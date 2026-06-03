@@ -8,6 +8,37 @@
 - local repository path: developer-specific。ここでは固定しない。
 - Notion project: `dotfiles` project とは分離する。
 - GitHub issues: `dotfiles` issues とは分離する。
+- Notion page / database は project planning と knowledge management の正とする。
+- 実作業は GitHub Issue と PR で管理する。
+- public repository には private Notion URL を書かない。
+
+## Notion に置くもの
+
+Notion には、project を進めるための設計・計画・判断材料を集約します。
+
+- 設計メモ。
+- 計画。
+- アイデア。
+- 作業ログ。
+- 方針の背景。
+- issue に切る前の検討。
+- issue / PR の結果を受けた project-level な更新。
+
+Notion 側は随時最新化します。repository に残す docs は、public に共有してよい
+policy、boundary、仕様、運用ルールに限定します。
+
+## GitHub Issue / PR に置くもの
+
+実際の作業単位は GitHub Issue に切り、変更は PR で管理します。
+
+- 実装 task。
+- docs 更新 task。
+- bug fix。
+- follow-up work。
+- review 可能な成果物。
+
+PR は対応する issue に紐づけます。小さなメンテナンスでも、原則として issue と
+PR を使って履歴を残します。
 
 ## 最初の issue
 

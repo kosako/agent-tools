@@ -29,6 +29,7 @@ secret store / local private config
 - 同名 target が unmanaged の場合は、上書きせず conflict として停止する。
 - secrets、credentials、private endpoints、client/work material は保存しない。
 - project tracking は `dotfiles` の Notion project と分離する。
+- 設計、計画、アイデア、作業ログは Notion に集約し、実作業は GitHub Issue / PR で管理する。
 
 ## 公開 repository の安全方針
 
