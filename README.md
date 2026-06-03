@@ -28,7 +28,9 @@ secret store / local private config
 - agent-tools 管理 marker を持つ target だけを更新する。
 - 同名 target が unmanaged の場合は、上書きせず conflict として停止する。
 - secrets、credentials、private endpoints、client/work material は保存しない。
-- project tracking は `dotfiles` の Notion project と分離する。
+- project planning / management docs は `dotfiles` と分離して別管理する。
+- 実作業は GitHub Issue / PR で管理する。
+- 基本 workflow は [personal-project-operating-loop](shared/workflows/personal-project-operating-loop.md) で管理する。
 
 ## 公開 repository の安全方針
 

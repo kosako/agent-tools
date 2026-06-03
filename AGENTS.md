@@ -8,9 +8,12 @@ local development environment の control plane ではありません。
 ## 境界
 
 - `dotfiles` は別 repository / 別 project として扱う。
-- この repository の Notion tracking は `dotfiles` と分離して扱う。
+- project planning / management docs は `dotfiles` と分離して別管理する。
+- 具体的な管理 tool や参照先は tracked files に書かず、local-only note を参照する。
+- 実作業は GitHub Issue に切り、変更は PR で管理する。
+- 基本 workflow は `shared/workflows/personal-project-operating-loop.md` を参照する。
 - tokens、credentials、private endpoints、client data、work data を追加しない。
-- private local paths、Notion URLs、internal hostnames、scratch handoff notes を
+- private local paths、private planning URLs、internal hostnames、scratch handoff notes を
   tracked files に追加しない。
 - 特定の secret store 実装を前提にした変更を入れない。
 - `dotfiles` からこの repository を自動 clone / pull / sync しない。

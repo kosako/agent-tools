@@ -6,8 +6,41 @@
 
 - GitHub repository: `https://github.com/kosako/agent-tools`
 - local repository path: developer-specific。ここでは固定しない。
-- Notion project: `dotfiles` project とは分離する。
+- project planning / management docs は `dotfiles` project とは分離し、repository 外で別管理する。
 - GitHub issues: `dotfiles` issues とは分離する。
+- 実作業は GitHub Issue と PR で管理する。
+- public repository には private planning tool の種類、URL、document list を書かない。
+- 具体的な参照先は ignored local note にだけ書く。
+
+## 別管理の planning docs
+
+project を進めるための planning / management docs は repository 外で管理します。
+tracked docs には、何の document があるか、どの tool を使うか、どこを見ればよいかは書きません。
+
+repository に残す docs は、public に共有してよい policy、boundary、仕様、運用ルールに限定します。
+private な参照先や project-specific な planning index は local-only note に置きます。
+
+## GitHub Issue / PR に置くもの
+
+実際の作業単位は GitHub Issue に切り、変更は PR で管理します。
+
+- 実装 task。
+- docs 更新 task。
+- bug fix。
+- follow-up work。
+- review 可能な成果物。
+
+PR は対応する issue に紐づけます。小さなメンテナンスでも、原則として issue と
+PR を使って履歴を残します。
+
+## 共通 workflow
+
+この進め方自体も repository 内の shared asset として管理します。
+
+- [personal-project-operating-loop](../shared/workflows/personal-project-operating-loop.md)
+
+agent が project を進めるときは、この workflow を参照して external planning docs /
+GitHub Issue / PR / repository docs の置き場所を判断します。
 
 ## 最初の issue
 
