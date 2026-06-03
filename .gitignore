@@ -8,6 +8,7 @@ node_modules/
 
 # local handoff notes は machine-specific な planning context を含みうる。
 agent-tools-handoff.md
+.agent-tools.local.md
 
 generated/**
 !generated/
