@@ -40,6 +40,15 @@ policy、boundary、仕様、運用ルールに限定します。
 PR は対応する issue に紐づけます。小さなメンテナンスでも、原則として issue と
 PR を使って履歴を残します。
 
+## 共通 workflow
+
+この進め方自体も repository 内の shared asset として管理します。
+
+- [personal-project-operating-loop](../shared/workflows/personal-project-operating-loop.md)
+
+agent が project を進めるときは、この workflow を参照して Notion / GitHub Issue /
+PR / repository docs の置き場所を判断します。
+
 ## 最初の issue
 
 タイトル:

@@ -30,6 +30,7 @@ secret store / local private config
 - secrets、credentials、private endpoints、client/work material は保存しない。
 - project tracking は `dotfiles` の Notion project と分離する。
 - 設計、計画、アイデア、作業ログは Notion に集約し、実作業は GitHub Issue / PR で管理する。
+- 基本 workflow は [personal-project-operating-loop](shared/workflows/personal-project-operating-loop.md) で管理する。
 
 ## 公開 repository の安全方針
 

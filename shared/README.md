@@ -4,6 +4,8 @@
 
 register / sync 対象になりうる asset names は、すべて `personal-` で始めます。
 
+`workflows/` には、agent が再利用できる進め方や運用 loop も置きます。
+
 将来の実装で推奨する asset metadata:
 
 - `name`
