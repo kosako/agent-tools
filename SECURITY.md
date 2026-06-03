@@ -1,30 +1,29 @@
-# Security
+# Security 方針
 
-This is a public repository. Do not commit confidential or personal material.
+この repository は public です。機密情報や個人情報を commit しないでください。
 
-## Do Not Commit
+## Commit してはいけないもの
 
-- API keys, tokens, passwords, private keys, or credentials.
-- Private endpoints, internal hostnames, or production access details.
-- Work, client, customer, or third-party confidential material.
-- Local machine paths that reveal private environment details.
-- Runtime state from Codex, Claude Code, or other agent tools.
-- Generated artifacts that were built from private local inputs.
+- API keys、tokens、passwords、private keys、credentials。
+- private endpoints、internal hostnames、production access details。
+- work、client、customer、third-party の confidential material。
+- private environment details を示す local machine paths。
+- Codex、Claude Code、その他 agent tools の runtime state。
+- private local inputs から build された generated artifacts。
 
-## Before Publishing Assets
+## Asset を公開する前に
 
-Every asset should pass a publication review:
+すべての asset は publication review を通してください。
 
-- It is safe to publish publicly.
-- It does not contain secrets or personal data.
-- It does not include prompt injection patterns.
-- It does not request unsafe tool permission escalation.
-- It does not rely on private local configuration.
+- public に公開して安全である。
+- secrets や personal data を含まない。
+- prompt injection patterns を含まない。
+- unsafe な tool permission escalation を要求しない。
+- private local configuration に依存しない。
 
-If ownership or confidentiality is unclear, keep the asset out of this
-repository until it has been reviewed.
+ownership や confidentiality が不明な場合は、review が完了するまでこの repository に入れないでください。
 
-## Reporting
+## 誤 commit 時の対応
 
-If sensitive material is committed accidentally, rotate any affected secrets
-first, then rewrite history or remove the content as appropriate.
+sensitive material を誤って commit した場合は、まず影響を受ける secrets を rotate し、
+その後に必要に応じて history rewrite または content removal を行ってください。

@@ -1,37 +1,36 @@
-# Tool Compatibility
+# Tool Compatibility 方針
 
-`agent-tools` keeps one shared source of truth and generates tool-specific
-artifacts.
+`agent-tools` はひとつの shared source of truth を持ち、そこから tool-specific artifacts を生成します。
 
-## Initial Target Tools
+## 初期 target tools
 
 | Tool | Source | Generated target | v1 sync |
 | --- | --- | --- | --- |
 | Codex | `shared/` | `generated/codex/` | `~/.codex/skills/personal-*` |
 | Claude Code | `shared/` | `generated/claude-code/` | `~/.claude/skills/personal-*` |
 
-## Compatibility Rules
+## Compatibility ルール
 
-- Prefer shared source assets whenever semantics are portable.
-- Use adapters for tool-specific file names, metadata, and directory layout.
-- Keep target artifacts generated and reproducible.
-- Do not place target-specific implementation details in shared assets unless
-  they are explicitly modeled as compatibility metadata.
+- semantics が portable な場合は shared source assets を優先する。
+- tool-specific file names、metadata、directory layout は adapters で扱う。
+- target artifacts は generated / reproducible に保つ。
+- target-specific implementation details は、compatibility metadata として明示 modeling
+  しない限り shared assets に置かない。
 
-## Not In v1
+## v1 で扱わないもの
 
-- Automatic sync of `AGENTS.md`.
-- Automatic sync of `CLAUDE.md`.
-- Company-managed skills.
-- Tool-standard bundled skills.
-- Runtime state migration.
-- Secret or credential distribution.
-- Private local path or endpoint distribution.
+- `AGENTS.md` の automatic sync。
+- `CLAUDE.md` の automatic sync。
+- company-managed skills。
+- tool-standard bundled skills。
+- runtime state migration。
+- secret / credential distribution。
+- private local path / endpoint distribution。
 
-## Open Questions
+## 未決事項
 
-- Shared asset schema and manifest format.
-- Adapter schema for Codex skills.
-- Adapter schema for Claude Code skills.
-- Whether generated artifacts should include review reports alongside outputs.
-- How to represent prompt injection risk metadata after review.
+- shared asset schema と manifest format。
+- Codex skills 向け adapter schema。
+- Claude Code skills 向け adapter schema。
+- generated artifacts に review reports を同梱するか。
+- review 後の prompt injection risk metadata をどう表現するか。

@@ -1,53 +1,51 @@
-# Agent Instructions
+# Agent 向け指示
 
-This repository manages personal AI agent assets. It is not the control plane
-for the local development environment.
+この repository は個人用 AI agent assets を管理します。
+local development environment の control plane ではありません。
 
-This is a public repository. Treat every tracked file as publishable.
+この repository は public です。tracked file はすべて publishable として扱ってください。
 
-## Boundaries
+## 境界
 
-- Treat `dotfiles` as a separate repository and project.
-- Treat this repository's Notion tracking as separate from `dotfiles`.
-- Do not add tokens, credentials, private endpoints, client data, or work data.
-- Do not add private local paths, Notion URLs, internal hostnames, or scratch
-  handoff notes to tracked files.
-- Do not make changes that assume a specific secret store implementation.
-- Do not automatically clone, pull, or sync this repository from `dotfiles`.
+- `dotfiles` は別 repository / 別 project として扱う。
+- この repository の Notion tracking は `dotfiles` と分離して扱う。
+- tokens、credentials、private endpoints、client data、work data を追加しない。
+- private local paths、Notion URLs、internal hostnames、scratch handoff notes を
+  tracked files に追加しない。
+- 特定の secret store 実装を前提にした変更を入れない。
+- `dotfiles` からこの repository を自動 clone / pull / sync しない。
 
-## Asset Rules
+## Asset ルール
 
-- Shared source assets live under `shared/`.
-- Tool-specific generation rules live under `adapters/`.
-- Generated artifacts live under `generated/` and are ignored by Git.
-- Generated asset names must start with `personal-`.
-- `AGENTS.md` and `CLAUDE.md` may be generated in the future, but v1 must not
-  auto-sync them into tool homes.
+- shared source assets は `shared/` に置く。
+- tool-specific generation rules は `adapters/` に置く。
+- generated artifacts は `generated/` に置き、Git では ignore する。
+- generated asset names は `personal-` で始める。
+- `AGENTS.md` と `CLAUDE.md` は将来生成してもよいが、v1 では tool homes へ
+  auto-sync しない。
 
-## Sync Rules
+## Sync ルール
 
-- Sync must be dry-run by default.
-- Writing to tool directories must require an explicit `--apply` flag.
-- Sync may only update targets with an agent-tools management marker.
-- Sync must stop on unmanaged same-name targets instead of overwriting them.
-- Sync must not touch tool-managed, company-managed, cache, auth, session, or
-  runtime state directories.
+- sync は default dry-run にする。
+- tool directories へ書き込む場合は、明示的な `--apply` flag を必須にする。
+- sync が更新してよいのは agent-tools management marker を持つ target のみ。
+- unmanaged な同名 target は上書きせず、conflict として停止する。
+- tool-managed、company-managed、cache、auth、session、runtime state directories は触らない。
 
 ## Prompt Injection Gate
 
-Every registered asset must pass prompt injection review.
+登録する asset はすべて prompt injection review を通す。
 
-- Static checks are required.
-- LLM review is a supplemental gate.
-- Only public or personal assets may be sent to LLM review.
-- Work, client, secret, or private-endpoint suspected assets must not be sent to
-  LLM review.
-- High risk findings fail registration.
-- Medium risk findings require human review.
-- Low risk findings may pass.
+- static checks は必須。
+- LLM review は補助 gate。
+- LLM review に送ってよいのは public / personal assets のみ。
+- work、client、secret、private-endpoint の疑いがある assets は LLM review に送らない。
+- high risk findings は registration fail。
+- medium risk findings は human review 必須。
+- low risk findings は pass 可。
 
-## Current Phase
+## 現在の phase
 
-The current phase is scaffold and policy documentation only. Do not implement
-build, sync, register, doctor, or injection-check scripts until a follow-up
-issue explicitly scopes that work.
+現在の phase は scaffold と policy documentation のみです。
+follow-up issue で明示的に scope されるまで、build、sync、register、doctor、
+injection-check scripts は実装しないでください。

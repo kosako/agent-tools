@@ -1,42 +1,41 @@
-# Boundary With dotfiles
+# dotfiles との境界
 
-`dotfiles` and `agent-tools` are separate repositories with separate project
-tracking.
+`dotfiles` と `agent-tools` は、別 repository / 別 project tracking として扱います。
 
-## dotfiles Owns
+## dotfiles が持つ責務
 
-- AI execution environment policy.
-- Capability declarations.
-- Directory conventions.
-- Safety gates for local machine setup.
-- Report-only checks for the presence of optional companion repositories.
+- AI execution environment policy。
+- capability declarations。
+- directory conventions。
+- local machine setup の safety gates。
+- optional companion repositories が存在するかどうかの report-only checks。
 
-## agent-tools Owns
+## agent-tools が持つ責務
 
-- Reusable personal skills.
-- Prompt libraries.
-- Workflow definitions.
-- Agent definitions.
-- Instruction templates.
-- Tool-specific generated artifacts.
-- Prompt injection review policy for registered assets.
+- reusable personal skills。
+- prompt libraries。
+- workflow definitions。
+- agent definitions。
+- instruction templates。
+- tool-specific generated artifacts。
+- registered assets 向け prompt injection review policy。
 
-## Neither Repository Owns
+## どちらの repository も持たないもの
 
-- Tokens.
-- API keys.
-- Credentials.
-- Private endpoints.
-- Client data.
-- Work data.
-- Runtime session state.
+- tokens。
+- API keys。
+- credentials。
+- private endpoints。
+- client data。
+- work data。
+- runtime session state。
 
-Those belong in a secret store or local private config that is explicitly out of
-scope for this repository.
+これらは secret store または local private config に置くものです。
+この repository の scope には含めません。
 
-## Integration Rule
+## 連携 rule
 
-`dotfiles` must not automatically clone, pull, build, or sync `agent-tools`.
+`dotfiles` は `agent-tools` を自動 clone / pull / build / sync しません。
 
-If `dotfiles` needs awareness of this repository, it may add report-only checks
-that tell the user whether `agent-tools` exists at an expected path.
+`dotfiles` がこの repository の存在を知る必要がある場合でも、許可するのは expected path に
+`agent-tools` が存在するかを知らせる report-only checks までです。

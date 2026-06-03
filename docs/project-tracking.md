@@ -1,42 +1,42 @@
-# Project Tracking
+# Project Tracking 方針
 
-`agent-tools` must be tracked separately from `dotfiles`.
+`agent-tools` は `dotfiles` とは別に tracking します。
 
-## Current Decision
+## 現在の決定
 
 - GitHub repository: `https://github.com/kosako/agent-tools`
-- Local repository path: developer-specific and intentionally not fixed here
-- Notion project: separate from the `dotfiles` project
-- GitHub issues: separate from `dotfiles` issues
+- local repository path: developer-specific。ここでは固定しない。
+- Notion project: `dotfiles` project とは分離する。
+- GitHub issues: `dotfiles` issues とは分離する。
 
-## First Issue
+## 最初の issue
 
-Title:
+タイトル:
 
 ```text
 Scaffold agent-tools repository and document safety policies
 ```
 
-Scope:
+scope:
 
-- Create repository scaffold.
-- Document boundary with `dotfiles`.
-- Document sync policy.
-- Document prompt injection check policy.
-- Document initial Codex / Claude Code compatibility assumptions.
+- repository scaffold を作る。
+- `dotfiles` との boundary を document にする。
+- sync policy を document にする。
+- prompt injection check policy を document にする。
+- initial Codex / Claude Code compatibility assumptions を document にする。
 
-Out of scope:
+out of scope:
 
-- Build script implementation.
-- Sync script implementation.
-- Registration script implementation.
-- Prompt injection checker implementation.
-- Automatic `AGENTS.md` or `CLAUDE.md` sync.
+- build script implementation。
+- sync script implementation。
+- registration script implementation。
+- prompt injection checker implementation。
+- automatic `AGENTS.md` / `CLAUDE.md` sync。
 
-## Follow-up Issues
+## Follow-up issues
 
-1. Define shared asset manifest schema.
-2. Implement static prompt injection checker.
-3. Implement build adapters for Codex and Claude Code.
-4. Implement dry-run sync with management marker enforcement.
-5. Add optional LLM review with privacy preflight.
+1. shared asset manifest schema を定義する。
+2. static prompt injection checker を実装する。
+3. Codex / Claude Code 向け build adapters を実装する。
+4. management marker enforcement つき dry-run sync を実装する。
+5. privacy preflight つき optional LLM review を追加する。

@@ -1,13 +1,12 @@
 # Scripts
 
-Planned scripts:
+予定している scripts:
 
-- `build.sh`: generate tool-specific artifacts from shared source assets.
-- `check-injection.sh`: run static prompt injection checks and optional LLM
-  review.
-- `register.sh`: validate and register assets into the local catalog.
-- `sync.sh`: dry-run or apply generated artifacts into tool directories.
-- `doctor.sh`: inspect local environment assumptions without modifying state.
+- `build.sh`: shared source assets から tool-specific artifacts を生成する。
+- `check-injection.sh`: static prompt injection checks と optional LLM review を実行する。
+- `register.sh`: assets を validate し、local catalog に register する。
+- `sync.sh`: generated artifacts の tool directories への反映を dry-run または apply する。
+- `doctor.sh`: state を変更せず、local environment assumptions を inspect する。
 
-No runnable scripts are included in the scaffold phase. This avoids implying
-that sync behavior is already implemented or safe to run.
+scaffold phase では runnable scripts は含めません。
+sync behavior がすでに実装済み、または安全に実行可能であるかのように見えることを避けるためです。

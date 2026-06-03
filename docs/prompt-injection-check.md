@@ -1,11 +1,10 @@
-# Prompt Injection Check
+# Prompt Injection Check 方針
 
-Every registered asset must pass prompt injection review before it can be
-registered or synced.
+registered asset は、register / sync される前に prompt injection review を通します。
 
-## Coverage
+## 対象範囲
 
-Check all registered asset types:
+以下の registered asset types をすべて check します。
 
 - skills
 - prompts
@@ -16,44 +15,42 @@ Check all registered asset types:
 
 ## Static Checks
 
-Static checks are required for every asset. They should detect:
+static checks はすべての asset で必須です。少なくとも以下を検出します。
 
-- Attempts to override system or developer instructions.
-- Requests to reveal or collect secrets, tokens, credentials, or private keys.
-- Hidden instruction patterns such as "ignore previous instructions".
-- Tool permission or approval policy bypass attempts.
-- External exfiltration, network tunnel, or production access requests.
-- Instructions to modify tool-managed, company-managed, auth, cache, session,
-  or runtime state.
+- system / developer instructions を override しようとする内容。
+- secrets、tokens、credentials、private keys の開示または収集要求。
+- "ignore previous instructions" などの hidden instruction patterns。
+- tool permission または approval policy の bypass attempts。
+- external exfiltration、network tunnel、production access requests。
+- tool-managed、company-managed、auth、cache、session、runtime state を変更する指示。
 
 ## LLM Review
 
-LLM review is a supplemental gate.
+LLM review は supplemental gate です。
 
-Allowed for LLM review:
+LLM review に送ってよいもの:
 
-- public assets
-- personal assets
+- public assets。
+- personal assets。
 
-Not allowed for LLM review:
+LLM review に送ってはいけないもの:
 
-- work assets
-- client assets
-- secret-like assets
-- assets containing private endpoints
-- assets with unclear ownership or confidentiality
+- work assets。
+- client assets。
+- secret-like assets。
+- private endpoints を含む assets。
+- ownership または confidentiality が不明な assets。
 
-When ownership or confidentiality is unclear, the asset must stay out of LLM
-review and require human review instead.
+ownership または confidentiality が不明な場合、その asset は LLM review に送らず、
+human review 必須にします。
 
 ## Risk Outcomes
 
-- High risk: fail registration.
-- Medium risk: require human review.
-- Low risk: registration may proceed.
+- High risk: registration fail。
+- Medium risk: human review 必須。
+- Low risk: registration 可。
 
-## Follow-up Implementation Notes
+## Follow-up 実装メモ
 
-The static checker should be deterministic and runnable without network access.
-The LLM review step should be optional and explicitly configured, with a privacy
-gate that runs before any content is sent out.
+static checker は deterministic で、network access なしで実行できる必要があります。
+LLM review step は optional かつ明示設定とし、content を外部に送る前に privacy gate を実行します。

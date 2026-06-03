@@ -1,25 +1,25 @@
 # Sync Policy
 
-Sync moves generated personal assets from this repository into local tool
-directories. It must be conservative by default.
+sync は、この repository で生成した personal assets を local tool directories に反映します。
+default は必ず conservative にします。
 
-## Defaults
+## Default 方針
 
-- Sync is dry-run by default.
-- Real writes require `--apply`.
-- Sync only handles generated assets whose names start with `personal-`.
-- Sync only updates targets containing an agent-tools management marker.
-- Same-name unmanaged targets are conflicts and must stop the sync.
+- sync は default dry-run。
+- 実際の書き込みには `--apply` を必須にする。
+- sync が扱うのは、名前が `personal-` で始まる generated assets のみ。
+- sync が更新してよいのは、agent-tools management marker を含む targets のみ。
+- 同名の unmanaged targets は conflict として扱い、sync を停止する。
 
-## v1 Codex Targets
+## v1 Codex targets
 
-Allowed target pattern:
+許可する target pattern:
 
 ```text
 ~/.codex/skills/personal-*
 ```
 
-Forbidden targets:
+禁止する targets:
 
 ```text
 ~/.codex/skills/.system
@@ -30,15 +30,15 @@ Forbidden targets:
 ~/.codex/*.sqlite
 ```
 
-## v1 Claude Code Targets
+## v1 Claude Code targets
 
-Allowed target pattern:
+許可する target pattern:
 
 ```text
 ~/.claude/skills/personal-*
 ```
 
-Forbidden targets:
+禁止する targets:
 
 ```text
 ~/.claude/cache
@@ -46,7 +46,7 @@ Forbidden targets:
 ~/.claude/projects
 ```
 
-## Other Forbidden Runtime State
+## その他の禁止 runtime state
 
 ```text
 ~/.agents/skills/*/db
@@ -55,18 +55,18 @@ Forbidden targets:
 
 ## Management Marker
 
-The exact marker format is not implemented yet. A follow-up issue should define
-a marker that includes:
+正確な marker format はまだ実装しません。
+follow-up issue で、少なくとも以下を含む marker を定義します。
 
 - repository name: `agent-tools`
 - generated asset name
 - target tool
 - source path
-- generation timestamp or build id
+- generation timestamp または build id
 
-Sync must refuse to modify files or directories that lack the marker.
+sync は marker を持たない files / directories の変更を拒否します。
 
-## v1 Exclusions
+## v1 exclusions
 
-`AGENTS.md` and `CLAUDE.md` may be generated as artifacts for inspection, but v1
-must not auto-sync them into tool homes.
+`AGENTS.md` と `CLAUDE.md` は inspection 用 artifact として生成してもよいですが、
+v1 では tool homes へ auto-sync しません。

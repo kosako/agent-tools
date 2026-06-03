@@ -1,14 +1,14 @@
 # agent-tools
 
-`agent-tools` is a personal AI agent asset repository for reusable skills,
-prompts, workflows, agent definitions, and instruction templates.
+`agent-tools` は、再利用可能な skills、prompts、workflows、agent definitions、
+instruction templates を管理するための個人用 AI agent asset repository です。
 
-This repository is intentionally separate from `dotfiles`.
-It is intended to be public, so tracked content must be safe to publish.
+この repository は `dotfiles` とは意図的に分離します。
+public repository として公開する前提なので、追跡する内容はすべて公開可能なものに限定します。
 
 ```text
 dotfiles
-  policy / capabilities / directory conventions / safety gates
+  policy / capabilities / directory convention / safety gates
 
 agent-tools
   skills / prompts / AGENTS.md templates / agent definitions / evals
@@ -17,61 +17,60 @@ secret store / local private config
   tokens / credentials / private endpoints
 ```
 
-## Principles
+## 原則
 
-- Keep Codex and Claude Code assets in one shared source repository.
-- Generate tool-specific artifacts from shared source assets.
-- Sync generated artifacts explicitly; do not rely on symlinks in v1.
-- Default every sync command to dry-run.
-- Require an explicit `--apply` flag before writing to tool directories.
-- Only manage generated assets whose names start with `personal-`.
-- Only update targets that contain an agent-tools management marker.
-- Stop on conflicts when a same-name target is unmanaged.
-- Never store secrets, credentials, private endpoints, or client/work material.
-- Keep project tracking separate from the `dotfiles` Notion project.
+- Codex と Claude Code の資産は、ひとつの共通 source repository で管理する。
+- 共通 source asset から tool 別 artifact を生成する。
+- 生成 artifact の反映は明示 sync とし、v1 では symlink に依存しない。
+- sync は default dry-run にする。
+- tool directory へ書き込む場合は、明示的な `--apply` flag を必須にする。
+- 管理対象は `personal-` で始まる生成 asset のみとする。
+- agent-tools 管理 marker を持つ target だけを更新する。
+- 同名 target が unmanaged の場合は、上書きせず conflict として停止する。
+- secrets、credentials、private endpoints、client/work material は保存しない。
+- project tracking は `dotfiles` の Notion project と分離する。
 
-## Public Repository Safety
+## 公開 repository の安全方針
 
-Do not commit secrets, credentials, private endpoints, work/client material,
-private local paths, runtime state, or generated artifacts derived from private
-inputs. See [SECURITY.md](SECURITY.md) and
-[docs/publication-safety.md](docs/publication-safety.md).
+secrets、credentials、private endpoints、work/client material、private local
+paths、runtime state、private input から生成した artifacts は commit しません。
+詳細は [SECURITY.md](SECURITY.md) と
+[docs/publication-safety.md](docs/publication-safety.md) を参照してください。
 
-## Repository Layout
+## Repository 構成
 
 ```text
 shared/
-  skills/         Shared source skills.
-  prompts/        Shared source prompts.
-  workflows/      Shared reusable workflows.
-  agents/         Shared agent definitions.
-  instructions/   Shared instruction templates.
+  skills/         共通 source skills
+  prompts/        共通 source prompts
+  workflows/      共通 reusable workflows
+  agents/         共通 agent definitions
+  instructions/   共通 instruction templates
 
 adapters/
-  codex/          Codex-specific build adapter specs.
-  claude-code/    Claude Code-specific build adapter specs.
+  codex/          Codex 向け build adapter specs
+  claude-code/    Claude Code 向け build adapter specs
 
 generated/
-  codex/          Generated Codex artifacts. Ignored except .gitkeep.
-  claude-code/    Generated Claude Code artifacts. Ignored except .gitkeep.
+  codex/          生成された Codex artifacts。README と .gitkeep 以外は ignored。
+  claude-code/    生成された Claude Code artifacts。README と .gitkeep 以外は ignored。
 
-scripts/          Planned build, check, register, sync, and doctor scripts.
-docs/             Boundary and policy documents.
+scripts/          build / check / register / sync / doctor scripts の予定地。
+docs/             boundary と policy documents。
 ```
 
-## Initial Scope
+## 初期 scope
 
-The first issue for this repository is deliberately narrow:
+この repository の最初の issue scope は、意図的に小さくします。
 
-1. Establish the repository scaffold.
-2. Document the boundary with `dotfiles`.
-3. Document sync policy and forbidden targets.
-4. Document prompt injection check policy.
-5. Document Codex / Claude Code compatibility assumptions.
+1. repository scaffold を作る。
+2. `dotfiles` との boundary を document にする。
+3. sync policy と forbidden targets を document にする。
+4. prompt injection check policy を document にする。
+5. Codex / Claude Code compatibility assumptions を document にする。
 
-Build, sync, registration, and prompt injection checker implementations belong
-in follow-up issues.
+build、sync、registration、prompt injection checker の実装は follow-up issue で扱います。
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. 詳細は [LICENSE](LICENSE) を参照してください。

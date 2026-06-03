@@ -6,7 +6,7 @@
 
 node_modules/
 
-# Local handoff notes can contain machine-specific planning context.
+# local handoff notes は machine-specific な planning context を含みうる。
 agent-tools-handoff.md
 
 generated/**

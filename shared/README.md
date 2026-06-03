@@ -1,11 +1,10 @@
 # Shared Assets
 
-This directory contains source-of-truth assets that can be adapted for multiple
-agent tools.
+この directory には、複数の agent tools に適用できる source-of-truth assets を置きます。
 
-All asset names that may be registered or synced must start with `personal-`.
+register / sync 対象になりうる asset names は、すべて `personal-` で始めます。
 
-Recommended asset metadata for future implementation:
+将来の実装で推奨する asset metadata:
 
 - `name`
 - `kind`
@@ -14,6 +13,5 @@ Recommended asset metadata for future implementation:
 - `risk`
 - `targets`
 
-The first scaffold phase does not define a strict schema yet. A follow-up issue
-should introduce a machine-readable manifest before registration scripts are
-implemented.
+最初の scaffold phase では、まだ strict schema は定義しません。
+registration scripts を実装する前に、follow-up issue で machine-readable manifest を導入します。

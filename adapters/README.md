@@ -1,11 +1,11 @@
 # Adapters
 
-Adapters describe how shared assets become tool-specific artifacts.
+Adapters は、shared assets を tool-specific artifacts に変換する方法を記述します。
 
-The intended v1 targets are:
+v1 で想定する targets:
 
 - Codex
 - Claude Code
 
-This scaffold phase only reserves the layout. Adapter schemas and build logic
-will be added in follow-up implementation issues.
+この scaffold phase では layout だけを予約します。
+adapter schemas と build logic は follow-up implementation issues で追加します。

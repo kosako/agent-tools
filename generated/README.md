@@ -1,9 +1,8 @@
 # Generated Artifacts
 
-Generated artifacts are build outputs created from `shared/` and
-tool-specific adapters.
+Generated artifacts は、`shared/` と tool-specific adapters から作られる build outputs です。
 
-This directory is ignored by Git except for `.gitkeep` files. Generated files
-must be reproducible from tracked source assets.
+この directory は、`.gitkeep` と `README.md` を除いて Git で ignore します。
+generated files は tracked source assets から再生成できる必要があります。
 
-Do not manually edit generated artifacts as source-of-truth.
+generated artifacts を source-of-truth として手動編集しないでください。

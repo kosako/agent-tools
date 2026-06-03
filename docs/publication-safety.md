@@ -1,37 +1,37 @@
-# Publication Safety
+# Publication Safety 方針
 
-`agent-tools` is intended to be public. Treat every tracked file as publishable.
+`agent-tools` は public repository として公開する前提です。
+tracked file はすべて publishable として扱います。
 
-## Public-Safe Content
+## 公開してよい内容
 
-Allowed:
+許可するもの:
 
-- Generic reusable skills.
-- Generic prompt templates.
-- Generic workflow descriptions.
-- Public documentation.
-- Tool adapter logic that does not expose private configuration.
+- generic reusable skills。
+- generic prompt templates。
+- generic workflow descriptions。
+- public documentation。
+- private configuration を露出しない tool adapter logic。
 
-Not allowed:
+許可しないもの:
 
-- Secrets, tokens, credentials, passwords, private keys, or session data.
-- Personal data beyond what is already intentionally public.
-- Work, client, customer, or third-party confidential material.
-- Private endpoints, internal hostnames, production URLs, or access details.
-- Local-only handoff notes, scratch files, or machine-specific paths.
-- Generated assets produced from private local inputs.
+- secrets、tokens、credentials、passwords、private keys、session data。
+- 意図的に公開済みのものを超える personal data。
+- work、client、customer、third-party の confidential material。
+- private endpoints、internal hostnames、production URLs、access details。
+- local-only handoff notes、scratch files、machine-specific paths。
+- private local inputs から生成された assets。
 
-## Review Checklist
+## Review checklist
 
-Before committing:
+commit 前に確認すること:
 
-- Run a text scan for secret-like strings and private paths.
-- Confirm that local handoff notes are ignored.
-- Confirm that generated artifacts are ignored unless they are intentional
-  documentation such as `.gitkeep` or `README.md`.
-- Confirm that any asset marked for LLM review is public or personal and safe
-  to send outside the local machine.
+- secret-like strings と private paths を text scan する。
+- local handoff notes が ignore されていることを確認する。
+- generated artifacts が ignore されていることを確認する。ただし `.gitkeep` や `README.md`
+  のような意図的な documentation は例外。
+- LLM review 対象の asset が public / personal で、local machine の外へ送って安全であることを確認する。
 
-## Default Decision
+## Default decision
 
-When in doubt, do not publish the asset. Keep it local until it can be reviewed.
+迷った場合、その asset は公開しません。review できるまで local に留めます。
