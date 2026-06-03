@@ -1,0 +1,16 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+
+node_modules/
+
+# Local handoff notes can contain machine-specific planning context.
+agent-tools-handoff.md
+
+generated/**
+!generated/
+!generated/**/
+!generated/README.md
+!generated/**/.gitkeep
