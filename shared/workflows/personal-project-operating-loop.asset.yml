@@ -1,0 +1,24 @@
+schema_version: 1
+name: personal-project-operating-loop
+kind: workflow
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/workflows/personal-project-operating-loop.md
+  format: markdown
+summary: reusable operating loop for personal agent projects
+description: public-safe workflow for deciding where project artifacts live
+review:
+  static_check: pending
+  llm_review: allowed
+  human_review: pending
+compatibility:
+  codex:
+    artifact_kind: skill
+  claude-code:
+    artifact_kind: skill

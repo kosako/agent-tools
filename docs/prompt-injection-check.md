@@ -1,6 +1,7 @@
 # Prompt Injection Check 方針
 
 registered asset は、register / sync される前に prompt injection review を通します。
+review 対象 asset の metadata は [Asset Manifest Schema](asset-manifest-schema.md) に従います。
 
 ## 対象範囲
 
