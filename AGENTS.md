@@ -51,7 +51,8 @@ local development environment の control plane ではありません。
 
 scaffold と policy documentation は完了し、check scripts の実装 phase に入っています。
 
-- 実装済み: manifest validation (`scripts/check-manifests.sh`)。
+- 実装済み: manifest validation (`scripts/check-manifests.sh`)、
+  static prompt injection checks (`scripts/check-injection.sh`)。
 - script の実装は、対応する GitHub Issue で明示的に scope された範囲だけで行う。
 - issue で scope されていない build、sync、register、doctor scripts を
   先回りで実装しない。

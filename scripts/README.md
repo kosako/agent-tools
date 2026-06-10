@@ -16,10 +16,23 @@ usage: check-manifests.sh [--root DIR] [--quiet]
 - manifest を持たない asset source も検出する。
 - self-test: `tests/check-manifests-test.sh`
 
+- `check-injection.sh`: shared assets への static prompt injection checks。
+  [Prompt Injection Check 方針](../docs/prompt-injection-check.md) に従う。
+
+```text
+usage: check-injection.sh [--root DIR] [--quiet]
+```
+
+- findings は `path:line: [risk] category: message` 形式で出力される。
+- exit code: high findings は 1 (registration fail)、medium のみは 3
+  (human review 必須)、findings なしまたは low のみは 0。
+- 対象は `shared/` 配下の text files のみ。policy docs は対象外。
+- self-test: `tests/check-injection-test.sh`
+
 ## 予定している scripts
 
 - `build.sh`: shared source assets から tool-specific artifacts を生成する。
-- `check-injection.sh`: static prompt injection checks と optional LLM review を実行する。
+- `check-injection.sh` への追加: optional LLM review (privacy preflight つき)。
 - `register.sh`: assets を validate し、local catalog に register する。
 - `sync.sh`: generated artifacts の tool directories への反映を dry-run または apply する。
 - `doctor.sh`: state を変更せず、local environment assumptions を inspect する。
