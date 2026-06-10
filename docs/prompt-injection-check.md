@@ -51,7 +51,16 @@ human review 必須にします。
 - Medium risk: human review 必須。
 - Low risk: registration 可。
 
+## Static checker 実装
+
+static checks は `scripts/check-injection.sh` として実装済みです。
+
+- deterministic で、外部依存ゼロ・network access なしで実行できる。
+- 対象は `shared/` 配下の asset files のみ。policy docs は対象外。
+- findings は `path:line: [risk] category: message` 形式で出力する。
+- exit code は risk outcome に対応する: high は 1 (registration fail)、
+  medium のみは 3 (human review 必須)、findings なしまたは low のみは 0。
+
 ## Follow-up 実装メモ
 
-static checker は deterministic で、network access なしで実行できる必要があります。
 LLM review step は optional かつ明示設定とし、content を外部に送る前に privacy gate を実行します。
