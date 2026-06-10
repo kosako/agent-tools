@@ -207,11 +207,17 @@ source asset:
 
 - [personal-project-operating-loop.md](../shared/workflows/personal-project-operating-loop.md)
 
+## 実装で決めたこと
+
+validator は `scripts/check-manifests.sh` として実装済みです。
+
+- 実装言語: Ruby (macOS 標準、YAML stdlib)。外部依存ゼロ、network access なし。
+- manifest discovery: `shared/**/*.asset.yml` と `shared/**/asset.yml`。
+- validation error format: `path: message` の line 単位。error があれば exit 1。
+- `shared/<category>/` 直下の asset source に manifest が無い場合も error にする。
+
 ## 後続実装で決めること
 
-- YAML parser / validator の実装言語。
-- manifest discovery の対象 glob。
-- validation error format。
 - generated catalog の形式。
 - prompt injection check result を manifest に書き戻すか、別 report に出すか。
 - `status` / `doctor` output に manifest validation 結果をどう含めるか。

@@ -49,6 +49,9 @@ local development environment の control plane ではありません。
 
 ## 現在の phase
 
-現在の phase は scaffold と policy documentation のみです。
-follow-up issue で明示的に scope されるまで、build、sync、register、doctor、
-injection-check scripts は実装しないでください。
+scaffold と policy documentation は完了し、check scripts の実装 phase に入っています。
+
+- 実装済み: manifest validation (`scripts/check-manifests.sh`)。
+- script の実装は、対応する GitHub Issue で明示的に scope された範囲だけで行う。
+- issue で scope されていない build、sync、register、doctor scripts を
+  先回りで実装しない。
