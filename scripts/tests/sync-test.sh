@@ -1,0 +1,96 @@
+#!/bin/sh
+# sync.sh の self-test。
+# 一時 directory に fixture と fake tool homes を生成して検証する。
+# 実際の ~/.codex / ~/.claude には一切触れない。network access なし。
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+build="$script_dir/../build.sh"
+sync="$script_dir/../sync.sh"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  echo "FAIL: $1" >&2
+  exit 1
+}
+
+run_sync() {
+  "$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" "$@"
+}
+
+# --- fixture repo を build ---
+mkdir -p "$tmp/repo/shared/workflows" "$tmp/codex/skills" "$tmp/claude/skills"
+cat > "$tmp/repo/shared/workflows/personal-demo.md" <<'EOF'
+# demo v1
+EOF
+cat > "$tmp/repo/shared/workflows/personal-demo.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-demo
+kind: workflow
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/workflows/personal-demo.md
+  format: markdown
+summary: demo workflow
+EOF
+"$build" --root "$tmp/repo" --quiet > /dev/null
+
+# --- case 1: dry-run が default で、何も書き込まれない ---
+run_sync > "$tmp/out-dry" 2>&1 || fail "dry-run should succeed: $(cat "$tmp/out-dry")"
+grep -q "create: \[codex\]" "$tmp/out-dry" || fail "missing codex create plan"
+grep -q "create: \[claude-code\]" "$tmp/out-dry" || fail "missing claude-code create plan"
+grep -q "dry-run only" "$tmp/out-dry" || fail "missing dry-run notice"
+[ ! -e "$tmp/claude/skills/personal-demo" ] || fail "dry-run must not write targets"
+
+# --- case 2: --apply で create される ---
+run_sync --apply > "$tmp/out-apply" 2>&1 || fail "apply should succeed: $(cat "$tmp/out-apply")"
+[ -f "$tmp/claude/skills/personal-demo/SKILL.md" ] || fail "apply should create target"
+[ -f "$tmp/codex/skills/personal-demo/SKILL.md" ] || fail "apply should create codex target"
+
+# --- case 3: 変更なしなら skip (up-to-date) ---
+run_sync > "$tmp/out-skip" 2>&1 || fail "skip run should succeed"
+grep -q "skip: \[codex\].*up-to-date" "$tmp/out-skip" || fail "missing up-to-date skip"
+grep -q "0 change(s)" "$tmp/out-skip" || fail "expected zero pending changes"
+
+# --- case 4: source 変更で update になり、apply で反映される ---
+cat > "$tmp/repo/shared/workflows/personal-demo.md" <<'EOF'
+# demo v2
+EOF
+"$build" --root "$tmp/repo" --quiet > /dev/null
+run_sync > "$tmp/out-update" 2>&1 || fail "update dry-run should succeed"
+grep -q "update: \[claude-code\]" "$tmp/out-update" || fail "missing update plan"
+run_sync --apply --quiet > /dev/null 2>&1
+grep -q "demo v2" "$tmp/claude/skills/personal-demo/SKILL.md" || fail "update not applied"
+
+# --- case 5: unmanaged な同名 target は conflict で停止し、--apply でも書き込まない ---
+rm -rf "$tmp/claude/skills/personal-demo"
+mkdir -p "$tmp/claude/skills/personal-demo"
+echo "user-owned content" > "$tmp/claude/skills/personal-demo/SKILL.md"
+
+status=0
+run_sync --apply > "$tmp/out-conflict" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "conflict should exit 1, got $status: $(cat "$tmp/out-conflict")"
+grep -q "conflict: \[claude-code\].*unmanaged" "$tmp/out-conflict" || fail "missing conflict line"
+grep -q "nothing was applied" "$tmp/out-conflict" || fail "missing stop notice"
+grep -q "user-owned content" "$tmp/claude/skills/personal-demo/SKILL.md" \
+  || fail "conflict target must not be overwritten"
+grep -q "demo v2" "$tmp/codex/skills/personal-demo/SKILL.md" \
+  || fail "codex target should be untouched but intact"
+
+# --- case 6: marker の壊れた generated artifact は conflict になる ---
+rm -rf "$tmp/claude/skills/personal-demo"
+rm -f "$tmp/repo/generated/claude-code/skills/personal-demo/.agent-tools-managed.yml"
+status=0
+run_sync > "$tmp/out-badmarker" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "missing marker should exit 1: $(cat "$tmp/out-badmarker")"
+grep -q "missing a valid marker" "$tmp/out-badmarker" || fail "missing marker conflict line"
+
+echo "ok: sync self-test passed"

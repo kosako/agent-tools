@@ -43,6 +43,22 @@ usage: build.sh [--root DIR] [--quiet]
 - 書き込み先は `generated/` のみ。tool directories には書き込まない。
 - self-test: `tests/build-test.sh`
 
+- `sync.sh`: `generated/` の personal assets を tool directories へ反映する。
+  [Sync Policy](../docs/sync-policy.md) を enforce する。
+
+```text
+usage: sync.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] [--quiet]
+```
+
+- default は dry-run。書き込みには `--apply` が必須。
+- plan は `create` / `update` / `skip (up-to-date)` / `conflict` で表示される。
+- 更新するのは agent-tools management marker を持つ target のみ。
+  unmanaged な同名 target は conflict として exit 1 で停止し、何も書き込まない。
+- 書き込み先は `<tool home>/skills/personal-*` のみ。それ以外の path は構成しない。
+- `--codex-home` / `--claude-home` は inspection / test 用の override。
+- self-test: `tests/sync-test.sh` (fake home のみを使い、実際の tool homes には触れない)
+- 残課題: `stale` / `missing` state の status 連携は `status.sh` 実装時に扱う。
+
 ## 予定している scripts
 
 - `check-injection.sh` への追加: optional LLM review (privacy preflight つき)。

@@ -3,6 +3,9 @@
 sync は、この repository で生成した personal assets を local tool directories に反映します。
 default は必ず conservative にします。
 
+実装は `scripts/sync.sh` です。usage は [scripts/README.md](../scripts/README.md) を
+参照してください。
+
 ## Default 方針
 
 - sync は default dry-run。
