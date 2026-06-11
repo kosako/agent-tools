@@ -43,14 +43,23 @@ module Register
       end
 
       assets = load_assets
-      mediums = findings.select { |f| f.risk == "medium" }
-      assign_findings(assets, mediums)
 
-      rejected = assets.select { |a| a[:flagged] && a[:human_review] == "rejected" }
+      # human_review: rejected は finding の有無によらず矛盾状態なので fail。
+      rejected = assets.select { |a| a[:human_review] == "rejected" }
       unless rejected.empty?
         names = rejected.map { |a| a[:name] }.join(", ")
-        raise Error, "rejected asset(s) with findings still present: #{names}; fix or remove them"
+        raise Error, "rejected asset(s) still present: #{names}; fix or remove them"
       end
+
+      # manifest が宣言した risk も enforce する (docs/asset-manifest-schema.md)。
+      declared_high = assets.select { |a| a[:declared_risks].include?("high") }
+      unless declared_high.empty?
+        names = declared_high.map { |a| a[:name] }.join(", ")
+        raise Error, "declared high risk asset(s): #{names}; catalog not updated"
+      end
+
+      mediums = findings.select { |f| f.risk == "medium" }
+      assign_findings(assets, mediums)
 
       {
         "catalog_version" => CATALOG_VERSION,
@@ -79,6 +88,7 @@ module Register
           targets: data["targets"],
           source: data["source"],
           human_review: data.dig("review", "human_review"),
+          declared_risks: (data["risk"] || {}).values,
           manifest_path: rel,
           flagged: false,
         }
@@ -106,8 +116,11 @@ module Register
     end
 
     def catalog_entry(asset)
+      # 宣言 risk の medium / unknown も human review 必須として扱う。
+      review_needed = asset[:flagged] ||
+                      asset[:declared_risks].any? { |r| %w[medium unknown].include?(r) }
       registration =
-        if !asset[:flagged]
+        if !review_needed
           "registered"
         elsif asset[:human_review] == "approved"
           "registered"
