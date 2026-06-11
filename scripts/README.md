@@ -29,9 +29,22 @@ usage: check-injection.sh [--root DIR] [--quiet]
 - 対象は `shared/` 配下の text files のみ。policy docs は対象外。
 - self-test: `tests/check-injection-test.sh`
 
+- `build.sh`: shared source assets から tool 別 artifacts を `generated/` に生成する。
+  adapter spec は [adapters/](../adapters/README.md) を参照。
+
+```text
+usage: build.sh [--root DIR] [--quiet]
+```
+
+- 生成前に manifest validation と static injection check を必ず通す。
+  gate が fail のときは何も生成しない。
+- 各 artifact に management marker (`.agent-tools-managed.yml`) を埋め込む。
+  `build_id` は source content の sha256 なので build は決定的。
+- 書き込み先は `generated/` のみ。tool directories には書き込まない。
+- self-test: `tests/build-test.sh`
+
 ## 予定している scripts
 
-- `build.sh`: shared source assets から tool-specific artifacts を生成する。
 - `check-injection.sh` への追加: optional LLM review (privacy preflight つき)。
 - `register.sh`: assets を validate し、local catalog に register する。
 - `sync.sh`: generated artifacts の tool directories への反映を dry-run または apply する。
