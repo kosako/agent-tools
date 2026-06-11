@@ -1,0 +1,7 @@
+# pinned action SHA の更新を自動で追従する。
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
