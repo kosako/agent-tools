@@ -33,11 +33,13 @@ module CheckManifests
     def initialize(root)
       @root = File.expand_path(root)
       @errors = []
+      @declared_names = Hash.new { |h, k| h[k] = [] }
     end
 
     def run
       manifests = discover_manifests
       manifests.each { |path| validate_manifest(path) }
+      check_duplicate_names
       check_sources_have_manifests
       [manifests.size, @errors]
     end
@@ -86,6 +88,8 @@ module CheckManifests
       REQUIRED_FIELDS.each do |key|
         error(path, "missing required field: #{key}") unless data.key?(key)
       end
+
+      @declared_names[data["name"]] << path if data["name"].is_a?(String)
 
       validate_schema_version(path, data["schema_version"]) if data.key?("schema_version")
       validate_name(path, data["name"]) if data.key?("name")
@@ -241,6 +245,19 @@ module CheckManifests
       return if value.is_a?(String) && !value.strip.empty?
 
       error(path, "#{field} must be a non-empty string")
+    end
+
+    # asset name は generated artifact の path になるため、repository 全体で一意でなければ
+    # ならない。重複すると build が後勝ちで上書きしてしまう。
+    def check_duplicate_names
+      @declared_names.each do |name, paths|
+        next if paths.size < 2
+
+        paths.each do |path|
+          others = (paths - [path]).join(", ")
+          error(path, "duplicate asset name #{name.inspect} (also declared in #{others})")
+        end
+      end
     end
 
     # shared/<category>/ 直下の asset source に manifest が無いものを検出する。

@@ -111,7 +111,34 @@ fi
 grep -q "missing sidecar manifest personal-orphan.asset.yml" "$tmp/out-orphan" \
   || fail "missing orphan error in: $(cat "$tmp/out-orphan")"
 
-# --- case 4: repository 本体の manifest が pass する ---
+# --- case 4: 重複 asset name は fail する ---
+mkdir -p "$tmp/dup/shared/workflows" "$tmp/dup/shared/prompts"
+for d in workflows prompts; do
+  k=workflow; [ "$d" = prompts ] && k=prompt
+  echo "# x" > "$tmp/dup/shared/$d/personal-x.md"
+  cat > "$tmp/dup/shared/$d/personal-x.asset.yml" <<EOF
+schema_version: 1
+name: personal-x
+kind: $k
+visibility: public
+targets:
+  - codex
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/$d/personal-x.md
+  format: markdown
+EOF
+done
+
+if "$check" --root "$tmp/dup" > "$tmp/out-dup" 2>&1; then
+  fail "duplicate names should fail"
+fi
+grep -q 'duplicate asset name "personal-x"' "$tmp/out-dup" \
+  || fail "missing duplicate name error in: $(cat "$tmp/out-dup")"
+
+# --- case 5: repository 本体の manifest が pass する ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \
   || fail "repository manifests should pass: $(cat "$tmp/out-repo")"
