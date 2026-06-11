@@ -48,6 +48,7 @@ catalog="$tmp/ok/generated/catalog.json"
 [ "$(jget "$catalog" catalog_version)" = "1" ] || fail "catalog_version should be 1"
 [ "$(jget "$catalog" assets 0 registration)" = '"registered"' ] || fail "asset should be registered"
 [ "$(jget "$catalog" assets 0 checks prompt_injection_static)" = '"pass"' ] || fail "injection check should be pass"
+jget "$catalog" assets 0 build_id | grep -q '"sha256:' || fail "catalog entry should carry build_id"
 
 # --- case 2: status が register summary を返す (contract v2) ---
 "$status_sh" --root "$tmp/ok" --json > "$tmp/s2" 2>&1
