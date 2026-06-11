@@ -87,12 +87,11 @@ module Build
 
       if format == "directory"
         copy_directory_asset(source, out_dir)
-        build_id = directory_build_id(source)
       else
         content = File.read(File.join(@root, source))
         File.write(File.join(out_dir, "SKILL.md"), skill_markdown(content, data))
-        build_id = "sha256:#{Digest::SHA256.hexdigest(content)[0, 12]}"
       end
+      build_id = Build.build_id_for(@root, source, format)
 
       write_marker(out_dir, name, tool, source, build_id)
       @built << rel(out_dir)
@@ -105,19 +104,6 @@ module Build
 
         FileUtils.cp_r(File.join(src_dir, entry), File.join(out_dir, entry))
       end
-    end
-
-    def directory_build_id(source)
-      src_dir = File.join(@root, source)
-      digest = Digest::SHA256.new
-      Dir.glob(File.join(src_dir, "**/*")).sort.each do |f|
-        next unless File.file?(f)
-        next if File.basename(f) == "asset.yml"
-
-        digest.update(f.sub(src_dir, ""))
-        digest.update(File.read(f, mode: "rb"))
-      end
-      "sha256:#{digest.hexdigest[0, 12]}"
     end
 
     # source が frontmatter を持たない場合のみ、manifest から frontmatter を生成する。
@@ -147,6 +133,24 @@ module Build
 
     def rel(path)
       path.sub(%r{\A#{Regexp.escape(@root)}/}, "")
+    end
+  end
+
+  # source content から決定的な build_id を作る。status の stale 判定でも使う。
+  def self.build_id_for(root, source, format)
+    if format == "directory"
+      src_dir = File.join(root, source)
+      digest = Digest::SHA256.new
+      Dir.glob(File.join(src_dir, "**/*")).sort.each do |f|
+        next unless File.file?(f)
+        next if File.basename(f) == "asset.yml"
+
+        digest.update(f.sub(src_dir, ""))
+        digest.update(File.read(f, mode: "rb"))
+      end
+      "sha256:#{digest.hexdigest[0, 12]}"
+    else
+      "sha256:#{Digest::SHA256.hexdigest(File.read(File.join(root, source)))[0, 12]}"
     end
   end
 

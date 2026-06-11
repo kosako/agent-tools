@@ -20,7 +20,7 @@ dotfiles 側の実装は含めません。
 
 ## Status output contract
 
-`scripts/status.sh --json` (未実装) は、以下の JSON を stdout に出力します。
+`scripts/status.sh --json` は、以下の JSON を stdout に出力します。
 
 ```json
 {
@@ -130,9 +130,12 @@ build_id: 20260611T000000Z
 - work / client / customer / third-party confidential material。
 - asset 本体の content。status は metadata と state のみを扱う。
 
+## 実装状態
+
+- `scripts/status.sh`: 実装済み (report-only、書き込みなし)。
+- build adapters での marker 埋め込み: `scripts/build.sh` で実装済み。
+- sync での marker enforcement: `scripts/sync.sh` で実装済み。
+
 ## 後続実装
 
-- `scripts/status.sh` の実装 (report-only、書き込みなし)。
-- build adapters での marker 埋め込み (Issue #10)。
-- sync での marker enforcement (Issue #11)。
 - `doctor` への status 統合。
