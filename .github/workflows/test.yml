@@ -1,0 +1,35 @@
+# self-tests と repository checks を PR / push ごとに実行する。
+# scripts は macOS 標準 Ruby 前提なので macOS runner を使う。
+# 外部 dependency の install と secrets は不要。
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  self-tests:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run self-tests
+        run: |
+          for t in scripts/tests/*.sh; do
+            echo "--- $t"
+            "$t"
+          done
+
+      - name: Check repository assets
+        run: |
+          scripts/check-manifests.sh
+          scripts/check-injection.sh
+
+      - name: Build and report status
+        run: |
+          scripts/build.sh
+          scripts/status.sh --json

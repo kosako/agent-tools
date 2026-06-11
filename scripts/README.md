@@ -3,6 +3,9 @@
 すべての scripts は外部依存ゼロ・network access なしで実行できます。
 実装は macOS 標準の Ruby (YAML stdlib) を使います。
 
+`tests/` の self-tests と repository checks は CI (`.github/workflows/test.yml`) で
+PR / push ごとに実行されます。
+
 ## 実装済み
 
 - `check-manifests.sh`: sidecar asset manifests の static validation。
