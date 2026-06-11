@@ -17,7 +17,7 @@ require_relative "build"
 require_relative "sync"
 
 module Status
-  CONTRACT_VERSION = 1
+  CONTRACT_VERSION = 2
   # Sync の plan action から contract の target state への対応。
   ACTION_TO_STATE = {
     "skip" => "managed",
@@ -55,6 +55,7 @@ module Status
           "total" => generated_total,
           "stale" => generated_stale,
         },
+        "register" => register_summary,
         "sync_targets" => sync_targets,
       }
     end
@@ -119,6 +120,21 @@ module Status
       end
     end
 
+    # catalog (docs/register-catalog.md) の register summary。
+    def register_summary
+      catalog_path = File.join(@root, "generated", "catalog.json")
+      summary = { "catalog_present" => false, "registered" => 0, "human_review_required" => 0 }
+      return summary unless File.file?(catalog_path)
+
+      assets = JSON.parse(File.read(catalog_path)).fetch("assets", [])
+      summary["catalog_present"] = true
+      summary["registered"] = assets.count { |a| a["registration"] == "registered" }
+      summary["human_review_required"] = assets.count { |a| a["registration"] == "human_review_required" }
+      summary
+    rescue JSON::ParserError
+      summary
+    end
+
     def sync_targets
       Sync::Runner.new(@root, @homes).plan.map do |p|
         {
@@ -178,6 +194,8 @@ module Status
     puts "assets:    #{report['assets']['total']} manifest(s), #{report['assets']['manifest_errors']} error(s)"
     puts "checks:    manifest=#{report['checks']['manifest_validation']} injection=#{report['checks']['prompt_injection_static']}"
     puts "generated: #{report['generated']['total']} artifact(s), #{report['generated']['stale']} stale"
+    reg = report["register"]
+    puts "register:  catalog_present=#{reg['catalog_present']} registered=#{reg['registered']} human_review_required=#{reg['human_review_required']}"
     report["sync_targets"].each do |t|
       puts "target:    [#{t['tool']}] #{t['name']} #{t['state']}"
     end

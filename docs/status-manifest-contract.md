@@ -24,7 +24,7 @@ dotfiles 側の実装は含めません。
 
 ```json
 {
-  "contract_version": 1,
+  "contract_version": 2,
   "repo": {
     "present": true,
     "clean": true
@@ -41,6 +41,11 @@ dotfiles 側の実装は含めません。
     "total": 0,
     "stale": 0
   },
+  "register": {
+    "catalog_present": true,
+    "registered": 1,
+    "human_review_required": 0
+  },
   "sync_targets": [
     {
       "tool": "claude-code",
@@ -53,7 +58,8 @@ dotfiles 側の実装は含めません。
 
 ### Fields
 
-- `contract_version`: この contract の version。v1 は `1`。
+- `contract_version`: この contract の version。現行は `2`
+  (v2 で `register` を追加)。
 - `repo.present`: agent-tools repository が存在するか。
 - `repo.clean`: working tree が clean か。
 - `assets.total`: tracked manifest の数。
@@ -61,6 +67,8 @@ dotfiles 側の実装は含めません。
 - `checks.*`: 各 check の最新結果。`pass`, `fail`, `human_review`, `not_run`。
 - `generated.total`: 生成済み artifact の数。
 - `generated.stale`: source より古い artifact の数。
+- `register.*`: [catalog](register-catalog.md) の summary。catalog 不在時は
+  `catalog_present: false` と zero counts。
 - `sync_targets[].state`: 後述の target state。
 
 ### Target state

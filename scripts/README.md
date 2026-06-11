@@ -88,10 +88,21 @@ usage: doctor.sh [--root DIR] [--codex-home DIR] [--claude-home DIR] [--agents-h
 - read-only。paths は tilde 表記で出力し、secrets を含めない。
 - self-test: `tests/doctor-test.sh`
 
+- `register.sh`: assets を検証し、`generated/catalog.json` に登録状態を記録する。
+  [Register / Catalog](../docs/register-catalog.md) に従う。
+
+```text
+usage: register.sh [--root DIR] [--quiet]
+```
+
+- gate は build と同じ。manifest error / high finding で fail し、catalog を更新しない。
+- medium finding は manifest の `review.human_review` と asset 単位で突き合わせる。
+- exit code: 0 (全 registered) / 3 (human_review_required あり) / 1 (gate fail)。
+- 書き込みは `generated/catalog.json` のみ。
+- self-test: `tests/register-test.sh`
+
 ## 予定している scripts
 
 - `check-injection.sh` への追加: optional LLM review (privacy preflight つき)。
-- `register.sh`: assets を validate し、local catalog に register する。
-  設計は [Register / Catalog](../docs/register-catalog.md) で確定済み。
 
 scripts の実装は、対応する GitHub Issue で scope されるまで行いません。
