@@ -76,12 +76,22 @@ usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR]
 - 出力に absolute local paths / secrets を含めない。
 - self-test: `tests/status-test.sh`
 
+- `doctor.sh`: state を変更せず、local environment assumptions を inspect する。
+
+```text
+usage: doctor.sh [--root DIR] [--codex-home DIR] [--claude-home DIR] [--agents-home DIR]
+```
+
+- ruby / git、status report の統合、tool homes、禁止 targets への marker
+  誤存在、catalog の存在と鮮度を check する。
+- 出力は `level: area: message` 形式 (ok / info / warn / fail)。fail があれば exit 1。
+- read-only。paths は tilde 表記で出力し、secrets を含めない。
+- self-test: `tests/doctor-test.sh`
+
 ## 予定している scripts
 
 - `check-injection.sh` への追加: optional LLM review (privacy preflight つき)。
 - `register.sh`: assets を validate し、local catalog に register する。
   設計は [Register / Catalog](../docs/register-catalog.md) で確定済み。
-- `sync.sh`: generated artifacts の tool directories への反映を dry-run または apply する。
-- `doctor.sh`: state を変更せず、local environment assumptions を inspect する。
 
-sync / build 系 scripts は、対応する GitHub Issue で scope されるまで実装しません。
+scripts の実装は、対応する GitHub Issue で scope されるまで行いません。
