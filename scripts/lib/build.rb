@@ -124,6 +124,47 @@ module Build
     def rel(path)
       path.sub(%r{\A#{Regexp.escape(@root)}/}, "")
     end
+
+    public
+
+    # 現在の manifests に対応しない generated artifacts を削除する。
+    # 削除するのは agent-tools marker を持つ directory のみ。
+    # marker のない directory は warning として返し、残す。
+    def prune
+      expected = Hash.new { |h, k| h[k] = [] }
+      manifests.each do |_path, data|
+        data["targets"].each { |tool| expected[tool] << data["name"] }
+      end
+
+      pruned = []
+      kept = []
+      TOOLS.each do |tool|
+        Dir.glob(File.join(@root, "generated", tool, "skills", "*")).sort.each do |dir|
+          next unless File.directory?(dir)
+          next if expected[tool].include?(File.basename(dir))
+
+          if managed_marker?(dir)
+            FileUtils.rm_rf(dir)
+            pruned << rel(dir)
+          else
+            kept << rel(dir)
+          end
+        end
+      end
+      [pruned, kept]
+    end
+
+    private
+
+    def managed_marker?(dir)
+      path = File.join(dir, ".agent-tools-managed.yml")
+      return false unless File.file?(path)
+
+      data = YamlUtil.load(File.read(path), path)
+      data.is_a?(Hash) && data["repo"] == "agent-tools"
+    rescue Psych::Exception
+      false
+    end
   end
 
   # source content から決定的な build_id を作る。status の stale 判定でも使う。
@@ -148,12 +189,15 @@ module Build
   def self.main(argv)
     root = Dir.pwd
     quiet = false
+    prune = false
     until argv.empty?
       case (arg = argv.shift)
       when "--root"
         root = argv.shift or abort_usage
       when "--quiet"
         quiet = true
+      when "--prune"
+        prune = true
       when "-h", "--help"
         print_usage
         return 0
@@ -168,9 +212,15 @@ module Build
       return 1
     end
 
-    built, skipped = Runner.new(root).run
+    runner = Runner.new(root)
+    built, skipped = runner.run
     built.each { |line| puts "built: #{line}" }
     skipped.each { |line| warn "skipped: #{line}" }
+    if prune
+      pruned, kept = runner.prune
+      pruned.each { |line| puts "pruned: #{line}" }
+      kept.each { |line| warn "kept (unmanaged, no agent-tools marker): #{line}" }
+    end
     puts "ok: #{built.size} artifact(s) built" unless quiet
     0
   end
@@ -197,7 +247,7 @@ module Build
   end
 
   def self.print_usage
-    puts "usage: build.sh [--root DIR] [--quiet]"
+    puts "usage: build.sh [--root DIR] [--prune] [--quiet]"
   end
 
   def self.abort_usage

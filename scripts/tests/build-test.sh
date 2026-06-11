@@ -179,6 +179,21 @@ grep -q "registration fail" "$tmp/out-inj" \
   || fail "missing registration fail notice: $(cat "$tmp/out-inj")"
 [ ! -d "$tmp/inj/generated" ] || fail "nothing should be generated on injection failure"
 
+# --- case 4b: --prune は manifest の消えた managed artifact だけを削除する ---
+rm -f "$tmp/ok/shared/prompts/personal-colon.md" "$tmp/ok/shared/prompts/personal-colon.asset.yml"
+mkdir -p "$tmp/ok/generated/codex/skills/personal-stray"
+echo "user file" > "$tmp/ok/generated/codex/skills/personal-stray/SKILL.md"
+
+"$build" --root "$tmp/ok" --prune > "$tmp/out-prune" 2>&1 || fail "prune build should pass: $(cat "$tmp/out-prune")"
+grep -q "pruned: generated/codex/skills/personal-colon" "$tmp/out-prune" \
+  || fail "missing pruned line: $(cat "$tmp/out-prune")"
+[ ! -e "$tmp/ok/generated/codex/skills/personal-colon" ] || fail "orphan artifact should be pruned"
+grep -q "kept (unmanaged, no agent-tools marker): generated/codex/skills/personal-stray" "$tmp/out-prune" \
+  || fail "missing kept warning: $(cat "$tmp/out-prune")"
+[ -f "$tmp/ok/generated/codex/skills/personal-stray/SKILL.md" ] \
+  || fail "unmanaged directory must not be pruned"
+[ -d "$tmp/ok/generated/codex/skills/personal-demo" ] || fail "live artifact must survive prune"
+
 # --- case 5: repository 本体が build できる ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$build" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \
