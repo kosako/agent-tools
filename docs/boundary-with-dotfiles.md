@@ -39,3 +39,6 @@
 
 `dotfiles` がこの repository の存在を知る必要がある場合でも、許可するのは expected path に
 `agent-tools` が存在するかを知らせる report-only checks までです。
+
+`dotfiles` が report-only で読める status の形式は
+[Status / Manifest Contract](status-manifest-contract.md) で定義します。
