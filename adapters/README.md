@@ -7,5 +7,10 @@ v1 で想定する targets:
 - Codex
 - Claude Code
 
-この scaffold phase では layout だけを予約します。
-adapter schemas と build logic は follow-up implementation issues で追加します。
+adapter specs:
+
+- [codex/README.md](codex/README.md)
+- [claude-code/README.md](claude-code/README.md)
+
+build logic は `scripts/build.sh` (`scripts/lib/build.rb`) にあります。
+v1 で生成する artifact kind は `skill` のみです。
