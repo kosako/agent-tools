@@ -33,7 +33,9 @@ jobs:
           scripts/check-manifests.sh
           scripts/check-injection.sh
 
-      - name: Build and report status
+      - name: Build, register, and report status
         run: |
           scripts/build.sh
+          scripts/register.sh
           scripts/status.sh --json
+          scripts/doctor.sh

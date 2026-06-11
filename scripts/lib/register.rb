@@ -13,6 +13,7 @@ require "json"
 require "yaml"
 require "fileutils"
 
+require_relative "yaml_util"
 require_relative "check_manifests"
 require_relative "check_injection"
 require_relative "build"
@@ -81,7 +82,7 @@ module Register
               Dir.glob(File.join(@root, "shared/**/asset.yml"))
       paths.sort.map do |full|
         rel = full.sub(%r{\A#{Regexp.escape(@root)}/}, "")
-        data = load_yaml(File.read(full), rel)
+        data = YamlUtil.load(File.read(full), rel)
         {
           name: data["name"],
           kind: data["kind"],
@@ -101,7 +102,8 @@ module Register
       mediums.each do |finding|
         asset = assets.find { |a| owns_path?(a, finding.path) }
         unless asset
-          raise Error, "medium finding on #{finding.path} cannot be attributed to any asset"
+          raise Error, "medium finding on #{finding.path}, which is not part of any asset; " \
+                       "clean the file or move it out of shared/"
         end
 
         warn finding.to_s
@@ -144,13 +146,6 @@ module Register
       }
     end
 
-    def load_yaml(content, path)
-      if Psych::VERSION.split(".").first.to_i >= 4
-        YAML.safe_load(content, filename: path)
-      else
-        YAML.safe_load(content, [], [], false, path)
-      end
-    end
   end
 
   def self.main(argv)

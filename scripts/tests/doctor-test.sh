@@ -62,9 +62,9 @@ do
 done
 
 # --- case 2: doctor は read-only ---
-before=$(find "$tmp" -type f -exec md5 -q {} + | sort)
+before=$(find "$tmp" -type f -exec cksum {} + | sort)
 run_doctor > /dev/null 2>&1
-after=$(find "$tmp" -type f -exec md5 -q {} + | sort)
+after=$(find "$tmp" -type f -exec cksum {} + | sort)
 [ "$before" = "$after" ] || fail "doctor must not modify anything"
 
 # --- case 3: 禁止 target に marker が紛れ込むと fail ---

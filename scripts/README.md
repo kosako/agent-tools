@@ -57,6 +57,7 @@ usage: sync.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] [--
 - plan は `create` / `update` / `skip (up-to-date)` / `conflict` で表示される。
 - 更新するのは agent-tools management marker を持つ target のみ。
   unmanaged な同名 target は conflict として exit 1 で停止し、何も書き込まない。
+- symlink の target も conflict として扱い、決して触らない。
 - 書き込み先は `<tool home>/skills/personal-*` のみ。それ以外の path は構成しない。
 - `--codex-home` / `--claude-home` は inspection / test 用の override。
 - self-test: `tests/sync-test.sh` (fake home のみを使い、実際の tool homes には触れない)

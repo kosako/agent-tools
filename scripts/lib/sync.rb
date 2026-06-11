@@ -11,6 +11,8 @@
 # - 許可 target は <tool home>/skills/personal-* のみ。それ以外の path は構成しない。
 
 require "yaml"
+
+require_relative "yaml_util"
 require "fileutils"
 
 module Sync
@@ -68,6 +70,11 @@ module Sync
         return Plan.new("conflict", tool, name, target, "generated artifact is missing a valid marker")
       end
 
+      # symlink は実体の所在によらず unmanaged target として扱い、決して触らない。
+      if File.symlink?(target)
+        return Plan.new("conflict", tool, name, target, "existing target is a symlink")
+      end
+
       unless File.exist?(target)
         return Plan.new("create", tool, name, target)
       end
@@ -88,7 +95,7 @@ module Sync
       path = File.join(dir, MARKER_FILE)
       return nil unless File.file?(path)
 
-      data = load_yaml(File.read(path), path)
+      data = YamlUtil.load(File.read(path), path)
       data.is_a?(Hash) ? data : nil
     rescue Psych::Exception
       nil
@@ -101,13 +108,6 @@ module Sync
         marker["name"] == name
     end
 
-    def load_yaml(content, path)
-      if Psych::VERSION.split(".").first.to_i >= 4
-        YAML.safe_load(content, filename: path)
-      else
-        YAML.safe_load(content, [], [], false, path)
-      end
-    end
   end
 
   def self.main(argv)

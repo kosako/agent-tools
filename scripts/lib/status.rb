@@ -11,6 +11,7 @@
 require "json"
 require "yaml"
 
+require_relative "yaml_util"
 require_relative "check_manifests"
 require_relative "check_injection"
 require_relative "build"
@@ -96,7 +97,7 @@ module Status
       marker_path = File.join(artifact, Sync::MARKER_FILE)
       return false unless File.file?(marker_path)
 
-      marker = load_yaml(File.read(marker_path), marker_path)
+      marker = YamlUtil.load(File.read(marker_path), marker_path)
       return false unless marker.is_a?(Hash)
 
       source = sources[marker["name"]]
@@ -111,7 +112,7 @@ module Status
       paths = Dir.glob(File.join(@root, "shared/**/*.asset.yml")) +
               Dir.glob(File.join(@root, "shared/**/asset.yml"))
       paths.each_with_object({}) do |full, map|
-        data = load_yaml(File.read(full), full)
+        data = YamlUtil.load(File.read(full), full)
         next unless data.is_a?(Hash) && data["name"] && data["source"].is_a?(Hash)
 
         map[data["name"]] = data["source"]
@@ -145,13 +146,6 @@ module Status
       end
     end
 
-    def load_yaml(content, path)
-      if Psych::VERSION.split(".").first.to_i >= 4
-        YAML.safe_load(content, filename: path)
-      else
-        YAML.safe_load(content, [], [], false, path)
-      end
-    end
   end
 
   def self.main(argv)
