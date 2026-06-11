@@ -36,7 +36,7 @@ usage: check-injection.sh [--root DIR] [--quiet]
   adapter spec は [adapters/](../adapters/README.md) を参照。
 
 ```text
-usage: build.sh [--root DIR] [--quiet]
+usage: build.sh [--root DIR] [--prune] [--quiet]
 ```
 
 - 生成前に manifest validation と static injection check を必ず通す。
@@ -44,6 +44,9 @@ usage: build.sh [--root DIR] [--quiet]
 - 各 artifact に management marker (`.agent-tools-managed.yml`) を埋め込む。
   `build_id` は source content の sha256 なので build は決定的。
 - 書き込み先は `generated/` のみ。tool directories には書き込まない。
+- `--prune` で manifest に対応しなくなった generated artifact を削除する。
+  削除するのは agent-tools marker を持つ directory のみで、marker のない
+  directory は警告して残す。
 - self-test: `tests/build-test.sh`
 
 - `sync.sh`: `generated/` の personal assets を tool directories へ反映する。
