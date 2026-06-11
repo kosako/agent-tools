@@ -15,7 +15,11 @@ jobs:
   self-tests:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      # 外部 action は full commit SHA で pin する (タグ移動による差し替え対策)。
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # テストが repo 内の scripts を実行するため、token を .git/config に残さない。
+          persist-credentials: false
 
       - name: Run self-tests
         run: |
