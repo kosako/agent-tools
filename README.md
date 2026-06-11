@@ -32,6 +32,8 @@ secret store / local private config
 - 実作業は GitHub Issue / PR で管理する。
 - 基本 workflow は [personal-project-operating-loop](shared/workflows/personal-project-operating-loop.md) で管理する。
 - shared asset metadata は [Asset Manifest Schema](docs/asset-manifest-schema.md) に従う。
+- dotfiles 連携と management marker は
+  [Status / Manifest Contract](docs/status-manifest-contract.md) に従う。
 
 ## 公開 repository の安全方針
 
