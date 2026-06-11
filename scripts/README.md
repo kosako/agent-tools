@@ -59,6 +59,20 @@ usage: sync.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] [--
 - self-test: `tests/sync-test.sh` (fake home のみを使い、実際の tool homes には触れない)
 - 残課題: `stale` / `missing` state の status 連携は `status.sh` 実装時に扱う。
 
+- `status.sh`: report-only status。
+  [Status / Manifest Contract](../docs/status-manifest-contract.md) の JSON を出力する。
+
+```text
+usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR]
+```
+
+- `--json` で contract_version 1 の JSON、省略時は human-readable summary。
+- manifest validation / injection check の結果、generated の stale 数、
+  sync target state (managed / stale / conflict / missing) を含む。
+- read-only。いかなる state も変更しない。
+- 出力に absolute local paths / secrets を含めない。
+- self-test: `tests/status-test.sh`
+
 ## 予定している scripts
 
 - `check-injection.sh` への追加: optional LLM review (privacy preflight つき)。
