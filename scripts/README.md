@@ -80,6 +80,7 @@ usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR]
 
 - `check-injection.sh` への追加: optional LLM review (privacy preflight つき)。
 - `register.sh`: assets を validate し、local catalog に register する。
+  設計は [Register / Catalog](../docs/register-catalog.md) で確定済み。
 - `sync.sh`: generated artifacts の tool directories への反映を dry-run または apply する。
 - `doctor.sh`: state を変更せず、local environment assumptions を inspect する。
 
