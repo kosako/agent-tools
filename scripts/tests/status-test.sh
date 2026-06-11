@@ -50,7 +50,8 @@ EOF
 
 # --- case 1: build 前。generated 0、sync_targets は空 ---
 run_status > "$tmp/s1" 2>&1 || fail "status should succeed: $(cat "$tmp/s1")"
-[ "$(jget "$tmp/s1" contract_version)" = "1" ] || fail "contract_version should be 1"
+[ "$(jget "$tmp/s1" contract_version)" = "2" ] || fail "contract_version should be 2"
+[ "$(jget "$tmp/s1" register catalog_present)" = "false" ] || fail "catalog_present should be false before register"
 [ "$(jget "$tmp/s1" assets total)" = "1" ] || fail "assets.total should be 1"
 [ "$(jget "$tmp/s1" checks manifest_validation)" = '"pass"' ] || fail "manifest check should pass"
 [ "$(jget "$tmp/s1" checks prompt_injection_static)" = '"pass"' ] || fail "injection check should pass"
