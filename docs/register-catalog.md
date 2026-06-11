@@ -31,6 +31,7 @@ catalog に記録する step です。
         "path": "shared/workflows/personal-example.md",
         "format": "markdown"
       },
+      "build_id": "sha256:0123456789ab",
       "checks": {
         "manifest_validation": "pass",
         "prompt_injection_static": "pass"
@@ -40,6 +41,11 @@ catalog に記録する step です。
   ]
 }
 ```
+
+### `build_id`
+
+source content の決定的 hash (build の marker と同じ計算)。doctor が catalog の
+鮮度判定に使う。mtime には依存しない。
 
 ### `registration`
 

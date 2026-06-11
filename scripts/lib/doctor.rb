@@ -14,6 +14,7 @@ require "yaml"
 
 require_relative "status"
 require_relative "sync"
+require_relative "build"
 
 module Doctor
   LEVELS = %w[ok info warn fail].freeze
@@ -126,6 +127,7 @@ module Doctor
     end
 
     # catalog の存在と鮮度 (docs/register-catalog.md)。
+    # mtime ではなく、catalog の build_id を source content から再計算して比較する。
     def check_catalog
       catalog = File.join(@root, "generated", "catalog.json")
       unless File.file?(catalog)
@@ -133,21 +135,53 @@ module Doctor
         return
       end
 
-      data = JSON.parse(File.read(catalog))
-      newest_manifest = (Dir.glob(File.join(@root, "shared/**/*.asset.yml")) +
-                         Dir.glob(File.join(@root, "shared/**/asset.yml")))
-                        .map { |f| File.mtime(f) }.max
-      if newest_manifest && File.mtime(catalog) < newest_manifest
-        report("warn", "catalog", "stale (manifests changed after last register)")
+      entries = JSON.parse(File.read(catalog)).fetch("assets", [])
+      by_name = entries.each_with_object({}) { |e, h| h[e["name"]] = e }
+      manifests = current_manifest_sources
+
+      stale = []
+      manifests.each do |name, source|
+        entry = by_name[name]
+        if entry.nil?
+          stale << "#{name}: not in catalog"
+        elsif entry["build_id"] != Build.build_id_for(@root, source["path"], source["format"])
+          stale << "#{name}: content changed since register"
+        end
+      end
+      (by_name.keys - manifests.keys).each { |name| stale << "#{name}: manifest removed" }
+
+      if stale.empty?
+        report("ok", "catalog", "present, #{entries.size} asset(s), fresh")
       else
-        report("ok", "catalog", "present, #{data.fetch('assets', []).size} asset(s)")
+        report("warn", "catalog", "stale (#{stale.join('; ')})")
       end
     rescue JSON::ParserError
       report("fail", "catalog", "unreadable (invalid JSON)")
     end
 
+    def current_manifest_sources
+      paths = Dir.glob(File.join(@root, "shared/**/*.asset.yml")) +
+              Dir.glob(File.join(@root, "shared/**/asset.yml"))
+      paths.each_with_object({}) do |full, map|
+        data = load_yaml(File.read(full), full)
+        next unless data.is_a?(Hash) && data["name"] && data["source"].is_a?(Hash)
+
+        map[data["name"]] = data["source"]
+      rescue Psych::Exception
+        next
+      end
+    end
+
     def tilde(path)
       path.sub(Dir.home, "~")
+    end
+
+    def load_yaml(content, path)
+      if Psych::VERSION.split(".").first.to_i >= 4
+        YAML.safe_load(content, filename: path)
+      else
+        YAML.safe_load(content, [], [], false, path)
+      end
     end
   end
 

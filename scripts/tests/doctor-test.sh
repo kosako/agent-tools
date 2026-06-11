@@ -85,15 +85,22 @@ grep -q "fail: target: \[codex\] personal-demo conflict" "$tmp/d4" || fail "miss
 "$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" > /dev/null 2>&1 \
   && fail "sync should also report the conflict" || true
 
-# --- case 5: catalog があれば鮮度を check する ---
+# --- case 5: catalog があれば build_id で鮮度を check する ---
 rm -rf "$tmp/codex/skills/personal-demo"
 "$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --apply --quiet > /dev/null
-echo '{"catalog_version":1,"assets":[{"name":"personal-demo"}]}' > "$tmp/repo/generated/catalog.json"
+"$script_dir/../register.sh" --root "$tmp/repo" --quiet > /dev/null
 run_doctor > "$tmp/d5" 2>&1 || fail "doctor with catalog should pass: $(cat "$tmp/d5")"
-grep -q "ok: catalog: present, 1 asset(s)" "$tmp/d5" || fail "missing catalog ok line: $(cat "$tmp/d5")"
+grep -q "ok: catalog: present, 1 asset(s), fresh" "$tmp/d5" || fail "missing catalog ok line: $(cat "$tmp/d5")"
 
-touch "$tmp/repo/shared/workflows/personal-demo.asset.yml"
+# mtime だけが変わっても stale にならない
+touch "$tmp/repo/shared/workflows/personal-demo.asset.yml" "$tmp/repo/shared/workflows/personal-demo.md"
+run_doctor > "$tmp/d5a" 2>&1 || fail "touched files should not be stale"
+grep -q "ok: catalog: present, 1 asset(s), fresh" "$tmp/d5a" || fail "mtime change must not cause stale: $(cat "$tmp/d5a")"
+
+# source content の変更は stale になる
+echo "changed" >> "$tmp/repo/shared/workflows/personal-demo.md"
 run_doctor > "$tmp/d5b" 2>&1 || fail "stale catalog should still exit 0"
-grep -q "warn: catalog: stale" "$tmp/d5b" || fail "missing catalog stale warn: $(cat "$tmp/d5b")"
+grep -q "warn: catalog: stale (personal-demo: content changed since register)" "$tmp/d5b" \
+  || fail "missing catalog stale warn: $(cat "$tmp/d5b")"
 
 echo "ok: doctor self-test passed"

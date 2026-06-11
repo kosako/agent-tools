@@ -15,6 +15,7 @@ require "fileutils"
 
 require_relative "check_manifests"
 require_relative "check_injection"
+require_relative "build"
 
 module Register
   CATALOG_VERSION = 1
@@ -133,6 +134,8 @@ module Register
         "visibility" => asset[:visibility],
         "targets" => asset[:targets],
         "source" => asset[:source],
+        # source content の決定的 hash。doctor の鮮度判定に使う。
+        "build_id" => Build.build_id_for(@root, asset[:source]["path"], asset[:source]["format"]),
         "checks" => {
           "manifest_validation" => "pass",
           "prompt_injection_static" => asset[:flagged] ? "human_review" : "pass",
