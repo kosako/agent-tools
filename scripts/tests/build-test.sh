@@ -101,6 +101,32 @@ build_id_1=$(grep build_id "$marker")
 build_id_2=$(grep build_id "$marker")
 [ "$build_id_1" = "$build_id_2" ] || fail "build_id should be deterministic"
 
+# --- case 2b: 特殊文字を含む summary でも frontmatter が valid YAML になる ---
+mkdir -p "$tmp/ok/shared/prompts"
+echo "# colon" > "$tmp/ok/shared/prompts/personal-colon.md"
+cat > "$tmp/ok/shared/prompts/personal-colon.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-colon
+kind: prompt
+visibility: public
+targets:
+  - codex
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/prompts/personal-colon.md
+  format: markdown
+summary: "demo: with colon #and hash"
+EOF
+"$build" --root "$tmp/ok" --quiet > /dev/null 2>&1 || fail "colon summary build should pass"
+ruby -ryaml -e '
+  fm = File.read(ARGV[0]).split(/^---$/)[1]
+  d = YAML.safe_load(fm)
+  abort "frontmatter broken: #{d.inspect}" unless d["description"] == "demo: with colon #and hash"
+' "$tmp/ok/generated/codex/skills/personal-colon/SKILL.md" \
+  || fail "generated frontmatter must stay valid YAML with special chars"
+
 # --- case 3: manifest error で build が止まる ---
 mkdir -p "$tmp/badmanifest/shared/prompts"
 cat > "$tmp/badmanifest/shared/prompts/personal-x.md" <<'EOF'

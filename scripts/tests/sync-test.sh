@@ -93,4 +93,18 @@ run_sync > "$tmp/out-badmarker" 2>&1 || status=$?
 [ "$status" -eq 1 ] || fail "missing marker should exit 1: $(cat "$tmp/out-badmarker")"
 grep -q "missing a valid marker" "$tmp/out-badmarker" || fail "missing marker conflict line"
 
+# --- case 7: symlink target は conflict として扱い、決して触らない ---
+"$build" --root "$tmp/repo" --quiet > /dev/null
+rm -rf "$tmp/codex/skills/personal-demo"
+mkdir -p "$tmp/real-skill"
+echo "real content" > "$tmp/real-skill/SKILL.md"
+ln -s "$tmp/real-skill" "$tmp/codex/skills/personal-demo"
+
+status=0
+run_sync --apply > "$tmp/out-symlink" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "symlink target should exit 1: $(cat "$tmp/out-symlink")"
+grep -q "conflict: \[codex\].*symlink" "$tmp/out-symlink" || fail "missing symlink conflict line"
+[ -L "$tmp/codex/skills/personal-demo" ] || fail "symlink must not be replaced"
+grep -q "real content" "$tmp/real-skill/SKILL.md" || fail "symlink destination must be untouched"
+
 echo "ok: sync self-test passed"

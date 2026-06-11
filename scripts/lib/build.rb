@@ -12,6 +12,7 @@ require "yaml"
 require "digest"
 require "fileutils"
 
+require_relative "yaml_util"
 require_relative "check_manifests"
 require_relative "check_injection"
 
@@ -58,17 +59,10 @@ module Build
               Dir.glob(File.join(@root, "shared/**/asset.yml"))
       paths.sort.map do |full|
         rel = full.sub(%r{\A#{Regexp.escape(@root)}/}, "")
-        [rel, load_yaml(File.read(full), rel)]
+        [rel, YamlUtil.load(File.read(full), rel)]
       end
     end
 
-    def load_yaml(content, path)
-      if Psych::VERSION.split(".").first.to_i >= 4
-        YAML.safe_load(content, filename: path)
-      else
-        YAML.safe_load(content, [], [], false, path)
-      end
-    end
 
     def artifact_kind_for(data, tool, kind)
       compat = data["compatibility"]
@@ -107,17 +101,13 @@ module Build
     end
 
     # source が frontmatter を持たない場合のみ、manifest から frontmatter を生成する。
+    # YAML dump を使い、特殊文字を含む summary でも frontmatter が壊れないようにする。
     def skill_markdown(content, data)
       return content if content.start_with?("---\n")
 
       description = data["summary"] || data["description"] || data["name"]
-      <<~FRONTMATTER + content
-        ---
-        name: #{data['name']}
-        description: #{description}
-        ---
-
-      FRONTMATTER
+      frontmatter = YAML.dump("name" => data["name"], "description" => description)
+      "#{frontmatter}---\n\n#{content}"
     end
 
     def write_marker(out_dir, name, tool, source, build_id)
@@ -143,7 +133,8 @@ module Build
       digest = Digest::SHA256.new
       Dir.glob(File.join(src_dir, "**/*")).sort.each do |f|
         next unless File.file?(f)
-        next if File.basename(f) == "asset.yml"
+        # copy と同じく、manifest として除外するのは top-level の asset.yml のみ。
+        next if f == File.join(src_dir, "asset.yml")
 
         digest.update(f.sub(src_dir, ""))
         digest.update(File.read(f, mode: "rb"))

@@ -8,6 +8,8 @@
 
 require "yaml"
 
+require_relative "yaml_util"
+
 module CheckManifests
   KINDS = %w[skill prompt workflow agent instruction template].freeze
   TRACKED_VISIBILITIES = %w[public personal].freeze
@@ -60,18 +62,11 @@ module CheckManifests
       (sidecars + dir_manifests).sort.map { |p| rel(p) }
     end
 
-    def load_yaml(content, path)
-      if Psych::VERSION.split(".").first.to_i >= 4
-        YAML.safe_load(content, filename: path)
-      else
-        YAML.safe_load(content, [], [], false, path)
-      end
-    end
 
     def validate_manifest(path)
       content = File.read(File.join(@root, path))
       data = begin
-        load_yaml(content, path)
+        YamlUtil.load(content, path)
       rescue Psych::Exception => e
         error(path, "YAML parse error: #{e.message}")
         return

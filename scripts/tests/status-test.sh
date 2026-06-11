@@ -109,10 +109,10 @@ run_status > "$tmp/s6" 2>&1
 
 # --- case 7: status は read-only (fixture を一切変更しない) ---
 before=$(find "$tmp/repo" "$tmp/codex" "$tmp/claude" -type f | sort)
-ls_before=$(find "$tmp/repo" "$tmp/codex" "$tmp/claude" -type f -exec md5 -q {} + | sort)
+ls_before=$(find "$tmp/repo" "$tmp/codex" "$tmp/claude" -type f -exec cksum {} + | sort)
 run_status > /dev/null 2>&1
 after=$(find "$tmp/repo" "$tmp/codex" "$tmp/claude" -type f | sort)
-ls_after=$(find "$tmp/repo" "$tmp/codex" "$tmp/claude" -type f -exec md5 -q {} + | sort)
+ls_after=$(find "$tmp/repo" "$tmp/codex" "$tmp/claude" -type f -exec cksum {} + | sort)
 [ "$before" = "$after" ] || fail "status must not add or remove files"
 [ "$ls_before" = "$ls_after" ] || fail "status must not modify files"
 
