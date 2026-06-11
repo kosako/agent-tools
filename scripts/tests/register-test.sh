@@ -103,7 +103,50 @@ status=0
 [ "$status" -eq 1 ] || fail "manifest error should exit 1"
 [ ! -e "$tmp/bad/generated/catalog.json" ] || fail "catalog must not be written on manifest error"
 
-# --- case 8: repository 本体が register できる ---
+# --- case 8: 宣言 risk high → fail, catalog 未生成 ---
+mkdir -p "$tmp/dhigh/shared/workflows"
+echo "# innocent" > "$tmp/dhigh/shared/workflows/personal-demo.md"
+write_manifest "$tmp/dhigh/shared/workflows"
+ruby -i -pe 'sub("prompt_injection: low", "prompt_injection: high")' \
+  "$tmp/dhigh/shared/workflows/personal-demo.asset.yml"
+status=0
+"$register" --root "$tmp/dhigh" > "$tmp/r8a" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "declared high should exit 1, got $status: $(cat "$tmp/r8a")"
+grep -q "declared high risk" "$tmp/r8a" || fail "missing declared high message"
+[ ! -e "$tmp/dhigh/generated/catalog.json" ] || fail "catalog must not be written on declared high"
+
+# --- case 9: 宣言 risk unknown → human_review_required / approved → registered ---
+mkdir -p "$tmp/dunk/shared/workflows"
+echo "# innocent" > "$tmp/dunk/shared/workflows/personal-demo.md"
+write_manifest "$tmp/dunk/shared/workflows"
+ruby -i -pe 'sub("privacy: low", "privacy: unknown")' \
+  "$tmp/dunk/shared/workflows/personal-demo.asset.yml"
+status=0
+"$register" --root "$tmp/dunk" > "$tmp/r9" 2>&1 || status=$?
+[ "$status" -eq 3 ] || fail "declared unknown should exit 3, got $status: $(cat "$tmp/r9")"
+[ "$(jget "$tmp/dunk/generated/catalog.json" assets 0 registration)" = '"human_review_required"' ] \
+  || fail "declared unknown should require human review"
+
+write_manifest "$tmp/dunk/shared/workflows" "review:
+  human_review: approved"
+ruby -i -pe 'sub("privacy: low", "privacy: unknown")' \
+  "$tmp/dunk/shared/workflows/personal-demo.asset.yml"
+"$register" --root "$tmp/dunk" > "$tmp/r9b" 2>&1 || fail "approved unknown should exit 0: $(cat "$tmp/r9b")"
+[ "$(jget "$tmp/dunk/generated/catalog.json" assets 0 registration)" = '"registered"' ] \
+  || fail "approved unknown should be registered"
+
+# --- case 10: rejected は finding なしでも fail ---
+mkdir -p "$tmp/drej/shared/workflows"
+echo "# innocent" > "$tmp/drej/shared/workflows/personal-demo.md"
+write_manifest "$tmp/drej/shared/workflows" "review:
+  human_review: rejected"
+status=0
+"$register" --root "$tmp/drej" > "$tmp/r10" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "rejected without findings should exit 1, got $status: $(cat "$tmp/r10")"
+grep -q "rejected asset" "$tmp/r10" || fail "missing rejected message"
+[ ! -e "$tmp/drej/generated/catalog.json" ] || fail "catalog must not be written on rejected"
+
+# --- case 11: repository 本体が register できる ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$register" --root "$repo_root" --quiet > "$tmp/r8" 2>&1 \
   || fail "repository register should pass: $(cat "$tmp/r8")"
