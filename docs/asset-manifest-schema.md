@@ -177,6 +177,10 @@ allowed values:
 - `llm_review`: `allowed`, `blocked`, `not_needed`
 - `human_review`: `pending`, `approved`, `rejected`, `not_needed`
 
+`human_review` は人間が宣言する値で、register が medium finding の解決に参照します。
+`static_check` / `llm_review` は informational で、自動 check の結果は
+[catalog](register-catalog.md) 側を真実とします。
+
 ### `compatibility`
 
 target tool ごとの変換 hint です。
@@ -216,8 +220,8 @@ validator は `scripts/check-manifests.sh` として実装済みです。
 - validation error format: `path: message` の line 単位。error があれば exit 1。
 - `shared/<category>/` 直下の asset source に manifest が無い場合も error にする。
 
-## 後続実装で決めること
+残りの論点は [Register / Catalog](register-catalog.md) で設計済みです。
 
-- generated catalog の形式。
-- prompt injection check result を manifest に書き戻すか、別 report に出すか。
-- `status` / `doctor` output に manifest validation 結果をどう含めるか。
+- generated catalog: JSON、`generated/catalog.json`、commit しない。
+- check result は manifest に書き戻さず、catalog に出す。
+- status / doctor への露出は register summary として contract v2 で追加する。
