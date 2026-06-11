@@ -60,21 +60,19 @@ generated/
   codex/          生成された Codex artifacts。README と .gitkeep 以外は ignored。
   claude-code/    生成された Claude Code artifacts。README と .gitkeep 以外は ignored。
 
-scripts/          build / check / register / sync / doctor scripts の予定地。
+scripts/          check / build / sync / status / doctor / register scripts。
+                  usage は scripts/README.md を参照。
 docs/             boundary と policy documents。
 ```
 
-## 初期 scope
+## 現在の scope
 
-この repository の最初の issue scope は、意図的に小さくします。
+scaffold と policy documentation、および check-manifests / check-injection /
+build / sync / status / doctor / register の各 script は実装済みです。
+self-tests は CI で PR ごとに実行されます。
 
-1. repository scaffold を作る。
-2. `dotfiles` との boundary を document にする。
-3. sync policy と forbidden targets を document にする。
-4. prompt injection check policy を document にする。
-5. Codex / Claude Code compatibility assumptions を document にする。
-
-build、sync、registration、prompt injection checker の実装は follow-up issue で扱います。
+残作業は GitHub Issues で管理します。script の実装は、対応する issue で
+scope された範囲だけで行います。
 
 ## License
 

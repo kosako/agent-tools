@@ -28,9 +28,12 @@
 - secret / credential distribution。
 - private local path / endpoint distribution。
 
-## 未決事項
+## 決定済み事項
 
-- Codex skills 向け adapter schema。
-- Claude Code skills 向け adapter schema。
-- generated artifacts に review reports を同梱するか。
-- review 後の prompt injection risk metadata をどう表現するか。
+- Codex / Claude Code skills 向け adapter spec:
+  [adapters/codex/README.md](../adapters/codex/README.md) /
+  [adapters/claude-code/README.md](../adapters/claude-code/README.md)。
+- review 結果は generated artifacts に同梱せず、
+  [catalog](register-catalog.md) に別出しする。
+- review 後の risk / registration 状態は catalog の `checks` と
+  `registration` で表現する。
