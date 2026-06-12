@@ -9,6 +9,7 @@
 require "yaml"
 
 require_relative "yaml_util"
+require_relative "assets"
 
 module CheckManifests
   KINDS = %w[skill prompt workflow agent instruction template].freeze
@@ -57,9 +58,7 @@ module CheckManifests
     end
 
     def discover_manifests
-      sidecars = Dir.glob(File.join(@root, "shared/**/*.asset.yml"))
-      dir_manifests = Dir.glob(File.join(@root, "shared/**/asset.yml"))
-      (sidecars + dir_manifests).sort.map { |p| rel(p) }
+      Assets.manifest_paths(@root).map { |p| rel(p) }
     end
 
 

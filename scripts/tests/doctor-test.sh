@@ -44,6 +44,7 @@ source:
 summary: demo workflow
 EOF
 "$build" --root "$tmp/repo" --quiet > /dev/null
+"$script_dir/../register.sh" --root "$tmp/repo" --quiet > /dev/null
 "$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --apply --quiet > /dev/null
 
 # --- case 1: 健全な環境では exit 0 で各 check が ok ---
@@ -55,7 +56,7 @@ for expected in \
   "ok: target: \[codex\] personal-demo managed" \
   "ok: home: \[codex\]" \
   "ok: forbidden: no agent-tools markers" \
-  "info: catalog: not present" \
+  "ok: catalog: present" \
   "doctor: ok"
 do
   grep -q "$expected" "$tmp/d1" || fail "missing '$expected' in: $(cat "$tmp/d1")"

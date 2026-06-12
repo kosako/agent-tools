@@ -12,7 +12,7 @@
 require "json"
 require "yaml"
 
-require_relative "yaml_util"
+require_relative "assets"
 require_relative "status"
 require_relative "sync"
 require_relative "build"
@@ -138,7 +138,7 @@ module Doctor
 
       entries = JSON.parse(File.read(catalog)).fetch("assets", [])
       by_name = entries.each_with_object({}) { |e, h| h[e["name"]] = e }
-      manifests = current_manifest_sources
+      manifests = Assets.sources_by_name(@root)
 
       stale = []
       manifests.each do |name, source|
@@ -158,19 +158,6 @@ module Doctor
       end
     rescue JSON::ParserError
       report("fail", "catalog", "unreadable (invalid JSON)")
-    end
-
-    def current_manifest_sources
-      paths = Dir.glob(File.join(@root, "shared/**/*.asset.yml")) +
-              Dir.glob(File.join(@root, "shared/**/asset.yml"))
-      paths.each_with_object({}) do |full, map|
-        data = YamlUtil.load(File.read(full), full)
-        next unless data.is_a?(Hash) && data["name"] && data["source"].is_a?(Hash)
-
-        map[data["name"]] = data["source"]
-      rescue Psych::Exception
-        next
-      end
     end
 
     def tilde(path)

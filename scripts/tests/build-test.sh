@@ -175,8 +175,8 @@ EOF
 if "$build" --root "$tmp/inj" > "$tmp/out-inj" 2>&1; then
   fail "build should fail on high risk findings"
 fi
-grep -q "registration fail" "$tmp/out-inj" \
-  || fail "missing registration fail notice: $(cat "$tmp/out-inj")"
+grep -q "high risk finding" "$tmp/out-inj" \
+  || fail "missing high risk finding notice: $(cat "$tmp/out-inj")"
 [ ! -d "$tmp/inj/generated" ] || fail "nothing should be generated on injection failure"
 
 # --- case 4b: --prune は manifest の消えた managed artifact だけを削除する ---

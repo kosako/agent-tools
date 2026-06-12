@@ -6,6 +6,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 build="$script_dir/../build.sh"
+register="$script_dir/../register.sh"
 sync="$script_dir/../sync.sh"
 
 tmp=$(mktemp -d)
@@ -42,6 +43,13 @@ source:
 summary: demo workflow
 EOF
 "$build" --root "$tmp/repo" --quiet > /dev/null
+
+# --- case 0: catalog が無いと sync は何も配置しない (register を促す) ---
+run_sync > "$tmp/out-nocat" 2>&1 || fail "sync without catalog should succeed: $(cat "$tmp/out-nocat")"
+grep -q "skip: \[codex\].*no catalog" "$tmp/out-nocat" || fail "missing no-catalog skip: $(cat "$tmp/out-nocat")"
+
+# register して catalog を作る (以降の case は registered 前提)
+"$register" --root "$tmp/repo" --quiet > /dev/null
 
 # --- case 1: dry-run が default で、何も書き込まれない ---
 run_sync > "$tmp/out-dry" 2>&1 || fail "dry-run should succeed: $(cat "$tmp/out-dry")"

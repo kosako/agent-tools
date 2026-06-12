@@ -39,8 +39,8 @@ usage: check-injection.sh [--root DIR] [--quiet]
 usage: build.sh [--root DIR] [--prune] [--quiet]
 ```
 
-- 生成前に manifest validation と static injection check を必ず通す。
-  gate が fail のときは何も生成しない。
+- 生成前に register と共有の致命 gate (`lib/gate.rb`) を通す。fail なら何も生成しない。
+  medium finding では止めず生成する (中間物。配置は sync が catalog を見て止める)。
 - 各 artifact に management marker (`.agent-tools-managed.yml`) を埋め込む。
   `build_id` は source content の sha256 なので build は決定的。
 - 書き込み先は `generated/` のみ。tool directories には書き込まない。
@@ -57,14 +57,15 @@ usage: sync.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] [--
 ```
 
 - default は dry-run。書き込みには `--apply` が必須。
-- plan は `create` / `update` / `skip (up-to-date)` / `conflict` で表示される。
+- **catalog (`generated/catalog.json`) を尊重する。`registration: registered` の
+  artifact だけを配置する。** `human_review_required` / catalog 不在は理由つきで skip。
+  先に `register.sh` を実行する必要がある。
+- plan は `create` / `update` / `skip` / `conflict` で表示される。
 - 更新するのは agent-tools management marker を持つ target のみ。
-  unmanaged な同名 target は conflict として exit 1 で停止し、何も書き込まない。
-- symlink の target も conflict として扱い、決して触らない。
+  unmanaged な同名 target / symlink は conflict として exit 1 で停止し、何も書き込まない。
 - 書き込み先は `<tool home>/skills/personal-*` のみ。それ以外の path は構成しない。
 - `--codex-home` / `--claude-home` は inspection / test 用の override。
 - self-test: `tests/sync-test.sh` (fake home のみを使い、実際の tool homes には触れない)
-- 残課題: `stale` / `missing` state の status 連携は `status.sh` 実装時に扱う。
 
 - `status.sh`: report-only status。
   [Status / Manifest Contract](../docs/status-manifest-contract.md) の JSON を出力する。

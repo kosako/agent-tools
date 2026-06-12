@@ -57,11 +57,13 @@ run_status > "$tmp/s1" 2>&1 || fail "status should succeed: $(cat "$tmp/s1")"
 [ "$(jget "$tmp/s1" checks prompt_injection_static)" = '"pass"' ] || fail "injection check should pass"
 [ "$(jget "$tmp/s1" generated total)" = "0" ] || fail "generated.total should be 0"
 
-# --- case 2: build 後。missing が報告される ---
+# --- case 2: build + register 後。missing が報告される ---
 "$build" --root "$tmp/repo" --quiet > /dev/null
+"$script_dir/../register.sh" --root "$tmp/repo" --quiet > /dev/null
 run_status > "$tmp/s2" 2>&1
 [ "$(jget "$tmp/s2" generated total)" = "2" ] || fail "generated.total should be 2"
 [ "$(jget "$tmp/s2" generated stale)" = "0" ] || fail "generated.stale should be 0"
+[ "$(jget "$tmp/s2" register registered)" = "1" ] || fail "register.registered should be 1"
 [ "$(jget "$tmp/s2" sync_targets 0 state)" = '"missing"' ] || fail "target should be missing"
 
 # --- case 3: sync apply 後は managed ---

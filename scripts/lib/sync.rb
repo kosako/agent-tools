@@ -11,12 +11,14 @@
 # - 許可 target は <tool home>/skills/personal-* のみ。それ以外の path は構成しない。
 
 require "yaml"
+require "json"
+require "fileutils"
 
 require_relative "yaml_util"
-require "fileutils"
 
 module Sync
   MARKER_FILE = ".agent-tools-managed.yml"
+  CATALOG_PATH = "generated/catalog.json"
   TOOLS = %w[codex claude-code].freeze
 
   Plan = Struct.new(:action, :tool, :name, :target, :reason) do
@@ -30,6 +32,21 @@ module Sync
     def initialize(root, homes)
       @root = File.expand_path(root)
       @homes = homes
+      load_catalog
+    end
+
+    # catalog から name => registration を作る。registered の artifact だけ配置する。
+    def load_catalog
+      @catalog_present = false
+      @registrations = {}
+      path = File.join(@root, CATALOG_PATH)
+      return unless File.file?(path)
+
+      assets = JSON.parse(File.read(path)).fetch("assets", [])
+      @catalog_present = true
+      assets.each { |a| @registrations[a["name"]] = a["registration"] }
+    rescue JSON::ParserError
+      @catalog_present = false
     end
 
     def plan
@@ -68,6 +85,15 @@ module Sync
       source_marker = read_marker(artifact)
       unless managed?(source_marker, tool, name)
         return Plan.new("conflict", tool, name, target, "generated artifact is missing a valid marker")
+      end
+
+      # catalog の registration を尊重する。registered 以外は配置しない (課題1)。
+      registration = @registrations[name]
+      if registration.nil?
+        reason = @catalog_present ? "not in catalog" : "no catalog (run scripts/register.sh first)"
+        return Plan.new("skip", tool, name, target, reason)
+      elsif registration != "registered"
+        return Plan.new("skip", tool, name, target, registration)
       end
 
       # symlink は実体の所在によらず unmanaged target として扱い、決して触らない。

@@ -10,11 +10,10 @@
 # - 外部依存ゼロ、network access なし。
 
 require "json"
-require "yaml"
 require "fileutils"
 
-require_relative "yaml_util"
-require_relative "check_manifests"
+require_relative "assets"
+require_relative "gate"
 require_relative "check_injection"
 require_relative "build"
 
@@ -31,35 +30,15 @@ module Register
 
     # catalog hash を返す。gate violation は Error を raise し、catalog は書かない。
     def run
-      _, manifest_errors = CheckManifests::Runner.new(@root).run
-      unless manifest_errors.empty?
-        manifest_errors.each { |line| warn line }
-        raise Error, "manifest validation failed; catalog not updated"
+      # 致命 gate は build と共有する (docs/register-catalog.md)。
+      errors = Gate.fatal_errors(@root)
+      unless errors.empty?
+        errors.each { |line| warn line }
+        raise Error, "fatal gate failed; catalog not updated"
       end
 
-      _, findings = CheckInjection::Runner.new(@root).run
-      high = findings.select { |f| f.risk == "high" }
-      unless high.empty?
-        high.each { |f| warn f.to_s }
-        raise Error, "high risk findings present; catalog not updated"
-      end
-
-      assets = load_assets
-
-      # human_review: rejected は finding の有無によらず矛盾状態なので fail。
-      rejected = assets.select { |a| a[:human_review] == "rejected" }
-      unless rejected.empty?
-        names = rejected.map { |a| a[:name] }.join(", ")
-        raise Error, "rejected asset(s) still present: #{names}; fix or remove them"
-      end
-
-      # manifest が宣言した risk も enforce する (docs/asset-manifest-schema.md)。
-      declared_high = assets.select { |a| a[:declared_risks].include?("high") }
-      unless declared_high.empty?
-        names = declared_high.map { |a| a[:name] }.join(", ")
-        raise Error, "declared high risk asset(s): #{names}; catalog not updated"
-      end
-
+      findings = CheckInjection::Runner.new(@root).run.last
+      assets = Assets.load_all(@root).map { |a| a.merge(flagged: false) }
       mediums = findings.select { |f| f.risk == "medium" }
       assign_findings(assets, mediums)
 
@@ -76,26 +55,6 @@ module Register
     end
 
     private
-
-    def load_assets
-      paths = Dir.glob(File.join(@root, "shared/**/*.asset.yml")) +
-              Dir.glob(File.join(@root, "shared/**/asset.yml"))
-      paths.sort.map do |full|
-        rel = full.sub(%r{\A#{Regexp.escape(@root)}/}, "")
-        data = YamlUtil.load(File.read(full), rel)
-        {
-          name: data["name"],
-          kind: data["kind"],
-          visibility: data["visibility"],
-          targets: data["targets"],
-          source: data["source"],
-          human_review: data.dig("review", "human_review"),
-          declared_risks: (data["risk"] || {}).values,
-          manifest_path: rel,
-          flagged: false,
-        }
-      end
-    end
 
     # medium finding の path を asset の source path / manifest path に対応づける。
     def assign_findings(assets, mediums)

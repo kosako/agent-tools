@@ -51,20 +51,37 @@ source content の決定的 hash (build の marker と同じ計算)。doctor が
 
 | value | 意味 |
 | --- | --- |
-| `registered` | build / sync の対象にしてよい。 |
-| `human_review_required` | medium finding があり、human review が未解決。build / sync の対象外。 |
+| `registered` | sync が配置してよい。 |
+| `human_review_required` | medium があり human review が未解決。sync は配置しない。 |
+
+## Gate は build / register / sync で一貫させる
+
+安全判定の source of truth は **致命 gate** (`scripts/lib/gate.rb`)。build と register が
+同じ判定を共有するので、同じ asset に対して両者の合否は必ず一致する。
+
+致命 gate (どれか 1 つでも該当すれば fail):
+
+- manifest validation error。
+- static injection high finding。
+- 宣言 risk (prompt_injection / privacy) が `high`。
+- `review.human_review: rejected`。
+
+致命 gate を通った後の medium の扱いは段階で異なる:
+
+- **build**: medium では止めない。artifact を `generated/` に生成する (中間物)。
+- **register**: medium を `human_review` と突き合わせ、catalog に
+  `registered` / `human_review_required` を記録する (次節)。
+- **sync**: catalog を読み、`registration: registered` の artifact だけ配置する。
+  `human_review_required` / catalog 不在の artifact は配置せず、理由つきで skip する。
+
+これにより「build は生成するが、human review 未解決のものは sync が止める」という
+一貫した流れになる。
 
 ## Register の意味論
 
 - 単位は repository 全体。register の実行は catalog を丸ごと再生成する。
-- register = manifest validation + static injection check + catalog 書き込み。
+- register = 致命 gate + medium 突き合わせ + catalog 書き込み。
 - catalog 書き込みが唯一の副作用で、書き込み先は `generated/` のみ。
-
-gate は build と同じ判定に揃える:
-
-- manifest validation error が 1 件でもあれば register は fail し、catalog を更新しない。
-- high risk finding があれば register は fail し、catalog を更新しない。
-- medium risk finding は asset 単位で解決する (次節)。
 
 ## Medium finding と human review の解決
 
@@ -109,18 +126,14 @@ enforce する。static finding と宣言 risk の厳しい方が勝つ。
 - catalog は repository 内部の中間生成物。dotfiles は catalog を直接読まない。
 - `status.sh` には register summary を追加する (contract_version 2 に bump):
   `"register": {"catalog_present": true, "registered": 1, "human_review_required": 0}`。
-- `doctor.sh` は catalog の存在と鮮度 (manifest より新しいか) を check する。
-- build / sync は将来、catalog の `registration: registered` を前提条件にできる
-  (v1 では build が直接 gate を実行しており、挙動は等価)。
+- `doctor.sh` は catalog の存在と鮮度 (build_id 比較) を check する。
+- sync は catalog の `registration: registered` の artifact だけを配置する。
 
 ## 実装状態
 
-- `scripts/register.sh`: 実装済み (catalog 生成、human_review 突き合わせ)。
+- 致命 gate (`scripts/lib/gate.rb`): build と register が共有。
+- `scripts/register.sh`: catalog 生成、human_review 突き合わせ。
   exit code は 0 (全 registered) / 3 (human_review_required あり) / 1 (gate fail)。
-- status contract v2 (register summary): 実装済み。
-- doctor での catalog 鮮度 check: 実装済み。
-
-## 後続実装
-
-- build / sync の前提条件を catalog の `registration: registered` に切り替えるか
-  の判断 (v1 では build が直接 gate を実行しており、挙動は等価)。
+- `scripts/sync.sh`: catalog を尊重し registered のみ配置。
+- status contract v2 (register summary) / doctor の鮮度 check: 実装済み。
+- asset discovery/load は `scripts/lib/assets.rb` に集約。

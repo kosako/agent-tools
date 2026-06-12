@@ -11,7 +11,7 @@
 require "json"
 require "yaml"
 
-require_relative "yaml_util"
+require_relative "assets"
 require_relative "check_manifests"
 require_relative "check_injection"
 require_relative "build"
@@ -19,13 +19,6 @@ require_relative "sync"
 
 module Status
   CONTRACT_VERSION = 2
-  # Sync の plan action から contract の target state への対応。
-  ACTION_TO_STATE = {
-    "skip" => "managed",
-    "update" => "stale",
-    "conflict" => "conflict",
-    "create" => "missing",
-  }.freeze
 
   class Runner
     def initialize(root, homes)
@@ -79,7 +72,7 @@ module Status
 
     # generated artifacts の数と、source より古い (build_id 不一致) artifact の数。
     def generated_state
-      sources = manifest_sources
+      sources = Assets.sources_by_name(@root)
       total = 0
       stale = 0
       Sync::TOOLS.each do |tool|
@@ -108,19 +101,6 @@ module Status
       false
     end
 
-    def manifest_sources
-      paths = Dir.glob(File.join(@root, "shared/**/*.asset.yml")) +
-              Dir.glob(File.join(@root, "shared/**/asset.yml"))
-      paths.each_with_object({}) do |full, map|
-        data = YamlUtil.load(File.read(full), full)
-        next unless data.is_a?(Hash) && data["name"] && data["source"].is_a?(Hash)
-
-        map[data["name"]] = data["source"]
-      rescue Psych::Exception
-        next
-      end
-    end
-
     # catalog (docs/register-catalog.md) の register summary。
     def register_summary
       catalog_path = File.join(@root, "generated", "catalog.json")
@@ -141,8 +121,19 @@ module Status
         {
           "tool" => p.tool,
           "name" => p.name,
-          "state" => ACTION_TO_STATE.fetch(p.action),
+          "state" => target_state(p),
         }
+      end
+    end
+
+    # Sync plan を contract の target state にマップする。
+    # registered でない artifact は配置されないため、target は missing 扱い。
+    def target_state(plan)
+      case plan.action
+      when "update" then "stale"
+      when "conflict" then "conflict"
+      when "create" then "missing"
+      when "skip" then plan.reason == "up-to-date" ? "managed" : "missing"
       end
     end
 
