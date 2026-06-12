@@ -5,6 +5,10 @@ local development environment の control plane ではありません。
 
 この repository は public です。tracked file はすべて publishable として扱ってください。
 
+全体像・pipeline・各 script の役割・現在地・今後の予定は
+[docs/onboarding.md](docs/onboarding.md) にまとまっています。作業を始める前に
+このファイルと onboarding を読んでください。
+
 ## 境界
 
 - `dotfiles` は別 repository / 別 project として扱う。

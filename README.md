@@ -3,6 +3,9 @@
 `agent-tools` は、再利用可能な skills、prompts、workflows、agent definitions、
 instruction templates を管理するための個人用 AI agent asset repository です。
 
+> 全体像・設計・現在地を一度に把握したい場合は
+> [docs/onboarding.md](docs/onboarding.md) から読んでください。
+
 この repository は `dotfiles` とは意図的に分離します。
 public repository として公開する前提なので、追跡する内容はすべて公開可能なものに限定します。
 
@@ -27,6 +30,8 @@ secret store / local private config
 - 管理対象は `personal-` で始まる生成 asset のみとする。
 - agent-tools 管理 marker を持つ target だけを更新する。
 - 同名 target が unmanaged の場合は、上書きせず conflict として停止する。
+- 安全判定 (致命 gate) は build と register で一本化し、両者の合否を一致させる。
+- sync は catalog を見て、register で `registered` になった asset だけ配置する。
 - secrets、credentials、private endpoints、client/work material は保存しない。
 - project planning / management docs は `dotfiles` と分離して別管理する。
 - 実作業は GitHub Issue / PR で管理する。
@@ -68,8 +73,11 @@ docs/             boundary と policy documents。
 ## 現在の scope
 
 scaffold と policy documentation、および check-manifests / check-injection /
-build / sync / status / doctor / register の各 script は実装済みです。
-self-tests は CI で PR ごとに実行されます。
+build / register / sync / status / doctor の各 script は実装済みです。
+安全判定 (致命 gate) は build と register で一本化され、sync は catalog を
+尊重して `registered` の asset だけ配置します。self-tests は CI で PR ごとに実行されます。
+
+pipeline 全体と各 script の役割は [docs/onboarding.md](docs/onboarding.md) を参照してください。
 
 残作業は GitHub Issues で管理します。script の実装は、対応する issue で
 scope された範囲だけで行います。
