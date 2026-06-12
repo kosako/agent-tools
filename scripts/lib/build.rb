@@ -12,9 +12,8 @@ require "yaml"
 require "digest"
 require "fileutils"
 
-require_relative "yaml_util"
-require_relative "check_manifests"
-require_relative "check_injection"
+require_relative "assets"
+require_relative "gate"
 
 module Build
   TOOLS = %w[codex claude-code].freeze
@@ -38,15 +37,15 @@ module Build
     attr_reader :built, :skipped
 
     def run
-      manifests.each do |path, data|
-        kind = data["kind"]
-        data["targets"].each do |tool|
-          artifact_kind = artifact_kind_for(data, tool, kind)
+      Assets.load_all(@root).each do |asset|
+        asset[:targets].each do |tool|
+          artifact_kind = artifact_kind_for(asset, tool)
           unless SUPPORTED_ARTIFACT_KINDS.include?(artifact_kind)
-            @skipped << "#{path}: unsupported artifact_kind #{artifact_kind.inspect} for #{tool}"
+            @skipped << "#{asset[:manifest_path]}: unsupported artifact_kind " \
+                        "#{artifact_kind.inspect} for #{tool}"
             next
           end
-          build_skill(tool, data)
+          build_skill(tool, asset)
         end
       end
       [@built, @skipped]
@@ -54,26 +53,16 @@ module Build
 
     private
 
-    def manifests
-      paths = Dir.glob(File.join(@root, "shared/**/*.asset.yml")) +
-              Dir.glob(File.join(@root, "shared/**/asset.yml"))
-      paths.sort.map do |full|
-        rel = full.sub(%r{\A#{Regexp.escape(@root)}/}, "")
-        [rel, YamlUtil.load(File.read(full), rel)]
-      end
-    end
-
-
-    def artifact_kind_for(data, tool, kind)
-      compat = data["compatibility"]
+    def artifact_kind_for(asset, tool)
+      compat = asset[:compatibility]
       explicit = compat.is_a?(Hash) && compat[tool].is_a?(Hash) ? compat[tool]["artifact_kind"] : nil
-      explicit || DEFAULT_ARTIFACT_KIND[kind] || "unsupported"
+      explicit || DEFAULT_ARTIFACT_KIND[asset[:kind]] || "unsupported"
     end
 
-    def build_skill(tool, data)
-      name = data["name"]
-      source = data.dig("source", "path")
-      format = data.dig("source", "format")
+    def build_skill(tool, asset)
+      name = asset[:name]
+      source = asset[:source]["path"]
+      format = asset[:source]["format"]
       out_dir = File.join(@root, "generated", tool, "skills", name)
 
       FileUtils.rm_rf(out_dir)
@@ -83,7 +72,7 @@ module Build
         copy_directory_asset(source, out_dir)
       else
         content = File.read(File.join(@root, source))
-        File.write(File.join(out_dir, "SKILL.md"), skill_markdown(content, data))
+        File.write(File.join(out_dir, "SKILL.md"), skill_markdown(content, asset))
       end
       build_id = Build.build_id_for(@root, source, format)
 
@@ -102,11 +91,11 @@ module Build
 
     # source が frontmatter を持たない場合のみ、manifest から frontmatter を生成する。
     # YAML dump を使い、特殊文字を含む summary でも frontmatter が壊れないようにする。
-    def skill_markdown(content, data)
+    def skill_markdown(content, asset)
       return content if content.start_with?("---\n")
 
-      description = data["summary"] || data["description"] || data["name"]
-      frontmatter = YAML.dump("name" => data["name"], "description" => description)
+      description = asset[:summary] || asset[:description] || asset[:name]
+      frontmatter = YAML.dump("name" => asset[:name], "description" => description)
       "#{frontmatter}---\n\n#{content}"
     end
 
@@ -132,8 +121,8 @@ module Build
     # marker のない directory は warning として返し、残す。
     def prune
       expected = Hash.new { |h, k| h[k] = [] }
-      manifests.each do |_path, data|
-        data["targets"].each { |tool| expected[tool] << data["name"] }
+      Assets.load_all(@root).each do |asset|
+        asset[:targets].each { |tool| expected[tool] << asset[:name] }
       end
 
       pruned = []
@@ -225,25 +214,12 @@ module Build
     0
   end
 
-  # build 前の必須 gate。manifest validation と static injection check。
+  # build 前の必須 gate。register と同じ致命 gate を共有する (Gate.fatal_errors)。
+  # medium finding では止めない。生成は中間物で、sync が catalog を見て止める。
   def self.run_gates(root)
-    _, errors = CheckManifests::Runner.new(root).run
+    errors = Gate.fatal_errors(root)
     errors.each { |line| warn line }
-    return false unless errors.empty?
-
-    _, findings = CheckInjection::Runner.new(root).run
-    findings.each { |line| warn line.to_s }
-    findings.each do |f|
-      if f.risk == "high"
-        warn "fail: high risk findings present (registration fail)"
-        return false
-      end
-    end
-    if findings.any? { |f| f.risk == "medium" }
-      warn "fail: medium risk findings require human review before build"
-      return false
-    end
-    true
+    errors.empty?
   end
 
   def self.print_usage
