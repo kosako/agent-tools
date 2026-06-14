@@ -138,6 +138,89 @@ fi
 grep -q 'duplicate asset name "personal-x"' "$tmp/out-dup" \
   || fail "missing duplicate name error in: $(cat "$tmp/out-dup")"
 
+# --- case 4b: 同一 target に instruction asset が複数あると fail ---
+mkdir -p "$tmp/dupinstr/shared/instructions"
+for n in ops rules; do
+  echo "# $n" > "$tmp/dupinstr/shared/instructions/personal-$n.md"
+  cat > "$tmp/dupinstr/shared/instructions/personal-$n.asset.yml" <<EOF
+schema_version: 1
+name: personal-$n
+kind: instruction
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/instructions/personal-$n.md
+  format: markdown
+EOF
+done
+
+if "$check" --root "$tmp/dupinstr" > "$tmp/out-dupinstr" 2>&1; then
+  fail "duplicate instruction targets should fail"
+fi
+grep -q "multiple instruction assets target claude-code" "$tmp/out-dupinstr" \
+  || fail "missing instruction uniqueness error in: $(cat "$tmp/out-dupinstr")"
+
+# --- case 4c: directory format の instruction は fail ---
+mkdir -p "$tmp/dirinstr/shared/instructions/personal-ops"
+echo "# ops" > "$tmp/dirinstr/shared/instructions/personal-ops/CLAUDE.md"
+cat > "$tmp/dirinstr/shared/instructions/personal-ops/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-ops
+kind: instruction
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/instructions/personal-ops
+  format: directory
+EOF
+
+if "$check" --root "$tmp/dirinstr" > "$tmp/out-dirinstr" 2>&1; then
+  fail "directory instruction should fail"
+fi
+grep -q "instruction asset must be a single file" "$tmp/out-dirinstr" \
+  || fail "missing directory instruction error in: $(cat "$tmp/out-dirinstr")"
+
+# --- case 4d: YAML パース不能な manifest でもクラッシュせず error 報告 ---
+mkdir -p "$tmp/yamlbad/shared/prompts"
+echo "# x" > "$tmp/yamlbad/shared/prompts/personal-x.md"
+printf 'name: [unclosed\n' > "$tmp/yamlbad/shared/prompts/personal-x.asset.yml"
+
+if "$check" --root "$tmp/yamlbad" > "$tmp/out-yamlbad" 2>&1; then
+  fail "unparseable manifest should fail"
+fi
+grep -q "YAML parse error" "$tmp/out-yamlbad" \
+  || fail "missing YAML parse error (uniqueness check must not crash) in: $(cat "$tmp/out-yamlbad")"
+
+# --- case 4e: valid YAML だが型不正 (risk が mapping でない) でもクラッシュしない ---
+mkdir -p "$tmp/badtype/shared/instructions"
+echo "# ops" > "$tmp/badtype/shared/instructions/personal-ops.md"
+cat > "$tmp/badtype/shared/instructions/personal-ops.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-ops
+kind: instruction
+visibility: public
+targets:
+  - codex
+risk: low
+source:
+  path: shared/instructions/personal-ops.md
+  format: markdown
+EOF
+
+if "$check" --root "$tmp/badtype" > "$tmp/out-badtype" 2>&1; then
+  fail "malformed risk type should fail"
+fi
+grep -q "risk must be a mapping" "$tmp/out-badtype" \
+  || fail "expected clean risk validation error (no crash) in: $(cat "$tmp/out-badtype")"
+
 # --- case 5: repository 本体の manifest が pass する ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \

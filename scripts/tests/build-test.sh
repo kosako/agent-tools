@@ -194,6 +194,50 @@ grep -q "kept (unmanaged, no agent-tools marker): generated/codex/skills/persona
   || fail "unmanaged directory must not be pruned"
 [ -d "$tmp/ok/generated/codex/skills/personal-demo" ] || fail "live artifact must survive prune"
 
+# --- case 4c: instruction asset は tool 別の単一ファイルとして生成される ---
+mkdir -p "$tmp/instr/shared/instructions"
+cat > "$tmp/instr/shared/instructions/personal-ops.md" <<'EOF'
+# operating rules
+
+ドキュメントは日本語を既定にする。
+EOF
+cat > "$tmp/instr/shared/instructions/personal-ops.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-ops
+kind: instruction
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/instructions/personal-ops.md
+  format: markdown
+EOF
+
+"$build" --root "$tmp/instr" > "$tmp/out-instr" 2>&1 \
+  || fail "instruction build should pass: $(cat "$tmp/out-instr")"
+claude_instr="$tmp/instr/generated/claude-code/instructions/CLAUDE.md"
+codex_instr="$tmp/instr/generated/codex/instructions/AGENTS.md"
+[ -f "$claude_instr" ] || fail "missing generated CLAUDE.md"
+[ -f "$codex_instr" ] || fail "missing generated AGENTS.md"
+head -1 "$claude_instr" | grep -q "agent-tools:managed" \
+  || fail "instruction marker missing: $(head -1 "$claude_instr")"
+head -1 "$claude_instr" | grep -q "artifact_kind=instruction" \
+  || fail "instruction marker kind missing: $(head -1 "$claude_instr")"
+head -1 "$claude_instr" | grep -q "target=claude-code" \
+  || fail "claude marker target missing: $(head -1 "$claude_instr")"
+head -1 "$claude_instr" | grep -q "build_id=sha256:" \
+  || fail "instruction marker build_id missing: $(head -1 "$claude_instr")"
+head -1 "$codex_instr" | grep -q "target=codex" \
+  || fail "codex marker target missing: $(head -1 "$codex_instr")"
+grep -q "ドキュメントは日本語" "$claude_instr" \
+  || fail "instruction body missing in CLAUDE.md"
+[ ! -d "$tmp/instr/generated/claude-code/skills" ] \
+  || fail "instruction must not be generated as a skill"
+
 # --- case 5: repository 本体が build できる ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$build" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \

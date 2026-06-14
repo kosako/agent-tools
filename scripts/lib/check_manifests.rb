@@ -10,6 +10,7 @@ require "yaml"
 
 require_relative "yaml_util"
 require_relative "assets"
+require_relative "artifact_targets"
 
 module CheckManifests
   KINDS = %w[skill prompt workflow agent instruction template].freeze
@@ -37,6 +38,7 @@ module CheckManifests
       @root = File.expand_path(root)
       @errors = []
       @declared_names = Hash.new { |h, k| h[k] = [] }
+      @instruction_targets = Hash.new { |h, k| h[k] = [] }
     end
 
     def run
@@ -44,6 +46,7 @@ module CheckManifests
       manifests.each { |path| validate_manifest(path) }
       check_duplicate_names
       check_sources_have_manifests
+      check_instruction_uniqueness
       [manifests.size, @errors]
     end
 
@@ -84,6 +87,7 @@ module CheckManifests
       end
 
       @declared_names[data["name"]] << path if data["name"].is_a?(String)
+      collect_instruction_targets(data, path)
 
       validate_schema_version(path, data["schema_version"]) if data.key?("schema_version")
       validate_name(path, data["name"]) if data.key?("name")
@@ -250,6 +254,44 @@ module CheckManifests
         paths.each do |path|
           others = (paths - [path]).join(", ")
           error(path, "duplicate asset name #{name.inspect} (also declared in #{others})")
+        end
+      end
+    end
+
+    # instruction artifact を生成する asset を target 別に集める。schema の型検証が
+    # 終わる前に呼ばれるため、Assets.from_manifest (risk/review の型を仮定する) は
+    # 使わず、resolve に必要な kind / compatibility / source.format だけを安全に読む
+    # (valid YAML だが型不正な manifest でもクラッシュしない)。directory format の
+    # instruction はここで reject する。
+    def collect_instruction_targets(data, path)
+      targets = data["targets"]
+      return unless targets.is_a?(Array)
+
+      asset = { kind: data["kind"], compatibility: data["compatibility"] }
+      instruction_tools = targets.select do |tool|
+        tool.is_a?(String) && ArtifactTargets.resolve(asset, tool) == "instruction"
+      end
+      return if instruction_tools.empty?
+
+      instruction_tools.each { |tool| @instruction_targets[tool] << path }
+
+      source = data["source"]
+      format = source.is_a?(Hash) ? source["format"] : nil
+      if format == "directory"
+        error(path, "instruction asset must be a single file, not a directory format")
+      end
+    end
+
+    # 1 つの target に instruction artifact を生成する asset は高々 1 個。
+    # 複数あると CLAUDE.md / AGENTS.md をどの asset で生成するか決まらない
+    # (後勝ち上書きを防ぐ)。
+    def check_instruction_uniqueness
+      @instruction_targets.each do |tool, paths|
+        next if paths.size < 2
+
+        paths.sort.each do |path|
+          others = (paths - [path]).sort.join(", ")
+          error(path, "multiple instruction assets target #{tool} (also: #{others}); only one allowed")
         end
       end
     end
