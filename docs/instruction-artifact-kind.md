@@ -62,12 +62,13 @@ instruction (public, 配布) には具体的な参照先 (planning tool の URL 
 これにより injection gate は instruction に対して URL / 絶対パスの検知を strict に
 適用できる ([Prompt Injection Check](prompt-injection-check.md))。
 
-## catalog / sync (後続実装)
+## catalog / sync
 
 - catalog は target-artifact 単位で `artifact_kind` を記録する。
 - register は `artifact_kind` を解決し、ビルド可能性を確認してから registered を発行する。
 - sync は catalog を source of truth として列挙し、registered の instruction だけを
-  所有ファイルとして配置する。
+  所有ファイルへ update する。未 build なら "run build first"、未接続なら "run connect
+  first" で skip し、create には落ちない。
 
 ## connect の挙動
 
@@ -88,6 +89,7 @@ connect / sync (所有判定) が同じ format を共有する。
 - 実装済み: artifact_kind resolver (`scripts/lib/artifact_targets.rb`)、build の
   instruction 生成、ファイル内コメント marker (`scripts/lib/instruction_marker.rb`)、
   check-manifests の 1-per-target 検証、catalog の target-artifact 化と register の
-  ビルド可能性証明、connect (`scripts/connect.sh`)。
-- 後続: sync の instruction 配置 (catalog 列挙源化)、status / doctor / prune の
-  instruction 対応、injection の instruction strict。
+  ビルド可能性証明、connect (`scripts/connect.sh`)、sync の instruction 配置
+  (catalog を source of truth として列挙)。
+- 後続: status / doctor / prune の instruction 対応、injection の instruction strict、
+  検証用の実 instruction asset 投入。
