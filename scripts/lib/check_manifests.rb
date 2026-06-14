@@ -258,14 +258,16 @@ module CheckManifests
       end
     end
 
-    # instruction artifact を生成する asset を target 別に集める。validate 済みの
-    # data をそのまま使い (Assets.load_all で再パースしない)、壊れた manifest でも
-    # クラッシュしないようにする。directory format の instruction はここで reject する。
+    # instruction artifact を生成する asset を target 別に集める。schema の型検証が
+    # 終わる前に呼ばれるため、Assets.from_manifest (risk/review の型を仮定する) は
+    # 使わず、resolve に必要な kind / compatibility / source.format だけを安全に読む
+    # (valid YAML だが型不正な manifest でもクラッシュしない)。directory format の
+    # instruction はここで reject する。
     def collect_instruction_targets(data, path)
       targets = data["targets"]
       return unless targets.is_a?(Array)
 
-      asset = Assets.from_manifest(data, path)
+      asset = { kind: data["kind"], compatibility: data["compatibility"] }
       instruction_tools = targets.select do |tool|
         tool.is_a?(String) && ArtifactTargets.resolve(asset, tool) == "instruction"
       end
@@ -273,7 +275,8 @@ module CheckManifests
 
       instruction_tools.each { |tool| @instruction_targets[tool] << path }
 
-      format = asset[:source].is_a?(Hash) ? asset[:source]["format"] : nil
+      source = data["source"]
+      format = source.is_a?(Hash) ? source["format"] : nil
       if format == "directory"
         error(path, "instruction asset must be a single file, not a directory format")
       end

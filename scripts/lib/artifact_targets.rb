@@ -6,7 +6,7 @@
 # check-manifests から read され、循環 require (Build -> Gate -> CheckManifests)
 # を避けるための独立 module。
 module ArtifactTargets
-  # build / sync が扱える artifact_kind。
+  # build が扱える artifact_kind (sync の instruction 配置は後続対応)。
   SUPPORTED_KINDS = %w[skill instruction].freeze
 
   # asset.kind から導出する既定の artifact_kind。

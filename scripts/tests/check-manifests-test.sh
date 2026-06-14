@@ -199,6 +199,28 @@ fi
 grep -q "YAML parse error" "$tmp/out-yamlbad" \
   || fail "missing YAML parse error (uniqueness check must not crash) in: $(cat "$tmp/out-yamlbad")"
 
+# --- case 4e: valid YAML だが型不正 (risk が mapping でない) でもクラッシュしない ---
+mkdir -p "$tmp/badtype/shared/instructions"
+echo "# ops" > "$tmp/badtype/shared/instructions/personal-ops.md"
+cat > "$tmp/badtype/shared/instructions/personal-ops.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-ops
+kind: instruction
+visibility: public
+targets:
+  - codex
+risk: low
+source:
+  path: shared/instructions/personal-ops.md
+  format: markdown
+EOF
+
+if "$check" --root "$tmp/badtype" > "$tmp/out-badtype" 2>&1; then
+  fail "malformed risk type should fail"
+fi
+grep -q "risk must be a mapping" "$tmp/out-badtype" \
+  || fail "expected clean risk validation error (no crash) in: $(cat "$tmp/out-badtype")"
+
 # --- case 5: repository 本体の manifest が pass する ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \
