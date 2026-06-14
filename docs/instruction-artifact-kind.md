@@ -69,9 +69,25 @@ instruction (public, 配布) には具体的な参照先 (planning tool の URL 
 - sync は catalog を source of truth として列挙し、registered の instruction だけを
   所有ファイルとして配置する。
 
+## connect の挙動
+
+`scripts/connect.sh` が接続を確立する (default dry-run、`--apply` で書き込み、冪等):
+
+- **claude-code**: `<claude home>/agent-tools/CLAUDE.md` を所有ファイルとして作成し
+  (generated instruction をコピー)、`<claude home>/CLAUDE.md` に `@agent-tools/CLAUDE.md`
+  の import 1 行を足す。既存内容と改行スタイルは保持し、import が既にあれば no-op。
+- **codex**: `<codex home>/AGENTS.md` を直接所有する。空ファイル (空白のみ) のみ claim 可。
+- symlink / dir / 特殊ファイルは決して触らない。所有ファイルに unmanaged な中身が
+  あれば conflict として停止し、何も書き込まない。
+
+marker の生成・解析は `scripts/lib/instruction_marker.rb` に集約し、build (生成) と
+connect / sync (所有判定) が同じ format を共有する。
+
 ## 実装状況
 
 - 実装済み: artifact_kind resolver (`scripts/lib/artifact_targets.rb`)、build の
-  instruction 生成、ファイル内コメント marker、check-manifests の 1-per-target 検証。
-- 後続: catalog の target-artifact 化と register のビルド可能性証明、sync の instruction
-  配置と connect、status / doctor / prune の instruction 対応、injection の instruction strict。
+  instruction 生成、ファイル内コメント marker (`scripts/lib/instruction_marker.rb`)、
+  check-manifests の 1-per-target 検証、catalog の target-artifact 化と register の
+  ビルド可能性証明、connect (`scripts/connect.sh`)。
+- 後続: sync の instruction 配置 (catalog 列挙源化)、status / doctor / prune の
+  instruction 対応、injection の instruction strict。
