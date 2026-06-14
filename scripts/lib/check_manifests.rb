@@ -38,6 +38,7 @@ module CheckManifests
       @root = File.expand_path(root)
       @errors = []
       @declared_names = Hash.new { |h, k| h[k] = [] }
+      @instruction_targets = Hash.new { |h, k| h[k] = [] }
     end
 
     def run
@@ -86,6 +87,7 @@ module CheckManifests
       end
 
       @declared_names[data["name"]] << path if data["name"].is_a?(String)
+      collect_instruction_targets(data, path)
 
       validate_schema_version(path, data["schema_version"]) if data.key?("schema_version")
       validate_name(path, data["name"]) if data.key?("name")
@@ -256,21 +258,32 @@ module CheckManifests
       end
     end
 
+    # instruction artifact を生成する asset を target 別に集める。validate 済みの
+    # data をそのまま使い (Assets.load_all で再パースしない)、壊れた manifest でも
+    # クラッシュしないようにする。directory format の instruction はここで reject する。
+    def collect_instruction_targets(data, path)
+      targets = data["targets"]
+      return unless targets.is_a?(Array)
+
+      asset = Assets.from_manifest(data, path)
+      instruction_tools = targets.select do |tool|
+        tool.is_a?(String) && ArtifactTargets.resolve(asset, tool) == "instruction"
+      end
+      return if instruction_tools.empty?
+
+      instruction_tools.each { |tool| @instruction_targets[tool] << path }
+
+      format = asset[:source].is_a?(Hash) ? asset[:source]["format"] : nil
+      if format == "directory"
+        error(path, "instruction asset must be a single file, not a directory format")
+      end
+    end
+
     # 1 つの target に instruction artifact を生成する asset は高々 1 個。
     # 複数あると CLAUDE.md / AGENTS.md をどの asset で生成するか決まらない
     # (後勝ち上書きを防ぐ)。
     def check_instruction_uniqueness
-      by_target = Hash.new { |h, k| h[k] = [] }
-      Assets.load_all(@root).each do |asset|
-        next unless asset[:targets].is_a?(Array)
-
-        asset[:targets].each do |tool|
-          next unless ArtifactTargets.resolve(asset, tool) == "instruction"
-
-          by_target[tool] << asset[:manifest_path]
-        end
-      end
-      by_target.each do |tool, paths|
+      @instruction_targets.each do |tool, paths|
         next if paths.size < 2
 
         paths.sort.each do |path|

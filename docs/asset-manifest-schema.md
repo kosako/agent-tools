@@ -189,11 +189,12 @@ target tool ごとの変換 hint です。
 明示できます。未指定なら asset の `kind` から既定値が導出されます (`instruction` kind は
 instruction、`skill` / `prompt` / `workflow` / `template` は skill)。
 
-build / sync が対応する artifact_kind は `skill` と `instruction` です。
+build が対応する artifact_kind は `skill` と `instruction` です
+(sync の instruction 配置は後続対応)。
 
 - `skill`: `<tool home>/skills/personal-<name>/` に directory として配る。
 - `instruction`: tool 別の単一ファイル (claude-code は `CLAUDE.md`、codex は `AGENTS.md`)
-  として配る。詳細は [Instruction Artifact Kind](instruction-artifact-kind.md)。
+  として生成する。詳細は [Instruction Artifact Kind](instruction-artifact-kind.md)。
 
 この field の他の用途は adapter 実装が読むための optional metadata で、strict validation
 しません。
