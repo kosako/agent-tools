@@ -46,7 +46,7 @@ EOF
 
 # --- case 0: catalog が無いと sync は何も配置しない (register を促す) ---
 run_sync > "$tmp/out-nocat" 2>&1 || fail "sync without catalog should succeed: $(cat "$tmp/out-nocat")"
-grep -q "skip: \[codex\].*no catalog" "$tmp/out-nocat" || fail "missing no-catalog skip: $(cat "$tmp/out-nocat")"
+grep -q "no catalog; run scripts/register.sh first" "$tmp/out-nocat" || fail "missing no-catalog notice: $(cat "$tmp/out-nocat")"
 
 # register して catalog を作る (以降の case は registered 前提)
 "$register" --root "$tmp/repo" --quiet > /dev/null
@@ -115,8 +115,7 @@ grep -q "conflict: \[codex\].*symlink" "$tmp/out-symlink" || fail "missing symli
 [ -L "$tmp/codex/skills/personal-demo" ] || fail "symlink must not be replaced"
 grep -q "real content" "$tmp/real-skill/SKILL.md" || fail "symlink destination must be untouched"
 
-# --- case 8: name が instruction として registered なら skill は配置しない ---
-# (skill -> instruction 転換時に stale skill artifact を誤って配置しないこと)
+# --- case 8: skill -> instruction 転換後、catalog 列挙なので stale skill は配置されない ---
 "$build" --root "$tmp/repo" --quiet > /dev/null
 cat > "$tmp/repo/shared/workflows/personal-demo.asset.yml" <<'EOF'
 schema_version: 1
@@ -134,10 +133,36 @@ source:
   format: markdown
 summary: demo instruction
 EOF
-# 古い generated skill artifact は残したまま、catalog だけ instruction で作り直す
+# 古い generated skill artifact は残したまま、catalog だけ instruction で作り直す。
+# catalog 列挙なので skill entry は出ず、instruction は未 build なので run build first。
 "$register" --root "$tmp/repo" --quiet > /dev/null
 run_sync > "$tmp/out-kindswitch" 2>&1 || fail "sync after kind switch should succeed: $(cat "$tmp/out-kindswitch")"
-grep -q "skip: \[codex\].*not a skill artifact" "$tmp/out-kindswitch" \
-  || fail "instruction registration must not be synced as skill: $(cat "$tmp/out-kindswitch")"
+grep -q "skip: \[codex\].*run build first" "$tmp/out-kindswitch" \
+  || fail "instruction without build should skip: $(cat "$tmp/out-kindswitch")"
+! grep -q "create: \[codex\]" "$tmp/out-kindswitch" \
+  || fail "stale skill artifact must not be synced after kind switch: $(cat "$tmp/out-kindswitch")"
+
+# --- case 9: instruction は connect が所有を確立し、sync が update する ---
+mkdir -p "$tmp/codex9" "$tmp/claude9"
+"$build" --root "$tmp/repo" --quiet > /dev/null
+"$register" --root "$tmp/repo" --quiet > /dev/null
+# 未接続では instruction を配置せず connect を促す
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex9" --claude-home "$tmp/claude9" > "$tmp/out-noconnect" 2>&1
+grep -q "skip: \[codex\].*run connect first" "$tmp/out-noconnect" \
+  || fail "instruction without connect should skip: $(cat "$tmp/out-noconnect")"
+# connect で所有を確立
+"$script_dir/../connect.sh" --root "$tmp/repo" --codex-home "$tmp/codex9" --claude-home "$tmp/claude9" --apply --quiet > /dev/null
+[ -f "$tmp/codex9/AGENTS.md" ] || fail "connect should create owned AGENTS.md"
+# source を変更して rebuild → sync が update
+cat > "$tmp/repo/shared/workflows/personal-demo.md" <<'EOF'
+# demo v3 instruction
+EOF
+"$build" --root "$tmp/repo" --quiet > /dev/null
+"$register" --root "$tmp/repo" --quiet > /dev/null
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex9" --claude-home "$tmp/claude9" > "$tmp/out-instr-update" 2>&1
+grep -q "update: \[codex\]" "$tmp/out-instr-update" || fail "instruction should update after rebuild: $(cat "$tmp/out-instr-update")"
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex9" --claude-home "$tmp/claude9" --apply --quiet > /dev/null
+grep -q "demo v3 instruction" "$tmp/codex9/AGENTS.md" || fail "instruction update not applied to AGENTS.md"
+head -1 "$tmp/codex9/AGENTS.md" | grep -q "agent-tools:managed" || fail "synced instruction must keep marker"
 
 echo "ok: sync self-test passed"

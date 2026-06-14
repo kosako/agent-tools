@@ -16,13 +16,14 @@ require "fileutils"
 
 require_relative "yaml_util"
 require_relative "artifact_targets"
+require_relative "instruction_marker"
 
 module Sync
   MARKER_FILE = ".agent-tools-managed.yml"
   CATALOG_PATH = "generated/catalog.json"
   TOOLS = %w[codex claude-code].freeze
 
-  Plan = Struct.new(:action, :tool, :name, :target, :reason) do
+  Plan = Struct.new(:action, :tool, :name, :target, :reason, :kind, :gen) do
     def to_s
       line = "#{action}: [#{tool}] #{target}"
       reason ? "#{line} (#{reason})" : line
@@ -36,12 +37,10 @@ module Sync
       load_catalog
     end
 
-    # catalog から (target, name) => registration を作る。catalog は
-    # target-artifact 単位 (catalog_version 2) なので tool ごとに引く。
-    # registered の artifact だけ配置する。
+    # catalog を source of truth として読む (catalog_version 2、target-artifact 単位)。
     def load_catalog
       @catalog_present = false
-      @registrations = {}
+      @entries = []
       path = File.join(@root, CATALOG_PATH)
       return unless File.file?(path)
 
@@ -50,84 +49,139 @@ module Sync
       return unless data["catalog_version"] == ArtifactTargets::CATALOG_VERSION
 
       @catalog_present = true
-      data.fetch("assets", []).each do |a|
-        @registrations[[a["target"], a["name"]]] =
-          { "registration" => a["registration"], "artifact_kind" => a["artifact_kind"] }
-      end
+      @entries = data.fetch("assets", [])
     rescue JSON::ParserError
       @catalog_present = false
     end
 
-    def plan
-      plans = []
-      TOOLS.each do |tool|
-        Dir.glob(File.join(@root, "generated", tool, "skills", "*")).sort.each do |artifact|
-          next unless File.directory?(artifact)
+    attr_reader :catalog_present
 
-          plans << plan_for(tool, artifact)
-        end
-      end
-      plans
+    # catalog の各 target-artifact を列挙し、registered のものを配置する。
+    def plan
+      @entries.map { |entry| plan_for_entry(entry) }
     end
 
     def apply(plans)
       plans.each do |p|
         next unless %w[create update].include?(p.action)
 
-        artifact = File.join(@root, "generated", p.tool, "skills", p.name)
-        FileUtils.rm_rf(p.target)
-        FileUtils.mkdir_p(File.dirname(p.target))
-        FileUtils.cp_r(artifact, p.target)
+        if p.kind == "instruction"
+          # instruction は単一ファイル。所有先は connect が確立済み (sync は update)。
+          FileUtils.mkdir_p(File.dirname(p.target))
+          FileUtils.cp(p.gen, p.target)
+        else
+          FileUtils.rm_rf(p.target)
+          FileUtils.mkdir_p(File.dirname(p.target))
+          FileUtils.cp_r(p.gen, p.target)
+        end
       end
     end
 
     private
 
-    def plan_for(tool, artifact)
-      name = File.basename(artifact)
+    # catalog entry (target-artifact) を plan にマップする。registered 以外は配置しない。
+    def plan_for_entry(entry)
+      tool = entry["target"]
+      name = entry["name"]
+      kind = entry["artifact_kind"]
+
+      if entry["registration"] != "registered"
+        return Plan.new("skip", tool, name, target_path(tool, name, kind), entry["registration"], kind, nil)
+      end
+
+      case kind
+      when "skill" then plan_skill(tool, name)
+      when "instruction" then plan_instruction(tool, name)
+      else
+        Plan.new("skip", tool, name, nil, "unsupported artifact_kind #{kind.inspect}", kind, nil)
+      end
+    end
+
+    # registered でない entry の skip 表示に使う target path。
+    def target_path(tool, name, kind)
+      if kind == "instruction"
+        filename = ArtifactTargets::INSTRUCTION_FILENAMES[tool]
+        filename && instruction_target(tool, filename)
+      else
+        File.join(@homes.fetch(tool), "skills", name)
+      end
+    end
+
+    def plan_skill(tool, name)
       target = File.join(@homes.fetch(tool), "skills", name)
+      gen = File.join(@root, "generated", tool, "skills", name)
 
       unless name.start_with?("personal-")
-        return Plan.new("conflict", tool, name, target, "generated asset without personal- prefix")
+        return Plan.new("conflict", tool, name, target, "generated asset without personal- prefix", "skill", gen)
+      end
+      unless File.directory?(gen)
+        return Plan.new("skip", tool, name, target, "run build first", "skill", gen)
       end
 
-      source_marker = read_marker(artifact)
+      source_marker = read_marker(gen)
       unless managed?(source_marker, tool, name)
-        return Plan.new("conflict", tool, name, target, "generated artifact is missing a valid marker")
+        return Plan.new("conflict", tool, name, target, "generated artifact is missing a valid marker", "skill", gen)
       end
-
-      # catalog の registration を尊重する。registered 以外は配置しない (課題1)。
-      entry = @registrations[[tool, name]]
-      if entry.nil?
-        reason = @catalog_present ? "not in catalog" : "no catalog (run scripts/register.sh first)"
-        return Plan.new("skip", tool, name, target, reason)
-      elsif entry["artifact_kind"] != "skill"
-        # この name は別の artifact_kind (instruction 等) として登録されている。
-        # skill の sync 対象ではないので配置しない (stale skill の誤配置を防ぐ)。
-        return Plan.new("skip", tool, name, target, "not a skill artifact")
-      elsif entry["registration"] != "registered"
-        return Plan.new("skip", tool, name, target, entry["registration"])
-      end
-
       # symlink は実体の所在によらず unmanaged target として扱い、決して触らない。
       if File.symlink?(target)
-        return Plan.new("conflict", tool, name, target, "existing target is a symlink")
+        return Plan.new("conflict", tool, name, target, "existing target is a symlink", "skill", gen)
       end
-
       unless File.exist?(target)
-        return Plan.new("create", tool, name, target)
+        return Plan.new("create", tool, name, target, nil, "skill", gen)
       end
 
       target_marker = File.directory?(target) ? read_marker(target) : nil
       unless managed?(target_marker, tool, name)
-        return Plan.new("conflict", tool, name, target, "existing target is unmanaged")
+        return Plan.new("conflict", tool, name, target, "existing target is unmanaged", "skill", gen)
       end
 
       if target_marker["build_id"] == source_marker["build_id"]
-        Plan.new("skip", tool, name, target, "up-to-date")
+        Plan.new("skip", tool, name, target, "up-to-date", "skill", gen)
       else
-        Plan.new("update", tool, name, target)
+        Plan.new("update", tool, name, target, nil, "skill", gen)
       end
+    end
+
+    # instruction は connect が所有を確立する。sync は create に落ちず、未接続なら
+    # connect を促す。所有先の marker を見て update / skip を決める。
+    def plan_instruction(tool, name)
+      filename = ArtifactTargets::INSTRUCTION_FILENAMES[tool]
+      unless filename
+        return Plan.new("skip", tool, name, nil, "instruction unsupported for #{tool}", "instruction", nil)
+      end
+      gen = File.join(@root, "generated", tool, "instructions", filename)
+      target = instruction_target(tool, filename)
+
+      unless File.file?(gen)
+        return Plan.new("skip", tool, name, target, "run build first", "instruction", gen)
+      end
+      gen_marker = InstructionMarker.parse(File.read(gen))
+      unless gen_marker && gen_marker["target"] == tool
+        return Plan.new("conflict", tool, name, target, "generated instruction is missing a valid marker", "instruction", gen)
+      end
+      if File.symlink?(target)
+        return Plan.new("conflict", tool, name, target, "existing target is a symlink", "instruction", gen)
+      end
+      # 未接続 (所有ファイルが無い) なら connect を促す。sync は create しない。
+      unless File.exist?(target)
+        return Plan.new("skip", tool, name, target, "run connect first", "instruction", gen)
+      end
+
+      target_marker = File.file?(target) ? InstructionMarker.parse(File.read(target)) : nil
+      unless target_marker && target_marker["target"] == tool
+        return Plan.new("conflict", tool, name, target, "existing target is unmanaged", "instruction", gen)
+      end
+
+      if target_marker["build_id"] == gen_marker["build_id"]
+        Plan.new("skip", tool, name, target, "up-to-date", "instruction", gen)
+      else
+        Plan.new("update", tool, name, target, nil, "instruction", gen)
+      end
+    end
+
+    def instruction_target(tool, filename)
+      home = @homes.fetch(tool)
+      tool == "claude-code" ? File.join(home, "agent-tools", filename) : File.join(home, filename)
     end
 
     def read_marker(dir)
@@ -182,7 +236,8 @@ module Sync
     plans = runner.plan
 
     if plans.empty?
-      puts "ok: nothing to sync (run scripts/build.sh first)" unless quiet
+      msg = runner.catalog_present ? "nothing to sync (run scripts/build.sh first)" : "no catalog; run scripts/register.sh first"
+      puts "ok: #{msg}" unless quiet
       return 0
     end
 
