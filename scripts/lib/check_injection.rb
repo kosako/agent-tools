@@ -67,6 +67,20 @@ module CheckInjection
     Pattern.new("runtime-state", "medium",
                 /(?:modify|write\s+to|edit|delete)\b.{0,50}\b(?:tool-managed|company-managed|auth|session|runtime\s+state)/i,
                 "instructs modification of managed or runtime state"),
+
+    # public repository に出してはいけない個人環境・個人情報の混入。
+    # absolute path と email は asset 種別によらず high。
+    Pattern.new("absolute-path", "high",
+                %r{(?:/Users|/home)/[A-Za-z0-9._-]+|/root(?![A-Za-z0-9_])},
+                "contains a user-specific absolute path"),
+    Pattern.new("pii", "high",
+                /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/,
+                "contains an email address (possible PII)"),
+    # external URL は検知するが現状 low (gate を通す)。artifact_kind 別 policy
+    # (instruction=strict で high に昇格) は後続の artifact kind 対応で導入する。
+    Pattern.new("external-url", "low",
+                %r{https?://[^\s)>"'\]]+}i,
+                "contains an external URL"),
   ].freeze
 
   RISK_ORDER = { "high" => 2, "medium" => 1, "low" => 0 }.freeze
@@ -156,8 +170,11 @@ module CheckInjection
     elsif highest >= RISK_ORDER.fetch("medium")
       warn "warn: medium risk findings present (human review required)"
       3
-    else
+    elsif findings.empty?
       puts "ok: #{count} file(s) scanned, no findings" unless quiet
+      0
+    else
+      puts "ok: #{count} file(s) scanned, #{findings.size} low-risk finding(s)" unless quiet
       0
     end
   end
