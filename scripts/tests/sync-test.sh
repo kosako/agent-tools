@@ -190,7 +190,7 @@ grep -q "conflict: \[claude-code\].*symlink" "$tmp/out-adsym" || fail "missing p
 mkdir -p "$tmp/codex12" "$tmp/claude12"
 "$build" --root "$tmp/repo" --quiet > /dev/null
 "$register" --root "$tmp/repo" --quiet > /dev/null
-: > "$tmp/codex12/AGENTS.md"   # 空ファイルが既に存在する状態
+printf '   \n\n  \n' > "$tmp/codex12/AGENTS.md"   # 空白のみ (whitespace-only) が既に存在する状態
 "$sync" --root "$tmp/repo" --codex-home "$tmp/codex12" --claude-home "$tmp/claude12" > "$tmp/out-empty" 2>&1
 grep -q "skip: \[codex\].*run connect first" "$tmp/out-empty" \
   || fail "empty instruction owned file should say run connect first: $(cat "$tmp/out-empty")"
