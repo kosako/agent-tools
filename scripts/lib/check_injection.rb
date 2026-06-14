@@ -7,6 +7,9 @@
 # deterministic で、外部依存ゼロ・network access なしで実行できること。
 # 対象は shared/ 配下の asset files のみ。policy docs (docs/) は対象外。
 
+require_relative "assets"
+require_relative "artifact_targets"
+
 module CheckInjection
   Pattern = Struct.new(:category, :risk, :regexp, :message)
 
@@ -110,6 +113,7 @@ module CheckInjection
     end
 
     def run
+      instruction_sources = instruction_source_paths
       findings = []
       count = 0
       target_files.each do |full|
@@ -118,12 +122,38 @@ module CheckInjection
 
         content = content.scrub("�")
         count += 1
-        findings.concat(scan(rel(full), content))
+        rel_path = rel(full)
+        file_findings = scan(rel_path, content)
+        # instruction asset の source は external URL を strict (high) に昇格する。
+        # instruction は具体参照先を書かない方針なので、URL 混入は方針違反として止める。
+        file_findings = file_findings.map { |f| strict_instruction(f) } if instruction_sources.include?(rel_path)
+        findings.concat(file_findings)
       end
       [count, findings]
     end
 
     private
+
+    def strict_instruction(finding)
+      return finding unless finding.category == "external-url"
+
+      Finding.new(finding.path, finding.line, "high", finding.category, finding.message)
+    end
+
+    # instruction artifact を生成する asset の source path 一覧。
+    # 壊れた manifest では昇格しない (gate の check-manifests が別途 fail させる)。
+    def instruction_source_paths
+      paths = []
+      Assets.load_all(@root).each do |asset|
+        next unless asset[:source].is_a?(Hash)
+
+        instruction = (asset[:targets] || []).any? { |t| ArtifactTargets.resolve(asset, t) == "instruction" }
+        paths << asset[:source]["path"] if instruction
+      end
+      paths
+    rescue Psych::Exception
+      []
+    end
 
     def rel(path)
       path.sub(%r{\A#{Regexp.escape(@root)}/}, "")

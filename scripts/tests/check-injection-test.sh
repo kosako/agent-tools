@@ -110,6 +110,33 @@ grep -q "\[low\] external-url: contains an external URL" "$tmp/out-url" \
 grep -q "low-risk finding" "$tmp/out-url" \
   || fail "missing low-risk summary in: $(cat "$tmp/out-url")"
 
+# --- case 7b: instruction asset の external URL は strict (high, exit 1) ---
+mkdir -p "$tmp/instrurl/shared/instructions"
+cat > "$tmp/instrurl/shared/instructions/personal-x.md" <<'EOF'
+# x
+Reference: https://example.com/docs for background.
+EOF
+cat > "$tmp/instrurl/shared/instructions/personal-x.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-x
+kind: instruction
+visibility: public
+targets:
+  - codex
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/instructions/personal-x.md
+  format: markdown
+EOF
+
+status=0
+"$check" --root "$tmp/instrurl" > "$tmp/out-instrurl" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "instruction URL should be high (exit 1), got $status: $(cat "$tmp/out-instrurl")"
+grep -q "\[high\] external-url" "$tmp/out-instrurl" \
+  || fail "instruction external URL should be strict high: $(cat "$tmp/out-instrurl")"
+
 # --- case 8: Windows の user-specific path も high (exit 1) ---
 mkdir -p "$tmp/winpath/shared/workflows"
 cat > "$tmp/winpath/shared/workflows/personal-winpath.md" <<'EOF'
