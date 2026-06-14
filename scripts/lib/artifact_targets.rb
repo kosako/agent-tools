@@ -36,4 +36,21 @@ module ArtifactTargets
   def self.supported?(kind)
     SUPPORTED_KINDS.include?(kind)
   end
+
+  # その tool 向けに artifact を build できるかを判定する (実 build はしない)。
+  # register が「registered != buildable」のサイレント断裂を防ぐために使う。
+  def self.buildable?(asset, tool)
+    case resolve(asset, tool)
+    when "skill"
+      true
+    when "instruction"
+      return false unless INSTRUCTION_FILENAMES.key?(tool)
+
+      source = asset[:source]
+      format = source.is_a?(Hash) ? source["format"] : nil
+      format != "directory"
+    else
+      false
+    end
+  end
 end

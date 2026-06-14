@@ -35,7 +35,9 @@ module Sync
       load_catalog
     end
 
-    # catalog から name => registration を作る。registered の artifact だけ配置する。
+    # catalog から (target, name) => registration を作る。catalog は
+    # target-artifact 単位 (catalog_version 2) なので tool ごとに引く。
+    # registered の artifact だけ配置する。
     def load_catalog
       @catalog_present = false
       @registrations = {}
@@ -44,7 +46,7 @@ module Sync
 
       assets = JSON.parse(File.read(path)).fetch("assets", [])
       @catalog_present = true
-      assets.each { |a| @registrations[a["name"]] = a["registration"] }
+      assets.each { |a| @registrations[[a["target"], a["name"]]] = a["registration"] }
     rescue JSON::ParserError
       @catalog_present = false
     end
@@ -88,7 +90,7 @@ module Sync
       end
 
       # catalog の registration を尊重する。registered 以外は配置しない (課題1)。
-      registration = @registrations[name]
+      registration = @registrations[[tool, name]]
       if registration.nil?
         reason = @catalog_present ? "not in catalog" : "no catalog (run scripts/register.sh first)"
         return Plan.new("skip", tool, name, target, reason)
