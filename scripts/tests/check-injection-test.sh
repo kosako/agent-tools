@@ -150,4 +150,25 @@ status=0
 grep -q "\[high\] absolute-path: contains a user-specific absolute path" "$tmp/out-winpath" \
   || fail "missing windows absolute-path finding in: $(cat "$tmp/out-winpath")"
 
+# --- case 9: 型不正 manifest (targets がスカラー) でも injection check はクラッシュしない ---
+mkdir -p "$tmp/badmani/shared/instructions"
+echo "# x" > "$tmp/badmani/shared/instructions/personal-x.md"
+cat > "$tmp/badmani/shared/instructions/personal-x.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-x
+kind: instruction
+visibility: public
+targets: codex
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/instructions/personal-x.md
+  format: markdown
+EOF
+
+"$check" --root "$tmp/badmani" > "$tmp/out-badmani" 2>&1 || true
+grep -q "scanned" "$tmp/out-badmani" \
+  || fail "injection check must not crash on malformed manifest: $(cat "$tmp/out-badmani")"
+
 echo "ok: check-injection self-test passed"

@@ -146,8 +146,9 @@ module CheckInjection
       paths = []
       Assets.load_all(@root).each do |asset|
         next unless asset[:source].is_a?(Hash)
+        next unless asset[:targets].is_a?(Array)
 
-        instruction = (asset[:targets] || []).any? { |t| ArtifactTargets.resolve(asset, t) == "instruction" }
+        instruction = asset[:targets].any? { |t| ArtifactTargets.resolve(asset, t) == "instruction" }
         paths << asset[:source]["path"] if instruction
       end
       paths
