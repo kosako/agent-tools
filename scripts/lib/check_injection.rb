@@ -73,6 +73,10 @@ module CheckInjection
     Pattern.new("absolute-path", "high",
                 %r{(?:/Users|/home)/[A-Za-z0-9._-]+|/root(?![A-Za-z0-9_])},
                 "contains a user-specific absolute path"),
+    # Windows の user-specific path (例 C:\Users\<name>\...) も検知する。
+    Pattern.new("absolute-path", "high",
+                /[A-Za-z]:\\Users\\[^\\\r\n]+/,
+                "contains a user-specific absolute path"),
     Pattern.new("pii", "high",
                 /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/,
                 "contains an email address (possible PII)"),

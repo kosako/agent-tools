@@ -110,4 +110,17 @@ grep -q "\[low\] external-url: contains an external URL" "$tmp/out-url" \
 grep -q "low-risk finding" "$tmp/out-url" \
   || fail "missing low-risk summary in: $(cat "$tmp/out-url")"
 
+# --- case 8: Windows の user-specific path も high (exit 1) ---
+mkdir -p "$tmp/winpath/shared/workflows"
+cat > "$tmp/winpath/shared/workflows/personal-winpath.md" <<'EOF'
+# workflow
+Open C:\Users\alice\AppData\Roaming\app for config.
+EOF
+
+status=0
+"$check" --root "$tmp/winpath" > "$tmp/out-winpath" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "windows path fixture should exit 1, got $status: $(cat "$tmp/out-winpath")"
+grep -q "\[high\] absolute-path: contains a user-specific absolute path" "$tmp/out-winpath" \
+  || fail "missing windows absolute-path finding in: $(cat "$tmp/out-winpath")"
+
 echo "ok: check-injection self-test passed"
