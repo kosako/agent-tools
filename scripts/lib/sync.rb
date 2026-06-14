@@ -164,8 +164,10 @@ module Sync
       if File.symlink?(target) || File.symlink?(File.dirname(target))
         return Plan.new("conflict", tool, name, target, "existing target is a symlink", "instruction", gen)
       end
-      # 未接続 (所有ファイルが無い) なら connect を促す。sync は create しない。
-      unless File.exist?(target)
+      # 未接続なら connect を促す。sync は create しない。
+      # 所有先が無い場合に加え、空ファイル (空白のみ) も未接続として扱う
+      # (codex の AGENTS.md は空で存在しうる。空の claim は connect の責務)。
+      if !File.exist?(target) || (File.file?(target) && File.read(target).strip.empty?)
         return Plan.new("skip", tool, name, target, "run connect first", "instruction", gen)
       end
 

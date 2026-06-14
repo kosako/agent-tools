@@ -186,4 +186,15 @@ status=0
 grep -q "conflict: \[claude-code\].*symlink" "$tmp/out-adsym" || fail "missing parent symlink conflict: $(cat "$tmp/out-adsym")"
 [ ! -e "$tmp/realad/CLAUDE.md" ] || fail "must not write through a symlinked parent"
 
+# --- case 12: 空の instruction 所有先は conflict でなく run connect first ---
+mkdir -p "$tmp/codex12" "$tmp/claude12"
+"$build" --root "$tmp/repo" --quiet > /dev/null
+"$register" --root "$tmp/repo" --quiet > /dev/null
+: > "$tmp/codex12/AGENTS.md"   # 空ファイルが既に存在する状態
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex12" --claude-home "$tmp/claude12" > "$tmp/out-empty" 2>&1
+grep -q "skip: \[codex\].*run connect first" "$tmp/out-empty" \
+  || fail "empty instruction owned file should say run connect first: $(cat "$tmp/out-empty")"
+! grep -q "conflict: \[codex\]" "$tmp/out-empty" \
+  || fail "empty owned file must not be reported as a conflict: $(cat "$tmp/out-empty")"
+
 echo "ok: sync self-test passed"
