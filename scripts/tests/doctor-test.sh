@@ -104,4 +104,10 @@ run_doctor > "$tmp/d5b" 2>&1 || fail "stale catalog should still exit 0"
 grep -q "warn: catalog: stale (personal-demo: content changed since register)" "$tmp/d5b" \
   || fail "missing catalog stale warn: $(cat "$tmp/d5b")"
 
+# --- case 6: catalog_version 不一致は warn (re-run register) ---
+ruby -i -pe 'sub(/"catalog_version": 2/, "\"catalog_version\": 1")' "$tmp/repo/generated/catalog.json"
+run_doctor > "$tmp/d6" 2>&1 || fail "version mismatch should still exit 0: $(cat "$tmp/d6")"
+grep -q "warn: catalog: version mismatch" "$tmp/d6" \
+  || fail "missing catalog version mismatch warn: $(cat "$tmp/d6")"
+
 echo "ok: doctor self-test passed"

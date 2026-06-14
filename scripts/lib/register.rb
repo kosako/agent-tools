@@ -19,7 +19,6 @@ require_relative "build"
 require_relative "artifact_targets"
 
 module Register
-  CATALOG_VERSION = 2
   CATALOG_PATH = "generated/catalog.json"
 
   class Error < StandardError; end
@@ -44,7 +43,7 @@ module Register
       assign_findings(assets, mediums)
 
       {
-        "catalog_version" => CATALOG_VERSION,
+        "catalog_version" => ArtifactTargets::CATALOG_VERSION,
         "assets" => assets.flat_map { |a| catalog_entries(a) },
       }
     end

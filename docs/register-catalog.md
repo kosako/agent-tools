@@ -142,6 +142,9 @@ enforce する。static finding と宣言 risk の厳しい方が勝つ。
 ## Status / doctor / dotfiles への露出
 
 - catalog は repository 内部の中間生成物。dotfiles は catalog を直接読まない。
+- catalog の reader (sync / status / doctor) は `catalog_version` が一致しない catalog を
+  古いものとして無視する (再度 register を実行して再生成する)。これにより古い catalog が
+  残った状態で reader 間の判断がずれることを防ぐ。
 - `status.sh` には register summary を追加する (contract_version 2 に bump):
   `"register": {"catalog_present": true, "registered": 1, "human_review_required": 0}`。
 - `doctor.sh` は catalog の存在と鮮度 (build_id 比較) を check する。

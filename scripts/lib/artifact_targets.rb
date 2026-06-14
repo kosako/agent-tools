@@ -6,6 +6,10 @@
 # check-manifests から read され、循環 require (Build -> Gate -> CheckManifests)
 # を避けるための独立 module。
 module ArtifactTargets
+  # catalog (generated/catalog.json) の version。reader (sync / status / doctor) は
+  # これと一致しない catalog を古いものとして無視する。
+  CATALOG_VERSION = 2
+
   # build が扱える artifact_kind (sync の instruction 配置は後続対応)。
   SUPPORTED_KINDS = %w[skill instruction].freeze
 

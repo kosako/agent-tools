@@ -115,4 +115,29 @@ grep -q "conflict: \[codex\].*symlink" "$tmp/out-symlink" || fail "missing symli
 [ -L "$tmp/codex/skills/personal-demo" ] || fail "symlink must not be replaced"
 grep -q "real content" "$tmp/real-skill/SKILL.md" || fail "symlink destination must be untouched"
 
+# --- case 8: name が instruction として registered なら skill は配置しない ---
+# (skill -> instruction 転換時に stale skill artifact を誤って配置しないこと)
+"$build" --root "$tmp/repo" --quiet > /dev/null
+cat > "$tmp/repo/shared/workflows/personal-demo.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-demo
+kind: instruction
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/workflows/personal-demo.md
+  format: markdown
+summary: demo instruction
+EOF
+# 古い generated skill artifact は残したまま、catalog だけ instruction で作り直す
+"$register" --root "$tmp/repo" --quiet > /dev/null
+run_sync > "$tmp/out-kindswitch" 2>&1 || fail "sync after kind switch should succeed: $(cat "$tmp/out-kindswitch")"
+grep -q "skip: \[codex\].*not a skill artifact" "$tmp/out-kindswitch" \
+  || fail "instruction registration must not be synced as skill: $(cat "$tmp/out-kindswitch")"
+
 echo "ok: sync self-test passed"

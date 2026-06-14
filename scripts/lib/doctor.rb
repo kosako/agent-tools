@@ -16,6 +16,7 @@ require_relative "assets"
 require_relative "status"
 require_relative "sync"
 require_relative "build"
+require_relative "artifact_targets"
 
 module Doctor
   LEVELS = %w[ok info warn fail].freeze
@@ -136,7 +137,14 @@ module Doctor
         return
       end
 
-      entries = JSON.parse(File.read(catalog)).fetch("assets", [])
+      data = JSON.parse(File.read(catalog))
+      unless data["catalog_version"] == ArtifactTargets::CATALOG_VERSION
+        report("warn", "catalog", "version mismatch (re-run register)")
+        return
+      end
+      entries = data.fetch("assets", [])
+      # target-artifact 単位の catalog を name でまとめる。build_id は target 非依存
+      # なので、鮮度判定は name 単位で正しい。
       by_name = entries.each_with_object({}) { |e, h| h[e["name"]] = e }
       manifests = Assets.sources_by_name(@root)
 

@@ -16,6 +16,7 @@ require_relative "check_manifests"
 require_relative "check_injection"
 require_relative "build"
 require_relative "sync"
+require_relative "artifact_targets"
 
 module Status
   CONTRACT_VERSION = 2
@@ -104,13 +105,21 @@ module Status
     # catalog (docs/register-catalog.md) の register summary。
     def register_summary
       catalog_path = File.join(@root, "generated", "catalog.json")
-      summary = { "catalog_present" => false, "registered" => 0, "human_review_required" => 0 }
+      summary = {
+        "catalog_present" => false, "registered" => 0,
+        "human_review_required" => 0, "unsupported" => 0
+      }
       return summary unless File.file?(catalog_path)
 
-      assets = JSON.parse(File.read(catalog_path)).fetch("assets", [])
+      data = JSON.parse(File.read(catalog_path))
+      # version の一致しない catalog は無視する (re-run register)。
+      return summary unless data["catalog_version"] == ArtifactTargets::CATALOG_VERSION
+
+      assets = data.fetch("assets", [])
       summary["catalog_present"] = true
       summary["registered"] = assets.count { |a| a["registration"] == "registered" }
       summary["human_review_required"] = assets.count { |a| a["registration"] == "human_review_required" }
+      summary["unsupported"] = assets.count { |a| a["registration"] == "unsupported" }
       summary
     rescue JSON::ParserError
       summary
@@ -180,7 +189,7 @@ module Status
     puts "checks:    manifest=#{report['checks']['manifest_validation']} injection=#{report['checks']['prompt_injection_static']}"
     puts "generated: #{report['generated']['total']} artifact(s), #{report['generated']['stale']} stale"
     reg = report["register"]
-    puts "register:  catalog_present=#{reg['catalog_present']} registered=#{reg['registered']} human_review_required=#{reg['human_review_required']}"
+    puts "register:  catalog_present=#{reg['catalog_present']} registered=#{reg['registered']} human_review_required=#{reg['human_review_required']} unsupported=#{reg['unsupported']}"
     report["sync_targets"].each do |t|
       puts "target:    [#{t['tool']}] #{t['name']} #{t['state']}"
     end

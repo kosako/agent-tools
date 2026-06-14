@@ -44,7 +44,8 @@ dotfiles 側の実装は含めません。
   "register": {
     "catalog_present": true,
     "registered": 1,
-    "human_review_required": 0
+    "human_review_required": 0,
+    "unsupported": 0
   },
   "sync_targets": [
     {
@@ -67,8 +68,9 @@ dotfiles 側の実装は含めません。
 - `checks.*`: 各 check の最新結果。`pass`, `fail`, `human_review`, `not_run`。
 - `generated.total`: 生成済み artifact の数。
 - `generated.stale`: source より古い artifact の数。
-- `register.*`: [catalog](register-catalog.md) の summary。catalog 不在時は
-  `catalog_present: false` と zero counts。
+- `register.*`: [catalog](register-catalog.md) の summary。target-artifact 単位の
+  `registered` / `human_review_required` / `unsupported` のカウント。catalog 不在時や
+  `catalog_version` 不一致時は `catalog_present: false` と zero counts。
 - `sync_targets[].state`: 後述の target state。
 
 ### Target state
