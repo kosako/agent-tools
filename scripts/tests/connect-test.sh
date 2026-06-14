@@ -103,4 +103,36 @@ status=0
 grep -q "conflict: \[claude-code\] import.*symlink" "$tmp/c6" || fail "missing symlink conflict: $(cat "$tmp/c6")"
 [ -L "$tmp/claude4/CLAUDE.md" ] || fail "symlink must not be replaced"
 
+# --- case 7: CLAUDE.md がディレクトリなら conflict (部分適用しない) ---
+mkdir -p "$tmp/codex5" "$tmp/claude5/CLAUDE.md"
+status=0
+"$connect" --root "$tmp/repo" --codex-home "$tmp/codex5" --claude-home "$tmp/claude5" --apply > "$tmp/c7" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "directory CLAUDE.md should conflict: $(cat "$tmp/c7")"
+grep -q "conflict: \[claude-code\] import.*not a regular file" "$tmp/c7" || fail "missing non-regular conflict: $(cat "$tmp/c7")"
+[ ! -e "$tmp/claude5/agent-tools/CLAUDE.md" ] || fail "conflict must prevent owned write"
+
+# --- case 8: 余分キーを持つ marker は managed と認識しない (厳密 parse) ---
+mkdir -p "$tmp/codex6" "$tmp/claude6"
+printf '<!-- agent-tools:managed v=1 repo=agent-tools name=x target=codex artifact_kind=instruction source=shared/x.md build_id=sha256:abc evil=1 -->\nbody\n' > "$tmp/codex6/AGENTS.md"
+status=0
+"$connect" --root "$tmp/repo" --codex-home "$tmp/codex6" --claude-home "$tmp/claude6" --apply > "$tmp/c8" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "marker with extra key should not be managed: $(cat "$tmp/c8")"
+grep -q "conflict: \[codex\] owned.*unmanaged" "$tmp/c8" || fail "extra-key marker should be treated as unmanaged: $(cat "$tmp/c8")"
+
+# --- case 9: CRLF の CLAUDE.md に import を足しても改行スタイルを保つ ---
+mkdir -p "$tmp/codex7" "$tmp/claude7"
+printf '# notes\r\nhello\r\n' > "$tmp/claude7/CLAUDE.md"
+"$connect" --root "$tmp/repo" --codex-home "$tmp/codex7" --claude-home "$tmp/claude7" --apply > /dev/null 2>&1
+ruby -e 'c=File.binread(ARGV[0]); abort "CRLF not preserved" unless c.include?("@agent-tools/CLAUDE.md\r\n")' \
+  "$tmp/claude7/CLAUDE.md" || fail "import line should keep CRLF newline style"
+
+# --- case 10: 所有先の親 dir が symlink なら conflict (意図外書き込みを防ぐ) ---
+mkdir -p "$tmp/codex8" "$tmp/claude8" "$tmp/realdir"
+ln -s "$tmp/realdir" "$tmp/claude8/agent-tools"
+status=0
+"$connect" --root "$tmp/repo" --codex-home "$tmp/codex8" --claude-home "$tmp/claude8" --apply > "$tmp/c10" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "symlinked owned parent should conflict: $(cat "$tmp/c10")"
+grep -q "conflict: \[claude-code\] owned.*symlink" "$tmp/c10" || fail "missing parent symlink conflict: $(cat "$tmp/c10")"
+[ ! -e "$tmp/realdir/CLAUDE.md" ] || fail "must not write through a symlinked parent"
+
 echo "ok: connect self-test passed"

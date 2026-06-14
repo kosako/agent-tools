@@ -38,10 +38,14 @@ module InstructionMarker
       pairs[key] = value
     end
 
-    return nil unless REQUIRED_FIELDS.all? { |f| pairs.key?(f) }
+    # 厳密: 必須フィールドと完全一致する (余分キーは不正)。
+    return nil unless pairs.keys.sort == REQUIRED_FIELDS.sort
     return nil unless pairs["v"] == VERSION
     return nil unless pairs["repo"] == "agent-tools"
     return nil unless pairs["artifact_kind"] == "instruction"
+    # 値形式の基本検証: build_id は hash、source は相対 path。
+    return nil unless pairs["build_id"].start_with?("sha256:")
+    return nil if pairs["source"].start_with?("/")
 
     pairs
   end

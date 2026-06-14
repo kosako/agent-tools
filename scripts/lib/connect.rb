@@ -81,6 +81,9 @@ module Connect
     # 所有ファイルの create / 接続済み skip / conflict を判定する。
     # symlink / dir / 特殊ファイルは触らない。空ファイルのみ claim 可。
     def owned_plan(tool, gen, owned)
+      if File.symlink?(File.dirname(owned))
+        return Plan.new("conflict", tool, "owned", owned, "owned parent dir is a symlink", gen)
+      end
       if File.symlink?(owned)
         return Plan.new("conflict", tool, "owned", owned, "owned path is a symlink", gen)
       end
@@ -105,6 +108,9 @@ module Connect
       if File.symlink?(import_file)
         return Plan.new("conflict", tool, "import", import_file, "CLAUDE.md is a symlink", nil)
       end
+      if File.exist?(import_file) && !File.file?(import_file)
+        return Plan.new("conflict", tool, "import", import_file, "CLAUDE.md is not a regular file", nil)
+      end
       if File.file?(import_file)
         content = File.read(import_file)
         if content.lines.any? { |l| l.strip == CLAUDE_IMPORT }
@@ -123,8 +129,9 @@ module Connect
     def do_add_import(plan)
       if File.file?(plan.path)
         content = File.read(plan.path)
-        sep = content.empty? || content.end_with?("\n") ? "" : "\n"
-        File.write(plan.path, "#{content}#{sep}#{CLAUDE_IMPORT}\n")
+        nl = content.include?("\r\n") ? "\r\n" : "\n"
+        sep = content.empty? || content.end_with?(nl) ? "" : nl
+        File.write(plan.path, "#{content}#{sep}#{CLAUDE_IMPORT}#{nl}")
       else
         FileUtils.mkdir_p(File.dirname(plan.path))
         File.write(plan.path, "#{CLAUDE_IMPORT}\n")
