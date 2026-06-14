@@ -15,6 +15,7 @@ require "fileutils"
 require_relative "assets"
 require_relative "gate"
 require_relative "artifact_targets"
+require_relative "instruction_marker"
 
 module Build
   TOOLS = %w[codex claude-code].freeze
@@ -95,11 +96,9 @@ module Build
     end
 
     # instruction 本体の先頭に管理 marker (HTML コメント) を 1 行入れる。
-    # marker は injection checker が除外し、sync が所有判定に使う (後続実装)。
+    # marker format は InstructionMarker に集約し、connect / sync が同じ解析を使う。
     def instruction_with_marker(content, name, tool, source, build_id)
-      marker = "<!-- agent-tools:managed v=1 repo=agent-tools " \
-               "name=#{name} target=#{tool} artifact_kind=instruction " \
-               "source=#{source} build_id=#{build_id} -->"
+      marker = InstructionMarker.render(name: name, target: tool, source: source, build_id: build_id)
       "#{marker}\n#{content}"
     end
 
