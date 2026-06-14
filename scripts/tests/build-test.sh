@@ -245,6 +245,32 @@ grep -q "pruned: generated/codex/instructions/AGENTS.md" "$tmp/out-iprune" || fa
 [ ! -e "$tmp/instr/generated/codex/instructions/AGENTS.md" ] || fail "orphan instruction should be removed"
 [ ! -e "$tmp/instr/generated/claude-code/instructions/CLAUDE.md" ] || fail "orphan claude instruction should be removed"
 
+# --- case 4e: instruction asset があっても canonical 以外の marker ファイルは prune ---
+mkdir -p "$tmp/instr3/shared/instructions"
+cat > "$tmp/instr3/shared/instructions/personal-ops.md" <<'EOF'
+# ops
+EOF
+cat > "$tmp/instr3/shared/instructions/personal-ops.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-ops
+kind: instruction
+visibility: public
+targets:
+  - codex
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/instructions/personal-ops.md
+  format: markdown
+EOF
+"$build" --root "$tmp/instr3" --quiet > /dev/null
+printf '<!-- agent-tools:managed v=1 repo=agent-tools name=personal-old target=codex artifact_kind=instruction source=shared/x.md build_id=sha256:old -->\nstale\n' \
+  > "$tmp/instr3/generated/codex/instructions/STRAY.md"
+"$build" --root "$tmp/instr3" --prune > "$tmp/out-stray" 2>&1 || fail "prune should pass: $(cat "$tmp/out-stray")"
+[ -f "$tmp/instr3/generated/codex/instructions/AGENTS.md" ] || fail "canonical instruction must survive prune"
+[ ! -e "$tmp/instr3/generated/codex/instructions/STRAY.md" ] || fail "non-canonical marker file should be pruned"
+
 # --- case 5: repository 本体が build できる ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$build" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \

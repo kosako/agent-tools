@@ -171,11 +171,12 @@ module Build
           end
         end
 
-        # instruction: その tool 向け instruction asset が無ければ generated を削除する。
-        next if instruction_expected[tool]
-
+        # instruction: 期待する canonical ファイル (INSTRUCTION_FILENAMES) 以外の
+        # marker 付きファイルを削除する。instruction asset が無ければ canonical も対象。
+        keep = instruction_expected[tool] ? ArtifactTargets::INSTRUCTION_FILENAMES[tool] : nil
         Dir.glob(File.join(@root, "generated", tool, "instructions", "*")).sort.each do |file|
           next unless File.file?(file)
+          next if keep && File.basename(file) == keep
 
           if InstructionMarker.parse(File.read(file))
             FileUtils.rm_f(file)
