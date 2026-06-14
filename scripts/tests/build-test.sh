@@ -238,6 +238,13 @@ grep -q "ドキュメントは日本語" "$claude_instr" \
 [ ! -d "$tmp/instr/generated/claude-code/skills" ] \
   || fail "instruction must not be generated as a skill"
 
+# --- case 4d: --prune は instruction asset が消えた generated も削除する ---
+rm "$tmp/instr/shared/instructions/personal-ops.md" "$tmp/instr/shared/instructions/personal-ops.asset.yml"
+"$build" --root "$tmp/instr" --prune > "$tmp/out-iprune" 2>&1 || fail "instruction prune should pass: $(cat "$tmp/out-iprune")"
+grep -q "pruned: generated/codex/instructions/AGENTS.md" "$tmp/out-iprune" || fail "instruction not pruned: $(cat "$tmp/out-iprune")"
+[ ! -e "$tmp/instr/generated/codex/instructions/AGENTS.md" ] || fail "orphan instruction should be removed"
+[ ! -e "$tmp/instr/generated/claude-code/instructions/CLAUDE.md" ] || fail "orphan claude instruction should be removed"
+
 # --- case 5: repository 本体が build できる ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$build" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \
