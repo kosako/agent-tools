@@ -70,4 +70,57 @@ repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \
   || fail "repository shared assets should pass: $(cat "$tmp/out-repo")"
 
+# --- case 5: user-specific absolute path は high (exit 1) ---
+mkdir -p "$tmp/abspath/shared/workflows"
+cat > "$tmp/abspath/shared/workflows/personal-abspath.md" <<'EOF'
+# workflow
+See /Users/alice/.config/app for the local setup.
+EOF
+
+status=0
+"$check" --root "$tmp/abspath" > "$tmp/out-abspath" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "absolute-path fixture should exit 1, got $status: $(cat "$tmp/out-abspath")"
+grep -q "\[high\] absolute-path: contains a user-specific absolute path" "$tmp/out-abspath" \
+  || fail "missing absolute-path finding in: $(cat "$tmp/out-abspath")"
+
+# --- case 6: email address は high (exit 1) ---
+mkdir -p "$tmp/pii/shared/workflows"
+cat > "$tmp/pii/shared/workflows/personal-pii.md" <<'EOF'
+# workflow
+Questions? Email alice@example.com for help.
+EOF
+
+status=0
+"$check" --root "$tmp/pii" > "$tmp/out-pii" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "pii fixture should exit 1, got $status: $(cat "$tmp/out-pii")"
+grep -q "\[high\] pii: contains an email address" "$tmp/out-pii" \
+  || fail "missing pii finding in: $(cat "$tmp/out-pii")"
+
+# --- case 7: external URL は low (検知のみ、exit 0 で pass) ---
+mkdir -p "$tmp/url/shared/workflows"
+cat > "$tmp/url/shared/workflows/personal-url.md" <<'EOF'
+# workflow
+Reference: https://example.com/docs for background.
+EOF
+
+"$check" --root "$tmp/url" > "$tmp/out-url" 2>&1 \
+  || fail "external-url fixture should pass (low only): $(cat "$tmp/out-url")"
+grep -q "\[low\] external-url: contains an external URL" "$tmp/out-url" \
+  || fail "missing external-url finding in: $(cat "$tmp/out-url")"
+grep -q "low-risk finding" "$tmp/out-url" \
+  || fail "missing low-risk summary in: $(cat "$tmp/out-url")"
+
+# --- case 8: Windows の user-specific path も high (exit 1) ---
+mkdir -p "$tmp/winpath/shared/workflows"
+cat > "$tmp/winpath/shared/workflows/personal-winpath.md" <<'EOF'
+# workflow
+Open C:\Users\alice\AppData\Roaming\app for config.
+EOF
+
+status=0
+"$check" --root "$tmp/winpath" > "$tmp/out-winpath" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "windows path fixture should exit 1, got $status: $(cat "$tmp/out-winpath")"
+grep -q "\[high\] absolute-path: contains a user-specific absolute path" "$tmp/out-winpath" \
+  || fail "missing windows absolute-path finding in: $(cat "$tmp/out-winpath")"
+
 echo "ok: check-injection self-test passed"
