@@ -1,0 +1,14 @@
+schema_version: 1
+name: personal-operating-rules
+kind: instruction
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/instructions/personal-operating-rules.md
+  format: markdown
+summary: shared operating rules for personal agent projects

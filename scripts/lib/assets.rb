@@ -41,8 +41,10 @@ module Assets
       compatibility: data["compatibility"],
       summary: data["summary"],
       description: data["description"],
-      human_review: data.dig("review", "human_review"),
-      declared_risks: (data["risk"] || {}).values,
+      # parse 可能だが型不正な manifest (scalar の review / risk) でも落ちないよう、
+      # Hash でなければ nil / [] に正規化する (検証は check-manifests が担う)。
+      human_review: data["review"].is_a?(Hash) ? data["review"]["human_review"] : nil,
+      declared_risks: data["risk"].is_a?(Hash) ? data["risk"].values : [],
       manifest_path: rel,
     }
   end
