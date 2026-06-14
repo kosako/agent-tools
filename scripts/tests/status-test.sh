@@ -129,4 +129,33 @@ repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$status_sh" --root "$repo_root" --json > "$tmp/s9" 2>&1 || fail "repo status should succeed"
 [ "$(jget "$tmp/s9" repo present)" = "true" ] || fail "repo.present should be true"
 
+# --- case 10: instruction の generated も generated.total に数える ---
+mkdir -p "$tmp/irepo/shared/instructions" "$tmp/icodex" "$tmp/iclaude"
+cat > "$tmp/irepo/shared/instructions/personal-ops.md" <<'EOF'
+# ops
+EOF
+cat > "$tmp/irepo/shared/instructions/personal-ops.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-ops
+kind: instruction
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/instructions/personal-ops.md
+  format: markdown
+EOF
+"$build" --root "$tmp/irepo" --quiet > /dev/null
+"$status_sh" --root "$tmp/irepo" --codex-home "$tmp/icodex" --claude-home "$tmp/iclaude" --json > "$tmp/is10" 2>&1
+[ "$(jget "$tmp/is10" generated total)" = "2" ] || fail "instruction generated should count (2 targets): $(cat "$tmp/is10")"
+[ "$(jget "$tmp/is10" generated stale)" = "0" ] || fail "fresh instruction should not be stale"
+# source 変更で instruction も stale になる
+echo "changed" >> "$tmp/irepo/shared/instructions/personal-ops.md"
+"$status_sh" --root "$tmp/irepo" --codex-home "$tmp/icodex" --claude-home "$tmp/iclaude" --json > "$tmp/is10b" 2>&1
+[ "$(jget "$tmp/is10b" generated stale)" = "2" ] || fail "changed instruction source should be stale: $(cat "$tmp/is10b")"
+
 echo "ok: status self-test passed"

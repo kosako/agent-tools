@@ -90,6 +90,7 @@ connect / sync (所有判定) が同じ format を共有する。
   instruction 生成、ファイル内コメント marker (`scripts/lib/instruction_marker.rb`)、
   check-manifests の 1-per-target 検証、catalog の target-artifact 化と register の
   ビルド可能性証明、connect (`scripts/connect.sh`)、sync の instruction 配置
-  (catalog を source of truth として列挙)。
-- 後続: status / doctor / prune の instruction 対応、injection の instruction strict、
-  検証用の実 instruction asset 投入。
+  (catalog を source of truth として列挙)、status / doctor の instruction generated
+  カウントと鮮度判定、build --prune の instruction 対応。
+- 後続: injection の instruction strict (external URL を high に)、検証用の実
+  instruction asset 投入。

@@ -143,13 +143,22 @@ module Build
     # marker のない directory は warning として返し、残す。
     def prune
       expected = Hash.new { |h, k| h[k] = [] }
+      instruction_expected = Hash.new(false)
       Assets.load_all(@root).each do |asset|
-        asset[:targets].each { |tool| expected[tool] << asset[:name] }
+        (asset[:targets] || []).each do |tool|
+          if ArtifactTargets.resolve(asset, tool) == "instruction"
+            instruction_expected[tool] = true
+          else
+            expected[tool] << asset[:name]
+          end
+        end
       end
 
       pruned = []
       kept = []
       TOOLS.each do |tool|
+        # skill: manifest に対応しない generated directory を削除する。
+        # (skill -> instruction 転換で残った stale skill もここで消える)
         Dir.glob(File.join(@root, "generated", tool, "skills", "*")).sort.each do |dir|
           next unless File.directory?(dir)
           next if expected[tool].include?(File.basename(dir))
@@ -159,6 +168,21 @@ module Build
             pruned << rel(dir)
           else
             kept << rel(dir)
+          end
+        end
+
+        # instruction: 期待する canonical ファイル (INSTRUCTION_FILENAMES) 以外の
+        # marker 付きファイルを削除する。instruction asset が無ければ canonical も対象。
+        keep = instruction_expected[tool] ? ArtifactTargets::INSTRUCTION_FILENAMES[tool] : nil
+        Dir.glob(File.join(@root, "generated", tool, "instructions", "*")).sort.each do |file|
+          next unless File.file?(file)
+          next if keep && File.basename(file) == keep
+
+          if InstructionMarker.parse(File.read(file))
+            FileUtils.rm_f(file)
+            pruned << rel(file)
+          else
+            kept << rel(file)
           end
         end
       end

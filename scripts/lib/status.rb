@@ -17,6 +17,7 @@ require_relative "check_injection"
 require_relative "build"
 require_relative "sync"
 require_relative "artifact_targets"
+require_relative "instruction_marker"
 
 module Status
   CONTRACT_VERSION = 2
@@ -72,6 +73,7 @@ module Status
     end
 
     # generated artifacts の数と、source より古い (build_id 不一致) artifact の数。
+    # skill (directory) と instruction (単一ファイル) の両方を数える。
     def generated_state
       sources = Assets.sources_by_name(@root)
       total = 0
@@ -82,6 +84,12 @@ module Status
 
           total += 1
           stale += 1 unless fresh?(artifact, sources)
+        end
+        Dir.glob(File.join(@root, "generated", tool, "instructions", "*")).sort.each do |artifact|
+          next unless File.file?(artifact)
+
+          total += 1
+          stale += 1 unless fresh_instruction?(artifact, sources)
         end
       end
       [total, stale]
@@ -100,6 +108,17 @@ module Status
       marker["build_id"] == Build.build_id_for(@root, source["path"], source["format"])
     rescue Psych::Exception
       false
+    end
+
+    # instruction (ファイル内コメント marker) の鮮度判定。
+    def fresh_instruction?(path, sources)
+      marker = InstructionMarker.parse(File.read(path))
+      return false unless marker
+
+      source = sources[marker["name"]]
+      return false unless source
+
+      marker["build_id"] == Build.build_id_for(@root, source["path"], source["format"])
     end
 
     # catalog (docs/register-catalog.md) の register summary。
