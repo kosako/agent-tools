@@ -165,4 +165,25 @@ grep -q "update: \[codex\]" "$tmp/out-instr-update" || fail "instruction should 
 grep -q "demo v3 instruction" "$tmp/codex9/AGENTS.md" || fail "instruction update not applied to AGENTS.md"
 head -1 "$tmp/codex9/AGENTS.md" | grep -q "agent-tools:managed" || fail "synced instruction must keep marker"
 
+# --- case 10: catalog の build_id と generated が不一致なら run build first ---
+cat > "$tmp/repo/shared/workflows/personal-demo.md" <<'EOF'
+# demo v4 instruction
+EOF
+# build せず register だけ進める (catalog の build_id が generated より新しくなる)
+"$register" --root "$tmp/repo" --quiet > /dev/null
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex9" --claude-home "$tmp/claude9" > "$tmp/out-stalegen" 2>&1
+grep -q "skip: \[codex\].*run build first" "$tmp/out-stalegen" \
+  || fail "stale generated vs catalog should skip with run build first: $(cat "$tmp/out-stalegen")"
+
+# --- case 11: instruction 所有先の親 dir が symlink なら conflict (素通りさせない) ---
+mkdir -p "$tmp/codex11" "$tmp/claude11" "$tmp/realad"
+"$build" --root "$tmp/repo" --quiet > /dev/null
+"$register" --root "$tmp/repo" --quiet > /dev/null
+ln -s "$tmp/realad" "$tmp/claude11/agent-tools"
+status=0
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex11" --claude-home "$tmp/claude11" --apply > "$tmp/out-adsym" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "symlinked owned parent should conflict (exit 1): $(cat "$tmp/out-adsym")"
+grep -q "conflict: \[claude-code\].*symlink" "$tmp/out-adsym" || fail "missing parent symlink conflict: $(cat "$tmp/out-adsym")"
+[ ! -e "$tmp/realad/CLAUDE.md" ] || fail "must not write through a symlinked parent"
+
 echo "ok: sync self-test passed"

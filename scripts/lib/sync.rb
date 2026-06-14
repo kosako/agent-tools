@@ -91,7 +91,7 @@ module Sync
 
       case kind
       when "skill" then plan_skill(tool, name)
-      when "instruction" then plan_instruction(tool, name)
+      when "instruction" then plan_instruction(tool, name, entry["build_id"])
       else
         Plan.new("skip", tool, name, nil, "unsupported artifact_kind #{kind.inspect}", kind, nil)
       end
@@ -143,8 +143,9 @@ module Sync
     end
 
     # instruction は connect が所有を確立する。sync は create に落ちず、未接続なら
-    # connect を促す。所有先の marker を見て update / skip を決める。
-    def plan_instruction(tool, name)
+    # connect を促す。catalog の name / build_id を真実として generated と所有先の
+    # marker を照合し、update / skip を決める。
+    def plan_instruction(tool, name, expected_build_id)
       filename = ArtifactTargets::INSTRUCTION_FILENAMES[tool]
       unless filename
         return Plan.new("skip", tool, name, nil, "instruction unsupported for #{tool}", "instruction", nil)
@@ -152,14 +153,15 @@ module Sync
       gen = File.join(@root, "generated", tool, "instructions", filename)
       target = instruction_target(tool, filename)
 
-      unless File.file?(gen)
+      gen_marker = File.file?(gen) ? InstructionMarker.parse(File.read(gen)) : nil
+      # generated が catalog entry と一致するか (target + name + build_id)。
+      # 一致しなければ build が未実行 / 古い。
+      unless gen_marker && gen_marker["target"] == tool &&
+             gen_marker["name"] == name && gen_marker["build_id"] == expected_build_id
         return Plan.new("skip", tool, name, target, "run build first", "instruction", gen)
       end
-      gen_marker = InstructionMarker.parse(File.read(gen))
-      unless gen_marker && gen_marker["target"] == tool
-        return Plan.new("conflict", tool, name, target, "generated instruction is missing a valid marker", "instruction", gen)
-      end
-      if File.symlink?(target)
+      # 所有先とその親 dir が symlink なら決して触らない (connect と同じ保証)。
+      if File.symlink?(target) || File.symlink?(File.dirname(target))
         return Plan.new("conflict", tool, name, target, "existing target is a symlink", "instruction", gen)
       end
       # 未接続 (所有ファイルが無い) なら connect を促す。sync は create しない。
@@ -168,11 +170,13 @@ module Sync
       end
 
       target_marker = File.file?(target) ? InstructionMarker.parse(File.read(target)) : nil
-      unless target_marker && target_marker["target"] == tool
+      # 所有先が同じ asset の agent-tools 管理か (target + name)。別 asset の残存ファイルを
+      # managed と誤認しない。
+      unless target_marker && target_marker["target"] == tool && target_marker["name"] == name
         return Plan.new("conflict", tool, name, target, "existing target is unmanaged", "instruction", gen)
       end
 
-      if target_marker["build_id"] == gen_marker["build_id"]
+      if target_marker["build_id"] == expected_build_id
         Plan.new("skip", tool, name, target, "up-to-date", "instruction", gen)
       else
         Plan.new("update", tool, name, target, nil, "instruction", gen)
