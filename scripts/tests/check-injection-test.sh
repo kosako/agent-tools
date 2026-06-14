@@ -171,4 +171,25 @@ EOF
 grep -q "scanned" "$tmp/out-badmani" \
   || fail "injection check must not crash on malformed manifest: $(cat "$tmp/out-badmani")"
 
+# --- case 10: scalar な risk / review でも injection check はクラッシュしない ---
+mkdir -p "$tmp/badmani2/shared/instructions"
+echo "# x" > "$tmp/badmani2/shared/instructions/personal-x.md"
+cat > "$tmp/badmani2/shared/instructions/personal-x.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-x
+kind: instruction
+visibility: public
+targets:
+  - codex
+risk: low
+review: pending
+source:
+  path: shared/instructions/personal-x.md
+  format: markdown
+EOF
+
+"$check" --root "$tmp/badmani2" > "$tmp/out-badmani2" 2>&1 || true
+grep -q "scanned" "$tmp/out-badmani2" \
+  || fail "injection check must not crash on scalar risk/review: $(cat "$tmp/out-badmani2")"
+
 echo "ok: check-injection self-test passed"
