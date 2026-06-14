@@ -14,18 +14,10 @@ require "fileutils"
 
 require_relative "assets"
 require_relative "gate"
+require_relative "artifact_targets"
 
 module Build
   TOOLS = %w[codex claude-code].freeze
-  SUPPORTED_ARTIFACT_KINDS = %w[skill].freeze
-  # artifact_kind が compatibility で指定されない場合の既定値。
-  DEFAULT_ARTIFACT_KIND = {
-    "skill" => "skill",
-    "prompt" => "skill",
-    "workflow" => "skill",
-    "instruction" => "skill",
-    "template" => "skill",
-  }.freeze
 
   class Runner
     def initialize(root)
@@ -39,25 +31,22 @@ module Build
     def run
       Assets.load_all(@root).each do |asset|
         asset[:targets].each do |tool|
-          artifact_kind = artifact_kind_for(asset, tool)
-          unless SUPPORTED_ARTIFACT_KINDS.include?(artifact_kind)
+          artifact_kind = ArtifactTargets.resolve(asset, tool)
+          case artifact_kind
+          when "skill"
+            build_skill(tool, asset)
+          when "instruction"
+            build_instruction(tool, asset)
+          else
             @skipped << "#{asset[:manifest_path]}: unsupported artifact_kind " \
                         "#{artifact_kind.inspect} for #{tool}"
-            next
           end
-          build_skill(tool, asset)
         end
       end
       [@built, @skipped]
     end
 
     private
-
-    def artifact_kind_for(asset, tool)
-      compat = asset[:compatibility]
-      explicit = compat.is_a?(Hash) && compat[tool].is_a?(Hash) ? compat[tool]["artifact_kind"] : nil
-      explicit || DEFAULT_ARTIFACT_KIND[asset[:kind]] || "unsupported"
-    end
 
     def build_skill(tool, asset)
       name = asset[:name]
@@ -78,6 +67,40 @@ module Build
 
       write_marker(out_dir, name, tool, source, build_id)
       @built << rel(out_dir)
+    end
+
+    # instruction asset を tool 別の単一ファイル (claude-code: CLAUDE.md /
+    # codex: AGENTS.md) として生成する。所有 marker は HTML コメントで本体に埋める
+    # (instruction は単一ファイル所有なので skill の dir sidecar marker が使えない)。
+    def build_instruction(tool, asset)
+      filename = ArtifactTargets::INSTRUCTION_FILENAMES[tool]
+      unless filename
+        @skipped << "#{asset[:manifest_path]}: instruction unsupported for #{tool}"
+        return
+      end
+      source = asset[:source]["path"]
+      format = asset[:source]["format"]
+      if format == "directory"
+        @skipped << "#{asset[:manifest_path]}: instruction must be a single file, not a directory"
+        return
+      end
+
+      out_dir = File.join(@root, "generated", tool, "instructions")
+      FileUtils.mkdir_p(out_dir)
+      out = File.join(out_dir, filename)
+      content = File.read(File.join(@root, source))
+      build_id = Build.build_id_for(@root, source, format)
+      File.write(out, instruction_with_marker(content, asset[:name], tool, source, build_id))
+      @built << rel(out)
+    end
+
+    # instruction 本体の先頭に管理 marker (HTML コメント) を 1 行入れる。
+    # marker は injection checker が除外し、sync が所有判定に使う (後続実装)。
+    def instruction_with_marker(content, name, tool, source, build_id)
+      marker = "<!-- agent-tools:managed v=1 repo=agent-tools " \
+               "name=#{name} target=#{tool} artifact_kind=instruction " \
+               "source=#{source} build_id=#{build_id} -->"
+      "#{marker}\n#{content}"
     end
 
     def copy_directory_asset(source, out_dir)

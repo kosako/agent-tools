@@ -10,6 +10,7 @@ require "yaml"
 
 require_relative "yaml_util"
 require_relative "assets"
+require_relative "artifact_targets"
 
 module CheckManifests
   KINDS = %w[skill prompt workflow agent instruction template].freeze
@@ -44,6 +45,7 @@ module CheckManifests
       manifests.each { |path| validate_manifest(path) }
       check_duplicate_names
       check_sources_have_manifests
+      check_instruction_uniqueness
       [manifests.size, @errors]
     end
 
@@ -250,6 +252,30 @@ module CheckManifests
         paths.each do |path|
           others = (paths - [path]).join(", ")
           error(path, "duplicate asset name #{name.inspect} (also declared in #{others})")
+        end
+      end
+    end
+
+    # 1 つの target に instruction artifact を生成する asset は高々 1 個。
+    # 複数あると CLAUDE.md / AGENTS.md をどの asset で生成するか決まらない
+    # (後勝ち上書きを防ぐ)。
+    def check_instruction_uniqueness
+      by_target = Hash.new { |h, k| h[k] = [] }
+      Assets.load_all(@root).each do |asset|
+        next unless asset[:targets].is_a?(Array)
+
+        asset[:targets].each do |tool|
+          next unless ArtifactTargets.resolve(asset, tool) == "instruction"
+
+          by_target[tool] << asset[:manifest_path]
+        end
+      end
+      by_target.each do |tool, paths|
+        next if paths.size < 2
+
+        paths.sort.each do |path|
+          others = (paths - [path]).sort.join(", ")
+          error(path, "multiple instruction assets target #{tool} (also: #{others}); only one allowed")
         end
       end
     end

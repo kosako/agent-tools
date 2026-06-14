@@ -138,6 +138,32 @@ fi
 grep -q 'duplicate asset name "personal-x"' "$tmp/out-dup" \
   || fail "missing duplicate name error in: $(cat "$tmp/out-dup")"
 
+# --- case 4b: 同一 target に instruction asset が複数あると fail ---
+mkdir -p "$tmp/dupinstr/shared/instructions"
+for n in ops rules; do
+  echo "# $n" > "$tmp/dupinstr/shared/instructions/personal-$n.md"
+  cat > "$tmp/dupinstr/shared/instructions/personal-$n.asset.yml" <<EOF
+schema_version: 1
+name: personal-$n
+kind: instruction
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/instructions/personal-$n.md
+  format: markdown
+EOF
+done
+
+if "$check" --root "$tmp/dupinstr" > "$tmp/out-dupinstr" 2>&1; then
+  fail "duplicate instruction targets should fail"
+fi
+grep -q "multiple instruction assets target claude-code" "$tmp/out-dupinstr" \
+  || fail "missing instruction uniqueness error in: $(cat "$tmp/out-dupinstr")"
+
 # --- case 5: repository 本体の manifest が pass する ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \

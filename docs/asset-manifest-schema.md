@@ -185,8 +185,18 @@ allowed values:
 
 target tool ごとの変換 hint です。
 
-この field は adapter 実装が読むための optional metadata です。v1 の schema 設計では
-strict validation しません。
+`compatibility.<tool>.artifact_kind` で、その tool 向けに生成する artifact の種類を
+明示できます。未指定なら asset の `kind` から既定値が導出されます (`instruction` kind は
+instruction、`skill` / `prompt` / `workflow` / `template` は skill)。
+
+build / sync が対応する artifact_kind は `skill` と `instruction` です。
+
+- `skill`: `<tool home>/skills/personal-<name>/` に directory として配る。
+- `instruction`: tool 別の単一ファイル (claude-code は `CLAUDE.md`、codex は `AGENTS.md`)
+  として配る。詳細は [Instruction Artifact Kind](instruction-artifact-kind.md)。
+
+この field の他の用途は adapter 実装が読むための optional metadata で、strict validation
+しません。
 
 ## Public repository rule
 
