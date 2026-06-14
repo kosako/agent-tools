@@ -16,9 +16,9 @@ require_relative "assets"
 require_relative "gate"
 require_relative "check_injection"
 require_relative "build"
+require_relative "artifact_targets"
 
 module Register
-  CATALOG_VERSION = 1
   CATALOG_PATH = "generated/catalog.json"
 
   class Error < StandardError; end
@@ -43,8 +43,8 @@ module Register
       assign_findings(assets, mediums)
 
       {
-        "catalog_version" => CATALOG_VERSION,
-        "assets" => assets.map { |a| catalog_entry(a) },
+        "catalog_version" => ArtifactTargets::CATALOG_VERSION,
+        "assets" => assets.flat_map { |a| catalog_entries(a) },
       }
     end
 
@@ -77,11 +77,14 @@ module Register
         path.start_with?("#{source.chomp('/')}/")
     end
 
-    def catalog_entry(asset)
+    # asset を target ごとの catalog entry (target-artifact 単位) に展開する。
+    # review 観点の registration は asset 単位で決まり、buildable でない
+    # target-artifact は "unsupported" にして registered != buildable を防ぐ。
+    def catalog_entries(asset)
       # 宣言 risk の medium / unknown も human review 必須として扱う。
       review_needed = asset[:flagged] ||
                       asset[:declared_risks].any? { |r| %w[medium unknown].include?(r) }
-      registration =
+      review_registration =
         if !review_needed
           "registered"
         elsif asset[:human_review] == "approved"
@@ -89,20 +92,26 @@ module Register
         else
           "human_review_required"
         end
-      {
-        "name" => asset[:name],
-        "kind" => asset[:kind],
-        "visibility" => asset[:visibility],
-        "targets" => asset[:targets],
-        "source" => asset[:source],
-        # source content の決定的 hash。doctor の鮮度判定に使う。
-        "build_id" => Build.build_id_for(@root, asset[:source]["path"], asset[:source]["format"]),
-        "checks" => {
-          "manifest_validation" => "pass",
-          "prompt_injection_static" => asset[:flagged] ? "human_review" : "pass",
-        },
-        "registration" => registration,
-      }
+      # source content の決定的 hash。target に依らない。doctor の鮮度判定に使う。
+      build_id = Build.build_id_for(@root, asset[:source]["path"], asset[:source]["format"])
+
+      (asset[:targets] || []).map do |tool|
+        registration = ArtifactTargets.buildable?(asset, tool) ? review_registration : "unsupported"
+        {
+          "name" => asset[:name],
+          "target" => tool,
+          "artifact_kind" => ArtifactTargets.resolve(asset, tool),
+          "kind" => asset[:kind],
+          "visibility" => asset[:visibility],
+          "source" => asset[:source],
+          "build_id" => build_id,
+          "checks" => {
+            "manifest_validation" => "pass",
+            "prompt_injection_static" => asset[:flagged] ? "human_review" : "pass",
+          },
+          "registration" => registration,
+        }
+      end
     end
 
   end
@@ -134,10 +143,14 @@ module Register
     end
 
     runner.write(catalog)
-    pending = catalog["assets"].count { |a| a["registration"] == "human_review_required" }
-    registered = catalog["assets"].size - pending
+    entries = catalog["assets"]
+    registered = entries.count { |a| a["registration"] == "registered" }
+    pending = entries.count { |a| a["registration"] == "human_review_required" }
+    unsupported = entries.count { |a| a["registration"] == "unsupported" }
     unless quiet
-      puts "ok: catalog written (#{registered} registered, #{pending} human review required)"
+      msg = "ok: catalog written (#{registered} registered, #{pending} human review required"
+      msg += ", #{unsupported} unsupported" if unsupported.positive?
+      puts "#{msg})"
     end
     pending.zero? ? 0 : 3
   end

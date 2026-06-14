@@ -91,17 +91,23 @@ rm -rf "$tmp/codex/skills/personal-demo"
 "$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --apply --quiet > /dev/null
 "$script_dir/../register.sh" --root "$tmp/repo" --quiet > /dev/null
 run_doctor > "$tmp/d5" 2>&1 || fail "doctor with catalog should pass: $(cat "$tmp/d5")"
-grep -q "ok: catalog: present, 1 asset(s), fresh" "$tmp/d5" || fail "missing catalog ok line: $(cat "$tmp/d5")"
+grep -q "ok: catalog: present, 2 asset(s), fresh" "$tmp/d5" || fail "missing catalog ok line: $(cat "$tmp/d5")"
 
 # mtime だけが変わっても stale にならない
 touch "$tmp/repo/shared/workflows/personal-demo.asset.yml" "$tmp/repo/shared/workflows/personal-demo.md"
 run_doctor > "$tmp/d5a" 2>&1 || fail "touched files should not be stale"
-grep -q "ok: catalog: present, 1 asset(s), fresh" "$tmp/d5a" || fail "mtime change must not cause stale: $(cat "$tmp/d5a")"
+grep -q "ok: catalog: present, 2 asset(s), fresh" "$tmp/d5a" || fail "mtime change must not cause stale: $(cat "$tmp/d5a")"
 
 # source content の変更は stale になる
 echo "changed" >> "$tmp/repo/shared/workflows/personal-demo.md"
 run_doctor > "$tmp/d5b" 2>&1 || fail "stale catalog should still exit 0"
 grep -q "warn: catalog: stale (personal-demo: content changed since register)" "$tmp/d5b" \
   || fail "missing catalog stale warn: $(cat "$tmp/d5b")"
+
+# --- case 6: catalog_version 不一致は warn (re-run register) ---
+ruby -i -pe 'sub(/"catalog_version": 2/, "\"catalog_version\": 1")' "$tmp/repo/generated/catalog.json"
+run_doctor > "$tmp/d6" 2>&1 || fail "version mismatch should still exit 0: $(cat "$tmp/d6")"
+grep -q "warn: catalog: version mismatch" "$tmp/d6" \
+  || fail "missing catalog version mismatch warn: $(cat "$tmp/d6")"
 
 echo "ok: doctor self-test passed"

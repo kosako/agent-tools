@@ -6,6 +6,10 @@
 # check-manifests から read され、循環 require (Build -> Gate -> CheckManifests)
 # を避けるための独立 module。
 module ArtifactTargets
+  # catalog (generated/catalog.json) の version。reader (sync / status / doctor) は
+  # これと一致しない catalog を古いものとして無視する。
+  CATALOG_VERSION = 2
+
   # build が扱える artifact_kind (sync の instruction 配置は後続対応)。
   SUPPORTED_KINDS = %w[skill instruction].freeze
 
@@ -35,5 +39,22 @@ module ArtifactTargets
 
   def self.supported?(kind)
     SUPPORTED_KINDS.include?(kind)
+  end
+
+  # その tool 向けに artifact を build できるかを判定する (実 build はしない)。
+  # register が「registered != buildable」のサイレント断裂を防ぐために使う。
+  def self.buildable?(asset, tool)
+    case resolve(asset, tool)
+    when "skill"
+      true
+    when "instruction"
+      return false unless INSTRUCTION_FILENAMES.key?(tool)
+
+      source = asset[:source]
+      format = source.is_a?(Hash) ? source["format"] : nil
+      format != "directory"
+    else
+      false
+    end
   end
 end

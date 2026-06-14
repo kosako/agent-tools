@@ -15,6 +15,7 @@ require "json"
 require "fileutils"
 
 require_relative "yaml_util"
+require_relative "artifact_targets"
 
 module Sync
   MARKER_FILE = ".agent-tools-managed.yml"
@@ -35,16 +36,24 @@ module Sync
       load_catalog
     end
 
-    # catalog から name => registration を作る。registered の artifact だけ配置する。
+    # catalog から (target, name) => registration を作る。catalog は
+    # target-artifact 単位 (catalog_version 2) なので tool ごとに引く。
+    # registered の artifact だけ配置する。
     def load_catalog
       @catalog_present = false
       @registrations = {}
       path = File.join(@root, CATALOG_PATH)
       return unless File.file?(path)
 
-      assets = JSON.parse(File.read(path)).fetch("assets", [])
+      data = JSON.parse(File.read(path))
+      # version の一致しない catalog は古いものとして無視する (re-run register)。
+      return unless data["catalog_version"] == ArtifactTargets::CATALOG_VERSION
+
       @catalog_present = true
-      assets.each { |a| @registrations[a["name"]] = a["registration"] }
+      data.fetch("assets", []).each do |a|
+        @registrations[[a["target"], a["name"]]] =
+          { "registration" => a["registration"], "artifact_kind" => a["artifact_kind"] }
+      end
     rescue JSON::ParserError
       @catalog_present = false
     end
@@ -88,12 +97,16 @@ module Sync
       end
 
       # catalog の registration を尊重する。registered 以外は配置しない (課題1)。
-      registration = @registrations[name]
-      if registration.nil?
+      entry = @registrations[[tool, name]]
+      if entry.nil?
         reason = @catalog_present ? "not in catalog" : "no catalog (run scripts/register.sh first)"
         return Plan.new("skip", tool, name, target, reason)
-      elsif registration != "registered"
-        return Plan.new("skip", tool, name, target, registration)
+      elsif entry["artifact_kind"] != "skill"
+        # この name は別の artifact_kind (instruction 等) として登録されている。
+        # skill の sync 対象ではないので配置しない (stale skill の誤配置を防ぐ)。
+        return Plan.new("skip", tool, name, target, "not a skill artifact")
+      elsif entry["registration"] != "registered"
+        return Plan.new("skip", tool, name, target, entry["registration"])
       end
 
       # symlink は実体の所在によらず unmanaged target として扱い、決して触らない。

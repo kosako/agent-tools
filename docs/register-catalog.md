@@ -18,15 +18,20 @@ catalog に記録する step です。
   いつでも再生成できる。
 - catalog は commit しない。tracked source は manifest だけが source of truth。
 
+catalog は **target-artifact 単位** (catalog_version 2) です。1 つの asset が複数 target を
+持つ場合、target ごとに entry を 1 つずつ出します。各 entry は `target` と
+`artifact_kind` を持ち、sync はこれを見て配置先を分岐します。
+
 ```json
 {
-  "catalog_version": 1,
+  "catalog_version": 2,
   "assets": [
     {
       "name": "personal-example",
+      "target": "claude-code",
+      "artifact_kind": "skill",
       "kind": "workflow",
       "visibility": "public",
-      "targets": ["codex", "claude-code"],
       "source": {
         "path": "shared/workflows/personal-example.md",
         "format": "markdown"
@@ -49,10 +54,23 @@ source content の決定的 hash (build の marker と同じ計算)。doctor が
 
 ### `registration`
 
+registration は target-artifact 単位で決まります。
+
 | value | 意味 |
 | --- | --- |
 | `registered` | sync が配置してよい。 |
 | `human_review_required` | medium があり human review が未解決。sync は配置しない。 |
+| `unsupported` | その target では artifact を build できない (artifact_kind 非対応 / instruction が directory format など)。sync は配置しない。 |
+
+### ビルド可能性の証明 (registered != buildable を防ぐ)
+
+register は各 target-artifact について artifact_kind を解決し、build できるかを
+確認してから registration を決めます (実 build はしません。support matrix /
+source format / output path の確認のみ)。build できない target-artifact は
+`unsupported` とし、`registered` にしません。これにより「catalog 上は registered
+なのに build できない」サイレント断裂を防ぎます。artifact_kind 解決と buildable
+判定は `scripts/lib/artifact_targets.rb` に集約し、build / register / check-manifests が
+共有します。
 
 ## Gate は build / register / sync で一貫させる
 
@@ -124,6 +142,9 @@ enforce する。static finding と宣言 risk の厳しい方が勝つ。
 ## Status / doctor / dotfiles への露出
 
 - catalog は repository 内部の中間生成物。dotfiles は catalog を直接読まない。
+- catalog の reader (sync / status / doctor) は `catalog_version` が一致しない catalog を
+  古いものとして無視する (再度 register を実行して再生成する)。これにより古い catalog が
+  残った状態で reader 間の判断がずれることを防ぐ。
 - `status.sh` には register summary を追加する (contract_version 2 に bump):
   `"register": {"catalog_present": true, "registered": 1, "human_review_required": 0}`。
 - `doctor.sh` は catalog の存在と鮮度 (build_id 比較) を check する。
