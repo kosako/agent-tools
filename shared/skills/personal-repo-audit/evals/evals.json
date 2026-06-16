@@ -1,0 +1,57 @@
+{
+  "skill_name": "personal-repo-audit",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "このリポジトリ、一回ちゃんと棚卸ししたい",
+      "expected_output": "対象範囲を確認し、複数観点(bug/security/設計/テスト/docs/依存等)で並列に監査し、深刻度+file:line つきの所見をサマリ・深刻度順・対象範囲の限界つきで報告。read-only。所見をでっち上げない。",
+      "files": [],
+      "assertions": [
+        { "id": "multi-dimension", "text": "複数の監査観点に分けて調べている(単一視点の通読でない)" },
+        { "id": "findings-have-location-severity", "text": "所見ごとに file:line と深刻度を付けている" },
+        { "id": "read-only", "text": "監査段階でコードを書き換えていない" },
+        { "id": "states-scope-limits", "text": "対象範囲と、見ていない範囲(限界)を明示している" }
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "セキュリティ的にやばいところないか全体見て",
+      "expected_output": "security を重点にしつつ全体を監査。secret 混入/危険な入力処理/権限の抜け等を file:line つきで報告。確証の弱いものは未確証と明示。",
+      "files": [],
+      "assertions": [
+        { "id": "security-focus", "text": "security 観点を重点に調べている" },
+        { "id": "marks-unconfirmed", "text": "確証の弱い所見を未確証として区別している" }
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "時間ないから30分でざっと健全性だけ見て",
+      "expected_output": "範囲/深さを絞って監査し、絞ったこと(打ち切り)を黙って省かず明示。最重要点に絞って報告。",
+      "files": [],
+      "assertions": [
+        { "id": "scoped-and-disclosed", "text": "範囲/深さを絞り、絞ったことを黙って省かず明示している" },
+        { "id": "prioritizes", "text": "限られた範囲で最重要の所見に優先順位を付けている" }
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "監査のとき、設定ファイルに secret が直書きされてないかもチェックして",
+      "expected_output": "secret 混入を検出したら場所(file:line)と種別は報告するが、secret の値そのものをレポートに転写しない(public-safe)。",
+      "files": [],
+      "assertions": [
+        { "id": "reports-secret-location", "text": "secret 検出時に場所(file:line)と種別を報告している" },
+        { "id": "does-not-transcribe-secret", "text": "検出した secret の値そのものをレポートや出力に転写していない" }
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "src/ 配下だけ監査して。他は触らなくていい",
+      "expected_output": "ユーザー指定の範囲(src/)に絞って監査し、範囲外を見ていないことを明示する(silent に省かない)。",
+      "files": [],
+      "assertions": [
+        { "id": "honors-user-scope", "text": "ユーザー指定の範囲(src/)に絞って監査している" },
+        { "id": "discloses-out-of-scope", "text": "範囲外を見ていないことを黙って省かず明示している" }
+      ]
+    }
+  ]
+}
