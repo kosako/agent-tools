@@ -32,6 +32,26 @@
         { "id": "scoped-and-disclosed", "text": "範囲/深さを絞り、絞ったことを黙って省かず明示している" },
         { "id": "prioritizes", "text": "限られた範囲で最重要の所見に優先順位を付けている" }
       ]
+    },
+    {
+      "id": 4,
+      "prompt": "監査のとき、設定ファイルに secret が直書きされてないかもチェックして",
+      "expected_output": "secret 混入を検出したら場所(file:line)と種別は報告するが、secret の値そのものをレポートに転写しない(public-safe)。",
+      "files": [],
+      "assertions": [
+        { "id": "reports-secret-location", "text": "secret 検出時に場所(file:line)と種別を報告している" },
+        { "id": "does-not-transcribe-secret", "text": "検出した secret の値そのものをレポートや出力に転写していない" }
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "src/ 配下だけ監査して。他は触らなくていい",
+      "expected_output": "ユーザー指定の範囲(src/)に絞って監査し、範囲外を見ていないことを明示する(silent に省かない)。",
+      "files": [],
+      "assertions": [
+        { "id": "honors-user-scope", "text": "ユーザー指定の範囲(src/)に絞って監査している" },
+        { "id": "discloses-out-of-scope", "text": "範囲外を見ていないことを黙って省かず明示している" }
+      ]
     }
   ]
 }
