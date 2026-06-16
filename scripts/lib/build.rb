@@ -106,6 +106,8 @@ module Build
       src_dir = File.join(@root, source)
       Dir.children(src_dir).sort.each do |entry|
         next if entry == "asset.yml"
+        # source-only な予約 dir (evals 等) は配置先に載せない。
+        next if ArtifactTargets::SKILL_NON_DEPLOY_DIRS.include?(entry)
 
         FileUtils.cp_r(File.join(src_dir, entry), File.join(out_dir, entry))
       end
@@ -205,12 +207,17 @@ module Build
   # source content から決定的な build_id を作る。status の stale 判定でも使う。
   def self.build_id_for(root, source, format)
     if format == "directory"
-      src_dir = File.join(root, source)
+      # source.path は末尾スラッシュ付きでも check-manifests を通る (chomp して検証)。
+      # 相対 path 計算 (evals 除外) が末尾スラッシュで壊れないよう正規化する。
+      src_dir = File.join(root, source).chomp("/")
       digest = Digest::SHA256.new
       Dir.glob(File.join(src_dir, "**/*")).sort.each do |f|
         next unless File.file?(f)
         # copy と同じく、manifest として除外するのは top-level の asset.yml のみ。
         next if f == File.join(src_dir, "asset.yml")
+        # 配置されない予約 dir (evals 等) は build_id に含めない。
+        # 配置成果物が変わらない eval 編集で stale 扱いにならないようにする (copy と整合)。
+        next if ArtifactTargets::SKILL_NON_DEPLOY_DIRS.include?(f.sub("#{src_dir}/", "").split("/").first)
 
         digest.update(f.sub(src_dir, ""))
         digest.update(File.read(f, mode: "rb"))

@@ -88,6 +88,7 @@ module CheckManifests
 
       @declared_names[data["name"]] << path if data["name"].is_a?(String)
       collect_instruction_targets(data, path)
+      check_directory_skill_contents(data, path)
 
       validate_schema_version(path, data["schema_version"]) if data.key?("schema_version")
       validate_name(path, data["name"]) if data.key?("name")
@@ -279,6 +280,34 @@ module CheckManifests
       format = source.is_a?(Hash) ? source["format"] : nil
       if format == "directory"
         error(path, "instruction asset must be a single file, not a directory format")
+      end
+    end
+
+    # directory 形式の skill asset の中身を Phase 1 制約で検証する。
+    # scripts/ (実行コード) は配る前の安全検査能力が無い (#43 待ち) ため fail-closed
+    # で止める。黙ってスキップせず、理由を出して gate を止める。
+    # 型不正 manifest でもクラッシュしないよう、resolve に必要な値だけを安全に読む。
+    def check_directory_skill_contents(data, path)
+      source = data["source"]
+      return unless source.is_a?(Hash) && source["format"] == "directory"
+
+      targets = data["targets"]
+      return unless targets.is_a?(Array)
+
+      asset = { kind: data["kind"], compatibility: data["compatibility"], source: source }
+      is_skill = targets.any? do |tool|
+        tool.is_a?(String) && ArtifactTargets.resolve(asset, tool) == "skill"
+      end
+      return unless is_skill
+
+      source_path = source["path"]
+      return unless source_path.is_a?(String)
+
+      ArtifactTargets::SKILL_FORBIDDEN_DIRS.each do |sub|
+        next unless File.directory?(File.join(@root, source_path, sub))
+
+        error(path, "directory skill must not contain #{sub}/ " \
+                    "(executable code is not supported yet; blocked on external scanner, see #43)")
       end
     end
 

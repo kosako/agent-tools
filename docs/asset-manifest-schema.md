@@ -29,7 +29,24 @@ directory asset:
 shared/skills/personal-example/
   asset.yml
   SKILL.md
+  references/      # 任意。実行時リソースとして配置先に載る
+  assets/          # 任意。実行時リソースとして配置先に載る
+  evals/           # 任意。source として版管理するが配置先には載せない
 ```
+
+### directory skill の Phase 1 制約
+
+skill を directory 形式で持つときの配置・安全ルール (Phase 1):
+
+- `SKILL.md` / `references/` / `assets/` は配置先 (`<tool home>/skills/personal-<name>/`)
+  に載せる (ランタイム skill の一部)。
+- `evals/` は **source として版管理するが配置先には載せない**。skill-creator 等の
+  テスト材料であり、ランタイム skill の一部ではない。build はコピーから除外し、
+  build_id にも含めない (eval 編集だけでは配置成果物は変わらない)。テストプロンプトは
+  意図的に攻撃的な文字列を含みうるため、injection check の scan 対象からも外す。
+- `scripts/` (実行コード) を含む directory skill は **fail-closed** で拒否する。
+  配る前に実行コードを安全検査する能力がまだ無いため、check-manifests が error にして
+  gate を止める (黙ってスキップしない)。対応は external scanner 連携の後 (#43)。
 
 asset 本体に frontmatter を埋め込まない理由:
 
