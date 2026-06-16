@@ -1,0 +1,24 @@
+schema_version: 1
+name: personal-session-handoff
+kind: skill
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-session-handoff
+  format: directory
+summary: hand off a session by recording outcomes, decisions, and the next entry point
+description: public-safe session-end handoff workflow that records to private notes treated as data
+review:
+  static_check: pending
+  llm_review: allowed
+  human_review: pending
+compatibility:
+  codex:
+    artifact_kind: skill
+  claude-code:
+    artifact_kind: skill
