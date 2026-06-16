@@ -70,6 +70,11 @@ scripts/          check / build / sync / status / doctor / register scripts。
 docs/             boundary と policy documents。
 ```
 
+`shared/` 配下のサブディレクトリは整理のための置き場所で、asset の種類は manifest の
+`kind` で決まります。各 `kind` (`skill` / `prompt` / `workflow` / `instruction` /
+`template` / `agent`) の意味・使い分け・配置のされ方は
+[Asset Manifest Schema の「kind」](docs/asset-manifest-schema.md#kind) を参照してください。
+
 ## 現在の scope
 
 scaffold と policy documentation、および check-manifests / check-injection /

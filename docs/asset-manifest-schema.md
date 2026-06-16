@@ -88,16 +88,35 @@ rules:
 
 ### `kind`
 
-asset の種類です。
+asset の種類を表す意味ラベルです。**用途に応じて選びます**。配置のされ方は kind ごとに
+下表の「配置挙動」のとおりで、配備対象は skill 系 (`skill` / `prompt` / `workflow` /
+`template` → skill target) と `instruction` (→ tool 別の `CLAUDE.md` / `AGENTS.md`) の
+2 系統です。`agent` は現状どの target にも解決されず未対応 (unsupported) です。kind が
+どの artifact に解決されるかの仕組みは [compatibility / artifact_kind](#compatibility)
+を参照してください。
 
-allowed values:
+| kind | 意味・用途 | 配置挙動 (artifact_kind) |
+| --- | --- | --- |
+| `skill` | モデルが必要時に参照する手順・能力のまとまり。`SKILL.md` 本体 + 任意の `references/` `assets/` `evals/`。 | `skill` |
+| `prompt` | 定型のプロンプト断片やテンプレート的な指示。 | `skill` (skill として配置) |
+| `workflow` | 複数ステップの再利用可能な作業手順。 | `skill` |
+| `template` | 出力フォーマットなどの雛形。 | `skill` |
+| `instruction` | 常時読まれる運用ルール。tool 別の `CLAUDE.md` / `AGENTS.md` として生成。詳細は [Instruction Artifact Kind](instruction-artifact-kind.md)。 | `instruction` |
+| `agent` | サブエージェント定義。**現状は配備未対応** (各 tool の agent 形式へのマッピングが未設計)。register では `unsupported` になる。 | 未対応 |
 
-- `skill`
-- `prompt`
-- `workflow`
-- `agent`
-- `instruction`
-- `template`
+補足:
+
+- `prompt` / `workflow` / `template` は現状いずれも **skill として build・配置** されます
+  (skill の意味別名)。意味のラベルとして使い分けつつ、配られ方は skill と同じです。
+  必要なら `compatibility.<tool>.artifact_kind` で明示的に上書きできます。
+- `agent` kind は現状 build 対象外で、配備したい需要が出た時点で設計します
+  (各 tool の agent 形式へのマッピングが論点)。
+- `shared/` 配下のサブディレクトリ (`skills/` `prompts/` `workflows/` `agents/`
+  `instructions/`) は **整理のための置き場所**で、kind を決定しません。asset の kind は
+  必ず manifest の `kind` フィールドで決まります (discovery は sidecar manifest
+  `shared/**/*.asset.yml` と directory manifest `shared/**/asset.yml` の両方)。
+  例: `personal-project-operating-loop` は `workflows/` 配下にありつつ `kind: workflow`
+  → skill として配置されます。
 
 ### `visibility`
 
@@ -206,8 +225,8 @@ target tool ごとの変換 hint です。
 明示できます。未指定なら asset の `kind` から既定値が導出されます (`instruction` kind は
 instruction、`skill` / `prompt` / `workflow` / `template` は skill)。
 
-build が対応する artifact_kind は `skill` と `instruction` です
-(sync の instruction 配置は後続対応)。
+build が対応する artifact_kind は `skill` と `instruction` です。どちらも build →
+register → sync で配置されます (instruction の所有確立は connect が担当)。
 
 - `skill`: `<tool home>/skills/personal-<name>/` に directory として配る。
 - `instruction`: tool 別の単一ファイル (claude-code は `CLAUDE.md`、codex は `AGENTS.md`)
