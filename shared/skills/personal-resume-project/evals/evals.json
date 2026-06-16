@@ -20,7 +20,9 @@
       "files": [],
       "assertions": [
         { "id": "concise-summary", "text": "到達点・未完・次の一手を含む簡潔な現在地サマリを返している" },
-        { "id": "separates-fact-guess", "text": "事実(出典あり)と推測を区別している" }
+        { "id": "separates-fact-guess", "text": "事実(出典あり)と推測を区別している" },
+        { "id": "cites-evidence", "text": "到達点・進行中の記述に出典(commit/issue/ファイル等)を添えている" },
+        { "id": "no-fabrication", "text": "確認できない情報をでっち上げず、不明な点は不明と述べている" }
       ]
     },
     {
