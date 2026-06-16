@@ -88,10 +88,12 @@ rules:
 
 ### `kind`
 
-asset の種類を表す意味ラベルです。**用途に応じて選びます**。ただし現在 build / 配置の
-挙動を分けるのは `instruction` か否かだけで、それ以外はすべて skill として配られます
-(下表の「配置挙動」を参照)。kind がどの artifact に解決されるかの仕組みは
-[compatibility / artifact_kind](#compatibility) を参照してください。
+asset の種類を表す意味ラベルです。**用途に応じて選びます**。配置のされ方は kind ごとに
+下表の「配置挙動」のとおりで、配備対象は skill 系 (`skill` / `prompt` / `workflow` /
+`template` → skill target) と `instruction` (→ tool 別の `CLAUDE.md` / `AGENTS.md`) の
+2 系統です。`agent` は現状どの target にも解決されず未対応 (unsupported) です。kind が
+どの artifact に解決されるかの仕組みは [compatibility / artifact_kind](#compatibility)
+を参照してください。
 
 | kind | 意味・用途 | 配置挙動 (artifact_kind) |
 | --- | --- | --- |
@@ -111,7 +113,8 @@ asset の種類を表す意味ラベルです。**用途に応じて選びます
   (各 tool の agent 形式へのマッピングが論点)。
 - `shared/` 配下のサブディレクトリ (`skills/` `prompts/` `workflows/` `agents/`
   `instructions/`) は **整理のための置き場所**で、kind を決定しません。asset の kind は
-  必ず manifest の `kind` フィールドで決まります (discovery は `shared/**/*.asset.yml`)。
+  必ず manifest の `kind` フィールドで決まります (discovery は sidecar manifest
+  `shared/**/*.asset.yml` と directory manifest `shared/**/asset.yml` の両方)。
   例: `personal-project-operating-loop` は `workflows/` 配下にありつつ `kind: workflow`
   → skill として配置されます。
 
@@ -222,8 +225,8 @@ target tool ごとの変換 hint です。
 明示できます。未指定なら asset の `kind` から既定値が導出されます (`instruction` kind は
 instruction、`skill` / `prompt` / `workflow` / `template` は skill)。
 
-build が対応する artifact_kind は `skill` と `instruction` です
-(sync の instruction 配置は後続対応)。
+build が対応する artifact_kind は `skill` と `instruction` です。どちらも build →
+register → sync で配置されます (instruction の所有確立は connect が担当)。
 
 - `skill`: `<tool home>/skills/personal-<name>/` に directory として配る。
 - `instruction`: tool 別の単一ファイル (claude-code は `CLAUDE.md`、codex は `AGENTS.md`)
