@@ -29,6 +29,14 @@ module ArtifactTargets
     "codex" => "AGENTS.md",
   }.freeze
 
+  # directory skill の予約 subdirectory (top-level basename で判定)。
+  # SKILL_NON_DEPLOY_DIRS: source には置くが配置先 (build 成果物) には載せない。
+  #   evals = skill-creator のテスト材料。ランタイム skill の一部ではない。
+  # SKILL_FORBIDDEN_DIRS: Phase 1 では未対応として fail-closed (検出で gate を止める)。
+  #   scripts = 実行コード。配る前の安全検査能力 (#43 external scanner) が前提。
+  SKILL_NON_DEPLOY_DIRS = %w[evals].freeze
+  SKILL_FORBIDDEN_DIRS = %w[scripts].freeze
+
   # asset (Assets.from_manifest の hash) と tool から artifact_kind を解決する。
   # 解決できない場合は "unsupported" を返す。
   def self.resolve(asset, tool)

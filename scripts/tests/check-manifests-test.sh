@@ -221,6 +221,67 @@ fi
 grep -q "risk must be a mapping" "$tmp/out-badtype" \
   || fail "expected clean risk validation error (no crash) in: $(cat "$tmp/out-badtype")"
 
+# --- case 4b: directory skill の scripts/ は fail-closed (Phase 1 未対応) ---
+mkdir -p "$tmp/scriptskill/shared/skills/personal-script-skill/scripts"
+cat > "$tmp/scriptskill/shared/skills/personal-script-skill/SKILL.md" <<'EOF'
+---
+name: personal-script-skill
+description: skill with scripts
+---
+
+# script skill
+EOF
+echo 'print("hi")' > "$tmp/scriptskill/shared/skills/personal-script-skill/scripts/run.py"
+cat > "$tmp/scriptskill/shared/skills/personal-script-skill/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-script-skill
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-script-skill
+  format: directory
+EOF
+
+if "$check" --root "$tmp/scriptskill" > "$tmp/out-scriptskill" 2>&1; then
+  fail "check-manifests must reject a directory skill containing scripts/"
+fi
+grep -q "must not contain scripts/" "$tmp/out-scriptskill" \
+  || fail "expected scripts/ fail-closed reason: $(cat "$tmp/out-scriptskill")"
+
+# evals/ だけなら通る (非配置だが許可される)。
+mkdir -p "$tmp/evalskill/shared/skills/personal-eval-skill/evals"
+cat > "$tmp/evalskill/shared/skills/personal-eval-skill/SKILL.md" <<'EOF'
+---
+name: personal-eval-skill
+description: skill with evals
+---
+
+# eval skill
+EOF
+echo '{"evals":[]}' > "$tmp/evalskill/shared/skills/personal-eval-skill/evals/evals.json"
+cat > "$tmp/evalskill/shared/skills/personal-eval-skill/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-eval-skill
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-eval-skill
+  format: directory
+EOF
+
+"$check" --root "$tmp/evalskill" > "$tmp/out-evalskill" 2>&1 \
+  || fail "directory skill with only evals/ should pass: $(cat "$tmp/out-evalskill")"
+
 # --- case 5: repository 本体の manifest が pass する ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \

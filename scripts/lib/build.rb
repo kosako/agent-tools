@@ -106,6 +106,8 @@ module Build
       src_dir = File.join(@root, source)
       Dir.children(src_dir).sort.each do |entry|
         next if entry == "asset.yml"
+        # source-only な予約 dir (evals 等) は配置先に載せない。
+        next if ArtifactTargets::SKILL_NON_DEPLOY_DIRS.include?(entry)
 
         FileUtils.cp_r(File.join(src_dir, entry), File.join(out_dir, entry))
       end
@@ -211,6 +213,9 @@ module Build
         next unless File.file?(f)
         # copy と同じく、manifest として除外するのは top-level の asset.yml のみ。
         next if f == File.join(src_dir, "asset.yml")
+        # 配置されない予約 dir (evals 等) は build_id に含めない。
+        # 配置成果物が変わらない eval 編集で stale 扱いにならないようにする (copy と整合)。
+        next if ArtifactTargets::SKILL_NON_DEPLOY_DIRS.include?(f.sub("#{src_dir}/", "").split("/").first)
 
         digest.update(f.sub(src_dir, ""))
         digest.update(File.read(f, mode: "rb"))

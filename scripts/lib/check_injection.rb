@@ -105,10 +105,13 @@ module CheckInjection
 
     # shared/ 配下のすべての text files を scan する。
     # manifest も text として scan 対象に含める。
+    # directory skill の evals/ (テスト材料。意図的に攻撃的文字列を含みうる) は除外する。
     def target_files
+      eval_prefixes = skill_eval_dir_prefixes
       Dir.glob(File.join(@root, "shared/**/*"), File::FNM_DOTMATCH)
          .select { |p| File.file?(p) }
          .reject { |p| File.basename(p) == ".gitkeep" }
+         .reject { |p| eval_prefixes.any? { |pre| p.start_with?(pre) } }
          .sort
     end
 
@@ -152,6 +155,28 @@ module CheckInjection
         paths << asset[:source]["path"] if instruction
       end
       paths
+    rescue Psych::Exception
+      []
+    end
+
+    # directory skill の evals/ 配下を scan 対象外にするための絶対 path prefix 一覧。
+    # 壊れた manifest では除外しない (gate の check-manifests が別途 fail させる)。
+    def skill_eval_dir_prefixes
+      prefixes = []
+      Assets.load_all(@root).each do |asset|
+        source = asset[:source]
+        next unless source.is_a?(Hash) && source["format"] == "directory"
+        next unless source["path"].is_a?(String)
+        next unless asset[:targets].is_a?(Array)
+
+        is_skill = asset[:targets].any? { |t| ArtifactTargets.resolve(asset, t) == "skill" }
+        next unless is_skill
+
+        ArtifactTargets::SKILL_NON_DEPLOY_DIRS.each do |sub|
+          prefixes << "#{File.join(@root, source['path'], sub)}/"
+        end
+      end
+      prefixes
     rescue Psych::Exception
       []
     end
