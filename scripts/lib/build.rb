@@ -207,7 +207,9 @@ module Build
   # source content から決定的な build_id を作る。status の stale 判定でも使う。
   def self.build_id_for(root, source, format)
     if format == "directory"
-      src_dir = File.join(root, source)
+      # source.path は末尾スラッシュ付きでも check-manifests を通る (chomp して検証)。
+      # 相対 path 計算 (evals 除外) が末尾スラッシュで壊れないよう正規化する。
+      src_dir = File.join(root, source).chomp("/")
       digest = Digest::SHA256.new
       Dir.glob(File.join(src_dir, "**/*")).sort.each do |f|
         next unless File.file?(f)
