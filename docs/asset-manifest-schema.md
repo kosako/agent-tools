@@ -88,16 +88,32 @@ rules:
 
 ### `kind`
 
-asset の種類です。
+asset の種類を表す意味ラベルです。**用途に応じて選びます**。ただし現在 build / 配置の
+挙動を分けるのは `instruction` か否かだけで、それ以外はすべて skill として配られます
+(下表の「配置挙動」を参照)。kind がどの artifact に解決されるかの仕組みは
+[compatibility / artifact_kind](#compatibility) を参照してください。
 
-allowed values:
+| kind | 意味・用途 | 配置挙動 (artifact_kind) |
+| --- | --- | --- |
+| `skill` | モデルが必要時に参照する手順・能力のまとまり。`SKILL.md` 本体 + 任意の `references/` `assets/` `evals/`。 | `skill` |
+| `prompt` | 定型のプロンプト断片やテンプレート的な指示。 | `skill` (skill として配置) |
+| `workflow` | 複数ステップの再利用可能な作業手順。 | `skill` |
+| `template` | 出力フォーマットなどの雛形。 | `skill` |
+| `instruction` | 常時読まれる運用ルール。tool 別の `CLAUDE.md` / `AGENTS.md` として生成。詳細は [Instruction Artifact Kind](instruction-artifact-kind.md)。 | `instruction` |
+| `agent` | サブエージェント定義。**現状は配備未対応** (各 tool の agent 形式へのマッピングが未設計)。register では `unsupported` になる。 | 未対応 |
 
-- `skill`
-- `prompt`
-- `workflow`
-- `agent`
-- `instruction`
-- `template`
+補足:
+
+- `prompt` / `workflow` / `template` は現状いずれも **skill として build・配置** されます
+  (skill の意味別名)。意味のラベルとして使い分けつつ、配られ方は skill と同じです。
+  必要なら `compatibility.<tool>.artifact_kind` で明示的に上書きできます。
+- `agent` kind は現状 build 対象外で、配備したい需要が出た時点で設計します
+  (各 tool の agent 形式へのマッピングが論点)。
+- `shared/` 配下のサブディレクトリ (`skills/` `prompts/` `workflows/` `agents/`
+  `instructions/`) は **整理のための置き場所**で、kind を決定しません。asset の kind は
+  必ず manifest の `kind` フィールドで決まります (discovery は `shared/**/*.asset.yml`)。
+  例: `personal-project-operating-loop` は `workflows/` 配下にありつつ `kind: workflow`
+  → skill として配置されます。
 
 ### `visibility`
 
