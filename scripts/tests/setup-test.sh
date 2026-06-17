@@ -6,13 +6,18 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 setup="$script_dir/../setup.sh"
 
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+tmpbase=$(mktemp -d)
+trap 'rm -rf "$tmpbase"' EXIT
 
 fail() {
   echo "FAIL: $1" >&2
   exit 1
 }
+
+# root / home に空白を含めて、引数 forwarding の quoting を検証する
+# ("Application Support" のような空白入り path での破綻を捕まえる)。
+tmp="$tmpbase/with space"
+mkdir -p "$tmp"
 
 # fixture: single-file skill asset (build → register → connect(noop) → sync を通せる)
 mkdir -p "$tmp/shared/skills" "$tmp/codex" "$tmp/claude"
@@ -38,11 +43,11 @@ source:
 summary: demo skill for setup-test
 EOF
 
-common="--root $tmp --codex-home $tmp/codex --claude-home $tmp/claude"
-
+# 引数は quote して渡す (root/home に空白を含むため)。setup.sh 側の forwarding の
+# quoting が壊れていれば、空白入り path の sub-script 呼び出しで失敗する。
 # --- case 1: dry-run は全段を通すが実 home には書き込まない ---
-# shellcheck disable=SC2086
-out=$("$setup" $common 2>&1) || fail "dry-run exited non-zero: $out"
+out=$("$setup" --root "$tmp" --codex-home "$tmp/codex" --claude-home "$tmp/claude" 2>&1) \
+  || fail "dry-run exited non-zero: $out"
 echo "$out" | grep -q "==> build" || fail "dry-run: build step missing"
 echo "$out" | grep -q "==> register" || fail "dry-run: register step missing"
 echo "$out" | grep -q "==> connect" || fail "dry-run: connect step missing"
@@ -52,8 +57,8 @@ echo "$out" | grep -q "==> sync" || fail "dry-run: sync step missing"
 echo "$out" | grep -q "dry-run のみ" || fail "dry-run: hint missing"
 
 # --- case 2: --apply は skill を実 home (fake) に配置する ---
-# shellcheck disable=SC2086
-out=$("$setup" --apply $common 2>&1) || fail "apply exited non-zero: $out"
+out=$("$setup" --apply --root "$tmp" --codex-home "$tmp/codex" --claude-home "$tmp/claude" 2>&1) \
+  || fail "apply exited non-zero: $out"
 [ -f "$tmp/codex/skills/personal-demo-skill/SKILL.md" ] || fail "apply did not place codex skill"
 [ -f "$tmp/claude/skills/personal-demo-skill/SKILL.md" ] || fail "apply did not place claude skill"
 
