@@ -28,13 +28,14 @@ description: >-
 ## レビュアーの決定（相互レビュー）
 
 書いた本人ではなく別の AI がレビューする (author ≠ reviewer)。運用ルールの「AI エージェント間
-のコードレビュー」に従う。判定は PR の commit の `Co-Authored-By:` トレーラ:
+のコードレビュー」に従う。PR の**全 commit**の `Co-Authored-By:` トレーラで著者を確認する:
 
-- Claude が書いた → Codex がレビュー。Codex が書いた → Claude がレビュー。
-- 1 つの PR に複数 AI の commit が混在するときは、単一 reviewer では author ≠ reviewer を
-  満たせない。自動で片側に倒さず、PR を著者ごとに分割するか人間が裁定する (fail-closed)。
-- AI トレーラが無い（人間のみ・不明）ときも fail-closed とし、黙って自分でレビューせず、
-  人間に確認してから進める。
+- 全 commit が単一の AI 著者（例: すべて Claude）→ 反対側の AI（この例なら Codex）がレビュー。
+- 次のいずれかは fail-closed とする（自動で片側に倒さない。PR を著者ごとに分割するか、人間が
+  裁定／確認してから進める）:
+  - 複数 AI の commit が混在する（単一 reviewer では author ≠ reviewer を満たせない）。
+  - author を判定できない commit が 1 つでもある（trailer 欠落 = 人間または不明）。
+  - AI トレーラが PR に皆無（人間のみ・不明）。
 - 相手エージェントを起動できない場合（例: Codex 環境から Claude を呼べない）は、自分で
   レビューせず人間に hand-off する。
 
@@ -58,8 +59,9 @@ description: >-
 ```sh
 gh pr view <番号> --json title,body,baseRefName,headRefName,url,commits
 gh pr diff <番号>
-# レビュアー決定のため、PR の各 commit の Co-Authored-By トレーラ(= 著者の AI)を確認する
-git log --format='%(trailers:key=Co-Authored-By,valueonly)' origin/<base>..<head>
+# レビュアー決定: 各 commit の author / co-author を確認する(Co-Authored-By は co-author
+# に入る)。fork PR でも確実なよう GitHub API の commit データを使う(ローカル fetch 不要)。
+gh pr view <番号> --json commits --jq '.commits[] | {oid: .oid, authors: [.authors[].name]}'
 ```
 
 ### 2. 依頼コメントを PR に投稿
