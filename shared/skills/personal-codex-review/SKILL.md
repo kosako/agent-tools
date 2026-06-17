@@ -3,9 +3,9 @@ name: personal-codex-review
 description: >-
   別モデル (Codex / GPT-5.x) に diff や PR を実際にレビューさせ、安定して結果を得るための
   skill。「Codex にレビューさせて」「codex でこの差分/PR を見て」「second opinion を
-  Codex で」「codex review が固まる/返ってこない」のときに使う。codex exec を直接呼び、
-  承認待ちで hang しない flag を付けて回すのが要点。相互レビュー (author ≠ reviewer) の
-  どちら側を呼ぶかは運用ルールの「相互レビュー」節に従う。
+  Codex で」「codex review が固まる/返ってこない」のときに使う。codex exec を foreground で
+  単独実行するのが要点(background 化すると stall する)。承認待ち対策の flag も併用する。
+  相互レビュー (author ≠ reviewer) のどちら側を呼ぶかは運用ルールの「相互レビュー」節に従う。
 ---
 
 # personal-codex-review
@@ -33,8 +33,8 @@ codex exec --skip-git-repo-check \
 ```
 
 - **foreground で実行する(detach / background しない)。** stall の主因はこれ。観測上、
-  codex exec の呼び出しが background 化・detach されると処理が無限に固まる
-  (16 分以上 stall)。同じ呼び出しを foreground で実行すると数秒〜数分で返る。
+  codex exec の呼び出しが background 化・detach されると返らなくなる(観測では
+  16 分以上 stall した)。同じ呼び出しを foreground で実行すると数秒〜数分で返る。
   複合コマンドの末尾に埋めると wrapper に background 化されることがあるので、
   **`codex exec` は単独コマンドで呼ぶ**。
 - **`-c approval_policy="never"` を付ける。** 併発要因の対策。ローカル設定が
