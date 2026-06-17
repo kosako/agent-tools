@@ -29,30 +29,39 @@ skill は隔離 directory なので `sync` が直接置けますが、instructio
 
 ## 初回インストール
 
+### 一発で通す(推奨)
+
 ```sh
 git clone <this-repo> agent-tools
 cd agent-tools
 
-# 1. 生成(generated/ にのみ書き込む。tool home には触れない)
-./scripts/build.sh
+./scripts/setup.sh           # dry-run: build → register → connect → sync の plan を表示
+./scripts/setup.sh --apply   # 確認できたら実環境へ反映
+```
 
-# 2. 登録(配ってよい asset を catalog に記録)
-./scripts/register.sh
+`setup.sh` は `build → register → connect → sync` を順に実行します。**既定は dry-run**
+(何も書き込まない)で、`--apply` を付けたときだけ connect / sync が実環境へ書き込みます。
+初回 install と更新の両方に使えます(connect は冪等なので毎回通して無害)。
 
-# 3. 所有の確立(instruction のみ。default dry-run → 確認して --apply)
-./scripts/connect.sh            # 何が起きるか確認
-./scripts/connect.sh --apply    # 実際に所有ファイルを作り、CLAUDE.md に import 1 行を足す
+### 個別に実行する場合
 
-# 4. 配置(default dry-run → 確認して --apply)
-./scripts/sync.sh               # plan を確認(create / update / skip / conflict)
-./scripts/sync.sh --apply       # tool home に反映
+中で何が起きるかを段階で確認したいときは、個別 script を順に実行します。
+
+```sh
+./scripts/build.sh              # 1. 生成(generated/ のみ。tool home には触れない)
+./scripts/register.sh           # 2. 登録(配ってよい asset を catalog に記録)
+./scripts/connect.sh            #    instruction の所有確立: まず dry-run で確認
+./scripts/connect.sh --apply    # 3. 所有ファイルを作り、CLAUDE.md に import 1 行を足す
+./scripts/sync.sh               #    まず dry-run で plan を確認
+./scripts/sync.sh --apply       # 4. tool home に配置
 ```
 
 - `connect` は冪等です。既に import 行があれば no-op。symlink / 既存の手書き内容が
   ある所有先は触らず conflict で停止します(何も書きません)。
-- instruction を配らない(skill だけの)構成なら手順 3 は不要です。
+- instruction を配らない(skill だけの)構成なら connect は不要です。
 - `register` と `connect` はどちらも `build` の後・`sync` の前であればよく、相互に依存
-  しません(上の番号は推奨順)。`sync` だけが両者(catalog と所有確立)を前提とします。
+  しません。`sync` だけが両者(catalog と所有確立)を前提とします。`setup.sh` はこの
+  順序で通します。
 
 ## アップデート
 
@@ -60,13 +69,12 @@ cd agent-tools
 cd agent-tools
 git pull
 
-./scripts/build.sh
-./scripts/register.sh
-./scripts/sync.sh           # dry-run で差分確認
-./scripts/sync.sh --apply   # 反映
+./scripts/setup.sh           # dry-run で差分確認
+./scripts/setup.sh --apply   # 反映
 ```
 
-- `connect` は初回だけ。所有が確立済みなら以後の更新は `sync` が担います。
+- `setup.sh` は冪等な connect を含むので、更新でもそのまま使えます。個別に回すなら
+  `build → register → sync --apply`(connect は所有確立済みなら不要)。
 - source asset を編集したときも同じ流れです(`build` が source の sha256 で
   `build_id` を再計算し、`sync` が差分のある target だけ `update` します)。
 
