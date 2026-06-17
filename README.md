@@ -13,15 +13,14 @@ instruction templates を管理するための個人用 AI agent asset repositor
 
 ```sh
 git clone <this-repo> agent-tools && cd agent-tools
-./scripts/build.sh            # generated/ に生成
-./scripts/register.sh         # 配ってよい asset を catalog に記録
-./scripts/connect.sh --apply  # instruction の所有を確立(初回のみ)
-./scripts/sync.sh --apply     # tool home に配置
+./scripts/setup.sh           # dry-run: 何が起きるか plan を表示(書き込まない)
+./scripts/setup.sh --apply   # build → register → connect → sync を通しで実環境に反映
 ```
 
-アップデートは `git pull && ./scripts/build.sh && ./scripts/register.sh && ./scripts/sync.sh --apply`
-(`connect` は初回だけ)。前提条件・配置先・トラブルシュートを含む詳細は
-[docs/install-and-usage.md](docs/install-and-usage.md) を参照してください。
+`setup.sh` は初回 install と更新の両方に使えます(`git pull` 後に再実行するだけ)。
+既定は dry-run で、`--apply` のときだけ実環境へ書き込みます。build / register /
+connect / sync を1つずつ個別に実行することもできます。前提条件・配置先・
+トラブルシュートを含む詳細は [docs/install-and-usage.md](docs/install-and-usage.md) を参照してください。
 
 この repository は `dotfiles` とは意図的に分離します。
 public repository として公開する前提なので、追跡する内容はすべて公開可能なものに限定します。

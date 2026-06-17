@@ -8,6 +8,22 @@ PR / push ごとに実行されます。
 
 ## 実装済み
 
+- `setup.sh`: `build → register → connect → sync` を一括実行する一発 setup。
+  初回 install と更新の両方に使える。詳細は
+  [Install & Usage](../docs/install-and-usage.md)。
+
+```text
+usage: setup.sh [--apply] [--root DIR] [--codex-home DIR] [--claude-home DIR] [--quiet]
+```
+
+- **既定は dry-run**(plan を表示するだけ・実環境に書き込まない)。`--apply` を付けた
+  ときだけ connect / sync に `--apply` を渡す。
+- build の gate fail / connect・sync の conflict では停止する。register の human review
+  待ち(exit 3)は非致命として継続し、note を出す(sync は registered のものだけ配置)。
+- 引数は各 sub-script へ forward する(`--root` / `--quiet` は全段、`--codex-home` /
+  `--claude-home` は connect / sync)。
+- self-test: `tests/setup-test.sh`
+
 - `check-manifests.sh`: sidecar asset manifests の static validation。
   [Asset Manifest Schema](../docs/asset-manifest-schema.md) v1 に従って検証する。
 
