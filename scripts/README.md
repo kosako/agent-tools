@@ -49,6 +49,24 @@ usage: build.sh [--root DIR] [--prune] [--quiet]
   directory は警告して残す。
 - self-test: `tests/build-test.sh`
 
+- `connect.sh`: instruction の所有ファイルを確立し、人間の instruction ファイルから
+  繋ぎ込む。[Instruction Artifact Kind](../docs/instruction-artifact-kind.md) に従う。
+
+```text
+usage: connect.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] [--quiet]
+```
+
+- default は dry-run。書き込みには `--apply` が必須。冪等(再実行しても安全)。
+- **claude-code**: `<claude home>/agent-tools/CLAUDE.md` を所有ファイルとして作成し、
+  人間の `<claude home>/CLAUDE.md` に `@agent-tools/CLAUDE.md` の import 1 行を足す
+  (既にあれば no-op)。
+- **codex**: import 非対応のため `<codex home>/AGENTS.md` を直接所有する
+  (空ファイルのみ claim 可)。
+- symlink / dir / 特殊ファイルは触らない。所有先に unmanaged な中身があれば
+  conflict で停止し、何も書き込まない。先に `build.sh` で generated instruction が
+  必要。instruction を配らない構成なら不要。
+- self-test: `tests/connect-test.sh`
+
 - `sync.sh`: `generated/` の personal assets を tool directories へ反映する。
   [Sync Policy](../docs/sync-policy.md) を enforce する。
 

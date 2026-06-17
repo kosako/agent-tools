@@ -32,6 +32,9 @@ shared/<category>/personal-*        ← source asset + sidecar manifest (.asset.
         │
         ▼  register.sh              generated/catalog.json に「配ってよいか」を記録
         │
+        ▼  connect.sh               instruction のみ: 所有ファイルを確立し CLAUDE.md に
+        │  (--apply, 初回のみ)        import を繋ぐ (skill は不要 / sync が直接 create)
+        │
         ▼  sync.sh                  catalog を見て registered のものだけ tool home に配置
                                     (default dry-run / --apply で実書き込み)
 
@@ -39,7 +42,9 @@ shared/<category>/personal-*        ← source asset + sidecar manifest (.asset.
 ```
 
 実行は手動。典型的には `build.sh && register.sh && sync.sh`
-(dry-run で確認 → `sync.sh --apply`)。CI が PR ごとに全 self-test + 上記一周を回す。
+(dry-run で確認 → `sync.sh --apply`)。instruction を初めて配るときは sync の前に
+`connect.sh --apply` で所有を確立する(冪等・初回のみ)。CI が PR ごとに全 self-test +
+上記一周を回す。新環境への install / update 手順は [install-and-usage](install-and-usage.md)。
 
 ## 3. コンポーネントとコードの場所
 

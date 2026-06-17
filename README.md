@@ -5,6 +5,23 @@ instruction templates を管理するための個人用 AI agent asset repositor
 
 > 全体像・設計・現在地を一度に把握したい場合は
 > [docs/onboarding.md](docs/onboarding.md) から読んでください。
+> 新しい環境に入れて使う手順は [docs/install-and-usage.md](docs/install-and-usage.md)。
+
+## インストール / クイックスタート
+
+macOS 標準の Ruby と git だけで動きます(追加依存・ネットワーク不要)。
+
+```sh
+git clone <this-repo> agent-tools && cd agent-tools
+./scripts/build.sh            # generated/ に生成
+./scripts/register.sh         # 配ってよい asset を catalog に記録
+./scripts/connect.sh --apply  # instruction の所有を確立(初回のみ)
+./scripts/sync.sh --apply     # tool home に配置
+```
+
+アップデートは `git pull && ./scripts/build.sh && ./scripts/register.sh && ./scripts/sync.sh --apply`
+(`connect` は初回だけ)。前提条件・配置先・トラブルシュートを含む詳細は
+[docs/install-and-usage.md](docs/install-and-usage.md) を参照してください。
 
 この repository は `dotfiles` とは意図的に分離します。
 public repository として公開する前提なので、追跡する内容はすべて公開可能なものに限定します。
