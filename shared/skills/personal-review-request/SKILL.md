@@ -58,14 +58,19 @@ description: >-
 
 ### 1. PR 情報の収集
 
+cwd の origin 以外を見るときは、以降の `gh` コマンドに `--repo <owner/repo>` を付ける。
+
 ```sh
 gh pr view <番号> --json title,body,baseRefName,headRefName,url,commits
 gh pr diff <番号>
-# レビュアー決定: 各 commit の Co-Authored-By トレーラ「だけ」で判定する(commit の author 名
-# は使わない)。fork PR でも確実なよう GitHub API の commit message から trailer を抽出する。
-gh pr view <番号> --json commits \
-  --jq '.commits[] | {oid: .oid, coauthored_by: [.messageBody | scan("(?im)^co-authored-by: .*")]}'
+# レビュアー決定の素材: 各 commit の message を集める(fork PR でも確実な GitHub API 経由)。
+gh pr view <番号> --json commits --jq '.commits[] | {oid: .oid, message: .messageBody}'
 ```
+
+集めた message から、各 commit を **`Co-Authored-By:` トレーラ（message 末尾の trailer
+block）だけ**で判定する。commit の author 名は使わず、body 文中に引用された
+`Co-Authored-By:` 行も trailer と誤認しない。author を確信できない commit が 1 つでも
+あれば fail-closed（下記）。
 
 ### 2. 依頼コメントを PR に投稿
 
