@@ -28,7 +28,9 @@ description: >-
 ## レビュアーの決定（相互レビュー）
 
 書いた本人ではなく別の AI がレビューする (author ≠ reviewer)。運用ルールの「AI エージェント間
-のコードレビュー」に従う。PR の**全 commit**の `Co-Authored-By:` トレーラで著者を確認する:
+のコードレビュー」に従う。PR の**全 commit**について、**`Co-Authored-By:` トレーラだけ**で
+著者を確認する(commit の author 名は routing に使わない。author が偶然 AI 名でも、trailer が
+無ければ AI 著者とみなさない):
 
 - 全 commit が単一の AI 著者（例: すべて Claude）→ 反対側の AI（この例なら Codex）がレビュー。
 - 次のいずれかは fail-closed とする（自動で片側に倒さない。PR を著者ごとに分割するか、人間が
@@ -59,9 +61,10 @@ description: >-
 ```sh
 gh pr view <番号> --json title,body,baseRefName,headRefName,url,commits
 gh pr diff <番号>
-# レビュアー決定: 各 commit の author / co-author を確認する(Co-Authored-By は co-author
-# に入る)。fork PR でも確実なよう GitHub API の commit データを使う(ローカル fetch 不要)。
-gh pr view <番号> --json commits --jq '.commits[] | {oid: .oid, authors: [.authors[].name]}'
+# レビュアー決定: 各 commit の Co-Authored-By トレーラ「だけ」で判定する(commit の author 名
+# は使わない)。fork PR でも確実なよう GitHub API の commit message から trailer を抽出する。
+gh pr view <番号> --json commits \
+  --jq '.commits[] | {oid: .oid, coauthored_by: [.messageBody | scan("(?im)^co-authored-by: .*")]}'
 ```
 
 ### 2. 依頼コメントを PR に投稿
