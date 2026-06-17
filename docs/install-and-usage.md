@@ -7,7 +7,7 @@
 
 - **Ruby**: macOS 標準の Ruby で動きます(YAML stdlib のみ使用)。追加 gem は不要。
 - **git**: clone / pull に使います。
-- ネットワーク不要・外部依存ゼロ。各 script は手元だけで完結します。
+- 各 script はネットワーク不要・外部依存ゼロで、手元だけで完結します。
 - `gh`(GitHub CLI)は asset の利用には不要です。repository へ変更を出す
   (Issue / PR)ときだけ使います。
 
