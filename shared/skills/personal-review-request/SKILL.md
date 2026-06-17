@@ -20,7 +20,9 @@ description: >-
 `/personal-review-request <PR番号> [--reviewer codex|claude] [--repo owner/repo]`
 
 - PR 番号: 必須。省略されたら聞き返す。
-- レビュアー: 既定は**相互レビュー契約に従って自動決定**(下記)。`--reviewer` で明示上書き可。
+- レビュアー: 既定は**相互レビュー契約に従って自動決定**(下記)。`--reviewer` は trailer
+  判定が誤るときの**人間による明示上書き専用**で、author 側を選んではならない
+  (author ≠ reviewer を破らない)。
 - リポジトリ: 省略時は cwd の origin。
 
 ## レビュアーの決定（相互レビュー）
@@ -31,6 +33,8 @@ description: >-
 - Claude が書いた → Codex がレビュー。Codex が書いた → Claude がレビュー。
 - 1 つの PR に複数 AI の commit が混在するときは、単一 reviewer では author ≠ reviewer を
   満たせない。自動で片側に倒さず、PR を著者ごとに分割するか人間が裁定する (fail-closed)。
+- AI トレーラが無い（人間のみ・不明）ときも fail-closed とし、黙って自分でレビューせず、
+  人間に確認してから進める。
 - 相手エージェントを起動できない場合（例: Codex 環境から Claude を呼べない）は、自分で
   レビューせず人間に hand-off する。
 
@@ -52,8 +56,10 @@ description: >-
 ### 1. PR 情報の収集
 
 ```sh
-gh pr view <番号> --json title,body,baseRefName,headRefName,url
+gh pr view <番号> --json title,body,baseRefName,headRefName,url,commits
 gh pr diff <番号>
+# レビュアー決定のため、PR の各 commit の Co-Authored-By トレーラ(= 著者の AI)を確認する
+git log --format='%(trailers:key=Co-Authored-By,valueonly)' origin/<base>..<head>
 ```
 
 ### 2. 依頼コメントを PR に投稿
