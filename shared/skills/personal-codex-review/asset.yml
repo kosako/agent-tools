@@ -1,0 +1,24 @@
+schema_version: 1
+name: personal-codex-review
+kind: skill
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-codex-review
+  format: directory
+summary: run a stable second-model code review via codex exec (read-only, no approval hang)
+description: public-safe procedure for getting a genuine Codex (GPT-5.x) review of a diff or PR via codex exec, with the flags that avoid the approval-policy hang
+review:
+  static_check: pending
+  llm_review: allowed
+  human_review: pending
+compatibility:
+  codex:
+    artifact_kind: skill
+  claude-code:
+    artifact_kind: skill
