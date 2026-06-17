@@ -22,7 +22,7 @@ description: >-
 
 ## 安定した呼び方 (重要)
 
-`codex exec` を直接呼ぶ。承認待ちで固まらないよう、次の flag を必ず付ける:
+`codex exec` を直接呼ぶ。安定して返すために、次の2点を守る:
 
 ```sh
 codex exec --skip-git-repo-check \
@@ -32,10 +32,15 @@ codex exec --skip-git-repo-check \
   "$(cat /tmp/review-brief.md)"
 ```
 
-- `-c approval_policy="never"`: **これが無いと hang する。** ローカル設定が
-  `approval_policy = "on-request"` の場合、codex exec がファイル読取やコマンド実行で
-  承認を要求し、非対話/バックグラウンドでは誰も承認できず無限に待つ
-  (観測: 16 分以上 stall)。`never` に上書きすると同じ処理が十数秒で返る。
+- **foreground で実行する(detach / background しない)。** stall の主因はこれ。観測上、
+  codex exec の呼び出しが background 化・detach されると処理が無限に固まる
+  (16 分以上 stall)。同じ呼び出しを foreground で実行すると数秒〜数分で返る。
+  複合コマンドの末尾に埋めると wrapper に background 化されることがあるので、
+  **`codex exec` は単独コマンドで呼ぶ**。
+- **`-c approval_policy="never"` を付ける。** 併発要因の対策。ローカル設定が
+  `approval_policy = "on-request"` だと、codex がファイル読取/コマンド実行で承認を要求し、
+  非対話 / TTY なしでは誰も承認できず待ち続ける。`never` で override すると承認待ちで
+  止まらない。
 - `-s read-only`: repo を**読ませて**実装と突き合わせた検証レビューができる
   (書き込みはさせない)。
 - `-c model_reasoning_effort="medium"`: 既定の `xhigh` は遅い。review 用途は medium で十分。
@@ -55,8 +60,10 @@ codex exec --skip-git-repo-check \
    - 🟡 should: 推奨だが必須でない。
    - ⚪ nit: スタイル・好み・任意。
    「念のため直しては」を must に格上げさせない。
-3. **上の安定形コマンドで実行。** foreground でよい。返ってこない時間が普段の数倍なら
-   approval 待ちを疑い、`approval_policy="never"` が付いているか確認する。
+3. **上の安定形で foreground 実行する**(単独コマンドで。複合コマンドに混ぜない)。
+   普段の数倍返ってこないときは、まず background 化 / detach されていないかを疑い、次に
+   `approval_policy="never"` が付いているかを確認する。固まったら kill して foreground で
+   実行し直す。
 4. **結果を評価して扱う。** 明らかな誤検知は黙って消さず、転記したうえで「採用しない理由」を
    併記する。must は対応するまで merge しない。
 5. **やり取りの正本は PR に残す。** GitHub PR の文脈で使うときは、依頼・結果・再レビューを
