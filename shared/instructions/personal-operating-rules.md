@@ -24,6 +24,30 @@ AI agent と個人 project を進めるときの共通運用ルールです。pu
 - 仕様・ログ・ダッシュボード: 外部のナレッジツール。
 - レビューのやり取り: GitHub の Pull Request。
 
+## AI エージェント間のコードレビュー (相互レビュー)
+
+AI が書いたコードは、書いた本人ではなく別の AI がレビューする (author ≠ reviewer)。
+自分の答案を自分で採点しない。
+
+- トレーラ契約: コードを書いて commit する AI エージェントは、commit メッセージ末尾に
+  自分を示す `Co-Authored-By:` トレーラ (AI author marker) を必ず付ける。name 部分で
+  エージェントを識別できるようにする (Claude は `Claude ...`、Codex は `Codex` で始める)。
+  email は公開してよい no-reply / bot 用のものに限る (private / work / client のアドレスを
+  使わない)。
+- レビュアーの決定: reviewer は、commit の `Co-Authored-By:` trailer (= AI author marker) に
+  居ない側の AI が務める。判定の正本は PR の commit trailers とし、name の `Claude` /
+  `Codex` で著者を見分ける。
+  - Claude が書いた → Codex がレビュー。Codex が書いた → Claude がレビュー。
+  - 1 つの PR に複数 AI の commit が混在するときは、単一 reviewer では author ≠ reviewer を
+    満たせない。自動で片側に倒さず、PR を著者ごとに分割するか、人間が裁定する (fail-closed)。
+  - AI トレーラが無い (人間のみ・不明) ときも fail-closed とし、黙って自分でレビューせず、
+    人間に確認してから進める。
+- hand-off: 自分から相手エージェントを起動できない場合 (例: Codex は Claude を呼べない) は、
+  自分でレビューせず人間に hand-off する。
+- trailer の喪失: squash / rebase / cherry-pick で trailer は保持されないことがある
+  (git の標準動作依存で、保証はしない)。routing が誤るときは PR の label などで人間が
+  明示的に上書きする。
+
 ## public safety
 
 - secret / local path / 外部ナレッジツールの参照先 / client 材料を tracked file に
