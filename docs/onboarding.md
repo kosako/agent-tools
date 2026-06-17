@@ -43,8 +43,10 @@ shared/<category>/personal-*        ← source asset + sidecar manifest (.asset.
 
 実行は手動。典型的には `build.sh && register.sh && sync.sh`
 (dry-run で確認 → `sync.sh --apply`)。instruction を初めて配るときは sync の前に
-`connect.sh --apply` で所有を確立する(冪等・初回のみ)。CI が PR ごとに全 self-test +
-上記一周を回す。新環境への install / update 手順は [install-and-usage](install-and-usage.md)。
+`connect.sh --apply` で所有を確立する(冪等・初回のみ)。`register` と `connect` は
+build 後・sync 前であればよく相互依存しない(図は直列に見えるが推奨順)。CI が PR ごとに
+全 self-test + 上記一周を回す。新環境への install / update 手順は
+[install-and-usage](install-and-usage.md)。
 
 ## 3. コンポーネントとコードの場所
 

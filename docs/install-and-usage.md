@@ -51,6 +51,8 @@ cd agent-tools
 - `connect` は冪等です。既に import 行があれば no-op。symlink / 既存の手書き内容が
   ある所有先は触らず conflict で停止します(何も書きません)。
 - instruction を配らない(skill だけの)構成なら手順 3 は不要です。
+- `register` と `connect` はどちらも `build` の後・`sync` の前であればよく、相互に依存
+  しません(上の番号は推奨順)。`sync` だけが両者(catalog と所有確立)を前提とします。
 
 ## アップデート
 
@@ -92,7 +94,7 @@ git pull
 | 症状(plan / 出力) | 意味 | 対処 |
 | --- | --- | --- |
 | `skip ... (run build first)` | generated が無い / 古い | `./scripts/build.sh` を実行 |
-| `skip ... (run connect first)` | instruction の所有先が未確立 / 空 | `./scripts/connect.sh --apply` |
+| `skip ... (run connect first)` | instruction の所有先が未確立(未接続 / 空ファイル) | `./scripts/connect.sh --apply` |
 | `skip ... (human_review_required)` | catalog で human review 待ち | manifest の `review.human_review` を解決して `register` し直す |
 | `conflict ... (existing target is unmanaged)` | 同名の手書き / 別管理ファイルがある | 中身を確認。agent-tools に委ねてよいなら退避してから再実行(無断上書きはしない) |
 | `conflict ... (existing target is a symlink)` | 所有先 / 親が symlink | symlink を解消するか、別 home を指定 |

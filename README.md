@@ -9,7 +9,7 @@ instruction templates を管理するための個人用 AI agent asset repositor
 
 ## インストール / クイックスタート
 
-macOS 標準の Ruby と git だけで動きます(追加依存・ネットワーク不要)。
+各 script は macOS 標準の Ruby だけで動きます(追加依存なし・ネットワーク不要)。clone / pull には git を使います。
 
 ```sh
 git clone <this-repo> agent-tools && cd agent-tools
