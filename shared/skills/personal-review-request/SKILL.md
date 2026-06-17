@@ -35,7 +35,8 @@ description: >-
 - 全 commit が単一の AI 著者（例: すべて Claude）→ 反対側の AI（この例なら Codex）がレビュー。
 - 次のいずれかは fail-closed とする（自動で片側に倒さない。PR を著者ごとに分割するか、人間が
   裁定／確認してから進める）:
-  - 複数 AI の commit が混在する（単一 reviewer では author ≠ reviewer を満たせない）。
+  - 複数 AI の commit が混在する、または 1 つの commit に複数 AI の `Co-Authored-By:` が
+    付く（いずれも単一 reviewer では author ≠ reviewer を満たせない）。
   - author を判定できない commit が 1 つでもある（trailer 欠落 = 人間または不明）。
   - AI トレーラが PR に皆無（人間のみ・不明）。
 - 相手エージェントを起動できない場合（例: Codex 環境から Claude を呼べない）は、自分で
@@ -61,7 +62,7 @@ description: >-
 cwd の origin 以外を見るときは、以降の `gh` コマンドに `--repo <owner/repo>` を付ける。
 
 ```sh
-gh pr view <番号> --json title,body,baseRefName,headRefName,url,commits
+gh pr view <番号> [--repo <owner/repo>] --json title,body,baseRefName,headRefName,url,commits
 gh pr diff <番号>
 # レビュアー決定の素材: 各 commit の message を集める(fork PR でも確実な GitHub API 経由)。
 gh pr view <番号> --json commits --jq '.commits[] | {oid: .oid, message: .messageBody}'
@@ -69,7 +70,8 @@ gh pr view <番号> --json commits --jq '.commits[] | {oid: .oid, message: .mess
 
 集めた message から、各 commit を **`Co-Authored-By:` トレーラ（message 末尾の trailer
 block）だけ**で判定する。commit の author 名は使わず、body 文中に引用された
-`Co-Authored-By:` 行も trailer と誤認しない。author を確信できない commit が 1 つでも
+`Co-Authored-By:` 行も trailer と誤認しない。著者の AI は trailer の name 部分
+（`Claude …` / `Codex …`）で見分ける。author を確信できない commit が 1 つでも
 あれば fail-closed（下記）。
 
 ### 2. 依頼コメントを PR に投稿
