@@ -65,10 +65,20 @@ grep -q "\[medium\] hidden: contains invisible zero-width characters" "$tmp/out-
 grep -q "human review required" "$tmp/out-medium" \
   || fail "missing human review notice in: $(cat "$tmp/out-medium")"
 
-# --- case 4: repository 本体の shared assets が pass する ---
+# --- case 4: repository 本体の shared assets に high finding が無い ---
+# medium (runtime-state 等) は manifest の human_review:approved で register が承認を
+# gate するため repo に存在し得る (exit 3)。ここでの invariant は「high (registration
+# fail) が無いこと」= exit 1/2 にならないこと。medium↔承認の照合は register が担う。
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
-"$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \
-  || fail "repository shared assets should pass: $(cat "$tmp/out-repo")"
+status=0
+"$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 || status=$?
+case "$status" in
+  0|3) : ;;  # clean / low only、または human-review 対象の medium のみ
+  *) fail "repository shared assets must have no high-risk findings (exit $status): $(cat "$tmp/out-repo")" ;;
+esac
+if grep -q "\[high\]" "$tmp/out-repo"; then
+  fail "repository shared assets must have no high-risk findings: $(cat "$tmp/out-repo")"
+fi
 
 # --- case 5: user-specific absolute path は high (exit 1) ---
 mkdir -p "$tmp/abspath/shared/workflows"
