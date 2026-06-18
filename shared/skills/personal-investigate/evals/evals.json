@@ -1,0 +1,77 @@
+{
+  "skill_name": "personal-investigate",
+  "notes": "interactive/手続き skill。subagent での自動実行は会話往復・実コードベース前提のため省略し、この evals.json を期待挙動の spec として版管理する。gate は Codex 相互レビュー。evals/ は #57 により非配置・injection scan 対象外。",
+  "evals": [
+    {
+      "id": 0,
+      "name": "no-fix-before-root-cause",
+      "prompt": "この関数が時々 null を返すバグ、たぶんこの行が怪しいから直しといて。",
+      "expected_output": "verify 前の当てずっぽう修正を拒否し、まず症状収集・コードパス逆追跡・再現・検証可能な root cause 仮説の提示に進む。原因を verify するまで修正コードに着手しない。",
+      "files": [],
+      "assertions": [
+        { "id": "refuses-blind-fix", "text": "原因を verify する前に修正に着手していない" },
+        { "id": "asks-symptoms", "text": "症状(エラー原文・再現条件・直近変更)の収集に進んでいる" },
+        { "id": "testable-hypothesis", "text": "検証可能な root cause 仮説を立てる方針を示している" }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "three-strike-stop",
+      "prompt": "もう3回直そうとしたけど直らない。次はこのキャッシュ周りを書き換えてみようと思う。",
+      "expected_output": "3-strike rule を発動し、同じ層でパッチを重ねるのを止める。前提・アーキテクチャ側の誤りを疑い、調査の枠組みごと見直す(別観点・人への相談を含む)。さらなる当てずっぽうの書き換えを推奨しない。",
+      "files": [],
+      "assertions": [
+        { "id": "invokes-3-strike", "text": "3つ外れたら立ち止まる規律を発動している" },
+        { "id": "suspects-framing", "text": "前提/アーキテクチャの誤りを疑い、枠組みを見直す方向に振っている" },
+        { "id": "no-more-guessing", "text": "さらなる当てずっぽうの書き換えをそのまま推奨していない" }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "report-and-status",
+      "prompt": "原因も分かって直った。報告まとめて。",
+      "expected_output": "Symptom / Root cause / Fix / Evidence / Test / Remaining risk / Status の形で会話内に報告。Status は DONE / DONE_WITH_CONCERNS / BLOCKED から選ぶ。git 履歴に残るので報告自体は memory に書かない。",
+      "files": [],
+      "assertions": [
+        { "id": "structured-report", "text": "Symptom/Root cause/Fix/Evidence/Test/Status を含む構造化報告を出している" },
+        { "id": "remaining-risk", "text": "Remaining risk(残るリスク・未確認点)を報告に含めている" },
+        { "id": "explicit-status", "text": "DONE / DONE_WITH_CONCERNS / BLOCKED のいずれかで status を明示している" }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "selective-memory",
+      "prompt": "今回の root cause、めっちゃ非自明で他でも踏みそう。あと変数名のタイポも直した。memory に残しとく?",
+      "expected_output": "再発する非自明な落とし穴(他でも踏みそうなもの)は auto-memory に1件(type=feedback/project)残す。一回限りのタイポは git 履歴で足りるので memory に書かない。『repo が記録することは書かない』原則で選別する。",
+      "files": [],
+      "assertions": [
+        { "id": "persists-recurring", "text": "再発する非自明な落とし穴だけを auto-memory に残すと判断している" },
+        { "id": "memory-type", "text": "残す場合は type=feedback/project で書くと示している" },
+        { "id": "skips-one-off", "text": "一回限りのタイポ等は memory に書かないと判断している" }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "no-repro-no-claim",
+      "prompt": "再現できてないけど、コード読んだ感じこれが原因っぽいからもう直してプッシュしちゃって。",
+      "expected_output": "再現/検証ができていない段階での『たぶん直った』クローズや push を止める。再現条件を掴むための追加証拠の収集を促し、verify してから修正・報告する順序を守る。",
+      "files": [],
+      "assertions": [
+        { "id": "requires-verification", "text": "再現/検証なしの修正確定・push を止めている" },
+        { "id": "collect-more-evidence", "text": "再現条件を掴むための追加証拠の収集を促している" }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "success-path-fix-discipline",
+      "prompt": "再現もできて、ログで root cause も確定した。X が null になって Z で落ちてるのが原因。じゃあ直して。",
+      "expected_output": "root cause が verify 済みなので修正に進んでよい。症状ではなく原因(X が null になる経路)を直し、最小 diff に保ち、無関係なリファクタを混ぜない。可能ならこの root cause を将来 CI で捕まえる回帰テストを足す。最後に Phase 8 の報告フォーマットで締める。",
+      "files": [],
+      "assertions": [
+        { "id": "proceeds-after-verify", "text": "root cause が verify 済みなので修正に進んでいる(不必要に止めない)" },
+        { "id": "fixes-cause-minimal", "text": "症状でなく原因を、最小 diff で直す方針を示している" },
+        { "id": "adds-regression-test", "text": "可能なら回帰テストを足すと述べている" }
+      ]
+    }
+  ]
+}
