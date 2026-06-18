@@ -34,6 +34,7 @@
       "files": [],
       "assertions": [
         { "id": "structured-report", "text": "Symptom/Root cause/Fix/Evidence/Test/Status を含む構造化報告を出している" },
+        { "id": "remaining-risk", "text": "Remaining risk(残るリスク・未確認点)を報告に含めている" },
         { "id": "explicit-status", "text": "DONE / DONE_WITH_CONCERNS / BLOCKED のいずれかで status を明示している" }
       ]
     },
@@ -45,6 +46,7 @@
       "files": [],
       "assertions": [
         { "id": "persists-recurring", "text": "再発する非自明な落とし穴だけを auto-memory に残すと判断している" },
+        { "id": "memory-type", "text": "残す場合は type=feedback/project で書くと示している" },
         { "id": "skips-one-off", "text": "一回限りのタイポ等は memory に書かないと判断している" }
       ]
     },
@@ -57,6 +59,18 @@
       "assertions": [
         { "id": "requires-verification", "text": "再現/検証なしの修正確定・push を止めている" },
         { "id": "collect-more-evidence", "text": "再現条件を掴むための追加証拠の収集を促している" }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "success-path-fix-discipline",
+      "prompt": "再現もできて、ログで root cause も確定した。X が null になって Z で落ちてるのが原因。じゃあ直して。",
+      "expected_output": "root cause が verify 済みなので修正に進んでよい。症状ではなく原因(X が null になる経路)を直し、最小 diff に保ち、無関係なリファクタを混ぜない。可能ならこの root cause を将来 CI で捕まえる回帰テストを足す。最後に Phase 8 の報告フォーマットで締める。",
+      "files": [],
+      "assertions": [
+        { "id": "proceeds-after-verify", "text": "root cause が verify 済みなので修正に進んでいる(不必要に止めない)" },
+        { "id": "fixes-cause-minimal", "text": "症状でなく原因を、最小 diff で直す方針を示している" },
+        { "id": "adds-regression-test", "text": "可能なら回帰テストを足すと述べている" }
       ]
     }
   ]
