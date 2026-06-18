@@ -1,0 +1,53 @@
+{
+  "skill_name": "personal-grill-me",
+  "notes": "interactive skill。subagent での自動実行は会話往復前提のため省略し、この evals.json を期待挙動の spec として版管理する。gate は Codex 相互レビュー。evals/ は #57 により非配置・injection scan 対象外。",
+  "evals": [
+    {
+      "id": 0,
+      "name": "auth-system",
+      "prompt": "今度のプロジェクトで認証システムを新しく作ろうと思ってる。とりあえずJWT使ってログインできるようにして、いい感じにセッション管理したい。設計の方針を一緒に詰めたい。",
+      "expected_output": "JWT採用の理由、セッション管理の具体要件、エッジケース(リフレッシュトークン、ログアウト、セキュリティ)、代替案などを一問一答で詰める。曖昧な『いい感じ』を許さず具体化を迫る。",
+      "files": [],
+      "assertions": [
+        { "id": "one-question", "text": "質問を一度に一つだけ投げている(複数をまとめて投げていない)" },
+        { "id": "recommendation", "text": "質問に自分の推奨案と理由を添えている" },
+        { "id": "refuse-vague", "text": "『いい感じ』『とりあえず』等の曖昧な表現を具体化させようとしている" }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "knowledge-tool",
+      "prompt": "社内向けにナレッジ共有ツールを作る企画を考えてる。今みんなNotionとSlackに情報がバラバラで困ってるから、それを統合したいんだけど、企画として穴がないか壁打ちしたい。",
+      "expected_output": "誰が困っているか、成功指標、既存ツールでなぜ駄目か、スコープ、撤退条件などを順に深掘り。『困ってる』の根拠を求め、希望的観測を突く。",
+      "files": [],
+      "assertions": [
+        { "id": "one-question", "text": "質問を一度に一つだけ投げている" },
+        { "id": "challenge-assumption", "text": "『困ってる』などの前提の根拠を問い、希望的観測を指摘している" },
+        { "id": "japanese", "text": "やり取りが日本語で行われている" }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "saas-idea",
+      "prompt": "副業で個人開発のSaaSを始めたくて、フリーランス向けの請求書管理ツールを作ろうと思ってる。たぶんニーズあると思うんだよね。深掘りして。",
+      "expected_output": "『たぶんニーズあると思う』を即座に詰める。誰が顧客か、既存ツール(freeeなど)との差別化、検証方法、価格、撤退条件などを辛辣に問う。",
+      "files": [],
+      "assertions": [
+        { "id": "one-question", "text": "質問を一度に一つだけ投げている" },
+        { "id": "challenge-assumption", "text": "『たぶんニーズある』の根拠を求め、検証方法や差別化を問うている" },
+        { "id": "recommendation", "text": "質問に自分の見解・推奨を添えている" }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "explore-instead-of-ask",
+      "prompt": "このリポジトリのキャッシュ層をRedisに移行しようと思う。設計を詰めたい。",
+      "expected_output": "現在のキャッシュ実装・依存ライブラリ・設定など、コードベースで分かることは自分で調べてから、判断が必要な点(移行範囲、整合性、失敗時挙動、撤退条件)だけを質問する。",
+      "files": [],
+      "assertions": [
+        { "id": "explore-codebase", "text": "コードベースで答えられることはユーザーに聞かず自分で調べようとしている" },
+        { "id": "one-question", "text": "判断が必要な点を一度に一つだけ質問している" }
+      ]
+    }
+  ]
+}
