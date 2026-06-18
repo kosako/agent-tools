@@ -7,7 +7,10 @@ targets:
   - claude-code
 risk:
   prompt_injection: low
-  privacy: low
+  # 実行時に private session logs を横断分析するため privacy: medium。asset 自体は
+  # public-safe だが、宣言 risk を実態に合わせ、runtime-state pattern が将来変わっても
+  # privacy 由来で human review を要求できるようにする (Codex review #87)。
+  privacy: medium
 source:
   path: shared/skills/personal-asset-miner
   format: directory

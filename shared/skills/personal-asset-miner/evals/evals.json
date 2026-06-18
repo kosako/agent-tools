@@ -17,10 +17,11 @@
       "id": 1,
       "name": "both-agents-and-recurrence",
       "prompt": "資産化候補を出して。直近2週間で。",
-      "expected_output": "Claude(~/.claude/projects)と Codex(~/.codex/sessions)両方を走査する。複数セッション横断(2 以上)で繰り返しているものだけを候補にし、単発は除外する。",
+      "expected_output": "Claude(~/.claude/projects)と Codex(~/.codex/sessions)両方を走査する。複数セッション横断(2 以上)で繰り返しているものだけを候補にし、単発は除外する。片方しか読めない場合はその制限を明記し、完全な両 agent 横断レポートとして出さない。",
       "files": [],
       "assertions": [
         { "id": "scans-both", "text": "Claude と Codex 両方のログを走査すると示している" },
+        { "id": "flags-partial", "text": "片方しか読めない場合は制限を明記し、完全な横断レポートとして出さないと示している" },
         { "id": "recurrence-gate", "text": "2 セッション以上の繰り返しを足切りにし単発を除外している" }
       ]
     },
