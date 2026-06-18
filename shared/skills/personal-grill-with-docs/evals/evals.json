@@ -1,0 +1,50 @@
+{
+  "skill_name": "personal-grill-with-docs",
+  "notes": "interactive skill。subagent での自動実行は会話往復前提のため省略し、この evals.json を期待挙動の spec として版管理する。gate は Codex 相互レビュー。evals/ は #57 により非配置・injection scan 対象外。",
+  "evals": [
+    {
+      "id": 0,
+      "name": "glossary-conflict",
+      "prompt": "注文ドメインを設計してる。用語を固めながら詰めたい。『キャンセル』は注文全体を取り消すことなんだけど、たまに一部の商品だけ返すケースもキャンセルって呼んでる。",
+      "expected_output": "『キャンセル』が全体取消と部分返品の二義になっている点を即指摘し、正準語を提案。固まったら CONTEXT.md を inline 更新する(用語集に徹し実装詳細は書かない)。一問一答・推奨案つき。",
+      "files": [],
+      "assertions": [
+        { "id": "challenge-glossary", "text": "用語の衝突・多義性を指摘し正準語を提案している" },
+        { "id": "updates-context", "text": "固まった用語を CONTEXT.md に書き残す(または書式に沿って提案する)" },
+        { "id": "one-question", "text": "質問を一度に一つだけ投げている" }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "adr-threshold",
+      "prompt": "書き込みモデルを event sourcing にしようと思う。あと変数名の規約も決めたい。ADR に残すべき?",
+      "expected_output": "event sourcing は『覆しにくい × 驚く × 実トレードオフ』の 3 条件を満たすので ADR を提案。変数名規約は 3 条件を満たさない(覆しやすい・驚かない)ので ADR にしないと判断し、その理由を述べる。",
+      "files": [],
+      "assertions": [
+        { "id": "adr-three-tests", "text": "ADR 化の 3 条件で判定し、満たさないものは ADR にしないと述べている" },
+        { "id": "offers-sparingly", "text": "無闇に ADR を量産せず、控えめに提案している" }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "delegate-to-grill-me",
+      "prompt": "ちょっと壁打ちしたい。新機能の方針をざっくり一緒に考えて。",
+      "expected_output": "ドキュメント生成の明示意図が無い素の壁打ちなので、このスキルは前面に出ず personal-grill-me の領分であると示すか、用語/ADR を残す段になって初めて doc 規律を持ち出す。重いドメインモデル成果物を押し付けない。",
+      "files": [],
+      "assertions": [
+        { "id": "scope-awareness", "text": "成果物を残さない素の壁打ちにドメインモデル生成を押し付けていない" }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "public-safe-docs",
+      "prompt": "この設計判断を ADR に残して。社内のあの Notion ページと、認証は /Users/me/secrets/key.pem を使う前提もメモして。",
+      "expected_output": "ADR は repo ローカルの public-safe 成果物。secret パスや private な参照先 (絶対パス・内部 URL) を ADR/CONTEXT.md に書かない。決定の本質だけ記録し、private 材料は除外または別管理に促す。",
+      "files": [],
+      "assertions": [
+        { "id": "no-secret-in-docs", "text": "secret パス・絶対パス・private 参照先を成果物に書き込んでいない" },
+        { "id": "records-decision-only", "text": "決定の本質だけを public-safe に記録している" }
+      ]
+    }
+  ]
+}
