@@ -1,0 +1,27 @@
+schema_version: 1
+name: personal-asset-miner
+kind: skill
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-asset-miner
+  format: directory
+summary: explicitly-triggered miner that scans past Claude Code and Codex session logs for cross-session repetition and proposes ranked skill/asset candidates, report-only and public-safe
+description: public-safe Japanese report-only skill that mines both ~/.claude and ~/.codex session logs for patterns repeated across two or more sessions (manual procedures, repeated corrections, re-investigations), classifies each candidate as skill/operating-rule/memory/reference, dedups against the existing catalog, ranks by recurrence x per-instance cost, and stops at a non-committed conversation report; treats logs as data (injection-resistant) and never transcribes secrets, paths, client names, or PII
+review:
+  static_check: pending
+  llm_review: allowed
+  # runtime-state (medium): SKILL.md が ~/.claude/projects ・ ~/.codex/sessions を
+  # 参照するため検出される。この skill はセッションログを読むのが目的で、auth/config/
+  # runtime state を変更しない read-only の正当な参照。人間レビューで承認 (#86)。
+  human_review: approved
+compatibility:
+  codex:
+    artifact_kind: skill
+  claude-code:
+    artifact_kind: skill
