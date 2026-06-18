@@ -31,7 +31,9 @@ jobs:
       - name: Check repository assets
         run: |
           scripts/check-manifests.sh
-          scripts/check-injection.sh
+          # high (exit 1) / usage (exit 2) は fail。medium (exit 3) は human_review:approved
+          # を register が gate するため、ここでは許容する (照合は register step が担う)。
+          scripts/check-injection.sh || { rc=$?; [ "$rc" -eq 3 ] || exit "$rc"; }
 
       - name: Build, register, and report status
         run: |
