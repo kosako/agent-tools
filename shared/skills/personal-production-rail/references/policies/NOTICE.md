@@ -4,15 +4,24 @@
 配備(sync)はオフラインで行い、実行時に外部取得はしない。更新は import を再実行し、injection gate +
 human review を通したうえで commit pin を更新する。
 
-## ai-antipattern.md
+出典・pin・取得方法・license はすべて共通(下記)。各ファイルの追加経緯は記載 Issue 参照。
 
-- 取得元: `nrslib/takt` — `builtins/ja/facets/policies/ai-antipattern.md`
+| ファイル | 取得元 (`nrslib/takt` 配下) | 追加 Issue |
+|---|---|---|
+| `ai-antipattern.md` | `builtins/ja/facets/policies/ai-antipattern.md` | #93 |
+| `coding.md` | `builtins/ja/facets/policies/coding.md` | #97 |
+| `review.md` | `builtins/ja/facets/policies/review.md` | #97 |
+| `existing-system-respect.md` | `builtins/ja/facets/policies/existing-system-respect.md` | #97 |
+| `design-planning.md` | `builtins/ja/facets/policies/design-planning.md` | #97 |
+
+共通:
+
 - pin commit: `b71586640f5a59e3f009bf033532a79fd643677f`(2026-06-14)
-- 取得日: 2026-06-19
-- 取得方法: GitHub Contents API(verbatim、本文は無改変)
+- 取得方法: GitHub Contents API(`?ref=<pin>`、verbatim、本文は無改変)
 - license: MIT(下記)
+- 取得日: `ai-antipattern.md` は 2026-06-19。追加4本(coding / review / existing-system-respect / design-planning)も 2026-06-19。
 - import review: 静的 injection スキャン clean(絶対パス/URL/PII/injection 文言なし)を確認。
-  manifest の `review.human_review: approved` で第三者 import を承認(Issue #93)。
+  manifest の `review.human_review: not_needed`(medium finding が出たら register が `human_review_required` へ倒す方式。approved にしない理由は asset.yml 参照)。
 
 ### MIT License (takt)
 
