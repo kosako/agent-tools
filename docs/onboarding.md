@@ -142,21 +142,23 @@ check 結果を manifest に書き戻さない (diff churn を避ける)。
 9. **pipeline 統合 (#44/#45)**: gate を一箇所に集約し、build/register の判定一致 +
    sync が catalog を尊重するように再構成。asset discovery を `assets.rb` に集約。
 
-**現在地**: check / build / sync / status / doctor / register の 7 script が揃い、
-gate 一本化で安全判定が pipeline 全体で一貫した状態。self-test 7 本が CI で回る。
+**現在地**: check / build / sync / status / doctor / register の各 script が揃い、
+gate 一本化で安全判定が pipeline 全体で一貫した状態。self-test 9 本が CI で回る。
 
-`shared/` の実 asset はまだ `personal-project-operating-loop` 1 個のみ。
-フレームワークは出来ているが、多様な asset 形状での実証はこれから。
+`shared/` には実 asset が 11 個 (skill 9 / workflow 1 / instruction 1) 入っており、
+directory 形式 skill・複数 target・`review.human_review: approved` を踏む medium asset
+(`personal-asset-miner` の runtime-state) まで、多様な asset 形状で pipeline を実証済み。
+skill 作成は skill-creator で `shared/skills/<name>/` に作り、check/build/register →
+PR → 相互レビュー → merge → sync の確立フローで回す。
 
 ## 7. 今後の予定 (open issue)
 
-- **検証用サンプル asset の投入** (issue 未作成): directory 形式 / 複数 target /
-  human_review を踏むものを `shared/` に入れ、pipeline を実 asset で 1 周回す。
-  中間 review での次の一手。
 - **#43 external skill scanner 連携**: 設計確定済み、実装は需要待ち
   (script を含む skill を扱う時 or CI に pip 層を足す時)。
 - **#24 skill 以外の artifact kind 対応**: 各 tool の agent 形式へのマッピング設計。
 - **#5 dotfiles 連携機構**: 時期待ち。前提 (status contract / marker / status.sh) は完了済み。
+- **skill 撤去機構 (`sync --prune`)**: `shared/` から消した skill の deployed コピーを
+  管理 marker 一致のものだけ撤去する。方針確定・未実装 (issue 未作成)。
 
 ## 8. 開発ワークフロー
 
