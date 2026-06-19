@@ -34,7 +34,7 @@ off のときは索引もポリシー本文も読みません。**vibe を重く
   - **実装後 self-check**: 書いたコードを観点に照らして自己点検する(過剰実装・見かけ上の修正・到達不能コード・スコープ逸脱 等)。
 - **弾く側(review lens)**:
   - 検出観点を 🔴 must / 🟡 should / ⚪ nit の severity に変換して指摘する(severity の既定は索引参照)。
-  - レビューを別モデルに投げるときは、この観点をブリーフに織り込む(`personal-codex-review` / `personal-review-request`)。
+  - レビューを別モデルに投げるときは、この観点をブリーフに織り込む(`personal-codex-review` / `personal-review-request`)。reviewer の選定は**相互レビュー契約(author ≠ reviewer / commit の `Co-Authored-By` marker による routing)に従う**。ポリシーを当てたいだけの理由で「別モデル」を勝手に選ばない。
 
 ### 4. 報告に紐づける
 

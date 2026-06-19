@@ -19,10 +19,13 @@ description: public-safe Japanese router/librarian skill for the production rail
 review:
   static_check: pending
   llm_review: allowed
-  # 第三者 vendor (takt の ai-antipattern.md) を references/policies/ に含むため、import の
-  # human review を記録する。静的 injection スキャンは clean (絶対パス/URL/PII/injection 文言
-  # なし) を確認済み。出典・license・pin commit は references/policies/NOTICE.md。承認 = #93。
-  human_review: approved
+  # 第三者 vendor (takt の ai-antipattern.md) を含むが、静的 injection スキャンは clean
+  # (findings なし) のため human review は不要 = not_needed。
+  # approved にしない理由: approved は asset 単位の永続承認で finding/hash に紐づかないため、
+  # 将来 re-import で medium finding が混入しても既存承認で通ってしまう (gate の穴)。
+  # not_needed なら finding 発生時に register が human_review_required へ正しく倒す。
+  # import の事実・出典・license・pin commit・review 記録は references/policies/NOTICE.md と #93。
+  human_review: not_needed
 compatibility:
   codex:
     artifact_kind: skill
