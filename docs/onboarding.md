@@ -142,8 +142,9 @@ check 結果を manifest に書き戻さない (diff churn を避ける)。
 9. **pipeline 統合 (#44/#45)**: gate を一箇所に集約し、build/register の判定一致 +
    sync が catalog を尊重するように再構成。asset discovery を `assets.rb` に集約。
 
-**現在地**: check / build / sync / status / doctor / register の各 script が揃い、
-gate 一本化で安全判定が pipeline 全体で一貫した状態。self-test 9 本が CI で回る。
+**現在地**: check-manifests / check-injection / build / register / connect / sync /
+status / doctor / setup の 9 script が揃い、各々に self-test が 1:1 で対応して CI で回る。
+gate 一本化で安全判定が pipeline 全体で一貫した状態。
 
 `shared/` には実 asset が 11 個 (skill 9 / workflow 1 / instruction 1) 入っており、
 directory 形式 skill・複数 target・`review.human_review: approved` を踏む medium asset
