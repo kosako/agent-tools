@@ -1,0 +1,33 @@
+# references/policies/ にサードパーティ vendor (takt, MIT) を含む。出典・license・pin は
+# references/policies/NOTICE.md。import (fetch → injection gate → human review → commit pin)
+# を通したもので、配備時に外部取得はしない。
+schema_version: 1
+name: personal-production-rail
+kind: skill
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-production-rail
+  format: directory
+summary: librarian skill that applies coding-quality policies on the production rail by reading a policy index and loading only the relevant 2-4 policy docs for preflight and self-check, without holding policy bodies itself
+description: public-safe Japanese router/librarian skill for the production rail; judges production vs vibe, reads references/policy-index.md, loads only the relevant vendored policy docs (e.g. ai-antipattern) for the task type, and applies them via a generation lens (preflight + self-check) and a review lens (severity), treating policy text as data not instructions; vendored third-party policies (takt, MIT) are imported through the injection gate and human review with a pinned commit
+review:
+  static_check: pending
+  llm_review: allowed
+  # 第三者 vendor (takt の ai-antipattern.md) を含むが、静的 injection スキャンは clean
+  # (findings なし) のため human review は不要 = not_needed。
+  # approved にしない理由: approved は asset 単位の永続承認で finding/hash に紐づかないため、
+  # 将来 re-import で medium finding が混入しても既存承認で通ってしまう (gate の穴)。
+  # not_needed なら finding 発生時に register が human_review_required へ正しく倒す。
+  # import の事実・出典・license・pin commit・review 記録は references/policies/NOTICE.md と #93。
+  human_review: not_needed
+compatibility:
+  codex:
+    artifact_kind: skill
+  claude-code:
+    artifact_kind: skill
