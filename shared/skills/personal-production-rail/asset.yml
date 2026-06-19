@@ -19,7 +19,7 @@ description: public-safe Japanese router/librarian skill for the production rail
 review:
   static_check: pending
   llm_review: allowed
-  # 第三者 vendor (takt の ai-antipattern.md) を含むが、静的 injection スキャンは clean
+  # 第三者 vendor (takt の policies/*.md、複数) を含むが、静的 injection スキャンは clean
   # (findings なし) のため human review は不要 = not_needed。
   # approved にしない理由: approved は asset 単位の永続承認で finding/hash に紐づかないため、
   # 将来 re-import で medium finding が混入しても既存承認で通ってしまう (gate の穴)。
