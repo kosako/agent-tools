@@ -97,6 +97,10 @@ gh pr comment <番号> --body "..."
 レビュアーへの指示には必ず次を含める: 対象（repo / branch / base / diff の取り方）、重点観点、
 **3 段階ランクで分類し各指摘に `file:line` を付けること**、must の定義（上の表のとおり）。
 
+production レール（本番反映・PR 前提）のコードをレビューするなら、重点観点に
+`personal-production-rail` の **review lens**（索引が指すポリシー観点）を含める。観点の実体は
+production-rail / 索引が単一の正本なので、**ここに書き写さず参照する**（コピーすると drift する）。
+
 - **Codex がレビュアーのとき**: `personal-codex-review` skill の手順で実行する(安定形の
   `codex exec` に自己完結ブリーフを渡す。具体的な flag はその skill を参照)。
   `codex:codex-rescue` サブエージェント経由は、コード読み書きを伴わない分析タスクで Codex に

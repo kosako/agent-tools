@@ -54,6 +54,9 @@ codex exec --skip-git-repo-check \
    diff は `git diff <base>...HEAD` や `gh pr diff <番号>` で取得して同梱する。
    実装と突き合わせてほしいなら「リポジトリ内の該当ファイルを読んで検証せよ」と明記する
    (`-s read-only` なので読める)。
+   - production レール(本番反映・PR 前提)のコードをレビューするなら、`personal-production-rail`
+     の **review lens**(索引が指すポリシー観点)も観点に含める。観点の実体は production-rail /
+     索引が単一の正本なので、**ここに観点を書き写さず参照する**(コピーすると drift する)。
 2. **出力形式を指定する。** 冒頭に判定 (merge 可 / 要対応)、各指摘に 3 段階ランクと
    `file:行` を付けさせる:
    - 🔴 must: 放置して merge すると実害が出るもの (バグ・データ破壊・セキュリティ・挙動退行)。
