@@ -21,7 +21,7 @@ human review を通したうえで commit pin を更新する。
 - license: MIT(下記)
 - 取得日: `ai-antipattern.md` は 2026-06-19。追加4本(coding / review / existing-system-respect / design-planning)も 2026-06-19。
 - import review: 静的 injection スキャン clean(絶対パス/URL/PII/injection 文言なし)を確認。
-  manifest の `review.human_review: not_needed`(finding 発生時に register が承認へ倒す方式。理由は asset.yml 参照)。
+  manifest の `review.human_review: not_needed`(medium finding が出たら register が `human_review_required` へ倒す方式。approved にしない理由は asset.yml 参照)。
 
 ### MIT License (takt)
 

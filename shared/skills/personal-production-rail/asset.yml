@@ -24,7 +24,8 @@ review:
   # approved にしない理由: approved は asset 単位の永続承認で finding/hash に紐づかないため、
   # 将来 re-import で medium finding が混入しても既存承認で通ってしまう (gate の穴)。
   # not_needed なら finding 発生時に register が human_review_required へ正しく倒す。
-  # import の事実・出典・license・pin commit・review 記録は references/policies/NOTICE.md と #93。
+  # import の事実・出典・license・pin commit・review 記録は references/policies/NOTICE.md の
+  # ファイル別表を正本とする (ai-antipattern は #93、追加4本は #97)。
   human_review: not_needed
 compatibility:
   codex:
