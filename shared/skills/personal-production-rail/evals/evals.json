@@ -55,7 +55,9 @@
       "files": [],
       "assertions": [
         { "id": "default-on", "text": "明示が無くても既定 production としてポリシーを当てている" },
-        { "id": "not-off-by-default", "text": "明示が無いことを理由に off にしていない" }
+        { "id": "not-off-by-default", "text": "明示が無いことを理由に off にしていない" },
+        { "id": "routes-via-index", "text": "索引を見て作業種別に合うポリシーだけを選んでいる" },
+        { "id": "does-not-load-all", "text": "全ポリシーを常時読み込まず 2〜4 本に間引いている(bloat 回避)" }
       ]
     },
     {
@@ -66,7 +68,8 @@
       "files": [],
       "assertions": [
         { "id": "keeps-bar", "text": "品質のバー(最小差分・契約維持)は保っている" },
-        { "id": "light-process", "text": "些細な変更に重いセレモニーを課さず手順を軽くしている(バーは下げない)" }
+        { "id": "light-process", "text": "些細な変更に重いセレモニーを課さず手順を軽くしている(バーは下げない)" },
+        { "id": "not-off-for-small-change", "text": "1 文字修正を vibe 扱いして skill 自体を off にしていない(手順を軽くするだけ)" }
       ]
     }
   ]
