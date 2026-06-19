@@ -89,6 +89,38 @@ git pull
 
 どちらも read-only で、state を一切変更しません。
 
+### dotfiles から参照する(report-only)
+
+`dotfiles` は `agent-tools` を自動 clone / pull / sync しません。連携は
+**`status.sh --json` を read-only で読むだけ**(presence + health の表示)です。
+読んでよい情報・読まない情報の境界は
+[status-manifest-contract.md](status-manifest-contract.md) と
+[boundary-with-dotfiles.md](boundary-with-dotfiles.md) が正本です。
+
+最小の参照例(dotfiles 側に置く想定。illustrative):
+
+```sh
+# 1. expected path に agent-tools があるか(presence)
+AGENT_TOOLS="${AGENT_TOOLS:-$HOME/dev/agent-tools}"
+[ -d "$AGENT_TOOLS" ] || { echo "agent-tools: absent"; exit 0; }
+
+# 2. status を read-only で読む(health)
+status=$("$AGENT_TOOLS/scripts/status.sh" --json) \
+  || { echo "agent-tools: status unavailable"; exit 0; }
+
+# 3. contract が許可した field だけ拾って表示(例: jq)
+echo "$status" | jq -r '
+  "agent-tools: " +
+  (if .repo.clean then "clean" else "dirty" end) +
+  " / injection=" + .checks.prompt_injection_static +
+  " / stale=" + (.generated.stale | tostring)'
+```
+
+- 読むのは contract が許可した field(`repo` / `checks` / 各 target の `state` など)だけ。
+- agent-tools の state は変更しない(書き込み・`sync` をしない)。
+- agent-tools が無い環境は `absent` を report して正常終了する(報告のみで、呼び出し側を
+  止めない)。
+
 ### asset を追加する
 
 1. `shared/<category>/` に source と sidecar manifest(`<name>.asset.yml`)を置く。
@@ -116,3 +148,4 @@ git pull
 - コマンド別の詳細 usage: [../scripts/README.md](../scripts/README.md)
 - 配置の安全則: [sync-policy.md](sync-policy.md)
 - instruction の所有モデル: [instruction-artifact-kind.md](instruction-artifact-kind.md)
+- dotfiles との境界・status 参照契約: [boundary-with-dotfiles.md](boundary-with-dotfiles.md) / [status-manifest-contract.md](status-manifest-contract.md)
