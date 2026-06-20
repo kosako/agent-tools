@@ -9,6 +9,12 @@
 | Codex | `shared/` | `generated/codex/` | `~/.codex/skills/personal-*` |
 | Claude Code | `shared/` | `generated/claude-code/` | `~/.claude/skills/personal-*` |
 
+表の v1 sync 列は skill の配置先です。instruction は connect が確立した所有ファイル
+(`~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md`) を sync が更新します
+([Instruction Artifact Kind](instruction-artifact-kind.md))。下記「v1 で扱わないもの」の
+`AGENTS.md` / `CLAUDE.md` の automatic sync は、人間が手書きするファイルを自動同期しない
+という意味です (connect は import 1 行追加 / 空ファイルの claim のみを行う)。
+
 ## Compatibility ルール
 
 - semantics が portable な場合は shared source assets を優先する。

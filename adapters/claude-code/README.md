@@ -5,11 +5,12 @@ shared assets を Claude Code 向け artifacts に変換する spec です。
 
 ## v1 で生成する artifact kind
 
-- `skill` のみ。
+- `skill` と `instruction`。
 
 manifest の `compatibility.claude-code.artifact_kind` で明示できます。
-未指定の場合、`kind` が `skill` / `prompt` / `workflow` / `instruction` /
-`template` の asset は `skill` として生成します。`agent` は v1 では生成しません。
+未指定の場合、`kind` が `skill` / `prompt` / `workflow` / `template` の asset は
+`skill`、`kind: instruction` は `instruction` として生成します。`agent` は v1 では
+生成しません。
 
 ## 出力 layout
 
@@ -17,6 +18,8 @@ manifest の `compatibility.claude-code.artifact_kind` で明示できます。
 generated/claude-code/skills/<name>/
   SKILL.md
   .agent-tools-managed.yml
+generated/claude-code/instructions/
+  CLAUDE.md              (kind: instruction。先頭に 1 行コメント marker)
 ```
 
 - single-file asset は source content を `SKILL.md` の body にする。

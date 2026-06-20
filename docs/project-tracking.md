@@ -68,6 +68,11 @@ out of scope:
 
 ## Follow-up issues
 
+> これは初期計画時点の記録です。現在地は [onboarding](onboarding.md) を参照。
+> 1-4 は実装・テスト済み (manifest schema / injection checker / build adapters /
+> dry-run sync)。5 (optional LLM review) のみ未着手で、#43 の external scanner の
+> LLM mode に統合する方針。
+
 1. shared asset manifest schema を定義する。
 2. static prompt injection checker を実装する。
 3. Codex / Claude Code 向け build adapters を実装する。

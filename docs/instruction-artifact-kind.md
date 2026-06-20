@@ -36,7 +36,7 @@ instruction は単一ファイル所有なので、skill の directory sidecar m
 ```
 
 marker は HTML コメントなので tool が読んでも指示として解釈されず、表示もされない。
-sync はこの marker を厳密にパースして所有を判定し (後続実装)、injection checker は
+sync はこの marker を厳密にパースして所有を判定し、injection checker は
 自分の marker 行を検査対象から除外する。
 
 ## 接続 (connect) と日常 sync の分離
