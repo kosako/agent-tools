@@ -57,12 +57,13 @@ usage: build.sh [--root DIR] [--prune] [--quiet]
 
 - 生成前に register と共有の致命 gate (`lib/gate.rb`) を通す。fail なら何も生成しない。
   medium finding では止めず生成する (中間物。配置は sync が catalog を見て止める)。
-- 各 artifact に management marker (`.agent-tools-managed.yml`) を埋め込む。
-  `build_id` は source content の sha256 なので build は決定的。
+- management marker を埋め込む。skill は directory 直下の `.agent-tools-managed.yml`、
+  instruction は本体先頭の 1 行 HTML コメント marker。`build_id` は source content の
+  sha256 なので build は決定的。
 - 書き込み先は `generated/` のみ。tool directories には書き込まない。
-- `--prune` で manifest に対応しなくなった generated artifact を削除する。
-  削除するのは agent-tools marker を持つ directory のみで、marker のない
-  directory は警告して残す。
+- `--prune` で manifest に対応しなくなった generated artifact を削除する。対象は
+  agent-tools marker を持つ skill directory と instruction file のみで、marker のない
+  directory / file は警告して残す。
 - self-test: `tests/build-test.sh`
 
 - `connect.sh`: instruction の所有ファイルを確立し、人間の instruction ファイルから
@@ -97,7 +98,8 @@ usage: sync.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] [--
 - plan は `create` / `update` / `skip` / `conflict` で表示される。
 - 更新するのは agent-tools management marker を持つ target のみ。
   unmanaged な同名 target / symlink は conflict として exit 1 で停止し、何も書き込まない。
-- 書き込み先は `<tool home>/skills/personal-*` のみ。それ以外の path は構成しない。
+- 書き込み先は skill が `<tool home>/skills/personal-*`、instruction が connect 確立済みの
+  所有ファイル (`~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md`)。それ以外の path は構成しない。
 - `--codex-home` / `--claude-home` は inspection / test 用の override。
 - self-test: `tests/sync-test.sh` (fake home のみを使い、実際の tool homes には触れない)
 
@@ -108,7 +110,7 @@ usage: sync.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] [--
 usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR]
 ```
 
-- `--json` で contract_version 1 の JSON、省略時は human-readable summary。
+- `--json` で contract_version 2 の JSON、省略時は human-readable summary。
 - manifest validation / injection check の結果、generated の stale 数、
   sync target state (managed / stale / conflict / missing) を含む。
 - read-only。いかなる state も変更しない。

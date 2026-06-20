@@ -89,21 +89,17 @@ dotfiles 側の実装は含めません。
 generated artifact が agent-tools 管理であることを示す marker です。
 [Sync Policy](sync-policy.md) の enforcement は、この marker を前提にします。
 
-### Single-file artifact (markdown / text)
+### Single-file artifact (instruction: markdown / text)
 
-file 先頭に comment block を埋め込みます。markdown の場合:
+file 先頭に 1 行の HTML コメント marker を埋め込みます。markdown の場合:
 
 ```markdown
-<!-- agent-tools-managed
-repo: agent-tools
-name: personal-example
-target: claude-code
-source: shared/workflows/personal-example.md
-build_id: 20260611T000000Z
--->
+<!-- agent-tools:managed v=1 repo=agent-tools name=personal-example target=claude-code artifact_kind=instruction source=shared/instructions/personal-example.md build_id=sha256:... -->
 ```
 
-comment 記法を持たない format (json など) では、sidecar marker file を使います。
+生成・解析は `scripts/lib/instruction_marker.rb` に集約し、build (生成) と
+connect / sync (所有判定) が同じ format を共有します。comment 記法を持たない
+format (json など) では、sidecar marker file を使います。
 
 ### Directory artifact
 
@@ -114,7 +110,7 @@ repo: agent-tools
 name: personal-example
 target: claude-code
 source: shared/skills/personal-example
-build_id: 20260611T000000Z
+build_id: sha256:...
 ```
 
 ### Marker rules
@@ -123,7 +119,7 @@ build_id: 20260611T000000Z
 - `name` は manifest の `name` と一致させる。
 - `target` は manifest の `targets` のいずれかと一致させる。
 - `source` は repository root からの relative path。absolute path は禁止。
-- `build_id` は UTC timestamp または build hash。stale 判定に使う。
+- `build_id` は source content の sha256。stale 判定に使う。
 - marker を持たない同名 target は `conflict` とし、sync は停止する。
 
 ## dotfiles が読んでよい情報
@@ -145,7 +141,4 @@ build_id: 20260611T000000Z
 - `scripts/status.sh`: 実装済み (report-only、書き込みなし)。
 - build adapters での marker 埋め込み: `scripts/build.sh` で実装済み。
 - sync での marker enforcement: `scripts/sync.sh` で実装済み。
-
-## 後続実装
-
-- `doctor` への status 統合。
+- `doctor` への status 統合: `scripts/doctor.sh` (`Doctor::Runner#check_repo_and_assets`) で実装済み。

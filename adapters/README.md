@@ -13,4 +13,4 @@ adapter specs:
 - [claude-code/README.md](claude-code/README.md)
 
 build logic は `scripts/build.sh` (`scripts/lib/build.rb`) にあります。
-v1 で生成する artifact kind は `skill` のみです。
+v1 で生成する artifact kind は `skill` と `instruction` です。
