@@ -207,7 +207,9 @@ printf '\n追記: catalog 未更新の変更。\n' >> "$tmp/repo3/shared/instruc
   || fail "connect should not error on stale build: $(cat "$tmp/c12")"
 grep -q "skip: \[claude-code\] owned.*stale" "$tmp/c12" || fail "claude owned should skip when generated build_id != catalog: $(cat "$tmp/c12")"
 grep -q "skip: \[codex\] owned.*stale" "$tmp/c12" || fail "codex owned should skip when generated build_id != catalog: $(cat "$tmp/c12")"
+grep -q "0 change(s)" "$tmp/c12" || fail "stale connect should apply 0 changes: $(cat "$tmp/c12")"
 [ ! -e "$tmp/claude10/agent-tools/CLAUDE.md" ] || fail "stale generated instruction must not create owned file"
+[ ! -e "$tmp/claude10/CLAUDE.md" ] || fail "stale generated instruction must not add import"
 [ ! -e "$tmp/codex10/AGENTS.md" ] || fail "stale generated instruction must not create owned codex file"
 
 echo "ok: connect self-test passed"
