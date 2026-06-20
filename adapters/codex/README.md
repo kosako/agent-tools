@@ -24,7 +24,8 @@ generated/codex/instructions/
 
 - **skill**: single-file asset は source content を `SKILL.md` の body にする。source が
   YAML frontmatter を持たない場合のみ、manifest の `name` と `summary` から frontmatter を
-  生成する。directory asset は `asset.yml` を除く全 files を copy する。
+  生成する。directory asset は `asset.yml` と source-only dir (現状 `evals/`) を除く
+  全 files を copy する (非配置 dir は build_id にも含めない)。
 - **instruction**: 単一ファイルを `AGENTS.md` に生成し、本体先頭に 1 行コメント marker を
   付ける。directory 形式の instruction は非対応。
 - marker: skill は directory 直下の `.agent-tools-managed.yml`、instruction は本体先頭の

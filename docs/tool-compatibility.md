@@ -36,7 +36,7 @@
 
 ## 決定済み事項
 
-- Codex / Claude Code skills 向け adapter spec:
+- Codex / Claude Code artifact 向け adapter spec:
   [adapters/codex/README.md](../adapters/codex/README.md) /
   [adapters/claude-code/README.md](../adapters/claude-code/README.md)。
 - review 結果は generated artifacts に同梱せず、
