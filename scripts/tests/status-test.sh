@@ -158,4 +158,39 @@ echo "changed" >> "$tmp/irepo/shared/instructions/personal-ops.md"
 "$status_sh" --root "$tmp/irepo" --codex-home "$tmp/icodex" --claude-home "$tmp/iclaude" --json > "$tmp/is10b" 2>&1
 [ "$(jget "$tmp/is10b" generated stale)" = "2" ] || fail "changed instruction source should be stale: $(cat "$tmp/is10b")"
 
+# --- case 11: 壊れた (malformed YAML) manifest があっても status は crash しない (B1) ---
+mkdir -p "$tmp/brepo/shared/workflows" "$tmp/bcodex" "$tmp/bclaude"
+cat > "$tmp/brepo/shared/workflows/personal-demo.md" <<'EOF'
+# demo
+EOF
+cat > "$tmp/brepo/shared/workflows/personal-demo.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-demo
+kind: workflow
+visibility: public
+targets:
+  - codex
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/workflows/personal-demo.md
+  format: markdown
+EOF
+"$build" --root "$tmp/brepo" --quiet > /dev/null   # generated artifact を作る (fresh? が走る)
+# manifest を malformed YAML に壊す (load_all が Psych::SyntaxError を raise する状況)
+printf 'name: personal-demo\nkind: [unbalanced\n   : :\n' > "$tmp/brepo/shared/workflows/personal-demo.asset.yml"
+"$status_sh" --root "$tmp/brepo" --codex-home "$tmp/bcodex" --claude-home "$tmp/bclaude" --json > "$tmp/s11" 2>&1 \
+  || fail "status must not crash on a broken manifest: $(cat "$tmp/s11")"
+[ "$(jget "$tmp/s11" checks manifest_validation)" = '"fail"' ] || fail "broken manifest should report manifest=fail: $(cat "$tmp/s11")"
+[ "$(jget "$tmp/s11" generated total)" = "1" ] || fail "generated artifact should still be counted with a broken manifest: $(cat "$tmp/s11")"
+[ "$(jget "$tmp/s11" generated stale)" = "1" ] || fail "broken manifest should degrade freshness to stale: $(cat "$tmp/s11")"
+
+# --- case 12: source ファイルが消えても status は crash しない (B2: build_id の Errno) ---
+# 有効な manifest + generated artifact のまま source 本体を削除すると build_id_for が Errno。
+rm -f "$tmp/irepo/shared/instructions/personal-ops.md"
+"$status_sh" --root "$tmp/irepo" --codex-home "$tmp/icodex" --claude-home "$tmp/iclaude" --json > "$tmp/s12" 2>&1 \
+  || fail "status must not crash when an instruction source file is missing: $(cat "$tmp/s12")"
+[ "$(jget "$tmp/s12" generated stale)" = "2" ] || fail "missing source should make instruction stale, not crash: $(cat "$tmp/s12")"
+
 echo "ok: status self-test passed"

@@ -75,7 +75,7 @@ module Status
     # generated artifacts の数と、source より古い (build_id 不一致) artifact の数。
     # skill (directory) と instruction (単一ファイル) の両方を数える。
     def generated_state
-      sources = Assets.sources_by_name(@root)
+      sources = safe_sources_by_name
       total = 0
       stale = 0
       Sync::TOOLS.each do |tool|
@@ -95,6 +95,15 @@ module Status
       [total, stale]
     end
 
+    # 壊れた / 型不正な manifest があっても status report を落とさない。source を解決できない
+    # ときは空 map を返し、freshness は全 generated を stale 扱い (保守的) に倒す。manifest
+    # 自体の不正は manifest_validation check が "fail" として別途報告する。
+    def safe_sources_by_name
+      Assets.sources_by_name(@root)
+    rescue StandardError
+      {}
+    end
+
     def fresh?(artifact, sources)
       marker_path = File.join(artifact, Sync::MARKER_FILE)
       return false unless File.file?(marker_path)
@@ -106,7 +115,10 @@ module Status
       return false unless source
 
       marker["build_id"] == Build.build_id_for(@root, source["path"], source["format"])
-    rescue Psych::Exception
+    rescue StandardError
+      # 鮮度判定は best-effort。marker / source / build_id 計算の失敗 (Psych /
+      # source path 欠落の TypeError / source ファイル欠落の Errno 等) は、検証不能 =
+      # stale として扱い、status report 全体を落とさない。
       false
     end
 
@@ -119,6 +131,9 @@ module Status
       return false unless source
 
       marker["build_id"] == Build.build_id_for(@root, source["path"], source["format"])
+    rescue StandardError
+      # fresh? と同じく best-effort: 検証不能なら stale 扱い (Errno / TypeError 等)。
+      false
     end
 
     # catalog (docs/register-catalog.md) の register summary。

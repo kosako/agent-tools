@@ -146,14 +146,25 @@ module Doctor
       # target-artifact 単位の catalog を name でまとめる。build_id は target 非依存
       # なので、鮮度判定は name 単位で正しい。
       by_name = entries.each_with_object({}) { |e, h| h[e["name"]] = e }
-      manifests = Assets.sources_by_name(@root)
+      # 壊れた / 型不正な manifest があっても doctor を落とさない (status と同じ best-effort)。
+      # source を読めなければ鮮度は検証不能とし、manifest の不正は check-manifests に委ねる。
+      manifests =
+        begin
+          Assets.sources_by_name(@root)
+        rescue StandardError
+          nil
+        end
+      if manifests.nil?
+        report("warn", "catalog", "freshness 未検証 (manifest を読めない; check-manifests を参照)")
+        return
+      end
 
       stale = []
       manifests.each do |name, source|
         entry = by_name[name]
         if entry.nil?
           stale << "#{name}: not in catalog"
-        elsif entry["build_id"] != Build.build_id_for(@root, source["path"], source["format"])
+        elsif !fresh_entry?(entry, source)
           stale << "#{name}: content changed since register"
         end
       end
@@ -166,6 +177,15 @@ module Doctor
       end
     rescue JSON::ParserError
       report("fail", "catalog", "unreadable (invalid JSON)")
+    end
+
+    # catalog entry の build_id と source content を比較する。source path 欠落 /
+    # source ファイル欠落など build_id を計算できないときは検証不能 = stale (false) に
+    # 倒し、doctor 全体を落とさない (status の fresh? と同じ best-effort)。
+    def fresh_entry?(entry, source)
+      entry["build_id"] == Build.build_id_for(@root, source["path"], source["format"])
+    rescue StandardError
+      false
     end
 
     def tilde(path)
