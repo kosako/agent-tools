@@ -110,4 +110,45 @@ run_doctor > "$tmp/d6" 2>&1 || fail "version mismatch should still exit 0: $(cat
 grep -q "warn: catalog: version mismatch" "$tmp/d6" \
   || fail "missing catalog version mismatch warn: $(cat "$tmp/d6")"
 
+# --- case 7/8: 壊れた manifest / source 欠落 + catalog present でも doctor は crash しない ---
+# (check_catalog が sources_by_name と build_id_for を直接呼ぶ経路。status と対称の best-effort)
+mkdir -p "$tmp/brepo/shared/workflows" "$tmp/bcodex" "$tmp/bclaude" "$tmp/bagents"
+cat > "$tmp/brepo/shared/workflows/personal-demo.md" <<'EOF'
+# demo
+EOF
+cat > "$tmp/brepo/shared/workflows/personal-demo.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-demo
+kind: workflow
+visibility: public
+targets:
+  - codex
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/workflows/personal-demo.md
+  format: markdown
+EOF
+"$build" --root "$tmp/brepo" --quiet > /dev/null
+"$script_dir/../register.sh" --root "$tmp/brepo" --quiet > /dev/null   # catalog を valid に作る
+run_bdoctor() {
+  "$doctor" --root "$tmp/brepo" --codex-home "$tmp/bcodex" \
+    --claude-home "$tmp/bclaude" --agents-home "$tmp/bagents"
+}
+
+# case 7: source ファイル欠落 (build_id が Errno) でも crash せず stale を warn
+rm -f "$tmp/brepo/shared/workflows/personal-demo.md"
+status=0
+run_bdoctor > "$tmp/d7" 2>&1 || status=$?
+grep -q "catalog:" "$tmp/d7" || fail "doctor must not crash when source file is missing: $(cat "$tmp/d7")"
+grep -q "warn: catalog: stale" "$tmp/d7" || fail "missing source should warn stale, not crash: $(cat "$tmp/d7")"
+
+# case 8: malformed YAML manifest (sources_by_name が raise) でも crash せず未検証を warn
+printf 'name: personal-demo\nkind: [unbalanced\n   : :\n' > "$tmp/brepo/shared/workflows/personal-demo.asset.yml"
+status=0
+run_bdoctor > "$tmp/d8" 2>&1 || status=$?
+grep -q "warn: catalog: freshness 未検証" "$tmp/d8" \
+  || fail "broken manifest should warn (not crash) in catalog check: $(cat "$tmp/d8")"
+
 echo "ok: doctor self-test passed"
