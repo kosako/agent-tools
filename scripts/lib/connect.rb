@@ -14,13 +14,16 @@
 # - symlink / 非通常ファイルは決して触らない。
 # - 外部依存ゼロ、network access なし。
 
+require "json"
 require "fileutils"
 
+require_relative "artifact_targets"
 require_relative "instruction_marker"
 
 module Connect
   # 人間の CLAUDE.md から所有ファイルを取り込む import 行。
   CLAUDE_IMPORT = "@agent-tools/CLAUDE.md"
+  CATALOG_PATH = "generated/catalog.json"
 
   Plan = Struct.new(:action, :tool, :kind, :path, :reason, :gen) do
     def to_s
@@ -33,6 +36,25 @@ module Connect
     def initialize(root, homes)
       @root = File.expand_path(root)
       @homes = homes
+      load_catalog
+    end
+
+    # catalog を source of truth として読む (catalog_version check は sync/status/doctor と
+    # 同じ)。connect は registered な instruction だけを所有確立する (review gate)。
+    def load_catalog
+      @catalog_present = false
+      @entries = []
+      path = File.join(@root, CATALOG_PATH)
+      return unless File.file?(path)
+
+      data = JSON.parse(File.read(path))
+      # version の一致しない catalog は古いものとして無視する (re-run register)。
+      return unless data["catalog_version"] == ArtifactTargets::CATALOG_VERSION
+
+      @catalog_present = true
+      @entries = data.fetch("assets", [])
+    rescue JSON::ParserError
+      @catalog_present = false
     end
 
     def plan
@@ -55,6 +77,29 @@ module Connect
       File.file?(path) ? path : nil
     end
 
+    # instruction の gate を connect でも enforce する (sync の plan_instruction と同じ契約)。
+    # 配置してよいなら nil、不可なら skip 理由を返す。catalog 不在 / 未登録 /
+    # human_review_required は配置しない。さらに、配置する generated 物が catalog entry と
+    # 一致する (target + name + build_id) ことも確認する。不一致は source 変更後に register
+    # していない (古い registered のまま未レビュー content を配置する) ことを意味するので塞ぐ。
+    def unconnectable_reason(tool, gen)
+      return "no catalog; run scripts/register.sh first" unless @catalog_present
+
+      entry = @entries.find { |e| e["target"] == tool && e["artifact_kind"] == "instruction" }
+      return "not in catalog; run scripts/register.sh first" unless entry
+      unless entry["registration"] == "registered"
+        return "instruction not registered (#{entry["registration"]})"
+      end
+
+      marker = InstructionMarker.parse(File.read(gen))
+      unless marker && marker["target"] == tool &&
+             marker["name"] == entry["name"] && marker["build_id"] == entry["build_id"]
+        return "generated instruction is stale; run scripts/build.sh && scripts/register.sh first"
+      end
+
+      nil
+    end
+
     # claude-code: 所有ファイル (agent-tools/CLAUDE.md) と人間の CLAUDE.md への import。
     def claude_plans
       tool = "claude-code"
@@ -64,6 +109,9 @@ module Connect
 
       owned = File.join(home, "agent-tools", "CLAUDE.md")
       import_file = File.join(home, "CLAUDE.md")
+      reason = unconnectable_reason(tool, gen)
+      return [Plan.new("skip", tool, "owned", owned, reason, gen)] if reason
+
       [owned_plan(tool, gen, owned), claude_import_plan(tool, import_file)]
     end
 
@@ -75,6 +123,9 @@ module Connect
       return [] unless gen
 
       owned = File.join(home, "AGENTS.md")
+      reason = unconnectable_reason(tool, gen)
+      return [Plan.new("skip", tool, "owned", owned, reason, gen)] if reason
+
       [owned_plan(tool, gen, owned)]
     end
 

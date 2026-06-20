@@ -6,6 +6,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 build="$script_dir/../build.sh"
+register="$script_dir/../register.sh"
 connect="$script_dir/../connect.sh"
 
 tmp=$(mktemp -d)
@@ -48,6 +49,9 @@ run_connect > "$tmp/c0" 2>&1 || fail "connect without artifacts should succeed: 
 grep -q "no instruction artifacts to connect" "$tmp/c0" || fail "missing no-artifacts notice: $(cat "$tmp/c0")"
 
 "$build" --root "$tmp/repo" --quiet > /dev/null
+# connect は catalog の registration を gate にするため register まで通す
+# (low risk fixture は registered になり exit 0)。
+"$register" --root "$tmp/repo" --quiet > /dev/null
 
 # --- case 1: dry-run は plan を出すが書き込まない ---
 run_connect > "$tmp/c1" 2>&1 || fail "dry-run should succeed: $(cat "$tmp/c1")"
@@ -134,5 +138,78 @@ status=0
 [ "$status" -eq 1 ] || fail "symlinked owned parent should conflict: $(cat "$tmp/c10")"
 grep -q "conflict: \[claude-code\] owned.*symlink" "$tmp/c10" || fail "missing parent symlink conflict: $(cat "$tmp/c10")"
 [ ! -e "$tmp/realdir/CLAUDE.md" ] || fail "must not write through a symlinked parent"
+
+# --- case 11: 未登録 (human_review_required) の instruction は connect しない (review gate) ---
+mkdir -p "$tmp/repo2/shared/instructions" "$tmp/codex9" "$tmp/claude9"
+cat > "$tmp/repo2/shared/instructions/personal-pending.md" <<'EOF'
+# pending rules
+
+レビュー待ちの instruction。
+EOF
+cat > "$tmp/repo2/shared/instructions/personal-pending.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-pending
+kind: instruction
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: medium
+  privacy: low
+source:
+  path: shared/instructions/personal-pending.md
+  format: markdown
+EOF
+"$build" --root "$tmp/repo2" --quiet > /dev/null
+# 宣言 medium + 未承認 → register は human_review_required (exit 3, 非致命) になる
+status=0
+"$register" --root "$tmp/repo2" --quiet > /dev/null || status=$?
+[ "$status" -eq 3 ] || fail "pending instruction should register as human_review_required (exit 3), got $status"
+"$connect" --root "$tmp/repo2" --codex-home "$tmp/codex9" --claude-home "$tmp/claude9" --apply > "$tmp/c11" 2>&1 \
+  || fail "connect should not error on unregistered instruction: $(cat "$tmp/c11")"
+grep -q "skip: \[claude-code\] owned.*not registered" "$tmp/c11" || fail "claude owned should skip when not registered: $(cat "$tmp/c11")"
+grep -q "skip: \[codex\] owned.*not registered" "$tmp/c11" || fail "codex owned should skip when not registered: $(cat "$tmp/c11")"
+grep -q "0 change(s)" "$tmp/c11" || fail "unregistered instruction connect should apply 0 changes: $(cat "$tmp/c11")"
+[ ! -e "$tmp/claude9/agent-tools/CLAUDE.md" ] || fail "unregistered instruction must not create owned claude file"
+[ ! -e "$tmp/claude9/CLAUDE.md" ] || fail "unregistered instruction must not add import"
+[ ! -e "$tmp/codex9/AGENTS.md" ] || fail "unregistered instruction must not create owned codex file"
+
+# --- case 12: registered な catalog のまま source を変えて build だけ再実行したら connect は skip ---
+# (古い registered catalog で未レビュー content を配置しないこと = build_id 照合の回帰)
+mkdir -p "$tmp/repo3/shared/instructions" "$tmp/codex10" "$tmp/claude10"
+cat > "$tmp/repo3/shared/instructions/personal-ops.md" <<'EOF'
+# operating rules
+
+ドキュメントは日本語を既定にする。
+EOF
+cat > "$tmp/repo3/shared/instructions/personal-ops.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-ops
+kind: instruction
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/instructions/personal-ops.md
+  format: markdown
+EOF
+"$build" --root "$tmp/repo3" --quiet > /dev/null
+"$register" --root "$tmp/repo3" --quiet > /dev/null
+# source を変更 (build_id が変わる) して build だけ再実行 (register しない → catalog は古い registered)
+printf '\n追記: catalog 未更新の変更。\n' >> "$tmp/repo3/shared/instructions/personal-ops.md"
+"$build" --root "$tmp/repo3" --quiet > /dev/null
+"$connect" --root "$tmp/repo3" --codex-home "$tmp/codex10" --claude-home "$tmp/claude10" --apply > "$tmp/c12" 2>&1 \
+  || fail "connect should not error on stale build: $(cat "$tmp/c12")"
+grep -q "skip: \[claude-code\] owned.*stale" "$tmp/c12" || fail "claude owned should skip when generated build_id != catalog: $(cat "$tmp/c12")"
+grep -q "skip: \[codex\] owned.*stale" "$tmp/c12" || fail "codex owned should skip when generated build_id != catalog: $(cat "$tmp/c12")"
+grep -q "0 change(s)" "$tmp/c12" || fail "stale connect should apply 0 changes: $(cat "$tmp/c12")"
+[ ! -e "$tmp/claude10/agent-tools/CLAUDE.md" ] || fail "stale generated instruction must not create owned file"
+[ ! -e "$tmp/claude10/CLAUDE.md" ] || fail "stale generated instruction must not add import"
+[ ! -e "$tmp/codex10/AGENTS.md" ] || fail "stale generated instruction must not create owned codex file"
 
 echo "ok: connect self-test passed"
