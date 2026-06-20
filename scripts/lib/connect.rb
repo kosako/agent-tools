@@ -14,13 +14,16 @@
 # - symlink / 非通常ファイルは決して触らない。
 # - 外部依存ゼロ、network access なし。
 
+require "json"
 require "fileutils"
 
+require_relative "artifact_targets"
 require_relative "instruction_marker"
 
 module Connect
   # 人間の CLAUDE.md から所有ファイルを取り込む import 行。
   CLAUDE_IMPORT = "@agent-tools/CLAUDE.md"
+  CATALOG_PATH = "generated/catalog.json"
 
   Plan = Struct.new(:action, :tool, :kind, :path, :reason, :gen) do
     def to_s
@@ -33,6 +36,25 @@ module Connect
     def initialize(root, homes)
       @root = File.expand_path(root)
       @homes = homes
+      load_catalog
+    end
+
+    # catalog を source of truth として読む (catalog_version check は sync/status/doctor と
+    # 同じ)。connect は registered な instruction だけを所有確立する (review gate)。
+    def load_catalog
+      @catalog_present = false
+      @entries = []
+      path = File.join(@root, CATALOG_PATH)
+      return unless File.file?(path)
+
+      data = JSON.parse(File.read(path))
+      # version の一致しない catalog は古いものとして無視する (re-run register)。
+      return unless data["catalog_version"] == ArtifactTargets::CATALOG_VERSION
+
+      @catalog_present = true
+      @entries = data.fetch("assets", [])
+    rescue JSON::ParserError
+      @catalog_present = false
     end
 
     def plan
@@ -55,6 +77,19 @@ module Connect
       File.file?(path) ? path : nil
     end
 
+    # instruction の review gate を connect でも enforce する (sync と同じ契約)。
+    # catalog の instruction entry が registered なら nil、そうでなければ skip 理由を返す。
+    # catalog 不在 / 未登録 / human_review_required の instruction は所有ファイルに配置しない。
+    def unregistered_reason(tool)
+      return "no catalog; run scripts/register.sh first" unless @catalog_present
+
+      entry = @entries.find { |e| e["target"] == tool && e["artifact_kind"] == "instruction" }
+      return "not in catalog; run scripts/register.sh first" unless entry
+      return nil if entry["registration"] == "registered"
+
+      "instruction not registered (#{entry["registration"]})"
+    end
+
     # claude-code: 所有ファイル (agent-tools/CLAUDE.md) と人間の CLAUDE.md への import。
     def claude_plans
       tool = "claude-code"
@@ -64,6 +99,9 @@ module Connect
 
       owned = File.join(home, "agent-tools", "CLAUDE.md")
       import_file = File.join(home, "CLAUDE.md")
+      reason = unregistered_reason(tool)
+      return [Plan.new("skip", tool, "owned", owned, reason, gen)] if reason
+
       [owned_plan(tool, gen, owned), claude_import_plan(tool, import_file)]
     end
 
@@ -75,6 +113,9 @@ module Connect
       return [] unless gen
 
       owned = File.join(home, "AGENTS.md")
+      reason = unregistered_reason(tool)
+      return [Plan.new("skip", tool, "owned", owned, reason, gen)] if reason
+
       [owned_plan(tool, gen, owned)]
     end
 
