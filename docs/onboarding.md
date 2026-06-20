@@ -120,9 +120,11 @@ medium の扱いは段階で異なる:
 | データ | 置き場所 | tracked? | 書く主体 |
 | --- | --- | --- | --- |
 | source asset + manifest | `shared/<category>/` | yes | 人間 |
-| 生成 artifact + marker | `generated/<tool>/skills/` | no (ignored) | build |
+| 生成 skill artifact + marker | `generated/<tool>/skills/` | no (ignored) | build |
+| 生成 instruction artifact + marker | `generated/<tool>/instructions/` | no (ignored) | build |
 | catalog (登録状態) | `generated/catalog.json` | no (ignored) | register |
 | 配置済み skill | `~/.codex` `~/.claude` の `skills/personal-*` | — | sync (--apply) |
+| 配置済み instruction | `~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md` | — | connect (確立) / sync (更新) |
 | status JSON | stdout のみ | — | status |
 
 原則: **manifest = 人間が宣言する metadata、catalog = 機械が計測した結果**。

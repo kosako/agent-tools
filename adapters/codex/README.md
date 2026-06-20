@@ -26,11 +26,14 @@ generated/codex/instructions/
 - source が YAML frontmatter を持たない場合のみ、manifest の `name` と
   `summary` から frontmatter を生成する。
 - directory asset は `asset.yml` を除く全 files を copy する。
-- `.agent-tools-managed.yml` は
-  [Status / Manifest Contract](../../docs/status-manifest-contract.md) の
-  management marker。`build_id` は source content の sha256 から作る。
+- marker: skill は directory 直下の `.agent-tools-managed.yml`、instruction は本体先頭の
+  1 行 HTML コメント。format は
+  [Status / Manifest Contract](../../docs/status-manifest-contract.md)。`build_id` は
+  source content の sha256 から作る。
 
 ## Sync 先 (参照)
 
-[Sync Policy](../../docs/sync-policy.md) の許可 pattern `~/.codex/skills/personal-*`。
+- skill: [Sync Policy](../../docs/sync-policy.md) の許可 pattern `~/.codex/skills/personal-*`。
+- instruction: connect が確立した所有ファイル `~/.codex/AGENTS.md` を sync が更新する。
+
 build は `generated/` にのみ書き込み、tool directories には書き込みません。
