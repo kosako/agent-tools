@@ -77,17 +77,27 @@ module Connect
       File.file?(path) ? path : nil
     end
 
-    # instruction の review gate を connect でも enforce する (sync と同じ契約)。
-    # catalog の instruction entry が registered なら nil、そうでなければ skip 理由を返す。
-    # catalog 不在 / 未登録 / human_review_required の instruction は所有ファイルに配置しない。
-    def unregistered_reason(tool)
+    # instruction の gate を connect でも enforce する (sync の plan_instruction と同じ契約)。
+    # 配置してよいなら nil、不可なら skip 理由を返す。catalog 不在 / 未登録 /
+    # human_review_required は配置しない。さらに、配置する generated 物が catalog entry と
+    # 一致する (target + name + build_id) ことも確認する。不一致は source 変更後に register
+    # していない (古い registered のまま未レビュー content を配置する) ことを意味するので塞ぐ。
+    def unconnectable_reason(tool, gen)
       return "no catalog; run scripts/register.sh first" unless @catalog_present
 
       entry = @entries.find { |e| e["target"] == tool && e["artifact_kind"] == "instruction" }
       return "not in catalog; run scripts/register.sh first" unless entry
-      return nil if entry["registration"] == "registered"
+      unless entry["registration"] == "registered"
+        return "instruction not registered (#{entry["registration"]})"
+      end
 
-      "instruction not registered (#{entry["registration"]})"
+      marker = InstructionMarker.parse(File.read(gen))
+      unless marker && marker["target"] == tool &&
+             marker["name"] == entry["name"] && marker["build_id"] == entry["build_id"]
+        return "generated instruction is stale; run scripts/build.sh && scripts/register.sh first"
+      end
+
+      nil
     end
 
     # claude-code: 所有ファイル (agent-tools/CLAUDE.md) と人間の CLAUDE.md への import。
@@ -99,7 +109,7 @@ module Connect
 
       owned = File.join(home, "agent-tools", "CLAUDE.md")
       import_file = File.join(home, "CLAUDE.md")
-      reason = unregistered_reason(tool)
+      reason = unconnectable_reason(tool, gen)
       return [Plan.new("skip", tool, "owned", owned, reason, gen)] if reason
 
       [owned_plan(tool, gen, owned), claude_import_plan(tool, import_file)]
@@ -113,7 +123,7 @@ module Connect
       return [] unless gen
 
       owned = File.join(home, "AGENTS.md")
-      reason = unregistered_reason(tool)
+      reason = unconnectable_reason(tool, gen)
       return [Plan.new("skip", tool, "owned", owned, reason, gen)] if reason
 
       [owned_plan(tool, gen, owned)]

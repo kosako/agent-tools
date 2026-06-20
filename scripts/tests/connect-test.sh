@@ -175,4 +175,39 @@ grep -q "0 change(s)" "$tmp/c11" || fail "unregistered instruction connect shoul
 [ ! -e "$tmp/claude9/CLAUDE.md" ] || fail "unregistered instruction must not add import"
 [ ! -e "$tmp/codex9/AGENTS.md" ] || fail "unregistered instruction must not create owned codex file"
 
+# --- case 12: registered な catalog のまま source を変えて build だけ再実行したら connect は skip ---
+# (古い registered catalog で未レビュー content を配置しないこと = build_id 照合の回帰)
+mkdir -p "$tmp/repo3/shared/instructions" "$tmp/codex10" "$tmp/claude10"
+cat > "$tmp/repo3/shared/instructions/personal-ops.md" <<'EOF'
+# operating rules
+
+ドキュメントは日本語を既定にする。
+EOF
+cat > "$tmp/repo3/shared/instructions/personal-ops.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-ops
+kind: instruction
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/instructions/personal-ops.md
+  format: markdown
+EOF
+"$build" --root "$tmp/repo3" --quiet > /dev/null
+"$register" --root "$tmp/repo3" --quiet > /dev/null
+# source を変更 (build_id が変わる) して build だけ再実行 (register しない → catalog は古い registered)
+printf '\n追記: catalog 未更新の変更。\n' >> "$tmp/repo3/shared/instructions/personal-ops.md"
+"$build" --root "$tmp/repo3" --quiet > /dev/null
+"$connect" --root "$tmp/repo3" --codex-home "$tmp/codex10" --claude-home "$tmp/claude10" --apply > "$tmp/c12" 2>&1 \
+  || fail "connect should not error on stale build: $(cat "$tmp/c12")"
+grep -q "skip: \[claude-code\] owned.*stale" "$tmp/c12" || fail "claude owned should skip when generated build_id != catalog: $(cat "$tmp/c12")"
+grep -q "skip: \[codex\] owned.*stale" "$tmp/c12" || fail "codex owned should skip when generated build_id != catalog: $(cat "$tmp/c12")"
+[ ! -e "$tmp/claude10/agent-tools/CLAUDE.md" ] || fail "stale generated instruction must not create owned file"
+[ ! -e "$tmp/codex10/AGENTS.md" ] || fail "stale generated instruction must not create owned codex file"
+
 echo "ok: connect self-test passed"
