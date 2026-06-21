@@ -169,8 +169,9 @@ module CheckInjection
       []
     end
 
-    # directory skill の evals/ 配下を scan 対象外にするための絶対 path prefix 一覧。
-    # 壊れた manifest では除外しない (gate の check-manifests が別途 fail させる)。
+    # directory skill の evals/ 配下を leak_only 判定するための絶対 path prefix 一覧。
+    # (evals は injection 攻撃文字列を抑止し leak (private-key) のみ scan する。run が使う。)
+    # 壊れた manifest では prefix を出さない (gate の check-manifests が別途 fail させる)。
     def skill_eval_dir_prefixes
       prefixes = []
       Assets.load_all(@root).each do |asset|

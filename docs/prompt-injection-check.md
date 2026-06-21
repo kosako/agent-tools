@@ -35,6 +35,11 @@ external URL は **artifact kind 別**に扱います。instruction asset の so
 (high) に昇格します (instruction は具体参照先を書かない方針なので、URL 混入は方針違反と
 して止める)。skill / workflow など他の asset では low (検知のみ、gate は通す) です。
 
+directory skill の `evals/` (adversarial なテスト材料) は例外です。eval prompt は「skill が
+転記/実行しないこと」を検証するため、injection 文字列・fake な絶対パス・email を意図的に
+含むので、evals ではそれらを抑止します。ただし inline の private key 本体
+(`-----BEGIN ... PRIVATE KEY-----`) だけは fixture で不要なため、evals でも high で検知します。
+
 ## LLM Review
 
 LLM review は supplemental gate です。
