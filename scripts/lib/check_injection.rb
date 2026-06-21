@@ -113,8 +113,8 @@ module CheckInjection
 
     # shared/ 配下のすべての text files を scan する。manifest も text として含める。
     # directory skill の evals/ (テスト材料。意図的に攻撃的文字列を含みうる) は
-    # injection 攻撃文字列の scan からは外すが、privacy/secret leak は引き続き scan する
-    # (run で per-file に判定する)。
+    # injection 攻撃文字列・fake path・email の scan からは外すが、inline private key leak
+    # のみ引き続き scan する (run で per-file に判定する)。
     def target_files
       Dir.glob(File.join(@root, "shared/**/*"), File::FNM_DOTMATCH)
          .select { |p| File.file?(p) }
