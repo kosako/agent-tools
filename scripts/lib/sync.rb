@@ -129,7 +129,9 @@ module Sync
         return Plan.new("skip", tool, name, target, "run build first", "skill", gen)
       end
       # symlink は実体の所在によらず unmanaged target として扱い、決して触らない。
-      if File.symlink?(target)
+      # 親 dir (<home>/skills) が symlink の場合も、rm_rf / cp_r が外へ追従しないよう
+      # conflict にする (plan_instruction と同じ防御)。
+      if File.symlink?(target) || File.symlink?(File.dirname(target))
         return Plan.new("conflict", tool, name, target, "existing target is a symlink", "skill", gen)
       end
       unless File.exist?(target)
