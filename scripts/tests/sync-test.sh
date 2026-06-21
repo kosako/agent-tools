@@ -238,4 +238,38 @@ grep -q "skip: \[codex\].*run build first" "$tmp/out-skstale" \
 "$sync" --root "$tmp/srepo" --codex-home "$tmp/scodex" --claude-home "$tmp/sclaude" --apply --quiet > /dev/null
 [ -f "$tmp/scodex/skills/personal-sk/SKILL.md" ] || fail "rebuilt skill should deploy"
 
+# --- case 14: skill 所有先の親 dir (<home>/skills) が symlink なら conflict (素通りさせない) ---
+# (D3: plan_instruction の親 dir 防御と対称。rm_rf / cp_r が symlink を辿らない)
+mkdir -p "$tmp/repo14/shared/skills/personal-sk" "$tmp/claude14" "$tmp/realskills"
+cat > "$tmp/repo14/shared/skills/personal-sk/SKILL.md" <<'EOF'
+---
+name: personal-sk
+description: demo skill
+---
+body
+EOF
+cat > "$tmp/repo14/shared/skills/personal-sk/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-sk
+kind: skill
+visibility: public
+targets:
+  - codex
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-sk
+  format: directory
+EOF
+"$build" --root "$tmp/repo14" --quiet > /dev/null
+"$register" --root "$tmp/repo14" --quiet > /dev/null
+mkdir -p "$tmp/codex14"
+ln -s "$tmp/realskills" "$tmp/codex14/skills"   # <home>/skills 自体を symlink にする
+status=0
+"$sync" --root "$tmp/repo14" --codex-home "$tmp/codex14" --claude-home "$tmp/claude14" --apply > "$tmp/out-skparent" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "symlinked skills parent should conflict (exit 1): $(cat "$tmp/out-skparent")"
+grep -q "conflict: \[codex\].*symlink" "$tmp/out-skparent" || fail "missing skills-parent symlink conflict: $(cat "$tmp/out-skparent")"
+[ ! -e "$tmp/realskills/personal-sk" ] || fail "must not write through a symlinked skills parent"
+
 echo "ok: sync self-test passed"
