@@ -32,7 +32,7 @@ module CheckInjection
     Pattern.new("secrets", "high",
                 /(?:reveal|print|show|display|output|send|leak|exfiltrate|dump|paste)\b.{0,60}\b(?:secrets?|credentials?|api[\s_-]?keys?|tokens?|private\s+keys?|passwords?)/i,
                 "requests disclosure or collection of secrets"),
-    Pattern.new("secrets", "high",
+    Pattern.new("private-key", "high",
                 /-----BEGIN\s[A-Z ]*PRIVATE KEY-----/,
                 "contains private key material"),
 
@@ -92,6 +92,14 @@ module CheckInjection
 
   RISK_ORDER = { "high" => 2, "medium" => 1, "low" => 0 }.freeze
 
+  # evals/ でも scan する category。evals は injection 攻撃文字列を「skill が転記/実行
+  # しないこと」を検証するテスト材料として意図的に含み、その攻撃文字列には fake な絶対パス
+  # (例 /Users/me/secrets/key.pem) や email も含まれる。よって absolute-path / pii は
+  # evals では正当な fixture として現れうるため抑止する。一方、inline の private key
+  # 本体 (-----BEGIN ... PRIVATE KEY-----) は fixture では path 参照で代替され実体を
+  # 置く必要がないため、evals に在れば真の leak とみなして必ず scan する。
+  LEAK_CATEGORIES = %w[private-key].freeze
+
   Finding = Struct.new(:path, :line, :risk, :category, :message) do
     def to_s
       "#{path}:#{line}: [#{risk}] #{category}: #{message}"
@@ -103,20 +111,20 @@ module CheckInjection
       @root = File.expand_path(root)
     end
 
-    # shared/ 配下のすべての text files を scan する。
-    # manifest も text として scan 対象に含める。
-    # directory skill の evals/ (テスト材料。意図的に攻撃的文字列を含みうる) は除外する。
+    # shared/ 配下のすべての text files を scan する。manifest も text として含める。
+    # directory skill の evals/ (テスト材料。意図的に攻撃的文字列を含みうる) は
+    # injection 攻撃文字列・fake path・email の scan からは外すが、inline private key leak
+    # のみ引き続き scan する (run で per-file に判定する)。
     def target_files
-      eval_prefixes = skill_eval_dir_prefixes
       Dir.glob(File.join(@root, "shared/**/*"), File::FNM_DOTMATCH)
          .select { |p| File.file?(p) }
          .reject { |p| File.basename(p) == ".gitkeep" }
-         .reject { |p| eval_prefixes.any? { |pre| p.start_with?(pre) } }
          .sort
     end
 
     def run
       instruction_sources = instruction_source_paths
+      eval_prefixes = skill_eval_dir_prefixes
       findings = []
       count = 0
       target_files.each do |full|
@@ -126,7 +134,9 @@ module CheckInjection
         content = content.scrub("�")
         count += 1
         rel_path = rel(full)
-        file_findings = scan(rel_path, content)
+        # evals/ は injection 攻撃文字列をテスト材料として含むため leak のみ scan する。
+        leak_only = eval_prefixes.any? { |pre| full.start_with?(pre) }
+        file_findings = scan(rel_path, content, leak_only)
         # instruction asset の source は external URL を strict (high) に昇格する。
         # instruction は具体参照先を書かない方針なので、URL 混入は方針違反として止める。
         file_findings = file_findings.map { |f| strict_instruction(f) } if instruction_sources.include?(rel_path)
@@ -159,8 +169,9 @@ module CheckInjection
       []
     end
 
-    # directory skill の evals/ 配下を scan 対象外にするための絶対 path prefix 一覧。
-    # 壊れた manifest では除外しない (gate の check-manifests が別途 fail させる)。
+    # directory skill の evals/ 配下を leak_only 判定するための絶対 path prefix 一覧。
+    # (evals は injection 攻撃文字列を抑止し leak (private-key) のみ scan する。run が使う。)
+    # 壊れた manifest では prefix を出さない (gate の check-manifests が別途 fail させる)。
     def skill_eval_dir_prefixes
       prefixes = []
       Assets.load_all(@root).each do |asset|
@@ -185,8 +196,10 @@ module CheckInjection
       path.sub(%r{\A#{Regexp.escape(@root)}/}, "")
     end
 
-    def scan(path, content)
-      PATTERNS.flat_map do |pattern|
+    # leak_only=true (evals/) のときは privacy/secret leak の category だけを当てる。
+    def scan(path, content, leak_only = false)
+      patterns = leak_only ? PATTERNS.select { |p| LEAK_CATEGORIES.include?(p.category) } : PATTERNS
+      patterns.flat_map do |pattern|
         positions = []
         pos = 0
         while (match = pattern.regexp.match(content, pos))

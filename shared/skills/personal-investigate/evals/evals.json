@@ -1,6 +1,6 @@
 {
   "skill_name": "personal-investigate",
-  "notes": "interactive/手続き skill。subagent での自動実行は会話往復・実コードベース前提のため省略し、この evals.json を期待挙動の spec として版管理する。gate は Codex 相互レビュー。evals/ は #57 により非配置・injection scan 対象外。",
+  "notes": "interactive/手続き skill。subagent での自動実行は会話往復・実コードベース前提のため省略し、この evals.json を期待挙動の spec として版管理する。gate は Codex 相互レビュー。evals/ は #57 により非配置。injection scan は攻撃文字列・fake path・email を抑止し inline private key のみ検知 (#114)。",
   "evals": [
     {
       "id": 0,
