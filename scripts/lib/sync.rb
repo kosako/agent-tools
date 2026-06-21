@@ -90,7 +90,7 @@ module Sync
       end
 
       case kind
-      when "skill" then plan_skill(tool, name)
+      when "skill" then plan_skill(tool, name, entry["build_id"])
       when "instruction" then plan_instruction(tool, name, entry["build_id"])
       else
         Plan.new("skip", tool, name, nil, "unsupported artifact_kind #{kind.inspect}", kind, nil)
@@ -107,7 +107,7 @@ module Sync
       end
     end
 
-    def plan_skill(tool, name)
+    def plan_skill(tool, name, expected_build_id)
       target = File.join(@homes.fetch(tool), "skills", name)
       gen = File.join(@root, "generated", tool, "skills", name)
 
@@ -121,6 +121,12 @@ module Sync
       source_marker = read_marker(gen)
       unless managed?(source_marker, tool, name)
         return Plan.new("conflict", tool, name, target, "generated artifact is missing a valid marker", "skill", gen)
+      end
+      # generated が catalog entry と一致するか (build_id)。不一致 = register 後に build して
+      # いない (stale generated)。instruction (plan_instruction) と同じく "run build first" で
+      # skip し、古い generated を配置しない。
+      if source_marker["build_id"] != expected_build_id
+        return Plan.new("skip", tool, name, target, "run build first", "skill", gen)
       end
       # symlink は実体の所在によらず unmanaged target として扱い、決して触らない。
       if File.symlink?(target)

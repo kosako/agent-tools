@@ -81,6 +81,7 @@ EOF
 run_status > "$tmp/s4" 2>&1
 [ "$(jget "$tmp/s4" generated stale)" = "2" ] || fail "generated should be stale after source change"
 "$build" --root "$tmp/repo" --quiet > /dev/null
+"$script_dir/../register.sh" --root "$tmp/repo" --quiet > /dev/null   # sync は catalog build_id を照合するため rebuild 後は register まで
 run_status > "$tmp/s4b" 2>&1
 [ "$(jget "$tmp/s4b" generated stale)" = "0" ] || fail "rebuild should clear stale"
 [ "$(jget "$tmp/s4b" sync_targets 0 state)" = '"stale"' ] || fail "target should be stale after rebuild"

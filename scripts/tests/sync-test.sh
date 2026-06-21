@@ -73,6 +73,7 @@ cat > "$tmp/repo/shared/workflows/personal-demo.md" <<'EOF'
 # demo v2
 EOF
 "$build" --root "$tmp/repo" --quiet > /dev/null
+"$register" --root "$tmp/repo" --quiet > /dev/null   # skill も catalog build_id を照合するため register まで通す
 run_sync > "$tmp/out-update" 2>&1 || fail "update dry-run should succeed"
 grep -q "update: \[claude-code\]" "$tmp/out-update" || fail "missing update plan"
 run_sync --apply --quiet > /dev/null 2>&1
@@ -196,5 +197,45 @@ grep -q "skip: \[codex\].*run connect first" "$tmp/out-empty" \
   || fail "empty instruction owned file should say run connect first: $(cat "$tmp/out-empty")"
 ! grep -q "conflict: \[codex\]" "$tmp/out-empty" \
   || fail "empty owned file must not be reported as a conflict: $(cat "$tmp/out-empty")"
+
+# --- case 13: skill も catalog build_id を照合する (stale generated は run build first) ---
+# (D2: plan_instruction と対称。register 後に build せず sync しても stale skill を配置しない)
+mkdir -p "$tmp/srepo/shared/skills/personal-sk" "$tmp/scodex" "$tmp/sclaude"
+cat > "$tmp/srepo/shared/skills/personal-sk/SKILL.md" <<'EOF'
+---
+name: personal-sk
+description: demo skill
+---
+v1
+EOF
+cat > "$tmp/srepo/shared/skills/personal-sk/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-sk
+kind: skill
+visibility: public
+targets:
+  - codex
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-sk
+  format: directory
+EOF
+"$build" --root "$tmp/srepo" --quiet > /dev/null
+"$register" --root "$tmp/srepo" --quiet > /dev/null   # catalog build_id = generated build_id
+# source を変更して build せず register だけ (catalog build_id が generated より新しくなる)
+echo "v2" >> "$tmp/srepo/shared/skills/personal-sk/SKILL.md"
+"$register" --root "$tmp/srepo" --quiet > /dev/null
+"$sync" --root "$tmp/srepo" --codex-home "$tmp/scodex" --claude-home "$tmp/sclaude" > "$tmp/out-skstale" 2>&1
+grep -q "skip: \[codex\].*run build first" "$tmp/out-skstale" \
+  || fail "stale skill generated vs catalog should skip with run build first: $(cat "$tmp/out-skstale")"
+# --apply しても stale skill は配置されない
+"$sync" --root "$tmp/srepo" --codex-home "$tmp/scodex" --claude-home "$tmp/sclaude" --apply --quiet > /dev/null 2>&1 || true
+[ ! -e "$tmp/scodex/skills/personal-sk" ] || fail "stale skill must not be deployed before rebuild"
+# rebuild すれば配置される (gate が正常系を塞がない)
+"$build" --root "$tmp/srepo" --quiet > /dev/null
+"$sync" --root "$tmp/srepo" --codex-home "$tmp/scodex" --claude-home "$tmp/sclaude" --apply --quiet > /dev/null
+[ -f "$tmp/scodex/skills/personal-sk/SKILL.md" ] || fail "rebuilt skill should deploy"
 
 echo "ok: sync self-test passed"
