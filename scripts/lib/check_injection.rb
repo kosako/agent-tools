@@ -83,8 +83,8 @@ module CheckInjection
     Pattern.new("pii", "high",
                 /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/,
                 "contains an email address (possible PII)"),
-    # external URL は検知するが現状 low (gate を通す)。artifact_kind 別 policy
-    # (instruction=strict で high に昇格) は後続の artifact kind 対応で導入する。
+    # external URL は検知するが skill では low (gate を通す)。instruction の source では
+    # strict_instruction が high に昇格する (artifact_kind 別 policy)。
     Pattern.new("external-url", "low",
                 %r{https?://[^\s)>"'\]]+}i,
                 "contains an external URL"),

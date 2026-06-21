@@ -91,12 +91,12 @@ rm -rf "$tmp/codex/skills/personal-demo"
 "$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --apply --quiet > /dev/null
 "$script_dir/../register.sh" --root "$tmp/repo" --quiet > /dev/null
 run_doctor > "$tmp/d5" 2>&1 || fail "doctor with catalog should pass: $(cat "$tmp/d5")"
-grep -q "ok: catalog: present, 2 asset(s), fresh" "$tmp/d5" || fail "missing catalog ok line: $(cat "$tmp/d5")"
+grep -q "ok: catalog: present, 1 asset(s), fresh" "$tmp/d5" || fail "missing catalog ok line: $(cat "$tmp/d5")"
 
 # mtime だけが変わっても stale にならない
 touch "$tmp/repo/shared/workflows/personal-demo.asset.yml" "$tmp/repo/shared/workflows/personal-demo.md"
 run_doctor > "$tmp/d5a" 2>&1 || fail "touched files should not be stale"
-grep -q "ok: catalog: present, 2 asset(s), fresh" "$tmp/d5a" || fail "mtime change must not cause stale: $(cat "$tmp/d5a")"
+grep -q "ok: catalog: present, 1 asset(s), fresh" "$tmp/d5a" || fail "mtime change must not cause stale: $(cat "$tmp/d5a")"
 
 # source content の変更は stale になる
 echo "changed" >> "$tmp/repo/shared/workflows/personal-demo.md"
