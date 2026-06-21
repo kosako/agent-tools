@@ -395,4 +395,29 @@ repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 [ -f "$repo_root/generated/claude-code/skills/personal-project-operating-loop/SKILL.md" ] \
   || fail "repository artifact missing"
 
+# --- case 6: CRLF frontmatter の single-file source を build しても二重化しない (B4) ---
+mkdir -p "$tmp/crlf/shared/prompts"
+printf -- '---\r\nname: personal-crlf\r\ndescription: crlf\r\n---\r\nbody\r\n' \
+  > "$tmp/crlf/shared/prompts/personal-crlf.md"
+cat > "$tmp/crlf/shared/prompts/personal-crlf.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-crlf
+kind: prompt
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/prompts/personal-crlf.md
+  format: markdown
+EOF
+"$build" --root "$tmp/crlf" --quiet > /dev/null 2>&1 || fail "CRLF frontmatter source should build"
+crlf_skill="$tmp/crlf/generated/claude-code/skills/personal-crlf/SKILL.md"
+[ -f "$crlf_skill" ] || fail "CRLF skill not generated"
+# 既存 frontmatter を検出できれば --- 区切りは 2 本のまま (検出失敗で二重化すると 4 本)。
+fm_count=$(grep -c -- '^---' "$crlf_skill" || true)
+[ "$fm_count" = "2" ] || fail "CRLF frontmatter must not be duplicated (got $fm_count '---' lines): $(cat "$crlf_skill")"
+
 echo "ok: build self-test passed"

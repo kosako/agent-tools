@@ -116,7 +116,9 @@ module Build
     # source が frontmatter を持たない場合のみ、manifest から frontmatter を生成する。
     # YAML dump を使い、特殊文字を含む summary でも frontmatter が壊れないようにする。
     def skill_markdown(content, asset)
-      return content if content.start_with?("---\n")
+      # LF / CRLF どちらの source でも既存 frontmatter を検出する (CRLF を取りこぼして
+      # manifest 由来 frontmatter を二重前置しないため)。
+      return content if content.start_with?("---\n", "---\r\n")
 
       description = asset[:summary] || asset[:description] || asset[:name]
       frontmatter = YAML.dump("name" => asset[:name], "description" => description)
