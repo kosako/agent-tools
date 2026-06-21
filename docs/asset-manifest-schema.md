@@ -47,6 +47,10 @@ skill を directory 形式で持つときの配置・安全ルール (Phase 1):
 - `scripts/` (実行コード) を含む directory skill は **fail-closed** で拒否する。
   配る前に実行コードを安全検査する能力がまだ無いため、check-manifests が error にして
   gate を止める (黙ってスキップしない)。対応は external scanner 連携の後 (#43)。
+- directory asset に **symlink / 特殊ファイル** (regular file・directory 以外: FIFO /
+  socket / device 等) が含まれると **fail-closed** で拒否する。build の `cp_r` / build_id 計算が
+  symlink を辿り `shared/` の外の内容を generated/ へ脱出させうるため、check-manifests が
+  error にして gate を止める。
 
 asset 本体に frontmatter を埋め込まない理由:
 
