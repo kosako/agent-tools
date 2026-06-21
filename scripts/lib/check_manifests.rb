@@ -210,7 +210,11 @@ module CheckManifests
 
       full = File.join(@root, source_path)
       if format == "directory"
-        error(path, "source.path #{source_path.inspect} is not a directory") unless File.directory?(full)
+        if File.directory?(full)
+          check_directory_no_symlinks(path, full)
+        else
+          error(path, "source.path #{source_path.inspect} is not a directory")
+        end
         expected_dir = File.dirname(path)
         unless source_path.chomp("/") == expected_dir
           error(path, "directory manifest must point at its own directory #{expected_dir.inspect}")
@@ -221,6 +225,24 @@ module CheckManifests
           error(path, "directory manifest requires source.format: directory")
         elsif File.dirname(source_path) != File.dirname(path)
           error(path, "sidecar manifest must sit next to its source file")
+        end
+      end
+    end
+
+    # directory asset 内に symlink / 特殊ファイルがあると build の cp_r が dereference し、
+    # build_id 計算 (File.file?) も symlink 先を読むため、shared/ の外へ脱出しうる。
+    # regular file / directory 以外を reject して fail-closed にする (gate 経由で build /
+    # register が止まる)。
+    def check_directory_no_symlinks(path, dir)
+      Dir.glob(File.join(dir, "**/*"), File::FNM_DOTMATCH).sort.each do |entry|
+        base = File.basename(entry)
+        next if base == "." || base == ".."
+
+        rel = entry.sub("#{@root}/", "")
+        if File.symlink?(entry)
+          error(path, "directory asset must not contain symlinks: #{rel}")
+        elsif !File.file?(entry) && !File.directory?(entry)
+          error(path, "directory asset must not contain special files: #{rel}")
         end
       end
     end

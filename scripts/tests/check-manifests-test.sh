@@ -282,6 +282,71 @@ EOF
 "$check" --root "$tmp/evalskill" > "$tmp/out-evalskill" 2>&1 \
   || fail "directory skill with only evals/ should pass: $(cat "$tmp/out-evalskill")"
 
+# --- case 4f: directory asset 内の symlink は fail-closed (shared/ 脱出防止) ---
+mkdir -p "$tmp/symskill/shared/skills/personal-sym-skill"
+cat > "$tmp/symskill/shared/skills/personal-sym-skill/SKILL.md" <<'EOF'
+---
+name: personal-sym-skill
+description: skill with a symlink
+---
+
+# sym skill
+EOF
+# asset dir 内に shared/ 外を指す symlink を仕込む (cp_r / build_id が辿りうる)
+ln -s /etc/hosts "$tmp/symskill/shared/skills/personal-sym-skill/leak"
+cat > "$tmp/symskill/shared/skills/personal-sym-skill/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-sym-skill
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-sym-skill
+  format: directory
+EOF
+
+if "$check" --root "$tmp/symskill" > "$tmp/out-symskill" 2>&1; then
+  fail "directory asset with a symlink should fail"
+fi
+grep -q "must not contain symlinks" "$tmp/out-symskill" \
+  || fail "expected symlink fail-closed reason: $(cat "$tmp/out-symskill")"
+
+# --- case 4g: directory asset 内の特殊ファイル (FIFO) も fail-closed ---
+mkdir -p "$tmp/fifoskill/shared/skills/personal-fifo-skill"
+cat > "$tmp/fifoskill/shared/skills/personal-fifo-skill/SKILL.md" <<'EOF'
+---
+name: personal-fifo-skill
+description: skill with a special file
+---
+
+# fifo skill
+EOF
+mkfifo "$tmp/fifoskill/shared/skills/personal-fifo-skill/pipe"
+cat > "$tmp/fifoskill/shared/skills/personal-fifo-skill/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-fifo-skill
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-fifo-skill
+  format: directory
+EOF
+
+if "$check" --root "$tmp/fifoskill" > "$tmp/out-fifoskill" 2>&1; then
+  fail "directory asset with a special file should fail"
+fi
+grep -q "must not contain special files" "$tmp/out-fifoskill" \
+  || fail "expected special-file fail-closed reason: $(cat "$tmp/out-fifoskill")"
+
 # --- case 5: repository 本体の manifest が pass する ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \
