@@ -61,6 +61,8 @@ out=$("$setup" --apply --root "$tmp" --codex-home "$tmp/codex" --claude-home "$t
   || fail "apply exited non-zero: $out"
 [ -f "$tmp/codex/skills/personal-demo-skill/SKILL.md" ] || fail "apply did not place codex skill"
 [ -f "$tmp/claude/skills/personal-demo-skill/SKILL.md" ] || fail "apply did not place claude skill"
+# --apply では dry-run hint を出さない (setup.sh:76 の gate 反転を検出する negative coverage)
+echo "$out" | grep -q "dry-run のみ" && fail "--apply must not print the dry-run hint: $out" || true
 
 # --- case 3: 未知オプションは usage を出して exit 2 ---
 rc=0
