@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 # register: shared assets を検証し、catalog に登録状態を記録する。
-# Spec: docs/register-catalog.md (catalog_version 1)
+# Spec: docs/register-catalog.md (catalog_version 2)
 #
 # - 副作用は generated/catalog.json の書き込みのみ。
 # - gate は build と同じ: manifest error / high finding で fail し、catalog を更新しない。

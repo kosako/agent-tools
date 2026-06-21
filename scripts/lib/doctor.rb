@@ -171,7 +171,9 @@ module Doctor
       (by_name.keys - manifests.keys).each { |name| stale << "#{name}: manifest removed" }
 
       if stale.empty?
-        report("ok", "catalog", "present, #{entries.size} asset(s), fresh")
+        # entries は target-artifact 単位なので、asset 数は unique name で数える。
+        asset_count = entries.map { |e| e["name"] }.uniq.size
+        report("ok", "catalog", "present, #{asset_count} asset(s), fresh")
       else
         report("warn", "catalog", "stale (#{stale.join('; ')})")
       end

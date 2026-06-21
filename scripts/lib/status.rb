@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 # Report-only status。dotfiles が読める contract JSON を出力する。
-# Spec: docs/status-manifest-contract.md (contract_version 1)
+# Spec: docs/status-manifest-contract.md (contract_version 2)
 #
 # - いかなる state も変更しない (read-only inspection のみ)。
 # - secrets / absolute local paths を出力しない。

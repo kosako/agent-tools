@@ -10,7 +10,7 @@ module ArtifactTargets
   # これと一致しない catalog を古いものとして無視する。
   CATALOG_VERSION = 2
 
-  # build が扱える artifact_kind (sync の instruction 配置は後続対応)。
+  # build が扱える artifact_kind。
   SUPPORTED_KINDS = %w[skill instruction].freeze
 
   # asset.kind から導出する既定の artifact_kind。
