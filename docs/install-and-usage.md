@@ -10,6 +10,8 @@
 - 各 script はネットワーク不要・外部依存ゼロで、手元だけで完結します。
 - `gh`(GitHub CLI)は asset の利用には不要です。repository へ変更を出す
   (Issue / PR)ときだけ使います。
+- この repo に commit / push する場合、配置先ディレクトリに応じた git identity の出し分けは
+  各自の git 設定(`dotfiles` 等)側で行います(本 repo の管理対象外)。
 
 配置先となる tool home(既定):
 
@@ -29,11 +31,17 @@ skill は隔離 directory なので `sync` が直接置けますが、instructio
 
 ## 初回インストール
 
+**配置先(推奨)**: `~/src/agent/agent-tools`。これは `dotfiles` の directory convention
+(`~/src/agent/<repo>`)と `dotfiles` doctor の既定期待パスに一致する**配置先の正本**です
+([boundary-with-dotfiles.md](boundary-with-dotfiles.md) で定義)。任意のパスでも動作しますが、
+`dotfiles` 連携(presence / health の report-only check)を使うなら、このパスに置くか
+`AGENT_TOOLS` env で実際の場所を指定してください。
+
 ### 一発で通す(推奨)
 
 ```sh
-git clone <this-repo> agent-tools
-cd agent-tools
+git clone <this-repo> ~/src/agent/agent-tools
+cd ~/src/agent/agent-tools
 
 ./scripts/setup.sh           # dry-run: build → register → connect → sync の plan を表示
 ./scripts/setup.sh --apply   # 確認できたら実環境へ反映
@@ -101,7 +109,7 @@ git pull
 
 ```sh
 # 1. expected path に agent-tools があるか(presence)
-AGENT_TOOLS="${AGENT_TOOLS:-$HOME/dev/agent-tools}"
+AGENT_TOOLS="${AGENT_TOOLS:-$HOME/src/agent/agent-tools}"
 [ -d "$AGENT_TOOLS" ] || { echo "agent-tools: absent"; exit 0; }
 
 # 2. status を read-only で読む(health)

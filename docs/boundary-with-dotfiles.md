@@ -42,3 +42,18 @@
 
 `dotfiles` が report-only で読める status の形式は
 [Status / Manifest Contract](status-manifest-contract.md) で定義します。
+
+## expected path(配置先の正本)
+
+`agent-tools` の配置先(clone 先)の正本はここで定義します。`dotfiles` 側はこれを
+**参照するだけ**で、独自に別パスを正としません。
+
+- **既定の expected path**: `~/src/agent/agent-tools`
+- **根拠**: `dotfiles` の directory convention(`~/src/agent/<repo>`)と、`dotfiles` doctor の
+  既定期待パス(`AGENT_TOOLS` env が未設定のときに見る場所)に一致させるため。
+- **override**: 別の場所に置く場合は `AGENT_TOOLS` env で実際のパスを指定する。`dotfiles` の
+  report-only check / doctor はこの env を尊重する。
+
+`agent-tools` 自体はどのパスに clone しても動作します(script は自分の位置からの相対で動く)。
+この expected path は「`dotfiles` 連携(presence / health の report-only check)を成立させる
+ための合意パス」であり、配置の強制ではありません。
