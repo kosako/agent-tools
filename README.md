@@ -12,10 +12,16 @@ instruction templates を管理するための個人用 AI agent asset repositor
 各 script は macOS 標準の Ruby だけで動きます(追加依存なし・ネットワーク不要)。clone / pull には git を使います。
 
 ```sh
-git clone <this-repo> agent-tools && cd agent-tools
+# 推奨 clone 先は ~/src/agent/agent-tools(理由は下記)。任意のパスでも動きます。
+git clone <this-repo> ~/src/agent/agent-tools && cd ~/src/agent/agent-tools
 ./scripts/setup.sh           # dry-run: 何が起きるか plan を表示(書き込まない)
 ./scripts/setup.sh --apply   # build → register → connect → sync を通しで実環境に反映
 ```
+
+配置先は `~/src/agent/agent-tools` を推奨します(`dotfiles` の directory convention と
+doctor の既定期待パスに一致)。任意のパスでも動作しますが、`dotfiles` 連携を使うなら
+このパスに合わせるか `AGENT_TOOLS` env で実際の場所を指定してください。配置先の正本は
+[docs/boundary-with-dotfiles.md](docs/boundary-with-dotfiles.md) で定義します。
 
 `setup.sh` は初回 install と更新の両方に使えます(`git pull` 後に再実行するだけ)。
 既定は dry-run で、`--apply` のときだけ実環境へ書き込みます。build / register /
