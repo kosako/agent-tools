@@ -3,6 +3,18 @@
 registered asset は、register / sync される前に prompt injection review を通します。
 review 対象 asset の metadata は [Asset Manifest Schema](asset-manifest-schema.md) に従います。
 
+## 適用範囲 (supply-side のみ)
+
+この gate が守るのは **配布する asset の supply-side** です。register / sync される前に、
+asset 自体 (skill / instruction など) に injection が仕込まれていないかを静的検査します。
+
+agent が **実行時に読み込む外部入力** (GitHub の Issue / PR / comment、外部 URL、貼られた
+ログや添付など) に第三者が混入させた指示で agent が誤誘導される runtime injection は、
+**別レイヤー**の防御です。攻撃面が逆向き (配布物の中身 ⇔ 実行時に流入するデータ) なので
+混同しません。runtime 入力の防御 (safe reader / `PreToolUse` hook / scoped token) は
+実行環境の責務で、この repository の scope には含めません
+([dotfiles との境界](boundary-with-dotfiles.md))。
+
 ## 対象範囲
 
 以下の registered asset types をすべて check します。

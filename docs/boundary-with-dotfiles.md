@@ -8,6 +8,8 @@
 - capability declarations。
 - directory conventions。
 - local machine setup の safety gates。
+- runtime に流入する外部入力 (GitHub の Issue / PR / comment、外部 URL、添付など) の
+  prompt injection 防御 (safe reader / `PreToolUse` hook / scoped token)。
 - optional companion repositories が存在するかどうかの report-only checks。
 
 ## agent-tools が持つ責務
@@ -18,7 +20,9 @@
 - agent definitions。
 - instruction templates。
 - tool-specific generated artifacts。
-- registered assets 向け prompt injection review policy。
+- registered assets 向け prompt injection review policy (supply-side: 配布する asset 自体に
+  injection が仕込まれていないかを register / sync 前に検査する。runtime の外部入力防御とは
+  別レイヤー)。
 
 ## どちらの repository も持たないもの
 
