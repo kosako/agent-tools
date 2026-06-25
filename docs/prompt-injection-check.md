@@ -10,10 +10,12 @@ asset 自体 (skill / instruction など) に injection が仕込まれていな
 
 agent が **実行時に読み込む外部入力** (GitHub の Issue / PR / comment、外部 URL、貼られた
 ログや添付など) に第三者が混入させた指示で agent が誤誘導される runtime injection は、
-**別レイヤー**の防御です。攻撃面が逆向き (配布物の中身 ⇔ 実行時に流入するデータ) なので
-混同しません。runtime 入力の防御 (safe reader / `PreToolUse` hook / scoped token) は
-実行環境の責務で、この repository の scope には含めません
-([dotfiles との境界](boundary-with-dotfiles.md))。
+**別レイヤー**の防御で、この `check-injection` gate の対象外です。攻撃面が逆向き
+(配布物の中身 ⇔ 実行時に流入するデータ) なので混同しません。runtime 防御自体は
+agent-tools の scope 外ではなく、**body (safe reader / hook script / token 隔離 / 隔離 reader /
+trust 判定) は agent-tools、control plane (settings deny 床 / capability / 規約 / doctor) は
+dotfiles** という分担です (この gate がそれを担うわけではない)。詳細は
+[dotfiles との境界](boundary-with-dotfiles.md) の「runtime GitHub injection 防御の分担」。
 
 ## 対象範囲
 
