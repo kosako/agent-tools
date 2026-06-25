@@ -7,9 +7,11 @@
 - AI execution environment policy。
 - capability declarations。
 - directory conventions。
-- local machine setup の safety gates。
-- runtime に流入する外部入力 (GitHub の Issue / PR / comment、外部 URL、添付など) の
-  prompt injection 防御 (safe reader / `PreToolUse` hook / scoped token)。
+- local machine setup の safety gates (settings.json の permission deny floor / sandbox / MCP gate)。
+- runtime GitHub injection 防御の **control plane**: settings.json の permission / sandbox / hook
+  宣言 (参照)、capability gate、trust list / egress local の置き場規約、body 配布先の絶対 path 参照、
+  doctor の presence report、射程と限界の docs。**body (trust 判定 / safe reader / hook script /
+  token 隔離 / 隔離 reader) は持たない** (下記「runtime GitHub injection 防御の分担」)。
 - optional companion repositories が存在するかどうかの report-only checks。
 
 ## agent-tools が持つ責務
@@ -20,9 +22,32 @@
 - agent definitions。
 - instruction templates。
 - tool-specific generated artifacts。
+- runtime GitHub injection 防御の **body / 振る舞い**: provenance 3 軸の trust 判定ロジック、
+  `safe-gh` wrapper 本体、`PreToolUse` hook の script body と home 配布 (build / sync)、
+  隔離 reader workflow、policy data の single source (tool 別 render)、Codex hook 配線
+  (下記「runtime GitHub injection 防御の分担」)。
 - registered assets 向け prompt injection review policy (supply-side: 配布する asset 自体に
   injection が仕込まれていないかを register / sync 前に検査する。runtime の外部入力防御とは
   別レイヤー)。
+
+## runtime GitHub injection 防御の分担 (control plane ⇔ body)
+
+agent が実行時に読み込む untrusted な GitHub 入力 (Issue / PR / comment 等) に対する防御は、
+**dotfiles が control plane、agent-tools が body** を持つ。同じ "prompt injection" でも、配布 asset
+自体を検査する supply-side review (上記 agent-tools 責務の「registered assets 向け prompt injection
+review policy」) とは攻撃面が逆向きの別レイヤー。設計の spec 正本は外部 planning tool の設計メモ
+(確定オーナーシップ地図)。
+
+- **dotfiles (control plane)**: capability gate、settings.json の permission deny floor / sandbox /
+  MCP github gate / hook 宣言 (参照)、trust list・egress local の置き場規約、body 配布先の絶対 path
+  参照、doctor の presence report、射程と限界の docs。
+- **agent-tools (body)**: trust 判定ロジック (provenance 3 軸)、`safe-gh` wrapper 本体、hook の
+  script body とその home 配布 (build / sync)、隔離 reader workflow、policy data の single source、
+  Codex hook 配線。
+
+原則は「runtime / invocation に属するものは agent-tools、宣言 / 規約 / capability に属するものは
+dotfiles」。command-string allowlist / hook / provenance は enforcement boundary ではなく steering で
+ある (egress も hostname best-effort) 点は、過大評価しないよう spec と docs で honest に明記する。
 
 ## どちらの repository も持たないもの
 
