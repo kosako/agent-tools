@@ -36,7 +36,8 @@ agent が実行時に読み込む untrusted な GitHub 入力 (Issue / PR / comm
 **dotfiles が control plane、agent-tools が body** を持つ。同じ "prompt injection" でも、配布 asset
 自体を検査する supply-side review (上記 agent-tools 責務の「registered assets 向け prompt injection
 review policy」) とは攻撃面が逆向きの別レイヤー。設計の spec 正本は外部 planning tool の設計メモ
-(確定オーナーシップ地図)。
+(確定オーナーシップ地図)。agent-tools 側 body の強度ラベル・配置先・provenance 定義・検証境界の
+正本は [Runtime GitHub Injection 防御 (Phase 3)](runtime-injection-defense.md) を参照。
 
 - **dotfiles (control plane)**: capability gate、settings.json の permission deny floor / sandbox /
   MCP github gate / hook 宣言 (参照)、trust list・egress local の置き場規約、body 配布先の絶対 path
