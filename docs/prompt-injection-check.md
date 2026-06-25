@@ -15,7 +15,8 @@ agent が **実行時に読み込む外部入力** (GitHub の Issue / PR / comm
 agent-tools の scope 外ではなく、**body (safe reader / hook script / token 隔離 / 隔離 reader /
 trust 判定) は agent-tools、control plane (settings deny 床 / capability / 規約 / doctor) は
 dotfiles** という分担です (この gate がそれを担うわけではない)。詳細は
-[dotfiles との境界](boundary-with-dotfiles.md) の「runtime GitHub injection 防御の分担」。
+[dotfiles との境界](boundary-with-dotfiles.md) の「runtime GitHub injection 防御の分担」と
+[Runtime GitHub Injection 防御 (Phase 3)](runtime-injection-defense.md)。
 
 ## 対象範囲
 
