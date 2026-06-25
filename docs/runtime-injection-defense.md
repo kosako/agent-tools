@@ -39,8 +39,8 @@ secret access / external send`。
 > **最重要テーゼ**: command-string allowlist / hook / provenance は **steering** であって
 > enforcement boundary では**ない**。`$()` / 等価 read path (`gh` を `--comments` 無し / `gh api` /
 > graphql / fork を `git fetch` + `git show` / `curl` / `python` / base64) / MCP github tool は
-> Bash matcher を素通りし、WebFetch も逃げ道、PreToolUse は subagent に不発
-> ([anthropics/claude-code#21460](https://github.com/anthropics/claude-code/issues/21460))、全失敗
+> Bash matcher を素通りし、WebFetch も逃げ道、PreToolUse は subagent に不発 (Claude Code の
+> 既知の制約)、全失敗
 > モードで fail-open。出口 (push / commit message / branch / PR title / gist / DNS exfil) も
 > 列挙し切れない。**列挙非依存の hard 防御だけが本命**。
 
@@ -138,16 +138,23 @@ steering (fail-open で消える)。
 
 | 関心事 | agent-tools (body) | dotfiles (control plane) |
 |---|---|---|
-| trust 判定ロジック (provenance 3 軸) | ✅ 実装 | — |
-| safe-gh wrapper 本体 | ✅ 実装 | 絶対 path 参照のみ |
+| trust 判定ロジック (provenance 3 軸) | ✅ 担当 | — |
+| safe-gh wrapper 本体 | ✅ 担当 | 絶対 path 参照のみ |
 | PreToolUse hook | ✅ script body + home 配布 | settings.json の hook 宣言 (参照) |
-| 隔離 reader workflow | ✅ 実装 | capability gate + 置き場規約 |
+| 隔離 reader workflow | ✅ 担当 | capability gate + 置き場規約 |
 | credential 隔離 session 機構 | ✅ acceptance harness | deny 床 / sandbox / token store 隔離 |
 | policy data | ✅ single source (tool 別 render) | — |
-| write / secret deny 床 | — | ✅ settings.json `permissions.deny` (hard) |
-| Codex の hard 層 | hook 配線のみ | ✅ `sandbox_mode` + `approval_policy` |
-| egress (best-effort 宣言) | — | ✅ settings.json |
+| write / secret deny 床 | — | settings.json `permissions.deny` (deny-first 床。ただし列挙依存=等価経路は素通り) |
+| Codex の write / secret 制限 | hook 配線のみ | `sandbox_mode` + `approval_policy` |
+| egress (best-effort 宣言) | — | settings.json |
 | doctor presence report / 限界 docs | — | ✅ |
+
+> 注: この表は **誰が担うか** (ownership) を示すもので、強度ラベルは上の「防御層と強度ラベル」節が
+> 正本。
+> control plane の `permissions.deny` 床 / `sandbox_mode` は hook より硬い (deny-first /
+> OS 強制) が、command-string matcher は列挙依存で等価経路を素通りさせるため、本文テーゼ
+> 「列挙非依存の hard 防御だけが本命」の hard 2 層 (P0-B credential 隔離 + egress L3/L4) には
+> 数えない。
 
 **配布順序**: 機構 (artifact kind / path) → body (reader / wrapper / hook) → instruction 誘導。
 dead-render を作らないため、成果物と消費者を同じ side (agent-tools) に置き、instruction での
