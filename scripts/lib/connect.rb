@@ -107,7 +107,7 @@ module Connect
       gen = generated_instruction(tool, "CLAUDE.md")
       return [] unless gen # instruction artifact が無ければ connect 不要
 
-      owned = File.join(home, "agent-tools", "CLAUDE.md")
+      owned = ArtifactTargets.target_path(home, tool, nil, "instruction")
       import_file = File.join(home, "CLAUDE.md")
       reason = unconnectable_reason(tool, gen)
       return [Plan.new("skip", tool, "owned", owned, reason, gen)] if reason
@@ -122,7 +122,7 @@ module Connect
       gen = generated_instruction(tool, "AGENTS.md")
       return [] unless gen
 
-      owned = File.join(home, "AGENTS.md")
+      owned = ArtifactTargets.target_path(home, tool, nil, "instruction")
       reason = unconnectable_reason(tool, gen)
       return [Plan.new("skip", tool, "owned", owned, reason, gen)] if reason
 

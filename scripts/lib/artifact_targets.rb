@@ -49,6 +49,21 @@ module ArtifactTargets
     SUPPORTED_KINDS.include?(kind)
   end
 
+  # tool home 内の target-artifact 配置先 path を返す (path 解決の単一 source)。
+  # home は解決済みの tool home dir (例 ~/.claude / ~/.codex)。
+  # - instruction: tool 固有ファイル名 (INSTRUCTION_FILENAMES)。claude-code は
+  #   agent-tools/ subdir 配下に所有ファイルを置き、codex は home 直下。filename を
+  #   解決できない tool では nil。
+  # - それ以外 (skill 等): <home>/skills/<name>。
+  def self.target_path(home, tool, name, kind)
+    if kind == "instruction"
+      filename = INSTRUCTION_FILENAMES[tool]
+      filename && (tool == "claude-code" ? File.join(home, "agent-tools", filename) : File.join(home, filename))
+    else
+      File.join(home, "skills", name)
+    end
+  end
+
   # その tool 向けに artifact を build できるかを判定する (実 build はしない)。
   # register が「registered != buildable」のサイレント断裂を防ぐために使う。
   def self.buildable?(asset, tool)
