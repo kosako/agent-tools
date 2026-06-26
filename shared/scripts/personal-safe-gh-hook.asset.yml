@@ -1,0 +1,17 @@
+schema_version: 1
+name: personal-safe-gh-hook
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/scripts/personal-safe-gh-hook.rb
+  format: text
+summary: >-
+  PreToolUse hook body。raw な gh の Issue/PR/コメント読み取りを検出し personal-safe-gh で
+  data として読むよう誘導する steering hook。非ブロッキング (additionalContext) で fail-open、
+  enforcement boundary ではない (docs/runtime-injection-defense.md §4)。
