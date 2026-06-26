@@ -149,6 +149,31 @@ status=0
 grep -q "rejected asset" "$tmp/r10" || fail "missing rejected message"
 [ ! -e "$tmp/drej/generated/catalog.json" ] || fail "catalog must not be written on rejected"
 
+# --- case 12: script kind は認識・検証されるが配布前なので unsupported (P3-03b) ---
+mkdir -p "$tmp/script/shared/scripts"
+printf '#!/bin/sh\necho hi\n' > "$tmp/script/shared/scripts/personal-demo-script.sh"
+cat > "$tmp/script/shared/scripts/personal-demo-script.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-demo-script
+kind: script
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/scripts/personal-demo-script.sh
+  format: text
+EOF
+"$register" --root "$tmp/script" > "$tmp/r12" 2>&1 \
+  || fail "script register should not fail (unsupported is exit 0): $(cat "$tmp/r12")"
+sc="$tmp/script/generated/catalog.json"
+[ "$(jget "$sc" assets 0 artifact_kind)" = '"script"' ] \
+  || fail "script asset should resolve to artifact_kind script"
+[ "$(jget "$sc" assets 0 registration)" = '"unsupported"' ] \
+  || fail "script should be unsupported until P3-04 (no silent registered != buildable)"
+
 # --- case 11: repository 本体が register できる ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$register" --root "$repo_root" --quiet > "$tmp/r8" 2>&1 \

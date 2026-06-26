@@ -13,7 +13,7 @@ require_relative "assets"
 require_relative "artifact_targets"
 
 module CheckManifests
-  KINDS = %w[skill prompt workflow agent instruction template].freeze
+  KINDS = %w[skill prompt workflow agent instruction template script].freeze
   TRACKED_VISIBILITIES = %w[public personal].freeze
   FORBIDDEN_VISIBILITIES = %w[private work client secret].freeze
   TARGETS = %w[codex claude-code].freeze
@@ -28,7 +28,7 @@ module CheckManifests
     "human_review" => %w[pending approved rejected not_needed],
   }.freeze
   NAME_PATTERN = /\A[a-z0-9]+(?:-[a-z0-9]+)*\z/.freeze
-  ASSET_CATEGORIES = %w[skills prompts workflows agents instructions].freeze
+  ASSET_CATEGORIES = %w[skills prompts workflows agents instructions scripts].freeze
   NON_ASSET_BASENAMES = %w[README.md].freeze
 
   class Runner
