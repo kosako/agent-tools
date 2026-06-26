@@ -9,8 +9,10 @@
 # 正本: docs/runtime-injection-defense.md §4 (P3-06)。
 #
 # 強度ラベル (偽らない): これは **steering / fail-open** であって enforcement boundary では
-# ない。コマンドを block せず、bypass も容易 (`$(gh ...)` 直実行 / gh の整形 / MCP github
-# tool / hook 無効化、すべて素通り)。hard な防御は床 (credential 隔離 + egress) が担う。
+# ない。コマンドを block せず、bypass も容易: 等価な read path (`gh api graphql` / fork を
+# `git fetch` + `git show` / `curl` / `python` / base64) / MCP github tool / hook 自体の無効化
+# は **すべて素通り**する。逆に検出は best-effort なので over-match もする (`echo` 内に括弧で
+# 書いた gh 文字列を拾う等)。hard な防御は床 (credential 隔離 + egress) が担う。
 # safe-gh-hook が買うのは「raw 読み取りに気づき、安全な読み方へ寄せる」nudge だけ。
 #
 # 機構 (検証済み hook semantics — docs §4.2/§4.3):
@@ -56,6 +58,9 @@ module SafeGhHook
   # `gh api` の path に現れたら untrusted な read とみなす語 (issues / pulls / comments
   # endpoint は他人由来の本文・コメントを返す)。
   API_UNTRUSTED = /\b(?:issues|pulls|comments)\b/i.freeze
+
+  # gh api を write とみなす field 書き込み flag (これらがあれば read でないので steer しない)。
+  API_WRITE_FLAGS = %w[-f --field -F --raw-field --input].freeze
 
   # モデルに渡す steering メッセージ。untrusted 由来の文字列・絶対パス・秘密語は混ぜない。
   BASE_MESSAGE =
@@ -129,14 +134,26 @@ module SafeGhHook
     segment.split(/\s+/).reject(&:empty?)
   end
 
-  # tokens 先頭の `VAR=value` 前置を飛ばし、その次が `gh` ならそれ以降の引数列を返す。
-  # `echo gh ...` のような「gh が引数」のケースは command word でないので拾わない。
+  # tokens 先頭の `env` / `VAR=value` 前置を飛ばし、その次が `gh` ならそれ以降の引数列を
+  # (gh の global flag を除いて) 返す。`echo gh ...` のような「gh が引数」のケースは
+  # command word でないので拾わない。
   def gh_args(tokens)
     i = 0
-    i += 1 while tokens[i] && tokens[i].match?(ENV_ASSIGN)
+    i += 1 if tokens[i] == "env" # `env VAR=v gh ...`
+    i += 1 while tokens[i] && tokens[i].match?(ENV_ASSIGN) # `VAR=v gh ...`
     return nil unless tokens[i] == "gh"
 
-    tokens[(i + 1)..-1] || []
+    strip_global_flags(tokens[(i + 1)..-1] || [])
+  end
+
+  # gh の subcommand 前に置かれる global flag (`-R OWNER/REPO` 等) を読み飛ばし、noun
+  # (issue / pr / api) を先頭に持ってくる。`-R` / `--repo` は値を取るので 2 つ飛ばす。
+  def strip_global_flags(args)
+    i = 0
+    while args[i] && args[i].start_with?("-")
+      i += (%w[-R --repo].include?(args[i]) ? 2 : 1)
+    end
+    args[i..-1] || []
   end
 
   # gh の引数列を分類して理由 key (or nil) を返す。
@@ -151,10 +168,23 @@ module SafeGhHook
     end
   end
 
-  # `gh api <path> ...`: path / 引数のどれかに issues / pulls / comments が現れたら untrusted。
-  # (-X GET のような flag 値を path と取り違えないよう、全 token を走査する。)
+  # `gh api <path> ...`: path / 引数のどれかに issues / pulls / comments が現れたら untrusted
+  # read とみなす (-X GET のような flag 値を path と取り違えないよう全 token を走査)。
+  # ただし write (非 GET method / field 書き込み) は untrusted read ではないので steer しない。
   def api_reason(rest)
+    return nil if api_write?(rest)
+
     rest.any? { |token| token.match?(API_UNTRUSTED) } ? REASON_API : nil
+  end
+
+  # gh api が write かを best-effort で判定する。明示 method が GET 以外、または field 書き込み
+  # flag があれば write。
+  def api_write?(args)
+    args.each_with_index do |arg, idx|
+      return true if API_WRITE_FLAGS.include?(arg)
+      return true if (arg == "-X" || arg == "--method") && args[idx + 1] && args[idx + 1].upcase != "GET"
+    end
+    false
   end
 
   # `gh issue|pr <verb> ...`。
@@ -201,8 +231,14 @@ module SafeGhHook
   def json_untrusted_fields?(value)
     return false if value.nil?
 
-    fields = value.split(",").map(&:strip)
+    fields = value.split(",").map { |field| dequote(field.strip) }
     !(fields & UNTRUSTED_JSON_FIELDS).empty?
+  end
+
+  # command 文字列をそのまま受け取るため `--json "body"` の囲み quote が field 名に残る。
+  # 1 層だけ剥がす (best-effort)。
+  def dequote(text)
+    text.sub(/\A["']/, "").sub(/["']\z/, "")
   end
 
   # ---- 出力: steering payload ------------------------------------------------

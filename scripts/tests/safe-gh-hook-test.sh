@@ -45,11 +45,22 @@ check("before pipe", reason("gh pr view 2 | cat") == SafeGhHook::REASON_VIEW)
 check("command substitution", reason("x=$(gh issue view 9)") == SafeGhHook::REASON_VIEW)
 # api の path を flag 値と取り違えない
 check("api -X GET path 走査", reason("gh api -X GET repos/o/r/issues/1") == SafeGhHook::REASON_API)
+# global flag (-R/--repo) が noun の前に来ても見つける (safe-gh 自身が使う形)
+check("global -R before noun", reason("gh -R o/r issue view 1") == SafeGhHook::REASON_VIEW)
+check("global --repo before noun", reason("gh --repo o/r pr view 2 --comments") == SafeGhHook::REASON_COMMENTS)
+# env コマンド前置
+check("env command prefix", reason("env GH_PAGER=cat gh issue view 1") == SafeGhHook::REASON_VIEW)
+# command 文字列に残る quote 付き --json 値
+check("quoted --json body", reason('gh issue view 1 --json "body,comments"') == SafeGhHook::REASON_VIEW)
+check("single-quoted --json body", reason("gh issue view 1 --json 'body'") == SafeGhHook::REASON_VIEW)
 
 # ---- untrusted_gh_read_reason: 検出しない (negative) ----
 check("issue view --json safe fields", reason("gh pr view 5 --json state,mergeable -q .state").nil?)
 check("plain issue list (title のみ)", reason("gh issue list").nil?)
 check("api user (untrusted でない)", reason("gh api user").nil?)
+# gh api の write (非 GET / field 書き込み) は read でないので steer しない
+check("api -X POST write not steered", reason("gh api -X POST repos/o/r/issues/1/comments -f body=hi").nil?)
+check("api field-write not steered", reason("gh api repos/o/r/issues/1/comments -f body=hi").nil?)
 check("gh repo view は対象外", reason("gh repo view o/r").nil?)
 check("gh as argument (echo)", reason("echo gh issue view 1").nil?)
 check("non-gh command", reason("git status").nil?)
