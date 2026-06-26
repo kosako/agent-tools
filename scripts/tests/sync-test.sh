@@ -272,4 +272,83 @@ status=0
 grep -q "conflict: \[codex\].*symlink" "$tmp/out-skparent" || fail "missing skills-parent symlink conflict: $(cat "$tmp/out-skparent")"
 [ ! -e "$tmp/realskills/personal-sk" ] || fail "must not write through a symlinked skills parent"
 
+# --- case 15: script artifact を <home>/agent-tools/scripts/ に配置する ---
+mkdir -p "$tmp/srepo15/shared/scripts" "$tmp/scodex15" "$tmp/sclaude15"
+printf '#!/bin/sh\necho v1\n' > "$tmp/srepo15/shared/scripts/personal-wrap.sh"
+cat > "$tmp/srepo15/shared/scripts/personal-wrap.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-wrap
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/scripts/personal-wrap.sh
+  format: text
+EOF
+run15() { "$sync" --root "$tmp/srepo15" --codex-home "$tmp/scodex15" --claude-home "$tmp/sclaude15" "$@"; }
+"$build" --root "$tmp/srepo15" --quiet > /dev/null
+"$register" --root "$tmp/srepo15" --quiet > /dev/null
+
+# dry-run は書き込まない
+run15 > "$tmp/out15-dry" 2>&1 || fail "script dry-run should succeed: $(cat "$tmp/out15-dry")"
+grep -q "create: \[claude-code\]" "$tmp/out15-dry" || fail "missing script create plan: $(cat "$tmp/out15-dry")"
+[ ! -e "$tmp/sclaude15/agent-tools/scripts/personal-wrap" ] || fail "dry-run must not write script"
+
+# --apply で本体 + sidecar marker が配置され、実行可能になる
+run15 --apply > "$tmp/out15-apply" 2>&1 || fail "script apply should succeed: $(cat "$tmp/out15-apply")"
+deployed="$tmp/sclaude15/agent-tools/scripts/personal-wrap"
+[ -f "$deployed" ] || fail "script not deployed"
+[ -x "$deployed" ] || fail "deployed script must be executable"
+grep -q "echo v1" "$deployed" || fail "deployed script body wrong"
+[ -f "$deployed.agent-tools-managed.yml" ] || fail "deployed script sidecar marker missing"
+[ -f "$tmp/scodex15/agent-tools/scripts/personal-wrap" ] || fail "codex script not deployed"
+
+# 変更なしなら skip (up-to-date)
+run15 > "$tmp/out15-skip" 2>&1 || fail "script skip run should succeed"
+grep -q "skip: \[claude-code\].*up-to-date" "$tmp/out15-skip" || fail "missing script up-to-date skip: $(cat "$tmp/out15-skip")"
+
+# source 変更で update → apply で反映
+printf '#!/bin/sh\necho v2\n' > "$tmp/srepo15/shared/scripts/personal-wrap.sh"
+"$build" --root "$tmp/srepo15" --quiet > /dev/null
+"$register" --root "$tmp/srepo15" --quiet > /dev/null
+run15 > "$tmp/out15-upd" 2>&1 || fail "script update dry-run should succeed"
+grep -q "update: \[claude-code\]" "$tmp/out15-upd" || fail "missing script update plan: $(cat "$tmp/out15-upd")"
+run15 --apply --quiet > /dev/null 2>&1
+grep -q "echo v2" "$deployed" || fail "script update not applied"
+
+# --- case 16: catalog の build_id と generated が不一致なら run build first (stale generated) ---
+printf '#!/bin/sh\necho v3\n' > "$tmp/srepo15/shared/scripts/personal-wrap.sh"
+"$register" --root "$tmp/srepo15" --quiet > /dev/null   # build せず register だけ
+run15 > "$tmp/out16" 2>&1 || fail "stale script dry-run should succeed"
+grep -q "skip: \[claude-code\].*run build first" "$tmp/out16" \
+  || fail "stale generated script should skip with run build first: $(cat "$tmp/out16")"
+# 整合を戻す (以降の case は v3 を配置済みにする)
+"$build" --root "$tmp/srepo15" --quiet > /dev/null
+"$register" --root "$tmp/srepo15" --quiet > /dev/null
+run15 --apply --quiet > /dev/null 2>&1
+
+# --- case 17: unmanaged な同名 script は conflict で停止し、--apply でも上書きしない ---
+rm -f "$deployed" "$deployed.agent-tools-managed.yml"
+echo "user-owned script" > "$deployed"   # marker なし
+status=0
+run15 --apply > "$tmp/out17" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "unmanaged script should exit 1, got $status: $(cat "$tmp/out17")"
+grep -q "conflict: \[claude-code\].*unmanaged" "$tmp/out17" || fail "missing script unmanaged conflict: $(cat "$tmp/out17")"
+grep -q "user-owned script" "$deployed" || fail "unmanaged script must not be overwritten"
+
+# --- case 18: 配置先の親 (agent-tools) が symlink なら conflict (素通りさせない) ---
+rm -rf "$tmp/sclaude15/agent-tools"
+mkdir -p "$tmp/realat"
+ln -s "$tmp/realat" "$tmp/sclaude15/agent-tools"
+status=0
+run15 --apply > "$tmp/out18" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "symlinked agent-tools parent should exit 1: $(cat "$tmp/out18")"
+grep -q "conflict: \[claude-code\].*symlink" "$tmp/out18" || fail "missing script parent symlink conflict: $(cat "$tmp/out18")"
+[ ! -e "$tmp/realat/scripts/personal-wrap" ] || fail "must not write through symlinked agent-tools parent"
+
 echo "ok: sync self-test passed"

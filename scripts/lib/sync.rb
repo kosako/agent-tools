@@ -8,7 +8,9 @@
 # - 対象は `personal-` で始まる generated assets のみ。
 # - 更新してよいのは agent-tools management marker を持つ target のみ。
 # - 同名 unmanaged target は conflict として停止する。
-# - 許可 target は <tool home>/skills/personal-* のみ。それ以外の path は構成しない。
+# - 許可 target は artifact_kind 別: skill = <tool home>/skills/personal-*、
+#   instruction = connect 確立済みの所有ファイル、script = <tool home>/agent-tools/scripts/
+#   personal-* (sidecar marker つき)。それ以外の path は構成しない (docs/sync-policy.md)。
 
 require "yaml"
 require "json"
@@ -19,7 +21,7 @@ require_relative "artifact_targets"
 require_relative "instruction_marker"
 
 module Sync
-  MARKER_FILE = ".agent-tools-managed.yml"
+  MARKER_FILE = ArtifactTargets::MARKER_BASENAME
   CATALOG_PATH = "generated/catalog.json"
   TOOLS = %w[codex claude-code].freeze
 
@@ -65,10 +67,17 @@ module Sync
       plans.each do |p|
         next unless %w[create update].include?(p.action)
 
-        if p.kind == "instruction"
+        case p.kind
+        when "instruction"
           # instruction は単一ファイル。所有先は connect が確立済み (sync は update)。
           FileUtils.mkdir_p(File.dirname(p.target))
           FileUtils.cp(p.gen, p.target)
+        when "script"
+          # script は単一実行ファイル + sidecar marker。本体を実行可能にして配置する。
+          FileUtils.mkdir_p(File.dirname(p.target))
+          FileUtils.cp(p.gen, p.target)
+          File.chmod(0o755, p.target)
+          FileUtils.cp(ArtifactTargets.sidecar_marker_path(p.gen), ArtifactTargets.sidecar_marker_path(p.target))
         else
           FileUtils.rm_rf(p.target)
           FileUtils.mkdir_p(File.dirname(p.target))
@@ -92,6 +101,7 @@ module Sync
       case kind
       when "skill" then plan_skill(tool, name, entry["build_id"])
       when "instruction" then plan_instruction(tool, name, entry["build_id"])
+      when "script" then plan_script(tool, name, entry["build_id"])
       else
         Plan.new("skip", tool, name, nil, "unsupported artifact_kind #{kind.inspect}", kind, nil)
       end
@@ -189,8 +199,67 @@ module Sync
       end
     end
 
+    # script は単一実行ファイル + sidecar marker。skill (plan_skill) と同じ marker ベースの
+    # 所有 / stale / symlink 防御を、単一ファイルと 2 階層の配置先
+    # (<home>/agent-tools/scripts/<name>) にあわせて適用する。instruction と違い人間ファイルを
+    # 介さないため connect は不要で、未配置なら直接 create する。
+    def plan_script(tool, name, expected_build_id)
+      target = target_path(tool, name, "script")
+      gen = File.join(@root, "generated", tool, "scripts", name)
+
+      unless name.start_with?("personal-")
+        return Plan.new("conflict", tool, name, target, "generated asset without personal- prefix", "script", gen)
+      end
+      unless File.file?(gen)
+        return Plan.new("skip", tool, name, target, "run build first", "script", gen)
+      end
+
+      source_marker = read_marker_file(ArtifactTargets.sidecar_marker_path(gen))
+      unless managed?(source_marker, tool, name)
+        return Plan.new("conflict", tool, name, target, "generated artifact is missing a valid marker", "script", gen)
+      end
+      # generated が catalog entry と一致するか (build_id)。不一致 = register 後に build して
+      # いない (stale generated)。plan_skill / plan_instruction と同じく run build first で skip。
+      if source_marker["build_id"] != expected_build_id
+        return Plan.new("skip", tool, name, target, "run build first", "script", gen)
+      end
+      # 配置先本体・その親 (agent-tools/scripts)・さらにその親 (agent-tools) のいずれかが
+      # symlink なら、cp / chmod が home の外へ追従しうるため触らない (plan_skill の親 dir
+      # 防御を、sync が作成する 2 階層に広げる)。
+      if script_target_symlink?(target)
+        return Plan.new("conflict", tool, name, target, "existing target is a symlink", "script", gen)
+      end
+      unless File.exist?(target)
+        return Plan.new("create", tool, name, target, nil, "script", gen)
+      end
+
+      target_marker = File.file?(target) ? read_marker_file(ArtifactTargets.sidecar_marker_path(target)) : nil
+      unless managed?(target_marker, tool, name)
+        return Plan.new("conflict", tool, name, target, "existing target is unmanaged", "script", gen)
+      end
+
+      if target_marker["build_id"] == source_marker["build_id"]
+        Plan.new("skip", tool, name, target, "up-to-date", "script", gen)
+      else
+        Plan.new("update", tool, name, target, nil, "script", gen)
+      end
+    end
+
+    # script 配置先本体と、sync が作成する 2 階層 (agent-tools/scripts と agent-tools) の
+    # いずれかが symlink かを判定する。
+    def script_target_symlink?(target)
+      scripts_dir = File.dirname(target)          # <home>/agent-tools/scripts
+      agent_tools_dir = File.dirname(scripts_dir) # <home>/agent-tools
+      File.symlink?(target) || File.symlink?(scripts_dir) || File.symlink?(agent_tools_dir)
+    end
+
+    # directory artifact (skill) の dir 直下 marker を読む。
     def read_marker(dir)
-      path = File.join(dir, MARKER_FILE)
+      read_marker_file(File.join(dir, MARKER_FILE))
+    end
+
+    # marker file を読んで Hash を返す。不在 / 型不正 / parse 失敗は nil。
+    def read_marker_file(path)
       return nil unless File.file?(path)
 
       data = YamlUtil.load(File.read(path), path)

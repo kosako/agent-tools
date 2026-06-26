@@ -38,6 +38,8 @@ module Build
             build_skill(tool, asset)
           when "instruction"
             build_instruction(tool, asset)
+          when "script"
+            build_script(tool, asset)
           else
             @skipped << "#{asset[:manifest_path]}: unsupported artifact_kind " \
                         "#{artifact_kind.inspect} for #{tool}"
@@ -95,6 +97,29 @@ module Build
       @built << rel(out)
     end
 
+    # script asset を単一の実行ファイルとして生成し、sidecar marker を添える。
+    # 本体は byte 単位で保持する (任意の interpreter / shebang を壊さない)。所有 marker は
+    # 本体を改変しないよう sidecar file に置く (docs/status-manifest-contract.md)。
+    # 配置先 (<home>/agent-tools/scripts/<name>) が単一ファイルなので directory 形式は弾く。
+    def build_script(tool, asset)
+      name = asset[:name]
+      source = asset[:source]["path"]
+      format = asset[:source]["format"]
+      if format == "directory"
+        @skipped << "#{asset[:manifest_path]}: script must be a single file, not a directory"
+        return
+      end
+
+      out_dir = File.join(@root, "generated", tool, "scripts")
+      FileUtils.mkdir_p(out_dir)
+      out = File.join(out_dir, name)
+      FileUtils.cp(File.join(@root, source), out)
+      File.chmod(0o755, out) # script は配置先で実行されるため実行可能にする
+      build_id = Build.build_id_for(@root, source, format)
+      File.write(ArtifactTargets.sidecar_marker_path(out), marker_yaml(name, tool, source, build_id))
+      @built << rel(out)
+    end
+
     # instruction 本体の先頭に管理 marker (HTML コメント) を 1 行入れる。
     # marker format は InstructionMarker に集約し、connect / sync が同じ解析を使う。
     def instruction_with_marker(content, name, tool, source, build_id)
@@ -125,15 +150,21 @@ module Build
       "#{frontmatter}---\n\n#{content}"
     end
 
+    # directory artifact (skill) の管理 marker を dir 直下に書く。
     def write_marker(out_dir, name, tool, source, build_id)
-      marker = {
+      File.write(File.join(out_dir, ArtifactTargets::MARKER_BASENAME),
+                 marker_yaml(name, tool, source, build_id))
+    end
+
+    # YAML marker の本文。directory marker (skill) と sidecar marker (script) が共有する。
+    def marker_yaml(name, tool, source, build_id)
+      YAML.dump(
         "repo" => "agent-tools",
         "name" => name,
         "target" => tool,
         "source" => source,
         "build_id" => build_id,
-      }
-      File.write(File.join(out_dir, ".agent-tools-managed.yml"), YAML.dump(marker))
+      )
     end
 
     def rel(path)
@@ -147,13 +178,14 @@ module Build
     # marker のない directory は warning として返し、残す。
     def prune
       expected = Hash.new { |h, k| h[k] = [] }
+      script_expected = Hash.new { |h, k| h[k] = [] }
       instruction_expected = Hash.new(false)
       Assets.load_all(@root).each do |asset|
         (asset[:targets] || []).each do |tool|
-          if ArtifactTargets.resolve(asset, tool) == "instruction"
-            instruction_expected[tool] = true
-          else
-            expected[tool] << asset[:name]
+          case ArtifactTargets.resolve(asset, tool)
+          when "instruction" then instruction_expected[tool] = true
+          when "script" then script_expected[tool] << asset[:name]
+          else expected[tool] << asset[:name]
           end
         end
       end
@@ -172,6 +204,22 @@ module Build
             pruned << rel(dir)
           else
             kept << rel(dir)
+          end
+        end
+
+        # script: manifest に対応しない managed script (と sidecar marker) を削除する。
+        # sidecar marker file 自体は本体と一緒に処理するため列挙対象から外す。
+        Dir.glob(File.join(@root, "generated", tool, "scripts", "*")).sort.each do |path|
+          next unless File.file?(path)
+          next if path.end_with?(ArtifactTargets::MARKER_BASENAME)
+          next if script_expected[tool].include?(File.basename(path))
+
+          if script_managed_marker?(path)
+            FileUtils.rm_f(path)
+            FileUtils.rm_f(ArtifactTargets.sidecar_marker_path(path))
+            pruned << rel(path)
+          else
+            kept << rel(path)
           end
         end
 
@@ -195,11 +243,21 @@ module Build
 
     private
 
+    # directory artifact (skill) の marker が agent-tools 管理を示すか。
     def managed_marker?(dir)
-      path = File.join(dir, ".agent-tools-managed.yml")
-      return false unless File.file?(path)
+      marker_present?(File.join(dir, ArtifactTargets::MARKER_BASENAME))
+    end
 
-      data = YamlUtil.load(File.read(path), path)
+    # 単一ファイル artifact (script) の sidecar marker が agent-tools 管理を示すか。
+    def script_managed_marker?(artifact_path)
+      marker_present?(ArtifactTargets.sidecar_marker_path(artifact_path))
+    end
+
+    # marker file が存在し agent-tools repo を示すか (本文 YAML を読む)。
+    def marker_present?(marker_path)
+      return false unless File.file?(marker_path)
+
+      data = YamlUtil.load(File.read(marker_path), marker_path)
       data.is_a?(Hash) && data["repo"] == "agent-tools"
     rescue Psych::Exception
       false

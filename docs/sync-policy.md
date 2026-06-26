@@ -20,6 +20,11 @@ default は必ず conservative にします。
   - instruction: connect が確立した所有ファイル。instruction の所有確立は connect の
     役割で、sync は create に落ちず未接続なら connect を促す
     ([Instruction Artifact Kind](instruction-artifact-kind.md))。
+  - script: `<tool home>/agent-tools/scripts/personal-<name>` (単一実行ファイル) と
+    その隣の `<name>.agent-tools-managed.yml` (sidecar marker)。本体は byte 保持・mode 0755。
+    instruction と違い人間ファイルを介さないため connect 不要で、未配置なら sync が直接
+    create する。配置先本体・`agent-tools/scripts`・`agent-tools` のいずれかが symlink なら
+    conflict として停止する。
 
 ## v1 Codex targets
 
@@ -27,7 +32,8 @@ default は必ず conservative にします。
 
 ```text
 ~/.codex/skills/personal-*
-~/.codex/AGENTS.md          (instruction、connect が所有を確立)
+~/.codex/AGENTS.md                       (instruction、connect が所有を確立)
+~/.codex/agent-tools/scripts/personal-*  (script、sync が直接配置)
 ```
 
 禁止する targets:
@@ -47,7 +53,8 @@ default は必ず conservative にします。
 
 ```text
 ~/.claude/skills/personal-*
-~/.claude/agent-tools/CLAUDE.md   (instruction、connect が所有を確立)
+~/.claude/agent-tools/CLAUDE.md            (instruction、connect が所有を確立)
+~/.claude/agent-tools/scripts/personal-*   (script、sync が直接配置)
 ```
 
 禁止する targets:

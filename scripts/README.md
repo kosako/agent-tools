@@ -99,7 +99,9 @@ usage: sync.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] [--
 - 更新するのは agent-tools management marker を持つ target のみ。
   unmanaged な同名 target / symlink は conflict として exit 1 で停止し、何も書き込まない。
 - 書き込み先は skill が `<tool home>/skills/personal-*`、instruction が connect 確立済みの
-  所有ファイル (`~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md`)。それ以外の path は構成しない。
+  所有ファイル (`~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md`)、script が
+  `<tool home>/agent-tools/scripts/personal-*` (単一実行ファイル + sidecar marker)。
+  それ以外の path は構成しない。
 - `--codex-home` / `--claude-home` は inspection / test 用の override。
 - self-test: `tests/sync-test.sh` (fake home のみを使い、実際の tool homes には触れない)
 
