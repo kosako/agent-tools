@@ -220,7 +220,15 @@ module CheckManifests
           error(path, "directory manifest must point at its own directory #{expected_dir.inspect}")
         end
       else
-        error(path, "source.path #{source_path.inspect} does not exist") unless File.file?(full)
+        # single-file source も symlink を fail-closed で reject する (directory asset の
+        # check_directory_no_symlinks と同じ境界)。symlink を許すと build の FileUtils.cp /
+        # build_id_for が shared/ の外を読み、特に script は byte 保持の実行ファイルとして
+        # 配布されるため、任意ファイルの内容を配布物に取り込めてしまう。
+        if File.symlink?(full)
+          error(path, "source.path must not be a symlink: #{source_path.inspect}")
+        elsif !File.file?(full)
+          error(path, "source.path #{source_path.inspect} does not exist")
+        end
         if File.basename(path) == "asset.yml"
           error(path, "directory manifest requires source.format: directory")
         elsif File.dirname(source_path) != File.dirname(path)

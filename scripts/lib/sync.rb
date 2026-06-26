@@ -223,9 +223,9 @@ module Sync
       if source_marker["build_id"] != expected_build_id
         return Plan.new("skip", tool, name, target, "run build first", "script", gen)
       end
-      # 配置先本体・その親 (agent-tools/scripts)・さらにその親 (agent-tools) のいずれかが
-      # symlink なら、cp / chmod が home の外へ追従しうるため触らない (plan_skill の親 dir
-      # 防御を、sync が作成する 2 階層に広げる)。
+      # 配置先本体・sidecar marker・その親 (agent-tools/scripts)・さらにその親
+      # (agent-tools) のいずれかが symlink なら、cp / chmod が home の外へ追従しうるため
+      # 触らない (plan_skill の親 dir 防御を、sync が書き込む 2 ファイル + 2 階層に広げる)。
       if script_target_symlink?(target)
         return Plan.new("conflict", tool, name, target, "existing target is a symlink", "script", gen)
       end
@@ -245,12 +245,15 @@ module Sync
       end
     end
 
-    # script 配置先本体と、sync が作成する 2 階層 (agent-tools/scripts と agent-tools) の
-    # いずれかが symlink かを判定する。
+    # sync が script で書き込む経路 (本体 / sidecar marker / 配置先 dir 2 階層) のいずれかが
+    # symlink かを判定する。1 つでも symlink なら cp / chmod が home の外へ追従しうる。
     def script_target_symlink?(target)
       scripts_dir = File.dirname(target)          # <home>/agent-tools/scripts
       agent_tools_dir = File.dirname(scripts_dir) # <home>/agent-tools
-      File.symlink?(target) || File.symlink?(scripts_dir) || File.symlink?(agent_tools_dir)
+      File.symlink?(target) ||
+        File.symlink?(ArtifactTargets.sidecar_marker_path(target)) ||
+        File.symlink?(scripts_dir) ||
+        File.symlink?(agent_tools_dir)
     end
 
     # directory artifact (skill) の dir 直下 marker を読む。

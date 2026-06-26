@@ -351,4 +351,16 @@ run15 --apply > "$tmp/out18" 2>&1 || status=$?
 grep -q "conflict: \[claude-code\].*symlink" "$tmp/out18" || fail "missing script parent symlink conflict: $(cat "$tmp/out18")"
 [ ! -e "$tmp/realat/scripts/personal-wrap" ] || fail "must not write through symlinked agent-tools parent"
 
+# --- case 19: 本体未存在でも sidecar marker が symlink なら conflict (素通りさせない) ---
+# (apply は sidecar も書き込む。create 分岐で sidecar の symlink を見逃すと home 外へ追従する)
+rm -rf "$tmp/sclaude15/agent-tools"
+mkdir -p "$tmp/sclaude15/agent-tools/scripts" "$tmp/realmarker"
+ln -s "$tmp/realmarker/stolen.yml" "$deployed.agent-tools-managed.yml"
+status=0
+run15 --apply > "$tmp/out19" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "symlinked sidecar should exit 1: $(cat "$tmp/out19")"
+grep -q "conflict: \[claude-code\].*symlink" "$tmp/out19" || fail "missing sidecar symlink conflict: $(cat "$tmp/out19")"
+[ ! -e "$tmp/realmarker/stolen.yml" ] || fail "must not write through symlinked sidecar marker"
+[ ! -e "$deployed" ] || fail "script body must not be created when sidecar is unsafe"
+
 echo "ok: sync self-test passed"
