@@ -98,8 +98,24 @@ file 先頭に 1 行の HTML コメント marker を埋め込みます。markdow
 ```
 
 生成・解析は `scripts/lib/instruction_marker.rb` に集約し、build (生成) と
-connect / sync (所有判定) が同じ format を共有します。comment 記法を持たない
-format (json など) では、sidecar marker file を使います。
+connect / sync (所有判定) が同じ format を共有します。
+
+### Single-file artifact (script): sidecar marker
+
+script のように本体を改変できない (任意の interpreter / shebang を壊さない) 単一ファイルは、
+本体の隣に `<artifact name>.agent-tools-managed.yml` を置きます。本体は byte 単位で保持し、
+所有情報は sidecar file 側に持たせます。中身は directory artifact の marker と同じ YAML です。
+
+```yaml
+repo: agent-tools
+name: personal-example
+target: claude-code
+source: shared/scripts/personal-example.sh
+build_id: sha256:...
+```
+
+配置先は `<tool home>/agent-tools/scripts/<name>` (本体) と同 `<name>.agent-tools-managed.yml`
+(sidecar)。本体は実行可能 (mode 0755) で配置します。
 
 ### Directory artifact
 

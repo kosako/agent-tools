@@ -11,7 +11,12 @@ module ArtifactTargets
   CATALOG_VERSION = 2
 
   # build が扱える artifact_kind。
-  SUPPORTED_KINDS = %w[skill instruction].freeze
+  SUPPORTED_KINDS = %w[skill instruction script].freeze
+
+  # management marker の basename。directory artifact (skill) は dir 直下にこの名前で
+  # 置き、単一ファイル artifact (script) は <artifact path> + この名前の sidecar file に
+  # 置く。build が書き、sync / status / doctor が所有判定に読む単一 source。
+  MARKER_BASENAME = ".agent-tools-managed.yml"
 
   # asset.kind から導出する既定の artifact_kind。
   # compatibility.<tool>.artifact_kind が明示されればそちらを優先する。
@@ -50,6 +55,13 @@ module ArtifactTargets
     SUPPORTED_KINDS.include?(kind)
   end
 
+  # 単一ファイル artifact (script) の sidecar management marker file path。
+  # 本体を改変せず所有を示すため、本体の隣に <artifact path>.agent-tools-managed.yml を置く
+  # (docs/status-manifest-contract.md)。build (生成) と sync / status (所有判定) が共有する。
+  def self.sidecar_marker_path(artifact_path)
+    "#{artifact_path}#{MARKER_BASENAME}"
+  end
+
   # tool home 内の target-artifact 配置先 path を返す (path 解決の単一 source)。
   # home は解決済みの tool home dir (例 ~/.claude / ~/.codex)。
   # - instruction: tool 固有ファイル名 (INSTRUCTION_FILENAMES)。claude-code は
@@ -64,7 +76,7 @@ module ArtifactTargets
       filename && (tool == "claude-code" ? File.join(home, "agent-tools", filename) : File.join(home, filename))
     when "script"
       # script body は tool home の agent-tools/scripts/ subdir に配る (配置先の正本は
-      # docs/runtime-injection-defense.md)。実際の build / sync 配布は P3-04。
+      # docs/runtime-injection-defense.md)。
       File.join(home, "agent-tools", "scripts", name)
     else
       File.join(home, "skills", name)
@@ -84,10 +96,12 @@ module ArtifactTargets
       format = source.is_a?(Hash) ? source["format"] : nil
       format != "directory"
     when "script"
-      # script kind は P3-03b では認識・検証・配置先解決まで。build / sync 配布と marker 戦略は
-      # P3-04 で入る。それまで buildable でない → register が "unsupported" にし、registered だが
-      # 配布されないサイレント断裂を防ぐ (registered != buildable を作らない)。
-      false
+      # script body は単一実行ファイルとして配る (sidecar marker)。directory 形式は
+      # 配置先 (<home>/agent-tools/scripts/<name>) が単一ファイルなので buildable でない
+      # → register が "unsupported" にし、registered != buildable のサイレント断裂を防ぐ。
+      source = asset[:source]
+      format = source.is_a?(Hash) ? source["format"] : nil
+      format != "directory"
     else
       false
     end

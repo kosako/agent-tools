@@ -96,8 +96,9 @@ rules:
 
 asset の種類を表す意味ラベルです。**用途に応じて選びます**。配置のされ方は kind ごとに
 下表の「配置挙動」のとおりで、配備対象は skill 系 (`skill` / `prompt` / `workflow` /
-`template` → skill target) と `instruction` (→ tool 別の `CLAUDE.md` / `AGENTS.md`) の
-2 系統です。`agent` は現状どの target にも解決されず未対応 (unsupported) です。kind が
+`template` → skill target)、`instruction` (→ tool 別の `CLAUDE.md` / `AGENTS.md`)、
+`script` (→ `<tool home>/agent-tools/scripts/personal-<name>` の単一実行ファイル) の
+3 系統です。`agent` は現状どの target にも解決されず未対応 (unsupported) です。kind が
 どの artifact に解決されるかの仕組みは [compatibility / artifact_kind](#compatibility)
 を参照してください。
 
@@ -108,6 +109,7 @@ asset の種類を表す意味ラベルです。**用途に応じて選びます
 | `workflow` | 複数ステップの再利用可能な作業手順。 | `skill` |
 | `template` | 出力フォーマットなどの雛形。 | `skill` |
 | `instruction` | 常時読まれる運用ルール。tool 別の `CLAUDE.md` / `AGENTS.md` として生成。詳細は [Instruction Artifact Kind](instruction-artifact-kind.md)。 | `instruction` |
+| `script` | tool home に配る実行可能な script body (hook / wrapper 等)。単一ファイルのみ。 | `script` |
 | `agent` | サブエージェント定義。**現状は配備未対応** (各 tool の agent 形式へのマッピングが未設計)。register では `unsupported` になる。 | 未対応 |
 
 補足:
@@ -229,14 +231,18 @@ target tool ごとの変換 hint です。
 
 `compatibility.<tool>.artifact_kind` で、その tool 向けに生成する artifact の種類を
 明示できます。未指定なら asset の `kind` から既定値が導出されます (`instruction` kind は
-instruction、`skill` / `prompt` / `workflow` / `template` は skill)。
+instruction、`script` kind は script、`skill` / `prompt` / `workflow` / `template` は skill)。
 
-build が対応する artifact_kind は `skill` と `instruction` です。どちらも build →
+build が対応する artifact_kind は `skill` / `instruction` / `script` です。いずれも build →
 register → sync で配置されます (instruction の所有確立は connect が担当)。
 
 - `skill`: `<tool home>/skills/personal-<name>/` に directory として配る。
 - `instruction`: tool 別の単一ファイル (claude-code は `CLAUDE.md`、codex は `AGENTS.md`)
   として生成する。詳細は [Instruction Artifact Kind](instruction-artifact-kind.md)。
+- `script`: `<tool home>/agent-tools/scripts/personal-<name>` に単一実行ファイル (mode 0755)
+  + sidecar marker として配る。**単一ファイルのみ対応** (source.format が directory の script は
+  unsupported)。本体は byte 単位で保持する。配置先と marker は
+  [Sync Policy](sync-policy.md) / [Status / Manifest Contract](status-manifest-contract.md)。
 
 この field の他の用途は adapter 実装が読むための optional metadata で、strict validation
 しません。

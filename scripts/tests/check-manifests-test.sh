@@ -367,6 +367,30 @@ EOF
 "$check" --root "$tmp/scriptkind" > "$tmp/out-scriptkind" 2>&1 \
   || fail "script kind manifest should validate: $(cat "$tmp/out-scriptkind")"
 
+# --- case: single-file source が symlink なら reject (shared/ の外を byte 保持で配らない) ---
+mkdir -p "$tmp/symsrc/shared/scripts"
+printf '#!/bin/sh\necho real\n' > "$tmp/symsrc/outside.sh"
+ln -s "$tmp/symsrc/outside.sh" "$tmp/symsrc/shared/scripts/personal-sym-script.sh"
+cat > "$tmp/symsrc/shared/scripts/personal-sym-script.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-sym-script
+kind: script
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/scripts/personal-sym-script.sh
+  format: text
+EOF
+if "$check" --root "$tmp/symsrc" > "$tmp/out-symsrc" 2>&1; then
+  fail "check-manifests must reject a symlinked single-file source"
+fi
+grep -q "must not be a symlink" "$tmp/out-symsrc" \
+  || fail "expected single-file symlink rejection reason: $(cat "$tmp/out-symsrc")"
+
 # --- case 5: repository 本体の manifest が pass する ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \

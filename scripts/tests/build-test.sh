@@ -388,6 +388,90 @@ grep -q "must not contain scripts/" "$tmp/out-scripts" \
   || fail "missing scripts fail-closed reason: $(cat "$tmp/out-scripts")"
 [ ! -d "$tmp/scripts/generated" ] || fail "nothing should be generated when scripts/ is rejected"
 
+# --- case 4h: script asset は単一実行ファイル + sidecar marker として生成される ---
+mkdir -p "$tmp/scriptasset/shared/scripts"
+printf '#!/bin/sh\necho "hello from wrap"\n' > "$tmp/scriptasset/shared/scripts/personal-wrap.sh"
+cat > "$tmp/scriptasset/shared/scripts/personal-wrap.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-wrap
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/scripts/personal-wrap.sh
+  format: text
+EOF
+
+"$build" --root "$tmp/scriptasset" > "$tmp/out-script" 2>&1 \
+  || fail "script build should pass: $(cat "$tmp/out-script")"
+grep -q "ok: 2 artifact(s) built" "$tmp/out-script" \
+  || fail "expected 2 script artifacts: $(cat "$tmp/out-script")"
+
+gen_script="$tmp/scriptasset/generated/claude-code/scripts/personal-wrap"
+[ -f "$gen_script" ] || fail "missing generated script body"
+[ -x "$gen_script" ] || fail "generated script must be executable"
+# 本体は byte 単位で保持される (frontmatter 等を前置しない)
+printf '#!/bin/sh\necho "hello from wrap"\n' > "$tmp/expected-wrap"
+cmp -s "$gen_script" "$tmp/expected-wrap" || fail "script body must be byte-identical to source"
+[ ! -e "$tmp/scriptasset/generated/claude-code/skills/personal-wrap" ] \
+  || fail "script must not be generated as a skill"
+
+sidecar="$tmp/scriptasset/generated/claude-code/scripts/personal-wrap.agent-tools-managed.yml"
+[ -f "$sidecar" ] || fail "missing script sidecar marker"
+for expected in \
+  "repo: agent-tools" \
+  "name: personal-wrap" \
+  "target: claude-code" \
+  "source: shared/scripts/personal-wrap.sh" \
+  "build_id: sha256:"
+do
+  grep -q "$expected" "$sidecar" || fail "sidecar marker missing '$expected': $(cat "$sidecar")"
+done
+[ -f "$tmp/scriptasset/generated/codex/scripts/personal-wrap" ] || fail "missing codex script artifact"
+
+# --- case 4h-2: script の directory 形式は単一ファイルでないため skip される (gate では止めない) ---
+mkdir -p "$tmp/scriptdir/shared/scripts/personal-dir-script"
+echo "x" > "$tmp/scriptdir/shared/scripts/personal-dir-script/run"
+cat > "$tmp/scriptdir/shared/scripts/personal-dir-script/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-dir-script
+kind: script
+visibility: personal
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/scripts/personal-dir-script
+  format: directory
+EOF
+"$build" --root "$tmp/scriptdir" > "$tmp/out-scriptdir" 2>&1 \
+  || fail "directory script build should still exit 0 (skipped, not gated): $(cat "$tmp/out-scriptdir")"
+grep -q "script must be a single file" "$tmp/out-scriptdir" \
+  || fail "directory script should be skipped with reason: $(cat "$tmp/out-scriptdir")"
+[ ! -e "$tmp/scriptdir/generated/claude-code/scripts/personal-dir-script" ] \
+  || fail "directory script must not be generated"
+
+# --- case 4h-3: --prune は manifest の消えた managed script (と sidecar) を削除する ---
+rm -f "$tmp/scriptasset/shared/scripts/personal-wrap.sh" "$tmp/scriptasset/shared/scripts/personal-wrap.asset.yml"
+echo "user script" > "$tmp/scriptasset/generated/codex/scripts/personal-stray-script"
+"$build" --root "$tmp/scriptasset" --prune > "$tmp/out-sprune" 2>&1 \
+  || fail "script prune build should pass: $(cat "$tmp/out-sprune")"
+grep -q "pruned: generated/claude-code/scripts/personal-wrap" "$tmp/out-sprune" \
+  || fail "orphan script not pruned: $(cat "$tmp/out-sprune")"
+[ ! -e "$gen_script" ] || fail "orphan script body should be removed"
+[ ! -e "$sidecar" ] || fail "orphan script sidecar should be removed"
+grep -q "kept (unmanaged, no agent-tools marker): generated/codex/scripts/personal-stray-script" "$tmp/out-sprune" \
+  || fail "unmanaged script should be kept with warning: $(cat "$tmp/out-sprune")"
+[ -f "$tmp/scriptasset/generated/codex/scripts/personal-stray-script" ] \
+  || fail "unmanaged script must not be pruned"
+
 # --- case 5: repository 本体が build できる ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$build" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \

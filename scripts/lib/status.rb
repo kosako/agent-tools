@@ -73,7 +73,7 @@ module Status
     end
 
     # generated artifacts の数と、source より古い (build_id 不一致) artifact の数。
-    # skill (directory) と instruction (単一ファイル) の両方を数える。
+    # skill (directory) / instruction (単一ファイル) / script (単一ファイル + sidecar) を数える。
     def generated_state
       sources = safe_sources_by_name
       total = 0
@@ -91,6 +91,13 @@ module Status
           total += 1
           stale += 1 unless fresh_instruction?(artifact, sources)
         end
+        Dir.glob(File.join(@root, "generated", tool, "scripts", "*")).sort.each do |artifact|
+          next unless File.file?(artifact)
+          next if artifact.end_with?(ArtifactTargets::MARKER_BASENAME) # sidecar marker は本体と一緒に数える
+
+          total += 1
+          stale += 1 unless fresh_script?(artifact, sources)
+        end
       end
       [total, stale]
     end
@@ -104,8 +111,18 @@ module Status
       {}
     end
 
+    # skill (directory) の鮮度判定。dir 直下の marker を読む。
     def fresh?(artifact, sources)
-      marker_path = File.join(artifact, Sync::MARKER_FILE)
+      fresh_by_marker_file?(File.join(artifact, Sync::MARKER_FILE), sources)
+    end
+
+    # script (単一ファイル) の鮮度判定。sidecar marker を読む。
+    def fresh_script?(artifact, sources)
+      fresh_by_marker_file?(ArtifactTargets.sidecar_marker_path(artifact), sources)
+    end
+
+    # YAML marker file (skill の dir 直下 / script の sidecar) から鮮度を判定する。
+    def fresh_by_marker_file?(marker_path, sources)
       return false unless File.file?(marker_path)
 
       marker = YamlUtil.load(File.read(marker_path), marker_path)

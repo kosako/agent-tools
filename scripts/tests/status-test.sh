@@ -194,4 +194,33 @@ rm -f "$tmp/irepo/shared/instructions/personal-ops.md"
   || fail "status must not crash when an instruction source file is missing: $(cat "$tmp/s12")"
 [ "$(jget "$tmp/s12" generated stale)" = "2" ] || fail "missing source should make instruction stale, not crash: $(cat "$tmp/s12")"
 
+# --- case 13: script の generated も generated.total に数え、sync_target を報告する ---
+mkdir -p "$tmp/screpo/shared/scripts" "$tmp/sccodex" "$tmp/scclaude"
+printf '#!/bin/sh\necho hi\n' > "$tmp/screpo/shared/scripts/personal-wrap.sh"
+cat > "$tmp/screpo/shared/scripts/personal-wrap.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-wrap
+kind: script
+visibility: personal
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/scripts/personal-wrap.sh
+  format: text
+EOF
+"$build" --root "$tmp/screpo" --quiet > /dev/null
+"$script_dir/../register.sh" --root "$tmp/screpo" --quiet > /dev/null
+"$status_sh" --root "$tmp/screpo" --codex-home "$tmp/sccodex" --claude-home "$tmp/scclaude" --json > "$tmp/sc13" 2>&1
+# generated は本体 1 つだけ数える (sidecar marker は含めない)
+[ "$(jget "$tmp/sc13" generated total)" = "1" ] || fail "script generated should count body only (not sidecar): $(cat "$tmp/sc13")"
+[ "$(jget "$tmp/sc13" generated stale)" = "0" ] || fail "fresh script should not be stale"
+[ "$(jget "$tmp/sc13" sync_targets 0 state)" = '"missing"' ] || fail "script target should be missing before sync: $(cat "$tmp/sc13")"
+# source 変更で script も stale になる
+printf '#!/bin/sh\necho changed\n' > "$tmp/screpo/shared/scripts/personal-wrap.sh"
+"$status_sh" --root "$tmp/screpo" --codex-home "$tmp/sccodex" --claude-home "$tmp/scclaude" --json > "$tmp/sc13b" 2>&1
+[ "$(jget "$tmp/sc13b" generated stale)" = "1" ] || fail "changed script source should be stale: $(cat "$tmp/sc13b")"
+
 echo "ok: status self-test passed"
