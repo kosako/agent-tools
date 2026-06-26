@@ -98,17 +98,13 @@ module Sync
     end
 
     # registered でない entry の skip 表示に使う target path。
+    # path 解決は ArtifactTargets.target_path が単一 source (skill / instruction 共通)。
     def target_path(tool, name, kind)
-      if kind == "instruction"
-        filename = ArtifactTargets::INSTRUCTION_FILENAMES[tool]
-        filename && instruction_target(tool, filename)
-      else
-        File.join(@homes.fetch(tool), "skills", name)
-      end
+      ArtifactTargets.target_path(@homes.fetch(tool), tool, name, kind)
     end
 
     def plan_skill(tool, name, expected_build_id)
-      target = File.join(@homes.fetch(tool), "skills", name)
+      target = target_path(tool, name, "skill")
       gen = File.join(@root, "generated", tool, "skills", name)
 
       unless name.start_with?("personal-")
@@ -159,7 +155,7 @@ module Sync
         return Plan.new("skip", tool, name, nil, "instruction unsupported for #{tool}", "instruction", nil)
       end
       gen = File.join(@root, "generated", tool, "instructions", filename)
-      target = instruction_target(tool, filename)
+      target = target_path(tool, name, "instruction")
 
       gen_marker = File.file?(gen) ? InstructionMarker.parse(File.read(gen)) : nil
       # generated が catalog entry と一致するか (target + name + build_id)。
@@ -191,11 +187,6 @@ module Sync
       else
         Plan.new("update", tool, name, target, nil, "instruction", gen)
       end
-    end
-
-    def instruction_target(tool, filename)
-      home = @homes.fetch(tool)
-      tool == "claude-code" ? File.join(home, "agent-tools", filename) : File.join(home, filename)
     end
 
     def read_marker(dir)
