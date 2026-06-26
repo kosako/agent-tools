@@ -21,6 +21,7 @@ module ArtifactTargets
     "workflow" => "skill",
     "instruction" => "instruction",
     "template" => "skill",
+    "script" => "script",
   }.freeze
 
   # instruction を配るときの tool 別ファイル名。
@@ -54,11 +55,17 @@ module ArtifactTargets
   # - instruction: tool 固有ファイル名 (INSTRUCTION_FILENAMES)。claude-code は
   #   agent-tools/ subdir 配下に所有ファイルを置き、codex は home 直下。filename を
   #   解決できない tool では nil。
+  # - script: <home>/agent-tools/scripts/<name> (配布は P3-04)。
   # - それ以外 (skill 等): <home>/skills/<name>。
   def self.target_path(home, tool, name, kind)
-    if kind == "instruction"
+    case kind
+    when "instruction"
       filename = INSTRUCTION_FILENAMES[tool]
       filename && (tool == "claude-code" ? File.join(home, "agent-tools", filename) : File.join(home, filename))
+    when "script"
+      # script body は tool home の agent-tools/scripts/ subdir に配る (配置先の正本は
+      # docs/runtime-injection-defense.md)。実際の build / sync 配布は P3-04。
+      File.join(home, "agent-tools", "scripts", name)
     else
       File.join(home, "skills", name)
     end
@@ -76,6 +83,11 @@ module ArtifactTargets
       source = asset[:source]
       format = source.is_a?(Hash) ? source["format"] : nil
       format != "directory"
+    when "script"
+      # script kind は P3-03b では認識・検証・配置先解決まで。build / sync 配布と marker 戦略は
+      # P3-04 で入る。それまで buildable でない → register が "unsupported" にし、registered だが
+      # 配布されないサイレント断裂を防ぐ (registered != buildable を作らない)。
+      false
     else
       false
     end

@@ -347,6 +347,26 @@ fi
 grep -q "must not contain special files" "$tmp/out-fifoskill" \
   || fail "expected special-file fail-closed reason: $(cat "$tmp/out-fifoskill")"
 
+# --- case: script kind の単一ファイル asset が validate する (P3-03b) ---
+mkdir -p "$tmp/scriptkind/shared/scripts"
+printf '#!/bin/sh\necho hi\n' > "$tmp/scriptkind/shared/scripts/personal-demo-script.sh"
+cat > "$tmp/scriptkind/shared/scripts/personal-demo-script.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-demo-script
+kind: script
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/scripts/personal-demo-script.sh
+  format: text
+EOF
+"$check" --root "$tmp/scriptkind" > "$tmp/out-scriptkind" 2>&1 \
+  || fail "script kind manifest should validate: $(cat "$tmp/out-scriptkind")"
+
 # --- case 5: repository 本体の manifest が pass する ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \
