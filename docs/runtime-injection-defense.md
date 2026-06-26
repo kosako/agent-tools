@@ -134,6 +134,23 @@ agent に渡すデータの trust 判定は 3 軸で行う (spec の防御層表
 **捏造可能**。よって best-effort。hook が provenance 無しの書き込み系 tool call を拒否するのも
 steering (fail-open で消える)。
 
+## safe-gh wrapper (実装: steering)
+
+`shared/scripts/personal-safe-gh.rb` が body。`script` artifact kind で build/sync が tool home
+(`<home>/agent-tools/scripts/personal-safe-gh`) に配る。生の `gh ... --comments` を agent に
+直接実行させる代わりにこれへ寄せ、untrusted content を data として扱わせる steering(迂回可・
+boundary でない)。
+
+- コマンド: `safe-gh [-R OWNER/REPO] <issue|pr> <view|comments> <number>`。出力は JSON。
+- 上の provenance 3 軸で author を `self` / `bot` / `other` に分類し、self を確定できなければ
+  全 `other` に倒す(fail-closed)。
+- **他人の Issue/PR**: metadata (number/state/author/labels) のみ。**title も body も親へ渡さない**
+  (title は attacker 制御の free-text = injection 面)。**自分の Issue/PR**: title/body を渡す。
+- **他人コメント**: count + 固定理由のみ。著者名・プレビュー・untrusted 由来の文字列を出力に
+  混ぜない。**自分のコメント**: body を渡す。
+- I/O(gh 呼び出し)と純粋な trust/render ロジックを分離。ロジックは `scripts/tests/safe-gh-test.sh`
+  で deterministic に検証し、gh の実挙動は実機手動(下記「検証境界」)。
+
 ## body ⇔ control plane 対応表
 
 | 関心事 | agent-tools (body) | dotfiles (control plane) |

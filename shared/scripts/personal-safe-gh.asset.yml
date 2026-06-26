@@ -1,0 +1,17 @@
+schema_version: 1
+name: personal-safe-gh
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/scripts/personal-safe-gh.rb
+  format: text
+summary: >-
+  GitHub の Issue/PR/コメントを untrusted data として安全に読む steering wrapper。
+  他人の Issue/PR は metadata のみ、他人コメントは count のみを出力し、runtime prompt
+  injection 面を狭める。enforcement boundary ではない (docs/runtime-injection-defense.md)。
