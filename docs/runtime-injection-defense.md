@@ -151,6 +151,30 @@ boundary でない)。
 - I/O(gh 呼び出し)と純粋な trust/render ロジックを分離。ロジックは `scripts/tests/safe-gh-test.sh`
   で deterministic に検証し、gh の実挙動は実機手動(下記「検証境界」)。
 
+## PreToolUse hook (実装: steering / fail-open)
+
+`shared/scripts/personal-safe-gh-hook.rb` が body。`script` artifact kind で build/sync が tool home
+(`<home>/agent-tools/scripts/personal-safe-gh-hook`)に配る。agent が raw な `gh` で Issue/PR/コメント
+(untrusted content)を直接 context に取り込もうとしたとき、それを検出して safe-gh へ寄せる
+**steering**(迂回可・block しない・boundary でない)。
+
+- **検出 (best-effort)**: `gh issue|pr view`(既定で本文を含む)/ `--comments` / `--json` に
+  `body`・`comments` を含む read / `gh api` の issues・pulls・comments path。`gh` を command word
+  として持つ各 segment を見る純粋な文字列照合で、**network I/O も `gh` 呼び出しもしない**(PreToolUse は
+  毎コマンド前に同期実行されるため)。author が self かは safe-gh 側が判定する。shell の厳密な構文解析は
+  せず over/under-match を許容する(steering ゆえ honest-label)。
+- **出力機構 (検証済み hook semantics)**: match 時に stdout へ PreToolUse の JSON
+  `{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"…(safe-gh を使え)"}}` を書く。
+  `additionalContext` がモデル可視で非ブロッキングな steer 経路(exit 0 の **stderr はモデルに届かない**)。
+  `permissionDecision` は **付けない**(許可フローを上書きせず他の gate を生かす。steering であって
+  approve でもない)。**exit code は常に 0**(no-match / 内部例外 / 非 JSON / 非 Bash すべて透過 =
+  fail-open を徹底)。
+- **Codex の制約 (honest)**: Codex の PreToolUse は `additionalContext` 非対応で、返すと透過(fail-open)。
+  よって Codex ではモデル可視 steer を出せず best-effort(block しない点・配線が dotfiles 側な点は同じ)。
+  入力 `tool_input.command` は両 tool 共通。
+- 純粋 match ロジックは `scripts/tests/safe-gh-hook-test.sh` で deterministic に検証。実 hook 配線
+  (どの event に結ぶか)は dotfiles の settings.json = 実機(下記「検証境界」)。
+
 ## body ⇔ control plane 対応表
 
 | 関心事 | agent-tools (body) | dotfiles (control plane) |
