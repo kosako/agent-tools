@@ -237,14 +237,14 @@ module SafeGh
 
   def main(argv)
     args = argv.dup
-    repo = extract_repo_flag(args)
-    if args.first == "-h" || args.first == "--help"
+    if args.include?("-h") || args.include?("--help")
       print_usage
       return 0
     end
 
+    repo, repo_ok = extract_repo_flag(args)
     noun, verb, number = args
-    unless valid_invocation?(noun, verb, number)
+    unless repo_ok && valid_invocation?(noun, verb, number)
       print_usage
       return 2
     end
@@ -260,13 +260,16 @@ module SafeGh
     1
   end
 
-  # `-R OWNER/REPO` / `--repo OWNER/REPO` を args から取り除いて値を返す。
+  # `-R OWNER/REPO` / `--repo OWNER/REPO` を args から取り除き、[repo, ok] を返す。
+  # -R 無し: [nil, true] (repo は後で resolve)。-R に値が無い (末尾フラグ): [nil, false]
+  # で malformed を示し、呼び出し側が usage exit に倒す (現在 repo へ黙って fallback しない)。
   def extract_repo_flag(args)
     idx = args.index { |a| a == "-R" || a == "--repo" }
-    return nil unless idx
+    return [nil, true] unless idx
 
-    args.delete_at(idx) # フラグ
-    args.delete_at(idx) # 値
+    args.delete_at(idx)         # フラグ
+    value = args.delete_at(idx) # 値 (末尾フラグなら nil)
+    [value, !value.nil?]
   end
 
   def valid_invocation?(noun, verb, number)

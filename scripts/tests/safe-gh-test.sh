@@ -137,12 +137,21 @@ check("missing number", !SafeGh.valid_invocation?("issue", "view", nil))
 
 # ---- -R フラグ抽出 ----
 args = ["-R", "o/r", "issue", "view", "1"]
-repo = SafeGh.extract_repo_flag(args)
+repo, ok = SafeGh.extract_repo_flag(args)
 check("extract -R value", repo == "o/r")
+check("extract -R ok", ok == true)
 check("extract -R leaves args", args == ["issue", "view", "1"])
 args2 = ["issue", "view", "1"]
-check("no -R returns nil", SafeGh.extract_repo_flag(args2).nil?)
+repo2, ok2 = SafeGh.extract_repo_flag(args2)
+check("no -R returns nil repo", repo2.nil?)
+check("no -R is ok", ok2 == true)
 check("no -R leaves args", args2 == ["issue", "view", "1"])
+# 末尾 -R (値欠落) は malformed: 現在 repo へ黙って fallback させない
+args3 = ["issue", "view", "1", "-R"]
+repo3, ok3 = SafeGh.extract_repo_flag(args3)
+check("trailing -R is malformed", ok3 == false)
+check("trailing -R repo nil", repo3.nil?)
+check("trailing -R removes flag", args3 == ["issue", "view", "1"])
 
 exit(@failed.zero? ? 0 : 1)
 RUBY
