@@ -9,6 +9,8 @@ node_modules/
 # local handoff notes は machine-specific な planning context を含みうる。
 agent-tools-handoff.md
 .agent-tools.local.md
+# .agent-context.local.md: 各 repo 共通の private 参照正本 (read-only / user 所有)。
+.agent-context.local.md
 
 generated/**
 !generated/
