@@ -39,8 +39,8 @@ public に出せない情報だからです。固定名 `.agent-context.local.md
 
 - **work tracking**: version 管理の最近の履歴 (直近の commit)、open な issue /
   pull request。「何が最近完了し、何が途中か」が分かります。
-- **planning / ログ**: 参照 note が指す planning ドキュメントや作業ログの最新部分。
-  「直近の判断」と「次にやること」を拾います。
+- **planning / ログ**: `.agent-context.local.md` が指す planning ドキュメントや作業ログの
+  最新部分。「直近の判断」と「次にやること」を拾います。
 - **ローカルの手掛かり**: 引き継ぎメモや memory ファイルがあれば、その「再開時の入口」。
 
 複数ソースが食い違うときは、より新しい時系列のものを優先し、矛盾自体も記録します。
