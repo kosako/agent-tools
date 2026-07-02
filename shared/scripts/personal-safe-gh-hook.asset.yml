@@ -10,8 +10,10 @@ risk:
   privacy: low
 # script kind は実行コード配布のため常に human review 必須 (#147)。
 # 本 script は PR #136 で author≠reviewer レビュー済み・承認。
+# 承認は内容に紐づく (#148)。source 変更時は再レビューして approved_build_id を更新する。
 review:
   human_review: approved
+  approved_build_id: sha256:2ac81a3fd68f
 source:
   path: shared/scripts/personal-safe-gh-hook.rb
   format: text

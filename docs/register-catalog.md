@@ -18,13 +18,13 @@ catalog に記録する step です。
   いつでも再生成できる。
 - catalog は commit しない。tracked source は manifest だけが source of truth。
 
-catalog は **target-artifact 単位** (catalog_version 2) です。1 つの asset が複数 target を
+catalog は **target-artifact 単位** (catalog_version 3) です。1 つの asset が複数 target を
 持つ場合、target ごとに entry を 1 つずつ出します。各 entry は `target` と
 `artifact_kind` を持ち、sync はこれを見て配置先を分岐します。
 
 ```json
 {
-  "catalog_version": 2,
+  "catalog_version": 3,
   "assets": [
     {
       "name": "personal-example",
@@ -37,6 +37,8 @@ catalog は **target-artifact 単位** (catalog_version 2) です。1 つの ass
         "format": "markdown"
       },
       "build_id": "sha256:0123456789ab",
+      "manifest_path": "shared/workflows/personal-example.asset.yml",
+      "manifest_digest": "<sha256 hex of manifest bytes>",
       "checks": {
         "manifest_validation": "pass",
         "prompt_injection_static": "pass"
@@ -51,6 +53,14 @@ catalog は **target-artifact 単位** (catalog_version 2) です。1 つの ass
 
 source content の決定的 hash (build の marker と同じ計算)。doctor が catalog の
 鮮度判定に使う。mtime には依存しない。
+
+### `manifest_path` / `manifest_digest` (v3, #148)
+
+登録判断 (risk / review / targets) は manifest に依存する。register 時の manifest file
+bytes の SHA256 を entry に記録し、reader が「register 後に manifest が変わった catalog」を
+検出できるようにする。**sync は不一致の entry を配置せず** `manifest changed; run
+scripts/register.sh first` で skip し (fail-closed)、**doctor は stale として warn** する。
+digest 計算は `Assets.manifest_digest` に一元化 (register と reader で割れない)。
 
 ### `registration`
 
@@ -106,10 +116,19 @@ source format / output path の確認のみ)。build できない target-artifac
 medium finding は「human review 必須」を意味する。register は finding の path を
 asset の source path に対応づけ、manifest の `review.human_review` と突き合わせる。
 
-- `review.human_review: approved` → その asset は `registered`。
-- それ以外 (`pending` / 欠落) → その asset は `human_review_required`。
+- `review.human_review: approved` **かつ** `review.approved_build_id` が現在の build_id と
+  一致 → その asset は `registered`。
+- それ以外 (`pending` / 欠落 / approved_build_id 不一致) → その asset は
+  `human_review_required`。
 - `review.human_review: rejected` の asset は、finding の有無によらず register fail
   とする (reject 済み asset が shared/ に残っている状態は矛盾なので、修正か削除を促す)。
+
+### 承認は内容に紐づく (`approved_build_id`, #148)
+
+`approved` 単独の永続承認は「承認後に source が全面的に変わっても registered のまま」に
+なる穴。承認には `review.approved_build_id` (承認時点の build_id) を併記し、現在の
+build_id と一致するときだけ効かせる。source を変更したら register が不一致を警告する
+(現在の build_id を表示) ので、再レビューのうえ approved_build_id を更新する。
 
 ## 宣言 risk の enforce
 

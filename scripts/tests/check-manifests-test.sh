@@ -391,6 +391,34 @@ fi
 grep -q "must not be a symlink" "$tmp/out-symsrc" \
   || fail "expected single-file symlink rejection reason: $(cat "$tmp/out-symsrc")"
 
+# --- case: approved_build_id の検証 (#148)。形式不正と approved なし併用を reject ---
+mkdir -p "$tmp/abid/shared/workflows"
+echo "# demo" > "$tmp/abid/shared/workflows/personal-abid.md"
+cat > "$tmp/abid/shared/workflows/personal-abid.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-abid
+kind: workflow
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+review:
+  human_review: pending
+  approved_build_id: not-a-build-id
+source:
+  path: shared/workflows/personal-abid.md
+  format: markdown
+EOF
+if "$check" --root "$tmp/abid" > "$tmp/out-abid" 2>&1; then
+  fail "check-manifests must reject malformed approved_build_id"
+fi
+grep -q "approved_build_id must be a build_id" "$tmp/out-abid" \
+  || fail "expected approved_build_id format error: $(cat "$tmp/out-abid")"
+grep -q "approved_build_id requires review.human_review: approved" "$tmp/out-abid" \
+  || fail "expected approved-pairing error: $(cat "$tmp/out-abid")"
+
 # --- case 5: repository 本体の manifest が pass する ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \
