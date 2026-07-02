@@ -48,6 +48,20 @@ usage: check-injection.sh [--root DIR] [--quiet]
 - 対象は `shared/` 配下の text files のみ。policy docs は対象外。
 - self-test: `tests/check-injection-test.sh`
 
+- `check-credential-isolation.sh`: credential 隔離 acceptance harness の判定コア。probe 結果
+  (JSON) を受け、隔離が破れていないか判定する (probe の実機実行は別・PR-2)。
+  [Credential Isolation Acceptance](../docs/credential-isolation-acceptance.md) に従う。
+
+```text
+usage: check-credential-isolation.sh --judge <results.json>
+```
+
+- canonical チャネルすべて (一覧の正本は lib の `CHANNELS` / `--help`) に同一 operation の
+  negative/positive ペアを 1 組以上要求し、credential leak・空振り緑・チャネル欠落を弾く。
+- exit code: 隔離確認は 0、観測された破れ (leak / false-green) は 1、usage / 入力・構造エラー
+  (チャネル欠落・ペア不成立・重複) は 2。破れと構造不備が同居したら 1 を優先し全件報告する。
+- self-test: `tests/check-credential-isolation-test.sh`
+
 - `build.sh`: shared source assets から tool 別 artifacts を `generated/` に生成する。
   adapter spec は [adapters/](../adapters/README.md) を参照。
 

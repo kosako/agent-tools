@@ -75,6 +75,12 @@ command-string allowlist — は **steering**、hostname allowlist は **best-ef
 - **既知の限界 (honest-label)**: これは「列挙した認証源を塞ぐ」test なので、**新しい read path /
   認証源を追加すると test が黙って緑のまま隔離が破れる**。1 本でも未列挙が残れば隔離は破れる。
   だからこそ隔離は「別 HOME 等で認証源を**構造的に**断つ」実装にし、列挙に依存しない。
+- **実装 harness のスコープ (honest-label)**: 実装
+  ([credential-isolation-acceptance.md](credential-isolation-acceptance.md)) の env 隔離が hard に
+  検証するのは、管理された `gh` / `git` / `curl` invocation の**既定 credential 探索が空**である
+  ことまで。keychain 直読みや MCP token store は env 隔離の射程外 (P0-A の tool surface 制限 /
+  OS sandbox tier の担当) で、harness の緑をこの節の認証源列挙すべての検証と読まない。
+  上の列挙との分界は PR-2 の doc 確定で是正する (harness doc に差分の明示あり)。
 
 ### P0-C OS egress firewall (本 Phase スコープ外・別 tier)
 
