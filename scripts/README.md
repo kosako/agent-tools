@@ -56,9 +56,10 @@ usage: check-injection.sh [--root DIR] [--quiet]
 usage: check-credential-isolation.sh --judge <results.json>
 ```
 
-- canonical チャネル (gh / git-https / git-ssh / curl) すべてに同一 operation の
-  negative/positive ペアを要求し、credential leak・空振り緑・チャネル欠落を弾く。
-- exit code: 隔離確認は 0、破れ検出は 1、usage / 入力エラーは 2。
+- canonical チャネルすべて (一覧の正本は lib の `CHANNELS` / `--help`) に同一 operation の
+  negative/positive ペアを 1 組以上要求し、credential leak・空振り緑・チャネル欠落を弾く。
+- exit code: 隔離確認は 0、観測された破れ (leak / false-green) は 1、usage / 入力・構造エラー
+  (チャネル欠落・ペア不成立・重複) は 2。破れと構造不備が同居したら 1 を優先し全件報告する。
 - self-test: `tests/check-credential-isolation-test.sh`
 
 - `build.sh`: shared source assets から tool 別 artifacts を `generated/` に生成する。
