@@ -220,8 +220,12 @@ allowed values:
 - `static_check`: `pending`, `pass`, `fail`
 - `llm_review`: `allowed`, `blocked`, `not_needed`
 - `human_review`: `pending`, `approved`, `rejected`, `not_needed`
+- `approved_build_id`: build_id 文字列 (`sha256:` + 12 hex)。`human_review: approved` と
+  対で使う (単独はエラー)。
 
 `human_review` は人間が宣言する値で、register が medium finding の解決に参照します。
+承認は `approved_build_id` (承認時点の build_id) で **内容に紐づき**、現在の build_id と
+一致するときだけ効きます ([register-catalog.md](register-catalog.md) の #148 節)。
 `static_check` / `llm_review` は informational で、自動 check の結果は
 [catalog](register-catalog.md) 側を真実とします。
 

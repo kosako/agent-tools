@@ -104,8 +104,16 @@ run_doctor > "$tmp/d5b" 2>&1 || fail "stale catalog should still exit 0"
 grep -q "warn: catalog: stale (personal-demo: content changed since register)" "$tmp/d5b" \
   || fail "missing catalog stale warn: $(cat "$tmp/d5b")"
 
+# manifest (登録判断) の変更も stale になる (#148)
+"$script_dir/../register.sh" --root "$tmp/repo" --quiet > /dev/null
+echo "# reviewed comment" >> "$tmp/repo/shared/workflows/personal-demo.asset.yml"
+run_doctor > "$tmp/d5c" 2>&1 || fail "manifest-stale catalog should still exit 0"
+grep -q "warn: catalog: stale (personal-demo: manifest changed since register)" "$tmp/d5c" \
+  || fail "missing manifest stale warn: $(cat "$tmp/d5c")"
+"$script_dir/../register.sh" --root "$tmp/repo" --quiet > /dev/null
+
 # --- case 6: catalog_version 不一致は warn (re-run register) ---
-ruby -i -pe 'sub(/"catalog_version": 2/, "\"catalog_version\": 1")' "$tmp/repo/generated/catalog.json"
+ruby -i -pe 'sub(/"catalog_version": \d+/, "\"catalog_version\": 1")' "$tmp/repo/generated/catalog.json"
 run_doctor > "$tmp/d6" 2>&1 || fail "version mismatch should still exit 0: $(cat "$tmp/d6")"
 grep -q "warn: catalog: version mismatch" "$tmp/d6" \
   || fail "missing catalog version mismatch warn: $(cat "$tmp/d6")"

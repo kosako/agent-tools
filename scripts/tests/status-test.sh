@@ -197,7 +197,10 @@ rm -f "$tmp/irepo/shared/instructions/personal-ops.md"
 # --- case 13: script の generated も generated.total に数え、sync_target を報告する ---
 mkdir -p "$tmp/screpo/shared/scripts" "$tmp/sccodex" "$tmp/scclaude"
 printf '#!/bin/sh\necho hi\n' > "$tmp/screpo/shared/scripts/personal-wrap.sh"
-cat > "$tmp/screpo/shared/scripts/personal-wrap.asset.yml" <<'EOF'
+# script kind は human review 必須 (#147) + 承認は内容に紐づく (#148)。
+scbid=$(ruby -r"$script_dir/../lib/build" \
+  -e 'puts Build.build_id_for(ARGV[0], "shared/scripts/personal-wrap.sh", "text")' "$tmp/screpo")
+cat > "$tmp/screpo/shared/scripts/personal-wrap.asset.yml" <<EOF
 schema_version: 1
 name: personal-wrap
 kind: script
@@ -207,9 +210,9 @@ targets:
 risk:
   prompt_injection: low
   privacy: low
-# script kind は human review 必須 (#147)。fixture は approved 前提で registered を得る。
 review:
   human_review: approved
+  approved_build_id: $scbid
 source:
   path: shared/scripts/personal-wrap.sh
   format: text

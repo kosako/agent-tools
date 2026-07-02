@@ -19,6 +19,11 @@ jget() {
   ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0])).dig(*ARGV[1..-1].map { |k| k =~ /\A\d+\z/ ? k.to_i : k }).inspect' "$@"
 }
 
+# 実装と同じ計算で build_id を得る (approved_build_id fixture 用)。
+bid() {
+  ruby -r"$script_dir/../lib/build" -e 'puts Build.build_id_for(ARGV[0], ARGV[1], ARGV[2])' "$@"
+}
+
 write_manifest() {
   # $1: dir, $2: human_review line (空なら review なし)
   cat > "$1/personal-demo.asset.yml" <<EOF
@@ -45,12 +50,17 @@ write_manifest "$tmp/ok/shared/workflows"
 "$register" --root "$tmp/ok" > "$tmp/r1" 2>&1 || fail "register should pass: $(cat "$tmp/r1")"
 catalog="$tmp/ok/generated/catalog.json"
 [ -f "$catalog" ] || fail "catalog not written"
-[ "$(jget "$catalog" catalog_version)" = "2" ] || fail "catalog_version should be 2"
+[ "$(jget "$catalog" catalog_version)" = "3" ] || fail "catalog_version should be 3"
 [ "$(jget "$catalog" assets 0 registration)" = '"registered"' ] || fail "asset should be registered"
 [ "$(jget "$catalog" assets 0 target)" = '"codex"' ] || fail "entry should carry target (target-artifact unit)"
 [ "$(jget "$catalog" assets 0 artifact_kind)" = '"skill"' ] || fail "entry should carry artifact_kind"
 [ "$(jget "$catalog" assets 0 checks prompt_injection_static)" = '"pass"' ] || fail "injection check should be pass"
 jget "$catalog" assets 0 build_id | grep -q '"sha256:' || fail "catalog entry should carry build_id"
+# 登録判断の鮮度検出用に manifest の path と digest も記録する (#148)
+[ "$(jget "$catalog" assets 0 manifest_path)" = '"shared/workflows/personal-demo.asset.yml"' ] \
+  || fail "catalog entry should carry manifest_path"
+jget "$catalog" assets 0 manifest_digest | grep -qE '"[0-9a-f]{64}"' \
+  || fail "catalog entry should carry manifest_digest (sha256 hex)"
 
 # --- case 2: status が register summary を返す (contract v2) ---
 "$status_sh" --root "$tmp/ok" --json > "$tmp/s2" 2>&1
@@ -71,11 +81,38 @@ catalog="$tmp/medium/generated/catalog.json"
 [ "$(jget "$catalog" assets 0 checks prompt_injection_static)" = '"human_review"' ] \
   || fail "injection check should be human_review"
 
-# --- case 4: medium finding + approved → registered, exit 0 ---
+# --- case 4: medium finding + approved (approved_build_id 一致) → registered, exit 0 ---
+bid_medium=$(bid "$tmp/medium" shared/workflows/personal-demo.md markdown)
 write_manifest "$tmp/medium/shared/workflows" "review:
-  human_review: approved"
+  human_review: approved
+  approved_build_id: $bid_medium"
 "$register" --root "$tmp/medium" > "$tmp/r4" 2>&1 || fail "approved should exit 0: $(cat "$tmp/r4")"
 [ "$(jget "$catalog" assets 0 registration)" = '"registered"' ] || fail "approved asset should be registered"
+
+# --- case 4b: approved でも approved_build_id が無ければ永続承認にならない (exit 3, #148) ---
+write_manifest "$tmp/medium/shared/workflows" "review:
+  human_review: approved"
+status=0
+"$register" --root "$tmp/medium" > "$tmp/r4b" 2>&1 || status=$?
+[ "$status" -eq 3 ] || fail "approved without approved_build_id should exit 3, got $status: $(cat "$tmp/r4b")"
+[ "$(jget "$catalog" assets 0 registration)" = '"human_review_required"' ] \
+  || fail "approval without content binding must not register"
+grep -q "approved_build_id does not match current build_id" "$tmp/r4b" \
+  || fail "missing re-review guidance: $(cat "$tmp/r4b")"
+
+# --- case 4c: 承認後に source が変わったら承認は失効する (stale approved_build_id → exit 3) ---
+write_manifest "$tmp/medium/shared/workflows" "review:
+  human_review: approved
+  approved_build_id: $bid_medium"
+printf '# demo with hidden\xe2\x80\x8bmarker\nedited after approval\n' \
+  > "$tmp/medium/shared/workflows/personal-demo.md"
+status=0
+"$register" --root "$tmp/medium" > "$tmp/r4c" 2>&1 || status=$?
+[ "$status" -eq 3 ] || fail "stale approval should exit 3, got $status: $(cat "$tmp/r4c")"
+[ "$(jget "$catalog" assets 0 registration)" = '"human_review_required"' ] \
+  || fail "content change must invalidate approval"
+# 後続 case のために元の内容へ戻す
+printf '# demo with hidden\xe2\x80\x8bmarker\n' > "$tmp/medium/shared/workflows/personal-demo.md"
 
 # --- case 5: medium finding + rejected → fail, catalog 未更新 ---
 write_manifest "$tmp/medium/shared/workflows" "review:
@@ -130,8 +167,10 @@ status=0
 [ "$(jget "$tmp/dunk/generated/catalog.json" assets 0 registration)" = '"human_review_required"' ] \
   || fail "declared unknown should require human review"
 
+bid_dunk=$(bid "$tmp/dunk" shared/workflows/personal-demo.md markdown)
 write_manifest "$tmp/dunk/shared/workflows" "review:
-  human_review: approved"
+  human_review: approved
+  approved_build_id: $bid_dunk"
 ruby -i -pe 'sub("privacy: low", "privacy: unknown")' \
   "$tmp/dunk/shared/workflows/personal-demo.asset.yml"
 "$register" --root "$tmp/dunk" > "$tmp/r9b" 2>&1 || fail "approved unknown should exit 0: $(cat "$tmp/r9b")"
@@ -177,8 +216,9 @@ sc="$tmp/script/generated/catalog.json"
 [ "$(jget "$sc" assets 0 registration)" = '"human_review_required"' ] \
   || fail "script without approval should be human_review_required (#147)"
 
-# --- case 12c: script kind + human_review: approved → registered (exit 0) ---
-cat > "$tmp/script/shared/scripts/personal-demo-script.asset.yml" <<'EOF'
+# --- case 12c: script kind + human_review: approved (approved_build_id 一致) → registered (exit 0) ---
+bid_script=$(bid "$tmp/script" shared/scripts/personal-demo-script.sh text)
+cat > "$tmp/script/shared/scripts/personal-demo-script.asset.yml" <<EOF
 schema_version: 1
 name: personal-demo-script
 kind: script
@@ -190,6 +230,7 @@ risk:
   privacy: low
 review:
   human_review: approved
+  approved_build_id: $bid_script
 source:
   path: shared/scripts/personal-demo-script.sh
   format: text
