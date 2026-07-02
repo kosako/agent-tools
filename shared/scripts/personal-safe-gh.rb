@@ -36,6 +36,9 @@ module SafeGh
 
   # self identity の任意 override file。dotfiles が非コミットで置く場合に優先して読む
   # (実値は public repo にハードコードしない)。env で path を上書きできる。
+  # 信頼境界 (honest): この file / env を書ける主体は任意 login/id を self と宣言でき、
+  # その author の body withhold が外れる。local file/env の改変は本 wrapper の脅威モデル外
+  # (steering であり enforcement boundary ではない。床は実行環境側の責務)。
   SELF_TRUST_FILE_ENV = "SAFE_GH_TRUST_FILE"
   DEFAULT_SELF_TRUST_FILE = File.join(Dir.home, ".config", "dotfiles", "github-trust.local")
 
@@ -137,8 +140,12 @@ module SafeGh
     env
   end
 
+  # label 名は envelope に残す唯一の free-text metadata (付与には triage/write 権限が要る
+  # ため attacker 制御性は低いが、ゼロではない)。制御文字を除去し長さを制限してから渡す。
   def label_names(labels)
     (labels || []).map { |l| l.is_a?(Hash) ? l["name"] : l }
+                  .select { |name| name.is_a?(String) }
+                  .map { |name| name.gsub(/[[:cntrl:]]/, "")[0, 100] }
   end
 
   # ---- I/O: gh 呼び出し ------------------------------------------------------

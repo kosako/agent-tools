@@ -59,7 +59,7 @@ registration は target-artifact 単位で決まります。
 | value | 意味 |
 | --- | --- |
 | `registered` | sync が配置してよい。 |
-| `human_review_required` | medium があり human review が未解決。sync は配置しない。 |
+| `human_review_required` | human review が未解決 (medium finding / medium・unknown の宣言 risk / script artifact)。sync は配置しない。 |
 | `unsupported` | その target では artifact を build できない (artifact_kind 非対応 / instruction が directory format など)。sync は配置しない。 |
 
 ### ビルド可能性の証明 (registered != buildable を防ぐ)
@@ -120,6 +120,16 @@ enforce する。static finding と宣言 risk の厳しい方が勝つ。
 - いずれかが `medium` / `unknown` → human review 必須として扱う
   (`approved` → `registered`、それ以外 → `human_review_required`)。
 - 両方 `low` → finding がなければ `registered`。
+
+## script artifact は常に human review 必須
+
+いずれかの target が `artifact_kind: script` に解決される asset は実行コードの配布で、
+static check が当てられるのは injection 文言 pattern のみ (コードの悪性は検査できない。
+[prompt-injection-check.md](prompt-injection-check.md) の honest-label 参照)。directory skill の
+`scripts/` を #43 まで fail-closed にしているのと対称に、宣言 risk / finding の有無によらず
+human review 必須として扱う (`approved` → `registered`、それ以外 → `human_review_required`)。
+判定は manifest の `kind` でなく **resolve 後の artifact_kind** で行う (`compatibility` の
+override で任意 kind を script 配布にできるため、kind 基準では迂回できる)。
 
 ## Check 結果の書き戻し方針
 

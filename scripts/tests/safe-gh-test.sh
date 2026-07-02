@@ -98,6 +98,25 @@ check("bot issue trust", env["author_trust"] == "bot")
 check("bot issue no body", !env.key?("body"))
 check("bot issue source pr", env["source"] == "pr")
 
+# ---- labels: envelope に残る唯一の free-text metadata。制御文字除去・長さ制限・非文字列除外 ----
+ctrl_issue = {
+  "number" => 10, "state" => "open", "title" => "t", "body" => "b",
+  "user" => { "login" => "attacker", "id" => 999 }, "author_association" => "NONE",
+  "labels" => [
+    { "name" => "ok-label" },
+    { "name" => "evil\nok: fake success line\e[31m" },
+    { "name" => 123 },
+    { "name" => "L" * 300 },
+  ],
+}
+env = SafeGh.issue_envelope("issue", "o/r", ctrl_issue, ME)
+check("labels keep plain name", env["labels"].include?("ok-label"))
+check("labels contain no control chars", env["labels"].none? { |l| l =~ /[[:cntrl:]]/ })
+check("labels drop non-string name", env["labels"].none? { |l| !l.is_a?(String) })
+check("labels are length-capped", env["labels"].all? { |l| l.length <= 100 })
+json = JSON.generate(env)
+check("label escape sequence not in JSON output", !json.include?("\\u001b") && !json.include?("\\n"))
+
 # ---- comments_envelope: self 通過 / other・bot 除外 (count のみ・著者名も漏らさない) ----
 comments = [
   { "user" => { "login" => "me", "id" => 1 }, "body" => "MY_COMMENT" },

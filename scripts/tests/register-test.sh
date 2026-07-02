@@ -149,7 +149,8 @@ status=0
 grep -q "rejected asset" "$tmp/r10" || fail "missing rejected message"
 [ ! -e "$tmp/drej/generated/catalog.json" ] || fail "catalog must not be written on rejected"
 
-# --- case 12: 単一ファイルの script kind は配布可能なので registered (P3-04) ---
+# --- case 12: script kind は実行コード配布のため human review 必須 (#147)。
+#     宣言 risk low・finding なしでも approved が無ければ human_review_required (exit 3) ---
 mkdir -p "$tmp/script/shared/scripts"
 printf '#!/bin/sh\necho hi\n' > "$tmp/script/shared/scripts/personal-demo-script.sh"
 cat > "$tmp/script/shared/scripts/personal-demo-script.asset.yml" <<'EOF'
@@ -166,13 +167,68 @@ source:
   path: shared/scripts/personal-demo-script.sh
   format: text
 EOF
-"$register" --root "$tmp/script" > "$tmp/r12" 2>&1 \
-  || fail "script register should not fail: $(cat "$tmp/r12")"
+status=0
+"$register" --root "$tmp/script" > "$tmp/r12" 2>&1 || status=$?
+[ "$status" -eq 3 ] \
+  || fail "script without approval should exit 3, got $status: $(cat "$tmp/r12")"
 sc="$tmp/script/generated/catalog.json"
 [ "$(jget "$sc" assets 0 artifact_kind)" = '"script"' ] \
   || fail "script asset should resolve to artifact_kind script"
+[ "$(jget "$sc" assets 0 registration)" = '"human_review_required"' ] \
+  || fail "script without approval should be human_review_required (#147)"
+
+# --- case 12c: script kind + human_review: approved → registered (exit 0) ---
+cat > "$tmp/script/shared/scripts/personal-demo-script.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-demo-script
+kind: script
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+review:
+  human_review: approved
+source:
+  path: shared/scripts/personal-demo-script.sh
+  format: text
+EOF
+"$register" --root "$tmp/script" > "$tmp/r12c" 2>&1 \
+  || fail "approved script register should pass: $(cat "$tmp/r12c")"
 [ "$(jget "$sc" assets 0 registration)" = '"registered"' ] \
-  || fail "single-file script should be registered (buildable) after P3-04"
+  || fail "approved single-file script should be registered (buildable, P3-04)"
+
+# --- case 12d: compatibility override で script 配布になる asset も human review 必須。
+#     (kind 基準だと `kind: workflow` + `compatibility.<tool>.artifact_kind: script` で迂回できる) ---
+mkdir -p "$tmp/scompat/shared/workflows"
+printf '#!/bin/sh\necho hi\n' > "$tmp/scompat/shared/workflows/personal-compat-script.md"
+cat > "$tmp/scompat/shared/workflows/personal-compat-script.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-compat-script
+kind: workflow
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+compatibility:
+  claude-code:
+    artifact_kind: script
+source:
+  path: shared/workflows/personal-compat-script.md
+  format: text
+EOF
+status=0
+"$register" --root "$tmp/scompat" > "$tmp/r12d" 2>&1 || status=$?
+[ "$status" -eq 3 ] \
+  || fail "compatibility-script without approval should exit 3, got $status: $(cat "$tmp/r12d")"
+scd="$tmp/scompat/generated/catalog.json"
+[ "$(jget "$scd" assets 0 artifact_kind)" = '"script"' ] \
+  || fail "compatibility override should resolve to artifact_kind script"
+[ "$(jget "$scd" assets 0 registration)" = '"human_review_required"' ] \
+  || fail "compatibility-script without approval must be human_review_required (kind-based gate is bypassable)"
 
 # --- case 12b: directory 形式の script は単一ファイルでないため unsupported ---
 # (registered != buildable のサイレント断裂を作らない)

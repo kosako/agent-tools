@@ -82,7 +82,15 @@ module Register
     # target-artifact は "unsupported" にして registered != buildable を防ぐ。
     def catalog_entries(asset)
       # 宣言 risk の medium / unknown も human review 必須として扱う。
+      # script artifact は実行コードの配布で、静的 gate が当てられるのは injection 文言の
+      # regex のみ (コードの悪性は検査できない)。directory skill の scripts/ を #43 まで
+      # fail-closed にしているのと対称に、常に human review を要求する。判定は manifest の
+      # kind でなく resolve 後の artifact_kind で行う (compatibility override で任意 kind を
+      # script 配布にできるため、kind 基準では迂回できてしまう)。
+      script_artifact = (asset[:targets] || [])
+                        .any? { |tool| ArtifactTargets.resolve(asset, tool) == "script" }
       review_needed = asset[:flagged] ||
+                      script_artifact ||
                       asset[:declared_risks].any? { |r| %w[medium unknown].include?(r) }
       review_registration =
         if !review_needed

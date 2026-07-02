@@ -286,6 +286,9 @@ targets:
 risk:
   prompt_injection: low
   privacy: low
+# script kind は human review 必須 (#147)。fixture は approved 前提で registered を得る。
+review:
+  human_review: approved
 source:
   path: shared/scripts/personal-wrap.sh
   format: text
