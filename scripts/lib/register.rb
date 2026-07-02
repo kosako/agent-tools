@@ -82,7 +82,11 @@ module Register
     # target-artifact は "unsupported" にして registered != buildable を防ぐ。
     def catalog_entries(asset)
       # 宣言 risk の medium / unknown も human review 必須として扱う。
+      # script kind は実行コードの配布で、静的 gate が当てられるのは injection 文言の
+      # regex のみ (コードの悪性は検査できない)。directory skill の scripts/ を #43 まで
+      # fail-closed にしているのと対称に、script kind は常に human review を要求する。
       review_needed = asset[:flagged] ||
+                      asset[:kind] == "script" ||
                       asset[:declared_risks].any? { |r| %w[medium unknown].include?(r) }
       review_registration =
         if !review_needed

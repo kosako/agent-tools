@@ -129,7 +129,15 @@ module CheckInjection
       count = 0
       target_files.each do |full|
         content = File.read(full, mode: "rb").force_encoding(Encoding::UTF_8)
-        next if content.include?("\x00") # binary は対象外
+        # NUL を含むファイルは pattern scan できない。silent skip すると NUL 1 byte で
+        # scanner 全体を回避できてしまうため、fail-closed で high finding にする。
+        # (medium だと #148 の digest 紐づけ前は既存 approved 資産への NUL 混入が素通りする)
+        if (nul_index = content.index("\x00"))
+          line = content[0...nul_index].count("\n") + 1
+          findings << Finding.new(rel(full), line, "high", "binary",
+                                  "contains NUL byte(s); scanner cannot inspect binary content (fail-closed)")
+          next
+        end
 
         content = content.scrub("�")
         count += 1

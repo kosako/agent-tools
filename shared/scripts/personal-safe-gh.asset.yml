@@ -8,6 +8,10 @@ targets:
 risk:
   prompt_injection: low
   privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は PR #135 / #141 で author≠reviewer レビュー済み・承認。
+review:
+  human_review: approved
 source:
   path: shared/scripts/personal-safe-gh.rb
   format: text

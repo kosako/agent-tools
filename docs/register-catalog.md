@@ -121,6 +121,14 @@ enforce する。static finding と宣言 risk の厳しい方が勝つ。
   (`approved` → `registered`、それ以外 → `human_review_required`)。
 - 両方 `low` → finding がなければ `registered`。
 
+## script kind は常に human review 必須
+
+`kind: script` の asset は実行コードの配布で、static check が当てられるのは injection
+文言 pattern のみ (コードの悪性は検査できない。[prompt-injection-check.md](prompt-injection-check.md)
+の honest-label 参照)。directory skill の `scripts/` を #43 まで fail-closed にしているのと
+対称に、script kind は宣言 risk / finding の有無によらず human review 必須として扱う
+(`approved` → `registered`、それ以外 → `human_review_required`)。
+
 ## Check 結果の書き戻し方針
 
 **manifest には書き戻さない。check 結果は catalog (別 report) に出す。**

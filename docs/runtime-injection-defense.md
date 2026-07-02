@@ -150,6 +150,10 @@ boundary でない)。
 - コマンド: `safe-gh [-R OWNER/REPO] <issue|pr> <view|comments> <number>`。出力は JSON。
 - 上の provenance 3 軸で author を `self` / `bot` / `other` に分類し、self を確定できなければ
   全 `other` に倒す(fail-closed)。
+- **self identity source の信頼境界 (honest-label)**: self identity は local の trust file /
+  env override を最優先で読むため、それらを書ける主体は任意 author を self と詐称でき、
+  その author の body withhold が外れる。local file / env の改変は本 wrapper の脅威モデル外
+  (steering であり、床は実行環境側の責務)。
 - **他人の Issue/PR**: metadata (number/state/author/labels) のみ。**title も body も親へ渡さない**
   (title は attacker 制御の free-text = injection 面)。**自分の Issue/PR**: title/body を渡す。
 - **他人コメント**: count + 固定理由のみ。著者名・プレビュー・untrusted 由来の文字列を出力に
