@@ -199,6 +199,37 @@ EOF
 [ "$(jget "$sc" assets 0 registration)" = '"registered"' ] \
   || fail "approved single-file script should be registered (buildable, P3-04)"
 
+# --- case 12d: compatibility override で script 配布になる asset も human review 必須。
+#     (kind 基準だと `kind: workflow` + `compatibility.<tool>.artifact_kind: script` で迂回できる) ---
+mkdir -p "$tmp/scompat/shared/workflows"
+printf '#!/bin/sh\necho hi\n' > "$tmp/scompat/shared/workflows/personal-compat-script.md"
+cat > "$tmp/scompat/shared/workflows/personal-compat-script.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-compat-script
+kind: workflow
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+compatibility:
+  claude-code:
+    artifact_kind: script
+source:
+  path: shared/workflows/personal-compat-script.md
+  format: text
+EOF
+status=0
+"$register" --root "$tmp/scompat" > "$tmp/r12d" 2>&1 || status=$?
+[ "$status" -eq 3 ] \
+  || fail "compatibility-script without approval should exit 3, got $status: $(cat "$tmp/r12d")"
+scd="$tmp/scompat/generated/catalog.json"
+[ "$(jget "$scd" assets 0 artifact_kind)" = '"script"' ] \
+  || fail "compatibility override should resolve to artifact_kind script"
+[ "$(jget "$scd" assets 0 registration)" = '"human_review_required"' ] \
+  || fail "compatibility-script without approval must be human_review_required (kind-based gate is bypassable)"
+
 # --- case 12b: directory 形式の script は単一ファイルでないため unsupported ---
 # (registered != buildable のサイレント断裂を作らない)
 mkdir -p "$tmp/scriptdir/shared/scripts/personal-dir-script"

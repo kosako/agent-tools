@@ -57,8 +57,8 @@ NUL byte を含むファイルは pattern scan できないため、**fail-close
 
 **script asset の限界 (honest-label)**: static check が実行コードに当てられるのは上記の
 injection **文言** pattern のみで、コードの悪性 (外部送信・破壊的操作など) は検査できません。
-script kind のコード安全性は author≠reviewer の PR レビューと、register の human review 必須
-ゲート ([register-catalog.md](register-catalog.md)) に依存します。
+script artifact のコード安全性は author≠reviewer の PR レビューと、register の human review
+必須ゲート ([register-catalog.md](register-catalog.md)) に依存します。
 
 directory skill の `evals/` (adversarial なテスト材料) は例外です。eval prompt は「skill が
 転記/実行しないこと」を検証するため、injection 文字列・fake な絶対パス・email を意図的に
