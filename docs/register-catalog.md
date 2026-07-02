@@ -59,7 +59,7 @@ registration は target-artifact 単位で決まります。
 | value | 意味 |
 | --- | --- |
 | `registered` | sync が配置してよい。 |
-| `human_review_required` | medium があり human review が未解決。sync は配置しない。 |
+| `human_review_required` | human review が未解決 (medium finding / medium・unknown の宣言 risk / script artifact)。sync は配置しない。 |
 | `unsupported` | その target では artifact を build できない (artifact_kind 非対応 / instruction が directory format など)。sync は配置しない。 |
 
 ### ビルド可能性の証明 (registered != buildable を防ぐ)
