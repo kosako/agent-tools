@@ -100,7 +100,7 @@ module Sync
       end
       # 登録判断 (risk / review / targets) は manifest に依存する。register 後に manifest が
       # 変わった entry は判断ごと stale なので、配置せず register を促す (fail-closed, #148)。
-      unless manifest_fresh?(entry)
+      unless Assets.manifest_fresh?(@root, entry)
         return Plan.new("skip", tool, name, target_path(tool, name, kind),
                         "manifest changed; run scripts/register.sh first", kind, nil)
       end
@@ -118,17 +118,6 @@ module Sync
     # path 解決は ArtifactTargets.target_path が単一 source (skill / instruction 共通)。
     def target_path(tool, name, kind)
       ArtifactTargets.target_path(@homes.fetch(tool), tool, name, kind)
-    end
-
-    # catalog entry に記録された manifest digest が現在の manifest と一致するか。
-    # manifest の欠落・読めない・digest 未記録 (旧 catalog) はすべて false = fail-closed。
-    def manifest_fresh?(entry)
-      path = entry["manifest_path"]
-      return false unless path.is_a?(String)
-
-      entry["manifest_digest"] == Assets.manifest_digest(@root, path)
-    rescue SystemCallError, IOError
-      false
     end
 
     def plan_skill(tool, name, expected_build_id)

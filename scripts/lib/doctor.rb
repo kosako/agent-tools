@@ -166,7 +166,7 @@ module Doctor
           stale << "#{asset[:name]}: not in catalog"
         elsif !fresh_entry?(entry, asset[:source])
           stale << "#{asset[:name]}: content changed since register"
-        elsif !manifest_fresh?(entry, asset[:manifest_path])
+        elsif !Assets.manifest_fresh?(@root, entry)
           # 登録判断 (risk / review / targets) は manifest に依存する (#148)。
           stale << "#{asset[:name]}: manifest changed since register"
         end
@@ -189,16 +189,6 @@ module Doctor
     # 倒し、doctor 全体を落とさない (status の fresh? と同じ best-effort)。
     def fresh_entry?(entry, source)
       entry["build_id"] == Build.build_id_for(@root, source["path"], source["format"])
-    rescue StandardError
-      false
-    end
-
-    # catalog entry の manifest_digest と現在の manifest file を比較する。読めない /
-    # 未記録は検証不能 = stale (false) に倒す (fresh_entry? と同じ best-effort)。
-    def manifest_fresh?(entry, manifest_path)
-      return false unless manifest_path.is_a?(String)
-
-      entry["manifest_digest"] == Assets.manifest_digest(@root, manifest_path)
     rescue StandardError
       false
     end

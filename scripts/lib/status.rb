@@ -188,12 +188,18 @@ module Status
 
     # Sync plan を contract の target state にマップする。
     # registered でない artifact は配置されないため、target は missing 扱い。
+    # manifest-stale (登録判断が古い) は配置済みでも再 register が要るので stale。
     def target_state(plan)
       case plan.action
       when "update" then "stale"
       when "conflict" then "conflict"
       when "create" then "missing"
-      when "skip" then plan.reason == "up-to-date" ? "managed" : "missing"
+      when "skip"
+        case plan.reason
+        when "up-to-date" then "managed"
+        when /\Amanifest changed/ then "stale"
+        else "missing"
+        end
       end
     end
 

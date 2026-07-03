@@ -19,6 +19,7 @@ require "fileutils"
 
 require_relative "artifact_targets"
 require_relative "instruction_marker"
+require_relative "assets"
 
 module Connect
   # 人間の CLAUDE.md から所有ファイルを取り込む import 行。
@@ -89,6 +90,12 @@ module Connect
       return "not in catalog; run scripts/register.sh first" unless entry
       unless entry["registration"] == "registered"
         return "instruction not registered (#{entry["registration"]})"
+      end
+      # 登録判断 (risk / review / targets) は manifest に依存する。register 後に manifest が
+      # 変わった entry で所有確立・コピーしない (sync と同じ fail-closed gate, #148)。
+      # connect は初回配置 (create) を担うため、ここを見ないと sync の gate を迂回できる。
+      unless Assets.manifest_fresh?(@root, entry)
+        return "manifest changed; run scripts/register.sh first"
       end
 
       marker = InstructionMarker.parse(File.read(gen))
