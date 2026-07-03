@@ -177,7 +177,7 @@ human review 必須として扱う (承認が有効 = `approved` かつ `approve
   古いものとして無視する (再度 register を実行して再生成する)。これにより古い catalog が
   残った状態で reader 間の判断がずれることを防ぐ。
 - `status.sh` には register summary を追加する (contract_version 2 に bump):
-  `"register": {"catalog_present": true, "registered": 1, "human_review_required": 0}`。
+  `"register": {"catalog_present": true, "registered": 1, "human_review_required": 0, "unsupported": 0}`。
 - `doctor.sh` は catalog の存在と鮮度 (build_id 比較) を check する。
 - sync は catalog の `registration: registered` の artifact だけを配置する。
 

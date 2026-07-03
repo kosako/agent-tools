@@ -72,12 +72,12 @@ usage: build.sh [--root DIR] [--prune] [--quiet]
 - 生成前に register と共有の致命 gate (`lib/gate.rb`) を通す。fail なら何も生成しない。
   medium finding では止めず生成する (中間物。配置は sync が catalog を見て止める)。
 - management marker を埋め込む。skill は directory 直下の `.agent-tools-managed.yml`、
-  instruction は本体先頭の 1 行 HTML コメント marker。`build_id` は source content の
-  sha256 なので build は決定的。
+  instruction は本体先頭の 1 行 HTML コメント marker、script は本体の隣の sidecar
+  `.agent-tools-managed.yml`。`build_id` は source content の sha256 なので build は決定的。
 - 書き込み先は `generated/` のみ。tool directories には書き込まない。
 - `--prune` で manifest に対応しなくなった generated artifact を削除する。対象は
-  agent-tools marker を持つ skill directory と instruction file のみで、marker のない
-  directory / file は警告して残す。
+  agent-tools marker を持つ skill directory / instruction file / script (本体 + sidecar) の
+  みで、marker のない directory / file は警告して残す。
 - self-test: `tests/build-test.sh`
 
 - `connect.sh`: instruction の所有ファイルを確立し、人間の instruction ファイルから

@@ -1,7 +1,7 @@
 # agent-tools
 
 `agent-tools` は、再利用可能な skills、prompts、workflows、agent definitions、
-instruction templates を管理するための個人用 AI agent asset repository です。
+instruction templates、scripts を管理するための個人用 AI agent asset repository です。
 
 > 全体像・設計・現在地を一度に把握したい場合は
 > [docs/onboarding.md](docs/onboarding.md) から読んでください。
@@ -36,7 +36,7 @@ dotfiles
   policy / capabilities / directory convention / safety gates
 
 agent-tools
-  skills / prompts / AGENTS.md templates / agent definitions / evals
+  skills / prompts / AGENTS.md templates / agent definitions / scripts / evals
 
 secret store / local private config
   tokens / credentials / private endpoints
@@ -78,6 +78,7 @@ shared/
   workflows/      共通 reusable workflows
   agents/         共通 agent definitions
   instructions/   共通 instruction templates
+  scripts/        共通 source scripts (配布される wrapper / hook body)
 
 adapters/
   codex/          Codex 向け build adapter specs
@@ -87,20 +88,22 @@ generated/
   codex/          生成された Codex artifacts。README と .gitkeep 以外は ignored。
   claude-code/    生成された Claude Code artifacts。README と .gitkeep 以外は ignored。
 
-scripts/          check / build / register / connect / sync / status / doctor / setup scripts。
+scripts/          check-manifests / check-injection / check-credential-isolation /
+                  build / register / connect / sync / status / doctor / setup scripts。
                   usage は scripts/README.md を参照。
 docs/             boundary と policy documents。
 ```
 
 `shared/` 配下のサブディレクトリは整理のための置き場所で、asset の種類は manifest の
 `kind` で決まります。各 `kind` (`skill` / `prompt` / `workflow` / `instruction` /
-`template` / `agent`) の意味・使い分け・配置のされ方は
+`script` / `template` / `agent`) の意味・使い分け・配置のされ方は
 [Asset Manifest Schema の「kind」](docs/asset-manifest-schema.md#kind) を参照してください。
 
 ## 現在の scope
 
 scaffold と policy documentation、および check-manifests / check-injection /
-build / register / connect / sync / status / doctor / setup の各 script は実装済みです。
+check-credential-isolation / build / register / connect / sync / status / doctor / setup
+の各 script は実装済みです。
 安全判定 (致命 gate) は build と register で一本化され、sync は catalog を
 尊重して `registered` の asset だけ配置します。self-tests は CI で PR ごとに実行されます。
 

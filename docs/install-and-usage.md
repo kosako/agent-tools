@@ -24,6 +24,7 @@
 | --- | --- | --- |
 | skill | `~/.codex/skills/personal-*` / `~/.claude/skills/personal-*` | `sync`(直接 create) |
 | instruction | `~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md`(人間の `~/.claude/CLAUDE.md` から `@agent-tools/CLAUDE.md` で import) | `connect`(初回所有)→ `sync`(更新) |
+| script | `~/.codex/agent-tools/scripts/personal-*` / `~/.claude/agent-tools/scripts/personal-*`(sidecar marker つき) | `sync`(直接 create) |
 
 skill は隔離 directory なので `sync` が直接置けますが、instruction は共有ファイル
 (`CLAUDE.md` / `AGENTS.md`)に載るため、**先に `connect` で所有を確立**してから
@@ -147,7 +148,7 @@ echo "$status" | jq -r '
 | `skip ... (manifest changed; run scripts/register.sh first)` | register 後に manifest を変更した(登録判断が古い) | `./scripts/register.sh` で catalog を再生成 |
 | `conflict ... (existing target is unmanaged)` | 同名の手書き / 別管理ファイルがある | 中身を確認。agent-tools に委ねてよいなら退避してから再実行(無断上書きはしない) |
 | `conflict ... (existing target is a symlink)` | 所有先 / 親が symlink | symlink を解消するか、別 home を指定 |
-| `no catalog; run register first` | catalog 未生成 | `./scripts/register.sh` |
+| `no catalog; run scripts/register.sh first` | catalog 未生成 | `./scripts/register.sh` |
 
 `--codex-home` / `--claude-home` で home を上書きできます(検証用)。
 

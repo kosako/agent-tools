@@ -120,7 +120,7 @@ asset の種類を表す意味ラベルです。**用途に応じて選びます
 - `agent` kind は現状 build 対象外で、配備したい需要が出た時点で設計します
   (各 tool の agent 形式へのマッピングが論点)。
 - `shared/` 配下のサブディレクトリ (`skills/` `prompts/` `workflows/` `agents/`
-  `instructions/`) は **整理のための置き場所**で、kind を決定しません。asset の kind は
+  `instructions/` `scripts/`) は **整理のための置き場所**で、kind を決定しません。asset の kind は
   必ず manifest の `kind` フィールドで決まります (discovery は sidecar manifest
   `shared/**/*.asset.yml` と directory manifest `shared/**/asset.yml` の両方)。
   例: `personal-project-operating-loop` は `workflows/` 配下にありつつ `kind: workflow`
