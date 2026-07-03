@@ -153,7 +153,8 @@ usage: register.sh [--root DIR] [--quiet]
 ```
 
 - gate は build と同じ。manifest error / high finding で fail し、catalog を更新しない。
-- medium finding は manifest の `review.human_review` と asset 単位で突き合わせる。
+- medium finding は manifest の `review.human_review` と asset 単位で突き合わせる。承認は
+  `review.approved_build_id` が現在の build_id と一致するときだけ効く (内容に紐づく承認, #148)。
 - exit code: 0 (全 registered) / 3 (human_review_required あり) / 1 (gate fail)。
 - 書き込みは `generated/catalog.json` のみ。
 - self-test: `tests/register-test.sh`

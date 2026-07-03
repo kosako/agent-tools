@@ -143,7 +143,8 @@ echo "$status" | jq -r '
 | --- | --- | --- |
 | `skip ... (run build first)` | generated が無い / 古い | `./scripts/build.sh` を実行 |
 | `skip ... (run connect first)` | instruction の所有先が未確立(未接続 / 空ファイル) | `./scripts/connect.sh --apply` |
-| `skip ... (human_review_required)` | catalog で human review 待ち | manifest の `review.human_review` を解決して `register` し直す |
+| `skip ... (human_review_required)` | catalog で human review 待ち | manifest の `review.human_review: approved` と `review.approved_build_id`(現在の build_id)を設定して `register` し直す |
+| `skip ... (manifest changed; run scripts/register.sh first)` | register 後に manifest を変更した(登録判断が古い) | `./scripts/register.sh` で catalog を再生成 |
 | `conflict ... (existing target is unmanaged)` | 同名の手書き / 別管理ファイルがある | 中身を確認。agent-tools に委ねてよいなら退避してから再実行(無断上書きはしない) |
 | `conflict ... (existing target is a symlink)` | 所有先 / 親が symlink | symlink を解消するか、別 home を指定 |
 | `no catalog; run register first` | catalog 未生成 | `./scripts/register.sh` |

@@ -8,7 +8,8 @@
 module ArtifactTargets
   # catalog (generated/catalog.json) の version。reader (sync / status / doctor) は
   # これと一致しない catalog を古いものとして無視する。
-  CATALOG_VERSION = 2
+  # v3: entry に manifest_path / manifest_digest を追加 (登録判断の鮮度検出, #148)。
+  CATALOG_VERSION = 3
 
   # build が扱える artifact_kind。
   SUPPORTED_KINDS = %w[skill instruction script].freeze

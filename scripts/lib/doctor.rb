@@ -148,27 +148,30 @@ module Doctor
       by_name = entries.each_with_object({}) { |e, h| h[e["name"]] = e }
       # 壊れた / 型不正な manifest があっても doctor を落とさない (status と同じ best-effort)。
       # source を読めなければ鮮度は検証不能とし、manifest の不正は check-manifests に委ねる。
-      manifests =
+      assets =
         begin
-          Assets.sources_by_name(@root)
+          Assets.load_all(@root).select { |a| a[:name] && a[:source].is_a?(Hash) }
         rescue StandardError
           nil
         end
-      if manifests.nil?
+      if assets.nil?
         report("warn", "catalog", "freshness 未検証 (manifest を読めない; check-manifests を参照)")
         return
       end
 
       stale = []
-      manifests.each do |name, source|
-        entry = by_name[name]
+      assets.each do |asset|
+        entry = by_name[asset[:name]]
         if entry.nil?
-          stale << "#{name}: not in catalog"
-        elsif !fresh_entry?(entry, source)
-          stale << "#{name}: content changed since register"
+          stale << "#{asset[:name]}: not in catalog"
+        elsif !fresh_entry?(entry, asset[:source])
+          stale << "#{asset[:name]}: content changed since register"
+        elsif !Assets.manifest_fresh?(@root, entry)
+          # 登録判断 (risk / review / targets) は manifest に依存する (#148)。
+          stale << "#{asset[:name]}: manifest changed since register"
         end
       end
-      (by_name.keys - manifests.keys).each { |name| stale << "#{name}: manifest removed" }
+      (by_name.keys - assets.map { |a| a[:name] }).each { |name| stale << "#{name}: manifest removed" }
 
       if stale.empty?
         # entries は target-artifact 単位なので、asset 数は unique name で数える。

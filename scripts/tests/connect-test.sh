@@ -212,4 +212,41 @@ grep -q "0 change(s)" "$tmp/c12" || fail "stale connect should apply 0 changes: 
 [ ! -e "$tmp/claude10/CLAUDE.md" ] || fail "stale generated instruction must not add import"
 [ ! -e "$tmp/codex10/AGENTS.md" ] || fail "stale generated instruction must not create owned codex file"
 
+# --- case 13: register 後に manifest だけ変えたら connect は gate で止まる (#148) ---
+# (source は不変で build_id 一致でも、登録判断 (risk/review) が古い catalog は配置しない。
+#  connect は初回配置を担うので、ここを塞がないと sync の manifest gate を迂回できる)
+mkdir -p "$tmp/repo4/shared/instructions" "$tmp/codex11" "$tmp/claude11"
+cat > "$tmp/repo4/shared/instructions/personal-ops.md" <<'EOF'
+# operating rules
+
+ドキュメントは日本語を既定にする。
+EOF
+cat > "$tmp/repo4/shared/instructions/personal-ops.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-ops
+kind: instruction
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/instructions/personal-ops.md
+  format: markdown
+EOF
+"$build" --root "$tmp/repo4" --quiet > /dev/null
+"$register" --root "$tmp/repo4" --quiet > /dev/null
+# source は変えず manifest だけ変更 (build_id 不変・manifest_digest 変化)。register しない。
+printf '\n# reviewed comment (catalog 未更新)\n' >> "$tmp/repo4/shared/instructions/personal-ops.asset.yml"
+"$connect" --root "$tmp/repo4" --codex-home "$tmp/codex11" --claude-home "$tmp/claude11" --apply > "$tmp/c13" 2>&1 \
+  || fail "connect should not error on manifest-stale catalog: $(cat "$tmp/c13")"
+grep -q "skip: \[claude-code\] owned.*manifest changed" "$tmp/c13" \
+  || fail "claude owned should skip when manifest changed since register: $(cat "$tmp/c13")"
+grep -q "skip: \[codex\] owned.*manifest changed" "$tmp/c13" \
+  || fail "codex owned should skip when manifest changed since register: $(cat "$tmp/c13")"
+[ ! -e "$tmp/claude11/agent-tools/CLAUDE.md" ] || fail "manifest-stale instruction must not create owned file"
+[ ! -e "$tmp/codex11/AGENTS.md" ] || fail "manifest-stale instruction must not create owned codex file"
+
 echo "ok: connect self-test passed"

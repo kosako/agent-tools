@@ -27,6 +27,10 @@ module CheckManifests
     "llm_review" => %w[allowed blocked not_needed],
     "human_review" => %w[pending approved rejected not_needed],
   }.freeze
+  # 承認を内容に紐づける build_id (#148)。build.rb の build_id 形式 (sha256: + 先頭 12 hex)。
+  # human_review: approved と対で使う。
+  APPROVED_BUILD_ID_KEY = "approved_build_id"
+  APPROVED_BUILD_ID_PATTERN = /\Asha256:[0-9a-f]{12}\z/.freeze
   NAME_PATTERN = /\A[a-z0-9]+(?:-[a-z0-9]+)*\z/.freeze
   ASSET_CATEGORIES = %w[skills prompts workflows agents instructions scripts].freeze
   NON_ASSET_BASENAMES = %w[README.md].freeze
@@ -260,12 +264,20 @@ module CheckManifests
         error(path, "review must be a mapping")
         return
       end
-      (value.keys - REVIEW_VALUES.keys).each { |key| error(path, "unknown review key: #{key}") }
+      (value.keys - REVIEW_VALUES.keys - [APPROVED_BUILD_ID_KEY]).each { |key| error(path, "unknown review key: #{key}") }
       REVIEW_VALUES.each do |key, allowed|
         next unless value.key?(key)
 
         unless allowed.include?(value[key])
           error(path, "review.#{key} must be one of #{allowed.join(', ')}, got #{value[key].inspect}")
+        end
+      end
+      if value.key?(APPROVED_BUILD_ID_KEY)
+        unless value[APPROVED_BUILD_ID_KEY].is_a?(String) && value[APPROVED_BUILD_ID_KEY] =~ APPROVED_BUILD_ID_PATTERN
+          error(path, "review.#{APPROVED_BUILD_ID_KEY} must be a build_id (sha256: + 12 hex chars)")
+        end
+        unless value["human_review"] == "approved"
+          error(path, "review.#{APPROVED_BUILD_ID_KEY} requires review.human_review: approved")
         end
       end
     end

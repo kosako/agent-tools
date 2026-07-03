@@ -13,6 +13,9 @@ default は必ず conservative にします。
   `registration: registered` の target-artifact だけを配置する。registered でない
   (`human_review_required` / `unsupported`) ものは理由つきで skip する。
 - catalog が無い / version 不一致なら何も配置せず register を促す。
+- register 後に manifest が変わった entry (catalog の `manifest_digest` と現在の manifest
+  が不一致) は、登録判断ごと stale なので配置せず `manifest changed; run
+  scripts/register.sh first` で skip する (fail-closed, #148)。
 - sync が更新してよいのは agent-tools management marker を含む targets のみ。
   同名の unmanaged targets は conflict として扱い、sync を停止する。
 - artifact_kind ごとに配置先が異なる:

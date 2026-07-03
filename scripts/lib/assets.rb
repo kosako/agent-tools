@@ -1,10 +1,30 @@
 # frozen_string_literal: true
 
+require "digest"
+
 require_relative "yaml_util"
 
 # shared asset の discovery と load を 1 箇所に集約する。
 # manifest glob / parse / 正規化を各 script で重複させない。
 module Assets
+  # manifest file bytes の SHA256。register が catalog に記録し、reader が現在の
+  # manifest と照合して「登録判断 (risk / review / targets) が古い catalog」を検出する
+  # (docs/register-catalog.md)。register と読む側で計算が割れないようここに一元化する。
+  def self.manifest_digest(root, manifest_rel)
+    Digest::SHA256.hexdigest(File.read(File.join(File.expand_path(root), manifest_rel)))
+  end
+
+  # catalog entry の manifest_digest が現在の manifest と一致するか。manifest の欠落・
+  # 読めない・digest 未記録 (旧 catalog) はすべて false = fail-closed。
+  # 配置系 reader (sync / connect) と doctor で判定を共有する (#148)。
+  def self.manifest_fresh?(root, entry)
+    path = entry["manifest_path"]
+    return false unless path.is_a?(String)
+
+    entry["manifest_digest"] == manifest_digest(root, path)
+  rescue SystemCallError, IOError
+    false
+  end
   # sidecar manifest と directory manifest を sort して返す (絶対 path)。
   def self.manifest_paths(root)
     root = File.expand_path(root)
@@ -44,6 +64,7 @@ module Assets
       # parse 可能だが型不正な manifest (scalar の review / risk) でも落ちないよう、
       # Hash でなければ nil / [] に正規化する (検証は check-manifests が担う)。
       human_review: data["review"].is_a?(Hash) ? data["review"]["human_review"] : nil,
+      approved_build_id: data["review"].is_a?(Hash) ? data["review"]["approved_build_id"] : nil,
       declared_risks: data["risk"].is_a?(Hash) ? data["risk"].values : [],
       manifest_path: rel,
     }

@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 # register: shared assets を検証し、catalog に登録状態を記録する。
-# Spec: docs/register-catalog.md (catalog_version 2)
+# Spec: docs/register-catalog.md (catalog_version 3)
 #
 # - 副作用は generated/catalog.json の書き込みのみ。
 # - gate は build と同じ: manifest error / high finding で fail し、catalog を更新しない。
@@ -92,16 +92,30 @@ module Register
       review_needed = asset[:flagged] ||
                       script_artifact ||
                       asset[:declared_risks].any? { |r| %w[medium unknown].include?(r) }
+      # source content の決定的 hash。target に依らない。doctor の鮮度判定に使う。
+      build_id = Build.build_id_for(@root, asset[:source]["path"], asset[:source]["format"])
+      # 承認は内容 (build_id) に紐づける。approved だけの永続承認は、承認後に source が
+      # 全面的に変わっても registered のまま残る穴になる (#148)。approved_build_id が
+      # 現在の build_id と一致するときだけ承認が効く。不一致は再レビューを促す。
+      approval_effective = asset[:human_review] == "approved" &&
+                           asset[:approved_build_id] == build_id
+      if review_needed && asset[:human_review] == "approved" && !approval_effective
+        warn "#{asset[:name]}: human_review is approved but review.approved_build_id does not " \
+             "match current build_id #{build_id}; re-review the content and update approved_build_id"
+      end
       review_registration =
         if !review_needed
           "registered"
-        elsif asset[:human_review] == "approved"
+        elsif approval_effective
           "registered"
         else
           "human_review_required"
         end
-      # source content の決定的 hash。target に依らない。doctor の鮮度判定に使う。
-      build_id = Build.build_id_for(@root, asset[:source]["path"], asset[:source]["format"])
+
+      # 登録判断 (risk / review / targets) は manifest に依存する。manifest の digest を
+      # entry に記録し、reader (sync / doctor) が register 後の manifest 変更を検出できる
+      # ようにする (#148)。
+      manifest_digest = Assets.manifest_digest(@root, asset[:manifest_path])
 
       (asset[:targets] || []).map do |tool|
         registration = ArtifactTargets.buildable?(asset, tool) ? review_registration : "unsupported"
@@ -113,6 +127,8 @@ module Register
           "visibility" => asset[:visibility],
           "source" => asset[:source],
           "build_id" => build_id,
+          "manifest_path" => asset[:manifest_path],
+          "manifest_digest" => manifest_digest,
           "checks" => {
             "manifest_validation" => "pass",
             "prompt_injection_static" => asset[:flagged] ? "human_review" : "pass",

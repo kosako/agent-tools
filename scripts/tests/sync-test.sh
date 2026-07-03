@@ -275,7 +275,12 @@ grep -q "conflict: \[codex\].*symlink" "$tmp/out-skparent" || fail "missing skil
 # --- case 15: script artifact を <home>/agent-tools/scripts/ に配置する ---
 mkdir -p "$tmp/srepo15/shared/scripts" "$tmp/scodex15" "$tmp/sclaude15"
 printf '#!/bin/sh\necho v1\n' > "$tmp/srepo15/shared/scripts/personal-wrap.sh"
-cat > "$tmp/srepo15/shared/scripts/personal-wrap.asset.yml" <<'EOF'
+# script kind は human review 必須 (#147) + 承認は内容に紐づく (#148)。
+# source を書き換える case (v2/v3) の前に呼び直し、現内容で approved を焼き直す。
+write_wrap_manifest() {
+  wrapbid=$(ruby -r"$script_dir/../lib/build" \
+    -e 'puts Build.build_id_for(ARGV[0], "shared/scripts/personal-wrap.sh", "text")' "$tmp/srepo15")
+  cat > "$tmp/srepo15/shared/scripts/personal-wrap.asset.yml" <<EOF
 schema_version: 1
 name: personal-wrap
 kind: script
@@ -286,13 +291,15 @@ targets:
 risk:
   prompt_injection: low
   privacy: low
-# script kind は human review 必須 (#147)。fixture は approved 前提で registered を得る。
 review:
   human_review: approved
+  approved_build_id: $wrapbid
 source:
   path: shared/scripts/personal-wrap.sh
   format: text
 EOF
+}
+write_wrap_manifest
 run15() { "$sync" --root "$tmp/srepo15" --codex-home "$tmp/scodex15" --claude-home "$tmp/sclaude15" "$@"; }
 "$build" --root "$tmp/srepo15" --quiet > /dev/null
 "$register" --root "$tmp/srepo15" --quiet > /dev/null
@@ -315,8 +322,9 @@ grep -q "echo v1" "$deployed" || fail "deployed script body wrong"
 run15 > "$tmp/out15-skip" 2>&1 || fail "script skip run should succeed"
 grep -q "skip: \[claude-code\].*up-to-date" "$tmp/out15-skip" || fail "missing script up-to-date skip: $(cat "$tmp/out15-skip")"
 
-# source 変更で update → apply で反映
+# source 変更で update → apply で反映 (内容変更につき approved_build_id も焼き直す)
 printf '#!/bin/sh\necho v2\n' > "$tmp/srepo15/shared/scripts/personal-wrap.sh"
+write_wrap_manifest
 "$build" --root "$tmp/srepo15" --quiet > /dev/null
 "$register" --root "$tmp/srepo15" --quiet > /dev/null
 run15 > "$tmp/out15-upd" 2>&1 || fail "script update dry-run should succeed"
@@ -326,6 +334,7 @@ grep -q "echo v2" "$deployed" || fail "script update not applied"
 
 # --- case 16: catalog の build_id と generated が不一致なら run build first (stale generated) ---
 printf '#!/bin/sh\necho v3\n' > "$tmp/srepo15/shared/scripts/personal-wrap.sh"
+write_wrap_manifest
 "$register" --root "$tmp/srepo15" --quiet > /dev/null   # build せず register だけ
 run15 > "$tmp/out16" 2>&1 || fail "stale script dry-run should succeed"
 grep -q "skip: \[claude-code\].*run build first" "$tmp/out16" \
@@ -365,5 +374,36 @@ run15 --apply > "$tmp/out19" 2>&1 || status=$?
 grep -q "conflict: \[claude-code\].*symlink" "$tmp/out19" || fail "missing sidecar symlink conflict: $(cat "$tmp/out19")"
 [ ! -e "$tmp/realmarker/stolen.yml" ] || fail "must not write through symlinked sidecar marker"
 [ ! -e "$deployed" ] || fail "script body must not be created when sidecar is unsafe"
+
+# --- case 20: register 後に manifest が変わった entry は配置せず register を促す (#148) ---
+# (登録判断 (risk / review / targets) は manifest 依存。判断ごと stale なので fail-closed に skip)
+mkdir -p "$tmp/mrepo/shared/workflows" "$tmp/mcodex" "$tmp/mclaude"
+printf '# demo\n' > "$tmp/mrepo/shared/workflows/personal-mdemo.md"
+cat > "$tmp/mrepo/shared/workflows/personal-mdemo.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-mdemo
+kind: workflow
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/workflows/personal-mdemo.md
+  format: markdown
+EOF
+run20() { "$sync" --root "$tmp/mrepo" --codex-home "$tmp/mcodex" --claude-home "$tmp/mclaude" "$@"; }
+"$build" --root "$tmp/mrepo" --quiet > /dev/null
+"$register" --root "$tmp/mrepo" --quiet > /dev/null
+run20 > "$tmp/out20a" 2>&1 || fail "fresh manifest sync should succeed: $(cat "$tmp/out20a")"
+grep -q "create: \[claude-code\]" "$tmp/out20a" || fail "fresh manifest should plan create: $(cat "$tmp/out20a")"
+echo "# edited after register" >> "$tmp/mrepo/shared/workflows/personal-mdemo.asset.yml"
+status=0
+run20 --apply > "$tmp/out20b" 2>&1 || status=$?
+[ "$status" -eq 0 ] || fail "manifest-stale sync should exit 0 (skip): $(cat "$tmp/out20b")"
+grep -q "skip: \[claude-code\].*manifest changed; run scripts/register.sh first" "$tmp/out20b" \
+  || fail "missing manifest-stale skip reason: $(cat "$tmp/out20b")"
+[ ! -e "$tmp/mclaude/skills/personal-mdemo" ] || fail "manifest-stale entry must not be deployed"
 
 echo "ok: sync self-test passed"

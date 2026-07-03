@@ -19,6 +19,7 @@ require "fileutils"
 require_relative "yaml_util"
 require_relative "artifact_targets"
 require_relative "instruction_marker"
+require_relative "assets"
 
 module Sync
   MARKER_FILE = ArtifactTargets::MARKER_BASENAME
@@ -39,7 +40,7 @@ module Sync
       load_catalog
     end
 
-    # catalog を source of truth として読む (catalog_version 2、target-artifact 単位)。
+    # catalog を source of truth として読む (ArtifactTargets::CATALOG_VERSION、target-artifact 単位)。
     def load_catalog
       @catalog_present = false
       @entries = []
@@ -96,6 +97,12 @@ module Sync
 
       if entry["registration"] != "registered"
         return Plan.new("skip", tool, name, target_path(tool, name, kind), entry["registration"], kind, nil)
+      end
+      # 登録判断 (risk / review / targets) は manifest に依存する。register 後に manifest が
+      # 変わった entry は判断ごと stale なので、配置せず register を促す (fail-closed, #148)。
+      unless Assets.manifest_fresh?(@root, entry)
+        return Plan.new("skip", tool, name, target_path(tool, name, kind),
+                        "manifest changed; run scripts/register.sh first", kind, nil)
       end
 
       case kind

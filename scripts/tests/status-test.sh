@@ -63,7 +63,7 @@ run_status > "$tmp/s1" 2>&1 || fail "status should succeed: $(cat "$tmp/s1")"
 run_status > "$tmp/s2" 2>&1
 [ "$(jget "$tmp/s2" generated total)" = "2" ] || fail "generated.total should be 2"
 [ "$(jget "$tmp/s2" generated stale)" = "0" ] || fail "generated.stale should be 0"
-# catalog は target-artifact 単位 (catalog_version 2)。2 target なので registered=2。
+# catalog は target-artifact 単位 (catalog_version 3)。2 target なので registered=2。
 [ "$(jget "$tmp/s2" register registered)" = "2" ] || fail "register.registered should be 2 (target-artifact unit)"
 [ "$(jget "$tmp/s2" register unsupported)" = "0" ] || fail "register.unsupported should be present and 0"
 [ "$(jget "$tmp/s2" sync_targets 0 state)" = '"missing"' ] || fail "target should be missing"
@@ -73,6 +73,17 @@ run_status > "$tmp/s2" 2>&1
 run_status > "$tmp/s3" 2>&1
 [ "$(jget "$tmp/s3" sync_targets 0 state)" = '"managed"' ] || fail "target should be managed"
 [ "$(jget "$tmp/s3" sync_targets 1 state)" = '"managed"' ] || fail "both targets should be managed"
+
+# --- case 3b: managed でも register 後に manifest を変えたら target は stale (#148) ---
+# (source 不変で managed のままでも、登録判断が古いと再 register が要る = stale 表示)
+printf '\nsummary: demo workflow (edited)\n' >> "$tmp/repo/shared/workflows/personal-demo.asset.yml"
+run_status > "$tmp/s3b" 2>&1
+[ "$(jget "$tmp/s3b" sync_targets 0 state)" = '"stale"' ] \
+  || fail "manifest change should make managed target stale: $(cat "$tmp/s3b")"
+"$script_dir/../register.sh" --root "$tmp/repo" --quiet > /dev/null   # 元の状態へ (再 register で fresh)
+run_status > "$tmp/s3c" 2>&1
+[ "$(jget "$tmp/s3c" sync_targets 0 state)" = '"managed"' ] \
+  || fail "re-register should restore managed: $(cat "$tmp/s3c")"
 
 # --- case 4: source 変更で generated.stale と target stale が出る ---
 cat > "$tmp/repo/shared/workflows/personal-demo.md" <<'EOF'
@@ -197,7 +208,10 @@ rm -f "$tmp/irepo/shared/instructions/personal-ops.md"
 # --- case 13: script の generated も generated.total に数え、sync_target を報告する ---
 mkdir -p "$tmp/screpo/shared/scripts" "$tmp/sccodex" "$tmp/scclaude"
 printf '#!/bin/sh\necho hi\n' > "$tmp/screpo/shared/scripts/personal-wrap.sh"
-cat > "$tmp/screpo/shared/scripts/personal-wrap.asset.yml" <<'EOF'
+# script kind は human review 必須 (#147) + 承認は内容に紐づく (#148)。
+scbid=$(ruby -r"$script_dir/../lib/build" \
+  -e 'puts Build.build_id_for(ARGV[0], "shared/scripts/personal-wrap.sh", "text")' "$tmp/screpo")
+cat > "$tmp/screpo/shared/scripts/personal-wrap.asset.yml" <<EOF
 schema_version: 1
 name: personal-wrap
 kind: script
@@ -207,9 +221,9 @@ targets:
 risk:
   prompt_injection: low
   privacy: low
-# script kind は human review 必須 (#147)。fixture は approved 前提で registered を得る。
 review:
   human_review: approved
+  approved_build_id: $scbid
 source:
   path: shared/scripts/personal-wrap.sh
   format: text

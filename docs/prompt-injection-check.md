@@ -88,10 +88,12 @@ human review 必須にします。
 ## Risk Outcomes
 
 - High risk: registration fail。
-- Medium risk: human review 必須。`review.human_review: approved` を manifest で宣言すると
-  `registered` になり配置される (medium↔承認の照合は register が担う)。read-only でログを
-  読む等、参照が設計上正当な skill (例 `personal-asset-miner` の runtime-state) はこの経路で
-  通す。詳細は [register-catalog](register-catalog.md)。
+- Medium risk: human review 必須。`review.human_review: approved` **かつ**
+  `review.approved_build_id` が現在の build_id と一致すると `registered` になり配置される
+  (medium↔承認の照合は register が担う)。承認は内容に紐づくので、source を変えたら
+  再レビューして `approved_build_id` を更新する (#148)。read-only でログを読む等、参照が
+  設計上正当な skill (例 `personal-asset-miner` の runtime-state) はこの経路で通す。詳細は
+  [register-catalog](register-catalog.md)。
 - Low risk: registration 可。
 
 ## Static checker 実装
