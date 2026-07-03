@@ -26,10 +26,14 @@ module Assets
     false
   end
   # sidecar manifest と directory manifest を sort して返す (絶対 path)。
+  # glob は `foo.asset.yml` という名前の directory にもマッチしうるため、File.read で
+  # EISDIR を踏まないよう file だけに絞る (directory manifest は File.file? で残る)。
   def self.manifest_paths(root)
     root = File.expand_path(root)
     (Dir.glob(File.join(root, "shared/**/*.asset.yml")) +
-     Dir.glob(File.join(root, "shared/**/asset.yml"))).sort
+     Dir.glob(File.join(root, "shared/**/asset.yml")))
+      .select { |p| File.file?(p) }
+      .sort
   end
 
   # すべての asset を正規化した hash で返す。

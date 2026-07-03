@@ -504,4 +504,43 @@ crlf_skill="$tmp/crlf/generated/claude-code/skills/personal-crlf/SKILL.md"
 fm_count=$(grep -c -- '^---' "$crlf_skill" || true)
 [ "$fm_count" = "2" ] || fail "CRLF frontmatter must not be duplicated (got $fm_count '---' lines): $(cat "$crlf_skill")"
 
+# --- case: directory asset 内の dotfile が build_id に反映され、配置もされる (#149) ---
+# (FNM_DOTMATCH 無しだと dotfile 変更が build_id 不変 → 永久に未配布になる回帰)
+mkdir -p "$tmp/dot/shared/skills/personal-dot/references"
+cat > "$tmp/dot/shared/skills/personal-dot/SKILL.md" <<'EOF'
+---
+name: personal-dot
+description: dotfile build_id regression
+---
+
+# dot skill
+EOF
+printf 'v1\n' > "$tmp/dot/shared/skills/personal-dot/references/.hidden.md"
+cat > "$tmp/dot/shared/skills/personal-dot/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-dot
+kind: skill
+visibility: personal
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-dot
+  format: directory
+EOF
+dotmarker="$tmp/dot/generated/claude-code/skills/personal-dot/.agent-tools-managed.yml"
+"$build" --root "$tmp/dot" --quiet > /dev/null 2>&1 || fail "dot skill build should pass"
+bid_before=$(grep build_id "$dotmarker")
+# dotfile が配置されている
+[ -f "$tmp/dot/generated/claude-code/skills/personal-dot/references/.hidden.md" ] \
+  || fail "dotfile should be deployed into generated skill"
+# dotfile だけ変更 → build_id が変わる (FNM_DOTMATCH で hash に含まれるため)
+printf 'v2-changed\n' > "$tmp/dot/shared/skills/personal-dot/references/.hidden.md"
+"$build" --root "$tmp/dot" --quiet > /dev/null 2>&1 || fail "dot skill rebuild should pass"
+bid_after=$(grep build_id "$dotmarker")
+[ "$bid_before" != "$bid_after" ] \
+  || fail "dotfile change must change build_id (else update never syncs): $bid_before"
+
 echo "ok: build self-test passed"

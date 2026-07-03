@@ -185,7 +185,10 @@ module Build
           case ArtifactTargets.resolve(asset, tool)
           when "instruction" then instruction_expected[tool] = true
           when "script" then script_expected[tool] << asset[:name]
-          else expected[tool] << asset[:name]
+          when "skill" then expected[tool] << asset[:name]
+          # unsupported は build しないので期待リストに入れない。else で skill 扱いすると
+          # kind 変更 (skill→agent 等) 後の stale な generated/<tool>/skills/<name> が
+          # prune 保護されて残ってしまう。
           end
         end
       end
@@ -271,7 +274,11 @@ module Build
       # 相対 path 計算 (evals 除外) が末尾スラッシュで壊れないよう正規化する。
       src_dir = File.join(root, source).chomp("/")
       digest = Digest::SHA256.new
-      Dir.glob(File.join(src_dir, "**/*")).sort.each do |f|
+      # copy (copy_directory_asset は Dir.children + cp_r で dotfile も配る) と揃えるため
+      # FNM_DOTMATCH で dotfile も hash に含める。含めないと dotfile だけ変えた更新が
+      # build_id 不変となり sync が up-to-date で skip し、永久に配布されない。
+      # `.` / `..` は `**/*` が返さず、File.file? が非ファイルを弾く。
+      Dir.glob(File.join(src_dir, "**/*"), File::FNM_DOTMATCH).sort.each do |f|
         next unless File.file?(f)
         # copy と同じく、manifest として除外するのは top-level の asset.yml のみ。
         next if f == File.join(src_dir, "asset.yml")

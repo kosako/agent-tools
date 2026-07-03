@@ -102,8 +102,36 @@ module CheckManifests
       validate_risk(path, data["risk"]) if data.key?("risk")
       validate_source(path, data["source"]) if data.key?("source")
       validate_review(path, data["review"]) if data.key?("review")
+      validate_compatibility(path, data["compatibility"]) if data.key?("compatibility")
       validate_text_field(path, "summary", data["summary"]) if data.key?("summary")
       validate_text_field(path, "description", data["description"]) if data.key?("description")
+    end
+
+    # compatibility は { <tool> => { "artifact_kind" => <kind> } }。無検証だと typo
+    # (artifact_kind: skil など) が silent に unsupported へ落ち、配布されない原因に人間が
+    # 気づけない (gate の fail-closed 方針に反する)。キーと値を厳密に検証する。
+    def validate_compatibility(path, value)
+      unless value.is_a?(Hash)
+        error(path, "compatibility must be a mapping")
+        return
+      end
+      value.each do |tool, entry|
+        error(path, "compatibility has unknown tool: #{tool}") unless TARGETS.include?(tool)
+        unless entry.is_a?(Hash)
+          error(path, "compatibility.#{tool} must be a mapping")
+          next
+        end
+        (entry.keys - %w[artifact_kind]).each do |key|
+          error(path, "compatibility.#{tool} has unknown key: #{key}")
+        end
+        next unless entry.key?("artifact_kind")
+
+        kind = entry["artifact_kind"]
+        unless ArtifactTargets::SUPPORTED_KINDS.include?(kind)
+          error(path, "compatibility.#{tool}.artifact_kind must be one of " \
+                      "#{ArtifactTargets::SUPPORTED_KINDS.join(', ')}, got #{kind.inspect}")
+        end
+      end
     end
 
     def validate_schema_version(path, value)

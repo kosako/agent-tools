@@ -175,7 +175,20 @@ module SafeGh
     return nil unless data.is_a?(Hash)
     return nil if data["login"].nil? && data["id"].nil?
 
-    { "login" => data["login"], "id" => data["id"] }
+    # id は GitHub API では integer。trust file に文字列 "12345" で書かれても integer 比較で
+    # 一致するよう正規化する (不一致だと自分の投稿まで恒久 untrusted に化ける)。
+    { "login" => data["login"], "id" => normalize_id(data["id"]) }
+  end
+
+  # numeric id を Integer に正規化する。integer / 数字文字列は Integer 化、nil は nil、
+  # 非数値はそのまま返す (integer と一致せず fail-closed のまま)。
+  def normalize_id(id)
+    return nil if id.nil?
+    return id if id.is_a?(Integer)
+
+    Integer(id.to_s, 10)
+  rescue ArgumentError, TypeError
+    id
   end
 
   def parse_json(text)
@@ -192,9 +205,14 @@ module SafeGh
   end
 
   # gh REST を叩いて JSON を返す。失敗 (network/auth/not found) は Error。安全側に倒すため
-  # 部分的な envelope は作らず止める。
-  def gh_api(path)
-    out, ok = gh_capture(["api", path])
+  # 部分的な envelope は作らず止める。paginate=true のとき --paginate を付け、配列を返す
+  # list endpoint (comments 等) の全ページを 1 つの JSON 配列にまとめて取得する
+  # (30 件で切れると excluded count が過少になり自分の comment 本文も落ちる)。
+  def gh_api(path, paginate: false)
+    args = ["api"]
+    args << "--paginate" if paginate
+    args << path
+    out, ok = gh_capture(args)
     raise Error, "gh api #{path} failed (gh が未認証 / network / 対象が存在しない可能性)" unless ok
 
     parse_json(out) || raise(Error, "gh api #{path} returned invalid JSON")
@@ -222,7 +240,7 @@ module SafeGh
   end
 
   def fetch_comments(repo, number)
-    gh_api("repos/#{repo}/issues/#{number}/comments")
+    gh_api("repos/#{repo}/issues/#{number}/comments", paginate: true)
   end
 
   # ---- entrypoint ------------------------------------------------------------
