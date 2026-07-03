@@ -68,7 +68,7 @@ module ArtifactTargets
   # - instruction: tool 固有ファイル名 (INSTRUCTION_FILENAMES)。claude-code は
   #   agent-tools/ subdir 配下に所有ファイルを置き、codex は home 直下。filename を
   #   解決できない tool では nil。
-  # - script: <home>/agent-tools/scripts/<name> (配布は P3-04)。
+  # - script: <home>/agent-tools/scripts/<name>。
   # - それ以外 (skill 等): <home>/skills/<name>。
   def self.target_path(home, tool, name, kind)
     case kind

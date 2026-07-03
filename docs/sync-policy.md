@@ -26,8 +26,8 @@ default は必ず conservative にします。
   - script: `<tool home>/agent-tools/scripts/personal-<name>` (単一実行ファイル) と
     その隣の `<name>.agent-tools-managed.yml` (sidecar marker)。本体は byte 保持・mode 0755。
     instruction と違い人間ファイルを介さないため connect 不要で、未配置なら sync が直接
-    create する。配置先本体・`agent-tools/scripts`・`agent-tools` のいずれかが symlink なら
-    conflict として停止する。
+    create する。配置先本体・sidecar marker・`agent-tools/scripts`・`agent-tools` のいずれかが
+    symlink なら conflict として停止する。
 
 ## v1 Codex targets
 

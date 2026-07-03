@@ -54,10 +54,11 @@ local development environment の control plane ではありません。
 
 ## 現在の phase
 
-scaffold と policy documentation は完了し、pipeline の 9 script が一通り実装済みです。
+scaffold と policy documentation は完了し、pipeline の 10 script が一通り実装済みです。
 
 - 実装済み: manifest validation (`scripts/check-manifests.sh`)、
   static prompt injection checks (`scripts/check-injection.sh`)、
+  credential 隔離 acceptance 判定 (`scripts/check-credential-isolation.sh`)、
   build adapters (`scripts/build.sh`)、register (`scripts/register.sh`)、
   connect (`scripts/connect.sh`)、dry-run sync (`scripts/sync.sh`)、
   report-only status (`scripts/status.sh`)、doctor (`scripts/doctor.sh`)、

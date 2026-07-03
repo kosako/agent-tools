@@ -11,7 +11,9 @@
 
 表の v1 sync 列は skill の配置先です。instruction は connect が確立した所有ファイル
 (`~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md`) を sync が更新します
-([Instruction Artifact Kind](instruction-artifact-kind.md))。下記「v1 で扱わないもの」の
+([Instruction Artifact Kind](instruction-artifact-kind.md))。script は
+`~/.codex/agent-tools/scripts/personal-*` / `~/.claude/agent-tools/scripts/personal-*`
+(sidecar marker つき) を sync が直接配置します。下記「v1 で扱わないもの」の
 `AGENTS.md` / `CLAUDE.md` の automatic sync は、人間が手書きするファイルを自動同期しない
 という意味です (connect は import 1 行追加 / 空ファイルの claim のみを行う)。
 

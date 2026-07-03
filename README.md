@@ -78,6 +78,7 @@ shared/
   workflows/      共通 reusable workflows
   agents/         共通 agent definitions
   instructions/   共通 instruction templates
+  scripts/        共通 source scripts (配布される wrapper / hook body)
 
 adapters/
   codex/          Codex 向け build adapter specs
@@ -87,7 +88,8 @@ generated/
   codex/          生成された Codex artifacts。README と .gitkeep 以外は ignored。
   claude-code/    生成された Claude Code artifacts。README と .gitkeep 以外は ignored。
 
-scripts/          check / build / register / connect / sync / status / doctor / setup scripts。
+scripts/          check-manifests / check-injection / check-credential-isolation /
+                  build / register / connect / sync / status / doctor / setup scripts。
                   usage は scripts/README.md を参照。
 docs/             boundary と policy documents。
 ```
@@ -100,7 +102,8 @@ docs/             boundary と policy documents。
 ## 現在の scope
 
 scaffold と policy documentation、および check-manifests / check-injection /
-build / register / connect / sync / status / doctor / setup の各 script は実装済みです。
+check-credential-isolation / build / register / connect / sync / status / doctor / setup
+の各 script は実装済みです。
 安全判定 (致命 gate) は build と register で一本化され、sync は catalog を
 尊重して `registered` の asset だけ配置します。self-tests は CI で PR ごとに実行されます。
 
