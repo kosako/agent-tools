@@ -205,17 +205,22 @@ module SafeGh
   end
 
   # gh REST を叩いて JSON を返す。失敗 (network/auth/not found) は Error。安全側に倒すため
-  # 部分的な envelope は作らず止める。paginate=true のとき --paginate を付け、配列を返す
-  # list endpoint (comments 等) の全ページを 1 つの JSON 配列にまとめて取得する
-  # (30 件で切れると excluded count が過少になり自分の comment 本文も落ちる)。
+  # 部分的な envelope は作らず止める。
+  #
+  # paginate=true は配列を返す list endpoint (comments 等) の全ページを取得する
+  # (30 件で切れると excluded count が過少になり自分の comment 本文も落ちる)。plain
+  # `--paginate` は array endpoint でページ境界に `][` を挟み単一 JSON として不正になり得る
+  # ため、`--slurp` で各ページを 1 要素とする配列にまとめ、flatten(1) で平坦化する
+  # (single page でも `[[...]]` を平坦化するので結果は常に flat な配列)。
   def gh_api(path, paginate: false)
     args = ["api"]
-    args << "--paginate" if paginate
+    args += ["--paginate", "--slurp"] if paginate
     args << path
     out, ok = gh_capture(args)
     raise Error, "gh api #{path} failed (gh が未認証 / network / 対象が存在しない可能性)" unless ok
 
-    parse_json(out) || raise(Error, "gh api #{path} returned invalid JSON")
+    data = parse_json(out) || raise(Error, "gh api #{path} returned invalid JSON")
+    paginate ? data.flatten(1) : data
   end
 
   # owner/repo を解決する。-R で明示されていればそれを、無ければ現在の repo を gh から引く。

@@ -277,7 +277,7 @@ module Build
       # copy (copy_directory_asset は Dir.children + cp_r で dotfile も配る) と揃えるため
       # FNM_DOTMATCH で dotfile も hash に含める。含めないと dotfile だけ変えた更新が
       # build_id 不変となり sync が up-to-date で skip し、永久に配布されない。
-      # `.` / `..` は `**/*` が返さず、File.file? が非ファイルを弾く。
+      # FNM_DOTMATCH では `.` 等の dir entry も返りうるが、File.file? が非ファイルを弾く。
       Dir.glob(File.join(src_dir, "**/*"), File::FNM_DOTMATCH).sort.each do |f|
         next unless File.file?(f)
         # copy と同じく、manifest として除外するのは top-level の asset.yml のみ。

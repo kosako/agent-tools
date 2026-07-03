@@ -13,7 +13,7 @@ risk:
 # 承認は内容に紐づく (#148)。source 変更時は再レビューして approved_build_id を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:c44a080a596f
+  approved_build_id: sha256:35cdec4f7860
 source:
   path: shared/scripts/personal-safe-gh.rb
   format: text
