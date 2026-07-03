@@ -406,4 +406,42 @@ grep -q "skip: \[claude-code\].*manifest changed; run scripts/register.sh first"
   || fail "missing manifest-stale skip reason: $(cat "$tmp/out20b")"
 [ ! -e "$tmp/mclaude/skills/personal-mdemo" ] || fail "manifest-stale entry must not be deployed"
 
+# --- case 21: 未レビュー (human_review_required) の asset は --apply でも配置しない (#150) ---
+# (register の review gate を sync が尊重すること。connect には同等テストがあるが sync に無かった)
+mkdir -p "$tmp/grepo/shared/skills/personal-gated" "$tmp/gcodex" "$tmp/gclaude"
+cat > "$tmp/grepo/shared/skills/personal-gated/SKILL.md" <<'EOF'
+---
+name: personal-gated
+description: pending review skill
+---
+
+# gated
+EOF
+cat > "$tmp/grepo/shared/skills/personal-gated/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-gated
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: medium
+  privacy: low
+source:
+  path: shared/skills/personal-gated
+  format: directory
+EOF
+run21() { "$sync" --root "$tmp/grepo" --codex-home "$tmp/gcodex" --claude-home "$tmp/gclaude" "$@"; }
+"$build" --root "$tmp/grepo" --quiet > /dev/null
+# 宣言 medium + 未承認 → register は human_review_required (exit 3, 非致命)
+status=0
+"$register" --root "$tmp/grepo" --quiet > /dev/null || status=$?
+[ "$status" -eq 3 ] || fail "pending skill should register as human_review_required (exit 3), got $status"
+status=0
+run21 --apply > "$tmp/out21" 2>&1 || status=$?
+[ "$status" -eq 0 ] || fail "sync of gated asset should exit 0 (skip): $(cat "$tmp/out21")"
+grep -q "skip: \[claude-code\].*human_review_required" "$tmp/out21" \
+  || fail "gated asset must skip with human_review_required reason: $(cat "$tmp/out21")"
+[ ! -e "$tmp/gclaude/skills/personal-gated" ] || fail "unreviewed asset must not be deployed"
+
 echo "ok: sync self-test passed"

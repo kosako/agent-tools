@@ -54,7 +54,7 @@ grep -q "personal-evil.md:1:" "$tmp/out-high" \
 
 # --- case 3: medium のみは exit 3 (human review required) ---
 mkdir -p "$tmp/medium/shared/instructions"
-printf 'normal text with hidden\xe2\x80\x8bmarker inside\n' \
+printf 'normal text with hidden\342\200\213marker inside\n' \
   > "$tmp/medium/shared/instructions/personal-hidden.md"
 
 status=0

@@ -449,6 +449,76 @@ grep -q "artifact_kind must be one of" "$tmp/out-compat" \
 grep -q "compatibility has unknown tool: bogus-tool" "$tmp/out-compat" \
   || fail "expected unknown-tool error: $(cat "$tmp/out-compat")"
 
+# --- case: source.path の path traversal を拒否する (shared/ 脱出防止の要, #150) ---
+# 絶対 path
+mkdir -p "$tmp/abs/shared/workflows"
+echo "# x" > "$tmp/abs/shared/workflows/personal-abs.md"
+cat > "$tmp/abs/shared/workflows/personal-abs.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-abs
+kind: workflow
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: /etc/passwd
+  format: markdown
+EOF
+if "$check" --root "$tmp/abs" > "$tmp/out-abs" 2>&1; then
+  fail "check-manifests must reject an absolute source.path"
+fi
+grep -q "source.path must be relative" "$tmp/out-abs" \
+  || fail "expected absolute-path rejection: $(cat "$tmp/out-abs")"
+
+# .. を含む相対 path
+mkdir -p "$tmp/dotdot/shared/workflows"
+echo "# x" > "$tmp/dotdot/shared/workflows/personal-dd.md"
+cat > "$tmp/dotdot/shared/workflows/personal-dd.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-dd
+kind: workflow
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/../../etc/secret
+  format: markdown
+EOF
+if "$check" --root "$tmp/dotdot" > "$tmp/out-dd" 2>&1; then
+  fail "check-manifests must reject a '..' source.path"
+fi
+grep -q "source.path must not contain '..'" "$tmp/out-dd" \
+  || fail "expected dotdot rejection: $(cat "$tmp/out-dd")"
+
+# shared/ 外
+mkdir -p "$tmp/outside/shared/workflows"
+echo "# x" > "$tmp/outside/shared/workflows/personal-out.md"
+cat > "$tmp/outside/shared/workflows/personal-out.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-out
+kind: workflow
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: docs/secret.md
+  format: markdown
+EOF
+if "$check" --root "$tmp/outside" > "$tmp/out-outside" 2>&1; then
+  fail "check-manifests must reject a source.path outside shared/"
+fi
+grep -q "source.path must be under shared/" "$tmp/out-outside" \
+  || fail "expected outside-shared rejection: $(cat "$tmp/out-outside")"
+
 # --- case 5: repository 本体の manifest が pass する ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \

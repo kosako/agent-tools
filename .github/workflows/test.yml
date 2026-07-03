@@ -14,6 +14,7 @@ permissions:
 jobs:
   self-tests:
     runs-on: macos-latest
+    timeout-minutes: 15
     steps:
       # 外部 action は full commit SHA で pin する (タグ移動による差し替え対策)。
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -23,10 +24,13 @@ jobs:
 
       - name: Run self-tests
         run: |
+          # 最初の失敗で止めず全 test を走らせ、1 回の CI で全失敗を可視化する。
+          failed=0
           for t in scripts/tests/*.sh; do
             echo "--- $t"
-            "$t"
+            "$t" || { echo "FAIL: $t"; failed=1; }
           done
+          exit "$failed"
 
       - name: Check repository assets
         run: |
@@ -39,5 +43,9 @@ jobs:
         run: |
           scripts/build.sh
           scripts/register.sh
-          scripts/status.sh --json
-          scripts/doctor.sh
+          # status / doctor は runner の実 ~/.codex 等を読まないよう空 home を渡す
+          # (環境依存の結果を避ける。CI では build/register の健全性だけ見る)。
+          homes="$RUNNER_TEMP/emptyhomes"
+          mkdir -p "$homes/codex" "$homes/claude" "$homes/agents"
+          scripts/status.sh --json --codex-home "$homes/codex" --claude-home "$homes/claude"
+          scripts/doctor.sh --codex-home "$homes/codex" --claude-home "$homes/claude" --agents-home "$homes/agents"
