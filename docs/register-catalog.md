@@ -137,7 +137,8 @@ enforce する。static finding と宣言 risk の厳しい方が勝つ。
 
 - いずれかが `high` → register fail。catalog を更新しない。
 - いずれかが `medium` / `unknown` → human review 必須として扱う
-  (`approved` → `registered`、それ以外 → `human_review_required`)。
+  (承認が有効 = `approved` かつ `approved_build_id` 一致なら `registered`、それ以外は
+  `human_review_required`。下記「承認は内容に紐づく」参照)。
 - 両方 `low` → finding がなければ `registered`。
 
 ## script artifact は常に human review 必須
@@ -146,9 +147,10 @@ enforce する。static finding と宣言 risk の厳しい方が勝つ。
 static check が当てられるのは injection 文言 pattern のみ (コードの悪性は検査できない。
 [prompt-injection-check.md](prompt-injection-check.md) の honest-label 参照)。directory skill の
 `scripts/` を #43 まで fail-closed にしているのと対称に、宣言 risk / finding の有無によらず
-human review 必須として扱う (`approved` → `registered`、それ以外 → `human_review_required`)。
-判定は manifest の `kind` でなく **resolve 後の artifact_kind** で行う (`compatibility` の
-override で任意 kind を script 配布にできるため、kind 基準では迂回できる)。
+human review 必須として扱う (承認が有効 = `approved` かつ `approved_build_id` 一致なら
+`registered`、それ以外は `human_review_required`)。判定は manifest の `kind` でなく
+**resolve 後の artifact_kind** で行う (`compatibility` の override で任意 kind を script
+配布にできるため、kind 基準では迂回できる)。
 
 ## Check 結果の書き戻し方針
 
