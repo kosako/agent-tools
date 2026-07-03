@@ -9,7 +9,7 @@
 ## 1. このプロジェクトは何か
 
 `agent-tools` は、再利用可能な AI agent asset (skills / prompts / workflows /
-agent definitions / instruction templates) を **管理・運用するフレームワーク**です。
+agent definitions / instruction templates / scripts) を **管理・運用するフレームワーク**です。
 asset を量産することが目的ではなく、**asset を安全に検証・生成・配置する仕組み**が本体です。
 
 - Codex と Claude Code の共通 source repository。

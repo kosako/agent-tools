@@ -1,7 +1,7 @@
 # agent-tools
 
 `agent-tools` は、再利用可能な skills、prompts、workflows、agent definitions、
-instruction templates を管理するための個人用 AI agent asset repository です。
+instruction templates、scripts を管理するための個人用 AI agent asset repository です。
 
 > 全体像・設計・現在地を一度に把握したい場合は
 > [docs/onboarding.md](docs/onboarding.md) から読んでください。
@@ -36,7 +36,7 @@ dotfiles
   policy / capabilities / directory convention / safety gates
 
 agent-tools
-  skills / prompts / AGENTS.md templates / agent definitions / evals
+  skills / prompts / AGENTS.md templates / agent definitions / scripts / evals
 
 secret store / local private config
   tokens / credentials / private endpoints
@@ -96,7 +96,7 @@ docs/             boundary と policy documents。
 
 `shared/` 配下のサブディレクトリは整理のための置き場所で、asset の種類は manifest の
 `kind` で決まります。各 `kind` (`skill` / `prompt` / `workflow` / `instruction` /
-`template` / `agent`) の意味・使い分け・配置のされ方は
+`script` / `template` / `agent`) の意味・使い分け・配置のされ方は
 [Asset Manifest Schema の「kind」](docs/asset-manifest-schema.md#kind) を参照してください。
 
 ## 現在の scope
