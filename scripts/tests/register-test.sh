@@ -70,7 +70,7 @@ jget "$catalog" assets 0 manifest_digest | grep -qE '"[0-9a-f]{64}"' \
 
 # --- case 3: medium finding + human_review なし → human_review_required, exit 3 ---
 mkdir -p "$tmp/medium/shared/workflows"
-printf '# demo with hidden\xe2\x80\x8bmarker\n' > "$tmp/medium/shared/workflows/personal-demo.md"
+printf '# demo with hidden\342\200\213marker\n' > "$tmp/medium/shared/workflows/personal-demo.md"
 write_manifest "$tmp/medium/shared/workflows"
 status=0
 "$register" --root "$tmp/medium" > "$tmp/r3" 2>&1 || status=$?
@@ -104,7 +104,7 @@ grep -q "approved_build_id does not match current build_id" "$tmp/r4b" \
 write_manifest "$tmp/medium/shared/workflows" "review:
   human_review: approved
   approved_build_id: $bid_medium"
-printf '# demo with hidden\xe2\x80\x8bmarker\nedited after approval\n' \
+printf '# demo with hidden\342\200\213marker\nedited after approval\n' \
   > "$tmp/medium/shared/workflows/personal-demo.md"
 status=0
 "$register" --root "$tmp/medium" > "$tmp/r4c" 2>&1 || status=$?
@@ -112,7 +112,7 @@ status=0
 [ "$(jget "$catalog" assets 0 registration)" = '"human_review_required"' ] \
   || fail "content change must invalidate approval"
 # 後続 case のために元の内容へ戻す
-printf '# demo with hidden\xe2\x80\x8bmarker\n' > "$tmp/medium/shared/workflows/personal-demo.md"
+printf '# demo with hidden\342\200\213marker\n' > "$tmp/medium/shared/workflows/personal-demo.md"
 
 # --- case 5: medium finding + rejected → fail, catalog 未更新 ---
 write_manifest "$tmp/medium/shared/workflows" "review:
