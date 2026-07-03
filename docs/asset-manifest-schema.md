@@ -236,6 +236,9 @@ target tool ごとの変換 hint です。
 `compatibility.<tool>.artifact_kind` で、その tool 向けに生成する artifact の種類を
 明示できます。未指定なら asset の `kind` から既定値が導出されます (`instruction` kind は
 instruction、`script` kind は script、`skill` / `prompt` / `workflow` / `template` は skill)。
+tool キーは初期 target (`codex` / `claude-code`)、`artifact_kind` は build 対応 kind
+(`skill` / `instruction` / `script`) に限られ、check-manifests が検証します (typo は
+silent に unsupported へ落とさず error にする)。
 
 build が対応する artifact_kind は `skill` / `instruction` / `script` です。いずれも build →
 register → sync で配置されます (instruction の所有確立は connect が担当)。

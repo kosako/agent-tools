@@ -419,6 +419,36 @@ grep -q "approved_build_id must be a build_id" "$tmp/out-abid" \
 grep -q "approved_build_id requires review.human_review: approved" "$tmp/out-abid" \
   || fail "expected approved-pairing error: $(cat "$tmp/out-abid")"
 
+# --- case: compatibility フィールドの検証 (#149)。typo / 不明 tool / 型不正を reject ---
+mkdir -p "$tmp/compat/shared/workflows"
+echo "# demo" > "$tmp/compat/shared/workflows/personal-compat.md"
+cat > "$tmp/compat/shared/workflows/personal-compat.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-compat
+kind: workflow
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+compatibility:
+  claude-code:
+    artifact_kind: skil
+  bogus-tool:
+    artifact_kind: skill
+source:
+  path: shared/workflows/personal-compat.md
+  format: markdown
+EOF
+if "$check" --root "$tmp/compat" > "$tmp/out-compat" 2>&1; then
+  fail "check-manifests must reject invalid compatibility"
+fi
+grep -q "artifact_kind must be one of" "$tmp/out-compat" \
+  || fail "expected artifact_kind typo error: $(cat "$tmp/out-compat")"
+grep -q "compatibility has unknown tool: bogus-tool" "$tmp/out-compat" \
+  || fail "expected unknown-tool error: $(cat "$tmp/out-compat")"
+
 # --- case 5: repository 本体の manifest が pass する ---
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \

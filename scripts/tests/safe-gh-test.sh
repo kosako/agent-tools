@@ -144,8 +144,30 @@ check("no excluded -> count 0", env["excluded_comments_count"] == 0)
 ident = SafeGh.self_identity(env: { "SAFE_GH_TRUST_FILE" => trust_file })
 check("self_identity from file login", ident && ident["login"] == "owner-login")
 check("self_identity from file id", ident && ident["id"] == 4242)
+
+# ---- id 正規化: trust file に文字列 id を書いても integer 比較で self になる ----
+str_id = SafeGh.normalize_identity({ "login" => "me", "id" => "1" })
+check("string id normalized to integer", str_id["id"] == 1)
+check("self by normalized string id", SafeGh.classify({ "login" => "me", "id" => 1 }, str_id) == "self")
+check("integer id passthrough", SafeGh.normalize_identity({ "login" => "me", "id" => 1 })["id"] == 1)
+# 非数値 id はそのまま (integer と一致せず fail-closed)
+weird = SafeGh.normalize_identity({ "login" => "me", "id" => "abc" })
+check("non-numeric id kept (fail-closed)", SafeGh.classify({ "login" => "me", "id" => 1 }, weird) == "other")
 # 存在しない file は nil (file パス単体)
 check("self_identity file missing -> nil", SafeGh.self_identity_from_file({ "SAFE_GH_TRUST_FILE" => "#{trust_file}.nope" }).nil?)
+
+# ---- pagination: --slurp 出力 (array-of-pages) を flatten して全件返す ----
+# gh_capture を stub して 2 ページ分 (--slurp 形式 [[..],[..]]) を返す。
+module SafeGh
+  def self.gh_capture(args)
+    raise "expected --paginate --slurp for comments" unless args.include?("--slurp") && args.include?("--paginate")
+    ['[[{"user":{"login":"me","id":1},"body":"c1"}],[{"user":{"login":"me","id":1},"body":"c2"}]]', true]
+  end
+end
+paged = SafeGh.fetch_comments("o/r", 5)
+check("paginated comments flattened to 2", paged.length == 2)
+check("paginated first comment body", paged[0]["body"] == "c1")
+check("paginated second comment body", paged[1]["body"] == "c2")
 
 # ---- 引数バリデーション ----
 check("valid invocation", SafeGh.valid_invocation?("issue", "view", "12"))
