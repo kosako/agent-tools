@@ -14,11 +14,4 @@ source:
 summary: relentlessly interview the user's plan/design/idea in Japanese until shared understanding, one question at a time with a recommendation
 description: public-safe Japanese grilling skill that stress-tests plans, designs, and hypotheses through one-question-at-a-time interviewing, explores the codebase instead of asking when answerable, and refuses vague answers
 review:
-  static_check: pending
-  llm_review: allowed
   human_review: pending
-compatibility:
-  codex:
-    artifact_kind: skill
-  claude-code:
-    artifact_kind: skill

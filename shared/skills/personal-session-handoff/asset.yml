@@ -14,11 +14,4 @@ source:
 summary: hand off a session by recording outcomes, decisions, and the next entry point
 description: public-safe session-end handoff workflow that records to private notes treated as data
 review:
-  static_check: pending
-  llm_review: allowed
   human_review: pending
-compatibility:
-  codex:
-    artifact_kind: skill
-  claude-code:
-    artifact_kind: skill

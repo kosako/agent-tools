@@ -35,8 +35,6 @@ source:
   format: markdown
 summary: demo workflow
 review:
-  static_check: pending
-  llm_review: allowed
   human_review: pending
 EOF
 cat > "$tmp/valid/shared/skills/personal-demo-skill/SKILL.md" <<'EOF'
@@ -70,7 +68,7 @@ EOF
 cat > "$tmp/broken/shared/prompts/personal-bad.asset.yml" <<'EOF'
 schema_version: 2
 name: Bad_Name
-kind: tool
+kind: template
 visibility: work
 targets: []
 risk:
@@ -78,6 +76,8 @@ risk:
 source:
   path: docs/missing.md
   format: pdf
+review:
+  static_check: pending
 extra_field: true
 EOF
 
@@ -93,6 +93,7 @@ for expected in \
   "missing risk key: privacy" \
   "source.path must be under shared/" \
   "source.format must be one of" \
+  "unknown review key: static_check" \
   "unknown field: extra_field"
 do
   grep -q "$expected" "$tmp/out-broken" \

@@ -8,7 +8,7 @@ shared assets を Claude Code 向け artifacts に変換する spec です。
 - `skill` / `instruction` / `script`。
 
 manifest の `compatibility.claude-code.artifact_kind` で明示できます。
-未指定の場合、`kind` が `skill` / `prompt` / `workflow` / `template` の asset は
+未指定の場合、`kind` が `skill` / `prompt` / `workflow` の asset は
 `skill`、`kind: instruction` は `instruction`、`kind: script` は `script` として
 生成します。`agent` は v1 では生成しません。
 
