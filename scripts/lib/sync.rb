@@ -166,11 +166,15 @@ module Sync
       end
       target = target_path(tool, name, "instruction")
 
-      gen_marker = File.file?(gen) ? InstructionMarker.parse(File.read(gen)) : nil
+      # instruction は plan_skill / plan_script のような personal- prefix 検査をしない:
+      # あの検査は配置先 namespace (<home>/skills/personal-* 等、name から導出される path) を
+      # 守るためのもので、instruction の配置先は name 非依存の固定ファイル (CLAUDE.md /
+      # AGENTS.md)。name 自体の prefix は check-manifests が manifest 段階で enforce する。
+
       # generated が catalog entry と一致するか (target + name + build_id)。
-      # 一致しなければ build が未実行 / 古い。
-      unless gen_marker && gen_marker["target"] == tool &&
-             gen_marker["name"] == name && gen_marker["build_id"] == expected_build_id
+      # 一致しなければ build が未実行 / 古い (判定は InstructionMarker.matches? に集約, #152)。
+      unless File.file?(gen) &&
+             InstructionMarker.matches?(File.read(gen), target: tool, name: name, build_id: expected_build_id)
         return Plan.new("skip", tool, name, target, "run build first", "instruction", gen, :build_first)
       end
       # 所有先とその親 dir が symlink なら決して触らない (connect と同じ保証)。

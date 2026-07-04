@@ -101,6 +101,9 @@ module Doctor
 
     # 禁止 targets に agent-tools marker が誤って存在しないことを確認する。
     # 深い recursion はせず、禁止 path 直下の marker file だけを見る。
+    # 検査対象は docs/sync-policy.md の禁止リストのうち directory の部分集合のみ (#152)。
+    # file 型の禁止 target (auth.json / config.toml / *.sqlite) は直下に marker file を
+    # 持ち得ないためこの検査方式の対象外 (sync はそもそもそれらの path を構成しない)。
     def check_forbidden_targets
       offenders = forbidden_paths.select do |path|
         File.directory?(path) && File.file?(File.join(path, ArtifactTargets::MARKER_BASENAME))

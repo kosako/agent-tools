@@ -154,6 +154,11 @@ boundary でない)。
   env override を最優先で読むため、それらを書ける主体は任意 author を self と詐称でき、
   その author の body withhold が外れる。local file / env の改変は本 wrapper の脅威モデル外
   (steering であり、床は実行環境側の責務)。
+- **trust file の path 契約 (dotfiles 連携)**: 既定 path は
+  `~/.config/dotfiles/github-trust.local`、env `SAFE_GH_TRUST_FILE` で上書き可
+  (コード内定数 `DEFAULT_SELF_TRUST_FILE` / `SELF_TRUST_FILE_ENV` が正本)。この file は
+  dotfiles 側が非コミットで置く local-only config で、実値 (login/id) はどちらの repo にも
+  入れない。path を変えるときは dotfiles 側の置き場規約と同時に更新する。
 - **他人の Issue/PR**: metadata (number/state/author/labels) のみ。**title も body も親へ渡さない**
   (title は attacker 制御の free-text = injection 面)。**自分の Issue/PR**: title/body を渡す。
 - **他人コメント**: count + 固定理由のみ。著者名・プレビュー・untrusted 由来の文字列を出力に

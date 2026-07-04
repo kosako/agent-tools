@@ -68,6 +68,8 @@ module ArtifactTargets
 
   # tool home 内の target-artifact 配置先 path を返す (path 解決の単一 source)。
   # home は解決済みの tool home dir (例 ~/.claude / ~/.codex)。
+  # name の要否は kind で変わる: instruction は name を使わない (nil 可)、
+  # skill / script は name が path に入るため必須 (generated_path と同じ契約)。
   # - instruction: tool 固有ファイル名 (INSTRUCTION_FILENAMES)。claude-code は
   #   agent-tools/ subdir 配下に所有ファイルを置き、codex は home 直下。filename を
   #   解決できない tool では nil。

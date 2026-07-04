@@ -55,4 +55,13 @@ module InstructionMarker
     marker = parse(content)
     !marker.nil? && marker["target"] == target
   end
+
+  # content (generated instruction) が catalog entry (target / name / build_id) と一致するか。
+  # 不一致 = source 変更後に build していない (stale generated)。sync / connect が配置前の
+  # gate として共有する (#152: 別実装だった一致検証の単一 source)。
+  def self.matches?(content, target:, name:, build_id:)
+    marker = parse(content)
+    !marker.nil? && marker["target"] == target &&
+      marker["name"] == name && marker["build_id"] == build_id
+  end
 end

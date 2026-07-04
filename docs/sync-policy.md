@@ -75,6 +75,10 @@ default は必ず conservative にします。
 ~/.agents/skills/*/teams
 ```
 
+補足: `scripts/doctor.sh` の forbidden target 検査は、上記禁止リストのうち directory の
+部分集合だけを見る (directory 直下の marker file の有無で判定するため、file 型の
+`auth.json` / `config.toml` / `*.sqlite` はこの検査方式の対象外)。
+
 ## Management Marker
 
 marker format は [Status / Manifest Contract](status-manifest-contract.md) で定義します。
