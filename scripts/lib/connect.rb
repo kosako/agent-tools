@@ -14,17 +14,16 @@
 # - symlink / 非通常ファイルは決して触らない。
 # - 外部依存ゼロ、network access なし。
 
-require "json"
 require "fileutils"
 
 require_relative "artifact_targets"
+require_relative "catalog"
 require_relative "instruction_marker"
 require_relative "assets"
 
 module Connect
   # 人間の CLAUDE.md から所有ファイルを取り込む import 行。
   CLAUDE_IMPORT = "@agent-tools/CLAUDE.md"
-  CATALOG_PATH = "generated/catalog.json"
 
   Plan = Struct.new(:action, :tool, :kind, :path, :reason, :gen) do
     def to_s
@@ -40,22 +39,12 @@ module Connect
       load_catalog
     end
 
-    # catalog を source of truth として読む (catalog_version check は sync/status/doctor と
-    # 同じ)。connect は registered な instruction だけを所有確立する (review gate)。
+    # catalog を source of truth として読む (reader は sync / status / doctor と共通の
+    # Catalog.read)。connect は registered な instruction だけを所有確立する (review gate)。
     def load_catalog
-      @catalog_present = false
-      @entries = []
-      path = File.join(@root, CATALOG_PATH)
-      return unless File.file?(path)
-
-      data = JSON.parse(File.read(path))
-      # version の一致しない catalog は古いものとして無視する (re-run register)。
-      return unless data["catalog_version"] == ArtifactTargets::CATALOG_VERSION
-
-      @catalog_present = true
-      @entries = data.fetch("assets", [])
-    rescue JSON::ParserError
-      @catalog_present = false
+      result = Catalog.read(@root)
+      @catalog_present = result.present?
+      @entries = result.entries
     end
 
     def plan
@@ -73,9 +62,10 @@ module Connect
 
     private
 
-    def generated_instruction(tool, filename)
-      path = File.join(@root, "generated", tool, "instructions", filename)
-      File.file?(path) ? path : nil
+    # tool の generated instruction path (tool 固有 filename の解決は generated_path に委ねる)。
+    def generated_instruction(tool)
+      path = ArtifactTargets.generated_path(@root, tool, nil, "instruction")
+      path && File.file?(path) ? path : nil
     end
 
     # instruction の gate を connect でも enforce する (sync の plan_instruction と同じ契約)。
@@ -111,7 +101,7 @@ module Connect
     def claude_plans
       tool = "claude-code"
       home = @homes.fetch(tool)
-      gen = generated_instruction(tool, "CLAUDE.md")
+      gen = generated_instruction(tool)
       return [] unless gen # instruction artifact が無ければ connect 不要
 
       owned = ArtifactTargets.target_path(home, tool, nil, "instruction")
@@ -126,7 +116,7 @@ module Connect
     def codex_plans
       tool = "codex"
       home = @homes.fetch(tool)
-      gen = generated_instruction(tool, "AGENTS.md")
+      gen = generated_instruction(tool)
       return [] unless gen
 
       owned = ArtifactTargets.target_path(home, tool, nil, "instruction")

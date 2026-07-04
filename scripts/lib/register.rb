@@ -19,8 +19,6 @@ require_relative "build"
 require_relative "artifact_targets"
 
 module Register
-  CATALOG_PATH = "generated/catalog.json"
-
   class Error < StandardError; end
 
   class Runner
@@ -49,7 +47,7 @@ module Register
     end
 
     def write(catalog)
-      path = File.join(@root, CATALOG_PATH)
+      path = File.join(@root, ArtifactTargets::CATALOG_PATH)
       FileUtils.mkdir_p(File.dirname(path))
       File.write(path, JSON.pretty_generate(catalog) + "\n")
     end

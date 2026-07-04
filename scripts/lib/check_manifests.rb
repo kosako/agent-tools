@@ -127,7 +127,7 @@ module CheckManifests
         next unless entry.key?("artifact_kind")
 
         kind = entry["artifact_kind"]
-        unless ArtifactTargets::SUPPORTED_KINDS.include?(kind)
+        unless ArtifactTargets.supported?(kind)
           error(path, "compatibility.#{tool}.artifact_kind must be one of " \
                       "#{ArtifactTargets::SUPPORTED_KINDS.join(', ')}, got #{kind.inspect}")
         end

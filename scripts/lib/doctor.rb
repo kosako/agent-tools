@@ -14,9 +14,9 @@ require "yaml"
 
 require_relative "assets"
 require_relative "status"
-require_relative "sync"
 require_relative "build"
 require_relative "artifact_targets"
+require_relative "catalog"
 
 module Doctor
   LEVELS = %w[ok info warn fail].freeze
@@ -103,7 +103,7 @@ module Doctor
     # 深い recursion はせず、禁止 path 直下の marker file だけを見る。
     def check_forbidden_targets
       offenders = forbidden_paths.select do |path|
-        File.directory?(path) && File.file?(File.join(path, Sync::MARKER_FILE))
+        File.directory?(path) && File.file?(File.join(path, ArtifactTargets::MARKER_BASENAME))
       end
       if offenders.empty?
         report("ok", "forbidden", "no agent-tools markers in forbidden targets")
@@ -131,18 +131,19 @@ module Doctor
     # catalog の存在と鮮度 (docs/register-catalog.md)。
     # mtime ではなく、catalog の build_id を source content から再計算して比較する。
     def check_catalog
-      catalog = File.join(@root, "generated", "catalog.json")
-      unless File.file?(catalog)
+      catalog = Catalog.read(@root)
+      case catalog.state
+      when :missing
         report("info", "catalog", "not present (register not yet run)")
         return
-      end
-
-      data = JSON.parse(File.read(catalog))
-      unless data["catalog_version"] == ArtifactTargets::CATALOG_VERSION
+      when :version_mismatch
         report("warn", "catalog", "version mismatch (re-run register)")
         return
+      when :unreadable
+        report("fail", "catalog", "unreadable (invalid JSON)")
+        return
       end
-      entries = data.fetch("assets", [])
+      entries = catalog.entries
       # target-artifact 単位の catalog を name でまとめる。build_id は target 非依存
       # なので、鮮度判定は name 単位で正しい。
       by_name = entries.each_with_object({}) { |e, h| h[e["name"]] = e }
@@ -180,8 +181,6 @@ module Doctor
       else
         report("warn", "catalog", "stale (#{stale.join('; ')})")
       end
-    rescue JSON::ParserError
-      report("fail", "catalog", "unreadable (invalid JSON)")
     end
 
     # catalog entry の build_id と source content を比較する。source path 欠落 /

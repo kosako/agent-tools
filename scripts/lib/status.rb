@@ -17,6 +17,7 @@ require_relative "check_injection"
 require_relative "build"
 require_relative "sync"
 require_relative "artifact_targets"
+require_relative "catalog"
 require_relative "instruction_marker"
 
 module Status
@@ -79,19 +80,19 @@ module Status
       total = 0
       stale = 0
       Sync::TOOLS.each do |tool|
-        Dir.glob(File.join(@root, "generated", tool, "skills", "*")).sort.each do |artifact|
+        Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "skill"), "*")).sort.each do |artifact|
           next unless File.directory?(artifact)
 
           total += 1
           stale += 1 unless fresh?(artifact, sources)
         end
-        Dir.glob(File.join(@root, "generated", tool, "instructions", "*")).sort.each do |artifact|
+        Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "instruction"), "*")).sort.each do |artifact|
           next unless File.file?(artifact)
 
           total += 1
           stale += 1 unless fresh_instruction?(artifact, sources)
         end
-        Dir.glob(File.join(@root, "generated", tool, "scripts", "*")).sort.each do |artifact|
+        Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "script"), "*")).sort.each do |artifact|
           next unless File.file?(artifact)
           next if artifact.end_with?(ArtifactTargets::MARKER_BASENAME) # sidecar marker は本体と一緒に数える
 
@@ -113,7 +114,7 @@ module Status
 
     # skill (directory) の鮮度判定。dir 直下の marker を読む。
     def fresh?(artifact, sources)
-      fresh_by_marker_file?(File.join(artifact, Sync::MARKER_FILE), sources)
+      fresh_by_marker_file?(File.join(artifact, ArtifactTargets::MARKER_BASENAME), sources)
     end
 
     # script (単一ファイル) の鮮度判定。sidecar marker を読む。
@@ -153,27 +154,16 @@ module Status
       false
     end
 
-    # catalog (docs/register-catalog.md) の register summary。
+    # catalog (docs/register-catalog.md) の register summary。読めない catalog
+    # (不在 / version 不一致 / 壊れた JSON) は catalog なし扱い (Catalog.read に委ねる)。
     def register_summary
-      catalog_path = File.join(@root, "generated", "catalog.json")
-      summary = {
-        "catalog_present" => false, "registered" => 0,
-        "human_review_required" => 0, "unsupported" => 0
+      catalog = Catalog.read(@root)
+      {
+        "catalog_present" => catalog.present?,
+        "registered" => catalog.entries.count { |a| a["registration"] == "registered" },
+        "human_review_required" => catalog.entries.count { |a| a["registration"] == "human_review_required" },
+        "unsupported" => catalog.entries.count { |a| a["registration"] == "unsupported" },
       }
-      return summary unless File.file?(catalog_path)
-
-      data = JSON.parse(File.read(catalog_path))
-      # version の一致しない catalog は無視する (re-run register)。
-      return summary unless data["catalog_version"] == ArtifactTargets::CATALOG_VERSION
-
-      assets = data.fetch("assets", [])
-      summary["catalog_present"] = true
-      summary["registered"] = assets.count { |a| a["registration"] == "registered" }
-      summary["human_review_required"] = assets.count { |a| a["registration"] == "human_review_required" }
-      summary["unsupported"] = assets.count { |a| a["registration"] == "unsupported" }
-      summary
-    rescue JSON::ParserError
-      summary
     end
 
     def sync_targets
@@ -186,7 +176,9 @@ module Status
       end
     end
 
-    # Sync plan を contract の target state にマップする。
+    # Sync plan を contract の target state にマップする。skip の判定は plan.code
+    # (機械可読) だけを見て、表示文言 (plan.reason) に依存しない — sync の文言変更で
+    # dotfiles 連携 contract を壊さないため (#152)。
     # registered でない artifact は配置されないため、target は missing 扱い。
     # manifest-stale (登録判断が古い) は配置済みでも再 register が要るので stale。
     def target_state(plan)
@@ -195,11 +187,15 @@ module Status
       when "conflict" then "conflict"
       when "create" then "missing"
       when "skip"
-        case plan.reason
-        when "up-to-date" then "managed"
-        when /\Amanifest changed/ then "stale"
+        case plan.code
+        when :up_to_date then "managed"
+        when :manifest_stale then "stale"
         else "missing"
         end
+      else
+        # sync が未知の action を導入したら、nil (doctor が KeyError で crash) に落とさず
+        # conflict = fail に倒して表面化させる (fail-closed)。
+        "conflict"
       end
     end
 

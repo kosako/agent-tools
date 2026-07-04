@@ -55,7 +55,7 @@ module Build
       name = asset[:name]
       source = asset[:source]["path"]
       format = asset[:source]["format"]
-      out_dir = File.join(@root, "generated", tool, "skills", name)
+      out_dir = ArtifactTargets.generated_path(@root, tool, name, "skill")
 
       FileUtils.rm_rf(out_dir)
       FileUtils.mkdir_p(out_dir)
@@ -76,8 +76,8 @@ module Build
     # codex: AGENTS.md) として生成する。所有 marker は HTML コメントで本体に埋める
     # (instruction は単一ファイル所有なので skill の dir sidecar marker が使えない)。
     def build_instruction(tool, asset)
-      filename = ArtifactTargets::INSTRUCTION_FILENAMES[tool]
-      unless filename
+      out = ArtifactTargets.generated_path(@root, tool, asset[:name], "instruction")
+      unless out
         @skipped << "#{asset[:manifest_path]}: instruction unsupported for #{tool}"
         return
       end
@@ -88,9 +88,7 @@ module Build
         return
       end
 
-      out_dir = File.join(@root, "generated", tool, "instructions")
-      FileUtils.mkdir_p(out_dir)
-      out = File.join(out_dir, filename)
+      FileUtils.mkdir_p(File.dirname(out))
       content = File.read(File.join(@root, source))
       build_id = Build.build_id_for(@root, source, format)
       File.write(out, instruction_with_marker(content, asset[:name], tool, source, build_id))
@@ -110,9 +108,8 @@ module Build
         return
       end
 
-      out_dir = File.join(@root, "generated", tool, "scripts")
-      FileUtils.mkdir_p(out_dir)
-      out = File.join(out_dir, name)
+      out = ArtifactTargets.generated_path(@root, tool, name, "script")
+      FileUtils.mkdir_p(File.dirname(out))
       FileUtils.cp(File.join(@root, source), out)
       File.chmod(0o755, out) # script は配置先で実行されるため実行可能にする
       build_id = Build.build_id_for(@root, source, format)
@@ -198,7 +195,7 @@ module Build
       TOOLS.each do |tool|
         # skill: manifest に対応しない generated directory を削除する。
         # (skill -> instruction 転換で残った stale skill もここで消える)
-        Dir.glob(File.join(@root, "generated", tool, "skills", "*")).sort.each do |dir|
+        Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "skill"), "*")).sort.each do |dir|
           next unless File.directory?(dir)
           next if expected[tool].include?(File.basename(dir))
 
@@ -212,7 +209,7 @@ module Build
 
         # script: manifest に対応しない managed script (と sidecar marker) を削除する。
         # sidecar marker file 自体は本体と一緒に処理するため列挙対象から外す。
-        Dir.glob(File.join(@root, "generated", tool, "scripts", "*")).sort.each do |path|
+        Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "script"), "*")).sort.each do |path|
           next unless File.file?(path)
           next if path.end_with?(ArtifactTargets::MARKER_BASENAME)
           next if script_expected[tool].include?(File.basename(path))
@@ -229,7 +226,7 @@ module Build
         # instruction: 期待する canonical ファイル (INSTRUCTION_FILENAMES) 以外の
         # marker 付きファイルを削除する。instruction asset が無ければ canonical も対象。
         keep = instruction_expected[tool] ? ArtifactTargets::INSTRUCTION_FILENAMES[tool] : nil
-        Dir.glob(File.join(@root, "generated", tool, "instructions", "*")).sort.each do |file|
+        Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "instruction"), "*")).sort.each do |file|
           next unless File.file?(file)
           next if keep && File.basename(file) == keep
 

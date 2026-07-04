@@ -159,6 +159,39 @@ usage: register.sh [--root DIR] [--quiet]
 - 書き込みは `generated/catalog.json` のみ。
 - self-test: `tests/register-test.sh`
 
+## artifact_kind / tool を追加するときのチェックリスト
+
+kind / tool の知識は `lib/artifact_targets.rb` に集約されているが (#152)、追加時に
+触る場所は 1 箇所ではない。取り残しが docs drift・サイレント断裂の原因になるので、
+追加 PR ではここを順に確認する。
+
+**artifact_kind を追加するとき**:
+
+1. `lib/artifact_targets.rb`: `SUPPORTED_KINDS` / `DEFAULT_BY_KIND` /
+   `GENERATED_SUBDIRS` / `generated_path` / `target_path` / `buildable?`。
+2. `lib/check_manifests.rb`: asset kind の列挙 `KINDS` (manifest の `kind` と
+   artifact_kind は別物。後者の検証は `ArtifactTargets.supported?` を参照済み)。
+3. `lib/build.rb`: `build_<kind>` の実装と `run` の分岐、`prune` の期待リスト。
+   marker 戦略は [Status / Manifest Contract](../docs/status-manifest-contract.md)
+   (directory = 直下 marker / 単一ファイル = sidecar / 本文コメント) に従う。
+4. `lib/sync.rb`: `plan_<kind>` の実装 (所有 / stale / symlink 防御を既存 kind と
+   対称に) と `apply` の分岐。
+5. `lib/status.rb`: `generated_state` の鮮度判定が新 kind の marker を読めるか。
+6. docs: この README の該当 script 節 /
+   [Asset Manifest Schema](../docs/asset-manifest-schema.md) /
+   [Register / Catalog](../docs/register-catalog.md) /
+   [Sync Policy](../docs/sync-policy.md) / [onboarding](../docs/onboarding.md)。
+7. tests: `tests/build-test.sh` / `sync-test.sh` / `status-test.sh` /
+   `register-test.sh` に既存 kind と対称のケースを足す。
+
+**tool を追加するとき** (v1 は 2 tool 固定。一元化は #152 low として将来):
+
+1. tool 一覧: `lib/build.rb` / `lib/sync.rb` の `TOOLS`、
+   `lib/check_manifests.rb` の `TARGETS`。
+2. homes 既定値と CLI flag: `sync` / `connect` / `status` / `doctor` の `main`。
+3. instruction を配るなら `ArtifactTargets::INSTRUCTION_FILENAMES` と connect の
+   所有戦略 (import 対応可否)。
+
 ## 予定している scripts
 
 - `check-injection.sh` への追加: optional LLM review (privacy preflight つき)。

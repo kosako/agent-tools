@@ -11,6 +11,9 @@ module ArtifactTargets
   # v3: entry に manifest_path / manifest_digest を追加 (登録判断の鮮度検出, #148)。
   CATALOG_VERSION = 3
 
+  # catalog の repo root 相対 path。register が書き、Catalog.read が読む (#152)。
+  CATALOG_PATH = "generated/catalog.json"
+
   # build が扱える artifact_kind。
   SUPPORTED_KINDS = %w[skill instruction script].freeze
 
@@ -81,6 +84,31 @@ module ArtifactTargets
       File.join(home, "agent-tools", "scripts", name)
     else
       File.join(home, "skills", name)
+    end
+  end
+
+  # generated/ 配下の artifact_kind 別出力 dir。
+  GENERATED_SUBDIRS = {
+    "skill" => "skills",
+    "instruction" => "instructions",
+    "script" => "scripts",
+  }.freeze
+
+  # generated/ 配下の kind 別出力 dir (build の出力先 / status・prune の glob 起点)。
+  def self.generated_dir(root, tool, kind)
+    File.join(root, "generated", tool, GENERATED_SUBDIRS.fetch(kind))
+  end
+
+  # generated 側の artifact path (target_path の生成側対称。path 解決の単一 source)。
+  # - instruction: tool 固有ファイル名 (INSTRUCTION_FILENAMES)。name は使わず、filename を
+  #   解決できない tool では nil (target_path と同じ契約)。
+  # - それ以外 (skill / script): <generated_dir>/<name>。
+  def self.generated_path(root, tool, name, kind)
+    if kind == "instruction"
+      filename = INSTRUCTION_FILENAMES[tool]
+      filename && File.join(generated_dir(root, tool, kind), filename)
+    else
+      File.join(generated_dir(root, tool, kind), name)
     end
   end
 
