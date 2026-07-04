@@ -88,9 +88,9 @@ module Connect
         return "manifest changed; run scripts/register.sh first"
       end
 
-      marker = InstructionMarker.parse(File.read(gen))
-      unless marker && marker["target"] == tool &&
-             marker["name"] == entry["name"] && marker["build_id"] == entry["build_id"]
+      # generated が catalog entry と一致するか (判定は sync と共通の InstructionMarker.matches?, #152)。
+      unless InstructionMarker.matches?(File.read(gen), target: tool,
+                                        name: entry["name"], build_id: entry["build_id"])
         return "generated instruction is stale; run scripts/build.sh && scripts/register.sh first"
       end
 
