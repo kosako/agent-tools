@@ -13,20 +13,20 @@
 #   personal-* (sidecar marker つき)。それ以外の path は構成しない (docs/sync-policy.md)。
 
 require "yaml"
-require "json"
 require "fileutils"
 
 require_relative "yaml_util"
 require_relative "artifact_targets"
+require_relative "catalog"
 require_relative "instruction_marker"
 require_relative "assets"
 
 module Sync
-  MARKER_FILE = ArtifactTargets::MARKER_BASENAME
-  CATALOG_PATH = "generated/catalog.json"
   TOOLS = %w[codex claude-code].freeze
 
-  Plan = Struct.new(:action, :tool, :name, :target, :reason, :kind, :gen) do
+  # code は reason (人間向け表示文言) と対になる機械可読な skip 理由。status が contract
+  # の target state 判定に読む (#152: 表示文言の変更で contract を壊さないための分離)。
+  Plan = Struct.new(:action, :tool, :name, :target, :reason, :kind, :gen, :code) do
     def to_s
       line = "#{action}: [#{tool}] #{target}"
       reason ? "#{line} (#{reason})" : line
@@ -40,21 +40,12 @@ module Sync
       load_catalog
     end
 
-    # catalog を source of truth として読む (ArtifactTargets::CATALOG_VERSION、target-artifact 単位)。
+    # catalog を source of truth として読む (target-artifact 単位)。不在 / version 不一致 /
+    # 壊れた JSON は catalog なし扱い (Catalog.read が fail-closed に判定)。
     def load_catalog
-      @catalog_present = false
-      @entries = []
-      path = File.join(@root, CATALOG_PATH)
-      return unless File.file?(path)
-
-      data = JSON.parse(File.read(path))
-      # version の一致しない catalog は古いものとして無視する (re-run register)。
-      return unless data["catalog_version"] == ArtifactTargets::CATALOG_VERSION
-
-      @catalog_present = true
-      @entries = data.fetch("assets", [])
-    rescue JSON::ParserError
-      @catalog_present = false
+      result = Catalog.read(@root)
+      @catalog_present = result.present?
+      @entries = result.entries
     end
 
     attr_reader :catalog_present
@@ -96,13 +87,14 @@ module Sync
       kind = entry["artifact_kind"]
 
       if entry["registration"] != "registered"
-        return Plan.new("skip", tool, name, target_path(tool, name, kind), entry["registration"], kind, nil)
+        return Plan.new("skip", tool, name, target_path(tool, name, kind), entry["registration"], kind, nil,
+                        :not_registered)
       end
       # 登録判断 (risk / review / targets) は manifest に依存する。register 後に manifest が
       # 変わった entry は判断ごと stale なので、配置せず register を促す (fail-closed, #148)。
       unless Assets.manifest_fresh?(@root, entry)
         return Plan.new("skip", tool, name, target_path(tool, name, kind),
-                        "manifest changed; run scripts/register.sh first", kind, nil)
+                        "manifest changed; run scripts/register.sh first", kind, nil, :manifest_stale)
       end
 
       case kind
@@ -110,7 +102,7 @@ module Sync
       when "instruction" then plan_instruction(tool, name, entry["build_id"])
       when "script" then plan_script(tool, name, entry["build_id"])
       else
-        Plan.new("skip", tool, name, nil, "unsupported artifact_kind #{kind.inspect}", kind, nil)
+        Plan.new("skip", tool, name, nil, "unsupported artifact_kind #{kind.inspect}", kind, nil, :unsupported)
       end
     end
 
@@ -122,13 +114,13 @@ module Sync
 
     def plan_skill(tool, name, expected_build_id)
       target = target_path(tool, name, "skill")
-      gen = File.join(@root, "generated", tool, "skills", name)
+      gen = ArtifactTargets.generated_path(@root, tool, name, "skill")
 
       unless name.start_with?("personal-")
         return Plan.new("conflict", tool, name, target, "generated asset without personal- prefix", "skill", gen)
       end
       unless File.directory?(gen)
-        return Plan.new("skip", tool, name, target, "run build first", "skill", gen)
+        return Plan.new("skip", tool, name, target, "run build first", "skill", gen, :build_first)
       end
 
       source_marker = read_marker(gen)
@@ -139,7 +131,7 @@ module Sync
       # いない (stale generated)。instruction (plan_instruction) と同じく "run build first" で
       # skip し、古い generated を配置しない。
       if source_marker["build_id"] != expected_build_id
-        return Plan.new("skip", tool, name, target, "run build first", "skill", gen)
+        return Plan.new("skip", tool, name, target, "run build first", "skill", gen, :build_first)
       end
       # symlink は実体の所在によらず unmanaged target として扱い、決して触らない。
       # 親 dir (<home>/skills) が symlink の場合も、rm_rf / cp_r が外へ追従しないよう
@@ -157,7 +149,7 @@ module Sync
       end
 
       if target_marker["build_id"] == source_marker["build_id"]
-        Plan.new("skip", tool, name, target, "up-to-date", "skill", gen)
+        Plan.new("skip", tool, name, target, "up-to-date", "skill", gen, :up_to_date)
       else
         Plan.new("update", tool, name, target, nil, "skill", gen)
       end
@@ -167,11 +159,11 @@ module Sync
     # connect を促す。catalog の name / build_id を真実として generated と所有先の
     # marker を照合し、update / skip を決める。
     def plan_instruction(tool, name, expected_build_id)
-      filename = ArtifactTargets::INSTRUCTION_FILENAMES[tool]
-      unless filename
-        return Plan.new("skip", tool, name, nil, "instruction unsupported for #{tool}", "instruction", nil)
+      gen = ArtifactTargets.generated_path(@root, tool, name, "instruction")
+      unless gen
+        return Plan.new("skip", tool, name, nil, "instruction unsupported for #{tool}", "instruction", nil,
+                        :unsupported)
       end
-      gen = File.join(@root, "generated", tool, "instructions", filename)
       target = target_path(tool, name, "instruction")
 
       gen_marker = File.file?(gen) ? InstructionMarker.parse(File.read(gen)) : nil
@@ -179,7 +171,7 @@ module Sync
       # 一致しなければ build が未実行 / 古い。
       unless gen_marker && gen_marker["target"] == tool &&
              gen_marker["name"] == name && gen_marker["build_id"] == expected_build_id
-        return Plan.new("skip", tool, name, target, "run build first", "instruction", gen)
+        return Plan.new("skip", tool, name, target, "run build first", "instruction", gen, :build_first)
       end
       # 所有先とその親 dir が symlink なら決して触らない (connect と同じ保証)。
       if File.symlink?(target) || File.symlink?(File.dirname(target))
@@ -189,7 +181,7 @@ module Sync
       # 所有先が無い場合に加え、空ファイル (空白のみ) も未接続として扱う
       # (codex の AGENTS.md は空で存在しうる。空の claim は connect の責務)。
       if !File.exist?(target) || (File.file?(target) && File.read(target).strip.empty?)
-        return Plan.new("skip", tool, name, target, "run connect first", "instruction", gen)
+        return Plan.new("skip", tool, name, target, "run connect first", "instruction", gen, :connect_first)
       end
 
       target_marker = File.file?(target) ? InstructionMarker.parse(File.read(target)) : nil
@@ -200,7 +192,7 @@ module Sync
       end
 
       if target_marker["build_id"] == expected_build_id
-        Plan.new("skip", tool, name, target, "up-to-date", "instruction", gen)
+        Plan.new("skip", tool, name, target, "up-to-date", "instruction", gen, :up_to_date)
       else
         Plan.new("update", tool, name, target, nil, "instruction", gen)
       end
@@ -212,13 +204,13 @@ module Sync
     # 介さないため connect は不要で、未配置なら直接 create する。
     def plan_script(tool, name, expected_build_id)
       target = target_path(tool, name, "script")
-      gen = File.join(@root, "generated", tool, "scripts", name)
+      gen = ArtifactTargets.generated_path(@root, tool, name, "script")
 
       unless name.start_with?("personal-")
         return Plan.new("conflict", tool, name, target, "generated asset without personal- prefix", "script", gen)
       end
       unless File.file?(gen)
-        return Plan.new("skip", tool, name, target, "run build first", "script", gen)
+        return Plan.new("skip", tool, name, target, "run build first", "script", gen, :build_first)
       end
 
       source_marker = read_marker_file(ArtifactTargets.sidecar_marker_path(gen))
@@ -228,7 +220,7 @@ module Sync
       # generated が catalog entry と一致するか (build_id)。不一致 = register 後に build して
       # いない (stale generated)。plan_skill / plan_instruction と同じく run build first で skip。
       if source_marker["build_id"] != expected_build_id
-        return Plan.new("skip", tool, name, target, "run build first", "script", gen)
+        return Plan.new("skip", tool, name, target, "run build first", "script", gen, :build_first)
       end
       # 配置先本体・sidecar marker・その親 (agent-tools/scripts)・さらにその親
       # (agent-tools) のいずれかが symlink なら、cp / chmod が home の外へ追従しうるため
@@ -246,7 +238,7 @@ module Sync
       end
 
       if target_marker["build_id"] == source_marker["build_id"]
-        Plan.new("skip", tool, name, target, "up-to-date", "script", gen)
+        Plan.new("skip", tool, name, target, "up-to-date", "script", gen, :up_to_date)
       else
         Plan.new("update", tool, name, target, nil, "script", gen)
       end
@@ -265,7 +257,7 @@ module Sync
 
     # directory artifact (skill) の dir 直下 marker を読む。
     def read_marker(dir)
-      read_marker_file(File.join(dir, MARKER_FILE))
+      read_marker_file(File.join(dir, ArtifactTargets::MARKER_BASENAME))
     end
 
     # marker file を読んで Hash を返す。不在 / 型不正 / parse 失敗は nil。
