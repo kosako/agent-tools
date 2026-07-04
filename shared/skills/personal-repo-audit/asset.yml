@@ -14,11 +14,4 @@ source:
 summary: audit a repository across multiple dimensions and aggregate severity-ranked findings
 description: public-safe read-only repo audit workflow that fans out per-dimension subagents and aggregates
 review:
-  static_check: pending
-  llm_review: allowed
   human_review: pending
-compatibility:
-  codex:
-    artifact_kind: skill
-  claude-code:
-    artifact_kind: skill

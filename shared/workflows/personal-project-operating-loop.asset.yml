@@ -14,11 +14,4 @@ source:
 summary: reusable operating loop for personal agent projects
 description: public-safe workflow for deciding where project artifacts live
 review:
-  static_check: pending
-  llm_review: allowed
   human_review: pending
-compatibility:
-  codex:
-    artifact_kind: skill
-  claude-code:
-    artifact_kind: skill

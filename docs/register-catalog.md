@@ -167,8 +167,8 @@ human review 必須として扱う (承認が有効 = `approved` かつ `approve
 
 - `human_review`: 人間が宣言する。register が medium finding の解決に参照する
   唯一の input。
-- `static_check` / `llm_review`: informational。自動 check の真実は catalog 側。
-  v2 schema で削除を検討する。
+- 旧 `static_check` / `llm_review` は informational で消費者がいなかったため撤去済み
+  (#153)。自動 check の真実は catalog 側。
 
 ## Status / doctor / dotfiles への露出
 

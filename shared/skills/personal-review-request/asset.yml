@@ -14,11 +14,4 @@ source:
 summary: request a PR code review and keep the whole exchange on the GitHub PR, ranked must/should/nit
 description: public-safe GitHub-PR review-request flow; reviewer is chosen by the cross-review contract and Codex runs via the personal-codex-review stable invocation
 review:
-  static_check: pending
-  llm_review: allowed
   human_review: pending
-compatibility:
-  codex:
-    artifact_kind: skill
-  claude-code:
-    artifact_kind: skill

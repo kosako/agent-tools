@@ -13,7 +13,7 @@ require_relative "assets"
 require_relative "artifact_targets"
 
 module CheckManifests
-  KINDS = %w[skill prompt workflow agent instruction template script].freeze
+  KINDS = %w[skill prompt workflow agent instruction script].freeze
   TRACKED_VISIBILITIES = %w[public personal].freeze
   FORBIDDEN_VISIBILITIES = %w[private work client secret].freeze
   TARGETS = %w[codex claude-code].freeze
@@ -22,9 +22,10 @@ module CheckManifests
   SOURCE_FORMATS = %w[markdown yaml json toml text directory].freeze
   REQUIRED_FIELDS = %w[schema_version name kind visibility targets risk source].freeze
   OPTIONAL_FIELDS = %w[summary description review compatibility].freeze
+  # review は人間が宣言する human_review (+ approved_build_id) のみ。機械計測の結果は
+  # catalog 側が真実 (docs/register-catalog.md)。旧 static_check / llm_review は消費者
+  # 不在の informational だったため撤去 (#153。LLM review 層を作るときは #43 の設計で再導入)。
   REVIEW_VALUES = {
-    "static_check" => %w[pending pass fail],
-    "llm_review" => %w[allowed blocked not_needed],
     "human_review" => %w[pending approved rejected not_needed],
   }.freeze
   # 承認を内容に紐づける build_id (#148)。build.rb の build_id 形式 (sha256: + 先頭 12 hex)。

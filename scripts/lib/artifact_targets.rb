@@ -29,7 +29,6 @@ module ArtifactTargets
     "prompt" => "skill",
     "workflow" => "skill",
     "instruction" => "instruction",
-    "template" => "skill",
     "script" => "script",
   }.freeze
 

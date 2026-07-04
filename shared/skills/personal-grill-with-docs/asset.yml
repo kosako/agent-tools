@@ -17,11 +17,4 @@ source:
 summary: relentless design interview that also grows the repo-local domain model (CONTEXT.md glossary + sparing ADRs) as decisions crystallise
 description: public-safe Japanese doc-producing grilling skill that stress-tests a design while maintaining a repo-local glossary (CONTEXT.md) and architectural decision records under docs/adr, adapted from the MIT-licensed mattpocock/skills grill-with-docs
 review:
-  static_check: pending
-  llm_review: allowed
   human_review: pending
-compatibility:
-  codex:
-    artifact_kind: skill
-  claude-code:
-    artifact_kind: skill

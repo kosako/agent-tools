@@ -17,11 +17,4 @@ source:
 summary: root-cause-first debugging skill that refuses to fix before a verified root cause, runs symptom->trace->git->repro->hypothesis->verify gate->minimal fix->report, with a 3-strike stop rule
 description: public-safe Japanese debugging skill enforcing investigation-before-fix; collects symptoms, traces code paths backward, checks recent changes and reproduction, forms a testable root-cause hypothesis, blocks fixing until the cause is verified, applies a minimal fix with a regression test, reports with a DONE/DONE_WITH_CONCERNS/BLOCKED status, and persists only recurring non-obvious pitfalls to auto-memory
 review:
-  static_check: pending
-  llm_review: allowed
   human_review: pending
-compatibility:
-  codex:
-    artifact_kind: skill
-  claude-code:
-    artifact_kind: skill

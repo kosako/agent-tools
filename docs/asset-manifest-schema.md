@@ -95,8 +95,8 @@ rules:
 ### `kind`
 
 asset の種類を表す意味ラベルです。**用途に応じて選びます**。配置のされ方は kind ごとに
-下表の「配置挙動」のとおりで、配備対象は skill 系 (`skill` / `prompt` / `workflow` /
-`template` → skill target)、`instruction` (→ tool 別の `CLAUDE.md` / `AGENTS.md`)、
+下表の「配置挙動」のとおりで、配備対象は skill 系 (`skill` / `prompt` / `workflow`
+→ skill target)、`instruction` (→ tool 別の `CLAUDE.md` / `AGENTS.md`)、
 `script` (→ `<tool home>/agent-tools/scripts/personal-<name>` の単一実行ファイル) の
 3 系統です。`agent` は現状どの target にも解決されず未対応 (unsupported) です。kind が
 どの artifact に解決されるかの仕組みは [compatibility / artifact_kind](#compatibility)
@@ -107,16 +107,17 @@ asset の種類を表す意味ラベルです。**用途に応じて選びます
 | `skill` | モデルが必要時に参照する手順・能力のまとまり。`SKILL.md` 本体 + 任意の `references/` `assets/` `evals/`。 | `skill` |
 | `prompt` | 定型のプロンプト断片やテンプレート的な指示。 | `skill` (skill として配置) |
 | `workflow` | 複数ステップの再利用可能な作業手順。 | `skill` |
-| `template` | 出力フォーマットなどの雛形。 | `skill` |
 | `instruction` | 常時読まれる運用ルール。tool 別の `CLAUDE.md` / `AGENTS.md` として生成。詳細は [Instruction Artifact Kind](instruction-artifact-kind.md)。 | `instruction` |
 | `script` | tool home に配る実行可能な script body (hook / wrapper 等)。単一ファイルのみ。 | `script` |
 | `agent` | サブエージェント定義。**現状は配備未対応** (各 tool の agent 形式へのマッピングが未設計)。register では `unsupported` になる。 | 未対応 |
 
 補足:
 
-- `prompt` / `workflow` / `template` は現状いずれも **skill として build・配置** されます
+- `prompt` / `workflow` は現状いずれも **skill として build・配置** されます
   (skill の意味別名)。意味のラベルとして使い分けつつ、配られ方は skill と同じです。
   必要なら `compatibility.<tool>.artifact_kind` で明示的に上書きできます。
+  (旧 `template` kind は使用 asset ゼロ・skill 写像の別名として区別に消費者がいなかった
+  ため撤去 (#153)。雛形は `prompt` か `skill` を使います。)
 - `agent` kind は現状 build 対象外で、配備したい需要が出た時点で設計します
   (各 tool の agent 形式へのマッピングが論点)。
 - `shared/` 配下のサブディレクトリ (`skills/` `prompts/` `workflows/` `agents/`
@@ -193,14 +194,10 @@ rules:
 summary: reusable operating loop for personal agent projects
 description: public-safe workflow for deciding where project artifacts live
 review:
-  static_check: pending
-  llm_review: allowed
   human_review: pending
 compatibility:
   codex:
-    artifact_kind: skill
-  claude-code:
-    artifact_kind: skill
+    artifact_kind: script
 ```
 
 ### `summary`
@@ -213,12 +210,10 @@ compatibility:
 
 ### `review`
 
-review 状態です。
+人間が宣言する review 状態です。
 
 allowed values:
 
-- `static_check`: `pending`, `pass`, `fail`
-- `llm_review`: `allowed`, `blocked`, `not_needed`
 - `human_review`: `pending`, `approved`, `rejected`, `not_needed`
 - `approved_build_id`: build_id 文字列 (`sha256:` + 12 hex)。`human_review: approved` と
   対で使う (単独はエラー)。
@@ -226,8 +221,11 @@ allowed values:
 `human_review` は人間が宣言する値で、register が medium finding の解決に参照します。
 承認は `approved_build_id` (承認時点の build_id) で **内容に紐づき**、現在の build_id と
 一致するときだけ効きます ([register-catalog.md](register-catalog.md) の #148 節)。
-`static_check` / `llm_review` は informational で、自動 check の結果は
-[catalog](register-catalog.md) 側を真実とします。
+
+機械計測の結果 (static check 等) は manifest に書かず [catalog](register-catalog.md) 側を
+真実とします。旧 `static_check` / `llm_review` フィールドは消費者不在の informational
+だったため撤去しました (#153)。LLM review 層 (外部送信前の privacy gate 含む) を作るときは
+#43 の設計にあわせて宣言を再導入します。
 
 ### `compatibility`
 
@@ -235,7 +233,9 @@ target tool ごとの変換 hint です。
 
 `compatibility.<tool>.artifact_kind` で、その tool 向けに生成する artifact の種類を
 明示できます。未指定なら asset の `kind` から既定値が導出されます (`instruction` kind は
-instruction、`script` kind は script、`skill` / `prompt` / `workflow` / `template` は skill)。
+instruction、`script` kind は script、`skill` / `prompt` / `workflow` は skill)。
+**既定どおりの値は書きません** (既定値の重複宣言は導出 mapping との drift 面になるため、
+kind から導出が変わるときだけ明示します, #153)。
 tool キーは初期 target (`codex` / `claude-code`)、`artifact_kind` は build 対応 kind
 (`skill` / `instruction` / `script`) に限られ、check-manifests が検証します (typo は
 silent に unsupported へ落とさず error にする)。

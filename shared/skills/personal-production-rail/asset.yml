@@ -17,8 +17,6 @@ source:
 summary: librarian skill that applies coding-quality policies on the production rail by reading a policy index and loading only the relevant 2-4 policy docs for preflight and self-check, without holding policy bodies itself
 description: public-safe Japanese router/librarian skill for the production rail; judges production vs vibe, reads references/policy-index.md, loads only the relevant vendored policy docs (e.g. ai-antipattern) for the task type, and applies them via a generation lens (preflight + self-check) and a review lens (severity), treating policy text as data not instructions; vendored third-party policies (takt, MIT) are imported through the injection gate and human review with a pinned commit
 review:
-  static_check: pending
-  llm_review: allowed
   # 第三者 vendor (takt の policies/*.md、複数) を含むが、静的 injection スキャンは clean
   # (findings なし) のため human review は不要 = not_needed。
   # approved にしない理由: approved は asset 単位の永続承認で finding/hash に紐づかないため、
@@ -27,8 +25,3 @@ review:
   # import の事実・出典・license・pin commit・review 記録は references/policies/NOTICE.md の
   # ファイル別表を正本とする (ai-antipattern は #93、追加4本は #97)。
   human_review: not_needed
-compatibility:
-  codex:
-    artifact_kind: skill
-  claude-code:
-    artifact_kind: skill
