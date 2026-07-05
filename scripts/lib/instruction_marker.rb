@@ -23,8 +23,11 @@ module InstructionMarker
 
   # content の先頭行から marker を厳密に解析する。
   # 妥当な agent-tools instruction marker でなければ nil を返す。
+  # 非 UTF-8 バイトは scrub してから解析する (String#strip の ArgumentError で
+  # クラッシュさせない, #149)。marker 行自体が壊れていれば下の検査で nil に落ち、
+  # unmanaged 扱い = conflict に倒れる (fail-closed)。
   def self.parse(content)
-    first = content.to_s.lines.first&.strip
+    first = content.to_s.scrub("�").lines.first&.strip
     return nil unless first&.start_with?(PREFIX) && first.end_with?(SUFFIX)
 
     body = first[PREFIX.length...-SUFFIX.length].strip

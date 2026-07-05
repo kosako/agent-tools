@@ -632,4 +632,23 @@ grep -q "no catalog; run scripts/register.sh first" "$tmp/out26" \
   || fail "prune without catalog should ask for register: $(cat "$tmp/out26")"
 [ -f "$tmp/nclaude/skills/personal-x/SKILL.md" ] || fail "prune without catalog must not delete anything"
 
+# --- case 27: 所有先の非 UTF-8 バイトで crash せず判定できる (#149) ---
+# 27a: unmanaged な非 UTF-8 所有先は conflict (String#strip の ArgumentError で落ちない)
+mkdir -p "$tmp/codex27" "$tmp/claude27"
+printf '# memo \377\376 non-utf8\n' > "$tmp/codex27/AGENTS.md"
+status=0
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex27" --claude-home "$tmp/claude27" > "$tmp/out27a" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "non-UTF-8 unmanaged owned file should conflict (exit 1), not crash: $(cat "$tmp/out27a")"
+grep -q "conflict: \[codex\].*unmanaged" "$tmp/out27a" \
+  || fail "non-UTF-8 owned file should be an unmanaged conflict: $(cat "$tmp/out27a")"
+
+# 27b: marker が正常なら、末尾に非 UTF-8 バイトがあっても managed のまま (scrub は判定のみ)
+mkdir -p "$tmp/codex27b" "$tmp/claude27b"
+cp "$tmp/repo/generated/codex/instructions/AGENTS.md" "$tmp/codex27b/AGENTS.md"
+printf '\377' >> "$tmp/codex27b/AGENTS.md"
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex27b" --claude-home "$tmp/claude27b" > "$tmp/out27b" 2>&1 \
+  || fail "sync with managed non-UTF-8 tail should succeed: $(cat "$tmp/out27b")"
+grep -q "skip: \[codex\].*up-to-date" "$tmp/out27b" \
+  || fail "managed owned file with non-UTF-8 tail should stay up-to-date: $(cat "$tmp/out27b")"
+
 echo "ok: sync self-test passed"

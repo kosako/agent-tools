@@ -76,6 +76,11 @@ module Sync
       TOOLS.flat_map { |tool| prune_skills(tool) + prune_scripts(tool) }
     end
 
+    # 既知の限界 (TOCTOU): symlink / unmanaged の検査は plan 時のみで、apply は配置先を
+    # 再検証しない。plan→apply 間の差し替えを突ける主体は同一ユーザー権限で任意書込できる
+    # 攻撃者に限られ、その主体は再検証も同様に無効化できるため、再検証は防御にならない
+    # (実装しない判断, #149)。同時実行の事故は個人ツールで前提が薄く、書き込み先が
+    # marker-gated に限定されることで被害も限定される。docs/sync-policy.md の既知の限界も参照。
     def apply(plans)
       plans.each do |p|
         if p.action == "delete"
@@ -278,7 +283,8 @@ module Sync
       # 未接続なら connect を促す。sync は create しない。
       # 所有先が無い場合に加え、空ファイル (空白のみ) も未接続として扱う
       # (codex の AGENTS.md は空で存在しうる。空の claim は connect の責務)。
-      if !File.exist?(target) || (File.file?(target) && File.read(target).strip.empty?)
+      # 人間所有ファイルの非 UTF-8 バイトは scrub してから判定する (crash させない, #149)。
+      if !File.exist?(target) || (File.file?(target) && File.read(target).scrub("�").strip.empty?)
         return Plan.new("skip", tool, name, target, "run connect first", "instruction", gen, :connect_first)
       end
 

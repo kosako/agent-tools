@@ -397,11 +397,14 @@ module CheckManifests
     end
 
     # shared/<category>/ 直下の asset source に manifest が無いものを検出する。
+    # sidecar は「拡張子を除いた同名」で対応づくため、拡張子違いの同名 source が同じ
+    # sidecar に相乗りして manifest 欠落検出を逃れられる。相乗りは error にする (#149)。
     def check_sources_have_manifests
       ASSET_CATEGORIES.each do |category|
         dir = File.join(@root, "shared", category)
         next unless File.directory?(dir)
 
+        sidecar_sources = Hash.new { |h, k| h[k] = [] }
         Dir.children(dir).sort.each do |entry|
           next if entry.start_with?(".")
           next if NON_ASSET_BASENAMES.include?(entry)
@@ -414,9 +417,21 @@ module CheckManifests
             end
           else
             sidecar = File.join(dir, "#{entry.sub(/\.[^.]+\z/, '')}.asset.yml")
-            unless File.file?(sidecar)
+            if File.file?(sidecar)
+              sidecar_sources[sidecar] << full
+            else
               error(rel(full), "asset source is missing sidecar manifest #{File.basename(sidecar)}")
             end
+          end
+        end
+
+        sidecar_sources.each do |sidecar, sources|
+          next if sources.size < 2
+
+          sources.each do |source|
+            others = (sources - [source]).map { |s| File.basename(s) }.join(", ")
+            error(rel(source),
+                  "multiple asset sources share sidecar manifest #{File.basename(sidecar)} (also: #{others})")
           end
         end
       end

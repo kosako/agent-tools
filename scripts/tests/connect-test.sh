@@ -249,4 +249,48 @@ grep -q "skip: \[codex\] owned.*manifest changed" "$tmp/c13" \
 [ ! -e "$tmp/claude11/agent-tools/CLAUDE.md" ] || fail "manifest-stale instruction must not create owned file"
 [ ! -e "$tmp/codex11/AGENTS.md" ] || fail "manifest-stale instruction must not create owned codex file"
 
+# --- case 14: 非 UTF-8 バイトで crash しない (#149) ---
+mkdir -p "$tmp/repo5/shared/instructions"
+cat > "$tmp/repo5/shared/instructions/personal-ops.md" <<'EOF'
+# operating rules
+EOF
+cat > "$tmp/repo5/shared/instructions/personal-ops.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-ops
+kind: instruction
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/instructions/personal-ops.md
+  format: markdown
+EOF
+"$build" --root "$tmp/repo5" --quiet > /dev/null
+"$register" --root "$tmp/repo5" --quiet > /dev/null
+
+# 14a: unmanaged な非 UTF-8 所有先は conflict (String#strip の ArgumentError で落ちない)
+mkdir -p "$tmp/codex14a" "$tmp/claude14a"
+printf 'existing \377\376 content\n' > "$tmp/codex14a/AGENTS.md"
+status=0
+"$connect" --root "$tmp/repo5" --codex-home "$tmp/codex14a" --claude-home "$tmp/claude14a" > "$tmp/c14a" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "connect with non-UTF-8 owned file should conflict (exit 1), not crash: $(cat "$tmp/c14a")"
+grep -q "conflict: \[codex\] owned.*unmanaged" "$tmp/c14a" \
+  || fail "non-UTF-8 owned AGENTS.md should be an unmanaged conflict: $(cat "$tmp/c14a")"
+
+# 14b: 人間の CLAUDE.md の非 UTF-8 バイトは import 判定を crash させず、追記でバイト列を保全する
+mkdir -p "$tmp/codex14b" "$tmp/claude14b"
+printf '# human notes \377\376\n' > "$tmp/claude14b/CLAUDE.md"
+cp "$tmp/claude14b/CLAUDE.md" "$tmp/c14b-orig"
+orig_size=$(wc -c < "$tmp/c14b-orig")
+"$connect" --root "$tmp/repo5" --codex-home "$tmp/codex14b" --claude-home "$tmp/claude14b" --apply > "$tmp/c14b" 2>&1 \
+  || fail "connect with non-UTF-8 CLAUDE.md should succeed: $(cat "$tmp/c14b")"
+grep -q "add-import: \[claude-code\]" "$tmp/c14b" || fail "expected add-import plan: $(cat "$tmp/c14b")"
+grep -q "@agent-tools/CLAUDE.md" "$tmp/claude14b/CLAUDE.md" || fail "import line should be appended"
+head -c "$orig_size" "$tmp/claude14b/CLAUDE.md" | cmp -s - "$tmp/c14b-orig" \
+  || fail "existing CLAUDE.md bytes must be preserved on append"
+
 echo "ok: connect self-test passed"

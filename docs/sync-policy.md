@@ -126,3 +126,14 @@ instruction artifact は connect が所有を確立し、sync が更新する。
 これらは日常 sync では create せず、connect だけが所有を開始する。symlink / 非通常
 ファイル / unmanaged な所有先は conflict として停止する。詳細は
 [Instruction Artifact Kind](instruction-artifact-kind.md)。
+
+## 既知の限界 (TOCTOU)
+
+symlink / unmanaged の検査は plan 時に行い、apply は配置先を再検証しません。
+plan→apply 間に配置先を差し替えられると検査を通過した plan のまま書き込みます。
+
+これを意図的に突ける主体は、同一ユーザー権限で任意のファイルを書き換えられる攻撃者に
+限られます。その主体は apply 直前の再検証も同様に無効化できるため、再検証を足しても
+防御になりません (実装しない判断, #149)。同時実行による事故は、個人ツールとして同時
+実行の前提が薄いこと、書き込み先が marker-gated な managed target に限定されることで
+被害が限定されます。
