@@ -600,6 +600,29 @@ run22 --prune --apply > "$tmp/out25" 2>&1 || fail "prune with gated entry should
 ! grep -q "delete: .*personal-keep2" "$tmp/out25" || fail "gated entry must not be pruned: $(cat "$tmp/out25")"
 [ -f "$tmp/pclaude/skills/personal-keep2/SKILL.md" ] || fail "gated deployed skill must be kept"
 
+# --- case 26b: valid だが空の catalog ({"assets": []}) でも --prune は何も削除しない ---
+# (manifest ゼロの repo (間違った --root 等) で register すると valid な空 catalog が
+#  できる。catalog_present だけを条件にすると全 deployed が orphan 扱いで全削除される)
+mkdir -p "$tmp/erepo/shared" "$tmp/ecodex" "$tmp/eclaude"
+"$register" --root "$tmp/erepo" --quiet > /dev/null   # manifest ゼロ → assets: []
+ruby -rjson -e 'j = JSON.parse(File.read(ARGV[0])); exit(j["assets"].empty? ? 0 : 1)' \
+  "$tmp/erepo/generated/catalog.json" || fail "empty repo register should write an empty catalog"
+mkdir -p "$tmp/eclaude/skills/personal-victim"
+cat > "$tmp/eclaude/skills/personal-victim/.agent-tools-managed.yml" <<'EOF'
+repo: agent-tools
+name: personal-victim
+target: claude-code
+artifact_kind: skill
+source: shared/skills/personal-victim
+build_id: sha256:000000000000
+EOF
+echo "victim" > "$tmp/eclaude/skills/personal-victim/SKILL.md"
+"$sync" --root "$tmp/erepo" --codex-home "$tmp/ecodex" --claude-home "$tmp/eclaude" --prune --apply \
+  > "$tmp/out26b" 2>&1 || fail "prune with empty catalog should succeed: $(cat "$tmp/out26b")"
+! grep -q "delete:" "$tmp/out26b" || fail "empty catalog must not plan deletes: $(cat "$tmp/out26b")"
+[ -f "$tmp/eclaude/skills/personal-victim/SKILL.md" ] \
+  || fail "managed deployed asset must survive prune with an empty catalog"
+
 # --- case 26: catalog が無ければ --prune は何も削除しない (fail-closed) ---
 mkdir -p "$tmp/nrepo/shared/skills" "$tmp/ncodex" "$tmp/nclaude/skills/personal-x"
 echo "x" > "$tmp/nclaude/skills/personal-x/SKILL.md"

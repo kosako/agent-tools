@@ -93,8 +93,9 @@ default は必ず conservative にします。
 - 照合は artifact_kind 単位。kind を変更した asset の旧配置物は保護されず撤去される
   (`build --prune` と同じ判断)。
 - catalog の entry は registration 状態を問わず asset の実在とみなす
-  (`human_review_required` でも撤去しない)。catalog が無い / version 不一致なら何も
-  判断せず撤去しない (fail-closed)。
+  (`human_review_required` でも撤去しない)。catalog が無い / version 不一致 / entry ゼロ
+  (valid な空 catalog) なら何も判断せず撤去しない (fail-closed。空 catalog は manifest
+  ゼロの repo で register しても生成できるため、全 deployed が orphan に見える誤爆を塞ぐ)。
 - 条件を満たさない orphan (unmanaged / symlink) は削除せず skip として可視化するだけで、
   conflict にしない (書き込みと違い「触らない」が常に安全なため、prune は停止しない)。
 - script は本体と sidecar marker を対で撤去する。

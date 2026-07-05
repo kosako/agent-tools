@@ -66,10 +66,12 @@ module Sync
     # 条件を満たさない orphan は削除せず skip で可視化する (prune は conflict でブロック
     # しない。書き込みと違い「触らない」が常に安全なため)。instruction は connect が
     # 人間ファイルと絡めて所有するため prune 対象外 (docs/sync-policy.md)。
-    # catalog 不在 / version 不一致 / 壊れた JSON では何も判断しない (fail-closed)。
-    # @entries が空だと全 deployed が orphan に見えて全削除を plan してしまうため。
+    # catalog 不在 / version 不一致 / 壊れた JSON / entry ゼロでは何も判断しない
+    # (fail-closed)。@entries が空だと全 deployed が orphan に見えて全削除を plan して
+    # しまうため。valid な空 catalog ({"assets": []}) は manifest ゼロの repo (間違った
+    # --root 等) でも生成できるので、catalog_present だけでは足りない。
     def prune_plans
-      return [] unless @catalog_present
+      return [] if !@catalog_present || @entries.empty?
 
       TOOLS.flat_map { |tool| prune_skills(tool) + prune_scripts(tool) }
     end
