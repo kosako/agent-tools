@@ -115,20 +115,21 @@ cat > "$tmp/mismatch.json" <<'EOF'
 EOF
 run_case "operation-mismatch" "$tmp/mismatch.json" 2 "channel gh: no complete negative/positive probe pair"
 
-# --- case 6: canonical channel を丸ごと欠くと構造エラー (exit 2・偽の安心を弾く) ---
+# --- case 6: required channel (git-https) を丸ごと欠くと構造エラー (exit 2・偽の安心を弾く) ---
+# opt-in の git-ssh / curl があっても required floor の欠落は塞げない。
 cat > "$tmp/missing.json" <<'EOF'
 {
   "probes": [
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "curl",      "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "curl",      "mode": "positive", "operation": "read-priv", "authenticated": true}
+    {"channel": "gh",      "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "gh",      "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "git-ssh", "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "git-ssh", "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "curl",    "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "curl",    "mode": "positive", "operation": "read-priv", "authenticated": true}
   ]
 }
 EOF
-run_case "missing-channel" "$tmp/missing.json" 2 "channel git-ssh: no complete negative/positive probe pair"
+run_case "missing-channel" "$tmp/missing.json" 2 "channel git-https: no complete negative/positive probe pair"
 
 # --- case 7: 同一 (channel, operation, mode) の重複は曖昧 = 構造エラー (exit 2) ---
 cat > "$tmp/dup.json" <<'EOF'
@@ -273,5 +274,80 @@ run_case "top-level-not-object" "$tmp/toplevel-array.json" 2 "input must be a JS
 # --- case 21: probes が array でなければ入力エラー (exit 2) (#150) ---
 echo '{ "probes": {} }' > "$tmp/probes-not-array.json"
 run_case "probes-not-array" "$tmp/probes-not-array.json" 2 "probes must be an array"
+
+# --- case 22: curl は opt-in。required 3 チャネルだけで完全なら pass (exit 0) (#129 P3-02) ---
+# curl の ambient 認証源 (~/.netrc) は環境依存で不在のことがあり、required floor から外した。
+cat > "$tmp/three.json" <<'EOF'
+{
+  "probes": [
+    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv", "authenticated": true}
+  ]
+}
+EOF
+run_case "curl-optional-three-channel-pass" "$tmp/three.json" 0 "isolation verified (3 channels"
+
+# --- case 23: curl を含めたなら curl も完全ペアが要る (opt-in でも骨抜けにしない) (exit 2) ---
+cat > "$tmp/curl-incomplete.json" <<'EOF'
+{
+  "probes": [
+    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "curl",      "mode": "negative", "operation": "read-priv", "authenticated": false}
+  ]
+}
+EOF
+run_case "curl-optin-must-be-complete" "$tmp/curl-incomplete.json" 2 \
+  "channel curl (operation read-priv): expected exactly one positive-control probe, got 0"
+
+# --- case 24: required チャネル (gh) を丸ごと欠くと構造エラー (exit 2・required floor は不変) ---
+cat > "$tmp/no-gh.json" <<'EOF'
+{
+  "probes": [
+    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv", "authenticated": true}
+  ]
+}
+EOF
+run_case "required-gh-missing" "$tmp/no-gh.json" 2 "channel gh: no complete negative/positive probe pair"
+
+# --- case 25: required 2 チャネル (gh + git-https) だけで完全なら pass (exit 0) (#129 P3-02) ---
+# git-ssh (ssh-agent) / curl (~/.netrc) は ambient 認証源がセッション依存のため opt-in。
+cat > "$tmp/two.json" <<'EOF'
+{
+  "probes": [
+    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true}
+  ]
+}
+EOF
+run_case "required-two-channel-pass" "$tmp/two.json" 0 "isolation verified (2 channels"
+
+# --- case 26: opt-in git-ssh を含めたなら git-ssh も完全ペアが要る (exit 2) ---
+cat > "$tmp/ssh-incomplete.json" <<'EOF'
+{
+  "probes": [
+    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false}
+  ]
+}
+EOF
+run_case "ssh-optin-must-be-complete" "$tmp/ssh-incomplete.json" 2 \
+  "channel git-ssh (operation read-priv): expected exactly one positive-control probe, got 0"
 
 echo "ok: check-credential-isolation self-test passed"

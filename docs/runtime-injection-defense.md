@@ -66,9 +66,14 @@ command-string allowlist — は **steering**、hostname allowlist は **best-ef
 `git` は env を外しても **keychain / credential helper 等から認証を取り直す**ため、private access が
 成功し得る。よって acceptance は **認証源の構造的不在**を検証する:
 
-- 隔離 session から次の認証源が**すべて参照不能**であること: keychain / git credential helper
-  (`git-credential-osxkeychain` 等) / OAuth cache / `~/.netrc` / `gh` の `hosts.yml` / MCP github
-  server が持つ token store。
+- 隔離 session から次の**shell env / config 由来の**認証源が**すべて参照不能**であること:
+  keychain / git credential helper (`git-credential-osxkeychain` 等) / OAuth cache / `~/.netrc` /
+  `gh` の `hosts.yml`。
+- **MCP github server の token store は本 acceptance の射程外**: MCP token は shell env の認証源
+  ではなく agent の MCP context 側にあり、env 隔離 harness では断てない。これは **P0-A (reader の
+  tool surface 制限)** / OS sandbox tier の担当。以前この列挙に MCP token store を含めていたのは
+  分界の誤りで、PR-2 (実機 harness) で env 隔離の射程に合わせて是正した
+  ([credential-isolation-acceptance.md](credential-isolation-acceptance.md))。
 - 検証は **negative test** (= 認証済み private access が**失敗**すれば合格)。テスト反転を明示する。
 - **positive control** を必ず置く: credential が在る通常 session では同じ private access が
   **成功する**ことを確認し、「そもそも到達できていないだけ」の偽合格を排除する。
@@ -80,7 +85,7 @@ command-string allowlist — は **steering**、hostname allowlist は **best-ef
   検証するのは、管理された `gh` / `git` / `curl` invocation の**既定 credential 探索が空**である
   ことまで。keychain 直読みや MCP token store は env 隔離の射程外 (P0-A の tool surface 制限 /
   OS sandbox tier の担当) で、harness の緑をこの節の認証源列挙すべての検証と読まない。
-  上の列挙との分界は PR-2 の doc 確定で是正する (harness doc に差分の明示あり)。
+  上の認証源列挙は PR-2 で env 隔離の射程 (shell env / config 由来) に是正済み。
 
 ### P0-C OS egress firewall (本 Phase スコープ外・別 tier)
 
