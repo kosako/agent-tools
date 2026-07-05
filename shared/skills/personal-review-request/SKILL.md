@@ -35,6 +35,9 @@ description: PR のコードレビューを依頼し、結果とやり取りを 
   - AI トレーラが PR に皆無（人間のみ・不明）。
 - 相手エージェントを起動できない場合（例: Codex 環境から Claude を呼べない）は、自分で
   レビューせず人間に hand-off する。
+- trailer の喪失: squash / rebase / cherry-pick で trailer は保持されないことがある
+  (git の標準動作依存で、保証はしない)。routing が誤るときは `--reviewer` や PR の label
+  などで人間が明示的に上書きする。
 
 ## ランク定義（3 段階）
 
