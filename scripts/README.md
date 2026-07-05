@@ -56,14 +56,16 @@ usage: check-injection.sh [--root DIR] [--quiet]
 usage: check-credential-isolation.sh --judge <results.json>
 ```
 
-- canonical チャネルすべて (一覧の正本は lib の `CHANNELS` / `--help`) に同一 operation の
-  negative/positive ペアを 1 組以上要求し、credential leak・空振り緑・チャネル欠落を弾く。
+- required チャネル (`gh` / `git-https`。一覧の正本は lib の `REQUIRED_CHANNELS` / `--help`) に
+  同一 operation の negative/positive ペアを 1 組以上要求し、credential leak・空振り緑・チャネル
+  欠落を弾く。`git-ssh` / `curl` は ambient 認証源がセッション依存のため opt-in (含めれば完全ペア
+  必須、無くても欠落扱いしない)。
 - exit code: 隔離確認は 0、観測された破れ (leak / false-green) は 1、usage / 入力・構造エラー
   (チャネル欠落・ペア不成立・重複) は 2。破れと構造不備が同居したら 1 を優先し全件報告する。
 - self-test: `tests/check-credential-isolation-test.sh`
 
 - `probe-credential-isolation.sh`: credential 隔離 acceptance harness の probe runner (実機)。
-  canonical チャネル (gh / git-https / git-ssh / curl) を private target に対し隔離 / 非隔離で
+  required チャネル (gh / git-https) + opt-in (git-ssh / curl) を private target に隔離 / 非隔離で
   叩き、認証成否を `results.json` (judge 入力) として出力する。隔離 recipe の SSOT は
   `lib/credential_isolation_recipe.sh`。
 

@@ -63,14 +63,18 @@ after=$(pwd -P)
 [ "$before" = "$after" ] || fail "iso_run must not change caller cwd ($before -> $after)"
 rm -rf "$scratch2"
 
-# --- case 3: git hardening flags が想定の credential 無効化を含む ---
-flags=$(iso_git_flags)
-for expect in "credential.helper=" "http.extraHeader=" "transfer.credentialsInUrl=die"; do
-  case "$flags" in
-    *"$expect"*) ;;
-    *) fail "iso_git_flags missing $expect: $flags" ;;
-  esac
-done
+# --- case 3: amb_run (positive) も非 repo cwd で実行し呼び出し側の cwd を汚さない ---
+# negative (iso_run) と positive (amb_run) の唯一の差分を env 隔離だけにするため、positive も
+# 非 repo cwd で走る (operation identity, #168 レビュー)。
+before3=$(pwd -P)
+amb_run sh -c 'echo "amb_cwd=$(pwd -P)"' > "$tmp/amb-out" 2>&1 || fail "amb_run should execute"
+after3=$(pwd -P)
+[ "$before3" = "$after3" ] || fail "amb_run must not change caller cwd ($before3 -> $after3)"
+grep -q "amb_cwd=" "$tmp/amb-out" || fail "amb_run should run the command"
+# amb_run の cwd は呼び出し側 (この repo) とは別の非 repo 一時 dir であること
+amb_cwd=$(sed 's/amb_cwd=//' "$tmp/amb-out")
+[ "$amb_cwd" != "$before3" ] || fail "amb_run must use a neutral (non-caller) cwd"
+[ ! -e "$amb_cwd/.git" ] || fail "amb_run cwd must not be a git repo"
 
 # --- case 4: probe target config が無ければ明示 fail (exit 2・silent skip しない) ---
 status=0
@@ -100,10 +104,10 @@ EOF
 grep -q "git-ssh .*skipped" "$tmp/out-two" || fail "git-ssh should be skipped when PROBE_GIT_SSH unset: $(cat "$tmp/out-two")"
 grep -q "curl .*skipped" "$tmp/out-two" || fail "curl should be skipped when PROBE_CURL_URL unset: $(cat "$tmp/out-two")"
 for ch in gh git-https; do
-  grep -q "^# $ch .*negative:" "$tmp/out-two" || fail "2-key dry-run missing $ch negative"
+  grep -q "^# $ch .*cmd:" "$tmp/out-two" || fail "2-key dry-run missing $ch cmd"
 done
 
-# --- case 6: dry-run は実行せず全チャネルの隔離/非隔離コマンドを表示する ---
+# --- case 6: dry-run は実行せず全チャネルの (negative/positive 共通) command を表示する ---
 cat > "$tmp/full.local" <<'EOF'
 PROBE_GH_REPO=owner/private-repo
 PROBE_GIT_HTTPS=https://github.com/owner/private-repo.git
@@ -113,12 +117,14 @@ EOF
 "$probe" --config "$tmp/full.local" --dry-run > "$tmp/out-dry" 2>&1 \
   || fail "dry-run should exit 0: $(cat "$tmp/out-dry")"
 for ch in gh git-https git-ssh curl; do
-  grep -q "^# $ch .*negative:" "$tmp/out-dry" || fail "dry-run missing $ch negative"
-  grep -q "^# $ch .*positive:" "$tmp/out-dry" || fail "dry-run missing $ch positive"
+  grep -q "^# $ch .*cmd:" "$tmp/out-dry" || fail "dry-run missing $ch cmd"
 done
-grep -q "iso_run <scratch> gh api repos/owner/private-repo" "$tmp/out-dry" \
-  || fail "dry-run gh negative should use iso_run"
-grep -q "credential.helper=" "$tmp/out-dry" || fail "dry-run git negative should show hardening flags"
+# negative = iso_run <cmd>、positive = amb_run <cmd> で cmd は同一 (operation identity)
+grep -q "negative = iso_run" "$tmp/out-dry" || fail "dry-run should describe negative as iso_run"
+grep -q "positive = amb_run" "$tmp/out-dry" || fail "dry-run should describe positive as amb_run"
+grep -q "git ls-remote https://github.com/owner/private-repo.git" "$tmp/out-dry" \
+  || fail "dry-run git-https cmd should be plain git ls-remote (no per-invocation flags)"
+grep -q "credential.helper=" "$tmp/out-dry" && fail "probe must not pass per-invocation git -c flags (breaks operation identity)"
 
 # --- case 7: dry-run の出力が judge の実 results.json 形と整合 (operation の ch 別一致) ---
 # 生成される results.json の operation id が negative/positive でチャネル毎に一致すること

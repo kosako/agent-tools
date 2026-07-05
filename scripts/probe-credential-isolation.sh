@@ -89,66 +89,63 @@ probe_ssh=false
 probe_curl=false
 [ -n "${PROBE_CURL_URL:-}" ] && probe_curl=true
 
-# 各チャネルの (negative=隔離 / positive=非隔離) を同一コマンドで走らせるための定義。
-# positive は ambient credential (gh keyring / git osxkeychain / ssh-agent / ~/.netrc) を
-# そのまま使う。negative は iso_run でそれらを構造的に断つ。両者はコマンドが同一で
-# iso_run の有無だけが違う (operation identity)。
+# 各チャネルの (negative=隔離 / positive=非隔離) を **同一コマンド** で走らせる。
+# negative = iso_run (env 隔離 + 非 repo cwd)、positive = amb_run (ambient env + 非 repo cwd)。
+# コマンド・cwd の種類・argv は完全に同一で、唯一の差分は env 隔離の有無 (operation
+# identity)。positive は ambient credential (gh keyring / git osxkeychain / ssh-agent /
+# ~/.netrc) をそのまま使う。git の per-invocation hardening flags は付けない (env+cwd 隔離が
+# config source ごと断つので冗長で、negative だけに付けると identity が崩れる, #168 レビュー)。
 #
 # gh:        gh api repos/<repo> --silent
-# git-https: git <hardening> ls-remote <https-url>
-# git-ssh:   git <hardening> ls-remote <ssh-url>
+# git-https: git ls-remote <https-url>
+# git-ssh:   git ls-remote <ssh-url>
 # curl:      curl -sfS -o /dev/null <api-url>  (認証源 = ~/.netrc)
 
-# 実行して認証成否 (true/false) を stdout に返す。第 1 引数 isolate=true/false、残りが command。
-run_probe() {
-  isolate=$1
-  shift
-  if [ "$isolate" = true ]; then
-    scratch=$(iso_make_scratch)
-    if iso_run "$scratch" "$@" >/dev/null 2>&1; then result=true; else result=false; fi
-    rm -rf "$scratch"
-  else
-    if "$@" >/dev/null 2>&1; then result=true; else result=false; fi
-  fi
+# negative probe: 隔離 session で command を実行し認証成否 (true/false) を返す。
+run_negative() {
+  scratch=$(iso_make_scratch)
+  if iso_run "$scratch" "$@" >/dev/null 2>&1; then result=true; else result=false; fi
+  rm -rf "$scratch"
+  printf '%s\n' "$result"
+}
+
+# positive control: ambient session (非 repo cwd) で同一 command を実行し認証成否を返す。
+run_positive() {
+  if amb_run "$@" >/dev/null 2>&1; then result=true; else result=false; fi
   printf '%s\n' "$result"
 }
 
 # dry-run: 実行せず、各チャネルの隔離/非隔離コマンドを表示して終わる。
 if [ "$dry_run" = true ]; then
   echo "# dry-run: 実行しません (credential に触れません)。config=$config"
-  echo "# gh        negative: iso_run <scratch> gh api repos/$PROBE_GH_REPO --silent"
-  echo "# gh        positive: gh api repos/$PROBE_GH_REPO --silent"
-  echo "# git-https negative: iso_run <scratch> git $(iso_git_flags) ls-remote $PROBE_GIT_HTTPS"
-  echo "# git-https positive: git ls-remote $PROBE_GIT_HTTPS"
+  echo "# negative = iso_run <scratch> <cmd> (env 隔離 + 非 repo cwd)"
+  echo "# positive = amb_run <cmd> (ambient env + 非 repo cwd)。cmd は negative と同一。"
+  echo "# gh        cmd: gh api repos/$PROBE_GH_REPO --silent"
+  echo "# git-https cmd: git ls-remote $PROBE_GIT_HTTPS"
   if [ "$probe_ssh" = true ]; then
-    echo "# git-ssh   negative: iso_run <scratch> git $(iso_git_flags) ls-remote $PROBE_GIT_SSH"
-    echo "# git-ssh   positive: git ls-remote $PROBE_GIT_SSH"
+    echo "# git-ssh   cmd: git ls-remote $PROBE_GIT_SSH"
   else
     echo "# git-ssh   skipped: PROBE_GIT_SSH 未設定 (opt-in channel)"
   fi
   if [ "$probe_curl" = true ]; then
-    echo "# curl      negative: iso_run <scratch> curl -sfS -o /dev/null $PROBE_CURL_URL"
-    echo "# curl      positive: curl -sfS -o /dev/null $PROBE_CURL_URL"
+    echo "# curl      cmd: curl -sfS -o /dev/null $PROBE_CURL_URL"
   else
     echo "# curl      skipped: PROBE_CURL_URL 未設定 (opt-in channel)"
   fi
   exit 0
 fi
 
-gh_neg=$(run_probe true  gh api "repos/$PROBE_GH_REPO" --silent)
-gh_pos=$(run_probe false gh api "repos/$PROBE_GH_REPO" --silent)
-# iso_git_flags は空白区切りの複数フラグを 1 語ずつ渡す必要があるので意図的に分割する。
-# shellcheck disable=SC2046
-gith_neg=$(run_probe true  git $(iso_git_flags) ls-remote "$PROBE_GIT_HTTPS")
-gith_pos=$(run_probe false git ls-remote "$PROBE_GIT_HTTPS")
+gh_neg=$(run_negative gh api "repos/$PROBE_GH_REPO" --silent)
+gh_pos=$(run_positive gh api "repos/$PROBE_GH_REPO" --silent)
+gith_neg=$(run_negative git ls-remote "$PROBE_GIT_HTTPS")
+gith_pos=$(run_positive git ls-remote "$PROBE_GIT_HTTPS")
 if [ "$probe_ssh" = true ]; then
-  # shellcheck disable=SC2046
-  giths_neg=$(run_probe true  git $(iso_git_flags) ls-remote "$PROBE_GIT_SSH")
-  giths_pos=$(run_probe false git ls-remote "$PROBE_GIT_SSH")
+  giths_neg=$(run_negative git ls-remote "$PROBE_GIT_SSH")
+  giths_pos=$(run_positive git ls-remote "$PROBE_GIT_SSH")
 fi
 if [ "$probe_curl" = true ]; then
-  curl_neg=$(run_probe true  curl -sfS -o /dev/null "$PROBE_CURL_URL")
-  curl_pos=$(run_probe false curl -sfS -o /dev/null "$PROBE_CURL_URL")
+  curl_neg=$(run_negative curl -sfS -o /dev/null "$PROBE_CURL_URL")
+  curl_pos=$(run_positive curl -sfS -o /dev/null "$PROBE_CURL_URL")
 fi
 
 # one JSON probe object を出力する。第 5 引数が空でなければ末尾にカンマを付ける。

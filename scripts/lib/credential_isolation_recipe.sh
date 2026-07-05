@@ -26,6 +26,14 @@ iso_make_scratch() {
 # ssh-agent / ~/.netrc / gh hosts.yml) を env allowlist (env -i) で構造的に断つ。
 # denylist (env -u) は列挙漏れに弱いので使わない (設計メモ・Codex hardening)。
 #
+# git の config 由来 credential (osxkeychain helper / http.extraHeader / proxy /
+# cookieFile) は、この env 隔離が config source ごと断つ: GIT_CONFIG_NOSYSTEM=1 (system
+# gitconfig 無効) + GIT_CONFIG_GLOBAL/SYSTEM=/dev/null (global/system 無効) + 空 HOME +
+# **非 repo scratch cwd** (repo-local .git/config を読ませない)。config source が空なので
+# `git -c credential.helper=` 等の per-invocation override は不要 (冗長)。かつ per-invocation
+# flag を negative だけに付けると positive と operation identity が崩れる (#168 レビュー) ため
+# 使わない。
+#
 # hard に保証する射程 (honest-label): 管理された gh / git / curl invocation の
 # 「既定 credential 探索が空」であることまで。keychain 直読み (security) /
 # absolute path 読み / MCP・browser の login 済み session は env 隔離の射程外
@@ -55,11 +63,17 @@ iso_run() {
   )
 }
 
-# git channel 用の追加 hardening 引数。git の途中に差し込む:
-#   git $(iso_git_flags) ls-remote <url>
-# credential.helper / askpass を空にし、http.extraHeader (Authorization 注入面) /
-# proxy / cookieFile を無効化、URL 埋め込み credential を die にする。
-# env 隔離だけでは cwd 外の設定経路が残りうるので、invocation ごとに明示 override する。
-iso_git_flags() {
-  printf '%s' "-c credential.helper= -c core.askPass= -c http.extraHeader= -c http.proxy= -c http.cookieFile= -c transfer.credentialsInUrl=die"
+# ambient (非隔離) env で command を中立な非 repo cwd で実行する。
+# negative (iso_run) と positive の唯一の差分を「env 隔離の有無」だけにするため、cwd は
+# positive も非 repo に固定する (repo-local .git/config が差分にならないよう、operation
+# identity を保つ, #168 レビュー)。ambient なので keychain / keyring / ssh-agent は生きる。
+amb_run() {
+  amb_cwd=$(mktemp -d) || return 1
+  (
+    cd "$amb_cwd" || exit 127
+    "$@"
+  )
+  amb_status=$?
+  rm -rf "$amb_cwd"
+  return $amb_status
 }
