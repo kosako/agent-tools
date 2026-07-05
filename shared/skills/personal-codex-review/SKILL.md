@@ -1,11 +1,6 @@
 ---
 name: personal-codex-review
-description: >-
-  別モデル (Codex / GPT-5.x) に diff や PR を実際にレビューさせ、安定して結果を得るための
-  skill。「Codex にレビューさせて」「codex でこの差分/PR を見て」「second opinion を
-  Codex で」「codex review が固まる/返ってこない」のときに使う。codex exec を foreground で
-  単独実行するのが要点(background 化すると stall する)。承認待ち対策の flag も併用する。
-  相互レビュー (author ≠ reviewer) のどちら側を呼ぶかは運用ルールの「相互レビュー」節に従う。
+description: 別モデル (Codex / GPT-5.x) に diff や PR を実際にレビューさせ、安定して結果を得るための skill。「Codex にレビューさせて」「codex でこの差分/PR を見て」「second opinion を Codex で」「codex review が固まる/返ってこない」のときに使う。要点は codex exec の foreground 単独実行(background 化すると stall する)。レビューの依頼と結果を GitHub PR 上で完結させたいときは personal-review-request(役割が違う)。
 ---
 
 # personal-codex-review
