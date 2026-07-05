@@ -89,6 +89,15 @@ probe_ssh=false
 probe_curl=false
 [ -n "${PROBE_CURL_URL:-}" ] && probe_curl=true
 
+# 実行バイナリを canonical PATH で 1 度だけ絶対パスに解決し、negative/positive の両方に渡す。
+# これで同一 argv だけでなく実行バイナリも一致し、ambient PATH 上の wrapper / 別版で positive
+# だけ通る偽の安心を排除する (operation identity, #168 レビュー)。
+GH_BIN=$(iso_resolve_bin gh)   || { echo "error: gh not found in canonical PATH ($ISO_PATH)" >&2; exit 2; }
+GIT_BIN=$(iso_resolve_bin git) || { echo "error: git not found in canonical PATH ($ISO_PATH)" >&2; exit 2; }
+if [ "$probe_curl" = true ]; then
+  CURL_BIN=$(iso_resolve_bin curl) || { echo "error: curl not found in canonical PATH ($ISO_PATH)" >&2; exit 2; }
+fi
+
 # 各チャネルの (negative=隔離 / positive=非隔離) を **同一コマンド** で走らせる。
 # negative = iso_run (env 隔離 + 非 repo cwd)、positive = amb_run (ambient env + 非 repo cwd)。
 # コマンド・cwd の種類・argv は完全に同一で、唯一の差分は env 隔離の有無 (operation
@@ -120,32 +129,33 @@ if [ "$dry_run" = true ]; then
   echo "# dry-run: 実行しません (credential に触れません)。config=$config"
   echo "# negative = iso_run <scratch> <cmd> (env 隔離 + 非 repo cwd)"
   echo "# positive = amb_run <cmd> (ambient env + 非 repo cwd)。cmd は negative と同一。"
-  echo "# gh        cmd: gh api repos/$PROBE_GH_REPO --silent"
-  echo "# git-https cmd: git ls-remote $PROBE_GIT_HTTPS"
+  echo "# pinned binaries (negative/positive 共通): gh=$GH_BIN git=$GIT_BIN"
+  echo "# gh        cmd: $GH_BIN api repos/$PROBE_GH_REPO --silent"
+  echo "# git-https cmd: $GIT_BIN ls-remote $PROBE_GIT_HTTPS"
   if [ "$probe_ssh" = true ]; then
-    echo "# git-ssh   cmd: git ls-remote $PROBE_GIT_SSH"
+    echo "# git-ssh   cmd: $GIT_BIN ls-remote $PROBE_GIT_SSH"
   else
     echo "# git-ssh   skipped: PROBE_GIT_SSH 未設定 (opt-in channel)"
   fi
   if [ "$probe_curl" = true ]; then
-    echo "# curl      cmd: curl -sfS -o /dev/null $PROBE_CURL_URL"
+    echo "# curl      cmd: $CURL_BIN -sfS -o /dev/null $PROBE_CURL_URL"
   else
     echo "# curl      skipped: PROBE_CURL_URL 未設定 (opt-in channel)"
   fi
   exit 0
 fi
 
-gh_neg=$(run_negative gh api "repos/$PROBE_GH_REPO" --silent)
-gh_pos=$(run_positive gh api "repos/$PROBE_GH_REPO" --silent)
-gith_neg=$(run_negative git ls-remote "$PROBE_GIT_HTTPS")
-gith_pos=$(run_positive git ls-remote "$PROBE_GIT_HTTPS")
+gh_neg=$(run_negative "$GH_BIN" api "repos/$PROBE_GH_REPO" --silent)
+gh_pos=$(run_positive "$GH_BIN" api "repos/$PROBE_GH_REPO" --silent)
+gith_neg=$(run_negative "$GIT_BIN" ls-remote "$PROBE_GIT_HTTPS")
+gith_pos=$(run_positive "$GIT_BIN" ls-remote "$PROBE_GIT_HTTPS")
 if [ "$probe_ssh" = true ]; then
-  giths_neg=$(run_negative git ls-remote "$PROBE_GIT_SSH")
-  giths_pos=$(run_positive git ls-remote "$PROBE_GIT_SSH")
+  giths_neg=$(run_negative "$GIT_BIN" ls-remote "$PROBE_GIT_SSH")
+  giths_pos=$(run_positive "$GIT_BIN" ls-remote "$PROBE_GIT_SSH")
 fi
 if [ "$probe_curl" = true ]; then
-  curl_neg=$(run_negative curl -sfS -o /dev/null "$PROBE_CURL_URL")
-  curl_pos=$(run_positive curl -sfS -o /dev/null "$PROBE_CURL_URL")
+  curl_neg=$(run_negative "$CURL_BIN" -sfS -o /dev/null "$PROBE_CURL_URL")
+  curl_pos=$(run_positive "$CURL_BIN" -sfS -o /dev/null "$PROBE_CURL_URL")
 fi
 
 # one JSON probe object を出力する。第 5 引数が空でなければ末尾にカンマを付ける。

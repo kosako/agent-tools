@@ -122,9 +122,20 @@ done
 # negative = iso_run <cmd>、positive = amb_run <cmd> で cmd は同一 (operation identity)
 grep -q "negative = iso_run" "$tmp/out-dry" || fail "dry-run should describe negative as iso_run"
 grep -q "positive = amb_run" "$tmp/out-dry" || fail "dry-run should describe positive as amb_run"
-grep -q "git ls-remote https://github.com/owner/private-repo.git" "$tmp/out-dry" \
-  || fail "dry-run git-https cmd should be plain git ls-remote (no per-invocation flags)"
+grep -q " ls-remote https://github.com/owner/private-repo.git" "$tmp/out-dry" \
+  || fail "dry-run git-https cmd should be plain ls-remote (no per-invocation flags)"
 grep -q "credential.helper=" "$tmp/out-dry" && fail "probe must not pass per-invocation git -c flags (breaks operation identity)"
+# executable identity: git/gh は canonical PATH で解決した絶対パスに pin される (#168 レビュー)
+grep -q "pinned binaries" "$tmp/out-dry" || fail "dry-run should report pinned binaries"
+grep -qE "gh=/[^ ]+ git=/[^ ]+" "$tmp/out-dry" \
+  || fail "dry-run should pin gh/git to absolute paths: $(grep 'pinned' "$tmp/out-dry")"
+
+# --- case 6b: iso_resolve_bin は canonical PATH で絶対パスを返す ---
+resolved=$(iso_resolve_bin git)
+case "$resolved" in
+  /*) ;;
+  *) fail "iso_resolve_bin git should return an absolute path, got: $resolved" ;;
+esac
 
 # --- case 7: dry-run の出力が judge の実 results.json 形と整合 (operation の ch 別一致) ---
 # 生成される results.json の operation id が negative/positive でチャネル毎に一致すること

@@ -10,6 +10,18 @@
 # この file は関数定義のみ。source して使う。network / credential には触らない
 # (触るのは runner が組む隔離 session であって、この recipe の構築自体ではない)。
 
+# canonical PATH。隔離 session の PATH であり、probe の binary 解決の pin 元でもある。
+# negative (iso_run) はこの PATH で実行し、runner は iso_resolve_bin でここから gh/git/curl の
+# 絶対パスを 1 度だけ解決して negative/positive の両方に渡す。これで同一 argv だけでなく
+# **実行バイナリも一致** する (ambient PATH 上の wrapper / 別版で positive だけ通る偽の安心を
+# 排除, #168 レビュー)。
+ISO_PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
+
+# canonical PATH で実行ファイルを解決し絶対パスを stdout に返す (見つからなければ非ゼロ)。
+iso_resolve_bin() {
+  PATH="$ISO_PATH" command -v "$1" 2>/dev/null
+}
+
 # 隔離 scratch を作り、その path を stdout に返す。
 # home/xdg/gh/curl は空の隔離先、cwd は「非 repo の作業ディレクトリ」。
 # 非 repo cwd で実行するのは、git に GIT_CONFIG_NOLOCAL が無く、repo 内で走らせると
@@ -45,7 +57,7 @@ iso_run() {
   (
     cd "$iso_scratch/cwd" || exit 127
     env -i \
-      PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin" \
+      PATH="$ISO_PATH" \
       HOME="$iso_scratch/home" \
       XDG_CONFIG_HOME="$iso_scratch/xdg" \
       GH_CONFIG_DIR="$iso_scratch/gh" \
