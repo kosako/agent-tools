@@ -102,14 +102,18 @@ usage: connect.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] 
   [Sync Policy](../docs/sync-policy.md) を enforce する。
 
 ```text
-usage: sync.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] [--quiet]
+usage: sync.sh [--root DIR] [--apply] [--prune] [--codex-home DIR] [--claude-home DIR] [--quiet]
 ```
 
 - default は dry-run。書き込みには `--apply` が必須。
 - **catalog (`generated/catalog.json`) を尊重する。`registration: registered` の
   artifact だけを配置する。** `human_review_required` / catalog 不在は理由つきで skip。
   先に `register.sh` を実行する必要がある。
-- plan は `create` / `update` / `skip` / `conflict` で表示される。
+- plan は `create` / `update` / `skip` / `conflict` (と `--prune` 時の `delete`) で表示される。
+- `--prune` で catalog に載らなくなった deployed asset を撤去する (`build --prune` の
+  sync 版)。削除は marker 一致 + catalog 不在の orphan のみで、unmanaged / symlink は
+  触らず skip 表示。実削除には `--apply` が必須。instruction は対象外
+  ([sync-policy](../docs/sync-policy.md) の「撤去」)。
 - 更新するのは agent-tools management marker を持つ target のみ。
   unmanaged な同名 target / symlink は conflict として exit 1 で停止し、何も書き込まない。
 - 書き込み先は skill が `<tool home>/skills/personal-*`、instruction が connect 確立済みの

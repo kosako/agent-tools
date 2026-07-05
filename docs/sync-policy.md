@@ -79,6 +79,28 @@ default は必ず conservative にします。
 部分集合だけを見る (directory 直下の marker file の有無で判定するため、file 型の
 `auth.json` / `config.toml` / `*.sqlite` はこの検査方式の対象外)。
 
+## 撤去 (sync --prune)
+
+`sync --prune` は、catalog に載らなくなった (= `shared/` から消えた) asset の deployed
+コピーを tool home から撤去します。`build --prune` (generated/ の orphan 削除) の sync 版
+です (#154)。
+
+- 削除も dry-run が既定で、実削除には `--apply` が必須。
+- 削除するのは次の 3 条件をすべて満たすものだけ (marker-gated delete):
+  1. 許可 namespace 内 (`<tool home>/skills/personal-*` / `<tool home>/agent-tools/scripts/personal-*`)
+  2. agent-tools management marker が tool / name と一致
+  3. catalog に同 target + name + artifact_kind の entry が無い
+- 照合は artifact_kind 単位。kind を変更した asset の旧配置物は保護されず撤去される
+  (`build --prune` と同じ判断)。
+- catalog の entry は registration 状態を問わず asset の実在とみなす
+  (`human_review_required` でも撤去しない)。catalog が無い / version 不一致なら何も
+  判断せず撤去しない (fail-closed)。
+- 条件を満たさない orphan (unmanaged / symlink) は削除せず skip として可視化するだけで、
+  conflict にしない (書き込みと違い「触らない」が常に安全なため、prune は停止しない)。
+- script は本体と sidecar marker を対で撤去する。
+- instruction は prune 対象外。所有ファイルは人間の instruction ファイルと絡めて connect
+  が管理しており、撤去 (所有解除) は人間の判断で行う。
+
 ## Management Marker
 
 marker format は [Status / Manifest Contract](status-manifest-contract.md) で定義します。

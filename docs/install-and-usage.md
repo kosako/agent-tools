@@ -71,6 +71,9 @@ cd ~/src/agent/agent-tools
 - `register` と `connect` はどちらも `build` の後・`sync` の前であればよく、相互に依存
   しません。`sync` だけが両者(catalog と所有確立)を前提とします。`setup.sh` はこの
   順序で通します。
+- `shared/` から asset を消したときは `sync --prune`(dry-run)→ `sync --prune --apply`
+  で deployed コピーを撤去できます(管理 marker が一致する orphan のみ削除。詳細は
+  [sync-policy](sync-policy.md) の「撤去」)。
 
 ## アップデート
 
