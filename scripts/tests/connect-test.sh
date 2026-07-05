@@ -293,4 +293,16 @@ grep -q "@agent-tools/CLAUDE.md" "$tmp/claude14b/CLAUDE.md" || fail "import line
 head -c "$orig_size" "$tmp/claude14b/CLAUDE.md" | cmp -s - "$tmp/c14b-orig" \
   || fail "existing CLAUDE.md bytes must be preserved on append"
 
+# --- case 15: 所有先 AGENTS.md 自体が symlink なら conflict (実体へ書き抜けない) (#150) ---
+mkdir -p "$tmp/codex15" "$tmp/claude15"
+echo "# real file elsewhere" > "$tmp/real-agents.md"
+ln -s "$tmp/real-agents.md" "$tmp/codex15/AGENTS.md"
+status=0
+"$connect" --root "$tmp/repo5" --codex-home "$tmp/codex15" --claude-home "$tmp/claude15" --apply > "$tmp/c15" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "symlinked owned AGENTS.md should conflict (exit 1): $(cat "$tmp/c15")"
+grep -q "conflict: \[codex\] owned.*symlink" "$tmp/c15" \
+  || fail "missing owned-symlink conflict: $(cat "$tmp/c15")"
+grep -q "# real file elsewhere" "$tmp/real-agents.md" \
+  || fail "must not write through a symlinked owned file"
+
 echo "ok: connect self-test passed"

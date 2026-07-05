@@ -294,10 +294,16 @@ EOF
 [ "$(jget "$tmp/scriptdir/generated/catalog.json" assets 0 registration)" = '"unsupported"' ] \
   || fail "directory script should be unsupported (not single-file buildable)"
 
-# --- case 11: repository 本体が register できる ---
+# --- case 11: repository 本体が register できる (実 repo を変異させないよう tmp コピーで検証) ---
+# 実 repo の catalog.json を直接上書きすると、branch でのテスト実行が実 sync の参照先を
+# 差し替える副作用がある (#150)。検証目的 (実 asset 一式で register が通る) はコピーでも同一。
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
-"$register" --root "$repo_root" --quiet > "$tmp/r8" 2>&1 \
+mkdir -p "$tmp/repocopy"
+cp -R "$repo_root/shared" "$tmp/repocopy/shared"
+cp -R "$repo_root/generated" "$tmp/repocopy/generated"
+rm -f "$tmp/repocopy/generated/catalog.json"
+"$register" --root "$tmp/repocopy" --quiet > "$tmp/r8" 2>&1 \
   || fail "repository register should pass: $(cat "$tmp/r8")"
-[ -f "$repo_root/generated/catalog.json" ] || fail "repository catalog missing"
+[ -f "$tmp/repocopy/generated/catalog.json" ] || fail "repository catalog missing"
 
 echo "ok: register self-test passed"

@@ -246,4 +246,32 @@ if [ "$(id -u)" -ne 0 ]; then
   chmod 644 "$tmp/unreadable.json"
 fi
 
+# --- case 19: 同一 (channel, operation) の positive 重複も曖昧 = 構造エラー (exit 2) (#150) ---
+# (case 7 は negative 重複のみで、positive 側の件数分岐が未到達だった)
+cat > "$tmp/duppos.json" <<'EOF'
+{
+  "probes": [
+    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv", "authenticated": true},
+    {"channel": "curl",      "mode": "negative", "operation": "read-priv", "authenticated": false},
+    {"channel": "curl",      "mode": "positive", "operation": "read-priv", "authenticated": true}
+  ]
+}
+EOF
+run_case "duplicate-positive-probe" "$tmp/duppos.json" 2 \
+  "channel gh (operation read-priv): expected exactly one positive-control probe, got 2"
+
+# --- case 20: top-level が JSON object でなければ入力エラー (exit 2) (#150) ---
+echo '[]' > "$tmp/toplevel-array.json"
+run_case "top-level-not-object" "$tmp/toplevel-array.json" 2 "input must be a JSON object"
+
+# --- case 21: probes が array でなければ入力エラー (exit 2) (#150) ---
+echo '{ "probes": {} }' > "$tmp/probes-not-array.json"
+run_case "probes-not-array" "$tmp/probes-not-array.json" 2 "probes must be an array"
+
 echo "ok: check-credential-isolation self-test passed"

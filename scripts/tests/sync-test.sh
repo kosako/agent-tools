@@ -651,4 +651,17 @@ printf '\377' >> "$tmp/codex27b/AGENTS.md"
 grep -q "skip: \[codex\].*up-to-date" "$tmp/out27b" \
   || fail "managed owned file with non-UTF-8 tail should stay up-to-date: $(cat "$tmp/out27b")"
 
+# --- case 28: 所有先 AGENTS.md 自体が symlink なら conflict (実体へ書き抜けない) (#150) ---
+# (case 11 は親 dir の symlink。所有ファイル自体が symlink のケースはここで押さえる)
+mkdir -p "$tmp/codex28" "$tmp/claude28"
+echo "# real file elsewhere" > "$tmp/real-agents-sync.md"
+ln -s "$tmp/real-agents-sync.md" "$tmp/codex28/AGENTS.md"
+status=0
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex28" --claude-home "$tmp/claude28" --apply > "$tmp/out28" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "symlinked owned AGENTS.md should conflict (exit 1): $(cat "$tmp/out28")"
+grep -q "conflict: \[codex\].*symlink" "$tmp/out28" \
+  || fail "missing owned-symlink conflict: $(cat "$tmp/out28")"
+grep -q "# real file elsewhere" "$tmp/real-agents-sync.md" \
+  || fail "must not write through a symlinked owned file"
+
 echo "ok: sync self-test passed"
