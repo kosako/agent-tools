@@ -1,12 +1,6 @@
 ---
 name: personal-review-request
-description: >-
-  PR のコードレビューを依頼し、依頼から結果・やり取りまでを GitHub PR 上で完結させる
-  skill。結果は 3 段階ランク（🔴 must / 🟡 should / ⚪ nit）で PR にコメント投稿し、
-  must がゼロなら「merge 可、残りは依頼元判断」と明記する。「レビュー依頼して」「Codex に
-  レビューしてもらって」「この PR をレビューして」「/personal-review-request <PR番号>」の
-  とき、および draft PR を外部レビュアー（Codex など）に見せたい文脈で使う。レビュー結果を
-  会話内だけで返したり、ランク無しで PR に投稿したりしない。
+description: PR のコードレビューを依頼し、結果とやり取りを GitHub PR 上で完結させる skill(結果は 🔴 must / 🟡 should / ⚪ nit の 3 段階ランクで PR にコメント投稿・must ゼロなら merge 可と明記)。「レビュー依頼して」「この PR をレビューして」「/personal-review-request <PR番号>」のとき、および draft PR を外部レビュアー(Codex など)に見せたいときに使う。PR に紐づかない diff の会話内レビューは personal-codex-review(役割が違う)。
 ---
 
 # personal-review-request — GitHub 上で完結する PR レビュー依頼

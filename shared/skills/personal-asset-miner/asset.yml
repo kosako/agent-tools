@@ -22,4 +22,4 @@ review:
   # runtime state を変更しない read-only の正当な参照。人間レビューで承認 (#86)。
   # 承認は内容に紐づく (#148)。source 変更時は再レビューして approved_build_id を更新する。
   human_review: approved
-  approved_build_id: sha256:d1cec48ac836
+  approved_build_id: sha256:9cc880a02269
