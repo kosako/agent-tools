@@ -49,18 +49,37 @@ usage: check-injection.sh [--root DIR] [--quiet]
 - self-test: `tests/check-injection-test.sh`
 
 - `check-credential-isolation.sh`: credential 隔離 acceptance harness の判定コア。probe 結果
-  (JSON) を受け、隔離が破れていないか判定する (probe の実機実行は別・PR-2)。
+  (JSON) を受け、隔離が破れていないか判定する (probe の実機実行は `probe-credential-isolation.sh`)。
   [Credential Isolation Acceptance](../docs/credential-isolation-acceptance.md) に従う。
 
 ```text
 usage: check-credential-isolation.sh --judge <results.json>
 ```
 
-- canonical チャネルすべて (一覧の正本は lib の `CHANNELS` / `--help`) に同一 operation の
-  negative/positive ペアを 1 組以上要求し、credential leak・空振り緑・チャネル欠落を弾く。
+- required チャネル (`gh` / `git-https`。一覧の正本は lib の `REQUIRED_CHANNELS` / `--help`) に
+  同一 operation の negative/positive ペアを 1 組以上要求し、credential leak・空振り緑・チャネル
+  欠落を弾く。`git-ssh` / `curl` は ambient 認証源がセッション依存のため opt-in (含めれば完全ペア
+  必須、無くても欠落扱いしない)。
 - exit code: 隔離確認は 0、観測された破れ (leak / false-green) は 1、usage / 入力・構造エラー
   (チャネル欠落・ペア不成立・重複) は 2。破れと構造不備が同居したら 1 を優先し全件報告する。
 - self-test: `tests/check-credential-isolation-test.sh`
+
+- `probe-credential-isolation.sh`: credential 隔離 acceptance harness の probe runner (実機)。
+  required チャネル (gh / git-https) + opt-in (git-ssh / curl) を private target に隔離 / 非隔離で
+  叩き、認証成否を `results.json` (judge 入力) として出力する。隔離 recipe の SSOT は
+  `lib/credential_isolation_recipe.sh`。
+
+```text
+usage: probe-credential-isolation.sh [--config PATH] [--out FILE] [--dry-run]
+```
+
+- probe target は local config 由来 (既定 `~/.config/dotfiles/github-isolation-probe.local`、
+  `GITHUB_ISOLATION_PROBE_CONFIG` / `--config` で上書き)。public repo にハードコードしない・
+  不在時は明示 fail。`--dry-run` は credential に触れず組み立てを表示する。
+- **CI では実行しない** (credential 不在)。hard 保証は実機ログ (PR 添付) が正本で、CI 緑を
+  根拠にしない ([Credential Isolation Acceptance](../docs/credential-isolation-acceptance.md))。
+- self-test: `tests/probe-credential-isolation-test.sh` (実 credential に触れず recipe の env
+  構造 / config 不在 fail / dry-run を検証)。
 
 - `build.sh`: shared source assets から tool 別 artifacts を `generated/` に生成する。
   adapter spec は [adapters/](../adapters/README.md) を参照。

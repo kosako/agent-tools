@@ -9,8 +9,10 @@
 # fixture で deterministic に検証できるようにする。判定入力は probe 結果の JSON。
 #
 # 判定契約:
-#   - canonical CHANNELS のすべてが results に揃っている (チャネル丸ごとの欠落 =
+#   - REQUIRED_CHANNELS のすべてが results に揃っている (チャネル丸ごとの欠落 =
 #     偽の安心 を弾く。required set は契約として固定し、呼び出し側は縮められない)。
+#     git-ssh / curl は KNOWN だが required floor 外の opt-in (results に有れば検証・無くても
+#     欠落扱いしない。理由は KNOWN_CHANNELS の注記)。
 #   - 各チャネルは同一 operation の negative / positive ペアを1組以上持つ (positive control
 #     が negative と別操作を叩く空振り緑を弾く。ペアを増やす方向の拡張は妨げない)。
 #   - negative probe が認証を通していない (通したら credential leak)。
@@ -33,11 +35,21 @@ require "json"
 module CheckCredentialIsolation
   class Error < StandardError; end
 
-  # acceptance が要求する canonical な認証チャネル。呼び出し側 (PR-2 の probe runner) が
-  # required set を縮めて harness を骨抜きにできないよう、契約としてここで固定する。
-  # 同時に閉語彙 (typo guard) でもある: 未知の channel は入力エラーで弾く。チャネルを
-  # 増やすのは意図的な契約変更としてこの定数の PR 修正で行う (results.json 側から足せない)。
-  CHANNELS = %w[gh git-https git-ssh curl].freeze
+  # acceptance が **必ず** 完全ペアを要求する canonical チャネル (required floor)。呼び出し側
+  # (probe runner) が required set を縮めて harness を骨抜きにできないよう、契約としてここで
+  # 固定する。gh (keyring) と git-https (osxkeychain) は **この Mac に永続的に** 存在する
+  # keychain-backed な認証源で、どのセッションでも positive control が立つ = 再現可能な床。
+  REQUIRED_CHANNELS = %w[gh git-https].freeze
+
+  # 既知チャネルの閉語彙 (typo guard)。未知の channel 名は入力エラーで弾く。git-ssh と curl は
+  # 既知だが required floor には含めない (opt-in): それぞれの ambient 認証源 (ssh-agent /
+  # ~/.netrc) は **セッション・設定依存** で、ロードされていないと positive control が立たず
+  # (空振り緑)、required にすると「credential 捏造」か「vacuous pass」のどちらかを強いる。
+  # opt-in は results に含めれば pair / polarity を検証する (含めたなら完全ペア必須で骨抜けに
+  # しない) が、無くても required 欠落にはしない。ambient credential がアクティブな環境では
+  # config に足せばそのチャネルも検証される。この分界は PR-2 で env 隔離の実機現実 (ambient
+  # 認証源が永続か否か) に合わせた honest-label な調整 (#129 P3-02)。
+  KNOWN_CHANNELS = (REQUIRED_CHANNELS + %w[git-ssh curl]).freeze
   MODES = %w[negative positive].freeze
 
   USAGE = <<~TEXT
@@ -48,7 +60,9 @@ module CheckCredentialIsolation
           { "channel": "gh", "mode": "negative", "operation": "<op id>", "authenticated": false },
           { "channel": "gh", "mode": "positive", "operation": "<op id>", "authenticated": true } ] }
 
-    channels (all required): #{CHANNELS.join(', ')}
+    required channels: #{REQUIRED_CHANNELS.join(', ')}
+    optional channels: git-ssh, curl (含めれば検証・無くても欠落扱いしない。ambient 認証源
+                       = ssh-agent / ~/.netrc がセッション依存のため)
     各 channel は同一 operation の negative / positive ペアを1組以上持つこと。
     operation は「隔離の有無だけが違う同一コマンド」を指す識別子 (真正性は runner の責務)。
 
@@ -72,8 +86,8 @@ module CheckCredentialIsolation
 
   def self.validate_probe!(probe, index)
     raise Error, "probes[#{index}] must be an object" unless probe.is_a?(Hash)
-    unless CHANNELS.include?(probe["channel"])
-      raise Error, "probes[#{index}].channel must be one of #{CHANNELS.join(', ')}"
+    unless KNOWN_CHANNELS.include?(probe["channel"])
+      raise Error, "probes[#{index}].channel must be one of #{KNOWN_CHANNELS.join(', ')}"
     end
     unless MODES.include?(probe["mode"])
       raise Error, "probes[#{index}].mode must be one of #{MODES.join(', ')}"
@@ -115,11 +129,13 @@ module CheckCredentialIsolation
   end
 
   # 構造検査: (channel, operation) group ごとに negative / positive がちょうど 1 本ずつ
-  # (重複は曖昧なので不成立)、かつ canonical チャネルすべてに完全ペアが 1 組以上あること。
+  # (重複は曖昧なので不成立)、かつ REQUIRED_CHANNELS すべてに完全ペアが 1 組以上あること。
+  # 完全ペア要求は全 group にかかる (curl を含めたなら curl も完全ペアが要る = opt-in でも
+  # 骨抜けにしない) が、「チャネル欠落」の判定は required floor のみ (curl 不在は許す)。
   def self.structural_failures(probes)
     groups = probes.group_by { |p| [p["channel"], p["operation"]] }
     failures = groups.flat_map { |(channel, operation), members| group_failures(channel, operation, members) }
-    CHANNELS.each do |channel|
+    REQUIRED_CHANNELS.each do |channel|
       next if groups.any? { |(ch, _), members| ch == channel && complete_pair?(members) }
       failures << "channel #{channel}: no complete negative/positive probe pair"
     end
@@ -162,7 +178,8 @@ module CheckCredentialIsolation
     probes = parse_input(File.read(path))
     breaches, structural = judge(probes)
     if breaches.empty? && structural.empty?
-      puts "ok: credential isolation verified (#{CHANNELS.length} channels, #{probes.length} probes)"
+      channels = probes.map { |p| p["channel"] }.uniq.length
+      puts "ok: credential isolation verified (#{channels} channels, #{probes.length} probes)"
       return 0
     end
 
