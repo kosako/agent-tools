@@ -11,6 +11,8 @@
 # - 許可 target は artifact_kind 別: skill = <tool home>/skills/personal-*、
 #   instruction = connect 確立済みの所有ファイル、script = <tool home>/agent-tools/scripts/
 #   personal-* (sidecar marker つき)。それ以外の path は構成しない (docs/sync-policy.md)。
+# - --prune で catalog に載らなくなった deployed asset を撤去する (marker-gated delete,
+#   #154)。削除も --apply が必須で、既定は dry-run。
 
 require "yaml"
 require "fileutils"
@@ -55,8 +57,31 @@ module Sync
       @entries.map { |entry| plan_for_entry(entry) }
     end
 
+    # --prune: catalog に載らなくなった deployed asset の撤去 plan を作る (#154)。
+    # build --prune (generated/ の orphan 削除) の sync 版。削除は 3 条件をすべて満たす
+    # ものだけ (marker-gated delete): 許可 namespace 内 (skills/personal-* /
+    # agent-tools/scripts/personal-*) + agent-tools 管理 marker が tool / name と一致 +
+    # catalog に同 target + name + artifact_kind の entry が無い。kind 単位で照合するのは
+    # build --prune と同じ判断 (kind 変更後の stale 配置物を保護して残さない)。
+    # 条件を満たさない orphan は削除せず skip で可視化する (prune は conflict でブロック
+    # しない。書き込みと違い「触らない」が常に安全なため)。instruction は connect が
+    # 人間ファイルと絡めて所有するため prune 対象外 (docs/sync-policy.md)。
+    # catalog 不在 / version 不一致 / 壊れた JSON / entry ゼロでは何も判断しない
+    # (fail-closed)。@entries が空だと全 deployed が orphan に見えて全削除を plan して
+    # しまうため。valid な空 catalog ({"assets": []}) は manifest ゼロの repo (間違った
+    # --root 等) でも生成できるので、catalog_present だけでは足りない。
+    def prune_plans
+      return [] if !@catalog_present || @entries.empty?
+
+      TOOLS.flat_map { |tool| prune_skills(tool) + prune_scripts(tool) }
+    end
+
     def apply(plans)
       plans.each do |p|
+        if p.action == "delete"
+          delete_target(p)
+          next
+        end
         next unless %w[create update].include?(p.action)
 
         case p.kind
@@ -79,6 +104,75 @@ module Sync
     end
 
     private
+
+    # prune の削除実体。marker-gated 判定 (prune_skills / prune_scripts) を通った
+    # plan だけが来る。script は本体と sidecar marker を対で消す。
+    def delete_target(plan)
+      if plan.kind == "script"
+        FileUtils.rm_f(plan.target)
+        FileUtils.rm_f(ArtifactTargets.sidecar_marker_path(plan.target))
+      else
+        FileUtils.rm_rf(plan.target)
+      end
+    end
+
+    # tool の catalog に載っている name (artifact_kind 単位)。registration 状態は問わない
+    # (human_review_required / unsupported でも entry がある = asset は shared/ に実在する
+    # ので、その deployed 物を prune が消さない。配置可否の判断は plan 側の責務)。
+    def catalog_names(tool, kind)
+      @entries.select { |e| e["target"] == tool && e["artifact_kind"] == kind }
+              .map { |e| e["name"] }
+    end
+
+    def prune_skills(tool)
+      skills_dir = File.join(@homes.fetch(tool), "skills")
+      return [] unless File.directory?(skills_dir)
+
+      known = catalog_names(tool, "skill")
+      Dir.glob(File.join(skills_dir, "personal-*")).sort.map do |target|
+        name = File.basename(target)
+        next if known.include?(name)
+
+        # symlink は実体の所在によらず決して触らない (plan_skill と同じ防御)。
+        if File.symlink?(target) || File.symlink?(skills_dir)
+          next Plan.new("skip", tool, name, target, "orphan is a symlink; left in place", "skill", nil,
+                        :orphan_symlink)
+        end
+        marker = File.directory?(target) ? read_marker(target) : nil
+        unless managed?(marker, tool, name)
+          next Plan.new("skip", tool, name, target, "orphan is unmanaged; left in place", "skill", nil,
+                        :orphan_unmanaged)
+        end
+        Plan.new("delete", tool, name, target, "not in catalog", "skill", nil, :orphan)
+      end.compact
+    end
+
+    def prune_scripts(tool)
+      scripts_dir = File.join(@homes.fetch(tool), "agent-tools", "scripts")
+      return [] unless File.directory?(scripts_dir)
+
+      known = catalog_names(tool, "script")
+      Dir.glob(File.join(scripts_dir, "personal-*")).sort.map do |target|
+        # sidecar marker は本体の delete と対で消すため、単体では列挙しない。
+        next if target.end_with?(ArtifactTargets::MARKER_BASENAME)
+
+        name = File.basename(target)
+        next if known.include?(name)
+
+        # 削除経路 (本体 / sidecar / 親 dir 2 階層) のいずれかが symlink なら触らない
+        # (plan_script と同じ防御)。
+        if script_target_symlink?(target)
+          next Plan.new("skip", tool, name, target, "orphan is a symlink; left in place", "script", nil,
+                        :orphan_symlink)
+        end
+        marker = read_marker_file(ArtifactTargets.sidecar_marker_path(target))
+        unless managed?(marker, tool, name)
+          next Plan.new("skip", tool, name, target, "orphan is unmanaged; left in place", "script", nil,
+                        :orphan_unmanaged)
+        end
+        Plan.new("delete", tool, name, target, "not in catalog", "script", nil, :orphan)
+      end.compact
+    end
 
     # catalog entry (target-artifact) を plan にマップする。registered 以外は配置しない。
     def plan_for_entry(entry)
@@ -286,6 +380,7 @@ module Sync
   def self.main(argv)
     root = Dir.pwd
     apply = false
+    prune = false
     quiet = false
     homes = {
       "codex" => File.expand_path("~/.codex"),
@@ -297,6 +392,8 @@ module Sync
         root = argv.shift or abort_usage
       when "--apply"
         apply = true
+      when "--prune"
+        prune = true
       when "--codex-home"
         homes["codex"] = File.expand_path(argv.shift || abort_usage)
       when "--claude-home"
@@ -314,6 +411,7 @@ module Sync
 
     runner = Runner.new(root, homes)
     plans = runner.plan
+    plans += runner.prune_plans if prune
 
     if plans.empty?
       msg = runner.catalog_present ? "nothing to sync (run scripts/build.sh first)" : "no catalog; run scripts/register.sh first"
@@ -330,7 +428,7 @@ module Sync
       return 1
     end
 
-    changes = plans.count { |p| %w[create update].include?(p.action) }
+    changes = plans.count { |p| %w[create update delete].include?(p.action) }
     if apply
       runner.apply(plans)
       puts "ok: applied #{changes} change(s)" unless quiet
@@ -341,7 +439,7 @@ module Sync
   end
 
   def self.print_usage
-    puts "usage: sync.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] [--quiet]"
+    puts "usage: sync.sh [--root DIR] [--apply] [--prune] [--codex-home DIR] [--claude-home DIR] [--quiet]"
   end
 
   def self.abort_usage

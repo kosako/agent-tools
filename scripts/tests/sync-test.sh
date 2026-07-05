@@ -444,4 +444,192 @@ grep -q "skip: \[claude-code\].*human_review_required" "$tmp/out21" \
   || fail "gated asset must skip with human_review_required reason: $(cat "$tmp/out21")"
 [ ! -e "$tmp/gclaude/skills/personal-gated" ] || fail "unreviewed asset must not be deployed"
 
+# --- case 22: --prune は catalog に載らない managed orphan を撤去する (#154) ---
+# fixture: 2 skill を配置後、片方を shared/ から消して build --prune + register し直す。
+mkdir -p "$tmp/prepo/shared/skills/personal-keep" "$tmp/prepo/shared/skills/personal-gone" \
+  "$tmp/pcodex" "$tmp/pclaude"
+for n in keep gone; do
+  cat > "$tmp/prepo/shared/skills/personal-$n/SKILL.md" <<EOF
+---
+name: personal-$n
+description: demo skill $n
+---
+body $n
+EOF
+  cat > "$tmp/prepo/shared/skills/personal-$n/asset.yml" <<EOF
+schema_version: 1
+name: personal-$n
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-$n
+  format: directory
+EOF
+done
+run22() { "$sync" --root "$tmp/prepo" --codex-home "$tmp/pcodex" --claude-home "$tmp/pclaude" "$@"; }
+"$build" --root "$tmp/prepo" --quiet > /dev/null
+"$register" --root "$tmp/prepo" --quiet > /dev/null
+run22 --apply --quiet > /dev/null
+[ -f "$tmp/pclaude/skills/personal-gone/SKILL.md" ] || fail "prune fixture should deploy personal-gone"
+# personal-gone を shared/ から撤去して catalog を作り直す
+rm -rf "$tmp/prepo/shared/skills/personal-gone" "$tmp/prepo/shared/skills/personal-gone.asset.yml" 2>/dev/null
+rm -rf "$tmp/prepo/shared/skills/personal-gone"
+"$build" --root "$tmp/prepo" --prune --quiet > /dev/null
+"$register" --root "$tmp/prepo" --quiet > /dev/null
+
+# --prune なしの sync は orphan に触れない (従来挙動)
+run22 > "$tmp/out22-noprune" 2>&1 || fail "sync without --prune should succeed"
+! grep -q "personal-gone" "$tmp/out22-noprune" || fail "orphan must not appear without --prune"
+
+# --prune の dry-run は delete を列挙するだけで消さない
+run22 --prune > "$tmp/out22-dry" 2>&1 || fail "prune dry-run should succeed: $(cat "$tmp/out22-dry")"
+grep -q "delete: \[claude-code\].*personal-gone (not in catalog)" "$tmp/out22-dry" \
+  || fail "missing delete plan: $(cat "$tmp/out22-dry")"
+grep -q "dry-run only" "$tmp/out22-dry" || fail "prune without --apply must stay dry-run"
+[ -d "$tmp/pclaude/skills/personal-gone" ] || fail "dry-run prune must not delete"
+
+# --prune --apply で削除される。現役 (personal-keep) は残る
+run22 --prune --apply > "$tmp/out22-apply" 2>&1 || fail "prune apply should succeed: $(cat "$tmp/out22-apply")"
+[ ! -e "$tmp/pclaude/skills/personal-gone" ] || fail "prune apply should delete orphan"
+[ -f "$tmp/pclaude/skills/personal-keep/SKILL.md" ] || fail "prune must keep catalog-backed skill"
+
+# --- case 23: unmanaged / symlink の orphan は削除せず可視化するだけ ---
+mkdir -p "$tmp/pclaude/skills/personal-handmade"
+echo "hand made" > "$tmp/pclaude/skills/personal-handmade/SKILL.md"   # marker なし
+mkdir -p "$tmp/real-orphan"
+ln -s "$tmp/real-orphan" "$tmp/pclaude/skills/personal-linked"
+status=0
+run22 --prune --apply > "$tmp/out23" 2>&1 || status=$?
+[ "$status" -eq 0 ] || fail "unmanaged orphan must not block prune (exit 0): $(cat "$tmp/out23")"
+grep -q "skip: \[claude-code\].*personal-handmade (orphan is unmanaged; left in place)" "$tmp/out23" \
+  || fail "missing unmanaged orphan skip: $(cat "$tmp/out23")"
+grep -q "skip: \[claude-code\].*personal-linked (orphan is a symlink; left in place)" "$tmp/out23" \
+  || fail "missing symlink orphan skip: $(cat "$tmp/out23")"
+[ -f "$tmp/pclaude/skills/personal-handmade/SKILL.md" ] || fail "unmanaged orphan must be left in place"
+[ -L "$tmp/pclaude/skills/personal-linked" ] || fail "symlink orphan must be left in place"
+[ -e "$tmp/real-orphan" ] || fail "symlink destination must be untouched"
+rm -rf "$tmp/pclaude/skills/personal-handmade" "$tmp/pclaude/skills/personal-linked"
+
+# --- case 24: script orphan は本体 + sidecar marker を対で撤去する ---
+mkdir -p "$tmp/prepo/shared/scripts"
+printf '#!/bin/sh\necho tool\n' > "$tmp/prepo/shared/scripts/personal-ptool.sh"
+ptoolbid=$(ruby -r"$script_dir/../lib/build" \
+  -e 'puts Build.build_id_for(ARGV[0], "shared/scripts/personal-ptool.sh", "text")' "$tmp/prepo")
+cat > "$tmp/prepo/shared/scripts/personal-ptool.asset.yml" <<EOF
+schema_version: 1
+name: personal-ptool
+kind: script
+visibility: personal
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+review:
+  human_review: approved
+  approved_build_id: $ptoolbid
+source:
+  path: shared/scripts/personal-ptool.sh
+  format: text
+EOF
+"$build" --root "$tmp/prepo" --quiet > /dev/null
+"$register" --root "$tmp/prepo" --quiet > /dev/null
+run22 --apply --quiet > /dev/null
+pdeployed="$tmp/pclaude/agent-tools/scripts/personal-ptool"
+[ -f "$pdeployed" ] || fail "script prune fixture should deploy personal-ptool"
+rm -f "$tmp/prepo/shared/scripts/personal-ptool.sh" "$tmp/prepo/shared/scripts/personal-ptool.asset.yml"
+"$build" --root "$tmp/prepo" --prune --quiet > /dev/null
+"$register" --root "$tmp/prepo" --quiet > /dev/null
+run22 --prune --apply > "$tmp/out24" 2>&1 || fail "script prune should succeed: $(cat "$tmp/out24")"
+grep -q "delete: \[claude-code\].*personal-ptool (not in catalog)" "$tmp/out24" \
+  || fail "missing script delete plan: $(cat "$tmp/out24")"
+[ ! -e "$pdeployed" ] || fail "script orphan body should be deleted"
+[ ! -e "$pdeployed.agent-tools-managed.yml" ] || fail "script orphan sidecar should be deleted"
+
+# --- case 25: catalog に entry があれば registration 状態によらず prune しない ---
+# (human_review_required でも asset は shared/ に実在する。撤去は catalog 不在のときだけ)
+mkdir -p "$tmp/prepo/shared/skills/personal-keep2"
+cat > "$tmp/prepo/shared/skills/personal-keep2/SKILL.md" <<'EOF'
+---
+name: personal-keep2
+description: gated skill
+---
+body
+EOF
+cat > "$tmp/prepo/shared/skills/personal-keep2/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-keep2
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-keep2
+  format: directory
+EOF
+"$build" --root "$tmp/prepo" --quiet > /dev/null
+"$register" --root "$tmp/prepo" --quiet > /dev/null
+run22 --apply --quiet > /dev/null
+[ -f "$tmp/pclaude/skills/personal-keep2/SKILL.md" ] || fail "keep2 should deploy"
+# risk を medium に上げて human_review_required にする (entry は残る)
+cat > "$tmp/prepo/shared/skills/personal-keep2/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-keep2
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: medium
+  privacy: low
+source:
+  path: shared/skills/personal-keep2
+  format: directory
+EOF
+"$build" --root "$tmp/prepo" --quiet > /dev/null
+"$register" --root "$tmp/prepo" --quiet > /dev/null || true   # exit 3 (human_review_required)
+run22 --prune --apply > "$tmp/out25" 2>&1 || fail "prune with gated entry should succeed: $(cat "$tmp/out25")"
+! grep -q "delete: .*personal-keep2" "$tmp/out25" || fail "gated entry must not be pruned: $(cat "$tmp/out25")"
+[ -f "$tmp/pclaude/skills/personal-keep2/SKILL.md" ] || fail "gated deployed skill must be kept"
+
+# --- case 26b: valid だが空の catalog ({"assets": []}) でも --prune は何も削除しない ---
+# (manifest ゼロの repo (間違った --root 等) で register すると valid な空 catalog が
+#  できる。catalog_present だけを条件にすると全 deployed が orphan 扱いで全削除される)
+mkdir -p "$tmp/erepo/shared" "$tmp/ecodex" "$tmp/eclaude"
+"$register" --root "$tmp/erepo" --quiet > /dev/null   # manifest ゼロ → assets: []
+ruby -rjson -e 'j = JSON.parse(File.read(ARGV[0])); exit(j["assets"].empty? ? 0 : 1)' \
+  "$tmp/erepo/generated/catalog.json" || fail "empty repo register should write an empty catalog"
+mkdir -p "$tmp/eclaude/skills/personal-victim"
+cat > "$tmp/eclaude/skills/personal-victim/.agent-tools-managed.yml" <<'EOF'
+repo: agent-tools
+name: personal-victim
+target: claude-code
+artifact_kind: skill
+source: shared/skills/personal-victim
+build_id: sha256:000000000000
+EOF
+echo "victim" > "$tmp/eclaude/skills/personal-victim/SKILL.md"
+"$sync" --root "$tmp/erepo" --codex-home "$tmp/ecodex" --claude-home "$tmp/eclaude" --prune --apply \
+  > "$tmp/out26b" 2>&1 || fail "prune with empty catalog should succeed: $(cat "$tmp/out26b")"
+! grep -q "delete:" "$tmp/out26b" || fail "empty catalog must not plan deletes: $(cat "$tmp/out26b")"
+[ -f "$tmp/eclaude/skills/personal-victim/SKILL.md" ] \
+  || fail "managed deployed asset must survive prune with an empty catalog"
+
+# --- case 26: catalog が無ければ --prune は何も削除しない (fail-closed) ---
+mkdir -p "$tmp/nrepo/shared/skills" "$tmp/ncodex" "$tmp/nclaude/skills/personal-x"
+echo "x" > "$tmp/nclaude/skills/personal-x/SKILL.md"
+"$sync" --root "$tmp/nrepo" --codex-home "$tmp/ncodex" --claude-home "$tmp/nclaude" --prune --apply \
+  > "$tmp/out26" 2>&1 || fail "prune without catalog should succeed: $(cat "$tmp/out26")"
+grep -q "no catalog; run scripts/register.sh first" "$tmp/out26" \
+  || fail "prune without catalog should ask for register: $(cat "$tmp/out26")"
+[ -f "$tmp/nclaude/skills/personal-x/SKILL.md" ] || fail "prune without catalog must not delete anything"
+
 echo "ok: sync self-test passed"
