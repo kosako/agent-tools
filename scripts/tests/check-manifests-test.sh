@@ -525,4 +525,30 @@ repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \
   || fail "repository manifests should pass: $(cat "$tmp/out-repo")"
 
+# --- case 6: 拡張子違いの同名 source は sidecar manifest に相乗りできない (#149) ---
+mkdir -p "$tmp/piggy/shared/workflows"
+echo "# a" > "$tmp/piggy/shared/workflows/personal-dup.md"
+echo "# b" > "$tmp/piggy/shared/workflows/personal-dup.txt"
+cat > "$tmp/piggy/shared/workflows/personal-dup.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-dup
+kind: workflow
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/workflows/personal-dup.md
+  format: markdown
+EOF
+if "$check" --root "$tmp/piggy" > "$tmp/out-piggy" 2>&1; then
+  fail "check-manifests must reject sources sharing one sidecar manifest"
+fi
+grep -q "multiple asset sources share sidecar manifest personal-dup.asset.yml" "$tmp/out-piggy" \
+  || fail "expected shared-sidecar rejection: $(cat "$tmp/out-piggy")"
+grep -q "personal-dup.txt" "$tmp/out-piggy" \
+  || fail "rejection should name the piggybacking source: $(cat "$tmp/out-piggy")"
+
 echo "ok: check-manifests self-test passed"

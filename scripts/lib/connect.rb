@@ -140,7 +140,10 @@ module Connect
       end
       return Plan.new("create", tool, "owned", owned, nil, gen) unless File.exist?(owned)
 
-      content = File.read(owned)
+      # 非 UTF-8 バイトは scrub してから判定する (crash させない, #149)。scrub は判定用で、
+      # 書き込みは do_create の byte copy なので所有先の内容を壊さない。marker が壊れて
+      # いれば managed? が false → conflict (fail-closed)。
+      content = File.read(owned).scrub("�")
       if content.strip.empty?
         return Plan.new("create", tool, "owned", owned, "claiming empty file", gen)
       end
@@ -160,7 +163,9 @@ module Connect
         return Plan.new("conflict", tool, "import", import_file, "CLAUDE.md is not a regular file", nil)
       end
       if File.file?(import_file)
-        content = File.read(import_file)
+        # scrub は判定用のみ。追記 (do_add_import) はファイルを読み直すので、人間の
+        # CLAUDE.md の既存バイト列は保全される (#149)。
+        content = File.read(import_file).scrub("�")
         if content.lines.any? { |l| l.strip == CLAUDE_IMPORT }
           return Plan.new("skip", tool, "import", import_file, "import already present", nil)
         end
