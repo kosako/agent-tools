@@ -15,12 +15,26 @@ jobs:
   self-tests:
     runs-on: macos-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # system = macOS 標準 Ruby (2.6 / psych 3) が配備先の床。3.4 は yaml_util.rb の
+        # psych >= 4 分岐を CI の dead path にしないための現行 Ruby (#150)。
+        ruby: [system, "3.4"]
     steps:
       # 外部 action は full commit SHA で pin する (タグ移動による差し替え対策)。
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # テストが repo 内の scripts を実行するため、token を .git/config に残さない。
           persist-credentials: false
+
+      # scripts/*.sh は PATH の ruby を exec するため、PATH 先頭を差し替えるだけで
+      # matrix の Ruby に切り替わる。system 行では何もしない (macOS 標準 Ruby のまま)。
+      - name: Set up Ruby ${{ matrix.ruby }}
+        if: matrix.ruby != 'system'
+        uses: ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9 # v1.316.0
+        with:
+          ruby-version: ${{ matrix.ruby }}
 
       - name: Run self-tests
         run: |

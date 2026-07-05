@@ -551,4 +551,60 @@ grep -q "multiple asset sources share sidecar manifest personal-dup.asset.yml" "
 grep -q "personal-dup.txt" "$tmp/out-piggy" \
   || fail "rejection should name the piggybacking source: $(cat "$tmp/out-piggy")"
 
+# --- case 7: reject 経路の代表 fixture (フィールド検証の各分岐が実際に error を出す) (#150) ---
+# 1 つの broken manifest に代表的な違反を同居させ、validate_* の主要 reject 分岐を実行する。
+mkdir -p "$tmp/reject/shared/workflows"
+echo "# broken" > "$tmp/reject/shared/workflows/personal-broken.md"
+cat > "$tmp/reject/shared/workflows/personal-broken.asset.yml" <<'EOF'
+schema_version: 2
+name: personal-other
+kind: gadget
+visibility: private
+targets:
+  - vscode
+  - vscode
+risk:
+  prompt_injection: catastrophic
+  extra: low
+source:
+  path: shared/workflows/personal-broken.md
+  format: binary
+review:
+  human_review: maybe
+bogus: true
+EOF
+if "$check" --root "$tmp/reject" > "$tmp/out-reject" 2>&1; then
+  fail "check-manifests must reject the broken manifest"
+fi
+for expect in \
+  "unknown field: bogus" \
+  "schema_version must be 1" \
+  'name "personal-other" does not match asset base name "personal-broken"' \
+  "kind must be one of" \
+  'visibility "private" must not be tracked in this public repository' \
+  "targets must be one of" \
+  "targets must not contain duplicates" \
+  "unknown risk key: extra" \
+  "missing risk key: privacy" \
+  "risk.prompt_injection must be one of" \
+  "source.format must be one of" \
+  "review.human_review must be one of"
+do
+  grep -qF "$expect" "$tmp/out-reject" \
+    || fail "expected rejection <$expect>: $(cat "$tmp/out-reject")"
+done
+
+# 必須フィールド欠落は独立 fixture で (存在するキーの検証と混ざらないように)
+mkdir -p "$tmp/missing/shared/workflows"
+cat > "$tmp/missing/shared/workflows/personal-empty.asset.yml" <<'EOF'
+schema_version: 1
+EOF
+if "$check" --root "$tmp/missing" > "$tmp/out-missing" 2>&1; then
+  fail "check-manifests must reject a manifest missing required fields"
+fi
+for field in name kind visibility targets risk source; do
+  grep -qF "missing required field: $field" "$tmp/out-missing" \
+    || fail "expected missing-field rejection for $field: $(cat "$tmp/out-missing")"
+done
+
 echo "ok: check-manifests self-test passed"

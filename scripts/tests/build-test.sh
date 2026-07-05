@@ -472,11 +472,15 @@ grep -q "kept (unmanaged, no agent-tools marker): generated/codex/scripts/person
 [ -f "$tmp/scriptasset/generated/codex/scripts/personal-stray-script" ] \
   || fail "unmanaged script must not be pruned"
 
-# --- case 5: repository 本体が build できる ---
+# --- case 5: repository 本体が build できる (実 repo を変異させないよう tmp コピーで検証) ---
+# 実 repo の generated/ を直接上書きすると、branch でのテスト実行が実 sync の参照先を
+# 差し替える副作用がある (#150)。検証目的 (実 asset 一式で build が通る) はコピーでも同一。
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
-"$build" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \
+mkdir -p "$tmp/repocopy"
+cp -R "$repo_root/shared" "$tmp/repocopy/shared"
+"$build" --root "$tmp/repocopy" --quiet > "$tmp/out-repo" 2>&1 \
   || fail "repository build should pass: $(cat "$tmp/out-repo")"
-[ -f "$repo_root/generated/claude-code/skills/personal-project-operating-loop/SKILL.md" ] \
+[ -f "$tmp/repocopy/generated/claude-code/skills/personal-project-operating-loop/SKILL.md" ] \
   || fail "repository artifact missing"
 
 # --- case 6: CRLF frontmatter の single-file source を build しても二重化しない (B4) ---
