@@ -50,6 +50,13 @@ review policy」) とは攻撃面が逆向きの別レイヤー。設計の spec
 dotfiles」。command-string allowlist / hook / provenance は enforcement boundary ではなく steering で
 ある (egress も hostname best-effort) 点は、過大評価しないよう spec と docs で honest に明記する。
 
+hook のように 1 つの機能が両 repo にまたがるもの (実体 = agent-tools / 登録 = dotfiles) は、所有を
+明示しないとどちらも持たず宙に浮く (機能は配備済みなのに不活性になる)。script 資産の配備先 path
+(`<home>/agent-tools/scripts/<name>`) は dotfiles が settings.json 等から絶対 path で参照する
+**公開契約**であり、agent-tools は path の変更を breaking change として扱う (dotfiles 側の参照更新と
+同期するまで旧 path を壊さない)。詳細は
+[Runtime GitHub Injection 防御](runtime-injection-defense.md) の「PreToolUse hook」節。
+
 ## どちらの repository も持たないもの
 
 - tokens。
