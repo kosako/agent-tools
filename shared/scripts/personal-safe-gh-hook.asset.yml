@@ -13,11 +13,12 @@ risk:
 # 承認は内容に紐づく (#148)。source 変更時は再レビューして approved_build_id を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:2ac81a3fd68f
+  approved_build_id: sha256:44fcf2283154
 source:
   path: shared/scripts/personal-safe-gh-hook.rb
   format: text
 summary: >-
   PreToolUse hook body。raw な gh の Issue/PR/コメント読み取りを検出し personal-safe-gh で
   data として読むよう誘導する steering hook。非ブロッキング (additionalContext) で fail-open、
-  enforcement boundary ではない (docs/runtime-injection-defense.md §4)。
+  enforcement boundary ではない (docs/runtime-injection-defense.md「PreToolUse hook」節)。
+  Claude Code / Codex 両対応 (payload・出力 schema 同型を実機確認済み・P3-07)。
