@@ -208,7 +208,8 @@ boundary でない)。
     project 層 (`<repo>/.codex/hooks.json`) は公式 docs に記載があるが **0.142.2 実機では scan
     されない** (docs と実装の乖離)。登録は user 層 = dotfiles managed に置く。
   - system 層の managed hooks (`/etc/codex/requirements.toml`) は policy trust (対話 trust 不要) だが
-    root 権限が要り、`allow_managed_hooks_only = true` は **plugin hooks も無効化する**副作用がある。
+    root 権限が要り、`allow_managed_hooks_only = true` は **user / project / plugin 層の hooks を
+    すべて無効化する** (= user 層に登録する本 hook 自体も殺す) 副作用がある。
     採否は dotfiles 側の登録判断 (control plane)。
 - 純粋 match ロジックは `scripts/tests/safe-gh-hook-test.sh` で deterministic に検証。実 hook 配線
   (どの event に結ぶか)は dotfiles の hook 宣言 (Claude: settings.json / Codex: config.toml 等
