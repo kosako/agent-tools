@@ -24,7 +24,7 @@
 - tool-specific generated artifacts。
 - runtime GitHub injection 防御の **body / 振る舞い**: provenance 3 軸の trust 判定ロジック、
   `safe-gh` wrapper 本体、`PreToolUse` hook の script body と home 配布 (build / sync)、
-  隔離 reader workflow、policy data の single source (tool 別 render)、Codex hook 配線
+  隔離 reader workflow、policy data の single source (tool 別 render)、Codex hook 用の body 互換 (登録・配線は dotfiles)
   (下記「runtime GitHub injection 防御の分担」)。
 - registered assets 向け prompt injection review policy (supply-side: 配布する asset 自体に
   injection が仕込まれていないかを register / sync 前に検査する。runtime の外部入力防御とは
@@ -44,7 +44,7 @@ review policy」) とは攻撃面が逆向きの別レイヤー。設計の spec
   参照、doctor の presence report、射程と限界の docs。
 - **agent-tools (body)**: trust 判定ロジック (provenance 3 軸)、`safe-gh` wrapper 本体、hook の
   script body とその home 配布 (build / sync)、隔離 reader workflow、policy data の single source、
-  Codex hook 配線。
+  Codex hook 用の body 互換 (登録・配線は dotfiles)。
 
 原則は「runtime / invocation に属するものは agent-tools、宣言 / 規約 / capability に属するものは
 dotfiles」。command-string allowlist / hook / provenance は enforcement boundary ではなく steering で
