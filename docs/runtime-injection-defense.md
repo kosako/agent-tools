@@ -194,6 +194,14 @@ boundary でない)。
   入力 `tool_input.command` は両 tool 共通。
 - 純粋 match ロジックは `scripts/tests/safe-gh-hook-test.sh` で deterministic に検証。実 hook 配線
   (どの event に結ぶか)は dotfiles の settings.json = 実機(下記「検証境界」)。
+- **登録の所有と配備先パス契約 (実体 = agent-tools / 登録 = dotfiles)**: hook script の実体と home
+  配布は agent-tools が持ち、settings.json への hook 登録 (宣言) は dotfiles の settings template が
+  持つ。所有を明示しないとどちらの repo も登録を持たず宙に浮く (実際に 2026-07-02 の監査まで未登録 =
+  不活性だった)。**登録が無い間この hook は不活性**で steering は一切効かない (fail-open の帰結・
+  honest-label)。dotfiles は配備先の絶対 path
+  (`<home>/agent-tools/scripts/personal-safe-gh-hook`) を参照するため、この path は**公開契約**として
+  安定を保証する: 配置規約 (`<home>/agent-tools/scripts/<name>`) や script name の変更は
+  **breaking change** として扱い、dotfiles 側の hook 宣言の更新と同期するまで旧 path を壊さない。
 
 ## body ⇔ control plane 対応表
 
