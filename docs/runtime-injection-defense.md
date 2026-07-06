@@ -189,16 +189,37 @@ boundary でない)。
   `permissionDecision` は **付けない**(許可フローを上書きせず他の gate を生かす。steering であって
   approve でもない)。**exit code は常に 0**(no-match / 内部例外 / 非 JSON / 非 Bash すべて透過 =
   fail-open を徹底)。
-- **Codex の制約 (honest)**: Codex の PreToolUse は `additionalContext` 非対応で、返すと透過(fail-open)。
-  よって Codex ではモデル可視 steer を出せず best-effort(block しない点・配線が dotfiles 側な点は同じ)。
-  入力 `tool_input.command` は両 tool 共通。
+  - honest-label: Claude Code の**公式 docs は PreToolUse の `additionalContext` を記載していない**
+    (PostToolUse 側のみ記載。2026-07-07 確認)。実機では動作するが非ドキュメント動作の可能性があり、
+    仕様変更で**静かに消えうる**。fail-open 前提の steering なので消えても実害は「steer が出なくなる」
+    だけだが、「docs に書いてあるから安泰」とは読まないこと。
+- **Codex parity (実機検証済み 2026-07-07, Codex 0.142.2 — P3-07)**: Codex の PreToolUse は
+  `additionalContext` を**サポートし、steer はモデル可視で届く** (2026-06 時点の「非対応」記述は
+  当時の裏取りで、現行版で解消)。payload は
+  `{"tool_name":"Bash","tool_input":{"command":"…"}}` で Claude Code と同型のため、
+  **hook body は無改変で両 tool に配れる** (実機 probe で verbatim 受領を確認)。
+  Codex 固有の運用上の限界 (honest):
+  - **未 trust の hook は無警告で silent skip** される (fail-open・実機確認)。trust は hook 単位の
+    `trusted_hash` として `~/.codex/config.toml` の `[hooks.state]` に記録され、初回は `/hooks` での
+    対話 trust が要る (公式 docs)。hash の対象範囲 (hook 定義のみか script 内容を含むか = 再配備で
+    trust が剥がれるか) は**未検証**。つまり Claude 側の「登録漏れ = 不活性」に加えて
+    **「登録済みでも未 trust = 不活性」**の段がある。
+  - hook 読み込みは **user 層 (`~/.codex/hooks.json` / `config.toml` の `[hooks]`) のみ実機で確認**。
+    project 層 (`<repo>/.codex/hooks.json`) は公式 docs に記載があるが **0.142.2 実機では scan
+    されない** (docs と実装の乖離)。登録は user 層 = dotfiles managed に置く。
+  - system 層の managed hooks (`/etc/codex/requirements.toml`) は policy trust (対話 trust 不要) だが
+    root 権限が要り、`allow_managed_hooks_only = true` は **plugin hooks も無効化する**副作用がある。
+    採否は dotfiles 側の登録判断 (control plane)。
 - 純粋 match ロジックは `scripts/tests/safe-gh-hook-test.sh` で deterministic に検証。実 hook 配線
-  (どの event に結ぶか)は dotfiles の settings.json = 実機(下記「検証境界」)。
+  (どの event に結ぶか)は dotfiles の hook 宣言 (Claude: settings.json / Codex: config.toml 等
+  user 層) = 実機(下記「検証境界」)。
 - **登録の所有と配備先パス契約 (実体 = agent-tools / 登録 = dotfiles)**: hook script の実体と home
-  配布は agent-tools が持ち、settings.json への hook 登録 (宣言) は dotfiles の settings template が
-  持つ。所有を明示しないとどちらの repo も登録を持たず宙に浮く (実際に 2026-07-02 の監査まで未登録 =
-  不活性だった)。**登録が無い間この hook は不活性**で steering は一切効かない (fail-open の帰結・
-  honest-label)。dotfiles は配備先の絶対 path
+  配布は agent-tools が持ち、hook 登録 (宣言) は dotfiles が持つ — Claude Code は settings.json の
+  template (2026-07-07 登録済み・実機で発火確認)、Codex は `~/.codex/config.toml` 等 user 層の
+  hook 宣言 (登録層の選定含め dotfiles 側の判断)。所有を明示しないとどちらの repo も登録を持たず
+  宙に浮く (実際に 2026-07-02 の監査まで未登録 = 不活性だった)。**登録が無い間この hook は不活性**で
+  steering は一切効かない (fail-open の帰結・honest-label。Codex はさらに未 trust でも不活性 —
+  上記 Codex parity 項)。dotfiles は配備先の絶対 path
   (`<home>/agent-tools/scripts/personal-safe-gh-hook`) を参照するため、この path は**公開契約**として
   安定を保証する: 配置規約 (`<home>/agent-tools/scripts/<name>`) や script name の変更は
   **breaking change** として扱い、dotfiles 側の hook 宣言の更新と同期するまで旧 path を壊さない。
@@ -209,7 +230,7 @@ boundary でない)。
 |---|---|---|
 | trust 判定ロジック (provenance 3 軸) | ✅ 担当 | — |
 | safe-gh wrapper 本体 | ✅ 担当 | 絶対 path 参照のみ |
-| PreToolUse hook | ✅ script body + home 配布 | settings.json の hook 宣言 (参照) |
+| PreToolUse hook | ✅ script body + home 配布 (両 tool 同一 body) | hook 宣言 (Claude: settings.json / Codex: config.toml 等 user 層) |
 | 隔離 reader workflow | ✅ 担当 | capability gate + 置き場規約 |
 | credential 隔離 session 機構 | ✅ acceptance harness | deny 床 / sandbox / token store 隔離 |
 | policy data | ✅ single source (tool 別 render) | — |

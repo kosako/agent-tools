@@ -6,7 +6,7 @@
 # そのまま context に取り込もうとしたとき、それを検出して safe-gh wrapper
 # (`personal-safe-gh`) で data として読むよう誘導する steering hook。
 #
-# 正本: docs/runtime-injection-defense.md §4 (P3-06)。
+# 正本: docs/runtime-injection-defense.md「PreToolUse hook」節 (P3-06 / P3-07)。
 #
 # 強度ラベル (偽らない): これは **steering / fail-open** であって enforcement boundary では
 # ない。コマンドを block せず、bypass も容易: 等価な read path (`gh api graphql` / fork を
@@ -15,13 +15,15 @@
 # 書いた gh 文字列を拾う等)。hard な防御は床 (credential 隔離 + egress) が担う。
 # safe-gh-hook が買うのは「raw 読み取りに気づき、安全な読み方へ寄せる」nudge だけ。
 #
-# 機構 (検証済み hook semantics — docs §4.2/§4.3):
-# - 非ブロッキングでモデルに steer を届ける手段は Claude Code の
-#   `hookSpecificOutput.additionalContext` (stdout JSON, exit 0)。exit 0 の stderr は
-#   モデルに届かない。`permissionDecision` は付けない (= 他の permission gate を上書きせず
-#   素の許可フローに委ねる。steering であって approve でもない)。
-# - Codex の PreToolUse は additionalContext 非対応 → 透過 (fail-open)。Codex でモデル可視の
-#   非ブロッキング steer は出せず best-effort になる (docs §4.4 で honest-label)。
+# 機構 (検証済み hook semantics — 正本 docs/runtime-injection-defense.md「PreToolUse hook」):
+# - 非ブロッキングでモデルに steer を届ける手段は `hookSpecificOutput.additionalContext`
+#   (stdout JSON, exit 0)。exit 0 の stderr はモデルに届かない。`permissionDecision` は
+#   付けない (= 他の permission gate を上書きせず素の許可フローに委ねる。steering であって
+#   approve でもない)。
+# - Claude Code / Codex **両対応を実機確認済み** (2026-07-07, Codex 0.142.2): payload・出力
+#   schema とも同型で、additionalContext は Codex でもモデル可視に届く。ただしどちらも
+#   「登録 (+ Codex は初回 trust) が済むまで無警告で不活性」(fail-open の帰結)。詳細な
+#   honest-label は docs 正本を参照。
 # - exit code は常に 0。hook 内部で例外が起きても 0 で透過する (fail-open を徹底)。
 #
 # 副作用ゼロ: network I/O も gh 呼び出しもしない。PreToolUse は毎コマンド前に同期実行される
@@ -52,7 +54,7 @@ module SafeGhHook
 
   # --json で untrusted 本文を引くフィールド。title は安全側だが injection 面ではあるので
   # safe-gh が withhold する一方、ここでは noise を避けて body / comments のみを steer 対象に
-  # する (honest-label: title だけの読みは検出しない。docs §4.1)。
+  # する (honest-label: title だけの読みは検出しない。docs「PreToolUse hook」節の検出項)。
   UNTRUSTED_JSON_FIELDS = %w[body comments].freeze
 
   # `gh api` の path に現れたら untrusted な read とみなす語 (issues / pulls / comments
