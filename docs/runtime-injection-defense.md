@@ -205,9 +205,12 @@ boundary でない)。
     trust が剥がれるか) は**未検証**。つまり Claude 側の「登録漏れ = 不活性」に加えて
     **「登録済みでも未 trust = 不活性」**の段がある。
     - **検証と本項の更新 (反映ループ)**: この未検証点は dotfiles#181 (Codex 登録) の受け入れ確認で
-      決着する — 登録 → `/hooks` trust → **hook script を再配備 (agent-tools `sync --apply`) して
-      steer が出続けるか**を見れば、trust hash が script 内容を含むか判別できる。**結果が出たら
-      本項の「未検証」を実測に更新する** (docs drift 防止・反映先はこの段落)。
+      決着する — 登録 → `/hooks` trust → **hook body に観測可能な変更 (= build_id が変わる差分。
+      steer 文言の一時変更など) を入れて再配備 (agent-tools `build` → `sync --apply`) し、trust
+      再要求なしで steer が出続けるか**を見る。**内容不変の再配備 (`sync --apply` のみ) では hash も
+      不変で剥離が起きず判別できない**点に注意 (これが本 hash 範囲テストの肝)。判定: 出続ける =
+      trust hash は hook 定義 (command path 等) のみ / 出なくなる = script 内容を含み再配備で剥離。
+      **結果が出たら本項の「未検証」を実測に更新する** (docs drift 防止・反映先はこの段落)。
     - **script 内容を含む場合の運用対処**: agent-tools が hook body を更新して再配備するたびに
       Codex 側 trust が剥がれ、**再 trust するまで無警告で不活性**になる。対処は 2 択で、どちらを
       採るかは dotfiles 側の登録判断: (a) 再配備を伴う agent-tools 側の hook 更新を dotfiles へ
