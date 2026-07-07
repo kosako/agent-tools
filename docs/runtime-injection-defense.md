@@ -204,6 +204,17 @@ boundary でない)。
     対話 trust が要る (公式 docs)。hash の対象範囲 (hook 定義のみか script 内容を含むか = 再配備で
     trust が剥がれるか) は**未検証**。つまり Claude 側の「登録漏れ = 不活性」に加えて
     **「登録済みでも未 trust = 不活性」**の段がある。
+    - **検証と本項の更新 (反映ループ)**: この未検証点は dotfiles#181 (Codex 登録) の受け入れ確認で
+      決着する — 登録 → `/hooks` trust → **hook script を再配備 (agent-tools `sync --apply`) して
+      steer が出続けるか**を見れば、trust hash が script 内容を含むか判別できる。**結果が出たら
+      本項の「未検証」を実測に更新する** (docs drift 防止・反映先はこの段落)。
+    - **script 内容を含む場合の運用対処**: agent-tools が hook body を更新して再配備するたびに
+      Codex 側 trust が剥がれ、**再 trust するまで無警告で不活性**になる。対処は 2 択で、どちらを
+      採るかは dotfiles 側の登録判断: (a) 再配備を伴う agent-tools 側の hook 更新を dotfiles へ
+      通知し `/hooks` 再 trust を運用フローに組み込む (agent-tools 側 = source 更新時に
+      `approved_build_id` を再計算する #148 の内容紐づけが「再 trust が要る変更」の signal になる)、
+      または (b) 対話 trust の要らない managed hooks (system 層) で登録し trust 剥離自体を無くす
+      (ただし上記 `allow_managed_hooks_only` の副作用に注意)。
   - hook 読み込みは **user 層 (`~/.codex/hooks.json` / `config.toml` の `[hooks]`) のみ実機で確認**。
     project 層 (`<repo>/.codex/hooks.json`) は公式 docs に記載があるが **0.142.2 実機では scan
     されない** (docs と実装の乖離)。登録は user 層 = dotfiles managed に置く。
