@@ -664,4 +664,49 @@ grep -q "conflict: \[codex\].*symlink" "$tmp/out28" \
 grep -q "# real file elsewhere" "$tmp/real-agents-sync.md" \
   || fail "must not write through a symlinked owned file"
 
+# --- case 29: 本体不在で unmanaged な sidecar だけ残る script は conflict (上書きしない, #179 H-06) ---
+# (case 17 は本体が unmanaged。本体が無く sidecar marker だけが平ファイルで残るケース。
+#  旧 create 経路は本体不在だけ見て sidecar を無条件上書きしていた。)
+rm -rf "$tmp/sclaude15/agent-tools"
+mkdir -p "$tmp/sclaude15/agent-tools/scripts"
+printf 'user-owned sidecar\n' \
+  > "$tmp/sclaude15/agent-tools/scripts/personal-wrap.agent-tools-managed.yml"
+status=0
+run15 --apply > "$tmp/out29" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "unmanaged sidecar without body should exit 1, got $status: $(cat "$tmp/out29")"
+grep -q "conflict: \[claude-code\].*sidecar marker is unmanaged" "$tmp/out29" \
+  || fail "missing unmanaged-sidecar conflict: $(cat "$tmp/out29")"
+grep -q "user-owned sidecar" "$tmp/sclaude15/agent-tools/scripts/personal-wrap.agent-tools-managed.yml" \
+  || fail "unmanaged sidecar must not be overwritten"
+[ ! -e "$tmp/sclaude15/agent-tools/scripts/personal-wrap" ] \
+  || fail "body must not be created when the sidecar is unmanaged"
+
+# --- case 30: shape 不正な catalog は crash させず fail-closed で no-catalog 扱い (#179 M-06) ---
+mkdir -p "$tmp/badcat/generated"
+# top-level が object でない → 旧実装は data["catalog_version"] 参照で TypeError
+echo '["not","an","object"]' > "$tmp/badcat/generated/catalog.json"
+"$sync" --root "$tmp/badcat" --codex-home "$tmp/bc-codex" --claude-home "$tmp/bc-claude" \
+  > "$tmp/out30a" 2>&1 || fail "malformed catalog must not crash sync: $(cat "$tmp/out30a")"
+grep -q "no catalog" "$tmp/out30a" \
+  || fail "non-object catalog should be treated as no-catalog: $(cat "$tmp/out30a")"
+# assets が Array of Hash でない場合も fail-closed
+echo '{"catalog_version":3,"assets":[1,2,3]}' > "$tmp/badcat/generated/catalog.json"
+"$sync" --root "$tmp/badcat" --codex-home "$tmp/bc-codex" --claude-home "$tmp/bc-claude" \
+  > "$tmp/out30b" 2>&1 || fail "malformed assets must not crash sync: $(cat "$tmp/out30b")"
+grep -q "no catalog" "$tmp/out30b" \
+  || fail "non-Hash asset entries should be treated as no-catalog: $(cat "$tmp/out30b")"
+
+# --- case 31: 本体不在 + managed sidecar は conflict にせず create する (#179 H-06 の許可側) ---
+# (case 29 の unmanaged と対。本体だけ消えて自分の managed marker が残った状態からの再配置。)
+rm -rf "$tmp/sclaude15/agent-tools"
+mkdir -p "$tmp/sclaude15/agent-tools/scripts"
+cp "$tmp/srepo15/generated/claude-code/scripts/personal-wrap.agent-tools-managed.yml" \
+   "$tmp/sclaude15/agent-tools/scripts/personal-wrap.agent-tools-managed.yml"
+run15 > "$tmp/out31" 2>&1 || fail "body-absent + managed sidecar dry-run should succeed: $(cat "$tmp/out31")"
+grep -q "create: \[claude-code\]" "$tmp/out31" \
+  || fail "body-absent + managed sidecar should plan create (not conflict): $(cat "$tmp/out31")"
+run15 --apply --quiet > /dev/null 2>&1
+[ -f "$tmp/sclaude15/agent-tools/scripts/personal-wrap" ] \
+  || fail "create should deploy the body when the existing sidecar is managed"
+
 echo "ok: sync self-test passed"

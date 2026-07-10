@@ -333,6 +333,14 @@ module Sync
         return Plan.new("conflict", tool, name, target, "existing target is a symlink", "script", gen)
       end
       unless File.exist?(target)
+        # 本体が未配置でも sidecar marker が unmanaged な平ファイルとして残っていることがある。
+        # create で apply が無条件に sidecar を上書きしないよう、本体だけでなく sidecar の
+        # 管理状態も確認する (本体ありの update 経路と対称, #179 H-06)。symlink な sidecar は
+        # script_target_symlink? が上で conflict 済み。
+        sidecar = ArtifactTargets.sidecar_marker_path(target)
+        if File.exist?(sidecar) && !managed?(read_marker_file(sidecar), tool, name)
+          return Plan.new("conflict", tool, name, target, "existing sidecar marker is unmanaged", "script", gen)
+        end
         return Plan.new("create", tool, name, target, nil, "script", gen)
       end
 

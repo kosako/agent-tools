@@ -143,7 +143,7 @@ module Doctor
         report("warn", "catalog", "version mismatch (re-run register)")
         return
       when :unreadable
-        report("fail", "catalog", "unreadable (invalid JSON)")
+        report("fail", "catalog", "unreadable (invalid JSON or shape)")
         return
       end
       entries = catalog.entries
