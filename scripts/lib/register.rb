@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 # register: shared assets を検証し、catalog に登録状態を記録する。
-# Spec: docs/register-catalog.md (catalog_version 3)
+# Spec: docs/register-catalog.md (catalog_version 4)
 #
 # - 副作用は generated/catalog.json の書き込みのみ。
 # - gate は build と同じ: manifest error / high finding で fail し、catalog を更新しない。
@@ -92,23 +92,15 @@ module Register
                       asset[:declared_risks].any? { |r| %w[medium unknown].include?(r) }
       # source content の決定的 hash。target に依らない。doctor の鮮度判定に使う。
       build_id = Build.build_id_for(@root, asset[:source]["path"], asset[:source]["format"])
-      # 承認は内容 (build_id) に紐づける。approved だけの永続承認は、承認後に source が
-      # 全面的に変わっても registered のまま残る穴になる (#148)。approved_build_id が
-      # 現在の build_id と一致するときだけ承認が効く。不一致は再レビューを促す。
-      approval_effective = asset[:human_review] == "approved" &&
-                           asset[:approved_build_id] == build_id
-      if review_needed && asset[:human_review] == "approved" && !approval_effective
+      # 承認 identity は (内容 = build_id, 配布形態 = artifact_kind) の対 (#148, #184)。
+      # 内容のみの束縛だと、source 不変のまま kind を script に変えて「skill として承認した
+      # source を実行ファイルとして配布」でき、再レビューなしで意味が変わる穴が残る。
+      # artifact_kind は tool ごとに解決されるため、承認の有効性も tool 単位で判定する。
+      approved = asset[:human_review] == "approved"
+      if review_needed && approved && asset[:approved_build_id] != build_id
         warn "#{asset[:name]}: human_review is approved but review.approved_build_id does not " \
              "match current build_id #{build_id}; re-review the content and update approved_build_id"
       end
-      review_registration =
-        if !review_needed
-          "registered"
-        elsif approval_effective
-          "registered"
-        else
-          "human_review_required"
-        end
 
       # 登録判断 (risk / review / targets) は manifest に依存する。manifest の digest を
       # entry に記録し、reader (sync / doctor) が register 後の manifest 変更を検出できる
@@ -116,11 +108,30 @@ module Register
       manifest_digest = Assets.manifest_digest(@root, asset[:manifest_path])
 
       (asset[:targets] || []).map do |tool|
+        artifact_kind = ArtifactTargets.resolve(asset, tool)
+        approval_effective = approved &&
+                             asset[:approved_build_id] == build_id &&
+                             asset[:approved_artifact_kind] == artifact_kind
+        if review_needed && approved && asset[:approved_build_id] == build_id &&
+           asset[:approved_artifact_kind] != artifact_kind
+          warn "#{asset[:name]}: human_review is approved but review.approved_artifact_kind " \
+               "#{asset[:approved_artifact_kind].inspect} does not match resolved artifact_kind " \
+               "#{artifact_kind.inspect} for #{tool}; re-review the distribution form and " \
+               "update approved_artifact_kind"
+        end
+        review_registration =
+          if !review_needed
+            "registered"
+          elsif approval_effective
+            "registered"
+          else
+            "human_review_required"
+          end
         registration = ArtifactTargets.buildable?(asset, tool) ? review_registration : "unsupported"
         {
           "name" => asset[:name],
           "target" => tool,
-          "artifact_kind" => ArtifactTargets.resolve(asset, tool),
+          "artifact_kind" => artifact_kind,
           "kind" => asset[:kind],
           "visibility" => asset[:visibility],
           "source" => asset[:source],

@@ -214,7 +214,7 @@ review:
   human_review: pending
 compatibility:
   codex:
-    artifact_kind: script
+    artifact_kind: instruction
 ```
 
 ### `summary`
@@ -232,12 +232,20 @@ compatibility:
 allowed values:
 
 - `human_review`: `pending`, `approved`, `rejected`, `not_needed`
-- `approved_build_id`: build_id 文字列 (`sha256:` + 12 hex)。`human_review: approved` と
+- `approved_build_id`: build_id 文字列 (`sha256:` + full 64 hex, #184)。
+  `human_review: approved` と対で使う (単独はエラー)。
+- `approved_artifact_kind`: `skill` / `instruction` / `script`。`human_review: approved` と
   対で使う (単独はエラー)。
 
 `human_review` は人間が宣言する値で、register が medium finding の解決に参照します。
-承認は `approved_build_id` (承認時点の build_id) で **内容に紐づき**、現在の build_id と
-一致するときだけ効きます ([register-catalog.md](register-catalog.md) の #148 節)。
+承認 identity は **(内容, 配布形態) の対** です (#148, #184): `approved_build_id`
+(承認時点の build_id) が現在の build_id と一致し、**かつ** `approved_artifact_kind` が
+その target の解決済み artifact_kind と一致するときだけ効きます。内容が同じでも kind を
+変えれば (例: skill → script = 実行ファイル配布) 承認は失効し、再レビューが要ります
+([register-catalog.md](register-catalog.md) の #148 節)。
+`human_review: approved` の asset は **全 targets が単一の artifact_kind に解決される**
+必要があります (混在は scalar の `approved_artifact_kind` で承認を満たせないため
+check-manifests が error にする。kind ごとに asset を分割する)。
 
 機械計測の結果 (static check 等) は manifest に書かず [catalog](register-catalog.md) 側を
 真実とします。旧 `static_check` / `llm_review` フィールドは消費者不在の informational
@@ -253,6 +261,10 @@ target tool ごとの変換 hint です。
 instruction、`script` kind は script、`skill` / `prompt` / `workflow` は skill)。
 **既定どおりの値は書きません** (既定値の重複宣言は導出 mapping との drift 面になるため、
 kind から導出が変わるときだけ明示します, #153)。
+**`artifact_kind: script` への override は禁止です** (#184): script (実行ファイル配布) は
+manifest の `kind: script` でのみ宣言でき、override で他 kind の source を実行ファイル
+配布に変えることはできません (check-manifests が error にする。kind: script なら既定導出
+されるので override に正当用途が無い)。
 tool キーは初期 target (`codex` / `claude-code`)、`artifact_kind` は build 対応 kind
 (`skill` / `instruction` / `script`) に限られ、check-manifests が検証します (typo は
 silent に unsupported へ落とさず error にする)。

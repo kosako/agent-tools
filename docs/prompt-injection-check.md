@@ -88,9 +88,11 @@ human review 必須にします。
 
 - High risk: registration fail。
 - Medium risk: human review 必須。`review.human_review: approved` **かつ**
-  `review.approved_build_id` が現在の build_id と一致すると `registered` になり配置される
-  (medium↔承認の照合は register が担う)。承認は内容に紐づくので、source を変えたら
-  再レビューして `approved_build_id` を更新する (#148)。read-only でログを読む等、参照が
+  `review.approved_build_id` が現在の build_id と一致し、**かつ**
+  `review.approved_artifact_kind` が resolve 済み artifact_kind と一致すると `registered` に
+  なり配置される (medium↔承認の照合は register が担う)。承認は内容と配布形態に紐づくので、
+  source を変えたら `approved_build_id` を、kind を変えたら `approved_artifact_kind` を
+  再レビューのうえ更新する (#148, #184)。read-only でログを読む等、参照が
   設計上正当な skill (例 `personal-asset-miner` の runtime-state) はこの経路で通す。詳細は
   [register-catalog](register-catalog.md)。
 - Low risk: registration 可。

@@ -28,10 +28,14 @@ module CheckManifests
   REVIEW_VALUES = {
     "human_review" => %w[pending approved rejected not_needed],
   }.freeze
-  # 承認を内容に紐づける build_id (#148)。build.rb の build_id 形式 (sha256: + 先頭 12 hex)。
-  # human_review: approved と対で使う。
+  # 承認を内容に紐づける build_id (#148)。build.rb の build_id 形式 (sha256: + full 64 hex,
+  # #184 で 12-hex 切り詰めから変更)。human_review: approved と対で使う。
   APPROVED_BUILD_ID_KEY = "approved_build_id"
-  APPROVED_BUILD_ID_PATTERN = /\Asha256:[0-9a-f]{12}\z/.freeze
+  APPROVED_BUILD_ID_PATTERN = /\Asha256:[0-9a-f]{64}\z/.freeze
+  # 承認を配布形態に紐づける artifact_kind (#184)。内容 (build_id) が同じでも kind が
+  # 変われば配布の意味が変わる (skill 承認の source を script = 実行ファイルとして配る等)
+  # ため、承認 identity は (build_id, artifact_kind) の対。human_review: approved と対で使う。
+  APPROVED_ARTIFACT_KIND_KEY = "approved_artifact_kind"
   NAME_PATTERN = /\A[a-z0-9]+(?:-[a-z0-9]+)*\z/.freeze
   ASSET_CATEGORIES = %w[skills prompts workflows agents instructions scripts].freeze
   NON_ASSET_BASENAMES = %w[README.md].freeze
@@ -95,6 +99,7 @@ module CheckManifests
       @declared_names[data["name"]] << path if data["name"].is_a?(String)
       collect_instruction_targets(data, path)
       check_directory_skill_contents(data, path)
+      check_approved_kind_uniformity(data, path)
 
       validate_schema_version(path, data["schema_version"]) if data.key?("schema_version")
       validate_name(path, data["name"]) if data.key?("name")
@@ -132,6 +137,14 @@ module CheckManifests
         unless ArtifactTargets.supported?(kind)
           error(path, "compatibility.#{tool}.artifact_kind must be one of " \
                       "#{ArtifactTargets::SUPPORTED_KINDS.join(', ')}, got #{kind.inspect}")
+        end
+        # script (実行ファイル配布) への override は禁止 (#184)。skill 等として承認済みの
+        # source を compatibility でこっそり実行ファイル配布に変える経路を構造的に塞ぐ。
+        # script は manifest の kind: script でのみ宣言でき、その場合は既定導出されるので
+        # override に正当用途はない (既定どおりの値は書かない方針, #153)。
+        if kind == "script"
+          error(path, "compatibility.#{tool}.artifact_kind: script is not allowed; " \
+                      "declare kind: script in the manifest instead (#184)")
         end
       end
     end
@@ -289,12 +302,30 @@ module CheckManifests
       end
     end
 
+    # 承認は (build_id, artifact_kind) の対で asset 単位に 1 つ (#184)。targets が複数の
+    # artifact_kind に解決される asset は、scalar の approved_artifact_kind では全 target の
+    # 承認を満たせず、必ずどれかが human_review_required に落ちる。register で silent に
+    # 片側 pending へ落とすのでなく、manifest error で「kind ごとに asset を分割する」ことを
+    # 明示的に要求する (#191 レビュー should)。
+    def check_approved_kind_uniformity(data, path)
+      return unless data["review"].is_a?(Hash) && data["review"]["human_review"] == "approved"
+      return unless data["targets"].is_a?(Array)
+
+      asset = { kind: data["kind"], compatibility: data["compatibility"] }
+      kinds = data["targets"].map { |tool| ArtifactTargets.resolve(asset, tool) }.uniq
+      return if kinds.size <= 1
+
+      error(path, "human_review: approved requires all targets to resolve to a single " \
+                  "artifact_kind (got #{kinds.join(', ')}); split the asset per kind (#184)")
+    end
+
     def validate_review(path, value)
       unless value.is_a?(Hash)
         error(path, "review must be a mapping")
         return
       end
-      (value.keys - REVIEW_VALUES.keys - [APPROVED_BUILD_ID_KEY]).each { |key| error(path, "unknown review key: #{key}") }
+      (value.keys - REVIEW_VALUES.keys - [APPROVED_BUILD_ID_KEY, APPROVED_ARTIFACT_KIND_KEY])
+        .each { |key| error(path, "unknown review key: #{key}") }
       REVIEW_VALUES.each do |key, allowed|
         next unless value.key?(key)
 
@@ -304,10 +335,20 @@ module CheckManifests
       end
       if value.key?(APPROVED_BUILD_ID_KEY)
         unless value[APPROVED_BUILD_ID_KEY].is_a?(String) && value[APPROVED_BUILD_ID_KEY] =~ APPROVED_BUILD_ID_PATTERN
-          error(path, "review.#{APPROVED_BUILD_ID_KEY} must be a build_id (sha256: + 12 hex chars)")
+          error(path, "review.#{APPROVED_BUILD_ID_KEY} must be a build_id (sha256: + 64 hex chars)")
         end
         unless value["human_review"] == "approved"
           error(path, "review.#{APPROVED_BUILD_ID_KEY} requires review.human_review: approved")
+        end
+      end
+      if value.key?(APPROVED_ARTIFACT_KIND_KEY)
+        unless ArtifactTargets.supported?(value[APPROVED_ARTIFACT_KIND_KEY])
+          error(path, "review.#{APPROVED_ARTIFACT_KIND_KEY} must be one of " \
+                      "#{ArtifactTargets::SUPPORTED_KINDS.join(', ')}, " \
+                      "got #{value[APPROVED_ARTIFACT_KIND_KEY].inspect}")
+        end
+        unless value["human_review"] == "approved"
+          error(path, "review.#{APPROVED_ARTIFACT_KIND_KEY} requires review.human_review: approved")
         end
       end
     end

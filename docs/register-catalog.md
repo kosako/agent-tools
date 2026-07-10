@@ -18,13 +18,13 @@ catalog に記録する step です。
   いつでも再生成できる。
 - catalog は commit しない。tracked source は manifest だけが source of truth。
 
-catalog は **target-artifact 単位** (catalog_version 3) です。1 つの asset が複数 target を
+catalog は **target-artifact 単位** (catalog_version 4) です。1 つの asset が複数 target を
 持つ場合、target ごとに entry を 1 つずつ出します。各 entry は `target` と
 `artifact_kind` を持ち、sync はこれを見て配置先を分岐します。
 
 ```json
 {
-  "catalog_version": 3,
+  "catalog_version": 4,
   "assets": [
     {
       "name": "personal-example",
@@ -36,7 +36,7 @@ catalog は **target-artifact 単位** (catalog_version 3) です。1 つの ass
         "path": "shared/workflows/personal-example.md",
         "format": "markdown"
       },
-      "build_id": "sha256:0123456789ab",
+      "build_id": "sha256:<full 64 hex of framed source content>",
       "manifest_path": "shared/workflows/personal-example.asset.yml",
       "manifest_digest": "<sha256 hex of manifest bytes>",
       "checks": {
@@ -53,6 +53,11 @@ catalog は **target-artifact 単位** (catalog_version 3) です。1 つの ass
 
 source content の決定的 hash (build の marker と同じ計算)。doctor が catalog の
 鮮度判定に使う。mtime には依存しない。
+
+形式は **full SHA-256 (64 hex)** で、directory source は各 part (相対 path / file bytes) を
+**length-framing** して連結する (catalog_version 4, #184)。旧形式 (12 hex 切り詰め +
+無区切り連結) は、外部由来の悪性コンテンツを脅威フレームに置くと衝突探索・構造的衝突
+(part 境界の移し替え) の余地があったため廃止した。
 
 ### `manifest_path` / `manifest_digest` (v3, #148)
 
@@ -117,18 +122,26 @@ medium finding は「human review 必須」を意味する。register は findin
 asset の source path に対応づけ、manifest の `review.human_review` と突き合わせる。
 
 - `review.human_review: approved` **かつ** `review.approved_build_id` が現在の build_id と
-  一致 → その asset は `registered`。
-- それ以外 (`pending` / 欠落 / approved_build_id 不一致) → その asset は
+  一致 **かつ** `review.approved_artifact_kind` が target の resolve 済み artifact_kind と
+  一致 → その target-artifact は `registered`。
+- それ以外 (`pending` / 欠落 / approved_build_id・approved_artifact_kind 不一致) →
   `human_review_required`。
 - `review.human_review: rejected` の asset は、finding の有無によらず register fail
   とする (reject 済み asset が shared/ に残っている状態は矛盾なので、修正か削除を促す)。
 
-### 承認は内容に紐づく (`approved_build_id`, #148)
+### 承認は内容と配布形態に紐づく (`approved_build_id` + `approved_artifact_kind`, #148 #184)
 
 `approved` 単独の永続承認は「承認後に source が全面的に変わっても registered のまま」に
 なる穴。承認には `review.approved_build_id` (承認時点の build_id) を併記し、現在の
 build_id と一致するときだけ効かせる。source を変更したら register が不一致を警告する
 (現在の build_id を表示) ので、再レビューのうえ approved_build_id を更新する。
+
+内容の一致だけでは不十分 (#184): source 不変のまま manifest の kind を変えると、
+「skill として承認した source を script = 実行ファイルとして配布」のように**配布の意味が
+変わるのに承認が生き残る**。承認には `review.approved_artifact_kind` も併記し、target の
+**resolve 後の artifact_kind と一致するときだけ**効かせる (承認の有効性は target 単位で
+判定)。kind を変えたら register が不一致を警告するので、配布形態を再レビューのうえ
+approved_artifact_kind を更新する。
 
 ## 宣言 risk の enforce
 
@@ -137,8 +150,8 @@ enforce する。static finding と宣言 risk の厳しい方が勝つ。
 
 - いずれかが `high` → register fail。catalog を更新しない。
 - いずれかが `medium` / `unknown` → human review 必須として扱う
-  (承認が有効 = `approved` かつ `approved_build_id` 一致なら `registered`、それ以外は
-  `human_review_required`。下記「承認は内容に紐づく」参照)。
+  (承認が有効 = `approved` かつ `approved_build_id` / `approved_artifact_kind` 一致なら
+  `registered`、それ以外は `human_review_required`。上記「承認は内容と配布形態に紐づく」参照)。
 - 両方 `low` → finding がなければ `registered`。
 
 ## script artifact は常に human review 必須
@@ -147,10 +160,12 @@ enforce する。static finding と宣言 risk の厳しい方が勝つ。
 static check が当てられるのは injection 文言 pattern のみ (コードの悪性は検査できない。
 [prompt-injection-check.md](prompt-injection-check.md) の honest-label 参照)。directory skill の
 `scripts/` を #43 まで fail-closed にしているのと対称に、宣言 risk / finding の有無によらず
-human review 必須として扱う (承認が有効 = `approved` かつ `approved_build_id` 一致なら
-`registered`、それ以外は `human_review_required`)。判定は manifest の `kind` でなく
-**resolve 後の artifact_kind** で行う (`compatibility` の override で任意 kind を script
-配布にできるため、kind 基準では迂回できる)。
+human review 必須として扱う (承認が有効 = `approved` かつ `approved_build_id` /
+`approved_artifact_kind` 一致なら `registered`、それ以外は `human_review_required`)。
+判定は manifest の `kind` でなく **resolve 後の artifact_kind** で行う (配布形態の
+実体は resolve 結果が単一の真実)。なお `compatibility` override による script 化は
+check-manifests が manifest error として弾く (#184) ので通常ここまで来ないが、
+register 側の判定も resolve 基準のまま残す (defense in depth)。
 
 ## Check 結果の書き戻し方針
 

@@ -50,7 +50,7 @@ write_manifest "$tmp/ok/shared/workflows"
 "$register" --root "$tmp/ok" > "$tmp/r1" 2>&1 || fail "register should pass: $(cat "$tmp/r1")"
 catalog="$tmp/ok/generated/catalog.json"
 [ -f "$catalog" ] || fail "catalog not written"
-[ "$(jget "$catalog" catalog_version)" = "3" ] || fail "catalog_version should be 3"
+[ "$(jget "$catalog" catalog_version)" = "4" ] || fail "catalog_version should be 4"
 [ "$(jget "$catalog" assets 0 registration)" = '"registered"' ] || fail "asset should be registered"
 [ "$(jget "$catalog" assets 0 target)" = '"codex"' ] || fail "entry should carry target (target-artifact unit)"
 [ "$(jget "$catalog" assets 0 artifact_kind)" = '"skill"' ] || fail "entry should carry artifact_kind"
@@ -81,11 +81,12 @@ catalog="$tmp/medium/generated/catalog.json"
 [ "$(jget "$catalog" assets 0 checks prompt_injection_static)" = '"human_review"' ] \
   || fail "injection check should be human_review"
 
-# --- case 4: medium finding + approved (approved_build_id 一致) → registered, exit 0 ---
+# --- case 4: medium finding + approved (approved_build_id / approved_artifact_kind 一致) → registered, exit 0 ---
 bid_medium=$(bid "$tmp/medium" shared/workflows/personal-demo.md markdown)
 write_manifest "$tmp/medium/shared/workflows" "review:
   human_review: approved
-  approved_build_id: $bid_medium"
+  approved_build_id: $bid_medium
+  approved_artifact_kind: skill"
 "$register" --root "$tmp/medium" > "$tmp/r4" 2>&1 || fail "approved should exit 0: $(cat "$tmp/r4")"
 [ "$(jget "$catalog" assets 0 registration)" = '"registered"' ] || fail "approved asset should be registered"
 
@@ -103,7 +104,8 @@ grep -q "approved_build_id does not match current build_id" "$tmp/r4b" \
 # --- case 4c: 承認後に source が変わったら承認は失効する (stale approved_build_id → exit 3) ---
 write_manifest "$tmp/medium/shared/workflows" "review:
   human_review: approved
-  approved_build_id: $bid_medium"
+  approved_build_id: $bid_medium
+  approved_artifact_kind: skill"
 printf '# demo with hidden\342\200\213marker\nedited after approval\n' \
   > "$tmp/medium/shared/workflows/personal-demo.md"
 status=0
@@ -113,6 +115,38 @@ status=0
   || fail "content change must invalidate approval"
 # 後続 case のために元の内容へ戻す
 printf '# demo with hidden\342\200\213marker\n' > "$tmp/medium/shared/workflows/personal-demo.md"
+
+# --- case 4d: kind が変わったら承認は失効する (approved_artifact_kind 不一致 → exit 3, #184) ---
+# 「skill として承認した source を script = 実行ファイル配布に変える」を模す:
+# 内容 (build_id) は承認時と一致したまま、配布形態だけが承認時と異なる。
+mkdir -p "$tmp/kindchange/shared/scripts"
+printf '#!/bin/sh\necho hi\n' > "$tmp/kindchange/shared/scripts/personal-kc.sh"
+bid_kc=$(bid "$tmp/kindchange" shared/scripts/personal-kc.sh text)
+cat > "$tmp/kindchange/shared/scripts/personal-kc.asset.yml" <<EOF
+schema_version: 1
+name: personal-kc
+kind: script
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+review:
+  human_review: approved
+  approved_build_id: $bid_kc
+  approved_artifact_kind: skill
+source:
+  path: shared/scripts/personal-kc.sh
+  format: text
+EOF
+status=0
+"$register" --root "$tmp/kindchange" > "$tmp/r4d" 2>&1 || status=$?
+[ "$status" -eq 3 ] || fail "kind change should invalidate approval (exit 3), got $status: $(cat "$tmp/r4d")"
+[ "$(jget "$tmp/kindchange/generated/catalog.json" assets 0 registration)" = '"human_review_required"' ] \
+  || fail "approval bound to a different artifact_kind must not register"
+grep -q "approved_artifact_kind" "$tmp/r4d" \
+  || fail "missing kind re-review guidance: $(cat "$tmp/r4d")"
 
 # --- case 5: medium finding + rejected → fail, catalog 未更新 ---
 write_manifest "$tmp/medium/shared/workflows" "review:
@@ -170,7 +204,8 @@ status=0
 bid_dunk=$(bid "$tmp/dunk" shared/workflows/personal-demo.md markdown)
 write_manifest "$tmp/dunk/shared/workflows" "review:
   human_review: approved
-  approved_build_id: $bid_dunk"
+  approved_build_id: $bid_dunk
+  approved_artifact_kind: skill"
 ruby -i -pe 'sub("privacy: low", "privacy: unknown")' \
   "$tmp/dunk/shared/workflows/personal-demo.asset.yml"
 "$register" --root "$tmp/dunk" > "$tmp/r9b" 2>&1 || fail "approved unknown should exit 0: $(cat "$tmp/r9b")"
@@ -216,7 +251,7 @@ sc="$tmp/script/generated/catalog.json"
 [ "$(jget "$sc" assets 0 registration)" = '"human_review_required"' ] \
   || fail "script without approval should be human_review_required (#147)"
 
-# --- case 12c: script kind + human_review: approved (approved_build_id 一致) → registered (exit 0) ---
+# --- case 12c: script kind + human_review: approved (approved_build_id / approved_artifact_kind 一致) → registered (exit 0) ---
 bid_script=$(bid "$tmp/script" shared/scripts/personal-demo-script.sh text)
 cat > "$tmp/script/shared/scripts/personal-demo-script.asset.yml" <<EOF
 schema_version: 1
@@ -231,6 +266,7 @@ risk:
 review:
   human_review: approved
   approved_build_id: $bid_script
+  approved_artifact_kind: script
 source:
   path: shared/scripts/personal-demo-script.sh
   format: text
@@ -240,8 +276,9 @@ EOF
 [ "$(jget "$sc" assets 0 registration)" = '"registered"' ] \
   || fail "approved single-file script should be registered (buildable, P3-04)"
 
-# --- case 12d: compatibility override で script 配布になる asset も human review 必須。
-#     (kind 基準だと `kind: workflow` + `compatibility.<tool>.artifact_kind: script` で迂回できる) ---
+# --- case 12d: compatibility override による script 化は manifest error (#184)。
+#     (かつては human_review_required に落としていたが、skill 等として承認済み source を
+#      override で実行ファイル配布に変える経路そのものを構造 fail-closed で塞いだ) ---
 mkdir -p "$tmp/scompat/shared/workflows"
 printf '#!/bin/sh\necho hi\n' > "$tmp/scompat/shared/workflows/personal-compat-script.md"
 cat > "$tmp/scompat/shared/workflows/personal-compat-script.asset.yml" <<'EOF'
@@ -263,13 +300,12 @@ source:
 EOF
 status=0
 "$register" --root "$tmp/scompat" > "$tmp/r12d" 2>&1 || status=$?
-[ "$status" -eq 3 ] \
-  || fail "compatibility-script without approval should exit 3, got $status: $(cat "$tmp/r12d")"
-scd="$tmp/scompat/generated/catalog.json"
-[ "$(jget "$scd" assets 0 artifact_kind)" = '"script"' ] \
-  || fail "compatibility override should resolve to artifact_kind script"
-[ "$(jget "$scd" assets 0 registration)" = '"human_review_required"' ] \
-  || fail "compatibility-script without approval must be human_review_required (kind-based gate is bypassable)"
+[ "$status" -eq 1 ] \
+  || fail "override-into-script should be a fatal manifest error (exit 1), got $status: $(cat "$tmp/r12d")"
+grep -q "artifact_kind: script is not allowed" "$tmp/r12d" \
+  || fail "missing override-into-script error: $(cat "$tmp/r12d")"
+[ ! -e "$tmp/scompat/generated/catalog.json" ] \
+  || fail "catalog must not be written when override-into-script is rejected"
 
 # --- case 12b: directory 形式の script は単一ファイルでないため unsupported ---
 # (registered != buildable のサイレント断裂を作らない)

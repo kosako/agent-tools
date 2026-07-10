@@ -717,6 +717,121 @@ grep -q "approved_build_id must be a build_id" "$tmp/out-abid" \
 grep -q "approved_build_id requires review.human_review: approved" "$tmp/out-abid" \
   || fail "expected approved-pairing error: $(cat "$tmp/out-abid")"
 
+# --- case: 旧 12-hex の approved_build_id は reject (full 64 hex のみ, #184) ---
+mkdir -p "$tmp/abid12/shared/workflows"
+echo "# demo" > "$tmp/abid12/shared/workflows/personal-abid12.md"
+cat > "$tmp/abid12/shared/workflows/personal-abid12.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-abid12
+kind: workflow
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+review:
+  human_review: approved
+  approved_build_id: sha256:0123456789ab
+source:
+  path: shared/workflows/personal-abid12.md
+  format: markdown
+EOF
+if "$check" --root "$tmp/abid12" > "$tmp/out-abid12" 2>&1; then
+  fail "check-manifests must reject legacy 12-hex approved_build_id"
+fi
+grep -q "approved_build_id must be a build_id (sha256: + 64 hex chars)" "$tmp/out-abid12" \
+  || fail "expected 64-hex approved_build_id error: $(cat "$tmp/out-abid12")"
+
+# --- case: approved_artifact_kind の検証 (#184)。不正値と approved なし併用を reject ---
+mkdir -p "$tmp/akind/shared/workflows"
+echo "# demo" > "$tmp/akind/shared/workflows/personal-akind.md"
+cat > "$tmp/akind/shared/workflows/personal-akind.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-akind
+kind: workflow
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+review:
+  human_review: pending
+  approved_artifact_kind: banana
+source:
+  path: shared/workflows/personal-akind.md
+  format: markdown
+EOF
+if "$check" --root "$tmp/akind" > "$tmp/out-akind" 2>&1; then
+  fail "check-manifests must reject invalid approved_artifact_kind"
+fi
+grep -q "approved_artifact_kind must be one of" "$tmp/out-akind" \
+  || fail "expected approved_artifact_kind value error: $(cat "$tmp/out-akind")"
+grep -q "approved_artifact_kind requires review.human_review: approved" "$tmp/out-akind" \
+  || fail "expected approved_artifact_kind pairing error: $(cat "$tmp/out-akind")"
+
+# --- case: compatibility override による script 化は reject (#184) ---
+# script (実行ファイル配布) は kind: script でのみ宣言できる。skill 等として承認済みの
+# source を override でこっそり実行ファイル配布に変える経路を構造的に塞ぐ。
+mkdir -p "$tmp/oscript/shared/workflows"
+echo "# demo" > "$tmp/oscript/shared/workflows/personal-oscript.md"
+cat > "$tmp/oscript/shared/workflows/personal-oscript.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-oscript
+kind: workflow
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+compatibility:
+  claude-code:
+    artifact_kind: script
+source:
+  path: shared/workflows/personal-oscript.md
+  format: markdown
+EOF
+if "$check" --root "$tmp/oscript" > "$tmp/out-oscript" 2>&1; then
+  fail "check-manifests must reject compatibility override into script"
+fi
+grep -q "artifact_kind: script is not allowed" "$tmp/out-oscript" \
+  || fail "expected override-into-script error: $(cat "$tmp/out-oscript")"
+
+# --- case: approved asset の targets が複数 kind に解決される構成は reject (#184) ---
+# scalar の approved_artifact_kind では全 target の承認を満たせないため、silent に
+# 片側 pending へ落とすのでなく「kind ごとに分割せよ」と manifest error で要求する。
+mkdir -p "$tmp/mixk/shared/scripts"
+printf '#!/bin/sh\necho hi\n' > "$tmp/mixk/shared/scripts/personal-mixk.sh"
+cat > "$tmp/mixk/shared/scripts/personal-mixk.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-mixk
+kind: script
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+review:
+  human_review: approved
+  approved_build_id: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  approved_artifact_kind: script
+compatibility:
+  claude-code:
+    artifact_kind: skill
+source:
+  path: shared/scripts/personal-mixk.sh
+  format: text
+EOF
+if "$check" --root "$tmp/mixk" > "$tmp/out-mixk" 2>&1; then
+  fail "check-manifests must reject approved asset with mixed resolved kinds"
+fi
+grep -q "requires all targets to resolve to a single artifact_kind" "$tmp/out-mixk" \
+  || fail "expected mixed-kind approval error: $(cat "$tmp/out-mixk")"
+
 # --- case: compatibility フィールドの検証 (#149)。typo / 不明 tool / 型不正を reject ---
 mkdir -p "$tmp/compat/shared/workflows"
 echo "# demo" > "$tmp/compat/shared/workflows/personal-compat.md"
