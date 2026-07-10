@@ -106,6 +106,11 @@ check("match -> additionalContext present", hso && hso["additionalContext"].is_a
 check("match -> no permissionDecision", hso && !hso.key?("permissionDecision"))
 ctx = hso ? hso["additionalContext"].to_s : ""
 check("steer mentions personal-safe-gh", ctx.include?("personal-safe-gh"))
+# PATH launcher は無いので、名前だけでなく実行可能な配置 path を tool 別に案内する (#190)
+check("steer mentions claude deployed path",
+      ctx.include?("~/.claude/agent-tools/scripts/personal-safe-gh"))
+check("steer mentions codex deployed path",
+      ctx.include?("~/.codex/agent-tools/scripts/personal-safe-gh"))
 check("steer は steering と明言", ctx.include?("steering"))
 # 出力に絶対パス / 攻撃由来文字列を混ぜない
 check("steer leaks no absolute path", !ctx.include?("/Users"))

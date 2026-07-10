@@ -8,9 +8,11 @@
 - **Ruby**: macOS 標準の Ruby で動きます(YAML stdlib のみ使用)。追加 gem は不要。
 - **git**: clone / pull に使います。
 - **pipeline scripts**(build / register / connect / sync / status / doctor と各種 check)は
-  ネットワーク不要・外部依存ゼロで、手元だけで完結します。例外は
-  `scripts/probe-credential-isolation.sh`(credential 隔離の実機検証 harness。`gh` / `git` /
-  `curl` と network に依存)と、配布 asset の `personal-safe-gh`(`gh` CLI 依存)。
+  ネットワーク不要・追加 gem 不要で、手元だけで完結します(status / doctor は repo 状態の
+  確認に `git` 実行ファイルを使う。無い環境でも crash せず該当項目が degrade するだけ)。
+  例外は `scripts/probe-credential-isolation.sh`(credential 隔離の実機検証 harness。
+  `gh` / `git` / `curl` と network に依存)と、配布 asset の `personal-safe-gh`
+  (`gh` CLI 依存)。
 - `gh`(GitHub CLI)は asset の利用には不要です。repository へ変更を出す
   (Issue / PR)とき、および上記 probe / `personal-safe-gh` を使うときだけ使います。
 - この repo に commit / push する場合、配置先ディレクトリに応じた git identity の出し分けは
@@ -47,7 +49,7 @@ skill は隔離 directory なので `sync` が直接置けますが、instructio
 git clone <this-repo> ~/src/agent/agent-tools
 cd ~/src/agent/agent-tools
 
-./scripts/setup.sh           # dry-run: build → register → connect → sync の plan を表示
+./scripts/setup.sh           # dry-run: connect/sync の plan を確認 (build/register は実行される)
 ./scripts/setup.sh --apply   # 確認できたら実環境へ反映
 ```
 
