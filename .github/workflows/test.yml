@@ -36,6 +36,17 @@ jobs:
         with:
           ruby-version: ${{ matrix.ruby }}
 
+      # system 行の存在理由は「配備先の床 = psych < 4 (現に 2.6 / psych 3)」の検証。
+      # macos-latest の更新で system Ruby が psych >= 4 になると、この床が黙って
+      # 無検証化する (両行とも psych >= 4 = 床側の分岐が dead path 化) ため、前提が
+      # 崩れた時点で CI を落として matrix の見直しを迫る (#176 Low)。
+      - name: Assert system Ruby is the psych 3 floor
+        if: matrix.ruby == 'system'
+        run: |
+          ruby -rpsych -e 'v = Psych::VERSION; puts "system ruby #{RUBY_VERSION} / psych #{v}"
+            abort "system Ruby is no longer the psych <4 floor; revisit the CI matrix (#176)" \
+              unless v.split(".").first.to_i < 4'
+
       - name: Run self-tests
         run: |
           # 最初の失敗で止めず全 test を走らせ、1 回の CI で全失敗を可視化する。

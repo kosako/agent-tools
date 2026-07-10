@@ -310,7 +310,7 @@ module SafeGh
 
   def print_usage
     warn <<~USAGE
-      usage: safe-gh [-R OWNER/REPO] <issue|pr> <view|comments> <number>
+      usage: personal-safe-gh [-R OWNER/REPO] <issue|pr> <view|comments> <number>
 
       GitHub の Issue/PR/コメントを untrusted data として安全に読む steering wrapper。
       他人の Issue/PR は metadata のみ、他人コメントは count のみを出力する。

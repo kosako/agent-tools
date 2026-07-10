@@ -7,9 +7,12 @@
 
 - **Ruby**: macOS 標準の Ruby で動きます(YAML stdlib のみ使用)。追加 gem は不要。
 - **git**: clone / pull に使います。
-- 各 script はネットワーク不要・外部依存ゼロで、手元だけで完結します。
+- **pipeline scripts**(build / register / connect / sync / status / doctor と各種 check)は
+  ネットワーク不要・外部依存ゼロで、手元だけで完結します。例外は
+  `scripts/probe-credential-isolation.sh`(credential 隔離の実機検証 harness。`gh` / `git` /
+  `curl` と network に依存)と、配布 asset の `personal-safe-gh`(`gh` CLI 依存)。
 - `gh`(GitHub CLI)は asset の利用には不要です。repository へ変更を出す
-  (Issue / PR)ときだけ使います。
+  (Issue / PR)とき、および上記 probe / `personal-safe-gh` を使うときだけ使います。
 - この repo に commit / push する場合、配置先ディレクトリに応じた git identity の出し分けは
   各自の git 設定(`dotfiles` 等)側で行います(本 repo の管理対象外)。
 
@@ -48,9 +51,11 @@ cd ~/src/agent/agent-tools
 ./scripts/setup.sh --apply   # 確認できたら実環境へ反映
 ```
 
-`setup.sh` は `build → register → connect → sync` を順に実行します。**既定は dry-run**
-(何も書き込まない)で、`--apply` を付けたときだけ connect / sync が実環境へ書き込みます。
-初回 install と更新の両方に使えます(connect は冪等なので毎回通して無害)。
+`setup.sh` は `build → register → connect → sync` を順に実行します。**既定は dry-run**で、
+`--apply` を付けたときだけ connect / sync が実環境 (tool home) へ書き込みます。dry-run でも
+build / register は毎回実行するため、repo 内の中間物 (`generated/` と
+`generated/catalog.json`) は**更新されます** (どちらも gitignore 済み・tool home には
+触れない)。初回 install と更新の両方に使えます(connect は冪等なので毎回通して無害)。
 
 ### 個別に実行する場合
 

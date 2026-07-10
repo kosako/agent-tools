@@ -12,7 +12,8 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 usage() {
   echo "usage: setup.sh [--apply] [--root DIR] [--codex-home DIR] [--claude-home DIR] [--quiet]"
   echo "  build → register → connect → sync を通しで実行する。"
-  echo "  既定は dry-run (何も書き込まない)。--apply で connect/sync を実環境に反映する。"
+  echo "  既定は dry-run (tool home には書き込まない。generated/ と catalog は毎回更新する)。"
+  echo "  --apply で connect/sync を実環境 (tool home) に反映する。"
 }
 
 apply=""

@@ -62,6 +62,14 @@ do
   grep -q "$expected" "$tmp/d1" || fail "missing '$expected' in: $(cat "$tmp/d1")"
 done
 
+# --- case 1b: custom home (Dir.home 外) でも生の絶対 path を出力しない (#176 Low) ---
+grep -q "ok: home: \[codex\] <codex home> present" "$tmp/d1" \
+  || fail "custom codex home should be redacted to label: $(cat "$tmp/d1")"
+grep -q "ok: home: \[claude-code\] <claude-code home> present" "$tmp/d1" \
+  || fail "custom claude home should be redacted to label: $(cat "$tmp/d1")"
+grep -F -q "$tmp" "$tmp/d1" \
+  && fail "doctor output must not contain raw custom home paths: $(cat "$tmp/d1")" || true
+
 # --- case 2: doctor は read-only ---
 before=$(find "$tmp" -type f -exec cksum {} + | sort)
 run_doctor > /dev/null 2>&1
@@ -74,7 +82,8 @@ cp "$tmp/claude/skills/personal-demo/.agent-tools-managed.yml" "$tmp/claude/sess
 status=0
 run_doctor > "$tmp/d3" 2>&1 || status=$?
 [ "$status" -eq 1 ] || fail "marker in forbidden target should exit 1: $(cat "$tmp/d3")"
-grep -q "fail: forbidden: agent-tools marker found" "$tmp/d3" || fail "missing forbidden fail line"
+grep -q "fail: forbidden: agent-tools marker found in forbidden target <claude-code home>/sessions" "$tmp/d3" \
+  || fail "missing forbidden fail line (path should be redacted): $(cat "$tmp/d3")"
 rm -rf "$tmp/claude/sessions"
 
 # --- case 4: unmanaged 同名 target は fail として現れる ---

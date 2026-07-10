@@ -195,8 +195,18 @@ module Doctor
       false
     end
 
+    # 出力に生の absolute path を出さない (冒頭の契約)。既定 home は Dir.home 配下なので
+    # tilde 表記になる。--codex-home 等で Dir.home 外の custom home を指定したときも
+    # 生 path を出さず、設定済み home の prefix をラベルへ置換する (#176 Low)。
+    # prefix は path 境界 (完全一致か直後が "/") でだけ一致させる。
     def tilde(path)
-      path.sub(Dir.home, "~")
+      prefixes = [[Dir.home, "~"]] +
+                 @homes.map { |tool, home| [home, "<#{tool} home>"] } +
+                 [[@agents_home, "<agents home>"]]
+      prefixes.each do |prefix, label|
+        return label + path[prefix.length..-1] if path == prefix || path.start_with?("#{prefix}/")
+      end
+      path
     end
 
   end

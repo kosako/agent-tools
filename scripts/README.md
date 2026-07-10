@@ -1,7 +1,9 @@
 # Scripts
 
-すべての scripts は外部依存ゼロ・network access なしで実行できます。
-実装は macOS 標準の Ruby (YAML stdlib) を使います。
+pipeline scripts (build / register / connect / sync / status / doctor と各種 check) は
+外部依存ゼロ・network access なしで実行できます。実装は macOS 標準の Ruby (YAML stdlib) を
+使います。**例外は `probe-credential-isolation.sh`**: credential 隔離の実機検証 harness で、
+`gh` / `git` / `curl` と network に依存します (CI では実行しない。下記該当節)。
 
 `tests/` の self-tests と repository checks は CI (`.github/workflows/test.yml`) で
 PR / push ごとに実行されます。
