@@ -74,4 +74,5 @@ module Assets
       manifest_path: rel,
     }
   end
+  private_class_method :from_manifest
 end

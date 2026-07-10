@@ -9,7 +9,6 @@
 # - 外部依存ゼロ、network access なし。
 
 require "json"
-require "yaml"
 
 require_relative "assets"
 require_relative "check_manifests"
@@ -18,6 +17,7 @@ require_relative "build"
 require_relative "sync"
 require_relative "artifact_targets"
 require_relative "catalog"
+require_relative "yaml_util"
 require_relative "instruction_marker"
 
 module Status

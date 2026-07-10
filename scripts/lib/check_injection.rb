@@ -111,17 +111,6 @@ module CheckInjection
       @root = File.expand_path(root)
     end
 
-    # shared/ 配下のすべての text files を scan する。manifest も text として含める。
-    # directory skill の evals/ (テスト材料。意図的に攻撃的文字列を含みうる) は
-    # injection 攻撃文字列・fake path・email の scan からは外すが、inline private key leak
-    # のみ引き続き scan する (run で per-file に判定する)。
-    def target_files
-      Dir.glob(File.join(@root, "shared/**/*"), File::FNM_DOTMATCH)
-         .select { |p| File.file?(p) }
-         .reject { |p| File.basename(p) == ".gitkeep" }
-         .sort
-    end
-
     def run
       instruction_sources = instruction_source_paths
       eval_prefixes = skill_eval_dir_prefixes
@@ -154,6 +143,17 @@ module CheckInjection
     end
 
     private
+
+    # shared/ 配下のすべての text files を scan する。manifest も text として含める。
+    # directory skill の evals/ (テスト材料。意図的に攻撃的文字列を含みうる) は
+    # injection 攻撃文字列・fake path・email の scan からは外すが、inline private key leak
+    # のみ引き続き scan する (run で per-file に判定する)。
+    def target_files
+      Dir.glob(File.join(@root, "shared/**/*"), File::FNM_DOTMATCH)
+         .select { |p| File.file?(p) }
+         .reject { |p| File.basename(p) == ".gitkeep" }
+         .sort
+    end
 
     def strict_instruction(finding)
       return finding unless finding.category == "external-url"
@@ -205,7 +205,7 @@ module CheckInjection
     end
 
     # leak_only=true (evals/) のときは privacy/secret leak の category だけを当てる。
-    def scan(path, content, leak_only = false)
+    def scan(path, content, leak_only)
       patterns = leak_only ? PATTERNS.select { |p| LEAK_CATEGORIES.include?(p.category) } : PATTERNS
       patterns.flat_map do |pattern|
         positions = []

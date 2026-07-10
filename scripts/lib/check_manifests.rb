@@ -41,8 +41,6 @@ module CheckManifests
   NON_ASSET_BASENAMES = %w[README.md].freeze
 
   class Runner
-    attr_reader :errors
-
     def initialize(root)
       @root = File.expand_path(root)
       @errors = []

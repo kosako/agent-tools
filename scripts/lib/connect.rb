@@ -39,14 +39,6 @@ module Connect
       load_catalog
     end
 
-    # catalog を source of truth として読む (reader は sync / status / doctor と共通の
-    # Catalog.read)。connect は registered な instruction だけを所有確立する (review gate)。
-    def load_catalog
-      result = Catalog.read(@root)
-      @catalog_present = result.present?
-      @entries = result.entries
-    end
-
     def plan
       claude_plans + codex_plans
     end
@@ -61,6 +53,14 @@ module Connect
     end
 
     private
+
+    # catalog を source of truth として読む (reader は sync / status / doctor と共通の
+    # Catalog.read)。connect は registered な instruction だけを所有確立する (review gate)。
+    def load_catalog
+      result = Catalog.read(@root)
+      @catalog_present = result.present?
+      @entries = result.entries
+    end
 
     # tool の generated instruction path (tool 固有 filename の解決は generated_path に委ねる)。
     def generated_instruction(tool)

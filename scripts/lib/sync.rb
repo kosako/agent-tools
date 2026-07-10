@@ -42,14 +42,6 @@ module Sync
       load_catalog
     end
 
-    # catalog を source of truth として読む (target-artifact 単位)。不在 / version 不一致 /
-    # 壊れた JSON は catalog なし扱い (Catalog.read が fail-closed に判定)。
-    def load_catalog
-      result = Catalog.read(@root)
-      @catalog_present = result.present?
-      @entries = result.entries
-    end
-
     attr_reader :catalog_present
 
     # catalog の各 target-artifact を列挙し、registered のものを配置する。
@@ -109,6 +101,14 @@ module Sync
     end
 
     private
+
+    # catalog を source of truth として読む (target-artifact 単位)。不在 / version 不一致 /
+    # 壊れた JSON は catalog なし扱い (Catalog.read が fail-closed に判定)。
+    def load_catalog
+      result = Catalog.read(@root)
+      @catalog_present = result.present?
+      @entries = result.entries
+    end
 
     # prune の削除実体。marker-gated 判定 (prune_skills / prune_scripts) を通った
     # plan だけが来る。script は本体と sidecar marker を対で消す。

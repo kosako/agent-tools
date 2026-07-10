@@ -27,8 +27,6 @@ module Build
       @skipped = []
     end
 
-    attr_reader :built, :skipped
-
     def run
       Assets.load_all(@root).each do |asset|
         asset[:targets].each do |tool|
