@@ -137,3 +137,18 @@ plan→apply 間に配置先を差し替えられると検査を通過した pla
 防御になりません (実装しない判断, #149)。同時実行による事故は、個人ツールとして同時
 実行の前提が薄いこと、書き込み先が marker-gated な managed target に限定されることで
 被害が限定されます。
+
+## 既知の限界 (tool home symlink)
+
+sync / connect の symlink 検査は配置先 target とその近接 parent (script は本体・sidecar・
+`agent-tools/scripts`・`agent-tools` の 4 経路) を対象とし、**tool home (`~/.claude` /
+`~/.codex`) 自体が symlink かは検査しません**。home が symlink なら、その先へ書き込みが
+向かいます。
+
+これは意図した won't-fix です (#176 M-03 裁定):
+
+- home の symlink 化は dotfile manager による**正当な構成**で、conflict で弾くと正当な
+  ユーザー環境を壊す。
+- この経路を悪用して書き込み先を外部へ向けられる主体は、home symlink を張り替えられる =
+  同一ユーザー権限の攻撃者に限られ、上記 TOCTOU と同じく脅威モデル外 (守る相手は配布物に
+  紛れ込む外部由来の悪性コンテンツであり、home symlink はその経路でない)。

@@ -1,6 +1,7 @@
 #!/bin/sh
 # build → register → connect → sync を一括実行する一発 setup。
-# 既定は dry-run (plan を表示するだけ・実環境に書き込まない)。
+# 既定は dry-run (connect/sync は plan 表示のみ・tool home に書き込まない。
+# build/register は dry-run でも generated/ と catalog を更新する)。
 # 実環境へ反映するには --apply を付ける。初回 install と更新の両方に使える
 # (connect は冪等なので毎回通して無害)。
 # Spec: docs/install-and-usage.md
@@ -12,7 +13,8 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 usage() {
   echo "usage: setup.sh [--apply] [--root DIR] [--codex-home DIR] [--claude-home DIR] [--quiet]"
   echo "  build → register → connect → sync を通しで実行する。"
-  echo "  既定は dry-run (何も書き込まない)。--apply で connect/sync を実環境に反映する。"
+  echo "  既定は dry-run (tool home には書き込まない。generated/ と catalog は毎回更新する)。"
+  echo "  --apply で connect/sync を実環境 (tool home) に反映する。"
 }
 
 apply=""

@@ -19,8 +19,9 @@ description: public-safe Japanese router/librarian skill for the production rail
 review:
   # 第三者 vendor (takt の policies/*.md、複数) を含むが、静的 injection スキャンは clean
   # (findings なし) のため human review は不要 = not_needed。
-  # approved にしない理由: approved は asset 単位の永続承認で finding/hash に紐づかないため、
-  # 将来 re-import で medium finding が混入しても既存承認で通ってしまう (gate の穴)。
+  # approved にしない理由: approved は明示承認が要る asset のためのもので、#148 以降は
+  # approved_build_id (build_id 束縛) が必須 = 内容が変わるたび再承認が要る。scan clean で
+  # 承認不要な本 asset に付けると、re-import ごとの無用な再承認手続きだけが増える。
   # not_needed なら finding 発生時に register が human_review_required へ正しく倒す。
   # import の事実・出典・license・pin commit・review 記録は references/policies/NOTICE.md の
   # ファイル別表を正本とする (ai-antipattern は #93、追加4本は #97)。

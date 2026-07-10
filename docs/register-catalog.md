@@ -185,7 +185,9 @@ human review 必須として扱う (承認が有効 = `approved` かつ `approve
 
 - 致命 gate (`scripts/lib/gate.rb`): build と register が共有。
 - `scripts/register.sh`: catalog 生成、human_review 突き合わせ。
-  exit code は 0 (全 registered) / 3 (human_review_required あり) / 1 (gate fail)。
+  exit code は 0 (human_review_required なし) / 3 (human_review_required あり) /
+  1 (gate fail)。`unsupported` は exit code に影響しない (catalog に `unsupported` として
+  記録され sync が skip する設計上の想定状態で、0 は「全 registered」を意味しない)。
 - `scripts/sync.sh`: catalog を尊重し registered のみ配置。
 - status contract v2 (register summary) / doctor の鮮度 check: 実装済み。
 - asset discovery/load は `scripts/lib/assets.rb` に集約。

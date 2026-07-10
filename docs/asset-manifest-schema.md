@@ -92,6 +92,9 @@ source:
   format: markdown
 ```
 
+manifest に書けるキーはこの schema が列挙するものに限ります。**top-level・入れ子を問わず
+未知キーは check-manifests が error にします** (fail-closed。typo を silent に無視しない)。
+
 ### `schema_version`
 
 manifest schema の version です。v1 は `1` です。
@@ -265,8 +268,10 @@ register → sync で配置されます (instruction の所有確立は connect 
   unsupported)。本体は byte 単位で保持する。配置先と marker は
   [Sync Policy](sync-policy.md) / [Status / Manifest Contract](status-manifest-contract.md)。
 
-この field の他の用途は adapter 実装が読むための optional metadata で、strict validation
-しません。
+`compatibility` に書けるのは上記のみです: tool キーは `codex` / `claude-code`、その下は
+`artifact_kind` の 1 キーだけで、**未知の tool キー・未知の下位キーは check-manifests が
+error にします** (fail-closed。「optional metadata は strict validation しない」という
+旧記述は実装と乖離していたため是正, #176 Low)。
 
 ## Public repository rule
 

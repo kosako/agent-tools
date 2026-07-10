@@ -1,7 +1,11 @@
 # Scripts
 
-すべての scripts は外部依存ゼロ・network access なしで実行できます。
-実装は macOS 標準の Ruby (YAML stdlib) を使います。
+pipeline scripts (build / register / connect / sync / status / doctor と各種 check) は
+network access なしで実行できます。実装は macOS 標準の Ruby (YAML stdlib) で、追加 gem は
+不要です (status / doctor は repo 状態の確認に `git` 実行ファイルを使う。無い環境でも
+crash せず該当項目が degrade するだけ)。**例外は `probe-credential-isolation.sh`**:
+credential 隔離の実機検証 harness で、`gh` / `git` / `curl` と network に依存します
+(CI では実行しない。下記該当節)。
 
 `tests/` の self-tests と repository checks は CI (`.github/workflows/test.yml`) で
 PR / push ごとに実行されます。
@@ -16,8 +20,9 @@ PR / push ごとに実行されます。
 usage: setup.sh [--apply] [--root DIR] [--codex-home DIR] [--claude-home DIR] [--quiet]
 ```
 
-- **既定は dry-run**(plan を表示するだけ・実環境に書き込まない)。`--apply` を付けた
-  ときだけ connect / sync に `--apply` を渡す。
+- **既定は dry-run**(connect / sync は plan 表示のみ・tool home に書き込まない。
+  build / register は dry-run でも `generated/` と catalog を更新する)。`--apply` を
+  付けたときだけ connect / sync に `--apply` を渡す。
 - build の gate fail / connect・sync の conflict では停止する。register の human review
   待ち(exit 3)は非致命として継続し、note を出す(sync は registered のものだけ配置)。
 - 引数は各 sub-script へ forward する(`--root` / `--quiet` は全段、`--codex-home` /
