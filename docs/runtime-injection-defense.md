@@ -216,10 +216,12 @@ boundary でない)。
     - **裏面の honest-label (body 改竄は trust の守備範囲外)**: trust hash が body を含まない
       ということは、**Codex の trust は deployed body の改竄を検出しない** (改変された body も
       trusted のまま実行される — 上記 probe で marker 入り body がそのまま実行されたのが実証)。
-      agent-tools 側の内容紐づけ承認 (`approved_build_id`、#148) と sync が担うのは
-      **「承認済み内容を配備するまで」**であり、**配備後の body 改竄の検出・継続的 integrity は
-      どの層も担わない** (sync の up-to-date 判定は sidecar marker の `build_id` 比較のみで
-      配置済み body 本体は照合しない — body だけ改竄され sidecar が不変なら skip される)。
+      agent-tools 側の内容紐づけ承認 (`approved_build_id`、#148) と sync が管理するのは
+      **sidecar marker (`build_id`) に基づく承認と配備可否**であり、**body 本体の bytes は
+      build 後どの時点でも再照合されない**: sync は generated 側も配置済み target 側も sidecar
+      の `build_id` しか確認せず body を無照合で copy するため、build 後に generated body だけ
+      改竄されればその内容が配備され、配備後に target body だけ改竄されても up-to-date として
+      skip される。つまり **generated / deployed の body 改竄はどの層も検出しない**。
       hook 自体が fail-open steering なので防御表の強度ラベルは変わらないが、「trust したから
       body も安全」と読み違えないこと。
   - hook 読み込みは **user 層のみ実機で確認**。登録の実配線は dotfiles#181 で **user 層の別ファイル
