@@ -52,7 +52,7 @@ negative だけに付けると operation identity が崩れるため使わない
 | gh | `GH_CONFIG_DIR=<空>` で keyring ごと断 (host 未登録で keyring 不参照) | env-strip だけでは keyring 認証が残る |
 | git-https | `GIT_CONFIG_NOSYSTEM=1` で system gitconfig の osxkeychain helper を断 | `GIT_CONFIG_SYSTEM=/dev/null` では切れない (別経路 load) |
 | git-ssh | `unset SSH_AUTH_SOCK` + `GIT_SSH_COMMAND`(`IdentityAgent=none`) | `SSH_AUTH_SOCK` だけでは agent 経由で残る |
-| curl | `HOME` / `NETRC` 隔離 | `.netrc` / `.curlrc` / proxy env |
+| curl | 空 `HOME` で `~/.netrc` を断つ (`--netrc` は `$HOME/.netrc` を読む) | curl は `NETRC` env を見ないので `NETRC=/dev/null` は効かない (遮断は `HOME` 隔離による)。`.curlrc` / proxy env |
 
 さらに **非 repo の scratch cwd で実行** する (git に `GIT_CONFIG_NOLOCAL` はなく、cwd の
 `.git/config` の credential.helper / http.extraHeader / core.sshCommand 等が読まれ bypass に

@@ -148,4 +148,34 @@ for op in gh-api-repo git-https-lsremote git-ssh-lsremote curl-api-repo; do
     || fail "runner should define operation id $op"
 done
 
+# --- case 8: 実 negative/positive 呼び出しが --netrc を渡す (dry-run 表示だけでなく実行経路, #180) ---
+# config で iso_run / amb_run / iso_resolve_bin を差し替えて実 argv を記録し、network を使わずに
+# 両 curl 呼び出しが --netrc を持ち、negative/positive で argv が同一であることを検証する。
+# (dry-run 表示は別文字列なので、実行経路から --netrc が消えても回帰テストが通ってしまう穴を塞ぐ。)
+argvlog="$tmp/argv.log"
+: > "$argvlog"
+cat > "$tmp/rec.local" <<EOF
+PROBE_GH_REPO=owner/private-repo
+PROBE_GIT_HTTPS=https://github.com/owner/private-repo.git
+PROBE_CURL_URL=https://api.github.com/repos/owner/private-repo
+iso_resolve_bin() { echo "\$1"; }
+iso_make_scratch() { echo "$tmp/recscratch"; }
+iso_run() { shift; printf 'NEG %s\n' "\$*" >> "$argvlog"; return 0; }
+amb_run() { printf 'POS %s\n' "\$*" >> "$argvlog"; return 0; }
+EOF
+mkdir -p "$tmp/recscratch"
+"$probe" --config "$tmp/rec.local" > "$tmp/out-rec" 2>&1 \
+  || fail "recording run should exit 0: $(cat "$tmp/out-rec")"
+neg_curl=$(grep '^NEG curl ' "$argvlog" || true)
+pos_curl=$(grep '^POS curl ' "$argvlog" || true)
+[ -n "$neg_curl" ] || fail "negative curl invocation not recorded: $(cat "$argvlog")"
+[ -n "$pos_curl" ] || fail "positive curl invocation not recorded: $(cat "$argvlog")"
+printf '%s\n' "$neg_curl" | grep -q -- '--netrc' \
+  || fail "negative curl must pass --netrc: $neg_curl"
+printf '%s\n' "$pos_curl" | grep -q -- '--netrc' \
+  || fail "positive curl must pass --netrc: $pos_curl"
+# operation identity: NEG/POS の prefix を除いた argv が完全一致すること
+[ "${neg_curl#NEG }" = "${pos_curl#POS }" ] \
+  || fail "negative/positive curl argv must be identical: [$neg_curl] vs [$pos_curl]"
+
 echo "ok: probe-credential-isolation self-test passed"
