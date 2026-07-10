@@ -215,10 +215,13 @@ boundary でない)。
       変えたときだけ)。
     - **裏面の honest-label (body 改竄は trust の守備範囲外)**: trust hash が body を含まない
       ということは、**Codex の trust は deployed body の改竄を検出しない** (改変された body も
-      trusted のまま実行される)。body の integrity は Codex trust では守られず、agent-tools 側の
-      内容紐づけ承認 (`approved_build_id`、#148) と sync の管理が担う。hook 自体が fail-open
-      steering なので防御表の強度ラベルは変わらないが、「trust したから body も安全」と
-      読み違えないこと。
+      trusted のまま実行される — 上記 probe で marker 入り body がそのまま実行されたのが実証)。
+      agent-tools 側の内容紐づけ承認 (`approved_build_id`、#148) と sync が担うのは
+      **「承認済み内容を配備するまで」**であり、**配備後の body 改竄の検出・継続的 integrity は
+      どの層も担わない** (sync の up-to-date 判定は sidecar marker の `build_id` 比較のみで
+      配置済み body 本体は照合しない — body だけ改竄され sidecar が不変なら skip される)。
+      hook 自体が fail-open steering なので防御表の強度ラベルは変わらないが、「trust したから
+      body も安全」と読み違えないこと。
   - hook 読み込みは **user 層のみ実機で確認**。登録の実配線は dotfiles#181 で **user 層の別ファイル
     `~/.codex/hooks.json`** に確定 (config.toml の `[hooks]` は codex 自身が `[hooks.state]` を
     書き込む live ファイルのため dotfiles は触らない、という dotfiles 側の裁定)。
@@ -253,7 +256,7 @@ boundary でない)。
 |---|---|---|
 | trust 判定ロジック (provenance 3 軸) | ✅ 担当 | — |
 | safe-gh wrapper 本体 | ✅ 担当 | 絶対 path 参照のみ |
-| PreToolUse hook | ✅ script body + home 配布 (両 tool 同一 body) | hook 宣言 (Claude: settings.json / Codex: config.toml 等 user 層) |
+| PreToolUse hook | ✅ script body + home 配布 (両 tool 同一 body) | hook 宣言 (Claude: settings.json / Codex: `~/.codex/hooks.json`) |
 | 隔離 reader workflow | ✅ 担当 | capability gate + 置き場規約 |
 | credential 隔離 session 機構 | ✅ acceptance harness | deny 床 / sandbox / token store 隔離 |
 | policy data | ✅ single source (tool 別 render) | — |
