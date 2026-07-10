@@ -53,6 +53,49 @@ for cmd in $COMMANDS; do
   status=0
   (cd "$tmp" && "$bin" --help --bogus-flag > "$tmp/out" 2> "$tmp/err") || status=$?
   [ "$status" -eq 0 ] || fail "$cmd: --help must short-circuit before --bogus-flag, got $status"
+
+  # --- 5: help 時は stderr 空・stdout は usage 1 行のみ ---
+  status=0
+  (cd "$tmp" && "$bin" --help > "$tmp/out" 2> "$tmp/err") || status=$?
+  [ ! -s "$tmp/err" ] || fail "$cmd: --help must not write to stderr: $(cat "$tmp/err")"
+  [ "$(wc -l < "$tmp/out" | tr -d ' ')" = "1" ] || fail "$cmd: --help stdout should be the usage line only"
+  case "$(cat "$tmp/out")" in "usage: $cmd.sh "*) ;; *) fail "$cmd: usage line should name $cmd.sh: $(cat "$tmp/out")";; esac
+
+  # --- 6: 位置引数は未知 option として拒否 ---
+  status=0
+  (cd "$tmp" && "$bin" positional > "$tmp/out" 2> "$tmp/err") || status=$?
+  [ "$status" -eq 2 ] || fail "$cmd: positional arg should exit 2, got $status"
+  grep -q "unknown option: positional" "$tmp/err" || fail "$cmd: positional arg should be reported as unknown option"
+
+  # --- 7: 引数途中の -h でも usage + exit 0 (value flag を先に読んでから) ---
+  status=0
+  (cd "$tmp" && "$bin" --root "$tmp" -h > "$tmp/out" 2> "$tmp/err") || status=$?
+  [ "$status" -eq 0 ] || fail "$cmd: mid-args -h should exit 0, got $status"
+  grep -q "^usage:" "$tmp/out" || fail "$cmd: mid-args -h should print usage"
 done
+
+# --- Cli.parse の直接 unit (外形から観測しにくい equivalence): 空文字列値 / 重複後勝ち /
+#     value flag が直後の flag を値として食う / help は以降の argv を消費しない ---
+ruby -r"$script_dir/../lib/cli" -e '
+  def check(name, cond)
+    return if cond
+    warn "FAIL: #{name}"
+    exit 1
+  end
+  # 空文字列は有効な値 (値欠落は argv 枯渇 = nil のみ)
+  opts = Cli.parse(["--root", ""], usage: "usage: x", value_flags: ["--root"])
+  check("empty string value accepted", opts["--root"] == "")
+  # 同一 flag 重複は後勝ち
+  opts = Cli.parse(["--root", "a", "--root", "b"], usage: "usage: x", value_flags: ["--root"])
+  check("duplicate value flag: last wins", opts["--root"] == "b")
+  # value flag は直後の token を無条件に値として食う (旧 loop と同じ)
+  opts = Cli.parse(["--root", "--quiet"], usage: "usage: x",
+                   bool_flags: ["--quiet"], value_flags: ["--root"])
+  check("value flag eats following flag token", opts["--root"] == "--quiet" && !opts.key?("--quiet"))
+  # help は :help を返し以降の argv を消費しない
+  argv = ["--help", "--rest"]
+  check("help returns :help", Cli.parse(argv, usage: "usage: x") == :help)
+  check("help leaves rest of argv", argv == ["--rest"])
+' > /dev/null || fail "Cli.parse direct unit checks failed"
 
 echo "ok: cli-args characterization test passed"
