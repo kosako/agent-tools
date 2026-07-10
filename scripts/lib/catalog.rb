@@ -19,15 +19,23 @@ module Catalog
   end
 
   # catalog を読む。存在しない (:missing) / catalog_version 不一致 (:version_mismatch) /
-  # JSON として壊れている (:unreadable) は entries を空にして返す (fail-closed)。
+  # JSON として壊れている・shape 不正 (:unreadable) は entries を空にして返す (fail-closed)。
   def self.read(root)
     path = File.join(root, ArtifactTargets::CATALOG_PATH)
     return Result.new(:missing, []) unless File.file?(path)
 
     data = JSON.parse(File.read(path))
+    # 型不正な catalog を fail-closed で弾く (#179 M-06)。top-level が object でないと
+    # data["catalog_version"] 参照自体が TypeError になり JSON::ParserError の rescue を
+    # 抜けてしまうため、まず shape を検証する。assets も entry も、下流が Hash#[] を
+    # 前提に読む (target / name / build_id) ので Array of Hash を要求する。
+    return Result.new(:unreadable, []) unless data.is_a?(Hash)
     return Result.new(:version_mismatch, []) unless data["catalog_version"] == ArtifactTargets::CATALOG_VERSION
 
-    Result.new(:ok, data.fetch("assets", []))
+    assets = data.fetch("assets", [])
+    return Result.new(:unreadable, []) unless assets.is_a?(Array) && assets.all?(Hash)
+
+    Result.new(:ok, assets)
   rescue JSON::ParserError
     Result.new(:unreadable, [])
   end
