@@ -456,6 +456,130 @@ fi
 grep -q "frontmatter name .* does not match manifest name" "$tmp/out-idmis" \
   || fail "expected frontmatter-name mismatch reason: $(cat "$tmp/out-idmis")"
 
+# --- case 4k: 未検証 source.path を走査しない (CM-181-01 / Codex review #181) ---
+# source.path が shared/../scripts のような traversal のとき、validate_source の前に走る
+# 実行コード走査が repo 外 (shared/ 外の scripts/) を Dir.glob しないこと。
+mkdir -p "$tmp/trav/scripts" "$tmp/trav/shared/skills/personal-evil"
+printf '#!/bin/sh\necho x\n' > "$tmp/trav/scripts/payload"
+chmod +x "$tmp/trav/scripts/payload"
+cat > "$tmp/trav/shared/skills/personal-evil/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-evil
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/../scripts
+  format: directory
+EOF
+if "$check" --root "$tmp/trav" > "$tmp/out-trav" 2>&1; then
+  fail "traversal source.path should fail validation"
+fi
+grep -q "source.path must not contain '..'" "$tmp/out-trav" \
+  || fail "expected traversal rejection: $(cat "$tmp/out-trav")"
+if grep -q "must not contain an executable file" "$tmp/out-trav"; then
+  fail "must not scan an unvalidated (traversal) source.path: $(cat "$tmp/out-trav")"
+fi
+
+# --- case 4l: SKILL.md frontmatter は fail-closed で読む (CM-181-02 / Codex review #181) ---
+# frontmatter 不在は identity 主張なしで許容 (case 1 で担保)。在るのに読めない場合は reject。
+
+# (l-1) 閉じ marker 欠落
+mkdir -p "$tmp/fmopen/shared/skills/personal-fmopen"
+printf -- '---\nname: personal-fmopen\n' > "$tmp/fmopen/shared/skills/personal-fmopen/SKILL.md"
+cat > "$tmp/fmopen/shared/skills/personal-fmopen/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-fmopen
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-fmopen
+  format: directory
+EOF
+if "$check" --root "$tmp/fmopen" > "$tmp/out-fmopen" 2>&1; then
+  fail "SKILL.md frontmatter without closing marker should fail"
+fi
+grep -q "missing its closing --- marker" "$tmp/out-fmopen" \
+  || fail "expected missing-closing-marker reason: $(cat "$tmp/out-fmopen")"
+
+# (l-2) YAML alias: validator は safe_load で reject し、target parser が解決する差を塞ぐ
+mkdir -p "$tmp/fmalias/shared/skills/personal-fmalias"
+printf -- '---\nid: &a personal-impostor\nname: *a\n---\n\n# x\n' \
+  > "$tmp/fmalias/shared/skills/personal-fmalias/SKILL.md"
+cat > "$tmp/fmalias/shared/skills/personal-fmalias/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-fmalias
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-fmalias
+  format: directory
+EOF
+if "$check" --root "$tmp/fmalias" > "$tmp/out-fmalias" 2>&1; then
+  fail "SKILL.md frontmatter with a YAML alias should fail (fail-closed)"
+fi
+grep -q "YAML error" "$tmp/out-fmalias" \
+  || fail "expected frontmatter YAML error (alias): $(cat "$tmp/out-fmalias")"
+
+# (l-3) frontmatter に name が無い
+mkdir -p "$tmp/fmnoname/shared/skills/personal-fmnoname"
+printf -- '---\ndescription: no name here\n---\n\n# x\n' \
+  > "$tmp/fmnoname/shared/skills/personal-fmnoname/SKILL.md"
+cat > "$tmp/fmnoname/shared/skills/personal-fmnoname/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-fmnoname
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-fmnoname
+  format: directory
+EOF
+if "$check" --root "$tmp/fmnoname" > "$tmp/out-fmnoname" 2>&1; then
+  fail "SKILL.md frontmatter without a name should fail"
+fi
+grep -q "must declare a non-empty string name" "$tmp/out-fmnoname" \
+  || fail "expected missing-name reason: $(cat "$tmp/out-fmnoname")"
+
+# (l-4) CRLF frontmatter でも name 照合が通る (一致すれば pass)
+mkdir -p "$tmp/fmcrlf/shared/skills/personal-fmcrlf"
+printf -- '---\r\nname: personal-fmcrlf\r\ndescription: crlf ok\r\n---\r\n\r\n# x\r\n' \
+  > "$tmp/fmcrlf/shared/skills/personal-fmcrlf/SKILL.md"
+cat > "$tmp/fmcrlf/shared/skills/personal-fmcrlf/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-fmcrlf
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-fmcrlf
+  format: directory
+EOF
+"$check" --root "$tmp/fmcrlf" > "$tmp/out-fmcrlf" 2>&1 \
+  || fail "CRLF frontmatter with matching name should pass: $(cat "$tmp/out-fmcrlf")"
+
 # --- case 4f: directory asset 内の symlink は fail-closed (shared/ 脱出防止) ---
 mkdir -p "$tmp/symskill/shared/skills/personal-sym-skill"
 cat > "$tmp/symskill/shared/skills/personal-sym-skill/SKILL.md" <<'EOF'

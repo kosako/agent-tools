@@ -375,6 +375,13 @@ module CheckManifests
       source_path = source["path"]
       return unless source_path.is_a?(String)
 
+      # check_directory_skill_contents は validate_source より先に走るため、未検証の
+      # source.path で Dir.glob すると shared/../ 脱出・repo 外走査 (大量走査 DoS 含む) が
+      # 起きる (CM-181-01)。外部由来 manifest が起点なので脅威モデル内。directory manifest の
+      # 所有不変条件「source は自分の dir」(validate_source と同じ条件) を満たすときだけ走査し、
+      # 満たさない manifest は走査せず validate_source の reject に委ねる。
+      return unless source_path.chomp("/") == File.dirname(path)
+
       dir = File.join(@root, source_path)
       return unless File.directory?(dir)
 
@@ -410,26 +417,43 @@ module CheckManifests
         error(path, "directory skill must contain a SKILL.md entrypoint")
         return
       end
-      fm_name = skill_frontmatter_name(skill_md)
-      if fm_name && data["name"].is_a?(String) && fm_name != data["name"]
-        error(path, "SKILL.md frontmatter name #{fm_name.inspect} does not match manifest name #{data['name'].inspect}")
-      end
+      validate_skill_frontmatter_name(path, skill_md, data["name"])
     end
 
-    # SKILL.md 先頭の YAML frontmatter から name を安全に読む (無ければ nil)。build の
-    # frontmatter 検出 (content.start_with?("---\n", "---\r\n")) と同じ判定に合わせ、閉じ
-    # marker がある well-formed な frontmatter のときだけ name を返す。
-    def skill_frontmatter_name(skill_md)
+    # SKILL.md 先頭の YAML frontmatter name を manifest name と照合する。
+    # frontmatter が **無ければ** identity を主張していない (target も dir 名等に fallback する)
+    # ので照合しない。frontmatter が **在る** (build と同じ start_with?("---\n","---\r\n") 判定)
+    # 場合は fail-closed で読む: 閉じ marker 欠落 / YAML parse 失敗 (alias 含む) / 非 mapping /
+    # name が非空 String でない — をすべて error にする (CM-181-02)。build は directory skill の
+    # SKILL.md を無改変で配るため、validator が読めない frontmatter を target parser が別 identity
+    # として解決する差 (alias 等) を fail-open で通すと identity bypass になる。
+    def validate_skill_frontmatter_name(path, skill_md, manifest_name)
       content = File.read(skill_md)
-      return nil unless content.start_with?("---\n", "---\r\n")
+      return unless content.start_with?("---\n", "---\r\n")
 
       parts = content.sub(/\A---\r?\n/, "").split(/^---\r?\n/, 2)
-      return nil if parts.length < 2
-
-      data = YamlUtil.load(parts[0], skill_md)
-      data.is_a?(Hash) ? data["name"] : nil
-    rescue Psych::Exception
-      nil
+      if parts.length < 2
+        error(path, "SKILL.md frontmatter is missing its closing --- marker")
+        return
+      end
+      fm = begin
+        YamlUtil.load(parts[0], skill_md)
+      rescue Psych::Exception => e
+        error(path, "SKILL.md frontmatter has a YAML error: #{e.message}")
+        return
+      end
+      unless fm.is_a?(Hash)
+        error(path, "SKILL.md frontmatter must be a YAML mapping")
+        return
+      end
+      fm_name = fm["name"]
+      unless fm_name.is_a?(String) && !fm_name.empty?
+        error(path, "SKILL.md frontmatter must declare a non-empty string name")
+        return
+      end
+      if manifest_name.is_a?(String) && fm_name != manifest_name
+        error(path, "SKILL.md frontmatter name #{fm_name.inspect} does not match manifest name #{manifest_name.inspect}")
+      end
     end
 
     # asset source の入れ子・重複所有を fail-closed で禁止する (#177 / H-01)。
