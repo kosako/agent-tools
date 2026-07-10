@@ -24,7 +24,7 @@ require_relative "instruction_marker"
 require_relative "assets"
 
 module Sync
-  TOOLS = %w[codex claude-code].freeze
+  TOOLS = ArtifactTargets::TOOLS
 
   # code は reason (人間向け表示文言) と対になる機械可読な skip 理由。status が contract
   # の target state 判定に読む (#152: 表示文言の変更で contract を壊さないための分離)。
@@ -396,10 +396,7 @@ module Sync
     apply = false
     prune = false
     quiet = false
-    homes = {
-      "codex" => File.expand_path("~/.codex"),
-      "claude-code" => File.expand_path("~/.claude"),
-    }
+    homes = ArtifactTargets.default_homes
     until argv.empty?
       case (arg = argv.shift)
       when "--root"

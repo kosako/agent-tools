@@ -210,10 +210,7 @@ module Doctor
 
   def self.main(argv)
     root = Dir.pwd
-    homes = {
-      "codex" => File.expand_path("~/.codex"),
-      "claude-code" => File.expand_path("~/.claude"),
-    }
+    homes = ArtifactTargets.default_homes
     agents_home = File.expand_path("~/.agents")
     until argv.empty?
       case (arg = argv.shift)

@@ -16,7 +16,7 @@ module CheckManifests
   KINDS = %w[skill prompt workflow agent instruction script].freeze
   TRACKED_VISIBILITIES = %w[public personal].freeze
   FORBIDDEN_VISIBILITIES = %w[private work client secret].freeze
-  TARGETS = %w[codex claude-code].freeze
+  TARGETS = ArtifactTargets::TOOLS
   RISK_KEYS = %w[prompt_injection privacy].freeze
   RISK_LEVELS = %w[low medium high unknown].freeze
   SOURCE_FORMATS = %w[markdown yaml json toml text directory].freeze

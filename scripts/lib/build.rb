@@ -18,7 +18,7 @@ require_relative "artifact_targets"
 require_relative "instruction_marker"
 
 module Build
-  TOOLS = %w[codex claude-code].freeze
+  TOOLS = ArtifactTargets::TOOLS
 
   class Runner
     def initialize(root)

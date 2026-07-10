@@ -79,7 +79,7 @@ module Status
       sources = safe_sources_by_name
       total = 0
       stale = 0
-      Sync::TOOLS.each do |tool|
+      ArtifactTargets::TOOLS.each do |tool|
         Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "skill"), "*")).sort.each do |artifact|
           next unless File.directory?(artifact)
 
@@ -204,10 +204,7 @@ module Status
   def self.main(argv)
     root = Dir.pwd
     json = false
-    homes = {
-      "codex" => File.expand_path("~/.codex"),
-      "claude-code" => File.expand_path("~/.claude"),
-    }
+    homes = ArtifactTargets.default_homes
     until argv.empty?
       case (arg = argv.shift)
       when "--root"

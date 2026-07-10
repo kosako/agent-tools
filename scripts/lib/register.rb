@@ -85,8 +85,7 @@ module Register
       # fail-closed にしているのと対称に、常に human review を要求する。判定は manifest の
       # kind でなく resolve 後の artifact_kind で行う (compatibility override で任意 kind を
       # script 配布にできるため、kind 基準では迂回できてしまう)。
-      script_artifact = (asset[:targets] || [])
-                        .any? { |tool| ArtifactTargets.resolve(asset, tool) == "script" }
+      script_artifact = ArtifactTargets.resolves_any?(asset, "script")
       review_needed = asset[:flagged] ||
                       script_artifact ||
                       asset[:declared_risks].any? { |r| %w[medium unknown].include?(r) }

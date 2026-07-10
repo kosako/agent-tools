@@ -169,8 +169,7 @@ module CheckInjection
         next unless asset[:source].is_a?(Hash)
         next unless asset[:targets].is_a?(Array)
 
-        instruction = asset[:targets].any? { |t| ArtifactTargets.resolve(asset, t) == "instruction" }
-        paths << asset[:source]["path"] if instruction
+        paths << asset[:source]["path"] if ArtifactTargets.resolves_any?(asset, "instruction")
       end
       paths
     rescue Psych::Exception
@@ -188,8 +187,7 @@ module CheckInjection
         next unless source["path"].is_a?(String)
         next unless asset[:targets].is_a?(Array)
 
-        is_skill = asset[:targets].any? { |t| ArtifactTargets.resolve(asset, t) == "skill" }
-        next unless is_skill
+        next unless ArtifactTargets.resolves_any?(asset, "skill")
 
         ArtifactTargets::SKILL_NON_DEPLOY_DIRS.each do |sub|
           prefixes << "#{File.join(@root, source['path'], sub)}/"
