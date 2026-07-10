@@ -294,6 +294,7 @@ risk:
 review:
   human_review: approved
   approved_build_id: $wrapbid
+  approved_artifact_kind: script
 source:
   path: shared/scripts/personal-wrap.sh
   format: text
@@ -533,6 +534,7 @@ risk:
 review:
   human_review: approved
   approved_build_id: $ptoolbid
+  approved_artifact_kind: script
 source:
   path: shared/scripts/personal-ptool.sh
   format: text

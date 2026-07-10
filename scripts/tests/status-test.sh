@@ -224,6 +224,7 @@ risk:
 review:
   human_review: approved
   approved_build_id: $scbid
+  approved_artifact_kind: script
 source:
   path: shared/scripts/personal-wrap.sh
   format: text

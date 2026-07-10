@@ -9,7 +9,9 @@ module ArtifactTargets
   # catalog (generated/catalog.json) の version。reader (sync / status / doctor) は
   # これと一致しない catalog を古いものとして無視する。
   # v3: entry に manifest_path / manifest_digest を追加 (登録判断の鮮度検出, #148)。
-  CATALOG_VERSION = 3
+  # v4: build_id を full SHA-256 + length-framing 化し、承認を artifact_kind に束縛
+  #     (approved_artifact_kind, #184)。旧 12-hex build_id の catalog / marker は失効。
+  CATALOG_VERSION = 4
 
   # catalog の repo root 相対 path。register が書き、Catalog.read が読む (#152)。
   CATALOG_PATH = "generated/catalog.json"

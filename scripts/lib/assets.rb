@@ -69,6 +69,7 @@ module Assets
       # Hash でなければ nil / [] に正規化する (検証は check-manifests が担う)。
       human_review: data["review"].is_a?(Hash) ? data["review"]["human_review"] : nil,
       approved_build_id: data["review"].is_a?(Hash) ? data["review"]["approved_build_id"] : nil,
+      approved_artifact_kind: data["review"].is_a?(Hash) ? data["review"]["approved_artifact_kind"] : nil,
       declared_risks: data["risk"].is_a?(Hash) ? data["risk"].values : [],
       manifest_path: rel,
     }

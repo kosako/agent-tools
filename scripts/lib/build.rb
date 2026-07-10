@@ -265,6 +265,12 @@ module Build
   end
 
   # source content から決定的な build_id を作る。status の stale 判定でも使う。
+  #
+  # 形式は full SHA-256 (64 hex, #184)。旧形式 (先頭 12 hex 切り詰め) は外部由来の悪性
+  # コンテンツを脅威に置くと衝突探索の余地が大きすぎるため廃止した。directory は各 part
+  # (相対 path / file bytes) を length-framing して連結する — 無区切り連結だと
+  # 「path "/ab" + content "c"」と「path "/a" + content "bc"」のような異なる tree が
+  # 同一 digest 入力になる構造的衝突が可能 (#184 回帰テストあり)。
   def self.build_id_for(root, source, format)
     if format == "directory"
       # source.path は末尾スラッシュ付きでも check-manifests を通る (chomp して検証)。
@@ -283,14 +289,22 @@ module Build
         # 配置成果物が変わらない eval 編集で stale 扱いにならないようにする (copy と整合)。
         next if ArtifactTargets::SKILL_NON_DEPLOY_DIRS.include?(f.sub("#{src_dir}/", "").split("/").first)
 
-        digest.update(f.sub(src_dir, ""))
-        digest.update(File.read(f, mode: "rb"))
+        digest_framed(digest, f.sub(src_dir, ""))
+        digest_framed(digest, File.read(f, mode: "rb"))
       end
-      "sha256:#{digest.hexdigest[0, 12]}"
+      "sha256:#{digest.hexdigest}"
     else
-      "sha256:#{Digest::SHA256.hexdigest(File.read(File.join(root, source)))[0, 12]}"
+      "sha256:#{Digest::SHA256.hexdigest(File.read(File.join(root, source), mode: "rb"))}"
     end
   end
+
+  # digest に length-framed な part を足す (4-byte big-endian の byte 長 + bytes)。
+  # part 境界を digest 入力に固定し、隣接 part 間で bytes を移し替える衝突を塞ぐ。
+  def self.digest_framed(digest, part)
+    digest.update([part.bytesize].pack("N"))
+    digest.update(part)
+  end
+  private_class_method :digest_framed
 
   def self.main(argv)
     root = Dir.pwd
