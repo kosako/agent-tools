@@ -25,6 +25,14 @@ module Assets
   rescue SystemCallError, IOError
     false
   end
+  # 絶対 path を root 相対に変換する (root prefix のみ剥がす)。root は File.expand_path
+  # 済みであることが前提 (呼び出し側の責務。生の相対 root を渡すと prefix が一致せず
+  # 絶対 path のまま返る)。build / check-manifests / check-injection の表示 path と
+  # manifest_path の正規化が共有する (#192)。
+  def self.rel(root, path)
+    path.sub(%r{\A#{Regexp.escape(root)}/}, "")
+  end
+
   # sidecar manifest と directory manifest を sort して返す (絶対 path)。
   # glob は `foo.asset.yml` という名前の directory にもマッチしうるため、File.read で
   # EISDIR を踏まないよう file だけに絞る (directory manifest は File.file? で残る)。
@@ -40,7 +48,7 @@ module Assets
   def self.load_all(root)
     root = File.expand_path(root)
     manifest_paths(root).map do |full|
-      rel = full.sub(%r{\A#{Regexp.escape(root)}/}, "")
+      rel = Assets.rel(root, full)
       from_manifest(YamlUtil.load(File.read(full), rel), rel)
     end
   end

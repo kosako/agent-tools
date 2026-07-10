@@ -199,7 +199,7 @@ module CheckInjection
     end
 
     def rel(path)
-      path.sub(%r{\A#{Regexp.escape(@root)}/}, "")
+      Assets.rel(@root, path)
     end
 
     # leak_only=true (evals/) のときは privacy/secret leak の category だけを当てる。

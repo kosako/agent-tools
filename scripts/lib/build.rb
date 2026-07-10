@@ -154,7 +154,7 @@ module Build
     end
 
     def rel(path)
-      path.sub(%r{\A#{Regexp.escape(@root)}/}, "")
+      Assets.rel(@root, path)
     end
 
     public

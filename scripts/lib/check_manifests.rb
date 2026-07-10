@@ -65,7 +65,7 @@ module CheckManifests
     end
 
     def rel(path)
-      path.sub(%r{\A#{Regexp.escape(@root)}/}, "")
+      Assets.rel(@root, path)
     end
 
     def discover_manifests
