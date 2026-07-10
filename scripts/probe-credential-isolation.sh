@@ -163,8 +163,9 @@ if [ "$probe_ssh" = true ]; then
 fi
 if [ "$probe_curl" = true ]; then
   # --netrc を明示しないと curl は netrc を一切参照しない。この channel の認証源は netrc
-  # なので必須 (#180 M-07)。curl は NETRC env を見ず $HOME/.netrc を読むため、negative 側の
-  # 遮断は iso_run の空 HOME (scratch) による (recipe の NETRC=/dev/null は curl には効かない)。
+  # なので必須 (#180 M-07)。negative 側の netrc 遮断は curl の版で経路が違う: 8.7.1 は NETRC env
+  # を見ず $HOME/.netrc を読むので空 HOME (scratch) が断ち、8.16.0+ は NETRC を netrc file 指定に
+  # 使うので NETRC=/dev/null が効く。recipe は両方 (空 HOME + NETRC=/dev/null) を設定するので新旧とも遮断される。
   curl_neg=$(run_negative "$CURL_BIN" -sfS --netrc -o /dev/null "$PROBE_CURL_URL")
   curl_pos=$(run_positive "$CURL_BIN" -sfS --netrc -o /dev/null "$PROBE_CURL_URL")
 fi
