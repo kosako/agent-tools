@@ -14,10 +14,9 @@
 # - --prune で catalog に載らなくなった deployed asset を撤去する (marker-gated delete,
 #   #154)。削除も --apply が必須で、既定は dry-run。
 
-require "yaml"
 require "fileutils"
 
-require_relative "yaml_util"
+require_relative "yaml_marker"
 require_relative "artifact_targets"
 require_relative "catalog"
 require_relative "instruction_marker"
@@ -144,7 +143,7 @@ module Sync
                         :orphan_symlink)
         end
         marker = File.directory?(target) ? read_marker(target) : nil
-        unless managed?(marker, tool, name)
+        unless YamlMarker.managed?(marker, tool, name)
           next Plan.new("skip", tool, name, target, "orphan is unmanaged; left in place", "skill", nil,
                         :orphan_unmanaged)
         end
@@ -170,8 +169,8 @@ module Sync
           next Plan.new("skip", tool, name, target, "orphan is a symlink; left in place", "script", nil,
                         :orphan_symlink)
         end
-        marker = read_marker_file(ArtifactTargets.sidecar_marker_path(target))
-        unless managed?(marker, tool, name)
+        marker = YamlMarker.read_file(ArtifactTargets.sidecar_marker_path(target))
+        unless YamlMarker.managed?(marker, tool, name)
           next Plan.new("skip", tool, name, target, "orphan is unmanaged; left in place", "script", nil,
                         :orphan_unmanaged)
         end
@@ -223,7 +222,7 @@ module Sync
       end
 
       source_marker = read_marker(gen)
-      unless managed?(source_marker, tool, name)
+      unless YamlMarker.managed?(source_marker, tool, name)
         return Plan.new("conflict", tool, name, target, "generated artifact is missing a valid marker", "skill", gen)
       end
       # generated が catalog entry と一致するか (build_id)。不一致 = register 後に build して
@@ -243,7 +242,7 @@ module Sync
       end
 
       target_marker = File.directory?(target) ? read_marker(target) : nil
-      unless managed?(target_marker, tool, name)
+      unless YamlMarker.managed?(target_marker, tool, name)
         return Plan.new("conflict", tool, name, target, "existing target is unmanaged", "skill", gen)
       end
 
@@ -317,8 +316,8 @@ module Sync
         return Plan.new("skip", tool, name, target, "run build first", "script", gen, :build_first)
       end
 
-      source_marker = read_marker_file(ArtifactTargets.sidecar_marker_path(gen))
-      unless managed?(source_marker, tool, name)
+      source_marker = YamlMarker.read_file(ArtifactTargets.sidecar_marker_path(gen))
+      unless YamlMarker.managed?(source_marker, tool, name)
         return Plan.new("conflict", tool, name, target, "generated artifact is missing a valid marker", "script", gen)
       end
       # generated が catalog entry と一致するか (build_id)。不一致 = register 後に build して
@@ -338,14 +337,14 @@ module Sync
         # 管理状態も確認する (本体ありの update 経路と対称, #179 H-06)。symlink な sidecar は
         # script_target_symlink? が上で conflict 済み。
         sidecar = ArtifactTargets.sidecar_marker_path(target)
-        if File.exist?(sidecar) && !managed?(read_marker_file(sidecar), tool, name)
+        if File.exist?(sidecar) && !YamlMarker.managed?(YamlMarker.read_file(sidecar), tool, name)
           return Plan.new("conflict", tool, name, target, "existing sidecar marker is unmanaged", "script", gen)
         end
         return Plan.new("create", tool, name, target, nil, "script", gen)
       end
 
-      target_marker = File.file?(target) ? read_marker_file(ArtifactTargets.sidecar_marker_path(target)) : nil
-      unless managed?(target_marker, tool, name)
+      target_marker = File.file?(target) ? YamlMarker.read_file(ArtifactTargets.sidecar_marker_path(target)) : nil
+      unless YamlMarker.managed?(target_marker, tool, name)
         return Plan.new("conflict", tool, name, target, "existing target is unmanaged", "script", gen)
       end
 
@@ -369,24 +368,7 @@ module Sync
 
     # directory artifact (skill) の dir 直下 marker を読む。
     def read_marker(dir)
-      read_marker_file(File.join(dir, ArtifactTargets::MARKER_BASENAME))
-    end
-
-    # marker file を読んで Hash を返す。不在 / 型不正 / parse 失敗は nil。
-    def read_marker_file(path)
-      return nil unless File.file?(path)
-
-      data = YamlUtil.load(File.read(path), path)
-      data.is_a?(Hash) ? data : nil
-    rescue Psych::Exception
-      nil
-    end
-
-    def managed?(marker, tool, name)
-      marker &&
-        marker["repo"] == "agent-tools" &&
-        marker["target"] == tool &&
-        marker["name"] == name
+      YamlMarker.read_file(File.join(dir, ArtifactTargets::MARKER_BASENAME))
     end
 
   end

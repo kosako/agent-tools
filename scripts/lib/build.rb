@@ -16,6 +16,7 @@ require_relative "assets"
 require_relative "gate"
 require_relative "artifact_targets"
 require_relative "instruction_marker"
+require_relative "yaml_marker"
 
 module Build
   TOOLS = ArtifactTargets::TOOLS
@@ -111,7 +112,8 @@ module Build
       FileUtils.cp(File.join(@root, source), out)
       File.chmod(0o755, out) # script は配置先で実行されるため実行可能にする
       build_id = Build.build_id_for(@root, source, format)
-      File.write(ArtifactTargets.sidecar_marker_path(out), marker_yaml(name, tool, source, build_id))
+      File.write(ArtifactTargets.sidecar_marker_path(out),
+                 YamlMarker.render(name: name, target: tool, source: source, build_id: build_id))
       @built << rel(out)
     end
 
@@ -148,18 +150,7 @@ module Build
     # directory artifact (skill) の管理 marker を dir 直下に書く。
     def write_marker(out_dir, name, tool, source, build_id)
       File.write(File.join(out_dir, ArtifactTargets::MARKER_BASENAME),
-                 marker_yaml(name, tool, source, build_id))
-    end
-
-    # YAML marker の本文。directory marker (skill) と sidecar marker (script) が共有する。
-    def marker_yaml(name, tool, source, build_id)
-      YAML.dump(
-        "repo" => "agent-tools",
-        "name" => name,
-        "target" => tool,
-        "source" => source,
-        "build_id" => build_id,
-      )
+                 YamlMarker.render(name: name, target: tool, source: source, build_id: build_id))
     end
 
     def rel(path)
@@ -253,12 +244,8 @@ module Build
 
     # marker file が存在し agent-tools repo を示すか (本文 YAML を読む)。
     def marker_present?(marker_path)
-      return false unless File.file?(marker_path)
-
-      data = YamlUtil.load(File.read(marker_path), marker_path)
-      data.is_a?(Hash) && data["repo"] == "agent-tools"
-    rescue Psych::Exception
-      false
+      marker = YamlMarker.read_file(marker_path)
+      !marker.nil? && marker["repo"] == "agent-tools"
     end
   end
 
