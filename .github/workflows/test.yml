@@ -18,8 +18,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # system = macOS 標準 Ruby (2.6 / psych 3) が配備先の床。3.4 は yaml_util.rb の
-        # psych >= 4 分岐を CI の dead path にしないための現行 Ruby (#150)。
+        # system = Apple 標準 Ruby /usr/bin/ruby (2.6 / psych 3) が配備先の床。3.4 は
+        # yaml_util.rb の psych >= 4 分岐を CI の dead path にしないための現行 Ruby (#150)。
+        # runner イメージの PATH ruby は既に 3.x (2026-07-10 実測 3.4.9) なので、system 行は
+        # PATH 任せにせず /usr/bin/ruby へ shim で pin する (#176 Low)。
         ruby: [system, "3.4"]
     steps:
       # 外部 action は full commit SHA で pin する (タグ移動による差し替え対策)。
@@ -37,9 +39,21 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
 
       # system 行の存在理由は「配備先の床 = psych < 4 (現に 2.6 / psych 3)」の検証。
-      # macos-latest の更新で system Ruby が psych >= 4 になると、この床が黙って
-      # 無検証化する (両行とも psych >= 4 = 床側の分岐が dead path 化) ため、前提が
-      # 崩れた時点で CI を落として matrix の見直しを迫る (#176 Low)。
+      # scripts/*.sh は PATH の ruby を exec するため、PATH 先頭に /usr/bin/ruby への
+      # shim を置いて Apple 標準 Ruby に固定する (runner の PATH ruby は 3.x に更新済みで、
+      # PATH 任せだと床の検証が黙って消える — 本 PR の CI で実際に検出)。
+      - name: Pin system row to Apple system Ruby (/usr/bin/ruby)
+        if: matrix.ruby == 'system'
+        run: |
+          test -x /usr/bin/ruby || { echo "::error::/usr/bin/ruby is gone; revisit the CI matrix (#176)"; exit 1; }
+          shim="$RUNNER_TEMP/system-ruby-shim"
+          mkdir -p "$shim"
+          ln -s /usr/bin/ruby "$shim/ruby"
+          echo "$shim" >> "$GITHUB_PATH"
+
+      # macOS の更新で /usr/bin/ruby が psych >= 4 になると床側の分岐が dead path 化する
+      # (両行とも psych >= 4) ため、前提が崩れた時点で CI を落として matrix の見直しを迫る
+      # (#176 Low)。
       - name: Assert system Ruby is the psych 3 floor
         if: matrix.ruby == 'system'
         run: |
