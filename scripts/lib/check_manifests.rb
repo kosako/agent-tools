@@ -398,6 +398,38 @@ module CheckManifests
                       "(executable code is not supported yet; blocked on external scanner, see #43)")
         end
       end
+
+      # directory skill は SKILL.md を entrypoint として必ず持つ (M-01)。build は directory
+      # skill の SKILL.md を生成しない (copy_directory_asset が verbatim コピー) ため、無いと
+      # entrypoint 欠落の inert skill が配布される。さらに SKILL.md の frontmatter name は
+      # manifest name と一致必須にする: build が SKILL.md を無改変で配るので、frontmatter で
+      # 別 identity / 広域 trigger を宣言すると「レビューされた identity ≠ 実配備 identity」に
+      # なる (#43 の外部 skill 配布で効く供給側ギャップ)。
+      skill_md = File.join(dir, "SKILL.md")
+      unless File.file?(skill_md)
+        error(path, "directory skill must contain a SKILL.md entrypoint")
+        return
+      end
+      fm_name = skill_frontmatter_name(skill_md)
+      if fm_name && data["name"].is_a?(String) && fm_name != data["name"]
+        error(path, "SKILL.md frontmatter name #{fm_name.inspect} does not match manifest name #{data['name'].inspect}")
+      end
+    end
+
+    # SKILL.md 先頭の YAML frontmatter から name を安全に読む (無ければ nil)。build の
+    # frontmatter 検出 (content.start_with?("---\n", "---\r\n")) と同じ判定に合わせ、閉じ
+    # marker がある well-formed な frontmatter のときだけ name を返す。
+    def skill_frontmatter_name(skill_md)
+      content = File.read(skill_md)
+      return nil unless content.start_with?("---\n", "---\r\n")
+
+      parts = content.sub(/\A---\r?\n/, "").split(/^---\r?\n/, 2)
+      return nil if parts.length < 2
+
+      data = YamlUtil.load(parts[0], skill_md)
+      data.is_a?(Hash) ? data["name"] : nil
+    rescue Psych::Exception
+      nil
     end
 
     # asset source の入れ子・重複所有を fail-closed で禁止する (#177 / H-01)。

@@ -401,6 +401,61 @@ fi
 grep -q "nested or overlapping asset sources are not allowed" "$tmp/out-nested" \
   || fail "expected nested-source fail-closed reason: $(cat "$tmp/out-nested")"
 
+# --- case 4i: directory skill に SKILL.md entrypoint が無ければ fail-closed (M-01) ---
+mkdir -p "$tmp/noentry/shared/skills/personal-noentry-skill"
+echo "# just notes, no SKILL.md" > "$tmp/noentry/shared/skills/personal-noentry-skill/notes.md"
+cat > "$tmp/noentry/shared/skills/personal-noentry-skill/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-noentry-skill
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-noentry-skill
+  format: directory
+EOF
+if "$check" --root "$tmp/noentry" > "$tmp/out-noentry" 2>&1; then
+  fail "check-manifests must reject a directory skill without SKILL.md"
+fi
+grep -q "must contain a SKILL.md entrypoint" "$tmp/out-noentry" \
+  || fail "expected SKILL.md entrypoint fail-closed reason: $(cat "$tmp/out-noentry")"
+
+# --- case 4j: SKILL.md frontmatter name が manifest name と不一致なら fail-closed (M-01) ---
+# build は directory skill の SKILL.md を無改変で配るので、レビューされた identity (manifest
+# name) と実配備 identity (frontmatter name) の乖離を gate で止める。
+mkdir -p "$tmp/idmis/shared/skills/personal-real-skill"
+cat > "$tmp/idmis/shared/skills/personal-real-skill/SKILL.md" <<'EOF'
+---
+name: personal-impostor
+description: claims a different identity than the manifest
+---
+
+# impostor
+EOF
+cat > "$tmp/idmis/shared/skills/personal-real-skill/asset.yml" <<'EOF'
+schema_version: 1
+name: personal-real-skill
+kind: skill
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-real-skill
+  format: directory
+EOF
+if "$check" --root "$tmp/idmis" > "$tmp/out-idmis" 2>&1; then
+  fail "check-manifests must reject a SKILL.md frontmatter name mismatch"
+fi
+grep -q "frontmatter name .* does not match manifest name" "$tmp/out-idmis" \
+  || fail "expected frontmatter-name mismatch reason: $(cat "$tmp/out-idmis")"
+
 # --- case 4f: directory asset 内の symlink は fail-closed (shared/ 脱出防止) ---
 mkdir -p "$tmp/symskill/shared/skills/personal-sym-skill"
 cat > "$tmp/symskill/shared/skills/personal-sym-skill/SKILL.md" <<'EOF'
