@@ -5,6 +5,8 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 build="$script_dir/../build.sh"
 register="$script_dir/../register.sh"
 sync="$script_dir/../sync.sh"
@@ -12,10 +14,6 @@ sync="$script_dir/../sync.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
 run_sync() {
   "$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" "$@"
@@ -278,8 +276,7 @@ printf '#!/bin/sh\necho v1\n' > "$tmp/srepo15/shared/scripts/personal-wrap.sh"
 # script kind は human review 必須 (#147) + 承認は内容に紐づく (#148)。
 # source を書き換える case (v2/v3) の前に呼び直し、現内容で approved を焼き直す。
 write_wrap_manifest() {
-  wrapbid=$(ruby -r"$script_dir/../lib/build" \
-    -e 'puts Build.build_id_for(ARGV[0], "shared/scripts/personal-wrap.sh", "text")' "$tmp/srepo15")
+  wrapbid=$(bid "$tmp/srepo15" shared/scripts/personal-wrap.sh text)
   cat > "$tmp/srepo15/shared/scripts/personal-wrap.asset.yml" <<EOF
 schema_version: 1
 name: personal-wrap
@@ -519,8 +516,7 @@ rm -rf "$tmp/pclaude/skills/personal-handmade" "$tmp/pclaude/skills/personal-lin
 # --- case 24: script orphan は本体 + sidecar marker を対で撤去する ---
 mkdir -p "$tmp/prepo/shared/scripts"
 printf '#!/bin/sh\necho tool\n' > "$tmp/prepo/shared/scripts/personal-ptool.sh"
-ptoolbid=$(ruby -r"$script_dir/../lib/build" \
-  -e 'puts Build.build_id_for(ARGV[0], "shared/scripts/personal-ptool.sh", "text")' "$tmp/prepo")
+ptoolbid=$(bid "$tmp/prepo" shared/scripts/personal-ptool.sh text)
 cat > "$tmp/prepo/shared/scripts/personal-ptool.asset.yml" <<EOF
 schema_version: 1
 name: personal-ptool

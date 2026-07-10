@@ -6,16 +6,14 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 probe="$script_dir/../probe-credential-isolation.sh"
 recipe="$script_dir/../lib/credential_isolation_recipe.sh"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
 # --- case 1: 隔離 recipe が認証源 env を構造的に断つ ---
 # iso_run 内で見える env を書き出し、ambient の認証源が漏れていないことを確認する。

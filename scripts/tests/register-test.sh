@@ -4,25 +4,16 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 register="$script_dir/../register.sh"
 status_sh="$script_dir/../status.sh"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
-jget() {
-  ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0])).dig(*ARGV[1..-1].map { |k| k =~ /\A\d+\z/ ? k.to_i : k }).inspect' "$@"
-}
 
-# 実装と同じ計算で build_id を得る (approved_build_id fixture 用)。
-bid() {
-  ruby -r"$script_dir/../lib/build" -e 'puts Build.build_id_for(ARGV[0], ARGV[1], ARGV[2])' "$@"
-}
 
 write_manifest() {
   # $1: dir, $2: human_review line (空なら review なし)
@@ -333,7 +324,6 @@ EOF
 # --- case 11: repository 本体が register できる (実 repo を変異させないよう tmp コピーで検証) ---
 # 実 repo の catalog.json を直接上書きすると、branch でのテスト実行が実 sync の参照先を
 # 差し替える副作用がある (#150)。検証目的 (実 asset 一式で register が通る) はコピーでも同一。
-repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 mkdir -p "$tmp/repocopy"
 cp -R "$repo_root/shared" "$tmp/repocopy/shared"
 cp -R "$repo_root/generated" "$tmp/repocopy/generated"

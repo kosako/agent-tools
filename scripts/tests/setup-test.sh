@@ -4,15 +4,13 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 setup="$script_dir/../setup.sh"
 
 tmpbase=$(mktemp -d)
 trap 'rm -rf "$tmpbase"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
 # root / home に空白を含めて、引数 forwarding の quoting を検証する
 # ("Application Support" のような空白入り path での破綻を捕まえる)。

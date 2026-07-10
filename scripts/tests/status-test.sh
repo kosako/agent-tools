@@ -5,6 +5,8 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 build="$script_dir/../build.sh"
 sync="$script_dir/../sync.sh"
 status_sh="$script_dir/../status.sh"
@@ -12,19 +14,12 @@ status_sh="$script_dir/../status.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
 run_status() {
   "$status_sh" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --json
 }
 
 # JSON から値を取り出す。
-jget() {
-  ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0])).dig(*ARGV[1..-1].map { |k| k =~ /\A\d+\z/ ? k.to_i : k }).inspect' "$@"
-}
 
 # --- fixture repo ---
 mkdir -p "$tmp/repo/shared/workflows" "$tmp/codex/skills" "$tmp/claude/skills"
@@ -137,7 +132,6 @@ grep -q "$tmp" "$tmp/s3" && fail "status output must not contain absolute paths"
 grep -qiE "token|credential|api[_-]?key" "$tmp/s3" && fail "status output must not contain secret-like keys"
 
 # --- case 9: repository 本体で contract JSON が出る ---
-repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$status_sh" --root "$repo_root" --json > "$tmp/s9" 2>&1 || fail "repo status should succeed"
 [ "$(jget "$tmp/s9" repo present)" = "true" ] || fail "repo.present should be true"
 
@@ -209,8 +203,7 @@ rm -f "$tmp/irepo/shared/instructions/personal-ops.md"
 mkdir -p "$tmp/screpo/shared/scripts" "$tmp/sccodex" "$tmp/scclaude"
 printf '#!/bin/sh\necho hi\n' > "$tmp/screpo/shared/scripts/personal-wrap.sh"
 # script kind は human review 必須 (#147) + 承認は内容に紐づく (#148)。
-scbid=$(ruby -r"$script_dir/../lib/build" \
-  -e 'puts Build.build_id_for(ARGV[0], "shared/scripts/personal-wrap.sh", "text")' "$tmp/screpo")
+scbid=$(bid "$tmp/screpo" shared/scripts/personal-wrap.sh text)
 cat > "$tmp/screpo/shared/scripts/personal-wrap.asset.yml" <<EOF
 schema_version: 1
 name: personal-wrap

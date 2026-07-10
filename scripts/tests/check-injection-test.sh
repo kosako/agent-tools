@@ -4,15 +4,13 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 check="$script_dir/../check-injection.sh"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
 # --- case 1: clean asset は pass する ---
 mkdir -p "$tmp/clean/shared/workflows"
@@ -69,7 +67,6 @@ grep -q "human review required" "$tmp/out-medium" \
 # medium (runtime-state 等) は manifest の human_review:approved で register が承認を
 # gate するため repo に存在し得る (exit 3)。ここでの invariant は「high (registration
 # fail) が無いこと」= exit 1/2 にならないこと。medium↔承認の照合は register が担う。
-repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 status=0
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 || status=$?
 case "$status" in

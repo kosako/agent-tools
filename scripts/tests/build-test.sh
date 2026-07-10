@@ -4,15 +4,13 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 build="$script_dir/../build.sh"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
 # --- case 1: single-file asset と directory asset を build できる ---
 mkdir -p "$tmp/ok/shared/workflows" "$tmp/ok/shared/skills/personal-demo-skill"
@@ -475,7 +473,6 @@ grep -q "kept (unmanaged, no agent-tools marker): generated/codex/scripts/person
 # --- case 5: repository 本体が build できる (実 repo を変異させないよう tmp コピーで検証) ---
 # 実 repo の generated/ を直接上書きすると、branch でのテスト実行が実 sync の参照先を
 # 差し替える副作用がある (#150)。検証目的 (実 asset 一式で build が通る) はコピーでも同一。
-repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 mkdir -p "$tmp/repocopy"
 cp -R "$repo_root/shared" "$tmp/repocopy/shared"
 "$build" --root "$tmp/repocopy" --quiet > "$tmp/out-repo" 2>&1 \
@@ -554,8 +551,8 @@ bid_after=$(grep build_id "$dotmarker")
 mkdir -p "$tmp/frame/dirA" "$tmp/frame/dirB"
 printf 'c' > "$tmp/frame/dirA/ab"
 printf 'bc' > "$tmp/frame/dirB/a"
-bid_a=$(ruby -r"$script_dir/../lib/build" -e 'puts Build.build_id_for(ARGV[0], "dirA", "directory")' "$tmp/frame")
-bid_b=$(ruby -r"$script_dir/../lib/build" -e 'puts Build.build_id_for(ARGV[0], "dirB", "directory")' "$tmp/frame")
+bid_a=$(bid "$tmp/frame" dirA directory)
+bid_b=$(bid "$tmp/frame" dirB directory)
 [ "$bid_a" != "$bid_b" ] \
   || fail "length-framing must distinguish trees that collide under unframed concat: $bid_a"
 echo "$bid_a" | grep -qE '^sha256:[0-9a-f]{64}$' \
@@ -570,8 +567,8 @@ mkdir -p "$tmp/xfmt/dir"
 printf 'payload' > "$tmp/xfmt/dir/a"
 # 単一ファイル側の本文 = frame("/a") + frame("payload") (4-byte BE 長 + bytes)
 ruby -e 'File.binwrite(ARGV[0], [2].pack("N") + "/a" + [7].pack("N") + "payload")' "$tmp/xfmt/asfile"
-bid_dir=$(ruby -r"$script_dir/../lib/build" -e 'puts Build.build_id_for(ARGV[0], "dir", "directory")' "$tmp/xfmt")
-bid_file=$(ruby -r"$script_dir/../lib/build" -e 'puts Build.build_id_for(ARGV[0], "asfile", "text")' "$tmp/xfmt")
+bid_dir=$(bid "$tmp/xfmt" dir directory)
+bid_file=$(bid "$tmp/xfmt" asfile text)
 [ "$bid_dir" != "$bid_file" ] \
   || fail "directory and single-file build_id must be domain-separated: $bid_dir"
 

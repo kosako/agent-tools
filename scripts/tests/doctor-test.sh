@@ -5,6 +5,8 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 build="$script_dir/../build.sh"
 sync="$script_dir/../sync.sh"
 doctor="$script_dir/../doctor.sh"
@@ -12,10 +14,6 @@ doctor="$script_dir/../doctor.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
 run_doctor() {
   "$doctor" --root "$tmp/repo" --codex-home "$tmp/codex" \

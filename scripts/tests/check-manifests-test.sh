@@ -4,15 +4,13 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 check="$script_dir/../check-manifests.sh"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
 # --- case 1: valid single-file asset + valid directory asset ---
 mkdir -p "$tmp/valid/shared/workflows" "$tmp/valid/shared/skills/personal-demo-skill"
@@ -933,7 +931,6 @@ grep -q "source.path must be under shared/" "$tmp/out-outside" \
   || fail "expected outside-shared rejection: $(cat "$tmp/out-outside")"
 
 # --- case 5: repository 本体の manifest が pass する ---
-repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 "$check" --root "$repo_root" --quiet > "$tmp/out-repo" 2>&1 \
   || fail "repository manifests should pass: $(cat "$tmp/out-repo")"
 

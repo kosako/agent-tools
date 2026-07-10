@@ -5,6 +5,8 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 build="$script_dir/../build.sh"
 register="$script_dir/../register.sh"
 connect="$script_dir/../connect.sh"
@@ -12,10 +14,6 @@ connect="$script_dir/../connect.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
 run_connect() {
   "$connect" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" "$@"

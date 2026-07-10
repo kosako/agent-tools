@@ -6,7 +6,8 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 src="$repo_root/shared/scripts/personal-safe-gh.rb"
 
 tmp=$(mktemp -d)

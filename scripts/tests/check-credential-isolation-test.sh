@@ -4,15 +4,13 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 check="$script_dir/../check-credential-isolation.sh"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
 # usage: run_case <name> <json-file> <expected-exit> [grep-pattern]
 # 直近の出力は $tmp/out に残る (追加 assert 用)。
