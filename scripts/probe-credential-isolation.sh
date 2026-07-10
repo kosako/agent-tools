@@ -70,6 +70,12 @@ if [ ! -f "$config" ]; then
 fi
 
 # config は private target (owner/repo・URL) の宣言のみ。secret は含めない前提。
+# 注意: この config は data ではなく shell として source される (KEY=value 以外に関数
+# 定義も評価され、iso_run / amb_run / iso_resolve_bin を override できてしまう)。判定を
+# 捏造されないよう、この file は probe 実行者本人が所有する信頼できる local file
+# ($HOME/.config 配下・repo 外) に限る。attacker-supplied な file を --config に渡さない
+# (H-03: config を書ける主体は results.json も runner 本体も書き換えられるので trust
+# boundary は跨がないが、data を装う label と実挙動の乖離をここで honest-label する)。
 # shellcheck source=/dev/null
 . "$config"
 
@@ -108,7 +114,8 @@ fi
 # gh:        gh api repos/<repo> --silent
 # git-https: git ls-remote <https-url>
 # git-ssh:   git ls-remote <ssh-url>
-# curl:      curl -sfS -o /dev/null <api-url>  (認証源 = ~/.netrc)
+# curl:      curl -sfS --netrc -o /dev/null <api-url>  (認証源 = ~/.netrc。--netrc が
+#            無いと curl は netrc を一切参照せず、この channel が netrc auth を行使しない, #180)
 
 # negative probe: 隔離 session で command を実行し認証成否 (true/false) を返す。
 run_negative() {
@@ -138,7 +145,7 @@ if [ "$dry_run" = true ]; then
     echo "# git-ssh   skipped: PROBE_GIT_SSH 未設定 (opt-in channel)"
   fi
   if [ "$probe_curl" = true ]; then
-    echo "# curl      cmd: $CURL_BIN -sfS -o /dev/null $PROBE_CURL_URL"
+    echo "# curl      cmd: $CURL_BIN -sfS --netrc -o /dev/null $PROBE_CURL_URL"
   else
     echo "# curl      skipped: PROBE_CURL_URL 未設定 (opt-in channel)"
   fi
@@ -154,8 +161,10 @@ if [ "$probe_ssh" = true ]; then
   giths_pos=$(run_positive "$GIT_BIN" ls-remote "$PROBE_GIT_SSH")
 fi
 if [ "$probe_curl" = true ]; then
-  curl_neg=$(run_negative "$CURL_BIN" -sfS -o /dev/null "$PROBE_CURL_URL")
-  curl_pos=$(run_positive "$CURL_BIN" -sfS -o /dev/null "$PROBE_CURL_URL")
+  # --netrc を明示しないと curl は ~/.netrc を参照しない。この channel の認証源は netrc
+  # なので必須 (#180 M-07)。negative 側は recipe が NETRC=/dev/null で netrc を遮断する。
+  curl_neg=$(run_negative "$CURL_BIN" -sfS --netrc -o /dev/null "$PROBE_CURL_URL")
+  curl_pos=$(run_positive "$CURL_BIN" -sfS --netrc -o /dev/null "$PROBE_CURL_URL")
 fi
 
 # one JSON probe object を出力する。第 5 引数が空でなければ末尾にカンマを付ける。

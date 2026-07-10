@@ -124,6 +124,9 @@ grep -q "negative = iso_run" "$tmp/out-dry" || fail "dry-run should describe neg
 grep -q "positive = amb_run" "$tmp/out-dry" || fail "dry-run should describe positive as amb_run"
 grep -q " ls-remote https://github.com/owner/private-repo.git" "$tmp/out-dry" \
   || fail "dry-run git-https cmd should be plain ls-remote (no per-invocation flags)"
+# curl channel は --netrc を明示する (無いと ~/.netrc を参照せず netrc auth を行使しない, #180)
+grep -qE "^# curl .*cmd:.* --netrc " "$tmp/out-dry" \
+  || fail "curl cmd should pass --netrc (netrc is the curl channel's auth source): $(grep '# curl' "$tmp/out-dry")"
 grep -q "credential.helper=" "$tmp/out-dry" && fail "probe must not pass per-invocation git -c flags (breaks operation identity)"
 # executable identity: git/gh は canonical PATH で解決した絶対パスに pin される (#168 レビュー)
 grep -q "pinned binaries" "$tmp/out-dry" || fail "dry-run should report pinned binaries"
