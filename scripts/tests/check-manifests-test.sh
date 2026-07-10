@@ -799,6 +799,39 @@ fi
 grep -q "artifact_kind: script is not allowed" "$tmp/out-oscript" \
   || fail "expected override-into-script error: $(cat "$tmp/out-oscript")"
 
+# --- case: approved asset の targets が複数 kind に解決される構成は reject (#184) ---
+# scalar の approved_artifact_kind では全 target の承認を満たせないため、silent に
+# 片側 pending へ落とすのでなく「kind ごとに分割せよ」と manifest error で要求する。
+mkdir -p "$tmp/mixk/shared/scripts"
+printf '#!/bin/sh\necho hi\n' > "$tmp/mixk/shared/scripts/personal-mixk.sh"
+cat > "$tmp/mixk/shared/scripts/personal-mixk.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-mixk
+kind: script
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+review:
+  human_review: approved
+  approved_build_id: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  approved_artifact_kind: script
+compatibility:
+  claude-code:
+    artifact_kind: skill
+source:
+  path: shared/scripts/personal-mixk.sh
+  format: text
+EOF
+if "$check" --root "$tmp/mixk" > "$tmp/out-mixk" 2>&1; then
+  fail "check-manifests must reject approved asset with mixed resolved kinds"
+fi
+grep -q "requires all targets to resolve to a single artifact_kind" "$tmp/out-mixk" \
+  || fail "expected mixed-kind approval error: $(cat "$tmp/out-mixk")"
+
 # --- case: compatibility フィールドの検証 (#149)。typo / 不明 tool / 型不正を reject ---
 mkdir -p "$tmp/compat/shared/workflows"
 echo "# demo" > "$tmp/compat/shared/workflows/personal-compat.md"

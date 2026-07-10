@@ -23,5 +23,5 @@ review:
   # 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
   # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
   human_review: approved
-  approved_build_id: sha256:40bcb53c26db8bd61726f7278351e68cc12d99494bd7eb302030ef50b1c9e47f
+  approved_build_id: sha256:6a5dcafd982ed10ff43857a5703f2e4cbcfecfea5ae62dccb6bf9969c8fdaccd
   approved_artifact_kind: skill

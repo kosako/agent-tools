@@ -182,8 +182,11 @@ usage: register.sh [--root DIR] [--quiet]
 
 - gate は build と同じ。manifest error / high finding で fail し、catalog を更新しない。
 - medium finding は manifest の `review.human_review` と asset 単位で突き合わせる。承認は
-  `review.approved_build_id` が現在の build_id と一致するときだけ効く (内容に紐づく承認, #148)。
-- exit code: 0 (全 registered) / 3 (human_review_required あり) / 1 (gate fail)。
+  `review.approved_build_id` が現在の build_id と一致し、かつ `review.approved_artifact_kind`
+  が target の resolve 済み artifact_kind と一致するときだけ効く (内容と配布形態に紐づく
+  承認, #148 #184)。
+- exit code: 0 (human_review_required なし) / 3 (human_review_required あり) / 1 (gate fail)。
+  unsupported は exit code に影響しない。
 - 書き込みは `generated/catalog.json` のみ。
 - self-test: `tests/register-test.sh`
 

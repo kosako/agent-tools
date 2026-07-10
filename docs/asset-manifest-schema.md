@@ -214,7 +214,7 @@ review:
   human_review: pending
 compatibility:
   codex:
-    artifact_kind: script
+    artifact_kind: instruction
 ```
 
 ### `summary`
@@ -243,6 +243,9 @@ allowed values:
 その target の解決済み artifact_kind と一致するときだけ効きます。内容が同じでも kind を
 変えれば (例: skill → script = 実行ファイル配布) 承認は失効し、再レビューが要ります
 ([register-catalog.md](register-catalog.md) の #148 節)。
+`human_review: approved` の asset は **全 targets が単一の artifact_kind に解決される**
+必要があります (混在は scalar の `approved_artifact_kind` で承認を満たせないため
+check-manifests が error にする。kind ごとに asset を分割する)。
 
 機械計測の結果 (static check 等) は manifest に書かず [catalog](register-catalog.md) 側を
 真実とします。旧 `static_check` / `llm_review` フィールドは消費者不在の informational

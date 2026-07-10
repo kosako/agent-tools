@@ -264,19 +264,28 @@ module Build
     end
   end
 
+  # build_id の digest 入力に最初に混ぜる domain tag。scheme を変えたら v を上げる
+  # (全 build_id / 承認が失効し再取得になる)。
+  BUILD_ID_DOMAIN = "agent-tools/build_id/v2"
+
   # source content から決定的な build_id を作る。status の stale 判定でも使う。
   #
   # 形式は full SHA-256 (64 hex, #184)。旧形式 (先頭 12 hex 切り詰め) は外部由来の悪性
-  # コンテンツを脅威に置くと衝突探索の余地が大きすぎるため廃止した。directory は各 part
-  # (相対 path / file bytes) を length-framing して連結する — 無区切り連結だと
-  # 「path "/ab" + content "c"」と「path "/a" + content "bc"」のような異なる tree が
-  # 同一 digest 入力になる構造的衝突が可能 (#184 回帰テストあり)。
+  # コンテンツを脅威に置くと衝突探索の余地が大きすぎるため廃止した。digest 入力は
+  # domain tag + 経路 tag ("directory" / "file") + length-framed な parts:
+  # - 無区切り連結だと「path "/ab" + content "c"」と「path "/a" + content "bc"」のような
+  #   異なる tree が同一 digest 入力になる構造的衝突が可能 (#184 回帰テストあり)。
+  # - 経路 tag が無いと「directory の framed byte 列」をそのまま本文に持つ単一ファイルが
+  #   同じ build_id になり、format を差し替えて旧承認を再利用できる
+  #   (#191 レビュー H02-REVIEW-01・cross-format 回帰テストあり)。
   def self.build_id_for(root, source, format)
+    digest = Digest::SHA256.new
+    digest_framed(digest, BUILD_ID_DOMAIN)
     if format == "directory"
+      digest_framed(digest, "directory")
       # source.path は末尾スラッシュ付きでも check-manifests を通る (chomp して検証)。
       # 相対 path 計算 (evals 除外) が末尾スラッシュで壊れないよう正規化する。
       src_dir = File.join(root, source).chomp("/")
-      digest = Digest::SHA256.new
       # copy (copy_directory_asset は Dir.children + cp_r で dotfile も配る) と揃えるため
       # FNM_DOTMATCH で dotfile も hash に含める。含めないと dotfile だけ変えた更新が
       # build_id 不変となり sync が up-to-date で skip し、永久に配布されない。
@@ -292,10 +301,14 @@ module Build
         digest_framed(digest, f.sub(src_dir, ""))
         digest_framed(digest, File.read(f, mode: "rb"))
       end
-      "sha256:#{digest.hexdigest}"
     else
-      "sha256:#{Digest::SHA256.hexdigest(File.read(File.join(root, source), mode: "rb"))}"
+      # 非 directory format (markdown / yaml / ... / text) は build が同じ単一ファイル
+      # 経路で扱うため、経路 tag も共通の "file" (format 文字列の相互差し替えは配布物を
+      # 変えず、承認を無駄に失効させない)。
+      digest_framed(digest, "file")
+      digest_framed(digest, File.read(File.join(root, source), mode: "rb"))
     end
+    "sha256:#{digest.hexdigest}"
   end
 
   # digest に length-framed な part を足す (4-byte big-endian の byte 長 + bytes)。

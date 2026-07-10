@@ -122,8 +122,9 @@ medium finding は「human review 必須」を意味する。register は findin
 asset の source path に対応づけ、manifest の `review.human_review` と突き合わせる。
 
 - `review.human_review: approved` **かつ** `review.approved_build_id` が現在の build_id と
-  一致 → その asset は `registered`。
-- それ以外 (`pending` / 欠落 / approved_build_id 不一致) → その asset は
+  一致 **かつ** `review.approved_artifact_kind` が target の resolve 済み artifact_kind と
+  一致 → その target-artifact は `registered`。
+- それ以外 (`pending` / 欠落 / approved_build_id・approved_artifact_kind 不一致) →
   `human_review_required`。
 - `review.human_review: rejected` の asset は、finding の有無によらず register fail
   とする (reject 済み asset が shared/ に残っている状態は矛盾なので、修正か削除を促す)。

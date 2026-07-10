@@ -563,4 +563,16 @@ echo "$bid_a" | grep -qE '^sha256:[0-9a-f]{64}$' \
 echo "$bid_b" | grep -qE '^sha256:[0-9a-f]{64}$' \
   || fail "build_id must be a full 64-hex sha256, got: $bid_b"
 
+# --- case: directory と単一ファイルの build_id は domain separation される (#191 H02-REVIEW-01) ---
+# 経路 tag が無いと、directory {"/a" => "payload"} の framed byte 列をそのまま本文に持つ
+# 単一ファイルが同じ build_id になり、format 差し替えで旧承認を再利用できる回帰。
+mkdir -p "$tmp/xfmt/dir"
+printf 'payload' > "$tmp/xfmt/dir/a"
+# 単一ファイル側の本文 = frame("/a") + frame("payload") (4-byte BE 長 + bytes)
+ruby -e 'File.binwrite(ARGV[0], [2].pack("N") + "/a" + [7].pack("N") + "payload")' "$tmp/xfmt/asfile"
+bid_dir=$(ruby -r"$script_dir/../lib/build" -e 'puts Build.build_id_for(ARGV[0], "dir", "directory")' "$tmp/xfmt")
+bid_file=$(ruby -r"$script_dir/../lib/build" -e 'puts Build.build_id_for(ARGV[0], "asfile", "text")' "$tmp/xfmt")
+[ "$bid_dir" != "$bid_file" ] \
+  || fail "directory and single-file build_id must be domain-separated: $bid_dir"
+
 echo "ok: build self-test passed"

@@ -99,6 +99,7 @@ module CheckManifests
       @declared_names[data["name"]] << path if data["name"].is_a?(String)
       collect_instruction_targets(data, path)
       check_directory_skill_contents(data, path)
+      check_approved_kind_uniformity(data, path)
 
       validate_schema_version(path, data["schema_version"]) if data.key?("schema_version")
       validate_name(path, data["name"]) if data.key?("name")
@@ -299,6 +300,23 @@ module CheckManifests
           error(path, "directory asset must not contain special files: #{rel}")
         end
       end
+    end
+
+    # 承認は (build_id, artifact_kind) の対で asset 単位に 1 つ (#184)。targets が複数の
+    # artifact_kind に解決される asset は、scalar の approved_artifact_kind では全 target の
+    # 承認を満たせず、必ずどれかが human_review_required に落ちる。register で silent に
+    # 片側 pending へ落とすのでなく、manifest error で「kind ごとに asset を分割する」ことを
+    # 明示的に要求する (#191 レビュー should)。
+    def check_approved_kind_uniformity(data, path)
+      return unless data["review"].is_a?(Hash) && data["review"]["human_review"] == "approved"
+      return unless data["targets"].is_a?(Array)
+
+      asset = { kind: data["kind"], compatibility: data["compatibility"] }
+      kinds = data["targets"].map { |tool| ArtifactTargets.resolve(asset, tool) }.uniq
+      return if kinds.size <= 1
+
+      error(path, "human_review: approved requires all targets to resolve to a single " \
+                  "artifact_kind (got #{kinds.join(', ')}); split the asset per kind (#184)")
     end
 
     def validate_review(path, value)
