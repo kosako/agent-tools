@@ -19,6 +19,7 @@ require_relative "artifact_targets"
 require_relative "catalog"
 require_relative "yaml_marker"
 require_relative "instruction_marker"
+require_relative "cli"
 
 module Status
   CONTRACT_VERSION = 2
@@ -199,27 +200,16 @@ module Status
   end
 
   def self.main(argv)
-    root = Dir.pwd
-    json = false
+    opts = Cli.parse(argv, usage: USAGE,
+                     bool_flags: %w[--json],
+                     value_flags: %w[--root --codex-home --claude-home])
+    return 0 if opts == :help
+
+    root = opts["--root"] || Dir.pwd
+    json = opts.key?("--json")
     homes = ArtifactTargets.default_homes
-    until argv.empty?
-      case (arg = argv.shift)
-      when "--root"
-        root = argv.shift or abort_usage
-      when "--json"
-        json = true
-      when "--codex-home"
-        homes["codex"] = File.expand_path(argv.shift || abort_usage)
-      when "--claude-home"
-        homes["claude-code"] = File.expand_path(argv.shift || abort_usage)
-      when "-h", "--help"
-        print_usage
-        return 0
-      else
-        warn "unknown option: #{arg}"
-        abort_usage
-      end
-    end
+    homes["codex"] = File.expand_path(opts["--codex-home"]) if opts["--codex-home"]
+    homes["claude-code"] = File.expand_path(opts["--claude-home"]) if opts["--claude-home"]
 
     report = Runner.new(root, homes).report
     if json
@@ -242,14 +232,7 @@ module Status
     end
   end
 
-  def self.print_usage
-    puts "usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR]"
-  end
-
-  def self.abort_usage
-    print_usage
-    exit 2
-  end
+  USAGE = "usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR]"
 end
 
 exit Status.main(ARGV) if $PROGRAM_NAME == __FILE__

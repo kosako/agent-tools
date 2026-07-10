@@ -17,6 +17,7 @@ require_relative "gate"
 require_relative "check_injection"
 require_relative "build"
 require_relative "artifact_targets"
+require_relative "cli"
 
 module Register
   class Error < StandardError; end
@@ -170,22 +171,11 @@ module Register
   end
 
   def self.main(argv)
-    root = Dir.pwd
-    quiet = false
-    until argv.empty?
-      case (arg = argv.shift)
-      when "--root"
-        root = argv.shift or abort_usage
-      when "--quiet"
-        quiet = true
-      when "-h", "--help"
-        print_usage
-        return 0
-      else
-        warn "unknown option: #{arg}"
-        abort_usage
-      end
-    end
+    opts = Cli.parse(argv, usage: USAGE, bool_flags: %w[--quiet], value_flags: %w[--root])
+    return 0 if opts == :help
+
+    root = opts["--root"] || Dir.pwd
+    quiet = opts.key?("--quiet")
 
     runner = Runner.new(root)
     begin
@@ -208,14 +198,7 @@ module Register
     pending.zero? ? 0 : 3
   end
 
-  def self.print_usage
-    puts "usage: register.sh [--root DIR] [--quiet]"
-  end
-
-  def self.abort_usage
-    print_usage
-    exit 2
-  end
+  USAGE = "usage: register.sh [--root DIR] [--quiet]"
 end
 
 exit Register.main(ARGV) if $PROGRAM_NAME == __FILE__

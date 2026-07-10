@@ -17,6 +17,7 @@ require_relative "gate"
 require_relative "artifact_targets"
 require_relative "instruction_marker"
 require_relative "yaml_marker"
+require_relative "cli"
 
 module Build
   TOOLS = ArtifactTargets::TOOLS
@@ -305,25 +306,12 @@ module Build
   private_class_method :digest_framed
 
   def self.main(argv)
-    root = Dir.pwd
-    quiet = false
-    prune = false
-    until argv.empty?
-      case (arg = argv.shift)
-      when "--root"
-        root = argv.shift or abort_usage
-      when "--quiet"
-        quiet = true
-      when "--prune"
-        prune = true
-      when "-h", "--help"
-        print_usage
-        return 0
-      else
-        warn "unknown option: #{arg}"
-        abort_usage
-      end
-    end
+    opts = Cli.parse(argv, usage: USAGE, bool_flags: %w[--quiet --prune], value_flags: %w[--root])
+    return 0 if opts == :help
+
+    root = opts["--root"] || Dir.pwd
+    quiet = opts.key?("--quiet")
+    prune = opts.key?("--prune")
 
     unless run_gates(root)
       warn "fail: pre-build gates did not pass; nothing was generated"
@@ -351,14 +339,7 @@ module Build
     errors.empty?
   end
 
-  def self.print_usage
-    puts "usage: build.sh [--root DIR] [--prune] [--quiet]"
-  end
-
-  def self.abort_usage
-    print_usage
-    exit 2
-  end
+  USAGE = "usage: build.sh [--root DIR] [--prune] [--quiet]"
 end
 
 exit Build.main(ARGV) if $PROGRAM_NAME == __FILE__
