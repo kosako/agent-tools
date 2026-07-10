@@ -201,37 +201,45 @@ boundary でない)。
   Codex 固有の運用上の限界 (honest):
   - **未 trust の hook は無警告で silent skip** される (fail-open・実機確認)。trust は hook 単位の
     `trusted_hash` として `~/.codex/config.toml` の `[hooks.state]` に記録され、初回は `/hooks` での
-    対話 trust が要る (公式 docs)。hash の対象範囲 (hook 定義のみか script 内容を含むか = 再配備で
-    trust が剥がれるか) は**未検証**。つまり Claude 側の「登録漏れ = 不活性」に加えて
+    対話 trust が要る (公式 docs)。つまり Claude 側の「登録漏れ = 不活性」に加えて
     **「登録済みでも未 trust = 不活性」**の段がある。
-    - **検証と本項の更新 (反映ループ)**: この未検証点は dotfiles#181 (Codex 登録) の受け入れ確認で
-      決着する — 登録 → `/hooks` trust → **hook body に観測可能な変更 (= build_id が変わる差分。
-      steer 文言の一時変更など) を入れて再配備 (agent-tools `build` → `sync --apply`) し、trust
-      再要求なしで steer が出続けるか**を見る。**内容不変の再配備 (`sync --apply` のみ) では hash も
-      不変で剥離が起きず判別できない**点に注意 (これが本 hash 範囲テストの肝)。判定: 出続ける =
-      trust hash は hook 定義 (command path 等) のみ / 出なくなる = script 内容を含み再配備で剥離。
-      **結果が出たら本項の「未検証」を実測に更新する** (docs drift 防止・反映先はこの段落)。
-    - **script 内容を含む場合の運用対処**: agent-tools が hook body を更新して再配備するたびに
-      Codex 側 trust が剥がれ、**再 trust するまで無警告で不活性**になる。対処は 2 択で、どちらを
-      採るかは dotfiles 側の登録判断: (a) 再配備を伴う agent-tools 側の hook 更新を dotfiles へ
-      通知し `/hooks` 再 trust を運用フローに組み込む (agent-tools 側 = source 更新時に
-      `approved_build_id` を再計算する #148 の内容紐づけが「再 trust が要る変更」の signal になる)、
-      または (b) 対話 trust の要らない managed hooks (system 層) で登録し trust 剥離自体を無くす
-      (ただし上記 `allow_managed_hooks_only` の副作用に注意)。
-  - hook 読み込みは **user 層 (`~/.codex/hooks.json` / `config.toml` の `[hooks]`) のみ実機で確認**。
+    - **trust hash の対象範囲 (実測済み 2026-07-10, Codex 0.142.5 — dotfiles#181 反映ループ)**:
+      **hook 定義のみ。script body の内容を含まない = body 再配備で trust は剥離しない**。
+      実測: dotfiles#181 完了状態 (user 層 `~/.codex/hooks.json` 登録 + `/hooks` trust 済み。
+      state key は `"<hooks.json の絶対 path>:pre_tool_use:0:0"` 形式で hook 定義を指す) を起点に、
+      deployed body の steer 文言へ観測 marker を注入 (内容 hash が変化) → 再 trust なしで
+      marker 入り steer が verbatim で届き続け、`trusted_hash` は全工程で不変。復元も byte-identical
+      を確認。公式 docs (developers.openai.com/codex/hooks) の「trust は hook 定義の hash に記録」
+      とも一致。**帰結: agent-tools の hook body 更新・再配備に再 trust 運用は不要**
+      (再 trust が要るのは dotfiles 側が hooks.json の定義 — command path / timeout 等 — を
+      変えたときだけ)。
+    - **裏面の honest-label (body 改竄は trust の守備範囲外)**: trust hash が body を含まない
+      ということは、**Codex の trust は deployed body の改竄を検出しない** (改変された body も
+      trusted のまま実行される)。body の integrity は Codex trust では守られず、agent-tools 側の
+      内容紐づけ承認 (`approved_build_id`、#148) と sync の管理が担う。hook 自体が fail-open
+      steering なので防御表の強度ラベルは変わらないが、「trust したから body も安全」と
+      読み違えないこと。
+  - hook 読み込みは **user 層のみ実機で確認**。登録の実配線は dotfiles#181 で **user 層の別ファイル
+    `~/.codex/hooks.json`** に確定 (config.toml の `[hooks]` は codex 自身が `[hooks.state]` を
+    書き込む live ファイルのため dotfiles は触らない、という dotfiles 側の裁定)。
     project 層 (`<repo>/.codex/hooks.json`) は公式 docs に記載があるが **0.142.2 実機では scan
     されない** (docs と実装の乖離)。登録は user 層 = dotfiles managed に置く。
+  - **hooks.json は最小形 `{"hooks": {...}}` に限る (0.142.5 実測 — dotfiles#185)**: Codex
+    0.142.5 は hooks.json の**未知 top-level キーを parse error にする** (top-level `description`
+    で hook が読み込めなくなった。0.142.2 の plugin 実例は description を持つが現行版で弾かれる)。
+    dotfiles 側は rendered JSON を最小形に固定し、top-level キー集合をテストで pin 済み。
   - system 層の managed hooks (`/etc/codex/requirements.toml`) は policy trust (対話 trust 不要) だが
     root 権限が要り、`allow_managed_hooks_only = true` は **user / project / plugin 層の hooks を
     すべて無効化する** (= user 層に登録する本 hook 自体も殺す) 副作用がある。
     採否は dotfiles 側の登録判断 (control plane)。
 - 純粋 match ロジックは `scripts/tests/safe-gh-hook-test.sh` で deterministic に検証。実 hook 配線
-  (どの event に結ぶか)は dotfiles の hook 宣言 (Claude: settings.json / Codex: config.toml 等
-  user 層) = 実機(下記「検証境界」)。
+  (どの event に結ぶか)は dotfiles の hook 宣言 (Claude: settings.json / Codex:
+  `~/.codex/hooks.json`) = 実機(下記「検証境界」)。
 - **登録の所有と配備先パス契約 (実体 = agent-tools / 登録 = dotfiles)**: hook script の実体と home
   配布は agent-tools が持ち、hook 登録 (宣言) は dotfiles が持つ — Claude Code は settings.json の
-  template (2026-07-07 登録済み・実機で発火確認)、Codex は `~/.codex/config.toml` 等 user 層の
-  hook 宣言 (登録層の選定含め dotfiles 側の判断)。所有を明示しないとどちらの repo も登録を持たず
+  template (2026-07-07 登録済み・実機で発火確認)、Codex は user 層 `~/.codex/hooks.json` の
+  template (dotfiles#181、2026-07-10 登録 + `/hooks` trust + 実機で発火確認済み。これで
+  **steering 層は両 tool で実機稼働**)。所有を明示しないとどちらの repo も登録を持たず
   宙に浮く (実際に 2026-07-02 の監査まで未登録 = 不活性だった)。**登録が無い間この hook は不活性**で
   steering は一切効かない (fail-open の帰結・honest-label。Codex はさらに未 trust でも不活性 —
   上記 Codex parity 項)。dotfiles は配備先の絶対 path
