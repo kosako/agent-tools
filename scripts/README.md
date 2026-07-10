@@ -215,11 +215,11 @@ kind / tool の知識は `lib/artifact_targets.rb` に集約されているが (
 7. tests: `tests/build-test.sh` / `sync-test.sh` / `status-test.sh` /
    `register-test.sh` に既存 kind と対称のケースを足す。
 
-**tool を追加するとき** (v1 は 2 tool 固定。一元化は #152 low として将来):
+**tool を追加するとき** (v1 は 2 tool 固定。tool 語彙と home 既定値は #192 で一元化済み):
 
-1. tool 一覧: `lib/build.rb` / `lib/sync.rb` の `TOOLS`、
-   `lib/check_manifests.rb` の `TARGETS`。
-2. homes 既定値と CLI flag: `sync` / `connect` / `status` / `doctor` の `main`。
+1. tool 一覧と home 既定値: `lib/artifact_targets.rb` の `TOOLS` と `default_homes`
+   (build / sync / check-manifests / status / doctor はここを参照する)。
+2. CLI flag: `sync` / `connect` / `status` / `doctor` の `main` に `--<tool>-home` を足す。
 3. instruction を配るなら `ArtifactTargets::INSTRUCTION_FILENAMES` と connect の
    所有戦略 (import 対応可否)。
 
