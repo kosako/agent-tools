@@ -12,18 +12,11 @@ src="$repo_root/shared/scripts/personal-safe-gh-hook.rb"
 
 [ -f "$src" ] || { echo "FAIL: missing $src" >&2; exit 1; }
 
-ruby - "$src" <<'RUBY'
+# check / @failed は lib/check_helper.rb を -r で読み込んで共有する。
+ruby -r"$script_dir/lib/check_helper" - "$src" <<'RUBY'
 require "json"
 require "stringio"
 require ARGV[0]
-
-@failed = 0
-def check(name, cond)
-  return if cond
-
-  warn "FAIL: #{name}"
-  @failed += 1
-end
 
 # ---- untrusted_gh_read_reason: 検出する (positive) ----
 def reason(cmd)

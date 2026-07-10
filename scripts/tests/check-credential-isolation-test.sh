@@ -24,147 +24,130 @@ run_case() {
   fi
 }
 
-# --- case 1: 4 canonical channel が同一 operation ペアで揃い polarity 正なら pass (exit 0) ---
-cat > "$tmp/pass.json" <<'EOF'
-{
-  "probes": [
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "curl",      "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "curl",      "mode": "positive", "operation": "read-priv", "authenticated": true}
-  ]
+# usage: probe_line <channel> <mode> <operation> <authenticated>
+# probe 1 件分の JSON object を 1 行で出す (write_probes に渡す)。
+probe_line() {
+  printf '{"channel": "%s", "mode": "%s", "operation": "%s", "authenticated": %s}' \
+    "$1" "$2" "$3" "$4"
 }
-EOF
+
+# usage: write_probes <file> [probe-line...]
+# probe_line の出力を {"probes": [...]} に包んで file へ書く (fixture は $tmp に残る)。
+# 構造そのものが主題の fixture (unknown top-level key / 型不正 / 不正 JSON 等) は
+# この helper を使わず inline で書く。
+write_probes() {
+  wp_file=$1; shift
+  {
+    printf '{\n  "probes": [\n'
+    while [ $# -gt 0 ]; do
+      if [ $# -gt 1 ]; then printf '    %s,\n' "$1"; else printf '    %s\n' "$1"; fi
+      shift
+    done
+    printf '  ]\n}\n'
+  } > "$wp_file"
+}
+
+# --- case 1: 4 canonical channel が同一 operation ペアで揃い polarity 正なら pass (exit 0) ---
+write_probes "$tmp/pass.json" \
+  "$(probe_line gh        negative read-priv false)" \
+  "$(probe_line gh        positive read-priv true)" \
+  "$(probe_line git-https negative read-priv false)" \
+  "$(probe_line git-https positive read-priv true)" \
+  "$(probe_line git-ssh   negative read-priv false)" \
+  "$(probe_line git-ssh   positive read-priv true)" \
+  "$(probe_line curl      negative read-priv false)" \
+  "$(probe_line curl      positive read-priv true)"
 run_case "all-clean" "$tmp/pass.json" 0 "isolation verified"
 
 # --- case 2: 被覆は床 (1組以上)。同一 channel に別 operation のペアを足しても pass (exit 0) ---
 #     カバレッジを増やした runner を「破れ検出」で罰しないことを pin する。
-cat > "$tmp/superset.json" <<'EOF'
-{
-  "probes": [
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv",  "authenticated": false},
-    {"channel": "gh",        "mode": "positive", "operation": "read-priv",  "authenticated": true},
-    {"channel": "gh",        "mode": "negative", "operation": "clone-priv", "authenticated": false},
-    {"channel": "gh",        "mode": "positive", "operation": "clone-priv", "authenticated": true},
-    {"channel": "git-https", "mode": "negative", "operation": "read-priv",  "authenticated": false},
-    {"channel": "git-https", "mode": "positive", "operation": "read-priv",  "authenticated": true},
-    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv",  "authenticated": false},
-    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv",  "authenticated": true},
-    {"channel": "curl",      "mode": "negative", "operation": "read-priv",  "authenticated": false},
-    {"channel": "curl",      "mode": "positive", "operation": "read-priv",  "authenticated": true}
-  ]
-}
-EOF
+write_probes "$tmp/superset.json" \
+  "$(probe_line gh        negative read-priv false)" \
+  "$(probe_line gh        positive read-priv true)" \
+  "$(probe_line gh        negative clone-priv false)" \
+  "$(probe_line gh        positive clone-priv true)" \
+  "$(probe_line git-https negative read-priv false)" \
+  "$(probe_line git-https positive read-priv true)" \
+  "$(probe_line git-ssh   negative read-priv false)" \
+  "$(probe_line git-ssh   positive read-priv true)" \
+  "$(probe_line curl      negative read-priv false)" \
+  "$(probe_line curl      positive read-priv true)"
 run_case "superset-coverage" "$tmp/superset.json" 0 "isolation verified"
 
 # --- case 3: negative が認証を通したら credential leak (exit 1) ---
-cat > "$tmp/leak.json" <<'EOF'
-{
-  "probes": [
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": true},
-    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "curl",      "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "curl",      "mode": "positive", "operation": "read-priv", "authenticated": true}
-  ]
-}
-EOF
+write_probes "$tmp/leak.json" \
+  "$(probe_line gh        negative read-priv true)" \
+  "$(probe_line gh        positive read-priv true)" \
+  "$(probe_line git-https negative read-priv false)" \
+  "$(probe_line git-https positive read-priv true)" \
+  "$(probe_line git-ssh   negative read-priv false)" \
+  "$(probe_line git-ssh   positive read-priv true)" \
+  "$(probe_line curl      negative read-priv false)" \
+  "$(probe_line curl      positive read-priv true)"
 run_case "leak" "$tmp/leak.json" 1 "credential leak: negative probe authenticated on channel gh"
 
 # --- case 4: positive-control が失敗したら false-green (exit 1) ---
-cat > "$tmp/falsegreen.json" <<'EOF'
-{
-  "probes": [
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "curl",      "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "curl",      "mode": "positive", "operation": "read-priv", "authenticated": true}
-  ]
-}
-EOF
+write_probes "$tmp/falsegreen.json" \
+  "$(probe_line gh        negative read-priv false)" \
+  "$(probe_line gh        positive read-priv false)" \
+  "$(probe_line git-https negative read-priv false)" \
+  "$(probe_line git-https positive read-priv true)" \
+  "$(probe_line git-ssh   negative read-priv false)" \
+  "$(probe_line git-ssh   positive read-priv true)" \
+  "$(probe_line curl      negative read-priv false)" \
+  "$(probe_line curl      positive read-priv true)"
 run_case "false-green" "$tmp/falsegreen.json" 1 "false-green: positive-control probe failed on channel gh"
 
 # --- case 5: negative/positive の operation がずれたら完全ペア不成立 = 構造エラー (exit 2) ---
 #     破れの観測ではないので 1 ではなく 2 (入力・構造エラー)。
-cat > "$tmp/mismatch.json" <<'EOF'
-{
-  "probes": [
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv",   "authenticated": false},
-    {"channel": "gh",        "mode": "positive", "operation": "read-public", "authenticated": true},
-    {"channel": "git-https", "mode": "negative", "operation": "read-priv",   "authenticated": false},
-    {"channel": "git-https", "mode": "positive", "operation": "read-priv",   "authenticated": true},
-    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv",   "authenticated": false},
-    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv",   "authenticated": true},
-    {"channel": "curl",      "mode": "negative", "operation": "read-priv",   "authenticated": false},
-    {"channel": "curl",      "mode": "positive", "operation": "read-priv",   "authenticated": true}
-  ]
-}
-EOF
+write_probes "$tmp/mismatch.json" \
+  "$(probe_line gh        negative read-priv false)" \
+  "$(probe_line gh        positive read-public true)" \
+  "$(probe_line git-https negative read-priv false)" \
+  "$(probe_line git-https positive read-priv true)" \
+  "$(probe_line git-ssh   negative read-priv false)" \
+  "$(probe_line git-ssh   positive read-priv true)" \
+  "$(probe_line curl      negative read-priv false)" \
+  "$(probe_line curl      positive read-priv true)"
 run_case "operation-mismatch" "$tmp/mismatch.json" 2 "channel gh: no complete negative/positive probe pair"
 
 # --- case 6: required channel (git-https) を丸ごと欠くと構造エラー (exit 2・偽の安心を弾く) ---
 # opt-in の git-ssh / curl があっても required floor の欠落は塞げない。
-cat > "$tmp/missing.json" <<'EOF'
-{
-  "probes": [
-    {"channel": "gh",      "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "gh",      "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-ssh", "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-ssh", "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "curl",    "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "curl",    "mode": "positive", "operation": "read-priv", "authenticated": true}
-  ]
-}
-EOF
+write_probes "$tmp/missing.json" \
+  "$(probe_line gh      negative read-priv false)" \
+  "$(probe_line gh      positive read-priv true)" \
+  "$(probe_line git-ssh negative read-priv false)" \
+  "$(probe_line git-ssh positive read-priv true)" \
+  "$(probe_line curl    negative read-priv false)" \
+  "$(probe_line curl    positive read-priv true)"
 run_case "missing-channel" "$tmp/missing.json" 2 "channel git-https: no complete negative/positive probe pair"
 
 # --- case 7: 同一 (channel, operation, mode) の重複は曖昧 = 構造エラー (exit 2) ---
-cat > "$tmp/dup.json" <<'EOF'
-{
-  "probes": [
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "curl",      "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "curl",      "mode": "positive", "operation": "read-priv", "authenticated": true}
-  ]
-}
-EOF
+write_probes "$tmp/dup.json" \
+  "$(probe_line gh        negative read-priv false)" \
+  "$(probe_line gh        negative read-priv false)" \
+  "$(probe_line gh        positive read-priv true)" \
+  "$(probe_line git-https negative read-priv false)" \
+  "$(probe_line git-https positive read-priv true)" \
+  "$(probe_line git-ssh   negative read-priv false)" \
+  "$(probe_line git-ssh   positive read-priv true)" \
+  "$(probe_line curl      negative read-priv false)" \
+  "$(probe_line curl      positive read-priv true)"
 run_case "duplicate-probe" "$tmp/dup.json" 2 \
   "channel gh (operation read-priv): expected exactly one negative probe, got 2"
 
 # --- case 8: 構造不備と破れが同居したら、破れを優先して exit 1 かつ両方報告する ---
 #     (構造エラーの陰で leak の証跡が報告から漏れない = 抑制しないことを pin) ---
-cat > "$tmp/dup-and-leak.json" <<'EOF'
-{
-  "probes": [
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": true},
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": true},
-    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "curl",      "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "curl",      "mode": "positive", "operation": "read-priv", "authenticated": true}
-  ]
-}
-EOF
+write_probes "$tmp/dup-and-leak.json" \
+  "$(probe_line gh        negative read-priv true)" \
+  "$(probe_line gh        negative read-priv true)" \
+  "$(probe_line gh        positive read-priv false)" \
+  "$(probe_line git-https negative read-priv false)" \
+  "$(probe_line git-https positive read-priv true)" \
+  "$(probe_line git-ssh   negative read-priv false)" \
+  "$(probe_line git-ssh   positive read-priv true)" \
+  "$(probe_line curl      negative read-priv false)" \
+  "$(probe_line curl      positive read-priv true)"
 run_case "breach-with-structural" "$tmp/dup-and-leak.json" 1 \
   "credential leak: negative probe authenticated on channel gh"
 grep -q "expected exactly one negative probe, got 2" "$tmp/out" \
@@ -247,21 +230,16 @@ fi
 
 # --- case 19: 同一 (channel, operation) の positive 重複も曖昧 = 構造エラー (exit 2) (#150) ---
 # (case 7 は negative 重複のみで、positive 側の件数分岐が未到達だった)
-cat > "$tmp/duppos.json" <<'EOF'
-{
-  "probes": [
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "curl",      "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "curl",      "mode": "positive", "operation": "read-priv", "authenticated": true}
-  ]
-}
-EOF
+write_probes "$tmp/duppos.json" \
+  "$(probe_line gh        negative read-priv false)" \
+  "$(probe_line gh        positive read-priv true)" \
+  "$(probe_line gh        positive read-priv true)" \
+  "$(probe_line git-https negative read-priv false)" \
+  "$(probe_line git-https positive read-priv true)" \
+  "$(probe_line git-ssh   negative read-priv false)" \
+  "$(probe_line git-ssh   positive read-priv true)" \
+  "$(probe_line curl      negative read-priv false)" \
+  "$(probe_line curl      positive read-priv true)"
 run_case "duplicate-positive-probe" "$tmp/duppos.json" 2 \
   "channel gh (operation read-priv): expected exactly one positive-control probe, got 2"
 
@@ -275,76 +253,51 @@ run_case "probes-not-array" "$tmp/probes-not-array.json" 2 "probes must be an ar
 
 # --- case 22: curl は opt-in。required 3 チャネルだけで完全なら pass (exit 0) (#129 P3-02) ---
 # curl の ambient 認証源 (~/.netrc) は環境依存で不在のことがあり、required floor から外した。
-cat > "$tmp/three.json" <<'EOF'
-{
-  "probes": [
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv", "authenticated": true}
-  ]
-}
-EOF
+write_probes "$tmp/three.json" \
+  "$(probe_line gh        negative read-priv false)" \
+  "$(probe_line gh        positive read-priv true)" \
+  "$(probe_line git-https negative read-priv false)" \
+  "$(probe_line git-https positive read-priv true)" \
+  "$(probe_line git-ssh   negative read-priv false)" \
+  "$(probe_line git-ssh   positive read-priv true)"
 run_case "curl-optional-three-channel-pass" "$tmp/three.json" 0 "isolation verified (3 channels"
 
 # --- case 23: curl を含めたなら curl も完全ペアが要る (opt-in でも骨抜けにしない) (exit 2) ---
-cat > "$tmp/curl-incomplete.json" <<'EOF'
-{
-  "probes": [
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "curl",      "mode": "negative", "operation": "read-priv", "authenticated": false}
-  ]
-}
-EOF
+write_probes "$tmp/curl-incomplete.json" \
+  "$(probe_line gh        negative read-priv false)" \
+  "$(probe_line gh        positive read-priv true)" \
+  "$(probe_line git-https negative read-priv false)" \
+  "$(probe_line git-https positive read-priv true)" \
+  "$(probe_line git-ssh   negative read-priv false)" \
+  "$(probe_line git-ssh   positive read-priv true)" \
+  "$(probe_line curl      negative read-priv false)"
 run_case "curl-optin-must-be-complete" "$tmp/curl-incomplete.json" 2 \
   "channel curl (operation read-priv): expected exactly one positive-control probe, got 0"
 
 # --- case 24: required チャネル (gh) を丸ごと欠くと構造エラー (exit 2・required floor は不変) ---
-cat > "$tmp/no-gh.json" <<'EOF'
-{
-  "probes": [
-    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-ssh",   "mode": "positive", "operation": "read-priv", "authenticated": true}
-  ]
-}
-EOF
+write_probes "$tmp/no-gh.json" \
+  "$(probe_line git-https negative read-priv false)" \
+  "$(probe_line git-https positive read-priv true)" \
+  "$(probe_line git-ssh   negative read-priv false)" \
+  "$(probe_line git-ssh   positive read-priv true)"
 run_case "required-gh-missing" "$tmp/no-gh.json" 2 "channel gh: no complete negative/positive probe pair"
 
 # --- case 25: required 2 チャネル (gh + git-https) だけで完全なら pass (exit 0) (#129 P3-02) ---
 # git-ssh (ssh-agent) / curl (~/.netrc) は ambient 認証源がセッション依存のため opt-in。
-cat > "$tmp/two.json" <<'EOF'
-{
-  "probes": [
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true}
-  ]
-}
-EOF
+write_probes "$tmp/two.json" \
+  "$(probe_line gh        negative read-priv false)" \
+  "$(probe_line gh        positive read-priv true)" \
+  "$(probe_line git-https negative read-priv false)" \
+  "$(probe_line git-https positive read-priv true)"
 run_case "required-two-channel-pass" "$tmp/two.json" 0 "isolation verified (2 channels"
 
 # --- case 26: opt-in git-ssh を含めたなら git-ssh も完全ペアが要る (exit 2) ---
-cat > "$tmp/ssh-incomplete.json" <<'EOF'
-{
-  "probes": [
-    {"channel": "gh",        "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "gh",        "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-https", "mode": "negative", "operation": "read-priv", "authenticated": false},
-    {"channel": "git-https", "mode": "positive", "operation": "read-priv", "authenticated": true},
-    {"channel": "git-ssh",   "mode": "negative", "operation": "read-priv", "authenticated": false}
-  ]
-}
-EOF
+write_probes "$tmp/ssh-incomplete.json" \
+  "$(probe_line gh        negative read-priv false)" \
+  "$(probe_line gh        positive read-priv true)" \
+  "$(probe_line git-https negative read-priv false)" \
+  "$(probe_line git-https positive read-priv true)" \
+  "$(probe_line git-ssh   negative read-priv false)"
 run_case "ssh-optin-must-be-complete" "$tmp/ssh-incomplete.json" 2 \
   "channel git-ssh (operation read-priv): expected exactly one positive-control probe, got 0"
 
