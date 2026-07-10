@@ -696,4 +696,17 @@ echo '{"catalog_version":3,"assets":[1,2,3]}' > "$tmp/badcat/generated/catalog.j
 grep -q "no catalog" "$tmp/out30b" \
   || fail "non-Hash asset entries should be treated as no-catalog: $(cat "$tmp/out30b")"
 
+# --- case 31: 本体不在 + managed sidecar は conflict にせず create する (#179 H-06 の許可側) ---
+# (case 29 の unmanaged と対。本体だけ消えて自分の managed marker が残った状態からの再配置。)
+rm -rf "$tmp/sclaude15/agent-tools"
+mkdir -p "$tmp/sclaude15/agent-tools/scripts"
+cp "$tmp/srepo15/generated/claude-code/scripts/personal-wrap.agent-tools-managed.yml" \
+   "$tmp/sclaude15/agent-tools/scripts/personal-wrap.agent-tools-managed.yml"
+run15 > "$tmp/out31" 2>&1 || fail "body-absent + managed sidecar dry-run should succeed: $(cat "$tmp/out31")"
+grep -q "create: \[claude-code\]" "$tmp/out31" \
+  || fail "body-absent + managed sidecar should plan create (not conflict): $(cat "$tmp/out31")"
+run15 --apply --quiet > /dev/null 2>&1
+[ -f "$tmp/sclaude15/agent-tools/scripts/personal-wrap" ] \
+  || fail "create should deploy the body when the existing sidecar is managed"
+
 echo "ok: sync self-test passed"
