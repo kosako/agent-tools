@@ -50,6 +50,7 @@ module CheckManifests
       manifests = discover_manifests
       manifests.each { |path| validate_manifest(path) }
       check_duplicate_names
+      check_nested_asset_sources(manifests)
       check_sources_have_manifests
       check_instruction_uniqueness
       [manifests.size, @errors]
@@ -374,11 +375,49 @@ module CheckManifests
       source_path = source["path"]
       return unless source_path.is_a?(String)
 
-      ArtifactTargets::SKILL_FORBIDDEN_DIRS.each do |sub|
-        next unless File.directory?(File.join(@root, source_path, sub))
+      dir = File.join(@root, source_path)
+      return unless File.directory?(dir)
 
-        error(path, "directory skill must not contain #{sub}/ " \
-                    "(executable code is not supported yet; blocked on external scanner, see #43)")
+      # 実行コード (配る前の安全検査能力が無い; #43 external scanner 待ち) を fail-closed で
+      # 止める。top-level の scripts/ 名だけを見ると bin/payload.rb やネストした evals/scripts/
+      # で回避できる (#178) ため、任意の深さを再帰し (1) SKILL_FORBIDDEN_DIRS 名の dir と
+      # (2) 実行ビットの立った regular file を拒否する。evals/ (非配置 fixture) も除外しない:
+      # 配布されないが、実行コードの持ち込み自体を gate で止める fail-closed 方針を保つ。
+      # symlink / 特殊ファイルは validate_source の check_directory_no_symlinks が別途 reject。
+      Dir.glob(File.join(dir, "**/*"), File::FNM_DOTMATCH).sort.each do |entry|
+        base = File.basename(entry)
+        next if base == "." || base == ".."
+        next if File.symlink?(entry)
+
+        entry_rel = entry.sub("#{@root}/", "")
+        if File.directory?(entry) && ArtifactTargets::SKILL_FORBIDDEN_DIRS.include?(base)
+          error(path, "directory skill must not contain #{base}/ (#{entry_rel}) " \
+                      "(executable code is not supported yet; blocked on external scanner, see #43)")
+        elsif File.file?(entry) && File.executable?(entry)
+          error(path, "directory skill must not contain an executable file (#{entry_rel}) " \
+                      "(executable code is not supported yet; blocked on external scanner, see #43)")
+        end
+      end
+    end
+
+    # asset source の入れ子・重複所有を fail-closed で禁止する (#177 / H-01)。
+    # directory asset の source dir 配下に、その asset 自身の root manifest 以外の manifest が
+    # あると、子 manifest が独立 asset として発見・build・register される一方、injection scan
+    # では親の evals/ prefix で leak_only 扱いになり攻撃文字列が無検査で通る。medium finding の
+    # 所有も最初にマッチした親 asset に誤帰属する。source の包含関係を禁じてこの前提ごと断つ。
+    def check_nested_asset_sources(manifests)
+      # directory asset の source dir = その manifest (asset.yml) の置かれた dir
+      # (validate_source が「directory manifest は自分の dir を指す」ことを保証する)。
+      dir_roots = manifests.select { |m| File.basename(m) == "asset.yml" }.map { |m| File.dirname(m) }
+      manifests.each do |m|
+        dir_roots.each do |root_dir|
+          # root_dir 自身の root manifest (root_dir/asset.yml) は自己なので除外する。
+          next if File.dirname(m) == root_dir && File.basename(m) == "asset.yml"
+          next unless m.start_with?("#{root_dir}/")
+
+          error(m, "asset manifest is nested inside directory asset #{root_dir.inspect}; " \
+                   "nested or overlapping asset sources are not allowed")
+        end
       end
     end
 
