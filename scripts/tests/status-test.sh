@@ -22,26 +22,9 @@ run_status() {
 # JSON から値を取り出す。
 
 # --- fixture repo ---
-mkdir -p "$tmp/repo/shared/workflows" "$tmp/codex/skills" "$tmp/claude/skills"
-cat > "$tmp/repo/shared/workflows/personal-demo.md" <<'EOF'
-# demo v1
-EOF
-cat > "$tmp/repo/shared/workflows/personal-demo.asset.yml" <<'EOF'
-schema_version: 1
-name: personal-demo
-kind: workflow
-visibility: public
-targets:
-  - codex
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/workflows/personal-demo.md
-  format: markdown
-summary: demo workflow
-EOF
+mkdir -p "$tmp/codex/skills" "$tmp/claude/skills"
+WAM_EXTRA='summary: demo workflow'
+make_demo_repo "$tmp/repo" workflows personal-demo workflow '# demo v1'
 
 # --- case 1: build 前。generated 0、sync_targets は空 ---
 run_status > "$tmp/s1" 2>&1 || fail "status should succeed: $(cat "$tmp/s1")"
@@ -136,25 +119,8 @@ grep -qiE "token|credential|api[_-]?key" "$tmp/s3" && fail "status output must n
 [ "$(jget "$tmp/s9" repo present)" = "true" ] || fail "repo.present should be true"
 
 # --- case 10: instruction の generated も generated.total に数える ---
-mkdir -p "$tmp/irepo/shared/instructions" "$tmp/icodex" "$tmp/iclaude"
-cat > "$tmp/irepo/shared/instructions/personal-ops.md" <<'EOF'
-# ops
-EOF
-cat > "$tmp/irepo/shared/instructions/personal-ops.asset.yml" <<'EOF'
-schema_version: 1
-name: personal-ops
-kind: instruction
-visibility: public
-targets:
-  - codex
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/instructions/personal-ops.md
-  format: markdown
-EOF
+mkdir -p "$tmp/icodex" "$tmp/iclaude"
+make_demo_repo "$tmp/irepo" instructions personal-ops instruction '# ops'
 "$build" --root "$tmp/irepo" --quiet > /dev/null
 "$status_sh" --root "$tmp/irepo" --codex-home "$tmp/icodex" --claude-home "$tmp/iclaude" --json > "$tmp/is10" 2>&1
 [ "$(jget "$tmp/is10" generated total)" = "2" ] || fail "instruction generated should count (2 targets): $(cat "$tmp/is10")"
@@ -169,20 +135,8 @@ mkdir -p "$tmp/brepo/shared/workflows" "$tmp/bcodex" "$tmp/bclaude"
 cat > "$tmp/brepo/shared/workflows/personal-demo.md" <<'EOF'
 # demo
 EOF
-cat > "$tmp/brepo/shared/workflows/personal-demo.asset.yml" <<'EOF'
-schema_version: 1
-name: personal-demo
-kind: workflow
-visibility: public
-targets:
-  - codex
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/workflows/personal-demo.md
-  format: markdown
-EOF
+write_asset_manifest "$tmp/brepo/shared/workflows/personal-demo.asset.yml" \
+  personal-demo workflow public shared/workflows/personal-demo.md markdown codex
 "$build" --root "$tmp/brepo" --quiet > /dev/null   # generated artifact を作る (fresh? が走る)
 # manifest を malformed YAML に壊す (load_all が Psych::SyntaxError を raise する状況)
 printf 'name: personal-demo\nkind: [unbalanced\n   : :\n' > "$tmp/brepo/shared/workflows/personal-demo.asset.yml"
@@ -203,25 +157,8 @@ rm -f "$tmp/irepo/shared/instructions/personal-ops.md"
 mkdir -p "$tmp/screpo/shared/scripts" "$tmp/sccodex" "$tmp/scclaude"
 printf '#!/bin/sh\necho hi\n' > "$tmp/screpo/shared/scripts/personal-wrap.sh"
 # script kind は human review 必須 (#147) + 承認は内容に紐づく (#148)。
-scbid=$(bid "$tmp/screpo" shared/scripts/personal-wrap.sh text)
-cat > "$tmp/screpo/shared/scripts/personal-wrap.asset.yml" <<EOF
-schema_version: 1
-name: personal-wrap
-kind: script
-visibility: personal
-targets:
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-review:
-  human_review: approved
-  approved_build_id: $scbid
-  approved_artifact_kind: script
-source:
-  path: shared/scripts/personal-wrap.sh
-  format: text
-EOF
+write_approved_script_manifest "$tmp/screpo" shared/scripts/personal-wrap.sh \
+  personal-wrap personal claude-code
 "$build" --root "$tmp/screpo" --quiet > /dev/null
 "$script_dir/../register.sh" --root "$tmp/screpo" --quiet > /dev/null
 "$status_sh" --root "$tmp/screpo" --codex-home "$tmp/sccodex" --claude-home "$tmp/scclaude" --json > "$tmp/sc13" 2>&1

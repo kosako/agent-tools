@@ -243,25 +243,8 @@ sc="$tmp/script/generated/catalog.json"
   || fail "script without approval should be human_review_required (#147)"
 
 # --- case 12c: script kind + human_review: approved (approved_build_id / approved_artifact_kind 一致) → registered (exit 0) ---
-bid_script=$(bid "$tmp/script" shared/scripts/personal-demo-script.sh text)
-cat > "$tmp/script/shared/scripts/personal-demo-script.asset.yml" <<EOF
-schema_version: 1
-name: personal-demo-script
-kind: script
-visibility: public
-targets:
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-review:
-  human_review: approved
-  approved_build_id: $bid_script
-  approved_artifact_kind: script
-source:
-  path: shared/scripts/personal-demo-script.sh
-  format: text
-EOF
+write_approved_script_manifest "$tmp/script" shared/scripts/personal-demo-script.sh \
+  personal-demo-script public claude-code
 "$register" --root "$tmp/script" > "$tmp/r12c" 2>&1 \
   || fail "approved script register should pass: $(cat "$tmp/r12c")"
 [ "$(jget "$sc" assets 0 registration)" = '"registered"' ] \
