@@ -50,6 +50,7 @@ module CheckManifests
       manifests = discover_manifests
       manifests.each { |path| validate_manifest(path) }
       check_duplicate_names
+      check_nested_asset_sources(manifests)
       check_sources_have_manifests
       check_instruction_uniqueness
       [manifests.size, @errors]
@@ -374,11 +375,105 @@ module CheckManifests
       source_path = source["path"]
       return unless source_path.is_a?(String)
 
-      ArtifactTargets::SKILL_FORBIDDEN_DIRS.each do |sub|
-        next unless File.directory?(File.join(@root, source_path, sub))
+      # check_directory_skill_contents は validate_source より先に走るため、未検証の
+      # source.path で Dir.glob すると shared/../ 脱出・repo 外走査 (大量走査 DoS 含む) が
+      # 起きる (CM-181-01)。外部由来 manifest が起点なので脅威モデル内。directory manifest の
+      # 所有不変条件「source は自分の dir」(validate_source と同じ条件) を満たすときだけ走査し、
+      # 満たさない manifest は走査せず validate_source の reject に委ねる。
+      return unless source_path.chomp("/") == File.dirname(path)
 
-        error(path, "directory skill must not contain #{sub}/ " \
-                    "(executable code is not supported yet; blocked on external scanner, see #43)")
+      dir = File.join(@root, source_path)
+      return unless File.directory?(dir)
+
+      # 実行コード (配る前の安全検査能力が無い; #43 external scanner 待ち) を fail-closed で
+      # 止める。top-level の scripts/ 名だけを見ると bin/payload.rb やネストした evals/scripts/
+      # で回避できる (#178) ため、任意の深さを再帰し (1) SKILL_FORBIDDEN_DIRS 名の dir と
+      # (2) 実行ビットの立った regular file を拒否する。evals/ (非配置 fixture) も除外しない:
+      # 配布されないが、実行コードの持ち込み自体を gate で止める fail-closed 方針を保つ。
+      # symlink / 特殊ファイルは validate_source の check_directory_no_symlinks が別途 reject。
+      Dir.glob(File.join(dir, "**/*"), File::FNM_DOTMATCH).sort.each do |entry|
+        base = File.basename(entry)
+        next if base == "." || base == ".."
+        next if File.symlink?(entry)
+
+        entry_rel = entry.sub("#{@root}/", "")
+        if File.directory?(entry) && ArtifactTargets::SKILL_FORBIDDEN_DIRS.include?(base)
+          error(path, "directory skill must not contain #{base}/ (#{entry_rel}) " \
+                      "(executable code is not supported yet; blocked on external scanner, see #43)")
+        elsif File.file?(entry) && File.executable?(entry)
+          error(path, "directory skill must not contain an executable file (#{entry_rel}) " \
+                      "(executable code is not supported yet; blocked on external scanner, see #43)")
+        end
+      end
+
+      # directory skill は SKILL.md を entrypoint として必ず持つ (M-01)。build は directory
+      # skill の SKILL.md を生成しない (copy_directory_asset が verbatim コピー) ため、無いと
+      # entrypoint 欠落の inert skill が配布される。さらに SKILL.md の frontmatter name は
+      # manifest name と一致必須にする: build が SKILL.md を無改変で配るので、frontmatter で
+      # 別 identity / 広域 trigger を宣言すると「レビューされた identity ≠ 実配備 identity」に
+      # なる (#43 の外部 skill 配布で効く供給側ギャップ)。
+      skill_md = File.join(dir, "SKILL.md")
+      unless File.file?(skill_md)
+        error(path, "directory skill must contain a SKILL.md entrypoint")
+        return
+      end
+      validate_skill_frontmatter_name(path, skill_md, data["name"])
+    end
+
+    # SKILL.md 先頭の YAML frontmatter name を manifest name と照合する。
+    # frontmatter が **無ければ** identity を主張していない (target も dir 名等に fallback する)
+    # ので照合しない。frontmatter が **在る** (build と同じ start_with?("---\n","---\r\n") 判定)
+    # 場合は fail-closed で読む: 閉じ marker 欠落 / YAML parse 失敗 (alias 含む) / 非 mapping /
+    # name が非空 String でない — をすべて error にする (CM-181-02)。build は directory skill の
+    # SKILL.md を無改変で配るため、validator が読めない frontmatter を target parser が別 identity
+    # として解決する差 (alias 等) を fail-open で通すと identity bypass になる。
+    def validate_skill_frontmatter_name(path, skill_md, manifest_name)
+      content = File.read(skill_md)
+      return unless content.start_with?("---\n", "---\r\n")
+
+      parts = content.sub(/\A---\r?\n/, "").split(/^---\r?\n/, 2)
+      if parts.length < 2
+        error(path, "SKILL.md frontmatter is missing its closing --- marker")
+        return
+      end
+      fm = begin
+        YamlUtil.load(parts[0], skill_md)
+      rescue Psych::Exception => e
+        error(path, "SKILL.md frontmatter has a YAML error: #{e.message}")
+        return
+      end
+      unless fm.is_a?(Hash)
+        error(path, "SKILL.md frontmatter must be a YAML mapping")
+        return
+      end
+      fm_name = fm["name"]
+      unless fm_name.is_a?(String) && !fm_name.empty?
+        error(path, "SKILL.md frontmatter must declare a non-empty string name")
+        return
+      end
+      if manifest_name.is_a?(String) && fm_name != manifest_name
+        error(path, "SKILL.md frontmatter name #{fm_name.inspect} does not match manifest name #{manifest_name.inspect}")
+      end
+    end
+
+    # asset source の入れ子・重複所有を fail-closed で禁止する (#177 / H-01)。
+    # directory asset の source dir 配下に、その asset 自身の root manifest 以外の manifest が
+    # あると、子 manifest が独立 asset として発見・build・register される一方、injection scan
+    # では親の evals/ prefix で leak_only 扱いになり攻撃文字列が無検査で通る。medium finding の
+    # 所有も最初にマッチした親 asset に誤帰属する。source の包含関係を禁じてこの前提ごと断つ。
+    def check_nested_asset_sources(manifests)
+      # directory asset の source dir = その manifest (asset.yml) の置かれた dir
+      # (validate_source が「directory manifest は自分の dir を指す」ことを保証する)。
+      dir_roots = manifests.select { |m| File.basename(m) == "asset.yml" }.map { |m| File.dirname(m) }
+      manifests.each do |m|
+        dir_roots.each do |root_dir|
+          # root_dir 自身の root manifest (root_dir/asset.yml) は自己なので除外する。
+          next if File.dirname(m) == root_dir && File.basename(m) == "asset.yml"
+          next unless m.start_with?("#{root_dir}/")
+
+          error(m, "asset manifest is nested inside directory asset #{root_dir.inspect}; " \
+                   "nested or overlapping asset sources are not allowed")
+        end
       end
     end
 
