@@ -112,8 +112,7 @@ module CheckInjection
     end
 
     def run
-      instruction_sources = instruction_source_paths
-      eval_prefixes = skill_eval_dir_prefixes
+      instruction_sources, eval_prefixes = asset_scan_context
       findings = []
       count = 0
       target_files.each do |full|
@@ -161,42 +160,35 @@ module CheckInjection
       Finding.new(finding.path, finding.line, "high", finding.category, finding.message)
     end
 
-    # instruction artifact を生成する asset の source path 一覧。
-    # 壊れた manifest では昇格しない (gate の check-manifests が別途 fail させる)。
-    def instruction_source_paths
+    # manifest 由来の scan 文脈を 1 回の走査で組み立てて [instruction_sources, eval_prefixes]
+    # で返す:
+    # - instruction artifact を生成する asset の source path 一覧 (external-url の high 昇格用)。
+    # - directory skill の evals/ 配下を leak_only 判定するための絶対 path prefix 一覧
+    #   (evals は injection 攻撃文字列を抑止し leak (private-key) のみ scan する。run が使う。)
+    # 壊れた manifest では昇格も prefix も出さない (gate の check-manifests が別途 fail させる)。
+    def asset_scan_context
       paths = []
-      Assets.load_all(@root).each do |asset|
-        next unless asset[:source].is_a?(Hash)
-        next unless asset[:targets].is_a?(Array)
-
-        paths << asset[:source]["path"] if ArtifactTargets.resolves_any?(asset, "instruction")
-      end
-      paths
-    rescue Psych::Exception
-      []
-    end
-
-    # directory skill の evals/ 配下を leak_only 判定するための絶対 path prefix 一覧。
-    # (evals は injection 攻撃文字列を抑止し leak (private-key) のみ scan する。run が使う。)
-    # 壊れた manifest では prefix を出さない (gate の check-manifests が別途 fail させる)。
-    def skill_eval_dir_prefixes
       prefixes = []
       Assets.load_all(@root).each do |asset|
         source = asset[:source]
-        next unless source.is_a?(Hash) && source["format"] == "directory"
-        next unless source["path"].is_a?(String)
+        next unless source.is_a?(Hash)
         next unless asset[:targets].is_a?(Array)
 
+        paths << source["path"] if ArtifactTargets.resolves_any?(asset, "instruction")
+
+        next unless source["format"] == "directory"
+        next unless source["path"].is_a?(String)
         next unless ArtifactTargets.resolves_any?(asset, "skill")
 
         ArtifactTargets::SKILL_NON_DEPLOY_DIRS.each do |sub|
           prefixes << "#{File.join(@root, source['path'], sub)}/"
         end
       end
-      prefixes
+      [paths, prefixes]
     rescue Psych::Exception
-      []
+      [[], []]
     end
+
 
     def rel(path)
       Assets.rel(@root, path)

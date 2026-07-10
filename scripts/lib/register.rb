@@ -79,28 +79,10 @@ module Register
     # review 観点の registration は asset 単位で決まり、buildable でない
     # target-artifact は "unsupported" にして registered != buildable を防ぐ。
     def catalog_entries(asset)
-      # 宣言 risk の medium / unknown も human review 必須として扱う。
-      # script artifact は実行コードの配布で、静的 gate が当てられるのは injection 文言の
-      # regex のみ (コードの悪性は検査できない)。directory skill の scripts/ を #43 まで
-      # fail-closed にしているのと対称に、常に human review を要求する。判定は manifest の
-      # kind でなく resolve 後の artifact_kind で行う (compatibility override で任意 kind を
-      # script 配布にできるため、kind 基準では迂回できてしまう)。
-      script_artifact = ArtifactTargets.resolves_any?(asset, "script")
-      review_needed = asset[:flagged] ||
-                      script_artifact ||
-                      asset[:declared_risks].any? { |r| %w[medium unknown].include?(r) }
+      review_needed = review_needed?(asset)
       # source content の決定的 hash。target に依らない。doctor の鮮度判定に使う。
       build_id = Build.build_id_for(@root, asset[:source]["path"], asset[:source]["format"])
-      # 承認 identity は (内容 = build_id, 配布形態 = artifact_kind) の対 (#148, #184)。
-      # 内容のみの束縛だと、source 不変のまま kind を script に変えて「skill として承認した
-      # source を実行ファイルとして配布」でき、再レビューなしで意味が変わる穴が残る。
-      # artifact_kind は tool ごとに解決されるため、承認の有効性も tool 単位で判定する。
-      approved = asset[:human_review] == "approved"
-      if review_needed && approved && asset[:approved_build_id] != build_id
-        warn "#{asset[:name]}: human_review is approved but review.approved_build_id does not " \
-             "match current build_id #{build_id}; re-review the content and update approved_build_id"
-      end
-
+      warn_stale_approval(asset, build_id) if review_needed
       # 登録判断 (risk / review / targets) は manifest に依存する。manifest の digest を
       # entry に記録し、reader (sync / doctor) が register 後の manifest 変更を検出できる
       # ようにする (#148)。
@@ -108,42 +90,81 @@ module Register
 
       (asset[:targets] || []).map do |tool|
         artifact_kind = ArtifactTargets.resolve(asset, tool)
-        approval_effective = approved &&
-                             asset[:approved_build_id] == build_id &&
-                             asset[:approved_artifact_kind] == artifact_kind
-        if review_needed && approved && asset[:approved_build_id] == build_id &&
-           asset[:approved_artifact_kind] != artifact_kind
-          warn "#{asset[:name]}: human_review is approved but review.approved_artifact_kind " \
-               "#{asset[:approved_artifact_kind].inspect} does not match resolved artifact_kind " \
-               "#{artifact_kind.inspect} for #{tool}; re-review the distribution form and " \
-               "update approved_artifact_kind"
-        end
+        warn_kind_mismatch(asset, build_id, artifact_kind, tool) if review_needed
         review_registration =
           if !review_needed
             "registered"
-          elsif approval_effective
+          elsif approval_effective?(asset, build_id, artifact_kind)
             "registered"
           else
             "human_review_required"
           end
         registration = ArtifactTargets.buildable?(asset, tool) ? review_registration : "unsupported"
-        {
-          "name" => asset[:name],
-          "target" => tool,
-          "artifact_kind" => artifact_kind,
-          "kind" => asset[:kind],
-          "visibility" => asset[:visibility],
-          "source" => asset[:source],
-          "build_id" => build_id,
-          "manifest_path" => asset[:manifest_path],
-          "manifest_digest" => manifest_digest,
-          "checks" => {
-            "manifest_validation" => "pass",
-            "prompt_injection_static" => asset[:flagged] ? "human_review" : "pass",
-          },
-          "registration" => registration,
-        }
+        entry_for(asset, tool, artifact_kind, build_id, manifest_digest, registration)
       end
+    end
+
+    # 宣言 risk の medium / unknown も human review 必須として扱う。
+    # script artifact は実行コードの配布で、静的 gate が当てられるのは injection 文言の
+    # regex のみ (コードの悪性は検査できない)。directory skill の scripts/ を #43 まで
+    # fail-closed にしているのと対称に、常に human review を要求する。判定は manifest の
+    # kind でなく resolve 後の artifact_kind で行う (compatibility override で任意 kind を
+    # script 配布にできるため、kind 基準では迂回できてしまう)。
+    def review_needed?(asset)
+      asset[:flagged] ||
+        ArtifactTargets.resolves_any?(asset, "script") ||
+        asset[:declared_risks].any? { |r| %w[medium unknown].include?(r) }
+    end
+
+    # 承認 identity は (内容 = build_id, 配布形態 = artifact_kind) の対 (#148, #184)。
+    # 内容のみの束縛だと、source 不変のまま kind を script に変えて「skill として承認した
+    # source を実行ファイルとして配布」でき、再レビューなしで意味が変わる穴が残る。
+    # artifact_kind は tool ごとに解決されるため、承認の有効性も tool 単位で判定する。
+    def approval_effective?(asset, build_id, artifact_kind)
+      asset[:human_review] == "approved" &&
+        asset[:approved_build_id] == build_id &&
+        asset[:approved_artifact_kind] == artifact_kind
+    end
+
+    # 内容 (build_id) が承認時と変わった asset への再レビュー案内 (asset 単位・target loop 外)。
+    def warn_stale_approval(asset, build_id)
+      return unless asset[:human_review] == "approved" && asset[:approved_build_id] != build_id
+
+      warn "#{asset[:name]}: human_review is approved but review.approved_build_id does not " \
+           "match current build_id #{build_id}; re-review the content and update approved_build_id"
+    end
+
+    # 配布形態 (artifact_kind) が承認時と違う target への再レビュー案内。build_id が一致する
+    # ときだけ出す (両方不一致なら stale 警告が既に出ており、二重に案内しない)。
+    def warn_kind_mismatch(asset, build_id, artifact_kind, tool)
+      return unless asset[:human_review] == "approved" &&
+                    asset[:approved_build_id] == build_id &&
+                    asset[:approved_artifact_kind] != artifact_kind
+
+      warn "#{asset[:name]}: human_review is approved but review.approved_artifact_kind " \
+           "#{asset[:approved_artifact_kind].inspect} does not match resolved artifact_kind " \
+           "#{artifact_kind.inspect} for #{tool}; re-review the distribution form and " \
+           "update approved_artifact_kind"
+    end
+
+    # catalog entry の 1 行分。キー順は catalog.json の byte 表現に直結するため変えない。
+    def entry_for(asset, tool, artifact_kind, build_id, manifest_digest, registration)
+      {
+        "name" => asset[:name],
+        "target" => tool,
+        "artifact_kind" => artifact_kind,
+        "kind" => asset[:kind],
+        "visibility" => asset[:visibility],
+        "source" => asset[:source],
+        "build_id" => build_id,
+        "manifest_path" => asset[:manifest_path],
+        "manifest_digest" => manifest_digest,
+        "checks" => {
+          "manifest_validation" => "pass",
+          "prompt_injection_static" => asset[:flagged] ? "human_review" : "pass",
+        },
+        "registration" => registration,
+      }
     end
 
   end
