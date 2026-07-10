@@ -16,6 +16,7 @@ require_relative "status"
 require_relative "build"
 require_relative "artifact_targets"
 require_relative "catalog"
+require_relative "cli"
 
 module Doctor
   Line = Struct.new(:level, :area, :message) do
@@ -209,27 +210,15 @@ module Doctor
   end
 
   def self.main(argv)
-    root = Dir.pwd
+    opts = Cli.parse(argv, usage: USAGE,
+                     value_flags: %w[--root --codex-home --claude-home --agents-home])
+    return 0 if opts == :help
+
+    root = opts["--root"] || Dir.pwd
     homes = ArtifactTargets.default_homes
-    agents_home = File.expand_path("~/.agents")
-    until argv.empty?
-      case (arg = argv.shift)
-      when "--root"
-        root = argv.shift or abort_usage
-      when "--codex-home"
-        homes["codex"] = File.expand_path(argv.shift || abort_usage)
-      when "--claude-home"
-        homes["claude-code"] = File.expand_path(argv.shift || abort_usage)
-      when "--agents-home"
-        agents_home = File.expand_path(argv.shift || abort_usage)
-      when "-h", "--help"
-        print_usage
-        return 0
-      else
-        warn "unknown option: #{arg}"
-        abort_usage
-      end
-    end
+    homes["codex"] = File.expand_path(opts["--codex-home"]) if opts["--codex-home"]
+    homes["claude-code"] = File.expand_path(opts["--claude-home"]) if opts["--claude-home"]
+    agents_home = File.expand_path(opts["--agents-home"] || "~/.agents")
 
     lines = Runner.new(root, homes, agents_home).run
     lines.each { |line| puts line }
@@ -243,14 +232,7 @@ module Doctor
     end
   end
 
-  def self.print_usage
-    puts "usage: doctor.sh [--root DIR] [--codex-home DIR] [--claude-home DIR] [--agents-home DIR]"
-  end
-
-  def self.abort_usage
-    print_usage
-    exit 2
-  end
+  USAGE = "usage: doctor.sh [--root DIR] [--codex-home DIR] [--claude-home DIR] [--agents-home DIR]"
 end
 
 exit Doctor.main(ARGV) if $PROGRAM_NAME == __FILE__
