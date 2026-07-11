@@ -137,6 +137,19 @@ env = SafeGh.comments_envelope("pr_review", "o/r", 8, comments, ME)
 check("review comments source", env["source"] == "pr_review_comments")
 check("review comments same trust filtering", env["comments"].length == 1 && env["excluded_comments_count"] == 2)
 
+# self の inline comment でも body 以外の PR 由来 metadata (path/line/diff_hunk = fork PR では
+# attacker 制御の free-text) を出力に載せない (allowlist 構築の回帰 pin)
+inline_self = [{
+  "user" => { "login" => "me", "id" => 1 }, "body" => "MY_INLINE",
+  "path" => "EVIL_PATH_SENTINEL.rb", "line" => 42, "diff_hunk" => "EVIL_HUNK_SENTINEL",
+}]
+env = SafeGh.comments_envelope("pr_review", "o/r", 8, inline_self, ME)
+check("self inline body included", env["comments"][0]["body"] == "MY_INLINE")
+json = JSON.generate(env)
+check("inline path not leaked", !json.include?("EVIL_PATH_SENTINEL"))
+check("inline diff_hunk not leaked", !json.include?("EVIL_HUNK_SENTINEL"))
+check("inline comment keys are allowlisted", env["comments"][0].keys.sort == %w[author author_trust body])
+
 # ---- reviews_envelope: self は state+body / other・bot は count + state 内訳のみ (#189(3)) ----
 reviews = [
   { "user" => { "login" => "me", "id" => 1 }, "state" => "COMMENTED", "body" => "MY_REVIEW" },
