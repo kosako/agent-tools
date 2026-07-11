@@ -17,12 +17,21 @@
 #     が negative と別操作を叩く空振り緑を弾く。ペアを増やす方向の拡張は妨げない)。
 #   - negative probe が認証を通していない (通したら credential leak)。
 #   - positive-control probe が認証を通している (通さなければ空振り緑)。
+#   - 各チャネルは reachability control (隔離 session 内の認証なし同一ホストアクセス) を
+#     ちょうど 1 本持つ (#185)。negative の失敗が「credential を剥いだから」なのか
+#     「そもそも到達できないから」(一過性障害 / proxy が env 隔離で落ちた) なのかを分岐する:
+#       - 隔離で認証あり成功 → credential leak (破れ)。
+#       - 隔離で認証あり失敗 + 認証なし到達成功 → 緑 (拒否は認証由来と言える)。
+#       - 隔離で認証なしも失敗 (reachable=false) → indeterminate (到達不能。緑に数えない)。
+#     positive control では原理的に捕まらない「隔離側だけの非対称な到達不能」を塞ぐ。
+#     エラー種別 (DNS/TLS/proxy) の解釈はしない (4-state taxonomy は不採用・#185)。
 #
 # exit code の分類 (incident class を混ぜない):
 #   - 1 = 観測された破れ (credential leak / false-green)。probe の実行結果そのものが赤。
-#   - 2 = 入力・構造エラー (JSON 不正 / スキーマ違反 / チャネル欠落 / ペア不成立 / 重複)。
-#     runner 側の不備で、破れの証拠ではない。両方あるときは 1 を優先し、全 failure を報告する。
-#   - 0 は完全被覆かつ全 polarity 正のときだけ。
+#   - 2 = 入力・構造エラー (JSON 不正 / スキーマ違反 / チャネル欠落 / ペア不成立 / 重複 /
+#     reachability control の欠落) と indeterminate (隔離 session から到達不能で判定不能)。
+#     どちらも破れの証拠ではない。破れと同居するときは 1 を優先し、全 failure を報告する。
+#   - 0 は完全被覆かつ全 polarity 正かつ全チャネル到達確認済みのときだけ。
 #
 # 信頼境界 (honest): judge は runner が付けた operation ラベルを信頼する。negative と
 # positive が「同一 operation を名乗る別コマンド」でないことを judge は構造的に検証できない
@@ -50,25 +59,30 @@ module CheckCredentialIsolation
   # config に足せばそのチャネルも検証される。この分界は PR-2 で env 隔離の実機現実 (ambient
   # 認証源が永続か否か) に合わせた honest-label な調整 (#129 P3-02)。
   KNOWN_CHANNELS = (REQUIRED_CHANNELS + %w[git-ssh curl]).freeze
-  MODES = %w[negative positive].freeze
+  MODES = %w[negative positive reachability].freeze
 
   USAGE = <<~TEXT
     usage: check-credential-isolation.sh --judge <results.json>
 
     <results.json> shape:
       { "probes": [
-          { "channel": "gh", "mode": "negative", "operation": "<op id>", "authenticated": false },
-          { "channel": "gh", "mode": "positive", "operation": "<op id>", "authenticated": true } ] }
+          { "channel": "gh", "mode": "negative",     "operation": "<op id>", "authenticated": false },
+          { "channel": "gh", "mode": "positive",     "operation": "<op id>", "authenticated": true },
+          { "channel": "gh", "mode": "reachability", "operation": "<op id>", "reachable": true } ] }
 
     required channels: #{REQUIRED_CHANNELS.join(', ')}
     optional channels: git-ssh, curl (含めれば検証・無くても欠落扱いしない。ambient 認証源
                        = ssh-agent / ~/.netrc がセッション依存のため)
     各 channel は同一 operation の negative / positive ペアを1組以上持つこと。
     operation は「隔離の有無だけが違う同一コマンド」を指す識別子 (真正性は runner の責務)。
+    さらに各 channel は reachability control (隔離 session 内の認証なし同一ホストアクセス)
+    をちょうど 1 本持つこと (#185)。reachable=false は indeterminate (到達不能・判定不能) で、
+    緑に数えず exit 2 に倒す。
 
     exit: 0 = isolation verified,
           1 = breach observed (credential leak / false-green),
-          2 = usage / input / structural error (missing channel, incomplete pair, duplicate)
+          2 = usage / input / structural error (missing channel, incomplete pair, duplicate,
+              missing reachability control) or indeterminate (isolated session unreachable)
   TEXT
 
   # results JSON を検証済みの probes 配列に変換する。
@@ -100,16 +114,32 @@ module CheckCredentialIsolation
     if probe["operation"] =~ /[[:cntrl:]]/
       raise Error, "probes[#{index}].operation must not contain control characters"
     end
-    unless [true, false].include?(probe["authenticated"])
-      raise Error, "probes[#{index}].authenticated must be a boolean"
+    # mode ごとに観測 field を 1 つに固定する (reachability は reachable / それ以外は
+    # authenticated)。他方の field の混入は曖昧なので入力エラー (fail-closed)。
+    if probe["mode"] == "reachability"
+      unless [true, false].include?(probe["reachable"])
+        raise Error, "probes[#{index}].reachable must be a boolean"
+      end
+      if probe.key?("authenticated")
+        raise Error, "probes[#{index}]: reachability probe must not carry authenticated"
+      end
+    else
+      unless [true, false].include?(probe["authenticated"])
+        raise Error, "probes[#{index}].authenticated must be a boolean"
+      end
+      if probe.key?("reachable")
+        raise Error, "probes[#{index}]: #{probe['mode']} probe must not carry reachable"
+      end
     end
   end
 
-  # 判定本体。[breaches, structural] の 2 配列を返す (両方空なら隔離 OK)。
+  # 判定本体。[breaches, structural, indeterminates] の 3 配列を返す (すべて空なら隔離 OK)。
   # polarity (leak / false-green) は構造の成否と独立に全 probe を検査する。構造不備の
   # 陰で同居する破れの証跡が報告から漏れないようにするため (early return しない)。
+  # indeterminate (到達不能) は破れでも runner の不備でもない第 3 の結果だが、
+  # exit class は 2 (緑に数えない・破れの証拠にもしない, #185)。
   def self.judge(probes)
-    [polarity_failures(probes), structural_failures(probes)]
+    [polarity_failures(probes), structural_failures(probes), indeterminate_failures(probes)]
   end
 
   def self.polarity_failures(probes)
@@ -132,14 +162,48 @@ module CheckCredentialIsolation
   # (重複は曖昧なので不成立)、かつ REQUIRED_CHANNELS すべてに完全ペアが 1 組以上あること。
   # 完全ペア要求は全 group にかかる (curl を含めたなら curl も完全ペアが要る = opt-in でも
   # 骨抜けにしない) が、「チャネル欠落」の判定は required floor のみ (curl 不在は許す)。
+  # reachability control はペアの operation に束縛しない別コマンドなので、pair group の
+  # 検査から分離し、チャネル単位でちょうど 1 本を要求する (#185)。
   def self.structural_failures(probes)
-    groups = probes.group_by { |p| [p["channel"], p["operation"]] }
+    pair_probes, reach_probes = probes.partition { |p| p["mode"] != "reachability" }
+    groups = pair_probes.group_by { |p| [p["channel"], p["operation"]] }
     failures = groups.flat_map { |(channel, operation), members| group_failures(channel, operation, members) }
     REQUIRED_CHANNELS.each do |channel|
       next if groups.any? { |(ch, _), members| ch == channel && complete_pair?(members) }
       failures << "channel #{channel}: no complete negative/positive probe pair"
     end
+    failures + reachability_structural_failures(pair_probes, reach_probes)
+  end
+
+  # reachability control の被覆検査: probe pair を持つ全チャネルにちょうど 1 本 (欠落 =
+  # 到達不能由来の false-green を見分けられない / 重複 = 曖昧)。pair の無いチャネルへの
+  # reachability だけの混入も曖昧なので弾く (fail-closed)。
+  def self.reachability_structural_failures(pair_probes, reach_probes)
+    failures = []
+    pair_channels = pair_probes.map { |p| p["channel"] }.uniq
+    reach_by_channel = reach_probes.group_by { |p| p["channel"] }
+    pair_channels.each do |channel|
+      count = reach_by_channel.fetch(channel, []).length
+      if count.zero?
+        failures << "channel #{channel}: no reachability control probe " \
+                    "(unreachable-host false-green cannot be ruled out)"
+      elsif count > 1
+        failures << "channel #{channel}: expected exactly one reachability probe, got #{count}"
+      end
+    end
+    (reach_by_channel.keys - pair_channels).each do |channel|
+      failures << "channel #{channel}: reachability probe without a negative/positive probe pair"
+    end
     failures
+  end
+
+  # 到達不能 (reachable=false) = indeterminate。negative の失敗を「隔離が効いた」と
+  # 解釈できない (一過性障害 / proxy-delta の窓, #185)。緑に数えず exit 2 に倒す。
+  def self.indeterminate_failures(probes)
+    probes.select { |p| p["mode"] == "reachability" && p["reachable"] == false }.map do |p|
+      "indeterminate: channel #{p['channel']} unreachable from isolated session " \
+        "(operation #{p['operation']}); negative failure cannot be attributed to isolation"
+    end
   end
 
   def self.group_failures(channel, operation, members)
@@ -176,14 +240,14 @@ module CheckCredentialIsolation
     raise Error, "results file not found: #{path}" unless File.file?(path)
 
     probes = parse_input(File.read(path))
-    breaches, structural = judge(probes)
-    if breaches.empty? && structural.empty?
+    breaches, structural, indeterminates = judge(probes)
+    if breaches.empty? && structural.empty? && indeterminates.empty?
       channels = probes.map { |p| p["channel"] }.uniq.length
       puts "ok: credential isolation verified (#{channels} channels, #{probes.length} probes)"
       return 0
     end
 
-    (breaches + structural).each { |failure| warn "FAIL: #{failure}" }
+    (breaches + structural + indeterminates).each { |failure| warn "FAIL: #{failure}" }
     breaches.empty? ? 2 : 1
   rescue Error, JSON::ParserError, SystemCallError => e
     warn "error: #{e.message}"

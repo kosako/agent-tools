@@ -64,14 +64,18 @@ usage: check-credential-isolation.sh --judge <results.json>
 - required チャネル (`gh` / `git-https`。一覧の正本は lib の `REQUIRED_CHANNELS` / `--help`) に
   同一 operation の negative/positive ペアを 1 組以上要求し、credential leak・空振り緑・チャネル
   欠落を弾く。`git-ssh` / `curl` は ambient 認証源がセッション依存のため opt-in (含めれば完全ペア
-  必須、無くても欠落扱いしない)。
+  必須、無くても欠落扱いしない)。さらに各チャネルに reachability control (隔離 session 内の
+  認証なし到達確認) をちょうど 1 本要求し、到達不能 (`reachable=false`) は indeterminate
+  (緑に数えない) に倒す (#185)。
 - exit code: 隔離確認は 0、観測された破れ (leak / false-green) は 1、usage / 入力・構造エラー
-  (チャネル欠落・ペア不成立・重複) は 2。破れと構造不備が同居したら 1 を優先し全件報告する。
+  (チャネル欠落・ペア不成立・重複・reachability 欠落) と indeterminate (到達不能) は 2。
+  破れと同居したら 1 を優先し全件報告する。
 - self-test: `tests/check-credential-isolation-test.sh`
 
 - `probe-credential-isolation.sh`: credential 隔離 acceptance harness の probe runner (実機)。
   required チャネル (gh / git-https) + opt-in (git-ssh / curl) を private target に隔離 / 非隔離で
-  叩き、認証成否を `results.json` (judge 入力) として出力する。隔離 recipe の SSOT は
+  叩き、認証成否を `results.json` (judge 入力) として出力する。各チャネルでは隔離 session 内の
+  認証なし同一ホストアクセス (reachability control) も 1 回観測する (#185)。隔離 recipe の SSOT は
   `lib/credential_isolation_recipe.sh`。
 
 ```text

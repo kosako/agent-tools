@@ -5,7 +5,8 @@
 # canonical チャネル (gh / git-https / git-ssh / curl) を private リソースに対し
 #   - negative: 隔離 session (lib/credential_isolation_recipe.sh の iso_run) で叩く
 #   - positive: 通常 session (ambient credential) で同一コマンドを叩く
-# 両方で認証成否を観測し、judge 入力の results.json を生成する。
+#   - reachability control: 隔離 session で同一ホストへ認証なしアクセスを 1 回叩く (#185)
+# を観測し、judge 入力の results.json を生成する。
 #
 # 責務境界 (honest):
 #   - runner は「観測」だけを行う。negative と positive は iso_run の有無だけが違う
@@ -18,6 +19,13 @@
 # 認証成否の判定: private リソースへの認証必須アクセスが成功 (exit 0) すれば
 # authenticated=true。隔離 session でこれが false、通常 session で true になるのが
 # 隔離が効いている状態。
+#
+# reachability control (#185): negative は失敗を exit 非ゼロでしか観測しないので、
+# 「credential を剥いだから失敗」と「そもそも到達できないから失敗」(一過性障害 /
+# proxy が env 隔離で落ちる proxy-delta) を区別できない。そこで隔離 session 内で
+# 同一ホストへの認証なしアクセスを 1 回観測し、judge が 3 分岐する (認証成功=leak /
+# 認証のみ失敗=緑 / 到達も失敗=indeterminate)。到達成否は transport の成否だけを見て、
+# エラー種別 (DNS/TLS/proxy) は解釈しない (4-state taxonomy 不採用)。
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -32,12 +40,14 @@ usage: probe-credential-isolation.sh [--config PATH] [--out FILE] [--dry-run]
 
 canonical チャネル (gh / git-https / git-ssh / curl) を private リソースに対し
 隔離 / 非隔離で叩き、認証成否を results.json (judge 入力) として出力する。
+各チャネルでは隔離 session 内の認証なし同一ホストアクセス (reachability control) も
+1 回観測する (#185。到達不能なら judge が indeterminate に倒す)。
 
 probe target は local config (既定 $CONFIG_DEFAULT) から読む。必須キー (required channels):
   PROBE_GH_REPO=owner/private-repo          # gh api repos/<value>
   PROBE_GIT_HTTPS=https://github.com/owner/private-repo.git
 任意キー (git-ssh は ssh-agent、curl は ~/.netrc 依存の opt-in channel。設定時のみ probe):
-  PROBE_GIT_SSH=git@github.com:owner/private-repo.git
+  PROBE_GIT_SSH=git@github.com:owner/private-repo.git   # scp 形式のみ (reachability の host 抽出)
   PROBE_CURL_URL=https://api.github.com/repos/owner/private-repo
 
   --config PATH   probe target config (既定: 上記、または GITHUB_ISOLATION_PROBE_CONFIG)
@@ -99,10 +109,22 @@ probe_curl=false
 # 実行バイナリを canonical PATH で 1 度だけ絶対パスに解決し、negative/positive の両方に渡す。
 # これで同一 argv だけでなく実行バイナリも一致し、ambient PATH 上の wrapper / 別版で positive
 # だけ通る偽の安心を排除する (operation identity, #168 レビュー)。
+# curl は opt-in channel の probe に加えて gh / git-https の reachability control でも使うため
+# 常に解決する (#185)。git-ssh の reachability は nc (TCP 到達確認)。
 GH_BIN=$(iso_resolve_bin gh)   || { echo "error: gh not found in canonical PATH ($ISO_PATH)" >&2; exit 2; }
 GIT_BIN=$(iso_resolve_bin git) || { echo "error: git not found in canonical PATH ($ISO_PATH)" >&2; exit 2; }
-if [ "$probe_curl" = true ]; then
-  CURL_BIN=$(iso_resolve_bin curl) || { echo "error: curl not found in canonical PATH ($ISO_PATH)" >&2; exit 2; }
+CURL_BIN=$(iso_resolve_bin curl) || { echo "error: curl not found in canonical PATH ($ISO_PATH)" >&2; exit 2; }
+if [ "$probe_ssh" = true ]; then
+  NC_BIN=$(iso_resolve_bin nc) || { echo "error: nc not found in canonical PATH ($ISO_PATH)" >&2; exit 2; }
+  # reachability control 用に host を取り出す。scp 形式 (git@host:path) のみ対応し、
+  # それ以外は推測せず明示 fail (fail fast。ssh:// 形式の需要が出たら契約ごと拡張する)。
+  case "$PROBE_GIT_SSH" in
+    *@*:*) SSH_REACH_HOST=${PROBE_GIT_SSH#*@}; SSH_REACH_HOST=${SSH_REACH_HOST%%:*} ;;
+    *)
+      echo "error: PROBE_GIT_SSH must be scp-style (git@host:path) so the reachability control can extract the host: $PROBE_GIT_SSH" >&2
+      exit 2
+      ;;
+  esac
 fi
 
 # 各チャネルの (negative=隔離 / positive=非隔離) を **同一コマンド** で走らせる。
@@ -117,9 +139,22 @@ fi
 # git-ssh:   git ls-remote <ssh-url>
 # curl:      curl -sfS --netrc -o /dev/null <api-url>  (認証源 = ~/.netrc。--netrc が
 #            無いと curl は netrc を一切参照せず、この channel が netrc auth を行使しない, #180)
+#
+# reachability control (#185) は隔離 session 内で認証なしの同一ホストアクセスを 1 回叩く:
+# gh:        curl -sS --max-time 20 -o /dev/null https://api.github.com/repos/<repo>
+#            (gh api と同一 host+path を認証なしで。gh binary は credential 不在だと
+#             network 前に拒否するため curl で到達を観測する。-f を付けないので 404/403
+#             等の HTTP 応答完了 = exit 0 = 到達、transport 失敗のみ非ゼロ)
+# git-https: curl -sS --max-time 20 -o /dev/null <https-url>  (同上・同一 host)
+# git-ssh:   nc -z -w 20 <host> 22  (TCP 到達確認のみ。ssh 認証の成否は解釈しない)
+# curl:      curl -sS --max-time 20 -o /dev/null <api-url>  (--netrc を付けない = 認証なし
+#            の同一 URL。-f なし)
+# 到達確認だけは応答が返らないとき hang しないよう timeout を付ける (auth probe は
+# 人間が見ている手動実行前提のまま・operation identity も崩さないため据え置き)。
 
-# negative probe: 隔離 session で command を実行し認証成否 (true/false) を返す。
-run_negative() {
+# 隔離 session で command を実行し成否 (true/false) を返す。
+# negative probe (認証成否) と reachability control (到達成否) の両方が使う。
+run_isolated() {
   scratch=$(iso_make_scratch)
   if iso_run "$scratch" "$@" >/dev/null 2>&1; then result=true; else result=false; fi
   rm -rf "$scratch"
@@ -137,37 +172,47 @@ if [ "$dry_run" = true ]; then
   echo "# dry-run: probe command は実行しません (config は既に shell source 済み)。config=$config"
   echo "# negative = iso_run <scratch> <cmd> (env 隔離 + 非 repo cwd)"
   echo "# positive = amb_run <cmd> (ambient env + 非 repo cwd)。cmd は negative と同一。"
-  echo "# pinned binaries (negative/positive 共通): gh=$GH_BIN git=$GIT_BIN"
+  echo "# reachability = iso_run <scratch> <reach cmd> (隔離 session 内・認証なし同一ホスト, #185)"
+  echo "# pinned binaries (negative/positive/reachability 共通): gh=$GH_BIN git=$GIT_BIN curl=$CURL_BIN${NC_BIN:+ nc=$NC_BIN}"
   echo "# gh        cmd: $GH_BIN api repos/$PROBE_GH_REPO --silent"
+  echo "# gh        reach: $CURL_BIN -sS --max-time 20 -o /dev/null https://api.github.com/repos/$PROBE_GH_REPO"
   echo "# git-https cmd: $GIT_BIN ls-remote $PROBE_GIT_HTTPS"
+  echo "# git-https reach: $CURL_BIN -sS --max-time 20 -o /dev/null $PROBE_GIT_HTTPS"
   if [ "$probe_ssh" = true ]; then
     echo "# git-ssh   cmd: $GIT_BIN ls-remote $PROBE_GIT_SSH"
+    echo "# git-ssh   reach: $NC_BIN -z -w 20 $SSH_REACH_HOST 22"
   else
     echo "# git-ssh   skipped: PROBE_GIT_SSH 未設定 (opt-in channel)"
   fi
   if [ "$probe_curl" = true ]; then
     echo "# curl      cmd: $CURL_BIN -sfS --netrc -o /dev/null $PROBE_CURL_URL"
+    echo "# curl      reach: $CURL_BIN -sS --max-time 20 -o /dev/null $PROBE_CURL_URL"
   else
     echo "# curl      skipped: PROBE_CURL_URL 未設定 (opt-in channel)"
   fi
   exit 0
 fi
 
-gh_neg=$(run_negative "$GH_BIN" api "repos/$PROBE_GH_REPO" --silent)
+gh_neg=$(run_isolated "$GH_BIN" api "repos/$PROBE_GH_REPO" --silent)
 gh_pos=$(run_positive "$GH_BIN" api "repos/$PROBE_GH_REPO" --silent)
-gith_neg=$(run_negative "$GIT_BIN" ls-remote "$PROBE_GIT_HTTPS")
+gh_reach=$(run_isolated "$CURL_BIN" -sS --max-time 20 -o /dev/null "https://api.github.com/repos/$PROBE_GH_REPO")
+gith_neg=$(run_isolated "$GIT_BIN" ls-remote "$PROBE_GIT_HTTPS")
 gith_pos=$(run_positive "$GIT_BIN" ls-remote "$PROBE_GIT_HTTPS")
+gith_reach=$(run_isolated "$CURL_BIN" -sS --max-time 20 -o /dev/null "$PROBE_GIT_HTTPS")
 if [ "$probe_ssh" = true ]; then
-  giths_neg=$(run_negative "$GIT_BIN" ls-remote "$PROBE_GIT_SSH")
+  giths_neg=$(run_isolated "$GIT_BIN" ls-remote "$PROBE_GIT_SSH")
   giths_pos=$(run_positive "$GIT_BIN" ls-remote "$PROBE_GIT_SSH")
+  giths_reach=$(run_isolated "$NC_BIN" -z -w 20 "$SSH_REACH_HOST" 22)
 fi
 if [ "$probe_curl" = true ]; then
   # --netrc を明示しないと curl は netrc を一切参照しない。この channel の認証源は netrc
   # なので必須 (#180 M-07)。negative 側の netrc 遮断は curl の版で経路が違う: 8.7.1 は NETRC env
   # を見ず $HOME/.netrc を読むので空 HOME (scratch) が断ち、8.16.0+ は NETRC を netrc file 指定に
   # 使うので NETRC=/dev/null が効く。recipe は両方 (空 HOME + NETRC=/dev/null) を設定するので新旧とも遮断される。
-  curl_neg=$(run_negative "$CURL_BIN" -sfS --netrc -o /dev/null "$PROBE_CURL_URL")
+  curl_neg=$(run_isolated "$CURL_BIN" -sfS --netrc -o /dev/null "$PROBE_CURL_URL")
   curl_pos=$(run_positive "$CURL_BIN" -sfS --netrc -o /dev/null "$PROBE_CURL_URL")
+  # reachability は --netrc を付けない同一 URL (認証なし)。-f も付けない (HTTP 応答完了 = 到達)。
+  curl_reach=$(run_isolated "$CURL_BIN" -sS --max-time 20 -o /dev/null "$PROBE_CURL_URL")
 fi
 
 # one JSON probe object を出力する。第 5 引数が空でなければ末尾にカンマを付ける。
@@ -175,29 +220,39 @@ probe_obj() {
   printf '    { "channel": "%s", "mode": "%s", "operation": "%s", "authenticated": %s }%s\n' "$1" "$2" "$3" "$4" "$5"
 }
 
+# one JSON reachability object。operation はペアと別コマンドなので別 id (<pair-op>-reach)。
+# 第 4 引数が空でなければ末尾にカンマを付ける。
+reach_obj() {
+  printf '    { "channel": "%s", "mode": "reachability", "operation": "%s", "reachable": %s }%s\n' "$1" "$2" "$3" "$4"
+}
+
 emit() {
   echo '{'
   echo '  "probes": ['
   probe_obj gh        negative gh-api-repo        "$gh_neg"  ,
   probe_obj gh        positive gh-api-repo        "$gh_pos"  ,
+  reach_obj gh        gh-api-repo-reach           "$gh_reach" ,
   probe_obj git-https negative git-https-lsremote "$gith_neg" ,
+  probe_obj git-https positive git-https-lsremote "$gith_pos" ,
   # required の最後の要素の末尾カンマは、opt-in を続けるかどうかで決まる。
   if [ "$probe_ssh" = true ] || [ "$probe_curl" = true ]; then
-    probe_obj git-https positive git-https-lsremote "$gith_pos" ,
+    reach_obj git-https git-https-lsremote-reach "$gith_reach" ,
   else
-    probe_obj git-https positive git-https-lsremote "$gith_pos" ""
+    reach_obj git-https git-https-lsremote-reach "$gith_reach" ""
   fi
   if [ "$probe_ssh" = true ]; then
     probe_obj git-ssh negative git-ssh-lsremote "$giths_neg" ,
+    probe_obj git-ssh positive git-ssh-lsremote "$giths_pos" ,
     if [ "$probe_curl" = true ]; then
-      probe_obj git-ssh positive git-ssh-lsremote "$giths_pos" ,
+      reach_obj git-ssh git-ssh-lsremote-reach "$giths_reach" ,
     else
-      probe_obj git-ssh positive git-ssh-lsremote "$giths_pos" ""
+      reach_obj git-ssh git-ssh-lsremote-reach "$giths_reach" ""
     fi
   fi
   if [ "$probe_curl" = true ]; then
     probe_obj curl negative curl-api-repo "$curl_neg" ,
-    probe_obj curl positive curl-api-repo "$curl_pos" ""
+    probe_obj curl positive curl-api-repo "$curl_pos" ,
+    reach_obj curl curl-api-repo-reach   "$curl_reach" ""
   fi
   echo '  ]'
   echo '}'
