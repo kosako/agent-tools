@@ -4,15 +4,13 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 setup="$script_dir/../setup.sh"
 
 tmpbase=$(mktemp -d)
 trap 'rm -rf "$tmpbase"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
 # root / home に空白を含めて、引数 forwarding の quoting を検証する
 # ("Application Support" のような空白入り path での破綻を捕まえる)。
@@ -26,22 +24,10 @@ cat > "$tmp/shared/skills/personal-demo-skill.md" <<'EOF'
 
 body for the demo skill.
 EOF
-cat > "$tmp/shared/skills/personal-demo-skill.asset.yml" <<'EOF'
-schema_version: 1
-name: personal-demo-skill
-kind: skill
-visibility: public
-targets:
-  - codex
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/skills/personal-demo-skill.md
-  format: markdown
-summary: demo skill for setup-test
-EOF
+WAM_EXTRA='summary: demo skill for setup-test'
+write_asset_manifest "$tmp/shared/skills/personal-demo-skill.asset.yml" \
+  personal-demo-skill skill public shared/skills/personal-demo-skill.md markdown \
+  codex claude-code
 
 # 引数は quote して渡す (root/home に空白を含むため)。setup.sh 側の forwarding の
 # quoting が壊れていれば、空白入り path の sub-script 呼び出しで失敗する。

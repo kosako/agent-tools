@@ -5,6 +5,8 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 build="$script_dir/../build.sh"
 sync="$script_dir/../sync.sh"
 doctor="$script_dir/../doctor.sh"
@@ -12,10 +14,6 @@ doctor="$script_dir/../doctor.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
 run_doctor() {
   "$doctor" --root "$tmp/repo" --codex-home "$tmp/codex" \
@@ -23,26 +21,9 @@ run_doctor() {
 }
 
 # --- fixture repo ---
-mkdir -p "$tmp/repo/shared/workflows" "$tmp/codex/skills" "$tmp/claude/skills" "$tmp/agents"
-cat > "$tmp/repo/shared/workflows/personal-demo.md" <<'EOF'
-# demo
-EOF
-cat > "$tmp/repo/shared/workflows/personal-demo.asset.yml" <<'EOF'
-schema_version: 1
-name: personal-demo
-kind: workflow
-visibility: public
-targets:
-  - codex
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/workflows/personal-demo.md
-  format: markdown
-summary: demo workflow
-EOF
+mkdir -p "$tmp/codex/skills" "$tmp/claude/skills" "$tmp/agents"
+WAM_EXTRA='summary: demo workflow'
+make_demo_repo "$tmp/repo" workflows personal-demo workflow '# demo'
 "$build" --root "$tmp/repo" --quiet > /dev/null
 "$script_dir/../register.sh" --root "$tmp/repo" --quiet > /dev/null
 "$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --apply --quiet > /dev/null
@@ -133,20 +114,8 @@ mkdir -p "$tmp/brepo/shared/workflows" "$tmp/bcodex" "$tmp/bclaude" "$tmp/bagent
 cat > "$tmp/brepo/shared/workflows/personal-demo.md" <<'EOF'
 # demo
 EOF
-cat > "$tmp/brepo/shared/workflows/personal-demo.asset.yml" <<'EOF'
-schema_version: 1
-name: personal-demo
-kind: workflow
-visibility: public
-targets:
-  - codex
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/workflows/personal-demo.md
-  format: markdown
-EOF
+write_asset_manifest "$tmp/brepo/shared/workflows/personal-demo.asset.yml" \
+  personal-demo workflow public shared/workflows/personal-demo.md markdown codex
 "$build" --root "$tmp/brepo" --quiet > /dev/null
 "$script_dir/../register.sh" --root "$tmp/brepo" --quiet > /dev/null   # catalog を valid に作る
 run_bdoctor() {

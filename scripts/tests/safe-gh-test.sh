@@ -6,7 +6,8 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 src="$repo_root/shared/scripts/personal-safe-gh.rb"
 
 tmp=$(mktemp -d)
@@ -19,19 +20,10 @@ cat > "$tmp/trust.json" <<'EOF'
 {"login": "owner-login", "id": 4242}
 EOF
 
-ruby - "$src" "$tmp/trust.json" <<'RUBY'
+# check / @failed は lib/check_helper.rb を -r で読み込んで共有する。
+ruby -r"$script_dir/lib/check_helper" - "$src" "$tmp/trust.json" <<'RUBY'
 require ARGV[0]
 trust_file = ARGV[1]
-
-@failed = 0
-def check(name, cond)
-  if cond
-    # pass
-  else
-    warn "FAIL: #{name}"
-    @failed += 1
-  end
-end
 
 ME = { "login" => "me", "id" => 1 }
 

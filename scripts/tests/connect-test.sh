@@ -5,6 +5,8 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 build="$script_dir/../build.sh"
 register="$script_dir/../register.sh"
 connect="$script_dir/../connect.sh"
@@ -12,37 +14,15 @@ connect="$script_dir/../connect.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
 run_connect() {
   "$connect" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" "$@"
 }
 
 # --- fixture: instruction asset ---
-mkdir -p "$tmp/repo/shared/instructions" "$tmp/codex" "$tmp/claude"
-cat > "$tmp/repo/shared/instructions/personal-ops.md" <<'EOF'
-# operating rules
-
-ドキュメントは日本語を既定にする。
-EOF
-cat > "$tmp/repo/shared/instructions/personal-ops.asset.yml" <<'EOF'
-schema_version: 1
-name: personal-ops
-kind: instruction
-visibility: public
-targets:
-  - codex
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/instructions/personal-ops.md
-  format: markdown
-EOF
+mkdir -p "$tmp/codex" "$tmp/claude"
+make_demo_repo "$tmp/repo" instructions personal-ops instruction \
+  '# operating rules' '' 'ドキュメントは日本語を既定にする。'
 
 # --- case 0: build 前は connect する artifact が無い ---
 run_connect > "$tmp/c0" 2>&1 || fail "connect without artifacts should succeed: $(cat "$tmp/c0")"
@@ -177,27 +157,9 @@ grep -q "0 change(s)" "$tmp/c11" || fail "unregistered instruction connect shoul
 
 # --- case 12: registered な catalog のまま source を変えて build だけ再実行したら connect は skip ---
 # (古い registered catalog で未レビュー content を配置しないこと = build_id 照合の回帰)
-mkdir -p "$tmp/repo3/shared/instructions" "$tmp/codex10" "$tmp/claude10"
-cat > "$tmp/repo3/shared/instructions/personal-ops.md" <<'EOF'
-# operating rules
-
-ドキュメントは日本語を既定にする。
-EOF
-cat > "$tmp/repo3/shared/instructions/personal-ops.asset.yml" <<'EOF'
-schema_version: 1
-name: personal-ops
-kind: instruction
-visibility: public
-targets:
-  - codex
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/instructions/personal-ops.md
-  format: markdown
-EOF
+mkdir -p "$tmp/codex10" "$tmp/claude10"
+make_demo_repo "$tmp/repo3" instructions personal-ops instruction \
+  '# operating rules' '' 'ドキュメントは日本語を既定にする。'
 "$build" --root "$tmp/repo3" --quiet > /dev/null
 "$register" --root "$tmp/repo3" --quiet > /dev/null
 # source を変更 (build_id が変わる) して build だけ再実行 (register しない → catalog は古い registered)
@@ -215,27 +177,9 @@ grep -q "0 change(s)" "$tmp/c12" || fail "stale connect should apply 0 changes: 
 # --- case 13: register 後に manifest だけ変えたら connect は gate で止まる (#148) ---
 # (source は不変で build_id 一致でも、登録判断 (risk/review) が古い catalog は配置しない。
 #  connect は初回配置を担うので、ここを塞がないと sync の manifest gate を迂回できる)
-mkdir -p "$tmp/repo4/shared/instructions" "$tmp/codex11" "$tmp/claude11"
-cat > "$tmp/repo4/shared/instructions/personal-ops.md" <<'EOF'
-# operating rules
-
-ドキュメントは日本語を既定にする。
-EOF
-cat > "$tmp/repo4/shared/instructions/personal-ops.asset.yml" <<'EOF'
-schema_version: 1
-name: personal-ops
-kind: instruction
-visibility: public
-targets:
-  - codex
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/instructions/personal-ops.md
-  format: markdown
-EOF
+mkdir -p "$tmp/codex11" "$tmp/claude11"
+make_demo_repo "$tmp/repo4" instructions personal-ops instruction \
+  '# operating rules' '' 'ドキュメントは日本語を既定にする。'
 "$build" --root "$tmp/repo4" --quiet > /dev/null
 "$register" --root "$tmp/repo4" --quiet > /dev/null
 # source は変えず manifest だけ変更 (build_id 不変・manifest_digest 変化)。register しない。
@@ -250,25 +194,7 @@ grep -q "skip: \[codex\] owned.*manifest changed" "$tmp/c13" \
 [ ! -e "$tmp/codex11/AGENTS.md" ] || fail "manifest-stale instruction must not create owned codex file"
 
 # --- case 14: 非 UTF-8 バイトで crash しない (#149) ---
-mkdir -p "$tmp/repo5/shared/instructions"
-cat > "$tmp/repo5/shared/instructions/personal-ops.md" <<'EOF'
-# operating rules
-EOF
-cat > "$tmp/repo5/shared/instructions/personal-ops.asset.yml" <<'EOF'
-schema_version: 1
-name: personal-ops
-kind: instruction
-visibility: public
-targets:
-  - codex
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/instructions/personal-ops.md
-  format: markdown
-EOF
+make_demo_repo "$tmp/repo5" instructions personal-ops instruction '# operating rules'
 "$build" --root "$tmp/repo5" --quiet > /dev/null
 "$register" --root "$tmp/repo5" --quiet > /dev/null
 

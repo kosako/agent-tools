@@ -5,6 +5,8 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
 build="$script_dir/../build.sh"
 register="$script_dir/../register.sh"
 sync="$script_dir/../sync.sh"
@@ -12,36 +14,15 @@ sync="$script_dir/../sync.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-fail() {
-  echo "FAIL: $1" >&2
-  exit 1
-}
 
 run_sync() {
   "$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" "$@"
 }
 
 # --- fixture repo を build ---
-mkdir -p "$tmp/repo/shared/workflows" "$tmp/codex/skills" "$tmp/claude/skills"
-cat > "$tmp/repo/shared/workflows/personal-demo.md" <<'EOF'
-# demo v1
-EOF
-cat > "$tmp/repo/shared/workflows/personal-demo.asset.yml" <<'EOF'
-schema_version: 1
-name: personal-demo
-kind: workflow
-visibility: public
-targets:
-  - codex
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/workflows/personal-demo.md
-  format: markdown
-summary: demo workflow
-EOF
+mkdir -p "$tmp/codex/skills" "$tmp/claude/skills"
+WAM_EXTRA='summary: demo workflow'
+make_demo_repo "$tmp/repo" workflows personal-demo workflow '# demo v1'
 "$build" --root "$tmp/repo" --quiet > /dev/null
 
 # --- case 0: catalog が無いと sync は何も配置しない (register を促す) ---
@@ -118,22 +99,10 @@ grep -q "real content" "$tmp/real-skill/SKILL.md" || fail "symlink destination m
 
 # --- case 8: skill -> instruction 転換後、catalog 列挙なので stale skill は配置されない ---
 "$build" --root "$tmp/repo" --quiet > /dev/null
-cat > "$tmp/repo/shared/workflows/personal-demo.asset.yml" <<'EOF'
-schema_version: 1
-name: personal-demo
-kind: instruction
-visibility: public
-targets:
-  - codex
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/workflows/personal-demo.md
-  format: markdown
-summary: demo instruction
-EOF
+WAM_EXTRA='summary: demo instruction'
+write_asset_manifest "$tmp/repo/shared/workflows/personal-demo.asset.yml" \
+  personal-demo instruction public shared/workflows/personal-demo.md markdown \
+  codex claude-code
 # 古い generated skill artifact は残したまま、catalog だけ instruction で作り直す。
 # catalog 列挙なので skill entry は出ず、instruction は未 build なので run build first。
 "$register" --root "$tmp/repo" --quiet > /dev/null
@@ -208,20 +177,8 @@ description: demo skill
 ---
 v1
 EOF
-cat > "$tmp/srepo/shared/skills/personal-sk/asset.yml" <<'EOF'
-schema_version: 1
-name: personal-sk
-kind: skill
-visibility: public
-targets:
-  - codex
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/skills/personal-sk
-  format: directory
-EOF
+write_asset_manifest "$tmp/srepo/shared/skills/personal-sk/asset.yml" \
+  personal-sk skill public shared/skills/personal-sk directory codex
 "$build" --root "$tmp/srepo" --quiet > /dev/null
 "$register" --root "$tmp/srepo" --quiet > /dev/null   # catalog build_id = generated build_id
 # source を変更して build せず register だけ (catalog build_id が generated より新しくなる)
@@ -248,20 +205,8 @@ description: demo skill
 ---
 body
 EOF
-cat > "$tmp/repo14/shared/skills/personal-sk/asset.yml" <<'EOF'
-schema_version: 1
-name: personal-sk
-kind: skill
-visibility: public
-targets:
-  - codex
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/skills/personal-sk
-  format: directory
-EOF
+write_asset_manifest "$tmp/repo14/shared/skills/personal-sk/asset.yml" \
+  personal-sk skill public shared/skills/personal-sk directory codex
 "$build" --root "$tmp/repo14" --quiet > /dev/null
 "$register" --root "$tmp/repo14" --quiet > /dev/null
 mkdir -p "$tmp/codex14"
@@ -278,27 +223,8 @@ printf '#!/bin/sh\necho v1\n' > "$tmp/srepo15/shared/scripts/personal-wrap.sh"
 # script kind は human review 必須 (#147) + 承認は内容に紐づく (#148)。
 # source を書き換える case (v2/v3) の前に呼び直し、現内容で approved を焼き直す。
 write_wrap_manifest() {
-  wrapbid=$(ruby -r"$script_dir/../lib/build" \
-    -e 'puts Build.build_id_for(ARGV[0], "shared/scripts/personal-wrap.sh", "text")' "$tmp/srepo15")
-  cat > "$tmp/srepo15/shared/scripts/personal-wrap.asset.yml" <<EOF
-schema_version: 1
-name: personal-wrap
-kind: script
-visibility: personal
-targets:
-  - codex
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-review:
-  human_review: approved
-  approved_build_id: $wrapbid
-  approved_artifact_kind: script
-source:
-  path: shared/scripts/personal-wrap.sh
-  format: text
-EOF
+  write_approved_script_manifest "$tmp/srepo15" shared/scripts/personal-wrap.sh \
+    personal-wrap personal codex claude-code
 }
 write_wrap_manifest
 run15() { "$sync" --root "$tmp/srepo15" --codex-home "$tmp/scodex15" --claude-home "$tmp/sclaude15" "$@"; }
@@ -380,20 +306,8 @@ grep -q "conflict: \[claude-code\].*symlink" "$tmp/out19" || fail "missing sidec
 # (登録判断 (risk / review / targets) は manifest 依存。判断ごと stale なので fail-closed に skip)
 mkdir -p "$tmp/mrepo/shared/workflows" "$tmp/mcodex" "$tmp/mclaude"
 printf '# demo\n' > "$tmp/mrepo/shared/workflows/personal-mdemo.md"
-cat > "$tmp/mrepo/shared/workflows/personal-mdemo.asset.yml" <<'EOF'
-schema_version: 1
-name: personal-mdemo
-kind: workflow
-visibility: public
-targets:
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/workflows/personal-mdemo.md
-  format: markdown
-EOF
+write_asset_manifest "$tmp/mrepo/shared/workflows/personal-mdemo.asset.yml" \
+  personal-mdemo workflow public shared/workflows/personal-mdemo.md markdown claude-code
 run20() { "$sync" --root "$tmp/mrepo" --codex-home "$tmp/mcodex" --claude-home "$tmp/mclaude" "$@"; }
 "$build" --root "$tmp/mrepo" --quiet > /dev/null
 "$register" --root "$tmp/mrepo" --quiet > /dev/null
@@ -457,20 +371,8 @@ description: demo skill $n
 ---
 body $n
 EOF
-  cat > "$tmp/prepo/shared/skills/personal-$n/asset.yml" <<EOF
-schema_version: 1
-name: personal-$n
-kind: skill
-visibility: public
-targets:
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/skills/personal-$n
-  format: directory
-EOF
+  write_asset_manifest "$tmp/prepo/shared/skills/personal-$n/asset.yml" \
+    "personal-$n" skill public "shared/skills/personal-$n" directory claude-code
 done
 run22() { "$sync" --root "$tmp/prepo" --codex-home "$tmp/pcodex" --claude-home "$tmp/pclaude" "$@"; }
 "$build" --root "$tmp/prepo" --quiet > /dev/null
@@ -519,26 +421,8 @@ rm -rf "$tmp/pclaude/skills/personal-handmade" "$tmp/pclaude/skills/personal-lin
 # --- case 24: script orphan は本体 + sidecar marker を対で撤去する ---
 mkdir -p "$tmp/prepo/shared/scripts"
 printf '#!/bin/sh\necho tool\n' > "$tmp/prepo/shared/scripts/personal-ptool.sh"
-ptoolbid=$(ruby -r"$script_dir/../lib/build" \
-  -e 'puts Build.build_id_for(ARGV[0], "shared/scripts/personal-ptool.sh", "text")' "$tmp/prepo")
-cat > "$tmp/prepo/shared/scripts/personal-ptool.asset.yml" <<EOF
-schema_version: 1
-name: personal-ptool
-kind: script
-visibility: personal
-targets:
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-review:
-  human_review: approved
-  approved_build_id: $ptoolbid
-  approved_artifact_kind: script
-source:
-  path: shared/scripts/personal-ptool.sh
-  format: text
-EOF
+write_approved_script_manifest "$tmp/prepo" shared/scripts/personal-ptool.sh \
+  personal-ptool personal claude-code
 "$build" --root "$tmp/prepo" --quiet > /dev/null
 "$register" --root "$tmp/prepo" --quiet > /dev/null
 run22 --apply --quiet > /dev/null
@@ -563,20 +447,8 @@ description: gated skill
 ---
 body
 EOF
-cat > "$tmp/prepo/shared/skills/personal-keep2/asset.yml" <<'EOF'
-schema_version: 1
-name: personal-keep2
-kind: skill
-visibility: public
-targets:
-  - claude-code
-risk:
-  prompt_injection: low
-  privacy: low
-source:
-  path: shared/skills/personal-keep2
-  format: directory
-EOF
+write_asset_manifest "$tmp/prepo/shared/skills/personal-keep2/asset.yml" \
+  personal-keep2 skill public shared/skills/personal-keep2 directory claude-code
 "$build" --root "$tmp/prepo" --quiet > /dev/null
 "$register" --root "$tmp/prepo" --quiet > /dev/null
 run22 --apply --quiet > /dev/null
