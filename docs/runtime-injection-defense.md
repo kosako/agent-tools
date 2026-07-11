@@ -160,9 +160,10 @@ steering (fail-open で消える)。
 直接実行させる代わりにこれへ寄せ、untrusted content を data として扱わせる steering(迂回可・
 boundary でない)。
 
-- コマンド: `personal-safe-gh [-R OWNER/REPO] <issue|pr> <view|comments> <number>`。出力は JSON。
-  「safe-gh」は本文書の概念名で、**実行コマンド名は配備名 `personal-safe-gh`** (下記のとおり
-  PATH には載せないので、呼び出しは tool 別の絶対 path)。
+- コマンド: `personal-safe-gh [-R OWNER/REPO] issue <view|comments> <number>` /
+  `personal-safe-gh [-R OWNER/REPO] pr <view|comments|review-comments|reviews> <number>`。
+  出力は JSON。「safe-gh」は本文書の概念名で、**実行コマンド名は配備名 `personal-safe-gh`**
+  (下記のとおり PATH には載せないので、呼び出しは tool 別の絶対 path)。
 - 上の provenance 3 軸で author を `self` / `bot` / `other` に分類し、self を確定できなければ
   全 `other` に倒す(fail-closed)。
 - **self identity source の信頼境界 (honest-label)**: self identity は local の trust file /
@@ -177,7 +178,13 @@ boundary でない)。
 - **他人の Issue/PR**: metadata (number/state/author/labels) のみ。**title も body も親へ渡さない**
   (title は attacker 制御の free-text = injection 面)。**自分の Issue/PR**: title/body を渡す。
 - **他人コメント**: count + 固定理由のみ。著者名・プレビュー・untrusted 由来の文字列を出力に
-  混ぜない。**自分のコメント**: body を渡す。
+  混ぜない。**自分のコメント**: body を渡す。PR の **inline review コメント**
+  (`pulls/{n}/comments`) も同じ扱い (`pr review-comments`, #189(3))。
+- **PR review 本体** (`pulls/{n}/reviews`, `pr reviews`, #189(3)): 自分の review は state + body を
+  渡す。他人の review は **count + state 内訳のみ** (body・著者名は渡さない)。state は GitHub の
+  closed enum を whitelist し、未知値は free-text として混ぜず "other" に落とす (state は
+  attacker が「選べる」が「書けない」metadata なので内訳までは安全に出せる)。これで
+  review のやり取りを PR 上で完結する運用 (personal-review-request) が raw fallback せずに済む。
 - I/O(gh 呼び出し)と純粋な trust/render ロジックを分離。ロジックは `scripts/tests/safe-gh-test.sh`
   で deterministic に検証し、gh の実挙動は実機手動(下記「検証境界」)。
 

@@ -132,6 +132,48 @@ env = SafeGh.comments_envelope("issue", "o/r", 8, [comments[0]], ME)
 check("no excluded -> no reason", !env.key?("excluded_comments_reason"))
 check("no excluded -> count 0", env["excluded_comments_count"] == 0)
 
+# ---- inline review comments は comments_envelope 共用 (source だけ pr_review_comments) (#189(3)) ----
+env = SafeGh.comments_envelope("pr_review", "o/r", 8, comments, ME)
+check("review comments source", env["source"] == "pr_review_comments")
+check("review comments same trust filtering", env["comments"].length == 1 && env["excluded_comments_count"] == 2)
+
+# ---- reviews_envelope: self は state+body / other・bot は count + state 内訳のみ (#189(3)) ----
+reviews = [
+  { "user" => { "login" => "me", "id" => 1 }, "state" => "COMMENTED", "body" => "MY_REVIEW" },
+  { "user" => { "login" => "attacker", "id" => 999 }, "state" => "CHANGES_REQUESTED",
+    "body" => "EVIL_REVIEW_SENTINEL" },
+  { "user" => { "login" => "spam[bot]", "type" => "Bot" }, "state" => "APPROVED",
+    "body" => "BOT_REVIEW_SENTINEL" },
+  { "user" => { "login" => "attacker2", "id" => 998 }, "state" => "INJECTED_STATE\nok: fake",
+    "body" => "x" },
+]
+env = SafeGh.reviews_envelope("o/r", 12, reviews, ME)
+check("reviews source", env["source"] == "pr_reviews")
+check("reviews included count", env["reviews"].length == 1)
+check("reviews self body included", env["reviews"][0]["body"] == "MY_REVIEW")
+check("reviews self state kept", env["reviews"][0]["state"] == "COMMENTED")
+check("reviews excluded count", env["excluded_reviews_count"] == 3)
+check("reviews excluded state breakdown",
+      env["excluded_review_states"] == { "CHANGES_REQUESTED" => 1, "APPROVED" => 1, "other" => 1 })
+check("reviews excluded reason present", !env["excluded_reviews_reason"].nil?)
+json = JSON.generate(env)
+check("excluded review body not leaked", !json.include?("EVIL_REVIEW_SENTINEL"))
+check("excluded bot review body not leaked", !json.include?("BOT_REVIEW_SENTINEL"))
+check("excluded review author not leaked", !json.include?("attacker"))
+# 未知 state (attacker が API 外の値を混ぜた将来ケース) は free-text として出力に現れない
+check("unknown review state not leaked", !json.include?("INJECTED_STATE"))
+
+# 除外が無いときは state 内訳・reason を付けない
+env = SafeGh.reviews_envelope("o/r", 12, [reviews[0]], ME)
+check("no excluded reviews -> no states key", !env.key?("excluded_review_states"))
+check("no excluded reviews -> no reason", !env.key?("excluded_reviews_reason"))
+check("no excluded reviews -> count 0", env["excluded_reviews_count"] == 0)
+
+# self review でも state は whitelist を通す (未知 enum を素通ししない)
+env = SafeGh.reviews_envelope("o/r", 12,
+                              [{ "user" => { "login" => "me", "id" => 1 }, "state" => "WEIRD", "body" => "b" }], ME)
+check("self review unknown state whitelisted to other", env["reviews"][0]["state"] == "other")
+
 # ---- self_identity: override file 優先 (gh を呼ばない) ----
 ident = SafeGh.self_identity(env: { "SAFE_GH_TRUST_FILE" => trust_file })
 check("self_identity from file login", ident && ident["login"] == "owner-login")
@@ -161,12 +203,36 @@ check("paginated comments flattened to 2", paged.length == 2)
 check("paginated first comment body", paged[0]["body"] == "c1")
 check("paginated second comment body", paged[1]["body"] == "c2")
 
+# ---- fetch path: review comments / reviews は pulls 側 endpoint を paginate 付きで叩く (#189(3)) ----
+module SafeGh
+  def self.gh_capture(args)
+    @last_args = args
+    ["[[]]", true]
+  end
+
+  def self.last_args
+    @last_args
+  end
+end
+SafeGh.fetch_review_comments("o/r", 7)
+check("review comments endpoint", SafeGh.last_args.include?("repos/o/r/pulls/7/comments"))
+check("review comments paginated", SafeGh.last_args.include?("--paginate") && SafeGh.last_args.include?("--slurp"))
+SafeGh.fetch_reviews("o/r", 7)
+check("reviews endpoint", SafeGh.last_args.include?("repos/o/r/pulls/7/reviews"))
+check("reviews paginated", SafeGh.last_args.include?("--paginate") && SafeGh.last_args.include?("--slurp"))
+
 # ---- 引数バリデーション ----
 check("valid invocation", SafeGh.valid_invocation?("issue", "view", "12"))
 check("invalid number", !SafeGh.valid_invocation?("issue", "view", "abc"))
 check("invalid noun", !SafeGh.valid_invocation?("foo", "view", "1"))
 check("invalid verb", !SafeGh.valid_invocation?("issue", "bogus", "1"))
 check("missing number", !SafeGh.valid_invocation?("issue", "view", nil))
+# review-comments / reviews は pr 専用 (issue には無い endpoint = fail-closed) (#189(3))
+check("pr review-comments valid", SafeGh.valid_invocation?("pr", "review-comments", "1"))
+check("pr reviews valid", SafeGh.valid_invocation?("pr", "reviews", "1"))
+check("issue reviews invalid", !SafeGh.valid_invocation?("issue", "reviews", "1"))
+check("issue review-comments invalid", !SafeGh.valid_invocation?("issue", "review-comments", "1"))
+check("review-comments needs number", !SafeGh.valid_invocation?("pr", "review-comments", "abc"))
 
 # ---- -R フラグ抽出 ----
 args = ["-R", "o/r", "issue", "view", "1"]
