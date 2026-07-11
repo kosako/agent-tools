@@ -9,7 +9,6 @@
 # - 出力に secrets / absolute private paths を含めない (paths は tilde 表記)。
 # - 外部依存ゼロ、network access なし。
 
-require "json"
 require "yaml"
 
 require_relative "assets"
@@ -19,8 +18,6 @@ require_relative "artifact_targets"
 require_relative "catalog"
 
 module Doctor
-  LEVELS = %w[ok info warn fail].freeze
-
   Line = Struct.new(:level, :area, :message) do
     def to_s
       "#{level}: #{area}: #{message}"
@@ -213,10 +210,7 @@ module Doctor
 
   def self.main(argv)
     root = Dir.pwd
-    homes = {
-      "codex" => File.expand_path("~/.codex"),
-      "claude-code" => File.expand_path("~/.claude"),
-    }
+    homes = ArtifactTargets.default_homes
     agents_home = File.expand_path("~/.agents")
     until argv.empty?
       case (arg = argv.shift)

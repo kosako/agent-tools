@@ -16,6 +16,20 @@ module ArtifactTargets
   # catalog の repo root 相対 path。register が書き、Catalog.read が読む (#152)。
   CATALOG_PATH = "generated/catalog.json"
 
+  # 対応 tool の語彙 (走査順も配布順として意味を持つ)。tool を追加するときはここだけを
+  # 変える (build の生成走査・sync の prune 走査・check-manifests の targets 検証・status の
+  # generated 列挙が全てここを参照する, #152)。
+  TOOLS = %w[codex claude-code].freeze
+
+  # 既定の tool home。各 CLI main が --codex-home 等で上書き (破壊的代入) するため、
+  # frozen 定数ではなく毎回 fresh な mutable Hash を返す。
+  def self.default_homes
+    {
+      "codex" => File.expand_path("~/.codex"),
+      "claude-code" => File.expand_path("~/.claude"),
+    }
+  end
+
   # build が扱える artifact_kind。
   SUPPORTED_KINDS = %w[skill instruction script].freeze
 
@@ -58,6 +72,14 @@ module ArtifactTargets
 
   def self.supported?(kind)
     SUPPORTED_KINDS.include?(kind)
+  end
+
+  # asset のいずれかの target が指定 kind に解決されるか。register の script 判定と
+  # check_injection の instruction / skill 昇格判定が共有する。
+  # targets が Array であることの型ガードは呼び出し側の責務 (未検証 YAML を読む経路は
+  # 呼び出し側が fail-closed に弾いてから渡す)。
+  def self.resolves_any?(asset, kind)
+    (asset[:targets] || []).any? { |tool| resolve(asset, tool) == kind }
   end
 
   # 単一ファイル artifact (script) の sidecar management marker file path。

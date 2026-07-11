@@ -111,20 +111,8 @@ module CheckInjection
       @root = File.expand_path(root)
     end
 
-    # shared/ 配下のすべての text files を scan する。manifest も text として含める。
-    # directory skill の evals/ (テスト材料。意図的に攻撃的文字列を含みうる) は
-    # injection 攻撃文字列・fake path・email の scan からは外すが、inline private key leak
-    # のみ引き続き scan する (run で per-file に判定する)。
-    def target_files
-      Dir.glob(File.join(@root, "shared/**/*"), File::FNM_DOTMATCH)
-         .select { |p| File.file?(p) }
-         .reject { |p| File.basename(p) == ".gitkeep" }
-         .sort
-    end
-
     def run
-      instruction_sources = instruction_source_paths
-      eval_prefixes = skill_eval_dir_prefixes
+      instruction_sources, eval_prefixes = asset_scan_context
       findings = []
       count = 0
       target_files.each do |full|
@@ -155,57 +143,59 @@ module CheckInjection
 
     private
 
+    # shared/ 配下のすべての text files を scan する。manifest も text として含める。
+    # directory skill の evals/ (テスト材料。意図的に攻撃的文字列を含みうる) は
+    # injection 攻撃文字列・fake path・email の scan からは外すが、inline private key leak
+    # のみ引き続き scan する (run で per-file に判定する)。
+    def target_files
+      Dir.glob(File.join(@root, "shared/**/*"), File::FNM_DOTMATCH)
+         .select { |p| File.file?(p) }
+         .reject { |p| File.basename(p) == ".gitkeep" }
+         .sort
+    end
+
     def strict_instruction(finding)
       return finding unless finding.category == "external-url"
 
       Finding.new(finding.path, finding.line, "high", finding.category, finding.message)
     end
 
-    # instruction artifact を生成する asset の source path 一覧。
-    # 壊れた manifest では昇格しない (gate の check-manifests が別途 fail させる)。
-    def instruction_source_paths
+    # manifest 由来の scan 文脈を 1 回の走査で組み立てて [instruction_sources, eval_prefixes]
+    # で返す:
+    # - instruction artifact を生成する asset の source path 一覧 (external-url の high 昇格用)。
+    # - directory skill の evals/ 配下を leak_only 判定するための絶対 path prefix 一覧
+    #   (evals は injection 攻撃文字列を抑止し leak (private-key) のみ scan する。run が使う。)
+    # 壊れた manifest では昇格も prefix も出さない (gate の check-manifests が別途 fail させる)。
+    def asset_scan_context
       paths = []
-      Assets.load_all(@root).each do |asset|
-        next unless asset[:source].is_a?(Hash)
-        next unless asset[:targets].is_a?(Array)
-
-        instruction = asset[:targets].any? { |t| ArtifactTargets.resolve(asset, t) == "instruction" }
-        paths << asset[:source]["path"] if instruction
-      end
-      paths
-    rescue Psych::Exception
-      []
-    end
-
-    # directory skill の evals/ 配下を leak_only 判定するための絶対 path prefix 一覧。
-    # (evals は injection 攻撃文字列を抑止し leak (private-key) のみ scan する。run が使う。)
-    # 壊れた manifest では prefix を出さない (gate の check-manifests が別途 fail させる)。
-    def skill_eval_dir_prefixes
       prefixes = []
       Assets.load_all(@root).each do |asset|
         source = asset[:source]
-        next unless source.is_a?(Hash) && source["format"] == "directory"
-        next unless source["path"].is_a?(String)
+        next unless source.is_a?(Hash)
         next unless asset[:targets].is_a?(Array)
 
-        is_skill = asset[:targets].any? { |t| ArtifactTargets.resolve(asset, t) == "skill" }
-        next unless is_skill
+        paths << source["path"] if ArtifactTargets.resolves_any?(asset, "instruction")
+
+        next unless source["format"] == "directory"
+        next unless source["path"].is_a?(String)
+        next unless ArtifactTargets.resolves_any?(asset, "skill")
 
         ArtifactTargets::SKILL_NON_DEPLOY_DIRS.each do |sub|
           prefixes << "#{File.join(@root, source['path'], sub)}/"
         end
       end
-      prefixes
+      [paths, prefixes]
     rescue Psych::Exception
-      []
+      [[], []]
     end
 
+
     def rel(path)
-      path.sub(%r{\A#{Regexp.escape(@root)}/}, "")
+      Assets.rel(@root, path)
     end
 
     # leak_only=true (evals/) のときは privacy/secret leak の category だけを当てる。
-    def scan(path, content, leak_only = false)
+    def scan(path, content, leak_only)
       patterns = leak_only ? PATTERNS.select { |p| LEAK_CATEGORIES.include?(p.category) } : PATTERNS
       patterns.flat_map do |pattern|
         positions = []

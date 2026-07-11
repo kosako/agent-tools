@@ -9,7 +9,6 @@
 # - 外部依存ゼロ、network access なし。
 
 require "json"
-require "yaml"
 
 require_relative "assets"
 require_relative "check_manifests"
@@ -18,6 +17,7 @@ require_relative "build"
 require_relative "sync"
 require_relative "artifact_targets"
 require_relative "catalog"
+require_relative "yaml_marker"
 require_relative "instruction_marker"
 
 module Status
@@ -79,7 +79,7 @@ module Status
       sources = safe_sources_by_name
       total = 0
       stale = 0
-      Sync::TOOLS.each do |tool|
+      ArtifactTargets::TOOLS.each do |tool|
         Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "skill"), "*")).sort.each do |artifact|
           next unless File.directory?(artifact)
 
@@ -124,15 +124,7 @@ module Status
 
     # YAML marker file (skill の dir 直下 / script の sidecar) から鮮度を判定する。
     def fresh_by_marker_file?(marker_path, sources)
-      return false unless File.file?(marker_path)
-
-      marker = YamlUtil.load(File.read(marker_path), marker_path)
-      return false unless marker.is_a?(Hash)
-
-      source = sources[marker["name"]]
-      return false unless source
-
-      marker["build_id"] == Build.build_id_for(@root, source["path"], source["format"])
+      marker_fresh?(YamlMarker.read_file(marker_path), sources)
     rescue StandardError
       # 鮮度判定は best-effort。marker / source / build_id 計算の失敗 (Psych /
       # source path 欠落の TypeError / source ファイル欠落の Errno 等) は、検証不能 =
@@ -142,16 +134,21 @@ module Status
 
     # instruction (ファイル内コメント marker) の鮮度判定。
     def fresh_instruction?(path, sources)
-      marker = InstructionMarker.parse(File.read(path))
+      marker_fresh?(InstructionMarker.parse(File.read(path)), sources)
+    rescue StandardError
+      # fresh? と同じく best-effort: 検証不能なら stale 扱い (Errno / TypeError 等)。
+      false
+    end
+
+    # marker (nil 可) の name から source manifest を引き、build_id が現在の source 内容と
+    # 一致するか。marker 形式 (YAML / HTML コメント) に依らない鮮度判定の共通 tail。
+    def marker_fresh?(marker, sources)
       return false unless marker
 
       source = sources[marker["name"]]
       return false unless source
 
       marker["build_id"] == Build.build_id_for(@root, source["path"], source["format"])
-    rescue StandardError
-      # fresh? と同じく best-effort: 検証不能なら stale 扱い (Errno / TypeError 等)。
-      false
     end
 
     # catalog (docs/register-catalog.md) の register summary。読めない catalog
@@ -204,10 +201,7 @@ module Status
   def self.main(argv)
     root = Dir.pwd
     json = false
-    homes = {
-      "codex" => File.expand_path("~/.codex"),
-      "claude-code" => File.expand_path("~/.claude"),
-    }
+    homes = ArtifactTargets.default_homes
     until argv.empty?
       case (arg = argv.shift)
       when "--root"
