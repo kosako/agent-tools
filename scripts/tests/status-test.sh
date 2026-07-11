@@ -28,7 +28,7 @@ make_demo_repo "$tmp/repo" workflows personal-demo workflow '# demo v1'
 
 # --- case 1: build 前。generated 0、sync_targets は空 ---
 run_status > "$tmp/s1" 2>&1 || fail "status should succeed: $(cat "$tmp/s1")"
-[ "$(jget "$tmp/s1" contract_version)" = "2" ] || fail "contract_version should be 2"
+[ "$(jget "$tmp/s1" contract_version)" = "3" ] || fail "contract_version should be 3 (v3: deployed_but_inactive, #186)"
 [ "$(jget "$tmp/s1" register catalog_present)" = "false" ] || fail "catalog_present should be false before register"
 [ "$(jget "$tmp/s1" assets total)" = "1" ] || fail "assets.total should be 1"
 [ "$(jget "$tmp/s1" checks manifest_validation)" = '"pass"' ] || fail "manifest check should pass"
@@ -170,5 +170,36 @@ write_approved_script_manifest "$tmp/screpo" shared/scripts/personal-wrap.sh \
 printf '#!/bin/sh\necho changed\n' > "$tmp/screpo/shared/scripts/personal-wrap.sh"
 "$status_sh" --root "$tmp/screpo" --codex-home "$tmp/sccodex" --claude-home "$tmp/scclaude" --json > "$tmp/sc13b" 2>&1
 [ "$(jget "$tmp/sc13b" generated stale)" = "1" ] || fail "changed script source should be stale: $(cat "$tmp/sc13b")"
+
+# --- case 14: 未登録 (gate 中) でも実体が残っていれば deployed_but_inactive (#186) ---
+# 「一度 registered で配布 → 後で gate がかかった」を再現するため、sync --apply 後に
+# catalog の registration を human_review_required へ変更する (registration state と
+# deployment state の分離を pin。missing = target 不在の contract 定義を守る)。
+mkdir -p "$tmp/dcodex/skills" "$tmp/dclaude/skills"
+WAM_EXTRA='summary: demo workflow'
+make_demo_repo "$tmp/drepo" workflows personal-demo workflow '# demo'
+"$build" --root "$tmp/drepo" --quiet > /dev/null
+"$script_dir/../register.sh" --root "$tmp/drepo" --quiet > /dev/null
+"$sync" --root "$tmp/drepo" --codex-home "$tmp/dcodex" --claude-home "$tmp/dclaude" --apply --quiet > /dev/null
+ruby -rjson -e '
+  path = ARGV[0]
+  catalog = JSON.parse(File.read(path))
+  catalog["assets"].each { |a| a["registration"] = "human_review_required" }
+  File.write(path, JSON.pretty_generate(catalog))
+' "$tmp/drepo/generated/catalog.json"
+"$status_sh" --root "$tmp/drepo" --codex-home "$tmp/dcodex" --claude-home "$tmp/dclaude" --json > "$tmp/s14" 2>&1
+[ "$(jget "$tmp/s14" sync_targets 0 state)" = '"deployed_but_inactive"' ] \
+  || fail "gated + deployed target should be deployed_but_inactive: $(cat "$tmp/s14")"
+[ "$(jget "$tmp/s14" sync_targets 1 state)" = '"deployed_but_inactive"' ] \
+  || fail "both deployed targets should be deployed_but_inactive: $(cat "$tmp/s14")"
+# 実体を消した側は従来どおり missing (deployment state だけが変わる)
+rm -rf "$tmp/dcodex/skills/personal-demo"
+"$status_sh" --root "$tmp/drepo" --codex-home "$tmp/dcodex" --claude-home "$tmp/dclaude" --json > "$tmp/s14b" 2>&1
+s14b_0=$(jget "$tmp/s14b" sync_targets 0 state)
+s14b_1=$(jget "$tmp/s14b" sync_targets 1 state)
+case "$s14b_0 $s14b_1" in
+  '"missing" "deployed_but_inactive"'|'"deployed_but_inactive" "missing"') ;;
+  *) fail "removing one deployed target should split states, got $s14b_0 / $s14b_1: $(cat "$tmp/s14b")" ;;
+esac
 
 echo "ok: status self-test passed"

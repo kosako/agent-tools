@@ -24,7 +24,7 @@ dotfiles 側の実装は含めません。
 
 ```json
 {
-  "contract_version": 2,
+  "contract_version": 3,
   "repo": {
     "present": true,
     "clean": true
@@ -59,8 +59,8 @@ dotfiles 側の実装は含めません。
 
 ### Fields
 
-- `contract_version`: この contract の version。現行は `2`
-  (v2 で `register` を追加)。
+- `contract_version`: この contract の version。現行は `3`
+  (v2 で `register` を追加、v3 で target state に `deployed_but_inactive` を追加 #186)。
 - `repo.present`: agent-tools repository が存在するか。
 - `repo.clean`: working tree が clean か。
 - `assets.total`: tracked manifest の数。
@@ -81,6 +81,7 @@ dotfiles 側の実装は含めません。
 | `stale` | agent-tools marker を持つが、generated artifact より古い。 |
 | `conflict` | 同名 target が存在するが marker を持たない (unmanaged)。 |
 | `missing` | generated artifact はあるが、target がまだ存在しない。 |
+| `deployed_but_inactive` | catalog entry が registered でない (human_review_required / unsupported) のに、target 実体がディスクに残っている (一度承認して配布 → 後で gate がかかった等)。sync は配置も削除もしないため、手動掃除か再承認まで居座る (#186)。 |
 
 `conflict` の target は sync が変更してはいけません。
 
@@ -141,7 +142,7 @@ build_id: sha256:...
 ## dotfiles が読んでよい情報
 
 - status output contract の JSON 全体。
-- 各 target の state (`managed` / `stale` / `conflict` / `missing`)。
+- 各 target の state (`managed` / `stale` / `conflict` / `missing` / `deployed_but_inactive`)。
 - checks の結果 (`pass` / `fail` / `human_review` / `not_run`)。
 
 ## dotfiles が読まない・status に含めない情報

@@ -137,4 +137,26 @@ run_bdoctor > "$tmp/d8" 2>&1 || status=$?
 grep -q "warn: catalog: freshness 未検証" "$tmp/d8" \
   || fail "broken manifest should warn (not crash) in catalog check: $(cat "$tmp/d8")"
 
+# --- case 9: deployed_but_inactive target は warn で報告する (crash しない) (#186) ---
+# 「一度配布 → 後で gate」を catalog の registration 変更で再現。doctor の state→level map に
+# 新語彙が無いと .fetch が KeyError で crash するため、その回帰も兼ねる。
+mkdir -p "$tmp/gcodex/skills" "$tmp/gclaude/skills" "$tmp/gagents"
+WAM_EXTRA='summary: demo workflow'
+make_demo_repo "$tmp/grepo" workflows personal-demo workflow '# demo'
+"$build" --root "$tmp/grepo" --quiet > /dev/null
+"$script_dir/../register.sh" --root "$tmp/grepo" --quiet > /dev/null
+"$sync" --root "$tmp/grepo" --codex-home "$tmp/gcodex" --claude-home "$tmp/gclaude" --apply --quiet > /dev/null
+ruby -rjson -e '
+  path = ARGV[0]
+  catalog = JSON.parse(File.read(path))
+  catalog["assets"].each { |a| a["registration"] = "human_review_required" }
+  File.write(path, JSON.pretty_generate(catalog))
+' "$tmp/grepo/generated/catalog.json"
+status=0
+"$doctor" --root "$tmp/grepo" --codex-home "$tmp/gcodex" \
+  --claude-home "$tmp/gclaude" --agents-home "$tmp/gagents" > "$tmp/d9" 2>&1 || status=$?
+[ "$status" -eq 0 ] || fail "deployed_but_inactive should warn, not fail/crash (exit $status): $(cat "$tmp/d9")"
+grep -q "warn: target: \[codex\] personal-demo deployed_but_inactive" "$tmp/d9" \
+  || fail "missing deployed_but_inactive warn line: $(cat "$tmp/d9")"
+
 echo "ok: doctor self-test passed"

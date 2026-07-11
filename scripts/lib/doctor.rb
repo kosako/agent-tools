@@ -80,7 +80,10 @@ module Doctor
       report(level, "generated", "#{generated['total']} artifact(s), #{generated['stale']} stale")
 
       status["sync_targets"].each do |t|
-        level = { "managed" => "ok", "missing" => "info", "stale" => "warn", "conflict" => "fail" }.fetch(t["state"])
+        # deployed_but_inactive = 未登録 (gate 中) なのに実体が残っている = 掃除対象の
+        # 可能性があるので warn (#186)。
+        level = { "managed" => "ok", "missing" => "info", "stale" => "warn", "conflict" => "fail",
+                  "deployed_but_inactive" => "warn" }.fetch(t["state"])
         report(level, "target", "[#{t['tool']}] #{t['name']} #{t['state']}")
       end
     end
