@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 # Report-only status。dotfiles が読める contract JSON を出力する。
-# Spec: docs/status-manifest-contract.md (contract_version 2)
+# Spec: docs/status-manifest-contract.md (contract_version 3)
 #
 # - いかなる state も変更しない (read-only inspection のみ)。
 # - secrets / absolute local paths を出力しない。
@@ -22,7 +22,7 @@ require_relative "instruction_marker"
 require_relative "cli"
 
 module Status
-  CONTRACT_VERSION = 2
+  CONTRACT_VERSION = 3
 
   class Runner
     def initialize(root, homes)
@@ -177,8 +177,11 @@ module Status
     # Sync plan を contract の target state にマップする。skip の判定は plan.code
     # (機械可読) だけを見て、表示文言 (plan.reason) に依存しない — sync の文言変更で
     # dotfiles 連携 contract を壊さないため (#152)。
-    # registered でない artifact は配置されないため、target は missing 扱い。
     # manifest-stale (登録判断が古い) は配置済みでも再 register が要るので stale。
+    # registered でない entry は sync が配置しないが、過去に配置した実体が target に
+    # 残っていることがある (一度承認して配布 → 後で gate がかかった等)。これを missing
+    # (target 不在) と混同すると掃除対象に気づけないので deployed_but_inactive で
+    # 区別する (#186・contract v3)。
     def target_state(plan)
       case plan.action
       when "update" then "stale"
@@ -188,6 +191,7 @@ module Status
         case plan.code
         when :up_to_date then "managed"
         when :manifest_stale then "stale"
+        when :not_registered then not_registered_state(plan)
         else "missing"
         end
       else
@@ -195,6 +199,14 @@ module Status
         # conflict = fail に倒して表面化させる (fail-closed)。
         "conflict"
       end
+    end
+
+    # 未登録 (human_review_required / unsupported) entry の deployment state。
+    # target 実体がディスクに在れば deployed_but_inactive、無ければ missing。
+    # symlink は (dangling でも) path が塞がっている事実を隠さないため「在る」扱い
+    # (sync 自体は symlink に触らない)。
+    def not_registered_state(plan)
+      File.exist?(plan.target) || File.symlink?(plan.target) ? "deployed_but_inactive" : "missing"
     end
 
   end

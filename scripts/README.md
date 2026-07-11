@@ -158,9 +158,9 @@ usage: sync.sh [--root DIR] [--apply] [--prune] [--codex-home DIR] [--claude-hom
 usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR]
 ```
 
-- `--json` で contract_version 2 の JSON、省略時は human-readable summary。
+- `--json` で contract_version 3 の JSON、省略時は human-readable summary。
 - manifest validation / injection check の結果、generated の stale 数、
-  sync target state (managed / stale / conflict / missing) を含む。
+  sync target state (managed / stale / conflict / missing / deployed_but_inactive) を含む。
 - read-only。いかなる state も変更しない。
 - 出力に absolute local paths / secrets を含めない。
 - self-test: `tests/status-test.sh`
