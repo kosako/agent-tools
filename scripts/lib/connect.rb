@@ -20,6 +20,8 @@ require_relative "artifact_targets"
 require_relative "catalog"
 require_relative "instruction_marker"
 require_relative "assets"
+require_relative "cli"
+require_relative "plan_report"
 
 module Connect
   # 人間の CLAUDE.md から所有ファイルを取り込む import 行。
@@ -193,30 +195,17 @@ module Connect
   end
 
   def self.main(argv)
-    root = Dir.pwd
-    apply = false
-    quiet = false
+    opts = Cli.parse(argv, usage: USAGE,
+                     bool_flags: %w[--apply --quiet],
+                     value_flags: %w[--root --codex-home --claude-home])
+    return 0 if opts == :help
+
+    root = opts["--root"] || Dir.pwd
+    apply = opts.key?("--apply")
+    quiet = opts.key?("--quiet")
     homes = ArtifactTargets.default_homes
-    until argv.empty?
-      case (arg = argv.shift)
-      when "--root"
-        root = argv.shift or abort_usage
-      when "--apply"
-        apply = true
-      when "--codex-home"
-        homes["codex"] = File.expand_path(argv.shift || abort_usage)
-      when "--claude-home"
-        homes["claude-code"] = File.expand_path(argv.shift || abort_usage)
-      when "--quiet"
-        quiet = true
-      when "-h", "--help"
-        print_usage
-        return 0
-      else
-        warn "unknown option: #{arg}"
-        abort_usage
-      end
-    end
+    homes["codex"] = File.expand_path(opts["--codex-home"]) if opts["--codex-home"]
+    homes["claude-code"] = File.expand_path(opts["--claude-home"]) if opts["--claude-home"]
 
     runner = Runner.new(root, homes)
     plans = runner.plan
@@ -226,32 +215,11 @@ module Connect
       return 0
     end
 
-    plans.each { |p| puts p.to_s.sub(Dir.home, "~") }
-
-    conflicts = plans.select { |p| p.action == "conflict" }
-    unless conflicts.empty?
-      warn "fail: #{conflicts.size} conflict(s); nothing was applied"
-      return 1
-    end
-
-    changes = plans.count { |p| %w[create add-import].include?(p.action) }
-    if apply
-      runner.apply(plans)
-      puts "ok: applied #{changes} change(s)" unless quiet
-    else
-      puts "ok: dry-run only, #{changes} change(s) pending (use --apply to write)" unless quiet
-    end
-    0
+    PlanReport.finish(plans, runner, apply: apply, quiet: quiet,
+                      change_actions: %w[create add-import])
   end
 
-  def self.print_usage
-    puts "usage: connect.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] [--quiet]"
-  end
-
-  def self.abort_usage
-    print_usage
-    exit 2
-  end
+  USAGE = "usage: connect.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] [--quiet]"
 end
 
 exit Connect.main(ARGV) if $PROGRAM_NAME == __FILE__
