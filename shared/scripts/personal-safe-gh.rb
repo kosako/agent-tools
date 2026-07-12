@@ -47,6 +47,13 @@ module SafeGh
     "author is not the trusted self; title and body withheld to avoid runtime injection"
   EXCLUDED_COMMENTS_REASON =
     "non-self comments withheld (count only) to avoid runtime injection"
+  EXCLUDED_REVIEWS_REASON =
+    "non-self review bodies withheld (count and state only) to avoid runtime injection"
+
+  # PR review の state は GitHub REST の closed enum。closed vocabulary で whitelist し、
+  # 未知値 (将来の enum 追加 / 不正値) は free-text として出力に混ぜず "other" へ落とす
+  # (#189(3)。state は attacker が「選べる」が「書けない」metadata なので count 内訳まで出す)。
+  REVIEW_STATES = %w[APPROVED CHANGES_REQUESTED COMMENTED DISMISSED PENDING].freeze
 
   class Error < StandardError; end
 
@@ -138,6 +145,46 @@ module SafeGh
     }
     env["excluded_comments_reason"] = EXCLUDED_COMMENTS_REASON if excluded.positive?
     env
+  end
+
+  # PR review 本体の envelope。self review は state + body を渡し、それ以外は count と
+  # state 内訳 (whitelist 済み enum) のみ。body・著者名・その他 free-text は混ぜない (決定 5)。
+  # inline review comments (pulls/{n}/comments) は comment object の形が issue comments と
+  # 同型 (user/body) なので comments_envelope をそのまま使う (#189(3))。
+  def reviews_envelope(repo, number, reviews, me)
+    included = []
+    excluded = 0
+    excluded_states = Hash.new(0)
+    (reviews || []).each do |r|
+      if classify(r["user"], me) == "self"
+        included << {
+          "author" => r["user"]["login"],
+          "author_trust" => "self",
+          "state" => review_state(r["state"]),
+          "body" => r["body"],
+        }
+      else
+        excluded += 1
+        excluded_states[review_state(r["state"])] += 1
+      end
+    end
+    env = {
+      "safe_reader_version" => VERSION,
+      "source" => "pr_reviews",
+      "repo" => repo,
+      "number" => number,
+      "reviews" => included,
+      "excluded_reviews_count" => excluded,
+    }
+    if excluded.positive?
+      env["excluded_review_states"] = excluded_states
+      env["excluded_reviews_reason"] = EXCLUDED_REVIEWS_REASON
+    end
+    env
+  end
+
+  def review_state(state)
+    REVIEW_STATES.include?(state) ? state : "other"
   end
 
   # label 名は envelope に残す唯一の free-text metadata (付与には triage/write 権限が要る
@@ -248,6 +295,15 @@ module SafeGh
     gh_api("repos/#{repo}/issues/#{number}/comments", paginate: true)
   end
 
+  # inline review comments (diff 行に付くコメント) は pulls 側の comments endpoint (#189(3))。
+  def fetch_review_comments(repo, number)
+    gh_api("repos/#{repo}/pulls/#{number}/comments", paginate: true)
+  end
+
+  def fetch_reviews(repo, number)
+    gh_api("repos/#{repo}/pulls/#{number}/reviews", paginate: true)
+  end
+
   # ---- entrypoint ------------------------------------------------------------
 
   def run(noun, verb, number, repo, me)
@@ -260,6 +316,11 @@ module SafeGh
       comments_envelope("issue", repo, number, fetch_comments(repo, number), me)
     when %w[pr comments]
       comments_envelope("pr", repo, number, fetch_comments(repo, number), me)
+    when %w[pr review-comments]
+      # source は "pr_review_comments" になる (comments_envelope の "#{kind}_comments")。
+      comments_envelope("pr_review", repo, number, fetch_review_comments(repo, number), me)
+    when %w[pr reviews]
+      reviews_envelope(repo, number, fetch_reviews(repo, number), me)
     else
       raise Error, "unknown command: #{noun} #{verb}"
     end
@@ -302,18 +363,26 @@ module SafeGh
     [value, !value.nil?]
   end
 
+  # review-comments / reviews は PR 専用 (issue には無い endpoint)。noun ごとに verb を
+  # 閉じ、未知の組はここで弾く (fail-closed)。
   def valid_invocation?(noun, verb, number)
-    %w[issue pr].include?(noun) &&
-      %w[view comments].include?(verb) &&
-      !number.nil? && number.match?(/\A\d+\z/)
+    return false if number.nil? || !number.match?(/\A\d+\z/)
+
+    case noun
+    when "issue" then %w[view comments].include?(verb)
+    when "pr" then %w[view comments review-comments reviews].include?(verb)
+    else false
+    end
   end
 
   def print_usage
     warn <<~USAGE
-      usage: personal-safe-gh [-R OWNER/REPO] <issue|pr> <view|comments> <number>
+      usage: personal-safe-gh [-R OWNER/REPO] issue <view|comments> <number>
+             personal-safe-gh [-R OWNER/REPO] pr <view|comments|review-comments|reviews> <number>
 
       GitHub の Issue/PR/コメントを untrusted data として安全に読む steering wrapper。
-      他人の Issue/PR は metadata のみ、他人コメントは count のみを出力する。
+      他人の Issue/PR は metadata のみ、他人コメント (会話 / inline review) は count のみ、
+      他人 review は count + state 内訳のみを出力する。
     USAGE
   end
 end

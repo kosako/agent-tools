@@ -9,13 +9,14 @@ risk:
   prompt_injection: low
   privacy: low
 # script kind は実行コード配布のため常に human review 必須 (#147)。
-# 本 script は PR #135 / #141 / #156 / #160 (+ usage 文言の #176 M-05 是正) で
-# author≠reviewer レビュー済み・承認。
+# 本 script は PR #135 / #141 / #156 / #160 (+ usage 文言の #176 M-05 是正、
+# review 経路拡張 pr review-comments/reviews の #189(3)) で author≠reviewer
+# レビュー済み・承認。
 # 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:c4f76e508fcd7ba740ae1a6b5630a0543a2b23167e005a9c92d191ef9c110234
+  approved_build_id: sha256:55ff4f50b1e01ebd1a2aabc539a7c531fe43c78df4e2dca8f5a2fdc54c3b96aa
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-safe-gh.rb
