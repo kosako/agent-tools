@@ -163,6 +163,11 @@ check("本文中のトレーラ行では pass しない (H206-02)",
       quiet { AiTrailerGate.judge([:claude], ["subject", "", claude_tr, "", "more prose"]) } == 1)
 check("trailer_block は末尾段落のみ返す",
       AiTrailerGate.trailer_block(["subject", "", "body", "", claude_tr, human_tr]) == [claude_tr, human_tr])
+# H206-02 R2 回帰: 末尾段落に散文が混在すると git は trailer と認めない → gate も認めない
+check("散文混在の末尾段落では pass しない (H206-02 R2)",
+      quiet { AiTrailerGate.judge([:claude], ["subject", "", claude_tr, "more prose"]) } == 1)
+check("散文混在段落は trailer_block にならない",
+      AiTrailerGate.trailer_block(["subject", "", claude_tr, "more prose"]) == [])
 
 # env marker の解釈
 check("CLAUDECODE で claude", AiTrailerGate.agents_from_env({ "CLAUDECODE" => "1" }) == [:claude])

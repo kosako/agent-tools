@@ -39,6 +39,11 @@ global git config: core.hooksPath = <dotfiles 所有の hooks dir>
   fail-closed (exit 2) で commit を止める (配備欠損を黙って素通りさせない)。
 - shim がどちらの tool home の deploy を指すかは dotfiles 側の裁定 (両 home に同一
   byte が配備される)。
+- **再入 sentinel の既知の副作用**: dispatcher は chain 実行時に stage 単位の env
+  (`AGENT_TOOLS_GIT_HOOK_ACTIVE_<STAGE>`) を立て、再入を検出したら gate 済みとして
+  即 pass する (shim 経由の間接自己参照 loop 対策)。このため、chain 先の repo hook が
+  **別 repository へ同じ stage の commit を行う**場合、その内側の commit は gate を
+  通らない。
 
 ## dispatcher の chain 契約
 

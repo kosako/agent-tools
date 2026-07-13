@@ -77,9 +77,15 @@ module AiTrailerGate
     lines
   end
 
-  # git の trailer 解釈の保守的近似: トレーラは message 末尾の段落 (trailer block) に
-  # あるものだけを数える。本文中に書かれた Co-Authored-By 行は git (interpret-trailers) も
-  # 消費側もトレーラと認識しないため、gate だけが pass すると判定が割れる (H206-02)。
+  # trailer 行の形 (Key: value)。git の trailer key は英数と '-'。
+  TRAILER_SHAPE_RE = /\A[A-Za-z0-9-]+:\s/
+
+  # git の trailer 解釈の保守的近似: message 末尾の段落を取り、**全行が trailer 形式の
+  # ときだけ** trailer block とみなす。本文中や散文混在段落の Co-Authored-By 行は git
+  # (interpret-trailers) も消費側もトレーラと認識しないため、gate だけが pass すると
+  # 判定が割れる (H206-02)。git 自身は「git 生成 trailer を含み 25% 以上が trailer」の
+  # 混在も許すが、こちらはより厳しい側 (認めない) に倒す — gate が要求するのは自分たちの
+  # commit が作る clean な trailer block であり、厳しい近似は fail-closed 方向。
   def trailer_block(lines)
     trimmed = lines.dup
     trimmed.pop while !trimmed.empty? && trimmed.last.strip.empty?
@@ -89,6 +95,8 @@ module AiTrailerGate
 
       block.unshift(line)
     end
+    return [] unless !block.empty? && block.all? { |l| TRAILER_SHAPE_RE.match?(l) }
+
     block
   end
 
