@@ -22,7 +22,10 @@
 # 全行 trailer 形式のときだけ trailer block とみなす保守近似)。単一ファイル配布のため
 # require で共有できない。**変更するときは両方を同時に直す**。
 #
-# 依存: gh (認証済み)。読み取りは `gh pr view --json commits` のみ (本文 field は取らない)。
+# 依存: gh (認証済み)。読み取りは pulls/<n>/commits の REST のみ。`gh pr view --json
+# commits` は先頭 100 commit しか返さない (pagination なし) ため使わない — 全件を
+# `gh api --paginate --slurp` で取る (plain --paginate は array endpoint でページ境界に
+# `][` を挟み不正 JSON になる既知の落とし穴があるため --slurp + flatten。#160 の前例)。
 # exit: 0 = routing 確定 / 1 = fail-closed / 2 = usage・入力・gh エラー。
 
 require "json"
@@ -98,15 +101,19 @@ module ReviewRoutingPreflight
     { verdict: :ok, author: author, reviewer: author == :claude ? :codex : :claude }
   end
 
+  # PR の全 commit を REST + pagination で取得する。repo 省略時は gh の placeholder
+  # (`{owner}/{repo}` = cwd の origin) に解決を委ねる。
   def fetch_commits(pr_number, repo)
-    argv = ["gh", "pr", "view", pr_number, "--json", "commits"]
-    argv += ["--repo", repo] if repo
+    path = "repos/#{repo || '{owner}/{repo}'}/pulls/#{pr_number}/commits"
+    argv = ["gh", "api", "--paginate", "--slurp", path]
     out = IO.popen(argv, &:read)
-    raise ArgumentError, "gh pr view が失敗しました (PR 番号 / 認証 / --repo を確認)" unless $?.success?
+    raise ArgumentError, "gh api が失敗しました (PR 番号 / 認証 / --repo を確認)" unless $?.success?
 
-    data = JSON.parse(out)
-    commits = data["commits"]
-    raise ArgumentError, "gh の応答に commits がありません" unless commits.is_a?(Array)
+    pages = JSON.parse(out)
+    raise ArgumentError, "gh の応答が page 配列ではありません" unless pages.is_a?(Array)
+
+    commits = pages.flatten(1)
+    raise ArgumentError, "gh の応答に commit がありません" unless commits.all? { |c| c.is_a?(Hash) }
 
     commits
   rescue JSON::ParserError
@@ -137,8 +144,8 @@ module ReviewRoutingPreflight
 
     commits = fetch_commits(pr_number, repo)
     oid_kinds = commits.map do |c|
-      body = c.is_a?(Hash) ? c["messageBody"] : nil
-      [short_oid(c.is_a?(Hash) ? c["oid"] : nil), classify_message(body)]
+      message = c["commit"].is_a?(Hash) ? c["commit"]["message"] : nil
+      [short_oid(c["sha"]), classify_message(message)]
     end
 
     oid_kinds.each { |oid, kind| puts "commit #{oid}: #{kind}" }
