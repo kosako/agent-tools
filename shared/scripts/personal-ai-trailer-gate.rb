@@ -77,9 +77,24 @@ module AiTrailerGate
     lines
   end
 
+  # git の trailer 解釈の保守的近似: トレーラは message 末尾の段落 (trailer block) に
+  # あるものだけを数える。本文中に書かれた Co-Authored-By 行は git (interpret-trailers) も
+  # 消費側もトレーラと認識しないため、gate だけが pass すると判定が割れる (H206-02)。
+  def trailer_block(lines)
+    trimmed = lines.dup
+    trimmed.pop while !trimmed.empty? && trimmed.last.strip.empty?
+    block = []
+    trimmed.reverse_each do |line|
+      break if line.strip.empty?
+
+      block.unshift(line)
+    end
+    block
+  end
+
   def ai_trailers(lines)
     trailers = []
-    lines.each do |line|
+    trailer_block(lines).each do |line|
       m = TRAILER_RE.match(line)
       next unless m
 
@@ -143,7 +158,15 @@ module AiTrailerGate
     end
     return 0 if merge_in_progress?
 
-    judge(agents_from_env(ENV), message_lines(File.read(path)))
+    # 非 UTF-8 混入で regex が例外にならないよう scrub (#149 と同じ方式・判定用のみ)。
+    text = File.read(path)
+    text.force_encoding(Encoding::UTF_8)
+    text = text.scrub("�") unless text.valid_encoding?
+    judge(agents_from_env(ENV), message_lines(text))
+  rescue StandardError => e
+    # 想定外は入力・構成エラーの exit 2 に倒す (fail-closed)。message 内容は出さない。
+    warn "ai-trailer-gate: unexpected error (#{e.class})"
+    2
   end
 end
 

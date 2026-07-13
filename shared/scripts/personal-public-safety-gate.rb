@@ -85,8 +85,10 @@ module PublicSafetyGate
 
       begin
         patterns << [format("local-pattern:%d", i + 1), Regexp.new(line)]
-      rescue RegexpError => e
-        raise ArgumentError, "#{path}:#{i + 1}: invalid regex (#{e.message})"
+      rescue RegexpError
+        # RegexpError#message は regex 本文を含む。private パターン置き場の内容を
+        # 出力しない契約 (H206-03) のため、位置情報だけを出す。
+        raise ArgumentError, "#{path}:#{i + 1}: invalid regex (パターン内容は表示しません)"
       end
     end
     patterns
@@ -103,27 +105,68 @@ module PublicSafetyGate
     names
   end
 
+  # git の quoted path ("b/na\tme" 形式) を復号する。quote されていなければそのまま。
+  def unquote_path(target)
+    return target unless target.start_with?('"') && target.end_with?('"') && target.size >= 2
+
+    target[1..-2].gsub(/\\(?:[abfnrtv\\"]|\d{1,3})/) do |esc|
+      body = esc[1..-1]
+      case body
+      when "\\" then "\\"
+      when '"' then '"'
+      when "n" then "\n"
+      when "t" then "\t"
+      when "a" then "\a"
+      when "b" then "\b"
+      when "f" then "\f"
+      when "r" then "\r"
+      when "v" then "\v"
+      else body.to_i(8).chr
+      end
+    end
+  end
+
   # unified diff の追加行を (file, 新 line 番号, 内容) で走査する。
+  # hunk 内の行 (+ / - / 空白 / "\" 始まり) を先に処理し、ヘッダー解釈 (--- / +++) は
+  # hunk 外に限定する。追加行の内容が "++ " で始まると "+++ " に見えるため (H206-01)。
   def scan_diff(diff_text, extra_patterns, home)
     findings = []
     file = nil
     lineno = nil
+    in_hunk = false
+    expect_new_path = false
     diff_text.each_line do |raw|
       line = raw.chomp
-      if line.start_with?("+++ ")
-        # 特殊文字入り path は git が全体を quote する ("b/na me") ので quote を先に外す。
-        target = line[4..-1].delete_prefix('"').delete_suffix('"')
-        file = target == "/dev/null" ? nil : target.sub(%r{\Ab/}, "")
+      if in_hunk
+        case line[0]
+        when "+"
+          if file && lineno
+            scan_line(line[1..-1].to_s, extra_patterns, home).each do |name, severity|
+              findings << Finding.new(file, lineno, name, severity)
+            end
+            lineno += 1
+          end
+          next
+        when "-", "\\" then next
+        when " ", nil
+          lineno += 1 if lineno
+          next
+        end
+        in_hunk = false # hunk の終端 (次の header 類) — fall through して header を解釈する
+      end
+      if line.start_with?("diff --git ")
+        file = nil
         lineno = nil
+        expect_new_path = false
+      elsif line.start_with?("--- ")
+        expect_new_path = true
+      elsif expect_new_path && line.start_with?("+++ ")
+        target = unquote_path(line[4..-1])
+        file = target == "/dev/null" ? nil : target.sub(%r{\Ab/}, "")
+        expect_new_path = false
       elsif (m = /\A@@ -[^ ]+ \+(\d+)/.match(line))
         lineno = Integer(m[1])
-      elsif file && lineno && line.start_with?("+")
-        scan_line(line[1..-1].to_s, extra_patterns, home).each do |name, severity|
-          findings << Finding.new(file, lineno, name, severity)
-        end
-        lineno += 1
-      elsif lineno && line.start_with?(" ")
-        lineno += 1
+        in_hunk = true
       end
     end
     findings
@@ -133,17 +176,25 @@ module PublicSafetyGate
     added_paths.select { |p| p.match?(LOCAL_ONLY_FILE) }
   end
 
+  # 出力形式を pin した diff 用の共通 flag (parser の前提を git 設定から独立させる)。
+  GIT_DIFF_PIN = %w[git -c diff.noprefix=false -c diff.mnemonicprefix=false
+                    -c core.quotepath=true diff --cached --no-color --no-ext-diff].freeze
+
   def git_read(argv)
     out = IO.popen(argv, &:read)
     raise ArgumentError, "#{argv.join(' ')} failed" unless $?.success?
 
-    out
+    # 非 UTF-8 の混入 (binary 混じりの text 等) で regex が例外にならないよう scrub する
+    # (#149 と同じ方式)。判定用のみで書き込み経路はない。
+    out.force_encoding(Encoding::UTF_8)
+    out.valid_encoding? ? out : out.scrub("�")
   end
 
   def run
     extra = load_local_patterns(LOCAL_PATTERNS_PATH)
-    diff = git_read(%w[git diff --cached --no-color --no-ext-diff])
-    added = git_read(%w[git diff --cached --name-only --diff-filter=A -z]).split("\0")
+    diff = git_read(GIT_DIFF_PIN)
+    # rename / copy でも新 path を検査対象にする (A のみだと git mv で素通り。H206-06)。
+    added = git_read(GIT_DIFF_PIN + %w[--name-only --diff-filter=ACR -z]).split("\0")
 
     findings = scan_diff(diff, extra, home_needle)
     staged_local_only_files(added).each do |path|
@@ -168,6 +219,11 @@ module PublicSafetyGate
     0
   rescue ArgumentError => e
     warn "public-safety-gate: error: #{e.message}"
+    2
+  rescue StandardError => e
+    # 想定外も入力・構成エラーの exit 2 に倒す (fail-closed)。内容を含みうる message は
+    # 出さず class 名のみ。
+    warn "public-safety-gate: unexpected error (#{e.class})"
     2
   end
 end

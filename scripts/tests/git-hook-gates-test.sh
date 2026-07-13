@@ -106,6 +106,25 @@ check("scan_diff が file:line を帰属", f.size == 1 && f[0].file == "a.txt" &
 check("削除行は見ない",
       PublicSafetyGate.scan_diff("--- a/a.txt\n+++ b/a.txt\n@@ -1,1 +1,1 @@\n-x = '#{gh_token}'\n+clean\n", [], nil).empty?)
 
+# H206-01 回帰: 追加行の内容が "++ " で始まっても header と誤認せず後続を取り逃さない
+tricky = <<~DIFF
+  diff --git a/a.txt b/a.txt
+  --- a/a.txt
+  +++ b/a.txt
+  @@ -0,0 +1,3 @@
+  +clean line
+  +++ b/looks-like-header
+  +x = '#{gh_token}'
+DIFF
+tf = PublicSafetyGate.scan_diff(tricky, [], nil)
+check("hunk 内の '+++' 行で file を失わない (H206-01)",
+      tf.size == 1 && tf[0].file == "a.txt" && tf[0].line == 3)
+
+# should 回帰: quoted path の C-style escape を復号する
+quoted = "diff --git \"a/ta\\tb.txt\" \"b/ta\\tb.txt\"\n--- \"a/ta\\tb.txt\"\n+++ \"b/ta\\tb.txt\"\n@@ -0,0 +1,1 @@\n+x = '#{gh_token}'\n"
+qf = PublicSafetyGate.scan_diff(quoted, [], nil)
+check("quoted path を復号して帰属 (tab)", qf.size == 1 && qf[0].file == "ta\tb.txt")
+
 # local-only file 判定
 check("*.local.md を検出",
       PublicSafetyGate.staged_local_only_files(["notes/x.local.md", "ok.md"]) == ["notes/x.local.md"])
@@ -139,6 +158,11 @@ check("nested: トレーラなしは fail", quiet { AiTrailerGate.judge([:claude
 check("人間 co-author は AI トレーラに数えない", quiet { AiTrailerGate.judge([:claude], msg(human_tr)) } == 1)
 check("人間 co-author 併記は妨げない",
       quiet { AiTrailerGate.judge([:claude], msg(claude_tr, human_tr)) } == 0)
+# H206-02 回帰: 本文中 (末尾 trailer block 外) のトレーラ行は数えない
+check("本文中のトレーラ行では pass しない (H206-02)",
+      quiet { AiTrailerGate.judge([:claude], ["subject", "", claude_tr, "", "more prose"]) } == 1)
+check("trailer_block は末尾段落のみ返す",
+      AiTrailerGate.trailer_block(["subject", "", "body", "", claude_tr, human_tr]) == [claude_tr, human_tr])
 
 # env marker の解釈
 check("CLAUDECODE で claude", AiTrailerGate.agents_from_env({ "CLAUDECODE" => "1" }) == [:claude])
@@ -180,6 +204,16 @@ set -e
 [ "$rc" -eq 1 ] || fail "*.local.md staged add should block (rc=$rc)"
 (cd "$repo" && git rm -q --cached x.local.md && rm x.local.md)
 
+# H206-06 回帰: 既存 tracked file の rename でも local-only 検査にかかる
+(cd "$repo" && as_human git commit -qm "seed for rename")
+(cd "$repo" && git mv ok.txt renamed.local && git add -A)
+set +e
+(cd "$repo" && as_human ruby "$pubsafe_src" >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "rename onto *.local should block (rc=$rc, H206-06)"
+(cd "$repo" && git mv renamed.local ok.txt)
+
 # local pattern file (HOME 配下) / invalid regex は exit 2
 mkdir -p "$tmp/home/.config/agent-tools"
 echo "secret-project-zeta" > "$tmp/home/.config/agent-tools/public-safety-patterns.local"
@@ -192,10 +226,15 @@ set -e
 [ "$rc" -eq 1 ] || fail "local pattern should block (rc=$rc)"
 echo "([" > "$tmp/home/.config/agent-tools/public-safety-patterns.local"
 set +e
-(cd "$repo" && as_human ruby "$pubsafe_src" >/dev/null 2>&1)
+out=$(cd "$repo" && as_human ruby "$pubsafe_src" 2>&1)
 rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "invalid local pattern regex should be a loud config error (rc=$rc)"
+# H206-03 回帰: 診断に regex 本文を含めない (private パターン置き場のため)
+case "$out" in
+  *"(["*) fail "invalid-regex diagnostic must not echo the pattern body: $out" ;;
+esac
+echo "$out" | grep -q "public-safety-patterns.local:1" || fail "diagnostic should carry file:line: $out"
 rm "$tmp/home/.config/agent-tools/public-safety-patterns.local"
 (cd "$repo" && git rm -q --cached doc.md && rm doc.md)
 
@@ -302,6 +341,13 @@ rc=$?
 set -e
 [ "$rc" -ne 0 ] || fail "failing chained hook should block the commit"
 
+# chain 先の exit code が等値で伝播する (dispatcher 直接呼び出しで pin)
+set +e
+(cd "$repo3" && as_human "$deploy/personal-git-hook-dispatcher" pre-commit >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 7 ] || fail "chained hook exit code should propagate verbatim (rc=$rc, want 7)"
+
 # chain 先が dispatcher 自身 (誤設定) なら skip して成功する
 ln -sf "$deploy/personal-git-hook-dispatcher" "$repo3/.git/hooks/pre-commit"
 set +e
@@ -309,6 +355,25 @@ out=$(cd "$repo3" && as_human git commit -qm "self chain" 2>&1)
 rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "self-referential chain should be skipped, not looped (rc=$rc): $out"
+
+# H206-04 回帰: chain 先が shim (間接的に dispatcher へ戻る) でも再入 sentinel で loop しない。
+# 回帰時は無限再帰になるため timeout で保護する。
+# 直前の test が残した symlink を必ず消してから書く (redirect は symlink を辿り、
+# deploy の dispatcher 本体を上書きしてしまう)。
+rm -f "$repo3/.git/hooks/pre-commit"
+printf '#!/bin/sh\nexec "%s" pre-commit "$@"\n' "$deploy/personal-git-hook-dispatcher" \
+  > "$repo3/.git/hooks/pre-commit"
+chmod +x "$repo3/.git/hooks/pre-commit"
+echo e > "$repo3/e.txt"
+(cd "$repo3" && git add e.txt)
+set +e
+out=$(cd "$repo3" && as_human ruby -rtimeout -e \
+  'Timeout.timeout(30) { ok = system(*ARGV); exit(ok ? 0 : (($?.exitstatus || 1))) }' \
+  -- git commit -qm "shim loop" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "shim-indirect chain should be loop-guarded (rc=$rc, H206-04): $out"
+echo "$out" | grep -q "re-entrant" || fail "loop guard should be visible in output: $out"
 
 # ---- dispatcher の usage / fail-closed ---------------------------------------
 set +e
@@ -327,5 +392,14 @@ rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "missing gate should fail closed with exit 2 (rc=$rc)"
 echo "$out" | grep -q "fail-closed" || fail "missing gate message should say fail-closed: $out"
+
+# 再入 sentinel の単体挙動: guard env が立っていれば gate 解決前に即 0 で返る
+# (sparse dir = gate 欠損でも 0 になることで、guard が先に効くと分かる)
+set +e
+(cd "$repo2" && as_human env AGENT_TOOLS_GIT_HOOK_ACTIVE_PRE_COMMIT=1 \
+  "$sparse/personal-git-hook-dispatcher" pre-commit >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "guard env should short-circuit before gate resolution (rc=$rc)"
 
 echo "ok: git-hook-gates self-test"

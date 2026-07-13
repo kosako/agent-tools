@@ -30,7 +30,18 @@ module GitHookDispatcher
     "commit-msg" => %w[personal-ai-trailer-gate],
   }.freeze
 
+  # 再入 sentinel (stage 単位)。repo hook が shim (→ dispatcher) を指す誤設定でも、
+  # realpath 比較では検出できない間接参照で無限再帰になる (H206-04)。chain 実行時に
+  # この env を立て、再入を検出したら gate 済みとして即 exit 0 する。副作用として、
+  # chain 先 hook が別 repo へ「同 stage の commit」を行う場合その commit は gate を
+  # 通らない (docs に明記の既知限界)。
+  GUARD_PREFIX = "AGENT_TOOLS_GIT_HOOK_ACTIVE_"
+
   module_function
+
+  def guard_key(stage)
+    GUARD_PREFIX + stage.upcase.tr("-", "_")
+  end
 
   # repo 自身の hooks directory。core.hooksPath を経由すると dispatcher 自身に戻って
   # しまうため、必ず common dir 直下の hooks/ を見る (worktree でも共有側が正、#201 実測)。
@@ -47,6 +58,12 @@ module GitHookDispatcher
       warn "git-hook-dispatcher: unknown stage #{stage.inspect} " \
            "(expected: #{STAGE_GATES.keys.join(' / ')})"
       return 2
+    end
+
+    if ENV[guard_key(stage)] == "1"
+      warn "git-hook-dispatcher: re-entrant #{stage} invocation detected; " \
+           "skipping (loop guard, gates already ran)"
+      return 0
     end
 
     args = argv[1..-1] || []
@@ -66,16 +83,17 @@ module GitHookDispatcher
 
     chain = repo_hook_path(stage)
     if chain.nil?
-      warn "git-hook-dispatcher: cannot resolve git common dir; skipping repo-hook chain"
-      return 0
+      # chain 解決不能を黙って素通りさせない (repo hook の silent 迂回になる。H206-05)。
+      warn "git-hook-dispatcher: cannot resolve git common dir; failing closed"
+      return 2
     end
     if File.executable?(chain)
-      # 誤設定で repo hook 自体が dispatcher (への link) だと無限 chain になるので識別して skip。
+      # 直接 link の自己参照は即 skip (間接参照は上の再入 sentinel が止める)。
       if File.realpath(chain) == File.realpath(__FILE__)
         warn "git-hook-dispatcher: repo hook #{chain} resolves to the dispatcher itself; skipping chain"
         return 0
       end
-      exec(chain, *args)
+      exec({ guard_key(stage) => "1" }, chain, *args)
     end
     0
   end
