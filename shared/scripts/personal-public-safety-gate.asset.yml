@@ -1,0 +1,27 @@
+schema_version: 1
+name: personal-public-safety-gate
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #202 (Phase 1) の実装 PR で author≠reviewer レビューのうえ承認。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:e6e02a242b197e2ff096193380b1796de544d11fffc55640d5f8a496deaa3394
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-public-safety-gate.rb
+  format: text
+summary: >-
+  pre-commit stage の git gate。staged diff の追加行から secret (private key / 既知 token 形) /
+  実 home path / 個人用 local file を検出して commit を block する (definite) か警告する
+  (suspicious)。値そのものは出力しない。私物パターンは untracked の
+  ~/.config/agent-tools/public-safety-patterns.local から読む。best-effort guardrail
+  (docs/git-hook-gates.md)。

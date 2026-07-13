@@ -1,0 +1,26 @@
+schema_version: 1
+name: personal-ai-trailer-gate
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #202 (Phase 1) の実装 PR で author≠reviewer レビューのうえ承認。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:cef12067930fc2ba04ce2539d8ff3413bce7fed561fcf4bfeb313e051eb09400
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-ai-trailer-gate.rb
+  format: text
+summary: >-
+  commit-msg stage の git gate。AI agent セッション由来 (env marker: CLAUDECODE / CODEX_*) の
+  commit に相互レビュー routing の正本 Co-Authored-By トレーラを要求する (欠落 / 混在 /
+  非 no-reply email を block)。人間 commit と merge commit は無言 pass の opt-in 設計。
+  squash / rebase での喪失は消費側 preflight の領分 (docs/git-hook-gates.md)。

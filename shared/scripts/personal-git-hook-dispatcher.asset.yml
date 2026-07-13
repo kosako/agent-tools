@@ -1,0 +1,26 @@
+schema_version: 1
+name: personal-git-hook-dispatcher
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #202 (Phase 1) の実装 PR で author≠reviewer レビューのうえ承認。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:47eef6e7033494c7e9e574261ec5ed82cdea3b080eb1994c4a261ae84122afaf
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-git-hook-dispatcher.rb
+  format: text
+summary: >-
+  global core.hooksPath から呼ばれる git hook の入口。stage (pre-commit / commit-msg) ごとの
+  personal gate を実行し、全 pass なら repo 自身の hooks/<stage> に chain して「置換」を
+  「合成」に変える (#201 裁定)。best-effort guardrail で --no-verify 等で迂回可能
+  (docs/git-hook-gates.md)。登録・配線 (shim + git config) は dotfiles 所有。
