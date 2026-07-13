@@ -78,6 +78,9 @@ module AiTrailerGate
   end
 
   # trailer 行の形 (Key: value)。git の trailer key は英数と '-'。
+  # このトレーラ解釈 (TRAILER_RE / TRAILER_SHAPE_RE / trailer_block) は
+  # shared/scripts/personal-review-routing-preflight.rb と双子ロジック (単一ファイル
+  # 配布のため require で共有できない)。**変更するときは両方を同時に直す**。
   TRAILER_SHAPE_RE = /\A[A-Za-z0-9-]+:\s/
 
   # git の trailer 解釈の保守的近似: message 末尾の段落を取り、**全行が trailer 形式の

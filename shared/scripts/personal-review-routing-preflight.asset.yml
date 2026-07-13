@@ -1,0 +1,27 @@
+schema_version: 1
+name: personal-review-routing-preflight
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #202 (Phase 1) の実装 PR で author≠reviewer レビューのうえ承認。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:06161ea3a727c4f4db428ba93d98bb98e0b87f52f4ff1c4d531df3f4c0bb60a4
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-review-routing-preflight.rb
+  format: text
+summary: >-
+  相互レビューの reviewer routing を PR 単位で機械判定する決定的 script (レビュー依頼時の
+  消費側検査)。全 commit の Co-Authored-By トレーラを ai-trailer-gate と双子の保守近似で
+  分類し、単一 AI なら反対側を reviewer に (exit 0)、混在・欠落・皆無は fail-closed
+  (exit 1)。出力は oid 短縮 + 分類ラベルのみで untrusted な本文・author 名を含めない。
+  規範の正本は personal-review-request skill。
