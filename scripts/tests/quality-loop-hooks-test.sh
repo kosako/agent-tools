@@ -191,6 +191,15 @@ echo v2 > "$repo/u.txt"
 (cd "$repo" && run_qa false >/dev/null) || fail "untracked v2 should pass"
 [ -s "$tmp/check-argv.log" ] || fail "untracked content change must invalidate cache (R1)"
 
+# untracked symlink の向き先変更で cache が無効化される (dangling でも。R2 回帰)
+ln -s missing-a "$repo/lnk"
+(cd "$repo" && run_qa false >/dev/null) || fail "dangling symlink v1 should pass"
+: > "$tmp/check-argv.log"
+ln -sf missing-b "$repo/lnk"
+(cd "$repo" && run_qa false >/dev/null) || fail "dangling symlink v2 should pass"
+[ -s "$tmp/check-argv.log" ] || fail "symlink retarget must invalidate cache (R2)"
+rm "$repo/lnk"
+
 # check 定義の変更で cache が無効化される
 ruby -rjson -e '
 File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "fake-suite-2", "command" => [ARGV[1]]}]}}))

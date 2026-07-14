@@ -128,7 +128,15 @@ module ChangedScopeQa
       full = File.join(root, path)
       digest =
         begin
-          File.file?(full) ? Digest::SHA256.file(full).hexdigest : "non-file"
+          if File.symlink?(full)
+            # File.file? / SHA256.file はリンク先を評価する (dangling だと常に non-file)。
+            # リンクの向き先そのものを指紋に含め、種別も区別する (R2 指摘)。
+            "symlink:" + Digest::SHA256.hexdigest(File.readlink(full))
+          elsif File.file?(full)
+            Digest::SHA256.file(full).hexdigest
+          else
+            "non-file"
+          end
         rescue StandardError
           "unreadable"
         end
