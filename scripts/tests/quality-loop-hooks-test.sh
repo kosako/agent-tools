@@ -174,4 +174,97 @@ echo "$out" | grep -q "実行できません" || fail "missing tool should warn:
 out=$(cd "$other" && run_qa false) || fail "undeclared repo qa should exit 0"
 [ -z "$out" ] || fail "undeclared repo qa should be silent: $out"
 
+# ---- R1 回帰: fingerprint の網羅 (untracked 内容 / check 定義) ------------------
+# 状態リセット (config を fake-suite に戻し、working tree を clean に)
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "fake-suite", "command" => [ARGV[1]]}]}}))
+' "$repo_real" "$tmp/fake-check" "$conf"
+(cd "$repo" && git add -A && git commit -qm clean)
+
+# untracked の「内容変更」で cache が無効化される (status 上は同じ ?? path)
+echo v1 > "$repo/u.txt"
+(cd "$repo" && run_qa false >/dev/null) || fail "untracked v1 should pass"
+: > "$tmp/check-argv.log"
+(cd "$repo" && run_qa false >/dev/null) || fail "cache hit should pass"
+[ ! -s "$tmp/check-argv.log" ] || fail "same untracked content should hit cache"
+echo v2 > "$repo/u.txt"
+(cd "$repo" && run_qa false >/dev/null) || fail "untracked v2 should pass"
+[ -s "$tmp/check-argv.log" ] || fail "untracked content change must invalidate cache (R1)"
+
+# check 定義の変更で cache が無効化される
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "fake-suite-2", "command" => [ARGV[1]]}]}}))
+' "$repo_real" "$tmp/fake-check" "$conf"
+: > "$tmp/check-argv.log"
+(cd "$repo" && run_qa false >/dev/null) || fail "renamed check should pass"
+[ -s "$tmp/check-argv.log" ] || fail "check definition change must invalidate cache (R1)"
+
+# ---- R1 回帰: missing と実 failure の混在 (missing の分離保持と再試行) ----------
+cat > "$tmp/later-tool" <<EOF
+#!/bin/sh
+printf 'ran\n' >> "$tmp/later-argv.log"
+exit 0
+EOF
+# (まだ +x を付けない = EACCES の spawn 失敗)
+ruby -rjson -e '
+File.write(ARGV[3], JSON.generate({ARGV[0] => {"qa_checks" => [
+  {"name" => "failing", "command" => [ARGV[1]]},
+  {"name" => "later", "command" => [ARGV[2]]}
+]}}))
+' "$repo_real" "$tmp/fake-check" "$tmp/later-tool" "$conf"
+touch "$tmp/check-fail"
+echo mix >> "$repo/u.txt"
+set +e
+err=$(cd "$repo" && run_qa false 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "real failure should still block despite missing check (rc=$rc)"
+echo "$err" | grep -q "未実行の check: later" || fail "block message should list missing: $err"
+
+# 環境が直る (実行可能になる) と、同一 scope の cache-hit でも missing だけ再試行される
+chmod +x "$tmp/later-tool"
+set +e
+out=$(cd "$repo" && run_qa false 2>/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "cache-hit must not re-block (rc=$rc)"
+[ -s "$tmp/later-argv.log" ] || fail "missing check must be retried on cache hit (R1)"
+echo "$out" | grep -q "未解消" || fail "unresolved failure should still be warned: $out"
+rm "$tmp/check-fail"
+
+# ---- R1 回帰: EACCES (実行権限なし) も spawn 失敗として警告降格 -----------------
+: > "$tmp/noexec"
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "noexec", "command" => [ARGV[1]]}]}}))
+' "$repo_real" "$tmp/noexec" "$conf"
+echo eaccess >> "$repo/u.txt"
+set +e
+out=$(cd "$repo" && run_qa false 2>/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "EACCES must not block (rc=$rc)"
+echo "$out" | grep -q "実行できません" || fail "EACCES should warn as missing (R1): $out"
+
+# ---- R1 回帰: fast-edit-check の不正 entry 可視化と総量 truncate ---------------
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"edit_checks" => [
+  {"name" => "bad-entry", "pattern" => "\\.rb$", "command" => "not-an-array"},
+  {"name" => "broken-re", "pattern" => "([", "command" => [ARGV[1]]},
+  {"name" => "big1", "pattern" => "\\.rb$", "command" => [ARGV[1]]},
+  {"name" => "big2", "pattern" => "\\.rb$", "command" => [ARGV[1]]}
+]}}))
+' "$repo_real" "$tmp/big-fail" "$conf"
+cat > "$tmp/big-fail" <<'EOF'
+#!/bin/sh
+awk 'BEGIN { for (i = 0; i < 60; i++) printf "%s\n", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }'
+exit 1
+EOF
+chmod +x "$tmp/big-fail"
+out=$(run_edit "$repo/a.rb") || fail "edit-check with invalid entries should exit 0"
+echo "$out" | grep -q "設定エラー" || fail "invalid entries should be surfaced (R1): $out"
+echo "$out" | grep -q "bad-entry\|edit_checks\[0\]" || fail "invalid entry should be named: $out"
+echo "$out" | grep -q "broken-re" || fail "broken regex entry should be named: $out"
+[ "${#out}" -lt 3500 ] || fail "total output should be capped (R1): length=${#out}"
+echo "$out" | grep -q "truncated" || fail "total cap should be visible: $out"
+
 echo "ok: quality-loop-hooks self-test"

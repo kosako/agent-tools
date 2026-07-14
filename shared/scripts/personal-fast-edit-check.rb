@@ -79,19 +79,28 @@ module FastEditCheck
     nil
   end
 
+  # 宣言 entry を [file に一致する有効 check, 不正 entry の名前] に分類する。
+  # 不正 entry (構造不備・壊れた regex) は黙って除外せず設定エラーとして可視化する
+  # (「設定済みなのに動かない」を診断可能にする)。
   def checks_for(entry, file)
     checks = entry.is_a?(Hash) ? entry["edit_checks"] : nil
-    return [] unless checks.is_a?(Array)
+    return [[], []] unless checks.is_a?(Array)
 
-    checks.select do |c|
-      c.is_a?(Hash) && c["pattern"].is_a?(String) && c["command"].is_a?(Array) &&
-        c["command"].all? { |a| a.is_a?(String) } && !c["command"].empty? &&
-        begin
-          Regexp.new(c["pattern"]).match?(file)
-        rescue RegexpError
-          false
-        end
+    matched = []
+    invalid = []
+    checks.each_with_index do |c, i|
+      unless c.is_a?(Hash) && c["pattern"].is_a?(String) && c["command"].is_a?(Array) &&
+             !c["command"].empty? && c["command"].all? { |a| a.is_a?(String) }
+        invalid << "edit_checks[#{i}]"
+        next
+      end
+      begin
+        matched << c if Regexp.new(c["pattern"]).match?(file)
+      rescue RegexpError
+        invalid << (c["name"] || "edit_checks[#{i}]") + " (壊れた regex)"
+      end
     end
+    [matched, invalid]
   end
 
   def run_check(check, file, repo_root)
@@ -99,9 +108,11 @@ module FastEditCheck
     status = $?.exitstatus
     { name: check["name"] || check["command"].first, ok: status == 0,
       output: out.to_s, spawn_failed: status.nil? }
-  rescue Errno::ENOENT
+  rescue Errno::ENOENT, Errno::EACCES, Errno::ENOEXEC => e
+    # コマンド不在だけでなく実行権限喪失・不正な実行形式も spawn 失敗として可視化する
+    # (包括 rescue の無言 exit 0 に落とすと check の恒久不活性に気づけない)
     { name: check["name"] || check["command"].first, ok: false,
-      output: "(check コマンドが見つかりません)", spawn_failed: true }
+      output: "(check を実行できません: #{e.class})", spawn_failed: true }
   end
 
   def truncate(text)
@@ -136,15 +147,24 @@ module FastEditCheck
     return 0 if repo_root.nil?
 
     entry = config[repo_root]
-    checks = entry ? checks_for(entry, file) : []
-    return 0 if checks.empty?
+    checks, invalid = entry ? checks_for(entry, file) : [[], []]
+
+    parts = []
+    unless invalid.empty?
+      parts << "fast-edit-check: 設定エラー: 不正な check 宣言を無視しました: " \
+               "#{invalid.join(', ')} (#{config_path})"
+    end
 
     failures = checks.map { |c| run_check(c, file, repo_root) }.reject { |r| r[:ok] }
-    return 0 if failures.empty?
+    unless failures.empty?
+      body = failures.map { |r| "[#{r[:name]}]\n#{truncate(r[:output])}" }.join("\n")
+      parts << "fast-edit-check: #{File.basename(file)} への編集が repo 宣言の check に失敗しました。" \
+               "いま直してください (自動修正はしません):\n#{body}"
+    end
+    return 0 if parts.empty?
 
-    body = failures.map { |r| "[#{r[:name]}]\n#{truncate(r[:output])}" }.join("\n")
-    emit("fast-edit-check: #{File.basename(file)} への編集が repo 宣言の check に失敗しました。" \
-         "いま直してください (自動修正はしません):\n#{body}")
+    # 上限は check 単位だけでなく合計にも適用する (複数失敗で context を溢れさせない)
+    emit(truncate(parts.join("\n")))
     0
   rescue StandardError
     0 # fail-open: hook 内部の想定外で編集操作を壊さない
