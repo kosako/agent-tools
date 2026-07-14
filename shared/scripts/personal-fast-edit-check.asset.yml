@@ -1,0 +1,27 @@
+schema_version: 1
+name: personal-fast-edit-check
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #203 (Phase 2) の実装 PR で author≠reviewer レビューのうえ承認。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:2ed788f160bc923d9cbe1098c29edf26bda61c6b34cad8e21b94ad77f4403fe0
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-fast-edit-check.rb
+  format: text
+summary: >-
+  PostToolUse (Edit|Write) hook body。編集直後の変更ファイル 1 個に、ユーザー所有の中央
+  local 設定 (checks.local.json) で宣言された高速 check を実行し、失敗要約だけを
+  additionalContext で返す steering (fail-open・block しない・自動 fix しない)。宣言の
+  無い repo では無言 no-op。repo 内の宣言は読まない (第三者 repo の任意コマンド宣言を
+  防ぐ)。docs/quality-loop-hooks.md が正本。

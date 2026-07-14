@@ -1,0 +1,27 @@
+schema_version: 1
+name: personal-changed-scope-qa
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #203 (Phase 2) の実装 PR で author≠reviewer レビューのうえ承認。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:52ccd219a458112d3d8d0c0c2cbc645738d3a589a3905b001c1aef44a353c8d6
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-changed-scope-qa.rb
+  format: text
+summary: >-
+  Stop hook body。turn 終了時に dirty scope (帰属なし・working tree 全体) へ repo 宣言の
+  QA check が未実行 / stale なら一度だけ block して続行させる gate。scope 指紋 + 結果を
+  cache し同一 scope を再検査しない / stop_hook_active 時と同一失敗の再発は非ブロッキング
+  警告に降格 / check 不在も警告降格 (無限ループ対策・#200 §4.5)。宣言の無い repo では
+  無言 no-op。docs/quality-loop-hooks.md が正本。
