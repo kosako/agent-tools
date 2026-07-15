@@ -67,7 +67,8 @@ codex exec review --help
 
 `personal-review-request` から `--base` review を受ける場合は、caller が metadata-only read で検証した
 `expected_base_ref` / `expected_base_oid` / `expected_head_oid` を必須入力にします。review 実行前に
-次を read-only で確認します。
+まず argv construction layer で base ref が空または `-` 始まりなら、Git command を呼ぶ前に
+`Status: BLOCKED` とします。その純粋な値検査を通った場合だけ、次を read-only で確認します。
 
 ```sh
 git rev-parse --verify HEAD
@@ -95,7 +96,7 @@ human に、正しい commit と base ref を持つ clean な worktree の準備
 codex exec -s read-only -c approval_policy="never" --ephemeral review --base=<base-branch> -
 
 # 1 commit が導入した変更
-codex exec -s read-only -c approval_policy="never" --ephemeral review --commit <sha> -
+codex exec -s read-only -c approval_policy="never" --ephemeral review --commit=<validated-oid> -
 
 # staged / unstaged / untracked changes
 codex exec -s read-only -c approval_policy="never" --ephemeral review --uncommitted -
@@ -114,6 +115,12 @@ review 実行を確認できない経路では `Status: BLOCKED` とし、独立
 PR context では上の target identity preflight が通った場合だけ、検証済み ref を
 `--base=<expected-base-ref>` という1つの argv 要素で渡します。shell command へ文字列結合せず、
 値を独立 option として再解釈させません。executor 自身は `gh pr diff` や PR 本文を取得しません。
+
+commit mode でも caller の target をそのまま option にせず、
+`git rev-parse --verify --end-of-options '<commit>^{commit}'` で commit object に解決した OID が
+expected target と一致した場合だけ、
+`--commit=<validated-oid>` という1つの argv 要素で渡します。不正・不一致なら target-identity の
+`Status: BLOCKED` 形式で停止し、`--base` / `--uncommitted` へ fallback しません。
 
 ## 4. stdin brief
 

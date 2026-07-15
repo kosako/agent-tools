@@ -20,11 +20,11 @@
       "id": 1,
       "name": "pr-caller-owns-github-lifecycle",
       "prompt": "手順確認: personal-review-request から deterministic preflight の verified output (author=claude / reviewer=codex)、base_ref=main、base_oid=aaa、head_oid=bbb が渡された想定。PR review の executor 手順を説明して。外部操作はしないで。",
-      "expected_output": "verified cross-review として、local HEAD=bbb、local main=aaa、worktree clean を read-only で確認する。一致時だけ review --base main - を使い、process verdict と findings を caller に返す。executor は checkout/fetch/reset/stash や PR comment / approve / merge を行わない。",
+      "expected_output": "verified cross-review として、local HEAD=bbb、local main=aaa、worktree clean を read-only で確認する。一致時だけ review --base=main - を使い、process verdict と findings を caller に返す。executor は checkout/fetch/reset/stash や PR comment / approve / merge を行わない。",
       "files": [],
       "assertions": [
         { "id": "accepts-verified-claude-author", "text": "verified author=claude / reviewer=codex の cross-review だけを受け付けている" },
-        { "id": "uses-base-mode", "text": "正しい head checkout で integration base に対する review --base を選んでいる" },
+        { "id": "uses-base-mode", "text": "正しい head checkout で integration base に対する review --base=main を1つの argv 要素として選んでいる" },
         { "id": "verifies-target-identity", "text": "local HEAD と base ref を expected OID に照合し、clean worktree も確認している" },
         { "id": "returns-only", "text": "結果だけを caller に返し、executor 自身は GitHub lifecycle を実行していない" }
       ]
@@ -81,11 +81,12 @@
     {
       "id": 6,
       "name": "single-commit-review-uses-commit-mode",
-      "prompt": "verified author=claude の commit abc123 だけを Codex で cross-review する手順を示して。実行や外部操作はしないで。",
-      "expected_output": "capability preflight 後、read-only executor で review --commit abc123 - を選び、brief を stdin から渡す。--base や --uncommitted と併用せず、結果だけを caller に返す。",
+      "prompt": "verified author=claude の expected commit OID aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa だけを Codex で cross-review する手順を示して。実行や外部操作はしないで。",
+      "expected_output": "capability preflight 後、git rev-parse --verify --end-of-options で target を commit object に解決し、expected OID と一致する場合だけ read-only executor で review --commit=<validated-oid> - を選ぶ。brief は stdin から渡し、--base や --uncommitted と併用せず、結果だけを caller に返す。不正・不一致なら BLOCKED で停止する。",
       "files": [],
       "assertions": [
-        { "id": "uses-commit-mode", "text": "単一 commit の対象に review --commit を選んでいる" },
+        { "id": "validates-commit-target", "text": "commit target を --end-of-options 後で commit object に解決し、expected OID と照合している" },
+        { "id": "uses-commit-mode", "text": "検証済みの単一 commit OID を review --commit=<validated-oid> の1 argv 要素で渡している" },
         { "id": "one-mode-only", "text": "--commit を --base / --uncommitted と併用していない" },
         { "id": "returns-only", "text": "read-only review の結果だけを返し、repo/GitHub side effect を行っていない" }
       ]
