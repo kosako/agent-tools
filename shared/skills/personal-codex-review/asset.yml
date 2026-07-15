@@ -11,7 +11,7 @@ risk:
 source:
   path: shared/skills/personal-codex-review
   format: directory
-summary: run a stable second-model code review via codex exec (read-only, no approval hang)
-description: public-safe procedure for getting a genuine Codex (GPT-5.x) review of a diff or PR via codex exec, with the flags that avoid the approval-policy hang
+summary: run a capability-checked, ephemeral read-only Codex review executor and return findings without repo or GitHub side effects
+description: public-safe Codex CLI review procedure using ephemeral review --base/--commit/--uncommitted with stdin instructions, cross-review author guards, PR head/base OID and clean-worktree verification, explicit second-opinion labeling, and fail-closed hand-off when capabilities are missing or targets mismatch
 review:
   human_review: pending
