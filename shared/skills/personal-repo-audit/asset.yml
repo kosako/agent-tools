@@ -12,6 +12,6 @@ source:
   path: shared/skills/personal-repo-audit
   format: directory
 summary: audit a repository across multiple dimensions and aggregate severity-ranked findings
-description: public-safe read-only repo audit workflow that fans out per-dimension subagents and aggregates
+description: "Outcome: aggregate evidence-backed, severity-ranked findings across a repository. Trigger: explicit or clearly repo-wide health and debt audits. Use: broad risks, gaps, and inconsistencies. Do not use: a single bug, one diff, or session-log mining. Side effects: read-only reporting with no fixes. Compose with: personal-investigate for a specific root cause and personal-asset-miner for log-derived candidates."
 review:
   human_review: pending

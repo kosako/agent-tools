@@ -12,6 +12,6 @@ source:
   path: shared/skills/personal-review-request
   format: directory
 summary: post a PR review request and results only with explicit GitHub-write authorization, keeping process verdict separate from finding severity
-description: public-safe GitHub PR review-request flow with draft-before-diff confirmation, safe-gh trust classification, metadata-only target identity, cross-review routing, and read-only Codex executor ownership
+description: "Outcome: manage review request, result, and follow-up on a GitHub PR. Trigger: explicit PR-comment writes, draft-before-diff confirmation for ambiguous review, or no-write delegation. Use: PR-backed review lifecycle with metadata-only target identity. Do not use: unbound diffs or merge, approve, fix, commit, and push actions. Side effects: GitHub comments only with current explicit trusted-user authorization. Compose with: personal-github-safe-reader, trailer routing, and the opposite-author review executor."
 review:
   human_review: pending

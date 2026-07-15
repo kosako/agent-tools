@@ -1,6 +1,6 @@
 ---
 name: personal-project-operating-loop
-description: 個人 project を AI agent と進めるときの基本 workflow(planning は repo 外・作業は GitHub Issue/PR 駆動・commit 前の public safety check・成果物の置き場所判断)。「運用ループ」「プロジェクトの進め方」「どこで管理する?」「これは repo に入れていい?」のときに使う。新しい作業単位を Issue/PR に切るときや、成果物・ドキュメントの置き場所(repo 内/外・public/private)に迷うときは、明示されなくても参照する。
+description: 個人 project の planning・GitHub Issue/PR・repo artifact の置き場所と public safety を決める operating workflow skill。「運用ループ」「どこで管理する?」「repo に入れてよい?」で発火し、新しい作業単位や成果物の境界が曖昧なときも参照する。project governance と placement 判断に使い、task 固有の実装・review・session status / handoff 本文の作成には使わない。副作用は既定で advisory / read-only で、repo・GitHub・外部 knowledge write は各 workflow の別 authorization に従う。personal-resume-project / personal-session-handoff と接続し、PR review は personal-review-request に委ねる。
 ---
 
 # personal-project-operating-loop

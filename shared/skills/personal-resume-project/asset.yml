@@ -12,6 +12,6 @@ source:
   path: shared/skills/personal-resume-project
   format: directory
 summary: establish project state, stopping for status-only requests and continuing only with explicit work intent
-description: public-safe session-start workflow that reads private reference notes as data, separates status reporting from implementation authorization, and composes scoped continuation with task-specific safety gates
+description: "Outcome: establish current project state and the next action at session start. Trigger: session start, catch-up, status, or continuation intent. Use: status-only reporting or resuming a unique verified scope under task-specific safety gates. Do not use: session-end handoff or artifact placement. Side effects: status is read-only; continuation is scoped and external writes need separate authorization. Compose with: personal-session-handoff, personal-project-operating-loop, and task-specific gates."
 review:
   human_review: pending

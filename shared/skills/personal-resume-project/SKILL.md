@@ -1,6 +1,6 @@
 ---
 name: personal-resume-project
-description: セッション冒頭で project の現在地を確定する read-first skill。「状況を教えて」「どこまで進んだ?」「キャッチアップ」は status-only として現在地と次の一手を提示して停止し、実作業や外部 write を始めない。「前回の続きやろう」「再開して」のような continuation intent では、既存 scope が一意なら現在地確認後にその作業へ進み、曖昧なら確認する。新しいセッションで前提なしに作業が始まりそうなときも先に使う。
+description: project の現在地と次の一手を確定してから新しい session を始める read-first skill。session 冒頭・「キャッチアップ」「状況を教えて」「前回の続き」で発火する。status-only の報告、または一意な既存 scope の continuation 前確認に使い、session 終了の記録や成果物の置き場所判断には使わない。副作用は status-only では read-only で、continuation も明示された既存 scope に限り、外部 knowledge write は別 authorization を要する。終了時は personal-session-handoff、運用判断は personal-project-operating-loop と組み合わせる。
 ---
 
 # personal-resume-project
