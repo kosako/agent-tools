@@ -1,6 +1,6 @@
 ---
 name: personal-investigate
-description: バグ・エラー・不具合の root cause を検証してから次の行動を決める debugging skill。「原因だけ調べて」「原因を調べて」「直す前に原因を」「なぜか動かない」「investigate」「何回直しても直らない」「デバッグして」は単独なら diagnose-only として、verified root cause / evidence / remaining risk の報告で停止し、ファイルを変更しない。「直して」「修正して」まで含む依頼、または現在の明示的な continuation intent と一意に検証できた既存の修正 scope がある場合は fix-authorized として、原因検証後にだけ最小修正へ進む。「バグを調べて」「エラーが出る」「root cause」「テストが落ちる」「flaky」「再現しない」も対象。不具合修正に着手しようとしているときも、明示されなくても root-cause gate と mode 判定を適用する。
+description: バグ・エラー・不具合の root cause を検証してから報告または最小修正へ進む debugging skill。不具合調査や修正に着手するとき自動発火し、「原因だけ調べて」や単独の「なぜか動かない」「デバッグして」「何回直しても直らない」は diagnose-only、「直して」、または現在の明示的な continuation intent と一意に検証できた既存の修正 scope は fix-authorized と判定する。再現・仮説検証・原因特定に使い、一般実装や repo 全体監査には使わない。副作用は diagnose-only では read-only、fix-authorized でも原因検証後の scope 内修正だけで、任意の knowledge write は別の trusted authorization を要する。修正品質は personal-production-rail、横断監査は personal-repo-audit と組み合わせる。
 ---
 
 バグ・エラー・不具合に対して、**原因(root cause)を特定・検証する前に修正を始めない**ためのデバッグ手順です。痛みは「症状を見て、仮説検証せずに当てずっぽうで直し始め、パッチを重ねてしまう」こと。これを順序の規律で矯正します。

@@ -12,6 +12,6 @@ source:
   path: shared/workflows/personal-project-operating-loop.md
   format: markdown
 summary: reusable operating loop for personal agent projects
-description: public-safe workflow for deciding where project artifacts live
+description: "Outcome: decide whether planning, tasks, and artifacts belong outside the repo, in GitHub, or in tracked files. Trigger: operating-model and placement questions or new work units. Use: project governance and public-safety boundaries. Do not use: task implementation, review execution, or session content. Side effects: advisory and read-only by default; writes follow separate workflow authorization. Compose with: resume, handoff, and review-request skills."
 review:
   human_review: pending

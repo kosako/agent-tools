@@ -1,6 +1,6 @@
 ---
 name: personal-review-request
-description: GitHub PR にコードレビューの依頼と結果をコメント投稿する書き込み型 skill。`/personal-review-request <PR番号>` または「この PR にレビュー依頼と結果を投稿して」のように GitHub への記録意図が明示されたときに使う。「この PR をレビューして」「レビュー依頼して」だけならコメント案を提示して確認を取り、明示確認まで投稿も diff 取得もしない。「GitHub には書かないで」や PR に紐づかない diff の会話内レビューには使わず、相互レビュー routing が選んだ read-only reviewer に委ねる。
+description: GitHub PR 上で review 依頼・結果・follow-up の lifecycle を管理する review workflow skill。明示的な PR comment 投稿依頼は write-authorized、曖昧な「この PR をレビューして」は draft とし、確認まで diff 取得も投稿も行わず、「GitHub に書かないで」は read-only reviewer へ委譲する。PR を正本にする review に使い、PR に紐づかない diff review、merge / approve / 修正 / commit / push には使わない。GitHub comment write は現在の trusted user の明示 authorization がある場合だけ行う。personal-github-safe-reader と trailer routing を前段に置き、verified author=Claude のとき personal-codex-review executor と組み合わせる。
 ---
 
 # personal-review-request — GitHub 上で完結する PR レビュー依頼

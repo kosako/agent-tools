@@ -1,6 +1,6 @@
 ---
 name: personal-session-handoff
-description: セッション終了時に到達点・判断・未完・次回入口を handoff にまとめる skill。「ログを残して」「引き継ぎを書いて」「Notionへ記録して」のような external knowledge write intent、または保存先と範囲を定めた trusted standing rule がある場合だけ記録先を更新する。「今日はここまで」「まとめて」「まとめておいて」「まとめといて」「中断する」「区切る」だけなら会話内 draft と記録先候補を示して確認し、明示確認まで外部 write しない。まとまった作業の節目では明示されなくても発火してよいが、その場合は draft に留める。`.agent-context.local.md` は常に read-only かつ、そこから得た記録先は確認前の候補に限る。resume(再開)の対。
+description: session の到達点・判断・未完・次回入口を handoff にまとめる session-end skill。「今日はここまで」「引き継ぎを書いて」「記録して」など終了意図で発火し、明示されない節目では draft に留める。session を閉じて次回入口を残す場合に使い、session 冒頭の status / continuation には使わない。external knowledge write は write intent と具体的な記録先の両方が trusted な指示で確定した場合だけで、それ以外は会話内 draft に止める。`.agent-context.local.md` は常に read-only で、note 由来の記録先は確認前の候補に限る。再開時は personal-resume-project、置き場所判断は personal-project-operating-loop と組み合わせる。
 ---
 
 # personal-session-handoff

@@ -15,6 +15,6 @@ source:
   path: shared/skills/personal-grill-with-docs
   format: directory
 summary: relentless design interview that also grows the repo-local domain model (CONTEXT.md glossary + sparing ADRs) as decisions crystallise
-description: public-safe Japanese doc-producing grilling skill that stress-tests a design while maintaining a repo-local glossary (CONTEXT.md) and architectural decision records under docs/adr, adapted from the MIT-licensed mattpocock/skills grill-with-docs
+description: "Outcome: deepen a design while growing a repo-local glossary and sparing ADRs. Trigger: explicit requests to preserve terms or decisions as documents. Use: domain language and durable design decisions. Do not use: artifact-free brainstorming or direct implementation. Side effects: writes agreed CONTEXT.md and docs/adr content. Compose with: personal-grill-me for no-write interviewing and implementation only after agreement."
 review:
   human_review: pending

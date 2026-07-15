@@ -12,6 +12,6 @@ source:
   path: shared/skills/personal-grill-me
   format: directory
 summary: relentlessly interview the user's plan/design/idea in Japanese until shared understanding, one question at a time with a recommendation
-description: public-safe Japanese grilling skill that stress-tests plans, designs, and hypotheses through one-question-at-a-time interviewing, explores the codebase instead of asking when answerable, and refuses vague answers
+description: "Outcome: reach shared understanding through one-question-at-a-time design interviewing. Trigger: explicit brainstorming or decision-validity work. Use: plans, designs, ideas, and hypotheses without durable artifacts. Do not use: simple questions, implementation, or document creation. Side effects: conversation-only and read-only. Compose with: personal-grill-with-docs when a glossary or ADR is required."
 review:
   human_review: pending
