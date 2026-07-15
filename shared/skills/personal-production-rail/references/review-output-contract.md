@@ -15,6 +15,10 @@ review finding の重大度と review process 全体の verdict を、別 field 
 vendored policy 内の `REJECT` / `Warning` は finding の分類基準として読み、最終出力では上表の
 severity に正規化します。個別 finding に process verdict を付けません。
 
+出力語彙・集計・対応主体について vendored policy と競合する場合は、この自前 contract を優先します。
+vendored policy の「APPROVE + 提案」禁止に対し、nit-only の finding を APPROVE と併記できるのは
+意図的な local override です。nit は対応条件や Warning ではなく、任意情報として保持します。
+
 ## process verdict
 
 finding を確定したあと、件数から process verdict を1つだけ集計します。
@@ -27,6 +31,10 @@ finding を確定したあと、件数から process verdict を1つだけ集計
 
 `APPROVE + Warning` のように複数 verdict を併記しません。should がある場合は Warning とし、
 nit は APPROVE と併記できても対応を条件にしません。
+
+should / Warning は非ブロッキングで、対応するかは trusted な依頼元が判断します。レビュアーは
+推奨と根拠を示しますが、should を未対応という理由だけで must や REJECT に格上げしません。
+一方、Warning は PR 全体の merge readiness や merge authorization を意味しません。
 
 ## 出力と境界
 

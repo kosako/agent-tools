@@ -6,7 +6,8 @@ description: Codex CLI に現在の repo の branch diff / commit / uncommitted 
 # personal-codex-review
 
 現在の repository を Codex CLI の review subcommand で検査する read-only executor です。
-GitHub の read / comment / approve / merge、修正、commit、push は行いません。
+GitHub の read / comment / approve / merge、修正、commit、push は行わず、review session も
+永続化しません。
 
 ## 責務境界
 
@@ -97,8 +98,10 @@ codex exec -s read-only -c approval_policy="never" --ephemeral review --uncommit
 ```
 
 コマンドは foreground の単独 process として実行し、stdin へ brief を渡したら EOF を送ります。
-detach / background にしません。`--ephemeral` は read-only review 専用の session state を永続化しない
-ために使い、capability がなければ黙って外さず preflight の規則どおり停止します。model family や
+detach / background にしません。`--ephemeral` は Codex 自身の review session state を永続化しない
+ための副作用境界です。repo sandbox の `read-only` だけではこの runtime state を抑止できないため、
+利便 flag ではなく executor contract の必須条件とします。capability がなければ黙って外さず
+preflight の規則どおり停止します。model family や
 reasoning effort は固定せず、現在の user / project selection に委ねます。明示依頼と capability
 確認がない `-m` や model-specific config を足しません。
 別 agent / wrapper に代行させず、実際の Codex CLI review process を直接呼びます。実行主体や

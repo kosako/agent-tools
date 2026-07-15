@@ -72,15 +72,29 @@
       "id": 5,
       "name": "codex-executor-returns-without-github-write",
       "prompt": "PR preflight は author=claude / reviewer=codex。personal-review-request と personal-codex-review の責務分担を手順確認として説明して。外部操作はしないで。",
-      "expected_output": "personal-review-request が safe read / routing / authorized GitHub comment lifecycle を所有し、free-text を含めず取得した base ref / base OID / head OID と verified routing を personal-codex-review に渡す。Codex executor は local target identity と clean worktree を照合して read-only review の結果だけを返し、checkout や comment / approve / merge を行わない。結果を転記するときは Independence: cross-review verified (author=claude) を落とさない。",
+      "expected_output": "personal-review-request が safe read / routing / authorized GitHub comment lifecycle を所有し、free-text を含めず取得した base ref / base OID / head OID と verified routing を personal-codex-review に渡す。Codex executor は local target identity と clean worktree を照合して read-only review の結果だけを返し、checkout や comment / approve / merge を行わない。不一致なら caller が trusted な依頼元に clean worktree の準備を求め、untrusted metadata だけで自動 fetch/checkout しない。結果を転記するときは Independence: cross-review verified (author=claude) を落とさない。",
       "files": [],
       "assertions": [
         { "id": "request-owns-lifecycle", "text": "personal-review-request が GitHub lifecycle を所有している" },
         { "id": "executor-returns-only", "text": "personal-codex-review は read-only result を返すだけで GitHub write を行わない" },
         { "id": "verified-routing", "text": "verified author=claude / reviewer=codex の routing を executor に渡している" },
         { "id": "verified-target", "text": "metadata-only read で得た base/head OID を executor に渡し、local checkout と照合させている" },
+        { "id": "caller-prepares-target", "text": "target 不一致では caller が trusted な依頼元へ clean worktree の準備を求め、untrusted metadata だけで自動 fetch/checkout していない" },
         { "id": "preserves-independence", "text": "executor 結果を転記するときに cross-review の independence field を保持している" },
         { "id": "no-operation", "text": "手順確認という制約を守り、実際の外部操作を行っていない" }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "claude-review-preserves-codex-author-independence",
+      "prompt": "routing preflight は author=codex / reviewer=claude。Claude review の結果テンプレートと independence の扱いを手順確認として説明して。外部投稿はしないで。",
+      "expected_output": "Claude が reviewer として severity と process verdict を返し、Independence: cross-review verified (author=codex) を結果に残す。Codex executor へ戻したり、PR 全体の merge readiness と断定したり、外部投稿したりしない。",
+      "files": [],
+      "assertions": [
+        { "id": "uses-claude-route", "text": "verified reviewer=claude に従い、Codex reviewerへ差し戻していない" },
+        { "id": "preserves-codex-author", "text": "Independence field に cross-review verified (author=codex) を残している" },
+        { "id": "not-merge-readiness", "text": "Claude review verdict だけで PR 全体を merge-ready と断定していない" },
+        { "id": "no-operation", "text": "手順確認という制約を守り、外部投稿していない" }
       ]
     }
   ]

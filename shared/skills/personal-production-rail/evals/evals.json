@@ -17,13 +17,12 @@
       "id": 1,
       "name": "production-loads-via-index",
       "prompt": "この決済まわりの API クライアント、本番品質で実装して。",
-      "expected_output": "production レール on と判定。references/policy-index.md を読み、この非自明な generation task に関連する基準文書(ai-antipattern 等)を2〜4本、かつ最大4本だけ load する。全 reference を常時読み込まず、些細な task に最低2本を強制しない。",
+      "expected_output": "production レール on と判定。references/policy-index.md を読み、この非自明な generation task に関連する policy lens (ai-antipattern 等)を2〜4本、かつ最大4本だけ load する。全 policy lens を常時読み込まない。",
       "files": [],
       "assertions": [
         { "id": "detects-on", "text": "production レール on と判定している" },
         { "id": "reads-index", "text": "policy-index を見て関連ポリシーを選んでいる(全部は読まない)" },
-        { "id": "caps-load", "text": "この非自明な task の load を2〜4本、かつ最大4本に間引いている" },
-        { "id": "no-minimum-for-trivial", "text": "些細な generation/debug task に最低2本を強制する契約にしていない" }
+        { "id": "caps-load", "text": "この非自明な task の policy lens を2〜4本、かつ最大4本に間引いている" }
       ]
     },
     {
@@ -58,18 +57,19 @@
         { "id": "default-on", "text": "明示が無くても既定 production としてポリシーを当てている" },
         { "id": "not-off-by-default", "text": "明示が無いことを理由に off にしていない" },
         { "id": "routes-via-index", "text": "索引を見て作業種別に合うポリシーだけを選んでいる" },
-        { "id": "does-not-load-all", "text": "全ポリシーを常時読み込まず 2〜4 本に間引いている(bloat 回避)" }
+        { "id": "does-not-load-all", "text": "全ポリシーを常時読み込まず最大4本に間引いている(bloat 回避)" }
       ]
     },
     {
       "id": 5,
       "name": "proportional-effort",
       "prompt": "このコメントの typo を1文字直して。",
-      "expected_output": "品質のバー(正当性・最小差分・契約維持)は保ちつつ、1 行の些細な修正に重い preflight/self-check セレモニーを課さない。手順を規模相応に軽くする。off にするのではなく、手順だけ軽くする。",
+      "expected_output": "品質のバー(正当性・最小差分・契約維持)は保ちつつ、1 行の些細な修正に重い preflight/self-check セレモニーや最低2本の policy lens を課さない。該当 lens が1本なら1本に軽量化できる。off にするのではなく、手順だけ軽くする。",
       "files": [],
       "assertions": [
         { "id": "keeps-bar", "text": "品質のバー(最小差分・契約維持)は保っている" },
         { "id": "light-process", "text": "些細な変更に重いセレモニーを課さず手順を軽くしている(バーは下げない)" },
+        { "id": "no-minimum-for-trivial", "text": "些細な generation/debug task に最低2本を強制せず、該当 lens 1本への軽量化を許している" },
         { "id": "not-off-for-small-change", "text": "1 文字修正を vibe 扱いして skill 自体を off にしていない(手順を軽くするだけ)" }
       ]
     },
@@ -77,7 +77,7 @@
       "id": 6,
       "name": "verdict-and-finding-severity-are-separate",
       "prompt": "review policy の process verdict と finding severity を整理して。ケースAは must 1 / should 2、Bは must 0 / should 2、Cは must 0 / should 0 / nit 1。PR の CI 状態は不明。",
-      "expected_output": "自前の references/review-output-contract.md を出力・集計規則の正本として使う。A=REJECT、B=Warning、C=APPROVE とし、finding severity の件数は別 field で保持する。nit は APPROVE と併記できるが条件にしない。どの verdict も CI 不明の PR 全体を merge-ready と断定しない。vendored policies/review.md は検出・判定観点として扱い、出力契約を埋め込むために改変しない。",
+      "expected_output": "自前の references/review-output-contract.md を出力・集計規則の正本として使う。A=REJECT、B=Warning、C=APPROVE とし、finding severity の件数は別 field で保持する。nit-only APPROVE は vendored policy に対する意図的な local output override で、nit を条件にしない。Bの should / Warning は非ブロッキングで対応可否はtrustedな依頼元判断。どの verdict も CI 不明の PR 全体を merge-ready と断定しない。vendored policies/review.md は検出・判定観点として扱い、出力契約を埋め込むために改変しない。",
       "files": [],
       "assertions": [
         { "id": "reject-must", "text": "must が1件以上のケースAを REJECT としている" },
@@ -85,6 +85,8 @@
         { "id": "approve-nit", "text": "must / should が0のケースCを APPROVE とし、nit を承認条件にしていない" },
         { "id": "separate-layers", "text": "process verdict と must/should/nit finding summary を別 field として扱っている" },
         { "id": "owned-output-contract", "text": "自前の review-output-contract.md を出力・集計規則の正本とし、vendored review.md をそのために改変していない" },
+        { "id": "documents-nit-override", "text": "nit-only APPROVE が vendored policy の提案併記禁止に対する意図的な local output override だと扱っている" },
+        { "id": "should-owned-by-requester", "text": "should / Warning を非ブロッキングとし、対応可否を trusted な依頼元判断としている" },
         { "id": "not-merge-readiness", "text": "code review verdict だけで PR 全体を merge-ready と断定していない" }
       ]
     }
