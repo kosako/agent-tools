@@ -75,7 +75,8 @@ process verdict と finding 集計は **code review process だけ**の判定で
 
 この手順より先に実行モードを決めます。write-authorized では、trusted なユーザーの review request に
 必要な metadata / diff を read-only で収集してよいものとします。draft は safe-gh の trust metadata と
-routing preflight だけを収集し、手順 2 のコメント案と確認までで停止します。明示確認後に
+metadata-only の review target identity、routing preflight だけを収集し、手順 2 のコメント案と
+確認までで停止します。明示確認後に
 write-authorized へ移るまで diff を取得せず、GitHub write や手順 3 の review 実行へ進みません。
 read-only はこの workflow に入らず、委譲先の read 手順に従います。
 

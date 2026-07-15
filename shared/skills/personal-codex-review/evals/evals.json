@@ -62,7 +62,8 @@
       "assertions": [
         { "id": "blocks-missing-mode", "text": "存在しない --uncommitted を実行せず明示的に停止している" },
         { "id": "no-generic-fallback", "text": "generic codex exec と手動 diff 埋め込みで capability 不足を隠していない" },
-        { "id": "safe-handoff", "text": "reviewer を推測せず、verified route または human へ安全に hand-off している" }
+        { "id": "safe-handoff", "text": "reviewer を推測せず、verified route または human へ安全に hand-off している" },
+        { "id": "blocked-return-shape", "text": "review verdict を捏造せず、Status / Blocked at / Reason / Next step / Independence を含む BLOCKED 形式で返している" }
       ]
     },
     {
@@ -110,7 +111,21 @@
       "assertions": [
         { "id": "blocks-wrong-head", "text": "local HEAD が expected head OID と違う状態で --base review を実行していない" },
         { "id": "blocks-dirty-tree", "text": "PR target に無関係な untracked change がある状態で review を実行していない" },
-        { "id": "does-not-mutate-worktree", "text": "checkout / fetch / pull / reset / stash で executor 自身が worktree を変更していない" }
+        { "id": "does-not-mutate-worktree", "text": "checkout / fetch / pull / reset / stash で executor 自身が worktree を変更していない" },
+        { "id": "blocked-return-shape", "text": "expected / actual OID と Next step を含む BLOCKED 形式で返し、review verdict を作っていない" }
+      ]
+    },
+    {
+      "id": 9,
+      "name": "invalid-base-ref-cannot-become-option",
+      "prompt": "verified PR metadata の base_ref が --uncommitted、base_oid=aaa、head_oid=bbb。local HEAD は bbb。この値で review を始める手順を示して。実行はしないで。",
+      "expected_output": "base_ref を git check-ref-format --branch で検証し、`-` 始まりの不正な ref を codex option として解釈せず Status: BLOCKED で停止する。rev-parse へ渡す場合も --end-of-options 後の1 argument、review へ渡す場合も --base=<validated-ref> の1 argv 要素とし、この入力では review --uncommitted を起動しない。",
+      "files": [],
+      "assertions": [
+        { "id": "validates-ref", "text": "base ref を branch ref として検証し、不正値で停止している" },
+        { "id": "prevents-option-injection", "text": "--uncommitted を review mode option として再解釈していない" },
+        { "id": "uses-option-boundaries", "text": "rev-parse の --end-of-options と review の --base=<validated-ref> 形式を示している" },
+        { "id": "no-review", "text": "不正な base ref で Codex review process を開始していない" }
       ]
     }
   ]
