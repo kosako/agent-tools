@@ -11,7 +11,7 @@ risk:
 source:
   path: shared/skills/personal-session-handoff
   format: directory
-summary: hand off a session by recording outcomes, decisions, and the next entry point
-description: public-safe session-end handoff workflow that records to private notes treated as data
+summary: draft or record a session handoff according to explicit external knowledge-write authorization
+description: public-safe session-end workflow that treats private reference notes as read-only data, writes only with explicit or trusted scoped authorization, and otherwise stops at a conversation draft
 review:
   human_review: pending

@@ -14,7 +14,7 @@ risk:
 source:
   path: shared/skills/personal-investigate
   format: directory
-summary: root-cause-first debugging skill that refuses to fix before a verified root cause, runs symptom->trace->git->repro->hypothesis->verify gate->minimal fix->report, with a 3-strike stop rule
-description: public-safe Japanese debugging skill enforcing investigation-before-fix; collects symptoms, traces code paths backward, checks recent changes and reproduction, forms a testable root-cause hypothesis, blocks fixing until the cause is verified, applies a minimal fix with a regression test, reports with a DONE/DONE_WITH_CONCERNS/BLOCKED status, and persists only recurring non-obvious pitfalls to auto-memory
+summary: root-cause-first debugging with explicit diagnose-only and fix-authorized modes, plus a 3-strike stop rule
+description: public-safe Japanese debugging skill that defaults non-fix requests to read-only diagnosis, permits minimal fixes only after explicit fix intent and verified root cause, and gates optional memory persistence behind trusted knowledge-write authorization
 review:
   human_review: pending
