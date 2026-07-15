@@ -12,6 +12,6 @@ source:
   path: shared/skills/personal-review-request
   format: directory
 summary: post a PR review request and results only with explicit GitHub-write authorization, ranked must/should/nit
-description: public-safe GitHub PR review-request flow with an explicit write gate, safe-gh trust classification, and cross-review routing
+description: public-safe GitHub PR review-request flow with an explicit write gate, draft-before-diff confirmation, safe-gh trust classification, and cross-review routing
 review:
   human_review: pending
