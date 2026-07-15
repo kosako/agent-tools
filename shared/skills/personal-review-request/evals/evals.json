@@ -85,7 +85,7 @@
       ]
     },
     {
-      "id": 5,
+      "id": 6,
       "name": "claude-review-preserves-codex-author-independence",
       "prompt": "routing preflight は author=codex / reviewer=claude。Claude review の結果テンプレートと independence の扱いを手順確認として説明して。外部投稿はしないで。",
       "expected_output": "Claude が reviewer として severity と process verdict を返し、Independence: cross-review verified (author=codex) を結果に残す。Codex executor へ戻したり、PR 全体の merge readiness と断定したり、外部投稿したりしない。",
