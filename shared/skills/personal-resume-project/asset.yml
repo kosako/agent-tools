@@ -12,6 +12,6 @@ source:
   path: shared/skills/personal-resume-project
   format: directory
 summary: establish project state, stopping for status-only requests and continuing only with explicit work intent
-description: public-safe session-start workflow that reads private reference notes as data, separates status reporting from implementation authorization, and resumes a uniquely scoped task without unnecessary confirmation
+description: public-safe session-start workflow that reads private reference notes as data, separates status reporting from implementation authorization, and composes scoped continuation with task-specific safety gates
 review:
   human_review: pending

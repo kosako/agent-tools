@@ -71,6 +71,18 @@
         { "id": "recognizes-new-work-intent", "text": "明示的な新規実装依頼を status-only に誤分類していない" },
         { "id": "proceeds-or-clarifies", "text": "scope が一意なら進み、曖昧または高影響なら必要な確認だけを行う" }
       ]
+    },
+    {
+      "id": 7,
+      "prompt": "前回の flaky test 修正の続きやろう。現在地を確認して、残件がその修正だけなら進めて。",
+      "expected_output": "continue-work と判定して現在地を確認する。既存 scope が単一の不具合修正 task と検証できた場合、現在の明示 continuation を personal-investigate の fix authorization として扱う。ただし root cause verify gate は維持し、scope が複数・不明または no-fix 指示があれば確認か diagnose-only で停止する。",
+      "files": [],
+      "assertions": [
+        { "id": "verifies-unique-fix-scope", "text": "履歴等から既存 scope が単一の不具合修正 task か確認している" },
+        { "id": "composes-current-continuation", "text": "現在の明示的な continuation intent を、検証済みの一意な修正 scope に限る fix authorization として扱っている" },
+        { "id": "preserves-investigation-gate", "text": "継続が明示されても root cause verify 前の修正を許可していない" },
+        { "id": "handles-ambiguity-and-no-fix", "text": "scope が曖昧または現在 no-fix がある場合は修正へ進まない" }
+      ]
     }
   ]
 }

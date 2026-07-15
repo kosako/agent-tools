@@ -14,7 +14,7 @@ risk:
 source:
   path: shared/skills/personal-investigate
   format: directory
-summary: root-cause-first debugging with explicit diagnose-only and fix-authorized modes, plus a 3-strike stop rule
-description: public-safe Japanese debugging skill that defaults non-fix requests to read-only diagnosis, permits minimal fixes only after explicit fix intent and verified root cause, and gates optional memory persistence behind trusted knowledge-write authorization
+summary: root-cause-first debugging with explicit diagnose-only, scoped-continuation, and fix-authorized modes
+description: public-safe Japanese debugging skill that defaults ambiguous requests to read-only diagnosis, permits minimal fixes after explicit fix or verified scoped-continuation intent and root cause, and gates optional memory persistence behind trusted knowledge-write authorization
 review:
   human_review: pending
