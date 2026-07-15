@@ -11,7 +11,7 @@ risk:
 source:
   path: shared/skills/personal-review-request
   format: directory
-summary: request a PR code review and keep the whole exchange on the GitHub PR, ranked must/should/nit
-description: public-safe GitHub-PR review-request flow; reviewer is chosen by the cross-review contract and Codex runs via the personal-codex-review stable invocation
+summary: post a PR review request and results only with explicit GitHub-write authorization, ranked must/should/nit
+description: public-safe GitHub PR review-request flow with an explicit write gate, safe-gh trust classification, and cross-review routing
 review:
   human_review: pending
