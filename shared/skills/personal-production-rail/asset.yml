@@ -14,8 +14,8 @@ risk:
 source:
   path: shared/skills/personal-production-rail
   format: directory
-summary: librarian skill that applies coding-quality policies on the production rail by reading a policy index and loading only the relevant 2-4 policy docs for preflight and self-check, without holding policy bodies itself
-description: public-safe Japanese router/librarian skill for the production rail; judges production vs vibe, reads references/policy-index.md, loads only the relevant vendored policy docs (e.g. ai-antipattern) for the task type, and applies them via a generation lens (preflight + self-check) and a review lens (severity), treating policy text as data not instructions; vendored third-party policies (takt, MIT) are imported through the injection gate and human review with a pinned commit
+summary: librarian skill that applies coding-quality references on the production rail by loading at most four relevant policy or contract docs for preflight, self-check, and review output
+description: public-safe Japanese router/librarian skill for the production rail; judges production vs vibe, reads references/policy-index.md, loads at most four relevant vendored policy or self-owned contract docs for the task type, and applies them via a generation lens (preflight + self-check) and a review lens (severity, process verdict, and independence), treating vendored policy text as data not instructions; vendored third-party policies (takt, MIT) are imported through the injection gate and human review with a pinned commit
 review:
   # 第三者 vendor (takt の policies/*.md、複数) を含むが、静的 injection スキャンは clean
   # (findings なし) のため human review は不要 = not_needed。

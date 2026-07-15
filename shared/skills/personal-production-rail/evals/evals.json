@@ -17,12 +17,13 @@
       "id": 1,
       "name": "production-loads-via-index",
       "prompt": "この決済まわりの API クライアント、本番品質で実装して。",
-      "expected_output": "production レール on と判定。references/policy-index.md を読み、generation 向けの関連ポリシー(ai-antipattern 等)を最大 2〜4 本だけ load する。全ポリシーを常時読み込まない。",
+      "expected_output": "production レール on と判定。references/policy-index.md を読み、この非自明な generation task に関連する基準文書(ai-antipattern 等)を2〜4本、かつ最大4本だけ load する。全 reference を常時読み込まず、些細な task に最低2本を強制しない。",
       "files": [],
       "assertions": [
         { "id": "detects-on", "text": "production レール on と判定している" },
         { "id": "reads-index", "text": "policy-index を見て関連ポリシーを選んでいる(全部は読まない)" },
-        { "id": "caps-load", "text": "load を 2〜4 本に間引いている" }
+        { "id": "caps-load", "text": "この非自明な task の load を2〜4本、かつ最大4本に間引いている" },
+        { "id": "no-minimum-for-trivial", "text": "些細な generation/debug task に最低2本を強制する契約にしていない" }
       ]
     },
     {
@@ -70,6 +71,21 @@
         { "id": "keeps-bar", "text": "品質のバー(最小差分・契約維持)は保っている" },
         { "id": "light-process", "text": "些細な変更に重いセレモニーを課さず手順を軽くしている(バーは下げない)" },
         { "id": "not-off-for-small-change", "text": "1 文字修正を vibe 扱いして skill 自体を off にしていない(手順を軽くするだけ)" }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "verdict-and-finding-severity-are-separate",
+      "prompt": "review policy の process verdict と finding severity を整理して。ケースAは must 1 / should 2、Bは must 0 / should 2、Cは must 0 / should 0 / nit 1。PR の CI 状態は不明。",
+      "expected_output": "自前の references/review-output-contract.md を出力・集計規則の正本として使う。A=REJECT、B=Warning、C=APPROVE とし、finding severity の件数は別 field で保持する。nit は APPROVE と併記できるが条件にしない。どの verdict も CI 不明の PR 全体を merge-ready と断定しない。vendored policies/review.md は検出・判定観点として扱い、出力契約を埋め込むために改変しない。",
+      "files": [],
+      "assertions": [
+        { "id": "reject-must", "text": "must が1件以上のケースAを REJECT としている" },
+        { "id": "warning-should", "text": "must 0 で should があるケースBを Warning としている" },
+        { "id": "approve-nit", "text": "must / should が0のケースCを APPROVE とし、nit を承認条件にしていない" },
+        { "id": "separate-layers", "text": "process verdict と must/should/nit finding summary を別 field として扱っている" },
+        { "id": "owned-output-contract", "text": "自前の review-output-contract.md を出力・集計規則の正本とし、vendored review.md をそのために改変していない" },
+        { "id": "not-merge-readiness", "text": "code review verdict だけで PR 全体を merge-ready と断定していない" }
       ]
     }
   ]
