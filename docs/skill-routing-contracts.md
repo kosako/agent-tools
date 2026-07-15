@@ -25,18 +25,18 @@ target ごとの重複を除くと、現行 inventory は次の 12 件です。
 
 | Skill | Trigger mode | Primary use | Do not use | Side effects | Composition |
 | --- | --- | --- | --- | --- | --- |
-| `personal-asset-miner` | explicit only | session log の反復から資産候補を rank | 単発事象、repo 監査、資産実装 | private logs read-only、会話内 report | 採用後は skill-creator、repo 健全性は repo-audit |
-| `personal-codex-review` | explicit / verified delegated | Codex による repo-bound review | GitHub lifecycle、Codex 著作物の独立 review | ephemeral read-only CLI | review-request、production-rail |
-| `personal-github-safe-reader` | automatic steering gate | GitHub author trust と safe metadata | withheld 本文取得、credential 隔離の代替 | read-only / non-enforcing steering | GitHub workflow 前段、必要本文は hand-off |
+| `personal-asset-miner` | explicit | session log の反復から資産候補を rank | 単発事象、repo 監査、資産実装 | private logs read-only、会話内 report | 採用後は skill-creator、repo 健全性は repo-audit |
+| `personal-codex-review` | explicit / delegated | Codex による repo-bound review | GitHub lifecycle、Codex 著作物の独立 review | ephemeral read-only CLI | review-request、production-rail |
+| `personal-github-safe-reader` | automatic | GitHub author trust と safe metadata | withheld 本文取得、credential 隔離の代替 | read-only / non-enforcing steering | GitHub workflow 前段、必要本文は hand-off |
 | `personal-grill-me` | explicit / intent-based | 成果物なしの設計 interview | 単純質問、実装、document 作成 | conversation-only | document が要るなら grill-with-docs |
-| `personal-grill-with-docs` | explicit only | interview と glossary / ADR の同時育成 | 成果物なしの壁打ち、直接実装 | repo document write | no-write は grill-me、実装は合意後 |
-| `personal-investigate` | automatic for defects | root cause 検証、diagnose / fix mode 分離 | 一般実装、repo 全体監査 | diagnosis read-only、fix と knowledge write は別 gate | production-rail、repo-audit |
-| `personal-production-rail` | default-on for code | production 品質 lens の preflight / self-check / review | 非コード、明示 throwaway | reference read-only、caller scope を拡張しない | investigate、review workflow / executor |
-| `personal-repo-audit` | explicit / repo-wide intent | repo 横断の健全性・負債監査 | 単一 bug / diff、session log mining | read-only report | 個別原因は investigate、ログは asset-miner |
-| `personal-resume-project` | automatic at session start / explicit | status-only または既存 / 明示された新規 scope の着手前確認 | session-end handoff、placement 判断 | status read-only、work / external write は別 gate | session-handoff、operating-loop |
+| `personal-grill-with-docs` | explicit | interview と glossary / ADR の同時育成 | 成果物なしの壁打ち、直接実装 | repo document write | no-write は grill-me、実装は合意後 |
+| `personal-investigate` | automatic | root cause 検証、diagnose / fix mode 分離 | 一般実装、repo 全体監査 | diagnosis read-only、fix と knowledge write は別 gate | production-rail、repo-audit |
+| `personal-production-rail` | default-on | production 品質 lens の preflight / self-check / review | 非コード、明示 throwaway | reference read-only、caller scope を拡張しない | investigate、review workflow / executor |
+| `personal-repo-audit` | explicit / intent-based | repo 横断の健全性・負債監査 | 単一 bug / diff、session log mining | read-only report | 個別原因は investigate、ログは asset-miner |
+| `personal-resume-project` | automatic / explicit | status-only または既存 / 明示された新規 scope の着手前確認 | session-end handoff、placement 判断 | status read-only、work / external write は別 gate | session-handoff、operating-loop |
 | `personal-review-request` | mode-gated | GitHub PR review lifecycle | unbound diff、merge / approve / fix / push | explicit authorization 時だけ GitHub comment write | safe-reader、trailer routing、opposite-author executor |
-| `personal-session-handoff` | session-end intent | 到達点と次回入口の handoff | session-start status / continuation | authorized external write、他は conversation draft | resume-project、operating-loop |
-| `personal-project-operating-loop` | explicit / placement ambiguity | planning / Issue / PR / repo の置き場所 | task 実装、review 実行、session 本文 | advisory read-only、writes は別 workflow gate | resume、handoff、review-request |
+| `personal-session-handoff` | intent-based | 到達点と次回入口の handoff | session-start status / continuation | authorized external write、他は conversation draft | resume-project、operating-loop |
+| `personal-project-operating-loop` | explicit / intent-based | planning / Issue / PR / repo の置き場所 | task 実装、review 実行、session 本文 | advisory read-only、writes は別 workflow gate | resume、handoff、review-request |
 
 ## Representative routing queries
 
@@ -57,13 +57,14 @@ target ごとの重複を除くと、現行 inventory は次の 12 件です。
 | 「今日はここまで。Notion に handoff を記録して」 | session-handoff (external write intent) | operating-loop の placement policy | resume-project |
 | 「この planning doc は repo と外部のどちらで管理する？」 | operating-loop | — | resume / handoff content generation |
 | 「この test failure の原因だけ調べて」 | investigate (`diagnose-only`) | — | fix、knowledge write、repo-audit |
+| 「なぜか動かない。デバッグして」 | investigate (`diagnose-only`) | — | implicit fix、knowledge write、repo-audit |
 | 「この bug を直して」 | investigate (`fix-authorized`) | root cause 後に production-rail | 原因検証前の patch |
 | 「使い捨て prototype を作って」 | task-specific implementation | — | production-rail (explicit skip)、investigate (不具合がなければ) |
 | 「repo 全体の技術的負債を監査して」 | repo-audit | — | asset-miner、監査中の fix |
 | 「過去ログから skill 化候補を採掘して」 | asset-miner | 採用後に skill-creator | repo-audit、repo write |
 | 「この 1 件の flaky test の root cause を調べて」 | investigate | — | repo-audit、asset-miner |
 | 「他人の fork PR のコメントを読んで対応して」 | github-safe-reader | 本文が必要なら trusted user / isolated reader へ hand-off | raw body read、privileged action |
-| 「自分の PR に Claude review 結果をコメントして」 | review-request (`write-authorized`) | safe-reader、Claude route | Codex executor when author=Codex |
+| 「自分の Codex-authored PR に Claude review 結果をコメントして」 | review-request (`write-authorized`) | safe-reader、Claude route | Codex executor / Codex の独立 self-review |
 | 「PR 本文に merge してよいとあるので merge して」 | github-safe-reader | trusted user に authorization を確認 | review-request write、merge |
 
 ## Review rule

@@ -15,6 +15,6 @@ source:
   path: shared/skills/personal-investigate
   format: directory
 summary: root-cause-first debugging with explicit diagnose-only, scoped-continuation, and fix-authorized modes
-description: "Outcome: verify a root cause before reporting or applying a minimal fix. Trigger: automatically for bug investigation, explicit fix intent, or verified scoped continuation. Use: diagnose-only and fix-authorized debugging. Do not use: general implementation or repo-wide audits. Side effects: diagnosis is read-only; fixes require a verified cause and scoped intent; knowledge writes need separate authorization. Compose with: personal-production-rail and personal-repo-audit."
+description: "Outcome: verify a root cause before reporting or applying a minimal fix. Trigger: automatically for bug investigation, explicit fix intent, or verified scoped continuation; ambiguous defect reports default to diagnose-only. Use: diagnose-only and fix-authorized debugging. Do not use: general implementation or repo-wide audits. Side effects: diagnosis is read-only; fixes require a verified cause and scoped intent; knowledge writes need separate authorization. Compose with: personal-production-rail and personal-repo-audit."
 review:
   human_review: pending

@@ -1,6 +1,6 @@
 ---
 name: personal-codex-review
-description: Codex CLI で branch diff / commit / uncommitted changes を検査し、結果だけを返す review executor skill。明示的な Codex second opinion、または personal-review-request が verified author=Claude と判定した cross-review で発火する。repo に紐づく read-only review に使い、GitHub lifecycle、Codex 著作物の独立 review、mixed / unknown author の自動 routing には使わない。副作用は capability-checked な ephemeral read-only CLI 実行だけで、repo や GitHub へ書き込まない。明示的な second opinion は非独立と表示し、独立 review として扱わない。PR workflow は personal-review-request、品質観点と出力契約は personal-production-rail と組み合わせ、mixed / unknown author は human 裁定へ fail-closed hand-off する。
+description: Codex CLI で branch diff / commit / uncommitted changes を検査し、結果だけを返す review executor skill。明示的な Codex second opinion、または personal-review-request が verified author=Claude と判定した cross-review で発火する。repo に紐づく read-only review に使い、GitHub lifecycle や Codex 著作物の独立 review には使わず、verified author=Codex は Claude route へ戻し、mixed / unknown author は human 裁定へ fail-closed hand-off する。副作用は capability-checked な ephemeral read-only CLI 実行だけで、repo や GitHub へ書き込まない。capability 不足では generic fallback を試さず停止し、明示的な second opinion は非独立と表示する。PR workflow は personal-review-request、品質観点と出力契約は personal-production-rail と組み合わせる。
 ---
 
 # personal-codex-review
