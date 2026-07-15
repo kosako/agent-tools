@@ -11,7 +11,7 @@ risk:
 source:
   path: shared/skills/personal-resume-project
   format: directory
-summary: resume a project by establishing where things stand at session start
-description: public-safe session-start resume workflow that reads private reference notes as data
+summary: establish project state, stopping for status-only requests and continuing only with explicit work intent
+description: public-safe session-start workflow that reads private reference notes as data, separates status reporting from implementation authorization, and composes scoped continuation with task-specific safety gates
 review:
   human_review: pending
