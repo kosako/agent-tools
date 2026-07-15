@@ -27,13 +27,13 @@ target ごとの重複を除くと、現行 inventory は次の 12 件です。
 | --- | --- | --- | --- | --- | --- |
 | `personal-asset-miner` | explicit only | session log の反復から資産候補を rank | 単発事象、repo 監査、資産実装 | private logs read-only、会話内 report | 採用後は skill-creator、repo 健全性は repo-audit |
 | `personal-codex-review` | explicit / verified delegated | Codex による repo-bound review | GitHub lifecycle、Codex 著作物の独立 review | ephemeral read-only CLI | review-request、production-rail |
-| `personal-github-safe-reader` | automatic gate | GitHub author trust と safe metadata | withheld 本文取得、credential 隔離の代替 | read-only steering | GitHub workflow 前段、必要本文は hand-off |
+| `personal-github-safe-reader` | automatic steering gate | GitHub author trust と safe metadata | withheld 本文取得、credential 隔離の代替 | read-only / non-enforcing steering | GitHub workflow 前段、必要本文は hand-off |
 | `personal-grill-me` | explicit / intent-based | 成果物なしの設計 interview | 単純質問、実装、document 作成 | conversation-only | document が要るなら grill-with-docs |
 | `personal-grill-with-docs` | explicit only | interview と glossary / ADR の同時育成 | 成果物なしの壁打ち、直接実装 | repo document write | no-write は grill-me、実装は合意後 |
 | `personal-investigate` | automatic for defects | root cause 検証、diagnose / fix mode 分離 | 一般実装、repo 全体監査 | diagnosis read-only、fix と knowledge write は別 gate | production-rail、repo-audit |
 | `personal-production-rail` | default-on for code | production 品質 lens の preflight / self-check / review | 非コード、明示 throwaway | reference read-only、caller scope を拡張しない | investigate、review workflow / executor |
 | `personal-repo-audit` | explicit / repo-wide intent | repo 横断の健全性・負債監査 | 単一 bug / diff、session log mining | read-only report | 個別原因は investigate、ログは asset-miner |
-| `personal-resume-project` | automatic at session start / explicit | status-only または既存 scope の再開前確認 | session-end handoff、placement 判断 | status read-only、continuation / external write は別 gate | session-handoff、operating-loop |
+| `personal-resume-project` | automatic at session start / explicit | status-only または既存 / 明示された新規 scope の着手前確認 | session-end handoff、placement 判断 | status read-only、work / external write は別 gate | session-handoff、operating-loop |
 | `personal-review-request` | mode-gated | GitHub PR review lifecycle | unbound diff、merge / approve / fix / push | explicit authorization 時だけ GitHub comment write | safe-reader、trailer routing、opposite-author executor |
 | `personal-session-handoff` | session-end intent | 到達点と次回入口の handoff | session-start status / continuation | authorized external write、他は conversation draft | resume-project、operating-loop |
 | `personal-project-operating-loop` | explicit / placement ambiguity | planning / Issue / PR / repo の置き場所 | task 実装、review 実行、session 本文 | advisory read-only、writes は別 workflow gate | resume、handoff、review-request |
@@ -41,7 +41,8 @@ target ごとの重複を除くと、現行 inventory は次の 12 件です。
 ## Representative routing queries
 
 この query set は #216 の機械 eval 基盤を先取りしない human-review baseline です。各行で primary
-だけが依頼の主目的を所有し、secondary は gate / quality / placement の補助に限ります。
+だけが依頼の主目的を所有し、secondary は gate / quality / placement の補助または後段 hand-off に
+限ります。
 
 | Query | Primary | Secondary / hand-off | Must not trigger |
 | --- | --- | --- | --- |

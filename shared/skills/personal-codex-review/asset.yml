@@ -12,6 +12,6 @@ source:
   path: shared/skills/personal-codex-review
   format: directory
 summary: run a capability-checked, ephemeral read-only Codex review executor and return findings without repo or GitHub side effects
-description: "Outcome: return a Codex review of a branch, commit, or uncommitted change. Trigger: an explicit Codex second opinion or verified Claude-authored cross-review route. Use: repo-bound read-only review. Do not use: GitHub lifecycle, Codex-authored independent review, or mixed/unknown author auto-routing. Side effects: ephemeral read-only CLI execution with no repo or GitHub writes. Compose with: personal-review-request and personal-production-rail; mixed/unknown authors fail closed to human adjudication."
+description: "Outcome: return a Codex review of a branch, commit, or uncommitted change. Trigger: an explicit Codex second opinion or verified Claude-authored cross-review route. Use: repo-bound read-only review. Do not use: GitHub lifecycle, Codex-authored independent review, or mixed/unknown author auto-routing. Side effects: ephemeral read-only CLI execution with no repo or GitHub writes; explicit second opinions are labeled non-independent. Compose with: personal-review-request and personal-production-rail; mixed/unknown authors fail closed to human adjudication."
 review:
   human_review: pending
