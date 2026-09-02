@@ -6,12 +6,12 @@
       "id": 0,
       "name": "glossary-conflict",
       "prompt": "注文ドメインを設計してる。用語を固めながら詰めたい。『キャンセル』は注文全体を取り消すことなんだけど、たまに一部の商品だけ返すケースもキャンセルって呼んでる。",
-      "expected_output": "『キャンセル』が全体取消と部分返品の二義になっている点を即指摘し、正準語を提案。固まったら CONTEXT.md を inline 更新する(用語集に徹し実装詳細は書かない)。一問一答・推奨案つき。",
+      "expected_output": "『キャンセル』が全体取消と部分返品の二義になっている点を即指摘し、正準語を提案。固まったら CONTEXT.md を inline 更新する(用語集に徹し実装詳細は書かない)。round 単位・推奨案つき。",
       "files": [],
       "assertions": [
         { "id": "challenge-glossary", "text": "用語の衝突・多義性を指摘し正準語を提案している" },
         { "id": "updates-context", "text": "固まった用語を CONTEXT.md に書き残す(または書式に沿って提案する)" },
-        { "id": "one-question", "text": "質問を一度に一つだけ投げている" }
+        { "id": "round-format", "text": "質問を番号 + 推奨案つきの round にまとめて出している" }
       ]
     },
     {

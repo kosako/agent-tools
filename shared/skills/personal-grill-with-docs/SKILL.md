@@ -1,6 +1,6 @@
 ---
 name: personal-grill-with-docs
-description: 設計を一問一答で深掘りし、合意した用語を CONTEXT.md、覆しにくい判断を docs/adr/ に育てる document-producing interview skill。「ドキュメント付きで詰めて」「用語を固めたい」「ADR に残したい」など成果物の明示依頼で発火する。domain language と重要判断を設計と同時に残す場合に使い、成果物不要の壁打ち・単純な実装依頼には使わない。副作用として合意済み範囲の repo document を更新する。成果物不要なら personal-grill-me、実装は設計合意後の別作業に委ねる。
+description: 設計を、前提の揃った質問をまとめた round 単位で深掘りし、合意した用語を CONTEXT.md、覆しにくい判断を docs/adr/ に育てる document-producing interview skill。「ドキュメント付きで詰めて」「用語を固めたい」「ADR に残したい」など成果物の明示依頼で発火する。domain language と重要判断を設計と同時に残す場合に使い、成果物不要の壁打ち・単純な実装依頼には使わない。副作用として合意済み範囲の repo document を更新する。成果物不要なら personal-grill-me、実装は設計合意後の別作業に委ねる。
 ---
 
 設計・企画を容赦なく詰めながら、合意できたドメインモデル(用語集と重要な設計判断)を**その場で repo に書き残していく**スキルです。`personal-grill-me` の「容赦ないインタビュー」に、**ドメインモデルを成果物として育てる規律**を足したものです。
@@ -12,10 +12,10 @@ description: 設計を一問一答で深掘りし、合意した用語を CONTEX
 
 ## インタビューの進め方(personal-grill-me と同じ核)
 
-- **質問は一度に一つだけ。** まとめて投げない。
+- **前提の揃った質問 (frontier) を、番号 + 推奨案つきで 1 round にまとめて聞く。** 別の質問の答えに依存する質問は後の round へ。回答が返るたびに frontier を再計算する。round の書式 (plain 表記・絵文字 marker 不使用) は personal-grill-me と同じ。
 - **各質問に自分の推奨案と理由を添える。** 「どう思う?」で終わらせない。
-- **コードベースで答えられることは聞かずに調べる。**
-- **曖昧・思考停止・矛盾・希望的観測を潰す。** 「いい感じ」「業界標準だから」「たぶん大丈夫」で先に進ませない。
+- **fact はコードベース等で聞かずに調べる。** 調査中も round を止めず、その fact に依存する質問だけを後回しにする。ユーザーに聞くのは判断だけ。
+- **曖昧・思考停止・矛盾・希望的観測を潰す。** 「いい感じ」「業界標準だから」「たぶん大丈夫」で先に進ませない。濁した回答は次の round の冒頭で必ず潰す。
 - **日本語で。**
 
 ## ドメインモデルを育てる(このスキル固有の規律)
@@ -66,8 +66,8 @@ root に `CONTEXT-MAP.md` があれば複数コンテキスト(map が各コン�
 
 ## 終わり方
 
-主要な分岐が解消されたら、決定事項・未解決の論点・**今回書いた/更新した CONTEXT.md と ADR** を簡潔にまとめて締める。だらだら続けない。
+**frontier が空になったら**(すべての分岐を訪問し、暗黙の仮定が残っていない状態)、決定事項・未解決の論点・**今回書いた/更新した CONTEXT.md と ADR** を簡潔にまとめて締める。だらだら続けない。
 
 ## 出典
 
-[mattpocock/skills](https://github.com/mattpocock/skills)(MIT)の `grill-with-docs`(= `grilling` + `domain-modeling`)を土台に、日本語化・運用ルール整合・repo ローカル方針で翻訳したもの。書式 [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md) / [ADR-FORMAT.md](./ADR-FORMAT.md) も同 upstream を基にしている。
+[mattpocock/skills](https://github.com/mattpocock/skills)(MIT)の `grill-with-docs`(= `grilling` + `domain-modeling`)を土台に、日本語化・運用ルール整合・repo ローカル方針で翻訳したもの。書式 [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md) / [ADR-FORMAT.md](./ADR-FORMAT.md) も同 upstream を基にしている。インタビュー方式は upstream `grilling` v1.2.0(2026-08、round-by-round frontier)に追随している。
