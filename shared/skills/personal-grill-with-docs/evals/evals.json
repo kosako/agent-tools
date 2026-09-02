@@ -11,7 +11,7 @@
       "assertions": [
         { "id": "challenge-glossary", "text": "用語の衝突・多義性を指摘し正準語を提案している" },
         { "id": "updates-context", "text": "固まった用語を CONTEXT.md に書き残す(または書式に沿って提案する)" },
-        { "id": "round-format", "text": "質問を番号 + 推奨案つきの round にまとめて出している" }
+        { "id": "round-format", "text": "独立して聞ける質問を 1 問ずつ小出しにせず、`Q1 - <タイトル>` / `→ 推奨:` 書式の round にまとめて出している" }
       ]
     },
     {
