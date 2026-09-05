@@ -33,6 +33,9 @@ generated/claude-code/scripts/
   Claude-only skill は frontmatter 不在・description 省略を許可する。Codex にも skill として
   配る場合は Codex の必須項目を満たす必要がある。詳細は
   [Asset Manifest Schema](../../docs/asset-manifest-schema.md)。
+  `allowed-tools` / `hooks` と本文の dynamic shell command は未対応のため、生成・登録前に
+  拒否する。frontmatter の無い単一 source も本文を検査し、説明用 references / evals へは
+  この検査を広げない。対象構文は同 schema の「Native skill 機能」を参照する。
 - **instruction**: 単一ファイルを `CLAUDE.md` に生成し、本体先頭に 1 行コメント marker を
   付ける。directory 形式の instruction は非対応。
 - **script**: 単一実行ファイルを byte 保持で copy し (mode 0755)、隣に sidecar marker を

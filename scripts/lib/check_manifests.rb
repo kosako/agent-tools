@@ -40,6 +40,8 @@ module CheckManifests
   NAME_PATTERN = /\A[a-z0-9]+(?:-[a-z0-9]+)*\z/.freeze
   ASSET_CATEGORIES = %w[skills prompts workflows agents instructions scripts].freeze
   NON_ASSET_BASENAMES = %w[README.md].freeze
+  # JavaScript の whitespace / trim と同じ集合。Ruby の [:space:] は U+0085 等で異なる。
+  CLAUDE_DYNAMIC_SPACE = /[\t\n\v\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]/.freeze
 
   class Runner
     def initialize(root)
@@ -109,7 +111,7 @@ module CheckManifests
       if data.key?("source")
         source_error_count = @errors.size
         validate_source(path, data["source"])
-        check_skill_frontmatter(data, path) if @errors.size == source_error_count
+        check_skill_entrypoint(data, path) if @errors.size == source_error_count
       end
       validate_review(path, data["review"]) if data.key?("review")
       validate_compatibility(path, data["compatibility"]) if data.key?("compatibility")
@@ -462,7 +464,7 @@ module CheckManifests
 
     # source の検証後だけ呼び、未検証 path や symlink の先を読まない。
     # kind ではなく生成先で判定し、Codex の instruction には skill の必須項目を課さない。
-    def check_skill_frontmatter(data, path)
+    def check_skill_entrypoint(data, path)
       targets = data["targets"]
       return unless targets.is_a?(Array)
 
@@ -479,8 +481,8 @@ module CheckManifests
       return unless File.file?(skill_md)
 
       codex = skill_targets.include?("codex")
-      validate_skill_frontmatter(path, skill_md, data["name"],
-                                 required: codex && directory, require_description: codex)
+      validate_skill_entrypoint(path, skill_md, data["name"], required: codex && directory,
+                                require_description: codex, claude_skill: skill_targets.include?("claude-code"))
     end
 
     # 既存 frontmatter は両 source 形式とも無改変で配るため同じ境界で検証する。
@@ -491,11 +493,12 @@ module CheckManifests
     # frontmatter で別 identity を宣言すると「レビューされた identity ≠ 実配備 identity」に
     # なるため、manifest name との一致を必須にする (#43 の外部 skill 配布で効く供給側ギャップ)。
     # YAML を読めない場合は target parser との identity 解釈差を fail-closed で止める。
-    def validate_skill_frontmatter(path, skill_md, manifest_name, required:, require_description:)
+    def validate_skill_entrypoint(path, skill_md, manifest_name, required:, require_description:, claude_skill:)
       source_path = rel(skill_md)
       content = File.read(skill_md)
       unless content.start_with?("---\n", "---\r\n")
         error(path, "Codex #{source_path} must contain YAML frontmatter with name and description") if required
+        check_claude_skill_features(path, source_path, {}, content) if claude_skill
         return
       end
 
@@ -514,6 +517,7 @@ module CheckManifests
         error(path, "#{source_path} frontmatter must be a YAML mapping")
         return
       end
+      check_claude_skill_features(path, source_path, fm, parts[1]) if claude_skill
       fm_name = fm["name"]
       unless fm_name.is_a?(String) && !fm_name.strip.empty?
         error(path, "#{source_path} frontmatter must declare a non-empty string name")
@@ -525,6 +529,31 @@ module CheckManifests
       if require_description && !(fm["description"].is_a?(String) && !fm["description"].strip.empty?)
         error(path, "Codex #{source_path} frontmatter must declare a non-empty string description")
       end
+    end
+
+    # native の事前許可と shell 実行は prose ではない。未対応なので承認で迂回させない (#233)。
+    def check_claude_skill_features(path, source_path, frontmatter, body)
+      %w[allowed-tools hooks].each do |feature|
+        if frontmatter.key?(feature)
+          error(path, "#{source_path}: unsupported Claude Code skill feature: #{feature} (see #233)")
+        end
+      end
+      if claude_dynamic_command?(body)
+        error(path, "#{source_path}: unsupported Claude Code skill feature: dynamic shell command (see #233)")
+      end
+    end
+
+    # Claude は通常の inline-code span を除いて inline command を探すが、code fence 全体は
+    # 除外しない。fenced command には改行無しの形もある (2.1.259 の parser と公式 docs を照合)。
+    def claude_dynamic_command?(body)
+      fenced = body.scan(/```!(.*?)```/m)
+      inline_body = body.gsub(/`[^`\n]+`/) do |span|
+        offset = Regexp.last_match.begin(0)
+        previous = offset.zero? ? nil : body[offset - 1]
+        %w[! `].include?(previous) ? span : "`#{' ' * (span.length - 2)}`"
+      end
+      inline = inline_body.scan(/(?:\A|#{CLAUDE_DYNAMIC_SPACE})!`([^`]+)`/)
+      (fenced + inline).any? { |match| !match.first.match?(/\A#{CLAUDE_DYNAMIC_SPACE}*\z/) }
     end
 
     # asset source の入れ子・重複所有を fail-closed で禁止する (#177 / H-01)。
