@@ -106,7 +106,11 @@ module CheckManifests
       validate_visibility(path, data["visibility"]) if data.key?("visibility")
       validate_targets(path, data["targets"]) if data.key?("targets")
       validate_risk(path, data["risk"]) if data.key?("risk")
-      validate_source(path, data["source"]) if data.key?("source")
+      if data.key?("source")
+        source_error_count = @errors.size
+        validate_source(path, data["source"])
+        check_skill_frontmatter(data, path) if @errors.size == source_error_count
+      end
       validate_review(path, data["review"]) if data.key?("review")
       validate_compatibility(path, data["compatibility"]) if data.key?("compatibility")
       validate_text_field(path, "summary", data["summary"]) if data.key?("summary")
@@ -457,19 +461,40 @@ module CheckManifests
         error(path, "directory skill must contain a SKILL.md entrypoint")
         return
       end
-      validate_skill_frontmatter_name(path, skill_md, data["name"])
     end
 
-    # SKILL.md 先頭の YAML frontmatter name を manifest name と照合する。
-    # frontmatter が **無ければ** identity を主張していない (target も dir 名等に fallback する)
-    # ので照合しない。frontmatter が **在る** (build と同じ start_with?("---\n","---\r\n") 判定)
-    # 場合は fail-closed で読む: 閉じ marker 欠落 / YAML parse 失敗 (alias 含む) / 非 mapping /
-    # name が非空 String でない — をすべて error にする (CM-181-02)。build は directory skill の
-    # SKILL.md を無改変で配るため、validator が読めない frontmatter を target parser が別 identity
-    # として解決する差 (alias 等) を fail-open で通すと identity bypass になる。
-    def validate_skill_frontmatter_name(path, skill_md, manifest_name)
+    # source の検証後だけ呼び、未検証 path や symlink の先を読まない。
+    # kind ではなく生成先で判定し、Codex の instruction には skill の必須項目を課さない。
+    def check_skill_frontmatter(data, path)
+      targets = data["targets"]
+      return unless targets.is_a?(Array)
+
+      asset = { kind: data["kind"], compatibility: data["compatibility"] }
+      skill_targets = targets.select do |tool|
+        TARGETS.include?(tool) && ArtifactTargets.resolve(asset, tool) == "skill"
+      end
+      return if skill_targets.empty?
+
+      source = data["source"]
+      directory = source["format"] == "directory"
+      skill_md = File.join(@root, source["path"])
+      skill_md = File.join(skill_md, "SKILL.md") if directory
+      return unless File.file?(skill_md)
+
+      codex = skill_targets.include?("codex")
+      validate_skill_frontmatter(path, skill_md, data["name"],
+                                 required: codex && directory, require_description: codex)
+    end
+
+    # 既存 frontmatter は両 source 形式とも無改変で配るため同じ境界で検証する。
+    # 無い単一 source は build が補完するが、directory は補完されず Codex では必須。
+    # YAML を読めない場合は target parser との identity 解釈差を fail-closed で止める。
+    def validate_skill_frontmatter(path, skill_md, manifest_name, required:, require_description:)
       content = File.read(skill_md)
-      return unless content.start_with?("---\n", "---\r\n")
+      unless content.start_with?("---\n", "---\r\n")
+        error(path, "Codex SKILL.md must contain YAML frontmatter with name and description") if required
+        return
+      end
 
       parts = content.sub(/\A---\r?\n/, "").split(/^---\r?\n/, 2)
       if parts.length < 2
@@ -487,12 +512,15 @@ module CheckManifests
         return
       end
       fm_name = fm["name"]
-      unless fm_name.is_a?(String) && !fm_name.empty?
+      unless fm_name.is_a?(String) && !fm_name.strip.empty?
         error(path, "SKILL.md frontmatter must declare a non-empty string name")
         return
       end
       if manifest_name.is_a?(String) && fm_name != manifest_name
         error(path, "SKILL.md frontmatter name #{fm_name.inspect} does not match manifest name #{manifest_name.inspect}")
+      end
+      if require_description && !(fm["description"].is_a?(String) && !fm["description"].strip.empty?)
+        error(path, "Codex SKILL.md frontmatter must declare a non-empty string description")
       end
     end
 

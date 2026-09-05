@@ -29,6 +29,10 @@ generated/codex/scripts/
   YAML frontmatter を持たない場合のみ、manifest の `name` と `summary` から frontmatter を
   生成する。directory asset は `asset.yml` と source-only dir (現状 `evals/`) を除く
   全 files を copy する (非配置 dir は build_id にも含めない)。
+  Codex に skill として配る source の既存 frontmatter は、manifest と一致する `name` と
+  非空 string の `description` を登録前に検証する。directory の frontmatter 不在は拒否し、
+  単一 source の frontmatter 不在は上記の生成経路を使う。詳細は
+  [Asset Manifest Schema](../../docs/asset-manifest-schema.md)。
 - **instruction**: 単一ファイルを `AGENTS.md` に生成し、本体先頭に 1 行コメント marker を
   付ける。directory 形式の instruction は非対応。
 - **script**: 単一実行ファイルを byte 保持で copy し (mode 0755)、隣に sidecar marker を
