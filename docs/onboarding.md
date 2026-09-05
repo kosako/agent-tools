@@ -158,7 +158,8 @@ register / connect / sync / status / doctor / setup の 10 script が揃い、�
 self-test が対応して CI で回る (加えて配布 script asset の純ロジック test)。gate 一本化で
 安全判定が pipeline 全体で一貫した状態。
 
-`shared/` には実 asset が 15 個 (source kind は skill 11 / workflow 1 / instruction 1 / script 2) 入っており、
+`shared/` には実 asset が 21 個 (source kind は skill 11 / workflow 1 / instruction 1 / script 8) 入っている
+(2026-09-05、[Assets.load_all](../scripts/lib/assets.rb) による manifest 集計)。
 directory 形式 skill・複数 target・script kind (safe-gh / hook)・content-bound human review gate
 を持つ medium asset (`personal-asset-miner` の runtime-state) まで、多様な asset 形状で
 pipeline を実証済み。skill 作成は skill-creator で `shared/skills/<name>/` に作り、

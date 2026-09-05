@@ -39,10 +39,14 @@ secret access / external send`。
 > **最重要テーゼ**: command-string allowlist / hook / provenance は **steering** であって
 > enforcement boundary では**ない**。`$()` / 等価 read path (`gh` を `--comments` 無し / `gh api` /
 > graphql / fork を `git fetch` + `git show` / `curl` / `python` / base64) / MCP github tool は
-> Bash matcher を素通りし、WebFetch も逃げ道、PreToolUse は subagent に不発 (Claude Code の
-> 既知の制約)、全失敗
-> モードで fail-open。出口 (push / commit message / branch / PR title / gist / DNS exfil) も
+> Bash matcher を素通りし、WebFetch も逃げ道となり、本 steering hook は全失敗モードで
+> fail-open。出口 (push / commit message / branch / PR title / gist / DNS exfil) も
 > 列挙し切れない。**列挙非依存の hard 防御だけが本命**。
+
+Claude Code の現行[公式 subagent 契約](https://code.claude.com/docs/en/sub-agents#define-hooks-for-subagents)
+では、settings / managed policy / plugin の hooks は subagent 内にも適用され、`PreToolUse` /
+`PostToolUse` は子の tool call でも発火する (2026-09-05 仕様確認)。従来の「subagent に不発」は
+現行の制約として扱わない。これは公式仕様の確認であり、配備先での実機 smoke とは区別する。
 
 | 層 / deliverable | 強度 | 本 Phase | 置き場 |
 |---|---|---|---|
@@ -206,20 +210,27 @@ boundary でない)。
   `permissionDecision` は **付けない**(許可フローを上書きせず他の gate を生かす。steering であって
   approve でもない)。**exit code は常に 0**(no-match / 内部例外 / 非 JSON / 非 Bash すべて透過 =
   fail-open を徹底)。
-  - honest-label: Claude Code の**公式 docs は PreToolUse の `additionalContext` を記載していない**
-    (PostToolUse 側のみ記載。2026-07-07 確認)。実機では動作するが非ドキュメント動作の可能性があり、
-    仕様変更で**静かに消えうる**。fail-open 前提の steering なので消えても実害は「steer が出なくなる」
-    だけだが、「docs に書いてあるから安泰」とは読まないこと。
-- **Codex parity (実機検証済み 2026-07-07, Codex 0.142.2 — P3-07)**: Codex の PreToolUse は
+  - **履歴 (2026-07-07 調査)**: 当時の Claude Code 公式 docs では PreToolUse の
+    `additionalContext` は未記載 (PostToolUse 側のみ記載) と記録し、実機では動作するものの
+    非ドキュメント動作の可能性があると扱っていた。
+  - **現行仕様 (2026-09-05 確認)**:
+    [公式 PreToolUse 契約](https://code.claude.com/docs/en/hooks#pretooluse-decision-control)に
+    `additionalContext` がモデルへ追加されることを明記。未記載という過去の判断は現行には適用しない。
+- **Codex parity (実機検証の履歴: 2026-07-07, Codex 0.142.2 — P3-07)**: Codex の PreToolUse は
   `additionalContext` を**サポートし、steer はモデル可視で届く** (2026-06 時点の「非対応」記述は
-  当時の裏取りで、現行版で解消)。payload は
+  当時の裏取りで、0.142.2 では解消)。payload は
   `{"tool_name":"Bash","tool_input":{"command":"…"}}` で Claude Code と同型のため、
   **hook body は無改変で両 tool に配れる** (実機 probe で verbatim 受領を確認)。
-  Codex 固有の運用上の限界 (honest):
-  - **未 trust の hook は無警告で silent skip** される (fail-open・実機確認)。trust は hook 単位の
-    `trusted_hash` として `~/.codex/config.toml` の `[hooks.state]` に記録され、初回は `/hooks` での
-    対話 trust が要る (公式 docs)。つまり Claude 側の「登録漏れ = 不活性」に加えて
-    **「登録済みでも未 trust = 不活性」**の段がある。
+  現行の[公式 PreToolUse 契約](https://developers.openai.com/codex/hooks#pretooluse)でも Bash の
+  `tool_input.command` と `additionalContext` をサポートする (2026-09-05 仕様確認)。
+  Codex 固有の運用上の限界と実測履歴 (honest):
+  - **履歴 (2026-07-07, Codex 0.142.2)**: 未 trust の hook は無警告で silent skip されることを
+    実機確認した。trust は hook 単位の `trusted_hash` として `~/.codex/config.toml` の
+    `[hooks.state]` に記録された。
+    **現行仕様 (2026-09-05 確認)**:
+    [公式 trust 契約](https://developers.openai.com/codex/hooks#review-and-trust-hooks)は、新規・変更済みの
+    non-managed hook を trust まで skip し、起動時に `/hooks` での確認を案内する警告を出すと記載。
+    「登録済みでも未 trust = 不活性」は維持されるが、「無警告」は現行仕様として扱わない。
     - **trust hash の対象範囲 (実測済み 2026-07-10, Codex 0.142.5 — dotfiles#181 反映ループ)**:
       **hook 定義のみ。script body の内容を含まない = body 再配備で trust は剥離しない**。
       実測: dotfiles#181 完了状態 (user 層 `~/.codex/hooks.json` 登録 + `/hooks` trust 済み。
