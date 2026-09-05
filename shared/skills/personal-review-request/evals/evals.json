@@ -105,6 +105,7 @@
       "files": [],
       "assertions": [
         { "id": "uses-claude-p-vehicle", "text": "Codex 環境からの実行手段として claude -p (headless) を挙げている" },
+        { "id": "capability-preflight-first", "text": "起動前に claude --help 等で必要な flag の実在と read-only 遮断 (allowlist 外の拒否) を確認し、未確認・不存在の flag を試さないとしている" },
         { "id": "read-only-and-safe-brief", "text": "read-only の tool allowlist と、stdin/ファイル経由の brief 渡しに言及している" },
         { "id": "anti-double-fire", "text": "brief に skill 不起動・nested codex/claude 実行禁止を明記するとしている" },
         { "id": "fail-closed-on-unavailable", "text": "capability 不足・起動失敗時に自分でレビューせず人間へ hand-off するとしている" }

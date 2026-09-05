@@ -192,6 +192,9 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
       試さず fail-closed で人間へ hand-off する。
     - read-only 契約で起動する: git 読み取り系（`git diff` / `git show` / `git log`）と
       ファイル読み取りだけを許す tool allowlist を付け、書き込み・GitHub write は許可しない。
+      allowlist 指定が「自動許可の追加」に過ぎない実装もあるため、既存の permission 設定や
+      MCP tool を含めて **allowlist 外の操作が拒否されることまで確認できた場合だけ実行する**
+      （拒否側の指定・mode の確認も preflight に含め、確認できなければ hand-off する）。
     - brief は shell 引数に埋め込まず stdin またはファイル経由で渡す（quoting 事故対策）。
       内容は本節の指示要件（対象・重点観点・output contract）に加え、**「あなた自身が
       最終レビュアー。review 系 skill を起動せず、nested な codex / claude を実行しない」を
