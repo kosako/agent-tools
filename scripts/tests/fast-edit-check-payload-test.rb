@@ -42,6 +42,9 @@ Dir.mktmpdir("fast-edit-payload-") do |tmp|
     if ENV["AGENT_TOOLS_TEST_CHECK_FAIL"] == "1"
       STDOUT.write("lint failure " + "\xff" * 2500)
       exit 1
+    elsif ENV["AGENT_TOOLS_TEST_CHECK_FAIL"] == "short"
+      puts "brief lint failure"
+      exit 1
     end
   RUBY
   config = File.join(tmp, "checks.json")
@@ -53,7 +56,7 @@ Dir.mktmpdir("fast-edit-payload-") do |tmp|
     File.write(log, "")
     out, err, status = Open3.capture3(
       { "AGENT_TOOLS_CHECKS_CONFIG" => config, "AGENT_TOOLS_TEST_CHECK_LOG" => log,
-        "AGENT_TOOLS_TEST_CHECK_FAIL" => fail_check ? "1" : "0" },
+        "AGENT_TOOLS_TEST_CHECK_FAIL" => fail_check == "short" ? "short" : (fail_check ? "1" : "0") },
       RbConfig.ruby, script, stdin_data: JSON.generate(payload), chdir: other
     )
     assert(status.success?, "hook must fail open: #{err}")
@@ -121,6 +124,39 @@ Dir.mktmpdir("fast-edit-payload-") do |tmp|
          "multi-file failures must share the existing total output cap and UTF-8 scrub")
   assert(calls.length == expected.length, "output cap must not skip later checks")
   assert(!JSON.parse(out).key?("decision"), "feedback must not block edits")
+
+  # A multi-file patch reports one config error per repo and identifies same-name targets.
+  %w[lib test].each do |dir|
+    FileUtils.mkdir_p(File.join(repo, dir))
+    File.write(File.join(repo, dir, "a.rb"), "puts 1\n")
+  end
+  same_names = patch_payload(repo, <<~PATCH)
+    *** Begin Patch
+    *** Update File: lib/a.rb
+    @@
+    -old
+    +new
+    *** Update File: test/a.rb
+    @@
+    -old
+    +new
+    *** End Patch
+  PATCH
+  valid_config = File.read(config)
+  invalid_config = JSON.parse(valid_config)
+  invalid_config.fetch(repo).fetch("edit_checks") << {
+    "name" => "invalid-regex", "pattern" => "[", "command" => [RbConfig.ruby, checker],
+  }
+  File.write(config, JSON.generate(invalid_config))
+  out, calls = invoke.call(same_names, "short")
+  message = JSON.parse(out).fetch("hookSpecificOutput").fetch("additionalContext")
+  assert(message.scan("不正な check 宣言を無視しました").length == 1,
+         "a repo config error must not repeat for each edited file")
+  assert(message.include?("lib/a.rb への編集") && message.include?("test/a.rb への編集"),
+         "multi-file failures with the same basename must identify their repo-relative paths")
+  assert(calls.length == 2 && message.scan("brief lint failure").length == 2,
+         "invalid config entries must not hide valid check failures")
+  File.write(config, valid_config)
 
   relative = patch_payload(File.join(repo, "nested"), <<~PATCH)
     *** Begin Patch

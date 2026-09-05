@@ -58,10 +58,15 @@
   対象、Move の移動先を `cwd` 基準の絶対 path にする。1 patch 内の重複は除き、Delete と
   現存しないファイルは高速 check の対象外にする。各ファイルの repo の `edit_checks` の
   うち `pattern` (Ruby regex) が一致するものだけを実行する。
+  1 patch の対象ファイルごとに check を直列・同期実行するため、全体の待ち時間は
+  「対象ファイル数 × 一致する check の所要時間」に応じて増える。出力上限に達しても
+  後続の check は省略しない。
 - 失敗した tool result、`cwd` 不在、壊れた / 未対応 patch は無言 skip。
   shell wrapper や `*** Environment ID` による別環境指定を local path と推測しない。
 - 失敗時のみ `hookSpecificOutput.additionalContext` で失敗要約 (上限 2000 文字 /
   非 UTF-8 は scrub) をモデルに返す。成功は無言 (ノイズ規律)。
+  複数ファイルの失敗は repo 相対 path で対象を識別し、不正な check 宣言の警告は
+  同じ repo について 1 回だけ返す。
 - 設定ファイルが壊れているときは無言で握り潰さず、設定エラーを additionalContext で
   1 行知らせる (それでも exit 0)。
 - **互換性の根拠**: [Codex Hooks](https://learn.chatgpt.com/docs/hooks#posttooluse)、

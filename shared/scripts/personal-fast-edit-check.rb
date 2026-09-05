@@ -214,21 +214,24 @@ module FastEditCheck
     end
 
     parts = []
+    reported_config_errors = {}
     files.each do |file|
       repo_root = repo_root_for(file)
       next if repo_root.nil?
 
       entry = config[repo_root]
       checks, invalid = entry ? checks_for(entry, file) : [[], []]
-      unless invalid.empty?
+      unless invalid.empty? || reported_config_errors[repo_root]
         parts << "fast-edit-check: 設定エラー: 不正な check 宣言を無視しました: " \
                  "#{invalid.join(', ')} (#{config_path})"
+        reported_config_errors[repo_root] = true
       end
 
       failures = checks.map { |c| run_check(c, file, repo_root) }.reject { |r| r[:ok] }
       unless failures.empty?
         body = failures.map { |r| "[#{r[:name]}]\n#{truncate(r[:output])}" }.join("\n")
-        parts << "fast-edit-check: #{File.basename(file)} への編集が repo 宣言の check に失敗しました。" \
+        label = files.length > 1 ? file.delete_prefix(repo_root + File::SEPARATOR) : File.basename(file)
+        parts << "fast-edit-check: #{label} への編集が repo 宣言の check に失敗しました。" \
                  "いま直してください (自動修正はしません):\n#{body}"
       end
     end
