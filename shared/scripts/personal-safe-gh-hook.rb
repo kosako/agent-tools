@@ -20,10 +20,9 @@
 #   (stdout JSON, exit 0)。exit 0 の stderr はモデルに届かない。`permissionDecision` は
 #   付けない (= 他の permission gate を上書きせず素の許可フローに委ねる。steering であって
 #   approve でもない)。
-# - Claude Code / Codex **両対応を実機確認済み** (2026-07-07, Codex 0.142.2): payload・出力
-#   schema とも同型で、additionalContext は Codex でもモデル可視に届く。ただしどちらも
-#   「登録 (+ Codex は初回 trust) が済むまで無警告で不活性」(fail-open の帰結)。詳細な
-#   honest-label は docs 正本を参照。
+# - 履歴 (2026-07-07, Codex 0.142.2): Claude Code / Codex の payload・出力 schema が
+#   同型で、additionalContext は Codex でもモデル可視に届くことを実機確認した。
+#   hook の登録・trust と未 trust 時の警告を含む時点付き仕様は docs 正本を参照。
 # - exit code は常に 0。hook 内部で例外が起きても 0 で透過する (fail-open を徹底)。
 #
 # 副作用ゼロ: network I/O も gh 呼び出しもしない。PreToolUse は毎コマンド前に同期実行される
