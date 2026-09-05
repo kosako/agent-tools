@@ -199,13 +199,9 @@ module ChangedScopeQa
     text.length > OUTPUT_CAP ? text[0, OUTPUT_CAP] + "\n…(truncated)" : text
   end
 
-  def emit_context(message)
-    puts JSON.generate(
-      "hookSpecificOutput" => {
-        "hookEventName" => "Stop",
-        "additionalContext" => truncate(message),
-      }
-    )
+  # Stop の additionalContext は Claude を再継続させる。警告はユーザーにだけ届ける。
+  def emit_warning(message)
+    puts JSON.generate("systemMessage" => truncate(message))
   end
 
   def failure_summary(failures)
@@ -214,7 +210,7 @@ module ChangedScopeQa
 
   # 同一 scope の cache hit。block は消費済みなので二度と block しない。
   # missing として保持した check だけ再試行し (環境が直れば拾う)、state を更新して
-  # [exit code, 非ブロッキング context (nil 可)] を返す。
+  # [exit code, ユーザー向け警告 (nil 可)] を返す。
   def handle_cached(root, fingerprint, state, checks)
     missing_names = state["missing"].is_a?(Array) ? state["missing"] : []
     return [0, nil] if state["outcome"] == "pass" && missing_names.empty?
@@ -262,7 +258,7 @@ module ChangedScopeQa
 
     code = gate(root, checks, already_continued, notes) unless checks.empty?
     code ||= 0
-    emit_context(notes.join("\n")) unless notes.empty? || code != 0
+    emit_warning(notes.join("\n")) unless notes.empty? || code != 0
     code
   rescue StandardError
     0 # fail-open: hook 内部の想定外でセッションを塞がない

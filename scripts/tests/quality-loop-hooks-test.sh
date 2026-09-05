@@ -64,6 +64,14 @@ run_qa() { # $1=stop_hook_active  cwd 前提: repo 内
     | env AGENT_TOOLS_CHECKS_CONFIG="$conf" AGENT_TOOLS_QA_STATE_DIR="$tmp/qa-state" \
         HOME="$tmp/home" ruby "$qa_src"
 }
+assert_qa_warning() {
+  printf '%s' "$1" | ruby -rjson -e '
+    data = JSON.parse(STDIN.read)
+    abort "Stop warning must contain only a user-facing systemMessage" unless
+      data.is_a?(Hash) && data.keys == ["systemMessage"] &&
+      data["systemMessage"].is_a?(String) && !data["systemMessage"].empty?
+  ' || fail "warning must not request continuation: $1"
+}
 mkdir -p "$tmp/home"
 
 # ---- fast-edit-check ----------------------------------------------------------
@@ -146,7 +154,16 @@ out=$(cd "$repo" && run_qa false 2>/dev/null)
 rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "same failing scope must not re-block (rc=$rc)"
+assert_qa_warning "$out"
 echo "$out" | grep -q "未解消" || fail "should warn non-blockingly on cached failure: $out"
+
+# 継続後の Stop を繰り返しても、モデルへの追加 feedback を発行しない (#231)。
+: > "$tmp/check-argv.log"
+for attempt in 1 2; do
+  out=$(cd "$repo" && run_qa true) || fail "continued cached failure should exit 0"
+  assert_qa_warning "$out"
+done
+[ ! -s "$tmp/check-argv.log" ] || fail "cached failure should not rerun checks"
 
 # stop_hook_active=true では新 scope の失敗でも block しない
 echo again >> "$repo/base.txt"
@@ -155,20 +172,39 @@ out=$(cd "$repo" && run_qa true 2>/dev/null)
 rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "stop_hook_active must never block (rc=$rc)"
+assert_qa_warning "$out"
 echo "$out" | grep -q "再 block しません" || fail "should report failure non-blockingly: $out"
 rm "$tmp/check-fail"
 
-# check コマンド不在 -> 警告降格・block しない・cache しない
+# check コマンド不在 -> 警告降格・block しない・missing として再試行する
 ruby -rjson -e '
-File.write(ARGV[1], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "gone", "command" => ["/nonexistent/check"]}]}}))
-' "$repo_real" "$conf"
+File.write(ARGV[1], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "gone", "command" => [ARGV[2]]}]}}))
+' "$repo_real" "$conf" "$tmp/gone-check"
 echo yet >> "$repo/base.txt"
 set +e
 out=$(cd "$repo" && run_qa false 2>/dev/null)
 rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "missing check tool must not block (rc=$rc)"
+assert_qa_warning "$out"
 echo "$out" | grep -q "実行できません" || fail "missing tool should warn: $out"
+out=$(cd "$repo" && run_qa false) || fail "cached missing check should exit 0"
+assert_qa_warning "$out"
+
+# scope / 宣言を変えずに missing check を復旧すると、再試行して無言 pass へ戻る。
+cat > "$tmp/gone-check" <<EOF
+#!/bin/sh
+printf 'ran\n' >> "$tmp/gone-argv.log"
+exit 0
+EOF
+chmod +x "$tmp/gone-check"
+out=$(cd "$repo" && run_qa false) || fail "recovered check should pass"
+[ -z "$out" ] || fail "recovered check should be silent: $out"
+[ -s "$tmp/gone-argv.log" ] || fail "recovered check should run on the same scope"
+: > "$tmp/gone-argv.log"
+out=$(cd "$repo" && run_qa false) || fail "recovered cached pass should exit 0"
+[ -z "$out" ] || fail "recovered cached pass should be silent: $out"
+[ ! -s "$tmp/gone-argv.log" ] || fail "recovered cached pass should not rerun checks"
 
 # 宣言なし repo -> 無言 no-op
 out=$(cd "$other" && run_qa false) || fail "undeclared repo qa should exit 0"
@@ -237,6 +273,7 @@ out=$(cd "$repo" && run_qa false 2>/dev/null)
 rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "cache-hit must not re-block (rc=$rc)"
+assert_qa_warning "$out"
 [ -s "$tmp/later-argv.log" ] || fail "missing check must be retried on cache hit (R1)"
 echo "$out" | grep -q "未解消" || fail "unresolved failure should still be warned: $out"
 rm "$tmp/check-fail"
@@ -252,7 +289,16 @@ out=$(cd "$repo" && run_qa false 2>/dev/null)
 rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "EACCES must not block (rc=$rc)"
+assert_qa_warning "$out"
 echo "$out" | grep -q "実行できません" || fail "EACCES should warn as missing (R1): $out"
+
+# 不正な check 宣言しかない場合も、構成エラーはユーザー警告に留める。
+ruby -rjson -e '
+File.write(ARGV[1], JSON.generate({ARGV[0] => {"qa_checks" => [{"command" => "not-an-array"}]}}))
+' "$repo_real" "$conf"
+out=$(cd "$repo" && run_qa false) || fail "invalid check declaration should exit 0"
+assert_qa_warning "$out"
+echo "$out" | grep -q "設定エラー" || fail "invalid declaration should warn: $out"
 
 # ---- R1 回帰: fast-edit-check の不正 entry 可視化と総量 truncate ---------------
 ruby -rjson -e '

@@ -70,19 +70,32 @@
   (モデルに修正の続行を促す)。
 - **無限ループ対策 (仕様)**:
   - `stop_hook_active: true` (この turn で既に継続済み) では**絶対に block しない**
-    (check は走らせ、結果は additionalContext の警告で返す)。
+    (新しい scope なら check は走らせ、失敗は `systemMessage` のユーザー向け警告で返す)。
   - 同一 scope 指紋の再 Stop は check を**再実行しない** (pass 済み = 無言 / fail 済み =
-    非ブロッキング警告のみ。block は新しい scope に 1 回だけ → 直せない失敗は人間に戻る)。
-  - check コマンド不在・spawn 失敗は「警告に降格」して block しない (cache もしないので
-    環境が直れば次の Stop で再試行)。
+    ユーザー向け警告のみ。block は新しい scope に 1 回だけ → 直せない失敗は人間に戻る)。
+  - check コマンド不在・spawn 失敗はユーザー向け警告に降格して block しない。未実行の
+    check は cache 内で `missing` として分離し、同一 scope でも次の Stop で再試行する。
+    復旧して全 check が pass になれば無言になる。
+- 警告は **exit 0 + `{"systemMessage":"..."}`** のみを出力する (本文は 2000 文字で打ち切り /
+  非 UTF-8 は scrub)。構成エラーの警告も同じ経路を使う。モデルへの追加指示や継続要求は
+  出さず、他の Stop hook の判断も上書きしない。
+- 出力契約の一次情報 (2026-09-05 確認):
+  [Claude Code](https://code.claude.com/docs/en/hooks#json-output) と
+  [Codex](https://developers.openai.com/codex/hooks#common-output-fields) は `systemMessage` を
+  ユーザー向け警告として扱う。Claude Code の
+  [Stop `additionalContext`](https://code.claude.com/docs/en/hooks#stop-decision-control) は
+  会話を継続させるため、この hook の警告経路には使わない。配線は同期 command hook を前提とする。
 - state: `~/.cache/agent-tools/changed-scope-qa/<repo path の sha256>.json`。
   test 用 override: `AGENT_TOOLS_QA_STATE_DIR` / 設定は `AGENT_TOOLS_CHECKS_CONFIG`。
-- Codex 側は Stop の matcher が無視される点 (#201) 以外は同型を期待。`stop_hook_active` /
-  block 挙動の Codex 実測は配備時 (#201 からの carry-over)。
+- Codex 側は Stop の matcher が無視される (#201)。`stop_hook_active` と exit 2 による
+  継続要求は[公式 Stop 契約](https://developers.openai.com/codex/hooks#stop)にも記載されている。
+  実際の発火・ユーザーへの警告到達は配備先ごとの実機 smoke で確認する。
 
 ## 検証境界
 
 - 純粋ロジックと git 連携・cache・ループ対策は `scripts/tests/quality-loop-hooks-test.sh`
   が CI で検証する (設定 / state / HOME / git config を隔離・fake check 使用)。
+- Stop の回帰テストは warning JSON に `systemMessage` だけがあり、継続を要求する
+  field がないことを検証する。fixture 検証は実 runner の継続回数や UI 表示の観測ではない。
 - 実配線 (settings.json / hooks.json への登録・Codex payload / Stop の実測) は CI 外
   (dotfiles 側 issue + 実機 smoke。実施記録は #203)。
