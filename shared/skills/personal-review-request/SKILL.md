@@ -51,8 +51,9 @@ draft から write-authorized へ移るには、投稿対象とコメント内�
     付く（いずれも単一 reviewer では author ≠ reviewer を満たせない）。
   - author を判定できない commit が 1 つでもある（trailer 欠落 = 人間または不明）。
   - AI トレーラが PR に皆無（人間のみ・不明）。
-- 相手エージェントを起動できない場合（例: Codex 環境から Claude を呼べない）は、自分で
-  レビューせず人間に hand-off する。
+- 相手エージェントを起動できない場合は、自分でレビューせず人間に hand-off する。
+  Codex 環境から Claude を呼ぶ vehicle は「レビュー実行」の `claude -p` 契約 — それが
+  capability 不足や起動失敗で使えないときが「起動できない場合」に当たる。
 - trailer の喪失: squash / rebase / cherry-pick で trailer は保持されないことがある
   (git の標準動作依存で、保証はしない)。routing が誤るときは `--reviewer` や PR の label
   などで人間が明示的に上書きする。
@@ -184,6 +185,23 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
 - **Claude がレビュアーのとき**: diff を読み、正当性（バグ・挙動退行）を中心にレビューして
   同じ severity と process verdict で分類し、verified `author=codex / reviewer=claude` を
   `Independence: cross-review verified (author=codex)` として結果へ残す。
+  - Claude Code セッション内なら、そのセッション自身がレビュアーとして実行する。
+  - **Codex 環境から呼ぶときは `claude -p`（headless）を起動 vehicle にする**:
+    - 実行前に `claude --version` / `claude --help` で `-p` と read-only 化に使う flag
+      （tool allowlist 等）の実在を capability preflight する。無ければ存在しない flag を
+      試さず fail-closed で人間へ hand-off する。
+    - read-only 契約で起動する: git 読み取り系（`git diff` / `git show` / `git log`）と
+      ファイル読み取りだけを許す tool allowlist を付け、書き込み・GitHub write は許可しない。
+      allowlist 指定が「自動許可の追加」に過ぎない実装もあるため、既存の permission 設定や
+      MCP tool を含めて **allowlist 外の操作が拒否されることまで確認できた場合だけ実行する**
+      （拒否側の指定・mode の確認も preflight に含め、確認できなければ hand-off する）。
+    - brief は shell 引数に埋め込まず stdin またはファイル経由で渡す（quoting 事故対策）。
+      内容は本節の指示要件（対象・重点観点・output contract）に加え、**「あなた自身が
+      最終レビュアー。review 系 skill を起動せず、nested な codex / claude を実行しない」を
+      明記する**（executor の二重発火防止）。
+    - sandbox 制約などで `claude -p` の起動自体が失敗したら、自分でレビューせず BLOCKED と
+      して人間へ hand-off する（「起動できない場合」の規則を維持）。
+    - model / reasoning effort は固定せず、現在の user selection に委ねる。
 
 ### 4. 結果を PR に投稿
 
