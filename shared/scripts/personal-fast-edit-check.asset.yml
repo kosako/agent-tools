@@ -20,7 +20,7 @@ source:
   path: shared/scripts/personal-fast-edit-check.rb
   format: text
 summary: >-
-  PostToolUse (Edit|Write) hook body。編集直後の変更ファイル 1 個に、ユーザー所有の中央
+  PostToolUse (Edit|Write|apply_patch) hook body。編集直後の変更ファイルに、ユーザー所有の中央
   local 設定 (checks.local.json) で宣言された高速 check を実行し、失敗要約だけを
   additionalContext で返す steering (fail-open・block しない・自動 fix しない)。宣言の
   無い repo では無言 no-op。repo 内の宣言は読まない (第三者 repo の任意コマンド宣言を

@@ -49,17 +49,27 @@
 - 宣言する check の目安: edit_checks は「1 ファイル・数百 ms」(編集のたびに同期実行)、
   qa_checks は「repo 全体で数秒・決定的」(Stop のたびに走りうる。決定性は cache の前提)。
 
-## personal-fast-edit-check(PostToolUse / `Edit|Write`)
+## personal-fast-edit-check(PostToolUse / `Edit|Write|apply_patch`)
 
-- payload の `tool_input.file_path` から対象ファイルを取り、その repo の `edit_checks` の
-  うち `pattern` (Ruby regex) がファイル名に一致するものを実行する。
+- Claude Code は `tool_input.file_path`、Codex は `tool_name: "apply_patch"` の
+  `tool_input.command` から対象を取る。Codex の成功判定は `PostToolUse` event に加え、
+  `tool_response` 文字列の先頭が `Exit code: 0` の行であることを確認する。
+- Codex の通常 patch (`*** Begin Patch` / `*** End Patch`) 全体を検査し、Add / Update の
+  対象、Move の移動先を `cwd` 基準の絶対 path にする。1 patch 内の重複は除き、Delete と
+  現存しないファイルは高速 check の対象外にする。各ファイルの repo の `edit_checks` の
+  うち `pattern` (Ruby regex) が一致するものだけを実行する。
+- 失敗した tool result、`cwd` 不在、壊れた / 未対応 patch は無言 skip。
+  shell wrapper や `*** Environment ID` による別環境指定を local path と推測しない。
 - 失敗時のみ `hookSpecificOutput.additionalContext` で失敗要約 (上限 2000 文字 /
   非 UTF-8 は scrub) をモデルに返す。成功は無言 (ノイズ規律)。
 - 設定ファイルが壊れているときは無言で握り潰さず、設定エラーを additionalContext で
   1 行知らせる (それでも exit 0)。
-- **Codex parity の honest-label**: Claude Code の payload 形 (`tool_input.file_path`) は
-  #201 実測済み。Codex (apply_patch) の payload 形は未実測で、file_path が取れなければ
-  無言 no-op に倒れる。配備時に実測して追従する。
+- **互換性の根拠**: [Codex Hooks](https://learn.chatgpt.com/docs/hooks#posttooluse)、
+  Codex 0.153.4 の [patch parser](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/apply-patch/src/parser.rs)、
+  [hook response](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/core/src/tools/context.rs)、
+  [出力形式](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/core/src/tools/mod.rs) に基づく。
+  Claude Code の payload は #201 実測済み。Codex はこの形式の fixture を stdin に渡して
+  check 実行と additionalContext を検証する。実機からモデルへの警告到達は別途 smoke が必要。
 
 ## personal-changed-scope-qa(Stop)
 
