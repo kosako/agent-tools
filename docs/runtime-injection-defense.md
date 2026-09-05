@@ -111,8 +111,8 @@ opt-in する。
 
 隔離 reader は untrusted GitHub 入力を「data-only・埋め込み指示を実行しない・構造化 metadata
 のみ親へ」読む **安全な読み方を steering する** body。ただし reader **自体**は hard 性に寄与しない:
-`$(gh issue view ...)` を Bash で直接実行する / 生 `curl` で raw content を読む / subagent が
-PreToolUse を発火させない / MCP github tool 経由、などで reader を**迂回できる**。
+`$(gh issue view ...)` を Bash で直接実行する / 生 `curl` で raw content を読む /
+MCP github tool 経由、などで reader を**迂回できる**。
 
 hard なのは **床** (credential 隔離 + egress)。reader を使えば hard、ではない。reader が hard に
 近づくのは「reader が credential を持たない session で動き、迂回路 (生 gh / 生 curl) も床によって

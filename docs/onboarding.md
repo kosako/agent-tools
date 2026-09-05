@@ -68,7 +68,7 @@ build 後・sync 前であればよく相互依存しない(図は直列に見�
 | psych 3/4 両対応 YAML loader | — | `scripts/lib/yaml_util.rb` (`YamlUtil.load`) |
 
 self-test は `scripts/tests/*-test.sh`。各 entrypoint に対応するほか、配布される shared script
-asset (safe-gh / safe-gh-hook) にも純ロジックの test がある。
+asset (safe-gh / safe-gh-hook など) にも純ロジックの test がある。
 
 ## 4. 安全モデル (このフレームワークの核心)
 
@@ -160,7 +160,7 @@ self-test が対応して CI で回る (加えて配布 script asset の純ロ�
 
 `shared/` には実 asset が 21 個 (source kind は skill 11 / workflow 1 / instruction 1 / script 8) 入っている
 (2026-09-05、[Assets.load_all](../scripts/lib/assets.rb) による manifest 集計)。
-directory 形式 skill・複数 target・script kind (safe-gh / hook)・content-bound human review gate
+directory 形式 skill・複数 target・script kind (safe-gh / hook など)・content-bound human review gate
 を持つ medium asset (`personal-asset-miner` の runtime-state) まで、多様な asset 形状で
 pipeline を実証済み。skill 作成は skill-creator で `shared/skills/<name>/` に作り、
 check/build/register → PR → 相互レビュー → merge → sync の確立フローで回す。撤去も
