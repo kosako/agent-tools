@@ -34,9 +34,9 @@ shared/skills/personal-example/
   evals/           # 任意。source として版管理するが配置先には載せない
 ```
 
-### directory skill の Phase 1 制約
+### skill source の制約
 
-skill を directory 形式で持つときの配置・安全ルール (Phase 1):
+directory 形式の配置ルールと、両 source 形式に共通する frontmatter 契約 (Phase 1):
 
 - `SKILL.md` / `references/` / `assets/` は配置先 (`<tool home>/skills/personal-<name>/`)
   に載せる (ランタイム skill の一部)。
@@ -77,7 +77,7 @@ skill を directory 形式で持つときの配置・安全ルール (Phase 1):
   その asset 自身の manifest 以外の manifest を置くと fail-closed で拒否する (子 asset が独立
   配布されつつ親の evals/ 抑止で injection check を回避する経路を断つ)。
 
-asset 本体に frontmatter を埋め込まない理由:
+manifest metadata を asset 本体の frontmatter と分ける理由:
 
 - target tool が独自 frontmatter を持つ可能性がある。
 - shared metadata と target-specific metadata を混ぜない。
@@ -213,6 +213,7 @@ rules:
 - absolute path は禁止。
 - private planning tool の URL は書かない。
 - source path は `shared/` 配下に置く。
+- skill に生成する source は、形式によらず上記の [skill source の制約](#skill-source-の制約) に従う。
 
 ## Optional fields
 

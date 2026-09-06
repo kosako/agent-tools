@@ -484,42 +484,46 @@ module CheckManifests
     end
 
     # 既存 frontmatter は両 source 形式とも無改変で配るため同じ境界で検証する。
+    # 開始 marker は Build::Runner#skill_markdown と同じ LF / CRLF 判定を保つ。
     # 無い単一 source は build が補完するが、directory は補完されず Codex では必須。
+    # frontmatter 不在は source による identity 主張が無く、Claude-only directory は
+    # loader が directory 名へ fallback するため name 照合を行わない。
     # frontmatter で別 identity を宣言すると「レビューされた identity ≠ 実配備 identity」に
     # なるため、manifest name との一致を必須にする (#43 の外部 skill 配布で効く供給側ギャップ)。
     # YAML を読めない場合は target parser との identity 解釈差を fail-closed で止める。
     def validate_skill_frontmatter(path, skill_md, manifest_name, required:, require_description:)
+      source_path = rel(skill_md)
       content = File.read(skill_md)
       unless content.start_with?("---\n", "---\r\n")
-        error(path, "Codex SKILL.md must contain YAML frontmatter with name and description") if required
+        error(path, "Codex #{source_path} must contain YAML frontmatter with name and description") if required
         return
       end
 
       parts = content.sub(/\A---\r?\n/, "").split(/^---\r?\n/, 2)
       if parts.length < 2
-        error(path, "SKILL.md frontmatter is missing its closing --- marker")
+        error(path, "#{source_path} frontmatter is missing its closing --- marker")
         return
       end
       fm = begin
         YamlUtil.load(parts[0], skill_md)
       rescue Psych::Exception => e
-        error(path, "SKILL.md frontmatter has a YAML error: #{e.message}")
+        error(path, "#{source_path} frontmatter has a YAML error: #{e.message}")
         return
       end
       unless fm.is_a?(Hash)
-        error(path, "SKILL.md frontmatter must be a YAML mapping")
+        error(path, "#{source_path} frontmatter must be a YAML mapping")
         return
       end
       fm_name = fm["name"]
       unless fm_name.is_a?(String) && !fm_name.strip.empty?
-        error(path, "SKILL.md frontmatter must declare a non-empty string name")
+        error(path, "#{source_path} frontmatter must declare a non-empty string name")
         return
       end
       if manifest_name.is_a?(String) && fm_name != manifest_name
-        error(path, "SKILL.md frontmatter name #{fm_name.inspect} does not match manifest name #{manifest_name.inspect}")
+        error(path, "#{source_path} frontmatter name #{fm_name.inspect} does not match manifest name #{manifest_name.inspect}")
       end
       if require_description && !(fm["description"].is_a?(String) && !fm["description"].strip.empty?)
-        error(path, "Codex SKILL.md frontmatter must declare a non-empty string description")
+        error(path, "Codex #{source_path} frontmatter must declare a non-empty string description")
       end
     end
 

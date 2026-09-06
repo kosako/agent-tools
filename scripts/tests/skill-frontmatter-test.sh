@@ -33,7 +33,8 @@ def check_case(format, label, content, targets, expected_error, compatibility = 
   Dir.mktmpdir("skill-frontmatter-") do |root|
     fixture(root, format, content, targets, compatibility)
     _, errors = CheckManifests::Runner.new(root).run
-    valid = expected_error ? errors.any? { |e| e.include?(expected_error) } : errors.empty?
+    entry = format == "directory" ? "shared/skills/personal-frontmatter/SKILL.md" : "shared/skills/personal-frontmatter.md"
+    valid = expected_error ? errors.any? { |e| e.include?(expected_error) && e.include?(entry) } : errors.empty?
     abort "FAIL: #{format}/#{label}: #{errors.inspect}" unless valid
   end
 end
@@ -83,7 +84,7 @@ Dir.mktmpdir("skill-frontmatter-source-") do |root|
   File.symlink("../../outside.md", source)
   _, errors = CheckManifests::Runner.new(root).run
   abort "FAIL: source symlink accepted" unless errors.any? { |e| e.include?("must not be a symlink") }
-  abort "FAIL: rejected source was parsed" if errors.any? { |e| e.include?("SKILL.md frontmatter") }
+  abort "FAIL: rejected source was parsed" if errors.any? { |e| e.include?("frontmatter has a YAML error") }
 end
 
 # frontmatter を持たない単一 source は既存の adapter 補完で有効になる。
