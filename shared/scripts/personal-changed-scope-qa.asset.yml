@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:52ccd219a458112d3d8d0c0c2cbc645738d3a589a3905b001c1aef44a353c8d6
+  approved_build_id: sha256:0cd5a6d886e19a77fd9c651c745188ec10bb6e2839572f2e8a77755fbdea0713
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-changed-scope-qa.rb
