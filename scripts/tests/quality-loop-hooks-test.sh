@@ -322,4 +322,6 @@ echo "$out" | grep -q "broken-re" || fail "broken regex entry should be named: $
 [ "${#out}" -lt 3500 ] || fail "total output should be capped (R1): length=${#out}"
 echo "$out" | grep -q "truncated" || fail "total cap should be visible: $out"
 
+ruby "$script_dir/fast-edit-check-payload-test.rb" "$edit_src"
+
 echo "ok: quality-loop-hooks self-test"
