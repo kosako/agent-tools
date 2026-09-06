@@ -109,7 +109,7 @@ Claude Code 2.1.259 (`claude-opus-5`) と Codex 0.153.4 (`gpt-6-astra`) で、
 Stop と実際の応答を照合した。モデルからの tool 呼び出しはなく、synthetic stdin の
 テストとは別に確認している。
 
-| case | 両 host の Stop exit / active | 最終 text 応答数 | check 実行数 |
+| case | 両 host の Stop exit / active | 最終 text 応答数 | check 実行数 (Codex) |
 |---|---|---|---|
 | command 不在 | `0 / false` | 1 | 0 |
 | 初回 failure → 同一 scope の再 Stop | `2 → 0 / false → true` | 2 | 1 |

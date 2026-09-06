@@ -10,6 +10,7 @@ risk:
   privacy: low
 # script kind は実行コード配布のため常に human review 必須 (#147)。
 # 本 script は #203 (Phase 2) の実装 PR で author≠reviewer レビューのうえ承認。
+# Stop 警告経路の分離・実機検証・現行内容の再承認は PR #237 を参照。
 # 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
