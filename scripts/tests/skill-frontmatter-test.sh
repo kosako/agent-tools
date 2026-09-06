@@ -81,6 +81,7 @@ dynamic_commands = [
   "```!printf fixture```\n",
   "  ```!\nprintf fixture\n  ```\n",
   "```markdown\n!`printf fixture`\n```\n",
+  "!`printf fixture\nprintf fixture`\n",
 ]
 %w[directory markdown].each do |format|
   native_fields.each do |field|
@@ -94,6 +95,7 @@ dynamic_commands = [
     check_case(format, "no-frontmatter-dynamic", body, %w[claude-code], "unsupported Claude Code skill feature")
   end
   ["KEY=!`printf fixture`\n", "escaped \\!`printf fixture`\n",
+   "```!\nprintf fixture\n",
    "prefix\u0085!`printf fixture`\n",
    "literal: `example !`printf fixture`\n", "``!`printf fixture` ``\n",
    "!`   `\n", "```!\n \t\n```\n",
