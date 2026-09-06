@@ -22,7 +22,8 @@
 #   approve でもない)。
 # - 履歴 (2026-07-07, Codex 0.142.2): Claude Code / Codex の payload・出力 schema が
 #   同型で、additionalContext は Codex でもモデル可視に届くことを実機確認した。
-#   hook の登録・trust と未 trust 時の警告を含む時点付き仕様は docs 正本を参照。
+# - 登録 (+ Codex は trust) が済むまでこの hook は不活性 (fail-open の帰結)。
+#   未 trust 時の警告など時点依存の詳細は docs 正本を参照。
 # - exit code は常に 0。hook 内部で例外が起きても 0 で透過する (fail-open を徹底)。
 #
 # 副作用ゼロ: network I/O も gh 呼び出しもしない。PreToolUse は毎コマンド前に同期実行される
