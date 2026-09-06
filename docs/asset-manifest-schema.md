@@ -70,7 +70,9 @@ skill を directory 形式で持つときの配置・安全ルール (Phase 1):
   [Claude Code の省略規則](https://code.claude.com/docs/en/skills#frontmatter-reference) に沿い、
   Claude-only skill の frontmatter 不在・description 省略は許可する。判定は manifest の
   kind ではなく target ごとの解決済み artifact_kind に従い、instruction / script は対象外。
-  build / register はこの静的検証を共有する。runtime loader を起動した検証ではない。
+  build / register はこの静的検証を共有する。根拠は 2026-09-06 に確認した上記公式契約:
+  Claude Code は全 frontmatter field が任意で、name の省略時は directory 名、description の
+  省略時は本文の先頭段落を使う。runtime loader を起動した検証ではない。
 - **asset source の入れ子・重複所有を禁止**する (#177 H-01)。directory asset の source dir 配下に
   その asset 自身の manifest 以外の manifest を置くと fail-closed で拒否する (子 asset が独立
   配布されつつ親の evals/ 抑止で injection check を回避する経路を断つ)。

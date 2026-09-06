@@ -452,14 +452,11 @@ module CheckManifests
 
       # directory skill は SKILL.md を entrypoint として必ず持つ (M-01)。build は directory
       # skill の SKILL.md を生成しない (copy_directory_asset が verbatim コピー) ため、無いと
-      # entrypoint 欠落の inert skill が配布される。さらに SKILL.md の frontmatter name は
-      # manifest name と一致必須にする: build が SKILL.md を無改変で配るので、frontmatter で
-      # 別 identity / 広域 trigger を宣言すると「レビューされた identity ≠ 実配備 identity」に
-      # なる (#43 の外部 skill 配布で効く供給側ギャップ)。
+      # entrypoint 欠落の inert skill が配布される。frontmatter は validate_source が成功した
+      # 後に target 別の共通入口で検証する。
       skill_md = File.join(dir, "SKILL.md")
       unless File.file?(skill_md)
         error(path, "directory skill must contain a SKILL.md entrypoint")
-        return
       end
     end
 
@@ -488,6 +485,8 @@ module CheckManifests
 
     # 既存 frontmatter は両 source 形式とも無改変で配るため同じ境界で検証する。
     # 無い単一 source は build が補完するが、directory は補完されず Codex では必須。
+    # frontmatter で別 identity を宣言すると「レビューされた identity ≠ 実配備 identity」に
+    # なるため、manifest name との一致を必須にする (#43 の外部 skill 配布で効く供給側ギャップ)。
     # YAML を読めない場合は target parser との identity 解釈差を fail-closed で止める。
     def validate_skill_frontmatter(path, skill_md, manifest_name, required:, require_description:)
       content = File.read(skill_md)
