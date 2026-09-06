@@ -34,9 +34,9 @@ shared/skills/personal-example/
   evals/           # 任意。source として版管理するが配置先には載せない
 ```
 
-### directory skill の Phase 1 制約
+### skill source の制約
 
-skill を directory 形式で持つときの配置・安全ルール (Phase 1):
+directory 形式の配置ルールと、両 source 形式に共通する frontmatter 契約 (Phase 1):
 
 - `SKILL.md` / `references/` / `assets/` は配置先 (`<tool home>/skills/personal-<name>/`)
   に載せる (ランタイム skill の一部)。
@@ -59,16 +59,25 @@ skill を directory 形式で持つときの配置・安全ルール (Phase 1):
 - **directory skill は `SKILL.md` を entrypoint として必須**にする (#187 M-01)。build は
   directory skill の `SKILL.md` を無改変でコピーする (単一ファイル skill と違い frontmatter を
   生成しない) ため、無いと entrypoint 欠落の inert skill が配布される。
-- **`SKILL.md` の frontmatter `name` は manifest name と一致必須** (#187 M-01)。build が
-  `SKILL.md` を無改変で配るので、frontmatter で別 identity / 広域 trigger を宣言すると「レビュー
-  された identity ≠ 実配備 identity」になる。frontmatter が在る (先頭が `---`) のに閉じ marker
-  欠落 / YAML parse 不能 (alias 等) / 非 mapping / name 欠落なら **fail-closed** で拒否する
-  (validator が読めない frontmatter を target parser が別 identity として解決する差を塞ぐ)。
+- **skill の既存 frontmatter `name` は manifest name と一致必須** (#187 M-01, #234)。
+  directory の `SKILL.md` と、既存 frontmatter を持つ単一 source に共通で適用する。
+  frontmatter が在る (先頭が `---` 行) のに閉じ marker 欠落 / YAML parse 不能 (alias 等) /
+  非 mapping / name 欠落・空・型不正なら **fail-closed** で拒否する。LF / CRLF に対応する。
+- **Codex に skill として生成する場合、非空 string の `description` も必須** (#234)。
+  [Codex の skill 契約](https://learn.chatgpt.com/docs/build-skills) に合わせ、frontmatter の無い
+  directory skill は拒否する。frontmatter の無い単一 source は既存どおり build が manifest の
+  name と summary (無ければ description、さらに無ければ name) から補完する。
+  [Claude Code の省略規則](https://code.claude.com/docs/en/skills#frontmatter-reference) に沿い、
+  Claude-only skill の frontmatter 不在・description 省略は許可する。判定は manifest の
+  kind ではなく target ごとの解決済み artifact_kind に従い、instruction / script は対象外。
+  build / register はこの静的検証を共有する。根拠は 2026-09-06 に確認した上記公式契約:
+  Claude Code は全 frontmatter field が任意で、name の省略時は directory 名、description の
+  省略時は本文の先頭段落を使う。runtime loader を起動した検証ではない。
 - **asset source の入れ子・重複所有を禁止**する (#177 H-01)。directory asset の source dir 配下に
   その asset 自身の manifest 以外の manifest を置くと fail-closed で拒否する (子 asset が独立
   配布されつつ親の evals/ 抑止で injection check を回避する経路を断つ)。
 
-asset 本体に frontmatter を埋め込まない理由:
+manifest metadata を asset 本体の frontmatter と分ける理由:
 
 - target tool が独自 frontmatter を持つ可能性がある。
 - shared metadata と target-specific metadata を混ぜない。
@@ -204,6 +213,7 @@ rules:
 - absolute path は禁止。
 - private planning tool の URL は書かない。
 - source path は `shared/` 配下に置く。
+- skill に生成する source は、形式によらず上記の [skill source の制約](#skill-source-の制約) に従う。
 
 ## Optional fields
 

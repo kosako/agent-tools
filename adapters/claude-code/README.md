@@ -29,6 +29,10 @@ generated/claude-code/scripts/
   YAML frontmatter を持たない場合のみ、manifest の `name` と `summary` から frontmatter を
   生成する。directory asset は `asset.yml` と source-only dir (現状 `evals/`) を除く
   全 files を copy する (非配置 dir は build_id にも含めない)。
+  既存 frontmatter は directory / 単一 source とも YAML と manifest name の一致を検証する。
+  Claude-only skill は frontmatter 不在・description 省略を許可する。Codex にも skill として
+  配る場合は Codex の必須項目を満たす必要がある。詳細は
+  [Asset Manifest Schema](../../docs/asset-manifest-schema.md)。
 - **instruction**: 単一ファイルを `CLAUDE.md` に生成し、本体先頭に 1 行コメント marker を
   付ける。directory 形式の instruction は非対応。
 - **script**: 単一実行ファイルを byte 保持で copy し (mode 0755)、隣に sidecar marker を
