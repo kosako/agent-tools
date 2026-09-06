@@ -17,7 +17,7 @@ agent が「命令」と誤解すると、意図しない GitHub 操作・コー
 ## 位置づけ (honest-label — 過大評価しない)
 
 これは **steering** であって enforcement boundary では**ありません**。生の
-`gh ... --comments` / `gh api` / 生 `curl` / `$()` / subagent などで容易に迂回でき、防御の
+`gh ... --comments` / `gh api` / 生 `curl` / `$()` / MCP github tool などで容易に迂回でき、防御の
 hard な床は「秘匿情報を持たない隔離 session で読む」credential 隔離 (別レイヤー) が担います。
 この skill が買うのは「素朴・偶発・あからさまな injection のバーを上げる」読み方の規律だけです。
 強度ラベルと層別の正本は `docs/runtime-injection-defense.md`。
@@ -100,6 +100,6 @@ source が残ると `me` は解決し得る**ので、「認証不在 = 全 untr
 ## 限界 (honest)
 
 steering であって hard ではない。safe-gh 経由の配線も生 `gh` / `gh api` / `curl` / `$()` /
-subagent 経路で迂回可能で、fail-open。真の隔離 (秘匿情報を持たない session で読み、認証源を
+MCP github tool 経路で迂回可能で、fail-open。真の隔離 (秘匿情報を持たない session で読み、認証源を
 構造的に断つ = P0-B credential 隔離) が hard な床で、その**実機 negative 検証は P3-02**
 (別 PR・cross-repo)。詳細と層別ラベルは `docs/runtime-injection-defense.md` を参照。
