@@ -73,8 +73,17 @@
   Codex 0.153.4 の [patch parser](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/apply-patch/src/parser.rs)、
   [hook response](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/core/src/tools/context.rs)、
   [出力形式](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/core/src/tools/mod.rs) に基づく。
-  Claude Code の payload は #201 実測済み。Codex はこの形式の fixture を stdin に渡して
-  check 実行と additionalContext を検証する。実機からモデルへの警告到達は別途 smoke が必要。
+  Claude Code の payload は #201 実測済み。Codex の複数 file / Add / Update / Delete /
+  Move / 不正 payload は stdin fixture で check 実行と additionalContext を検証する。
+- **Codex native smoke (2026-09-06 / #239)**: Codex 0.153.4 (公式同版 Code Mode host) /
+  `gpt-6-astra` で、1 ファイルへの実 `apply_patch` 2 回を観測した。最初の更新による
+  Ruby 構文エラーで check が 1 回失敗し、その場で生成した識別子を含む additionalContext が
+  モデルへ届いた。モデルが同じ識別子を返してファイルを修復し、次の check は 1 回成功して
+  無出力だった。実 hook payload・check receipt・session trace を照合し、他の tool 呼出しや
+  check / 観測 log の直接参照が無いことを確認した。
+  一時 project / hook の信頼設定は撤回し、別 process の readback で当該 permission の不在と
+  他設定・hooks の不変を確認した。実測はこの 1 ファイルの Update / repair に限る。
+  複数 file・Add / Delete / Move の native 実測や、全配備環境・モデル性能の検証ではない。
 
 ## personal-changed-scope-qa(Stop)
 
@@ -115,7 +124,7 @@
 - Stop の回帰テストは warning JSON に `systemMessage` だけがあり、継続を要求する
   field がないことを検証する。fixture 検証は実 runner の継続回数や UI 表示の観測ではない。
 - 実配線 (settings.json / hooks.json への登録・Codex payload / Stop の実測) は CI 外
-  (dotfiles 側 issue + 実機 smoke。実施記録は #203)。
+  (dotfiles 側 issue + 実機 smoke。実施記録は #203 / #237 / #239)。
 
 ### Stop の実機確認 (2026-09-06 / #237)
 
