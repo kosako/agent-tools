@@ -33,6 +33,9 @@ generated/codex/scripts/
   非空 string の `description` を登録前に検証する。directory の frontmatter 不在は拒否し、
   単一 source の frontmatter 不在は上記の生成経路を使う。詳細は
   [Asset Manifest Schema](../../docs/asset-manifest-schema.md)。
+  Codex のみへ生成する skill には Claude 固有の native 実行構文の拒否 gate を適用しない。
+  同じ source を Claude Code の skill にも配る場合は、そちらの未対応機能検査で asset 全体が
+  停止する。これは Codex の機能有効化や実行権限の承認を意味しない。
 - **instruction**: 単一ファイルを `AGENTS.md` に生成し、本体先頭に 1 行コメント marker を
   付ける。directory 形式の instruction は非対応。
 - **script**: 単一実行ファイルを byte 保持で copy し (mode 0755)、隣に sidecar marker を
