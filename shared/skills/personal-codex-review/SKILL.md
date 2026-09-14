@@ -34,7 +34,8 @@ caller が渡した deterministic preflight の verified classification だけ�
   required cross-review や独立承認として扱いません。
 
 cross-review で verified `author=codex / reviewer=claude` なら Codex 実行を拒否し、caller に verified
-Claude route を使うよう返します。cross-review で mixed / unknown、routing preflight の失敗、または
+Claude route（`personal-review-request`「レビュー実行」の Claude 節。Codex 環境からの起動 vehicle は
+`claude -p`）を使うよう返します。cross-review で mixed / unknown、routing preflight の失敗、または
 caller が verified author classification を渡せない場合は reviewer を自動選択せず、human の裁定へ
 fail-closed hand-off します。explicit second opinion は現在の trusted なユーザー依頼を根拠に上の
 非独立 route を使い、cross-review 用 classification の欠如だけでは拒否しません。commit author 表示や

@@ -11,7 +11,8 @@
   想定外はすべて exit 0 で透過し、編集操作を壊さない。
 - **changed-scope-qa は best-effort gate**。hook 無効化・別経路で迂回できる。block は
   「新しい変更 scope に対して 1 回だけ」で、無限ループ対策 (下記) を仕様に含む。
-- どちらも登録 (+ Codex は trust) が済むまで無警告で不活性 (fail-open の帰結)。
+- どちらも登録 (+ Codex は trust) が済むまで不活性 (fail-open の帰結)。
+  未 trust 時の警告など時点付き仕様は [runtime 正本](runtime-injection-defense.md) を参照。
   配線は dotfiles 所有 (boundary-with-dotfiles)。
 
 ## check コマンドの発見(自動推測しない・#203 裁定)
@@ -48,41 +49,108 @@
 - 宣言する check の目安: edit_checks は「1 ファイル・数百 ms」(編集のたびに同期実行)、
   qa_checks は「repo 全体で数秒・決定的」(Stop のたびに走りうる。決定性は cache の前提)。
 
-## personal-fast-edit-check(PostToolUse / `Edit|Write`)
+## personal-fast-edit-check(PostToolUse / `Edit|Write|apply_patch`)
 
-- payload の `tool_input.file_path` から対象ファイルを取り、その repo の `edit_checks` の
-  うち `pattern` (Ruby regex) がファイル名に一致するものを実行する。
+- Claude Code は `tool_input.file_path`、Codex は `tool_name: "apply_patch"` の
+  `tool_input.command` から対象を取る。Codex の成功判定は `PostToolUse` event に加え、
+  `tool_response` 文字列の先頭が `Exit code: 0` の行であることを確認する。
+- Codex の通常 patch (`*** Begin Patch` / `*** End Patch`) 全体を検査し、Add / Update の
+  対象、Move の移動先を `cwd` 基準の絶対 path にする。1 patch 内の重複は除き、Delete と
+  現存しないファイルは高速 check の対象外にする。各ファイルの repo の `edit_checks` の
+  うち `pattern` (Ruby regex) が一致するものだけを実行する。
+  1 patch の対象ファイルごとに check を直列・同期実行するため、全体の待ち時間は
+  「対象ファイル数 × 一致する check の所要時間」に応じて増える。出力上限に達しても
+  後続の check は省略しない。
+- 失敗した tool result、`cwd` 不在、壊れた / 未対応 patch は無言 skip。
+  shell wrapper や `*** Environment ID` による別環境指定を local path と推測しない。
 - 失敗時のみ `hookSpecificOutput.additionalContext` で失敗要約 (上限 2000 文字 /
   非 UTF-8 は scrub) をモデルに返す。成功は無言 (ノイズ規律)。
+  複数ファイルの失敗は repo 相対 path で対象を識別し、不正な check 宣言の警告は
+  同じ repo について 1 回だけ返す。
 - 設定ファイルが壊れているときは無言で握り潰さず、設定エラーを additionalContext で
   1 行知らせる (それでも exit 0)。
-- **Codex parity の honest-label**: Claude Code の payload 形 (`tool_input.file_path`) は
-  #201 実測済み。Codex (apply_patch) の payload 形は未実測で、file_path が取れなければ
-  無言 no-op に倒れる。配備時に実測して追従する。
+- **互換性の根拠**: [Codex Hooks](https://learn.chatgpt.com/docs/hooks#posttooluse)、
+  Codex 0.153.4 の [patch parser](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/apply-patch/src/parser.rs)、
+  [hook response](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/core/src/tools/context.rs)、
+  [出力形式](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/core/src/tools/mod.rs) に基づく。
+  Claude Code の payload は #201 実測済み。Codex の複数 file / Add / Update / Delete /
+  Move / 不正 payload は stdin fixture で check 実行と additionalContext を検証する。
+- **Codex native smoke (2026-09-06 / #239)**: Codex 0.153.4 (公式同版 Code Mode host) /
+  `gpt-6-astra` で、1 ファイルへの実 `apply_patch` 2 回を観測した。最初の更新による
+  Ruby 構文エラーで check が 1 回失敗し、その場で生成した識別子を含む additionalContext が
+  モデルへ届いた。モデルが同じ識別子を返してファイルを修復し、次の check は 1 回成功して
+  無出力だった。実 hook payload・check receipt・session trace を照合し、他の tool 呼出しや
+  check / 観測 log の直接参照が無いことを確認した。
+  一時 project / hook の信頼設定は撤回し、別 process の readback で当該 permission の不在と
+  他設定・hooks の不変を確認した。実測はこの 1 ファイルの Update / repair に限る。
+  複数 file・Add / Delete / Move の native 実測や、全配備環境・モデル性能の検証ではない。
 
 ## personal-changed-scope-qa(Stop)
 
 - **検査対象の帰属 (#203 裁定)**: agent の変更とユーザーの手元変更を区別せず、working
   tree の **dirty scope 全体** (tracked の変更 + untracked) を対象にする。ユーザー自身の
   書きかけ変更も検査対象になる (明記)。
-- dirty かつ宣言 repo なら `qa_checks` を実行。全 pass → scope 指紋 (status + diff の
-  sha256) と結果を state に cache して無言 pass。失敗 → **exit 2 + stderr 要約で block**
+- dirty かつ宣言 repo なら `qa_checks` を実行。全 pass → scope 指紋 (HEAD / status / tracked diff /
+  untracked 内容 / check 定義を含む sha256) と結果を state に cache して無言 pass。
+  失敗 → **exit 2 + stderr 要約で block**
   (モデルに修正の続行を促す)。
 - **無限ループ対策 (仕様)**:
   - `stop_hook_active: true` (この turn で既に継続済み) では**絶対に block しない**
-    (check は走らせ、結果は additionalContext の警告で返す)。
+    (新しい scope なら check は走らせ、失敗は `systemMessage` のユーザー向け警告で返す)。
   - 同一 scope 指紋の再 Stop は check を**再実行しない** (pass 済み = 無言 / fail 済み =
-    非ブロッキング警告のみ。block は新しい scope に 1 回だけ → 直せない失敗は人間に戻る)。
-  - check コマンド不在・spawn 失敗は「警告に降格」して block しない (cache もしないので
-    環境が直れば次の Stop で再試行)。
+    ユーザー向け警告のみ。block は新しい scope に 1 回だけ → 直せない失敗は人間に戻る)。
+  - check コマンド不在・spawn 失敗はユーザー向け警告に降格して block しない。未実行の
+    check は cache 内で `missing` として分離し、同一 scope でも次の Stop で再試行する。
+    復旧して全 check が pass になれば無言になる。
+- 警告は **exit 0 + `{"systemMessage":"..."}`** のみを出力する (本文は 2000 文字で打ち切り /
+  非 UTF-8 は scrub)。構成エラーの警告も同じ経路を使う。モデルへの追加指示や継続要求は
+  出さず、他の Stop hook の判断も上書きしない。
+- 出力契約の一次情報 (2026-09-05 確認):
+  [Claude Code](https://code.claude.com/docs/en/hooks#json-output) と
+  [Codex](https://developers.openai.com/codex/hooks#common-output-fields) は `systemMessage` を
+  ユーザー向け警告として扱う。Claude Code の
+  [Stop `additionalContext`](https://code.claude.com/docs/en/hooks#stop-decision-control) は
+  会話を継続させるため、この hook の警告経路には使わない。配線は同期 command hook を前提とする。
 - state: `~/.cache/agent-tools/changed-scope-qa/<repo path の sha256>.json`。
   test 用 override: `AGENT_TOOLS_QA_STATE_DIR` / 設定は `AGENT_TOOLS_CHECKS_CONFIG`。
-- Codex 側は Stop の matcher が無視される点 (#201) 以外は同型を期待。`stop_hook_active` /
-  block 挙動の Codex 実測は配備時 (#201 からの carry-over)。
+- Codex 側は Stop の matcher が無視される (#201)。`stop_hook_active` と exit 2 による
+  継続要求は[公式 Stop 契約](https://developers.openai.com/codex/hooks#stop)にも記載されている。
+  実機 smoke の確認範囲は下記。配備先ごとの登録・trust は別途必要。
 
 ## 検証境界
 
 - 純粋ロジックと git 連携・cache・ループ対策は `scripts/tests/quality-loop-hooks-test.sh`
   が CI で検証する (設定 / state / HOME / git config を隔離・fake check 使用)。
+- Stop の回帰テストは warning JSON に `systemMessage` だけがあり、継続を要求する
+  field がないことを検証する。fixture 検証は実 runner の継続回数や UI 表示の観測ではない。
 - 実配線 (settings.json / hooks.json への登録・Codex payload / Stop の実測) は CI 外
-  (dotfiles 側 issue + 実機 smoke。実施記録は #203)。
+  (dotfiles 側 issue + 実機 smoke。実施記録は #203 / #237 / #239)。
+
+### Stop の実機確認 (2026-09-06 / #237)
+
+Claude Code 2.1.259 (`claude-opus-5`) と Codex 0.153.4 (`gpt-6-astra`) で、
+同じ候補 source と一時 Git fixture・専用 checks/state を使い、native runner が呼んだ
+Stop と実際の応答を照合した。モデルからの tool 呼び出しはなく、synthetic stdin の
+テストとは別に確認している。
+
+| case | 両 host の Stop exit / active | 最終 text 応答数 | check 実行数 (Codex) |
+|---|---|---|---|
+| command 不在 | `0 / false` | 1 | 0 |
+| 初回 failure → 同一 scope の再 Stop | `2 → 0 / false → true` | 2 | 1 |
+| successful check | `0 / false` | 1 | 1 |
+
+Claude は warning と再 Stop の後に `system/informational` の notice が各 1 回届き、
+成功時は QA notice なしで終了した。Codex は上表を `exec --json` で確認したが、
+`systemMessage` は JSON 出力にも通常の `exec` 出力にも現れなかった。別の TUI 実行で
+command 不在と既存の失敗 scope cache による警告が `Hook` 通知として表示され、
+各 1 応答・再 block なしで終了したことを確認した。Codex の `exec` による警告表示は
+確認済みの機能とは扱わない。Claude の対話 UI 描画も検査範囲外。
+
+Codex の検証環境には既存 plugin の timeout 調整と optional Code Mode host 不在の
+起動診断があったため、strict な JSON verifier の初回判定は inconclusive だった。
+hook receipt と対応 session の実 trace を照合して上表を確認し、元の evidence は保持した。
+検証用に追加した Codex project / 単独 hook の信頼設定は公式 API で撤回し、別 process で
+他の設定・hooks の不変を確認した。通常の配線や設定を更新した検証ではない。
+
+成功時 cache、変更 scope、command 復旧時の再試行は regression / synthetic test の
+確認範囲であり、上表の実機観測へ広げて主張しない。
