@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# fast-edit-check: PostToolUse (Edit|Write) hook body。編集直後の変更ファイル 1 個に
+# fast-edit-check: PostToolUse (Edit|Write|apply_patch) hook body。編集直後の変更ファイルに
 # repo 宣言済みの高速 check (syntax / lint) を実行し、失敗要約だけを
 # hookSpecificOutput.additionalContext でモデルに返す steering hook (#200 §4.4 / #203)。
 # 「書いた直後に機械が指摘 → その場で直す」ループの機械判定部分を担う。
@@ -33,9 +33,8 @@
 #   edit_checks は「1 ファイル・数百 ms」の高速 check だけを宣言する (PostToolUse は編集の
 #   たびに同期で走る)。
 #
-# payload 互換: Claude Code の PostToolUse payload (tool_input.file_path) は #201 で実測済み。
-# Codex (apply_patch) の payload 形は未実測で、file_path が取れない場合は無言 no-op に
-# 倒れる (fail-open)。配備時に実測して追従する (honest-label)。
+# payload 互換: Claude Code は tool_input.file_path、Codex は成功した apply_patch の
+# tool_input.command を読む。未知の payload / patch は無言 no-op (fail-open)。
 
 require "json"
 
@@ -52,6 +51,77 @@ module FastEditCheck
 
   def config_path
     ENV[CONFIG_PATH_ENV].to_s.empty? ? DEFAULT_CONFIG : ENV[CONFIG_PATH_ENV]
+  end
+
+  def valid_update_body?(lines)
+    has_lines = false
+    lines.each_with_index do |line, i|
+      if line == "*** End of File"
+        return false unless has_lines && i == lines.length - 1
+      elsif line == "@@" || line.start_with?("@@ ")
+        return false if i.positive? && !has_lines
+
+        has_lines = false
+      else
+        return false unless line.empty? || line.match?(/\A[ +\-]/)
+
+        has_lines = true
+      end
+    end
+    has_lines
+  end
+
+  # 完全な通常 patch だけを解釈する。patch を実行したり、未知の shell wrapper / remote
+  # environment を local cwd と推定したりしない。解釈不能なら全体を skip する。
+  def patch_paths(command)
+    return [] unless command.is_a?(String) && !command.include?("\0")
+
+    lines = command.strip.lines(chomp: true)
+    return [] unless lines.shift == "*** Begin Patch" && lines.pop == "*** End Patch"
+
+    paths = []
+    until lines.empty?
+      header = lines.shift.match(/\A\*\*\* (Add|Update|Delete) File: (\S.*)\z/)
+      return [] unless header
+
+      operation, path = header.captures
+      if operation == "Update" && lines.first.to_s.start_with?("*** Move to: ")
+        move = lines.shift.match(/\A\*\*\* Move to: (\S.*)\z/)
+        return [] unless move
+
+        path = move[1]
+      end
+      body = []
+      body << lines.shift until lines.empty? || lines.first.match?(/\A\*\*\* (?:Add|Update|Delete) File: /)
+      valid = case operation
+              when "Add" then body.all? { |line| line.start_with?("+") }
+              when "Update" then valid_update_body?(body)
+              when "Delete" then body.empty?
+              end
+      return [] unless valid
+
+      paths << path unless operation == "Delete"
+    end
+    paths
+  end
+
+  def edited_files(payload)
+    return [] unless payload.is_a?(Hash) && payload["tool_input"].is_a?(Hash)
+
+    if payload["tool_name"] == "apply_patch"
+      response = payload["tool_response"]
+      cwd = payload["cwd"]
+      # Codex 0.153.4 の ApplyPatchToolOutput は exit status を先頭に持つ文字列。
+      # PostToolUse という event 名だけで成功したと推定しない。
+      return [] unless payload["hook_event_name"] == "PostToolUse" &&
+                       response.is_a?(String) && response.start_with?("Exit code: 0\n") &&
+                       cwd.is_a?(String) && cwd.start_with?(File::SEPARATOR) && File.directory?(cwd)
+
+      files = patch_paths(payload["tool_input"]["command"]).map { |path| File.absolute_path(path, cwd) }
+    else
+      files = [payload["tool_input"]["file_path"]]
+    end
+    files.select { |file| file.is_a?(String) && File.file?(file) }.uniq
   end
 
   # 設定を読む。無い = opt-in していない (nil)。壊れている = 警告文字列を返す
@@ -133,8 +203,8 @@ module FastEditCheck
 
   def run
     payload = JSON.parse($stdin.read)
-    file = payload.dig("tool_input", "file_path")
-    return 0 unless file.is_a?(String) && File.file?(file)
+    files = edited_files(payload)
+    return 0 if files.empty?
 
     config = load_config
     return 0 if config.nil?
@@ -143,23 +213,27 @@ module FastEditCheck
       return 0
     end
 
-    repo_root = repo_root_for(file)
-    return 0 if repo_root.nil?
-
-    entry = config[repo_root]
-    checks, invalid = entry ? checks_for(entry, file) : [[], []]
-
     parts = []
-    unless invalid.empty?
-      parts << "fast-edit-check: 設定エラー: 不正な check 宣言を無視しました: " \
-               "#{invalid.join(', ')} (#{config_path})"
-    end
+    reported_config_errors = {}
+    files.each do |file|
+      repo_root = repo_root_for(file)
+      next if repo_root.nil?
 
-    failures = checks.map { |c| run_check(c, file, repo_root) }.reject { |r| r[:ok] }
-    unless failures.empty?
-      body = failures.map { |r| "[#{r[:name]}]\n#{truncate(r[:output])}" }.join("\n")
-      parts << "fast-edit-check: #{File.basename(file)} への編集が repo 宣言の check に失敗しました。" \
-               "いま直してください (自動修正はしません):\n#{body}"
+      entry = config[repo_root]
+      checks, invalid = entry ? checks_for(entry, file) : [[], []]
+      unless invalid.empty? || reported_config_errors[repo_root]
+        parts << "fast-edit-check: 設定エラー: 不正な check 宣言を無視しました: " \
+                 "#{invalid.join(', ')} (#{config_path})"
+        reported_config_errors[repo_root] = true
+      end
+
+      failures = checks.map { |c| run_check(c, file, repo_root) }.reject { |r| r[:ok] }
+      unless failures.empty?
+        body = failures.map { |r| "[#{r[:name]}]\n#{truncate(r[:output])}" }.join("\n")
+        label = files.length > 1 ? file.delete_prefix(repo_root + File::SEPARATOR) : File.basename(file)
+        parts << "fast-edit-check: #{label} への編集が repo 宣言の check に失敗しました。" \
+                 "いま直してください (自動修正はしません):\n#{body}"
+      end
     end
     return 0 if parts.empty?
 

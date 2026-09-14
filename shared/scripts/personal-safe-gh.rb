@@ -8,8 +8,9 @@
 # 正本: docs/runtime-injection-defense.md / 外部 planning tool の設計メモ (8 決定)。
 #
 # 強度ラベル (偽らない): これは **steering** であって enforcement boundary ではない。
-# `$(gh ...)` 直実行 / `gh api` / `curl` / MCP github tool などで容易に迂回でき、PreToolUse
-# hook も subagent に不発・fail-open。hard な防御は床 (credential 隔離 + egress) が担う。
+# `$(gh ...)` 直実行 / `gh api` / `curl` / MCP github tool などで容易に迂回できる。
+# PreToolUse による誘導も fail-open。hook の適用範囲・発火条件の時点付き情報は正本を参照。
+# hard な防御は床 (credential 隔離 + egress) が担う。
 # safe-gh が買うのは「安全な読み方を便利にし、untrusted content を data として扱わせる」こと。
 #
 # 設計 (決定 3/4/5 を実装):

@@ -96,6 +96,20 @@
         { "id": "not-merge-readiness", "text": "Claude review verdict だけで PR 全体を merge-ready と断定していない" },
         { "id": "no-operation", "text": "手順確認という制約を守り、外部投稿していない" }
       ]
+    },
+    {
+      "id": 7,
+      "name": "codex-env-uses-claude-p-vehicle",
+      "prompt": "いま Codex セッションで作業中。routing preflight は author=codex / reviewer=claude。この環境から Claude レビューをどう実行するか、手順確認として説明して。外部投稿はしないで。",
+      "expected_output": "claude -p (headless) を起動 vehicle にする。実行前に claude --help で -p と read-only 化 flag の実在を capability preflight し、git 読み取り系とファイル読み取りだけの tool allowlist で起動、brief は stdin/ファイル経由で渡す。brief に「あなた自身が最終レビュアー。review 系 skill を起動せず nested な codex / claude を実行しない」を明記する。capability 不足や起動失敗なら自分でレビューせず人間へ hand-off する。",
+      "files": [],
+      "assertions": [
+        { "id": "uses-claude-p-vehicle", "text": "Codex 環境からの実行手段として claude -p (headless) を挙げている" },
+        { "id": "capability-preflight-first", "text": "起動前に claude --help 等で必要な flag の実在と read-only 遮断 (allowlist 外の拒否) を確認し、未確認・不存在の flag を試さないとしている" },
+        { "id": "read-only-and-safe-brief", "text": "read-only の tool allowlist と、stdin/ファイル経由の brief 渡しに言及している" },
+        { "id": "anti-double-fire", "text": "brief に skill 不起動・nested codex/claude 実行禁止を明記するとしている" },
+        { "id": "fail-closed-on-unavailable", "text": "capability 不足・起動失敗時に自分でレビューせず人間へ hand-off するとしている" }
+      ]
     }
   ]
 }

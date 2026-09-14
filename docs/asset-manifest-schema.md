@@ -34,9 +34,9 @@ shared/skills/personal-example/
   evals/           # 任意。source として版管理するが配置先には載せない
 ```
 
-### directory skill の Phase 1 制約
+### skill source の制約
 
-skill を directory 形式で持つときの配置・安全ルール (Phase 1):
+directory 形式の配置ルールと、両 source 形式に共通する frontmatter 契約 (Phase 1):
 
 - `SKILL.md` / `references/` / `assets/` は配置先 (`<tool home>/skills/personal-<name>/`)
   に載せる (ランタイム skill の一部)。
@@ -59,20 +59,61 @@ skill を directory 形式で持つときの配置・安全ルール (Phase 1):
 - **directory skill は `SKILL.md` を entrypoint として必須**にする (#187 M-01)。build は
   directory skill の `SKILL.md` を無改変でコピーする (単一ファイル skill と違い frontmatter を
   生成しない) ため、無いと entrypoint 欠落の inert skill が配布される。
-- **`SKILL.md` の frontmatter `name` は manifest name と一致必須** (#187 M-01)。build が
-  `SKILL.md` を無改変で配るので、frontmatter で別 identity / 広域 trigger を宣言すると「レビュー
-  された identity ≠ 実配備 identity」になる。frontmatter が在る (先頭が `---`) のに閉じ marker
-  欠落 / YAML parse 不能 (alias 等) / 非 mapping / name 欠落なら **fail-closed** で拒否する
-  (validator が読めない frontmatter を target parser が別 identity として解決する差を塞ぐ)。
+- **skill の既存 frontmatter `name` は manifest name と一致必須** (#187 M-01, #234)。
+  directory の `SKILL.md` と、既存 frontmatter を持つ単一 source に共通で適用する。
+  frontmatter が在る (先頭が `---` 行) のに閉じ marker 欠落 / YAML parse 不能 (alias 等) /
+  非 mapping / name 欠落・空・型不正なら **fail-closed** で拒否する。LF / CRLF に対応する。
+- **Codex に skill として生成する場合、非空 string の `description` も必須** (#234)。
+  [Codex の skill 契約](https://learn.chatgpt.com/docs/build-skills) に合わせ、frontmatter の無い
+  directory skill は拒否する。frontmatter の無い単一 source は既存どおり build が manifest の
+  name と summary (無ければ description、さらに無ければ name) から補完する。
+  [Claude Code の省略規則](https://code.claude.com/docs/en/skills#frontmatter-reference) に沿い、
+  Claude-only skill の frontmatter 不在・description 省略は許可する。判定は manifest の
+  kind ではなく target ごとの解決済み artifact_kind に従い、instruction / script は対象外。
+  build / register はこの静的検証を共有する。根拠は 2026-09-06 に確認した上記公式契約:
+  Claude Code は全 frontmatter field が任意で、name の省略時は directory 名、description の
+  省略時は本文の先頭段落を使う。runtime loader を起動した検証ではない。
+- **Claude Code skill の native 実行・事前許可機能は未対応として拒否**する (#233)。
+  検査対象は source entrypoint (directory の `SKILL.md` / 単一 source) に限る。
+  実 frontmatter の `allowed-tools` / `hooks` は空値も含めて拒否し、本文の inline / fenced
+  dynamic shell command は非空 command を含む場合に拒否する。理由は下記「Native skill 機能」。
 - **asset source の入れ子・重複所有を禁止**する (#177 H-01)。directory asset の source dir 配下に
   その asset 自身の manifest 以外の manifest を置くと fail-closed で拒否する (子 asset が独立
   配布されつつ親の evals/ 抑止で injection check を回避する経路を断つ)。
 
-asset 本体に frontmatter を埋め込まない理由:
+manifest metadata を asset 本体の frontmatter と分ける理由:
 
 - target tool が独自 frontmatter を持つ可能性がある。
 - shared metadata と target-specific metadata を混ぜない。
 - markdown 以外の asset にも同じ考え方を使える。
+
+### Native skill 機能
+
+`allowed-tools` は事前許可の grant であり、利用可能 tool の制限ではない。`hooks` と dynamic
+shell command も host が実行する機能なので、通常の説明文と分けて検査する。これらを安全に
+配布する機能は現段階で提供せず、`check-manifests` が拒否する。build / register は同じ gate で
+停止し、`human_review: approved` でも未対応機能の拒否は解除しない。承認 schema は変更しない。
+
+| 解決済み target artifact | この拒否 gate の扱い |
+| --- | --- |
+| `claude-code` の `skill` | `allowed-tools` / `hooks` / dynamic shell command を拒否 |
+| `codex` のみの `skill` | Claude 固有の実行構文による拒否は適用しない。Codex の必須 frontmatter 検証は適用する |
+| `instruction` / `script` | この skill 用検査の対象外。既存の kind 別 gate を適用する |
+
+一つの source を両 target の skill に配る場合は、Claude Code 向けに拒否された時点で asset の
+build / register 全体が停止する。片側だけ登録しない。これは host の permissions を変更したり、
+Codex でこれらの機能の実行を承認したりする仕組みではない。
+
+[Claude Code の dynamic context 契約](https://code.claude.com/docs/en/skills#inject-dynamic-context)
+と 2.1.259 の静的 parser に基づき、inline は行頭または空白直後の bang + backtick 構文、fenced は
+三連 backtick + bang で始まる構文を扱う (改行無しの fenced 形も含む)。空または空白だけの
+command は実行形に数えない。通常の inline-code span に隠れた説明は除外するが、Markdown の
+code fence 全体を一律には除外しない。コード例でも host が実行する形をそのまま載せれば拒否する。
+`KEY=` 直後や backslash 直後の bang は inline command の開始にならない。
+
+本文中の `allowed-tools` / `hooks` という説明や YAML コード例、frontmatter の `metadata` 内の
+同名 key はこの検査の対象外。`references/` / `assets/` / 非配置の `evals/` の説明文も entrypoint
+として解析しない。既存の injection / 実行 bit / symlink 検査の対象範囲は変更しない。
 
 ## Required fields
 
@@ -204,6 +245,7 @@ rules:
 - absolute path は禁止。
 - private planning tool の URL は書かない。
 - source path は `shared/` 配下に置く。
+- skill に生成する source は、形式によらず上記の [skill source の制約](#skill-source-の制約) に従う。
 
 ## Optional fields
 
