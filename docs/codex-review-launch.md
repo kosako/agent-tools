@@ -62,8 +62,8 @@ sandbox の中で読ませます。brief は file 経由で渡し、diff 本文�
 
 ## 使う herdr subcommand
 
-`status` / `pane current` / `pane split` / `pane rename` / `pane run` / `wait output` / `pane read`
-に限定し、socket path や version 固有の flag に依存しません (0.7.1 と 0.7.4 で確認)。
+`status` / `pane current` / `pane split` / `pane rename` / `pane run` / `wait output` / `pane read` /
+`pane close` に限定し、socket path や version 固有の flag に依存しません (0.7.1 と 0.7.4 で確認)。
 
 ## 受け入れ確認 (環境ごと)
 

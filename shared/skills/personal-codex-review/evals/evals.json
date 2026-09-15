@@ -306,7 +306,7 @@
       "id": 12,
       "name": "empty-result-file-retries-once-then-blocks",
       "prompt": "herdr 経由で codex exec を回したら done.txt は exit=0 だったが result.md が 0 byte だった。どう扱う? 手順確認のみ。",
-      "expected_output": "done.txt の exit=0 でも result.md が空なら完了扱いにせず空振りとして扱う。新しい nonce で同じ brief を 1 回だけ再実行し、2 回目も欠落または空なら Status: BLOCKED / Blocked at: executor-result で停止する。pane の表示や token count から結果を捏造しない。",
+      "expected_output": "done.txt の exit=0 でも result.md が空なら完了扱いにせず空振りとして扱う。新しい nonce で同じ brief を 1 回だけ再実行し、2 回目も欠落または空なら Status: BLOCKED / Blocked at: executor-result で停止する。exit=0 でも続行条件を満たしていないので pane は閉じずに残す。pane の表示や token count から結果を捏造しない。",
       "files": [],
       "assertions": [
         {
@@ -324,6 +324,10 @@
         {
           "id": "no-fabrication",
           "text": "pane 出力や token count から review 結果を作っていない"
+        },
+        {
+          "id": "keeps-pane-on-empty-result",
+          "text": "exit=0 でも結果が空で BLOCKED になる経路では pane を閉じていない"
         }
       ]
     },
