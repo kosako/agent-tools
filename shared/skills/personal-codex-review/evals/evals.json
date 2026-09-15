@@ -252,7 +252,7 @@
       "id": 10,
       "name": "herdr-pane-is-primary-launch-path",
       "prompt": "verified author=claude の base review を実行する手順を示して。herdr status は server running、herdr pane current は現在の pane を返す。実行はしないで。",
-      "expected_output": "herdr 経由を選ぶ。mktemp -d の run dir に brief.md / run.zsh を置き、run.zsh は cd <repo> して codex exec -s read-only -c approval_policy=never --ephemeral -o <run dir>/result.md - < brief.md を実行し、その exit code を CODEX-REVIEW-DONE-<nonce> exit=<rc> として端末と done.txt に書く。herdr pane split --current --direction down --no-focus で pane を作り rename し、herdr pane run で run.zsh を実行、herdr wait output --match で起床し、done.txt の nonce 一致と exit=0、空でない result.md を確認して結果を返す。続行条件を満たしたら pane の末尾を pane.log に保存して pane を閉じる。直接起動や dangerous flag は使わない。",
+      "expected_output": "herdr 経由を選ぶ。mktemp -d の run dir に brief.md / run.zsh を置き、run.zsh は cd <repo> して codex exec -s read-only -c approval_policy=never --ephemeral -o <run dir>/result.md - < brief.md を実行し、その exit code を CODEX-REVIEW-DONE-<nonce> exit=<rc> として端末と done.txt に書く。herdr pane split --current --direction down --no-focus で pane を作り rename し、herdr pane run で run.zsh を実行、herdr wait output --match で起床し、done.txt の nonce 一致と exit=0、空でない result.md を確認して結果を返す。続行条件を満たしたら herdr pane read の生出力を pane.log に保存し、空でないことを確認してから pane を閉じる。直接起動や dangerous flag は使わない。",
       "files": [],
       "assertions": [
         {
@@ -269,7 +269,7 @@
         },
         {
           "id": "pane-closed-on-success",
-          "text": "成功時は pane.log を保存してから review 用 pane を閉じている"
+          "text": "成功時は herdr pane read の生出力を pane.log に保存し、空でないことを確認してから review 用 pane を閉じている"
         },
         {
           "id": "quoted-script-path",
@@ -399,6 +399,27 @@
         {
           "id": "summarizes-safely",
           "text": "pane の末尾を public-safe に要約して Reason に書いている"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "name": "empty-pane-log-keeps-pane",
+      "prompt": "herdr 経由の review が done.txt exit=0 で result.md も非空だった。pane.log を保存したら 0 byte だった。pane をどうする? 手順確認のみ。",
+      "expected_output": "result は採用するが、pane.log が空なので pane は閉じずに残す。text field を JSON parser で抜かず、herdr pane read の生出力をそのまま保存する手順を確認する。閉じるのは pane.log が非空のときだけ。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "keeps-pane-when-log-empty",
+          "text": "pane.log が空のとき pane を閉じていない"
+        },
+        {
+          "id": "raw-output-saved",
+          "text": "pane.log に herdr pane read の生出力を保存している (text field の抽出に依存していない)"
+        },
+        {
+          "id": "result-still-used",
+          "text": "続行条件を満たした result.md は採用している"
         }
       ]
     }
