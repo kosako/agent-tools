@@ -422,6 +422,31 @@
           "text": "続行条件を満たした result.md は採用している"
         }
       ]
+    },
+    {
+      "id": 17,
+      "name": "paths-are-shell-literals",
+      "prompt": "herdr 経由で verified author=claude の base review を実行する手順を示して。repo root は /Users/x/sr c/$(touch pwned)/repo、mktemp -d が返した run dir は /tmp/tmp.a'b`id`\" です。実行はしないで。",
+      "expected_output": "run script では repo root / run dir / nonce を shell literal として escape し (値を ' で囲み、内側の ' を '\\'' に置換)、script 先頭の変数に 1 回だけ埋め込んで以降は \"$repo\" / \"$run\" で参照する。値を \"…\" の中へ直接展開しない。herdr pane run に渡す command は pane shell 用に script path を literal 化し、その文字列を自分の shell 経由で渡すならもう一段 literal 化する (2 段)。$( ) やバッククォートが command 置換として評価される形にしない。判定契約 (done.txt の nonce 一致・exit=0、空でない result.md) は変えない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "single-quote-literals",
+          "text": "path と nonce を単引用の shell literal として埋め込み、内側の ' を '\\'' に置換している"
+        },
+        {
+          "id": "no-bare-expansion",
+          "text": "値を \"…\" の中へ直接展開した形 (cd \"<repo root>\" など) を使っていない"
+        },
+        {
+          "id": "two-layer-pane-run",
+          "text": "呼び出し元 shell を経由するなら pane run の command を 2 段で escape し、argv を直接組む経路なら内側 1 段で足りると区別している"
+        },
+        {
+          "id": "no-command-substitution",
+          "text": "$( ) やバッククォートを含む path が command 置換として評価される形になっていない"
+        }
+      ]
     }
   ]
 }

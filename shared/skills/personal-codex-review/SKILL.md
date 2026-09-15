@@ -161,16 +161,27 @@ production review の process verdict mapping は
 ## 5. 実行と完了判定
 
 run 用の directory を `mktemp -d` で作り、`brief.md`、`result.md` (出力先)、`done.txt` (完了記録)、
-`run.zsh` を置きます。run script は次の形で、Codex の flag は固定です。path は生成時に展開し、
-script 内では必ず引用します。
+`run.zsh` を置きます。run script は次の形で、Codex の flag は固定です。
+
+path と nonce は生成時に **shell literal として escape** し、script 先頭の変数に 1 回だけ埋め込みます。
+以降は `"$repo"` / `"$run"` のように二重引用の変数展開で参照します。escape の規則は「値全体を `'` で
+囲み、値の中の `'` を `'\''` に置換する」で、これで空白・`$( )`・バッククォート・`"`・`'` がすべて
+literal になります。**値をそのまま `"…"` の中に展開しません**。この script は Codex の read-only
+sandbox が適用される前に走るため、引用の破綻はそのまま呼び出し元の権限での command 置換になります。
+
+literal 化の結果は引用符を含む値そのものです (例: `sr c/re'po` → `'sr c/re'\''po'`)。
+代入の右辺にそのまま置き、さらに引用符で囲みません。
 
 ```sh
 #!/bin/zsh
-cd "<repo root>" || exit 90
+repo=<repo root の shell literal>
+run=<run dir の shell literal>
+nonce=<nonce の shell literal>
+cd "$repo" || exit 90
 codex exec -s read-only -c approval_policy="never" --ephemeral \
-  -o "<run dir>/result.md" - < "<run dir>/brief.md"
+  -o "$run/result.md" - < "$run/brief.md"
 rc=$?
-printf 'CODEX-REVIEW-DONE-%s exit=%s\n' "<nonce>" "$rc" | tee "<run dir>/done.txt"
+printf 'CODEX-REVIEW-DONE-%s exit=%s\n' "$nonce" "$rc" | tee "$run/done.txt"
 exit "$rc"
 ```
 
@@ -185,15 +196,26 @@ capability 確認がない `-m` や model-specific config を足しません。�
 
 ### herdr 経由
 
+次は shell を介さず argv を直接組む経路の形です (各 `<…>` は 1 argument として渡す値そのもので、
+この経路では escape は pane shell 用の 1 段だけです)。
+
 ```sh
-herdr pane split --current --direction down --ratio 0.3 --cwd "<repo root>" --no-focus
+herdr pane split --current --direction down --ratio 0.3 --cwd <repo root> --no-focus
 herdr pane rename <pane-id> review-<short-target>
-herdr pane run <pane-id> "zsh '<run dir>/run.zsh'"
-herdr pane wait-output <pane-id> --match "CODEX-REVIEW-DONE-<nonce>" --timeout 300000
+herdr pane run <pane-id> <"zsh " + run script path の shell literal>
+herdr pane wait-output <pane-id> --match CODEX-REVIEW-DONE-<nonce> --timeout 300000
 ```
 
-- `pane run` の command は pane の shell が解釈するので、script path は内側で単引用します
-  (`mktemp -d` の親 directory に空白が含まれても分割されないように)。
+呼び出し元の shell を経由して打つ場合は、上の各 argument をさらにもう一段 literal 化します
+(`pane run` の command は内側と合わせて 2 段)。
+
+- `pane run` の command は **pane の shell が解釈する** ので、script path を pane shell 用に shell
+  literal 化します (上と同じ規則)。さらにその command 文字列を自分の shell 経由で `herdr` に渡す
+  場合は、**呼び出し元の shell 用にもう一段** literal 化します。escape は 2 段あり、内側だけでは
+  呼び出し元で `$( )` やバッククォートが評価されます。shell を介さず argv を直接組める経路なら
+  外側は不要です。空白だけを想定した引用で済ませません。`pane split --cwd` や
+  `pane wait-output --match` に渡す値も、呼び出し元の shell を経由するなら同じ規則で literal 化
+  します (こちらは herdr へ渡る argv で、pane shell は解釈しないので 1 段です)。
 - `pane wait-output` は一致すると `"type":"output_matched"` を含む JSON、timeout すると
   `"code":"timeout"` の error JSON を返します (0.9.0 で実測)。一致時の JSON には pane の生テキストが入り、
   制御文字で JSON parser が失敗することがあるため、起床の判定は raw 出力に
@@ -219,7 +241,8 @@ detach / background にせず、複合コマンドの末尾にも埋め込みま
 
 ### 人手 hand-off (BLOCKED からの続行)
 
-`launch-path` で停止したときは、Next step に `zsh '<run dir>/run.zsh'` と run dir の path を書きます。
+`launch-path` で停止したときは、Next step に `zsh <run script path の shell literal>` と run dir の
+path を書きます (人が shell に貼る文字列なので、ここでも同じ規則で literal 化します)。
 人が自分の terminal で実行すると `done.txt` と `result.md` が同じ run dir に残るので、caller は
 `done.txt` の nonce が今回のものと一致し `exit=0` で、`result.md` が空でないことを確認してから
 結果を読みます。端末に出た sentinel や人の口頭報告だけで完了とみなしません。
