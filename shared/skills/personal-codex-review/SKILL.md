@@ -160,16 +160,23 @@ production review の process verdict mapping は
 
 ## 5. 実行と完了判定
 
-run 用の directory を `mktemp -d` で作り、`brief.md`、`result.md` (出力先)、`run.zsh` を置きます。
-run script は次の形で、Codex の flag は固定です。
+run 用の directory を `mktemp -d` で作り、`brief.md`、`result.md` (出力先)、`done.txt` (完了記録)、
+`run.zsh` を置きます。run script は次の形で、Codex の flag は固定です。path は生成時に展開し、
+script 内では必ず引用します。
 
 ```sh
 #!/bin/zsh
 cd "<repo root>" || exit 90
 codex exec -s read-only -c approval_policy="never" --ephemeral \
   -o "<run dir>/result.md" - < "<run dir>/brief.md"
-echo "CODEX-REVIEW-DONE-<nonce> exit=$?"
+rc=$?
+printf 'CODEX-REVIEW-DONE-%s exit=%s\n' "<nonce>" "$rc" | tee "<run dir>/done.txt"
+exit "$rc"
 ```
+
+完了の正本は `done.txt` です (nonce が一致し `exit=0`)。端末に出る同じ行 (sentinel) は
+`herdr wait output` の起床信号として使い、判定は file で行います。どの経路でも、続行条件は
+「`done.txt` の nonce 一致と `exit=0`」かつ「`result.md` が存在し空でない」の両方です。
 
 `--ephemeral` は Codex 自身の review session state を永続化しないための副作用境界で、必須条件です。
 model family や reasoning effort は固定せず、現在の user / project selection に委ねます。明示依頼と
@@ -181,21 +188,35 @@ capability 確認がない `-m` や model-specific config を足しません。�
 ```sh
 herdr pane split --current --direction down --ratio 0.3 --cwd "<repo root>" --no-focus
 herdr pane rename <pane-id> review-<short-target>
-herdr pane run <pane-id> "zsh <run dir>/run.zsh"
+herdr pane run <pane-id> "zsh '<run dir>/run.zsh'"
 herdr wait output <pane-id> --match "CODEX-REVIEW-DONE-<nonce>" --timeout 300000
 ```
 
-- `wait output` が timeout したら `herdr pane read <pane-id> --source recent-unwrapped --lines 40`
-  で状況を読み、codex process がまだ動いていれば同じ wait を繰り返します (合計 3 回まで)。
-  それでも sentinel が出なければ `Blocked at: executor-exit` で停止します。
-- sentinel の `exit=` が 0 以外なら `Blocked at: executor-exit` とし、pane の末尾を public-safe に
+- `pane run` の command は pane の shell が解釈するので、script path は内側で単引用します
+  (`mktemp -d` の親 directory に空白が含まれても分割されないように)。
+- `wait output` は一致すると `"type":"output_matched"` を含む JSON、timeout すると
+  `"code":"timeout"` の error JSON を返します。一致時の JSON には pane の生テキストが入り、
+  制御文字で JSON parser が失敗することがあるため、起床の判定は raw 出力に
+  `CODEX-REVIEW-DONE-<nonce>` が含まれるかで行い、exit code は `done.txt` から読みます。
+- timeout したら `herdr pane read <pane-id> --source recent-unwrapped --lines 40` で状況を読み、
+  codex process がまだ動いていれば同じ wait を繰り返します (合計 3 回まで)。それでも
+  `done.txt` が現れなければ `Blocked at: executor-exit` で停止します。
+- `done.txt` の `exit=` が 0 以外なら `Blocked at: executor-exit` とし、pane の末尾を public-safe に
   要約して Reason に書きます。
 - pane は閉じません。一次情報として残し、閉じるかは人か caller が決めます。
 
 ### 直接起動 (fallback)
 
 §2 の条件を満たすときだけ、同じ `run.zsh` を foreground の単独 process として実行します。
-detach / background にせず、複合コマンドの末尾にも埋め込みません。判定は herdr 経路と同じです。
+detach / background にせず、複合コマンドの末尾にも埋め込みません。判定は `done.txt` と
+`result.md` で行い、herdr 経路と同じです。
+
+### 人手 hand-off (BLOCKED からの続行)
+
+`launch-path` で停止したときは、Next step に `zsh '<run dir>/run.zsh'` と run dir の path を書きます。
+人が自分の terminal で実行すると `done.txt` と `result.md` が同じ run dir に残るので、caller は
+`done.txt` の nonce が今回のものと一致し `exit=0` で、`result.md` が空でないことを確認してから
+結果を読みます。端末に出た sentinel や人の口頭報告だけで完了とみなしません。
 
 ### 結果 file の判定 (空振り)
 
@@ -236,8 +257,8 @@ Independence: not-established
 ```
 
 OID 以外の untrusted metadata や secret を停止結果へ転記しません。`launch-path` の Next step には
-run script の path と `result.md` の path を書き、人が実行した結果 file を caller が読めば同じ判定で
-続行できることを添えます。
+run script の path と run dir を書き、人が実行したあと `done.txt` (nonce 一致・`exit=0`) と空でない
+`result.md` を確認すれば同じ判定で続行できることを添えます。
 
 結果は caller にそのまま返します。明らかな誤検知も黙って削らず、caller 側の評価を別記します。
 この verdict は code review process の判定であり、CI / required checks / branch protection / public
@@ -256,5 +277,6 @@ safety を含む PR 全体の merge readiness ではありません。
   呼び出し元 sandbox の無効化、`sandbox-exec` probe で入れ子を回避・検査する。
 - diff や周辺コードを brief に埋め込む。brief を shell 引数に埋め込む。
 - expected PR head / base と違う checkout、または dirty worktree のまま base review を始める。
-- 空の結果 file を完了扱いにする。再実行を 2 回以上繰り返す。
+- 空の結果 file を完了扱いにする。`done.txt` の nonce と exit code を確認せずに続行する。再実行を
+  2 回以上繰り返す。
 - model family / fixed effort / 観測時間を selection metadata や必須 contract に焼き込む。

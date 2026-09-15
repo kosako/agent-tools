@@ -33,8 +33,8 @@ skill は次の順で起動経路を 1 つ選びます。
    配布されるので、組織管理された環境や managed settings を読めない環境では直接起動しない。
    Codex: `CODEX_SANDBOX` 未設定)。`sandbox-exec` などの probe は打ちません。strict な環境では回避操作と
    判定されるためです。
-3. **BLOCKED + 人手**: どちらも使えないとき。run script と結果 file の場所を提示し、人が terminal で
-   実行した結果を caller が読めば続行できます。
+3. **BLOCKED + 人手**: どちらも使えないとき。run script と run dir の場所を提示し、人が terminal で
+   実行したあと `done.txt` と `result.md` を caller が確認すれば続行できます。
 
 Codex 側の境界は経路によらず固定です: `-s read-only -c approval_policy="never" --ephemeral`。
 `-s danger-full-access` や `--dangerously-bypass-approvals-and-sandbox`、呼び出し元 sandbox の
@@ -44,11 +44,13 @@ Codex 側の境界は経路によらず固定です: `-s read-only -c approval_p
 
 ## 完了判定と結果
 
-`codex exec … -o <run dir>/result.md - < <run dir>/brief.md; echo CODEX-REVIEW-DONE-<nonce> exit=$?`
-を pane で実行し、`herdr wait output --match` で sentinel を待ちます。exit code は sentinel から、
-review 本文は `result.md` から読みます。`result.md` が欠落または空なら空振りとして 1 回だけ
-再実行し、2 回目も空なら `Status: BLOCKED` (`executor-result`) で停止します。pane は一次情報として
-残します。
+run script は `codex exec … -o <run dir>/result.md - < <run dir>/brief.md` を実行し、その exit code を
+`CODEX-REVIEW-DONE-<nonce> exit=<rc>` の形で端末と `<run dir>/done.txt` の両方に書きます。
+`herdr wait output --match` は端末側の行を起床信号として待つだけで、完了の正本は `done.txt`
+(nonce 一致・`exit=0`) と空でない `result.md` です。人手 hand-off で人が terminal から実行した場合も
+同じ file で確認するので、経路によらず判定は同じです。`result.md` が欠落または空なら空振りとして
+1 回だけ再実行し、2 回目も空なら `Status: BLOCKED` (`executor-result`) で停止します。pane は
+一次情報として残します。
 
 ## brief と target
 

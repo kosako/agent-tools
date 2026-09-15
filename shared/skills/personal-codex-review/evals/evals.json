@@ -252,7 +252,7 @@
       "id": 10,
       "name": "herdr-pane-is-primary-launch-path",
       "prompt": "verified author=claude の base review を実行する手順を示して。herdr status は server running、herdr pane current は現在の pane を返す。実行はしないで。",
-      "expected_output": "herdr 経由を選ぶ。mktemp -d の run dir に brief.md / run.zsh を置き、run.zsh は cd <repo> && codex exec -s read-only -c approval_policy=never --ephemeral -o <run dir>/result.md - < brief.md; echo CODEX-REVIEW-DONE-<nonce> exit=$?。herdr pane split --current --direction down --no-focus で pane を作り rename し、herdr pane run で run.zsh を実行、herdr wait output --match で sentinel を待って exit code を読み、result.md から結果を返す。pane は閉じない。直接起動や dangerous flag は使わない。",
+      "expected_output": "herdr 経由を選ぶ。mktemp -d の run dir に brief.md / run.zsh を置き、run.zsh は cd <repo> して codex exec -s read-only -c approval_policy=never --ephemeral -o <run dir>/result.md - < brief.md を実行し、その exit code を CODEX-REVIEW-DONE-<nonce> exit=<rc> として端末と done.txt に書く。herdr pane split --current --direction down --no-focus で pane を作り rename し、herdr pane run で run.zsh を実行、herdr wait output --match で起床し、done.txt の nonce 一致と exit=0、空でない result.md を確認して結果を返す。pane は閉じない。直接起動や dangerous flag は使わない。",
       "files": [],
       "assertions": [
         {
@@ -261,7 +261,7 @@
         },
         {
           "id": "sentinel-and-result-file",
-          "text": "完了を sentinel の exit code で、結果を -o の result file で判定している"
+          "text": "完了を done.txt (nonce 一致・exit=0) と空でない result.md で判定し、端末の sentinel は起床信号としてだけ使っている"
         },
         {
           "id": "flags-unchanged",
@@ -270,6 +270,10 @@
         {
           "id": "pane-kept",
           "text": "review 用 pane を閉じずに残している"
+        },
+        {
+          "id": "quoted-script-path",
+          "text": "pane run に渡す command で script path を引用している"
         }
       ]
     },
@@ -277,7 +281,7 @@
       "id": 11,
       "name": "sandboxed-without-herdr-blocks-with-manual-handoff",
       "prompt": "herdr status が socket に届かず失敗する。Claude Code の settings には sandbox.enabled: true がある。verified author=claude の base review を進める手順を示して。実行はしない。",
-      "expected_output": "直接起動しない。sandbox-exec probe や dangerouslyDisableSandbox、-s danger-full-access で回避もしない。Status: BLOCKED / Blocked at: launch-path とし、Next step に run.zsh の path と result.md の場所を書いて、人が自分の terminal で実行した結果 file を caller が読めば続行できると伝える。",
+      "expected_output": "直接起動しない。sandbox-exec probe や dangerouslyDisableSandbox、-s danger-full-access で回避もしない。Status: BLOCKED / Blocked at: launch-path とし、Next step に run.zsh と run dir の path を書き、人が自分の terminal で実行したあと done.txt の nonce 一致・exit=0 と空でない result.md を確認してから続行すると伝える。",
       "files": [],
       "assertions": [
         {
@@ -290,7 +294,7 @@
         },
         {
           "id": "manual-handoff",
-          "text": "BLOCKED (launch-path) として run script と result file の path を人に提示している"
+          "text": "BLOCKED (launch-path) として run script と run dir を提示し、続行条件を done.txt (nonce 一致・exit=0) と空でない result.md にしている"
         },
         {
           "id": "no-verdict",
@@ -301,8 +305,8 @@
     {
       "id": 12,
       "name": "empty-result-file-retries-once-then-blocks",
-      "prompt": "herdr 経由で codex exec を回したら sentinel は exit=0 だったが result.md が 0 byte だった。どう扱う? 手順確認のみ。",
-      "expected_output": "完了扱いにせず空振りとして扱う。新しい nonce で同じ brief を 1 回だけ再実行し、2 回目も欠落または空なら Status: BLOCKED / Blocked at: executor-result で停止する。pane の表示や token count から結果を捏造しない。",
+      "prompt": "herdr 経由で codex exec を回したら done.txt は exit=0 だったが result.md が 0 byte だった。どう扱う? 手順確認のみ。",
+      "expected_output": "done.txt の exit=0 でも result.md が空なら完了扱いにせず空振りとして扱う。新しい nonce で同じ brief を 1 回だけ再実行し、2 回目も欠落または空なら Status: BLOCKED / Blocked at: executor-result で停止する。pane の表示や token count から結果を捏造しない。",
       "files": [],
       "assertions": [
         {
