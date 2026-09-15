@@ -169,8 +169,8 @@ path と nonce は生成時に **shell literal として escape** し、script �
 literal になります。**値をそのまま `"…"` の中に展開しません**。この script は Codex の read-only
 sandbox が適用される前に走るため、引用の破綻はそのまま呼び出し元の権限での command 置換になります。
 
-literal 化の結果は引用符を含む値そのものです (例: `/Users/me/sr c/re'po` →
-`'/Users/me/sr c/re'\''po'`)。代入の右辺にそのまま置き、さらに引用符で囲みません。
+literal 化の結果は引用符を含む値そのものです (例: `sr c/re'po` → `'sr c/re'\''po'`)。
+代入の右辺にそのまま置き、さらに引用符で囲みません。
 
 ```sh
 #!/bin/zsh
