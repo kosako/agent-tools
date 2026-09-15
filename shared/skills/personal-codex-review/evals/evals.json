@@ -440,7 +440,7 @@
         },
         {
           "id": "two-layer-pane-run",
-          "text": "pane run の command を pane shell 用と呼び出し元 shell 用の 2 段に分けて escape している"
+          "text": "呼び出し元 shell を経由するなら pane run の command を 2 段で escape し、argv を直接組む経路なら内側 1 段で足りると区別している"
         },
         {
           "id": "no-command-substitution",

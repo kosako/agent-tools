@@ -169,11 +169,14 @@ path と nonce は生成時に **shell literal として escape** し、script �
 literal になります。**値をそのまま `"…"` の中に展開しません**。この script は Codex の read-only
 sandbox が適用される前に走るため、引用の破綻はそのまま呼び出し元の権限での command 置換になります。
 
+literal 化の結果は引用符を含む値そのものです (例: `/Users/me/sr c/re'po` →
+`'/Users/me/sr c/re'\''po'`)。代入の右辺にそのまま置き、さらに引用符で囲みません。
+
 ```sh
 #!/bin/zsh
-repo='<repo root を shell literal 化>'
-run='<run dir を shell literal 化>'
-nonce='<nonce を shell literal 化>'
+repo=<repo root の shell literal>
+run=<run dir の shell literal>
+nonce=<nonce の shell literal>
 cd "$repo" || exit 90
 codex exec -s read-only -c approval_policy="never" --ephemeral \
   -o "$run/result.md" - < "$run/brief.md"
@@ -193,12 +196,18 @@ capability 確認がない `-m` や model-specific config を足しません。�
 
 ### herdr 経由
 
+次は shell を介さず argv を直接組む経路の形です (各 `<…>` は 1 argument として渡す値そのもので、
+この経路では escape は pane shell 用の 1 段だけです)。
+
 ```sh
-herdr pane split --current --direction down --ratio 0.3 --cwd "<repo root>" --no-focus
+herdr pane split --current --direction down --ratio 0.3 --cwd <repo root> --no-focus
 herdr pane rename <pane-id> review-<short-target>
-herdr pane run <pane-id> "zsh <run script path を shell literal 化>"
-herdr pane wait-output <pane-id> --match "CODEX-REVIEW-DONE-<nonce>" --timeout 300000
+herdr pane run <pane-id> <"zsh " + run script path の shell literal>
+herdr pane wait-output <pane-id> --match CODEX-REVIEW-DONE-<nonce> --timeout 300000
 ```
+
+呼び出し元の shell を経由して打つ場合は、上の各 argument をさらにもう一段 literal 化します
+(`pane run` の command は内側と合わせて 2 段)。
 
 - `pane run` の command は **pane の shell が解釈する** ので、script path を pane shell 用に shell
   literal 化します (上と同じ規則)。さらにその command 文字列を自分の shell 経由で `herdr` に渡す
@@ -232,7 +241,8 @@ detach / background にせず、複合コマンドの末尾にも埋め込みま
 
 ### 人手 hand-off (BLOCKED からの続行)
 
-`launch-path` で停止したときは、Next step に `zsh '<run dir>/run.zsh'` と run dir の path を書きます。
+`launch-path` で停止したときは、Next step に `zsh <run script path の shell literal>` と run dir の
+path を書きます (人が shell に貼る文字列なので、ここでも同じ規則で literal 化します)。
 人が自分の terminal で実行すると `done.txt` と `result.md` が同じ run dir に残るので、caller は
 `done.txt` の nonce が今回のものと一致し `exit=0` で、`result.md` が空でないことを確認してから
 結果を読みます。端末に出た sentinel や人の口頭報告だけで完了とみなしません。
