@@ -50,8 +50,9 @@ run script は `codex exec … -o <run dir>/result.md - < <run dir>/brief.md` �
 (nonce 一致・`exit=0`) と空でない `result.md` です。人手 hand-off で人が terminal から実行した場合も
 同じ file で確認するので、経路によらず判定は同じです。`result.md` が欠落または空なら空振りとして
 1 回だけ再実行し、2 回目も空なら `Status: BLOCKED` (`executor-result`) で停止します。続行条件を
-満たした pane は `pane.log` を run dir に保存してから閉じ、満たさなかった pane (exit≠0、空振り、
-BLOCKED) だけを一次情報として残します。review のたびに pane が溜まらないようにするためです。
+満たした pane は `herdr pane read` の生出力を `pane.log` として run dir に保存し、空でないことを
+確認してから閉じ、満たさなかった pane (exit≠0、空振り、BLOCKED、`pane.log` が空) だけを一次情報として
+残します。review のたびに pane が溜まらないようにするためです。
 
 ## brief と target
 
