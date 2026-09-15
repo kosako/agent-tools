@@ -175,7 +175,7 @@ exit "$rc"
 ```
 
 完了の正本は `done.txt` です (nonce が一致し `exit=0`)。端末に出る同じ行 (sentinel) は
-`herdr wait output` の起床信号として使い、判定は file で行います。どの経路でも、続行条件は
+`herdr pane wait-output` の起床信号として使い、判定は file で行います。どの経路でも、続行条件は
 「`done.txt` の nonce 一致と `exit=0`」かつ「`result.md` が存在し空でない」の両方です。
 
 `--ephemeral` は Codex 自身の review session state を永続化しないための副作用境界で、必須条件です。
@@ -189,12 +189,12 @@ capability 確認がない `-m` や model-specific config を足しません。�
 herdr pane split --current --direction down --ratio 0.3 --cwd "<repo root>" --no-focus
 herdr pane rename <pane-id> review-<short-target>
 herdr pane run <pane-id> "zsh '<run dir>/run.zsh'"
-herdr wait output <pane-id> --match "CODEX-REVIEW-DONE-<nonce>" --timeout 300000
+herdr pane wait-output <pane-id> --match "CODEX-REVIEW-DONE-<nonce>" --timeout 300000
 ```
 
 - `pane run` の command は pane の shell が解釈するので、script path は内側で単引用します
   (`mktemp -d` の親 directory に空白が含まれても分割されないように)。
-- `wait output` は一致すると `"type":"output_matched"` を含む JSON、timeout すると
+- `pane wait-output` は一致すると `"type":"output_matched"` を含む JSON、timeout すると
   `"code":"timeout"` の error JSON を返します。一致時の JSON には pane の生テキストが入り、
   制御文字で JSON parser が失敗することがあるため、起床の判定は raw 出力に
   `CODEX-REVIEW-DONE-<nonce>` が含まれるかで行い、exit code は `done.txt` から読みます。
