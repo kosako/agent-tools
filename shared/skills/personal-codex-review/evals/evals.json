@@ -252,7 +252,7 @@
       "id": 10,
       "name": "herdr-pane-is-primary-launch-path",
       "prompt": "verified author=claude の base review を実行する手順を示して。herdr status は server running、herdr pane current は現在の pane を返す。実行はしないで。",
-      "expected_output": "herdr 経由を選ぶ。mktemp -d の run dir に brief.md / run.zsh を置き、run.zsh は cd <repo> して codex exec -s read-only -c approval_policy=never --ephemeral -o <run dir>/result.md - < brief.md を実行し、その exit code を CODEX-REVIEW-DONE-<nonce> exit=<rc> として端末と done.txt に書く。herdr pane split --current --direction down --no-focus で pane を作り rename し、herdr pane run で run.zsh を実行、herdr wait output --match で起床し、done.txt の nonce 一致と exit=0、空でない result.md を確認して結果を返す。pane は閉じない。直接起動や dangerous flag は使わない。",
+      "expected_output": "herdr 経由を選ぶ。mktemp -d の run dir に brief.md / run.zsh を置き、run.zsh は cd <repo> して codex exec -s read-only -c approval_policy=never --ephemeral -o <run dir>/result.md - < brief.md を実行し、その exit code を CODEX-REVIEW-DONE-<nonce> exit=<rc> として端末と done.txt に書く。herdr pane split --current --direction down --no-focus で pane を作り rename し、herdr pane run で run.zsh を実行、herdr wait output --match で起床し、done.txt の nonce 一致と exit=0、空でない result.md を確認して結果を返す。続行条件を満たしたら pane の末尾を pane.log に保存して pane を閉じる。直接起動や dangerous flag は使わない。",
       "files": [],
       "assertions": [
         {
@@ -268,8 +268,8 @@
           "text": "-s read-only / approval_policy never / --ephemeral を維持し、danger-full-access や bypass flag を使っていない"
         },
         {
-          "id": "pane-kept",
-          "text": "review 用 pane を閉じずに残している"
+          "id": "pane-closed-on-success",
+          "text": "成功時は pane.log を保存してから review 用 pane を閉じている"
         },
         {
           "id": "quoted-script-path",
@@ -374,6 +374,27 @@
         {
           "id": "manual-handoff",
           "text": "BLOCKED (launch-path) として run script と result file の path を提示している"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "name": "failed-review-keeps-pane",
+      "prompt": "herdr 経由で codex exec を回したら done.txt が exit=1 だった。pane と結果の扱いを示して。手順確認のみ。",
+      "expected_output": "Status: BLOCKED / Blocked at: executor-exit とし、pane の末尾を public-safe に要約して Reason に書く。pane は閉じずに残し、review verdict は作らない。result.md があっても exit≠0 なので採用しない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "blocks-on-nonzero-exit",
+          "text": "exit≠0 を executor-exit の BLOCKED として扱い、verdict を作っていない"
+        },
+        {
+          "id": "keeps-failed-pane",
+          "text": "失敗した pane を閉じずに残している"
+        },
+        {
+          "id": "summarizes-safely",
+          "text": "pane の末尾を public-safe に要約して Reason に書いている"
         }
       ]
     }
