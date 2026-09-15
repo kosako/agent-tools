@@ -25,10 +25,14 @@ sandbox が無効な環境では同じ flag の `codex exec -s read-only` が co
 skill は次の順で起動経路を 1 つ選びます。
 
 1. **herdr 経由 (primary)**: `herdr status` と `herdr pane current` が通るとき。review 用 pane を
-   `--split down --no-focus` で作り、`run.zsh` を `herdr pane run` で実行する。
+   `herdr pane split --current --direction down --no-focus` で作り、`run.zsh` を `herdr pane run` で
+   実行する。
 2. **直接起動 (fallback)**: herdr が使えず、かつ自分が sandbox の外にいると設定と環境変数で確認
-   できたときだけ (Claude Code: settings に `sandbox.enabled: true` が無い。Codex: `CODEX_SANDBOX`
-   未設定)。`sandbox-exec` などの probe は打ちません。strict な環境では回避操作と判定されるためです。
+   できたときだけ (Claude Code: user / project / managed の全 scope の settings に
+   `sandbox.enabled: true` が無い。managed settings は file のほか MDM や claude.ai console からも
+   配布されるので、組織管理された環境や managed settings を読めない環境では直接起動しない。
+   Codex: `CODEX_SANDBOX` 未設定)。`sandbox-exec` などの probe は打ちません。strict な環境では回避操作と
+   判定されるためです。
 3. **BLOCKED + 人手**: どちらも使えないとき。run script と結果 file の場所を提示し、人が terminal で
    実行した結果を caller が読めば続行できます。
 

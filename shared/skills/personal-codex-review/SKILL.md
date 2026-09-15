@@ -81,10 +81,14 @@ hand-off します。reviewer を推測せず、user config も無断で変更�
    現在の pane を返す。herdr server が pane の shell で process を起動するため、呼び出し元の
    sandbox を継承しません。この経路を使える限り、直接起動は選びません。
 2. **直接起動 (fallback)**: herdr が使えず、かつ自分が sandbox の外にいると確認できたときだけ。
-   確認は設定と環境変数の読み取りで行います。Claude Code なら user / project の settings
-   (`settings.json` / `settings.local.json`) のどれにも `sandbox.enabled: true` が無いこと、
-   Codex 環境なら `CODEX_SANDBOX` が未設定であること。`sandbox-exec` などの probe を打って
-   sandbox を検査しません (strict な環境では回避操作と判定されます)。
+   確認は設定と環境変数の読み取りで行います。Claude Code なら有効な settings の全 scope に
+   `sandbox.enabled: true` が無いこと。対象は user / project の `settings.json` /
+   `settings.local.json` に加えて managed settings で、managed settings は system directory の
+   `managed-settings.json` のほか MDM policy や claude.ai console (server-managed settings) からも
+   配布されるため、file が無いことを policy が無い根拠にしません。組織が Claude Code を管理して
+   いる環境、または managed settings を読めない環境では直接起動を選ばず 3 へ進みます。Codex
+   環境なら `CODEX_SANDBOX` が未設定であること。`sandbox-exec` などの probe を打って sandbox を
+   検査しません (strict な環境では回避操作と判定されます)。
 3. **BLOCKED + 人手 hand-off**: どちらも使えない。`Blocked at: launch-path` とし、Next step に
    §5 の run script を人が自分の terminal で実行する手順と、結果 file の場所を書きます。
 
@@ -126,11 +130,13 @@ ref 名や caller の free text をそのまま brief に写しません。
   `git log --oneline <base-oid>..<head-oid>` で対象を取得させます。
 - **commit** (1 commit が導入した変更): caller の target をそのまま使わず、
   `git rev-parse --verify --end-of-options '<commit>^{commit}'` で commit object に解決した OID が
-  expected target と一致した場合だけ、`git show --stat <validated-oid>` と
-  `git diff <validated-oid>^ <validated-oid>` で取得させます。不正・不一致なら target-identity の
-  `Status: BLOCKED` で停止し、他の mode へ fallback しません。
+  expected target と一致した場合だけ、`git show --stat --patch <validated-oid>` で取得させます
+  (第一親との差分。root commit は親が無いので `<oid>^` を使わず、この形なら全追加として読めます)。
+  merge commit は commit mode の対象外で、base mode を使うよう caller に返します。不正・不一致なら
+  target-identity の `Status: BLOCKED` で停止し、他の mode へ fallback しません。
 - **uncommitted** (staged / unstaged / untracked changes): `git status --porcelain=v1
-  --untracked-files=all`、`git diff HEAD`、untracked file の内容で取得させます。
+  --untracked-files=all`、`git diff --cached` (staged)、`git diff` (unstaged)、untracked file の
+  内容で取得させます。`git diff HEAD` だけでは、stage 後に作業ツリーを戻した変更が消えます。
 
 mode は 1 つだけです。base の OID 対と commit の OID を同じ brief に併記しません。
 

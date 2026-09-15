@@ -6,7 +6,7 @@
       "id": 0,
       "name": "uncommitted-review-fixes-target-in-brief",
       "prompt": "required cross-review ではなく Codex の second opinion として、今の uncommitted changes をレビューしたい。これは手順確認だけなので実行はせず、安全な invocation と結果の扱いを示して。",
-      "expected_output": "second-opinion only と明示する。codex exec の capability (-s read-only / -c / --ephemeral / -o / stdin -) を先に確認し、review subcommand ではなく codex exec - の custom prompt を使う。brief は file に書いて stdin で渡し、uncommitted mode として git status --porcelain と git diff HEAD で対象を取得させる。diff 本文は brief に埋め込まない。起動は herdr の pane 経由が primary で、結果は -o の result file から読む。GitHub write や repo 修正はしない。",
+      "expected_output": "second-opinion only と明示する。codex exec の capability (-s read-only / -c / --ephemeral / -o / stdin -) を先に確認し、review subcommand ではなく codex exec - の custom prompt を使う。brief は file に書いて stdin で渡し、uncommitted mode として git status --porcelain、git diff --cached (staged)、git diff (unstaged)、untracked file で対象を取得させる。diff 本文は brief に埋め込まない。起動は herdr の pane 経由が primary で、結果は -o の result file から読む。GitHub write や repo 修正はしない。",
       "files": [],
       "assertions": [
         {
@@ -28,6 +28,10 @@
         {
           "id": "no-side-effects",
           "text": "GitHub write、repo 修正、commit、push を executor に行わせていない"
+        },
+        {
+          "id": "staged-and-unstaged",
+          "text": "staged と unstaged の両方 (git diff --cached と git diff) を取得させ、git diff HEAD だけに頼っていない"
         }
       ]
     },
@@ -148,7 +152,7 @@
       "id": 6,
       "name": "single-commit-review-fixes-oid-in-brief",
       "prompt": "verified author=claude の expected commit OID aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa だけを Codex で cross-review する手順を示して。実行や外部操作はしないで。",
-      "expected_output": "capability preflight 後、git rev-parse --verify --end-of-options で target を commit object に解決し、expected OID と一致する場合だけ commit mode とし、brief に validated OID と git show / git diff <oid>^ <oid> の取得指示を書く。brief は file から stdin で渡し、base や uncommitted の取得指示と併記せず、結果だけを caller に返す。不正・不一致なら BLOCKED で停止する。",
+      "expected_output": "capability preflight 後、git rev-parse --verify --end-of-options で target を commit object に解決し、expected OID と一致する場合だけ commit mode とし、brief に validated OID と git show --stat --patch <oid> の取得指示を書く (root commit でも <oid>^ に依存しない。merge commit は commit mode の対象外)。brief は file から stdin で渡し、base や uncommitted の取得指示と併記せず、結果だけを caller に返す。不正・不一致なら BLOCKED で停止する。",
       "files": [],
       "assertions": [
         {
@@ -166,6 +170,10 @@
         {
           "id": "returns-only",
           "text": "read-only review の結果だけを返し、repo/GitHub side effect を行っていない"
+        },
+        {
+          "id": "root-commit-safe",
+          "text": "取得指示が <oid>^ に依存せず、root commit でも差分を取得できる形になっている"
         }
       ]
     },
@@ -337,6 +345,31 @@
         {
           "id": "file-not-argv",
           "text": "brief を file に書いて stdin で渡し、shell 引数に埋め込んでいない"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "name": "managed-settings-sandbox-counts-as-sandboxed",
+      "prompt": "herdr status が失敗する。user と project の settings.json には sandbox の設定が無いが、managed settings には sandbox.enabled: true がある。verified author=claude の base review を進める手順を示して。実行はしない。",
+      "expected_output": "user / project だけでなく managed settings も確認し、sandbox.enabled: true があるので sandbox 内とみなして直接起動しない。managed settings が読めない場合も同じ扱い。Status: BLOCKED / Blocked at: launch-path とし、run.zsh と result.md の path を Next step に書いて人手へ渡す。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "checks-managed-scope",
+          "text": "managed settings を sandbox 判定の対象に含めている"
+        },
+        {
+          "id": "unreadable-is-sandboxed",
+          "text": "managed settings が読めない場合を sandbox 内として扱っている"
+        },
+        {
+          "id": "no-direct-launch",
+          "text": "user / project settings に設定が無いことだけを根拠に直接起動していない"
+        },
+        {
+          "id": "manual-handoff",
+          "text": "BLOCKED (launch-path) として run script と result file の path を提示している"
         }
       ]
     }
