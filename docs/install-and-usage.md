@@ -15,6 +15,9 @@
   (`gh` CLI 依存)。
 - `gh`(GitHub CLI)は asset の利用には不要です。repository へ変更を出す
   (Issue / PR)とき、および上記 probe / `personal-safe-gh` を使うときだけ使います。
+- [herdr](https://herdr.dev)(任意)は `personal-codex-review` が Codex を起動する launcher です。
+  無い環境では、呼び出し元の Bash sandbox が無効なときだけ直接起動し、それ以外は BLOCKED で
+  人手へ渡します。背景と経路の選び方は [codex-review-launch.md](codex-review-launch.md)。
 - この repo に commit / push する場合、配置先ディレクトリに応じた git identity の出し分けは
   各自の git 設定(`dotfiles` 等)側で行います(本 repo の管理対象外)。
 
