@@ -203,7 +203,13 @@ herdr wait output <pane-id> --match "CODEX-REVIEW-DONE-<nonce>" --timeout 300000
   `done.txt` が現れなければ `Blocked at: executor-exit` で停止します。
 - `done.txt` の `exit=` が 0 以外なら `Blocked at: executor-exit` とし、pane の末尾を public-safe に
   要約して Reason に書きます。
-- pane は閉じません。一次情報として残し、閉じるかは人か caller が決めます。
+- **pane の後始末**: 続行条件 (`done.txt` の nonce 一致・`exit=0`、空でない `result.md`) を満たした
+  ときは、`herdr pane read <pane-id> --source recent-unwrapped --lines 200` の出力 (JSON) を
+  そのまま `<run dir>/pane.log` に保存し、file が空でないことを確認してから
+  `herdr pane close <pane-id>` で閉じます。text field だけを JSON parser で抜くと制御文字で
+  失敗して空 file になることがあるため、生の出力を保存します。満たさないとき
+  (exit≠0、空振りの再実行が尽きた、途中で BLOCKED) は閉じず、調べる必要がある pane だけを
+  残します。固定名の pane を使い回しません。
 
 ### 直接起動 (fallback)
 
@@ -279,4 +285,5 @@ safety を含む PR 全体の merge readiness ではありません。
 - expected PR head / base と違う checkout、または dirty worktree のまま base review を始める。
 - 空の結果 file を完了扱いにする。`done.txt` の nonce と exit code を確認せずに続行する。再実行を
   2 回以上繰り返す。
+- 失敗した review の pane を閉じる。成功した pane を `pane.log` を保存せずに閉じる。
 - model family / fixed effort / 観測時間を selection metadata や必須 contract に焼き込む。

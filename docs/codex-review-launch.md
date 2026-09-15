@@ -49,8 +49,10 @@ run script は `codex exec … -o <run dir>/result.md - < <run dir>/brief.md` �
 `herdr wait output --match` は端末側の行を起床信号として待つだけで、完了の正本は `done.txt`
 (nonce 一致・`exit=0`) と空でない `result.md` です。人手 hand-off で人が terminal から実行した場合も
 同じ file で確認するので、経路によらず判定は同じです。`result.md` が欠落または空なら空振りとして
-1 回だけ再実行し、2 回目も空なら `Status: BLOCKED` (`executor-result`) で停止します。pane は
-一次情報として残します。
+1 回だけ再実行し、2 回目も空なら `Status: BLOCKED` (`executor-result`) で停止します。続行条件を
+満たした pane は `herdr pane read` の生出力を `pane.log` として run dir に保存し、空でないことを
+確認してから閉じ、満たさなかった pane (exit≠0、空振り、BLOCKED、`pane.log` が空) だけを一次情報として
+残します。review のたびに pane が溜まらないようにするためです。
 
 ## brief と target
 
@@ -61,8 +63,8 @@ sandbox の中で読ませます。brief は file 経由で渡し、diff 本文�
 
 ## 使う herdr subcommand
 
-`status` / `pane current` / `pane split` / `pane rename` / `pane run` / `wait output` / `pane read`
-に限定し、socket path や version 固有の flag に依存しません (0.7.1 と 0.7.4 で確認)。
+`status` / `pane current` / `pane split` / `pane rename` / `pane run` / `wait output` / `pane read` /
+`pane close` に限定し、socket path や version 固有の flag に依存しません (0.7.1 と 0.7.4 で確認)。
 
 ## 受け入れ確認 (環境ごと)
 
