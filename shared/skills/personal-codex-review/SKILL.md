@@ -195,7 +195,7 @@ herdr pane wait-output <pane-id> --match "CODEX-REVIEW-DONE-<nonce>" --timeout 3
 - `pane run` の command は pane の shell が解釈するので、script path は内側で単引用します
   (`mktemp -d` の親 directory に空白が含まれても分割されないように)。
 - `pane wait-output` は一致すると `"type":"output_matched"` を含む JSON、timeout すると
-  `"code":"timeout"` の error JSON を返します。一致時の JSON には pane の生テキストが入り、
+  `"code":"timeout"` の error JSON を返します (0.9.0 で実測)。一致時の JSON には pane の生テキストが入り、
   制御文字で JSON parser が失敗することがあるため、起床の判定は raw 出力に
   `CODEX-REVIEW-DONE-<nonce>` が含まれるかで行い、exit code は `done.txt` から読みます。
 - timeout したら `herdr pane read <pane-id> --source recent-unwrapped --lines 40` で状況を読み、

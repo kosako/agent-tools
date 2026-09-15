@@ -65,8 +65,9 @@ sandbox の中で読ませます。brief は file 経由で渡し、diff 本文�
 
 `status` / `pane current` / `pane split` / `pane rename` / `pane run` / `pane wait-output` / `pane read` /
 `pane close` に限定し、socket path や version 固有の flag に依存しません (0.9.0 で確認)。
-0.7 系にあった top-level の `herdr wait output` は 0.9.0 で `herdr pane wait-output` に移動しており
-(`unknown command: wait` になる)、0.7 系の記述はこの版で置き換えました。
+top-level の `wait` command は herdr 0.7.5 で `pane wait-output` (と `agent wait`) に置き換えられており
+(herdr 同梱の CHANGELOG)、0.9.0 では `unknown command: wait` になります。0.7.1 / 0.7.4 で確認した
+旧記述はこの版で置き換えました。
 
 ## 受け入れ確認 (環境ごと)
 
