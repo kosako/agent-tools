@@ -180,8 +180,9 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
 
 - **Codex がレビュアーのとき**: preflight の verified `author=claude / reviewer=codex` と検証済み
   base ref / base OID / head OID を `personal-codex-review` に渡し、read-only executor として実行する。executor は
-  `codex exec review --base` 相当で review し、結果だけを返す。GitHub lifecycle はこの skill が
-  所有し、executor に comment / approve / merge をさせない。
+  検証済み base / head OID を brief に固定した custom prompt (`codex exec -`) で review し、結果だけを
+  返す (起動は herdr の pane 経由。herdr が無く sandbox 内なら BLOCKED で人手へ渡す)。GitHub
+  lifecycle はこの skill が所有し、executor に comment / approve / merge をさせない。
 - **Claude がレビュアーのとき**: diff を読み、正当性（バグ・挙動退行）を中心にレビューして
   同じ severity と process verdict で分類し、verified `author=codex / reviewer=claude` を
   `Independence: cross-review verified (author=codex)` として結果へ残す。
