@@ -46,7 +46,7 @@ Codex 側の境界は経路によらず固定です: `-s read-only -c approval_p
 
 run script は `codex exec … -o <run dir>/result.md - < <run dir>/brief.md` を実行し、その exit code を
 `CODEX-REVIEW-DONE-<nonce> exit=<rc>` の形で端末と `<run dir>/done.txt` の両方に書きます。
-`herdr wait output --match` は端末側の行を起床信号として待つだけで、完了の正本は `done.txt`
+`herdr pane wait-output --match` は端末側の行を起床信号として待つだけで、完了の正本は `done.txt`
 (nonce 一致・`exit=0`) と空でない `result.md` です。人手 hand-off で人が terminal から実行した場合も
 同じ file で確認するので、経路によらず判定は同じです。`result.md` が欠落または空なら空振りとして
 1 回だけ再実行し、2 回目も空なら `Status: BLOCKED` (`executor-result`) で停止します。続行条件を
@@ -63,8 +63,11 @@ sandbox の中で読ませます。brief は file 経由で渡し、diff 本文�
 
 ## 使う herdr subcommand
 
-`status` / `pane current` / `pane split` / `pane rename` / `pane run` / `wait output` / `pane read` /
-`pane close` に限定し、socket path や version 固有の flag に依存しません (0.7.1 と 0.7.4 で確認)。
+`status` / `pane current` / `pane split` / `pane rename` / `pane run` / `pane wait-output` / `pane read` /
+`pane close` に限定し、socket path や version 固有の flag に依存しません (0.9.0 で確認)。
+top-level の `wait` command は herdr 0.7.5 で `pane wait-output` (と `agent wait`) に置き換えられており
+(herdr 同梱の CHANGELOG)、0.9.0 では `unknown command: wait` になります。0.7.1 / 0.7.4 で確認した
+旧記述はこの版で置き換えました。
 
 ## 受け入れ確認 (環境ごと)
 

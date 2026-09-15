@@ -252,7 +252,7 @@
       "id": 10,
       "name": "herdr-pane-is-primary-launch-path",
       "prompt": "verified author=claude の base review を実行する手順を示して。herdr status は server running、herdr pane current は現在の pane を返す。実行はしないで。",
-      "expected_output": "herdr 経由を選ぶ。mktemp -d の run dir に brief.md / run.zsh を置き、run.zsh は cd <repo> して codex exec -s read-only -c approval_policy=never --ephemeral -o <run dir>/result.md - < brief.md を実行し、その exit code を CODEX-REVIEW-DONE-<nonce> exit=<rc> として端末と done.txt に書く。herdr pane split --current --direction down --no-focus で pane を作り rename し、herdr pane run で run.zsh を実行、herdr wait output --match で起床し、done.txt の nonce 一致と exit=0、空でない result.md を確認して結果を返す。続行条件を満たしたら herdr pane read の生出力を pane.log に保存し、空でないことを確認してから pane を閉じる。直接起動や dangerous flag は使わない。",
+      "expected_output": "herdr 経由を選ぶ。mktemp -d の run dir に brief.md / run.zsh を置き、run.zsh は cd <repo> して codex exec -s read-only -c approval_policy=never --ephemeral -o <run dir>/result.md - < brief.md を実行し、その exit code を CODEX-REVIEW-DONE-<nonce> exit=<rc> として端末と done.txt に書く。herdr pane split --current --direction down --no-focus で pane を作り rename し、herdr pane run で run.zsh を実行、herdr pane wait-output --match で起床し、done.txt の nonce 一致と exit=0、空でない result.md を確認して結果を返す。続行条件を満たしたら herdr pane read の生出力を pane.log に保存し、空でないことを確認してから pane を閉じる。直接起動や dangerous flag は使わない。",
       "files": [],
       "assertions": [
         {
