@@ -204,8 +204,10 @@ herdr wait output <pane-id> --match "CODEX-REVIEW-DONE-<nonce>" --timeout 300000
 - `done.txt` の `exit=` が 0 以外なら `Blocked at: executor-exit` とし、pane の末尾を public-safe に
   要約して Reason に書きます。
 - **pane の後始末**: 続行条件 (`done.txt` の nonce 一致・`exit=0`、空でない `result.md`) を満たした
-  ときは、`herdr pane read <pane-id> --source recent-unwrapped --lines 200` の text を
-  `<run dir>/pane.log` に保存してから `herdr pane close <pane-id>` で閉じます。満たさないとき
+  ときは、`herdr pane read <pane-id> --source recent-unwrapped --lines 200` の出力 (JSON) を
+  そのまま `<run dir>/pane.log` に保存し、file が空でないことを確認してから
+  `herdr pane close <pane-id>` で閉じます。text field だけを JSON parser で抜くと制御文字で
+  失敗して空 file になることがあるため、生の出力を保存します。満たさないとき
   (exit≠0、空振りの再実行が尽きた、途中で BLOCKED) は閉じず、調べる必要がある pane だけを
   残します。固定名の pane を使い回しません。
 
