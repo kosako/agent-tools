@@ -156,12 +156,16 @@
       "id": 6,
       "name": "single-commit-review-fixes-oid-in-brief",
       "prompt": "verified author=claude の expected commit OID aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa だけを Codex で cross-review する手順を示して。実行や外部操作はしないで。",
-      "expected_output": "capability preflight 後、git rev-parse --verify --end-of-options で target を commit object に解決し、expected OID と一致する場合だけ commit mode とし、brief に validated OID と git show --stat --patch <oid> の取得指示を書く (root commit でも <oid>^ に依存しない。merge commit は commit mode の対象外)。brief は file から stdin で渡し、base や uncommitted の取得指示と併記せず、結果だけを caller に返す。不正・不一致なら BLOCKED で停止する。",
+      "expected_output": "capability preflight 後、commit target を shell literal 化して変数に入れ (argv を直接組むなら 1 argument)、git rev-parse --verify --end-of-options \"$commit_target^{commit}\" で commit object に解決し、expected OID と一致する場合だけ commit mode とし、brief に validated OID と git show --stat --patch <oid> の取得指示を書く (root commit でも <oid>^ に依存しない。merge commit は commit mode の対象外)。brief は file から stdin で渡し、base や uncommitted の取得指示と併記せず、結果だけを caller に返す。不正・不一致なら BLOCKED で停止する。",
       "files": [],
       "assertions": [
         {
           "id": "validates-commit-target",
           "text": "commit target を --end-of-options 後で commit object に解決し、expected OID と照合している"
+        },
+        {
+          "id": "escapes-commit-target",
+          "text": "commit target を shell literal (または単一 argv) として渡し、inline の引用へ埋め込んでいない"
         },
         {
           "id": "uses-commit-mode-in-brief",
@@ -499,6 +503,27 @@
         {
           "id": "compares-oids",
           "text": "expected base / head OID と照合し、clean worktree を確認してから base mode に入っている"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "name": "commit-target-with-quote-is-escaped",
+      "prompt": "verified author=claude。caller の commit target が it's-a-tag (repo に実在する正当な tag)、expected commit OID は aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。commit mode で cross-review する手順を示して。実行や外部操作はしないで。",
+      "expected_output": "target に ' が含まれるので、単に ' で囲むだけでは値が壊れる。shell literal 化 (内側の ' を '\\'' に置換) して変数に入れ、git rev-parse --verify --end-of-options \"$commit_target^{commit}\" で解決する (argv を直接組むなら 1 argument としてそのまま渡す)。解決した OID が expected commit OID と一致した場合だけ commit mode とし、brief には validated OID と git show --stat --patch の取得指示を書く。不一致なら target-identity の BLOCKED で停止し、他の mode へ fallback しない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "escapes-quoted-target",
+          "text": "' を含む target を shell literal 化 (内側の ' を '\\'' に置換) または単一 argv として渡し、単に ' で囲む形にしていない"
+        },
+        {
+          "id": "resolves-then-compares",
+          "text": "解決して得た OID を expected commit OID と照合してから commit mode に入っている"
+        },
+        {
+          "id": "no-mode-fallback",
+          "text": "不一致なら BLOCKED で停止し、base / uncommitted へ fallback していない"
         }
       ]
     }
