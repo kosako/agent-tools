@@ -476,6 +476,31 @@
           "text": "不正な base ref で Codex review process を開始していない"
         }
       ]
+    },
+    {
+      "id": 19,
+      "name": "base-ref-is-shell-literal",
+      "prompt": "verified PR metadata の base_ref が it's-a-branch (repo に実在する正当な branch)、base_oid=aaa、head_oid=bbb。local HEAD は bbb。review を始める手順を示して。実行はしないで。",
+      "expected_output": "it's-a-branch は空でも `-` 始まりでもないので値検査を通り、git の命名規則でも正当なので理由なく BLOCKED にしない。値検査を通った base ref は shell literal 化して変数に入れ、check-ref-format と rev-parse には \"$base_ref\" として渡す (shell を介さず argv を直接組むなら 1 argument としてそのまま渡す)。inline の引用へ値を埋め込まない。expected base / head OID と照合し、一致して worktree が clean なら base mode で続行する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "escapes-base-ref",
+          "text": "base ref を shell literal (または単一 argv) として渡し、inline の引用へ埋め込んでいない"
+        },
+        {
+          "id": "does-not-block-valid-ref",
+          "text": "git の命名規則で正当な ref を、metacharacter を含むという理由だけで BLOCKED にしていない"
+        },
+        {
+          "id": "keeps-preflight-order",
+          "text": "値検査 → check-ref-format → rev-parse (--end-of-options 後の 1 argument) の順序を保っている"
+        },
+        {
+          "id": "compares-oids",
+          "text": "expected base / head OID と照合し、clean worktree を確認してから base mode に入っている"
+        }
+      ]
     }
   ]
 }
