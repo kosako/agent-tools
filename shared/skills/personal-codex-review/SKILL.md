@@ -134,9 +134,12 @@ ref 名や caller の free text をそのまま brief に写しません。
 - **base** (integration base から current HEAD まで): target identity preflight を通った
   `expected_base_oid` と `expected_head_oid` を書き、`git diff <base-oid>...<head-oid>` と
   `git log --oneline <base-oid>..<head-oid>` で対象を取得させます。
-- **commit** (1 commit が導入した変更): caller の target をそのまま使わず、
-  `git rev-parse --verify --end-of-options '<commit>^{commit}'` で commit object に解決した OID が
-  expected target と一致した場合だけ、`git show --stat --patch <validated-oid>` で取得させます
+- **commit** (1 commit が導入した変更): caller の target をそのまま使わず、§2 と同じ規則で
+  shell literal 化して変数に入れ (`commit_target=<commit target の shell literal>`、argv を直接組む
+  経路は 1 argument)、`git rev-parse --verify --end-of-options "$commit_target^{commit}"` で commit
+  object に解決した OID が expected target と一致した場合だけ、`git show --stat --patch <validated-oid>`
+  で取得させます。解決コマンド自体に生の値が入ると、OID 照合へ到達する前に shell が値を解釈するため、
+  照合は escape の代わりになりません
   (第一親との差分。root commit は親が無いので `<oid>^` を使わず、この形なら全追加として読めます)。
   merge commit は commit mode の対象外で、base mode を使うよう caller に返します。不正・不一致なら
   target-identity の `Status: BLOCKED` で停止し、他の mode へ fallback しません。
