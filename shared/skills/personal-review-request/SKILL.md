@@ -91,13 +91,15 @@ read-only はこの workflow に入らず、委譲先の read 手順に従いま
 呼び出し元の shell が先に解釈します。次の 3 つを**別々の段として順に**行います。どれか 1 つでは
 残りを代替できません。
 
-1. **入力検証**: PR 番号が `\A\d+\z`、repo slug が `\A[\w.-]+/[\w.-]+\z` に一致することを
-   確認し、外れたら command を組み立てずに停止して聞き返します。`personal-safe-gh` と routing
-   preflight は script 側でも同じ検証をしますが、**それが走るのは呼び出し元の shell が行を解釈した
-   後**なので、ここでの検証の代わりになりません。生の `gh` にはその検証自体がありません。
+1. **入力検証**: PR 番号が `\A\d+\z`、repo slug が `\A[\w.-]+/[\w.-]+\z` に一致し、どちらも
+   `-` で始まらないことを確認します。外れたら command を組み立てずに停止して聞き返します。
+   下流の検証は代わりになりません。routing preflight は番号と repo slug の両方を検証しますが、
+   `personal-safe-gh` は番号を検証するだけで slug の形は検証せず、生の `gh` には検証自体が
+   ありません。いずれにせよ **script が走るのは呼び出し元の shell が行を解釈した後**です。
 2. **option 解釈**: `-` で始まる値は `gh` が flag として解釈します (`--repo` の差し替え等)。
-   1 の検証を通れば `-` 始まりは排除されますが、これは shell metacharacter とは別の防御で、
-   escape をしても防げません。検証を省いた経路には効きません。
+   PR 番号は位置引数で `\A\d+\z` が `-` 始まりを排除しますが、**repo slug は option の値で、
+   上の正規表現は `-` を文字クラスに含むため `-owner/repo` を通します**。先頭が `-` でないことを
+   別に確認します。これは shell metacharacter とは別の防御で、escape をしても防げません。
 3. **shell literal 化**: 検証を通った値を shell literal として変数に入れ (`'` で囲み、内側の `'` を
    `'\''` に置換)、以降は `"$pr"` / `"$repo"` で参照します。shell を介さず argv を直接組む経路では
    1 argument としてそのまま渡します。**値を inline の引用へ埋め込みません**。
@@ -107,7 +109,8 @@ metacharacter を含みえます)。
 
 ```sh
 # 0. 検証を通した値だけを shell literal として変数へ入れる (上記「値の受け渡し」)。
-#    repo を省く (cwd の origin を使う) ときは -R / --repo ごと付けない。
+#    角括弧は省略可を示す記法で、実行時には角括弧ごと除く。repo を省く (cwd の origin を
+#    使う) ときは -R / --repo ごと付けない。
 pr=<PR 番号の shell literal>        # \A\d+\z を確認済み
 repo=<owner/repo の shell literal>  # \A[\w.-]+/[\w.-]+\z を確認済み
 

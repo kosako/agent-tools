@@ -131,8 +131,8 @@
       "expected_output": "検証を通した PR 番号 / repo slug / 一時ファイル path を shell literal として変数に入れ、gh pr comment \"$pr\" --repo \"$repo\" --body-file \"$body\" のように変数参照で渡す (shell を介さず argv を直接組む経路なら 1 argument としてそのまま渡す)。値を inline の引用へ埋め込まない。一時ファイルは repository 外に作り、投稿の成否にかかわらず削除する。",
       "files": [],
       "assertions": [
-        { "id": "literal-then-reference", "text": "値を shell literal 化して変数に入れ、\"$pr\" / \"$repo\" / \"$body\" で参照している" },
-        { "id": "temp-path-quoted", "text": "空白を含む一時ファイル path を literal 化して渡している" },
+        { "id": "literal-then-reference", "text": "値を shell literal 化して変数に入れ \"$pr\" / \"$repo\" / \"$body\" で参照している (shell を介さず単一 argv として渡す形でもよい)" },
+        { "id": "temp-path-quoted", "text": "空白を含む一時ファイル path を literal 化して (または単一 argv として) 渡している" },
         { "id": "no-inline-interpolation", "text": "値を inline の引用へ直接埋め込んだ形を使っていない" },
         { "id": "temp-file-hygiene", "text": "一時ファイルを repository 外に作り、投稿の成否にかかわらず削除している" }
       ]
