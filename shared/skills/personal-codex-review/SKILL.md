@@ -103,10 +103,16 @@ hand-off します。reviewer を推測せず、user config も無断で変更�
 実行前にまず argv construction layer で base ref が空または `-` 始まりなら、Git command を呼ぶ前に
 `Status: BLOCKED` とします。その純粋な値検査を通った場合だけ、次を read-only で確認します。
 
+値検査を通った base ref は §5 と同じ規則で shell literal 化して変数に入れ、以降は `"$base_ref"` で
+参照します。shell を介さず argv を直接組む経路では 1 argument としてそのまま渡します。**値を
+inline の引用へ埋め込みません**。ref 名は `$` / バッククォート / `'` を含んでいても git の命名規則
+では正当で、`check-ref-format` はこれらを弾きません。引用の正しさだけが防御です。
+
 ```sh
+base_ref=<base ref の shell literal>
 git rev-parse --verify HEAD
-git check-ref-format --branch '<base-ref>'
-git rev-parse --verify --end-of-options '<base-ref>^{commit}'
+git check-ref-format --branch "$base_ref"
+git rev-parse --verify --end-of-options "$base_ref^{commit}"
 git status --porcelain=v1 --untracked-files=all
 ```
 
