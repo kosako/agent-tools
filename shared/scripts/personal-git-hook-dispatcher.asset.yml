@@ -10,11 +10,13 @@ risk:
   privacy: low
 # script kind は実行コード配布のため常に human review 必須 (#147)。
 # 本 script は #202 (Phase 1) の実装 PR で author≠reviewer レビューのうえ承認。
+# #267 (引数ゼロでの shell 経由起動の修正) で body を変更し、同じく author≠reviewer
+# レビューのうえ approved_build_id を焼き直した。
 # 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:35301f64b67f28f136121034261c25b767c47f276f62be9e6b77e186c70eb671
+  approved_build_id: sha256:52aa8c96a6396f2a6132afa7069c983d21deaa06b369d379cee500c8613fab8c
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-git-hook-dispatcher.rb

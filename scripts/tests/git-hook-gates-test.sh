@@ -483,10 +483,31 @@ chained267=$(cat "$weird_repo/CHAINED267" 2>/dev/null || true)
 [ "$chained267" = "argc=0 guard=1" ] || \
   fail "#267 回帰: chain 先に引数ゼロと stage guard が渡っていない (got: $chained267)"
 
-# (4) source lint: 再発を形で止める。system( / exec( の行は必ず [cmdname, argv0] 形を含む。
+# (4) source lint: 再発を形で止める。system( / exec( の command 位置は必ず配列 literal。
+# 行のどこかに [ があれば良い、という緩い検査にしない (`system(gate_path, *args[0..-1])` の
+# ような書き換えを見逃す)。env Hash が先頭にある exec 形だけを例外として許す。
+# 引数が 2 個以上あって実際には安全な String 形も、ここでは意図的に落とす: 安全性が
+# 「たまたま引数が 2 個ある」ことに依存する形をこの file に残さないため。
 hazard267=$(grep -nE '(^|[^_[:alnum:]])(system|exec)\(' "$dispatcher_src" \
-  | grep -vE '^[0-9]+:[[:space:]]*#' | grep -vF '[' || true)
+  | grep -vE '^[0-9]+:[[:space:]]*#' \
+  | grep -vE '(system|exec)\((\{[^}]*\}, *)?\[' || true)
 [ -z "$hazard267" ] || \
-  fail "#267 回帰: dispatcher の system/exec が [cmdname, argv0] 形になっていない: $hazard267"
+  fail "#267 回帰: dispatcher の system/exec の command 位置が配列 literal でない: $hazard267"
+
+# (5) chain へ引数が渡る契約を commit-msg stage で pin する。pre-commit (引数ゼロ) だけを
+# 見ていると、[chain, chain, *args] のような「配列形の自然な整理」で commit-msg の chain が
+# 壊れても suite が気づけない (3 要素以上は [cmdname, argv0] 形ではない)。
+repo267b="$tmp/repo267b"
+git init -q "$repo267b"
+(cd "$repo267b" && git config core.hooksPath "$hooksdir")
+printf '#!/bin/sh\nprintf %%s "argc=$# base=$(basename "$1")" > CHAINED267MSG\nexit 0\n' \
+  > "$repo267b/.git/hooks/commit-msg"
+chmod +x "$repo267b/.git/hooks/commit-msg"
+echo x267 > "$repo267b/x.txt"
+(cd "$repo267b" && git add x.txt && as_human git commit -qm "chain msg") \
+  || fail "#267 回帰: commit-msg stage の chain 込みで clean commit が通るべき"
+chained267msg=$(cat "$repo267b/CHAINED267MSG" 2>/dev/null || true)
+[ "$chained267msg" = "argc=1 base=COMMIT_EDITMSG" ] || \
+  fail "#267 回帰: commit-msg の chain 先へ message file が 1 引数で渡っていない (got: $chained267msg)"
 
 echo "ok: git-hook-gates self-test"
