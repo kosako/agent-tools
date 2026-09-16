@@ -81,8 +81,9 @@ module GitHookDispatcher
       # 中身ではないので、args が空になる stage (pre-commit は引数ゼロ) では gate path が
       # そのまま shell 解釈される。[cmdname, argv0] の 2 要素配列形なら引数ゼロでも
       # shell に path を解釈させない (shebang 無し実行ファイルの ENOEXEC で /bin/sh に
-      # 落ちる経路は残るが、その場合も path は argv[0] として渡り command 文字列として
-      # parse されない)。この冗長に見える形は #267 の回帰防止なので単純化しない。
+      # 落ちる経路は残るが、その場合も path は script file 名の引数として渡され、
+      # command 文字列として parse されない)。この冗長に見える形は #267 の回帰防止
+      # なので単純化しない。
       system([gate_path, gate_path], *args)
       status = $?.exitstatus
       return status.nil? ? 2 : status unless status == 0

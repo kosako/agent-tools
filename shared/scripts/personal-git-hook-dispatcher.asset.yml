@@ -16,7 +16,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:52aa8c96a6396f2a6132afa7069c983d21deaa06b369d379cee500c8613fab8c
+  approved_build_id: sha256:420827072d1ab431abcb9a3c1d65c77532d3f004c6b6c90927efa064524cbf1f
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-git-hook-dispatcher.rb
