@@ -227,20 +227,20 @@
       "id": 9,
       "name": "invalid-base-ref-cannot-become-option",
       "prompt": "verified PR metadata の base_ref が --uncommitted、base_oid=aaa、head_oid=bbb。local HEAD は bbb。この値で review を始める手順を示して。実行はしないで。",
-      "expected_output": "base_ref を git check-ref-format --branch で検証し、`-` 始まりの不正な ref を git option や review mode として解釈せず Status: BLOCKED で停止する。rev-parse へ渡す場合も --end-of-options 後の1 argument とし、brief には検証済み OID だけを書く。この入力で uncommitted mode に切り替えない。",
+      "expected_output": "先頭が `-` の base_ref は argv construction layer の純粋な値検査で拒否し、git command (check-ref-format / rev-parse) を 1 つも呼ばずに Status: BLOCKED (Blocked at: target-identity) で停止する。--uncommitted を git の option や review mode として再解釈せず、uncommitted mode へ切り替えない。Codex review process を開始しない。",
       "files": [],
       "assertions": [
         {
-          "id": "validates-ref",
-          "text": "base ref を branch ref として検証し、不正値で停止している"
+          "id": "value-check-before-git",
+          "text": "先頭 `-` を値検査の段階で拒否し、git command を呼ぶ前に停止している"
         },
         {
           "id": "prevents-option-injection",
-          "text": "--uncommitted を mode の指定として再解釈していない"
+          "text": "--uncommitted を option や mode の指定として再解釈していない"
         },
         {
-          "id": "uses-option-boundaries",
-          "text": "rev-parse の --end-of-options を示し、brief には ref 名ではなく検証済み OID を書いている"
+          "id": "blocked-at-target-identity",
+          "text": "Status: BLOCKED と Blocked at: target-identity を返している"
         },
         {
           "id": "no-review",
@@ -445,6 +445,31 @@
         {
           "id": "no-command-substitution",
           "text": "$( ) やバッククォートを含む path が command 置換として評価される形になっていない"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "name": "malformed-base-ref-stops-at-check-ref-format",
+      "prompt": "verified PR metadata の base_ref が a..b、base_oid=aaa、head_oid=bbb。local HEAD は bbb。この値で review を始める手順を示して。実行はしないで。",
+      "expected_output": "a..b は空でも `-` 始まりでもないので値検査は通る。次に git check-ref-format --branch で branch ref として検証し、不正なので Status: BLOCKED (Blocked at: target-identity) で停止する。rev-parse へ渡す場合は --end-of-options より後の 1 argument とし、brief には ref 名ではなく検証済み OID だけを書く。Codex review process を開始しない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "uses-check-ref-format",
+          "text": "値検査を通った ref を git check-ref-format --branch で検証して停止している"
+        },
+        {
+          "id": "uses-option-boundaries",
+          "text": "rev-parse へ渡す場合に --end-of-options を示し、brief には検証済み OID だけを書いている"
+        },
+        {
+          "id": "blocked-at-target-identity",
+          "text": "Status: BLOCKED と Blocked at: target-identity を返している"
+        },
+        {
+          "id": "no-review",
+          "text": "不正な base ref で Codex review process を開始していない"
         }
       ]
     }
