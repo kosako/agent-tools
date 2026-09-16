@@ -76,7 +76,12 @@ module GitHookDispatcher
              "refusing to proceed (fail-closed). Re-run agent-tools sync."
         return 2
       end
-      system(gate_path, *args)
+      # Ruby は引数が 1 個だけの system / exec を単一 command 文字列として扱い、空白で
+      # 分割するか metacharacter があれば /bin/sh に渡す。判定は引数の「個数」であって
+      # 中身ではないので、args が空になる stage (pre-commit は引数ゼロ) では gate path が
+      # そのまま shell 解釈される。[cmdname, argv0] の 2 要素配列形なら引数ゼロでも必ず
+      # execve になる。この冗長に見える形は #267 の回帰防止なので単純化しない。
+      system([gate_path, gate_path], *args)
       status = $?.exitstatus
       return status.nil? ? 2 : status unless status == 0
     end
@@ -93,7 +98,10 @@ module GitHookDispatcher
         warn "git-hook-dispatcher: repo hook #{chain} resolves to the dispatcher itself; skipping chain"
         return 0
       end
-      exec({ guard_key(stage) => "1" }, chain, *args)
+      # 同上 (#267)。引数ゼロでも shell を経由しないため [cmdname, argv0] 形で渡す。
+      # env Hash は exec の第 1 引数のままにする (末尾に置くと spawn option と解釈され、
+      # guard が立たないまま chain してしまう)。
+      exec({ guard_key(stage) => "1" }, [chain, chain], *args)
     end
     0
   end

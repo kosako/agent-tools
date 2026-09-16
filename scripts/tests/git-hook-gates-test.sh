@@ -407,4 +407,86 @@ rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "guard env should short-circuit before gate resolution (rc=$rc)"
 
+# ---- #267 回帰: 引数ゼロの gate 起動 / chain が shell を経由しない ------------
+# git の pre-commit hook は引数を取らないので dispatcher の args が空になる。Ruby は
+# 引数 1 個の system / exec を単一 command 文字列として扱い (判定は引数の「個数」であって
+# 中身ではない)、空白で分割するか metacharacter を /bin/sh に渡す。
+# fixture の path は引用を balanced に保つ: 不均衡だと sh が parse 時点で死に、canary が
+# 作られないまま「何も実行されなかった」ように見えて assertion の意味が消える。
+# canary は相対名だけを使う (絶対 path を入れると slash が directory 名に入り、
+# mkdir -p が 1 つの directory ではなく入れ子を作る)。
+# canary の不在は exit code より先に確認する (fail は fail-fast なので、rc を先に見ると
+# 「黙って実行された」という #267 本来の failure mode が隠れる)。
+canary267=CANARY267
+
+copy_deploy267() {
+  for pair in "personal-git-hook-dispatcher:$dispatcher_src" \
+              "personal-public-safety-gate:$pubsafe_src" \
+              "personal-ai-trailer-gate:$trailer_src"; do
+    name=${pair%%:*}
+    src=${pair#*:}
+    cp "$src" "$1/$name"
+    chmod +x "$1/$name"
+  done
+}
+
+repo267="$tmp/repo267"
+git init -q "$repo267"
+printf 'x = "%s"\n' "$gh_token" > "$repo267/leak.txt"
+(cd "$repo267" && git add leak.txt)
+
+# (1) gate 起動側 (dispatcher の system): deploy path に空白と $( ) を含める。
+weird_deploy="$tmp/de ploy \$(touch $canary267)"
+mkdir -p "$weird_deploy"
+copy_deploy267 "$weird_deploy"
+set +e
+out=$(cd "$repo267" && as_human "$weird_deploy/personal-git-hook-dispatcher" pre-commit 2>&1)
+rc=$?
+set -e
+[ ! -f "$repo267/$canary267" ] || \
+  fail "#267 回帰: gate 起動で command substitution が実行された (deploy path の \$( ) が評価された)"
+[ "$rc" -eq 1 ] || \
+  fail "#267 回帰: metachar を含む deploy path でも gate が起動し secret を block すべき (rc=$rc): $out"
+echo "$out" | grep -q "public-safety-gate: blocked" || \
+  fail "#267 回帰: gate 自身の診断が出ていない (gate が起動していない疑い): $out"
+
+# (2) 空白だけの deploy path。metacharacter が無いと /bin/sh には渡らず word split される
+# 別分岐なので、(1) とは独立に pin する。
+space_deploy="$tmp/de ploy2"
+mkdir -p "$space_deploy"
+copy_deploy267 "$space_deploy"
+set +e
+out=$(cd "$repo267" && as_human "$space_deploy/personal-git-hook-dispatcher" pre-commit 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || \
+  fail "#267 回帰: 空白を含む deploy path でも gate が起動すべき (rc=$rc): $out"
+(cd "$repo267" && git rm -q --cached leak.txt && rm leak.txt)
+
+# (3) chain 側 (dispatcher の exec): metacharacter は repo 側の path に置き、gate は clean な
+# $deploy から解決させる。chain path が clean だと未修正でも chain は成功するため、deploy 側に
+# metachar を置いた case では exec の site を pin できない。
+weird_repo="$tmp/re po \$(touch $canary267)"
+git init -q "$weird_repo"
+printf '#!/bin/sh\nprintf %%s "argc=$# guard=${AGENT_TOOLS_GIT_HOOK_ACTIVE_PRE_COMMIT:-unset}" > CHAINED267\nexit 7\n' \
+  > "$weird_repo/.git/hooks/pre-commit"
+chmod +x "$weird_repo/.git/hooks/pre-commit"
+set +e
+(cd "$weird_repo" && as_human "$deploy/personal-git-hook-dispatcher" pre-commit >/dev/null 2>&1)
+rc=$?
+set -e
+[ ! -f "$weird_repo/$canary267" ] || \
+  fail "#267 回帰: chain 起動で command substitution が実行された (repo path の \$( ) が評価された)"
+[ "$rc" -eq 7 ] || \
+  fail "#267 回帰: metachar を含む repo path でも chain 先の exit code が等値で伝播すべき (rc=$rc)"
+chained267=$(cat "$weird_repo/CHAINED267" 2>/dev/null || true)
+[ "$chained267" = "argc=0 guard=1" ] || \
+  fail "#267 回帰: chain 先に引数ゼロと stage guard が渡っていない (got: $chained267)"
+
+# (4) source lint: 再発を形で止める。system( / exec( の行は必ず [cmdname, argv0] 形を含む。
+hazard267=$(grep -nE '(^|[^_[:alnum:]])(system|exec)\(' "$dispatcher_src" \
+  | grep -vE '^[0-9]+:[[:space:]]*#' | grep -vF '[' || true)
+[ -z "$hazard267" ] || \
+  fail "#267 回帰: dispatcher の system/exec が [cmdname, argv0] 形になっていない: $hazard267"
+
 echo "ok: git-hook-gates self-test"
