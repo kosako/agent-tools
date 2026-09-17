@@ -272,14 +272,20 @@ module SafeGh
   end
 
   # owner/repo を解決する。-R で明示されていればそれを、無ければ現在の repo を gh から引く。
+  # 明示値と解決値の**両方**を検証する (#270)。空文字での暗黙 fallback も拒否する。
   def resolve_repo(explicit)
-    return explicit if explicit && !explicit.empty?
+    unless explicit.nil?
+      raise Error, "repository 指定が owner/repo 形式ではありません" unless valid_repo?(explicit)
+
+      return explicit
+    end
 
     out, ok = gh_capture(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"])
     raise Error, "repository を解決できない (-R OWNER/REPO で指定してください)" unless ok
 
     name = out.strip
     raise Error, "repository を解決できない (-R OWNER/REPO で指定してください)" if name.empty?
+    raise Error, "解決した repository が owner/repo 形式ではありません" unless valid_repo?(name)
 
     name
   end
@@ -336,7 +342,8 @@ module SafeGh
 
     repo, repo_ok = extract_repo_flag(args)
     noun, verb, number = args
-    unless repo_ok && valid_invocation?(noun, verb, number)
+    # -R が与えられたなら、その場で形を検査する (空文字で現在 repo へ黙って倒さない)。
+    unless repo_ok && (repo.nil? || valid_repo?(repo)) && valid_invocation?(noun, verb, number)
       print_usage
       return 2
     end
@@ -362,6 +369,16 @@ module SafeGh
     args.delete_at(idx)         # フラグ
     value = args.delete_at(idx) # 値 (末尾フラグなら nil)
     [value, !value.nil?]
+  end
+
+  # repo slug は REST path の component になるので、余分な segment や `?` が宛先を変える。
+  # sibling の personal-review-routing-preflight と同じ形を要求する (#270)。command は argv
+  # 形式で実行するので shell injection ではなく、ここでの目的は対象の同定。先頭 `-` の扱いは
+  # caller 側 (skill) の入力制限に委ねる (argv 形式では flag 解釈が起きないため)。
+  REPO_RE = %r{\A[\w.-]+/[\w.-]+\z}.freeze
+
+  def valid_repo?(repo)
+    !repo.nil? && repo.match?(REPO_RE)
   end
 
   # review-comments / reviews は PR 専用 (issue には無い endpoint)。noun ごとに verb を
