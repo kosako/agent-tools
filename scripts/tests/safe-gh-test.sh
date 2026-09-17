@@ -265,6 +265,119 @@ check("trailing -R is malformed", ok3 == false)
 check("trailing -R repo nil", repo3.nil?)
 check("trailing -R removes flag", args3 == ["issue", "view", "1"])
 
+# ---- repo slug の検証 (#270): 明示値と解決値の両方 ----
+check("repo slug valid", SafeGh.valid_repo?("owner/repo"))
+check("repo slug with dot/dash/underscore", SafeGh.valid_repo?("o-w.n_er/re.po-1"))
+check("repo slug nil rejected", !SafeGh.valid_repo?(nil))
+check("repo slug empty rejected", !SafeGh.valid_repo?(""))
+check("repo slug without slash rejected", !SafeGh.valid_repo?("owner"))
+check("repo slug extra segment rejected", !SafeGh.valid_repo?("owner/repo/extra"))
+check("repo slug with query rejected", !SafeGh.valid_repo?("owner/repo?x=1"))
+check("repo slug with traversal rejected", !SafeGh.valid_repo?("owner/../other"))
+check("repo slug with space rejected", !SafeGh.valid_repo?("owner/re po"))
+
+# 明示値: 不正なら gh を呼ばずに Error (現在 repo へ黙って倒さない)
+module SafeGh
+  def self.gh_capture(_args)
+    @resolve_called = true
+    ["o/r", true]
+  end
+
+  def self.resolve_called?
+    @resolve_called ? true : false
+  end
+
+  def self.reset_resolve!
+    @resolve_called = false
+  end
+end
+SafeGh.reset_resolve!
+begin
+  SafeGh.resolve_repo("owner/repo/extra")
+  check("explicit malformed repo raises", false)
+rescue SafeGh::Error
+  check("explicit malformed repo raises", true)
+end
+check("explicit malformed repo does not call gh", !SafeGh.resolve_called?)
+
+SafeGh.reset_resolve!
+begin
+  SafeGh.resolve_repo("")
+  check("empty repo raises instead of falling back", false)
+rescue SafeGh::Error
+  check("empty repo raises instead of falling back", true)
+end
+check("empty repo does not fall back to gh", !SafeGh.resolve_called?)
+
+check("valid explicit repo passes through", SafeGh.resolve_repo("owner/repo") == "owner/repo")
+
+# 解決値: gh が返した値が不正なら fail-closed
+module SafeGh
+  def self.gh_capture(_args)
+    ["not-a-slug", true]
+  end
+end
+begin
+  SafeGh.resolve_repo(nil)
+  check("malformed resolved repo raises", false)
+rescue SafeGh::Error
+  check("malformed resolved repo raises", true)
+end
+
+module SafeGh
+  def self.gh_capture(_args)
+    ["owner/repo\n", true]
+  end
+end
+check("valid resolved repo is used", SafeGh.resolve_repo(nil) == "owner/repo")
+
+# ---- main 経由の契約 (#270): 不正な明示値は usage exit 2 で gh を呼ばない ----
+# resolve_repo を直接叩くだけでは main 側の検証を外しても通ってしまうため、CLI 入口で pin する。
+module SafeGh
+  def self.gh_capture(args)
+    (@calls ||= []) << args
+    ["", false]
+  end
+
+  def self.calls
+    @calls ||= []
+  end
+
+  def self.reset_calls!
+    @calls = []
+  end
+end
+
+def silently
+  orig = $stderr.dup
+  $stderr.reopen(File::NULL, "w")
+  yield
+ensure
+  $stderr.reopen(orig)
+end
+
+SafeGh.reset_calls!
+rc_bad = silently { SafeGh.main(["-R", "owner/repo/extra", "issue", "view", "1"]) }
+check("main rejects malformed -R with usage exit 2", rc_bad == 2)
+check("main does not call gh for malformed -R", SafeGh.calls.empty?)
+
+SafeGh.reset_calls!
+rc_empty = silently { SafeGh.main(["-R", "", "issue", "view", "1"]) }
+check("main rejects empty -R with usage exit 2", rc_empty == 2)
+check("main does not call gh for empty -R", SafeGh.calls.empty?)
+
+# 解決値が不正なら exit 1 (fail-closed) で、対象 API へは到達しない。
+module SafeGh
+  def self.gh_capture(args)
+    (@calls ||= []) << args
+    args.include?("user") ? ['{"login":"me","id":1}', true] : ["not-a-slug", true]
+  end
+end
+SafeGh.reset_calls!
+rc_resolved = silently { SafeGh.main(["issue", "view", "1"]) }
+check("main fails closed on malformed resolved repo", rc_resolved == 1)
+check("main does not reach the target API", SafeGh.calls.none? { |a| a.any? { |x| x.to_s.include?("repos/") } })
+
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
