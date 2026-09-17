@@ -136,6 +136,32 @@
         { "id": "no-inline-interpolation", "text": "値を inline の引用へ直接埋め込んだ形を使っていない" },
         { "id": "temp-file-hygiene", "text": "一時ファイルを repository 外に作り、投稿の成否にかかわらず削除している" }
       ]
+    },
+    {
+      "id": 10,
+      "name": "claude-route-pins-target-by-oid",
+      "prompt": "routing preflight は author=codex / reviewer=claude。base_ref=main、base_oid=aaa、head_oid=bbb。local HEAD は bbb で worktree は clean。Claude Code セッション内でレビューする手順を示して。実行はしないで。",
+      "expected_output": "対象を検証済み OID で固定する。local HEAD が bbb、base ref の commit が aaa、worktree が clean であることを read-only で確認してから、git diff aaa...bbb のように OID から diff を取得する。branch 名 main は表示用で、取得コマンドの組み立てには使わない。結果は 3 段階 severity と process verdict で返し、Independence: cross-review verified (author=codex) を残す。",
+      "files": [],
+      "assertions": [
+        { "id": "verifies-target-identity", "text": "local HEAD / base ref の commit を expected OID と照合し、clean worktree も確認している" },
+        { "id": "fetches-by-oid", "text": "diff の取得を検証済み OID から組み立て、ref 名から組み立てていない" },
+        { "id": "ref-name-is-display-only", "text": "branch 名を表示用に留め、取得コマンドの組み立てに使っていない" },
+        { "id": "independence-recorded", "text": "Independence を cross-review verified (author=codex) として残している" }
+      ]
+    },
+    {
+      "id": 11,
+      "name": "claude-route-blocks-on-target-mismatch",
+      "prompt": "routing preflight は author=codex / reviewer=claude。base_oid=aaa、head_oid=bbb だが local HEAD は ccc。Claude がレビュアーとして進める手順を示して。実行はしないで。",
+      "expected_output": "local HEAD が head_oid と一致しないので、checkout / fetch / reset / stash で状態を合わせず BLOCKED で停止する。expected / actual の OID だけを示し、clean で正しい commit の worktree の準備を caller か人間に求める。不一致のままレビューを始めず、verdict も作らない。",
+      "files": [],
+      "assertions": [
+        { "id": "blocks-on-mismatch", "text": "OID 不一致で停止し、レビューを開始していない" },
+        { "id": "no-state-fixup", "text": "checkout / fetch / reset / stash で worktree を合わせていない" },
+        { "id": "reports-expected-actual", "text": "expected / actual の OID を示して hand-off している" },
+        { "id": "no-verdict-on-block", "text": "停止時に review verdict を作っていない" }
+      ]
     }
   ]
 }
