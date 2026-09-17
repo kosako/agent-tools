@@ -93,9 +93,9 @@ read-only はこの workflow に入らず、委譲先の read 手順に従いま
 
 1. **入力検証**: PR 番号が `\A\d+\z`、repo slug が `\A[\w.-]+/[\w.-]+\z` に一致し、どちらも
    `-` で始まらないことを確認します。外れたら command を組み立てずに停止して聞き返します。
-   下流の検証は代わりになりません。routing preflight は番号と repo slug の両方を検証しますが、
-   `personal-safe-gh` は番号を検証するだけで slug の形は検証せず、生の `gh` には検証自体が
-   ありません。いずれにせよ **script が走るのは呼び出し元の shell が行を解釈した後**です。
+   下流の検証は代わりになりません。routing preflight と `personal-safe-gh` は番号と repo slug の
+   両方を検証しますが (safe-gh の slug 検証は #270 で追加)、生の `gh` には検証自体がありません。
+   いずれにせよ **script が走るのは呼び出し元の shell が行を解釈した後**です。
 2. **option 解釈**: 位置引数と option の値を分けて考えます。PR 番号は **位置引数** なので、`-` で
    始まる値は `gh` が flag として解釈しえます。`\A\d+\z` がこれを排除します。一方 repo slug は
    `--repo` / `-R` の **値** として渡され、`gh` は先頭が `-` でも次の引数を値として消費するので、

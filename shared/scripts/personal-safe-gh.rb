@@ -373,8 +373,9 @@ module SafeGh
 
   # repo slug は REST path の component になるので、余分な segment や `?` が宛先を変える。
   # sibling の personal-review-routing-preflight と同じ形を要求する (#270)。command は argv
-  # 形式で実行するので shell injection ではなく、ここでの目的は対象の同定。先頭 `-` の扱いは
-  # caller 側 (skill) の入力制限に委ねる (argv 形式では flag 解釈が起きないため)。
+  # 形式で実行するので shell 解釈は起きず、ここでの目的は対象の同定。先頭 `-` を拒否しないのは、
+  # この値が渡る引数が必ず `repos/` で始まり gh の option として解釈されないため (argv 形式でも
+  # 子 process の option 解釈自体は残る点に注意)。caller 側 (skill) の入力制限とは層が違う。
   REPO_RE = %r{\A[\w.-]+/[\w.-]+\z}.freeze
 
   def valid_repo?(repo)

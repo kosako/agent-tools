@@ -331,6 +331,53 @@ module SafeGh
 end
 check("valid resolved repo is used", SafeGh.resolve_repo(nil) == "owner/repo")
 
+# ---- main 経由の契約 (#270): 不正な明示値は usage exit 2 で gh を呼ばない ----
+# resolve_repo を直接叩くだけでは main 側の検証を外しても通ってしまうため、CLI 入口で pin する。
+module SafeGh
+  def self.gh_capture(args)
+    (@calls ||= []) << args
+    ["", false]
+  end
+
+  def self.calls
+    @calls ||= []
+  end
+
+  def self.reset_calls!
+    @calls = []
+  end
+end
+
+def silently
+  orig = $stderr.dup
+  $stderr.reopen(File::NULL, "w")
+  yield
+ensure
+  $stderr.reopen(orig)
+end
+
+SafeGh.reset_calls!
+rc_bad = silently { SafeGh.main(["-R", "owner/repo/extra", "issue", "view", "1"]) }
+check("main rejects malformed -R with usage exit 2", rc_bad == 2)
+check("main does not call gh for malformed -R", SafeGh.calls.empty?)
+
+SafeGh.reset_calls!
+rc_empty = silently { SafeGh.main(["-R", "", "issue", "view", "1"]) }
+check("main rejects empty -R with usage exit 2", rc_empty == 2)
+check("main does not call gh for empty -R", SafeGh.calls.empty?)
+
+# 解決値が不正なら exit 1 (fail-closed) で、対象 API へは到達しない。
+module SafeGh
+  def self.gh_capture(args)
+    (@calls ||= []) << args
+    args.include?("user") ? ['{"login":"me","id":1}', true] : ["not-a-slug", true]
+  end
+end
+SafeGh.reset_calls!
+rc_resolved = silently { SafeGh.main(["issue", "view", "1"]) }
+check("main fails closed on malformed resolved repo", rc_resolved == 1)
+check("main does not reach the target API", SafeGh.calls.none? { |a| a.any? { |x| x.to_s.include?("repos/") } })
+
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
