@@ -81,8 +81,10 @@ metadata-only の review target identity、routing preflight だけを収集し�
 write-authorized へ移るまで diff を取得せず、GitHub write や手順 3 の review 実行へ進みません。
 read-only はこの workflow に入らず、委譲先の read 手順に従います。
 
-情報収集では、最初に safe-gh で author trust と安全な metadata を確認し、そのあとで review target
-の closed metadata、routing preflight、最後に必要な diff の順で読みます。cwd の origin 以外を見る
+情報収集では、最初に safe-gh で author trust と安全な metadata を確認し、そのあとで review target の
+identity (OID 2 つと base ref 名)、routing preflight、最後に必要な diff の順で読みます。OID は形が
+閉じていますが、**base ref 名は作者が決める自由値**なので untrusted として扱います (下記「値の受け渡し」
+と、Claude route の preflight 参照)。cwd の origin 以外を見る
 ときは、safe-gh には `-R`、preflight / `gh` にはそれぞれの `--repo` を付けます。
 
 #### 値の受け渡し (PR 番号 / repo slug / 一時ファイル path)

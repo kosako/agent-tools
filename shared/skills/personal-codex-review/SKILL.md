@@ -11,8 +11,9 @@ GitHub の read / comment / approve / merge、修正、commit、push は行わ�
 
 ## 責務境界
 
-- **この skill**: CLI capability preflight、author/caller guard、review 対象 mode の選択、起動経路の
-  選択 (herdr → 直接 → BLOCKED)、brief 生成、完了判定、review 結果の返却。
+- **この skill**: CLI capability preflight、author/caller guard、target identity preflight (base ref の
+  扱いを含む。`personal-review-request` の Claude route もこれを正本として参照する)、review 対象 mode の
+  選択、起動経路の選択 (herdr → 直接 → BLOCKED)、brief 生成、完了判定、review 結果の返却。
 - **`personal-review-request`**: PR の safe read、cross-review routing、GitHub への依頼 / 結果
   comment lifecycle。PR 文脈ではこの caller から verified routing と対象を受け取ります。
 - **caller / user**: 結果を採用するか、修正するか、どこへ記録するかを決めます。
