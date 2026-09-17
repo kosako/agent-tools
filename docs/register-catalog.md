@@ -3,7 +3,7 @@
 register は、shared assets を検証し、tool への反映を許可してよい状態を
 catalog に記録する step です。
 
-この document は設計です。`register.sh` の実装は含めません。
+この document は設計です。`register.sh` の実装コードは含めません (実装状態は末尾の節)。
 
 ## 目的
 
@@ -191,7 +191,8 @@ register 側の判定も resolve 基準のまま残す (defense in depth)。
 - catalog の reader (sync / status / doctor) は `catalog_version` が一致しない catalog を
   古いものとして無視する (再度 register を実行して再生成する)。これにより古い catalog が
   残った状態で reader 間の判断がずれることを防ぐ。
-- `status.sh` には register summary を追加する (contract_version 2 に bump):
+- `status.sh` には register summary を追加する (導入時に contract_version 2 へ bump。現行版は
+  `docs/status-manifest-contract.md` が正本):
   `"register": {"catalog_present": true, "registered": 1, "human_review_required": 0, "unsupported": 0}`。
 - `doctor.sh` は catalog の存在と鮮度 (build_id 比較) を check する。
 - sync は catalog の `registration: registered` の artifact だけを配置する。
@@ -204,5 +205,5 @@ register 側の判定も resolve 基準のまま残す (defense in depth)。
   1 (gate fail)。`unsupported` は exit code に影響しない (catalog に `unsupported` として
   記録され sync が skip する設計上の想定状態で、0 は「全 registered」を意味しない)。
 - `scripts/sync.sh`: catalog を尊重し registered のみ配置。
-- status contract v2 (register summary) / doctor の鮮度 check: 実装済み。
+- status contract の register summary (v2 で導入) / doctor の鮮度 check: 実装済み。
 - asset discovery/load は `scripts/lib/assets.rb` に集約。

@@ -44,8 +44,10 @@ Codex 側の境界は経路によらず固定です: `-s read-only -c approval_p
 
 ## 完了判定と結果
 
-run script は `codex exec … -o <run dir>/result.md - < <run dir>/brief.md` を実行し、その exit code を
-`CODEX-REVIEW-DONE-<nonce> exit=<rc>` の形で端末と `<run dir>/done.txt` の両方に書きます。
+run script は run dir と repo root と nonce を shell literal として script 先頭の変数に 1 回だけ
+埋め込み、以降は `"$run"` のように参照します (値を command 行へ直接展開しません。契約の正本は
+SKILL.md)。実行するのは `codex exec … -o "$run/result.md" - < "$run/brief.md"` で、その exit code を
+`CODEX-REVIEW-DONE-<nonce> exit=<rc>` の形で端末と `"$run/done.txt"` の両方に書きます。
 `herdr pane wait-output --match` は端末側の行を起床信号として待つだけで、完了の正本は `done.txt`
 (nonce 一致・`exit=0`) と空でない `result.md` です。人手 hand-off で人が terminal から実行した場合も
 同じ file で確認するので、経路によらず判定は同じです。`result.md` が欠落または空なら空振りとして
@@ -65,6 +67,11 @@ sandbox の中で読ませます。brief は file 経由で渡し、diff 本文�
 
 `status` / `pane current` / `pane split` / `pane rename` / `pane run` / `pane wait-output` / `pane read` /
 `pane close` に限定し、socket path や version 固有の flag に依存しません (0.9.0 で確認)。
+
+渡す値の escape は 2 段あります。`pane run` の command は **pane の shell** が解釈するので script path を
+shell literal 化し、その command 文字列を自分の shell 経由で `herdr` へ渡すならもう一段 literal 化
+します。`pane split --cwd` のように herdr へ直接渡る argv は 1 段です。shell を介さず argv を組む
+経路なら外側は不要です。
 top-level の `wait` command は herdr 0.7.5 で `pane wait-output` (と `agent wait`) に置き換えられており
 (herdr 同梱の CHANGELOG)、0.9.0 では `unknown command: wait` になります。0.7.1 / 0.7.4 で確認した
 旧記述はこの版で置き換えました。

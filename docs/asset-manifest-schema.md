@@ -3,7 +3,7 @@
 shared asset を register / build / sync する前に読む machine-readable metadata の
 schema 方針です。
 
-この document は設計です。parser、validator、build、sync の実装は含めません。
+この document は設計です。parser、validator、build、sync の実装コードは含めません (実装状態は末尾の節)。
 
 ## 目的
 
@@ -363,4 +363,5 @@ validator は `scripts/check-manifests.sh` として実装済みです。
 
 - generated catalog: JSON、`generated/catalog.json`、commit しない。
 - check result は manifest に書き戻さず、catalog に出す。
-- status / doctor への露出は register summary として contract v2 で追加する。
+- status / doctor への露出は register summary として contract v2 で追加済み (現行の contract
+  版は `docs/status-manifest-contract.md` が正本)。
