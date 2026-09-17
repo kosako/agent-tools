@@ -9,12 +9,14 @@ instruction templates、scripts を管理するための個人用 AI agent asset
 
 ## インストール / クイックスタート
 
-各 script は macOS 標準の Ruby だけで動きます(追加依存なし・ネットワーク不要)。clone / pull には git を使います。
+pipeline の各 script は macOS 標準の Ruby だけで動きます(追加依存なし・ネットワーク不要)。
+例外は `scripts/probe-credential-isolation.sh` (`gh` / `git` / `curl` と network に依存) と
+配布 script の `personal-safe-gh` (`gh` に依存)。clone / pull には git を使います。
 
 ```sh
 # 推奨 clone 先は ~/src/agent/agent-tools(理由は下記)。任意のパスでも動きます。
 git clone <this-repo> ~/src/agent/agent-tools && cd ~/src/agent/agent-tools
-./scripts/setup.sh           # dry-run: 何が起きるか plan を表示(書き込まない)
+./scripts/setup.sh           # dry-run: plan を表示(tool home には書き込まない)
 ./scripts/setup.sh --apply   # build → register → connect → sync を通しで実環境に反映
 ```
 
@@ -24,7 +26,9 @@ doctor の既定期待パスに一致)。任意のパスでも動作しますが
 [docs/boundary-with-dotfiles.md](docs/boundary-with-dotfiles.md) で定義します。
 
 `setup.sh` は初回 install と更新の両方に使えます(`git pull` 後に再実行するだけ)。
-既定は dry-run で、`--apply` のときだけ実環境へ書き込みます。build / register /
+既定は dry-run で、`--apply` のときだけ実環境 (tool home) へ書き込みます。dry-run でも
+build / register は実行するので、repo 内の `generated/` と catalog は更新されます
+(どちらも gitignore 済み)。build / register /
 connect / sync を1つずつ個別に実行することもできます。前提条件・配置先・
 トラブルシュートを含む詳細は [docs/install-and-usage.md](docs/install-and-usage.md) を参照してください。
 

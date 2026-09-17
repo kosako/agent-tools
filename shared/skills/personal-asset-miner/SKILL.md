@@ -5,7 +5,8 @@ description: 過去の Claude Code / Codex セッションログから、繰り�
 
 過去の Claude Code / Codex セッションログを横断で洗い、**複数セッションで繰り返している手作業・段取り・訂正・再調査**を見つけて、「skill 化 / 資産化した方がよい候補」をランクつきで提案します。
 
-**これは report-only です。** 候補と根拠を出すところまでが仕事。実際に作るのは別工程(grill → skill-creator → check/build → PR → Codex review → sync)に渡します。自動でスキルや資産を生成・配備しません。
+**これは report-only です。** 候補と根拠を出すところまでが仕事。実際に作るのは別工程(grill → skill-creator → check/build → PR → 相互レビュー → sync)に渡します。
+reviewer は author ≠ reviewer の routing で決まるので、ここで片側に固定しません。自動でスキルや資産を生成・配備しません。
 
 **明示発火のみ。** 上記トリガーで明示的に頼まれたときだけ動きます。雰囲気で勝手に走りません。
 

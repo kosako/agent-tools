@@ -19,7 +19,10 @@ description: "Outcome: rank repeated cross-session work as reusable asset candid
 review:
   # runtime-state / privacy (medium): #215 で runtime description を変更したため、#86 の旧 content に
   # 紐づく承認は失効 (#148, #184)。private logs の read-only 境界、untrusted-data 扱い、出力の
-  # 非転記規律を human が再レビュー済み。承認対象を current build_id / artifact_kind に固定する。
+  # 非転記規律を human が再レビュー済み。
+  # 2026-09-17: reviewer を「Codex review」と固定していた記述を routing (author ≠ reviewer) へ
+  # 直したため build_id が変わり、author ≠ reviewer で再レビューのうえ approved_build_id を
+  # 焼き直した (内容変更は当該 1 文のみ)。承認対象を current build_id / artifact_kind に固定する。
   human_review: approved
-  approved_build_id: sha256:635d2edf05f7a2a13623152276b548c23f6c3ac61fc08647c80de6745bd74c20
+  approved_build_id: sha256:3508cf8c4ddd0d87d44a10c08a6510026ef1662127081a40a4ab1c39c9c0dd3a
   approved_artifact_kind: skill

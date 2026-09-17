@@ -64,5 +64,5 @@ scaffold と policy documentation は完了し、pipeline の 10 script が一�
   report-only status (`scripts/status.sh`)、doctor (`scripts/doctor.sh`)、
   一発 setup (`scripts/setup.sh`)。
 - script の実装は、対応する GitHub Issue で明示的に scope された範囲だけで行う。
-- issue で scope されていない build、sync、register、doctor scripts を
-  先回りで実装しない。
+- 既存 script への機能追加も、新しい script の追加も、issue で scope された範囲だけで行う
+  (先回りで広げない)。

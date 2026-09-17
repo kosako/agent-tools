@@ -54,7 +54,12 @@ global `core.hooksPath` は per-repo `.git/hooks` を**完全に置換**し、fa
 2. 全 gate pass 後、`git rev-parse --git-common-dir` 直下の `hooks/<stage>` が実行可能
    なら `exec` で chain する (exit code はそのまま repo hook のもの)。worktree でも
    共有側 hooks が対象 (実測 #201 と同じ挙動)。
-3. chain 先が dispatcher 自身に解決される誤設定は検出して skip する (無限 chain 防止)。
+3. gate 起動と chain は、いずれも Ruby の `[cmdname, argv0]` 2 要素配列形で行う。Ruby は
+   引数の **個数** で shell 経由かを決めるため、引数ゼロの pre-commit では path がそのまま
+   shell 解釈される (#267。空白で word split、`$( )` で command 置換。`.gitmodules` の
+   submodule 名経由で到達する経路を実測)。この形は冗長に見えるが回帰防止なので単純化
+   しない。`exec` の env Hash は第 1 引数のまま置く。
+4. chain 先が dispatcher 自身に解決される誤設定は検出して skip する (無限 chain 防止)。
 
 `git rev-parse --git-path hooks` は core.hooksPath を返すため使わない (自分に戻る)。
 
@@ -107,4 +112,5 @@ AI agent セッション由来の commit に相互レビュー routing の正本
 - 純粋ロジックと git 連携 (hooksPath 経由の commit / chain / 隔離 env) は
   `scripts/tests/git-hook-gates-test.sh` が CI で検証する。
 - 実環境の配線 (dotfiles の shim + global git config・Codex 側 marker の生存) は CI 外
-  (実機 smoke。実施記録は #202)。
+  (実機 smoke。実施記録は #202)。この実測以降 CLI は更新されており (2026-09-17 時点で
+  Claude Code 2.1.273 / codex 0.153.4)、marker 挙動の再検証は未実施。

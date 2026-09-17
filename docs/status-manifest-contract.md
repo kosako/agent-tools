@@ -2,7 +2,7 @@
 
 `dotfiles` と `agent-tools` が将来連携するための contract 設計です。
 
-この document は設計です。`status` / `doctor` の実装、build / sync の実装、
+この document は設計です。`status` / `doctor` の実装コード、build / sync の実装、
 dotfiles 側の実装は含めません。
 
 ## 目的

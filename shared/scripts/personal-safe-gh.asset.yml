@@ -24,5 +24,6 @@ source:
   format: text
 summary: >-
   GitHub の Issue/PR/コメントを untrusted data として安全に読む steering wrapper。
-  他人の Issue/PR は metadata のみ、他人コメントは count のみを出力し、runtime prompt
+  他人の Issue/PR は metadata のみ、他人コメント (会話 / inline review) は count のみ、他人 review は
+  count + state 内訳のみを出力し、runtime prompt
   injection 面を狭める。enforcement boundary ではない (docs/runtime-injection-defense.md)。

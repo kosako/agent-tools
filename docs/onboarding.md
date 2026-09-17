@@ -179,8 +179,6 @@ open issue の**正本は GitHub Issues** (この一覧は代表的な設計系�
   (script を含む skill を扱う時 or CI に pip 層を足す時)。
 - **#24 追加 artifact kind 対応**: skill / instruction / script は対応済み。残るは `agent`
   kind の各 tool 形式へのマッピング設計 (需要待ち)。
-- **#176 監査 FU (umbrella)**: 2026-07-10 の別モデル監査の残タスク (要判断の実装
-  #184/#185/#186 等) を集約。
 
 ## 8. 開発ワークフロー
 
