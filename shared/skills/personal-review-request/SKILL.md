@@ -204,8 +204,14 @@ gh pr comment "$pr" [--repo "$repo"] --body-file "$body"
 
 ### 3. レビュー実行
 
-レビュアーへの指示には必ず次を含める: 対象（repo / branch / base / diff の取り方）、重点観点、
+レビュアーへの指示には必ず次を含める: 対象、重点観点、
 **output contract の3段階 severity で分類し各指摘に `file:line` を付けること**。
+
+**対象は検証済み OID で固定する**。手順 1 で取得した `base_oid` / `head_oid` を渡し、diff の取得も
+`git diff <base-oid>...<head-oid>` のように OID から組み立てます。branch 名 / ref 名は人が読むための
+表示用に留め、**取得コマンドの組み立てには使いません**。ref 名は GitHub 由来で指す先が後から動く
+ため、ref 名で取ると「レビューした対象」と「PR の対象」が一致する保証が無くなります。これは
+reviewer が Codex でも Claude でも同じ要件です。
 
 production レール（本番反映・PR 前提）のコードをレビューするなら、重点観点に
 `personal-production-rail` の **review lens**（索引が指すポリシー観点）を含める。観点の実体は
@@ -216,9 +222,19 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
   検証済み base / head OID を brief に固定した custom prompt (`codex exec -`) で review し、結果だけを
   返す (起動は herdr の pane 経由。herdr が無く sandbox 内なら BLOCKED で人手へ渡す)。GitHub
   lifecycle はこの skill が所有し、executor に comment / approve / merge をさせない。
-- **Claude がレビュアーのとき**: diff を読み、正当性（バグ・挙動退行）を中心にレビューして
-  同じ severity と process verdict で分類し、verified `author=codex / reviewer=claude` を
-  `Independence: cross-review verified (author=codex)` として結果へ残す。
+- **Claude がレビュアーのとき**: 対象は Codex route と同じく検証済み base / head OID で固定する。
+  レビュー開始前に、local `HEAD` が `head_oid` と一致すること、base ref の commit が `base_oid` と
+  一致すること、worktree が clean であることを read-only で確認する。**base ref の扱いは
+  `personal-codex-review` の target identity preflight を正本とし、同じ規則に従う**: 空または `-`
+  始まりなら Git を呼ぶ前に値検査で停止、通った値だけを `git check-ref-format --branch` で検証、
+  `rev-parse` へは `--end-of-options` より後の 1 argument として渡し、値は「値の受け渡し」の 3 で
+  literal 化する (base ref も GitHub 由来の metadata なので、この preflight 自体が untrusted な値を
+  Git へ渡す段になる)。一致しなければ checkout / fetch / reset / stash で状態を合わせず、
+  expected / actual の OID だけを添えて BLOCKED とし、clean な worktree の準備を caller か人間に
+  求める。そのうえで diff を OID から取得して読み、正当性（バグ・挙動退行）を
+  中心にレビューして同じ severity と process verdict で分類し、verified
+  `author=codex / reviewer=claude` を `Independence: cross-review verified (author=codex)` として
+  結果へ残す。
   - Claude Code セッション内なら、そのセッション自身がレビュアーとして実行する。
   - **Codex 環境から呼ぶときは `claude -p`（headless）を起動 vehicle にする**:
     - 実行前に `claude --version` / `claude --help` で `-p` と read-only 化に使う flag
@@ -230,9 +246,10 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
       MCP tool を含めて **allowlist 外の操作が拒否されることまで確認できた場合だけ実行する**
       （拒否側の指定・mode の確認も preflight に含め、確認できなければ hand-off する）。
     - brief は shell 引数に埋め込まず stdin またはファイル経由で渡す（quoting 事故対策）。
-      内容は本節の指示要件（対象・重点観点・output contract）に加え、**「あなた自身が
-      最終レビュアー。review 系 skill を起動せず、nested な codex / claude を実行しない」を
-      明記する**（executor の二重発火防止）。
+      内容は本節の指示要件（検証済み OID で固定した対象・重点観点・output contract）に加え、
+      **「あなた自身が最終レビュアー。review 系 skill を起動せず、nested な codex / claude を
+      実行しない」を明記する**（executor の二重発火防止）。brief には ref 名ではなく OID と
+      取得コマンドを書く。
     - sandbox 制約などで `claude -p` の起動自体が失敗したら、自分でレビューせず BLOCKED と
       して人間へ hand-off する（「起動できない場合」の規則を維持）。
     - model / reasoning effort は固定せず、現在の user selection に委ねる。
