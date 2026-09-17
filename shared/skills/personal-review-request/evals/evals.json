@@ -145,6 +145,7 @@
       "files": [],
       "assertions": [
         { "id": "verifies-target-identity", "text": "local HEAD / base ref の commit を expected OID と照合し、clean worktree も確認している" },
+        { "id": "base-ref-handling", "text": "base ref を値検査 → check-ref-format → --end-of-options の順で扱い、literal 化して渡している (codex-review の preflight と同じ規則)" },
         { "id": "fetches-by-oid", "text": "diff の取得を検証済み OID から組み立て、ref 名から組み立てていない" },
         { "id": "ref-name-is-display-only", "text": "branch 名を表示用に留め、取得コマンドの組み立てに使っていない" },
         { "id": "independence-recorded", "text": "Independence を cross-review verified (author=codex) として残している" }

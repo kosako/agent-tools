@@ -224,10 +224,14 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
   lifecycle はこの skill が所有し、executor に comment / approve / merge をさせない。
 - **Claude がレビュアーのとき**: 対象は Codex route と同じく検証済み base / head OID で固定する。
   レビュー開始前に、local `HEAD` が `head_oid` と一致すること、base ref の commit が `base_oid` と
-  一致すること、worktree が clean であることを read-only で確認する。一致しなければ checkout /
-  fetch / reset / stash で状態を合わせず、expected / actual の OID だけを添えて BLOCKED とし、
-  clean な worktree の準備を caller か人間に求める (`personal-codex-review` の target identity
-  preflight と同じ扱い)。そのうえで diff を OID から取得して読み、正当性（バグ・挙動退行）を
+  一致すること、worktree が clean であることを read-only で確認する。**base ref の扱いは
+  `personal-codex-review` の target identity preflight を正本とし、同じ規則に従う**: 空または `-`
+  始まりなら Git を呼ぶ前に値検査で停止、通った値だけを `git check-ref-format --branch` で検証、
+  `rev-parse` へは `--end-of-options` より後の 1 argument として渡し、値は「値の受け渡し」の 3 で
+  literal 化する (base ref も GitHub 由来の metadata なので、この preflight 自体が untrusted な値を
+  Git へ渡す段になる)。一致しなければ checkout / fetch / reset / stash で状態を合わせず、
+  expected / actual の OID だけを添えて BLOCKED とし、clean な worktree の準備を caller か人間に
+  求める。そのうえで diff を OID から取得して読み、正当性（バグ・挙動退行）を
   中心にレビューして同じ severity と process verdict で分類し、verified
   `author=codex / reviewer=claude` を `Independence: cross-review verified (author=codex)` として
   結果へ残す。
