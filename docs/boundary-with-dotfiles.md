@@ -22,7 +22,8 @@
 - agent definitions。
 - instruction templates。
 - tool-specific generated artifacts。
-- runtime GitHub injection 防御の **body / 振る舞い**: provenance 3 軸の trust 判定ロジック、
+- runtime GitHub injection 防御の **body / 振る舞い**: provenance の trust 判定ロジック
+  (signal の定義と分類規則は `docs/runtime-injection-defense.md` が正本)、
   `safe-gh` wrapper 本体、`PreToolUse` hook の script body と home 配布 (build / sync)、
   隔離 reader workflow、policy data の single source (tool 別 render)、Codex hook 用の body 互換 (登録・配線は dotfiles)
   (下記「runtime GitHub injection 防御の分担」)。
@@ -42,7 +43,7 @@ review policy」) とは攻撃面が逆向きの別レイヤー。設計の spec
 - **dotfiles (control plane)**: capability gate、settings.json の permission deny floor / sandbox /
   MCP github gate / hook 宣言 (参照)、trust list・egress local の置き場規約、body 配布先の絶対 path
   参照、doctor の presence report、射程と限界の docs。
-- **agent-tools (body)**: trust 判定ロジック (provenance 3 軸)、`safe-gh` wrapper 本体、hook の
+- **agent-tools (body)**: trust 判定ロジック (provenance。定義は runtime-injection-defense.md)、`safe-gh` wrapper 本体、hook の
   script body とその home 配布 (build / sync)、隔離 reader workflow、policy data の single source、
   Codex hook 用の body 互換 (登録・配線は dotfiles)。
 
