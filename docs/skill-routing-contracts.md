@@ -40,9 +40,10 @@ target ごとの重複を除くと、現行 inventory は次の 12 件です。
 
 ## Representative routing queries
 
-この query set は #216 の機械 eval 基盤を先取りしない human-review baseline です。各行で primary
-だけが依頼の主目的を所有し、secondary は gate / quality / placement の補助または後段 hand-off に
-限ります。
+この query set は human-review baseline です。各行で primary だけが依頼の主目的を所有し、
+secondary は gate / quality / placement の補助または後段 hand-off に限ります。機械 eval 版
+(prompt / primary / must_not の正本) は `scripts/lib/skill_routing_cases.json` で、実測手順は
+[skill-routing-acceptance.md](skill-routing-acceptance.md) (#280)。
 
 | Query | Primary | Secondary / hand-off | Must not trigger |
 | --- | --- | --- | --- |
