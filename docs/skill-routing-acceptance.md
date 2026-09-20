@@ -34,8 +34,12 @@ probe は一時 directory に project を作り、候補 skill を **project sco
 
 | tool | 候補 skill の置き場 | user scope の排除 | 確認した版 |
 | --- | --- | --- | --- |
-| claude-code | `<proj>/.claude/skills/<name>/` | `--setting-sources project` (user / local の settings と skill を読まない) | 未確認 (smoke で確定する) |
+| claude-code | `<proj>/.claude/skills/<name>/` | `--setting-sources project` (user / local の settings と skill を読まない) | 2.1.277 (2026-09-20 smoke): `~/.claude/skills` の `personal-*` と plugin skill は listing から消え、project skill と bundled skill (dataviz / code-review 等) だけが残る。bundled は両 variant に等しく載る |
 | codex | `<proj>/.agents/skills/<name>/` (公式 docs の repository-level path) | 未確認 (`~/.codex/skills` の skill が同名で並ぶ可能性がある) | 未確認 |
+
+claude-code の観測に使う event (2.1.277 で実測): `system` / `init` の `model` と `skills` (listing)、
+`assistant` の `tool_use` (`name: "Skill"`, `input.skill: "<name>"`)、`result` の `usage`
+(`input_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens` / `output_tokens`)。
 
 候補 skill の既定の source は `generated/<tool>/skills` (build 済みの配布物)。`--source DIR` で
 別の dir (例: 圧縮前の generated を退避したもの) を指せるので、baseline と candidate を同じ
