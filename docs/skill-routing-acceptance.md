@@ -41,6 +41,11 @@ claude-code の観測に使う event (2.1.277 で実測): `system` / `init` の 
 `assistant` の `tool_use` (`name: "Skill"`, `input.skill: "<name>"`)、`result` の `usage`
 (`input_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens` / `output_tokens`)。
 
+MCP server は `--strict-mcp-config` で読まない。headless では MCP の起動が最初の API call に間に合う
+かが run ごとに揺れ、baseline の実測 (2026-09-20) では 24 run が `tools=25 / mcp=0` と
+`tools=72 / mcp=5` の 2 群に割れて `first_prompt_tokens` に ±2.7k token の差が出た (skill listing は
+全 run で一定)。description 圧縮で期待する差 (1〜2k token) より大きいので、条件を固定する。
+
 候補 skill の既定の source は `generated/<tool>/skills` (build 済みの配布物)。`--source DIR` で
 別の dir (例: 圧縮前の generated を退避したもの) を指せるので、baseline と candidate を同じ
 手順で測れる。実 home (`~/.claude` / `~/.codex`) には書き込まない。

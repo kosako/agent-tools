@@ -147,8 +147,13 @@ module ProbeSkillRouting
 
   # --- adapter: claude-code -----------------------------------------------------------
 
+  # --strict-mcp-config (かつ --mcp-config 無し) で MCP server を読まない。headless では MCP の
+  # 起動が最初の API call に間に合うかが run ごとに揺れ、tool 定義の分だけ prompt 量が変わる
+  # (baseline の実測で 25 tool / 72 tool の 2 群に割れ、first_prompt_tokens に ±2.7k の差が出た)。
+  # routing の観測に MCP は不要なので、条件を固定する側に倒す。
   def self.claude_argv(opts, prompt)
-    argv = ["claude", "-p", "--setting-sources", "project", "--output-format", "stream-json", "--verbose",
+    argv = ["claude", "-p", "--setting-sources", "project", "--strict-mcp-config",
+            "--output-format", "stream-json", "--verbose",
             "--max-turns", opts[:max_turns].to_s, "--no-session-persistence"]
     argv += ["--model", opts[:model]] if opts[:model]
     argv + [prompt]
