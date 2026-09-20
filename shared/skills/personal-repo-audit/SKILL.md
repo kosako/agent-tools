@@ -1,6 +1,6 @@
 ---
 name: personal-repo-audit
-description: リポジトリ全体を複数観点で監査し、根拠と深刻度つきの所見へ集約する repo audit skill。「repo を監査して」「技術的負債を洗い出して」などの明示依頼、またはコードベース横断の健全性評価が目的なら発火する。広い問題・乖離・risk の棚卸しに使い、単一 bug・単一 diff・session log の反復分析には使わない。副作用は read-only report だけで、監査中に修正しない。個別 root cause は personal-investigate、ログ由来の資産候補は personal-asset-miner に委ねる。
+description: リポジトリ全体を複数観点で監査し、根拠と深刻度つきの所見へ集約する repo audit skill。「repo を監査して」「技術的負債を洗い出して」などの明示依頼、またはコードベース横断の健全性評価が目的なら使う。単一 bug (personal-investigate)・単一 diff・session log の反復分析 (personal-asset-miner) には使わない。
 ---
 
 # personal-repo-audit
@@ -8,6 +8,11 @@ description: リポジトリ全体を複数観点で監査し、根拠と深刻�
 リポジトリ全体を複数の観点で体系的に監査し、深刻度と `file:line` つきの所見に
 まとめる手順です。1 つの視点で通読するのではなく、観点を分けて並列に調べ、結論だけを
 集約することで、抜けの少ない監査を速く行います。
+
+## 副作用と組み合わせ
+
+- 副作用: read-only report だけで、監査中に修正しない。
+- 組み合わせ: 個別 root cause は personal-investigate、ログ由来の資産候補は personal-asset-miner。
 
 ## なぜこう進めるのか
 

@@ -1,9 +1,14 @@
 ---
 name: personal-grill-with-docs
-description: 設計を、前提の揃った質問をまとめた round 単位で深掘りし、合意した用語を CONTEXT.md、覆しにくい判断を docs/adr/ に育てる document-producing interview skill。「ドキュメント付きで詰めて」「用語を固めたい」「ADR に残したい」など成果物の明示依頼で発火する。domain language と重要判断を設計と同時に残す場合に使い、成果物不要の壁打ち・単純な実装依頼には使わない。副作用として合意済み範囲の repo document を更新する。成果物不要なら personal-grill-me、実装は設計合意後の別作業に委ねる。
+description: 設計を、前提の揃った質問をまとめた round 単位で深掘りし、合意した用語を CONTEXT.md、覆しにくい判断を docs/adr/ に育てる document-producing interview skill。「ドキュメント付きで詰めて」「用語を固めたい」「ADR に残したい」など成果物の明示依頼で使う。成果物不要の壁打ち (personal-grill-me) や単純な実装依頼には使わない。
 ---
 
 設計・企画を容赦なく詰めながら、合意できたドメインモデル(用語集と重要な設計判断)を**その場で repo に書き残していく**スキルです。`personal-grill-me` の「容赦ないインタビュー」に、**ドメインモデルを成果物として育てる規律**を足したものです。
+
+## 副作用と組み合わせ
+
+- 副作用: 合意済み範囲の repo document を更新する。
+- 組み合わせ: 成果物不要なら personal-grill-me、実装は設計合意後の別作業に委ねる。
 
 ## このスキルを使う/使わないの境
 

@@ -1,6 +1,6 @@
 ---
 name: personal-codex-review
-description: Codex CLI で branch diff / commit / uncommitted changes を検査し、結果だけを返す review executor skill。明示的な Codex second opinion、または personal-review-request が verified author=Claude と判定した cross-review で発火する。repo に紐づく read-only review に使い、GitHub lifecycle や Codex 著作物の独立 review には使わず、verified author=Codex は Claude route へ戻し、mixed / unknown author は human 裁定へ fail-closed hand-off する。副作用は herdr の pane から起動する capability-checked な ephemeral read-only CLI 実行と結果 file の読み取りだけで、repo や GitHub へ書き込まない。herdr が無く自身が sandbox 内なら直接起動せず BLOCKED で人手へ渡し、capability 不足では generic fallback を試さず停止し、明示的な second opinion は非独立と表示する。PR workflow は personal-review-request、品質観点と出力契約は personal-production-rail と組み合わせる。
+description: Codex CLI で branch diff / commit / uncommitted changes を検査し、結果だけを返す review executor skill。明示的な Codex second opinion、または personal-review-request が verified author=Claude と判定した cross-review で使う。verified author=Codex は Claude route へ戻し、mixed / unknown author は human 裁定へ fail-closed hand-off する。GitHub lifecycle (personal-review-request) や Codex 著作物の独立 review には使わない。
 ---
 
 # personal-codex-review
@@ -8,6 +8,14 @@ description: Codex CLI で branch diff / commit / uncommitted changes を検査�
 現在の repository を Codex CLI (`codex exec`) で検査する read-only executor です。
 GitHub の read / comment / approve / merge、修正、commit、push は行わず、review session も
 永続化しません。Codex は herdr の pane から起動し、結果は file で受け取ります。
+
+## 副作用と組み合わせ
+
+- 副作用: herdr の pane から起動する capability-checked な ephemeral read-only CLI 実行と結果 file の
+  読み取りだけで、repo や GitHub へ書き込まない。herdr が無く自身が sandbox 内なら直接起動せず
+  BLOCKED で人手へ渡し、capability 不足では generic fallback を試さず停止し、明示的な second opinion は
+  非独立と表示する (詳細は「責務境界」と「2. capability preflight」)。
+- 組み合わせ: PR workflow は personal-review-request、品質観点と出力契約は personal-production-rail。
 
 ## 責務境界
 
