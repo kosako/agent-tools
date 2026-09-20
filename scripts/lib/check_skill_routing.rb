@@ -15,7 +15,9 @@
 #   - primary hit: case の primary skill が observed に含まれる (primary が null の case は対象外)。
 #   - must_not violation: case の must_not のいずれかが observed に含まれる (routing の破れ)。
 #   - token: run ごとの prompt_tokens / output_tokens を合算して報告する (gate ではなく観測値。
-#     description の圧縮が context 量に効いたかを見るための指標)。
+#     description の圧縮が context 量に効いたかを見るための指標)。first_prompt_tokens (最初の
+#     API call の prompt 量) は任意 field で、全 ok run が持つときだけ集計する。turn 数に依存
+#     しないので listing の大きさの差はこちらに素直に出る。
 #   - baseline 比較 (--baseline): 同じ tool・同じ model・同じ case 集合・同じ run 数の結果同士だけ
 #     比較する (条件が違えば構造エラー)。候補で primary hit が減る、または violation が増えたら
 #     回帰として exit 1。token の増減は報告だけで gate にしない。
@@ -47,11 +49,14 @@ module CheckSkillRouting
     <results.json> probe-skill-routing.sh の出力。shape:
       { "schema_version": 1, "tool": "claude-code", "model": "<model id>", "variant": "<label>",
         "runs": [ { "case": "<case id>", "observed": ["<skill name>", ...],
-                    "prompt_tokens": 1234, "output_tokens": 56, "status": "ok" } ] }
+                    "prompt_tokens": 1234, "output_tokens": 56, "status": "ok",
+                    "first_prompt_tokens": 1000 } ] }   (first_prompt_tokens は任意)
 
     判定: 全 case に ok な run があること (coverage)。primary skill の hit と must_not skill の
-    violation を数え、token を合算して報告する。--baseline を与えると同条件 (tool / model /
-    case 集合 / run 数) の結果と比較し、primary hit の減少または violation の増加を回帰とする。
+    violation を数え、token を合算して報告する (prompt_tokens = run 全体、first_prompt_tokens =
+    最初の API call の prompt 量。後者は全 run が持つときだけ集計)。--baseline を与えると同条件
+    (tool / model / case 集合 / run 数) の結果と比較し、primary hit の減少または violation の増加を
+    回帰とする。token は gate にせず delta を報告するだけ。
 
     exit: 0 = pass (violation 0、比較時は回帰なし),
           1 = breach observed (must_not violation / regression against baseline),
@@ -131,6 +136,10 @@ module CheckSkillRouting
         raise Error, "#{label}: runs[#{index}].#{key} must be a non-negative integer"
       end
     end
+    # first_prompt_tokens (最初の API call の prompt 量) は取れる tool だけが書く任意 field。
+    if r.key?("first_prompt_tokens") && !(r["first_prompt_tokens"].is_a?(Integer) && r["first_prompt_tokens"] >= 0)
+      raise Error, "#{label}: runs[#{index}].first_prompt_tokens must be a non-negative integer when present"
+    end
   end
 
   # skill 名は失敗メッセージへ interpolate されるので、制御文字を入力エラーで弾く (出力偽造の防止)。
@@ -162,6 +171,8 @@ module CheckSkillRouting
     runs_total = 0
     prompt_tokens = 0
     output_tokens = 0
+    first_tokens = 0
+    first_count = 0
 
     cases[:cases].each do |c|
       runs = by_case[c["id"]]
@@ -177,6 +188,10 @@ module CheckSkillRouting
         runs_total += 1
         prompt_tokens += r["prompt_tokens"]
         output_tokens += r["output_tokens"]
+        if r.key?("first_prompt_tokens")
+          first_tokens += r["first_prompt_tokens"]
+          first_count += 1
+        end
         observed = r["observed"]
         primary_hit = c["primary"].nil? ? nil : observed.include?(c["primary"])
         unless c["primary"].nil?
@@ -190,15 +205,18 @@ module CheckSkillRouting
         end
         per_case << {
           id: c["id"], primary: c["primary"], primary_hit: primary_hit, violated: violated,
-          observed: observed, prompt_tokens: r["prompt_tokens"], output_tokens: r["output_tokens"]
+          observed: observed, prompt_tokens: r["prompt_tokens"], output_tokens: r["output_tokens"],
+          first_prompt_tokens: r["first_prompt_tokens"]
         }
       end
     end
 
+    # first_prompt_tokens は全 ok run が持つときだけ集計値として意味を持つ (一部欠けは n/a)。
     summary = {
       label: label, variant: results["variant"], tool: results["tool"], model: results["model"],
       runs: runs_total, hit: hit, hit_total: hit_total, violations: violations,
-      prompt_tokens: prompt_tokens, output_tokens: output_tokens
+      prompt_tokens: prompt_tokens, output_tokens: output_tokens,
+      first_prompt_tokens: (first_count == runs_total && runs_total.positive? ? first_tokens : nil)
     }
     { summary: summary, per_case: per_case, breaches: breaches, structural: structural }
   end
@@ -234,24 +252,27 @@ module CheckSkillRouting
     primary = pc[:primary].nil? ? "primary=n/a" : "primary=#{pc[:primary_hit] ? 'hit' : 'MISS'}"
     must_not = pc[:violated].empty? ? "must_not=ok" : "must_not=VIOLATED(#{pc[:violated].join(',')})"
     "case #{pc[:id]}: #{primary} #{must_not} observed=[#{pc[:observed].join(',')}] " \
-      "tokens=#{pc[:prompt_tokens]}/#{pc[:output_tokens]}"
+      "tokens=first:#{pc[:first_prompt_tokens] || 'n/a'} total:#{pc[:prompt_tokens]} out:#{pc[:output_tokens]}"
   end
 
   def self.format_summary(s)
-    mean = s[:runs].zero? ? 0 : (s[:prompt_tokens].to_f / s[:runs]).round
+    mean = ->(total) { s[:runs].zero? ? 0 : (total.to_f / s[:runs]).round }
+    first = s[:first_prompt_tokens] ? "#{s[:first_prompt_tokens]} (mean #{mean.call(s[:first_prompt_tokens])})" : "n/a"
     "summary[#{s[:label]}] variant=#{s[:variant]} tool=#{s[:tool]} model=#{s[:model]} runs=#{s[:runs]} " \
       "primary=#{s[:hit]}/#{s[:hit_total]} violations=#{s[:violations]} " \
-      "prompt_tokens=#{s[:prompt_tokens]} (mean #{mean}) output_tokens=#{s[:output_tokens]}"
+      "prompt_tokens=#{s[:prompt_tokens]} (mean #{mean.call(s[:prompt_tokens])}) output_tokens=#{s[:output_tokens]} " \
+      "first_prompt_tokens=#{first}"
   end
 
   def self.format_delta(cand, base)
     pct = lambda do |c, b|
-      b.zero? ? "n/a" : format("%+.1f%%", (c - b) * 100.0 / b)
+      c.nil? || b.nil? || b.zero? ? "n/a" : format("%+.1f%%", (c - b) * 100.0 / b)
     end
     "delta candidate-baseline: primary #{format('%+d', cand[:hit] - base[:hit])}, " \
       "violations #{format('%+d', cand[:violations] - base[:violations])}, " \
       "prompt_tokens #{pct.call(cand[:prompt_tokens], base[:prompt_tokens])}, " \
-      "output_tokens #{pct.call(cand[:output_tokens], base[:output_tokens])}"
+      "output_tokens #{pct.call(cand[:output_tokens], base[:output_tokens])}, " \
+      "first_prompt_tokens #{pct.call(cand[:first_prompt_tokens], base[:first_prompt_tokens])}"
   end
 
   # --- CLI --------------------------------------------------------------------------

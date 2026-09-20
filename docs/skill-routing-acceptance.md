@@ -51,7 +51,8 @@ claude-code の観測に使う event (2.1.277 で実測): `system` / `init` の 
 { "schema_version": 1, "tool": "claude-code", "model": "<model id>", "variant": "baseline",
   "listing_chars": 4952,
   "runs": [ { "case": "<case id>", "observed": ["<skill name>", ...],
-              "prompt_tokens": 1234, "output_tokens": 56, "status": "ok" } ] }
+              "prompt_tokens": 1234, "output_tokens": 56, "first_prompt_tokens": 1000,
+              "status": "ok" } ] }
 ```
 
 - `observed`: その run で **起動された** skill 名。claude-code は stream-json の `Skill` tool_use、
@@ -59,7 +60,13 @@ claude-code の観測に使う event (2.1.277 で実測): `system` / `init` の 
   skill は含めない。
 - `prompt_tokens`: claude-code は `result.usage` の input + cache_creation + cache_read の合計
   (skill listing は system prompt 側なので cache に現れる)。codex は usage の `input_tokens`。
-  `output_tokens` は各 CLI の値。
+  `output_tokens` は各 CLI の値。どちらも run 全体の合計で、turn 数 (model の振る舞い) に依存する。
+- `first_prompt_tokens` (任意): 最初の API call の prompt 量 (claude-code は最初の `assistant`
+  event の `message.usage` の合計)。turn 数に依存しないので、listing の大きさの差はこちらに
+  素直に出る。judge は全 ok run が持つときだけ集計する。
+- `--max-turns` (既定 2) の打ち切り (`result.subtype == "error_max_turns"`) は **観測完了**として
+  `status: ok` にする。routing の判断 (Skill 起動) は最初の turn で出るので、skill が起動した後の
+  作業は走らせない (baseline 24 case のうち 20 case がこの形で終わった)。
 - `listing_chars`: 候補 skill の description の合計文字数 (毎 turn 載る静的な context 量の指標)。
   Claude Code は description を 1,536 文字で切り、Codex は listing 全体を context の 2% または
   8,000 文字に収める (2026-09-19 時点の公式 docs)。

@@ -18,6 +18,8 @@
 #     PR / Issue に貼る summary。CI 緑を根拠にしない。
 #   - 観測は CLI の event stream に依存する。field 名が変わると observed が空になり、判定は
 #     primary MISS として現れる (緑には化けない)。--smoke で listing と event 形式を先に確認する。
+#   - --max-turns の打ち切りは観測完了として扱う (routing の判断は最初の turn の Skill 起動で
+#     出る。skill が起動した後の作業は観測対象外なので、続きを走らせない)。
 #
 # prompt / path は shell 文字列に埋め込まず argv 配列と stdin で渡す (#266 の欠陥クラスを
 # 持ち込まない)。
@@ -152,16 +154,22 @@ module ProbeSkillRouting
     argv + [prompt]
   end
 
-  # stream-json を読んで observed / token / model を取り出す。
+  # prompt 側の token として合算する usage の key (input + cache_creation + cache_read。skill
+  # listing は system prompt 側なので cache に現れる)。
+  PROMPT_USAGE_KEYS = %w[input_tokens cache_creation_input_tokens cache_read_input_tokens].freeze
+
+  # stream-json を読んで observed / token / model を取り出す (2.1.277 で実測した形)。
   # - Skill tool の起動: type=assistant の content[].tool_use で name == "Skill"。skill 名は
   #   input.skill (無ければ input.name)。
-  # - usage: type=result の usage。prompt は input + cache_creation + cache_read の合計 (skill
-  #   listing は system prompt 側なので cache 側に現れる)。
+  # - first_prompt_tokens: 最初の assistant message の usage の prompt 合計 = 最初の API call の
+  #   context 量。listing (description) の大きさが最も素直に出る指標。
+  # - prompt_tokens / output_tokens: type=result の usage (run 全体の合計。turn 数に依存する)。
+  # - subtype: result の subtype。error_max_turns は打ち切りであって観測失敗ではない。
   def self.parse_claude(jsonl)
     observed = []
     model = nil
-    prompt_tokens = output_tokens = nil
-    is_error = false
+    prompt_tokens = output_tokens = first_prompt_tokens = nil
+    subtype = nil
     text = +""
     jsonl.each_line do |line|
       e = begin
@@ -175,6 +183,10 @@ module ProbeSkillRouting
       when "system"
         model ||= e["model"] if e["model"].is_a?(String)
       when "assistant"
+        if first_prompt_tokens.nil?
+          u = e.dig("message", "usage")
+          first_prompt_tokens = sum_usage(u, PROMPT_USAGE_KEYS) if u.is_a?(Hash)
+        end
         content = e.dig("message", "content")
         next unless content.is_a?(Array)
         content.each do |c|
@@ -189,15 +201,18 @@ module ProbeSkillRouting
         end
       when "result"
         u = e["usage"].is_a?(Hash) ? e["usage"] : {}
-        prompt_tokens = %w[input_tokens cache_creation_input_tokens cache_read_input_tokens]
-                        .sum { |k| u[k].is_a?(Integer) ? u[k] : 0 }
+        prompt_tokens = sum_usage(u, PROMPT_USAGE_KEYS)
         output_tokens = u["output_tokens"].is_a?(Integer) ? u["output_tokens"] : 0
-        is_error = e["is_error"] == true
+        subtype = e["subtype"] if e["subtype"].is_a?(String)
         text = e["result"] if text.empty? && e["result"].is_a?(String)
       end
     end
     { observed: observed.uniq, model: model, prompt_tokens: prompt_tokens, output_tokens: output_tokens,
-      is_error: is_error, text: text }
+      first_prompt_tokens: first_prompt_tokens, subtype: subtype, text: text }
+  end
+
+  def self.sum_usage(usage, keys)
+    keys.sum { |k| usage[k].is_a?(Integer) ? usage[k] : 0 }
   end
 
   # --- adapter: codex (0.153.4 で未検証。--smoke で確認してから使う) ------------------------
@@ -239,7 +254,7 @@ module ProbeSkillRouting
     prompt_tokens = usage ? usage["input_tokens"] : nil
     output_tokens = usage ? usage["output_tokens"] : nil
     { observed: observed.uniq, model: model, prompt_tokens: prompt_tokens, output_tokens: output_tokens,
-      is_error: false, text: text }
+      first_prompt_tokens: nil, subtype: nil, text: text }
   end
 
   def self.find_string(obj, key)
@@ -303,7 +318,12 @@ module ProbeSkillRouting
       out, err, status = run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout])
       parsed = parse_codex(out, proj, names)
     end
-    ok = status&.success? && !parsed[:is_error] && parsed[:prompt_tokens] && parsed[:output_tokens]
+    # 観測完了の条件: usage が取れていて、CLI が正常終了したか、または --max-turns の打ち切り
+    # (claude-code の result.subtype == "error_max_turns")。打ち切りは routing の判断 (最初の
+    # turn の Skill 起動) を観測した後に起きるので観測失敗ではない。認証 / API エラー等の
+    # 非ゼロ終了は観測不能として error (judge は緑に数えない)。
+    complete = status&.success? || parsed[:subtype] == "error_max_turns"
+    ok = complete && parsed[:prompt_tokens] && parsed[:output_tokens]
     parsed.merge(argv: argv, stdout: out, stderr: err, exit: status&.exitstatus, status: ok ? "ok" : "error")
   end
 
@@ -345,8 +365,9 @@ module ProbeSkillRouting
 
       if opts[:smoke]
         r = run_one(opts, proj, names, SMOKE_PROMPT)
-        puts "status=#{r[:status]} exit=#{r[:exit].inspect} model=#{r[:model].inspect} " \
-             "prompt_tokens=#{r[:prompt_tokens].inspect} output_tokens=#{r[:output_tokens].inspect}"
+        puts "status=#{r[:status]} exit=#{r[:exit].inspect} subtype=#{r[:subtype].inspect} model=#{r[:model].inspect} " \
+             "first_prompt_tokens=#{r[:first_prompt_tokens].inspect} prompt_tokens=#{r[:prompt_tokens].inspect} " \
+             "output_tokens=#{r[:output_tokens].inspect}"
         puts "observed=#{r[:observed].inspect}"
         puts "text: #{r[:text].to_s.strip[0, 800]}"
         unless r[:stderr].to_s.empty?
@@ -365,10 +386,14 @@ module ProbeSkillRouting
           model ||= r[:model]
           File.write(File.join(raw_dir, "#{c['id']}-#{n + 1}.jsonl"), r[:stdout])
           File.write(File.join(raw_dir, "#{c['id']}-#{n + 1}.stderr"), r[:stderr]) unless r[:stderr].to_s.empty?
-          runs << { "case" => c["id"], "observed" => r[:observed], "prompt_tokens" => r[:prompt_tokens] || 0,
-                    "output_tokens" => r[:output_tokens] || 0, "status" => r[:status] }
+          run = { "case" => c["id"], "observed" => r[:observed], "prompt_tokens" => r[:prompt_tokens] || 0,
+                  "output_tokens" => r[:output_tokens] || 0, "status" => r[:status] }
+          # first_prompt_tokens は取れた tool (claude-code) だけ書く。judge では任意 field。
+          run["first_prompt_tokens"] = r[:first_prompt_tokens] if r[:first_prompt_tokens]
+          runs << run
           puts "#{c['id']} [#{n + 1}/#{opts[:repeat]}]: #{r[:status]} observed=#{r[:observed].inspect} " \
-               "tokens=#{r[:prompt_tokens].inspect}/#{r[:output_tokens].inspect}"
+               "tokens=first:#{r[:first_prompt_tokens].inspect} total:#{r[:prompt_tokens].inspect} " \
+               "out:#{r[:output_tokens].inspect}"
         end
       end
       results = {

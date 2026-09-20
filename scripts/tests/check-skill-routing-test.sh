@@ -64,8 +64,10 @@ write_results "$tmp/ok.json" claude-code model-x candidate \
   "$(run_line b-primary ok 120 12 '["skill-b"]')" \
   "$(run_line none ok 80 8 '[]')"
 run_case "pass" 0 "ok: skill routing verified (3 runs, 3 cases)" -- --cases "$tmp/cases.json" --results "$tmp/ok.json"
-grep -q "summary\[candidate\] variant=candidate tool=claude-code model=model-x runs=3 primary=2/2 violations=0 prompt_tokens=300 (mean 100) output_tokens=30" "$tmp/out" \
+grep -q "summary\[candidate\] variant=candidate tool=claude-code model=model-x runs=3 primary=2/2 violations=0 prompt_tokens=300 (mean 100) output_tokens=30 first_prompt_tokens=n/a" "$tmp/out" \
   || fail "pass: unexpected summary: $(cat "$tmp/out")"
+grep -q "case a-primary: primary=hit must_not=ok observed=\[skill-a,skill-c\] tokens=first:n/a total:100 out:10" "$tmp/out" \
+  || fail "pass: unexpected case line: $(cat "$tmp/out")"
 
 # --- case 2: primary miss は報告するが破れではない (exit 0、MISS を表示) ---
 write_results "$tmp/miss.json" claude-code model-x candidate \
@@ -129,7 +131,7 @@ write_results "$tmp/base.json" claude-code model-x baseline \
   "$(run_line a-primary ok 200 20 '["skill-a"]')" \
   "$(run_line b-primary ok 200 20 '[]')" \
   "$(run_line none ok 200 20 '[]')"
-run_case "compare-pass" 0 "delta candidate-baseline: primary +1, violations +0, prompt_tokens -50.0%, output_tokens -50.0%" \
+run_case "compare-pass" 0 "delta candidate-baseline: primary +1, violations +0, prompt_tokens -50.0%, output_tokens -50.0%, first_prompt_tokens n/a" \
   -- --cases "$tmp/cases.json" --results "$tmp/ok.json" --baseline "$tmp/base.json"
 grep -q "summary\[baseline\] variant=baseline" "$tmp/out" || fail "compare-pass: baseline summary missing: $(cat "$tmp/out")"
 
@@ -210,6 +212,37 @@ run_case "missing-results-arg" 2 "cases and --results are required" -- --cases "
 run_case "unknown-arg" 2 "unknown argument: --bogus" -- --cases "$tmp/cases.json" --results "$tmp/ok.json" --bogus
 run_case "value-missing" 2 "requires a path" -- --cases "$tmp/cases.json" --results
 run_case "help" 0 "usage: check-skill-routing.sh" -- --help
+
+# --- case 20: first_prompt_tokens (任意 field) は全 run が持つときだけ集計し、delta にも出る ---
+# usage: run_line_first <case> <status> <prompt_tokens> <output_tokens> <first_prompt_tokens> <observed-json-array>
+run_line_first() {
+  printf '{"case": "%s", "status": "%s", "prompt_tokens": %s, "output_tokens": %s, "first_prompt_tokens": %s, "observed": %s}' \
+    "$1" "$2" "$3" "$4" "$5" "$6"
+}
+write_results "$tmp/first-cand.json" claude-code model-x candidate \
+  "$(run_line_first a-primary ok 100 10 40 '["skill-a"]')" \
+  "$(run_line_first b-primary ok 120 12 40 '["skill-b"]')" \
+  "$(run_line_first none ok 80 8 40 '[]')"
+write_results "$tmp/first-base.json" claude-code model-x baseline \
+  "$(run_line_first a-primary ok 100 10 80 '["skill-a"]')" \
+  "$(run_line_first b-primary ok 120 12 80 '["skill-b"]')" \
+  "$(run_line_first none ok 80 8 80 '[]')"
+run_case "first-tokens-summary" 0 "first_prompt_tokens=120 (mean 40)" -- --cases "$tmp/cases.json" --results "$tmp/first-cand.json"
+grep -q "case a-primary: .*tokens=first:40 total:100 out:10" "$tmp/out" || fail "first-tokens-summary: case line missing first: $(cat "$tmp/out")"
+run_case "first-tokens-delta" 0 "first_prompt_tokens -50.0%" \
+  -- --cases "$tmp/cases.json" --results "$tmp/first-cand.json" --baseline "$tmp/first-base.json"
+# 一部の run にしか無ければ n/a (混ぜて平均しない)
+write_results "$tmp/first-partial.json" claude-code model-x candidate \
+  "$(run_line_first a-primary ok 100 10 40 '["skill-a"]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line none ok 80 8 '[]')"
+run_case "first-tokens-partial" 0 "first_prompt_tokens=n/a" -- --cases "$tmp/cases.json" --results "$tmp/first-partial.json"
+# 型不正は入力エラー (exit 2)
+write_results "$tmp/first-bad.json" claude-code model-x candidate \
+  "$(run_line_first a-primary ok 100 10 '"40"' '["skill-a"]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line none ok 80 8 '[]')"
+run_case "first-tokens-bad-type" 2 "first_prompt_tokens must be a non-negative integer when present" -- --cases "$tmp/cases.json" --results "$tmp/first-bad.json"
 
 # --- case 19: 正本の case set は schema に通る (inventory 12 件・runtime skill と一致) ---
 ruby -rjson -e '
