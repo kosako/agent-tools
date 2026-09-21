@@ -1,0 +1,27 @@
+schema_version: 1
+name: personal-git-identity-gate
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #281 の実装 PR で author≠reviewer レビューのうえ承認。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:e11fcf6ae20a075889ddc132203d26f95c9fbf340df0c76b0e005ca5226136bb
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-git-identity-gate.rb
+  format: text
+summary: >-
+  pre-commit stage の git gate。git var で解決した author / committer の identity が name /
+  email とも非空であることを検証し、partial な identity (Git が受理してしまう空 email) の
+  commit を block する。identity の値は出力せず key 名だけを出す。context 一致は検査しない
+  (dotfiles 側の layout 規約に依存するため)。best-effort guardrail で --no-verify 等で迂回可能
+  (docs/git-hook-gates.md)。dispatcher の pre-commit 2 本目 (public-safety の後)。

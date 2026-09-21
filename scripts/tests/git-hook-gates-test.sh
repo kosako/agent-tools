@@ -1,6 +1,6 @@
 #!/bin/sh
 # personal-git-hook-dispatcher.rb / personal-public-safety-gate.rb /
-# personal-ai-trailer-gate.rb の self-test。
+# personal-git-identity-gate.rb / personal-ai-trailer-gate.rb の self-test。
 # 純粋ロジック (scan / judge) は check_helper の Ruby unit check、git 連携 (staged diff /
 # commit-msg / hooksPath 経由の dispatcher chain) は tmp repo での integration で検証する。
 # 実 HOME / 実 git config には触れない (HOME / GIT_CONFIG_GLOBAL / GIT_CONFIG_SYSTEM を隔離)。
@@ -15,7 +15,8 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 dispatcher_src="$repo_root/shared/scripts/personal-git-hook-dispatcher.rb"
 pubsafe_src="$repo_root/shared/scripts/personal-public-safety-gate.rb"
 trailer_src="$repo_root/shared/scripts/personal-ai-trailer-gate.rb"
-for f in "$dispatcher_src" "$pubsafe_src" "$trailer_src"; do
+identity_src="$repo_root/shared/scripts/personal-git-identity-gate.rb"
+for f in "$dispatcher_src" "$pubsafe_src" "$trailer_src" "$identity_src"; do
   [ -f "$f" ] || fail "missing $f"
 done
 
@@ -49,11 +50,12 @@ mkdir -p "$tmp/home"
 gh_token=$(printf 'ghp'; printf '_'; printf 'aaaaaaaaaabbbbbbbbbbccccccccccdddddd')
 
 # ---- Ruby unit checks: 純粋ロジック ------------------------------------------
-as_human ruby -r"$script_dir/lib/check_helper" - "$pubsafe_src" "$trailer_src" "$gh_token" <<'RUBY'
+as_human ruby -r"$script_dir/lib/check_helper" - "$pubsafe_src" "$trailer_src" "$identity_src" "$gh_token" <<'RUBY'
 require "stringio"
 require ARGV[0]
 require ARGV[1]
-gh_token = ARGV[2]
+require ARGV[2]
+gh_token = ARGV[3]
 
 # 負例ケースの想定内診断 (warn) で test 出力を汚さない。check_helper の FAIL は
 # capture の外で出るよう、判定呼び出しだけを包む。
@@ -176,6 +178,31 @@ check("CODEX_THREAD_ID で codex",
 check("両方で nested", AiTrailerGate.agents_from_env({ "CLAUDECODE" => "1", "CODEX_SANDBOX" => "x" }) == [:claude, :codex])
 check("空値は marker にしない", AiTrailerGate.agents_from_env({ "CLAUDECODE" => "" }) == [])
 
+# git-identity: parse / findings / judge (#281)。値は診断に出ないことも見る。
+full = GitIdentityGate.parse("CANARY-NAME <canary@example.com> 1700000000 +0900")
+check("ident 行を name / email に分解", full == { name: "CANARY-NAME", email: "canary@example.com" })
+partial = GitIdentityGate.parse("CANARY-NAME <> 1700000000 +0900")
+check("空 email の ident 行も形として受ける", partial == { name: "CANARY-NAME", email: "" })
+check("形が合わなければ nil", GitIdentityGate.parse("fatal: something").nil?)
+check("完全なら finding なし",
+      GitIdentityGate.findings({ "AUTHOR" => full, "COMMITTER" => full }).empty?)
+check("空 email は author / committer 別に key 名で報告",
+      GitIdentityGate.findings({ "AUTHOR" => partial, "COMMITTER" => full }) == ["author email is empty"])
+check("解決不能 (nil) は unresolved として報告",
+      GitIdentityGate.findings({ "AUTHOR" => nil, "COMMITTER" => full }) ==
+        ["author identity could not be resolved by git (name or email missing)"])
+check("空白だけの name も空扱い",
+      GitIdentityGate.findings({ "AUTHOR" => { name: "  ", email: "a@b" }, "COMMITTER" => full }) == ["author name is empty"])
+check("judge: 完全なら 0", quiet { GitIdentityGate.judge({ "AUTHOR" => full, "COMMITTER" => full }) } == 0)
+check("judge: partial なら 1", quiet { GitIdentityGate.judge({ "AUTHOR" => partial, "COMMITTER" => partial }) } == 1)
+diag = StringIO.new
+orig = $stderr
+$stderr = diag
+GitIdentityGate.judge({ "AUTHOR" => partial, "COMMITTER" => partial })
+$stderr = orig
+check("judge の診断に identity の値が出ない", !diag.string.include?("CANARY-NAME"))
+check("judge の診断に key 名は出る", diag.string.include?("author email is empty"))
+
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -258,7 +285,8 @@ deploy="$tmp/deploy"
 mkdir -p "$deploy"
 for pair in "personal-git-hook-dispatcher:$dispatcher_src" \
             "personal-public-safety-gate:$pubsafe_src" \
-            "personal-ai-trailer-gate:$trailer_src"; do
+            "personal-ai-trailer-gate:$trailer_src" \
+            "personal-git-identity-gate:$identity_src"; do
   name=${pair%%:*}
   src=${pair#*:}
   cp "$src" "$deploy/$name"
@@ -422,7 +450,8 @@ canary267=CANARY267
 copy_deploy267() {
   for pair in "personal-git-hook-dispatcher:$dispatcher_src" \
               "personal-public-safety-gate:$pubsafe_src" \
-              "personal-ai-trailer-gate:$trailer_src"; do
+              "personal-ai-trailer-gate:$trailer_src" \
+              "personal-git-identity-gate:$identity_src"; do
     name=${pair%%:*}
     src=${pair#*:}
     cp "$src" "$1/$name"
@@ -529,8 +558,11 @@ no_backtrace274() {
 deploy274="$tmp/deploy274"
 mkdir -p "$deploy274"
 cp "$dispatcher_src" "$deploy274/personal-git-hook-dispatcher"
-printf '#!/bin/sh\nexit 0\n' > "$deploy274/personal-public-safety-gate"
-chmod +x "$deploy274/personal-git-hook-dispatcher" "$deploy274/personal-public-safety-gate"
+for g in personal-public-safety-gate personal-git-identity-gate; do
+  printf '#!/bin/sh\nexit 0\n' > "$deploy274/$g"
+  chmod +x "$deploy274/$g"
+done
+chmod +x "$deploy274/personal-git-hook-dispatcher"
 repo274="$tmp/repo274"
 git init -q "$repo274"
 
@@ -629,5 +661,77 @@ set -e
 [ "$rc" -ne 0 ] || fail "#272 回帰: 特殊文字を含む deploy path の shim 経由でも secret は block されるべき: $out"
 echo "$out" | grep -q "public-safety-gate: blocked" || \
   fail "#272 回帰: shim 経由で gate が起動していない (path が壊れている疑い): $out"
+
+# ---- integration: git-identity-gate (#281) を hooksPath 経由の git commit で -------
+# dotfiles の identity reset と同じ形 (user.useConfigOnly + 明示的な空値) を repo local
+# config で再現する。Git は空 name を拒否するが空 email は受理して `Name <>` の commit を
+# 作る (実測 2.50.1) ので、gate が無いと name-only は通ってしまう。
+# 診断に identity の値が出ないことを canary (name / email) で pin する。
+repo281="$tmp/repo281"
+git init -q "$repo281"
+(cd "$repo281" && git config core.hooksPath "$hooksdir" && git config user.useConfigOnly true)
+name281="CANARY-NAME-281"
+email281="canary281@example.com"
+
+# 完全な identity は通る (gate 追加で既存の clean commit が壊れていない)
+(cd "$repo281" && git config user.name "$name281" && git config user.email "$email281")
+echo one > "$repo281/a.txt"
+(cd "$repo281" && git add a.txt && as_human git commit -qm "complete identity") \
+  || fail "#281: 完全な identity の commit は通るべき"
+
+# name-only (空 email): Git 単体では `Name <>` で通る形。gate が block する。
+(cd "$repo281" && git config user.email "")
+echo two > "$repo281/b.txt"
+(cd "$repo281" && git add b.txt)
+set +e
+out=$(cd "$repo281" && as_human git commit -qm "partial: name only" 2>&1)
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "#281: 空 email (name-only) の commit は block されるべき: $out"
+echo "$out" | grep -q "git-identity-gate: blocked" || fail "#281: identity gate の診断が出ていない: $out"
+echo "$out" | grep -q "author email is empty" || fail "#281: 空の key 名 (author email) が報告されていない: $out"
+echo "$out" | grep -q "$name281" && fail "#281: 診断に name の値が漏れている: $out"
+count=$(cd "$repo281" && git rev-list --count HEAD)
+[ "$count" -eq 1 ] || fail "#281: block されたはずの commit が作られている (count=$count)"
+
+# email-only (空 name): Git 自身が pre-commit より前に拒否する (実測 2.50.1: hook は走らない)。
+# ここでは commit が通らないことだけ見て、gate の unresolved 分岐は直接呼び出しで pin する。
+(cd "$repo281" && git config user.name "" && git config user.email "$email281")
+set +e
+(cd "$repo281" && as_human git commit -qm "partial: email only" >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "#281: 空 name (email-only) の commit は通らないはず (git 自身が拒否)"
+set +e
+out=$(cd "$repo281" && as_human "$deploy/personal-git-identity-gate" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "#281: 空 name で gate 単体は unresolved として exit 1 (rc=$rc): $out"
+echo "$out" | grep -q "could not be resolved by git" || fail "#281: unresolved の診断が出ていない: $out"
+echo "$out" | grep -q "$email281" && fail "#281: 診断に email の値が漏れている (git の stderr が素通り): $out"
+
+# gate の順序: secret が staged で identity も partial なら、先に走る public-safety が
+# block し、identity gate には到達しない (最初に fail した gate で止まる契約)。
+(cd "$repo281" && git config user.name "$name281" && git config user.email "")
+printf 'x = "%s"\n' "$gh_token" > "$repo281/leak.txt"
+(cd "$repo281" && git add leak.txt)
+set +e
+out=$(cd "$repo281" && as_human git commit -qm "leak + partial" 2>&1)
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "#281: secret + partial identity は block されるべき"
+echo "$out" | grep -q "public-safety-gate: blocked" || fail "#281: public-safety が先に block すべき: $out"
+echo "$out" | grep -q "git-identity-gate" && fail "#281: 先の gate が fail したのに identity gate まで走っている: $out"
+
+# 直接呼び出し: 引数ゼロで exit code が契約 (0 / 1) どおり
+(cd "$repo281" && git rm -q --cached leak.txt && rm leak.txt)
+set +e
+(cd "$repo281" && as_human "$deploy/personal-git-identity-gate" >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "#281: partial identity で gate 単体は exit 1 (rc=$rc)"
+(cd "$repo281" && git config user.email "$email281")
+(cd "$repo281" && as_human "$deploy/personal-git-identity-gate" >/dev/null 2>&1) \
+  || fail "#281: 完全な identity で gate 単体は exit 0"
 
 echo "ok: git-hook-gates self-test"

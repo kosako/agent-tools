@@ -14,11 +14,13 @@ risk:
 # レビューのうえ approved_build_id を焼き直した。
 # #274 (例外 / gate 起動失敗の exit code 正規化) で body を変更し、同じく author≠reviewer
 # レビューのうえ approved_build_id を焼き直した。
+# #281 (pre-commit に git-identity gate を追加) で STAGE_GATES を変更し、同じく author≠reviewer
+# レビューのうえ approved_build_id を焼き直した。
 # 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:614f4c9979fe7fdb0b8b587d0a24432f56cee708a8b16a9f910047592e1338d8
+  approved_build_id: sha256:d7219dd4951871fbcc7ccd9f591a168910f872fa62ff02bc9e04d4c774f7a6a1
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-git-hook-dispatcher.rb
