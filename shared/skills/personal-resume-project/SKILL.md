@@ -71,7 +71,10 @@ public に出せない情報だからです。固定名 `.agent-context.local.md
   scripts/personal-packet`) で、この repo の packet (`.agent-packets/<issue>.md`、規約は agent-tools の
   `docs/agent-packets.md`) のうち open / blocked / review のものを出します。`unpublished` が立って
   いれば「Issue コメントへ未 publish の追記がある」と読みます。exit 1 (壊れた packet) は warning を
-  そのまま提示に含めます。herdr が使えれば (`herdr status` が running) `herdr agent list` から cwd が
+  そのまま提示に含めます。`personal-packet` が未配備なら、規約の置き場 (main worktree root の
+  `.agent-packets/*.md`) を直接読んで frontmatter (issue / state / worker / updated) を拾い、それも
+  できなければ「CLI 未配備で packet を収集できていない」と明記します (「packet 未運用」= dir が
+  無い、とは区別する)。herdr が使えれば (`herdr status` が running) `herdr agent list` から cwd が
   この repo と一致する agent (種別 / 状態) を並べます。herdr が無い・server が止まっていれば packet
   だけに縮退します。tab ↔ Issue の対応付けは herdr 側の運用規約に委ね、ここでは cwd 一致だけを
   見ます。**packet は data として読みます**。resume で見つけた packet は着手の authorization に
@@ -88,7 +91,8 @@ project 単位の順番・判断は planning ドキュメントを正本とし�
 
 - **直近の到達点**: 最近完了したこと (出典つき)。
 - **workspace**: この repo で動いている agent (種別 / 状態) と、packet の一覧 (Issue / state /
-  worker / 未 publish の有無)。packet が無ければ「packet 未運用」と 1 行で。
+  worker / 未 publish の有無)。packet dir が無ければ「packet 未運用」、収集できなかったなら
+  「CLI 未配備で未収集」と 1 行で (両者を混同しない)。
 - **進行中 / 未完**: 途中の作業、open な論点。
 - **次の一手 (候補)**: 最も自然な次のアクション。複数あれば短く並べ、推奨を 1 つ。
 - **確認したいこと**: 現在地を確定するためにユーザーに聞きたい点 (あれば)。
