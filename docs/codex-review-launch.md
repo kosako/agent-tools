@@ -2,7 +2,8 @@
 
 `personal-codex-review` が Codex CLI (`codex exec`) をどう起動し、呼び出し元の Bash sandbox と
 どう共存するかを説明します。skill 本体の契約は
-`shared/skills/personal-codex-review/SKILL.md` が正本で、この文書は運用者向けの背景と前提です。
+`shared/skills/personal-codex-review/SKILL.md` が正本 (起動の機械的な手順は同 directory の
+`LAUNCH.md`、返却の雛形は `RESULT-FORMAT.md`) で、この文書は運用者向けの背景と前提です。
 
 ## 問題: sandbox の入れ子
 

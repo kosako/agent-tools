@@ -200,15 +200,8 @@ gh pr comment "$pr" [--repo "$repo"] --body-file "$body"
 3 と同じ規則で literal 化します (`mktemp` の結果に空白が含まれても壊れないように)。draft では一時ファイルを
 作らず、コメント案を会話内にだけ提示します。
 
-テンプレート:
-
-```markdown
-## 🔍 レビュー依頼（→ Codex | Claude）
-
-- **観点**: <今回の重点。例: 挙動変更を意図しないリファクタリングなので behavior drift を重点的に>
-- **出力**: finding は 🔴 must / 🟡 should / ⚪ nit、process verdict と independence は別 field
-- 結果はこの PR にコメントで返します
-```
+テンプレートは **この skill の directory にある `TEMPLATES.md` の「🔍 レビュー依頼」** を使います
+(観点・出力契約・結果の返し先の 3 点を必ず埋める。雛形の正本はそちら)。
 
 ### 3. レビュー実行
 
@@ -264,26 +257,8 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
 
 ### 4. 結果を PR に投稿
 
-```markdown
-## 📋 レビュー結果（by Codex | Claude）
-
-**Review process verdict: REJECT | Warning | APPROVE**
-**Finding summary: 🔴 must N / 🟡 should N / ⚪ nit N**
-**Independence: cross-review verified (author=claude) | cross-review verified (author=codex) | second-opinion only | human review**
-
-PR 全体の merge readiness は required checks 等を別途確認する。
-
-### 🔴 must
-- `path/to/file:123` — 指摘内容と理由
-
-### 🟡 should
-- ...
-
-### ⚪ nit
-- ...
-
-（該当ゼロの severity セクションは「なし」と書くか省略）
-```
+テンプレートは **`TEMPLATES.md` の「📋 レビュー結果」** を使います (verdict / finding summary /
+independence を別 field で書き、該当ゼロの severity は「なし」と書くか省略する。雛形の正本はそちら)。
 
 レビュアーの指摘を転記するときは要約しすぎない。一方で、明らかに誤検知と判断した指摘は黙って
 削らず、**転記したうえで依頼元としての評価（採用しない理由）を併記**する。
