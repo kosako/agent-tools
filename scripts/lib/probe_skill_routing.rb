@@ -354,20 +354,30 @@ module ProbeSkillRouting
         t.report_on_exception = false
         t
       end
-      if wait.join(timeout)
-        readers.each(&:join)
-        status = wait.value
-      else
+      completed = wait.join(timeout)
+      unless completed
         # pgroup: true なので pgid == 子の pid。負の pid で group 全体に送る。
         kill_group(wait.pid, "TERM")
         sleep 1
         kill_group(wait.pid, "KILL")
-        readers.each { |t| t.join(READER_JOIN_GRACE) }
+      end
+      # 正常終了でも、CLI が残した孫 process が pipe を継承していると read が返らない。timeout
+      # 経路と同じく共通の deadline で bounded に待ち、閉じなければ group を KILL し (pipe が閉じて
+      # 読めた分を回収してから)、それでも閉じない pipe を runner 側で閉じる。
+      deadline = Time.now + READER_JOIN_GRACE
+      drained = readers.map { |t| t.join([deadline - Time.now, 0].max) }.all?
+      unless drained
+        kill_group(wait.pid, "KILL")
+        readers.each { |t| t.join(1) }
         [o, e].each { |io| io.close unless io.closed? }
         readers.each { |t| t.join(1) }
-        wait.join(READER_JOIN_GRACE)
-        return [out, err, nil]
       end
+      wait.join(READER_JOIN_GRACE) unless completed
+      # stream を最後まで読み切れなかった run は観測として信用しない (status nil → error run)。
+      status = wait.value if completed && drained
+      # process group は runner 専用なので、CLI が detach したまま残した process も最後に回収する
+      # (残っていなければ ESRCH で no-op)。
+      kill_group(wait.pid, "KILL")
     end
     [out, err, status]
   end
