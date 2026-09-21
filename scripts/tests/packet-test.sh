@@ -193,7 +193,8 @@ grep -q "state" "$tmp/err" || fail "warning should name the field: $(cat "$tmp/e
 rm "$repo/.agent-packets/6.md"
 
 # 型変換で例外を投げる YAML (`!!float invalid`) が key / 値にあっても、その packet だけ broken (R293-21)
-for bad in '!!float invalid: ignored' 'pr: !!float invalid'; do
+# `title: !!binary /w==` は UTF-8 でない String になり list --json の JSON 生成で落ちる (R293-22)。tag は AST で拒否
+for bad in '!!float invalid: ignored' 'pr: !!float invalid' 'branch: !!binary /w=='; do
   printf -- '---\nissue: 6\ntitle: t\nstate: open\nworker: claude\nupdated: 2026-09-21T00:00:00+09:00\n%s\n---\n' "$bad" > "$repo/.agent-packets/6.md"
   set +e
   out=$(cd "$repo" && "$pkt" list 2>"$tmp/err")
@@ -202,6 +203,12 @@ for bad in '!!float invalid: ignored' 'pr: !!float invalid'; do
   [ "$rc" -eq 1 ] || fail "YAML type-conversion failure ($bad) should be a broken row, exit 1 (R293-21) (rc=$rc): $(cat "$tmp/err")"
   echo "$out" | grep -q "^#7 " || fail "R293-21 ($bad): healthy rows must still be listed: $out"
   grep -q "6.md" "$tmp/err" || fail "R293-21 ($bad): warning should name the packet: $(cat "$tmp/err")"
+  set +e
+  (cd "$repo" && "$pkt" list --json > "$tmp/json.out" 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "R293-22 ($bad): list --json should also degrade to exit 1 (rc=$rc)"
+  [ "$(jget "$tmp/json.out" 0 issue)" = "7" ] || fail "R293-22 ($bad): list --json must still emit healthy rows"
 done
 rm "$repo/.agent-packets/6.md"
 

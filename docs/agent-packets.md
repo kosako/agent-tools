@@ -140,8 +140,8 @@ file で行い、command 文字列へ inline 展開しない。
 - frontmatter の `title` に ` #` を含めるときは YAML の comment と区別するため引用符で囲む
   (`title: "Issue #253 の …"`)。
 - `published` は行頭の plain な `published: <日時>` 1 行だけを script が書き換える (引用符付き・
-  escape・tag 付きの key や重複は投稿前に拒否)。frontmatter の key は tag の無い plain scalar だけ
-  (tag 付き・入れ子の key は list で壊れた packet として報告)。packet は UTF-8 で書く (不正 byte が
+  escape・tag 付きの key や重複は投稿前に拒否)。frontmatter に YAML tag (`!!…`) は key にも値にも使わず、key は
+  plain scalar だけ (tag 付き・入れ子の key は list で壊れた packet として報告)。packet は UTF-8 で書く (不正 byte が
   あれば list は壊れた packet として報告し、publish は投稿しない)。
 - publish は投稿前に更新内容を同じ dir の `.<issue>.md.tmp` へ書き切り、投稿後に rename で差し替える。
   差し替えに失敗したら投稿済み URL とこの一時 file を示して止まる (再実行しない。中身を手で移す)。

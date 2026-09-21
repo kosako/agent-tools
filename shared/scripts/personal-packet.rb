@@ -378,15 +378,27 @@ module Packet
     root = Psych.parse(front_yaml)&.root
     raise Error, "#{path}: frontmatter が key: value の mapping ではありません" unless root.is_a?(Psych::Nodes::Mapping)
 
+    check_tags!(root, path)
     root.children.each_slice(2).map do |k, _v|
-      unless k.is_a?(Psych::Nodes::Scalar) && k.tag.nil?
-        raise Error, "#{path}: frontmatter の key に tag や入れ子は使えません (plain な `key:` にしてください)"
+      unless k.is_a?(Psych::Nodes::Scalar)
+        raise Error, "#{path}: frontmatter の key に入れ子は使えません (plain な `key:` にしてください)"
       end
 
       k
     end
   rescue Psych::Exception => e
     raise Error, "#{path}: frontmatter を YAML として読めません (#{e.class})"
+  end
+
+  # frontmatter の AST 全体で YAML tag を許さない。tag 付きの値は Psych が UTF-8 でない String
+  # (`!!binary`) や型変換の例外 (`!!float invalid`) を生む唯一の入口で、後段の型検査 (String かどうか)
+  # をすり抜けて JSON 生成で全体が落ちる (R293-22)。key の tag (R293-20) も同じ検査に含める。
+  def check_tags!(node, path)
+    if node.respond_to?(:tag) && !node.tag.nil?
+      raise Error, "#{path}: frontmatter に YAML tag (`!!…`) は使えません (plain な値にしてください)"
+    end
+
+    node.children&.each { |c| check_tags!(c, path) }
   end
 
   def check_keys!(front_yaml, path)
