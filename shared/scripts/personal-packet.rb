@@ -255,24 +255,42 @@ module Packet
 
     lines = sec.lines
     start = lines.rindex { |l| l.match?(ENTRY_RE) } || 0
-    publishable(lines[start..-1].join)
+    publishable(lines[start..-1].join, "## 結果 (最新 entry)")
   end
 
   def next_entry(secs)
     sec = secs["次の入口"]
-    sec && publishable(sec)
+    sec && publishable(sec, "## 次の入口")
+  end
+
+  # comment の対応を検査する。閉じていない `<!--` / 対応しない `-->` が残る text は拒否する
+  # (comment が節や entry の境界をまたいで境界を作り替える入力。R293-12)。切り捨てる範囲 (古い
+  # entry) にある閉じていない `<!--` は切り出した後では見えないので、**節全体に対して** 切り出しの
+  # 前に検査する (R293-14)。
+  # `<!--` と `-->` を出現順に走査し、厳密に交互 (開く → 閉じる) であることを要求する。lazy な
+  # gsub だけだと、comment の中にもう 1 つ `<!--` がある入力で外側の不均衡が見えなくなる
+  # (入れ子・孤立・未閉鎖はすべて拒否)。
+  def check_comments!(text, where)
+    open = false
+    text.scan(/<!--|-->/) do |tok|
+      if tok == "<!--"
+        raise Error, "#{where}: comment の中に `<!--` があります (入れ子)。投稿しません" if open
+
+        open = true
+      else
+        raise Error, "#{where}: 対応しない `-->` があります。投稿しません" unless open
+
+        open = false
+      end
+    end
+    raise Error, "#{where}: 閉じていない `<!--` があります (comment が節や entry をまたいでいます)。投稿しません" if open
+
+    text.gsub(/<!--.*?-->/m, "")
   end
 
   # 写す直前に template の案内 (HTML comment) を除く。境界は原文で決めた後なので除去で動かない。
-  # 閉じていない `<!--` / 対応しない `-->` が残る text は、comment が節をまたいで境界を作り替える
-  # 入力なので拒否する (R293-12)。
-  def publishable(text)
-    out = text.gsub(/<!--.*?-->/m, "")
-    if out.include?("<!--") || out.include?("-->")
-      raise Error, "閉じていない `<!--` か対応しない `-->` があります (comment が節をまたいでいます)。投稿しません"
-    end
-
-    out.strip
+  def publishable(text, where)
+    check_comments!(text, where).strip
   end
 
   def marker(issue, at)
@@ -281,6 +299,8 @@ module Packet
 
   def compose(front, at)
     secs = sections(front.body)
+    # 切り出す前に、各節の全体で comment の対応を検査する (切り捨てる範囲も含めて)。
+    secs.each { |name, text| check_comments!(text, "## #{name}") }
     result = latest_result(secs).to_s
     entry = next_entry(secs).to_s
     raise Error, "#{front.path}: 写す内容がありません (## 結果 / ## 次の入口 が空)" if result.empty? && entry.empty?

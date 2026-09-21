@@ -249,6 +249,32 @@ set -e
 [ "$rc" -eq 2 ] || fail "comment spanning sections should be refused (R293-12) (rc=$rc): $out"
 echo "$out" | grep -q "REQUEST-ONLY" && fail "R293-12: 依頼 content must not be printed"
 echo "$out" | grep -q "またいで" || fail "R293-12: should explain the cross-section comment: $out"
+# R293-14: 切り捨てる範囲 (古い entry の前) にある閉じていない `<!--` は、切り出した後では見えない。
+# 節全体で検査して拒否する (下書きが公開されない)
+cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
+ruby -e 'src = File.read(ARGV[0]); src.sub!(/^## 結果\n/) { "## 結果\n<!--\n" }; File.write(ARGV[0], src)' "$repo/.agent-packets/7.md"
+set +e
+out=$(cd "$repo" && with_gh "$pkt" publish 7 --dry-run 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "unclosed comment before the latest entry should be refused (R293-14) (rc=$rc): $out"
+echo "$out" | grep -q "NEW-SECTION-LINE\|OLD-SECTION-LINE\|NEXT-ENTRY-LINE" && fail "R293-14: refused publish must not print body"
+echo "$out" | grep -q "入れ子\|閉じていない" || fail "R293-14: should explain the comment problem: $out"
+# Codex の再現条件そのもの (後続に `-->` が一切無い): 閉じていない `<!--`
+cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
+ruby -e 'src = File.read(ARGV[0]); src.sub!(/^## 結果\n/) { "## 結果\n<!--\n" }; src.gsub!(/<!-- PRIVATE-COMMENT.*?-->\n/m) { "" }; File.write(ARGV[0], src)' "$repo/.agent-packets/7.md"
+set +e
+out=$(cd "$repo" && with_gh "$pkt" publish 7 --dry-run 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "unclosed comment with no closer at all should be refused (R293-14) (rc=$rc): $out"
+echo "$out" | grep -q "NEW-SECTION-LINE\|NEXT-ENTRY-LINE" && fail "R293-14 (no closer): refused publish must not print body"
+echo "$out" | grep -q "閉じていない" || fail "R293-14 (no closer): should say unclosed: $out"
+# 節をまたがない・entry をまたがない comment は従来どおり除去して通る (古い entry の中の閉じた comment)
+cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
+ruby -e 'src = File.read(ARGV[0]); src.sub!(/^- OLD-SECTION-LINE\n/) { "- OLD-SECTION-LINE\n<!-- closed inside old entry -->\n" }; File.write(ARGV[0], src)' "$repo/.agent-packets/7.md"
+out=$(cd "$repo" && with_gh "$pkt" publish 7 --dry-run) || fail "a closed comment inside an old entry must not block publish"
+echo "$out" | grep -q "NEW-SECTION-LINE" || fail "closed-comment case should still carry the latest entry"
 # R293-13: 未知 H2 の診断に本文 (secret) を出さない
 cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
 printf '## %s\nREQUEST-SECRET-H2\n' "$gh_token" > "$tmp/r13.add"
