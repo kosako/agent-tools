@@ -245,14 +245,18 @@ module PublicSafetyGate
   end
 
   def run(argv)
-    extra = load_local_patterns(LOCAL_PATTERNS_PATH)
-    case argv
-    when [] then report(staged_findings(extra), "再 commit してください")
-    when ["--stdin"] then report(stdin_findings(extra), "再実行してください")
-    else
-      # 未知の引数で黙って staged mode に倒さない (dispatcher は pre-commit に引数を渡さない)。
+    # 未知の引数で黙って staged mode に倒さない (dispatcher は pre-commit に引数を渡さない)。
+    # 引数の判定は local pattern の読み込みより前に置く (壊れた regex があっても usage を出す)。
+    unless [[], ["--stdin"]].include?(argv)
       warn "usage: personal-public-safety-gate [--stdin]"
-      2
+      return 2
+    end
+
+    extra = load_local_patterns(LOCAL_PATTERNS_PATH)
+    if argv.empty?
+      report(staged_findings(extra), "再 commit してください")
+    else
+      report(stdin_findings(extra), "再実行してください")
     end
   rescue ArgumentError => e
     warn "public-safety-gate: error: #{e.message}"

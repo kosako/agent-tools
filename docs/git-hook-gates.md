@@ -103,7 +103,8 @@ local pattern file のみ。network なし・値そのものは出力しない (
 実 `$HOME`、allow pragma も同じ) で stdin の text を行単位に scan する。git には触らず、
 path 判定 (`local-only-file`) は対象外。finding は `stdin:<line>` で報告し、exit 契約も
 同じ。packet の public 写しを Issue コメントへ投稿する前の検査口 (#253)。呼び出し側は
-text を stdin で渡し、definite が 1 件でもあれば投稿しない。
+text を stdin で渡し、exit 0 のときだけ投稿へ進む (1 = definite あり、2 = 検査できていない。
+どちらも投稿しない)。
 
 ## personal-git-identity-gate(pre-commit)
 

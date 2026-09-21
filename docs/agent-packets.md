@@ -81,7 +81,8 @@ published: 2026-09-21T23:55:00+09:00 # 最後に Issue コメントへ写した�
 - 停止理由 / 質問: (あれば)
 
 ### 2026-09-22 reviewer/codex
-- verdict: APPROVE (must 0 / should 1)
+- Review process verdict: Warning (🔴 must 0 / 🟡 should 1 / ⚪ nit 0)
+- Independence: cross-review verified (author=claude)
 
 ## 次の入口
 
@@ -100,8 +101,10 @@ PR #124 の should 1 件を直して re-review を依頼する。
 Issue コメントへ写すのは **`結果` の最新節 + `次の入口` の全文** (+ marker
 `<!-- agent-packet issue=N published=<日時> -->`)。`依頼` は Issue 本文そのものなので写さない。
 
-- 写す前に `personal-public-safety-gate --stdin` に本文を通し、definite (secret / 実 home
-  path / local pattern) が 1 件でもあれば投稿しない。suspicious は人に見せて判断する。
+- 写す前に `personal-public-safety-gate --stdin` に本文を通し、**exit 0 のときだけ投稿へ進む**。
+  exit 1 (definite: secret / 実 home path / local pattern が 1 件でもある) と exit 2 (検査エラー:
+  local pattern file の regex 壊れ等。本文を検査できていない) はどちらも投稿しない。suspicious は
+  exit 0 のまま警告が出るので、人に見せて判断する。
   レビュー済みの誤検知は該当行に `public-safety: allow` を書く (commit と同じ escape)。
   **planning tool の URL は local pattern file (`~/.config/agent-tools/public-safety-patterns.local`)
   に domain を置いてはじめて止まる** (gate 本体は public repo なので持たない。不在なら外部 URL は

@@ -33,6 +33,10 @@ export GIT_CONFIG_GLOBAL
 git config --file "$GIT_CONFIG_GLOBAL" user.name test
 git config --file "$GIT_CONFIG_GLOBAL" user.email test@example.com
 git config --file "$GIT_CONFIG_GLOBAL" init.defaultBranch main
+# Git の既定 excludes ($XDG_CONFIG_HOME/git/ignore) は HOME / XDG 由来で GIT_CONFIG_GLOBAL の隔離を
+# 素通りする。`.agent-packets/` を global ignore に登録した machine (dotfiles 側の規約) では
+# `git add -A` の fixture が stage されず、正常な gate が 0 を返して test が落ちる (R292-01)。
+git config --file "$GIT_CONFIG_GLOBAL" core.excludesFile /dev/null
 
 # 人間 (marker なし) として実行するための env 前置。
 as_human() {
@@ -366,6 +370,15 @@ set +e
 rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "--stdin with extra argument should be usage error (rc=$rc)"
+# 壊れた local pattern file があっても、未知引数は usage で止まる (argv 判定が pattern 読み込みより先)
+echo "([" > "$tmp/home/.config/agent-tools/public-safety-patterns.local"
+set +e
+out=$(cd "$repo" && as_human ruby "$pubsafe_src" --bogus 2>&1)
+rc=$?
+set -e
+rm "$tmp/home/.config/agent-tools/public-safety-patterns.local"
+[ "$rc" -eq 2 ] || fail "unknown argument with broken local pattern should still be exit 2 (rc=$rc)"
+echo "$out" | grep -q "^usage:" || fail "unknown argument should print usage even with broken local pattern: $out"
 
 # ---- integration: dispatcher (配備形) + core.hooksPath 経由の git commit ------
 deploy="$tmp/deploy"
