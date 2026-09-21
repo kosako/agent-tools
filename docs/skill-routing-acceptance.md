@@ -24,9 +24,9 @@ harness です。#216 の cross-skill routing suite の最小 slice で、
   変わる。field 名が変わると observed が空になり、judge には primary MISS として現れる (緑には
   化けないが、原因は runner 側)。**probe の結果は「同条件の before / after を比べる」用途に限り、
   絶対値を品質の保証として読まない。**
-- Codex adapter は **Codex CLI 0.153.4 で未検証** (project scope `.agents/skills` の読み込み、
-  user scope の skill の排除、event の形)。`--smoke` で「見えている skill の一覧」と event 形式を
-  確認してから使う。確認結果はこの doc に追記する。
+- Codex は `first_prompt_tokens` を取れない (event に turn 合計の usage しか無い) ので、token の比較は
+  `prompt_tokens` (turn 全体) と静的な `listing_chars` で見る。`--max-turns` 相当も無く、run は model が
+  終えるか `--timeout` (既定 300 秒) で kill されるまで走る。
 
 ## 隔離 (実 home に触らない)
 
@@ -35,13 +35,19 @@ probe は一時 directory に project を作り、候補 skill を **project sco
 | tool | 候補 skill の置き場 | user scope の排除 | 確認した版 |
 | --- | --- | --- | --- |
 | claude-code | `<proj>/.claude/skills/<name>/` | `--setting-sources project` (user / local の settings と skill を読まない) | 2.1.277 (2026-09-20 smoke): `~/.claude/skills` の `personal-*` と plugin skill は listing から消え、project skill と bundled skill (dataviz / code-review 等) だけが残る。bundled は両 variant に等しく載る |
-| codex | `<proj>/.agents/skills/<name>/` (公式 docs の repository-level path) | 未確認 (`~/.codex/skills` の skill が同名で並ぶ可能性がある) | 未確認 |
+| codex | `<proj>/.agents/skills/<name>/` (公式 docs の repository-level path) | 候補と同名の `~/.codex/skills/<name>/SKILL.md` を `-c 'skills.config=[{path=...,enabled=false},...]'` で無効化 | 0.153.4 (2026-09-21 実測): project scope は読まれる。user scope の同名 skill は **両方 listing に並ぶ** (`--ignore-user-config` では消えない。plugin skill だけ消える)。`skills.config` で 12 本を無効化すると候補だけが残る。他の user / plugin skill は両 variant に等しく載る |
 
 claude-code の観測に使う event (2.1.277 で実測): `system` / `init` の `model` と `skills` (listing)、
 `assistant` の `tool_use` (`name: "Skill"`, `input.skill: "<name>"`)、`result` の `usage`
 (`input_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens` / `output_tokens`)。
 
-MCP server は `--strict-mcp-config` で読まない。headless では MCP の起動が最初の API call に間に合う
+codex の観測に使う event (0.153.4 で実測): `item.completed` / `item.started` の `item` (`type` が
+`command_execution` なら `command` に読んだ path が出る。skill の起動 = `<proj>/.agents/skills/<name>/SKILL.md`
+の読み取り)、`agent_message` の `text` (最終応答)、`turn.completed` の `usage` (`input_tokens` /
+`cached_input_tokens` / `output_tokens` など。turn 内の全 API call の合計)。model は event に出ないので
+`--model`、無ければ `$CODEX_HOME/config.toml` の top-level `model` を `-m` で渡し、その値を記録する。
+
+claude-code の MCP server は `--strict-mcp-config` で読まない。headless では MCP の起動が最初の API call に間に合う
 かが run ごとに揺れ、baseline の実測 (2026-09-20) では 24 run が `tools=25 / mcp=0` と
 `tools=72 / mcp=5` の 2 群に割れて `first_prompt_tokens` に ±2.7k token の差が出た (skill listing は
 全 run で一定)。description 圧縮で期待する差 (1〜2k token) より大きいので、条件を固定する。
@@ -135,5 +141,6 @@ codex は `--tool codex` で同じ手順。両 tool で回帰なしを確認し�
   訂正) を含まない。user scope の instruction が skill 名に触れる環境では、その影響は before /
   after の両方に等しく乗る。
 - model を固定しても揺れはある。`--repeat` と「同条件比較」で扱い、絶対値を保証にしない。
-- Codex adapter の観測契約は未検証 (上記)。検証したら「確認した版」を埋める。
+- Codex の観測は skill path の読み取りで判定する。skill を読まずに listing の description だけで
+  振る舞う run は observed に出ない (Claude Code の `Skill` tool_use と同じ意味の「起動」で揃えている)。
 - CI では probe を実行しない。証跡は raw log と、Issue / PR に貼る judge の summary。

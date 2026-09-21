@@ -118,7 +118,8 @@ usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
 ```
 
 - **CI では実行しない** (CLI 認証と network が要る)。証跡は raw log (`<out>.raw/`) と judge の
-  summary。`--smoke` で隔離と event 形式を先に確認する (Codex adapter は 0.153.4 で未検証)。
+  summary。`--smoke` で隔離と event 形式を先に確認する (実測した版: Claude Code 2.1.277 /
+  Codex CLI 0.153.4)。
 - self-test は無い (CLI 起動そのものが主題のため)。`--dry-run` / `--help` の引数契約は
   `tests/cli-args-test.sh` の対象外。
 

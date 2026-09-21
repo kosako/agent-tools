@@ -12,8 +12,8 @@
 #   - runner は「観測」だけを行う。判定は check-skill-routing.sh、緑/赤の解釈は人間の責務。
 #   - 実 tool home (~/.claude / ~/.codex) には書き込まない。候補 skill は project scope
 #     (claude-code: <proj>/.claude/skills、codex: <proj>/.agents/skills) に copy し、claude-code は
-#     --setting-sources project で user scope の skill を外す。codex の user scope 排除は
-#     0.153.4 で未検証 (--smoke で可視 skill を確認してから使う)。
+#     --setting-sources project で user scope の skill を外し、codex は候補と同名の user skill を
+#     skills.config の -c override で無効化する (どちらも実測済み。docs 参照)。
 #   - CI では実行しない (CLI 認証と network が要る)。hard な証跡は raw log (<out>.raw/) と
 #     PR / Issue に貼る summary。CI 緑を根拠にしない。
 #   - 観測は CLI の event stream に依存する。field 名が変わると observed が空になり、判定は
@@ -220,29 +220,69 @@ module ProbeSkillRouting
     keys.sum { |k| usage[k].is_a?(Integer) ? usage[k] : 0 }
   end
 
-  # --- adapter: codex (0.153.4 で未検証。--smoke で確認してから使う) ------------------------
+  # --- adapter: codex (Codex CLI 0.153.4 で実測) ---------------------------------------------
 
-  def self.codex_argv(opts, proj)
+  # codex は user scope (~/.codex/skills) の skill を、project scope に同名の skill があっても両方
+  # listing に載せる (0.153.4 で実測。--ignore-user-config でも消えない)。候補と同名の user skill を
+  # skills.config (path 単位の enabled=false) の -c override で無効化し、listing に候補だけが載る
+  # ようにする。他の user skill / plugin skill は実環境に合わせて残す (両 variant に等しく載る)。
+  # model は event に出ないので -m で明示し、results.json に記録する値と一致させる。
+  def self.codex_argv(opts, proj, names)
     argv = ["codex", "exec", "--json", "--ephemeral", "--skip-git-repo-check", "-s", "read-only",
-            "-c", 'approval_policy="never"', "-C", proj]
-    argv += ["-m", opts[:model]] if opts[:model]
+            "-c", 'approval_policy="never"', "-C", proj, "-m", codex_model(opts)]
+    disable = codex_disable_override(names)
+    argv += ["-c", disable] if disable
     argv + ["-"]
   end
 
-  # codex の JSONL event 名は版で変わるため、構造ではなく内容で観測する:
-  # - observed: いずれかの event の本文に project scope の skill path (<proj>/.agents/skills/<name>/)
-  #   が現れた skill。skill の起動 = SKILL.md の読み取りなので、read / command の event に path が出る。
-  # - token: input_tokens と output_tokens を両方持つ hash を再帰的に探し、最後に現れたものを採る
-  #   (累計 usage は turn 末尾に出る)。
-  # - model: いずれかの event の "model" 文字列。
+  def self.codex_home
+    ENV["CODEX_HOME"] || File.join(Dir.home, ".codex")
+  end
+
+  # --model が無ければ $CODEX_HOME/config.toml の top-level model を使う。どちらも無ければ
+  # エラー (model 不明のまま比較しない)。
+  def self.codex_model(opts)
+    return opts[:model] if opts[:model]
+
+    config = File.join(codex_home, "config.toml")
+    if File.file?(config)
+      File.foreach(config) do |line|
+        m = line.match(/\A\s*model\s*=\s*"([^"]+)"/)
+        return m[1] if m
+      end
+    end
+    raise Error, "codex: --model is required (no top-level model in #{config})"
+  end
+
+  def self.codex_disable_override(names)
+    entries = names.map do |n|
+      path = File.join(codex_home, "skills", n, "SKILL.md")
+      next unless File.file?(path)
+
+      "{path=\"#{toml_escape(path)}\",enabled=false}"
+    end.compact
+    entries.empty? ? nil : "skills.config=[#{entries.join(',')}]"
+  end
+
+  # TOML basic string の escape (path に backslash / 二重引用符が含まれても壊れないように)。
+  def self.toml_escape(s)
+    s.gsub("\\") { "\\\\" }.gsub('"') { '\\"' }
+  end
+
+  # codex exec --json の event (0.153.4 で実測): thread.started / turn.started / item.started /
+  # item.completed (item.type = agent_message | command_execution | error ...) / turn.completed
+  # (usage: input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens, ...)。
+  # - observed: agent_message 以外の item に project scope の skill path (<proj>/.agents/skills/<name>/)
+  #   が現れた skill。skill の起動 = SKILL.md の読み取りで、command_execution の command に path が出る。
+  # - prompt_tokens / output_tokens: turn.completed の usage。turn 内の全 API call の合計で、最初の
+  #   call だけの値は event に無いので first_prompt_tokens は取らない (judge では n/a)。
+  # - text: 最後の agent_message。model は event に出ない (caller が argv の値を使う)。
   def self.parse_codex(jsonl, proj, names)
     observed = []
-    model = nil
     usage = nil
     text = +""
     prefix = File.join(proj, PROJECT_SKILL_DIRS.fetch("codex"))
     jsonl.each_line do |line|
-      names.each { |n| observed << n if line.include?(File.join(prefix, n) + "/") }
       e = begin
         JSON.parse(line)
       rescue JSON::ParserError
@@ -250,41 +290,23 @@ module ProbeSkillRouting
       end
       next unless e.is_a?(Hash)
 
-      model ||= find_string(e, "model")
-      u = find_usage(e)
-      usage = u if u
-      msg = e["msg"].is_a?(Hash) ? e["msg"] : e
-      text = msg["message"] if msg["type"].to_s.include?("message") && msg["message"].is_a?(String)
-    end
-    prompt_tokens = usage ? usage["input_tokens"] : nil
-    output_tokens = usage ? usage["output_tokens"] : nil
-    { observed: observed.uniq, model: model, prompt_tokens: prompt_tokens, output_tokens: output_tokens,
-      first_prompt_tokens: nil, subtype: nil, text: text }
-  end
-
-  def self.find_string(obj, key)
-    case obj
-    when Hash
-      return obj[key] if obj[key].is_a?(String)
-      obj.each_value { |v| (r = find_string(v, key)) && (return r) }
-    when Array
-      obj.each { |v| (r = find_string(v, key)) && (return r) }
-    end
-    nil
-  end
-
-  def self.find_usage(obj)
-    found = nil
-    case obj
-    when Hash
-      if obj["input_tokens"].is_a?(Integer) && obj["output_tokens"].is_a?(Integer)
-        found = obj
+      case e["type"]
+      when "item.started", "item.completed"
+        item = e["item"].is_a?(Hash) ? e["item"] : {}
+        if item["type"] == "agent_message"
+          text = item["text"] if item["text"].is_a?(String)
+        else
+          serialized = JSON.generate(item)
+          names.each { |n| observed << n if serialized.include?(File.join(prefix, n) + "/") }
+        end
+      when "turn.completed"
+        usage = e["usage"] if e["usage"].is_a?(Hash)
       end
-      obj.each_value { |v| (r = find_usage(v)) && (found = r) }
-    when Array
-      obj.each { |v| (r = find_usage(v)) && (found = r) }
     end
-    found
+    prompt_tokens = usage && usage["input_tokens"].is_a?(Integer) ? usage["input_tokens"] : nil
+    output_tokens = usage && usage["output_tokens"].is_a?(Integer) ? usage["output_tokens"] : nil
+    { observed: observed.uniq, model: nil, prompt_tokens: prompt_tokens, output_tokens: output_tokens,
+      first_prompt_tokens: nil, subtype: nil, text: text }
   end
 
   # --- 実行 -------------------------------------------------------------------------
@@ -319,9 +341,9 @@ module ProbeSkillRouting
       out, err, status = run_command(argv, chdir: proj, stdin: nil, timeout: opts[:timeout])
       parsed = parse_claude(out)
     else
-      argv = codex_argv(opts, proj)
+      argv = codex_argv(opts, proj, names)
       out, err, status = run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout])
-      parsed = parse_codex(out, proj, names)
+      parsed = parse_codex(out, proj, names).merge(model: codex_model(opts))
     end
     # 観測完了の条件: usage が取れていて、CLI が正常終了したか、または --max-turns の打ち切り
     # (claude-code の result.subtype == "error_max_turns")。打ち切りは routing の判断 (最初の
@@ -361,7 +383,7 @@ module ProbeSkillRouting
       puts "isolated project: #{proj} (#{names.length} skills from #{source}, listing #{listing_chars} chars)"
 
       if opts[:dry_run]
-        sample = opts[:tool] == "claude-code" ? claude_argv(opts, "<prompt>") : codex_argv(opts, proj)
+        sample = opts[:tool] == "claude-code" ? claude_argv(opts, "<prompt>") : codex_argv(opts, proj, names)
         puts "argv: #{sample.map(&:inspect).join(' ')}#{opts[:tool] == 'codex' ? ' (prompt on stdin)' : ''}"
         puts "cases: #{cases.length} x repeat #{opts[:repeat]}"
         cases.each { |c| puts "  #{c['id']}: #{c['prompt']}" }
