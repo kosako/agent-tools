@@ -134,6 +134,9 @@ file で行い、command 文字列へ inline 展開しない。
   (Codex の sandbox 等) ときは exit 2 で止め、Claude か人に publish を渡す。
 - frontmatter の `title` に ` #` を含めるときは YAML の comment と区別するため引用符で囲む
   (`title: "Issue #253 の …"`)。
+- `published` は行頭の plain な `published: <日時>` 1 行だけを script が書き換える (引用符付きの key・
+  重複は投稿前に拒否)。packet は UTF-8 で書く (不正 byte があれば list は壊れた packet として報告し、
+  publish は投稿しない)。
 
 ## resume / handoff との関係
 

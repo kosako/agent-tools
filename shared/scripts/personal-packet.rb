@@ -85,9 +85,20 @@ module Packet
 
   # ---- parse -----------------------------------------------------------------
 
-  def parse(path)
+  # 読み取りは UTF-8 として valid な text だけを受理する。scrub で読めてしまうと、書き戻し
+  # (mark_published) が同じ byte を扱えず、投稿後に更新だけ失敗する (R293-03)。
+  def read_text(path)
     text = File.read(path, encoding: "UTF-8")
-    text = text.scrub("�") unless text.valid_encoding?
+    raise Error, "#{path}: UTF-8 として読めません" unless text.valid_encoding?
+
+    text
+  end
+
+  def parse(path)
+    parse_text(read_text(path), path)
+  end
+
+  def parse_text(text, path)
     m = FRONT_RE.match(text)
     raise Error, "#{path}: frontmatter (--- で囲んだ先頭 block) がありません" unless m
 
@@ -215,8 +226,10 @@ module Packet
   end
 
   # `## 結果` の最新節 (最後の `### ` block)。`### ` が無ければ節全体。
+  # comment の除去は節や block の分割より先に本文全体へかける (comment の中の `### ` や `## ` で
+  # 分割すると、開始記号を失った comment の中身が写ってしまう。R293-01)。
   def latest_result(body)
-    sec = section(body, "結果")
+    sec = section(strip_comments(body), "結果")
     return nil unless sec
 
     blocks = []
@@ -226,17 +239,17 @@ module Packet
       end
       blocks.last << l
     end
-    strip_comments(blocks.last.to_s)
+    blocks.last.to_s.strip
   end
 
   def next_entry(body)
-    sec = section(body, "次の入口")
-    sec && strip_comments(sec)
+    sec = section(strip_comments(body), "次の入口")
+    sec&.strip
   end
 
   # template の案内 (HTML comment) は写さない。
   def strip_comments(text)
-    text.gsub(/<!--.*?-->/m, "").strip
+    text.gsub(/<!--.*?-->/m, "")
   end
 
   def marker(issue, at)
@@ -296,29 +309,42 @@ module Packet
     tmp&.close!
   end
 
-  # frontmatter の published を書き換える (無ければ updated の直後に足す)。body は触らない。
-  def mark_published(path, at)
-    text = File.read(path, encoding: "UTF-8")
+  # YAML が published と読みうる key 行 (plain / 引用 / 先頭空白)。この script が書き換えられるのは
+  # 行頭の plain な `published:` 1 行だけなので、それ以外の表現や重複は publish の前に拒否する
+  # (読み取りは受理するのに更新だけ失敗すると、投稿後に published が残らず再試行で二重投稿になる。
+  # R293-02)。
+  PUBLISHED_KEY_RE = /^\s*["']?published["']?\s*:/.freeze
+  PLAIN_PUBLISHED_RE = /^published:.*\n/.freeze
+
+  # frontmatter の published を書き換えた text を返す (file には書かない)。無ければ updated の
+  # 直後に足す。body は触らない。
+  def with_published(text, at, path)
     m = FRONT_RE.match(text)
     raise Error, "#{path}: frontmatter が見つかりません" unless m
 
     front = m[1]
+    keys = front.lines.grep(PUBLISHED_KEY_RE)
+    if keys.size > 1 || (keys.size == 1 && !keys[0].match?(PLAIN_PUBLISHED_RE))
+      raise Error, "#{path}: published は行頭の `published: <日時>` 1 行にしてください (引用符付き・重複は更新できません)"
+    end
+
     stamp = "published: #{at.iso8601}\n"
-    if front.match?(/^published:.*\n/)
-      front = front.sub(/^published:.*\n/) { stamp }
+    if front.match?(PLAIN_PUBLISHED_RE)
+      front = front.sub(PLAIN_PUBLISHED_RE) { stamp }
     elsif front.match?(/^updated:.*\n/)
       front = front.sub(/^updated:.*\n/) { |u| u + stamp }
     else
       front += stamp
     end
-    File.write(path, "---\n#{front}---\n#{m[2]}")
+    "---\n#{front}---\n#{m[2]}"
   end
 
   def publish(dir, issue, repo:, dry_run:)
     path = File.join(dir, "#{issue}.md")
     raise Error, "#{path} がありません" unless File.file?(path)
 
-    front = parse(path)
+    original = read_text(path)
+    front = parse_text(original, path)
     at = Time.now
     text = compose(front, at)
     scan(text)
@@ -327,8 +353,16 @@ module Packet
       return
     end
 
+    # 投稿前に更新後の packet を作り、読み直して published が at になることまで確かめる。
+    # 投稿だけ成功して更新が失敗する経路 (再試行で二重投稿) を先に潰す。
+    updated_text = with_published(original, at, path)
+    check = parse_text(updated_text, path)
+    unless check.published && check.published.to_i == at.to_i
+      raise Error, "#{path}: published を更新した結果を読み直せません。投稿しません"
+    end
+
     url = post_comment(issue, repo, text)
-    mark_published(path, at)
+    File.write(path, updated_text)
     puts "published: #{url.empty? ? "issue ##{issue}" : url}"
   end
 

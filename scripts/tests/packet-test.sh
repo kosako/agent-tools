@@ -93,7 +93,10 @@ updated: 2026-09-21T23:50:00+09:00
 
 ### 2026-09-21 worker/claude
 - 到達点: NEW-SECTION-LINE
-<!-- PRIVATE-COMMENT -->
+<!-- PRIVATE-COMMENT
+### 下書き
+COMMENT-DRAFT-LINE
+-->
 
 ## 次の入口
 
@@ -175,6 +178,8 @@ echo "$out" | grep -q "NEW-SECTION-LINE" || fail "dry-run should carry latest �
 echo "$out" | grep -q "OLD-SECTION-LINE" && fail "dry-run must not carry older 結果 sections"
 echo "$out" | grep -q "NEXT-ENTRY-LINE" || fail "dry-run should carry 次の入口"
 echo "$out" | grep -q "PRIVATE-COMMENT" && fail "dry-run must strip HTML comments"
+echo "$out" | grep -q "COMMENT-DRAFT-LINE" && fail "a '### ' line inside a comment must not start the latest section (R293-01)"
+echo "$out" | grep -q "^### 下書き" && fail "comment-internal heading must not leak (R293-01)"
 echo "$out" | grep -q "受け入れ条件" && fail "dry-run must not carry 依頼"
 [ "$(gh_calls)" -eq 0 ] || fail "dry-run must not call gh"
 grep -q "^published:" "$repo/.agent-packets/7.md" && fail "dry-run must not mark published"
@@ -229,6 +234,46 @@ grep -q "NEXT-ENTRY-LINE" "$repo/.agent-packets/7.md" || fail "body must be unto
 (cd "$repo" && with_gh "$pkt" publish 7 >/dev/null)
 [ "$(grep -c '^published:' "$repo/.agent-packets/7.md")" -eq 1 ] || fail "published line should be replaced, not duplicated"
 
+# ---- publish: published を更新できない表現 (引用 key / 重複) は投稿前に exit 2 (R293-02) --------
+calls=$(gh_calls)
+cp "$tmp/7.bak" "$tmp/7.quoted"
+printf '"published": 2026-09-01T00:00:00+09:00\n' | sed '' > "$tmp/ins"
+ruby -e 'src = File.read(ARGV[0]); src.sub!(/^updated:.*\n/) { |u| u + File.read(ARGV[1]) }; File.write(ARGV[0], src)' "$tmp/7.quoted" "$tmp/ins"
+cp "$tmp/7.quoted" "$repo/.agent-packets/7.md"
+set +e
+out=$(cd "$repo" && with_gh "$pkt" publish 7 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "quoted published key should be refused before posting (rc=$rc): $out"
+[ "$(gh_calls)" -eq "$calls" ] || fail "refused publish must not call gh"
+cmp -s "$tmp/7.quoted" "$repo/.agent-packets/7.md" || fail "refused publish must not modify the packet"
+cp "$tmp/7.bak" "$tmp/7.dup"
+printf 'published: 2026-09-01T00:00:00+09:00\npublished: 2026-09-02T00:00:00+09:00\n' > "$tmp/ins"
+ruby -e 'src = File.read(ARGV[0]); src.sub!(/^updated:.*\n/) { |u| u + File.read(ARGV[1]) }; File.write(ARGV[0], src)' "$tmp/7.dup" "$tmp/ins"
+cp "$tmp/7.dup" "$repo/.agent-packets/7.md"
+set +e
+(cd "$repo" && with_gh "$pkt" publish 7 >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "duplicate published lines should be refused before posting (rc=$rc)"
+[ "$(gh_calls)" -eq "$calls" ] || fail "refused publish (dup) must not call gh"
+
+# ---- 不正 UTF-8 の packet は list で warning、publish は投稿前に exit 2 (R293-03) --------------
+cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
+printf '\n\377bad byte\n' >> "$repo/.agent-packets/7.md"
+set +e
+out=$(cd "$repo" && "$pkt" list 2>"$tmp/err")
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "invalid utf-8 packet should be reported as broken (rc=$rc)"
+grep -q "UTF-8" "$tmp/err" || fail "warning should say UTF-8: $(cat "$tmp/err")"
+set +e
+(cd "$repo" && with_gh "$pkt" publish 7 >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "invalid utf-8 packet should not be published (rc=$rc)"
+[ "$(gh_calls)" -eq "$calls" ] || fail "invalid utf-8 publish must not call gh"
+
 # ---- publish: gh 失敗 → exit 2、published は変えない、hand-off の案内 --------------------
 cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
 echo 1 > "$gh_rc"
@@ -258,17 +303,18 @@ else
 fi
 
 # ---- 引数 ----------------------------------------------------------------------------
+# fake gh を当てたまま走らせる (検証が退行して投稿処理に到達したら fake の呼び出し数で分かる。R293-04)
 calls_before=$(gh_calls)
 set +e
-(cd "$repo" && "$pkt" publish seven >/dev/null 2>&1); [ $? -eq 2 ] || fail "non-numeric issue should be exit 2"
-(cd "$repo" && "$pkt" publish 7 --repo bad >/dev/null 2>&1); [ $? -eq 2 ] || fail "bad repo slug should be exit 2"
-(cd "$repo" && "$pkt" publish 7 --repo -x/y >/dev/null 2>&1); [ $? -eq 2 ] || fail "leading-dash repo should be exit 2"
-(cd "$repo" && "$pkt" publish 7 --bogus >/dev/null 2>&1); [ $? -eq 2 ] || fail "unknown publish option should be exit 2"
-(cd "$repo" && "$pkt" list --bogus >/dev/null 2>&1); [ $? -eq 2 ] || fail "unknown list option should be exit 2"
-(cd "$repo" && "$pkt" frobnicate >/dev/null 2>"$tmp/err"); [ $? -eq 2 ] || fail "unknown command should be exit 2"
+(cd "$repo" && with_gh "$pkt" publish seven >/dev/null 2>&1); [ $? -eq 2 ] || fail "non-numeric issue should be exit 2"
+(cd "$repo" && with_gh "$pkt" publish 7 --repo bad >/dev/null 2>&1); [ $? -eq 2 ] || fail "bad repo slug should be exit 2"
+(cd "$repo" && with_gh "$pkt" publish 7 --repo -x/y >/dev/null 2>&1); [ $? -eq 2 ] || fail "leading-dash repo should be exit 2"
+(cd "$repo" && with_gh "$pkt" publish 7 --bogus >/dev/null 2>&1); [ $? -eq 2 ] || fail "unknown publish option should be exit 2"
+(cd "$repo" && with_gh "$pkt" list --bogus >/dev/null 2>&1); [ $? -eq 2 ] || fail "unknown list option should be exit 2"
+(cd "$repo" && with_gh "$pkt" frobnicate >/dev/null 2>"$tmp/err"); [ $? -eq 2 ] || fail "unknown command should be exit 2"
 grep -q "^usage:" "$tmp/err" || fail "unknown command should print usage on stderr"
-(cd "$repo" && "$pkt" >/dev/null 2>&1); [ $? -eq 2 ] || fail "no args should be exit 2"
-(cd "$repo" && "$pkt" --help > "$tmp/out" 2>&1); [ $? -eq 0 ] || fail "--help should be exit 0"
+(cd "$repo" && with_gh "$pkt" >/dev/null 2>&1); [ $? -eq 2 ] || fail "no args should be exit 2"
+(cd "$repo" && with_gh "$pkt" --help > "$tmp/out" 2>&1); [ $? -eq 0 ] || fail "--help should be exit 0"
 grep -q "^usage:" "$tmp/out" || fail "--help should print usage on stdout"
 [ "$(gh_calls)" -eq "$calls_before" ] || fail "argument errors must not call gh (calls=$(gh_calls))"
 set -e
