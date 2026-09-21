@@ -109,6 +109,8 @@ module Packet
     end
     raise Error, "#{path}: frontmatter が key: value の mapping ではありません" unless data.is_a?(Hash)
 
+    check_keys!(m[1], path)
+
     front = Front.new(path)
     front.issue = required_issue(data, path)
     front.title = required_string(data, "title", path)
@@ -366,15 +368,34 @@ module Packet
   PUBLISHED_KEY_RE = /^\s*["']?published["']?\s*:/.freeze
   PLAIN_PUBLISHED_RE = /^published:.*\n/.freeze
 
+  # frontmatter の top-level key node を返す。key は tag の無い scalar だけを受理する
+  # (`!!binary cHVibGlzaGVk` のような tag 付き key は safe_load では `published` に解決されるが、
+  # AST の値は符号化文字列のままで構造検査と食い違う。mapping / sequence を key にした形も同様。
+  # R293-20)。読み取り (list) と更新 (publish) で同じ解釈にするため parse 段階で検査する。
+  def key_nodes(front_yaml, path)
+    root = Psych.parse(front_yaml)&.root
+    raise Error, "#{path}: frontmatter が key: value の mapping ではありません" unless root.is_a?(Psych::Nodes::Mapping)
+
+    root.children.each_slice(2).map do |k, _v|
+      unless k.is_a?(Psych::Nodes::Scalar) && k.tag.nil?
+        raise Error, "#{path}: frontmatter の key に tag や入れ子は使えません (plain な `key:` にしてください)"
+      end
+
+      k
+    end
+  rescue Psych::Exception => e
+    raise Error, "#{path}: frontmatter を YAML として読めません (#{e.class})"
+  end
+
+  def check_keys!(front_yaml, path)
+    key_nodes(front_yaml, path)
+    nil
+  end
+
   # frontmatter の YAML を key 構造で見て、published と解決される key を数える。引用や escape
   # (`"published"`) の別表記も YAML は同じ key に解決するが、行検査では見えない (R293-17)。
-  def published_key_count(front_yaml)
-    root = Psych.parse(front_yaml)&.root
-    return 0 unless root.is_a?(Psych::Nodes::Mapping)
-
-    root.children.each_slice(2).count { |k, _v| k.is_a?(Psych::Nodes::Scalar) && k.value == "published" }
-  rescue Psych::Exception
-    0 # 壊れた YAML は parse_text が先に Error にしている
+  def published_key_count(front_yaml, path)
+    key_nodes(front_yaml, path).count { |k| k.value == "published" }
   end
 
   # frontmatter の published を書き換えた text を返す (file には書かない)。無ければ updated の
@@ -386,7 +407,7 @@ module Packet
     front = m[1]
     keys = front.lines.grep(PUBLISHED_KEY_RE)
     plain = keys.size == 1 && keys[0].match?(PLAIN_PUBLISHED_RE)
-    if keys.size > 1 || (keys.size == 1 && !plain) || published_key_count(front) != keys.size
+    if keys.size > 1 || (keys.size == 1 && !plain) || published_key_count(front, path) != keys.size
       raise Error, "#{path}: published は行頭の `published: <日時>` 1 行にしてください (引用符付き・別表記・重複は更新できません)"
     end
 
@@ -454,17 +475,29 @@ module Packet
   end
 
   # path と同じ directory に、同じ mode で内容を書き切った一時 file を作り、その path を返す。
+  # 名前は固定 (`.<name>.tmp`)。既にあれば (前回の rename 失敗で残した回復用 file かもしれない)
+  # 消さずに止める。削除するのは自分が今回作った file だけ (R293-19)。
+  def sibling_path(path)
+    File.join(File.dirname(path), ".#{File.basename(path)}.tmp")
+  end
+
   def write_sibling(path, content)
+    tmp = sibling_path(path)
+    if File.exist?(tmp)
+      raise Error, "#{tmp} が既にあります (前回の更新内容かもしれません)。中身を確認して片付けてから再実行してください。投稿しません"
+    end
+
     mode = File.stat(path).mode & 0o777
-    tmp = File.join(File.dirname(path), ".#{File.basename(path)}.#{Process.pid}.tmp")
+    created = false
     File.open(tmp, File::WRONLY | File::CREAT | File::EXCL, mode) do |f|
+      created = true
       f.write(content)
       f.flush
       f.fsync
     end
     tmp
   rescue SystemCallError => e
-    File.unlink(tmp) rescue nil if tmp
+    File.unlink(tmp) rescue nil if created
     raise Error, "#{path}: 更新内容を保存できません (#{e.class})。投稿しません"
   end
 
