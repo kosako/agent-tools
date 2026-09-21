@@ -97,11 +97,10 @@ REQUEST-SAMPLE-LINE
 ## 次の入口
 REQUEST-SAMPLE-ENTRY
 ```
-- 入れ子の例 (4 本の fence の中に 3 本):
+- 入れ子の例 (4 本の fence の中に、対になっていない 3 本の fence 行。3 本で外側を閉じたと誤認すると
+  直後の見出しが本物として拾われる。R293-07):
 
 ````markdown
-```
-inner fence must not close the outer one
 ```
 ## 次の入口
 REQUEST-NESTED-ENTRY
