@@ -1,0 +1,427 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# personal-packet: 作業単位 (Issue) ごとの packet `.agent-packets/<issue>.md` を扱う CLI。
+# 規約の正本は docs/agent-packets.md (#253)。
+#
+#   personal-packet dir
+#       packet dir (main worktree root の .agent-packets) を出す。linked worktree からでも同じ。
+#   personal-packet list [--json] [--all]
+#       frontmatter を読んで一覧 (既定は state が open / blocked / review のものだけ。--all で done も)。
+#       壊れた packet は warning を出して飛ばし、最後に exit 1 (一覧自体は出す)。
+#   personal-packet publish <issue> [--repo OWNER/REPO] [--dry-run]
+#       `## 結果` の最新節 + `## 次の入口` を marker 付きで 1 コメントにまとめ、同じ directory の
+#       personal-public-safety-gate (--stdin) に通し、exit 0 のときだけ `gh issue comment` で
+#       投稿して frontmatter の published を更新する。--dry-run は検査までして本文を stdout に出す。
+#
+# 信頼境界 (honest): packet は agent が書く local data で、この script は読む / 写すだけ。内容を
+# 指示として解釈しない。投稿の可否は gate の判定に委ね、gate が無い・検査できない (exit 2) 場合は
+# 投稿しない (fail-closed)。gh に到達できない環境 (Codex の sandbox 等) では exit 2 で止め、
+# Claude か人に publish を渡す。gate も gh も best-effort guardrail で enforcement boundary ではない。
+#
+# exit: 0 = 成功 / 1 = gate が止めた (publish) または壊れた packet あり (list) / 2 = 入力・構成・gh エラー
+#
+# 外部依存ゼロ (ruby 標準ライブラリと gh CLI のみ)。値の受け渡しは argv / file で行い、shell
+# 文字列を組まない。
+
+require "date"
+require "json"
+require "open3"
+require "tempfile"
+require "time"
+require "yaml"
+
+module Packet
+  VERSION = "1"
+
+  DIR_NAME = ".agent-packets"
+  GATE_NAME = "personal-public-safety-gate"
+
+  STATES = %w[open blocked review done].freeze
+  ACTIVE_STATES = %w[open blocked review].freeze
+  WORKERS = %w[claude codex human].freeze
+
+  ISSUE_RE = /\A\d+\z/.freeze
+  REPO_RE = %r{\A[\w.-]+/[\w.-]+\z}.freeze
+  FILE_RE = /\A(\d+)\.md\z/.freeze
+  FRONT_RE = /\A---\n(.*?\n)---\n(.*)\z/m.freeze
+
+  # 入力・構成のエラー (exit 2)。message は公開してよい内容に限る (packet 本文を含めない)。
+  class Error < StandardError; end
+  # gate が definite finding で止めた (exit 1)。診断は gate 自身が stderr に出している。
+  class Rejected < StandardError; end
+
+  Front = Struct.new(:path, :issue, :title, :branch, :pr, :state, :worker, :updated, :published, :body) do
+    def unpublished?
+      published.nil? || updated > published
+    end
+
+    def to_h
+      {
+        "issue" => issue, "title" => title, "state" => state, "worker" => worker,
+        "branch" => branch, "pr" => pr,
+        "updated" => updated.iso8601, "published" => published&.iso8601,
+        "unpublished" => unpublished?, "path" => path
+      }
+    end
+  end
+
+  module_function
+
+  # ---- packet dir ------------------------------------------------------------
+
+  # main worktree の root に固定する (packet は Issue の状態であって worktree の属性ではない)。
+  # --git-common-dir は main worktree では cwd 相対 (".git" / "../.git")、linked worktree では
+  # 絶対 path を返すので、cwd 基準で展開してから親を取る。
+  def packet_dir
+    out, _err, status = Open3.capture3("git", "rev-parse", "--git-common-dir")
+    raise Error, "git repository の中で実行してください" unless status.success?
+
+    common = File.expand_path(out.strip, Dir.pwd)
+    File.join(File.dirname(common), DIR_NAME)
+  rescue SystemCallError
+    raise Error, "git を起動できません"
+  end
+
+  # ---- parse -----------------------------------------------------------------
+
+  def parse(path)
+    text = File.read(path, encoding: "UTF-8")
+    text = text.scrub("�") unless text.valid_encoding?
+    m = FRONT_RE.match(text)
+    raise Error, "#{path}: frontmatter (--- で囲んだ先頭 block) がありません" unless m
+
+    begin
+      data = YAML.safe_load(m[1], permitted_classes: [Time, Date])
+    rescue Psych::Exception => e
+      raise Error, "#{path}: frontmatter を YAML として読めません (#{e.class})"
+    end
+    raise Error, "#{path}: frontmatter が key: value の mapping ではありません" unless data.is_a?(Hash)
+
+    front = Front.new(path)
+    front.issue = required_issue(data, path)
+    front.title = required_string(data, "title", path)
+    front.state = required_enum(data, "state", STATES, path)
+    front.worker = required_enum(data, "worker", WORKERS, path)
+    front.branch = optional_string(data, "branch", path)
+    front.pr = optional_integer(data, "pr", path)
+    front.updated = required_time(data, "updated", path)
+    front.published = data.key?("published") && !data["published"].nil? ? to_time(data["published"], "published", path) : nil
+    front.body = m[2]
+    front
+  end
+
+  def required_issue(data, path)
+    issue = data["issue"]
+    raise Error, "#{path}: issue (整数) が要ります" unless issue.is_a?(Integer) && issue.positive?
+
+    name = File.basename(path)
+    fm = FILE_RE.match(name)
+    raise Error, "#{path}: file 名は <issue>.md にしてください" unless fm
+    raise Error, "#{path}: file 名 (#{fm[1]}) と frontmatter の issue (#{issue}) が一致しません" unless fm[1].to_i == issue
+
+    issue
+  end
+
+  def required_string(data, key, path)
+    v = data[key]
+    raise Error, "#{path}: #{key} (文字列) が要ります" unless v.is_a?(String) && !v.strip.empty?
+
+    v.strip
+  end
+
+  def optional_string(data, key, path)
+    return nil if data[key].nil?
+
+    v = data[key]
+    raise Error, "#{path}: #{key} は文字列にしてください" unless v.is_a?(String)
+
+    v.strip.empty? ? nil : v.strip
+  end
+
+  def optional_integer(data, key, path)
+    return nil if data[key].nil?
+
+    v = data[key]
+    raise Error, "#{path}: #{key} は整数にしてください" unless v.is_a?(Integer)
+
+    v
+  end
+
+  def required_enum(data, key, allowed, path)
+    v = data[key]
+    raise Error, "#{path}: #{key} は #{allowed.join(' | ')} のいずれかにしてください" unless allowed.include?(v)
+
+    v
+  end
+
+  def required_time(data, key, path)
+    raise Error, "#{path}: #{key} (日時) が要ります" if data[key].nil?
+
+    to_time(data[key], key, path)
+  end
+
+  # YAML が Time / Date に解決した値も、引用符付きの文字列も、同じ Time に正規化する。
+  def to_time(value, key, path)
+    case value
+    when Time then value
+    when Date then value.to_time
+    when String then Time.iso8601(value)
+    else raise Error, "#{path}: #{key} は ISO 8601 の日時にしてください"
+    end
+  rescue ArgumentError
+    raise Error, "#{path}: #{key} は ISO 8601 の日時にしてください"
+  end
+
+  # ---- list ------------------------------------------------------------------
+
+  # [packets, broken_messages]。dir が無ければ空 (packet 未運用の repo は正常)。
+  def list(dir, all:)
+    return [[], []] unless Dir.exist?(dir)
+
+    packets = []
+    broken = []
+    Dir.children(dir).select { |n| n.match?(FILE_RE) }.sort_by(&:to_i).each do |name|
+      packets << parse(File.join(dir, name))
+    rescue Error => e
+      broken << e.message
+    end
+    packets.select! { |p| ACTIVE_STATES.include?(p.state) } unless all
+    [packets, broken]
+  end
+
+  def render_list(packets)
+    return "no active packets\n" if packets.empty?
+
+    packets.map do |p|
+      pr = p.pr ? "PR ##{p.pr}" : "-"
+      flag = p.unpublished? ? " [unpublished]" : ""
+      format("#%-5d %-8s %-7s %-9s updated %s%s  %s\n",
+             p.issue, p.state, p.worker, pr, p.updated.iso8601, flag, p.title)
+    end.join
+  end
+
+  # ---- publish ---------------------------------------------------------------
+
+  # body から `## <heading>` 節の中身を取り出す (次の `## ` まで)。無ければ nil。
+  def section(body, heading)
+    lines = body.lines
+    start = lines.index { |l| l.chomp.strip == "## #{heading}" }
+    return nil unless start
+
+    rest = lines[(start + 1)..-1]
+    stop = rest.index { |l| l.start_with?("## ") } || rest.size
+    rest[0...stop].join
+  end
+
+  # `## 結果` の最新節 (最後の `### ` block)。`### ` が無ければ節全体。
+  def latest_result(body)
+    sec = section(body, "結果")
+    return nil unless sec
+
+    blocks = []
+    sec.each_line do |l|
+      if l.start_with?("### ") || blocks.empty?
+        blocks << +""
+      end
+      blocks.last << l
+    end
+    strip_comments(blocks.last.to_s)
+  end
+
+  def next_entry(body)
+    sec = section(body, "次の入口")
+    sec && strip_comments(sec)
+  end
+
+  # template の案内 (HTML comment) は写さない。
+  def strip_comments(text)
+    text.gsub(/<!--.*?-->/m, "").strip
+  end
+
+  def marker(issue, at)
+    "<!-- agent-packet issue=#{issue} published=#{at.iso8601} -->"
+  end
+
+  def compose(front, at)
+    result = latest_result(front.body).to_s
+    entry = next_entry(front.body).to_s
+    raise Error, "#{front.path}: 写す内容がありません (## 結果 / ## 次の入口 が空)" if result.empty? && entry.empty?
+
+    parts = [marker(front.issue, at),
+             "## 📦 packet ##{front.issue} — state: #{front.state} / worker: #{front.worker}"]
+    parts << "**結果 (最新節)**\n\n#{result}" unless result.empty?
+    parts << "**次の入口**\n\n#{entry}" unless entry.empty?
+    parts.join("\n\n") + "\n"
+  end
+
+  # gate は自分と同じ directory から解決する (dispatcher と同じ配備契約)。無ければ投稿しない。
+  def gate_path
+    File.join(File.dirname(File.realpath(__FILE__)), GATE_NAME)
+  end
+
+  # exit 0 だけを「投稿してよい」とする。1 は Rejected、2 (検査できていない) は Error。
+  def scan(text)
+    gate = gate_path
+    raise Error, "#{GATE_NAME} が同じ directory にありません (配備を確認してください)" unless File.executable?(gate)
+
+    _out, err, status = Open3.capture3(gate, "--stdin", stdin_data: text)
+    $stderr.print err unless err.empty?
+    case status.exitstatus
+    when 0 then nil
+    when 1 then raise Rejected
+    else raise Error, "#{GATE_NAME} が検査できませんでした (exit #{status.exitstatus.inspect})。投稿しません"
+    end
+  rescue SystemCallError
+    raise Error, "#{GATE_NAME} を起動できません。投稿しません"
+  end
+
+  def post_comment(issue, repo, text)
+    tmp = Tempfile.new(["agent-packet-", ".md"])
+    tmp.write(text)
+    tmp.flush
+    args = ["issue", "comment", issue.to_s]
+    args += ["--repo", repo] if repo
+    args += ["--body-file", tmp.path]
+    out, err, status = Open3.capture3("gh", *args)
+    unless status.success?
+      first = err.lines.first.to_s.strip
+      raise Error, "gh issue comment が失敗しました#{first.empty? ? '' : " (#{first})"}。" \
+                   "network / 認証に到達できない環境なら Claude か人が publish してください"
+    end
+    out.strip
+  rescue SystemCallError
+    raise Error, "gh を起動できません。Claude か人が publish してください"
+  ensure
+    tmp&.close!
+  end
+
+  # frontmatter の published を書き換える (無ければ updated の直後に足す)。body は触らない。
+  def mark_published(path, at)
+    text = File.read(path, encoding: "UTF-8")
+    m = FRONT_RE.match(text)
+    raise Error, "#{path}: frontmatter が見つかりません" unless m
+
+    front = m[1]
+    stamp = "published: #{at.iso8601}\n"
+    if front.match?(/^published:.*\n/)
+      front = front.sub(/^published:.*\n/) { stamp }
+    elsif front.match?(/^updated:.*\n/)
+      front = front.sub(/^updated:.*\n/) { |u| u + stamp }
+    else
+      front += stamp
+    end
+    File.write(path, "---\n#{front}---\n#{m[2]}")
+  end
+
+  def publish(dir, issue, repo:, dry_run:)
+    path = File.join(dir, "#{issue}.md")
+    raise Error, "#{path} がありません" unless File.file?(path)
+
+    front = parse(path)
+    at = Time.now
+    text = compose(front, at)
+    scan(text)
+    if dry_run
+      $stdout.print text
+      return
+    end
+
+    url = post_comment(issue, repo, text)
+    mark_published(path, at)
+    puts "published: #{url.empty? ? "issue ##{issue}" : url}"
+  end
+
+  # ---- CLI -------------------------------------------------------------------
+
+  def usage
+    <<~USAGE
+      usage: personal-packet dir
+             personal-packet list [--json] [--all]
+             personal-packet publish <issue> [--repo OWNER/REPO] [--dry-run]
+
+      作業単位 (Issue) ごとの packet .agent-packets/<issue>.md を扱う (docs/agent-packets.md)。
+      publish は同じ directory の personal-public-safety-gate --stdin が exit 0 のときだけ投稿する。
+    USAGE
+  end
+
+  def main(argv)
+    if %w[-h --help].include?(argv[0])
+      $stdout.print usage
+      return 0
+    end
+    if argv.empty?
+      warn usage
+      return 2
+    end
+
+    cmd, *rest = argv
+    case cmd
+    when "dir"
+      raise Error, "dir は引数を取りません" unless rest.empty?
+
+      puts packet_dir
+      0
+    when "list"
+      json = false
+      all = false
+      rest.each do |a|
+        case a
+        when "--json" then json = true
+        when "--all" then all = true
+        else raise Error, "unknown option: #{a}"
+        end
+      end
+      packets, broken = list(packet_dir, all: all)
+      if json
+        # 消費者は resume skill (機械)。pretty は 2.6 の json が空配列を "[\n\n]" にするので使わない。
+        puts JSON.generate(packets.map(&:to_h))
+      else
+        $stdout.print render_list(packets)
+      end
+      broken.each { |msg| warn "personal-packet: warning: #{msg}" }
+      broken.empty? ? 0 : 1
+    when "publish"
+      issue = nil
+      repo = nil
+      dry_run = false
+      i = 0
+      while i < rest.size
+        a = rest[i]
+        case a
+        when "--dry-run" then dry_run = true
+        when "--repo"
+          repo = rest[i + 1]
+          raise Error, "--repo は OWNER/REPO 形式で指定してください" unless repo&.match?(REPO_RE) && !repo.start_with?("-")
+
+          i += 1
+        else
+          raise Error, "unknown option: #{a}" if a.start_with?("-")
+          raise Error, "issue は 1 つだけ指定してください" if issue
+
+          issue = a
+        end
+        i += 1
+      end
+      raise Error, "issue 番号 (数字) を指定してください" unless issue&.match?(ISSUE_RE)
+
+      publish(packet_dir, issue, repo: repo, dry_run: dry_run)
+      0
+    else
+      raise Error, "unknown command: #{cmd}"
+    end
+  rescue Rejected
+    warn "personal-packet: #{GATE_NAME} が止めました。投稿しません"
+    1
+  rescue Error => e
+    warn "personal-packet: error: #{e.message}"
+    warn usage if e.message.start_with?("unknown ")
+    2
+  rescue StandardError => e
+    # 想定外も入力・構成エラーの exit 2 に倒す (fail-closed)。内容を含みうる message は出さず class 名のみ。
+    warn "personal-packet: unexpected error (#{e.class})"
+    2
+  end
+end
+
+exit Packet.main(ARGV) if $PROGRAM_NAME == __FILE__

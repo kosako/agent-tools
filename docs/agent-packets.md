@@ -117,9 +117,23 @@ Issue コメントへ写すのは **`結果` の最新節 + `次の入口` の�
 - 受け側 (別 machine でコメントから packet を再構成する `pull`) は #291 で別途。当面は
   受け側の人が `personal-safe-gh` で読んで packet を手で起こす。
 
-tooling (`personal-packet list --json` / `publish <issue>`) は script asset として配布する
-(#253 PR-2)。値の受け渡し (Issue 番号 / 本文) は argv / stdin で行い、command 文字列へ
-inline 展開しない。
+## tooling(`personal-packet`)
+
+script asset `personal-packet` (配備先は `<tool home>/agent-tools/scripts/personal-packet`、
+両 tool に同一 byte) が規約の機械的な部分を持つ。値の受け渡し (Issue 番号 / 本文) は argv /
+file で行い、command 文字列へ inline 展開しない。
+
+| command | すること | exit |
+|---|---|---|
+| `dir` | packet dir を出す (main worktree root に固定。linked worktree からでも同じ) | 0 / 2 (git 外) |
+| `list [--json] [--all]` | frontmatter を読んで一覧。既定は open / blocked / review だけ、`--all` で done も。`updated > published` (または未 publish) を `unpublished` で示す | 0 / 1 (壊れた packet あり。warning を出し、健全な行は出す) / 2 |
+| `publish <issue> [--repo OWNER/REPO] [--dry-run]` | `結果` の最新節 + `次の入口` を marker 付きで合成 → 同じ directory の `personal-public-safety-gate --stdin` に通す → **exit 0 のときだけ** `gh issue comment` で投稿 → frontmatter の `published` を更新 | 0 / 1 (gate が止めた) / 2 (検査できない・gate 不在・gh 不在 / 失敗・入力エラー) |
+
+- `--dry-run` は検査までして本文を stdout に出す (投稿も `published` 更新もしない)。
+- gate が無い・検査できない (exit 2) ときは投稿しない (fail-closed)。gh に到達できない
+  (Codex の sandbox 等) ときは exit 2 で止め、Claude か人に publish を渡す。
+- frontmatter の `title` に ` #` を含めるときは YAML の comment と区別するため引用符で囲む
+  (`title: "Issue #253 の …"`)。
 
 ## resume / handoff との関係
 
