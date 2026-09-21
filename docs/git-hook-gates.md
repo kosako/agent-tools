@@ -60,6 +60,13 @@ global `core.hooksPath` は per-repo `.git/hooks` を**完全に置換**し、fa
    submodule 名経由で到達する経路を実測)。この形は冗長に見えるが回帰防止なので単純化
    しない。`exec` の env Hash は第 1 引数のまま置く。
 4. chain 先が dispatcher 自身に解決される誤設定は検出して skip する (無限 chain 防止)。
+5. dispatcher 自身の exit code は 0 / 1 / 2 に閉じる (#274): 0 = 全 gate pass (chain なし)、
+   1 = gate の finding による block、2 = usage・構成エラー。途中の例外 (git 不在・chain 先の
+   消失や実行 bit 喪失など) は捕捉して 2 に正規化し、backtrace は出さず原因を 1 行 warn
+   する (Ruby 既定の例外終了は exit 1 で、1 の意味が壊れる)。gate の**起動自体**に失敗
+   したとき (`executable?` 確認後の消失。Ruby の `system` は nil を返し `$?` は 127) も
+   2 に正規化する。gate が**自分で返した** exit code は等値で伝播し (1. のとおり。契約外の
+   値を返すのは gate 側の欠陥)、chain 先は `exec` で置き換わるため verbatim (2. のとおり)。
 
 `git rev-parse --git-path hooks` は core.hooksPath を返すため使わない (自分に戻る)。
 
