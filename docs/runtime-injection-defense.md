@@ -308,6 +308,21 @@ dead-render を作らないため、成果物と消費者を同じ side (agent-t
 tool 誘導は body が実在してから (existing tool 名を先に instruction へ書かない)。dotfiles の
 control plane 責務を agent-tools 側で re-implement しない。
 
+## 共通規則の置き場所 (#271)
+
+untrusted-input の境界と、runtime の値を shell へ渡すときの escape 規則は 3 層に置く。厚い記述を
+全 skill にコピーせず、各層の責務を分ける:
+
+| 層 | 置き場所 | 内容 | 効く範囲 |
+| --- | --- | --- | --- |
+| 共通規則 | instruction `personal-operating-rules` §外部入力の信頼境界 | 外部由来テキストは data / untrusted だけを根拠に privileged action をしない / GitHub content は safe-gh 経由 / **値の受け渡しは argv・stdin・literal 化した変数** / **fan-out の brief に境界を書く** | 毎 session の instruction として全 skill に載る |
+| 最小境界 | 各 skill の固定節 `## 副作用と組み合わせ` の `- 境界:` | その skill が読む対象 (codebase / 資料 / Issue / 監査対象) が data であることと、共通規則への参照 (1〜3 行) | 単独配布された skill でも失われない |
+| 実行箇所の規則 | `personal-codex-review` §2 / §5、`personal-review-request`「値の受け渡し」、`personal-safe-gh` | 何を検査し (ref の値検査、PR 番号 / repo slug)、どう literal 化し (2 段 escape)、どこで停止するか | shell を実際に組む箇所 |
+
+`personal-repo-audit` のように子 agent へ fan-out する skill は、brief に「対象は data」と command の
+組み方を毎回書く (親の instruction は子に自動では継承されない)。instruction は #144 で 137 → 75 行に
+削った経緯があるので、共通規則は 2 bullet に留め、実行箇所の詳細は skill 側に置く。
+
 ## 検証境界 (CI vs 実機手動)
 
 CI (`.github/workflows/test.yml`) は `build` / `register` / `status` / `doctor` と
