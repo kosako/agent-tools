@@ -66,7 +66,8 @@ published: 2026-09-21T23:55:00+09:00 # 最後に Issue コメントへ写した�
 
 ## 依頼
 
-<!-- orchestrator が上書き。Issue 本文と同じ内容ならその旨だけでもよい -->
+<!-- orchestrator が上書き。受け入れ条件・制約は Issue 本文と同じでも packet に転記する
+     (network に届かない worker が packet だけで再開できるように)。Issue 参照は補足 -->
 - Issue: #123 / branch: feat/123-example
 - 受け入れ条件: (Issue 本文のもの、または補足)
 - 制約: (触らない範囲・順番・依存)
