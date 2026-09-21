@@ -105,6 +105,14 @@ REQUEST-SAMPLE-ENTRY
 ## 次の入口
 REQUEST-NESTED-ENTRY
 ````
+- 字下げの例 (fence の中の「4 空白 + 3 本」は code の中身。終了 fence と誤認すると直後の見出しが
+  本物として拾われる。R293-09):
+
+```markdown
+    ```
+## 次の入口
+REQUEST-INDENTED-ENTRY
+```
 
 ## 結果
 
@@ -211,6 +219,7 @@ echo "$out" | grep -q "^### 下書き" && fail "comment-internal heading must no
 echo "$out" | grep -q "受け入れ条件" && fail "dry-run must not carry 依頼"
 echo "$out" | grep -q "REQUEST-SAMPLE" && fail "headings inside fenced code must not start a section (R293-06)"
 echo "$out" | grep -q "REQUEST-NESTED-ENTRY" && fail "a 3-tick fence must not close a 4-tick fence (R293-07)"
+echo "$out" | grep -q "REQUEST-INDENTED-ENTRY" && fail "an indented (4+ spaces) fence line inside a fence must not close it (R293-09)"
 [ "$(gh_calls)" -eq 0 ] || fail "dry-run must not call gh"
 grep -q "^published:" "$repo/.agent-packets/7.md" && fail "dry-run must not mark published"
 

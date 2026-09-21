@@ -218,15 +218,15 @@ module Packet
   # して扱わない (依頼のサンプル code に `## 結果` があると、そこから本物の結果までを合成して
   # しまう。R293-06)。終了 fence は CommonMark どおり「開始と同じ記号・開始以上の本数・後続は
   # 空白のみ」に限る (4 本の fence を中の 3 本で閉じたと誤認すると、例の中身が公開対象になる。
-  # R293-07)。
+  # R293-07)。開始・終了とも字下げは 0〜3 空白まで (4 空白以上は code block の中身。lstrip で
+  # 字下げを全部消すと、fence 内の「4 空白 + ```」で閉じてしまう。R293-09)。
   def fenced_lines(text)
     fence = nil # [記号, 本数]
     text.lines.map do |l|
-      stripped = l.lstrip
-      if fence.nil? && (m = /\A(`{3,}|~{3,})/.match(stripped))
+      if fence.nil? && (m = /\A {0,3}(`{3,}|~{3,})/.match(l))
         fence = [m[1][0], m[1].size]
         [l, true]
-      elsif fence && stripped.match?(/\A#{Regexp.escape(fence[0])}{#{fence[1]},}\s*\z/)
+      elsif fence && l.match?(/\A {0,3}#{Regexp.escape(fence[0])}{#{fence[1]},}\s*\z/)
         fence = nil
         [l, true]
       else
