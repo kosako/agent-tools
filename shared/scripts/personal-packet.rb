@@ -196,6 +196,9 @@ module Packet
       packets << parse(File.join(dir, name))
     rescue Error => e
       broken << e.message
+    rescue SystemCallError => e
+      # 読めない 1 件で一覧全体を止めない (R293-18)。診断は class 名だけ (内容を含まない)。
+      broken << "#{File.join(dir, name)}: 読めません (#{e.class})"
     end
     packets.select! { |p| ACTIVE_STATES.include?(p.state) } unless all
     [packets, broken]
@@ -363,6 +366,17 @@ module Packet
   PUBLISHED_KEY_RE = /^\s*["']?published["']?\s*:/.freeze
   PLAIN_PUBLISHED_RE = /^published:.*\n/.freeze
 
+  # frontmatter の YAML を key 構造で見て、published と解決される key を数える。引用や escape
+  # (`"published"`) の別表記も YAML は同じ key に解決するが、行検査では見えない (R293-17)。
+  def published_key_count(front_yaml)
+    root = Psych.parse(front_yaml)&.root
+    return 0 unless root.is_a?(Psych::Nodes::Mapping)
+
+    root.children.each_slice(2).count { |k, _v| k.is_a?(Psych::Nodes::Scalar) && k.value == "published" }
+  rescue Psych::Exception
+    0 # 壊れた YAML は parse_text が先に Error にしている
+  end
+
   # frontmatter の published を書き換えた text を返す (file には書かない)。無ければ updated の
   # 直後に足す。body は触らない。
   def with_published(text, at, path)
@@ -371,8 +385,9 @@ module Packet
 
     front = m[1]
     keys = front.lines.grep(PUBLISHED_KEY_RE)
-    if keys.size > 1 || (keys.size == 1 && !keys[0].match?(PLAIN_PUBLISHED_RE))
-      raise Error, "#{path}: published は行頭の `published: <日時>` 1 行にしてください (引用符付き・重複は更新できません)"
+    plain = keys.size == 1 && keys[0].match?(PLAIN_PUBLISHED_RE)
+    if keys.size > 1 || (keys.size == 1 && !plain) || published_key_count(front) != keys.size
+      raise Error, "#{path}: published は行頭の `published: <日時>` 1 行にしてください (引用符付き・別表記・重複は更新できません)"
     end
 
     stamp = "published: #{at.iso8601}\n"
@@ -414,19 +429,43 @@ module Packet
                    "block mapping にしてください)。投稿しません"
     end
 
-    # 投稿より前に保存できることを確かめる (読めるが書けない packet だと、投稿だけ残って published
-    # が更新されず、再試行で二重投稿になる。R293-08)。
+    # 書けない packet は投稿しない (rename は file の権限を迂回して差し替えられるので、権限の意思は
+    # ここで尊重する。読めるが書けない packet で投稿だけ残す経路も塞ぐ。R293-08)。
     raise Error, "#{path}: 書き込みできません。投稿しません" unless File.writable?(path)
 
-    url = post_comment(issue, repo, text)
+    # 投稿より前に、更新後の内容を同じ directory の一時 file へ書き切る (容量不足や dir の権限なら
+    # 投稿する前にここで止まる)。投稿後は rename で差し替える (File.write は truncate してから書く
+    # ため、途中で失敗すると packet 本体を失う。R293-16)。
+    tmp = write_sibling(path, updated_text)
     begin
-      File.write(path, updated_text)
+      url = post_comment(issue, repo, text)
+    rescue Error
+      File.unlink(tmp) rescue nil
+      raise
+    end
+    begin
+      File.rename(tmp, path)
     rescue SystemCallError => e
-      # 投稿は済んでいる。再試行すると二重投稿になるので、URL と入れるべき値を示して止める。
-      raise Error, "投稿は完了しました (#{url.empty? ? "issue ##{issue}" : url}) が、packet の保存に失敗しました " \
-                   "(#{e.class})。再実行せず、#{path} の frontmatter に `published: #{at.iso8601}` を手で入れてください"
+      # 投稿は済んでいる。再試行すると二重投稿になるので、URL と更新内容の置き場を示して止める。
+      raise Error, "投稿は完了しました (#{url.empty? ? "issue ##{issue}" : url}) が、packet の差し替えに失敗しました " \
+                   "(#{e.class})。再実行せず、更新内容 #{tmp} を #{path} に手で移してください"
     end
     puts "published: #{url.empty? ? "issue ##{issue}" : url}"
+  end
+
+  # path と同じ directory に、同じ mode で内容を書き切った一時 file を作り、その path を返す。
+  def write_sibling(path, content)
+    mode = File.stat(path).mode & 0o777
+    tmp = File.join(File.dirname(path), ".#{File.basename(path)}.#{Process.pid}.tmp")
+    File.open(tmp, File::WRONLY | File::CREAT | File::EXCL, mode) do |f|
+      f.write(content)
+      f.flush
+      f.fsync
+    end
+    tmp
+  rescue SystemCallError => e
+    File.unlink(tmp) rescue nil if tmp
+    raise Error, "#{path}: 更新内容を保存できません (#{e.class})。投稿しません"
   end
 
   # ---- CLI -------------------------------------------------------------------

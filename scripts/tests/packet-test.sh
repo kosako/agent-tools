@@ -338,7 +338,14 @@ set -e
 mv "$tmp/gate.away" "$deploy/personal-public-safety-gate"
 
 # ---- publish: 成功。gh の引数 / 本文 / published 更新 ----------------------------------
+# 投稿の瞬間 (gh hook) に、更新内容は同じ dir の一時 file に書き切られ、原本はまだ不変 (R293-16)
+printf 'ls %s/.7.md.*.tmp > %s 2>/dev/null; cmp -s %s %s && echo intact >> %s\n' \
+  "$(shq "$repo/.agent-packets")" "$(shq "$tmp/at-post")" "$(shq "$tmp/7.bak")" "$(shq "$repo/.agent-packets/7.md")" "$(shq "$tmp/at-post")" > "$gh_hook"
 out=$(cd "$repo" && with_gh "$pkt" publish 7 --repo owner/repo)
+rm -f "$gh_hook"
+grep -q "\.7\.md\..*\.tmp" "$tmp/at-post" || fail "R293-16: updated content should be in a sibling temp file at post time: $(cat "$tmp/at-post")"
+grep -q "^intact$" "$tmp/at-post" || fail "R293-16: the packet must be unchanged at post time"
+[ -z "$(ls "$repo/.agent-packets"/.7.md.*.tmp 2>/dev/null)" ] || fail "R293-16: temp file must not remain after success"
 [ "$(gh_calls)" -eq 1 ] || fail "publish should call gh once"
 grep -q "^issue comment 7 --repo owner/repo --body-file " "$gh_log" || fail "gh args: $(cat "$gh_log")"
 grep -q "^<!-- agent-packet issue=7 published=" "$gh_body" || fail "posted body should carry marker"
@@ -438,7 +445,8 @@ else
   [ "$rc" -eq 2 ] || fail "read-only packet should be refused before posting (rc=$rc): $out"
   [ "$(gh_calls)" -eq "$calls" ] || fail "read-only packet must not call gh"
   echo "$out" | grep -q "書き込みできません" || fail "read-only packet should say so: $out"
-  # 投稿の瞬間に read-only になる: 投稿は済み、保存は失敗 → exit 2 だが URL と手当てを示す
+  # 投稿の瞬間に file が read-only になっても、更新内容は投稿前に一時 file へ書き切ってあり rename で
+  # 差し替えられる (投稿だけ残って published が更新されない経路が無い。R293-08 / R293-16)
   printf 'chmod 444 %s\n' "$(shq "$repo/.agent-packets/7.md")" > "$gh_hook"
   set +e
   out=$(cd "$repo" && with_gh "$pkt" publish 7 2>&1)
@@ -446,13 +454,57 @@ else
   set -e
   rm -f "$gh_hook"
   chmod 644 "$repo/.agent-packets/7.md"
-  [ "$rc" -eq 2 ] || fail "save failure after posting should be exit 2 (rc=$rc): $out"
-  [ "$(gh_calls)" -eq $((calls + 1)) ] || fail "save-failure case should have posted exactly once"
-  echo "$out" | grep -q "example.invalid/comment/1" || fail "save failure must report the posted url: $out"
-  echo "$out" | grep -q "再実行せず" || fail "save failure must warn against retrying: $out"
-  grep -q "^published:" "$repo/.agent-packets/7.md" && fail "save failure must leave the packet unchanged"
+  [ "$rc" -eq 0 ] || fail "read-only at post time should still complete via rename (rc=$rc): $out"
+  [ "$(gh_calls)" -eq $((calls + 1)) ] || fail "read-only-at-post case should have posted exactly once"
+  grep -q "^published:" "$repo/.agent-packets/7.md" || fail "read-only-at-post case must have written published"
+  [ -z "$(ls "$repo/.agent-packets"/.7.md.*.tmp 2>/dev/null)" ] || fail "R293-16: no temp file may remain after success"
   calls=$(gh_calls)
+  # 投稿の瞬間に dir が書けなくなる → rename 失敗。投稿 1 回・URL と一時 file の案内・原本不変 (R293-16)
+  cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
+  printf 'chmod 555 %s\n' "$(shq "$repo/.agent-packets")" > "$gh_hook"
+  set +e
+  out=$(cd "$repo" && with_gh "$pkt" publish 7 2>&1)
+  rc=$?
+  set -e
+  rm -f "$gh_hook"
+  chmod 755 "$repo/.agent-packets"
+  [ "$rc" -eq 2 ] || fail "rename failure after posting should be exit 2 (rc=$rc): $out"
+  [ "$(gh_calls)" -eq $((calls + 1)) ] || fail "rename-failure case should have posted exactly once"
+  echo "$out" | grep -q "example.invalid/comment/1" || fail "rename failure must report the posted url: $out"
+  echo "$out" | grep -q "再実行せず" || fail "rename failure must warn against retrying: $out"
+  cmp -s "$tmp/7.bak" "$repo/.agent-packets/7.md" || fail "rename failure must leave the original packet intact"
+  ls "$repo/.agent-packets"/.7.md.*.tmp >/dev/null 2>&1 || fail "rename failure should leave the updated content in the temp file for manual recovery"
+  rm -f "$repo/.agent-packets"/.7.md.*.tmp
+  calls=$(gh_calls)
+  # 読めない packet が 1 つあっても list は止まらず、健全な行を出して exit 1 (R293-18)
+  printf -- '---\nissue: 6\ntitle: t\nstate: open\nworker: claude\nupdated: 2026-09-21T00:00:00+09:00\n---\n' > "$repo/.agent-packets/6.md"
+  chmod 000 "$repo/.agent-packets/6.md"
+  set +e
+  out=$(cd "$repo" && "$pkt" list 2>"$tmp/err")
+  rc=$?
+  set -e
+  chmod 644 "$repo/.agent-packets/6.md"
+  rm "$repo/.agent-packets/6.md"
+  [ "$rc" -eq 1 ] || fail "unreadable packet should be a broken row, exit 1 (R293-18) (rc=$rc)"
+  echo "$out" | grep -q "^#7 " || fail "unreadable packet must not hide healthy rows: $out"
+  grep -q "6.md" "$tmp/err" || fail "warning should name the unreadable packet: $(cat "$tmp/err")"
 fi
+
+# ---- publish: 別表記の published key (`"published"`) は YAML では同じ key。投稿前に拒否 (R293-17) ----
+cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
+printf '"pub\\u006cished": "2026-09-01T00:00:00+09:00"\n' > "$tmp/ins"
+ruby -e 'src = File.read(ARGV[0]); src.sub!(/^updated:.*\n/) { |u| File.read(ARGV[1]) + u }; File.write(ARGV[0], src)' "$repo/.agent-packets/7.md" "$tmp/ins"
+grep -q 'pub\\u006cished' "$repo/.agent-packets/7.md" || fail "R293-17 fixture should carry the escaped key"
+(cd "$repo" && "$pkt" list --json > "$tmp/alt.json") || fail "escaped key should still parse for list"
+[ "$(jget "$tmp/alt.json" 0 published)" = '"2026-09-01T00:00:00+09:00"' ] || fail "escaped key should resolve to published for list"
+cp "$repo/.agent-packets/7.md" "$tmp/7.alt"
+set +e
+out=$(cd "$repo" && with_gh "$pkt" publish 7 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "escaped published key must be refused before posting (R293-17) (rc=$rc): $out"
+[ "$(gh_calls)" -eq "$calls" ] || fail "refused publish (escaped key) must not call gh"
+cmp -s "$tmp/7.alt" "$repo/.agent-packets/7.md" || fail "refused publish (escaped key) must not modify the packet"
 
 # ---- 不正 UTF-8 の packet は list で warning、publish は投稿前に exit 2 (R293-03) --------------
 cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
