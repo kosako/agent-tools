@@ -305,6 +305,23 @@ set -e
 [ "$(gh_calls)" -eq "$calls" ] || fail "refused publish (flow) must not call gh"
 cmp -s "$tmp/7.flow" "$repo/.agent-packets/7.md" || fail "refused publish (flow) must not modify the packet"
 
+# 上の flow fixture は「無引用の日時 stamp が flow context で YAML として不正」という経路でも拒否される
+# ので、same_except_published? (published 以外の field / body が不変であることの guard) は unit で
+# 直接 pin する (stamp の形式が変わっても guard が残るように)。
+ruby -r"$script_dir/lib/check_helper" - "$packet_src" <<'RUBY'
+require ARGV[0]
+base = { issue: 7, title: "t", branch: "b", pr: 1, state: "open", worker: "claude",
+         updated: Time.iso8601("2026-09-21T23:50:00+09:00"), published: nil, body: "x\n" }
+mk = ->(over) { Packet::Front.new("p").tap { |f| base.merge(over).each { |k, v| f[k] = v } } }
+a = mk.call({})
+check("published だけ違えば same", Packet.same_except_published?(a, mk.call(published: Time.now)))
+check("branch が消えれば not same", !Packet.same_except_published?(a, mk.call(branch: nil)))
+check("pr が消えれば not same", !Packet.same_except_published?(a, mk.call(pr: nil)))
+check("body が変われば not same", !Packet.same_except_published?(a, mk.call(body: "y\n")))
+check("updated が変われば not same", !Packet.same_except_published?(a, mk.call(updated: Time.now + 60)))
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
 # ---- 不正 UTF-8 の packet は list で warning、publish は投稿前に exit 2 (R293-03) --------------
 cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
 printf '\n\377bad byte\n' >> "$repo/.agent-packets/7.md"
