@@ -27,8 +27,10 @@
 # (#274。Ruby 既定の例外終了は exit 1 で、gate の finding による block と区別がつかない)。
 
 module GitHookDispatcher
+  # stage ごとの gate を配列順に実行し、最初に fail した gate の exit code で止まる。
+  # pre-commit は public-safety (staged diff) → git-identity (#281。partial な identity) の順。
   STAGE_GATES = {
-    "pre-commit" => %w[personal-public-safety-gate],
+    "pre-commit" => %w[personal-public-safety-gate personal-git-identity-gate],
     "commit-msg" => %w[personal-ai-trailer-gate],
   }.freeze
 

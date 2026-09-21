@@ -1,6 +1,6 @@
-# Git Hook Gates(dispatcher / public-safety / AI trailer)
+# Git Hook Gates(dispatcher / public-safety / git identity / AI trailer)
 
-commit 境界の機械的規律を git hook として決定的に実行するための 3 script の契約。
+commit 境界の機械的規律を git hook として決定的に実行するための 4 script の契約。
 skill (probabilistic な steering) が繰り返し宣言してきた規律のうち、条件とアクションが
 機械判定できる部分だけを hook に切り出したもの (#200 §4.1-4.2 / #202)。判断が要る部分
 (公開してよい意味内容か・レビュー運用) は従来どおり skill / 人間の領分に残る。
@@ -31,7 +31,8 @@ global git config: core.hooksPath = <dotfiles 所有の hooks dir>
 
 <deploy> = <tool home>/agent-tools/scripts (sync の script 配備先。公開契約)
   personal-git-hook-dispatcher   … stage ごとの gate 実行 + repo hook への chain
-  personal-public-safety-gate    … pre-commit stage の gate
+  personal-public-safety-gate    … pre-commit stage の gate (1 本目)
+  personal-git-identity-gate     … pre-commit stage の gate (2 本目。#281)
   personal-ai-trailer-gate       … commit-msg stage の gate
 ```
 
@@ -39,6 +40,10 @@ global git config: core.hooksPath = <dotfiles 所有の hooks dir>
   fail-closed (exit 2) で commit を止める (配備欠損を黙って素通りさせない)。
 - shim がどちらの tool home の deploy を指すかは dotfiles 側の裁定 (両 home に同一
   byte が配備される)。
+- 同じ stage の gate は配列順に実行し、最初に fail した gate の exit code で止まる (後続の
+  gate は走らない)。pre-commit は public-safety → git-identity の順。
+- dotfiles 側の readiness probe / doctor は配備本数を数える。gate を増やしたら dotfiles 側も
+  追随が要る (#281 で 3 本 → 4 本。follow-up は dotfiles 側の Issue)。
 - **再入 sentinel の既知の副作用**: dispatcher は chain 実行時に stage 単位の env
   (`AGENT_TOOLS_GIT_HOOK_ACTIVE_<STAGE>`) を立て、再入を検出したら gate 済みとして
   即 pass する (shim 経由の間接自己参照 loop 対策)。このため、chain 先の repo hook が
@@ -88,6 +93,32 @@ local pattern file のみ。network なし・値そのものは出力しない (
 - 実 `$HOME` の判定は `$HOME` が `/Users/<name>` / `/home/<name>` 形のときだけ有効
   (汎用の `/Users/...` 例示は検出しない)。
 - exit: 0 = pass / 1 = definite finding / 2 = 入力・構成エラー (git 失敗・regex 壊れ)。
+
+## personal-git-identity-gate(pre-commit)
+
+commit に使われる author / committer の identity が name / email とも非空であることを
+検証し、partial な identity の commit を止める (#281)。読むのは `git var GIT_AUTHOR_IDENT` /
+`GIT_COMMITTER_IDENT` の解決結果だけ。network なし・引数なし (pre-commit は引数ゼロ)。
+
+| 状態 | Git 単体の挙動 | gate |
+|---|---|---|
+| name / email とも非空 | commit 可 | pass (exit 0) |
+| name あり・email 空 (partial) | **`Name <>` で commit が通る** (2.50.1 実測) | exit 1 で block |
+| name 空 (email の有無を問わず) | git が pre-commit より前に拒否 (hook は走らない) | 直接呼ぶと unresolved として exit 1 |
+
+- 背景: `user.useConfigOnly` は「未設定」を止めるだけで「明示的に空」は止められず、
+  gitconfig の include 順や値でも表現できない。dotfiles の identity reset (非 personal
+  context で空値を挟む設計) と、context の identity file が name だけの partial な状態が
+  重なるとこの穴を踏む。可視化 (prompt / doctor) は既にあり、機械的に止める最後の 1 段が
+  この gate。
+- **出力の規律**: identity の**値**は stdout / stderr に出さない。出すのは key 名 (author
+  name / author email / committer name / committer email) と「空」であることだけ。git の
+  stderr (`for <email>` を含みうる) も捨てる。
+- **検査しないもの**: context 一致 (repo の場所と email の対応)。dotfiles 側の layout 規約に
+  依存するため実体には持たない (必要なら別 Issue)。環境変数 / `git -c` による identity
+  上書きは `git var` の解決結果に含まれるが、上書き自体の検出・拒否はしない。
+- exit: 0 = pass / 1 = identity が不完全 (partial / git が解決不能) / 2 = usage・構成エラー
+  (git 不在等の想定外)。
 
 ## personal-ai-trailer-gate(commit-msg)
 
