@@ -343,7 +343,17 @@ module ProbeSkillRouting
     Open3.popen3(env, *argv, chdir: chdir, pgroup: true) do |i, o, e, wait|
       i.write(stdin) if stdin
       i.close
-      readers = [Thread.new { out << o.read }, Thread.new { err << e.read }]
+      # timeout 時に runner 側で pipe を close すると、read 中の thread は IOError で抜ける。
+      # それは意図した打ち切りなので握り (join で再送出させない)、読めた分だけを返す。
+      readers = [[o, out], [e, err]].map do |io, buf|
+        t = Thread.new do
+          buf << io.read
+        rescue IOError
+          nil
+        end
+        t.report_on_exception = false
+        t
+      end
       if wait.join(timeout)
         readers.each(&:join)
         status = wait.value
