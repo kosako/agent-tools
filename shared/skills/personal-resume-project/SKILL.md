@@ -72,7 +72,8 @@ public に出せない情報だからです。固定名 `.agent-context.local.md
   `docs/agent-packets.md`) のうち open / blocked / review のものを出します。`unpublished` が立って
   いれば「Issue コメントへ未 publish の追記がある」と読みます。exit 1 (壊れた packet) は warning を
   そのまま提示に含めます。`personal-packet` が未配備なら、規約の置き場 (main worktree root の
-  `.agent-packets/*.md`) を直接読んで frontmatter (issue / state / worker / updated) を拾い、それも
+  `.agent-packets/*.md`) を直接読んで frontmatter (issue / state / worker / updated / published) を
+  拾い、未 publish は「`published` が無い、または `updated > published`」で判定します。それも
   できなければ「CLI 未配備で packet を収集できていない」と明記します (「packet 未運用」= dir が
   無い、とは区別する)。herdr が使えれば (`herdr status` が running) `herdr agent list` から cwd が
   この repo と一致する agent (種別 / 状態) を並べます。herdr が無い・server が止まっていれば packet
