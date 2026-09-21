@@ -23,6 +23,10 @@ review:
   # 2026-09-17: reviewer を「Codex review」と固定していた記述を routing (author ≠ reviewer) へ
   # 直したため build_id が変わり、author ≠ reviewer で再レビューのうえ approved_build_id を
   # 焼き直した (内容変更は当該 1 文のみ)。承認対象を current build_id / artifact_kind に固定する。
+  # 2026-09-20 (#280): description を routing 判断に要る 1〜4 項目へ圧縮し、副作用 / 組み合わせを
+  # 本文の固定節「## 副作用と組み合わせ」へ移したため build_id が変わった。private log の
+  # read-only 境界と非転記規律の文言は移しただけで変えていない。author ≠ reviewer の再レビューは
+  # この変更の PR cross-review で行い、approved_build_id を焼き直した。
   human_review: approved
-  approved_build_id: sha256:3508cf8c4ddd0d87d44a10c08a6510026ef1662127081a40a4ab1c39c9c0dd3a
+  approved_build_id: sha256:2ad51e693e5c2b52743508bb1e49cac9f392a758a25ff22256d9ee95d28a9b1b
   approved_artifact_kind: skill

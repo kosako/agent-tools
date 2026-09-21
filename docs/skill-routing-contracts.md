@@ -1,14 +1,19 @@
 # Skill routing contracts
 
 runtime に配布される skill の description が、似た skill 間でも同じ依頼を奪い合わないための
-境界契約です。description は次の順で読むだけで route を決められる形にします。
+境界契約です。契約は次の 6 項目で、**description には 1〜4 だけ**を書き (routing の判断に要る
+情報に絞って毎 turn の listing を軽くする、#280)、5〜6 は本文冒頭の固定節
+`## 副作用と組み合わせ` に置きます。
 
 1. Outcome: 何を返すか。
 2. Trigger mode: explicit / automatic / default-on / mode-gated / intent-based / delegated。必要なら組み合わせる。
 3. Use: primary use case。
-4. Do not use: 隣接 skill との負の境界。
-5. Side effects: read-only / repo write / GitHub write / external knowledge write。
-6. Composition: 前段・後段・委譲先。
+4. Do not use: 隣接 skill との負の境界 (隣接 skill の名前を添える)。
+5. Side effects: read-only / repo write / GitHub write / external knowledge write。→ 本文の固定節。
+6. Composition: 前段・後段・委譲先。→ 本文の固定節。
+
+description の目安は 150〜300 文字。Claude Code は description を 1,536 文字で切り、Codex は
+listing 全体を context の 2% または 8,000 文字に収める (2026-09-19 時点の公式 docs)。
 
 ## Runtime inventory
 
@@ -70,7 +75,9 @@ secondary は gate / quality / placement の補助または後段 hand-off に�
 
 ## Review rule
 
-description を変更したら、この表の隣接 skill ごとに positive / negative query を読み直します。
-固定 model version、固定 effort、所要時間のような変化しやすい troubleshooting 情報は description に
-入れず、必要なら executor capability check や本文 reference に置きます。side effect がある skill は、
-trigger より後・composition より前に authorization boundary を明記します。
+description を変更したら、この表の隣接 skill ごとに positive / negative query を読み直し、
+[skill-routing-acceptance.md](skill-routing-acceptance.md) の harness で両 tool の before / after を
+実測します。固定 model version、固定 effort、所要時間のような変化しやすい troubleshooting 情報は
+description に入れず、必要なら executor capability check や本文 reference に置きます。side effect が
+ある skill は、authorization boundary を本文の `## 副作用と組み合わせ` に明記します (description
+には mode の分岐 (draft / write-authorized 等) だけを残す)。

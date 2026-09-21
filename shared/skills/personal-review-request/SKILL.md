@@ -1,6 +1,6 @@
 ---
 name: personal-review-request
-description: GitHub PR 上で review 依頼・結果・follow-up の lifecycle を管理する review workflow skill。明示的な PR comment 投稿依頼は write-authorized、曖昧な「この PR をレビューして」は draft とし、確認まで diff 取得も投稿も行わず、「GitHub に書かないで」は read-only reviewer へ委譲する。PR を正本にする review に使い、PR に紐づかない diff review、merge / approve / 修正 / commit / push には使わない。GitHub comment write は現在の trusted user の明示 authorization がある場合だけ行う。personal-github-safe-reader と trailer routing を前段に置き、verified author=Claude のとき personal-codex-review executor と組み合わせる。
+description: GitHub PR 上で review 依頼・結果・follow-up の lifecycle を管理する review workflow skill。明示的な PR comment 投稿依頼は write-authorized、曖昧な「この PR をレビューして」は draft (確認まで diff 取得も投稿もしない)、「GitHub に書かないで」は read-only reviewer へ委譲。PR に紐づかない diff review (personal-codex-review) や merge / approve / 修正 / commit / push には使わない。
 ---
 
 # personal-review-request — GitHub 上で完結する PR レビュー依頼
@@ -8,6 +8,12 @@ description: GitHub PR 上で review 依頼・結果・follow-up の lifecycle �
 明示的に依頼されたとき、レビューの依頼・結果・追加のやり取りを GitHub PR のコメントとして
 残します。これは外部から見える書き込みを行う skill なので、通常の「レビューして」を投稿許可と
 解釈しません。PR 上を正本にするのは、ユーザーが GitHub への記録を選んだ場合だけです。
+
+## 副作用と組み合わせ
+
+- 副作用: GitHub comment write は現在の trusted user の明示 authorization がある場合だけ行う。
+- 組み合わせ: personal-github-safe-reader と trailer routing を前段に置き、verified author=Claude の
+  とき personal-codex-review executor と組み合わせる。
 
 ## 実行モード (write authorization gate)
 

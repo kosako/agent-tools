@@ -1,12 +1,18 @@
 ---
 name: personal-resume-project
-description: project の現在地と次の一手を確定してから新しい session を始める read-first skill。session 冒頭・「キャッチアップ」「状況を教えて」「前回の続き」や明示的な新規作業で発火する。status-only の報告、または一意な既存 scope の continuation / 明示された新規 scope の着手前確認に使い、session 終了の記録や成果物の置き場所判断には使わない。副作用は status-only では read-only で、continuation / new-work も明示された scope に限り、外部 knowledge write は別 authorization を要する。終了時は personal-session-handoff、運用判断は personal-project-operating-loop と組み合わせる。
+description: project の現在地と次の一手を確定してから session を始める read-first skill。session 冒頭、「キャッチアップ」「状況を教えて」「前回の続き」、明示的な新規作業の着手時に使う。session 終了の記録 (personal-session-handoff) や成果物の置き場所判断 (personal-project-operating-loop) には使わない。
 ---
 
 # personal-resume-project
 
 新しいセッションや作業の冒頭で、その project の「現在地」を素早く正確に把握し、
 次の一手を提示してから作業に入るための手順です。
+
+## 副作用と組み合わせ
+
+- 副作用: status-only では read-only。continuation / new-work も明示された scope に限り、外部
+  knowledge write は別 authorization を要する。
+- 組み合わせ: 終了時は personal-session-handoff、運用判断は personal-project-operating-loop。
 
 ## 実行モード (continuation gate)
 

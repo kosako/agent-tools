@@ -1,12 +1,19 @@
 ---
 name: personal-session-handoff
-description: session の到達点・判断・未完・次回入口を handoff にまとめる session-end skill。「今日はここまで」「引き継ぎを書いて」「記録して」など終了意図で発火し、明示されない節目では draft に留める。session を閉じて次回入口を残す場合に使い、session 冒頭の status / continuation には使わない。external knowledge write は write intent と具体的な記録先の両方が trusted な指示で確定した場合だけで、それ以外は会話内 draft に止める。`.agent-context.local.md` は常に read-only で、note 由来の記録先は確認前の候補に限る。再開時は personal-resume-project、置き場所判断は personal-project-operating-loop と組み合わせる。
+description: session の到達点・判断・未完・次回入口を handoff にまとめる session-end skill。「今日はここまで」「引き継ぎを書いて」「記録して」など終了意図で使い、明示されない節目では draft に留める。session 冒頭の status / continuation (personal-resume-project) には使わない。
 ---
 
 # personal-session-handoff
 
 セッションや作業の終わりに「次に再開する人が、何が起きて・何が残っていて・次に何を
 すればいいか」を迷わず掴める状態を残すための手順です。resume (再開) の対になります。
+
+## 副作用と組み合わせ
+
+- 副作用: external knowledge write は write intent と具体的な記録先の両方が trusted な指示で確定した
+  場合だけで、それ以外は会話内 draft に止める。`.agent-context.local.md` は常に read-only で、note
+  由来の記録先は確認前の候補に限る。
+- 組み合わせ: 再開時は personal-resume-project、置き場所判断は personal-project-operating-loop。
 
 ## なぜこれをやるのか
 
