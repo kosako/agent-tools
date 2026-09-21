@@ -238,6 +238,28 @@ printf -- '- ```inline``` then fence:\n\n```\n## 次の入口\nREQUEST-INLINE-H2
 printf '```markdown\n    ```\n## 次の入口\nREQUEST-INDENTED-FENCE-H2\n```\n' | refuse_case "H2 after an indented fence line (R293-09)"
 printf '## 参考\nREQUEST-EXTRA-H2\n' | refuse_case "unknown H2"
 printf '## 結果\nREQUEST-DUP-H2\n' | refuse_case "duplicate H2"
+# R293-12: comment 除去で節境界が作り替わる並び (fence 内の `<!-- x -->## 結果` と、節をまたぐ comment)
+printf '```html\n<!-- sample -->## 結果\n```\nREQUEST-ONLY\n```html\n<!--\n```\n' > "$tmp/r12.add"
+cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
+ruby -e 'src = File.read(ARGV[0]); add = File.read(ARGV[1]); src.sub!(/^- 受け入れ条件: foo\n/) { |m| m + add }; src.sub!(/^## 次の入口\n/) { "```html\n-->\n```\n\n## 次の入口\n" }; File.write(ARGV[0], src)' "$repo/.agent-packets/7.md" "$tmp/r12.add"
+set +e
+out=$(cd "$repo" && with_gh "$pkt" publish 7 --dry-run 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "comment spanning sections should be refused (R293-12) (rc=$rc): $out"
+echo "$out" | grep -q "REQUEST-ONLY" && fail "R293-12: 依頼 content must not be printed"
+echo "$out" | grep -q "またいで" || fail "R293-12: should explain the cross-section comment: $out"
+# R293-13: 未知 H2 の診断に本文 (secret) を出さない
+cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
+printf '## %s\nREQUEST-SECRET-H2\n' "$gh_token" > "$tmp/r13.add"
+ruby -e 'src = File.read(ARGV[0]); add = File.read(ARGV[1]); src.sub!(/^- 受け入れ条件: foo\n/) { |m| m + add }; File.write(ARGV[0], src)' "$repo/.agent-packets/7.md" "$tmp/r13.add"
+set +e
+out=$(cd "$repo" && with_gh "$pkt" publish 7 --dry-run 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "unknown H2 carrying a secret should be refused (rc=$rc)"
+echo "$out" | grep -q "$gh_token" && fail "R293-13: diagnostic must not echo the heading text (secret)"
+echo "$out" | grep -q "行目" || fail "R293-13: diagnostic should carry the line number: $out"
 [ "$(gh_calls)" -eq 0 ] || fail "refused cases must not call gh"
 cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
 

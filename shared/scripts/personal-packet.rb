@@ -223,18 +223,21 @@ module Packet
   # 予約する** (fenced code の中でも同じ)。それ以外の `## ` 行・重複は Error にして publish しない
   # (fence / 字下げ / inline code の近似で節を切ると、依頼のサンプルが公開範囲に混ざる経路が
   # 残り続ける。R293-06 / 07 / 09 / 10 / 11)。見出しは列 0 の `## <名前>` だけ (字下げした行は
-  # 見出しでも節境界でもなく、その時点の節の中身)。comment の除去は分割より先 (R293-01)。
+  # 見出しでも節境界でもなく、その時点の節の中身)。
+  # 境界は **原文** で決める。comment の除去を先にかけると、除去で行が繋がって境界が動く
+  # (R293-12)。除去は写す直前の葉 (publishable) だけで行う。
+  # 診断に本文 (見出しの文字列) を含めない。見出しに secret が書かれていると stderr に出る (R293-13)。
   def sections(body)
     found = {}
     current = nil
-    strip_comments(body).each_line do |l|
+    body.each_line.with_index(1) do |l, n|
       if l.start_with?("## ")
         name = l.chomp.sub(/\A## /, "").rstrip
         unless HEADINGS.include?(name)
-          raise Error, "行頭の `## ` は 依頼 / 結果 / 次の入口 の 3 見出しに予約しています (fenced code の中でも同じ)。" \
-                       "`## #{name}` を字下げするか見出し記号を変えてください。投稿しません"
+          raise Error, "本文 #{n} 行目: 行頭の `## ` は 依頼 / 結果 / 次の入口 の 3 見出しに予約しています " \
+                       "(fenced code の中でも同じ)。その行を字下げするか見出し記号を変えてください。投稿しません"
         end
-        raise Error, "`## #{name}` が重複しています。投稿しません" if found.key?(name)
+        raise Error, "本文 #{n} 行目: `## #{name}` が重複しています。投稿しません" if found.key?(name)
 
         found[name] = +""
         current = name
@@ -245,23 +248,31 @@ module Packet
     found
   end
 
-  # `## 結果` の最新節 = 最後の entry 見出し (ENTRY_RE) から節末まで。entry 見出しが無ければ節全体。
+  # `## 結果` の最新節 = 最後の entry 見出し (ENTRY_RE、原文で判定) から節末まで。無ければ節全体。
   def latest_result(secs)
     sec = secs["結果"]
     return nil unless sec
 
     lines = sec.lines
     start = lines.rindex { |l| l.match?(ENTRY_RE) } || 0
-    lines[start..-1].join.strip
+    publishable(lines[start..-1].join)
   end
 
   def next_entry(secs)
-    secs["次の入口"]&.strip
+    sec = secs["次の入口"]
+    sec && publishable(sec)
   end
 
-  # template の案内 (HTML comment) は写さない。
-  def strip_comments(text)
-    text.gsub(/<!--.*?-->/m, "")
+  # 写す直前に template の案内 (HTML comment) を除く。境界は原文で決めた後なので除去で動かない。
+  # 閉じていない `<!--` / 対応しない `-->` が残る text は、comment が節をまたいで境界を作り替える
+  # 入力なので拒否する (R293-12)。
+  def publishable(text)
+    out = text.gsub(/<!--.*?-->/m, "")
+    if out.include?("<!--") || out.include?("-->")
+      raise Error, "閉じていない `<!--` か対応しない `-->` があります (comment が節をまたいでいます)。投稿しません"
+    end
+
+    out.strip
   end
 
   def marker(issue, at)
