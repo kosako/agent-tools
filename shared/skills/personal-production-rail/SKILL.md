@@ -54,6 +54,11 @@ production レールで、コードを書く/設計する/レビューすると�
 
 preflight / self-check / review で何を確認し、どの観点でどう判断したかを簡潔に残す。ポリシーに沿って **直した/直さなかった理由**を明示する(「テストやドキュメントで言い訳して直さない」=ポリシー違反)。
 
+**この skill の完了と停止**: この報告 (review なら finding と process verdict) を残した時点で完了。
+作業そのものの完了判定 (実装が終わったか、PR が merge できるか) は caller の task / workflow が
+決め、lens を当てた結果で caller の scope を広げたり、caller の作業を止めたりしない。lens が
+🔴 must を出したときも、直すかどうかは caller の authorization に従う (この skill は指摘まで)。
+
 ## public safety / 第三者ポリシーの扱い
 
 - `references/policies/` には**第三者から vendor したポリシー**が含まれる(`NOTICE.md` に出典・license・pin commit)。

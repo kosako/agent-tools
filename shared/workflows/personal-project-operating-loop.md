@@ -69,3 +69,11 @@ commit / PR 前に、少なくとも以下を確認します。
 - 実装すべきか迷う内容は、先に repository 外の planning docs で検討する。
 - 作業単位が曖昧な内容は、GitHub Issue に切る前に scope を詰める。
 - 変更が複数の目的を含み始めたら、Issue / PR を分ける。
+
+## この workflow の出口
+
+置き場所 (repository / planning docs / GitHub Issue・PR) と public safety の判断を返した時点で
+完了。実装・review・session の status / handoff の実行はこの workflow では行わず、それぞれ
+personal-review-request / personal-resume-project / personal-session-handoff と task 固有の作業に
+渡す。判断に必要な情報が足りないときは、上の「判断に迷ったとき」の既定 (迷うなら repository に
+入れない・先に planning docs で検討する) を返して止まり、推測で置き場所を決めない。
