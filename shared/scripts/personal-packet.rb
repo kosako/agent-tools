@@ -102,14 +102,16 @@ module Packet
     m = FRONT_RE.match(text)
     raise Error, "#{path}: frontmatter (--- で囲んだ先頭 block) がありません" unless m
 
+    # key の構造検査 (AST のみ、型変換なし) を型変換より先に行う。型変換 (safe_load) は tag 付きの
+    # 値で Psych::Exception 以外 (`!!float invalid` の ArgumentError 等) も投げるので、StandardError
+    # ごと Error に正規化する (1 件の壊れた packet で list 全体を止めない。R293-21)。
+    check_keys!(m[1], path)
     begin
       data = YAML.safe_load(m[1], permitted_classes: [Time, Date])
-    rescue Psych::Exception => e
+    rescue StandardError => e
       raise Error, "#{path}: frontmatter を YAML として読めません (#{e.class})"
     end
     raise Error, "#{path}: frontmatter が key: value の mapping ではありません" unless data.is_a?(Hash)
-
-    check_keys!(m[1], path)
 
     front = Front.new(path)
     front.issue = required_issue(data, path)
