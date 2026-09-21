@@ -21,8 +21,10 @@
 # 素通りさせない。
 #
 # exit code: 0 = 全 gate pass (+ chain 先の exit 0 / chain なし) / 1 = gate の finding で
-# block / 2 = usage・構成エラー (未知 stage・gate 欠損・git 情報取得失敗)。chain 先が
-# ある場合は exec で置き換わるため chain 先の exit code がそのまま返る。
+# block / 2 = usage・構成エラー (未知 stage・gate 欠損・gate 起動失敗・git 情報取得失敗・
+# その他の例外)。chain 先がある場合は exec で置き換わるため chain 先の exit code がそのまま
+# 返る。run 内で起きた例外は捕捉して 2 に正規化し、backtrace は出さず原因を 1 行 warn する
+# (#274。Ruby 既定の例外終了は exit 1 で、gate の finding による block と区別がつかない)。
 
 module GitHookDispatcher
   STAGE_GATES = {
@@ -84,7 +86,16 @@ module GitHookDispatcher
       # 落ちる経路は残るが、その場合も path は script file 名の引数として渡され、
       # command 文字列として parse されない)。この冗長に見える形は #267 の回帰防止
       # なので単純化しない。
-      system([gate_path, gate_path], *args)
+      started = system([gate_path, gate_path], *args)
+      if started.nil?
+        # spawn 自体の失敗 (executable? 確認後に gate が消えた / 実行不能になった TOCTOU)。
+        # このとき $?.exitstatus は nil ではなく 127 なので、下の nil guard (signal 死) では
+        # 拾えず契約外の 127 がそのまま返る。gate の finding ではなく構成エラーとして 2 に
+        # 正規化する (#274)。gate 自身が返した exit code は等値で伝播する (gate 契約の責務)。
+        warn "git-hook-dispatcher: gate #{gate} could not be started at #{gate_path}; " \
+             "refusing to proceed (fail-closed)"
+        return 2
+      end
       status = $?.exitstatus
       return status.nil? ? 2 : status unless status == 0
     end
@@ -109,6 +120,13 @@ module GitHookDispatcher
       exec({ guard_key(stage) => "1" }, [chain, chain], *args)
     end
     0
+  rescue StandardError => e
+    # git 不在 (IO.popen の ENOENT) / chain 先の消失・実行 bit 喪失 (realpath / exec の
+    # ENOENT・EACCES) など、途中で起きた例外を Ruby 既定の exit 1 + backtrace で抜けさせない
+    # (#274)。原因は 1 行だけ出し、疑わしいときは commit を止める (fail-closed)。
+    # SystemExit / Interrupt は StandardError ではないので従来どおり素通し。
+    warn "git-hook-dispatcher: #{e.class}: #{e.message}; failing closed (exit 2)"
+    2
   end
 end
 

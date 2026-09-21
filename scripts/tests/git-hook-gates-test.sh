@@ -510,4 +510,86 @@ chained267msg=$(cat "$repo267b/CHAINED267MSG" 2>/dev/null || true)
 [ "$chained267msg" = "argc=1 base=COMMIT_EDITMSG" ] || \
   fail "#267 回帰: commit-msg の chain 先へ message file が 1 引数で渡っていない (got: $chained267msg)"
 
+# ---- #274 回帰: 例外 / gate 起動失敗が exit code 契約 (0/1/2) の外へ抜けない ------
+# run に rescue が無いと、途中の例外は Ruby 既定の exit 1 + backtrace で抜け、gate の
+# finding による block (1) と区別がつかない。gate の spawn 失敗は system が nil を返し
+# $?.exitstatus は 127 (nil ではない) なので、signal 死用の nil guard では拾えない。
+# 3 経路とも「exit 2 / backtrace なし / 原因が 1 行」で pin する。
+# gate は常に pass する stub に差し替え、dispatcher 自身の経路だけを見る (実 gate は git に
+# 依存するため、git 不在 case で gate 側が先に落ちて dispatcher の経路を pin できない)。
+# chain / gate の消失 (TOCTOU) は競合を実機で作れないので、File.executable? を stub して
+# 「確認は通るが実体が無い」状態を固定する。
+no_backtrace274() {
+  # Ruby の backtrace 形 ("\tfrom ..." / "file:NN:in `method'") が 1 行も無いこと
+  if printf '%s\n' "$1" | grep -qE '^[[:space:]]+from |:[0-9]+:in `'; then
+    fail "#274 回帰: backtrace が stderr に出ている ($2): $1"
+  fi
+}
+
+deploy274="$tmp/deploy274"
+mkdir -p "$deploy274"
+cp "$dispatcher_src" "$deploy274/personal-git-hook-dispatcher"
+printf '#!/bin/sh\nexit 0\n' > "$deploy274/personal-public-safety-gate"
+chmod +x "$deploy274/personal-git-hook-dispatcher" "$deploy274/personal-public-safety-gate"
+repo274="$tmp/repo274"
+git init -q "$repo274"
+
+# (1) git が PATH に無い: repo_hook_path の IO.popen が Errno::ENOENT を投げる経路。
+# PATH を空にしても絶対 path の stub gate (#!/bin/sh) は起動できるので、落ちるのは popen だけ。
+set +e
+out=$(cd "$repo274" && as_human ruby -e \
+  'load ARGV[0]; ENV["PATH"] = ""; exit GitHookDispatcher.run(["pre-commit"])' \
+  "$deploy274/personal-git-hook-dispatcher" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "#274 回帰: git 不在は exit 2 (構成エラー) に正規化すべき (rc=$rc): $out"
+no_backtrace274 "$out" "git 不在"
+printf '%s\n' "$out" | grep -q "failing closed" || \
+  fail "#274 回帰: git 不在の原因が 1 行 warn されていない: $out"
+
+# (2) chain 先の消失: File.executable? は true (stub) だが File.realpath が ENOENT。
+set +e
+out=$(cd "$repo274" && as_human ruby -e '
+  load ARGV[0]
+  chain = File.join(Dir.pwd, ".git", "hooks", "pre-commit")
+  File.singleton_class.prepend(Module.new { define_method(:executable?) { |p| p == chain || super(p) } })
+  exit GitHookDispatcher.run(["pre-commit"])
+' "$deploy274/personal-git-hook-dispatcher" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "#274 回帰: chain 先消失は exit 2 に正規化すべき (rc=$rc): $out"
+no_backtrace274 "$out" "chain 消失"
+
+# (2b) chain 先の実行 bit 喪失: realpath は通るが exec が EACCES。
+printf '#!/bin/sh\nexit 0\n' > "$repo274/.git/hooks/pre-commit"
+chmod 0644 "$repo274/.git/hooks/pre-commit"
+set +e
+out=$(cd "$repo274" && as_human ruby -e '
+  load ARGV[0]
+  chain = File.join(Dir.pwd, ".git", "hooks", "pre-commit")
+  File.singleton_class.prepend(Module.new { define_method(:executable?) { |p| p == chain || super(p) } })
+  exit GitHookDispatcher.run(["pre-commit"])
+' "$deploy274/personal-git-hook-dispatcher" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "#274 回帰: chain 先の exec 失敗は exit 2 に正規化すべき (rc=$rc): $out"
+no_backtrace274 "$out" "chain exec 失敗"
+rm -f "$repo274/.git/hooks/pre-commit"
+
+# (3) gate の起動失敗: executable? は true (stub) だが gate が無い ($sparse は dispatcher のみ)。
+# system は nil を返し $?.exitstatus は 127 になる。127 を素通しさせず 2 にする。
+set +e
+out=$(cd "$repo274" && as_human ruby -e '
+  load ARGV[0]
+  gate = File.join(File.dirname(File.realpath(ARGV[0])), "personal-public-safety-gate")
+  File.singleton_class.prepend(Module.new { define_method(:executable?) { |p| p == gate || super(p) } })
+  exit GitHookDispatcher.run(["pre-commit"])
+' "$sparse/personal-git-hook-dispatcher" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "#274 回帰: gate の起動失敗は exit 2 に正規化すべき (rc=$rc, 127 は契約外): $out"
+no_backtrace274 "$out" "gate 起動失敗"
+printf '%s\n' "$out" | grep -q "could not be started" || \
+  fail "#274 回帰: gate 起動失敗の原因が warn されていない: $out"
+
 echo "ok: git-hook-gates self-test"
