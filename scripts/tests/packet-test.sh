@@ -248,7 +248,7 @@ rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "comment spanning sections should be refused (R293-12) (rc=$rc): $out"
 echo "$out" | grep -q "REQUEST-ONLY" && fail "R293-12: 依頼 content must not be printed"
-echo "$out" | grep -q "またいで" || fail "R293-12: should explain the cross-section comment: $out"
+echo "$out" | grep -q "またいで\|入れ子\|閉じていない\|対応しない" || fail "R293-12: should explain the comment problem: $out"
 # R293-14: 切り捨てる範囲 (古い entry の前) にある閉じていない `<!--` は、切り出した後では見えない。
 # 節全体で検査して拒否する (下書きが公開されない)
 cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
@@ -275,6 +275,21 @@ cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
 ruby -e 'src = File.read(ARGV[0]); src.sub!(/^- OLD-SECTION-LINE\n/) { "- OLD-SECTION-LINE\n<!-- closed inside old entry -->\n" }; File.write(ARGV[0], src)' "$repo/.agent-packets/7.md"
 out=$(cd "$repo" && with_gh "$pkt" publish 7 --dry-run) || fail "a closed comment inside an old entry must not block publish"
 echo "$out" | grep -q "NEW-SECTION-LINE" || fail "closed-comment case should still carry the latest entry"
+# R293-15: 最初の見出しより前 (節に入らない前文) の閉じていない `<!--` は、節単位の検査では見えない
+calls=$(gh_calls)
+cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
+# 閉じた comment を先に消してから、先頭に未閉鎖の `<!--` を置く (逆順だと lazy な gsub が未閉鎖の方を巻き込む)
+ruby -e 'src = File.read(ARGV[0]); src.gsub!(/<!-- .*?-->\n?/m) { "" }; src.sub!(/^## 依頼\n/) { "<!-- 未公開の下書き\n## 依頼\n" }; File.write(ARGV[0], src)' "$repo/.agent-packets/7.md"
+grep -q "^<!-- 未公開" "$repo/.agent-packets/7.md" || fail "R293-15 fixture should keep the leading unclosed comment"
+cp "$repo/.agent-packets/7.md" "$tmp/7.r15"
+set +e
+out=$(cd "$repo" && with_gh "$pkt" publish 7 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "unclosed comment before the first heading should be refused (R293-15) (rc=$rc): $out"
+echo "$out" | grep -q "NEW-SECTION-LINE\|NEXT-ENTRY-LINE" && fail "R293-15: refused publish must not print body"
+[ "$(gh_calls)" -eq "$calls" ] || fail "R293-15: refused publish must not call gh"
+cmp -s "$tmp/7.r15" "$repo/.agent-packets/7.md" || fail "R293-15: refused publish must not modify the packet"
 # R293-13: 未知 H2 の診断に本文 (secret) を出さない
 cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
 printf '## %s\nREQUEST-SECRET-H2\n' "$gh_token" > "$tmp/r13.add"

@@ -298,8 +298,11 @@ module Packet
   end
 
   def compose(front, at)
+    # 節に分ける前に本文全体で comment の対応を検査する (最初の見出しより前は節に入らず、そこの
+    # 閉じていない `<!--` が節単位の検査では見えない。R293-15)。節単位の検査は、全体では
+    # 釣り合っていても節をまたぐ comment を拾うために残す。境界の判定はどちらも原文のまま。
+    check_comments!(front.body, "本文")
     secs = sections(front.body)
-    # 切り出す前に、各節の全体で comment の対応を検査する (切り捨てる範囲も含めて)。
     secs.each { |name, text| check_comments!(text, "## #{name}") }
     result = latest_result(secs).to_s
     entry = next_entry(secs).to_s
