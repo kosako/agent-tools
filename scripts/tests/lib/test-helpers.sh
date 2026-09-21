@@ -12,6 +12,16 @@ fail() {
   exit 1
 }
 
+# 値を POSIX shell の literal (値全体を ' で囲み、内側の ' を '\'' に置換) にして出す。
+# test が生成する shim / fake command / sourced config の中へ runtime の path
+# ($tmp や deploy dir) を埋めるときに使う (#272)。生成時の printf / heredoc の引用は
+# 生成物が実行時に再解釈されることを防がない: 二重引用のまま埋めると、path に
+# 含まれる $( ) やバッククォートは shim を実行した時点で評価される。
+# 使い方: printf '... %s ...' "$(shq "$path")"  /  lit=$(shq "$path") を heredoc に展開
+shq() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 # JSON file から dig で値を取り出して inspect 表記で出す (assert 用)。
 # 使い方: jget <file> <key|index>...
 jget() {

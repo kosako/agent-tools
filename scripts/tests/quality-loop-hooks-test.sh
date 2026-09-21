@@ -35,8 +35,8 @@ repo_real=$(ruby -e 'puts File.realpath(ARGV[0])' "$repo")
 # 記録付き fake check: 引数を log に書き、FAKE_CHECK_RC で成否を制御
 cat > "$tmp/fake-check" <<EOF
 #!/bin/sh
-printf '%s\n' "\$*" >> "$tmp/check-argv.log"
-if [ -f "$tmp/check-fail" ]; then
+printf '%s\n' "\$*" >> $(shq "$tmp/check-argv.log")
+if [ -f $(shq "$tmp/check-fail") ]; then
   echo "lint error: something is wrong"
   exit 1
 fi
@@ -194,7 +194,7 @@ assert_qa_warning "$out"
 # scope / 宣言を変えずに missing check を復旧すると、再試行して無言 pass へ戻る。
 cat > "$tmp/gone-check" <<EOF
 #!/bin/sh
-printf 'ran\n' >> "$tmp/gone-argv.log"
+printf 'ran\n' >> $(shq "$tmp/gone-argv.log")
 exit 0
 EOF
 chmod +x "$tmp/gone-check"
@@ -247,7 +247,7 @@ File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "fake-
 # ---- R1 回帰: missing と実 failure の混在 (missing の分離保持と再試行) ----------
 cat > "$tmp/later-tool" <<EOF
 #!/bin/sh
-printf 'ran\n' >> "$tmp/later-argv.log"
+printf 'ran\n' >> $(shq "$tmp/later-argv.log")
 exit 0
 EOF
 # (まだ +x を付けない = EACCES の spawn 失敗)
