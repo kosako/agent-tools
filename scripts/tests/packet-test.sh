@@ -85,6 +85,15 @@ updated: 2026-09-21T23:50:00+09:00
 
 <!-- orchestrator が上書き -->
 - 受け入れ条件: foo
+- packet の書式の例:
+
+```markdown
+## 結果
+### 2030-01-01 sample/agent
+REQUEST-SAMPLE-LINE
+## 次の入口
+REQUEST-SAMPLE-ENTRY
+```
 
 ## 結果
 
@@ -93,6 +102,12 @@ updated: 2026-09-21T23:50:00+09:00
 
 ### 2026-09-21 worker/claude
 - 到達点: NEW-SECTION-LINE
+- 例:
+
+~~~
+### 2030-01-01 fenced/sample
+FENCED-SAMPLE-LINE
+~~~
 <!-- PRIVATE-COMMENT
 ### 下書き
 COMMENT-DRAFT-LINE
@@ -175,12 +190,15 @@ out=$(cd "$empty" && "$pkt" list)
 out=$(cd "$repo" && with_gh "$pkt" publish 7 --dry-run)
 echo "$out" | grep -q "^<!-- agent-packet issue=7 published=" || fail "dry-run should start with marker: $out"
 echo "$out" | grep -q "NEW-SECTION-LINE" || fail "dry-run should carry latest 結果 section"
+echo "$out" | grep -q "FENCED-SAMPLE-LINE" || fail "fenced sample inside the latest section is part of it and must be carried"
+echo "$out" | grep -q "^### 2030-01-01 fenced/sample" && { echo "$out" | grep -q "NEW-SECTION-LINE" || fail "a '### ' inside a fence must not split the latest section (R293-06)"; }
 echo "$out" | grep -q "OLD-SECTION-LINE" && fail "dry-run must not carry older 結果 sections"
 echo "$out" | grep -q "NEXT-ENTRY-LINE" || fail "dry-run should carry 次の入口"
 echo "$out" | grep -q "PRIVATE-COMMENT" && fail "dry-run must strip HTML comments"
 echo "$out" | grep -q "COMMENT-DRAFT-LINE" && fail "a '### ' line inside a comment must not start the latest section (R293-01)"
 echo "$out" | grep -q "^### 下書き" && fail "comment-internal heading must not leak (R293-01)"
 echo "$out" | grep -q "受け入れ条件" && fail "dry-run must not carry 依頼"
+echo "$out" | grep -q "REQUEST-SAMPLE" && fail "headings inside fenced code must not start a section (R293-06)"
 [ "$(gh_calls)" -eq 0 ] || fail "dry-run must not call gh"
 grep -q "^published:" "$repo/.agent-packets/7.md" && fail "dry-run must not mark published"
 
@@ -257,6 +275,35 @@ rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "duplicate published lines should be refused before posting (rc=$rc)"
 [ "$(gh_calls)" -eq "$calls" ] || fail "refused publish (dup) must not call gh"
+
+# ---- publish: flow mapping で published の行置換が他 field を巻き込む → 投稿前に exit 2 (R293-05) ----
+cat > "$repo/.agent-packets/7.md" <<'EOF'
+---
+{ issue: 7, title: flow, state: review, worker: claude,
+updated: "2026-09-21T23:50:00+09:00",
+published: "2026-09-01T00:00:00+09:00", branch: feat/7-flow, pr: 8
+}
+---
+
+## 結果
+
+### 2026-09-21 worker/claude
+- FLOW-LINE
+
+## 次の入口
+
+FLOW-ENTRY
+EOF
+(cd "$repo" && "$pkt" list --json > "$tmp/flow.json") || fail "flow mapping should parse for list"
+[ "$(jget "$tmp/flow.json" 0 branch)" = '"feat/7-flow"' ] || fail "flow mapping branch should parse"
+cp "$repo/.agent-packets/7.md" "$tmp/7.flow"
+set +e
+out=$(cd "$repo" && with_gh "$pkt" publish 7 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "flow mapping whose published line carries other fields must be refused (rc=$rc): $out"
+[ "$(gh_calls)" -eq "$calls" ] || fail "refused publish (flow) must not call gh"
+cmp -s "$tmp/7.flow" "$repo/.agent-packets/7.md" || fail "refused publish (flow) must not modify the packet"
 
 # ---- 不正 UTF-8 の packet は list で warning、publish は投稿前に exit 2 (R293-03) --------------
 cp "$tmp/7.bak" "$repo/.agent-packets/7.md"

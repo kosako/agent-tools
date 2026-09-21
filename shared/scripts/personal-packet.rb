@@ -214,18 +214,42 @@ module Packet
 
   # ---- publish ---------------------------------------------------------------
 
-  # body から `## <heading>` 節の中身を取り出す (次の `## ` まで)。無ければ nil。
-  def section(body, heading)
-    lines = body.lines
-    start = lines.index { |l| l.chomp.strip == "## #{heading}" }
-    return nil unless start
-
-    rest = lines[(start + 1)..-1]
-    stop = rest.index { |l| l.start_with?("## ") } || rest.size
-    rest[0...stop].join
+  # 各行を [line, in_fence] で返す。fenced code block (``` / ~~~) の中の `## ` / `### ` は見出しと
+  # して扱わない (依頼のサンプル code に `## 結果` があると、そこから本物の結果までを合成して
+  # しまう。R293-06)。fence の開始と終了は同じ記号で判定する (CommonMark の最小近似)。
+  def fenced_lines(text)
+    fence = nil
+    text.lines.map do |l|
+      stripped = l.lstrip
+      if fence.nil? && (m = /\A(`{3,}|~{3,})/.match(stripped))
+        fence = m[1][0]
+        [l, true]
+      elsif fence && stripped.start_with?(fence * 3)
+        fence = nil
+        [l, true]
+      else
+        [l, !fence.nil?]
+      end
+    end
   end
 
-  # `## 結果` の最新節 (最後の `### ` block)。`### ` が無ければ節全体。
+  def heading?(pair, prefix)
+    line, in_fence = pair
+    !in_fence && line.start_with?(prefix)
+  end
+
+  # body から `## <heading>` 節の中身を取り出す (次の `## ` まで)。無ければ nil。
+  def section(body, heading)
+    pairs = fenced_lines(body)
+    start = pairs.index { |(l, f)| !f && l.chomp.strip == "## #{heading}" }
+    return nil unless start
+
+    rest = pairs[(start + 1)..-1]
+    stop = rest.index { |p| heading?(p, "## ") } || rest.size
+    rest[0...stop].map(&:first).join
+  end
+
+  # `## 結果` の最新節 (最後の fence 外の `### ` block)。`### ` が無ければ節全体。
   # comment の除去は節や block の分割より先に本文全体へかける (comment の中の `### ` や `## ` で
   # 分割すると、開始記号を失った comment の中身が写ってしまう。R293-01)。
   def latest_result(body)
@@ -233,11 +257,11 @@ module Packet
     return nil unless sec
 
     blocks = []
-    sec.each_line do |l|
-      if l.start_with?("### ") || blocks.empty?
+    fenced_lines(sec).each do |pair|
+      if heading?(pair, "### ") || blocks.empty?
         blocks << +""
       end
-      blocks.last << l
+      blocks.last << pair[0]
     end
     blocks.last.to_s.strip
   end
@@ -339,6 +363,10 @@ module Packet
     "---\n#{front}---\n#{m[2]}"
   end
 
+  def same_except_published?(a, b)
+    %i[issue title branch pr state worker body].all? { |k| a[k] == b[k] } && a.updated.to_i == b.updated.to_i
+  end
+
   def publish(dir, issue, repo:, dry_run:)
     path = File.join(dir, "#{issue}.md")
     raise Error, "#{path} がありません" unless File.file?(path)
@@ -353,12 +381,14 @@ module Packet
       return
     end
 
-    # 投稿前に更新後の packet を作り、読み直して published が at になることまで確かめる。
-    # 投稿だけ成功して更新が失敗する経路 (再試行で二重投稿) を先に潰す。
+    # 投稿前に更新後の packet を作り、読み直して published が at になり、それ以外の field と
+    # body が元と同じことまで確かめる。投稿だけ成功して更新が失敗する経路 (再試行で二重投稿) と、
+    # 行置換が同じ行の他 field を巻き込む経路 (flow mapping 等。R293-05) を先に潰す。
     updated_text = with_published(original, at, path)
     check = parse_text(updated_text, path)
-    unless check.published && check.published.to_i == at.to_i
-      raise Error, "#{path}: published を更新した結果を読み直せません。投稿しません"
+    unless check.published && check.published.to_i == at.to_i && same_except_published?(front, check)
+      raise Error, "#{path}: published を更新すると他の内容が変わります (frontmatter を 1 行 1 field の " \
+                   "block mapping にしてください)。投稿しません"
     end
 
     url = post_comment(issue, repo, text)
