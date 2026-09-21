@@ -82,7 +82,7 @@ local pattern file のみ。network なし・値そのものは出力しない (
 
 | クラス | 対象 | 挙動 |
 |---|---|---|
-| definite | private key block / 既知 token 形 (GitHub・AWS・Slack・Anthropic・OpenAI・Stripe) / 実 `$HOME` path の literal / `*.local` `*.local.md` の staged 追加 / local pattern 一致 | exit 1 で block |
+| definite | private key block / 既知 token 形 (GitHub・AWS・Slack・Anthropic・OpenAI・Stripe) / 実 `$HOME` path の literal / `*.local` `*.local.md` `.agent-packets/` 配下の staged 追加 / local pattern 一致 | exit 1 で block |
 | suspicious | 汎用 credential 代入ヒューリスティック | 警告のみ (block しない) |
 
 - **escape (明示確認)**: レビュー済みの誤検知は該当行に `public-safety: allow` を書く。
@@ -92,7 +92,18 @@ local pattern file のみ。network なし・値そのものは出力しない (
   持たない)。不在は追加パターンなし。regex が壊れていれば exit 2 で止める。
 - 実 `$HOME` の判定は `$HOME` が `/Users/<name>` / `/home/<name>` 形のときだけ有効
   (汎用の `/Users/...` 例示は検出しない)。
-- exit: 0 = pass / 1 = definite finding / 2 = 入力・構成エラー (git 失敗・regex 壊れ)。
+- `.agent-packets/` (作業単位の packet、[agent-packets](agent-packets.md)) は global
+  gitignore が第一防衛。未設定の repo で `git add -A` に拾われた場合をここで止める
+  (root でも nested でも対象。`*.local` と同じ `local-only-file` class)。
+- exit: 0 = pass / 1 = definite finding / 2 = 入力・構成エラー (git 失敗・regex 壊れ・
+  未知の引数)。引数ゼロが pre-commit mode。未知の引数では黙って pre-commit mode に倒さず
+  usage + exit 2 (dispatcher は pre-commit に引数を渡さない)。
+
+**stdin mode (`--stdin`)**: pre-commit mode と同じ pattern (definite + local pattern file +
+実 `$HOME`、allow pragma も同じ) で stdin の text を行単位に scan する。git には触らず、
+path 判定 (`local-only-file`) は対象外。finding は `stdin:<line>` で報告し、exit 契約も
+同じ。packet の public 写しを Issue コメントへ投稿する前の検査口 (#253)。呼び出し側は
+text を stdin で渡し、definite が 1 件でもあれば投稿しない。
 
 ## personal-git-identity-gate(pre-commit)
 

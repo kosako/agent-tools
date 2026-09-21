@@ -132,6 +132,23 @@ check("*.local.md を検出",
       PublicSafetyGate.staged_local_only_files(["notes/x.local.md", "ok.md"]) == ["notes/x.local.md"])
 check("*.local を検出",
       PublicSafetyGate.staged_local_only_files(["conf/app.local"]) == ["conf/app.local"])
+# #253: packet dir は root でも nested でも local-only。名前が似ているだけの file は対象外
+check(".agent-packets/ 配下を検出 (root / nested)",
+      PublicSafetyGate.staged_local_only_files(
+        [".agent-packets/253.md", "sub/.agent-packets/1.md", "docs/agent-packets.md", "agent-packets/x.md"]
+      ) == [".agent-packets/253.md", "sub/.agent-packets/1.md"])
+
+# #253: stdin mode の scan_text (行番号の帰属 / allow pragma / home / local pattern)
+st = PublicSafetyGate.scan_text("clean\nx = '#{gh_token}'\nsee /Users/ghost-user/x\n",
+                                [], "/Users/ghost-user")
+check("scan_text が stdin:line を帰属",
+      st.map { |f| [f.file, f.line, f.name] } == [["stdin", 2, "github-token"], ["stdin", 3, "home-path"]])
+check("scan_text も allow pragma を尊重",
+      PublicSafetyGate.scan_text("x = '#{gh_token}' # public-safety: allow\n", [], nil).empty?)
+check("scan_text が local pattern を definite で検出",
+      PublicSafetyGate.scan_text("see internal-tool-x\n", [["local-pattern:1", /internal-tool-x/]], nil)
+        .map { |f| [f.line, f.name, f.severity] } == [[1, "local-pattern:1", :definite]])
+check("scan_text の空入力は finding なし", PublicSafetyGate.scan_text("", [], nil).empty?)
 
 # trailer: message_lines (comment / scissors 除去)
 lines = AiTrailerGate.message_lines("subject\n# comment\nCo-Authored-By: Claude X <noreply@anthropic.com>\n# ------------------------ >8 ------------------------\nCo-Authored-By: Codex <bot@no-reply.example>\n")
@@ -279,6 +296,76 @@ rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "suspicious finding should not block (rc=$rc)"
 echo "$out" | grep -q "credential-assignment" || fail "suspicious finding should warn: $out"
+(cd "$repo" && git rm -q --cached warn.txt && rm warn.txt)
+
+# #253: .agent-packets/ 配下の staged 追加は local-only として block。gitignore 未設定の repo で
+# `git add -A` に拾われる場面 (global gitignore が第一防衛、gate は fail-safe) を再現する。
+mkdir -p "$repo/.agent-packets"
+printf -- '---\nissue: 1\n---\nclean packet body\n' > "$repo/.agent-packets/1.md"
+(cd "$repo" && git add -A)
+set +e
+out=$(cd "$repo" && as_human ruby "$pubsafe_src" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail ".agent-packets/ staged add should block (rc=$rc)"
+echo "$out" | grep -q "\.agent-packets/1\.md:0: \[local-only-file\]" || \
+  fail "packet finding should name path and class: $out"
+(cd "$repo" && git rm -rq --cached .agent-packets && rm -r .agent-packets)
+
+# ---- #253: stdin mode (packet の public 写しの検査口) ----------------------------
+# git を要らない: repo 外の空 dir から走らせる。
+mkdir -p "$tmp/nogit"
+printf 'clean line\n' | (cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --stdin) || \
+  fail "stdin mode: clean text should pass outside a git repo"
+
+set +e
+out=$(printf 'clean\ntoken = "%s"\n' "$gh_token" | (cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --stdin 2>&1))
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "stdin mode: token should block (rc=$rc)"
+echo "$out" | grep -q "stdin:2: \[github-token\]" || fail "stdin finding should carry stdin:line: $out"
+echo "$out" | grep -q "$gh_token" && fail "stdin mode must not echo the secret value"
+echo "$out" | grep -q "再実行" || fail "stdin mode hint should say re-run, not re-commit: $out"
+
+printf 'token = "%s" # public-safety: allow\n' "$gh_token" | \
+  (cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --stdin 2>/dev/null) || \
+  fail "stdin mode: allow pragma should pass"
+
+# local pattern file は stdin でも効く / 壊れていれば exit 2
+echo "secret-project-zeta" > "$tmp/home/.config/agent-tools/public-safety-patterns.local"
+set +e
+printf 'mentions secret-project-zeta\n' | (cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --stdin >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "stdin mode: local pattern should block (rc=$rc)"
+echo "([" > "$tmp/home/.config/agent-tools/public-safety-patterns.local"
+set +e
+printf 'anything\n' | (cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --stdin >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "stdin mode: invalid local pattern regex should be exit 2 (rc=$rc)"
+rm "$tmp/home/.config/agent-tools/public-safety-patterns.local"
+
+# suspicious は stdin でも警告のみ
+set +e
+out=$(printf 'password = "hunter2secret"\n' | (cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --stdin 2>&1))
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "stdin mode: suspicious should not block (rc=$rc)"
+echo "$out" | grep -q "credential-assignment" || fail "stdin mode: suspicious should warn: $out"
+
+# 未知の引数は黙って staged mode に倒さず usage + exit 2 (staged に secret が無くても 2)
+set +e
+out=$(cd "$repo" && as_human ruby "$pubsafe_src" --bogus 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "unknown argument should be usage error (rc=$rc)"
+echo "$out" | grep -q "^usage:" || fail "unknown argument should print usage: $out"
+set +e
+(cd "$repo" && as_human ruby "$pubsafe_src" --stdin --bogus </dev/null >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "--stdin with extra argument should be usage error (rc=$rc)"
 
 # ---- integration: dispatcher (配備形) + core.hooksPath 経由の git commit ------
 deploy="$tmp/deploy"
