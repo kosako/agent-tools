@@ -69,12 +69,14 @@ CLI / file write を行いません。
 そこへ写します。packet は local で agent 所有なので、この更新に external write の authorization は
 要りません:
 
-- `## 結果` に `### <日付> <役割/agent>` の見出しで **追記** (到達点 / 判断と理由 / 停止理由や
-  質問)。過去の節は書き換えない。
-- `## 次の入口` を現在地に **上書き** (次に着手する人が最初の 1 アクションに迷わない一文 + 前提)。
-- frontmatter の `updated` を今の日時にし、`state` を実態に合わせる (`review` = PR を出して
-  review 待ち / `blocked` = 質問待ち・limit 到達・CI 赤 / `open` = 作業中)。`done` は orchestrator が
-  入れる。`依頼` は worker は書き換えない (曖昧なら `結果` に質問を書く)。
+- `## 結果` に `### <日付> <役割/agent>` の見出しで **追記** (worker なら到達点 / 判断と理由 /
+  停止理由や質問、reviewer なら verdict)。過去の節は書き換えない。
+- `## 次の入口` の **上書き** は、この session で自分が **worker** だったときだけ (次に着手する人が
+  最初の 1 アクションに迷わない一文 + 前提)。reviewer は `結果` への追記までで、`次の入口` は
+  触らない (worker の再開指示を上書きしない)。
+- frontmatter の `updated` を今の日時にする。`state` を実態に合わせるのも worker (`review` = PR を
+  出して review 待ち / `blocked` = 質問待ち・limit 到達・CI 赤 / `open` = 作業中)。`done` は
+  orchestrator が入れる。`依頼` は worker も reviewer も書き換えない (曖昧なら `結果` に質問を書く)。
 - packet が無い Issue は作らない (起こすのは orchestrator の役目)。必要なら「packet を起こすか」を
   次の入口に書く。
 
@@ -134,8 +136,9 @@ agent はこのファイルを **書き換えません (read-only)**。代わり
 ### 5. 次回の入口を一文で示す
 
 最後に「次回はここから」を、記録済み handoff または会話内 draft に一文で残し、ユーザーにも
-提示します。packet がある Issue では、その `## 次の入口` と同じ一文にします (再開する人は
-resume が出す packet 一覧から入る)。再開する人が最初の 1 アクションに迷わない状態にして終わります。
+提示します。packet がある Issue で自分が worker なら、その `## 次の入口` と同じ一文にします
+(再開する人は resume が出す packet 一覧から入る)。再開する人が最初の 1 アクションに迷わない状態に
+して終わります。
 
 ## やってはいけないこと
 
@@ -147,7 +150,7 @@ resume が出す packet 一覧から入る)。再開する人が最初の 1 ア�
 - draft / no-write で external knowledge sink を更新しない (packet の local 更新はこの制限の対象外、
   Issue コメントへの publish は対象)。
 - workspace 単位の索引 file を作らない (一覧は resume が packet から導出する)。packet の `依頼` を
-  worker として書き換えない。
+  書き換えない。reviewer として `次の入口` を上書きしない。
 - write intent だけを、note 由来の未確認 destination へ書く許可に広げない。
 
 ## 例
