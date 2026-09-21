@@ -214,63 +214,49 @@ module Packet
 
   # ---- publish ---------------------------------------------------------------
 
-  # 各行を [line, in_fence] で返す。fenced code block (``` / ~~~) の中の `## ` / `### ` は見出しと
-  # して扱わない (依頼のサンプル code に `## 結果` があると、そこから本物の結果までを合成して
-  # しまう。R293-06)。終了 fence は CommonMark どおり「開始と同じ記号・開始以上の本数・後続は
-  # 空白のみ」に限る (4 本の fence を中の 3 本で閉じたと誤認すると、例の中身が公開対象になる。
-  # R293-07)。開始・終了とも字下げは 0〜3 空白まで (4 空白以上は code block の中身。lstrip で
-  # 字下げを全部消すと、fence 内の「4 空白 + ```」で閉じてしまう。R293-09)。
-  def fenced_lines(text)
-    fence = nil # [記号, 本数]
-    text.lines.map do |l|
-      if fence.nil? && (m = /\A {0,3}(`{3,}|~{3,})/.match(l))
-        fence = [m[1][0], m[1].size]
-        [l, true]
-      elsif fence && l.match?(/\A {0,3}#{Regexp.escape(fence[0])}{#{fence[1]},}\s*\z/)
-        fence = nil
-        [l, true]
-      else
-        [l, !fence.nil?]
+  HEADINGS = %w[依頼 結果 次の入口].freeze
+  # `結果` の追記 1 件の見出し。この厳密形だけを entry の境界にする (fenced code の中の `### ` や
+  # comment の `### 下書き` は境界にならない)。
+  ENTRY_RE = %r{\A### \d{4}-\d{2}-\d{2} (?:worker|reviewer|orchestrator)/(?:claude|codex|human)\s*\z}.freeze
+
+  # body を 3 節に分ける。markdown を解釈しない代わりに、規約で **行頭の `## ` を 3 つの節見出しに
+  # 予約する** (fenced code の中でも同じ)。それ以外の `## ` 行・重複は Error にして publish しない
+  # (fence / 字下げ / inline code の近似で節を切ると、依頼のサンプルが公開範囲に混ざる経路が
+  # 残り続ける。R293-06 / 07 / 09 / 10 / 11)。見出しは列 0 の `## <名前>` だけ (字下げした行は
+  # 見出しでも節境界でもなく、その時点の節の中身)。comment の除去は分割より先 (R293-01)。
+  def sections(body)
+    found = {}
+    current = nil
+    strip_comments(body).each_line do |l|
+      if l.start_with?("## ")
+        name = l.chomp.sub(/\A## /, "").rstrip
+        unless HEADINGS.include?(name)
+          raise Error, "行頭の `## ` は 依頼 / 結果 / 次の入口 の 3 見出しに予約しています (fenced code の中でも同じ)。" \
+                       "`## #{name}` を字下げするか見出し記号を変えてください。投稿しません"
+        end
+        raise Error, "`## #{name}` が重複しています。投稿しません" if found.key?(name)
+
+        found[name] = +""
+        current = name
+      elsif current
+        found[current] << l
       end
     end
+    found
   end
 
-  def heading?(pair, prefix)
-    line, in_fence = pair
-    !in_fence && line.start_with?(prefix)
-  end
-
-  # body から `## <heading>` 節の中身を取り出す (次の `## ` まで)。無ければ nil。
-  def section(body, heading)
-    pairs = fenced_lines(body)
-    start = pairs.index { |(l, f)| !f && l.chomp.strip == "## #{heading}" }
-    return nil unless start
-
-    rest = pairs[(start + 1)..-1]
-    stop = rest.index { |p| heading?(p, "## ") } || rest.size
-    rest[0...stop].map(&:first).join
-  end
-
-  # `## 結果` の最新節 (最後の fence 外の `### ` block)。`### ` が無ければ節全体。
-  # comment の除去は節や block の分割より先に本文全体へかける (comment の中の `### ` や `## ` で
-  # 分割すると、開始記号を失った comment の中身が写ってしまう。R293-01)。
-  def latest_result(body)
-    sec = section(strip_comments(body), "結果")
+  # `## 結果` の最新節 = 最後の entry 見出し (ENTRY_RE) から節末まで。entry 見出しが無ければ節全体。
+  def latest_result(secs)
+    sec = secs["結果"]
     return nil unless sec
 
-    blocks = []
-    fenced_lines(sec).each do |pair|
-      if heading?(pair, "### ") || blocks.empty?
-        blocks << +""
-      end
-      blocks.last << pair[0]
-    end
-    blocks.last.to_s.strip
+    lines = sec.lines
+    start = lines.rindex { |l| l.match?(ENTRY_RE) } || 0
+    lines[start..-1].join.strip
   end
 
-  def next_entry(body)
-    sec = section(strip_comments(body), "次の入口")
-    sec&.strip
+  def next_entry(secs)
+    secs["次の入口"]&.strip
   end
 
   # template の案内 (HTML comment) は写さない。
@@ -283,8 +269,9 @@ module Packet
   end
 
   def compose(front, at)
-    result = latest_result(front.body).to_s
-    entry = next_entry(front.body).to_s
+    secs = sections(front.body)
+    result = latest_result(secs).to_s
+    entry = next_entry(secs).to_s
     raise Error, "#{front.path}: 写す内容がありません (## 結果 / ## 次の入口 が空)" if result.empty? && entry.empty?
 
     parts = [marker(front.issue, at),

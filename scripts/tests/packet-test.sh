@@ -88,30 +88,24 @@ updated: 2026-09-21T23:50:00+09:00
 
 <!-- orchestrator が上書き -->
 - 受け入れ条件: foo
-- packet の書式の例:
+- 結果の書式の例 (fenced code。行頭 `## ` は使わない):
 
 ```markdown
-## 結果
 ### 2030-01-01 sample/agent
 REQUEST-SAMPLE-LINE
-## 次の入口
-REQUEST-SAMPLE-ENTRY
 ```
-- 入れ子の例 (4 本の fence の中に、対になっていない 3 本の fence 行。3 本で外側を閉じたと誤認すると
-  直後の見出しが本物として拾われる。R293-07):
+- 字下げした code (R293-10 の並び。字下げ行は見出しにならない):
 
-````markdown
+    ~~~
+    ## 次の入口
+    REQUEST-INDENTED-CODE-ENTRY
+    ~~~
+
+- inline code ```三連``` を含む行 (R293-11 の並び) の後に fence:
+
 ```
-## 次の入口
-REQUEST-NESTED-ENTRY
-````
-- 字下げの例 (fence の中の「4 空白 + 3 本」は code の中身。終了 fence と誤認すると直後の見出しが
-  本物として拾われる。R293-09):
-
-```markdown
-    ```
-## 次の入口
-REQUEST-INDENTED-ENTRY
+### 2030-01-02 sample/agent
+REQUEST-INLINE-SAMPLE
 ```
 
 ## 結果
@@ -205,23 +199,47 @@ out=$(cd "$empty" && "$pkt" list)
 [ "$out" = "no active packets" ] || fail "no dir should be empty list: $out"
 [ "$(cd "$empty" && "$pkt" list --json)" = "[]" ] || fail "no dir json should be []"
 
+cp "$repo/.agent-packets/7.md" "$tmp/7.bak"
+
 # ---- publish --dry-run: 合成だけ。gh は呼ばない ------------------------------------
 out=$(cd "$repo" && with_gh "$pkt" publish 7 --dry-run)
 echo "$out" | grep -q "^<!-- agent-packet issue=7 published=" || fail "dry-run should start with marker: $out"
 echo "$out" | grep -q "NEW-SECTION-LINE" || fail "dry-run should carry latest 結果 section"
-echo "$out" | grep -q "FENCED-SAMPLE-LINE" || fail "fenced sample inside the latest section is part of it and must be carried"
-echo "$out" | grep -q "^### 2030-01-01 fenced/sample" && { echo "$out" | grep -q "NEW-SECTION-LINE" || fail "a '### ' inside a fence must not split the latest section (R293-06)"; }
 echo "$out" | grep -q "OLD-SECTION-LINE" && fail "dry-run must not carry older 結果 sections"
+echo "$out" | grep -q "FENCED-SAMPLE-LINE" || fail "fenced sample inside the latest section is part of it and must be carried"
 echo "$out" | grep -q "NEXT-ENTRY-LINE" || fail "dry-run should carry 次の入口"
 echo "$out" | grep -q "PRIVATE-COMMENT" && fail "dry-run must strip HTML comments"
 echo "$out" | grep -q "COMMENT-DRAFT-LINE" && fail "a '### ' line inside a comment must not start the latest section (R293-01)"
 echo "$out" | grep -q "^### 下書き" && fail "comment-internal heading must not leak (R293-01)"
 echo "$out" | grep -q "受け入れ条件" && fail "dry-run must not carry 依頼"
-echo "$out" | grep -q "REQUEST-SAMPLE" && fail "headings inside fenced code must not start a section (R293-06)"
-echo "$out" | grep -q "REQUEST-NESTED-ENTRY" && fail "a 3-tick fence must not close a 4-tick fence (R293-07)"
-echo "$out" | grep -q "REQUEST-INDENTED-ENTRY" && fail "an indented (4+ spaces) fence line inside a fence must not close it (R293-09)"
+echo "$out" | grep -q "REQUEST-SAMPLE" && fail "fenced sample inside 依頼 must not be carried (R293-06)"
+echo "$out" | grep -q "REQUEST-INDENTED-CODE-ENTRY" && fail "an indented '## 次の入口' inside 依頼 is not a heading (R293-10)"
+echo "$out" | grep -q "REQUEST-INLINE-SAMPLE" && fail "inline triple backticks must not flip fence state (R293-11)"
 [ "$(gh_calls)" -eq 0 ] || fail "dry-run must not call gh"
 grep -q "^published:" "$repo/.agent-packets/7.md" && fail "dry-run must not mark published"
+
+# ---- publish: 行頭 `## ` の予約違反 / 重複は投稿前に exit 2 (fenced code の中でも。R293-06/07/09/11 の構造的な閉じ方) ----
+refuse_case() {
+  # $1 = 説明、stdin = 依頼に足す行
+  cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
+  ruby -e 'src = File.read(ARGV[0]); add = STDIN.read; src.sub!(/^- 受け入れ条件: foo\n/) { |m| m + add }; File.write(ARGV[0], src)' "$repo/.agent-packets/7.md"
+  set +e
+  out=$(cd "$repo" && with_gh "$pkt" publish 7 --dry-run 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "$1: should be refused with exit 2 (rc=$rc): $out"
+  echo "$out" | grep -q "予約\|重複" || fail "$1: should explain the reserved heading rule: $out"
+  echo "$out" | grep -q "REQUEST-" && fail "$1: refused publish must not print 依頼 content"
+  return 0 # 末尾の `cmd && fail` が不一致 (正常) で 1 を返し、set -e で黙って落ちるのを防ぐ
+}
+printf '```markdown\n## 結果\nREQUEST-FENCED-H2\n```\n' | refuse_case "column-0 H2 inside a fence"
+printf '````markdown\n```\n## 次の入口\nREQUEST-NESTED-H2\n````\n' | refuse_case "H2 inside nested fences (R293-07)"
+printf -- '- ```inline``` then fence:\n\n```\n## 次の入口\nREQUEST-INLINE-H2\n```\n' | refuse_case "H2 after an inline-code line (R293-11)"
+printf '```markdown\n    ```\n## 次の入口\nREQUEST-INDENTED-FENCE-H2\n```\n' | refuse_case "H2 after an indented fence line (R293-09)"
+printf '## 参考\nREQUEST-EXTRA-H2\n' | refuse_case "unknown H2"
+printf '## 結果\nREQUEST-DUP-H2\n' | refuse_case "duplicate H2"
+[ "$(gh_calls)" -eq 0 ] || fail "refused cases must not call gh"
+cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
 
 # ---- publish: gate が止める (definite) → exit 1、gh を呼ばない、値を出さない -----------
 cp "$repo/.agent-packets/7.md" "$tmp/7.bak"

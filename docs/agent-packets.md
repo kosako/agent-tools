@@ -96,6 +96,11 @@ PR #124 の should 1 件を直して re-review を依頼する。
   は orchestrator が入れる。
 - 「依頼は上書き・結果は追記」は書式でなく手順で守る (1 PR = 1 author なので同時書き込みは
   想定しない)。
+- **行頭の `## ` は 3 つの節見出しに予約する** (fenced code や引用の中でも同じ)。それ以外の行頭
+  `## ` や重複があると `personal-packet publish` は投稿しない (markdown を解釈せずに節を切るための
+  規約。サンプルを書くなら字下げするか見出し記号を変える)。`結果` の追記の見出しは
+  `### YYYY-MM-DD 役割/agent` (役割 = worker / reviewer / orchestrator、agent = claude / codex / human)
+  の形だけを entry の境界とみなし、publish はその最後の entry から節末までを写す。
 
 ## public 写し(publish)
 
