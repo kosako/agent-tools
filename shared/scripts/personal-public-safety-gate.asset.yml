@@ -14,14 +14,15 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:e6e02a242b197e2ff096193380b1796de544d11fffc55640d5f8a496deaa3394
+  approved_build_id: sha256:bf9b199d6db559ab062feaf4146600668eda18aae1f0984254e2c401039403f5
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-public-safety-gate.rb
   format: text
 summary: >-
   pre-commit stage の git gate。staged diff の追加行から secret (private key / 既知 token 形) /
-  実 home path / 個人用 local file を検出して commit を block する (definite) か警告する
-  (suspicious)。値そのものは出力しない。私物パターンは untracked の
+  実 home path / 個人用 local file (*.local / .agent-packets/) を検出して commit を block する
+  (definite) か警告する (suspicious)。--stdin で同じ pattern により text を検査する (packet の
+  public 写しの検査口)。値そのものは出力しない。私物パターンは untracked の
   ~/.config/agent-tools/public-safety-patterns.local から読む。best-effort guardrail
   (docs/git-hook-gates.md)。

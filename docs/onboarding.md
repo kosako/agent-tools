@@ -194,6 +194,8 @@ open issue の**正本は GitHub Issues** (この一覧は代表的な設計系�
   tool 名や URL を書かない)。
 - commit / PR 前に public safety check: secrets / private path / planning tool の
   情報が tracked file に入っていないか確認する。
+- 作業単位 (Issue) の状態は local の packet (`.agent-packets/<issue>.md`) で agent 間に
+  受け渡す。規約は [agent-packets](agent-packets.md)。
 
 新しく入る AI agent はまず `AGENTS.md` (この repository での振る舞い) と
 本ドキュメントを読むとよい。

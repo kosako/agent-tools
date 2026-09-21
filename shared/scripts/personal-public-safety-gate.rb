@@ -15,8 +15,8 @@
 #
 # 検出クラス:
 # - definite (exit 1 で block): private key block / 既知 token 形 / 実 HOME path の
-#   literal 混入 / 個人用 local file (*.local / *.local.md) の staged 追加 /
-#   local pattern file の追加パターン一致
+#   literal 混入 / 個人用 local file (*.local / *.local.md / .agent-packets/ 配下) の
+#   staged 追加 / local pattern file の追加パターン一致
 # - suspicious (警告のみ・block しない): 汎用 credential 代入ヒューリスティック。
 #   「疑わしいだけの finding は block でなく明示確認に落とす」(#200 §4.1) の実装。
 # 誤検知の escape: 該当行に `public-safety: allow` を含める (レビュー済みの明示)。
@@ -31,6 +31,10 @@
 #
 # 副作用ゼロ・network なし。読むのは `git diff --cached` / staged file 一覧 /
 # local pattern file のみ。
+#
+# stdin mode (`--stdin`): 引数ゼロの pre-commit mode と同じ pattern で stdin の text を
+# 行単位に scan する (git には触らない。path 判定は対象外)。packet の public 写しを
+# Issue コメントへ投稿する前の検査口 (#253、docs/agent-packets.md)。exit 契約は同じ。
 
 module PublicSafetyGate
   VERSION = "1"
@@ -58,7 +62,9 @@ module PublicSafetyGate
 
   # ユーザー正本・個人メモの命名規約 (このリポジトリ群のローカル慣行)。
   # .gitignore が第一防衛だが、`git add -f` の事故をここで止める。
-  LOCAL_ONLY_FILE = /(?:\.local|\.local\.md)\z/
+  # `.agent-packets/` (作業単位の packet、docs/agent-packets.md) は global gitignore が
+  # 第一防衛で、未設定の repo での `git add -A` をここで止める。
+  LOCAL_ONLY_FILE = %r{(?:\.local|\.local\.md)\z|(?:\A|/)\.agent-packets/}
 
   Finding = Struct.new(:file, :line, :name, :severity)
 
@@ -190,8 +196,18 @@ module PublicSafetyGate
     out.valid_encoding? ? out : out.scrub("�")
   end
 
-  def run
-    extra = load_local_patterns(LOCAL_PATTERNS_PATH)
+  # stdin の text を行単位に scan する (path 判定は無い)。
+  def scan_text(text, extra_patterns, home)
+    findings = []
+    text.each_line.with_index(1) do |raw, lineno|
+      scan_line(raw.chomp, extra_patterns, home).each do |name, severity|
+        findings << Finding.new("stdin", lineno, name, severity)
+      end
+    end
+    findings
+  end
+
+  def staged_findings(extra)
     diff = git_read(GIT_DIFF_PIN)
     # rename / copy でも新 path を検査対象にする (A のみだと git mv で素通り。H206-06)。
     added = git_read(GIT_DIFF_PIN + %w[--name-only --diff-filter=ACR -z]).split("\0")
@@ -200,7 +216,16 @@ module PublicSafetyGate
     staged_local_only_files(added).each do |path|
       findings << Finding.new(path, 0, "local-only-file", :definite)
     end
+    findings
+  end
 
+  def stdin_findings(extra)
+    text = $stdin.read.to_s.force_encoding(Encoding::UTF_8)
+    scan_text(text.valid_encoding? ? text : text.scrub("�"), extra, home_needle)
+  end
+
+  # 判定と診断の共通部。retry_hint は mode ごとの再実行手順の文言。
+  def report(findings, retry_hint)
     blocked = findings.select { |f| f.severity == :definite }
     warned = findings.select { |f| f.severity == :suspicious }
 
@@ -213,10 +238,26 @@ module PublicSafetyGate
         warn "public-safety-gate: blocked: #{f.file}:#{f.line}: [#{f.name}]"
       end
       warn "public-safety-gate: #{blocked.size} finding(s)。値は表示しません。該当行を直すか、" \
-           "レビュー済みの誤検知なら該当行に `#{ALLOW_PRAGMA}` を書いて再 commit してください。"
+           "レビュー済みの誤検知なら該当行に `#{ALLOW_PRAGMA}` を書いて#{retry_hint}。"
       return 1
     end
     0
+  end
+
+  def run(argv)
+    # 未知の引数で黙って staged mode に倒さない (dispatcher は pre-commit に引数を渡さない)。
+    # 引数の判定は local pattern の読み込みより前に置く (壊れた regex があっても usage を出す)。
+    unless [[], ["--stdin"]].include?(argv)
+      warn "usage: personal-public-safety-gate [--stdin]"
+      return 2
+    end
+
+    extra = load_local_patterns(LOCAL_PATTERNS_PATH)
+    if argv.empty?
+      report(staged_findings(extra), "再 commit してください")
+    else
+      report(stdin_findings(extra), "再実行してください")
+    end
   rescue ArgumentError => e
     warn "public-safety-gate: error: #{e.message}"
     2
@@ -228,4 +269,4 @@ module PublicSafetyGate
   end
 end
 
-exit PublicSafetyGate.run if $PROGRAM_NAME == __FILE__
+exit PublicSafetyGate.run(ARGV) if $PROGRAM_NAME == __FILE__
