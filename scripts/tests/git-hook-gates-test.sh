@@ -268,7 +268,7 @@ done
 hooksdir="$tmp/hooks"
 mkdir -p "$hooksdir"
 for stage in pre-commit commit-msg; do
-  printf '#!/bin/sh\nexec "%s" %s "$@"\n' "$deploy/personal-git-hook-dispatcher" "$stage" > "$hooksdir/$stage"
+  printf '#!/bin/sh\nexec %s %s "$@"\n' "$(shq "$deploy/personal-git-hook-dispatcher")" "$stage" > "$hooksdir/$stage"
   chmod +x "$hooksdir/$stage"
 done
 
@@ -330,7 +330,7 @@ repo3="$tmp/repo3"
 git init -q "$repo3"
 (cd "$repo3" && git config core.hooksPath "$hooksdir")
 mkdir -p "$repo3/.git/hooks"
-printf '#!/bin/sh\ntouch "%s/chained"\nexit 0\n' "$tmp" > "$repo3/.git/hooks/pre-commit"
+printf '#!/bin/sh\ntouch %s\nexit 0\n' "$(shq "$tmp/chained")" > "$repo3/.git/hooks/pre-commit"
 chmod +x "$repo3/.git/hooks/pre-commit"
 echo c > "$repo3/c.txt"
 (cd "$repo3" && git add c.txt && as_human git commit -qm "chain ok") \
@@ -366,7 +366,7 @@ set -e
 # 直前の test が残した symlink を必ず消してから書く (redirect は symlink を辿り、
 # deploy の dispatcher 本体を上書きしてしまう)。
 rm -f "$repo3/.git/hooks/pre-commit"
-printf '#!/bin/sh\nexec "%s" pre-commit "$@"\n' "$deploy/personal-git-hook-dispatcher" \
+printf '#!/bin/sh\nexec %s pre-commit "$@"\n' "$(shq "$deploy/personal-git-hook-dispatcher")" \
   > "$repo3/.git/hooks/pre-commit"
 chmod +x "$repo3/.git/hooks/pre-commit"
 echo e > "$repo3/e.txt"
@@ -591,5 +591,43 @@ set -e
 no_backtrace274 "$out" "gate 起動失敗"
 printf '%s\n' "$out" | grep -q "could not be started" || \
   fail "#274 回帰: gate 起動失敗の原因が warn されていない: $out"
+
+# ---- #272 回帰: test が生成する shim に埋めた path が実行時に再解釈されない ------
+# 生成側 (この suite) の printf / heredoc の引用は、生成物 (shim) が実行される時点の解釈を
+# 決めない。path を "%s" のまま埋めると shim の中で二重引用になり、$( ) が評価される。
+# 埋め込みは shq (shell literal 化) に統一し、(1) helper の round-trip と (2) hooksPath shim の
+# 生成→git commit の end-to-end を、特殊文字を含む deploy path で pin する。
+# canary は #267 と同じ相対名。deploy path は #267 の weird_deploy を再利用する (空白 + $( ))。
+# (1) helper: ' / 空白 / $( ) / バッククォート / " / \ を含む値が literal として往復する。
+shq_probe="a b'c\$(touch $canary267)\`id\` \"q\" \\bs"
+# 引用が崩れると sh -c は syntax error (非ゼロ) になる。set -e で診断なしに死なないよう包む。
+set +e
+shq_back=$(cd "$tmp" && sh -c "printf %s $(shq "$shq_probe")" 2>&1)
+set -e
+[ "$shq_back" = "$shq_probe" ] || \
+  fail "#272 回帰: shq の round-trip が崩れた (got: $shq_back)"
+[ ! -f "$tmp/$canary267" ] || fail "#272 回帰: shq の round-trip で command substitution が実行された"
+
+# (2) hooksPath shim: 生成した shim 経由で git commit し、deploy path の $( ) が評価されず、
+# gate が起動して secret を block することを確認する。
+weird_hooks="$tmp/weird-hooks"
+mkdir -p "$weird_hooks"
+printf '#!/bin/sh\nexec %s pre-commit "$@"\n' "$(shq "$weird_deploy/personal-git-hook-dispatcher")" \
+  > "$weird_hooks/pre-commit"
+chmod +x "$weird_hooks/pre-commit"
+repo272="$tmp/repo272"
+git init -q "$repo272"
+(cd "$repo272" && git config core.hooksPath "$weird_hooks")
+printf 'x = "%s"\n' "$gh_token" > "$repo272/leak.txt"
+(cd "$repo272" && git add leak.txt)
+set +e
+out=$(cd "$repo272" && as_human git commit -qm "leak via weird shim" 2>&1)
+rc=$?
+set -e
+[ ! -f "$repo272/$canary267" ] || \
+  fail "#272 回帰: 生成した shim の中で deploy path の \$( ) が評価された"
+[ "$rc" -ne 0 ] || fail "#272 回帰: 特殊文字を含む deploy path の shim 経由でも secret は block されるべき: $out"
+echo "$out" | grep -q "public-safety-gate: blocked" || \
+  fail "#272 回帰: shim 経由で gate が起動していない (path が壊れている疑い): $out"
 
 echo "ok: git-hook-gates self-test"

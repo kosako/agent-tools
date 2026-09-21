@@ -174,12 +174,12 @@ PROBE_GIT_HTTPS=https://github.com/owner/private-repo.git
 PROBE_GIT_SSH=git@github.com:owner/private-repo.git
 PROBE_CURL_URL=https://api.github.com/repos/owner/private-repo
 iso_resolve_bin() { echo "\$1"; }
-iso_make_scratch() { echo "$tmp/recscratch"; }
+iso_make_scratch() { echo $(shq "$tmp/recscratch"); }
 iso_run() {
-  shift; printf 'NEG %s\n' "\$*" >> "$argvlog"
+  shift; printf 'NEG %s\n' "\$*" >> $(shq "$argvlog")
   case "\$*" in *--max-time*|*" -z "*) return 0 ;; *) return 1 ;; esac
 }
-amb_run() { printf 'POS %s\n' "\$*" >> "$argvlog"; return 0; }
+amb_run() { printf 'POS %s\n' "\$*" >> $(shq "$argvlog"); return 0; }
 EOF
 mkdir -p "$tmp/recscratch"
 "$probe" --config "$tmp/rec.local" > "$tmp/out-rec" 2> "$tmp/err-rec" \

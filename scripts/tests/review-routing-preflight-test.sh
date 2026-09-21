@@ -61,7 +61,7 @@ fakebin="$tmp/bin"
 mkdir -p "$fakebin"
 cat > "$fakebin/gh" <<EOF
 #!/bin/sh
-printf '%s\n' "\$*" >> "$tmp/gh-argv.log"
+printf '%s\n' "\$*" >> $(shq "$tmp/gh-argv.log")
 [ "\${FAKE_GH_RC:-0}" -eq 0 ] || exit "\$FAKE_GH_RC"
 cat "\$FAKE_GH_FIXTURE"
 EOF
