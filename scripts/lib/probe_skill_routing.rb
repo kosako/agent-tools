@@ -324,28 +324,48 @@ module ProbeSkillRouting
 
   # --- 実行 -------------------------------------------------------------------------
 
-  # argv を配列のまま起動し、timeout を超えたら kill する。stdout / stderr / status を返す。
+  # timeout 後に reader thread を待つ上限秒。group kill 後も pipe が閉じない (kill が届かない
+  # 孫 process が握っている) 場合に runner 自体がハングしないための床。
+  READER_JOIN_GRACE = 5
+
+  # argv を配列のまま起動し、timeout を超えたら kill する。stdout / stderr / status を返す
+  # (timeout 時の status は nil)。
+  # CLI は子 process (codex の command 実行、claude の hook 等) を持ち、それらが stdout / stderr の
+  # pipe を継承する。CLI の PID だけを kill しても孫が pipe を握ったままだと read が返らず runner が
+  # ハングするので、pgroup: true で新しい process group を作り、timeout 時は group 全体へ TERM →
+  # KILL を送る。reader の join は bounded にし、それでも閉じない pipe は runner 側で close する。
   def self.run_command(argv, chdir:, stdin:, timeout:)
     # 入れ子起動の guard 変数を外す (Claude Code の Bash から起動された場合)。
     env = { "CLAUDECODE" => nil, "CLAUDE_CODE_ENTRYPOINT" => nil }
     out = +""
     err = +""
     status = nil
-    Open3.popen3(env, *argv, chdir: chdir) do |i, o, e, wait|
+    Open3.popen3(env, *argv, chdir: chdir, pgroup: true) do |i, o, e, wait|
       i.write(stdin) if stdin
       i.close
       readers = [Thread.new { out << o.read }, Thread.new { err << e.read }]
-      unless wait.join(timeout)
-        Process.kill("TERM", wait.pid) rescue nil
-        sleep 1
-        Process.kill("KILL", wait.pid) rescue nil
+      if wait.join(timeout)
         readers.each(&:join)
+        status = wait.value
+      else
+        # pgroup: true なので pgid == 子の pid。負の pid で group 全体に送る。
+        kill_group(wait.pid, "TERM")
+        sleep 1
+        kill_group(wait.pid, "KILL")
+        readers.each { |t| t.join(READER_JOIN_GRACE) }
+        [o, e].each { |io| io.close unless io.closed? }
+        readers.each { |t| t.join(1) }
+        wait.join(READER_JOIN_GRACE)
         return [out, err, nil]
       end
-      readers.each(&:join)
-      status = wait.value
     end
     [out, err, status]
+  end
+
+  def self.kill_group(pid, signal)
+    Process.kill(signal, -pid)
+  rescue Errno::ESRCH, Errno::EPERM
+    nil
   end
 
   def self.run_one(opts, proj, names, prompt)

@@ -75,8 +75,8 @@ claude-code の MCP server は `--strict-mcp-config` で読まない。headless 
 ```
 
 - `observed`: その run で **起動された** skill 名。claude-code は stream-json の `Skill` tool_use、
-  codex は event 本文に現れた project scope の `SKILL.md` path から取る。listing に載っているだけの
-  skill は含めない。
+  codex は `command_execution` の command 文字列に現れた `/<name>/SKILL.md` の読み取り (scope 不問、
+  出力は見ない。詳細は下の「codex の起動」) から取る。listing に載っているだけの skill は含めない。
 - `prompt_tokens`: claude-code は `result.usage` の input + cache_creation + cache_read の合計
   (skill listing は system prompt 側なので cache に現れる)。codex は usage の `input_tokens`。
   `output_tokens` は各 CLI の値。どちらも run 全体の合計で、turn 数 (model の振る舞い) に依存する。
