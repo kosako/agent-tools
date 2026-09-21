@@ -213,7 +213,7 @@ module ProbeSkillRouting
       end
     end
     { observed: observed.uniq, model: model, prompt_tokens: prompt_tokens, output_tokens: output_tokens,
-      first_prompt_tokens: first_prompt_tokens, subtype: subtype, text: text }
+      first_prompt_tokens: first_prompt_tokens, subtype: subtype, text: text, note: nil }
   end
 
   def self.sum_usage(usage, keys)
@@ -269,19 +269,27 @@ module ProbeSkillRouting
     s.gsub("\\") { "\\\\" }.gsub('"') { '\\"' }
   end
 
+  # codex で「探索読み」とみなす閾値: 1 run で inventory のこれ以上の skill の SKILL.md を読んだら、
+  # routing の判断ではなく skill 一覧の把握とみなし、最初に読んだ skill だけを observed にする
+  # (残りは note に残す)。Claude Code の Skill tool 呼び出しと違い、codex は file を読むだけなので
+  # 安価に全部読める run がある (baseline 24 run 中 1 run が 12 本すべてを順に読んだ)。
+  CODEX_SURVEY_THRESHOLD = 6
+
   # codex exec --json の event (0.153.4 で実測): thread.started / turn.started / item.started /
   # item.completed (item.type = agent_message | command_execution | error ...) / turn.completed
   # (usage: input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens, ...)。
-  # - observed: agent_message 以外の item に project scope の skill path (<proj>/.agents/skills/<name>/)
-  #   が現れた skill。skill の起動 = SKILL.md の読み取りで、command_execution の command に path が出る。
+  # - observed: command_execution の **command 文字列** に `/<name>/SKILL.md` が現れた skill (読んだ順、
+  #   重複なし)。scope は問わない: listing から外した user scope (~/.codex/skills/<name>/) や
+  #   `.system/../<name>/` を model が推測して読む run が実測で多く、project path だけでは起動を
+  #   取りこぼす。出力 (aggregated_output) は見ない (ls の結果に全 skill の path が並ぶと誤検知する)。
   # - prompt_tokens / output_tokens: turn.completed の usage。turn 内の全 API call の合計で、最初の
   #   call だけの値は event に無いので first_prompt_tokens は取らない (judge では n/a)。
   # - text: 最後の agent_message。model は event に出ない (caller が argv の値を使う)。
-  def self.parse_codex(jsonl, proj, names)
-    observed = []
+  def self.parse_codex(jsonl, names)
+    reads = []
     usage = nil
     text = +""
-    prefix = File.join(proj, PROJECT_SKILL_DIRS.fetch("codex"))
+    pattern = %r{/(#{names.map { |n| Regexp.escape(n) }.join('|')})/SKILL\.md}
     jsonl.each_line do |line|
       e = begin
         JSON.parse(line)
@@ -291,22 +299,27 @@ module ProbeSkillRouting
       next unless e.is_a?(Hash)
 
       case e["type"]
-      when "item.started", "item.completed"
+      when "item.completed"
         item = e["item"].is_a?(Hash) ? e["item"] : {}
         if item["type"] == "agent_message"
           text = item["text"] if item["text"].is_a?(String)
-        else
-          serialized = JSON.generate(item)
-          names.each { |n| observed << n if serialized.include?(File.join(prefix, n) + "/") }
+        elsif item["type"] == "command_execution" && item["command"].is_a?(String)
+          item["command"].scan(pattern) { |(name)| reads << name unless reads.include?(name) }
         end
       when "turn.completed"
         usage = e["usage"] if e["usage"].is_a?(Hash)
       end
     end
+    observed = reads
+    note = nil
+    if reads.length >= CODEX_SURVEY_THRESHOLD
+      observed = reads.first(1)
+      note = "survey: read #{reads.length} skills (#{reads.join(', ')}); counted the first only"
+    end
     prompt_tokens = usage && usage["input_tokens"].is_a?(Integer) ? usage["input_tokens"] : nil
     output_tokens = usage && usage["output_tokens"].is_a?(Integer) ? usage["output_tokens"] : nil
-    { observed: observed.uniq, model: nil, prompt_tokens: prompt_tokens, output_tokens: output_tokens,
-      first_prompt_tokens: nil, subtype: nil, text: text }
+    { observed: observed, model: nil, prompt_tokens: prompt_tokens, output_tokens: output_tokens,
+      first_prompt_tokens: nil, subtype: nil, text: text, note: note }
   end
 
   # --- 実行 -------------------------------------------------------------------------
@@ -343,7 +356,7 @@ module ProbeSkillRouting
     else
       argv = codex_argv(opts, proj, names)
       out, err, status = run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout])
-      parsed = parse_codex(out, proj, names).merge(model: codex_model(opts))
+      parsed = parse_codex(out, names).merge(model: codex_model(opts))
     end
     # 観測完了の条件: usage が取れていて、CLI が正常終了したか、または --max-turns の打ち切り
     # (claude-code の result.subtype == "error_max_turns")。打ち切りは routing の判断 (最初の
@@ -417,10 +430,11 @@ module ProbeSkillRouting
                   "output_tokens" => r[:output_tokens] || 0, "status" => r[:status] }
           # first_prompt_tokens は取れた tool (claude-code) だけ書く。judge では任意 field。
           run["first_prompt_tokens"] = r[:first_prompt_tokens] if r[:first_prompt_tokens]
+          run["note"] = r[:note] if r[:note]
           runs << run
           puts "#{c['id']} [#{n + 1}/#{opts[:repeat]}]: #{r[:status]} observed=#{r[:observed].inspect} " \
                "tokens=first:#{r[:first_prompt_tokens].inspect} total:#{r[:prompt_tokens].inspect} " \
-               "out:#{r[:output_tokens].inspect}"
+               "out:#{r[:output_tokens].inspect}#{r[:note] ? " (#{r[:note]})" : ''}"
         end
       end
       results = {

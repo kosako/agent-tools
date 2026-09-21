@@ -41,11 +41,19 @@ claude-code の観測に使う event (2.1.277 で実測): `system` / `init` の 
 `assistant` の `tool_use` (`name: "Skill"`, `input.skill: "<name>"`)、`result` の `usage`
 (`input_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens` / `output_tokens`)。
 
-codex の観測に使う event (0.153.4 で実測): `item.completed` / `item.started` の `item` (`type` が
-`command_execution` なら `command` に読んだ path が出る。skill の起動 = `<proj>/.agents/skills/<name>/SKILL.md`
-の読み取り)、`agent_message` の `text` (最終応答)、`turn.completed` の `usage` (`input_tokens` /
-`cached_input_tokens` / `output_tokens` など。turn 内の全 API call の合計)。model は event に出ないので
-`--model`、無ければ `$CODEX_HOME/config.toml` の top-level `model` を `-m` で渡し、その値を記録する。
+codex の観測に使う event (0.153.4 で実測): `item.completed` の `item` (`type` が `command_execution` なら
+`command` に読んだ path が出る)、`agent_message` の `text` (最終応答)、`turn.completed` の `usage`
+(`input_tokens` / `cached_input_tokens` / `output_tokens` など。turn 内の全 API call の合計)。model は event に
+出ないので `--model`、無ければ `$CODEX_HOME/config.toml` の top-level `model` を `-m` で渡し、その値を記録する。
+
+codex の「起動」= **command 文字列に `/<name>/SKILL.md` が現れた読み取り** (読んだ順、重複なし)。scope は
+問わない: listing から外した user scope (`~/.codex/skills/<name>/`) や `.system/../<name>/` を model が推測して
+読む run が実測で多く (baseline 24 run 中 10 run 以上)、project path だけでは起動を取りこぼす。command の出力
+(`aggregated_output`) は見ない (`ls` の結果に全 skill の path が並ぶと全件起動に化ける。初版で実際に起きた)。
+1 run で inventory の半数 (6 本) 以上を読んだ run は **探索読み**とみなし、最初に読んだ skill だけを
+`observed` にして残りを `note` に残す (Claude Code の `Skill` 呼び出しと違い、codex は file を読むだけなので
+安価に全部読める run がある。baseline 24 run 中 1 run)。これは heuristic であり、raw log で確認できるように
+しておく。
 
 claude-code の MCP server は `--strict-mcp-config` で読まない。headless では MCP の起動が最初の API call に間に合う
 かが run ごとに揺れ、baseline の実測 (2026-09-20) では 24 run が `tools=25 / mcp=0` と
@@ -141,6 +149,9 @@ codex は `--tool codex` で同じ手順。両 tool で回帰なしを確認し�
   訂正) を含まない。user scope の instruction が skill 名に触れる環境では、その影響は before /
   after の両方に等しく乗る。
 - model を固定しても揺れはある。`--repeat` と「同条件比較」で扱い、絶対値を保証にしない。
-- Codex の観測は skill path の読み取りで判定する。skill を読まずに listing の description だけで
+- Codex の観測は skill file の読み取りで判定する。skill を読まずに listing の description だけで
   振る舞う run は observed に出ない (Claude Code の `Skill` tool_use と同じ意味の「起動」で揃えている)。
+  探索読みの扱い (最初の 1 本だけを採る) は heuristic で、閾値は runner の定数。
+- Codex は run ごとの揺れが Claude Code より大きい (同じ prompt でも skill を読む / 読まない、user scope
+  の旧 body を読む、探索する)。`--repeat` を使い、1 run の差を回帰と読まない。
 - CI では probe を実行しない。証跡は raw log と、Issue / PR に貼る judge の summary。
