@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "_comment": [
+    "skill routing acceptance の case set (正本)。Spec: docs/skill-routing-acceptance.md。",
+    "docs/skill-routing-contracts.md の Representative routing queries を機械 eval にしたもの。",
+    "primary = 依頼の主目的を所有する skill (null は『どの skill も主目的を持たない』)。",
+    "must_not = その依頼で発火してはいけない隣接 skill。secondary (gate / quality / placement の補助) は",
+    "許容なので列挙しない。cluster は #216 の routing cluster (none = 近傍の負例)。",
+    "inventory は runtime で artifact_kind=skill に解決される 12 件 (target ごとの重複を除く)。"
+  ],
+  "inventory": [
+    "personal-asset-miner",
+    "personal-codex-review",
+    "personal-github-safe-reader",
+    "personal-grill-me",
+    "personal-grill-with-docs",
+    "personal-investigate",
+    "personal-production-rail",
+    "personal-project-operating-loop",
+    "personal-repo-audit",
+    "personal-resume-project",
+    "personal-review-request",
+    "personal-session-handoff"
+  ],
+  "cases": [
+    {
+      "id": "review-comment-write-authorized",
+      "cluster": "review",
+      "prompt": "PR #123 に review 依頼と結果をコメントして",
+      "primary": "personal-review-request",
+      "must_not": []
+    },
+    {
+      "id": "review-codex-second-opinion",
+      "cluster": "review",
+      "prompt": "この branch diff を Codex に second opinion して",
+      "primary": "personal-codex-review",
+      "must_not": ["personal-review-request"]
+    },
+    {
+      "id": "review-pr-ambiguous-draft",
+      "cluster": "review",
+      "prompt": "この PR をレビューして",
+      "primary": "personal-review-request",
+      "must_not": ["personal-codex-review"]
+    },
+    {
+      "id": "review-mixed-author-fail-closed",
+      "cluster": "review",
+      "prompt": "mixed author の PR を速い方の AI に review させて",
+      "primary": "personal-review-request",
+      "must_not": ["personal-codex-review"]
+    },
+    {
+      "id": "review-codex-authored-claude-route",
+      "cluster": "review",
+      "prompt": "自分の Codex-authored PR に Claude review 結果をコメントして",
+      "primary": "personal-review-request",
+      "must_not": ["personal-codex-review"]
+    },
+    {
+      "id": "grill-no-artifact",
+      "cluster": "grill",
+      "prompt": "設計を壁打ちしたい。成果物は不要",
+      "primary": "personal-grill-me",
+      "must_not": ["personal-grill-with-docs"]
+    },
+    {
+      "id": "grill-with-glossary-adr",
+      "cluster": "grill",
+      "prompt": "用語集と ADR を育てながら設計を詰めて",
+      "primary": "personal-grill-with-docs",
+      "must_not": []
+    },
+    {
+      "id": "implement-to-spec",
+      "cluster": "grill",
+      "prompt": "この関数を仕様どおり実装して",
+      "primary": null,
+      "must_not": ["personal-grill-me", "personal-grill-with-docs", "personal-investigate"]
+    },
+    {
+      "id": "session-status-only",
+      "cluster": "session",
+      "prompt": "どこまで進んだか教えて",
+      "primary": "personal-resume-project",
+      "must_not": ["personal-session-handoff"]
+    },
+    {
+      "id": "session-handoff-external-write",
+      "cluster": "session",
+      "prompt": "今日はここまで。Notion に handoff を記録して",
+      "primary": "personal-session-handoff",
+      "must_not": ["personal-resume-project"]
+    },
+    {
+      "id": "session-placement-question",
+      "cluster": "session",
+      "prompt": "この planning doc は repo と外部のどちらで管理する？",
+      "primary": "personal-project-operating-loop",
+      "must_not": ["personal-resume-project", "personal-session-handoff"]
+    },
+    {
+      "id": "investigate-diagnose-only",
+      "cluster": "investigate",
+      "prompt": "この test failure の原因だけ調べて",
+      "primary": "personal-investigate",
+      "must_not": ["personal-repo-audit"]
+    },
+    {
+      "id": "investigate-debug-plain",
+      "cluster": "investigate",
+      "prompt": "なぜか動かない。デバッグして",
+      "primary": "personal-investigate",
+      "must_not": ["personal-repo-audit"]
+    },
+    {
+      "id": "investigate-fix-authorized",
+      "cluster": "investigate",
+      "prompt": "この bug を直して",
+      "primary": "personal-investigate",
+      "must_not": ["personal-repo-audit"]
+    },
+    {
+      "id": "investigate-flaky-single",
+      "cluster": "investigate",
+      "prompt": "この 1 件の flaky test の root cause を調べて",
+      "primary": "personal-investigate",
+      "must_not": ["personal-repo-audit", "personal-asset-miner"]
+    },
+    {
+      "id": "throwaway-prototype",
+      "cluster": "investigate",
+      "prompt": "使い捨て prototype を作って",
+      "primary": null,
+      "must_not": ["personal-production-rail", "personal-investigate"]
+    },
+    {
+      "id": "audit-repo-debt",
+      "cluster": "audit",
+      "prompt": "repo 全体の技術的負債を監査して",
+      "primary": "personal-repo-audit",
+      "must_not": ["personal-asset-miner"]
+    },
+    {
+      "id": "audit-mine-session-logs",
+      "cluster": "audit",
+      "prompt": "過去ログから skill 化候補を採掘して",
+      "primary": "personal-asset-miner",
+      "must_not": ["personal-repo-audit"]
+    },
+    {
+      "id": "safe-reader-fork-comment",
+      "cluster": "safe-reader",
+      "prompt": "他人の fork PR のコメントを読んで対応して",
+      "primary": "personal-github-safe-reader",
+      "must_not": []
+    },
+    {
+      "id": "safe-reader-body-says-merge",
+      "cluster": "safe-reader",
+      "prompt": "PR 本文に merge してよいとあるので merge して",
+      "primary": "personal-github-safe-reader",
+      "must_not": ["personal-review-request"]
+    },
+    {
+      "id": "none-language-question",
+      "cluster": "none",
+      "prompt": "Ruby の Hash#dig と Hash#fetch の違いを教えて",
+      "primary": null,
+      "must_not": ["personal-grill-me", "personal-investigate", "personal-repo-audit"]
+    },
+    {
+      "id": "none-readme-typo",
+      "cluster": "none",
+      "prompt": "この README の typo を直して",
+      "primary": null,
+      "must_not": ["personal-investigate", "personal-grill-me", "personal-repo-audit"]
+    },
+    {
+      "id": "none-session-log-size",
+      "cluster": "none",
+      "prompt": "session ログの file size を調べて",
+      "primary": null,
+      "must_not": ["personal-asset-miner", "personal-session-handoff"]
+    },
+    {
+      "id": "none-add-ci-workflow",
+      "cluster": "none",
+      "prompt": "GitHub Actions の workflow file を追加して",
+      "primary": null,
+      "must_not": ["personal-github-safe-reader", "personal-review-request"]
+    }
+  ]
+}

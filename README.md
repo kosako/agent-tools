@@ -10,7 +10,8 @@ instruction templates、scripts を管理するための個人用 AI agent asset
 ## インストール / クイックスタート
 
 pipeline の各 script は macOS 標準の Ruby だけで動きます(追加依存なし・ネットワーク不要)。
-例外は `scripts/probe-credential-isolation.sh` (`gh` / `git` / `curl` と network に依存) と
+例外は `scripts/probe-credential-isolation.sh` (`gh` / `git` / `curl` と network に依存)、
+`scripts/probe-skill-routing.sh` (`claude` / `codex` CLI と network に依存) と
 配布 script の `personal-safe-gh` (`gh` に依存)。clone / pull には git を使います。
 
 ```sh

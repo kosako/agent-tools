@@ -3,9 +3,10 @@
 pipeline scripts (build / register / connect / sync / status / doctor と各種 check) は
 network access なしで実行できます。実装は macOS 標準の Ruby (YAML stdlib) で、追加 gem は
 不要です (status / doctor は repo 状態の確認に `git` 実行ファイルを使う。無い環境でも
-crash せず該当項目が degrade するだけ)。**例外は `probe-credential-isolation.sh`**:
-credential 隔離の実機検証 harness で、`gh` / `git` / `curl` と network に依存します
-(CI では実行しない。下記該当節)。
+crash せず該当項目が degrade するだけ)。**例外は `probe-credential-isolation.sh` と
+`probe-skill-routing.sh`**: 前者は credential 隔離の実機検証 harness で `gh` / `git` / `curl` と
+network に、後者は skill routing の実機観測で `claude` / `codex` CLI と network に依存します
+(いずれも CI では実行しない。下記該当節)。
 
 `tests/` の self-tests と repository checks は CI (`.github/workflows/test.yml`) で
 PR / push ごとに実行されます。
@@ -89,6 +90,38 @@ usage: probe-credential-isolation.sh [--config PATH] [--out FILE] [--dry-run]
   根拠にしない ([Credential Isolation Acceptance](../docs/credential-isolation-acceptance.md))。
 - self-test: `tests/probe-credential-isolation-test.sh` (実 credential に触れず recipe の env
   構造 / config 不在 fail / dry-run を検証)。
+
+- `check-skill-routing.sh`: skill routing acceptance harness の判定コア。case set と probe 結果
+  (JSON) を受け、coverage / primary hit / must_not violation / token を判定・報告する。
+  `--baseline` で before / after を比較する。
+  [Skill Routing Acceptance](../docs/skill-routing-acceptance.md) に従う。
+
+```text
+usage: check-skill-routing.sh --cases <cases.json> --results <results.json> [--baseline <results.json>]
+```
+
+- exit code: pass は 0、観測された破れ (must_not violation / baseline からの回帰) は 1、
+  usage / 入力・構造エラー (coverage 欠落・error run・比較条件不一致) は 2。token は gate にせず
+  delta を報告するだけ。
+- case set の正本は `lib/skill_routing_cases.json`。
+- self-test: `tests/check-skill-routing-test.sh`
+
+- `probe-skill-routing.sh`: skill routing acceptance harness の probe runner (実機)。候補 skill
+  だけを project scope に置いた隔離 project で `claude -p` / `codex exec` を headless 実行し、
+  発火した skill と token 使用量を `results.json` (judge 入力) に書く。実 tool home には
+  書き込まない。
+
+```text
+usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
+         [--source DIR] [--cases FILE] [--variant LABEL] [--model MODEL] [--repeat N]
+         [--only ID[,ID...]] [--max-turns N] [--timeout SEC] [--dry-run] [--smoke]
+```
+
+- **CI では実行しない** (CLI 認証と network が要る)。証跡は raw log (`<out>.raw/`) と judge の
+  summary。`--smoke` で隔離と event 形式を先に確認する (実測した版: Claude Code 2.1.277 /
+  Codex CLI 0.153.4)。
+- self-test は無い (CLI 起動そのものが主題のため)。`--dry-run` / `--help` の引数契約は
+  `tests/cli-args-test.sh` の対象外。
 
 - `build.sh`: shared source assets から tool 別 artifacts を `generated/` に生成する。
   adapter spec は [adapters/](../adapters/README.md) を参照。
