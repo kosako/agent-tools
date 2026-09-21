@@ -46,12 +46,15 @@ mkdir -p "$fakebin"
 gh_log="$tmp/gh.log"
 gh_body="$tmp/gh.body"
 gh_rc="$tmp/gh.rc"
+gh_hook="$tmp/gh.hook"
 echo 0 > "$gh_rc"
 {
   printf '#!/bin/sh\n'
-  printf 'log=%s\nbody=%s\nrcfile=%s\n' "$(shq "$gh_log")" "$(shq "$gh_body")" "$(shq "$gh_rc")"
+  printf 'log=%s\nbody=%s\nrcfile=%s\nhook=%s\n' "$(shq "$gh_log")" "$(shq "$gh_body")" "$(shq "$gh_rc")" "$(shq "$gh_hook")"
   cat <<'EOF'
 printf '%s\n' "$*" >> "$log"
+# 投稿の瞬間に環境を変える case (投稿後の保存失敗) 用。hook file があれば実行する
+if [ -f "$hook" ]; then sh "$hook"; fi
 while [ $# -gt 0 ]; do
   if [ "$1" = "--body-file" ]; then cp "$2" "$body"; fi
   shift
@@ -94,6 +97,15 @@ REQUEST-SAMPLE-LINE
 ## 次の入口
 REQUEST-SAMPLE-ENTRY
 ```
+- 入れ子の例 (4 本の fence の中に 3 本):
+
+````markdown
+```
+inner fence must not close the outer one
+```
+## 次の入口
+REQUEST-NESTED-ENTRY
+````
 
 ## 結果
 
@@ -199,6 +211,7 @@ echo "$out" | grep -q "COMMENT-DRAFT-LINE" && fail "a '### ' line inside a comme
 echo "$out" | grep -q "^### 下書き" && fail "comment-internal heading must not leak (R293-01)"
 echo "$out" | grep -q "受け入れ条件" && fail "dry-run must not carry 依頼"
 echo "$out" | grep -q "REQUEST-SAMPLE" && fail "headings inside fenced code must not start a section (R293-06)"
+echo "$out" | grep -q "REQUEST-NESTED-ENTRY" && fail "a 3-tick fence must not close a 4-tick fence (R293-07)"
 [ "$(gh_calls)" -eq 0 ] || fail "dry-run must not call gh"
 grep -q "^published:" "$repo/.agent-packets/7.md" && fail "dry-run must not mark published"
 
@@ -321,6 +334,36 @@ check("body が変われば not same", !Packet.same_except_published?(a, mk.call
 check("updated が変われば not same", !Packet.same_except_published?(a, mk.call(updated: Time.now + 60)))
 exit(@failed.zero? ? 0 : 1)
 RUBY
+
+# ---- publish: 書き込み不可の packet は投稿前に exit 2 / 投稿直後に不可になったら URL 付きで区別 (R293-08) ----
+if [ "$(id -u)" -eq 0 ]; then
+  echo "skip: running as root; write-permission cases are not meaningful" >&2
+else
+  cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
+  chmod 444 "$repo/.agent-packets/7.md"
+  set +e
+  out=$(cd "$repo" && with_gh "$pkt" publish 7 2>&1)
+  rc=$?
+  set -e
+  chmod 644 "$repo/.agent-packets/7.md"
+  [ "$rc" -eq 2 ] || fail "read-only packet should be refused before posting (rc=$rc): $out"
+  [ "$(gh_calls)" -eq "$calls" ] || fail "read-only packet must not call gh"
+  echo "$out" | grep -q "書き込みできません" || fail "read-only packet should say so: $out"
+  # 投稿の瞬間に read-only になる: 投稿は済み、保存は失敗 → exit 2 だが URL と手当てを示す
+  printf 'chmod 444 %s\n' "$(shq "$repo/.agent-packets/7.md")" > "$gh_hook"
+  set +e
+  out=$(cd "$repo" && with_gh "$pkt" publish 7 2>&1)
+  rc=$?
+  set -e
+  rm -f "$gh_hook"
+  chmod 644 "$repo/.agent-packets/7.md"
+  [ "$rc" -eq 2 ] || fail "save failure after posting should be exit 2 (rc=$rc): $out"
+  [ "$(gh_calls)" -eq $((calls + 1)) ] || fail "save-failure case should have posted exactly once"
+  echo "$out" | grep -q "example.invalid/comment/1" || fail "save failure must report the posted url: $out"
+  echo "$out" | grep -q "再実行せず" || fail "save failure must warn against retrying: $out"
+  grep -q "^published:" "$repo/.agent-packets/7.md" && fail "save failure must leave the packet unchanged"
+  calls=$(gh_calls)
+fi
 
 # ---- 不正 UTF-8 の packet は list で warning、publish は投稿前に exit 2 (R293-03) --------------
 cp "$tmp/7.bak" "$repo/.agent-packets/7.md"

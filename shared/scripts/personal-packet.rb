@@ -216,15 +216,17 @@ module Packet
 
   # 各行を [line, in_fence] で返す。fenced code block (``` / ~~~) の中の `## ` / `### ` は見出しと
   # して扱わない (依頼のサンプル code に `## 結果` があると、そこから本物の結果までを合成して
-  # しまう。R293-06)。fence の開始と終了は同じ記号で判定する (CommonMark の最小近似)。
+  # しまう。R293-06)。終了 fence は CommonMark どおり「開始と同じ記号・開始以上の本数・後続は
+  # 空白のみ」に限る (4 本の fence を中の 3 本で閉じたと誤認すると、例の中身が公開対象になる。
+  # R293-07)。
   def fenced_lines(text)
-    fence = nil
+    fence = nil # [記号, 本数]
     text.lines.map do |l|
       stripped = l.lstrip
       if fence.nil? && (m = /\A(`{3,}|~{3,})/.match(stripped))
-        fence = m[1][0]
+        fence = [m[1][0], m[1].size]
         [l, true]
-      elsif fence && stripped.start_with?(fence * 3)
+      elsif fence && stripped.match?(/\A#{Regexp.escape(fence[0])}{#{fence[1]},}\s*\z/)
         fence = nil
         [l, true]
       else
@@ -391,8 +393,18 @@ module Packet
                    "block mapping にしてください)。投稿しません"
     end
 
+    # 投稿より前に保存できることを確かめる (読めるが書けない packet だと、投稿だけ残って published
+    # が更新されず、再試行で二重投稿になる。R293-08)。
+    raise Error, "#{path}: 書き込みできません。投稿しません" unless File.writable?(path)
+
     url = post_comment(issue, repo, text)
-    File.write(path, updated_text)
+    begin
+      File.write(path, updated_text)
+    rescue SystemCallError => e
+      # 投稿は済んでいる。再試行すると二重投稿になるので、URL と入れるべき値を示して止める。
+      raise Error, "投稿は完了しました (#{url.empty? ? "issue ##{issue}" : url}) が、packet の保存に失敗しました " \
+                   "(#{e.class})。再実行せず、#{path} の frontmatter に `published: #{at.iso8601}` を手で入れてください"
+    end
     puts "published: #{url.empty? ? "issue ##{issue}" : url}"
   end
 
