@@ -30,8 +30,8 @@ orchestrator が行います。
 - **この skill (orchestrator 側)**: authorization と scope の確認、preflight の実行、clone と
   branch の用意、brief の生成、起動と完了判定、commit の回収 (fetch)、結果の転記、停止の記録、
   PR の作成、返却。
-- **`personal-codex-worker-preflight`**: 起動できる前提 (非対称 / capability / model 選択) の決定的
-  検査と launch argv の生成。この skill は preflight の判定を再実装しない。
+- **`personal-codex-worker-preflight`**: 起動できる前提 (非対称 / capability / model 選択 / clone の
+  妥当性) の決定的検査と launch argv の生成。この skill は preflight の判定を再実装しない。
 - **worker (Codex)**: clone の中で `依頼` を実装し、作業単位ごとに commit し、最終 message に
   結果を書く。packet / GitHub / main repository には触れない。
 - **人**: 委譲の起動指示、blocked からの再開判断、残量の申告 (#255)、PR の merge。
@@ -51,7 +51,8 @@ orchestrator が行います。
 ## 2. preflight
 
 起動前に、配備済みの `personal-codex-worker-preflight` (`<tool home>/agent-tools/scripts/`) を
-`--json` で実行し、**exit 0 のときだけ**その `launch_argv` を使います。
+`--clone <clone path> --json` で実行し、**exit 0 のときだけ**その `launch_argv` を使います。clone を
+検査するので **§3 の clone を作ってから** 実行します (順番は `LAUNCH.md`)。
 
 - exit 1 (BLOCKED): `blocked_at` (asymmetry / capability) と `reason` をそのまま `Blocked at: preflight`
   として返す。Codex の session 内 (`CODEX_SANDBOX` / `CODEX_THREAD_ID`) からの起動は非対称なので
@@ -64,9 +65,14 @@ orchestrator が行います。
 
 `launch_argv` は `codex exec --ignore-user-config --ignore-rules -s workspace-write
 -c approval_policy="never" --disable apps --disable computer_use --disable browser_use
-[-c model="…"] [-c model_reasoning_effort="…"] -o <run dir>/result.md -` の形で、`<run dir>` を
-run directory に置き換えて使う。**flag を足さない・外さない** (`--ephemeral` は付けない。
-`-s danger-full-access` や `--dangerously-…` は使わない。`--add-dir` で packet dir や home を開けない)。
+--add-dir <clone>/.git [-c model="…"] [-c model_reasoning_effort="…"] -o <run dir>/result.md -` の形で、
+`<run dir>` を run directory に置き換えて使う。**flag を足さない・外さない** (`--ephemeral` は付けない。
+`-s danger-full-access` や `--dangerously-…` は使わない。`--add-dir` を自分で足さない)。
+
+`--add-dir` が 1 つ入るのは、`workspace-write` の sandbox が **workdir の内側でも `.git` を保護する**
+ため (codex 0.154.0 で実測。これが無いと worker は `git add` すらできない)。開けるのは **worker 自身の
+clone の git dir だけ**で、preflight が orchestrator 自身の repository と linked worktree を拒否する
+(exit 2)。main の Git 管理領域・packet dir・home は開かない。
 
 herdr の状態 (`herdr` field) が `running` でなければ、pane 経由の起動はできない。この skill は
 worker を直接起動しない (review executor と違い、無人で長時間走る process を呼び出し元の
@@ -89,7 +95,8 @@ git dir が workdir の内側に入り、追加の書込許可なしで commit �
 - **起動前に clone 側の commit 前提を確認する**: `user.email` / `user.name` が解決でき、git hook gate
   (public-safety / git-identity / ai-trailer) の hook が clone から見えること。clone には main の
   repo-local な設定は引き継がれないので、どちらか欠ければ起動せず `Blocked at: clone` とする
-  (手順は `LAUNCH.md` §3)。
+  (手順は `LAUNCH.md` §3)。clone の path 自体の妥当性 (git dir が `<clone>/.git` の directory である /
+  orchestrator 自身の repository ではない) は preflight が検査する。
 - **clone の置き場は identity が効く場所に固定する**。git の identity を repository の置き場で
   切り替える設定 (`includeIf "gitdir:…"`) を使っている環境では、その context の外 (例: 一時 dir) へ
   clone すると user.email が空になり、commit が fail-closed で落ちます。既定は

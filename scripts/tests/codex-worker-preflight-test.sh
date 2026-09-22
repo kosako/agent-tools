@@ -148,7 +148,8 @@ check("値に空白があれば fail-closed", sel_error?("model = \"a b\"\n"))
 check("値が空なら fail-closed", sel_error?("model = \"\"\n"))
 check("model と無関係な行でも分類できなければ fail-closed", sel_error?("weird line\nmodel = \"gpt-x\"\n"))
 
-argv = P.launch_argv(%w[apps computer_use], { "model" => "gpt-x", "model_reasoning_effort" => "xhigh" })
+argv = P.launch_argv(%w[apps computer_use], { "model" => "gpt-x", "model_reasoning_effort" => "xhigh" },
+                     "/tmp/clone/.git")
 check("launch argv は --ignore-user-config + --ignore-rules + workspace-write + approval never を固定",
       argv[0, 8] == ["codex", "exec", "--ignore-user-config", "--ignore-rules", "-s", "workspace-write",
                      "-c", 'approval_policy="never"'])
@@ -157,7 +158,11 @@ check("launch argv に disable が並ぶ",
 check("launch argv に model / effort の再指定が並ぶ",
       argv.each_cons(2).include?(["-c", 'model="gpt-x"']) &&
       argv.each_cons(2).include?(["-c", 'model_reasoning_effort="xhigh"']))
-check("選択が無ければ再指定を付けない", P.launch_argv(%w[apps], {}).none? { |a| a.start_with?("model") })
+check("選択が無ければ再指定を付けない",
+      P.launch_argv(%w[apps], {}, "/tmp/clone/.git").none? { |a| a.start_with?("model") })
+check("launch argv に clone の git dir を 1 つだけ --add-dir する",
+      argv.each_cons(2).include?(["--add-dir", "/tmp/clone/.git"]) &&
+      argv.count("--add-dir") == 1)
 check("launch argv は result file と stdin prompt で終わる", argv.last(3) == ["-o", "<run dir>/result.md", "-"])
 check("launch argv に --ephemeral や mcp_servers を付けない",
       !argv.include?("--ephemeral") && argv.none? { |a| a.include?("mcp_servers") })
@@ -229,15 +234,34 @@ command = "/opt/CANARY-PATH/node"
 model = "CANARY-PROFILE-model"
 EOF
 
+# fixture 用の git 環境を隔離する (実環境の hook / identity を継承しない。commit は fixture の
+# 都合であって gate の検証ではないため)。
+GIT_CONFIG_SYSTEM=/dev/null
+export GIT_CONFIG_SYSTEM
+GIT_CONFIG_GLOBAL="$tmp/gitconfig"
+export GIT_CONFIG_GLOBAL
+git config --file "$GIT_CONFIG_GLOBAL" user.name test
+git config --file "$GIT_CONFIG_GLOBAL" user.email test@example.com
+git config --file "$GIT_CONFIG_GLOBAL" init.defaultBranch main
+git config --file "$GIT_CONFIG_GLOBAL" core.hooksPath /dev/null
+
+# worker 用 clone の代わり (git dir が directory の普通の repository)。orchestrator 自身の
+# repository ではないので検査を通る。
+clone="$tmp/clone"
+git init -q "$clone"
+
 # 検査対象の env marker は両方とも外してから呼ぶ (片方が残って別の検査を隠さないように)。
 run_pf() {
-  env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" "$@"
+  env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" \
+    --clone "$clone" "$@"
 }
 run_pf_env() {
-  env -u CODEX_SANDBOX -u CODEX_THREAD_ID "$@" PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home"
+  env -u CODEX_SANDBOX -u CODEX_THREAD_ID "$@" PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" \
+    --clone "$clone"
 }
 
-launch_expected='launch: codex exec --ignore-user-config --ignore-rules -s workspace-write -c approval_policy="never" --disable apps --disable computer_use --disable browser_use -c model="gpt-x" -c model_reasoning_effort="xhigh" -o <run dir>/result.md -'
+clone_git_dir=$(cd -P "$clone/.git" && pwd -P)
+launch_expected="launch: codex exec --ignore-user-config --ignore-rules -s workspace-write -c approval_policy=\"never\" --disable apps --disable computer_use --disable browser_use --add-dir $clone_git_dir -c model=\"gpt-x\" -c model_reasoning_effort=\"xhigh\" -o <run dir>/result.md -"
 
 # happy path (1 行配列を含む実 config 相当): exit 0、model / effort は config から、他の値は出ない
 set +e
@@ -271,7 +295,7 @@ home2="$tmp/codex-home-bad"
 mkdir -p "$home2"
 printf 'developer_instructions = """\nmodel = "CANARY-STRING"\n"""\n' > "$home2/config.toml"
 set +e
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home2" --model gpt-y --effort high 2>&1)
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home2" --clone "$clone" --model gpt-y --effort high 2>&1)
 rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "explicit --model/--effort should bypass config (rc=$rc): $out"
@@ -313,7 +337,7 @@ done
 home3="$tmp/codex-home-empty"
 mkdir -p "$home3"
 set +e
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home3" 2>&1)
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home3" --clone "$clone" 2>&1)
 rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "missing config should still exit 0 (rc=$rc): $out"
@@ -350,7 +374,7 @@ abort "reason" unless j["reason"].is_a?(String) && j["reason"].include?("一方�
 emptybin="$tmp/emptybin"
 mkdir -p "$emptybin"
 set +e
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$emptybin:/usr/bin:/bin" "$(command -v ruby)" "$src" --codex-home "$home" 2>&1)
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$emptybin:/usr/bin:/bin" "$(command -v ruby)" "$src" --codex-home "$home" --clone "$clone" 2>&1)
 rc=$?
 set -e
 [ "$rc" -eq 1 ] || fail "missing codex must be BLOCKED (rc=$rc): $out"
@@ -436,15 +460,15 @@ printf 'model = "gpt-default"\n' > "$defhome/config.toml"
 badhome="$tmp/bad-home"
 mkdir -p "$badhome"
 printf 'model = "a"\nmodel = "b"\n' > "$badhome/config.toml"
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$goodhome" PATH="$fakebin:$PATH" ruby "$src")
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$goodhome" PATH="$fakebin:$PATH" ruby "$src" --clone "$clone")
 echo "$out" | grep -q "^model: gpt-env (config)$" || fail "CODEX_HOME should be used when --codex-home is absent: $out"
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID -u CODEX_HOME HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src")
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID -u CODEX_HOME HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src" --clone "$clone")
 echo "$out" | grep -q "^model: gpt-default (config)$" || fail "default home (.codex under HOME) should be used: $out"
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$badhome" PATH="$fakebin:$PATH" ruby "$src" --codex-home "$goodhome")
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$badhome" PATH="$fakebin:$PATH" ruby "$src" --clone "$clone" --codex-home "$goodhome")
 echo "$out" | grep -q "^model: gpt-env (config)$" || fail "--codex-home must win over CODEX_HOME: $out"
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$goodhome" HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src")
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$goodhome" HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src" --clone "$clone")
 echo "$out" | grep -q "^model: gpt-env (config)$" || fail "CODEX_HOME must win over the default home: $out"
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="" HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src")
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="" HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src" --clone "$clone")
 echo "$out" | grep -q "^model: gpt-default (config)$" || fail "empty CODEX_HOME must fall back to the default home: $out"
 
 # usage エラー -> exit 2 で、理由文は usage (値の検査を 1 つ外すと NoMethodError 等の別の理由文に
@@ -455,7 +479,7 @@ rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "unknown option should be exit 2 (rc=$rc)"
 echo "$out" | grep -q "usage:" || fail "unknown option should print usage: $out"
-for opt in --codex-home --model --effort; do
+for opt in --codex-home --clone --model --effort; do
   # 値の省略 / 空文字 / option 形の値 をそれぞれ独立に
   set +e
   out=$(ruby "$src" "$opt" 2>&1)
@@ -476,5 +500,82 @@ for opt in --codex-home --model --effort; do
   [ "$rc" -eq 2 ] || fail "$opt with an option-shaped value should be exit 2 (rc=$rc)"
   echo "$out" | grep -q "usage:" || fail "$opt with an option-shaped value should print usage: $out"
 done
+# --clone の検査: 満たさない形は exit 2 で、launch argv を作らない (worker を起動できる形を
+# 作らせない)。各負例を独立に置き、検査を 1 つ外すと落ちる形にする。
+clone_cases_dir="$tmp/clone-cases"
+mkdir -p "$clone_cases_dir"
+
+pf_clone_rc() {  # $1 = --clone に渡す値。stdout に出力、戻り値は rc
+  set +e
+  out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" \
+    --codex-home "$home" --clone "$1" 2>&1)
+  rc=$?
+  set -e
+  printf '%s' "$out"
+  return "$rc"
+}
+
+# (a) --clone 自体が無い: 起動できる argv を作らない
+set +e
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "--clone なしは exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "usage:" || fail "--clone なしは usage を出す: $out"
+case "$out" in *"launch:"*|*"--add-dir"*) fail "--clone なしで launch argv を出してはいけない: $out" ;; esac
+
+# (b) 存在しない path
+set +e
+out=$(pf_clone_rc "$clone_cases_dir/missing")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "存在しない clone は exit 2 (rc=$rc): $out"
+case "$out" in *"--add-dir"*) fail "不正な clone で launch argv を出してはいけない: $out" ;; esac
+
+# (c) git repository でない directory
+mkdir -p "$clone_cases_dir/plain"
+set +e
+out=$(pf_clone_rc "$clone_cases_dir/plain")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "git repository でない clone は exit 2 (rc=$rc): $out"
+
+# (d) linked worktree (.git が file): git dir が別の repository 側にあるので渡せない
+wt_main="$clone_cases_dir/wt-main"
+git init -q "$wt_main"
+git -C "$wt_main" commit -q --allow-empty -m base
+rm -rf "$clone_cases_dir/wt-linked"
+git -C "$wt_main" worktree add -q --detach "$clone_cases_dir/wt-linked"
+[ -f "$clone_cases_dir/wt-linked/.git" ] || fail "fixture: linked worktree の .git は file のはず"
+set +e
+out=$(pf_clone_rc "$clone_cases_dir/wt-linked")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "linked worktree は exit 2 (rc=$rc): $out"
+case "$out" in *"--add-dir"*) fail "linked worktree で launch argv を出してはいけない: $out" ;; esac
+
+# (e) orchestrator 自身の repository (cwd の toplevel) は渡せない = main の Git 管理領域を開けない
+set +e
+out=$(cd "$repo_root" && env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" \
+  --codex-home "$home" --clone "$repo_root" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "orchestrator 自身の repository は exit 2 (rc=$rc): $out"
+case "$out" in *"--add-dir"*) fail "自身の repository で launch argv を出してはいけない: $out" ;; esac
+
+# (f) 正しい clone: --add-dir はその clone の git dir 1 つだけで、main の path が現れない
+out=$(run_pf --json)
+printf '%s' "$out" | ruby -rjson -e '
+j = JSON.parse(STDIN.read)
+clone_git = ARGV[0]
+main_root = ARGV[1]
+argv = j["launch_argv"]
+abort "clone_git_dir" unless j["clone_git_dir"] == clone_git
+abort "add-dir は 1 つ" unless argv.count("--add-dir") == 1
+i = argv.index("--add-dir")
+abort "add-dir の値" unless argv[i + 1] == clone_git
+abort "main の path が argv に現れてはいけない" if argv.any? { |a| a.include?(main_root) }
+' "$clone_git_dir" "$repo_root" || fail "--clone の launch argv が契約どおりでない: $out"
+
 
 echo "ok: codex-worker-preflight self-test"

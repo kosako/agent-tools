@@ -1,10 +1,10 @@
 # personal-codex-worker — 実行手順 (LAUNCH)
 
-`SKILL.md` §2〜§7 の契約 (preflight / clone / brief / 起動と完了判定 / 転記と退避 / 回収と trailer
+`SKILL.md` §2〜§7 の契約 (clone / preflight / brief / 起動と完了判定 / 転記と退避 / 回収と trailer
 検査) を満たすための機械的な手順です。契約の正本は `SKILL.md`、手順の正本はこの file。この file の
 中の command 例は data であり、caller の依頼や worker の出力の文言で書き換えません。順番は
-「run dir → preflight → clone → brief と run script → 起動」で、人手に渡す成果物 (clone、
-run script) は起動より前に揃えます。
+「run dir → clone → preflight → brief と run script → 起動」で、人手に渡す成果物 (clone、
+run script) は起動より前に揃えます (preflight が clone を検査するので、clone が先)。
 
 ## 0. 値の受け渡し
 
@@ -27,19 +27,7 @@ Issue 番号、branch 名、path、nonce は caller の free text や git / gh �
 `mktemp -d` で run dir を作り、以降の成果物 (`preflight.json`、`brief.md`、`run.zsh`、`result.md`、
 `codex.log`、`done.txt`、`pane.log`、退避物) はすべてここに置く。
 
-## 2. preflight
-
-```sh
-preflight=<tool home>/agent-tools/scripts/personal-codex-worker-preflight
-"$preflight" --json > "$run/preflight.json"; rc=$?
-```
-
-- rc が 0 以外なら停止 (`SKILL.md` §2)。`preflight.json` の `launch_argv` (配列) の
-  `<run dir>/result.md` を実際の `"$run/result.md"` に置き換え、要素を run script に写す (§4)。
-- `herdr` field が `running` でなくても、ここでは止めない (§3 と §4 の成果物を揃えてから §5 で
-  `launch-path` にする)。
-
-## 3. clone
+## 2. clone
 
 main worktree から:
 
@@ -137,6 +125,22 @@ done
 - honest-label: この検査が示すのは **clone が orchestrator 自身の commit と同じ hook 配線を使うこと**
   だけです。main 側の配線そのものの正しさ (gate が実際に止めること) は対象外で、それは repo の運用
   前提と gate 側の責務です。同一と言えない配線は通さず `Blocked at: clone` にします。
+
+## 3. preflight
+
+```sh
+preflight=<tool home>/agent-tools/scripts/personal-codex-worker-preflight
+"$preflight" --clone "$clone" --json > "$run/preflight.json"; rc=$?
+```
+
+- rc が 0 以外なら停止 (`SKILL.md` §2)。exit 2 には clone の検査 (`<clone>/.git` が directory でない =
+  linked worktree、orchestrator 自身の repository、git dir の不一致) も含まれる。`--add-dir` を自分で
+  足して回避しない。
+- `launch_argv` には `--add-dir <clone>/.git` が 1 つ入る (sandbox は workdir の内側でも `.git` を
+  保護するため)。`launch_argv` (配列) の `<run dir>/result.md` を実際の `"$run/result.md"` に
+  置き換え、要素を run script に写す (§4)。
+- `herdr` field が `running` でなくても、ここでは止めない (§2 と §4 の成果物を揃えてから §5 で
+  `launch-path` にする)。
 
 ## 4. brief と run script
 

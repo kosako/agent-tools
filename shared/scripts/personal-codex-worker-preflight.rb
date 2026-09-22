@@ -97,7 +97,8 @@ module CodexWorkerPreflight
   module_function
 
   def usage
-    "usage: personal-codex-worker-preflight [--codex-home DIR] [--model NAME] [--effort LEVEL] [--json]"
+    "usage: personal-codex-worker-preflight --clone DIR [--codex-home DIR] [--model NAME] " \
+      "[--effort LEVEL] [--json]"
   end
 
   # 下位 command を argv 配列で起動して stdout + stderr を読む。exit 0 以外と不在は nil。
@@ -173,12 +174,49 @@ module CodexWorkerPreflight
   end
 
   # 起動 argv。`<run dir>` は launcher が run directory に置き換える placeholder。
-  def launch_argv(features, selection)
+  # `--add-dir` は **worker 自身の clone の git dir 1 つだけ**。workspace-write の sandbox は workdir の
+  # 内側でも `.git` を保護するため、これが無いと worker は commit できない (codex 0.154.0 で実測)。
+  # main の Git 管理領域は渡さない (validate_clone が orchestrator の repository を拒否する)。
+  def launch_argv(features, selection, clone_git_dir)
     argv = ["codex", "exec", "--ignore-user-config", "--ignore-rules", "-s", "workspace-write",
             "-c", 'approval_policy="never"']
     features.each { |f| argv.push("--disable", f) }
+    argv.push("--add-dir", clone_git_dir)
     MODEL_KEYS.each_value { |key| argv.push("-c", "#{key}=\"#{selection[key]}\"") if selection[key] }
     argv.push("-o", "<run dir>/result.md", "-")
+  end
+
+  # worker を動かす clone の検査。満たさなければ ArgumentError (exit 2) で、launch argv を作らない。
+  # 返すのは `--add-dir` に渡す git dir の物理 path。
+  def validate_clone(path)
+    raise ArgumentError, "clone: directory ではありません: #{path}" unless File.directory?(path)
+
+    root = real_path(path)
+    raise ArgumentError, "clone: path を解決できません: #{path}" unless root
+
+    git_dir = real_path(File.join(root, ".git"))
+    unless git_dir && File.directory?(git_dir)
+      raise ArgumentError, "clone: <clone>/.git が directory ではありません (linked worktree は不可): #{path}"
+    end
+
+    resolved = run_capture(["git", "-C", root, "rev-parse", "--absolute-git-dir"]).to_s.strip
+    actual = resolved.empty? ? nil : real_path(resolved)
+    unless actual == git_dir
+      raise ArgumentError, "clone: git repository の git dir が <clone>/.git と一致しません: #{path}"
+    end
+
+    self_root = run_capture(["git", "rev-parse", "--show-toplevel"]).to_s.strip
+    if !self_root.empty? && real_path(self_root) == root
+      raise ArgumentError, "clone: orchestrator 自身の repository は渡せません (main の Git 管理領域を開けない)"
+    end
+
+    git_dir
+  end
+
+  def real_path(path)
+    File.realpath(path)
+  rescue SystemCallError
+    nil
   end
 
   def codex_home(override)
@@ -189,18 +227,19 @@ module CodexWorkerPreflight
   end
 
   def parse_args(argv)
-    opts = { codex_home: nil, json: false, explicit: {} }
+    opts = { codex_home: nil, clone: nil, json: false, explicit: {} }
     args = argv.dup
     until args.empty?
       arg = args.shift
       case arg
       when "--json" then opts[:json] = true
-      when "--codex-home", "--model", "--effort"
+      when "--codex-home", "--clone", "--model", "--effort"
         value = args.shift
         raise ArgumentError, usage if value.nil? || value.empty? || value.start_with?("-")
 
-        if arg == "--codex-home"
-          opts[:codex_home] = value
+        case arg
+        when "--codex-home" then opts[:codex_home] = value
+        when "--clone" then opts[:clone] = value
         else
           key = MODEL_KEYS.fetch(arg)
           opts[:explicit][key] = validate_model_value(key, value)
@@ -225,6 +264,12 @@ module CodexWorkerPreflight
     if ENV.key?("CODEX_SANDBOX") || ENV.key?("CODEX_THREAD_ID")
       raise Blocked, "asymmetry: Codex の session 内から worker は起動しない (委譲は Claude → Codex の一方通行)"
     end
+
+    # --clone は必須 (worker は clone の中でしか動かさない)。非対称の判定を usage で隠さないよう、
+    # asymmetry の後に置く。
+    raise ArgumentError, usage if opts[:clone].nil?
+
+    clone_git_dir = validate_clone(opts[:clone])
 
     version = parse_version(run_capture(%w[codex --version]))
     raise Blocked, "capability: codex CLI が無いか、版を読めません" unless version
@@ -252,7 +297,8 @@ module CodexWorkerPreflight
       model_reasoning_effort: selection["model_reasoning_effort"],
       model_source: opts[:explicit].empty? ? "config" : "explicit",
       herdr: herdr_state,
-      launch_argv: launch_argv(DISABLE_FEATURES, selection),
+      clone_git_dir: clone_git_dir,
+      launch_argv: launch_argv(DISABLE_FEATURES, selection, clone_git_dir),
     }
   end
 
@@ -263,6 +309,7 @@ module CodexWorkerPreflight
     puts "model: #{r[:model] || '(codex default)'} (#{r[:model_source]})"
     puts "model_reasoning_effort: #{r[:model_reasoning_effort] || '(codex default)'} (#{r[:model_source]})"
     puts "herdr: #{r[:herdr]}"
+    puts "clone git dir: #{r[:clone_git_dir]}"
     puts "launch: #{r[:launch_argv].join(' ')}"
   end
 
