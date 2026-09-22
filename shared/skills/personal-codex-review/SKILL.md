@@ -6,13 +6,13 @@ description: Codex CLI で branch diff / commit / uncommitted changes を検査�
 # personal-codex-review
 
 現在の repository を Codex CLI (`codex exec`) で検査する read-only executor です。
-GitHub の read / comment / approve / merge、修正、commit、push は行わず、review session も
-永続化しません。Codex は herdr の pane から起動し、結果は file で受け取ります。
+GitHub の read / comment / approve / merge、修正、commit、push は行いません。review の session rollout は
+Codex 側に残します (利用量の集計に使う)。Codex は herdr の pane から起動し、結果は file で受け取ります。
 
 ## 副作用と組み合わせ
 
-- 副作用: herdr の pane から起動する capability-checked な ephemeral read-only CLI 実行と結果 file の
-  読み取りだけで、repo や GitHub へ書き込まない。herdr が無く自身が sandbox 内なら直接起動せず
+- 副作用: herdr の pane から起動する capability-checked な read-only CLI 実行と結果 file の読み取り
+  だけで、repo や GitHub へ書き込まない (Codex 側に session rollout は残る。利用量の集計に使う)。herdr が無く自身が sandbox 内なら直接起動せず
   BLOCKED で人手へ渡し、capability 不足では generic fallback を試さず停止し、明示的な second opinion は
   非独立と表示する (詳細は「責務境界」と「2. capability preflight」)。
 - 組み合わせ: PR workflow は personal-review-request、品質観点と出力契約は personal-production-rail。
@@ -66,7 +66,7 @@ codex exec --help
 次をすべて確認します。
 
 - `codex exec` が `-s` / `--sandbox` の `read-only` を受け付ける。
-- `codex exec` が `-c` / `--config` と `--ephemeral` を受け付ける。
+- `codex exec` が `-c` / `--config` を受け付ける。
 - `codex exec` が `-o` / `--output-last-message <FILE>` を受け付ける。
 - `codex exec` が prompt を `-` (stdin) から読める。
 - current working directory が review 対象の git repository である。
@@ -183,9 +183,10 @@ run 用の directory を `mktemp -d` で作り、`brief.md`、`result.md` (出�
 command は **この skill の directory にある `LAUNCH.md` を読んで、その通りに組みます** (手順の正本は
 そちら)。ここには手順が満たすべき契約だけを置きます。
 
-- **Codex の flag は固定**: `codex exec -s read-only -c approval_policy="never" --ephemeral`
-  `-o <run dir>/result.md -` で、brief は stdin から渡す。`--ephemeral` は Codex 自身の review session
-  state を永続化しないための副作用境界で必須。model family / reasoning effort は固定せず、明示依頼と
+- **Codex の flag は固定**: `codex exec -s read-only -c approval_policy="never"`
+  `-o <run dir>/result.md -` で、brief は stdin から渡す。`--ephemeral` は付けない (review の session
+  rollout を Codex 側に残し、利用量の集計に使う。#297)。安全境界は sandbox と approval policy で、rollout の
+  有無は境界ではない。model family / reasoning effort は固定せず、明示依頼と
   capability 確認がない `-m` や model-specific config を足さない。別 agent / wrapper に代行させず、
   実際の Codex CLI process を起動する。
 - **escape**: path と nonce は生成時に shell literal 化 (値全体を `'` で囲み、内側の `'` を `'\''` に

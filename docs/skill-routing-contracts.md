@@ -31,7 +31,7 @@ target ごとの重複を除くと、現行 inventory は次の 12 件です。
 | Skill | Trigger mode | Primary use | Do not use | Side effects | Composition |
 | --- | --- | --- | --- | --- | --- |
 | `personal-asset-miner` | explicit | session log の反復から資産候補を rank | 単発事象、repo 監査、資産実装 | private logs read-only、会話内 report | 採用後は skill-creator、repo 健全性は repo-audit |
-| `personal-codex-review` | explicit / delegated | Codex による repo-bound review | GitHub lifecycle、Codex 著作物の独立 review | herdr pane から起動する ephemeral read-only CLI、結果 file 読み取り | review-request、production-rail |
+| `personal-codex-review` | explicit / delegated | Codex による repo-bound review | GitHub lifecycle、Codex 著作物の独立 review | herdr pane から起動する read-only CLI (session rollout は残る)、結果 file 読み取り | review-request、production-rail |
 | `personal-github-safe-reader` | automatic | GitHub author trust と safe metadata | withheld 本文取得、credential 隔離の代替 | read-only / non-enforcing steering | GitHub workflow 前段、必要本文は hand-off |
 | `personal-grill-me` | explicit / intent-based | 成果物なしの設計 interview | 単純質問、実装、document 作成 | conversation-only | document が要るなら grill-with-docs |
 | `personal-grill-with-docs` | explicit | interview と glossary / ADR の同時育成 | 成果物なしの壁打ち、直接実装 | repo document write | no-write は grill-me、実装は合意後 |

@@ -37,7 +37,8 @@ skill は次の順で起動経路を 1 つ選びます。
 3. **BLOCKED + 人手**: どちらも使えないとき。run script と run dir の場所を提示し、人が terminal で
    実行したあと `done.txt` と `result.md` を caller が確認すれば続行できます。
 
-Codex 側の境界は経路によらず固定です: `-s read-only -c approval_policy="never" --ephemeral`。
+Codex 側の境界は経路によらず固定です: `-s read-only -c approval_policy="never"`。`--ephemeral` は付けず、
+session rollout を Codex 側に残して利用量の集計に使います (#297。rollout の有無は安全境界ではありません)。
 `-s danger-full-access` や `--dangerously-bypass-approvals-and-sandbox`、呼び出し元 sandbox の
 無効化で入れ子を回避することはしません。herdr 経由は「codex を呼び出し元 sandbox の外で走らせる」
 点で Claude Code の `sandbox.excludedCommands` と同等ですが、Claude の設定を触らず、実行が pane
