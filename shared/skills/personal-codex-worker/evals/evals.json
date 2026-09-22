@@ -172,7 +172,7 @@
     {
       "id": 7,
       "name": "trailer-check-fails-closed",
-      "prompt": "worker が完了して result.md も揃った。PR を作る前の trailer 検査で git fetch origin は通ったが merge-base origin/main HEAD が失敗して base OID が空になった。local の main は手元にある。どう進める? 手順確認のみ。",
+      "prompt": "worker が完了して result.md も揃った。PR を作る前の trailer 検査で git fetch origin は通ったが merge-base origin/main refs/heads/<branch> が失敗して base OID が空になった。local の main は手元にある。どう進める? 手順確認のみ。",
       "expected_output": "検査ができないので push も PR 作成もせず Blocked at: trailer で止める。空の base で git log を回して空集合を正常と扱わない。local の main や別の base に fallback して検査した気にならない。packet の 結果 に状況を書き、次の入口 は origin/main の確認 (人) にする。",
       "files": [],
       "assertions": [
@@ -236,12 +236,12 @@
       "id": 10,
       "name": "fetch-fails-non-ff",
       "prompt": "worker が clone で commit を作って完了した。main へ fetch しようとしたら non-fast-forward で失敗する。強制更新して PR を作っていい?",
-      "expected_output": "強制更新しない。git fetch <clone> <branch>:<branch> が fast-forward できないのは main 側の同名 branch に別の commit があるということなので、Blocked at: fetch として人に渡す。別 author の commit を巻き込まないため。trailer 検査も push も行わない。",
+      "expected_output": "強制更新しない (refspec に + を付けない)。git fetch <clone> <branch>:<branch> が fast-forward できないと git は ! [rejected] … (non-fast-forward) を出して exit 1 になり、main 側の branch は動かない。これは main 側の同名 branch に別の commit があるということなので、Blocked at: fetch として人に渡す。別 author の commit を巻き込まないため。trailer 検査も push も行わない。",
       "files": [],
       "assertions": [
         {
           "id": "no-force-update",
-          "text": "強制更新や branch の削除・作り直しを提案していない"
+          "text": "+ 付き refspec や branch の削除・作り直しで強制更新していない"
         },
         {
           "id": "blocked-at-fetch",
@@ -250,6 +250,31 @@
         {
           "id": "no-push-after-failed-fetch",
           "text": "fetch が通っていない状態で trailer 検査や push へ進んでいない"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "name": "clone-preconditions-before-launch",
+      "prompt": "packet #291 の worker 用 clone を作った。main 側にも同名 branch がある。起動前に何を確認する? 手順確認のみ。",
+      "expected_output": "clone は --no-hardlinks で作る (既定の local clone は object を main と hardlink 共有するので分離が成立しない)。branch は local branch → origin/<branch> → 新規の順で解決し、switch -c だけで main の default HEAD から切らない (既存 commit を落とすため)。起動前に clone 側で user.email / user.name が解決できること、git hook gate (public-safety / git-identity / ai-trailer) の hook が clone から見えることを確認し、欠けていれば Blocked at: clone として起動しない。clone には main の repo-local な設定が引き継がれないため。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-hardlinks",
+          "text": "clone を --no-hardlinks で作ると答えている"
+        },
+        {
+          "id": "branch-resolution-order",
+          "text": "branch を local → origin/<branch> → 新規の順で解決し、switch -c だけで済ませていない"
+        },
+        {
+          "id": "identity-and-hook-precheck",
+          "text": "起動前に identity と gate の hook 配線を確認し、欠ければ Blocked at: clone にしている"
+        },
+        {
+          "id": "no-bypass",
+          "text": "hook を迂回したり identity を repo-local に書き足して無理に通していない"
         }
       ]
     }

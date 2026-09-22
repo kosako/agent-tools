@@ -32,7 +32,7 @@ target ごとの重複を除くと、現行 inventory は次の 13 件です。
 | --- | --- | --- | --- | --- | --- |
 | `personal-asset-miner` | explicit | session log の反復から資産候補を rank | 単発事象、repo 監査、資産実装 | private logs read-only、会話内 report | 採用後は skill-creator、repo 健全性は repo-audit |
 | `personal-codex-review` | explicit / delegated | Codex による repo-bound review | GitHub lifecycle、Codex 著作物の独立 review | herdr pane から起動する read-only CLI (session rollout は残る)、結果 file 読み取り | review-request、production-rail |
-| `personal-codex-worker` | explicit (orchestrator) | packet の Issue を Codex worker に委譲し結果を packet に転記 | review、PR lifecycle、Codex session 内からの起動 (非対称) | linked worktree、herdr pane から起動する workspace-write CLI (connector / MCP / rules を外す)、packet の local 更新、orchestrator による push と PR 作成 | codex-worker-preflight、agent-packets、review-request |
+| `personal-codex-worker` | explicit (orchestrator) | packet の Issue を Codex worker に委譲し結果を packet に転記 | review、PR lifecycle、Codex session 内からの起動 (非対称) | worker 用 clone、herdr pane から起動する workspace-write CLI (connector / MCP / rules を外す)、clone からの fetch、packet の local 更新、orchestrator による push と PR 作成 | codex-worker-preflight、agent-packets、review-request |
 | `personal-github-safe-reader` | automatic | GitHub author trust と safe metadata | withheld 本文取得、credential 隔離の代替 | read-only / non-enforcing steering | GitHub workflow 前段、必要本文は hand-off |
 | `personal-grill-me` | explicit / intent-based | 成果物なしの設計 interview | 単純質問、実装、document 作成 | conversation-only | document が要るなら grill-with-docs |
 | `personal-grill-with-docs` | explicit | interview と glossary / ADR の同時育成 | 成果物なしの壁打ち、直接実装 | repo document write | no-write は grill-me、実装は合意後 |

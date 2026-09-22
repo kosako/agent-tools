@@ -44,12 +44,28 @@ preflight=<tool home>/agent-tools/scripts/personal-codex-worker-preflight
 main worktree から:
 
 ```sh
-# 再開なら既存の clone をそのまま使う (作り直さない)
+# 再開なら、この手順で作った既存 clone をそのまま使う (作り直さない)
 [ -d "$clone/.git" ] && git -C "$clone" rev-parse --git-dir >/dev/null 2>&1 \
-  || git clone --quiet -- "$main" "$clone"
-git -C "$clone" switch -c "$branch" 2>/dev/null || git -C "$clone" switch "$branch"
+  || git clone --quiet --no-hardlinks -- "$main" "$clone"
+
+# branch: main 側に既にあれば その tip から、無ければ新規に切る
+if git -C "$clone" rev-parse --verify --quiet --end-of-options "refs/heads/$branch" >/dev/null; then
+  git -C "$clone" switch -- "$branch"
+elif git -C "$clone" rev-parse --verify --quiet --end-of-options "refs/remotes/origin/$branch" >/dev/null; then
+  git -C "$clone" switch -c "$branch" --no-track "refs/remotes/origin/$branch"
+else
+  git -C "$clone" switch -c "$branch"
+fi
 ```
 
+- **`--no-hardlinks` は必須**。local path からの `git clone` は既定で object を hardlink するため、
+  clone 側の object / pack が main と同じ実体になり「main の Git 管理領域を worker に開けない」が
+  成立しない (実測: 既定 clone は object の link 数 2、`--no-hardlinks` は 1)。再利用してよいのは
+  **この手順で作った clone だけ**で、素性が不明なら作り直す。
+- **branch は取り違えない**。main 側に同名 branch があると clone にも `origin/<branch>` として入って
+  いるので、`switch -c` だけで作ると clone の既定 HEAD (main の default branch) から切ってしまい、
+  既存の commit を含まない履歴で worker が始まる。上のように「local branch → `origin/<branch>` →
+  新規」の順で分岐する。
 - `$clone` は `<main worktree>-clones/<issue>` のように **main と同じ identity context の中**に切る
   (`SKILL.md` §3。context の外に切ると user.email が空になり、worker の commit が落ちる)。
 - clone の origin は main repository の path になる (worker に network は無い)。worker はここに
@@ -57,6 +73,25 @@ git -C "$clone" switch -c "$branch" 2>/dev/null || git -C "$clone" switch "$bran
 - clone / switch が失敗したら `Blocked at: clone`。
 - 既存 clone を再利用するときは、`git -C "$clone" status --porcelain` の結果を run dir に控えてから
   起動する (前 round の残りと、この round の変更を区別するため)。
+
+### clone 側の commit 前提を起動前に確認する
+
+clone には main の repo-local な設定 (identity / hooksPath) は引き継がれません。**worker を起動する前に
+次を確認し、1 つでも満たさなければ `Blocked at: clone`** とします (起動してから commit で落ちると、
+round を 1 つ無駄にして停止理由も分かりにくくなる)。
+
+```sh
+git -C "$clone" config --get user.email        # 空なら Blocked (identity context の外)
+git -C "$clone" config --get user.name         # 同上
+hooks=$(git -C "$clone" config --get core.hooksPath) || hooks=""
+# hooksPath は未設定なら .git/hooks。値の先頭 ~ は git が展開するので、test する前に展開する
+[ -n "$hooks" ] || hooks="$(git -C "$clone" rev-parse --absolute-git-dir)/hooks"
+[ -x "${hooks/#\~/$HOME}/pre-commit" ] && [ -x "${hooks/#\~/$HOME}/commit-msg" ]   # gate の配線
+```
+
+- identity が空: commit が `useConfigOnly` で落ちるので起動しない。clone の置き場を直す。
+- gate の hook が見えない: public-safety / git-identity / ai-trailer が動かないまま worker が commit
+  する状態なので起動しない (gate を迂回する経路を作らない)。
 
 ## 4. brief と run script
 
@@ -159,12 +194,14 @@ main の local path)。fetch は **branch を明示した refspec** で行い、
 (clone の中で検査して push、はしない。push する repository は main 側の設定に閉じる)。
 
 ```sh
-git -C "$main" fetch --no-tags -- "$clone" "+refs/heads/$branch:refs/heads/$branch" || exit 1
+git -C "$main" fetch --no-tags -- "$clone" "refs/heads/$branch:refs/heads/$branch" || exit 1
 ```
 
-- 同じ branch が main 側に既にあり fast-forward できないときは fetch が失敗する。強制更新
-  (`+` は refspec に付くが non-fast-forward の local branch 更新は拒否される形) をここで回避せず、
-  `Blocked at: fetch` にして人に渡す (別 author の commit を巻き込まないため)。
+- **refspec に `+` を付けない**。`+` は non-fast-forward の上書きを許すので、main 側の同名 branch が
+  分岐していても黙って巻き戻る。`+` 無しなら git は
+  `! [rejected] <branch> -> <branch> (non-fast-forward)` を出して **exit 1**、local branch は動かない
+  (実測)。その場合は強制更新せず `Blocked at: fetch` で人に渡す (別 author の commit を巻き込まない
+  ため)。
 - fetch した branch は **checkout しない**。以降の検査と push は main の repository から
   `refs/heads/$branch` を対象に行う。
 

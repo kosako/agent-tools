@@ -81,9 +81,15 @@ commit できません (codex 0.154.0 で実測。`--add-dir <main>/.git` を足
 objects / refs / 他 worktree の index / config を worker に開けることになるので採りません)。clone なら
 git dir が workdir の内側に入り、追加の書込許可なしで commit できます。
 
-- `git clone <main worktree> <clone path> -b <branch>` (branch が未作成なら clone 後に
-  `git -C <clone path> switch -c <branch>`)。branch 名は packet の `branch`。無ければ orchestrator が
-  決めて packet に書く。
+- `git clone --no-hardlinks <main worktree> <clone path>` で切り、branch は clone 側で選ぶ。
+  `--no-hardlinks` は必須 (既定の local clone は object を main と hardlink 共有するので、分離が
+  成立しない)。branch は「clone の local branch → `origin/<branch>` → 新規」の順で解決する
+  (`switch -c` だけだと、main 側にある同名 branch の tip を取り違える)。branch 名は packet の
+  `branch`。無ければ orchestrator が決めて packet に書く。
+- **起動前に clone 側の commit 前提を確認する**: `user.email` / `user.name` が解決でき、git hook gate
+  (public-safety / git-identity / ai-trailer) の hook が clone から見えること。clone には main の
+  repo-local な設定は引き継がれないので、どちらか欠ければ起動せず `Blocked at: clone` とする
+  (手順は `LAUNCH.md` §3)。
 - **clone の置き場は identity が効く場所に固定する**。git の identity を repository の置き場で
   切り替える設定 (`includeIf "gitdir:…"`) を使っている環境では、その context の外 (例: 一時 dir) へ
   clone すると user.email が空になり、commit が fail-closed で落ちます。既定は
@@ -172,7 +178,8 @@ worker の最終 message が「完了」で、`依頼` の受け入れ条件を�
    `git -C <main> fetch <clone path> <branch>:<branch>` で取り込む (network 不要)。fetch が失敗したら
    `Blocked at: fetch`。以降の検査と push は main 側で行う。
 2. **trailer 検査**: PR に含まれる追加 commit (fetch 済みの `origin/main` との merge-base から
-   `HEAD` まで。local の main を base にしない) の trailer が **すべて Codex のみ** (Claude 系の
+   `refs/heads/<branch>` まで。fetch した branch は checkout しないので `HEAD` を対象にしない。
+   local の main を base にしない) の trailer が **すべて Codex のみ** (Claude 系の
    trailer が 1 つも無く、trailer 欠落も無い) であることを確認する。混在 / 欠落なら push せず
    `Blocked at: trailer` (author 交代は新 branch + 新 PR)。検査そのものができない (fetch / merge-base /
    log の失敗、base OID が取れない、commit が 0 件) ときも push せず `Blocked at: trailer` (別の base

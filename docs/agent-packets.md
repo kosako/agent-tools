@@ -190,7 +190,7 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
   clone は identity が効く場所 (置き場で identity を切り替える設定を使っているなら、その context の
   中) に切る。外に切ると user.email が空になり commit が fail-closed で落ちる。
 - **worker の権限境界**: packet の編集、GitHub への write (Issue / PR の操作、push)、別 agent の
-  起動、上の 2 つ以外への書込は worker がしない。起動側は Codex の approval policy を「承認を求める
+  起動、clone の外への書込は worker がしない。起動側は Codex の approval policy を「承認を求める
   操作は失敗する」側に固定する。これで止まるのは承認を求める操作だけなので、起動側は有効な承認設定
   (approval policy と、MCP connector の tool ごとの承認設定) を起動前に検査し、GitHub への write が
   無承認で通る設定なら起動しない (検査は委譲 skill の preflight が持つ)。worker は作業単位ごとに
