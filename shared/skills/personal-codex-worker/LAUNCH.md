@@ -102,10 +102,13 @@ resolve_hooks() {  # $1 = repo path。成功時に hook dir の物理 path を s
     dir="$dir/hooks"
   fi
   case "$dir" in /*) ;; *) dir="$repo/$dir" ;; esac   # 相対値は **その repo の root** 基準
-  ( cd "$dir" 2>/dev/null && pwd -P )                 # 物理 path (symlink を畳む)。無ければ失敗
+  ( cd -P "$dir" 2>/dev/null && pwd -P )              # 物理 path。**移動から** -P にする (下記)
 }
 
 # 3. 配線: clone が **main と同じ hook dir** を使うことだけを受け付ける。
+#    比較は物理 path。`cd` は既定で論理解決し、symlink の後ろの `..` を先に畳むので、
+#    `/A/link/../hooks` (`/A/link -> /B/subdir`) は `cd` だけだと `/A/hooks` になり、
+#    `pwd -P` では戻せない (実測)。移動から `cd -P` にする。
 #    任意の hook の正しさを shell で判定しようとすると偽陽性が残る (コメント行・到達不能な exec 行・
 #    呼出先 path の不一致)。ここでは「orchestrator 自身の commit を通している配線と同一か」だけを
 #    見て、違う配線 (repo-local な hooksPath、別 dir) は判定せず停止する。

@@ -303,7 +303,7 @@
       "id": 13,
       "name": "relative-hookspath-checks-clone",
       "prompt": "worker 用 clone で `git -C <clone> config --path --get core.hooksPath` が `.githooks` を返した。main worktree 側の同じ command は別の値を返す。起動前の hook 検査はどう書く? 手順確認のみ。",
-      "expected_output": "相対値は **その repo の root 基準**で解決する (git -C は呼び出し元の cwd を変えないので、相対のまま test すると main 側を見てしまう)。展開は git config --path に委ねる。解決した main と clone の hook dir が一致しなければ Blocked at: clone とし、hook を copy したり検査を飛ばしたりしない。",
+      "expected_output": "相対値は **その repo の root 基準**で解決する (git -C は呼び出し元の cwd を変えないので、相対のまま test すると main 側を見てしまう)。展開は git config --path に委ね、比較は cd -P で移動してから pwd -P で取った物理 path で行う (設定値が違っても symlink や相対表記で同じ dir を指すことがあり、論理 cd では symlink の後ろの .. を畳んで別 dir を同一と誤判定する)。解決した main と clone の hook dir が **一致すれば起動してよく、一致しなければ** Blocked at: clone とする。hook を copy したり検査を飛ばしたりしない。",
       "files": [],
       "assertions": [
         {
@@ -315,8 +315,12 @@
           "text": "展開を git config --path に委ねている (素朴な ~ 置換で済ませていない)"
         },
         {
-          "id": "blocked-not-workaround",
-          "text": "clone に hook が無いので Blocked at: clone とし、copy や検査の省略で回避していない"
+          "id": "physical-path-compare",
+          "text": "比較を物理 path で行い (cd -P + pwd -P)、設定値の文字列一致で判定していない"
+        },
+        {
+          "id": "conditional-block",
+          "text": "一致すれば起動してよく、一致しないときだけ Blocked at: clone としている (copy や検査の省略で回避していない)"
         }
       ]
     },
