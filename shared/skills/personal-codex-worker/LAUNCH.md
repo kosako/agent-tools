@@ -68,6 +68,9 @@ fi
   新規」の順で分岐する。
 - `$clone` は `<main worktree>-clones/<issue>` のように **main と同じ identity context の中**に切る
   (`SKILL.md` §3。context の外に切ると user.email が空になり、worker の commit が落ちる)。
+- upstream は当てにしない (`--no-track` で作るのは新規分のみで、clone が最初に作った branch や
+  再利用 branch の upstream は残る)。push は orchestrator が main から行うので、worker 側の upstream は
+  使わない。
 - clone の origin は main repository の path になる (worker に network は無い)。worker はここに
   push しない。commit の回収は orchestrator が §9 の fetch で行う。
 - clone / switch が失敗したら `Blocked at: clone`。
@@ -81,17 +84,35 @@ clone には main の repo-local な設定 (identity / hooksPath) は引き継�
 round を 1 つ無駄にして停止理由も分かりにくくなる)。
 
 ```sh
-git -C "$clone" config --get user.email        # 空なら Blocked (identity context の外)
-git -C "$clone" config --get user.name         # 同上
-hooks=$(git -C "$clone" config --get core.hooksPath) || hooks=""
-# hooksPath は未設定なら .git/hooks。値の先頭 ~ は git が展開するので、test する前に展開する
+# 1. identity: 空なら commit が useConfigOnly で落ちる (identity context の外に clone している)
+git -C "$clone" config --get user.email
+git -C "$clone" config --get user.name
+
+# 2. hook の dir: --path に展開を委ねる (~ と ~user/ を git が展開する。素朴な ~ 置換は ~user/ を壊す)
+hooks=$(git -C "$clone" config --path --get core.hooksPath 2>/dev/null) || hooks=""
 [ -n "$hooks" ] || hooks="$(git -C "$clone" rev-parse --absolute-git-dir)/hooks"
-[ -x "${hooks/#\~/$HOME}/pre-commit" ] && [ -x "${hooks/#\~/$HOME}/commit-msg" ]   # gate の配線
+# 相対値は **clone root 基準** で解決する (git は hook を worktree top で実行する)。
+# `git -C` は呼び出し元の cwd を変えないので、ここで解決しないと main 側を検査してしまう。
+case "$hooks" in /*) ;; *) hooks="$clone/$hooks" ;; esac
+
+# 3. 配線: hook が dispatcher を呼び、dispatcher と 3 gate が配備されていること
+scripts=<tool home>/agent-tools/scripts
+for h in pre-commit commit-msg; do
+  [ -x "$hooks/$h" ] || exit 1
+  grep -q personal-git-hook-dispatcher -- "$hooks/$h" || exit 1
+done
+[ -x "$scripts/personal-git-hook-dispatcher" ] || exit 1
+for g in personal-public-safety-gate personal-git-identity-gate personal-ai-trailer-gate; do
+  [ -x "$scripts/$g" ] || exit 1
+done
 ```
 
 - identity が空: commit が `useConfigOnly` で落ちるので起動しない。clone の置き場を直す。
-- gate の hook が見えない: public-safety / git-identity / ai-trailer が動かないまま worker が commit
-  する状態なので起動しない (gate を迂回する経路を作らない)。
+- hook が無い / dispatcher を呼ばない / dispatcher・gate が配備されていない: public-safety /
+  git-identity / ai-trailer が動かないまま worker が commit する状態なので起動しない (gate を迂回する
+  経路を作らない)。
+- honest-label: これは**配線の確認**であって、gate が実際に止めることの証明ではありません (実行時の
+  判定は gate 側の責務)。確認できない環境では通さず `Blocked at: clone` にします。
 
 ## 4. brief と run script
 
