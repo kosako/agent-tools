@@ -29,8 +29,8 @@ Codex の sandbox から読める場所に置くため。
 | 節 | 書けるのは | 操作 |
 |---|---|---|
 | `## 依頼` | orchestrator のみ | 上書き |
-| `## 結果` | worker (実装) / reviewer (verdict)。packet に書けない worker (委譲した Codex) の分は orchestrator が worker の最終 message から転記する (見出しは `worker/codex`) | `### <日付> <役割/agent>` 見出しで区切って追記 |
-| `## 次の入口` | worker (転記の場合は orchestrator が worker の最終 message から写す) | 現在地に上書き |
+| `## 結果` | worker (実装) / reviewer (verdict) / orchestrator (委譲した worker の停止記録だけ。見出しは `orchestrator/claude`)。packet に書けない worker (委譲した Codex) の分は orchestrator が worker の最終 message から転記する (見出しは `worker/codex`) | `### <日付> <役割/agent>` 見出しで区切って追記 |
+| `## 次の入口` | worker (委譲した worker の分は orchestrator が worker の最終 message から写す。worker が止まって最終 message が無いときは orchestrator が続きの入り方を書く) | 現在地に上書き |
 
 worker は `依頼` を書き換えない。受け入れ条件が曖昧なら `結果` に質問を追記して止まり、
 orchestrator が `依頼` を更新して再起動する (1 PR = 1 author と同じ「途中で scope を変えた
@@ -123,10 +123,11 @@ Issue コメントへ写すのは **`結果` の最新節 + `次の入口` の�
   に domain を置いてはじめて止まる** (gate 本体は public repo なので持たない。不在なら外部 URL は
   素通りする)。packet を運用する machine には先に置く。
 - publish は **Claude / 人の操作**。Codex の sandbox からは shell 経由 (`gh` / `curl`) で network に
-  届かないので、Codex が worker のときは packet を書くまで (local で完結) とし、publish は Claude か
-  人が行う。ただし MCP connector (GitHub app 等) は sandbox の外から GitHub に届きうるので、
-  「network に届かない」を write 境界として当てにしない。委譲した worker の write は起動側が
-  approval policy で止める (下記「worker 委譲との関係」)。
+  届かないので、Codex が自分で packet に書ける立場 (人が Codex の session で作業している等) なら
+  packet を書くまで (local で完結) とし、委譲された Codex worker は packet に書かず orchestrator が
+  転記する (下記「worker 委譲との関係」)。publish はどちらの場合も Claude か人が行う。ただし
+  MCP connector (GitHub app 等) は sandbox の外から GitHub に届きうるので、「network に届かない」を
+  write 境界として当てにしない。委譲した worker の write は起動側が承認設定で止める (同節)。
 - 投稿後に frontmatter の `published` を更新する。resume は `updated > published` を
   「未 publish の追記あり」として表示する。
 - 受け側 (別 machine でコメントから packet を再構成する `pull`) は #291 で別途。当面は
@@ -177,26 +178,37 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
   モデルと同じ)。brief には `依頼` を要約せず verbatim で写す (orchestrator 著なので trusted。
   要約は drift の元)。
 - **作業場所**: Issue ごとの linked worktree (orchestrator が `git worktree add … -b <branch>` で
-  切る)。packet dir は main worktree の root のまま (置き場の規則どおり)。worker の書込は
-  worktree の中に限り、packet dir を worker に開けない。
+  切る)。packet dir は main worktree の root のまま (置き場の規則どおり)。worker の書込先は
+  **その worktree の中**と、**その worktree の commit に要る Git 管理領域** (main worktree 側の
+  `.git` 配下にある index / objects / refs) の 2 つに限り、packet dir は含めない (worker に開けない)。
+  成立条件は、起動する sandbox が linked worktree からの `git commit` を通すこと。codex 0.154.0 の
+  `codex exec -s workspace-write` で実測し、linked worktree でも追加の書込許可なしで commit が
+  通った。通らない環境では委譲 skill が起動前に止める (packet の規約ではなく skill の preflight)。
 - **worker の権限境界**: packet の編集、GitHub への write (Issue / PR の操作、push)、別 agent の
-  起動、worktree 外への書込は worker がしない。起動側は Codex の approval policy を「承認を求める
-  操作は失敗する」側に固定し、MCP connector 経由の write もそこで止める。worker は作業単位ごとに
+  起動、上の 2 つ以外への書込は worker がしない。起動側は Codex の approval policy を「承認を求める
+  操作は失敗する」側に固定する。これで止まるのは承認を求める操作だけなので、起動側は有効な承認設定
+  (approval policy と、MCP connector の tool ごとの承認設定) を起動前に検査し、GitHub への write が
+  無承認で通る設定なら起動しない (検査は委譲 skill の preflight が持つ)。worker は作業単位ごとに
   commit し、自分を示す `Co-Authored-By: Codex …` trailer を付ける (commit-msg の gate が検査する)。
-- **結果の転記**: worker は最終 message に到達点 / 判断 / 未完 / 停止理由 / commit 一覧を書き、
-  orchestrator がそれを `結果` に `### <日付> worker/codex` として転記し、`次の入口` も worker の
-  message から写す (転記前に `personal-public-safety-gate --stdin` を通す)。
+- **結果の転記**: worker は最終 message に到達点 / 判断 / 未完 / 停止理由 / commit 一覧 /
+  次の 1 アクション (`次の入口` の転記元) を書き、orchestrator がそれを `結果` に
+  `### <日付> worker/codex` として転記し、`次の入口` を最終 message の「次の 1 アクション」から
+  写す (転記前に `personal-public-safety-gate --stdin` を通す)。最終 message が無い (途中終了) とき
+  は転記せず、下の「停止」の手順で orchestrator が書く。
 - **PR**: orchestrator が branch の全 commit の trailer が Codex のみであることを確認してから push
   し、PR を作る。packet に `pr:` と `state: review` を入れるのは orchestrator (PR を出した側)。
 - **停止 (limit / 途中終了)**: worker は自分で記録できないので、orchestrator が
   `### <日付> orchestrator/claude` で停止理由 (limit の文言、exit code、末尾の public-safe な要約) を
-  書き `state: blocked` にする。uncommitted な変更は `git diff` を run directory に退避して
-  その path を記録し、orchestrator が代わりに commit しない (trailer が Claude になり author が
-  混ざる)。自動で再起動しない (残量は申告制、#255)。続きは同じ branch を Codex が続ける
-  (同 author なので同じ PR)。Claude が続けるなら新しい branch + 新しい PR (author の交代)。
-- **非対称**: Codex の sandbox からは herdr の socket にも Claude の認証にも届かないので、
-  委譲は常に Claude → Codex の一方通行。Codex が worker のとき、review や次の worker の起動は
-  Claude か人が行う。同時に走らせる worker は orchestrator session あたり 1 つ (並列は #256)。
+  書き `state: blocked` にし、`次の入口` に続きの入り方 (下記) を書く。uncommitted な変更は
+  staged / unstaged / untracked をすべて run directory に退避し (staged と unstaged は patch、
+  untracked は file の写し)、その path を記録する。復元を確認するまで worktree を消さない。
+  orchestrator が代わりに commit しない (trailer が Claude になり author が混ざる)。自動で再起動
+  しない (残量は申告制、#255)。続きは同じ branch を Codex が続ける (同 author なので同じ PR)。
+  Claude が続けるなら新しい branch + 新しい PR (author の交代)。
+- **非対称**: 委譲は Claude → Codex の一方通行 (運用規則)。根拠として実測しているのは、Codex の
+  sandbox から herdr の socket に届かないこと (#251) までで、Codex 側から Claude を起動する経路は
+  持たない。Codex が worker のとき、review や次の worker の起動は Claude か人が行う。同時に
+  走らせる worker は orchestrator session あたり 1 つ (並列は #256)。
 
 ## 関連
 
