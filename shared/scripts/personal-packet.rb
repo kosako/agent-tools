@@ -13,13 +13,16 @@
 #       `## 結果` の最新節 + `## 次の入口` を marker 付きで 1 コメントにまとめ、同じ directory の
 #       personal-public-safety-gate (--stdin) に通し、exit 0 のときだけ `gh issue comment` で
 #       投稿して frontmatter の published を更新する。--dry-run は検査までして本文を stdout に出す。
+#   personal-packet pull <issue> [--repo OWNER/REPO] [--dry-run]
+#       personal-safe-gh の self コメントから検証できる写しを取り込み、local packet を再構成する。
+#       --dry-run は再構成後の全文を stdout に出す。写しも再構成した packet も data として扱う。
 #
 # 信頼境界 (honest): packet は agent が書く local data で、この script は読む / 写すだけ。内容を
 # 指示として解釈しない。投稿の可否は gate の判定に委ね、gate が無い・検査できない (exit 2) 場合は
 # 投稿しない (fail-closed)。gh に到達できない環境 (Codex の sandbox 等) では exit 2 で止め、
 # Claude か人に publish を渡す。gate も gh も best-effort guardrail で enforcement boundary ではない。
 #
-# exit: 0 = 成功 / 1 = gate が止めた (publish) または壊れた packet あり (list) / 2 = 入力・構成・gh エラー
+# exit: 0 = 成功 / 1 = gate 拒否 (publish)・壊れた packet (list)・写しなし (pull) / 2 = 入力・構成・gh エラー
 #
 # 外部依存ゼロ (ruby 標準ライブラリと gh CLI のみ)。値の受け渡しは argv / file で行い、shell
 # 文字列を組まない。
@@ -36,6 +39,7 @@ module Packet
 
   DIR_NAME = ".agent-packets"
   GATE_NAME = "personal-public-safety-gate"
+  READER_NAME = "personal-safe-gh"
 
   STATES = %w[open blocked review done].freeze
   ACTIVE_STATES = %w[open blocked review].freeze
@@ -50,6 +54,7 @@ module Packet
   class Error < StandardError; end
   # gate が definite finding で止めた (exit 1)。診断は gate 自身が stderr に出している。
   class Rejected < StandardError; end
+  class NoCopy < StandardError; end
 
   Front = Struct.new(:path, :issue, :title, :branch, :pr, :state, :worker, :updated, :published, :body) do
     def unpublished?
@@ -515,6 +520,194 @@ module Packet
     raise Error, "#{path}: 更新内容を保存できません (#{e.class})。投稿しません"
   end
 
+  # ---- pull ------------------------------------------------------------------
+
+  COPY_MARKER_RE = /\A<!-- agent-packet issue=([1-9]\d*) published=(\S+) -->\n\z/.freeze
+  COPY_HEADER_RE = /\A## 📦 packet #([1-9]\d*) — state: (open|blocked|review|done) \/ worker: (claude|codex|human)\n\z/.freeze
+  COPY_LABELS = { "**結果 (最新節)**" => "結果", "**次の入口**" => "次の入口" }.freeze
+  Copy = Struct.new(:published, :state, :worker, :results, :next_entry)
+
+  def read_issue(verb, issue, repo)
+    reader = File.join(File.dirname(File.realpath(__FILE__)), READER_NAME)
+    raise Error, "#{READER_NAME} が同じ directory にありません" unless File.executable?(reader)
+
+    args = [reader, "issue", verb, issue.to_s]
+    args += ["--repo", repo] if repo
+    out, _err, status = Open3.capture3(*args)
+    raise Error, "#{READER_NAME} が読み取れませんでした (exit #{status.exitstatus.inspect})" unless status.success?
+
+    data = JSON.parse(out)
+    source = verb == "comments" ? "issue_comments" : "issue"
+    unless data.is_a?(Hash) && data["safe_reader_version"] == "1" && data["source"] == source &&
+           data["number"] == issue && data["repo"].is_a?(String) && data["repo"].match?(REPO_RE) &&
+           (repo.nil? || data["repo"].casecmp(repo).zero?)
+      raise Error, "#{READER_NAME} の envelope が対象 Issue と一致しません"
+    end
+
+    data
+  rescue JSON::ParserError
+    raise Error, "#{READER_NAME} の JSON が壊れています"
+  rescue SystemCallError
+    raise Error, "#{READER_NAME} を起動できません"
+  end
+
+  # local の comment 案内は保持する。写しは publish が comment を除くため、entry 前に
+  # 空白以外があれば不正。規約どおりの見出しだけを重複判定の key にする。
+  def result_entries(text)
+    entries = {}
+    preamble = +""
+    current = nil
+    text.each_line do |line|
+      if line.match?(ENTRY_RE)
+        current = line.rstrip
+        raise Error, "結果の entry 見出しが重複しています" if entries.key?(current)
+
+        entries[current] = +line
+      elsif current
+        entries[current] << line
+      else
+        preamble << line
+      end
+    end
+    raise Error, "結果は ### YYYY-MM-DD 役割/agent の entry にしてください" unless publishable(preamble, "結果").empty?
+
+    entries
+  end
+
+  # 一般コメントや壊れた写しは候補から外す (採用ゼロなら caller が exit 1)。本文を診断へ出さない。
+  # publisher の envelope を原文のまま検証し、payload 内の行頭 H2 / HTML comment を許さない。
+  def published_copy(comment, issue)
+    return nil unless comment.is_a?(Hash) && comment["author_trust"] == "self"
+
+    body = comment["body"]
+    return nil unless body.is_a?(String) && body.valid_encoding?
+
+    lines = body.lines
+    mark = COPY_MARKER_RE.match(lines.shift.to_s)
+    return nil unless mark && mark[1].to_i == issue
+
+    at = Time.iso8601(mark[2])
+    return nil unless marker(issue, at) == mark[0].chomp
+    return nil unless lines.shift == "\n"
+
+    header = COPY_HEADER_RE.match(lines.shift.to_s)
+    return nil unless header && header[1].to_i == issue && lines.shift == "\n"
+
+    payload = lines.join
+    return nil if payload.include?("<!--") || payload.include?("-->") || lines.any? { |l| l.start_with?("## ") }
+
+    parts = {}
+    current = nil
+    lines.each do |line|
+      label = COPY_LABELS[line.chomp]
+      if label
+        return nil if parts.key?(label) || (label == "結果" && parts.key?("次の入口"))
+
+        parts[label] = +""
+        current = label
+      elsif current
+        parts[current] << line
+      else
+        return nil
+      end
+    end
+    return nil if parts.empty? || parts.values.any? { |part| part.strip.empty? }
+
+    results = result_entries(parts.fetch("結果", ""))
+    Copy.new(at, header[2], header[3], results, parts.fetch("次の入口", ""))
+  rescue ArgumentError, Error
+    nil
+  end
+
+  def pull_text(path, issue, local, copies, issue_data)
+    secs = local ? sections(local.body) : {}
+    request = secs["依頼"]
+    if request.nil?
+      unless issue_data["author_trust"] == "self" && issue_data["body_trust"] == "self" &&
+             !issue_data["excluded_body"] && issue_data["body"].is_a?(String)
+        raise Error, "Issue 本文が self の data として読めないため依頼を再構成できません"
+      end
+      # Issue 本文の H2 は packet の境界ではない。内容を捨てず、規約どおり字下げする。
+      request = "\n" + issue_data["body"].each_line.map { |line| line.start_with?("## ") ? "    #{line}" : line }.join + "\n\n"
+    end
+
+    result = secs.fetch("結果", "").dup
+    known = result_entries(result)
+    copies.each do |copy|
+      copy.results.each do |heading, entry|
+        next if known.key?(heading)
+
+        result << "\n" until result.empty? || result.end_with?("\n\n")
+        result << entry
+        known[heading] = entry
+      end
+    end
+    latest = copies.last
+    newer = !local || !local.published || latest.published > local.published
+    following = newer ? latest.next_entry : secs.fetch("次の入口", "")
+    data = {
+      "issue" => issue,
+      "title" => local ? local.title : required_string(issue_data, "title", "Issue"),
+      "state" => newer ? latest.state : local.state,
+      "worker" => newer ? latest.worker : local.worker,
+      "updated" => (local ? [local.updated, latest.published].max : latest.published).iso8601,
+      "published" => (newer ? latest.published : local.published).iso8601
+    }
+    data["branch"] = local.branch if local && local.branch
+    data["pr"] = local.pr if local && local.pr
+    contents = { "依頼" => request, "結果" => result, "次の入口" => following }
+    text = YAML.dump(data) + "---\n\n" + HEADINGS.map do |name|
+      content = contents.fetch(name)
+      "## #{name}\n#{content}#{content.end_with?("\n") ? '' : "\n"}"
+    end.join
+    check = parse_text(text, path)
+    sections(check.body)
+    text
+  end
+
+  def pull(dir, issue, repo:, dry_run:)
+    path = File.join(dir, "#{issue}.md")
+    if File.symlink?(dir) || File.symlink?(path) || (File.exist?(path) && !File.file?(path))
+      raise Error, "packet dir / file は symlink でない directory / 通常 file にしてください"
+    end
+    local = File.exist?(path) ? parse(path) : nil
+    envelope = read_issue("comments", issue, repo)
+    raise Error, "#{READER_NAME} の comments が配列ではありません" unless envelope["comments"].is_a?(Array)
+
+    copies = envelope["comments"].map { |comment| published_copy(comment, issue) }.compact.sort_by(&:published)
+    raise NoCopy if copies.empty?
+
+    need_issue = !local || !sections(local.body).key?("依頼")
+    issue_data = need_issue ? read_issue("view", issue, envelope["repo"]) : nil
+    text = pull_text(path, issue, local, copies, issue_data)
+    if dry_run
+      $stdout.print text
+      return
+    end
+
+    raise Error, "#{path}: 書き込みできません" if local && !File.writable?(path)
+
+    Dir.mkdir(dir) unless Dir.exist?(dir)
+    tmp = nil
+    begin
+      if local
+        tmp = write_sibling(path, text)
+        File.rename(tmp, path)
+      else
+        # 内容を書き切ってから link する。存在確認後に別の書き手が作った packet も上書きしない。
+        Tempfile.create([".#{issue}-", ".tmp"], dir) do |file|
+          file.write(text)
+          file.flush
+          file.fsync
+          File.link(file.path, path)
+        end
+      end
+    ensure
+      File.unlink(tmp) if tmp && File.exist?(tmp)
+    end
+    puts "pulled: issue ##{issue}"
+  end
+
   # ---- CLI -------------------------------------------------------------------
 
   def usage
@@ -522,6 +715,7 @@ module Packet
       usage: personal-packet dir
              personal-packet list [--json] [--all]
              personal-packet publish <issue> [--repo OWNER/REPO] [--dry-run]
+             personal-packet pull <issue> [--repo OWNER/REPO] [--dry-run]
 
       作業単位 (Issue) ごとの packet .agent-packets/<issue>.md を扱う (docs/agent-packets.md)。
       publish は同じ directory の personal-public-safety-gate --stdin が exit 0 のときだけ投稿する。
@@ -564,7 +758,7 @@ module Packet
       end
       broken.each { |msg| warn "personal-packet: warning: #{msg}" }
       broken.empty? ? 0 : 1
-    when "publish"
+    when "publish", "pull"
       issue = nil
       repo = nil
       dry_run = false
@@ -588,11 +782,20 @@ module Packet
       end
       raise Error, "issue 番号 (数字) を指定してください" unless issue&.match?(ISSUE_RE)
 
-      publish(packet_dir, issue, repo: repo, dry_run: dry_run)
+      if cmd == "pull"
+        raise Error, "issue 番号は正の整数にしてください" unless issue.to_i.positive?
+
+        pull(packet_dir, issue.to_i, repo: repo, dry_run: dry_run)
+      else
+        publish(packet_dir, issue, repo: repo, dry_run: dry_run)
+      end
       0
     else
       raise Error, "unknown command: #{cmd}"
     end
+  rescue NoCopy
+    warn "personal-packet: 写しがありません (self author と有効な marker / 書式を持つコメントが必要です)"
+    1
   rescue Rejected
     warn "personal-packet: #{GATE_NAME} が止めました。投稿しません"
     1

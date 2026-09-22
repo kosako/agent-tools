@@ -1,0 +1,319 @@
+# frozen_string_literal: true
+
+require "fileutils"
+require "json"
+require "open3"
+require "tmpdir"
+require "rbconfig"
+
+# --mutations は同じ CLI assertions を一条件ずつ壊した source に当てる。通常の CI では
+# assertions だけを走らせ、変異検証は実装 round で明示実行する。
+source = File.expand_path(ARGV.fetch(0))
+if ARGV[1] == "--mutations"
+  mutations = {
+    "other author" => ['comment["author_trust"] == "self"', 'true'],
+    "missing marker" => ['mark = COPY_MARKER_RE.match(lines.shift.to_s)',
+                         'mark = COPY_MARKER_RE.match(lines.shift.to_s) || COPY_MARKER_RE.match("<!-- agent-packet issue=7 published=2026-09-22T00:00:00Z -->\n")'],
+    "broken marker" => ['marker(issue, at) == mark[0].chomp', 'true'],
+    "duplicate results" => ['next if known.key?(heading)', '# mutation: no deduplication'],
+    "request overwrite" => ['request = secs["依頼"]', 'request = nil'],
+    "stale next entry" => ['latest.published > local.published', 'true'],
+    "remote H2" => [' || lines.any? { |l| l.start_with?("## ") }', ''],
+    "issue H2" => ['line.start_with?("## ") ? "    #{line}" : line', 'line'],
+    "local H2" => ['unless HEADINGS.include?(name)', 'unless HEADINGS.include?(name) || name == "injected"'],
+    "invalid frontmatter" => ['"issue" => issue,\n      "title" => local', '"issue" => issue.to_s,\n      "title" => local']
+  }
+  original = File.read(source)
+  Dir.mktmpdir("packet-mutations-") do |dir|
+    mutations.each do |label, (from, to)|
+      from = from.gsub('\\n', "\n") if label == "invalid frontmatter"
+      to = to.gsub('\\n', "\n") if label == "invalid frontmatter"
+      abort "FAIL: mutation anchor missing: #{label}" unless original.include?(from)
+      mutant = File.join(dir, "personal-packet.rb")
+      File.write(mutant, original.sub(from, to))
+      _out, err, status = Open3.capture3(RbConfig.ruby, __FILE__, mutant)
+      abort "FAIL: mutation survived: #{label}" if status.success?
+      abort "FAIL: mutation failed outside assertion: #{label}: #{err}" unless err.include?("FAIL:")
+      puts "ok: mutation caught: #{label}"
+    end
+  end
+  exit
+end
+
+require source
+
+def assert(ok, message)
+  abort "FAIL: #{message}" unless ok
+end
+
+def copy(at: "2026-09-22T00:00:00Z", date: "2026-09-22", result: "REMOTE-RESULT", following: "REMOTE-NEXT")
+  <<~TEXT
+    <!-- agent-packet issue=7 published=#{at} -->
+
+    ## 📦 packet #7 — state: review / worker: codex
+
+    **結果 (最新節)**
+
+    ### #{date} worker/codex
+    #{result}
+
+    **次の入口**
+
+    #{following}
+  TEXT
+end
+
+def self_comment(body)
+  { "author" => "fixture-self", "author_trust" => "self", "body" => body }
+end
+
+LOCAL = <<~TEXT
+  ---
+  issue: 7
+  title: "LOCAL-TITLE #7"
+  branch: feat/7-test
+  pr: 8
+  state: blocked
+  worker: claude
+  updated: 2026-09-21T12:00:00Z
+  published: 2026-09-21T00:00:00Z
+  ---
+
+  ## 依頼
+
+  <!-- local scope -->
+  LOCAL-REQUEST
+
+  ## 結果
+
+  <!-- append only -->
+  ### 2026-09-20 worker/claude
+  LOCAL-RESULT
+
+  ### 2026-09-21 worker/codex
+  LOCAL-DUPLICATE
+
+  ## 次の入口
+
+  LOCAL-NEXT
+TEXT
+
+Dir.mktmpdir("packet-pull-") do |tmp|
+  # path / 本文が shell として再解釈されないことも検証する。
+  repo = File.join(tmp, "repo space ' $(touch SHELL-PATH) `touch SHELL-BACKTICK`")
+  deploy = File.join(tmp, "deploy space ' $(touch SHELL-DEPLOY)")
+  FileUtils.mkdir_p([repo, deploy])
+  env = { "GIT_CONFIG_SYSTEM" => "/dev/null", "GIT_CONFIG_GLOBAL" => "/dev/null",
+          "GIT_AUTHOR_NAME" => "test", "GIT_AUTHOR_EMAIL" => "test@example.com",
+          "GIT_COMMITTER_NAME" => "test", "GIT_COMMITTER_EMAIL" => "test@example.com" }
+  _out, err, status = Open3.capture3(env, "git", "init", "-q", repo)
+  assert(status.success?, "fixture git init: #{err}")
+  packet = File.join(deploy, "personal-packet")
+  FileUtils.cp(source, packet)
+  File.chmod(0o755, packet)
+  reader = File.join(deploy, "personal-safe-gh")
+  File.write(reader, <<~'RUBY')
+    #!/usr/bin/env ruby
+    require "json"
+    dir = File.dirname(__FILE__)
+    File.open(File.join(dir, "calls.jsonl"), "a") { |f| f.puts JSON.generate(ARGV) }
+    exit 1 if File.exist?(File.join(dir, "fail"))
+    abort "bad argv" unless ARGV[0] == "issue" && %w[view comments].include?(ARGV[1]) && ARGV[2] == "7"
+    print File.read(File.join(dir, "#{ARGV[1]}.json"))
+  RUBY
+  File.chmod(0o755, reader)
+  # raw gh を呼ぶ退行が network に出ないよう必ず失敗する fake を PATH に置く。
+  File.write(File.join(deploy, "gh"), "#!/bin/sh\nexit 99\n")
+  File.chmod(0o755, File.join(deploy, "gh"))
+  env["PATH"] = deploy + File::PATH_SEPARATOR + ENV.fetch("PATH")
+  run = lambda do |*args|
+    Open3.capture3(env, RbConfig.ruby, packet, *args, chdir: repo)
+  end
+  comments = lambda do |items|
+    data = { "safe_reader_version" => "1", "source" => "issue_comments", "repo" => "fixture/repo",
+             "number" => 7, "comments" => items, "excluded_comments_count" => 1 }
+    File.write(File.join(deploy, "comments.json"), JSON.generate(data))
+  end
+  issue_data = { "safe_reader_version" => "1", "source" => "issue", "repo" => "fixture/repo",
+                 "number" => 7, "author_trust" => "self", "body_trust" => "self",
+                 "title" => "REMOTE-TITLE #7: example", "body" => "ISSUE-REQUEST\n## 結果\nSAMPLE\n## injected\n$(touch SHELL-BODY)\n" }
+  view_path = File.join(deploy, "view.json")
+  File.write(view_path, JSON.generate(issue_data))
+  packet_dir = File.join(repo, ".agent-packets")
+  path = File.join(packet_dir, "7.md")
+
+  # 新規 / dry-run / 既存 publisher との round trip / list --json。
+  comments.call([self_comment(copy)])
+  out, err, status = run.call("pull", "7", "--dry-run", "--repo", "fixture/repo")
+  assert(status.success?, "new dry-run: #{err}")
+  assert(!File.exist?(packet_dir), "dry-run must not create packet dir")
+  front = Packet.parse_text(out, path)
+  assert(front.issue == 7 && front.title == issue_data["title"], "new frontmatter issue/title")
+  assert(front.state == "review" && front.worker == "codex", "new frontmatter state/worker")
+  assert(front.updated == Time.iso8601("2026-09-22T00:00:00Z") && front.updated == front.published, "new timestamps")
+  assert(front.body.lines.grep(/^## /).map(&:strip) == %w[依頼 結果 次の入口].map { |n| "## #{n}" }, "reserved H2 in reconstructed packet")
+  assert(front.body.include?("    ## injected") && front.body.include?("    ## 結果"), "Issue H2 must be indented")
+  assert(Packet.compose(front, front.published) == copy, "publish/pull round trip")
+  expected = out
+  out, err, status = run.call("pull", "7")
+  assert(status.success? && out == "pulled: issue #7\n", "new pull: #{err}")
+  assert(File.read(path) == expected, "dry-run and apply must produce same packet")
+  out, err, status = run.call("list", "--json")
+  listed = JSON.parse(out)
+  assert(status.success? && listed.size == 1 && listed[0]["issue"] == 7 && !listed[0]["unpublished"], "list --json after pull: #{err}")
+  _out, err, status = run.call("pull", "7")
+  assert(status.success? && File.read(path) == expected, "repeated pull must be byte-idempotent: #{err}")
+
+  # publish の片節省略・timezone も既存の出力契約どおりに受理する。
+  [copy.sub(/\*\*結果 \(最新節\)\*\*.*?(?=\*\*次の入口\*\*)/m, ""),
+   copy.sub(/\n\n\*\*次の入口\*\*.*\z/m, "\n"),
+   copy(at: "2026-09-22T12:00:00+09:00")].each do |body|
+    File.unlink(path)
+    comments.call([self_comment(body)])
+    _out, err, status = run.call("pull", "7")
+    assert(status.success?, "single section / timezone copy: #{err}")
+    restored = Packet.parse(path)
+    assert(Packet.compose(restored, restored.published) == body, "single section / timezone round trip")
+  end
+
+  # 履歴のない新規 packet にも採用した全 entry が published の順で戻る。
+  File.unlink(path)
+  comments.call([self_comment(copy), self_comment(copy(at: "2026-09-20T00:00:00Z", date: "2026-09-20", result: "FIRST-RESULT"))])
+  _out, err, status = run.call("pull", "7")
+  assert(status.success?, "restore all published entries: #{err}")
+  results = Packet.sections(Packet.parse(path).body)["結果"]
+  assert(results.include?("FIRST-RESULT") && results.index("FIRST-RESULT") < results.index("REMOTE-RESULT"), "restore results chronologically")
+
+  # local 依頼 / title / optional fields と同名 entry を保持。コメント順は published 順と異なる。
+  older = copy(at: "2026-09-21T00:00:00Z", date: "2026-09-21", result: "REMOTE-DUPLICATE", following: "OLD-NEXT")
+  comments.call([self_comment(copy), self_comment(older), self_comment(copy)])
+  File.write(path, LOCAL)
+  File.write(view_path, "not JSON: local request means no Issue fetch")
+  out, err, status = run.call("pull", "7", "--dry-run")
+  assert(status.success? && File.read(path) == LOCAL, "existing dry-run: #{err}")
+  front = Packet.parse_text(out, path)
+  secs = Packet.sections(front.body)
+  assert(secs["依頼"] == Packet.sections(Packet.parse_text(LOCAL, path).body)["依頼"], "local request must be preserved verbatim")
+  assert(front.title == "LOCAL-TITLE #7" && front.branch == "feat/7-test" && front.pr == 8, "local metadata preservation")
+  assert(secs["結果"].include?("LOCAL-RESULT") && secs["結果"].include?("LOCAL-DUPLICATE"), "local results retained")
+  assert(!secs["結果"].include?("REMOTE-DUPLICATE") && secs["結果"].scan("REMOTE-RESULT").size == 1, "result deduplication")
+  assert(secs["結果"].index("LOCAL-RESULT") < secs["結果"].index("REMOTE-RESULT"), "new result must append")
+  assert(secs["次の入口"].strip == "REMOTE-NEXT", "newest published wins independent of comment order")
+  _out, err, status = run.call("pull", "7")
+  assert(status.success? && File.read(path) == out, "merge apply matches dry-run: #{err}")
+
+  # 空の依頼節は既存 local として保持。published 無しなら写しを採用する。
+  unpublished = LOCAL.sub(/^published:.*\n/, "").sub("LOCAL-REQUEST", "")
+  File.write(path, unpublished)
+  _out, err, status = run.call("pull", "7")
+  assert(status.success?, "unpublished local with existing request: #{err}")
+  assert(Packet.sections(Packet.parse(path).body)["次の入口"].strip == "REMOTE-NEXT", "unpublished local accepts copy")
+
+  # 同時刻 / 古い写しは次の入口と state/worker を巻き戻さない。未 publish の updated も保持。
+  newer_local = LOCAL.sub("published: 2026-09-21", "published: 2026-09-23").sub("updated: 2026-09-21", "updated: 2026-09-24")
+  [newer_local, newer_local.sub("published: 2026-09-23", "published: 2026-09-22")].each do |local|
+    File.write(path, local)
+    out, err, status = run.call("pull", "7")
+    assert(status.success?, "stale/equal pull: #{err}")
+    front = Packet.parse(path)
+    assert(Packet.sections(front.body)["次の入口"].strip == "LOCAL-NEXT", "stale/equal next entry must not overwrite")
+    assert(front.state == "blocked" && front.worker == "claude" && front.unpublished?, "local state and unpublished updates must survive")
+    assert(front.updated == Packet.parse_text(local, path).updated, "local updated must not roll back")
+  end
+
+  # 依頼節だけが無い場合も self Issue 本文から起こす。withhold された本文は復元しない。
+  no_request = LOCAL.sub(/## 依頼\n.*?(?=## 結果)/m, "")
+  File.write(path, no_request)
+  File.write(view_path, JSON.generate(issue_data))
+  _out, err, status = run.call("pull", "7")
+  assert(status.success? && File.read(path).include?("ISSUE-REQUEST"), "missing local request: #{err}")
+  File.write(path, no_request)
+  File.write(view_path, JSON.generate(issue_data.merge("author_trust" => "other", "body_trust" => "untrusted", "excluded_body" => true)))
+  _out, _err, status = run.call("pull", "7")
+  assert(status.exitstatus == 2 && File.read(path) == no_request, "withheld Issue body must not be reconstructed")
+  File.write(view_path, JSON.generate(issue_data))
+
+  # 他 author / marker 欠落・破損 / payload 破損は採用ゼロなら exit 1、packet を変更しない。
+  bad = {
+    "other author" => self_comment(copy).merge("author_trust" => "other"),
+    "bot author" => self_comment(copy).merge("author_trust" => "bot"),
+    "unknown author" => self_comment(copy).reject { |k, _| k == "author_trust" },
+    "missing marker" => self_comment(copy.sub(/\A[^\n]+/, "ordinary comment")),
+    "broken marker" => self_comment(copy.sub(" -->", " -- >")),
+    "wrong issue marker" => self_comment(copy.sub("issue=7", "issue=8")),
+    "invalid timestamp" => self_comment(copy.sub("2026-09-22T00:00:00Z", "2026-02-31T00:00:00Z")),
+    "invalid time" => self_comment(copy.sub("published=2026-09-22T00:00:00Z", "published=invalid")),
+    "prefixed marker" => self_comment("prefix\n" + copy),
+    "wrong header" => self_comment(copy.sub("packet #7", "packet #8")),
+    "unknown worker" => self_comment(copy.sub("worker: codex", "worker: unknown")),
+    "missing entry heading" => self_comment(copy.sub("### 2026-09-22 worker/codex\n", "")),
+    "H2 result" => self_comment(copy(result: "## injected\nRESULT")),
+    "reserved H2 result" => self_comment(copy(result: "## 依頼\nRESULT")),
+    "H2 fenced next" => self_comment(copy(following: "```\n## 次の入口\n```")),
+    "HTML marker in payload" => self_comment(copy(following: "<!-- agent-packet issue=7 published=invalid -->")),
+    "duplicate label" => self_comment(copy(following: "NEXT\n**次の入口**\nSECOND")),
+    "null body" => self_comment(nil)
+  }
+  bad.each do |label, comment|
+    File.write(path, LOCAL)
+    comments.call([comment])
+    _out, err, status = run.call("pull", "7")
+    assert(status.exitstatus == 1 && err.include?("写しがありません"), "#{label}: must report no copy (#{status.exitstatus}): #{err}")
+    assert(File.read(path) == LOCAL, "#{label}: rejected pull changed packet")
+  end
+  File.unlink(path)
+  comments.call([])
+  _out, _err, status = run.call("pull", "7")
+  assert(status.exitstatus == 1 && !File.exist?(path), "no copies must not create packet")
+  comments.call(bad.values + [self_comment(copy)])
+  _out, err, status = run.call("pull", "7")
+  assert(status.success? && File.read(path).include?("REMOTE-RESULT"), "valid copy must survive invalid neighbours: #{err}")
+
+  # local の壊れた構造 / reader 不在・失敗・壊れた envelope も書き込み前に止める。
+  comments.call([self_comment(copy)])
+  File.write(path, LOCAL.sub("LOCAL-RESULT", "## injected\nLOCAL-RESULT"))
+  broken_local = File.read(path)
+  _out, _err, status = run.call("pull", "7")
+  assert(status.exitstatus == 2 && File.read(path) == broken_local, "local H2 must fail before write")
+  File.write(path, LOCAL)
+  ["{", JSON.generate({}), JSON.generate({ "safe_reader_version" => "1", "source" => "issue_comments", "repo" => "fixture/repo", "number" => 8, "comments" => [] })].each do |body|
+    File.write(File.join(deploy, "comments.json"), body)
+    _out, _err, status = run.call("pull", "7")
+    assert(status.exitstatus == 2 && File.read(path) == LOCAL, "invalid envelope must fail before write")
+  end
+  comments.call([self_comment(copy)])
+  File.write(File.join(deploy, "fail"), "")
+  _out, _err, status = run.call("pull", "7")
+  assert(status.exitstatus == 2 && File.read(path) == LOCAL, "reader failure must fail before write")
+  File.unlink(File.join(deploy, "fail"))
+  File.rename(reader, reader + ".disabled")
+  _out, _err, status = run.call("pull", "7")
+  assert(status.exitstatus == 2 && File.read(path) == LOCAL, "missing reader must fail before write")
+  File.rename(reader + ".disabled", reader)
+  File.write(Packet.sibling_path(path), "recovery")
+  _out, _err, status = run.call("pull", "7")
+  assert(status.exitstatus == 2 && File.read(path) == LOCAL && File.read(Packet.sibling_path(path)) == "recovery", "existing temporary file must survive")
+  File.unlink(Packet.sibling_path(path))
+  File.unlink(path)
+  target = File.join(repo, "symlink-target.md")
+  File.write(target, LOCAL)
+  File.symlink(target, path)
+  _out, _err, status = run.call("pull", "7")
+  assert(status.exitstatus == 2 && File.read(target) == LOCAL, "symlink packet must not be followed")
+  File.unlink(path)
+
+  # 引数の負例と argv の形。実行文字列への inline 展開があれば shell sentinel が作られる。
+  calls_path = File.join(deploy, "calls.jsonl")
+  calls = File.readlines(calls_path)
+  [["pull"], ["pull", "0"], ["pull", "seven"], ["pull", "7", "8"],
+   ["pull", "7", "--repo", "-x/y"], ["pull", "7", "--repo"],
+   ["pull", "7; touch SHELL-ISSUE"], ["pull", "7", "--repo", "x/$(touch SHELL-REPO)"],
+   ["pull", "7", "--bogus"]].each do |args|
+    _out, _err, status = run.call(*args)
+    assert(status.exitstatus == 2, "invalid pull args must return exit 2")
+  end
+  assert(File.readlines(calls_path) == calls, "argument failures must not call reader")
+  assert(calls.map { |l| JSON.parse(l) }.include?(["issue", "comments", "7", "--repo", "fixture/repo"]), "reader argv contract")
+  assert(Dir.glob(File.join(repo, "SHELL-*")).empty?, "runtime data must not execute as shell")
+end
+puts "ok: packet pull self-test"
