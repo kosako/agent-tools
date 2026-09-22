@@ -1,0 +1,35 @@
+# personal-codex-worker — 返却形式 (RESULT-FORMAT)
+
+`SKILL.md` §8 の契約を満たす雛形です。契約の正本は `SKILL.md`、雛形の正本はこの file。
+
+worker が完了して packet を更新した場合:
+
+```text
+Status: DONE | REVIEW
+Packet: #<issue> — 結果 "### <日付> worker/codex" を追記 / 次の入口を更新 / state: <open|review>
+PR: #<number> (REVIEW のとき。author=codex、review は Claude route)
+Run dir: <path>
+Commits: <n> (すべて Codex trailer)
+```
+
+worker がまだ走っている (hard cap) 場合:
+
+```text
+Status: RUNNING
+Pane: <pane id> / Run dir: <path> / Elapsed: <分>
+Next step: pane を見て続行か中断かを決める。中断するなら worker の process を止めてから §7 の退避
+```
+
+停止した場合 (verdict は作らない):
+
+```text
+Status: BLOCKED
+Blocked at: authorization | preflight | launch-path | worktree | executor-exit | executor-result | limit | transcription | trailer
+Reason: <public-safe な停止理由>
+Packet: #<issue> — state: blocked / 結果 "### <日付> orchestrator/claude" (書いた場合)
+Run dir: <path> / 退避: <path> (あれば)
+Next step: <人が実行する run script の shell literal と run dir | 依頼の更新 | 残量の申告 | 新 branch + 新 PR>
+```
+
+worker の本文 (最終 message / diff / commit message) を停止結果へ転記しません。secret / 実 home
+path / 外部 URL も同様です。この結果は委譲 process の判定であり、PR の merge readiness ではありません。
