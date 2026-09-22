@@ -77,6 +77,12 @@ CLI / file write を行いません。
 - frontmatter の `updated` を今の日時にする。`state` を実態に合わせるのも worker (`review` = PR を
   出して review 待ち / `blocked` = 質問待ち・limit 到達・CI 赤 / `open` = 作業中)。`done` は
   orchestrator が入れる。`依頼` は worker も reviewer も書き換えない (曖昧なら `結果` に質問を書く)。
+- 例外は orchestrator として Codex worker に委譲した session (規約の「worker 委譲との関係」)。
+  worker は packet に書けないので、orchestrator が worker の最終 message から `結果` (見出しは
+  `worker/codex`) と `次の入口` (最終 message の「次の 1 アクション」) を転記し、PR を出したら `pr:` と
+  `state: review` を入れる。worker が止まっている (質問・失敗・limit) なら最終 message の有無に
+  かかわらず `state: blocked` にし、最終 message があれば転記、無ければ `orchestrator/claude` の
+  見出しで停止理由を書き、`次の入口` に続きの入り方を入れる。
 - packet が無い Issue は作らない (起こすのは orchestrator の役目)。必要なら「packet を起こすか」を
   次の入口に書く。
 
