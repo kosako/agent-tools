@@ -122,6 +122,8 @@ check("配列の要素に , や = を含む文字列は同じ行で閉じるの�
       sel("a = [\"a,b\", 'k=v']\nmodel = \"gpt-x\"\n") == { "model" => "gpt-x" })
 # 理由文を固定 (検査の重複を除去したときに区別できるように)
 check("分類に落ちる行の理由文", sel_error_msg("weird line\n").to_s.include?("解釈できない行"))
+check("basic string の値に \\ があれば分類に落ちる (model 以外の key でも。charset 検査に依存しない)",
+      sel_error_msg("note = \"x\\\\y\"\n").to_s.include?("解釈できない行"))
 check("model が basic string 以外のときの理由文", sel_error_msg("model = 'lit'\n").to_s.include?("basic string 1 行"))
 check("model の値の charset の理由文", sel_error_msg("model = \"a b\"\n").to_s.include?("安全に埋められない文字"))
 check("model が重複のときの理由文", sel_error_msg("model = \"a\"\nmodel = \"b\"\n").to_s.include?("複数あり"))
@@ -196,7 +198,11 @@ chmod +x "$fakebin/codex"
 cat > "$fakebin/herdr" <<'EOF'
 #!/bin/sh
 [ "${FAKE_HERDR_RC:-0}" -eq 0 ] || exit "$FAKE_HERDR_RC"
-printf 'server:\n  status: running\n'
+case "${FAKE_HERDR_OUT:-running}" in
+  running) printf 'server:\n  status: running\n' ;;
+  stopped) printf 'server:\n  status: stopped\n' ;;
+  empty) : ;;
+esac
 EOF
 chmod +x "$fakebin/herdr"
 
@@ -319,10 +325,17 @@ set -e
 [ "$rc" -eq 1 ] || fail "CODEX_THREAD_ID must be BLOCKED (rc=$rc): $out"
 echo "$out" | grep -q "BLOCKED (asymmetry)" || fail "should name asymmetry for CODEX_THREAD_ID: $out"
 
-# --json でも BLOCKED は JSON で返る
-out=$(env -u CODEX_THREAD_ID CODEX_SANDBOX=1 PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" --json 2>/dev/null || true)
-printf '%s' "$out" | ruby -rjson -e 'j = JSON.parse(STDIN.read); abort unless j["status"] == "BLOCKED" && j["blocked_at"] == "asymmetry"' \
-  || fail "--json BLOCKED shape: $out"
+# --json でも BLOCKED は JSON で返る (exit 1 のまま、reason も載る)
+set +e
+out=$(env -u CODEX_THREAD_ID CODEX_SANDBOX=1 PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" --json 2>/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "--json BLOCKED must still exit 1 (rc=$rc): $out"
+printf '%s' "$out" | ruby -rjson -e '
+j = JSON.parse(STDIN.read)
+abort "status" unless j["status"] == "BLOCKED" && j["blocked_at"] == "asymmetry"
+abort "reason" unless j["reason"].is_a?(String) && j["reason"].include?("一方通行")
+' || fail "--json BLOCKED shape: $out"
 
 # codex が PATH に無い (実際の command 不在) -> BLOCKED exit 1
 emptybin="$tmp/emptybin"
@@ -387,26 +400,72 @@ for feature in apps computer_use browser_use; do
   echo "$out" | grep -q "無い feature" || fail "absent feature must be reported by the feature check: $out"
 done
 
-# herdr は任意の状態表示: 無い / 止まっていても exit 0 のまま unavailable
+# herdr は任意の状態表示: 無い / 止まっていても exit 0 のまま unavailable。exit 0 でも出力が
+# running でなければ unavailable (出力の判定を外すと捕捉される)
 set +e
 out=$(run_pf_env FAKE_HERDR_RC=1 2>&1)
 rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "herdr down should not block (rc=$rc): $out"
 echo "$out" | grep -q "^herdr: unavailable" || fail "should report herdr unavailable: $out"
+for state in stopped empty; do
+  set +e
+  out=$(run_pf_env FAKE_HERDR_OUT="$state" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "herdr $state should not block (rc=$rc): $out"
+  echo "$out" | grep -q "^herdr: unavailable" || fail "herdr exit 0 with '$state' output must be unavailable: $out"
+done
 
-# usage エラー -> exit 2
+# config の探索順: --codex-home > CODEX_HOME > 既定 (HOME 配下の .codex)。各段を隔離した fixture で
+goodhome="$tmp/env-home"
+mkdir -p "$goodhome"
+printf 'model = "gpt-env"\n' > "$goodhome/config.toml"
+defhome="$tmp/default-home/.codex"
+mkdir -p "$defhome"
+printf 'model = "gpt-default"\n' > "$defhome/config.toml"
+badhome="$tmp/bad-home"
+mkdir -p "$badhome"
+printf 'model = "a"\nmodel = "b"\n' > "$badhome/config.toml"
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$goodhome" PATH="$fakebin:$PATH" ruby "$src")
+echo "$out" | grep -q "^model: gpt-env (config)$" || fail "CODEX_HOME should be used when --codex-home is absent: $out"
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID -u CODEX_HOME HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src")
+echo "$out" | grep -q "^model: gpt-default (config)$" || fail "default home (.codex under HOME) should be used: $out"
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$badhome" PATH="$fakebin:$PATH" ruby "$src" --codex-home "$goodhome")
+echo "$out" | grep -q "^model: gpt-env (config)$" || fail "--codex-home must win over CODEX_HOME: $out"
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$goodhome" HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src")
+echo "$out" | grep -q "^model: gpt-env (config)$" || fail "CODEX_HOME must win over the default home: $out"
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="" HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src")
+echo "$out" | grep -q "^model: gpt-default (config)$" || fail "empty CODEX_HOME must fall back to the default home: $out"
+
+# usage エラー -> exit 2 で、理由文は usage (値の検査を 1 つ外すと NoMethodError 等の別の理由文に
+# なるので、usage の文言まで固定する)
 set +e
-ruby "$src" --bogus >/dev/null 2>&1
+out=$(ruby "$src" --bogus 2>&1)
 rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "unknown option should be exit 2 (rc=$rc)"
+echo "$out" | grep -q "usage:" || fail "unknown option should print usage: $out"
 for opt in --codex-home --model --effort; do
+  # 値の省略 / 空文字 / option 形の値 をそれぞれ独立に
   set +e
-  ruby "$src" "$opt" >/dev/null 2>&1
+  out=$(ruby "$src" "$opt" 2>&1)
   rc=$?
   set -e
   [ "$rc" -eq 2 ] || fail "$opt without value should be exit 2 (rc=$rc)"
+  echo "$out" | grep -q "usage:" || fail "$opt without value should print usage, not another error: $out"
+  set +e
+  out=$(ruby "$src" "$opt" "" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "$opt with empty value should be exit 2 (rc=$rc)"
+  echo "$out" | grep -q "usage:" || fail "$opt with empty value should print usage: $out"
+  set +e
+  out=$(ruby "$src" "$opt" --json 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "$opt with an option-shaped value should be exit 2 (rc=$rc)"
+  echo "$out" | grep -q "usage:" || fail "$opt with an option-shaped value should print usage: $out"
 done
 
 echo "ok: codex-worker-preflight self-test"
