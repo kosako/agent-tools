@@ -1,6 +1,6 @@
 {
   "skill_name": "personal-codex-worker",
-  "notes": "delegation executor skill。model eval では codex / herdr / git / gh を実行せず、authorization gate・preflight の扱い・clone・brief の薄さ・完了判定 (sentinel + 結果 file)・転記と退避・trailer 検査・停止条件を期待挙動 spec として検証する。evals/ は非配置。 LAUNCH §3 の配線検査は「clone が main と同じ hook dir を使うか」で判定し、repo-local hooksPath / 別 dir / 明示的な空値 / 壊れた config の 4 変異が Blocked になることを実測している (eval はその手順を選ぶかを見る。model の before / after 比較は repo に runner が無く未実施)。 launch argv の --add-dir は preflight が clone の git dir に対して 1 つだけ入れる (workspace-write は workdir 内でも .git を保護するため。#307)。",
+  "notes": "delegation executor skill。model eval では codex / herdr / git / gh を実行せず、authorization gate・preflight の扱い・clone・brief の薄さ・完了判定 (sentinel + 結果 file)・転記と退避・trailer 検査・停止条件を期待挙動 spec として検証する。evals/ は非配置。 LAUNCH §2 の配線検査は「clone が main と同じ hook dir を使うか」で判定し、repo-local hooksPath / 別 dir / 明示的な空値 / 壊れた config の 4 変異が Blocked になることを実測している (eval はその手順を選ぶかを見る。model の before / after 比較は repo に runner が無く未実施)。 launch argv の --add-dir は preflight が clone の git dir に対して 1 つだけ入れる (workspace-write は workdir 内でも .git を保護するため。#307)。",
   "evals": [
     {
       "id": 0,

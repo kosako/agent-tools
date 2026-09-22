@@ -95,7 +95,7 @@ git dir が workdir の内側に入り、追加の書込許可なしで commit �
 - **起動前に clone 側の commit 前提を確認する**: `user.email` / `user.name` が解決でき、git hook gate
   (public-safety / git-identity / ai-trailer) の hook が clone から見えること。clone には main の
   repo-local な設定は引き継がれないので、どちらか欠ければ起動せず `Blocked at: clone` とする
-  (手順は `LAUNCH.md` §3)。clone の path 自体の妥当性 (git dir が `<clone>/.git` の directory である /
+  (手順は `LAUNCH.md` §2)。clone の path 自体の妥当性 (git dir が `<clone>/.git` の directory である /
   orchestrator 自身の repository ではない) は preflight が検査する。
 - **clone の置き場は identity が効く場所に固定する**。git の identity を repository の置き場で
   切り替える設定 (`includeIf "gitdir:…"`) を使っている環境では、その context の外 (例: 一時 dir) へ
@@ -137,8 +137,9 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
 通りに組みます** (手順の正本はそちら)。ここには手順が満たすべき契約だけを置きます。
 
 - **起動形は preflight の `launch_argv` そのまま** (`<run dir>` の置換だけ)。run script は clone に
-  `cd` してから起動し、stdout / stderr を `codex.log` に tee する。`--add-dir` を足さない (clone なら
-  不要。足すことは main の Git 管理領域を開けることと同じ)。
+  `cd` してから起動し、stdout / stderr を `codex.log` に tee する。`--add-dir` を**自分で足さない**
+  (preflight が clone の git dir に対して 1 つだけ入れる。別の path を足すことは main の Git 管理領域を
+  開けることと同じ)。
 - **escape**: path と nonce は生成時に shell literal 化 (値全体を `'` で囲み、内側の `'` を `'\''` に
   置換) して script 先頭の変数に 1 回だけ埋め込み、以降は `"$run"` / `"$clone"` で参照する。値を
   inline の引用へ展開しない。`pane run` は pane shell と呼び出し元 shell の 2 段で literal 化する。

@@ -326,10 +326,13 @@ model = "b"' 'model = "a b"' 'model_reasoning_effort = ""'; do
   i=$((i + 1))
   printf '%s\n' "$bad" > "$home2/config.toml"
   set +e
-  out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home2" 2>&1)
+  out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home2" \
+    --clone "$clone" 2>&1)
   rc=$?
   set -e
   [ "$rc" -eq 2 ] || fail "unsafe config #$i must be exit 2 (rc=$rc): $out"
+  # 必須引数不足 (usage) で早期に落ちると config 検査を迂回するので、理由が config 由来であることまで見る
+  case "$out" in *"usage:"*) fail "unsafe config #$i must fail on the config check, not usage: $out" ;; esac
   case "$out" in *"CANARY"*) fail "error output must not echo config content: $out" ;; esac
 done
 
@@ -554,14 +557,43 @@ set -e
 [ "$rc" -eq 2 ] || fail "linked worktree は exit 2 (rc=$rc): $out"
 case "$out" in *"--add-dir"*) fail "linked worktree で launch argv を出してはいけない: $out" ;; esac
 
-# (e) orchestrator 自身の repository (cwd の toplevel) は渡せない = main の Git 管理領域を開けない
+# (e) orchestrator 自身の repository は渡せない = main の Git 管理領域を開けない。
+#     実 repository は checkout 形態 (linked worktree 等) で前段の検査に引っかかりうるので、
+#     通常 repository の独立 fixture を使い、拒否理由が「自身の repository」であることまで見る。
+selfrepo="$clone_cases_dir/self"
+git init -q "$selfrepo"
 set +e
-out=$(cd "$repo_root" && env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" \
-  --codex-home "$home" --clone "$repo_root" 2>&1)
+out=$(cd "$selfrepo" && env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" \
+  --codex-home "$home" --clone "$selfrepo" 2>&1)
 rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "orchestrator 自身の repository は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "orchestrator 自身の repository" || fail "自身の repository 固有の理由で落ちるべき: $out"
 case "$out" in *"--add-dir"*) fail "自身の repository で launch argv を出してはいけない: $out" ;; esac
+
+# (g) `<clone>/.git` が symlink: 解決先 (例: 別 repository の git dir) を開けない
+symrepo="$clone_cases_dir/symlinked"
+mkdir -p "$symrepo"
+ln -s "$clone/.git" "$symrepo/.git"
+set +e
+out=$(pf_clone_rc "$symrepo")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail ".git が symlink の clone は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "が symlink です" || fail "symlink 固有の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "symlink の .git で launch argv を出してはいけない: $out" ;; esac
+
+# (h) orchestrator の repository を確認できない (repository の外から実行) 場合は通さない
+outside="$tmp/outside"
+mkdir -p "$outside"
+set +e
+out=$(cd "$outside" && env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" \
+  --codex-home "$home" --clone "$clone" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "repository の外からの実行は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "orchestrator の repository を確認できません" || fail "確認不能の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "確認不能で launch argv を出してはいけない: $out" ;; esac
 
 # (f) 正しい clone: --add-dir はその clone の git dir 1 つだけで、main の path が現れない
 out=$(run_pf --json)

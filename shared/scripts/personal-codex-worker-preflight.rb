@@ -194,7 +194,16 @@ module CodexWorkerPreflight
     root = real_path(path)
     raise ArgumentError, "clone: path を解決できません: #{path}" unless root
 
-    git_dir = real_path(File.join(root, ".git"))
+    entry = File.join(root, ".git")
+    # `.git` が symlink だと、解決先 (例: main の git dir) を開けてしまうので、entry 自体が
+    # **その clone の中にある実体の directory** であることを要求する。
+    if File.symlink?(entry)
+      raise ArgumentError, "clone: <clone>/.git が symlink です (解決先を開けない): #{path}"
+    end
+
+    # root は realpath 済みで entry の symlink も上で弾いてあるので、ここは「directory か」だけを見る
+    # (linked worktree は `.git` が file なのでここで落ちる)。
+    git_dir = real_path(entry)
     unless git_dir && File.directory?(git_dir)
       raise ArgumentError, "clone: <clone>/.git が directory ではありません (linked worktree は不可): #{path}"
     end
@@ -205,8 +214,16 @@ module CodexWorkerPreflight
       raise ArgumentError, "clone: git repository の git dir が <clone>/.git と一致しません: #{path}"
     end
 
-    self_root = run_capture(["git", "rev-parse", "--show-toplevel"]).to_s.strip
-    if !self_root.empty? && real_path(self_root) == root
+    # orchestrator 自身の repository を渡させない。**判定できないときも通さない** (repository の
+    # 外から実行されると自己判定が空振りして main を開けてしまうため。preflight は orchestrator の
+    # repository の中から実行する)。
+    self_root_raw = run_capture(["git", "rev-parse", "--show-toplevel"]).to_s.strip
+    self_root = self_root_raw.empty? ? nil : real_path(self_root_raw)
+    unless self_root
+      raise ArgumentError, "clone: orchestrator の repository を確認できません " \
+        "(repository の中から実行してください)"
+    end
+    if self_root == root
       raise ArgumentError, "clone: orchestrator 自身の repository は渡せません (main の Git 管理領域を開けない)"
     end
 

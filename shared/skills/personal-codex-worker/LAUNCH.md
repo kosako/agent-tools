@@ -156,6 +156,7 @@ nonce=<nonce の shell literal>
 cd "$clone" || exit 90
 codex exec --ignore-user-config --ignore-rules -s workspace-write -c 'approval_policy="never"' \
   --disable apps --disable computer_use --disable browser_use \
+  --add-dir '<preflight の clone_git_dir>' \
   -c 'model="<preflight の model>"' -c 'model_reasoning_effort="<同 effort>"' \
   -o "$run/result.md" - < "$run/brief.md" 2>&1 | tee "$run/codex.log"
 rc=${pipestatus[1]}
@@ -165,6 +166,8 @@ exit "$rc"
 
 - `-c` の値は preflight の要素 (`approval_policy="never"` 等、引用符を含む) を丸ごと `'…'` で
   literal 化する。model / effort の `-c` は preflight が出したときだけ。
+- `--add-dir` の値は preflight の `clone_git_dir` (= `launch_argv` の要素) をそのまま literal 化して
+  使う。自分で組み立てない・省かない (省くと worker は `git add` すらできない)。
 - `2>&1 | tee` で stdout / stderr を `codex.log` に残す (limit の文言はここで拾う)。exit code は
   `pipestatus[1]` (zsh) で codex のものを取る。
 
