@@ -88,18 +88,32 @@ round を 1 つ無駄にして停止理由も分かりにくくなる)。
 git -C "$clone" config --get user.email
 git -C "$clone" config --get user.name
 
-# 2. hook の dir: --path に展開を委ねる (~ と ~user/ を git が展開する。素朴な ~ 置換は ~user/ を壊す)
-hooks=$(git -C "$clone" config --path --get core.hooksPath 2>/dev/null) || hooks=""
-[ -n "$hooks" ] || hooks="$(git -C "$clone" rev-parse --absolute-git-dir)/hooks"
+# 2. hook の dir。未設定 (exit 1) のときだけ .git/hooks に fallback し、明示的な空値 (exit 0 で空
+#    文字列) と取得エラー (exit 128 等) は「未設定」に丸めず停止する (実測した exit code)。
+#    展開は --path に委ねる (~ も ~user/ も git が展開する。素朴な ~ 置換は ~user/ を壊す)。
+if hooks=$(git -C "$clone" config --path --get core.hooksPath 2>/dev/null); then
+  [ -n "$hooks" ] || exit 1                  # 明示的な空値 = 「未設定」ではない → Blocked
+else
+  [ "$?" -eq 1 ] || exit 1                   # 1 = 未設定。それ以外は取得・展開エラー → Blocked
+  hooks=$(git -C "$clone" rev-parse --absolute-git-dir) || exit 1
+  hooks="$hooks/hooks"
+fi
 # 相対値は **clone root 基準** で解決する (git は hook を worktree top で実行する)。
 # `git -C` は呼び出し元の cwd を変えないので、ここで解決しないと main 側を検査してしまう。
 case "$hooks" in /*) ;; *) hooks="$clone/$hooks" ;; esac
 
-# 3. 配線: hook が dispatcher を呼び、dispatcher と 3 gate が配備されていること
+# 3. 配線: hook が正規 shim の形 (`exec <dispatcher> <stage> "$@"`) で dispatcher を呼び、
+#    その dispatcher と 3 gate が配備されていること。名前が本文のどこかに在るだけでは通さない
+#    (コメントに書いただけの hook を弾く)。
 scripts=<tool home>/agent-tools/scripts
 for h in pre-commit commit-msg; do
   [ -x "$hooks/$h" ] || exit 1
-  grep -q personal-git-hook-dispatcher -- "$hooks/$h" || exit 1
+  exec_line=$(sed -n 's/^[[:space:]]*exec[[:space:]]\{1,\}//p' -- "$hooks/$h" | tail -1)
+  [ -n "$exec_line" ] || exit 1
+  case "$exec_line" in
+    *personal-git-hook-dispatcher*" $h "*'"$@"'*) ;;   # 呼出先・stage・引数転送が同じ exec 行に在る
+    *) exit 1 ;;
+  esac
 done
 [ -x "$scripts/personal-git-hook-dispatcher" ] || exit 1
 for g in personal-public-safety-gate personal-git-identity-gate personal-ai-trailer-gate; do
@@ -108,11 +122,15 @@ done
 ```
 
 - identity が空: commit が `useConfigOnly` で落ちるので起動しない。clone の置き場を直す。
-- hook が無い / dispatcher を呼ばない / dispatcher・gate が配備されていない: public-safety /
-  git-identity / ai-trailer が動かないまま worker が commit する状態なので起動しない (gate を迂回する
-  経路を作らない)。
-- honest-label: これは**配線の確認**であって、gate が実際に止めることの証明ではありません (実行時の
-  判定は gate 側の責務)。確認できない環境では通さず `Blocked at: clone` にします。
+- hook が無い / 正規 shim の形で dispatcher を呼んでいない / dispatcher・gate が配備されていない:
+  public-safety / git-identity / ai-trailer が動かないまま worker が commit する状態なので起動しない
+  (gate を迂回する経路を作らない)。
+- この形は変異で確かめてあります: 名前がコメントに在るだけの hook / lint だけを呼ぶ hook /
+  `commit-msg` が `pre-commit` stage を渡す hook / 引数を転送しない hook は、いずれも
+  `Blocked at: clone` になります (実機の正規 shim は通ります)。
+- honest-label: 静的に確認できるのは **shim の呼出先・stage・引数転送と、呼出先 script の存在**まで
+  です。gate が実際に止めることの証明ではありません (実行時の判定は gate 側の責務)。この形で判定
+  できない hook (別の起動方法、wrapper 越し) は通さず `Blocked at: clone` にします。
 
 ## 4. brief と run script
 
