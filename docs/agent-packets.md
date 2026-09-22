@@ -99,8 +99,9 @@ PR #124 の should 1 件を直して re-review を依頼する。
 - `state`: `open` (作業中) / `blocked` (質問待ち・limit 到達・CI 赤などで止まっている) /
   `review` (PR を出して review 待ち) / `done` (merge / close 済み)。`review` は PR を出した側が
   入れる (自分で push できる worker なら本人、委譲した Codex worker の分は push と PR 作成を行う
-  orchestrator)。`blocked` は止まった worker が入れ、worker が止まって書けないときは orchestrator が
-  停止理由と一緒に入れる。`done` は orchestrator が入れる。
+  orchestrator)。`blocked` は止まった worker が入れる。委譲した worker の分は、止まっていれば
+  最終 message の有無にかかわらず orchestrator が入れる (停止理由は最終 message の転記か、無ければ
+  orchestrator の記録)。`done` は orchestrator が入れる。
 - 「依頼は上書き・結果は追記」は書式でなく手順で守る (1 PR = 1 author なので同時書き込みは
   想定しない)。
 - **行頭の `## ` は 3 つの節見出しに予約する** (fenced code や引用の中でも同じ)。それ以外の行頭
@@ -193,13 +194,18 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
 - **結果の転記**: worker は最終 message に到達点 / 判断 / 未完 / 停止理由 / commit 一覧 /
   次の 1 アクション (`次の入口` の転記元) を書き、orchestrator がそれを `結果` に
   `### <日付> worker/codex` として転記し、`次の入口` を最終 message の「次の 1 アクション」から
-  写す (転記前に `personal-public-safety-gate --stdin` を通す)。最終 message が無い (途中終了) とき
-  は転記せず、下の「停止」の手順で orchestrator が書く。
-- **PR**: orchestrator が branch の全 commit の trailer が Codex のみであることを確認してから push
-  し、PR を作る。packet に `pr:` と `state: review` を入れるのは orchestrator (PR を出した側)。
-- **停止 (limit / 途中終了)**: worker は自分で記録できないので、orchestrator が
-  `### <日付> orchestrator/claude` で停止理由 (limit の文言、exit code、末尾の public-safe な要約) を
-  書き `state: blocked` にし、`次の入口` に続きの入り方 (下記) を書く。uncommitted な変更は
+  写す (転記前に `personal-public-safety-gate --stdin` を通す)。worker が止まっている (質問・失敗・
+  limit) なら、最終 message の有無にかかわらず orchestrator が `state: blocked` にする。有無で変わる
+  のは記録の出所だけで、最終 message があればこの転記 (`worker/codex`)、無ければ下の「停止」の手順で
+  orchestrator が書く (`orchestrator/claude`)。
+- **PR**: orchestrator が PR に含まれる追加 commit (base OID から head までの
+  `git log <base-oid>..<head-oid>`。共有祖先は含めない) の trailer がすべて Codex のみであることを
+  確認してから push し、PR を作る。packet に `pr:` と `state: review` を入れるのは orchestrator
+  (PR を出した側)。
+- **停止 (limit / 途中終了 / 質問)**: 最終 message が無い停止では worker の記録が残らないので、
+  orchestrator が `### <日付> orchestrator/claude` で停止理由 (limit の文言、exit code、末尾の
+  public-safe な要約) を書く (最終 message があれば上の転記)。どちらも `state: blocked` にし、
+  `次の入口` に続きの入り方 (下記) を書く。uncommitted な変更は
   staged / unstaged / untracked をすべて run directory に退避し (staged と unstaged は patch、
   untracked は file の写し)、その path を記録する。復元を確認するまで worktree を消さない。
   orchestrator が代わりに commit しない (trailer が Claude になり author が混ざる)。自動で再起動
