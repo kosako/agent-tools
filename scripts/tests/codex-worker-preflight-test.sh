@@ -568,7 +568,7 @@ out=$(cd "$selfrepo" && env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$
 rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "orchestrator 自身の repository は exit 2 (rc=$rc): $out"
-echo "$out" | grep -q "orchestrator 自身の repository" || fail "自身の repository 固有の理由で落ちるべき: $out"
+echo "$out" | grep -q "自身の Git 管理領域" || fail "自身の Git 管理領域の理由で落ちるべき: $out"
 case "$out" in *"--add-dir"*) fail "自身の repository で launch argv を出してはいけない: $out" ;; esac
 
 # (g) `<clone>/.git` が symlink: 解決先 (例: 別 repository の git dir) を開けない
@@ -582,6 +582,45 @@ set -e
 [ "$rc" -eq 2 ] || fail ".git が symlink の clone は exit 2 (rc=$rc): $out"
 echo "$out" | grep -q "が symlink です" || fail "symlink 固有の理由で落ちるべき: $out"
 case "$out" in *"--add-dir"*) fail "symlink の .git で launch argv を出してはいけない: $out" ;; esac
+
+# (i) `.git` は directory だが git repository ではない: git dir の一致検査で落ちる
+#     (前段の directory / symlink 検査は通るので、一致検査だけを外した変異を捕捉できる)
+emptygit="$clone_cases_dir/empty-git"
+mkdir -p "$emptygit/.git"
+set +e
+out=$(pf_clone_rc "$emptygit")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "空の .git は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "git dir が <clone>/.git と一致しません" || fail "git dir 一致検査の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "空の .git で launch argv を出してはいけない: $out" ;; esac
+
+# (j) repository を選ぶ環境変数が立っていたら、検査と起動がずれるので通さない
+for var in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; do
+  set +e
+  out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID "$var=$clone" PATH="$fakebin:$PATH" ruby "$src" \
+    --codex-home "$home" --clone "$clone" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "$var が立っていたら exit 2 (rc=$rc): $out"
+  echo "$out" | grep -q "repository を選ぶ環境変数" || fail "$var 固有の理由で落ちるべき: $out"
+  case "$out" in *"--add-dir"*) fail "$var が立っている状態で launch argv を出してはいけない: $out" ;; esac
+done
+
+# (k) orchestrator が linked worktree に居るとき、その main worktree は渡せない
+#     (worktree root は違うが Git 管理領域は同じ)
+selfwt="$clone_cases_dir/self-wt"
+rm -rf "$selfwt"
+git -C "$selfrepo" commit -q --allow-empty -m base
+git -C "$selfrepo" worktree add -q --detach "$selfwt"
+set +e
+out=$(cd "$selfwt" && env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" \
+  --codex-home "$home" --clone "$selfrepo" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "linked worktree から main を渡したら exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "自身の Git 管理領域" || fail "共有 Git 管理領域の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "同じ Git 管理領域で launch argv を出してはいけない: $out" ;; esac
 
 # (h) orchestrator の repository を確認できない (repository の外から実行) 場合は通さない
 outside="$tmp/outside"

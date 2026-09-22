@@ -136,6 +136,10 @@ preflight=<tool home>/agent-tools/scripts/personal-codex-worker-preflight
 - rc が 0 以外なら停止 (`SKILL.md` §2)。exit 2 には clone の検査 (`<clone>/.git` が directory でない =
   linked worktree、orchestrator 自身の repository、git dir の不一致) も含まれる。`--add-dir` を自分で
   足して回避しない。
+- honest-label: preflight の検査は **その時点の path** を見る。検査から起動までの間に `.git` を
+  symlink へ差し替える competing write までは防げない (同じ path を使い回し、`clone_root` /
+  `clone_git_dir` を preflight の出力から取ることで窓を狭めている)。clone は orchestrator が作った
+  ものだけを使う。
 - `launch_argv` には `--add-dir <clone>/.git` が 1 つ入る (sandbox は workdir の内側でも `.git` を
   保護するため)。`launch_argv` (配列) の `<run dir>/result.md` を実際の `"$run/result.md"` に
   置き換え、要素を run script に写す (§4)。
@@ -150,10 +154,10 @@ flag は 2026-09-22 時点の preflight が出す形で、手で編集しませ�
 
 ```sh
 #!/bin/zsh
-clone=<clone path の shell literal>
+clone=<preflight の clone_root の shell literal>
 run=<run dir の shell literal>
 nonce=<nonce の shell literal>
-cd "$clone" || exit 90
+cd -P "$clone" || exit 90
 codex exec --ignore-user-config --ignore-rules -s workspace-write -c 'approval_policy="never"' \
   --disable apps --disable computer_use --disable browser_use \
   --add-dir '<preflight の clone_git_dir>' \
@@ -168,6 +172,10 @@ exit "$rc"
   literal 化する。model / effort の `-c` は preflight が出したときだけ。
 - `--add-dir` の値は preflight の `clone_git_dir` (= `launch_argv` の要素) をそのまま literal 化して
   使う。自分で組み立てない・省かない (省くと worker は `git add` すらできない)。
+- **`cd` する path も preflight の `clone_root`** (検査した物理 path) を使う。caller が渡した生の値を
+  `cd` すると、symlink と `..` の組み合わせで **検査した dir と別の dir に入る** ことがある
+  (`/A/link -> /B/subdir` のとき `/A/link/../repo` は物理 `/B/repo`、論理 `cd` は `/A/repo`)。
+  移動は `cd -P` で行う。
 - `2>&1 | tee` で stdout / stderr を `codex.log` に残す (limit の文言はここで拾う)。exit code は
   `pipestatus[1]` (zsh) で codex のものを取る。
 

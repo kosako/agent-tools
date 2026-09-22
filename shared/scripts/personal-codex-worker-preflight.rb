@@ -16,8 +16,8 @@
 #     --disable apps --disable computer_use --disable browser_use
 #     [-c model="<user config の model>"] [-c model_reasoning_effort="<同 effort>"] -o <result> -
 # `--ignore-user-config` で config.toml と bootstrap の MCP server が読まれなくなり (AGENTS.md
-# と skills は読まれる。worker は main の clone で動かすので git dir は workdir の内側にあり、
-# 追加の書込許可なしに commit が通る)、`--disable apps` で account 側の
+# と skills は読まれる。worker は main の clone で動かし、その clone の git dir だけを `--add-dir` で
+# 開ける (`workspace-write` は workdir の内側でも `.git` を保護するため。#307)、`--disable apps` で account 側の
 # connector が消える。`-c mcp_servers.<name>.enabled=false` は config.toml に無い bootstrap の
 # server に対して config load を落とす (invalid transport) ので使わない。`--ignore-rules` は
 # user / project の execpolicy `.rules` を読まない指定 (`--ignore-user-config` とは別)。
@@ -91,6 +91,14 @@ module CodexWorkerPreflight
       |\[\s*(?:#{ARRAY_ITEM}(?:\s*,\s*#{ARRAY_ITEM})*\s*,?)?\s*\])
     \s*(?:\#.*)?\z
   }x
+
+  # repository の選択を変える env。preflight の検査と、起動する worker の実行環境がずれるので、
+  # 1 つでも立っていたら検査自体を信じない (exit 2)。
+  REPO_SELECTING_ENV = %w[
+    GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY
+    GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CEILING_DIRECTORIES GIT_NAMESPACE
+    GIT_DISCOVERY_ACROSS_FILESYSTEM
+  ].freeze
 
   Blocked = Class.new(StandardError)
 
@@ -189,6 +197,12 @@ module CodexWorkerPreflight
   # worker を動かす clone の検査。満たさなければ ArgumentError (exit 2) で、launch argv を作らない。
   # 返すのは `--add-dir` に渡す git dir の物理 path。
   def validate_clone(path)
+    set_env = REPO_SELECTING_ENV.select { |v| ENV.key?(v) }
+    unless set_env.empty?
+      raise ArgumentError, "clone: repository を選ぶ環境変数が立っています (検査と起動がずれる): " \
+        "#{set_env.join(', ')}"
+    end
+
     raise ArgumentError, "clone: directory ではありません: #{path}" unless File.directory?(path)
 
     root = real_path(path)
@@ -201,11 +215,16 @@ module CodexWorkerPreflight
       raise ArgumentError, "clone: <clone>/.git が symlink です (解決先を開けない): #{path}"
     end
 
-    # root は realpath 済みで entry の symlink も上で弾いてあるので、ここは「directory か」だけを見る
-    # (linked worktree は `.git` が file なのでここで落ちる)。
     git_dir = real_path(entry)
     unless git_dir && File.directory?(git_dir)
       raise ArgumentError, "clone: <clone>/.git が directory ではありません (linked worktree は不可): #{path}"
+    end
+    # root は realpath 済みで、entry の symlink も上で弾いてあるので、通常の入力ではここは常に等しい。
+    # 検査の途中で `.git` が symlink に差し替わる競合を狭めるための defense-in-depth で、
+    # **self-test の変異では捕捉できない** (競合を作らないと到達しない)。完全には防げず、
+    # honest-label は LAUNCH の §3 に書いてある。
+    unless git_dir == entry
+      raise ArgumentError, "clone: <clone>/.git の解決先が clone の外です: #{path}"
     end
 
     resolved = run_capture(["git", "-C", root, "rev-parse", "--absolute-git-dir"]).to_s.strip
@@ -214,20 +233,36 @@ module CodexWorkerPreflight
       raise ArgumentError, "clone: git repository の git dir が <clone>/.git と一致しません: #{path}"
     end
 
-    # orchestrator 自身の repository を渡させない。**判定できないときも通さない** (repository の
-    # 外から実行されると自己判定が空振りして main を開けてしまうため。preflight は orchestrator の
-    # repository の中から実行する)。
-    self_root_raw = run_capture(["git", "rev-parse", "--show-toplevel"]).to_s.strip
-    self_root = self_root_raw.empty? ? nil : real_path(self_root_raw)
-    unless self_root
+    # orchestrator 自身の Git 管理領域を渡させない。**worktree root ではなく common git dir** を
+    # 比べる (orchestrator が linked worktree に居ると root は違うが、同じ object store を指す)。
+    # 判定できないときも通さない (preflight は orchestrator の repository の中から実行する)。
+    self_common = common_git_dir(nil)
+    unless self_common
       raise ArgumentError, "clone: orchestrator の repository を確認できません " \
         "(repository の中から実行してください)"
     end
-    if self_root == root
-      raise ArgumentError, "clone: orchestrator 自身の repository は渡せません (main の Git 管理領域を開けない)"
+    clone_common = common_git_dir(root)
+    # ここも defense-in-depth: 直前の `--absolute-git-dir` が通っていれば common dir も取れるので、
+    # **self-test の変異では捕捉できない**。git 側の挙動が変わったときに黙って通さないための保険。
+    unless clone_common
+      raise ArgumentError, "clone: clone の git 管理領域を確認できません: #{path}"
+    end
+    if self_common == clone_common
+      raise ArgumentError, "clone: orchestrator 自身の Git 管理領域は渡せません " \
+        "(main / その linked worktree は不可)"
     end
 
-    git_dir
+    [root, git_dir]
+  end
+
+  # repository の common git dir (worktree を跨いで同じ object store を指す) の物理 path。
+  # `repo` が nil なら cwd の repository。解決できなければ nil。
+  def common_git_dir(repo)
+    argv = ["git"]
+    argv.push("-C", repo) if repo
+    argv.push("rev-parse", "--path-format=absolute", "--git-common-dir")
+    out = run_capture(argv).to_s.strip
+    out.empty? ? nil : real_path(out)
   end
 
   def real_path(path)
@@ -286,7 +321,7 @@ module CodexWorkerPreflight
     # asymmetry の後に置く。
     raise ArgumentError, usage if opts[:clone].nil?
 
-    clone_git_dir = validate_clone(opts[:clone])
+    clone_root, clone_git_dir = validate_clone(opts[:clone])
 
     version = parse_version(run_capture(%w[codex --version]))
     raise Blocked, "capability: codex CLI が無いか、版を読めません" unless version
@@ -314,6 +349,7 @@ module CodexWorkerPreflight
       model_reasoning_effort: selection["model_reasoning_effort"],
       model_source: opts[:explicit].empty? ? "config" : "explicit",
       herdr: herdr_state,
+      clone_root: clone_root,
       clone_git_dir: clone_git_dir,
       launch_argv: launch_argv(DISABLE_FEATURES, selection, clone_git_dir),
     }
@@ -326,6 +362,7 @@ module CodexWorkerPreflight
     puts "model: #{r[:model] || '(codex default)'} (#{r[:model_source]})"
     puts "model_reasoning_effort: #{r[:model_reasoning_effort] || '(codex default)'} (#{r[:model_source]})"
     puts "herdr: #{r[:herdr]}"
+    puts "clone root: #{r[:clone_root]}"
     puts "clone git dir: #{r[:clone_git_dir]}"
     puts "launch: #{r[:launch_argv].join(' ')}"
   end

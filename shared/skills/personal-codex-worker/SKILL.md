@@ -84,10 +84,12 @@ run script を実行する hand-off にする。
 worker は Issue ごとの **local clone** で動かします。linked worktree は使いません: worktree の git dir
 は main 側 (`<main>/.git/worktrees/<n>`) にあり、`workspace-write` の sandbox から書けないため worker が
 commit できません (codex 0.154.0 で実測。`--add-dir <main>/.git` を足せば通りますが、それは main の
-objects / refs / 他 worktree の index / config を worker に開けることになるので採りません)。clone なら
-git dir が workdir の内側に入り、追加の書込許可なしで commit できます。
+objects / refs / 他 worktree の index / config を worker に開けることになるので採りません)。clone なら git dir が
+その clone の中に入るので、**その 1 つだけ** を `--add-dir` で開ければ commit できます
+(`workspace-write` は workdir の内側でも `.git` を保護するため、追加許可そのものは必要。#307)。
 
 - `git clone --no-hardlinks <main worktree> <clone path>` で切り、branch は clone 側で選ぶ。
+  以降 (preflight / 起動) は preflight が返す `clone_root` (検査した物理 path) を使う。
   `--no-hardlinks` は必須 (既定の local clone は object を main と hardlink 共有するので、分離が
   成立しない)。branch は「clone の local branch → `origin/<branch>` → 新規」の順で解決する
   (`switch -c` だけだと、main 側にある同名 branch の tip を取り違える)。branch 名は packet の
