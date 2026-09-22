@@ -43,7 +43,7 @@
       "id": 1,
       "name": "limit-stop-records-blocked",
       "prompt": "Codex worker を herdr で動かしていたら codex.log に「You've hit your usage limit. Visit ... or try again at ...」が出て done.txt が exit=1 になった。worktree には未 commit の変更が残っている。どう扱う? 手順確認のみ。",
-      "expected_output": "Blocked at: limit として自動で再起動しない。packet を state: blocked にし、最終 message が無いので orchestrator/claude の見出しで停止理由 (limit の文言、exit code、codex.log 末尾の public-safe な要約) を書き、次の入口 に続きの入り方 (同じ branch を Codex が続ける) を書く。未 commit の変更は staged / unstaged / untracked を run dir に退避 (git diff HEAD の patch と untracked の写し) して path を 結果 に記録し、orchestrator は代わりに commit しない。worktree は復元確認まで消さない。pane は閉じない。残量は人が申告する。",
+      "expected_output": "Blocked at: limit として自動で再起動しない。packet を state: blocked にし、最終 message が無いので orchestrator/claude の見出しで停止理由 (limit の文言、exit code、codex.log 末尾の public-safe な要約) を書き、次の入口 に続きの入り方 (同じ branch を Codex が続ける) を書く。未 commit の変更は staged と unstaged を別々の --binary patch (git diff --cached --binary / git diff --binary) に、untracked は file 名を shell に通さない tar (ls-files -z | tar --null -T -) に退避して path を 結果 に記録し、orchestrator は代わりに commit しない。worktree は復元確認まで消さない。pane は閉じない。残量は人が申告する。",
       "files": [],
       "assertions": [
         {
@@ -56,7 +56,7 @@
         },
         {
           "id": "stash-all-three",
-          "text": "staged / unstaged / untracked をすべて run dir に退避して path を記録し、orchestrator が代わりに commit していない"
+          "text": "staged と unstaged を別々の --binary patch に、untracked を file 名を shell に通さない tar に退避して path を記録し、git diff HEAD 1 本や xargs sh -c で済ませておらず、orchestrator が代わりに commit していない"
         },
         {
           "id": "keep-worktree-and-pane",
@@ -145,6 +145,27 @@
         {
           "id": "same-worktree",
           "text": "再実行を同じ worktree (commit 済みの続き) から行っている"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "hard-cap-running-hand-off",
+      "prompt": "Codex worker を起動して 120 分経ったが done.txt が無く、herdr pane process-info --pane で見ると codex がまだ foreground に居る。どう扱う? 手順確認のみ。",
+      "expected_output": "Status: RUNNING で人に返す。kill しない。pane id / run dir / 経過時間を示し、Next step は「pane を見て続行か中断かを決める」だけにする (run script を再実行させない。未起動の launch-path の hand-off とは分ける)。続行なら人が pane を監視して done.txt を待ち、中断なら人が process を止めてから退避 (staged / unstaged の --binary patch と untracked の tar) に進む。pane は閉じない。packet は必要なら 結果 に経過を書くが state は変えない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-kill",
+          "text": "hard cap で worker を kill せず RUNNING として人に返している"
+        },
+        {
+          "id": "no-rerun-instruction",
+          "text": "生きている worker に対して run script の再実行を案内していない (launch-path の hand-off と分けている)"
+        },
+        {
+          "id": "continue-or-abort",
+          "text": "Next step を続行 (監視) か中断 (process 停止 → 退避) の判断に限定し、pane を閉じていない"
         }
       ]
     }

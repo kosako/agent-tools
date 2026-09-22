@@ -1,6 +1,6 @@
 ---
 name: personal-codex-worker
-description: Claude が orchestrator として packet の Issue を Codex の worker に委譲し、herdr の pane で codex exec を無人起動して結果を packet に転記する delegation executor skill。「packet #N を Codex に委譲して」「Codex worker で実装して」のように orchestrator が明示したときだけ使う。preflight が BLOCKED (非対称・capability 不足) なら起動せず人に返し、review・GitHub write・merge は行わない。review 実行は personal-codex-review、PR lifecycle は personal-review-request、packet 規約は docs/agent-packets.md。
+description: Claude が orchestrator として packet の Issue を Codex の worker に委譲し、herdr の pane で codex exec を無人起動して結果を packet に転記する delegation executor skill。「packet #N を Codex に委譲して」「Codex worker で実装して」のように orchestrator が明示したときだけ使う。preflight が BLOCKED (非対称・capability 不足) なら起動せず人に返す。worker には GitHub write をさせず、push と PR 作成は orchestrator が trailer 検査後に行い、review と merge はしない。review 実行は personal-codex-review、PR lifecycle は personal-review-request、packet 規約は docs/agent-packets.md。
 ---
 
 # personal-codex-worker
@@ -118,9 +118,11 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   inline の引用へ展開しない。`pane run` は pane shell と呼び出し元 shell の 2 段で literal 化する。
 - **完了の正本は `done.txt`** (nonce が一致し `exit=0`)。端末の sentinel は起床信号。続行条件は
   「`done.txt` の nonce 一致と `exit=0`」かつ「`result.md` が存在し空でない」。
-- **待ち方**: `herdr pane wait-output` の 300 秒 slice を、codex process が生きている限り繰り返す。
-  process が消えて `done.txt` が無ければ `Blocked at: executor-exit`。hard cap は 120 分 (暫定) で、
-  達したら kill せず pane を残し `Status: RUNNING` で人に返す。
+- **待ち方**: `herdr pane wait-output` の 300 秒 slice を、codex process が生きている限り繰り返す
+  (生存は `herdr pane process-info --pane <id>` の foreground process で見る。判定できないときは
+  「消滅」に倒さず待ち続ける)。process が消えたと確認できて `done.txt` が無ければ
+  `Blocked at: executor-exit`。hard cap は 120 分 (暫定) で、達したら kill せず pane を残し
+  `Status: RUNNING` で人に返す (run script を再実行させない。人は pane を見て続行か中断かを決める)。
 - **limit**: `codex.log` に `You've hit your usage limit` (前方一致) があれば `Blocked at: limit`。
   自動で再起動しない (残量は申告制、#255)。
 - **空振り**: `done.txt` が `exit=0` なのに `result.md` が欠落 / 空なら、新しい nonce で同じ brief を
@@ -144,18 +146,19 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   (limit の文言、exit code、`codex.log` 末尾の public-safe な要約) を書く。`次の入口` には続きの
   入り方 (同じ branch を Codex が続ける / 質問に答えて再起動) を書く。
 - **退避**: worktree の uncommitted な変更を staged / unstaged / untracked すべて run directory に
-  退避し (`git diff HEAD` の patch と untracked file の写し)、その path を `結果` に記録する。
-  orchestrator は代わりに commit しない (trailer が Claude になり author が混ざる)。復元を確認するまで
-  worktree を消さない。
+  退避し (staged と unstaged は別々の `--binary` patch、untracked は file 名を shell に通さない
+  tar の写し)、その path を `結果` に記録する。orchestrator は代わりに commit しない (trailer が
+  Claude になり author が混ざる)。復元を確認するまで worktree を消さない。
 - `依頼` は書き換えない。frontmatter の `updated` を更新する。
 
 ## 7. PR (orchestrator の操作)
 
 worker の最終 message が「完了」で、`依頼` の受け入れ条件を満たしたと orchestrator が判断したら:
 
-1. **trailer 検査**: PR に含まれる追加 commit (`git log <base-oid>..<head>`) の trailer が **すべて
-   Codex のみ** (Claude 系の trailer が 1 つも無く、trailer 欠落も無い) であることを確認する。
-   混在 / 欠落なら push せず `Blocked at: trailer` (author 交代は新 branch + 新 PR)。
+1. **trailer 検査**: PR に含まれる追加 commit (fetch 済みの `origin/main` との merge-base から
+   `HEAD` まで。local の main を base にしない) の trailer が **すべて Codex のみ** (Claude 系の
+   trailer が 1 つも無く、trailer 欠落も無い) であることを確認する。混在 / 欠落なら push せず
+   `Blocked at: trailer` (author 交代は新 branch + 新 PR)。
 2. push して PR を作る (title / body は packet の `依頼` と `結果` から orchestrator が書く。worker の
    本文をそのまま貼らない)。
 3. packet に `pr:` と `state: review` を入れる。review は `personal-review-request` に渡す
