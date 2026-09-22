@@ -6,8 +6,8 @@ description: Codex CLI で branch diff / commit / uncommitted changes を検査�
 # personal-codex-review
 
 現在の repository を Codex CLI (`codex exec`) で検査する read-only executor です。
-GitHub の read / comment / approve / merge、修正、commit、push は行わず、review session も
-永続化しません。Codex は herdr の pane から起動し、結果は file で受け取ります。
+GitHub の read / comment / approve / merge、修正、commit、push は行いません。review の session rollout は
+Codex 側に残します (利用量の集計に使う)。Codex は herdr の pane から起動し、結果は file で受け取ります。
 
 ## 副作用と組み合わせ
 
