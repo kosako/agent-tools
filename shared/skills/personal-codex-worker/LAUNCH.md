@@ -88,33 +88,36 @@ round を 1 つ無駄にして停止理由も分かりにくくなる)。
 git -C "$clone" config --get user.email
 git -C "$clone" config --get user.name
 
-# 2. hook の dir。未設定 (exit 1) のときだけ .git/hooks に fallback し、明示的な空値 (exit 0 で空
-#    文字列) と取得エラー (exit 128 等) は「未設定」に丸めず停止する (実測した exit code)。
+# 2. hook dir の解決 (repo path を引数に取る。main と clone の両方に同じ手順を当てる)。
+#    未設定 (exit 1) のときだけ .git/hooks に fallback し、明示的な空値 (exit 0 で空文字列) と
+#    取得・展開エラー (exit 128 等) は「未設定」に丸めず停止する (実測した exit code)。
 #    展開は --path に委ねる (~ も ~user/ も git が展開する。素朴な ~ 置換は ~user/ を壊す)。
-if hooks=$(git -C "$clone" config --path --get core.hooksPath 2>/dev/null); then
-  [ -n "$hooks" ] || exit 1                  # 明示的な空値 = 「未設定」ではない → Blocked
-else
-  [ "$?" -eq 1 ] || exit 1                   # 1 = 未設定。それ以外は取得・展開エラー → Blocked
-  hooks=$(git -C "$clone" rev-parse --absolute-git-dir) || exit 1
-  hooks="$hooks/hooks"
-fi
-# 相対値は **clone root 基準** で解決する (git は hook を worktree top で実行する)。
-# `git -C` は呼び出し元の cwd を変えないので、ここで解決しないと main 側を検査してしまう。
-case "$hooks" in /*) ;; *) hooks="$clone/$hooks" ;; esac
+resolve_hooks() {  # $1 = repo path。成功時に hook dir の物理 path を stdout へ
+  repo=$1
+  if dir=$(git -C "$repo" config --path --get core.hooksPath 2>/dev/null); then
+    [ -n "$dir" ] || return 1                 # 明示的な空値 = 「未設定」ではない
+  else
+    [ "$?" -eq 1 ] || return 1                # 1 = 未設定。それ以外は取得・展開エラー
+    dir=$(git -C "$repo" rev-parse --absolute-git-dir) || return 1
+    dir="$dir/hooks"
+  fi
+  case "$dir" in /*) ;; *) dir="$repo/$dir" ;; esac   # 相対値は **その repo の root** 基準
+  ( cd "$dir" 2>/dev/null && pwd -P )                 # 物理 path (symlink を畳む)。無ければ失敗
+}
 
-# 3. 配線: hook が正規 shim の形 (`exec <dispatcher> <stage> "$@"`) で dispatcher を呼び、
-#    その dispatcher と 3 gate が配備されていること。名前が本文のどこかに在るだけでは通さない
-#    (コメントに書いただけの hook を弾く)。
-scripts=<tool home>/agent-tools/scripts
+# 3. 配線: clone が **main と同じ hook dir** を使うことだけを受け付ける。
+#    任意の hook の正しさを shell で判定しようとすると偽陽性が残る (コメント行・到達不能な exec 行・
+#    呼出先 path の不一致)。ここでは「orchestrator 自身の commit を通している配線と同一か」だけを
+#    見て、違う配線 (repo-local な hooksPath、別 dir) は判定せず停止する。
+main_hooks=$(resolve_hooks "$main") || exit 1
+clone_hooks=$(resolve_hooks "$clone") || exit 1
+[ "$main_hooks" = "$clone_hooks" ] || exit 1
 for h in pre-commit commit-msg; do
-  [ -x "$hooks/$h" ] || exit 1
-  exec_line=$(sed -n 's/^[[:space:]]*exec[[:space:]]\{1,\}//p' -- "$hooks/$h" | tail -1)
-  [ -n "$exec_line" ] || exit 1
-  case "$exec_line" in
-    *personal-git-hook-dispatcher*" $h "*'"$@"'*) ;;   # 呼出先・stage・引数転送が同じ exec 行に在る
-    *) exit 1 ;;
-  esac
+  [ -x "$clone_hooks/$h" ] || exit 1
 done
+
+# 4. 呼出先: dispatcher と 3 gate が配備されていること
+scripts=<tool home>/agent-tools/scripts
 [ -x "$scripts/personal-git-hook-dispatcher" ] || exit 1
 for g in personal-public-safety-gate personal-git-identity-gate personal-ai-trailer-gate; do
   [ -x "$scripts/$g" ] || exit 1
@@ -122,15 +125,15 @@ done
 ```
 
 - identity が空: commit が `useConfigOnly` で落ちるので起動しない。clone の置き場を直す。
-- hook が無い / 正規 shim の形で dispatcher を呼んでいない / dispatcher・gate が配備されていない:
-  public-safety / git-identity / ai-trailer が動かないまま worker が commit する状態なので起動しない
+- hook dir が main と違う / hook が無い / dispatcher・gate が配備されていない: public-safety /
+  git-identity / ai-trailer が動かないまま worker が commit する状態になりうるので起動しない
   (gate を迂回する経路を作らない)。
-- この形は変異で確かめてあります: 名前がコメントに在るだけの hook / lint だけを呼ぶ hook /
-  `commit-msg` が `pre-commit` stage を渡す hook / 引数を転送しない hook は、いずれも
-  `Blocked at: clone` になります (実機の正規 shim は通ります)。
-- honest-label: 静的に確認できるのは **shim の呼出先・stage・引数転送と、呼出先 script の存在**まで
-  です。gate が実際に止めることの証明ではありません (実行時の判定は gate 側の責務)。この形で判定
-  できない hook (別の起動方法、wrapper 越し) は通さず `Blocked at: clone` にします。
+- この形は変異で確かめてあります: clone に repo-local な `core.hooksPath` がある / hook dir が別の
+  場所を指す / 明示的な空値 / 壊れた config / hook file が無い、はいずれも `Blocked at: clone` に
+  なり、main と同じ配線の clone は通ります。
+- honest-label: この検査が示すのは **clone が orchestrator 自身の commit と同じ hook 配線を使うこと**
+  だけです。main 側の配線そのものの正しさ (gate が実際に止めること) は対象外で、それは repo の運用
+  前提と gate 側の責務です。同一と言えない配線は通さず `Blocked at: clone` にします。
 
 ## 4. brief と run script
 
