@@ -69,6 +69,9 @@ check("features table を name => {stage, enabled} に読む",
       feats["apps"] == { stage: "stable", enabled: true } &&
       feats["apply_patch_preserve_line_endings"] == { stage: "under development", enabled: false })
 check("列が 2 空白未満の行は読まない", P.parse_features("apps stable true\n").empty?)
+check("第 1 区切りだけが 1 空白の行は読まない", P.parse_features("apps stable  true\n").empty?)
+check("第 2 区切りだけが 1 空白の行は読まない", P.parse_features("apps  stable true\n").empty?)
+check("boolean 列が true / false 以外の行は読まない", P.parse_features("apps  stable  unknown\n").empty?)
 
 def sel(text)
   CodexWorkerPreflight.read_model_selection(text)
@@ -105,6 +108,10 @@ check("許可した文字だけの値は通る", sel("model = \"gpt-6.1_astra-x\
 check("複数行文字列の開始行は fail-closed (偽 key が 1 つでも拾わない)",
       sel_error?("developer_instructions = '''\nmodel = \"CANARY\"\n[example]\n'''\nmodel = \"gpt-x\"\n"))
 check("複数行文字列 (basic) も fail-closed", sel_error?("note = \"\"\"\nmodel = \"b\"\n\"\"\"\n"))
+check("1 行の三重引用符 (basic) は分類に落ちる (basic string の \" 除外を外すと通ってしまう)",
+      sel_error?("note = \"\"\"x\"\"\"\n"))
+check("basic 複数行文字列の中の偽 model と [example] は、閉じ行に依存せず拒否される",
+      sel_error?("note = \"\"\"\nmodel = \"CANARY\"\n[example]\n\"\"\"\nmodel = \"gpt-x\"\n"))
 check("複数行に跨る配列 (継続行) は fail-closed", sel_error?("notify = [\n  \"a\",\n]\nmodel = \"gpt-x\"\n"))
 check("comment の ] で閉じたように見える配列 + [ 始まりの継続行は fail-closed (header と誤認しない)",
       sel_error?("matrix = [ # ]\n  [1, 2]\n]\nmodel = \"gpt-x\"\n"))
