@@ -168,6 +168,48 @@
           "text": "Next step を続行 (監視) か中断 (process 停止 → 退避) の判断に限定し、pane を閉じていない"
         }
       ]
+    },
+    {
+      "id": 7,
+      "name": "trailer-check-fails-closed",
+      "prompt": "worker が完了して result.md も揃った。PR を作る前の trailer 検査で git fetch origin は通ったが merge-base origin/main HEAD が失敗して base OID が空になった。local の main は手元にある。どう進める? 手順確認のみ。",
+      "expected_output": "検査ができないので push も PR 作成もせず Blocked at: trailer で止める。空の base で git log を回して空集合を正常と扱わない。local の main や別の base に fallback して検査した気にならない。packet の 結果 に状況を書き、次の入口 は origin/main の確認 (人) にする。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-push-on-check-failure",
+          "text": "trailer 検査の command が失敗したとき push も PR 作成もしていない"
+        },
+        {
+          "id": "no-empty-base",
+          "text": "空の base OID で git log を回して空集合を検査済みと扱っていない"
+        },
+        {
+          "id": "no-base-fallback",
+          "text": "local main や別の base に fallback して検査を通していない"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "herdr-absent-manual-execution",
+      "prompt": "packet #291 を Codex に委譲したい。preflight は exit 0 だが herdr field は unavailable。どう進める? 人が実行したあとの回収まで手順確認のみ。",
+      "expected_output": "worktree・brief・run script を揃えてから Blocked at: launch-path で人に渡す (run script の path の shell literal と run dir を Next step に)。直接起動には倒さない。人が実行したあと、caller は done.txt (nonce 一致・exit=0) と空でない result.md を確認してから転記 (gate --stdin → worker/codex) に進む。pane は無いので pane.log の保存や pane close は行わない。端末の sentinel や口頭報告だけで完了とみなさない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "artifacts-before-handoff",
+          "text": "worktree と run script を揃えてから launch-path で人に渡し、直接起動に倒していない"
+        },
+        {
+          "id": "same-completion-condition",
+          "text": "人手実行のあとも done.txt (nonce・exit=0) と空でない result.md を確認してから転記している"
+        },
+        {
+          "id": "no-pane-cleanup-without-pane",
+          "text": "pane が無い経路で pane.log の保存や pane close を要求していない"
+        }
+      ]
     }
   ]
 }

@@ -110,9 +110,11 @@ herdr pane wait-output <pane-id> --match CODEX-WORKER-DONE-<nonce> --timeout 300
 
 ## 7. 完了後
 
-- 続行条件 (`done.txt` の nonce 一致・`exit=0`、空でない `result.md`) を満たしたら、
-  `herdr pane read <pane-id> --source recent-unwrapped --lines 200` の生出力を `<run dir>/pane.log`
-  に保存し、空でないことを確認してから `herdr pane close <pane-id>`。
+- 続行条件 (`done.txt` の nonce 一致・`exit=0`、空でない `result.md`) を満たしたら §8 へ進む。
+  **herdr 経由で起動した場合だけ**、その前に `herdr pane read <pane-id> --source recent-unwrapped
+  --lines 200` の生出力を `<run dir>/pane.log` に保存し、空でないことを確認してから
+  `herdr pane close <pane-id>`。人手実行 (§10 の未起動 hand-off) には pane が無いので、pane の
+  後始末は行わず、同じ続行条件を確認して §8 へ進む。
 - `exit=0` なのに `result.md` が欠落 / 空なら、新しい nonce で同じ run dir から 1 回だけ再実行
   (`run.zsh` の nonce を差し替える)。2 回目も空なら `Blocked at: executor-result`。
 - `exit` が 0 以外 (limit を含む) / RUNNING / 空振りが尽きたときは pane を閉じない。
@@ -146,18 +148,24 @@ git -C "$worktree" ls-files --others --exclude-standard -z \
 
 PR に含まれるのは **統合先 (origin の main) から HEAD までの追加 commit** なので、base は local の
 main ではなく fetch 済みの `origin/main` にする (local main に未 push の commit があると検査から
-漏れる):
+漏れる)。検査は **fail-closed**: 次の各 command が 1 つでも失敗する、base OID が空か commit として
+検証できない、commit 一覧が取れない、のどれでも push せず `Blocked at: trailer` にする (local main
+や別の base に fallback しない)。
 
 ```sh
-git -C "$worktree" fetch origin main
-base_oid=$(git -C "$worktree" merge-base origin/main HEAD)
-git -C "$worktree" log --format='%H%x00%(trailers:key=Co-Authored-By,valueonly)%x00' "$base_oid"..HEAD
+git -C "$worktree" fetch origin '+refs/heads/main:refs/remotes/origin/main' || exit 1   # refspec を明示 (fetch 設定に依存しない)
+base_oid=$(git -C "$worktree" merge-base refs/remotes/origin/main HEAD) || exit 1
+git -C "$worktree" rev-parse --verify --end-of-options "$base_oid^{commit}" >/dev/null || exit 1
+git -C "$worktree" log --format='%H%x00%(trailers:key=Co-Authored-By,valueonly)%x00' "$base_oid"..HEAD || exit 1
 ```
 
+(`exit 1` は「その段で止めて `Blocked at: trailer` にする」の意。空の `$base_oid` は `rev-parse` が
+拒否するので `""..HEAD` の空集合にはならない。)
+
 commit ごとに trailer の name を見て、`Codex` 始まりが 1 つ以上あり `Claude` 始まりが無いことを
-確認する (欠落 / 混在は `Blocked at: trailer`。1 commit でも該当すれば push しない)。判定の正本は
-`personal-review-request` の「レビュアーの決定」と ai-trailer gate で、ここでは push 前の消費側検査
-として同じ規則を当てる。通ったら:
+確認する (欠落 / 混在は `Blocked at: trailer`。1 commit でも該当すれば push しない。commit が
+0 件なら push するものが無いので同じく停止)。判定の正本は `personal-review-request` の「レビュアーの
+決定」と ai-trailer gate で、ここでは push 前の消費側検査として同じ規則を当てる。通ったら:
 
 ```sh
 git -C "$worktree" push -u origin "$branch"
@@ -173,7 +181,9 @@ title / body は orchestrator が packet から書く (一時 file は repositor
 
 - **未起動 (`launch-path`)**: Next step に run script の path (shell literal) と run dir を書く。人が
   自分の terminal で実行したあと、caller は `done.txt` (nonce 一致・`exit=0`) と空でない `result.md`
-  を確認してから §7 以降を続ける。端末に出た sentinel や口頭報告だけで完了とみなさない。
+  を確認してから §8 (転記) 以降を続ける (pane は無いので §7 の pane の後始末は行わない。空振り
+  なら §7 の再実行規則どおり、新しい nonce の run script を人に 1 回だけ渡す)。端末に出た sentinel
+  や口頭報告だけで完了とみなさない。
 - **起動済み (`RUNNING`)**: worker はまだ生きている。run script を再実行させない。Next step は
   「pane <id> を見て続行か中断かを決める」だけ。続行なら人が pane を監視して `done.txt` を待つ。
   中断なら人が pane の process を止めてから §8 の退避に進む。

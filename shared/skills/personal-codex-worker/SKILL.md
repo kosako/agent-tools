@@ -158,7 +158,9 @@ worker の最終 message が「完了」で、`依頼` の受け入れ条件を�
 1. **trailer 検査**: PR に含まれる追加 commit (fetch 済みの `origin/main` との merge-base から
    `HEAD` まで。local の main を base にしない) の trailer が **すべて Codex のみ** (Claude 系の
    trailer が 1 つも無く、trailer 欠落も無い) であることを確認する。混在 / 欠落なら push せず
-   `Blocked at: trailer` (author 交代は新 branch + 新 PR)。
+   `Blocked at: trailer` (author 交代は新 branch + 新 PR)。検査そのものができない (fetch / merge-base /
+   log の失敗、base OID が取れない、commit が 0 件) ときも push せず `Blocked at: trailer` (別の base
+   に fallback しない)。
 2. push して PR を作る (title / body は packet の `依頼` と `結果` から orchestrator が書く。worker の
    本文をそのまま貼らない)。
 3. packet に `pr:` と `state: review` を入れる。review は `personal-review-request` に渡す
