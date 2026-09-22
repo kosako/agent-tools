@@ -97,8 +97,11 @@ module CodexWorkerPreflight
   REPO_SELECTING_ENV = %w[
     GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY
     GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CEILING_DIRECTORIES GIT_NAMESPACE
-    GIT_DISCOVERY_ACROSS_FILESYSTEM
+    GIT_DISCOVERY_ACROSS_FILESYSTEM GIT_CONFIG GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM
+    GIT_CONFIG_NOSYSTEM GIT_CONFIG_COUNT
   ].freeze
+  # `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` は個数が動くので prefix で見る。
+  REPO_SELECTING_ENV_PREFIX = %w[GIT_CONFIG_KEY_ GIT_CONFIG_VALUE_].freeze
 
   Blocked = Class.new(StandardError)
 
@@ -197,7 +200,9 @@ module CodexWorkerPreflight
   # worker を動かす clone の検査。満たさなければ ArgumentError (exit 2) で、launch argv を作らない。
   # 返すのは `--add-dir` に渡す git dir の物理 path。
   def validate_clone(path)
-    set_env = REPO_SELECTING_ENV.select { |v| ENV.key?(v) }
+    set_env = REPO_SELECTING_ENV.select { |v| ENV.key?(v) } +
+              ENV.keys.select { |k| REPO_SELECTING_ENV_PREFIX.any? { |pre| k.start_with?(pre) } }
+    set_env = set_env.uniq.sort
     unless set_env.empty?
       raise ArgumentError, "clone: repository を選ぶ環境変数が立っています (検査と起動がずれる): " \
         "#{set_env.join(', ')}"
@@ -247,12 +252,35 @@ module CodexWorkerPreflight
     unless clone_common
       raise ArgumentError, "clone: clone の git 管理領域を確認できません: #{path}"
     end
-    if self_common == clone_common
-      raise ArgumentError, "clone: orchestrator 自身の Git 管理領域は渡せません " \
-        "(main / その linked worktree は不可)"
+    # 等値だけでなく **包含**も拒否する。submodule の中から superproject を渡すと
+    # self_common (`<super>/.git/modules/<sub>`) は clone_common (`<super>/.git`) の内側にあり、
+    # 等値検査だけでは通ってしまう (実測)。開ける git_dir が自分の管理領域を含む形も同じ。
+    # (`git_dir` は上の検査で clone_common と同じ dir に決まっているので、ここでは common dir の
+    #  2 方向だけを見る)
+    if contains_path?(clone_common, self_common) || contains_path?(self_common, clone_common)
+      raise ArgumentError, "clone: orchestrator 自身の Git 管理領域を含みます " \
+        "(main / linked worktree / submodule の親子は不可)"
+    end
+
+    # Git が認識する worktree root が検査した root と一致すること。`core.worktree` で作業ツリーを
+    # すげ替えた repository と bare repository をここで落とす (実測: repo-local な core.worktree は
+    # `--show-toplevel` を別 dir にする / bare は worktree 無しで失敗する)。
+    toplevel_out = run_capture(["git", "-C", root, "rev-parse", "--path-format=absolute",
+                                "--show-toplevel"]).to_s.strip
+    toplevel = toplevel_out.empty? ? nil : real_path(toplevel_out)
+    unless toplevel == root
+      raise ArgumentError, "clone: Git が使う作業ツリーが clone と一致しません " \
+        "(core.worktree / bare repository は不可): #{path}"
     end
 
     [root, git_dir]
+  end
+
+  # `parent` が `child` を含む (同一を含む) か。path component 単位で見る。
+  def contains_path?(parent, child)
+    return false unless parent && child
+
+    child == parent || child.start_with?(parent.end_with?("/") ? parent : parent + "/")
   end
 
   # repository の common git dir (worktree を跨いで同じ object store を指す) の物理 path。

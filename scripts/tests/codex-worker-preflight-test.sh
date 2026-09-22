@@ -235,15 +235,16 @@ model = "CANARY-PROFILE-model"
 EOF
 
 # fixture 用の git 環境を隔離する (実環境の hook / identity を継承しない。commit は fixture の
-# 都合であって gate の検証ではないため)。
-GIT_CONFIG_SYSTEM=/dev/null
-export GIT_CONFIG_SYSTEM
-GIT_CONFIG_GLOBAL="$tmp/gitconfig"
-export GIT_CONFIG_GLOBAL
-git config --file "$GIT_CONFIG_GLOBAL" user.name test
-git config --file "$GIT_CONFIG_GLOBAL" user.email test@example.com
-git config --file "$GIT_CONFIG_GLOBAL" init.defaultBranch main
-git config --file "$GIT_CONFIG_GLOBAL" core.hooksPath /dev/null
+# 都合であって gate の検証ではないため)。**GIT_CONFIG_* は使わない**: preflight がそれらを
+# 「repository を選ぶ環境変数」として拒否するので、隔離は HOME の差し替えで行う。
+HOME="$tmp/git-home"
+export HOME
+mkdir -p "$HOME"
+git config --global user.name test
+git config --global user.email test@example.com
+git config --global init.defaultBranch main
+git config --global core.hooksPath /dev/null
+git config --global protocol.file.allow always
 
 # worker 用 clone の代わり (git dir が directory の普通の repository)。orchestrator 自身の
 # repository ではないので検査を通る。
@@ -633,6 +634,77 @@ set -e
 [ "$rc" -eq 2 ] || fail "repository の外からの実行は exit 2 (rc=$rc): $out"
 echo "$out" | grep -q "orchestrator の repository を確認できません" || fail "確認不能の理由で落ちるべき: $out"
 case "$out" in *"--add-dir"*) fail "確認不能で launch argv を出してはいけない: $out" ;; esac
+
+# (l) submodule の中から superproject を渡す: common dir は等値でないが **包含**している
+submain="$clone_cases_dir/super"
+git init -q "$submain"
+git -C "$submain" commit -q --allow-empty -m base
+subsrc="$clone_cases_dir/subsrc"
+git init -q "$subsrc"
+git -C "$subsrc" commit -q --allow-empty -m s
+git -C "$submain" submodule add -q "$subsrc" sub 2>/dev/null
+set +e
+out=$(cd "$submain/sub" && env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" \
+  --codex-home "$home" --clone "$submain" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "submodule から superproject は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "自身の Git 管理領域を含みます" || fail "包含の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "包含する形で launch argv を出してはいけない: $out" ;; esac
+
+# (l2) 逆向きの包含: orchestrator の Git 管理領域の **内側** に作られた repository も渡せない
+nested="$selfrepo/.git/nested-clone"
+git init -q "$nested"
+git -C "$nested" commit -q --allow-empty -m n
+set +e
+out=$(cd "$selfrepo" && env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" \
+  --codex-home "$home" --clone "$nested" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "自分の Git 管理領域の内側の repository は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "自身の Git 管理領域を含みます" || fail "包含の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "内側の repository で launch argv を出してはいけない: $out" ;; esac
+
+# (m) core.worktree で作業ツリーをすげ替えた repository は渡せない (bare もここで落ちる)
+wtswap="$clone_cases_dir/worktree-swapped"
+git init -q "$wtswap"
+git -C "$wtswap" commit -q --allow-empty -m c
+git -C "$wtswap" config core.worktree "$submain"
+set +e
+out=$(pf_clone_rc "$wtswap")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "core.worktree をすげ替えた clone は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "作業ツリーが clone と一致しません" || fail "worktree 不一致の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "worktree 不一致で launch argv を出してはいけない: $out" ;; esac
+git -C "$wtswap" config --unset core.worktree
+
+# (n) GIT_CONFIG_* (config を注入する経路) も拒否する
+set +e
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.worktree \
+  GIT_CONFIG_VALUE_0="$submain" PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" --clone "$clone" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "GIT_CONFIG_* は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "GIT_CONFIG_KEY_0" || fail "動的な GIT_CONFIG_KEY_<n> も名指しで落とすべき: $out"
+
+# (o) clone_root は **物理 path** を返す (symlink と .. を含む入力を canonical 化する)
+linkdir="$clone_cases_dir/linkdir"
+mkdir -p "$linkdir/real"
+ln -s "$clone" "$linkdir/link"
+tricky="$linkdir/link/../../clone"   # symlink と .. の組み合わせ
+set +e
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" \
+  --clone "$clone/." --json 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "末尾 /. の clone は通るべき (rc=$rc): $out"
+printf '%s' "$out" | ruby -rjson -e '
+j = JSON.parse(STDIN.read)
+root = ARGV[0]
+abort "clone_root は物理 path" unless j["clone_root"] == root
+abort "clone_git_dir は clone_root の直下" unless j["clone_git_dir"] == File.join(root, ".git")
+' "$(cd -P "$clone" && pwd -P)" || fail "clone_root が canonical でない: $out"
 
 # (f) 正しい clone: --add-dir はその clone の git dir 1 つだけで、main の path が現れない
 out=$(run_pf --json)
