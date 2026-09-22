@@ -146,8 +146,10 @@ worker 委譲時の `pull` は orchestrator が main repository 側で行い、�
   他 author、marker 無し・破損、別 Issue の写しは採用しない。payload に行頭 `## ` や HTML
   comment がある写し、結果の entry 見出しが規約の形でない写しも除外する。採用できる写しが
   1 件もなければ「写しがありません」で exit 1、packet は変更しない。
-- `結果` は採用した全コメントを `published` の古い順に追記する。同じ entry 見出しが既に
-  あれば追記しない (local を優先し、取り込み済み entry の本文も書き換えない)。
+- `結果` は採用した全コメントを `published` の古い順に追記する。entry は見出しと本文で
+  識別する。見出しが同じでも本文が異なれば別 entry として追記し、local に同じ見出しの
+  複数 entry があっても保持する。見出し・本文が一致する entry は、HTML comment 除去と
+  前後空白の strip をした本文が一致するときだけ重複として追記しない。
 - `次の入口` は最新の写しの `published` が local より新しければ上書きする。local に
   `published` がなければ写しを採用し、同時刻・古い写しでは local を保つ。state / worker も
   同じ判断で更新する。最新の写しに次の入口がない場合は空にする。
@@ -155,9 +157,10 @@ worker 委譲時の `pull` は orchestrator が main repository 側で行い、�
   本文から起こす。Issue 本文の行頭 `## ` は 4 空白で字下げし、packet の節境界と区別する。
   本文が withhold されていれば exit 2 で止める。
 - title / branch / pr は既存 local を保持する。新規 title は Issue の title、state / worker は
-  最新の写しから取る。`updated` と `published` はそれぞれ local の日時と最新の写しの
-  `published` の大きい方にする (新規は両方とも写しの日時)。local の未 publish の更新日時は
-  巻き戻さない。
+  最新の写しから取る。`updated` は local の `updated` と最新写しの `published` の大きい方、
+  `published` は採用した最新写しの日時 (同時刻・古い写しなら local の日時) にする。新規 packet
+  は両方とも写しの日時にする。local が未 publish (`published` 無し、または `updated > published`)
+  なら、その状態を pull 後も保つ。必要なら `updated` を `published` より 1 秒先に置く。
 - 書き込み前に frontmatter と 3 節を読み直して検証する。壊れた local packet、reader 不在・失敗、
   不正な envelope は exit 2。既存 file は一時 file を書き切ってから差し替え、新規 file は
   内容を確定してから作成する。symlink の packet dir / file は更新しない。

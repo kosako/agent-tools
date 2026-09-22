@@ -9,13 +9,16 @@ require "rbconfig"
 # --mutations は同じ CLI assertions を一条件ずつ壊した source に当てる。通常の CI では
 # assertions だけを走らせ、変異検証は実装 round で明示実行する。
 source = File.expand_path(ARGV.fetch(0))
-if ARGV[1] == "--mutations"
+safe_gh_source = File.expand_path(ARGV.fetch(1))
+if ARGV[2] == "--mutations"
   mutations = {
-    "other author" => ['comment["author_trust"] == "self"', 'true'],
+    "other author" => ['if classify(c["user"], me) == "self"', 'if true'],
     "missing marker" => ['mark = COPY_MARKER_RE.match(lines.shift.to_s)',
                          'mark = COPY_MARKER_RE.match(lines.shift.to_s) || COPY_MARKER_RE.match("<!-- agent-packet issue=7 published=2026-09-22T00:00:00Z -->\n")'],
     "broken marker" => ['marker(issue, at) == mark[0].chomp', 'true'],
-    "duplicate results" => ['next if known.key?(heading)', '# mutation: no deduplication'],
+    "duplicate results" => ['publishable(known_entry, "結果 entry") == normalized', 'true'],
+    "issue number type" => ['issue_number_matches?(data["number"], issue)', 'data["number"] == issue'],
+    "unpublished local" => ['updated_at = published_at + 1', 'updated_at = published_at'],
     "request overwrite" => ['request = secs["依頼"]', 'request = nil'],
     "stale next entry" => ['latest.published > local.published', 'true'],
     "remote H2" => [' || lines.any? { |l| l.start_with?("## ") }', ''],
@@ -26,12 +29,18 @@ if ARGV[1] == "--mutations"
   original = File.read(source)
   Dir.mktmpdir("packet-mutations-") do |dir|
     mutations.each do |label, (from, to)|
-      from = from.gsub('\\n', "\n") if label == "invalid frontmatter"
-      to = to.gsub('\\n', "\n") if label == "invalid frontmatter"
-      abort "FAIL: mutation anchor missing: #{label}" unless original.include?(from)
-      mutant = File.join(dir, "personal-packet.rb")
-      File.write(mutant, original.sub(from, to))
-      _out, err, status = Open3.capture3(RbConfig.ruby, __FILE__, mutant)
+      if label == "invalid frontmatter"
+        from = from.gsub('\\n', "\n")
+        to = to.gsub('\\n', "\n")
+      end
+      safe_mutation = label == "other author"
+      mutation_source = safe_mutation ? File.read(safe_gh_source) : original
+      abort "FAIL: mutation anchor missing: #{label}" unless mutation_source.include?(from)
+      mutant = File.join(dir, safe_mutation ? "personal-safe-gh.rb" : "personal-packet.rb")
+      File.write(mutant, mutation_source.sub(from, to))
+      packet_variant = safe_mutation ? source : mutant
+      reader_variant = safe_mutation ? mutant : safe_gh_source
+      _out, err, status = Open3.capture3(RbConfig.ruby, __FILE__, packet_variant, reader_variant)
       abort "FAIL: mutation survived: #{label}" if status.success?
       abort "FAIL: mutation failed outside assertion: #{label}: #{err}" unless err.include?("FAIL:")
       puts "ok: mutation caught: #{label}"
@@ -93,6 +102,9 @@ LOCAL = <<~TEXT
   ### 2026-09-21 worker/codex
   LOCAL-DUPLICATE
 
+  ### 2026-09-21 worker/codex
+  LOCAL-SECOND-SAME-HEADING
+
   ## 次の入口
 
   LOCAL-NEXT
@@ -112,32 +124,49 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   FileUtils.cp(source, packet)
   File.chmod(0o755, packet)
   reader = File.join(deploy, "personal-safe-gh")
-  File.write(reader, <<~'RUBY')
+  FileUtils.cp(safe_gh_source, reader)
+  File.chmod(0o755, reader)
+  trust_file = File.join(deploy, "trust.json")
+  File.write(trust_file, JSON.generate("login" => "fixture-self", "id" => 4242))
+  gh = File.join(deploy, "gh")
+  File.write(gh, <<~'RUBY')
     #!/usr/bin/env ruby
     require "json"
     dir = File.dirname(__FILE__)
-    File.open(File.join(dir, "calls.jsonl"), "a") { |f| f.puts JSON.generate(ARGV) }
+    File.open(File.join(dir, "gh-calls.jsonl"), "a") { |f| f.puts JSON.generate(ARGV) }
     exit 1 if File.exist?(File.join(dir, "fail"))
-    abort "bad argv" unless ARGV[0] == "issue" && %w[view comments].include?(ARGV[1]) && ARGV[2] == "7"
-    print File.read(File.join(dir, "#{ARGV[1]}.json"))
+    if ARGV[0] == "repo" && ARGV[1..2] == %w[view --json]
+      puts "fixture/repo"
+      exit 0
+    end
+    abort "unexpected gh args: #{ARGV.inspect}" unless ARGV[0] == "api"
+    path = ARGV.last
+    fixture = if path == "repos/fixture/repo/issues/7"
+                "issue-rest.json"
+              elsif path == "repos/fixture/repo/issues/7/comments" && ARGV[1..2] == %w[--paginate --slurp]
+                "comments-rest.json"
+              else
+                abort "unexpected endpoint: #{ARGV.inspect}"
+              end
+    print File.read(File.join(dir, fixture))
   RUBY
-  File.chmod(0o755, reader)
-  # raw gh を呼ぶ退行が network に出ないよう必ず失敗する fake を PATH に置く。
-  File.write(File.join(deploy, "gh"), "#!/bin/sh\nexit 99\n")
   File.chmod(0o755, File.join(deploy, "gh"))
   env["PATH"] = deploy + File::PATH_SEPARATOR + ENV.fetch("PATH")
+  env["SAFE_GH_TRUST_FILE"] = trust_file
   run = lambda do |*args|
     Open3.capture3(env, RbConfig.ruby, packet, *args, chdir: repo)
   end
   comments = lambda do |items|
-    data = { "safe_reader_version" => "1", "source" => "issue_comments", "repo" => "fixture/repo",
-             "number" => 7, "comments" => items, "excluded_comments_count" => 1 }
-    File.write(File.join(deploy, "comments.json"), JSON.generate(data))
+    data = items.map do |item|
+      { "user" => { "login" => item["author"], "id" => item["author_trust"] == "self" ? 4242 : 99 },
+        "body" => item["body"] }
+    end
+    data << { "user" => { "login" => "outsider", "id" => 99 }, "body" => "excluded" }
+    File.write(File.join(deploy, "comments-rest.json"), JSON.generate(data))
   end
-  issue_data = { "safe_reader_version" => "1", "source" => "issue", "repo" => "fixture/repo",
-                 "number" => 7, "author_trust" => "self", "body_trust" => "self",
+  issue_data = { "number" => 7, "state" => "open", "user" => { "login" => "fixture-self", "id" => 4242 },
                  "title" => "REMOTE-TITLE #7: example", "body" => "ISSUE-REQUEST\n## 結果\nSAMPLE\n## injected\n$(touch SHELL-BODY)\n" }
-  view_path = File.join(deploy, "view.json")
+  view_path = File.join(deploy, "issue-rest.json")
   File.write(view_path, JSON.generate(issue_data))
   packet_dir = File.join(repo, ".agent-packets")
   path = File.join(packet_dir, "7.md")
@@ -196,7 +225,8 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   assert(secs["依頼"] == Packet.sections(Packet.parse_text(LOCAL, path).body)["依頼"], "local request must be preserved verbatim")
   assert(front.title == "LOCAL-TITLE #7" && front.branch == "feat/7-test" && front.pr == 8, "local metadata preservation")
   assert(secs["結果"].include?("LOCAL-RESULT") && secs["結果"].include?("LOCAL-DUPLICATE"), "local results retained")
-  assert(!secs["結果"].include?("REMOTE-DUPLICATE") && secs["結果"].scan("REMOTE-RESULT").size == 1, "result deduplication")
+  assert(secs["結果"].include?("REMOTE-DUPLICATE") && secs["結果"].scan("REMOTE-RESULT").size == 1, "same heading with distinct body must append")
+  assert(secs["結果"].include?("LOCAL-SECOND-SAME-HEADING"), "local duplicate headings with distinct bodies must be retained")
   assert(secs["結果"].index("LOCAL-RESULT") < secs["結果"].index("REMOTE-RESULT"), "new result must append")
   assert(secs["次の入口"].strip == "REMOTE-NEXT", "newest published wins independent of comment order")
   _out, err, status = run.call("pull", "7")
@@ -207,7 +237,9 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   File.write(path, unpublished)
   _out, err, status = run.call("pull", "7")
   assert(status.success?, "unpublished local with existing request: #{err}")
-  assert(Packet.sections(Packet.parse(path).body)["次の入口"].strip == "REMOTE-NEXT", "unpublished local accepts copy")
+  front = Packet.parse(path)
+  assert(Packet.sections(front.body)["次の入口"].strip == "REMOTE-NEXT", "unpublished local accepts copy")
+  assert(front.unpublished? && front.updated > front.published, "unpublished local must remain unpublished after pull")
 
   # 同時刻 / 古い写しは次の入口と state/worker を巻き戻さない。未 publish の updated も保持。
   newer_local = LOCAL.sub("published: 2026-09-21", "published: 2026-09-23").sub("updated: 2026-09-21", "updated: 2026-09-24")
@@ -228,7 +260,7 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   _out, err, status = run.call("pull", "7")
   assert(status.success? && File.read(path).include?("ISSUE-REQUEST"), "missing local request: #{err}")
   File.write(path, no_request)
-  File.write(view_path, JSON.generate(issue_data.merge("author_trust" => "other", "body_trust" => "untrusted", "excluded_body" => true)))
+  File.write(view_path, JSON.generate(issue_data.merge("user" => { "login" => "outsider", "id" => 99 })))
   _out, _err, status = run.call("pull", "7")
   assert(status.exitstatus == 2 && File.read(path) == no_request, "withheld Issue body must not be reconstructed")
   File.write(view_path, JSON.generate(issue_data))
@@ -276,8 +308,8 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   _out, _err, status = run.call("pull", "7")
   assert(status.exitstatus == 2 && File.read(path) == broken_local, "local H2 must fail before write")
   File.write(path, LOCAL)
-  ["{", JSON.generate({}), JSON.generate({ "safe_reader_version" => "1", "source" => "issue_comments", "repo" => "fixture/repo", "number" => 8, "comments" => [] })].each do |body|
-    File.write(File.join(deploy, "comments.json"), body)
+  ["{"].each do |body|
+    File.write(File.join(deploy, "comments-rest.json"), body)
     _out, _err, status = run.call("pull", "7")
     assert(status.exitstatus == 2 && File.read(path) == LOCAL, "invalid envelope must fail before write")
   end
@@ -303,7 +335,7 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   File.unlink(path)
 
   # 引数の負例と argv の形。実行文字列への inline 展開があれば shell sentinel が作られる。
-  calls_path = File.join(deploy, "calls.jsonl")
+  calls_path = File.join(deploy, "gh-calls.jsonl")
   calls = File.readlines(calls_path)
   [["pull"], ["pull", "0"], ["pull", "seven"], ["pull", "7", "8"],
    ["pull", "7", "--repo", "-x/y"], ["pull", "7", "--repo"],
@@ -313,7 +345,7 @@ Dir.mktmpdir("packet-pull-") do |tmp|
     assert(status.exitstatus == 2, "invalid pull args must return exit 2")
   end
   assert(File.readlines(calls_path) == calls, "argument failures must not call reader")
-  assert(calls.map { |l| JSON.parse(l) }.include?(["issue", "comments", "7", "--repo", "fixture/repo"]), "reader argv contract")
+  assert(calls.map { |l| JSON.parse(l) }.include?(%w[api --paginate --slurp repos/fixture/repo/issues/7/comments]), "real safe-gh REST argv contract")
   assert(Dir.glob(File.join(repo, "SHELL-*")).empty?, "runtime data must not execute as shell")
 end
 puts "ok: packet pull self-test"

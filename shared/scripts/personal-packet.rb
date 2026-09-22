@@ -539,7 +539,7 @@ module Packet
     data = JSON.parse(out)
     source = verb == "comments" ? "issue_comments" : "issue"
     unless data.is_a?(Hash) && data["safe_reader_version"] == "1" && data["source"] == source &&
-           data["number"] == issue && data["repo"].is_a?(String) && data["repo"].match?(REPO_RE) &&
+           issue_number_matches?(data["number"], issue) && data["repo"].is_a?(String) && data["repo"].match?(REPO_RE) &&
            (repo.nil? || data["repo"].casecmp(repo).zero?)
       raise Error, "#{READER_NAME} の envelope が対象 Issue と一致しません"
     end
@@ -551,20 +551,24 @@ module Packet
     raise Error, "#{READER_NAME} を起動できません"
   end
 
+  # safe-gh keeps argv's decimal number as a string for comments, while `issue view`
+  # returns GitHub's integer. Accept either representation without accepting aliases.
+  def issue_number_matches?(value, issue)
+    value == issue || (value.is_a?(String) && value == issue.to_s)
+  end
+
   # local の comment 案内は保持する。写しは publish が comment を除くため、entry 前に
-  # 空白以外があれば不正。規約どおりの見出しだけを重複判定の key にする。
+  # 空白以外があれば不正。見出しと publish と同じ正規化後の本文で重複を判定する。
   def result_entries(text)
-    entries = {}
+    entries = []
     preamble = +""
     current = nil
     text.each_line do |line|
       if line.match?(ENTRY_RE)
-        current = line.rstrip
-        raise Error, "結果の entry 見出しが重複しています" if entries.key?(current)
-
-        entries[current] = +line
+        current = [line.rstrip, +line]
+        entries << current
       elsif current
-        entries[current] << line
+        current[1] << line
       else
         preamble << line
       end
@@ -635,23 +639,30 @@ module Packet
     known = result_entries(result)
     copies.each do |copy|
       copy.results.each do |heading, entry|
-        next if known.key?(heading)
+        normalized = publishable(entry, "結果 entry")
+        next if known.any? { |known_heading, known_entry| known_heading == heading &&
+          publishable(known_entry, "結果 entry") == normalized }
 
         result << "\n" until result.empty? || result.end_with?("\n\n")
         result << entry
-        known[heading] = entry
+        known << [heading, entry]
       end
     end
     latest = copies.last
     newer = !local || !local.published || latest.published > local.published
     following = newer ? latest.next_entry : secs.fetch("次の入口", "")
+    published_at = newer ? latest.published : local.published
+    updated_at = local ? [local.updated, latest.published].max : latest.published
+    if local && local.unpublished? && updated_at <= published_at
+      updated_at = published_at + 1
+    end
     data = {
       "issue" => issue,
       "title" => local ? local.title : required_string(issue_data, "title", "Issue"),
       "state" => newer ? latest.state : local.state,
       "worker" => newer ? latest.worker : local.worker,
-      "updated" => (local ? [local.updated, latest.published].max : latest.published).iso8601,
-      "published" => (newer ? latest.published : local.published).iso8601
+      "updated" => updated_at.iso8601,
+      "published" => published_at.iso8601
     }
     data["branch"] = local.branch if local && local.branch
     data["pr"] = local.pr if local && local.pr
