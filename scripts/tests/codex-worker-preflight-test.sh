@@ -25,18 +25,20 @@ P = CodexWorkerPreflight
 
 # 定義を固定値で pin する (実装側から marker / feature / key を 1 つ削ると検知される)。
 check("必須 marker の一覧",
-      P::REQUIRED_HELP_MARKERS.keys.sort == ["config override", "feature disable", "result file", "rules ignore",
-                                              "sandbox flag", "stdin prompt", "user config ignore",
-                                              "workspace-write mode"])
+      P::REQUIRED_HELP_MARKERS.keys.sort == ["config override", "extra writable dir", "feature disable",
+                                              "result file", "rules ignore", "sandbox flag", "stdin prompt",
+                                              "user config ignore", "workspace-write mode"])
 check("必須 marker の文字列",
-      P::REQUIRED_HELP_MARKERS.values.sort == ["--config", "--disable", "--ignore-rules", "--ignore-user-config",
-                                                "--output-last-message", "--sandbox", "`-`", "workspace-write"])
+      P::REQUIRED_HELP_MARKERS.values.sort == ["--add-dir", "--config", "--disable", "--ignore-rules",
+                                                "--ignore-user-config", "--output-last-message", "--sandbox",
+                                                "`-`", "workspace-write"])
 check("disable する feature の一覧", P::DISABLE_FEATURES == %w[apps computer_use browser_use])
 check("再指定する key の一覧", P::MODEL_KEYS == { "--model" => "model", "--effort" => "model_reasoning_effort" })
 
 HELP_OK = <<~H
   Options:
     -c, --config <key=value>
+        --add-dir <DIR>
         --disable <FEATURE>
     -s, --sandbox <SANDBOX_MODE>
             [possible values: read-only, workspace-write, danger-full-access]
@@ -49,10 +51,11 @@ H
 check("help に全 marker があれば missing なし", P.missing_help_markers(HELP_OK).empty?)
 { "--config" => "config override", "--disable" => "feature disable", "--sandbox" => "sandbox flag",
   "workspace-write" => "workspace-write mode", "--ignore-user-config" => "user config ignore",
-  "--ignore-rules" => "rules ignore", "--output-last-message" => "result file", "`-`" => "stdin prompt" }.each do |text, name|
+  "--ignore-rules" => "rules ignore", "--output-last-message" => "result file", "--add-dir" => "extra writable dir",
+  "`-`" => "stdin prompt" }.each do |text, name|
   check("#{text} が無いと #{name} が missing", P.missing_help_markers(HELP_OK.sub(text, "")) == [name])
 end
-check("nil help は 8 marker すべて missing", P.missing_help_markers(nil).size == 8)
+check("nil help は 9 marker すべて missing", P.missing_help_markers(nil).size == 9)
 
 check("version を読む", P.parse_version("codex-cli 0.154.0\n") == "0.154.0")
 check("version 形でなければ nil", P.parse_version("something else").nil?)
@@ -177,6 +180,7 @@ cat > "$tmp/exec-help.txt" <<'EOF'
 Run Codex non-interactively
 Options:
   -c, --config <key=value>
+      --add-dir <DIR>
       --disable <FEATURE>
   -s, --sandbox <SANDBOX_MODE>
           [possible values: read-only, workspace-write, danger-full-access]
@@ -411,7 +415,8 @@ done
 i=0
 for pair in "--config|config override" "--disable <FEATURE>|feature disable" "--sandbox|sandbox flag" \
             "workspace-write|workspace-write mode" "--ignore-user-config|user config ignore" \
-            "--ignore-rules|rules ignore" "--output-last-message|result file" "\`-\`|stdin prompt"; do
+            "--ignore-rules|rules ignore" "--output-last-message|result file" \
+            "--add-dir|extra writable dir" "\`-\`|stdin prompt"; do
   i=$((i + 1))
   text=${pair%%|*}
   name=${pair#*|}

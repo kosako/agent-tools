@@ -69,6 +69,7 @@ module CodexWorkerPreflight
     "user config ignore" => "--ignore-user-config",
     "rules ignore" => "--ignore-rules",
     "result file" => "--output-last-message",
+    "extra writable dir" => "--add-dir",
     "stdin prompt" => "`-`",
   }.freeze
 
