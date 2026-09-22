@@ -16,20 +16,27 @@
 # - exit 1 (BLOCKED): Codex の session 内 (CODEX_SANDBOX / CODEX_THREAD_ID) から呼ばれた
 #   (委譲は Claude → Codex の一方通行) / codex CLI が無い・版が読めない / `codex exec --help` に
 #   要る flag が無い / `codex features list` に disable 対象の feature 行が無い
-# - exit 2 (検査できない): usage / Codex home の config で section header を解釈できない
-#   (quoted な id、array table、不正な id) / 下位 command の出力を読めない
+# - exit 2 (検査できない): usage / Codex home の config を安全に解釈できない (header を tokenize
+#   できない、mcp_servers の id が bare key でない、`[mcp_servers.<id>]` table 以外の表記
+#   (dotted key / inline table / 親 table 直下の key) で server が定義されている、複数行文字列が
+#   閉じていない) / 下位 command の出力を読めない
 # - exit 0: 起動可。stdout に検査結果と launch argv (`--json` なら JSON 1 個)
+#
+# config の読み方は行単位の最小解釈で、読むのは mcp_servers の section id と apps の tool ごとの
+# approval_mode だけ。TOML parser を持たないので、server の列挙が欠けうる表記は「読める」に
+# 倒さず exit 2 にする。mcp_servers 以外の section は quoted な id でも読み飛ばす (個人の config
+# には plugins の quoted section がある)。
 #
 # 検査しないこと (honest): 実際の tool surface。起動して model に列挙させないと分からないので、
 # 本 script は決定的に読めるものだけを見る。surface の実測は acceptance probe に置く。
 # 副作用ゼロ・network なし。読むのは codex / herdr の help・status・feature 一覧と、Codex home
 # の config のみ。値は argv 配列で下位 command に渡し、shell を介さない。出力に config の
-# 値そのもの (path / URL / 引数) は載せず、section id と件数だけを出す。
+# 値そのもの (path / URL / policy 等の生値) は載せず、section id と件数だけを出す。
 
 require "json"
 
 module CodexWorkerPreflight
-  VERSION = "1"
+  VERSION = "2"
 
   # 起動時に `--disable` で外す feature。`codex features list` に行が無ければ BLOCKED
   # (存在しない feature を disable しようとして CLI が止まる形へ倒さない)。
@@ -46,8 +53,9 @@ module CodexWorkerPreflight
   }.freeze
 
   BARE_KEY_RE = /\A[A-Za-z0-9_-]+\z/
-  STRING_KV_RE = /\A\s*([A-Za-z0-9_-]+)\s*=\s*"([^"]*)"\s*(?:#.*)?\z/
-  TOP_LEVEL_KEYS = %w[approval_policy approvals_reviewer sandbox_mode].freeze
+  # key 行: bare / dotted bare / quoted な key と `=` 以降の生の値。
+  KEY_LINE_RE = /\A\s*([A-Za-z0-9_-]+(?:\s*\.\s*[A-Za-z0-9_-]+)*|"(?:[^"\\]|\\.)*"|'[^']*')\s*=\s*(.*)\z/
+  MULTILINE_DELIMS = ['"""', "'''"].freeze
   AUTO_APPROVE_MODES = %w[approve auto].freeze
 
   Blocked = Class.new(StandardError)
@@ -89,55 +97,126 @@ module CodexWorkerPreflight
     features
   end
 
-  # Codex home の config.toml を行単位で読む。使うのは mcp_servers の section id、apps の
-  # tool ごとの approval_mode、top-level の 3 key だけ。解釈できない header は fail-closed。
+  # Codex home の config.toml を行単位で読む。返すのは mcp_servers の section id と、apps の
+  # tool ごとの approval_mode が自動承認になっている件数だけ。
   def parse_config(text)
-    result = { mcp_servers: [], apps_auto_approve_tools: 0,
-               approval_policy: nil, approvals_reviewer: nil, sandbox_mode: nil }
-    section = nil # nil = top-level、それ以外は dotted path の segment 配列
+    result = { mcp_servers: [], apps_auto_approve_tools: 0 }
+    section = nil   # nil = top-level、それ以外は [[name, :bare|:quoted], ...]
+    multiline = nil # 複数行文字列の閉じ delimiter を待っている間だけ non-nil
     text.each_line do |raw|
-      line = raw.chomp
-      next if line.strip.empty? || line.lstrip.start_with?("#")
-
-      if line.lstrip.start_with?("[[")
-        raise ConfigError, "config の array table ([[...]]) は未対応です"
-      end
-
-      if (m = /\A\s*\[([^\]]*)\]\s*(?:#.*)?\z/.match(line))
-        section = parse_section_path(m[1])
-        result[:mcp_servers] << section[1] if section.first == "mcp_servers"
+      line = raw.chomp.sub(/\r\z/, "")
+      if multiline
+        multiline = nil if line.include?(multiline)
         next
       end
 
-      next unless (kv = STRING_KV_RE.match(line))
+      stripped = line.strip
+      next if stripped.empty? || stripped.start_with?("#")
 
-      key, value = kv[1], kv[2]
-      if section.nil?
-        result[key.to_sym] = value if TOP_LEVEL_KEYS.include?(key)
-      elsif apps_tool_section?(section) && key == "approval_mode" && AUTO_APPROVE_MODES.include?(value)
-        result[:apps_auto_approve_tools] += 1
+      if stripped.start_with?("[")
+        section = parse_section_header(stripped)
+        register_mcp_section(result, section)
+        next
       end
+
+      multiline = inspect_key_line(result, section, line)
     end
-    result[:mcp_servers] = result[:mcp_servers].uniq
+    raise ConfigError, "config の複数行文字列が閉じていません" if multiline
+
+    result[:mcp_servers].uniq!
     result
   end
 
-  # `[a.b.c]` の中身を segment 配列にする。quoted な segment と不正な id は fail-closed
-  # (`-c mcp_servers.<id>.enabled=false` に安全に埋められる id だけを通す)。
-  def parse_section_path(inner)
-    path = inner.strip
-    raise ConfigError, "config の quoted な section id は未対応です" if path.include?('"') || path.include?("'")
+  # `[a.b."c"]` を segment の配列にする。tokenize できない header は fail-closed。
+  def parse_section_header(line)
+    raise ConfigError, "config の array table ([[...]]) は未対応です" if line.start_with?("[[")
 
-    segments = path.split(".", -1)
-    if segments.empty? || segments.any? { |s| !s.match?(BARE_KEY_RE) }
-      raise ConfigError, "config の section header を解釈できません"
+    m = /\A\[(.*)\]\s*(?:#.*)?\z/.match(line)
+    raise ConfigError, "config の section header を解釈できません" unless m
+
+    tokenize_key_path(m[1])
+  end
+
+  # dotted key path を [[name, :bare|:quoted], ...] にする。segment は bare / basic string /
+  # literal string。それ以外 (空 segment、閉じていない引用、末尾の dot) は fail-closed。
+  def tokenize_key_path(path)
+    s = path.strip
+    raise ConfigError, "config の section header を解釈できません" if s.empty?
+
+    segments = []
+    pos = 0
+    loop do
+      rest = s[pos..-1]
+      if (m = /\A([A-Za-z0-9_-]+)/.match(rest))
+        segments << [m[1], :bare]
+      elsif (m = /\A"((?:[^"\\]|\\.)*)"/.match(rest))
+        segments << [m[1], :quoted]
+      elsif (m = /\A'([^']*)'/.match(rest))
+        segments << [m[1], :quoted]
+      else
+        raise ConfigError, "config の section header を解釈できません"
+      end
+      pos += m[0].size
+      rest = s[pos..-1]
+      break if rest.empty?
+
+      dot = /\A\s*\.\s*/.match(rest)
+      raise ConfigError, "config の section header を解釈できません" if dot.nil? || dot[0].size == rest.size
+
+      pos += dot[0].size
     end
-
     segments
   end
 
+  # `[mcp_servers.<id>]` だけを server として数える。親 table `[mcp_servers]` は server ではない。
+  # id が quoted なら `-c mcp_servers.<id>.enabled=false` に安全に埋められないので fail-closed。
+  def register_mcp_section(result, segments)
+    return unless segments.first == ["mcp_servers", :bare]
+    return if segments.size == 1
+
+    id, kind = segments[1]
+    raise ConfigError, "config の mcp_servers の id は bare key だけ対応しています" unless kind == :bare
+
+    result[:mcp_servers] << id
+  end
+
   def apps_tool_section?(segments)
-    segments.size == 4 && segments[0] == "apps" && segments[2] == "tools"
+    segments.size == 4 && segments[0][0] == "apps" && segments[2][0] == "tools"
+  end
+
+  # key 行を見て、(1) server 列挙が欠けうる表記 (top-level の `mcp_servers.…` / `mcp_servers = {…}`、
+  # 親 table `[mcp_servers]` 直下の key) は fail-closed、(2) apps tool の approval_mode を数え、
+  # (3) 複数行文字列が開いたらその delimiter を返す (呼び出し側が閉じるまで読み飛ばす)。
+  def inspect_key_line(result, section, line)
+    m = KEY_LINE_RE.match(line)
+    return nil unless m
+
+    key, value = m[1], m[2]
+    if section.nil? && key.match?(/\Amcp_servers(\s*\.|\z)/)
+      raise ConfigError, "config の mcp_servers は [mcp_servers.<id>] table 以外の表記に未対応です"
+    end
+    if section == [["mcp_servers", :bare]]
+      raise ConfigError, "config の mcp_servers は [mcp_servers.<id>] table 以外の表記に未対応です"
+    end
+
+    if (delim = multiline_open(value))
+      return delim
+    end
+
+    if section && apps_tool_section?(section) && key == "approval_mode" &&
+       (sv = /\A"([^"]*)"/.match(value)) && AUTO_APPROVE_MODES.include?(sv[1])
+      result[:apps_auto_approve_tools] += 1
+    end
+    nil
+  end
+
+  # 値が複数行文字列を開いて同じ行で閉じていなければ、その delimiter を返す。
+  def multiline_open(value)
+    MULTILINE_DELIMS.each do |delim|
+      next unless value.start_with?(delim)
+      return delim unless value[delim.size..-1].include?(delim)
+    end
+    nil
   end
 
   def herdr_state
@@ -201,7 +280,7 @@ module CodexWorkerPreflight
     raise Blocked, "capability: features list に無い feature (disable できない): #{absent.join(', ')}" unless absent.empty?
 
     config_path = File.join(codex_home(opts[:codex_home]), "config.toml")
-    config = File.file?(config_path) ? parse_config(File.read(config_path, encoding: "UTF-8")) : parse_config("")
+    config = parse_config(File.file?(config_path) ? File.read(config_path, encoding: "UTF-8") : "")
 
     {
       status: "ok",
@@ -209,9 +288,6 @@ module CodexWorkerPreflight
       disable_features: DISABLE_FEATURES.dup,
       mcp_servers: config[:mcp_servers],
       apps_auto_approve_tools: config[:apps_auto_approve_tools],
-      approval_policy: config[:approval_policy],
-      approvals_reviewer: config[:approvals_reviewer],
-      sandbox_mode: config[:sandbox_mode],
       herdr: herdr_state,
       launch_argv: launch_argv(config[:mcp_servers], DISABLE_FEATURES),
     }
@@ -223,9 +299,6 @@ module CodexWorkerPreflight
     puts "disable features: #{r[:disable_features].join(' ')}"
     puts "mcp servers: #{r[:mcp_servers].empty? ? '(none)' : r[:mcp_servers].join(' ')}"
     puts "apps auto-approve tools: #{r[:apps_auto_approve_tools]} (apps は --disable するので起動には影響しない)"
-    puts "approval_policy (config): #{r[:approval_policy] || '(unset)'} (起動時は -c で never に上書き)"
-    puts "approvals_reviewer (config): #{r[:approvals_reviewer] || '(unset)'}"
-    puts "sandbox_mode (config): #{r[:sandbox_mode] || '(unset)'} (起動時は -s workspace-write)"
     puts "herdr: #{r[:herdr]}"
     puts "launch: #{r[:launch_argv].join(' ')}"
   end
