@@ -1,0 +1,27 @@
+schema_version: 1
+name: personal-codex-worker-preflight
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #254 PR-2a の実装 PR で author≠reviewer レビューのうえ承認。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:a8ed5e586b67570d8d1707043fecfb9cb981a62736b344829aa1610898cdeff4
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-codex-worker-preflight.rb
+  format: text
+summary: >-
+  Claude が Codex を worker として委譲起動する前の決定的 preflight (#254)。Codex の session 内から
+  の起動 (非対称) / codex CLI の flag / features list の disable 対象 / Codex home config の
+  mcp_servers 一覧を検査し、connector と MCP を外した起動 argv を出す (exit 0)。capability 不足と
+  非対称は exit 1 (BLOCKED)、config を解釈できなければ exit 2 (fail-closed)。規範の正本は
+  personal-codex-worker skill。
