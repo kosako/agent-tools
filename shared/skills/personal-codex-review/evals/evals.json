@@ -6,12 +6,12 @@
       "id": 0,
       "name": "uncommitted-review-fixes-target-in-brief",
       "prompt": "required cross-review ではなく Codex の second opinion として、今の uncommitted changes をレビューしたい。これは手順確認だけなので実行はせず、安全な invocation と結果の扱いを示して。",
-      "expected_output": "second-opinion only と明示する。codex exec の capability (-s read-only / -c / --ephemeral / -o / stdin -) を先に確認し、review subcommand ではなく codex exec - の custom prompt を使う。brief は file に書いて stdin で渡し、uncommitted mode として git status --porcelain、git diff --cached (staged)、git diff (unstaged)、untracked file で対象を取得させる。diff 本文は brief に埋め込まない。起動は herdr の pane 経由が primary で、結果は -o の result file から読む。GitHub write や repo 修正はしない。",
+      "expected_output": "second-opinion only と明示する。codex exec の capability (-s read-only / -c / -o / stdin -) を先に確認し、review subcommand ではなく codex exec - の custom prompt を使う。brief は file に書いて stdin で渡し、uncommitted mode として git status --porcelain、git diff --cached (staged)、git diff (unstaged)、untracked file で対象を取得させる。diff 本文は brief に埋め込まない。起動は herdr の pane 経由が primary で、結果は -o の result file から読む。GitHub write や repo 修正はしない。",
       "files": [],
       "assertions": [
         {
           "id": "capability-first",
-          "text": "実行前に codex exec の -s read-only / -c / --ephemeral / -o / stdin - の capability を確認している"
+          "text": "実行前に codex exec の -s read-only / -c / -o / stdin - の capability を確認している"
         },
         {
           "id": "custom-prompt-uncommitted",
@@ -260,7 +260,7 @@
       "id": 10,
       "name": "herdr-pane-is-primary-launch-path",
       "prompt": "verified author=claude の base review を実行する手順を示して。herdr status は server running、herdr pane current は現在の pane を返す。実行はしないで。",
-      "expected_output": "herdr 経由を選ぶ。mktemp -d の run dir に brief.md / run.zsh を置き、run.zsh は cd <repo> して codex exec -s read-only -c approval_policy=never --ephemeral -o <run dir>/result.md - < brief.md を実行し、その exit code を CODEX-REVIEW-DONE-<nonce> exit=<rc> として端末と done.txt に書く。herdr pane split --current --direction down --no-focus で pane を作り rename し、herdr pane run で run.zsh を実行、herdr pane wait-output --match で起床し、done.txt の nonce 一致と exit=0、空でない result.md を確認して結果を返す。続行条件を満たしたら herdr pane read の生出力を pane.log に保存し、空でないことを確認してから pane を閉じる。直接起動や dangerous flag は使わない。",
+      "expected_output": "herdr 経由を選ぶ。mktemp -d の run dir に brief.md / run.zsh を置き、run.zsh は cd <repo> して codex exec -s read-only -c approval_policy=never -o <run dir>/result.md - < brief.md を実行し (--ephemeral は付けず、session rollout を Codex 側に残す)、その exit code を CODEX-REVIEW-DONE-<nonce> exit=<rc> として端末と done.txt に書く。herdr pane split --current --direction down --no-focus で pane を作り rename し、herdr pane run で run.zsh を実行、herdr pane wait-output --match で起床し、done.txt の nonce 一致と exit=0、空でない result.md を確認して結果を返す。続行条件を満たしたら herdr pane read の生出力を pane.log に保存し、空でないことを確認してから pane を閉じる。直接起動や dangerous flag は使わない。",
       "files": [],
       "assertions": [
         {
@@ -273,7 +273,7 @@
         },
         {
           "id": "flags-unchanged",
-          "text": "-s read-only / approval_policy never / --ephemeral を維持し、danger-full-access や bypass flag を使っていない"
+          "text": "-s read-only / approval_policy never を維持し、--ephemeral を付けず、danger-full-access や bypass flag を使っていない"
         },
         {
           "id": "pane-closed-on-success",

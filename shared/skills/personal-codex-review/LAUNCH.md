@@ -24,7 +24,7 @@ repo=<repo root の shell literal>
 run=<run dir の shell literal>
 nonce=<nonce の shell literal>
 cd "$repo" || exit 90
-codex exec -s read-only -c approval_policy="never" --ephemeral \
+codex exec -s read-only -c approval_policy="never" \
   -o "$run/result.md" - < "$run/brief.md"
 rc=$?
 printf 'CODEX-REVIEW-DONE-%s exit=%s\n' "$nonce" "$rc" | tee "$run/done.txt"
@@ -35,7 +35,9 @@ exit "$rc"
 `herdr pane wait-output` の起床信号として使い、判定は file で行います。どの経路でも、続行条件は
 「`done.txt` の nonce 一致と `exit=0`」かつ「`result.md` が存在し空でない」の両方です。
 
-`--ephemeral` は Codex 自身の review session state を永続化しないための副作用境界で、必須条件です。
+`--ephemeral` は付けません。review の session rollout は Codex 側の session 保存先に残し、利用量の集計
+(tokens / cost / rate limit) に使います (#297)。安全境界は `-s read-only` と `approval_policy="never"` で、
+rollout の有無は境界ではありません。
 model family や reasoning effort は固定せず、現在の user / project selection に委ねます。明示依頼と
 capability 確認がない `-m` や model-specific config を足しません。別 agent / wrapper に代行させず、
 実際の Codex CLI process を起動します。
