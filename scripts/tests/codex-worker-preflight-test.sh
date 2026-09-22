@@ -72,6 +72,8 @@ check("列が 2 空白未満の行は読まない", P.parse_features("apps stabl
 check("第 1 区切りだけが 1 空白の行は読まない", P.parse_features("apps stable  true\n").empty?)
 check("第 2 区切りだけが 1 空白の行は読まない", P.parse_features("apps  stable true\n").empty?)
 check("boolean 列が true / false 以外の行は読まない", P.parse_features("apps  stable  unknown\n").empty?)
+check("先頭に空白がある行は読まない (\\A の除去を捕捉)", P.parse_features(" apps  stable  true\n").empty?)
+check("boolean の後ろに余分な文字がある行は読まない (\\z の除去を捕捉)", P.parse_features("apps  stable  true-junk\n").empty?)
 
 def sel(text)
   CodexWorkerPreflight.read_model_selection(text)
