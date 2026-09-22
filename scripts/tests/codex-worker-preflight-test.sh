@@ -665,6 +665,21 @@ set -e
 echo "$out" | grep -q "自身の Git 管理領域を含みます" || fail "包含の理由で落ちるべき: $out"
 case "$out" in *"--add-dir"*) fail "内側の repository で launch argv を出してはいけない: $out" ;; esac
 
+# (l3) `.git` は実 directory だが `commondir` で common dir を別 repository へ向けた形
+commondir_case="$clone_cases_dir/commondir"
+other_repo="$clone_cases_dir/commondir-other"
+git init -q "$commondir_case"
+git init -q "$other_repo"
+git -C "$other_repo" commit -q --allow-empty -m o
+printf '%s\n' "$other_repo/.git" > "$commondir_case/.git/commondir"
+set +e
+out=$(pf_clone_rc "$commondir_case")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "commondir で切り替えた clone は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "common dir が <clone>/.git と一致しません" || fail "commondir の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "commondir 切替で launch argv を出してはいけない: $out" ;; esac
+
 # (m) core.worktree で作業ツリーをすげ替えた repository は渡せない (bare もここで落ちる)
 wtswap="$clone_cases_dir/worktree-swapped"
 git init -q "$wtswap"
@@ -679,26 +694,36 @@ echo "$out" | grep -q "作業ツリーが clone と一致しません" || fail "
 case "$out" in *"--add-dir"*) fail "worktree 不一致で launch argv を出してはいけない: $out" ;; esac
 git -C "$wtswap" config --unset core.worktree
 
-# (n) GIT_CONFIG_* (config を注入する経路) も拒否する
-set +e
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.worktree \
-  GIT_CONFIG_VALUE_0="$submain" PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" --clone "$clone" 2>&1)
-rc=$?
-set -e
-[ "$rc" -eq 2 ] || fail "GIT_CONFIG_* は exit 2 (rc=$rc): $out"
-echo "$out" | grep -q "GIT_CONFIG_KEY_0" || fail "動的な GIT_CONFIG_KEY_<n> も名指しで落とすべき: $out"
+# (n) config を注入する env は **1 つずつ独立に** 拒否する (複合だと prefix を片方外した変異を
+#     捕捉できない)。固定名と動的名 (KEY_<n> / VALUE_<n>) の両方を見る。
+for cfgenv in "GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=core.worktree" "GIT_CONFIG_VALUE_0=/tmp" \
+  "GIT_CONFIG_PARAMETERS='core.worktree'='/tmp'" "GIT_CONFIG_GLOBAL=/dev/null" "GIT_CONFIG_NOSYSTEM=1"; do
+  name=${cfgenv%%=*}
+  set +e
+  out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID "$cfgenv" PATH="$fakebin:$PATH" ruby "$src" \
+    --codex-home "$home" --clone "$clone" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "$name は exit 2 (rc=$rc): $out"
+  echo "$out" | grep -q "$name" || fail "$name を名指しで落とすべき: $out"
+  case "$out" in *"--add-dir"*) fail "$name が立っている状態で launch argv を出してはいけない: $out" ;; esac
+done
 
 # (o) clone_root は **物理 path** を返す (symlink と .. を含む入力を canonical 化する)
+# symlink と `..` を組み合わせ、**物理解決と論理解決で到達先が変わる**入力を渡す
+#   <linkdir>/link -> <clone> なので、<linkdir>/link/.. は物理では <clone> の親、論理では <linkdir>。
+#   そこから clone の basename を辿ると、物理解決した場合だけ clone に着く。
 linkdir="$clone_cases_dir/linkdir"
-mkdir -p "$linkdir/real"
+mkdir -p "$linkdir"
 ln -s "$clone" "$linkdir/link"
-tricky="$linkdir/link/../../clone"   # symlink と .. の組み合わせ
+clone_base=$(basename "$clone")
+tricky="$linkdir/link/../$clone_base"
 set +e
 out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" \
-  --clone "$clone/." --json 2>&1)
+  --clone "$tricky" --json 2>&1)
 rc=$?
 set -e
-[ "$rc" -eq 0 ] || fail "末尾 /. の clone は通るべき (rc=$rc): $out"
+[ "$rc" -eq 0 ] || fail "symlink + .. の clone は物理解決で通るべき (rc=$rc): $out"
 printf '%s' "$out" | ruby -rjson -e '
 j = JSON.parse(STDIN.read)
 root = ARGV[0]

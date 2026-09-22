@@ -98,7 +98,7 @@ module CodexWorkerPreflight
     GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY
     GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CEILING_DIRECTORIES GIT_NAMESPACE
     GIT_DISCOVERY_ACROSS_FILESYSTEM GIT_CONFIG GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM
-    GIT_CONFIG_NOSYSTEM GIT_CONFIG_COUNT
+    GIT_CONFIG_NOSYSTEM GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
   ].freeze
   # `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_VALUE_<n>` は個数が動くので prefix で見る。
   REPO_SELECTING_ENV_PREFIX = %w[GIT_CONFIG_KEY_ GIT_CONFIG_VALUE_].freeze
@@ -247,6 +247,13 @@ module CodexWorkerPreflight
         "(repository の中から実行してください)"
     end
     clone_common = common_git_dir(root)
+    # `.git` が実 directory でも、その中の `commondir` file で common dir を別の場所へ向けられる
+    # (実測: `--absolute-git-dir` は `<clone>/.git` のまま、`--git-common-dir` だけが別 repository を
+    # 指す)。許可するのは `<clone>/.git` なので、common dir がそれと同じであることを要求する。
+    if clone_common && clone_common != git_dir
+      raise ArgumentError, "clone: git の common dir が <clone>/.git と一致しません " \
+        "(commondir による切替は不可): #{path}"
+    end
     # ここも defense-in-depth: 直前の `--absolute-git-dir` が通っていれば common dir も取れるので、
     # **self-test の変異では捕捉できない**。git 側の挙動が変わったときに黙って通さないための保険。
     unless clone_common
