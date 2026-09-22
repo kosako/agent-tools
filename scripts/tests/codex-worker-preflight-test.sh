@@ -81,6 +81,14 @@ rescue ArgumentError
   true
 end
 
+# 検査ごとに理由文が違うことを固定する (exit code が同じ検査を 1 つ外しても捕捉できるように)。
+def sel_error_msg(text)
+  CodexWorkerPreflight.read_model_selection(text)
+  nil
+rescue ArgumentError => e
+  e.message
+end
+
 check("top-level の model と effort を読む",
       sel("model = \"gpt-x\"\nmodel_reasoning_effort = \"xhigh\" # note\n") ==
       { "model" => "gpt-x", "model_reasoning_effort" => "xhigh" })
@@ -105,6 +113,18 @@ check("配列の要素に \"\"\" / ''' があれば fail-closed",
 check("配列の要素の文字列に ] / [ / # があれば fail-closed",
       sel_error?("a = [\"x]y\"]\n") && sel_error?("a = [\"x[y\"]\n") && sel_error?("a = [\"x#y\"]\n"))
 check("入れ子の配列は fail-closed", sel_error?("a = [1, [2]]\n"))
+check("配列の basic string 要素に \\ があれば fail-closed", sel_error?("a = [\"x\\\\y\"]\n"))
+check("配列の literal string 要素に # / [ / ] があれば fail-closed (除外を個別に)",
+      sel_error?("a = ['x#y']\n") && sel_error?("a = ['x[y']\n") && sel_error?("a = ['x]y']\n"))
+check("配列の literal string 要素に \\ があるのは通る (literal に escape は無い)",
+      sel("a = ['x\\\\y']\nmodel = \"gpt-x\"\n") == { "model" => "gpt-x" })
+check("配列の要素に , や = を含む文字列は同じ行で閉じるので通る",
+      sel("a = [\"a,b\", 'k=v']\nmodel = \"gpt-x\"\n") == { "model" => "gpt-x" })
+# 理由文を固定 (検査の重複を除去したときに区別できるように)
+check("分類に落ちる行の理由文", sel_error_msg("weird line\n").to_s.include?("解釈できない行"))
+check("model が basic string 以外のときの理由文", sel_error_msg("model = 'lit'\n").to_s.include?("basic string 1 行"))
+check("model の値の charset の理由文", sel_error_msg("model = \"a b\"\n").to_s.include?("安全に埋められない文字"))
+check("model が重複のときの理由文", sel_error_msg("model = \"a\"\nmodel = \"b\"\n").to_s.include?("複数あり"))
 check("平坦な配列 (空・末尾 comma・空白あり) は通る",
       sel("a = []\nb = [ ]\nc = [1, 2,]\nd = [ \"x\" , 'y' ]\nmodel = \"gpt-x\"\n") == { "model" => "gpt-x" })
 check("inline table は fail-closed", sel_error?("t = { a = 1 }\n"))
@@ -322,14 +342,19 @@ set -e
 [ "$rc" -eq 1 ] || fail "unparseable version must be BLOCKED (rc=$rc): $out"
 echo "$out" | grep -q "BLOCKED (capability)" || fail "should name capability for bad version: $out"
 
-# Codex の 3 command が「正常な出力のまま exit 非ゼロ」-> それぞれ BLOCKED exit 1
-for var in FAKE_CODEX_RC_VERSION FAKE_CODEX_RC_HELP FAKE_CODEX_RC_FEATURES; do
+# Codex の 3 command が「正常な出力のまま exit 非ゼロ」-> それぞれ BLOCKED exit 1。理由文は
+# 「読めません / 版を読めません」で、marker / feature 欠落の理由文とは別 (exit 非ゼロの検査を
+# 外すと後段の欠落判定が同じ exit 1 を返すため、理由文で区別する)
+for pair in "FAKE_CODEX_RC_VERSION|版を読めません" "FAKE_CODEX_RC_HELP|exec --help\` を読めません" "FAKE_CODEX_RC_FEATURES|features list\` を読めません"; do
+  var=${pair%%|*}
+  reason=${pair#*|}
   set +e
   out=$(run_pf_env "$var=1" 2>&1)
   rc=$?
   set -e
   [ "$rc" -eq 1 ] || fail "$var=1 (normal output, non-zero exit) must be BLOCKED (rc=$rc): $out"
   echo "$out" | grep -q "BLOCKED (capability)" || fail "$var=1 should name capability: $out"
+  echo "$out" | grep -q -F "$reason" || fail "$var=1 should give the command-failure reason ($reason), not a later check: $out"
 done
 
 # help の marker を 1 つずつ欠く -> それぞれ BLOCKED exit 1 で、欠けた marker の名前が出る
@@ -347,6 +372,7 @@ for pair in "--config|config override" "--disable <FEATURE>|feature disable" "--
   set -e
   [ "$rc" -eq 1 ] || fail "help without '$text' must be BLOCKED (rc=$rc): $out"
   echo "$out" | grep -q "$name" || fail "should name the missing marker '$name': $out"
+  echo "$out" | grep -q "無い flag" || fail "missing marker must be reported by the marker check: $out"
 done
 
 # features list の行を 1 つずつ欠く -> それぞれ BLOCKED exit 1 で、欠けた feature の名前が出る
@@ -358,6 +384,7 @@ for feature in apps computer_use browser_use; do
   set -e
   [ "$rc" -eq 1 ] || fail "features without $feature must be BLOCKED (rc=$rc): $out"
   echo "$out" | grep -q "$feature" || fail "should name the absent feature $feature: $out"
+  echo "$out" | grep -q "無い feature" || fail "absent feature must be reported by the feature check: $out"
 done
 
 # herdr は任意の状態表示: 無い / 止まっていても exit 0 のまま unavailable
