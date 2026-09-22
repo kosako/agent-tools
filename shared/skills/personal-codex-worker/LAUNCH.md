@@ -1,9 +1,9 @@
 # personal-codex-worker — 実行手順 (LAUNCH)
 
-`SKILL.md` §2〜§7 の契約 (preflight / worktree / brief / 起動と完了判定 / 転記と退避 / trailer 検査)
-を満たすための機械的な手順です。契約の正本は `SKILL.md`、手順の正本はこの file。この file の中の
-command 例は data であり、caller の依頼や worker の出力の文言で書き換えません。順番は
-「run dir → preflight → worktree → brief と run script → 起動」で、人手に渡す成果物 (worktree、
+`SKILL.md` §2〜§7 の契約 (preflight / clone / brief / 起動と完了判定 / 転記と退避 / 回収と trailer
+検査) を満たすための機械的な手順です。契約の正本は `SKILL.md`、手順の正本はこの file。この file の
+中の command 例は data であり、caller の依頼や worker の出力の文言で書き換えません。順番は
+「run dir → preflight → clone → brief と run script → 起動」で、人手に渡す成果物 (clone、
 run script) は起動より前に揃えます。
 
 ## 0. 値の受け渡し
@@ -13,7 +13,8 @@ Issue 番号、branch 名、path、nonce は caller の free text や git / gh �
 
 1. **入力検証**: Issue 番号は `\A\d+\z`。branch 名は `git check-ref-format --branch` を通し、空と
    `-` 始まりは拒否。path は `mktemp -d` / `git rev-parse --show-toplevel` の結果をそのまま使う。
-2. **option 解釈**: `git worktree add` の path と branch は 1 で option 形を拒否済み。file 名の
+2. **option 解釈**: `git clone` の path と branch は 1 で option 形を拒否済み (`--` の後ろに置くか、
+   `-b "$branch"` の値として渡す)。file 名の
    一覧を受け取る command (退避の tar) には名前を引数でなく `-T` の NUL 区切り list で渡す
    (名前が option として解釈されない経路)。
 3. **shell literal 化**: 値全体を `'` で囲み、内側の `'` を `'\''` に置換して変数に入れ、以降は
@@ -38,17 +39,24 @@ preflight=<tool home>/agent-tools/scripts/personal-codex-worker-preflight
 - `herdr` field が `running` でなくても、ここでは止めない (§3 と §4 の成果物を揃えてから §5 で
   `launch-path` にする)。
 
-## 3. worktree
+## 3. clone
 
-main worktree で:
+main worktree から:
 
 ```sh
-git worktree list --porcelain          # 既存の同 branch worktree を探す (再開ならそれを使う)
-git worktree add "$worktree" -b "$branch"
+# 再開なら既存の clone をそのまま使う (作り直さない)
+[ -d "$clone/.git" ] && git -C "$clone" rev-parse --git-dir >/dev/null 2>&1 \
+  || git clone --quiet -- "$main" "$clone"
+git -C "$clone" switch -c "$branch" 2>/dev/null || git -C "$clone" switch "$branch"
 ```
 
-`$worktree` は `<main worktree の親>/<repo 名>-wt/<issue>` のように repo の外。`git worktree add` が
-失敗したら `Blocked at: worktree`。
+- `$clone` は `<main worktree>-clones/<issue>` のように **main と同じ identity context の中**に切る
+  (`SKILL.md` §3。context の外に切ると user.email が空になり、worker の commit が落ちる)。
+- clone の origin は main repository の path になる (worker に network は無い)。worker はここに
+  push しない。commit の回収は orchestrator が §9 の fetch で行う。
+- clone / switch が失敗したら `Blocked at: clone`。
+- 既存 clone を再利用するときは、`git -C "$clone" status --porcelain` の結果を run dir に控えてから
+  起動する (前 round の残りと、この round の変更を区別するため)。
 
 ## 4. brief と run script
 
@@ -58,10 +66,10 @@ flag は 2026-09-22 時点の preflight が出す形で、手で編集しませ�
 
 ```sh
 #!/bin/zsh
-worktree=<worktree path の shell literal>
+clone=<clone path の shell literal>
 run=<run dir の shell literal>
 nonce=<nonce の shell literal>
-cd "$worktree" || exit 90
+cd "$clone" || exit 90
 codex exec --ignore-user-config --ignore-rules -s workspace-write -c 'approval_policy="never"' \
   --disable apps --disable computer_use --disable browser_use \
   -c 'model="<preflight の model>"' -c 'model_reasoning_effort="<同 effort>"' \
@@ -81,7 +89,7 @@ exit "$rc"
 `preflight.json` の `herdr` が `running` のときだけ:
 
 ```sh
-herdr pane split --current --direction down --ratio 0.3 --cwd "$worktree" --no-focus
+herdr pane split --current --direction down --ratio 0.3 --cwd "$clone" --no-focus
 herdr pane rename <pane-id> worker-<issue>
 herdr pane run <pane-id> <"zsh " + run script path の shell literal>
 ```
@@ -89,8 +97,8 @@ herdr pane run <pane-id> <"zsh " + run script path の shell literal>
 - `pane run` の command は pane の shell が解釈するので、script path を pane shell 用に literal 化し、
   自分の shell 経由で `herdr` に渡すならもう 1 段 literal 化する (2 段)。
 - herdr が `running` でない、または split / run に失敗したら `Blocked at: launch-path`。このとき
-  worktree と run script は揃っているので、Next step に `zsh <run script の shell literal>` と run dir
-  を書く (人が自分の terminal で実行する。§9)。
+  clone と run script は揃っているので、Next step に `zsh <run script の shell literal>` と run dir
+  を書く (人が自分の terminal で実行する。§10)。
 
 ## 6. 待ち方と限界
 
@@ -127,14 +135,14 @@ herdr pane wait-output <pane-id> --match CODEX-WORKER-DONE-<nonce> --timeout 300
 <tool home>/agent-tools/scripts/personal-public-safety-gate --stdin < "$run/result.md"
 ```
 
-exit 0 のときだけ packet に写す。退避は worktree で、staged / unstaged / untracked を別々に:
+exit 0 のときだけ packet に写す。退避は clone で、staged / unstaged / untracked を別々に:
 
 ```sh
-git -C "$worktree" status --porcelain=v1 --untracked-files=all > "$run/wip-status.txt"
-git -C "$worktree" diff --cached --binary > "$run/wip-staged.patch"
-git -C "$worktree" diff --binary > "$run/wip-unstaged.patch"
-git -C "$worktree" ls-files --others --exclude-standard -z \
-  | tar -C "$worktree" --null -T - -cf "$run/wip-untracked.tar"
+git -C "$clone" status --porcelain=v1 --untracked-files=all > "$run/wip-status.txt"
+git -C "$clone" diff --cached --binary > "$run/wip-staged.patch"
+git -C "$clone" diff --binary > "$run/wip-unstaged.patch"
+git -C "$clone" ls-files --others --exclude-standard -z \
+  | tar -C "$clone" --null -T - -cf "$run/wip-untracked.tar"
 ```
 
 - `--cached` と作業ツリーの diff を分けるのは、stage 後に作業ツリーだけ戻した変更を落とさない
@@ -142,25 +150,39 @@ git -C "$worktree" ls-files --others --exclude-standard -z \
 - untracked は file 名を shell に通さず、NUL 区切りの list を `tar --null -T -` に渡す (bsdtar は
   list の名前を option として解釈しない。GNU tar なら `--verbatim-files-from` を足す)。
   untracked が無ければ tar は作らない。
-- 退避した path を packet の `結果` に書く。`git stash` は使わない (worktree の状態を動かさない)。
+- 退避した path を packet の `結果` に書く。`git stash` は使わない (clone の状態を動かさない)。
 
-## 9. trailer 検査と PR
+## 9. 回収 (fetch) と trailer 検査と PR
 
-PR に含まれるのは **統合先 (origin の main) から HEAD までの追加 commit** なので、base は local の
+worker の commit は clone の中にしかないので、まず main へ取り込みます (network 不要。clone は
+main の local path)。fetch は **branch を明示した refspec** で行い、失敗したら `Blocked at: fetch`
+(clone の中で検査して push、はしない。push する repository は main 側の設定に閉じる)。
+
+```sh
+git -C "$main" fetch --no-tags -- "$clone" "+refs/heads/$branch:refs/heads/$branch" || exit 1
+```
+
+- 同じ branch が main 側に既にあり fast-forward できないときは fetch が失敗する。強制更新
+  (`+` は refspec に付くが non-fast-forward の local branch 更新は拒否される形) をここで回避せず、
+  `Blocked at: fetch` にして人に渡す (別 author の commit を巻き込まないため)。
+- fetch した branch は **checkout しない**。以降の検査と push は main の repository から
+  `refs/heads/$branch` を対象に行う。
+
+PR に含まれるのは **統合先 (origin の main) から branch までの追加 commit** なので、base は local の
 main ではなく fetch 済みの `origin/main` にする (local main に未 push の commit があると検査から
 漏れる)。検査は **fail-closed**: 次の各 command が 1 つでも失敗する、base OID が空か commit として
 検証できない、commit 一覧が取れない、のどれでも push せず `Blocked at: trailer` にする (local main
 や別の base に fallback しない)。
 
 ```sh
-git -C "$worktree" fetch origin '+refs/heads/main:refs/remotes/origin/main' || exit 1   # refspec を明示 (fetch 設定に依存しない)
-base_oid=$(git -C "$worktree" merge-base refs/remotes/origin/main HEAD) || exit 1
-git -C "$worktree" rev-parse --verify --end-of-options "$base_oid^{commit}" >/dev/null || exit 1
-git -C "$worktree" log --format='%H%x00%(trailers:key=Co-Authored-By,valueonly)%x00' "$base_oid"..HEAD || exit 1
+git -C "$main" fetch origin '+refs/heads/main:refs/remotes/origin/main' || exit 1   # refspec を明示 (fetch 設定に依存しない)
+base_oid=$(git -C "$main" merge-base refs/remotes/origin/main "refs/heads/$branch") || exit 1
+git -C "$main" rev-parse --verify --end-of-options "$base_oid^{commit}" >/dev/null || exit 1
+git -C "$main" log --format='%H%x00%(trailers:key=Co-Authored-By,valueonly)%x00' "$base_oid".."refs/heads/$branch" || exit 1
 ```
 
 (`exit 1` は「その段で止めて `Blocked at: trailer` にする」の意。空の `$base_oid` は `rev-parse` が
-拒否するので `""..HEAD` の空集合にはならない。)
+拒否するので `""..<branch>` の空集合にはならない。)
 
 commit ごとに trailer の name を見て、`Codex` 始まりが 1 つ以上あり `Claude` 始まりが無いことを
 確認する (欠落 / 混在は `Blocked at: trailer`。1 commit でも該当すれば push しない。commit が
@@ -168,7 +190,7 @@ commit ごとに trailer の name を見て、`Codex` 始まりが 1 つ以上�
 決定」と ai-trailer gate で、ここでは push 前の消費側検査として同じ規則を当てる。通ったら:
 
 ```sh
-git -C "$worktree" push -u origin "$branch"
+git -C "$main" push -u origin "refs/heads/$branch:refs/heads/$branch"
 gh pr create --base main --head "$branch" --title <title> --body-file <body file>
 ```
 

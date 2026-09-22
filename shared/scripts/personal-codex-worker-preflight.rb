@@ -16,7 +16,8 @@
 #     --disable apps --disable computer_use --disable browser_use
 #     [-c model="<user config の model>"] [-c model_reasoning_effort="<同 effort>"] -o <result> -
 # `--ignore-user-config` で config.toml と bootstrap の MCP server が読まれなくなり (AGENTS.md
-# と skills は読まれ、linked worktree での commit も通る)、`--disable apps` で account 側の
+# と skills は読まれる。worker は main の clone で動かすので git dir は workdir の内側にあり、
+# 追加の書込許可なしに commit が通る)、`--disable apps` で account 側の
 # connector が消える。`-c mcp_servers.<name>.enabled=false` は config.toml に無い bootstrap の
 # server に対して config load を落とす (invalid transport) ので使わない。`--ignore-rules` は
 # user / project の execpolicy `.rules` を読まない指定 (`--ignore-user-config` とは別)。

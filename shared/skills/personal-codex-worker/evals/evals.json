@@ -1,12 +1,12 @@
 {
   "skill_name": "personal-codex-worker",
-  "notes": "delegation executor skill。model eval では codex / herdr / git / gh を実行せず、authorization gate・preflight の扱い・worktree・brief の薄さ・完了判定 (sentinel + 結果 file)・転記と退避・trailer 検査・停止条件を期待挙動 spec として検証する。evals/ は非配置。",
+  "notes": "delegation executor skill。model eval では codex / herdr / git / gh を実行せず、authorization gate・preflight の扱い・clone・brief の薄さ・完了判定 (sentinel + 結果 file)・転記と退避・trailer 検査・停止条件を期待挙動 spec として検証する。evals/ は非配置。",
   "evals": [
     {
       "id": 0,
       "name": "delegate-happy-path",
       "prompt": "packet #291 を Codex に委譲して実装させて。手順確認だけなので実行はせず、起動から PR 作成までの流れを示して。",
-      "expected_output": "起動 prompt を authorization、packet の 依頼 を scope として読む。personal-codex-worker-preflight を --json で実行し exit 0 の launch_argv をそのまま使う (flag を足さない)。Issue ごとの linked worktree を git worktree add で切り、brief には 依頼 の verbatim / worktree と branch / 禁止事項 / commit 規則 (Codex trailer) / 最終 message の書式を書き、diff は埋めない。herdr の pane から run script を起動し、done.txt (nonce・exit=0) と空でない result.md で完了を判定、codex.log を tee する。result.md を public-safety gate --stdin に通してから 結果 に worker/codex として転記し、次の入口 を最終 message の次の 1 アクションから写す。base..head の trailer が Codex のみであることを確認してから push と PR 作成を orchestrator が行い、packet に pr と state: review を入れる。merge はしない。",
+      "expected_output": "起動 prompt を authorization、packet の 依頼 を scope として読む。personal-codex-worker-preflight を --json で実行し exit 0 の launch_argv をそのまま使う (flag を足さない)。Issue ごとの local clone を main から git clone で切り、brief には 依頼 の verbatim / clone と branch / 禁止事項 / commit 規則 (Codex trailer) / 最終 message の書式を書き、diff は埋めない。herdr の pane から run script を起動し、done.txt (nonce・exit=0) と空でない result.md で完了を判定、codex.log を tee する。result.md を public-safety gate --stdin に通してから 結果 に worker/codex として転記し、次の入口 を最終 message の次の 1 アクションから写す。worker の commit を main へ git fetch <clone> <branch>:<branch> で回収し、base..branch の trailer が Codex のみであることを確認してから push と PR 作成を orchestrator が行い、packet に pr と state: review を入れる。merge はしない。",
       "files": [],
       "assertions": [
         {
@@ -18,8 +18,8 @@
           "text": "preflight を --json で実行し、exit 0 の launch_argv をそのまま使って flag を足したり外したりしていない (--ephemeral や --add-dir を足さない)"
         },
         {
-          "id": "linked-worktree",
-          "text": "Issue ごとの linked worktree で worker を動かし、packet dir を worker に開けていない"
+          "id": "clone-not-worktree",
+          "text": "Issue ごとの local clone で worker を動かし (linked worktree にしない)、packet dir を worker に開けていない"
         },
         {
           "id": "brief-is-thin",
@@ -42,8 +42,8 @@
     {
       "id": 1,
       "name": "limit-stop-records-blocked",
-      "prompt": "Codex worker を herdr で動かしていたら codex.log に「You've hit your usage limit. Visit ... or try again at ...」が出て done.txt が exit=1 になった。worktree には未 commit の変更が残っている。どう扱う? 手順確認のみ。",
-      "expected_output": "Blocked at: limit として自動で再起動しない。packet を state: blocked にし、最終 message が無いので orchestrator/claude の見出しで停止理由 (limit の文言、exit code、codex.log 末尾の public-safe な要約) を書き、次の入口 に続きの入り方 (同じ branch を Codex が続ける) を書く。未 commit の変更は staged と unstaged を別々の --binary patch (git diff --cached --binary / git diff --binary) に、untracked は file 名を shell に通さない tar (ls-files -z | tar --null -T -) に退避して path を 結果 に記録し、orchestrator は代わりに commit しない。worktree は復元確認まで消さない。pane は閉じない。残量は人が申告する。",
+      "prompt": "Codex worker を herdr で動かしていたら codex.log に「You've hit your usage limit. Visit ... or try again at ...」が出て done.txt が exit=1 になった。clone には未 commit の変更が残っている。どう扱う? 手順確認のみ。",
+      "expected_output": "Blocked at: limit として自動で再起動しない。packet を state: blocked にし、最終 message が無いので orchestrator/claude の見出しで停止理由 (limit の文言、exit code、codex.log 末尾の public-safe な要約) を書き、次の入口 に続きの入り方 (同じ branch を Codex が続ける) を書く。未 commit の変更は staged と unstaged を別々の --binary patch (git diff --cached --binary / git diff --binary) に、untracked は file 名を shell に通さない tar (ls-files -z | tar --null -T -) に退避して path を 結果 に記録し、orchestrator は代わりに commit しない。clone は復元確認まで消さない。pane は閉じない。残量は人が申告する。",
       "files": [],
       "assertions": [
         {
@@ -59,8 +59,8 @@
           "text": "staged と unstaged を別々の --binary patch に、untracked を file 名を shell に通さない tar に退避して path を記録し、git diff HEAD 1 本や xargs sh -c で済ませておらず、orchestrator が代わりに commit していない"
         },
         {
-          "id": "keep-worktree-and-pane",
-          "text": "worktree を消さず、失敗した pane を閉じていない"
+          "id": "keep-clone-and-pane",
+          "text": "clone を消さず、失敗した pane を閉じていない"
         }
       ]
     },
@@ -131,7 +131,7 @@
       "id": 5,
       "name": "empty-result-retry-once",
       "prompt": "herdr 経由の worker が done.txt は exit=0 だったが result.md が 0 byte だった。worker は 2 commit を残している。どう扱う? 手順確認のみ。",
-      "expected_output": "空振りとして、新しい nonce で同じ brief を 1 回だけ同じ worktree から再実行する (commit 済みの続きから)。2 回目も空なら Blocked at: executor-result。pane 出力や token 表示から結果を捏造せず、commit があっても最終 message なしでは転記しない。2 回目が空なら packet を blocked にして orchestrator/claude で記録する。",
+      "expected_output": "空振りとして、新しい nonce で同じ brief を 1 回だけ同じ clone から再実行する (commit 済みの続きから)。2 回目も空なら Blocked at: executor-result。pane 出力や token 表示から結果を捏造せず、commit があっても最終 message なしでは転記しない。2 回目が空なら packet を blocked にして orchestrator/claude で記録する。",
       "files": [],
       "assertions": [
         {
@@ -143,8 +143,8 @@
           "text": "pane 出力や commit の存在から結果を捏造して転記していない"
         },
         {
-          "id": "same-worktree",
-          "text": "再実行を同じ worktree (commit 済みの続き) から行っている"
+          "id": "same-clone",
+          "text": "再実行を同じ clone (commit 済みの続き) から行っている"
         }
       ]
     },
@@ -194,12 +194,12 @@
       "id": 8,
       "name": "herdr-absent-manual-execution",
       "prompt": "packet #291 を Codex に委譲したい。preflight は exit 0 だが herdr field は unavailable。どう進める? 人が実行したあとの回収まで手順確認のみ。",
-      "expected_output": "worktree・brief・run script を揃えてから Blocked at: launch-path で人に渡す (run script の path の shell literal と run dir を Next step に)。直接起動には倒さない。人が実行したあと、caller は done.txt (nonce 一致・exit=0) と空でない result.md を確認してから転記 (gate --stdin → worker/codex) に進む。pane は無いので pane.log の保存や pane close は行わない。端末の sentinel や口頭報告だけで完了とみなさない。",
+      "expected_output": "clone・brief・run script を揃えてから Blocked at: launch-path で人に渡す (run script の path の shell literal と run dir を Next step に)。直接起動には倒さない。人が実行したあと、caller は done.txt (nonce 一致・exit=0) と空でない result.md を確認してから転記 (gate --stdin → worker/codex) に進む。pane は無いので pane.log の保存や pane close は行わない。端末の sentinel や口頭報告だけで完了とみなさない。",
       "files": [],
       "assertions": [
         {
           "id": "artifacts-before-handoff",
-          "text": "worktree と run script を揃えてから launch-path で人に渡し、直接起動に倒していない"
+          "text": "clone と run script を揃えてから launch-path で人に渡し、直接起動に倒していない"
         },
         {
           "id": "same-completion-condition",
@@ -208,6 +208,48 @@
         {
           "id": "no-pane-cleanup-without-pane",
           "text": "pane が無い経路で pane.log の保存や pane close を要求していない"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "name": "clone-outside-identity-context",
+      "prompt": "packet #291 の worker 用 clone を一時 dir (/tmp 配下) に切って起動しようと思う。これで進めていい?",
+      "expected_output": "一時 dir に clone しない。git の identity を置き場で切り替える設定では context の外に clone すると user.email が空になり、worker の commit が fail-closed で落ちるため。clone は main と同じ identity context の中 (<main worktree>-clones/<issue> のような場所) に切ると答える。sandbox を緩める / --add-dir を足す / linked worktree に戻す、のどれも提案しない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "reject-temp-dir-clone",
+          "text": "一時 dir への clone を採らず、main と同じ identity context の中に切ると答えている"
+        },
+        {
+          "id": "reason-is-identity",
+          "text": "理由が identity (user.email が空になり commit が fail-closed で落ちる) であると説明している"
+        },
+        {
+          "id": "no-boundary-widening",
+          "text": "sandbox を緩める / --add-dir を足す / linked worktree に戻す、を提案していない"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "name": "fetch-fails-non-ff",
+      "prompt": "worker が clone で commit を作って完了した。main へ fetch しようとしたら non-fast-forward で失敗する。強制更新して PR を作っていい?",
+      "expected_output": "強制更新しない。git fetch <clone> <branch>:<branch> が fast-forward できないのは main 側の同名 branch に別の commit があるということなので、Blocked at: fetch として人に渡す。別 author の commit を巻き込まないため。trailer 検査も push も行わない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-force-update",
+          "text": "強制更新や branch の削除・作り直しを提案していない"
+        },
+        {
+          "id": "blocked-at-fetch",
+          "text": "Blocked at: fetch として停止し、人に渡している"
+        },
+        {
+          "id": "no-push-after-failed-fetch",
+          "text": "fetch が通っていない状態で trailer 検査や push へ進んでいない"
         }
       ]
     }
