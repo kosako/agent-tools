@@ -29,12 +29,17 @@ Codex の sandbox から読める場所に置くため。
 | 節 | 書けるのは | 操作 |
 |---|---|---|
 | `## 依頼` | orchestrator のみ | 上書き |
-| `## 結果` | worker (実装) / reviewer (verdict) | `### <日付> <役割/agent>` 見出しで区切って追記 |
-| `## 次の入口` | worker | 現在地に上書き |
+| `## 結果` | worker (実装) / reviewer (verdict)。packet に書けない worker (委譲した Codex) の分は orchestrator が worker の最終 message から転記する (見出しは `worker/codex`) | `### <日付> <役割/agent>` 見出しで区切って追記 |
+| `## 次の入口` | worker (転記の場合は orchestrator が worker の最終 message から写す) | 現在地に上書き |
 
 worker は `依頼` を書き換えない。受け入れ条件が曖昧なら `結果` に質問を追記して止まり、
 orchestrator が `依頼` を更新して再起動する (1 PR = 1 author と同じ「途中で scope を変えた
 のが誰か」を残す規則)。
+
+`次の入口` に書くのは **worker の次の 1 アクションだけ**。orchestrator の手順 (Issue の close、
+`state: done`、次の Issue への移行) は書かない。worker はそこに書かれた手順を自分の task として
+実行しにくる (#253 の実演で、Codex worker が「通れば close」を読んで Issue の close を試みた)。
+orchestrator 向けの判断は `結果` の「判断」に残す。
 
 ## 置き場
 
@@ -92,8 +97,10 @@ PR #124 の should 1 件を直して re-review を依頼する。
 ```
 
 - `state`: `open` (作業中) / `blocked` (質問待ち・limit 到達・CI 赤などで止まっている) /
-  `review` (PR を出して review 待ち) / `done` (merge / close 済み)。`review` は worker、`done`
-  は orchestrator が入れる。
+  `review` (PR を出して review 待ち) / `done` (merge / close 済み)。`review` は PR を出した側が
+  入れる (自分で push できる worker なら本人、委譲した Codex worker の分は push と PR 作成を行う
+  orchestrator)。`blocked` は止まった worker が入れ、worker が止まって書けないときは orchestrator が
+  停止理由と一緒に入れる。`done` は orchestrator が入れる。
 - 「依頼は上書き・結果は追記」は書式でなく手順で守る (1 PR = 1 author なので同時書き込みは
   想定しない)。
 - **行頭の `## ` は 3 つの節見出しに予約する** (fenced code や引用の中でも同じ)。それ以外の行頭
@@ -115,8 +122,11 @@ Issue コメントへ写すのは **`結果` の最新節 + `次の入口` の�
   **planning tool の URL は local pattern file (`~/.config/agent-tools/public-safety-patterns.local`)
   に domain を置いてはじめて止まる** (gate 本体は public repo なので持たない。不在なら外部 URL は
   素通りする)。packet を運用する machine には先に置く。
-- publish は **Claude / 人の操作**。Codex の sandbox は network に届かないので、Codex が
-  worker のときは packet を書くまで (local で完結) とし、publish は Claude か人が行う。
+- publish は **Claude / 人の操作**。Codex の sandbox からは shell 経由 (`gh` / `curl`) で network に
+  届かないので、Codex が worker のときは packet を書くまで (local で完結) とし、publish は Claude か
+  人が行う。ただし MCP connector (GitHub app 等) は sandbox の外から GitHub に届きうるので、
+  「network に届かない」を write 境界として当てにしない。委譲した worker の write は起動側が
+  approval policy で止める (下記「worker 委譲との関係」)。
 - 投稿後に frontmatter の `published` を更新する。resume は `updated > published` を
   「未 publish の追記あり」として表示する。
 - 受け側 (別 machine でコメントから packet を再構成する `pull`) は #291 で別途。当面は
@@ -151,15 +161,46 @@ file で行い、command 文字列へ inline 展開しない。
 
 - `personal-resume-project`: cwd が repo と一致する herdr agent (種別 / 状態) と、この repo の
   packet 一覧 (open / blocked / review) を workspace 節として出す。herdr が無い / server が
-  止まっていれば packet 一覧だけに縮退する。tab ↔ Issue の対応規約は #254 で決める。
+  止まっていれば packet 一覧だけに縮退する。tab ↔ Issue の対応規約は #256 で決める。
 - `personal-session-handoff`: workspace 単位の索引 file は作らない (packet から導出)。役割は
   packet の `結果` / `次の入口` を更新 (常時。local で agent 所有) → publish (write-authorized
   のとき) → planning tool (write-authorized のとき、project 単位の判断だけ)。
 - 既存の open Issue は packet 化しない。着手する Issue から orchestrator が起こす。
 
+## worker 委譲との関係(#254)
+
+orchestrator (Claude) が packet を Codex の worker に委譲するときの、packet 側の規約。起動の
+機械的な手順 (herdr の pane、完了判定、pane の後始末) は委譲 skill が持ち、ここには packet に
+現れる約束だけを置く。
+
+- **authorization と scope**: 起動 prompt が authorization、packet の `依頼` が scope (上の信頼
+  モデルと同じ)。brief には `依頼` を要約せず verbatim で写す (orchestrator 著なので trusted。
+  要約は drift の元)。
+- **作業場所**: Issue ごとの linked worktree (orchestrator が `git worktree add … -b <branch>` で
+  切る)。packet dir は main worktree の root のまま (置き場の規則どおり)。worker の書込は
+  worktree の中に限り、packet dir を worker に開けない。
+- **worker の権限境界**: packet の編集、GitHub への write (Issue / PR の操作、push)、別 agent の
+  起動、worktree 外への書込は worker がしない。起動側は Codex の approval policy を「承認を求める
+  操作は失敗する」側に固定し、MCP connector 経由の write もそこで止める。worker は作業単位ごとに
+  commit し、自分を示す `Co-Authored-By: Codex …` trailer を付ける (commit-msg の gate が検査する)。
+- **結果の転記**: worker は最終 message に到達点 / 判断 / 未完 / 停止理由 / commit 一覧を書き、
+  orchestrator がそれを `結果` に `### <日付> worker/codex` として転記し、`次の入口` も worker の
+  message から写す (転記前に `personal-public-safety-gate --stdin` を通す)。
+- **PR**: orchestrator が branch の全 commit の trailer が Codex のみであることを確認してから push
+  し、PR を作る。packet に `pr:` と `state: review` を入れるのは orchestrator (PR を出した側)。
+- **停止 (limit / 途中終了)**: worker は自分で記録できないので、orchestrator が
+  `### <日付> orchestrator/claude` で停止理由 (limit の文言、exit code、末尾の public-safe な要約) を
+  書き `state: blocked` にする。uncommitted な変更は `git diff` を run directory に退避して
+  その path を記録し、orchestrator が代わりに commit しない (trailer が Claude になり author が
+  混ざる)。自動で再起動しない (残量は申告制、#255)。続きは同じ branch を Codex が続ける
+  (同 author なので同じ PR)。Claude が続けるなら新しい branch + 新しい PR (author の交代)。
+- **非対称**: Codex の sandbox からは herdr の socket にも Claude の認証にも届かないので、
+  委譲は常に Claude → Codex の一方通行。Codex が worker のとき、review や次の worker の起動は
+  Claude か人が行う。同時に走らせる worker は orchestrator session あたり 1 つ (並列は #256)。
+
 ## 関連
 
 - #251 (umbrella: herdr 前提の運用形) / #253 (この規約) / #291 (pull) / #254 (委譲 skill) /
-  #255 (割当規則)
+  #255 (割当規則) / #256 (並列運用と pane / tab)
 - [git-hook-gates](git-hook-gates.md) (public-safety gate の stdin mode) /
   [publication-safety](publication-safety.md)
