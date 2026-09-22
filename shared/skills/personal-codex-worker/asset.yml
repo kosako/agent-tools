@@ -1,0 +1,17 @@
+schema_version: 1
+name: personal-codex-worker
+kind: skill
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-codex-worker
+  format: directory
+summary: delegate a packet-scoped issue to an unattended Codex worker launched from a herdr pane with the preflight's fixed launch argv, transcribe the worker's final message into the packet, and open the PR as the orchestrator without letting the worker touch GitHub or the packet
+description: "Outcome: an issue delegated to a Codex worker via its packet, with the result transcribed into the packet and a PR opened by the orchestrator. Trigger: an explicit orchestrator instruction such as delegating packet #N to Codex. Use: unattended implementation work scoped by the packet's request, in a linked worktree. Do not use: code review (personal-codex-review), PR lifecycle (personal-review-request), or any launch from inside a Codex session (asymmetric; preflight blocks it). Side effects: linked worktree creation, a herdr-launched workspace-write Codex process with connectors, MCP servers and execpolicy rules disabled, local packet updates, and a trailer-checked push plus PR creation by the orchestrator; no worker access to GitHub, network or the packet. Compose with: personal-codex-worker-preflight, docs/agent-packets.md, personal-review-request."
+review:
+  human_review: pending

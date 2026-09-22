@@ -6,11 +6,12 @@
     "primary = 依頼の主目的を所有する skill (null は『どの skill も主目的を持たない』)。",
     "must_not = その依頼で発火してはいけない隣接 skill。secondary (gate / quality / placement の補助) は",
     "許容なので列挙しない。cluster は #216 の routing cluster (none = 近傍の負例)。",
-    "inventory は runtime で artifact_kind=skill に解決される 12 件 (target ごとの重複を除く)。"
+    "inventory は runtime で artifact_kind=skill に解決される 13 件 (target ごとの重複を除く)。"
   ],
   "inventory": [
     "personal-asset-miner",
     "personal-codex-review",
+    "personal-codex-worker",
     "personal-github-safe-reader",
     "personal-grill-me",
     "personal-grill-with-docs",
@@ -35,7 +36,21 @@
       "cluster": "review",
       "prompt": "この branch diff を Codex に second opinion して",
       "primary": "personal-codex-review",
-      "must_not": ["personal-review-request"]
+      "must_not": ["personal-review-request", "personal-codex-worker"]
+    },
+    {
+      "id": "delegate-packet-to-codex-worker",
+      "cluster": "delegation",
+      "prompt": "packet #291 を Codex に委譲して実装させて",
+      "primary": "personal-codex-worker",
+      "must_not": ["personal-codex-review", "personal-review-request"]
+    },
+    {
+      "id": "delegate-near-miss-review-not-worker",
+      "cluster": "delegation",
+      "prompt": "Codex worker が出した PR #300 に review 結果をコメントして",
+      "primary": "personal-review-request",
+      "must_not": ["personal-codex-worker"]
     },
     {
       "id": "review-pr-ambiguous-draft",

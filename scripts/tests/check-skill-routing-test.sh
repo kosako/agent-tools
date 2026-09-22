@@ -244,10 +244,10 @@ write_results "$tmp/first-bad.json" claude-code model-x candidate \
   "$(run_line none ok 80 8 '[]')"
 run_case "first-tokens-bad-type" 2 "first_prompt_tokens must be a non-negative integer when present" -- --cases "$tmp/cases.json" --results "$tmp/first-bad.json"
 
-# --- case 19: 正本の case set は schema に通る (inventory 12 件・runtime skill と一致) ---
+# --- case 19: 正本の case set は schema に通る (inventory 13 件・runtime skill と一致) ---
 ruby -rjson -e '
   d = JSON.parse(File.read(ARGV[0]))
-  abort "inventory must have 12 skills" unless d["inventory"].length == 12
+  abort "inventory must have 13 skills" unless d["inventory"].length == 13
   ids = d["cases"].map { |c| c["id"] }
   abort "duplicate ids" unless ids.uniq.length == ids.length
   covered = d["cases"].map { |c| c["primary"] }.compact.uniq
