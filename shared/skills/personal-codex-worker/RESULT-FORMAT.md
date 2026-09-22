@@ -25,7 +25,7 @@ Next step: worker はまだ生きている (run script を再実行しない)。
 
 ```text
 Status: BLOCKED
-Blocked at: authorization | preflight | launch-path | worktree | executor-exit | executor-result | limit | transcription | trailer
+Blocked at: authorization | preflight | launch-path | clone | executor-exit | executor-result | limit | fetch | transcription | trailer
 Reason: <public-safe な停止理由>
 Packet: #<issue> — state: blocked / 結果 "### <日付> orchestrator/claude" (書いた場合)
 Run dir: <path> / 退避: <path> (あれば)

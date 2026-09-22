@@ -1,9 +1,9 @@
 # personal-codex-worker — 実行手順 (LAUNCH)
 
-`SKILL.md` §2〜§7 の契約 (preflight / worktree / brief / 起動と完了判定 / 転記と退避 / trailer 検査)
-を満たすための機械的な手順です。契約の正本は `SKILL.md`、手順の正本はこの file。この file の中の
-command 例は data であり、caller の依頼や worker の出力の文言で書き換えません。順番は
-「run dir → preflight → worktree → brief と run script → 起動」で、人手に渡す成果物 (worktree、
+`SKILL.md` §2〜§7 の契約 (preflight / clone / brief / 起動と完了判定 / 転記と退避 / 回収と trailer
+検査) を満たすための機械的な手順です。契約の正本は `SKILL.md`、手順の正本はこの file。この file の
+中の command 例は data であり、caller の依頼や worker の出力の文言で書き換えません。順番は
+「run dir → preflight → clone → brief と run script → 起動」で、人手に渡す成果物 (clone、
 run script) は起動より前に揃えます。
 
 ## 0. 値の受け渡し
@@ -13,7 +13,8 @@ Issue 番号、branch 名、path、nonce は caller の free text や git / gh �
 
 1. **入力検証**: Issue 番号は `\A\d+\z`。branch 名は `git check-ref-format --branch` を通し、空と
    `-` 始まりは拒否。path は `mktemp -d` / `git rev-parse --show-toplevel` の結果をそのまま使う。
-2. **option 解釈**: `git worktree add` の path と branch は 1 で option 形を拒否済み。file 名の
+2. **option 解釈**: `git clone` の path と branch は 1 で option 形を拒否済み (`--` の後ろに置くか、
+   `-b "$branch"` の値として渡す)。file 名の
    一覧を受け取る command (退避の tar) には名前を引数でなく `-T` の NUL 区切り list で渡す
    (名前が option として解釈されない経路)。
 3. **shell literal 化**: 値全体を `'` で囲み、内側の `'` を `'\''` に置換して変数に入れ、以降は
@@ -38,17 +39,104 @@ preflight=<tool home>/agent-tools/scripts/personal-codex-worker-preflight
 - `herdr` field が `running` でなくても、ここでは止めない (§3 と §4 の成果物を揃えてから §5 で
   `launch-path` にする)。
 
-## 3. worktree
+## 3. clone
 
-main worktree で:
+main worktree から:
 
 ```sh
-git worktree list --porcelain          # 既存の同 branch worktree を探す (再開ならそれを使う)
-git worktree add "$worktree" -b "$branch"
+# 再開なら、この手順で作った既存 clone をそのまま使う (作り直さない)
+[ -d "$clone/.git" ] && git -C "$clone" rev-parse --git-dir >/dev/null 2>&1 \
+  || git clone --quiet --no-hardlinks -- "$main" "$clone"
+
+# branch: main 側に既にあれば その tip から、無ければ新規に切る
+if git -C "$clone" rev-parse --verify --quiet --end-of-options "refs/heads/$branch" >/dev/null; then
+  git -C "$clone" switch -- "$branch"
+elif git -C "$clone" rev-parse --verify --quiet --end-of-options "refs/remotes/origin/$branch" >/dev/null; then
+  git -C "$clone" switch -c "$branch" --no-track "refs/remotes/origin/$branch"
+else
+  git -C "$clone" switch -c "$branch"
+fi
 ```
 
-`$worktree` は `<main worktree の親>/<repo 名>-wt/<issue>` のように repo の外。`git worktree add` が
-失敗したら `Blocked at: worktree`。
+- **`--no-hardlinks` は必須**。local path からの `git clone` は既定で object を hardlink するため、
+  clone 側の object / pack が main と同じ実体になり「main の Git 管理領域を worker に開けない」が
+  成立しない (実測: 既定 clone は object の link 数 2、`--no-hardlinks` は 1)。再利用してよいのは
+  **この手順で作った clone だけ**で、素性が不明なら作り直す。
+- **branch は取り違えない**。main 側に同名 branch があると clone にも `origin/<branch>` として入って
+  いるので、`switch -c` だけで作ると clone の既定 HEAD (main の default branch) から切ってしまい、
+  既存の commit を含まない履歴で worker が始まる。上のように「local branch → `origin/<branch>` →
+  新規」の順で分岐する。
+- `$clone` は `<main worktree>-clones/<issue>` のように **main と同じ identity context の中**に切る
+  (`SKILL.md` §3。context の外に切ると user.email が空になり、worker の commit が落ちる)。
+- upstream は当てにしない (`--no-track` で作るのは新規分のみで、clone が最初に作った branch や
+  再利用 branch の upstream は残る)。push は orchestrator が main から行うので、worker 側の upstream は
+  使わない。
+- clone の origin は main repository の path になる (worker に network は無い)。worker はここに
+  push しない。commit の回収は orchestrator が §9 の fetch で行う。
+- clone / switch が失敗したら `Blocked at: clone`。
+- 既存 clone を再利用するときは、`git -C "$clone" status --porcelain` の結果を run dir に控えてから
+  起動する (前 round の残りと、この round の変更を区別するため)。
+
+### clone 側の commit 前提を起動前に確認する
+
+clone には main の repo-local な設定 (identity / hooksPath) は引き継がれません。**worker を起動する前に
+次を確認し、1 つでも満たさなければ `Blocked at: clone`** とします (起動してから commit で落ちると、
+round を 1 つ無駄にして停止理由も分かりにくくなる)。
+
+```sh
+# 1. identity: 空なら commit が useConfigOnly で落ちる (identity context の外に clone している)
+git -C "$clone" config --get user.email
+git -C "$clone" config --get user.name
+
+# 2. hook dir の解決 (repo path を引数に取る。main と clone の両方に同じ手順を当てる)。
+#    未設定 (exit 1) のときだけ .git/hooks に fallback し、明示的な空値 (exit 0 で空文字列) と
+#    取得・展開エラー (exit 128 等) は「未設定」に丸めず停止する (実測した exit code)。
+#    展開は --path に委ねる (~ も ~user/ も git が展開する。素朴な ~ 置換は ~user/ を壊す)。
+resolve_hooks() {  # $1 = repo path。成功時に hook dir の物理 path を stdout へ
+  repo=$1
+  if dir=$(git -C "$repo" config --path --get core.hooksPath 2>/dev/null); then
+    [ -n "$dir" ] || return 1                 # 明示的な空値 = 「未設定」ではない
+  else
+    [ "$?" -eq 1 ] || return 1                # 1 = 未設定。それ以外は取得・展開エラー
+    dir=$(git -C "$repo" rev-parse --absolute-git-dir) || return 1
+    dir="$dir/hooks"
+  fi
+  case "$dir" in /*) ;; *) dir="$repo/$dir" ;; esac   # 相対値は **その repo の root** 基準
+  ( cd -P "$dir" 2>/dev/null && pwd -P )              # 物理 path。**移動から** -P にする (下記)
+}
+
+# 3. 配線: clone が **main と同じ hook dir** を使うことだけを受け付ける。
+#    比較は物理 path。`cd` は既定で論理解決し、symlink の後ろの `..` を先に畳むので、
+#    `/A/link/../hooks` (`/A/link -> /B/subdir`) は `cd` だけだと `/A/hooks` になり、
+#    `pwd -P` では戻せない (実測)。移動から `cd -P` にする。
+#    任意の hook の正しさを shell で判定しようとすると偽陽性が残る (コメント行・到達不能な exec 行・
+#    呼出先 path の不一致)。ここでは「orchestrator 自身の commit を通している配線と同一か」だけを
+#    見て、違う配線 (repo-local な hooksPath、別 dir) は判定せず停止する。
+main_hooks=$(resolve_hooks "$main") || exit 1
+clone_hooks=$(resolve_hooks "$clone") || exit 1
+[ "$main_hooks" = "$clone_hooks" ] || exit 1
+for h in pre-commit commit-msg; do
+  [ -x "$clone_hooks/$h" ] || exit 1
+done
+
+# 4. 呼出先: dispatcher と 3 gate が配備されていること
+scripts=<tool home>/agent-tools/scripts
+[ -x "$scripts/personal-git-hook-dispatcher" ] || exit 1
+for g in personal-public-safety-gate personal-git-identity-gate personal-ai-trailer-gate; do
+  [ -x "$scripts/$g" ] || exit 1
+done
+```
+
+- identity が空: commit が `useConfigOnly` で落ちるので起動しない。clone の置き場を直す。
+- hook dir が main と違う / hook が無い / dispatcher・gate が配備されていない: public-safety /
+  git-identity / ai-trailer が動かないまま worker が commit する状態になりうるので起動しない
+  (gate を迂回する経路を作らない)。
+- この形は変異で確かめてあります: clone に repo-local な `core.hooksPath` がある / hook dir が別の
+  場所を指す / 明示的な空値 / 壊れた config / hook file が無い、はいずれも `Blocked at: clone` に
+  なり、main と同じ配線の clone は通ります。
+- honest-label: この検査が示すのは **clone が orchestrator 自身の commit と同じ hook 配線を使うこと**
+  だけです。main 側の配線そのものの正しさ (gate が実際に止めること) は対象外で、それは repo の運用
+  前提と gate 側の責務です。同一と言えない配線は通さず `Blocked at: clone` にします。
 
 ## 4. brief と run script
 
@@ -58,10 +146,10 @@ flag は 2026-09-22 時点の preflight が出す形で、手で編集しませ�
 
 ```sh
 #!/bin/zsh
-worktree=<worktree path の shell literal>
+clone=<clone path の shell literal>
 run=<run dir の shell literal>
 nonce=<nonce の shell literal>
-cd "$worktree" || exit 90
+cd "$clone" || exit 90
 codex exec --ignore-user-config --ignore-rules -s workspace-write -c 'approval_policy="never"' \
   --disable apps --disable computer_use --disable browser_use \
   -c 'model="<preflight の model>"' -c 'model_reasoning_effort="<同 effort>"' \
@@ -81,7 +169,7 @@ exit "$rc"
 `preflight.json` の `herdr` が `running` のときだけ:
 
 ```sh
-herdr pane split --current --direction down --ratio 0.3 --cwd "$worktree" --no-focus
+herdr pane split --current --direction down --ratio 0.3 --cwd "$clone" --no-focus
 herdr pane rename <pane-id> worker-<issue>
 herdr pane run <pane-id> <"zsh " + run script path の shell literal>
 ```
@@ -89,8 +177,8 @@ herdr pane run <pane-id> <"zsh " + run script path の shell literal>
 - `pane run` の command は pane の shell が解釈するので、script path を pane shell 用に literal 化し、
   自分の shell 経由で `herdr` に渡すならもう 1 段 literal 化する (2 段)。
 - herdr が `running` でない、または split / run に失敗したら `Blocked at: launch-path`。このとき
-  worktree と run script は揃っているので、Next step に `zsh <run script の shell literal>` と run dir
-  を書く (人が自分の terminal で実行する。§9)。
+  clone と run script は揃っているので、Next step に `zsh <run script の shell literal>` と run dir
+  を書く (人が自分の terminal で実行する。§10)。
 
 ## 6. 待ち方と限界
 
@@ -127,14 +215,14 @@ herdr pane wait-output <pane-id> --match CODEX-WORKER-DONE-<nonce> --timeout 300
 <tool home>/agent-tools/scripts/personal-public-safety-gate --stdin < "$run/result.md"
 ```
 
-exit 0 のときだけ packet に写す。退避は worktree で、staged / unstaged / untracked を別々に:
+exit 0 のときだけ packet に写す。退避は clone で、staged / unstaged / untracked を別々に:
 
 ```sh
-git -C "$worktree" status --porcelain=v1 --untracked-files=all > "$run/wip-status.txt"
-git -C "$worktree" diff --cached --binary > "$run/wip-staged.patch"
-git -C "$worktree" diff --binary > "$run/wip-unstaged.patch"
-git -C "$worktree" ls-files --others --exclude-standard -z \
-  | tar -C "$worktree" --null -T - -cf "$run/wip-untracked.tar"
+git -C "$clone" status --porcelain=v1 --untracked-files=all > "$run/wip-status.txt"
+git -C "$clone" diff --cached --binary > "$run/wip-staged.patch"
+git -C "$clone" diff --binary > "$run/wip-unstaged.patch"
+git -C "$clone" ls-files --others --exclude-standard -z \
+  | tar -C "$clone" --null -T - -cf "$run/wip-untracked.tar"
 ```
 
 - `--cached` と作業ツリーの diff を分けるのは、stage 後に作業ツリーだけ戻した変更を落とさない
@@ -142,25 +230,41 @@ git -C "$worktree" ls-files --others --exclude-standard -z \
 - untracked は file 名を shell に通さず、NUL 区切りの list を `tar --null -T -` に渡す (bsdtar は
   list の名前を option として解釈しない。GNU tar なら `--verbatim-files-from` を足す)。
   untracked が無ければ tar は作らない。
-- 退避した path を packet の `結果` に書く。`git stash` は使わない (worktree の状態を動かさない)。
+- 退避した path を packet の `結果` に書く。`git stash` は使わない (clone の状態を動かさない)。
 
-## 9. trailer 検査と PR
+## 9. 回収 (fetch) と trailer 検査と PR
 
-PR に含まれるのは **統合先 (origin の main) から HEAD までの追加 commit** なので、base は local の
+worker の commit は clone の中にしかないので、まず main へ取り込みます (network 不要。clone は
+main の local path)。fetch は **branch を明示した refspec** で行い、失敗したら `Blocked at: fetch`
+(clone の中で検査して push、はしない。push する repository は main 側の設定に閉じる)。
+
+```sh
+git -C "$main" fetch --no-tags -- "$clone" "refs/heads/$branch:refs/heads/$branch" || exit 1
+```
+
+- **refspec に `+` を付けない**。`+` は non-fast-forward の上書きを許すので、main 側の同名 branch が
+  分岐していても黙って巻き戻る。`+` 無しなら git は
+  `! [rejected] <branch> -> <branch> (non-fast-forward)` を出して **exit 1**、local branch は動かない
+  (実測)。その場合は強制更新せず `Blocked at: fetch` で人に渡す (別 author の commit を巻き込まない
+  ため)。
+- fetch した branch は **checkout しない**。以降の検査と push は main の repository から
+  `refs/heads/$branch` を対象に行う。
+
+PR に含まれるのは **統合先 (origin の main) から branch までの追加 commit** なので、base は local の
 main ではなく fetch 済みの `origin/main` にする (local main に未 push の commit があると検査から
 漏れる)。検査は **fail-closed**: 次の各 command が 1 つでも失敗する、base OID が空か commit として
 検証できない、commit 一覧が取れない、のどれでも push せず `Blocked at: trailer` にする (local main
 や別の base に fallback しない)。
 
 ```sh
-git -C "$worktree" fetch origin '+refs/heads/main:refs/remotes/origin/main' || exit 1   # refspec を明示 (fetch 設定に依存しない)
-base_oid=$(git -C "$worktree" merge-base refs/remotes/origin/main HEAD) || exit 1
-git -C "$worktree" rev-parse --verify --end-of-options "$base_oid^{commit}" >/dev/null || exit 1
-git -C "$worktree" log --format='%H%x00%(trailers:key=Co-Authored-By,valueonly)%x00' "$base_oid"..HEAD || exit 1
+git -C "$main" fetch origin '+refs/heads/main:refs/remotes/origin/main' || exit 1   # refspec を明示 (fetch 設定に依存しない)
+base_oid=$(git -C "$main" merge-base refs/remotes/origin/main "refs/heads/$branch") || exit 1
+git -C "$main" rev-parse --verify --end-of-options "$base_oid^{commit}" >/dev/null || exit 1
+git -C "$main" log --format='%H%x00%(trailers:key=Co-Authored-By,valueonly)%x00' "$base_oid".."refs/heads/$branch" || exit 1
 ```
 
 (`exit 1` は「その段で止めて `Blocked at: trailer` にする」の意。空の `$base_oid` は `rev-parse` が
-拒否するので `""..HEAD` の空集合にはならない。)
+拒否するので `""..<branch>` の空集合にはならない。)
 
 commit ごとに trailer の name を見て、`Codex` 始まりが 1 つ以上あり `Claude` 始まりが無いことを
 確認する (欠落 / 混在は `Blocked at: trailer`。1 commit でも該当すれば push しない。commit が
@@ -168,7 +272,7 @@ commit ごとに trailer の name を見て、`Codex` 始まりが 1 つ以上�
 決定」と ai-trailer gate で、ここでは push 前の消費側検査として同じ規則を当てる。通ったら:
 
 ```sh
-git -C "$worktree" push -u origin "$branch"
+git -C "$main" push -u origin "refs/heads/$branch:refs/heads/$branch"
 gh pr create --base main --head "$branch" --title <title> --body-file <body file>
 ```
 

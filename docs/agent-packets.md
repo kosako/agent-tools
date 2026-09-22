@@ -178,15 +178,19 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
 - **authorization と scope**: 起動 prompt が authorization、packet の `依頼` が scope (上の信頼
   モデルと同じ)。brief には `依頼` を要約せず verbatim で写す (orchestrator 著なので trusted。
   要約は drift の元)。
-- **作業場所**: Issue ごとの linked worktree (orchestrator が `git worktree add … -b <branch>` で
-  切る)。packet dir は main worktree の root のまま (置き場の規則どおり)。worker の書込先は
-  **その worktree の中**と、**その worktree の commit に要る Git 管理領域** (main worktree 側の
-  `.git` 配下にある index / objects / refs) の 2 つに限り、packet dir は含めない (worker に開けない)。
-  成立条件は、起動する sandbox が linked worktree からの `git commit` を通すこと。codex 0.154.0 の
-  `codex exec -s workspace-write` で実測し、linked worktree でも追加の書込許可なしで commit が
-  通った。通らない環境では委譲 skill が起動前に止める (packet の規約ではなく skill の preflight)。
+- **作業場所**: Issue ごとの **local clone** (orchestrator が main から `git clone` して branch を
+  切る)。packet dir は main worktree の root のまま (置き場の規則どおり) で、gitignore されているので
+  clone には含まれない。worker の書込先は **その clone の中だけ**で、main の Git 管理領域も packet dir
+  も含めない。worker の commit は orchestrator が main へ `git fetch <clone> <branch>:<branch>` で
+  回収する (network 不要)。
+  linked worktree を使わないのは、worktree の git dir が main 側 (`<main>/.git/worktrees/<n>`) にあり、
+  `workspace-write` の sandbox の writable roots に入らないため (codex 0.154.0 で実測。`git add` が
+  index と objects の両方で `Operation not permitted` になる)。`--add-dir <main>/.git` で通るが、
+  それは main の objects / refs / 他 worktree の index / config を worker に開けるので採らない。
+  clone は identity が効く場所 (置き場で identity を切り替える設定を使っているなら、その context の
+  中) に切る。外に切ると user.email が空になり commit が fail-closed で落ちる。
 - **worker の権限境界**: packet の編集、GitHub への write (Issue / PR の操作、push)、別 agent の
-  起動、上の 2 つ以外への書込は worker がしない。起動側は Codex の approval policy を「承認を求める
+  起動、clone の外への書込は worker がしない。起動側は Codex の approval policy を「承認を求める
   操作は失敗する」側に固定する。これで止まるのは承認を求める操作だけなので、起動側は有効な承認設定
   (approval policy と、MCP connector の tool ごとの承認設定) を起動前に検査し、GitHub への write が
   無承認で通る設定なら起動しない (検査は委譲 skill の preflight が持つ)。worker は作業単位ごとに
@@ -207,7 +211,7 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
   public-safe な要約) を書く (最終 message があれば上の転記)。どちらも `state: blocked` にし、
   `次の入口` に続きの入り方 (下記) を書く。uncommitted な変更は
   staged / unstaged / untracked をすべて run directory に退避し (staged と unstaged は patch、
-  untracked は file の写し)、その path を記録する。復元を確認するまで worktree を消さない。
+  untracked は file の写し)、その path を記録する。復元を確認するまで clone を消さない。
   orchestrator が代わりに commit しない (trailer が Claude になり author が混ざる)。自動で再起動
   しない (残量は申告制、#255)。続きは同じ branch を Codex が続ける (同 author なので同じ PR)。
   Claude が続けるなら新しい branch + 新しい PR (author の交代)。
