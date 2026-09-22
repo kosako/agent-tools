@@ -1,0 +1,28 @@
+schema_version: 1
+name: personal-codex-worker-preflight
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #254 PR-2a の実装 PR で author≠reviewer レビューのうえ承認。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:33043777434b70be5142e7609c7facc9bda2aa36864bb6f270dc1c95992a78f6
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-codex-worker-preflight.rb
+  format: text
+summary: >-
+  Claude が Codex を worker として委譲起動する前の決定的 preflight (#254)。Codex の session 内から
+  の起動 (非対称) / codex CLI の flag / features list の disable 対象を検査し、connector・MCP
+  (bootstrap 含む)・execpolicy の allow rule を外した起動 argv (--ignore-user-config
+  --ignore-rules + --disable apps 等、model / effort は再指定) を出す (exit 0)。capability
+  不足と非対称は exit 1 (BLOCKED)、user config の top-level を安全に解釈できなければ exit 2
+  (fail-closed。--model / --effort の明示で回避)。規範の正本は personal-codex-worker skill。
