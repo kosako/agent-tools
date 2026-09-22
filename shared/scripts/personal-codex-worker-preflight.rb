@@ -25,10 +25,12 @@
 # model / effort の出所は 2 つ。`--model` / `--effort` で明示されればそれを使い config は
 # 読まない。無ければ config.toml の top-level (最初の table header より前) から `model` /
 # `model_reasoning_effort` を読む。TOML parser は持たないので、top-level の各行を
-# 「空行 / comment / `bare_key = <1 行で閉じる scalar か配列>`」だけに分類し、それ以外の行
-# (複数行文字列、複数行の配列、inline table、quoted / dotted key、escape を含む文字列) が 1 つでも
-# あれば、model を「無し」に倒さず fail-closed (exit 2) にする。remedy は `--model` / `--effort`
-# の明示。model / effort の値は basic string 1 行で、charset は `[A-Za-z0-9._-]+` に限る。
+# 「空行 / comment / `bare_key = <1 行で閉じる scalar か平坦な配列>`」だけに分類し、それ以外の行
+# (複数行文字列、複数行の配列、入れ子や `#` `[` `]` を要素に含む配列、inline table、quoted /
+# dotted key、escape を含む文字列) が 1 つでもあれば、model を「無し」に倒さず fail-closed
+# (exit 2) にする。独立した検査は持たず、この分類 1 本で判定する (除去しても捕捉できない冗長な
+# 検査を置かない)。remedy は `--model` / `--effort` の明示。model / effort の値は basic string
+# 1 行で、charset は `[A-Za-z0-9._-]+` に限る。
 #
 # 判定:
 # - exit 1 (BLOCKED): Codex の session 内 (CODEX_SANDBOX / CODEX_THREAD_ID) から呼ばれた
@@ -75,11 +77,17 @@ module CodexWorkerPreflight
   # 含まない文字だけを通す。
   MODEL_VALUE_RE = /\A[A-Za-z0-9._-]+\z/
 
+  # 配列の要素として受け入れる形: `#` / `[` / `]` / escape を含まない basic string、literal
+  # string、bare scalar。入れ子や、comment 文字・括弧を含む文字列は受け入れない (その行で配列が
+  # 閉じたかを文脈なしに判定できないため。fail-closed)。
+  ARRAY_ITEM = /(?:"[^"\\#\[\]]*"|'[^'#\[\]]*'|[A-Za-z0-9._:+-]+)/
+
   # top-level の行として受け入れる形 (これ以外は fail-closed)。value は 1 行で閉じる
-  # basic string / literal string / bare scalar / 配列のどれか。
+  # basic string / literal string / bare scalar / 平坦な配列のどれか。
   TOP_LEVEL_LINE_RE = %r{
     \A\s*(?<key>[A-Za-z0-9_-]+)\s*=\s*
-    (?:"(?<basic>[^"\\]*)"|'[^']*'|[A-Za-z0-9._:+-]+|\[[^\n]*\])
+    (?:"(?<basic>[^"\\]*)"|'[^']*'|[A-Za-z0-9._:+-]+
+      |\[\s*(?:#{ARRAY_ITEM}(?:\s*,\s*#{ARRAY_ITEM})*\s*,?)?\s*\])
     \s*(?:\#.*)?\z
   }x
 
@@ -131,9 +139,6 @@ module CodexWorkerPreflight
       stripped = line.strip
       next if stripped.empty? || stripped.start_with?("#")
       break if stripped.start_with?("[")
-      if line.include?('"""') || line.include?("'''")
-        raise ArgumentError, "user config の top-level に複数行文字列があり安全に読めません (--model / --effort で明示してください)"
-      end
 
       m = TOP_LEVEL_LINE_RE.match(line)
       raise ArgumentError, "user config の top-level に解釈できない行があります (--model / --effort で明示してください)" unless m

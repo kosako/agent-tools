@@ -90,7 +90,7 @@ check("table header より後の model は読まない", sel("[profiles.a]\nmode
 check("comment 行は読まない", sel("# model = \"gpt-x\"\n") == {})
 check("CRLF でも読める", sel("model = \"gpt-x\"\r\n") == { "model" => "gpt-x" })
 check("1 行で閉じる配列・literal string・bare scalar の行は通る",
-      sel("notify = [\"a\", \"b]\"]\nx = 'lit'\nn = 12\nb = true\nmodel = \"gpt-x\"\n") == { "model" => "gpt-x" })
+      sel("notify = [\"a\", \"b\"]\nx = 'lit'\nn = 12\nb = true\nmodel = \"gpt-x\"\n") == { "model" => "gpt-x" })
 check("値の中の [ は header と誤認しない", sel("s = \"[not a header]\"\nmodel = \"gpt-x\"\n") == { "model" => "gpt-x" })
 check("許可した文字だけの値は通る", sel("model = \"gpt-6.1_astra-x\"\n") == { "model" => "gpt-6.1_astra-x" })
 
@@ -98,6 +98,15 @@ check("複数行文字列の開始行は fail-closed (偽 key が 1 つでも拾
       sel_error?("developer_instructions = '''\nmodel = \"CANARY\"\n[example]\n'''\nmodel = \"gpt-x\"\n"))
 check("複数行文字列 (basic) も fail-closed", sel_error?("note = \"\"\"\nmodel = \"b\"\n\"\"\"\n"))
 check("複数行に跨る配列 (継続行) は fail-closed", sel_error?("notify = [\n  \"a\",\n]\nmodel = \"gpt-x\"\n"))
+check("comment の ] で閉じたように見える配列 + [ 始まりの継続行は fail-closed (header と誤認しない)",
+      sel_error?("matrix = [ # ]\n  [1, 2]\n]\nmodel = \"gpt-x\"\n"))
+check("配列の要素に \"\"\" / ''' があれば fail-closed",
+      sel_error?("note = [\"\"\"x\"\"\"]\n") && sel_error?("note = ['''x''']\n"))
+check("配列の要素の文字列に ] / [ / # があれば fail-closed",
+      sel_error?("a = [\"x]y\"]\n") && sel_error?("a = [\"x[y\"]\n") && sel_error?("a = [\"x#y\"]\n"))
+check("入れ子の配列は fail-closed", sel_error?("a = [1, [2]]\n"))
+check("平坦な配列 (空・末尾 comma・空白あり) は通る",
+      sel("a = []\nb = [ ]\nc = [1, 2,]\nd = [ \"x\" , 'y' ]\nmodel = \"gpt-x\"\n") == { "model" => "gpt-x" })
 check("inline table は fail-closed", sel_error?("t = { a = 1 }\n"))
 check("quoted key は fail-closed", sel_error?("\"model\" = \"gpt-x\"\n") && sel_error?("'model_reasoning_effort' = \"x\"\n"))
 check("dotted key は fail-closed", sel_error?("model.name = \"x\"\n"))
@@ -249,6 +258,10 @@ model = "CANARY"
 model = "gpt-x"' 'notify = [
   "a",
 ]
+model = "gpt-x"' 'matrix = [ # ]
+  [1, 2]
+]
+model = "gpt-x"' 'note = ["""CANARY"""]
 model = "gpt-x"' '"model" = "gpt-x"' 'model = "a"
 model = "b"' 'model = "a b"' 'model_reasoning_effort = ""'; do
   i=$((i + 1))
