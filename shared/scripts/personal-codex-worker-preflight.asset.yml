@@ -14,14 +14,15 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:c6a8c6edf3e3408e33899f1cee23bdf55efa29c204b8468ad627d8bbaafeab2d
+  approved_build_id: sha256:93c70688f86267db41d672aba1c8bfd2b0b6633ad8bd2f11a4515558caba9735
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-codex-worker-preflight.rb
   format: text
 summary: >-
   Claude が Codex を worker として委譲起動する前の決定的 preflight (#254)。Codex の session 内から
-  の起動 (非対称) / codex CLI の flag / features list の disable 対象を検査し、user config の
-  model / effort を再指定した起動 argv (--ignore-user-config + --disable apps 等で connector と
-  MCP を外す) を出す (exit 0)。capability 不足と非対称は exit 1 (BLOCKED)、model を一意に読め
-  なければ exit 2 (fail-closed)。規範の正本は personal-codex-worker skill。
+  の起動 (非対称) / codex CLI の flag / features list の disable 対象を検査し、connector・MCP
+  (bootstrap 含む)・execpolicy の allow rule を外した起動 argv (--ignore-user-config
+  --ignore-rules + --disable apps 等、model / effort は再指定) を出す (exit 0)。capability
+  不足と非対称は exit 1 (BLOCKED)、user config の top-level を安全に解釈できなければ exit 2
+  (fail-closed。--model / --effort の明示で回避)。規範の正本は personal-codex-worker skill。

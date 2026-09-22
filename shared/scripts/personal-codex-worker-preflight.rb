@@ -6,43 +6,52 @@
 #
 # 何を守るか: worker の Codex に、GitHub connector (account 側の app)、MCP server (config.toml
 # で定義したもの、ChatGPT app が Codex home に足す bootstrap のもの)、computer / browser 系の
-# tool を持たせない。MCP server は Codex の command sandbox の外で動く process で、bootstrap の
-# JS REPL は特に境界の穴になる。approval policy は「承認を求める操作は失敗する」側に固定するが、
-# それで止まるのは承認を求める操作だけで、connector tool ごとの承認設定が自動承認なら素通りする。
+# tool、execpolicy の allow rule (一致した command を追加承認なしに sandbox 外で実行しうる) を
+# 持たせない。MCP server は Codex の command sandbox の外で動く process で、bootstrap の JS REPL
+# は特に境界の穴になる。approval policy は「承認を求める操作は失敗する」側に固定するが、それで
+# 止まるのは承認を求める操作だけで、connector tool ごとの承認設定が自動承認なら素通りする。
 #
 # 実測 (2026-09-22、codex 0.154.0) で唯一これらを全部外せた起動形:
-#   codex exec --ignore-user-config -s workspace-write -c approval_policy="never"
+#   codex exec --ignore-user-config --ignore-rules -s workspace-write -c approval_policy="never"
 #     --disable apps --disable computer_use --disable browser_use
-#     -c model="<user config の model>" -c model_reasoning_effort="<同 effort>" -o <result> -
+#     [-c model="<user config の model>"] [-c model_reasoning_effort="<同 effort>"] -o <result> -
 # `--ignore-user-config` で config.toml と bootstrap の MCP server が読まれなくなり (AGENTS.md
 # と skills は読まれ、linked worktree での commit も通る)、`--disable apps` で account 側の
 # connector が消える。`-c mcp_servers.<name>.enabled=false` は config.toml に無い bootstrap の
-# server に対して config load を落とす (invalid transport) ので使わない。model / effort は
-# user config が読まれなくなる分を再指定する (無ければ Codex の既定に委ねる)。
+# server に対して config load を落とす (invalid transport) ので使わない。`--ignore-rules` は
+# user / project の execpolicy `.rules` を読まない指定 (`--ignore-user-config` とは別)。
+# model / effort は user config が読まれなくなる分を再指定する。
 #
-# 判定 (fail-closed):
+# model / effort の出所は 2 つ。`--model` / `--effort` で明示されればそれを使い config は
+# 読まない。無ければ config.toml の top-level (最初の table header より前) から `model` /
+# `model_reasoning_effort` を読む。TOML parser は持たないので、top-level の各行を
+# 「空行 / comment / `bare_key = <1 行で閉じる scalar か配列>`」だけに分類し、それ以外の行
+# (複数行文字列、複数行の配列、inline table、quoted / dotted key、escape を含む文字列) が 1 つでも
+# あれば、model を「無し」に倒さず fail-closed (exit 2) にする。remedy は `--model` / `--effort`
+# の明示。model / effort の値は basic string 1 行で、charset は `[A-Za-z0-9._-]+` に限る。
+#
+# 判定:
 # - exit 1 (BLOCKED): Codex の session 内 (CODEX_SANDBOX / CODEX_THREAD_ID) から呼ばれた
 #   (委譲は Claude → Codex の一方通行) / codex CLI が無い・版が読めない / `codex exec --help` に
-#   要る flag が無い / `codex features list` に disable 対象の feature 行が無い
-# - exit 2 (検査できない): usage / user config の model / model_reasoning_effort を一意に読めない
-#   (top-level に同じ key が複数ある、値が argv に安全に埋められない文字を含む)
+#   要る flag が無い / `codex features list` に disable 対象の feature 行が無い。Codex の 3 command
+#   (`--version` / `exec --help` / `features list`) は exit 0 のときだけ出力を信用する
+# - exit 2 (検査できない): usage / user config の top-level を安全に解釈できない / model・effort の
+#   値が不正
 # - exit 0: 起動可。stdout に検査結果と launch argv (`--json` なら JSON 1 個)
 #
-# model / effort の読み取りは、config.toml の最初の table header より前 (top-level) にある
-# `model = "…"` / `model_reasoning_effort = "…"` の行だけを見る最小解釈で、TOML parser は
-# 持たない。読めるのは model の選択だけで境界には関わらず、選ばれた model は起動 log に出る。
-# 同じ key が 2 回以上あれば (複数行文字列の中身を拾った疑いを含む) fail-closed にする。
+# herdr の状態 (`herdr status`) は起動経路 (herdr pane か直接か) を launcher が選ぶための任意の
+# 表示で、herdr が無い・止まっていても BLOCKED にはしない (上の exit 非ゼロ規則の対象外)。
 #
-# 検査しないこと (honest): 実際の tool surface。起動して model に列挙させないと分からないので、
-# 本 script は決定的に読めるものだけを見る。surface の実測は acceptance probe に置く。
-# 副作用ゼロ・network なし。読むのは codex / herdr の help・status・feature 一覧と、user config
-# の 2 行だけ。値は argv 配列で下位 command に渡し、shell を介さない。出力に config の他の値は
-# 載せない。`--codex-home DIR` は config.toml の場所の上書き。
+# 検査しないこと (honest): 実際の tool surface と、allow rule が本当に無効になるか。起動して
+# 確かめるしかないので acceptance probe に置く。副作用ゼロ・network なし。読むのは codex / herdr
+# の help・status・feature 一覧と、user config の top-level だけ。値は argv 配列で下位 command に
+# 渡し、shell を介さない。出力に model / effort 以外の config の値は載せない。`--codex-home DIR`
+# は config.toml の場所の上書き。
 
 require "json"
 
 module CodexWorkerPreflight
-  VERSION = "4"
+  VERSION = "5"
 
   # 起動時に `--disable` で外す feature。`codex features list` に行が無ければ BLOCKED
   # (存在しない feature を disable しようとして CLI が止まる形へ倒さない)。
@@ -55,22 +64,31 @@ module CodexWorkerPreflight
     "config override" => "--config",
     "feature disable" => "--disable",
     "user config ignore" => "--ignore-user-config",
+    "rules ignore" => "--ignore-rules",
     "result file" => "--output-last-message",
     "stdin prompt" => "`-`",
   }.freeze
 
-  # user config から再指定する key (TOML key => launch argv に載せる config key)。
-  MODEL_KEYS = %w[model model_reasoning_effort].freeze
+  # user config から再指定する key (option 名 => TOML / config key)。
+  MODEL_KEYS = { "--model" => "model", "--effort" => "model_reasoning_effort" }.freeze
   # `-c key="value"` の value は TOML の basic string として解釈されるので、引用符や escape を
   # 含まない文字だけを通す。
   MODEL_VALUE_RE = /\A[A-Za-z0-9._-]+\z/
+
+  # top-level の行として受け入れる形 (これ以外は fail-closed)。value は 1 行で閉じる
+  # basic string / literal string / bare scalar / 配列のどれか。
+  TOP_LEVEL_LINE_RE = %r{
+    \A\s*(?<key>[A-Za-z0-9_-]+)\s*=\s*
+    (?:"(?<basic>[^"\\]*)"|'[^']*'|[A-Za-z0-9._:+-]+|\[[^\n]*\])
+    \s*(?:\#.*)?\z
+  }x
 
   Blocked = Class.new(StandardError)
 
   module_function
 
   def usage
-    "usage: personal-codex-worker-preflight [--codex-home DIR] [--json]"
+    "usage: personal-codex-worker-preflight [--codex-home DIR] [--model NAME] [--effort LEVEL] [--json]"
   end
 
   # 下位 command を argv 配列で起動して stdout + stderr を読む。exit 0 以外と不在は nil。
@@ -103,34 +121,44 @@ module CodexWorkerPreflight
     features
   end
 
-  # config.toml の top-level (最初の table header より前) から model / model_reasoning_effort を
-  # 読む。無ければ nil (Codex の既定に委ねる)。同じ key が 2 回以上、または値が安全に埋められない
-  # 形なら fail-closed (ArgumentError → exit 2)。
+  # config.toml の top-level から model / model_reasoning_effort を読む。無ければ空 (Codex の
+  # 既定に委ねる)。top-level に分類できない行があれば、その行が model と無関係でも fail-closed
+  # (複数行文字列の中身を key として拾う経路を残さないため)。
   def read_model_selection(text)
     found = Hash.new { |h, k| h[k] = [] }
     text.to_s.each_line do |raw|
       line = raw.chomp.sub(/\r\z/, "")
-      break if line.lstrip.start_with?("[")
+      stripped = line.strip
+      next if stripped.empty? || stripped.start_with?("#")
+      break if stripped.start_with?("[")
+      if line.include?('"""') || line.include?("'''")
+        raise ArgumentError, "user config の top-level に複数行文字列があり安全に読めません (--model / --effort で明示してください)"
+      end
 
-      km = /\A\s*(model|model_reasoning_effort)\s*=\s*(.*)\z/.match(line)
-      next unless km
+      m = TOP_LEVEL_LINE_RE.match(line)
+      raise ArgumentError, "user config の top-level に解釈できない行があります (--model / --effort で明示してください)" unless m
 
-      # key があるのに basic string 1 行の形でなければ、黙って「無し」に倒さず fail-closed。
-      vm = /\A"([^"]*)"\s*(?:#.*)?\z/.match(km[2])
-      raise ArgumentError, "user config の #{km[1]} を安全に読めません (1 行の basic string だけ対応)" unless vm
+      key = m[:key]
+      next unless MODEL_KEYS.value?(key)
+      raise ArgumentError, "user config の #{key} は basic string 1 行の形だけ対応しています" if m[:basic].nil?
 
-      found[km[1]] << vm[1]
+      found[key] << m[:basic]
     end
     selection = {}
-    MODEL_KEYS.each do |key|
+    MODEL_KEYS.each_value do |key|
       values = found[key]
       next if values.empty?
       raise ArgumentError, "user config の #{key} が top-level に複数あり一意に読めません" if values.size > 1
-      raise ArgumentError, "user config の #{key} の値に argv へ安全に埋められない文字があります" unless values.first.match?(MODEL_VALUE_RE)
 
-      selection[key] = values.first
+      selection[key] = validate_model_value(key, values.first)
     end
     selection
+  end
+
+  def validate_model_value(key, value)
+    raise ArgumentError, "#{key} の値に argv へ安全に埋められない文字があります" unless value.to_s.match?(MODEL_VALUE_RE)
+
+    value
   end
 
   def herdr_state
@@ -140,9 +168,10 @@ module CodexWorkerPreflight
 
   # 起動 argv。`<run dir>` は launcher が run directory に置き換える placeholder。
   def launch_argv(features, selection)
-    argv = ["codex", "exec", "--ignore-user-config", "-s", "workspace-write", "-c", 'approval_policy="never"']
+    argv = ["codex", "exec", "--ignore-user-config", "--ignore-rules", "-s", "workspace-write",
+            "-c", 'approval_policy="never"']
     features.each { |f| argv.push("--disable", f) }
-    MODEL_KEYS.each { |key| argv.push("-c", "#{key}=\"#{selection[key]}\"") if selection[key] }
+    MODEL_KEYS.each_value { |key| argv.push("-c", "#{key}=\"#{selection[key]}\"") if selection[key] }
     argv.push("-o", "<run dir>/result.md", "-")
   end
 
@@ -154,22 +183,36 @@ module CodexWorkerPreflight
   end
 
   def parse_args(argv)
-    opts = { codex_home: nil, json: false }
+    opts = { codex_home: nil, json: false, explicit: {} }
     args = argv.dup
     until args.empty?
       arg = args.shift
       case arg
       when "--json" then opts[:json] = true
-      when "--codex-home"
-        dir = args.shift
-        raise ArgumentError, usage if dir.nil? || dir.empty? || dir.start_with?("-")
+      when "--codex-home", "--model", "--effort"
+        value = args.shift
+        raise ArgumentError, usage if value.nil? || value.empty? || value.start_with?("-")
 
-        opts[:codex_home] = dir
+        if arg == "--codex-home"
+          opts[:codex_home] = value
+        else
+          key = MODEL_KEYS.fetch(arg)
+          opts[:explicit][key] = validate_model_value(key, value)
+        end
       else
         raise ArgumentError, usage
       end
     end
     opts
+  end
+
+  # 明示 (--model / --effort) があれば config を読まない。片方だけ明示されたときも読まない
+  # (config の解釈を「一部だけ」混ぜると出所が追えなくなる)。
+  def model_selection(opts)
+    return opts[:explicit] unless opts[:explicit].empty?
+
+    config_path = File.join(codex_home(opts[:codex_home]), "config.toml")
+    read_model_selection(File.file?(config_path) ? File.read(config_path, encoding: "UTF-8") : "")
   end
 
   def inspect_environment(opts)
@@ -193,8 +236,7 @@ module CodexWorkerPreflight
     absent = DISABLE_FEATURES.reject { |f| features.key?(f) }
     raise Blocked, "capability: features list に無い feature (disable できない): #{absent.join(', ')}" unless absent.empty?
 
-    config_path = File.join(codex_home(opts[:codex_home]), "config.toml")
-    selection = read_model_selection(File.file?(config_path) ? File.read(config_path, encoding: "UTF-8") : "")
+    selection = model_selection(opts)
 
     {
       status: "ok",
@@ -202,6 +244,7 @@ module CodexWorkerPreflight
       disable_features: DISABLE_FEATURES.dup,
       model: selection["model"],
       model_reasoning_effort: selection["model_reasoning_effort"],
+      model_source: opts[:explicit].empty? ? "config" : "explicit",
       herdr: herdr_state,
       launch_argv: launch_argv(DISABLE_FEATURES, selection),
     }
@@ -211,8 +254,8 @@ module CodexWorkerPreflight
     puts "codex: #{r[:codex_version]}"
     puts "exec flags: ok"
     puts "disable features: #{r[:disable_features].join(' ')}"
-    puts "model: #{r[:model] || '(codex default)'}"
-    puts "model_reasoning_effort: #{r[:model_reasoning_effort] || '(codex default)'}"
+    puts "model: #{r[:model] || '(codex default)'} (#{r[:model_source]})"
+    puts "model_reasoning_effort: #{r[:model_reasoning_effort] || '(codex default)'} (#{r[:model_source]})"
     puts "herdr: #{r[:herdr]}"
     puts "launch: #{r[:launch_argv].join(' ')}"
   end
