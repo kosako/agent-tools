@@ -182,7 +182,10 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
   切る)。packet dir は main worktree の root のまま (置き場の規則どおり) で、gitignore されているので
   clone には含まれない。worker の書込先は **その clone の中だけ**で、main の Git 管理領域も packet dir
   も含めない。worker の commit は orchestrator が main へ `git fetch <clone> <branch>:<branch>` で
-  回収する (network 不要)。
+  回収する (network 不要)。起動側は **その clone の git dir (`<clone>/.git`) だけ**を sandbox の
+  writable roots に足す (`workspace-write` は workdir の内側でも `.git` を保護するため。実測)。
+  main の Git 管理領域は足さない (preflight が orchestrator 自身の repository と linked worktree を
+  拒否する)。
   linked worktree を使わないのは、worktree の git dir が main 側 (`<main>/.git/worktrees/<n>`) にあり、
   `workspace-write` の sandbox の writable roots に入らないため (codex 0.154.0 で実測。`git add` が
   index と objects の両方で `Operation not permitted` になる)。`--add-dir <main>/.git` で通るが、

@@ -30,8 +30,8 @@ orchestrator が行います。
 - **この skill (orchestrator 側)**: authorization と scope の確認、preflight の実行、clone と
   branch の用意、brief の生成、起動と完了判定、commit の回収 (fetch)、結果の転記、停止の記録、
   PR の作成、返却。
-- **`personal-codex-worker-preflight`**: 起動できる前提 (非対称 / capability / model 選択) の決定的
-  検査と launch argv の生成。この skill は preflight の判定を再実装しない。
+- **`personal-codex-worker-preflight`**: 起動できる前提 (非対称 / capability / model 選択 / clone の
+  妥当性) の決定的検査と launch argv の生成。この skill は preflight の判定を再実装しない。
 - **worker (Codex)**: clone の中で `依頼` を実装し、作業単位ごとに commit し、最終 message に
   結果を書く。packet / GitHub / main repository には触れない。
 - **人**: 委譲の起動指示、blocked からの再開判断、残量の申告 (#255)、PR の merge。
@@ -51,7 +51,8 @@ orchestrator が行います。
 ## 2. preflight
 
 起動前に、配備済みの `personal-codex-worker-preflight` (`<tool home>/agent-tools/scripts/`) を
-`--json` で実行し、**exit 0 のときだけ**その `launch_argv` を使います。
+`--clone <clone path> --json` で実行し、**exit 0 のときだけ**その `launch_argv` を使います。clone を
+検査するので **§3 の clone を作ってから** 実行します (順番は `LAUNCH.md`)。
 
 - exit 1 (BLOCKED): `blocked_at` (asymmetry / capability) と `reason` をそのまま `Blocked at: preflight`
   として返す。Codex の session 内 (`CODEX_SANDBOX` / `CODEX_THREAD_ID`) からの起動は非対称なので
@@ -64,9 +65,14 @@ orchestrator が行います。
 
 `launch_argv` は `codex exec --ignore-user-config --ignore-rules -s workspace-write
 -c approval_policy="never" --disable apps --disable computer_use --disable browser_use
-[-c model="…"] [-c model_reasoning_effort="…"] -o <run dir>/result.md -` の形で、`<run dir>` を
-run directory に置き換えて使う。**flag を足さない・外さない** (`--ephemeral` は付けない。
-`-s danger-full-access` や `--dangerously-…` は使わない。`--add-dir` で packet dir や home を開けない)。
+--add-dir <clone>/.git [-c model="…"] [-c model_reasoning_effort="…"] -o <run dir>/result.md -` の形で、
+`<run dir>` を run directory に置き換えて使う。**flag を足さない・外さない** (`--ephemeral` は付けない。
+`-s danger-full-access` や `--dangerously-…` は使わない。`--add-dir` を自分で足さない)。
+
+`--add-dir` が 1 つ入るのは、`workspace-write` の sandbox が **workdir の内側でも `.git` を保護する**
+ため (codex 0.154.0 で実測。これが無いと worker は `git add` すらできない)。開けるのは **worker 自身の
+clone の git dir だけ**で、preflight が orchestrator 自身の repository と linked worktree を拒否する
+(exit 2)。main の Git 管理領域・packet dir・home は開かない。
 
 herdr の状態 (`herdr` field) が `running` でなければ、pane 経由の起動はできない。この skill は
 worker を直接起動しない (review executor と違い、無人で長時間走る process を呼び出し元の
@@ -78,10 +84,12 @@ run script を実行する hand-off にする。
 worker は Issue ごとの **local clone** で動かします。linked worktree は使いません: worktree の git dir
 は main 側 (`<main>/.git/worktrees/<n>`) にあり、`workspace-write` の sandbox から書けないため worker が
 commit できません (codex 0.154.0 で実測。`--add-dir <main>/.git` を足せば通りますが、それは main の
-objects / refs / 他 worktree の index / config を worker に開けることになるので採りません)。clone なら
-git dir が workdir の内側に入り、追加の書込許可なしで commit できます。
+objects / refs / 他 worktree の index / config を worker に開けることになるので採りません)。clone なら git dir が
+その clone の中に入るので、**その 1 つだけ** を `--add-dir` で開ければ commit できます
+(`workspace-write` は workdir の内側でも `.git` を保護するため、追加許可そのものは必要。#307)。
 
 - `git clone --no-hardlinks <main worktree> <clone path>` で切り、branch は clone 側で選ぶ。
+  以降 (preflight / 起動) は preflight が返す `clone_root` (検査した物理 path) を使う。
   `--no-hardlinks` は必須 (既定の local clone は object を main と hardlink 共有するので、分離が
   成立しない)。branch は「clone の local branch → `origin/<branch>` → 新規」の順で解決する
   (`switch -c` だけだと、main 側にある同名 branch の tip を取り違える)。branch 名は packet の
@@ -89,7 +97,8 @@ git dir が workdir の内側に入り、追加の書込許可なしで commit �
 - **起動前に clone 側の commit 前提を確認する**: `user.email` / `user.name` が解決でき、git hook gate
   (public-safety / git-identity / ai-trailer) の hook が clone から見えること。clone には main の
   repo-local な設定は引き継がれないので、どちらか欠ければ起動せず `Blocked at: clone` とする
-  (手順は `LAUNCH.md` §3)。
+  (手順は `LAUNCH.md` §2)。clone の path 自体の妥当性 (git dir が `<clone>/.git` の directory である /
+  orchestrator 自身の repository ではない) は preflight が検査する。
 - **clone の置き場は identity が効く場所に固定する**。git の identity を repository の置き場で
   切り替える設定 (`includeIf "gitdir:…"`) を使っている環境では、その context の外 (例: 一時 dir) へ
   clone すると user.email が空になり、commit が fail-closed で落ちます。既定は
@@ -130,8 +139,9 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
 通りに組みます** (手順の正本はそちら)。ここには手順が満たすべき契約だけを置きます。
 
 - **起動形は preflight の `launch_argv` そのまま** (`<run dir>` の置換だけ)。run script は clone に
-  `cd` してから起動し、stdout / stderr を `codex.log` に tee する。`--add-dir` を足さない (clone なら
-  不要。足すことは main の Git 管理領域を開けることと同じ)。
+  `cd` してから起動し、stdout / stderr を `codex.log` に tee する。`--add-dir` を**自分で足さない**
+  (preflight が clone の git dir に対して 1 つだけ入れる。別の path を足すことは main の Git 管理領域を
+  開けることと同じ)。
 - **escape**: path と nonce は生成時に shell literal 化 (値全体を `'` で囲み、内側の `'` を `'\''` に
   置換) して script 先頭の変数に 1 回だけ埋め込み、以降は `"$run"` / `"$clone"` で参照する。値を
   inline の引用へ展開しない。`pane run` は pane shell と呼び出し元 shell の 2 段で literal 化する。

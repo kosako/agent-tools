@@ -25,18 +25,20 @@ P = CodexWorkerPreflight
 
 # 定義を固定値で pin する (実装側から marker / feature / key を 1 つ削ると検知される)。
 check("必須 marker の一覧",
-      P::REQUIRED_HELP_MARKERS.keys.sort == ["config override", "feature disable", "result file", "rules ignore",
-                                              "sandbox flag", "stdin prompt", "user config ignore",
-                                              "workspace-write mode"])
+      P::REQUIRED_HELP_MARKERS.keys.sort == ["config override", "extra writable dir", "feature disable",
+                                              "result file", "rules ignore", "sandbox flag", "stdin prompt",
+                                              "user config ignore", "workspace-write mode"])
 check("必須 marker の文字列",
-      P::REQUIRED_HELP_MARKERS.values.sort == ["--config", "--disable", "--ignore-rules", "--ignore-user-config",
-                                                "--output-last-message", "--sandbox", "`-`", "workspace-write"])
+      P::REQUIRED_HELP_MARKERS.values.sort == ["--add-dir", "--config", "--disable", "--ignore-rules",
+                                                "--ignore-user-config", "--output-last-message", "--sandbox",
+                                                "`-`", "workspace-write"])
 check("disable する feature の一覧", P::DISABLE_FEATURES == %w[apps computer_use browser_use])
 check("再指定する key の一覧", P::MODEL_KEYS == { "--model" => "model", "--effort" => "model_reasoning_effort" })
 
 HELP_OK = <<~H
   Options:
     -c, --config <key=value>
+        --add-dir <DIR>
         --disable <FEATURE>
     -s, --sandbox <SANDBOX_MODE>
             [possible values: read-only, workspace-write, danger-full-access]
@@ -49,10 +51,11 @@ H
 check("help に全 marker があれば missing なし", P.missing_help_markers(HELP_OK).empty?)
 { "--config" => "config override", "--disable" => "feature disable", "--sandbox" => "sandbox flag",
   "workspace-write" => "workspace-write mode", "--ignore-user-config" => "user config ignore",
-  "--ignore-rules" => "rules ignore", "--output-last-message" => "result file", "`-`" => "stdin prompt" }.each do |text, name|
+  "--ignore-rules" => "rules ignore", "--output-last-message" => "result file", "--add-dir" => "extra writable dir",
+  "`-`" => "stdin prompt" }.each do |text, name|
   check("#{text} が無いと #{name} が missing", P.missing_help_markers(HELP_OK.sub(text, "")) == [name])
 end
-check("nil help は 8 marker すべて missing", P.missing_help_markers(nil).size == 8)
+check("nil help は 9 marker すべて missing", P.missing_help_markers(nil).size == 9)
 
 check("version を読む", P.parse_version("codex-cli 0.154.0\n") == "0.154.0")
 check("version 形でなければ nil", P.parse_version("something else").nil?)
@@ -148,7 +151,8 @@ check("値に空白があれば fail-closed", sel_error?("model = \"a b\"\n"))
 check("値が空なら fail-closed", sel_error?("model = \"\"\n"))
 check("model と無関係な行でも分類できなければ fail-closed", sel_error?("weird line\nmodel = \"gpt-x\"\n"))
 
-argv = P.launch_argv(%w[apps computer_use], { "model" => "gpt-x", "model_reasoning_effort" => "xhigh" })
+argv = P.launch_argv(%w[apps computer_use], { "model" => "gpt-x", "model_reasoning_effort" => "xhigh" },
+                     "/tmp/clone/.git")
 check("launch argv は --ignore-user-config + --ignore-rules + workspace-write + approval never を固定",
       argv[0, 8] == ["codex", "exec", "--ignore-user-config", "--ignore-rules", "-s", "workspace-write",
                      "-c", 'approval_policy="never"'])
@@ -157,7 +161,11 @@ check("launch argv に disable が並ぶ",
 check("launch argv に model / effort の再指定が並ぶ",
       argv.each_cons(2).include?(["-c", 'model="gpt-x"']) &&
       argv.each_cons(2).include?(["-c", 'model_reasoning_effort="xhigh"']))
-check("選択が無ければ再指定を付けない", P.launch_argv(%w[apps], {}).none? { |a| a.start_with?("model") })
+check("選択が無ければ再指定を付けない",
+      P.launch_argv(%w[apps], {}, "/tmp/clone/.git").none? { |a| a.start_with?("model") })
+check("launch argv に clone の git dir を 1 つだけ --add-dir する",
+      argv.each_cons(2).include?(["--add-dir", "/tmp/clone/.git"]) &&
+      argv.count("--add-dir") == 1)
 check("launch argv は result file と stdin prompt で終わる", argv.last(3) == ["-o", "<run dir>/result.md", "-"])
 check("launch argv に --ephemeral や mcp_servers を付けない",
       !argv.include?("--ephemeral") && argv.none? { |a| a.include?("mcp_servers") })
@@ -172,6 +180,7 @@ cat > "$tmp/exec-help.txt" <<'EOF'
 Run Codex non-interactively
 Options:
   -c, --config <key=value>
+      --add-dir <DIR>
       --disable <FEATURE>
   -s, --sandbox <SANDBOX_MODE>
           [possible values: read-only, workspace-write, danger-full-access]
@@ -229,15 +238,35 @@ command = "/opt/CANARY-PATH/node"
 model = "CANARY-PROFILE-model"
 EOF
 
+# fixture 用の git 環境を隔離する (実環境の hook / identity を継承しない。commit は fixture の
+# 都合であって gate の検証ではないため)。**GIT_CONFIG_* は使わない**: preflight がそれらを
+# 「repository を選ぶ環境変数」として拒否するので、隔離は HOME の差し替えで行う。
+HOME="$tmp/git-home"
+export HOME
+mkdir -p "$HOME"
+git config --global user.name test
+git config --global user.email test@example.com
+git config --global init.defaultBranch main
+git config --global core.hooksPath /dev/null
+git config --global protocol.file.allow always
+
+# worker 用 clone の代わり (git dir が directory の普通の repository)。orchestrator 自身の
+# repository ではないので検査を通る。
+clone="$tmp/clone"
+git init -q "$clone"
+
 # 検査対象の env marker は両方とも外してから呼ぶ (片方が残って別の検査を隠さないように)。
 run_pf() {
-  env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" "$@"
+  env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" \
+    --clone "$clone" "$@"
 }
 run_pf_env() {
-  env -u CODEX_SANDBOX -u CODEX_THREAD_ID "$@" PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home"
+  env -u CODEX_SANDBOX -u CODEX_THREAD_ID "$@" PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" \
+    --clone "$clone"
 }
 
-launch_expected='launch: codex exec --ignore-user-config --ignore-rules -s workspace-write -c approval_policy="never" --disable apps --disable computer_use --disable browser_use -c model="gpt-x" -c model_reasoning_effort="xhigh" -o <run dir>/result.md -'
+clone_git_dir=$(cd -P "$clone/.git" && pwd -P)
+launch_expected="launch: codex exec --ignore-user-config --ignore-rules -s workspace-write -c approval_policy=\"never\" --disable apps --disable computer_use --disable browser_use --add-dir $clone_git_dir -c model=\"gpt-x\" -c model_reasoning_effort=\"xhigh\" -o <run dir>/result.md -"
 
 # happy path (1 行配列を含む実 config 相当): exit 0、model / effort は config から、他の値は出ない
 set +e
@@ -271,7 +300,7 @@ home2="$tmp/codex-home-bad"
 mkdir -p "$home2"
 printf 'developer_instructions = """\nmodel = "CANARY-STRING"\n"""\n' > "$home2/config.toml"
 set +e
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home2" --model gpt-y --effort high 2>&1)
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home2" --clone "$clone" --model gpt-y --effort high 2>&1)
 rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "explicit --model/--effort should bypass config (rc=$rc): $out"
@@ -302,10 +331,13 @@ model = "b"' 'model = "a b"' 'model_reasoning_effort = ""'; do
   i=$((i + 1))
   printf '%s\n' "$bad" > "$home2/config.toml"
   set +e
-  out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home2" 2>&1)
+  out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home2" \
+    --clone "$clone" 2>&1)
   rc=$?
   set -e
   [ "$rc" -eq 2 ] || fail "unsafe config #$i must be exit 2 (rc=$rc): $out"
+  # 必須引数不足 (usage) で早期に落ちると config 検査を迂回するので、理由が config 由来であることまで見る
+  case "$out" in *"usage:"*) fail "unsafe config #$i must fail on the config check, not usage: $out" ;; esac
   case "$out" in *"CANARY"*) fail "error output must not echo config content: $out" ;; esac
 done
 
@@ -313,7 +345,7 @@ done
 home3="$tmp/codex-home-empty"
 mkdir -p "$home3"
 set +e
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home3" 2>&1)
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home3" --clone "$clone" 2>&1)
 rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "missing config should still exit 0 (rc=$rc): $out"
@@ -350,7 +382,7 @@ abort "reason" unless j["reason"].is_a?(String) && j["reason"].include?("一方�
 emptybin="$tmp/emptybin"
 mkdir -p "$emptybin"
 set +e
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$emptybin:/usr/bin:/bin" "$(command -v ruby)" "$src" --codex-home "$home" 2>&1)
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$emptybin:/usr/bin:/bin" "$(command -v ruby)" "$src" --codex-home "$home" --clone "$clone" 2>&1)
 rc=$?
 set -e
 [ "$rc" -eq 1 ] || fail "missing codex must be BLOCKED (rc=$rc): $out"
@@ -383,7 +415,8 @@ done
 i=0
 for pair in "--config|config override" "--disable <FEATURE>|feature disable" "--sandbox|sandbox flag" \
             "workspace-write|workspace-write mode" "--ignore-user-config|user config ignore" \
-            "--ignore-rules|rules ignore" "--output-last-message|result file" "\`-\`|stdin prompt"; do
+            "--ignore-rules|rules ignore" "--output-last-message|result file" \
+            "--add-dir|extra writable dir" "\`-\`|stdin prompt"; do
   i=$((i + 1))
   text=${pair%%|*}
   name=${pair#*|}
@@ -436,15 +469,15 @@ printf 'model = "gpt-default"\n' > "$defhome/config.toml"
 badhome="$tmp/bad-home"
 mkdir -p "$badhome"
 printf 'model = "a"\nmodel = "b"\n' > "$badhome/config.toml"
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$goodhome" PATH="$fakebin:$PATH" ruby "$src")
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$goodhome" PATH="$fakebin:$PATH" ruby "$src" --clone "$clone")
 echo "$out" | grep -q "^model: gpt-env (config)$" || fail "CODEX_HOME should be used when --codex-home is absent: $out"
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID -u CODEX_HOME HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src")
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID -u CODEX_HOME HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src" --clone "$clone")
 echo "$out" | grep -q "^model: gpt-default (config)$" || fail "default home (.codex under HOME) should be used: $out"
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$badhome" PATH="$fakebin:$PATH" ruby "$src" --codex-home "$goodhome")
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$badhome" PATH="$fakebin:$PATH" ruby "$src" --clone "$clone" --codex-home "$goodhome")
 echo "$out" | grep -q "^model: gpt-env (config)$" || fail "--codex-home must win over CODEX_HOME: $out"
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$goodhome" HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src")
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="$goodhome" HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src" --clone "$clone")
 echo "$out" | grep -q "^model: gpt-env (config)$" || fail "CODEX_HOME must win over the default home: $out"
-out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="" HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src")
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID CODEX_HOME="" HOME="$tmp/default-home" PATH="$fakebin:$PATH" ruby "$src" --clone "$clone")
 echo "$out" | grep -q "^model: gpt-default (config)$" || fail "empty CODEX_HOME must fall back to the default home: $out"
 
 # usage エラー -> exit 2 で、理由文は usage (値の検査を 1 つ外すと NoMethodError 等の別の理由文に
@@ -455,7 +488,7 @@ rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "unknown option should be exit 2 (rc=$rc)"
 echo "$out" | grep -q "usage:" || fail "unknown option should print usage: $out"
-for opt in --codex-home --model --effort; do
+for opt in --codex-home --clone --model --effort; do
   # 値の省略 / 空文字 / option 形の値 をそれぞれ独立に
   set +e
   out=$(ruby "$src" "$opt" 2>&1)
@@ -476,5 +509,246 @@ for opt in --codex-home --model --effort; do
   [ "$rc" -eq 2 ] || fail "$opt with an option-shaped value should be exit 2 (rc=$rc)"
   echo "$out" | grep -q "usage:" || fail "$opt with an option-shaped value should print usage: $out"
 done
+# --clone の検査: 満たさない形は exit 2 で、launch argv を作らない (worker を起動できる形を
+# 作らせない)。各負例を独立に置き、検査を 1 つ外すと落ちる形にする。
+clone_cases_dir="$tmp/clone-cases"
+mkdir -p "$clone_cases_dir"
+
+pf_clone_rc() {  # $1 = --clone に渡す値。stdout に出力、戻り値は rc
+  set +e
+  out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" \
+    --codex-home "$home" --clone "$1" 2>&1)
+  rc=$?
+  set -e
+  printf '%s' "$out"
+  return "$rc"
+}
+
+# (a) --clone 自体が無い: 起動できる argv を作らない
+set +e
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "--clone なしは exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "usage:" || fail "--clone なしは usage を出す: $out"
+case "$out" in *"launch:"*|*"--add-dir"*) fail "--clone なしで launch argv を出してはいけない: $out" ;; esac
+
+# (b) 存在しない path
+set +e
+out=$(pf_clone_rc "$clone_cases_dir/missing")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "存在しない clone は exit 2 (rc=$rc): $out"
+case "$out" in *"--add-dir"*) fail "不正な clone で launch argv を出してはいけない: $out" ;; esac
+
+# (c) git repository でない directory
+mkdir -p "$clone_cases_dir/plain"
+set +e
+out=$(pf_clone_rc "$clone_cases_dir/plain")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "git repository でない clone は exit 2 (rc=$rc): $out"
+
+# (d) linked worktree (.git が file): git dir が別の repository 側にあるので渡せない
+wt_main="$clone_cases_dir/wt-main"
+git init -q "$wt_main"
+git -C "$wt_main" commit -q --allow-empty -m base
+rm -rf "$clone_cases_dir/wt-linked"
+git -C "$wt_main" worktree add -q --detach "$clone_cases_dir/wt-linked"
+[ -f "$clone_cases_dir/wt-linked/.git" ] || fail "fixture: linked worktree の .git は file のはず"
+set +e
+out=$(pf_clone_rc "$clone_cases_dir/wt-linked")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "linked worktree は exit 2 (rc=$rc): $out"
+case "$out" in *"--add-dir"*) fail "linked worktree で launch argv を出してはいけない: $out" ;; esac
+
+# (e) orchestrator 自身の repository は渡せない = main の Git 管理領域を開けない。
+#     実 repository は checkout 形態 (linked worktree 等) で前段の検査に引っかかりうるので、
+#     通常 repository の独立 fixture を使い、拒否理由が「自身の repository」であることまで見る。
+selfrepo="$clone_cases_dir/self"
+git init -q "$selfrepo"
+set +e
+out=$(cd "$selfrepo" && env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" \
+  --codex-home "$home" --clone "$selfrepo" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "orchestrator 自身の repository は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "自身の Git 管理領域" || fail "自身の Git 管理領域の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "自身の repository で launch argv を出してはいけない: $out" ;; esac
+
+# (g) `<clone>/.git` が symlink: 解決先 (例: 別 repository の git dir) を開けない
+symrepo="$clone_cases_dir/symlinked"
+mkdir -p "$symrepo"
+ln -s "$clone/.git" "$symrepo/.git"
+set +e
+out=$(pf_clone_rc "$symrepo")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail ".git が symlink の clone は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "が symlink です" || fail "symlink 固有の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "symlink の .git で launch argv を出してはいけない: $out" ;; esac
+
+# (i) `.git` は directory だが git repository ではない: git dir の一致検査で落ちる
+#     (前段の directory / symlink 検査は通るので、一致検査だけを外した変異を捕捉できる)
+emptygit="$clone_cases_dir/empty-git"
+mkdir -p "$emptygit/.git"
+set +e
+out=$(pf_clone_rc "$emptygit")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "空の .git は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "git dir が <clone>/.git と一致しません" || fail "git dir 一致検査の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "空の .git で launch argv を出してはいけない: $out" ;; esac
+
+# (j) repository を選ぶ環境変数が立っていたら、検査と起動がずれるので通さない
+for var in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR; do
+  set +e
+  out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID "$var=$clone" PATH="$fakebin:$PATH" ruby "$src" \
+    --codex-home "$home" --clone "$clone" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "$var が立っていたら exit 2 (rc=$rc): $out"
+  echo "$out" | grep -q "repository を選ぶ環境変数" || fail "$var 固有の理由で落ちるべき: $out"
+  case "$out" in *"--add-dir"*) fail "$var が立っている状態で launch argv を出してはいけない: $out" ;; esac
+done
+
+# (k) orchestrator が linked worktree に居るとき、その main worktree は渡せない
+#     (worktree root は違うが Git 管理領域は同じ)
+selfwt="$clone_cases_dir/self-wt"
+rm -rf "$selfwt"
+git -C "$selfrepo" commit -q --allow-empty -m base
+git -C "$selfrepo" worktree add -q --detach "$selfwt"
+set +e
+out=$(cd "$selfwt" && env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" \
+  --codex-home "$home" --clone "$selfrepo" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "linked worktree から main を渡したら exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "自身の Git 管理領域" || fail "共有 Git 管理領域の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "同じ Git 管理領域で launch argv を出してはいけない: $out" ;; esac
+
+# (h) orchestrator の repository を確認できない (repository の外から実行) 場合は通さない
+outside="$tmp/outside"
+mkdir -p "$outside"
+set +e
+out=$(cd "$outside" && env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" \
+  --codex-home "$home" --clone "$clone" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "repository の外からの実行は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "orchestrator の repository を確認できません" || fail "確認不能の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "確認不能で launch argv を出してはいけない: $out" ;; esac
+
+# (l) submodule の中から superproject を渡す: common dir は等値でないが **包含**している
+submain="$clone_cases_dir/super"
+git init -q "$submain"
+git -C "$submain" commit -q --allow-empty -m base
+subsrc="$clone_cases_dir/subsrc"
+git init -q "$subsrc"
+git -C "$subsrc" commit -q --allow-empty -m s
+git -C "$submain" submodule add -q "$subsrc" sub 2>/dev/null
+set +e
+out=$(cd "$submain/sub" && env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" \
+  --codex-home "$home" --clone "$submain" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "submodule から superproject は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "自身の Git 管理領域を含みます" || fail "包含の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "包含する形で launch argv を出してはいけない: $out" ;; esac
+
+# (l2) 逆向きの包含: orchestrator の Git 管理領域の **内側** に作られた repository も渡せない
+nested="$selfrepo/.git/nested-clone"
+git init -q "$nested"
+git -C "$nested" commit -q --allow-empty -m n
+set +e
+out=$(cd "$selfrepo" && env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" \
+  --codex-home "$home" --clone "$nested" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "自分の Git 管理領域の内側の repository は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "自身の Git 管理領域を含みます" || fail "包含の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "内側の repository で launch argv を出してはいけない: $out" ;; esac
+
+# (l3) `.git` は実 directory だが `commondir` で common dir を別 repository へ向けた形
+commondir_case="$clone_cases_dir/commondir"
+other_repo="$clone_cases_dir/commondir-other"
+git init -q "$commondir_case"
+git init -q "$other_repo"
+git -C "$other_repo" commit -q --allow-empty -m o
+printf '%s\n' "$other_repo/.git" > "$commondir_case/.git/commondir"
+set +e
+out=$(pf_clone_rc "$commondir_case")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "commondir で切り替えた clone は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "common dir が <clone>/.git と一致しません" || fail "commondir の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "commondir 切替で launch argv を出してはいけない: $out" ;; esac
+
+# (m) core.worktree で作業ツリーをすげ替えた repository は渡せない (bare もここで落ちる)
+wtswap="$clone_cases_dir/worktree-swapped"
+git init -q "$wtswap"
+git -C "$wtswap" commit -q --allow-empty -m c
+git -C "$wtswap" config core.worktree "$submain"
+set +e
+out=$(pf_clone_rc "$wtswap")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "core.worktree をすげ替えた clone は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "作業ツリーが clone と一致しません" || fail "worktree 不一致の理由で落ちるべき: $out"
+case "$out" in *"--add-dir"*) fail "worktree 不一致で launch argv を出してはいけない: $out" ;; esac
+git -C "$wtswap" config --unset core.worktree
+
+# (n) config を注入する env は **1 つずつ独立に** 拒否する (複合だと prefix を片方外した変異を
+#     捕捉できない)。固定名と動的名 (KEY_<n> / VALUE_<n>) の両方を見る。
+for cfgenv in "GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=core.worktree" "GIT_CONFIG_VALUE_0=/tmp" \
+  "GIT_CONFIG_PARAMETERS='core.worktree'='/tmp'" "GIT_CONFIG_GLOBAL=/dev/null" "GIT_CONFIG_NOSYSTEM=1"; do
+  name=${cfgenv%%=*}
+  set +e
+  out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID "$cfgenv" PATH="$fakebin:$PATH" ruby "$src" \
+    --codex-home "$home" --clone "$clone" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "$name は exit 2 (rc=$rc): $out"
+  echo "$out" | grep -q "$name" || fail "$name を名指しで落とすべき: $out"
+  case "$out" in *"--add-dir"*) fail "$name が立っている状態で launch argv を出してはいけない: $out" ;; esac
+done
+
+# (o) clone_root は **物理 path** を返す (symlink と .. を含む入力を canonical 化する)
+# symlink と `..` を組み合わせ、**物理解決と論理解決で到達先が変わる**入力を渡す
+#   <linkdir>/link -> <clone> なので、<linkdir>/link/.. は物理では <clone> の親、論理では <linkdir>。
+#   そこから clone の basename を辿ると、物理解決した場合だけ clone に着く。
+linkdir="$clone_cases_dir/linkdir"
+mkdir -p "$linkdir"
+ln -s "$clone" "$linkdir/link"
+clone_base=$(basename "$clone")
+tricky="$linkdir/link/../$clone_base"
+set +e
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" \
+  --clone "$tricky" --json 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "symlink + .. の clone は物理解決で通るべき (rc=$rc): $out"
+printf '%s' "$out" | ruby -rjson -e '
+j = JSON.parse(STDIN.read)
+root = ARGV[0]
+abort "clone_root は物理 path" unless j["clone_root"] == root
+abort "clone_git_dir は clone_root の直下" unless j["clone_git_dir"] == File.join(root, ".git")
+' "$(cd -P "$clone" && pwd -P)" || fail "clone_root が canonical でない: $out"
+
+# (f) 正しい clone: --add-dir はその clone の git dir 1 つだけで、main の path が現れない
+out=$(run_pf --json)
+printf '%s' "$out" | ruby -rjson -e '
+j = JSON.parse(STDIN.read)
+clone_git = ARGV[0]
+main_root = ARGV[1]
+argv = j["launch_argv"]
+abort "clone_git_dir" unless j["clone_git_dir"] == clone_git
+abort "add-dir は 1 つ" unless argv.count("--add-dir") == 1
+i = argv.index("--add-dir")
+abort "add-dir の値" unless argv[i + 1] == clone_git
+abort "main の path が argv に現れてはいけない" if argv.any? { |a| a.include?(main_root) }
+' "$clone_git_dir" "$repo_root" || fail "--clone の launch argv が契約どおりでない: $out"
+
 
 echo "ok: codex-worker-preflight self-test"
