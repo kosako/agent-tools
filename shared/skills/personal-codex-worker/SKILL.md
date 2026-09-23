@@ -150,7 +150,9 @@ brief は file に書き、stdin (`-`) で渡します。shell 引数に埋め�
   test は sandbox の中で実行してよい (network は無い)。
 - 最終 message の書式 (転記元): `到達点` / `判断` (理由) / `未完` / `停止理由 または 質問`
   (あれば) / `commits` (oid と subject の一覧) / `次の 1 アクション` (`次の入口` の転記元)。
-  markdown の見出しは `###` 以下を使い、行頭 `## ` は使わない (packet の予約)。
+  markdown の見出しは `###` 以下を使い、行頭 `## ` は使わない (packet の予約)。file は repo 相対の
+  path で書き、markdown のリンクにしない。clone / run dir / home の絶対 path も書かない (転記前の
+  public-safety gate が止め、`Blocked at: transcription` になる。#326)。
 - 途中で受け入れ条件が曖昧だと分かったら、推測で進めず `停止理由 または 質問` に書いて終える。
 
 model family / reasoning effort は brief に書かない (preflight の launch argv が user selection を
