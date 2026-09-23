@@ -33,6 +33,8 @@ Codex の sandbox から読める場所に置くため。
 | `## 結果` | worker (実装) / reviewer (verdict) / orchestrator (委譲した worker の停止記録だけ。見出しは `orchestrator/claude`)。packet に書けない worker (委譲した Codex) の分は orchestrator が worker の最終 message から転記する (見出しは `worker/codex`) | `### <日付> <役割/agent>` 見出しで区切って追記 |
 | `## 次の入口` | worker (委譲した worker の分は orchestrator が worker の最終 message から写す。worker が止まって最終 message が無いときは orchestrator が続きの入り方を書く) | 現在地に上書き |
 
+frontmatter の `run` / `tab` (起動の記録) を書く・消すのも orchestrator だけ。
+
 worker は `依頼` を書き換えない。受け入れ条件が曖昧なら `結果` に質問を追記して止まり、
 orchestrator が `依頼` を更新して再起動する (1 PR = 1 author と同じ「途中で scope を変えた
 のが誰か」を残す規則)。
@@ -68,6 +70,8 @@ state: review        # open | blocked | review | done
 worker: claude       # claude | codex | human
 updated: 2026-09-21T23:50:00+09:00   # 書いた agent が入れる (mtime に頼らない)
 published: 2026-09-21T23:55:00+09:00 # 最後に Issue コメントへ写した時刻。未 publish なら省略
+run: /path/to/run-dir  # worker の起動の記録 (委譲した worker が走っている / 未回収の間だけ)。無ければ省略
+tab: "#123"            # worker を動かしている herdr の tab 名。`#` があるので引用符で囲む
 ---
 
 ## 依頼
@@ -103,6 +107,18 @@ PR #124 の should 1 件を直して re-review を依頼する。
   orchestrator)。`blocked` は止まった worker が入れる。委譲した worker の分は、止まっていれば
   最終 message の有無にかかわらず orchestrator が入れる (停止理由は最終 message の転記か、無ければ
   orchestrator の記録)。`done` は orchestrator が入れる。
+- `run` / `tab` (#315): 委譲した worker の**起動の記録**。`run` は run dir の絶対 path、`tab` は
+  worker を動かしている herdr の tab 名 (`#<issue>`)。書くのは **orchestrator だけ** (worker は packet に
+  書かない)。書く時点・消す時点は [herdr-operations](herdr-operations.md) の「起動の記録」(手順は
+  委譲 skill `personal-codex-worker`)。
+  - `tab` の値は引用符で囲む (`tab: "#123"`)。引用符が無いと `#` 以降が YAML の comment になって値が
+    消えるので、key があって値が空の packet は壊れた packet として報告する (記録が黙って消えると
+    二重起動の検査が効かない)。改行などの制御文字、相対 path の `run` も同じく壊れた packet。
+  - 写しの対象ではない (publish は写さない。`run` は local の path)。なので書き込み・削除で
+    `updated` を変えない (未 publish の印を立てない)。pull は local の値を保持する。
+  - `list` は `run` があれば run dir の状態を stat だけで見て `run_status` に出す: `finished` (`done.txt`
+    がある = 完了・未転記) / `unfinished` (run dir はあるが `done.txt` が無い = 実行中 / 不明) /
+    `missing` (run dir が無い = 消失。worker の commit は clone から回収する)。
 - 「依頼は上書き・結果は追記」は書式でなく手順で守る (1 PR = 1 author なので同時書き込みは
   想定しない)。
 - **行頭の `## ` は 3 つの節見出しに予約する** (fenced code や引用の中でも同じ)。それ以外の行頭
@@ -156,7 +172,7 @@ worker 委譲時の `pull` は orchestrator が main repository 側で行い、�
 - `依頼` は既存 local の節を保持し、節が無い場合だけ `personal-safe-gh issue view` の self
   本文から起こす。Issue 本文の行頭 `## ` は 4 空白で字下げし、packet の節境界と区別する。
   本文が withhold されていれば exit 2 で止める。
-- title / branch / pr は既存 local を保持する。新規 title は Issue の title、state / worker は
+- title / branch / pr / run / tab は既存 local を保持する (run / tab は写しに載らない)。新規 title は Issue の title、state / worker は
   最新の写しから取る。`updated` は local の `updated` と最新写しの `published` の大きい方、
   `published` は採用した最新写しの日時 (同時刻・古い写しなら local の日時) にする。新規 packet
   は両方とも写しの日時にする。local が未 publish (`published` 無し、または `updated > published`)
@@ -177,7 +193,7 @@ file で行い、command 文字列へ inline 展開しない。
 | command | すること | exit |
 |---|---|---|
 | `dir` | packet dir を出す (main worktree root に固定。linked worktree からでも同じ) | 0 / 2 (git 外) |
-| `list [--json] [--all]` | frontmatter を読んで一覧。既定は open / blocked / review だけ、`--all` で done も。`updated > published` (または未 publish) を `unpublished` で示す | 0 / 1 (壊れた packet あり。warning を出し、健全な行は出す) / 2 |
+| `list [--json] [--all]` | frontmatter を読んで一覧。既定は open / blocked / review だけ、`--all` で done も。`updated > published` (または未 publish) を `unpublished` で示す。起動の記録があれば `run` / `tab` と `run_status` を出す (text は `[run: <status>]`) | 0 / 1 (壊れた packet あり。warning を出し、健全な行は出す) / 2 |
 | `publish <issue> [--repo OWNER/REPO] [--dry-run]` | `結果` の最新節 + `次の入口` を marker 付きで合成 → 同じ directory の `personal-public-safety-gate --stdin` に通す → **exit 0 のときだけ** `gh issue comment` で投稿 → frontmatter の `published` を更新 | 0 / 1 (gate が止めた) / 2 (検査できない・gate 不在・gh 不在 / 失敗・入力エラー) |
 | `pull <issue> [--repo OWNER/REPO] [--dry-run]` | self コメントの有効な写しを取り込んで packet を再構成。`--dry-run` は全文を stdout に出す | 0 / 1 (採用できる写しなし) / 2 (reader / 入力 / 保存エラー) |
 

@@ -24,7 +24,9 @@ if ARGV[2] == "--mutations"
     "remote H2" => [' || lines.any? { |l| l.start_with?("## ") }', ''],
     "issue H2" => ['line.start_with?("## ") ? "    #{line}" : line', 'line'],
     "local H2" => ['unless HEADINGS.include?(name)', 'unless HEADINGS.include?(name) || name == "injected"'],
-    "invalid frontmatter" => ['"issue" => issue,\n      "title" => local', '"issue" => issue.to_s,\n      "title" => local']
+    "launch record run" => ['data["run"] = local.run if local && local.run', ''],
+    "launch record tab" => ['data["tab"] = local.tab if local && local.tab', ''],
+    "invalid frontmatter" =>['"issue" => issue,\n      "title" => local', '"issue" => issue.to_s,\n      "title" => local']
   }
   original = File.read(source)
   Dir.mktmpdir("packet-mutations-") do |dir|
@@ -86,6 +88,8 @@ LOCAL = <<~TEXT
   worker: claude
   updated: 2026-09-21T12:00:00Z
   published: 2026-09-21T00:00:00Z
+  run: /tmp/agent-packet-run-7
+  tab: "#7"
   ---
 
   ## 依頼
@@ -224,6 +228,7 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   secs = Packet.sections(front.body)
   assert(secs["依頼"] == Packet.sections(Packet.parse_text(LOCAL, path).body)["依頼"], "local request must be preserved verbatim")
   assert(front.title == "LOCAL-TITLE #7" && front.branch == "feat/7-test" && front.pr == 8, "local metadata preservation")
+  assert(front.run == "/tmp/agent-packet-run-7" && front.tab == "#7", "local launch record (run / tab) must survive pull (#315)")
   assert(secs["結果"].include?("LOCAL-RESULT") && secs["結果"].include?("LOCAL-DUPLICATE"), "local results retained")
   assert(secs["結果"].include?("REMOTE-DUPLICATE") && secs["結果"].scan("REMOTE-RESULT").size == 1, "same heading with distinct body must append")
   assert(secs["結果"].include?("LOCAL-SECOND-SAME-HEADING"), "local duplicate headings with distinct bodies must be retained")

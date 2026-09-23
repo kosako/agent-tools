@@ -219,6 +219,68 @@ out=$(cd "$empty" && "$pkt" list)
 [ "$out" = "no active packets" ] || fail "no dir should be empty list: $out"
 [ "$(cd "$empty" && "$pkt" list --json)" = "[]" ] || fail "no dir json should be []"
 
+# ---- list: 起動の記録 (run / tab。#315) ------------------------------------------------
+# run dir の状態は done.txt の有無で分ける (stat だけ)。記録の無い packet は今までと同じ。
+runrepo="$tmp/runrepo"
+git init -q "$runrepo"
+mkdir -p "$runrepo/.agent-packets" "$tmp/run-fin" "$tmp/run-unfin"
+: > "$tmp/run-fin/done.txt"
+run_packet() { # issue state extra-frontmatter-lines
+  { printf -- '---\nissue: %s\ntitle: run %s\nstate: %s\nworker: codex\n' "$1" "$1" "$2"
+    printf 'updated: 2026-09-23T10:00:00+09:00\n%s---\n\n## 結果\n\n### 2026-09-23 worker/codex\n- RUN-RESULT\n\n## 次の入口\n\nRUN-NEXT\n' "$3"
+  } > "$runrepo/.agent-packets/$1.md"
+}
+run_packet 21 open "run: $tmp/run-fin
+tab: \"#21\"
+"
+run_packet 22 blocked "run: $tmp/run-unfin
+tab: \"#22\"
+"
+run_packet 23 open "run: $tmp/run-gone
+"
+run_packet 24 review ""
+(cd "$runrepo" && "$pkt" list --json > "$tmp/run.json") || fail "run/tab packets should list cleanly"
+[ "$(jget "$tmp/run.json" 0 run_status)" = '"finished"' ] || fail "done.txt present -> finished: $(jget "$tmp/run.json" 0 run_status)"
+[ "$(jget "$tmp/run.json" 0 tab)" = '"#21"' ] || fail "quoted tab should keep '#': $(jget "$tmp/run.json" 0 tab)"
+[ "$(jget "$tmp/run.json" 0 run)" = "\"$tmp/run-fin\"" ] || fail "run path in json: $(jget "$tmp/run.json" 0 run)"
+[ "$(jget "$tmp/run.json" 1 run_status)" = '"unfinished"' ] || fail "run dir without done.txt -> unfinished"
+[ "$(jget "$tmp/run.json" 2 run_status)" = '"missing"' ] || fail "absent run dir -> missing"
+[ "$(jget "$tmp/run.json" 2 tab)" = "nil" ] || fail "tab is optional"
+[ "$(jget "$tmp/run.json" 3 run)" = "nil" ] || fail "no launch record -> run nil"
+[ "$(jget "$tmp/run.json" 3 run_status)" = "nil" ] || fail "no launch record -> run_status nil"
+out=$(cd "$runrepo" && "$pkt" list)
+echo "$out" | grep -q "^#21 .*\[run: finished\]" || fail "text list should mark finished run: $out"
+echo "$out" | grep -q "^#22 .*\[run: unfinished\]" || fail "text list should mark unfinished run: $out"
+echo "$out" | grep -q "^#23 .*\[run: missing\]" || fail "text list should mark missing run dir: $out"
+echo "$out" | grep "^#24 " | grep -q "run:" && fail "packet without launch record must not be marked: $out"
+# 書き間違い / 不正な値は壊れた packet (黙って「記録なし」にしない。記録が消えると二重起動の検査が効かない)
+for bad in 'tab: #25' 'tab: ""' 'run: tmp/relative' 'run: "/tmp/a\nb"' 'run: 12' 'run:'; do
+  run_packet 25 open "$bad
+"
+  set +e
+  (cd "$runrepo" && "$pkt" list > "$tmp/out" 2> "$tmp/err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "invalid launch record ($bad) should be a broken packet, exit 1 (rc=$rc)"
+  grep -q "25.md" "$tmp/err" || fail "warning should name the packet ($bad): $(cat "$tmp/err")"
+  grep -q "^#21 " "$tmp/out" || fail "healthy rows must still be listed ($bad)"
+done
+rm "$runrepo/.agent-packets/25.md"
+# publish: 写しに run / tab を載せず (run は local path)、published の更新で消さない
+calls=$(gh_calls)
+out=$(cd "$runrepo" && "$pkt" publish 21 --dry-run)
+echo "$out" | grep -q "RUN-RESULT" || fail "publish dry-run should carry the latest result: $out"
+echo "$out" | grep -q "run-fin" && fail "publish must not carry the run path: $out"
+echo "$out" | grep -q '#21"' && fail "publish must not carry the tab: $out"
+(cd "$runrepo" && with_gh "$pkt" publish 21 >/dev/null) || fail "publish with launch record should succeed"
+[ "$(gh_calls)" -eq $((calls + 1)) ] || fail "publish with launch record should call gh once"
+grep -q "run-fin" "$gh_body" && fail "posted body must not carry the run path"
+grep -q "^run: $tmp/run-fin$" "$runrepo/.agent-packets/21.md" || fail "publish must keep run in the packet"
+grep -q '^tab: "#21"$' "$runrepo/.agent-packets/21.md" || fail "publish must keep tab in the packet"
+grep -q "^published: 20" "$runrepo/.agent-packets/21.md" || fail "publish should still mark published"
+# 以降の case は gh の呼び出し回数を 0 から数えるので、fake gh の記録を戻す
+rm -f "$gh_log" "$gh_body"
+
 cp "$repo/.agent-packets/7.md" "$tmp/7.bak"
 
 # ---- publish --dry-run: 合成だけ。gh は呼ばない ------------------------------------
@@ -440,12 +502,15 @@ cmp -s "$tmp/7.flow" "$repo/.agent-packets/7.md" || fail "refused publish (flow)
 ruby -r"$script_dir/lib/check_helper" - "$packet_src" <<'RUBY'
 require ARGV[0]
 base = { issue: 7, title: "t", branch: "b", pr: 1, state: "open", worker: "claude",
-         updated: Time.iso8601("2026-09-21T23:50:00+09:00"), published: nil, body: "x\n" }
+         updated: Time.iso8601("2026-09-21T23:50:00+09:00"), published: nil,
+         run: "/tmp/run-7", tab: "#7", body: "x\n" }
 mk = ->(over) { Packet::Front.new("p").tap { |f| base.merge(over).each { |k, v| f[k] = v } } }
 a = mk.call({})
 check("published だけ違えば same", Packet.same_except_published?(a, mk.call(published: Time.now)))
 check("branch が消えれば not same", !Packet.same_except_published?(a, mk.call(branch: nil)))
 check("pr が消えれば not same", !Packet.same_except_published?(a, mk.call(pr: nil)))
+check("run が消えれば not same (#315)", !Packet.same_except_published?(a, mk.call(run: nil)))
+check("tab が消えれば not same (#315)", !Packet.same_except_published?(a, mk.call(tab: nil)))
 check("body が変われば not same", !Packet.same_except_published?(a, mk.call(body: "y\n")))
 check("updated が変われば not same", !Packet.same_except_published?(a, mk.call(updated: Time.now + 60)))
 exit(@failed.zero? ? 0 : 1)

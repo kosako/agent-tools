@@ -8,6 +8,7 @@
 #       packet dir (main worktree root の .agent-packets) を出す。linked worktree からでも同じ。
 #   personal-packet list [--json] [--all]
 #       frontmatter を読んで一覧 (既定は state が open / blocked / review のものだけ。--all で done も)。
+#       起動の記録 (run / tab) があれば run dir の状態 (run_status) も出す (stat だけの read-only)。
 #       壊れた packet は warning を出して飛ばし、最後に exit 1 (一覧自体は出す)。
 #   personal-packet publish <issue> [--repo OWNER/REPO] [--dry-run]
 #       `## 結果` の最新節 + `## 次の入口` を marker 付きで 1 コメントにまとめ、同じ directory の
@@ -56,9 +57,22 @@ module Packet
   class Rejected < StandardError; end
   class NoCopy < StandardError; end
 
-  Front = Struct.new(:path, :issue, :title, :branch, :pr, :state, :worker, :updated, :published, :body) do
+  # run / tab は worker の起動の記録 (#315)。書くのは orchestrator だけで、publish の写しには載せない
+  # (run は local の path)。
+  Front = Struct.new(:path, :issue, :title, :branch, :pr, :state, :worker, :updated, :published, :run, :tab, :body) do
     def unpublished?
       published.nil? || updated > published
+    end
+
+    # run dir の状態を read-only に見る (stat だけ。中身は読まない)。run が無ければ nil。
+    #   finished   = done.txt がある (完了・未転記)
+    #   unfinished = run dir はあるが done.txt が無い (実行中 / 不明)
+    #   missing    = run dir が無い (消失。worker の commit は clone から回収する)
+    def run_status
+      return nil unless run
+      return "missing" unless File.directory?(run)
+
+      File.file?(File.join(run, "done.txt")) ? "finished" : "unfinished"
     end
 
     def to_h
@@ -66,7 +80,9 @@ module Packet
         "issue" => issue, "title" => title, "state" => state, "worker" => worker,
         "branch" => branch, "pr" => pr,
         "updated" => updated.iso8601, "published" => published&.iso8601,
-        "unpublished" => unpublished?, "path" => path
+        "unpublished" => unpublished?,
+        "run" => run, "tab" => tab, "run_status" => run_status,
+        "path" => path
       }
     end
   end
@@ -127,8 +143,30 @@ module Packet
     front.pr = optional_integer(data, "pr", path)
     front.updated = required_time(data, "updated", path)
     front.published = data.key?("published") && !data["published"].nil? ? to_time(data["published"], "published", path) : nil
+    front.run = launch_record(data, "run", path)
+    front.tab = launch_record(data, "tab", path)
+    if front.run && !front.run.start_with?("/")
+      raise Error, "#{path}: run は run dir の絶対 path にしてください"
+    end
     front.body = m[2]
     front
+  end
+
+  # 起動の記録 (run / tab) は任意の 1 行の文字列。key があるのに値が空 (null) なのは、ほぼ
+  # `tab: #123` の書き間違い (引用符が無いと `#` 以降が YAML の comment になり値が消える) なので、
+  # 黙って「記録なし」にせず壊れた packet として報告する (記録が消えると二重起動の検査が効かない)。
+  # 制御文字 (改行等) は path / tab 名として意味を持たず、一覧の 1 行を壊すので拒否する。
+  def launch_record(data, key, path)
+    return nil unless data.key?(key)
+
+    v = data[key]
+    if v.nil? || (v.is_a?(String) && v.strip.empty?)
+      raise Error, "#{path}: #{key} が空です (`#{key}: \"#123\"` のように引用符で囲んでください。記録が無いなら key ごと消します)"
+    end
+    raise Error, "#{path}: #{key} は文字列にしてください" unless v.is_a?(String)
+    raise Error, "#{path}: #{key} に制御文字 (改行等) は使えません" if v.match?(/[[:cntrl:]]/)
+
+    v.strip
   end
 
   def required_issue(data, path)
@@ -219,6 +257,7 @@ module Packet
     packets.map do |p|
       pr = p.pr ? "PR ##{p.pr}" : "-"
       flag = p.unpublished? ? " [unpublished]" : ""
+      flag += " [run: #{p.run_status}]" if p.run
       format("#%-5d %-8s %-7s %-9s updated %s%s  %s\n",
              p.issue, p.state, p.worker, pr, p.updated.iso8601, flag, p.title)
     end.join
@@ -442,7 +481,7 @@ module Packet
   end
 
   def same_except_published?(a, b)
-    %i[issue title branch pr state worker body].all? { |k| a[k] == b[k] } && a.updated.to_i == b.updated.to_i
+    %i[issue title branch pr state worker run tab body].all? { |k| a[k] == b[k] } && a.updated.to_i == b.updated.to_i
   end
 
   def publish(dir, issue, repo:, dry_run:)
@@ -666,6 +705,9 @@ module Packet
     }
     data["branch"] = local.branch if local && local.branch
     data["pr"] = local.pr if local && local.pr
+    # 起動の記録は local だけの情報 (写しに載らない)。写しから再構成しても消さない (#315)。
+    data["run"] = local.run if local && local.run
+    data["tab"] = local.tab if local && local.tab
     contents = { "依頼" => request, "結果" => result, "次の入口" => following }
     text = YAML.dump(data) + "---\n\n" + HEADINGS.map do |name|
       content = contents.fetch(name)
