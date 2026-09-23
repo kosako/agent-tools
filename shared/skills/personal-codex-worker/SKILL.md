@@ -34,8 +34,7 @@ orchestrator が行います。
   妥当性) の決定的検査と launch argv の生成。この skill は preflight の判定を再実装しない。
 - **worker (Codex)**: clone の中で `依頼` を実装し、作業単位ごとに commit し、最終 message に
   結果を書く。packet / GitHub / main repository には触れない。
-- **人**: 委譲の起動指示、blocked からの再開判断、残量の申告 (`personal-project-operating-loop` の
-  「割当」)、PR の merge。
+- **人**: 委譲の起動指示、blocked からの再開判断、PR の merge。
 - **herdr**: launcher。skill が組んだ argv を pane の shell で実行するだけ。
 
 ## 1. authorization と scope
@@ -184,7 +183,7 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   `Blocked at: executor-exit`。hard cap は 120 分 (暫定) で、達したら kill せず pane を残し
   `Status: RUNNING` で人に返す (run script を再実行させない。人は pane を見て続行か中断かを決める)。
 - **limit**: `codex.log` に `You've hit your usage limit` (前方一致) があれば `Blocked at: limit`。
-  自動で再起動しない (残量は割当時の申告制。`personal-project-operating-loop` の「割当」)。
+  自動で再起動しない (limit の reset を待つ。残量の扱いは `personal-project-operating-loop` の「割当」)。
 - **空振り**: `done.txt` が `exit=0` なのに `result.md` が欠落 / 空なら、新しい nonce で同じ brief を
   **1 回だけ** 再実行し、2 回目も空なら `Blocked at: executor-result`。worker が commit 済みなら
   再実行は同じ clone で続きから (brief は同じ)。
@@ -255,8 +254,8 @@ merge はしない (人が行う)。
   `state`、起動の記録を消したか残したか)、PR を作ったなら番号、run directory の path。
 - 停止時は `Status: BLOCKED`、`Blocked at:` (authorization | launch-record | preflight | launch-path |
   clone | executor-exit | executor-result | limit | fetch | transcription | trailer)、public-safe な `Reason`、
-  `Next step` (人が実行する run script の path と run dir / 退避物の path / `依頼` の更新 / 残量の
-  申告 / 起動の記録の run を確かめる)。worker の本文や secret を停止結果に転記しない。
+  `Next step` (人が実行する run script の path と run dir / 退避物の path / `依頼` の更新 / limit の
+  reset 待ち / 起動の記録の run を確かめる)。worker の本文や secret を停止結果に転記しない。
 
 **この skill の完了と停止**: packet を更新して返却した時点で完了 (PR を作った場合は `state: review`
 まで)。review / merge / publish / planning tool の更新はこの skill の外。

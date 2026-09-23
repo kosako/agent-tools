@@ -51,7 +51,7 @@
       "id": 1,
       "name": "limit-stop-records-blocked",
       "prompt": "Codex worker を herdr で動かしていたら codex.log に「You've hit your usage limit. Visit ... or try again at ...」が出て done.txt が exit=1 になった。clone には未 commit の変更が残っている。どう扱う? 手順確認のみ。",
-      "expected_output": "Blocked at: limit として自動で再起動しない。packet を state: blocked にし、最終 message が無いので orchestrator/claude の見出しで停止理由 (limit の文言、exit code、codex.log 末尾の public-safe な要約) を書き、次の入口 に続きの入り方 (同じ branch を Codex が続ける) を書く。未 commit の変更は staged と unstaged を別々の --binary patch (git diff --cached --binary / git diff --binary) に、untracked は file 名を shell に通さない tar (ls-files -z | tar --null -T -) に退避して path を 結果 に記録し、orchestrator は代わりに commit しない。clone は復元確認まで消さない。pane は閉じない。残量は人が申告する。",
+      "expected_output": "Blocked at: limit として自動で再起動しない。packet を state: blocked にし、最終 message が無いので orchestrator/claude の見出しで停止理由 (limit の文言、exit code、codex.log 末尾の public-safe な要約) を書き、次の入口 に続きの入り方 (同じ branch を Codex が続ける) を書く。未 commit の変更は staged と unstaged を別々の --binary patch (git diff --cached --binary / git diff --binary) に、untracked は file 名を shell に通さない tar (ls-files -z | tar --null -T -) に退避して path を 結果 に記録し、orchestrator は代わりに commit しない。clone は復元確認まで消さない。pane は閉じない。limit の reset を待って人が再開を判断する (残量を人に聞かない)。",
       "files": [],
       "assertions": [
         {

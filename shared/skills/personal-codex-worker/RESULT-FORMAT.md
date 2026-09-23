@@ -29,7 +29,7 @@ Blocked at: authorization | launch-record | preflight | launch-path | clone | ex
 Reason: <public-safe な停止理由>
 Packet: #<issue> — state: blocked / 結果 "### <日付> orchestrator/claude" (書いた場合) / 起動の記録は残す
 Run dir: <path> / 退避: <path> (あれば)
-Next step: <人が実行する run script の shell literal と run dir | 依頼の更新 | 残量の申告 | 新 branch + 新 PR | 記録された run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決める (launch-record)>
+Next step: <人が実行する run script の shell literal と run dir | 依頼の更新 | limit の reset 待ち (reset 時刻) | 新 branch + 新 PR | 記録された run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決める (launch-record)>
 ```
 
 worker の本文 (最終 message / diff / commit message) を停止結果へ転記しません。secret / 実 home

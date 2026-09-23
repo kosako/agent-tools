@@ -81,7 +81,7 @@ tab: "#123"            # worker を動かしている herdr の tab 名。`#` �
 - Issue: #123 / branch: feat/123-example
 - 受け入れ条件: (Issue 本文のもの、または補足)
 - 制約: (触らない範囲・順番・依存)
-- 割当: (担当・capacity の申告・理由の 1 行。規則と書式は `personal-project-operating-loop` の「割当」。未定なら空)
+- 割当: (担当・残量の扱い (読んだ値と取得時刻、または使わない理由)・理由の 1 行。規則と書式は `personal-project-operating-loop` の「割当」。未定なら空)
 
 ## 結果
 
@@ -273,7 +273,7 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
   staged / unstaged / untracked をすべて run directory に退避し (staged と unstaged は patch、
   untracked は file の写し)、その path を記録する。復元を確認するまで clone を消さない。
   orchestrator が代わりに commit しない (trailer が Claude になり author が混ざる)。自動で再起動
-  しない (残量は割当時の申告制。`personal-project-operating-loop` の「割当」)。続きは同じ branch を
+  しない (limit の reset を待つ。残量の扱いは `personal-project-operating-loop` の「割当」)。続きは同じ branch を
   Codex が続ける (同 author なので同じ PR)。
   Claude が続けるなら新しい branch + 新しい PR (author の交代)。
 - **非対称**: 委譲は Claude → Codex の一方通行 (運用規則)。根拠として実測しているのは、Codex の
