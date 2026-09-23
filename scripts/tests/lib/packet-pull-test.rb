@@ -40,16 +40,15 @@ if ARGV[2] == "--mutations"
         to = to.gsub('\\n', "\n")
       elsif label == "read repo forwarding"
         from = from.gsub('\\n', "\n")
+        to = to.gsub('\\n', "\n")
       end
       safe_mutation = label == "other author"
-      reader_mutation = label == "read repo forwarding"
       mutation_source = safe_mutation ? File.read(safe_gh_source) : original
-      mutation_source = mutation_source.gsub("\\n", "\n") if reader_mutation
       abort "FAIL: mutation anchor missing: #{label}" unless mutation_source.include?(from)
       mutant = File.join(dir, safe_mutation ? "personal-safe-gh.rb" : "personal-packet.rb")
       File.write(mutant, mutation_source.sub(from, to))
-      packet_variant = safe_mutation || reader_mutation ? source : mutant
-      reader_variant = safe_mutation || reader_mutation ? mutant : safe_gh_source
+      packet_variant = safe_mutation ? source : mutant
+      reader_variant = safe_mutation ? mutant : safe_gh_source
       _out, err, status = Open3.capture3(RbConfig.ruby, __FILE__, packet_variant, reader_variant)
       abort "FAIL: mutation survived: #{label}" if status.success?
       abort "FAIL: mutation failed outside assertion: #{label}: #{err}" unless err.include?("FAIL:")
