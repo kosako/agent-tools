@@ -18,6 +18,10 @@ if ARGV[2] == "--mutations"
     "broken marker" => ['marker(issue, at) == mark[0].chomp', 'true'],
     "duplicate results" => ['publishable(known_entry, "結果 entry") == normalized', 'true'],
     "issue number type" => ['issue_number_matches?(data["number"], issue)', 'data["number"] == issue'],
+    "envelope number" => ['issue_number_matches?(data["number"], issue)', 'true'],
+    "envelope source" => ['data["source"] == source', 'true'],
+    "envelope repo" => ['(repo.nil? || data["repo"].casecmp(repo).zero?)', 'true'],
+    "read repo forwarding" => ['args = [reader, "issue", verb, issue.to_s]\\n    args += ["--repo", repo] if repo', 'args = [reader, "issue", verb, issue.to_s]'],
     "unpublished local" => ['updated_at = published_at + 1', 'updated_at = published_at'],
     "request overwrite" => ['request = secs["依頼"]', 'request = nil'],
     "stale next entry" => ['latest.published > local.published', 'true'],
@@ -32,6 +36,9 @@ if ARGV[2] == "--mutations"
   Dir.mktmpdir("packet-mutations-") do |dir|
     mutations.each do |label, (from, to)|
       if label == "invalid frontmatter"
+        from = from.gsub('\\n', "\n")
+        to = to.gsub('\\n', "\n")
+      elsif label == "read repo forwarding"
         from = from.gsub('\\n', "\n")
         to = to.gsub('\\n', "\n")
       end
@@ -174,6 +181,56 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   File.write(view_path, JSON.generate(issue_data))
   packet_dir = File.join(repo, ".agent-packets")
   path = File.join(packet_dir, "7.md")
+
+  # REST の issue view envelope が要求番号と違う場合は既存 packet を変更しない。
+  FileUtils.mkdir_p(packet_dir)
+  no_request = LOCAL.sub(/## 依頼\n.*?(?=## 結果)/m, "")
+  File.write(path, no_request)
+  comments.call([self_comment(copy)])
+  File.write(view_path, JSON.generate(issue_data.merge("number" => 8)))
+  _out, _err, status = run.call("pull", "7")
+  assert(status.exitstatus == 2 && File.read(path) == no_request, "Issue REST envelope number mismatch must fail before write")
+  File.write(view_path, JSON.generate(issue_data))
+  File.unlink(path)
+
+  # reader envelope の各照合と --repo の伝達を独立に検証する。
+  reader_stub = <<~'RUBY'
+    #!/usr/bin/env ruby
+    require "json"
+    verb = ARGV[1]
+    File.write(ENV.fetch("PACKET_READER_ARGS"), JSON.generate(ARGV))
+    repo_index = ARGV.index("--repo")
+    repo = repo_index ? ARGV[repo_index + 1] : "fixture/repo"
+    number = ENV.fetch("PACKET_ENVELOPE_NUMBER", "7")
+    source = ENV.fetch("PACKET_ENVELOPE_SOURCE", verb == "comments" ? "issue_comments" : "issue")
+    repo = ENV.fetch("PACKET_ENVELOPE_REPO", repo)
+    envelope = { "safe_reader_version" => "1", "source" => source, "repo" => repo,
+                 "number" => number, "comments" => [{ "author" => "fixture-self", "author_trust" => "self",
+                                                        "body" => ENV.fetch("PACKET_COPY") }] }
+    puts JSON.generate(envelope)
+  RUBY
+  File.write(reader, reader_stub)
+  File.chmod(0o755, reader)
+  env["PACKET_READER_ARGS"] = File.join(deploy, "reader-args.json")
+  env["PACKET_COPY"] = copy
+  { "number" => { "PACKET_ENVELOPE_NUMBER" => "07" },
+    "source" => { "PACKET_ENVELOPE_SOURCE" => "issue" },
+    "repo" => { "PACKET_ENVELOPE_REPO" => "other/repo" } }.each do |label, overrides|
+    File.write(path, LOCAL)
+    File.unlink(env.fetch("PACKET_READER_ARGS")) if File.exist?(env.fetch("PACKET_READER_ARGS"))
+    overrides.each { |key, value| env[key] = value }
+    _out, _err, status = run.call("pull", "7", "--repo", "fixture/repo")
+    assert(status.exitstatus == 2 && File.read(path) == LOCAL, "#{label} envelope mismatch must fail before write")
+    reader_args = JSON.parse(File.read(env.fetch("PACKET_READER_ARGS")))
+    assert(reader_args[-2..-1] == ["--repo", "fixture/repo"], "--repo must reach reader")
+    overrides.each_key { |key| env.delete(key) }
+  end
+  File.unlink(path)
+  FileUtils.remove_entry(packet_dir)
+  FileUtils.cp(safe_gh_source, reader)
+  File.chmod(0o755, reader)
+  env.delete("PACKET_READER_ARGS")
+  env.delete("PACKET_COPY")
 
   # 新規 / dry-run / 既存 publisher との round trip / list --json。
   comments.call([self_comment(copy)])
