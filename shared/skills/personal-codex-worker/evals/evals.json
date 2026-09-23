@@ -1,12 +1,12 @@
 {
   "skill_name": "personal-codex-worker",
-  "notes": "delegation executor skill。model eval では codex / herdr / git / gh を実行せず、authorization gate・preflight の扱い・clone・brief の薄さ・完了判定 (sentinel + 結果 file)・転記と退避・trailer 検査・停止条件を期待挙動 spec として検証する。evals/ は非配置。 LAUNCH §2 の配線検査は「clone が main と同じ hook dir を使うか」で判定し、repo-local hooksPath / 別 dir / 明示的な空値 / 壊れた config の 4 変異が Blocked になることを実測している (eval はその手順を選ぶかを見る。model の before / after 比較は repo に runner が無く未実施)。 launch argv の --add-dir は preflight が clone の git dir に対して 1 つだけ入れる (workspace-write は workdir 内でも .git を保護するため。#307)。",
+  "notes": "delegation executor skill。model eval では codex / herdr / git / gh を実行せず、authorization gate・preflight の扱い・clone・brief の薄さ・完了判定 (sentinel + 結果 file)・転記と退避・trailer 検査・停止条件を期待挙動 spec として検証する。evals/ は非配置。 LAUNCH §2 の配線検査は「clone が main と同じ hook dir を使うか」で判定し、repo-local hooksPath / 別 dir / 明示的な空値 / 壊れた config の 4 変異が Blocked になることを実測している (eval はその手順を選ぶかを見る。model の before / after 比較は repo に runner が無く未実施)。 launch argv の --add-dir は preflight が clone の git dir に対して 1 つだけ入れる (workspace-write は workdir 内でも .git を保護するため。#307)。 worker は Issue ごとの tab (#<issue>) で起動し done まで残す (#316)。herdr 0.9.0 で tab create の応答が .result.tab.tab_id / .result.root_pane.pane_id、pane rename 後の label が pane list の .label に出ることを実測している。",
   "evals": [
     {
       "id": 0,
       "name": "delegate-happy-path",
       "prompt": "packet #291 を Codex に委譲して実装させて。手順確認だけなので実行はせず、起動から PR 作成までの流れを示して。",
-      "expected_output": "起動 prompt を authorization、packet の 依頼 を scope として読む。clone を作ってから personal-codex-worker-preflight を --clone <clone> --json で実行し、exit 0 の launch_argv をそのまま使う (flag を足さない。--add-dir は preflight が clone の git dir に対して 1 つ入れる)。Issue ごとの local clone を main から git clone で切り、brief には 依頼 の verbatim / clone と branch / 禁止事項 / commit 規則 (Codex trailer) / 最終 message の書式を書き、diff は埋めない。herdr の pane から run script を起動し、done.txt (nonce・exit=0) と空でない result.md で完了を判定、codex.log を tee する。result.md を public-safety gate --stdin に通してから 結果 に worker/codex として転記し、次の入口 を最終 message の次の 1 アクションから写す。worker の commit を main へ git fetch <clone> <branch>:<branch> で回収し、base..branch の trailer が Codex のみであることを確認してから push と PR 作成を orchestrator が行い、packet に pr と state: review を入れる。merge はしない。",
+      "expected_output": "起動 prompt を authorization、packet の 依頼 を scope として読む。clone を作ってから personal-codex-worker-preflight を --clone <clone> --json で実行し、exit 0 の launch_argv をそのまま使う (flag を足さない。--add-dir は preflight が clone の git dir に対して 1 つ入れる)。Issue ごとの local clone を main から git clone で切り、brief には 依頼 の verbatim / clone と branch / 禁止事項 / commit 規則 (Codex trailer) / 最終 message の書式を書き、diff は埋めない。Issue ごとの tab (label #<issue>) を herdr tab create --no-focus で作り、応答の .result.root_pane の pane を worker-<issue> と名付けてそこで run script を起動し (orchestrator の tab は分割しない)、done.txt (nonce・exit=0) と空でない result.md で完了を判定、codex.log を tee する。result.md を public-safety gate --stdin に通してから 結果 に worker/codex として転記し、次の入口 を最終 message の次の 1 アクションから写す。worker の commit を main へ git fetch <clone> <branch>:<branch> で回収し、base..branch の trailer が Codex のみであることを確認してから push と PR 作成を orchestrator が行い、packet に pr と state: review を入れる。merge はしない。",
       "files": [],
       "assertions": [
         {
@@ -24,6 +24,10 @@
         {
           "id": "brief-is-thin",
           "text": "brief に 依頼 の verbatim・禁止事項・commit 規則・最終 message の書式を書き、diff や code 本文を埋め込んでいない"
+        },
+        {
+          "id": "worker-in-issue-tab",
+          "text": "worker を Issue ごとの tab (#<issue>) の pane で起動し、orchestrator の tab を分割していない (tab / pane の ID は応答の JSON から読んでいる)"
         },
         {
           "id": "done-file-is-truth",
@@ -409,6 +413,31 @@
         {
           "id": "no-bypass",
           "text": "preflight の迂回や --add-dir の手動追加を選んでいない"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "name": "issue-tab-lifecycle",
+      "prompt": "packet #291 の worker (round 1) が成功して PR を作り、packet は state: review になった。review の指摘を受けて、orchestrator が 依頼 に修正点を書き state を open に戻したので、同じ branch で Codex worker をもう一度起動する。herdr には label が #291 の tab が 1 つ残っていて、中の pane は worker-291 だけ (codex は foreground にいない)。起動と、その後 PR が merge されて packet が done になったときの tab の扱いを手順確認のみで示して。",
+      "expected_output": "round 1 の成功後も pane と tab は閉じずに残っている (出力は pane.log に保存済み) ので、それ自体は起動を止める理由にしない。herdr tab list で label #291 の tab が 1 つだけであること、その tab の pane の label がすべて worker-291 の命名であること (所有の確認)、どの pane の foreground にも codex がいないことを確かめてから、その tab の pane を herdr pane split --no-focus で分割し、応答の .result.pane の pane を worker-291-r2 と名付けて run script を起動する (新しい tab を作らない、orchestrator の tab を分割しない、固定名の pane を使い回さない)。label の比較は jq --arg で値を渡す。label が #291 の tab が 2 つ以上ある / 所有を確かめられないときは Blocked at: launch-path。packet が done になったら clone の掃除と同じ時点で、同じ所有の確認と codex がいないことを確かめてから herdr tab close で tab を閉じる。done より前 (review / blocked / RUNNING) には閉じない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "remaining-tab-does-not-block",
+          "text": "前の round の pane / tab が残っていることを起動を止める理由にしておらず、走っている worker の有無は foreground の codex で判定している"
+        },
+        {
+          "id": "reuse-owned-tab",
+          "text": "所有を確かめた #291 の tab に worker-291-r2 の pane を足し、新しい tab を作ったり orchestrator の tab を分割したりしていない"
+        },
+        {
+          "id": "ambiguous-tab-blocks",
+          "text": "同じ label の tab が複数ある、または所有を確かめられないときは触らず Blocked at: launch-path にしている"
+        },
+        {
+          "id": "close-tab-only-at-done",
+          "text": "tab を閉じるのを packet が done になったときだけにし、閉じる前に所有と codex の不在を確かめている"
         }
       ]
     }

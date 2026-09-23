@@ -53,8 +53,10 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
 
 - **worker**: orchestrator が起動時に tab を作り (`herdr tab create --label '#<Issue 番号>'
   --no-focus`)、応答の `.result.root_pane` の pane を `worker-<Issue 番号>[-r<round>]` と名付けて、そこで
-  worker を動かす (実装は #316。ID は応答の JSON から読み、推測しない)。worker は 10 分以上動くので、
-  orchestrator が別の作業単位を進める tab と分ける。
+  worker を動かす (ID は応答の JSON から読み、推測しない。手順は `personal-codex-worker` の LAUNCH
+  §5)。worker は 10 分以上動くので、orchestrator が別の作業単位を進める tab と分ける。同じ Issue の
+  2 回目以降の起動 (review の修正 round、停止からの再開) は、残っている `#<Issue 番号>` の tab に
+  `-r<round>` の pane を足す (作業単位ごとに tab は 1 つ)。
 - **review**: review の pane は、対象 PR の作業単位の tab に置きます (1 役割 = 1 pane)。Codex が review
   するのは Claude が書いた PR、つまり orchestrator 自身の作業単位なので、置き場は orchestrator の tab に
   なります (「1 作業単位 = 1 tab」の例外ではない)。Codex が書いた PR は orchestrator の Claude が自分の
@@ -69,10 +71,12 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   | pane | `<役割>-<番号>[-r<round>]`。worker は Issue 番号、review は PR 番号 | `worker-291-r2` / `review-312` |
 
 - 名前を付けたり閉じたりするのは、**自分が作った tab と pane だけ**です。人の tab (orchestrator 自身が
-  いる tab も含む) の名前は変えません。
+  いる tab も含む) の名前は変えません。自分が作った tab かどうかは、label が `#<Issue 番号>` で、pane が
+  すべて `worker-<Issue 番号>[-r<round>]` の名前であることで確かめます (命名の規約に頼る確認で、人が
+  同じ名前を付けた tab とは区別できない)。確かめられなければ触らず人に渡します。
 - worker の tab を閉じるのは packet が `done` になったとき (clone を片付けるのと同じ時点) です。止まって
-  いる間 (`blocked`) と、上限時間を超えて走っている間 (RUNNING) は、調べられるように残します。失敗した
-  pane を閉じない規則は今のままです。
+  いる間 (`blocked`) と、上限時間を超えて走っている間 (RUNNING) は、調べられるように残します。worker が
+  成功した後も pane は閉じず (出力は `pane.log` に保存)、tab ごと `done` で閉じます。
 
 ## dashboard (毎回導出する)
 

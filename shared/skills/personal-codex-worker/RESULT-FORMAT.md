@@ -16,8 +16,8 @@ worker がまだ走っている (hard cap) 場合:
 
 ```text
 Status: RUNNING
-Pane: <pane id> / Run dir: <path> / Elapsed: <分>
-Next step: worker はまだ生きている (run script を再実行しない)。pane を見て続行か中断かを決める。
+Tab: #<issue> / Pane: <pane id> / Run dir: <path> / Elapsed: <分>
+Next step: worker はまだ生きている (run script を再実行しない)。tab #<issue> の pane を見て続行か中断かを決める。
 続行なら pane を監視して done.txt を待つ。中断なら worker の process を止めてから退避 (LAUNCH §8)
 ```
 

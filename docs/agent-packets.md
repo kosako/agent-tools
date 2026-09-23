@@ -208,7 +208,7 @@ file で行い、command 文字列へ inline 展開しない。
 ## worker 委譲との関係(#254)
 
 orchestrator (Claude) が packet を Codex の worker に委譲するときの、packet 側の規約。起動の
-機械的な手順 (herdr の pane、完了判定、pane の後始末) は委譲 skill `personal-codex-worker` と
+機械的な手順 (herdr の tab / pane、完了判定、tab の後始末) は委譲 skill `personal-codex-worker` と
 その preflight (`personal-codex-worker-preflight`) が持ち、ここには packet に現れる約束だけを置く。
 
 - **authorization と scope**: 起動 prompt が authorization、packet の `依頼` が scope (上の信頼
