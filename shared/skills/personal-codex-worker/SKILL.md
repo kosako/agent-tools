@@ -152,7 +152,7 @@ brief は file に書き、stdin (`-`) で渡します。shell 引数に埋め�
   (あれば) / `commits` (oid と subject の一覧) / `次の 1 アクション` (`次の入口` の転記元)。
   markdown の見出しは `###` 以下を使い、行頭 `## ` は使わない (packet の予約)。file は repo 相対の
   path で書き、markdown のリンクにしない。clone / run dir / home の絶対 path も書かない (転記前の
-  public-safety gate が止め、`Blocked at: transcription` になる。#326)。
+  public-safety gate が止める。§6 の置き換えは取りこぼしたときの安全網。#326)。
 - 途中で受け入れ条件が曖昧だと分かったら、推測で進めず `停止理由 または 質問` に書いて終える。
 
 model family / reasoning effort は brief に書かない (preflight の launch argv が user selection を
@@ -216,8 +216,16 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
 - **完了 (最終 message あり)**: `result.md` の内容を `personal-public-safety-gate --stdin` に通し、
   exit 0 のときだけ packet の `結果` に `### <日付> worker/codex` として転記する (見出しと
   `次の 1 アクション` の項目名は残し、本文は要約しない)。`次の入口` を最終 message の
-  `次の 1 アクション` から写す。gate が exit 1 / 2 なら転記せず、`Blocked at: transcription` として
-  本文を人に見せる (packet に secret / 実 path を写さない)。
+  `次の 1 アクション` から写す。
+  - gate が exit 1 で、止めた finding が **すべて `home-path`** のときだけ、local の path を置き換えた版を
+    別 file に作り、gate に通し直して exit 0 ならその版を転記する (#326)。置き換えは clone の中の path →
+    repo 相対、clone そのもの → `<clone>`、run dir → `<run dir>`、それ以外の home → `<home>` で、手順は
+    `LAUNCH.md` §8。原文の `result.md` は run dir に残し、`結果` の entry の先頭に置き換えたことを 1 行
+    注記する。置き換えるのは path の文字列だけで、本文の要約や言い換えはしない。
+  - それ以外 (home-path 以外の finding を 1 つでも含む exit 1、exit 2、置き換えた版も gate を通らない) は
+    転記せず、`Blocked at: transcription` として本文を人に見せる (packet に secret / 実 path を写さない)。
+    secret・token の形や local pattern は置き換えても意味が戻らず、worker が漏らしかけている兆候でも
+    あるので、自動では扱わない。
 - **止まっている (質問・失敗・limit)**: 最終 message の有無にかかわらず `state: blocked`。最終
   message があれば上の転記、無ければ orchestrator が `### <日付> orchestrator/claude` で停止理由
   (limit の文言、exit code、`codex.log` 末尾の public-safe な要約) を書く。`次の入口` には続きの
