@@ -165,6 +165,12 @@ run 用の directory を `mktemp -d` で作り、`brief.md`、`preflight.json`�
 herdr 経由の起動、待ち方、限界、pane の後始末、退避の command は **`LAUNCH.md` を読んで、その
 通りに組みます** (手順の正本はそちら)。ここには手順が満たすべき契約だけを置きます。
 
+- **run dir は worker が書けない場所に置く** (#324): orchestrator は run dir の `run.zsh` を sandbox の
+  外で実行し (空振りの再実行、人手の hand-off)、`done.txt` / `result.md` / `tab-id` を判定に使う。
+  `workspace-write` の worker は clone に加えて `/tmp` と `$TMPDIR` にも書ける (codex 0.156.0 の起動表示で
+  実測) ので、`mktemp -d` の既定の置き場 (`$TMPDIR`) は使わない。置き場と、worker の書込先の内側に
+  無いことの確認は `LAUNCH.md` §1 / §3。確かめられなければ起動せず `Blocked at: launch-path`。
+
 - **起動の記録を起動の前に書く**: run dir と run script が揃った時点で (herdr 経由の起動も `launch-path`
   の hand-off も、その前に)、packet の frontmatter に `run` (run dir) と `tab` (`#<issue>`) を書き、
   `personal-packet list --json --all` で読み直して一致と `run_status: unfinished` を確かめる (一致
