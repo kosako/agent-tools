@@ -13,9 +13,9 @@ orchestrator が行います。
 
 ## 副作用と組み合わせ
 
-- 副作用: worker 用 clone の作成、herdr の pane からの `codex exec` 起動 (workspace-write。書込は
-  その clone の中に閉じる)、clone から main への fetch、packet の local 更新 (`結果` / `次の入口` /
-  `state`)、worker が commit した branch の push と PR 作成 (orchestrator の操作。trailer 検査を
+- 副作用: worker 用 clone の作成、herdr の Issue ごとの tab (`#<issue>`) を作ってその pane から
+  `codex exec` を起動 (workspace-write。書込はその clone の中に閉じる)、clone から main への fetch、
+  packet の local 更新 (`結果` / `次の入口` / `state`)、worker が commit した branch の push と PR 作成 (orchestrator の操作。trailer 検査を
   通ったときだけ)。
   Issue コメントへの publish と planning tool の更新はしない (handoff の領分)。worker は GitHub /
   network / packet に触れない。preflight が BLOCKED なら何も起動しない。
@@ -46,8 +46,12 @@ orchestrator が行います。
   orchestrator に `依頼` の記入を求めて `Blocked at: authorization` で止まる。
 - packet の `state` が `blocked` (質問待ち) のときは、`結果` の質問に orchestrator が `依頼` で答えて
   から再起動する。`review` / `done` の packet は起動しない。
-- 同時に走らせる worker は orchestrator session あたり 1 つ。走っている worker の pane が残って
-  いれば新しく起動しない (並列の範囲と tab / pane の命名は agent-tools の `docs/herdr-operations.md`)。
+- 同時に走らせる worker は orchestrator session あたり 1 つ。走っている worker (workspace の中の
+  worker の pane のどれかで foreground に `codex` がいる) があれば新しく起動しない。終わった worker の
+  tab / pane は packet が `done` になるまで残るので、残っていること自体は起動を止める理由にしない
+  (並列の範囲と tab / pane の命名は agent-tools の `docs/herdr-operations.md`)。`launch-path` の
+  hand-off で人が herdr の外から動かしている worker は herdr から見えないので、その run の `done.txt`
+  を確かめるまで同じ Issue を起動し直さない。
 
 ## 2. preflight
 
@@ -108,7 +112,8 @@ objects / refs / 他 worktree の index / config を worker に開けること�
 - packet dir は main worktree の root のまま。clone には含まれない (gitignore) ので worker からは
   見えない。`docs/agent-packets.md` の置き場の規則は変わらない。
 - clone の掃除 (`rm -rf <clone path>`) は、commit を main へ fetch し、PR が merge されて packet が
-  `done` になった後。停止 (`blocked`) の間は退避物の復元確認まで消さない。
+  `done` になった後。停止 (`blocked`) の間は退避物の復元確認まで消さない。worker の tab
+  (`#<issue>`) も同じ時点で閉じる (所有を確かめた tab だけ。手順は `LAUNCH.md` §11)。
 
 ## 4. brief
 
@@ -158,9 +163,17 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
 - **空振り**: `done.txt` が `exit=0` なのに `result.md` が欠落 / 空なら、新しい nonce で同じ brief を
   **1 回だけ** 再実行し、2 回目も空なら `Blocked at: executor-result`。worker が commit 済みなら
   再実行は同じ clone で続きから (brief は同じ)。
-- **pane の後始末**: 続行条件を満たしたときだけ、pane の生出力を `<run dir>/pane.log` に保存し、
-  空でないことを確認してから閉じる。満たさないとき (exit≠0、limit、空振りが尽きた、RUNNING) は
-  閉じない。固定名の pane を使い回さない。
+- **tab と pane**: worker は Issue ごとの tab (label `#<issue>`) で動かし、orchestrator の tab は
+  分割しない。ID は herdr の応答 JSON から読み、推測しない。同じ Issue の 2 回目以降の起動 (review の
+  修正 round、停止からの再開) は、残っている `#<issue>` の tab に `worker-<issue>-r<N>` の pane を
+  足す (固定名の pane を使い回さない)。pane を足す・tab を閉じるのは、所有を確かめた tab (tab を
+  作ったときに run dir に記録した tab ID と一致し、かつ pane がすべて `worker-<issue>` の命名) だけ。
+  前の run dir が分からない (別の session) なら確かめられないとして触らない。herdr の一覧は終了コード
+  と JSON の形を確かめてから読み、読めないことを「一致 0 件」と取り違えない。確かめられなければ
+  `Blocked at: launch-path`。
+- **後始末**: 続行条件を満たしたら pane の生出力を `<run dir>/pane.log` に保存し、空でないことを
+  確認する。pane と tab は閉じない (成功・失敗・limit・空振り・RUNNING のどれでも)。tab を閉じるのは
+  packet が `done` になったときだけ (§3)。
 
 ## 6. 結果の転記と停止の記録
 
@@ -226,3 +239,5 @@ merge はしない (人が行う)。
 - 停止した worker の代わりに orchestrator が commit する。limit で自動再起動する。
 - trailer が Codex のみでない branch を push する。merge する。
 - 2 つ目の worker を同じ session で並行起動する。失敗した pane を閉じる。
+- worker を orchestrator の tab の分割で動かす。packet が `done` になる前に worker の tab を閉じる。
+  所有を確かめずに tab を閉じる / 人の tab に pane を足す。

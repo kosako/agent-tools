@@ -25,7 +25,7 @@ Issue 番号、branch 名、path、nonce は caller の free text や git / gh �
 ## 1. run directory
 
 `mktemp -d` で run dir を作り、以降の成果物 (`preflight.json`、`brief.md`、`run.zsh`、`result.md`、
-`codex.log`、`done.txt`、`pane.log`、退避物) はすべてここに置く。
+`codex.log`、`done.txt`、`pane.log`、`tab-id`、退避物) はすべてここに置く。
 
 ## 2. clone
 
@@ -181,19 +181,116 @@ exit "$rc"
 
 ## 5. herdr 経由の起動
 
-`preflight.json` の `herdr` が `running` のときだけ:
+`preflight.json` の `herdr` が `running` のときだけ。worker は **Issue ごとの tab** (label `#<issue>`)
+で動かし、orchestrator の tab は分割しません (worker は 10 分以上動くので、orchestrator が別の作業
+単位を進める tab と分ける。規約は agent-tools の `docs/herdr-operations.md`)。workspace は herdr が
+orchestrator の pane に注入する `$HERDR_WORKSPACE_ID` を使います。
 
 ```sh
-herdr pane split --current --direction down --ratio 0.3 --cwd "$clone" --no-focus
-herdr pane rename <pane-id> worker-<issue>
-herdr pane run <pane-id> <"zsh " + run script path の shell literal>
+ws=$HERDR_WORKSPACE_ID
+[ -n "$ws" ] || exit 1            # 空 = orchestrator が herdr の pane の外にいる。herdr を呼ばない
+label=<'#<issue>' の shell literal>
+
+# 0. 一覧を取り、herdr の終了コードと JSON の形を確かめる。確かめずに進むと、herdr の失敗が
+#    「一致 0 件」に見えて tab を重複して作る (herdr は失敗時に exit 1 と error の JSON を返す)
+tabs=$(herdr tab list --workspace "$ws") || exit 1
+panes=$(herdr pane list --workspace "$ws") || exit 1
+printf '%s' "$tabs"  | jq -e '.result.tabs  | type == "array"' >/dev/null || exit 1
+printf '%s' "$panes" | jq -e '.result.panes | type == "array"' >/dev/null || exit 1
+
+# 1. 走っている worker が workspace のどこかにいれば起動しない (§1 の「worker 1 つ」)。
+#    worker の命名の pane をすべて挙げ、それぞれ process-info の foreground に codex がいないか見る
+printf '%s' "$panes" | jq -r '.result.panes[]
+  | select((.label // "") | test("^worker-[0-9]+(-r[0-9]+)?$")) | .pane_id'
+herdr pane process-info --pane <上の各 pane-id>
+
+# 2. 同じ Issue の worker tab が残っているか (2 回目以降の起動: review の修正 round、停止からの再開)
+printf '%s' "$tabs" \
+  | jq -r --arg label "$label" '.result.tabs[] | select(.label == $label) | .tab_id'
+
+# 3a. 0 件: tab を作る。ID は応答から取り出し (推測しない。jq -er は null や欠落で非 0)、
+#     tab ID を run dir に記録する
+out=$(herdr tab create --workspace "$ws" --cwd "$clone" --label "$label" --no-focus) || exit 1
+tab=$(printf '%s' "$out" | jq -er '.result.tab.tab_id') || exit 1
+pane=$(printf '%s' "$out" | jq -er '.result.root_pane.pane_id') || exit 1
+printf '%s\n' "$tab" > "$run/tab-id" || exit 1
+
+# 3b. 1 件 ($tab = 手順 2 の tab ID) で、所有を確かめられた (下記) とき: その tab の pane を
+#     1 つ選んで分割し、同じ tab ID を新しい run dir にも記録する (次の round と §11 が辿れるように)
+base_pane=$(printf '%s' "$panes" | jq -er --arg tab "$tab" \
+  'first(.result.panes[] | select(.tab_id == $tab) | .pane_id)') || exit 1
+out=$(herdr pane split --pane "$base_pane" --direction down --cwd "$clone" --no-focus) || exit 1
+pane=$(printf '%s' "$out" | jq -er '.result.pane.pane_id') || exit 1
+printf '%s\n' "$tab" > "$run/tab-id" || exit 1
+
+# 4. 名前を付けて実行する
+pane_label=<worker-<issue> または worker-<issue>-r<N> の shell literal>
+herdr pane rename "$pane" "$pane_label" >/dev/null || exit 1
+herdr pane run "$pane" <"zsh " + run script path の shell literal> || exit 1
 ```
 
+(`exit 1` は「その段で止めて `Blocked at: launch-path` にする」の意。)
+
+- **所有の確認** (3b の前、§11 で閉じる前も同じ): 次の 2 つが**両方**成り立つ tab だけを、この skill
+  が作った tab とみなします。pane を足したり tab を閉じたりしてよいのは、その tab だけです。
+  1. **記録した ID**: 手順 2 で見つけた tab の ID が、同じ Issue の前の run の run dir に記録した
+     `tab-id` と一致する。前の run dir が分かるのは、同じ orchestrator session の中か、packet の起動
+     記録 (`run`、#315) から辿れるときだけです。分からない・file が無い・一致しない、はどれも
+     「確かめられない」。
+  2. **命名**: その tab の pane が 1 つ以上あり、`.label` がすべて `worker-<issue>` か
+     `worker-<issue>-r<N>`。値は jq の `--arg` で渡し、filter の文字列に埋め込みません (`$issue` は
+     §0 で `\A\d+\z` を通した値)。label の無い pane は `.label` が出ないので不一致になります。手順 0
+     で形を確かめた `$panes` を使います。
+
+  ```sh
+  prev_tab=$(cat "$prev_run/tab-id") && [ "$prev_tab" = "$tab" ] || <確かめられない>
+  printf '%s' "$panes" | jq -e --arg tab "$tab" --arg issue "$issue" '
+    [.result.panes[] | select(.tab_id == $tab)] as $p
+    | ($p | length) > 0
+      and all($p[]; (.label // "") | test("^worker-" + $issue + "(-r[0-9]+)?$"))'
+  ```
+
+  jq が exit 0 (`true`) のときだけ命名を確かめたとみなす (exit 1 = `false`、それ以外 = 判定できない)。
+  ID だけ・命名だけの一致では触りません。ID は tab を作った応答から取った値なので人が同じ名前の tab
+  を作っても一致せず、命名の確認は、記録の取り違え (別の run dir を辿った等) で無関係な tab を指した
+  ときの歯止めです。
+- **走っている worker があれば起動しない** (手順 1): workspace の中の worker の命名の pane (どの
+  Issue の tab にあっても) のどれかで、`herdr pane process-info --pane <id>` の foreground process
+  (`result.process_info.foreground_processes[].name`) に `codex` がいれば、新しく起動しない (§1 の
+  「worker 1 つ」。数える単位は workspace で、`docs/herdr-operations.md` の 1 + 1 と同じ)。
+  process-info が失敗する・解釈できないときも起動しない (`launch-path`)。前の round の pane が
+  残っていること自体は止める理由にしない (tab は done まで残る。§7)。
+- honest-label (二重起動): 手順 1 が見えるのは herdr の pane で動いている worker だけです。
+  `launch-path` の hand-off で人が自分の terminal から動かしている worker は herdr からは見えず、
+  この確認では検出できません (この変更の前から同じ)。起動の記録を packet に残して起動前に確かめる
+  仕組みは #315 で足します。それまでは、hand-off した run の `done.txt` を確かめる前に同じ Issue を
+  起動し直さないことを orchestrator が守ります。
+- **round**: 最初の起動は `worker-<issue>`、同じ tab に足す pane は `-r<N>` を付け、`<N>` は tab に
+  ある worker pane の round の最大 + 1 (`worker-<issue>` を round 1 と数える)。固定名の pane を
+  使い回さない。
 - `pane run` の command は pane の shell が解釈するので、script path を pane shell 用に literal 化し、
   自分の shell 経由で `herdr` に渡すならもう 1 段 literal 化する (2 段)。
-- herdr が `running` でない、または split / run に失敗したら `Blocked at: launch-path`。このとき
-  clone と run script は揃っているので、Next step に `zsh <run script の shell literal>` と run dir
-  を書く (人が自分の terminal で実行する。§10)。
+- 次のどれかなら `Blocked at: launch-path`。Next step は場合で分けます:
+  - **走っている worker がいる** (手順 1): Next step は「pane <id> の worker の完了を待ってから、この
+    skill で起動し直す」。run script を人に実行させない (二重起動になる)。
+  - **tab を特定できない**: label が `#<issue>` の tab が 2 つ以上ある / 1 つあるが所有を確かめられ
+    ない (別の session で作った tab で前の run dir が分からない場合を含む)。その tab には触らず、
+    Next step は「人が `#<issue>` の tab を確かめ、不要なら閉じてから、この skill で起動し直す」
+    (閉じれば手順 3a で新しい tab を作り、ID を記録し直す)。人が自分の terminal で run script を
+    実行してもよい (§10)。
+  - **起動できない**: herdr が `running` でない / `$HERDR_WORKSPACE_ID` が空 / 手順 0 の一覧の取得か
+    形の確認に失敗した / 手順 1 の process-info で判定できない / tab create・split・rename・run の
+    どれかが失敗した / 応答から ID を取り出せない / `tab-id` を書けない。clone と run script は
+    揃っているので、Next step に `zsh <run script の shell literal>` と run dir を書く (人が自分の
+    terminal で実行する。§10)。手順 1 を終えられていないときは、「同じ workspace で worker が走って
+    いないことを確かめてから実行する」を添える。作りかけの tab は閉じない (人がその pane で run
+    script を実行できる。`tab-id` を記録できていなければ、次の起動では「tab を特定できない」として
+    人に渡る)。
+- honest-label (所有): 記録した tab ID は、この skill が tab を作ったときの herdr の応答から取った値
+  です。記録の置き場は run dir (orchestrator が `mktemp -d` で作る一時領域) で、worker の sandbox から
+  書けないことまでは確かめていないので、ID の一致だけでは決めず命名の確認と両方を要求します。
+  herdr の ID は server が動いている間は再利用されません。server の再起動をまたいだ ID の扱いは
+  確かめていないので、その場合も命名が一致しなければ触りません。
 
 ## 6. 待ち方と限界
 
@@ -215,12 +312,13 @@ herdr pane wait-output <pane-id> --match CODEX-WORKER-DONE-<nonce> --timeout 300
 
 - 続行条件 (`done.txt` の nonce 一致・`exit=0`、空でない `result.md`) を満たしたら §8 へ進む。
   **herdr 経由で起動した場合だけ**、その前に `herdr pane read <pane-id> --source recent-unwrapped
-  --lines 200` の生出力を `<run dir>/pane.log` に保存し、空でないことを確認してから
-  `herdr pane close <pane-id>`。人手実行 (§10 の未起動 hand-off) には pane が無いので、pane の
-  後始末は行わず、同じ続行条件を確認して §8 へ進む。
+  --lines 200` の生出力を `<run dir>/pane.log` に保存し、空でないことを確認する。pane と tab は
+  **閉じない** (tab は packet が `done` になるまで残し、§11 で閉じる)。人手実行 (§10 の未起動
+  hand-off) には pane が無いので、pane.log の保存は行わず、同じ続行条件を確認して §8 へ進む。
 - `exit=0` なのに `result.md` が欠落 / 空なら、新しい nonce で同じ run dir から 1 回だけ再実行
   (`run.zsh` の nonce を差し替える)。2 回目も空なら `Blocked at: executor-result`。
-- `exit` が 0 以外 (limit を含む) / RUNNING / 空振りが尽きたときは pane を閉じない。
+- `exit` が 0 以外 (limit を含む) / RUNNING / 空振りが尽きたときも、pane と tab を閉じない
+  (調べられるように残す)。
 
 ## 8. 転記と退避
 
@@ -303,9 +401,39 @@ title / body は orchestrator が packet から書く (一時 file は repositor
 
 - **未起動 (`launch-path`)**: Next step に run script の path (shell literal) と run dir を書く。人が
   自分の terminal で実行したあと、caller は `done.txt` (nonce 一致・`exit=0`) と空でない `result.md`
-  を確認してから §8 (転記) 以降を続ける (pane は無いので §7 の pane の後始末は行わない。空振り
+  を確認してから §8 (転記) 以降を続ける (pane は無いので §7 の pane.log の保存は行わない。空振り
   なら §7 の再実行規則どおり、新しい nonce の run script を人に 1 回だけ渡す)。端末に出た sentinel
   や口頭報告だけで完了とみなさない。
 - **起動済み (`RUNNING`)**: worker はまだ生きている。run script を再実行させない。Next step は
-  「pane <id> を見て続行か中断かを決める」だけ。続行なら人が pane を監視して `done.txt` を待つ。
-  中断なら人が pane の process を止めてから §8 の退避に進む。
+  「tab `#<issue>` の pane <id> を見て続行か中断かを決める」だけ。続行なら人が pane を監視して
+  `done.txt` を待つ。中断なら人が pane の process を止めてから §8 の退避に進む。
+
+## 11. tab の後始末 (packet が done になったとき)
+
+worker の tab を閉じるのは、PR が merge されて packet が `done` になったときだけです (clone を片付ける
+のと同じ時点。`SKILL.md` §3)。`blocked` の間と RUNNING の間は、調べられるように残します。
+
+```sh
+ws=$HERDR_WORKSPACE_ID
+[ -n "$ws" ] || exit 1
+label=<'#<issue>' の shell literal>
+# §5 の手順 0 と同じく、終了コードと JSON の形を確かめてから読む
+tabs=$(herdr tab list --workspace "$ws") || exit 1
+panes=$(herdr pane list --workspace "$ws") || exit 1
+printf '%s' "$tabs"  | jq -e '.result.tabs  | type == "array"' >/dev/null || exit 1
+printf '%s' "$panes" | jq -e '.result.panes | type == "array"' >/dev/null || exit 1
+printf '%s' "$tabs" \
+  | jq -r --arg label "$label" '.result.tabs[] | select(.label == $label) | .tab_id'
+# 1 件で、§5 の所有の確認 (最後の run dir の tab-id との一致 + 命名) を通り、
+# その tab のどの pane の foreground にも codex がいないときだけ
+herdr tab close <tab-id>
+```
+
+(`exit 1` は「その段で止めて閉じない」の意。)
+
+- 0 件なら何もしない (人が既に閉じた)。一覧の取得か形の確認に失敗した、2 件以上、所有を確かめられ
+  ない (最後の run dir が分からない場合を含む)、codex がまだ foreground にいる、process-info で判定
+  できない、のどれかなら閉じずに、人に「tab `#<issue>` を確かめて閉じてください」と伝える (人の tab
+  と、走っている worker を閉じない。一覧が読めないことを「0 件」と取り違えない)。
+- orchestrator 自身がいる tab (`personal-codex-review` の review pane もここに置かれる) は、記録した
+  tab ID と一致せず、pane の名前も `worker-<issue>` の形でないので、閉じる対象にならない。
