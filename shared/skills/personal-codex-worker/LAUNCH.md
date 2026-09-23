@@ -395,10 +395,49 @@ herdr pane wait-output <pane-id> --match CODEX-WORKER-DONE-<nonce> --timeout 300
 転記 (`SKILL.md` §6) の前に gate に通す:
 
 ```sh
-<tool home>/agent-tools/scripts/personal-public-safety-gate --stdin < "$run/result.md"
+gate=<tool home>/agent-tools/scripts/personal-public-safety-gate
+"$gate" --stdin < "$run/result.md" 2> "$run/gate.err"; rc=$?
 ```
 
-exit 0 のときだけ packet に写す。退避は clone で、staged / unstaged / untracked を別々に:
+exit 0 なら `result.md` を packet に写す。exit 1 で、止めた finding がすべて `home-path` のときだけ、
+local の path を置き換えた版を作って通し直す (#326):
+
+```sh
+blocked=$(grep -c '^public-safety-gate: blocked: ' "$run/gate.err")
+home_only=$(grep -c '^public-safety-gate: blocked: .*: \[home-path\]$' "$run/gate.err")
+[ "$rc" = 1 ] && [ "$blocked" -gt 0 ] && [ "$blocked" = "$home_only" ] || exit 1
+ruby -e '
+  src, dst, clone, run, home = ARGV
+  pre = "(?<![A-Za-z0-9._~/-])"   # path の途中から始まらない
+  post = "(?![A-Za-z0-9._~-])"    # 名前の途中で終わらない (続くのは / か区切り)
+  at = ->(path) { Regexp.new(pre + Regexp.escape(path) + post) }
+  t = File.read(src)
+  t = t.gsub(Regexp.new(pre + Regexp.escape(clone) + "/"), "")
+  t = t.gsub(at.(clone), "<clone>").gsub(at.(run), "<run dir>").gsub(at.(home), "<home>")
+  File.write(dst, t)
+' "$run/result.md" "$run/result.redacted.md" "$clone_root" "$run" "$HOME" || exit 1
+"$gate" --stdin < "$run/result.redacted.md" || exit 1
+```
+
+(`exit 1` は「その段で止めて `Blocked at: transcription` にする」の意。`$clone_root` は preflight の
+`clone_root`。)
+
+- gate は finding 1 件につき `public-safety-gate: blocked: stdin:<行>: [<種類>]` を 1 行出す (1 行に
+  2 種類あれば 2 行)。`blocked` の行がすべて `[home-path]` のときだけ置き換えに進む。値は gate も表示
+  しないので、判定は種類だけで行う。
+- 置き換えの順番は、clone の中の path (`<clone_root>/` を消して repo 相対にする) → clone そのもの
+  (`<clone>`) → run dir (`<run dir>`) → それ以外の home (`<home>`)。clone と run dir は home の下に
+  あるので、home を最後にする。path は `ruby` の argv で渡し、`Regexp.escape` してから使う。
+- 置き換えるのは **path の区切りで一致した出現だけ**: 前が path の文字 (英数字と `._~/-`) でなく、後ろが
+  名前の文字 (英数字と `._~-`) でない。clone が `…/999` のときの `…/9990/x` や、home が `/Users/<name>` の
+  ときの `/Users/<name>X/…` のように名前の途中で一致するものは置き換えない (置き換えると別の path に
+  変わる)。置き換えなかった出現は残り、通し直した gate が home-path で止めるので、判定できないものは自動で
+  転記しない。
+- 置き換えた版 (`result.redacted.md`) を転記し、`結果` の entry の見出しの直後に
+  「(orchestrator 注: 最終 message の local の path を置き換えて転記した。gate が home-path で止めたため。
+  原文は run dir に残した)」を 1 行入れる。`次の入口` も置き換えた版の `次の 1 アクション` から写す。
+
+退避は clone で、staged / unstaged / untracked を別々に:
 
 ```sh
 git -C "$clone" status --porcelain=v1 --untracked-files=all > "$run/wip-status.txt"

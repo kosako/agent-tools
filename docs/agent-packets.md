@@ -253,7 +253,9 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
 - **結果の転記**: worker は最終 message に到達点 / 判断 / 未完 / 停止理由 / commit 一覧 /
   次の 1 アクション (`次の入口` の転記元) を書き、orchestrator がそれを `結果` に
   `### <日付> worker/codex` として転記し、`次の入口` を最終 message の「次の 1 アクション」から
-  写す (転記前に `personal-public-safety-gate --stdin` を通す)。worker が止まっている (質問・失敗・
+  写す (転記前に `personal-public-safety-gate --stdin` を通す。止めた finding が `home-path` だけなら、
+  orchestrator が local の path を repo 相対や `<home>` などに置き換えた版を通し直して転記し、その旨を
+  注記する。それ以外は転記せず人に見せる。手順は委譲 skill の §6、#326)。worker が止まっている (質問・失敗・
   limit) なら、最終 message の有無にかかわらず orchestrator が `state: blocked` にする。有無で変わる
   のは記録の出所だけで、最終 message があればこの転記 (`worker/codex`)、無ければ下の「停止」の手順で
   orchestrator が書く (`orchestrator/claude`)。
