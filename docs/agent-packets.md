@@ -198,7 +198,8 @@ file で行い、command 文字列へ inline 展開しない。
 
 - `personal-resume-project`: cwd が repo と一致する herdr agent (種別 / 状態) と、この repo の
   packet 一覧 (open / blocked / review) を workspace 節として出す。herdr が無い / server が
-  止まっていれば packet 一覧だけに縮退する。tab ↔ Issue の対応規約は #256 で決める。
+  止まっていれば packet 一覧だけに縮退する。tab ↔ Issue の対応規約 (worker の tab は `#<Issue 番号>`)
+  は [herdr-operations](herdr-operations.md)。
 - `personal-session-handoff`: workspace 単位の索引 file は作らない (packet から導出)。役割は
   packet の `結果` / `次の入口` を更新 (常時。local で agent 所有) → publish (write-authorized
   のとき) → planning tool (write-authorized のとき、project 単位の判断だけ)。
@@ -257,11 +258,13 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
 - **非対称**: 委譲は Claude → Codex の一方通行 (運用規則)。根拠として実測しているのは、Codex の
   sandbox から herdr の socket に届かないこと (#251) までで、Codex 側から Claude を起動する経路は
   持たない。Codex が worker のとき、review や次の worker の起動は Claude か人が行う。同時に
-  走らせる worker は orchestrator session あたり 1 つ (並列は #256)。
+  走らせる worker は orchestrator session あたり 1 つ (並列の範囲は
+  [herdr-operations](herdr-operations.md) の「1 + 1」)。
 
 ## 関連
 
 - #251 (umbrella: herdr 前提の運用形) / #253 (この規約) / #291 (pull) / #254 (委譲 skill) /
   #255 (割当規則) / #256 (並列運用と pane / tab)
 - [git-hook-gates](git-hook-gates.md) (public-safety gate の stdin mode) /
-  [publication-safety](publication-safety.md)
+  [publication-safety](publication-safety.md) / [herdr-operations](herdr-operations.md) (並列・tab /
+  pane・dashboard・通知)

@@ -47,7 +47,7 @@ orchestrator が行います。
 - packet の `state` が `blocked` (質問待ち) のときは、`結果` の質問に orchestrator が `依頼` で答えて
   から再起動する。`review` / `done` の packet は起動しない。
 - 同時に走らせる worker は orchestrator session あたり 1 つ。走っている worker の pane が残って
-  いれば新しく起動しない。
+  いれば新しく起動しない (並列の範囲と tab / pane の命名は agent-tools の `docs/herdr-operations.md`)。
 
 ## 2. preflight
 
