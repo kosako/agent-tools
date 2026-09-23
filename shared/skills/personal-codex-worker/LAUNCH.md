@@ -165,9 +165,13 @@ preflight=<tool home>/agent-tools/scripts/personal-codex-worker-preflight
   run_p=$(cd -P "$run" && pwd -P) || exit 1
   for w in "$clone_root" /tmp "${TMPDIR:-/tmp}"; do
     w_p=$(cd -P "$w" && pwd -P) || exit 1
-    case "$run_p/" in "$w_p"/*) exit 1 ;; esac   # 引用した "$w_p" は literal (glob にしない)
+    case "$run_p/" in "${w_p%/}"/*) exit 1 ;; esac
   done
   ```
+
+  pattern の引用した部分は literal (glob にしない)。`${w_p%/}` は末尾の `/` を 1 つ落とす: `pwd -P` が
+  末尾に `/` を返すのは `/` そのものだけで、書込先が `/` (例: `TMPDIR=/`) なら pattern は `/*` になって
+  すべての run dir を止める (`"$w_p"/*` のままだと `//*` になり、何にも一致しない)。
 
   honest-label: 比べるのは codex 0.156.0 の `workspace-write` が起動時に表示した書込先 (workdir、`/tmp`、
   `$TMPDIR`、`--add-dir` の `<clone>/.git`) で、`<clone>/.git` は clone の内側に含まれる。codex の版で
