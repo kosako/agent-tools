@@ -221,7 +221,8 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
     別 file に作り、gate に通し直して exit 0 ならその版を転記する (#326)。置き換えは clone の中の path →
     repo 相対、clone そのもの → `<clone>`、run dir → `<run dir>`、それ以外の home → `<home>` で、手順は
     `LAUNCH.md` §8。原文の `result.md` は run dir に残し、`結果` の entry の先頭に置き換えたことを 1 行
-    注記する。置き換えるのは path の文字列だけで、本文の要約や言い換えはしない。
+    注記する。置き換えるのは path の区切りで一致した path の文字列だけで、本文の要約や言い換えはしない。
+    名前の途中で一致するなど path と判定できない出現は置き換えずに残し、通し直した gate が止める。
   - それ以外 (home-path 以外の finding を 1 つでも含む exit 1、exit 2、置き換えた版も gate を通らない) は
     転記せず、`Blocked at: transcription` として本文を人に見せる (packet に secret / 実 path を写さない)。
     secret・token の形や local pattern は置き換えても意味が戻らず、worker が漏らしかけている兆候でも

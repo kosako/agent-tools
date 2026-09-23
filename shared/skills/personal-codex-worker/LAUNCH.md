@@ -408,8 +408,12 @@ home_only=$(grep -c '^public-safety-gate: blocked: .*: \[home-path\]$' "$run/gat
 [ "$rc" = 1 ] && [ "$blocked" -gt 0 ] && [ "$blocked" = "$home_only" ] || exit 1
 ruby -e '
   src, dst, clone, run, home = ARGV
+  pre = "(?<![A-Za-z0-9._~/-])"   # path の途中から始まらない
+  post = "(?![A-Za-z0-9._~-])"    # 名前の途中で終わらない (続くのは / か区切り)
+  at = ->(path) { Regexp.new(pre + Regexp.escape(path) + post) }
   t = File.read(src)
-  t = t.gsub(clone + "/", "").gsub(clone, "<clone>").gsub(run, "<run dir>").gsub(home, "<home>")
+  t = t.gsub(Regexp.new(pre + Regexp.escape(clone) + "/"), "")
+  t = t.gsub(at.(clone), "<clone>").gsub(at.(run), "<run dir>").gsub(at.(home), "<home>")
   File.write(dst, t)
 ' "$run/result.md" "$run/result.redacted.md" "$clone_root" "$run" "$HOME" || exit 1
 "$gate" --stdin < "$run/result.redacted.md" || exit 1
@@ -423,7 +427,12 @@ ruby -e '
   しないので、判定は種類だけで行う。
 - 置き換えの順番は、clone の中の path (`<clone_root>/` を消して repo 相対にする) → clone そのもの
   (`<clone>`) → run dir (`<run dir>`) → それ以外の home (`<home>`)。clone と run dir は home の下に
-  あるので、home を最後にする。path は `ruby` の argv で渡し、文字列の一致で置き換える (正規表現にしない)。
+  あるので、home を最後にする。path は `ruby` の argv で渡し、`Regexp.escape` してから使う。
+- 置き換えるのは **path の区切りで一致した出現だけ**: 前が path の文字 (英数字と `._~/-`) でなく、後ろが
+  名前の文字 (英数字と `._~-`) でない。clone が `…/999` のときの `…/9990/x` や、home が `/Users/<name>` の
+  ときの `/Users/<name>X/…` のように名前の途中で一致するものは置き換えない (置き換えると別の path に
+  変わる)。置き換えなかった出現は残り、通し直した gate が home-path で止めるので、判定できないものは自動で
+  転記しない。
 - 置き換えた版 (`result.redacted.md`) を転記し、`結果` の entry の見出しの直後に
   「(orchestrator 注: 最終 message の local の path を置き換えて転記した。gate が home-path で止めたため。
   原文は run dir に残した)」を 1 行入れる。`次の入口` も置き換えた版の `次の 1 アクション` から写す。
