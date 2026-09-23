@@ -208,20 +208,25 @@ herdr pane process-info --pane <上の各 pane-id>
 printf '%s' "$tabs" \
   | jq -r --arg label "$label" '.result.tabs[] | select(.label == $label) | .tab_id'
 
-# 3a. 0 件: tab を作る。ID は応答から読み (推測しない)、tab ID を run dir に記録する
-herdr tab create --workspace "$ws" --cwd "$clone" --label "$label" --no-focus
-#     tab  = .result.tab.tab_id / pane = .result.root_pane.pane_id
-printf '%s\n' "$tab" > "$run/tab-id"
+# 3a. 0 件: tab を作る。ID は応答から取り出し (推測しない。jq -er は null や欠落で非 0)、
+#     tab ID を run dir に記録する
+out=$(herdr tab create --workspace "$ws" --cwd "$clone" --label "$label" --no-focus) || exit 1
+tab=$(printf '%s' "$out" | jq -er '.result.tab.tab_id') || exit 1
+pane=$(printf '%s' "$out" | jq -er '.result.root_pane.pane_id') || exit 1
+printf '%s\n' "$tab" > "$run/tab-id" || exit 1
 
-# 3b. 1 件で、所有を確かめられた (下記) とき: その tab の pane を 1 つ選んで分割し、
-#     同じ tab ID を新しい run dir にも記録する (次の round と §11 が辿れるように)
-herdr pane split --pane <その tab の pane-id> --direction down --cwd "$clone" --no-focus
-#     pane = .result.pane.pane_id
-printf '%s\n' "$tab" > "$run/tab-id"
+# 3b. 1 件 ($tab = 手順 2 の tab ID) で、所有を確かめられた (下記) とき: その tab の pane を
+#     1 つ選んで分割し、同じ tab ID を新しい run dir にも記録する (次の round と §11 が辿れるように)
+base_pane=$(printf '%s' "$panes" | jq -er --arg tab "$tab" \
+  'first(.result.panes[] | select(.tab_id == $tab) | .pane_id)') || exit 1
+out=$(herdr pane split --pane "$base_pane" --direction down --cwd "$clone" --no-focus) || exit 1
+pane=$(printf '%s' "$out" | jq -er '.result.pane.pane_id') || exit 1
+printf '%s\n' "$tab" > "$run/tab-id" || exit 1
 
 # 4. 名前を付けて実行する
-herdr pane rename "$pane" <worker-<issue> または worker-<issue>-r<N> の shell literal>
-herdr pane run "$pane" <"zsh " + run script path の shell literal>
+pane_label=<worker-<issue> または worker-<issue>-r<N> の shell literal>
+herdr pane rename "$pane" "$pane_label" >/dev/null || exit 1
+herdr pane run "$pane" <"zsh " + run script path の shell literal> || exit 1
 ```
 
 (`exit 1` は「その段で止めて `Blocked at: launch-path` にする」の意。)
@@ -275,10 +280,12 @@ herdr pane run "$pane" <"zsh " + run script path の shell literal>
     実行してもよい (§10)。
   - **起動できない**: herdr が `running` でない / `$HERDR_WORKSPACE_ID` が空 / 手順 0 の一覧の取得か
     形の確認に失敗した / 手順 1 の process-info で判定できない / tab create・split・rename・run の
-    どれかが失敗した。clone と run script は揃っているので、Next step に
-    `zsh <run script の shell literal>` と run dir を書く (人が自分の terminal で実行する。§10)。
-    手順 1 を終えられていないときは、「同じ workspace で worker が走っていないことを確かめてから
-    実行する」を添える。作りかけの tab は閉じない (人がその pane で run script を実行できる)。
+    どれかが失敗した / 応答から ID を取り出せない / `tab-id` を書けない。clone と run script は
+    揃っているので、Next step に `zsh <run script の shell literal>` と run dir を書く (人が自分の
+    terminal で実行する。§10)。手順 1 を終えられていないときは、「同じ workspace で worker が走って
+    いないことを確かめてから実行する」を添える。作りかけの tab は閉じない (人がその pane で run
+    script を実行できる。`tab-id` を記録できていなければ、次の起動では「tab を特定できない」として
+    人に渡る)。
 - honest-label (所有): 記録した tab ID は、この skill が tab を作ったときの herdr の応答から取った値
   です。記録の置き場は run dir (orchestrator が `mktemp -d` で作る一時領域) で、worker の sandbox から
   書けないことまでは確かめていないので、ID の一致だけでは決めず命名の確認と両方を要求します。
