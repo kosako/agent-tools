@@ -64,8 +64,10 @@ orchestrator が行います。
     自動で起動し直さず `Blocked at: launch-record` で人に確かめる。
   - それ以外で `missing` (run dir が無い) → `Blocked at: launch-record` (worker の commit は clone に
     残りうるので、人が確かめてから記録の破棄を決める)。
-  - `list` が exit 2 / その packet が壊れている (exit 1 の warning に出る) → 記録を確かめられないので
-    `Blocked at: launch-record`。
+  - `list` が exit 0 でない (exit 2、または exit 1 = **どれか**の packet が壊れている) / JSON が読めない
+    → 記録を確かめられないので `Blocked at: launch-record`。壊れているのが別の Issue の packet でも
+    止める (その中に未回収の記録が隠れうる)。`list` の終了コードは pipe で失わないよう、出力を受けて
+    から照合する (`LAUNCH.md` §4 の最後と同じ形)。
   - **他の Issue** の packet に `unfinished` の記録がある (`state: blocked` を除く) ときも、その worker が
     動いているかを同じく見る。動いていれば「worker 1 つ」により起動しない。動いていると確認できない
     なら、その Issue の記録を人が確かめるまで起動しない (`Blocked at: launch-record`)。herdr の外で

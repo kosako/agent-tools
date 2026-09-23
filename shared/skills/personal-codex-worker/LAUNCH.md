@@ -197,12 +197,19 @@ tab: "#<issue>"    # 引用符が要る (無いと `#` 以降が YAML の commen
   二重起動の防止もできない)。
 
 ```sh
-"$packet_cli" list --json --all \
+# list の終了コードを pipe で失わないよう、出力を受けてから照合する。exit 1 (どれかの packet が
+# 壊れている) も止める: 壊れた packet の中に他の Issue の未回収の記録が隠れうる
+packets=$("$packet_cli" list --json --all) || exit 1
+printf '%s' "$packets" \
   | jq -e --argjson issue "$issue" --arg run "$run" --arg tab "#$issue" \
-    '.[] | select(.issue == $issue) | .run == $run and .tab == $tab and .run_status == "unfinished"'
+    '[.[] | select(.issue == $issue)] | length == 1 and
+     (.[0] | .run == $run and .tab == $tab and .run_status == "unfinished")' >/dev/null || exit 1
 ```
 
-(`$packet_cli` は `<tool home>/agent-tools/scripts/personal-packet`。`$issue` は §0 で `\A\d+\z` を通した値。)
+(`$packet_cli` は `<tool home>/agent-tools/scripts/personal-packet`。`$issue` は §0 で `\A\d+\z` を通した値。
+`exit 1` は「その段で止めて `Blocked at: launch-record` にする」の意。JSON が読めない・行が無いときも
+jq が非 0 で止まる。`SKILL.md` §1 の起動前の確認と §8 の記録を消した後の読み直しも、同じく `list` の
+終了コードを先に確かめてから照合する。)
 
 ## 5. herdr 経由の起動
 
@@ -372,8 +379,9 @@ git -C "$clone" ls-files --others --exclude-standard -z \
   list の名前を option として解釈しない。GNU tar なら `--verbatim-files-from` を足す)。
   untracked が無ければ tar は作らない。
 - 退避した path を packet の `結果` に書く。`git stash` は使わない (clone の状態を動かさない)。
-- 起動の記録 (`run` / `tab`): 完了の転記が済んだら key ごと消し、`list --json --all` で `run` が null に
-  なったことを確かめる。止まっている (`state: blocked`) ときは消さない (`SKILL.md` §6)。
+- 起動の記録 (`run` / `tab`): 完了の転記が済んだら key ごと消し、`list --json --all` が exit 0 で、その
+  Issue の行の `run` が null になったことを確かめる (§4 の最後と同じく、終了コードを先に見てから照合する)。
+  止まっている (`state: blocked`) ときは消さない (`SKILL.md` §6)。
 
 ## 9. 回収 (fetch) と trailer 検査と PR
 

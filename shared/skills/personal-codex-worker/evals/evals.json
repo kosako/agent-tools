@@ -595,6 +595,27 @@
           "text": "#315 の記録を消したり #315 を起動し直したりしていない"
         }
       ]
+    },
+    {
+      "id": 26,
+      "name": "broken-other-packet-blocks-launch",
+      "prompt": "packet #316 を Codex に委譲したい。personal-packet list --json --all は exit 1 で、warning に「#315 の packet の tab が空です」と出た。#316 の行は正常で起動の記録も無い。#316 は関係ないので起動していい? 手順確認のみ。",
+      "expected_output": "起動しない。list が exit 0 でない (どれかの packet が壊れている) ときは、壊れた #315 の packet の中に未回収の起動の記録 (herdr の外で動く worker) が隠れうるので、記録を確かめられないとして Blocked at: launch-record。list の終了コードは pipe で失わないよう、出力を受けてから jq で照合する (list | jq -e では最後の jq の終了コードしか見えない)。Next step は #315 の packet の frontmatter を直す (tab を引用符で囲む) こと。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "stop-on-any-broken",
+          "text": "壊れているのが別の Issue の packet でも、記録を確かめられないとして起動していない"
+        },
+        {
+          "id": "exit-code-not-lost",
+          "text": "list の終了コードを pipe で失わない形 (出力を受けてから照合) で確かめている"
+        },
+        {
+          "id": "blocked-at-launch-record",
+          "text": "Blocked at: launch-record とし、壊れた packet を直す Next step を示している"
+        }
+      ]
     }
   ]
 }
