@@ -120,8 +120,9 @@ continue-work / new-work では、次の一手が複数ありうる、scope が�
 continue-work で packet のある Issue を続けるときは、その packet の `依頼` (受け入れ条件・制約) を
 scope として読み、`結果` の最新節と `次の入口` から再開します。new-work で別の agent に worker を
 割り当てる場面 (委譲) が生じたときだけ、`personal-project-operating-loop` の「割当」(向き不向き表と、
-枠のある tool の残量が読めるときだけ残量) に従い、それが読めなければ人に割当先を聞きます。残量は
-人に聞きません (読み取り口から読めなければ使わない)。
+枠のある tool の残量が読めるときだけ残量) に従います。残量が読めないときも人には聞かず、その規則と
+表で割当先を決めます。人に割当先を聞くのは、割当の規則 (`personal-project-operating-loop`) 自体を読めない
+ときだけです。
 
 ## やってはいけないこと
 
