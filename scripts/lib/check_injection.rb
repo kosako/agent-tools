@@ -217,7 +217,7 @@ module CheckInjection
     opts = Cli.parse(argv, usage: USAGE, bool_flags: %w[--quiet], value_flags: %w[--root])
     return 0 if opts == :help
 
-    root = opts["--root"] || Dir.pwd
+    root = opts["--root"] || Cli::DEFAULT_ROOT
     quiet = opts.key?("--quiet")
 
     count, findings = Runner.new(root).run

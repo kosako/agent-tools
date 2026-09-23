@@ -217,7 +217,7 @@ module Status
                      value_flags: %w[--root --codex-home --claude-home])
     return 0 if opts == :help
 
-    root = opts["--root"] || Dir.pwd
+    root = opts["--root"] || Cli::DEFAULT_ROOT
     json = opts.key?("--json")
     homes = ArtifactTargets.default_homes
     homes["codex"] = File.expand_path(opts["--codex-home"]) if opts["--codex-home"]

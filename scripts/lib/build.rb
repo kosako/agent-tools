@@ -309,7 +309,7 @@ module Build
     opts = Cli.parse(argv, usage: USAGE, bool_flags: %w[--quiet --prune], value_flags: %w[--root])
     return 0 if opts == :help
 
-    root = opts["--root"] || Dir.pwd
+    root = opts["--root"] || Cli::DEFAULT_ROOT
     quiet = opts.key?("--quiet")
     prune = opts.key?("--prune")
 
