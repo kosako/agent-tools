@@ -97,7 +97,8 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   そろった時点で)、packet の frontmatter に `run` (run dir) と `tab` (tab の名前 `#<Issue 番号>`) を
   書きます。
   - 起動に失敗して人に渡す (`launch-path`) ときも消しません。人がその run script を実行するためです。
-  - 消すのは、転記が済んだときか、人がその run を破棄すると決めたときだけです。
+  - 消すのは、転記が済んだときか、人がその run を破棄すると決めたときだけです。worker が止まって
+    `state: blocked` にした間は、`run` をその退避物の置き場として残し、再起動で新しい run に置き換えます。
   - resume はこれを見て「起動済み・未回収」と出し、orchestrator は新しく起動する前にこれを確かめます。
   - `run` があるのに、その run の `done.txt` も、生きている worker の process も確認できないとき (起動の
     直前に止まった、落ちた、判定できない) は、自動で起動し直さず人に確認します。
@@ -105,8 +106,8 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   これで、orchestrator の session が起動の前後や worker の途中で終わっても、二重に起動せず、次の
   session が回収できます。`personal-packet` は `run` / `tab` を解析し、`list` に run dir の状態
   (`run_status`: `finished` / `unfinished` / `missing`) を出し、publish / pull で保持します (書式は
-  [agent-packets](agent-packets.md))。worker の起動手順と resume の表示への組み込みは #315 の続きで
-  行います。
+  [agent-packets](agent-packets.md))。worker の起動手順 (`personal-codex-worker`) が起動の前に書いて
+  起動の前に確かめ、resume (`personal-resume-project`) が「起動済み・未回収」を出します。
 
 ## 通知
 

@@ -6,7 +6,7 @@
       "id": 0,
       "name": "delegate-happy-path",
       "prompt": "packet #291 を Codex に委譲して実装させて。手順確認だけなので実行はせず、起動から PR 作成までの流れを示して。",
-      "expected_output": "起動 prompt を authorization、packet の 依頼 を scope として読む。clone を作ってから personal-codex-worker-preflight を --clone <clone> --json で実行し、exit 0 の launch_argv をそのまま使う (flag を足さない。--add-dir は preflight が clone の git dir に対して 1 つ入れる)。Issue ごとの local clone を main から git clone で切り、brief には 依頼 の verbatim / clone と branch / 禁止事項 / commit 規則 (Codex trailer) / 最終 message の書式を書き、diff は埋めない。Issue ごとの tab (label #<issue>) を herdr tab create --no-focus で作り、応答の .result.root_pane の pane を worker-<issue> と名付けてそこで run script を起動し (orchestrator の tab は分割しない)、done.txt (nonce・exit=0) と空でない result.md で完了を判定、codex.log を tee する。result.md を public-safety gate --stdin に通してから 結果 に worker/codex として転記し、次の入口 を最終 message の次の 1 アクションから写す。worker の commit を main へ git fetch <clone> <branch>:<branch> で回収し、base..branch の trailer が Codex のみであることを確認してから push と PR 作成を orchestrator が行い、packet に pr と state: review を入れる。merge はしない。",
+      "expected_output": "起動 prompt を authorization、packet の 依頼 を scope として読む。clone を作ってから personal-codex-worker-preflight を --clone <clone> --json で実行し、exit 0 の launch_argv をそのまま使う (flag を足さない。--add-dir は preflight が clone の git dir に対して 1 つ入れる)。Issue ごとの local clone を main から git clone で切り、brief には 依頼 の verbatim / clone と branch / 禁止事項 / commit 規則 (Codex trailer) / 最終 message の書式を書き、diff は埋めない。起動の前に packet の frontmatter へ起動の記録 (run = run dir / tab = \"#<issue>\"、updated は変えない) を書いて personal-packet list --json で読み直し、Issue ごとの tab (label #<issue>) を herdr tab create --no-focus で作り、応答の .result.root_pane の pane を worker-<issue> と名付けてそこで run script を起動し (orchestrator の tab は分割しない)、done.txt (nonce・exit=0) と空でない result.md で完了を判定、codex.log を tee する。result.md を public-safety gate --stdin に通してから 結果 に worker/codex として転記し、次の入口 を最終 message の次の 1 アクションから写し、転記が済んだら起動の記録 (run / tab) を消す。worker の commit を main へ git fetch <clone> <branch>:<branch> で回収し、base..branch の trailer が Codex のみであることを確認してから push と PR 作成を orchestrator が行い、packet に pr と state: review を入れる。merge はしない。",
       "files": [],
       "assertions": [
         {
@@ -40,6 +40,10 @@
         {
           "id": "orchestrator-opens-pr",
           "text": "trailer が Codex のみであることを確認してから orchestrator が push と PR 作成を行い、merge はしていない"
+        },
+        {
+          "id": "launch-record-lifecycle",
+          "text": "起動の前に packet に run / tab を書いて読み直し、完了の転記が済んだら消している (updated は変えない)"
         }
       ]
     },
@@ -198,7 +202,7 @@
       "id": 8,
       "name": "herdr-absent-manual-execution",
       "prompt": "packet #291 を Codex に委譲したい。preflight は exit 0 だが herdr field は unavailable。どう進める? 人が実行したあとの回収まで手順確認のみ。",
-      "expected_output": "clone・brief・run script を揃えてから Blocked at: launch-path で人に渡す (run script の path の shell literal と run dir を Next step に)。直接起動には倒さない。人が実行したあと、caller は done.txt (nonce 一致・exit=0) と空でない result.md を確認してから転記 (gate --stdin → worker/codex) に進む。pane は無いので pane.log の保存や pane close は行わない。端末の sentinel や口頭報告だけで完了とみなさない。",
+      "expected_output": "clone・brief・run script を揃えてから Blocked at: launch-path で人に渡す (run script の path の shell literal と run dir を Next step に)。直接起動には倒さない。人が実行したあと、caller は done.txt (nonce 一致・exit=0) と空でない result.md を確認してから転記 (gate --stdin → worker/codex) に進む。pane は無いので pane.log の保存や pane close は行わない。端末の sentinel や口頭報告だけで完了とみなさない。 起動の記録 (run / tab) は起動の前に書いたまま残して渡す (caller の session が先に終わっても、次の session が run_status から回収に入れる)。",
       "files": [],
       "assertions": [
         {
@@ -212,6 +216,10 @@
         {
           "id": "no-pane-cleanup-without-pane",
           "text": "pane が無い経路で pane.log の保存や pane close を要求していない"
+        },
+        {
+          "id": "keep-record-on-handoff",
+          "text": "launch-path で人に渡すときも起動の記録 (run / tab) を消さずに残している"
         }
       ]
     },
@@ -501,6 +509,90 @@
         {
           "id": "handoff-to-human",
           "text": "その tab に触らず Blocked at: launch-path とし、人が tab を確かめて閉じてから起動し直す Next step を示している"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "name": "existing-run-finished-collect-first",
+      "prompt": "packet #291 を Codex に委譲して、と言われた。personal-packet list --json --all の #291 の行は state: open、run: /tmp/run-x、tab: \"#291\"、run_status: finished。どう進める? 手順確認のみ。",
+      "expected_output": "新しく起動しない。記録の run には done.txt があり、前の session が起動して回収していない run。先にその run dir で完了判定 (done.txt の nonce 一致と exit、空でない result.md) から続け、転記 (gate --stdin → worker/codex) と回収・trailer 検査・PR へ進む。転記が済んだら起動の記録を消す。新しい run dir を作って二重に起動しない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-new-launch",
+          "text": "新しい run dir を作って worker を起動し直していない"
+        },
+        {
+          "id": "collect-existing-run",
+          "text": "記録された run dir の done.txt / result.md から完了判定と転記を続けている"
+        },
+        {
+          "id": "clear-after-transcription",
+          "text": "転記が済んでから起動の記録を消すとしている"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "name": "existing-run-unfinished-unconfirmed",
+      "prompt": "packet #291 を Codex に委譲したい。list --json --all の #291 は state: open、run_status: unfinished (run dir はあるが done.txt が無い)。herdr の workspace には worker-291 の pane が無く、どの worker の pane にも codex が foreground にいない。起動していい? 手順確認のみ。",
+      "expected_output": "起動しない。done.txt が無く、worker が動いていると確認できない (launch-path の hand-off で人が herdr の外から動かしている、起動の直前に止まった、落ちた、のどれか区別できない)。自動で起動し直さず Blocked at: launch-record で人に確かめる。Next step は、その run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決めること。記録を勝手に消さない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-auto-relaunch",
+          "text": "動いていると確認できない unfinished の run があるのに、自動で起動し直していない"
+        },
+        {
+          "id": "blocked-at-launch-record",
+          "text": "Blocked at: launch-record として人に確かめている"
+        },
+        {
+          "id": "keep-record",
+          "text": "起動の記録を勝手に消していない"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "name": "blocked-run-replaced-on-restart",
+      "prompt": "packet #291 の worker は limit で止まり、state: blocked で停止理由と退避物の path を 結果 に記録済み。run には止まった run の run dir が残っている (run_status: finished)。limit が解けたので orchestrator が 依頼 を確認して再起動したい。起動の記録はどう扱う? 手順確認のみ。",
+      "expected_output": "state: blocked の run は停止を記録済みの run (run は退避物の置き場) なので、未回収として止めない。再起動では新しい run dir を作り、起動の前に run / tab を新しい値で置き換えて読み直す。古い run dir は 結果 に書いた退避物の path として残る (消さない)。同じ branch・同じ clone から続ける。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "blocked-not-uncollected",
+          "text": "blocked の run を未回収として扱って再起動を止めていない"
+        },
+        {
+          "id": "replace-record",
+          "text": "新しい run dir で起動の記録を置き換え、読み直している"
+        },
+        {
+          "id": "keep-old-stash",
+          "text": "古い run dir (退避物) を消していない"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "name": "other-issue-unfinished-record",
+      "prompt": "packet #316 を Codex に委譲したい。#316 には起動の記録が無い。list --json --all を見ると、別の #315 の packet が state: open・run_status: unfinished で、herdr のどの worker の pane にも codex はいない。#316 を起動していい? 手順確認のみ。",
+      "expected_output": "起動しない。worker は workspace (この repo) あたり 1 つで、#315 の記録は herdr の外 (launch-path の hand-off) で worker が動いている可能性を示すが、動いていると確認できない。#315 の記録を人が確かめるまで #316 は起動せず Blocked at: launch-record。#315 の記録を消したり、#315 を起動し直したりしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "check-other-issues",
+          "text": "起動する Issue 以外の packet の unfinished の記録も見ている"
+        },
+        {
+          "id": "no-launch-while-unknown",
+          "text": "他の Issue の worker が動いていないと確認できないまま #316 を起動していない"
+        },
+        {
+          "id": "no-touch-other-record",
+          "text": "#315 の記録を消したり #315 を起動し直したりしていない"
         }
       ]
     }
