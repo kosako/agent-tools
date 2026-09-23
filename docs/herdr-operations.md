@@ -103,9 +103,10 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
     直前に止まった、落ちた、判定できない) は、自動で起動し直さず人に確認します。
 
   これで、orchestrator の session が起動の前後や worker の途中で終わっても、二重に起動せず、次の
-  session が回収できます。今の `personal-packet` は `run` / `tab` を解析も出力もしないので、#315 では
-  packet の CLI (`list --json` への出力と、publish / pull での保持) と resume の表示もあわせて変えます
-  (これが無いと、記録しても resume と二重起動のチェックに届かない)。
+  session が回収できます。`personal-packet` は `run` / `tab` を解析し、`list` に run dir の状態
+  (`run_status`: `finished` / `unfinished` / `missing`) を出し、publish / pull で保持します (書式は
+  [agent-packets](agent-packets.md))。worker の起動手順と resume の表示への組み込みは #315 の続きで
+  行います。
 
 ## 通知
 

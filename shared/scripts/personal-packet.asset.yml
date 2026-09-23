@@ -14,14 +14,14 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:9e01f37b1a947c07c06f61316e2dafc52538ff5a68612ae65dfd9c0a7a6040d6
+  approved_build_id: sha256:9f7d801b7ebe6e2fb382fe794bc07475ee81e8a3b031e862b4b7665b0819beb4
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-packet.rb
   format: text
 summary: >-
   作業単位 (Issue) ごとの packet .agent-packets/<issue>.md を扱う CLI。dir (main worktree root に
-  固定) / list (frontmatter の一覧、--json) / publish (結果の最新節 + 次の入口を marker 付きで
+  固定) / list (frontmatter の一覧、--json。起動の記録 run / tab と run dir の状態も出す) / publish (結果の最新節 + 次の入口を marker 付きで
   Issue コメントへ写す。同じ directory の personal-public-safety-gate --stdin が exit 0 のときだけ
   投稿し、gh に到達できなければ exit 2 で Claude か人に渡す) / pull (personal-safe-gh の self
   コメントから検証できる写しを取り込み、local packet を再構成。--dry-run で全文を表示)。
