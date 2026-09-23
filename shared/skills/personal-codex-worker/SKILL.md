@@ -46,10 +46,12 @@ orchestrator が行います。
   orchestrator に `依頼` の記入を求めて `Blocked at: authorization` で止まる。
 - packet の `state` が `blocked` (質問待ち) のときは、`結果` の質問に orchestrator が `依頼` で答えて
   から再起動する。`review` / `done` の packet は起動しない。
-- 同時に走らせる worker は orchestrator session あたり 1 つ。走っている worker (worker の pane の
-  foreground に `codex` がいる) があれば新しく起動しない。終わった worker の tab / pane は packet が
-  `done` になるまで残るので、残っていること自体は起動を止める理由にしない (並列の範囲と tab / pane
-  の命名は agent-tools の `docs/herdr-operations.md`)。
+- 同時に走らせる worker は orchestrator session あたり 1 つ。走っている worker (workspace の中の
+  worker の pane のどれかで foreground に `codex` がいる) があれば新しく起動しない。終わった worker の
+  tab / pane は packet が `done` になるまで残るので、残っていること自体は起動を止める理由にしない
+  (並列の範囲と tab / pane の命名は agent-tools の `docs/herdr-operations.md`)。`launch-path` の
+  hand-off で人が herdr の外から動かしている worker は herdr から見えないので、その run の `done.txt`
+  を確かめるまで同じ Issue を起動し直さない。
 
 ## 2. preflight
 
@@ -165,7 +167,8 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   分割しない。ID は herdr の応答 JSON から読み、推測しない。同じ Issue の 2 回目以降の起動 (review の
   修正 round、停止からの再開) は、残っている `#<issue>` の tab に `worker-<issue>-r<N>` の pane を
   足す (固定名の pane を使い回さない)。pane を足す・tab を閉じるのは、所有を確かめた tab (pane が
-  すべて `worker-<issue>` の命名) だけ。確かめられなければ `Blocked at: launch-path`。
+  すべて `worker-<issue>` の命名) だけ。herdr の一覧は終了コードと JSON の形を確かめてから読み、読め
+  ないことを「一致 0 件」と取り違えない。確かめられなければ `Blocked at: launch-path`。
 - **後始末**: 続行条件を満たしたら pane の生出力を `<run dir>/pane.log` に保存し、空でないことを
   確認する。pane と tab は閉じない (成功・失敗・limit・空振り・RUNNING のどれでも)。tab を閉じるのは
   packet が `done` になったときだけ (§3)。

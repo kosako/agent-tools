@@ -440,6 +440,48 @@
           "text": "tab を閉じるのを packet が done になったときだけにし、閉じる前に所有と codex の不在を確かめている"
         }
       ]
+    },
+    {
+      "id": 19,
+      "name": "herdr-list-failure-is-not-zero",
+      "prompt": "packet #291 の worker を起動しようとしたら、herdr tab list --workspace が exit 1 で error の JSON を返し、jq で label #291 の tab を探すと何も出てこなかった。tab が無いということなので新しく tab を作って起動していい? 手順確認のみ。",
+      "expected_output": "作らない。herdr の失敗で一覧が読めないことを「一致 0 件」と取り違えると、既存の #291 の tab を見落として tab を重複して作る。一覧は herdr の終了コードと JSON の形 (.result.tabs / .result.panes が配列であることを jq -e で) を確かめてから読み、確かめられなければ Blocked at: launch-path で止める。走っている worker の確認も終えられていないので、Next step の run script の手動実行には「同じ workspace で worker が走っていないことを確かめてから」を添える。done のときの tab の後始末 (close) でも同じく、一覧が読めなければ閉じずに人に伝える。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "failure-not-zero",
+          "text": "一覧の取得失敗を「tab が 0 件」と扱っておらず、tab を新しく作っていない"
+        },
+        {
+          "id": "check-exit-and-shape",
+          "text": "herdr の終了コードと JSON の形を確かめてから一覧を読む手順にしている"
+        },
+        {
+          "id": "blocked-with-caveat",
+          "text": "Blocked at: launch-path で止め、run script を人に渡すなら worker が走っていないことの確認を添えている"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "name": "running-worker-in-other-tab",
+      "prompt": "packet #316 を Codex worker に委譲したい。herdr には label #316 の tab はまだ無い。同じ workspace の #315 の tab にある worker-315 の pane を process-info で見ると、foreground に codex がいる。#316 の tab を作って起動していい? 手順確認のみ。",
+      "expected_output": "起動しない。worker は orchestrator session (workspace) あたり 1 つで、走っている worker の確認は起動する Issue の tab に限らず workspace の中の worker の命名の pane (worker-<n>[-r<N>]) すべてを対象にする。worker-315 で codex が foreground にいるので Blocked at: launch-path とし、Next step は「pane の worker の完了を待ってから、この skill で起動し直す」にする。run script を人の terminal で実行させない (二重起動になる)。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "workspace-wide-check",
+          "text": "走っている worker の確認を起動する Issue の tab に限らず、workspace の worker の pane すべてに当てている"
+        },
+        {
+          "id": "no-launch-while-running",
+          "text": "別の worker が走っている間は #316 の tab を作らず起動していない"
+        },
+        {
+          "id": "no-manual-run-handoff",
+          "text": "Next step を完了待ちにし、run script の手動実行を案内していない"
+        }
+      ]
     }
   ]
 }

@@ -190,51 +190,78 @@ orchestrator の pane に注入する `$HERDR_WORKSPACE_ID` を使います。
 ws=$HERDR_WORKSPACE_ID            # 空なら launch-path (orchestrator が herdr の pane の外にいる)
 label=<'#<issue>' の shell literal>
 
-# 1. 同じ Issue の worker tab が残っているか (2 回目以降の起動: review の修正 round、停止からの再開)
-herdr tab list --workspace "$ws" \
+# 0. 一覧を取り、herdr の終了コードと JSON の形を確かめる。確かめずに進むと、herdr の失敗が
+#    「一致 0 件」に見えて tab を重複して作る (herdr は失敗時に exit 1 と error の JSON を返す)
+tabs=$(herdr tab list --workspace "$ws") || exit 1
+panes=$(herdr pane list --workspace "$ws") || exit 1
+printf '%s' "$tabs"  | jq -e '.result.tabs  | type == "array"' >/dev/null || exit 1
+printf '%s' "$panes" | jq -e '.result.panes | type == "array"' >/dev/null || exit 1
+
+# 1. 走っている worker が workspace のどこかにいれば起動しない (§1 の「worker 1 つ」)。
+#    worker の命名の pane をすべて挙げ、それぞれ process-info の foreground に codex がいないか見る
+printf '%s' "$panes" | jq -r '.result.panes[]
+  | select((.label // "") | test("^worker-[0-9]+(-r[0-9]+)?$")) | .pane_id'
+herdr pane process-info --pane <上の各 pane-id>
+
+# 2. 同じ Issue の worker tab が残っているか (2 回目以降の起動: review の修正 round、停止からの再開)
+printf '%s' "$tabs" \
   | jq -r --arg label "$label" '.result.tabs[] | select(.label == $label) | .tab_id'
 
-# 2a. 0 件: tab を作る。ID は応答から読む (推測しない)
+# 3a. 0 件: tab を作る。ID は応答から読む (推測しない)
 herdr tab create --workspace "$ws" --cwd "$clone" --label "$label" --no-focus
 #     tab  = .result.tab.tab_id / pane = .result.root_pane.pane_id
 
-# 2b. 1 件で、所有を確かめられた (下記) とき: その tab の pane を 1 つ選んで分割する
+# 3b. 1 件で、所有を確かめられた (下記) とき: その tab の pane を 1 つ選んで分割する
 herdr pane split --pane <その tab の pane-id> --direction down --cwd "$clone" --no-focus
 #     pane = .result.pane.pane_id
 
-# 3. 名前を付けて実行する
+# 4. 名前を付けて実行する
 herdr pane rename "$pane" <worker-<issue> または worker-<issue>-r<N> の shell literal>
 herdr pane run "$pane" <"zsh " + run script path の shell literal>
 ```
 
-- **所有の確認** (2b の前、§11 で閉じる前も同じ): その tab の pane が 1 つ以上あり、`.label` が
+(`exit 1` は「その段で止めて `Blocked at: launch-path` にする」の意。)
+
+- **所有の確認** (3b の前、§11 で閉じる前も同じ): その tab の pane が 1 つ以上あり、`.label` が
   すべて `worker-<issue>` か `worker-<issue>-r<N>` であること。pane を足したり tab を閉じたりして
   よいのは、この命名の pane だけから成る tab (= この skill が作った tab) だけです。値は jq の
   `--arg` で渡し、filter の文字列に埋め込みません (`$issue` は §0 で `\A\d+\z` を通した値)。label の
-  無い pane は `.label` が出ないので不一致になります。
+  無い pane は `.label` が出ないので不一致になります。手順 0 で形を確かめた `$panes` を使います。
 
   ```sh
-  herdr pane list --workspace "$ws" | jq -e --arg tab "$tab" --arg issue "$issue" '
+  printf '%s' "$panes" | jq -e --arg tab "$tab" --arg issue "$issue" '
     [.result.panes[] | select(.tab_id == $tab)] as $p
     | ($p | length) > 0
       and all($p[]; (.label // "") | test("^worker-" + $issue + "(-r[0-9]+)?$"))'
   ```
 
   exit 0 (`true`) のときだけ所有を確かめたとみなす (exit 1 = `false`、それ以外 = 判定できない)。
-- **走っている worker があれば起動しない**: 2b の tab の pane のどれかで、`herdr pane process-info
-  --pane <id>` の foreground process に `codex` がいれば、新しく起動しない (§1 の「worker 1 つ」)。
+- **走っている worker があれば起動しない** (手順 1): workspace の中の worker の命名の pane (どの
+  Issue の tab にあっても) のどれかで、`herdr pane process-info --pane <id>` の foreground process
+  (`result.process_info.foreground_processes[].name`) に `codex` がいれば、新しく起動しない (§1 の
+  「worker 1 つ」。数える単位は workspace で、`docs/herdr-operations.md` の 1 + 1 と同じ)。
   process-info が失敗する・解釈できないときも起動しない (`launch-path`)。前の round の pane が
   残っていること自体は止める理由にしない (tab は done まで残る。§7)。
+- honest-label (二重起動): 手順 1 が見えるのは herdr の pane で動いている worker だけです。
+  `launch-path` の hand-off で人が自分の terminal から動かしている worker は herdr からは見えず、
+  この確認では検出できません (この変更の前から同じ)。起動の記録を packet に残して起動前に確かめる
+  仕組みは #315 で足します。それまでは、hand-off した run の `done.txt` を確かめる前に同じ Issue を
+  起動し直さないことを orchestrator が守ります。
 - **round**: 最初の起動は `worker-<issue>`、同じ tab に足す pane は `-r<N>` を付け、`<N>` は tab に
   ある worker pane の round の最大 + 1 (`worker-<issue>` を round 1 と数える)。固定名の pane を
   使い回さない。
 - `pane run` の command は pane の shell が解釈するので、script path を pane shell 用に literal 化し、
   自分の shell 経由で `herdr` に渡すならもう 1 段 literal 化する (2 段)。
-- 次のどれかなら `Blocked at: launch-path`: herdr が `running` でない / `$HERDR_WORKSPACE_ID` が空 /
-  label が `#<issue>` の tab が 2 つ以上ある / 1 つあるが所有を確かめられない / tab create・split・
-  rename・run のどれかが失敗した。このとき clone と run script は揃っているので、Next step に
-  `zsh <run script の shell literal>` と run dir を書く (人が自分の terminal で実行する。§10)。作り
-  かけの tab は閉じない (人がその pane で run script を実行できる)。
+- 次のどれかなら `Blocked at: launch-path`。Next step は場合で分けます:
+  - **走っている worker がいる** (手順 1): Next step は「pane <id> の worker の完了を待ってから、この
+    skill で起動し直す」。run script を人に実行させない (二重起動になる)。
+  - **起動できない**: herdr が `running` でない / `$HERDR_WORKSPACE_ID` が空 / 手順 0 の一覧の取得か
+    形の確認に失敗した / 手順 1 の process-info で判定できない / label が `#<issue>` の tab が 2 つ
+    以上ある / 1 つあるが所有を確かめられない / tab create・split・rename・run のどれかが失敗した。
+    clone と run script は揃っているので、Next step に `zsh <run script の shell literal>` と run dir
+    を書く (人が自分の terminal で実行する。§10)。手順 1 を終えられていないときは、「同じ
+    workspace で worker が走っていないことを確かめてから実行する」を添える。作りかけの tab は閉じない
+    (人がその pane で run script を実行できる)。
 - honest-label: 所有の確認は **命名の規約** (`#<issue>` の tab と `worker-<issue>` の pane) に頼って
   います。人が同じ名前を付けた tab / pane は区別できません。ID は再利用されない (herdr の仕様) ので、
   同じ session の中では応答から読んだ ID を使い続けます。
@@ -348,7 +375,7 @@ title / body は orchestrator が packet から書く (一時 file は repositor
 
 - **未起動 (`launch-path`)**: Next step に run script の path (shell literal) と run dir を書く。人が
   自分の terminal で実行したあと、caller は `done.txt` (nonce 一致・`exit=0`) と空でない `result.md`
-  を確認してから §8 (転記) 以降を続ける (pane は無いので §7 の pane の後始末は行わない。空振り
+  を確認してから §8 (転記) 以降を続ける (pane は無いので §7 の pane.log の保存は行わない。空振り
   なら §7 の再実行規則どおり、新しい nonce の run script を人に 1 回だけ渡す)。端末に出た sentinel
   や口頭報告だけで完了とみなさない。
 - **起動済み (`RUNNING`)**: worker はまだ生きている。run script を再実行させない。Next step は
@@ -363,14 +390,21 @@ worker の tab を閉じるのは、PR が merge されて packet が `done` に
 ```sh
 ws=$HERDR_WORKSPACE_ID
 label=<'#<issue>' の shell literal>
-herdr tab list --workspace "$ws" \
+# §5 の手順 0 と同じく、終了コードと JSON の形を確かめてから読む
+tabs=$(herdr tab list --workspace "$ws") || exit 1
+panes=$(herdr pane list --workspace "$ws") || exit 1
+printf '%s' "$tabs"  | jq -e '.result.tabs  | type == "array"' >/dev/null || exit 1
+printf '%s' "$panes" | jq -e '.result.panes | type == "array"' >/dev/null || exit 1
+printf '%s' "$tabs" \
   | jq -r --arg label "$label" '.result.tabs[] | select(.label == $label) | .tab_id'
-# 1 件で、§5 の所有の確認を通り、どの pane の foreground にも codex がいないときだけ
+# 1 件で、§5 の所有の確認を通り、その tab のどの pane の foreground にも codex がいないときだけ
 herdr tab close <tab-id>
 ```
 
-- 0 件なら何もしない (人が既に閉じた)。2 件以上、所有を確かめられない、codex がまだ foreground に
-  いる、process-info で判定できない、のどれかなら閉じずに人に伝える (人の tab と、走っている worker
-  を閉じない)。
+(`exit 1` は「その段で止めて閉じない」の意。)
+
+- 0 件なら何もしない (人が既に閉じた)。一覧の取得か形の確認に失敗した、2 件以上、所有を確かめられ
+  ない、codex がまだ foreground にいる、process-info で判定できない、のどれかなら閉じずに人に伝える
+  (人の tab と、走っている worker を閉じない。一覧が読めないことを「0 件」と取り違えない)。
 - orchestrator 自身がいる tab (`personal-codex-review` の review pane もここに置かれる) は、pane の
   名前が `worker-<issue>` の形でないので所有の確認を通らず、閉じる対象にならない。
