@@ -71,7 +71,11 @@ capacity (申告 2026-09-23 09:10): Claude 週 52% / 5h 80% ・ Codex 週 45% / 
 1. 構造の制約を先に当てる。1 PR = 1 author (途中で交代しない。交代は新しい branch + 新しい PR)。
    cross-review は author でない方 (相互レビュー契約)。自動の委譲は Claude → Codex の一方通行で、
    Codex を worker にするなら Claude か人が `personal-codex-worker` で起動し、Claude を worker に
-   するなら人が Claude の session を起こす。
+   するなら人が Claude の session を起こす。構造の制約で担当が 1 つに決まったら (cross-review の
+   reviewer、同じ PR の続き)、2 と 3 は当てない。その担当の 5h が枯れていても別の agent には倒さず、
+   reset を待つか人に渡す。cross-review なら `personal-review-request` の「相手を起動できない場合」と
+   同じく人へ hand-off し、author 自身に review させない。同じ PR の続きを別の agent に渡すなら、
+   新しい branch + 新しい PR として割当をやり直す。
 2. 5h が枯れている方 (limit 到達中、または申告のときに人が枯れていると言った方) は、今すぐの割当から
    外す。数字の閾値は置かない。両方とも枯れていれば、reset を待つか人が担当する。
 3. 週の残量 % が大きい方にする。差が 10 pt 未満なら、下の向き不向き表で決める。
