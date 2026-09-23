@@ -21,6 +21,7 @@ if ARGV[2] == "--mutations"
     "envelope number" => ['issue_number_matches?(data["number"], issue)', 'true'],
     "envelope source" => ['data["source"] == source', 'true'],
     "envelope repo" => ['(repo.nil? || data["repo"].casecmp(repo).zero?)', 'true'],
+    "read repo forwarding" => ['args = [reader, "issue", verb, issue.to_s]\\n    args += ["--repo", repo] if repo', 'args = [reader, "issue", verb, issue.to_s]'],
     "unpublished local" => ['updated_at = published_at + 1', 'updated_at = published_at'],
     "request overwrite" => ['request = secs["依頼"]', 'request = nil'],
     "stale next entry" => ['latest.published > local.published', 'true'],
@@ -37,14 +38,18 @@ if ARGV[2] == "--mutations"
       if label == "invalid frontmatter"
         from = from.gsub('\\n', "\n")
         to = to.gsub('\\n', "\n")
+      elsif label == "read repo forwarding"
+        from = from.gsub('\\n', "\n")
       end
       safe_mutation = label == "other author"
+      reader_mutation = label == "read repo forwarding"
       mutation_source = safe_mutation ? File.read(safe_gh_source) : original
+      mutation_source = mutation_source.gsub("\\n", "\n") if reader_mutation
       abort "FAIL: mutation anchor missing: #{label}" unless mutation_source.include?(from)
       mutant = File.join(dir, safe_mutation ? "personal-safe-gh.rb" : "personal-packet.rb")
       File.write(mutant, mutation_source.sub(from, to))
-      packet_variant = safe_mutation ? source : mutant
-      reader_variant = safe_mutation ? mutant : safe_gh_source
+      packet_variant = safe_mutation || reader_mutation ? source : mutant
+      reader_variant = safe_mutation || reader_mutation ? mutant : safe_gh_source
       _out, err, status = Open3.capture3(RbConfig.ruby, __FILE__, packet_variant, reader_variant)
       abort "FAIL: mutation survived: #{label}" if status.success?
       abort "FAIL: mutation failed outside assertion: #{label}: #{err}" unless err.include?("FAIL:")
@@ -180,7 +185,6 @@ Dir.mktmpdir("packet-pull-") do |tmp|
 
   # REST の issue view envelope が要求番号と違う場合は既存 packet を変更しない。
   FileUtils.mkdir_p(packet_dir)
-  File.write(path, LOCAL)
   no_request = LOCAL.sub(/## 依頼\n.*?(?=## 結果)/m, "")
   File.write(path, no_request)
   comments.call([self_comment(copy)])
@@ -210,10 +214,11 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   File.chmod(0o755, reader)
   env["PACKET_READER_ARGS"] = File.join(deploy, "reader-args.json")
   env["PACKET_COPY"] = copy
-  { "number" => { "PACKET_ENVELOPE_NUMBER" => "08" },
+  { "number" => { "PACKET_ENVELOPE_NUMBER" => "07" },
     "source" => { "PACKET_ENVELOPE_SOURCE" => "issue" },
     "repo" => { "PACKET_ENVELOPE_REPO" => "other/repo" } }.each do |label, overrides|
     File.write(path, LOCAL)
+    File.unlink(env.fetch("PACKET_READER_ARGS")) if File.exist?(env.fetch("PACKET_READER_ARGS"))
     overrides.each { |key, value| env[key] = value }
     _out, _err, status = run.call("pull", "7", "--repo", "fixture/repo")
     assert(status.exitstatus == 2 && File.read(path) == LOCAL, "#{label} envelope mismatch must fail before write")

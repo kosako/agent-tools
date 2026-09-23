@@ -182,7 +182,7 @@ worker 委譲時の `pull` は orchestrator が main repository 側で行い、�
   内容を確定してから作成する。symlink の packet dir / file は更新しない。
 
 self-test は `scripts/tests/packet-pull-test.sh`。`--mutations` を付けると author / marker /
-envelope (number / source / repo) / merge / H2 / frontmatter の検証を壊した source に同じ assertions を当て、退行を検出できるか確かめる。
+envelope (number / source / repo) / reader への `--repo` 伝達 / merge / H2 / frontmatter の検証を壊した source に同じ assertions を当て、退行を検出できるか確かめる。
 
 ## tooling(`personal-packet`)
 
