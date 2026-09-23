@@ -15,8 +15,8 @@ orchestrator が行います。
 
 - 副作用: worker 用 clone の作成、herdr の Issue ごとの tab (`#<issue>`) を作ってその pane から
   `codex exec` を起動 (workspace-write。書込はその clone の中に閉じる)、clone から main への fetch、
-  packet の local 更新 (`結果` / `次の入口` / `state`)、worker が commit した branch の push と PR 作成 (orchestrator の操作。trailer 検査を
-  通ったときだけ)。
+  packet の local 更新 (`結果` / `次の入口` / `state` / 起動の記録 `run` / `tab`)、worker が commit した
+  branch の push と PR 作成 (orchestrator の操作。trailer 検査を通ったときだけ)。
   Issue コメントへの publish と planning tool の更新はしない (handoff の領分)。worker は GitHub /
   network / packet に触れない。preflight が BLOCKED なら何も起動しない。
 - 組み合わせ: packet 規約は `docs/agent-packets.md` (worker 委譲との関係)、preflight は script
@@ -49,9 +49,29 @@ orchestrator が行います。
 - 同時に走らせる worker は orchestrator session あたり 1 つ。走っている worker (workspace の中の
   worker の pane のどれかで foreground に `codex` がいる) があれば新しく起動しない。終わった worker の
   tab / pane は packet が `done` になるまで残るので、残っていること自体は起動を止める理由にしない
-  (並列の範囲と tab / pane の命名は agent-tools の `docs/herdr-operations.md`)。`launch-path` の
-  hand-off で人が herdr の外から動かしている worker は herdr から見えないので、その run の `done.txt`
-  を確かめるまで同じ Issue を起動し直さない。
+  (並列の範囲と tab / pane の命名は agent-tools の `docs/herdr-operations.md`)。
+- **起動の記録を先に確かめる** (二重起動の防止)。packet の frontmatter の `run` / `tab` (起動の記録。
+  規約は `docs/agent-packets.md`) を `personal-packet list --json --all` で読み、その Issue の行を見る:
+  - 記録なし → そのまま進む。
+  - `state: blocked` → 停止を記録済みの run (`run` はその退避物の置き場)。再起動では新しい run で
+    記録を置き換える (古い run dir は `結果` に書いた退避物の path として残る)。
+  - それ以外で `run_status: finished` (`done.txt` がある) → 新しく起動しない。先にその run の結果を
+    回収・転記する (§5 の完了判定から、その run dir で続ける)。
+  - それ以外で `unfinished` (`done.txt` が無い) → その run の worker が動いているかを見る (run dir の
+    `tab-id` の tab、または workspace の worker の pane の foreground に `codex`。手順は `LAUNCH.md`
+    §5)。動いていれば起動せず `Status: RUNNING` で返す。動いていると確認できない (`launch-path` の
+    hand-off で人が herdr の外から動かしている、起動の直前に止まった、落ちた、判定できない) なら、
+    自動で起動し直さず `Blocked at: launch-record` で人に確かめる。
+  - それ以外で `missing` (run dir が無い) → `Blocked at: launch-record` (worker の commit は clone に
+    残りうるので、人が確かめてから記録の破棄を決める)。
+  - `list` が exit 0 でない (exit 2、または exit 1 = **どれか**の packet が壊れている) / JSON が読めない
+    → 記録を確かめられないので `Blocked at: launch-record`。壊れているのが別の Issue の packet でも
+    止める (その中に未回収の記録が隠れうる)。`list` の終了コードは pipe で失わないよう、出力を受けて
+    から照合する (`LAUNCH.md` §4 の最後と同じ形)。
+  - **他の Issue** の packet に `unfinished` の記録がある (`state: blocked` を除く) ときも、その worker が
+    動いているかを同じく見る。動いていれば「worker 1 つ」により起動しない。動いていると確認できない
+    なら、その Issue の記録を人が確かめるまで起動しない (`Blocked at: launch-record`)。herdr の外で
+    動いている worker (`launch-path` の hand-off) は、記録からしか見えないため。
 
 ## 2. preflight
 
@@ -144,6 +164,11 @@ run 用の directory を `mktemp -d` で作り、`brief.md`、`preflight.json`�
 herdr 経由の起動、待ち方、限界、pane の後始末、退避の command は **`LAUNCH.md` を読んで、その
 通りに組みます** (手順の正本はそちら)。ここには手順が満たすべき契約だけを置きます。
 
+- **起動の記録を起動の前に書く**: run dir と run script が揃った時点で (herdr 経由の起動も `launch-path`
+  の hand-off も、その前に)、packet の frontmatter に `run` (run dir) と `tab` (`#<issue>`) を書き、
+  `personal-packet list --json --all` で読み直して一致と `run_status: unfinished` を確かめる (一致
+  しなければ起動せず `Blocked at: launch-record`)。`updated` は変えない。書き方は `LAUNCH.md` §4。
+  session が起動の前後や worker の途中で終わっても、次の session が §1 でこの記録から回収する。
 - **起動形は preflight の `launch_argv` そのまま** (`<run dir>` の置換だけ)。run script は clone に
   `cd` してから起動し、stdout / stderr を `codex.log` に tee する。`--add-dir` を**自分で足さない**
   (preflight が clone の git dir に対して 1 つだけ入れる。別の path を足すことは main の Git 管理領域を
@@ -168,7 +193,9 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   修正 round、停止からの再開) は、残っている `#<issue>` の tab に `worker-<issue>-r<N>` の pane を
   足す (固定名の pane を使い回さない)。pane を足す・tab を閉じるのは、所有を確かめた tab (tab を
   作ったときに run dir に記録した tab ID と一致し、かつ pane がすべて `worker-<issue>` の命名) だけ。
-  前の run dir が分からない (別の session) なら確かめられないとして触らない。herdr の一覧は終了コード
+  前の run dir は、同じ session の中か、packet の `run` (起動済み・未回収、または停止中の間だけ残る)
+  から辿る。辿れない (転記の後に記録を消した run の次の round を別の session で起動する等) なら
+  確かめられないとして触らない。herdr の一覧は終了コード
   と JSON の形を確かめてから読み、読めないことを「一致 0 件」と取り違えない。確かめられなければ
   `Blocked at: launch-path`。
 - **後始末**: 続行条件を満たしたら pane の生出力を `<run dir>/pane.log` に保存し、空でないことを
@@ -192,6 +219,11 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   退避し (staged と unstaged は別々の `--binary` patch、untracked は file 名を shell に通さない
   tar の写し)、その path を `結果` に記録する。orchestrator は代わりに commit しない (trailer が
   Claude になり author が混ざる)。復元を確認するまで clone を消さない。
+- **起動の記録の後始末**: 完了 (最終 message があり止まっていない) の転記が済んだら、frontmatter の
+  `run` / `tab` を消す (key ごと)。止まっている (`state: blocked`) ときは消さない (`run` は退避物の
+  置き場。再起動で新しい run に置き換える)。RUNNING で返すとき、`launch-path` で人に渡すとき、空振りの
+  再実行の間も消さない。人がその run の破棄を決めたときは、人の指示で消す。消したら
+  `personal-packet list --json --all` で `run` が null になったことを確かめる。
 - `依頼` は書き換えない。frontmatter の `updated` を更新する。
 
 ## 7. PR (orchestrator の操作)
@@ -220,11 +252,11 @@ merge はしない (人が行う)。
 `RESULT-FORMAT.md` の形で返します。契約:
 
 - 完了時は `Status: DONE | REVIEW | RUNNING` と、packet に書いた内容 (`結果` の見出し、`次の入口`、
-  `state`)、PR を作ったなら番号、run directory の path。
-- 停止時は `Status: BLOCKED`、`Blocked at:` (authorization | preflight | launch-path | clone |
-  executor-exit | executor-result | limit | fetch | transcription | trailer)、public-safe な `Reason`、
+  `state`、起動の記録を消したか残したか)、PR を作ったなら番号、run directory の path。
+- 停止時は `Status: BLOCKED`、`Blocked at:` (authorization | launch-record | preflight | launch-path |
+  clone | executor-exit | executor-result | limit | fetch | transcription | trailer)、public-safe な `Reason`、
   `Next step` (人が実行する run script の path と run dir / 退避物の path / `依頼` の更新 / 残量の
-  申告)。worker の本文や secret を停止結果に転記しない。
+  申告 / 起動の記録の run を確かめる)。worker の本文や secret を停止結果に転記しない。
 
 **この skill の完了と停止**: packet を更新して返却した時点で完了 (PR を作った場合は `state: review`
 まで)。review / merge / publish / planning tool の更新はこの skill の外。
@@ -241,3 +273,5 @@ merge はしない (人が行う)。
 - 2 つ目の worker を同じ session で並行起動する。失敗した pane を閉じる。
 - worker を orchestrator の tab の分割で動かす。packet が `done` になる前に worker の tab を閉じる。
   所有を確かめずに tab を閉じる / 人の tab に pane を足す。
+- 起動の記録を書かずに起動する。記録のある Issue を、§1 の確認なしに起動し直す。転記の前や停止中に
+  記録を消す。

@@ -179,6 +179,38 @@ exit "$rc"
 - `2>&1 | tee` で stdout / stderr を `codex.log` に残す (limit の文言はここで拾う)。exit code は
   `pipestatus[1]` (zsh) で codex のものを取る。
 
+### 起動の記録 (§5 の前)
+
+run dir と run script が揃ったら、herdr 経由で起動する前に (`launch-path` で人に渡す場合も、その前に)
+packet の frontmatter に起動の記録を書きます (`SKILL.md` §5。規約は `docs/agent-packets.md`)。
+
+```yaml
+run: "<run dir>"   # double-quoted。run dir に `"` / `\` / 制御文字が無いことを確かめる (mktemp の結果なら満たす)
+tab: "#<issue>"    # 引用符が要る (無いと `#` 以降が YAML の comment になり、list が壊れた packet として報告する)
+```
+
+- 既にあれば (停止からの再起動) 新しい値で置き換える。`updated` は変えない (写しの対象ではない)。
+  書くのは packet の frontmatter だけで、`依頼` / `結果` / `次の入口` には触らない。
+- 書いたら読み直して確かめる。`list` が exit 0 で、その Issue の行の `run` が run dir と一致し、
+  `tab` が `#<issue>`、`run_status` が `unfinished` (まだ `done.txt` が無い) であること。どれかが違えば
+  起動せず `Blocked at: launch-record` (記録が効かないまま起動すると、session を失ったときに回収も
+  二重起動の防止もできない)。
+
+```sh
+# list の終了コードを pipe で失わないよう、出力を受けてから照合する。exit 1 (どれかの packet が
+# 壊れている) も止める: 壊れた packet の中に他の Issue の未回収の記録が隠れうる
+packets=$("$packet_cli" list --json --all) || exit 1
+printf '%s' "$packets" \
+  | jq -e --argjson issue "$issue" --arg run "$run" --arg tab "#$issue" \
+    '[.[] | select(.issue == $issue)] | length == 1 and
+     (.[0] | .run == $run and .tab == $tab and .run_status == "unfinished")' >/dev/null || exit 1
+```
+
+(`$packet_cli` は `<tool home>/agent-tools/scripts/personal-packet`。`$issue` は §0 で `\A\d+\z` を通した値。
+`exit 1` は「その段で止めて `Blocked at: launch-record` にする」の意。JSON が読めない・行が無いときも
+jq が非 0 で止まる。`SKILL.md` §1 の起動前の確認と §8 の記録を消した後の読み直しも、同じく `list` の
+終了コードを先に確かめてから照合する。)
+
 ## 5. herdr 経由の起動
 
 `preflight.json` の `herdr` が `running` のときだけ。worker は **Issue ごとの tab** (label `#<issue>`)
@@ -235,8 +267,9 @@ herdr pane run "$pane" <"zsh " + run script path の shell literal> || exit 1
   が作った tab とみなします。pane を足したり tab を閉じたりしてよいのは、その tab だけです。
   1. **記録した ID**: 手順 2 で見つけた tab の ID が、同じ Issue の前の run の run dir に記録した
      `tab-id` と一致する。前の run dir が分かるのは、同じ orchestrator session の中か、packet の起動
-     記録 (`run`、#315) から辿れるときだけです。分からない・file が無い・一致しない、はどれも
-     「確かめられない」。
+     の記録 (`run`) から辿れるときだけです。記録は転記が済むと消える (`state: blocked` の間は残る)
+     ので、転記の後の次の round を別の session で起動するときは辿れません。分からない・file が無い・
+     一致しない、はどれも「確かめられない」。
   2. **命名**: その tab の pane が 1 つ以上あり、`.label` がすべて `worker-<issue>` か
      `worker-<issue>-r<N>`。値は jq の `--arg` で渡し、filter の文字列に埋め込みません (`$issue` は
      §0 で `\A\d+\z` を通した値)。label の無い pane は `.label` が出ないので不一致になります。手順 0
@@ -260,11 +293,13 @@ herdr pane run "$pane" <"zsh " + run script path の shell literal> || exit 1
   「worker 1 つ」。数える単位は workspace で、`docs/herdr-operations.md` の 1 + 1 と同じ)。
   process-info が失敗する・解釈できないときも起動しない (`launch-path`)。前の round の pane が
   残っていること自体は止める理由にしない (tab は done まで残る。§7)。
-- honest-label (二重起動): 手順 1 が見えるのは herdr の pane で動いている worker だけです。
-  `launch-path` の hand-off で人が自分の terminal から動かしている worker は herdr からは見えず、
-  この確認では検出できません (この変更の前から同じ)。起動の記録を packet に残して起動前に確かめる
-  仕組みは #315 で足します。それまでは、hand-off した run の `done.txt` を確かめる前に同じ Issue を
-  起動し直さないことを orchestrator が守ります。
+- 二重起動の防止は 2 段です。手順 1 が見えるのは herdr の pane で動いている worker だけで、
+  `launch-path` の hand-off で人が自分の terminal から動かしている worker は herdr からは見えません。
+  そちらは packet の起動の記録 (`run`。§4 の最後で書く) が残っているので、`SKILL.md` §1 の確認で
+  `unfinished` として止まります (同じ Issue でも別の Issue でも。動いていると確認できなければ
+  `Blocked at: launch-record` で人に確かめる)。
+  honest-label: 記録を見るのはこの repo の packet だけです。同じ herdr workspace で別の repo の worker を
+  人が herdr の外で動かしている場合は検出できません (workspace = project の運用前提の外)。
 - **round**: 最初の起動は `worker-<issue>`、同じ tab に足す pane は `-r<N>` を付け、`<N>` は tab に
   ある worker pane の round の最大 + 1 (`worker-<issue>` を round 1 と数える)。固定名の pane を
   使い回さない。
@@ -344,6 +379,9 @@ git -C "$clone" ls-files --others --exclude-standard -z \
   list の名前を option として解釈しない。GNU tar なら `--verbatim-files-from` を足す)。
   untracked が無ければ tar は作らない。
 - 退避した path を packet の `結果` に書く。`git stash` は使わない (clone の状態を動かさない)。
+- 起動の記録 (`run` / `tab`): 完了の転記が済んだら key ごと消し、`list --json --all` が exit 0 で、その
+  Issue の行の `run` が null になったことを確かめる (§4 の最後と同じく、終了コードを先に見てから照合する)。
+  止まっている (`state: blocked`) ときは消さない (`SKILL.md` §6)。
 
 ## 9. 回収 (fetch) と trailer 検査と PR
 
@@ -403,7 +441,9 @@ title / body は orchestrator が packet から書く (一時 file は repositor
   自分の terminal で実行したあと、caller は `done.txt` (nonce 一致・`exit=0`) と空でない `result.md`
   を確認してから §8 (転記) 以降を続ける (pane は無いので §7 の pane.log の保存は行わない。空振り
   なら §7 の再実行規則どおり、新しい nonce の run script を人に 1 回だけ渡す)。端末に出た sentinel
-  や口頭報告だけで完了とみなさない。
+  や口頭報告だけで完了とみなさない。起動の記録は §4 の最後で書いたまま残して渡すので、caller の
+  session が先に終わっても、次の session が `SKILL.md` §1 で `run_status` を見て回収に入れる
+  (`finished` なら回収、`unfinished` なら人に確かめる)。
 - **起動済み (`RUNNING`)**: worker はまだ生きている。run script を再実行させない。Next step は
   「tab `#<issue>` の pane <id> を見て続行か中断かを決める」だけ。続行なら人が pane を監視して
   `done.txt` を待つ。中断なら人が pane の process を止めてから §8 の退避に進む。

@@ -257,6 +257,11 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
   limit) なら、最終 message の有無にかかわらず orchestrator が `state: blocked` にする。有無で変わる
   のは記録の出所だけで、最終 message があればこの転記 (`worker/codex`)、無ければ下の「停止」の手順で
   orchestrator が書く (`orchestrator/claude`)。
+- **起動の記録** (`run` / `tab`、#315): orchestrator は worker を起動する前に packet の frontmatter へ
+  書き、起動する前に確かめる (同じ Issue に記録があれば、その run を回収するか人に確かめる。別の Issue の
+  未回収の記録も「worker 1 つ」のために見る)。完了の転記が済んだら消し、`state: blocked` の間は退避物の
+  置き場として残す。書く時点・消す時点の正本は [herdr-operations](herdr-operations.md) の「起動の
+  記録」、手順は委譲 skill。
 - **PR**: orchestrator が PR に含まれる追加 commit (base OID から head までの
   `git log <base-oid>..<head-oid>`。共有祖先は含めない) の trailer がすべて Codex のみであることを
   確認してから push し、PR を作る。packet に `pr:` と `state: review` を入れるのは orchestrator
