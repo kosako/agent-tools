@@ -27,6 +27,19 @@ Issue 番号、branch 名、path、nonce は caller の free text や git / gh �
 `mktemp -d` で run dir を作り、以降の成果物 (`preflight.json`、`brief.md`、`run.zsh`、`result.md`、
 `codex.log`、`done.txt`、`pane.log`、`tab-id`、退避物) はすべてここに置く。
 
+置き場は worker の書込先の外にする (`SKILL.md` §5、#324)。`workspace-write` の worker は clone、
+`/tmp`、`$TMPDIR` に書けるので、`mktemp -d` の既定 (`$TMPDIR`) ではなく、state 用の directory の
+下に作る:
+
+```sh
+base=${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/worker-runs
+mkdir -p "$base" && chmod 700 "$base" || exit 1
+run=$(mktemp -d "$base/<issue>.XXXXXX") || exit 1   # <issue> は §0 で \A\d+\z を通した値
+```
+
+(`exit 1` は「その段で止めて `Blocked at: launch-path` にする」の意。) clone の場所はまだ決まって
+いないので、worker の書込先の内側に無いことの確認は §3 の preflight の後で行う。
+
 ## 2. clone
 
 main worktree から:
@@ -143,6 +156,22 @@ preflight=<tool home>/agent-tools/scripts/personal-codex-worker-preflight
 - `launch_argv` には `--add-dir <clone>/.git` が 1 つ入る (sandbox は workdir の内側でも `.git` を
   保護するため)。`launch_argv` (配列) の `<run dir>/result.md` を実際の `"$run/result.md"` に
   置き換え、要素を run script に写す (§4)。
+- **run dir が worker の書込先の外にあることを確かめる** (#324): 物理 path で、preflight の
+  `clone_root`、`/tmp`、`$TMPDIR` のどれの内側でもないこと。内側なら起動せず `Blocked at: launch-path`
+  (§1 の置き場を直す)。どれかの物理 path を解決できないときも同じく止める。
+
+  ```sh
+  clone_root=<preflight.json の clone_root の shell literal>
+  run_p=$(cd -P "$run" && pwd -P) || exit 1
+  for w in "$clone_root" /tmp "${TMPDIR:-/tmp}"; do
+    w_p=$(cd -P "$w" && pwd -P) || exit 1
+    case "$run_p/" in "$w_p"/*) exit 1 ;; esac   # 引用した "$w_p" は literal (glob にしない)
+  done
+  ```
+
+  honest-label: 比べるのは codex 0.156.0 の `workspace-write` が起動時に表示した書込先 (workdir、`/tmp`、
+  `$TMPDIR`、`--add-dir` の `<clone>/.git`) で、`<clone>/.git` は clone の内側に含まれる。codex の版で
+  書込先が増えたら、この列挙も合わせる (起動後の `codex.log` の先頭に出る `sandbox:` の行で確かめられる)。
 - `herdr` field が `running` でなくても、ここでは止めない (§2 と §4 の成果物を揃えてから §5 で
   `launch-path` にする)。
 
@@ -322,8 +351,9 @@ herdr pane run "$pane" <"zsh " + run script path の shell literal> || exit 1
     script を実行できる。`tab-id` を記録できていなければ、次の起動では「tab を特定できない」として
     人に渡る)。
 - honest-label (所有): 記録した tab ID は、この skill が tab を作ったときの herdr の応答から取った値
-  です。記録の置き場は run dir (orchestrator が `mktemp -d` で作る一時領域) で、worker の sandbox から
-  書けないことまでは確かめていないので、ID の一致だけでは決めず命名の確認と両方を要求します。
+  です。記録の置き場は run dir で、§1 / §3 で worker の書込先の外に置いたことを確かめています (#324 より
+  前の run dir は `$TMPDIR` にあり、worker から書けた)。それでも ID の一致だけでは決めず、命名の確認と
+  両方を要求します。
   herdr の ID は server が動いている間は再利用されません。server の再起動をまたいだ ID の扱いは
   確かめていないので、その場合も命名が一致しなければ触りません。
 
@@ -351,7 +381,8 @@ herdr pane wait-output <pane-id> --match CODEX-WORKER-DONE-<nonce> --timeout 300
   **閉じない** (tab は packet が `done` になるまで残し、§11 で閉じる)。人手実行 (§10 の未起動
   hand-off) には pane が無いので、pane.log の保存は行わず、同じ続行条件を確認して §8 へ進む。
 - `exit=0` なのに `result.md` が欠落 / 空なら、新しい nonce で同じ run dir から 1 回だけ再実行
-  (`run.zsh` の nonce を差し替える)。2 回目も空なら `Blocked at: executor-result`。
+  (`run.zsh` は既存の file を編集して使い回さず、§3 の preflight を実行し直して、その `launch_argv`
+  から §4 の手順で作り直す。#324)。2 回目も空なら `Blocked at: executor-result`。
 - `exit` が 0 以外 (limit を含む) / RUNNING / 空振りが尽きたときも、pane と tab を閉じない
   (調べられるように残す)。
 
