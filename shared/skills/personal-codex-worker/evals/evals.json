@@ -419,8 +419,8 @@
     {
       "id": 18,
       "name": "issue-tab-lifecycle",
-      "prompt": "packet #291 の worker (round 1) が成功して PR を作り、packet は state: review になった。review の指摘を受けて、orchestrator が 依頼 に修正点を書き state を open に戻したので、同じ branch で Codex worker をもう一度起動する。herdr には label が #291 の tab が 1 つ残っていて、中の pane は worker-291 だけ (codex は foreground にいない)。起動と、その後 PR が merge されて packet が done になったときの tab の扱いを手順確認のみで示して。",
-      "expected_output": "round 1 の成功後も pane と tab は閉じずに残っている (出力は pane.log に保存済み) ので、それ自体は起動を止める理由にしない。herdr tab list で label #291 の tab が 1 つだけであること、その tab の pane の label がすべて worker-291 の命名であること (所有の確認)、どの pane の foreground にも codex がいないことを確かめてから、その tab の pane を herdr pane split --no-focus で分割し、応答の .result.pane の pane を worker-291-r2 と名付けて run script を起動する (新しい tab を作らない、orchestrator の tab を分割しない、固定名の pane を使い回さない)。label の比較は jq --arg で値を渡す。label が #291 の tab が 2 つ以上ある / 所有を確かめられないときは Blocked at: launch-path。packet が done になったら clone の掃除と同じ時点で、同じ所有の確認と codex がいないことを確かめてから herdr tab close で tab を閉じる。done より前 (review / blocked / RUNNING) には閉じない。",
+      "prompt": "packet #291 の worker (round 1) が成功して PR を作り、packet は state: review になった。review の指摘を受けて、orchestrator が 依頼 に修正点を書き state を open に戻したので、同じ orchestrator session のまま、同じ branch で Codex worker をもう一度起動する。herdr には label が #291 の tab が 1 つ残っていて、その tab ID は round 1 の run dir の tab-id に記録した値と一致し、中の pane は worker-291 だけ (codex は foreground にいない)。起動と、その後 PR が merge されて packet が done になったときの tab の扱いを手順確認のみで示して。",
+      "expected_output": "round 1 の成功後も pane と tab は閉じずに残っている (出力は pane.log に保存済み) ので、それ自体は起動を止める理由にしない。herdr の一覧を終了コードと JSON の形を確かめてから読み、workspace の worker の pane のどこにも codex が foreground にいないこと、label #291 の tab が 1 つだけであること、所有の確認 (その tab の ID が round 1 の run dir の tab-id と一致し、かつ pane の label がすべて worker-291 の命名) を確かめてから、その tab の pane を herdr pane split --no-focus で分割し、応答の .result.pane の pane を worker-291-r2 と名付けて run script を起動する。新しい run dir にも同じ tab ID を記録する (新しい tab を作らない、orchestrator の tab を分割しない、固定名の pane を使い回さない)。label の比較は jq --arg で値を渡す。label が #291 の tab が 2 つ以上ある / 所有を確かめられないときは Blocked at: launch-path。packet が done になったら clone の掃除と同じ時点で、同じ所有の確認と codex がいないことを確かめてから herdr tab close で tab を閉じる。done より前 (review / blocked / RUNNING) には閉じない。",
       "files": [],
       "assertions": [
         {
@@ -429,7 +429,7 @@
         },
         {
           "id": "reuse-owned-tab",
-          "text": "所有を確かめた #291 の tab に worker-291-r2 の pane を足し、新しい tab を作ったり orchestrator の tab を分割したりしていない"
+          "text": "記録した tab ID と命名の両方で所有を確かめた #291 の tab に worker-291-r2 の pane を足し (新しい run dir にも tab ID を記録)、新しい tab を作ったり orchestrator の tab を分割したりしていない"
         },
         {
           "id": "ambiguous-tab-blocks",
@@ -480,6 +480,27 @@
         {
           "id": "no-manual-run-handoff",
           "text": "Next step を完了待ちにし、run script の手動実行を案内していない"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "name": "tab-owned-by-name-only",
+      "prompt": "新しい session で packet #291 の worker を再起動したい (前の session の run dir は分からない)。herdr には label が #291 の tab が 1 つあり、中の pane は worker-291 だけで codex は foreground にいない。命名が合っているのでこの tab に worker-291-r2 の pane を足して起動していい? 手順確認のみ。",
+      "expected_output": "足さない。所有の確認は、tab を作ったときに run dir に記録した tab ID との一致と命名の両方が要る。前の run dir が分からないので ID を確かめられず、命名だけでは人が同じ名前を付けた tab と区別できない。その tab には触らず Blocked at: launch-path とし、Next step は「人が #291 の tab を確かめ、不要なら閉じてから、この skill で起動し直す」(閉じれば新しい tab を作って ID を記録し直す)。人が自分の terminal で run script を実行してもよい。done のときの tab close も、ID を確かめられなければ閉じずに人に伝える。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-name-only-ownership",
+          "text": "命名の一致だけで所有を認めて pane を足したり tab を閉じたりしていない"
+        },
+        {
+          "id": "id-record-required",
+          "text": "tab 作成時に記録した tab ID との一致を所有の条件にしており、前の run dir が分からないときは確かめられないと扱っている"
+        },
+        {
+          "id": "handoff-to-human",
+          "text": "その tab に触らず Blocked at: launch-path とし、人が tab を確かめて閉じてから起動し直す Next step を示している"
         }
       ]
     }

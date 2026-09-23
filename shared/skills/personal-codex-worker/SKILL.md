@@ -166,9 +166,11 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
 - **tab と pane**: worker は Issue ごとの tab (label `#<issue>`) で動かし、orchestrator の tab は
   分割しない。ID は herdr の応答 JSON から読み、推測しない。同じ Issue の 2 回目以降の起動 (review の
   修正 round、停止からの再開) は、残っている `#<issue>` の tab に `worker-<issue>-r<N>` の pane を
-  足す (固定名の pane を使い回さない)。pane を足す・tab を閉じるのは、所有を確かめた tab (pane が
-  すべて `worker-<issue>` の命名) だけ。herdr の一覧は終了コードと JSON の形を確かめてから読み、読め
-  ないことを「一致 0 件」と取り違えない。確かめられなければ `Blocked at: launch-path`。
+  足す (固定名の pane を使い回さない)。pane を足す・tab を閉じるのは、所有を確かめた tab (tab を
+  作ったときに run dir に記録した tab ID と一致し、かつ pane がすべて `worker-<issue>` の命名) だけ。
+  前の run dir が分からない (別の session) なら確かめられないとして触らない。herdr の一覧は終了コード
+  と JSON の形を確かめてから読み、読めないことを「一致 0 件」と取り違えない。確かめられなければ
+  `Blocked at: launch-path`。
 - **後始末**: 続行条件を満たしたら pane の生出力を `<run dir>/pane.log` に保存し、空でないことを
   確認する。pane と tab は閉じない (成功・失敗・limit・空振り・RUNNING のどれでも)。tab を閉じるのは
   packet が `done` になったときだけ (§3)。

@@ -71,9 +71,11 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   | pane | `<役割>-<番号>[-r<round>]`。worker は Issue 番号、review は PR 番号 | `worker-291-r2` / `review-312` |
 
 - 名前を付けたり閉じたりするのは、**自分が作った tab と pane だけ**です。人の tab (orchestrator 自身が
-  いる tab も含む) の名前は変えません。自分が作った tab かどうかは、label が `#<Issue 番号>` で、pane が
-  すべて `worker-<Issue 番号>[-r<round>]` の名前であることで確かめます (命名の規約に頼る確認で、人が
-  同じ名前を付けた tab とは区別できない)。確かめられなければ触らず人に渡します。
+  いる tab も含む) の名前は変えません。自分が作った tab かどうかは、tab を作ったときに記録した tab ID
+  (応答から取って run dir に置く) と一致し、かつ pane がすべて `worker-<Issue 番号>[-r<round>]` の名前で
+  あることの両方で確かめます (命名だけでは人が同じ名前を付けた tab と区別できない)。記録を辿れない
+  (別の session で run dir が分からない) ときや、確かめられないときは触らず人に渡します。session を
+  またいで記録を辿る口は、packet の起動の記録 (`run`、#315) です。
 - worker の tab を閉じるのは packet が `done` になったとき (clone を片付けるのと同じ時点) です。止まって
   いる間 (`blocked`) と、上限時間を超えて走っている間 (RUNNING) は、調べられるように残します。worker が
   成功した後も pane は閉じず (出力は `pane.log` に保存)、tab ごと `done` で閉じます。
