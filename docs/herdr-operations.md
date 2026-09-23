@@ -52,7 +52,8 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
 ## tab と pane
 
 - **worker**: orchestrator が起動時に tab を作り (`herdr tab create --label '#<Issue 番号>'
-  --no-focus`)、その tab の最初の pane で worker を動かす (実装は #316)。worker は 10 分以上動くので、
+  --no-focus`)、応答の `.result.root_pane` の pane を `worker-<Issue 番号>[-r<round>]` と名付けて、そこで
+  worker を動かす (実装は #316。ID は応答の JSON から読み、推測しない)。worker は 10 分以上動くので、
   orchestrator が別の作業単位を進める tab と分ける。
 - **review**: review の pane は、対象 PR の作業単位の tab に置きます (1 役割 = 1 pane)。Codex が review
   するのは Claude が書いた PR、つまり orchestrator 自身の作業単位なので、置き場は orchestrator の tab に
