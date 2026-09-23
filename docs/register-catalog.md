@@ -94,6 +94,7 @@ source format / output path の確認のみ)。build できない target-artifac
 
 致命 gate (どれか 1 つでも該当すれば fail):
 
+- root に `shared/` が無い (agent-tools の repo ではない。#305)。
 - manifest validation error。
 - static injection high finding。
 - 宣言 risk (prompt_injection / privacy) が `high`。

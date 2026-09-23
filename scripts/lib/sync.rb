@@ -381,7 +381,7 @@ module Sync
                      value_flags: %w[--root --codex-home --claude-home])
     return 0 if opts == :help
 
-    root = opts["--root"] || Dir.pwd
+    root = opts["--root"] || Cli::DEFAULT_ROOT
     apply = opts.key?("--apply")
     prune = opts.key?("--prune")
     quiet = opts.key?("--quiet")

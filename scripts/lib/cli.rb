@@ -11,9 +11,16 @@
 # - value flag の値欠落 (argv 枯渇 = nil) は unknown 行なしで usage を stdout に出して exit 2。
 # - 値の加工 (File.expand_path 等) は呼び出し元の責務 (--root を生値のまま使う既存挙動を
 #   変えないため)。
+# - --root を省略したときの root は DEFAULT_ROOT (script の属する repo) で、cwd には依存しない
+#   (#305)。
 #
 # check_credential_isolation.rb は error 時 usage を stderr に出す別契約のため対象外。
 module Cli
+  # --root 省略時の repo root。この file (scripts/lib/cli.rb) の 2 つ上。__dir__ は realpath
+  # なので、symlink 経由で起動しても実体の repo を指す。repo 外の cwd から絶対 path で
+  # 起動したときに cwd を root とみなして空ツリーを処理しないため、cwd は使わない (#305)。
+  DEFAULT_ROOT = File.expand_path("../..", __dir__)
+
   # argv を { "--flag" => true | "<value>" } に解析して返す。-h / --help は :help を返す。
   def self.parse(argv, usage:, bool_flags: [], value_flags: [])
     opts = {}

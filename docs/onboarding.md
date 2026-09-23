@@ -79,6 +79,7 @@ asset (safe-gh / safe-gh-hook など) にも純ロジックの test がある。
 
 致命 gate (どれか 1 つでも該当すれば fail):
 
+- root に `shared/` が無い (agent-tools の repo ではない。空の generated/ と catalog で上書きしないため、#305)
 - manifest validation error (`CheckManifests`)
 - static injection の high finding (`CheckInjection`)
 - manifest 宣言 risk が `high` (prompt_injection / privacy)

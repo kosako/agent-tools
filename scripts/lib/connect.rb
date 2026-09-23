@@ -200,7 +200,7 @@ module Connect
                      value_flags: %w[--root --codex-home --claude-home])
     return 0 if opts == :help
 
-    root = opts["--root"] || Dir.pwd
+    root = opts["--root"] || Cli::DEFAULT_ROOT
     apply = opts.key?("--apply")
     quiet = opts.key?("--quiet")
     homes = ArtifactTargets.default_homes

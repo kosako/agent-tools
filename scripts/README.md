@@ -11,6 +11,12 @@ network に、後者は skill routing の実機観測で `claude` / `codex` CLI 
 `tests/` の self-tests と repository checks は CI (`.github/workflows/test.yml`) で
 PR / push ごとに実行されます。
 
+pipeline scripts の `--root` を省略したときの root は、その script が属する repo (`scripts/` の親)
+です。cwd には依存しないので、repo 外の cwd から絶対パスで起動しても同じ repo を対象にします。
+`shared/` を持たない root を `--root` に渡すと、build / register は致命 gate で非 0 終了し、
+`generated/` と catalog を書きません (setup もそこで止まる)。self-test: `tests/root-default-test.sh`
+(#305)。
+
 ## 実装済み
 
 - `setup.sh`: `build → register → connect → sync` を一括実行する一発 setup。

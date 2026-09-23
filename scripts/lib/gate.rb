@@ -8,10 +8,16 @@ require_relative "check_injection"
 # ここを通った asset だけが生成・登録に進んでよい。
 module Gate
   # pass なら []、fail なら human-readable な error message の配列を返す。
-  # 致命 = manifest validation error / injection high / 宣言 risk high /
-  #        human_review: rejected。
+  # 致命 = shared/ の無い root / manifest validation error / injection high /
+  #        宣言 risk high / human_review: rejected。
   def self.fatal_errors(root)
     root = File.expand_path(root)
+
+    # shared/ の無い root は agent-tools の repo ではない。0 件のまま生成・登録に進むと、
+    # 空の generated/ と catalog で正しい状態を上書きするので、ここで止める (#305)。
+    unless File.directory?(File.join(root, "shared"))
+      return ["no shared/ directory under root: #{root} (not an agent-tools repository; check --root)"]
+    end
 
     _, manifest_errors = CheckManifests::Runner.new(root).run
     # manifest が壊れていると以降の判定が不正確なので、ここで打ち切る。

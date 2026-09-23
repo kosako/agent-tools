@@ -217,7 +217,7 @@ module Doctor
                      value_flags: %w[--root --codex-home --claude-home --agents-home])
     return 0 if opts == :help
 
-    root = opts["--root"] || Dir.pwd
+    root = opts["--root"] || Cli::DEFAULT_ROOT
     homes = ArtifactTargets.default_homes
     homes["codex"] = File.expand_path(opts["--codex-home"]) if opts["--codex-home"]
     homes["claude-code"] = File.expand_path(opts["--claude-home"]) if opts["--claude-home"]
