@@ -49,8 +49,12 @@ herdr (terminal workspace manager) の上で、複数の作業単位を同時に
 - **worker**: orchestrator が起動時に tab を作り (`herdr tab create --label '#<Issue 番号>'
   --no-focus`)、その tab の最初の pane で worker を動かす (実装は #316)。worker は 10 分以上動くので、
   orchestrator が別の作業単位を進める tab と分ける。
-- **review**: 短時間 (1〜5 分) で終わるので、今のまま orchestrator の tab を分割した pane で動かし、
-  成功したら閉じる (`personal-codex-review`)。
+- **review**: review の pane は、対象 PR の作業単位の tab に置きます (1 役割 = 1 pane)。Codex が review
+  するのは Claude が書いた PR、つまり orchestrator 自身の作業単位なので、置き場は orchestrator の tab に
+  なります (「1 作業単位 = 1 tab」の例外ではない)。Codex が書いた PR は orchestrator の Claude が自分の
+  pane で review するので、pane は増えません。review は短時間 (1〜5 分) で終わるので、今のまま tab を
+  分割した pane で動かし、成功したら閉じます (`personal-codex-review`)。明示的な second opinion (Codex
+  の PR を Codex が見る) は 1 + 1 の枠の外の補助として、orchestrator の tab に置きます。
 - **命名**:
 
   | 対象 | 名前 | 例 |
@@ -69,18 +73,25 @@ herdr (terminal workspace manager) の上で、複数の作業単位を同時に
 - 「今どの作業単位がどの状態で、誰が動いているか」の正本は、packet と herdr の agent 一覧です。
   `personal-resume-project` の workspace 節が、毎回この 2 つを突き合わせて出します (#253 で決めた
   「workspace 単位の索引 file を作らない」のまま)。
-- herdr 側で常に見えるのは、agent panel (`agent_panel_sort = "priority"` なら注意が必要な順に並ぶ) と、上の命名による
-  tab / pane の名前です。1 + 1 の規模なら、どの pane が何の作業単位かはこれで分かります。
+- herdr 側で常に見えるのは、agent panel (`agent_panel_sort = "priority"` なら注意が必要な順に並ぶ) と、
+  上の命名による tab / pane の名前です。1 + 1 の規模なら、どの pane が何の作業単位かはこれで分かります。
 - herdr の sidebar に状態を送る仕組み (pane / workspace の metadata token を report して表示する) は
   入れません。理由:
   - 状態が変わるたびに report が要り、1 回漏れると表示と packet がずれる (索引 file を作らないのと
     同じ理由)。
   - token の表示は最大 24 時間で消える。
   - 何をどの行に出すかを決める herdr の config は dotfiles の管轄で、agent-tools からは触らない。
-- **起動の記録**: worker を起動したら、orchestrator が packet の frontmatter に `run` (run dir) と
-  `tab` を書き、転記が終わったら消します (実装は #315)。resume はこれを見て「起動済み・未回収」と出し、
-  新しく起動する前の二重起動のチェックにも使います。orchestrator の session が worker の途中で終わって
-  も、次の session が回収できます。
+- **起動の記録** (実装は #315): orchestrator は worker を起動する**前に** (run dir と run script が
+  そろった時点で)、packet の frontmatter に `run` (run dir) と `tab` (tab の名前 `#<Issue 番号>`) を
+  書きます。
+  - 起動に失敗して人に渡す (`launch-path`) ときも消しません。人がその run script を実行するためです。
+  - 消すのは、転記が済んだときか、人がその run を破棄すると決めたときだけです。
+  - resume はこれを見て「起動済み・未回収」と出し、orchestrator は新しく起動する前にこれを確かめます。
+  - `run` があるのに、その run の `done.txt` も、生きている worker の process も確認できないとき (起動の
+    直前に止まった、落ちた、判定できない) は、自動で起動し直さず人に確認します。
+
+  これで、orchestrator の session が起動の前後や worker の途中で終わっても、二重に起動せず、次の
+  session が回収できます。
 
 ## 通知
 
