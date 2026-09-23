@@ -254,9 +254,12 @@ main の local path)。fetch は **branch を明示した refspec** で行い、
 (clone の中で検査して push、はしない。push する repository は main 側の設定に閉じる)。
 
 ```sh
-git -C "$main" fetch --no-tags -- "$clone" "refs/heads/$branch:refs/heads/$branch" || exit 1
+git -C "$main" fetch --no-tags -- "$clone" "refs/heads/${branch}:refs/heads/${branch}" || exit 1
 ```
 
+- **`:` が直後に続く展開は `${branch}` と波括弧で書く**。zsh は `$branch:r` の `:r` を parameter
+  modifier (拡張子の除去) として解釈するので、`"refs/heads/$branch:refs/heads/$branch"` は
+  `refs/heads/<branch>efs/heads/<branch>` に壊れる (実測。POSIX sh では壊れない)。下の push も同じ。
 - **refspec に `+` を付けない**。`+` は non-fast-forward の上書きを許すので、main 側の同名 branch が
   分岐していても黙って巻き戻る。`+` 無しなら git は
   `! [rejected] <branch> -> <branch> (non-fast-forward)` を出して **exit 1**、local branch は動かない
@@ -287,7 +290,7 @@ commit ごとに trailer の name を見て、`Codex` 始まりが 1 つ以上�
 決定」と ai-trailer gate で、ここでは push 前の消費側検査として同じ規則を当てる。通ったら:
 
 ```sh
-git -C "$main" push -u origin "refs/heads/$branch:refs/heads/$branch"
+git -C "$main" push -u origin "refs/heads/${branch}:refs/heads/${branch}"
 gh pr create --base main --head "$branch" --title <title> --body-file <body file>
 ```
 
