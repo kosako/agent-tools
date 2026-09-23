@@ -24,8 +24,8 @@ Claude が自分の担当の作業単位を進めている間に、Codex の wor
 
 上限は workspace ごとに数え、machine 上の別の workspace の作業単位とは合算しません。orchestrator の
 session は workspace ごとにあり、`personal-codex-worker` の「orchestrator の session あたり worker 1 つ」も
-その単位です。別の workspace で同時に進めている分の残量の減りは、割当 (#255) で申告してもらう週 / 5h の
-% に表れるので、そこで吸収します。
+その単位です。別の workspace で同時に進めている分の残量の減りは、割当 (#255 / #319) で読む週 / 5h の
+残量に表れるので (枠のある tool のとき)、そこで吸収します。
 
 この範囲にする理由:
 
@@ -42,7 +42,7 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
 - subagent であっても、自分の branch と PR を作るなら 1 つの作業単位として数える。実装を複数の PR に
   分ける fan-out は、1 枠の中で順番に出す (前の PR が review に入ってから次を出す)。
 - review・監査・調査のような read-only の fan-out は、何本走らせても数えない。
-- subagent と ultracode は親と同じ残量を使う。重い fan-out を予定しているときは、割当の申告で
+- subagent と ultracode は親と同じ残量を使う。重い fan-out を予定しているときは、割当のときに
   その分を差し引いて考える。
 
 **未検証**: 同じ種類の worker を複数同時に走らせる N 並列は、この doc の範囲に入れていません。1 + 1
