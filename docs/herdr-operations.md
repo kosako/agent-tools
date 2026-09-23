@@ -19,8 +19,13 @@ herdr (terminal workspace manager) の上で、複数の作業単位を同時に
 
 ## 並列の範囲 (1 + 1)
 
-同時に動く作業単位は、**agent の種類ごとに 1 つまで**です。orchestrator の Claude が自分の担当の
-作業単位を進めている間に、Codex の worker が別の作業単位を進めます。
+同時に動く作業単位は、**workspace (= project) ごとに、agent の種類ごとに 1 つまで**です。orchestrator の
+Claude が自分の担当の作業単位を進めている間に、Codex の worker が別の作業単位を進めます。
+
+上限は workspace ごとに数え、machine 上の別の workspace の作業単位とは合算しません。orchestrator の
+session は workspace ごとにあり、`personal-codex-worker` の「orchestrator の session あたり worker 1 つ」も
+その単位です。別の workspace で同時に進めている分の残量の減りは、割当 (#255) で申告してもらう週 / 5h の
+% に表れるので、そこで吸収します。
 
 この範囲にする理由:
 
