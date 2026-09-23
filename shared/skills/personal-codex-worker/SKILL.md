@@ -34,7 +34,8 @@ orchestrator が行います。
   妥当性) の決定的検査と launch argv の生成。この skill は preflight の判定を再実装しない。
 - **worker (Codex)**: clone の中で `依頼` を実装し、作業単位ごとに commit し、最終 message に
   結果を書く。packet / GitHub / main repository には触れない。
-- **人**: 委譲の起動指示、blocked からの再開判断、残量の申告 (#255)、PR の merge。
+- **人**: 委譲の起動指示、blocked からの再開判断、残量の申告 (`personal-project-operating-loop` の
+  「割当」)、PR の merge。
 - **herdr**: launcher。skill が組んだ argv を pane の shell で実行するだけ。
 
 ## 1. authorization と scope
@@ -153,7 +154,7 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   `Blocked at: executor-exit`。hard cap は 120 分 (暫定) で、達したら kill せず pane を残し
   `Status: RUNNING` で人に返す (run script を再実行させない。人は pane を見て続行か中断かを決める)。
 - **limit**: `codex.log` に `You've hit your usage limit` (前方一致) があれば `Blocked at: limit`。
-  自動で再起動しない (残量は申告制、#255)。
+  自動で再起動しない (残量は割当時の申告制。`personal-project-operating-loop` の「割当」)。
 - **空振り**: `done.txt` が `exit=0` なのに `result.md` が欠落 / 空なら、新しい nonce で同じ brief を
   **1 回だけ** 再実行し、2 回目も空なら `Blocked at: executor-result`。worker が commit 済みなら
   再実行は同じ clone で続きから (brief は同じ)。

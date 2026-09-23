@@ -108,8 +108,9 @@ continue-work / new-work では、次の一手が複数ありうる、scope が�
 
 continue-work で packet のある Issue を続けるときは、その packet の `依頼` (受け入れ条件・制約) を
 scope として読み、`結果` の最新節と `次の入口` から再開します。new-work で別の agent に worker を
-割り当てる場面 (委譲) が生じたときだけ、割当の規則 (向き不向き・残量申告) を持つ手順に従い、
-無ければ人に割当先と残量を聞きます。割当が生じない status / continuation では残量を聞きません。
+割り当てる場面 (委譲) が生じたときだけ、`personal-project-operating-loop` の「割当」(向き不向き表と
+残量の申告) に従い、それが読めなければ人に割当先と残量を聞きます。割当が生じない status /
+continuation では残量を聞きません。
 
 ## やってはいけないこと
 
