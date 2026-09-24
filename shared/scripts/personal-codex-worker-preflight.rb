@@ -46,15 +46,26 @@
 # 表示で、herdr が無い・止まっていても BLOCKED にはしない (上の exit 非ゼロ規則の対象外)。
 #
 # 検査しないこと (honest): 実際の tool surface と、allow rule が本当に無効になるか。起動して
-# 確かめるしかないので acceptance probe に置く。副作用ゼロ・network なし。読むのは codex / herdr
-# の help・status・feature 一覧と、user config の top-level だけ。値は argv 配列で下位 command に
+# 確かめるしかないので acceptance probe に置く。副作用ゼロ・network なし。通常の preflight は
+# codex / herdr の help・status・feature 一覧と user config の top-level を読む。.git snapshot のため
+# clone の `.git` 全体も walk し、regular file の SHA-256 を計算する。値は argv 配列で下位 command に
 # 渡し、shell を介さない。出力に model / effort 以外の config の値は載せない。`--codex-home DIR`
 # は config.toml の場所の上書き。
+#
+# `--verify-git-snapshot FILE --clone DIR` は、FILE 内の preflight JSON にある `.git` snapshot と、
+# clone の `.git` 全体を git を使わず walk して照合する。entry の種類、symlink target、regular file
+# の SHA-256 を比較し、commit 用 allowlist 以外の変更・追加・削除を検出すれば exit 2。snapshot の
+# 読み取り / 形式 / walk が失敗して照合できない場合も exit 2 (どちらも clone を使わせない同じ
+# fail-closed gate)。成功は exit 0。
 
 require "json"
+require "digest"
 
 module CodexWorkerPreflight
-  VERSION = "5"
+  VERSION = "6"
+  GIT_MUTABLE_FILES = %w[HEAD index COMMIT_EDITMSG ORIG_HEAD packed-refs].freeze
+  GIT_MUTABLE_DIRS = %w[objects refs logs].freeze
+  MAX_CHANGED_PATHS = 20
 
   # 起動時に `--disable` で外す feature。`codex features list` に行が無ければ BLOCKED
   # (存在しない feature を disable しようとして CLI が止まる形へ倒さない)。
@@ -110,7 +121,89 @@ module CodexWorkerPreflight
 
   def usage
     "usage: personal-codex-worker-preflight --clone DIR [--codex-home DIR] [--model NAME] " \
-      "[--effort LEVEL] [--json]"
+      "[--effort LEVEL] [--json] | --verify-git-snapshot FILE --clone DIR"
+  end
+
+  # `.git` snapshot の allowlist は Git が commit / ref 更新に書く領域だけ。
+  # file type も記録し、許可領域内でも既存の固定 file / directory の型変更は許可しない。
+  def mutable_git_path?(path)
+    GIT_MUTABLE_FILES.include?(path) || GIT_MUTABLE_DIRS.any? { |dir| path == dir || path.start_with?(dir + "/") }
+  end
+
+  def valid_mutable_entry?(path, entry)
+    return true unless entry
+    return entry["type"] == "file" if GIT_MUTABLE_FILES.include?(path)
+    return entry["type"] == "dir" if GIT_MUTABLE_DIRS.include?(path)
+
+    return false if entry["type"] == "symlink" || entry["type"] == "other"
+
+    true
+  end
+
+  def git_snapshot(root)
+    entries = {}
+    walk = lambda do |dir, prefix|
+      Dir.children(dir).sort.each do |name|
+        path = [prefix, name].reject(&:empty?).join("/")
+        full = File.join(dir, name)
+        stat = File.lstat(full)
+        entry = if stat.symlink?
+                  { "type" => "symlink", "target" => File.readlink(full) }
+                elsif stat.directory?
+                  { "type" => "dir" }
+                elsif stat.file?
+                  { "type" => "file", "sha256" => Digest::SHA256.file(full).hexdigest }
+                else
+                  { "type" => "other" }
+                end
+        entries[path] = entry
+        walk.call(full, path) if stat.directory?
+      end
+    end
+    walk.call(root, "")
+    entries
+  end
+
+  def snapshot_git_dir(path)
+    raise ArgumentError, "snapshot: .git が directory ではありません" unless File.directory?(path) && !File.symlink?(path)
+
+    entries = git_snapshot(path)
+    { "schema" => 1, "git_dir" => File.realpath(path), "entries" => entries }
+  end
+
+  def verify_git_snapshot(snapshot_path, clone_path)
+    document = JSON.parse(File.read(snapshot_path, encoding: "UTF-8"))
+    snapshot = document.is_a?(Hash) ? (document["git_snapshot"] || document) : nil
+    unless snapshot.is_a?(Hash) && snapshot["schema"] == 1 && snapshot["entries"].is_a?(Hash)
+      raise ArgumentError, "snapshot: 形式が不正です"
+    end
+    root = File.realpath(clone_path)
+    git_dir = File.join(root, ".git")
+    unless snapshot["git_dir"] == git_dir
+      raise ArgumentError, "snapshot: clone の .git path が一致しません"
+    end
+    unless File.directory?(git_dir) && !File.symlink?(git_dir) && File.realpath(git_dir) == git_dir
+      raise ArgumentError, "snapshot: .git が directory ではありません"
+    end
+    current = git_snapshot(git_dir)
+    before = snapshot["entries"]
+    paths = (before.keys | current.keys).sort
+    changed = paths.select do |path|
+      if mutable_git_path?(path)
+        !valid_mutable_entry?(path, before[path]) || !valid_mutable_entry?(path, current[path])
+      else
+        before[path] != current[path]
+      end
+    end
+    unless changed.empty?
+      shown = changed.first(MAX_CHANGED_PATHS).map(&:inspect)
+      more = changed.size - shown.size
+      suffix = more.positive? ? " (ほか #{more} 件)" : ""
+      raise ArgumentError, "snapshot: allowlist 外の .git entry が変化しました: #{shown.join(', ')}#{suffix}"
+    end
+    true
+  rescue JSON::ParserError, Errno::ENOENT, Errno::EACCES, Errno::ENOTDIR => e
+    raise ArgumentError, "snapshot: 読み取りまたは照合に失敗しました (#{e.class})"
   end
 
   # 下位 command を argv 配列で起動して stdout + stderr を読む。exit 0 以外と不在は nil。
@@ -387,6 +480,7 @@ module CodexWorkerPreflight
       herdr: herdr_state,
       clone_root: clone_root,
       clone_git_dir: clone_git_dir,
+      git_snapshot: snapshot_git_dir(clone_git_dir),
       launch_argv: launch_argv(DISABLE_FEATURES, selection, clone_git_dir),
     }
   end
@@ -404,6 +498,13 @@ module CodexWorkerPreflight
   end
 
   def run(argv)
+    if argv[0] == "--verify-git-snapshot"
+      raise ArgumentError, usage unless argv.length == 4 && argv[2] == "--clone"
+
+      verify_git_snapshot(argv[1], argv[3])
+      puts "git snapshot: ok"
+      return 0
+    end
     opts = parse_args(argv)
     result = inspect_environment(opts)
     opts[:json] ? puts(JSON.generate(result)) : print_text(result)

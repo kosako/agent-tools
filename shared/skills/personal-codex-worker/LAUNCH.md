@@ -45,9 +45,19 @@ run=$(mktemp -d "$base/<issue>.XXXXXX") || exit 1   # <issue> は §0 で \A\d+\
 main worktree から:
 
 ```sh
+preflight=<tool home>/agent-tools/scripts/personal-codex-worker-preflight
+# `previous_run` は同じ session の直前 run、または packet の起動記録が指す run dir。
+# 起動記録は完了の転記時に消えるため、別 session では通常たどれない。
 # 再開なら、この手順で作った既存 clone をそのまま使う (作り直さない)
-[ -d "$clone/.git" ] && git -C "$clone" rev-parse --git-dir >/dev/null 2>&1 \
-  || git clone --quiet --no-hardlinks -- "$main" "$clone"
+if [ -d "$clone/.git" ]; then
+  # snapshot をたどれなければ clone に git を実行しない。人が §9 の回収済み branch を確認し、
+  # 問題がないと判断した後に clone を作り直す (修正 round の state 運用は #325 の scope)。
+  [ -n "${previous_run:-}" ] && [ -f "$previous_run/preflight.json" ] || exit 1
+  "$preflight" --verify-git-snapshot "$previous_run/preflight.json" --clone "$clone" || exit 1
+  git -C "$clone" rev-parse --git-dir >/dev/null 2>&1 || exit 1
+else
+  git clone --quiet --no-hardlinks -- "$main" "$clone" || exit 1
+fi
 
 # branch: main 側に既にあれば その tip から、無ければ新規に切る
 if git -C "$clone" rev-parse --verify --quiet --end-of-options "refs/heads/$branch" >/dev/null; then
@@ -75,8 +85,11 @@ fi
 - clone の origin は main repository の path になる (worker に network は無い)。worker はここに
   push しない。commit の回収は orchestrator が §9 の fetch で行う。
 - clone / switch が失敗したら `Blocked at: clone`。
-- 既存 clone を再利用するときは、`git -C "$clone" status --porcelain` の結果を run dir に控えてから
-  起動する (前 round の残りと、この round の変更を区別するため)。
+- 既存 clone を再利用するときは、**clone に git を実行する前に**前 round の
+  `preflight.json` (`$previous_run/preflight.json`) で `.git` を照合する。照合 script は git を呼ばず、
+  allowlist 外の変更・追加・削除を止める。snapshot が辿れない / 不正 / 不一致なら `Blocked at: clone` とし、
+  clone をそのまま保持して人に渡す (commit / uncommitted work の有無が分からないため自動で作り直さない)。
+  通過後に `git -C "$clone" status --porcelain` の結果を今回の run dir に控える。
 
 ### clone 側の commit 前提を起動前に確認する
 
@@ -142,17 +155,23 @@ done
 ## 3. preflight
 
 ```sh
-preflight=<tool home>/agent-tools/scripts/personal-codex-worker-preflight
 "$preflight" --clone "$clone" --json > "$run/preflight.json"; rc=$?
 ```
 
 - rc が 0 以外なら停止 (`SKILL.md` §2)。exit 2 には clone の検査 (`<clone>/.git` が directory でない =
   linked worktree、orchestrator 自身の repository、git dir の不一致) も含まれる。`--add-dir` を自分で
   足して回避しない。
-- honest-label: preflight の検査は **その時点の path** を見る。検査から起動までの間に `.git` を
-  symlink へ差し替える competing write までは防げない (同じ path を使い回し、`clone_root` /
-  `clone_git_dir` を preflight の出力から取ることで窓を狭めている)。clone は orchestrator が作った
-  ものだけを使う。
+- 成功時の `preflight.json` には `.git` snapshot が入る。worker 終了後は §8 / §9 で clone に git を
+  実行する直前に `"$preflight" --verify-git-snapshot "$run/preflight.json" --clone "$clone_root"` を実行し、
+  exit 0 を確かめる。照合不能 / 不一致ならそこで止める。
+- honest-label: 2026-09-24 の実測は codex 0.156.0。preflight の launch argv そのままの起動形で、
+  worker は `.git/config`・`.git/hooks`・`.git/info`・`.git` 直下の新規 file に書けた。sandbox 外への
+  書込みは拒否された。`codex sandbox` 単体は `--permission-profile` が必須で、単体起動の結果は未測定。
+  記録は #324 の Issue comment。snapshot は preflight 時と照合時の directory walk の結果を比較する。
+  worker が一時的に allowlist 外を書いて元に戻す競合や walk の最中の変更、別 process による同時変更までは証明しない。
+  比較対象は `.git` entry の種類・regular file の SHA-256・symlink target。allowlist は `objects/`, `refs/`,
+  `logs/`, `HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`, `packed-refs` だけで、その領域内の symlink / special file と固定 entry の
+  型変更も止める。
 - `launch_argv` には `--add-dir <clone>/.git` が 1 つ入る (sandbox は workdir の内側でも `.git` を
   保護するため)。`launch_argv` (配列) の `<run dir>/result.md` を実際の `"$run/result.md"` に
   置き換え、要素を run script に写す (§4)。
@@ -440,12 +459,15 @@ ruby -e '
 退避は clone で、staged / unstaged / untracked を別々に:
 
 ```sh
+"$preflight" --verify-git-snapshot "$run/preflight.json" --clone "$clone_root" || exit 1
 git -C "$clone" status --porcelain=v1 --untracked-files=all > "$run/wip-status.txt"
 git -C "$clone" diff --cached --binary > "$run/wip-staged.patch"
 git -C "$clone" diff --binary > "$run/wip-unstaged.patch"
 git -C "$clone" ls-files --others --exclude-standard -z \
   | tar -C "$clone" --null -T - -cf "$run/wip-untracked.tar"
 ```
+
+照合が失敗したら `Blocked at: clone` とし、退避 command を含め clone に git を実行しない。
 
 - `--cached` と作業ツリーの diff を分けるのは、stage 後に作業ツリーだけ戻した変更を落とさない
   ため。`--binary` で binary も復元できる形にする。
@@ -464,8 +486,11 @@ main の local path)。fetch は **branch を明示した refspec** で行い、
 (clone の中で検査して push、はしない。push する repository は main 側の設定に閉じる)。
 
 ```sh
+"$preflight" --verify-git-snapshot "$run/preflight.json" --clone "$clone_root" || exit 1
 git -C "$main" fetch --no-tags -- "$clone" "refs/heads/${branch}:refs/heads/${branch}" || exit 1
 ```
+
+照合が失敗したら `Blocked at: fetch` とし、clone を fetch source に使わない。
 
 - **`:` が直後に続く展開は `${branch}` と波括弧で書く**。zsh は `$branch:r` の `:r` を parameter
   modifier (拡張子の除去) として解釈するので、`"refs/heads/$branch:refs/heads/$branch"` は
