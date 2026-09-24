@@ -103,7 +103,12 @@ clone の git dir だけ**で、preflight が orchestrator 自身の repository 
   保存する。worker 終了後、clone に git を実行する前に preflight の `--verify-git-snapshot` mode で照合する。
   allowlist 外の変更・entry 追加 / 削除は停止し、許可する書込み先は `objects/`, `refs/`, `logs/`,
   `HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`, `packed-refs`。再利用 clone も git を呼ぶ前に直前 run の snapshot を照合し、
-  追えない場合は clone を保持したまま `Blocked at: clone` で人に渡す。判定範囲と限界は `LAUNCH.md` §3。
+  追えない場合は clone に git を実行せず `Blocked at: clone` で人に渡す。別 session では完了転記時に
+  起動記録が消えて通常 snapshot をたどれないため、人が §9 で main に回収済みの branch を確認し、
+  問題がないと判断してから clone を作り直す。修正 round の state の扱いは #325 の scope。判定範囲と限界は `LAUNCH.md` §3。
+  honest-label: 2026-09-24、codex 0.156.0 の preflight launch argv そのままの起動形で、worker から
+  `.git/config`・`.git/hooks`・`.git/info`・`.git` 直下の新規 file への書込みと、sandbox 外への書込み拒否を実測した。
+  `codex sandbox` 単体は `--permission-profile` 必須のため未測定。記録は #324 の Issue comment。
 
 herdr の状態 (`herdr` field) が `running` でなければ、pane 経由の起動はできない。この skill は
 worker を直接起動しない (review executor と違い、無人で長時間走る process を呼び出し元の

@@ -47,10 +47,11 @@ main worktree から:
 ```sh
 preflight=<tool home>/agent-tools/scripts/personal-codex-worker-preflight
 # `previous_run` は同じ session の直前 run、または packet の起動記録が指す run dir。
-# 追えない場合は既存 clone に git を実行せず停止する。
+# 起動記録は完了の転記時に消えるため、別 session では通常たどれない。
 # 再開なら、この手順で作った既存 clone をそのまま使う (作り直さない)
 if [ -d "$clone/.git" ]; then
-  # 前 round の run dir にある preflight.json が無ければ、git を実行せず人に渡す。
+  # snapshot をたどれなければ clone に git を実行しない。人が §9 の回収済み branch を確認し、
+  # 問題がないと判断した後に clone を作り直す (修正 round の state 運用は #325 の scope)。
   [ -n "${previous_run:-}" ] && [ -f "$previous_run/preflight.json" ] || exit 1
   "$preflight" --verify-git-snapshot "$previous_run/preflight.json" --clone "$clone" || exit 1
   git -C "$clone" rev-parse --git-dir >/dev/null 2>&1 || exit 1
@@ -163,12 +164,15 @@ done
 - 成功時の `preflight.json` には `.git` snapshot が入る。worker 終了後は §8 / §9 で clone に git を
   実行する直前に `"$preflight" --verify-git-snapshot "$run/preflight.json" --clone "$clone_root"` を実行し、
   exit 0 を確かめる。照合不能 / 不一致ならそこで止める。
-- honest-label: snapshot は preflight 時と照合時の directory walk の結果を比較する。worker が一時的に
+- honest-label: 2026-09-24 の実測は codex 0.156.0。preflight の launch argv そのままの起動形で、
+  worker は `.git/config`・`.git/hooks`・`.git/info`・`.git` 直下の新規 file に書けた。sandbox 外への
+  書込みは拒否された。`codex sandbox` 単体は `--permission-profile` が必須で、単体起動の結果は未測定。
+  記録は #324 の Issue comment。snapshot は preflight 時と照合時の directory walk の結果を比較する。
+  worker が一時的に
   allowlist 外を書いて元に戻す競合や walk の最中の変更、別 process による同時変更までは証明しない。
   比較対象は `.git` entry の種類・regular file の SHA-256・symlink target。allowlist は `objects/`, `refs/`,
   `logs/`, `HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`, `packed-refs` だけで、その領域内の symlink / special file と固定 entry の
-  型変更も止める。2026-09-24 に確認できた CLI version は 0.156.0 だが、この作業では worker を起動して
-  `sandbox:` 表示を再確認していない。起動可能な書込先に関する実測は既存の 0.156.0 probe に基づく。
+  型変更も止める。
 - `launch_argv` には `--add-dir <clone>/.git` が 1 つ入る (sandbox は workdir の内側でも `.git` を
   保護するため)。`launch_argv` (配列) の `<run dir>/result.md` を実際の `"$run/result.md"` に
   置き換え、要素を run script に写す (§4)。

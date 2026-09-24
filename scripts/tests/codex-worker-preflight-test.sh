@@ -300,7 +300,8 @@ abort "git snapshot schema" unless j.dig("git_snapshot", "schema") == 1 && j.dig
 ' || fail "--json shape mismatch: $out"
 
 # clone の git dir snapshot は Git を呼ばず照合する。Git が書く allowlist 内の更新は許可し、
-# allowlist 外の内容変更 / 新規 entry / allowlist 内 symlink は拒否する。
+# allowlist 外の内容変更 / 追加 / 削除 / allowlist 内の固定 file の型変更を拒否する。
+touch "$clone/.git/index"
 printf '%s' "$out" > "$tmp/preflight.json"
 verify_snapshot() { ruby "$src" --verify-git-snapshot "$tmp/preflight.json" --clone "$clone"; }
 verify_snapshot >/dev/null || fail "unchanged git dir snapshot should pass"
@@ -314,6 +315,7 @@ out=$(verify_snapshot 2>&1)
 rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "config content change must fail closed (rc=$rc): $out"
+case "$out" in *'"config"'*) : ;; *) fail "diagnostic must name config safely: $out" ;; esac
 # 直前の preflight snapshot を作り直して、許可外の新規 entry を検出する。
 out=$(run_pf --json)
 printf '%s' "$out" > "$tmp/preflight.json"
@@ -323,7 +325,66 @@ out=$(verify_snapshot 2>&1)
 rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "new unallowlisted entry must fail closed (rc=$rc): $out"
+case "$out" in *'"unexpected-entry"'*) : ;; *) fail "diagnostic must name new entry: $out" ;; esac
 rm "$clone/.git/unexpected-entry"
+# allowlist 外 entry の削除も検出し、名前を診断する。
+out=$(run_pf --json)
+printf '%s' "$out" > "$tmp/preflight.json"
+rm "$clone/.git/description"
+set +e
+out=$(verify_snapshot 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "deleted unallowlisted entry must fail closed (rc=$rc): $out"
+case "$out" in *'"description"'*) : ;; *) fail "diagnostic must name deleted entry: $out" ;; esac
+printf 'Unnamed repository; edit this file to name it.\n' > "$clone/.git/description"
+# entry 名は inspect で escape して表示し、報告数に上限を設ける。
+out=$(run_pf --json)
+printf '%s' "$out" > "$tmp/preflight.json"
+odd_name=$(printf 'odd\nname')
+touch "$clone/.git/$odd_name"
+set +e
+out=$(verify_snapshot 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "escaped entry diagnostic must fail closed (rc=$rc): $out"
+case "$out" in *'"odd\nname"'*) : ;; *) fail "diagnostic must escape entry name: $out" ;; esac
+rm "$clone/.git/$odd_name"
+out=$(run_pf --json)
+printf '%s' "$out" > "$tmp/preflight.json"
+i=0
+while [ "$i" -lt 25 ]; do touch "$clone/.git/unexpected-$i"; i=$((i + 1)); done
+set +e
+out=$(verify_snapshot 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "many changed entries must fail closed (rc=$rc): $out"
+case "$out" in *'(ほか 5 件)'*) : ;; *) fail "diagnostic must cap entry count: $out" ;; esac
+rm "$clone/.git"/unexpected-*
+# 固定可変 file は内容変更を許すが、symlink / directory への型変更は拒否する。
+for entry in HEAD index; do
+  out=$(run_pf --json)
+  printf '%s' "$out" > "$tmp/preflight.json"
+  cp "$clone/.git/$entry" "$tmp/$entry.saved"
+  rm "$clone/.git/$entry"
+  ln -s "$tmp/$entry.saved" "$clone/.git/$entry"
+  set +e
+  out=$(verify_snapshot 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "$entry symlink replacement must fail closed (rc=$rc): $out"
+  case "$out" in *"\"$entry\""*) : ;; *) fail "diagnostic must name $entry symlink replacement: $out" ;; esac
+  rm "$clone/.git/$entry"
+  mkdir "$clone/.git/$entry"
+  set +e
+  out=$(verify_snapshot 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "$entry directory replacement must fail closed (rc=$rc): $out"
+  case "$out" in *"\"$entry\""*) : ;; *) fail "diagnostic must name $entry directory replacement: $out" ;; esac
+  rmdir "$clone/.git/$entry"
+  cp "$tmp/$entry.saved" "$clone/.git/$entry"
+done
 # allowlist の内部でも symlink entry は許可しない。
 out=$(run_pf --json)
 printf '%s' "$out" > "$tmp/preflight.json"

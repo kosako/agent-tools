@@ -50,6 +50,12 @@
 # の help・status・feature 一覧と、user config の top-level だけ。値は argv 配列で下位 command に
 # 渡し、shell を介さない。出力に model / effort 以外の config の値は載せない。`--codex-home DIR`
 # は config.toml の場所の上書き。
+#
+# `--verify-git-snapshot FILE --clone DIR` は、FILE 内の preflight JSON にある `.git` snapshot と、
+# clone の `.git` 全体を git を使わず walk して照合する。entry の種類、symlink target、regular file
+# の SHA-256 を比較し、commit 用 allowlist 以外の変更・追加・削除を検出すれば exit 2。snapshot の
+# 読み取り / 形式 / walk が失敗して照合できない場合も exit 2 (どちらも clone を使わせない同じ
+# fail-closed gate)。成功は exit 0。
 
 require "json"
 require "digest"
@@ -58,6 +64,7 @@ module CodexWorkerPreflight
   VERSION = "6"
   GIT_MUTABLE_FILES = %w[HEAD index COMMIT_EDITMSG ORIG_HEAD packed-refs].freeze
   GIT_MUTABLE_DIRS = %w[objects refs logs].freeze
+  MAX_CHANGED_PATHS = 20
 
   # 起動時に `--disable` で外す feature。`codex features list` に行が無ければ BLOCKED
   # (存在しない feature を disable しようとして CLI が止まる形へ倒さない)。
@@ -188,7 +195,10 @@ module CodexWorkerPreflight
       end
     end
     unless changed.empty?
-      raise ArgumentError, "snapshot: allowlist 外の .git entry が変化しました: #{changed.join(', ')}"
+      shown = changed.first(MAX_CHANGED_PATHS).map(&:inspect)
+      more = changed.size - shown.size
+      suffix = more.positive? ? " (ほか #{more} 件)" : ""
+      raise ArgumentError, "snapshot: allowlist 外の .git entry が変化しました: #{shown.join(', ')}#{suffix}"
     end
     true
   rescue JSON::ParserError, Errno::ENOENT, Errno::EACCES, Errno::ENOTDIR => e
