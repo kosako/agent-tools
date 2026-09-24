@@ -34,6 +34,9 @@ check("必須 marker の文字列",
                                                 "`-`", "workspace-write"])
 check("disable する feature の一覧", P::DISABLE_FEATURES == %w[apps computer_use browser_use])
 check("再指定する key の一覧", P::MODEL_KEYS == { "--model" => "model", "--effort" => "model_reasoning_effort" })
+check("git snapshot の変更 allowlist は commit 用の領域に固定",
+      P::GIT_MUTABLE_DIRS == %w[objects refs logs] &&
+      P::GIT_MUTABLE_FILES == %w[HEAD index COMMIT_EDITMSG ORIG_HEAD packed-refs])
 
 HELP_OK = <<~H
   Options:
@@ -293,7 +296,54 @@ abort "json status" unless j["status"] == "ok"
 abort "json model" unless j["model"] == "gpt-x" && j["model_reasoning_effort"] == "xhigh" && j["model_source"] == "config"
 abort "json launch_argv" unless j["launch_argv"].first(6) == %w[codex exec --ignore-user-config --ignore-rules -s workspace-write]
 abort "json disable_features" unless j["disable_features"] == %w[apps computer_use browser_use]
+abort "git snapshot schema" unless j.dig("git_snapshot", "schema") == 1 && j.dig("git_snapshot", "entries").is_a?(Hash)
 ' || fail "--json shape mismatch: $out"
+
+# clone の git dir snapshot は Git を呼ばず照合する。Git が書く allowlist 内の更新は許可し、
+# allowlist 外の内容変更 / 新規 entry / allowlist 内 symlink は拒否する。
+printf '%s' "$out" > "$tmp/preflight.json"
+verify_snapshot() { ruby "$src" --verify-git-snapshot "$tmp/preflight.json" --clone "$clone"; }
+verify_snapshot >/dev/null || fail "unchanged git dir snapshot should pass"
+printf 'ref: refs/heads/test\n' > "$clone/.git/HEAD"
+mkdir -p "$clone/.git/objects/aa"
+printf 'object\n' > "$clone/.git/objects/aa/object"
+verify_snapshot >/dev/null || fail "HEAD and object writes should be allowed"
+printf '\n[worker-test]\n\tmarker = tampered\n' >> "$clone/.git/config"
+set +e
+out=$(verify_snapshot 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "config content change must fail closed (rc=$rc): $out"
+# 直前の preflight snapshot を作り直して、許可外の新規 entry を検出する。
+out=$(run_pf --json)
+printf '%s' "$out" > "$tmp/preflight.json"
+touch "$clone/.git/unexpected-entry"
+set +e
+out=$(verify_snapshot 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "new unallowlisted entry must fail closed (rc=$rc): $out"
+rm "$clone/.git/unexpected-entry"
+# allowlist の内部でも symlink entry は許可しない。
+out=$(run_pf --json)
+printf '%s' "$out" > "$tmp/preflight.json"
+ln -s config "$clone/.git/refs/unexpected-link"
+set +e
+out=$(verify_snapshot 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "symlink under mutable refs must fail closed (rc=$rc): $out"
+rm "$clone/.git/refs/unexpected-link"
+# clone の `.git` 自体も real directory でなければ拒否する。
+mv "$clone/.git" "$clone/.git-real"
+ln -s .git-real "$clone/.git"
+set +e
+out=$(verify_snapshot 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail ".git symlink must fail closed (rc=$rc): $out"
+rm "$clone/.git"
+mv "$clone/.git-real" "$clone/.git"
 
 # --model / --effort の明示: config を読まない (解釈できない config でも exit 0)
 home2="$tmp/codex-home-bad"

@@ -94,9 +94,16 @@ orchestrator が行います。
 `-s danger-full-access` や `--dangerously-…` は使わない。`--add-dir` を自分で足さない)。
 
 `--add-dir` が 1 つ入るのは、`workspace-write` の sandbox が **workdir の内側でも `.git` を保護する**
-ため (codex 0.154.0 で実測。これが無いと worker は `git add` すらできない)。開けるのは **worker 自身の
+ため (Codex CLI 0.156.0 を 2026-09-24 に確認。`.git` 保護の挙動は 0.154.0 の実測が根拠で、
+0.156.0 での起動 probe は未実施)。開けるのは **worker 自身の
 clone の git dir だけ**で、preflight が orchestrator 自身の repository と linked worktree を拒否する
 (exit 2)。main の Git 管理領域・packet dir・home は開かない。
+
+- **clone の `.git` snapshot 照合** (#324): preflight JSON に `.git` 内の entry 種類と regular file の digest を
+  保存する。worker 終了後、clone に git を実行する前に preflight の `--verify-git-snapshot` mode で照合する。
+  allowlist 外の変更・entry 追加 / 削除は停止し、許可する書込み先は `objects/`, `refs/`, `logs/`,
+  `HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`, `packed-refs`。再利用 clone も git を呼ぶ前に直前 run の snapshot を照合し、
+  追えない場合は clone を保持したまま `Blocked at: clone` で人に渡す。判定範囲と限界は `LAUNCH.md` §3。
 
 herdr の状態 (`herdr` field) が `running` でなければ、pane 経由の起動はできない。この skill は
 worker を直接起動しない (review executor と違い、無人で長時間走る process を呼び出し元の

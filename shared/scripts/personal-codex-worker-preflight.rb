@@ -52,9 +52,12 @@
 # は config.toml の場所の上書き。
 
 require "json"
+require "digest"
 
 module CodexWorkerPreflight
-  VERSION = "5"
+  VERSION = "6"
+  GIT_MUTABLE_FILES = %w[HEAD index COMMIT_EDITMSG ORIG_HEAD packed-refs].freeze
+  GIT_MUTABLE_DIRS = %w[objects refs logs].freeze
 
   # 起動時に `--disable` で外す feature。`codex features list` に行が無ければ BLOCKED
   # (存在しない feature を disable しようとして CLI が止まる形へ倒さない)。
@@ -110,7 +113,86 @@ module CodexWorkerPreflight
 
   def usage
     "usage: personal-codex-worker-preflight --clone DIR [--codex-home DIR] [--model NAME] " \
-      "[--effort LEVEL] [--json]"
+      "[--effort LEVEL] [--json] | --verify-git-snapshot FILE --clone DIR"
+  end
+
+  # `.git` snapshot の allowlist は Git が commit / ref 更新に書く領域だけ。
+  # file type も記録し、許可領域内でも既存の固定 file / directory の型変更は許可しない。
+  def mutable_git_path?(path)
+    GIT_MUTABLE_FILES.include?(path) || GIT_MUTABLE_DIRS.any? { |dir| path == dir || path.start_with?(dir + "/") }
+  end
+
+  def valid_mutable_entry?(path, entry)
+    return true unless entry
+    return entry["type"] == "file" if GIT_MUTABLE_FILES.include?(path)
+    return entry["type"] == "dir" if GIT_MUTABLE_DIRS.include?(path)
+
+    return false if entry["type"] == "symlink" || entry["type"] == "other"
+
+    true
+  end
+
+  def git_snapshot(root)
+    entries = {}
+    walk = lambda do |dir, prefix|
+      Dir.children(dir).sort.each do |name|
+        path = [prefix, name].reject(&:empty?).join("/")
+        full = File.join(dir, name)
+        stat = File.lstat(full)
+        entry = if stat.symlink?
+                  { "type" => "symlink", "target" => File.readlink(full) }
+                elsif stat.directory?
+                  { "type" => "dir" }
+                elsif stat.file?
+                  { "type" => "file", "sha256" => Digest::SHA256.file(full).hexdigest }
+                else
+                  { "type" => "other" }
+                end
+        entries[path] = entry
+        walk.call(full, path) if stat.directory?
+      end
+    end
+    walk.call(root, "")
+    entries
+  end
+
+  def snapshot_git_dir(path)
+    raise ArgumentError, "snapshot: .git が directory ではありません" unless File.directory?(path) && !File.symlink?(path)
+
+    entries = git_snapshot(path)
+    { "schema" => 1, "git_dir" => File.realpath(path), "entries" => entries }
+  end
+
+  def verify_git_snapshot(snapshot_path, clone_path)
+    document = JSON.parse(File.read(snapshot_path, encoding: "UTF-8"))
+    snapshot = document.is_a?(Hash) ? (document["git_snapshot"] || document) : nil
+    unless snapshot.is_a?(Hash) && snapshot["schema"] == 1 && snapshot["entries"].is_a?(Hash)
+      raise ArgumentError, "snapshot: 形式が不正です"
+    end
+    root = File.realpath(clone_path)
+    git_dir = File.join(root, ".git")
+    unless snapshot["git_dir"] == git_dir
+      raise ArgumentError, "snapshot: clone の .git path が一致しません"
+    end
+    unless File.directory?(git_dir) && !File.symlink?(git_dir) && File.realpath(git_dir) == git_dir
+      raise ArgumentError, "snapshot: .git が directory ではありません"
+    end
+    current = git_snapshot(git_dir)
+    before = snapshot["entries"]
+    paths = (before.keys | current.keys).sort
+    changed = paths.select do |path|
+      if mutable_git_path?(path)
+        !valid_mutable_entry?(path, before[path]) || !valid_mutable_entry?(path, current[path])
+      else
+        before[path] != current[path]
+      end
+    end
+    unless changed.empty?
+      raise ArgumentError, "snapshot: allowlist 外の .git entry が変化しました: #{changed.join(', ')}"
+    end
+    true
+  rescue JSON::ParserError, Errno::ENOENT, Errno::EACCES, Errno::ENOTDIR => e
+    raise ArgumentError, "snapshot: 読み取りまたは照合に失敗しました (#{e.class})"
   end
 
   # 下位 command を argv 配列で起動して stdout + stderr を読む。exit 0 以外と不在は nil。
@@ -387,6 +469,7 @@ module CodexWorkerPreflight
       herdr: herdr_state,
       clone_root: clone_root,
       clone_git_dir: clone_git_dir,
+      git_snapshot: snapshot_git_dir(clone_git_dir),
       launch_argv: launch_argv(DISABLE_FEATURES, selection, clone_git_dir),
     }
   end
@@ -404,6 +487,13 @@ module CodexWorkerPreflight
   end
 
   def run(argv)
+    if argv[0] == "--verify-git-snapshot"
+      raise ArgumentError, usage unless argv.length == 4 && argv[2] == "--clone"
+
+      verify_git_snapshot(argv[1], argv[3])
+      puts "git snapshot: ok"
+      return 0
+    end
     opts = parse_args(argv)
     result = inspect_environment(opts)
     opts[:json] ? puts(JSON.generate(result)) : print_text(result)
