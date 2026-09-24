@@ -168,8 +168,7 @@ done
   worker は `.git/config`・`.git/hooks`・`.git/info`・`.git` 直下の新規 file に書けた。sandbox 外への
   書込みは拒否された。`codex sandbox` 単体は `--permission-profile` が必須で、単体起動の結果は未測定。
   記録は #324 の Issue comment。snapshot は preflight 時と照合時の directory walk の結果を比較する。
-  worker が一時的に
-  allowlist 外を書いて元に戻す競合や walk の最中の変更、別 process による同時変更までは証明しない。
+  worker が一時的に allowlist 外を書いて元に戻す競合や walk の最中の変更、別 process による同時変更までは証明しない。
   比較対象は `.git` entry の種類・regular file の SHA-256・symlink target。allowlist は `objects/`, `refs/`,
   `logs/`, `HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`, `packed-refs` だけで、その領域内の symlink / special file と固定 entry の
   型変更も止める。

@@ -46,8 +46,9 @@
 # 表示で、herdr が無い・止まっていても BLOCKED にはしない (上の exit 非ゼロ規則の対象外)。
 #
 # 検査しないこと (honest): 実際の tool surface と、allow rule が本当に無効になるか。起動して
-# 確かめるしかないので acceptance probe に置く。副作用ゼロ・network なし。読むのは codex / herdr
-# の help・status・feature 一覧と、user config の top-level だけ。値は argv 配列で下位 command に
+# 確かめるしかないので acceptance probe に置く。副作用ゼロ・network なし。通常の preflight は
+# codex / herdr の help・status・feature 一覧と user config の top-level を読む。.git snapshot のため
+# clone の `.git` 全体も walk し、regular file の SHA-256 を計算する。値は argv 配列で下位 command に
 # 渡し、shell を介さない。出力に model / effort 以外の config の値は載せない。`--codex-home DIR`
 # は config.toml の場所の上書き。
 #
