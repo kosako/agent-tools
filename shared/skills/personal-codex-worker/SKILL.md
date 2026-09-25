@@ -44,14 +44,17 @@ orchestrator が行います。
 - **scope は packet の `依頼`** (orchestrator 著)。`依頼` が無い / 受け入れ条件が空なら起動せず、
   orchestrator に `依頼` の記入を求めて `Blocked at: authorization` で止まる。
 - packet の `state` が `blocked` (質問待ち) のときは、`結果` の質問に orchestrator が `依頼` で答えて
-  から再起動する。`review` / `done` の packet は起動しない。
+  から再起動する。`review` / `done` の packet は起動しない。review の修正 round は、orchestrator が
+  `依頼` に「修正 round N」の項を足し、同時に `state` を `open` に戻して `次の入口` を「修正 round N
+  (`依頼` の該当項) を実装する」に上書きしてから起動する (規約は `docs/agent-packets.md`、#325)。
 - 同時に走らせる worker は orchestrator session あたり 1 つ。走っている worker (workspace の中の
   worker の pane のどれかで foreground に `codex` がいる) があれば新しく起動しない。終わった worker の
   tab / pane は packet が `done` になるまで残るので、残っていること自体は起動を止める理由にしない
   (並列の範囲と tab / pane の命名は agent-tools の `docs/herdr-operations.md`)。
 - **起動の記録を先に確かめる** (二重起動の防止)。packet の frontmatter の `run` / `tab` (起動の記録。
   規約は `docs/agent-packets.md`) を `personal-packet list --json --all` で読み、その Issue の行を見る:
-  - 記録なし → そのまま進む。
+  - 記録なし → そのまま進む。`last_run` (最後の run dir。#325) だけがあるときも同じ (起動の記録では
+    ない。§5 で `run` を書くときに消す)。
   - `state: blocked` → 停止を記録済みの run (`run` はその退避物の置き場)。再起動では新しい run で
     記録を置き換える (古い run dir は `結果` に書いた退避物の path として残る)。
   - それ以外で `run_status: finished` (`done.txt` がある) → 新しく起動しない。先にその run の結果を
@@ -103,9 +106,10 @@ clone の git dir だけ**で、preflight が orchestrator 自身の repository 
   保存する。worker 終了後、clone に git を実行する前に preflight の `--verify-git-snapshot` mode で照合する。
   allowlist 外の変更・entry 追加 / 削除は停止し、許可する書込み先は `objects/`, `refs/`, `logs/`,
   `HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`, `packed-refs`。再利用 clone も git を呼ぶ前に直前 run の snapshot を照合し、
-  追えない場合は clone に git を実行せず `Blocked at: clone` で人に渡す。別 session では完了転記時に
-  起動記録が消えて通常 snapshot をたどれないため、人が §9 で main に回収済みの branch を確認し、
-  問題がないと判断してから clone を作り直す。修正 round の state の扱いは #325 の scope。判定範囲と限界は `LAUNCH.md` §3。
+  追えない場合は clone に git を実行せず `Blocked at: clone` で人に渡す。前の run dir は packet の
+  `last_run` (完了の転記の後) か `run` (停止中) から辿る (#325)。どちらも無い (`last_run` を導入する前に
+  転記した run の次の round 等) ときは、人が §9 で main に回収済みの branch を確認し、問題がないと
+  判断してから clone を作り直す。判定範囲と限界は `LAUNCH.md` §3。
   honest-label: 2026-09-24、codex 0.156.0 の preflight launch argv そのままの起動形で、worker から
   `.git/config`・`.git/hooks`・`.git/info`・`.git` 直下の新規 file への書込みと、sandbox 外への書込み拒否を実測した。
   `codex sandbox` 単体は `--permission-profile` 必須のため未測定。記録は #324 の Issue comment。
@@ -159,9 +163,13 @@ brief は file に書き、stdin (`-`) で渡します。shell 引数に埋め�
   `claude`) の起動、clone の外への書込、`依頼` の scope を超える変更。
 - commit 規則: 作業単位ごとに commit する。commit message に自分を示す trailer
   `Co-Authored-By: Codex <no-reply 形の email>` を付ける (commit-msg の gate が要求する)。
-  test は sandbox の中で実行してよい (network は無い)。
+  test は sandbox の中で実行してよい (network は無い)。script asset (`shared/scripts/`) を変えたら、
+  最終版から asset の `approved_build_id` を計算し直し、`scripts/tests/register-test.sh` まで回して
+  通ることを確かめる (build_id は script の中身に紐づくので、編集のたびに計算し直す。#324 の round 2)。
 - 最終 message の書式 (転記元): `到達点` / `判断` (理由) / `未完` / `停止理由 または 質問`
   (あれば) / `commits` (oid と subject の一覧) / `次の 1 アクション` (`次の入口` の転記元)。
+  `次の 1 アクション` は worker 自身の次の手だけを書き、完了して review 待ちなら「なし (review 待ち)」と
+  書く。orchestrator / reviewer への依頼 (「転記して review に回す」等) は書かない (#325)。
   markdown の見出しは `###` 以下を使い、行頭 `## ` は使わない (packet の予約)。file は repo 相対の
   path で書き、markdown のリンクにしない。clone / run dir / home の絶対 path も書かない (転記前の
   public-safety gate が止める。§6 の置き換えは取りこぼしたときの安全網。#326)。
@@ -184,7 +192,8 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   無いことの確認は `LAUNCH.md` §1 / §3。確かめられなければ起動せず `Blocked at: launch-path`。
 
 - **起動の記録を起動の前に書く**: run dir と run script が揃った時点で (herdr 経由の起動も `launch-path`
-  の hand-off も、その前に)、packet の frontmatter に `run` (run dir) と `tab` (`#<issue>`) を書き、
+  の hand-off も、その前に)、packet の frontmatter に `run` (run dir) と `tab` (`#<issue>`) を書き
+  (`last_run` があれば同時に消す。`run` と同時に置くと `list` が壊れた packet として止める)、
   `personal-packet list --json --all` で読み直して一致と `run_status: unfinished` を確かめる (一致
   しなければ起動せず `Blocked at: launch-record`)。`updated` は変えない。書き方は `LAUNCH.md` §4。
   session が起動の前後や worker の途中で終わっても、次の session が §1 でこの記録から回収する。
@@ -212,8 +221,8 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   修正 round、停止からの再開) は、残っている `#<issue>` の tab に `worker-<issue>-r<N>` の pane を
   足す (固定名の pane を使い回さない)。pane を足す・tab を閉じるのは、所有を確かめた tab (tab を
   作ったときに run dir に記録した tab ID と一致し、かつ pane がすべて `worker-<issue>` の命名) だけ。
-  前の run dir は、同じ session の中か、packet の `run` (起動済み・未回収、または停止中の間だけ残る)
-  から辿る。辿れない (転記の後に記録を消した run の次の round を別の session で起動する等) なら
+  前の run dir は、同じ session の中か、packet の `run` (起動済み・未回収、または停止中) か `last_run`
+  (完了の転記の後。#325) から辿る。辿れない (`last_run` を導入する前に転記した run 等) なら
   確かめられないとして触らない。herdr の一覧は終了コード
   と JSON の形を確かめてから読み、読めないことを「一致 0 件」と取り違えない。確かめられなければ
   `Blocked at: launch-path`。
@@ -248,10 +257,11 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   tar の写し)、その path を `結果` に記録する。orchestrator は代わりに commit しない (trailer が
   Claude になり author が混ざる)。復元を確認するまで clone を消さない。
 - **起動の記録の後始末**: 完了 (最終 message があり止まっていない) の転記が済んだら、frontmatter の
-  `run` / `tab` を消す (key ごと)。止まっている (`state: blocked`) ときは消さない (`run` は退避物の
+  `run` の値を `last_run` に移し、`run` / `tab` を消す (key ごと。#325)。止まっている (`state: blocked`) ときは消さない (`run` は退避物の
   置き場。再起動で新しい run に置き換える)。RUNNING で返すとき、`launch-path` で人に渡すとき、空振りの
-  再実行の間も消さない。人がその run の破棄を決めたときは、人の指示で消す。消したら
-  `personal-packet list --json --all` で `run` が null になったことを確かめる。
+  再実行の間も消さない。人がその run の破棄を決めたときは、人の指示で消す (`last_run` にも移さない)。
+  消したら `personal-packet list --json --all` で `run` が null になり、完了の転記なら `last_run` がその
+  run dir になったことを確かめる。
 - `依頼` は書き換えない。frontmatter の `updated` を更新する。
 
 ## 7. PR (orchestrator の操作)
@@ -271,7 +281,8 @@ worker の最終 message が「完了」で、`依頼` の受け入れ条件を�
 3. push して PR を作る (title / body は packet の `依頼` と `結果` から orchestrator が書く。worker の
    本文をそのまま貼らない)。
 4. packet に `pr:` と `state: review` を入れる。review は `personal-review-request` に渡す
-   (author=codex なので reviewer は Claude route)。
+   (author=codex なので reviewer は Claude route)。修正 round の push の後も、同じく `state: review` に
+   戻す (PR は既にあるので作らない。#325)。
 
 merge はしない (人が行う)。
 
@@ -280,7 +291,7 @@ merge はしない (人が行う)。
 `RESULT-FORMAT.md` の形で返します。契約:
 
 - 完了時は `Status: DONE | REVIEW | RUNNING` と、packet に書いた内容 (`結果` の見出し、`次の入口`、
-  `state`、起動の記録を消したか残したか)、PR を作ったなら番号、run directory の path。
+  `state`、起動の記録を `last_run` に移したか残したか)、PR を作ったなら番号、run directory の path。
 - 停止時は `Status: BLOCKED`、`Blocked at:` (authorization | launch-record | preflight | launch-path |
   clone | executor-exit | executor-result | limit | fetch | transcription | trailer)、public-safe な `Reason`、
   `Next step` (人が実行する run script の path と run dir / 退避物の path / `依頼` の更新 / limit の

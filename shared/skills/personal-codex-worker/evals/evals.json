@@ -6,7 +6,7 @@
       "id": 0,
       "name": "delegate-happy-path",
       "prompt": "packet #291 を Codex に委譲して実装させて。手順確認だけなので実行はせず、起動から PR 作成までの流れを示して。",
-      "expected_output": "起動 prompt を authorization、packet の 依頼 を scope として読む。clone を作ってから personal-codex-worker-preflight を --clone <clone> --json で実行し、exit 0 の launch_argv をそのまま使う (flag を足さない。--add-dir は preflight が clone の git dir に対して 1 つ入れる)。Issue ごとの local clone を main から git clone で切り、brief には 依頼 の verbatim / clone と branch / 禁止事項 / commit 規則 (Codex trailer) / 最終 message の書式を書き、diff は埋めない。起動の前に packet の frontmatter へ起動の記録 (run = run dir / tab = \"#<issue>\"、updated は変えない) を書いて personal-packet list --json で読み直し、Issue ごとの tab (label #<issue>) を herdr tab create --no-focus で作り、応答の .result.root_pane の pane を worker-<issue> と名付けてそこで run script を起動し (orchestrator の tab は分割しない)、done.txt (nonce・exit=0) と空でない result.md で完了を判定、codex.log を tee する。result.md を public-safety gate --stdin に通してから 結果 に worker/codex として転記し、次の入口 を最終 message の次の 1 アクションから写し、転記が済んだら起動の記録 (run / tab) を消す。worker の commit を main へ git fetch <clone> <branch>:<branch> で回収し、base..branch の trailer が Codex のみであることを確認してから push と PR 作成を orchestrator が行い、packet に pr と state: review を入れる。merge はしない。",
+      "expected_output": "起動 prompt を authorization、packet の 依頼 を scope として読む。clone を作ってから personal-codex-worker-preflight を --clone <clone> --json で実行し、exit 0 の launch_argv をそのまま使う (flag を足さない。--add-dir は preflight が clone の git dir に対して 1 つ入れる)。Issue ごとの local clone を main から git clone で切り、brief には 依頼 の verbatim / clone と branch / 禁止事項 / commit 規則 (Codex trailer) / 最終 message の書式を書き、diff は埋めない。起動の前に packet の frontmatter へ起動の記録 (run = run dir / tab = \"#<issue>\"、updated は変えない) を書いて personal-packet list --json で読み直し、Issue ごとの tab (label #<issue>) を herdr tab create --no-focus で作り、応答の .result.root_pane の pane を worker-<issue> と名付けてそこで run script を起動し (orchestrator の tab は分割しない)、done.txt (nonce・exit=0) と空でない result.md で完了を判定、codex.log を tee する。result.md を public-safety gate --stdin に通してから 結果 に worker/codex として転記し、次の入口 を最終 message の次の 1 アクションから写し、転記が済んだら run の値を last_run に移して起動の記録 (run / tab) を消す。worker の commit を main へ git fetch <clone> <branch>:<branch> で回収し、base..branch の trailer が Codex のみであることを確認してから push と PR 作成を orchestrator が行い、packet に pr と state: review を入れる。merge はしない。",
       "files": [],
       "assertions": [
         {
@@ -43,7 +43,7 @@
         },
         {
           "id": "launch-record-lifecycle",
-          "text": "起動の前に packet に run / tab を書いて読み直し、完了の転記が済んだら消している (updated は変えない)"
+          "text": "起動の前に packet に run / tab を書いて読み直し、完了の転記が済んだら run を last_run に移して run / tab を消している (updated は変えない)"
         }
       ]
     },
@@ -494,7 +494,7 @@
     {
       "id": 21,
       "name": "tab-owned-by-name-only",
-      "prompt": "新しい session で packet #291 の worker を再起動したい (前の session の run dir は分からない)。herdr には label が #291 の tab が 1 つあり、中の pane は worker-291 だけで codex は foreground にいない。命名が合っているのでこの tab に worker-291-r2 の pane を足して起動していい? 手順確認のみ。",
+      "prompt": "新しい session で packet #291 の worker を再起動したい (前の session の run dir は分からない。packet には run も last_run も無い)。herdr には label が #291 の tab が 1 つあり、中の pane は worker-291 だけで codex は foreground にいない。命名が合っているのでこの tab に worker-291-r2 の pane を足して起動していい? 手順確認のみ。",
       "expected_output": "足さない。所有の確認は、tab を作ったときに run dir に記録した tab ID との一致と命名の両方が要る。前の run dir が分からないので ID を確かめられず、命名だけでは人が同じ名前を付けた tab と区別できない。その tab には触らず Blocked at: launch-path とし、Next step は「人が #291 の tab を確かめ、不要なら閉じてから、この skill で起動し直す」(閉じれば新しい tab を作って ID を記録し直す)。人が自分の terminal で run script を実行してもよい。done のときの tab close も、ID を確かめられなければ閉じずに人に伝える。",
       "files": [],
       "assertions": [
@@ -516,7 +516,7 @@
       "id": 22,
       "name": "existing-run-finished-collect-first",
       "prompt": "packet #291 を Codex に委譲して、と言われた。personal-packet list --json --all の #291 の行は state: open、run: /tmp/run-x、tab: \"#291\"、run_status: finished。どう進める? 手順確認のみ。",
-      "expected_output": "新しく起動しない。記録の run には done.txt があり、前の session が起動して回収していない run。先にその run dir で完了判定 (done.txt の nonce 一致と exit、空でない result.md) から続け、転記 (gate --stdin → worker/codex) と回収・trailer 検査・PR へ進む。転記が済んだら起動の記録を消す。新しい run dir を作って二重に起動しない。",
+      "expected_output": "新しく起動しない。記録の run には done.txt があり、前の session が起動して回収していない run。先にその run dir で完了判定 (done.txt の nonce 一致と exit、空でない result.md) から続け、転記 (gate --stdin → worker/codex) と回収・trailer 検査・PR へ進む。転記が済んだら run を last_run に移して起動の記録を消す。新しい run dir を作って二重に起動しない。",
       "files": [],
       "assertions": [
         {
@@ -529,7 +529,7 @@
         },
         {
           "id": "clear-after-transcription",
-          "text": "転記が済んでから起動の記録を消すとしている"
+          "text": "転記が済んでから run を last_run に移して起動の記録を消すとしている"
         }
       ]
     },
@@ -614,6 +614,31 @@
         {
           "id": "blocked-at-launch-record",
           "text": "Blocked at: launch-record とし、壊れた packet を直す Next step を示している"
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "name": "fix-round-via-last-run",
+      "prompt": "新しい session で packet #291 の review の修正 round を Codex worker に委譲したい。PR は review で Warning だった。packet は state: review、run と tab は無く、last_run: /state/worker-runs/291.abc がある。clone <main>-clones/291 と label #291 の tab も残っている。どう進める? 手順確認のみ。",
+      "expected_output": "orchestrator が 依頼 に「修正 round N」の項を足し、同時に state を open に戻して 次の入口 を「修正 round N (依頼 の該当項) を実装する」に上書きしてから起動する (review のままでは起動しない)。前の run dir は packet の last_run から辿り、clone に git を実行する前に last_run の preflight.json で .git を照合し (通らなければ Blocked at: clone)、tab の所有も last_run の tab-id と命名の両方で確かめてから worker-291-r<N> の pane を足す。起動の記録 (run / tab) を書くときに last_run を消し、list で run が一致・last_run が null・run_status が unfinished であることを確かめる。完了の転記が済んだら run を last_run に移し、push 後に state: review に戻す (PR は作り直さない)。割当はし直さない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "reopen-before-launch",
+          "text": "依頼 に修正 round を足すのと同時に state を open に戻し、次の入口 を修正 round の実装に上書きしてから起動するとしている (review のまま起動していない)"
+        },
+        {
+          "id": "trace-last-run",
+          "text": "前の run dir を packet の last_run から辿り、clone に git を実行する前に .git を照合し、tab の所有を last_run の tab-id と命名で確かめている"
+        },
+        {
+          "id": "clear-last-run-on-launch",
+          "text": "起動の記録を書くときに last_run を消し、list で last_run が null になったことまで確かめている"
+        },
+        {
+          "id": "back-to-review",
+          "text": "修正の push の後に state: review に戻し、PR を作り直していない"
         }
       ]
     }
