@@ -9,6 +9,7 @@
 #   personal-packet list [--json] [--all]
 #       frontmatter を読んで一覧 (既定は state が open / blocked / review のものだけ。--all で done も)。
 #       起動の記録 (run / tab) があれば run dir の状態 (run_status) も出す (stat だけの read-only)。
+#       --json には最後の run dir (last_run) も出す。
 #       壊れた packet は warning を出して飛ばし、最後に exit 1 (一覧自体は出す)。
 #   personal-packet publish <issue> [--repo OWNER/REPO] [--dry-run]
 #       `## 結果` の最新節 + `## 次の入口` を marker 付きで 1 コメントにまとめ、同じ directory の
@@ -58,8 +59,10 @@ module Packet
   class NoCopy < StandardError; end
 
   # run / tab は worker の起動の記録 (#315)。書くのは orchestrator だけで、publish の写しには載せない
-  # (run は local の path)。
-  Front = Struct.new(:path, :issue, :title, :branch, :pr, :state, :worker, :updated, :published, :run, :tab, :body) do
+  # (run は local の path)。last_run は完了の転記で run を消すときに移す最後の run dir (#325)。clone の
+  # 照合と tab の所有の確認を別の session からも辿るためのもので、run と同時には置かない。
+  Front = Struct.new(:path, :issue, :title, :branch, :pr, :state, :worker, :updated, :published, :run, :tab, :last_run,
+                     :body) do
     def unpublished?
       published.nil? || updated > published
     end
@@ -81,7 +84,7 @@ module Packet
         "branch" => branch, "pr" => pr,
         "updated" => updated.iso8601, "published" => published&.iso8601,
         "unpublished" => unpublished?,
-        "run" => run, "tab" => tab, "run_status" => run_status,
+        "run" => run, "tab" => tab, "run_status" => run_status, "last_run" => last_run,
         "path" => path
       }
     end
@@ -145,9 +148,13 @@ module Packet
     front.published = data.key?("published") && !data["published"].nil? ? to_time(data["published"], "published", path) : nil
     front.run = launch_record(data, "run", path)
     front.tab = launch_record(data, "tab", path)
-    if front.run && !front.run.start_with?("/")
-      raise Error, "#{path}: run は run dir の絶対 path にしてください"
+    front.last_run = launch_record(data, "last_run", path)
+    %i[run last_run].each do |key|
+      value = front[key]
+      raise Error, "#{path}: #{key} は run dir の絶対 path にしてください" if value && !value.start_with?("/")
     end
+    # 次の起動で run を書くときに last_run は消す (手順の消し忘れを list の検証で止める)
+    raise Error, "#{path}: run と last_run は同時に置けません (起動するときは last_run を消します)" if front.run && front.last_run
     front.body = m[2]
     front
   end
@@ -481,7 +488,7 @@ module Packet
   end
 
   def same_except_published?(a, b)
-    %i[issue title branch pr state worker run tab body].all? { |k| a[k] == b[k] } && a.updated.to_i == b.updated.to_i
+    %i[issue title branch pr state worker run tab last_run body].all? { |k| a[k] == b[k] } && a.updated.to_i == b.updated.to_i
   end
 
   def publish(dir, issue, repo:, dry_run:)
@@ -705,9 +712,10 @@ module Packet
     }
     data["branch"] = local.branch if local && local.branch
     data["pr"] = local.pr if local && local.pr
-    # 起動の記録は local だけの情報 (写しに載らない)。写しから再構成しても消さない (#315)。
+    # 起動の記録と最後の run dir は local だけの情報 (写しに載らない)。写しから再構成しても消さない (#315 / #325)。
     data["run"] = local.run if local && local.run
     data["tab"] = local.tab if local && local.tab
+    data["last_run"] = local.last_run if local && local.last_run
     contents = { "依頼" => request, "結果" => result, "次の入口" => following }
     text = YAML.dump(data) + "---\n\n" + HEADINGS.map do |name|
       content = contents.fetch(name)

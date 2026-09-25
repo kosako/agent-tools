@@ -72,6 +72,7 @@ updated: 2026-09-21T23:50:00+09:00   # 書いた agent が入れる (mtime に�
 published: 2026-09-21T23:55:00+09:00 # 最後に Issue コメントへ写した時刻。未 publish なら省略
 run: /path/to/run-dir  # worker の起動の記録 (委譲した worker が走っている / 未回収の間だけ)。無ければ省略
 tab: "#123"            # worker を動かしている herdr の tab 名。`#` があるので引用符で囲む
+# last_run: /path/to/run-dir  # 最後の run dir (完了の転記で run から移す)。run とは同時に置かないので、run が無いときだけ書く
 ---
 
 ## 依頼
@@ -119,6 +120,15 @@ PR #124 の should 1 件を直して re-review を依頼する。
   - `list` は `run` があれば run dir の状態を stat だけで見て `run_status` に出す: `finished` (`done.txt`
     がある = 完了・未転記) / `unfinished` (run dir はあるが `done.txt` が無い = 実行中 / 不明) /
     `missing` (run dir が無い = 消失。worker の commit は clone から回収する)。
+- `last_run` (#325): **最後の run dir**。完了の転記で `run` / `tab` を消すときに、orchestrator が `run` の値を
+  `last_run` に移す。次の起動で `run` を書くときに `last_run` は消す (`run` と同時には置かない。両方あれば
+  壊れた packet として報告する)。`state: blocked` の停止では従来どおり `run` に残す (退避物の置き場)。
+  `done` の後も残す。用途は、転記で起動の記録が消えた後も、前の run の成果物 (clone の `.git` の
+  snapshot、tab の所有の確認に使う `tab-id`) を別の session から辿れるようにすること。
+  - 書くのは orchestrator だけ。検証は `run` と同じ (引用符付きの 1 行・制御文字なし・絶対 path)。
+  - 起動の記録ではない (`run_status` は出さず、resume の「起動済み・未回収」にもならない)。`list --json` にだけ
+    出し、text の一覧には出さない。写しの対象ではないので、書き込み・削除で `updated` を変えない。pull は
+    local の値を保持する。
 - 「依頼は上書き・結果は追記」は書式でなく手順で守る (1 PR = 1 author なので同時書き込みは
   想定しない)。
 - **行頭の `## ` は 3 つの節見出しに予約する** (fenced code や引用の中でも同じ)。それ以外の行頭
@@ -172,7 +182,7 @@ worker 委譲時の `pull` は orchestrator が main repository 側で行い、�
 - `依頼` は既存 local の節を保持し、節が無い場合だけ `personal-safe-gh issue view` の self
   本文から起こす。Issue 本文の行頭 `## ` は 4 空白で字下げし、packet の節境界と区別する。
   本文が withhold されていれば exit 2 で止める。
-- title / branch / pr / run / tab は既存 local を保持する (run / tab は写しに載らない)。新規 title は Issue の title、state / worker は
+- title / branch / pr / run / tab / last_run は既存 local を保持する (run / tab / last_run は写しに載らない)。新規 title は Issue の title、state / worker は
   最新の写しから取る。`updated` は local の `updated` と最新写しの `published` の大きい方、
   `published` は採用した最新写しの日時 (同時刻・古い写しなら local の日時) にする。新規 packet
   は両方とも写しの日時にする。local が未 publish (`published` 無し、または `updated > published`)
@@ -193,7 +203,7 @@ file で行い、command 文字列へ inline 展開しない。
 | command | すること | exit |
 |---|---|---|
 | `dir` | packet dir を出す (main worktree root に固定。linked worktree からでも同じ) | 0 / 2 (git 外) |
-| `list [--json] [--all]` | frontmatter を読んで一覧。既定は open / blocked / review だけ、`--all` で done も。`updated > published` (または未 publish) を `unpublished` で示す。起動の記録があれば `run` / `tab` と `run_status` を出す (text は `[run: <status>]`) | 0 / 1 (壊れた packet あり。warning を出し、健全な行は出す) / 2 |
+| `list [--json] [--all]` | frontmatter を読んで一覧。既定は open / blocked / review だけ、`--all` で done も。`updated > published` (または未 publish) を `unpublished` で示す。起動の記録があれば `run` / `tab` と `run_status` を出す (text は `[run: <status>]`)。`--json` には `last_run` も出す | 0 / 1 (壊れた packet あり。warning を出し、健全な行は出す) / 2 |
 | `publish <issue> [--repo OWNER/REPO] [--dry-run]` | `結果` の最新節 + `次の入口` を marker 付きで合成 → 同じ directory の `personal-public-safety-gate --stdin` に通す → **exit 0 のときだけ** `gh issue comment` で投稿 → frontmatter の `published` を更新 | 0 / 1 (gate が止めた) / 2 (検査できない・gate 不在・gh 不在 / 失敗・入力エラー) |
 | `pull <issue> [--repo OWNER/REPO] [--dry-run]` | self コメントの有効な写しを取り込んで packet を再構成。`--dry-run` は全文を stdout に出す | 0 / 1 (採用できる写しなし) / 2 (reader / 入力 / 保存エラー) |
 
