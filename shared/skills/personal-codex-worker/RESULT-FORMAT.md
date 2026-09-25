@@ -6,7 +6,7 @@ worker が完了して packet を更新した場合:
 
 ```text
 Status: DONE | REVIEW
-Packet: #<issue> — 結果 "### <日付> worker/codex" を追記 / 次の入口を更新 / state: <open|review> / 起動の記録 (run / tab) を消した
+Packet: #<issue> — 結果 "### <日付> worker/codex" を追記 / 次の入口を更新 / state: <open|review> / 起動の記録 (run / tab) を消して run dir を last_run に移した
 PR: #<number> (REVIEW のとき。author=codex、review は Claude route)
 Run dir: <path>
 Commits: <n> (すべて Codex trailer)

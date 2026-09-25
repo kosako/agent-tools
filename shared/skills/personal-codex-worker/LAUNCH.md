@@ -46,12 +46,12 @@ main worktree から:
 
 ```sh
 preflight=<tool home>/agent-tools/scripts/personal-codex-worker-preflight
-# `previous_run` は同じ session の直前 run、または packet の起動記録が指す run dir。
-# 起動記録は完了の転記時に消えるため、別 session では通常たどれない。
+# `previous_run` は前の run dir: 同じ session の直前 run、または packet の `last_run` (完了の転記の後)
+# か `run` (停止中)。どちらも無い (`last_run` を導入する前に転記した run 等) ときは辿れない (#325)。
 # 再開なら、この手順で作った既存 clone をそのまま使う (作り直さない)
 if [ -d "$clone/.git" ]; then
   # snapshot をたどれなければ clone に git を実行しない。人が §9 の回収済み branch を確認し、
-  # 問題がないと判断した後に clone を作り直す (修正 round の state 運用は #325 の scope)。
+  # 問題がないと判断した後に clone を作り直す。
   [ -n "${previous_run:-}" ] && [ -f "$previous_run/preflight.json" ] || exit 1
   "$preflight" --verify-git-snapshot "$previous_run/preflight.json" --clone "$clone" || exit 1
   git -C "$clone" rev-parse --git-dir >/dev/null 2>&1 || exit 1
@@ -86,7 +86,8 @@ fi
   push しない。commit の回収は orchestrator が §9 の fetch で行う。
 - clone / switch が失敗したら `Blocked at: clone`。
 - 既存 clone を再利用するときは、**clone に git を実行する前に**前 round の
-  `preflight.json` (`$previous_run/preflight.json`) で `.git` を照合する。照合 script は git を呼ばず、
+  `preflight.json` (`$previous_run/preflight.json`。前の run dir は packet の `last_run` か `run` から辿る) で
+  `.git` を照合する。照合 script は git を呼ばず、
   allowlist 外の変更・追加・削除を止める。snapshot が辿れない / 不正 / 不一致なら `Blocked at: clone` とし、
   clone をそのまま保持して人に渡す (commit / uncommitted work の有無が分からないため自動で作り直さない)。
   通過後に `git -C "$clone" status --porcelain` の結果を今回の run dir に控える。
@@ -241,10 +242,12 @@ run: "<run dir>"   # double-quoted。run dir に `"` / `\` / 制御文字が無�
 tab: "#<issue>"    # 引用符が要る (無いと `#` 以降が YAML の comment になり、list が壊れた packet として報告する)
 ```
 
-- 既にあれば (停止からの再起動) 新しい値で置き換える。`updated` は変えない (写しの対象ではない)。
+- 既にあれば (停止からの再起動) 新しい値で置き換える。`last_run` (前の run の転記の後に残した最後の run dir。
+  #325) があれば、同じ書き込みで消す (`run` と同時に置くと `list` が壊れた packet として止める)。消す前に、
+  §2 の照合と §5 の所有の確認に使う前の run dir を控えておく。`updated` は変えない (写しの対象ではない)。
   書くのは packet の frontmatter だけで、`依頼` / `結果` / `次の入口` には触らない。
 - 書いたら読み直して確かめる。`list` が exit 0 で、その Issue の行の `run` が run dir と一致し、
-  `tab` が `#<issue>`、`run_status` が `unfinished` (まだ `done.txt` が無い) であること。どれかが違えば
+  `tab` が `#<issue>`、`run_status` が `unfinished` (まだ `done.txt` が無い)、`last_run` が null であること。どれかが違えば
   起動せず `Blocked at: launch-record` (記録が効かないまま起動すると、session を失ったときに回収も
   二重起動の防止もできない)。
 
@@ -255,7 +258,7 @@ packets=$("$packet_cli" list --json --all) || exit 1
 printf '%s' "$packets" \
   | jq -e --argjson issue "$issue" --arg run "$run" --arg tab "#$issue" \
     '[.[] | select(.issue == $issue)] | length == 1 and
-     (.[0] | .run == $run and .tab == $tab and .run_status == "unfinished")' >/dev/null || exit 1
+     (.[0] | .run == $run and .tab == $tab and .run_status == "unfinished" and .last_run == null)' >/dev/null || exit 1
 ```
 
 (`$packet_cli` は `<tool home>/agent-tools/scripts/personal-packet`。`$issue` は §0 で `\A\d+\z` を通した値。
@@ -319,9 +322,9 @@ herdr pane run "$pane" <"zsh " + run script path の shell literal> || exit 1
   が作った tab とみなします。pane を足したり tab を閉じたりしてよいのは、その tab だけです。
   1. **記録した ID**: 手順 2 で見つけた tab の ID が、同じ Issue の前の run の run dir に記録した
      `tab-id` と一致する。前の run dir が分かるのは、同じ orchestrator session の中か、packet の起動
-     の記録 (`run`) から辿れるときだけです。記録は転記が済むと消える (`state: blocked` の間は残る)
-     ので、転記の後の次の round を別の session で起動するときは辿れません。分からない・file が無い・
-     一致しない、はどれも「確かめられない」。
+     の記録 (`run`。停止中) か最後の run dir (`last_run`。完了の転記の後、#325) から辿れるときです。
+     `last_run` を導入する前に転記した run は辿れません。分からない・file が無い・一致しない、はどれも
+     「確かめられない」。
   2. **命名**: その tab の pane が 1 つ以上あり、`.label` がすべて `worker-<issue>` か
      `worker-<issue>-r<N>`。値は jq の `--arg` で渡し、filter の文字列に埋め込みません (`$issue` は
      §0 で `\A\d+\z` を通した値)。label の無い pane は `.label` が出ないので不一致になります。手順 0
@@ -475,8 +478,9 @@ git -C "$clone" ls-files --others --exclude-standard -z \
   list の名前を option として解釈しない。GNU tar なら `--verbatim-files-from` を足す)。
   untracked が無ければ tar は作らない。
 - 退避した path を packet の `結果` に書く。`git stash` は使わない (clone の状態を動かさない)。
-- 起動の記録 (`run` / `tab`): 完了の転記が済んだら key ごと消し、`list --json --all` が exit 0 で、その
-  Issue の行の `run` が null になったことを確かめる (§4 の最後と同じく、終了コードを先に見てから照合する)。
+- 起動の記録 (`run` / `tab`): 完了の転記が済んだら、`run` の値を `last_run` に移して `run` / `tab` を key ごと
+  消し (#325)、`list --json --all` が exit 0 で、その Issue の行の `run` が null、`last_run` がその run dir に
+  なったことを確かめる (§4 の最後と同じく、終了コードを先に見てから照合する)。
   止まっている (`state: blocked`) ときは消さない (`SKILL.md` §6)。
 
 ## 9. 回収 (fetch) と trailer 検査と PR
@@ -563,7 +567,7 @@ printf '%s' "$tabs"  | jq -e '.result.tabs  | type == "array"' >/dev/null || exi
 printf '%s' "$panes" | jq -e '.result.panes | type == "array"' >/dev/null || exit 1
 printf '%s' "$tabs" \
   | jq -r --arg label "$label" '.result.tabs[] | select(.label == $label) | .tab_id'
-# 1 件で、§5 の所有の確認 (最後の run dir の tab-id との一致 + 命名) を通り、
+# 1 件で、§5 の所有の確認 (最後の run dir = packet の last_run の tab-id との一致 + 命名) を通り、
 # その tab のどの pane の foreground にも codex がいないときだけ
 herdr tab close <tab-id>
 ```

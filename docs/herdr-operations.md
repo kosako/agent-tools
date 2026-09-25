@@ -75,7 +75,8 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   (応答から取って run dir に置く) と一致し、かつ pane がすべて `worker-<Issue 番号>[-r<round>]` の名前で
   あることの両方で確かめます (命名だけでは人が同じ名前を付けた tab と区別できない)。記録を辿れない
   (別の session で run dir が分からない) ときや、確かめられないときは触らず人に渡します。session を
-  またいで記録を辿る口は、packet の起動の記録 (`run`、#315) です。
+  またいで記録を辿る口は、packet の起動の記録 (`run`、#315) と、転記の後に残す最後の run dir
+  (`last_run`、#325) です。
 - worker の tab を閉じるのは packet が `done` になったとき (clone を片付けるのと同じ時点) です。止まって
   いる間 (`blocked`) と、上限時間を超えて走っている間 (RUNNING) は、調べられるように残します。worker が
   成功した後も pane は閉じず (出力は `pane.log` に保存)、tab ごと `done` で閉じます。
@@ -97,8 +98,12 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   そろった時点で)、packet の frontmatter に `run` (run dir) と `tab` (tab の名前 `#<Issue 番号>`) を
   書きます。
   - 起動に失敗して人に渡す (`launch-path`) ときも消しません。人がその run script を実行するためです。
-  - 消すのは、転記が済んだときか、人がその run を破棄すると決めたときだけです。worker が止まって
-    `state: blocked` にした間は、`run` をその退避物の置き場として残し、再起動で新しい run に置き換えます。
+  - 消すのは、転記が済んだときか、人がその run を破棄すると決めたときだけです。転記が済んだら `run` の値を
+    `last_run` に移し、`run` と `tab` を消します (#325)。worker が止まって `state: blocked` にした間は、`run`
+    をその退避物の置き場として残し、再起動で新しい run に置き換えます。
+  - `last_run` は起動の記録ではなく、前の run の成果物 (clone の `.git` の snapshot、tab の `tab-id`) を別の
+    session からも辿るための口です。次の起動で `run` を書くときに消し、`done` の後も残します (tab を閉じる
+    ときに使う)。`run` と同時には置きません。
   - resume はこれを見て「起動済み・未回収」と出し、orchestrator は新しく起動する前にこれを確かめます。
   - `run` があるのに、その run の `done.txt` も、生きている worker の process も確認できないとき (起動の
     直前に止まった、落ちた、判定できない) は、自動で起動し直さず人に確認します。
