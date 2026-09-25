@@ -104,7 +104,8 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   - `last_run` は起動の記録ではなく、前の run の成果物 (clone の `.git` の snapshot、tab の `tab-id`) を別の
     session からも辿るための口です。次の起動で `run` を書くときに消し、`done` の後も残します (tab を閉じる
     ときに使う)。`run` と同時には置きません。
-  - resume はこれを見て「起動済み・未回収」と出し、orchestrator は新しく起動する前にこれを確かめます。
+  - resume は `run` を見て「起動済み・未回収」と出し、orchestrator は新しく起動する前に `run` を確かめます
+    (`last_run` は未回収の印ではありません)。
   - `run` があるのに、その run の `done.txt` も、生きている worker の process も確認できないとき (起動の
     直前に止まった、落ちた、判定できない) は、自動で起動し直さず人に確認します。
 
