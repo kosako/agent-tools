@@ -30,6 +30,7 @@ if ARGV[2] == "--mutations"
     "local H2" => ['unless HEADINGS.include?(name)', 'unless HEADINGS.include?(name) || name == "injected"'],
     "launch record run" => ['data["run"] = local.run if local && local.run', ''],
     "launch record tab" => ['data["tab"] = local.tab if local && local.tab', ''],
+    "last run" => ['data["last_run"] = local.last_run if local && local.last_run', ''],
     "invalid frontmatter" =>['"issue" => issue,\n      "title" => local', '"issue" => issue.to_s,\n      "title" => local']
   }
   original = File.read(source)
@@ -293,6 +294,12 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   assert(secs["次の入口"].strip == "REMOTE-NEXT", "newest published wins independent of comment order")
   _out, err, status = run.call("pull", "7")
   assert(status.success? && File.read(path) == out, "merge apply matches dry-run: #{err}")
+
+  # 最後の run dir (last_run) も local だけの情報として保持する (#325)。run とは同時に置かない。
+  File.write(path, LOCAL.sub(/^run:.*\n/, "last_run: /tmp/agent-packet-run-6\n").sub(/^tab:.*\n/, ""))
+  out, err, status = run.call("pull", "7", "--dry-run")
+  front = Packet.parse_text(out, path)
+  assert(status.success? && front.last_run == "/tmp/agent-packet-run-6" && front.run.nil?, "local last_run must survive pull (#325): #{err}")
 
   # 空の依頼節は既存 local として保持。published 無しなら写しを採用する。
   unpublished = LOCAL.sub(/^published:.*\n/, "").sub("LOCAL-REQUEST", "")

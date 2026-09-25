@@ -266,6 +266,31 @@ for bad in 'tab: #25' 'tab: ""' 'run: tmp/relative' 'run: "/tmp/a\nb"' 'run: 12'
   grep -q "^#21 " "$tmp/out" || fail "healthy rows must still be listed ($bad)"
 done
 rm "$runrepo/.agent-packets/25.md"
+# 最後の run dir (last_run。#325): 完了の転記で run から移す。json には出し、text の一覧には出さない
+run_packet 26 review "last_run: $tmp/run-fin
+"
+(cd "$runrepo" && "$pkt" list --json > "$tmp/run.json") || fail "last_run packet should list cleanly"
+[ "$(jget "$tmp/run.json" 4 issue)" = "26" ] || fail "last_run packet should be the 5th row: $(jget "$tmp/run.json" 4 issue)"
+[ "$(jget "$tmp/run.json" 4 last_run)" = "\"$tmp/run-fin\"" ] || fail "last_run path in json: $(jget "$tmp/run.json" 4 last_run)"
+[ "$(jget "$tmp/run.json" 4 run)" = "nil" ] || fail "last_run is not a launch record (run stays nil)"
+[ "$(jget "$tmp/run.json" 4 run_status)" = "nil" ] || fail "last_run must not produce run_status"
+[ "$(jget "$tmp/run.json" 0 last_run)" = "nil" ] || fail "packet without last_run -> nil"
+out=$(cd "$runrepo" && "$pkt" list)
+echo "$out" | grep "^#26 " | grep -q -e "run:" -e "run-fin" && fail "text list must not show last_run: $out"
+for bad in 'last_run: tmp/relative' 'last_run: ""' 'last_run: "/tmp/a\nb"' 'last_run: 12' 'last_run:' "run: $tmp/run-unfin
+last_run: $tmp/run-fin"; do
+  run_packet 25 open "$bad
+"
+  set +e
+  (cd "$runrepo" && "$pkt" list > "$tmp/out" 2> "$tmp/err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "invalid last_run ($bad) should be a broken packet, exit 1 (rc=$rc)"
+  grep -q "25.md" "$tmp/err" || fail "warning should name the packet ($bad): $(cat "$tmp/err")"
+  grep -q "^#26 " "$tmp/out" || fail "healthy rows must still be listed ($bad)"
+done
+grep -q "同時に置けません" "$tmp/err" || fail "run + last_run should be reported as such: $(cat "$tmp/err")"
+rm "$runrepo/.agent-packets/25.md"
 # publish: 写しに run / tab を載せず (run は local path)、published の更新で消さない
 calls=$(gh_calls)
 out=$(cd "$runrepo" && "$pkt" publish 21 --dry-run)
@@ -278,6 +303,13 @@ grep -q "run-fin" "$gh_body" && fail "posted body must not carry the run path"
 grep -q "^run: $tmp/run-fin$" "$runrepo/.agent-packets/21.md" || fail "publish must keep run in the packet"
 grep -q '^tab: "#21"$' "$runrepo/.agent-packets/21.md" || fail "publish must keep tab in the packet"
 grep -q "^published: 20" "$runrepo/.agent-packets/21.md" || fail "publish should still mark published"
+# last_run も写しに載せず、published の更新で消さない
+out=$(cd "$runrepo" && "$pkt" publish 26 --dry-run)
+echo "$out" | grep -q "run-fin" && fail "publish must not carry last_run: $out"
+(cd "$runrepo" && with_gh "$pkt" publish 26 >/dev/null) || fail "publish with last_run should succeed"
+[ "$(gh_calls)" -eq $((calls + 2)) ] || fail "publish with last_run should call gh once more"
+grep -q "run-fin" "$gh_body" && fail "posted body must not carry last_run"
+grep -q "^last_run: $tmp/run-fin$" "$runrepo/.agent-packets/26.md" || fail "publish must keep last_run in the packet"
 # 以降の case は gh の呼び出し回数を 0 から数えるので、fake gh の記録を戻す
 rm -f "$gh_log" "$gh_body"
 
@@ -503,7 +535,7 @@ ruby -r"$script_dir/lib/check_helper" - "$packet_src" <<'RUBY'
 require ARGV[0]
 base = { issue: 7, title: "t", branch: "b", pr: 1, state: "open", worker: "claude",
          updated: Time.iso8601("2026-09-21T23:50:00+09:00"), published: nil,
-         run: "/tmp/run-7", tab: "#7", body: "x\n" }
+         run: "/tmp/run-7", tab: "#7", last_run: nil, body: "x\n" }
 mk = ->(over) { Packet::Front.new("p").tap { |f| base.merge(over).each { |k, v| f[k] = v } } }
 a = mk.call({})
 check("published だけ違えば same", Packet.same_except_published?(a, mk.call(published: Time.now)))
@@ -511,6 +543,7 @@ check("branch が消えれば not same", !Packet.same_except_published?(a, mk.ca
 check("pr が消えれば not same", !Packet.same_except_published?(a, mk.call(pr: nil)))
 check("run が消えれば not same (#315)", !Packet.same_except_published?(a, mk.call(run: nil)))
 check("tab が消えれば not same (#315)", !Packet.same_except_published?(a, mk.call(tab: nil)))
+check("last_run が変われば not same (#325)", !Packet.same_except_published?(a, mk.call(last_run: "/tmp/run-6")))
 check("body が変われば not same", !Packet.same_except_published?(a, mk.call(body: "y\n")))
 check("updated が変われば not same", !Packet.same_except_published?(a, mk.call(updated: Time.now + 60)))
 exit(@failed.zero? ? 0 : 1)
