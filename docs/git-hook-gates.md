@@ -147,6 +147,10 @@ AI agent セッション由来の commit に相互レビュー routing の正本
 - AI トレーラの email は no-reply 形式 (`no-?reply` を含む) のみ許可。この regex が
   「email は公開してよい no-reply / bot 用に限る」(operating-rules) の機械判定可能な
   床であり、**許可 email 形式の policy source はこの gate が SSOT**。
+- Codex の trailer の email (`codex@users.noreply.github.com`) は、GitHub 上で `codex` の account に
+  紐づく。この account は OpenAI 公式の Codex の account で、第三者ではない (OpenAI 自身が使う trailer
+  `Codex <noreply@openai.com>` も同じ account に解決される。2026-09-26 に GraphQL の `Commit.authors` の
+  解決結果で確認。#335)。この形の no-reply は login で紐づくので、login が変わると紐づき先も動きうる。
 - 1 commit に Claude 系と Codex 系のトレーラが混在したら fail-closed (routing 判定不能)。
 - 人間の co-author トレーラ (AI 名以外) は自由 (検査対象外)。
 - **merge commit (MERGE_HEAD あり) は対象外** (authored commit の契約。merge は
