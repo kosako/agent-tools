@@ -115,10 +115,10 @@ OpenCode 1.18.30 (Homebrew)、macOS (arm64)。2026-09-26 に `--stage all` を 2
 | M14 | mock | edit の失敗では after が呼ばれず、bash の非 0 終了では呼ばれる | 予測どおり。失敗した edit の part の status は error | confirmed |
 | M15 | mock | tmp の HOME の `~/.claude/CLAUDE.md` と `~/.claude/skills` が request に載り、`OPENCODE_DISABLE_CLAUDE_CODE=1` で消える | 予測どおり | confirmed |
 | M16 | real | after で足した nonce が、実 provider の変換を経ても model に届く | `opencode-go/kimi-k3` で 1 run (auth は env の OPENCODE_API_KEY を `--pass-env` で渡した)。model の返答に、after で足した nonce (run ごとの乱数) がそのまま含まれていた。実物の config dir と DB の mtime は変わらない | confirmed |
-| M17 | tui-plan (手動) | — | (未測) | unknown |
+| M17 | tui-plan (手動) | — | 未測。TUI の表示 (注記・toast・PTY の目印・event の reject) は、PR 2 の実機 smoke で人が確かめる。自動で測れる部分は M5 / M8 / M11 (serve の PTY と `!` を含む) で確認済み | unknown |
 | M18 | mock (snapshot) | (予測なし) | snapshot を on にした run で踏む hook は post-index-change (15 回) と reference-transaction (2 回)。commit 系 (pre-commit / commit-msg / post-commit) は踏まない。hook の env の目印は OPENCODE / AGENT / OPENCODE_PID だけで、plugin が shell.env で立てた目印は届かない。harness 自身の `git init` も reference-transaction を 1 回踏む (run の label が空の記録) | observed |
 | M19 | mock | (予測なし) | mock が受けた system message に `probe/claude-probe` の形の ID がある | observed |
-| M20 | 手動 | — | (未測) | unknown |
+| M20 | 手動 | 普段の起動経路で、他の agent の目印が OpenCode に漏れうる | herdr の pane (Claude Code と同じ tab を分割した pane) から起動した OpenCode: CLAUDECODE / CODEX_THREAD_ID / CODEX_SANDBOX はどれも立っていない (model の bash で確認。`!` と同じく OpenCode の process の env を継ぐ経路。`env` / `printenv` は user の permission 設定で deny されていたので、model が `${VAR+x}` の展開で存在だけを確かめた)。Claude の session の中の terminal から起動する経路は未測 (Claude Code の `!` / Bash からは TUI を起動できず、入れ子の agent の起動も避ける)。子 process は親の env を継ぐので、その経路では CLAUDECODE が立つと予測する | unknown (1 経路のみ) |
 
 ## PR 1〜3 への入力
 
@@ -138,7 +138,7 @@ PR 0 の merge の後、orchestrator がこの表に従って #295 の PR 1〜3 
 | M15 | PR 1 と PR 3b の前提 | 読まれなければ、orchestrator が PR 3b の OpenCode session の規則を見直す | 読まれた。skill と instruction は OpenCode に配らない (OpenCode が `~/.claude` を読む)。`~/.claude/skills` の personal-* は OpenCode からも発火しうるので、PR 3b の規則 (OpenCode の session での review は人に渡す) はそのまま要る |
 | M18 | PR 3a | 内部の git が目印つきの env で commit-msg を踏むなら、user の判断を待つ | 踏まない。snapshot は commit 系の hook を踏まず、shell.env の目印も届かない。組み込みの OPENCODE=1 は内部の git にも載る (gate の目印にしない、という既定のとおり) |
 | M19 | PR 3b | ID が載っていなければ、PR 3a の着手前に user に方式を諮る | 載っている。model は trailer の `<provider>/<model>` を system message から書ける (mock での観測) |
-| M20 | 漏れ対策 | 漏れ対策は既定で入れる。結果は有無だけを記録する | (未測) |
+| M20 | 漏れ対策 | 漏れ対策は既定で入れる。結果は有無だけを記録する | herdr の pane の経路では漏れていない。Claude の session の中から起動する経路では漏れると予測する。漏れ対策 (shell.env で空文字に上書き) は既定どおり入れる。あわせて、user の permission の `env` / `printenv` の deny は、model が別の command で env を調べるのを止めなかった (deny は command 名での steering で、境界ではない) |
 
 ## 強度のラベル
 
