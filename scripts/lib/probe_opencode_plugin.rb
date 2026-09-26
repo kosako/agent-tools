@@ -208,7 +208,7 @@ module ProbeOpencodePlugin
   end
 
   def self.opencode_run(ctx, label:, stage:, argv:, env:, spec: {})
-    ctx[:mock].run_label = label if ctx[:mock]
+    ctx[:mock].run_label = label
     marker = File.join(ctx[:layout].project, "probe-executed")
     FileUtils.rm_f(marker)
     res = Child.run(argv, env: env, chdir: ctx[:layout].project, timeout: ctx[:opts][:timeout])
@@ -227,7 +227,7 @@ module ProbeOpencodePlugin
   end
 
   def self.write_mock_config(ctx, snapshot: false)
-    Isolation.write_config(ctx[:layout], Isolation.opencode_config(shell: ctx[:shell], mock_url: ctx[:mock]&.base_url || "http://127.0.0.1:9/v1", snapshot: snapshot))
+    Isolation.write_config(ctx[:layout], Isolation.opencode_config(shell: ctx[:shell], mock_url: ctx[:mock].base_url, snapshot: snapshot))
   end
 
   # --- stage ------------------------------------------------------------------------

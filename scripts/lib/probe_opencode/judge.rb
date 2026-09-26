@@ -355,8 +355,7 @@ module ProbeOpencode
         "run_delayed_recorded" => main ? hooks(data, "tools-claude", "idle.delayed").any? { |h| h["sessionID"] == main } : nil,
         "serve_delayed_recorded" => prompt_sid ? hooks(data, "serve-plugin", "idle.delayed").any? { |h| h["sessionID"] == prompt_sid } : nil,
       }
-      item("M10", pred: { "run_delayed_recorded" => false, "serve_delayed_recorded" => true }, obs: obs,
-                  reason: nil)
+      item("M10", pred: { "run_delayed_recorded" => false, "serve_delayed_recorded" => true }, obs: obs)
     end
 
     def self.m11(data)
