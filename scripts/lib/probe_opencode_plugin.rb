@@ -392,6 +392,7 @@ module ProbeOpencodePlugin
     <<~TEXT
       TUI の手動 checklist (M17 / M8・M10・M11 の TUI 側)。別の terminal で次を起動する:
         #{script}
+      0. model に probe/claude-probe を選ぶ (mock provider。実 provider は見えない)
       1. `PROBE-SCENARIO:bash-env` と送る → bash の結果の先頭に nonce の行が出るか (M11: 注記が表示に出るか)
       2. 応答の後に toast "probe toast" が出るか (M11 / M17)
       3. `!env | cut -d= -f1 | grep -xE 'OPENCODE|AGENT|AGENT_TOOLS_PROBE_MARK' | sort` の結果 (M17: `!` の結果)
