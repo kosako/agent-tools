@@ -163,15 +163,19 @@ module ProbeOpencode
       pure = run_fact(data, "pure")
       throw_run = run_fact(data, "throw-init")
       throw_inits = hooks(data, "throw-init", "init").map { |h| h["label"] }
+      order = inits.sort_by { |h| h["t"] }.map { |h| h["label"] }
+      # 予測は source の読込順 (global の plugins dir → project の plugins dir) だけ。同じ dir の中の
+      # 順は source に定めが無いので、観測値として残す。
       obs = {
-        "init_order" => inits.empty? ? nil : inits.sort_by { |h| h["t"] }.map { |h| h["label"] },
+        "global_before_project" => order.include?("probe-project") ? order.index("probe-project") == order.length - 1 : nil,
         "marker_file_inits" => inits.empty? ? nil : inits.count { |h| h["label"] == "probe-global-a" },
+        "each_file_once" => inits.empty? ? nil : order.uniq.length == order.length && order.length == 3,
         "pure_inits" => pure ? hooks(data, "pure", "init").length : nil,
         "throw_init_continues" => throw_run ? (throw_run["exit"] == 0 && throw_inits.include?("probe-global-a") && throw_inits.include?("probe-project")) : nil,
       }
-      pred = { "init_order" => %w[probe-global-a probe-global-b probe-project], "marker_file_inits" => 1,
+      pred = { "global_before_project" => true, "marker_file_inits" => 1, "each_file_once" => true,
                "pure_inits" => 0, "throw_init_continues" => true }
-      extra = { "throw_init_stderr_mentions_plugin" => throw_run && throw_run["stderr_has_plugin"],
+      extra = { "init_order" => order, "throw_init_stderr_mentions_plugin" => throw_run && throw_run["stderr_has_plugin"],
                 "throw_init_error_events" => data["events"].count { |e| e["run"] == "throw-init" && e.dig("event", "type") == "error" } }
       item("M2", pred: pred, obs: obs, extra: extra)
     end

@@ -62,7 +62,8 @@ module ProbeOpencodePlugin
     { label: "claude-compat", model: "claude-probe", scenario: "bash-env", modes: [], canaries: true },
     { label: "claude-compat-disabled", model: "claude-probe", scenario: "bash-env", modes: [], canaries: true,
       extra_env: { "OPENCODE_DISABLE_CLAUDE_CODE" => "1" } },
-    { label: "snapshot", model: "claude-probe", scenario: "tools", modes: %w[annotate], snapshot: true },
+    # M18: mark を立て、shell.env の目印が OpenCode 内部の git に届くかも見る。
+    { label: "snapshot", model: "claude-probe", scenario: "tools", modes: %w[annotate mark], snapshot: true },
   ].freeze
 
   SERVE_RUNS = [
