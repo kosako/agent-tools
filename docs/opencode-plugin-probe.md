@@ -94,8 +94,8 @@ data が欠けた項目は unknown にして pass に数えない。
 ## 結果
 
 OpenCode 1.18.30 (Homebrew)、macOS (arm64)。2026-09-26 に `--stage all` を 2 回 (bash tool の shell =
-`/bin/sh` と `$SHELL` の zsh) 実行した。2 回の verdict は同じだったので 1 行にまとめ、数値が違うものは
-両方を書く。予測は source からのもので、根拠は #295 の packet の「既知の事実」。
+`/bin/sh` と `$SHELL` の zsh) 実行し、`--stage real` を 1 回実行した。2 回の verdict は同じだったので 1 行に
+まとめ、数値が違うものは両方を書く。予測は source からのもので、根拠は #295 の packet の「既知の事実」。
 
 | M | stage | source からの予測 | observed | verdict |
 | --- | --- | --- | --- | --- |
@@ -114,7 +114,7 @@ OpenCode 1.18.30 (Homebrew)、macOS (arm64)。2026-09-26 に `--stage all` を 2
 | M13 | mock | detached で起動した子の process group を負の pid で SIGKILL すると、子も孫も消える | 予測どおり。after の中からの ruby の spawn は 61ms (sh) / 44ms (zsh) | confirmed |
 | M14 | mock | edit の失敗では after が呼ばれず、bash の非 0 終了では呼ばれる | 予測どおり。失敗した edit の part の status は error | confirmed |
 | M15 | mock | tmp の HOME の `~/.claude/CLAUDE.md` と `~/.claude/skills` が request に載り、`OPENCODE_DISABLE_CLAUDE_CODE=1` で消える | 予測どおり | confirmed |
-| M16 | real | after で足した nonce が、実 provider の変換を経ても model に届く | (未測) | unknown |
+| M16 | real | after で足した nonce が、実 provider の変換を経ても model に届く | `opencode-go/kimi-k3` で 1 run (auth は env の OPENCODE_API_KEY を `--pass-env` で渡した)。model の返答に、after で足した nonce (run ごとの乱数) がそのまま含まれていた。実物の config dir と DB の mtime は変わらない | confirmed |
 | M17 | tui-plan (手動) | — | (未測) | unknown |
 | M18 | mock (snapshot) | (予測なし) | snapshot を on にした run で踏む hook は post-index-change (15 回) と reference-transaction (2 回)。commit 系 (pre-commit / commit-msg / post-commit) は踏まない。hook の env の目印は OPENCODE / AGENT / OPENCODE_PID だけで、plugin が shell.env で立てた目印は届かない。harness 自身の `git init` も reference-transaction を 1 回踏む (run の label が空の記録) | observed |
 | M19 | mock | (予測なし) | mock が受けた system message に `probe/claude-probe` の形の ID がある | observed |
@@ -128,12 +128,12 @@ PR 0 の merge の後、orchestrator がこの表に従って #295 の PR 1〜3 
 | --- | --- | --- | --- |
 | M2 | PR 1 の plugin の形と marker 行 | marker 行が付いた file が読まれなければ、PR 1 に着手せず user に報告する | 読まれた (1 回)。PR 1 に着手してよい |
 | M3 | PR 2 の対象 tool と path の取り方 | orchestrator が PR 2 の項を実物に合わせて更新する | 予測どおり。edit / write は args.filePath、apply_patch は after の `metadata.files[].filePath` から取る |
-| M4 | Q2 と Q3 の前提 | 届かなければ、PR 1 に着手せず user の判断を待つ | 届いた。PR 1 に着手してよい (実 provider での確認は M16) |
+| M4 | Q2 と Q3 の前提 | 届かなければ、PR 1 に着手せず user の判断を待つ | 届いた (mock と、M16 の実 provider の両方)。PR 1 に着手してよい |
 | M5 | PR 3a の目印と絞り方 | 既定の分岐に従う。shell.env が model の bash で効かなければ、Q4 の前提が崩れるので PR 3a に着手せず user の判断を待つ | OPENCODE_SESSION_ID は無いので、plugin の shell.env で目印を立てる。shell.env は model の bash で効く (Q4 の前提は保たれる)。`!` にも callID が付くので「callID の有無で絞る」は使えず、既定の分岐のとおり、記録専用の tool.execute.before で model の bash の callID を覚えて突き合わせる。PR 1 の test「hooks に tool.execute.before が無い」は「before は throw せず、args を書き換えない」に置き換える。PTY は sessionID も callID も持たないので、目印は立たない |
 | M6 / M7 / M8 | plugin の fail-open | 落ちなくても try/catch は外さない | M6 / M7 で、hook の throw は tool を失敗させる (after の throw では、実行済みでも出力が model に届かない)。try/catch は必須。M8 は run / serve では落ちないが、stack trace が出るので包む。after には timeout が無いので、plugin の定数の timeout が要る |
 | M9 | PR 2 の直列化と子 session の除外 | 子 session の idle が届くなら、`client.session.get` の parentID で除外する | 届いた。parentID は取れるので、その方法で除外する |
 | M10 / M11 | PR 2 の docs | — | run では idle の後の非同期の処理が打ち切られる。showToast の戻り値は表示の証拠にならない。app.log は log file に出る。どちらも docs に書く |
-| M12 | PR 3a の regex と系列表の fixture | 実物の文字列を fixture に足す。regex に合わなければ PR 3a の項を更新する | mock では `probe` / `claude-probe`。実 provider の文字列は M16 の run の chat.params で取る |
+| M12 | PR 3a の regex と系列表の fixture | 実物の文字列を fixture に足す。regex に合わなければ PR 3a の項を更新する | M16 の run の chat.params で providerID = `opencode-go`、modelID = api.id = `kimi-k3`。この文字列を fixture に足す (mock では `probe` / `claude-probe`) |
 | M13 | timeout と kill の方法 | 負の pid の kill が効かなければ、子だけを kill して、孫が残りうることを honest-label する | 効いた。detached の spawn と負の pid への SIGKILL を採る。timeout の起点の値 (10 / 30 / 120 秒) は、spawn の 44〜61ms に対して十分 |
 | M15 | PR 1 と PR 3b の前提 | 読まれなければ、orchestrator が PR 3b の OpenCode session の規則を見直す | 読まれた。skill と instruction は OpenCode に配らない (OpenCode が `~/.claude` を読む)。`~/.claude/skills` の personal-* は OpenCode からも発火しうるので、PR 3b の規則 (OpenCode の session での review は人に渡す) はそのまま要る |
 | M18 | PR 3a | 内部の git が目印つきの env で commit-msg を踏むなら、user の判断を待つ | 踏まない。snapshot は commit 系の hook を踏まず、shell.env の目印も届かない。組み込みの OPENCODE=1 は内部の git にも載る (gate の目印にしない、という既定のとおり) |
