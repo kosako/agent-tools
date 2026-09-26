@@ -412,7 +412,12 @@ module ProbeOpencodePlugin
     File.write(script, "#!/bin/sh\ncd #{shq(ctx[:layout].project)} || exit 2\nexec env -i #{assigns} opencode\n")
     File.chmod(0o755, script)
     ctx[:mock].run_label = "tui"
+    # 出力を溜めて終了後に見せる wrapper 経由で起動されても、待っている間に別の pane から読めるように
+    # checklist を --out にも書く (#295 PR 0 の実測で、runner が timeout まで待つ間に何も見えなかった)。
+    plan_file = File.join(ctx[:out], "tui-plan.txt")
+    File.write(plan_file, tui_checklist(script))
     puts tui_checklist(script)
+    puts "checklist: #{plan_file}"
     puts "waiting up to #{ctx[:opts][:timeout]}s (Ctrl-C to finish)"
     begin
       sleep ctx[:opts][:timeout]
@@ -462,6 +467,8 @@ module ProbeOpencodePlugin
   end
 
   def self.main(argv, parent_env: ENV.to_h)
+    # 進み具合と tui-plan の案内を、pipe 経由でもすぐ見えるようにする。
+    $stdout.sync = true
     if argv.length == 1 && %w[-h --help].include?(argv[0])
       puts USAGE
       return 0

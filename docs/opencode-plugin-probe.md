@@ -25,6 +25,10 @@ scripts/probe-opencode-plugin.sh --stage real --real --model <provider/model> --
 scripts/probe-opencode-plugin.sh --stage tui-plan --out <dir> --timeout 1800   # 別の terminal で。Ctrl-C で終わる
 ```
 
+tui-plan は mock を動かしたまま待つので、出力を終了後にまとめて見せる wrapper を通さず、pane で直接起動する。
+案内 (checklist と `tui-launch.sh` の path) は `<dir>/tui-plan.txt` にも書く。`tui-launch.sh` は別の pane で、runner が
+動いている間に起動する (runner が終わると隔離 dir ごと消える)。
+
 | stage | 起動するもの | 主に測る項目 |
 | --- | --- | --- |
 | isolation | `opencode debug paths` / `debug config` / `models` | M1 |
