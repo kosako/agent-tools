@@ -16,22 +16,35 @@ module ArtifactTargets
   # catalog の repo root 相対 path。register が書き、Catalog.read が読む (#152)。
   CATALOG_PATH = "generated/catalog.json"
 
-  # 対応 tool の語彙 (走査順も配布順として意味を持つ)。tool を追加するときはここだけを
-  # 変える (build の生成走査・sync の prune 走査・check-manifests の targets 検証・status の
-  # generated 列挙が全てここを参照する, #152)。
-  TOOLS = %w[codex claude-code].freeze
+  # 対応 tool の語彙 (走査順も配布順として意味を持つ)。tool を追加するときはここと
+  # TOOL_KINDS を変える (build の生成走査・sync の prune 走査・check-manifests の targets 検証・
+  # status の generated 列挙が全てここを参照する, #152)。
+  TOOLS = %w[codex claude-code opencode].freeze
 
   # 既定の tool home。各 CLI main が --codex-home 等で上書き (破壊的代入) するため、
   # frozen 定数ではなく毎回 fresh な mutable Hash を返す。
+  # opencode は XDG_CONFIG_HOME を見ず ~/.config/opencode に固定する (codex が CODEX_HOME を
+  # 見ないのと同じ。食い違いの検出は doctor の責務, #295)。
   def self.default_homes
     {
       "codex" => File.expand_path("~/.codex"),
       "claude-code" => File.expand_path("~/.claude"),
+      "opencode" => File.expand_path("~/.config/opencode"),
     }
   end
 
   # build が扱える artifact_kind。
-  SUPPORTED_KINDS = %w[skill instruction script].freeze
+  SUPPORTED_KINDS = %w[skill instruction script plugin].freeze
+
+  # tool ごとに配れる artifact_kind の表 (#295)。opencode に配るのは plugin だけで、plugin の
+  # 配布先も opencode だけ (skill / instruction は OpenCode が ~/.claude を直接読むので配らない)。
+  # build の生成と prune・sync の plan と prune・status の列挙・doctor の表示は、TOOLS 全体 ×
+  # 全 kind ではなくこの表の組だけを回す (opencode home の skills/ を走査して消さないため)。
+  TOOL_KINDS = {
+    "codex" => %w[skill instruction script].freeze,
+    "claude-code" => %w[skill instruction script].freeze,
+    "opencode" => %w[plugin].freeze,
+  }.freeze
 
   # management marker の basename。directory artifact (skill) は dir 直下にこの名前で
   # 置き、単一ファイル artifact (script) は <artifact path> + この名前の sidecar file に
@@ -46,6 +59,7 @@ module ArtifactTargets
     "workflow" => "skill",
     "instruction" => "instruction",
     "script" => "script",
+    "plugin" => "plugin",
   }.freeze
 
   # instruction を配るときの tool 別ファイル名。
@@ -74,7 +88,13 @@ module ArtifactTargets
     SUPPORTED_KINDS.include?(kind)
   end
 
-  # asset のいずれかの target が指定 kind に解決されるか。register の script 判定と
+  # tool がその artifact_kind を受け取れるか (TOOL_KINDS の組にあるか)。未知の tool は何も
+  # 受け取れない。check-manifests の tool / kind 検査と buildable? が共有する。
+  def self.tool_supports?(tool, kind)
+    TOOL_KINDS.key?(tool) && TOOL_KINDS[tool].include?(kind)
+  end
+
+  # asset のいずれかの target が指定 kind に解決されるか。register の script / plugin 判定と
   # check_injection の instruction / skill 昇格判定が共有する。
   # targets が Array であることの型ガードは呼び出し側の責務 (未検証 YAML を読む経路は
   # 呼び出し側が fail-closed に弾いてから渡す)。
@@ -97,6 +117,7 @@ module ArtifactTargets
   #   agent-tools/ subdir 配下に所有ファイルを置き、codex は home 直下。filename を
   #   解決できない tool では nil。
   # - script: <home>/agent-tools/scripts/<name>。
+  # - plugin: <home>/plugins/<name>.js (OpenCode が plugins/*.js を読む, #295)。
   # - それ以外 (skill 等): <home>/skills/<name>。
   def self.target_path(home, tool, name, kind)
     case kind
@@ -107,9 +128,17 @@ module ArtifactTargets
       # script body は tool home の agent-tools/scripts/ subdir に配る (配置先の正本は
       # docs/runtime-injection-defense.md)。
       File.join(home, "agent-tools", "scripts", name)
+    when "plugin"
+      File.join(home, "plugins", plugin_filename(name))
     else
       File.join(home, "skills", name)
     end
+  end
+
+  # plugin artifact のファイル名。OpenCode の loader は拡張子で plugin を見つけるので、
+  # generated 側と target 側で同じ名前を使う。
+  def self.plugin_filename(name)
+    "#{name}.js"
   end
 
   # generated/ 配下の artifact_kind 別出力 dir。
@@ -117,6 +146,7 @@ module ArtifactTargets
     "skill" => "skills",
     "instruction" => "instructions",
     "script" => "scripts",
+    "plugin" => "plugins",
   }.freeze
 
   # generated/ 配下の kind 別出力 dir (build の出力先 / status・prune の glob 起点)。
@@ -127,11 +157,15 @@ module ArtifactTargets
   # generated 側の artifact path (target_path の生成側対称。path 解決の単一 source)。
   # - instruction: tool 固有ファイル名 (INSTRUCTION_FILENAMES)。name は使わず、filename を
   #   解決できない tool では nil (target_path と同じ契約)。
+  # - plugin: <generated_dir>/<name>.js (target_path と同じファイル名)。
   # - それ以外 (skill / script): <generated_dir>/<name>。
   def self.generated_path(root, tool, name, kind)
-    if kind == "instruction"
+    case kind
+    when "instruction"
       filename = INSTRUCTION_FILENAMES[tool]
       filename && File.join(generated_dir(root, tool, kind), filename)
+    when "plugin"
+      File.join(generated_dir(root, tool, kind), plugin_filename(name))
     else
       File.join(generated_dir(root, tool, kind), name)
     end
@@ -139,8 +173,13 @@ module ArtifactTargets
 
   # その tool 向けに artifact を build できるかを判定する (実 build はしない)。
   # register が「registered != buildable」のサイレント断裂を防ぐために使う。
+  # tool が受け取れない kind (TOOL_KINDS 外) は、check-manifests が gate で止める前提だが、
+  # ここでも false にして registered != buildable にならないようにする。
   def self.buildable?(asset, tool)
-    case resolve(asset, tool)
+    kind = resolve(asset, tool)
+    return false unless tool_supports?(tool, kind)
+
+    case kind
     when "skill"
       true
     when "instruction"
@@ -156,6 +195,13 @@ module ArtifactTargets
       source = asset[:source]
       format = source.is_a?(Hash) ? source["format"] : nil
       format != "directory"
+    when "plugin"
+      # plugin は単一の .js を marker 行つきでそのまま配る。OpenCode の loader が読む拡張子は
+      # .ts / .js だが、.ts は扱わない (transpile しない) ので .js だけを buildable にする。
+      source = asset[:source]
+      path = source.is_a?(Hash) ? source["path"] : nil
+      format = source.is_a?(Hash) ? source["format"] : nil
+      format != "directory" && path.is_a?(String) && path.end_with?(".js")
     else
       false
     end
