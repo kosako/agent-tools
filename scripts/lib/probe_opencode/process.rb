@@ -20,6 +20,16 @@ module ProbeOpencode
       nil
     end
 
+    def self.reader(io, buf)
+      t = Thread.new do
+        buf << io.read
+      rescue IOError
+        nil
+      end
+      t.report_on_exception = false
+      t
+    end
+
     def self.run(argv, env:, chdir:, timeout:)
       started = Time.now
       out = +""
@@ -27,32 +37,29 @@ module ProbeOpencode
       exitstatus = nil
       timed_out = false
       Open3.popen3(env, *argv, chdir: chdir, pgroup: true, unsetenv_others: true) do |i, o, e, wait|
-        i.close
-        readers = [[o, out], [e, err]].map do |io, buf|
-          t = Thread.new do
-            buf << io.read
-          rescue IOError
-            nil
+        readers = []
+        begin
+          i.close
+          readers = [reader(o, out), reader(e, err)]
+          unless wait.join(timeout)
+            timed_out = true
+            kill_group(wait.pid, "TERM")
+            sleep 1
+            kill_group(wait.pid, "KILL")
           end
-          t.report_on_exception = false
-          t
-        end
-        unless wait.join(timeout)
-          timed_out = true
-          kill_group(wait.pid, "TERM")
-          sleep 1
-          kill_group(wait.pid, "KILL")
-        end
-        deadline = Time.now + READER_GRACE
-        drained = readers.map { |t| t.join([deadline - Time.now, 0].max) }.all?
-        unless drained
+          # 孫が pipe を握っていると read が返らないので bounded に待ち、閉じなければ group を止める。
+          deadline = Time.now + READER_GRACE
+          drained = readers.map { |t| t.join([deadline - Time.now, 0].max) }.all?
+          kill_group(wait.pid, "KILL") unless drained
+          wait.join(READER_GRACE)
+          exitstatus = wait.value&.exitstatus unless timed_out || wait.alive?
+        ensure
+          # 正常終了・timeout・中断 (Ctrl-C)・例外のどれでも、子の process group を残さない。pgroup: true
+          # なので端末の SIGINT は子に届かず、ここで止めないと Open3 の終了待ちで runner も止まる。
           kill_group(wait.pid, "KILL")
           [o, e].each { |io| io.close unless io.closed? }
           readers.each { |t| t.join(1) }
         end
-        wait.join(READER_GRACE)
-        exitstatus = wait.value&.exitstatus unless timed_out
-        kill_group(wait.pid, "KILL")
       end
       Result.new(out: out, err: err, exitstatus: exitstatus, timed_out: timed_out,
                  duration_ms: ((Time.now - started) * 1000).round)
@@ -104,12 +111,17 @@ module ProbeOpencode
         @wait.alive? ? nil : @wait.value&.exitstatus
       end
 
+      # start の途中で失敗しても呼べる (起動できていなければ何もしない)。親が TERM で先に終わっても、
+      # TERM を無視する子孫が同じ group に残りうるので、猶予の後に必ず group 全体へ KILL を送る。
       def stop
+        return unless @wait
+
         Child.kill_group(@wait.pid, "TERM")
-        Child.kill_group(@wait.pid, "KILL") unless @wait.join(3)
+        @wait.join(3)
+        Child.kill_group(@wait.pid, "KILL")
         @wait.join(READER_GRACE)
         [@stdout, @stderr].each { |io| io.close unless io.closed? }
-        [@out_thread, @err_thread].each { |t| t.join(1) }
+        [@out_thread, @err_thread].compact.each { |t| t.join(1) }
       end
     end
 

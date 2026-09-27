@@ -19,7 +19,6 @@
 
 require "fileutils"
 require "json"
-require "open3"
 require "securerandom"
 require "time"
 require "tmpdir"
@@ -141,17 +140,25 @@ module ProbeOpencodePlugin
   end
 
   # --out は git の worktree / .git の外で、無いか空の dir に限る (raw を tracked にしないため)。
+  # git の探索は親の env (GIT_CEILING_DIRECTORIES / GIT_DIR など) で結果が変わるので使わず、symlink を
+  # 解決した path について、祖先に `.git` があるか (worktree の root) と、`.git` という成分を含むか
+  # (git dir の中) を filesystem で見る。
   def self.check_out!(out)
     path = File.expand_path(out)
     raise Error, "--out is not a directory: #{out}" if File.exist?(path) && !File.directory?(path)
     raise Error, "--out must be empty or absent: #{out}" if File.directory?(path) && !Dir.empty?(path)
 
-    probe = path
-    probe = File.dirname(probe) until File.directory?(probe)
-    stdout, _, status = Open3.capture3({ "GIT_DIR" => nil, "GIT_WORK_TREE" => nil }, "git", "-C", probe, "rev-parse",
-                                       "--is-inside-work-tree", "--is-inside-git-dir")
-    raise Error, "--out must be outside a git worktree: #{out}" if status.success? && stdout.split.include?("true")
+    existing = path
+    existing = File.dirname(existing) until File.exist?(existing)
+    dir = File.join(File.realpath(existing), path[existing.length..-1])
+    loop do
+      raise Error, "--out must be outside a git worktree: #{out}" if File.basename(dir) == ".git" || File.exist?(File.join(dir, ".git"))
 
+      parent = File.dirname(dir)
+      break if parent == dir
+
+      dir = parent
+    end
     path
   end
 
@@ -299,20 +306,29 @@ module ProbeOpencodePlugin
     tool = parts.find { |p| p.is_a?(Hash) && p["type"] == "tool" }
     output = tool && tool.dig("state", "output")
     { "session_id" => sid, "status" => st, "part_status" => tool && tool.dig("state", "status"),
-      "names" => names_of(output), "ok_marker" => output.to_s.include?(Mock::OK_MARKER) }
+      "names" => output ? names_of(output) : nil, "ok_marker" => output.to_s.include?(Mock::OK_MARKER) }
   end
 
+  def self.now_ms
+    (Time.now.to_f * 1000).to_i
+  end
+
+  # PTY の shell.env は sessionID も callID も持たないので、hooks.jsonl の記録は PTY を起動した時間帯
+  # (t_start〜t_end) で選ぶ (judge.rb の pty_records)。
   def self.serve_pty(ctx, client, label)
     file = File.join(ctx[:layout].tmp, "pty-#{label}.txt")
     FileUtils.rm_f(file)
     cmd = "(#{Mock::ENV_NAMES_CMD}) > #{shq(file)} 2>&1"
+    t_start = now_ms
     status, body = client.post("/pty", { "command" => "/bin/sh", "args" => ["-c", cmd], "cwd" => ctx[:layout].project, "title" => "probe" })
     deadline = Time.now + 5
     sleep 0.2 until (File.file?(file) && File.read(file).include?(Mock::OK_MARKER)) || Time.now > deadline
+    t_end = now_ms
     id = body.is_a?(Hash) ? body["id"] : nil
     client.delete("/pty/#{id}") if id
     written = File.file?(file)
-    { "status" => status, "file_written" => written, "names" => written ? names_of(File.read(file)) : nil }
+    { "status" => status, "file_written" => written, "names" => written ? names_of(File.read(file)) : nil,
+      "t_start" => t_start, "t_end" => t_end }
   end
 
   def self.prompt_body(scenario)
@@ -346,21 +362,25 @@ module ProbeOpencodePlugin
     env = env_for(ctx, label, spec[:modes], extra: { "OPENCODE_SERVER_PASSWORD" => password })
     argv = %w[opencode serve --hostname 127.0.0.1 --port 0 --log-level DEBUG] + (spec[:pure] ? ["--pure"] : [])
     srv = Child::Serve.new(argv, env: env, chdir: ctx[:layout].project, timeout: ctx[:opts][:timeout])
-    port = srv.start
-    fact = { "label" => label, "stage" => "serve", "command" => "serve", "modes" => spec[:modes], "pure" => spec[:pure] == true,
-             "listening" => !port.nil? }
-    if port
-      client = Child::Client.new(port: port, password: password, directory: ctx[:layout].project, timeout: ctx[:opts][:timeout])
-      fact["shell"] = serve_shell(client)
-      fact["pty"] = serve_pty(ctx, client, label)
-      fact["prompt"] = serve_prompt(client)
-      fact["abort"] = serve_abort(client)
-      sleep 1.0
-      status, = client.get("/session")
-      fact["alive_after"] = srv.alive? && status == 200
+    fact = { "label" => label, "stage" => "serve", "command" => "serve", "modes" => spec[:modes], "pure" => spec[:pure] == true }
+    begin
+      port = srv.start
+      fact["listening"] = !port.nil?
+      if port
+        client = Child::Client.new(port: port, password: password, directory: ctx[:layout].project, timeout: ctx[:opts][:timeout])
+        fact["shell"] = serve_shell(client)
+        fact["pty"] = serve_pty(ctx, client, label)
+        fact["prompt"] = serve_prompt(client)
+        fact["abort"] = serve_abort(client)
+        sleep 1.0
+        status, = client.get("/session")
+        fact["alive_after"] = srv.alive? && status == 200
+      end
+      fact["exit_before_stop"] = srv.exitstatus
+    ensure
+      # 中断・例外でも serve の process group を残さない (pgroup: true なので端末の SIGINT は届かない)。
+      srv.stop
     end
-    fact["exit_before_stop"] = srv.exitstatus
-    srv.stop
     save_stderr(ctx, label, srv.err)
     ctx[:runs] << fact
     puts "#{label}: listening=#{fact['listening']} alive_after=#{fact['alive_after'].inspect}"
@@ -396,7 +416,8 @@ module ProbeOpencodePlugin
       1. `PROBE-SCENARIO:bash-env` と送る → bash の結果の先頭に nonce の行が出るか (M11: 注記が表示に出るか)
       2. 応答の後に toast "probe toast" が出るか (M11 / M17)
       3. `!env | cut -d= -f1 | grep -xE 'OPENCODE|AGENT|AGENT_TOOLS_PROBE_MARK' | sort` の結果 (M17: `!` の結果)
-      4. terminal (PTY) を開き、同じ command の結果 (M17: PTY に目印が立たないこと。有無だけ)
+      4. terminal の TUI (1.18.30) には terminal (PTY) の欄が無い。PTY の経路は serve の stage で測る (M5)。
+         web / desktop の app で試すなら、probe の plugin は PTY にも目印を立てるので AGENT_TOOLS_PROBE_MARK が出るのが予測どおり
       5. 終了したら、この runner を Ctrl-C で止める (hooks.jsonl は --out に残る)
       M20 (普段の起動経路での漏れ。手動・有無だけ): herdr の pane と、Claude の session の中の terminal から
       普段どおり opencode を起動し、`!env | cut -d= -f1 | grep -xE 'CLAUDECODE|CODEX_THREAD_ID|CODEX_SANDBOX' | sort`

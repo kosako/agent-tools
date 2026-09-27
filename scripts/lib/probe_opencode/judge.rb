@@ -92,6 +92,24 @@ module ProbeOpencode
       (data["facts"]["runs"] || []).find { |r| r["label"] == label }
     end
 
+    # run が観測できる地点まで正常に進んだか (exit 0・timeout なし・event が出た)。欠けた data や
+    # 起動の失敗を、予測どおりの「0 件」や「記録なし」に数えないために使う。
+    def self.run_ok?(fact)
+      !fact.nil? && fact["exit"] == 0 && fact["timed_out"] == false && fact["events"].to_i.positive?
+    end
+
+    PTY_SLACK_MS = 500
+
+    # PTY の shell.env は sessionID / callID を持たないので、runner が記録した PTY の起動の時間帯で選ぶ
+    # (sessionID の有無で選ぶと、PTY に sessionID が付いた場合を検出できない)。時間帯が無ければ nil。
+    def self.pty_records(data, run, fact)
+      t0 = fact && fact.dig("pty", "t_start")
+      t1 = fact && fact.dig("pty", "t_end")
+      return nil unless t0.is_a?(Integer) && t1.is_a?(Integer)
+
+      hooks(data, run, "shell.env").select { |h| h["t"].is_a?(Integer) && h["t"] >= t0 - PTY_SLACK_MS && h["t"] <= t1 + PTY_SLACK_MS }
+    end
+
     def self.hooks(data, run, kind)
       data["hooks"].select { |h| h["run"] == run && h["kind"] == kind }
     end
@@ -170,8 +188,8 @@ module ProbeOpencode
         "global_before_project" => order.include?("probe-project") ? order.index("probe-project") == order.length - 1 : nil,
         "marker_file_inits" => inits.empty? ? nil : inits.count { |h| h["label"] == "probe-global-a" },
         "each_file_once" => inits.empty? ? nil : order.uniq.length == order.length && order.length == 3,
-        "pure_inits" => pure ? hooks(data, "pure", "init").length : nil,
-        "throw_init_continues" => throw_run ? (throw_run["exit"] == 0 && throw_inits.include?("probe-global-a") && throw_inits.include?("probe-project")) : nil,
+        "pure_inits" => run_ok?(pure) ? hooks(data, "pure", "init").length : nil,
+        "throw_init_continues" => throw_run ? (run_ok?(throw_run) && throw_inits.include?("probe-global-a") && throw_inits.include?("probe-project")) : nil,
       }
       pred = { "global_before_project" => true, "marker_file_inits" => 1, "each_file_once" => true,
                "pure_inits" => 0, "throw_init_continues" => true }
@@ -225,7 +243,7 @@ module ProbeOpencode
       serve_env = hooks(data, "serve-plugin", "shell.env")
       serve_before = hooks(data, "serve-plugin", "tool.before").map { |h| h["callID"] }
       bang = serve_env.select { |h| bang_sid && h["sessionID"] == bang_sid }
-      pty = serve_env.reject { |h| h["has_sessionID"] }
+      pty = pty_records(data, "serve-plugin", serve) || []
       {
         "model_bash.sessionID" => model.empty? ? nil : model.all? { |h| h["has_sessionID"] },
         "model_bash.callID" => model.empty? ? nil : model.all? { |h| h["has_callID"] },
@@ -271,13 +289,22 @@ module ProbeOpencode
       item("M5", pred: pred, obs: obs, extra: extra)
     end
 
+    # 「失敗した」と数えるのは、shell.env の hook に届いた記録があり、その経路の応答を受け取れたときだけ。
+    # session の作成や通信の失敗 (status が無い) は、hook を試せていないので unknown にする。
     def self.m6(data)
-      part = tool_parts(data, "throw-shell-env", "bash").first
+      run = "throw-shell-env"
+      part = tool_parts(data, run, "bash").first
+      model_reached = !hooks(data, run, "shell.env").empty?
       serve = run_fact(data, "serve-throw-shell-env")
+      bang_sid = serve && serve.dig("shell", "session_id")
+      bang_status = serve && serve.dig("shell", "status")
+      bang_reached = !bang_sid.nil? && hooks(data, "serve-throw-shell-env", "shell.env").any? { |h| h["sessionID"] == bang_sid }
+      pty_status = serve && serve.dig("pty", "status")
+      pty_reached = !(pty_records(data, "serve-throw-shell-env", serve) || []).empty?
       obs = {
-        "model_bash_fails" => part ? part.dig("state", "status") == "error" : nil,
-        "bang_fails" => serve && serve["shell"] ? (serve.dig("shell", "status") != 200 || serve.dig("shell", "part_status") == "error") : nil,
-        "pty_fails" => serve && serve["pty"] ? (serve.dig("pty", "status") != 200 || !serve.dig("pty", "file_written")) : nil,
+        "model_bash_fails" => part && model_reached ? part.dig("state", "status") == "error" : nil,
+        "bang_fails" => bang_reached && !bang_status.nil? ? (bang_status != 200 || serve.dig("shell", "part_status") == "error") : nil,
+        "pty_fails" => pty_reached && !pty_status.nil? ? (pty_status != 200 || !serve.dig("pty", "file_written")) : nil,
       }
       extra = { "model_bash_executed" => (run_fact(data, "throw-shell-env") || {})["executed_marker"] }
       item("M6", pred: obs.keys.map { |k| [k, true] }.to_h, obs: obs, extra: extra)
@@ -334,12 +361,17 @@ module ProbeOpencode
       task_main = main_session(data, "task")
       task_idle = idle_for(data, "task")
       sessions = hooks(data, "task", "idle.session")
+      # idle の有無を見るのは、その前の操作 (turn / `!` / abort / permission の ask / task) が成り立った
+      # 証跡があるときだけ。操作の失敗を「idle が出ない」と数えない。
+      bang_ok = !bang_sid.nil? && serve.dig("shell", "status") == 200
+      abort_ok = !abort_sid.nil? && serve.dig("abort", "abort_status") == 200
+      asked = hooks(data, "ask", "event").any? { |h| h["type"] == "permission.asked" }
       obs = {
-        "idle_per_turn" => main ? idle_for(data, "tools-claude", main).length : nil,
-        "idle_after_bang" => bang_sid ? !idle_for(data, "serve-plugin", bang_sid).empty? : nil,
-        "idle_after_abort" => abort_sid ? !idle_for(data, "serve-plugin", abort_sid).empty? : nil,
-        "idle_after_permission_reject" => run_fact(data, "ask") ? !idle_for(data, "ask").empty? : nil,
-        "child_idle_delivered" => task_main ? task_idle.any? { |h| h["sessionID"] != task_main } : nil,
+        "idle_per_turn" => main && run_ok?(run_fact(data, "tools-claude")) ? idle_for(data, "tools-claude", main).length : nil,
+        "idle_after_bang" => bang_ok ? !idle_for(data, "serve-plugin", bang_sid).empty? : nil,
+        "idle_after_abort" => abort_ok ? !idle_for(data, "serve-plugin", abort_sid).empty? : nil,
+        "idle_after_permission_reject" => asked ? !idle_for(data, "ask").empty? : nil,
+        "child_idle_delivered" => task_main && run_ok?(run_fact(data, "task")) ? task_idle.any? { |h| h["sessionID"] != task_main } : nil,
         "child_parent_readable" => sessions.empty? ? nil : sessions.any? { |h| h["has_parentID"] },
       }
       pred = obs.keys.map { |k| [k, true] }.to_h.merge("idle_per_turn" => 1)
@@ -347,13 +379,17 @@ module ProbeOpencode
       item("M9", pred: pred, obs: obs, extra: extra)
     end
 
+    # 遅延の記録の有無を見るのは、対象の session が idle に達した (遅延の timer が張られた) ときだけ。
+    # run は正常に終わったことも前提にする (idle の前の timeout や異常終了を「打ち切り」と数えない)。
     def self.m10(data)
       main = main_session(data, "tools-claude")
+      run_idle = !main.nil? && run_ok?(run_fact(data, "tools-claude")) && !idle_for(data, "tools-claude", main).empty?
       serve = run_fact(data, "serve-plugin") || {}
       prompt_sid = serve.dig("prompt", "session_id")
+      serve_idle = !prompt_sid.nil? && serve.dig("prompt", "status") == 200 && !idle_for(data, "serve-plugin", prompt_sid).empty?
       obs = {
-        "run_delayed_recorded" => main ? hooks(data, "tools-claude", "idle.delayed").any? { |h| h["sessionID"] == main } : nil,
-        "serve_delayed_recorded" => prompt_sid ? hooks(data, "serve-plugin", "idle.delayed").any? { |h| h["sessionID"] == prompt_sid } : nil,
+        "run_delayed_recorded" => run_idle ? hooks(data, "tools-claude", "idle.delayed").any? { |h| h["sessionID"] == main } : nil,
+        "serve_delayed_recorded" => serve_idle ? hooks(data, "serve-plugin", "idle.delayed").any? { |h| h["sessionID"] == prompt_sid } : nil,
       }
       item("M10", pred: { "run_delayed_recorded" => false, "serve_delayed_recorded" => true }, obs: obs)
     end

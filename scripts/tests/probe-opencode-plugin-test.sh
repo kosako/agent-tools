@@ -28,6 +28,13 @@ expect_exit real-without-model 2 --stage real --real --out "$tmp/o-real"
 expect_exit out-in-worktree 2 --dry-run --stage mock --out "$repo_root/probe-out-should-not-exist"
 [ ! -e "$repo_root/probe-out-should-not-exist" ] || fail "T1: --out inside the worktree must not be created"
 expect_exit unknown-stage 2 --stage nope --out "$tmp/o"
+# 回帰 (#336 review F1): 親の env で git の探索を止めても、symlink を通しても、worktree の中は拒否する。
+status=0
+GIT_CEILING_DIRECTORIES="$repo_root" "$probe" --dry-run --stage mock --out "$repo_root/docs/probe-out-should-not-exist" > "$tmp/t1.out" 2>&1 || status=$?
+[ "$status" -eq 2 ] || fail "T1 ceiling: expected exit 2, got $status: $(cat "$tmp/t1.out")"
+ln -s "$repo_root/docs" "$tmp/docs-link"
+expect_exit symlink-into-worktree 2 --dry-run --stage mock --out "$tmp/docs-link/probe-out"
+expect_exit inside-git-dir 2 --dry-run --stage mock --out "$repo_root/.git/probe-out"
 expect_exit managed-pass-env 2 --stage real --real --model p/m --pass-env HOME --out "$tmp/o"
 mkdir -p "$tmp/nonempty" && : > "$tmp/nonempty/x"
 expect_exit nonempty-out 2 --dry-run --stage mock --out "$tmp/nonempty"
@@ -111,6 +118,8 @@ ruby "$helper" t3 "$tmp" || fail "T3"
 ruby "$helper" t4 "$tmp" || fail "T4"
 mkdir -p "$tmp/t5"
 ruby "$helper" t5 "$tmp/t5" || fail "T5"
+mkdir -p "$tmp/t8"
+ruby "$helper" t8 "$tmp/t8" || fail "T8"
 
 # --- T7: 記録の allowlist (plugin と mock の header) --------------------------------------
 if grep -q "$canary" "$tmp/mock-requests.jsonl"; then fail "T7: header canary leaked into mock-requests.jsonl"; fi
