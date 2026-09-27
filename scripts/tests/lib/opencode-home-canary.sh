@@ -2,10 +2,12 @@
 # opencode home の canary (#295)。書き込みの経路を持つ suite (sync-test / setup-test /
 # root-default-test) を偽の HOME の下で回し、既定の opencode home (<HOME>/.config/opencode) に
 # 置いた管理下の canary plugin が byte で残り、その下に entry が増減しないことを確かめる。
-# --opencode-home を 1 つ外した call site があると、既定の home (= 偽の HOME の下) に書く /
-# 消すので、ここで落ちる (sync --apply は plugins/personal-*.js を作り、sync --prune --apply は
-# marker つきの canary を orphan として消す)。読み取りだけの call site (status / doctor) は
-# ここでは捕まらないので scripts/tests/opencode-home-callsites-test.sh (静的な検査) が守る。
+# 捕まえる範囲: --opencode-home を外した call site のうち、既定の home (= 偽の HOME の下) に実際に
+# 書く / 消すもの。plugin を catalog に含む fixture の sync --apply (plugins/personal-*.js を作る) と、
+# 非空 catalog の sync --prune --apply (marker つきの canary を orphan として消す) がここで落ちる。
+# 既定の home に何も書かない call site (plugin を含まない fixture の --apply、空 catalog の fail-closed な
+# --prune、読み取りだけの status / doctor) はここでは捕まらないので、
+# scripts/tests/opencode-home-callsites-test.sh (静的な検査) が守る。
 #
 # CI では self-tests の loop とは別 step で実行する (tests/lib/ は loop の glob に乗らない)。
 # HOME を差し替えるのは、この canary と doctor-test の XDG case だけ (suite 本体では差し替え

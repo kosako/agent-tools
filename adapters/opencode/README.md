@@ -24,8 +24,8 @@ generated/opencode/plugins/
 - **plugin**: source (`shared/plugins/personal-<name>.js`。ESM、外部依存ゼロの単一 `.js`) を
   byte 保持で copy し、先頭に marker 行 1 行 + `"\n"` を前置する。2 行目以降は source の bytes と
   一致する。実行 bit は付けない (OpenCode が import する module で、単独で実行するものではない)。
-  directory 形式と `.ts` は非対応 (check-manifests が error にし、build は
-  `plugin must be a single .js file, not a directory` で skip する)。
+  directory 形式と `.ts` は非対応 (どちらも check-manifests が build 前の gate として error にする。build
+  単体の skip は directory format のときだけで、`plugin must be a single .js file, not a directory`)。
 - marker: 本体先頭の 1 行 JS ブロックコメント。生成と解析は `scripts/lib/plugin_marker.rb`
   (`PluginMarker.render` / `parse`) に集約し、instruction の HTML コメント marker
   (`InstructionMarker`) とは module を分ける (互いの marker を拒否する)。format は

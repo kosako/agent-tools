@@ -289,14 +289,17 @@ boundary でない)。
     で書き換えた出力を描き直さない (M11 / M17)。人が注記を見る経路は無い。
   - **trust gate が無く、置けばそのまま有効**: Codex の hook trust に相当するものは無く、`plugins/`
     の file は起動時に読まれる。外すには `opencode --pure` で起動するか、`sync --prune` で撤去する。
-    読込の失敗 ("Failed to load plugin") は log に出るだけで OpenCode は続行する (M2)。
+    読込に失敗した plugin があっても OpenCode は続行する (source の plugin/index.ts の読み。M2 で確かめたのは
+    init の throw が隔離され他の plugin が読まれることまでで、log への出力 ("Failed to load plugin") は
+    実機の smoke で確かめる)。
   - **user の `!` は対象外**: `!` (session.shell) と PTY は `tool.execute.*` を通らない (M5)。
   - **長い出力では注記が全文に付かない**: 出力が長いと OpenCode は全文を file に保存して切り詰めた
     もの (先頭が残る) を model に渡す。注記は切り詰め後の先頭に載るが、model が後でその file を
     read しても注記は付かない。
   - **後段の plugin が注記を消せる**: 読込順は global config → project config → global `plugins/` →
     project `.opencode/plugins/` で、後に読まれた plugin の after が `output.output` を置き換えれば
-    注記は消える (M2 で順を確認)。
+    注記は消える (plugins dir の global → project の順は M2 で確認。config 由来の plugin との前後は公式
+    docs の記述で、未実測)。
   - **fail-open の形**: script が無い (ENOENT) / 実行権限が無い / 非 0 終了 / stdout が JSON でない /
     timeout (plugin の定数。safe-gh-hook は 10 秒) のどれでも無変更で resolve し、throw しない
     (after の throw は実行済みでも tool 結果を error にする — M7)。warn は script ごとに 1 回だけ
