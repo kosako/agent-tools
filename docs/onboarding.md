@@ -12,7 +12,7 @@
 agent definitions / instruction templates / scripts) を **管理・運用するフレームワーク**です。
 asset を量産することが目的ではなく、**asset を安全に検証・生成・配置する仕組み**が本体です。
 
-- Codex と Claude Code の共通 source repository。
+- Codex と Claude Code の共通 source repository。OpenCode には plugin だけを配る (#295)。
 - `shared/` の source asset から、tool 別 artifact を生成して各 tool home に配置する。
 - public repository 前提。secrets / private planning 情報は tracked file に入れない。
 - `dotfiles` とは別 repository。境界は [boundary-with-dotfiles](boundary-with-dotfiles.md)。
@@ -28,7 +28,8 @@ shared/<category>/personal-*        ← source asset + manifest (sidecar .asset.
         │
         ▼  check-injection.sh       static prompt injection 検査 (CheckInjection::Runner)
         │
-        ▼  build.sh                 generated/<tool>/ に skill / instruction / script を生成 + marker 埋め込み
+        ▼  build.sh                 generated/<tool>/ に skill / instruction / script / plugin を生成 + marker 埋め込み
+        │                           (tool ごとに配れる kind は ArtifactTargets::TOOL_KINDS の組だけ)
         │
         ▼  register.sh              generated/catalog.json に「配ってよいか」を記録
         │
@@ -53,13 +54,14 @@ build 後・sync 前であればよく相互依存しない(図は直列に見�
 | 役割 | entrypoint | 実装 (module / 主要 method) |
 | --- | --- | --- |
 | asset の発見・読み込み (共通基盤) | — | `scripts/lib/assets.rb` (`Assets.load_all` / `manifest_paths` / `sources_by_name` / `manifest_digest`) |
-| artifact_kind / 配置先 path 解決 (共通基盤) | — | `scripts/lib/artifact_targets.rb` (`ArtifactTargets.resolve` / `target_path` / `CATALOG_VERSION`) |
+| artifact_kind / 配置先 path 解決 (共通基盤) | — | `scripts/lib/artifact_targets.rb` (`ArtifactTargets.resolve` / `target_path` / `TOOL_KINDS` / `tool_supports?` / `CATALOG_VERSION`) |
 | 致命 gate (安全判定の source of truth) | — | `scripts/lib/gate.rb` (`Gate.fatal_errors`) |
 | manifest schema 検証 | `check-manifests.sh` | `scripts/lib/check_manifests.rb` (`CheckManifests::Runner#run`) |
 | static prompt injection 検査 | `check-injection.sh` | `scripts/lib/check_injection.rb` (`CheckInjection::Runner#run`, `PATTERNS`) |
 | credential 隔離 acceptance 判定 | `check-credential-isolation.sh` | `scripts/lib/check_credential_isolation.rb` (`CheckCredentialIsolation.judge`) |
 | build (生成 + marker) | `build.sh` | `scripts/lib/build.rb` (`Build::Runner#run`, `Build.build_id_for`, `Build.run_gates`) |
 | instruction marker の生成・解析 | — | `scripts/lib/instruction_marker.rb` (`InstructionMarker.render` / `parse`) |
+| plugin marker (先頭 1 行 JS コメント) の生成・解析 | — | `scripts/lib/plugin_marker.rb` (`PluginMarker.render` / `parse` / `managed?` / `matches?`) |
 | register (catalog 生成) | `register.sh` | `scripts/lib/register.rb` (`Register::Runner#run`, `catalog_entries`) |
 | connect (instruction 所有確立) | `connect.sh` | `scripts/lib/connect.rb` (`Connect::Runner#plan` / `apply`) |
 | sync (配置) | `sync.sh` | `scripts/lib/sync.rb` (`Sync::Runner#plan` / `plan_for_entry` / `apply`) |
@@ -109,10 +111,16 @@ medium の扱いは段階で異なる:
 - 生成・配置対象は `personal-` prefix の asset のみ。
 - skill の配置先は `<tool home>/skills/personal-*` のみ。instruction は connect が確立した
   所有ファイル (`~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md`) のみ。script は
-  `<tool home>/agent-tools/scripts/personal-*` (sidecar marker つき)。禁止 target
-  (auth / cache / sessions / config 等) には構造的に到達しない。詳細は [sync-policy](sync-policy.md)。
-- agent-tools management marker (`.agent-tools-managed.yml`) を持つ target だけ更新。
-  unmanaged な同名 target / symlink は上書きせず conflict で停止。
+  `<tool home>/agent-tools/scripts/personal-*` (sidecar marker つき)。plugin は
+  `<opencode home>/plugins/personal-*.js` のみ (opencode home の `skills/` と `agent-tools/` は
+  走査しない)。禁止 target (auth / cache / sessions / config / OpenCode の `opencode.json` /
+  `node_modules` 等) には構造的に到達しない。詳細は [sync-policy](sync-policy.md)。
+- tool と artifact_kind の組は `ArtifactTargets::TOOL_KINDS` が正本 (codex / claude-code は
+  skill / instruction / script、opencode は plugin)。build の生成と prune、sync の plan と prune、
+  status の列挙、doctor の表示はこの組だけを回し、表に無い組は check-manifests が error にする
+  ([tool-compatibility](tool-compatibility.md))。
+- agent-tools management marker (`.agent-tools-managed.yml`、instruction / plugin は本体先頭の
+  1 行コメント) を持つ target だけ更新。unmanaged な同名 target / symlink は上書きせず conflict で停止。
 - sync は default dry-run。書き込みは `--apply` 明示が必須。
 
 ### 4.4 一貫した identity
@@ -130,10 +138,12 @@ medium の扱いは段階で異なる:
 | 生成 skill artifact + marker | `generated/<tool>/skills/` | no (ignored) | build |
 | 生成 instruction artifact + marker | `generated/<tool>/instructions/` | no (ignored) | build |
 | 生成 script artifact + sidecar marker | `generated/<tool>/scripts/` | no (ignored) | build |
+| 生成 plugin artifact (先頭行 marker) | `generated/opencode/plugins/` | no (ignored) | build |
 | catalog (登録状態) | `generated/catalog.json` | no (ignored) | register |
 | 配置済み skill | `~/.codex` `~/.claude` の `skills/personal-*` | — | sync (--apply) |
 | 配置済み instruction | `~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md` | — | connect (確立) / sync (更新) |
 | 配置済み script | `~/.codex` `~/.claude` の `agent-tools/scripts/personal-*` | — | sync (--apply) |
+| 配置済み plugin | `~/.config/opencode/plugins/personal-*.js` | — | sync (--apply) |
 | status JSON | stdout のみ | — | status |
 
 原則: **manifest = 人間が宣言する metadata、catalog = 機械が計測した結果**。
@@ -159,8 +169,8 @@ register / connect / sync / status / doctor / setup の 10 script が揃い、�
 self-test が対応して CI で回る (加えて配布 script asset の純ロジック test)。gate 一本化で
 安全判定が pipeline 全体で一貫した状態。
 
-`shared/` には実 asset が 21 個 (source kind は skill 11 / workflow 1 / instruction 1 / script 8) 入っている
-(2026-09-05、[Assets.load_all](../scripts/lib/assets.rb) による manifest 集計)。
+`shared/` には実 asset が 26 個 (source kind は skill 12 / workflow 1 / instruction 1 / script 11 / plugin 1) 入っている
+(2026-09-27、[Assets.load_all](../scripts/lib/assets.rb) による manifest 集計)。
 directory 形式 skill・複数 target・script kind (safe-gh / hook など)・content-bound human review gate
 を持つ medium asset (`personal-asset-miner` の runtime-state) まで、多様な asset 形状で
 pipeline を実証済み。skill 作成は skill-creator で `shared/skills/<name>/` に作り、
@@ -180,8 +190,11 @@ open issue の**正本は GitHub Issues** (この一覧は代表的な設計系�
 
 - **#43 external skill scanner 連携**: 設計確定済み、実装は需要待ち
   (script を含む skill を扱う時 or CI に pip 層を足す時)。
-- **#24 追加 artifact kind 対応**: skill / instruction / script は対応済み。残るは `agent`
-  kind の各 tool 形式へのマッピング設計 (需要待ち)。
+- **#24 追加 artifact kind 対応**: skill / instruction / script / plugin (OpenCode 専用, #295) は
+  対応済み。残るは `agent` kind の各 tool 形式へのマッピング設計 (需要待ち)。
+- **#295 OpenCode 対応**: PR 1 (配布の基盤と safe-gh の誘導) の後、PR 2 (品質ループ)、PR 3a
+  (shell.env の目印)、PR 3b (規約の文面) が続く。前提の実測は
+  [opencode-plugin-probe](opencode-plugin-probe.md)。
 
 ## 8. 開発ワークフロー
 

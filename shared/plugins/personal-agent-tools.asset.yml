@@ -1,0 +1,27 @@
+schema_version: 1
+name: personal-agent-tools
+kind: plugin
+visibility: personal
+targets:
+  - opencode
+risk:
+  prompt_injection: low
+  privacy: low
+# plugin kind は OpenCode の process の中で動く実行コード配布のため常に human review 必須 (#295)。
+# 本 plugin は #295 PR 1 で author≠reviewer レビューのうえ承認。承認は内容と配布形態に
+# 紐づく (#148, #184)。source 変更時は再レビューして approved_build_id を、kind 変更時は
+# approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:b34316b5e047aaa520233dd9b5d5688958f60f05c43b9e264de50e0964e0d8c6
+  approved_artifact_kind: plugin
+source:
+  path: shared/plugins/personal-agent-tools.js
+  format: text
+summary: >-
+  OpenCode plugin (v1 形、tool.execute.after だけ)。model の bash が gh コマンドを実行した後、
+  Claude Code target に配った personal-safe-gh-hook を同じ payload で呼び、その返す
+  additionalContext (personal-safe-gh で data として読む誘導) を tool 結果の先頭に載せる。
+  文言と判定は script のものをそのまま使い、plugin では持たない。fail-open (script が無い /
+  実行できない / 非 0 / 非 JSON / timeout はすべて無変更で、warn を script ごとに 1 回だけ
+  client.app.log に出す) で、steering であって enforcement ではない。--pure で外せる。

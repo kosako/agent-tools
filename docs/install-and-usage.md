@@ -25,6 +25,7 @@
 
 - Codex: `~/.codex`
 - Claude Code: `~/.claude`
+- OpenCode: `~/.config/opencode`(`XDG_CONFIG_HOME` は見ません。食い違いは `doctor` が warn)
 
 ## 何がどこに置かれるか
 
@@ -33,10 +34,19 @@
 | skill | `~/.codex/skills/personal-*` / `~/.claude/skills/personal-*` | `sync`(直接 create) |
 | instruction | `~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md`(人間の `~/.claude/CLAUDE.md` から `@agent-tools/CLAUDE.md` で import) | `connect`(初回所有)→ `sync`(更新) |
 | script | `~/.codex/agent-tools/scripts/personal-*` / `~/.claude/agent-tools/scripts/personal-*`(sidecar marker つき) | `sync`(直接 create) |
+| plugin(OpenCode のみ) | `~/.config/opencode/plugins/personal-*.js`(先頭 1 行が marker) | `sync`(直接 create。置くこと自体が OpenCode への登録) |
 
 skill は隔離 directory なので `sync` が直接置けますが、instruction は共有ファイル
 (`CLAUDE.md` / `AGENTS.md`)に載るため、**先に `connect` で所有を確立**してから
 `sync` が更新します。
+
+OpenCode には skill / instruction / script を配りません(OpenCode は `~/.claude/skills` と
+`~/.claude/CLAUDE.md` を直接読むため。[tool-compatibility.md](tool-compatibility.md))。plugin は
+Claude Code 側に配った `~/.claude/agent-tools/scripts/personal-*` を呼ぶので、OpenCode で効かせる
+には Claude Code target の `sync` も済んでいる必要があります。plugin を一時的に外すには `opencode --pure`
+で起動します。恒久に撤去するには、`shared/plugins/` の source と manifest を消して `register` し (catalog から
+消える)、`sync --prune --apply` で orphan として撤去します (`sync --prune` は catalog に残る現役の plugin を消さず、
+既定は dry-run です)。
 
 ## 初回インストール
 
@@ -161,9 +171,11 @@ echo "$status" | jq -r '
 | `skip ... (manifest changed; run scripts/register.sh first)` | register 後に manifest を変更した(登録判断が古い) | `./scripts/register.sh` で catalog を再生成 |
 | `conflict ... (existing target is unmanaged)` | 同名の手書き / 別管理ファイルがある | 中身を確認。agent-tools に委ねてよいなら退避してから再実行(無断上書きはしない) |
 | `conflict ... (existing target is a symlink)` | 所有先 / 親が symlink | symlink を解消するか、別 home を指定 |
+| `conflict ... (existing target is not a regular file)` | plugin の配置先が directory など regular file でない | 実体を確認し、agent-tools に委ねてよいなら退避してから再実行(無断削除はしない) |
 | `no catalog; run scripts/register.sh first` | catalog 未生成 | `./scripts/register.sh` |
 
-`--codex-home` / `--claude-home` で home を上書きできます(検証用)。
+`--codex-home` / `--claude-home` / `--opencode-home` で home を上書きできます(検証用。
+`--opencode-home` は sync / status / doctor / setup が受け付け、connect は受け付けません)。
 
 ## 関連ドキュメント
 

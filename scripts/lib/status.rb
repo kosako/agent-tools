@@ -19,6 +19,7 @@ require_relative "artifact_targets"
 require_relative "catalog"
 require_relative "yaml_marker"
 require_relative "instruction_marker"
+require_relative "plugin_marker"
 require_relative "cli"
 
 module Status
@@ -75,33 +76,45 @@ module Status
     end
 
     # generated artifacts の数と、source より古い (build_id 不一致) artifact の数。
-    # skill (directory) / instruction (単一ファイル) / script (単一ファイル + sidecar) を数える。
+    # skill (directory) / instruction (単一ファイル) / script (単一ファイル + sidecar) /
+    # plugin (先頭行 marker つき単一ファイル) を数える。列挙は TOOL_KINDS の組だけ
+    # (TOOLS × 全 kind ではない, #295)。
     def generated_state
       sources = safe_sources_by_name
       total = 0
       stale = 0
       ArtifactTargets::TOOLS.each do |tool|
-        Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "skill"), "*")).sort.each do |artifact|
-          next unless File.directory?(artifact)
-
-          total += 1
-          stale += 1 unless fresh?(artifact, sources)
-        end
-        Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "instruction"), "*")).sort.each do |artifact|
-          next unless File.file?(artifact)
-
-          total += 1
-          stale += 1 unless fresh_instruction?(artifact, sources)
-        end
-        Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "script"), "*")).sort.each do |artifact|
-          next unless File.file?(artifact)
-          next if artifact.end_with?(ArtifactTargets::MARKER_BASENAME) # sidecar marker は本体と一緒に数える
-
-          total += 1
-          stale += 1 unless fresh_script?(artifact, sources)
+        ArtifactTargets::TOOL_KINDS.fetch(tool).each do |kind|
+          generated_artifacts(tool, kind).each do |artifact|
+            total += 1
+            stale += 1 unless fresh_generated?(artifact, kind, sources)
+          end
         end
       end
       [total, stale]
+    end
+
+    # generated/<tool>/<kind の subdir>/ 直下の artifact 本体。skill は directory、それ以外は
+    # 単一ファイル (script の sidecar marker は本体と一緒に数えるので除く)。
+    def generated_artifacts(tool, kind)
+      Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, kind), "*")).sort.select do |artifact|
+        case kind
+        when "skill" then File.directory?(artifact)
+        when "script" then File.file?(artifact) && !artifact.end_with?(ArtifactTargets::MARKER_BASENAME)
+        else File.file?(artifact)
+        end
+      end
+    end
+
+    # kind ごとの marker の置き場 (dir 直下 / sidecar / ファイル内コメント) に応じた鮮度判定。
+    def fresh_generated?(artifact, kind, sources)
+      case kind
+      when "skill" then fresh?(artifact, sources)
+      when "instruction" then fresh_instruction?(artifact, sources)
+      when "script" then fresh_script?(artifact, sources)
+      when "plugin" then fresh_plugin?(artifact, sources)
+      else raise ArgumentError, "no freshness check for artifact_kind #{kind.inspect}"
+      end
     end
 
     # 壊れた / 型不正な manifest があっても status report を落とさない。source を解決できない
@@ -141,8 +154,16 @@ module Status
       false
     end
 
+    # plugin (先頭行の JS コメント marker) の鮮度判定。marker は bytes のまま読む (build と同じ)。
+    def fresh_plugin?(path, sources)
+      marker_fresh?(PluginMarker.parse(File.binread(path)), sources)
+    rescue StandardError
+      # fresh? と同じく best-effort: 検証不能なら stale 扱い。
+      false
+    end
+
     # marker (nil 可) の name から source manifest を引き、build_id が現在の source 内容と
-    # 一致するか。marker 形式 (YAML / HTML コメント) に依らない鮮度判定の共通 tail。
+    # 一致するか。marker 形式 (YAML / HTML コメント / JS コメント) に依らない鮮度判定の共通 tail。
     def marker_fresh?(marker, sources)
       return false unless marker
 
@@ -214,7 +235,7 @@ module Status
   def self.main(argv)
     opts = Cli.parse(argv, usage: USAGE,
                      bool_flags: %w[--json],
-                     value_flags: %w[--root --codex-home --claude-home])
+                     value_flags: %w[--root --codex-home --claude-home --opencode-home])
     return 0 if opts == :help
 
     root = opts["--root"] || Cli::DEFAULT_ROOT
@@ -222,6 +243,7 @@ module Status
     homes = ArtifactTargets.default_homes
     homes["codex"] = File.expand_path(opts["--codex-home"]) if opts["--codex-home"]
     homes["claude-code"] = File.expand_path(opts["--claude-home"]) if opts["--claude-home"]
+    homes["opencode"] = File.expand_path(opts["--opencode-home"]) if opts["--opencode-home"]
 
     report = Runner.new(root, homes).report
     if json
@@ -244,7 +266,7 @@ module Status
     end
   end
 
-  USAGE = "usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR]"
+  USAGE = "usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR] [--opencode-home DIR]"
 end
 
 exit Status.main(ARGV) if $PROGRAM_NAME == __FILE__

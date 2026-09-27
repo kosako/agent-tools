@@ -16,6 +16,7 @@ require_relative "assets"
 require_relative "gate"
 require_relative "artifact_targets"
 require_relative "instruction_marker"
+require_relative "plugin_marker"
 require_relative "yaml_marker"
 require_relative "cli"
 
@@ -33,6 +34,14 @@ module Build
       Assets.load_all(@root).each do |asset|
         asset[:targets].each do |tool|
           artifact_kind = ArtifactTargets.resolve(asset, tool)
+          # unsupported (agent 等) と、supported でも tool の表 (TOOL_KINDS) に無い組 (plugin →
+          # codex 等) は生成しない。後者は check-manifests が gate で止めるので通常は到達しないが、
+          # 生成の走査が TOOLS × 全 kind にならないことを Runner 単体でも保証する (#295)。
+          unless ArtifactTargets.tool_supports?(tool, artifact_kind)
+            @skipped << "#{asset[:manifest_path]}: unsupported artifact_kind " \
+                        "#{artifact_kind.inspect} for #{tool}"
+            next
+          end
           case artifact_kind
           when "skill"
             build_skill(tool, asset)
@@ -40,9 +49,11 @@ module Build
             build_instruction(tool, asset)
           when "script"
             build_script(tool, asset)
+          when "plugin"
+            build_plugin(tool, asset)
           else
-            @skipped << "#{asset[:manifest_path]}: unsupported artifact_kind " \
-                        "#{artifact_kind.inspect} for #{tool}"
+            # TOOL_KINDS に kind を足したのに builder を足し忘れた実装ミス。黙って skip しない。
+            raise ArgumentError, "no builder for artifact_kind #{artifact_kind.inspect}"
           end
         end
       end
@@ -118,6 +129,28 @@ module Build
       @built << rel(out)
     end
 
+    # plugin asset を OpenCode の plugins/<name>.js として生成する。所有 marker は先頭行の JS
+    # ブロックコメント (PluginMarker) で本体に埋め、2 行目以降は source の bytes をそのまま保つ
+    # (byte 単位で保持し、encoding の変換や改行の正規化をしない)。OpenCode が import して読む
+    # file で実行ファイルではないので、実行ビットは立てない (mode 0644)。
+    def build_plugin(tool, asset)
+      name = asset[:name]
+      source = asset[:source]["path"]
+      format = asset[:source]["format"]
+      if format == "directory"
+        @skipped << "#{asset[:manifest_path]}: plugin must be a single .js file, not a directory"
+        return
+      end
+
+      out = ArtifactTargets.generated_path(@root, tool, name, "plugin")
+      FileUtils.mkdir_p(File.dirname(out))
+      build_id = Build.build_id_for(@root, source, format)
+      marker = PluginMarker.render(name: name, target: tool, source: source, build_id: build_id)
+      File.binwrite(out, "#{marker}\n".b + File.binread(File.join(@root, source)))
+      File.chmod(0o644, out)
+      @built << rel(out)
+    end
+
     # instruction 本体の先頭に管理 marker (HTML コメント) を 1 行入れる。
     # marker format は InstructionMarker に集約し、connect / sync が同じ解析を使う。
     def instruction_with_marker(content, name, tool, source, build_id)
@@ -161,77 +194,124 @@ module Build
     public
 
     # 現在の manifests に対応しない generated artifacts を削除する。
-    # 削除するのは agent-tools marker を持つ directory のみ。
-    # marker のない directory は warning として返し、残す。
+    # 削除するのは agent-tools marker を持つものだけ。marker のない directory / file は
+    # warning として返し、残す。走査は TOOL_KINDS の組だけを回す (TOOLS × 全 kind ではない, #295)。
     def prune
-      expected = Hash.new { |h, k| h[k] = [] }
-      script_expected = Hash.new { |h, k| h[k] = [] }
-      instruction_expected = Hash.new(false)
-      Assets.load_all(@root).each do |asset|
-        (asset[:targets] || []).each do |tool|
-          case ArtifactTargets.resolve(asset, tool)
-          when "instruction" then instruction_expected[tool] = true
-          when "script" then script_expected[tool] << asset[:name]
-          when "skill" then expected[tool] << asset[:name]
-          # unsupported は build しないので期待リストに入れない。else で skill 扱いすると
-          # kind 変更 (skill→agent 等) 後の stale な generated/<tool>/skills/<name> が
-          # prune 保護されて残ってしまう。
-          end
-        end
-      end
-
+      expected = expected_names
       pruned = []
       kept = []
       TOOLS.each do |tool|
-        # skill: manifest に対応しない generated directory を削除する。
-        # (skill -> instruction 転換で残った stale skill もここで消える)
-        Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "skill"), "*")).sort.each do |dir|
-          next unless File.directory?(dir)
-          next if expected[tool].include?(File.basename(dir))
-
-          if managed_marker?(dir)
-            FileUtils.rm_rf(dir)
-            pruned << rel(dir)
-          else
-            kept << rel(dir)
-          end
-        end
-
-        # script: manifest に対応しない managed script (と sidecar marker) を削除する。
-        # sidecar marker file 自体は本体と一緒に処理するため列挙対象から外す。
-        Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "script"), "*")).sort.each do |path|
-          next unless File.file?(path)
-          next if path.end_with?(ArtifactTargets::MARKER_BASENAME)
-          next if script_expected[tool].include?(File.basename(path))
-
-          if script_managed_marker?(path)
-            FileUtils.rm_f(path)
-            FileUtils.rm_f(ArtifactTargets.sidecar_marker_path(path))
-            pruned << rel(path)
-          else
-            kept << rel(path)
-          end
-        end
-
-        # instruction: 期待する canonical ファイル (INSTRUCTION_FILENAMES) 以外の
-        # marker 付きファイルを削除する。instruction asset が無ければ canonical も対象。
-        keep = instruction_expected[tool] ? ArtifactTargets::INSTRUCTION_FILENAMES[tool] : nil
-        Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "instruction"), "*")).sort.each do |file|
-          next unless File.file?(file)
-          next if keep && File.basename(file) == keep
-
-          if InstructionMarker.parse(File.read(file))
-            FileUtils.rm_f(file)
-            pruned << rel(file)
-          else
-            kept << rel(file)
-          end
+        ArtifactTargets::TOOL_KINDS.fetch(tool).each do |kind|
+          removed, left =
+            case kind
+            when "skill" then prune_skills(tool, expected[tool][kind])
+            when "script" then prune_scripts(tool, expected[tool][kind])
+            when "instruction" then prune_instructions(tool, expected[tool][kind])
+            when "plugin" then prune_plugins(tool, expected[tool][kind])
+            else raise ArgumentError, "no prune for artifact_kind #{kind.inspect}"
+            end
+          pruned.concat(removed)
+          kept.concat(left)
         end
       end
       [pruned, kept]
     end
 
     private
+
+    # tool × artifact_kind ごとに、現在の manifests が期待する artifact 名。
+    # unsupported は build しないので期待リストに入れない。else で skill 扱いすると kind 変更
+    # (skill→agent 等) 後の stale な generated/<tool>/skills/<name> が prune 保護されて残ってしまう。
+    def expected_names
+      expected = Hash.new { |by_tool, tool| by_tool[tool] = Hash.new { |by_kind, kind| by_kind[kind] = [] } }
+      Assets.load_all(@root).each do |asset|
+        (asset[:targets] || []).each do |tool|
+          kind = ArtifactTargets.resolve(asset, tool)
+          expected[tool][kind] << asset[:name] if ArtifactTargets.supported?(kind)
+        end
+      end
+      expected
+    end
+
+    # skill: manifest に対応しない generated directory を削除する。
+    # (skill -> instruction 転換で残った stale skill もここで消える)
+    def prune_skills(tool, names)
+      pruned = []
+      kept = []
+      Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "skill"), "*")).sort.each do |dir|
+        next unless File.directory?(dir)
+        next if names.include?(File.basename(dir))
+
+        if managed_marker?(dir)
+          FileUtils.rm_rf(dir)
+          pruned << rel(dir)
+        else
+          kept << rel(dir)
+        end
+      end
+      [pruned, kept]
+    end
+
+    # script: manifest に対応しない managed script (と sidecar marker) を削除する。
+    # sidecar marker file 自体は本体と一緒に処理するため列挙対象から外す。
+    def prune_scripts(tool, names)
+      pruned = []
+      kept = []
+      Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "script"), "*")).sort.each do |path|
+        next unless File.file?(path)
+        next if path.end_with?(ArtifactTargets::MARKER_BASENAME)
+        next if names.include?(File.basename(path))
+
+        if script_managed_marker?(path)
+          FileUtils.rm_f(path)
+          FileUtils.rm_f(ArtifactTargets.sidecar_marker_path(path))
+          pruned << rel(path)
+        else
+          kept << rel(path)
+        end
+      end
+      [pruned, kept]
+    end
+
+    # instruction: 期待する canonical ファイル (INSTRUCTION_FILENAMES) 以外の
+    # marker 付きファイルを削除する。instruction asset が無ければ canonical も対象。
+    def prune_instructions(tool, names)
+      pruned = []
+      kept = []
+      keep = names.empty? ? nil : ArtifactTargets::INSTRUCTION_FILENAMES[tool]
+      Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "instruction"), "*")).sort.each do |file|
+        next unless File.file?(file)
+        next if keep && File.basename(file) == keep
+
+        if InstructionMarker.parse(File.read(file))
+          FileUtils.rm_f(file)
+          pruned << rel(file)
+        else
+          kept << rel(file)
+        end
+      end
+      [pruned, kept]
+    end
+
+    # plugin: manifest に対応しない managed plugin を削除する。管理の判定は先頭行の marker
+    # (PluginMarker.parse)。marker が無い / 壊れている file は残す。
+    def prune_plugins(tool, names)
+      pruned = []
+      kept = []
+      expected_files = names.map { |name| ArtifactTargets.plugin_filename(name) }
+      Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "plugin"), "*")).sort.each do |path|
+        next unless File.file?(path)
+        next if expected_files.include?(File.basename(path))
+
+        if PluginMarker.parse(File.binread(path))
+          FileUtils.rm_f(path)
+          pruned << rel(path)
+        else
+          kept << rel(path)
+        end
+      end
+      [pruned, kept]
+    end
 
     # directory artifact (skill) の marker が agent-tools 管理を示すか。
     def managed_marker?(dir)

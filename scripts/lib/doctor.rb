@@ -16,6 +16,7 @@ require_relative "status"
 require_relative "build"
 require_relative "artifact_targets"
 require_relative "catalog"
+require_relative "plugin_marker"
 require_relative "cli"
 
 module Doctor
@@ -26,10 +27,13 @@ module Doctor
   end
 
   class Runner
-    def initialize(root, homes, agents_home)
+    # xdg_opencode_mismatch: main が境界で解決した「--opencode-home を省いて既定の home を使い、
+    # かつ $XDG_CONFIG_HOME/opencode が既定と食い違う」の判定 (#295)。
+    def initialize(root, homes, agents_home, xdg_opencode_mismatch:)
       @root = File.expand_path(root)
       @homes = homes
       @agents_home = agents_home
+      @xdg_opencode_mismatch = xdg_opencode_mismatch
       @lines = []
     end
 
@@ -91,12 +95,41 @@ module Doctor
     def check_tool_homes
       @homes.each do |tool, home|
         if File.directory?(home)
-          skills = File.join(home, "skills")
-          count = File.directory?(skills) ? Dir.glob(File.join(skills, "personal-*")).size : 0
-          report("ok", "home", "[#{tool}] #{tilde(home)} present, #{count} personal skill(s)")
+          report("ok", "home", "[#{tool}] #{tilde(home)} present, #{deployed_summary(tool, home)}")
         else
           report("info", "home", "[#{tool}] #{tilde(home)} not present (tool not installed?)")
         end
+        next unless tool == "opencode" && @xdg_opencode_mismatch
+
+        # OpenCode は XDG_CONFIG_HOME を尊重するが、agent-tools は ~/.config/opencode に固定する
+        # (ArtifactTargets.default_homes)。食い違うと sync が置いた plugin を OpenCode が読まない。
+        # path は出さない (XDG の値は tilde に畳めない生の path になりうる)。
+        report("warn", "home",
+               "[opencode] $XDG_CONFIG_HOME/opencode differs from the default ~/.config/opencode " \
+               "(OpenCode reads the XDG dir; pass --opencode-home to point agent-tools at it)")
+      end
+    end
+
+    # home に配置済みの personal asset の数。数える kind は TOOL_KINDS に従う: skill を配る tool は
+    # skills/personal-* の数、plugin を配る tool (opencode) は plugins/personal-*.js のうち先頭行
+    # marker がその tool の管理を示すものの数 (OpenCode の plugins/ は user も file を置く dir なので、
+    # 名前だけでは数えない, #295)。
+    def deployed_summary(tool, home)
+      if ArtifactTargets.tool_supports?(tool, "skill")
+        skills = File.join(home, "skills")
+        count = File.directory?(skills) ? Dir.glob(File.join(skills, "personal-*")).size : 0
+        "#{count} personal skill(s)"
+      elsif ArtifactTargets.tool_supports?(tool, "plugin")
+        "#{managed_plugin_count(tool, home)} personal plugin(s)"
+      else
+        raise ArgumentError, "no home summary for #{tool}"
+      end
+    end
+
+    def managed_plugin_count(tool, home)
+      Dir.glob(File.join(home, "plugins", ArtifactTargets.plugin_filename("personal-*"))).count do |path|
+        # 数える条件は sync の所有判定と同じ (marker の target と、file 名と同じ name)。
+        File.file?(path) && PluginMarker.managed?(File.binread(path), tool, File.basename(path, ".js"))
       end
     end
 
@@ -214,16 +247,19 @@ module Doctor
 
   def self.main(argv)
     opts = Cli.parse(argv, usage: USAGE,
-                     value_flags: %w[--root --codex-home --claude-home --agents-home])
+                     value_flags: %w[--root --codex-home --claude-home --opencode-home --agents-home])
     return 0 if opts == :help
 
     root = opts["--root"] || Cli::DEFAULT_ROOT
     homes = ArtifactTargets.default_homes
     homes["codex"] = File.expand_path(opts["--codex-home"]) if opts["--codex-home"]
     homes["claude-code"] = File.expand_path(opts["--claude-home"]) if opts["--claude-home"]
+    homes["opencode"] = File.expand_path(opts["--opencode-home"]) if opts["--opencode-home"]
     agents_home = File.expand_path(opts["--agents-home"] || "~/.agents")
+    # --opencode-home を渡したときは user が home を明示しているので XDG との食い違いは見ない。
+    xdg_mismatch = !opts.key?("--opencode-home") && xdg_opencode_home_differs?(homes["opencode"])
 
-    lines = Runner.new(root, homes, agents_home).run
+    lines = Runner.new(root, homes, agents_home, xdg_opencode_mismatch: xdg_mismatch).run
     lines.each { |line| puts line }
 
     if lines.any? { |l| l.level == "fail" }
@@ -235,7 +271,17 @@ module Doctor
     end
   end
 
-  USAGE = "usage: doctor.sh [--root DIR] [--codex-home DIR] [--claude-home DIR] [--agents-home DIR]"
+  # $XDG_CONFIG_HOME/opencode (OpenCode が実際に読む config dir) が既定の home と別か。空の
+  # XDG_CONFIG_HOME は未設定と同じ (XDG Base Directory spec)。
+  def self.xdg_opencode_home_differs?(default_home)
+    xdg = ENV["XDG_CONFIG_HOME"].to_s
+    return false if xdg.empty?
+
+    File.expand_path("opencode", xdg) != default_home
+  end
+
+  USAGE = "usage: doctor.sh [--root DIR] [--codex-home DIR] [--claude-home DIR] [--opencode-home DIR] " \
+          "[--agents-home DIR]"
 end
 
 exit Doctor.main(ARGV) if $PROGRAM_NAME == __FILE__

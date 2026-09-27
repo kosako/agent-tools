@@ -61,6 +61,10 @@ dotfiles 側の実装は含めません。
 
 - `contract_version`: この contract の version。現行は `3`
   (v2 で `register` を追加、v3 で target state に `deployed_but_inactive` を追加 #186)。
+  `plugin` kind と `opencode` target (#295) では上げていない: field の集合も値の意味も変わらず、
+  `sync_targets[].tool` の値に `opencode` が増えるだけで、旧 reader (dotfiles の doctor) の解釈が
+  壊れないため (version を上げると dotfiles の doctor が status を解釈しなくなる。
+  [Register / Catalog](register-catalog.md)「catalog_version は上げない」と同じ判断)。
 - `repo.present`: agent-tools repository が存在するか。
 - `repo.clean`: working tree が clean か。
 - `assets.total`: tracked manifest の数。
@@ -71,6 +75,8 @@ dotfiles 側の実装は含めません。
 - `register.*`: [catalog](register-catalog.md) の summary。target-artifact 単位の
   `registered` / `human_review_required` / `unsupported` のカウント。catalog 不在時や
   `catalog_version` 不一致時は `catalog_present: false` と zero counts。
+- `sync_targets[].tool`: `codex` / `claude-code` / `opencode` (`ArtifactTargets::TOOLS`)。opencode の
+  行は plugin (`plugins/personal-<name>.js`) を指す。
 - `sync_targets[].state`: 後述の target state。
 
 ### Target state
@@ -118,6 +124,31 @@ build_id: sha256:...
 配置先は `<tool home>/agent-tools/scripts/<name>` (本体) と同 `<name>.agent-tools-managed.yml`
 (sidecar)。本体は実行可能 (mode 0755) で配置します。
 
+### Single-file artifact (plugin): 先頭 1 行の JS ブロックコメント marker (#295)
+
+OpenCode の plugin (`plugins/personal-<name>.js`) は、file 先頭の 1 行に JS ブロックコメントの
+marker を埋め込みます。OpenCode は `plugins/*.js` を import するので sidecar を置くと別 file と
+して読まれうるため、本体側に持たせます (instruction と同じ「本体先頭 1 行」戦略。ただし export に
+はしない)。2 行目以降は source の bytes をそのまま保ちます。
+
+```javascript
+/* agent-tools:managed v=1 repo=agent-tools name=personal-example target=opencode artifact_kind=plugin source=shared/plugins/personal-example.js build_id=sha256:... */
+```
+
+生成・解析は `scripts/lib/plugin_marker.rb` (`PluginMarker.render` / `parse` / `managed?` /
+`matches?`) に集約し、build (生成) と sync / status / doctor (所有・鮮度判定) が共有します。
+instruction の `InstructionMarker` とは module を分け、互いの marker を拒否します
+(`InstructionMarker.parse` は plugin marker に nil、`PluginMarker.parse` は instruction marker に
+nil)。InstructionMarker の挙動 (先頭行の strip / CRLF 受容 / 非 UTF-8 の scrub) は変えません。
+
+解析は先頭行 (最初の `\n` の手前) だけを厳密に読み、次のどれかに当たれば marker 無し
+(unmanaged = sync では conflict、prune では skip) と判定します: 先頭行が `/* agent-tools:managed ` で
+始まらない / ` */` で終わらない、先頭行に制御文字 (`\r` / `\t` を含む) がある、先頭行が UTF-8 と
+して不正、token が単一空白区切りでない、`key=value` の形でない・value が空、key の重複、key の
+集合が `v repo name target artifact_kind source build_id` と完全一致しない (余分な key を含む)、
+`v` が `1` でない、`repo` が `agent-tools` でない、`artifact_kind` が `plugin` でない、`build_id` が
+`sha256:` で始まらない、`source` が `/` で始まる。2 行目以降にある marker は見ません。
+
 ### Directory artifact
 
 directory 直下に `.agent-tools-managed.yml` を置きます。
@@ -134,7 +165,7 @@ build_id: sha256:...
 
 - `repo` は固定で `agent-tools`。
 - `name` は manifest の `name` と一致させる。
-- `target` は manifest の `targets` のいずれかと一致させる。
+- `target` は manifest の `targets` のいずれかと一致させる (plugin は `opencode` のみ)。
 - `source` は repository root からの relative path。absolute path は禁止。
 - `build_id` は source content の sha256。stale 判定に使う。
 - marker を持たない同名 target は `conflict` とし、sync は停止する。

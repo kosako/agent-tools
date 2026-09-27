@@ -74,7 +74,7 @@ registration は target-artifact 単位で決まります。
 | value | 意味 |
 | --- | --- |
 | `registered` | sync が配置してよい。 |
-| `human_review_required` | human review が未解決 (medium finding / medium・unknown の宣言 risk / script artifact)。sync は配置しない。 |
+| `human_review_required` | human review が未解決 (medium finding / medium・unknown の宣言 risk / script・plugin artifact)。sync は配置しない。 |
 | `unsupported` | その target では artifact を build できない (artifact_kind 非対応 / instruction が directory format など)。sync は配置しない。 |
 
 ### ビルド可能性の証明 (registered != buildable を防ぐ)
@@ -155,18 +155,36 @@ enforce する。static finding と宣言 risk の厳しい方が勝つ。
   `registered`、それ以外は `human_review_required`。上記「承認は内容と配布形態に紐づく」参照)。
 - 両方 `low` → finding がなければ `registered`。
 
-## script artifact は常に human review 必須
+## script / plugin artifact は常に human review 必須
 
-いずれかの target が `artifact_kind: script` に解決される asset は実行コードの配布で、
-static check が当てられるのは injection 文言 pattern のみ (コードの悪性は検査できない。
-[prompt-injection-check.md](prompt-injection-check.md) の honest-label 参照)。directory skill の
-`scripts/` を #43 まで fail-closed にしているのと対称に、宣言 risk / finding の有無によらず
-human review 必須として扱う (承認が有効 = `approved` かつ `approved_build_id` /
+いずれかの target が `artifact_kind: script` または `artifact_kind: plugin` に解決される asset は
+実行コードの配布で、static check が当てられるのは injection 文言 pattern のみ (コードの悪性は
+検査できない。[prompt-injection-check.md](prompt-injection-check.md) の honest-label 参照)。
+directory skill の `scripts/` を #43 まで fail-closed にしているのと対称に、宣言 risk / finding の
+有無によらず human review 必須として扱う (承認が有効 = `approved` かつ `approved_build_id` /
 `approved_artifact_kind` 一致なら `registered`、それ以外は `human_review_required`)。
+plugin は置いた時点で OpenCode の process の中で動く実行コードになる (trust gate が無く、
+`plugins/` に file があればそのまま読み込まれる) ので、risk が `low` でも例外にしない (#295)。
 判定は manifest の `kind` でなく **resolve 後の artifact_kind** で行う (配布形態の
-実体は resolve 結果が単一の真実)。なお `compatibility` override による script 化は
-check-manifests が manifest error として弾く (#184) ので通常ここまで来ないが、
-register 側の判定も resolve 基準のまま残す (defense in depth)。
+実体は resolve 結果が単一の真実。実装は `Register::Runner#review_needed?`)。なお `compatibility`
+override による script / plugin 化は check-manifests が manifest error として弾く (#184) ので
+通常ここまで来ないが、register 側の判定も resolve 基準のまま残す (defense in depth)。
+
+plugin の entry は `target: opencode` / `artifact_kind: plugin` / `kind: plugin` で、key の集合と順は
+他の kind と同じ。exit code も同じ (human_review_required があれば 3)。
+
+### plugin を足しても catalog_version は上げない (#295)
+
+`plugin` kind と `opencode` target を足しても `catalog_version` は 4 のまま。version を上げるのは、
+**新しい reader (sync / status / doctor) が旧 catalog を誤読しうるとき** で、今回は entry の key 集合も
+`build_id` の決め方 (format `text` の単一 file 経路。marker 行は含めない) も変わらないので、この PR より
+前に register した catalog も新しい reader は正しく読める。script kind を足した #134 でも上げていない。
+同じ理由で status の `contract_version` も 3 のまま ([Status / Manifest Contract](status-manifest-contract.md))。
+
+逆方向 (この PR より前の reader が、`target: opencode` を含む新しい catalog を読む) の互換性は保証しない。
+旧 reader は `opencode` を tool として知らず、home の解決 (`@homes.fetch`) で止まる。reader と catalog は同じ
+checkout の `register` で一緒に更新されるので、この混在は想定しない (catalog は generated/ にあり、tracked
+ではない)。
 
 ## Check 結果の書き戻し方針
 

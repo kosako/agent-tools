@@ -48,18 +48,18 @@ run_script register.sh
   || fail "register should register the fixture repo: $(cat "$tmp/out")"
 [ -f "$repo/generated/catalog.json" ] || fail "catalog should land in the fixture repo"
 
-run_script status.sh --json --codex-home "$tmp/codex" --claude-home "$tmp/claude"
+run_script status.sh --json --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode"
 [ "$rc" = 0 ] || fail "status should succeed: $(cat "$tmp/out")"
 [ "$(jget "$tmp/out" repo present)" = "true" ] || fail "status should see shared/ of the fixture repo: $(cat "$tmp/out")"
 
-run_script doctor.sh --codex-home "$tmp/codex" --claude-home "$tmp/claude" --agents-home "$tmp/agents"
+run_script doctor.sh --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" --agents-home "$tmp/agents"
 grep -q "ok: repo: present=true" "$tmp/out" || fail "doctor should see the fixture repo: $(cat "$tmp/out")"
 
 run_script connect.sh --codex-home "$tmp/codex" --claude-home "$tmp/claude"
 [ "$rc" = 0 ] && grep -q "create: \[claude-code\] owned" "$tmp/out" \
   || fail "connect should plan from the fixture repo's artifacts: $(cat "$tmp/out")"
 
-run_script sync.sh --codex-home "$tmp/codex" --claude-home "$tmp/claude"
+run_script sync.sh --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode"
 [ "$rc" = 0 ] && grep -q "(run connect first)" "$tmp/out" \
   || fail "sync should read the fixture repo's catalog: $(cat "$tmp/out")"
 
@@ -81,7 +81,7 @@ run_script register.sh --root "$noshared"
 grep -q "no shared/ directory under root" "$tmp/out" || fail "register should say why: $(cat "$tmp/out")"
 [ ! -e "$noshared/generated" ] || fail "register must not write a catalog without shared/"
 
-run_script setup.sh --root "$noshared" --codex-home "$tmp/codex" --claude-home "$tmp/claude"
+run_script setup.sh --root "$noshared" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode"
 [ "$rc" != 0 ] || fail "setup should stop without shared/: $(cat "$tmp/out")"
 [ ! -e "$noshared/generated" ] || fail "setup must not write generated/ without shared/"
 

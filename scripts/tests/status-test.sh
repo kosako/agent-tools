@@ -16,7 +16,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 
 run_status() {
-  "$status_sh" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --json
+  "$status_sh" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" --json
 }
 
 # JSON から値を取り出す。
@@ -47,7 +47,7 @@ run_status > "$tmp/s2" 2>&1
 [ "$(jget "$tmp/s2" sync_targets 0 state)" = '"missing"' ] || fail "target should be missing"
 
 # --- case 3: sync apply 後は managed ---
-"$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --apply --quiet > /dev/null
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" --apply --quiet > /dev/null
 run_status > "$tmp/s3" 2>&1
 [ "$(jget "$tmp/s3" sync_targets 0 state)" = '"managed"' ] || fail "target should be managed"
 [ "$(jget "$tmp/s3" sync_targets 1 state)" = '"managed"' ] || fail "both targets should be managed"
@@ -115,19 +115,21 @@ grep -q "$tmp" "$tmp/s3" && fail "status output must not contain absolute paths"
 grep -qiE "token|credential|api[_-]?key" "$tmp/s3" && fail "status output must not contain secret-like keys"
 
 # --- case 9: repository 本体で contract JSON が出る ---
-"$status_sh" --root "$repo_root" --json > "$tmp/s9" 2>&1 || fail "repo status should succeed"
+mkdir -p "$tmp/s9codex" "$tmp/s9claude" "$tmp/s9opencode"
+"$status_sh" --root "$repo_root" --json --codex-home "$tmp/s9codex" --claude-home "$tmp/s9claude" \
+  --opencode-home "$tmp/s9opencode" > "$tmp/s9" 2>&1 || fail "repo status should succeed"
 [ "$(jget "$tmp/s9" repo present)" = "true" ] || fail "repo.present should be true"
 
 # --- case 10: instruction の generated も generated.total に数える ---
 mkdir -p "$tmp/icodex" "$tmp/iclaude"
 make_demo_repo "$tmp/irepo" instructions personal-ops instruction '# ops'
 "$build" --root "$tmp/irepo" --quiet > /dev/null
-"$status_sh" --root "$tmp/irepo" --codex-home "$tmp/icodex" --claude-home "$tmp/iclaude" --json > "$tmp/is10" 2>&1
+"$status_sh" --root "$tmp/irepo" --codex-home "$tmp/icodex" --claude-home "$tmp/iclaude" --opencode-home "$tmp/iopencode" --json > "$tmp/is10" 2>&1
 [ "$(jget "$tmp/is10" generated total)" = "2" ] || fail "instruction generated should count (2 targets): $(cat "$tmp/is10")"
 [ "$(jget "$tmp/is10" generated stale)" = "0" ] || fail "fresh instruction should not be stale"
 # source 変更で instruction も stale になる
 echo "changed" >> "$tmp/irepo/shared/instructions/personal-ops.md"
-"$status_sh" --root "$tmp/irepo" --codex-home "$tmp/icodex" --claude-home "$tmp/iclaude" --json > "$tmp/is10b" 2>&1
+"$status_sh" --root "$tmp/irepo" --codex-home "$tmp/icodex" --claude-home "$tmp/iclaude" --opencode-home "$tmp/iopencode" --json > "$tmp/is10b" 2>&1
 [ "$(jget "$tmp/is10b" generated stale)" = "2" ] || fail "changed instruction source should be stale: $(cat "$tmp/is10b")"
 
 # --- case 11: 壊れた (malformed YAML) manifest があっても status は crash しない (B1) ---
@@ -140,7 +142,7 @@ write_asset_manifest "$tmp/brepo/shared/workflows/personal-demo.asset.yml" \
 "$build" --root "$tmp/brepo" --quiet > /dev/null   # generated artifact を作る (fresh? が走る)
 # manifest を malformed YAML に壊す (load_all が Psych::SyntaxError を raise する状況)
 printf 'name: personal-demo\nkind: [unbalanced\n   : :\n' > "$tmp/brepo/shared/workflows/personal-demo.asset.yml"
-"$status_sh" --root "$tmp/brepo" --codex-home "$tmp/bcodex" --claude-home "$tmp/bclaude" --json > "$tmp/s11" 2>&1 \
+"$status_sh" --root "$tmp/brepo" --codex-home "$tmp/bcodex" --claude-home "$tmp/bclaude" --opencode-home "$tmp/bopencode" --json > "$tmp/s11" 2>&1 \
   || fail "status must not crash on a broken manifest: $(cat "$tmp/s11")"
 [ "$(jget "$tmp/s11" checks manifest_validation)" = '"fail"' ] || fail "broken manifest should report manifest=fail: $(cat "$tmp/s11")"
 [ "$(jget "$tmp/s11" generated total)" = "1" ] || fail "generated artifact should still be counted with a broken manifest: $(cat "$tmp/s11")"
@@ -149,7 +151,7 @@ printf 'name: personal-demo\nkind: [unbalanced\n   : :\n' > "$tmp/brepo/shared/w
 # --- case 12: source ファイルが消えても status は crash しない (B2: build_id の Errno) ---
 # 有効な manifest + generated artifact のまま source 本体を削除すると build_id_for が Errno。
 rm -f "$tmp/irepo/shared/instructions/personal-ops.md"
-"$status_sh" --root "$tmp/irepo" --codex-home "$tmp/icodex" --claude-home "$tmp/iclaude" --json > "$tmp/s12" 2>&1 \
+"$status_sh" --root "$tmp/irepo" --codex-home "$tmp/icodex" --claude-home "$tmp/iclaude" --opencode-home "$tmp/iopencode" --json > "$tmp/s12" 2>&1 \
   || fail "status must not crash when an instruction source file is missing: $(cat "$tmp/s12")"
 [ "$(jget "$tmp/s12" generated stale)" = "2" ] || fail "missing source should make instruction stale, not crash: $(cat "$tmp/s12")"
 
@@ -161,14 +163,14 @@ write_approved_script_manifest "$tmp/screpo" shared/scripts/personal-wrap.sh \
   personal-wrap personal claude-code
 "$build" --root "$tmp/screpo" --quiet > /dev/null
 "$script_dir/../register.sh" --root "$tmp/screpo" --quiet > /dev/null
-"$status_sh" --root "$tmp/screpo" --codex-home "$tmp/sccodex" --claude-home "$tmp/scclaude" --json > "$tmp/sc13" 2>&1
+"$status_sh" --root "$tmp/screpo" --codex-home "$tmp/sccodex" --claude-home "$tmp/scclaude" --opencode-home "$tmp/scopencode" --json > "$tmp/sc13" 2>&1
 # generated は本体 1 つだけ数える (sidecar marker は含めない)
 [ "$(jget "$tmp/sc13" generated total)" = "1" ] || fail "script generated should count body only (not sidecar): $(cat "$tmp/sc13")"
 [ "$(jget "$tmp/sc13" generated stale)" = "0" ] || fail "fresh script should not be stale"
 [ "$(jget "$tmp/sc13" sync_targets 0 state)" = '"missing"' ] || fail "script target should be missing before sync: $(cat "$tmp/sc13")"
 # source 変更で script も stale になる
 printf '#!/bin/sh\necho changed\n' > "$tmp/screpo/shared/scripts/personal-wrap.sh"
-"$status_sh" --root "$tmp/screpo" --codex-home "$tmp/sccodex" --claude-home "$tmp/scclaude" --json > "$tmp/sc13b" 2>&1
+"$status_sh" --root "$tmp/screpo" --codex-home "$tmp/sccodex" --claude-home "$tmp/scclaude" --opencode-home "$tmp/scopencode" --json > "$tmp/sc13b" 2>&1
 [ "$(jget "$tmp/sc13b" generated stale)" = "1" ] || fail "changed script source should be stale: $(cat "$tmp/sc13b")"
 
 # --- case 14: 未登録 (gate 中) でも実体が残っていれば deployed_but_inactive (#186) ---
@@ -180,26 +182,87 @@ WAM_EXTRA='summary: demo workflow'
 make_demo_repo "$tmp/drepo" workflows personal-demo workflow '# demo'
 "$build" --root "$tmp/drepo" --quiet > /dev/null
 "$script_dir/../register.sh" --root "$tmp/drepo" --quiet > /dev/null
-"$sync" --root "$tmp/drepo" --codex-home "$tmp/dcodex" --claude-home "$tmp/dclaude" --apply --quiet > /dev/null
+"$sync" --root "$tmp/drepo" --codex-home "$tmp/dcodex" --claude-home "$tmp/dclaude" --opencode-home "$tmp/dopencode" --apply --quiet > /dev/null
 ruby -rjson -e '
   path = ARGV[0]
   catalog = JSON.parse(File.read(path))
   catalog["assets"].each { |a| a["registration"] = "human_review_required" }
   File.write(path, JSON.pretty_generate(catalog))
 ' "$tmp/drepo/generated/catalog.json"
-"$status_sh" --root "$tmp/drepo" --codex-home "$tmp/dcodex" --claude-home "$tmp/dclaude" --json > "$tmp/s14" 2>&1
+"$status_sh" --root "$tmp/drepo" --codex-home "$tmp/dcodex" --claude-home "$tmp/dclaude" --opencode-home "$tmp/dopencode" --json > "$tmp/s14" 2>&1
 [ "$(jget "$tmp/s14" sync_targets 0 state)" = '"deployed_but_inactive"' ] \
   || fail "gated + deployed target should be deployed_but_inactive: $(cat "$tmp/s14")"
 [ "$(jget "$tmp/s14" sync_targets 1 state)" = '"deployed_but_inactive"' ] \
   || fail "both deployed targets should be deployed_but_inactive: $(cat "$tmp/s14")"
 # 実体を消した側は従来どおり missing (deployment state だけが変わる)
 rm -rf "$tmp/dcodex/skills/personal-demo"
-"$status_sh" --root "$tmp/drepo" --codex-home "$tmp/dcodex" --claude-home "$tmp/dclaude" --json > "$tmp/s14b" 2>&1
+"$status_sh" --root "$tmp/drepo" --codex-home "$tmp/dcodex" --claude-home "$tmp/dclaude" --opencode-home "$tmp/dopencode" --json > "$tmp/s14b" 2>&1
 s14b_0=$(jget "$tmp/s14b" sync_targets 0 state)
 s14b_1=$(jget "$tmp/s14b" sync_targets 1 state)
 case "$s14b_0 $s14b_1" in
   '"missing" "deployed_but_inactive"'|'"deployed_but_inactive" "missing"') ;;
   *) fail "removing one deployed target should split states, got $s14b_0 / $s14b_1: $(cat "$tmp/s14b")" ;;
 esac
+
+# --- case 16: TOOL_KINDS に無い tool × kind (register の unsupported) の entry は、その tool の path を
+# 構成しない (#338 review)。構成すると target_path の既定 (skills/<name>) が opencode home にも組まれ、
+# 対象外の path に実体があると deployed_but_inactive と誤表示する。
+mkdir -p "$tmp/urepo/shared/agents" "$tmp/ucodex" "$tmp/uclaude" "$tmp/uopencode/skills/personal-uagent"
+echo "# agent" > "$tmp/urepo/shared/agents/personal-uagent.md"
+write_asset_manifest "$tmp/urepo/shared/agents/personal-uagent.asset.yml" \
+  personal-uagent agent public shared/agents/personal-uagent.md markdown opencode
+"$build" --root "$tmp/urepo" --quiet > "$tmp/s16build" 2>&1 || fail "build with an unsupported-only asset should pass: $(cat "$tmp/s16build")"
+"$script_dir/../register.sh" --root "$tmp/urepo" --quiet > "$tmp/s16reg" 2>&1 || fail "register with an unsupported-only asset should exit 0: $(cat "$tmp/s16reg")"
+[ "$(jget "$tmp/urepo/generated/catalog.json" assets 0 registration)" = '"unsupported"' ] \
+  || fail "kind: agent for opencode should register as unsupported: $(cat "$tmp/urepo/generated/catalog.json")"
+"$status_sh" --root "$tmp/urepo" --codex-home "$tmp/ucodex" --claude-home "$tmp/uclaude" --opencode-home "$tmp/uopencode" --json > "$tmp/s16" 2>&1 \
+  || fail "status with an unsupported opencode entry should succeed: $(cat "$tmp/s16")"
+[ "$(jget "$tmp/s16" sync_targets 0 state)" = '"missing"' ] \
+  || fail "unsupported entry must not look at <opencode home>/skills/<name> (got $(jget "$tmp/s16" sync_targets 0 state)): $(cat "$tmp/s16")"
+"$sync" --root "$tmp/urepo" --codex-home "$tmp/ucodex" --claude-home "$tmp/uclaude" --opencode-home "$tmp/uopencode" > "$tmp/s16sync" 2>&1 \
+  || fail "sync plan with an unsupported opencode entry should succeed: $(cat "$tmp/s16sync")"
+grep -q "skip: \[opencode\] personal-uagent (unsupported)" "$tmp/s16sync" \
+  || fail "unsupported entry should be a skip without a target path: $(cat "$tmp/s16sync")"
+grep -F -q "uopencode/skills" "$tmp/s16sync" && fail "sync must not construct <opencode home>/skills for an unsupported entry: $(cat "$tmp/s16sync")" || true
+
+# --- case 15: plugin の generated を数え、sync_targets に tool=opencode の行が出る (#295) ---
+# 列挙は TOOL_KINDS の組だけ: generated/opencode/skills/ に managed な skill が残っていても数えない。
+# contract_version は 3 のまま (entry の key も build_id の決め方も変わらないので上げない)。
+mkdir -p "$tmp/plrepo/shared/plugins" "$tmp/plcodex" "$tmp/plclaude" "$tmp/plopen"
+printf 'export default { id: "personal-plug", server: async () => ({}) };\n' > "$tmp/plrepo/shared/plugins/personal-plug.js"
+write_approved_plugin_manifest "$tmp/plrepo" personal-plug personal
+run_pstatus() {
+  "$status_sh" --root "$tmp/plrepo" --codex-home "$tmp/plcodex" --claude-home "$tmp/plclaude" \
+    --opencode-home "$tmp/plopen" --json
+}
+"$build" --root "$tmp/plrepo" --quiet > /dev/null
+"$script_dir/../register.sh" --root "$tmp/plrepo" --quiet > /dev/null
+mkdir -p "$tmp/plrepo/generated/opencode/skills/personal-ghost"
+ruby -r"$script_dir/../lib/yaml_marker" -e 'puts YamlMarker.render(name: "personal-ghost", target: "opencode",
+  source: "shared/skills/personal-ghost", build_id: "sha256:" + "0" * 64)' \
+  > "$tmp/plrepo/generated/opencode/skills/personal-ghost/.agent-tools-managed.yml"
+run_pstatus > "$tmp/s15" 2>&1 || fail "status with a plugin should succeed: $(cat "$tmp/s15")"
+[ "$(jget "$tmp/s15" contract_version)" = "3" ] || fail "contract_version must stay 3 with plugin kind (#295)"
+[ "$(jget "$tmp/s15" generated total)" = "1" ] \
+  || fail "plugin generated should count once (opencode skills/ is not scanned): $(cat "$tmp/s15")"
+[ "$(jget "$tmp/s15" generated stale)" = "0" ] || fail "fresh plugin should not be stale: $(cat "$tmp/s15")"
+[ "$(jget "$tmp/s15" register registered)" = "1" ] || fail "approved plugin should be registered: $(cat "$tmp/s15")"
+[ "$(jget "$tmp/s15" sync_targets 0 tool)" = '"opencode"' ] || fail "sync_target tool should be opencode: $(cat "$tmp/s15")"
+[ "$(jget "$tmp/s15" sync_targets 0 name)" = '"personal-plug"' ] || fail "sync_target name should be the plugin: $(cat "$tmp/s15")"
+[ "$(jget "$tmp/s15" sync_targets 0 state)" = '"missing"' ] || fail "plugin target should be missing before sync: $(cat "$tmp/s15")"
+# sync apply 後は managed
+"$sync" --root "$tmp/plrepo" --codex-home "$tmp/plcodex" --claude-home "$tmp/plclaude" --opencode-home "$tmp/plopen" --apply --quiet > /dev/null
+run_pstatus > "$tmp/s15b" 2>&1
+[ "$(jget "$tmp/s15b" sync_targets 0 state)" = '"managed"' ] || fail "deployed plugin should be managed: $(cat "$tmp/s15b")"
+# source 変更で generated.stale と target stale が出る
+printf 'export default { id: "personal-plug", server: async () => ({ changed: true }) };\n' > "$tmp/plrepo/shared/plugins/personal-plug.js"
+run_pstatus > "$tmp/s15c" 2>&1
+[ "$(jget "$tmp/s15c" generated stale)" = "1" ] || fail "changed plugin source should make generated stale: $(cat "$tmp/s15c")"
+# marker 行が壊れた generated plugin は検証不能 = stale (crash しない)
+printf 'export default {};\n' > "$tmp/plrepo/generated/opencode/plugins/personal-plug.js"
+run_pstatus > "$tmp/s15d" 2>&1 || fail "status must not crash on a generated plugin without marker: $(cat "$tmp/s15d")"
+[ "$(jget "$tmp/s15d" generated total)" = "1" ] || fail "unmarked generated plugin should still be counted: $(cat "$tmp/s15d")"
+[ "$(jget "$tmp/s15d" generated stale)" = "1" ] || fail "unmarked generated plugin should be stale: $(cat "$tmp/s15d")"
+grep -q "$tmp" "$tmp/s15b" && fail "status output must not contain the opencode home path"
 
 echo "ok: status self-test passed"

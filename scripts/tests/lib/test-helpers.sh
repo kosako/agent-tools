@@ -68,9 +68,42 @@ write_asset_manifest() {
   unset WAM_EXTRA
 }
 
-# 現内容の build_id を bid で計算し、human_review: approved な script asset の manifest を
-# 現行 fixture と同形式 (review ブロックが source より前) で書く。manifest の置き場所は
-# <root>/<rel_src の .sh を .asset.yml に替えた path>。
+# 現内容の build_id を bid で計算し、human_review: approved な単一ファイル (format: text) asset の
+# manifest を現行 fixture と同形式 (review ブロックが source より前) で書く。承認は
+# (approved_build_id, approved_artifact_kind = kind) の対。manifest の置き場所は
+# <root>/<rel_src の拡張子を .asset.yml に替えた path> (.sh / .js の sidecar 規約)。
+# 使い方: write_approved_manifest <root> <rel_src> <name> <kind> <visibility> <target>...
+write_approved_manifest() {
+  wapm_root=$1
+  wapm_src=$2
+  wapm_name=$3
+  wapm_kind=$4
+  wapm_visibility=$5
+  shift 5
+  wapm_bid=$(bid "$wapm_root" "$wapm_src" text)
+  {
+    printf 'schema_version: 1\n'
+    printf 'name: %s\n' "$wapm_name"
+    printf 'kind: %s\n' "$wapm_kind"
+    printf 'visibility: %s\n' "$wapm_visibility"
+    printf 'targets:\n'
+    for wapm_target in "$@"; do
+      printf '  - %s\n' "$wapm_target"
+    done
+    printf 'risk:\n'
+    printf '  prompt_injection: low\n'
+    printf '  privacy: low\n'
+    printf 'review:\n'
+    printf '  human_review: approved\n'
+    printf '  approved_build_id: %s\n' "$wapm_bid"
+    printf '  approved_artifact_kind: %s\n' "$wapm_kind"
+    printf 'source:\n'
+    printf '  path: %s\n' "$wapm_src"
+    printf '  format: text\n'
+  } > "$wapm_root/${wapm_src%.*}.asset.yml"
+}
+
+# write_approved_manifest の script 版 (kind: script。既存 suite の呼び出し形を保つ)。
 # 使い方: write_approved_script_manifest <root> <rel_src> <name> <visibility> <target>...
 write_approved_script_manifest() {
   wasm_root=$1
@@ -78,27 +111,14 @@ write_approved_script_manifest() {
   wasm_name=$3
   wasm_visibility=$4
   shift 4
-  wasm_bid=$(bid "$wasm_root" "$wasm_src" text)
-  {
-    printf 'schema_version: 1\n'
-    printf 'name: %s\n' "$wasm_name"
-    printf 'kind: script\n'
-    printf 'visibility: %s\n' "$wasm_visibility"
-    printf 'targets:\n'
-    for wasm_target in "$@"; do
-      printf '  - %s\n' "$wasm_target"
-    done
-    printf 'risk:\n'
-    printf '  prompt_injection: low\n'
-    printf '  privacy: low\n'
-    printf 'review:\n'
-    printf '  human_review: approved\n'
-    printf '  approved_build_id: %s\n' "$wasm_bid"
-    printf '  approved_artifact_kind: script\n'
-    printf 'source:\n'
-    printf '  path: %s\n' "$wasm_src"
-    printf '  format: text\n'
-  } > "$wasm_root/${wasm_src%.sh}.asset.yml"
+  write_approved_manifest "$wasm_root" "$wasm_src" "$wasm_name" script "$wasm_visibility" "$@"
+}
+
+# write_approved_manifest の plugin 版 (kind: plugin、target は opencode 固定: plugin の配布先は
+# opencode だけ, #295)。source は shared/plugins/<name>.js。
+# 使い方: write_approved_plugin_manifest <root> <name> <visibility>
+write_approved_plugin_manifest() {
+  write_approved_manifest "$1" "shared/plugins/$2.js" "$2" plugin "$3" opencode
 }
 
 # demo 用 fixture repo を組み立てる: shared/<category>/<name>.md (body は残余引数を

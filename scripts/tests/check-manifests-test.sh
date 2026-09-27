@@ -1016,4 +1016,134 @@ for field in name kind visibility targets risk source; do
     || fail "expected missing-field rejection for $field: $(cat "$tmp/out-missing")"
 done
 
+# --- case: plugin kind (#295)。kind: plugin + targets [opencode] + 単一の .js は ok。
+#     approved_artifact_kind: plugin も受け付ける ---
+mkdir -p "$tmp/plugin/shared/plugins"
+printf 'export default { id: "personal-demo-plugin", server: async () => ({}) };\n' \
+  > "$tmp/plugin/shared/plugins/personal-demo-plugin.js"
+write_asset_manifest "$tmp/plugin/shared/plugins/personal-demo-plugin.asset.yml" \
+  personal-demo-plugin plugin personal shared/plugins/personal-demo-plugin.js text opencode
+"$check" --root "$tmp/plugin" > "$tmp/out-plugin" 2>&1 \
+  || fail "plugin kind manifest should validate: $(cat "$tmp/out-plugin")"
+
+pbid=$(bid "$tmp/plugin" shared/plugins/personal-demo-plugin.js text)
+WAM_EXTRA="review:
+  human_review: approved
+  approved_build_id: $pbid
+  approved_artifact_kind: plugin"
+write_asset_manifest "$tmp/plugin/shared/plugins/personal-demo-plugin.asset.yml" \
+  personal-demo-plugin plugin personal shared/plugins/personal-demo-plugin.js text opencode
+"$check" --root "$tmp/plugin" > "$tmp/out-plugin-approved" 2>&1 \
+  || fail "approved_artifact_kind: plugin should be accepted: $(cat "$tmp/out-plugin-approved")"
+
+# --- case: tool / kind の組は TOOL_KINDS で検査する (#295)。plugin → codex / claude-code と、
+#     opencode → skill / instruction / script は error。組の error 以外は出ない ---
+mkdir -p "$tmp/toolkind/shared/plugins" "$tmp/toolkind/shared/workflows" \
+  "$tmp/toolkind/shared/instructions" "$tmp/toolkind/shared/scripts"
+printf 'export default {};\n' > "$tmp/toolkind/shared/plugins/personal-p.js"
+write_asset_manifest "$tmp/toolkind/shared/plugins/personal-p.asset.yml" \
+  personal-p plugin personal shared/plugins/personal-p.js text codex claude-code
+echo "# w" > "$tmp/toolkind/shared/workflows/personal-w.md"
+write_asset_manifest "$tmp/toolkind/shared/workflows/personal-w.asset.yml" \
+  personal-w workflow public shared/workflows/personal-w.md markdown opencode
+echo "# i" > "$tmp/toolkind/shared/instructions/personal-i.md"
+write_asset_manifest "$tmp/toolkind/shared/instructions/personal-i.asset.yml" \
+  personal-i instruction public shared/instructions/personal-i.md markdown opencode
+printf '#!/bin/sh\necho hi\n' > "$tmp/toolkind/shared/scripts/personal-s.sh"
+write_asset_manifest "$tmp/toolkind/shared/scripts/personal-s.asset.yml" \
+  personal-s script public shared/scripts/personal-s.sh text opencode
+if "$check" --root "$tmp/toolkind" > "$tmp/out-toolkind" 2>&1; then
+  fail "check-manifests must reject tool / kind pairs outside TOOL_KINDS"
+fi
+for expect in \
+  "personal-p.asset.yml: artifact_kind plugin cannot be distributed to codex (codex accepts: skill, instruction, script)" \
+  "personal-p.asset.yml: artifact_kind plugin cannot be distributed to claude-code (claude-code accepts: skill, instruction, script)" \
+  "personal-w.asset.yml: artifact_kind skill cannot be distributed to opencode (opencode accepts: plugin)" \
+  "personal-i.asset.yml: artifact_kind instruction cannot be distributed to opencode (opencode accepts: plugin)" \
+  "personal-s.asset.yml: artifact_kind script cannot be distributed to opencode (opencode accepts: plugin)"
+do
+  grep -qF "$expect" "$tmp/out-toolkind" \
+    || fail "expected tool / kind rejection <$expect>: $(cat "$tmp/out-toolkind")"
+done
+grep -q "5 error(s) in 4 manifest(s)" "$tmp/out-toolkind" \
+  || fail "tool / kind check must not add unrelated errors: $(cat "$tmp/out-toolkind")"
+
+# --- case: unsupported な kind: agent は今までどおり error にならない (回帰, #295) ---
+mkdir -p "$tmp/agentkind/shared/agents"
+echo "# agent" > "$tmp/agentkind/shared/agents/personal-agent.md"
+write_asset_manifest "$tmp/agentkind/shared/agents/personal-agent.asset.yml" \
+  personal-agent agent public shared/agents/personal-agent.md markdown codex claude-code
+"$check" --root "$tmp/agentkind" > "$tmp/out-agentkind" 2>&1 \
+  || fail "kind: agent (unsupported) must still validate: $(cat "$tmp/out-agentkind")"
+
+# --- case: compatibility override による plugin 化は reject (#184 の原則, #295) ---
+mkdir -p "$tmp/oplugin/shared/workflows"
+echo "# demo" > "$tmp/oplugin/shared/workflows/personal-oplugin.md"
+WAM_EXTRA="compatibility:
+  opencode:
+    artifact_kind: plugin"
+write_asset_manifest "$tmp/oplugin/shared/workflows/personal-oplugin.asset.yml" \
+  personal-oplugin workflow public shared/workflows/personal-oplugin.md markdown opencode
+if "$check" --root "$tmp/oplugin" > "$tmp/out-oplugin" 2>&1; then
+  fail "check-manifests must reject compatibility override into plugin"
+fi
+grep -qF "compatibility.opencode.artifact_kind: plugin is not allowed; declare kind: plugin in the manifest instead" \
+  "$tmp/out-oplugin" || fail "expected override-into-plugin error: $(cat "$tmp/out-oplugin")"
+
+# --- case: plugin の source は directory でない .js に限る (#295) ---
+mkdir -p "$tmp/pdir/shared/plugins/personal-pdir"
+echo "export default {};" > "$tmp/pdir/shared/plugins/personal-pdir/index.js"
+write_asset_manifest "$tmp/pdir/shared/plugins/personal-pdir/asset.yml" \
+  personal-pdir plugin personal shared/plugins/personal-pdir directory opencode
+if "$check" --root "$tmp/pdir" > "$tmp/out-pdir" 2>&1; then
+  fail "check-manifests must reject a directory plugin"
+fi
+grep -qF "plugin asset must be a single .js file, not a directory format" "$tmp/out-pdir" \
+  || fail "expected directory plugin error: $(cat "$tmp/out-pdir")"
+
+mkdir -p "$tmp/pts/shared/plugins"
+echo "export default {};" > "$tmp/pts/shared/plugins/personal-pts.ts"
+write_asset_manifest "$tmp/pts/shared/plugins/personal-pts.asset.yml" \
+  personal-pts plugin personal shared/plugins/personal-pts.ts text opencode
+if "$check" --root "$tmp/pts" > "$tmp/out-pts" 2>&1; then
+  fail "check-manifests must reject a non-.js plugin source"
+fi
+grep -qF 'plugin source must be a .js file, got "shared/plugins/personal-pts.ts"' "$tmp/out-pts" \
+  || fail "expected non-.js plugin error: $(cat "$tmp/out-pts")"
+
+# --- case: plugin の source は shebang / marker prefix で始まらず、全体が UTF-8 (#295) ---
+mkdir -p "$tmp/pbad/shared/plugins"
+printf '#!/usr/bin/env node\nexport default {};\n' > "$tmp/pbad/shared/plugins/personal-shebang.js"
+write_asset_manifest "$tmp/pbad/shared/plugins/personal-shebang.asset.yml" \
+  personal-shebang plugin personal shared/plugins/personal-shebang.js text opencode
+printf '/* agent-tools:managed v=1 repo=agent-tools name=personal-premarked target=opencode artifact_kind=plugin source=shared/plugins/personal-premarked.js build_id=sha256:x */\nexport default {};\n' \
+  > "$tmp/pbad/shared/plugins/personal-premarked.js"
+write_asset_manifest "$tmp/pbad/shared/plugins/personal-premarked.asset.yml" \
+  personal-premarked plugin personal shared/plugins/personal-premarked.js text opencode
+printf 'export default { name: "caf\351" };\n' > "$tmp/pbad/shared/plugins/personal-latin1.js"
+write_asset_manifest "$tmp/pbad/shared/plugins/personal-latin1.asset.yml" \
+  personal-latin1 plugin personal shared/plugins/personal-latin1.js text opencode
+if "$check" --root "$tmp/pbad" > "$tmp/out-pbad" 2>&1; then
+  fail "check-manifests must reject plugin sources with a forbidden prefix or invalid UTF-8"
+fi
+for expect in \
+  'plugin source must not start with "#!": shared/plugins/personal-shebang.js' \
+  'plugin source must not start with "/* agent-tools:managed": shared/plugins/personal-premarked.js' \
+  "plugin source must be valid UTF-8: shared/plugins/personal-latin1.js"
+do
+  grep -qF "$expect" "$tmp/out-pbad" \
+    || fail "expected plugin source rejection <$expect>: $(cat "$tmp/out-pbad")"
+done
+grep -q "3 error(s) in 3 manifest(s)" "$tmp/out-pbad" \
+  || fail "plugin source checks must not add unrelated errors: $(cat "$tmp/out-pbad")"
+
+# --- case: shared/plugins/ の source も sidecar manifest が無ければ error (#295) ---
+mkdir -p "$tmp/porphan/shared/plugins"
+echo "export default {};" > "$tmp/porphan/shared/plugins/personal-porphan.js"
+if "$check" --root "$tmp/porphan" > "$tmp/out-porphan" 2>&1; then
+  fail "orphan plugin source should fail"
+fi
+grep -q "missing sidecar manifest personal-porphan.asset.yml" "$tmp/out-porphan" \
+  || fail "missing orphan plugin error in: $(cat "$tmp/out-porphan")"
+
 echo "ok: check-manifests self-test passed"

@@ -17,8 +17,9 @@ trap 'rm -rf "$tmpbase"' EXIT
 tmp="$tmpbase/with space"
 mkdir -p "$tmp"
 
-# fixture: single-file skill asset (build → register → connect(noop) → sync を通せる)
-mkdir -p "$tmp/shared/skills" "$tmp/codex" "$tmp/claude"
+# fixture: single-file skill asset (build → register → connect(noop) → sync を通せる) と、
+# opencode に配る approved plugin (sync だけが --opencode-home を受け、connect には渡らない, #295)
+mkdir -p "$tmp/shared/skills" "$tmp/shared/plugins" "$tmp/codex" "$tmp/claude" "$tmp/opencode"
 cat > "$tmp/shared/skills/personal-demo-skill.md" <<'EOF'
 # demo skill
 
@@ -28,11 +29,14 @@ WAM_EXTRA='summary: demo skill for setup-test'
 write_asset_manifest "$tmp/shared/skills/personal-demo-skill.asset.yml" \
   personal-demo-skill skill public shared/skills/personal-demo-skill.md markdown \
   codex claude-code
+printf 'export default { id: "personal-demo-plugin", server: async () => ({}) };\n' \
+  > "$tmp/shared/plugins/personal-demo-plugin.js"
+write_approved_plugin_manifest "$tmp" personal-demo-plugin personal
 
 # 引数は quote して渡す (root/home に空白を含むため)。setup.sh 側の forwarding の
 # quoting が壊れていれば、空白入り path の sub-script 呼び出しで失敗する。
 # --- case 1: dry-run は全段を通すが実 home には書き込まない ---
-out=$("$setup" --root "$tmp" --codex-home "$tmp/codex" --claude-home "$tmp/claude" 2>&1) \
+out=$("$setup" --root "$tmp" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" 2>&1) \
   || fail "dry-run exited non-zero: $out"
 echo "$out" | grep -q "==> build" || fail "dry-run: build step missing"
 echo "$out" | grep -q "==> register" || fail "dry-run: register step missing"
@@ -40,19 +44,22 @@ echo "$out" | grep -q "==> connect" || fail "dry-run: connect step missing"
 echo "$out" | grep -q "==> sync" || fail "dry-run: sync step missing"
 [ -d "$tmp/codex/skills/personal-demo-skill" ] && fail "dry-run wrote to codex home"
 [ -d "$tmp/claude/skills/personal-demo-skill" ] && fail "dry-run wrote to claude home"
+[ -e "$tmp/opencode/plugins" ] && fail "dry-run wrote to opencode home"
 echo "$out" | grep -q "dry-run のみ" || fail "dry-run: hint missing"
 
 # --- case 2: --apply は skill を実 home (fake) に配置する ---
-out=$("$setup" --apply --root "$tmp" --codex-home "$tmp/codex" --claude-home "$tmp/claude" 2>&1) \
+out=$("$setup" --apply --root "$tmp" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" 2>&1) \
   || fail "apply exited non-zero: $out"
 [ -f "$tmp/codex/skills/personal-demo-skill/SKILL.md" ] || fail "apply did not place codex skill"
 [ -f "$tmp/claude/skills/personal-demo-skill/SKILL.md" ] || fail "apply did not place claude skill"
+[ -f "$tmp/opencode/plugins/personal-demo-plugin.js" ] || fail "apply did not place the plugin in the opencode home"
+[ ! -e "$tmp/codex/plugins" ] && [ ! -e "$tmp/claude/plugins" ] || fail "plugin must land only in the opencode home"
 # --apply では dry-run hint を出さない (setup.sh:76 の gate 反転を検出する negative coverage)
 echo "$out" | grep -q "dry-run のみ" && fail "--apply must not print the dry-run hint: $out" || true
 
 # --- case 3: 未知オプションは usage を出して exit 2 ---
 rc=0
-"$setup" --bogus >/dev/null 2>&1 || rc=$?
+"$setup" --bogus >/dev/null 2>&1 || rc=$? # no-opencode-home: usage で止まる parse-only の case
 [ "$rc" -eq 2 ] || fail "unknown option should exit 2, got $rc"
 
 echo "ok: setup-test passed"
