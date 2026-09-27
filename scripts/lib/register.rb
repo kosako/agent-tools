@@ -108,12 +108,14 @@ module Register
     # 宣言 risk の medium / unknown も human review 必須として扱う。
     # script artifact は実行コードの配布で、静的 gate が当てられるのは injection 文言の
     # regex のみ (コードの悪性は検査できない)。directory skill の scripts/ を #43 まで
-    # fail-closed にしているのと対称に、常に human review を要求する。判定は manifest の
+    # fail-closed にしているのと対称に、常に human review を要求する。plugin も同じ:
+    # 置いた時点で OpenCode の process の中で動く実行コードになる (#295)。判定は manifest の
     # kind でなく resolve 後の artifact_kind で行う (compatibility override で任意 kind を
     # script 配布にできるため、kind 基準では迂回できてしまう)。
     def review_needed?(asset)
       asset[:flagged] ||
         ArtifactTargets.resolves_any?(asset, "script") ||
+        ArtifactTargets.resolves_any?(asset, "plugin") ||
         asset[:declared_risks].any? { |r| %w[medium unknown].include?(r) }
     end
 

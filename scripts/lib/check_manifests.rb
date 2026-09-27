@@ -11,10 +11,11 @@ require "yaml"
 require_relative "yaml_util"
 require_relative "assets"
 require_relative "artifact_targets"
+require_relative "plugin_marker"
 require_relative "cli"
 
 module CheckManifests
-  KINDS = %w[skill prompt workflow agent instruction script].freeze
+  KINDS = %w[skill prompt workflow agent instruction script plugin].freeze
   TRACKED_VISIBILITIES = %w[public personal].freeze
   FORBIDDEN_VISIBILITIES = %w[private work client secret].freeze
   TARGETS = ArtifactTargets::TOOLS
@@ -38,7 +39,15 @@ module CheckManifests
   # ため、承認 identity は (build_id, artifact_kind) の対。human_review: approved と対で使う。
   APPROVED_ARTIFACT_KIND_KEY = "approved_artifact_kind"
   NAME_PATTERN = /\A[a-z0-9]+(?:-[a-z0-9]+)*\z/.freeze
-  ASSET_CATEGORIES = %w[skills prompts workflows agents instructions scripts].freeze
+  ASSET_CATEGORIES = %w[skills prompts workflows agents instructions scripts plugins].freeze
+  # compatibility.<tool>.artifact_kind で上書きできない kind。実行コードの配布形態 (script /
+  # plugin) は manifest の kind でのみ宣言でき、その場合は既定導出されるので override に正当用途は
+  # ない。skill 等として承認済みの source を override でこっそり実行コード配布に変える経路を
+  # 構造的に塞ぐ (#184 の原則を plugin にも当てる, #295)。
+  NON_OVERRIDABLE_KINDS = %w[script plugin].freeze
+  # plugin source が持ってはいけない先頭 bytes。shebang は import される module に意味が無く、
+  # marker の prefix は build が前置するもの (source 側にあると先頭行が二重になる)。
+  PLUGIN_FORBIDDEN_PREFIXES = ["#!", PluginMarker::PREFIX].freeze
   NON_ASSET_BASENAMES = %w[README.md].freeze
   # JavaScript の whitespace / trim と同じ集合。Ruby の [:space:] は U+0085 等で異なる。
   CLAUDE_DYNAMIC_SPACE = /[\t\n\v\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]/.freeze
@@ -107,11 +116,15 @@ module CheckManifests
       validate_kind(path, data["kind"]) if data.key?("kind")
       validate_visibility(path, data["visibility"]) if data.key?("visibility")
       validate_targets(path, data["targets"]) if data.key?("targets")
+      check_target_kinds(data, path) if data.key?("targets")
       validate_risk(path, data["risk"]) if data.key?("risk")
       if data.key?("source")
         source_error_count = @errors.size
         validate_source(path, data["source"])
-        check_skill_entrypoint(data, path) if @errors.size == source_error_count
+        if @errors.size == source_error_count
+          check_skill_entrypoint(data, path)
+          check_plugin_source(data, path)
+        end
       end
       validate_review(path, data["review"]) if data.key?("review")
       validate_compatibility(path, data["compatibility"]) if data.key?("compatibility")
@@ -143,14 +156,34 @@ module CheckManifests
           error(path, "compatibility.#{tool}.artifact_kind must be one of " \
                       "#{ArtifactTargets::SUPPORTED_KINDS.join(', ')}, got #{kind.inspect}")
         end
-        # script (実行ファイル配布) への override は禁止 (#184)。skill 等として承認済みの
-        # source を compatibility でこっそり実行ファイル配布に変える経路を構造的に塞ぐ。
-        # script は manifest の kind: script でのみ宣言でき、その場合は既定導出されるので
-        # override に正当用途はない (既定どおりの値は書かない方針, #153)。
-        if kind == "script"
-          error(path, "compatibility.#{tool}.artifact_kind: script is not allowed; " \
-                      "declare kind: script in the manifest instead (#184)")
+        # 実行コード配布 (script / plugin) への override は禁止 (NON_OVERRIDABLE_KINDS)。
+        # 既定どおりの値は書かない方針 (#153) とも整合する。
+        if NON_OVERRIDABLE_KINDS.include?(kind)
+          error(path, "compatibility.#{tool}.artifact_kind: #{kind} is not allowed; " \
+                      "declare kind: #{kind} in the manifest instead (#184)")
         end
+      end
+    end
+
+    # targets の各 tool が、その asset の resolve 後の artifact_kind を受け取れるか (TOOL_KINDS)。
+    # supported な kind が tool の表に無い組 (plugin → codex、skill → opencode 等) だけを error に
+    # する。unsupported な kind (agent 等) は従来どおり error にしない (register が unsupported に
+    # する契約, docs/asset-manifest-schema.md)。未知の tool は validate_targets が別途 error にする。
+    # schema の型検証と混ざる位置で呼ばれるため、resolve に必要な値だけを安全に読む。
+    def check_target_kinds(data, path)
+      targets = data["targets"]
+      return unless targets.is_a?(Array)
+
+      asset = { kind: data["kind"], compatibility: data["compatibility"] }
+      targets.each do |tool|
+        next unless tool.is_a?(String) && TARGETS.include?(tool)
+
+        kind = ArtifactTargets.resolve(asset, tool)
+        next unless ArtifactTargets.supported?(kind)
+        next if ArtifactTargets.tool_supports?(tool, kind)
+
+        error(path, "artifact_kind #{kind} cannot be distributed to #{tool} " \
+                    "(#{tool} accepts: #{ArtifactTargets::TOOL_KINDS.fetch(tool).join(', ')})")
       end
     end
 
@@ -459,6 +492,43 @@ module CheckManifests
       skill_md = File.join(dir, "SKILL.md")
       unless File.file?(skill_md)
         error(path, "directory skill must contain a SKILL.md entrypoint")
+      end
+    end
+
+    # plugin artifact になる asset の source を検証する。validate_source が通った後だけ呼び、
+    # 未検証 path や symlink の先を読まない。plugin は OpenCode が import する単一の .js に限る
+    # (.ts と directory は扱わない)。先頭が shebang か marker の prefix なら拒否し、build が
+    # 前置する marker 行と合わせて file 全体が UTF-8 として正しいことをここで確かめる
+    # (PluginMarker.parse は先頭行しか見ない, #295)。
+    def check_plugin_source(data, path)
+      targets = data["targets"]
+      return unless targets.is_a?(Array)
+
+      asset = { kind: data["kind"], compatibility: data["compatibility"] }
+      plugin = targets.any? do |tool|
+        tool.is_a?(String) && ArtifactTargets.resolve(asset, tool) == "plugin"
+      end
+      return unless plugin
+
+      source = data["source"]
+      source_path = source["path"]
+      if source["format"] == "directory"
+        error(path, "plugin asset must be a single .js file, not a directory format")
+        return
+      end
+      unless source_path.end_with?(".js")
+        error(path, "plugin source must be a .js file, got #{source_path.inspect}")
+        return
+      end
+
+      content = File.binread(File.join(@root, source_path))
+      unless content.dup.force_encoding(Encoding::UTF_8).valid_encoding?
+        error(path, "plugin source must be valid UTF-8: #{source_path}")
+      end
+      PLUGIN_FORBIDDEN_PREFIXES.each do |prefix|
+        next unless content.start_with?(prefix.b)
+
+        error(path, "plugin source must not start with #{prefix.inspect}: #{source_path}")
       end
     end
 

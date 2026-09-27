@@ -315,4 +315,69 @@ rm -f "$tmp/repocopy/generated/catalog.json"
   || fail "repository register should pass: $(cat "$tmp/r8")"
 [ -f "$tmp/repocopy/generated/catalog.json" ] || fail "repository catalog missing"
 
+# --- case 13: plugin kind は OpenCode の process の中で動く実行コードなので human review 必須 (#295)。
+#     宣言 risk low・finding なしでも approved が無ければ human_review_required (exit 3) ---
+mkdir -p "$tmp/plugin/shared/plugins"
+printf 'export default { id: "personal-demo-plugin", server: async () => ({}) };\n' \
+  > "$tmp/plugin/shared/plugins/personal-demo-plugin.js"
+write_asset_manifest "$tmp/plugin/shared/plugins/personal-demo-plugin.asset.yml" \
+  personal-demo-plugin plugin personal shared/plugins/personal-demo-plugin.js text opencode
+status=0
+"$register" --root "$tmp/plugin" > "$tmp/r13" 2>&1 || status=$?
+[ "$status" -eq 3 ] \
+  || fail "plugin without approval should exit 3, got $status: $(cat "$tmp/r13")"
+pc="$tmp/plugin/generated/catalog.json"
+[ "$(jget "$pc" assets 0 target)" = '"opencode"' ] || fail "plugin entry should target opencode"
+[ "$(jget "$pc" assets 0 artifact_kind)" = '"plugin"' ] || fail "plugin entry should carry artifact_kind plugin"
+[ "$(jget "$pc" assets 0 checks prompt_injection_static)" = '"pass"' ] \
+  || fail "plugin fixture must be clean (the review requirement comes from the kind, not a finding)"
+[ "$(jget "$pc" assets 0 registration)" = '"human_review_required"' ] \
+  || fail "plugin without approval should be human_review_required (#295)"
+
+# --- case 13b: approved + build_id 一致 + approved_artifact_kind: plugin → registered (exit 0) ---
+pbid=$(bid "$tmp/plugin" shared/plugins/personal-demo-plugin.js text)
+WAM_EXTRA="review:
+  human_review: approved
+  approved_build_id: $pbid
+  approved_artifact_kind: plugin"
+write_asset_manifest "$tmp/plugin/shared/plugins/personal-demo-plugin.asset.yml" \
+  personal-demo-plugin plugin personal shared/plugins/personal-demo-plugin.js text opencode
+"$register" --root "$tmp/plugin" > "$tmp/r13b" 2>&1 \
+  || fail "approved plugin register should pass: $(cat "$tmp/r13b")"
+[ "$(jget "$pc" assets 0 registration)" = '"registered"' ] \
+  || fail "approved plugin should be registered"
+
+# --- case 13c: approved_artifact_kind: script は plugin の承認にならない (exit 3) ---
+WAM_EXTRA="review:
+  human_review: approved
+  approved_build_id: $pbid
+  approved_artifact_kind: script"
+write_asset_manifest "$tmp/plugin/shared/plugins/personal-demo-plugin.asset.yml" \
+  personal-demo-plugin plugin personal shared/plugins/personal-demo-plugin.js text opencode
+status=0
+"$register" --root "$tmp/plugin" > "$tmp/r13c" 2>&1 || status=$?
+[ "$status" -eq 3 ] \
+  || fail "approval bound to script must not register a plugin (exit 3), got $status: $(cat "$tmp/r13c")"
+[ "$(jget "$pc" assets 0 registration)" = '"human_review_required"' ] \
+  || fail "approval bound to a different artifact_kind must not register"
+grep -q "approved_artifact_kind" "$tmp/r13c" \
+  || fail "missing kind re-review guidance: $(cat "$tmp/r13c")"
+
+# --- case 13d: buildable? は TOOL_KINDS に従う (registered != buildable の断裂を防ぐ側の契約, #295)。
+#     tool / kind の組と .js の検査は check-manifests が gate で先に止めるので、register の
+#     入口からは到達できない。ArtifactTargets を直接呼んで確かめる ---
+ruby -r"$script_dir/../lib/artifact_targets" -e '
+  plugin_js = { kind: "plugin", source: { "path" => "shared/plugins/personal-p.js", "format" => "text" } }
+  plugin_ts = { kind: "plugin", source: { "path" => "shared/plugins/personal-p.ts", "format" => "text" } }
+  plugin_dir = { kind: "plugin", source: { "path" => "shared/plugins/personal-p", "format" => "directory" } }
+  skill = { kind: "skill", source: { "path" => "shared/skills/personal-s", "format" => "directory" } }
+  abort "single .js plugin must be buildable for opencode" unless ArtifactTargets.buildable?(plugin_js, "opencode")
+  abort ".ts plugin must not be buildable" if ArtifactTargets.buildable?(plugin_ts, "opencode")
+  abort "directory plugin must not be buildable" if ArtifactTargets.buildable?(plugin_dir, "opencode")
+  abort "plugin must not be buildable for codex" if ArtifactTargets.buildable?(plugin_js, "codex")
+  abort "plugin must not be buildable for claude-code" if ArtifactTargets.buildable?(plugin_js, "claude-code")
+  abort "skill must not be buildable for opencode" if ArtifactTargets.buildable?(skill, "opencode")
+  abort "skill must stay buildable for claude-code" unless ArtifactTargets.buildable?(skill, "claude-code")
+' || fail "ArtifactTargets.buildable? must follow TOOL_KINDS and the single-.js rule"
+
 echo "ok: register self-test passed"
