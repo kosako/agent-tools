@@ -16,7 +16,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 
 run_sync() {
-  "$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" "$@"
+  "$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" "$@"
 }
 
 # --- fixture repo を build ---
@@ -129,9 +129,9 @@ cat > "$tmp/repo/shared/workflows/personal-demo.md" <<'EOF'
 EOF
 "$build" --root "$tmp/repo" --quiet > /dev/null
 "$register" --root "$tmp/repo" --quiet > /dev/null
-"$sync" --root "$tmp/repo" --codex-home "$tmp/codex9" --claude-home "$tmp/claude9" > "$tmp/out-instr-update" 2>&1
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex9" --claude-home "$tmp/claude9" --opencode-home "$tmp/opencode9" > "$tmp/out-instr-update" 2>&1
 grep -q "update: \[codex\]" "$tmp/out-instr-update" || fail "instruction should update after rebuild: $(cat "$tmp/out-instr-update")"
-"$sync" --root "$tmp/repo" --codex-home "$tmp/codex9" --claude-home "$tmp/claude9" --apply --quiet > /dev/null
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex9" --claude-home "$tmp/claude9" --opencode-home "$tmp/opencode9" --apply --quiet > /dev/null
 grep -q "demo v3 instruction" "$tmp/codex9/AGENTS.md" || fail "instruction update not applied to AGENTS.md"
 head -1 "$tmp/codex9/AGENTS.md" | grep -q "agent-tools:managed" || fail "synced instruction must keep marker"
 
@@ -141,7 +141,7 @@ cat > "$tmp/repo/shared/workflows/personal-demo.md" <<'EOF'
 EOF
 # build せず register だけ進める (catalog の build_id が generated より新しくなる)
 "$register" --root "$tmp/repo" --quiet > /dev/null
-"$sync" --root "$tmp/repo" --codex-home "$tmp/codex9" --claude-home "$tmp/claude9" > "$tmp/out-stalegen" 2>&1
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex9" --claude-home "$tmp/claude9" --opencode-home "$tmp/opencode9" > "$tmp/out-stalegen" 2>&1
 grep -q "skip: \[codex\].*run build first" "$tmp/out-stalegen" \
   || fail "stale generated vs catalog should skip with run build first: $(cat "$tmp/out-stalegen")"
 
@@ -151,7 +151,7 @@ mkdir -p "$tmp/codex11" "$tmp/claude11" "$tmp/realad"
 "$register" --root "$tmp/repo" --quiet > /dev/null
 ln -s "$tmp/realad" "$tmp/claude11/agent-tools"
 status=0
-"$sync" --root "$tmp/repo" --codex-home "$tmp/codex11" --claude-home "$tmp/claude11" --apply > "$tmp/out-adsym" 2>&1 || status=$?
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex11" --claude-home "$tmp/claude11" --opencode-home "$tmp/opencode11" --apply > "$tmp/out-adsym" 2>&1 || status=$?
 [ "$status" -eq 1 ] || fail "symlinked owned parent should conflict (exit 1): $(cat "$tmp/out-adsym")"
 grep -q "conflict: \[claude-code\].*symlink" "$tmp/out-adsym" || fail "missing parent symlink conflict: $(cat "$tmp/out-adsym")"
 [ ! -e "$tmp/realad/CLAUDE.md" ] || fail "must not write through a symlinked parent"
@@ -161,7 +161,7 @@ mkdir -p "$tmp/codex12" "$tmp/claude12"
 "$build" --root "$tmp/repo" --quiet > /dev/null
 "$register" --root "$tmp/repo" --quiet > /dev/null
 printf '   \n\n  \n' > "$tmp/codex12/AGENTS.md"   # 空白のみ (whitespace-only) が既に存在する状態
-"$sync" --root "$tmp/repo" --codex-home "$tmp/codex12" --claude-home "$tmp/claude12" > "$tmp/out-empty" 2>&1
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex12" --claude-home "$tmp/claude12" --opencode-home "$tmp/opencode12" > "$tmp/out-empty" 2>&1
 grep -q "skip: \[codex\].*run connect first" "$tmp/out-empty" \
   || fail "empty instruction owned file should say run connect first: $(cat "$tmp/out-empty")"
 ! grep -q "conflict: \[codex\]" "$tmp/out-empty" \
@@ -184,15 +184,15 @@ write_asset_manifest "$tmp/srepo/shared/skills/personal-sk/asset.yml" \
 # source を変更して build せず register だけ (catalog build_id が generated より新しくなる)
 echo "v2" >> "$tmp/srepo/shared/skills/personal-sk/SKILL.md"
 "$register" --root "$tmp/srepo" --quiet > /dev/null
-"$sync" --root "$tmp/srepo" --codex-home "$tmp/scodex" --claude-home "$tmp/sclaude" > "$tmp/out-skstale" 2>&1
+"$sync" --root "$tmp/srepo" --codex-home "$tmp/scodex" --claude-home "$tmp/sclaude" --opencode-home "$tmp/sopencode" > "$tmp/out-skstale" 2>&1
 grep -q "skip: \[codex\].*run build first" "$tmp/out-skstale" \
   || fail "stale skill generated vs catalog should skip with run build first: $(cat "$tmp/out-skstale")"
 # --apply しても stale skill は配置されない
-"$sync" --root "$tmp/srepo" --codex-home "$tmp/scodex" --claude-home "$tmp/sclaude" --apply --quiet > /dev/null 2>&1 || true
+"$sync" --root "$tmp/srepo" --codex-home "$tmp/scodex" --claude-home "$tmp/sclaude" --opencode-home "$tmp/sopencode" --apply --quiet > /dev/null 2>&1 || true
 [ ! -e "$tmp/scodex/skills/personal-sk" ] || fail "stale skill must not be deployed before rebuild"
 # rebuild すれば配置される (gate が正常系を塞がない)
 "$build" --root "$tmp/srepo" --quiet > /dev/null
-"$sync" --root "$tmp/srepo" --codex-home "$tmp/scodex" --claude-home "$tmp/sclaude" --apply --quiet > /dev/null
+"$sync" --root "$tmp/srepo" --codex-home "$tmp/scodex" --claude-home "$tmp/sclaude" --opencode-home "$tmp/sopencode" --apply --quiet > /dev/null
 [ -f "$tmp/scodex/skills/personal-sk/SKILL.md" ] || fail "rebuilt skill should deploy"
 
 # --- case 14: skill 所有先の親 dir (<home>/skills) が symlink なら conflict (素通りさせない) ---
@@ -212,7 +212,7 @@ write_asset_manifest "$tmp/repo14/shared/skills/personal-sk/asset.yml" \
 mkdir -p "$tmp/codex14"
 ln -s "$tmp/realskills" "$tmp/codex14/skills"   # <home>/skills 自体を symlink にする
 status=0
-"$sync" --root "$tmp/repo14" --codex-home "$tmp/codex14" --claude-home "$tmp/claude14" --apply > "$tmp/out-skparent" 2>&1 || status=$?
+"$sync" --root "$tmp/repo14" --codex-home "$tmp/codex14" --claude-home "$tmp/claude14" --opencode-home "$tmp/opencode14" --apply > "$tmp/out-skparent" 2>&1 || status=$?
 [ "$status" -eq 1 ] || fail "symlinked skills parent should conflict (exit 1): $(cat "$tmp/out-skparent")"
 grep -q "conflict: \[codex\].*symlink" "$tmp/out-skparent" || fail "missing skills-parent symlink conflict: $(cat "$tmp/out-skparent")"
 [ ! -e "$tmp/realskills/personal-sk" ] || fail "must not write through a symlinked skills parent"
@@ -227,7 +227,7 @@ write_wrap_manifest() {
     personal-wrap personal codex claude-code
 }
 write_wrap_manifest
-run15() { "$sync" --root "$tmp/srepo15" --codex-home "$tmp/scodex15" --claude-home "$tmp/sclaude15" "$@"; }
+run15() { "$sync" --root "$tmp/srepo15" --codex-home "$tmp/scodex15" --claude-home "$tmp/sclaude15" --opencode-home "$tmp/sopencode15" "$@"; }
 "$build" --root "$tmp/srepo15" --quiet > /dev/null
 "$register" --root "$tmp/srepo15" --quiet > /dev/null
 
@@ -308,7 +308,7 @@ mkdir -p "$tmp/mrepo/shared/workflows" "$tmp/mcodex" "$tmp/mclaude"
 printf '# demo\n' > "$tmp/mrepo/shared/workflows/personal-mdemo.md"
 write_asset_manifest "$tmp/mrepo/shared/workflows/personal-mdemo.asset.yml" \
   personal-mdemo workflow public shared/workflows/personal-mdemo.md markdown claude-code
-run20() { "$sync" --root "$tmp/mrepo" --codex-home "$tmp/mcodex" --claude-home "$tmp/mclaude" "$@"; }
+run20() { "$sync" --root "$tmp/mrepo" --codex-home "$tmp/mcodex" --claude-home "$tmp/mclaude" --opencode-home "$tmp/mopencode" "$@"; }
 "$build" --root "$tmp/mrepo" --quiet > /dev/null
 "$register" --root "$tmp/mrepo" --quiet > /dev/null
 run20 > "$tmp/out20a" 2>&1 || fail "fresh manifest sync should succeed: $(cat "$tmp/out20a")"
@@ -346,7 +346,7 @@ source:
   path: shared/skills/personal-gated
   format: directory
 EOF
-run21() { "$sync" --root "$tmp/grepo" --codex-home "$tmp/gcodex" --claude-home "$tmp/gclaude" "$@"; }
+run21() { "$sync" --root "$tmp/grepo" --codex-home "$tmp/gcodex" --claude-home "$tmp/gclaude" --opencode-home "$tmp/gopencode" "$@"; }
 "$build" --root "$tmp/grepo" --quiet > /dev/null
 # 宣言 medium + 未承認 → register は human_review_required (exit 3, 非致命)
 status=0
@@ -374,7 +374,7 @@ EOF
   write_asset_manifest "$tmp/prepo/shared/skills/personal-$n/asset.yml" \
     "personal-$n" skill public "shared/skills/personal-$n" directory claude-code
 done
-run22() { "$sync" --root "$tmp/prepo" --codex-home "$tmp/pcodex" --claude-home "$tmp/pclaude" "$@"; }
+run22() { "$sync" --root "$tmp/prepo" --codex-home "$tmp/pcodex" --claude-home "$tmp/pclaude" --opencode-home "$tmp/popencode" "$@"; }
 "$build" --root "$tmp/prepo" --quiet > /dev/null
 "$register" --root "$tmp/prepo" --quiet > /dev/null
 run22 --apply --quiet > /dev/null
@@ -491,7 +491,7 @@ source: shared/skills/personal-victim
 build_id: sha256:000000000000
 EOF
 echo "victim" > "$tmp/eclaude/skills/personal-victim/SKILL.md"
-"$sync" --root "$tmp/erepo" --codex-home "$tmp/ecodex" --claude-home "$tmp/eclaude" --prune --apply \
+"$sync" --root "$tmp/erepo" --codex-home "$tmp/ecodex" --claude-home "$tmp/eclaude" --opencode-home "$tmp/eopencode" --prune --apply \
   > "$tmp/out26b" 2>&1 || fail "prune with empty catalog should succeed: $(cat "$tmp/out26b")"
 ! grep -q "delete:" "$tmp/out26b" || fail "empty catalog must not plan deletes: $(cat "$tmp/out26b")"
 [ -f "$tmp/eclaude/skills/personal-victim/SKILL.md" ] \
@@ -500,7 +500,7 @@ echo "victim" > "$tmp/eclaude/skills/personal-victim/SKILL.md"
 # --- case 26: catalog が無ければ --prune は何も削除しない (fail-closed) ---
 mkdir -p "$tmp/nrepo/shared/skills" "$tmp/ncodex" "$tmp/nclaude/skills/personal-x"
 echo "x" > "$tmp/nclaude/skills/personal-x/SKILL.md"
-"$sync" --root "$tmp/nrepo" --codex-home "$tmp/ncodex" --claude-home "$tmp/nclaude" --prune --apply \
+"$sync" --root "$tmp/nrepo" --codex-home "$tmp/ncodex" --claude-home "$tmp/nclaude" --opencode-home "$tmp/nopencode" --prune --apply \
   > "$tmp/out26" 2>&1 || fail "prune without catalog should succeed: $(cat "$tmp/out26")"
 grep -q "no catalog; run scripts/register.sh first" "$tmp/out26" \
   || fail "prune without catalog should ask for register: $(cat "$tmp/out26")"
@@ -511,7 +511,7 @@ grep -q "no catalog; run scripts/register.sh first" "$tmp/out26" \
 mkdir -p "$tmp/codex27" "$tmp/claude27"
 printf '# memo \377\376 non-utf8\n' > "$tmp/codex27/AGENTS.md"
 status=0
-"$sync" --root "$tmp/repo" --codex-home "$tmp/codex27" --claude-home "$tmp/claude27" > "$tmp/out27a" 2>&1 || status=$?
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex27" --claude-home "$tmp/claude27" --opencode-home "$tmp/opencode27" > "$tmp/out27a" 2>&1 || status=$?
 [ "$status" -eq 1 ] || fail "non-UTF-8 unmanaged owned file should conflict (exit 1), not crash: $(cat "$tmp/out27a")"
 grep -q "conflict: \[codex\].*unmanaged" "$tmp/out27a" \
   || fail "non-UTF-8 owned file should be an unmanaged conflict: $(cat "$tmp/out27a")"
@@ -520,7 +520,7 @@ grep -q "conflict: \[codex\].*unmanaged" "$tmp/out27a" \
 mkdir -p "$tmp/codex27b" "$tmp/claude27b"
 cp "$tmp/repo/generated/codex/instructions/AGENTS.md" "$tmp/codex27b/AGENTS.md"
 printf '\377' >> "$tmp/codex27b/AGENTS.md"
-"$sync" --root "$tmp/repo" --codex-home "$tmp/codex27b" --claude-home "$tmp/claude27b" > "$tmp/out27b" 2>&1 \
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex27b" --claude-home "$tmp/claude27b" --opencode-home "$tmp/opencode27b" > "$tmp/out27b" 2>&1 \
   || fail "sync with managed non-UTF-8 tail should succeed: $(cat "$tmp/out27b")"
 grep -q "skip: \[codex\].*up-to-date" "$tmp/out27b" \
   || fail "managed owned file with non-UTF-8 tail should stay up-to-date: $(cat "$tmp/out27b")"
@@ -531,7 +531,7 @@ mkdir -p "$tmp/codex28" "$tmp/claude28"
 echo "# real file elsewhere" > "$tmp/real-agents-sync.md"
 ln -s "$tmp/real-agents-sync.md" "$tmp/codex28/AGENTS.md"
 status=0
-"$sync" --root "$tmp/repo" --codex-home "$tmp/codex28" --claude-home "$tmp/claude28" --apply > "$tmp/out28" 2>&1 || status=$?
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex28" --claude-home "$tmp/claude28" --opencode-home "$tmp/opencode28" --apply > "$tmp/out28" 2>&1 || status=$?
 [ "$status" -eq 1 ] || fail "symlinked owned AGENTS.md should conflict (exit 1): $(cat "$tmp/out28")"
 grep -q "conflict: \[codex\].*symlink" "$tmp/out28" \
   || fail "missing owned-symlink conflict: $(cat "$tmp/out28")"
@@ -559,13 +559,13 @@ grep -q "user-owned sidecar" "$tmp/sclaude15/agent-tools/scripts/personal-wrap.a
 mkdir -p "$tmp/badcat/generated"
 # top-level が object でない → 旧実装は data["catalog_version"] 参照で TypeError
 echo '["not","an","object"]' > "$tmp/badcat/generated/catalog.json"
-"$sync" --root "$tmp/badcat" --codex-home "$tmp/bc-codex" --claude-home "$tmp/bc-claude" \
+"$sync" --root "$tmp/badcat" --codex-home "$tmp/bc-codex" --claude-home "$tmp/bc-claude" --opencode-home "$tmp/bc-opencode" \
   > "$tmp/out30a" 2>&1 || fail "malformed catalog must not crash sync: $(cat "$tmp/out30a")"
 grep -q "no catalog" "$tmp/out30a" \
   || fail "non-object catalog should be treated as no-catalog: $(cat "$tmp/out30a")"
 # assets が Array of Hash でない場合も fail-closed
 echo '{"catalog_version":3,"assets":[1,2,3]}' > "$tmp/badcat/generated/catalog.json"
-"$sync" --root "$tmp/badcat" --codex-home "$tmp/bc-codex" --claude-home "$tmp/bc-claude" \
+"$sync" --root "$tmp/badcat" --codex-home "$tmp/bc-codex" --claude-home "$tmp/bc-claude" --opencode-home "$tmp/bc-opencode" \
   > "$tmp/out30b" 2>&1 || fail "malformed assets must not crash sync: $(cat "$tmp/out30b")"
 grep -q "no catalog" "$tmp/out30b" \
   || fail "non-Hash asset entries should be treated as no-catalog: $(cat "$tmp/out30b")"
@@ -582,5 +582,234 @@ grep -q "create: \[claude-code\]" "$tmp/out31" \
 run15 --apply --quiet > /dev/null 2>&1
 [ -f "$tmp/sclaude15/agent-tools/scripts/personal-wrap" ] \
   || fail "create should deploy the body when the existing sidecar is managed"
+
+# --- case 32: plugin artifact を <opencode home>/plugins/<name>.js に配置する (#295) ---
+# fixture: approved plugin (plugin kind は常に human review 必須) と、OpenCode 側の既存 file
+# (opencode.json / package.json / node_modules / 非 personal の herdr-agent-state.js)。sync が
+# 書くのは plugins/personal-*.js だけで、それ以外は byte で変わらないことを見る。
+mkdir -p "$tmp/plrepo/shared/plugins" "$tmp/plopen/plugins" "$tmp/plopen/node_modules/@opencode-ai/plugin" \
+  "$tmp/plcodex" "$tmp/plclaude"
+printf 'export default { id: "personal-plug", server: async () => ({}) };\n// v1\n' \
+  > "$tmp/plrepo/shared/plugins/personal-plug.js"
+# 承認は内容に紐づく (#148)。source を書き換える前に呼び直し、現内容で approved を焼き直す。
+write_plug_manifest() { write_approved_plugin_manifest "$tmp/plrepo" personal-plug personal; }
+write_plug_manifest
+printf '{ "$schema": "https://opencode.ai/config.json" }\n' > "$tmp/plopen/opencode.json"
+printf '{ "dependencies": { "@opencode-ai/plugin": "1.18.30" } }\n' > "$tmp/plopen/package.json"
+printf 'export {};\n' > "$tmp/plopen/node_modules/@opencode-ai/plugin/index.js"
+printf 'export const herdr = async () => ({});\n' > "$tmp/plopen/plugins/herdr-agent-state.js"
+run32() {
+  "$sync" --root "$tmp/plrepo" --codex-home "$tmp/plcodex" --claude-home "$tmp/plclaude" \
+    --opencode-home "$tmp/plopen" "$@"
+}
+# opencode home のうち sync の書き先 (plugins/personal-*) 以外の file の checksum。
+opencode_others() { find "$tmp/plopen" -type f ! -path "$tmp/plopen/plugins/personal-*" -exec cksum {} + | sort; }
+# marker 行は実装 (PluginMarker.render) で組む。使い方: plugin_marker <name> <target> <build_id>
+plugin_marker() {
+  ruby -r"$script_dir/../lib/plugin_marker" -e 'puts PluginMarker.render(name: ARGV[0], target: ARGV[1],
+    source: "shared/plugins/#{ARGV[0]}.js", build_id: ARGV[2])' "$@"
+}
+others_before=$(opencode_others)
+"$build" --root "$tmp/plrepo" --quiet > /dev/null
+"$register" --root "$tmp/plrepo" --quiet > /dev/null
+pdeployed="$tmp/plopen/plugins/personal-plug.js"
+pgen="$tmp/plrepo/generated/opencode/plugins/personal-plug.js"
+
+# dry-run は create を plan し、何も書かない
+run32 > "$tmp/out32-dry" 2>&1 || fail "plugin dry-run should succeed: $(cat "$tmp/out32-dry")"
+grep -q "create: \[opencode\] .*/plugins/personal-plug.js" "$tmp/out32-dry" \
+  || fail "missing plugin create plan: $(cat "$tmp/out32-dry")"
+[ ! -e "$pdeployed" ] || fail "dry-run must not write plugin"
+
+# --apply で generated と byte 一致の file (marker 行つき) が mode 0644 で置かれる
+run32 --apply > "$tmp/out32-apply" 2>&1 || fail "plugin apply should succeed: $(cat "$tmp/out32-apply")"
+[ -f "$pdeployed" ] || fail "plugin not deployed"
+cmp -s "$pdeployed" "$pgen" || fail "deployed plugin must be byte-identical to generated"
+[ "$(head -1 "$pdeployed")" = "$(plugin_marker personal-plug opencode "$(bid "$tmp/plrepo" shared/plugins/personal-plug.js text)")" ] \
+  || fail "deployed plugin must start with the marker line: $(head -1 "$pdeployed")"
+ruby -e 'exit((File.stat(ARGV[0]).mode & 0o777) == 0o644)' "$pdeployed" || fail "deployed plugin mode must be 0644"
+[ ! -e "$tmp/plcodex/plugins" ] && [ ! -e "$tmp/plclaude/plugins" ] || fail "plugin must land only in the opencode home"
+[ "$others_before" = "$(opencode_others)" ] \
+  || fail "apply must not touch OpenCode's own files (opencode.json / package.json / node_modules / herdr-agent-state.js)"
+
+# 変更なしなら skip (up-to-date)
+run32 > "$tmp/out32-skip" 2>&1 || fail "plugin skip run should succeed"
+grep -q "skip: \[opencode\].*up-to-date" "$tmp/out32-skip" || fail "missing plugin up-to-date skip: $(cat "$tmp/out32-skip")"
+
+# source 変更で update → apply で反映
+printf 'export default { id: "personal-plug", server: async () => ({}) };\n// v2\n' \
+  > "$tmp/plrepo/shared/plugins/personal-plug.js"
+write_plug_manifest
+"$build" --root "$tmp/plrepo" --quiet > /dev/null
+"$register" --root "$tmp/plrepo" --quiet > /dev/null
+run32 > "$tmp/out32-upd" 2>&1 || fail "plugin update dry-run should succeed"
+grep -q "update: \[opencode\]" "$tmp/out32-upd" || fail "missing plugin update plan: $(cat "$tmp/out32-upd")"
+run32 --apply --quiet > /dev/null 2>&1
+grep -q "// v2" "$pdeployed" || fail "plugin update not applied"
+cmp -s "$pdeployed" "$pgen" || fail "updated plugin must be byte-identical to generated"
+
+# --- case 33: catalog の build_id と generated が不一致なら run build first (stale generated) ---
+printf 'export default { id: "personal-plug", server: async () => ({}) };\n// v3\n' \
+  > "$tmp/plrepo/shared/plugins/personal-plug.js"
+write_plug_manifest
+"$register" --root "$tmp/plrepo" --quiet > /dev/null   # build せず register だけ
+run33_rc=0
+run32 --apply > "$tmp/out33" 2>&1 || run33_rc=$?
+[ "$run33_rc" -eq 0 ] || fail "stale plugin generated should skip (exit 0): $(cat "$tmp/out33")"
+grep -q "skip: \[opencode\].*run build first" "$tmp/out33" \
+  || fail "stale generated plugin should skip with run build first: $(cat "$tmp/out33")"
+grep -q "// v2" "$pdeployed" || fail "stale generated plugin must not be deployed"
+# 整合を戻す (以降の case は v3 を配置済みにする)
+"$build" --root "$tmp/plrepo" --quiet > /dev/null
+"$register" --root "$tmp/plrepo" --quiet > /dev/null
+run32 --apply --quiet > /dev/null 2>&1
+pbid=$(bid "$tmp/plrepo" shared/plugins/personal-plug.js text)
+
+# --- case 34: unmanaged / symlink / directory の target は conflict で停止し、--apply でも書かない ---
+# 使い方: expect_plugin_conflict <label> <reason regex>
+expect_plugin_conflict() {
+  epc_rc=0
+  run32 --apply > "$tmp/out34" 2>&1 || epc_rc=$?
+  [ "$epc_rc" -eq 1 ] || fail "$1 should conflict (exit 1), got $epc_rc: $(cat "$tmp/out34")"
+  grep -q "conflict: \[opencode\].*$2" "$tmp/out34" || fail "$1: missing conflict reason '$2': $(cat "$tmp/out34")"
+  grep -q "nothing was applied" "$tmp/out34" || fail "$1: missing stop notice"
+}
+# 34a: marker の無い同名 file
+echo "user plugin" > "$pdeployed"
+expect_plugin_conflict "unmarked same-name plugin" "existing target is unmanaged"
+grep -q "user plugin" "$pdeployed" || fail "unmarked plugin must not be overwritten"
+# 34b: 別の name の marker
+printf '%s\nexport default {};\n' "$(plugin_marker personal-other opencode "$pbid")" > "$pdeployed"
+expect_plugin_conflict "plugin with another asset's marker" "existing target is unmanaged"
+# 34c: instruction の marker (HTML コメント) は plugin の管理として認めない
+imarker=$(ruby -r"$script_dir/../lib/instruction_marker" -e 'puts InstructionMarker.render(name: "personal-plug",
+  target: "opencode", source: "shared/plugins/personal-plug.js", build_id: ARGV[0])' "$pbid")
+printf '%s\nexport default {};\n' "$imarker" > "$pdeployed"
+expect_plugin_conflict "plugin with an instruction marker" "existing target is unmanaged"
+# 34d: 別 tool (claude-code) 向けの marker
+printf '%s\nexport default {};\n' "$(plugin_marker personal-plug claude-code "$pbid")" > "$pdeployed"
+expect_plugin_conflict "plugin with a claude-code marker" "existing target is unmanaged"
+# 34e: target が symlink (実体は触らない)
+rm -f "$pdeployed"
+echo "real plugin elsewhere" > "$tmp/real-plugin.js"
+ln -s "$tmp/real-plugin.js" "$pdeployed"
+expect_plugin_conflict "symlinked plugin" "existing target is a symlink"
+[ -L "$pdeployed" ] || fail "symlinked plugin must not be replaced"
+grep -q "real plugin elsewhere" "$tmp/real-plugin.js" || fail "symlink destination must be untouched"
+rm -f "$pdeployed"
+# 34f: plugins/ 自体が symlink (home の外へ書き抜けない)
+mv "$tmp/plopen/plugins" "$tmp/plopen/plugins.real"
+mkdir -p "$tmp/real-plugins"
+ln -s "$tmp/real-plugins" "$tmp/plopen/plugins"
+expect_plugin_conflict "symlinked plugins dir" "existing target is a symlink"
+[ ! -e "$tmp/real-plugins/personal-plug.js" ] || fail "must not write through a symlinked plugins dir"
+rm "$tmp/plopen/plugins"
+mv "$tmp/plopen/plugins.real" "$tmp/plopen/plugins"
+# 34g: target が directory
+mkdir -p "$pdeployed"
+expect_plugin_conflict "directory at plugin path" "existing target is not a regular file"
+[ -d "$pdeployed" ] || fail "directory at plugin path must be left in place"
+rmdir "$pdeployed"
+# 復旧
+run32 --apply --quiet > /dev/null 2>&1
+cmp -s "$pdeployed" "$pgen" || fail "plugin should be redeployed after conflicts are cleared"
+
+# --- case 35: 非 personal の file と TOOL_KINDS 外の場所は plan にも prune にも出ない ---
+# opencode home の skills/personal-x と agent-tools/scripts/personal-x に target=opencode の marker を
+# 置いても走査しない (OpenCode が ~/.claude と同じ形で読む skills/ を消さないため)。
+yaml_marker() {
+  ruby -r"$script_dir/../lib/yaml_marker" -e 'puts YamlMarker.render(name: ARGV[0], target: ARGV[1],
+    source: ARGV[2], build_id: ARGV[3])' "$@"
+}
+mkdir -p "$tmp/plopen/skills/personal-x" "$tmp/plopen/agent-tools/scripts"
+echo "skill body" > "$tmp/plopen/skills/personal-x/SKILL.md"
+yaml_marker personal-x opencode shared/skills/personal-x "sha256:$(printf '%064d' 0)" \
+  > "$tmp/plopen/skills/personal-x/.agent-tools-managed.yml"
+echo "script body" > "$tmp/plopen/agent-tools/scripts/personal-x"
+yaml_marker personal-x opencode shared/scripts/personal-x.sh "sha256:$(printf '%064d' 0)" \
+  > "$tmp/plopen/agent-tools/scripts/personal-x.agent-tools-managed.yml"
+run32 --prune --apply > "$tmp/out35" 2>&1 || fail "prune with out-of-scope files should succeed: $(cat "$tmp/out35")"
+! grep -q "personal-x" "$tmp/out35" || fail "opencode skills/ and agent-tools/scripts/ must not be scanned: $(cat "$tmp/out35")"
+! grep -q "herdr-agent-state" "$tmp/out35" || fail "non-personal plugin must not appear in plans: $(cat "$tmp/out35")"
+[ -f "$tmp/plopen/skills/personal-x/SKILL.md" ] || fail "opencode skills/personal-x must be left in place"
+[ -f "$tmp/plopen/agent-tools/scripts/personal-x" ] || fail "opencode agent-tools/scripts/personal-x must be left in place"
+[ "$others_before" = "$(opencode_others | grep -v "/skills/\|/agent-tools/")" ] \
+  || fail "prune must not touch OpenCode's own files"
+
+# --- case 36: human_review_required と manifest_stale は skip (配置しない) ---
+# 36a: 未承認の plugin (plugin kind は risk が low でも human review 必須)
+printf 'export default { id: "personal-plug2", server: async () => ({}) };\n' > "$tmp/plrepo/shared/plugins/personal-plug2.js"
+write_asset_manifest "$tmp/plrepo/shared/plugins/personal-plug2.asset.yml" \
+  personal-plug2 plugin personal shared/plugins/personal-plug2.js text opencode
+"$build" --root "$tmp/plrepo" --quiet > /dev/null
+run36_rc=0
+"$register" --root "$tmp/plrepo" --quiet > /dev/null || run36_rc=$?
+[ "$run36_rc" -eq 3 ] || fail "unapproved plugin should register as human_review_required (exit 3), got $run36_rc"
+run32 --apply > "$tmp/out36a" 2>&1 || fail "sync with a gated plugin should exit 0: $(cat "$tmp/out36a")"
+grep -q "skip: \[opencode\].*personal-plug2.js (human_review_required)" "$tmp/out36a" \
+  || fail "gated plugin must skip with human_review_required: $(cat "$tmp/out36a")"
+[ ! -e "$tmp/plopen/plugins/personal-plug2.js" ] || fail "unreviewed plugin must not be deployed"
+rm -f "$tmp/plrepo/shared/plugins/personal-plug2.js" "$tmp/plrepo/shared/plugins/personal-plug2.asset.yml"
+"$build" --root "$tmp/plrepo" --prune --quiet > /dev/null
+"$register" --root "$tmp/plrepo" --quiet > /dev/null
+# 36b: register 後に manifest が変わった entry は配置せず register を促す (#148)
+echo "# edited after register" >> "$tmp/plrepo/shared/plugins/personal-plug.asset.yml"
+run32 --apply > "$tmp/out36b" 2>&1 || fail "manifest-stale plugin sync should exit 0: $(cat "$tmp/out36b")"
+grep -q "skip: \[opencode\].*manifest changed; run scripts/register.sh first" "$tmp/out36b" \
+  || fail "missing manifest-stale skip for plugin: $(cat "$tmp/out36b")"
+write_plug_manifest
+"$register" --root "$tmp/plrepo" --quiet > /dev/null
+
+# --- case 37: --prune は管理下の orphan plugin だけを消し、管理外 / symlink / .ts は触らない ---
+# 現役の personal-plug-keep を足してから personal-plug を撤去する (catalog が空だと prune は何もしない)。
+printf 'export default { id: "personal-plug-keep", server: async () => ({}) };\n' \
+  > "$tmp/plrepo/shared/plugins/personal-plug-keep.js"
+write_approved_plugin_manifest "$tmp/plrepo" personal-plug-keep personal
+"$build" --root "$tmp/plrepo" --quiet > /dev/null
+"$register" --root "$tmp/plrepo" --quiet > /dev/null
+run32 --apply --quiet > /dev/null
+[ -f "$tmp/plopen/plugins/personal-plug-keep.js" ] || fail "prune fixture should deploy personal-plug-keep"
+rm -f "$tmp/plrepo/shared/plugins/personal-plug.js" "$tmp/plrepo/shared/plugins/personal-plug.asset.yml"
+"$build" --root "$tmp/plrepo" --prune --quiet > /dev/null
+"$register" --root "$tmp/plrepo" --quiet > /dev/null
+echo "hand made plugin" > "$tmp/plopen/plugins/personal-stray.js"                   # marker なし
+ln -s "$tmp/real-plugin.js" "$tmp/plopen/plugins/personal-linked.js"                # symlink
+printf '%s\nexport default {};\n' "$(plugin_marker personal-old opencode "$pbid")" \
+  > "$tmp/plopen/plugins/personal-old.ts"                                            # .ts は扱わない
+
+# --prune なしの sync は orphan に触れない
+run32 > "$tmp/out37-noprune" 2>&1 || fail "sync without --prune should succeed"
+! grep -q "personal-plug.js" "$tmp/out37-noprune" || fail "plugin orphan must not appear without --prune: $(cat "$tmp/out37-noprune")"
+# dry-run は delete を列挙するだけで消さない
+run32 --prune > "$tmp/out37-dry" 2>&1 || fail "plugin prune dry-run should succeed: $(cat "$tmp/out37-dry")"
+grep -q "delete: \[opencode\].*personal-plug.js (not in catalog)" "$tmp/out37-dry" \
+  || fail "missing plugin delete plan: $(cat "$tmp/out37-dry")"
+grep -q "dry-run only" "$tmp/out37-dry" || fail "plugin prune without --apply must stay dry-run"
+[ -f "$pdeployed" ] || fail "dry-run prune must not delete the plugin"
+# --prune --apply で orphan だけ消える
+run32 --prune --apply > "$tmp/out37" 2>&1 || fail "plugin prune apply should succeed: $(cat "$tmp/out37")"
+[ ! -e "$pdeployed" ] || fail "managed plugin orphan should be deleted"
+[ -f "$tmp/plopen/plugins/personal-plug-keep.js" ] || fail "prune must keep the catalog-backed plugin"
+grep -q "skip: \[opencode\].*personal-stray.js (orphan is unmanaged; left in place)" "$tmp/out37" \
+  || fail "missing unmanaged plugin orphan skip: $(cat "$tmp/out37")"
+grep -q "skip: \[opencode\].*personal-linked.js (orphan is a symlink; left in place)" "$tmp/out37" \
+  || fail "missing symlink plugin orphan skip: $(cat "$tmp/out37")"
+[ -f "$tmp/plopen/plugins/personal-stray.js" ] || fail "unmanaged plugin orphan must be left in place"
+[ -L "$tmp/plopen/plugins/personal-linked.js" ] || fail "symlink plugin orphan must be left in place"
+grep -q "real plugin elsewhere" "$tmp/real-plugin.js" || fail "symlink destination must be untouched"
+! grep -q "personal-old" "$tmp/out37" || fail ".ts must be ignored by prune: $(cat "$tmp/out37")"
+[ -f "$tmp/plopen/plugins/personal-old.ts" ] || fail ".ts must be left in place"
+[ -f "$tmp/plopen/plugins/herdr-agent-state.js" ] || fail "non-personal plugin must be left in place"
+
+# --- case 38: valid だが空の catalog では plugin も --prune で消さない (fail-closed) ---
+mkdir -p "$tmp/plerepo/shared" "$tmp/pleopen/plugins"
+"$register" --root "$tmp/plerepo" --quiet > /dev/null   # manifest ゼロ → assets: []
+printf '%s\nexport default {};\n' "$(plugin_marker personal-victim opencode "$pbid")" \
+  > "$tmp/pleopen/plugins/personal-victim.js"
+"$sync" --root "$tmp/plerepo" --codex-home "$tmp/plecodex" --claude-home "$tmp/pleclaude" \
+  --opencode-home "$tmp/pleopen" --prune --apply > "$tmp/out38" 2>&1 \
+  || fail "plugin prune with empty catalog should succeed: $(cat "$tmp/out38")"
+! grep -q "delete:" "$tmp/out38" || fail "empty catalog must not plan plugin deletes: $(cat "$tmp/out38")"
+[ -f "$tmp/pleopen/plugins/personal-victim.js" ] || fail "managed plugin must survive prune with an empty catalog"
 
 echo "ok: sync self-test passed"

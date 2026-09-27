@@ -10,7 +10,10 @@
 # - 同名 unmanaged target は conflict として停止する。
 # - 許可 target は artifact_kind 別: skill = <tool home>/skills/personal-*、
 #   instruction = connect 確立済みの所有ファイル、script = <tool home>/agent-tools/scripts/
-#   personal-* (sidecar marker つき)。それ以外の path は構成しない (docs/sync-policy.md)。
+#   personal-* (sidecar marker つき)、plugin = <opencode home>/plugins/personal-*.js (先頭行
+#   marker)。それ以外の path は構成しない (docs/sync-policy.md)。
+# - plan と prune が走査する tool × kind の組は ArtifactTargets::TOOL_KINDS に従う (opencode
+#   home の skills/ と agent-tools/scripts/ は走査しない, #295)。
 # - --prune で catalog に載らなくなった deployed asset を撤去する (marker-gated delete,
 #   #154)。削除も --apply が必須で、既定は dry-run。
 
@@ -20,6 +23,7 @@ require_relative "yaml_marker"
 require_relative "artifact_targets"
 require_relative "catalog"
 require_relative "instruction_marker"
+require_relative "plugin_marker"
 require_relative "assets"
 require_relative "cli"
 require_relative "plan_report"
@@ -59,6 +63,8 @@ module Sync
     # 条件を満たさない orphan は削除せず skip で可視化する (prune は conflict でブロック
     # しない。書き込みと違い「触らない」が常に安全なため)。instruction は connect が
     # 人間ファイルと絡めて所有するため prune 対象外 (docs/sync-policy.md)。
+    # 走査は TOOL_KINDS の組だけ (TOOLS × 全 kind ではない): opencode home の skills/ は OpenCode
+    # が skill として読む dir で、marker が一致しても消してはいけない (#295)。
     # catalog 不在 / version 不一致 / 壊れた JSON / entry ゼロでは何も判断しない
     # (fail-closed)。@entries が空だと全 deployed が orphan に見えて全削除を plan して
     # しまうため。valid な空 catalog ({"assets": []}) は manifest ゼロの repo (間違った
@@ -66,7 +72,17 @@ module Sync
     def prune_plans
       return [] if !@catalog_present || @entries.empty?
 
-      TOOLS.flat_map { |tool| prune_skills(tool) + prune_scripts(tool) }
+      TOOLS.flat_map do |tool|
+        ArtifactTargets::TOOL_KINDS.fetch(tool).flat_map do |kind|
+          case kind
+          when "skill" then prune_skills(tool)
+          when "script" then prune_scripts(tool)
+          when "instruction" then [] # connect が所有するため prune 対象外
+          when "plugin" then prune_plugins(tool)
+          else raise ArgumentError, "no prune for artifact_kind #{kind.inspect}"
+          end
+        end
+      end
     end
 
     # 既知の限界 (TOCTOU): symlink / unmanaged の検査は plan 時のみで、apply は配置先を
@@ -93,6 +109,12 @@ module Sync
           FileUtils.cp(p.gen, p.target)
           File.chmod(0o755, p.target)
           FileUtils.cp(ArtifactTargets.sidecar_marker_path(p.gen), ArtifactTargets.sidecar_marker_path(p.target))
+        when "plugin"
+          # plugin は先頭行に marker を持つ単一ファイル。OpenCode が import して読むので
+          # 実行ビットは立てない (build と同じ 0644)。
+          FileUtils.mkdir_p(File.dirname(p.target))
+          FileUtils.cp(p.gen, p.target)
+          File.chmod(0o644, p.target)
         else
           FileUtils.rm_rf(p.target)
           FileUtils.mkdir_p(File.dirname(p.target))
@@ -111,12 +133,16 @@ module Sync
       @entries = result.entries
     end
 
-    # prune の削除実体。marker-gated 判定 (prune_skills / prune_scripts) を通った
-    # plan だけが来る。script は本体と sidecar marker を対で消す。
+    # prune の削除実体。marker-gated 判定 (prune_skills / prune_scripts / prune_plugins) を
+    # 通った plan だけが来る。script は本体と sidecar marker を対で消す。単一ファイルの kind
+    # (script / plugin) は rm_f で、directory (skill) だけ rm_rf。
     def delete_target(plan)
-      if plan.kind == "script"
+      case plan.kind
+      when "script"
         FileUtils.rm_f(plan.target)
         FileUtils.rm_f(ArtifactTargets.sidecar_marker_path(plan.target))
+      when "plugin"
+        FileUtils.rm_f(plan.target)
       else
         FileUtils.rm_rf(plan.target)
       end
@@ -180,6 +206,30 @@ module Sync
       end.compact
     end
 
+    # plugin の prune は <home>/plugins/personal-*.js だけを見る (.ts と personal- 以外の file、
+    # herdr-agent-state.js 等は列挙しない)。symlink と、先頭行 marker が自分の管理 (tool + name)
+    # を示さない file は skip (plan_plugin と同じ防御)。
+    def prune_plugins(tool)
+      plugins_dir = File.join(@homes.fetch(tool), "plugins")
+      return [] unless File.directory?(plugins_dir)
+
+      known = catalog_names(tool, "plugin")
+      Dir.glob(File.join(plugins_dir, ArtifactTargets.plugin_filename("personal-*"))).sort.map do |target|
+        name = File.basename(target, ".js")
+        next if known.include?(name)
+
+        if File.symlink?(target) || File.symlink?(plugins_dir)
+          next Plan.new("skip", tool, name, target, "orphan is a symlink; left in place", "plugin", nil,
+                        :orphan_symlink)
+        end
+        unless owned_plugin_marker(target, tool, name)
+          next Plan.new("skip", tool, name, target, "orphan is unmanaged; left in place", "plugin", nil,
+                        :orphan_unmanaged)
+        end
+        Plan.new("delete", tool, name, target, "not in catalog", "plugin", nil, :orphan)
+      end.compact
+    end
+
     # catalog entry (target-artifact) を plan にマップする。registered 以外は配置しない。
     def plan_for_entry(entry)
       tool = entry["target"]
@@ -201,6 +251,7 @@ module Sync
       when "skill" then plan_skill(tool, name, entry["build_id"])
       when "instruction" then plan_instruction(tool, name, entry["build_id"])
       when "script" then plan_script(tool, name, entry["build_id"])
+      when "plugin" then plan_plugin(tool, name, entry["build_id"])
       else
         Plan.new("skip", tool, name, nil, "unsupported artifact_kind #{kind.inspect}", kind, nil, :unsupported)
       end
@@ -357,6 +408,57 @@ module Sync
       end
     end
 
+    # plugin は先頭行 marker を持つ単一ファイル (<opencode home>/plugins/<name>.js)。skill / script
+    # と同じ所有 / stale / symlink 防御を、marker が本体の中にある形にあわせて適用する。
+    # 判定の順は docs/sync-policy.md の OpenCode target の項と同じ。
+    def plan_plugin(tool, name, expected_build_id)
+      target = target_path(tool, name, "plugin")
+      gen = ArtifactTargets.generated_path(@root, tool, name, "plugin")
+
+      unless name.start_with?("personal-")
+        return Plan.new("conflict", tool, name, target, "generated asset without personal- prefix", "plugin", gen)
+      end
+      # generated が catalog entry と一致するか (target + name + build_id)。marker が無い /
+      # 壊れている / build_id が古い、はすべて「build が未実行 / 古い」(plan_instruction と同じ)。
+      unless File.file?(gen) &&
+             PluginMarker.matches?(File.binread(gen), target: tool, name: name, build_id: expected_build_id)
+        return Plan.new("skip", tool, name, target, "run build first", "plugin", gen, :build_first)
+      end
+      # 本体か親 dir (<home>/plugins) が symlink なら、cp / chmod が home の外へ追従しうるため
+      # 触らない (plan_skill / plan_instruction と同じ防御)。
+      if File.symlink?(target) || File.symlink?(File.dirname(target))
+        return Plan.new("conflict", tool, name, target, "existing target is a symlink", "plugin", gen)
+      end
+      unless File.exist?(target)
+        return Plan.new("create", tool, name, target, nil, "plugin", gen)
+      end
+      # directory 等は marker を持ち得ず、cp が失敗するか中身を壊すので unmanaged より前に止める。
+      unless File.file?(target)
+        return Plan.new("conflict", tool, name, target, "existing target is not a regular file", "plugin", gen)
+      end
+
+      target_marker = owned_plugin_marker(target, tool, name)
+      unless target_marker
+        return Plan.new("conflict", tool, name, target, "existing target is unmanaged", "plugin", gen)
+      end
+
+      if target_marker["build_id"] == expected_build_id
+        Plan.new("skip", tool, name, target, "up-to-date", "plugin", gen, :up_to_date)
+      else
+        Plan.new("update", tool, name, target, nil, "plugin", gen)
+      end
+    end
+
+    # 配置済み plugin (regular file) の先頭行 marker が、この tool の同名 asset の agent-tools 管理を
+    # 示すならその marker、示さなければ nil。plan_plugin の unmanaged 判定と prune の marker-gated
+    # delete が同じ条件を共有する。
+    def owned_plugin_marker(target, tool, name)
+      return nil unless File.file?(target)
+
+      marker = PluginMarker.parse(File.binread(target))
+      marker if marker && marker["target"] == tool && marker["name"] == name
+    end
+
     # sync が script で書き込む経路 (本体 / sidecar marker / 配置先 dir 2 階層) のいずれかが
     # symlink かを判定する。1 つでも symlink なら cp / chmod が home の外へ追従しうる。
     def script_target_symlink?(target)
@@ -378,7 +480,7 @@ module Sync
   def self.main(argv)
     opts = Cli.parse(argv, usage: USAGE,
                      bool_flags: %w[--apply --prune --quiet],
-                     value_flags: %w[--root --codex-home --claude-home])
+                     value_flags: %w[--root --codex-home --claude-home --opencode-home])
     return 0 if opts == :help
 
     root = opts["--root"] || Cli::DEFAULT_ROOT
@@ -388,6 +490,7 @@ module Sync
     homes = ArtifactTargets.default_homes
     homes["codex"] = File.expand_path(opts["--codex-home"]) if opts["--codex-home"]
     homes["claude-code"] = File.expand_path(opts["--claude-home"]) if opts["--claude-home"]
+    homes["opencode"] = File.expand_path(opts["--opencode-home"]) if opts["--opencode-home"]
 
     runner = Runner.new(root, homes)
     plans = runner.plan
@@ -403,7 +506,8 @@ module Sync
                       change_actions: %w[create update delete])
   end
 
-  USAGE = "usage: sync.sh [--root DIR] [--apply] [--prune] [--codex-home DIR] [--claude-home DIR] [--quiet]"
+  USAGE = "usage: sync.sh [--root DIR] [--apply] [--prune] [--codex-home DIR] [--claude-home DIR] " \
+          "[--opencode-home DIR] [--quiet]"
 end
 
 exit Sync.main(ARGV) if $PROGRAM_NAME == __FILE__
