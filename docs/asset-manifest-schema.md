@@ -115,6 +115,30 @@ code fence 全体を一律には除外しない。コード例でも host が実
 同名 key はこの検査の対象外。`references/` / `assets/` / 非配置の `evals/` の説明文も entrypoint
 として解析しない。既存の injection / 実行 bit / symlink 検査の対象範囲は変更しない。
 
+### plugin source の制約
+
+`kind: plugin` の asset (OpenCode の `plugins/*.js` として配る実行コード, #295) の source は、
+`shared/plugins/personal-<name>.js` と sidecar manifest `personal-<name>.asset.yml` の対です
+(sidecar が無ければ既存どおり `asset source is missing sidecar manifest` の error)。
+check-manifests は、`source` の通常の検査 (相対 path / `shared/` 配下 / symlink・不在・traversal の
+拒否) が error を出さなかったときだけ、続けて次を検査します。いずれも fail-closed の error です。
+
+| 条件 | error 文言 (`<manifest_path>: ` が前置される) |
+| --- | --- |
+| `source.format` が `directory` | `plugin asset must be a single .js file, not a directory format` |
+| `source.path` が `.js` で終わらない (`.ts` / `.mjs` を含む) | `plugin source must be a .js file, got "<source.path>"` |
+| source 全体が UTF-8 として不正 | `plugin source must be valid UTF-8: <source.path>` |
+| source の先頭が `#!` | `plugin source must not start with "#!": <source.path>` |
+| source の先頭が `/* agent-tools:managed` | `plugin source must not start with "/* agent-tools:managed": <source.path>` |
+
+理由: OpenCode の loader は `plugins/*.{ts,js}` を import する (`.ts` は transpile しないので扱わない)。
+shebang は import される module に意味が無く、marker の prefix は build が前置するもので、source
+側にあると先頭行が二重になる。UTF-8 の検査を source 全体に当てるのは、配置後の所有判定
+(`PluginMarker.parse`) が先頭行しか見ないため、file 全体の正しさをここで担保するためです。
+形は ESM の単一 file で、export は `export default { id, server }` だけに限ります (名前付き export は
+OpenCode の legacy loader がすべて plugin 関数として扱うため置かない。形の詳細は
+[adapters/opencode/README.md](../adapters/opencode/README.md))。
+
 ## Required fields
 
 ```yaml
@@ -155,10 +179,11 @@ rules:
 asset の種類を表す意味ラベルです。**用途に応じて選びます**。配置のされ方は kind ごとに
 下表の「配置挙動」のとおりで、配備対象は skill 系 (`skill` / `prompt` / `workflow`
 → skill target)、`instruction` (→ tool 別の `CLAUDE.md` / `AGENTS.md`)、
-`script` (→ `<tool home>/agent-tools/scripts/personal-<name>` の単一実行ファイル) の
-3 系統です。`agent` は現状どの target にも解決されず未対応 (unsupported) です。kind が
+`script` (→ `<tool home>/agent-tools/scripts/personal-<name>` の単一実行ファイル)、
+`plugin` (→ `<opencode home>/plugins/personal-<name>.js`。opencode 専用) の 4 系統です。
+`agent` は現状どの target にも解決されず未対応 (unsupported) です。kind が
 どの artifact に解決されるかの仕組みは [compatibility / artifact_kind](#compatibility)
-を参照してください。
+を、tool ごとに配れる artifact_kind は下記 [`targets`](#targets) の表を参照してください。
 
 | kind | 意味・用途 | 配置挙動 (artifact_kind) |
 | --- | --- | --- |
@@ -167,6 +192,7 @@ asset の種類を表す意味ラベルです。**用途に応じて選びます
 | `workflow` | 複数ステップの再利用可能な作業手順。 | `skill` |
 | `instruction` | 常時読まれる運用ルール。tool 別の `CLAUDE.md` / `AGENTS.md` として生成。詳細は [Instruction Artifact Kind](instruction-artifact-kind.md)。 | `instruction` |
 | `script` | tool home に配る実行可能な script body (hook / wrapper 等)。単一ファイルのみ。 | `script` |
+| `plugin` | OpenCode の process の中で動く plugin (ESM の単一 `.js`)。target は `opencode` のみ。常に human review 必須 ([Register / Catalog](register-catalog.md))。 | `plugin` |
 | `agent` | サブエージェント定義。**現状は配備未対応** (各 tool の agent 形式へのマッピングが未設計)。register では `unsupported` になる。 | 未対応 |
 
 補足:
@@ -179,7 +205,7 @@ asset の種類を表す意味ラベルです。**用途に応じて選びます
 - `agent` kind は現状 build 対象外で、配備したい需要が出た時点で設計します
   (各 tool の agent 形式へのマッピングが論点)。
 - `shared/` 配下のサブディレクトリ (`skills/` `prompts/` `workflows/` `agents/`
-  `instructions/` `scripts/`) は **整理のための置き場所**で、kind を決定しません。asset の kind は
+  `instructions/` `scripts/` `plugins/`) は **整理のための置き場所**で、kind を決定しません。asset の kind は
   必ず manifest の `kind` フィールドで決まります (discovery は sidecar manifest
   `shared/**/*.asset.yml` と directory manifest `shared/**/asset.yml` の両方)。
   例: `personal-project-operating-loop` は `workflows/` 配下にありつつ `kind: workflow`
@@ -212,8 +238,27 @@ v1 allowed values:
 
 - `codex`
 - `claude-code`
+- `opencode` (#295)
 
 empty list は不可です。target 未定の場合は register 対象にしません。
+
+tool ごとに受け取れる artifact_kind は `scripts/lib/artifact_targets.rb` の `TOOL_KINDS` で
+決まります。check-manifests は、targets の各 tool について resolve 後の artifact_kind がこの表に
+あるかを検査し、**build 対応 kind なのに表に無い組だけを error** にします
+(`artifact_kind <kind> cannot be distributed to <tool> (<tool> accepts: ...)`。
+例: `artifact_kind plugin cannot be distributed to codex (codex accepts: skill, instruction, script)` /
+`artifact_kind skill cannot be distributed to opencode (opencode accepts: plugin)`)。
+`agent` のような build 非対応 kind は従来どおり error にせず、register が `unsupported` にします。
+
+| tool | 受け取る artifact_kind | 表に無い組の扱い |
+| --- | --- | --- |
+| `codex` | `skill` / `instruction` / `script` | `plugin` → manifest error |
+| `claude-code` | `skill` / `instruction` / `script` | `plugin` → manifest error |
+| `opencode` | `plugin` | `skill` / `instruction` / `script` → manifest error |
+| (すべて) | — | `agent` (build 非対応) → register の `unsupported` |
+
+OpenCode に skill / instruction / script を配らない理由は
+[Tool Compatibility 方針](tool-compatibility.md)「tool と artifact_kind の組」。
 
 ### `risk`
 
@@ -276,8 +321,8 @@ allowed values:
 - `human_review`: `pending`, `approved`, `rejected`, `not_needed`
 - `approved_build_id`: build_id 文字列 (`sha256:` + full 64 hex, #184)。
   `human_review: approved` と対で使う (単独はエラー)。
-- `approved_artifact_kind`: `skill` / `instruction` / `script`。`human_review: approved` と
-  対で使う (単独はエラー)。
+- `approved_artifact_kind`: `skill` / `instruction` / `script` / `plugin`。`human_review: approved`
+  と対で使う (単独はエラー)。
 
 `human_review` は人間が宣言する値で、register が medium finding の解決に参照します。
 承認 identity は **(内容, 配布形態) の対** です (#148, #184): `approved_build_id`
@@ -300,19 +345,24 @@ target tool ごとの変換 hint です。
 
 `compatibility.<tool>.artifact_kind` で、その tool 向けに生成する artifact の種類を
 明示できます。未指定なら asset の `kind` から既定値が導出されます (`instruction` kind は
-instruction、`script` kind は script、`skill` / `prompt` / `workflow` は skill)。
+instruction、`script` kind は script、`plugin` kind は plugin、`skill` / `prompt` / `workflow` は
+skill)。
 **既定どおりの値は書きません** (既定値の重複宣言は導出 mapping との drift 面になるため、
 kind から導出が変わるときだけ明示します, #153)。
-**`artifact_kind: script` への override は禁止です** (#184): script (実行ファイル配布) は
-manifest の `kind: script` でのみ宣言でき、override で他 kind の source を実行ファイル
-配布に変えることはできません (check-manifests が error にする。kind: script なら既定導出
-されるので override に正当用途が無い)。
-tool キーは初期 target (`codex` / `claude-code`)、`artifact_kind` は build 対応 kind
-(`skill` / `instruction` / `script`) に限られ、check-manifests が検証します (typo は
-silent に unsupported へ落とさず error にする)。
+**`artifact_kind: script` / `artifact_kind: plugin` への override は禁止です** (#184, #295):
+実行コードの配布形態 (script = 実行ファイル、plugin = OpenCode の process 内で動く module) は
+manifest の `kind: script` / `kind: plugin` でのみ宣言でき、override で他 kind の source を実行
+コード配布に変えることはできません (check-manifests が
+`compatibility.<tool>.artifact_kind: <kind> is not allowed; declare kind: <kind> in the manifest
+instead (#184)` の error にする。kind で宣言すれば既定導出されるので override に正当用途が無い。
+正本は `CheckManifests::NON_OVERRIDABLE_KINDS`)。
+tool キーは `targets` と同じ語彙 (`codex` / `claude-code` / `opencode`)、`artifact_kind` は
+build 対応 kind (`skill` / `instruction` / `script` / `plugin`) に限られ、check-manifests が
+検証します (typo は silent に unsupported へ落とさず error にする)。tool と kind の組は
+[`targets`](#targets) の表に従い、表に無い組は override で明示しても error になります。
 
-build が対応する artifact_kind は `skill` / `instruction` / `script` です。いずれも build →
-register → sync で配置されます (instruction の所有確立は connect が担当)。
+build が対応する artifact_kind は `skill` / `instruction` / `script` / `plugin` です。いずれも
+build → register → sync で配置されます (instruction の所有確立は connect が担当)。
 
 - `skill`: `<tool home>/skills/personal-<name>/` に directory として配る。
 - `instruction`: tool 別の単一ファイル (claude-code は `CLAUDE.md`、codex は `AGENTS.md`)
@@ -321,8 +371,14 @@ register → sync で配置されます (instruction の所有確立は connect 
   + sidecar marker として配る。**単一ファイルのみ対応** (source.format が directory の script は
   unsupported)。本体は byte 単位で保持する。配置先と marker は
   [Sync Policy](sync-policy.md) / [Status / Manifest Contract](status-manifest-contract.md)。
+- `plugin`: `<opencode home>/plugins/personal-<name>.js` に単一 file (mode 0644) として配る。
+  marker は本体先頭の 1 行 JS ブロックコメント。**単一の `.js` のみ対応** (directory / `.ts` は
+  上記「plugin source の制約」で manifest error)。2 行目以降は source を byte 単位で保持する。
+  target は `opencode` だけで、配置先と marker は [Sync Policy](sync-policy.md) /
+  [Status / Manifest Contract](status-manifest-contract.md)、adapter は
+  [adapters/opencode/README.md](../adapters/opencode/README.md)。
 
-`compatibility` に書けるのは上記のみです: tool キーは `codex` / `claude-code`、その下は
+`compatibility` に書けるのは上記のみです: tool キーは `codex` / `claude-code` / `opencode`、その下は
 `artifact_kind` の 1 キーだけで、**未知の tool キー・未知の下位キーは check-manifests が
 error にします** (fail-closed。「optional metadata は strict validation しない」という
 旧記述は実装と乖離していたため是正, #176 Low)。

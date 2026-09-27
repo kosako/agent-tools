@@ -8,14 +8,41 @@
 | --- | --- | --- | --- |
 | Codex | `shared/` | `generated/codex/` | `~/.codex/skills/personal-*` |
 | Claude Code | `shared/` | `generated/claude-code/` | `~/.claude/skills/personal-*` |
+| OpenCode | `shared/` | `generated/opencode/` | `~/.config/opencode/plugins/personal-*.js` (plugin のみ) |
 
-表の v1 sync 列は skill の配置先です。instruction は connect が確立した所有ファイル
+表の v1 sync 列は Codex / Claude Code では skill の配置先、OpenCode では plugin の配置先です。
+instruction は connect が確立した所有ファイル
 (`~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md`) を sync が更新します
 ([Instruction Artifact Kind](instruction-artifact-kind.md))。script は
 `~/.codex/agent-tools/scripts/personal-*` / `~/.claude/agent-tools/scripts/personal-*`
 (sidecar marker つき) を sync が直接配置します。下記「v1 で扱わないもの」の
 `AGENTS.md` / `CLAUDE.md` の automatic sync は、人間が手書きするファイルを自動同期しない
 という意味です (connect は import 1 行追加 / 空ファイルの claim のみを行う)。
+
+### tool と artifact_kind の組
+
+どの tool にどの artifact_kind を配れるかは `scripts/lib/artifact_targets.rb` の `TOOL_KINDS`
+が正本です (#295)。build の生成と prune、sync の plan と prune、status の generated の列挙、
+doctor の home の表示は、TOOLS 全体 × 全 kind ではなくこの表の組だけを回します。
+
+| tool | 配る artifact_kind | 配らないもの |
+| --- | --- | --- |
+| `codex` | `skill` / `instruction` / `script` | `plugin` |
+| `claude-code` | `skill` / `instruction` / `script` | `plugin` |
+| `opencode` | `plugin` | `skill` / `instruction` / `script` |
+
+OpenCode に skill と instruction を配らない理由: OpenCode は `~/.claude/skills/<name>/SKILL.md` を
+global の skill として、`~/.claude/CLAUDE.md` を global の rules として直接読みます
+(`~/.config/opencode/AGENTS.md` が無いとき。2026-09-26 に OpenCode 1.18.30 で実測、
+[opencode-plugin-probe](opencode-plugin-probe.md) の M15)。Claude Code target に配った skill と、
+dotfiles の `opencode.json` の instructions から参照される `~/.claude/agent-tools/CLAUDE.md` が
+そのまま OpenCode にも届くので、同じ内容を `<opencode home>/skills/` に二重配布すると二重読込に
+なります。script も配りません: `<home>/agent-tools/scripts/<name>` は dotfiles が参照する
+公開契約で tool ごとに置き場を変えられず、OpenCode 向けの plugin は Claude Code target に配った
+script を `~/.claude/agent-tools/scripts/` から呼びます
+([dotfiles との境界](boundary-with-dotfiles.md)「OpenCode home の所有」)。
+表に無い組 (plugin → codex、skill → opencode 等) は register の `unsupported` ではなく
+check-manifests の manifest error になります ([Asset Manifest Schema](asset-manifest-schema.md))。
 
 ## Compatibility ルール
 
@@ -38,9 +65,10 @@
 
 ## 決定済み事項
 
-- Codex / Claude Code artifact 向け adapter spec:
+- Codex / Claude Code / OpenCode artifact 向け adapter spec:
   [adapters/codex/README.md](../adapters/codex/README.md) /
-  [adapters/claude-code/README.md](../adapters/claude-code/README.md)。
+  [adapters/claude-code/README.md](../adapters/claude-code/README.md) /
+  [adapters/opencode/README.md](../adapters/opencode/README.md)。
 - review 結果は generated artifacts に同梱せず、
   [catalog](register-catalog.md) に別出しする。
 - review 後の risk / registration 状態は catalog の `checks` と
