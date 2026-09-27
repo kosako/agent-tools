@@ -25,7 +25,7 @@ pipeline scripts の `--root` を省略したときの root は、その script 
   [Install & Usage](../docs/install-and-usage.md)。
 
 ```text
-usage: setup.sh [--apply] [--root DIR] [--codex-home DIR] [--claude-home DIR] [--quiet]
+usage: setup.sh [--apply] [--root DIR] [--codex-home DIR] [--claude-home DIR] [--opencode-home DIR] [--quiet]
 ```
 
 - **既定は dry-run**(connect / sync は plan 表示のみ・tool home に書き込まない。
@@ -34,7 +34,8 @@ usage: setup.sh [--apply] [--root DIR] [--codex-home DIR] [--claude-home DIR] [-
 - build の gate fail / connect・sync の conflict では停止する。register の human review
   待ち(exit 3)は非致命として継続し、note を出す(sync は registered のものだけ配置)。
 - 引数は各 sub-script へ forward する(`--root` / `--quiet` は全段、`--codex-home` /
-  `--claude-home` は connect / sync)。
+  `--claude-home` は connect / sync、`--opencode-home` は sync だけ。connect は instruction を
+  配らない opencode を扱わないので渡さない)。
 - self-test: `tests/setup-test.sh`
 
 - `check-manifests.sh`: sidecar asset manifests の static validation。
@@ -46,6 +47,13 @@ usage: check-manifests.sh [--root DIR] [--quiet]
 
 - error は `path: message` の line 単位で出力され、error があれば exit 1。
 - manifest を持たない asset source も検出する。
+- tool と artifact_kind の組 (`ArtifactTargets::TOOL_KINDS`) を検査し、build 対応 kind なのに
+  表に無い組 (plugin → codex / claude-code、skill・instruction・script → opencode) を error にする。
+  build 非対応 kind (agent) は従来どおり error にしない (register が unsupported にする)。
+  `compatibility.<tool>.artifact_kind` の `script` / `plugin` への上書きは禁止
+  (`CheckManifests::NON_OVERRIDABLE_KINDS`)。plugin の source は単一の `.js` / UTF-8 / 先頭が `#!` と
+  marker prefix でないことを検査する (文言は
+  [Asset Manifest Schema](../docs/asset-manifest-schema.md)「plugin source の制約」)。
 - self-test: `tests/check-manifests-test.sh`
 
 - `check-injection.sh`: shared assets への static prompt injection checks。
@@ -157,11 +165,16 @@ usage: build.sh [--root DIR] [--prune] [--quiet]
   medium finding では止めず生成する (中間物。配置は sync が catalog を見て止める)。
 - management marker を埋め込む。skill は directory 直下の `.agent-tools-managed.yml`、
   instruction は本体先頭の 1 行 HTML コメント marker、script は本体の隣の sidecar
-  `.agent-tools-managed.yml`。`build_id` は source content の sha256 なので build は決定的。
+  `.agent-tools-managed.yml`、plugin は本体先頭の 1 行 JS ブロックコメント marker
+  (`lib/plugin_marker.rb`。mode 0644、2 行目以降は source の bytes)。`build_id` は source
+  content の sha256 なので build は決定的 (plugin の marker 行は build_id に含めない)。
+- 生成と prune は `ArtifactTargets::TOOL_KINDS` の組だけを回す (codex / claude-code は skill /
+  instruction / script、opencode は plugin)。表に無い組は `unsupported artifact_kind` として skip
+  し、`generated/opencode/skills/` などは走査しない。
 - 書き込み先は `generated/` のみ。tool directories には書き込まない。
 - `--prune` で manifest に対応しなくなった generated artifact を削除する。対象は
-  agent-tools marker を持つ skill directory / instruction file / script (本体 + sidecar) の
-  みで、marker のない directory / file は警告して残す。
+  agent-tools marker を持つ skill directory / instruction file / script (本体 + sidecar) /
+  plugin file のみで、marker のない directory / file は警告して残す。
 - self-test: `tests/build-test.sh`
 
 - `connect.sh`: instruction の所有ファイルを確立し、人間の instruction ファイルから
@@ -186,7 +199,7 @@ usage: connect.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] 
   [Sync Policy](../docs/sync-policy.md) を enforce する。
 
 ```text
-usage: sync.sh [--root DIR] [--apply] [--prune] [--codex-home DIR] [--claude-home DIR] [--quiet]
+usage: sync.sh [--root DIR] [--apply] [--prune] [--codex-home DIR] [--claude-home DIR] [--opencode-home DIR] [--quiet]
 ```
 
 - default は dry-run。書き込みには `--apply` が必須。
@@ -202,21 +215,27 @@ usage: sync.sh [--root DIR] [--apply] [--prune] [--codex-home DIR] [--claude-hom
   unmanaged な同名 target / symlink は conflict として exit 1 で停止し、何も書き込まない。
 - 書き込み先は skill が `<tool home>/skills/personal-*`、instruction が connect 確立済みの
   所有ファイル (`~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md`)、script が
-  `<tool home>/agent-tools/scripts/personal-*` (単一実行ファイル + sidecar marker)。
-  それ以外の path は構成しない。
-- `--codex-home` / `--claude-home` は inspection / test 用の override。
+  `<tool home>/agent-tools/scripts/personal-*` (単一実行ファイル + sidecar marker)、plugin が
+  `<opencode home>/plugins/personal-*.js` (単一 file、mode 0644、先頭 1 行 marker)。
+  それ以外の path は構成しない。plan と prune が走査する tool と kind の組は
+  `ArtifactTargets::TOOL_KINDS` に従い、opencode home の `skills/` と `agent-tools/scripts/` は
+  走査しない ([sync-policy](../docs/sync-policy.md) の「v1 OpenCode targets」)。
+- `--codex-home` / `--claude-home` / `--opencode-home` は inspection / test 用の override
+  (opencode の既定は `~/.config/opencode`。`XDG_CONFIG_HOME` は見ない)。
 - self-test: `tests/sync-test.sh` (fake home のみを使い、実際の tool homes には触れない)
 
 - `status.sh`: report-only status。
   [Status / Manifest Contract](../docs/status-manifest-contract.md) の JSON を出力する。
 
 ```text
-usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR]
+usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR] [--opencode-home DIR]
 ```
 
 - `--json` で contract_version 3 の JSON、省略時は human-readable summary。
 - manifest validation / injection check の結果、generated の stale 数、
   sync target state (managed / stale / conflict / missing / deployed_but_inactive) を含む。
+  generated の列挙は `ArtifactTargets::TOOL_KINDS` の組だけを回し、plugin の鮮度は先頭行 marker の
+  `build_id` と `Build.build_id_for` の比較で判定する。`sync_targets[].tool` に `opencode` が入る。
 - read-only。いかなる state も変更しない。
 - 出力に absolute local paths / secrets を含めない。
 - self-test: `tests/status-test.sh`
@@ -224,11 +243,19 @@ usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR]
 - `doctor.sh`: state を変更せず、local environment assumptions を inspect する。
 
 ```text
-usage: doctor.sh [--root DIR] [--codex-home DIR] [--claude-home DIR] [--agents-home DIR]
+usage: doctor.sh [--root DIR] [--codex-home DIR] [--claude-home DIR] [--opencode-home DIR] [--agents-home DIR]
 ```
 
 - ruby / git、status report の統合、tool homes、禁止 targets への marker
   誤存在、catalog の存在と鮮度を check する。
+- tool home の表示は `ArtifactTargets::TOOL_KINDS` に従う。opencode は
+  `[opencode] <label> present, N personal plugin(s)` で、数えるのは `plugins/personal-*.js` のうち
+  先頭行 marker が `target=opencode` として正しいもの (`PluginMarker.managed?`)。custom home は
+  label に置き換え、生の path を出さない。`--opencode-home` を省いて既定 home を使い、かつ
+  `$XDG_CONFIG_HOME/opencode` が既定と食い違うときだけ warn を出す。禁止 targets の検査 (sidecar
+  marker を探す方式) に `<opencode home>/node_modules` は足さない (file 先頭 marker の plugin は
+  この方式で検出できないため)。OpenCode が plugin を読み込んだかや二重読込の判定は dotfiles の
+  doctor が持つ ([boundary-with-dotfiles](../docs/boundary-with-dotfiles.md)「OpenCode home の所有」)。
 - 出力は `level: area: message` 形式 (ok / info / warn / fail)。fail があれば exit 1。
 - read-only。paths は tilde 表記で出力し、secrets を含めない。
 - self-test: `tests/doctor-test.sh`
@@ -247,6 +274,9 @@ usage: register.sh [--root DIR] [--quiet]
   承認, #148 #184)。
 - exit code: 0 (human_review_required なし) / 3 (human_review_required あり) / 1 (gate fail)。
   unsupported は exit code に影響しない。
+- resolve 後の artifact_kind が `script` / `plugin` の asset は、risk / finding によらず常に human
+  review 必須 (`Register::Runner#review_needed?`。実行コードの配布)。catalog_version は 4 のまま
+  ([Register / Catalog](../docs/register-catalog.md))。
 - 書き込みは `generated/catalog.json` のみ。
 - self-test: `tests/register-test.sh`
 
@@ -259,29 +289,54 @@ kind / tool の知識は `lib/artifact_targets.rb` に集約されているが (
 **artifact_kind を追加するとき**:
 
 1. `lib/artifact_targets.rb`: `SUPPORTED_KINDS` / `DEFAULT_BY_KIND` /
-   `GENERATED_SUBDIRS` / `generated_path` / `target_path` / `buildable?`。
-2. `lib/check_manifests.rb`: asset kind の列挙 `KINDS` (manifest の `kind` と
-   artifact_kind は別物。後者の検証は `ArtifactTargets.supported?` を参照済み)。
-3. `lib/build.rb`: `build_<kind>` の実装と `run` の分岐、`prune` の期待リスト。
+   `GENERATED_SUBDIRS` / `generated_path` / `target_path` / `buildable?`、そして `TOOL_KINDS`
+   (どの tool に配れる kind か。表に無い組は生成も配置も列挙もされない)。
+2. `lib/check_manifests.rb`: asset kind の列挙 `KINDS` と置き場所 `ASSET_CATEGORIES` (manifest の
+   `kind` と artifact_kind は別物。後者の検証は `ArtifactTargets.supported?` を参照済み)。実行コードの
+   配布形態なら `NON_OVERRIDABLE_KINDS` に足して `compatibility.*.artifact_kind` での上書きを禁じる。
+   tool / kind の組の検査 (`check_target_kinds`) は `TOOL_KINDS` を参照するので追加不要。source の
+   形式に制約があるなら `check_<kind>_source` を足す。
+3. `lib/build.rb`: `build_<kind>` の実装と `run` の分岐、`prune_<kind>` と `prune` の期待リスト
+   (`TOOL_KINDS` の組で回す。builder が無い kind は ArgumentError)。
    marker 戦略は [Status / Manifest Contract](../docs/status-manifest-contract.md)
-   (directory = 直下 marker / 単一ファイル = sidecar / 本文コメント) に従う。
-4. `lib/sync.rb`: `plan_<kind>` の実装 (所有 / stale / symlink 防御を既存 kind と
-   対称に) と `apply` の分岐。
-5. `lib/status.rb`: `generated_state` の鮮度判定が新 kind の marker を読めるか。
-6. docs: この README の該当 script 節 /
+   (directory = 直下 marker / 単一ファイル = sidecar / 本文コメント) に従う。本文コメント marker
+   なら `lib/<kind>_marker.rb` を分けて作り、既存 marker と相互に拒否させる。
+4. `lib/register.rb`: 実行コードの配布形態なら `review_needed?` に足して常に human review 必須にする。
+   entry の key の順は変えない。
+5. `lib/sync.rb`: `plan_<kind>` の実装 (所有 / stale / symlink 防御を既存 kind と
+   対称に)、`apply` / `delete_target` の分岐、`prune_plans` の kind 別の走査。
+6. `lib/status.rb`: `generated_state` の鮮度判定が新 kind の marker を読めるか (列挙は `TOOL_KINDS`)。
+7. `lib/doctor.rb`: home の表示 (`check_tool_homes`) が新 kind を数えるか。
+8. docs: この README の該当 script 節 / [adapters/](../adapters/README.md) /
    [Asset Manifest Schema](../docs/asset-manifest-schema.md) /
    [Register / Catalog](../docs/register-catalog.md) /
-   [Sync Policy](../docs/sync-policy.md) / [onboarding](../docs/onboarding.md)。
-7. tests: `tests/build-test.sh` / `sync-test.sh` / `status-test.sh` /
-   `register-test.sh` に既存 kind と対称のケースを足す。
+   [Sync Policy](../docs/sync-policy.md) / [Status / Manifest Contract](../docs/status-manifest-contract.md) /
+   [onboarding](../docs/onboarding.md) / [Install & Usage](../docs/install-and-usage.md)。
+9. tests: `tests/check-manifests-test.sh` / `build-test.sh` / `sync-test.sh` / `status-test.sh` /
+   `register-test.sh` / `doctor-test.sh` に既存 kind と対称のケースを足す。
 
-**tool を追加するとき** (v1 は 2 tool 固定。tool 語彙と home 既定値は #192 で一元化済み):
+**tool を追加するとき** (tool 語彙と home 既定値は #192 で一元化済み。#295 で opencode を足した):
 
-1. tool 一覧と home 既定値: `lib/artifact_targets.rb` の `TOOLS` と `default_homes`
-   (build / sync / check-manifests / status / doctor はここを参照する)。
-2. CLI flag: `sync` / `connect` / `status` / `doctor` の `main` に `--<tool>-home` を足す。
+1. tool 一覧と home 既定値: `lib/artifact_targets.rb` の `TOOLS` と `default_homes`、そして
+   `TOOL_KINDS` にその tool が受け取る kind の列 (build / sync / check-manifests / status / doctor は
+   ここを参照する)。生成・prune・plan・列挙・表示は `TOOLS` × 全 kind ではなく `TOOL_KINDS` の
+   組で回す (他 tool の home の `skills/` などを走査して消さないため)。
+2. CLI flag: `sync` / `status` / `doctor` の `main` と `setup.sh` の forward に `--<tool>-home` を
+   足す。`connect` に足すのは instruction を配る tool だけ (配らない tool では connect は flag を
+   受け付けず exit 2 のままにする)。
 3. instruction を配るなら `ArtifactTargets::INSTRUCTION_FILENAMES` と connect の
    所有戦略 (import 対応可否)。
+4. `lib/check_manifests.rb`: `TARGETS` の列挙は `ArtifactTargets::TOOLS` 参照なので追加不要だが、
+   tool / kind の組の error 文言 (`<tool> accepts: ...`) が docs と一致するか確かめる。
+5. `lib/doctor.rb`: `check_tool_homes` の表示と、custom home の label 化。`forbidden_paths` は
+   sidecar marker 方式で検出できる dir だけを足す。
+6. tests と CI: sync / status / doctor / setup を呼ぶ**すべての** test の call site に `--<tool>-home`
+   を足し (実物の home を読み書きしない)、静的な検査と home の canary で漏れを確かめる。
+   `.github/workflows/test.yml` の status / doctor にも空の home を渡す。
+7. docs: [tool-compatibility](../docs/tool-compatibility.md) の表と「配らない理由」、
+   [adapters/<tool>/README.md](../adapters/README.md)、[Sync Policy](../docs/sync-policy.md) の
+   許可 / 禁止 target、[boundary-with-dotfiles](../docs/boundary-with-dotfiles.md) の home の所有、
+   [Install & Usage](../docs/install-and-usage.md) の配置先の表。
 
 ## 予定している scripts
 

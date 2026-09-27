@@ -25,6 +25,7 @@
 
 - Codex: `~/.codex`
 - Claude Code: `~/.claude`
+- OpenCode: `~/.config/opencode`(`XDG_CONFIG_HOME` は見ません。食い違いは `doctor` が warn)
 
 ## 何がどこに置かれるか
 
@@ -33,10 +34,17 @@
 | skill | `~/.codex/skills/personal-*` / `~/.claude/skills/personal-*` | `sync`(直接 create) |
 | instruction | `~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md`(人間の `~/.claude/CLAUDE.md` から `@agent-tools/CLAUDE.md` で import) | `connect`(初回所有)→ `sync`(更新) |
 | script | `~/.codex/agent-tools/scripts/personal-*` / `~/.claude/agent-tools/scripts/personal-*`(sidecar marker つき) | `sync`(直接 create) |
+| plugin(OpenCode のみ) | `~/.config/opencode/plugins/personal-*.js`(先頭 1 行が marker) | `sync`(直接 create。置くこと自体が OpenCode への登録) |
 
 skill は隔離 directory なので `sync` が直接置けますが、instruction は共有ファイル
 (`CLAUDE.md` / `AGENTS.md`)に載るため、**先に `connect` で所有を確立**してから
 `sync` が更新します。
+
+OpenCode には skill / instruction / script を配りません(OpenCode は `~/.claude/skills` と
+`~/.claude/CLAUDE.md` を直接読むため。[tool-compatibility.md](tool-compatibility.md))。plugin は
+Claude Code 側に配った `~/.claude/agent-tools/scripts/personal-*` を呼ぶので、OpenCode で効かせる
+には Claude Code target の `sync` も済んでいる必要があります。plugin を外すには `opencode --pure`
+で起動するか、`sync --prune` で撤去します。
 
 ## 初回インストール
 
@@ -163,7 +171,8 @@ echo "$status" | jq -r '
 | `conflict ... (existing target is a symlink)` | 所有先 / 親が symlink | symlink を解消するか、別 home を指定 |
 | `no catalog; run scripts/register.sh first` | catalog 未生成 | `./scripts/register.sh` |
 
-`--codex-home` / `--claude-home` で home を上書きできます(検証用)。
+`--codex-home` / `--claude-home` / `--opencode-home` で home を上書きできます(検証用。
+`--opencode-home` は sync / status / doctor / setup が受け付け、connect は受け付けません)。
 
 ## 関連ドキュメント
 
