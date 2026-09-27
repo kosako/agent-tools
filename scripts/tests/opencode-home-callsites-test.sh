@@ -3,9 +3,11 @@
 # 静的な検査 (#295)。読み取りの call site (status / doctor) は canary
 # (scripts/tests/lib/opencode-home-canary.sh、書き込みの検出) では捕まらないので、ここで守る。
 #
-# 判定: 行末 \ の継続行をつないだ 1 行のうち、先頭の command word (先行する VAR=value を除く) が
-# sync / status / doctor / setup の呼び出し ("$sync" / "$status_sh" / "$doctor" / "$setup" か
-# <name>.sh の file 名) である行は、すべて --opencode-home を渡していること。home flag を 1 つも渡さない
+# 判定: 行末 \ の継続行をつないだ 1 行のうち、sync / status / doctor / setup の呼び出しの token
+# ("$sync" / "$status_sh" / "$doctor" / "$setup" か <name>.sh の file 名) を含む行は、すべて
+# --opencode-home を渡していること。token は行頭だけでなく、command 置換の中 (`out=$("$setup" …)`)、
+# 関数本体の 1 行定義 (`run15() { "$sync" …; }`)、pipeline / `&&` の後ろでも拾う (#338 review round 2)。
+# 変数の定義行 (`sync=…`) と `for … in` の列挙行は呼び出しではないので除く。home flag を 1 つも渡さない
 # 呼び出しも対象に含める (既定の home を読むので、読み取りでも実物の ~/.config/opencode に触る。
 # #338 review)。除外は、行末の注記 `# no-opencode-home: <理由>` を付けた呼び出しだけ (HOME を偽に差し替えた
 # doctor-test の XDG case、usage で止まる parse-only の case)。connect は instruction を配らない
@@ -47,12 +49,16 @@ ruby -e '
         joined = joined.chomp("\\") + " " + lines[i].chomp.lstrip
       end
       i += 1
-      cmd = joined.sub(/\A\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|\x27[^\x27]*\x27|\S*)\s+)*/, "")
-      # 呼び出しの形: "$sync" 等の変数、<dir>/sync.sh 等の file 名、helper 経由 (run_script status.sh …)。
-      next unless cmd =~ /\A"?\$\{?(sync|status_sh|doctor|setup)\}?"?(?:\s|\z)|\A(?:\w+\s+)?\S*?(sync|status|doctor|setup)\.sh(?:\s|\z)/
+      next if joined =~ /\A\s*#/ || joined =~ /\A\s*for\s/
+      # 呼び出しの token: "$sync" 等の変数 (行頭、$(、{、;、&&、||、| の後ろ)、<dir>/sync.sh 等の
+      # file 名、helper 経由 (run_script status.sh …)。変数の定義行は token の後ろが `="` なので当たらない。
+      next unless joined =~ /(?:\A|[\s(;{&|])"?\$\{?(sync|status_sh|doctor|setup)\}?"?(?=[\s)]|\z)/ ||
+                  joined =~ /(?:\A|[\s(;{&|])(?:\w+\s+)?\S*?(sync|status|doctor|setup)\.sh(?=[\s)]|\z)/
 
-      checked[File.basename(path)] += 1
-      next if joined.include?("--opencode-home")
+      if joined.include?("--opencode-home")
+        checked[File.basename(path)] += 1
+        next
+      end
       if joined =~ /#\s*no-opencode-home:\s*\S/
         exempt << "#{path}:#{start}"
         next
@@ -60,9 +66,10 @@ ruby -e '
       offenders << "#{path}:#{start}: #{joined.strip}"
     end
   end
+  # 注記で除外した呼び出しは数えない (除外だけの suite で「検査した」ことにならないように)。
   missing = required.reject { |name| checked[name] > 0 }
   unless missing.empty?
-    warn "no home-flag call sites found in: #{missing.join(", ")} (is the detection regex broken?)"
+    warn "no flag-carrying call sites found in: #{missing.join(", ")} (is the detection regex broken?)"
     exit 1
   end
   unless offenders.empty?
