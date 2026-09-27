@@ -99,8 +99,9 @@ data が欠けた項目は unknown にして pass に数えない。
 
 OpenCode 1.18.30 (Homebrew)、macOS (arm64)。2026-09-26 に `--stage all` を 2 回 (bash tool の shell =
 `/bin/sh` と `$SHELL` の zsh) 実行し、`--stage real` を 1 回実行した。2 回の verdict は同じだったので 1 行に
-まとめ、数値が違うものは両方を書く。PR #336 の review で判定 (欠けた data の扱いと PTY の記録の選び方) を直した後、
-2026-09-27 に `--stage all` を同じ 2 通りで測り直し、同じ verdict になった。予測は source からのもので、根拠は #295 の packet の「既知の事実」。
+まとめ、数値が違うものは両方を書く。PR #336 の review (2 round) で判定を「予測する値ごとに前提の証跡を確かめる」形に直し、
+`!` と PTY の記録を操作の時間帯で選ぶようにした後、2026-09-27 に `--stage all` を同じ 2 通りで測り直し、同じ
+verdict になった。予測は source からのもので、根拠は #295 の packet の「既知の事実」。
 
 | M | stage | source からの予測 | observed | verdict |
 | --- | --- | --- | --- | --- |
@@ -116,7 +117,7 @@ OpenCode 1.18.30 (Homebrew)、macOS (arm64)。2026-09-26 に `--stage all` を 2
 | M10 | mock / serve | idle の 500ms 後の記録は run では欠け、serve では残る | 予測どおり | confirmed |
 | M11 | mock / serve / tui-plan | (予測なし) | showToast は run / serve / TUI のどれでも `data: true` を返し、`tui.toast.show` の event も出るが、TUI の画面に toast は描かれなかった (M17。戻り値は表示の証拠にならない)。app.log は `<data>/opencode/log/opencode.log` に出る。bash の出力に after で足した注記は model には届く (M4) が、TUI の bash の欄には表示されない (TUI は実行中に流れた出力を見せている) | observed |
 | M12 | mock | chat.params の providerID = probe、modelID と api.id = claude-probe。chat.params と shell.env は sessionID で突き合わせられる | 予測どおり。chat.message の model も同じ文字列 | confirmed |
-| M13 | mock | detached で起動した子の process group を負の pid で SIGKILL すると、子も孫も消える | 予測どおり。after の中からの ruby の spawn は 43〜61ms (4 回の実測) | confirmed |
+| M13 | mock | detached で起動した子の process group を負の pid で SIGKILL すると、子も孫も消える | 予測どおり。after の中からの ruby の spawn は 43〜61ms (6 回の実測) | confirmed |
 | M14 | mock | edit の失敗では after が呼ばれず、bash の非 0 終了では呼ばれる | 予測どおり。失敗した edit の part の status は error | confirmed |
 | M15 | mock | tmp の HOME の `~/.claude/CLAUDE.md` と `~/.claude/skills` が request に載り、`OPENCODE_DISABLE_CLAUDE_CODE=1` で消える | 予測どおり | confirmed |
 | M16 | real | after で足した nonce が、実 provider の変換を経ても model に届く | `opencode-go/kimi-k3` で 1 run (auth は env の OPENCODE_API_KEY を `--pass-env` で渡した)。model の返答に、after で足した nonce (run ごとの乱数) がそのまま含まれていた。実物の config dir と DB の mtime は変わらない | confirmed |
