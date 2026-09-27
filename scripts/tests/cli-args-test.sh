@@ -98,4 +98,22 @@ ruby -r"$script_dir/../lib/cli" -e '
   check("help leaves rest of argv", argv == ["--rest"])
 ' > /dev/null || fail "Cli.parse direct unit checks failed"
 
+# --- --opencode-home (#295): sync / status / doctor / setup は value flag として受け (値欠落は
+#     exit 2)、connect は受けない (instruction を配らない tool の home。unknown option で exit 2) ---
+for cmd in sync status doctor setup; do
+  bin="$script_dir/../$cmd.sh"
+  status=0
+  (cd "$tmp" && "$bin" --opencode-home > "$tmp/out" 2> "$tmp/err") || status=$?
+  [ "$status" -eq 2 ] || fail "$cmd: --opencode-home without value should exit 2, got $status"
+  cat "$tmp/out" "$tmp/err" | grep -q "^usage:" || fail "$cmd: --opencode-home without value should print usage"
+  if grep -q "unknown option" "$tmp/err"; then
+    fail "$cmd: --opencode-home must be a known option: $(cat "$tmp/err")"
+  fi
+done
+status=0
+(cd "$tmp" && "$script_dir/../connect.sh" --opencode-home "$tmp" > "$tmp/out" 2> "$tmp/err") || status=$?
+[ "$status" -eq 2 ] || fail "connect: --opencode-home should be rejected with exit 2, got $status"
+grep -q "unknown option: --opencode-home" "$tmp/err" \
+  || fail "connect: --opencode-home should be reported as unknown option: $(cat "$tmp/err")"
+
 echo "ok: cli-args characterization test passed"

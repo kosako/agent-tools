@@ -17,7 +17,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 run_doctor() {
   "$doctor" --root "$tmp/repo" --codex-home "$tmp/codex" \
-    --claude-home "$tmp/claude" --agents-home "$tmp/agents"
+    --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" --agents-home "$tmp/agents"
 }
 
 # --- fixture repo ---
@@ -26,7 +26,7 @@ WAM_EXTRA='summary: demo workflow'
 make_demo_repo "$tmp/repo" workflows personal-demo workflow '# demo'
 "$build" --root "$tmp/repo" --quiet > /dev/null
 "$script_dir/../register.sh" --root "$tmp/repo" --quiet > /dev/null
-"$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --apply --quiet > /dev/null
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" --apply --quiet > /dev/null
 
 # --- case 1: 健全な環境では exit 0 で各 check が ok ---
 run_doctor > "$tmp/d1" 2>&1 || fail "doctor should pass: $(cat "$tmp/d1")"
@@ -73,12 +73,12 @@ status=0
 run_doctor > "$tmp/d4" 2>&1 || status=$?
 [ "$status" -eq 1 ] || fail "conflict target should exit 1"
 grep -q "fail: target: \[codex\] personal-demo conflict" "$tmp/d4" || fail "missing conflict line"
-"$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" > /dev/null 2>&1 \
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" > /dev/null 2>&1 \
   && fail "sync should also report the conflict" || true
 
 # --- case 5: catalog があれば build_id で鮮度を check する ---
 rm -rf "$tmp/codex/skills/personal-demo"
-"$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --apply --quiet > /dev/null
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" --apply --quiet > /dev/null
 "$script_dir/../register.sh" --root "$tmp/repo" --quiet > /dev/null
 run_doctor > "$tmp/d5" 2>&1 || fail "doctor with catalog should pass: $(cat "$tmp/d5")"
 grep -q "ok: catalog: present, 1 asset(s), fresh" "$tmp/d5" || fail "missing catalog ok line: $(cat "$tmp/d5")"
@@ -120,7 +120,7 @@ write_asset_manifest "$tmp/brepo/shared/workflows/personal-demo.asset.yml" \
 "$script_dir/../register.sh" --root "$tmp/brepo" --quiet > /dev/null   # catalog を valid に作る
 run_bdoctor() {
   "$doctor" --root "$tmp/brepo" --codex-home "$tmp/bcodex" \
-    --claude-home "$tmp/bclaude" --agents-home "$tmp/bagents"
+    --claude-home "$tmp/bclaude" --opencode-home "$tmp/bopencode" --agents-home "$tmp/bagents"
 }
 
 # case 7: source ファイル欠落 (build_id が Errno) でも crash せず stale を warn
@@ -145,7 +145,7 @@ WAM_EXTRA='summary: demo workflow'
 make_demo_repo "$tmp/grepo" workflows personal-demo workflow '# demo'
 "$build" --root "$tmp/grepo" --quiet > /dev/null
 "$script_dir/../register.sh" --root "$tmp/grepo" --quiet > /dev/null
-"$sync" --root "$tmp/grepo" --codex-home "$tmp/gcodex" --claude-home "$tmp/gclaude" --apply --quiet > /dev/null
+"$sync" --root "$tmp/grepo" --codex-home "$tmp/gcodex" --claude-home "$tmp/gclaude" --opencode-home "$tmp/gopencode" --apply --quiet > /dev/null
 ruby -rjson -e '
   path = ARGV[0]
   catalog = JSON.parse(File.read(path))
@@ -154,9 +154,81 @@ ruby -rjson -e '
 ' "$tmp/grepo/generated/catalog.json"
 status=0
 "$doctor" --root "$tmp/grepo" --codex-home "$tmp/gcodex" \
-  --claude-home "$tmp/gclaude" --agents-home "$tmp/gagents" > "$tmp/d9" 2>&1 || status=$?
+  --claude-home "$tmp/gclaude" --opencode-home "$tmp/gopencode" --agents-home "$tmp/gagents" > "$tmp/d9" 2>&1 || status=$?
 [ "$status" -eq 0 ] || fail "deployed_but_inactive should warn, not fail/crash (exit $status): $(cat "$tmp/d9")"
 grep -q "warn: target: \[codex\] personal-demo deployed_but_inactive" "$tmp/d9" \
   || fail "missing deployed_but_inactive warn line: $(cat "$tmp/d9")"
+
+# --- case 10: opencode home は先頭行 marker が正しい plugin の数を出し、生の path を出さない (#295) ---
+mkdir -p "$tmp/plrepo/shared/plugins" "$tmp/plcodex" "$tmp/plclaude" "$tmp/plopen/plugins" "$tmp/plagents"
+printf 'export default { id: "personal-plug", server: async () => ({}) };\n' > "$tmp/plrepo/shared/plugins/personal-plug.js"
+write_approved_plugin_manifest "$tmp/plrepo" personal-plug personal
+"$build" --root "$tmp/plrepo" --quiet > /dev/null
+"$script_dir/../register.sh" --root "$tmp/plrepo" --quiet > /dev/null
+"$sync" --root "$tmp/plrepo" --codex-home "$tmp/plcodex" --claude-home "$tmp/plclaude" --opencode-home "$tmp/plopen" --apply --quiet > /dev/null
+# 数えないもの: marker の無い personal-*.js、非 personal の file、別 tool 向けの marker
+echo "hand made" > "$tmp/plopen/plugins/personal-junk.js"
+echo "herdr" > "$tmp/plopen/plugins/herdr-agent-state.js"
+ruby -r"$script_dir/../lib/plugin_marker" -e 'puts PluginMarker.render(name: "personal-foreign", target: "claude-code",
+  source: "shared/plugins/personal-foreign.js", build_id: "sha256:" + "0" * 64)' > "$tmp/plopen/plugins/personal-foreign.js"
+# 使い方: run_pdoctor <opencode home> [extra args]
+run_pdoctor() {
+  rpd_home=$1
+  shift
+  "$doctor" --root "$tmp/plrepo" --codex-home "$tmp/plcodex" --claude-home "$tmp/plclaude" \
+    --opencode-home "$rpd_home" --agents-home "$tmp/plagents" "$@"
+}
+run_pdoctor "$tmp/plopen" > "$tmp/d10" 2>&1 || fail "doctor with a plugin should pass: $(cat "$tmp/d10")"
+grep -q "ok: home: \[opencode\] <opencode home> present, 1 personal plugin(s)" "$tmp/d10" \
+  || fail "opencode home line should count only managed plugins: $(cat "$tmp/d10")"
+grep -q "ok: target: \[opencode\] personal-plug managed" "$tmp/d10" || fail "missing opencode target line: $(cat "$tmp/d10")"
+grep -F -q "$tmp" "$tmp/d10" && fail "doctor output must not contain the raw opencode home path: $(cat "$tmp/d10")" || true
+! grep -q "XDG_CONFIG_HOME" "$tmp/d10" || fail "XDG warn must not appear when --opencode-home is given: $(cat "$tmp/d10")"
+# home が無ければ info (tool not installed?)
+run_pdoctor "$tmp/no-such-opencode" > "$tmp/d10b" 2>&1 || fail "missing opencode home should not fail: $(cat "$tmp/d10b")"
+grep -q "info: home: \[opencode\] <opencode home> not present" "$tmp/d10b" || fail "missing opencode home should be info: $(cat "$tmp/d10b")"
+# --opencode-home が複数あれば後勝ち
+run_pdoctor "$tmp/no-such-opencode" --opencode-home "$tmp/plopen" > "$tmp/d10c" 2>&1 \
+  || fail "duplicate --opencode-home should pass: $(cat "$tmp/d10c")"
+grep -q "ok: home: \[opencode\] <opencode home> present, 1 personal plugin(s)" "$tmp/d10c" \
+  || fail "duplicate --opencode-home should take the last value: $(cat "$tmp/d10c")"
+
+# --- case 11: XDG_CONFIG_HOME の warn は --opencode-home を省いたときだけ (#295) ---
+# HOME を tmp に差し替える唯一の case: 既定の home (~/.config/opencode) を偽の HOME の下に向け、
+# 実物の ~/.config/opencode を読まない。home flag を全部省いても既定は偽の HOME の下になる。
+fake_home="$tmp/home11"
+mkdir -p "$fake_home/.config/opencode" "$tmp/xdg11"
+xdg_warn="warn: home: \[opencode\] \$XDG_CONFIG_HOME/opencode differs from the default ~/.config/opencode"
+# 11a: flag なし + XDG が既定と食い違う → warn (exit は 0 のまま)
+HOME="$fake_home" XDG_CONFIG_HOME="$tmp/xdg11" "$doctor" --root "$tmp/plrepo" > "$tmp/d11a" 2>&1 \
+  || fail "XDG mismatch should warn, not fail: $(cat "$tmp/d11a")"
+grep -q "$xdg_warn" "$tmp/d11a" || fail "missing XDG warn when --opencode-home is omitted: $(cat "$tmp/d11a")"
+grep -q "home: \[opencode\] ~/.config/opencode present, 0 personal plugin(s)" "$tmp/d11a" \
+  || fail "default opencode home should be shown with tilde: $(cat "$tmp/d11a")"
+grep -F -q "$tmp/xdg11" "$tmp/d11a" && fail "XDG warn must not print the raw XDG path: $(cat "$tmp/d11a")" || true
+# 11b: --opencode-home を渡せば、XDG が食い違っていても warn しない
+HOME="$fake_home" XDG_CONFIG_HOME="$tmp/xdg11" "$doctor" --root "$tmp/plrepo" --opencode-home "$tmp/plopen" > "$tmp/d11b" 2>&1 \
+  || fail "doctor with --opencode-home under XDG should pass: $(cat "$tmp/d11b")"
+! grep -q "XDG_CONFIG_HOME" "$tmp/d11b" || fail "XDG warn must not appear when --opencode-home is given: $(cat "$tmp/d11b")"
+# 11c: XDG が既定と一致 / 空 (未設定と同じ) なら warn しない
+HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" "$doctor" --root "$tmp/plrepo" > "$tmp/d11c" 2>&1 \
+  || fail "doctor with matching XDG should pass: $(cat "$tmp/d11c")"
+! grep -q "XDG_CONFIG_HOME" "$tmp/d11c" || fail "XDG warn must not appear when XDG matches the default: $(cat "$tmp/d11c")"
+HOME="$fake_home" XDG_CONFIG_HOME= "$doctor" --root "$tmp/plrepo" > "$tmp/d11d" 2>&1 \
+  || fail "doctor with empty XDG should pass: $(cat "$tmp/d11d")"
+! grep -q "XDG_CONFIG_HOME" "$tmp/d11d" || fail "empty XDG_CONFIG_HOME must count as unset: $(cat "$tmp/d11d")"
+
+# --- case 12: plugin の deployed_but_inactive は warn のまま (fail にしない) (#295) ---
+ruby -rjson -e '
+  path = ARGV[0]
+  catalog = JSON.parse(File.read(path))
+  catalog["assets"].each { |a| a["registration"] = "human_review_required" }
+  File.write(path, JSON.pretty_generate(catalog))
+' "$tmp/plrepo/generated/catalog.json"
+status=0
+run_pdoctor "$tmp/plopen" > "$tmp/d12" 2>&1 || status=$?
+[ "$status" -eq 0 ] || fail "plugin deployed_but_inactive should warn, not fail (exit $status): $(cat "$tmp/d12")"
+grep -q "warn: target: \[opencode\] personal-plug deployed_but_inactive" "$tmp/d12" \
+  || fail "missing plugin deployed_but_inactive warn: $(cat "$tmp/d12")"
 
 echo "ok: doctor self-test passed"
