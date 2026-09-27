@@ -98,16 +98,16 @@ module ProbeOpencode
       !fact.nil? && fact["exit"] == 0 && fact["timed_out"] == false && fact["events"].to_i.positive?
     end
 
-    PTY_SLACK_MS = 500
-
-    # PTY の shell.env は sessionID / callID を持たないので、runner が記録した PTY の起動の時間帯で選ぶ
-    # (sessionID の有無で選ぶと、PTY に sessionID が付いた場合を検出できない)。時間帯が無ければ nil。
+    # PTY の shell.env は sessionID / callID を持たないので、runner が記録した PTY の時間帯 (POST /pty の
+    # 直前から、出力の file を確かめ終えるまで) で選ぶ。sessionID の有無で選ぶと、PTY に sessionID が付いた
+    # 場合を検出できない。runner はこの時間帯に他の操作をしないので、余裕は取らない (取ると直前の `!` や
+    # 直後の prompt の記録を拾う。実測で起きた)。時間帯が無ければ nil。
     def self.pty_records(data, run, fact)
       t0 = fact && fact.dig("pty", "t_start")
       t1 = fact && fact.dig("pty", "t_end")
       return nil unless t0.is_a?(Integer) && t1.is_a?(Integer)
 
-      hooks(data, run, "shell.env").select { |h| h["t"].is_a?(Integer) && h["t"] >= t0 - PTY_SLACK_MS && h["t"] <= t1 + PTY_SLACK_MS }
+      hooks(data, run, "shell.env").select { |h| h["t"].is_a?(Integer) && h["t"] >= t0 && h["t"] <= t1 }
     end
 
     def self.hooks(data, run, kind)

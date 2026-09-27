@@ -155,6 +155,13 @@ def t5(dir)
                    [{ "run" => "serve-plugin", "kind" => "shell.env", "t" => 150, "has_sessionID" => true, "has_callID" => false },
                     { "run" => "serve-plugin", "kind" => "shell.env", "t" => 5000, "has_sessionID" => false, "has_callID" => false }], [], [])["M5"]
   check(pty["observed"]["pty.sessionID"] == true, "T5: a PTY record with a sessionID must be detected: #{pty['observed'].select { |k, _| k.start_with?('pty.s') }}")
+  # 時間帯の外 (直前の `!` / 直後の prompt) の記録は、sessionID を持っていても PTY に数えない。
+  near = write.call("pty-neighbors", { "runs" => [{ "label" => "serve-plugin", "pty" => { "t_start" => 1000, "t_end" => 1800 } }] },
+                    [{ "run" => "serve-plugin", "kind" => "shell.env", "t" => 980, "has_sessionID" => true, "has_callID" => true },
+                     { "run" => "serve-plugin", "kind" => "shell.env", "t" => 1002, "has_sessionID" => false, "has_callID" => false },
+                     { "run" => "serve-plugin", "kind" => "shell.env", "t" => 1900, "has_sessionID" => true, "has_callID" => true }], [], [])["M5"]
+  check(near["observed"]["pty.sessionID"] == false && near["observed"]["pty.callID"] == false,
+        "T5: records outside the PTY window must not count: #{near['observed'].select { |k, _| k.start_with?('pty.') }}")
   puts "ok T5"
 end
 

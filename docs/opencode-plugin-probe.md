@@ -99,7 +99,8 @@ data が欠けた項目は unknown にして pass に数えない。
 
 OpenCode 1.18.30 (Homebrew)、macOS (arm64)。2026-09-26 に `--stage all` を 2 回 (bash tool の shell =
 `/bin/sh` と `$SHELL` の zsh) 実行し、`--stage real` を 1 回実行した。2 回の verdict は同じだったので 1 行に
-まとめ、数値が違うものは両方を書く。予測は source からのもので、根拠は #295 の packet の「既知の事実」。
+まとめ、数値が違うものは両方を書く。PR #336 の review で判定 (欠けた data の扱いと PTY の記録の選び方) を直した後、
+2026-09-27 に `--stage all` を同じ 2 通りで測り直し、同じ verdict になった。予測は source からのもので、根拠は #295 の packet の「既知の事実」。
 
 | M | stage | source からの予測 | observed | verdict |
 | --- | --- | --- | --- | --- |
@@ -115,7 +116,7 @@ OpenCode 1.18.30 (Homebrew)、macOS (arm64)。2026-09-26 に `--stage all` を 2
 | M10 | mock / serve | idle の 500ms 後の記録は run では欠け、serve では残る | 予測どおり | confirmed |
 | M11 | mock / serve / tui-plan | (予測なし) | showToast は run / serve / TUI のどれでも `data: true` を返し、`tui.toast.show` の event も出るが、TUI の画面に toast は描かれなかった (M17。戻り値は表示の証拠にならない)。app.log は `<data>/opencode/log/opencode.log` に出る。bash の出力に after で足した注記は model には届く (M4) が、TUI の bash の欄には表示されない (TUI は実行中に流れた出力を見せている) | observed |
 | M12 | mock | chat.params の providerID = probe、modelID と api.id = claude-probe。chat.params と shell.env は sessionID で突き合わせられる | 予測どおり。chat.message の model も同じ文字列 | confirmed |
-| M13 | mock | detached で起動した子の process group を負の pid で SIGKILL すると、子も孫も消える | 予測どおり。after の中からの ruby の spawn は 61ms (sh) / 44ms (zsh) | confirmed |
+| M13 | mock | detached で起動した子の process group を負の pid で SIGKILL すると、子も孫も消える | 予測どおり。after の中からの ruby の spawn は 43〜61ms (4 回の実測) | confirmed |
 | M14 | mock | edit の失敗では after が呼ばれず、bash の非 0 終了では呼ばれる | 予測どおり。失敗した edit の part の status は error | confirmed |
 | M15 | mock | tmp の HOME の `~/.claude/CLAUDE.md` と `~/.claude/skills` が request に載り、`OPENCODE_DISABLE_CLAUDE_CODE=1` で消える | 予測どおり | confirmed |
 | M16 | real | after で足した nonce が、実 provider の変換を経ても model に届く | `opencode-go/kimi-k3` で 1 run (auth は env の OPENCODE_API_KEY を `--pass-env` で渡した)。model の返答に、after で足した nonce (run ごとの乱数) がそのまま含まれていた。実物の config dir と DB の mtime は変わらない | confirmed |
@@ -139,7 +140,7 @@ PR 0 の merge の後、orchestrator がこの表に従って #295 の PR 1〜3 
 | M10 / M11 | PR 1 / PR 2 の docs | — | run では idle の後の非同期の処理が打ち切られる (TUI と serve では残る)。app.log は log file に出る。bash に足した注記は model に届くが TUI の表示には出ないので、PR 1 の safe-gh の注記は「model への steering で、人の目には入らない」と docs に書く |
 | M17 | Q3 の前提 (PR 2 の人に見せる経路) | (事前の決めは無い) | toast が TUI に描かれない (1.18.30)。Q3 の既定「changed-scope-qa の結果は toast と log の両方に出す」では、人に届く経路が実質 log だけになる。user の判断 (2026-09-26): log だけで割り切り、docs に「OpenCode では変更範囲の検査の結果に人が気づけない」と honest-label する。編集ごとの検査 (fast-edit-check) の結果は model に届く (M4 / M16)。OpenCode を主に使うようになったら、通知の経路を見直す (PR 1 には影響しない) |
 | M12 | PR 3a の regex と系列表の fixture | 実物の文字列を fixture に足す。regex に合わなければ PR 3a の項を更新する | M16 の run の chat.params で providerID = `opencode-go`、modelID = api.id = `kimi-k3`。この文字列を fixture に足す (mock では `probe` / `claude-probe`) |
-| M13 | timeout と kill の方法 | 負の pid の kill が効かなければ、子だけを kill して、孫が残りうることを honest-label する | 効いた。detached の spawn と負の pid への SIGKILL を採る。timeout の起点の値 (10 / 30 / 120 秒) は、spawn の 44〜61ms に対して十分 |
+| M13 | timeout と kill の方法 | 負の pid の kill が効かなければ、子だけを kill して、孫が残りうることを honest-label する | 効いた。detached の spawn と負の pid への SIGKILL を採る。timeout の起点の値 (10 / 30 / 120 秒) は、spawn の 43〜61ms に対して十分 |
 | M15 | PR 1 と PR 3b の前提 | 読まれなければ、orchestrator が PR 3b の OpenCode session の規則を見直す | 読まれた。skill と instruction は OpenCode に配らない (OpenCode が `~/.claude` を読む)。`~/.claude/skills` の personal-* は OpenCode からも発火しうるので、PR 3b の規則 (OpenCode の session での review は人に渡す) はそのまま要る |
 | M18 | PR 3a | 内部の git が目印つきの env で commit-msg を踏むなら、user の判断を待つ | 踏まない。snapshot は commit 系の hook を踏まず、shell.env の目印も届かない。組み込みの OPENCODE=1 は内部の git にも載る (gate の目印にしない、という既定のとおり) |
 | M19 | PR 3b | ID が載っていなければ、PR 3a の着手前に user に方式を諮る | 載っている。model は trailer の `<provider>/<model>` を system message から書ける (mock での観測) |
