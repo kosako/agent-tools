@@ -53,7 +53,7 @@ const homes = {
   garbage: makeHome("garbage", "#!/bin/sh\necho 'not json at all'\n", 0o755),
   // pid を cwd (= fake ctx の directory) に書いてから寝る。group kill で子 (sh) と孫 (sleep) が
   // 消えることを確かめるため。
-  slow: makeHome("slow", "#!/bin/sh\necho $$ > child.pid\nsleep 30 &\necho $! > grandchild.pid\nwait\n", 0o755),
+  slow: makeHome("slow", "#!/bin/sh\necho $$ > child.pid\nsleep 5 &\necho $! > grandchild.pid\nwait\n", 0o755),
 }
 mkdirSync(homes.missing, { recursive: true })
 
@@ -155,6 +155,13 @@ function bashInput(command) {
     rejected = error instanceof TypeError
   }
   assert(rejected, "P1: server must reject an invalid options.timeoutMs.safeGh with TypeError")
+  let rejectedTable = false
+  try {
+    await plugin.server({ client, directory: ctxDir }, { timeoutMs: 5 })
+  } catch (error) {
+    rejectedTable = error instanceof TypeError
+  }
+  assert(rejectedTable, "P1: server must reject a non-object options.timeoutMs with TypeError")
   console.log("ok P1 hooks shape")
 }
 

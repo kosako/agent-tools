@@ -58,7 +58,12 @@ function scriptPath(name) {
 // 渡し方の誤りなので、hook ではなく server() の時点で fail fast する (file plugin として
 // 読まれるときは options が渡らないので、ここで throw しても OpenCode の起動には関わらない)。
 function resolveTimeout(options, key) {
-  const given = options && options.timeoutMs ? options.timeoutMs[key] : undefined
+  const table = options ? options.timeoutMs : undefined
+  if (table === undefined) return DEFAULT_TIMEOUT_MS[key]
+  if (typeof table !== "object" || table === null) {
+    throw new TypeError(`${ID}: options.timeoutMs must be an object`)
+  }
+  const given = table[key]
   if (given === undefined) return DEFAULT_TIMEOUT_MS[key]
   if (typeof given !== "number" || !Number.isFinite(given) || given <= 0) {
     throw new TypeError(`${ID}: options.timeoutMs.${key} must be a positive finite number`)

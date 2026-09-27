@@ -13,7 +13,7 @@ risk:
 # approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:97e28919f47e2dca017a729d004e1e45d4ba4be3a5a99f354dbdc411919bd074
+  approved_build_id: sha256:b34316b5e047aaa520233dd9b5d5688958f60f05c43b9e264de50e0964e0d8c6
   approved_artifact_kind: plugin
 source:
   path: shared/plugins/personal-agent-tools.js
