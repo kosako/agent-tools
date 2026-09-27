@@ -4,9 +4,10 @@ pipeline scripts (build / register / connect / sync / status / doctor と各種 
 network access なしで実行できます。実装は macOS 標準の Ruby (YAML stdlib) で、追加 gem は
 不要です (status / doctor は repo 状態の確認に `git` 実行ファイルを使う。無い環境でも
 crash せず該当項目が degrade するだけ)。**例外は `probe-credential-isolation.sh` と
-`probe-skill-routing.sh`**: 前者は credential 隔離の実機検証 harness で `gh` / `git` / `curl` と
-network に、後者は skill routing の実機観測で `claude` / `codex` CLI と network に依存します
-(いずれも CI では実行しない。下記該当節)。
+`probe-skill-routing.sh` と `probe-opencode-plugin.sh`**: 1 つ目は credential 隔離の実機検証
+harness で `gh` / `git` / `curl` と network に、2 つ目は skill routing の実機観測で `claude` /
+`codex` CLI と network に、3 つ目は OpenCode plugin の前提の実機観測で `opencode` CLI と network
+(起動時の npm install) に依存します (いずれも CI では実行しない。下記該当節)。
 
 `tests/` の self-tests と repository checks は CI (`.github/workflows/test.yml`) で
 PR / push ごとに実行されます。
@@ -128,6 +129,22 @@ usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
   Codex CLI 0.153.4)。
 - self-test は無い (CLI 起動そのものが主題のため)。`--dry-run` / `--help` の引数契約は
   `tests/cli-args-test.sh` の対象外。
+
+- `probe-opencode-plugin.sh`: OpenCode plugin probe の runner (実機・#295)。HOME / XDG / DB /
+  git config を tmp に向けた隔離環境で `opencode` を起動し、計測用 plugin と 127.0.0.1 の mock
+  provider で plugin の前提 (M1〜M20) を観測して、raw の記録と summary を `--out` に書く。
+  実物の OpenCode の config / DB / auth は読ませない。Spec: [docs/opencode-plugin-probe.md](../docs/opencode-plugin-probe.md)。
+
+```text
+usage: probe-opencode-plugin.sh --stage <isolation|serve|mock|real|tui-plan|all> --out DIR
+         [--real] [--model provider/model] [--pass-env NAME]... [--shell sh|user]
+         [--timeout SEC] [--keep] [--dry-run]
+```
+
+- **CI では実行しない** (`opencode` CLI と、起動時の npm install の network が要る)。`--out` は
+  git の worktree の外に限る。docs に写すのは summary だけ。
+- self-test: `tests/probe-opencode-plugin-test.sh` (opencode も外部の network も使わない。T2 / T6 は
+  偽の `opencode` で runner を通しで動かす。node が要る)。
 
 - `build.sh`: shared source assets から tool 別 artifacts を `generated/` に生成する。
   adapter spec は [adapters/](../adapters/README.md) を参照。
