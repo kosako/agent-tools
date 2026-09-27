@@ -288,7 +288,8 @@ boundary でない)。
   - **注記は model への steering で、人の目には入らない**: TUI は実行中に流れた出力を表示し、after
     で書き換えた出力を描き直さない (M11 / M17)。人が注記を見る経路は無い。
   - **trust gate が無く、置けばそのまま有効**: Codex の hook trust に相当するものは無く、`plugins/`
-    の file は起動時に読まれる。外すには `opencode --pure` で起動するか、`sync --prune` で撤去する。
+    の file は起動時に読まれる。一時的に外すには `opencode --pure` で起動する。恒久に撤去するには source と
+    manifest を消して `register` し、`sync --prune --apply` で orphan として撤去する (catalog に残る限り prune は消さない)。
     読込に失敗した plugin があっても OpenCode は続行する (source の plugin/index.ts の読み。M2 で確かめたのは
     init の throw が隔離され他の plugin が読まれることまでで、log への出力 ("Failed to load plugin") は
     実機の smoke で確かめる)。

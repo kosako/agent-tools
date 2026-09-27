@@ -175,12 +175,16 @@ plugin の entry は `target: opencode` / `artifact_kind: plugin` / `kind: plugi
 
 ### plugin を足しても catalog_version は上げない (#295)
 
-`plugin` kind と `opencode` target を足しても `catalog_version` は 4 のまま。version を上げるのは
-reader (sync / status / doctor) が旧 catalog を誤読しうるときで、今回は entry の key 集合も
-`build_id` の決め方 (format `text` の単一 file 経路。marker 行は含めない) も変わらず、旧 reader が
-新 entry を読んでも `target` / `artifact_kind` の値が増えるだけで解釈が壊れない。script kind を
-足した #134 でも上げていない。同じ理由で status の `contract_version` も 3 のまま
-([Status / Manifest Contract](status-manifest-contract.md))。
+`plugin` kind と `opencode` target を足しても `catalog_version` は 4 のまま。version を上げるのは、
+**新しい reader (sync / status / doctor) が旧 catalog を誤読しうるとき** で、今回は entry の key 集合も
+`build_id` の決め方 (format `text` の単一 file 経路。marker 行は含めない) も変わらないので、この PR より
+前に register した catalog も新しい reader は正しく読める。script kind を足した #134 でも上げていない。
+同じ理由で status の `contract_version` も 3 のまま ([Status / Manifest Contract](status-manifest-contract.md))。
+
+逆方向 (この PR より前の reader が、`target: opencode` を含む新しい catalog を読む) の互換性は保証しない。
+旧 reader は `opencode` を tool として知らず、home の解決 (`@homes.fetch`) で止まる。reader と catalog は同じ
+checkout の `register` で一緒に更新されるので、この混在は想定しない (catalog は generated/ にあり、tracked
+ではない)。
 
 ## Check 結果の書き戻し方針
 

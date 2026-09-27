@@ -43,8 +43,10 @@ skill は隔離 directory なので `sync` が直接置けますが、instructio
 OpenCode には skill / instruction / script を配りません(OpenCode は `~/.claude/skills` と
 `~/.claude/CLAUDE.md` を直接読むため。[tool-compatibility.md](tool-compatibility.md))。plugin は
 Claude Code 側に配った `~/.claude/agent-tools/scripts/personal-*` を呼ぶので、OpenCode で効かせる
-には Claude Code target の `sync` も済んでいる必要があります。plugin を外すには `opencode --pure`
-で起動するか、`sync --prune` で撤去します。
+には Claude Code target の `sync` も済んでいる必要があります。plugin を一時的に外すには `opencode --pure`
+で起動します。恒久に撤去するには、`shared/plugins/` の source と manifest を消して `register` し (catalog から
+消える)、`sync --prune --apply` で orphan として撤去します (`sync --prune` は catalog に残る現役の plugin を消さず、
+既定は dry-run です)。
 
 ## 初回インストール
 

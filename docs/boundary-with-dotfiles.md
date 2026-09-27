@@ -74,8 +74,9 @@ OpenCode の tool home (`<opencode home>`。既定 `~/.config/opencode`) は複�
 
 - **登録の例外**: Claude Code / Codex の hook は「実体 = agent-tools、登録 = dotfiles」に分けているが、
   OpenCode では `plugins/` に file を置くこと自体が登録 (trust gate も config への記述も無い) なので、
-  plugin については登録も agent-tools が持つ。外すには `opencode --pure` で起動するか、sync --prune
-  で撤去する。
+  plugin については登録も agent-tools が持つ。一時的に外すには `opencode --pure` で起動する。恒久に
+  撤去するには source と manifest を消して `register` し、`sync --prune --apply` で orphan として撤去する
+  (catalog に残る限り prune は消さず、既定は dry-run)。
 - **doctor の分担**: agent-tools の doctor が見るのは「自分が置いた `plugins/personal-*.js` があり、
   先頭行の marker が正しいこと」と、既定 home (`~/.config/opencode`) と `$XDG_CONFIG_HOME/opencode`
   の食い違い (`--opencode-home` を省いたときだけ warn) まで。OpenCode が plugin を実際に読み込んだか
