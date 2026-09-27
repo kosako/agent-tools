@@ -115,7 +115,9 @@ grep -q "$tmp" "$tmp/s3" && fail "status output must not contain absolute paths"
 grep -qiE "token|credential|api[_-]?key" "$tmp/s3" && fail "status output must not contain secret-like keys"
 
 # --- case 9: repository 本体で contract JSON が出る ---
-"$status_sh" --root "$repo_root" --json > "$tmp/s9" 2>&1 || fail "repo status should succeed"
+mkdir -p "$tmp/s9codex" "$tmp/s9claude" "$tmp/s9opencode"
+"$status_sh" --root "$repo_root" --json --codex-home "$tmp/s9codex" --claude-home "$tmp/s9claude" \
+  --opencode-home "$tmp/s9opencode" > "$tmp/s9" 2>&1 || fail "repo status should succeed"
 [ "$(jget "$tmp/s9" repo present)" = "true" ] || fail "repo.present should be true"
 
 # --- case 10: instruction の generated も generated.total に数える ---
@@ -201,6 +203,27 @@ case "$s14b_0 $s14b_1" in
   '"missing" "deployed_but_inactive"'|'"deployed_but_inactive" "missing"') ;;
   *) fail "removing one deployed target should split states, got $s14b_0 / $s14b_1: $(cat "$tmp/s14b")" ;;
 esac
+
+# --- case 16: TOOL_KINDS に無い tool × kind (register の unsupported) の entry は、その tool の path を
+# 構成しない (#338 review)。構成すると target_path の既定 (skills/<name>) が opencode home にも組まれ、
+# 対象外の path に実体があると deployed_but_inactive と誤表示する。
+mkdir -p "$tmp/urepo/shared/agents" "$tmp/ucodex" "$tmp/uclaude" "$tmp/uopencode/skills/personal-uagent"
+echo "# agent" > "$tmp/urepo/shared/agents/personal-uagent.md"
+write_asset_manifest "$tmp/urepo/shared/agents/personal-uagent.asset.yml" \
+  personal-uagent agent public shared/agents/personal-uagent.md markdown opencode
+"$build" --root "$tmp/urepo" --quiet > "$tmp/s16build" 2>&1 || fail "build with an unsupported-only asset should pass: $(cat "$tmp/s16build")"
+"$script_dir/../register.sh" --root "$tmp/urepo" --quiet > "$tmp/s16reg" 2>&1 || fail "register with an unsupported-only asset should exit 0: $(cat "$tmp/s16reg")"
+[ "$(jget "$tmp/urepo/generated/catalog.json" assets 0 registration)" = '"unsupported"' ] \
+  || fail "kind: agent for opencode should register as unsupported: $(cat "$tmp/urepo/generated/catalog.json")"
+"$status_sh" --root "$tmp/urepo" --codex-home "$tmp/ucodex" --claude-home "$tmp/uclaude" --opencode-home "$tmp/uopencode" --json > "$tmp/s16" 2>&1 \
+  || fail "status with an unsupported opencode entry should succeed: $(cat "$tmp/s16")"
+[ "$(jget "$tmp/s16" sync_targets 0 state)" = '"missing"' ] \
+  || fail "unsupported entry must not look at <opencode home>/skills/<name> (got $(jget "$tmp/s16" sync_targets 0 state)): $(cat "$tmp/s16")"
+"$sync" --root "$tmp/urepo" --codex-home "$tmp/ucodex" --claude-home "$tmp/uclaude" --opencode-home "$tmp/uopencode" > "$tmp/s16sync" 2>&1 \
+  || fail "sync plan with an unsupported opencode entry should succeed: $(cat "$tmp/s16sync")"
+grep -q "skip: \[opencode\] personal-uagent (unsupported)" "$tmp/s16sync" \
+  || fail "unsupported entry should be a skip without a target path: $(cat "$tmp/s16sync")"
+grep -F -q "uopencode/skills" "$tmp/s16sync" && fail "sync must not construct <opencode home>/skills for an unsupported entry: $(cat "$tmp/s16sync")" || true
 
 # --- case 15: plugin の generated を数え、sync_targets に tool=opencode の行が出る (#295) ---
 # 列挙は TOOL_KINDS の組だけ: generated/opencode/skills/ に managed な skill が残っていても数えない。

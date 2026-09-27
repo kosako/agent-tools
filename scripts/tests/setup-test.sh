@@ -59,7 +59,7 @@ echo "$out" | grep -q "dry-run のみ" && fail "--apply must not print the dry-r
 
 # --- case 3: 未知オプションは usage を出して exit 2 ---
 rc=0
-"$setup" --bogus >/dev/null 2>&1 || rc=$?
+"$setup" --bogus >/dev/null 2>&1 || rc=$? # no-opencode-home: usage で止まる parse-only の case
 [ "$rc" -eq 2 ] || fail "unknown option should exit 2, got $rc"
 
 echo "ok: setup-test passed"

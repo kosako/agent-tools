@@ -3,12 +3,15 @@
 # 静的な検査 (#295)。読み取りの call site (status / doctor) は canary
 # (scripts/tests/lib/opencode-home-canary.sh、書き込みの検出) では捕まらないので、ここで守る。
 #
-# 判定: 行末 \ の継続行をつないだ 1 行のうち、sync / status / doctor / setup を参照し
-# ($sync / $status_sh / $doctor / $setup の変数か <name>.sh の file 名)、--codex-home か --claude-home
-# を渡していて connect を呼んでいない行は、--opencode-home も渡していること。connect は instruction を
-# 配らない opencode の home を受け取らない (渡すと exit 2) ので除く。home flag を 1 つも渡さない
-# 呼び出し (cli-args の parse 段の case、HOME を差し替える doctor-test の XDG case) と、別 script
-# (codex-worker-preflight 等) の --codex-home は対象外。
+# 判定: 行末 \ の継続行をつないだ 1 行のうち、先頭の command word (先行する VAR=value を除く) が
+# sync / status / doctor / setup の呼び出し ("$sync" / "$status_sh" / "$doctor" / "$setup" か
+# <name>.sh の file 名) である行は、すべて --opencode-home を渡していること。home flag を 1 つも渡さない
+# 呼び出しも対象に含める (既定の home を読むので、読み取りでも実物の ~/.config/opencode に触る。
+# #338 review)。除外は、行末の注記 `# no-opencode-home: <理由>` を付けた呼び出しだけ (HOME を偽に差し替えた
+# doctor-test の XDG case、usage で止まる parse-only の case)。connect は instruction を配らない
+# opencode の home を受け取らない (渡すと exit 2) ので対象外。helper 経由の呼び出し (root-default-test の
+# `run_script status.sh …`) は script 名で拾う。cli-args-test の "$cmd" 経由の loop は
+# 変数名が違うので対象に入らない (parse 段で止まる case のみ)。
 # 対象は scripts/tests/*.sh と scripts/tests/lib/*.sh (この test 自身を除く)。
 set -eu
 
@@ -31,6 +34,7 @@ done
 ruby -e '
   required = %w[sync-test.sh status-test.sh doctor-test.sh setup-test.sh root-default-test.sh]
   offenders = []
+  exempt = []
   checked = Hash.new(0)
   ARGV.each do |path|
     lines = File.readlines(path)
@@ -43,12 +47,17 @@ ruby -e '
         joined = joined.chomp("\\") + " " + lines[i].chomp.lstrip
       end
       i += 1
-      next unless joined =~ /--(codex|claude)-home\b/
-      next unless joined =~ /\$\{?(sync|status_sh|status|doctor|setup)\b|\b(sync|status|doctor|setup)\.sh\b/
-      next if joined.include?("connect")
+      cmd = joined.sub(/\A\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|\x27[^\x27]*\x27|\S*)\s+)*/, "")
+      # 呼び出しの形: "$sync" 等の変数、<dir>/sync.sh 等の file 名、helper 経由 (run_script status.sh …)。
+      next unless cmd =~ /\A"?\$\{?(sync|status_sh|doctor|setup)\}?"?(?:\s|\z)|\A(?:\w+\s+)?\S*?(sync|status|doctor|setup)\.sh(?:\s|\z)/
 
       checked[File.basename(path)] += 1
-      offenders << "#{path}:#{start}: #{joined.strip}" unless joined.include?("--opencode-home")
+      next if joined.include?("--opencode-home")
+      if joined =~ /#\s*no-opencode-home:\s*\S/
+        exempt << "#{path}:#{start}"
+        next
+      end
+      offenders << "#{path}:#{start}: #{joined.strip}"
     end
   end
   missing = required.reject { |name| checked[name] > 0 }
@@ -57,11 +66,11 @@ ruby -e '
     exit 1
   end
   unless offenders.empty?
-    warn "call sites passing --codex-home / --claude-home without --opencode-home:"
+    warn "sync / status / doctor / setup call sites without --opencode-home (add the flag, or `# no-opencode-home: <reason>` for a parse-only / fake-HOME case):"
     offenders.each { |o| warn "  #{o}" }
     exit 1
   end
-  puts "checked #{checked.values.sum} call site(s) in #{checked.size} file(s)"
+  puts "checked #{checked.values.sum} call site(s) in #{checked.size} file(s), #{exempt.size} exempt by annotation"
 ' "$@" || fail "static --opencode-home check failed"
 
 echo "ok: opencode-home call-site check passed"

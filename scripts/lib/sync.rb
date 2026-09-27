@@ -35,7 +35,7 @@ module Sync
   # の target state 判定に読む (#152: 表示文言の変更で contract を壊さないための分離)。
   Plan = Struct.new(:action, :tool, :name, :target, :reason, :kind, :gen, :code) do
     def to_s
-      line = "#{action}: [#{tool}] #{target}"
+      line = "#{action}: [#{tool}] #{target || name}"
       reason ? "#{line} (#{reason})" : line
     end
   end
@@ -237,6 +237,12 @@ module Sync
       kind = entry["artifact_kind"]
 
       if entry["registration"] != "registered"
+        # TOOL_KINDS に無い tool × kind (register の unsupported) は、その tool の path を構成しない。
+        # 構成すると ArtifactTargets.target_path の既定 (skills/<name>) が opencode home にも組まれ、
+        # status が対象外の path の存在で deployed_but_inactive を出しうる (#338 review)。
+        unless ArtifactTargets.tool_supports?(tool, kind)
+          return Plan.new("skip", tool, name, nil, entry["registration"], kind, nil, :unsupported)
+        end
         return Plan.new("skip", tool, name, target_path(tool, name, kind), entry["registration"], kind, nil,
                         :not_registered)
       end

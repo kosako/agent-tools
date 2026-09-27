@@ -204,7 +204,7 @@ mkdir -p "$fake_home/.config/opencode" "$tmp/xdg11"
 xdg_warn="warn: home: \[opencode\] \$XDG_CONFIG_HOME/opencode differs from the default ~/.config/opencode"
 # 11a: flag なし + XDG が既定と食い違う → warn (exit は 0 のまま)
 HOME="$fake_home" XDG_CONFIG_HOME="$tmp/xdg11" "$doctor" --root "$tmp/plrepo" > "$tmp/d11a" 2>&1 \
-  || fail "XDG mismatch should warn, not fail: $(cat "$tmp/d11a")"
+  || fail "XDG mismatch should warn, not fail: $(cat "$tmp/d11a")" # no-opencode-home: HOME を偽に差し替えた XDG の case (既定 home は偽 HOME の下)
 grep -q "$xdg_warn" "$tmp/d11a" || fail "missing XDG warn when --opencode-home is omitted: $(cat "$tmp/d11a")"
 grep -q "home: \[opencode\] ~/.config/opencode present, 0 personal plugin(s)" "$tmp/d11a" \
   || fail "default opencode home should be shown with tilde: $(cat "$tmp/d11a")"
@@ -215,10 +215,10 @@ HOME="$fake_home" XDG_CONFIG_HOME="$tmp/xdg11" "$doctor" --root "$tmp/plrepo" --
 ! grep -q "XDG_CONFIG_HOME" "$tmp/d11b" || fail "XDG warn must not appear when --opencode-home is given: $(cat "$tmp/d11b")"
 # 11c: XDG が既定と一致 / 空 (未設定と同じ) なら warn しない
 HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" "$doctor" --root "$tmp/plrepo" > "$tmp/d11c" 2>&1 \
-  || fail "doctor with matching XDG should pass: $(cat "$tmp/d11c")"
+  || fail "doctor with matching XDG should pass: $(cat "$tmp/d11c")" # no-opencode-home: 同上
 ! grep -q "XDG_CONFIG_HOME" "$tmp/d11c" || fail "XDG warn must not appear when XDG matches the default: $(cat "$tmp/d11c")"
 HOME="$fake_home" XDG_CONFIG_HOME= "$doctor" --root "$tmp/plrepo" > "$tmp/d11d" 2>&1 \
-  || fail "doctor with empty XDG should pass: $(cat "$tmp/d11d")"
+  || fail "doctor with empty XDG should pass: $(cat "$tmp/d11d")" # no-opencode-home: 同上
 ! grep -q "XDG_CONFIG_HOME" "$tmp/d11d" || fail "empty XDG_CONFIG_HOME must count as unset: $(cat "$tmp/d11d")"
 
 # --- case 12: plugin の deployed_but_inactive は warn のまま (fail にしない) (#295) ---

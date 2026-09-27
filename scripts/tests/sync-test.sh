@@ -117,7 +117,7 @@ mkdir -p "$tmp/codex9" "$tmp/claude9"
 "$build" --root "$tmp/repo" --quiet > /dev/null
 "$register" --root "$tmp/repo" --quiet > /dev/null
 # 未接続では instruction を配置せず connect を促す
-"$sync" --root "$tmp/repo" --codex-home "$tmp/codex9" --claude-home "$tmp/claude9" > "$tmp/out-noconnect" 2>&1
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex9" --claude-home "$tmp/claude9" --opencode-home "$tmp/opencode9" > "$tmp/out-noconnect" 2>&1
 grep -q "skip: \[codex\].*run connect first" "$tmp/out-noconnect" \
   || fail "instruction without connect should skip: $(cat "$tmp/out-noconnect")"
 # connect で所有を確立

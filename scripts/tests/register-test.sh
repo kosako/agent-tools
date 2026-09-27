@@ -54,7 +54,9 @@ jget "$catalog" assets 0 manifest_digest | grep -qE '"[0-9a-f]{64}"' \
   || fail "catalog entry should carry manifest_digest (sha256 hex)"
 
 # --- case 2: status が register summary を返す (contract v2 で追加・現行 v3) ---
-"$status_sh" --root "$tmp/ok" --json > "$tmp/s2" 2>&1
+mkdir -p "$tmp/s2codex" "$tmp/s2claude" "$tmp/s2opencode"
+"$status_sh" --root "$tmp/ok" --json --codex-home "$tmp/s2codex" --claude-home "$tmp/s2claude" \
+  --opencode-home "$tmp/s2opencode" > "$tmp/s2" 2>&1
 [ "$(jget "$tmp/s2" contract_version)" = "3" ] || fail "contract_version should be 3"
 [ "$(jget "$tmp/s2" register catalog_present)" = "true" ] || fail "catalog_present should be true"
 [ "$(jget "$tmp/s2" register registered)" = "1" ] || fail "registered count should be 1"

@@ -469,6 +469,8 @@ ruby -r"$script_dir/../lib/plugin_marker" -r"$script_dir/../lib/instruction_mark
     "tab as separator" => ok.sub(" name=", "\tname="),
     "double space between tokens" => ok.sub(" name=", "  name="),
     "double space before the suffix" => ok.sub(" */", "  */"),
+    "other marker version" => ok.sub(" v=1 ", " v=2 "),
+    "other repo" => ok.sub(" repo=agent-tools ", " repo=other "),
     "empty content" => "",
   }
   rejects.each { |label, content| abort "PluginMarker.parse must reject #{label}" if PluginMarker.parse(content) }
