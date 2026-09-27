@@ -466,6 +466,8 @@ ruby -r"$script_dir/../lib/plugin_marker" -r"$script_dir/../lib/instruction_mark
     "non-sha256 build_id" => ok.sub("build_id=sha256:", "build_id=md5:"),
     "leading whitespace" => " " + ok,
     "tab as separator" => ok.sub(" name=", "\tname="),
+    "double space between tokens" => ok.sub(" name=", "  name="),
+    "double space before the suffix" => ok.sub(" */", "  */"),
     "empty content" => "",
   }
   rejects.each { |label, content| abort "PluginMarker.parse must reject #{label}" if PluginMarker.parse(content) }

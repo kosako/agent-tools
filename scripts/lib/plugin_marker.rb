@@ -37,7 +37,9 @@ module PluginMarker
 
     body = first[(PREFIX.length + 1)...-(SUFFIX.length + 1)]
     pairs = {}
-    body.split(" ", -1).each do |token|
+    # split(" ") は awk 風に連続する空白をまとめるので、1 文字の正規表現で区切り、二重の空白を
+    # 空 token として拒否する (render の出力と byte で同じ形だけを通す)。
+    body.split(/ /, -1).each do |token|
       key, value = token.split("=", 2)
       return nil if key.nil? || key.empty? || value.nil? || value.empty?
 
