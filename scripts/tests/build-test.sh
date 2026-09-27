@@ -415,4 +415,94 @@ bid_file=$(bid "$tmp/xfmt" asfile text)
 [ "$bid_dir" != "$bid_file" ] \
   || fail "directory and single-file build_id must be domain-separated: $bid_dir"
 
+# --- case: plugin asset は marker 行 + source bytes の単一 .js として生成される (#295) ---
+mkdir -p "$tmp/pluginasset/shared/plugins"
+printf 'export default { id: "personal-demo-plugin", server: async () => ({}) };\n// caf\303\251 (utf-8 body)\n' \
+  > "$tmp/pluginasset/shared/plugins/personal-demo-plugin.js"
+write_asset_manifest "$tmp/pluginasset/shared/plugins/personal-demo-plugin.asset.yml" \
+  personal-demo-plugin plugin personal shared/plugins/personal-demo-plugin.js text opencode
+
+"$build" --root "$tmp/pluginasset" > "$tmp/out-plugin" 2>&1 \
+  || fail "plugin build should pass: $(cat "$tmp/out-plugin")"
+grep -q "ok: 1 artifact(s) built" "$tmp/out-plugin" \
+  || fail "expected 1 plugin artifact: $(cat "$tmp/out-plugin")"
+grep -q "built: generated/opencode/plugins/personal-demo-plugin.js" "$tmp/out-plugin" \
+  || fail "missing built line: $(cat "$tmp/out-plugin")"
+
+gen_plugin="$tmp/pluginasset/generated/opencode/plugins/personal-demo-plugin.js"
+[ -f "$gen_plugin" ] || fail "missing generated plugin"
+[ ! -x "$gen_plugin" ] || fail "generated plugin must not be executable"
+ruby -e 'exit((File.stat(ARGV[0]).mode & 0o777) == 0o644)' "$gen_plugin" \
+  || fail "generated plugin mode must be 0644"
+# 1 行目は marker (build_id は Build.build_id_for と一致)、2 行目以降は source と byte で一致する。
+pbid=$(bid "$tmp/pluginasset" shared/plugins/personal-demo-plugin.js text)
+expected_marker="/* agent-tools:managed v=1 repo=agent-tools name=personal-demo-plugin target=opencode artifact_kind=plugin source=shared/plugins/personal-demo-plugin.js build_id=$pbid */"
+[ "$(head -1 "$gen_plugin")" = "$expected_marker" ] \
+  || fail "plugin marker line mismatch: $(head -1 "$gen_plugin")"
+tail -n +2 "$gen_plugin" > "$tmp/plugin-body"
+cmp -s "$tmp/plugin-body" "$tmp/pluginasset/shared/plugins/personal-demo-plugin.js" \
+  || fail "plugin body must be byte-identical to source after the marker line"
+[ ! -e "$tmp/pluginasset/generated/opencode/skills" ] || fail "plugin must not be generated as a skill"
+[ ! -e "$tmp/pluginasset/generated/codex" ] || fail "plugin must not be generated for codex"
+
+# --- case: PluginMarker.parse は先頭行だけを厳密に読み、instruction の marker と互いに拒否する (#295) ---
+ruby -r"$script_dir/../lib/plugin_marker" -r"$script_dir/../lib/instruction_marker" -e '
+  bid = "sha256:" + "a" * 64
+  ok = PluginMarker.render(name: "personal-x", target: "opencode", source: "shared/plugins/personal-x.js", build_id: bid)
+  abort "render output must parse" unless PluginMarker.parse(ok + "\nexport default {};\n")
+  abort "body after the marker may be non-UTF-8" unless PluginMarker.parse(ok.b + "\n\xff".b)
+  abort "managed? must compare target" unless PluginMarker.managed?(ok, "opencode") && !PluginMarker.managed?(ok, "claude-code")
+  abort "matches? must accept the same entry" unless PluginMarker.matches?(ok, target: "opencode", name: "personal-x", build_id: bid)
+  abort "matches? must reject another build_id" if PluginMarker.matches?(ok, target: "opencode", name: "personal-x", build_id: "sha256:" + "b" * 64)
+  rejects = {
+    "extra key" => ok.sub(" */", " evil=1 */"),
+    "artifact_kind=instruction" => ok.sub("artifact_kind=plugin", "artifact_kind=instruction"),
+    "marker on the second line" => "// header\n" + ok,
+    "CRLF" => ok + "\r\nbody",
+    "non-UTF-8 in the first line" => ok.b.sub("personal-x".b, "personal-\xff".b),
+    "instruction marker" => InstructionMarker.render(name: "personal-x", target: "codex", source: "shared/x.md", build_id: bid),
+    "duplicate key" => ok.sub(" repo=agent-tools", " repo=agent-tools repo=agent-tools"),
+    "absolute source" => ok.sub("source=shared/", "source=/shared/"),
+    "non-sha256 build_id" => ok.sub("build_id=sha256:", "build_id=md5:"),
+    "leading whitespace" => " " + ok,
+    "tab as separator" => ok.sub(" name=", "\tname="),
+    "empty content" => "",
+  }
+  rejects.each { |label, content| abort "PluginMarker.parse must reject #{label}" if PluginMarker.parse(content) }
+  abort "InstructionMarker.parse must reject a plugin marker" if InstructionMarker.parse(ok)
+' || fail "PluginMarker parse contract broken"
+
+# --- case: --prune は管理下の orphan plugin だけを消し、TOOL_KINDS 外の場所は走査しない (#295) ---
+rm -f "$tmp/pluginasset/shared/plugins/personal-demo-plugin.js" \
+  "$tmp/pluginasset/shared/plugins/personal-demo-plugin.asset.yml"
+printf '/* agent-tools:managed v=1 repo=agent-tools name=personal-old-plugin target=opencode artifact_kind=plugin source=shared/plugins/personal-old-plugin.js build_id=sha256:old */\nexport default {};\n' \
+  > "$tmp/pluginasset/generated/opencode/plugins/personal-old-plugin.js"
+echo "user plugin" > "$tmp/pluginasset/generated/opencode/plugins/personal-stray-plugin.js"
+# opencode の skills/ と codex の plugins/ は TOOL_KINDS に無い組なので、marker があっても触らない。
+mkdir -p "$tmp/pluginasset/generated/opencode/skills/personal-ghost" "$tmp/pluginasset/generated/codex/plugins"
+printf 'repo: agent-tools\nname: personal-ghost\ntarget: opencode\nsource: x\nbuild_id: sha256:x\n' \
+  > "$tmp/pluginasset/generated/opencode/skills/personal-ghost/.agent-tools-managed.yml"
+printf '/* agent-tools:managed v=1 repo=agent-tools name=personal-ghost target=codex artifact_kind=plugin source=shared/plugins/personal-ghost.js build_id=sha256:x */\n' \
+  > "$tmp/pluginasset/generated/codex/plugins/personal-ghost.js"
+
+"$build" --root "$tmp/pluginasset" --prune > "$tmp/out-pprune" 2>&1 \
+  || fail "plugin prune build should pass: $(cat "$tmp/out-pprune")"
+grep -q "pruned: generated/opencode/plugins/personal-demo-plugin.js" "$tmp/out-pprune" \
+  || fail "orphan plugin not pruned: $(cat "$tmp/out-pprune")"
+grep -q "pruned: generated/opencode/plugins/personal-old-plugin.js" "$tmp/out-pprune" \
+  || fail "stale managed plugin not pruned: $(cat "$tmp/out-pprune")"
+[ ! -e "$gen_plugin" ] || fail "orphan plugin should be removed"
+[ ! -e "$tmp/pluginasset/generated/opencode/plugins/personal-old-plugin.js" ] \
+  || fail "stale managed plugin should be removed"
+grep -q "kept (unmanaged, no agent-tools marker): generated/opencode/plugins/personal-stray-plugin.js" "$tmp/out-pprune" \
+  || fail "unmanaged plugin should be kept with warning: $(cat "$tmp/out-pprune")"
+[ -f "$tmp/pluginasset/generated/opencode/plugins/personal-stray-plugin.js" ] \
+  || fail "unmanaged plugin must not be pruned"
+[ -d "$tmp/pluginasset/generated/opencode/skills/personal-ghost" ] \
+  || fail "prune must not scan generated/opencode/skills (not in TOOL_KINDS)"
+[ -f "$tmp/pluginasset/generated/codex/plugins/personal-ghost.js" ] \
+  || fail "prune must not scan generated/codex/plugins (not in TOOL_KINDS)"
+grep -q "personal-ghost" "$tmp/out-pprune" \
+  && fail "paths outside TOOL_KINDS must not be reported by prune: $(cat "$tmp/out-pprune")" || true
+
 echo "ok: build self-test passed"
