@@ -84,6 +84,11 @@ module ProbeOpencode
       ids.all? { |v| valid_id?(v) } ? ids : nil
     end
 
+    # 判定に使う真偽値の field が、集合のすべての記録で true / false か (欠けた field を false と数えない)。
+    def self.bools?(records, key)
+      records.all? { |r| [true, false].include?(r[key]) }
+    end
+
     # その run の session.idle の記録が、すべて有効な sessionID を持つか (欠けた記録があれば、session ごとの
     # idle の有無を「無い」と結論できない)。
     def self.idles_valid?(data, run)
@@ -283,14 +288,14 @@ module ProbeOpencode
       bang = window_records(data, "serve-plugin", serve, "shell") || []
       pty = window_records(data, "serve-plugin", serve, "pty") || []
       {
-        "model_bash.sessionID" => model.empty? ? nil : model.all? { |h| h["has_sessionID"] },
-        "model_bash.callID" => model.empty? ? nil : model.all? { |h| h["has_callID"] },
+        "model_bash.sessionID" => model.empty? || !bools?(model, "has_sessionID") ? nil : model.all? { |h| h["has_sessionID"] },
+        "model_bash.callID" => model.empty? || !bools?(model, "has_callID") ? nil : model.all? { |h| h["has_callID"] },
         "model_bash.callID_matches_before" => model.empty? || claude_before.nil? || ids_of(model, "callID").nil? ? nil : model.all? { |h| claude_before.include?(h["callID"]) },
-        "bang.sessionID" => bang.empty? ? nil : bang.all? { |h| h["has_sessionID"] },
-        "bang.callID" => bang.empty? ? nil : bang.all? { |h| h["has_callID"] },
+        "bang.sessionID" => bang.empty? || !bools?(bang, "has_sessionID") ? nil : bang.all? { |h| h["has_sessionID"] },
+        "bang.callID" => bang.empty? || !bools?(bang, "has_callID") ? nil : bang.all? { |h| h["has_callID"] },
         "bang.callID_matches_before" => bang.empty? || serve_before.nil? || ids_of(bang, "callID").nil? ? nil : bang.any? { |h| serve_before.include?(h["callID"]) },
-        "pty.sessionID" => pty.empty? ? nil : pty.any? { |h| h["has_sessionID"] },
-        "pty.callID" => pty.empty? ? nil : pty.any? { |h| h["has_callID"] },
+        "pty.sessionID" => pty.empty? || !bools?(pty, "has_sessionID") ? nil : pty.any? { |h| h["has_sessionID"] },
+        "pty.callID" => pty.empty? || !bools?(pty, "has_callID") ? nil : pty.any? { |h| h["has_callID"] },
       }
     end
 
@@ -350,7 +355,7 @@ module ProbeOpencode
       obs = {
         "model_bash_fails" => part && model_reached ? part.dig("state", "status") == "error" : nil,
         "bang_fails" => bang_reached && !bang_status.nil? ? (bang_status != 200 || serve.dig("shell", "part_status") == "error") : nil,
-        "pty_fails" => pty_reached && !pty_status.nil? ? (pty_status != 200 || !serve.dig("pty", "file_written")) : nil,
+        "pty_fails" => pty_reached && !pty_status.nil? && [true, false].include?(serve.dig("pty", "file_written")) ? (pty_status != 200 || !serve.dig("pty", "file_written")) : nil,
       }
       extra = { "model_bash_executed" => (run_fact(data, "throw-shell-env") || {})["executed_marker"] }
       item("M6", pred: obs.keys.map { |k| [k, true] }.to_h, obs: obs, extra: extra)
@@ -492,8 +497,9 @@ module ProbeOpencode
       s = hooks(data, "spawn", "spawn").first
       # kill の直前に子と孫が生きていて、group への kill 自体が成功したときだけ判定する (自然に終わった
       # 後の kill を「効いた」と数えない)。
-      killed = s && s["group_kill_error"].nil? && s["child_alive_before_kill"] == true && s["grandchild_alive_before_kill"] == true
-      obs = { "child_killed" => killed ? s["child_exited"] : nil,
+      # group_kill_error は key があって null のときだけ「成功」(key の欠落を成功と数えない)。
+      killed = s && s.key?("group_kill_error") && s["group_kill_error"].nil? && s["child_alive_before_kill"] == true && s["grandchild_alive_before_kill"] == true
+      obs = { "child_killed" => killed && [true, false].include?(s["child_exited"]) ? s["child_exited"] : nil,
               "grandchild_killed" => killed && [true, false].include?(s["grandchild_alive"]) ? !s["grandchild_alive"] : nil }
       item("M13", pred: { "child_killed" => true, "grandchild_killed" => true }, obs: obs,
                   extra: s ? s.slice("spawn_ms", "spawn_exit", "group_kill_error", "grandchild_pid_read", "child_alive_before_kill", "grandchild_alive_before_kill") : {})

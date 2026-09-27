@@ -304,6 +304,21 @@ def t5(dir)
   unknown.call("m9-child-invalid", "M9", "child_idle_delivered", { "runs" => [ok_run.call("task")] },
                [ev.call("task", "session.created", "sessionID" => nil, "parentID" => "main1"), ev.call("task", "session.idle", "sessionID" => "main1")], [],
                [{ "run" => "task", "event" => { "type" => "step_start", "sessionID" => "main1" } }])
+  # 回帰 (#336 review round 5)
+  # F23: 有効な子 (child1) の作成と idle に、ID の欠けた子の作成が混ざる (残りだけで確定しない)
+  unknown.call("f23-m9-child-mixed", "M9", "child_idle_delivered", { "runs" => [ok_run.call("task")] },
+               [ev.call("task", "session.created", "sessionID" => "child1", "parentID" => "main1"),
+                ev.call("task", "session.created", "sessionID" => nil, "parentID" => "main1"),
+                ev.call("task", "session.idle", "sessionID" => "child1")], [],
+               [{ "run" => "task", "event" => { "type" => "step_start", "sessionID" => "main1" } }])
+  # F19: 判定に使う真偽値の field / key が欠けている
+  unknown.call("f19-pty-bools", "M5", "pty.sessionID", { "runs" => [{ "label" => "serve-plugin", "pty" => { "t_start" => 100, "t_end" => 200 } }] },
+               [{ "run" => "serve-plugin", "kind" => "shell.env", "t" => 150 }], [], [])
+  unknown.call("f19-file-written", "M6", "pty_fails", { "runs" => [{ "label" => "serve-throw-shell-env", "pty" => { "status" => 200, "t_start" => 100, "t_end" => 200 } }] },
+               [{ "run" => "serve-throw-shell-env", "kind" => "shell.env", "t" => 150, "has_sessionID" => false, "has_callID" => false }], [], [])
+  kill_rec = spawn_rec.call({})
+  kill_rec.delete("group_kill_error")
+  unknown.call("f19-kill-key", "M13", "child_killed", {}, [kill_rec], [], [])
   # 同型: M12 で shell.env の sessionID に欠けた記録がある
   unknown.call("m12-invalid", "M12", "joinable_by_sessionID", {},
                [{ "run" => "tools-claude", "kind" => "chat.params", "sessionID" => "s1", "providerID" => "probe", "modelID" => "claude-probe", "apiID" => "claude-probe" },
