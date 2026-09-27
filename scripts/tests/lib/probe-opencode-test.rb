@@ -207,12 +207,22 @@ def t5(dir)
   # 回帰 (#336 review round 3)
   ev = ->(run, type, extra = {}) { { "run" => run, "kind" => "event", "type" => type }.merge(extra) }
   # F10 permission: 返答が reject でない / requestID が ask と合わない
-  asked = ev.call("ask", "permission.asked", "requestID" => "r1", "sessionID" => "s1")
-  idle_ask = ev.call("ask", "session.idle", "sessionID" => "s1")
+  asked = ev.call("ask", "permission.asked", "requestID" => "r1", "sessionID" => "s1", "t" => 100)
+  idle_ask = ev.call("ask", "session.idle", "sessionID" => "s1", "t" => 300)
   unknown.call("f10-once", "M9", "idle_after_permission_reject", { "runs" => [ok_run.call("ask")] },
-               [asked, ev.call("ask", "permission.replied", "requestID" => "r1", "reply" => "once"), idle_ask], [], [])
+               [asked, ev.call("ask", "permission.replied", "requestID" => "r1", "reply" => "once", "sessionID" => "s1", "t" => 200), idle_ask], [], [])
   unknown.call("f10-other-request", "M9", "idle_after_permission_reject", { "runs" => [ok_run.call("ask")] },
-               [asked, ev.call("ask", "permission.replied", "requestID" => "r2", "reply" => "reject"), idle_ask], [], [])
+               [asked, ev.call("ask", "permission.replied", "requestID" => "r2", "reply" => "reject", "sessionID" => "s1", "t" => 200), idle_ask], [], [])
+  # 回帰 (#336 review round 6、F25): 拒否の後の idle は、拒否された session のもので、返答より後のものだけ
+  reject = ev.call("ask", "permission.replied", "requestID" => "r1", "reply" => "reject", "sessionID" => "s1", "t" => 200)
+  ctrl = write.call("f25-control", { "runs" => [ok_run.call("ask")] }, [asked, reject, idle_ask], [], [])["M9"]
+  check(ctrl["observed"]["idle_after_permission_reject"] == true, "T5 f25-control: #{ctrl['observed']['idle_after_permission_reject'].inspect}")
+  early = write.call("f25-idle-before", { "runs" => [ok_run.call("ask")] }, [asked, reject, ev.call("ask", "session.idle", "sessionID" => "s1", "t" => 150)], [], [])["M9"]
+  check(early["observed"]["idle_after_permission_reject"] == false, "T5 f25-idle-before: an idle before the reject must not count: #{early['observed']['idle_after_permission_reject'].inspect}")
+  other = write.call("f25-other-session", { "runs" => [ok_run.call("ask")] }, [asked, reject, ev.call("ask", "session.idle", "sessionID" => "s9", "t" => 300)], [], [])["M9"]
+  check(other["observed"]["idle_after_permission_reject"] == false, "T5 f25-other-session: an idle of another session must not count: #{other['observed']['idle_after_permission_reject'].inspect}")
+  unknown.call("f25-idle-no-sid", "M9", "idle_after_permission_reject", { "runs" => [ok_run.call("ask")] },
+               [asked, reject, idle_ask, ev.call("ask", "session.idle", "sessionID" => nil, "t" => 300)], [], [])
   # F10 abort: 条件を 1 つずつ外す (対照は成り立つ)
   abort_fact = ->(prompt) { { "runs" => [{ "label" => "serve-plugin", "abort" => { "session_id" => "a1", "prompt_async_status" => prompt, "abort_status" => 200, "t_abort" => 1000 } }] } }
   before_at = ->(t) { { "run" => "serve-plugin", "kind" => "tool.before", "tool" => "bash", "sessionID" => "a1", "callID" => "c9", "t" => t } }

@@ -428,10 +428,12 @@ module ProbeOpencode
                  idle_for(data, "serve-plugin", abort_sid).none? { |h| abort_before.call(h) } &&
                  serve.dig("abort", "abort_status") == 200
       # permission: ask された request と同じ requestID に「reject」の返答が出て、run が正常に終わったこと。
+      # idle は、拒否された session のもので、拒否の返答より後のものだけを数える。
       asks = hooks(data, "ask", "event")
       asked_ids = asks.select { |h| h["type"] == "permission.asked" && valid_id?(h["requestID"]) }.map { |h| h["requestID"] }
-      rejected = asks.any? { |h| h["type"] == "permission.replied" && h["reply"] == "reject" && asked_ids.include?(h["requestID"]) } &&
-                 run_ok?(run_fact(data, "ask"))
+      reject = asks.find { |h| h["type"] == "permission.replied" && h["reply"] == "reject" && asked_ids.include?(h["requestID"]) }
+      rejected = !reject.nil? && valid_id?(reject["sessionID"]) && reject["t"].is_a?(Integer) && run_ok?(run_fact(data, "ask")) &&
+                 idles_valid?(data, "ask")
       # task: 子 session が作られた記録 (parentID の付いた session.created) があること。
       created = hooks(data, "task", "event").select { |h| h["type"] == "session.created" }
       children = ids_of(created, "sessionID") && created.select { |h| valid_id?(h["parentID"]) }.map { |h| h["sessionID"] }.uniq
@@ -440,7 +442,7 @@ module ProbeOpencode
         "idle_per_turn" => valid_id?(main) && run_ok?(run_fact(data, "tools-claude")) && idles_valid?(data, "tools-claude") ? idle_for(data, "tools-claude", main).length : nil,
         "idle_after_bang" => bang_ok && idles_valid?(data, "serve-plugin") ? !idle_for(data, "serve-plugin", bang_sid).empty? : nil,
         "idle_after_abort" => abort_ok && idles_valid?(data, "serve-plugin") ? idle_for(data, "serve-plugin", abort_sid).any? { |h| h["t"].is_a?(Integer) && h["t"] >= t_abort } : nil,
-        "idle_after_permission_reject" => rejected ? !idle_for(data, "ask").empty? : nil,
+        "idle_after_permission_reject" => rejected ? idle_for(data, "ask", reject["sessionID"]).any? { |h| h["t"].is_a?(Integer) && h["t"] >= reject["t"] } : nil,
         "child_idle_delivered" => children && !children.empty? && run_ok?(run_fact(data, "task")) && idles_valid?(data, "task") ? idle_for(data, "task").any? { |h| children.include?(h["sessionID"]) } : nil,
         "child_parent_readable" => child_sessions.empty? ? nil : child_sessions.all? { |h| h["has_parentID"] },
       }
