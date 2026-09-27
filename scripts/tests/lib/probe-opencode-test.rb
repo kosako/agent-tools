@@ -269,6 +269,45 @@ def t5(dir)
                [{ "run" => "slow-after", "kind" => "tool.after", "tool" => "bash", "callID" => "c1" }], [], [slow_part])
   unknown.call("f23-m9-child", "M9", "child_idle_delivered", { "runs" => [ok_run.call("task")] },
                [ev.call("task", "session.idle", "sessionID" => "child1")], [], [{ "run" => "task", "event" => { "type" => "step_start", "sessionID" => "main1" } }])
+
+  # 回帰 (#336 review round 4): 照合に使う記録の集合に欠けた ID が 1 つでもあれば unknown
+  # F16: after に ID の欠けた記録が混ざる
+  unknown.call("f16-mixed", "M4", "next_request_has_nonce", facts,
+               [{ "run" => "tools-claude", "kind" => "tool.after", "tool" => "bash", "callID" => "a" }, { "run" => "tools-claude", "kind" => "tool.after", "tool" => "bash", "callID" => nil }],
+               [{ "run" => "tools-claude", "tool_messages" => [{ "id" => "a", "nonce_first" => true, "ok_marker" => true }] }], [m4_part.call("a")])
+  # F23: M4 で message は揃うが part が無い
+  unknown.call("f23-m4-part-missing", "M4", "run_event_output_has_nonce", facts,
+               [{ "run" => "tools-claude", "kind" => "tool.after", "tool" => "bash", "callID" => "a" }],
+               [{ "run" => "tools-claude", "tool_messages" => [{ "id" => "a", "nonce_first" => true, "ok_marker" => true }] }], [])
+  # F24: M14 で edit の after の callID が欠けている
+  hk = ->(kind, tool, id) { { "run" => "tools-claude", "kind" => kind, "tool" => tool, "callID" => id } }
+  m14_parts = [{ "run" => "tools-claude", "event" => { "type" => "tool_use", "sessionID" => "s1", "part" => { "tool" => "edit", "callID" => "e", "state" => { "status" => "error" } } } },
+               { "run" => "tools-claude", "event" => { "type" => "tool_use", "sessionID" => "s1", "part" => { "tool" => "bash", "callID" => "b", "state" => { "status" => "completed", "metadata" => { "exit" => 3 } } } } }]
+  f24 = write.call("f24-m14", {}, [hk.call("tool.before", "edit", "e"), hk.call("tool.before", "bash", "b"), hk.call("tool.after", "edit", nil), hk.call("tool.after", "bash", "b")], [], m14_parts)["M14"]
+  check(f24["observed"]["edit_failure_after_called"].nil? && f24["observed"]["bash_nonzero_after_called"].nil?,
+        "T5 f24-m14: an unmatchable after must make M14 unknown: #{f24['observed'].slice('edit_failure_after_called', 'bash_nonzero_after_called')}")
+  # F24: M5 で `!` の時間帯の前後にある before の callID が欠けている
+  unknown.call("f24-m5", "M5", "bang.callID_matches_before",
+               { "runs" => [{ "label" => "serve-plugin", "shell" => { "status" => 200, "t_start" => 100, "t_end" => 200 } }] },
+               [{ "run" => "serve-plugin", "kind" => "shell.env", "t" => 150, "has_sessionID" => true, "sessionID" => "b1", "has_callID" => true, "callID" => "x" },
+                { "run" => "serve-plugin", "kind" => "tool.before", "tool" => "bash", "callID" => nil }], [], [])
+  # F19: serve の idle.delayed の sessionID が欠けている
+  unknown.call("f19-serve-delayed", "M10", "serve_delayed_recorded", { "runs" => [{ "label" => "serve-plugin", "prompt" => { "session_id" => "p1", "status" => 200 } }] },
+               [ev.call("serve-plugin", "session.idle", "sessionID" => "p1"), { "run" => "serve-plugin", "kind" => "idle.delayed" }], [], [])
+  # F23: abort の成功だけが欠ける (他の条件は成り立つ)
+  unknown.call("f23-abort-status", "M9", "idle_after_abort",
+               { "runs" => [{ "label" => "serve-plugin", "abort" => { "session_id" => "a1", "prompt_async_status" => 204, "abort_status" => 500, "t_abort" => 1000 } }] },
+               [before_at.call(900), idle_at.call(1200)], [], [])
+  # 同型: M9 の idle に sessionID の欠けた記録がある / 子 session の作成の記録に sessionID が無い
+  unknown.call("m9-idle-invalid", "M9", "idle_after_bang", { "runs" => [{ "label" => "serve-plugin", "shell" => { "session_id" => "b1", "status" => 200 } }] },
+               [ev.call("serve-plugin", "session.idle", "sessionID" => nil)], [], [])
+  unknown.call("m9-child-invalid", "M9", "child_idle_delivered", { "runs" => [ok_run.call("task")] },
+               [ev.call("task", "session.created", "sessionID" => nil, "parentID" => "main1"), ev.call("task", "session.idle", "sessionID" => "main1")], [],
+               [{ "run" => "task", "event" => { "type" => "step_start", "sessionID" => "main1" } }])
+  # 同型: M12 で shell.env の sessionID に欠けた記録がある
+  unknown.call("m12-invalid", "M12", "joinable_by_sessionID", {},
+               [{ "run" => "tools-claude", "kind" => "chat.params", "sessionID" => "s1", "providerID" => "probe", "modelID" => "claude-probe", "apiID" => "claude-probe" },
+                { "run" => "tools-claude", "kind" => "shell.env", "sessionID" => nil }, { "run" => "tools-claude", "kind" => "shell.env", "sessionID" => "s2" }], [], [])
   puts "ok T5"
 end
 

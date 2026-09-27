@@ -77,6 +77,19 @@ module ProbeOpencode
       v.is_a?(String) && !v.empty?
     end
 
+    # 照合に使う記録の集合から ID を集める。1 つでも欠けた ID があれば nil を返す (照合できない記録を
+    # 除外すると、残りだけで「揃った」「一致しない」と結論してしまうため)。
+    def self.ids_of(records, key)
+      ids = records.map { |r| r[key] }
+      ids.all? { |v| valid_id?(v) } ? ids : nil
+    end
+
+    # その run の session.idle の記録が、すべて有効な sessionID を持つか (欠けた記録があれば、session ごとの
+    # idle の有無を「無い」と結論できない)。
+    def self.idles_valid?(data, run)
+      !ids_of(idle_for(data, run), "sessionID").nil?
+    end
+
     # pred: 予測の flat hash (nil なら予測なし)。obs: 観測の flat hash。
     # 予測の key のうち観測が nil のものがあれば unknown にする (欠けた data を pass に数えない)。
     def self.verdict(pred, obs)
@@ -245,34 +258,37 @@ module ProbeOpencode
     # after を観測した call ごとに、completed の part と、次の request の tool message の両方が揃ったときだけ
     # 判定する (一部の call だけで予測どおりと数えない)。
     def self.m4(data)
-      after_ids = hooks(data, "tools-claude", "tool.after").map { |h| h["callID"] }.select { |v| valid_id?(v) }.uniq
-      msgs = mock(data, "tools-claude").flat_map { |m| m["tool_messages"] || [] }.select { |t| valid_id?(t["id"]) }.uniq { |t| t["id"] }
-      parts = tool_parts(data, "tools-claude").select { |p| valid_id?(p["callID"]) && p.dig("state", "status") == "completed" }
+      after_ids = ids_of(hooks(data, "tools-claude", "tool.after"), "callID")&.uniq
+      msg_list = mock(data, "tools-claude").flat_map { |m| m["tool_messages"] || [] }
+      part_list = tool_parts(data, "tools-claude")
+      msgs = msg_list.uniq { |t| t["id"] }
+      parts = part_list.select { |p| p.dig("state", "status") == "completed" }
       nonce = data["facts"]["nonce"].to_s
-      complete = !after_ids.empty? && !nonce.empty? &&
+      complete = !after_ids.nil? && !ids_of(msg_list, "id").nil? && !ids_of(part_list, "callID").nil? &&
+                 !after_ids.empty? && !nonce.empty? &&
                  after_ids.all? { |id| msgs.any? { |t| t["id"] == id } && parts.any? { |p| p["callID"] == id } }
       obs = {
         "next_request_has_nonce" => complete ? after_ids.all? { |id| msgs.find { |t| t["id"] == id }["nonce_first"] == true } : nil,
         "run_event_output_has_nonce" => complete ? after_ids.all? { |id| parts.find { |p| p["callID"] == id }.dig("state", "output").to_s.start_with?(nonce) } : nil,
       }
-      extra = { "callid_equals_provider_tool_call_id" => msgs.empty? || after_ids.empty? ? nil : after_ids.all? { |id| msgs.any? { |t| t["id"] == id } } }
+      extra = { "callid_equals_provider_tool_call_id" => complete ? true : nil }
       item("M4", pred: obs.keys.map { |k| [k, true] }.to_h, obs: obs, extra: extra)
     end
 
     def self.shell_env_inputs(data)
-      claude_before = hooks(data, "tools-claude", "tool.before").map { |h| h["callID"] }.select { |v| valid_id?(v) }
+      claude_before = ids_of(hooks(data, "tools-claude", "tool.before"), "callID")
       model = hooks(data, "tools-claude", "shell.env")
       serve = run_fact(data, "serve-plugin") || {}
-      serve_before = hooks(data, "serve-plugin", "tool.before").map { |h| h["callID"] }.select { |v| valid_id?(v) }
+      serve_before = ids_of(hooks(data, "serve-plugin", "tool.before"), "callID")
       bang = window_records(data, "serve-plugin", serve, "shell") || []
       pty = window_records(data, "serve-plugin", serve, "pty") || []
       {
         "model_bash.sessionID" => model.empty? ? nil : model.all? { |h| h["has_sessionID"] },
         "model_bash.callID" => model.empty? ? nil : model.all? { |h| h["has_callID"] },
-        "model_bash.callID_matches_before" => model.empty? ? nil : model.all? { |h| valid_id?(h["callID"]) && claude_before.include?(h["callID"]) },
+        "model_bash.callID_matches_before" => model.empty? || claude_before.nil? || ids_of(model, "callID").nil? ? nil : model.all? { |h| claude_before.include?(h["callID"]) },
         "bang.sessionID" => bang.empty? ? nil : bang.all? { |h| h["has_sessionID"] },
         "bang.callID" => bang.empty? ? nil : bang.all? { |h| h["has_callID"] },
-        "bang.callID_matches_before" => bang.empty? ? nil : bang.any? { |h| valid_id?(h["callID"]) && serve_before.include?(h["callID"]) },
+        "bang.callID_matches_before" => bang.empty? || serve_before.nil? || ids_of(bang, "callID").nil? ? nil : bang.any? { |h| serve_before.include?(h["callID"]) },
         "pty.sessionID" => pty.empty? ? nil : pty.any? { |h| h["has_sessionID"] },
         "pty.callID" => pty.empty? ? nil : pty.any? { |h| h["has_callID"] },
       }
@@ -412,14 +428,15 @@ module ProbeOpencode
       rejected = asks.any? { |h| h["type"] == "permission.replied" && h["reply"] == "reject" && asked_ids.include?(h["requestID"]) } &&
                  run_ok?(run_fact(data, "ask"))
       # task: 子 session が作られた記録 (parentID の付いた session.created) があること。
-      children = hooks(data, "task", "event").select { |h| h["type"] == "session.created" && valid_id?(h["parentID"]) && valid_id?(h["sessionID"]) }.map { |h| h["sessionID"] }.uniq
-      child_sessions = hooks(data, "task", "idle.session").select { |h| children.include?(h["sessionID"]) }
+      created = hooks(data, "task", "event").select { |h| h["type"] == "session.created" }
+      children = ids_of(created, "sessionID") && created.select { |h| valid_id?(h["parentID"]) }.map { |h| h["sessionID"] }.uniq
+      child_sessions = children ? hooks(data, "task", "idle.session").select { |h| children.include?(h["sessionID"]) } : []
       obs = {
-        "idle_per_turn" => valid_id?(main) && run_ok?(run_fact(data, "tools-claude")) ? idle_for(data, "tools-claude", main).length : nil,
-        "idle_after_bang" => bang_ok ? !idle_for(data, "serve-plugin", bang_sid).empty? : nil,
-        "idle_after_abort" => abort_ok ? idle_for(data, "serve-plugin", abort_sid).any? { |h| h["t"].is_a?(Integer) && h["t"] >= t_abort } : nil,
+        "idle_per_turn" => valid_id?(main) && run_ok?(run_fact(data, "tools-claude")) && idles_valid?(data, "tools-claude") ? idle_for(data, "tools-claude", main).length : nil,
+        "idle_after_bang" => bang_ok && idles_valid?(data, "serve-plugin") ? !idle_for(data, "serve-plugin", bang_sid).empty? : nil,
+        "idle_after_abort" => abort_ok && idles_valid?(data, "serve-plugin") ? idle_for(data, "serve-plugin", abort_sid).any? { |h| h["t"].is_a?(Integer) && h["t"] >= t_abort } : nil,
         "idle_after_permission_reject" => rejected ? !idle_for(data, "ask").empty? : nil,
-        "child_idle_delivered" => !children.empty? && run_ok?(run_fact(data, "task")) ? idle_for(data, "task").any? { |h| children.include?(h["sessionID"]) } : nil,
+        "child_idle_delivered" => children && !children.empty? && run_ok?(run_fact(data, "task")) && idles_valid?(data, "task") ? idle_for(data, "task").any? { |h| children.include?(h["sessionID"]) } : nil,
         "child_parent_readable" => child_sessions.empty? ? nil : child_sessions.all? { |h| h["has_parentID"] },
       }
       pred = obs.keys.map { |k| [k, true] }.to_h.merge("idle_per_turn" => 1)
@@ -435,10 +452,10 @@ module ProbeOpencode
       serve = run_fact(data, "serve-plugin") || {}
       prompt_sid = serve.dig("prompt", "session_id")
       serve_idle = !prompt_sid.nil? && serve.dig("prompt", "status") == 200 && !idle_for(data, "serve-plugin", prompt_sid).empty?
-      delayed_ok = hooks(data, "tools-claude", "idle.delayed").all? { |h| valid_id?(h["sessionID"]) }
+      delayed_ok = !ids_of(hooks(data, "tools-claude", "idle.delayed"), "sessionID").nil?
       obs = {
         "run_delayed_recorded" => run_idle && delayed_ok ? hooks(data, "tools-claude", "idle.delayed").any? { |h| h["sessionID"] == main } : nil,
-        "serve_delayed_recorded" => serve_idle ? hooks(data, "serve-plugin", "idle.delayed").any? { |h| h["sessionID"] == prompt_sid } : nil,
+        "serve_delayed_recorded" => serve_idle && !ids_of(hooks(data, "serve-plugin", "idle.delayed"), "sessionID").nil? ? hooks(data, "serve-plugin", "idle.delayed").any? { |h| h["sessionID"] == prompt_sid } : nil,
       }
       item("M10", pred: { "run_delayed_recorded" => false, "serve_delayed_recorded" => true }, obs: obs)
     end
@@ -457,8 +474,8 @@ module ProbeOpencode
     def self.m12(data)
       params = hooks(data, "tools-claude", "chat.params")
       # 結合するのは、両方に有効な sessionID があるときだけ (欠けた ID 同士を一致とみなさない)。
-      param_sids = params.map { |h| h["sessionID"] }.select { |v| v.is_a?(String) && !v.empty? }
-      env_sids = hooks(data, "tools-claude", "shell.env").map { |h| h["sessionID"] }.select { |v| v.is_a?(String) && !v.empty? }
+      param_sids = ids_of(params, "sessionID") || []
+      env_sids = ids_of(hooks(data, "tools-claude", "shell.env"), "sessionID") || []
       p = params.first
       obs = {
         "providerID" => p && p["providerID"], "modelID" => p && p["modelID"], "apiID" => p && p["apiID"],
@@ -485,9 +502,17 @@ module ProbeOpencode
     # part (終了の結果) と hook の記録を callID で対応付ける。edit の失敗 (part の status が error) と bash の
     # 非 0 終了 (metadata.exit) を確かめ、その call が before に届いていたときだけ、after の有無を見る。
     def self.m14(data)
-      parts = tool_parts(data, "tools-claude").select { |x| valid_id?(x["callID"]) }
-      before_ids = hooks(data, "tools-claude", "tool.before").map { |h| h["callID"] }.select { |v| valid_id?(v) }
-      after_ids = hooks(data, "tools-claude", "tool.after").map { |h| h["callID"] }.select { |v| valid_id?(v) }
+      # edit / bash の part・before・after のどれかに欠けた callID があれば判定しない (照合できない after を
+      # 「呼ばれていない」と数えない)。
+      relevant = ->(recs) { recs.select { |r| %w[edit bash].include?(r["tool"]) } }
+      parts = relevant.call(tool_parts(data, "tools-claude"))
+      before_ids = ids_of(relevant.call(hooks(data, "tools-claude", "tool.before")), "callID")
+      after_ids = ids_of(relevant.call(hooks(data, "tools-claude", "tool.after")), "callID")
+      if before_ids.nil? || after_ids.nil? || ids_of(parts, "callID").nil?
+        before_ids = []
+        after_ids = []
+        parts = []
+      end
       failed_edits = parts.select { |x| x["tool"] == "edit" && x.dig("state", "status") == "error" && before_ids.include?(x["callID"]) }.map { |x| x["callID"] }
       nonzero_bash = parts.select do |x|
         code = x.dig("state", "metadata", "exit")
