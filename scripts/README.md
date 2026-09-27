@@ -250,7 +250,8 @@ usage: doctor.sh [--root DIR] [--codex-home DIR] [--claude-home DIR] [--opencode
   誤存在、catalog の存在と鮮度を check する。
 - tool home の表示は `ArtifactTargets::TOOL_KINDS` に従う。opencode は
   `[opencode] <label> present, N personal plugin(s)` で、数えるのは `plugins/personal-*.js` のうち
-  先頭行 marker が `target=opencode` として正しいもの (`PluginMarker.managed?`)。custom home は
+  先頭行 marker が `target=opencode` で name が file 名と同じもの (`PluginMarker.managed?`。sync の
+  所有判定と同じ条件)。custom home は
   label に置き換え、生の path を出さない。`--opencode-home` を省いて既定 home を使い、かつ
   `$XDG_CONFIG_HOME/opencode` が既定と食い違うときだけ warn を出す。禁止 targets の検査 (sidecar
   marker を探す方式) に `<opencode home>/node_modules` は足さない (file 先頭 marker の plugin は

@@ -451,7 +451,8 @@ ruby -r"$script_dir/../lib/plugin_marker" -r"$script_dir/../lib/instruction_mark
   ok = PluginMarker.render(name: "personal-x", target: "opencode", source: "shared/plugins/personal-x.js", build_id: bid)
   abort "render output must parse" unless PluginMarker.parse(ok + "\nexport default {};\n")
   abort "body after the marker may be non-UTF-8" unless PluginMarker.parse(ok.b + "\n\xff".b)
-  abort "managed? must compare target" unless PluginMarker.managed?(ok, "opencode") && !PluginMarker.managed?(ok, "claude-code")
+  abort "managed? must compare target and name" unless PluginMarker.managed?(ok, "opencode", "personal-x") && !PluginMarker.managed?(ok, "claude-code", "personal-x") && !PluginMarker.managed?(ok, "opencode", "personal-y")
+  abort "owned must return the marker only for the same target and name" unless PluginMarker.owned(ok, target: "opencode", name: "personal-x")["build_id"] == bid && PluginMarker.owned(ok, target: "opencode", name: "personal-y").nil?
   abort "matches? must accept the same entry" unless PluginMarker.matches?(ok, target: "opencode", name: "personal-x", build_id: bid)
   abort "matches? must reject another build_id" if PluginMarker.matches?(ok, target: "opencode", name: "personal-x", build_id: "sha256:" + "b" * 64)
   rejects = {

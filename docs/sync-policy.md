@@ -114,7 +114,8 @@ plugin の plan の判定順 (既存 kind と対称):
 5. target が regular file でなければ conflict。
 6. 先頭行の marker が `target=opencode` かつ同じ name でなければ、`existing target is unmanaged` の
    conflict (marker 無し / 別 name / instruction の HTML コメント marker / `target=claude-code` の
-   marker はすべてここで止まる。`PluginMarker.managed?`)。
+   marker はすべてここで止まる。判定は `PluginMarker.owned` = `parse` + target + name の一致で、prune と
+   共有する。doctor が数える plugin も同じ判定 (`PluginMarker.managed?`、name は file 名) を使う)。
 7. build_id が同じなら up-to-date、違えば `update`。
 
 apply は mkdir_p + cp + chmod 0644。`--prune` は `plugins/personal-*.js` だけを見て、marker が

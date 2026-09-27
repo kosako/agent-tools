@@ -166,11 +166,14 @@ write_approved_plugin_manifest "$tmp/plrepo" personal-plug personal
 "$build" --root "$tmp/plrepo" --quiet > /dev/null
 "$script_dir/../register.sh" --root "$tmp/plrepo" --quiet > /dev/null
 "$sync" --root "$tmp/plrepo" --codex-home "$tmp/plcodex" --claude-home "$tmp/plclaude" --opencode-home "$tmp/plopen" --apply --quiet > /dev/null
-# 数えないもの: marker の無い personal-*.js、非 personal の file、別 tool 向けの marker
+# 数えないもの: marker の無い personal-*.js、非 personal の file、別 tool 向けの marker、file 名と name が違う marker
 echo "hand made" > "$tmp/plopen/plugins/personal-junk.js"
 echo "herdr" > "$tmp/plopen/plugins/herdr-agent-state.js"
 ruby -r"$script_dir/../lib/plugin_marker" -e 'puts PluginMarker.render(name: "personal-foreign", target: "claude-code",
   source: "shared/plugins/personal-foreign.js", build_id: "sha256:" + "0" * 64)' > "$tmp/plopen/plugins/personal-foreign.js"
+# marker の name が file 名と違うものは、sync の所有判定 (target + name) では unmanaged なので doctor も数えない
+ruby -r"$script_dir/../lib/plugin_marker" -e 'puts PluginMarker.render(name: "personal-other", target: "opencode",
+  source: "shared/plugins/personal-other.js", build_id: "sha256:" + "0" * 64)' > "$tmp/plopen/plugins/personal-mismatch.js"
 # 使い方: run_pdoctor <opencode home> [extra args]
 run_pdoctor() {
   rpd_home=$1

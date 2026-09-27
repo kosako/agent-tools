@@ -128,7 +128,8 @@ module Doctor
 
     def managed_plugin_count(tool, home)
       Dir.glob(File.join(home, "plugins", ArtifactTargets.plugin_filename("personal-*"))).count do |path|
-        File.file?(path) && PluginMarker.managed?(File.binread(path), tool)
+        # 数える条件は sync の所有判定と同じ (marker の target と、file 名と同じ name)。
+        File.file?(path) && PluginMarker.managed?(File.binread(path), tool, File.basename(path, ".js"))
       end
     end
 

@@ -2,8 +2,8 @@
 
 # plugin artifact (OpenCode の plugins/*.js) の管理 marker (ファイル内 JS ブロックコメント) の
 # 生成と解析を 1 箇所に集約する。build が生成し、sync / status / doctor が所有判定に使う。
-# instruction の HTML コメント marker (InstructionMarker) と対称の API (render / parse /
-# managed? / matches?) を持つが、module は分ける: OpenCode の process の中で動く実行コードの
+# instruction の HTML コメント marker (InstructionMarker) と同じ並びの API (render / parse /
+# managed? / matches?。managed? は YamlMarker と同じく target と name の所有判定) を持つが、module は分ける: OpenCode の process の中で動く実行コードの
 # 目印なので、解析は緩めず (strip しない・CRLF と非 UTF-8 を拒否する)、InstructionMarker の
 # 挙動 (strip / CRLF 受容 / scrub) には触れない (#295)。
 #
@@ -60,10 +60,16 @@ module PluginMarker
     pairs
   end
 
-  # content が指定 target の agent-tools plugin として管理されているか。
-  def self.managed?(content, target)
+  # content が target の agent-tools plugin として、その name で管理されているか (所有判定)。
+  # YamlMarker.managed?(marker, tool, name) と同じ契約で、sync の plan / prune と doctor の件数が
+  # 同じ判定を使う。marker の中身 (build_id) も要るときは owned を使う。
+  def self.owned(content, target:, name:)
     marker = parse(content)
-    !marker.nil? && marker["target"] == target
+    marker if marker && marker["target"] == target && marker["name"] == name
+  end
+
+  def self.managed?(content, target, name)
+    !owned(content, target: target, name: name).nil?
   end
 
   # content (generated plugin) が catalog entry (target / name / build_id) と一致するか。

@@ -455,8 +455,7 @@ module Sync
     def owned_plugin_marker(target, tool, name)
       return nil unless File.file?(target)
 
-      marker = PluginMarker.parse(File.binread(target))
-      marker if marker && marker["target"] == tool && marker["name"] == name
+      PluginMarker.owned(File.binread(target), target: tool, name: name)
     end
 
     # sync が script で書き込む経路 (本体 / sidecar marker / 配置先 dir 2 階層) のいずれかが
