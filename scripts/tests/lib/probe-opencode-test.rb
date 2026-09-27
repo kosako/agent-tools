@@ -134,10 +134,10 @@ def t5(dir)
   # confirmed に数えない。
   ok_run = ->(label) { { "label" => label, "exit" => 0, "timed_out" => false, "events" => 5 } }
   bash_error = { "run" => "throw-shell-env", "event" => { "type" => "tool_use", "sessionID" => "s1",
-                                                         "part" => { "tool" => "bash", "state" => { "status" => "error" } } } }
+                                                         "part" => { "tool" => "bash", "callID" => "c1", "state" => { "status" => "error" } } } }
   m6 = write.call("m6-unreached", { "runs" => [{ "label" => "serve-throw-shell-env", "shell" => { "session_status" => 500 },
                                                   "pty" => { "status" => nil, "file_written" => false } }] },
-                  [{ "run" => "throw-shell-env", "kind" => "shell.env", "t" => 1 }], [], [bash_error])["M6"]
+                  [{ "run" => "throw-shell-env", "kind" => "shell.env", "t" => 1, "callID" => "c1" }], [], [bash_error])["M6"]
   check(m6["verdict"] == "unknown" && m6["observed"]["model_bash_fails"] == true && m6["observed"]["bang_fails"].nil? && m6["observed"]["pty_fails"].nil?,
         "T5: M6 must not count unreached `!` / PTY as failed: #{m6.inspect}")
   inits = %w[probe-global-b probe-global-a probe-project].each_with_index.map { |l, i| { "run" => "tools-claude", "kind" => "init", "label" => l, "t" => i } }
@@ -203,6 +203,72 @@ def t5(dir)
                [{ "run" => "tools-claude", "event" => { "type" => "step_start", "sessionID" => "s1" } }])
   # M1: 実物の config dir / DB が 1 つも無い (比べる対象が無い)
   unknown.call("m1-vacuous", "M1", "real_state_unchanged", { "real_mtime" => { "before" => { "a" => nil }, "after" => { "a" => nil } } }, [], [], [])
+
+  # 回帰 (#336 review round 3)
+  ev = ->(run, type, extra = {}) { { "run" => run, "kind" => "event", "type" => type }.merge(extra) }
+  # F10 permission: 返答が reject でない / requestID が ask と合わない
+  asked = ev.call("ask", "permission.asked", "requestID" => "r1", "sessionID" => "s1")
+  idle_ask = ev.call("ask", "session.idle", "sessionID" => "s1")
+  unknown.call("f10-once", "M9", "idle_after_permission_reject", { "runs" => [ok_run.call("ask")] },
+               [asked, ev.call("ask", "permission.replied", "requestID" => "r1", "reply" => "once"), idle_ask], [], [])
+  unknown.call("f10-other-request", "M9", "idle_after_permission_reject", { "runs" => [ok_run.call("ask")] },
+               [asked, ev.call("ask", "permission.replied", "requestID" => "r2", "reply" => "reject"), idle_ask], [], [])
+  # F10 abort: 条件を 1 つずつ外す (対照は成り立つ)
+  abort_fact = ->(prompt) { { "runs" => [{ "label" => "serve-plugin", "abort" => { "session_id" => "a1", "prompt_async_status" => prompt, "abort_status" => 200, "t_abort" => 1000 } }] } }
+  before_at = ->(t) { { "run" => "serve-plugin", "kind" => "tool.before", "tool" => "bash", "sessionID" => "a1", "callID" => "c9", "t" => t } }
+  idle_at = ->(t) { ev.call("serve-plugin", "session.idle", "sessionID" => "a1", "t" => t) }
+  control = write.call("f10-abort-control", abort_fact.call(204), [before_at.call(900), idle_at.call(1200)], [], [])["M9"]
+  check(control["observed"]["idle_after_abort"] == true, "T5 f10-abort-control: #{control['observed']['idle_after_abort'].inspect}")
+  unknown.call("f10-abort-late-before", "M9", "idle_after_abort", abort_fact.call(204), [before_at.call(1100), idle_at.call(1200)], [], [])
+  unknown.call("f10-abort-done-before", "M9", "idle_after_abort", abort_fact.call(204), [before_at.call(900), idle_at.call(950), idle_at.call(1200)], [], [])
+  unknown.call("f10-abort-prompt-failed", "M9", "idle_after_abort", abort_fact.call(500), [before_at.call(900), idle_at.call(1200)], [], [])
+  # F15: 欠けた callID 同士を結合しない
+  nil_part = { "run" => "throw-before", "event" => { "type" => "tool_use", "sessionID" => "s1", "part" => { "tool" => "bash", "callID" => nil, "state" => { "status" => "error" } } } }
+  unknown.call("f15-m7", "M7", "throw_before.part_status", { "runs" => [ok_run.call("throw-before").merge("executed_marker" => false)] },
+               [{ "run" => "throw-before", "kind" => "tool.before", "tool" => "bash", "callID" => nil }], [], [nil_part])
+  other_call = { "run" => "throw-shell-env", "event" => { "type" => "tool_use", "sessionID" => "s1", "part" => { "tool" => "bash", "callID" => "c1", "state" => { "status" => "error" } } } }
+  unknown.call("f15-m6", "M6", "model_bash_fails", {}, [{ "run" => "throw-shell-env", "kind" => "shell.env", "t" => 1, "callID" => "c2" }], [], [other_call])
+  # F16: after は a / b、次の request の tool message は a だけ
+  m4_part = ->(id) { { "run" => "tools-claude", "event" => { "type" => "tool_use", "sessionID" => "s1", "part" => { "tool" => "bash", "callID" => id, "state" => { "status" => "completed", "output" => "#{nonce}\nx" } } } } }
+  unknown.call("f16", "M4", "next_request_has_nonce", facts,
+               %w[a b].map { |id| { "run" => "tools-claude", "kind" => "tool.after", "tool" => "bash", "callID" => id } },
+               [{ "run" => "tools-claude", "tool_messages" => [{ "id" => "a", "nonce_first" => true, "ok_marker" => true }] }], [m4_part.call("a"), m4_part.call("b")])
+  # F17: group への kill が失敗 / kill の前に子が終わっていた
+  spawn_rec = ->(extra) { { "run" => "spawn", "kind" => "spawn", "child_exited" => true, "grandchild_alive" => false, "group_kill_error" => nil,
+                           "child_alive_before_kill" => true, "grandchild_alive_before_kill" => true }.merge(extra) }
+  unknown.call("f17-kill-error", "M13", "child_killed", {}, [spawn_rec.call("group_kill_error" => "ESRCH")], [], [])
+  unknown.call("f17-already-exited", "M13", "grandchild_killed", {}, [spawn_rec.call("child_alive_before_kill" => false)], [], [])
+  # F18: debug paths が異常終了した
+  unknown.call("f18", "M1", "paths_under_tmp", { "isolation" => { "paths_all_under_tmp" => true, "exits" => { "paths" => 1, "config" => 0, "models" => 0 } } }, [], [], [])
+  # F19: 壊れた行があれば全項目を unknown / 判定に使う field の欠落
+  broken = File.join(dir, "f19-broken")
+  Dir.mkdir(broken)
+  File.write(File.join(broken, "hooks.jsonl"), "{\"run\":\"tools-claude\",\"kind\":\"init\"}\nnot json\n")
+  all = j.judge(j.load(broken))
+  check(all.all? { |i| i["verdict"] == "unknown" && i["reason"].to_s.include?("hooks.jsonl") }, "T5 f19: a broken line must make every item unknown: #{all.map { |i| i['verdict'] }.uniq}")
+  unknown.call("f19-home-field", "M1", "home_path_not_sent", {}, [], [{ "run" => "tools-claude", "method" => "POST" }], [])
+  unknown.call("f19-canary-field", "M15", "rules_read", { "runs" => [ok_run.call("claude-compat")] }, [], [{ "run" => "claude-compat", "canaries_seen" => {} }], [])
+  unknown.call("f19-delayed-field", "M10", "run_delayed_recorded", { "runs" => [ok_run.call("tools-claude")] },
+               [ev.call("tools-claude", "session.idle", "sessionID" => "s1"), { "run" => "tools-claude", "kind" => "idle.delayed" }], [],
+               [{ "run" => "tools-claude", "event" => { "type" => "step_start", "sessionID" => "s1" } }])
+  # F20: project の init だけ
+  unknown.call("f20", "M2", "global_before_project", {}, [{ "run" => "tools-claude", "kind" => "init", "label" => "probe-project", "t" => 1 }], [], [])
+  # F21: `!` が最後まで走った印が無い (names は空でも「立っていない」と数えない)
+  f21 = write.call("f21", { "runs" => [{ "label" => "serve-plugin", "shell" => { "status" => 200, "ok_marker" => false, "names" => { "env" => [] } } }] }, [], [], [])["M5"]
+  check(f21["observed"]["bang.plugin.env.OPENCODE_SESSION_ID"].nil?, "T5 f21: `!` names without the OK marker must be unknown: #{f21['observed']['bang.plugin.env.OPENCODE_SESSION_ID'].inspect}")
+  # F23: M15 / M16 の前提、M7 の hook_ms、M9 の子の作成
+  unknown.call("f23-m15-run-failed", "M15", "rules_read", { "runs" => [{ "label" => "claude-compat", "exit" => 1, "timed_out" => false, "events" => 0 }] }, [],
+               [{ "run" => "claude-compat", "canaries_seen" => { "claude_rules" => true, "claude_skill" => true } }], [])
+  real_text = { "run" => "real", "event" => { "type" => "text", "sessionID" => "s1", "part" => { "text" => "#{nonce} echoed" } } }
+  unknown.call("f23-m16-not-annotated", "M16", "nonce_reached_model", facts.merge("runs" => [ok_run.call("real")]),
+               [{ "run" => "real", "kind" => "tool.after", "nonce_first" => false }], [], [real_text])
+  unknown.call("f23-m16-run-failed", "M16", "nonce_reached_model", facts.merge("runs" => [{ "label" => "real", "exit" => 1, "timed_out" => false, "events" => 1 }]),
+               [{ "run" => "real", "kind" => "tool.after", "nonce_first" => true }], [], [real_text])
+  slow_part = { "run" => "slow-after", "event" => { "type" => "tool_use", "sessionID" => "s1", "part" => { "tool" => "bash", "callID" => "c1", "state" => { "status" => "completed", "time" => { "start" => 0, "end" => 4000 } } } } }
+  unknown.call("f23-m7-hook-ms", "M7", "slow_after.waited", { "runs" => [ok_run.call("slow-after").merge("executed_marker" => true)] },
+               [{ "run" => "slow-after", "kind" => "tool.after", "tool" => "bash", "callID" => "c1" }], [], [slow_part])
+  unknown.call("f23-m9-child", "M9", "child_idle_delivered", { "runs" => [ok_run.call("task")] },
+               [ev.call("task", "session.idle", "sessionID" => "child1")], [], [{ "run" => "task", "event" => { "type" => "step_start", "sessionID" => "main1" } }])
   puts "ok T5"
 end
 
@@ -238,21 +304,27 @@ def t8(dir)
   check(wait_dead(grandchild, "sleep", 3), "T8: a TERM-ignoring grandchild survived Serve#stop")
 
   # Serve#stop が TERM の猶予の途中で中断されても、KILL を飛ばさない (親自身が TERM を無視する)。
+  # 親は TERM を受けたら file に書くだけで終わらない (TERM の猶予の待ちに入ったことを file で同期する)。
   pidfile3 = File.join(dir, "t8-serve-parent.pid")
-  script3 = %(trap "" TERM; echo $$ > "$0"; echo "listening on http://127.0.0.1:1"; sleep 60)
-  srv3 = ProbeOpencode::Child::Serve.new(["sh", "-c", script3, pidfile3], env: env, chdir: dir, timeout: 10)
+  termfile = File.join(dir, "t8-serve-parent.term")
+  script3 = %(trap 'echo term > "$1"' TERM; echo $$ > "$0"; echo "listening on http://127.0.0.1:1"; while :; do sleep 0.1; done)
+  srv3 = ProbeOpencode::Child::Serve.new(["sh", "-c", script3, pidfile3, termfile], env: env, chdir: dir, timeout: 10)
   check(srv3.start == 1, "T8: serve stand-in 2 did not print the listen URL")
   parent = wait_file(pidfile3, 5)
   check(parent && pid_alive?(parent, "sh"), "T8: serve stand-in 2 did not start")
   stopper = Thread.new do
     srv3.stop
+    :completed
   rescue Interrupt
     :interrupted
   end
   stopper.report_on_exception = false
-  sleep 0.5
+  deadline = Time.now + 5
+  sleep 0.05 until File.file?(termfile) || Time.now > deadline
+  check(File.file?(termfile), "T8: Serve#stop did not send TERM")
   stopper.raise(Interrupt)
   check(!stopper.join(10).nil?, "T8: interrupted Serve#stop did not return within 10s")
+  check(stopper.value == :interrupted, "T8: the interrupt must land in the TERM grace: #{stopper.value.inspect}")
   check(wait_dead(parent, "sh", 3), "T8: an interrupted Serve#stop left the TERM-ignoring parent alive")
 
   # 中断 (Ctrl-C 相当) された Child.run は、子の group を止めてすぐ戻る (Open3 の終了待ちで止まらない)。

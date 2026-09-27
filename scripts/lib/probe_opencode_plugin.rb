@@ -308,9 +308,10 @@ module ProbeOpencodePlugin
     parts = msg.is_a?(Hash) && msg["parts"].is_a?(Array) ? msg["parts"] : []
     tool = parts.find { |p| p.is_a?(Hash) && p["type"] == "tool" }
     output = tool && tool.dig("state", "output")
+    # names は、command が最後まで走った印 (OK_MARKER) があるときだけ取る (途中の出力を「不在」と数えない)。
+    ok = output.to_s.include?(Mock::OK_MARKER)
     { "session_id" => sid, "status" => st, "part_status" => tool && tool.dig("state", "status"),
-      "names" => output ? names_of(output) : nil, "ok_marker" => output.to_s.include?(Mock::OK_MARKER),
-      "t_start" => t_start, "t_end" => t_end }
+      "names" => ok ? names_of(output) : nil, "ok_marker" => ok, "t_start" => t_start, "t_end" => t_end }
   end
 
   def self.now_ms
@@ -330,8 +331,9 @@ module ProbeOpencodePlugin
     t_end = now_ms
     id = body.is_a?(Hash) ? body["id"] : nil
     client.delete("/pty/#{id}") if id
-    written = File.file?(file)
-    { "status" => status, "file_written" => written, "names" => written ? names_of(File.read(file)) : nil,
+    text = File.file?(file) ? File.read(file) : nil
+    ok = !text.nil? && text.include?(Mock::OK_MARKER)
+    { "status" => status, "file_written" => !text.nil?, "ok_marker" => ok, "names" => ok ? names_of(text) : nil,
       "t_start" => t_start, "t_end" => t_end }
   end
 
@@ -354,9 +356,12 @@ module ProbeOpencodePlugin
 
     st, = client.post("/session/#{sid}/prompt_async", prompt_body("slow"))
     sleep 1.5
+    # abort を送った時刻。judge は、この前に bash が始まり、この前には idle が無く、この後に idle が出たことを
+    # 確かめる (通常の完了の後の abort を数えない)。
+    t_abort = now_ms
     abort_status, = client.post("/session/#{sid}/abort", {})
     sleep 1.0
-    { "session_id" => sid, "prompt_async_status" => st, "abort_status" => abort_status }
+    { "session_id" => sid, "prompt_async_status" => st, "abort_status" => abort_status, "t_abort" => t_abort }
   end
 
   def self.serve_run(ctx, spec)

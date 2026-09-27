@@ -41,25 +41,40 @@ module ProbeOpencode
     MARK = "AGENT_TOOLS_PROBE_MARK"
     SOURCE_MARKERS = { "OPENCODE" => true, "AGENT" => true, "OPENCODE_PID" => true, "OPENCODE_SESSION_ID" => false }.freeze
 
-    def self.read_jsonl(path)
-      return [] unless File.file?(path)
+    JSONL_FILES = { "hooks" => "hooks.jsonl", "mock" => "mock-requests.jsonl", "events" => "run-events.jsonl",
+                    "git_hooks" => "git-hooks.jsonl" }.freeze
 
-      File.readlines(path).map do |l|
-        JSON.parse(l)
+    # [記録, 読めなかった行数]。parse できない行と object でない行を数える (黙って捨てると、欠測が
+    # 「記録なし」に化けて予測どおりに数えられる)。
+    def self.read_jsonl(path)
+      return [[], 0] unless File.file?(path)
+
+      broken = 0
+      recs = File.readlines(path).map do |l|
+        v = JSON.parse(l)
+        v.is_a?(Hash) ? v : (broken += 1
+                             nil)
       rescue JSON::ParserError
+        broken += 1
         nil
       end.compact
+      [recs, broken]
     end
 
     def self.load(dir)
       facts_path = File.join(dir, "facts.json")
-      {
-        "facts" => File.file?(facts_path) ? JSON.parse(File.read(facts_path)) : {},
-        "hooks" => read_jsonl(File.join(dir, "hooks.jsonl")),
-        "mock" => read_jsonl(File.join(dir, "mock-requests.jsonl")),
-        "events" => read_jsonl(File.join(dir, "run-events.jsonl")),
-        "git_hooks" => read_jsonl(File.join(dir, "git-hooks.jsonl")),
-      }
+      data = { "facts" => File.file?(facts_path) ? JSON.parse(File.read(facts_path)) : {}, "load_errors" => {} }
+      JSONL_FILES.each do |key, file|
+        recs, broken = read_jsonl(File.join(dir, file))
+        data[key] = recs
+        data["load_errors"][file] = broken if broken.positive?
+      end
+      data
+    end
+
+    # 結合に使う ID (callID / sessionID) は、空でない文字列のときだけ有効 (欠けた ID 同士を一致とみなさない)。
+    def self.valid_id?(v)
+      v.is_a?(String) && !v.empty?
     end
 
     # pred: 予測の flat hash (nil なら予測なし)。obs: 観測の flat hash。
@@ -165,12 +180,15 @@ module ProbeOpencode
       iso = data["facts"]["isolation"]
       mtime = data["facts"]["real_mtime"] || {}
       mocks = data["mock"].reject { |m| m["unhandled"] }
+      exits = (iso && iso["exits"]) || {}
       obs = {
-        "paths_under_tmp" => iso && iso["paths_all_under_tmp"],
-        "only_probe_provider" => iso && iso["config_providers"] && iso["config_providers"] == ["probe"] && iso["models_providers"] == ["probe"],
+        # debug paths / config / models が正常に終わったときだけ (途中までの出力で判定しない)。
+        "paths_under_tmp" => exits["paths"] == 0 ? iso["paths_all_under_tmp"] : nil,
+        "only_probe_provider" => exits["config"] == 0 && exits["models"] == 0 && iso["config_providers"] ? iso["config_providers"] == ["probe"] && iso["models_providers"] == ["probe"] : nil,
         # 実物の config dir / DB が 1 つも無ければ、比べる対象が無いので unknown にする。
         "real_state_unchanged" => mtime["before"].is_a?(Hash) && mtime["before"].values.any? && mtime["after"] ? mtime["before"] == mtime["after"] : nil,
-        "home_path_not_sent" => mocks.empty? ? nil : mocks.none? { |m| m["home_path_seen"] },
+        # どの request にも真偽値の home_path_seen があるときだけ (欠けた field を「送っていない」と数えない)。
+        "home_path_not_sent" => mocks.empty? || !mocks.all? { |m| [true, false].include?(m["home_path_seen"]) } ? nil : mocks.none? { |m| m["home_path_seen"] },
       }
       extra = { "install" => data["facts"]["install"], "log_hosts" => data["facts"]["log_hosts"],
                 "outside_labels" => iso && iso["outside_labels"] }
@@ -186,7 +204,8 @@ module ProbeOpencode
       # 予測は source の読込順 (global の plugins dir → project の plugins dir) だけ。同じ dir の中の
       # 順は source に定めが無いので、観測値として残す。
       obs = {
-        "global_before_project" => order.include?("probe-project") ? order.index("probe-project") == order.length - 1 : nil,
+        # 両方の global と project の init があるときだけ比べる。
+        "global_before_project" => (%w[probe-global-a probe-global-b probe-project] - order).empty? ? order.index("probe-project") > [order.index("probe-global-a"), order.index("probe-global-b")].max : nil,
         "marker_file_inits" => inits.empty? ? nil : inits.count { |h| h["label"] == "probe-global-a" },
         "each_file_once" => inits.empty? ? nil : order.uniq.length == order.length && order.length == 3,
         "pure_inits" => run_ok?(pure) ? hooks(data, "pure", "init").length : nil,
@@ -223,37 +242,49 @@ module ProbeOpencode
       item("M3", pred: pred, obs: obs, extra: extra)
     end
 
+    # after を観測した call ごとに、completed の part と、次の request の tool message の両方が揃ったときだけ
+    # 判定する (一部の call だけで予測どおりと数えない)。
     def self.m4(data)
-      after_ids = hooks(data, "tools-claude", "tool.after").map { |h| h["callID"] }
-      msgs = mock(data, "tools-claude").flat_map { |m| m["tool_messages"] || [] }.uniq { |t| t["id"] }
-      matched = msgs.select { |t| after_ids.include?(t["id"]) }
+      after_ids = hooks(data, "tools-claude", "tool.after").map { |h| h["callID"] }.select { |v| valid_id?(v) }.uniq
+      msgs = mock(data, "tools-claude").flat_map { |m| m["tool_messages"] || [] }.select { |t| valid_id?(t["id"]) }.uniq { |t| t["id"] }
+      parts = tool_parts(data, "tools-claude").select { |p| valid_id?(p["callID"]) && p.dig("state", "status") == "completed" }
       nonce = data["facts"]["nonce"].to_s
-      parts = tool_parts(data, "tools-claude").select { |p| p.dig("state", "status") == "completed" && after_ids.include?(p["callID"]) }
+      complete = !after_ids.empty? && !nonce.empty? &&
+                 after_ids.all? { |id| msgs.any? { |t| t["id"] == id } && parts.any? { |p| p["callID"] == id } }
       obs = {
-        "next_request_has_nonce" => matched.empty? ? nil : matched.all? { |t| t["nonce_first"] },
-        "run_event_output_has_nonce" => parts.empty? || nonce.empty? ? nil : parts.all? { |p| p.dig("state", "output").to_s.start_with?(nonce) },
+        "next_request_has_nonce" => complete ? after_ids.all? { |id| msgs.find { |t| t["id"] == id }["nonce_first"] == true } : nil,
+        "run_event_output_has_nonce" => complete ? after_ids.all? { |id| parts.find { |p| p["callID"] == id }.dig("state", "output").to_s.start_with?(nonce) } : nil,
       }
-      extra = { "callid_equals_provider_tool_call_id" => msgs.empty? || after_ids.empty? ? nil : !matched.empty? }
+      extra = { "callid_equals_provider_tool_call_id" => msgs.empty? || after_ids.empty? ? nil : after_ids.all? { |id| msgs.any? { |t| t["id"] == id } } }
       item("M4", pred: obs.keys.map { |k| [k, true] }.to_h, obs: obs, extra: extra)
     end
 
     def self.shell_env_inputs(data)
-      claude_before = hooks(data, "tools-claude", "tool.before").map { |h| h["callID"] }
+      claude_before = hooks(data, "tools-claude", "tool.before").map { |h| h["callID"] }.select { |v| valid_id?(v) }
       model = hooks(data, "tools-claude", "shell.env")
       serve = run_fact(data, "serve-plugin") || {}
-      serve_before = hooks(data, "serve-plugin", "tool.before").map { |h| h["callID"] }
+      serve_before = hooks(data, "serve-plugin", "tool.before").map { |h| h["callID"] }.select { |v| valid_id?(v) }
       bang = window_records(data, "serve-plugin", serve, "shell") || []
       pty = window_records(data, "serve-plugin", serve, "pty") || []
       {
         "model_bash.sessionID" => model.empty? ? nil : model.all? { |h| h["has_sessionID"] },
         "model_bash.callID" => model.empty? ? nil : model.all? { |h| h["has_callID"] },
-        "model_bash.callID_matches_before" => model.empty? ? nil : model.all? { |h| claude_before.include?(h["callID"]) },
+        "model_bash.callID_matches_before" => model.empty? ? nil : model.all? { |h| valid_id?(h["callID"]) && claude_before.include?(h["callID"]) },
         "bang.sessionID" => bang.empty? ? nil : bang.all? { |h| h["has_sessionID"] },
         "bang.callID" => bang.empty? ? nil : bang.all? { |h| h["has_callID"] },
-        "bang.callID_matches_before" => bang.empty? ? nil : bang.any? { |h| serve_before.include?(h["callID"]) },
+        "bang.callID_matches_before" => bang.empty? ? nil : bang.any? { |h| valid_id?(h["callID"]) && serve_before.include?(h["callID"]) },
         "pty.sessionID" => pty.empty? ? nil : pty.any? { |h| h["has_sessionID"] },
         "pty.callID" => pty.empty? ? nil : pty.any? { |h| h["has_callID"] },
       }
+    end
+
+    # `!` / PTY の env の名前は、操作が成功し command が最後まで走った印 (OK_MARKER) があるときだけ使う
+    # (失敗した出力から作った空の一覧を「立っていない」と数えない)。
+    def self.op_names(fact, op)
+      o = fact[op]
+      return nil unless o.is_a?(Hash) && o["status"] == 200 && o["ok_marker"] == true
+
+      o.dig("names", "env")
     end
 
     def self.m5(data)
@@ -268,10 +299,10 @@ module ProbeOpencode
       obs.merge!(flatten("model_bash.plugin.env", presence(claude && claude["env"], keys)))
       obs.merge!(flatten("model_bash.plugin.child", presence(claude && claude["child"], keys)))
       obs.merge!(flatten("model_bash.pure.env", presence(pure && pure["env"], keys)))
-      obs.merge!(flatten("bang.plugin.env", presence(serve.dig("shell", "names", "env"), keys)))
-      obs.merge!(flatten("bang.pure.env", presence(serve_pure.dig("shell", "names", "env"), keys)))
-      obs.merge!(flatten("pty.plugin.env", presence(serve.dig("pty", "names", "env"), keys)))
-      obs.merge!(flatten("pty.pure.env", presence(serve_pure.dig("pty", "names", "env"), keys)))
+      obs.merge!(flatten("bang.plugin.env", presence(op_names(serve, "shell"), keys)))
+      obs.merge!(flatten("bang.pure.env", presence(op_names(serve_pure, "shell"), keys)))
+      obs.merge!(flatten("pty.plugin.env", presence(op_names(serve, "pty"), keys)))
+      obs.merge!(flatten("pty.pure.env", presence(op_names(serve_pure, "pty"), keys)))
       obs.merge!(shell_env_inputs(data))
       pred = {}
       pred.merge!(flatten("model_bash.plugin.env", plugin_pred))
@@ -294,7 +325,7 @@ module ProbeOpencode
     def self.m6(data)
       run = "throw-shell-env"
       part = tool_parts(data, run, "bash").first
-      model_reached = !hooks(data, run, "shell.env").empty?
+      model_reached = !part.nil? && valid_id?(part["callID"]) && hooks(data, run, "shell.env").any? { |h| h["callID"] == part["callID"] }
       serve = run_fact(data, "serve-throw-shell-env")
       bang_status = serve && serve.dig("shell", "status")
       bang_reached = !(window_records(data, "serve-throw-shell-env", serve, "shell") || []).empty?
@@ -314,7 +345,7 @@ module ProbeOpencode
     def self.m7_run(data, run, hook_kind)
       fact = run_fact(data, run)
       part = tool_parts(data, run, "bash").first
-      rec = part && hooks(data, run, hook_kind).find { |h| h["callID"] == part["callID"] }
+      rec = part && valid_id?(part["callID"]) && hooks(data, run, hook_kind).find { |h| h["callID"] == part["callID"] }
       return {} unless fact && rec
 
       msgs = mock(data, run).flat_map { |m| m["tool_messages"] || [] }
@@ -366,22 +397,27 @@ module ProbeOpencode
       abort_sid = serve.dig("abort", "session_id")
       # idle の有無を見るのは、その前の操作が成り立った証跡があるときだけ。操作の失敗を「idle が出ない」と
       # 数えない。
-      bang_ok = !bang_sid.nil? && serve.dig("shell", "status") == 200
-      # abort: prompt が受け付けられ (2xx)、その session で bash の実行が始まった (before の記録) 後に、
-      # abort が成功したこと。
-      abort_started = !abort_sid.nil? && serve.dig("abort", "prompt_async_status").to_i.between?(200, 299) &&
-                      hooks(data, "serve-plugin", "tool.before").any? { |h| h["sessionID"] == abort_sid }
-      abort_ok = abort_started && serve.dig("abort", "abort_status") == 200
-      # permission: ask と、それへの返答 (run の自動拒否) の両方が出て、run が正常に終わったこと。
-      ask_types = hooks(data, "ask", "event").map { |h| h["type"] }
-      rejected = ask_types.include?("permission.asked") && ask_types.include?("permission.replied") && run_ok?(run_fact(data, "ask"))
+      bang_ok = valid_id?(bang_sid) && serve.dig("shell", "status") == 200
+      # abort: prompt が受け付けられ (2xx)、abort を送る前にその session で bash が始まり (before の記録)、
+      # abort を送る前には idle が無く (まだ実行中)、abort が成功したこと。idle は abort の後のものだけを数える。
+      t_abort = serve.dig("abort", "t_abort")
+      abort_before = ->(h) { h["t"].is_a?(Integer) && t_abort.is_a?(Integer) && h["t"] < t_abort }
+      abort_ok = valid_id?(abort_sid) && t_abort.is_a?(Integer) && serve.dig("abort", "prompt_async_status").to_i.between?(200, 299) &&
+                 hooks(data, "serve-plugin", "tool.before").any? { |h| h["sessionID"] == abort_sid && abort_before.call(h) } &&
+                 idle_for(data, "serve-plugin", abort_sid).none? { |h| abort_before.call(h) } &&
+                 serve.dig("abort", "abort_status") == 200
+      # permission: ask された request と同じ requestID に「reject」の返答が出て、run が正常に終わったこと。
+      asks = hooks(data, "ask", "event")
+      asked_ids = asks.select { |h| h["type"] == "permission.asked" && valid_id?(h["requestID"]) }.map { |h| h["requestID"] }
+      rejected = asks.any? { |h| h["type"] == "permission.replied" && h["reply"] == "reject" && asked_ids.include?(h["requestID"]) } &&
+                 run_ok?(run_fact(data, "ask"))
       # task: 子 session が作られた記録 (parentID の付いた session.created) があること。
-      children = hooks(data, "task", "event").select { |h| h["type"] == "session.created" && h["parentID"].is_a?(String) }.map { |h| h["sessionID"] }.uniq
+      children = hooks(data, "task", "event").select { |h| h["type"] == "session.created" && valid_id?(h["parentID"]) && valid_id?(h["sessionID"]) }.map { |h| h["sessionID"] }.uniq
       child_sessions = hooks(data, "task", "idle.session").select { |h| children.include?(h["sessionID"]) }
       obs = {
-        "idle_per_turn" => main && run_ok?(run_fact(data, "tools-claude")) ? idle_for(data, "tools-claude", main).length : nil,
+        "idle_per_turn" => valid_id?(main) && run_ok?(run_fact(data, "tools-claude")) ? idle_for(data, "tools-claude", main).length : nil,
         "idle_after_bang" => bang_ok ? !idle_for(data, "serve-plugin", bang_sid).empty? : nil,
-        "idle_after_abort" => abort_ok ? !idle_for(data, "serve-plugin", abort_sid).empty? : nil,
+        "idle_after_abort" => abort_ok ? idle_for(data, "serve-plugin", abort_sid).any? { |h| h["t"].is_a?(Integer) && h["t"] >= t_abort } : nil,
         "idle_after_permission_reject" => rejected ? !idle_for(data, "ask").empty? : nil,
         "child_idle_delivered" => !children.empty? && run_ok?(run_fact(data, "task")) ? idle_for(data, "task").any? { |h| children.include?(h["sessionID"]) } : nil,
         "child_parent_readable" => child_sessions.empty? ? nil : child_sessions.all? { |h| h["has_parentID"] },
@@ -399,8 +435,9 @@ module ProbeOpencode
       serve = run_fact(data, "serve-plugin") || {}
       prompt_sid = serve.dig("prompt", "session_id")
       serve_idle = !prompt_sid.nil? && serve.dig("prompt", "status") == 200 && !idle_for(data, "serve-plugin", prompt_sid).empty?
+      delayed_ok = hooks(data, "tools-claude", "idle.delayed").all? { |h| valid_id?(h["sessionID"]) }
       obs = {
-        "run_delayed_recorded" => run_idle ? hooks(data, "tools-claude", "idle.delayed").any? { |h| h["sessionID"] == main } : nil,
+        "run_delayed_recorded" => run_idle && delayed_ok ? hooks(data, "tools-claude", "idle.delayed").any? { |h| h["sessionID"] == main } : nil,
         "serve_delayed_recorded" => serve_idle ? hooks(data, "serve-plugin", "idle.delayed").any? { |h| h["sessionID"] == prompt_sid } : nil,
       }
       item("M10", pred: { "run_delayed_recorded" => false, "serve_delayed_recorded" => true }, obs: obs)
@@ -436,17 +473,21 @@ module ProbeOpencode
 
     def self.m13(data)
       s = hooks(data, "spawn", "spawn").first
-      obs = { "child_killed" => s && s["child_exited"], "grandchild_killed" => s && (s["grandchild_alive"].nil? ? nil : !s["grandchild_alive"]) }
+      # kill の直前に子と孫が生きていて、group への kill 自体が成功したときだけ判定する (自然に終わった
+      # 後の kill を「効いた」と数えない)。
+      killed = s && s["group_kill_error"].nil? && s["child_alive_before_kill"] == true && s["grandchild_alive_before_kill"] == true
+      obs = { "child_killed" => killed ? s["child_exited"] : nil,
+              "grandchild_killed" => killed && [true, false].include?(s["grandchild_alive"]) ? !s["grandchild_alive"] : nil }
       item("M13", pred: { "child_killed" => true, "grandchild_killed" => true }, obs: obs,
-                  extra: s ? s.slice("spawn_ms", "spawn_exit", "group_kill_error", "grandchild_pid_read") : {})
+                  extra: s ? s.slice("spawn_ms", "spawn_exit", "group_kill_error", "grandchild_pid_read", "child_alive_before_kill", "grandchild_alive_before_kill") : {})
     end
 
     # part (終了の結果) と hook の記録を callID で対応付ける。edit の失敗 (part の status が error) と bash の
     # 非 0 終了 (metadata.exit) を確かめ、その call が before に届いていたときだけ、after の有無を見る。
     def self.m14(data)
-      parts = tool_parts(data, "tools-claude")
-      before_ids = hooks(data, "tools-claude", "tool.before").map { |h| h["callID"] }
-      after_ids = hooks(data, "tools-claude", "tool.after").map { |h| h["callID"] }
+      parts = tool_parts(data, "tools-claude").select { |x| valid_id?(x["callID"]) }
+      before_ids = hooks(data, "tools-claude", "tool.before").map { |h| h["callID"] }.select { |v| valid_id?(v) }
+      after_ids = hooks(data, "tools-claude", "tool.after").map { |h| h["callID"] }.select { |v| valid_id?(v) }
       failed_edits = parts.select { |x| x["tool"] == "edit" && x.dig("state", "status") == "error" && before_ids.include?(x["callID"]) }.map { |x| x["callID"] }
       nonzero_bash = parts.select do |x|
         code = x.dig("state", "metadata", "exit")
@@ -461,9 +502,12 @@ module ProbeOpencode
                   extra: { "part_statuses" => statuses })
     end
 
+    # どの request にも canaries_seen[key] の真偽値があるときだけ (欠けた field を「読んでいない」と数えない)。
     def self.seen(data, run, key)
       reqs = mock(data, run)
-      reqs.empty? ? nil : reqs.any? { |m| (m["canaries_seen"] || {})[key] }
+      return nil if reqs.empty? || !reqs.all? { |m| m["canaries_seen"].is_a?(Hash) && [true, false].include?(m["canaries_seen"][key]) }
+
+      reqs.any? { |m| m["canaries_seen"][key] }
     end
 
     def self.m15(data)
@@ -511,6 +555,12 @@ module ProbeOpencode
     end
 
     def self.judge(data)
+      errors = data["load_errors"] || {}
+      unless errors.empty?
+        reason = "記録の読込に失敗 (" + errors.map { |f, n| "#{f}: #{n} 行" }.join(", ") + ")"
+        return ITEMS.keys.map { |id| manual(id, reason) }
+      end
+
       [
         m1(data), m2(data), m3(data), m4(data), m5(data), m6(data), m7(data), m8(data), m9(data), m10(data),
         m11(data), m12(data), m13(data), m14(data), m15(data), m16(data),

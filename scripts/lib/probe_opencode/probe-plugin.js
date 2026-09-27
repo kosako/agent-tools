@@ -34,6 +34,9 @@ const MODES = new Set([
   "notify", // M11: 最初の session.idle で toast と app.log を呼ぶ
 ])
 
+// permission の返答の種類 (enum)。これ以外の値は "other" として記録する。
+const REPLIES = new Set(["once", "always", "reject"])
+
 const SLOW_AFTER_MS = 3000
 const IDLE_DELAY_MS = 500
 const KILL_SETTLE_MS = 300
@@ -131,6 +134,9 @@ async function spawnProbe() {
     child.on("error", () => resolve(null))
     setTimeout(() => resolve(null), 5000)
   })
+  // kill の前に子と孫が生きていたことを記録する (自然に終わった後の kill を「効いた」と数えないため)。
+  const childAliveBeforeKill = !exited && alive(child.pid)
+  const grandAliveBeforeKill = grandPid ? alive(grandPid) : null
   let killError = null
   try {
     process.kill(-child.pid, "SIGKILL")
@@ -145,6 +151,8 @@ async function spawnProbe() {
     spawn_exit: exitCode,
     grandchild_pid_read: grandPid !== null,
     group_kill_error: killError,
+    child_alive_before_kill: childAliveBeforeKill,
+    grandchild_alive_before_kill: grandAliveBeforeKill,
     child_exited: exited,
     grandchild_alive: grandAlive,
   }
@@ -208,6 +216,9 @@ async function server(input) {
         type: str(event && event.type),
         sessionID: str(props.sessionID) || str(info.sessionID) || (event && event.type && event.type.startsWith("session.") ? str(info.id) : null),
         parentID: str(info.parentID),
+        // permission.asked は request の id、permission.replied は requestID と返答の種類 (enum) を持つ。
+        requestID: str(props.requestID) || (event && event.type === "permission.asked" ? str(props.id) : null),
+        reply: typeof props.reply === "string" ? (REPLIES.has(props.reply) ? props.reply : "other") : null,
       })
       if (mode.has("reject-event") && !rejected) {
         rejected = true
