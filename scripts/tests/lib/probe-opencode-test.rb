@@ -114,7 +114,7 @@ def t5(dir)
   after = { "run" => "tools-claude", "kind" => "tool.after", "tool" => "bash", "callID" => "c1" }
   msg = ->(first) { { "run" => "tools-claude", "tool_messages" => [{ "id" => "c1", "nonce_first" => first, "ok_marker" => true }] } }
   event = { "run" => "tools-claude", "event" => { "type" => "tool_use", "sessionID" => "s1",
-                                                 "part" => { "tool" => "bash", "state" => { "status" => "completed", "output" => "#{nonce}\nx" } } } }
+                                                 "part" => { "tool" => "bash", "callID" => "c1", "state" => { "status" => "completed", "output" => "#{nonce}\nx" } } } }
   facts = { "nonce" => nonce }
 
   ok = write.call("confirmed", facts, [after], [msg.call(true)], [event])
@@ -162,15 +162,55 @@ def t5(dir)
                      { "run" => "serve-plugin", "kind" => "shell.env", "t" => 1900, "has_sessionID" => true, "has_callID" => true }], [], [])["M5"]
   check(near["observed"]["pty.sessionID"] == false && near["observed"]["pty.callID"] == false,
         "T5: records outside the PTY window must not count: #{near['observed'].select { |k, _| k.start_with?('pty.') }}")
+
+  # 回帰 (#336 review round 2): 前提の操作が成り立った証跡が無ければ confirmed / 予測どおりに数えない。
+  unknown = lambda do |name, id, key, facts, hooks, mock, events|
+    it = write.call(name, facts, hooks, mock, events)[id]
+    check(it["observed"][key].nil?, "T5 #{name}: #{id}.#{key} must be unknown without evidence: #{it['observed'][key].inspect}")
+  end
+  # F8: throw させた plugin (global-b) の init の記録が無い
+  unknown.call("f8", "M2", "throw_init_continues", { "runs" => [ok_run.call("throw-init")] },
+               %w[probe-global-a probe-project].map { |l| { "run" => "throw-init", "kind" => "init", "label" => l, "t" => 1 } }, [], [])
+  # F9: bash は error だが before の記録が無い / 遅いが after の記録が無い
+  err_part = ->(run, status, ms) { { "run" => run, "event" => { "type" => "tool_use", "sessionID" => "s1", "part" => { "tool" => "bash", "callID" => "c1", "state" => { "status" => status, "time" => { "start" => 0, "end" => ms } } } } } }
+  unknown.call("f9-before", "M7", "throw_before.part_status", { "runs" => [ok_run.call("throw-before").merge("executed_marker" => false)] }, [], [], [err_part.call("throw-before", "error", 5)])
+  unknown.call("f9-slow", "M7", "slow_after.waited", { "runs" => [ok_run.call("slow-after").merge("executed_marker" => true)] }, [], [], [err_part.call("slow-after", "completed", 4000)])
+  # F10: permission は ask だけで返答が無い / abort の前にその session で実行が始まっていない
+  unknown.call("f10-ask", "M9", "idle_after_permission_reject", { "runs" => [ok_run.call("ask")] },
+               [{ "run" => "ask", "kind" => "event", "type" => "permission.asked", "sessionID" => "s1" }], [], [])
+  unknown.call("f10-abort", "M9", "idle_after_abort", { "runs" => [{ "label" => "serve-plugin", "abort" => { "session_id" => "a1", "prompt_async_status" => 500, "abort_status" => 200 } }] },
+               [{ "run" => "serve-plugin", "kind" => "event", "type" => "session.idle", "sessionID" => "a1" }], [], [])
+  # F11: chat.params と shell.env の sessionID が両方とも欠けている
+  unknown.call("f11", "M12", "joinable_by_sessionID", {},
+               [{ "run" => "tools-claude", "kind" => "chat.params", "sessionID" => nil, "providerID" => "probe", "modelID" => "claude-probe", "apiID" => "claude-probe" },
+                { "run" => "tools-claude", "kind" => "shell.env", "sessionID" => nil }], [], [])
+  # F12: hook の件数は予測どおりだが、失敗の証跡 (part の error / 非 0 終了) が無い
+  counts = [%w[tool.before edit c1], %w[tool.before edit c2], %w[tool.after edit c1], %w[tool.before bash c3], %w[tool.before bash c4], %w[tool.after bash c3], %w[tool.after bash c4]]
+  # part は edit も bash も成功 (失敗の証跡が無い)。hook の件数だけでは判定しない。
+  ok_parts = [%w[edit c1], %w[edit c2], %w[bash c3], %w[bash c4]].map do |t, c|
+    { "run" => "tools-claude", "event" => { "type" => "tool_use", "sessionID" => "s1", "part" => { "tool" => t, "callID" => c, "state" => { "status" => "completed", "metadata" => { "exit" => 0 } } } } }
+  end
+  f12 = write.call("f12", {}, counts.map { |k, t, c| { "run" => "tools-claude", "kind" => k, "tool" => t, "callID" => c } }, [], ok_parts)["M14"]
+  check(f12["observed"]["edit_failure_after_called"].nil? && f12["observed"]["bash_nonzero_after_called"].nil?,
+        "T5 f12: M14 needs failure evidence (edit error / non-zero exit): #{f12["observed"].slice("edit_failure_after_called", "bash_nonzero_after_called")}")
+  # F13: `!` の時間帯の中の記録に sessionID が無ければ、そのとおり false として検出する (値で選ばない)
+  bang = write.call("f13", { "runs" => [{ "label" => "serve-plugin", "shell" => { "session_id" => "b1", "status" => 200, "t_start" => 100, "t_end" => 200 } }] },
+                    [{ "run" => "serve-plugin", "kind" => "shell.env", "t" => 150, "has_sessionID" => false, "sessionID" => nil, "has_callID" => true }], [], [])["M5"]
+  check(bang["observed"]["bang.sessionID"] == false, "T5 f13: a `!` record without a sessionID must be detected: #{bang['observed']['bang.sessionID'].inspect}")
+  # M10: idle はあるが run が失敗している
+  unknown.call("m10-run-failed", "M10", "run_delayed_recorded", { "runs" => [{ "label" => "tools-claude", "exit" => 1, "timed_out" => false, "events" => 5 }] },
+               [{ "run" => "tools-claude", "kind" => "event", "type" => "session.idle", "sessionID" => "s1" }], [],
+               [{ "run" => "tools-claude", "event" => { "type" => "step_start", "sessionID" => "s1" } }])
+  # M1: 実物の config dir / DB が 1 つも無い (比べる対象が無い)
+  unknown.call("m1-vacuous", "M1", "real_state_unchanged", { "real_mtime" => { "before" => { "a" => nil }, "after" => { "a" => nil } } }, [], [], [])
   puts "ok T5"
 end
 
 # T8: 子 process の後始末 (#336 review F2 / F3)。
-def pid_alive?(pid)
-  Process.kill(0, pid)
-  true
-rescue Errno::ESRCH
-  false
+# kill(0) は zombie にも成功するので、ps の状態 (Z でない) と command (PID の再利用でない) も見る。
+def pid_alive?(pid, command)
+  out = IO.popen(["ps", "-o", "stat=,command=", "-p", pid.to_s], err: File::NULL, &:read).to_s.strip
+  !out.empty? && !out.start_with?("Z") && out.include?(command)
 end
 
 def wait_file(path, seconds)
@@ -179,10 +219,10 @@ def wait_file(path, seconds)
   File.file?(path) ? File.read(path).strip.to_i : nil
 end
 
-def wait_dead(pid, seconds)
+def wait_dead(pid, command, seconds)
   deadline = Time.now + seconds
-  sleep 0.1 while pid_alive?(pid) && Time.now < deadline
-  !pid_alive?(pid)
+  sleep 0.1 while pid_alive?(pid, command) && Time.now < deadline
+  !pid_alive?(pid, command)
 end
 
 def t8(dir)
@@ -193,9 +233,27 @@ def t8(dir)
   srv = ProbeOpencode::Child::Serve.new(["sh", "-c", script, pidfile], env: env, chdir: dir, timeout: 10)
   check(srv.start == 1, "T8: serve stand-in did not print the listen URL")
   grandchild = wait_file(pidfile, 5)
-  check(grandchild && pid_alive?(grandchild), "T8: grandchild did not start")
+  check(grandchild && pid_alive?(grandchild, "sleep"), "T8: grandchild did not start")
   srv.stop
-  check(wait_dead(grandchild, 3), "T8: a TERM-ignoring grandchild survived Serve#stop")
+  check(wait_dead(grandchild, "sleep", 3), "T8: a TERM-ignoring grandchild survived Serve#stop")
+
+  # Serve#stop が TERM の猶予の途中で中断されても、KILL を飛ばさない (親自身が TERM を無視する)。
+  pidfile3 = File.join(dir, "t8-serve-parent.pid")
+  script3 = %(trap "" TERM; echo $$ > "$0"; echo "listening on http://127.0.0.1:1"; sleep 60)
+  srv3 = ProbeOpencode::Child::Serve.new(["sh", "-c", script3, pidfile3], env: env, chdir: dir, timeout: 10)
+  check(srv3.start == 1, "T8: serve stand-in 2 did not print the listen URL")
+  parent = wait_file(pidfile3, 5)
+  check(parent && pid_alive?(parent, "sh"), "T8: serve stand-in 2 did not start")
+  stopper = Thread.new do
+    srv3.stop
+  rescue Interrupt
+    :interrupted
+  end
+  stopper.report_on_exception = false
+  sleep 0.5
+  stopper.raise(Interrupt)
+  check(!stopper.join(10).nil?, "T8: interrupted Serve#stop did not return within 10s")
+  check(wait_dead(parent, "sh", 3), "T8: an interrupted Serve#stop left the TERM-ignoring parent alive")
 
   # 中断 (Ctrl-C 相当) された Child.run は、子の group を止めてすぐ戻る (Open3 の終了待ちで止まらない)。
   pidfile2 = File.join(dir, "t8-child.pid")
@@ -206,12 +264,12 @@ def t8(dir)
   end
   runner.report_on_exception = false
   child = wait_file(pidfile2, 5)
-  check(child && pid_alive?(child), "T8: child did not start")
+  check(child && pid_alive?(child, "sleep"), "T8: child did not start")
   started = Time.now
   runner.raise(Interrupt)
   check(!runner.join(10).nil?, "T8: interrupted Child.run did not return within 10s")
   check(runner.value == :interrupted && Time.now - started < 10, "T8: Child.run must re-raise the interrupt")
-  check(wait_dead(child, 3), "T8: the child group survived an interrupted Child.run")
+  check(wait_dead(child, "sleep", 3), "T8: the child group survived an interrupted Child.run")
   puts "ok T8"
 end
 

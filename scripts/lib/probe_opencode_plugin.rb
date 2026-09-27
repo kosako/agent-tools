@@ -301,12 +301,16 @@ module ProbeOpencodePlugin
     status, sid = new_session(client)
     return { "session_status" => status } unless sid
 
+    # `!` の shell.env の記録は、この時間帯 (t_start〜t_end) で選ぶ (judge.rb の window_records)。
+    t_start = now_ms
     st, msg = client.post("/session/#{sid}/shell", { "agent" => "build", "command" => Mock::ENV_NAMES_CMD })
+    t_end = now_ms
     parts = msg.is_a?(Hash) && msg["parts"].is_a?(Array) ? msg["parts"] : []
     tool = parts.find { |p| p.is_a?(Hash) && p["type"] == "tool" }
     output = tool && tool.dig("state", "output")
     { "session_id" => sid, "status" => st, "part_status" => tool && tool.dig("state", "status"),
-      "names" => output ? names_of(output) : nil, "ok_marker" => output.to_s.include?(Mock::OK_MARKER) }
+      "names" => output ? names_of(output) : nil, "ok_marker" => output.to_s.include?(Mock::OK_MARKER),
+      "t_start" => t_start, "t_end" => t_end }
   end
 
   def self.now_ms
@@ -314,7 +318,7 @@ module ProbeOpencodePlugin
   end
 
   # PTY の shell.env は sessionID も callID も持たないので、hooks.jsonl の記録は PTY を起動した時間帯
-  # (t_start〜t_end) で選ぶ (judge.rb の pty_records)。
+  # (t_start〜t_end) で選ぶ (judge.rb の window_records)。
   def self.serve_pty(ctx, client, label)
     file = File.join(ctx[:layout].tmp, "pty-#{label}.txt")
     FileUtils.rm_f(file)

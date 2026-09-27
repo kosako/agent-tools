@@ -116,12 +116,16 @@ module ProbeOpencode
       def stop
         return unless @wait
 
-        Child.kill_group(@wait.pid, "TERM")
-        @wait.join(3)
-        Child.kill_group(@wait.pid, "KILL")
-        @wait.join(READER_GRACE)
-        [@stdout, @stderr].each { |io| io.close unless io.closed? }
-        [@out_thread, @err_thread].compact.each { |t| t.join(1) }
+        begin
+          Child.kill_group(@wait.pid, "TERM")
+          @wait.join(3)
+        ensure
+          # 猶予の途中で中断 (Ctrl-C) されても KILL を飛ばさない。KILL を先に送ってから後片付けをする。
+          Child.kill_group(@wait.pid, "KILL")
+          @wait.join(READER_GRACE)
+          [@stdout, @stderr].each { |io| io.close unless io.closed? }
+          [@out_thread, @err_thread].compact.each { |t| t.join(1) }
+        end
       end
     end
 

@@ -98,13 +98,13 @@ module ProbeOpencode
       !fact.nil? && fact["exit"] == 0 && fact["timed_out"] == false && fact["events"].to_i.positive?
     end
 
-    # PTY の shell.env は sessionID / callID を持たないので、runner が記録した PTY の時間帯 (POST /pty の
-    # 直前から、出力の file を確かめ終えるまで) で選ぶ。sessionID の有無で選ぶと、PTY に sessionID が付いた
-    # 場合を検出できない。runner はこの時間帯に他の操作をしないので、余裕は取らない (取ると直前の `!` や
-    # 直後の prompt の記録を拾う。実測で起きた)。時間帯が無ければ nil。
-    def self.pty_records(data, run, fact)
-      t0 = fact && fact.dig("pty", "t_start")
-      t1 = fact && fact.dig("pty", "t_end")
+    # `!` (op = "shell") と PTY (op = "pty") の shell.env を、runner が記録した操作の時間帯 (POST の直前から、
+    # 結果を確かめ終えるまで) で選ぶ。検査したい値 (sessionID / callID) で選ぶと判定が循環する。runner は
+    # この時間帯に他の操作をしないので、余裕は取らない (取ると隣の操作の記録を拾う。実測で起きた)。
+    # 時間帯が無ければ nil。
+    def self.window_records(data, run, fact, op)
+      t0 = fact && fact.dig(op, "t_start")
+      t1 = fact && fact.dig(op, "t_end")
       return nil unless t0.is_a?(Integer) && t1.is_a?(Integer)
 
       hooks(data, run, "shell.env").select { |h| h["t"].is_a?(Integer) && h["t"] >= t0 && h["t"] <= t1 }
@@ -168,7 +168,8 @@ module ProbeOpencode
       obs = {
         "paths_under_tmp" => iso && iso["paths_all_under_tmp"],
         "only_probe_provider" => iso && iso["config_providers"] && iso["config_providers"] == ["probe"] && iso["models_providers"] == ["probe"],
-        "real_state_unchanged" => mtime["before"] && mtime["after"] ? mtime["before"] == mtime["after"] : nil,
+        # 実物の config dir / DB が 1 つも無ければ、比べる対象が無いので unknown にする。
+        "real_state_unchanged" => mtime["before"].is_a?(Hash) && mtime["before"].values.any? && mtime["after"] ? mtime["before"] == mtime["after"] : nil,
         "home_path_not_sent" => mocks.empty? ? nil : mocks.none? { |m| m["home_path_seen"] },
       }
       extra = { "install" => data["facts"]["install"], "log_hosts" => data["facts"]["log_hosts"],
@@ -189,7 +190,8 @@ module ProbeOpencode
         "marker_file_inits" => inits.empty? ? nil : inits.count { |h| h["label"] == "probe-global-a" },
         "each_file_once" => inits.empty? ? nil : order.uniq.length == order.length && order.length == 3,
         "pure_inits" => run_ok?(pure) ? hooks(data, "pure", "init").length : nil,
-        "throw_init_continues" => throw_run ? (run_ok?(throw_run) && throw_inits.include?("probe-global-a") && throw_inits.include?("probe-project")) : nil,
+        # throw させた plugin (global-b) は throw の直前に init を記録するので、それを throw に届いた証跡にする。
+        "throw_init_continues" => throw_run && throw_inits.include?("probe-global-b") ? (run_ok?(throw_run) && throw_inits.include?("probe-global-a") && throw_inits.include?("probe-project")) : nil,
       }
       pred = { "global_before_project" => true, "marker_file_inits" => 1, "each_file_once" => true,
                "pure_inits" => 0, "throw_init_continues" => true }
@@ -226,7 +228,7 @@ module ProbeOpencode
       msgs = mock(data, "tools-claude").flat_map { |m| m["tool_messages"] || [] }.uniq { |t| t["id"] }
       matched = msgs.select { |t| after_ids.include?(t["id"]) }
       nonce = data["facts"]["nonce"].to_s
-      parts = tool_parts(data, "tools-claude").select { |p| p.dig("state", "status") == "completed" }
+      parts = tool_parts(data, "tools-claude").select { |p| p.dig("state", "status") == "completed" && after_ids.include?(p["callID"]) }
       obs = {
         "next_request_has_nonce" => matched.empty? ? nil : matched.all? { |t| t["nonce_first"] },
         "run_event_output_has_nonce" => parts.empty? || nonce.empty? ? nil : parts.all? { |p| p.dig("state", "output").to_s.start_with?(nonce) },
@@ -239,16 +241,14 @@ module ProbeOpencode
       claude_before = hooks(data, "tools-claude", "tool.before").map { |h| h["callID"] }
       model = hooks(data, "tools-claude", "shell.env")
       serve = run_fact(data, "serve-plugin") || {}
-      bang_sid = serve.dig("shell", "session_id")
-      serve_env = hooks(data, "serve-plugin", "shell.env")
       serve_before = hooks(data, "serve-plugin", "tool.before").map { |h| h["callID"] }
-      bang = serve_env.select { |h| bang_sid && h["sessionID"] == bang_sid }
-      pty = pty_records(data, "serve-plugin", serve) || []
+      bang = window_records(data, "serve-plugin", serve, "shell") || []
+      pty = window_records(data, "serve-plugin", serve, "pty") || []
       {
         "model_bash.sessionID" => model.empty? ? nil : model.all? { |h| h["has_sessionID"] },
         "model_bash.callID" => model.empty? ? nil : model.all? { |h| h["has_callID"] },
         "model_bash.callID_matches_before" => model.empty? ? nil : model.all? { |h| claude_before.include?(h["callID"]) },
-        "bang.sessionID" => bang.empty? ? nil : true,
+        "bang.sessionID" => bang.empty? ? nil : bang.all? { |h| h["has_sessionID"] },
         "bang.callID" => bang.empty? ? nil : bang.all? { |h| h["has_callID"] },
         "bang.callID_matches_before" => bang.empty? ? nil : bang.any? { |h| serve_before.include?(h["callID"]) },
         "pty.sessionID" => pty.empty? ? nil : pty.any? { |h| h["has_sessionID"] },
@@ -296,11 +296,10 @@ module ProbeOpencode
       part = tool_parts(data, run, "bash").first
       model_reached = !hooks(data, run, "shell.env").empty?
       serve = run_fact(data, "serve-throw-shell-env")
-      bang_sid = serve && serve.dig("shell", "session_id")
       bang_status = serve && serve.dig("shell", "status")
-      bang_reached = !bang_sid.nil? && hooks(data, "serve-throw-shell-env", "shell.env").any? { |h| h["sessionID"] == bang_sid }
+      bang_reached = !(window_records(data, "serve-throw-shell-env", serve, "shell") || []).empty?
       pty_status = serve && serve.dig("pty", "status")
-      pty_reached = !(pty_records(data, "serve-throw-shell-env", serve) || []).empty?
+      pty_reached = !(window_records(data, "serve-throw-shell-env", serve, "pty") || []).empty?
       obs = {
         "model_bash_fails" => part && model_reached ? part.dig("state", "status") == "error" : nil,
         "bang_fails" => bang_reached && !bang_status.nil? ? (bang_status != 200 || serve.dig("shell", "part_status") == "error") : nil,
@@ -310,35 +309,42 @@ module ProbeOpencode
       item("M6", pred: obs.keys.map { |k| [k, true] }.to_h, obs: obs, extra: extra)
     end
 
-    def self.m7_run(data, run)
+    # その call が hook (before か after) に届いた記録があるときだけ判定する。hook に届かずに bash が別の
+    # 原因で失敗した場合や、hook を通らずに遅れた場合を、予測どおりに数えない。
+    def self.m7_run(data, run, hook_kind)
       fact = run_fact(data, run)
       part = tool_parts(data, run, "bash").first
+      rec = part && hooks(data, run, hook_kind).find { |h| h["callID"] == part["callID"] }
+      return {} unless fact && rec
+
       msgs = mock(data, run).flat_map { |m| m["tool_messages"] || [] }
-      time = part && part.dig("state", "time")
+      time = part.dig("state", "time")
       {
-        "executed" => fact && fact["executed_marker"],
-        "part_status" => part && part.dig("state", "status"),
+        "executed" => fact["executed_marker"],
+        "part_status" => part.dig("state", "status"),
         "model_got_ok_marker" => msgs.empty? ? nil : msgs.any? { |t| t["ok_marker"] },
         "part_ms" => time && time["start"] && time["end"] ? time["end"] - time["start"] : nil,
+        "hook_ms" => rec["hook_ms"],
       }
     end
 
     def self.m7(data)
-      before = m7_run(data, "throw-before")
-      after = m7_run(data, "throw-after")
-      slow = m7_run(data, "slow-after")
+      before = m7_run(data, "throw-before", "tool.before")
+      after = m7_run(data, "throw-after", "tool.after")
+      slow = m7_run(data, "slow-after", "tool.after")
       obs = {
         "throw_before.executed" => before["executed"], "throw_before.part_status" => before["part_status"],
         "throw_after.executed" => after["executed"], "throw_after.part_status" => after["part_status"],
         "slow_after.executed" => slow["executed"], "slow_after.part_status" => slow["part_status"],
-        "slow_after.waited" => slow["part_ms"] ? slow["part_ms"] >= 3000 : nil,
+        # after の中で待った時間 (hook_ms) と、それを含む part の時間の両方で見る。
+        "slow_after.waited" => slow["hook_ms"].is_a?(Integer) && slow["part_ms"] ? slow["hook_ms"] >= 3000 && slow["part_ms"] >= slow["hook_ms"] : nil,
       }
       pred = { "throw_before.executed" => false, "throw_before.part_status" => "error",
                "throw_after.executed" => true, "throw_after.part_status" => "error",
                "slow_after.executed" => true, "slow_after.part_status" => "completed", "slow_after.waited" => true }
       extra = { "throw_before.model_got_ok_marker" => before["model_got_ok_marker"],
                 "throw_after.model_got_ok_marker" => after["model_got_ok_marker"],
-                "slow_after.part_ms" => slow["part_ms"] }
+                "slow_after.part_ms" => slow["part_ms"], "slow_after.hook_ms" => slow["hook_ms"] }
       item("M7", pred: pred, obs: obs, extra: extra)
     end
 
@@ -358,21 +364,27 @@ module ProbeOpencode
       serve = run_fact(data, "serve-plugin") || {}
       bang_sid = serve.dig("shell", "session_id")
       abort_sid = serve.dig("abort", "session_id")
-      task_main = main_session(data, "task")
-      task_idle = idle_for(data, "task")
-      sessions = hooks(data, "task", "idle.session")
-      # idle の有無を見るのは、その前の操作 (turn / `!` / abort / permission の ask / task) が成り立った
-      # 証跡があるときだけ。操作の失敗を「idle が出ない」と数えない。
+      # idle の有無を見るのは、その前の操作が成り立った証跡があるときだけ。操作の失敗を「idle が出ない」と
+      # 数えない。
       bang_ok = !bang_sid.nil? && serve.dig("shell", "status") == 200
-      abort_ok = !abort_sid.nil? && serve.dig("abort", "abort_status") == 200
-      asked = hooks(data, "ask", "event").any? { |h| h["type"] == "permission.asked" }
+      # abort: prompt が受け付けられ (2xx)、その session で bash の実行が始まった (before の記録) 後に、
+      # abort が成功したこと。
+      abort_started = !abort_sid.nil? && serve.dig("abort", "prompt_async_status").to_i.between?(200, 299) &&
+                      hooks(data, "serve-plugin", "tool.before").any? { |h| h["sessionID"] == abort_sid }
+      abort_ok = abort_started && serve.dig("abort", "abort_status") == 200
+      # permission: ask と、それへの返答 (run の自動拒否) の両方が出て、run が正常に終わったこと。
+      ask_types = hooks(data, "ask", "event").map { |h| h["type"] }
+      rejected = ask_types.include?("permission.asked") && ask_types.include?("permission.replied") && run_ok?(run_fact(data, "ask"))
+      # task: 子 session が作られた記録 (parentID の付いた session.created) があること。
+      children = hooks(data, "task", "event").select { |h| h["type"] == "session.created" && h["parentID"].is_a?(String) }.map { |h| h["sessionID"] }.uniq
+      child_sessions = hooks(data, "task", "idle.session").select { |h| children.include?(h["sessionID"]) }
       obs = {
         "idle_per_turn" => main && run_ok?(run_fact(data, "tools-claude")) ? idle_for(data, "tools-claude", main).length : nil,
         "idle_after_bang" => bang_ok ? !idle_for(data, "serve-plugin", bang_sid).empty? : nil,
         "idle_after_abort" => abort_ok ? !idle_for(data, "serve-plugin", abort_sid).empty? : nil,
-        "idle_after_permission_reject" => asked ? !idle_for(data, "ask").empty? : nil,
-        "child_idle_delivered" => task_main && run_ok?(run_fact(data, "task")) ? task_idle.any? { |h| h["sessionID"] != task_main } : nil,
-        "child_parent_readable" => sessions.empty? ? nil : sessions.any? { |h| h["has_parentID"] },
+        "idle_after_permission_reject" => rejected ? !idle_for(data, "ask").empty? : nil,
+        "child_idle_delivered" => !children.empty? && run_ok?(run_fact(data, "task")) ? idle_for(data, "task").any? { |h| children.include?(h["sessionID"]) } : nil,
+        "child_parent_readable" => child_sessions.empty? ? nil : child_sessions.all? { |h| h["has_parentID"] },
       }
       pred = obs.keys.map { |k| [k, true] }.to_h.merge("idle_per_turn" => 1)
       extra = { "permission_asked_events" => hooks(data, "ask", "event").count { |h| h["type"] == "permission.asked" } }
@@ -407,11 +419,13 @@ module ProbeOpencode
 
     def self.m12(data)
       params = hooks(data, "tools-claude", "chat.params")
-      env_sids = hooks(data, "tools-claude", "shell.env").map { |h| h["sessionID"] }
+      # 結合するのは、両方に有効な sessionID があるときだけ (欠けた ID 同士を一致とみなさない)。
+      param_sids = params.map { |h| h["sessionID"] }.select { |v| v.is_a?(String) && !v.empty? }
+      env_sids = hooks(data, "tools-claude", "shell.env").map { |h| h["sessionID"] }.select { |v| v.is_a?(String) && !v.empty? }
       p = params.first
       obs = {
         "providerID" => p && p["providerID"], "modelID" => p && p["modelID"], "apiID" => p && p["apiID"],
-        "joinable_by_sessionID" => params.empty? || env_sids.empty? ? nil : params.any? { |h| env_sids.include?(h["sessionID"]) },
+        "joinable_by_sessionID" => param_sids.empty? || env_sids.empty? ? nil : !(param_sids & env_sids).empty?,
       }
       pred = { "providerID" => "probe", "modelID" => "claude-probe", "apiID" => "claude-probe", "joinable_by_sessionID" => true }
       real = hooks(data, "real", "chat.params").first
@@ -427,15 +441,20 @@ module ProbeOpencode
                   extra: s ? s.slice("spawn_ms", "spawn_exit", "group_kill_error", "grandchild_pid_read") : {})
     end
 
+    # part (終了の結果) と hook の記録を callID で対応付ける。edit の失敗 (part の status が error) と bash の
+    # 非 0 終了 (metadata.exit) を確かめ、その call が before に届いていたときだけ、after の有無を見る。
     def self.m14(data)
-      before = hooks(data, "tools-claude", "tool.before")
-      after = hooks(data, "tools-claude", "tool.after")
-      count = ->(list, tool) { list.count { |h| h["tool"] == tool } }
-      edits_b = count.call(before, "edit")
-      bash_b = count.call(before, "bash")
+      parts = tool_parts(data, "tools-claude")
+      before_ids = hooks(data, "tools-claude", "tool.before").map { |h| h["callID"] }
+      after_ids = hooks(data, "tools-claude", "tool.after").map { |h| h["callID"] }
+      failed_edits = parts.select { |x| x["tool"] == "edit" && x.dig("state", "status") == "error" && before_ids.include?(x["callID"]) }.map { |x| x["callID"] }
+      nonzero_bash = parts.select do |x|
+        code = x.dig("state", "metadata", "exit")
+        x["tool"] == "bash" && code.is_a?(Integer) && code != 0 && before_ids.include?(x["callID"])
+      end.map { |x| x["callID"] }
       obs = {
-        "edit_failure_after_called" => edits_b == 2 ? count.call(after, "edit") == 2 : nil,
-        "bash_nonzero_after_called" => bash_b == 2 ? count.call(after, "bash") == 2 : nil,
+        "edit_failure_after_called" => failed_edits.empty? ? nil : failed_edits.any? { |id| after_ids.include?(id) },
+        "bash_nonzero_after_called" => nonzero_bash.empty? ? nil : nonzero_bash.all? { |id| after_ids.include?(id) },
       }
       statuses = tool_parts(data, "tools-claude").map { |x| [x["tool"], x.dig("state", "status")] }
       item("M14", pred: { "edit_failure_after_called" => false, "bash_nonzero_after_called" => true }, obs: obs,
@@ -448,11 +467,13 @@ module ProbeOpencode
     end
 
     def self.m15(data)
+      compat = run_ok?(run_fact(data, "claude-compat"))
+      disabled = run_ok?(run_fact(data, "claude-compat-disabled"))
       obs = {
-        "rules_read" => seen(data, "claude-compat", "claude_rules"),
-        "skills_read" => seen(data, "claude-compat", "claude_skill"),
-        "rules_read_when_disabled" => seen(data, "claude-compat-disabled", "claude_rules"),
-        "skills_read_when_disabled" => seen(data, "claude-compat-disabled", "claude_skill"),
+        "rules_read" => compat ? seen(data, "claude-compat", "claude_rules") : nil,
+        "skills_read" => compat ? seen(data, "claude-compat", "claude_skill") : nil,
+        "rules_read_when_disabled" => disabled ? seen(data, "claude-compat-disabled", "claude_rules") : nil,
+        "skills_read_when_disabled" => disabled ? seen(data, "claude-compat-disabled", "claude_skill") : nil,
       }
       pred = { "rules_read" => true, "skills_read" => true, "rules_read_when_disabled" => false, "skills_read_when_disabled" => false }
       item("M15", pred: pred, obs: obs, extra: { "disable_env" => "OPENCODE_DISABLE_CLAUDE_CODE=1" })
@@ -465,7 +486,8 @@ module ProbeOpencode
       nonce = data["facts"]["nonce"].to_s
       texts = data["events"].select { |e| e["run"] == "real" && e.dig("event", "type") == "text" }.map { |e| e.dig("event", "part", "text").to_s }
       after = hooks(data, "real", "tool.after")
-      obs = { "nonce_reached_model" => texts.empty? || nonce.empty? ? nil : texts.any? { |t| t.include?(nonce) } }
+      annotated = after.any? { |h| h["nonce_first"] }
+      obs = { "nonce_reached_model" => run_ok?(run) && annotated && !texts.empty? && !nonce.empty? ? texts.any? { |t| t.include?(nonce) } : nil }
       extra = { "model" => run["model"], "exit" => run["exit"], "after_nonce_first" => after.map { |h| h["nonce_first"] } }
       item("M16", pred: { "nonce_reached_model" => true }, obs: obs, extra: extra)
     end
