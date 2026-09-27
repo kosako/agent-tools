@@ -58,6 +58,39 @@ hook のように 1 つの機能が両 repo にまたがるもの (実体 = agen
 同期するまで旧 path を壊さない)。詳細は
 [Runtime GitHub Injection 防御](runtime-injection-defense.md) の「PreToolUse hook」節。
 
+## OpenCode home の所有 (#295)
+
+OpenCode の tool home (`<opencode home>`。既定 `~/.config/opencode`) は複数の主体が file を置く
+共有 dir なので、所有を file 単位で分ける。agent-tools が書くのは 1 pattern だけ。
+
+| file | 所有 | agent-tools の扱い |
+| --- | --- | --- |
+| `opencode.json` (`opencode.jsonc`) | dotfiles | 読まない・書かない。plugin の登録も書かない (置くだけで登録になる) |
+| `opencode.local.json`、auth | local (非コミット) | 触らない |
+| `node_modules/`、`package.json`、`package-lock.json`、`bun.lock`、`.gitignore` | OpenCode 本体 (起動時に `@opencode-ai/plugin` を npm install して書く) | 触らない |
+| `plugins/herdr-agent-state.js` | herdr (herdr の installer を使ったときに置かれる。Issue #295 の Phase 1 の記述による。この machine では未導入で、未実測) | `personal-` で始まらないので plan にも prune にも出さない |
+| `plugins/personal-*.js` | **agent-tools** | sync が配置・更新・撤去する唯一の場所 ([Sync Policy](sync-policy.md)「v1 OpenCode targets」) |
+| `skills/`、`agent-tools/` | (agent-tools は使わない) | 走査しない |
+
+- **登録の例外**: Claude Code / Codex の hook は「実体 = agent-tools、登録 = dotfiles」に分けているが、
+  OpenCode では `plugins/` に file を置くこと自体が登録 (trust gate も config への記述も無い) なので、
+  plugin については登録も agent-tools が持つ。外すには `opencode --pure` で起動するか、sync --prune
+  で撤去する。
+- **doctor の分担**: agent-tools の doctor が見るのは「自分が置いた `plugins/personal-*.js` があり、
+  先頭行の marker が正しいこと」と、既定 home (`~/.config/opencode`) と `$XDG_CONFIG_HOME/opencode`
+  の食い違い (`--opencode-home` を省いたときだけ warn) まで。OpenCode が plugin を実際に読み込んだか
+  (起動 log の "Failed to load plugin")、二重読込 (単数形の `plugin/` dir、同名の `.ts`、global と
+  project の両方への配置) の判定は dotfiles の doctor が持つ。
+- **instruction の公開契約**: `~/.claude/agent-tools/CLAUDE.md` は dotfiles の `opencode.json` の
+  `instructions` から参照される。OpenCode は `~/.claude/CLAUDE.md` を直接読む
+  ([opencode-plugin-probe](opencode-plugin-probe.md) の M15) が、この path も script の配備先と
+  同じく **公開契約**で、変更は breaking change (dotfiles 側の参照更新と同期するまで旧 path を壊さない)。
+- **plugin は claude-code target の script に依存する**: plugin は薄い adapter で、判定は Claude Code
+  target に配った `~/.claude/agent-tools/scripts/personal-*` (safe-gh-hook 等) を `os.homedir()` から
+  解決して無改変で呼ぶ (script kind は tool ごとに置き場を変えられないため。custom の claude home
+  には対応しない)。よって OpenCode で plugin を効かせるには、claude-code target の sync も済んで
+  いる必要がある。script が無ければ plugin は no-op (fail-open) で、OpenCode を止めない。
+
 ## どちらの repository も持たないもの
 
 - tokens。

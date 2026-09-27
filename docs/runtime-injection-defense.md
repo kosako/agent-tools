@@ -58,6 +58,7 @@ Claude Code の現行[公式 subagent 契約](https://code.claude.com/docs/en/su
 | policy data single source | best-effort (infra) | ✅ | agent-tools |
 | `script` artifact kind / 配布機構 | n/a (infra) | ✅ | agent-tools |
 | Codex parity | (各層の強度を踏襲) | ✅ | agent-tools (body) / dotfiles (control plane) |
+| OpenCode parity (plugin `personal-agent-tools`, #295) | steering (fail-open。実行後の注記) | ✅ PR 1 | agent-tools (plugin + 登録 = 配置) |
 | OS egress firewall (P0-C) | hard は L3/L4 のみ | ❌ 別 tier | 将来 opt-in tier |
 
 **hard 層は 2 つだけ**: (1) credential 隔離 (P0-B)、(2) egress の L3/L4 IP/port 遮断 (= P0-C の
@@ -130,6 +131,11 @@ hook / safe-gh / 隔離 reader 等の **script body は tool home subdir に配�
 作らない**。dotfiles control plane はこの**絶対 path を参照するだけ** (body 配布先の絶対 path
 参照)。`~/.config/<tool>/` 案は採らない (sync に tool home 以外の path 解決機構を新設する必要が
 あり、配布面が増えるため)。
+
+補足 (OpenCode, #295): OpenCode では `~/.config/opencode` 自体が tool home で、そこに置くのは
+`plugins/personal-*.js` (plugin kind) だけ。script body は OpenCode 向けには配らず、plugin が
+Claude Code の配置先 `~/.claude/agent-tools/scripts/<name>` を呼ぶ (置き場は 1 つのまま。
+[dotfiles との境界](boundary-with-dotfiles.md)「OpenCode home の所有」)。
 
 **PATH launcher は作らない (確定・#176 M-05)**: 配備 script を PATH に載せる launcher /
 symlink / bin stub は意図的に作らない (「dotfiles に新 bin 配布面を作らない」方針の帰結)。
@@ -266,6 +272,39 @@ boundary でない)。
     root 権限が要り、`allow_managed_hooks_only = true` は **user / project / plugin 層の hooks を
     すべて無効化する** (= user 層に登録する本 hook 自体も殺す) 副作用がある。
     採否は dotfiles 側の登録判断 (control plane)。
+- **OpenCode parity (plugin 経由。2026-09-26 に OpenCode 1.18.30 で実測、#295 PR 1)**: OpenCode
+  には PreToolUse に相当する hook 登録が無いので、agent-tools が `plugin` kind で配る
+  `~/.config/opencode/plugins/personal-agent-tools.js` が `tool.execute.after` で同じ script body
+  (`~/.claude/agent-tools/scripts/personal-safe-gh-hook`。Claude Code target の配置物) に Claude 形の
+  payload `{"tool_name":"Bash","tool_input":{"command":…}}` を stdin で渡し、返った
+  `additionalContext` を tool 結果の先頭に前置する。文言は script が Claude / Codex に返すものと同じ
+  で、plugin では書き足さない。対象は `bash` tool で command に `gh` を含むものだけ (script の判定の
+  上位集合)。強度は steering / fail-open のまま。Claude / Codex との差 (すべて honest-label):
+  - **注記は実行した後に載る**: OpenCode の `tool.execute.after` は built-in tool の実行が成功した後
+    に呼ばれるので、注記は同じ tool 結果の先頭に前置される (実行前の steer は無い。実行を止める
+    経路 = `tool.execute.before` での throw / args の書き換え / `permission.ask` は使わない)。文言は
+    script の実行前の時制 (「取り込みます」) のままで、OpenCode では「取り込んだ」の意味になる。
+    次の request の tool message に載ることは M4 (mock) と M16 (実 provider) で確認した。
+  - **注記は model への steering で、人の目には入らない**: TUI は実行中に流れた出力を表示し、after
+    で書き換えた出力を描き直さない (M11 / M17)。人が注記を見る経路は無い。
+  - **trust gate が無く、置けばそのまま有効**: Codex の hook trust に相当するものは無く、`plugins/`
+    の file は起動時に読まれる。外すには `opencode --pure` で起動するか、`sync --prune` で撤去する。
+    読込の失敗 ("Failed to load plugin") は log に出るだけで OpenCode は続行する (M2)。
+  - **user の `!` は対象外**: `!` (session.shell) と PTY は `tool.execute.*` を通らない (M5)。
+  - **長い出力では注記が全文に付かない**: 出力が長いと OpenCode は全文を file に保存して切り詰めた
+    もの (先頭が残る) を model に渡す。注記は切り詰め後の先頭に載るが、model が後でその file を
+    read しても注記は付かない。
+  - **後段の plugin が注記を消せる**: 読込順は global config → project config → global `plugins/` →
+    project `.opencode/plugins/` で、後に読まれた plugin の after が `output.output` を置き換えれば
+    注記は消える (M2 で順を確認)。
+  - **fail-open の形**: script が無い (ENOENT) / 実行権限が無い / 非 0 終了 / stdout が JSON でない /
+    timeout (plugin の定数。safe-gh-hook は 10 秒) のどれでも無変更で resolve し、throw しない
+    (after の throw は実行済みでも tool 結果を error にする — M7)。warn は script ごとに 1 回だけ
+    `client.app.log` に出す (log file 行き。M11)。
+  - **登録は配置と同じ**: 上の「登録の所有」と違い、OpenCode では file を置くこと自体が登録なので、
+    agent-tools が登録も持つ ([dotfiles との境界](boundary-with-dotfiles.md)「OpenCode home の所有」)。
+  - 実測の根拠は [opencode-plugin-probe](opencode-plugin-probe.md) の M2 / M4 / M5 / M7 / M11 / M16 /
+    M17。verdict は「1.18.30 のこの環境で観測した」の意味に限る。
 - 純粋 match ロジックは `scripts/tests/safe-gh-hook-test.sh` で deterministic に検証。実 hook 配線
   (どの event に結ぶか)は dotfiles の hook 宣言 (Claude: settings.json / Codex:
   `~/.codex/hooks.json`) = 実機(下記「検証境界」)。
@@ -288,6 +327,7 @@ boundary でない)。
 | trust 判定ロジック (provenance 3 軸) | ✅ 担当 | — |
 | safe-gh wrapper 本体 | ✅ 担当 | 絶対 path 参照のみ |
 | PreToolUse hook | ✅ script body + home 配布 (両 tool 同一 body) | hook 宣言 (Claude: settings.json / Codex: `~/.codex/hooks.json`) |
+| OpenCode の同等物 (plugin `tool.execute.after`) | ✅ plugin body + `plugins/personal-*.js` 配布 (= 登録) | `opencode.json` の instructions 参照のみ (plugin の登録は無い) |
 | 隔離 reader workflow | ✅ 担当 | capability gate + 置き場規約 |
 | credential 隔離 session 機構 | ✅ acceptance harness | deny 床 / sandbox / token store 隔離 |
 | policy data | ✅ single source (tool 別 render) | — |
