@@ -71,6 +71,12 @@ jobs:
           done
           exit "$failed"
 
+      # 偽の HOME の下に置いた canary で、書き込み経路を持つ suite (sync / setup / root-default)
+      # が実物の ~/.config/opencode を触らないことを確かめる (#295)。tests/lib/ は上の loop に
+      # 乗らないので別 step で呼ぶ。
+      - name: Run opencode home canary
+        run: scripts/tests/lib/opencode-home-canary.sh
+
       - name: Check repository assets
         run: |
           scripts/check-manifests.sh
@@ -85,6 +91,8 @@ jobs:
           # status / doctor は runner の実 ~/.codex 等を読まないよう空 home を渡す
           # (環境依存の結果を避ける。CI では build/register の健全性だけ見る)。
           homes="$RUNNER_TEMP/emptyhomes"
-          mkdir -p "$homes/codex" "$homes/claude" "$homes/agents"
-          scripts/status.sh --json --codex-home "$homes/codex" --claude-home "$homes/claude"
-          scripts/doctor.sh --codex-home "$homes/codex" --claude-home "$homes/claude" --agents-home "$homes/agents"
+          mkdir -p "$homes/codex" "$homes/claude" "$homes/opencode" "$homes/agents"
+          scripts/status.sh --json --codex-home "$homes/codex" --claude-home "$homes/claude" \
+            --opencode-home "$homes/opencode"
+          scripts/doctor.sh --codex-home "$homes/codex" --claude-home "$homes/claude" \
+            --opencode-home "$homes/opencode" --agents-home "$homes/agents"
