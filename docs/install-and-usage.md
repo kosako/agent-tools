@@ -158,15 +158,16 @@ echo "$status" | jq -r '
 `personal-codex-review` と `personal-codex-worker` は Codex の model / reasoning effort を skill で固定せず、
 user の Codex の設定を使います。既定のままだと、機械的な review と worker も対話と同じ model・effort で
 動きます。review と worker だけを軽くしたいときは、Codex home (`$CODEX_HOME`、空なら `~/.codex`) に
-次の file を **user が** 置きます (#339)。agent-tools はこれらを作らず、書き換えず、sync の対象にもしません。
-file が無ければ今までどおりです。
+次の file を置きます (#339)。置くのは **dotfiles** で (machine ごとの値。手で置いてもよい)、agent-tools は
+これらを作らず、書き換えず、sync の対象にもしません。file が無ければ今までどおりです。file 名は dotfiles
+との公開契約です ([dotfiles との境界](boundary-with-dotfiles.md))。
 
 | file | 効く先 | 読まれ方 |
 | --- | --- | --- |
 | `agent-tools-review.config.toml` | personal-codex-review | `codex exec -p agent-tools-review` で、base の user config の上に丸ごと重なる (Codex の profile) |
 | `agent-tools-worker.config.toml` | personal-codex-worker | preflight が top-level の `model` / `model_reasoning_effort` だけを読み、`-c` で再指定する (`--ignore-user-config` の起動に他の key を持ち込まない) |
 
-例 (値は user の判断):
+例 (値は dotfiles 側で machine ごとに決める。fast を外す値は未実測なので、まず effort だけ):
 
 ```toml
 # ~/.codex/agent-tools-review.config.toml

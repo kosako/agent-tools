@@ -191,7 +191,7 @@ command は **この skill の directory にある `LAUNCH.md` を読んで、�
   (review の session rollout を Codex 側に残し、利用量の集計に使う。#297)。安全境界は sandbox と approval
   policy で、rollout の有無は境界ではない。
 - **model の選択は user に委ねる**: model family / reasoning effort / service tier は skill では固定しない。
-  user が Codex home に review 用 profile file `agent-tools-review.config.toml` を置いていれば、run script を
+  Codex home に review 用 profile file `agent-tools-review.config.toml` (dotfiles か user が置く) が在れば、run script を
   組む時点で `-p agent-tools-review` を足し、base の user config の上に重ねる (#339)。無ければ付けない
   (Codex は無い profile を error にする)。file の中身は読まず、作らず、書き換えない。明示依頼と capability
   確認がない `-m` や model-specific config は足さない。別 agent / wrapper に代行させず、実際の Codex CLI

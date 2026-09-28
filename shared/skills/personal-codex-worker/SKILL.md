@@ -88,7 +88,7 @@ orchestrator が行います。
   `--effort` を明示して再実行できるが、値は現在の user selection (Codex の設定) から人が示したものだけを
   使い、推測で model を選ばない。示されなければ `Blocked at: preflight`。
 - model / effort の出所は preflight が決め、上ほど優先する: `--model` / `--effort` の明示 → Codex home の
-  worker 用 profile file `agent-tools-worker.config.toml` の top-level (user が置く。無ければ読まない) →
+  worker 用 profile file `agent-tools-worker.config.toml` の top-level (dotfiles か user が置く。無ければ読まない) →
   `config.toml` の top-level。出所は出力の `model_source` / `model_reasoning_effort_source` に出る (#339)。
   この skill は profile を作らず、書き換えない。
 - preflight が無い・実行できない (配備欠損) ときも `Blocked at: preflight`。generic な `codex exec`
