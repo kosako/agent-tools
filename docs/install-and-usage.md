@@ -153,6 +153,43 @@ echo "$status" | jq -r '
 - agent-tools が無い環境は `absent` を report して正常終了する(報告のみで、呼び出し側を
   止めない)。
 
+### Codex の review / worker だけを軽くする (profile file)
+
+`personal-codex-review` と `personal-codex-worker` は Codex の model / reasoning effort を skill で固定せず、
+user の Codex の設定を使います。既定のままだと、機械的な review と worker も対話と同じ model・effort で
+動きます。review と worker だけを軽くしたいときは、Codex home (`$CODEX_HOME`、空なら `~/.codex`) に
+次の file を **user が** 置きます (#339)。agent-tools はこれらを作らず、書き換えず、sync の対象にもしません。
+file が無ければ今までどおりです。
+
+| file | 効く先 | 読まれ方 |
+| --- | --- | --- |
+| `agent-tools-review.config.toml` | personal-codex-review | `codex exec -p agent-tools-review` で、base の user config の上に丸ごと重なる (Codex の profile) |
+| `agent-tools-worker.config.toml` | personal-codex-worker | preflight が top-level の `model` / `model_reasoning_effort` だけを読み、`-c` で再指定する (`--ignore-user-config` の起動に他の key を持ち込まない) |
+
+例 (値は user の判断):
+
+```toml
+# ~/.codex/agent-tools-review.config.toml
+model_reasoning_effort = "high"
+
+# ~/.codex/agent-tools-worker.config.toml
+model_reasoning_effort = "high"
+```
+
+- worker の出所の優先順は、preflight の `--model` / `--effort` の明示 → worker 用 profile → `config.toml` の
+  top-level です。preflight の出力 (`model_source` / `model_reasoning_effort_source`) で確かめられます。
+- **Fast mode (`service_tier = "fast"`)**: 公式 docs によると、GPT-6 (Astra / Sol / Luna) の Fast mode は速度が
+  1.5 倍になる代わりに Standard の 2.5 倍の credit を使い、plan の included limits も同じ割合で早く減ります
+  ([Speed](https://learn.chatgpt.com/docs/agent-configuration/speed)、[Pricing](https://learn.chatgpt.com/docs/pricing)。
+  2026-09-28 確認)。`[features].fast_mode` は stable で既定 on です。user config の top-level に
+  `service_tier = "fast"` があると review にも効きます (profile は base の上に重なるので引き継がれる)。worker は
+  `service_tier` を再指定しないので効きません。review で外すには profile 側で上書きしますが、受け付ける値は
+  Codex の版で変わってきたので (新しい版は標準の意味で `"default"` を書く。旧版は `fast` / `flex` だけを受け付けた)、
+  使っている版で request が通ることを確かめてから置いてください。
+- model の単価も大きく違います (Pricing の input は Astra 250 / Sol 50 / Luna 2.5 credits per 1M tokens)。
+  ただし credit の単価だけで plan の included usage は決まらないので、変えた後は usage の dashboard か
+  session rollout で消費を見ます。
+
 ### asset を追加する
 
 1. `shared/<category>/` に source と sidecar manifest(`<name>.asset.yml`)を置く。

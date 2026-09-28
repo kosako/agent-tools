@@ -65,6 +65,14 @@ SKILL.md)。実行するのは `codex exec … -o "$run/result.md" - < "$run/bri
 (または commit OID) と `git diff` の取得コマンドを書き、diff と周辺コードは Codex に read-only
 sandbox の中で読ませます。brief は file 経由で渡し、diff 本文を埋め込みません。
 
+## model の選択
+
+model family / reasoning effort / service tier は skill で固定せず、user の Codex の設定に委ねます。
+user が Codex home に `agent-tools-review.config.toml` を置いていれば、`codex exec` に
+`-p agent-tools-review` を足して base の user config の上に重ねます (無い profile は Codex が error に
+するので、在るときだけ。#339)。置き方と Fast mode の消費は [Install & Usage](install-and-usage.md) の
+「Codex の review / worker だけを軽くする」。
+
 ## 使う herdr subcommand
 
 `status` / `pane current` / `pane split` / `pane rename` / `pane run` / `pane wait-output` / `pane read` /
