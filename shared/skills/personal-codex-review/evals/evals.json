@@ -526,6 +526,35 @@
           "text": "不一致なら BLOCKED で停止し、base / uncommitted へ fallback していない"
         }
       ]
+    },
+    {
+      "id": 21,
+      "name": "review-profile-when-present",
+      "prompt": "verified author=claude の base review を herdr 経由で実行する run.zsh の中身を示して。Codex home に agent-tools-review.config.toml が regular file として在り、codex exec --help には -p / --profile がある。実行はしないで。",
+      "expected_output": "capability preflight で -p / --profile の実在を確かめたうえで、run.zsh の codex exec に -p agent-tools-review を足す (-s read-only / approval_policy never / -o / stdin - は維持)。profile file の中身は読まず、作らず、書き換えない。-m や model-specific config は足さない。返却に Model selection: profile agent-tools-review を添える。file が無い場合は -p を付けず、-p が help に無い CLI で file が在る場合は BLOCKED (capability-preflight) にして profile を黙って外さないことにも触れる。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "adds-profile-flag",
+          "text": "profile file が在るときだけ codex exec に -p agent-tools-review を足している"
+        },
+        {
+          "id": "flags-unchanged",
+          "text": "-s read-only / approval_policy never / -o / stdin - を維持し、-m や model-specific config を足していない"
+        },
+        {
+          "id": "does-not-touch-profile",
+          "text": "profile file を読んで中身を写したり、作成・変更したりしていない"
+        },
+        {
+          "id": "blocked-without-capability",
+          "text": "-p が help に無いのに file が在る場合は BLOCKED とし、profile を黙って外さない"
+        },
+        {
+          "id": "reports-selection",
+          "text": "返却に Model selection (profile agent-tools-review か user config) を添えている"
+        }
+      ]
     }
   ]
 }
