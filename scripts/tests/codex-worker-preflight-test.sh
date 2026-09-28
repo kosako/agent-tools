@@ -463,6 +463,54 @@ set -e
 echo "$out" | grep -q "^model: (codex default)" || fail "missing config should leave the model to codex: $out"
 case "$out" in *"-c model"*) fail "no model flags without config: $out" ;; esac
 
+# worker 用 profile (Codex home の agent-tools-worker.config.toml、#339): top-level の model / effort を config.toml より
+# 優先する。profile の他の値は出さない。明示 (--model / --effort) は profile より優先し、そのときは profile も読まない。
+profile="$home/agent-tools-worker.config.toml"
+cat > "$profile" <<'EOF'
+model_reasoning_effort = "high"
+approval_policy = "CANARY-PROFILE-POLICY"
+[mcp_servers.CANARY_PROFILE]
+command = "/opt/CANARY-PROFILE/bin"
+EOF
+set +e
+out=$(run_pf 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "worker profile should exit 0 (rc=$rc): $out"
+echo "$out" | grep -q "^model: gpt-x (config)$" || fail "model without a profile value should stay from config: $out"
+echo "$out" | grep -q "^model_reasoning_effort: high (profile agent-tools-worker)$" || fail "profile effort should win over config: $out"
+echo "$out" | grep -q -- '-c model="gpt-x" -c model_reasoning_effort="high"' || fail "profile effort must reach launch: $out"
+case "$out" in *"CANARY"*) fail "output must not echo other profile values: $out" ;; esac
+out=$(run_pf --json)
+printf '%s' "$out" | ruby -rjson -e '
+j = JSON.parse(STDIN.read)
+abort "json sources" unless j["model_source"] == "config" && j["model_reasoning_effort_source"] == "profile"
+abort "json values" unless j["model"] == "gpt-x" && j["model_reasoning_effort"] == "high"
+' || fail "--json should report per-key sources: $out"
+# profile が両方を持てば両方とも profile
+printf 'model = "gpt-y-mini"\nmodel_reasoning_effort = "medium"\n' > "$profile"
+out=$(run_pf 2>&1)
+echo "$out" | grep -q "^model: gpt-y-mini (profile agent-tools-worker)$" || fail "profile model should win: $out"
+echo "$out" | grep -q -- '-c model="gpt-y-mini" -c model_reasoning_effort="medium"' || fail "profile values must reach launch: $out"
+# 明示は profile より優先し、profile を読まない (解釈できない profile でも exit 0)
+printf 'developer_instructions = """\nmodel = "CANARY-STRING"\n"""\n' > "$profile"
+set +e
+out=$(run_pf --effort low 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "explicit flags should bypass the profile (rc=$rc): $out"
+echo "$out" | grep -q "^model_reasoning_effort: low (explicit)$" || fail "explicit effort should win over the profile: $out"
+case "$out" in *"CANARY"*|*'-c model="'*) fail "explicit run must not read the profile or config: $out" ;; esac
+# 明示が無ければ、解釈できない profile は exit 2 (profile の名前を理由に出し、中身は出さない)
+set +e
+out=$(run_pf 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "unsafe worker profile must be exit 2 (rc=$rc): $out"
+case "$out" in *"agent-tools-worker.config.toml"*) : ;; *) fail "error should name the profile file: $out" ;; esac
+case "$out" in *"CANARY"*|*"usage:"*) fail "profile error must not echo content or fall to usage: $out" ;; esac
+rm "$profile"
+
 # 非対称: env marker のどちらか 1 つだけで BLOCKED exit 1 (もう片方は外す)
 set +e
 out=$(env -u CODEX_THREAD_ID CODEX_SANDBOX=workspace-write PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" 2>&1)
