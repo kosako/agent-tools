@@ -509,6 +509,15 @@ set -e
 [ "$rc" -eq 2 ] || fail "unsafe worker profile must be exit 2 (rc=$rc): $out"
 case "$out" in *"agent-tools-worker.config.toml"*) : ;; *) fail "error should name the profile file: $out" ;; esac
 case "$out" in *"CANARY"*|*"usage:"*) fail "profile error must not echo content or fall to usage: $out" ;; esac
+# profile の値が不正 (charset) でも、理由文に profile の file 名が出て、値そのものは出ない (#340 review)
+printf "model = \"CANARY bad\"\n" > "$profile"
+set +e
+out=$(run_pf 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "unsafe profile value must be exit 2 (rc=$rc): $out"
+case "$out" in *"agent-tools-worker.config.toml の model の値"*) : ;; *) fail "value error should name the profile file: $out" ;; esac
+case "$out" in *"CANARY"*) fail "value error must not echo the value: $out" ;; esac
 rm "$profile"
 
 # 非対称: env marker のどちらか 1 つだけで BLOCKED exit 1 (もう片方は外す)

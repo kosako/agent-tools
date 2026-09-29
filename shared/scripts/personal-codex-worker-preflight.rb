@@ -268,13 +268,15 @@ module CodexWorkerPreflight
       next if values.empty?
       raise ArgumentError, "#{label} の #{key} が top-level に複数あり一意に読めません" if values.size > 1
 
-      selection[key] = validate_model_value(key, values.first)
+      selection[key] = validate_model_value(key, values.first, label)
     end
     selection
   end
 
-  def validate_model_value(key, value)
-    raise ArgumentError, "#{key} の値に argv へ安全に埋められない文字があります" unless value.to_s.match?(MODEL_VALUE_RE)
+  # label は理由文に出す出所 (file 名。明示の flag なら nil)。値そのものは理由文に出さない。
+  def validate_model_value(key, value, label = nil)
+    where = label ? "#{label} の " : ""
+    raise ArgumentError, "#{where}#{key} の値に argv へ安全に埋められない文字があります" unless value.to_s.match?(MODEL_VALUE_RE)
 
     value
   end
