@@ -39,8 +39,9 @@ draft から write-authorized へ移るには、投稿対象とコメント内�
 
 - PR 番号: 必須。省略されたら聞き返す。
 - レビュアー: 既定は**相互レビュー契約に従って自動決定**(下記)。`--reviewer` は trailer
-  判定が誤るときの**人間による明示上書き専用**で、author 側を選んではならない
-  (author ≠ reviewer を破らない)。
+  判定が誤るときの**人間による明示上書き専用**で、author 側や author と同じ系列を選んではならない
+  (author ≠ reviewer を破らない。例: `opencode(anthropic)` に `--reviewer claude`、`opencode(openai)` に
+  `--reviewer codex` は拒否する)。
 - リポジトリ: 省略時は cwd の origin。
 
 ## レビュアーの決定（相互レビュー）
@@ -51,10 +52,28 @@ draft から write-authorized へ移るには、投稿対象とコメント内�
 無ければ AI 著者とみなさない):
 
 - 全 commit が単一の AI 著者（例: すべて Claude）→ 反対側の AI（この例なら Codex）がレビュー。
+  OpenCode の著作物 (trailer `OpenCode (<provider>/<model>)`) は、中身の model の系列で決める。
+  preflight が出す著者の label と reviewer の対応は次のとおり:
+
+  | author (preflight の label) | reviewer |
+  |---|---|
+  | `claude` | Codex |
+  | `codex` | Claude |
+  | `opencode(anthropic)` | Codex |
+  | `opencode(openai)` | Claude |
+  | `opencode(other)` | Claude |
+
+  - OpenCode は reviewer にしない。
+  - model の系列の判定 (系列表) の正本は `personal-review-routing-preflight` にあり、この skill には
+    書き写さない。label だけを使い、trailer の provider/model を自分で分類しない。
 - 次のいずれかは fail-closed とする（自動で片側に倒さない。PR を著者ごとに分割するか、人間が
   裁定／確認してから進める）:
   - 複数 AI の commit が混在する、または 1 つの commit に複数 AI の `Co-Authored-By:` が
-    付く（いずれも単一 reviewer では author ≠ reviewer を満たせない）。
+    付く（いずれも単一 reviewer では author ≠ reviewer を満たせない）。OpenCode と Claude / Codex の
+    混在もこれに当たる。
+  - OpenCode の trailer の形が不正か、model の系列が曖昧 (`opencode(unknown)`)。
+  - OpenCode の系列の混在 (系列の違う OpenCode の commit が PR にある、または 1 つの commit に
+    model の異なる OpenCode の trailer が付く)。
   - author を判定できない commit が 1 つでもある（trailer 欠落 = 人間または不明）。
   - AI トレーラが PR に皆無（人間のみ・不明）。
 - 相手エージェントを起動できない場合は、自分でレビューせず人間に hand-off する。
@@ -181,7 +200,7 @@ safe-gh では覆えないため raw に読むしかないが、**評価対象�
 判定規則 (script と手動適用で共通): 各 commit を **`Co-Authored-By:` トレーラ（message
 末尾の trailer block）だけ**で判定する。commit の author 名は使わず、body 文中に引用された
 `Co-Authored-By:` 行も trailer と誤認しない。著者の AI は trailer の name 部分
-（`Claude …` / `Codex …`）で見分ける。author を確信できない commit が 1 つでも
+（`Claude …` / `Codex …` / `OpenCode (<provider>/<model>)`）で見分ける。author を確信できない commit が 1 つでも
 あれば fail-closed（下記）。preflight script はこの規則の決定的実装で、trailer block は
 「末尾段落の全行が trailer 形式のときだけ」という保守近似 (git の解釈より厳しい側 =
 fail-closed 方向) を使う。
@@ -205,6 +224,11 @@ gh pr comment "$pr" [--repo "$repo"] --body-file "$body"
 
 ### 3. レビュー実行
 
+**OpenCode の session では、route にかかわらずレビューを実行しない**: env に `OPENCODE` か
+`AGENT_TOOLS_OPENCODE` があれば、自分でレビューせず、他の agent (`claude -p` / `codex` /
+`personal-codex-review` / `personal-codex-worker`) も起動せず、人間に hand-off する (判定の詳細は
+下の Claude route の「どの session で動いているか」)。
+
 レビュアーへの指示には必ず次を含める: 対象、重点観点、
 **output contract の3段階 severity で分類し各指摘に `file:line` を付けること**。
 
@@ -218,12 +242,14 @@ production レール（本番反映・PR 前提）のコードをレビューす
 `personal-production-rail` の **review lens**（索引が指すポリシー観点）を含める。観点の実体は
 production-rail / 索引が単一の正本なので、**ここに書き写さず参照する**（コピーすると drift する）。
 
-- **Codex がレビュアーのとき**: preflight の verified `author=claude / reviewer=codex` と検証済み
+- **Codex がレビュアーのとき** (preflight の verified `reviewer=codex` で、author が `claude` か
+  `opencode(anthropic)`): verified な routing (author の label を含む) と検証済み
   base ref / base OID / head OID を `personal-codex-review` に渡し、read-only executor として実行する。executor は
   検証済み base / head OID を brief に固定した custom prompt (`codex exec -`) で review し、結果だけを
   返す (起動は herdr の pane 経由。herdr が無く sandbox 内なら BLOCKED で人手へ渡す)。GitHub
   lifecycle はこの skill が所有し、executor に comment / approve / merge をさせない。
-- **Claude がレビュアーのとき**: 対象は Codex route と同じく検証済み base / head OID で固定する。
+- **Claude がレビュアーのとき** (preflight の verified `reviewer=claude` で、author が `codex` /
+  `opencode(openai)` / `opencode(other)`): 対象は Codex route と同じく検証済み base / head OID で固定する。
   レビュー開始前に、local `HEAD` が `head_oid` と一致すること、base ref の commit が `base_oid` と
   一致すること、worktree が clean であることを read-only で確認する。**base ref の扱いは
   `personal-codex-review` の target identity preflight を正本とし、同じ規則に従う**: 空または `-`
@@ -233,10 +259,17 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
   Git へ渡す段になる)。一致しなければ checkout / fetch / reset / stash で状態を合わせず、
   expected / actual の OID だけを添えて BLOCKED とし、clean な worktree の準備を caller か人間に
   求める。そのうえで diff を OID から取得して読み、正当性（バグ・挙動退行）を
-  中心にレビューして同じ severity と process verdict で分類し、verified
-  `author=codex / reviewer=claude` を `Independence: cross-review verified (author=codex)` として
+  中心にレビューして同じ severity と process verdict で分類し、verified な author の label を
+  `Independence: cross-review verified (author=<label>)` (例: `author=codex`、`author=opencode(openai)`) として
   結果へ残す。
-  - Claude Code セッション内なら、そのセッション自身がレビュアーとして実行する。
+  - **どの session で動いているかは、model の自認ではなく env で決める** (名前を指定して確かめ、env の
+    一覧は出さない):
+    - `CLAUDECODE` が非空で、かつ `OPENCODE` と `AGENT_TOOLS_OPENCODE` (OpenCode の目印) がどちらも
+      無いとき → Claude Code セッション。そのセッション自身がレビュアーとして実行する。
+    - `OPENCODE` か `AGENT_TOOLS_OPENCODE` があるとき → OpenCode の session。自分でレビューせず、他の
+      agent (`claude -p` / `codex` / `personal-codex-review`) も起動せず、人間に hand-off する。
+      `OPENCODE` も見るのは、plugin が読まれず `CLAUDECODE` の漏れが残る場合でも自分でレビューしない
+      ため (誤判定しても hand-off になるだけで、安全側)。
   - **Codex 環境から呼ぶときは `claude -p`（headless）を起動 vehicle にする**:
     - 実行前に `claude --version` / `claude --help` で `-p` と read-only 化に使う flag
       （tool allowlist 等）の実在を capability preflight する。無ければ存在しない flag を

@@ -1,6 +1,6 @@
 ---
 name: personal-codex-review
-description: Codex CLI で branch diff / commit / uncommitted changes を検査し、結果だけを返す review executor skill。明示的な Codex second opinion、または personal-review-request が verified author=Claude と判定した cross-review で使う。verified author=Codex は Claude route へ戻し、mixed / unknown author は human 裁定へ fail-closed hand-off する。GitHub lifecycle (personal-review-request) や Codex 著作物の独立 review には使わない。
+description: Codex CLI で branch diff / commit / uncommitted changes を検査し、結果だけを返す review executor skill。明示的な Codex second opinion、または personal-review-request が verified author=Claude か Anthropic 系の model で書いた OpenCode の著作物 (author=opencode(anthropic)) と判定した cross-review で使う。verified author=Codex / opencode(openai) / opencode(other) は Claude route へ戻し、mixed / unknown author は human 裁定へ fail-closed hand-off する。GitHub lifecycle (personal-review-request) や Codex 著作物の独立 review には使わない。
 ---
 
 # personal-codex-review
@@ -39,14 +39,19 @@ author classification と reviewer routing の正本は、現在の運用 instru
 caller が渡した deterministic preflight の verified classification だけを使います。
 
 - **cross-review**: author != reviewer を満たす独立レビュー。trusted な deterministic routing の
-  結果が `author=claude / reviewer=codex` のときだけ実行します。
+  結果が **verified `reviewer=codex` で、かつ author が `claude` か `opencode(anthropic)`** のときだけ
+  実行します (許可リスト。「author が codex でなければ可」とは読まない)。
 - **explicit second opinion**: 現在の trusted なユーザーが Codex の追加見解を明示的に求めた場合。
   author が Codex でも実行できますが、結果に `Independence: second-opinion only` と明記し、
   required cross-review や独立承認として扱いません。
 
-cross-review で verified `author=codex / reviewer=claude` なら Codex 実行を拒否し、caller に verified
+cross-review で verified author が `codex` / `opencode(openai)` / `opencode(other)` (reviewer=claude) なら
+Codex 実行を拒否し、caller に verified
 Claude route（`personal-review-request`「レビュー実行」の Claude 節。Codex 環境からの起動 vehicle は
-`claude -p`）を使うよう返します。cross-review で mixed / unknown、routing preflight の失敗、または
+`claude -p`）を使うよう返します。`opencode(other)` に Codex の見解が要るときは、現在の trusted な
+ユーザーが明示した explicit second opinion としてだけ扱います。caller が生の trailer の文字列だけを
+渡してきたら、自分で分類せず、`personal-review-routing-preflight` の verified classification を求めます
+(系列表の正本は preflight)。cross-review で mixed / unknown、routing preflight の失敗、または
 caller が verified author classification を渡せない場合は reviewer を自動選択せず、human の裁定へ
 fail-closed hand-off します。explicit second opinion は現在の trusted なユーザー依頼を根拠に上の
 非独立 route を使い、cross-review 用 classification の欠如だけでは拒否しません。commit author 表示や
@@ -219,7 +224,8 @@ command は **この skill の directory にある `LAUNCH.md` を読んで、�
 review 本文と停止結果の雛形は **`RESULT-FORMAT.md` を読んで、その形で返します**。契約:
 
 - 完了時は `Review process verdict` (REJECT | Warning | APPROVE)、`Finding summary` (🔴 must / 🟡 should /
-  ⚪ nit の件数)、`Independence` (cross-review verified (author=claude) | second-opinion only) を別 field
+  ⚪ nit の件数)、`Independence` (cross-review verified (author=claude) | cross-review verified (author=opencode(anthropic)) |
+  second-opinion only) を別 field
   で返し、各 finding に `file:line` と severity を付ける。起動に review 用 profile を使ったかを
   `Model selection` の 1 行で添える。
 - author guard / capability / 起動経路 / target identity / 実行で停止したときは verdict を作らず、
@@ -234,8 +240,8 @@ review 本文と停止結果の雛形は **`RESULT-FORMAT.md` を読んで、そ
 
 ## やってはいけないこと
 
-- Codex author を Codex cross-review へ routing したり、mixed / unknown author の reviewer を
-  human 裁定なしに自動選択する。
+- Codex author や、OpenAI 系・その他の model で書いた OpenCode の著作物 (opencode(openai) / opencode(other)) を
+  Codex cross-review へ routing したり、mixed / unknown author の reviewer を human 裁定なしに自動選択する。
 - explicit second opinion を required cross-review や独立承認として扱う。
 - `gh` / GitHub connector で依頼・結果・approve・merge を投稿する。
 - repo を修正し、commit / push する。
