@@ -1,9 +1,10 @@
 #!/bin/sh
-# shared/plugins/personal-agent-tools.js (OpenCode plugin, #295 PR 1) の self-test。
+# shared/plugins/personal-agent-tools.js (OpenCode plugin, #295 PR 1 / PR 2) の self-test。
 # build.sh で tmp の最小 fixture から生成した plugin (marker 行つき) を node で import し、
-# server(fakeCtx, {timeoutMs}) が返す hooks 経由で safe-gh の注記と fail-open を確かめる
-# (node 側: lib/opencode-plugin-test.mjs)。hook script は shared/scripts の実物を tmp の home に
-# 置いて呼ぶ。実物の tool home も network も使わない。node が無ければ fail にする (skip にしない)。
+# server(fakeCtx, {timeoutMs}) が返す hooks 経由で safe-gh の注記、品質ループ (fast-edit-check /
+# changed-scope-qa)、fail-open を確かめる (node 側: lib/opencode-plugin-test.mjs)。hook script は
+# shared/scripts の実物を tmp の home に置いて呼ぶ。check は tmp の git repo と記録つきの fake を使う。
+# 実物の tool home も network も使わない。node が無ければ fail にする (skip にしない)。
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -12,9 +13,13 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 build="$script_dir/../build.sh"
 node_cases="$script_dir/lib/opencode-plugin-test.mjs"
 hook_source="$repo_root/shared/scripts/personal-safe-gh-hook.rb"
+fast_edit_source="$repo_root/shared/scripts/personal-fast-edit-check.rb"
+qa_source="$repo_root/shared/scripts/personal-changed-scope-qa.rb"
 
 command -v node >/dev/null 2>&1 || fail "node is required (the plugin cases run with node)"
-[ -f "$hook_source" ] || fail "missing hook script source: shared/scripts/personal-safe-gh-hook.rb"
+for source in "$hook_source" "$fast_edit_source" "$qa_source"; do
+  [ -f "$source" ] || fail "missing hook script source: $source"
+done
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -38,7 +43,7 @@ echo "ok build fixture"
 
 # --- 2. node の case (入口経由。HOME は node 側が case ごとに tmp へ向ける) ---
 mkdir -p "$tmp/work"
-node "$node_cases" "$generated" "$hook_source" "$tmp/work" \
+node "$node_cases" "$generated" "$hook_source" "$fast_edit_source" "$qa_source" "$tmp/work" \
   || fail "node cases failed"
 
 echo "all opencode-plugin tests passed"

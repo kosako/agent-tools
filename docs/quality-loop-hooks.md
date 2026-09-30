@@ -13,7 +13,10 @@
   「新しい変更 scope に対して 1 回だけ」で、無限ループ対策 (下記) を仕様に含む。
 - どちらも登録 (+ Codex は trust) が済むまで不活性 (fail-open の帰結)。
   未 trust 時の警告など時点付き仕様は [runtime 正本](runtime-injection-defense.md) を参照。
-  配線は dotfiles 所有 (boundary-with-dotfiles)。
+  配線は dotfiles 所有 (boundary-with-dotfiles)。例外は OpenCode で、agent-tools が配る plugin が
+  両 script を呼ぶので、plugin の配置がそのまま配線になる (下の「OpenCode」節)。
+- **OpenCode では changed-scope-qa は gate ではなく人向けの通知 (report-only)**。block も継続も
+  しない。
 
 ## check コマンドの発見(自動推測しない・#203 裁定)
 
@@ -112,15 +115,91 @@
   [Stop `additionalContext`](https://code.claude.com/docs/en/hooks#stop-decision-control) は
   会話を継続させるため、この hook の警告経路には使わない。配線は同期 command hook を前提とする。
 - state: `~/.cache/agent-tools/changed-scope-qa/<repo path の sha256>.json`。
-  test 用 override: `AGENT_TOOLS_QA_STATE_DIR` / 設定は `AGENT_TOOLS_CHECKS_CONFIG`。
+  override: `AGENT_TOOLS_QA_STATE_DIR` (test と、OpenCode の plugin が使う。plugin が渡す値は下の
+  「OpenCode」節の契約) / 設定は `AGENT_TOOLS_CHECKS_CONFIG`。
 - Codex 側は Stop の matcher が無視される (#201)。`stop_hook_active` と exit 2 による
   継続要求は[公式 Stop 契約](https://developers.openai.com/codex/hooks#stop)にも記載されている。
   実機 smoke の確認範囲は下記。配備先ごとの登録・trust は別途必要。
+
+## OpenCode (plugin 経由、#295)
+
+OpenCode には PostToolUse / Stop に相当する hook 登録が無いので、agent-tools が `plugin` kind で配る
+`~/.config/opencode/plugins/personal-agent-tools.js` が両 script を無改変で呼ぶ (safe-gh の注記と同じ
+plugin。配布と fail-open の形は [runtime 正本](runtime-injection-defense.md)「OpenCode parity」)。
+script は Claude Code target に配った `~/.claude/agent-tools/scripts/personal-*` を解決し、無ければ
+何もしない。実測の根拠は [opencode-plugin-probe](opencode-plugin-probe.md) の M3 / M7 / M9 / M10 /
+M13 / M14 / M17 (OpenCode 1.18.30)。
+
+- **fast-edit-check** (`tool.execute.after`): 成功した `edit` / `write` / `apply_patch` の後に呼ぶ
+  (失敗した編集では after が呼ばれない: M14)。対象の file は、edit / write が `args.filePath`
+  (plugin の directory を基準に絶対 path にする)、apply_patch が after の `metadata.files` のうち
+  delete 以外 (move は移動先の `movePath`) で、絶対 path のものだけ。metadata が無ければ patch の
+  本文は parse しない。file ごとに `{"hook_event_name":"PostToolUse","tool_name":"Edit"|"Write",
+  "tool_input":{"file_path":…}}` で直列に呼ぶ (apply_patch の file は `Edit` として渡す。Codex 形の
+  `apply_patch` payload は渡さない)。失敗要約は tool 結果の**末尾**に `\n\n` で足す (safe-gh の注記は
+  先頭。編集系の結果は短いので切り詰めで落ちにくく、元の結果を先に読ませる)。同じ文言は 1 回だけ。
+- **総予算**: 1 回の after で 30 秒 (file ごとではない。Codex では 1 patch に起動も timeout も 1 回
+  なのに合わせる)。使い切ったら残りの file は check せず、warn を出す。1 file の script の失敗は
+  warn して次の file に進む。
+- **changed-scope-qa** (`event` の `session.idle`): report-only。`{"hook_event_name":"Stop",
+  "stop_hook_active":false}` を渡し、cwd は plugin の directory。exit 2 なら stderr を level `error`、
+  exit 0 の `systemMessage` を level `warn` で `client.app.log` にだけ出す (service は
+  `personal-agent-tools`)。log は OpenCode の log file (`~/.local/share/opencode/log/opencode.log`。
+  `opencode serve --print-logs` では stderr にも出る) に level `ERROR` / `WARN` の行として出る。1.18.30 の
+  行には service 名が出ないので、`changed-scope-qa:` で始まる message で探す (2026-09-30 の実機 smoke)。
+  - task の子 session の idle も同じ directory に届く (M9) ので、`client.session.get` の `parentID`
+    で除外する。親子を判定できない (lookup の失敗・data が無い) ときは起動せず warn を出す。
+  - 実行中に来た idle は skip する (instance ごとに直列。親子の判定を待つ間も実行中に含めるので、判定の後で
+    前の実行が終わっていても、後から起動しない)。
+  - toast は使わない: 1.18.30 の TUI は `showToast` が成功を返しても描かない (M17)。
+- **Stop の制約**: Stop のように、hook の戻り値で終了を止めて続けさせる仕組みは OpenCode に無い
+  (`session.idle` は事後に届く fire-and-forget の event)。SDK で prompt を送れば続けさせられるが、
+  採らない (#295 の決定)。plugin は `session.prompt` / `promptAsync` / `tui.appendPrompt` /
+  `tui.submitPrompt` を呼ばない。継続させないので、上の無限ループ対策は該当しない。
+- **exit 2 の文は人が読む**: script の文面は model 向け (「終了する前に修正してください」) だが、
+  OpenCode では model には届かず、log を見た人が読む。
+- **state dir を分ける (契約)**: plugin は子 process に
+  `AGENT_TOOLS_QA_STATE_DIR=~/.cache/agent-tools/changed-scope-qa-opencode` を渡す (agent-tools の
+  名前空間に置き、OpenCode の config / data / cache の dir には置かない)。理由: script は
+  `stop_hook_active` にかかわらず fail を state に書き、「scope ごとに 1 回だけの block」を消費する。
+  共有すると、model に届かない OpenCode の実行が Claude / Codex の block を先に使ってしまう。代償と
+  して、同じ scope の check を agent ごとに 1 回ずつ実行する。
+- **子 process の env は絞る**: plugin が渡すのは `PATH` / `HOME` / `LANG` / `LC_ALL` / `LC_CTYPE` /
+  `AGENT_TOOLS_CHECKS_CONFIG` (と changed-scope-qa の state dir) だけ。宣言した check もこの env で
+  動く (env をそのまま継承する Claude Code / Codex の hook との差。check が他の env に依存するなら
+  OpenCode では動かないことがある)。
+- **強度と honest-label**:
+  - fast-edit-check の要約は model への steering で、人の目に入ることは期待しない。M4 / M17 で
+    確かめたのは bash の結果の先頭の書き換え (model に届き、TUI には描き直されない)。編集系の結果の
+    末尾への追記が model に届くことは、2026-09-30 の実機 smoke で確かめた (model が返答で、追記にしか
+    無い check 名と失敗の中身に触れた)。
+  - changed-scope-qa の結果は log にだけ出て、TUI には通知されないので、**OpenCode では変更範囲の
+    検査の結果に人が気づけない**。後ろに git hook / CI / 相互レビューがある前提で割り切る (#295 の判断。OpenCode を
+    主に使うようになったら通知の経路を見直す)。
+  - `opencode run` では idle の後の非同期の処理が打ち切られうる (M10) ので、run では changed-scope-qa
+    の結果が残らないことがある (TUI と serve では残る)。
+  - fail-open: script が無い / 実行できない / 非 0 (changed-scope-qa の exit 2 を除く) / stdout が
+    JSON でない / timeout (fast-edit-check は総予算、changed-scope-qa は 120 秒。process group ごと
+    kill する) のどれでも、tool 結果を変えず・何も報告せず、warn を script ごとに 1 回だけ log に出す。
+  - 一時的に外すには `opencode --pure` で起動する。
 
 ## 検証境界
 
 - 純粋ロジックと git 連携・cache・ループ対策は `scripts/tests/quality-loop-hooks-test.sh`
   が CI で検証する (設定 / state / HOME / git config を隔離・fake check 使用)。
+- OpenCode の plugin からの呼び出しは `scripts/tests/opencode-plugin-test.sh` (node) が CI で検証する。
+  build した plugin を入口 (`server(ctx)` が返す hooks) 経由で動かし、実物の script を tmp の home に
+  置いて、tmp の git repo と記録つきの fake check で確かめる (追記の位置、apply_patch の file の取り方、
+  総予算、payload の形、state dir、子 session の除外と直列化、model を続けさせる API と toast を呼ばない
+  こと、fail-open)。OpenCode の実機での確認は CI 外の smoke (人 + Claude) で行う。2026-09-30 に
+  OpenCode 1.18.30 (`opencode-go/kimi-k3`、`opencode serve` + `opencode run --attach`) で次を確かめた:
+  構文エラーを入れた `edit` の結果の末尾に要約が載り model に届く / 直した `edit` には載らない /
+  壊れた scope の `session.idle` で changed-scope-qa の `ERROR` が log に出て、直した後は何も出ない。根拠は
+  項目ごとに分ける: 追記の有無と位置は DB に保存された tool の part、model に届いたことは返答 (追記にしか
+  無い check 名と失敗の中身に触れた)、changed-scope-qa の報告は log (serve の stderr と log file)、直した後の
+  結果は QA の state (`pass`)。`apply_patch` の経路 (gpt 系の model) は実機では確かめておらず、node の test
+  だけで確かめている。TUI での表示は今回の smoke では確かめていない (node の test が確かめるのは、TUI の
+  API を呼ばないことだけ)。
 - Stop の回帰テストは warning JSON に `systemMessage` だけがあり、継続を要求する
   field がないことを検証する。fixture 検証は実 runner の継続回数や UI 表示の観測ではない。
 - 実配線 (settings.json / hooks.json への登録・Codex payload / Stop の実測) は CI 外
