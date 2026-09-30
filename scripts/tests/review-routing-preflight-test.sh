@@ -42,13 +42,15 @@ OC_EMAIL = ["noreply", "opencode.invalid"].join("@")
 def oc(id)
   "Co-Authored-By: OpenCode (#{id}) <#{OC_EMAIL}>"
 end
+# provider だけで決まる ID、o 系の境界 (前は区切りか先頭、後ろは終端か - / .)、曖昧 (両方) も固定する。
 {
   opencode_anthropic: %w[anthropic/claude-sonnet-4-5 openrouter/anthropic/claude-sonnet-4.5
                          github-copilot/claude-sonnet-4 amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
-                         probe/claude-probe],
-  opencode_openai: %w[openai/gpt-5 opencode/gpt-5.1-codex github-copilot/gpt-5 azure/o4-mini probe/gpt-5-probe],
-  opencode_other: %w[google/gemini-2.5-pro opencode-go/kimi-k3],
-  opencode_unknown: %w[openrouter/claude-gpt-hybrid],
+                         probe/claude-probe anthropic/custom-model],
+  opencode_openai: %w[openai/gpt-5 opencode/gpt-5.1-codex github-copilot/gpt-5 azure/o4-mini probe/gpt-5-probe
+                      openai/custom-model azure/o3 azure/o3-mini openai/o1.preview],
+  opencode_other: %w[google/gemini-2.5-pro opencode-go/kimi-k3 azure/xo3 azure/o30],
+  opencode_unknown: %w[openrouter/claude-gpt-hybrid anthropic/o3],
 }.each do |want, ids|
   ids.each { |id| check("OpenCode (#{id}) -> :#{want}", cls("s\n\n#{oc(id)}") == want) }
 end

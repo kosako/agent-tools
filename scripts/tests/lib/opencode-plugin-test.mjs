@@ -866,15 +866,41 @@ console.log("ok Q4 log failures are swallowed")
   console.log("ok S1 the marker is set only for the model bash, and foreign markers are emptied")
 }
 
+// S3: 記録は (sessionID, callID) の組。callID は provider の ID で session をまたいで一意とは限らない。
+// 別 session の同じ callID の終了で記録が消えず、別 session の同じ callID の `!` には立たない。
+{
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, {})
+  const before = (sessionID, callID) => hooks["tool.execute.before"]({ tool: "bash", sessionID, callID }, { args: { command: "ls" } })
+  const env = async (input) => {
+    const output = { env: { CLAUDECODE: "1" } }
+    await hooks["shell.env"](input, output)
+    return output.env
+  }
+  await before("s1", "dup")
+  await before("s2", "dup")
+  await runAfter(hooks, homes.missing, { tool: "bash", sessionID: "s1", callID: "dup", args: { command: "ls" } }, toolOutput(), DEADLINE_MARGIN_MS, "S3 after s1")
+  const s2 = await env({ cwd: ctxDir, sessionID: "s2", callID: "dup" })
+  assert(s2.AGENT_TOOLS_OPENCODE === "1" && s2.CLAUDECODE === "", `S3: finishing s1 must not forget s2's call with the same callID, got ${JSON.stringify(s2)}`)
+  const s1 = await env({ cwd: ctxDir, sessionID: "s1", callID: "dup" })
+  assert(s1.AGENT_TOOLS_OPENCODE === undefined && s1.CLAUDECODE === "1", `S3: s1's finished call must be forgotten, got ${JSON.stringify(s1)}`)
+  const bang = await env({ cwd: ctxDir, sessionID: "s3", callID: "dup" })
+  assert(bang.AGENT_TOOLS_OPENCODE === undefined && bang.CLAUDECODE === "1", `S3: \`!\` in another session with the same callID must not be marked, got ${JSON.stringify(bang)}`)
+  const noSession = await env({ cwd: ctxDir, callID: "dup" })
+  assert(noSession.AGENT_TOOLS_OPENCODE === undefined, "S3: a call without sessionID must not be marked")
+  assert(client.calls.length === 0, `S3: no warn expected, got ${JSON.stringify(client.calls)}`)
+  console.log("ok S3 records are keyed by (sessionID, callID)")
+}
+
 // S2: shell.env の中で例外が起きても throw しない (env が無い・凍結・getter が throw、input が無い)。
 {
   const client = makeClient("ok")
   const hooks = await makeHooks(client, {})
   await hooks["tool.execute.before"]({ tool: "bash", sessionID: "s1", callID: "model-2" }, { args: { command: "ls" } })
   const cases = [
-    ["no env", { cwd: ctxDir, callID: "model-2" }, {}],
-    ["frozen env", { cwd: ctxDir, callID: "model-2" }, { env: Object.freeze({ CLAUDECODE: "1" }) }],
-    ["throwing getter", { cwd: ctxDir, callID: "model-2" }, Object.defineProperty({}, "env", { get() { throw new Error("boom") } })],
+    ["no env", { cwd: ctxDir, sessionID: "s1", callID: "model-2" }, {}],
+    ["frozen env", { cwd: ctxDir, sessionID: "s1", callID: "model-2" }, { env: Object.freeze({ CLAUDECODE: "1" }) }],
+    ["throwing getter", { cwd: ctxDir, sessionID: "s1", callID: "model-2" }, Object.defineProperty({}, "env", { get() { throw new Error("boom") } })],
     ["no input", undefined, { env: {} }],
   ]
   for (const [label, input, output] of cases) {

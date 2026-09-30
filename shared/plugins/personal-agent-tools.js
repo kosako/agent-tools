@@ -213,8 +213,10 @@ async function server(input, options) {
   const warned = new Set()
   // changed-scope-qa の実行中の印。server() は directory ごとに呼ばれるので、instance に 1 つ。
   let qaRunning = false
-  // model の bash の callID (記録専用の before で覚え、shell.env で突き合わせ、after で忘れる)。
-  // `!` にも callID が付くので callID の有無では絞れない (M5)。PTY は callID を持たない。
+  // model の bash の (sessionID, callID) (記録専用の before で覚え、shell.env で突き合わせ、after で
+  // 忘れる)。`!` にも callID が付くので callID の有無では絞れない (M5)。PTY は callID を持たない。
+  // callID は provider の ID で session をまたいで一意とは限らず、instance は directory 単位で session を
+  // 共有するので、session と組にする。どちらかが欠ければ記録も一致もしない (目印を立てない側に倒れる)。
   const modelBashCalls = new Set()
 
   // client が無い / log が throw・reject する場合も握る (log の失敗で hook を落とさない)。
@@ -335,15 +337,30 @@ async function server(input, options) {
     }
   }
 
+  function callKey(input) {
+    if (!input) return null
+    const { sessionID, callID } = input
+    if (typeof sessionID !== "string" || sessionID === "" || typeof callID !== "string" || callID === "") return null
+    return JSON.stringify([sessionID, callID])
+  }
+
   function rememberModelBash(input) {
-    if (!input || input.tool !== "bash" || typeof input.callID !== "string" || input.callID === "") return
-    modelBashCalls.add(input.callID)
+    const key = callKey(input)
+    if (key === null || input.tool !== "bash") return
+    modelBashCalls.add(key)
     if (modelBashCalls.size > MODEL_BASH_CALLS_MAX) modelBashCalls.delete(modelBashCalls.values().next().value)
+  }
+
+  function forgetModelBash(input) {
+    if (!input || input.tool !== "bash") return
+    const key = callKey(input)
+    if (key !== null) modelBashCalls.delete(key)
   }
 
   // model の bash の env にだけ目印を立て、他の agent の目印を空にする。
   function markModelBash(input, output) {
-    if (!input || !modelBashCalls.has(input.callID)) return
+    const key = callKey(input)
+    if (key === null || !modelBashCalls.has(key)) return
     const env = output.env
     if (!env || typeof env !== "object") return
     env[OPENCODE_MARKER] = "1"
@@ -359,7 +376,7 @@ async function server(input, options) {
       await failOpen("shell.env", "the OpenCode marker was not set", () => markModelBash(input, output))
     },
     "tool.execute.after": async (input, output) => {
-      if (input && input.tool === "bash") modelBashCalls.delete(input.callID)
+      await failOpen("tool.execute.after", "the bash call record was kept", () => forgetModelBash(input))
       await failOpen("tool.execute.after", "the tool result was left unchanged", () => annotateSafeGh(input, output))
       await failOpen("tool.execute.after", "the tool result was left unchanged", () => checkEdits(input, output))
     },
