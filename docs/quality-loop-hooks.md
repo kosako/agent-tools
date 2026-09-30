@@ -144,7 +144,9 @@ M13 / M14 / M17 (OpenCode 1.18.30)。
 - **changed-scope-qa** (`event` の `session.idle`): report-only。`{"hook_event_name":"Stop",
   "stop_hook_active":false}` を渡し、cwd は plugin の directory。exit 2 なら stderr を level `error`、
   exit 0 の `systemMessage` を level `warn` で `client.app.log` にだけ出す (service は
-  `personal-agent-tools`)。
+  `personal-agent-tools`)。log は OpenCode の log file (`~/.local/share/opencode/log/opencode.log`。
+  `opencode serve --print-logs` では stderr にも出る) に level `ERROR` / `WARN` の行として出る。1.18.30 の
+  行には service 名が出ないので、`changed-scope-qa:` で始まる message で探す (2026-09-30 の実機 smoke)。
   - task の子 session の idle も同じ directory に届く (M9) ので、`client.session.get` の `parentID`
     で除外する。親子を判定できない (lookup の失敗・data が無い) ときは起動せず warn を出す。
   - 実行中に来た idle は skip する (instance ごとに直列。親子の判定を待つ間も実行中に含めるので、判定の後で
@@ -168,8 +170,9 @@ M13 / M14 / M17 (OpenCode 1.18.30)。
   OpenCode では動かないことがある)。
 - **強度と honest-label**:
   - fast-edit-check の要約は model への steering で、人の目に入ることは期待しない。M4 / M17 で
-    確かめたのは bash の結果の先頭の書き換え (model に届き、TUI には描き直されない) で、編集系の
-    結果の末尾への追記が model に届くことは実機の smoke で確かめる。
+    確かめたのは bash の結果の先頭の書き換え (model に届き、TUI には描き直されない)。編集系の結果の
+    末尾への追記が model に届くことは、2026-09-30 の実機 smoke で確かめた (model が返答で、追記にしか
+    無い check 名と失敗の中身に触れた)。
   - changed-scope-qa の結果は log file にしか出ないので、**OpenCode では変更範囲の検査の結果に人が
     気づけない**。後ろに git hook / CI / 相互レビューがある前提で割り切る (#295 の判断。OpenCode を
     主に使うようになったら通知の経路を見直す)。
@@ -188,8 +191,12 @@ M13 / M14 / M17 (OpenCode 1.18.30)。
   build した plugin を入口 (`server(ctx)` が返す hooks) 経由で動かし、実物の script を tmp の home に
   置いて、tmp の git repo と記録つきの fake check で確かめる (追記の位置、apply_patch の file の取り方、
   総予算、payload の形、state dir、子 session の除外と直列化、model を続けさせる API と toast を呼ばない
-  こと、fail-open)。OpenCode の実機での確認 (編集後に要約が載る、idle で log に出る) は CI 外の smoke
-  (人 + Claude) で行う。
+  こと、fail-open)。OpenCode の実機での確認は CI 外の smoke (人 + Claude) で行う。2026-09-30 に
+  OpenCode 1.18.30 (`opencode-go/kimi-k3`、`opencode serve` + `opencode run --attach`) で次を確かめた:
+  構文エラーを入れた `edit` の結果の末尾に要約が載り model に届く / 直した `edit` には載らない /
+  壊れた scope の `session.idle` で changed-scope-qa の `ERROR` が log に出て、直した後は何も出ない。判定は
+  model の返答ではなく DB の part と log で行った。`apply_patch` の経路 (gpt 系の model) と TUI は実機では
+  確かめておらず、node の test だけで確かめている。
 - Stop の回帰テストは warning JSON に `systemMessage` だけがあり、継続を要求する
   field がないことを検証する。fixture 検証は実 runner の継続回数や UI 表示の観測ではない。
 - 実配線 (settings.json / hooks.json への登録・Codex payload / Stop の実測) は CI 外
