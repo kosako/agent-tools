@@ -41,7 +41,7 @@ should / Warning は非ブロッキングで、対応するかは trusted な依
 ```text
 Review process verdict: REJECT | Warning | APPROVE
 Finding summary: 🔴 must N / 🟡 should N / ⚪ nit N
-Independence: cross-review verified (author=claude) | cross-review verified (author=codex) | second-opinion only | human review
+Independence: cross-review verified (author=claude) | cross-review verified (author=codex) | cross-review verified (author=opencode(anthropic)) | cross-review verified (author=opencode(openai)) | cross-review verified (author=opencode(other)) | second-opinion only | human review
 ```
 
 process verdict と finding summary は code review process だけの判定です。CI / required checks /

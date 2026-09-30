@@ -20,11 +20,15 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
 ## AI エージェント間のコードレビュー (相互レビュー)
 
 - AI が書いたコードは、書いた本人ではなく別の AI がレビューする (author ≠ reviewer)。
-  Claude が書いた → Codex がレビュー。Codex が書いた → Claude がレビュー。
+  Claude が書いた → Codex がレビュー。Codex が書いた → Claude がレビュー。OpenCode が書いた →
+  中身の model の系列で決める (Anthropic 系 → Codex、OpenAI 系とそれ以外 → Claude)。OpenCode は reviewer にしない。
 - トレーラ契約: コードを commit する AI は、自分を示す `Co-Authored-By:` トレーラを必ず
   付け、name でエージェントを識別できるようにする (Claude は `Claude ...`、Codex は
-  `Codex` で始める)。email は公開してよい no-reply / bot 用のものに限る。
-- 判定の正本は PR の commit trailers。複数 AI の混在・AI トレーラ無しは fail-closed とし、
+  `Codex` で始める)。name は model ではなく実行している tool で名乗り、OpenCode は model に関わらず
+  `OpenCode (<provider>/<model>)` (provider/model は OpenCode の model ID のまま) と書く。
+  email は公開してよい no-reply / bot 用のものに限る (OpenCode は予約 domain `.invalid` の noreply)。
+- 判定の正本は PR の commit trailers。複数 AI の混在・AI トレーラ無し・OpenCode の model の系列を
+  判定できない / 系列違いの混在は fail-closed とし、
   黙って自分でレビューせず人間に確認する。routing の詳細 (fail-closed 分岐・hand-off・
   trailer 喪失時の人間による上書き) は `personal-review-request` の「レビュアーの決定」。
 

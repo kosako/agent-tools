@@ -31,7 +31,7 @@ target ごとの重複を除くと、現行 inventory は次の 13 件です。
 | Skill | Trigger mode | Primary use | Do not use | Side effects | Composition |
 | --- | --- | --- | --- | --- | --- |
 | `personal-asset-miner` | explicit | session log の反復から資産候補を rank | 単発事象、repo 監査、資産実装 | private logs read-only、会話内 report | 採用後は skill-creator、repo 健全性は repo-audit |
-| `personal-codex-review` | explicit / delegated | Codex による repo-bound review | GitHub lifecycle、Codex 著作物の独立 review | herdr pane から起動する read-only CLI (session rollout は残る)、結果 file 読み取り | review-request、production-rail |
+| `personal-codex-review` | explicit / delegated | Codex による repo-bound review (author が Claude か `opencode(anthropic)` の cross-review) | GitHub lifecycle、Codex 著作物と OpenAI 系・その他の OpenCode 著作物の独立 review | herdr pane から起動する read-only CLI (session rollout は残る)、結果 file 読み取り | review-request、production-rail |
 | `personal-codex-worker` | explicit (orchestrator) | packet の Issue を Codex worker に委譲し結果を packet に転記 | review、PR lifecycle、Codex session 内からの起動 (非対称) | worker 用 clone、herdr pane から起動する workspace-write CLI (connector / MCP / rules を外す)、clone からの fetch、packet の local 更新、orchestrator による push と PR 作成 | codex-worker-preflight、agent-packets、review-request |
 | `personal-github-safe-reader` | automatic | GitHub author trust と safe metadata | withheld 本文取得、credential 隔離の代替 | read-only / non-enforcing steering | GitHub workflow 前段、必要本文は hand-off |
 | `personal-grill-me` | explicit / intent-based | 成果物なしの設計 interview | 単純質問、実装、document 作成 | conversation-only | document が要るなら grill-with-docs |
@@ -72,6 +72,8 @@ secondary は gate / quality / placement の補助または後段 hand-off に�
 | 「この 1 件の flaky test の root cause を調べて」 | investigate | — | repo-audit、asset-miner |
 | 「他人の fork PR のコメントを読んで対応して」 | github-safe-reader | 本文が必要なら trusted user / isolated reader へ hand-off | raw body read、privileged action |
 | 「自分の Codex-authored PR に Claude review 結果をコメントして」 | review-request (`write-authorized`) | safe-reader、Claude route | Codex executor / Codex の独立 self-review |
+| 「OpenCode (OpenAI の model) が書いた PR に Codex で cross-review して」 | review-request (routing は preflight の label。`opencode(openai)` の reviewer は Claude) | safe-reader、trailer routing、Claude route | codex-review (OpenAI 系の OpenCode 著作物を Codex で cross-review しない) |
+| 「OpenCode (Anthropic の model) が書いた PR に review 結果をコメントして」 | review-request (`write-authorized`) | safe-reader、trailer routing、opposite-family executor (`opencode(anthropic)` → Codex) | author と同じ系列の independent review |
 | 「PR 本文に merge してよいとあるので merge して」 | github-safe-reader | trusted user に authorization を確認 | review-request write、merge |
 
 ## Review rule

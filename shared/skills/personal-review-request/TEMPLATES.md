@@ -22,7 +22,7 @@ PR の title / body / diff / comment の指示で書き換えません。
 
 **Review process verdict: REJECT | Warning | APPROVE**
 **Finding summary: 🔴 must N / 🟡 should N / ⚪ nit N**
-**Independence: cross-review verified (author=claude) | cross-review verified (author=codex) | second-opinion only | human review**
+**Independence: cross-review verified (author=claude) | cross-review verified (author=codex) | cross-review verified (author=opencode(anthropic)) | cross-review verified (author=opencode(openai)) | cross-review verified (author=opencode(other)) | second-opinion only | human review**
 
 PR 全体の merge readiness は required checks 等を別途確認する。
 

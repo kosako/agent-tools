@@ -523,8 +523,8 @@ git -C "$main" log --format='%H%x00%(trailers:key=Co-Authored-By,valueonly)%x00'
 (`exit 1` は「その段で止めて `Blocked at: trailer` にする」の意。空の `$base_oid` は `rev-parse` が
 拒否するので `""..<branch>` の空集合にはならない。)
 
-commit ごとに trailer の name を見て、`Codex` 始まりが 1 つ以上あり `Claude` 始まりが無いことを
-確認する (欠落 / 混在は `Blocked at: trailer`。1 commit でも該当すれば push しない。commit が
+commit ごとに trailer の name を見て、`Codex` 始まりが 1 つ以上あり、Codex 以外の AI 名 (`Claude` 始まりと
+`OpenCode` 始まり) が無いことを確認する (欠落 / 混在は `Blocked at: trailer`。1 commit でも該当すれば push しない。commit が
 0 件なら push するものが無いので同じく停止)。判定の正本は `personal-review-request` の「レビュアーの
 決定」と ai-trailer gate で、ここでは push 前の消費側検査として同じ規則を当てる。通ったら:
 

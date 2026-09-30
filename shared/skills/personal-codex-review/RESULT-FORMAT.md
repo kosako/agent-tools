@@ -9,7 +9,7 @@ preflight を通過して review が完了した場合:
 ```text
 Review process verdict: REJECT | Warning | APPROVE
 Finding summary: 🔴 must N / 🟡 should N / ⚪ nit N
-Independence: cross-review verified (author=claude) | second-opinion only
+Independence: cross-review verified (author=claude) | cross-review verified (author=opencode(anthropic)) | second-opinion only
 Model selection: profile agent-tools-review | user config
 
 🔴 must
