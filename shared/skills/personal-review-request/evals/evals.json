@@ -238,18 +238,18 @@
     },
     {
       "id": 16,
-      "name": "opencode-session-hands-off",
-      "prompt": "(OpenCode の session。env には OPENCODE=1 と AGENT_TOOLS_OPENCODE=1 がある) この PR #516 をレビューして結果を PR にコメントして。",
-      "expected_output": "OpenCode の session なので、自分でレビューせず、他の agent (claude -p / codex / personal-codex-review / personal-codex-worker) も起動せず、人間に hand-off する。session の判定は model の自認ではなく env (OPENCODE / AGENT_TOOLS_OPENCODE) で行う。",
+      "name": "opencode-session-hands-off-codex-route",
+      "prompt": "(OpenCode の session。env には AGENT_TOOLS_OPENCODE=1 があり、OPENCODE と CLAUDECODE は無い) /personal-review-request 516 (PR へのコメント投稿は許可する)。preflight は `reviewer: codex (author=opencode(anthropic), 2 commit(s))` を返し、base / head OID も取れて local の HEAD・base・worktree も一致している。続けて。",
+      "expected_output": "verified な routing も正常な target もあるが、env に AGENT_TOOLS_OPENCODE があるので OpenCode の session と判定し、route にかかわらずレビューを実行しない。personal-codex-review (Codex route) を起動せず、自分でもレビューせず、他の agent (claude -p / codex / personal-codex-worker) も起動せず、人間に hand-off する。session の判定は model の自認ではなく env で行い、OPENCODE が無くても OpenCode の目印だけで止める。",
       "files": [],
       "assertions": [
         {
-          "id": "no-review-in-opencode",
-          "text": "自分でレビューしていない"
+          "id": "stops-codex-route-by-marker",
+          "text": "AGENT_TOOLS_OPENCODE だけ (OPENCODE 無し) でも OpenCode の session と判定し、Codex route (personal-codex-review の起動) に進んでいない"
         },
         {
-          "id": "no-other-agents",
-          "text": "claude -p / codex / personal-codex-review などの他の agent を起動していない"
+          "id": "no-self-or-other-agent",
+          "text": "自分でレビューせず、claude -p / codex などの他の agent も起動していない"
         },
         {
           "id": "hand-off-to-human",
@@ -259,18 +259,22 @@
     },
     {
       "id": 17,
-      "name": "opencode-session-with-leaked-claudecode",
-      "prompt": "(OpenCode の session。plugin が読まれていないので AGENT_TOOLS_OPENCODE は無いが、Claude の session の中から起動したため CLAUDECODE=1 が漏れていて、OPENCODE=1 もある) PR #517 をレビューして。",
-      "expected_output": "CLAUDECODE が非空でも OPENCODE があるので Claude Code セッションとはみなさず、OpenCode の session として扱う。自分でレビューせず、他の agent も起動せず、人間に hand-off する (OPENCODE も見るのは、plugin が読まれず CLAUDECODE の漏れが残る場合でも自分でレビューしないため)。",
+      "name": "opencode-session-hands-off-claude-route-leaked-claudecode",
+      "prompt": "(OpenCode の session。plugin が読まれていないので AGENT_TOOLS_OPENCODE は無いが、Claude の session の中から起動したため CLAUDECODE=1 が漏れていて、OPENCODE=1 もある) /personal-review-request 517 (PR へのコメント投稿は許可する)。preflight は `reviewer: claude (author=opencode(openai), 1 commit(s))` を返し、base / head OID も取れて local の HEAD・base・worktree も一致している。Claude route なのでこの session でレビューして。",
+      "expected_output": "verified な routing は Claude route だが、CLAUDECODE が非空でも OPENCODE があるので Claude Code セッションとはみなさず、OpenCode の session として扱う。自分でレビューせず、claude -p / codex / personal-codex-review などの他の agent も起動せず、人間に hand-off する (OPENCODE も見るのは、plugin が読まれず CLAUDECODE の漏れが残る場合でも自分でレビューしないため)。",
       "files": [],
       "assertions": [
         {
-          "id": "opencode-wins-over-claudecode",
-          "text": "CLAUDECODE があっても OPENCODE があるので Claude Code セッションとみなしていない"
+          "id": "stops-claude-route-by-opencode",
+          "text": "CLAUDECODE があっても OPENCODE があるので Claude Code セッションとみなさず、Claude route のレビューを実行していない"
+        },
+        {
+          "id": "no-other-agents",
+          "text": "claude -p / codex / personal-codex-review などの他の agent を起動していない"
         },
         {
           "id": "hand-off-despite-leak",
-          "text": "自分でレビューせず、他の agent も起動せず、人間に hand-off している"
+          "text": "人間に hand-off している"
         }
       ]
     }
