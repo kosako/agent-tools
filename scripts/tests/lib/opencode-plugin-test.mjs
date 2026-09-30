@@ -811,4 +811,115 @@ console.log("ok Q4 log failures are swallowed")
   console.log("ok V1 child processes get only the allowed env")
 }
 
+// === 目印: shell.env (#295 PR 3a) ==============================================================
+
+// S1: 目印は model の bash (記録専用の before で覚えた callID) にだけ立ち、`!` (callID はあるが before を
+// 通らない) と PTY (sessionID も callID も無い) には立たない。model の bash では他の agent の目印を空にする。
+{
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, {})
+  assert(typeof hooks["shell.env"] === "function", "S1: shell.env must be registered")
+  const leaked = () => ({ CLAUDECODE: "1", CODEX_THREAD_ID: "thread", CODEX_SANDBOX: "seatbelt", KEEP: "keep" })
+  const runEnv = async (input, output, label) => {
+    try {
+      await withDeadline(hooks["shell.env"](input, output), DEADLINE_MARGIN_MS, label)
+    } catch (error) {
+      fail(`${label}: shell.env must not throw: ${error && error.stack ? error.stack : error}`)
+    }
+  }
+  const runBefore = async (input, args, label) => {
+    try {
+      await withDeadline(hooks["tool.execute.before"](input, { args }), DEADLINE_MARGIN_MS, label)
+    } catch (error) {
+      fail(`${label}: tool.execute.before must not throw: ${error}`)
+    }
+  }
+
+  const args = { command: "git commit -m x" }
+  await runBefore({ tool: "bash", sessionID: "s1", callID: "model-1" }, args, "S1 before model bash")
+  assert(args.command === "git commit -m x", "S1: before must not rewrite args")
+  const model = { env: leaked() }
+  await runEnv({ cwd: ctxDir, sessionID: "s1", callID: "model-1" }, model, "S1 model bash")
+  assert(model.env.AGENT_TOOLS_OPENCODE === "1", `S1: the marker must be set for the model bash, got ${JSON.stringify(model.env)}`)
+  for (const name of ["CLAUDECODE", "CODEX_THREAD_ID", "CODEX_SANDBOX"]) {
+    assert(model.env[name] === "", `S1: ${name} must be emptied for the model bash, got ${JSON.stringify(model.env[name])}`)
+  }
+  assert(model.env.KEEP === "keep", "S1: other env must be left as is")
+
+  const bang = { env: leaked() }
+  await runEnv({ cwd: ctxDir, sessionID: "s1", callID: "bang-1" }, bang, "S1 bang")
+  assert(JSON.stringify(bang.env) === JSON.stringify(leaked()), `S1: \`!\` (callID without before) must not be touched, got ${JSON.stringify(bang.env)}`)
+  const pty = { env: leaked() }
+  await runEnv({ cwd: ctxDir }, pty, "S1 pty")
+  assert(JSON.stringify(pty.env) === JSON.stringify(leaked()), `S1: PTY (no callID) must not be touched, got ${JSON.stringify(pty.env)}`)
+
+  await runBefore({ tool: "read", sessionID: "s1", callID: "read-1" }, { filePath: "x" }, "S1 before read")
+  const read = { env: leaked() }
+  await runEnv({ cwd: ctxDir, sessionID: "s1", callID: "read-1" }, read, "S1 other tool")
+  assert(read.env.AGENT_TOOLS_OPENCODE === undefined, "S1: only the bash tool may be marked")
+
+  await runAfter(hooks, homes.missing, { tool: "bash", sessionID: "s1", callID: "model-1", args }, toolOutput(), DEADLINE_MARGIN_MS, "S1 after")
+  const again = { env: leaked() }
+  await runEnv({ cwd: ctxDir, sessionID: "s1", callID: "model-1" }, again, "S1 after forget")
+  assert(again.env.AGENT_TOOLS_OPENCODE === undefined, "S1: a finished bash call must be forgotten")
+  assert(client.calls.length === 0, `S1: no warn expected, got ${JSON.stringify(client.calls)}`)
+  console.log("ok S1 the marker is set only for the model bash, and foreign markers are emptied")
+}
+
+// S3: 記録は (sessionID, callID) の組。callID は provider の ID で session をまたいで一意とは限らない。
+// 別 session の同じ callID の終了で記録が消えず、別 session の同じ callID の `!` には立たない。
+{
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, {})
+  const before = (sessionID, callID) => hooks["tool.execute.before"]({ tool: "bash", sessionID, callID }, { args: { command: "ls" } })
+  const env = async (input) => {
+    const output = { env: { CLAUDECODE: "1" } }
+    await hooks["shell.env"](input, output)
+    return output.env
+  }
+  await before("s1", "dup")
+  await before("s2", "dup")
+  await runAfter(hooks, homes.missing, { tool: "bash", sessionID: "s1", callID: "dup", args: { command: "ls" } }, toolOutput(), DEADLINE_MARGIN_MS, "S3 after s1")
+  const s2 = await env({ cwd: ctxDir, sessionID: "s2", callID: "dup" })
+  assert(s2.AGENT_TOOLS_OPENCODE === "1" && s2.CLAUDECODE === "", `S3: finishing s1 must not forget s2's call with the same callID, got ${JSON.stringify(s2)}`)
+  const s1 = await env({ cwd: ctxDir, sessionID: "s1", callID: "dup" })
+  assert(s1.AGENT_TOOLS_OPENCODE === undefined && s1.CLAUDECODE === "1", `S3: s1's finished call must be forgotten, got ${JSON.stringify(s1)}`)
+  const bang = await env({ cwd: ctxDir, sessionID: "s3", callID: "dup" })
+  assert(bang.AGENT_TOOLS_OPENCODE === undefined && bang.CLAUDECODE === "1", `S3: \`!\` in another session with the same callID must not be marked, got ${JSON.stringify(bang)}`)
+  const noSession = await env({ cwd: ctxDir, callID: "dup" })
+  assert(noSession.AGENT_TOOLS_OPENCODE === undefined, "S3: a call without sessionID must not be marked")
+  assert(client.calls.length === 0, `S3: no warn expected, got ${JSON.stringify(client.calls)}`)
+  console.log("ok S3 records are keyed by (sessionID, callID)")
+}
+
+// S2: shell.env の中で例外が起きても throw しない (env が無い・凍結・getter が throw、input が無い)。
+{
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, {})
+  await hooks["tool.execute.before"]({ tool: "bash", sessionID: "s1", callID: "model-2" }, { args: { command: "ls" } })
+  const cases = [
+    ["no env", { cwd: ctxDir, sessionID: "s1", callID: "model-2" }, {}],
+    ["frozen env", { cwd: ctxDir, sessionID: "s1", callID: "model-2" }, { env: Object.freeze({ CLAUDECODE: "1" }) }],
+    ["throwing getter", { cwd: ctxDir, sessionID: "s1", callID: "model-2" }, Object.defineProperty({}, "env", { get() { throw new Error("boom") } })],
+    ["no input", undefined, { env: {} }],
+  ]
+  for (const [label, input, output] of cases) {
+    try {
+      await withDeadline(hooks["shell.env"](input, output), DEADLINE_MARGIN_MS, `S2 ${label}`)
+    } catch (error) {
+      fail(`S2 ${label}: shell.env must not throw: ${error}`)
+    }
+  }
+  for (const input of [undefined, null, { tool: "bash" }]) {
+    try {
+      await withDeadline(hooks["tool.execute.before"](input, { args: {} }), DEADLINE_MARGIN_MS, "S2 before")
+    } catch (error) {
+      fail(`S2: tool.execute.before must not throw for ${JSON.stringify(input)}: ${error}`)
+    }
+  }
+  // 凍結された env と throw する getter は同じ hook の失敗なので warn は 1 回だけ。
+  assertWarns(client, 1, "S2 shell.env failures")
+  console.log("ok S2 shell.env and before never throw")
+}
+
 console.log("all opencode-plugin node cases passed")

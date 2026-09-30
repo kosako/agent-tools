@@ -40,13 +40,16 @@ git config --file "$GIT_CONFIG_GLOBAL" core.excludesFile /dev/null
 
 # 人間 (marker なし) として実行するための env 前置。
 as_human() {
-  env -u CLAUDECODE -u CODEX_THREAD_ID -u CODEX_SANDBOX HOME="$tmp/home" "$@"
+  env -u CLAUDECODE -u CODEX_THREAD_ID -u CODEX_SANDBOX -u AGENT_TOOLS_OPENCODE HOME="$tmp/home" "$@"
 }
 as_claude() {
-  env -u CODEX_THREAD_ID -u CODEX_SANDBOX CLAUDECODE=1 HOME="$tmp/home" "$@"
+  env -u CODEX_THREAD_ID -u CODEX_SANDBOX -u AGENT_TOOLS_OPENCODE CLAUDECODE=1 HOME="$tmp/home" "$@"
 }
 as_codex() {
-  env -u CLAUDECODE CODEX_THREAD_ID=test-thread HOME="$tmp/home" "$@"
+  env -u CLAUDECODE -u AGENT_TOOLS_OPENCODE CODEX_THREAD_ID=test-thread HOME="$tmp/home" "$@"
+}
+as_opencode() {
+  env -u CLAUDECODE -u CODEX_THREAD_ID -u CODEX_SANDBOX AGENT_TOOLS_OPENCODE=1 HOME="$tmp/home" "$@"
 }
 mkdir -p "$tmp/home"
 
@@ -67,6 +70,16 @@ def quiet
   orig = $stderr
   $stderr = StringIO.new
   yield
+ensure
+  $stderr = orig
+end
+
+# 診断の文言を確かめるときは、判定の戻り値ではなく stderr の中身を返す。
+def capture_stderr
+  orig = $stderr
+  $stderr = StringIO.new
+  yield
+  $stderr.string
 ensure
   $stderr = orig
 end
@@ -192,12 +205,59 @@ check("散文混在の末尾段落では pass しない (H206-02 R2)",
 check("散文混在段落は trailer_block にならない",
       AiTrailerGate.trailer_block(["subject", "", claude_tr, "more prose"]) == [])
 
+# OpenCode (#295 PR 3a): name は「OpenCode (<provider>/<model>)」、email は no-reply。
+oc_email = "noreply@opencode.invalid"
+oc = ->(name, email = oc_email) { "Co-Authored-By: #{name} <#{email}>" }
+[
+  ["anthropic", "OpenCode (anthropic/claude-sonnet-4-5)"],
+  ["model に / を含む", "OpenCode (openrouter/anthropic/claude-sonnet-4.5)"],
+  ["M12 の実物", "OpenCode (opencode-go/kimi-k3)"],
+  ["mock (claude 系)", "OpenCode (probe/claude-probe)"],
+  ["mock (gpt 系)", "OpenCode (probe/gpt-5-probe)"],
+  ["provider に大文字", "OpenCode (MyCustom-Provider/model-1)"],
+].each do |label, name|
+  check("opencode: #{label} で pass", quiet { AiTrailerGate.judge([:opencode], msg(oc.call(name))) } == 0)
+end
+check("opencode: 人間 co-author 併記は妨げない",
+      quiet { AiTrailerGate.judge([:opencode], msg(oc.call("OpenCode (opencode-go/kimi-k3)"), human_tr)) } == 0)
+check("opencode: トレーラ欠落は fail", quiet { AiTrailerGate.judge([:opencode], msg()) } == 1)
+["OpenCode", "OpenCode (anthropic)", "OpenCode ()", "OpenCode (/model)", "OpenCodeX (a/b)"].each do |name|
+  check("opencode: 形が不正な #{name.inspect} は fail", quiet { AiTrailerGate.judge([:opencode], msg(oc.call(name))) } == 1)
+end
+check("opencode: 非 no-reply email は fail",
+      quiet { AiTrailerGate.judge([:opencode], msg(oc.call("OpenCode (a/b)", "bot@example.com"))) } == 1)
+check("opencode: Claude トレーラだけは fail", quiet { AiTrailerGate.judge([:opencode], msg(claude_tr)) } == 1)
+check("opencode: Claude との併記は混在で fail",
+      quiet { AiTrailerGate.judge([:opencode], msg(oc.call("OpenCode (a/b)"), claude_tr)) } == 1)
+check("opencode: 形が不正でも混在の検出にかかる",
+      quiet { AiTrailerGate.judge([:claude], msg(claude_tr, oc.call("OpenCode"))) } == 1)
+check("opencode: 1 commit に model の異なる 2 本は fail",
+      quiet { AiTrailerGate.judge([:opencode], msg(oc.call("OpenCode (anthropic/claude-a)"), oc.call("OpenCode (anthropic/claude-b)"))) } == 1)
+check("opencode: 同じ model の 2 本は pass",
+      quiet { AiTrailerGate.judge([:opencode], msg(oc.call("OpenCode (a/b)"), oc.call("OpenCode (a/b)"))) } == 0)
+check("claude: OpenCode トレーラだけは fail", quiet { AiTrailerGate.judge([:claude], msg(oc.call("OpenCode (a/b)"))) } == 1)
+check("nested [:claude, :opencode]: OpenCode トレーラで pass",
+      quiet { AiTrailerGate.judge([:claude, :opencode], msg(oc.call("OpenCode (a/b)"))) } == 0)
+check("nested [:claude, :opencode]: Codex トレーラは fail (env に無い agent)",
+      quiet { AiTrailerGate.judge([:claude, :opencode], msg(codex_tr)) } == 1)
+missing_oc = capture_stderr { AiTrailerGate.judge([:opencode], msg()) }
+check("opencode: 欠落の文言に OpenCode の例が出る", missing_oc.include?("OpenCode (<provider>/<model>)"))
+check("opencode: 例の email は no-reply", missing_oc.include?(oc_email))
+mixed_oc = capture_stderr { AiTrailerGate.judge([:opencode], msg(oc.call("OpenCode (a/b)"), claude_tr)) }
+check("混在の文言は 3 種類に一般化 (名前を出す)", mixed_oc.include?("Claude と OpenCode"))
+
 # env marker の解釈
 check("CLAUDECODE で claude", AiTrailerGate.agents_from_env({ "CLAUDECODE" => "1" }) == [:claude])
 check("CODEX_THREAD_ID で codex",
       AiTrailerGate.agents_from_env({ "CODEX_THREAD_ID" => "t" }) == [:codex])
 check("両方で nested", AiTrailerGate.agents_from_env({ "CLAUDECODE" => "1", "CODEX_SANDBOX" => "x" }) == [:claude, :codex])
 check("空値は marker にしない", AiTrailerGate.agents_from_env({ "CLAUDECODE" => "" }) == [])
+check("AGENT_TOOLS_OPENCODE で opencode", AiTrailerGate.agents_from_env({ "AGENT_TOOLS_OPENCODE" => "1" }) == [:opencode])
+check("OpenCode の目印も空値は marker にしない", AiTrailerGate.agents_from_env({ "AGENT_TOOLS_OPENCODE" => "" }) == [])
+check("CLAUDECODE と併存で nested (既存の順の後ろ)",
+      AiTrailerGate.agents_from_env({ "CLAUDECODE" => "1", "AGENT_TOOLS_OPENCODE" => "1" }) == [:claude, :opencode])
+check("CLAUDECODE が空文字なら opencode だけ",
+      AiTrailerGate.agents_from_env({ "CLAUDECODE" => "", "AGENT_TOOLS_OPENCODE" => "1" }) == [:opencode])
 
 # git-identity: parse / findings / judge (#281)。値は診断に出ないことも見る。
 full = GitIdentityGate.parse("CANARY-NAME <canary@example.com> 1700000000 +0900")
@@ -439,6 +499,23 @@ echo three > "$repo2/h.txt"
 
 Co-Authored-By: Codex <codex@no-reply.example.com>") \
   || fail "codex commit with trailer should pass"
+
+# OpenCode marker (#295 PR 3a): trailer なしは block (文言に OpenCode の例)、trailer ありは通る
+echo four > "$repo2/i.txt"
+(cd "$repo2" && git add i.txt)
+set +e
+out=$(cd "$repo2" && as_opencode git commit -qm "opencode commit without trailer" 2>&1)
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "opencode commit without trailer should be blocked"
+case "$out" in
+  *"OpenCode (<provider>/<model>)"*) ;;
+  *) fail "the block message should show the OpenCode trailer example: $out" ;;
+esac
+(cd "$repo2" && as_opencode git commit -qm "opencode commit
+
+Co-Authored-By: OpenCode (opencode-go/kimi-k3) <noreply@opencode.invalid>") \
+  || fail "opencode commit with trailer should pass"
 
 # merge commit (MERGE_HEAD) は trailer 対象外
 (cd "$repo2" && git checkout -q -b feature && echo m > m.txt && git add m.txt \

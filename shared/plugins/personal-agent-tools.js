@@ -8,6 +8,9 @@
 // - safe-gh: bash の gh コマンドの後、personal-safe-gh-hook の注記を tool 結果の先頭に載せる。
 // - 品質ループ: 編集の後、personal-fast-edit-check の失敗要約を tool 結果の末尾に足す。
 //   session.idle で personal-changed-scope-qa を report-only で呼び、結果を log にだけ出す。
+// - 目印: model の bash の env に AGENT_TOOLS_OPENCODE=1 を立て、他の agent の目印
+//   (CLAUDECODE / CODEX_THREAD_ID / CODEX_SANDBOX) を空にする。personal-ai-trailer-gate が
+//   OpenCode の commit を見分けるため (docs/git-hook-gates.md)。人が打つ `!` と PTY には立てない。
 //
 // 強度ラベル (偽らない): steering / fail-open であって enforcement ではない。OpenCode に
 // 実行前の steer は無いので、注記は実行が済んだ後の同じ tool 結果に載る (model には届くが、
@@ -58,6 +61,16 @@ const EDIT_TOOL_NAMES = Object.freeze({ edit: "Edit", write: "Write", apply_patc
 // state に記録するので、共有すると model に届かない OpenCode の実行がその 1 回を先に使ってしまう。
 const QA_STATE_DIR_ENV = "AGENT_TOOLS_QA_STATE_DIR"
 const QA_STATE_DIR_SEGMENTS = [".cache", "agent-tools", "changed-scope-qa-opencode"]
+
+// OpenCode の目印 (personal-ai-trailer-gate の OPENCODE_MARKER と対)。OpenCode 自身の OPENCODE=1 は
+// `!` / PTY / 内部の git にも載るので使わない (#295 の M5)。
+const OPENCODE_MARKER = "AGENT_TOOLS_OPENCODE"
+// 他の agent の目印。herdr の pane や Claude の session の中から起動した OpenCode では漏れうるので、
+// model の bash では空にする (shell.env の output.env は string の Record で、変数を消せない。gate は
+// 空の値を目印とみなさない)。
+const FOREIGN_MARKERS = ["CLAUDECODE", "CODEX_THREAD_ID", "CODEX_SANDBOX"]
+// 目印を立てる callID の記録の上限 (after が呼ばれない失敗で記録が残っても、増え続けないように)。
+const MODEL_BASH_CALLS_MAX = 256
 
 function childEnv(extra) {
   const env = {}
@@ -200,6 +213,11 @@ async function server(input, options) {
   const warned = new Set()
   // changed-scope-qa の実行中の印。server() は directory ごとに呼ばれるので、instance に 1 つ。
   let qaRunning = false
+  // model の bash の (sessionID, callID) (記録専用の before で覚え、shell.env で突き合わせ、after で
+  // 忘れる)。`!` にも callID が付くので callID の有無では絞れない (M5)。PTY は callID を持たない。
+  // callID は provider の ID で session をまたいで一意とは限らず、instance は directory 単位で session を
+  // 共有するので、session と組にする。どちらかが欠ければ記録も一致もしない (目印を立てない側に倒れる)。
+  const modelBashCalls = new Set()
 
   // client が無い / log が throw・reject する場合も握る (log の失敗で hook を落とさない)。
   function log(level, message) {
@@ -319,8 +337,46 @@ async function server(input, options) {
     }
   }
 
+  function callKey(input) {
+    if (!input) return null
+    const { sessionID, callID } = input
+    if (typeof sessionID !== "string" || sessionID === "" || typeof callID !== "string" || callID === "") return null
+    return JSON.stringify([sessionID, callID])
+  }
+
+  function rememberModelBash(input) {
+    const key = callKey(input)
+    if (key === null || input.tool !== "bash") return
+    modelBashCalls.add(key)
+    if (modelBashCalls.size > MODEL_BASH_CALLS_MAX) modelBashCalls.delete(modelBashCalls.values().next().value)
+  }
+
+  function forgetModelBash(input) {
+    if (!input || input.tool !== "bash") return
+    const key = callKey(input)
+    if (key !== null) modelBashCalls.delete(key)
+  }
+
+  // model の bash の env にだけ目印を立て、他の agent の目印を空にする。
+  function markModelBash(input, output) {
+    const key = callKey(input)
+    if (key === null || !modelBashCalls.has(key)) return
+    const env = output.env
+    if (!env || typeof env !== "object") return
+    env[OPENCODE_MARKER] = "1"
+    for (const name of FOREIGN_MARKERS) env[name] = ""
+  }
+
   return {
+    // 記録専用。throw も args の書き換えもしない (実行を止める経路は使わない)。
+    "tool.execute.before": async (input) => {
+      await failOpen("tool.execute.before", "the OpenCode marker may be missing", () => rememberModelBash(input))
+    },
+    "shell.env": async (input, output) => {
+      await failOpen("shell.env", "the OpenCode marker was not set", () => markModelBash(input, output))
+    },
     "tool.execute.after": async (input, output) => {
+      await failOpen("tool.execute.after", "the bash call record was kept", () => forgetModelBash(input))
       await failOpen("tool.execute.after", "the tool result was left unchanged", () => annotateSafeGh(input, output))
       await failOpen("tool.execute.after", "the tool result was left unchanged", () => checkEdits(input, output))
     },

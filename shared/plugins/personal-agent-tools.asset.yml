@@ -8,24 +8,28 @@ risk:
   prompt_injection: low
   privacy: low
 # plugin kind は OpenCode の process の中で動く実行コード配布のため常に human review 必須 (#295)。
-# 本 plugin は #295 PR 1 で author≠reviewer レビューのうえ承認し、PR 2 (品質ループ) で
+# 本 plugin は #295 PR 1 で author≠reviewer レビューのうえ承認し、PR 2 (品質ループ) と PR 3a (目印) で
 # 再レビューする。承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:81e1cfd7f078be314c23fff4733cb0af950449273073c80d65c054536e9d288a
+  approved_build_id: sha256:f0638cab959c04be622c8e8187b0f430dfda57b2946024a5e16c3aa1329a0dfa
   approved_artifact_kind: plugin
 source:
   path: shared/plugins/personal-agent-tools.js
   format: text
 summary: >-
-  OpenCode plugin (v1 形、tool.execute.after と event)。Claude Code target に配った hook script を
-  Claude 形の payload で無改変に呼び、文言と判定は script のものをそのまま使う (plugin では持たない)。
+  OpenCode plugin (v1 形、tool.execute.before (記録専用) / shell.env / tool.execute.after / event)。
+  Claude Code target に配った hook script を Claude 形の payload で無改変に呼び、文言と判定は script の
+  ものをそのまま使う (plugin では持たない)。
   safe-gh: model の bash が gh コマンドを実行した後、personal-safe-gh-hook の additionalContext
   (personal-safe-gh で data として読む誘導) を tool 結果の先頭に載せる。品質ループ: 成功した
   edit / write / apply_patch の後、file ごとに personal-fast-edit-check を呼び、失敗要約を tool 結果の
   末尾に足す (総予算 30 秒)。session.idle では personal-changed-scope-qa を report-only で呼び
   (子 session は除外、実行中は skip、state dir は OpenCode 用)、結果を client.app.log にだけ出す
-  (model を続けさせる API と toast は使わない)。fail-open (script が無い / 実行できない / 非 0 /
-  非 JSON / timeout はすべて無変更・無報告で、warn を script ごとに 1 回だけ client.app.log に出す) で、
+  (model を続けさせる API と toast は使わない)。目印: 記録専用の before で覚えた model の bash の callID に
+  だけ、shell.env で AGENT_TOOLS_OPENCODE=1 を立て、CLAUDECODE / CODEX_THREAD_ID / CODEX_SANDBOX を空にする
+  (personal-ai-trailer-gate が OpenCode の commit を見分けるため。人が打つ ! と PTY には立てない)。
+  fail-open (script が無い / 実行できない / 非 0 / 非 JSON / timeout はすべて無変更・無報告で、warn を
+  script ごとに 1 回だけ client.app.log に出す) で、
   steering であって enforcement ではない。--pure で外せる。

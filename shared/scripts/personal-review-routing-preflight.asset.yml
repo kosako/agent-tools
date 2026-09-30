@@ -9,12 +9,13 @@ risk:
   prompt_injection: low
   privacy: low
 # script kind は実行コード配布のため常に human review 必須 (#147)。
-# 本 script は #202 (Phase 1) の実装 PR で author≠reviewer レビューのうえ承認。
+# 本 script は #202 (Phase 1) の実装 PR で author≠reviewer レビューのうえ承認し、
+# #295 PR 3a (OpenCode) で再レビューする。
 # 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:06161ea3a727c4f4db428ba93d98bb98e0b87f52f4ff1c4d531df3f4c0bb60a4
+  approved_build_id: sha256:6542a00deec069b421355991ae93bb6d4feafffdb081bf06b0e54ee811eebae7
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-review-routing-preflight.rb
@@ -22,6 +23,8 @@ source:
 summary: >-
   相互レビューの reviewer routing を PR 単位で機械判定する決定的 script (レビュー依頼時の
   消費側検査)。全 commit の Co-Authored-By トレーラを ai-trailer-gate と双子の保守近似で
-  分類し、単一 AI なら反対側を reviewer に (exit 0)、混在・欠落・皆無は fail-closed
-  (exit 1)。出力は oid 短縮 + 分類ラベルのみで untrusted な本文・author 名を含めない。
-  規範の正本は personal-review-request skill。
+  分類し、単一 AI なら閉じた表で reviewer を決める (exit 0。Claude → Codex、Codex → Claude、
+  OpenCode は中身の model の系列で Anthropic 系 → Codex / OpenAI 系 → Claude / それ以外 → Claude。
+  系列表の正本はこの script)。混在・欠落・皆無・OpenCode の形の不正や系列の曖昧は fail-closed
+  (exit 1)。出力は oid 短縮 + 閉じた表の分類ラベルのみで、untrusted な本文・author 名・OpenCode の
+  provider/model を含めない。規範の正本は personal-review-request skill。
