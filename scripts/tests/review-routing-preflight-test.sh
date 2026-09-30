@@ -37,6 +37,28 @@ check("人間 co-author 併記 -> :claude",
       cls("s\n\n#{CLAUDE_TR}\nCo-Authored-By: Alice <a@example.com>") == :claude)
 check("nil body -> :none", cls(nil) == :none)
 
+# OpenCode (#295 PR 3a): 中身の model の系列で分類する。
+OC_EMAIL = ["noreply", "opencode.invalid"].join("@")
+def oc(id)
+  "Co-Authored-By: OpenCode (#{id}) <#{OC_EMAIL}>"
+end
+{
+  opencode_anthropic: %w[anthropic/claude-sonnet-4-5 openrouter/anthropic/claude-sonnet-4.5
+                         github-copilot/claude-sonnet-4 amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+                         probe/claude-probe],
+  opencode_openai: %w[openai/gpt-5 opencode/gpt-5.1-codex github-copilot/gpt-5 azure/o4-mini probe/gpt-5-probe],
+  opencode_other: %w[google/gemini-2.5-pro opencode-go/kimi-k3],
+  opencode_unknown: %w[openrouter/claude-gpt-hybrid],
+}.each do |want, ids|
+  ids.each { |id| check("OpenCode (#{id}) -> :#{want}", cls("s\n\n#{oc(id)}") == want) }
+end
+check("形が不正な OpenCode -> :opencode_unknown", cls("s\n\nCo-Authored-By: OpenCode (anthropic) <#{OC_EMAIL}>") == :opencode_unknown)
+check("小文字の opencode は AI 名ではない -> :none", cls("s\n\nCo-Authored-By: opencode (anthropic/claude-x) <#{OC_EMAIL}>") == :none)
+check("OpenCode と Claude の併記 -> :mixed", cls("s\n\n#{oc('anthropic/claude-x')}\n#{CLAUDE_TR}") == :mixed)
+check("anthropic と openai の OpenCode の併記 -> :mixed", cls("s\n\n#{oc('anthropic/claude-x')}\n#{oc('openai/gpt-5')}") == :mixed)
+check("1 commit に同じ系列の異なる model -> :mixed", cls("s\n\n#{oc('anthropic/claude-a')}\n#{oc('anthropic/claude-b')}") == :mixed)
+check("同じ model の 2 本 -> その系列", cls("s\n\n#{oc('anthropic/claude-a')}\n#{oc('anthropic/claude-a')}") == :opencode_anthropic)
+
 def judge(pairs)
   ReviewRoutingPreflight.judge(pairs)
 end
@@ -49,6 +71,24 @@ check("mixed commit で fail-closed", judge([["a" * 8, :mixed]])[:verdict] == :f
 check("trailer 欠落で fail-closed", judge([["a" * 8, :claude], ["b" * 8, :none]])[:verdict] == :fail_closed)
 check("複数 AI 混在で fail-closed", judge([["a" * 8, :claude], ["b" * 8, :codex]])[:verdict] == :fail_closed)
 check("commit ゼロは error", judge([])[:verdict] == :error)
+
+# reviewer の閉じた表
+{
+  opencode_anthropic: :codex,
+  opencode_openai: :claude,
+  opencode_other: :claude,
+}.each do |author, reviewer|
+  r = judge([["a" * 8, author]])
+  check("#{author} -> reviewer #{reviewer}", r[:verdict] == :ok && r[:author] == author && r[:reviewer] == reviewer)
+end
+check(":opencode_unknown は fail-closed", judge([["a" * 8, :opencode_unknown]])[:verdict] == :fail_closed)
+check("表に無い分類 (:foo) は fail-closed", judge([["a" * 8, :foo]])[:verdict] == :fail_closed)
+r = judge([["a" * 8, :opencode_anthropic], ["b" * 8, :opencode_anthropic]])
+check("別々の commit の同じ系列 (model は異なりうる) は ok", r[:verdict] == :ok && r[:reviewer] == :codex)
+check("OpenCode と Claude の commit の混在は fail-closed",
+      judge([["a" * 8, :opencode_anthropic], ["b" * 8, :claude]])[:verdict] == :fail_closed)
+check("label は閉じた表", ReviewRoutingPreflight.label(:opencode_anthropic) == "opencode(anthropic)" &&
+                          ReviewRoutingPreflight.label(:none) == "none")
 
 check("short_oid は hex のみ通す", ReviewRoutingPreflight.short_oid("0123abcd" * 5) == "0123abcd")
 check("short_oid は非 hex を unknown に", ReviewRoutingPreflight.short_oid("evil; rm -rf") == "unknown")
@@ -98,8 +138,14 @@ File.write(ARGV[4], JSON.generate(pages_ok))
 pages_tail = Marshal.load(Marshal.dump(pages_ok))
 pages_tail[1][-1] = c.call(sha.call(149), "s149\n\n#{codex_tr}")
 File.write(ARGV[5], JSON.generate(pages_tail))
+# OpenCode だけの PR。provider/model に canary を埋めた commit を含む (label だけが出ること)。
+oc_email = ["noreply", "opencode.invalid"].join("@")
+File.write(ARGV[6], JSON.generate([[
+  c.call(sha.call(0), "x\n\nCo-Authored-By: OpenCode (anthropic/claude-sonnet-4-5) <#{oc_email}>"),
+  c.call(sha.call(1), "y\n\nCo-Authored-By: OpenCode (canaryprov/claude-OCCANARY-model) <#{oc_email}>"),
+]]))
 ' "$canary" "$tmp/fx-claude.json" "$tmp/fx-mixed.json" "$tmp/fx-none.json" \
-  "$tmp/fx-2page-ok.json" "$tmp/fx-2page-tail.json"
+  "$tmp/fx-2page-ok.json" "$tmp/fx-2page-tail.json" "$tmp/fx-opencode.json"
 
 run_pf() {
   env PATH="$fakebin:$PATH" FAKE_GH_FIXTURE="$1" ruby "$src" "$2" ${3:+--repo "$3"}
@@ -113,6 +159,22 @@ set -e
 [ "$rc" -eq 0 ] || fail "all-claude PR should route (rc=$rc): $out"
 echo "$out" | grep -q "reviewer: codex" || fail "should print reviewer codex: $out"
 case "$out" in *"INJECTION-CANARY"*) fail "output must not echo commit message bodies: $out" ;; esac
+# stdout 全体が #295 PR 3a より前と完全に一致する (label の表に替えても Claude / Codex の出力は不変)
+out=$(run_pf "$tmp/fx-claude.json" 206 2>/dev/null)
+expected="commit 00000000: claude
+commit 00000000: claude
+reviewer: codex (author=claude, 2 commit(s))"
+[ "$out" = "$expected" ] || fail "all-claude stdout must stay byte-identical: $out"
+
+# OpenCode だけ -> 系列の label と reviewer。provider/model の canary は出さない
+set +e
+out=$(run_pf "$tmp/fx-opencode.json" 206 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "all-opencode(anthropic) PR should route (rc=$rc): $out"
+echo "$out" | grep -q "^commit 00000000: opencode(anthropic)$" || fail "should print the opencode label per commit: $out"
+echo "$out" | grep -q "^reviewer: codex (author=opencode(anthropic), 2 commit(s))$" || fail "should route opencode(anthropic) to codex: $out"
+case "$out" in *OCCANARY*|*canaryprov*) fail "output must not echo the OpenCode provider/model: $out" ;; esac
 
 # --repo が REST path に埋まり、--paginate --slurp が付く
 : > "$tmp/gh-argv.log"
