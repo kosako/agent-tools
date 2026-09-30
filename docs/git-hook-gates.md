@@ -142,7 +142,8 @@ AI agent セッション由来の commit に相互レビュー routing の正本
 | marker なし (人間・他 tool) | 無言 pass |
 | `CLAUDECODE` のみ | name が `Claude` 始まりのトレーラ 1 本以上 |
 | `CODEX_THREAD_ID` / `CODEX_SANDBOX` のみ | name が `Codex` 始まりのトレーラ 1 本以上 |
-| 両方 (nested 実行: Claude → codex exec 等) | いずれかの有効な AI トレーラ 1 本以上 |
+| `AGENT_TOOLS_OPENCODE` のみ (#295。OpenCode の plugin が model の bash に立てる) | name が `OpenCode (<provider>/<model>)` のトレーラ 1 本以上 |
+| 複数 (nested 実行: Claude → codex exec 等) | env にある agent のどれかの有効なトレーラ 1 本以上 (env に無い agent のトレーラだけでは通さない) |
 
 - AI トレーラの email は no-reply 形式 (`no-?reply` を含む) のみ許可。この regex が
   「email は公開してよい no-reply / bot 用に限る」(operating-rules) の機械判定可能な
@@ -154,7 +155,14 @@ AI agent セッション由来の commit に相互レビュー routing の正本
   - 判断: OpenAI 自身が使う email が同じ account に解決されるので、OpenAI の Codex の account とみなし、
     今の email を維持する。email の verified 状態や account の管理主体は、直接は確かめていない。
   - この形の no-reply は login で紐づくので、login が変わると紐づき先も動きうる。
-- 1 commit に Claude 系と Codex 系のトレーラが混在したら fail-closed (routing 判定不能)。
+- 1 commit に複数の AI (Claude / Codex / OpenCode) のトレーラが混在したら fail-closed (routing 判定不能)。
+- **AI 名**は name が `Claude` / `Codex` / `OpenCode` で始まるもの (#295 で OpenCode を追加)。`OpenCode` で
+  始まるトレーラは形を問わず OpenCode のものとして拾い、形 `OpenCode (<provider>/<model>)` を検査する
+  (`<provider>/<model>` は OpenCode の model 指定の文字列そのままで、model は `/` を含みうる)。形が不正なら
+  fail で、形が不正でも混在の検出にはかける。1 commit に model の異なる OpenCode トレーラがあれば fail
+  (1 commit に 1 model。reviewer は model の系列で決まるため)。
+- OpenCode のトレーラの email は `noreply@opencode.invalid` (RFC 2606 の予約 domain で、どの account にも
+  紐づかない) を使う。gate は OpenCode の email を固定せず、上の no-reply の床を Claude / Codex と共通に保つ。
 - 人間の co-author トレーラ (AI 名以外) は自由 (検査対象外)。
 - **merge commit (MERGE_HEAD あり) は対象外** (authored commit の契約。merge は
   レビュー済み作業の合成)。
@@ -162,12 +170,29 @@ AI agent セッション由来の commit に相互レビュー routing の正本
 - env marker は**観測された事実であって両 CLI の公開契約ではない** (#201 実測,
   Claude Code 2.1.207 / codex 0.144.1)。CLI 更新で消えた場合、gate は人間 commit と
   同じ扱い (無言 pass) に fail-open で倒れる。CLI 更新時の smoke test で生存確認する。
+- **OpenCode の marker は agent-tools の plugin が立てる** (#295)。OpenCode には session を示す env が無く
+  (`OPENCODE_SESSION_ID` は無い)、組み込みの `OPENCODE=1` は人が打つ `!` / PTY / OpenCode 内部の git にも
+  載るので、目印にしない (人の commit を AI の commit として block してしまう)。plugin
+  (`~/.config/opencode/plugins/personal-agent-tools.js`) は、記録専用の `tool.execute.before` で model の
+  bash の callID を覚え、`shell.env` で callID が一致したときだけ `AGENT_TOOLS_OPENCODE=1` を立てる (`!` にも
+  callID が付くので callID の有無では絞れない。PTY は callID を持たない)。実測は OpenCode 1.18.30
+  (2026-09-26、[opencode-plugin-probe](opencode-plugin-probe.md) の M5)。
+  - honest-label: plugin が読まれない (`opencode --pure`・読込失敗・撤去) と marker は立たず、gate は
+    人間の commit として通す。その場合の床は PR 単位の routing-preflight (trailer の無い commit は
+    fail-closed)。OpenCode を更新したら、probe で marker がまだ立つかを確かめる。
+  - 漏れ対策: herdr の pane や Claude の session の中から起動した OpenCode では、他の agent の marker
+    (`CLAUDECODE` / `CODEX_THREAD_ID` / `CODEX_SANDBOX`) が model の bash に漏れうる。漏れると gate は
+    nested と判定して Claude のトレーラを通してしまうので、plugin は model の bash でこれらを空文字にする
+    (`shell.env` では変数を消せない。gate は空の値を marker とみなさない)。plugin が読まれないときは
+    この対策も効かない。
 - exit: 0 = pass / 1 = 検証 fail / 2 = usage・入力エラー。
 
 ## 検証境界
 
 - 純粋ロジックと git 連携 (hooksPath 経由の commit / chain / 隔離 env) は
-  `scripts/tests/git-hook-gates-test.sh` が CI で検証する。
+  `scripts/tests/git-hook-gates-test.sh` が CI で検証する (OpenCode の marker の commit を含む)。
+- OpenCode の plugin が marker を model の bash にだけ立て、他の agent の marker を空にすることは
+  `scripts/tests/opencode-plugin-test.sh` (node) が CI で検証する (`!` / PTY に相当する入力には立たない)。
 - 実環境の配線 (dotfiles の shim + global git config・Codex 側 marker の生存) は CI 外
   (実機 smoke。実施記録は #202)。この実測以降 CLI は更新されており (2026-09-17 時点で
   Claude Code 2.1.273 / codex 0.153.4)、marker 挙動の再検証は未実施。
