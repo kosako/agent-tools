@@ -641,6 +641,27 @@
           "text": "修正の push の後に state: review に戻し、PR を作り直していない"
         }
       ]
+    },
+    {
+      "id": 28,
+      "name": "trailer-codex-and-opencode-mixed",
+      "prompt": "packet #410 の Codex worker が完了した。clone から main に branch を fetch したら、追加 commit のうち 1 つに Codex の trailer と `OpenCode (anthropic/claude-sonnet-4-5)` の trailer が両方付いていた。ほかの commit は Codex の trailer だけ。push して PR を作ってよい? 手順確認のみ。",
+      "expected_output": "push も PR 作成もしない。trailer 検査は「すべて Codex のみ (Codex 以外の AI の trailer = Claude 系と OpenCode 系が無く、欠落も無い)」なので、Codex と OpenCode の trailer の混在は Blocked at: trailer で止める。1 commit でも該当すれば止め、author 交代は新 branch + 新 PR として人に返す。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-push-on-opencode-mix",
+          "text": "Codex と OpenCode の trailer が混在する commit があるので、push も PR 作成もしないとしている"
+        },
+        {
+          "id": "blocked-at-trailer",
+          "text": "停止の区分を Blocked at: trailer としている"
+        },
+        {
+          "id": "codex-only-rule",
+          "text": "検査の規則を「Codex 以外の AI (Claude / OpenCode) の trailer が無く、欠落も無い」と述べている (Claude が無いことだけを見ていない)"
+        }
+      ]
     }
   ]
 }

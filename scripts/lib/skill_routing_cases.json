@@ -74,6 +74,20 @@
       "must_not": ["personal-codex-review"]
     },
     {
+      "id": "review-opencode-openai-codex-requested",
+      "cluster": "review",
+      "prompt": "OpenCode (OpenAI の model) が書いた PR に Codex で cross-review して",
+      "primary": "personal-review-request",
+      "must_not": ["personal-codex-review"]
+    },
+    {
+      "id": "review-opencode-anthropic-comment",
+      "cluster": "review",
+      "prompt": "OpenCode (Anthropic の model) が書いた PR に review 結果をコメントして",
+      "primary": "personal-review-request",
+      "must_not": []
+    },
+    {
       "id": "grill-no-artifact",
       "cluster": "grill",
       "prompt": "設計を壁打ちしたい。成果物は不要",

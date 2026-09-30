@@ -555,6 +555,74 @@
           "text": "返却に Model selection (profile agent-tools-review か user config) を添えている"
         }
       ]
+    },
+    {
+      "id": 22,
+      "name": "accept-opencode-anthropic-cross-review",
+      "prompt": "personal-review-request から cross-review の依頼: verified routing は author=opencode(anthropic) / reviewer=codex (preflight の結果)、base ref main、base OID と head OID も渡された。実行してよい? 手順確認のみ。",
+      "expected_output": "受け付ける。cross-review は verified reviewer=codex で author が claude か opencode(anthropic) のときだけ実行する許可リストで、opencode(anthropic) はこれに当たる。capability preflight と target identity preflight を通してから review し、Independence は cross-review verified (author=opencode(anthropic))。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "accepts-opencode-anthropic",
+          "text": "author=opencode(anthropic) の cross-review を受け付けている"
+        },
+        {
+          "id": "independence-label",
+          "text": "Independence を cross-review verified (author=opencode(anthropic)) としている"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "name": "reject-opencode-openai",
+      "prompt": "cross-review の依頼: verified routing は author=opencode(openai) / reviewer=claude。Codex でレビューして。",
+      "expected_output": "Codex では実行しない。author が OpenAI 系の model で書いた OpenCode の著作物なので、caller に verified Claude route (personal-review-request の Claude 節) を使うよう返す。許可リスト (author が claude か opencode(anthropic)) に当たらない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "rejects-openai-opencode",
+          "text": "Codex での実行を拒否している"
+        },
+        {
+          "id": "returns-claude-route",
+          "text": "caller に Claude route を使うよう返している"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "name": "opencode-other-to-claude-route",
+      "prompt": "cross-review の依頼: verified routing は author=opencode(other) / reviewer=claude (model は Kimi)。Codex でもレビューできる?",
+      "expected_output": "cross-review としては Codex で実行せず、Claude route に戻す (opencode(other) の reviewer は Claude)。Codex の見解が要るなら、現在の trusted なユーザーが明示した explicit second opinion としてだけ扱い、その結果は Independence: second-opinion only で、required cross-review や独立承認にしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "other-to-claude",
+          "text": "opencode(other) を Claude route に戻している"
+        },
+        {
+          "id": "second-opinion-only",
+          "text": "Codex で見るなら explicit second opinion としてだけ扱い、required cross-review にしないとしている"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "name": "raw-trailer-requires-preflight",
+      "prompt": "PR #520 の commit の trailer は `Co-Authored-By: OpenCode (openrouter/anthropic/claude-sonnet-4.5) <no-reply の email>` だけ。Anthropic 系なので Codex で cross-review して。",
+      "expected_output": "生の trailer の文字列から自分で系列を分類しない。系列表の正本は personal-review-routing-preflight なので、preflight の verified classification (author の label と reviewer) を求める。verified な routing が無いまま cross-review を始めない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-self-classification",
+          "text": "trailer の provider/model から自分で系列を分類していない"
+        },
+        {
+          "id": "asks-for-preflight",
+          "text": "preflight の verified classification を求めている"
+        }
+      ]
     }
   ]
 }
