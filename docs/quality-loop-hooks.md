@@ -173,8 +173,8 @@ M13 / M14 / M17 (OpenCode 1.18.30)。
     確かめたのは bash の結果の先頭の書き換え (model に届き、TUI には描き直されない)。編集系の結果の
     末尾への追記が model に届くことは、2026-09-30 の実機 smoke で確かめた (model が返答で、追記にしか
     無い check 名と失敗の中身に触れた)。
-  - changed-scope-qa の結果は log file にしか出ないので、**OpenCode では変更範囲の検査の結果に人が
-    気づけない**。後ろに git hook / CI / 相互レビューがある前提で割り切る (#295 の判断。OpenCode を
+  - changed-scope-qa の結果は log にだけ出て、TUI には通知されないので、**OpenCode では変更範囲の
+    検査の結果に人が気づけない**。後ろに git hook / CI / 相互レビューがある前提で割り切る (#295 の判断。OpenCode を
     主に使うようになったら通知の経路を見直す)。
   - `opencode run` では idle の後の非同期の処理が打ち切られうる (M10) ので、run では changed-scope-qa
     の結果が残らないことがある (TUI と serve では残る)。
@@ -194,9 +194,12 @@ M13 / M14 / M17 (OpenCode 1.18.30)。
   こと、fail-open)。OpenCode の実機での確認は CI 外の smoke (人 + Claude) で行う。2026-09-30 に
   OpenCode 1.18.30 (`opencode-go/kimi-k3`、`opencode serve` + `opencode run --attach`) で次を確かめた:
   構文エラーを入れた `edit` の結果の末尾に要約が載り model に届く / 直した `edit` には載らない /
-  壊れた scope の `session.idle` で changed-scope-qa の `ERROR` が log に出て、直した後は何も出ない。判定は
-  model の返答ではなく DB の part と log で行った。`apply_patch` の経路 (gpt 系の model) と TUI は実機では
-  確かめておらず、node の test だけで確かめている。
+  壊れた scope の `session.idle` で changed-scope-qa の `ERROR` が log に出て、直した後は何も出ない。根拠は
+  項目ごとに分ける: 追記の有無と位置は DB に保存された tool の part、model に届いたことは返答 (追記にしか
+  無い check 名と失敗の中身に触れた)、changed-scope-qa の報告は log (serve の stderr と log file)、直した後の
+  結果は QA の state (`pass`)。`apply_patch` の経路 (gpt 系の model) は実機では確かめておらず、node の test
+  だけで確かめている。TUI での表示は今回の smoke では確かめていない (node の test が確かめるのは、TUI の
+  API を呼ばないことだけ)。
 - Stop の回帰テストは warning JSON に `systemMessage` だけがあり、継続を要求する
   field がないことを検証する。fixture 検証は実 runner の継続回数や UI 表示の観測ではない。
 - 実配線 (settings.json / hooks.json への登録・Codex payload / Stop の実測) は CI 外
