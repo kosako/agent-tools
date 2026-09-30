@@ -1,6 +1,6 @@
 ---
 name: personal-codex-review
-description: Codex CLI で branch diff / commit / uncommitted changes を検査し、結果だけを返す review executor skill。明示的な Codex second opinion、または personal-review-request が verified author=Claude か Anthropic 系の model で書いた OpenCode の著作物 (author=opencode(anthropic)) と判定した cross-review で使う。verified author=Codex / opencode(openai) / opencode(other) は Claude route へ戻し、mixed / unknown author は human 裁定へ fail-closed hand-off する。GitHub lifecycle (personal-review-request) や Codex 著作物の独立 review には使わない。
+description: Codex CLI で branch diff / commit / uncommitted changes を検査し、結果だけを返す review executor skill。明示的な Codex second opinion、または personal-review-request が routing を確定して渡した cross-review (verified author=Claude か opencode(anthropic)) で使う。PR の author の判定と reviewer の決定は personal-review-request が行い、この skill は routing をしない。それ以外の verified author は Claude route へ戻し、mixed / unknown author は human 裁定へ fail-closed hand-off する。GitHub lifecycle (personal-review-request) や Codex 著作物の独立 review には使わない。
 ---
 
 # personal-codex-review
