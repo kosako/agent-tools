@@ -42,8 +42,8 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
 - subagent であっても、自分の branch と PR を作るなら 1 つの作業単位として数える。実装を複数の PR に
   分ける fan-out は、1 枠の中で順番に出す (前の PR が review に入ってから次を出す)。
 - review・監査・調査のような read-only の fan-out は、何本走らせても数えない。
-- subagent と ultracode は親と同じ残量を使う。重い fan-out を予定しているときは、割当のときに
-  その分を差し引いて考える。
+- subagent と ultracode は親と同じ枠を使う。割当では予定の消費を差し引かず、枠が実際に枯渇したときだけ
+  割当の規則 2 で扱う。
 
 **未検証**: 同じ種類の worker を複数同時に走らせる N 並列は、この doc の範囲に入れていません。1 + 1
 自体もまだ実際に回していないので、最初の 1 回を検証として扱い、その経験を見て N 並列を別の Issue に

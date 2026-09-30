@@ -24,7 +24,7 @@ URL、local path、secret、credential、client/work material は含めません
 - project planning / management docs を repository 外で別管理する。
 - 実作業を GitHub Issue と PR で追跡する。
 - public repository には公開可能な policy、仕様、運用ルールだけを残す。
-- 作業単位 (PR) の実装担当を、向き不向きと (枠のある tool の) 残量で振り分ける。
+- 作業単位 (PR) の実装担当を決める (既定は Claude。Codex は cross-review と、人の明示・Claude の枠の枯渇のときの worker)。
 - agent が毎回同じ進め方を再現できるようにする。
 
 ## 基本 loop
@@ -98,9 +98,10 @@ round、停止からの再開)、status の確認、継続の作業では割当�
   Claude が subagent に作業を切り出すときで、3 条件を満たす作業には Claude が Sonnet 5.5 を指定する (それ以外は
   親の model を継ぐ)。Fable 5.1 へは、運用 instruction の reasoning escalation (深掘り型) の提案を受けて人が
   切り替える。
-- **Codex の effort の値の正本は dotfiles**: review / worker の effort は Codex home の profile file
-  (`agent-tools-review.config.toml` / `agent-tools-worker.config.toml`) で決まり、中身は dotfiles が持つ。
-  この workflow には値を書かない (machine ごとに変えられるため)。model は Codex の設定の既定を使う。
+- **Codex の model と effort の値の正本は dotfiles**: model / effort は user の Codex の設定を使い、役割別の
+  profile file (Codex home の `agent-tools-review.config.toml` / `agent-tools-worker.config.toml`) があれば
+  その値が優先する (review は profile を重ね、worker の preflight は profile の model / effort を base の設定より
+  優先する)。profile の中身は dotfiles が持ち、この workflow には値を書かない (machine ごとに変えられるため)。
 - model の名前は 2026-10 時点のもの。新しい model が出たら、#313 の材料をもとにこの表を見直す。
 
 **残量を読む (枯渇の確認だけ。人には聞かない)**: 割当のときに、残量の読み取り口があれば読み、規則 2 に
