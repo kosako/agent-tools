@@ -51,6 +51,12 @@ function readLines(path) {
 
 // --- fixture: case ごとの home (3 本の script を同じ body で置く) ---------------------------
 
+// 記録用 script の 1 行: <script>\t<sentinel か unset>\t<AGENT_TOOLS_CHECKS_CONFIG か unset>
+const ENV_SENTINEL = "OPENCODE_PLUGIN_TEST_SENTINEL"
+function envLine(script) {
+  return `printf '%s\\t%s\\t%s\\n' ${script} "\${${ENV_SENTINEL}-unset}" "\${AGENT_TOOLS_CHECKS_CONFIG-unset}" >> "$HOME/env.log"\n`
+}
+
 function makeHome(label, body, mode, overrides = {}) {
   const home = join(workDir, `home-${label}`)
   const dir = join(home, ...SCRIPTS_DIR)
@@ -77,11 +83,12 @@ const homes = {
   // pid を cwd (= fake ctx の directory) に書いてから寝る。group kill で子 (sh) と孫 (sleep) が
   // 消えることを確かめるため。
   slow: makeHome("slow", "#!/bin/sh\necho $$ > child.pid\nsleep 5 &\necho $! > grandchild.pid\nwait\n", 0o755),
-  // 起動と payload / env / cwd を $HOME の下に記録する (出力なしの exit 0)。changed-scope-qa は
-  // 実行中の idle を skip することを確かめるため少し寝る。
-  recorder: makeHome("recorder", "#!/bin/sh\nexit 0\n", 0o755, {
-    [FAST_EDIT]: '#!/bin/sh\ncat >> "$HOME/edit-payloads.log"\necho >> "$HOME/edit-payloads.log"\n',
-    [QA]: '#!/bin/sh\nprintf \'%s\\t%s\\t%s\\n\' "$AGENT_TOOLS_QA_STATE_DIR" "$(pwd -P)" "$(cat)" >> "$HOME/qa-starts.log"\nsleep 0.3\n',
+  // 起動と payload / env / cwd を $HOME の下に記録する (出力なしの exit 0)。env.log には、許可外の
+  // sentinel と AGENT_TOOLS_CHECKS_CONFIG が子 process から見えるかを script ごとに書く。
+  // changed-scope-qa は実行中の idle を skip することを確かめるため少し寝る。
+  recorder: makeHome("recorder", `#!/bin/sh\ncat > /dev/null\n${envLine(SAFE_GH)}`, 0o755, {
+    [FAST_EDIT]: `#!/bin/sh\ncat >> "$HOME/edit-payloads.log"\necho >> "$HOME/edit-payloads.log"\n${envLine(FAST_EDIT)}`,
+    [QA]: `#!/bin/sh\nprintf '%s\\t%s\\t%s\\n' "$AGENT_TOOLS_QA_STATE_DIR" "$(pwd -P)" "$(cat)" >> "$HOME/qa-starts.log"\n${envLine(QA)}sleep 0.3\n`,
   }),
   // fast-edit-check が bad.rb でだけ非 0 で終わり、ほかの file には file 名入りの要約を返す。
   flaky: makeHome("flaky", "#!/bin/sh\nexit 0\n", 0o755, {
@@ -191,9 +198,9 @@ function forbidden(name) {
   return () => fail(`${name} must never be called (the plugin must not continue the model or show a toast)`)
 }
 
-// session.get: parents[id] があればその parentID を持つ子 session として返す。
-// getMode: "ok" / "throw" / "empty" (data が無い)。
-function makeClient(mode, { parents = {}, getMode = "ok" } = {}) {
+// session.get: parents[id] があればその parentID を持つ子 session として返す。waits[id] があれば、
+// その promise が解決するまで返さない (lookup の遅れを再現する)。getMode: "ok" / "throw" / "empty" (data が無い)。
+function makeClient(mode, { parents = {}, waits = {}, getMode = "ok" } = {}) {
   const calls = []
   const log = (arg) => {
     assertLogShape(arg)
@@ -205,6 +212,7 @@ function makeClient(mode, { parents = {}, getMode = "ok" } = {}) {
   const get = async (arg) => {
     const id = arg && arg.path ? arg.path.id : undefined
     assert(typeof id === "string" && id !== "", `session.get must be called with {path: {id}}, got ${JSON.stringify(arg)}`)
+    if (waits[id]) await waits[id]
     if (getMode === "throw") throw new Error("fake session.get throws")
     if (getMode === "empty") return { data: undefined }
     return { data: parents[id] === undefined ? { id } : { id, parentID: parents[id] } }
@@ -711,6 +719,28 @@ const qaStateDir = (home) => join(home, ...QA_STATE_REL)
   console.log("ok Q2 only a top-level session.idle starts the script, one at a time")
 }
 
+// Q2b: 実行中に来た idle は、親子の判定 (session.get) を待つ間に前の実行が終わっても、後から起動しない。
+{
+  const starts = join(homes.recorder, "qa-starts.log")
+  let release
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  const client = makeClient("ok", { waits: { late: held } })
+  const hooks = await makeHooks(client, { timeoutMs: { changedScopeQa: REAL_TIMEOUT_MS } }, qaRepo)
+  const before = readLines(starts).length
+  process.env.HOME = homes.recorder
+  const first = hooks.event({ event: idle() })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  const second = hooks.event({ event: idle("late") })
+  await withDeadline(first, REAL_TIMEOUT_MS, "Q2b first")
+  release()
+  await withDeadline(second, REAL_TIMEOUT_MS, "Q2b second")
+  assert(readLines(starts).length === before + 1, `Q2b: an idle that arrived while running must not start later, got ${readLines(starts).length - before} start(s)`)
+  assert(client.calls.length === 0, `Q2b: no log expected, got ${JSON.stringify(client.calls)}`)
+  console.log("ok Q2b an idle that arrived while running is skipped even if its lookup resolves later")
+}
+
 // Q3: 親子の判定ができないときは起動せず warn を 1 回 (session.get が throw / data が無い)。
 for (const getMode of ["throw", "empty"]) {
   const starts = join(homes.recorder, "qa-starts.log")
@@ -751,5 +781,34 @@ for (const mode of ["throw", "reject"]) {
   assert(client.calls.length === 1 && client.calls[0].body.level === "error", `Q4 app.log ${mode}: the report must still be attempted once`)
 }
 console.log("ok Q4 log failures are swallowed")
+
+// V1: 子 process の env は絞る。許可外の sentinel は 3 本のどれからも見えず、AGENT_TOOLS_CHECKS_CONFIG は
+// 渡り、changed-scope-qa の state dir は親の AGENT_TOOLS_QA_STATE_DIR ではなく plugin の値になる。
+{
+  const envLog = join(homes.recorder, "env.log")
+  const starts = join(homes.recorder, "qa-starts.log")
+  rmSync(envLog, { force: true })
+  process.env[ENV_SENTINEL] = "leaked"
+  process.env.AGENT_TOOLS_QA_STATE_DIR = join(workDir, "parent-qa-state")
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, { timeoutMs: { safeGh: REAL_TIMEOUT_MS, fastEditCheck: REAL_TIMEOUT_MS, changedScopeQa: REAL_TIMEOUT_MS } }, qaRepo)
+  await runAfter(hooks, homes.recorder, bashInput("gh issue view 1"), toolOutput(), REAL_TIMEOUT_MS, "V1 safe-gh")
+  await runAfter(hooks, homes.recorder, editInput("edit", join(qaRepo, "base.txt")), toolOutput(), REAL_TIMEOUT_MS, "V1 fast-edit-check")
+  const startsBefore = readLines(starts).length
+  await runEvent(hooks, homes.recorder, idle(), REAL_TIMEOUT_MS, "V1 changed-scope-qa")
+  delete process.env[ENV_SENTINEL]
+  delete process.env.AGENT_TOOLS_QA_STATE_DIR
+
+  const lines = readLines(envLog).map((line) => line.split("\t"))
+  assert(JSON.stringify(lines.map(([script]) => script)) === JSON.stringify([SAFE_GH, FAST_EDIT, QA]), `V1: each script must record its env once, got ${JSON.stringify(lines)}`)
+  for (const [script, sentinel, checksConfig] of lines) {
+    assert(sentinel === "unset", `V1: ${script} must not see ${ENV_SENTINEL} (got ${sentinel})`)
+    assert(checksConfig === configs.fake, `V1: ${script} must see AGENT_TOOLS_CHECKS_CONFIG=${configs.fake}, got ${checksConfig}`)
+  }
+  const [stateDir] = readLines(starts)[startsBefore].split("\t")
+  assert(stateDir === qaStateDir(homes.recorder), `V1: the plugin state dir must win over the parent's, got ${stateDir}`)
+  assert(client.calls.length === 0, `V1: no log expected, got ${JSON.stringify(client.calls)}`)
+  console.log("ok V1 child processes get only the allowed env")
+}
 
 console.log("all opencode-plugin node cases passed")

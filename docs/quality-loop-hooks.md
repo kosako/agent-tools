@@ -147,7 +147,8 @@ M13 / M14 / M17 (OpenCode 1.18.30)。
   `personal-agent-tools`)。
   - task の子 session の idle も同じ directory に届く (M9) ので、`client.session.get` の `parentID`
     で除外する。親子を判定できない (lookup の失敗・data が無い) ときは起動せず warn を出す。
-  - 実行中に来た idle は skip する (instance ごとに直列)。
+  - 実行中に来た idle は skip する (instance ごとに直列。親子の判定を待つ間も実行中に含めるので、判定の後で
+    前の実行が終わっていても、後から起動しない)。
   - toast は使わない: 1.18.30 の TUI は `showToast` が成功を返しても描かない (M17)。
 - **Stop の制約**: Stop のように、hook の戻り値で終了を止めて続けさせる仕組みは OpenCode に無い
   (`session.idle` は事後に届く fire-and-forget の event)。SDK で prompt を送れば続けさせられるが、

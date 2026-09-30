@@ -300,15 +300,16 @@ async function server(input, options) {
 
   // changed-scope-qa: session.idle で report-only に呼ぶ。Stop の block (exit 2) も警告も
   // client.app.log にだけ出し、model を続けさせる API (session.prompt 等) も toast も使わない
-  // (1.18.30 の TUI は toast を描かない: M17)。実行中に来た idle は skip する。
+  // (1.18.30 の TUI は toast を描かない: M17)。実行中に来た idle は skip する。実行中の印は最初の
+  // await より前に取り、親子の判定も含めて持つ (判定を待つ間に前の実行が終わっても、後から起動しない)。
   async function reportChangedScope(event) {
     if (!event || event.type !== "session.idle") return
     // 検査対象は directory の working tree。OpenCode の process の cwd を代わりに使わない。
     if (cwd === undefined) throw new Error("the plugin input has no directory")
-    if (await isChildSession(event.properties ? event.properties.sessionID : undefined)) return
     if (qaRunning) return
     qaRunning = true
     try {
+      if (await isChildSession(event.properties ? event.properties.sessionID : undefined)) return
       const payload = { hook_event_name: "Stop", stop_hook_active: false }
       const env = { [QA_STATE_DIR_ENV]: qaStateDir() }
       const report = qaReport(await spawnScript(CHANGED_SCOPE_QA_SCRIPT, payload, { cwd, timeoutMs: timeoutMs.changedScopeQa, env }))
