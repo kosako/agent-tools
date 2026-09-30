@@ -10,6 +10,7 @@ preflight を通過して review が完了した場合:
 Review process verdict: REJECT | Warning | APPROVE
 Finding summary: 🔴 must N / 🟡 should N / ⚪ nit N
 Independence: cross-review verified (author=claude) | second-opinion only
+Model selection: profile agent-tools-review | user config
 
 🔴 must
 - path/to/file:123 — finding

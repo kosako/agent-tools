@@ -92,6 +92,21 @@ OpenCode の tool home (`<opencode home>`。既定 `~/.config/opencode`) は複�
   には対応しない)。よって OpenCode で plugin を効かせるには、claude-code target の sync も済んで
   いる必要がある。script が無ければ plugin は no-op (fail-open) で、OpenCode を止めない。
 
+## Codex の review / worker 用 profile file (#339)
+
+- **中身は dotfiles**: `personal-codex-review` と `personal-codex-worker` の model / reasoning effort は、
+  Codex home (`$CODEX_HOME`、空なら `~/.codex`) の `agent-tools-review.config.toml` と
+  `agent-tools-worker.config.toml` で軽くできる。どの値にするかは machine ごとの設定なので dotfiles が
+  持ち (`~/.codex/hooks.json` と同じく、Codex が書き換えない別 file として chezmoi で配る)、agent-tools は
+  作らず、書き換えず、sync の対象にもしない。手で置いてもよい。
+- **agent-tools は名前だけを読む**: review は file が在るときだけ `codex exec -p agent-tools-review` を足し
+  (Codex は無い profile を error にする)、worker の preflight は top-level の `model` /
+  `model_reasoning_effort` だけを読む。file が無ければ今までどおり (user config の既定) なので、置かない
+  machine (例: 会社機) があってよい。
+- **file 名は公開契約**: 2 つの file 名は dotfiles が配る先の名前なので、agent-tools は名前の変更を
+  breaking change として扱う (dotfiles 側の更新と同期するまで旧名を壊さない)。置き方と Fast mode の
+  消費は [Install & Usage](install-and-usage.md) の「Codex の review / worker だけを軽くする」。
+
 ## どちらの repository も持たないもの
 
 - tokens。

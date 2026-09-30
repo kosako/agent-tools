@@ -23,9 +23,13 @@
 # user / project の execpolicy `.rules` を読まない指定 (`--ignore-user-config` とは別)。
 # model / effort は user config が読まれなくなる分を再指定する。
 #
-# model / effort の出所は 2 つ。`--model` / `--effort` で明示されればそれを使い config は
-# 読まない。無ければ config.toml の top-level (最初の table header より前) から `model` /
-# `model_reasoning_effort` を読む。TOML parser は持たないので、top-level の各行を
+# model / effort の出所は 3 つで、上ほど優先する。`--model` / `--effort` で明示されればそれを使い、
+# config も profile も読まない。無ければ config.toml の top-level (最初の table header より前) から
+# `model` / `model_reasoning_effort` を読み、Codex home に worker 用 profile file
+# (`agent-tools-worker.config.toml`。user が置く。無ければ読まない) があれば、その top-level の同じ key を
+# config.toml の値より優先する (Codex の profile と同じく base の config の上に重ねる。#339)。profile を
+# `-p` で渡さないのは、`--ignore-user-config` の起動に profile の他の key (MCP server 等) を持ち込まない
+# ため。どちらの file も同じ規則で読む。TOML parser は持たないので、top-level の各行を
 # 「空行 / comment / `bare_key = <1 行で閉じる scalar か平坦な配列>`」だけに分類し、それ以外の行
 # (複数行文字列、複数行の配列、入れ子や `#` `[` `]` を要素に含む配列、inline table、quoted /
 # dotted key、escape を含む文字列) が 1 つでもあれば、model を「無し」に倒さず fail-closed
@@ -86,6 +90,8 @@ module CodexWorkerPreflight
 
   # user config から再指定する key (option 名 => TOML / config key)。
   MODEL_KEYS = { "--model" => "model", "--effort" => "model_reasoning_effort" }.freeze
+  # worker 用 profile の名前。Codex home の `<name>.config.toml` を読む (#339)。
+  WORKER_PROFILE = "agent-tools-worker"
   # `-c key="value"` の value は TOML の basic string として解釈されるので、引用符や escape を
   # 含まない文字だけを通す。
   MODEL_VALUE_RE = /\A[A-Za-z0-9._-]+\z/
@@ -236,10 +242,10 @@ module CodexWorkerPreflight
     features
   end
 
-  # config.toml の top-level から model / model_reasoning_effort を読む。無ければ空 (Codex の
-  # 既定に委ねる)。top-level に分類できない行があれば、その行が model と無関係でも fail-closed
-  # (複数行文字列の中身を key として拾う経路を残さないため)。
-  def read_model_selection(text)
+  # config.toml (と worker 用 profile) の top-level から model / model_reasoning_effort を読む。無ければ
+  # 空 (Codex の既定に委ねる)。top-level に分類できない行があれば、その行が model と無関係でも
+  # fail-closed (複数行文字列の中身を key として拾う経路を残さないため)。label は理由文に出す file の名前。
+  def read_model_selection(text, label = "user config")
     found = Hash.new { |h, k| h[k] = [] }
     text.to_s.each_line do |raw|
       line = raw.chomp.sub(/\r\z/, "")
@@ -248,11 +254,11 @@ module CodexWorkerPreflight
       break if stripped.start_with?("[")
 
       m = TOP_LEVEL_LINE_RE.match(line)
-      raise ArgumentError, "user config の top-level に解釈できない行があります (--model / --effort で明示してください)" unless m
+      raise ArgumentError, "#{label} の top-level に解釈できない行があります (--model / --effort で明示してください)" unless m
 
       key = m[:key]
       next unless MODEL_KEYS.value?(key)
-      raise ArgumentError, "user config の #{key} は basic string 1 行の形だけ対応しています" if m[:basic].nil?
+      raise ArgumentError, "#{label} の #{key} は basic string 1 行の形だけ対応しています" if m[:basic].nil?
 
       found[key] << m[:basic]
     end
@@ -260,15 +266,17 @@ module CodexWorkerPreflight
     MODEL_KEYS.each_value do |key|
       values = found[key]
       next if values.empty?
-      raise ArgumentError, "user config の #{key} が top-level に複数あり一意に読めません" if values.size > 1
+      raise ArgumentError, "#{label} の #{key} が top-level に複数あり一意に読めません" if values.size > 1
 
-      selection[key] = validate_model_value(key, values.first)
+      selection[key] = validate_model_value(key, values.first, label)
     end
     selection
   end
 
-  def validate_model_value(key, value)
-    raise ArgumentError, "#{key} の値に argv へ安全に埋められない文字があります" unless value.to_s.match?(MODEL_VALUE_RE)
+  # label は理由文に出す出所 (file 名。明示の flag なら nil)。値そのものは理由文に出さない。
+  def validate_model_value(key, value, label = nil)
+    where = label ? "#{label} の " : ""
+    raise ArgumentError, "#{where}#{key} の値に argv へ安全に埋められない文字があります" unless value.to_s.match?(MODEL_VALUE_RE)
 
     value
   end
@@ -432,13 +440,32 @@ module CodexWorkerPreflight
     opts
   end
 
-  # 明示 (--model / --effort) があれば config を読まない。片方だけ明示されたときも読まない
-  # (config の解釈を「一部だけ」混ぜると出所が追えなくなる)。
+  # 明示 (--model / --effort) があれば config も profile も読まない。片方だけ明示されたときも読まない
+  # (config の解釈を「一部だけ」混ぜると出所が追えなくなる)。明示が無ければ config.toml を読み、
+  # worker 用 profile file があればその値を key ごとに優先する。戻り値は [選択, key ごとの出所]。
+  # 出所は "explicit" / "config" / "profile" (値が無い key は含めない)。
   def model_selection(opts)
-    return opts[:explicit] unless opts[:explicit].empty?
+    explicit = opts[:explicit]
+    return [explicit, explicit.map { |k, _| [k, "explicit"] }.to_h] unless explicit.empty?
 
-    config_path = File.join(codex_home(opts[:codex_home]), "config.toml")
-    read_model_selection(File.file?(config_path) ? File.read(config_path, encoding: "UTF-8") : "")
+    home = codex_home(opts[:codex_home])
+    config_path = File.join(home, "config.toml")
+    selection = read_model_selection(File.file?(config_path) ? File.read(config_path, encoding: "UTF-8") : "")
+    sources = selection.map { |k, _| [k, "config"] }.to_h
+    profile_path = File.join(home, "#{WORKER_PROFILE}.config.toml")
+    if File.file?(profile_path)
+      profile = read_model_selection(File.read(profile_path, encoding: "UTF-8"), "#{WORKER_PROFILE}.config.toml")
+      profile.each do |key, value|
+        selection[key] = value
+        sources[key] = "profile"
+      end
+    end
+    [selection, sources]
+  end
+
+  # 出所の表示 (text 出力)。profile は名前も添える。
+  def source_label(source)
+    source == "profile" ? "profile #{WORKER_PROFILE}" : source
   end
 
   def inspect_environment(opts)
@@ -468,7 +495,7 @@ module CodexWorkerPreflight
     absent = DISABLE_FEATURES.reject { |f| features.key?(f) }
     raise Blocked, "capability: features list に無い feature (disable できない): #{absent.join(', ')}" unless absent.empty?
 
-    selection = model_selection(opts)
+    selection, sources = model_selection(opts)
 
     {
       status: "ok",
@@ -476,7 +503,8 @@ module CodexWorkerPreflight
       disable_features: DISABLE_FEATURES.dup,
       model: selection["model"],
       model_reasoning_effort: selection["model_reasoning_effort"],
-      model_source: opts[:explicit].empty? ? "config" : "explicit",
+      model_source: sources["model"],
+      model_reasoning_effort_source: sources["model_reasoning_effort"],
       herdr: herdr_state,
       clone_root: clone_root,
       clone_git_dir: clone_git_dir,
@@ -489,8 +517,8 @@ module CodexWorkerPreflight
     puts "codex: #{r[:codex_version]}"
     puts "exec flags: ok"
     puts "disable features: #{r[:disable_features].join(' ')}"
-    puts "model: #{r[:model] || '(codex default)'} (#{r[:model_source]})"
-    puts "model_reasoning_effort: #{r[:model_reasoning_effort] || '(codex default)'} (#{r[:model_source]})"
+    puts "model: #{r[:model] ? "#{r[:model]} (#{source_label(r[:model_source])})" : '(codex default)'}"
+    puts "model_reasoning_effort: #{r[:model_reasoning_effort] ? "#{r[:model_reasoning_effort]} (#{source_label(r[:model_reasoning_effort_source])})" : '(codex default)'}"
     puts "herdr: #{r[:herdr]}"
     puts "clone root: #{r[:clone_root]}"
     puts "clone git dir: #{r[:clone_git_dir]}"

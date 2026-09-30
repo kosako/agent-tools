@@ -84,9 +84,13 @@ orchestrator が行います。
 - exit 1 (BLOCKED): `blocked_at` (asymmetry / capability) と `reason` をそのまま `Blocked at: preflight`
   として返す。Codex の session 内 (`CODEX_SANDBOX` / `CODEX_THREAD_ID`) からの起動は非対称なので
   常に BLOCKED になる (委譲は Claude → Codex の一方通行。Codex 側から Claude は起動できない)。
-- exit 2 (検査できない): user config の top-level を安全に読めない等。`--model` / `--effort` を
-  明示して再実行できるが、値は現在の user selection (Codex の設定) から人が示したものだけを使い、
-  推測で model を選ばない。示されなければ `Blocked at: preflight`。
+- exit 2 (検査できない): user config か worker 用 profile の top-level を安全に読めない等。`--model` /
+  `--effort` を明示して再実行できるが、値は現在の user selection (Codex の設定) から人が示したものだけを
+  使い、推測で model を選ばない。示されなければ `Blocked at: preflight`。
+- model / effort の出所は preflight が決め、上ほど優先する: `--model` / `--effort` の明示 → Codex home の
+  worker 用 profile file `agent-tools-worker.config.toml` の top-level (dotfiles か user が置く。無ければ読まない) →
+  `config.toml` の top-level。出所は出力の `model_source` / `model_reasoning_effort_source` に出る (#339)。
+  この skill は profile を作らず、書き換えない。
 - preflight が無い・実行できない (配備欠損) ときも `Blocked at: preflight`。generic な `codex exec`
   に fallback しない。
 
@@ -176,7 +180,7 @@ brief は file に書き、stdin (`-`) で渡します。shell 引数に埋め�
 - 途中で受け入れ条件が曖昧だと分かったら、推測で進めず `停止理由 または 質問` に書いて終える。
 
 model family / reasoning effort は brief に書かない (preflight の launch argv が user selection を
-再指定している)。
+再指定している。worker 用 profile があればその値)。
 
 ## 5. 実行と完了判定
 

@@ -24,7 +24,7 @@ repo=<repo root の shell literal>
 run=<run dir の shell literal>
 nonce=<nonce の shell literal>
 cd "$repo" || exit 90
-codex exec -s read-only -c approval_policy="never" \
+codex exec -s read-only -c approval_policy="never" <review 用 profile があるときだけ -p agent-tools-review> \
   -o "$run/result.md" - < "$run/brief.md"
 rc=$?
 printf 'CODEX-REVIEW-DONE-%s exit=%s\n' "$nonce" "$rc" | tee "$run/done.txt"
@@ -34,6 +34,12 @@ exit "$rc"
 完了の正本は `done.txt` です (nonce が一致し `exit=0`)。端末に出る同じ行 (sentinel) は
 `herdr pane wait-output` の起床信号として使い、判定は file で行います。どの経路でも、続行条件は
 「`done.txt` の nonce 一致と `exit=0`」かつ「`result.md` が存在し空でない」の両方です。
+
+`-p agent-tools-review` は、run script を組む時点で Codex home (`$CODEX_HOME`、空なら `~/.codex`) に
+`agent-tools-review.config.toml` が regular file として在るときだけ、その位置にそのまま書きます (無いときは
+何も書かない。角括弧や説明文は script に残さない)。profile の名前は固定の literal で、runtime の値を
+埋め込まないので escape は要りません。Codex は無い profile を error にするので、組んだ後に file を消すと
+exit≠0 になり、`executor-exit` で止まります。使ったかどうかは返却の `Model selection` に書きます (#339)。
 
 `--ephemeral` は付けません。review の session rollout は Codex 側の session 保存先に残し、利用量の集計
 (tokens / cost / rate limit) に使います (#297)。安全境界は `-s read-only` と `approval_policy="never"` で、

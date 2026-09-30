@@ -69,6 +69,9 @@ codex exec --help
 - `codex exec` が `-c` / `--config` を受け付ける。
 - `codex exec` が `-o` / `--output-last-message <FILE>` を受け付ける。
 - `codex exec` が prompt を `-` (stdin) から読める。
+- Codex home (`$CODEX_HOME`、空なら `~/.codex`) に review 用 profile file `agent-tools-review.config.toml`
+  が regular file として在るときは、`codex exec` が `-p` / `--profile` を受け付ける。受け付けなければ
+  BLOCKED とし、profile を黙って外して重い既定で走らせない。file が無ければこの項目は確認しない。
 - current working directory が review 対象の git repository である。
 
 `codex exec review` subcommand は使いません。target selector (`--base` / `--commit` /
@@ -184,11 +187,15 @@ command は **この skill の directory にある `LAUNCH.md` を読んで、�
 そちら)。ここには手順が満たすべき契約だけを置きます。
 
 - **Codex の flag は固定**: `codex exec -s read-only -c approval_policy="never"`
-  `-o <run dir>/result.md -` で、brief は stdin から渡す。`--ephemeral` は付けない (review の session
-  rollout を Codex 側に残し、利用量の集計に使う。#297)。安全境界は sandbox と approval policy で、rollout の
-  有無は境界ではない。model family / reasoning effort は固定せず、明示依頼と
-  capability 確認がない `-m` や model-specific config を足さない。別 agent / wrapper に代行させず、
-  実際の Codex CLI process を起動する。
+  `[-p agent-tools-review] -o <run dir>/result.md -` で、brief は stdin から渡す。`--ephemeral` は付けない
+  (review の session rollout を Codex 側に残し、利用量の集計に使う。#297)。安全境界は sandbox と approval
+  policy で、rollout の有無は境界ではない。
+- **model の選択は user に委ねる**: model family / reasoning effort / service tier は skill では固定しない。
+  Codex home に review 用 profile file `agent-tools-review.config.toml` (dotfiles か user が置く) が在れば、run script を
+  組む時点で `-p agent-tools-review` を足し、base の user config の上に重ねる (#339)。無ければ付けない
+  (Codex は無い profile を error にする)。file の中身は読まず、作らず、書き換えない。明示依頼と capability
+  確認がない `-m` や model-specific config は足さない。別 agent / wrapper に代行させず、実際の Codex CLI
+  process を起動する。
 - **escape**: path と nonce は生成時に shell literal 化 (値全体を `'` で囲み、内側の `'` を `'\''` に
   置換) して script 先頭の変数に 1 回だけ埋め込み、以降は `"$repo"` / `"$run"` で参照する。値を
   inline の引用へ展開しない。herdr の `pane run` は pane shell と呼び出し元 shell の 2 段で literal
@@ -213,7 +220,8 @@ review 本文と停止結果の雛形は **`RESULT-FORMAT.md` を読んで、そ
 
 - 完了時は `Review process verdict` (REJECT | Warning | APPROVE)、`Finding summary` (🔴 must / 🟡 should /
   ⚪ nit の件数)、`Independence` (cross-review verified (author=claude) | second-opinion only) を別 field
-  で返し、各 finding に `file:line` と severity を付ける。
+  で返し、各 finding に `file:line` と severity を付ける。起動に review 用 profile を使ったかを
+  `Model selection` の 1 行で添える。
 - author guard / capability / 起動経路 / target identity / 実行で停止したときは verdict を作らず、
   `Status: BLOCKED`、`Blocked at:` (author-guard | capability-preflight | launch-path | target-identity |
   executor-exit | executor-result)、public-safe な Reason、target identity なら expected / actual の
