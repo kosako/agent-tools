@@ -1,0 +1,95 @@
+{
+  "title": "personal-repo-audit report",
+  "description": "REPORT-FORMAT.md の報告を JSON にした形。Codex に read-only で監査させるとき (CODEX-LAUNCH.md) の最終出力。欄の意味と値の集合の正本は REPORT-FORMAT.md。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "findings", "not_problems", "decisions", "scope"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "サマリ: 全体の健全性と、最も重要な数点"
+    },
+    "findings": {
+      "type": "array",
+      "description": "所見 (深刻度順)",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "fingerprint",
+          "dimension",
+          "kind",
+          "severity",
+          "confidence",
+          "locations",
+          "claim",
+          "evidence",
+          "impact",
+          "recommendation",
+          "needs_decision",
+          "decision_reason"
+        ],
+        "properties": {
+          "id": { "type": "string", "description": "ID (F01, F02, …)" },
+          "fingerprint": { "type": "string", "description": "fingerprint (<場所の key>#<topic>)" },
+          "dimension": { "type": "string", "description": "観点 (correctness / security / design / test / docs / dependency / comparison、または足した観点の名前)" },
+          "kind": { "type": "string", "enum": ["defect", "docs-drift", "debt", "proposal"], "description": "種別" },
+          "severity": { "type": "string", "enum": ["high", "medium", "low"], "description": "深刻度" },
+          "confidence": { "type": "string", "enum": ["確証", "有力", "未確証"], "description": "確度" },
+          "locations": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "場所 (repo 相対の path:line、行が決まらなければ path)"
+          },
+          "claim": { "type": "string", "description": "主張 (1 文)" },
+          "evidence": { "type": "string", "description": "根拠 (secret は値を書かず種別と場所だけ)" },
+          "impact": { "type": "string", "description": "影響" },
+          "recommendation": { "type": "string", "description": "推奨" },
+          "needs_decision": { "type": "boolean", "description": "判断が要るか" },
+          "decision_reason": { "type": "string", "description": "判断が要るときの理由。要らなければ空文字" }
+        }
+      }
+    },
+    "not_problems": {
+      "type": "array",
+      "description": "問題に見えて実は問題でないもの",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["location", "apparent_issue", "reason"],
+        "properties": {
+          "location": { "type": "string", "description": "場所" },
+          "apparent_issue": { "type": "string", "description": "一見の問題" },
+          "reason": { "type": "string", "description": "問題でない理由 (根拠)" }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "description": "判断が要る点",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["finding_id", "question"],
+        "properties": {
+          "finding_id": { "type": "string", "description": "対応する所見の ID。所見に紐づかない論点なら空文字" },
+          "question": { "type": "string", "description": "何を決める必要があるか、選択肢" }
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "description": "対象範囲",
+      "additionalProperties": false,
+      "required": ["seen", "partial", "not_seen", "uncommitted", "prescan"],
+      "properties": {
+        "seen": { "type": "array", "items": { "type": "string" }, "description": "見た範囲" },
+        "partial": { "type": "array", "items": { "type": "string" }, "description": "一部だけ見た範囲 (どこまで見たか)" },
+        "not_seen": { "type": "array", "items": { "type": "string" }, "description": "見ていない範囲 (理由)" },
+        "uncommitted": { "type": "string", "description": "未 commit の変更: なし、または含めた file" },
+        "prescan": { "type": "string", "description": "下調べの実施状況 (変更の多い場所、壊れた参照の候補の件数)、または未実施 (理由)" }
+      }
+    }
+  }
+}

@@ -18,7 +18,8 @@
         { "id": "report-sections", "text": "サマリ・所見・問題に見えて実は問題でないもの・判断が要る点・対象範囲 の節があり、中身が無い節も「なし」と書いて残している" },
         { "id": "read-only", "text": "監査段階でコードを書き換えていない" },
         { "id": "states-scope-limits", "text": "見た範囲・一部だけ見た範囲・見ていない範囲、未 commit の変更を含めたかどうか、下調べの実施状況を明示している" },
-        { "id": "no-comparison-without-input", "text": "比較対象が渡されていないので、要件や類似との比較をしていない" }
+        { "id": "no-comparison-without-input", "text": "比較対象が渡されていないので、要件や類似との比較をしていない" },
+        { "id": "no-codex-launch", "text": "単独の起動なので、CODEX-LAUNCH.md の手順で Codex を起動していない (自分で監査している)" }
       ]
     },
     {
