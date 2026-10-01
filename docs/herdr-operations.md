@@ -24,13 +24,13 @@ Claude が自分の担当の作業単位を進めている間に、Codex の wor
 
 上限は workspace ごとに数え、machine 上の別の workspace の作業単位とは合算しません。orchestrator の
 session は workspace ごとにあり、`personal-codex-worker` の「orchestrator の session あたり worker 1 つ」も
-その単位です。別の workspace で同時に進めている分の残量の減りは、割当 (#255 / #319) で読む週 / 5h の
-残量に表れるので (枠のある tool のとき)、そこで吸収します。
+その単位です。別の workspace で同時に進めている分の残量の減りは、割当 (#255 / #344) で読む週 / 5h の
+残量に表れるので (枠のある tool のとき)、枯渇の確認 (割当の規則 2) で吸収します。
 
 この範囲にする理由:
 
-- 割当 (#255) の目標「2 系統の残量がだいたい均等に減る」にそのまま合う。同じ種類の worker を
-  2 本走らせると、その系統の残量だけが倍の速さで減る。
+- 割当 (#344) では実装の既定が Claude で、Codex の worker は人が明示したときと Claude の枠が枯渇した
+  ときだけ。同じ種類の worker を 2 本走らせると、その系統の枠だけが倍の速さで減る。
 - merge は人が行うので、PR の流量が詰まるのは人の側。同時の本数を増やしても merge 待ちが溜まる
   だけになる。
 - 実績は worker 1 本の委譲だけで、それを超える運用は検証できていない。
@@ -42,8 +42,8 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
 - subagent であっても、自分の branch と PR を作るなら 1 つの作業単位として数える。実装を複数の PR に
   分ける fan-out は、1 枠の中で順番に出す (前の PR が review に入ってから次を出す)。
 - review・監査・調査のような read-only の fan-out は、何本走らせても数えない。
-- subagent と ultracode は親と同じ残量を使う。重い fan-out を予定しているときは、割当のときに
-  その分を差し引いて考える。
+- subagent と ultracode は親と同じ枠を使う。割当では予定の消費を差し引かず、枠が実際に枯渇したときだけ
+  割当の規則 2 で扱う。
 
 **未検証**: 同じ種類の worker を複数同時に走らせる N 並列は、この doc の範囲に入れていません。1 + 1
 自体もまだ実際に回していないので、最初の 1 回を検証として扱い、その経験を見て N 並列を別の Issue に
