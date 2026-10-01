@@ -143,6 +143,18 @@
         { "id": "same-fingerprint", "text": "前回と同じ fingerprint scripts/import.sh@load_rows#unvalidated-row-input を付けている" },
         { "id": "location-updated", "text": "場所の欄は新しい行 (scripts/import.sh:72) を指している" }
       ]
+    },
+    {
+      "id": 13,
+      "name": "same-fingerprint-different-problems",
+      "prompt": "[前提: 観点 correctness と観点 security の調査が、どちらも fingerprint scripts/import.sh#unvalidated-input の所見を返した。前者は 3 行目の引数の個数を検査していない箇所、後者は 40 行目で外部 file の中身を検証せずに eval に渡す箇所で、どちらも関数の外の top-level の code] scripts/ 配下を監査して",
+      "expected_output": "fingerprint は一致しているが、場所と主張を読み比べると別の問題なので統合しない。2 つの所見を残し、片方 (または両方) の topic を区別できる語に変えて fingerprint を別の値にする (例 scripts/import.sh#unvalidated-arg-count と scripts/import.sh#unvalidated-input-to-eval)。",
+      "files": [],
+      "assertions": [
+        { "id": "reads-before-merge", "text": "fingerprint の一致を見て、場所と主張を読み比べている" },
+        { "id": "keeps-both", "text": "2 つを別々の所見として残している (1 つに統合していない)" },
+        { "id": "topics-distinguished", "text": "報告の 2 つの所見の fingerprint が、topic を区別できる語に変えて別の値になっている" }
+      ]
     }
   ]
 }
