@@ -2,7 +2,8 @@
 
 `SKILL.md` 手順 3 で子 agent が返す所見の欄と、手順 6 の報告の雛形です。手順の正本は `SKILL.md`、
 欄と雛形の正本はこの file。後段 (personal-maintenance-sweep) がこの欄で所見を読むので、欄の名前や
-値の集合を変えるときは後段も合わせて変えます。
+値の集合を変えるときは後段も合わせて変えます。Codex に read-only で監査させるとき (CODEX-LAUNCH.md)
+の最終出力は、同じ欄を JSON にした `findings.schema.json` で、欄や値を変えるときはこれも合わせます。
 
 ## 所見の欄
 
