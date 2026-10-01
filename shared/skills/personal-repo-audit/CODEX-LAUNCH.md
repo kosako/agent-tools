@@ -135,9 +135,9 @@ code や docs の本文は埋め込みません (Codex が sandbox の中で自�
   在る。
 - `exit=` が 0 以外、または待っても `done.txt` が現れない (wait は合計 3 回まで) なら `Blocked at:
   executor-exit`。
-- `result.json` が欠けているか空、または JSON として読めないなら、新しい nonce で同じ brief を
-  **1 回だけ** 再実行し、2 回目も同じなら `Blocked at: executor-result`。pane の出力から結果を作り
-  ません。
+- `exit=0` でも、`result.json` が欠けている・空・JSON として読めない・必須の key のどれかが無い
+  (例 `{}`) なら、新しい nonce で同じ brief を **1 回だけ** 再実行し、2 回目も続行の条件を満たさなければ
+  `Blocked at: executor-result`。pane の出力から結果を作りません。
 - 続行の条件を満たしたときだけ、`herdr pane read <pane> --source recent-unwrapped --lines 200` の出力を
   `<run dir>/pane.log` に保存し、空でないことを確かめてから pane を閉じます。満たさないときは pane を
   残します。
