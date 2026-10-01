@@ -34,7 +34,7 @@ jobs:
       # matrix の Ruby に切り替わる。system 行では何もしない (macOS 標準 Ruby のまま)。
       - name: Set up Ruby ${{ matrix.ruby }}
         if: matrix.ruby != 'system'
-        uses: ruby/setup-ruby@e8944e80fb94b20106697132f8c20c665fab29e9 # v1.325.0
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
           ruby-version: ${{ matrix.ruby }}
 
