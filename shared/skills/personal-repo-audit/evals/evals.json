@@ -13,7 +13,8 @@
         { "id": "prescan-before-judgement", "text": "観点ごとの判断の前に、変更の多い場所と docs の壊れた参照の候補を機械的に集めている" },
         { "id": "prescan-not-findings", "text": "下調べの候補を、該当箇所を読まずにそのまま所見にしていない" },
         { "id": "findings-have-fixed-fields", "text": "所見ごとに ID・fingerprint・観点・種別・深刻度・確度・場所・主張・根拠・影響・推奨・判断が要るか の欄がすべてある" },
-        { "id": "fingerprint-line-independent", "text": "fingerprint が <場所の key>#<topic> の形で、行番号・観点・深刻度を含まない" },
+        { "id": "findings-have-location-severity", "text": "行を特定できる所見の場所は path:line で、深刻度は high / medium / low、種別・確度・観点も REPORT-FORMAT.md の値のどれかになっている" },
+        { "id": "fingerprint-line-independent", "text": "fingerprint が <場所の key>#<topic> の形 (名前つきの単位に収まる所見は path@単位名) で、行番号・観点・深刻度を含まない" },
         { "id": "report-sections", "text": "サマリ・所見・問題に見えて実は問題でないもの・判断が要る点・対象範囲 の節があり、中身が無い節も「なし」と書いて残している" },
         { "id": "read-only", "text": "監査段階でコードを書き換えていない" },
         { "id": "states-scope-limits", "text": "見た範囲・一部だけ見た範囲・見ていない範囲、未 commit の変更を含めたかどうか、下調べの実施状況を明示している" },
@@ -118,6 +119,29 @@
       "assertions": [
         { "id": "no-sweep-line", "text": "personal-maintenance-sweep へ進む 1 行を書いていない" },
         { "id": "same-report", "text": "報告の節と所見の欄は eval 1 と同じ形になっている" }
+      ]
+    },
+    {
+      "id": 11,
+      "name": "fingerprint-collision-not-merged",
+      "prompt": "[前提: scripts/import.sh の関数 parse_args と関数 load_rows の両方に、外部入力を検証せずに使う別々の箇所がある] scripts/ 配下を監査して",
+      "expected_output": "2 つは同じ種類の問題だが別の箇所なので、別の所見として残す。fingerprint は名前つきの単位で区別し (scripts/import.sh@parse_args#… と scripts/import.sh@load_rows#…)、fingerprint や topic が似ていても、場所と主張を読み比べずに 1 つへ統合しない。",
+      "files": [],
+      "assertions": [
+        { "id": "distinct-findings", "text": "2 つの箇所を別々の所見として報告している (1 つに統合していない)" },
+        { "id": "distinct-fingerprints", "text": "2 つの所見の fingerprint が、関数の名前 (@parse_args / @load_rows) で区別されている" },
+        { "id": "merge-needs-reading", "text": "fingerprint の一致や類似だけを根拠に統合せず、場所と主張を読み比べている" }
+      ]
+    },
+    {
+      "id": 12,
+      "name": "fingerprint-stable-across-line-shift",
+      "prompt": "[前提: 前回の監査の報告に fingerprint scripts/import.sh@load_rows#unvalidated-row-input の所見がある。その後 load_rows の上に関数が 1 つ足され、問題の行は 42 行目から 72 行目に動いた。問題自体は直っていない] scripts/ 配下をもう一度監査して",
+      "expected_output": "問題は同じなので、同じ fingerprint (scripts/import.sh@load_rows#unvalidated-row-input) を付け、場所の欄だけが新しい行 (scripts/import.sh:72) になる。",
+      "files": [],
+      "assertions": [
+        { "id": "same-fingerprint", "text": "前回と同じ fingerprint scripts/import.sh@load_rows#unvalidated-row-input を付けている" },
+        { "id": "location-updated", "text": "場所の欄は新しい行 (scripts/import.sh:72) を指している" }
       ]
     }
   ]

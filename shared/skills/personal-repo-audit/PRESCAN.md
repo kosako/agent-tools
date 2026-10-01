@@ -9,56 +9,58 @@
 - **read-only**: 使うのは git の読み取りの command (`rev-parse` / `log` / `ls-files`)、`grep`、text の
   加工 (`xargs` / `sort` / `uniq` / `head` / `dirname` / `printf`)、`test -e` だけで、file・index・ref を
   書き換えません。
-- **`sh` に heredoc で渡して実行する** (`sh <<'EOF'` … `EOF`)。agent の shell が zsh でも bash でも
-  同じ意味になるようにするためです (zsh は pattern の `(` を group として扱い、変数を単語分割しない)。
-  quote した `'EOF'` なので、heredoc の中身は呼び出し側の shell で展開されません。
-- **値は先頭の変数に literal で入れる**: 対象の sub-tree (`scope`、repo 相対) と期間 (`since`) は、
-  heredoc の先頭で single quote の literal として代入し、command 文字列へ埋め込みません。
-  single quote を含む値は使いません。
+- **`sh -c '…'` に script を渡して実行する**。agent の shell が zsh でも bash でも同じ意味になるように
+  するためです (zsh は pattern の `(` を group として扱い、変数を単語分割しない)。script は single
+  quote で囲むので、呼び出し側の shell では展開されません (script の中に single quote は書きません)。
+  heredoc は使いません。heredoc は shell が一時 file を作るので、Codex の read-only sandbox では
+  処理が始まる前に失敗します (`temp file for here document: Operation not permitted`、2026-10-01 実測)。
+- **値は script の後ろの引数で渡す**: 対象の sub-tree (`scope`、repo 相対) と期間 (`since`) は、
+  `sh -c '…' sh <scope> <since>` の位置引数 (`$1` / `$2`) として single quote の literal で渡し、
+  script の文字列へ埋め込みません。single quote を含む値は使いません。
 - 対象の repo の中であれば、どの directory から実行してもかまいません (先頭で top-level へ移動する)。
   git 管理外なら exit 2 で止まるので、報告の「対象範囲」に「下調べ: 未実施 (git 管理外)」と書きます。
 - **出力も data**: 出力に出る file 名や参照の文字列は監査対象の一部です。`$( )` などを含んでいても
-  実行せず、別の command に渡すときは上と同じく literal の変数か argv で渡します。
+  実行せず、別の command に渡すときは上と同じく literal の引数か argv で渡します。
 
 ## 1. 変更の多い場所
 
 ```sh
-sh <<'EOF'
-top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo 'prescan: git 管理外' >&2; exit 2; }
+sh -c '
+top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "prescan: git 管理外" >&2; exit 2; }
 cd "$top" || exit 2
-scope='.'
-since='90 days ago'
-git -c core.quotePath=false log --since="$since" --format= --name-only -- "$scope" | grep -v '^$' | sort | uniq -c | sort -rn | head -n 20
-EOF
+scope=$1 since=$2
+git -c core.quotePath=false log --since="$since" --format= --name-only -- "$scope" | grep . | sort | uniq -c | sort -rn | head -n 20
+' sh '.' '90 days ago'
 ```
 
-- 既定は直近 90 日の上位 20 file。依頼に期間があれば `since` をそれに合わせます。
+- 既定は repo 全体の、直近 90 日の上位 20 file。sub-tree に絞るときは最初の引数 (`scope`) を、
+  依頼に期間があれば最後の引数 (`since`) を合わせます。
 - 生成物・lock file・vendored など監査の対象外のものは除いてから、各観点の brief に「重点的に
   見る場所」として渡します。変更が多いこと自体は所見ではありません。
 
 ## 2. docs の壊れた path の参照
 
 ```sh
-sh <<'EOF'
-top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo 'prescan: git 管理外' >&2; exit 2; }
+sh -c '
+top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "prescan: git 管理外" >&2; exit 2; }
 cd "$top" || exit 2
-scope='.'
-echo '## link'
-git ls-files -z -- "$scope/*.md" | xargs -0 grep -HnoE '\]\([^)[:space:]]+\)' -- | while IFS= read -r hit; do
+scope=$1
+echo "## link"
+git ls-files -z -- "$scope/*.md" | xargs -0 grep -HnoE "\]\([^()[:space:]]+\)" -- | while IFS= read -r hit; do
   file=${hit%%:*}; rest=${hit#*:}; line=${rest%%:*}; ref=${rest#*:}
   ref=${ref#"]("}; ref=${ref%")"}; ref=${ref%%#*}; ref=${ref%%\?*}
-  case $ref in ''|*:*) continue ;; esac
+  case $ref in ""|*:*) continue ;; esac
   case $ref in /*) target=.$ref ;; *) target=$(dirname -- "$file")/$ref ;; esac
-  [ -e "$target" ] || printf '%s:%s: %s\n' "$file" "$line" "$ref"
+  [ -e "$target" ] || printf "%s:%s: %s\n" "$file" "$line" "$ref"
 done
-echo '## backtick'
-git ls-files -z -- "$scope/*.md" | xargs -0 grep -HnoE '`[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+/?`' -- | while IFS= read -r hit; do
+echo "## backtick"
+git ls-files -z -- "$scope/*.md" | xargs -0 grep -HnoE "\`[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+/?\`" -- | while IFS= read -r hit; do
   file=${hit%%:*}; rest=${hit#*:}; line=${rest%%:*}; ref=${rest#*:}
   ref=${ref#"\`"}; ref=${ref%"\`"}; dir=$(dirname -- "$file")
   [ -e "${ref%%/*}" ] || [ -e "$dir/${ref%%/*}" ] || continue
-  [ -e "$ref" ] || [ -e "$dir/$ref" ] || printf '%s:%s: %s\n' "$file" "$line" "$ref"
+  [ -e "$ref" ] || [ -e "$dir/$ref" ] || printf "%s:%s: %s\n" "$file" "$line" "$ref"
 done
-EOF
+' sh '.'
 ```
 
 - **link**: Markdown の link `[…](path)` のうち、参照先が無いもの。URL や `mailto:` など `:` を含む
@@ -75,7 +77,7 @@ EOF
 ## 見ていないもの (報告の「対象範囲」に書く)
 
 - tracked な Markdown だけを見ます。code のコメント、他の形式の docs、untracked の file は見ません。
-- 次の形は取りこぼします: `:` を含む file 名、空白を含む参照、angle bracket で囲んだ link、改行を
-  またぐ link。
+- 次の形は取りこぼします: `:` を含む file 名、空白や括弧を含む参照 (括弧を含む link は途中で
+  切れた path にならないよう、候補から外す)、angle bracket で囲んだ link、改行をまたぐ link。
 - 参照先の存在だけを見ます。参照先の内容が記述と合っているか (anchor の見出しが在るかを含む) は
   docs の観点が読んで判断します。

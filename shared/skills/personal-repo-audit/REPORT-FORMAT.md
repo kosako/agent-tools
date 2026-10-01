@@ -46,16 +46,27 @@ docs を実態に合わせるだけで済むなら いいえ です。実態の�
 
 ### fingerprint
 
-run をまたいで同じ問題を同じ値で指すための鍵です。
+run をまたいで同じ問題を同じ値で指すための鍵です。行が動いても変わらず、同じ file の別の箇所の
+問題とは別の値になるように、次の規則で決めます。
 
-- 形は `<場所の key>#<topic>`。例: `scripts/sync.sh#unquoted-path-in-command`、
-  `docs/onboarding.md#stale-script-count`。
-- **場所の key**: repo 相対の path。行番号は入れない。複数の file にまたがる所見は、共通の
-  directory (例 `docs/`) か、問題になっている契約の名前 (例 `catalog-version`)。
+- 形は `<場所の key>#<topic>`。例: `scripts/sync.sh@apply_target#unquoted-path-in-command`、
+  `docs/onboarding.md#stale-script-count`、`docs/#broken-relative-links`。
+- **場所の key** (次の順に、最初に当てはまるもの):
+  1. 問題が 1 つの file の中の名前つきの単位 (関数・method・class・Markdown の見出し) に収まる:
+     `<repo 相対の path>@<最も内側の単位の名前>`。見出しは記号を除いた見出しの文字列。
+  2. 1 つの file の中だが、名前つきの単位に収まらない (file の先頭の設定、file 全体、file の不在):
+     `<repo 相対の path>`。
+  3. 複数の file にまたがる: それらの file の最も深い共通の directory に `/` を付けたもの (repo の
+     root なら `./`)。
 - **topic**: 問題を表す短い英語の kebab-case (小文字・数字・`-`)。値や行番号で変わる語を入れない。
 - 入れないもの: 行番号、観点、深刻度、確度、日付 (run ごとに揺れるため)、secret の値と絶対 path
   (public にできないため)。
 - 同じ問題には同じ fingerprint を付けます。観点をまたいでまとめた所見は 1 つの fingerprint にします。
+- **一致は重複の候補であって、同じ問題の証明ではありません**。fingerprint が一致しても、場所と
+  主張を読み比べて同じ問題と確かめてから統合します。別の問題と分かったら、片方の topic を
+  区別できる語に変えます (例 `-in-dry-run`)。逆に、関数や見出しの名前が変わると同じ問題でも
+  fingerprint が変わるので、照合する側は完全一致に加えて、同じ path を含む fingerprint の所見も
+  読み比べます。
 
 ## 報告の雛形
 
@@ -66,7 +77,7 @@ run をまたいで同じ問題を同じ値で指すための鍵です。
 
 ## 所見 (深刻度順)
 ### F01 <短い題>
-- fingerprint: scripts/sync.sh#unquoted-path-in-command
+- fingerprint: scripts/sync.sh@apply_target#unquoted-path-in-command
 - 観点: security
 - 種別: defect
 - 深刻度: high
