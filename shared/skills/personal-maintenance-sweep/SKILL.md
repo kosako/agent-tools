@@ -37,7 +37,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   あれば、監査をやり直さない。手順 0 (前提) と 1 (役割。監査をした側を監査役とみなし、検証役はその反対) と
   2 (予算。反証から先の分だけを確かめる) を済ませてから、手順 4 の反証から始める。ただし、その監査の対象の
   commit が分かっていて今の `HEAD` と違う、または分からないのに監査のあとで default branch が進んでいる
-  ときは、結果が古いので使わず、監査からやり直すかを確認する。
+  とき、または 未 commit の変更を含めて読んだ結果 (repo-audit の報告の「未 commit の変更」が「なし」でない) の
+ときは、結果が対象の commit と合わないので使わず、監査からやり直すかを確認する。
 - **中断した run を再開する**: local の state に `done` でない単位が残っていれば、手順 0 と 2 をやり直し
   (残量は読み直す)、役割は state の記録のまま (人の明示があればそれに従う) にして、単位ごとの `status` から
   続ける。`pending` は手順 3 (監査)、`audited` は手順 4 (反証)、`refuted` は手順 5 (triage) から。`done` は
@@ -49,11 +50,14 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 
 ### 0. 前提を確かめる
 
-- 対象の repo が git 管理で、GitHub の remote があり、`gh auth status` が通る。対象は default branch
-  (main など) の状態なので、作業ツリーが default branch を checkout していることを確かめる (別の branch
-  なら、default branch に切り替えてよいかを確認する。役割の数え方も `HEAD` からの first-parent で数える
-  ため)。対象の commit (`HEAD` の OID) と、未 commit の変更の有無を記録する。issues モードで GitHub に届かなければ report モードに
-  切り替えるかを確認する。
+- 対象の repo が git 管理で、GitHub の remote があり、`gh auth status` が通る。issues モードで GitHub に
+  届かなければ、report モードに切り替えるかを確認する。
+- **対象は default branch の commit そのもの**: 作業ツリーが default branch (main など) を checkout していて、
+  未 commit の変更 (staged / unstaged / untracked) が無い (`git status --porcelain=v1 --untracked-files=all`
+  が空) ことを確かめる。満たさなければ開始せず、切り替えるか clean にしてよいかを確認する (自分では
+  stash も checkout もしない)。こうすると監査の対象が commit で一意に決まり、run の再開で対象の
+  commit を照合すれば足りる。役割の数え方も `HEAD` からの first-parent で数える。対象の commit (`HEAD`
+  の OID) を記録する。
 - 追跡 Issue と local の state を探す ([RECORD.md](RECORD.md))。
   - **初めての repo** (追跡 Issue が無い): issues モードなら、作る label と追跡 Issue の題名を示して確認を
     取ってから作る。断られたら report モードで続ける。
@@ -166,7 +170,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 | --- | --- |
 | 残量が読めない・古い・従量課金 | 規模を広げない。依頼の範囲、無ければ最小のプリセット |
 | 5h の残りが開始の条件に満たない | 開始しない。いつ再開できるか (reset の時刻) を伝える |
-| 使える量がどのプリセットにも足りない | 開始しない。依頼で範囲が指定されていれば、その範囲だけで続けるかを確認する |
+| 使える量がどのプリセットにも足りない、または依頼の範囲の推定に足りない | 開始しない。範囲を縮めるかを確認し、縮めた範囲を覆うプリセットで見積もり直して、収まるときだけ開始する |
+| 作業ツリーが default branch でない、または未 commit の変更がある | 開始しない。切り替えるか clean にしてよいかを確認する (自分では stash も checkout もしない) |
 | 途中で停止の条件に当たった | 今の単位で止め、残りの単位を state に残す。それまでの所見は反証と記録まで進める |
 | 検証役が使えない | 起票しない。監査だけで report にするか、後で途中から始める |
 | 設定 file が不正 | 開始しない。どの key がなぜ不正かを伝える |
