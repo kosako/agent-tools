@@ -102,8 +102,8 @@ round、停止からの再開)、status の確認、継続の作業では割当�
   切り替える。
 - **Codex の model と effort の値の正本は dotfiles**: model / effort は user の Codex の設定を使い、役割別の
   profile file (Codex home の `agent-tools-review.config.toml` / `agent-tools-worker.config.toml`) があれば
-  その値が優先する (review は profile を重ね、worker の preflight は profile の model / effort を base の設定より
-  優先する)。profile の中身は dotfiles が持ち、この workflow には値を書かない (machine ごとに変えられるため)。
+  その値が優先する (review も worker も、profile の top-level の model / effort を base の設定より優先し、他の key は
+  読まない)。profile の中身は dotfiles が持ち、この workflow には値を書かない (machine ごとに変えられるため)。
 - model の名前は 2026-10 時点のもの。新しい model が出たら、#313 の材料をもとにこの表を見直す。
 
 **残量を読む (枯渇の確認だけ。人には聞かない)**: 割当のときに、残量の読み取り口があれば読み、規則 2 に
