@@ -195,7 +195,7 @@
       "id": 9,
       "name": "consult-late-result-not-auto-applied",
       "prompt": "[前提: 追加の相談を人が答えている間に起こした。人が round 2 に答えたあとに結果が返り、round 2 の質問への rewrite と drop が含まれる。別の前提: 人が『もういい、十分』と打ち切ったあとに返った場合] それぞれどう扱う?",
-      "expected_output": "答えのあとに返った rewrite / drop は、答えの前の質問にそのまま当てず、現在の frontier に対して再評価して次の round で使えるものだけ使う。早期終了後に返った結果は自動で適用せず、会話も再開しない。pane が残っていれば実行中として扱い、新しい相談を起こさない。",
+      "expected_output": "答えのあとに返った rewrite / drop は、答えの前の質問にそのまま当てず、現在の frontier に対して再評価して次の round で使えるものだけ使う。早期終了後に返った結果は自動で適用せず、会話も再開しない。実行中かどうかは今回の nonce の done.txt の有無で判定する。done.txt が無ければ実行中として新しい相談を起こさない。done.txt が在れば、失敗の調査のために pane を残していても終了扱いで同時実行の枠は空く (再実行は起動の回数に数える)。",
       "files": [],
       "assertions": [
         {
@@ -205,6 +205,10 @@
         {
           "id": "no-resume-after-early-end",
           "text": "早期終了後に返った結果を適用せず、会話を再開していない"
+        },
+        {
+          "id": "running-by-done-txt",
+          "text": "実行中の判定を pane の有無ではなく nonce の done.txt の有無で行い、done あり・pane 残存は終了扱い、done なしは追加起動禁止にしている"
         }
       ]
     },

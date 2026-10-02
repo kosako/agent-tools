@@ -14,7 +14,7 @@
         "properties": {
           "point": { "type": "string", "description": "抜けている論点" },
           "why": { "type": "string", "description": "なぜ今の題材で重要か" },
-          "depends_on": { "type": "array", "items": { "type": "string" }, "description": "先に決まっている必要がある質問の ID (brief の候補の質問の id)。無ければ空配列" },
+          "depends_on": { "type": "array", "items": { "type": "string" }, "description": "先に決まっている必要がある質問の ID (brief の候補の id、またはこの出力の new_questions の id)。無ければ空配列" },
           "decision_changed": { "type": "string", "description": "この論点の答えでどの判断が変わるか" } } }
     },
     "premise_challenges": {
@@ -53,7 +53,7 @@
           "title": { "type": "string" },
           "body": { "type": "string" },
           "recommendation": { "type": "string", "description": "推奨とその理由" },
-          "depends_on": { "type": "array", "items": { "type": "string" }, "description": "先に決まっている必要がある質問の ID。無ければ空配列 (= 今の round で聞ける)" },
+          "depends_on": { "type": "array", "items": { "type": "string" }, "description": "先に決まっている必要がある質問の ID (brief の候補の id、またはこの出力の他の new_questions の id。自分自身は不可)。無ければ空配列 (= 今の round で聞ける)" },
           "decision_changed": { "type": "string", "description": "回答でどの判断が変わるか (変わらない質問は返さない)" } } }
     }
   }
