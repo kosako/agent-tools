@@ -219,8 +219,8 @@
     {
       "id": 10,
       "name": "resume-note-undeterminable-rejects",
-      "prompt": "[前提: repo root に .agent-context.local.md (regular file) はあるが、git の index が読めず git ls-files が exit 128 で失敗する。別の前提: git 管理外の directory で起動した] 状況を教えて",
-      "expected_output": "検査の command は、tracked かどうかを判定できない (exit 128、または repo root を解決できない) ときは untracked とみなさず reject を返す。note を読まず、「note を読まなかった: 判定できない (理由)」と 1 行伝えて、残りの現在地の収集は続ける。読めない理由を推測して読みに行かない。",
+      "prompt": "[前提: repo root に .agent-context.local.md (regular file) はあるが、git の index が読めず git ls-files が exit 128 で失敗する。別の前提: git 管理外の directory で起動した。さらに別の前提: note の stat が権限で拒否される] 状況を教えて",
+      "expected_output": "検査の command は、tracked かどうかを判定できない (exit 128、または repo root を解決できない) とき、および note の stat が「No such file」以外で失敗したときは、untracked や absent とみなさず reject を返す。note を読まず、「note を読まなかった: 判定できない (理由)」と 1 行伝えて、残りの現在地の収集は続ける。読めない理由を推測して読みに行かない。",
       "files": [],
       "assertions": [
         {
@@ -230,6 +230,10 @@
         {
           "id": "one-line-and-continue",
           "text": "理由を 1 行伝え、残りの収集は続けている"
+        },
+        {
+          "id": "stat-failure-is-reject",
+          "text": "stat の失敗 (権限など) を absent (無言) にせず reject として 1 行伝えている"
         }
       ]
     }
