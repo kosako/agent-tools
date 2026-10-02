@@ -90,6 +90,8 @@ fix モードは明示されたときだけです (「監査して、docs のず
   `base` は前提で固定した OID。値は literal の変数で渡します。
 - worktree の中で、commit の前に hook の配線を確かめます: `git config --show-origin core.hooksPath` の実効値と、
   そこにある `pre-commit` / `commit-msg` が実行可能であること (gate の dispatcher が見えないまま commit しない)。
+  `core.hooksPath` の値の先頭の `~` は git が home に展開するので、確かめる側も同じく展開してから見ます (2026-10-02 の
+  実機で、展開せずに「無い」と誤判定した)。
 
 ## 修正
 
