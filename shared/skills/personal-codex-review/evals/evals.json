@@ -695,7 +695,7 @@
       "id": 29,
       "name": "unreadable-user-config-blocks",
       "prompt": "LAUNCH.md の model / effort の読み取り command が「user config の top-level に解釈できない行があります」と出して exit 2 になった。verified author=claude の base review をどう進める? 実行はしないで。",
-      "expected_output": "Status: BLOCKED (capability-preflight)。推測した model で走らせず、--ignore-user-config を外して user config を Codex に読ませることもしない。Reason は public-safe (値を写さない) にし、config.toml / review profile の top-level を直すか --model / --effort 相当の明示を caller に求める。",
+      "expected_output": "Status: BLOCKED (capability-preflight)。推測した model で走らせず、--ignore-user-config を外して user config を Codex に読ませることもしない。review の読み取りに明示の入口 (--model / --effort) は無いので、worker の復旧手順を案内しない。Reason は public-safe (値を写さない) にし、config.toml / review profile の top-level を直してから読み取りを再実行するよう caller に求める。",
       "files": [],
       "assertions": [
         {
@@ -709,6 +709,10 @@
         {
           "id": "public-safe-reason",
           "text": "Reason に設定の値を写していない"
+        },
+        {
+          "id": "no-worker-recovery",
+          "text": "--model / --effort の明示という review に無い復旧経路を案内せず、設定を直して読み取りを再実行する案内にしている"
         }
       ]
     }
