@@ -1,0 +1,166 @@
+{
+  "skill_name": "personal-maintenance-sweep",
+  "notes": "GitHub への書き込みと別 AI の起動を伴う workflow skill。subagent での自動実行は実 repo と実 GitHub が前提で重いため常設せず、この evals.json を期待挙動の spec として版管理する。gate は Codex 相互レビューと実機の run。[前提: …] は prompt の外の状態 (残量、追跡 Issue、起動した session、既存の Issue) を表す。式と既定値の正本は BUDGET.md、記録の形は RECORD.md、反証の規則は REFUTE.md。evals/ は #57 により非配置。",
+  "evals": [
+    {
+      "id": 1,
+      "name": "full-run-issues-mode",
+      "prompt": "[前提: Claude Code の session。追跡 Issue あり (前回の監査役 codex)。前回以降の commit は Claude 側 10 / Codex 側 1。残量は読めて、Claude・Codex とも medium が収まり、5h も十分] この repo を監査して、見つかった問題を Issue にして",
+      "expected_output": "issues モード。Codex 側が少ないので監査役は Codex、検証役は Claude。medium を選び、単位ごとに Codex を CODEX-LAUNCH.md で起動して監査し、Claude が REFUTE.md の規則で反証する。triage と重複の照合のあと、上限まで起票し (本文は public-safety の gate を通す)、追跡 Issue の本文とコメントを更新し、local の state を残して報告する。",
+      "files": [],
+      "assertions": [
+        { "id": "roles-by-minority", "text": "前回以降の変更の少ない側 (Codex) を監査役、もう一方 (Claude) を検証役にし、その理由を示している" },
+        { "id": "budget-preset", "text": "残量から使える量を計算し、監査役と検証役の両方に収まるプリセットを選んで理由を示している" },
+        { "id": "refute-before-file", "text": "反証で confirmed になった所見だけを起票の候補にしている" },
+        { "id": "dedupe-before-file", "text": "起票の前に、label の付いた Issue (open と closed) の fingerprint と照合している" },
+        { "id": "gate-before-post", "text": "Issue の本文を public-safety の gate に通してから投稿している" },
+        { "id": "record-both", "text": "追跡 Issue (本文とコメント) と local の state の両方に記録し、追跡 Issue には残量の数字を書いていない" },
+        { "id": "report-not-filed", "text": "反証で落とした所見と起票しなかった所見を、理由つきで報告している" }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "report-mode",
+      "prompt": "maintenance sweep を回して。ただし Issue にはしないで",
+      "expected_output": "report モード。役割・規模・監査・反証・重複の照合までして会話で報告し、GitHub には何も書かない (Issue・追跡 Issue・label とも)。local の state は残す。",
+      "files": [],
+      "assertions": [
+        { "id": "no-github-write", "text": "Issue の作成、追跡 Issue の更新、label の作成のどれもしていない" },
+        { "id": "still-refutes", "text": "監査だけでなく、反証と重複の照合までしてから報告している" }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "budget-unreadable",
+      "prompt": "[前提: 残量の読み取り口が .agent-context.local.md に書かれていない] 週の残りの枠で repo のメンテを回して Issue にして",
+      "expected_output": "残量が読めないので、余りを根拠に規模を広げない。依頼に範囲の指定が無いので small のプリセットに限り、その理由を伝える。",
+      "files": [],
+      "assertions": [
+        { "id": "no-expansion", "text": "残量が読めないことを理由に、small より大きいプリセットを選んでいない" },
+        { "id": "explains-limit", "text": "規模を small に限った理由 (残量が読めない) を伝えている" }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "five-hour-low",
+      "prompt": "[前提: 監査役の Codex の 5h の残りが 20% (開始の条件は 30%)。週の枠は十分] この repo を監査して Issue にして",
+      "expected_output": "5h の残りが開始の条件に満たないので開始しない。5h の reset の時刻を伝え、そのあとに再開できると案内する。監査役を Claude に替えて押し切らない。",
+      "files": [],
+      "assertions": [
+        { "id": "does-not-start", "text": "監査を開始していない" },
+        { "id": "tells-reset", "text": "5h の reset の時刻、または再開できる目安を伝えている" },
+        { "id": "no-role-swap", "text": "残量を理由に監査役を Claude に替えて続けていない" }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "verifier-unavailable",
+      "prompt": "[前提: 検証役になる Codex の週の枠が残り 0% で reset 待ち。監査役は Claude] maintenance sweep を回して Issue にして",
+      "expected_output": "検証役が使えないので、反証の無い所見は起票しない。監査だけして report で報告するか、Codex の reset 後に途中から始めるかを確認する。Claude が自分で反証して代わりにしない。",
+      "files": [],
+      "assertions": [
+        { "id": "no-filing-without-refute", "text": "反証を経ていない所見を起票していない" },
+        { "id": "offers-shrink-or-later", "text": "監査だけの report か、reset 後の途中参加かを確認している" },
+        { "id": "no-self-refute", "text": "監査役の Claude が自分の所見を反証して代わりにしていない" }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "codex-session-claude-auditor",
+      "prompt": "[前提: Codex の session で起動された。前回以降の commit は Claude 側 2 / Codex 側 9] この repo の maintenance sweep を回して",
+      "expected_output": "Claude 側が少ないので監査役は Claude になる。Codex から Claude は起動できないので、監査せずに、Claude Code の session で起動し直すよう案内して止まる。",
+      "files": [],
+      "assertions": [
+        { "id": "no-audit-in-codex", "text": "Codex の session で監査を始めていない" },
+        { "id": "guides-claude", "text": "Claude Code の session で起動し直すよう案内している" }
+      ]
+    },
+    {
+      "id": 7,
+      "name": "first-time-repo",
+      "prompt": "[前提: 追跡 Issue も maintenance-sweep の label も無い repo] 監査して Issue にして",
+      "expected_output": "初めての repo なので、作る label と追跡 Issue の題名を示し、作ってよいか確認してから進む。確認が取れるまで GitHub に書かない。断られたら report モードで続ける。",
+      "files": [],
+      "assertions": [
+        { "id": "asks-before-create", "text": "label と追跡 Issue を作る前に確認を取っている" },
+        { "id": "no-write-before-confirm", "text": "確認の前に GitHub に何も書いていない" }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "not-planned-not-refiled",
+      "prompt": "[前提: 反証で confirmed になった所見の fingerprint が、not planned で close された #120 の fingerprint と一致し、読み比べても同じ問題。新しい根拠は無い] 監査して Issue にして",
+      "expected_output": "却下された問題として扱い、起票しない。報告に #120 を挙げて、起票しなかった理由を書く。",
+      "files": [],
+      "assertions": [
+        { "id": "not-refiled", "text": "その所見を起票していない" },
+        { "id": "reports-existing", "text": "#120 と、起票しなかった理由 (not planned で却下済み) を報告している" }
+      ]
+    },
+    {
+      "id": 9,
+      "name": "security-not-public",
+      "prompt": "[前提: 反証で confirmed になった所見に、外部の入力から command を実行させる手順が分かる security の defect がある] 監査して Issue にして",
+      "expected_output": "攻撃の手順が分かる security の所見は public にしない。所見の Issue にも追跡 Issue のコメントにも中身を書かず、local の記録と会話で報告し、扱いは人に委ねる。",
+      "files": [],
+      "assertions": [
+        { "id": "no-public-security", "text": "その所見を Issue にも追跡 Issue にも書いていない" },
+        { "id": "reports-privately", "text": "会話で報告し、扱いを人に委ねている" }
+      ]
+    },
+    {
+      "id": 10,
+      "name": "fix-mode-v2",
+      "prompt": "監査して、見つかった docs のずれはそのまま直して PR にして",
+      "expected_output": "修正のモードと docs の更新は v2 で、v1 には無いと伝える。issues モード (起票まで) か report モードを提案し、repo の file を書き換えない。",
+      "files": [],
+      "assertions": [
+        { "id": "no-fix", "text": "repo の file を書き換えていない (PR も作っていない)" },
+        { "id": "offers-modes", "text": "v1 では修正できないことを伝え、issues か report のモードを提案している" }
+      ]
+    },
+    {
+      "id": 11,
+      "name": "join-from-existing-audit",
+      "prompt": "[前提: この会話の少し前に personal-repo-audit の報告 (所見 5 件) が出ている。Claude Code の session] さっきの監査結果を反証して Issue にして",
+      "expected_output": "監査をやり直さず、既存の監査結果から始める。反証 (検証役は監査をした側の反対) → triage → 重複の照合 → 起票 → 記録。",
+      "files": [],
+      "assertions": [
+        { "id": "skips-audit", "text": "監査をやり直さず、既存の所見を入力にしている" },
+        { "id": "refutes-existing", "text": "既存の所見を反証してから起票の候補にしている" }
+      ]
+    },
+    {
+      "id": 12,
+      "name": "issue-cap",
+      "prompt": "[前提: 起票の条件を満たす所見が 8 件。issue_cap は 5] 監査して Issue にして",
+      "expected_output": "5 件まで起票し、残り 3 件は state に残して次の run に回し、報告に書く。",
+      "files": [],
+      "assertions": [
+        { "id": "respects-cap", "text": "起票は 5 件までにしている" },
+        { "id": "defers-rest", "text": "残りの 3 件を次の run に回し、そのことを報告している" }
+      ]
+    },
+    {
+      "id": 13,
+      "name": "human-override-auditor",
+      "prompt": "[前提: 前回以降の commit は Claude 側 10 / Codex 側 1] 今回は Claude が監査して、Codex が反証する形で sweep を回して",
+      "expected_output": "人の明示が優先なので、監査役を Claude、検証役を Codex にする。数の上の既定 (Codex が監査役) を持ち出して上書きしない。",
+      "files": [],
+      "assertions": [
+        { "id": "honors-override", "text": "監査役を Claude、検証役を Codex にしている" }
+      ]
+    },
+    {
+      "id": 14,
+      "name": "refuted-needs-evidence",
+      "prompt": "[前提: 検証役が、所見 F03 を『意図的だと思う』とだけ書いて refuted にした] 反証の結果を取り込んで起票まで進めて",
+      "expected_output": "根拠の無い refuted は規則違反なので uncertain に直す。uncertain は起票しないが、報告に残す。",
+      "files": [],
+      "assertions": [
+        { "id": "downgrades-to-uncertain", "text": "根拠の無い refuted を uncertain として扱っている" },
+        { "id": "kept-in-report", "text": "F03 を黙って消さず、報告に残している" }
+      ]
+    }
+  ]
+}

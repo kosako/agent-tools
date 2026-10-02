@@ -1,0 +1,37 @@
+{
+  "title": "personal-maintenance-sweep refutation",
+  "description": "検証役が所見を 1 件ずつ確かめた結果。REFUTE.md の判定の規則に従う。Codex に反証させるときの最終出力。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdicts"],
+  "properties": {
+    "verdicts": {
+      "type": "array",
+      "description": "入力の所見 1 件につき 1 つ",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "fingerprint", "verdict", "confidence", "evidence", "note"],
+        "properties": {
+          "id": { "type": "string", "description": "入力の所見の ID" },
+          "fingerprint": { "type": "string", "description": "入力の所見の fingerprint (そのまま写す)" },
+          "verdict": {
+            "type": "string",
+            "enum": ["confirmed", "refuted", "uncertain"],
+            "description": "confirmed = 問題と確かめた / refuted = 根拠つきで否定 / uncertain = 確かめきれない"
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["確証", "有力", "未確証"],
+            "description": "判定の確度 (REPORT-FORMAT.md の 3 段階)"
+          },
+          "evidence": {
+            "type": "string",
+            "description": "判定の根拠 (確かめた行や command の結果)。refuted では必須で、空にしない"
+          },
+          "note": { "type": "string", "description": "補足 (深刻度の見直しの提案など)。無ければ空文字" }
+        }
+      }
+    }
+  }
+}
