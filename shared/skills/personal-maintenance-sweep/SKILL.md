@@ -45,8 +45,10 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 
 ### 0. 前提を確かめる
 
-- 対象の repo が git 管理で、GitHub の remote があり、`gh auth status` が通る。対象の commit (`HEAD` の
-  OID) と、未 commit の変更の有無を記録する。issues モードで GitHub に届かなければ report モードに
+- 対象の repo が git 管理で、GitHub の remote があり、`gh auth status` が通る。対象は default branch
+  (main など) の状態なので、作業ツリーが default branch を checkout していることを確かめる (別の branch
+  なら、default branch に切り替えてよいかを確認する。役割の数え方も `HEAD` からの first-parent で数える
+  ため)。対象の commit (`HEAD` の OID) と、未 commit の変更の有無を記録する。issues モードで GitHub に届かなければ report モードに
   切り替えるかを確認する。
 - 追跡 Issue と local の state を探す ([RECORD.md](RECORD.md))。
   - **初めての repo** (追跡 Issue が無い): issues モードなら、作る label と追跡 Issue の題名を示して確認を
@@ -70,11 +72,11 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 - **Codex の session で起動したとき**: この session 自身では監査も反証もしない (connector と MCP を外した
   起動の境界が、起動済みの session には効かないため)。Codex から Claude は起動できない。
   - 監査役が Claude になったら、Claude Code の session で起動し直すよう案内して止まる。
-  - 監査役が Codex なら、personal-repo-audit の `CODEX-LAUNCH.md` の起動経路で、別の Codex を監査役と
-    して起こせるかを確かめる。起こせれば起動して結果を local の state に保存し、反証から先は Claude Code の
-    session で途中から始めるよう案内して止まる (検証役の Claude を起動できないため)。起動経路が無ければ
-    (Codex の sandbox からは herdr に届かないことが多い)、監査せずに Claude Code の session で起動し直す
-    よう案内して止まる。
+  - 監査役が Codex なら、personal-repo-audit の `CODEX-LAUNCH.md` の起動経路があるかだけをここで確かめる
+    (起動はしない)。経路が無ければ (Codex の sandbox からは herdr に届かないことが多い)、Claude Code の
+    session で起動し直すよう案内して止まる。経路があれば手順 2 (規模) を通し、手順 3 で別の Codex を監査役
+    として起こして結果を local の state に保存したあと、反証から先は Claude Code の session で途中から
+    始めるよう案内して止まる (検証役の Claude を起動できないため)。
 - **検証役が使えない** (枠が枯れている、起動の経路が無い): 反証の無い所見は起票しない。監査だけして
   report モードで報告するか、使えるようになってから途中から始めるかを確認する。
 - 残量は、監査役と検証役の組が最後まで完了できるかの判定 (手順 2) にだけ使い、役割の選択には使わない。
@@ -164,7 +166,7 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 | 途中で停止の条件に当たった | 今の単位で止め、残りの単位を state に残す。それまでの所見は反証と記録まで進める |
 | 検証役が使えない | 起票しない。監査だけで report にするか、後で途中から始める |
 | 設定 file が不正 | 開始しない。どの key がなぜ不正かを伝える |
-| Codex の session で起動した | 自分では監査も反証もしない。監査役が Codex で起動経路があれば別の Codex を起こし、それ以外は Claude Code での起動を案内して止まる |
+| Codex の session で起動した | 自分では監査も反証もしない。監査役が Codex で起動経路があれば、手順 2 を通したうえで別の Codex を起こす。それ以外は Claude Code での起動を案内して止まる |
 | GitHub に届かない (issues モード) | report モードに切り替えるかを確認する |
 
 ## やってはいけないこと

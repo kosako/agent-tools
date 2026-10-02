@@ -41,8 +41,9 @@ label の付いた Issue のうち、**自分 (gh の認証 user) が作った�
 混ざるので除きます。
 
 ```sh
-me=$(gh api user --jq .login) && gh api --paginate --slurp \
-  "repos/{owner}/{repo}/issues?labels=maintenance-sweep&state=all&per_page=100" | ruby -rjson -e '
+me=$(gh api user --jq .login) && pages=$(gh api --paginate --slurp \
+  "repos/{owner}/{repo}/issues?labels=maintenance-sweep&state=all&per_page=100") \
+  && printf '%s' "$pages" | ruby -rjson -e '
 me = ARGV.fetch(0)
 JSON.parse($stdin.read).flatten.each do |i|
   next if i.key?("pull_request")
@@ -63,8 +64,9 @@ end' "$me"
   どれを使うかを人に確認する。
 - `finding` の行が所見の Issue (番号、状態、close の理由、fingerprint)。close の理由は `completed` /
   `not_planned` / `reopened`、open なら `-`。
-- command が失敗したら (gh の認証、network、rate limit)、照合が終わっていないものとして起票しない
-  (report モードに切り替えるかを確認する)。
+- 一覧の取得 (`gh api`) は変数に受けてから解析するので、取得が途中で失敗すれば全体が 0 以外で終わる (pipe の
+  後ろの ruby の成功で失敗が隠れない)。command が失敗したら (gh の認証、network、rate limit)、照合が
+  終わっていないものとして起票しない (report モードに切り替えるかを確認する)。
 
 ## 役割の数え方
 
@@ -77,8 +79,9 @@ preflight は tool の home に配備されたものを使います (Claude Code
 `$HOME/.claude/agent-tools/scripts/personal-review-routing-preflight`、Codex なら `$HOME/.codex/` の下の同じ
 path)。無ければ数えず、役割を人に確認します。path は literal の変数 `preflight` に入れて渡します。
 
-前回の記録があるときは 1 つ目の block、無いときは 2 つ目の block (直近 90 日) で commit を列挙し、出力を
-そのまま 3 つ目の block に渡します。
+前回の記録があるときは 1 つ目の block、無いときは 2 つ目の block (直近 90 日) で commit を列挙します。出力は
+変数に受け (`commits=$(…)`)、exit が 0 のときだけ 3 つ目の block に渡します (`printf '%s\n' "$commits" | ruby …`)。
+列挙が失敗したのに、空の集計を役割の判定に使わないためです。
 
 ```sh
 sh -c '

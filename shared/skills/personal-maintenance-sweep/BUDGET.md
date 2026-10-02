@@ -59,7 +59,8 @@ if File.exist?(path)
   fail_with.call("top-level が object でない") unless user.is_a?(Hash)
   unknown = user.keys - DEFAULTS.keys
   fail_with.call("知らない key: #{unknown.join(", ")}") unless unknown.empty?
-  (user["reserve"] || {}).tap do |r|
+  if user.key?("reserve")
+    r = user["reserve"]
     fail_with.call("reserve が object でない") unless r.is_a?(Hash)
     r.each do |tool, v|
       fail_with.call("reserve の知らない tool: #{tool}") unless DEFAULTS["reserve"].key?(tool)
@@ -123,7 +124,9 @@ reset までの日数 = (週の reset の時刻 − 今) / 24 時間   (小数�
    その window の reset の時刻を伝える。週の値が読めないことより先に当てる (読めない値による縮小で、
    分かっている不足を押し切らない)。
 3. **読めない値**: どちらかの tool の 5h か週の値が読めない → 余りを根拠に広げない。依頼の範囲、無ければ
-   small。読めない理由を伝える。
+   small。読めない理由を伝える。ただし、週の値が読める tool については、その規模の推定消費 (依頼の範囲なら
+   small の値を目安にする) が使える量に収まることを確かめ、収まらなければ開始しない (読めない値があることで、
+   分かっている週の不足を飛ばさない)。
 4. **使える量**: 両方の tool の使える量が推定消費 (監査役の値 / 検証役の値) 以上になる、いちばん大きい
    プリセットを選ぶ。small も収まらなければ開始しない。依頼で範囲が指定されていれば、その範囲だけで
    続けるかを確認する。
