@@ -11,7 +11,8 @@
 | fingerprint の marker | 所見の Issue の本文 | 重複の照合の鍵 | public |
 | local の state | `${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/maintenance-sweep/<owner>/<repo>/` | run の進み具合、単位ごとの結果、起票した番号、消費の実績 | local だけ |
 
-GitHub に書くのは Claude の session の issues モードだけです (Codex の session は GitHub に書かない)。
+GitHub に書くのは Claude の session の issues モードと fix モードだけです (fix モードは所見の Issue と追跡 Issue に加え、
+branch の push・PR・review のコメント。`FIX.md`)。Codex の session は GitHub に書きません。
 
 ## 値の受け渡し
 
@@ -276,7 +277,8 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
 
 - `status` は `planned` → `editing` → `committed` → `pushed` → `pr_created` → `reviewing` → `review_complete`、または
   `blocked`。merge は人がするので、次の run が PR の状態を読んで `merged` を補う。
-- 外部に書く操作 (push、PR、コメント) の前に段階を、後に結果を保存する。`fix_cap` の累計はこの file の `run_id` が
-  同じ (再開を含む) 記録を数える。
+- 外部に書く操作 (push、PR、コメント、review の round の起動) の前に段階 (round なら識別子) を、後に結果を保存する。
+  `fix_cap` の累計は、この file の `run_id` が同じ (再開を含む) 記録のうち PR を作ったもの (`pr_created` 以降) を数える
+  (v2 は 1 所見 = 1 PR なので記録数 = PR 数)。
   `target_commit` が今の `HEAD` と違えば、その run の監査と反証の結果は再利用しない (`SKILL.md` の
   「中断した run を再開する」)。

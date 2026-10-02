@@ -74,8 +74,8 @@ fix モードは明示されたときだけです (「監査して、docs のず
 
 ## 修正の単位と作業場所
 
-- **1 所見 Issue = 1 PR** が既定です。同じ原因で不可分な所見だけをまとめます (`Closes` を複数)。file が同じと
-  いうだけではまとめません。
+- v2 は **例外なく 1 所見 Issue = 1 PR** です (まとめない。同じ原因に見えても所見ごとに PR を分ける。`fix_cap` は
+  PR の本数 = 所見の記録数で数える)。
 - 所見ごとに、着手前に `fixes.json` へ **修正の仕様** を書きます: 照合する正本 (何に合わせるか)、変えてよい箇所
   (file と見出し)、局所的な受け入れ条件 (何が書いてあれば直ったと言えるか)。review の指摘の採否はこれで判断します。
 - run dir の下に linked worktree を作ります (main の checkout と index を汚さないための **作業場所** であって、
@@ -86,7 +86,7 @@ fix モードは明示されたときだけです (「監査して、docs のず
   git worktree add "$fixdir" -b "$branch" "$base"
   ```
 
-  `fixdir` は `<run dir>/fix/<Issue 番号>`、`branch` は `sweep/fix-<Issue 番号>` (まとめるときは `-` でつなぐ)、
+  `fixdir` は `<run dir>/fix/<Issue 番号>`、`branch` は `sweep/fix-<Issue 番号>`、
   `base` は前提で固定した OID。値は literal の変数で渡します。
 - worktree の中で、commit の前に hook の配線を確かめます: `git config --show-origin core.hooksPath` の実効値と、
   そこにある `pre-commit` / `commit-msg` が実行可能であること (gate の dispatcher が見えないまま commit しない)。
@@ -148,8 +148,12 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
 - review の lifecycle (routing の確定、依頼、結果、follow-up のコメント) は `personal-review-request` に委ねます
   (fix の明示が write authorization)。executor は routing が `reviewer=codex` と確定したときの
   `personal-codex-review` です。
-- round ごとに、対象の base / head の OID、verdict、finding、コメントの識別子を `fixes.json` に残します。結果を
+- round を **始める前に**、`fixes.json` の `reviews` に round の識別子 (round 番号、対象の base / head の OID、
+  executor の run dir) を結果なしで保存し、結果が返ったら verdict / finding / コメントの識別子を書き足します。結果を
   採用するときも、PR の head が review した OID と同じであることを確かめます。
+- 再開で `reviewing` の記録に結果の無い round があれば、新しい round を起動する前にその run dir の `done.txt` と
+  `result.md` を回収します (nonce 一致・exit=0・空でない result)。回収できなければ (run dir が無い、結果が無い) 完了した
+  回数を確定できないので、その round を未完として `blocked` にし、人に渡します (4 回目を起動する余地を作らない)。
 - 指摘の扱い: 🔴 must は修正の仕様の範囲内で妥当なものだけ直す。範囲外の must や契約の変更が要る must は、
   scope を広げず `blocked` にして人に渡す。🟡 should は採否と理由を残す (採用しなくても verdict を書き換えない)。
   ⚪ nit は caller の判断。
@@ -161,9 +165,9 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
 
 ## 予算
 
-- fix の推定消費は PR 1 本あたり、週の枠の percentage point で Claude 2 / Codex 2 (修正 + 完了した review 最大
-  3 回を含む初期の仮説。`BUDGET.md`)。PR を始める前に、少なくとも初回の review と記録までの分が使える量に
-  残っていることを確かめます。
+- fix の推定消費は PR 1 本あたり、週の枠の percentage point で Claude 2 / Codex 2.5 (修正 + 完了した review 最大
+  3 回 + 記録を含む初期の仮説。内訳と fix の停止の条件は `BUDGET.md`)。PR を始める前に、少なくとも修正と初回の
+  review と記録の分が使える量に残っていることを確かめます。
 - 1 run の fix は `fix_cap` (既定 2 PR) までで、**再開をまたいだ累計**です (再開で数え直さない)。超えた分は次の
   run に回し、報告に書きます。
 - PR を始める前と、review の round の前後で残量を読み直し、停止の条件に当たったら PR を残して止めます。limit
@@ -185,11 +189,12 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
 
 - 着手前に `fixes.json` を読み、`review_complete` / `merged` でない記録があれば、その `status` から続けます
   (`editing` は worktree と branch の状態を読んで修正から、`committed` は検証から、`pushed` は PR の照合から、
-  `pr_created` / `reviewing` は review から)。`blocked` は理由を読み、人の判断を待ちます。
+  `pr_created` は review から、`reviewing` は結果の無い round の回収から)。`blocked` は理由を読み、人の判断を待ちます。
 - 再開のときも `fix_cap` と review の round は引き継ぎます (新しい fix として数え直さない)。
 - 所見 Issue の本文・label・状態が候補の選定のあとで変わっていたら、変更の開始前と公開の前に照合し直し、
   scope が変わっていれば止めます。
-- まとめた所見のうち 1 件が既に解決していれば、その所見を除いて進めます (空の修正や不適切な `Closes` を作らない)。
+- 着手のあとで所見が既に解決していると分かれば (別の変更で直っていた)、空の修正や不適切な `Closes` を作らず、その
+  所見を `blocked` (理由: 解決済み) にして報告します。
 - worktree が dirty、run dir が無い、branch だけが残っている、のどれかなら、自動で破棄・強制作成せず、回収できる
   状態を報告します。
 

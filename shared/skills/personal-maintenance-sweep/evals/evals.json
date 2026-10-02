@@ -591,6 +591,27 @@
           "text": "論点なしの印が付いた所見には no-contention の marker を書いている"
         }
       ]
+    },
+    {
+      "id": 31,
+      "name": "fix-resume-recovers-unfinished-review",
+      "prompt": "[前提: fixes.json の #354 が reviewing で、reviews に round 3 の識別子 (head の OID と executor の run dir) はあるが結果が無い。前の session は round 3 の起動後に落ちた] 続きをやって",
+      "expected_output": "新しい round を起動する前に、round 3 の run dir の done.txt と result.md を回収する。回収できれば verdict を書いて完了回数を 3 にし、それ以上の round は起動しない。回収できなければ (run dir が無い・結果が無い) 完了回数を確定できないので round 3 を未完として blocked にし、人に渡す。4 回目を起動しない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "recover-before-launch",
+          "text": "新しい round を起動する前に、結果の無い round の run dir を回収している"
+        },
+        {
+          "id": "no-fourth-round",
+          "text": "回収の可否にかかわらず 4 回目の review を起動していない"
+        },
+        {
+          "id": "blocked-when-undeterminable",
+          "text": "回収できないときは完了回数を確定できないとして blocked にし、人に渡している"
+        }
+      ]
     }
   ]
 }
