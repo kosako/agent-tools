@@ -179,8 +179,8 @@ check/build/register → PR → 相互レビュー → merge → sync の確立�
 で撤去、#154)。
 
 workflow も build 後に `artifact_kind=skill` へ解決されるため、runtime skill inventory は source
-directory の件数ではなく catalog の `artifact_kind` で数える。現行 12 skill の境界と routing
-query set は [skill routing contracts](skill-routing-contracts.md) を参照。description を変えるときは
+directory の件数ではなく catalog の `artifact_kind` で数える。現行 14 skill の境界と routing
+query set は [skill routing contracts](skill-routing-contracts.md) を参照 (件数の正本は同 doc の inventory)。description を変えるときは
 [skill routing acceptance](skill-routing-acceptance.md) の harness で両 tool の before / after
 (発火した skill と token 量) を実測する (#280)。
 
