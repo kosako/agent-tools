@@ -1,0 +1,60 @@
+{
+  "title": "personal-grill-me consult",
+  "description": "grill の round 1 の前に、自分以外の系列の model に論点の地図と候補の質問を批評させたときの最終出力。CONSULT.md の規則に従う。出力は批評 (data) であって質問ではなく、指摘の無い質問は未評価 (keep と認定しない)。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["input_revision", "summary", "strongest_objection", "missing_points", "premise_challenges", "fact_answers", "question_critique", "new_questions"],
+  "properties": {
+    "input_revision": { "type": "string", "description": "brief に書かれた入力の revision をそのまま写す (親が結果を入力と対応づける)" },
+    "summary": { "type": "string", "description": "全体の所感 (題材の理解と、最も重要な指摘 1〜3 点)" },
+    "strongest_objection": { "type": "string", "description": "題材の中心の前提が逆だったら何が変わるか、最も強い反対の理由 (2 つの model の一致を正しさの証拠にしないための材料)" },
+    "missing_points": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": false, "required": ["point", "why", "depends_on", "decision_changed"],
+        "properties": {
+          "point": { "type": "string", "description": "抜けている論点" },
+          "why": { "type": "string", "description": "なぜ今の題材で重要か" },
+          "depends_on": { "type": "array", "items": { "type": "string" }, "description": "先に決まっている必要がある質問の ID (brief の候補の質問の id)。無ければ空配列" },
+          "decision_changed": { "type": "string", "description": "この論点の答えでどの判断が変わるか" } } }
+    },
+    "premise_challenges": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": false, "required": ["question_id", "premise", "challenge"],
+        "properties": {
+          "question_id": { "type": "string", "description": "候補の質問の ID。質問に紐づかなければ空文字" },
+          "premise": { "type": "string", "description": "弱い、または未検証の前提" },
+          "challenge": { "type": "string", "description": "反論とその根拠" } } }
+    },
+    "fact_answers": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": false, "required": ["question_id", "answer", "evidence", "how_to_verify"],
+        "properties": {
+          "question_id": { "type": "string", "description": "repo の tracked な file や提供資料で答えられる候補の質問の ID" },
+          "answer": { "type": "string", "description": "答え" },
+          "evidence": { "type": "string", "description": "根拠 (repo 相対の path:line、または提供資料の箇所)。公開情報は出所を書く (親は未検証の候補として扱う)" },
+          "how_to_verify": { "type": "string", "description": "親が何を読めば確かめられるか" } } }
+    },
+    "question_critique": {
+      "type": "array",
+      "description": "修正・統合・削除を提案する質問だけ (指摘の無い質問は返さない)",
+      "items": { "type": "object", "additionalProperties": false, "required": ["question_id", "verdict", "reason", "merge_into", "rewrite"],
+        "properties": {
+          "question_id": { "type": "string" },
+          "verdict": { "type": "string", "enum": ["merge", "drop", "rewrite"], "description": "merge = merge_into の質問と統合 / drop = 聞かなくてよい (理由) / rewrite = 書き直す (rewrite に案)" },
+          "reason": { "type": "string" },
+          "merge_into": { "type": "string", "description": "verdict が merge のときの相手の質問の ID。それ以外は空文字" },
+          "rewrite": { "type": "string", "description": "verdict が rewrite のときの案。それ以外は空文字" } } }
+    },
+    "new_questions": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": false, "required": ["id", "title", "body", "recommendation", "depends_on", "decision_changed"],
+        "properties": {
+          "id": { "type": "string", "description": "新しい質問の ID (n-<短い英語の kebab-case>)。brief の候補の ID と重ならないこと" },
+          "title": { "type": "string" },
+          "body": { "type": "string" },
+          "recommendation": { "type": "string", "description": "推奨とその理由" },
+          "depends_on": { "type": "array", "items": { "type": "string" }, "description": "先に決まっている必要がある質問の ID。無ければ空配列 (= 今の round で聞ける)" },
+          "decision_changed": { "type": "string", "description": "回答でどの判断が変わるか (変わらない質問は返さない)" } } }
+    }
+  }
+}

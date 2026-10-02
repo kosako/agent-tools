@@ -15,6 +15,6 @@ source:
   path: shared/skills/personal-grill-with-docs
   format: directory
 summary: relentless design interview that also grows the repo-local domain model (CONTEXT.md glossary + sparing ADRs) as decisions crystallise
-description: "Outcome: deepen a design while growing a repo-local glossary and sparing ADRs. Trigger: explicit requests to preserve terms or decisions as documents. Use: domain language and durable design decisions. Do not use: artifact-free brainstorming or direct implementation. Side effects: writes agreed CONTEXT.md and docs/adr content. Compose with: personal-grill-me for no-write interviewing and implementation only after agreement."
+description: "Outcome: deepen a design while growing a repo-local glossary and sparing ADRs. Trigger: explicit requests to preserve terms or decisions as documents. Use: domain language and durable design decisions. Do not use: artifact-free brainstorming or direct implementation. Side effects: writes agreed CONTEXT; before round 1 it may send the topic summary and candidate questions to the other model family for a read-only critique (same procedure as personal-grill-me, run dir outside the repo).md and docs/adr content. Compose with: personal-grill-me for no-write interviewing and implementation only after agreement."
 review:
   human_review: pending
