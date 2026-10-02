@@ -121,7 +121,9 @@ reset までの日数 = (週の reset の時刻 − 今) / 24 時間   (小数�
   `model_reasoning_effort` は使いません。
   読み方は worker の preflight (`personal-codex-worker-preflight`) と同じで、次の command で出します (exit 0 で
   model の値、無ければ空行。top-level に解釈できない行や、値が上の形に合わないときは exit 2 で理由を stderr に
-  出す)。**exit 2 のときは「設定が不正」と同じく開始せず**、理由を報告します (推測で model を決めない)。
+  出す)。**出力を採用するのは exit 0 のときだけ**で、それ以外 (exit 2 の理由つきの停止のほか、preflight が
+  配備されていない・file を読めないなどで ruby が 0 以外で終わった場合も) は「設定が不正」と同じく開始せず、
+  理由を報告します (推測で model を決めない。空の出力を「model 無し」と読まない)。
   `preflight` は tool の home に配備されたもの (Claude Code なら `$HOME/.claude/agent-tools/scripts/personal-codex-worker-preflight`、
   Codex なら `$HOME/.codex/` の下の同じ path。RECORD.md の役割の数え方と同じ) を literal の変数で渡します。
 
@@ -138,7 +140,7 @@ reset までの日数 = (週の reset の時刻 − 今) / 24 時間   (小数�
       selection.merge!(CodexWorkerPreflight.read_model_selection(File.read(path), label))
     end
     puts selection.fetch("model", "")
-  rescue ArgumentError => e
+  rescue ScriptError, StandardError => e
     warn "codex model: #{e.message}"
     exit 2
   end

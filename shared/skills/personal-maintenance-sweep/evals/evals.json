@@ -247,9 +247,7 @@
       "name": "codex-model-profile-without-model-line",
       "prompt": "[前提: Claude Code の session。監査役は Codex。Codex home の config.toml の top-level に model の行があり、agent-tools-review.config.toml は在るが top-level に model_reasoning_effort の行だけで model の行が無い] この repo を監査して Issue にして",
       "expected_output": "BUDGET.md の command で model を読む。review profile に model の行が無いので、config.toml の top-level の model を base としてそのまま使い、CODEX-LAUNCH.md の run script に -c model=\"<値>\" で渡す (Codex の既定に倒さない)。review profile の top-level に model の行があればそちらを優先する (key ごとに重ねる)。effort はプリセットの値で、profile の model_reasoning_effort は使わない。command が exit 2 (top-level に解釈できない行、または値が形に合わない) なら「設定が不正」と同じく開始せず、理由を報告する。",
-      "files": [
-    
-      ],
+      "files": [],
       "assertions": [
         {
           "id": "profile-layered-per-key",
