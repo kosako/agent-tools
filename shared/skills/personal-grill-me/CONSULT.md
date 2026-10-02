@@ -24,8 +24,8 @@ grill の round 1 の質問を人に出す前に、**自分以外の系列の mo
 - **追加の相談** は、重要な未決の判断で案が拮抗して推奨を決めきれないとき、または人が頼んだときだけ。人が答えて
   いる間に起こし、次の round までに返らなければその round では使いません。「収束の直前」を理由にした自動の相談は
   しません。
-- 回数: 1 grill あたり **起動は合計 3 回まで** (再実行を含む)。**同時に動く相談は 1 件**。前の相談が実行中 (pane が
-  残っている) なら新しく起こしません。
+- 回数: 1 grill あたり **起動は合計 3 回まで** (再実行を含む)。**同時に動く相談は 1 件**。前の相談が実行中 (今回の nonce の
+  `done.txt` が無い) なら新しく起こしません。
 
 ## 相手と経路
 
@@ -80,7 +80,8 @@ brief は file に書き、stdin (`-`) で渡します。先頭に信頼でき�
 - **制約** (信頼できる指示): 役割 (相談役。質問を作り直すのではなく、抜け・弱い前提・事実で答えられるもの・冗長・
   依存を指摘する)、read-only、network に触れない、nested な `codex` / `claude` と skill / subagent を起動しない、
   gitignore された local の note (`.agent-context.local.md`、`.agent-packets/`) を読まない、根拠は repo の tracked な
-  file と brief の提供資料に限る、最終 message は schema に従う JSON だけ、`input_revision` を写すこと。
+  file と brief の提供資料に限り、読むときは path を正規化して repo 外・禁止された note・symlink で外へ出る file (tracked な
+  symlink の先を含む) を読まない、最終 message は schema に従う JSON だけ、`input_revision` を写すこと。
 - **入力の revision**: `<grill の識別>/<round 番号>/<連番>`。親はこれを記録し、結果の `input_revision` と照合します。
 - **題材** (data): 人の依頼の要点と、自分が整理した計画・設計の要約。
 - **論点の地図** (data): 決定木の現状 (決まったこと / 未決 / 依存関係)。round 2 以降なら合意済みの決定。
@@ -93,12 +94,18 @@ brief は file に書き、stdin (`-`) で渡します。先頭に信頼でき�
 
 次をすべて満たしたときだけ結果を使います。満たさなければ相談なしで進み (再実行は上の回数に数える)、理由を添えます。
 
-- `done.txt` が今回の nonce で `exit=0`、`result.json` が在って空でなく、JSON として読め、schema の必須 key が在る。
+- `done.txt` が今回の nonce で `exit=0`、`result.json` が在って空でなく、JSON として読め、**schema 全体に適合する**
+  (必須 key、型、enum、`additionalProperties: false` を親が自分で確かめる。Codex の `--output-schema` に頼らず、人手経路でも
+  同じ検証をする)。schema の検証を通ってから、下の ID の意味の検証へ進みます。
 - `input_revision` が今回の brief と一致する (違う revision の結果は使わない)。
-- ID の意味の検証: `question_critique` / `premise_challenges` / `fact_answers` の `question_id` と `merge_into` は brief の
-  候補の ID に在る、`new_questions` の `id` は候補と重ならず互いに重複しない、`depends_on` は在る ID だけを指す、
-  `merge_into` が drop 対象や自分自身を指さない。違反した提案だけを捨て (報告に残す)、残りを使います。
-- 待機が終わっても process が止まったとは限りません。pane が残っていれば「実行中」として扱い、新しい相談を起こしません。
+- ID の意味の検証 (空文字を許す条件は schema の規約どおり): `question_critique` と `fact_answers` の `question_id` は
+  brief の候補の ID に在る (空は不可)。`premise_challenges` の `question_id` は候補の ID か空文字 (質問に紐づかない指摘)。
+  `merge_into` は verdict が `merge` のときだけ候補の ID で、自分自身や drop の対象を指さない (他の verdict では空文字)。
+  `rewrite` は verdict が `rewrite` のときだけ非空。`new_questions` の `id` は候補と重ならず互いに重複しない。`depends_on` は
+  在る ID (候補か新しい質問) だけを指す。違反した提案だけを捨て (報告に残す)、残りを使います。
+- 待機が終わっても process が止まったとは限りません。実行中かどうかは **今回の nonce の `done.txt` の有無** で判定し、無ければ
+  実行中として新しい相談を起こしません (pane の有無では判定しない。失敗して終わった pane は調べるために残しますが、`done.txt`
+  が在れば同時実行の枠は空きます。再実行は起動の回数に数える)。
   返った結果は、その時点の frontier に対して再評価します (人が答えたあとに返った rewrite / drop を、答えの前の質問に
   そのまま当てない)。人が早期に打ち切ったあとに返った結果は、自動で適用せず会話も再開しません。
 
