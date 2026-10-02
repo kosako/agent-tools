@@ -122,7 +122,8 @@ reset までの日数 = (週の reset の時刻 − 今) / 24 時間   (小数�
   読み方は worker の preflight (`personal-codex-worker-preflight`) と同じで、次の command で出します (exit 0 で
   model の値、無ければ空行。top-level に解釈できない行や、値が上の形に合わないときは exit 2 で理由を stderr に
   出す)。**exit 2 のときは「設定が不正」と同じく開始せず**、理由を報告します (推測で model を決めない)。
-  `preflight` は Claude Code の home に配備されたものを literal の変数で渡します。
+  `preflight` は tool の home に配備されたもの (Claude Code なら `$HOME/.claude/agent-tools/scripts/personal-codex-worker-preflight`、
+  Codex なら `$HOME/.codex/` の下の同じ path。RECORD.md の役割の数え方と同じ) を literal の変数で渡します。
 
   ```sh
   preflight="$HOME/.claude/agent-tools/scripts/personal-codex-worker-preflight"
