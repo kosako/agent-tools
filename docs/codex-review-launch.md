@@ -65,13 +65,25 @@ SKILL.md)。実行するのは `codex exec … -o "$run/result.md" - < "$run/bri
 (または commit OID) と `git diff` の取得コマンドを書き、diff と周辺コードは Codex に read-only
 sandbox の中で読ませます。brief は file 経由で渡し、diff 本文を埋め込みません。
 
+## 起動の境界 (#358)
+
+review は PR の diff という untrusted な内容を Codex に読ませるので、`personal-repo-audit` の `CODEX-LAUNCH.md`
+(監査の起動) と同じ境界で起動します: `--ignore-user-config` (user の `config.toml` と、そこに足される bootstrap の
+MCP server を読まない)、`--ignore-rules` (execpolicy の `.rules` を読まない)、`--disable apps` /
+`--disable computer_use` / `--disable browser_use` (account 側の connector と sandbox の外へ届く tool を外す)。
+read-only の sandbox は MCP の tool の呼び出しを止めないため、sandbox と approval policy だけでは diff の中の文言から
+外部へ書き込める経路が残るからです。`-p` は使いません (profile の他の key、例えば MCP server を持ち込まないため)。
+capability preflight は `codex exec --help` の flag に加えて `codex features list` の 3 行を確かめ、無ければ起動しません。
+
 ## model の選択
 
-model family / reasoning effort / service tier は skill で固定せず、user の Codex の設定に委ねます。
-user が Codex home に `agent-tools-review.config.toml` を置いていれば、`codex exec` に
-`-p agent-tools-review` を足して base の user config の上に重ねます (無い profile は Codex が error に
-するので、在るときだけ。#339)。置き方と Fast mode の消費は [Install & Usage](install-and-usage.md) の
-「Codex の review / worker だけを軽くする」。
+model family / reasoning effort は skill で固定せず、user の Codex の設定を再指定します (`--ignore-user-config` で
+読まれなくなる分)。user の `config.toml` の top-level を base に、Codex home の `agent-tools-review.config.toml` の
+top-level に同じ key があればそれを優先し (key ごとに重ねる)、`-c model="…"` / `-c model_reasoning_effort="…"` で
+渡します。読むのは `model` と `model_reasoning_effort` だけで (worker の preflight と同じ規則、同じ library)、
+profile の他の key (例: `service_tier`) は読みません。読めなければ (top-level に解釈できない行など) 推測せず
+BLOCKED です。置き方と Fast mode の消費は [Install & Usage](install-and-usage.md) の「Codex の review / worker
+だけを軽くする」。
 
 ## 使う herdr subcommand
 

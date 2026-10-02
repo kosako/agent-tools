@@ -336,7 +336,7 @@ boundary でない)。
 | credential 隔離 session 機構 | ✅ acceptance harness | deny 床 / sandbox / token store 隔離 |
 | policy data | ✅ single source (tool 別 render) | — |
 | write / secret deny 床 | — | settings.json `permissions.deny` (deny-first 床。ただし列挙依存=等価経路は素通り) |
-| Codex の write / secret 制限 | hook 配線のみ | `sandbox_mode` + `approval_policy` |
+| Codex の write / secret 制限 | hook 配線 + review / worker / 監査の起動で user config の MCP・connector・rules を外す (`--ignore-user-config --ignore-rules --disable …`。`personal-codex-review` §5 / `personal-codex-worker` / `personal-repo-audit` の `CODEX-LAUNCH.md`) | `sandbox_mode` + `approval_policy` |
 | egress (best-effort 宣言) | — | settings.json |
 | doctor presence report / 限界 docs | — | ✅ |
 

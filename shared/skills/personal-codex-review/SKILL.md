@@ -11,8 +11,8 @@ Codex 側に残します (利用量の集計に使う)。Codex は herdr の pan
 
 ## 副作用と組み合わせ
 
-- 副作用: herdr の pane から起動する capability-checked な read-only CLI 実行と結果 file の読み取り
-  だけで、repo や GitHub へ書き込まない (Codex 側に session rollout は残る。利用量の集計に使う)。herdr が無く自身が sandbox 内なら直接起動せず
+- 副作用: herdr の pane から起動する capability-checked な read-only CLI 実行 (user config の MCP /
+  connector と rules を外した起動) と結果 file の読み取りだけで、repo や GitHub へ書き込まない (Codex 側に session rollout は残る。利用量の集計に使う)。herdr が無く自身が sandbox 内なら直接起動せず
   BLOCKED で人手へ渡し、capability 不足では generic fallback を試さず停止し、明示的な second opinion は
   非独立と表示する (詳細は「責務境界」と「2. capability preflight」)。
 - 組み合わせ: PR workflow は personal-review-request、品質観点と出力契約は personal-production-rail。
@@ -66,6 +66,7 @@ diff / PR 本文の自己申告で classification を上書きしません。
 ```sh
 codex --version
 codex exec --help
+codex features list
 ```
 
 次をすべて確認します。
@@ -74,9 +75,14 @@ codex exec --help
 - `codex exec` が `-c` / `--config` を受け付ける。
 - `codex exec` が `-o` / `--output-last-message <FILE>` を受け付ける。
 - `codex exec` が prompt を `-` (stdin) から読める。
-- Codex home (`$CODEX_HOME`、空なら `~/.codex`) に review 用 profile file `agent-tools-review.config.toml`
-  が regular file として在るときは、`codex exec` が `-p` / `--profile` を受け付ける。受け付けなければ
-  BLOCKED とし、profile を黙って外して重い既定で走らせない。file が無ければこの項目は確認しない。
+- `codex exec` が `--ignore-user-config`、`--ignore-rules`、`--disable <FEATURE>` を受け付ける。
+- `codex features list` に `apps` / `computer_use` / `browser_use` の行が在る (無い feature を `--disable` に
+  渡すと CLI が止まるので、行が無ければ起動しない。`--disable` を外して起動することもしない)。
+- model / effort の読み取り (`LAUNCH.md` の command) が exit 0 で終わる。user の `config.toml` と Codex home
+  (`$CODEX_HOME`、空なら `~/.codex`) の review 用 profile file `agent-tools-review.config.toml` の top-level を、
+  worker の preflight と同じ規則で読む。exit 0 以外 (top-level に解釈できない行、値が形に合わない、preflight が
+  配備されていない) は BLOCKED とし、推測した model で走らせず、`--ignore-user-config` を外して user config を
+  読ませることもしない。
 - current working directory が review 対象の git repository である。
 
 `codex exec review` subcommand は使いません。target selector (`--base` / `--commit` /
@@ -191,16 +197,24 @@ run 用の directory を `mktemp -d` で作り、`brief.md`、`result.md` (出�
 command は **この skill の directory にある `LAUNCH.md` を読んで、その通りに組みます** (手順の正本は
 そちら)。ここには手順が満たすべき契約だけを置きます。
 
-- **Codex の flag は固定**: `codex exec -s read-only -c approval_policy="never"`
-  `[-p agent-tools-review] -o <run dir>/result.md -` で、brief は stdin から渡す。`--ephemeral` は付けない
-  (review の session rollout を Codex 側に残し、利用量の集計に使う。#297)。安全境界は sandbox と approval
-  policy で、rollout の有無は境界ではない。
-- **model の選択は user に委ねる**: model family / reasoning effort / service tier は skill では固定しない。
-  Codex home に review 用 profile file `agent-tools-review.config.toml` (dotfiles か user が置く) が在れば、run script を
-  組む時点で `-p agent-tools-review` を足し、base の user config の上に重ねる (#339)。無ければ付けない
-  (Codex は無い profile を error にする)。file の中身は読まず、作らず、書き換えない。明示依頼と capability
-  確認がない `-m` や model-specific config は足さない。別 agent / wrapper に代行させず、実際の Codex CLI
-  process を起動する。
+- **Codex の flag は固定**: `codex exec --ignore-user-config --ignore-rules -s read-only -c approval_policy="never"`
+  `--disable apps --disable computer_use --disable browser_use [-c model="<model>"] [-c model_reasoning_effort="<effort>"]`
+  `-o <run dir>/result.md -` で、brief は stdin から渡す。review は PR の diff という untrusted な内容を読むので、
+  `personal-repo-audit` の `CODEX-LAUNCH.md` (監査の起動) と同じ境界にする: `--ignore-user-config` で `config.toml` と
+  そこに足される bootstrap の MCP server を読まず、`--ignore-rules` で execpolicy の `.rules` を読まず、`--disable` で
+  account 側の connector と sandbox の外へ届く tool を外す (read-only の sandbox は MCP の tool の呼び出しを止めない)。
+  `-p` は使わない (profile の他の key、例えば MCP server を、`--ignore-user-config` の起動へ持ち込まないため)。
+  `--ephemeral` は付けない (review の session rollout を Codex 側に残し、利用量の集計に使う。#297)。安全境界は
+  sandbox と approval policy と上の 3 種の flag で、rollout の有無は境界ではない。
+- **model / effort は user の設定から再指定する**: `--ignore-user-config` で user の model 設定も読まれなくなるので、
+  model family / reasoning effort は skill で固定せず、user の `config.toml` の top-level を base に、Codex home の
+  review 用 profile file `agent-tools-review.config.toml` (dotfiles か user が置く。#339) の top-level に同じ key が
+  あればそれを優先して読み (key ごとに重ねる)、`-c` で渡す。読み方は worker の preflight
+  (`personal-codex-worker-preflight`) の `read_model_selection` を library として使い、TOML の読み方を写さない
+  (command は `LAUNCH.md`)。読むのは `model` と `model_reasoning_effort` だけで、profile の他の key (例:
+  `service_tier`) は読まない (worker と同じ)。どちらにも無い key は渡さず Codex の既定に任せる。file は作らず、
+  書き換えない。読み取った値以外の `-m` や model-specific config は足さない。別 agent / wrapper に代行させず、
+  実際の Codex CLI process を起動する。
 - **escape**: path と nonce は生成時に shell literal 化 (値全体を `'` で囲み、内側の `'` を `'\''` に
   置換) して script 先頭の変数に 1 回だけ埋め込み、以降は `"$repo"` / `"$run"` で参照する。値を
   inline の引用へ展開しない。herdr の `pane run` は pane shell と呼び出し元 shell の 2 段で literal
@@ -226,8 +240,8 @@ review 本文と停止結果の雛形は **`RESULT-FORMAT.md` を読んで、そ
 - 完了時は `Review process verdict` (REJECT | Warning | APPROVE)、`Finding summary` (🔴 must / 🟡 should /
   ⚪ nit の件数)、`Independence` (cross-review verified (author=claude) | cross-review verified (author=opencode(anthropic)) |
   second-opinion only) を別 field
-  で返し、各 finding に `file:line` と severity を付ける。起動に review 用 profile を使ったかを
-  `Model selection` の 1 行で添える。
+  で返し、各 finding に `file:line` と severity を付ける。model / effort の出所 (review profile / user config /
+  codex default) を `Model selection` の 1 行で添える (値は書かない)。
 - author guard / capability / 起動経路 / target identity / 実行で停止したときは verdict を作らず、
   `Status: BLOCKED`、`Blocked at:` (author-guard | capability-preflight | launch-path | target-identity |
   executor-exit | executor-result)、public-safe な Reason、target identity なら expected / actual の
@@ -255,3 +269,5 @@ review 本文と停止結果の雛形は **`RESULT-FORMAT.md` を読んで、そ
   2 回以上繰り返す。
 - 失敗した review の pane を閉じる。成功した pane を `pane.log` を保存せずに閉じる。
 - model family / fixed effort / 観測時間を selection metadata や必須 contract に焼き込む。
+- `-p` で profile を重ねる。`--ignore-user-config` / `--ignore-rules` / `--disable` を外す。`codex features list` に
+  無い feature を `--disable` に渡す。model / effort を読めないときに推測した値や user config の読み込みで補う。

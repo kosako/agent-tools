@@ -23,29 +23,82 @@ literal 化の結果は引用符を含む値そのものです (例: `sr c/re'po
 repo=<repo root の shell literal>
 run=<run dir の shell literal>
 nonce=<nonce の shell literal>
+model=<model の shell literal>
+effort=<effort の shell literal>
 cd "$repo" || exit 90
-codex exec -s read-only -c approval_policy="never" <review 用 profile があるときだけ -p agent-tools-review> \
+codex exec --ignore-user-config --ignore-rules -s read-only -c approval_policy="never" \
+  --disable apps --disable computer_use --disable browser_use \
+  -c "model=\"$model\"" -c "model_reasoning_effort=\"$effort\"" \
   -o "$run/result.md" - < "$run/brief.md"
 rc=$?
 printf 'CODEX-REVIEW-DONE-%s exit=%s\n' "$nonce" "$rc" | tee "$run/done.txt"
 exit "$rc"
 ```
 
+`model` / `effort` は下の「model / effort の読み取り」で得た値を shell literal にして入れます。読み取りで無かった
+key は、その変数の行と対応する `-c` を script から除きます (空の値を渡さない)。`-c` の値は TOML として読まれる
+ので、引用符ごと渡します (`model="<値>"`。引用符が無いと、値によっては数値などに読まれる)。値は preflight が
+`\A[A-Za-z0-9._-]+\z` に限っているので、引用符の中に入れても壊れません。
+
 完了の正本は `done.txt` です (nonce が一致し `exit=0`)。端末に出る同じ行 (sentinel) は
 `herdr pane wait-output` の起床信号として使い、判定は file で行います。どの経路でも、続行条件は
 「`done.txt` の nonce 一致と `exit=0`」かつ「`result.md` が存在し空でない」の両方です。
 
-`-p agent-tools-review` は、run script を組む時点で Codex home (`$CODEX_HOME`、空なら `~/.codex`) に
-`agent-tools-review.config.toml` が regular file として在るときだけ、その位置にそのまま書きます (無いときは
-何も書かない。角括弧や説明文は script に残さない)。profile の名前は固定の literal で、runtime の値を
-埋め込まないので escape は要りません。Codex は無い profile を error にするので、組んだ後に file を消すと
-exit≠0 になり、`executor-exit` で止まります。使ったかどうかは返却の `Model selection` に書きます (#339)。
+### model / effort の読み取り
+
+`--ignore-user-config` で user の model 設定は読まれないので、run script を組む前に次の command で読み、`-c` で
+再指定します。user の `config.toml` の top-level (最初の table header より前) を base に、Codex home (`$CODEX_HOME`、
+空なら `~/.codex`) の `agent-tools-review.config.toml` の top-level に同じ key があればそれを優先します (key ごとに
+重ねる。Codex の `-p` で profile を重ねたときの実効値と同じ)。読むのは `model` と `model_reasoning_effort` だけで、
+profile の他の key は読みません。読み方は worker の preflight (`personal-codex-worker-preflight`) の
+`read_model_selection` を library として使います (TOML の読み方を写さない)。`preflight` は tool の home に配備された
+もの (Claude Code なら `$HOME/.claude/agent-tools/scripts/personal-codex-worker-preflight`、Codex なら `$HOME/.codex/`
+の下の同じ path) を literal の変数で渡します。
+
+```sh
+preflight="$HOME/.claude/agent-tools/scripts/personal-codex-worker-preflight"
+ruby -rjson -e '
+begin
+  load ARGV.fetch(0)
+  home = ENV["CODEX_HOME"].to_s.empty? ? File.join(Dir.home, ".codex") : ENV["CODEX_HOME"]
+  selection = {}
+  sources = {}
+  [["config.toml", "user config"], ["agent-tools-review.config.toml", "review profile"]].each do |name, label|
+    path = File.join(home, name)
+    begin
+      stat = File.stat(path)
+    rescue Errno::ENOENT
+      next
+    end
+    raise ArgumentError, "#{label} が regular file ではありません" unless stat.file?
+    CodexWorkerPreflight.read_model_selection(File.read(path), label).each do |key, value|
+      selection[key] = value
+      sources[key] = label
+    end
+  end
+  puts JSON.generate({ "selection" => selection, "sources" => sources })
+rescue ScriptError, StandardError => e
+  warn "codex model: #{e.message}"
+  exit 2
+end
+' "$preflight"
+```
+
+- **exit 0 の JSON だけを使います**。`selection` にある key だけを run script に `-c` で書き、無い key は行ごと
+  除きます (Codex の既定に任せる)。`sources` (`user config` / `review profile`。無い key は `codex default`) を返却の
+  `Model selection` に写します (値は写さない)。
+- exit 0 以外 (top-level に解釈できない行、値が形に合わない、preflight が配備されていない、file を読めない、file は
+  在るが regular file でない、在るかどうかを確かめられない) は
+  `Status: BLOCKED` (`capability-preflight`) です。推測した値で走らせず、`--ignore-user-config` を外して user config を
+  読ませることもしません。
+- profile の file は作らず、書き換えません。無い machine があってよく、そのときは `config.toml` の top-level の
+  値 (それも無ければ Codex の既定) になります (#339)。
 
 `--ephemeral` は付けません。review の session rollout は Codex 側の session 保存先に残し、利用量の集計
 (tokens / cost / rate limit) に使います (#297)。安全境界は `-s read-only` と `approval_policy="never"` で、
 rollout の有無は境界ではありません。
-model family や reasoning effort は固定せず、現在の user / project selection に委ねます。明示依頼と
-capability 確認がない `-m` や model-specific config を足しません。別 agent / wrapper に代行させず、
+model family や reasoning effort は固定せず、上の読み取りの値に委ねます。読み取った値以外の `-m` や
+model-specific config を足しません。別 agent / wrapper に代行させず、
 実際の Codex CLI process を起動します。
 
 ### herdr 経由

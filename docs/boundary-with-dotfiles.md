@@ -99,10 +99,11 @@ OpenCode の tool home (`<opencode home>`。既定 `~/.config/opencode`) は複�
   `agent-tools-worker.config.toml` で軽くできる。どの値にするかは machine ごとの設定なので dotfiles が
   持ち (`~/.codex/hooks.json` と同じく、Codex が書き換えない別 file として chezmoi で配る)、agent-tools は
   作らず、書き換えず、sync の対象にもしない。手で置いてもよい。
-- **agent-tools は名前だけを読む**: review は file が在るときだけ `codex exec -p agent-tools-review` を足し
-  (Codex は無い profile を error にする)、worker の preflight は top-level の `model` /
-  `model_reasoning_effort` だけを読む。file が無ければ今までどおり (user config の既定) なので、置かない
-  machine (例: 会社機) があってよい。
+- **agent-tools は top-level の model / effort だけを読む**: review も worker も、`--ignore-user-config` の起動
+  (user config の MCP / connector を外す) に合わせて、`config.toml` の top-level を base に profile file の top-level の
+  `model` / `model_reasoning_effort` を優先して読み、`-c` で再指定する (#358。review は worker の preflight と同じ
+  library で読む)。profile の他の key (例: `service_tier`) は読まれない。file が無ければ `config.toml` の top-level の
+  値 (それも無ければ Codex の既定) なので、置かない machine (例: 会社機) があってよい。
 - **file 名は公開契約**: 2 つの file 名は dotfiles が配る先の名前なので、agent-tools は名前の変更を
   breaking change として扱う (dotfiles 側の更新と同期するまで旧名を壊さない)。置き方と Fast mode の
   消費は [Install & Usage](install-and-usage.md) の「Codex の review / worker だけを軽くする」。

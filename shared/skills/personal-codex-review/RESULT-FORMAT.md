@@ -10,7 +10,7 @@ preflight を通過して review が完了した場合:
 Review process verdict: REJECT | Warning | APPROVE
 Finding summary: 🔴 must N / 🟡 should N / ⚪ nit N
 Independence: cross-review verified (author=claude) | cross-review verified (author=opencode(anthropic)) | second-opinion only
-Model selection: profile agent-tools-review | user config
+Model selection: model=<review profile | user config | codex default> / effort=<review profile | user config | codex default>
 
 🔴 must
 - path/to/file:123 — finding

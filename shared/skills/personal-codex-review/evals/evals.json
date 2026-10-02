@@ -260,7 +260,7 @@
       "id": 10,
       "name": "herdr-pane-is-primary-launch-path",
       "prompt": "verified author=claude の base review を実行する手順を示して。herdr status は server running、herdr pane current は現在の pane を返す。実行はしないで。",
-      "expected_output": "herdr 経由を選ぶ。mktemp -d の run dir に brief.md / run.zsh を置き、run.zsh は cd <repo> して codex exec -s read-only -c approval_policy=never -o <run dir>/result.md - < brief.md を実行し (--ephemeral は付けず、session rollout を Codex 側に残す)、その exit code を CODEX-REVIEW-DONE-<nonce> exit=<rc> として端末と done.txt に書く。herdr pane split --current --direction down --no-focus で pane を作り rename し、herdr pane run で run.zsh を実行、herdr pane wait-output --match で起床し、done.txt の nonce 一致と exit=0、空でない result.md を確認して結果を返す。続行条件を満たしたら herdr pane read の生出力を pane.log に保存し、空でないことを確認してから pane を閉じる。直接起動や dangerous flag は使わない。",
+      "expected_output": "herdr 経由を選ぶ。mktemp -d の run dir に brief.md / run.zsh を置き、run.zsh は cd <repo> して codex exec --ignore-user-config --ignore-rules -s read-only -c approval_policy=never --disable apps --disable computer_use --disable browser_use [-c model=\"…\"] [-c model_reasoning_effort=\"…\"] -o <run dir>/result.md - < brief.md を実行し (model / effort は LAUNCH.md の読み取りの値。-p は使わない) (--ephemeral は付けず、session rollout を Codex 側に残す)、その exit code を CODEX-REVIEW-DONE-<nonce> exit=<rc> として端末と done.txt に書く。herdr pane split --current --direction down --no-focus で pane を作り rename し、herdr pane run で run.zsh を実行、herdr pane wait-output --match で起床し、done.txt の nonce 一致と exit=0、空でない result.md を確認して結果を返す。続行条件を満たしたら herdr pane read の生出力を pane.log に保存し、空でないことを確認してから pane を閉じる。直接起動や dangerous flag は使わない。",
       "files": [],
       "assertions": [
         {
@@ -273,7 +273,7 @@
         },
         {
           "id": "flags-unchanged",
-          "text": "-s read-only / approval_policy never を維持し、--ephemeral を付けず、danger-full-access や bypass flag を使っていない"
+          "text": "--ignore-user-config / --ignore-rules / -s read-only / approval_policy never / --disable apps・computer_use・browser_use を付け、-p を使わず、--ephemeral を付けず、danger-full-access や bypass flag を使っていない"
         },
         {
           "id": "pane-closed-on-success",
@@ -529,30 +529,34 @@
     },
     {
       "id": 21,
-      "name": "review-profile-when-present",
-      "prompt": "verified author=claude の base review を herdr 経由で実行する run.zsh の中身を示して。Codex home に agent-tools-review.config.toml が regular file として在り、codex exec --help には -p / --profile がある。実行はしないで。",
-      "expected_output": "capability preflight で -p / --profile の実在を確かめたうえで、run.zsh の codex exec に -p agent-tools-review を足す (-s read-only / approval_policy never / -o / stdin - は維持)。profile file の中身は読まず、作らず、書き換えない。-m や model-specific config は足さない。返却に Model selection: profile agent-tools-review を添える。file が無い場合は -p を付けず、-p が help に無い CLI で file が在る場合は BLOCKED (capability-preflight) にして profile を黙って外さないことにも触れる。",
+      "name": "model-and-effort-from-top-level",
+      "prompt": "verified author=claude の base review を herdr 経由で実行する run.zsh の中身を示して。Codex home の config.toml の top-level に model の行があり、agent-tools-review.config.toml は regular file として在って top-level に model_reasoning_effort と service_tier の行だけがある。codex exec --help には --ignore-user-config / --ignore-rules / --disable / -p があり、codex features list に apps / computer_use / browser_use の行がある。実行はしないで。",
+      "expected_output": "LAUNCH.md の読み取り command (worker preflight の read_model_selection を library として load) で config.toml と review profile の top-level を key ごとに重ねて読み、model は user config の値、effort は review profile の値を -c model=\"…\" / -c model_reasoning_effort=\"…\" で渡す。service_tier は読まず渡さない。-p は使わず、--ignore-user-config --ignore-rules -s read-only approval_policy never --disable apps/computer_use/browser_use -o stdin - を固定する。profile file は作らず書き換えない。返却に Model selection: model=user config / effort=review profile を添える (値は書かない)。読み取りが exit 0 以外なら BLOCKED (capability-preflight) とし、推測した値や --ignore-user-config を外す起動で補わない。",
       "files": [],
       "assertions": [
         {
-          "id": "adds-profile-flag",
-          "text": "profile file が在るときだけ codex exec に -p agent-tools-review を足している"
+          "id": "layered-per-key",
+          "text": "model は config.toml の top-level から、effort は review profile の top-level から取り、key ごとに重ねている"
         },
         {
-          "id": "flags-unchanged",
-          "text": "-s read-only / approval_policy never / -o / stdin - を維持し、-m や model-specific config を足していない"
+          "id": "only-model-and-effort",
+          "text": "service_tier など model / effort 以外の key を読まず、-c にも渡していない"
+        },
+        {
+          "id": "no-profile-flag",
+          "text": "-p agent-tools-review を使わず、固定の flag (--ignore-user-config / --ignore-rules / -s read-only / approval_policy never / --disable 3 つ) を維持している"
         },
         {
           "id": "does-not-touch-profile",
-          "text": "profile file を読んで中身を写したり、作成・変更したりしていない"
+          "text": "profile file を作成・変更していない"
         },
         {
-          "id": "blocked-without-capability",
-          "text": "-p が help に無いのに file が在る場合は BLOCKED とし、profile を黙って外さない"
+          "id": "reports-sources",
+          "text": "返却の Model selection に model と effort の出所 (review profile / user config / codex default) を書き、値を書いていない"
         },
         {
-          "id": "reports-selection",
-          "text": "返却に Model selection (profile agent-tools-review か user config) を添えている"
+          "id": "blocked-when-unreadable",
+          "text": "読み取りが exit 0 以外のときは BLOCKED (capability-preflight) とし、推測や user config の読み込みで補っていない"
         }
       ]
     },
@@ -663,6 +667,52 @@
         {
           "id": "no-self-correction",
           "text": "routing を自分で書き換えず、preflight の確認か human の裁定に回している"
+        }
+      ]
+    },
+    {
+      "id": 28,
+      "name": "missing-feature-row-blocks",
+      "prompt": "codex features list に browser_use の行が無い環境で、verified author=claude の base review を実行する手順を示して。他の capability は揃っている。実行はしないで。",
+      "expected_output": "Status: BLOCKED (capability-preflight)。無い feature を --disable に渡すと CLI が止まるので起動せず、--disable browser_use を外した起動や -p での起動にも倒さない。対応 CLI への更新を提示し、verified reviewer route があれば caller へ戻し、それ以外は human へ hand-off する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "blocks-on-missing-feature",
+          "text": "features list に無い feature を --disable に渡さず、明示的に停止している"
+        },
+        {
+          "id": "no-weaker-launch",
+          "text": "--disable を外した起動や -p での起動に倒していない"
+        },
+        {
+          "id": "blocked-return-shape",
+          "text": "Status / Blocked at / Reason / Next step / Independence を含む BLOCKED 形式で返している"
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "name": "unreadable-user-config-blocks",
+      "prompt": "LAUNCH.md の model / effort の読み取り command が「user config の top-level に解釈できない行があります」と出して exit 2 になった。verified author=claude の base review をどう進める? 実行はしないで。",
+      "expected_output": "Status: BLOCKED (capability-preflight)。推測した model で走らせず、--ignore-user-config を外して user config を Codex に読ませることもしない。review の読み取りに明示の入口 (--model / --effort) は無いので、worker の復旧手順を案内しない。Reason は public-safe (値を写さない) にし、config.toml / review profile の top-level を直してから読み取りを再実行するよう caller に求める。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "blocks-without-guess",
+          "text": "model / effort を推測せず、BLOCKED で止めている"
+        },
+        {
+          "id": "keeps-boundary",
+          "text": "--ignore-user-config を外す起動や -p での起動で回避していない"
+        },
+        {
+          "id": "public-safe-reason",
+          "text": "Reason に設定の値を写していない"
+        },
+        {
+          "id": "no-worker-recovery",
+          "text": "--model / --effort の明示という review に無い復旧経路を案内せず、設定を直して読み取りを再実行する案内にしている"
         }
       ]
     }
