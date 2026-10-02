@@ -9,9 +9,18 @@
       "expected_output": "『キャンセル』が全体取消と部分返品の二義になっている点を即指摘し、正準語を提案。固まったら CONTEXT.md を inline 更新する(用語集に徹し実装詳細は書かない)。round 単位・推奨案つき。",
       "files": [],
       "assertions": [
-        { "id": "challenge-glossary", "text": "用語の衝突・多義性を指摘し正準語を提案している" },
-        { "id": "updates-context", "text": "固まった用語を CONTEXT.md に書き残す(または書式に沿って提案する)" },
-        { "id": "round-format", "text": "独立して聞ける質問を 1 問ずつ小出しにせず、`Q1 - <タイトル>` / `→ 推奨:` 書式の round にまとめて出している" }
+        {
+          "id": "challenge-glossary",
+          "text": "用語の衝突・多義性を指摘し正準語を提案している"
+        },
+        {
+          "id": "updates-context",
+          "text": "固まった用語を CONTEXT.md に書き残す(または書式に沿って提案する)"
+        },
+        {
+          "id": "round-format",
+          "text": "独立して聞ける質問を 1 問ずつ小出しにせず、`Q1 - <タイトル>` / `→ 推奨:` 書式の round にまとめて出している"
+        }
       ]
     },
     {
@@ -21,8 +30,14 @@
       "expected_output": "event sourcing は『覆しにくい × 驚く × 実トレードオフ』の 3 条件を満たすので ADR を提案。変数名規約は 3 条件を満たさない(覆しやすい・驚かない)ので ADR にしないと判断し、その理由を述べる。",
       "files": [],
       "assertions": [
-        { "id": "adr-three-tests", "text": "ADR 化の 3 条件で判定し、満たさないものは ADR にしないと述べている" },
-        { "id": "offers-sparingly", "text": "無闇に ADR を量産せず、控えめに提案している" }
+        {
+          "id": "adr-three-tests",
+          "text": "ADR 化の 3 条件で判定し、満たさないものは ADR にしないと述べている"
+        },
+        {
+          "id": "offers-sparingly",
+          "text": "無闇に ADR を量産せず、控えめに提案している"
+        }
       ]
     },
     {
@@ -32,7 +47,10 @@
       "expected_output": "ドキュメント生成の明示意図が無い素の壁打ちなので、このスキルは前面に出ず personal-grill-me の領分であると示すか、用語/ADR を残す段になって初めて doc 規律を持ち出す。重いドメインモデル成果物を押し付けない。",
       "files": [],
       "assertions": [
-        { "id": "scope-awareness", "text": "成果物を残さない素の壁打ちにドメインモデル生成を押し付けていない" }
+        {
+          "id": "scope-awareness",
+          "text": "成果物を残さない素の壁打ちにドメインモデル生成を押し付けていない"
+        }
       ]
     },
     {
@@ -42,8 +60,31 @@
       "expected_output": "ADR は repo ローカルの public-safe 成果物。secret パスや private な参照先 (絶対パス・内部 URL) を ADR/CONTEXT.md に書かない。決定の本質だけ記録し、private 材料は除外または別管理に促す。",
       "files": [],
       "assertions": [
-        { "id": "no-secret-in-docs", "text": "secret パス・絶対パス・private 参照先を成果物に書き込んでいない" },
-        { "id": "records-decision-only", "text": "決定の本質だけを public-safe に記録している" }
+        {
+          "id": "no-secret-in-docs",
+          "text": "secret パス・絶対パス・private 参照先を成果物に書き込んでいない"
+        },
+        {
+          "id": "records-decision-only",
+          "text": "決定の本質だけを public-safe に記録している"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "consult-same-procedure-no-adr-log",
+      "prompt": "[前提: Claude Code の session。経路はある] 用語集と ADR を育てながら、決済の取消の設計を詰めて。round 1 の前に別の model に相談してから質問を出して",
+      "expected_output": "personal-grill-me の CONSULT.md と同じ手順で round 1 の前に相談し、印・採らなかった点・fact の確かめ方・縮退も同じにする。ADR に書くのは round で合意した判断と必要な理由だけで、相談者の名前、採らなかった指摘の一覧、run dir の path、未合意の提案は書かない。CONTEXT.md の用語も合意したものだけ。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "same-procedure",
+          "text": "personal-grill-me の CONSULT.md と同じ手順 (印、採らなかった点、fact の確かめ方、縮退) で相談している"
+        },
+        {
+          "id": "adr-not-a-consult-log",
+          "text": "ADR に相談者の名前、採らなかった指摘の一覧、run dir の path、未合意の提案を書いていない"
+        }
       ]
     }
   ]
