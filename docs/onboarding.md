@@ -192,8 +192,8 @@ open issue の**正本は GitHub Issues** (この一覧は代表的な設計系�
   (script を含む skill を扱う時 or CI に pip 層を足す時)。
 - **#24 追加 artifact kind 対応**: skill / instruction / script / plugin (OpenCode 専用, #295) は
   対応済み。残るは `agent` kind の各 tool 形式へのマッピング設計 (需要待ち)。
-- **#295 OpenCode 対応**: PR 1 (配布の基盤と safe-gh の誘導) と PR 2 (品質ループ) の後、PR 3a
-  (shell.env の目印)、PR 3b (規約の文面) が続く。前提の実測は
+- **#343 OpenCode plugin の init 成功の目印 log**: #295 (OpenCode 対応 Phase 2。PR 0〜3b) は完了済みで、
+  残る follow-up は dotfiles の doctor の読込確認に使う目印の log だけ。前提の実測は
   [opencode-plugin-probe](opencode-plugin-probe.md)。
 
 ## 8. 開発ワークフロー
