@@ -36,14 +36,17 @@ gh label create maintenance-sweep --description 'personal-maintenance-sweep が�
 
 label の付いた Issue のうち、**自分 (gh の認証 user) が作ったものだけ**から、marker の値だけを取り
 出します。本文そのものは出力しません (他人が label を付けた Issue や本文の中の文言を、data としても
-読み込まないため)。
+読み込まないため)。`gh api --paginate --slurp` で全 page を取るので、件数の上限で照合が打ち切られることは
+ありません。`{owner}/{repo}` は gh が current の repo の remote から埋めます。REST の一覧には PR も
+混ざるので除きます。
 
 ```sh
-me=$(gh api user --jq .login) && gh issue list --label maintenance-sweep --state all --limit 1000 \
-  --json number,state,stateReason,author,body | ruby -rjson -e '
+me=$(gh api user --jq .login) && gh api --paginate --slurp \
+  "repos/{owner}/{repo}/issues?labels=maintenance-sweep&state=all&per_page=100" | ruby -rjson -e '
 me = ARGV.fetch(0)
-JSON.parse($stdin.read).each do |i|
-  next unless i.dig("author", "login") == me
+JSON.parse($stdin.read).flatten.each do |i|
+  next if i.key?("pull_request")
+  next unless i.dig("user", "login") == me
   body = i["body"].to_s
   if body.include?("<!-- maintenance-sweep:tracking v1 -->")
     commit = body[/<!-- maintenance-sweep:last-commit=([0-9a-f]{40}) -->/, 1]
@@ -51,60 +54,67 @@ JSON.parse($stdin.read).each do |i|
     puts ["tracking", i["number"], i["state"], commit || "-", auditor || "-"].join("\t")
   end
   body.scan(/<!-- maintenance-sweep:fingerprint=(.+?) -->/).flatten.each do |fp|
-    puts ["finding", i["number"], i["state"], i["stateReason"] || "-", fp].join("\t")
+    puts ["finding", i["number"], i["state"], i["state_reason"] || "-", fp].join("\t")
   end
 end' "$me"
 ```
 
 - `tracking` の行が追跡 Issue (番号、状態、前回の監査の対象の commit、前回の監査役)。2 行以上あれば、
   どれを使うかを人に確認する。
-- `finding` の行が所見の Issue (番号、状態、close の理由、fingerprint)。close の理由は `COMPLETED` /
-  `NOT_PLANNED` など。
+- `finding` の行が所見の Issue (番号、状態、close の理由、fingerprint)。close の理由は `completed` /
+  `not_planned` / `reopened`、open なら `-`。
+- command が失敗したら (gh の認証、network、rate limit)、照合が終わっていないものとして起票しない
+  (report モードに切り替えるかを確認する)。
 
 ## 役割の数え方
 
-前回の監査の対象の commit から `HEAD` までの first-parent の commit について、`Co-Authored-By:` の
-trailer の値を出し、Claude 側 / Codex 側に数えます。前回の記録が無いときは、1 つ目の block の代わりに
-2 つ目の block (直近 90 日) を使います。
+前回の監査の対象の commit から `HEAD` までの first-parent の commit を、相互レビューの routing の
+preflight (`personal-review-routing-preflight`) と同じ分類で Claude 側 / Codex 側に数えます。preflight を
+library として load し、その分類 (`classify_message`) と reviewer の表 (`REVIEWER`) をそのまま使うので、
+OpenCode の model の系列表もここに写しません (正本は preflight)。author の側は reviewer の反対です。
+
+preflight は tool の home に配備されたものを使います (Claude Code なら
+`$HOME/.claude/agent-tools/scripts/personal-review-routing-preflight`、Codex なら `$HOME/.codex/` の下の同じ
+path)。無ければ数えず、役割を人に確認します。path は literal の変数 `preflight` に入れて渡します。
+
+前回の記録があるときは 1 つ目の block、無いときは 2 つ目の block (直近 90 日) で commit を列挙し、出力を
+そのまま 3 つ目の block に渡します。
 
 ```sh
 sh -c '
 base=$1
 case $base in ""|*[!0-9a-f]*) echo "base は 16 進の OID で渡す" >&2; exit 2 ;; esac
 git rev-parse --verify --quiet --end-of-options "$base^{commit}" >/dev/null || { echo "base が commit ではない" >&2; exit 2; }
-git log --first-parent --format="%H%x09%(trailers:key=Co-Authored-By,valueonly,separator=%x1e)" "$base..HEAD"
+git log --first-parent --format=%H "$base..HEAD"
 ' sh '<前回の監査の対象の commit の OID>'
 ```
 
 ```sh
 sh -c '
-git log --first-parent --since="$1" --format="%H%x09%(trailers:key=Co-Authored-By,valueonly,separator=%x1e)" HEAD
+git log --first-parent --since="$1" --format=%H HEAD
 ' sh '90 days ago'
 ```
 
-出力をそのまま次に渡して数えます。
-
 ```sh
 ruby -e '
+load ARGV.fetch(0)
 counts = Hash.new(0)
 $stdin.each_line do |line|
-  _oid, trailers = line.chomp.split("\t", 2)
-  sides = trailers.to_s.split("\x1e").map(&:strip).map do |v|
-    case v
-    when /\AClaude\b/, %r{\AOpenCode \(anthropic/} then "claude"
-    when /\ACodex\b/, /\AOpenCode \(/ then "codex"
-    end
-  end.compact.uniq
-  counts[sides.size == 1 ? sides.first : (sides.empty? ? "none" : "mixed")] += 1
+  oid = line.strip
+  next unless oid.match?(/\A[0-9a-f]{40}\z/)
+  msg = IO.popen(["git", "log", "-1", "--format=%B", oid], &:read)
+  kind = ReviewRoutingPreflight.classify_message(msg)
+  reviewer = ReviewRoutingPreflight::REVIEWER[kind]
+  side = { codex: "claude", claude: "codex" }[reviewer] || ReviewRoutingPreflight.label(kind)
+  counts[side] += 1
 end
-puts %w[claude codex mixed none].map { |k| "#{k}=#{counts[k]}" }.join(" ")'
+puts counts.sort.map { |k, v| "#{k}=#{v}" }.join(" ")' "$preflight"
 ```
 
-- 分類は相互レビューの routing と同じ向きです: name が `Claude` で始まる、または OpenCode の
-  Anthropic 系の model → Claude 側。`Codex` で始まる、または それ以外の OpenCode → Codex 側。
-- 1 つの commit に両側の trailer があれば `mixed`、AI の trailer が無ければ `none` で、どちらも数に入れない。
-- git の trailer の解釈を使うので、routing の preflight (より厳しい近似) と境界で結果が違うことがあります。
-  役割の選択は安全の境界ではないので、この差は許容します。
+- 出力は `claude=<数>` と `codex=<数>` に、数えなかった commit の分類 (`none` = AI の trailer が無い、
+  `mixed` = 1 つの commit に複数の AI、`opencode(unknown)` = 系列が曖昧) が並ぶ形。数えなかったものは
+  役割の判定に入れない。
+- trailer の読み方も preflight と同じ (末尾の段落がすべて trailer の形のときだけ trailer として読む)。
 
 ## 追跡 Issue
 
@@ -175,17 +185,23 @@ personal-maintenance-sweep の run `<run id>` で起票 (観点: <観点> / 種�
 ```
 
 - fingerprint に `-->` を含めない (含むなら、場所の key から単位の名前を除いた形にする)。
-- 投稿の前に、本文の file を public-safety の gate に通し、exit 0 のときだけ投稿する。
+- 投稿の前に、**題名と本文の両方**を public-safety の gate に通し、exit 0 のときだけ投稿する (題名も
+  所見から作るので、本文だけを通すと題名に残った値が素通りする)。
 
 ```sh
 gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"
-"$gate" --stdin < "$body_file" && gh issue create --title "$title" --body-file "$body_file" --label maintenance-sweep
+{ printf '%s\n\n' "$title"; cat "$body_file"; } | "$gate" --stdin \
+  && gh issue create --title "$title" --body-file "$body_file" --label maintenance-sweep
 ```
 
   gate は Claude Code の home に配備されたもの (投稿するのは Claude の session だけ)。`title` と
   `body_file` は literal の変数で渡す。gate が無い・exit 0 でないときは投稿せず、gate の出力 (どの規則に
-  当たったか) を報告して、本文を直すか report モードに切り替えるかを確認する。追跡 Issue の本文と run の
-  コメントも、同じく gate を通してから `gh issue edit --body-file` / `gh issue comment --body-file` で書く。
+  当たったか) を報告して、題名と本文を直すか report モードに切り替えるかを確認する。追跡 Issue の本文と
+  run のコメントも、同じく gate を通してから `gh issue edit --body-file` / `gh issue comment --body-file` で
+  書く (追跡 Issue を作るときは題名も一緒に通す)。
+- gate が止めるのは機械で判定できるものだけ (実 HOME の path、既知の token の形、local の pattern file の
+  pattern など) で、網羅ではありません。security の所見や残量の数字を public にしないことは、triage と
+  記録の規則 (`SKILL.md` 手順 5 と 8) が持ちます。
 
 ## local の state
 

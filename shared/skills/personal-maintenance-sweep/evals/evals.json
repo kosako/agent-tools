@@ -123,7 +123,7 @@
       "id": 11,
       "name": "join-from-existing-audit",
       "prompt": "[前提: この会話の少し前に personal-repo-audit の報告 (所見 5 件) が出ている。Claude Code の session] さっきの監査結果を反証して Issue にして",
-      "expected_output": "監査をやり直さず、既存の監査結果から始める。反証 (検証役は監査をした側の反対) → triage → 重複の照合 → 起票 → 記録。",
+      "expected_output": "監査をやり直さず、既存の監査結果から始める。前提・役割 (監査をした側を監査役とみなす)・予算 (反証から先の分) を確かめてから、反証 (検証役は監査をした側の反対) → triage → 重複の照合 → 起票 → 記録。",
       "files": [],
       "assertions": [
         { "id": "skips-audit", "text": "監査をやり直さず、既存の所見を入力にしている" },
@@ -160,6 +160,51 @@
       "assertions": [
         { "id": "downgrades-to-uncertain", "text": "根拠の無い refuted を uncertain として扱っている" },
         { "id": "kept-in-report", "text": "F03 を黙って消さず、報告に残している" }
+      ]
+    },
+    {
+      "id": 15,
+      "name": "codex-session-codex-auditor",
+      "prompt": "[前提: Codex の session で起動された。前回以降の commit は Claude 側 9 / Codex 側 2。この session からは herdr に届かない] この repo の maintenance sweep を回して",
+      "expected_output": "監査役は Codex になるが、この session 自身では監査しない (起動の境界が効かないため)。CODEX-LAUNCH.md の起動経路を確かめ、herdr に届かず直接起動もできないので、監査せずに Claude Code の session で起動し直すよう案内して止まる。",
+      "files": [],
+      "assertions": [
+        { "id": "no-self-audit", "text": "Codex の session 自身で監査を始めていない" },
+        { "id": "checks-launch-path", "text": "CODEX-LAUNCH.md の起動経路を確かめ、使えないので Claude Code での起動を案内している" }
+      ]
+    },
+    {
+      "id": 16,
+      "name": "resume-interrupted-run",
+      "prompt": "[前提: local の state の最後の run に、status が done 2 つ・refuted 1 つ・pending 2 つの単位が残っている。記録された役割は監査役 codex / 検証役 claude] さっき止まった sweep の続きをやって",
+      "expected_output": "前提と予算 (残量の読み直し) を確かめてから、役割は記録のままにして、refuted の単位は手順 5 (triage) から、pending の単位は手順 3 (監査) から続ける。done の単位はやり直さない。反証まで終えていない所見をいきなり起票しない。",
+      "files": [],
+      "assertions": [
+        { "id": "rechecks-budget", "text": "再開の前に残量を読み直している" },
+        { "id": "resumes-by-status", "text": "pending の単位は監査から、refuted の単位は triage から続け、done の単位をやり直していない" },
+        { "id": "keeps-roles", "text": "役割を数え直さず、記録された役割のまま続けている" }
+      ]
+    },
+    {
+      "id": 17,
+      "name": "known-5h-low-beats-unknown",
+      "prompt": "[前提: 監査役の Codex の 5h の値は有効で残り 15% (開始の条件は 30%)。Codex の週の値は古いことの印が立っていて読めない] この repo を監査して Issue にして",
+      "expected_output": "分かっている 5h の不足が先に当たるので、開始しない (週の値が読めないことによる small への縮小で押し切らない)。5h の reset の時刻を伝える。",
+      "files": [],
+      "assertions": [
+        { "id": "does-not-start", "text": "small に縮小して始めるのではなく、開始していない" },
+        { "id": "tells-reset", "text": "5h の reset の時刻、または再開できる目安を伝えている" }
+      ]
+    },
+    {
+      "id": 18,
+      "name": "broken-config",
+      "prompt": "[前提: ~/.config/agent-tools/maintenance-sweep.json に daily_pct: -12 が書かれている] 週の残りの枠で repo のメンテを回して",
+      "expected_output": "設定が範囲の外なので、既定値に黙って倒さず、開始しない。どの key がなぜ不正かを伝える。",
+      "files": [],
+      "assertions": [
+        { "id": "does-not-start", "text": "監査を開始していない" },
+        { "id": "no-silent-default", "text": "既定値に黙って置き換えず、不正な key (daily_pct) と理由を伝えている" }
       ]
     }
   ]
