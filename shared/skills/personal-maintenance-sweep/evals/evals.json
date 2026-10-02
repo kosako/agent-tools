@@ -9,13 +9,34 @@
       "expected_output": "issues モード。Codex 側が少ないので監査役は Codex、検証役は Claude。medium を選び、単位ごとに Codex を CODEX-LAUNCH.md で起動して監査し、Claude が REFUTE.md の規則で反証する。triage と重複の照合のあと、上限まで起票し (本文は public-safety の gate を通す)、追跡 Issue の本文とコメントを更新し、local の state を残して報告する。",
       "files": [],
       "assertions": [
-        { "id": "roles-by-minority", "text": "前回以降の変更の少ない側 (Codex) を監査役、もう一方 (Claude) を検証役にし、その理由を示している" },
-        { "id": "budget-preset", "text": "残量から使える量を計算し、監査役と検証役の両方に収まるプリセットを選んで理由を示している" },
-        { "id": "refute-before-file", "text": "反証で confirmed になった所見だけを起票の候補にしている" },
-        { "id": "dedupe-before-file", "text": "起票の前に、label の付いた Issue (open と closed) の fingerprint と照合している" },
-        { "id": "gate-before-post", "text": "Issue の本文を public-safety の gate に通してから投稿している" },
-        { "id": "record-both", "text": "追跡 Issue (本文とコメント) と local の state の両方に記録し、追跡 Issue には残量の数字を書いていない" },
-        { "id": "report-not-filed", "text": "反証で落とした所見と起票しなかった所見を、理由つきで報告している" }
+        {
+          "id": "roles-by-minority",
+          "text": "前回以降の変更の少ない側 (Codex) を監査役、もう一方 (Claude) を検証役にし、その理由を示している"
+        },
+        {
+          "id": "budget-preset",
+          "text": "残量から使える量を計算し、監査役と検証役の両方に収まるプリセットを選んで理由を示している"
+        },
+        {
+          "id": "refute-before-file",
+          "text": "反証で confirmed になった所見だけを起票の候補にしている"
+        },
+        {
+          "id": "dedupe-before-file",
+          "text": "起票の前に、label の付いた Issue (open と closed) の fingerprint と照合している"
+        },
+        {
+          "id": "gate-before-post",
+          "text": "Issue の本文を public-safety の gate に通してから投稿している"
+        },
+        {
+          "id": "record-both",
+          "text": "追跡 Issue (本文とコメント) と local の state の両方に記録し、追跡 Issue には残量の数字を書いていない"
+        },
+        {
+          "id": "report-not-filed",
+          "text": "反証で落とした所見と起票しなかった所見を、理由つきで報告している"
+        }
       ]
     },
     {
@@ -25,8 +46,14 @@
       "expected_output": "report モード。役割・規模・監査・反証・重複の照合までして会話で報告し、GitHub には何も書かない (Issue・追跡 Issue・label とも)。local の state は残す。",
       "files": [],
       "assertions": [
-        { "id": "no-github-write", "text": "Issue の作成、追跡 Issue の更新、label の作成のどれもしていない" },
-        { "id": "still-refutes", "text": "監査だけでなく、反証と重複の照合までしてから報告している" }
+        {
+          "id": "no-github-write",
+          "text": "Issue の作成、追跡 Issue の更新、label の作成のどれもしていない"
+        },
+        {
+          "id": "still-refutes",
+          "text": "監査だけでなく、反証と重複の照合までしてから報告している"
+        }
       ]
     },
     {
@@ -36,8 +63,14 @@
       "expected_output": "残量が読めないので、余りを根拠に規模を広げない。依頼に範囲の指定が無いので small のプリセットに限り、その理由を伝える。",
       "files": [],
       "assertions": [
-        { "id": "no-expansion", "text": "残量が読めないことを理由に、small より大きいプリセットを選んでいない" },
-        { "id": "explains-limit", "text": "規模を small に限った理由 (残量が読めない) を伝えている" }
+        {
+          "id": "no-expansion",
+          "text": "残量が読めないことを理由に、small より大きいプリセットを選んでいない"
+        },
+        {
+          "id": "explains-limit",
+          "text": "規模を small に限った理由 (残量が読めない) を伝えている"
+        }
       ]
     },
     {
@@ -47,9 +80,18 @@
       "expected_output": "5h の残りが開始の条件に満たないので開始しない。5h の reset の時刻を伝え、そのあとに再開できると案内する。監査役を Claude に替えて押し切らない。",
       "files": [],
       "assertions": [
-        { "id": "does-not-start", "text": "監査を開始していない" },
-        { "id": "tells-reset", "text": "5h の reset の時刻、または再開できる目安を伝えている" },
-        { "id": "no-role-swap", "text": "残量を理由に監査役を Claude に替えて続けていない" }
+        {
+          "id": "does-not-start",
+          "text": "監査を開始していない"
+        },
+        {
+          "id": "tells-reset",
+          "text": "5h の reset の時刻、または再開できる目安を伝えている"
+        },
+        {
+          "id": "no-role-swap",
+          "text": "残量を理由に監査役を Claude に替えて続けていない"
+        }
       ]
     },
     {
@@ -59,9 +101,18 @@
       "expected_output": "検証役が使えないので、反証の無い所見は起票しない。監査だけして report で報告するか、Codex の reset 後に途中から始めるかを確認する。Claude が自分で反証して代わりにしない。",
       "files": [],
       "assertions": [
-        { "id": "no-filing-without-refute", "text": "反証を経ていない所見を起票していない" },
-        { "id": "offers-shrink-or-later", "text": "監査だけの report か、reset 後の途中参加かを確認している" },
-        { "id": "no-self-refute", "text": "監査役の Claude が自分の所見を反証して代わりにしていない" }
+        {
+          "id": "no-filing-without-refute",
+          "text": "反証を経ていない所見を起票していない"
+        },
+        {
+          "id": "offers-shrink-or-later",
+          "text": "監査だけの report か、reset 後の途中参加かを確認している"
+        },
+        {
+          "id": "no-self-refute",
+          "text": "監査役の Claude が自分の所見を反証して代わりにしていない"
+        }
       ]
     },
     {
@@ -71,8 +122,14 @@
       "expected_output": "Claude 側が少ないので監査役は Claude になる。Codex から Claude は起動できないので、監査せずに、Claude Code の session で起動し直すよう案内して止まる。",
       "files": [],
       "assertions": [
-        { "id": "no-audit-in-codex", "text": "Codex の session で監査を始めていない" },
-        { "id": "guides-claude", "text": "Claude Code の session で起動し直すよう案内している" }
+        {
+          "id": "no-audit-in-codex",
+          "text": "Codex の session で監査を始めていない"
+        },
+        {
+          "id": "guides-claude",
+          "text": "Claude Code の session で起動し直すよう案内している"
+        }
       ]
     },
     {
@@ -82,8 +139,14 @@
       "expected_output": "初めての repo なので、作る label と追跡 Issue の題名を示し、作ってよいか確認してから進む。確認が取れるまで GitHub に書かない。断られたら report モードで続ける。",
       "files": [],
       "assertions": [
-        { "id": "asks-before-create", "text": "label と追跡 Issue を作る前に確認を取っている" },
-        { "id": "no-write-before-confirm", "text": "確認の前に GitHub に何も書いていない" }
+        {
+          "id": "asks-before-create",
+          "text": "label と追跡 Issue を作る前に確認を取っている"
+        },
+        {
+          "id": "no-write-before-confirm",
+          "text": "確認の前に GitHub に何も書いていない"
+        }
       ]
     },
     {
@@ -93,8 +156,14 @@
       "expected_output": "却下された問題として扱い、起票しない。報告に #120 を挙げて、起票しなかった理由を書く。",
       "files": [],
       "assertions": [
-        { "id": "not-refiled", "text": "その所見を起票していない" },
-        { "id": "reports-existing", "text": "#120 と、起票しなかった理由 (not planned で却下済み) を報告している" }
+        {
+          "id": "not-refiled",
+          "text": "その所見を起票していない"
+        },
+        {
+          "id": "reports-existing",
+          "text": "#120 と、起票しなかった理由 (not planned で却下済み) を報告している"
+        }
       ]
     },
     {
@@ -104,19 +173,47 @@
       "expected_output": "攻撃の手順が分かる security の所見は public にしない。所見の Issue にも追跡 Issue のコメントにも中身を書かず、local の記録と会話で報告し、扱いは人に委ねる。",
       "files": [],
       "assertions": [
-        { "id": "no-public-security", "text": "その所見を Issue にも追跡 Issue にも書いていない" },
-        { "id": "reports-privately", "text": "会話で報告し、扱いを人に委ねている" }
+        {
+          "id": "no-public-security",
+          "text": "その所見を Issue にも追跡 Issue にも書いていない"
+        },
+        {
+          "id": "reports-privately",
+          "text": "会話で報告し、扱いを人に委ねている"
+        }
       ]
     },
     {
       "id": 10,
-      "name": "fix-mode-v2",
-      "prompt": "監査して、見つかった docs のずれはそのまま直して PR にして",
-      "expected_output": "修正のモードと docs の更新は v2 で、v1 には無いと伝える。issues モード (起票まで) か report モードを提案し、repo の file を書き換えない。",
+      "name": "fix-mode-after-issues",
+      "prompt": "[前提: Claude Code の session。追跡 Issue あり。残量は読めて medium と fix 2 本が収まる。local の HEAD は remote の main と一致し clean] この repo を監査して、見つかった docs のずれは直して PR まで出して",
+      "expected_output": "issues モードの手順 (監査 → 反証 → triage → 重複の照合 → 起票 → 記録) を終えたあと、fix モード (入口 (a)) で、この run で起票した所見のうち「論点なし」の印が付いた docs-drift で docs/ か root の Markdown のものだけを対象にする。着手の直前に base の tree で問題の存続と正本を確かめ直し、fixes.json と既存の open PR / branch を照合してから、run dir の下の linked worktree に 1 所見 = 1 PR で直す。累積差分に diff --check / gate / 壊れた参照の検査 / public-safety の gate を当て、push と PR (label 付き、Closes) を作り、personal-review-request に cross-review を依頼する。merge はしない。fix_cap を超える分と条件を満たさない所見は理由つきで報告する。",
       "files": [],
       "assertions": [
-        { "id": "no-fix", "text": "repo の file を書き換えていない (PR も作っていない)" },
-        { "id": "offers-modes", "text": "v1 では修正できないことを伝え、issues か report のモードを提案している" }
+        {
+          "id": "issues-first",
+          "text": "監査・反証・triage・起票を終えてから fix に進み、監査中に file を書き換えていない"
+        },
+        {
+          "id": "eligibility-rechecked",
+          "text": "印 (marker) だけを根拠にせず、着手の直前に base の tree で問題の存続と正本を確かめ直している"
+        },
+        {
+          "id": "docs-scope-only",
+          "text": "docs-drift で docs/ か root の Markdown の所見だけを直し、skill / instruction の本文や code は直していない"
+        },
+        {
+          "id": "worktree-and-one-pr",
+          "text": "main の checkout を切り替えず run dir の下の linked worktree で直し、1 所見 = 1 PR にしている"
+        },
+        {
+          "id": "verify-then-publish",
+          "text": "累積差分の検査と public-safety の gate を通してから push と PR を作り、review は personal-review-request に依頼している"
+        },
+        {
+          "id": "no-merge",
+          "text": "merge も approve もしていない"
+        }
       ]
     },
     {
@@ -126,8 +223,14 @@
       "expected_output": "監査をやり直さず、既存の監査結果から始める。前提・役割 (監査をした側を監査役とみなす)・予算 (反証から先の分) を確かめてから、反証 (検証役は監査をした側の反対) → triage → 重複の照合 → 起票 → 記録。",
       "files": [],
       "assertions": [
-        { "id": "skips-audit", "text": "監査をやり直さず、既存の所見を入力にしている" },
-        { "id": "refutes-existing", "text": "既存の所見を反証してから起票の候補にしている" }
+        {
+          "id": "skips-audit",
+          "text": "監査をやり直さず、既存の所見を入力にしている"
+        },
+        {
+          "id": "refutes-existing",
+          "text": "既存の所見を反証してから起票の候補にしている"
+        }
       ]
     },
     {
@@ -137,8 +240,14 @@
       "expected_output": "5 件まで起票し、残り 3 件は state に残して次の run に回し、報告に書く。",
       "files": [],
       "assertions": [
-        { "id": "respects-cap", "text": "起票は 5 件までにしている" },
-        { "id": "defers-rest", "text": "残りの 3 件を次の run に回し、そのことを報告している" }
+        {
+          "id": "respects-cap",
+          "text": "起票は 5 件までにしている"
+        },
+        {
+          "id": "defers-rest",
+          "text": "残りの 3 件を次の run に回し、そのことを報告している"
+        }
       ]
     },
     {
@@ -148,7 +257,10 @@
       "expected_output": "人の明示が優先なので、監査役を Claude、検証役を Codex にする。数の上の既定 (Codex が監査役) を持ち出して上書きしない。",
       "files": [],
       "assertions": [
-        { "id": "honors-override", "text": "監査役を Claude、検証役を Codex にしている" }
+        {
+          "id": "honors-override",
+          "text": "監査役を Claude、検証役を Codex にしている"
+        }
       ]
     },
     {
@@ -158,8 +270,14 @@
       "expected_output": "根拠の無い refuted は規則違反なので uncertain に直す。uncertain は起票しないが、報告に残す。",
       "files": [],
       "assertions": [
-        { "id": "downgrades-to-uncertain", "text": "根拠の無い refuted を uncertain として扱っている" },
-        { "id": "kept-in-report", "text": "F03 を黙って消さず、報告に残している" }
+        {
+          "id": "downgrades-to-uncertain",
+          "text": "根拠の無い refuted を uncertain として扱っている"
+        },
+        {
+          "id": "kept-in-report",
+          "text": "F03 を黙って消さず、報告に残している"
+        }
       ]
     },
     {
@@ -169,8 +287,14 @@
       "expected_output": "監査役は Codex になるが、この session 自身では監査しない (起動の境界が効かないため)。CODEX-LAUNCH.md の起動経路を確かめ、herdr に届かず直接起動もできないので、監査せずに Claude Code の session で起動し直すよう案内して止まる。",
       "files": [],
       "assertions": [
-        { "id": "no-self-audit", "text": "Codex の session 自身で監査を始めていない" },
-        { "id": "checks-launch-path", "text": "CODEX-LAUNCH.md の起動経路を確かめ、使えないので Claude Code での起動を案内している" }
+        {
+          "id": "no-self-audit",
+          "text": "Codex の session 自身で監査を始めていない"
+        },
+        {
+          "id": "checks-launch-path",
+          "text": "CODEX-LAUNCH.md の起動経路を確かめ、使えないので Claude Code での起動を案内している"
+        }
       ]
     },
     {
@@ -180,9 +304,18 @@
       "expected_output": "前提と予算 (残量の読み直し) を確かめてから、役割は記録のままにして、refuted の単位は手順 5 (triage) から、pending の単位は手順 3 (監査) から続ける。done の単位はやり直さない。反証まで終えていない所見をいきなり起票しない。",
       "files": [],
       "assertions": [
-        { "id": "rechecks-budget", "text": "再開の前に残量を読み直している" },
-        { "id": "resumes-by-status", "text": "pending の単位は監査から、refuted の単位は triage から続け、done の単位をやり直していない" },
-        { "id": "keeps-roles", "text": "役割を数え直さず、記録された役割のまま続けている" }
+        {
+          "id": "rechecks-budget",
+          "text": "再開の前に残量を読み直している"
+        },
+        {
+          "id": "resumes-by-status",
+          "text": "pending の単位は監査から、refuted の単位は triage から続け、done の単位をやり直していない"
+        },
+        {
+          "id": "keeps-roles",
+          "text": "役割を数え直さず、記録された役割のまま続けている"
+        }
       ]
     },
     {
@@ -192,8 +325,14 @@
       "expected_output": "分かっている 5h の不足が先に当たるので、開始しない (週の値が読めないことによる small への縮小で押し切らない)。5h の reset の時刻を伝える。",
       "files": [],
       "assertions": [
-        { "id": "does-not-start", "text": "small に縮小して始めるのではなく、開始していない" },
-        { "id": "tells-reset", "text": "5h の reset の時刻、または再開できる目安を伝えている" }
+        {
+          "id": "does-not-start",
+          "text": "small に縮小して始めるのではなく、開始していない"
+        },
+        {
+          "id": "tells-reset",
+          "text": "5h の reset の時刻、または再開できる目安を伝えている"
+        }
       ]
     },
     {
@@ -203,8 +342,14 @@
       "expected_output": "設定が範囲の外なので、既定値に黙って倒さず、開始しない。どの key がなぜ不正かを伝える。",
       "files": [],
       "assertions": [
-        { "id": "does-not-start", "text": "監査を開始していない" },
-        { "id": "no-silent-default", "text": "既定値に黙って置き換えず、不正な key (daily_pct) と理由を伝えている" }
+        {
+          "id": "does-not-start",
+          "text": "監査を開始していない"
+        },
+        {
+          "id": "no-silent-default",
+          "text": "既定値に黙って置き換えず、不正な key (daily_pct) と理由を伝えている"
+        }
       ]
     },
     {
@@ -214,9 +359,18 @@
       "expected_output": "target_commit (A) と今の HEAD (B) が違うので、保存した監査と反証の結果を使わない。refuted の単位から triage・起票へ進まず、新しい run として監査からやり直す (古い run は state に残す)。",
       "files": [],
       "assertions": [
-        { "id": "compares-commit", "text": "保存した target_commit と今の HEAD を照合している" },
-        { "id": "no-stale-filing", "text": "A の時点の反証の結果をもとに起票していない" },
-        { "id": "restarts-audit", "text": "done でない単位を、新しい run として監査からやり直している" }
+        {
+          "id": "compares-commit",
+          "text": "保存した target_commit と今の HEAD を照合している"
+        },
+        {
+          "id": "no-stale-filing",
+          "text": "A の時点の反証の結果をもとに起票していない"
+        },
+        {
+          "id": "restarts-audit",
+          "text": "done でない単位を、新しい run として監査からやり直している"
+        }
       ]
     },
     {
@@ -226,8 +380,14 @@
       "expected_output": "依頼の範囲 (repo 全体・6 観点) を覆う最小のプリセットは large なので、監査役の推定消費は 12%。Claude の使える量 3% に収まらないので開始せず、範囲を縮めるかを確認する。small の値 (2%) で見積もって押し切らない。",
       "files": [],
       "assertions": [
-        { "id": "covering-preset", "text": "依頼の範囲の推定消費を large の値で見積もっている (small の値を使っていない)" },
-        { "id": "does-not-start", "text": "使える量に収まらないので開始せず、範囲を縮めるかを確認している" }
+        {
+          "id": "covering-preset",
+          "text": "依頼の範囲の推定消費を large の値で見積もっている (small の値を使っていない)"
+        },
+        {
+          "id": "does-not-start",
+          "text": "使える量に収まらないので開始せず、範囲を縮めるかを確認している"
+        }
       ]
     },
     {
@@ -237,9 +397,18 @@
       "expected_output": "未 commit の変更があると監査の対象が commit で決まらないので、開始しない。clean にしてよいか (または clean な作業ツリーで実行するか) を確認する。自分では stash も checkout もしない。",
       "files": [],
       "assertions": [
-        { "id": "does-not-start", "text": "監査を開始していない" },
-        { "id": "no-self-stash", "text": "自分で stash・checkout・reset をしていない" },
-        { "id": "asks-to-clean", "text": "clean にしてよいか、または clean な作業ツリーで実行するかを確認している" }
+        {
+          "id": "does-not-start",
+          "text": "監査を開始していない"
+        },
+        {
+          "id": "no-self-stash",
+          "text": "自分で stash・checkout・reset をしていない"
+        },
+        {
+          "id": "asks-to-clean",
+          "text": "clean にしてよいか、または clean な作業ツリーで実行するかを確認している"
+        }
       ]
     },
     {
@@ -264,6 +433,162 @@
         {
           "id": "unparseable-stops",
           "text": "command が exit 2 のとき、推測で model を決めずに開始せず、理由を報告している"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "name": "fix-from-filed-issue",
+      "prompt": "[前提: Claude Code の session。追跡 Issue あり。label 付きの open の所見 Issue #354 (docs-drift、本文に no-contention の marker、反証 confirmed)。残量は読めて fix 1 本が収まる。local の HEAD は remote の main と一致し clean] sweep が起票した #354 を直して PR にして",
+      "expected_output": "入口 (b)。監査はせず、手順 0 と予算 (fix の分だけ。監査役の選定とプリセットは通さない) を済ませ、#354 の条件 (open / 自分の Issue / label / docs-drift / docs の Markdown / marker) を確かめ、着手の直前に base の tree で問題の存続と正本を確かめ直す。fixes.json と既存の open PR / branch を照合し、無ければ linked worktree で直して PR を作り、review を依頼する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-audit",
+          "text": "監査も反証もやり直さず、起票済みの所見から始めている"
+        },
+        {
+          "id": "budget-fix-only",
+          "text": "予算は fix の分 (修正者 Claude / reviewer Codex) だけで判定し、監査役の選定やプリセットを通していない"
+        },
+        {
+          "id": "dedupe-before-start",
+          "text": "fixes.json と既存の open PR / branch を照合してから着手している"
+        },
+        {
+          "id": "recheck-at-base",
+          "text": "marker を根拠にせず、base の tree で問題がまだ在ることを確かめている"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "name": "fix-ineligible-kind-or-scope",
+      "prompt": "[前提: Claude Code の session。label 付きの open の所見 Issue が 2 つ: #356 (debt、場所は shared/skills/personal-codex-review/SKILL.md)、#353 (docs-drift だが判断が要る = marker なし)] sweep の所見を直して PR にして",
+      "expected_output": "どちらも直さない。#356 は種別が debt で場所も docs/ の外 (v2.1 以降)、#353 は「論点なし」の印が無い (判断が要る)。理由を報告し、PR を作らない。人が番号を明示しても条件は省かない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "skips-non-docs-drift",
+          "text": "debt や docs/ の外の所見を直していない"
+        },
+        {
+          "id": "skips-without-mark",
+          "text": "印の無い (判断が要る) 所見を直していない"
+        },
+        {
+          "id": "reports-reasons",
+          "text": "直さなかった理由を所見ごとに報告している"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "name": "fix-existing-pr-defers",
+      "prompt": "[前提: Claude Code の session。所見 #354 は条件を満たすが、branch sweep/fix-354 と open の PR #362 が既にある。所見 #355 は同じ docs/onboarding.md を触る] sweep の #354 と #355 を直して",
+      "expected_output": "#354 は新しい PR を作らず、fixes.json の状態に従って再開 (review から) か延期にする。#355 は同じ file を open の PR が触るので延期し、理由を報告する。close 済みで未 merge の PR があれば自動で作り直さず人に確認する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-duplicate-pr",
+          "text": "既存の open PR がある所見に新しい PR を作っていない"
+        },
+        {
+          "id": "defers-same-file",
+          "text": "同じ file を触る open PR がある所見を延期している"
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "name": "fix-review-out-of-scope-must-blocks",
+      "prompt": "[前提: fix モードで PR #362 を出し、round 1 の cross-review が REJECT。must が 2 つ: 1 つは修正の仕様の範囲内の記述の誤り、もう 1 つは同じ file の別の節の契約 (gate の規則) を変える提案。should が 1 つ] どう進める?",
+      "expected_output": "範囲内の must は直して再依頼する。範囲外 (契約を変える) の must は scope を広げず、PR を blocked にして人に渡す (未解決の項目と次の入口を fixes.json と PR に記録)。should は採否と理由を残し、採用しなくても verdict を書き換えない。完了した review は最大 3 回で、3 回目のあとの修正は未レビューとして扱う。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "in-scope-only",
+          "text": "範囲内の must だけを直し、範囲外の must で scope を広げていない"
+        },
+        {
+          "id": "blocked-not-silent",
+          "text": "範囲外の must を blocked として記録し、人に渡している"
+        },
+        {
+          "id": "should-decision-recorded",
+          "text": "should の採否と理由を残している"
+        },
+        {
+          "id": "round-cap",
+          "text": "完了した review を最大 3 回とし、3 回目のあとの修正を APPROVE 扱いにしていない"
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "name": "fix-head-diverged-from-remote",
+      "prompt": "[前提: Claude Code の session。作業ツリーは clean な main だが、local の HEAD は origin/main より 2 commit 進んでいる (未 push)] sweep の論点なしの所見を直して",
+      "expected_output": "fix を始めない。local の HEAD が remote の default branch と違う (未 push の commit) ことを伝え、push するか戻すかを人に確認する。自分では push も reset もしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "stops-on-divergence",
+          "text": "HEAD と remote の default branch の不一致で fix を始めていない"
+        },
+        {
+          "id": "no-self-repair",
+          "text": "自分で push / reset / stash をしていない"
+        }
+      ]
+    },
+    {
+      "id": 28,
+      "name": "fix-codex-session-blocks",
+      "prompt": "[前提: Codex の session で起動] sweep の所見を直して PR にして",
+      "expected_output": "fix はしない。PR の author は Claude で GitHub write も Claude の session だけなので、Claude Code の session で起動し直すよう案内して止まる。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-fix-in-codex",
+          "text": "Codex の session で修正も PR も作っていない"
+        },
+        {
+          "id": "guides-to-claude",
+          "text": "Claude Code で起動し直すよう案内している"
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "name": "fix-cap-cumulative-on-resume",
+      "prompt": "[前提: fix_cap は既定の 2。前の run で PR を 2 本出した直後に中断し、fixes.json に 2 件 (pr_created と reviewing) が残っている。条件を満たす所見がもう 1 つある] 続きをやって",
+      "expected_output": "再開では fix_cap を数え直さず、累計 2 本に達しているので新しい PR は作らない。残っている 2 件を status から続け (review の照合と結果の取り込み)、3 件目は次の run に回すと報告する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "cap-not-reset",
+          "text": "再開で fix_cap を数え直さず、3 本目の PR を作っていない"
+        },
+        {
+          "id": "resumes-from-status",
+          "text": "fixes.json の status から未完の fix を続けている"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "name": "issues-mode-does-not-fix",
+      "prompt": "[前提: Claude Code の session。残量は十分] この repo を監査して、見つかった問題を Issue にして。修正はしないで",
+      "expected_output": "issues モードで起票までにし、fix モードには進まない (論点なしの印が付いた所見があっても直さず、marker を書くだけ)。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-fix-without-request",
+          "text": "fix の明示が無いので file を書き換えず PR も作っていない"
+        },
+        {
+          "id": "marker-written",
+          "text": "論点なしの印が付いた所見には no-contention の marker を書いている"
         }
       ]
     }

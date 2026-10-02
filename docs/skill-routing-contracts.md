@@ -37,7 +37,7 @@ target ごとの重複を除くと、現行 inventory は次の 14 件です。
 | `personal-grill-me` | explicit / intent-based | 成果物なしの設計 interview | 単純質問、実装、document 作成 | conversation-only | document が要るなら grill-with-docs |
 | `personal-grill-with-docs` | explicit | interview と glossary / ADR の同時育成 | 成果物なしの壁打ち、直接実装 | repo document write | no-write は grill-me、実装は合意後 |
 | `personal-investigate` | automatic | root cause 検証、diagnose / fix mode 分離 | 一般実装、repo 全体監査 | diagnosis read-only、fix と knowledge write は別 gate | production-rail、repo-audit |
-| `personal-maintenance-sweep` | explicit | 残量に合わせた規模の監査 → 別 AI の反証 → 重複の照合 → 起票 → 記録 | report だけの監査、単一 bug、PR review | 監査と反証は read-only、issues モードで GitHub write (Issue・追跡 Issue・label)、local state | repo-audit (診断と Codex の起動)、operating-loop (残量の読み取り口) |
+| `personal-maintenance-sweep` | explicit | 残量に合わせた規模の監査 → 別 AI の反証 → 重複の照合 → 起票 → 記録。明示された fix では、論点なしの docs-drift を PR にする (v2) | report だけの監査、単一 bug、単なる「直して」、PR review | 監査と反証は read-only、issues モードで GitHub write (Issue・追跡 Issue・label)、fix モードで push・PR・review のコメント、local state | repo-audit (診断と Codex の起動)、operating-loop (残量の読み取り口)、review-request (fix の review) |
 | `personal-production-rail` | default-on | production 品質 lens の preflight / self-check / review | 非コード、明示 throwaway | reference read-only、caller scope を拡張しない | investigate、review workflow / executor |
 | `personal-repo-audit` | explicit / intent-based | repo 横断の健全性・負債監査 | 単一 bug / diff、session log mining | read-only report | 個別原因は investigate、ログは asset-miner |
 | `personal-resume-project` | automatic / explicit | status-only または既存 / 明示された新規 scope の着手前確認 | session-end handoff、placement 判断 | status read-only、work / external write は別 gate | session-handoff、operating-loop |
@@ -72,6 +72,9 @@ secondary は gate / quality / placement の補助または後段 hand-off に�
 | 「repo を監査して。Issue にはしなくていい」 | repo-audit | — | maintenance-sweep、GitHub write |
 | 「repo を監査して、見つかった問題を Issue にして」 | maintenance-sweep (issues モード) | repo-audit (監査役の診断)、public-safety gate | 反証の無い起票、監査中の fix |
 | 「週の残りの枠で、この repo のメンテナンスを回して」 | maintenance-sweep (残量に合わせた規模) | repo-audit、operating-loop の残量の読み取り口 | 余りが読めないときの規模の拡大 |
+| 「repo を監査して、見つかった docs のずれは直して PR まで出して」 | maintenance-sweep (issues → fix モード) | repo-audit、review-request (fix の cross-review) | 監査中の fix、印の無い所見の修正、merge |
+| 「sweep が起票した Issue #354 を直して PR にして」 | maintenance-sweep (fix モード、起票済みの所見から) | review-request | investigate、repo-audit (監査のやり直し) |
+| 「repo を監査して、見つかった問題を Issue にして。修正はしないで」 | maintenance-sweep (issues モード) | repo-audit | fix モード (明示が無い) |
 | 「過去ログから skill 化候補を採掘して」 | asset-miner | 採用後に skill-creator | repo-audit、repo write |
 | 「この 1 件の flaky test の root cause を調べて」 | investigate | — | repo-audit、asset-miner |
 | 「他人の fork PR のコメントを読んで対応して」 | github-safe-reader | 本文が必要なら trusted user / isolated reader へ hand-off | raw body read、privileged action |

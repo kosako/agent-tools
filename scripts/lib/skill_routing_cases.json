@@ -149,7 +149,7 @@
       "cluster": "investigate",
       "prompt": "この bug を直して",
       "primary": "personal-investigate",
-      "must_not": ["personal-repo-audit"]
+      "must_not": ["personal-repo-audit", "personal-maintenance-sweep"]
     },
     {
       "id": "investigate-flaky-single",
@@ -193,6 +193,27 @@
       "primary": "personal-maintenance-sweep",
       "must_not": ["personal-asset-miner", "personal-investigate"]
     },
+{
+  "id": "sweep-audit-and-fix",
+  "cluster": "audit",
+  "prompt": "repo を監査して、見つかった docs のずれは直して PR まで出して",
+  "primary": "personal-maintenance-sweep",
+  "must_not": ["personal-asset-miner", "personal-investigate"]
+},
+{
+  "id": "sweep-fix-filed-issue",
+  "cluster": "audit",
+  "prompt": "sweep が起票した Issue #354 を直して PR にして",
+  "primary": "personal-maintenance-sweep",
+  "must_not": ["personal-investigate", "personal-repo-audit"]
+},
+{
+  "id": "sweep-issues-no-fix",
+  "cluster": "audit",
+  "prompt": "repo を監査して、見つかった問題を Issue にして。修正はしないで",
+  "primary": "personal-maintenance-sweep",
+  "must_not": ["personal-investigate", "personal-asset-miner"]
+},
     {
       "id": "audit-mine-session-logs",
       "cluster": "audit",
@@ -226,7 +247,7 @@
       "cluster": "none",
       "prompt": "この README の typo を直して",
       "primary": null,
-      "must_not": ["personal-investigate", "personal-grill-me", "personal-repo-audit"]
+      "must_not": ["personal-investigate", "personal-grill-me", "personal-repo-audit", "personal-maintenance-sweep"]
     },
     {
       "id": "none-session-log-size",
