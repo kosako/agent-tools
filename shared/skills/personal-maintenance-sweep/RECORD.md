@@ -11,13 +11,15 @@
 | fingerprint の marker | 所見の Issue の本文 | 重複の照合の鍵 | public |
 | local の state | `${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/maintenance-sweep/<owner>/<repo>/` | run の進み具合、単位ごとの結果、起票した番号、消費の実績 | local だけ |
 
-GitHub に書くのは Claude の session の issues モードだけです (Codex の session は GitHub に書かない)。
+GitHub に書くのは Claude の session の issues モードと fix モードだけです (fix モードは所見の Issue と追跡 Issue に加え、
+branch の push・PR・review のコメント。`FIX.md`)。Codex の session は GitHub に書きません。
 
 ## 値の受け渡し
 
 - owner / repo は `gh repo view --json nameWithOwner --jq .nameWithOwner` から取り、`\A[\w.-]+/[\w.-]+\z`
   に合うことを確かめてから使う。
-- commit は 16 進の OID だけを受け付ける。
+- commit は 16 進の OID だけを受け付ける。fix の branch 名は `sweep/fix-<Issue 番号>` (番号は 10 進の 1 つ) だけを
+  受け付ける。
 - Issue の本文は file に書いて `--body-file` で渡す (command 文字列に埋め込まない)。一時 file は repo の
   外に作り、使い終わったら消す。
 - 以下の command の値は、shell の single quote の literal か、検証した変数で渡す。
@@ -54,16 +56,17 @@ JSON.parse($stdin.read).flatten.each do |i|
     auditor = body[/<!-- maintenance-sweep:last-auditor=(claude|codex) -->/, 1]
     puts ["tracking", i["number"], i["state"], commit || "-", auditor || "-"].join("\t")
   end
+  nc = body.include?("<!-- maintenance-sweep:no-contention -->") ? "no-contention" : "-"
   body.scan(/<!-- maintenance-sweep:fingerprint=(.+?) -->/).flatten.each do |fp|
-    puts ["finding", i["number"], i["state"], i["state_reason"] || "-", fp].join("\t")
+    puts ["finding", i["number"], i["state"], i["state_reason"] || "-", nc, fp].join("\t")
   end
 end' "$me"
 ```
 
 - `tracking` の行が追跡 Issue (番号、状態、前回の監査の対象の commit、前回の監査役)。2 行以上あれば、
   どれを使うかを人に確認する。
-- `finding` の行が所見の Issue (番号、状態、close の理由、fingerprint)。close の理由は `completed` /
-  `not_planned` / `reopened`、open なら `-`。
+- `finding` の行が所見の Issue (番号、状態、close の理由、論点なしの印、fingerprint)。close の理由は `completed` /
+  `not_planned` / `reopened`、open なら `-`。印は `no-contention` か `-` (fix モードの候補の抽出に使う。`FIX.md`)。
 - 一覧の取得 (`gh api`) は変数に受けてから解析するので、取得が途中で失敗すれば全体が 0 以外で終わる (pipe の
   後ろの ruby の成功で失敗が隠れない)。command が失敗したら (gh の認証、network、rate limit)、照合が
   終わっていないものとして起票しない (report モードに切り替えるかを確認する)。
@@ -142,7 +145,9 @@ personal-maintenance-sweep の追跡 Issue です。close しません。本文�
 - 試していない観点の行は残さない (試した観点だけを書く)。
 - 「反証まで完了した日」は、その観点の所見の反証と記録まで終えた日。止めて残した観点は空欄。
 - run のコメント: 日付、モード、役割、プリセットの名前、終えた単位と残した単位、起票した Issue、起票
-  しなかった件数 (重複 / 反証で否定 / uncertain / 上限 / security / proposal)。**残量の数字と、security の
+  しなかった件数 (重複 / 反証で否定 / uncertain / 上限 / security / proposal)。fix モードでは「修正 PR: #<PR>
+  (所見 #A、round N <verdict>)」と、直さなかった所見の件数と理由 (印なし / 範囲外 / 既存の PR / 上限 / review
+  未収束 / 確かめ直しで不成立)。**残量の数字と、security の
   所見の中身は書かない**。proposal と比較から出た所見は、このコメントに 1 行ずつまとめる。
 
 ## 所見の Issue
@@ -185,8 +190,11 @@ personal-maintenance-sweep の run `<run id>` で起票 (観点: <観点> / 種�
 再発の場合: 前の Issue #<番号>
 
 <!-- maintenance-sweep:fingerprint=<fingerprint> -->
+<!-- maintenance-sweep:no-contention -->
 ```
 
+- `no-contention` の marker は、triage で「論点なし」の印が付いた所見だけに書く (付かなければ行ごと省く)。fix モードは
+  この marker で候補を抽出し、着手の直前に適格性を確かめ直す (`FIX.md`)。
 - fingerprint に `-->` を含めない (含むなら、場所の key から単位の名前を除いた形にする)。
 - 投稿の前に、**題名と本文の両方**を public-safety の gate に通し、exit 0 のときだけ投稿する (題名も
   所見から作るので、本文だけを通すと題名に残った値が素通りする)。
@@ -211,6 +219,7 @@ gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"
 ```text
 ${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/maintenance-sweep/<owner>/<repo>/
   latest-run                  最後の run の id (1 行)
+  fixes.json                  fix モードの所見ごとの記録 (repo 単位。run をまたいで照合する。下)
   runs/<run id>/              run id は開始時刻 (YYYYmmddTHHMMSS)
     state.json                run の状態 (下)
     units/<n>/result.json     単位ごとの監査結果 (repo-audit の findings.schema.json の形)
@@ -242,5 +251,34 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
 - 単位の `status` は `pending` → `audited` → `refuted` → `done` (`done` は起票と記録まで終えたもの)。
 - 単位が終わるたびに書き直す。中断しても、`status` が `done` でない単位から再開できる。
 - 新しい run を始める前に `latest-run` の run を見て、`done` でない単位があれば再開するかを確認する。
+
+`fixes.json` の中身 (fix モード。`FIX.md`):
+
+```json
+{
+  "fixes": [
+    {
+      "issue": 354,
+      "fingerprint": "docs/onboarding.md@6. ここまでの流れと現在地#stale-runtime-skill-count",
+      "run_id": "20261003T090000",
+      "status": "reviewing",
+      "branch": "sweep/fix-354",
+      "base": "<40 桁の OID>",
+      "head": "<40 桁の OID>",
+      "pr": 362,
+      "spec": { "source_of_truth": "…", "editable": ["docs/onboarding.md@6. ここまでの流れと現在地"], "acceptance": "…" },
+      "eligibility": { "checked_at": "…", "result": "ok", "note": "" },
+      "reviews": [ { "round": 1, "base": "…", "head": "…", "verdict": "Warning", "comment": "…", "adopted": ["R1"], "declined": [] } ],
+      "blocked": ""
+    }
+  ]
+}
+```
+
+- `status` は `planned` → `editing` → `committed` → `pushed` → `pr_created` → `reviewing` → `review_complete`、または
+  `blocked`。merge は人がするので、次の run が PR の状態を読んで `merged` を補う。
+- 外部に書く操作 (push、PR、コメント、review の round の起動) の前に段階 (round なら識別子) を、後に結果を保存する。
+  `fix_cap` の累計は、この file の `run_id` が同じ (再開を含む) 記録のうち PR を作ったもの (`pr_created` 以降) を数える
+  (v2 は 1 所見 = 1 PR なので記録数 = PR 数)。
   `target_commit` が今の `HEAD` と違えば、その run の監査と反証の結果は再利用しない (`SKILL.md` の
   「中断した run を再開する」)。

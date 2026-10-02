@@ -32,6 +32,7 @@ key は省いてよく、省いた key は既定値を使います。在る key 
 | `start_5h_min_pct` | 30 | 0〜100 の数 | 開始の条件。動かす tool の 5h の残りがこれ未満なら開始しない |
 | `stop_5h_min_pct` | 10 | 0〜100 の数で、`start_5h_min_pct` 以下 | 停止の条件。単位の終わりに読み直して、5h の残りがこれ未満なら止める |
 | `issue_cap` | 5 | 1〜20 の整数 | 1 run で起票する Issue の上限 |
+| `fix_cap` | 2 | 0〜20 の整数 | fix モードで出す PR の上限 (再開をまたいだ累計。0 なら fix をしない) |
 
 `<tool>` は `claude-code` と `codex` だけです。次の command で、検証した実効値を出します (exit 0 で実効値の
 JSON、exit 2 で理由を stderr に出す)。
@@ -43,7 +44,7 @@ DEFAULTS = {
     "claude-code" => { "floor_pct" => 10, "daily_pct" => 12 },
     "codex" => { "floor_pct" => 10, "daily_pct" => 6 },
   },
-  "start_5h_min_pct" => 30, "stop_5h_min_pct" => 10, "issue_cap" => 5,
+  "start_5h_min_pct" => 30, "stop_5h_min_pct" => 10, "issue_cap" => 5, "fix_cap" => 2,
 }
 base = ENV["XDG_CONFIG_HOME"].to_s.empty? ? File.join(Dir.home, ".config") : ENV["XDG_CONFIG_HOME"]
 path = File.join(base, "agent-tools", "maintenance-sweep.json")
@@ -81,6 +82,11 @@ if File.exist?(path)
     c = user["issue_cap"]
     fail_with.call("issue_cap が 1〜20 の整数でない") unless c.is_a?(Integer) && c >= 1 && c <= 20
     eff["issue_cap"] = c
+  end
+  if user.key?("fix_cap")
+    c = user["fix_cap"]
+    fail_with.call("fix_cap が 0〜20 の整数でない") unless c.is_a?(Integer) && c >= 0 && c <= 20
+    eff["fix_cap"] = c
   end
 end
 fail_with.call("stop_5h_min_pct が start_5h_min_pct より大きい") if eff["stop_5h_min_pct"] > eff["start_5h_min_pct"]
@@ -172,12 +178,31 @@ reset までの日数 = (週の reset の時刻 − 今) / 24 時間   (小数�
    tool の使える量が推定消費 (監査役の値 / 検証役の値) 以上になる、いちばん大きいプリセットを選ぶ。small も
    収まらなければ開始しない。
 
+## fix モードの消費 (v2)
+
+- fix の推定消費は PR 1 本あたり、週の枠の percentage point で **Claude 2 / Codex 2.5** (修正 + 完了した review
+  最大 3 回 + 記録を含む初期の仮説。実測の蓄積で直す)。内訳は、修正と初回の review と記録 (Claude 1 / Codex 1.5) に
+  追加の round 2 回 (Claude 0.5 × 2 / Codex 0.5 × 2) を足したもの。
+- 入口 (a) (run の中で続ける) は、プリセットの推定に `fix_cap` 本分を足して使える量に収まるかを見る。収まらなければ
+  fix の本数を減らす (0 なら issues モードで止める)。入口 (b) (起票済みの所見から) は監査役の選定とプリセットを
+  通さず、修正者 Claude / reviewer Codex の消費だけで判定する。
+- **fix の停止の条件** (監査の単位の条件とは別。5h の条件は共通):
+  - 次の PR を始める前に残量を読み直し、使える量が修正と初回の review と記録の分 (Claude 1 / Codex 1.5) 未満なら、
+    新しい PR を始めない (残りの所見は次の run に回す)。
+  - **初回の review** の前に読み直し、初回の review と記録の分 (Claude 0.5 / Codex 1.5) 未満なら round を始めず、PR を
+    `blocked` (理由: 残量) にして残す (PR の着手時に足りていても、修正で減った分を初回の見積もりで確かめ直す)。
+  - **追加の round** の前に読み直し、追加の round の分 (Claude 0.5 / Codex 0.5) 未満なら同じく始めない。round の後にも
+    読み直し、次の判断に使う。
+  - 開始のときは読めた値が読めなくなった、または Codex が usage limit で止まった、のどちらかなら同じく止める。
+- `fix_cap` は再開をまたいだ累計 (`fixes.json` の PR を作った記録を数える)。limit に当たったら自動で再試行しない。
+
 ## 単位の終わりの読み直しと停止
 
 単位が終わるたびに残量を読み直し、次のどれかに当たったら、今の単位で止め、残りの単位を state に残します。
 
 - 動かしている tool の 5h の値が有効で、残りが `stop_5h_min_pct` 未満
-- 週の値が有効で、使える量が次の単位の推定消費 (プリセットの推定 ÷ 単位の数) 未満
+- 週の値が有効で、使える量が次の単位の推定消費 (プリセットの推定 ÷ 単位の数) 未満 (監査の単位の条件。fix の
+  条件は上の「fix モードの消費」)
 - 開始のときは読めた値が、読み直しで読めなくなった (それ以降は余りを根拠に続けない)
 - Codex が usage limit で止まった (`codex exec` の出力が `ERROR: You've hit your usage limit` で始まる
   行を含み、exit が 0 でない)。自動では再実行しない

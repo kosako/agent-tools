@@ -1,6 +1,6 @@
 ---
 name: personal-maintenance-sweep
-description: repo の定期メンテナンスを、使用量の枠の残りに合わせた規模で 1 run 回す maintenance workflow skill。全体の監査、別の AI による反証、既存の Issue との重複の照合、起票、記録までを持つ。skill の名指し、「監査して Issue にして」のように監査と起票の両方を頼まれたとき、または「週の残りの枠で repo のメンテを回して」のように残量の消化を頼まれたときだけ使う。report だけの監査は personal-repo-audit、単一 bug は personal-investigate、PR の review は personal-review-request が持つ。
+description: repo の定期メンテナンスを、使用量の枠の残りに合わせた規模で 1 run 回す maintenance workflow skill。全体の監査、別の AI による反証、既存の Issue との重複の照合、起票、記録までを持ち、明示された fix では sweep が起票した論点なしの docs のずれを PR にする。skill の名指し、「監査して Issue にして」「監査して docs のずれは直して PR まで」のように監査と起票 / 修正を頼まれたとき、「sweep の Issue を直して」のように sweep の所見の修正を頼まれたとき、または「週の残りの枠で repo のメンテを回して」のように残量の消化を頼まれたときだけ使う。report だけの監査は personal-repo-audit、単一 bug や単なる「直して」は personal-investigate、PR の review は personal-review-request が持つ。
 ---
 
 # personal-maintenance-sweep
@@ -12,9 +12,11 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 
 ## 副作用と組み合わせ
 
-- 副作用: 監査と反証は read-only で、repo の file を書き換えない (修正のモードは v2)。issues モードでは
-  GitHub に書く (所見の Issue の作成、追跡 Issue の作成と本文の更新とコメント、label の作成)。書く本文は
-  先に public-safety の gate に通す。local の state と run dir (repo の外) に書く。
+- 副作用: 監査と反証は read-only で、repo の file を書き換えない。issues モードでは GitHub に書く (所見の
+  Issue の作成、追跡 Issue の作成と本文の更新とコメント、label の作成)。fix モードではさらに、run dir の下の
+  linked worktree で docs を直し、branch を push し、PR を作り、review の依頼 / 結果 / follow-up をコメントする
+  (`FIX.md`。merge と配備は人)。書く本文と公開する差分は先に public-safety の gate に通す。local の state と
+  run dir (repo の外) に書く。
 - 組み合わせ: 監査は personal-repo-audit (Codex に監査させるときは同 skill の `CODEX-LAUNCH.md`)。
   残量の読み取り口は personal-project-operating-loop の「割当」と同じものを使う。他人が書いた GitHub の
   content を読むときは personal-github-safe-reader。
@@ -31,8 +33,13 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   - **issues** (既定): 起票まで進む。
   - **report**: 「Issue にはしないで」と言われたとき。反証と重複の照合までして会話で報告し、GitHub に
     書かない (local の記録は残す)。
-  - **fix**: v2 で足す予定で、v1 には無い。頼まれたら v1 では使えないことを伝え、issues か report を
-    提案する。docs の更新の依頼も同じ扱い (v2 の修正のモードで取り込む)。
+  - **fix** (v2): 「監査して、docs のずれは直して PR まで」「sweep の Issue #N を直して」「sweep が起票した
+    論点なしの所見を直して」のように、sweep の所見の修正が明示されたとき。issues モードの手順のあと (入口 (a))、
+    または起票済みの所見から (入口 (b)、監査はしない)、「論点なし」の印が付いた docs-drift のうち `docs/` と root
+    の Markdown の説明文だけを、run dir の下の linked worktree で直して PR にし、cross-review まで進める (merge は
+    人)。手順の正本は [FIX.md](FIX.md)。code・設定・宣言、skill や instruction の本文は v2.1 以降。単なる
+    「直して」(単一 bug は personal-investigate、typo は skill なし) では起動しない。Codex の session では fix を
+    しない (Claude Code で起動し直すよう案内する)。
 - **既存の監査結果から始める**: 会話の中の personal-repo-audit の報告や、Codex の監査の `result.json` が
   あれば、監査をやり直さない。手順 0 (前提) と 1 (役割。監査をした側を監査役とみなし、検証役はその反対) と
   2 (予算。反証から先の分だけを確かめる) を済ませてから、手順 4 の反証から始める。ただし、その監査の対象の
@@ -146,7 +153,20 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 
 - 1 run の起票は上限まで ([BUDGET.md](BUDGET.md))。超えた分は state に残して次の run に回し、報告に書く。
 - 本文の形は [RECORD.md](RECORD.md)。投稿の前に public-safety の gate に通し、通らなければ投稿しない。
-- label を付ける。
+- label を付ける。「論点なし」の印が付いた所見には、本文に no-contention の marker を書く ([RECORD.md](RECORD.md))。
+
+### 7b. 修正する (fix モードだけ)
+
+[FIX.md](FIX.md) の手順で、「論点なし」の印が付いた docs-drift を直して PR にします。要点:
+
+- 前提: local の `HEAD` が remote の default branch と一致し clean。marker は候補の抽出の印で、着手の直前に
+  `base` の tree で問題の存続・正本・範囲を確かめ直す。確かめられなければ直さない (再反証か報告)。
+- 着手前に `fixes.json`、既存の open PR / branch、同じ file を触る open PR を照合し、二重修正と conflict を作らない。
+- 1 所見 = 1 PR。run dir の下の linked worktree で、修正の仕様 (正本 / 変えてよい箇所 / 受け入れ条件) の範囲だけを
+  直す。累積差分に `diff --check`、repo の gate、壊れた参照の検査、public-safety の gate を当ててから push と PR。
+- review は `personal-review-request` に委ね (fix の明示が write authorization)、must は範囲内だけ直し、範囲外は
+  `blocked`。完了した review は最大 3 回。未レビューの PR を完了扱いにしない。
+- `fix_cap` (再開をまたいだ累計) まで。PR の前と review の round の前後で残量を読み直す ([BUDGET.md](BUDGET.md))。
 
 ### 8. 記録する
 
@@ -154,6 +174,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   除外した範囲、監査役) を更新し、run の要約をコメントで足す。残量の数字は書かない。
 - **local の state**: run の進み具合、終わった単位、起票した Issue の番号、消費の実績 (前後の残量)。
   単位ごとに保存してあるので、中断しても続きから再開できる。
+- **fix モード**: repo 単位の `fixes.json` に所見ごとの段階・branch・OID・PR・review の round を残し、追跡 Issue の
+  run のコメントに修正 PR と直さなかった所見を足す ([FIX.md](FIX.md) / [RECORD.md](RECORD.md))。
 
 ### 9. 報告する
 
@@ -162,6 +184,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 - モード、役割 (とその理由)、選んだ規模 (とその理由)、見た範囲と次の run に回した単位
 - 起票した Issue、重複として起票しなかったもの (既存の番号)、反証で落とした所見 (理由)、uncertain で
   残したもの、上限・security・proposal で個別に起票しなかったもの
+- fix モードでは、直した PR (所見、review の round と verdict)、直さなかった所見 (印なし / 範囲外 / 既存の PR /
+  上限 / review 未収束 / 確かめ直しで不成立) と理由
 - 次の run への申し送り
 
 ## 停止と縮小
@@ -177,6 +201,10 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 | 設定 file が不正 | 開始しない。どの key がなぜ不正かを伝える |
 | Codex の session で起動した | 自分では監査も反証もしない。監査役が Codex で起動経路があれば、手順 2 を通したうえで別の Codex を起こす。それ以外は Claude Code での起動を案内して止まる |
 | GitHub に届かない (issues モード) | report モードに切り替えるかを確認する |
+| fix モードで local の HEAD が remote の default branch と違う | fix を始めない。未 push の commit や分岐を人に確認する |
+| fix モードで所見に既存の open PR / branch がある、または同じ file を他の open PR が触る | 新しく作らず、再開か延期にする (close 済み未 merge の PR は人に確認) |
+| fix モードで reviewer が起動できない、または review が 3 回で収束しない | PR を残して `blocked` にし、未解決の項目と次の入口を記録する。未レビューを完了扱いにしない |
+| fix モードで範囲外の 🔴 must が出た | scope を広げず `blocked` にして人に渡す |
 
 ## やってはいけないこと
 
@@ -189,7 +217,10 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 - 監査中や反証中に repo の file を書き換える (v1 に修正のモードは無い)。
 - 起票の上限を越えて起票する。not planned で閉じた問題を、新しい根拠なしに起票し直す。
 - Codex の session から Claude を起動しようとする。Codex の session 自身で監査や反証をする (起動の境界が
-  効かない)。
+  効かない)。Codex の session で fix をする。
+- fix モードで、印の無い所見・docs-drift 以外・`docs/` と root の Markdown 以外を直す。marker だけを根拠に直す。
+  所見の範囲外を「ついで」に直す。既存の open PR があるのに作る。merge / approve する。未レビューの PR を完了扱い
+  にする。`fix_cap` を再開で数え直す。
 
 ## 例
 
