@@ -112,10 +112,38 @@ reset までの日数 = (週の reset の時刻 − 今) / 24 時間   (小数�
   (観点の数がプリセット以下で、領域がプリセットの領域に収まるもの) の値を使います。例: repo 全体・6 観点
   → large、repo 全体・3 観点 → medium、1 つの directory・2 観点 → small。依頼の範囲を small の値で
   見積もって、分かっている不足を通すことはしません。
-- Codex に監査・反証させるときの model は、Codex home の `agent-tools-review.config.toml`、無ければ
-  user の `config.toml` の top-level の `model = "<値>"` の行から読みます。値が `\A[A-Za-z0-9._-]+\z` に
-  合わない、または行が無いときは model を渡さず Codex の既定に任せます (`CODEX-LAUNCH.md` の
-  `--ignore-user-config` で user の設定は読まれないため、ここで明示する)。
+- Codex に監査・反証させるときの model は、user の `config.toml` の top-level (最初の table header より前) の
+  `model = "<値>"` を base に、Codex home の `agent-tools-review.config.toml` の top-level に同じ key があれば
+  それを優先して読みます (**key ごとに重ねる**。profile の file はあるが `model` 行が無ければ base の値をそのまま
+  使う。Codex の `-p` で profile を重ねたときの実効値と同じ)。どちらにも行が無ければ model を渡さず Codex の
+  既定に任せます (`CODEX-LAUNCH.md` の `--ignore-user-config` で user の設定は読まれないため、ここで明示する)。
+  値は `\A[A-Za-z0-9._-]+\z` に合うものだけを受け付けます。effort はプリセットの値を渡し、profile の
+  `model_reasoning_effort` は使いません。
+  読み方は worker の preflight (`personal-codex-worker-preflight`) と同じで、次の command で出します (exit 0 で
+  model の値、無ければ空行。top-level に解釈できない行や、値が上の形に合わないときは exit 2 で理由を stderr に
+  出す)。**exit 2 のときは「設定が不正」と同じく開始せず**、理由を報告します (推測で model を決めない)。
+  `preflight` は Claude Code の home に配備されたものを literal の変数で渡します。
+
+  ```sh
+  preflight="$HOME/.claude/agent-tools/scripts/personal-codex-worker-preflight"
+  ruby -e '
+  begin
+    load ARGV.fetch(0)
+    home = ENV["CODEX_HOME"].to_s.empty? ? File.join(Dir.home, ".codex") : ENV["CODEX_HOME"]
+    selection = {}
+    [["config.toml", "user config"], ["agent-tools-review.config.toml", "review profile"]].each do |name, label|
+      path = File.join(home, name)
+      next unless File.file?(path)
+      selection.merge!(CodexWorkerPreflight.read_model_selection(File.read(path), label))
+    end
+    puts selection.fetch("model", "")
+  rescue ArgumentError => e
+    warn "codex model: #{e.message}"
+    exit 2
+  end
+  ' "$preflight"
+  ```
+
 - Claude の側は今の session の model のまま動きます (skill は model を切り替えない)。
 
 ## 判定の順番
