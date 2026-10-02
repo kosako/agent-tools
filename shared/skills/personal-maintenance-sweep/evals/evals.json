@@ -206,6 +206,29 @@
         { "id": "does-not-start", "text": "監査を開始していない" },
         { "id": "no-silent-default", "text": "既定値に黙って置き換えず、不正な key (daily_pct) と理由を伝えている" }
       ]
+    },
+    {
+      "id": 19,
+      "name": "resume-after-head-moved",
+      "prompt": "[前提: local の state の最後の run は target_commit A で、status が refuted の単位が 1 つ残っている。その後 default branch は commit B に進み、今の HEAD は B] さっき止まった sweep の続きをやって",
+      "expected_output": "target_commit (A) と今の HEAD (B) が違うので、保存した監査と反証の結果を使わない。refuted の単位から triage・起票へ進まず、新しい run として監査からやり直す (古い run は state に残す)。",
+      "files": [],
+      "assertions": [
+        { "id": "compares-commit", "text": "保存した target_commit と今の HEAD を照合している" },
+        { "id": "no-stale-filing", "text": "A の時点の反証の結果をもとに起票していない" },
+        { "id": "restarts-audit", "text": "done でない単位を、新しい run として監査からやり直している" }
+      ]
+    },
+    {
+      "id": 20,
+      "name": "requested-scope-estimated-by-covering-preset",
+      "prompt": "[前提: 監査役は Claude で、Claude の週の使える量は 3%。検証役の Codex の週の値は読めない。両方の 5h は十分] repo 全体を 6 観点すべてで監査して Issue にして",
+      "expected_output": "依頼の範囲 (repo 全体・6 観点) を覆う最小のプリセットは large なので、監査役の推定消費は 12%。Claude の使える量 3% に収まらないので開始せず、範囲を縮めるかを確認する。small の値 (2%) で見積もって押し切らない。",
+      "files": [],
+      "assertions": [
+        { "id": "covering-preset", "text": "依頼の範囲の推定消費を large の値で見積もっている (small の値を使っていない)" },
+        { "id": "does-not-start", "text": "使える量に収まらないので開始せず、範囲を縮めるかを確認している" }
+      ]
     }
   ]
 }

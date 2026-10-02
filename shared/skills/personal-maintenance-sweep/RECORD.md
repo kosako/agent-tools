@@ -242,3 +242,5 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
 - 単位の `status` は `pending` → `audited` → `refuted` → `done` (`done` は起票と記録まで終えたもの)。
 - 単位が終わるたびに書き直す。中断しても、`status` が `done` でない単位から再開できる。
 - 新しい run を始める前に `latest-run` の run を見て、`done` でない単位があれば再開するかを確認する。
+  `target_commit` が今の `HEAD` と違えば、その run の監査と反証の結果は再利用しない (`SKILL.md` の
+  「中断した run を再開する」)。
