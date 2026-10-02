@@ -170,8 +170,9 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
   review と記録の分が使える量に残っていることを確かめます。
 - 1 run の fix は `fix_cap` (既定 2 PR) までで、**再開をまたいだ累計**です (再開で数え直さない)。超えた分は次の
   run に回し、報告に書きます。
-- PR を始める前と、review の round の前後で残量を読み直し、停止の条件に当たったら PR を残して止めます。limit
-  に当たったら自動で再試行しません。
+- PR を始める前と、review の round の前後で残量を読み直し、停止の条件に当たったら PR を残して止めます (初回の
+  review の前は初回の分 Claude 0.5 / Codex 1.5、追加の round の前は 0.5 / 0.5 で判定する。`BUDGET.md`)。limit に
+  当たったら自動で再試行しません。
 
 ## 記録
 

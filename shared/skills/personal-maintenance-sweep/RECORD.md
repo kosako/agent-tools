@@ -18,8 +18,8 @@ branch の push・PR・review のコメント。`FIX.md`)。Codex の session �
 
 - owner / repo は `gh repo view --json nameWithOwner --jq .nameWithOwner` から取り、`\A[\w.-]+/[\w.-]+\z`
   に合うことを確かめてから使う。
-- commit は 16 進の OID だけを受け付ける。fix の branch 名は `sweep/fix-<Issue 番号>` (番号は 10 進、複数は `-`)
-  だけを受け付ける。
+- commit は 16 進の OID だけを受け付ける。fix の branch 名は `sweep/fix-<Issue 番号>` (番号は 10 進の 1 つ) だけを
+  受け付ける。
 - Issue の本文は file に書いて `--body-file` で渡す (command 文字列に埋め込まない)。一時 file は repo の
   外に作り、使い終わったら消す。
 - 以下の command の値は、shell の single quote の literal か、検証した変数で渡す。

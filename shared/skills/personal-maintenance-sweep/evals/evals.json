@@ -612,6 +612,23 @@
           "text": "回収できないときは完了回数を確定できないとして blocked にし、人に渡している"
         }
       ]
+    },
+    {
+      "id": 32,
+      "name": "fix-first-review-threshold",
+      "prompt": "[前提: fix モードで #354 の修正を commit し push した直後。残量を読み直すと Codex の週の使える量は 1.0、Claude は 3.0 (PR の着手時は Codex 2.0 あった)] 初回の review を依頼する?",
+      "expected_output": "依頼しない。初回の review の前は初回の見積もり (Codex 1.5 / Claude 0.5) で判定するので、Codex 1.0 では足りない。追加の round 用の閾値 (0.5) を初回に当てない。PR を blocked (理由: 残量) にして残し、fixes.json と報告に書く。自動で再試行しない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "first-review-uses-initial-estimate",
+          "text": "初回の review の前の判定に初回の見積もり (Codex 1.5) を使い、追加 round 用の 0.5 を当てていない"
+        },
+        {
+          "id": "blocked-with-reason",
+          "text": "PR を blocked (残量) にして残し、review を起動していない"
+        }
+      ]
     }
   ]
 }
