@@ -9,13 +9,12 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 skill_dir=${1:-"$script_dir/../../shared/skills/personal-repo-audit"}
-ruby - "$skill_dir" <<'RUBY'
+ruby -r "$script_dir/lib/schema_shape" - "$skill_dir" <<'RUBY'
 require "json"
 
 dir = ARGV.fetch(0)
 schema = JSON.parse(File.read(File.join(dir, "findings.schema.json")))
 format = File.read(File.join(dir, "REPORT-FORMAT.md"))
-errors = []
 
 # 期待する形。object は key => 子の形の Hash、array は [要素の形]、葉は型の名前。
 strings = ->(*keys) { keys.to_h { |k| [k, "string"] } }
@@ -32,40 +31,13 @@ SHAPE = {
     .merge("seen" => ["string"], "partial" => ["string"], "not_seen" => ["string"]),
 }.freeze
 
-# 形と strict の前提を同時に確かめる。
-check = lambda do |node, shape, path|
-  unless node.is_a?(Hash)
-    errors << "#{path}: schema の node が object でない"
-    next
-  end
-  case shape
-  when Hash
-    errors << "#{path}: type が object でない (#{node["type"].inspect})" unless node["type"] == "object"
-    errors << "#{path}: additionalProperties が false でない" unless node["additionalProperties"] == false
-    props = node["properties"].is_a?(Hash) ? node["properties"] : {}
-    errors << "#{path}: properties #{props.keys.sort} が期待 #{shape.keys.sort} と一致しない" unless props.keys.sort == shape.keys.sort
-    req = node["required"].is_a?(Array) ? node["required"].sort : []
-    errors << "#{path}: required #{req} が properties #{props.keys.sort} と一致しない" unless req == props.keys.sort
-    shape.each { |k, sub| check.call(props[k], sub, "#{path}.#{k}") if props.key?(k) }
-  when Array
-    errors << "#{path}: type が array でない (#{node["type"].inspect})" unless node["type"] == "array"
-    check.call(node["items"], shape.first, "#{path}[]")
-  else
-    errors << "#{path}: type が #{shape} でない (#{node["type"].inspect})" unless node["type"] == shape
-  end
-end
-check.call(schema, SHAPE, "$")
+errors = SchemaShape.check(schema, SHAPE)
 
-# REPORT-FORMAT.md の「所見の欄」の表から、欄の値の集合を読む (2 列目を " / " で分ける)。
-table_values = lambda do |label|
-  row = format.lines.find { |l| l.start_with?("| #{label} |") }
-  next nil unless row
-  row.split("|")[2].strip.split(" / ").map(&:strip)
-end
-finding = schema.dig("properties", "findings", "items", "properties") || {}
+finding = schema.dig("properties", "findings", "items", "properties")
+finding = {} unless finding.is_a?(Hash)
 { "種別" => "kind", "深刻度" => "severity", "確度" => "confidence" }.each do |label, key|
-  expected = table_values.call(label)
-  actual = finding.is_a?(Hash) ? finding.dig(key, "enum") : nil
+  expected = SchemaShape.table_values(format, label)
+  actual = finding.dig(key, "enum")
   if expected.nil?
     errors << "REPORT-FORMAT.md に「#{label}」の行が無い"
   elsif actual != expected

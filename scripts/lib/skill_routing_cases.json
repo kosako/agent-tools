@@ -6,7 +6,7 @@
     "primary = 依頼の主目的を所有する skill (null は『どの skill も主目的を持たない』)。",
     "must_not = その依頼で発火してはいけない隣接 skill。secondary (gate / quality / placement の補助) は",
     "許容なので列挙しない。cluster は #216 の routing cluster (none = 近傍の負例)。",
-    "inventory は runtime で artifact_kind=skill に解決される 13 件 (target ごとの重複を除く)。"
+    "inventory は runtime で artifact_kind=skill に解決される 14 件 (target ごとの重複を除く)。"
   ],
   "inventory": [
     "personal-asset-miner",
@@ -16,6 +16,7 @@
     "personal-grill-me",
     "personal-grill-with-docs",
     "personal-investigate",
+    "personal-maintenance-sweep",
     "personal-production-rail",
     "personal-project-operating-loop",
     "personal-repo-audit",
@@ -169,7 +170,28 @@
       "cluster": "audit",
       "prompt": "repo 全体の技術的負債を監査して",
       "primary": "personal-repo-audit",
-      "must_not": ["personal-asset-miner"]
+      "must_not": ["personal-asset-miner", "personal-maintenance-sweep"]
+    },
+    {
+      "id": "audit-report-only",
+      "cluster": "audit",
+      "prompt": "repo を監査して。Issue にはしなくていい",
+      "primary": "personal-repo-audit",
+      "must_not": ["personal-maintenance-sweep", "personal-asset-miner"]
+    },
+    {
+      "id": "sweep-audit-and-file",
+      "cluster": "audit",
+      "prompt": "repo を監査して、見つかった問題を Issue にして",
+      "primary": "personal-maintenance-sweep",
+      "must_not": ["personal-asset-miner", "personal-investigate"]
+    },
+    {
+      "id": "sweep-spend-quota",
+      "cluster": "audit",
+      "prompt": "週の残りの枠で、この repo のメンテナンスを回して",
+      "primary": "personal-maintenance-sweep",
+      "must_not": ["personal-asset-miner", "personal-investigate"]
     },
     {
       "id": "audit-mine-session-logs",

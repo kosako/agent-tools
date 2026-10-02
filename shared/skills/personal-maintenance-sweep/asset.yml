@@ -1,0 +1,17 @@
+schema_version: 1
+name: personal-maintenance-sweep
+kind: skill
+visibility: public
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/personal-maintenance-sweep
+  format: directory
+summary: run a budget-sized repository maintenance audit, have the other AI refute it, then deduplicate, file, and record findings
+description: "Outcome: one budget-sized maintenance run (audit, cross-AI refutation, dedupe, filing, record). Trigger: explicit only (skill name, audit plus filing, or spending remaining quota). Use: periodic repository upkeep with GitHub issues. Do not use: report-only audits (personal-repo-audit), a single bug (personal-investigate), or PR review (personal-review-request). Side effects: read-only audit and refutation; GitHub issue writes in issues mode; local state. Compose with: personal-repo-audit for diagnosis and personal-project-operating-loop for quota readouts."
+review:
+  human_review: pending

@@ -57,7 +57,9 @@ URL、local path、secret、credential、client/work material は含めません
 
 **いつ決めるか**: 割当が発生するのは、新しい作業単位の worker を決めるときと、止まった PR を別の agent
 が新しい branch + 新しい PR で引き継ぐときです。同じ PR を同じ author が続けるとき (review の修正
-round、停止からの再開)、status の確認、継続の作業では割当をしません。
+round、停止からの再開)、status の確認、継続の作業では割当をしません。read-only の監査 (personal-maintenance-sweep
+の監査役と検証役) もこの割当の対象外で、役割は sweep が変更の多数派から決め、残量は組が最後まで完了できるかの
+判定にだけ使います (実装担当の規則は変えない)。
 
 **振り分け規則** (上から順に当てる):
 

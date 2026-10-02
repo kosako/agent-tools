@@ -26,7 +26,7 @@ jq -r '.assets[] | select(.artifact_kind == "skill") | .name' \
   generated/catalog.json | sort -u
 ```
 
-target ごとの重複を除くと、現行 inventory は次の 13 件です。
+target ごとの重複を除くと、現行 inventory は次の 14 件です。
 
 | Skill | Trigger mode | Primary use | Do not use | Side effects | Composition |
 | --- | --- | --- | --- | --- | --- |
@@ -37,6 +37,7 @@ target ごとの重複を除くと、現行 inventory は次の 13 件です。
 | `personal-grill-me` | explicit / intent-based | 成果物なしの設計 interview | 単純質問、実装、document 作成 | conversation-only | document が要るなら grill-with-docs |
 | `personal-grill-with-docs` | explicit | interview と glossary / ADR の同時育成 | 成果物なしの壁打ち、直接実装 | repo document write | no-write は grill-me、実装は合意後 |
 | `personal-investigate` | automatic | root cause 検証、diagnose / fix mode 分離 | 一般実装、repo 全体監査 | diagnosis read-only、fix と knowledge write は別 gate | production-rail、repo-audit |
+| `personal-maintenance-sweep` | explicit | 残量に合わせた規模の監査 → 別 AI の反証 → 重複の照合 → 起票 → 記録 | report だけの監査、単一 bug、PR review | 監査と反証は read-only、issues モードで GitHub write (Issue・追跡 Issue・label)、local state | repo-audit (診断と Codex の起動)、operating-loop (残量の読み取り口) |
 | `personal-production-rail` | default-on | production 品質 lens の preflight / self-check / review | 非コード、明示 throwaway | reference read-only、caller scope を拡張しない | investigate、review workflow / executor |
 | `personal-repo-audit` | explicit / intent-based | repo 横断の健全性・負債監査 | 単一 bug / diff、session log mining | read-only report | 個別原因は investigate、ログは asset-miner |
 | `personal-resume-project` | automatic / explicit | status-only または既存 / 明示された新規 scope の着手前確認 | session-end handoff、placement 判断 | status read-only、work / external write は別 gate | session-handoff、operating-loop |
@@ -67,7 +68,10 @@ secondary は gate / quality / placement の補助または後段 hand-off に�
 | 「なぜか動かない。デバッグして」 | investigate (`diagnose-only`) | — | implicit fix、knowledge write、repo-audit |
 | 「この bug を直して」 | investigate (`fix-authorized`) | root cause 後に production-rail | 原因検証前の patch |
 | 「使い捨て prototype を作って」 | task-specific implementation | — | production-rail (explicit skip)、investigate (不具合がなければ) |
-| 「repo 全体の技術的負債を監査して」 | repo-audit | — | asset-miner、監査中の fix |
+| 「repo 全体の技術的負債を監査して」 | repo-audit | — | asset-miner、maintenance-sweep、監査中の fix |
+| 「repo を監査して。Issue にはしなくていい」 | repo-audit | — | maintenance-sweep、GitHub write |
+| 「repo を監査して、見つかった問題を Issue にして」 | maintenance-sweep (issues モード) | repo-audit (監査役の診断)、public-safety gate | 反証の無い起票、監査中の fix |
+| 「週の残りの枠で、この repo のメンテナンスを回して」 | maintenance-sweep (残量に合わせた規模) | repo-audit、operating-loop の残量の読み取り口 | 余りが読めないときの規模の拡大 |
 | 「過去ログから skill 化候補を採掘して」 | asset-miner | 採用後に skill-creator | repo-audit、repo write |
 | 「この 1 件の flaky test の root cause を調べて」 | investigate | — | repo-audit、asset-miner |
 | 「他人の fork PR のコメントを読んで対応して」 | github-safe-reader | 本文が必要なら trusted user / isolated reader へ hand-off | raw body read、privileged action |
