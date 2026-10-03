@@ -70,7 +70,7 @@ iso_run() {
       GIT_ASKPASS=/usr/bin/false \
       SSH_ASKPASS=/usr/bin/false \
       GH_PROMPT_DISABLED=1 \
-      GIT_SSH_COMMAND="/usr/bin/ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no" \
+      GIT_SSH_COMMAND="/usr/bin/ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o IdentityFile=none -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no" \
       "$@"
   )
 }
