@@ -463,6 +463,20 @@ set -e
 echo "$out" | grep -q "^model: (codex default)" || fail "missing config should leave the model to codex: $out"
 case "$out" in *"-c model"*) fail "no model flags without config: $out" ;; esac
 
+# 在るのに regular file でない config / worker profile は、無いことにせず exit 2 (#364。review / sweep と
+# 同じ layered_model_selection で読む)。理由に file の label を出し、usage には落ちない
+for name in config.toml agent-tools-worker.config.toml; do
+  mkdir "$home3/$name"
+  set +e
+  out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home3" --clone "$clone" 2>&1)
+  rc=$?
+  set -e
+  rmdir "$home3/$name"
+  [ "$rc" -eq 2 ] || fail "non-regular $name must be exit 2 (rc=$rc): $out"
+  case "$name" in config.toml) label="user config" ;; *) label="$name" ;; esac
+  case "$out" in *"$label が regular file ではありません"*) : ;; *) fail "non-regular $name should be named: $out" ;; esac
+done
+
 # worker 用 profile (Codex home の agent-tools-worker.config.toml、#339): top-level の model / effort を config.toml より
 # 優先する。profile の他の値は出さない。明示 (--model / --effort) は profile より優先し、そのときは profile も読まない。
 profile="$home/agent-tools-worker.config.toml"

@@ -125,37 +125,19 @@ reset までの日数 = (週の reset の時刻 − 今) / 24 時間   (小数�
   既定に任せます (`CODEX-LAUNCH.md` の `--ignore-user-config` で user の設定は読まれないため、ここで明示する)。
   値は `\A[A-Za-z0-9._-]+\z` に合うものだけを受け付けます。effort はプリセットの値を渡し、profile の
   `model_reasoning_effort` は使いません。
-  読み方は worker の preflight (`personal-codex-worker-preflight`) と同じで、次の command で出します (exit 0 で
-  model の値、無ければ空行。top-level に解釈できない行、値が上の形に合わない、file は在るが regular file でない、
-  在るかどうかを確かめられない、のどれかなら exit 2 で理由を stderr に出す。無い file は飛ばす)。**出力を採用するのは exit 0 のときだけ**で、それ以外 (exit 2 の理由つきの停止のほか、preflight が
-  配備されていない・file を読めないなどで ruby が 0 以外で終わった場合も) は「設定が不正」と同じく開始せず、
-  理由を報告します (推測で model を決めない。空の出力を「model 無し」と読まない)。
-  `preflight` は tool の home に配備されたもの (Claude Code なら `$HOME/.claude/agent-tools/scripts/personal-codex-worker-preflight`、
-  Codex なら `$HOME/.codex/` の下の同じ path。RECORD.md の役割の数え方と同じ) を literal の変数で渡します。
+  読み方は配備済みの script `personal-codex-model-selection` が持ち (worker の preflight と同じ重ね方を共有
+  する。#364)、次の command で出します (exit 0 で model の値、無ければ空行。top-level に解釈できない行、値が上の形に
+  合わない、file は在るが regular file でない、在るかどうかを確かめられない・読めない、のどれかなら exit 2 で理由を
+  stderr に出す。無い file は飛ばす)。**出力を採用するのは exit 0 のときだけ**で、それ以外 (exit 2 の理由つきの
+  停止のほか、script が配備されていないなどで 0 以外で終わった場合も) は「設定が不正」と同じく開始せず、理由を
+  報告します (推測で model を決めない。空の出力を「model 無し」と読まない)。script は tool の home に配備された
+  もの (Claude Code なら `$HOME/.claude/agent-tools/scripts/personal-codex-model-selection`、Codex なら `$HOME/.codex/`
+  の下の同じ path。RECORD.md の役割の数え方と同じ) を literal の変数で渡します。引数は列挙
+  (`--profile review` / `--format model`) だけで、path を渡しません。
 
   ```sh
-  preflight="$HOME/.claude/agent-tools/scripts/personal-codex-worker-preflight"
-  ruby -e '
-  begin
-    load ARGV.fetch(0)
-    home = ENV["CODEX_HOME"].to_s.empty? ? File.join(Dir.home, ".codex") : ENV["CODEX_HOME"]
-    selection = {}
-    [["config.toml", "user config"], ["agent-tools-review.config.toml", "review profile"]].each do |name, label|
-      path = File.join(home, name)
-      begin
-        stat = File.stat(path)
-      rescue Errno::ENOENT
-        next
-      end
-      raise ArgumentError, "#{label} が regular file ではありません" unless stat.file?
-      selection.merge!(CodexWorkerPreflight.read_model_selection(File.read(path), label))
-    end
-    puts selection.fetch("model", "")
-  rescue ScriptError, StandardError => e
-    warn "codex model: #{e.message}"
-    exit 2
-  end
-  ' "$preflight"
+  selector="$HOME/.claude/agent-tools/scripts/personal-codex-model-selection"
+  "$selector" --profile review --format model
   ```
 
 - Claude の側は今の session の model のまま動きます (skill は model を切り替えない)。

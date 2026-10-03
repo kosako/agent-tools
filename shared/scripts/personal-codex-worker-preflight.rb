@@ -29,7 +29,10 @@
 # (`agent-tools-worker.config.toml`。user が置く。無ければ読まない) があれば、その top-level の同じ key を
 # config.toml の値より優先する (Codex の profile と同じく base の config の上に重ねる。#339)。profile を
 # `-p` で渡さないのは、`--ignore-user-config` の起動に profile の他の key (MCP server 等) を持ち込まない
-# ため。どちらの file も同じ規則で読む。TOML parser は持たないので、top-level の各行を
+# ため。どちらの file も同じ規則で読む。無い file は読まないが、在るのに regular file でない・在るかを確かめ
+# られない・読めない file は無いことにせず exit 2 にする。この重ね方 (`layered_model_selection`) は、review /
+# sweep が使う `personal-codex-model-selection` (#364) が library として load して共有する。
+# TOML parser は持たないので、top-level の各行を
 # 「空行 / comment / `bare_key = <1 行で閉じる scalar か平坦な配列>`」だけに分類し、それ以外の行
 # (複数行文字列、複数行の配列、入れ子や `#` `[` `]` を要素に含む配列、inline table、quoted /
 # dotted key、escape を含む文字列) が 1 つでもあれば、model を「無し」に倒さず fail-closed
@@ -66,7 +69,7 @@ require "json"
 require "digest"
 
 module CodexWorkerPreflight
-  VERSION = "6"
+  VERSION = "7"
   GIT_MUTABLE_FILES = %w[HEAD index COMMIT_EDITMSG ORIG_HEAD packed-refs].freeze
   GIT_MUTABLE_DIRS = %w[objects refs logs].freeze
   MAX_CHANGED_PATHS = 20
@@ -441,26 +444,45 @@ module CodexWorkerPreflight
   end
 
   # 明示 (--model / --effort) があれば config も profile も読まない。片方だけ明示されたときも読まない
-  # (config の解釈を「一部だけ」混ぜると出所が追えなくなる)。明示が無ければ config.toml を読み、
-  # worker 用 profile file があればその値を key ごとに優先する。戻り値は [選択, key ごとの出所]。
-  # 出所は "explicit" / "config" / "profile" (値が無い key は含めない)。
+  # (config の解釈を「一部だけ」混ぜると出所が追えなくなる)。明示が無ければ worker 用 profile で重ねる。
+  # 戻り値は [選択, key ごとの出所]。出所は "explicit" / "config" / "profile" (値が無い key は含めない)。
   def model_selection(opts)
     explicit = opts[:explicit]
     return [explicit, explicit.map { |k, _| [k, "explicit"] }.to_h] unless explicit.empty?
 
-    home = codex_home(opts[:codex_home])
-    config_path = File.join(home, "config.toml")
-    selection = read_model_selection(File.file?(config_path) ? File.read(config_path, encoding: "UTF-8") : "")
-    sources = selection.map { |k, _| [k, "config"] }.to_h
-    profile_path = File.join(home, "#{WORKER_PROFILE}.config.toml")
-    if File.file?(profile_path)
-      profile = read_model_selection(File.read(profile_path, encoding: "UTF-8"), "#{WORKER_PROFILE}.config.toml")
-      profile.each do |key, value|
+    layered_model_selection(codex_home(opts[:codex_home]), WORKER_PROFILE)
+  end
+
+  # Codex home の config.toml の top-level を base に、`<profile>.config.toml` の top-level の同じ key を
+  # key ごとに重ねる (Codex の `-p` で profile を重ねたときの実効値と同じ)。worker の preflight と
+  # personal-codex-model-selection (review / sweep) が共有する唯一の重ね方。戻り値は [選択, key ごとの出所]
+  # で、出所は "config" / "profile" (値が無い key は含めない)。
+  def layered_model_selection(home, profile)
+    selection = {}
+    sources = {}
+    [["config.toml", "user config", "config"],
+     ["#{profile}.config.toml", "#{profile}.config.toml", "profile"]].each do |name, label, source|
+      read_model_file(File.join(home, name), label).each do |key, value|
         selection[key] = value
-        sources[key] = "profile"
+        sources[key] = source
       end
     end
     [selection, sources]
+  end
+
+  # 無い file は空 (読まない)。在るのに regular file でない・在るかを確かめられない・読めない file は、
+  # 無いことにせず止める。理由文には file の label と errno の種類だけを出し、path は出さない。
+  def read_model_file(path, label)
+    begin
+      stat = File.stat(path)
+    rescue Errno::ENOENT
+      return {}
+    end
+    raise ArgumentError, "#{label} が regular file ではありません" unless stat.file?
+
+    read_model_selection(File.read(path, encoding: "UTF-8"), label)
+  rescue SystemCallError => e
+    raise ArgumentError, "#{label} を確かめられないか読めません (#{e.class})"
   end
 
   # 出所の表示 (text 出力)。profile は名前も添える。

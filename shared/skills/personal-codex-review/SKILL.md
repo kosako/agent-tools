@@ -80,8 +80,9 @@ codex features list
   渡すと CLI が止まるので、行が無ければ起動しない。`--disable` を外して起動することもしない)。
 - model / effort の読み取り (`LAUNCH.md` の command) が exit 0 で終わる。user の `config.toml` と Codex home
   (`$CODEX_HOME`、空なら `~/.codex`) の review 用 profile file `agent-tools-review.config.toml` の top-level を、
-  worker の preflight と同じ規則で読む。exit 0 以外 (top-level に解釈できない行、値が形に合わない、preflight が
-  配備されていない) は BLOCKED とし、推測した model で走らせず、`--ignore-user-config` を外して user config を
+  配備済みの `personal-codex-model-selection` で worker の preflight と同じ規則で読む。exit 0 以外 (top-level に
+  解釈できない行、値が形に合わない、script か preflight が配備されていない、file を読めない・regular file でない)
+  は BLOCKED とし、推測した model で走らせず、`--ignore-user-config` を外して user config を
   読ませることもしない。
 - current working directory が review 対象の git repository である。
 
@@ -209,9 +210,9 @@ command は **この skill の directory にある `LAUNCH.md` を読んで、�
 - **model / effort は user の設定から再指定する**: `--ignore-user-config` で user の model 設定も読まれなくなるので、
   model family / reasoning effort は skill で固定せず、user の `config.toml` の top-level を base に、Codex home の
   review 用 profile file `agent-tools-review.config.toml` (dotfiles か user が置く。#339) の top-level に同じ key が
-  あればそれを優先して読み (key ごとに重ねる)、`-c` で渡す。読み方は worker の preflight
-  (`personal-codex-worker-preflight`) の `read_model_selection` を library として使い、TOML の読み方を写さない
-  (command は `LAUNCH.md`)。読むのは `model` と `model_reasoning_effort` だけで、profile の他の key (例:
+  あればそれを優先して読み (key ごとに重ねる)、`-c` で渡す。読み方は配備済みの script
+  `personal-codex-model-selection` が持ち (worker の preflight と同じ重ね方を共有し、TOML の読み方を写さない。#364)、
+  command は `LAUNCH.md`。読むのは `model` と `model_reasoning_effort` だけで、profile の他の key (例:
   `service_tier`) は読まない (worker と同じ)。どちらにも無い key は渡さず Codex の既定に任せる。file は作らず、
   書き換えない。読み取った値以外の `-m` や model-specific config は足さない。別 agent / wrapper に代行させず、
   実際の Codex CLI process を起動する。
