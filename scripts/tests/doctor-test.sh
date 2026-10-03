@@ -112,6 +112,11 @@ grep -q "warn: catalog: version mismatch" "$tmp/d6" \
 # (check_catalog が sources_by_name と build_id_for を直接呼ぶ経路。status と対称の best-effort)
 mkdir -p "$tmp/brepo/shared/workflows" "$tmp/bcodex" "$tmp/bclaude" "$tmp/bagents"
 cat > "$tmp/brepo/shared/workflows/personal-demo.md" <<'EOF'
+---
+name: personal-demo
+description: demo personal-demo
+---
+
 # demo
 EOF
 write_asset_manifest "$tmp/brepo/shared/workflows/personal-demo.asset.yml" \

@@ -25,9 +25,8 @@ generated/claude-code/scripts/
   personal-<name>.agent-tools-managed.yml (sidecar marker)
 ```
 
-- **skill**: single-file asset は source content を `SKILL.md` の body にする。source が
-  YAML frontmatter を持たない場合のみ、manifest の `name` と `summary` から frontmatter を
-  生成する。directory asset は `asset.yml` と source-only dir (現状 `evals/`) を除く
+- **skill**: single-file asset は source を byte のまま `SKILL.md` にする (manifest から frontmatter を
+  生成しない。#376)。directory asset は `asset.yml` と source-only dir (現状 `evals/`) を除く
   全 files を copy する (非配置 dir は build_id にも含めない)。
   既存 frontmatter は directory / 単一 source とも YAML と manifest name の一致を検証する。
   Claude-only skill は frontmatter 不在・description 省略を許可する。Codex にも skill として

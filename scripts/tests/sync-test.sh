@@ -51,6 +51,11 @@ grep -q "0 change(s)" "$tmp/out-skip" || fail "expected zero pending changes"
 
 # --- case 4: source 変更で update になり、apply で反映される ---
 cat > "$tmp/repo/shared/workflows/personal-demo.md" <<'EOF'
+---
+name: personal-demo
+description: demo personal-demo
+---
+
 # demo v2
 EOF
 "$build" --root "$tmp/repo" --quiet > /dev/null
