@@ -418,6 +418,53 @@ grep -q "skip: \[claude-code\].*personal-linked (orphan is a symlink; left in pl
 [ -e "$tmp/real-orphan" ] || fail "symlink destination must be untouched"
 rm -rf "$tmp/pclaude/skills/personal-handmade" "$tmp/pclaude/skills/personal-linked"
 
+# --- case 23b: conflict があれば、prune の削除も含めて何も適用しない (#375) ---
+# fixture: 2 skill を配置後、片方を shared/ から消して managed orphan にし、新しい skill の配置先に unmanaged な
+# 同名 dir を置いて conflict を作る。--prune --apply は exit 1 で、orphan も配置先も変わらない。
+mkdir -p "$tmp/cprepo/shared/skills" "$tmp/cpcodex" "$tmp/cpclaude"
+for n in keep gone; do
+  mkdir -p "$tmp/cprepo/shared/skills/personal-$n"
+  cat > "$tmp/cprepo/shared/skills/personal-$n/SKILL.md" <<EOF
+---
+name: personal-$n
+description: demo skill $n
+---
+body $n
+EOF
+  write_asset_manifest "$tmp/cprepo/shared/skills/personal-$n/asset.yml" \
+    "personal-$n" skill public "shared/skills/personal-$n" directory claude-code
+done
+run23b() { "$sync" --root "$tmp/cprepo" --codex-home "$tmp/cpcodex" --claude-home "$tmp/cpclaude" --opencode-home "$tmp/cpopencode" "$@"; }
+"$build" --root "$tmp/cprepo" --quiet > /dev/null
+"$register" --root "$tmp/cprepo" --quiet > /dev/null
+run23b --apply --quiet > /dev/null
+[ -f "$tmp/cpclaude/skills/personal-gone/SKILL.md" ] || fail "conflict+prune fixture should deploy personal-gone"
+rm -rf "$tmp/cprepo/shared/skills/personal-gone"
+mkdir -p "$tmp/cprepo/shared/skills/personal-new"
+cat > "$tmp/cprepo/shared/skills/personal-new/SKILL.md" <<'EOF'
+---
+name: personal-new
+description: demo skill new
+---
+body new
+EOF
+write_asset_manifest "$tmp/cprepo/shared/skills/personal-new/asset.yml" \
+  personal-new skill public shared/skills/personal-new directory claude-code
+"$build" --root "$tmp/cprepo" --prune --quiet > /dev/null
+"$register" --root "$tmp/cprepo" --quiet > /dev/null
+mkdir -p "$tmp/cpclaude/skills/personal-new"
+echo "hand made" > "$tmp/cpclaude/skills/personal-new/SKILL.md"   # marker なし = unmanaged
+status=0
+run23b --prune --apply > "$tmp/out23b" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "conflict with prune should exit 1, got $status: $(cat "$tmp/out23b")"
+grep -q "conflict: \[claude-code\].*personal-new" "$tmp/out23b" || fail "missing conflict line: $(cat "$tmp/out23b")"
+grep -q "delete: \[claude-code\].*personal-gone (not in catalog)" "$tmp/out23b" \
+  || fail "the orphan should still be planned for deletion: $(cat "$tmp/out23b")"
+grep -q "nothing was applied" "$tmp/out23b" || fail "missing stop notice: $(cat "$tmp/out23b")"
+[ -f "$tmp/cpclaude/skills/personal-gone/SKILL.md" ] || fail "conflict must stop the prune delete as well"
+grep -q "hand made" "$tmp/cpclaude/skills/personal-new/SKILL.md" || fail "conflict target must not be overwritten"
+[ -f "$tmp/cpclaude/skills/personal-keep/SKILL.md" ] || fail "catalog-backed skill must stay"
+
 # --- case 24: script orphan は本体 + sidecar marker を対で撤去する ---
 mkdir -p "$tmp/prepo/shared/scripts"
 printf '#!/bin/sh\necho tool\n' > "$tmp/prepo/shared/scripts/personal-ptool.sh"
@@ -563,12 +610,20 @@ echo '["not","an","object"]' > "$tmp/badcat/generated/catalog.json"
   > "$tmp/out30a" 2>&1 || fail "malformed catalog must not crash sync: $(cat "$tmp/out30a")"
 grep -q "no catalog" "$tmp/out30a" \
   || fail "non-object catalog should be treated as no-catalog: $(cat "$tmp/out30a")"
-# assets が Array of Hash でない場合も fail-closed
-echo '{"catalog_version":3,"assets":[1,2,3]}' > "$tmp/badcat/generated/catalog.json"
+# assets が Array of Hash でない場合も fail-closed。version は現行の CATALOG_VERSION に合わせる (古い version だと
+# 型検査より前の version 不一致の分岐で返り、型検査を外しても通ってしまう。#375)
+cur_ver=$(ruby -r"$script_dir/../lib/artifact_targets" -e 'print ArtifactTargets::CATALOG_VERSION')
+printf '{"catalog_version":%s,"assets":[1,2,3]}\n' "$cur_ver" > "$tmp/badcat/generated/catalog.json"
 "$sync" --root "$tmp/badcat" --codex-home "$tmp/bc-codex" --claude-home "$tmp/bc-claude" --opencode-home "$tmp/bc-opencode" \
   > "$tmp/out30b" 2>&1 || fail "malformed assets must not crash sync: $(cat "$tmp/out30b")"
 grep -q "no catalog" "$tmp/out30b" \
   || fail "non-Hash asset entries should be treated as no-catalog: $(cat "$tmp/out30b")"
+# version 不一致も no-catalog (中身を読まない)
+printf '{"catalog_version":%s,"assets":[1,2,3]}\n' "$((cur_ver - 1))" > "$tmp/badcat/generated/catalog.json"
+"$sync" --root "$tmp/badcat" --codex-home "$tmp/bc-codex" --claude-home "$tmp/bc-claude" --opencode-home "$tmp/bc-opencode" \
+  > "$tmp/out30c" 2>&1 || fail "old catalog version must not crash sync: $(cat "$tmp/out30c")"
+grep -q "no catalog" "$tmp/out30c" \
+  || fail "old catalog version should be treated as no-catalog: $(cat "$tmp/out30c")"
 
 # --- case 31: 本体不在 + managed sidecar は conflict にせず create する (#179 H-06 の許可側) ---
 # (case 29 の unmanaged と対。本体だけ消えて自分の managed marker が残った状態からの再配置。)
