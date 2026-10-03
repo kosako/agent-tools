@@ -618,8 +618,9 @@ printf '{"catalog_version":%s,"assets":[1,2,3]}\n' "$cur_ver" > "$tmp/badcat/gen
   > "$tmp/out30b" 2>&1 || fail "malformed assets must not crash sync: $(cat "$tmp/out30b")"
 grep -q "no catalog" "$tmp/out30b" \
   || fail "non-Hash asset entries should be treated as no-catalog: $(cat "$tmp/out30b")"
-# version 不一致も no-catalog (中身を読まない)
-printf '{"catalog_version":%s,"assets":[1,2,3]}\n' "$((cur_ver - 1))" > "$tmp/badcat/generated/catalog.json"
+# version 不一致も no-catalog (中身を読まない)。assets は正常な形にして、version の検査だけで決まるようにする
+# (assets も壊すと、version の検査を外しても型検査が no-catalog を返してしまう。#378 review)
+printf '{"catalog_version":%s,"assets":[]}\n' "$((cur_ver - 1))" > "$tmp/badcat/generated/catalog.json"
 "$sync" --root "$tmp/badcat" --codex-home "$tmp/bc-codex" --claude-home "$tmp/bc-claude" --opencode-home "$tmp/bc-opencode" \
   > "$tmp/out30c" 2>&1 || fail "old catalog version must not crash sync: $(cat "$tmp/out30c")"
 grep -q "no catalog" "$tmp/out30c" \
