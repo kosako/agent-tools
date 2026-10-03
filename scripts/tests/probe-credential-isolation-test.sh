@@ -38,6 +38,7 @@ iso_run "$scratch" sh -c '
   printf "GH_TOKEN=[%s]\n" "${GH_TOKEN:-<unset>}"
   printf "GITHUB_TOKEN=[%s]\n" "${GITHUB_TOKEN:-<unset>}"
   printf "GIT_CONFIG_NOSYSTEM=%s\n" "${GIT_CONFIG_NOSYSTEM:-<unset>}"
+  printf "GIT_SSH_COMMAND=%s\n" "${GIT_SSH_COMMAND:-<unset>}"
   printf "cwd=%s\n" "$(pwd -P)"
 ' > "$tmp/env-out" 2>&1 || fail "iso_run should execute the command"
 
@@ -48,6 +49,10 @@ grep -q "^SSH_AUTH_SOCK=\[<unset>\]$" "$tmp/env-out" || fail "SSH_AUTH_SOCK leak
 grep -q "^GH_TOKEN=\[<unset>\]$" "$tmp/env-out" || fail "GH_TOKEN leaked into isolation"
 grep -q "^GITHUB_TOKEN=\[<unset>\]$" "$tmp/env-out" || fail "GITHUB_TOKEN leaked into isolation"
 grep -q "^GIT_CONFIG_NOSYSTEM=1$" "$tmp/env-out" || fail "GIT_CONFIG_NOSYSTEM not set"
+# git-ssh: agent に加えて既定の鍵の探索も止める (OpenSSH は既定の鍵の path を HOME ではなく account の home から
+# 解決するので、空 HOME だけでは止まらない。#374)
+grep -q "^GIT_SSH_COMMAND=.* -o IdentityAgent=none " "$tmp/env-out" || fail "ssh agent not disabled: $(cat "$tmp/env-out")"
+grep -q "^GIT_SSH_COMMAND=.* -o IdentityFile=none " "$tmp/env-out" || fail "default ssh identities not disabled: $(cat "$tmp/env-out")"
 # 非 repo scratch cwd で実行される (repo 内の .git/config を読まない)
 grep -q "cwd=.*$scratch/cwd$" "$tmp/env-out" || fail "iso_run did not use non-repo scratch cwd: $(cat "$tmp/env-out")"
 rm -rf "$scratch"

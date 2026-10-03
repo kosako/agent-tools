@@ -52,7 +52,7 @@ negative だけに付けると operation identity が崩れるため使わない
 |---|---|---|
 | gh | `GH_CONFIG_DIR=<空>` で keyring ごと断 (host 未登録で keyring 不参照) | env-strip だけでは keyring 認証が残る |
 | git-https | `GIT_CONFIG_NOSYSTEM=1` で system gitconfig の osxkeychain helper を断 | `GIT_CONFIG_SYSTEM=/dev/null` では切れない (別経路 load) |
-| git-ssh | `unset SSH_AUTH_SOCK` + `GIT_SSH_COMMAND`(`IdentityAgent=none`) | `SSH_AUTH_SOCK` だけでは agent 経由で残る |
+| git-ssh | `unset SSH_AUTH_SOCK` + `GIT_SSH_COMMAND`(`IdentityAgent=none` + `IdentityFile=none`) | `SSH_AUTH_SOCK` だけでは agent 経由で残る。`IdentitiesOnly=yes` は既定の鍵の候補を外さず、OpenSSH は既定の鍵の path を `HOME` ではなく account の home から解決するので、空 `HOME` でも既定の鍵の探索は止まらない (`IdentityFile=none` で止める、#374) |
 | curl | 空 `HOME` + `NETRC=/dev/null` で `~/.netrc` を断つ (`--netrc` 前提。curl 8.7.1 は空 HOME が、8.16.0+ は `NETRC` file 指定が効く) | version で経路が違うが recipe が両方設定するため新旧とも遮断。`.curlrc` / proxy env |
 
 さらに **非 repo の scratch cwd で実行** する (git に `GIT_CONFIG_NOLOCAL` はなく、cwd の
