@@ -124,7 +124,8 @@ usage: check-skill-routing.sh --cases <cases.json> --results <results.json> [--b
 - `probe-skill-routing.sh`: skill routing acceptance harness の probe runner (実機)。候補 skill
   だけを project scope に置いた隔離 project で `claude -p` / `codex exec` を headless 実行し、
   発火した skill と token 使用量を `results.json` (judge 入力) に書く。実 tool home には
-  書き込まない。
+  書き込まない。Codex は監査 / review と同じ境界 (`--ignore-user-config` / `--ignore-rules` /
+  `--disable apps` 等) で起動し、起動の前に flag と feature の在否を確かめる (#372)。
 
 ```text
 usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
@@ -134,9 +135,10 @@ usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
 
 - **CI では実行しない** (CLI 認証と network が要る)。証跡は raw log (`<out>.raw/`) と judge の
   summary。`--smoke` で隔離と event 形式を先に確認する (実測した版: Claude Code 2.1.277 /
-  Codex CLI 0.153.4)。
-- self-test は無い (CLI 起動そのものが主題のため)。`--dry-run` / `--help` の引数契約は
-  `tests/cli-args-test.sh` の対象外。
+  Codex CLI 0.153.4、境界つきの起動は 0.159.3)。
+- self-test: `tests/probe-skill-routing-test.sh` は Codex の起動の境界 (argv と、起動の前の flag と
+  feature の確認) だけを偽の `codex` で確かめる。event の解析と CLI の実起動は対象外 (実機で
+  `--smoke`)。`--dry-run` / `--help` の引数契約は `tests/cli-args-test.sh` の対象外。
 
 - `probe-opencode-plugin.sh`: OpenCode plugin probe の runner (実機・#295)。HOME / XDG / DB /
   git config を tmp に向けた隔離環境で `opencode` を起動し、計測用 plugin と 127.0.0.1 の mock
