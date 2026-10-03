@@ -65,6 +65,11 @@ run_status > "$tmp/s3c" 2>&1
 
 # --- case 4: source 変更で generated.stale と target stale が出る ---
 cat > "$tmp/repo/shared/workflows/personal-demo.md" <<'EOF'
+---
+name: personal-demo
+description: demo personal-demo
+---
+
 # demo v2
 EOF
 run_status > "$tmp/s4" 2>&1
@@ -135,6 +140,11 @@ echo "changed" >> "$tmp/irepo/shared/instructions/personal-ops.md"
 # --- case 11: 壊れた (malformed YAML) manifest があっても status は crash しない (B1) ---
 mkdir -p "$tmp/brepo/shared/workflows" "$tmp/bcodex" "$tmp/bclaude"
 cat > "$tmp/brepo/shared/workflows/personal-demo.md" <<'EOF'
+---
+name: personal-demo
+description: demo personal-demo
+---
+
 # demo
 EOF
 write_asset_manifest "$tmp/brepo/shared/workflows/personal-demo.asset.yml" \

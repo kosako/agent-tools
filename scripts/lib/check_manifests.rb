@@ -551,14 +551,14 @@ module CheckManifests
       return unless File.file?(skill_md)
 
       codex = skill_targets.include?("codex")
-      validate_skill_entrypoint(path, skill_md, data["name"], required: codex && directory,
+      validate_skill_entrypoint(path, skill_md, data["name"], required: codex,
                                 require_description: codex, claude_skill: skill_targets.include?("claude-code"))
     end
 
-    # 既存 frontmatter は両 source 形式とも無改変で配るため同じ境界で検証する。
-    # 開始 marker は Build::Runner#skill_markdown と同じ LF / CRLF 判定を保つ。
-    # 無い単一 source は build が補完するが、directory は補完されず Codex では必須。
-    # frontmatter 不在は source による identity 主張が無く、Claude-only directory は
+    # 両 source 形式とも source を無改変で配る (build は frontmatter を生成しない。#376) ため、
+    # 同じ境界で検証する。開始 marker は LF / CRLF の両方を読む。Codex に配る skill は
+    # frontmatter (name と description) が必須で、Claude-only は省略できる。
+    # frontmatter 不在は source による identity 主張が無く、Claude-only の skill は
     # loader が directory 名へ fallback するため name 照合を行わない。
     # frontmatter で別 identity を宣言すると「レビューされた identity ≠ 実配備 identity」に
     # なるため、manifest name との一致を必須にする (#43 の外部 skill 配布で効く供給側ギャップ)。

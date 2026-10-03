@@ -57,16 +57,18 @@ directory 形式の配置ルールと、両 source 形式に共通する frontma
   symlink を辿り `shared/` の外の内容を generated/ へ脱出させうるため、check-manifests が
   error にして gate を止める。
 - **directory skill は `SKILL.md` を entrypoint として必須**にする (#187 M-01)。build は
-  directory skill の `SKILL.md` を無改変でコピーする (単一ファイル skill と違い frontmatter を
-  生成しない) ため、無いと entrypoint 欠落の inert skill が配布される。
+  directory skill の `SKILL.md` を無改変でコピーする (単一ファイル skill も source を無改変で配り、
+  frontmatter を生成しない。#376) ため、無いと entrypoint 欠落の inert skill が配布される。
 - **skill の既存 frontmatter `name` は manifest name と一致必須** (#187 M-01, #234)。
   directory の `SKILL.md` と、既存 frontmatter を持つ単一 source に共通で適用する。
   frontmatter が在る (先頭が `---` 行) のに閉じ marker 欠落 / YAML parse 不能 (alias 等) /
   非 mapping / name 欠落・空・型不正なら **fail-closed** で拒否する。LF / CRLF に対応する。
 - **Codex に skill として生成する場合、非空 string の `description` も必須** (#234)。
   [Codex の skill 契約](https://learn.chatgpt.com/docs/build-skills) に合わせ、frontmatter の無い
-  directory skill は拒否する。frontmatter の無い単一 source は既存どおり build が manifest の
-  name と summary (無ければ description、さらに無ければ name) から補完する。
+  skill は directory でも単一 source でも拒否する。build は manifest から frontmatter を生成しない
+  (#376。以前は単一 source にだけ manifest の name と summary から補完していたが、生成した内容が
+  build_id に入らず、summary だけの変更が配布にも承認の失効にも届かなかったため廃止した)。
+  承認した bytes (build_id の対象) と配る bytes が、どの skill でも一致する。
   [Claude Code の省略規則](https://code.claude.com/docs/en/skills#frontmatter-reference) に沿い、
   Claude-only skill の frontmatter 不在・description 省略は許可する。判定は manifest の
   kind ではなく target ごとの解決済み artifact_kind に従い、instruction / script は対象外。

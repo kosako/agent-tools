@@ -21,6 +21,11 @@ mkdir -p "$tmp"
 # opencode に配る approved plugin (sync だけが --opencode-home を受け、connect には渡らない, #295)
 mkdir -p "$tmp/shared/skills" "$tmp/shared/plugins" "$tmp/codex" "$tmp/claude" "$tmp/opencode"
 cat > "$tmp/shared/skills/personal-demo-skill.md" <<'EOF'
+---
+name: personal-demo-skill
+description: demo personal-demo-skill
+---
+
 # demo skill
 
 body for the demo skill.

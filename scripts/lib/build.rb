@@ -8,7 +8,6 @@
 # 外部依存ゼロ、network access なしで実行できること。
 # 生成前に manifest validation と static injection check を必ず通す。
 
-require "yaml"
 require "digest"
 require "fileutils"
 
@@ -74,8 +73,9 @@ module Build
       if format == "directory"
         copy_directory_asset(source, out_dir)
       else
-        content = File.read(File.join(@root, source))
-        File.write(File.join(out_dir, "SKILL.md"), skill_markdown(content, asset))
+        # 単一 file の skill も directory と同じく source を byte のまま配る (承認した bytes = 配る bytes。
+        # manifest から frontmatter を生成すると、build_id に入らない内容が配られてしまう。#376)。
+        File.binwrite(File.join(out_dir, "SKILL.md"), File.binread(File.join(@root, source)))
       end
       build_id = Build.build_id_for(@root, source, format)
 
@@ -167,18 +167,6 @@ module Build
 
         FileUtils.cp_r(File.join(src_dir, entry), File.join(out_dir, entry))
       end
-    end
-
-    # source が frontmatter を持たない場合のみ、manifest から frontmatter を生成する。
-    # YAML dump を使い、特殊文字を含む summary でも frontmatter が壊れないようにする。
-    def skill_markdown(content, asset)
-      # LF / CRLF どちらの source でも既存 frontmatter を検出する (CRLF を取りこぼして
-      # manifest 由来 frontmatter を二重前置しないため)。
-      return content if content.start_with?("---\n", "---\r\n")
-
-      description = asset[:summary] || asset[:description] || asset[:name]
-      frontmatter = YAML.dump("name" => asset[:name], "description" => description)
-      "#{frontmatter}---\n\n#{content}"
     end
 
     # directory artifact (skill) の管理 marker を dir 直下に書く。
