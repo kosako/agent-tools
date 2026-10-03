@@ -64,7 +64,7 @@ expect_json() {
 expect_error() {
   [ "$rc" -eq 2 ] || fail "$1 should exit 2 (rc=$rc): out=$out err=$err"
   case "$err" in *"$2"*) : ;; *) fail "$1 should say '$2': $err" ;; esac
-  [ -z "$out" ] || fail "$1 must not print a selection on stdout: $out"
+  [ ! -s "$tmp/out" ] || fail "$1 must not print anything on stdout (not even a newline): $(od -c "$tmp/out")"
   case "$err" in *"usage:"*) fail "$1 must fail on its own check, not usage: $err" ;; esac
   case "$err" in *CANARY*) fail "$1 must not echo file content: $err" ;; esac
   case "$err" in *"$tmp"*) fail "$1 must not echo the path: $err" ;; esac
@@ -201,7 +201,7 @@ for args in "" "--profile review" "--format json" "--profile other --format json
   run_sel "$home" $args
   [ "$rc" -eq 2 ] || fail "usage error should exit 2 for '$args' (rc=$rc): $out"
   case "$err" in *"usage: personal-codex-model-selection"*) : ;; *) fail "should print usage for '$args': $err" ;; esac
-  [ -z "$out" ] || fail "usage error must not print on stdout for '$args': $out"
+  [ ! -s "$tmp/out" ] || fail "usage error must not print anything on stdout for '$args': $(od -c "$tmp/out")"
 done
 
 # preflight が同じ directory に配備されていない → exit 2 (path は出さない)
