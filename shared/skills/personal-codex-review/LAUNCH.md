@@ -50,45 +50,24 @@ key は、その変数の行と対応する `-c` を script から除きます (
 再指定します。user の `config.toml` の top-level (最初の table header より前) を base に、Codex home (`$CODEX_HOME`、
 空なら `~/.codex`) の `agent-tools-review.config.toml` の top-level に同じ key があればそれを優先します (key ごとに
 重ねる。Codex の `-p` で profile を重ねたときの実効値と同じ)。読むのは `model` と `model_reasoning_effort` だけで、
-profile の他の key は読みません。読み方は worker の preflight (`personal-codex-worker-preflight`) の
-`read_model_selection` を library として使います (TOML の読み方を写さない)。`preflight` は tool の home に配備された
-もの (Claude Code なら `$HOME/.claude/agent-tools/scripts/personal-codex-worker-preflight`、Codex なら `$HOME/.codex/`
-の下の同じ path) を literal の変数で渡します。
+profile の他の key は読みません。読み方は配備済みの script `personal-codex-model-selection` が持ち (worker の
+preflight と同じ重ね方を共有する。#364)、ここには写しません。script は tool の home に配備されたもの (Claude Code
+なら `$HOME/.claude/agent-tools/scripts/personal-codex-model-selection`、Codex なら `$HOME/.codex/` の下の同じ path)
+を literal の変数で渡します。引数は列挙 (`--profile review` / `--format json`) だけで、path を渡しません。
 
 ```sh
-preflight="$HOME/.claude/agent-tools/scripts/personal-codex-worker-preflight"
-ruby -rjson -e '
-begin
-  load ARGV.fetch(0)
-  home = ENV["CODEX_HOME"].to_s.empty? ? File.join(Dir.home, ".codex") : ENV["CODEX_HOME"]
-  selection = {}
-  sources = {}
-  [["config.toml", "user config"], ["agent-tools-review.config.toml", "review profile"]].each do |name, label|
-    path = File.join(home, name)
-    begin
-      stat = File.stat(path)
-    rescue Errno::ENOENT
-      next
-    end
-    raise ArgumentError, "#{label} が regular file ではありません" unless stat.file?
-    CodexWorkerPreflight.read_model_selection(File.read(path), label).each do |key, value|
-      selection[key] = value
-      sources[key] = label
-    end
-  end
-  puts JSON.generate({ "selection" => selection, "sources" => sources })
-rescue ScriptError, StandardError => e
-  warn "codex model: #{e.message}"
-  exit 2
-end
-' "$preflight"
+selector="$HOME/.claude/agent-tools/scripts/personal-codex-model-selection"
+"$selector" --profile review --format json
 ```
+
+出力は `{"selection": {key: value}, "sources": {key: "user config" | "review profile"}}` です (無い key は含めない)。
 
 - **exit 0 の JSON だけを使います**。`selection` にある key だけを run script に `-c` で書き、無い key は行ごと
   除きます (Codex の既定に任せる)。`sources` (`user config` / `review profile`。無い key は `codex default`) を返却の
   `Model selection` に写します (値は写さない)。
-- exit 0 以外 (top-level に解釈できない行、値が形に合わない、preflight が配備されていない、file を読めない、file は
-  在るが regular file でない、在るかどうかを確かめられない) は
+- exit 0 以外 (top-level に解釈できない行、値が形に合わない、script か、script が load する
+  `personal-codex-worker-preflight` が配備されていない、file を読めない、file は在るが regular file でない、
+  在るかどうかを確かめられない) は
   `Status: BLOCKED` (`capability-preflight`) です。推測した値で走らせず、`--ignore-user-config` を外して user config を
   読ませることもしません。
 - profile の file は作らず、書き換えません。無い machine があってよく、そのときは `config.toml` の top-level の

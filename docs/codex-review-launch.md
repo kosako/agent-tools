@@ -80,7 +80,8 @@ capability preflight は `codex exec --help` の flag に加えて `codex featur
 model family / reasoning effort は skill で固定せず、user の Codex の設定を再指定します (`--ignore-user-config` で
 読まれなくなる分)。user の `config.toml` の top-level を base に、Codex home の `agent-tools-review.config.toml` の
 top-level に同じ key があればそれを優先し (key ごとに重ねる)、`-c model="…"` / `-c model_reasoning_effort="…"` で
-渡します。読むのは `model` と `model_reasoning_effort` だけで (worker の preflight と同じ規則、同じ library)、
+渡します。読むのは `model` と `model_reasoning_effort` だけで (worker の preflight と同じ規則で、配備済みの
+`personal-codex-model-selection` が読む。#364)、
 profile の他の key (例: `service_tier`) は読みません。読めなければ (top-level に解釈できない行など) 推測せず
 BLOCKED です。置き方と Fast mode の消費は [Install & Usage](install-and-usage.md) の「Codex の review / worker
 だけを軽くする」。

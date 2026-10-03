@@ -1,0 +1,28 @@
+schema_version: 1
+name: personal-codex-model-selection
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #364 の実装 PR で author≠reviewer レビューのうえ承認。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:5c3a0a69f4ef867b09710d2bc06d5c4c04311186428d1aad3fe5fc45985a6c14
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-codex-model-selection.rb
+  format: text
+summary: >-
+  Codex を --ignore-user-config で起動する caller (personal-codex-review の LAUNCH / personal-maintenance-sweep の
+  BUDGET / grill の CONSULT) が、user の model / effort を -c で再指定するために読む CLI (#364)。config.toml の
+  top-level を base に、Codex home の profile file (--profile review|worker → agent-tools-review.config.toml /
+  agent-tools-worker.config.toml) の top-level を key ごとに重ね、--format json (選択と key ごとの出所) か model
+  (model の値 1 行) で出す (exit 0)。重ね方と TOML の読み方は同じ directory の personal-codex-worker-preflight を
+  load して共有する。解釈できない行・不正な値・在るのに regular file でない / 確かめられない file は理由つき exit 2。
