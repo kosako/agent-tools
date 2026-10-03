@@ -35,7 +35,7 @@ probe は一時 directory に project を作り、候補 skill を **project sco
 | tool | 候補 skill の置き場 | user scope の排除 | 確認した版 |
 | --- | --- | --- | --- |
 | claude-code | `<proj>/.claude/skills/<name>/` | `--setting-sources project` (user / local の settings と skill を読まない) | 2.1.277 (2026-09-20 smoke): `~/.claude/skills` の `personal-*` と plugin skill は listing から消え、project skill と bundled skill (dataviz / code-review 等) だけが残る。bundled は両 variant に等しく載る |
-| codex | `<proj>/.agents/skills/<name>/` (公式 docs の repository-level path) | 候補と同名の `~/.codex/skills/<name>/SKILL.md` を `-c 'skills.config=[{path=...,enabled=false},...]'` で無効化 | 0.153.4 (2026-09-21 実測): project scope は読まれる。user scope の同名 skill は **両方 listing に並ぶ** (`--ignore-user-config` では消えない。plugin skill だけ消える)。`skills.config` で 12 本を無効化すると候補だけが残る。他の user / plugin skill は両 variant に等しく載る |
+| codex | `<proj>/.agents/skills/<name>/` (公式 docs の repository-level path) | 候補と同名の `~/.codex/skills/<name>/SKILL.md` を `-c 'skills.config=[{path=...,enabled=false},...]'` で無効化 | 0.153.4 (2026-09-21 実測): project scope は読まれる。user scope の同名 skill は **両方 listing に並ぶ** (`--ignore-user-config` では消えない。plugin skill だけ消える)。`skills.config` で 12 本を無効化すると候補だけが残る。他の user / plugin skill は両 variant に等しく載る。0.159.3 (2026-10-03、下の起動の境界つき): listing は候補 14 本と system skill 5 本 (imagegen / openai-docs / skill-creator / skill-installer / migrate-to-codex) で、plugin skill は消える |
 
 claude-code の観測に使う event (2.1.277 で実測): `system` / `init` の `model` と `skills` (listing)、
 `assistant` の `tool_use` (`name: "Skill"`, `input.skill: "<name>"`)、`result` の `usage`
@@ -59,6 +59,17 @@ claude-code の MCP server は `--strict-mcp-config` で読まない。headless 
 かが run ごとに揺れ、baseline の実測 (2026-09-20) では 24 run が `tools=25 / mcp=0` と
 `tools=72 / mcp=5` の 2 群に割れて `first_prompt_tokens` に ±2.7k token の差が出た (skill listing は
 全 run で一定)。description 圧縮で期待する差 (1〜2k token) より大きいので、条件を固定する。
+
+codex は監査 / review の起動と同じ境界で起動する (#372): `--ignore-user-config` (user の `config.toml` と、そこに
+足される bootstrap の MCP server を読まない)、`--ignore-rules` (execpolicy の rules を読まない)、`--disable apps` /
+`--disable computer_use` / `--disable browser_use` (account 側の connector と sandbox の外へ届く tool を外す)。
+case の prompt には PR へのコメントや merge を頼むものがあり、read-only の sandbox は MCP / connector の tool の
+呼び出しを止めないため。起動の前に `codex exec --help` に flag があり、`codex features list` に disable する
+feature の行があることを確かめ、どちらかが欠ければ起動せずに exit 2 で止まる (`--dry-run` は CLI を起動しないので
+確かめない)。user config を読まないので effort は Codex の既定になり、plugin skill は listing から消える。どちらも
+baseline と candidate に等しく効くので、同じ版の probe で測った前後の比較は成り立つ (境界の無い版で測った
+results とは比べない)。0.159.3 の smoke では、prompt は境界なしの約 20.2k token から約 17.2k token に減り、
+2 case の実行で発火の観測 (SKILL.md の読み取り) は変わらず取れた。
 
 候補 skill の既定の source は `generated/<tool>/skills` (build 済みの配布物)。`--source DIR` で
 別の dir (例: 圧縮前の generated を退避したもの) を指せるので、baseline と candidate を同じ

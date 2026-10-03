@@ -14,6 +14,9 @@
 #     (claude-code: <proj>/.claude/skills、codex: <proj>/.agents/skills) に copy し、claude-code は
 #     --setting-sources project で user scope の skill を外し、codex は候補と同名の user skill を
 #     skills.config の -c override で無効化する (どちらも実測済み。docs 参照)。
+#   - 外部へ書ける経路を残さない: claude-code は MCP を読まず (--strict-mcp-config)、codex は監査 / review
+#     と同じ境界 (--ignore-user-config / --ignore-rules / --disable apps 等) で起動し、起動の前に flag と
+#     feature の在否を確かめる (#372)。case の prompt は PR への書き込みなどを頼むものを含むため。
 #   - CI では実行しない (CLI 認証と network が要る)。hard な証跡は raw log (<out>.raw/) と
 #     PR / Issue に貼る summary。CI 緑を根拠にしない。
 #   - 観測は CLI の event stream に依存する。field 名が変わると observed が空になり、判定は
@@ -43,6 +46,9 @@ module ProbeSkillRouting
   SMOKE_PROMPT = "あなたが今使える skill の name を、カンマ区切りで全部列挙して。他の文は書かない。"
   DEFAULT_MAX_TURNS = 2
   DEFAULT_TIMEOUT = 300
+  # Codex の起動で disable する feature と、起動の前に `codex exec --help` で確かめる flag (#372)。
+  CODEX_DISABLE_FEATURES = %w[apps computer_use browser_use].freeze
+  CODEX_HELP_MARKERS = %w[--ignore-user-config --ignore-rules --disable].freeze
 
   USAGE = <<~TEXT
     usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
@@ -227,12 +233,44 @@ module ProbeSkillRouting
   # skills.config (path 単位の enabled=false) の -c override で無効化し、listing に候補だけが載る
   # ようにする。他の user skill / plugin skill は実環境に合わせて残す (両 variant に等しく載る)。
   # model は event に出ないので -m で明示し、results.json に記録する値と一致させる。
+  # 境界 (#372): case の prompt には PR への書き込みを頼むものがあり、read-only の sandbox は MCP /
+  # connector の tool の呼び出しを止めない。監査 / review の起動と同じく、user config (MCP server、
+  # bootstrap の MCP) と execpolicy の rules を読まず、sandbox の外へ届く feature を disable する。
+  # user config を読まないので effort は Codex の既定になり、plugin skill は listing から消える
+  # (どちらも baseline と candidate に等しく効く)。
   def self.codex_argv(opts, proj, names)
-    argv = ["codex", "exec", "--json", "--ephemeral", "--skip-git-repo-check", "-s", "read-only",
-            "-c", 'approval_policy="never"', "-C", proj, "-m", codex_model(opts)]
+    argv = ["codex", "exec", "--json", "--ephemeral", "--skip-git-repo-check",
+            "--ignore-user-config", "--ignore-rules", "-s", "read-only", "-c", 'approval_policy="never"']
+    CODEX_DISABLE_FEATURES.each { |f| argv.push("--disable", f) }
+    argv.push("-C", proj, "-m", codex_model(opts))
     disable = codex_disable_override(names)
     argv += ["-c", disable] if disable
     argv + ["-"]
+  end
+
+  # 起動の前に、境界の flag が `codex exec --help` に在り、disable する feature の行が
+  # `codex features list` に在ることを確かめる。どちらも exit 0 のときだけ出力を信じ、欠けていれば
+  # 存在しない flag を試さずに止める (無い feature を --disable に渡すと CLI が止まる)。
+  def self.codex_preflight!
+    help = capture_ok(%w[codex exec --help])
+    raise Error, "codex: `codex exec --help` failed" unless help
+
+    missing = CODEX_HELP_MARKERS.reject { |m| help.include?(m) }
+    raise Error, "codex: exec lacks boundary flag(s): #{missing.join(', ')}" unless missing.empty?
+
+    features = capture_ok(%w[codex features list])
+    raise Error, "codex: `codex features list` failed" unless features
+
+    listed = features.each_line.map { |l| l.split.first }
+    absent = CODEX_DISABLE_FEATURES - listed
+    raise Error, "codex: features list lacks feature(s) to disable: #{absent.join(', ')}" unless absent.empty?
+  end
+
+  def self.capture_ok(argv)
+    out, status = Open3.capture2e(*argv)
+    status.success? ? out : nil
+  rescue SystemCallError
+    nil
   end
 
   def self.codex_home
@@ -430,6 +468,8 @@ module ProbeSkillRouting
     # prompt は argv / stdin で渡すが、先頭 '-' は CLI に option と解釈されうるので弾く。
     bad = cases.select { |c| c["prompt"].start_with?("-") }
     raise Error, "prompt must not start with '-': #{bad.map { |c| c['id'] }.join(', ')}" unless bad.empty?
+    # dry-run は CLI を起動しないので確かめない。
+    codex_preflight! if opts[:tool] == "codex" && !opts[:dry_run]
 
     Dir.mktmpdir("skill-routing-") do |base|
       proj = prepare_project(base, opts[:tool], dirs)
