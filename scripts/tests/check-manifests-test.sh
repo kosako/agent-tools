@@ -15,6 +15,11 @@ trap 'rm -rf "$tmp"' EXIT
 # --- case 1: valid single-file asset + valid directory asset ---
 mkdir -p "$tmp/valid/shared/workflows" "$tmp/valid/shared/skills/personal-demo-skill"
 cat > "$tmp/valid/shared/workflows/personal-demo.md" <<'EOF'
+---
+name: personal-demo
+description: demo personal-demo
+---
+
 # demo
 EOF
 cat > "$tmp/valid/shared/workflows/personal-demo.asset.yml" <<'EOF'

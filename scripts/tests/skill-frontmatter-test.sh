@@ -58,8 +58,12 @@ missing_description = "---\nname: personal-frontmatter\n---\n\n# Fixture\n"
   check_case(format, "mapping", "---\n- item\n---\n", %w[codex], "YAML mapping")
   check_case(format, "alias", "---\nname: &name personal-frontmatter\ndescription: *name\n---\n", %w[codex], "YAML error")
 end
-check_case("directory", "codex-frontmatter-required", "# Fixture\n", %w[codex], "must contain YAML frontmatter")
-check_case("directory", "claude-frontmatter-optional", "# Fixture\n", %w[claude-code], nil)
+# 単一 file の skill も directory と同じ規則 (build は frontmatter を生成しない、#376)。
+%w[directory markdown].each do |format|
+  check_case(format, "codex-frontmatter-required", "# Fixture\n", %w[codex], "must contain YAML frontmatter")
+  check_case(format, "codex-and-claude-frontmatter-required", "# Fixture\n", %w[codex claude-code], "must contain YAML frontmatter")
+  check_case(format, "claude-frontmatter-optional", "# Fixture\n", %w[claude-code], nil)
+end
 check_case("markdown", "codex-instruction", missing_description, %w[codex claude-code], nil,
            { "codex" => { "artifact_kind" => "instruction" } })
 
@@ -174,22 +178,40 @@ Dir.mktmpdir("skill-frontmatter-source-") do |root|
   abort "FAIL: rejected source was parsed" if errors.any? { |e| e.include?("frontmatter has a YAML error") }
 end
 
-# frontmatter を持たない単一 source は既存の adapter 補完で有効になる。
-Dir.mktmpdir("skill-frontmatter-generated-") do |root|
+# 単一 file の skill の source は byte のまま配る。frontmatter を生成しないので、manifest の summary は配る内容に
+# 入らず、承認した bytes (build_id の対象) と配る bytes が一致する (#376)。Codex 向けで frontmatter が無ければ
+# build も register も止まり、generated/ に届かない。
+Dir.mktmpdir("skill-frontmatter-no-generation-") do |root|
   fixture(root, "markdown", "# Fixture\n", %w[codex claude-code])
   %w[build register].each do |stage|
     output, status = Open3.capture2e(File.join(scripts, "#{stage}.sh"), "--root", root)
-    abort "FAIL: #{stage} rejected generated frontmatter: #{output}" unless status.success?
+    abort "FAIL: #{stage} accepted a Codex skill without frontmatter: #{output}" if status.success?
+    abort "FAIL: #{stage} should name the missing frontmatter: #{output}" unless output.include?("must contain YAML frontmatter")
   end
-  %w[codex claude-code].each do |target|
-    content = File.read(File.join(root, "generated", target, "skills/personal-frontmatter/SKILL.md"))
-    fm = YamlUtil.load(content.split(/^---\n/, 3)[1], "generated SKILL.md")
-    abort "FAIL: generated metadata differs" unless fm == {
-      "name" => "personal-frontmatter", "description" => "Generated fixture description",
-    }
+  abort "FAIL: rejected skill reached generated/" if Dir.exist?(File.join(root, "generated", "codex", "skills"))
+end
+Dir.mktmpdir("skill-frontmatter-claude-as-is-") do |root|
+  fixture(root, "markdown", "# Fixture\n", %w[claude-code])
+  %w[build register].each do |stage|
+    output, status = Open3.capture2e(File.join(scripts, "#{stage}.sh"), "--root", root)
+    abort "FAIL: #{stage} rejected a Claude-only skill without frontmatter: #{output}" unless status.success?
   end
-  catalog = JSON.parse(File.read(File.join(root, "generated/catalog.json")))
-  abort "FAIL: valid skill not registered" unless catalog.fetch("assets").all? { |a| a["registration"] == "registered" }
+  content = File.binread(File.join(root, "generated/claude-code/skills/personal-frontmatter/SKILL.md"))
+  abort "FAIL: Claude-only source must be deployed as-is: #{content.inspect}" unless content == "# Fixture\n"
+end
+Dir.mktmpdir("skill-frontmatter-bytes-") do |root|
+  fixture(root, "markdown", valid, %w[codex claude-code])
+  deployed = lambda do
+    output, status = Open3.capture2e(File.join(scripts, "build.sh"), "--root", root)
+    abort "FAIL: build rejected a valid skill: #{output}" unless status.success?
+    %w[codex claude-code].map { |t| File.binread(File.join(root, "generated", t, "skills/personal-frontmatter/SKILL.md")) }
+  end
+  abort "FAIL: deployed bytes differ from the source" unless deployed.call.all? { |c| c == valid }
+  manifest = File.join(root, "shared/skills/personal-frontmatter.asset.yml")
+  File.write(manifest, File.read(manifest).sub("Generated fixture description", "Changed summary"))
+  abort "FAIL: manifest summary leaked into the deployed bytes" unless deployed.call.all? { |c| c == valid }
+  output, status = Open3.capture2e(File.join(scripts, "register.sh"), "--root", root)
+  abort "FAIL: valid skill not registered: #{output}" unless status.success?
 end
 puts "ok: skill frontmatter self-test passed"
 RUBY

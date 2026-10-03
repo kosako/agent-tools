@@ -121,11 +121,28 @@ write_approved_plugin_manifest() {
   write_approved_manifest "$1" "shared/plugins/$2.js" "$2" plugin "$3" opencode
 }
 
+# skill に解決される単一 file の source を、frontmatter つきで書く。name は file 名から .md を除いたもの
+# (manifest の name と一致させる)。build は frontmatter を生成せず source をそのまま配り、Codex に配る
+# skill は frontmatter (name と description) が必須のため (#376)。本文は残余引数を 1 行ずつ出力する。
+# 使い方: write_skill_source <file> <body_line>...
+write_skill_source() {
+  wss_file=$1
+  shift
+  wss_name=$(basename "$wss_file" .md)
+  {
+    printf -- '---\nname: %s\ndescription: demo %s\n---\n\n' "$wss_name" "$wss_name"
+    for wss_line in "$@"; do
+      printf '%s\n' "$wss_line"
+    done
+  } > "$wss_file"
+}
+
 # demo 用 fixture repo を組み立てる: shared/<category>/<name>.md (body は残余引数を
 # 1 行ずつ出力) + boilerplate manifest (write_asset_manifest / targets は codex + claude-code
 # 固定。違う targets の fixture は write_asset_manifest を直接使う)。summary 行が要る suite は
 # 直前の行で WAM_EXTRA を設定する (write_asset_manifest が消費)。fake home の mkdir は
 # suite ごとに異なり root から導出できないため含めない (呼び出し側で行う)。
+# skill に解決される kind (skill / workflow / prompt / template) は write_skill_source で frontmatter つきに書く (#376)。
 # 使い方: make_demo_repo <root> <category> <name> <kind> <body_line>...
 make_demo_repo() {
   mdr_root=$1
@@ -134,9 +151,13 @@ make_demo_repo() {
   mdr_kind=$4
   shift 4
   mkdir -p "$mdr_root/shared/$mdr_category"
-  for mdr_line in "$@"; do
-    printf '%s\n' "$mdr_line"
-  done > "$mdr_root/shared/$mdr_category/$mdr_name.md"
+  case $mdr_kind in
+    skill|workflow|prompt|template) write_skill_source "$mdr_root/shared/$mdr_category/$mdr_name.md" "$@" ;;
+    *)
+      for mdr_line in "$@"; do
+        printf '%s\n' "$mdr_line"
+      done > "$mdr_root/shared/$mdr_category/$mdr_name.md" ;;
+  esac
   write_asset_manifest "$mdr_root/shared/$mdr_category/$mdr_name.asset.yml" \
     "$mdr_name" "$mdr_kind" public "shared/$mdr_category/$mdr_name.md" markdown \
     codex claude-code

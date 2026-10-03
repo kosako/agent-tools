@@ -25,13 +25,12 @@ generated/codex/scripts/
   personal-<name>.agent-tools-managed.yml (sidecar marker)
 ```
 
-- **skill**: single-file asset は source content を `SKILL.md` の body にする。source が
-  YAML frontmatter を持たない場合のみ、manifest の `name` と `summary` から frontmatter を
-  生成する。directory asset は `asset.yml` と source-only dir (現状 `evals/`) を除く
+- **skill**: single-file asset は source を byte のまま `SKILL.md` にする (manifest から frontmatter を
+  生成しない。#376)。directory asset は `asset.yml` と source-only dir (現状 `evals/`) を除く
   全 files を copy する (非配置 dir は build_id にも含めない)。
   Codex に skill として配る source の既存 frontmatter は、manifest と一致する `name` と
-  非空 string の `description` を登録前に検証する。directory の frontmatter 不在は拒否し、
-  単一 source の frontmatter 不在は上記の生成経路を使う。詳細は
+  非空 string の `description` を登録前に検証する。frontmatter の不在は directory でも単一 source でも
+  拒否する。詳細は
   [Asset Manifest Schema](../../docs/asset-manifest-schema.md)。
   Codex のみへ生成する skill には Claude 固有の native 実行構文の拒否 gate を適用しない。
   同じ source を Claude Code の skill にも配る場合は、そちらの未対応機能検査で asset 全体が
