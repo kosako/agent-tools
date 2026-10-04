@@ -452,11 +452,13 @@ module ProbeSkillRouting
   end
 
   # raw log の保存先 (<raw_dir>/<case id>-<n>.<ext>)。case id の文字集合は parse_cases が限っているが、
-  # 多層防御として、展開した保存先の directory が raw dir と一致しなければ書かずに止める (raw dir の
-  # 外に file を作らない)。
+  # 多層防御として、file 名が区切りを含まない 1 つの path 要素で、展開した保存先の directory が raw dir と
+  # 一致しなければ書かずに止める (raw dir の外に file を作らない)。'a/../b' のように字面の正規化では
+  # raw dir に戻る id も、書き込みは raw dir の中の symlink を経て外に届きうるので止める。
   def self.raw_log_path(raw_dir, id, n, ext)
-    path = File.join(raw_dir, "#{id}-#{n}.#{ext}")
-    unless File.dirname(File.absolute_path(path)) == File.absolute_path(raw_dir)
+    name = "#{id}-#{n}.#{ext}"
+    path = File.join(raw_dir, name)
+    unless File.basename(path) == name && File.dirname(File.absolute_path(path)) == File.absolute_path(raw_dir)
       raise Error, "raw log path for case id #{id.inspect} is outside #{raw_dir}"
     end
     path

@@ -103,7 +103,9 @@ raw = File.join("out", "results.json.raw")
 check("raw log は raw dir の直下に <case id>-<n>.<ext> で保存する",
       P.raw_log_path(raw, "a-primary", 1, "jsonl") == File.join(raw, "a-primary-1.jsonl") &&
       P.raw_log_path(raw, "a.b_c-2", 3, "stderr") == File.join(raw, "a.b_c-2-3.stderr"))
-["../escaped", "../../escaped", "sub/escaped"].each do |id|
+# sub/../escaped と sub/../../results.json.raw/escaped は字面の正規化では raw dir の直下に戻るが、
+# 書き込みは raw dir の中の symlink を経て外に届きうる
+["../escaped", "../../escaped", "sub/escaped", "sub/../escaped", "sub/../../results.json.raw/escaped"].each do |id|
   stopped = begin
     P.raw_log_path(raw, id, 1, "jsonl")
     false
