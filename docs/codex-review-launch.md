@@ -64,6 +64,8 @@ SKILL.md)。実行するのは `codex exec … -o "$run/result.md" - < "$run/bri
 排他なので使いません。代わりに `codex exec -` の custom prompt に、検証済みの base / head OID
 (または commit OID) と `git diff` の取得コマンドを書き、diff と周辺コードは Codex に read-only
 sandbox の中で読ませます。brief は file 経由で渡し、diff 本文を埋め込みません。
+commit mode では周辺コードも検証済み commit OID の tree から読ませ (`git show <oid>:<path>` など)、現在の HEAD や
+worktree の file は根拠にしません (#356。tree に無い file・読めない object の扱いを含む規則の正本は SKILL.md §3)。
 
 ## 起動の境界 (#358)
 

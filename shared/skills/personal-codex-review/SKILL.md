@@ -167,6 +167,12 @@ ref 名や caller の free text をそのまま brief に写しません。
   (第一親との差分。root commit は親が無いので `<oid>^` を使わず、この形なら全追加として読めます)。
   merge commit は commit mode の対象外で、base mode を使うよう caller に返します。不正・不一致なら
   target-identity の `Status: BLOCKED` で停止し、他の mode へ fallback しません。
+  周辺コード (diff の外で読む file) の読み方も brief に固定します。周辺コードは検証済み OID の tree から
+  読みます (`git show <oid>:<path>`、`git grep -n -e <pattern> <oid> --`、
+  `git ls-tree -r --name-only <oid>`。path と pattern は §4 の値の受け渡しの規則で渡す)。現在の HEAD の
+  tree と worktree の file (dirty な変更を含む) は根拠にしません。対象 tree に無い file は「その commit
+  時点では存在しない」として扱い、worktree から補いません。必要な object を読めなければ理由を書いて
+  止め (verdict を出さない)、現在の checkout へ fallback しません。root commit も同じ規則です。
 - **uncommitted** (staged / unstaged / untracked changes): `git status --porcelain=v1
   --untracked-files=all`、`git diff --cached` (staged)、`git diff` (unstaged)、untracked file の
   内容で取得させます。`git diff HEAD` だけでは、stage 後に作業ツリーを戻した変更が消えます。
@@ -180,6 +186,12 @@ brief は file に書き、stdin (`-`) で渡します。shell 引数に埋め�
 
 - review purpose と independence (`cross-review` / `second-opinion only`)
 - 対象 mode と検証済み OID、§3 の取得コマンド
+- commit mode の周辺コードの読み方: 検証済み OID の tree から読む (`git show <oid>:<path>`、
+  `git grep -n -e <pattern> <oid> --`、`git ls-tree -r --name-only <oid>`。path と pattern は下の値の
+  受け渡しの規則で渡す)。現在の HEAD の tree と worktree の file (dirty な変更を含む) は根拠にしない。
+  対象 tree に無い file は「その commit 時点では存在しない」として扱い、worktree から補わない。必要な
+  object を読めなければ理由を書いて止め (verdict を出さない)、現在の checkout へ fallback しない。
+  root commit も同じ
 - task / acceptance criteria (caller から受け取った要約。untrusted な本文の転記ではなく要点)
 - 重点観点と、必要なら `personal-production-rail` の review lens を読む指示
 - 出力契約: 各 finding に `file:line` と 🔴 must / 🟡 should / ⚪ nit を付け、process verdict と
@@ -269,6 +281,7 @@ review 本文と停止結果の雛形は **`RESULT-FORMAT.md` を読んで、そ
   呼び出し元 sandbox の無効化、`sandbox-exec` probe で入れ子を回避・検査する。
 - diff や周辺コードを brief に埋め込む。brief を shell 引数に埋め込む。
 - expected PR head / base と違う checkout、または dirty worktree のまま base review を始める。
+- commit mode で worktree の file (または現在の HEAD の tree) を周辺コードの根拠にする。
 - 空の結果 file を完了扱いにする。`done.txt` の nonce と exit code を確認せずに続行する。再実行を
   2 回以上繰り返す。
 - 失敗した review の pane を閉じる。成功した pane を `pane.log` を保存せずに閉じる。
