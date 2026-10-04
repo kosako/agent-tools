@@ -47,15 +47,22 @@ grep -q '^plan (dry-run): stages=isolation,mock,serve ' "$tmp/t1.out" || fail "T
 echo "ok T1"
 
 # --- T2 / T6: runner を偽の opencode で通しで動かす ---------------------------------------
-# 偽の opencode は受け取った env を dump に書き、isolation stage が読む出力を返す。
+# 偽の opencode は受け取った env を dump に書き、isolation stage が読む出力を返す。起動のたびに、
+# OpenCode が config dir に install する形を真似て、固定の package.json と lockfile を書く (T6 の install)。
 fakebin="$tmp/fakebin"
 dump="$tmp/env-dump"
+lock_body='{"name":"probe-lock","lockfileVersion":3,"requires":true,"packages":{}}'
 mkdir -p "$fakebin"
 {
   printf '#!/bin/sh\n'
   printf 'dump=%s\n' "$(shq "$dump")"
+  printf 'lock_body=%s\n' "$(shq "$lock_body")"
   cat <<'EOF'
 { echo "--- $*"; env; } >> "$dump"
+pkg="$XDG_CONFIG_HOME/opencode/node_modules/@opencode-ai/plugin"
+mkdir -p "$pkg"
+printf '{"name":"@opencode-ai/plugin","version":"0.0.0-probe-test","description":"PROBE-PKG-OTHER-FIELD"}\n' > "$pkg/package.json"
+printf '%s\n' "$lock_body" > "$XDG_CONFIG_HOME/opencode/package-lock.json"
 case "$1" in
   --version) echo 1.18.30 ;;
   debug)
@@ -109,6 +116,29 @@ for f in summary.json summary.md; do
 done
 [ "$(jget "$tmp/o-iso/summary.json" items 0 id)" = '"M1"' ] || fail "T6: summary.json items"
 [ "$(jget "$tmp/o-iso/summary.json" items 0 observed paths_under_tmp)" = true ] || fail "T6: M1 paths_under_tmp: $(jget "$tmp/o-iso/summary.json" items 0)"
+# install (#397): 偽の opencode が global の config dir に書いた package.json の version と lockfile の sha256 が
+# facts に載り、summary の M1 にそのまま写る。project には置いていないので null。他の field と path は載らない。
+facts="$tmp/o-iso/facts.json"
+lock_sha=$(printf '%s\n' "$lock_body" | ruby -rdigest -e 'print Digest::SHA256.hexdigest($stdin.read)')
+[ "$(jget "$facts" install global_plugin_version)" = '"0.0.0-probe-test"' ] \
+  || fail "T6: install global_plugin_version must be the installed version: $(jget "$facts" install)"
+[ "$(jget "$facts" install global_lockfile_sha256)" = "\"$lock_sha\"" ] \
+  || fail "T6: install global_lockfile_sha256 must be the sha256 of package-lock.json: $(jget "$facts" install)"
+ruby -rjson -e '
+  install = JSON.parse(File.read(ARGV[0]))["install"]
+  keys = %w[global_plugin_pkg project_plugin_pkg global_plugin_version global_lockfile_sha256 project_plugin_version project_lockfile_sha256]
+  abort "FAIL: T6: install keys: #{install.inspect}" unless install.is_a?(Hash) && install.keys.sort == keys.sort
+  abort "FAIL: T6: install global_plugin_pkg must be true: #{install.inspect}" unless install["global_plugin_pkg"] == true
+  project = install.values_at("project_plugin_pkg", "project_plugin_version", "project_lockfile_sha256")
+  abort "FAIL: T6: install project side must be false / null: #{install.inspect}" unless project == [false, nil, nil]
+  m1 = JSON.parse(File.read(ARGV[1]))["items"][0]
+  abort "FAIL: T6: summary M1 must carry the facts install: #{m1.inspect}" unless m1["id"] == "M1" && m1["observed"]["install"] == install
+' "$facts" "$tmp/o-iso/summary.json" || fail "T6: install in facts / summary"
+for f in facts.json summary.json summary.md; do
+  if grep -q 'PROBE-PKG-OTHER-FIELD\|node_modules' "$tmp/o-iso/$f"; then fail "T6: $f records a package.json field or path besides the version"; fi
+done
+mkdir -p "$tmp/t6"
+ruby "$helper" t6 "$tmp/t6" || fail "T6 (install_state)"
 echo "ok T6"
 
 # --- T3 / T4 / T5 (Ruby) ----------------------------------------------------------------
