@@ -294,8 +294,9 @@ expect_line "unknown" "$f:evals[0](id=0):assertions[0].weight: unknown field"
 expect_errors "unknown" 3 1
 
 # --- case 9: evals.json の置き場所。directory asset の evals/ の regular file に限り、symlink の
-#     evals.json / evals/・asset.yml の無い dir は読まずに error (symlink は数えない)。asset.yml が
-#     symlink・name を読めないときも error (manifest 自体の不正の詳細は check-manifests が出す) ---
+#     evals.json / evals/ は読まずに error (symlink は数えない)。asset.yml の無い dir の evals.json は
+#     error にしたうえで、全件を集めるため中身の検査も続ける。asset.yml が symlink・name を読めない
+#     ときも error (manifest 自体の不正の詳細は check-manifests が出す) ---
 # 中身だけなら正しい evals.json を書く。
 # 使い方: write_good_evals <file> <skill_name>
 write_good_evals() {
@@ -303,6 +304,9 @@ write_good_evals() {
 }
 mkdir -p "$tmp/place/shared/skills/personal-orphan/evals"
 write_good_evals "$tmp/place/shared/skills/personal-orphan/evals/evals.json" personal-orphan
+# asset.yml が無く中身も壊れている: 置き場所の error と JSON の error の両方が出る
+mkdir -p "$tmp/place/shared/skills/personal-orphanbad/evals"
+printf '{"skill_name": ' > "$tmp/place/shared/skills/personal-orphanbad/evals/evals.json"
 make_skill "$tmp/place" personal-linked
 write_good_evals "$tmp/outside/evals.json" personal-linked
 ln -s "$tmp/outside/evals.json" "$tmp/place/shared/skills/personal-linked/evals/evals.json"
@@ -328,7 +332,10 @@ expect_line "place" "shared/skills/personal-dirjson/evals/evals.json: must be a 
 expect_line "place" "shared/skills/personal-badyaml/evals/evals.json:skill_name: cannot read name from shared/skills/personal-badyaml/asset.yml"
 expect_line "place" "shared/skills/personal-linkedmanifest/asset.yml: $symlink_msg"
 expect_line "place" "shared/skills/personal-linkedmanifest/evals/evals.json: shared/skills/personal-linkedmanifest/asset.yml must not be a symlink"
-expect_errors "place" 7 4
+expect_line "place" "shared/skills/personal-orphanbad/evals/evals.json: no asset.yml in shared/skills/personal-orphanbad; evals.json must sit in a directory asset's evals/"
+grep -q '^shared/skills/personal-orphanbad/evals/evals.json: invalid JSON: ' "$tmp/out" \
+  || fail "place: an orphan evals.json must still be checked (missing invalid JSON line): $(cat "$tmp/out")"
+expect_errors "place" 9 5
 
 # --- case 10: 未知の option は usage で exit 2。shared/ の無い root は「0 件 ok」にしない ---
 run_check "usage" 2 --bogus
@@ -336,6 +343,14 @@ mkdir -p "$tmp/not-a-repo"
 run_check "no shared" 1 --root "$tmp/not-a-repo"
 grep -qF "no shared/ directory under root: " "$tmp/out" \
   || fail "no shared: missing reason: $(cat "$tmp/out")"
+# root の path に改行があっても、この診断も escape されて 1 行 1 件のまま (集計と行数が一致する)
+nl_root="$tmp/not-a
+repo"
+mkdir -p "$nl_root"
+run_check "no shared (newline root)" 1 --root "$nl_root"
+expect_line "no shared (newline root)" "no shared/ directory under root: $tmp/not-a\\nrepo (not an agent-tools repository; check --root)"
+[ "$(wc -l < "$tmp/out" | tr -d ' ')" -eq 1 ] \
+  || fail "no shared (newline root): expected 1 error line, got: $(cat "$tmp/out")"
 
 # --- case 11: shared/ の下は lstat で辿り、symlink は種類を問わず辿らずに error。skill の
 #     directory・category の directory・shared/ 自体が symlink でも、その先の evals.json を検査から

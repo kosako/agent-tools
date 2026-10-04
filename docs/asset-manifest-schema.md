@@ -165,8 +165,9 @@ directory skill の `evals/evals.json` は、skill の期待挙動を case と�
   要らないことを確かめました。
 - 置き場所は directory asset の `evals/evals.json` だけです。探索は `shared/` の下を lstat で辿り、
   symlink は種類を問わず辿らずに error にします (skill や category の directory、`shared/` 自体が
-  symlink でも、その先の evals.json を黙って検査から漏らさない)。`asset.yml` の無い dir の
-  `evals/evals.json`、regular file でないものは読まずに error にします。UTF-8 でない (対に
+  symlink でも、その先の evals.json を黙って検査から漏らさない)。regular file でないものは読まずに
+  error にします。`asset.yml` の無い dir の `evals/evals.json` は error にしたうえで、全件を集めるため
+  中身の検査も続けます (中身の error も出る)。UTF-8 でない (対に
   なっていない surrogate の `\u` escape を含む)・JSON として読めない・top-level が object で
   ないものも error です。`shared/` の無い root は 0 件の成功にせず error にします。
 - 読めない file / directory や stat できない entry (権限など) は、その path の error

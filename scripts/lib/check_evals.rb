@@ -67,7 +67,7 @@ module CheckEvals
       end
       # shared/ の無い root で「0 件 ok」と緑にしない (--root の取り違えを見逃さない。Gate と同じ文言)。
       unless stat&.directory?
-        @errors << "no shared/ directory under root: #{@root} (not an agent-tools repository; check --root)"
+        @errors << CheckEvals.escape_line("no shared/ directory under root: #{@root} (not an agent-tools repository; check --root)")
         return [0, 0, @errors]
       end
       files = []
