@@ -13,8 +13,9 @@ permitted`)、model がローカル command を一切実行できません。Sea
 で、Codex 側の欠陥ではなく起動経路の問題です。Codex TUI の中で `codex exec` を起動しても同じ構図に
 なります (`CODEX_SANDBOX=seatbelt` が立つ環境)。この構図 (Codex の sandbox の中から入れ子で `codex exec` を
 起動する場合) では、起動直後に `failed to initialize in-process app-server client: Operation not permitted` で
-終了することもあります。過去の観測 (#246) はすべて外側の Codex session が read-only の sandbox で入れ子の
-`codex exec` を起動した場合で、今の起動経路 (herdr の pane と、sandbox の外での直接起動だけ) はこの形を選びません。
+終了することもあります。Codex の session 記録に残る過去の観測 (#246、15 件) は、どれも外側の Codex session が
+read-only の sandbox の中で入れ子の `codex exec` を起動した場合でした。今の起動経路 (herdr の pane と、sandbox の
+外での直接起動だけ) はこの形を選びません。
 
 sandbox が無効な環境では同じ flag の `codex exec -s read-only` が command 実行に成功します
 (2026-09-14 実測)。つまり挙動は「どの環境で skill を使うか」で変わります。
