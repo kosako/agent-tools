@@ -175,7 +175,8 @@ expect_check_same() {
   ecs_label=$1
   shift
   ecs_rc=$rc
-  ecs_err=$err
+  # 理由は file のまま byte 単位で比べる ($(cat) は末尾の改行を削るので、空行が増えても一致してしまう)。
+  cp "$tmp/err" "$tmp/err-normal"
   if [ "$#" -eq 0 ]; then
     run_reader --check
   else
@@ -187,7 +188,8 @@ expect_check_same() {
     err=$(cat "$tmp/err")
   fi
   [ "$rc" -eq "$ecs_rc" ] || fail "$ecs_label: --check should exit like the normal run ($ecs_rc, got $rc): $err"
-  [ "$err" = "$ecs_err" ] || fail "$ecs_label: --check should give the same reason as the normal run: normal=$ecs_err check=$err"
+  cmp -s "$tmp/err-normal" "$tmp/err" ||
+    fail "$ecs_label: --check should give the same reason as the normal run: normal=$(od -c "$tmp/err-normal" | tail -3) check=$(od -c "$tmp/err" | tail -3)"
   [ ! -s "$tmp/out" ] || fail "$ecs_label: --check must not print on stdout: $out"
 }
 
