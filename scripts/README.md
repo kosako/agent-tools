@@ -156,7 +156,9 @@ usage: probe-opencode-plugin.sh --stage <isolation|serve|mock|real|tui-plan|all>
 - **CI では実行しない** (`opencode` CLI と、起動時の npm install の network が要る)。`--out` は
   git の worktree の外に限る。docs に写すのは summary だけ。
 - self-test: `tests/probe-opencode-plugin-test.sh` (opencode も外部の network も使わない。T2 / T6 は
-  偽の `opencode` で runner を通しで動かす。node が要る)。
+  偽の `opencode` で runner を通しで動かす。node が要る。T7 は計測用 plugin を一時 dir に copy し、隣に
+  `{"type":"module"}` の package.json を置いて読むので、Node の構文の自動判定と checkout の祖先の
+  package.json に左右されない)。
 
 - `build.sh`: shared source assets から tool 別 artifacts を `generated/` に生成する。
   adapter spec は [adapters/](../adapters/README.md) を参照。
