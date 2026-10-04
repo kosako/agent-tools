@@ -6,6 +6,8 @@
 #   ここだけ) に、tree から読む command の例・HEAD / worktree を根拠にしないこと・tree に無い file の
 #   扱い・object を読めないときに止めること・root commit も同じことがある。§3 では merge commit を
 #   対象外にする規則も残っている。節の外にだけ語があっても規則として読まれないので、節に範囲を絞る。
+#   禁止の文は否定形 (§3 は「しません」、§4 は「しない」) まで比べる。語幹だけだと「しません」を
+#   「します」に変えて禁止を許可へ反転しても語が残り、検知できない。
 # - 「やってはいけないこと」と docs/codex-review-launch.md の「brief と target」が同じ規則に触れている。
 # - evals.json に 3 case があり、id が重複していない。
 # 引数で repo root を差し替えられる (変異での確認用)。
@@ -27,13 +29,21 @@ TREE_RULE = [
   "`git grep -n -e <pattern> <oid> --`",
   "`git ls-tree -r --name-only <oid>`",
   "値の受け渡しの規則で渡す",
-  "worktree の file (dirty な変更を含む) は根拠にし",
   "その commit 時点では存在しない",
-  "worktree から補",
   "読めなければ理由を書いて止め",
   "verdict を出さない",
-  "現在の checkout へ fallback し",
   "root commit も同じ",
+].freeze
+# 禁止の文。§3 は です・ます調、§4 は である調で書いてあるので、否定形を節ごとに持つ。
+FORBID_POLITE = [
+  "現在の HEAD の tree と worktree の file (dirty な変更を含む) は根拠にしません",
+  "worktree から補いません",
+  "現在の checkout へ fallback しません",
+].freeze
+FORBID_PLAIN = [
+  "現在の HEAD の tree と worktree の file (dirty な変更を含む) は根拠にしない",
+  "worktree から補わない",
+  "現在の checkout へ fallback しない",
 ].freeze
 
 # [file, 節の名前, [[始まりの行, 終わりの行], ...], 節にあるべき語]。組を順に当てて絞る (前の組で
@@ -42,10 +52,10 @@ TREE_RULE = [
 TARGETS = [
   ["#{skill}/SKILL.md", "§3 の commit の bullet",
    [[/\A## 3\. /, H2], [/\A- \*\*commit\*\*/, /\A(?:\S|\s*\z)/]],
-   TREE_RULE + ["merge commit は commit mode の対象外"]],
+   TREE_RULE + FORBID_POLITE + ["merge commit は commit mode の対象外"]],
   ["#{skill}/SKILL.md", "§4 の brief の一覧",
    [[/\A## 4\. brief\s*\z/, H2], [/\A- /, /\A\s*\z/]],
-   TREE_RULE],
+   TREE_RULE + FORBID_PLAIN],
   ["#{skill}/SKILL.md", "やってはいけないこと",
    [[/\A## やってはいけないこと\s*\z/, H2]],
    ["commit mode で worktree の file", "周辺コードの根拠にする"]],
