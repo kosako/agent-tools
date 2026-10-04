@@ -35,6 +35,8 @@ generated/codex/scripts/
   Codex のみへ生成する skill には Claude 固有の native 実行構文の拒否 gate を適用しない。
   同じ source を Claude Code の skill にも配る場合は、そちらの未対応機能検査で asset 全体が
   停止する。これは Codex の機能有効化や実行権限の承認を意味しない。
+  frontmatter の key は `name` と `description` だけを許し、`agents/openai.yaml` などの target
+  metadata (directory skill の top-level の `agents/`) も source に置かせない (#217)。
 - **instruction**: 単一ファイルを `AGENTS.md` に生成し、本体先頭に 1 行コメント marker を
   付ける。directory 形式の instruction は非対応。
 - **script**: 単一実行ファイルを byte 保持で copy し (mode 0755)、隣に sidecar marker を

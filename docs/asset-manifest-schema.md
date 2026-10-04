@@ -79,6 +79,10 @@ directory 形式の配置ルールと、両 source 形式に共通する frontma
   検査対象は source entrypoint (directory の `SKILL.md` / 単一 source) に限る。
   実 frontmatter の `allowed-tools` / `hooks` は空値も含めて拒否し、本文の inline / fenced
   dynamic shell command は非空 command を含む場合に拒否する。理由は下記「Native skill 機能」。
+- **skill の frontmatter で許す key は `name` と `description` だけ** (#217)。それ以外の key
+  (`model` / `context` / `disable-model-invocation` / `metadata` / 未知の key 等) は target に
+  よらず fail-closed で拒否し、診断にどの key かを出す。directory skill の top-level の `agents/`
+  (Codex の `agents/openai.yaml` 等) も拒否する。理由は下記「Native skill 機能」の target metadata。
 - **asset source の入れ子・重複所有を禁止**する (#177 H-01)。directory asset の source dir 配下に
   その asset 自身の manifest 以外の manifest を置くと fail-closed で拒否する (子 asset が独立
   配布されつつ親の evals/ 抑止で injection check を回避する経路を断つ)。
@@ -99,7 +103,7 @@ shell command も host が実行する機能なので、通常の説明文と分
 | 解決済み target artifact | この拒否 gate の扱い |
 | --- | --- |
 | `claude-code` の `skill` | `allowed-tools` / `hooks` / dynamic shell command を拒否 |
-| `codex` のみの `skill` | Claude 固有の実行構文による拒否は適用しない。Codex の必須 frontmatter 検証は適用する |
+| `codex` のみの `skill` | Claude 固有の dynamic shell command の拒否は適用しない。`allowed-tools` / `hooks` は下記 target metadata の allowlist で拒否する。Codex の必須 frontmatter 検証は適用する |
 | `instruction` / `script` | この skill 用検査の対象外。既存の kind 別 gate を適用する |
 
 一つの source を両 target の skill に配る場合は、Claude Code 向けに拒否された時点で asset の
@@ -113,9 +117,39 @@ command は実行形に数えない。通常の inline-code span に隠れた説
 code fence 全体を一律には除外しない。コード例でも host が実行する形をそのまま載せれば拒否する。
 `KEY=` 直後や backslash 直後の bang は inline command の開始にならない。
 
-本文中の `allowed-tools` / `hooks` という説明や YAML コード例、frontmatter の `metadata` 内の
-同名 key はこの検査の対象外。`references/` / `assets/` / 非配置の `evals/` の説明文も entrypoint
-として解析しない。既存の injection / 実行 bit / symlink 検査の対象範囲は変更しない。
+本文中の `allowed-tools` / `hooks` という説明や YAML コード例はこの検査の対象外。frontmatter の
+`metadata` は下記の allowlist の外なので、中の key によらず `metadata` 自体を拒否する。
+`references/` / `assets/` / 非配置の `evals/` の説明文も entrypoint として解析しない。既存の
+injection / 実行 bit / symlink 検査の対象範囲は変更しない。
+
+#### target metadata は今は追加しない (#217)
+
+shared の skill source は target metadata を所有しない。現行 manifest の `compatibility` は
+artifact_kind の mapping であって runtime capability の宣言ではなく、target ごとの追加 metadata
+(Claude Code の `model` / `context` / `disable-model-invocation` 等、Codex の `agents/openai.yaml`
+等。いずれも 2026-10-04 に上記の公式 docs で存在を確認した例) を shared source と adapter の
+どちらが所有し、どう生成・検証・before/after 評価するかは
+まだ決まっていない。決まるまでは追加しない: shared の source に置かず、adapter が生成する
+仕組みも作らない。
+
+- skill の entrypoint (directory の `SKILL.md` / 単一 source) の frontmatter で許す key は
+  **`name` と `description` だけ** (allowlist)。それ以外の key は値や target によらず
+  fail-closed で拒否し、診断に key を出す
+  (`unsupported skill frontmatter key: "model" (allowed: name, description; see #217)`)。
+  大文字小文字だけが違う key (`Description` 等)・未知の key・YAML の非 string key も拒否する。
+- `allowed-tools` / `hooks` も allowlist の外。Claude Code に skill として配る場合は上記 #233 の
+  診断 (`unsupported Claude Code skill feature: allowed-tools (see #233)`) で報告し、同じ key を
+  allowlist の診断と二重には出さない。Codex のみの skill では allowlist の診断になる。
+- directory skill の top-level の `agents/` (大文字小文字を区別しない。Codex の
+  `agents/openai.yaml` 等) は target によらず拒否する
+  (`<source>/agents/: unsupported skill target metadata directory ...`)。host が metadata として
+  読むのは skill root 直下だけなので、`references/` / `evals/` の下の `agents/` は対象外。
+- frontmatter の無い source (Claude-only で許す形) には検査する key が無く、この allowlist では
+  拒否しない。
+- build / register は同じ gate で停止し、`human_review: approved` でも拒否は解除しない。
+
+target metadata が必要になったら、所有・生成・検証の境界と両 target の before/after 評価を
+決めてから allowlist を広げる。
 
 ### plugin source の制約
 

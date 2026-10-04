@@ -49,6 +49,13 @@ module CheckManifests
   # marker の prefix は build が前置するもの (source 側にあると先頭行が二重になる)。
   PLUGIN_FORBIDDEN_PREFIXES = ["#!", PluginMarker::PREFIX].freeze
   NON_ASSET_BASENAMES = %w[README.md].freeze
+  # shared の skill source が持ってよい frontmatter key (#217)。target metadata (model / context /
+  # allowed-tools 等) は、所有と生成の仕組みが決まるまで shared source に置かない。
+  SKILL_FRONTMATTER_KEYS = %w[name description].freeze
+  # allowlist 外の key のうち、Claude Code に skill として配るときは #233 の診断で拒否するもの。
+  CLAUDE_NATIVE_SKILL_FIELDS = %w[allowed-tools hooks].freeze
+  # directory skill の top-level に置かせない target metadata の dir (Codex の agents/openai.yaml 等, #217)。
+  SKILL_TARGET_METADATA_DIRS = %w[agents].freeze
   # JavaScript の whitespace / trim と同じ集合。Ruby の [:space:] は U+0085 等で異なる。
   CLAUDE_DYNAMIC_SPACE = /[\t\n\v\f\r \u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]/.freeze
 
@@ -547,6 +554,7 @@ module CheckManifests
       source = data["source"]
       directory = source["format"] == "directory"
       skill_md = File.join(@root, source["path"])
+      check_skill_target_metadata_dirs(path, skill_md) if directory
       skill_md = File.join(skill_md, "SKILL.md") if directory
       return unless File.file?(skill_md)
 
@@ -568,7 +576,7 @@ module CheckManifests
       content = File.read(skill_md)
       unless content.start_with?("---\n", "---\r\n")
         error(path, "Codex #{source_path} must contain YAML frontmatter with name and description") if required
-        check_claude_skill_features(path, source_path, {}, content) if claude_skill
+        check_claude_skill_features(path, source_path, content) if claude_skill
         return
       end
 
@@ -587,7 +595,8 @@ module CheckManifests
         error(path, "#{source_path} frontmatter must be a YAML mapping")
         return
       end
-      check_claude_skill_features(path, source_path, fm, parts[1]) if claude_skill
+      check_skill_frontmatter_keys(path, source_path, fm, claude_skill: claude_skill)
+      check_claude_skill_features(path, source_path, parts[1]) if claude_skill
       fm_name = fm["name"]
       unless fm_name.is_a?(String) && !fm_name.strip.empty?
         error(path, "#{source_path} frontmatter must declare a non-empty string name")
@@ -601,13 +610,40 @@ module CheckManifests
       end
     end
 
-    # native の事前許可と shell 実行は prose ではない。未対応なので承認で迂回させない (#233)。
-    def check_claude_skill_features(path, source_path, frontmatter, body)
-      %w[allowed-tools hooks].each do |feature|
-        if frontmatter.key?(feature)
-          error(path, "#{source_path}: unsupported Claude Code skill feature: #{feature} (see #233)")
+    # shared の skill source は target metadata を所有しない (#217)。frontmatter の key は
+    # SKILL_FRONTMATTER_KEYS だけを許し、それ以外は target によらず fail-closed で拒否する。
+    # Claude Code に配る skill の allowed-tools / hooks は native の事前許可と実行面なので、
+    # #233 の診断で報告する (同じ key を allowlist の診断と二重にしない)。
+    def check_skill_frontmatter_keys(path, source_path, frontmatter, claude_skill:)
+      (frontmatter.keys - SKILL_FRONTMATTER_KEYS).each do |key|
+        if claude_skill && CLAUDE_NATIVE_SKILL_FIELDS.include?(key)
+          error(path, "#{source_path}: unsupported Claude Code skill feature: #{key} (see #233)")
+        else
+          error(path, "#{source_path}: unsupported skill frontmatter key: #{key.inspect} " \
+                      "(allowed: #{SKILL_FRONTMATTER_KEYS.join(', ')}; see #217)")
         end
       end
+    end
+
+    # directory skill の top-level の target metadata dir (Codex の agents/openai.yaml 等) も
+    # frontmatter と同じく shared source に置かせない (#217)。host が metadata として読むのは
+    # skill root 直下だけなので top-level を見る。大文字小文字を区別しない file system に配ると
+    # 同じ dir として読まれるため、名前は大文字小文字を無視して比べる。
+    def check_skill_target_metadata_dirs(path, dir)
+      Dir.children(dir).sort.each do |entry|
+        next unless entry.valid_encoding? && SKILL_TARGET_METADATA_DIRS.any? { |name| entry.casecmp?(name) }
+
+        full = File.join(dir, entry)
+        next unless File.directory?(full)
+
+        error(path, "#{rel(full)}/: unsupported skill target metadata directory " \
+                    "(shared source does not own target metadata; see #217)")
+      end
+    end
+
+    # native の shell 実行は prose ではない。未対応なので承認で迂回させない (#233)。
+    # 事前許可 (allowed-tools) と hooks は check_skill_frontmatter_keys が拒否する。
+    def check_claude_skill_features(path, source_path, body)
       if claude_dynamic_command?(body)
         error(path, "#{source_path}: unsupported Claude Code skill feature: dynamic shell command (see #233)")
       end

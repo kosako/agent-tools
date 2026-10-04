@@ -90,8 +90,10 @@ dynamic_commands = [
 %w[directory markdown].each do |format|
   native_fields.each do |field|
     content = valid.sub("description: Public fixture", "description: Public fixture\n#{field}")
-    check_case(format, field, content, %w[codex claude-code], "unsupported Claude Code skill feature")
-    check_case(format, "codex-only-#{field}", content, %w[codex], nil)
+    key = field[/\A'?([a-z-]+)/, 1]
+    check_case(format, field, content, %w[codex claude-code], "unsupported Claude Code skill feature: #{key} ")
+    # Claude 固有の診断は Claude Code に配るときだけ。Codex のみでも frontmatter の allowlist で拒否する (#217)。
+    check_case(format, "codex-only-#{field}", content, %w[codex], "unsupported skill frontmatter key: #{key.inspect}")
   end
   dynamic_commands.each do |body|
     check_case(format, "dynamic-command", valid + body, %w[codex claude-code], "unsupported Claude Code skill feature")
@@ -108,11 +110,78 @@ dynamic_commands = [
    "```sh\nprintf fixture\n```\n"].each do |body|
     check_case(format, "literal-example", valid + body, %w[codex claude-code], nil)
   end
+  # metadata の中の同名 key は Claude の native 機能ではないが、metadata 自体が allowlist の外 (#217)。
   content = valid.sub("description: Public fixture", "description: Public fixture\nmetadata:\n  hooks: example\n  allowed-tools: example")
-  check_case(format, "nested-metadata", content, %w[codex claude-code], nil)
+  check_case(format, "nested-metadata", content, %w[codex claude-code], "unsupported skill frontmatter key: \"metadata\"")
 end
 check_case("markdown", "claude-instruction", valid + dynamic_commands.first, %w[codex claude-code], nil,
            { "claude-code" => { "artifact_kind" => "instruction" } })
+
+# shared の skill source は target metadata を所有しない。frontmatter の key は name と description だけを許し、
+# それ以外は target によらず拒否して、どの key かを診断に出す (#217)。
+target_metadata_fields = [
+  ["model", "model: fable"],
+  ["context", "context: fork"],
+  ["disable-model-invocation", "disable-model-invocation: true"],
+  ["x-unknown", "x-unknown: value"],
+  ["Description", "Description: Public fixture"],
+  [42, "42: numeric"],
+  [nil, "~: null-key"],
+]
+%w[directory markdown].each do |format|
+  target_metadata_fields.each do |key, field|
+    content = valid.sub("description: Public fixture", "description: Public fixture\n#{field}")
+    [%w[codex claude-code], %w[codex], %w[claude-code]].each do |targets|
+      check_case(format, "target-metadata-#{key.inspect}-#{targets.join('+')}", content, targets,
+                 "unsupported skill frontmatter key: #{key.inspect} ")
+    end
+  end
+  check_case(format, "target-metadata-without-name", "---\nmodel: fable\n---\n", %w[claude-code],
+             "unsupported skill frontmatter key: \"model\" ")
+end
+# Claude Code に配る allowed-tools は #233 の診断で 1 度だけ報告し、allowlist の診断と二重にしない。
+Dir.mktmpdir("skill-native-single-") do |root|
+  fixture(root, "directory", valid.sub("description: Public fixture", "description: Public fixture\nallowed-tools: Read"),
+          %w[codex claude-code])
+  _, errors = CheckManifests::Runner.new(root).run
+  abort "FAIL: allowed-tools must be reported once: #{errors.inspect}" unless errors.size == 1
+end
+
+# directory skill の top-level の agents/ (Codex の agents/openai.yaml 等) も target metadata なので、
+# target によらず拒否する。大文字小文字だけが違う名前も同じ扱い (#217)。
+[%w[codex claude-code], %w[codex], %w[claude-code]].each do |targets|
+  %w[agents Agents].each do |dirname|
+    Dir.mktmpdir("skill-target-metadata-dir-") do |root|
+      fixture(root, "directory", valid, targets)
+      dir = File.join(root, "shared/skills/personal-frontmatter", dirname)
+      FileUtils.mkdir_p(dir)
+      File.write(File.join(dir, "openai.yaml"), "policy:\n  allow_implicit_invocation: false\n")
+      _, errors = CheckManifests::Runner.new(root).run
+      expected = "shared/skills/personal-frontmatter/#{dirname}/: unsupported skill target metadata directory"
+      abort "FAIL: #{dirname}/ accepted for #{targets.join('+')}: #{errors.inspect}" unless errors.any? { |e| e.include?(expected) }
+    end
+    # 拒否するのは directory だけ。同名の通常の file は target metadata の dir ではないので通す。
+    %w[agents Agents].each do |filename|
+      Dir.mktmpdir("skill-target-metadata-file-") do |root|
+        fixture(root, "directory", valid, targets)
+        File.write(File.join(root, "shared/skills/personal-frontmatter", filename), "policy: example\n")
+        _, errors = CheckManifests::Runner.new(root).run
+        abort "FAIL: regular file #{filename} rejected for #{targets.join('+')}: #{errors.inspect}" unless errors.empty?
+      end
+    end
+  end
+end
+# host が metadata として読むのは skill root 直下の agents/ だけ。references / evals の下は対象外。
+Dir.mktmpdir("skill-target-metadata-nested-") do |root|
+  fixture(root, "directory", valid, %w[codex claude-code])
+  %w[references/agents evals/agents].each do |sub|
+    dir = File.join(root, "shared/skills/personal-frontmatter", sub)
+    FileUtils.mkdir_p(dir)
+    File.write(File.join(dir, "openai.yaml"), "policy:\n  allow_implicit_invocation: false\n")
+  end
+  _, errors = CheckManifests::Runner.new(root).run
+  abort "FAIL: nested agents/ treated as target metadata: #{errors.inspect}" unless errors.empty?
+end
 
 # refs / evals に書いた説明は host が skill 本文として実行する入口ではない。
 Dir.mktmpdir("skill-native-references-") do |root|
@@ -126,14 +195,24 @@ Dir.mktmpdir("skill-native-references-") do |root|
   abort "FAIL: reference example treated as entrypoint: #{errors.inspect}" unless errors.empty?
 end
 
-# native 機能は未対応なので、content-bound 承認があっても build / register は拒否する。
+# native 機能と target metadata は未対応なので、content-bound 承認があっても build / register は拒否する。
 require File.join(scripts, "lib/build")
+native = "unsupported Claude Code skill feature"
 %w[directory markdown].each do |format|
-  [valid.sub("description: Public fixture", "description: Public fixture\nallowed-tools: Read"),
-   valid.sub("description: Public fixture", "description: Public fixture\nhooks: {}"),
-   valid + dynamic_commands.first, valid + dynamic_commands[4], dynamic_commands.first].each do |content|
+  gate_cases = [valid.sub("description: Public fixture", "description: Public fixture\nallowed-tools: Read"),
+                valid.sub("description: Public fixture", "description: Public fixture\nhooks: {}"),
+                valid + dynamic_commands.first, valid + dynamic_commands[4], dynamic_commands.first].map { |c| [c, native, nil] }
+  gate_cases << [valid.sub("description: Public fixture", "description: Public fixture\nmodel: fable"),
+                 "unsupported skill frontmatter key: \"model\"", nil]
+  gate_cases << [valid, "unsupported skill target metadata directory", "agents"] if format == "directory"
+  gate_cases.each do |content, expected, metadata_dir|
     Dir.mktmpdir("skill-native-gate-") do |root|
       fixture(root, format, content, %w[claude-code])
+      if metadata_dir
+        dir = File.join(root, "shared/skills/personal-frontmatter", metadata_dir)
+        FileUtils.mkdir_p(dir)
+        File.write(File.join(dir, "openai.yaml"), "policy:\n  allow_implicit_invocation: false\n")
+      end
       source = format == "directory" ? "shared/skills/personal-frontmatter" : "shared/skills/personal-frontmatter.md"
       manifest = format == "directory" ? "#{source}/asset.yml" : "shared/skills/personal-frontmatter.asset.yml"
       path = File.join(root, manifest)
@@ -145,11 +224,11 @@ require File.join(scripts, "lib/build")
       File.write(path, YAML.dump(data))
       %w[build register].each do |stage|
         output, status = Open3.capture2e(File.join(scripts, "#{stage}.sh"), "--root", root)
-        unless status.exitstatus == 1 && output.include?("unsupported Claude Code skill feature")
-          abort "FAIL: #{stage}/#{format} accepted native feature: #{output}"
+        unless status.exitstatus == 1 && output.include?(expected)
+          abort "FAIL: #{stage}/#{format} accepted unsupported skill content (#{expected}): #{output}"
         end
       end
-      abort "FAIL: native skill reached generated/" if File.exist?(File.join(root, "generated"))
+      abort "FAIL: unsupported skill reached generated/" if File.exist?(File.join(root, "generated"))
     end
   end
 end
