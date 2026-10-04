@@ -343,6 +343,28 @@ set -e
 [ "$rc" -eq 2 ] || fail "signaled check with long output must block (rc=$rc)"
 echo "$err" | grep -q "truncated" || fail "long output should be truncated in the summary: $err"
 echo "$err" | grep -q "SIGTERM" || fail "signal name must survive truncation of a long output"
+# 複数の check: 長い出力で exit 1 の check の後ろに signal で終わる check があっても、全体の打ち切りで後ろの
+# check の理由が消えない (理由の一覧をログより前に置く。#381 review CSQA-02 round 2)
+cat > "$tmp/long-fail-check" <<'EOF'
+#!/bin/sh
+awk 'BEGIN { for (i = 0; i < 80; i++) printf "%s\n", "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy" }'
+exit 1
+EOF
+chmod +x "$tmp/long-fail-check"
+ruby -rjson -e '
+File.write(ARGV[3], JSON.generate({ARGV[0] => {"qa_checks" => [
+  {"name" => "long-fail", "command" => [ARGV[1]]}, {"name" => "sig-after", "command" => [ARGV[2]]}
+]}}))
+' "$repo_real" "$tmp/long-fail-check" "$tmp/sig-check" "$conf"
+echo signaled-multi >> "$repo/u.txt"
+set +e
+err=$(cd "$repo" && run_qa false 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "multiple failing checks must block (rc=$rc)"
+echo "$err" | grep -q "truncated" || fail "combined summary should be truncated: $err"
+echo "$err" | grep -q -- "- long-fail: exit 1" || fail "summary should list the exit reason of the first check: $err"
+echo "$err" | grep -q -- "- sig-after: terminated by SIGTERM" || fail "signal of a later check must survive the overall truncation"
 
 # ---- #373: 初回 commit 前 (HEAD が無い) の repo でも、stage 済み / 未 stage の内容の変化で再検査する ----
 unborn="$tmp/unborn"

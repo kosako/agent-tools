@@ -213,18 +213,17 @@ module ChangedScopeQa
   end
 
   # 起動の失敗は spawn 時の例外だけで判定する。起動した check が signal で終わったのは、実行して異常
-  # 終了した (crash や外からの kill) ので実 failure として扱い、診断に signal 名を残す (#373。hook の
+  # 終了した (crash や外からの kill) ので実 failure として扱い、終了の理由に signal 名を残す (#373。hook の
   # timeout や中断では hook 自身も止まるので、ここで観測するのは check だけが落ちたとき)。
   def run_check(check, root)
     out = IO.popen(check["command"], chdir: root, err: %i[child out], &:read)
     status = $?
-    output = out.to_s
-    # 要約は先頭から打ち切るので、終了の理由は出力より前に置く。
-    output = "(terminated by SIG#{Signal.signame(status.termsig)})\n#{output}" if status.signaled?
-    { name: check_name(check), ok: status.success?, output: output, spawn_failed: false }
+    reason = status.signaled? ? "terminated by SIG#{Signal.signame(status.termsig)}" : "exit #{status.exitstatus}"
+    { name: check_name(check), ok: status.success?, output: out.to_s, reason: reason, spawn_failed: false }
   rescue Errno::ENOENT, Errno::EACCES, Errno::ENOEXEC => e
     # 不在だけでなく権限喪失・不正形式も spawn 失敗として可視化する (無言の恒久不活性を防ぐ)
-    { name: check_name(check), ok: false, output: "(#{e.class})", spawn_failed: true }
+    { name: check_name(check), ok: false, output: "(#{e.class})", reason: "spawn failed (#{e.class})",
+      spawn_failed: true }
   end
 
   def truncate(text)
@@ -239,8 +238,12 @@ module ChangedScopeQa
     puts JSON.generate("systemMessage" => truncate(message))
   end
 
+  # 失敗した check の名前と終了の理由を先にまとめ、ログはその後ろに置く。呼び出し側は要約全体を先頭から
+  # 打ち切るので、長いログの後ろにある check の理由が消えないようにする (#381 review CSQA-02)。
   def failure_summary(failures)
-    failures.map { |r| "[#{r[:name]}]\n#{truncate(r[:output])}" }.join("\n")
+    reasons = failures.map { |r| "- #{r[:name]}: #{r[:reason]}" }
+    logs = failures.map { |r| "[#{r[:name]}]\n#{truncate(r[:output])}" }
+    (reasons + logs).join("\n")
   end
 
   # 同一 scope の cache hit。block は消費済みなので二度と block しない。
