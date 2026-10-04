@@ -160,6 +160,15 @@ end
       expected = "shared/skills/personal-frontmatter/#{dirname}/: unsupported skill target metadata directory"
       abort "FAIL: #{dirname}/ accepted for #{targets.join('+')}: #{errors.inspect}" unless errors.any? { |e| e.include?(expected) }
     end
+    # 拒否するのは directory だけ。同名の通常の file は target metadata の dir ではないので通す。
+    %w[agents Agents].each do |filename|
+      Dir.mktmpdir("skill-target-metadata-file-") do |root|
+        fixture(root, "directory", valid, targets)
+        File.write(File.join(root, "shared/skills/personal-frontmatter", filename), "policy: example\n")
+        _, errors = CheckManifests::Runner.new(root).run
+        abort "FAIL: regular file #{filename} rejected for #{targets.join('+')}: #{errors.inspect}" unless errors.empty?
+      end
+    end
   end
 end
 # host が metadata として読むのは skill root 直下の agents/ だけ。references / evals の下は対象外。
