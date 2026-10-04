@@ -8,6 +8,7 @@
 # - 同じ読み取り口に触れる sweep の SKILL.md と grill-me の CONSULT.md が wrapper の名前を挙げている。
 # - 入口経由: BUDGET.md の code block を切り出し、偽の HOME の配備先に置いた wrapper で実際に走らせる (設定が
 #   無ければ exit 3、設定があれば exit 0 で reader の出力)。
+# - 公開契約 (docs/boundary-with-dotfiles.md) が `--check` を書き、wrapper の --help の usage 行を載せている (#400)。
 # 引数で shared の directory を差し替えられる (変異での確認用)。実 HOME には触れない。
 set -eu
 
@@ -147,5 +148,14 @@ rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "documented call with a config should exit 0 (rc=$rc): $(cat "$tmp/err")"
 [ "$(cat "$tmp/out")" = "CLAUDE-WEEK-57" ] || fail "documented call should print the reader output: $(cat "$tmp/out")"
+
+# ---- 公開契約の docs: --check と、対応の判別に使う usage 行 (#400) --------------------------
+# docs/boundary-with-dotfiles.md が `--check` を書き、wrapper の --help の 1 行目 (usage 行) をそのまま code span で
+# 載せている (呼ぶ側はこの行の `[--check]` で対応を判別するので、docs と wrapper がずれたら落とす)。
+boundary="$repo_root/docs/boundary-with-dotfiles.md"
+usage_line=$(env -u XDG_CONFIG_HOME HOME="$fake_home" "$deploy/personal-usage-reader" --help </dev/null | head -n 1)
+case "$usage_line" in *"[--check]"*) : ;; *) fail "wrapper --help usage line should list [--check]: $usage_line" ;; esac
+grep -qF -- "\`$usage_line\`" "$boundary" || fail "boundary-with-dotfiles.md should quote the usage line: $usage_line"
+grep -qF -- "\`--check\`" "$boundary" || fail "boundary-with-dotfiles.md should document --check"
 
 echo "ok: usage-reader-docs"
