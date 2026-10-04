@@ -46,6 +46,7 @@ directory 形式の配置ルールと、両 source 形式に共通する frontma
   「skill が転記/実行しないこと」を検証するため意図的に攻撃的な文字列 (injection 文字列・
   fake な絶対パス・email 等) を含みうるので、injection check はそれらを evals では抑止する。
   ただし inline の private key 本体だけは fixture で不要なため evals でも検知する。
+  `evals/evals.json` の形式は下記 [evals の形式](#evals-の形式-evalsevalsjson)。
 - **実行コードを含む directory skill は fail-closed で拒否する** (#178)。配る前に実行コードを
   安全検査する能力がまだ無いため、check-manifests が error にして gate を止める (黙ってスキップ
   しない)。判定は **任意の深さを再帰**し、(1) `scripts/` 名の subdirectory (top-level に限らず
@@ -116,6 +117,80 @@ code fence 全体を一律には除外しない。コード例でも host が実
 本文中の `allowed-tools` / `hooks` という説明や YAML コード例、frontmatter の `metadata` 内の
 同名 key はこの検査の対象外。`references/` / `assets/` / 非配置の `evals/` の説明文も entrypoint
 として解析しない。既存の injection / 実行 bit / symlink 検査の対象範囲は変更しない。
+
+### evals の形式 (`evals/evals.json`)
+
+directory skill の `evals/evals.json` は、skill の期待挙動を case として書く source です
+(配置先には載らない)。**任意**で、無いことは error にしません。形式は
+`scripts/lib/check_evals.rb` が依存なしで検査し、CI では `scripts/tests/check-evals-test.sh` が
+実 repo のすべての `evals/evals.json` をこの検査に通します (#216)。
+
+```json
+{
+  "skill_name": "personal-example",
+  "notes": "任意の補足",
+  "evals": [
+    {
+      "id": 1,
+      "name": "任意の短い名前",
+      "prompt": "user の発話",
+      "expected_output": "期待する振る舞いの説明",
+      "files": ["evals/fixtures/input.md"],
+      "assertions": [
+        { "id": "reads-before-acting", "text": "確かめられる 1 文" }
+      ]
+    }
+  ]
+}
+```
+
+| 位置 | field | 必須 | 規則 |
+| --- | --- | --- | --- |
+| top-level | `skill_name` | 必須 | 空でない string。skill の directory 名と `asset.yml` の `name` の両方に一致する |
+| top-level | `evals` | 必須 | 空でない配列。各要素は object (case) |
+| top-level | `notes` | 任意 | string |
+| case | `id` | 必須 | 非負の整数。file の中で一意。連番や起点 (0 / 1) は問わない |
+| case | `prompt` | 必須 | 空でない string (空白だけも不可) |
+| case | `expected_output` | 必須 | 空でない string (空白だけも不可) |
+| case | `name` | 任意 | string |
+| case | `files` | 任意 | 配列。各要素は skill の directory からの相対 path で、`..` の段を含まず (外へ出ない)、空の段・`.` の段も含まず、存在し、symlink を経由しない regular file |
+| case | `assertions` | 必須 | 空でない配列。各要素は object |
+| assertion | `id` | 必須 | lower kebab-case の slug。一意性は case の中だけ (case をまたいだ同じ id は可) |
+| assertion | `text` | 必須 | 空でない string (空白だけも不可) |
+
+- 未知の field は top-level・case・assertion のどこでも error にします (typo や別の schema を
+  黙って通さない)。導入時に、既存の 13 本の evals.json に未知の field が無く、migration が
+  要らないことを確かめました。
+- 置き場所は directory asset の `evals/evals.json` だけです。`asset.yml` の無い dir の
+  `evals/evals.json`、symlink を含む path、regular file でないものは読まずに error にします。
+  UTF-8 でない・JSON として読めない・top-level が object でないものも error です。`shared/` の
+  無い root は 0 件の成功にせず error にします。
+- 診断は 1 行 1 件で、`<file>: <message>` (file 全体)、`<file>:<field>: <message>`
+  (top-level)、`<file>:evals[<index>](id=<id>):<field>: <message>` (case と assertion。case の id
+  が不正なら `(id=<id>)` を付けない) の形です。すべての error を集めてから出し、error があれば
+  exit 1。`ruby scripts/lib/check_evals.rb [--root DIR] [--quiet]` で単独でも実行できます。
+
+skill-creator の schema との違い: skill-creator の `references/schemas.md` は case の検証項目を
+`expectations` (string の配列) と書きます。この repo は `assertions` (`id` と `text` を持つ
+object の配列) を使い、assertion を id で参照できます (例:
+`scripts/tests/maintenance-sweep-fix-gate-test.sh` が id `verify-then-publish` の assertion を確かめる)。
+`expectations` は未知の field として error になり、診断に置き換え先を添えます。形が違うので、
+skill-creator の tooling がこの形をそのまま読めるとは限りません。
+
+この検査の範囲の外:
+
+- **workflow には eval を必須にしません**。kind によらず、eval を置けるのは directory asset の
+  `evals/evals.json` だけで、置いた場合は同じ検査を受けます。単一 file の asset (現状の workflow
+  `personal-project-operating-loop` など) には置き場が無く、directory asset でも evals は任意です。
+  workflow を含む skill の routing は中央の case set
+  (`scripts/lib/skill_routing_cases.json`、[Skill Routing Acceptance](skill-routing-acceptance.md))
+  が扱います。
+- **意味的な完全性は保証しません**。case が十分か、assertion の文が期待挙動を正しく言い当てて
+  いるかは見ず、構造だけを検査します。
+- **実モデルでの評価は #369 で扱います**。複数 turn・副作用・model の timeout / refusal の扱いは
+  この静的な検査の failure に混ぜません。
+- `Gate.fatal_errors` / check-manifests には組み込みません。build / register / sync の合否と、
+  build_id の対象 (evals は含めない) は変わりません。
 
 ### plugin source の制約
 
@@ -416,6 +491,8 @@ validator は `scripts/check-manifests.sh` として実装済みです。
 - manifest discovery: `shared/**/*.asset.yml` と `shared/**/asset.yml`。
 - validation error format: `path: message` の line 単位。error があれば exit 1。
 - `shared/<category>/` 直下の asset source に manifest が無い場合も error にする。
+- directory skill の `evals/evals.json` の形式は check-manifests とは別の
+  `scripts/lib/check_evals.rb` が検査する (上記 [evals の形式](#evals-の形式-evalsevalsjson)、#216)。
 
 残りの論点は [Register / Catalog](register-catalog.md) で設計済みです。
 

@@ -56,6 +56,18 @@ usage: check-manifests.sh [--root DIR] [--quiet]
   [Asset Manifest Schema](../docs/asset-manifest-schema.md)「plugin source の制約」)。
 - self-test: `tests/check-manifests-test.sh`
 
+- `lib/check_evals.rb`: directory skill の `evals/evals.json` の形式検査 (#216)。top-level の
+  wrapper は無く、CI では self-test が fixture と実 repo のすべての evals.json をこの検査に通す。
+  schema は [Asset Manifest Schema](../docs/asset-manifest-schema.md)「evals の形式」。
+
+```text
+usage: ruby scripts/lib/check_evals.rb [--root DIR] [--quiet]
+```
+
+- error は `<file>[:<case>][:<field>]: <message>` の line 単位で、すべて集めてから出し、error が
+  あれば exit 1。evals.json が無い skill は error にしない。Gate / check-manifests には組み込まない。
+- self-test: `tests/check-evals-test.sh`
+
 - `check-injection.sh`: shared assets への static prompt injection checks。
   [Prompt Injection Check 方針](../docs/prompt-injection-check.md) に従う。
 
