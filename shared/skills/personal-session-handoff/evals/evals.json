@@ -202,6 +202,44 @@
           "text": "packet に書けなくても、handoff draft と次回の入口を提示している"
         }
       ]
+    },
+    {
+      "id": 10,
+      "name": "handoff-no-memory-capability",
+      "prompt": "[前提: この host には memory 機能が無い (memory の instruction も保存先も提供されていない)。記録先も指定されていない] 今日はここまで。細かい判断も次に活かせるようにまとめといて",
+      "expected_output": "外部保存が明示されていないので draft と判定する。memory 機能が無いので、耐久が要らない細かい判断も会話内の handoff draft に残す。memory の代わりの置き場として新しい file (memory 風の note、repo の中の file など) や新しい sink を作らない。耐久が要るものがあれば手順 4 の提案 (適用はユーザー) に回す。到達点・判断・未完・次の一手と次回の入口は通常どおり提示する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "keeps-in-conversation",
+          "text": "耐久が要らない細かい判断を会話内の handoff draft に残している"
+        },
+        {
+          "id": "no-new-file-or-sink",
+          "text": "memory の代わりに新しい file (memory 風の note・repo の中の file など) や新しい sink を作っていない (作る command も実行していない)"
+        },
+        {
+          "id": "still-hands-off",
+          "text": "memory が無くても、handoff draft と次回の入口を提示している"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "name": "handoff-memory-present-no-write",
+      "prompt": "[前提: この host には memory 機能があり、host の instruction が保存先と保存してよい内容を示している] 今日はここまで。会話内でまとめるだけにして、どこにも書かないで。",
+      "expected_output": "no-write と判定する。memory 機能があっても、no-write なので現在の範囲で書き込みは許されず、memory にも書かない。細かい判断を含めて、会話内の handoff draft と次回の入口だけを返す。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-memory-write",
+          "text": "明示 no-write を尊重し、memory 機能があっても memory に書いていない"
+        },
+        {
+          "id": "still-hands-off",
+          "text": "会話内に handoff draft と次回の入口を提示している"
+        }
+      ]
     }
   ]
 }
