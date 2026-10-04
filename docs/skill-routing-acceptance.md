@@ -102,7 +102,8 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
   8,000 文字に収める (2026-09-19 時点の公式 docs)。
 - `status`: CLI が非ゼロで終わった / usage が取れなかった run は `error`。judge は緑に数えない。
 - raw log は `<out>.raw/<case>-<n>.jsonl` に残す。observed が正しいかはこの log で人が確認する
-  (judge は runner の観測を信頼する。信頼境界は judge の冒頭コメント参照)。
+  (judge は runner の観測を信頼する。信頼境界は judge の冒頭コメント参照)。raw log は private な内容を
+  含みうるので、Issue / PR / comment には貼らない (下の「raw log の扱い」)。
 
 ## 判定契約 (judge)
 
@@ -116,7 +117,9 @@ scripts/check-skill-routing.sh --cases scripts/lib/skill_routing_cases.json \
   MISS は報告するが、単独では破れにしない (headless 単発 turn の揺れがあるため)。
 - **must_not violation**: `must_not` のいずれかが `observed` に含まれる = routing の破れ (exit 1)。
 - **baseline 比較**: 同じ tool・同じ model・同じ case 集合・同じ run 数の結果だけ比較する (違えば
-  exit 2)。候補で primary hit が減る、または violation が増えたら回帰 (exit 1)。
+  exit 2)。候補で primary hit が減る、または violation が増えたら回帰 (exit 1)。構造エラー (coverage 欠落・
+  error run・比較条件の不一致) が baseline / candidate のどちらかにあると、比較 (delta の表示と回帰の判定) を
+  しない。candidate 自身の must_not violation は、その場合も exit 1 として出る。
 - **token は gate にしない**。delta (%) を報告するだけ。「減った」ことは受け入れ条件として
   Issue / PR に記録する。
 - exit: `0` = pass、`1` = 破れ / 回帰、`2` = 入力・構造エラー。破れと構造不備が同居したら 1 を
@@ -144,7 +147,45 @@ scripts/check-skill-routing.sh --cases scripts/lib/skill_routing_cases.json \
 ```
 
 codex は `--tool codex` で同じ手順。両 tool で回帰なしを確認したものだけ merge する (#280 の
-受け入れ条件)。`--repeat N` で揺れを均せる (baseline と candidate で同じ N にする)。
+受け入れ条件)。`--repeat N` で揺れを均せる (baseline と candidate で同じ N にする)。Codex で全 case を
+流すと、case `audit-mine-session-logs` の error run で比較が飛びやすい (下の「既知の挙動」)。
+
+## raw log の扱い
+
+- raw log (`<out>.raw/<case>-<n>.jsonl` と `.stderr`) は、CLI の event stream と stderr をそのまま保存したもので、
+  model の応答と、model が実行した command や読んだ file の中身を含みうる (codex は `command_execution` の
+  `aggregated_output` に command の出力がそのまま入る)。probe は project を隔離するが、file の読み取りは
+  隔離しない (codex の read-only の sandbox でも project の外の file を読める)。例えば採掘の case
+  (`audit-mine-session-logs`) で model が実際の採掘を始めると、実 home の session log の中身が raw log に
+  入りうる (#302)。
+- そのため raw log とその抜粋は Issue / PR / comment に貼らず、repo にも commit しない。貼るのは judge の
+  summary (case ごとの判定と集計) だけにする。raw log で確かめたこと (読んだ skill、打ち切りの理由など) は、
+  skill 名や件数の要約として書く。
+
+## 既知の挙動: Codex の `audit-mine-session-logs` (#302)
+
+- Codex では、case `audit-mine-session-logs` の run が `personal-asset-miner` の SKILL.md を読んだあと実際の
+  採掘を始め、`--timeout` (既定 300 秒) で打ち切られやすい。Codex には `--max-turns` 相当が無いので、skill を
+  読んだ後の作業も打ち切りまで走る。打ち切られた run は CLI が正常に終わらないので error run になる
+  (SKILL.md の読み取りが raw log に出ていても ok に数えない)。Claude Code は `--max-turns` の打ち切りで
+  止まり、PR #300 の Claude Code 側ではこの case も ok だった。
+- 観測: #302 の起票時 (PR #300 の before / after) は baseline / candidate の両方が error run だった。raw log
+  では、asset-miner を読んだあと実際の採掘を始め (command 24 本)、1 run の上限 300 秒で打ち切られていた。
+  その後の before / after でも、PR #304 では candidate、PR #363 では baseline が error run だった (この 3 PR の
+  記録で 6 run 中 4 run)。
+- error run は構造エラーなので、judge は exit 2 (must_not violation が同居すれば exit 1) になり、どちらでも
+  baseline との比較 (delta の表示と回帰の判定) を飛ばす (上の「判定契約」。judge の self-test で固定して
+  いる)。そのため、この case を含む Codex の run は judge の exit code で機械的に gate できない。次のどちらかで
+  扱う。
+  - **subset から外す**: case set の copy からこの case を除いた file を作り、before / after の両方で probe と
+    judge の `--cases` に同じ file を渡す (judge はその範囲で gate できる)。Codex 側の asset-miner の routing は
+    測っていないことを PR に書き、case を外して全体の coverage を満たしたことにしない。
+  - **per-case で読む**: この case を含めて測り、before / after の結果をそれぞれ judge に通して (`--baseline`
+    を付けると case ごとの行は candidate 側しか出ない)、case ごとの行を突き合わせる。他の case で primary hit の
+    減少や must_not violation の増加が無いことを人が確かめ、この case の結果 (error run かどうか、読んだ skill)
+    は件数で書く。`--only` で一部の case だけを流した結果も、正本の case set では coverage 欠落 (exit 2) に
+    なるので、こちらで読む。
+- 観測の完了で run を止める runner 側の対処は #302 で扱う (未実装)。
 
 ## case set の育て方
 
@@ -167,4 +208,5 @@ codex は `--tool codex` で同じ手順。両 tool で回帰なしを確認し�
   探索読みの扱い (最初の 1 本だけを採る) は heuristic で、閾値は runner の定数。
 - Codex は run ごとの揺れが Claude Code より大きい (同じ prompt でも skill を読む / 読まない、user scope
   の旧 body を読む、探索する)。`--repeat` を使い、1 run の差を回帰と読まない。
-- CI では probe を実行しない。証跡は raw log と、Issue / PR に貼る judge の summary。
+- CI では probe を実行しない。証跡は手元の raw log と、Issue / PR に貼る judge の summary (raw log は
+  貼らない。上の「raw log の扱い」)。
