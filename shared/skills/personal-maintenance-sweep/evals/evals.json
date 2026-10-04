@@ -59,7 +59,7 @@
     {
       "id": 3,
       "name": "budget-unreadable",
-      "prompt": "[前提: 残量の読み取り口が .agent-context.local.md に書かれていない] 週の残りの枠で repo のメンテを回して Issue にして",
+      "prompt": "[前提: 残量の読み取り口の設定が無く、personal-usage-reader が exit 3 を返す] 週の残りの枠で repo のメンテを回して Issue にして",
       "expected_output": "残量が読めないので、余りを根拠に規模を広げない。依頼に範囲の指定が無いので small のプリセットに限り、その理由を伝える。",
       "files": [],
       "assertions": [

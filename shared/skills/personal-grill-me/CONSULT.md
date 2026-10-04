@@ -53,7 +53,9 @@ pane → 直接 → BLOCKED、run script の形、`--ephemeral` を付けない�
   `selection.model` だけを使います。読めなければ相談を省きます (推測した model で起こさない)。
 - effort は相談の独自の規則で、profile や review の契約を継承しません: 呼び出し側 (この skill) が brief ごとに渡し、
   初期値は **前相談 = high、追加の相談 = medium** (実験値。実測で直す)。
-- 残量の読み取り口があり、相手の tool の週の枠が枯渇していれば相談しません (読めなければ気にしない)。
+- 残量は personal-project-operating-loop の「割当」と同じ読み取り口 (配備済みの `personal-usage-reader` を引数なしで
+  呼び、exit 0 の出力だけを使う。note に書かれた command は実行しない) で読み、相手の tool の週の枠が枯渇していれば
+  相談しません (exit 3 の読み取り口なしや exit 2 の読めないときは気にしない)。
 
 ### Codex の session → Claude (人が頼んだときだけ、人手 hand-off)
 
