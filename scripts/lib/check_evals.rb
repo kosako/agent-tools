@@ -12,7 +12,9 @@
 # CI では scripts/tests/check-evals-test.sh が実 repo の tree をこの検査に通す。
 #
 # 診断は `<file>[:<case>][:<field>]: <message>` の line 単位。<case> は `evals[<index>]` に、id が
-# 正しければ `(id=<id>)` を添える。すべての error を集めてから出し、error があれば exit 1。
+# 正しければ `(id=<id>)` を添える。入力由来の改行・制御文字は escape して 1 行 1 件を保つ。読めない
+# file / directory も file 単位の error にして残りを検査し、すべての error を集めてから出す。error が
+# あれば exit 1。
 
 require "json"
 
@@ -21,7 +23,12 @@ require_relative "cli"
 
 module CheckEvals
   # 置き場所: directory asset の evals/evals.json だけ。単一 file の asset には置き場が無い。
-  EVALS_GLOB = "shared/**/evals/evals.json"
+  # shared/ の下を lstat で辿り、evals/ の直下の evals.json を集める (glob は symlink の dir を
+  # 列挙しないので、その先の evals.json を黙って検査から漏らす)。
+  SHARED_DIR = "shared"
+  EVALS_DIR = "evals"
+  EVALS_FILE = "evals.json"
+  SYMLINK_MESSAGE = "must not be a symlink (not followed; any evals.json behind it would go unchecked)"
   TOP_REQUIRED = %w[skill_name evals].freeze
   TOP_OPTIONAL = %w[notes].freeze
   CASE_REQUIRED = %w[id prompt expected_output assertions].freeze
@@ -34,6 +41,13 @@ module CheckEvals
     "expectations" => "skill-creator's expectations; this repo uses assertions with id and text",
   }.freeze
   JSON_ERROR_MAX = 160
+  # 空白だけの string も空とみなす。String#strip は ASCII の空白 (と NUL) しか除かないので、Unicode
+  # の White_Space (NBSP U+00A0・全角空白 U+3000 など) で判定する。NUL は strip と同じく空扱い。
+  BLANK_PATTERN = /\A[\p{White_Space}\u0000]*\z/.freeze
+  # 診断の 1 行を割りうる文字 (C0 / DEL / C1 の制御文字と U+2028 / U+2029)。入力由来の値 (未知の
+  # field 名・files の値・file 名) に含まれていれば escape する。
+  LINE_BREAKING = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/.freeze
+  ESCAPES = { "\n" => "\\n", "\r" => "\\r", "\t" => "\\t" }.freeze
 
   class Runner
     def initialize(root)
@@ -44,13 +58,21 @@ module CheckEvals
 
     # [検査した evals.json の数, case の数, error の行] を返す。
     def run
+      shared = File.join(@root, SHARED_DIR)
+      stat = lstat_or_nil(shared)
+      # shared/ 自体が symlink なら、その先 (repo の外でありうる) を辿らずに止める。
+      if stat&.symlink?
+        error(SHARED_DIR, SYMLINK_MESSAGE)
+        return [0, 0, @errors]
+      end
       # shared/ の無い root で「0 件 ok」と緑にしない (--root の取り違えを見逃さない。Gate と同じ文言)。
-      unless File.directory?(File.join(@root, "shared"))
+      unless stat&.directory?
         @errors << "no shared/ directory under root: #{@root} (not an agent-tools repository; check --root)"
         return [0, 0, @errors]
       end
-      # base: で root を glob の pattern から外す (root の path に [ や * があっても誤解釈しない)。
-      files = Dir.glob(EVALS_GLOB, base: @root).sort
+      files = []
+      discover(SHARED_DIR, files)
+      files.sort!
       files.each { |path| check_file(path) }
       [files.size, @case_count, @errors]
     end
@@ -58,17 +80,40 @@ module CheckEvals
     private
 
     def error(where, message)
-      @errors << "#{where}: #{message}"
+      @errors << CheckEvals.escape_line("#{where}: #{message}")
+    end
+
+    # rel_dir (root からの相対 path) の entry を lstat で調べ、evals/ の直下の evals.json を files に
+    # 足す。symlink は種類を問わず辿らずに error にする (先を見ないと evals.json を隠すかどうか
+    # 判断できないので、すべて拒否する)。列挙・stat の失敗はその entry の error にして続ける。
+    def discover(rel_dir, files)
+      names = begin
+        Dir.children(File.join(@root, rel_dir))
+      rescue SystemCallError => e
+        error(rel_dir, "cannot read the directory (#{e.class})")
+        return
+      end
+      names.sort.each do |name|
+        name = name.dup.force_encoding(Encoding::UTF_8)
+        rel = "#{rel_dir}/#{name}"
+        stat = begin
+          File.lstat(File.join(@root, rel))
+        rescue SystemCallError => e
+          error(rel, "cannot stat (#{e.class})")
+          next
+        end
+        if stat.symlink?
+          error(rel, SYMLINK_MESSAGE)
+          next
+        end
+        # regular file でない evals.json も候補にして、check_file で error にする。
+        files << rel if name == EVALS_FILE && File.basename(rel_dir) == EVALS_DIR
+        discover(rel, files) if stat.directory?
+      end
     end
 
     def check_file(path)
-      # glob の literal な component (shared / evals) は symlink を辿りうるので、root からの各段を
-      # lstat し、symlink を含む path は読まない (repo の外を読まない)。
-      problem, segment = walk(@root, path.split("/"))
-      if problem == :symlink
-        error(path, "must not be or go through a symlink: #{segment}")
-        return
-      end
+      # 候補は discover が symlink を辿らずに集めたもの (path のどの段も symlink でない)。
       full = File.join(@root, path)
       unless File.file?(full)
         error(path, "must be a regular file")
@@ -78,7 +123,12 @@ module CheckEvals
       skill_dir = File.dirname(File.dirname(path))
       manifest_name = read_manifest_name(path, skill_dir)
 
-      content = File.binread(full).force_encoding(Encoding::UTF_8)
+      content = begin
+        File.binread(full).force_encoding(Encoding::UTF_8)
+      rescue SystemCallError => e
+        error(path, "cannot read (#{e.class})")
+        return
+      end
       unless content.valid_encoding?
         error(path, "must be valid UTF-8")
         return
@@ -87,6 +137,13 @@ module CheckEvals
         JSON.parse(content)
       rescue JSON::ParserError => e
         error(path, "invalid JSON: #{e.message.lines.first.to_s.strip[0, JSON_ERROR_MAX]}")
+        return
+      end
+      # Ruby の json は対になっていない surrogate の \u escape (例: \udc00) を不正な UTF-8 の string に
+      # decode しうる。そのまま正規表現や strip に渡すと ArgumentError で検査全体が止まるので、key と
+      # 値のすべての string を先に確かめる。
+      if invalid_string?(data)
+        error(path, "must be valid UTF-8 after decoding (unpaired \\u surrogate escape)")
         return
       end
       unless data.is_a?(Hash)
@@ -115,8 +172,14 @@ module CheckEvals
         error(path, "no asset.yml in #{skill_dir}; evals.json must sit in a directory asset's evals/")
         return nil
       end
+      content = begin
+        File.read(full)
+      rescue SystemCallError => e
+        error(path, "cannot read #{manifest} (#{e.class})")
+        return nil
+      end
       data = begin
-        YamlUtil.load(File.read(full), manifest)
+        YamlUtil.load(content, manifest)
       rescue Psych::Exception
         nil
       end
@@ -221,11 +284,13 @@ module CheckEvals
         end
 
         base = File.join(@root, skill_dir)
-        problem, segment = walk(base, parts)
+        problem, segment, cause = walk(base, parts)
         if problem == :missing
           error(at, "does not exist: #{file}")
         elsif problem == :symlink
           error(at, "must not be or go through a symlink: #{segment}")
+        elsif problem == :unreadable
+          error(at, "cannot access #{segment} (#{cause})")
         elsif !File.file?(File.join(base, file))
           error(at, "must be a regular file: #{file}")
         end
@@ -280,21 +345,40 @@ module CheckEvals
     end
 
     # base から parts を 1 段ずつ lstat で辿る。最初に symlink の段があれば [:symlink, 段]、
-    # 存在しない段があれば [:missing, 段] (段は base からの相対 path)、どちらも無ければ nil。
+    # 存在しない段があれば [:missing, 段]、権限などで stat できない段があれば
+    # [:unreadable, 段, 例外の class 名] (段は base からの相対 path)、どれも無ければ nil。
     # symlink の先は辿らない。
     def walk(base, parts)
       current = base
       parts.each_with_index do |part, index|
         current = File.join(current, part)
+        segment = parts[0..index].join("/")
         stat = begin
           File.lstat(current)
-        rescue SystemCallError
-          nil
+        rescue Errno::ENOENT, Errno::ENOTDIR
+          return [:missing, segment]
+        rescue SystemCallError => e
+          return [:unreadable, segment, e.class]
         end
-        return [:missing, parts[0..index].join("/")] if stat.nil?
-        return [:symlink, parts[0..index].join("/")] if stat.symlink?
+        return [:symlink, segment] if stat.symlink?
       end
       nil
+    end
+
+    def lstat_or_nil(path)
+      File.lstat(path)
+    rescue SystemCallError
+      nil
+    end
+
+    # JSON から読んだ値の中に不正な UTF-8 の string (key を含む) があるか。
+    def invalid_string?(value)
+      case value
+      when String then !value.valid_encoding?
+      when Array then value.any? { |v| invalid_string?(v) }
+      when Hash then value.any? { |k, v| invalid_string?(k) || invalid_string?(v) }
+      else false
+      end
     end
 
     def case_id?(value)
@@ -302,8 +386,19 @@ module CheckEvals
     end
 
     def non_empty_string?(value)
-      value.is_a?(String) && !value.strip.empty?
+      value.is_a?(String) && !value.match?(BLANK_PATTERN)
     end
+  end
+
+  # 診断の 1 行を 1 行のまま出す。入力由来の改行・制御文字を \n / \r / \t / \uXXXX に、不正な UTF-8 の
+  # byte (file 名などで起こりうる) を \xXX に置き換える。backslash 自体は escape しないので、表示は
+  # 読むための近似。
+  def self.escape_line(line)
+    line = line.dup.force_encoding(Encoding::UTF_8)
+    unless line.valid_encoding?
+      line = line.scrub { |bytes| bytes.unpack("C*").map { |b| format("\\x%02X", b) }.join }
+    end
+    line.gsub(LINE_BREAKING) { |c| ESCAPES[c] || format("\\u%04X", c.ord) }
   end
 
   def self.main(argv)

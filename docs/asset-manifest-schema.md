@@ -158,17 +158,26 @@ directory skill の `evals/evals.json` は、skill の期待挙動を case と�
 | assertion | `id` | 必須 | lower kebab-case の slug。一意性は case の中だけ (case をまたいだ同じ id は可) |
 | assertion | `text` | 必須 | 空でない string (空白だけも不可) |
 
+- 「空白だけも不可」の空白は Unicode の White_Space です (半角空白・タブ・改行のほか、
+  NBSP U+00A0・全角空白 U+3000 なども空白として扱う)。
 - 未知の field は top-level・case・assertion のどこでも error にします (typo や別の schema を
   黙って通さない)。導入時に、既存の 13 本の evals.json に未知の field が無く、migration が
   要らないことを確かめました。
-- 置き場所は directory asset の `evals/evals.json` だけです。`asset.yml` の無い dir の
-  `evals/evals.json`、symlink を含む path、regular file でないものは読まずに error にします。
-  UTF-8 でない・JSON として読めない・top-level が object でないものも error です。`shared/` の
-  無い root は 0 件の成功にせず error にします。
+- 置き場所は directory asset の `evals/evals.json` だけです。探索は `shared/` の下を lstat で辿り、
+  symlink は種類を問わず辿らずに error にします (skill や category の directory、`shared/` 自体が
+  symlink でも、その先の evals.json を黙って検査から漏らさない)。`asset.yml` の無い dir の
+  `evals/evals.json`、regular file でないものは読まずに error にします。UTF-8 でない (対に
+  なっていない surrogate の `\u` escape を含む)・JSON として読めない・top-level が object で
+  ないものも error です。`shared/` の無い root は 0 件の成功にせず error にします。
+- 読めない file / directory や stat できない entry (権限など) は、その path の error
+  (`cannot read (Errno::EACCES)` など) にして、残りの検査と集計を続けます。
 - 診断は 1 行 1 件で、`<file>: <message>` (file 全体)、`<file>:<field>: <message>`
   (top-level)、`<file>:evals[<index>](id=<id>):<field>: <message>` (case と assertion。case の id
-  が不正なら `(id=<id>)` を付けない) の形です。すべての error を集めてから出し、error があれば
-  exit 1。`ruby scripts/lib/check_evals.rb [--root DIR] [--quiet]` で単独でも実行できます。
+  が不正なら `(id=<id>)` を付けない) の形です。診断に出す入力由来の値 (未知の field 名・`files`
+  の値・file 名) の改行や制御文字 (U+2028 / U+2029 を含む) は `\n` / `\r` / `\t` / `\uXXXX` に、
+  不正な UTF-8 の byte は `\xXX` に escape し、1 件が複数行に割れないようにします。すべての error
+  を集めてから出し、error があれば exit 1。`ruby scripts/lib/check_evals.rb [--root DIR] [--quiet]`
+  で単独でも実行できます。
 
 skill-creator の schema との違い: skill-creator の `references/schemas.md` は case の検証項目を
 `expectations` (string の配列) と書きます。この repo は `assertions` (`id` と `text` を持つ

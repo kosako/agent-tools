@@ -10,7 +10,8 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 check="$script_dir/../lib/check_evals.rb"
 
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+# chmod 000 にした fixture が残っても消せるように、権限を戻してから消す。
+trap 'chmod -R u+rwx "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
 
 # 検査を走らせ、exit code を確かめる。stdout は $tmp/out、stderr は $tmp/err に残る。
 # 使い方: run_check <label> <want-exit> <check の引数>...
@@ -49,6 +50,9 @@ make_skill() {
   printf -- '---\nname: %s\ndescription: demo %s\n---\n\n# %s\n' "$ms_name" "$ms_name" "$ms_name" > "$ms_dir/SKILL.md"
   write_asset_manifest "$ms_dir/asset.yml" "$ms_name" skill public "shared/skills/$2" directory claude-code
 }
+
+# shared/ の下の symlink (種類を問わない) に付く診断。
+symlink_msg="must not be a symlink (not followed; any evals.json behind it would go unchecked)"
 
 # --- case 1: 正常系。id は連番でなく起点も問わない、assertion の id は case をまたげば重複してよい、
 #     name / notes / files は任意。evals.json の無い skill と、evals/ だけあって evals.json の無い
@@ -198,7 +202,7 @@ expect_line "types" "$f:evals[6](id=10):assertions: missing required field"
 expect_errors "types" 20 1
 
 # --- case 6: files は skill の directory からの相対 path で、外へ出ず、存在し、symlink を含まない
-#     regular file。symlink の先 (repo の外) は読まない ---
+#     regular file。symlink の先 (repo の外) は読まない。shared/ の下の symlink はそれ自体も error ---
 make_skill "$tmp/files" personal-files
 mkdir -p "$tmp/outside" "$tmp/files/shared/skills/personal-files/evals/fixtures"
 printf 'outside\n' > "$tmp/outside/secret.md"
@@ -247,7 +251,9 @@ expect_line "files" "$f:files[7]: must not be or go through a symlink: evals/lin
 expect_line "files" "$f:files[8]: must be a regular file: evals"
 expect_line "files" "$f:files[9]: must be a non-empty string"
 expect_line "files" "$f:files[10]: must be a non-empty string"
-expect_errors "files" 11 1
+expect_line "files" "shared/skills/personal-files/evals/link.md: $symlink_msg"
+expect_line "files" "shared/skills/personal-files/evals/linkdir: $symlink_msg"
+expect_errors "files" 13 1
 
 # --- case 7: skill_name は skill の directory 名と asset.yml の name の両方に一致する ---
 make_skill "$tmp/name" personal-alpha
@@ -287,9 +293,9 @@ expect_line "unknown" "$f:evals[0](id=0):expectations: unknown field (skill-crea
 expect_line "unknown" "$f:evals[0](id=0):assertions[0].weight: unknown field"
 expect_errors "unknown" 3 1
 
-# --- case 9: evals.json の置き場所。directory asset の evals/ の regular file に限り、symlink を
-#     含む path・asset.yml の無い dir は読まずに error。asset.yml が symlink・name を読めないときも
-#     error (manifest 自体の不正の詳細は check-manifests が出す) ---
+# --- case 9: evals.json の置き場所。directory asset の evals/ の regular file に限り、symlink の
+#     evals.json / evals/・asset.yml の無い dir は読まずに error (symlink は数えない)。asset.yml が
+#     symlink・name を読めないときも error (manifest 自体の不正の詳細は check-manifests が出す) ---
 # 中身だけなら正しい evals.json を書く。
 # 使い方: write_good_evals <file> <skill_name>
 write_good_evals() {
@@ -316,12 +322,13 @@ ln -s "$tmp/outside/asset.yml" "$tmp/place/shared/skills/personal-linkedmanifest
 write_good_evals "$tmp/place/shared/skills/personal-linkedmanifest/evals/evals.json" personal-linkedmanifest
 run_check "place" 1 --root "$tmp/place"
 expect_line "place" "shared/skills/personal-orphan/evals/evals.json: no asset.yml in shared/skills/personal-orphan; evals.json must sit in a directory asset's evals/"
-expect_line "place" "shared/skills/personal-linked/evals/evals.json: must not be or go through a symlink: shared/skills/personal-linked/evals/evals.json"
-expect_line "place" "shared/skills/personal-linkeddir/evals/evals.json: must not be or go through a symlink: shared/skills/personal-linkeddir/evals"
+expect_line "place" "shared/skills/personal-linked/evals/evals.json: $symlink_msg"
+expect_line "place" "shared/skills/personal-linkeddir/evals: $symlink_msg"
 expect_line "place" "shared/skills/personal-dirjson/evals/evals.json: must be a regular file"
 expect_line "place" "shared/skills/personal-badyaml/evals/evals.json:skill_name: cannot read name from shared/skills/personal-badyaml/asset.yml"
+expect_line "place" "shared/skills/personal-linkedmanifest/asset.yml: $symlink_msg"
 expect_line "place" "shared/skills/personal-linkedmanifest/evals/evals.json: shared/skills/personal-linkedmanifest/asset.yml must not be a symlink"
-expect_errors "place" 6 6
+expect_errors "place" 7 4
 
 # --- case 10: 未知の option は usage で exit 2。shared/ の無い root は「0 件 ok」にしない ---
 run_check "usage" 2 --bogus
@@ -330,8 +337,142 @@ run_check "no shared" 1 --root "$tmp/not-a-repo"
 grep -qF "no shared/ directory under root: " "$tmp/out" \
   || fail "no shared: missing reason: $(cat "$tmp/out")"
 
-# --- case 11: 実 repo の全 evals.json (と files が指す fixture) が通る。数は find と突き合わせて、
-#     発見の取りこぼしを緑に数えない ---
+# --- case 11: shared/ の下は lstat で辿り、symlink は種類を問わず辿らずに error。skill の
+#     directory・category の directory・shared/ 自体が symlink でも、その先の evals.json を検査から
+#     漏らさない (他に正常な evals.json があっても緑にしない) ---
+make_skill "$tmp/symdir" personal-good
+write_good_evals "$tmp/symdir/shared/skills/personal-good/evals/evals.json" personal-good
+mkdir -p "$tmp/outside/symskill/evals" "$tmp/outside/symcat/personal-cat/evals"
+printf '{"skill_name": "personal-demo", "evals": []}\n' > "$tmp/outside/symskill/evals/evals.json"
+printf '{"skill_name": "personal-cat", "evals": []}\n' > "$tmp/outside/symcat/personal-cat/evals/evals.json"
+ln -s "$tmp/outside/symskill" "$tmp/symdir/shared/skills/personal-demo"
+ln -s "$tmp/outside/symcat" "$tmp/symdir/shared/linkedcat"
+run_check "symdir" 1 --root "$tmp/symdir"
+expect_line "symdir" "shared/linkedcat: $symlink_msg"
+expect_line "symdir" "shared/skills/personal-demo: $symlink_msg"
+expect_errors "symdir" 2 1
+# shared/ 自体が symlink なら、その先を読まずに止める。
+make_skill "$tmp/outside/realroot" personal-good
+write_good_evals "$tmp/outside/realroot/shared/skills/personal-good/evals/evals.json" personal-good
+mkdir -p "$tmp/symroot"
+ln -s "$tmp/outside/realroot/shared" "$tmp/symroot/shared"
+run_check "symroot" 1 --root "$tmp/symroot"
+expect_line "symroot" "shared: $symlink_msg"
+expect_errors "symroot" 1 0
+
+# --- case 12: 読めない file / directory、stat できない entry は file 単位の error にして、残りの
+#     検査と集計を続ける (例外で止めず、蓄積した診断も失わない)。root は権限を無視するので飛ばす ---
+if [ "$(id -u)" -ne 0 ]; then
+  p="$tmp/perm/shared/skills"
+  make_skill "$tmp/perm" personal-a-noread
+  write_good_evals "$p/personal-a-noread/evals/evals.json" personal-a-noread
+  chmod 000 "$p/personal-a-noread/evals/evals.json"
+  make_skill "$tmp/perm" personal-b-nomanifest
+  write_good_evals "$p/personal-b-nomanifest/evals/evals.json" personal-b-nomanifest
+  chmod 000 "$p/personal-b-nomanifest/asset.yml"
+  make_skill "$tmp/perm" personal-c-nolist
+  mkdir -p "$p/personal-c-nolist/evals/fixtures"
+  printf 'x\n' > "$p/personal-c-nolist/evals/fixtures/a.md"
+  printf '{"skill_name": "personal-c-nolist", "evals": [{"id": 0, "prompt": "p", "expected_output": "e", "files": ["evals/fixtures/a.md"], "assertions": [{"id": "a", "text": "t"}]}]}\n' \
+    > "$p/personal-c-nolist/evals/evals.json"
+  chmod 000 "$p/personal-c-nolist/evals/fixtures"
+  # 読めるが search できない dir: 名前は列挙できても、中の entry を lstat できない。
+  make_skill "$tmp/perm" personal-d-nosearch
+  write_good_evals "$p/personal-d-nosearch/evals/evals.json" personal-d-nosearch
+  chmod 444 "$p/personal-d-nosearch/evals"
+  make_skill "$tmp/perm" personal-e-later
+  printf '{"skill_name": "personal-e-later", "evals": []}\n' > "$p/personal-e-later/evals/evals.json"
+  run_check "perm" 1 --root "$tmp/perm"
+  chmod 644 "$p/personal-a-noread/evals/evals.json" "$p/personal-b-nomanifest/asset.yml"
+  chmod 755 "$p/personal-c-nolist/evals/fixtures" "$p/personal-d-nosearch/evals"
+  expect_line "perm" "shared/skills/personal-a-noread/evals/evals.json: cannot read (Errno::EACCES)"
+  expect_line "perm" "shared/skills/personal-b-nomanifest/evals/evals.json: cannot read shared/skills/personal-b-nomanifest/asset.yml (Errno::EACCES)"
+  expect_line "perm" "shared/skills/personal-c-nolist/evals/fixtures: cannot read the directory (Errno::EACCES)"
+  expect_line "perm" "shared/skills/personal-c-nolist/evals/evals.json:evals[0](id=0):files[0]: cannot access evals/fixtures/a.md (Errno::EACCES)"
+  expect_line "perm" "shared/skills/personal-d-nosearch/evals/evals.json: cannot stat (Errno::EACCES)"
+  expect_line "perm" "shared/skills/personal-e-later/evals/evals.json:evals: must be a non-empty array"
+  expect_errors "perm" 6 4
+fi
+
+# --- case 13: 診断は 1 行 1 件。入力由来の値 (未知の field 名・files の値・path) の改行・CR・
+#     制御文字・U+2028 などは escape して、診断の行数と集計の件数を一致させる ---
+make_skill "$tmp/escape" personal-escape
+cat > "$tmp/escape/shared/skills/personal-escape/evals/evals.json" <<'EOF'
+{
+  "skill_name": "personal-escape",
+  "bad\nfield": 1,
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "p",
+      "expected_output": "e",
+      "cr\rkey": true,
+      "files": ["evals/new\nline.md", "evals/sep\u2028x.md"],
+      "assertions": [{ "id": "a", "text": "t", "tab\tnel\u0085": 1 }]
+    }
+  ]
+}
+EOF
+# 名前に改行を含む directory (asset.yml が無いので置き場所の error になる)。
+nl_dir="$tmp/escape/shared/skills/orphan
+x"
+mkdir -p "$nl_dir/evals"
+write_good_evals "$nl_dir/evals/evals.json" 'orphan\nx'
+run_check "escape" 1 --root "$tmp/escape"
+f=shared/skills/personal-escape/evals/evals.json
+expect_line "escape" "$f:bad\\nfield: unknown field"
+expect_line "escape" "$f:evals[0](id=0):cr\\rkey: unknown field"
+expect_line "escape" "$f:evals[0](id=0):files[0]: does not exist: evals/new\\nline.md"
+expect_line "escape" "$f:evals[0](id=0):files[1]: does not exist: evals/sep\\u2028x.md"
+expect_line "escape" "$f:evals[0](id=0):assertions[0].tab\\tnel\\u0085: unknown field"
+expect_line "escape" "shared/skills/orphan\\nx/evals/evals.json: no asset.yml in shared/skills/orphan\\nx; evals.json must sit in a directory asset's evals/"
+expect_errors "escape" 6 2
+# 不正な UTF-8 の byte (Linux の file 名などで起こりうる。macOS の fixture では作れない) は \xXX にし、
+# 例外で止めない。
+escaped=$(ruby -r"$check" -e 'print CheckEvals.escape_line("bad\xFF\x80\nname".b)' 2>&1) \
+  || fail "escape: escape_line must not raise on invalid UTF-8: $escaped"
+[ "$escaped" = 'bad\xFF\x80\nname' ] || fail "escape: invalid UTF-8 bytes must become \\xFF\\x80: $escaped"
+
+# --- case 14: 空白だけの判定は Unicode の空白 (NBSP U+00A0・EM SPACE U+2003・全角空白 U+3000 など)
+#     も含む。空白以外を含む値は通す ---
+make_skill "$tmp/blank" personal-blank
+cat > "$tmp/blank/shared/skills/personal-blank/evals/evals.json" <<'EOF'
+{
+  "skill_name": "personal-blank",
+  "evals": [
+    { "id": 0, "prompt": "\u3000", "expected_output": "\u00A0 \t\u2003", "assertions": [{ "id": "a", "text": "\u3000\u00A0" }] },
+    { "id": 1, "prompt": "\u3000x", "expected_output": "e\u00A0", "assertions": [{ "id": "a", "text": "\u3000t\u3000" }] }
+  ]
+}
+EOF
+run_check "blank" 1 --root "$tmp/blank"
+f="shared/skills/personal-blank/evals/evals.json:evals[0](id=0)"
+expect_line "blank" "$f:prompt: must be a non-empty string"
+expect_line "blank" "$f:expected_output: must be a non-empty string"
+expect_line "blank" "$f:assertions[0].text: must be a non-empty string"
+expect_errors "blank" 3 1
+
+# --- case 15: \u escape の対になっていない surrogate で検査全体を止めない。Ruby の json は版により
+#     不正な UTF-8 の文字列に decode する (2.6) か、別の扱い (JSON の error など) をする。どれでも
+#     その file の error にして、後続の file も検査する ---
+make_skill "$tmp/surrogate" personal-lone
+cat > "$tmp/surrogate/shared/skills/personal-lone/evals/evals.json" <<'EOF'
+{"skill_name": "personal-lone", "evals": [{"id": 0, "prompt": "\udc00", "expected_output": "e", "assertions": [{"id": "\udc00", "text": "t"}]}]}
+EOF
+make_skill "$tmp/surrogate" personal-z-later
+printf '{"skill_name": "personal-z-later", "evals": []}\n' > "$tmp/surrogate/shared/skills/personal-z-later/evals/evals.json"
+run_check "surrogate" 1 --root "$tmp/surrogate"
+expect_line "surrogate" "shared/skills/personal-z-later/evals/evals.json:evals: must be a non-empty array"
+expect_errors "surrogate" 2 2
+f=shared/skills/personal-lone/evals/evals.json
+grep -qF -- "$f" "$tmp/out" || fail "surrogate: missing the error for $f in: $(cat "$tmp/out")"
+# この Ruby の json が不正な UTF-8 の string に decode するなら、その旨の error 1 件で止める。
+if ruby -rjson -e 'exit(JSON.parse(ARGV[0]).first.valid_encoding? ? 1 : 0)' '["\udc00"]' 2>/dev/null; then
+  expect_line "surrogate" "$f: must be valid UTF-8 after decoding (unpaired \\u surrogate escape)"
+fi
+
+# --- case 16: 実 repo の全 evals.json (と files が指す fixture) が通る。数は find (symlink を
+#     辿らない。探索と同じく隠し dir も含む) と突き合わせて、発見の取りこぼしを緑に数えない ---
 real_count=$(find "$repo_root/shared" -path '*/evals/evals.json' -type f | wc -l | tr -d ' ')
 [ "$real_count" -gt 0 ] || fail "real repo: no evals.json found under shared/"
 run_check "real repo" 0 --root "$repo_root"
