@@ -1,7 +1,9 @@
 #!/bin/sh
 # probe-opencode-plugin.sh の self-test (#295 PR 0)。opencode も外部の network も使わない
 # (mock は loopback だけ。runner を通しで動かす T2 / T6 は偽の opencode を PATH に置く)。
-# node が無ければ fail にする (T7 は計測用 plugin を node で読む。skip にしない)。
+# node が無ければ fail にする (T7 は計測用 plugin を node で読む。skip にしない)。T7 は plugin を一時 dir に
+# copy し、隣に {"type":"module"} の package.json を置いて読む (Node の構文の自動判定と、checkout の祖先の
+# package.json に頼らない。#396)。
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -15,6 +17,9 @@ command -v node >/dev/null 2>&1 || fail "node is required (T7 loads the probe pl
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# 回帰 (#396): T7 の copy の祖先に {"type":"commonjs"} の package.json を置く。copy の隣の宣言が無ければ、
+# Node の版によらず import が SyntaxError で落ちる。
+printf '{"type":"commonjs"}\n' > "$tmp/package.json"
 
 # --- T1: 引数と exit code -------------------------------------------------------------
 expect_exit() {
@@ -123,8 +128,23 @@ ruby "$helper" t8 "$tmp/t8" || fail "T8"
 
 # --- T7: 記録の allowlist (plugin と mock の header) --------------------------------------
 if grep -q "$canary" "$tmp/mock-requests.jsonl"; then fail "T7: header canary leaked into mock-requests.jsonl"; fi
+# repo 内の source を直接読まず、同じ basename で copy して読む (LABEL は file 名から取るので、
+# PROBE_PRIMARY=probe-plugin のまま変わらない)。隣に {"type":"module"} の package.json を置く (#396)。
+mkdir -p "$tmp/t7"
+cp "$plugin" "$tmp/t7/probe-plugin.js"
+printf '{"type":"module"}\n' > "$tmp/t7/package.json"
 : > "$tmp/hooks.jsonl"
 PROBE_HOOKS_OUT="$tmp/hooks.jsonl" PROBE_PRIMARY=probe-plugin PROBE_NONCE=PROBE-NONCE-t7 PROBE_MODE=annotate,mark,notify \
-  node "$script_dir/lib/probe-opencode-plugin-test.mjs" "$plugin" "$tmp/hooks.jsonl" "$canary" || fail "T7"
+  node "$script_dir/lib/probe-opencode-plugin-test.mjs" "$tmp/t7/probe-plugin.js" "$tmp/hooks.jsonl" "$canary" || fail "T7"
+# 構文の自動判定の無い Node の再現 (flag を受け付ける Node のときだけ。記録先は分ける)。
+if no_detect=$(node_options_without_detect_module); then
+  : > "$tmp/hooks-no-detect.jsonl"
+  NODE_OPTIONS=$no_detect PROBE_HOOKS_OUT="$tmp/hooks-no-detect.jsonl" PROBE_PRIMARY=probe-plugin PROBE_NONCE=PROBE-NONCE-t7 PROBE_MODE=annotate,mark,notify \
+    node "$script_dir/lib/probe-opencode-plugin-test.mjs" "$tmp/t7/probe-plugin.js" "$tmp/hooks-no-detect.jsonl" "$canary" \
+    || fail "T7 without the syntax detection (NODE_OPTIONS=$no_detect)"
+  echo "ok T7 without the syntax detection"
+else
+  echo "skip: T7 without the syntax detection (this node does not accept --no-experimental-detect-module in NODE_OPTIONS)"
+fi
 
 echo "all probe-opencode-plugin tests passed"

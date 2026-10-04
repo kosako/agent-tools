@@ -220,5 +220,16 @@ expect_output_not_file_stop() {
   expect_output_stop "$eonf_label" "$eonf_outside" "$eonf_reason" "$@"
 }
 
+# Node の ESM 構文の自動判定 (型の宣言が無い .js を構文から ESM とみなす。22.7 / 20.19 から既定で on) を
+# 切った NODE_OPTIONS の値 (既存の NODE_OPTIONS の後ろに flag を足したもの) を出す。判定の無い Node を
+# 再現して、plugin の import がモジュール形式の明示だけで通ることを確かめるのに使う (#396)。この flag を
+# NODE_OPTIONS で受け付けない Node では何も出さずに 1 を返す (呼び出し側は skip を明示する)。
+# 使い方: if opts=$(node_options_without_detect_module); then NODE_OPTIONS=$opts node ...; else echo "skip: ..."; fi
+node_options_without_detect_module() {
+  nownd_opts="${NODE_OPTIONS:+$NODE_OPTIONS }--no-experimental-detect-module"
+  NODE_OPTIONS=$nownd_opts node -e 0 >/dev/null 2>&1 || return 1
+  printf '%s\n' "$nownd_opts"
+}
+
 # repo root (scripts/tests/ の 2 つ上)。実 repo を対象にする case が使う。
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
