@@ -128,8 +128,8 @@ commit のあと、`base` から branch の `HEAD` までの累積差分に対�
   `body_file` は literal の変数で渡します。`pipefail` は、材料の `git` が失敗したときに gate が残りだけを読んで
   exit 0 になるのを防ぎます。gate が無い・exit 0 でないときは push も PR もせず、gate の出力 (どの規則に
   当たったか) を報告します。直したら、この節の検証からやり直します。
-- commit の message は Claude の trailer 付きで、file に書いて `-F` で渡します。commit の前に message の file を
-  `"$gate" --stdin < "$msg_file"` で確かめておくと、push の前の gate で止まってから書き直す手間が減ります。
+- commit の message は Claude の trailer 付きで、file に書いて `-F` で渡します。commit の前にその file を同じ gate
+  (上の `gate` の path) の `--stdin` に通しておくと、push の前の gate で止まってから書き直す手間が減ります。
 
 ## PR
 

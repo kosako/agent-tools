@@ -10,7 +10,8 @@
 #   local pattern file に置く。
 # - SKILL.md の fix モードの要約 (7b) と evals.json の verify-then-publish が commit の message を挙げている。
 # 引数で sweep の skill の directory を差し替えられる (変異での確認用)。
-# 実 HOME / 実 git config には触れない (HOME / GIT_CONFIG_GLOBAL / GIT_CONFIG_SYSTEM を隔離)。network access なし。
+# 実 HOME / 実 git config には触れない (gate の command は偽の HOME で走らせ、git は GIT_CONFIG_GLOBAL /
+# GIT_CONFIG_SYSTEM を隔離する)。network access なし。
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
