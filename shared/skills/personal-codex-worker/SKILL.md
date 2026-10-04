@@ -19,6 +19,13 @@ orchestrator が行います。
   branch の push と PR 作成 (orchestrator の操作。trailer 検査を通ったときだけ)。
   Issue コメントへの publish と planning tool の更新はしない (handoff の領分)。worker は GitHub /
   network / packet に触れない。preflight が BLOCKED なら何も起動しない。
+- **packet に書く前の検査** (#386): packet に書く前 (§1 の修正 round の記入、§3 の `branch`、§5 の
+  起動の記録、§6 の転記・停止の記録・起動の記録の後始末、§7 の `pr:` / `state`) には毎回、配備済みの
+  `personal-packet check <issue>` を通す (`"$packet_cli" check "$issue"`。値は `LAUNCH.md` §4 と同じく
+  literal 化した変数で渡す)。exit 0 以外 (symlink / git で tracked などの拒否、判定できない、実行できない)
+  なら packet を書かず、理由を 1 行伝えて、書く予定だった内容は返却の中の draft に留める (規約は
+  `docs/agent-packets.md` の置き場)。起動より前 (§1 / §3 / §5) で落ちたら起動せず
+  `Blocked at: launch-record`、起動より後 (§6 / §7) は各節に書く。
 - 組み合わせ: packet 規約は `docs/agent-packets.md` (worker 委譲との関係)、preflight は script
   asset `personal-codex-worker-preflight`、PR の review は `personal-review-request` →
   `personal-codex-review` ではなく Claude route (author=codex)、品質観点は `personal-production-rail`。
@@ -201,7 +208,8 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   無いことの確認は `LAUNCH.md` §1 / §3。確かめられなければ起動せず `Blocked at: launch-path`。
 
 - **起動の記録を起動の前に書く**: run dir と run script が揃った時点で (herdr 経由の起動も `launch-path`
-  の hand-off も、その前に)、packet の frontmatter に `run` (run dir) と `tab` (`#<issue>`) を書き
+  の hand-off も、その前に)、書く前の検査 (「副作用と組み合わせ」) を通してから (落ちたら起動せず
+  `Blocked at: launch-record`)、packet の frontmatter に `run` (run dir) と `tab` (`#<issue>`) を書き
   (`last_run` があれば同時に消す。`run` と同時に置くと `list` が壊れた packet として止める)、
   `personal-packet list --json --all` で読み直して一致と `run_status: unfinished` を確かめる (一致
   しなければ起動せず `Blocked at: launch-record`)。`updated` は変えない。書き方は `LAUNCH.md` §4。
@@ -241,7 +249,10 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
 
 ## 6. 結果の転記と停止の記録
 
-転記の規則は `docs/agent-packets.md` の「worker 委譲との関係」が正本です。
+転記の規則は `docs/agent-packets.md` の「worker 委譲との関係」が正本です。この節で packet に書く前
+(転記、停止の記録、退避の path、起動の記録の後始末) には毎回、書く前の検査 (「副作用と組み合わせ」) を
+通します。落ちたら packet を書かず `Blocked at: transcription` とし、書く予定だった内容を返却の中の
+draft に留めます (起動の記録は消さずに残す)。
 
 - **完了 (最終 message あり)**: `result.md` の内容を `personal-public-safety-gate --stdin` に通し、
   exit 0 のときだけ packet の `結果` に `### <日付> worker/codex` として転記する (見出しと
@@ -289,7 +300,8 @@ worker の最終 message が「完了」で、`依頼` の受け入れ条件を�
    に fallback しない)。
 3. push して PR を作る (title / body は packet の `依頼` と `結果` から orchestrator が書く。worker の
    本文をそのまま貼らない)。
-4. packet に `pr:` と `state: review` を入れる。review は `personal-review-request` に渡す
+4. 書く前の検査 (「副作用と組み合わせ」) を通してから、packet に `pr:` と `state: review` を入れる
+   (落ちたら書かず、PR 番号と state を返却の中の draft に留める)。review は `personal-review-request` に渡す
    (author=codex なので reviewer は Claude route)。修正 round の push の後も、同じく `state: review` に
    戻す (PR は既にあるので作らない。#325)。
 
@@ -315,7 +327,8 @@ merge はしない (人が行う)。
 - preflight を飛ばす、BLOCKED を無視する、`launch_argv` に flag を足す / 外す、直接起動に倒す。
 - worker に packet dir / home / main の Git 管理領域 / GitHub を開ける (`--add-dir`、network を許す
   config、approval を緩める)。linked worktree で動かす (git dir が sandbox の外に出る)。
-- 最終 message を要約して転記する、gate を通さずに転記する、`依頼` を書き換える。
+- 最終 message を要約して転記する、gate を通さずに転記する、`依頼` を書き換える。書く前の検査を通さずに
+  packet に書く。
 - 停止した worker の代わりに orchestrator が commit する。limit で自動再起動する。
 - trailer が Codex のみでない branch を push する。merge する。
 - 2 つ目の worker を同じ session で並行起動する。失敗した pane を閉じる。

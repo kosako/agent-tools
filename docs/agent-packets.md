@@ -61,6 +61,17 @@ orchestrator 向けの判断は `結果` の「判断」に残す。
   repo 側 `.gitignore` は fail-safe。それでも staged に乗った場合は
   [public-safety gate](git-hook-gates.md#personal-public-safety-gatepre-commit) が
   `local-only-file` として commit を止める (best-effort guardrail。`--no-verify` は素通り)。
+- **symlink / tracked の packet は誰も更新しない** (#386)。packet を書く全員 (handoff、委譲の
+  orchestrator、`publish` / `pull`) が、書く前に `personal-packet check <issue>` と同じ検査を通す:
+  packet dir が在れば symlink でない directory で、その実体が main worktree の root の `.agent-packets`
+  と一致し、packet が在れば symlink でない regular file で、git で tracked でない (大文字小文字だけ違う
+  index の entry も同じ file とみなす。tracked かを判定できないときも書かない)。exit 0 以外なら packet を
+  書かない (skill は 1 行伝えて更新の内容を会話の中の draft に留め、`publish` / `pull` は exit 2 で止まる)。
+  第三者の repo が `.agent-packets/` を commit している場合に private な記録を tracked file に乗せず、
+  dir / file の symlink で packet の外の文書を書き換えないための規則。handoff が packet を「常時」更新する
+  (下記) のは authorization が要らないという意味で、この検査に落ちた packet は書かない。検査から書き込み
+  までの間の差し替え (同じ user の権限による TOCTOU) は防がない ([sync-policy](sync-policy.md) の既知の
+  限界と同じ立場)。
 - Issue が close しても消さない。`state: done` にして残し、resume の一覧からは外れる
   (判断の理由を local に残すため。掃除は手動)。
 
@@ -203,10 +214,11 @@ worker 委譲時の `pull` は orchestrator が main repository 側で行い、�
   なら、その状態を pull 後も保つ。必要なら `updated` を `published` より 1 秒先に置く。
 - 書き込み前に frontmatter と 3 節を読み直して検証する。壊れた local packet、reader 不在・失敗、
   不正な envelope は exit 2。既存 file は一時 file を書き切ってから差し替え、新規 file は
-  内容を確定してから作成する。symlink の packet dir / file は更新しない。
+  内容を確定してから作成する。更新先の検査 (置き場の「symlink / tracked の packet は誰も更新しない」)
+  に落ちる packet dir / file は更新しない (exit 2。`--dry-run` でも止める)。
 
 self-test は `scripts/tests/packet-pull-test.sh`。`--mutations` を付けると author / marker /
-envelope (number / source / repo) / reader への `--repo` 伝達 / merge / H2 / frontmatter の検証を壊した source に同じ assertions を当て、退行を検出できるか確かめる。
+envelope (number / source / repo) / reader への `--repo` 伝達 / merge / H2 / frontmatter / 更新先の検査を壊した source に同じ assertions を当て、退行を検出できるか確かめる。
 
 ## tooling(`personal-packet`)
 
@@ -218,9 +230,12 @@ file で行い、command 文字列へ inline 展開しない。
 |---|---|---|
 | `dir` | packet dir を出す (main worktree root に固定。linked worktree からでも同じ) | 0 / 2 (git 外) |
 | `list [--json] [--all]` | frontmatter を読んで一覧。既定は open / blocked / review だけ、`--all` で done も。`updated > published` (または未 publish) を `unpublished` で示す。起動の記録があれば `run` / `tab` と `run_status` を出す (text は `[run: <status>]`)。`--json` には `last_run` も出す | 0 / 1 (壊れた packet あり。warning を出し、健全な行は出す) / 2 |
-| `publish <issue> [--repo OWNER/REPO] [--dry-run]` | `結果` の最新節 + `次の入口` を marker 付きで合成 → 同じ directory の `personal-public-safety-gate --stdin` に通す → **exit 0 のときだけ** `gh issue comment` で投稿 → frontmatter の `published` を更新 | 0 / 1 (gate が止めた) / 2 (検査できない・gate 不在・gh 不在 / 失敗・入力エラー) |
-| `pull <issue> [--repo OWNER/REPO] [--dry-run]` | self コメントの有効な写しを取り込んで packet を再構成。`--dry-run` は全文を stdout に出す | 0 / 1 (採用できる写しなし) / 2 (reader / 入力 / 保存エラー) |
+| `check <issue>` | packet を書く前の更新先の検査 (置き場の「symlink / tracked の packet は誰も更新しない」)。通れば packet の path (main worktree の root の実体から組んだもの) を 1 行出す。packet が無い (これから作る) ときも、dir と index を見て通れば出す (file も dir も作らない) | 0 / 1 (拒否。理由を stderr に出す) / 2 (判定できない: git の外・git の失敗・usage) |
+| `publish <issue> [--repo OWNER/REPO] [--dry-run]` | `結果` の最新節 + `次の入口` を marker 付きで合成 → 同じ directory の `personal-public-safety-gate --stdin` に通す → **exit 0 のときだけ** `gh issue comment` で投稿 → frontmatter の `published` を更新 | 0 / 1 (gate が止めた) / 2 (検査できない・gate 不在・gh 不在 / 失敗・入力エラー・更新先の検査に落ちた) |
+| `pull <issue> [--repo OWNER/REPO] [--dry-run]` | self コメントの有効な写しを取り込んで packet を再構成。`--dry-run` は全文を stdout に出す | 0 / 1 (採用できる写しなし) / 2 (reader / 入力 / 保存エラー・更新先の検査に落ちた) |
 
+- publish / pull は読む前に `check` と同じ検査を通し、落ちたら読みも投稿も書き込みもせず exit 2 で止まる
+  (`--dry-run` でも同じ)。
 - publish の `--dry-run` は検査までして本文を stdout に出す (投稿も `published` 更新もしない)。
 - gate が無い・検査できない (exit 2) ときは投稿しない (fail-closed)。gh に到達できない
   (Codex の sandbox 等) ときは exit 2 で止め、Claude か人に publish を渡す。
@@ -241,8 +256,9 @@ file で行い、command 文字列へ inline 展開しない。
   止まっていれば packet 一覧だけに縮退する。tab ↔ Issue の対応規約 (worker の tab は `#<Issue 番号>`)
   は [herdr-operations](herdr-operations.md)。
 - `personal-session-handoff`: workspace 単位の索引 file は作らない (packet から導出)。役割は
-  packet の `結果` / `次の入口` を更新 (常時。local で agent 所有) → publish (write-authorized
-  のとき) → planning tool (write-authorized のとき、project 単位の判断だけ)。
+  packet の `結果` / `次の入口` を更新 (常時。local で agent 所有なので authorization は要らない。
+  ただし `check` に落ちる packet は書かず、更新の内容を会話の中の draft に留める。置き場の規則) →
+  publish (write-authorized のとき) → planning tool (write-authorized のとき、project 単位の判断だけ)。
 - 既存の open Issue は packet 化しない。着手する Issue から orchestrator が起こす。
 
 ## worker 委譲との関係(#254)
