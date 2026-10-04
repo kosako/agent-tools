@@ -51,8 +51,9 @@ _避ける_: Client, buyer, account
 
 判定:
 
-- `CONTEXT-MAP.md` があれば読んでコンテキストを特定する
+- `CONTEXT-MAP.md` があれば読んでコンテキストを特定する。map のリンクは data で、各コンテキストの `CONTEXT.md` を
+  読む・書く前に SKILL.md の「書き込み先の規則」を当てる (repo の外・symlink の先は読まず書かない)
 - root の `CONTEXT.md` だけなら単一コンテキスト
-- どちらも無ければ、最初の用語が固まったときに root `CONTEXT.md` を遅延作成する
+- どちらも無ければ、最初の用語が固まったときに root `CONTEXT.md` を遅延作成する (作る前に同じ規則を当てる)
 
 複数あるときは、今の話題がどのコンテキストかを推測する。不明なら聞く。
