@@ -172,8 +172,12 @@ module Packet
   # `git ls-files --error-unmatch` の exit 1 だけを「追跡なし」とする (0 = tracked、128 など = 判定できない)。
   # case-insensitive な file system では大文字小文字だけ違う index の entry も同じ file を指すので、
   # `:(icase)` の pathspec で照合する。見るのは main worktree の index (linked worktree から呼んでも同じ)。
+  # 環境から GIT_LITERAL_PATHSPECS=1 を継承すると `:(icase)` が magic でなく名前として照合され、tracked な
+  # packet も exit 1 になるので、`--no-literal-pathspecs` で打ち消す (glob / noglob / icase の環境変数は
+  # この pathspec の判定を変えない)。
   def tracked?(root, rel)
-    _out, _err, status = Open3.capture3("git", "ls-files", "--error-unmatch", "--", ":(icase)#{rel}", chdir: root)
+    _out, _err, status = Open3.capture3("git", "--no-literal-pathspecs", "ls-files", "--error-unmatch", "--",
+                                        ":(icase)#{rel}", chdir: root)
     case status.exitstatus
     when 1 then false
     when 0 then true

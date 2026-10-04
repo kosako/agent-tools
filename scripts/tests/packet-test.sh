@@ -796,6 +796,21 @@ cp "$trk/.agent-packets/7.md" "$tmp/chk-tracked.bak"
 expect_refused "$trk" 7 "tracked packet" "tracked です"
 expect_publish_refused "$trk" 7 "tracked packet"
 cmp -s "$tmp/chk-tracked.bak" "$trk/.agent-packets/7.md" || fail "publish must not modify a tracked packet"
+# (d) pathspec の大域設定 (GIT_*_PATHSPECS) を環境から継承しても判定は変わらない
+# (GIT_LITERAL_PATHSPECS=1 だと `:(icase)` が magic でなく名前として照合され、tracked でも exit 1 になる)
+for pathspec_env in GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS; do
+  set +e
+  (cd "$trk" && env "$pathspec_env=1" "$pkt" check 7 > "$tmp/chk.out" 2> "$tmp/chk.err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "check (tracked packet with $pathspec_env=1 inherited) should refuse with exit 1 (rc=$rc): $(cat "$tmp/chk.err")"
+  grep -q "tracked です" "$tmp/chk.err" || fail "check (tracked packet with $pathspec_env=1 inherited) should say tracked: $(cat "$tmp/chk.err")"
+  set +e
+  (cd "$chk" && env "$pathspec_env=1" "$pkt" check 7 > "$tmp/chk.out" 2> "$tmp/chk.err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "check (untracked packet with $pathspec_env=1 inherited) should pass (rc=$rc): $(cat "$tmp/chk.err")"
+done
 rm "$trk/.agent-packets/7.md"
 expect_refused "$trk" 7 "tracked packet removed from the worktree" "tracked です"
 # (d) 大文字小文字だけ違う名前で tracked (case-insensitive な file system では同じ file)
