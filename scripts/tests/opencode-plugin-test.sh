@@ -2,8 +2,9 @@
 # shared/plugins/personal-agent-tools.js (OpenCode plugin, #295 PR 1 / PR 2) の self-test。
 # build.sh で tmp の最小 fixture から生成した plugin (marker 行つき) を node で import し、
 # server(fakeCtx, {timeoutMs}) が返す hooks 経由で safe-gh の注記、品質ループ (fast-edit-check /
-# changed-scope-qa)、fail-open を確かめる (node 側: lib/opencode-plugin-test.mjs)。hook script は
-# shared/scripts の実物を tmp の home に置いて呼ぶ。check は tmp の git repo と記録つきの fake を使う。
+# changed-scope-qa)、fail-open、init の目印の行 (#343) を確かめる (node 側: lib/opencode-plugin-test.mjs)。
+# hook script は shared/scripts の実物を tmp の home に置いて呼ぶ。check は tmp の git repo と記録つきの
+# fake を使う。目印の行の build_id の期待値は、生成物の 1 行目を実装の PluginMarker.owned で読んだ値。
 # 実物の tool home も network も使わない。node が無ければ fail にする (skip にしない)。
 # 生成物は ESM 構文の .js なので、隣に {"type":"module"} の package.json を置いてモジュール形式を明示し、
 # Node の構文の自動判定と祖先の package.json に頼らない (#396)。
@@ -17,6 +18,7 @@ node_cases="$script_dir/lib/opencode-plugin-test.mjs"
 hook_source="$repo_root/shared/scripts/personal-safe-gh-hook.rb"
 fast_edit_source="$repo_root/shared/scripts/personal-fast-edit-check.rb"
 qa_source="$repo_root/shared/scripts/personal-changed-scope-qa.rb"
+plugin_marker_lib="$repo_root/scripts/lib/plugin_marker.rb"
 
 command -v node >/dev/null 2>&1 || fail "node is required (the plugin cases run with node)"
 for source in "$hook_source" "$fast_edit_source" "$qa_source"; do
@@ -44,18 +46,26 @@ generated="$fixture/generated/opencode/plugins/personal-agent-tools.js"
 [ -f "$generated" ] || fail "missing generated plugin"
 head -1 "$generated" | grep -q '^/\* agent-tools:managed v=1 repo=agent-tools name=personal-agent-tools target=opencode artifact_kind=plugin ' \
   || fail "generated plugin must start with the plugin marker: $(head -1 "$generated")"
+# 目印の行 (#343) が載せるべき build_id。plugin の JS の解析ではなく、実装の Ruby の解析で読む。
+build_id=$(ruby -r"$plugin_marker_lib" -e '
+  marker = PluginMarker.owned(File.binread(ARGV[0]), target: "opencode", name: "personal-agent-tools")
+  abort "the generated plugin has no marker of its own" if marker.nil?
+  puts marker["build_id"]
+' "$generated") || fail "cannot read the build_id of the generated plugin"
+printf '%s\n' "$build_id" | grep -Eq '^sha256:[0-9a-f]{64}$' \
+  || fail "the generated marker must carry a full sha256 build_id: $build_id"
 echo "ok build fixture"
 
 # --- 2. node の case (入口経由。HOME は node 側が case ごとに tmp へ向ける) ---
 # import する生成物の隣に {"type":"module"} の package.json を置いて、モジュール形式を明示する (#396)。
 printf '{"type":"module"}\n' > "$fixture/generated/opencode/plugins/package.json"
 mkdir -p "$tmp/work"
-node "$node_cases" "$generated" "$hook_source" "$fast_edit_source" "$qa_source" "$tmp/work" \
+node "$node_cases" "$generated" "$hook_source" "$fast_edit_source" "$qa_source" "$tmp/work" "$build_id" "$plugin_marker_lib" \
   || fail "node cases failed"
 # 構文の自動判定の無い Node の再現 (flag を受け付ける Node のときだけ。work dir は分ける)。
 if no_detect=$(node_options_without_detect_module); then
   mkdir -p "$tmp/work-no-detect"
-  NODE_OPTIONS=$no_detect node "$node_cases" "$generated" "$hook_source" "$fast_edit_source" "$qa_source" "$tmp/work-no-detect" \
+  NODE_OPTIONS=$no_detect node "$node_cases" "$generated" "$hook_source" "$fast_edit_source" "$qa_source" "$tmp/work-no-detect" "$build_id" "$plugin_marker_lib" \
     || fail "node cases failed without the syntax detection (NODE_OPTIONS=$no_detect)"
   echo "ok node cases without the syntax detection"
 else

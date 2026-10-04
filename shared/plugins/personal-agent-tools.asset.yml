@@ -8,12 +8,12 @@ risk:
   prompt_injection: low
   privacy: low
 # plugin kind は OpenCode の process の中で動く実行コード配布のため常に human review 必須 (#295)。
-# 本 plugin は #295 PR 1 で author≠reviewer レビューのうえ承認し、PR 2 (品質ループ) と PR 3a (目印) で
-# 再レビューする。承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
-# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+# 本 plugin は #295 PR 1 で author≠reviewer レビューのうえ承認し、PR 2 (品質ループ) と PR 3a (目印)、
+# #343 (init の目印の行) で再レビューする。承認は内容と配布形態に紐づく (#148, #184)。source 変更時は
+# 再レビューして approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:f0638cab959c04be622c8e8187b0f430dfda57b2946024a5e16c3aa1329a0dfa
+  approved_build_id: sha256:a634f35a35a79197b3dbfc03794bce9da995f94ab0b7342f88dd7c6787c5df47
   approved_artifact_kind: plugin
 source:
   path: shared/plugins/personal-agent-tools.js
@@ -30,6 +30,9 @@ summary: >-
   (model を続けさせる API と toast は使わない)。目印: 記録専用の before で覚えた model の bash の callID に
   だけ、shell.env で AGENT_TOOLS_OPENCODE=1 を立て、CLAUDECODE / CODEX_THREAD_ID / CODEX_SANDBOX を空にする
   (personal-ai-trailer-gate が OpenCode の commit を見分けるため。人が打つ ! と PTY には立てない)。
+  init の目印: server() が hooks を組み終えた時点で、client.app.log に level info で
+  `agent-tools:plugin-init v=1 name=personal-agent-tools build_id=<自分の file の marker の build_id か unknown>`
+  を 1 回だけ出す (dotfiles の doctor が読込の成功を確かめる公開契約。log と build_id の読み取りは fail-open)。
   fail-open (script が無い / 実行できない / 非 0 / 非 JSON / timeout はすべて無変更・無報告で、warn を
   script ごとに 1 回だけ client.app.log に出す) で、
   steering であって enforcement ではない。--pure で外せる。

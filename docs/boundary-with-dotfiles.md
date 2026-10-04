@@ -79,9 +79,11 @@ OpenCode の tool home (`<opencode home>`。既定 `~/.config/opencode`) は複�
   (catalog に残る限り prune は消さず、既定は dry-run)。
 - **doctor の分担**: agent-tools の doctor が見るのは「自分が置いた `plugins/personal-*.js` があり、
   先頭行の marker が正しいこと」と、既定 home (`~/.config/opencode`) と `$XDG_CONFIG_HOME/opencode`
-  の食い違い (`--opencode-home` を省いたときだけ warn) まで。OpenCode が plugin を実際に読み込んだか
-  (起動 log の "Failed to load plugin")、二重読込 (単数形の `plugin/` dir、同名の `.ts`、global と
-  project の両方への配置) の判定は dotfiles の doctor が持つ。
+  の食い違い (`--opencode-home` を省いたときだけ warn) まで。OpenCode が plugin を実際に読み込んで init を
+  終えたか (下記「OpenCode plugin の init の目印」の行で判定する) と、二重読込 (単数形の `plugin/` dir、
+  同名の `.ts` / `.mjs`、設定 file の `plugin` 欄、global と project の両方への配置) の判定は dotfiles の
+  doctor が持つ。どちらの doctor も OpenCode を起動しない (`opencode debug config` も実行のたびに OpenCode の
+  DB へ書き込む (1.18.30 の dotfiles 側の実測) ので、report-only の検査には使わない)。
 - **instruction の公開契約**: `~/.claude/agent-tools/CLAUDE.md` は dotfiles の `opencode.json` の
   `instructions` から参照される。OpenCode は `~/.claude/CLAUDE.md` を直接読む
   ([opencode-plugin-probe](opencode-plugin-probe.md) の M15) が、この path も script の配備先と
@@ -91,6 +93,60 @@ OpenCode の tool home (`<opencode home>`。既定 `~/.config/opencode`) は複�
   解決して無改変で呼ぶ (script kind は tool ごとに置き場を変えられないため。custom の claude home
   には対応しない)。よって OpenCode で plugin を効かせるには、claude-code target の sync も済んで
   いる必要がある。script が無ければ plugin は no-op (fail-open) で、OpenCode を止めない。
+
+## OpenCode plugin の init の目印 (#343)
+
+OpenCode が plugin を実際に読み込んで init を終えたかは、OpenCode を起動しない静的な検査では分からない。
+そこで plugin `personal-agent-tools` は init を終えた時点で目印の行を OpenCode の log に出し、dotfiles の
+doctor が既にある log を読んで判定する。以下は **公開契約**で、agent-tools は変更を breaking change として
+扱う (dotfiles 側の reader の更新と同期するまで旧い形を壊さない)。
+
+- **行の形**: `client.app.log` に service `personal-agent-tools`・level `info` で、次の 1 行を message として
+  渡す。token は単一の空白区切りで、この順に並び、ほかの token を持たない。
+
+  ```text
+  agent-tools:plugin-init v=1 name=personal-agent-tools build_id=sha256:<64 桁の小文字 hex>
+  ```
+
+  | 部分 | 意味 |
+  | --- | --- |
+  | `agent-tools:plugin-init v=1` | 固定の接頭辞。`v` は行の形の版で、形を変えるときは版を上げる (旧い reader は新しい版の行を目印とみなさず、未確認に倒れる) |
+  | `name=` | plugin の名前 (asset 名 = 配置した file の basename = marker の `name`)。今は `personal-agent-tools` だけ |
+  | `build_id=` | plugin の module を読み込んだ時点で、配置された自分の file の 1 行目の marker ([Status / Manifest Contract](status-manifest-contract.md) の plugin marker。build が前置する) から読んだ `build_id`。marker が無い・`PluginMarker.owned` が拒否する形・`sha256:` + 64 桁の小文字 hex でない・file として読めないときは `unknown` |
+
+  secret、path (directory を含む)、session の内容、env は載せない。
+- **出す時点**: `server()` が hooks の object を組み終えて return する直前に 1 回。行が示すのは「`server()` が
+  return まで到達した」ことまでで、return の後に OpenCode 側で起きる失敗は含まない。`server()` が途中で throw
+  したとき (options の誤りなど) は出さない (失敗を示す行も無い)。
+- **回数**: `server()` の 1 回の呼び出しに 1 行。OpenCode は directory の instance ごとに `server()` を呼ぶ
+  (source の読みでは instance を作り直したときも呼ぶ。未実測) ので、1 つの process から複数の行が出うる。
+  行の数に意味を持たせない。build_id は module の読込の時点で 1 回だけ読むので、同じ process の中では、後から
+  sync が file を置き換えても読み込み済みの code の build_id を出し続ける (OpenCode が file を読み込んでから
+  plugin が同じ file を読み直すまでの短い間に置き換わったときだけ食い違いうる)。
+- **fail-open**: log は待たず、client が無い・`app.log` が throw / reject するときも握って hooks を返す。build_id の
+  読み取りの失敗も `unknown` に倒すだけで、どちらも plugin の動作を止めない。そのため行が無いことは init の失敗の
+  証拠にならない。
+- **出る場所 (OpenCode の持ち物)**: `client.app.log` は OpenCode の log file に書かれる (1.18.30 では
+  `<data>/opencode/log/opencode.log`。[opencode-plugin-probe](opencode-plugin-probe.md) の M11)。log file の場所・
+  rotate・message を囲む行の形は OpenCode のもので、この契約に含めない (OpenCode を更新したら実機で確かめる)。
+  1.18.30 の行には service 名が出ない ([quality-loop-hooks](quality-loop-hooks.md)) ので、reader は message の
+  接頭辞で探す。level は INFO なので、`--log-level` で WARN / ERROR に絞った起動では書かれない (source の読み。
+  未実測)。
+- **doctor の判定 (reader は dotfiles)**: 「確認できた」とするのは、log の中でいちばん新しい
+  `name=personal-agent-tools` の目印の行の build_id が、いま配置されている `plugins/personal-agent-tools.js` の
+  1 行目の marker の build_id と一致するときだけ。次はどれも「未確認」とし、成功とも失敗とも言わない。
+
+  | 状態 | 例 |
+  | --- | --- |
+  | 未起動 | log file が無い (OpenCode をまだ起動していない) |
+  | 証跡なし | log はあるが目印の行が無い (`--pure` での起動、INFO より上の log level、log の rotate、`server()` の throw、log の失敗) |
+  | build_id 不一致 | いちばん新しい行の build_id が配置中の marker と違う (配置の後にまだ起動していない、旧い版を読み込んだままの process の行) |
+  | 読めない行 | build_id が `unknown`、行が契約の形でない (接頭辞の版が違うものを含む) |
+
+  限界 (honest-label): 行は「この build で `server()` が return まで到達した起動が過去にあった」ことの証拠で、
+  直近の起動が成功した証拠ではない。同じ build の過去の行が残っていれば、その後の起動が init に失敗しても
+  「確認できた」になる。doctor は判定と build_id だけを報告し、log の行の全文や過去の log を出さない。
+  OpenCode を起動して確かめることもしない。
 
 ## Codex の review / worker 用 profile file (#339)
 
