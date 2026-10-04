@@ -13,7 +13,8 @@ description: session の到達点・判断・未完・次回入口を handoff �
 - 副作用: external knowledge write は write intent と具体的な記録先の両方が trusted な指示で確定した
   場合だけで、それ以外は会話内 draft に止める。`.agent-context.local.md` は常に read-only で、note
   由来の記録先は確認前の候補に限る。この session の Issue の packet (`.agent-packets/<issue>.md`、
-  local で agent 所有) の更新は external write ではなく常に行う。Issue コメントへの publish は
+  local で agent 所有) の更新は external write ではなく常に行う (手順 1.5 の更新先の検査に落ちた
+  packet は書かず、内容を draft に留める)。Issue コメントへの publish は
   external write なので write-authorized のときだけ。
 - 組み合わせ: 再開時は personal-resume-project、置き場所判断は personal-project-operating-loop。
 
@@ -63,6 +64,18 @@ CLI / file write を行いません。
 - **次の一手**: 次回まず着手すべきこと。複数あれば推奨を 1 つ。
 
 ### 1.5. packet を更新する (local、常に)
+
+更新の前に、配備済みの `personal-packet` で更新先を検査します:
+
+```sh
+"$packet_cli" check "$issue"
+```
+
+(`$packet_cli` は `<tool home>/agent-tools/scripts/personal-packet`、`$issue` は数字だけの Issue 番号。
+どちらも shell literal 化した変数で渡し、command 文字列へ埋め込まない。) exit 0 なら出力の path が
+更新先です。exit 0 以外 (1 = symlink / git で tracked などで拒否、2 = 判定できない。実行できないときも
+同じ) なら packet を書かず、理由を 1 行伝えて、下の更新の内容は会話の中の draft に留めます (規約の
+置き場の「symlink / tracked の packet は誰も更新しない」)。
 
 この session で進めた Issue に packet (`.agent-packets/<issue>.md`。dir は配備済みの
 `personal-packet dir`、規約は agent-tools の `docs/agent-packets.md`) があれば、手順 1 の整理を
@@ -158,7 +171,8 @@ agent はこのファイルを **書き換えません (read-only)**。代わり
 - draft / no-write で external knowledge sink を更新しない (packet の local 更新はこの制限の対象外、
   Issue コメントへの publish は対象)。
 - workspace 単位の索引 file を作らない (一覧は resume が packet から導出する)。packet の `依頼` を
-  書き換えない。reviewer として `次の入口` を上書きしない。
+  書き換えない。reviewer として `次の入口` を上書きしない。`personal-packet check` に落ちた packet には
+  書かない。
 - write intent だけを、note 由来の未確認 destination へ書く許可に広げない。
 
 ## 例

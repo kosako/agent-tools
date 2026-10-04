@@ -11,6 +11,9 @@
 #       起動の記録 (run / tab) があれば run dir の状態 (run_status) も出す (stat だけの read-only)。
 #       --json には最後の run dir (last_run) も出す。
 #       壊れた packet は warning を出して飛ばし、最後に exit 1 (一覧自体は出す)。
+#   personal-packet check <issue>
+#       packet を書く前の更新先の検査 (#386)。通れば packet の path を 1 行出して exit 0、拒めば理由を
+#       出して exit 1、判定できなければ exit 2。publish / pull も書く前に同じ検査を通す。
 #   personal-packet publish <issue> [--repo OWNER/REPO] [--dry-run]
 #       `## 結果` の最新節 + `## 次の入口` を marker 付きで 1 コメントにまとめ、同じ directory の
 #       personal-public-safety-gate (--stdin) に通し、exit 0 のときだけ `gh issue comment` で
@@ -24,7 +27,8 @@
 # 投稿しない (fail-closed)。gh に到達できない環境 (Codex の sandbox 等) では exit 2 で止め、
 # Claude か人に publish を渡す。gate も gh も best-effort guardrail で enforcement boundary ではない。
 #
-# exit: 0 = 成功 / 1 = gate 拒否 (publish)・壊れた packet (list)・写しなし (pull) / 2 = 入力・構成・gh エラー
+# exit: 0 = 成功 / 1 = gate 拒否 (publish)・壊れた packet (list)・写しなし (pull)・更新先の拒否 (check) /
+#       2 = 入力・構成・gh エラー (publish / pull が更新先の検査で止まったときも 2)
 #
 # 外部依存ゼロ (ruby 標準ライブラリと gh CLI のみ)。値の受け渡しは argv / file で行い、shell
 # 文字列を組まない。
@@ -51,12 +55,20 @@ module Packet
   REPO_RE = %r{\A[\w.-]+/[\w.-]+\z}.freeze
   FILE_RE = /\A(\d+)\.md\z/.freeze
   FRONT_RE = /\A---\n(.*?\n)---\n(.*)\z/m.freeze
+  # repository / index の選び方を変える git の環境変数 (#386)。継承していると、check が見る main worktree /
+  # index と書き込み先がずれうる (別の index を指す GIT_INDEX_FILE なら tracked な packet も追跡なしに
+  # 見える) ので、1 つでも在れば check は判定できないとして止める (fail-closed)。
+  GIT_REPO_ENV = %w[GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
+                    GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE].freeze
 
   # 入力・構成のエラー (exit 2)。message は公開してよい内容に限る (packet 本文を含めない)。
   class Error < StandardError; end
   # gate が definite finding で止めた (exit 1)。診断は gate 自身が stderr に出している。
   class Rejected < StandardError; end
   class NoCopy < StandardError; end
+  # packet の更新先が検査を通らない (#386)。check は exit 1、書き込む subcommand (publish / pull) は
+  # Error と同じ exit 2 で止まる。
+  class Unsafe < Error; end
 
   # run / tab は worker の起動の記録 (#315)。書くのは orchestrator だけで、publish の写しには載せない
   # (run は local の path)。last_run は完了の転記で run を消すときに移す最後の run dir (#325)。clone の
@@ -105,6 +117,102 @@ module Packet
     File.join(File.dirname(common), DIR_NAME)
   rescue SystemCallError
     raise Error, "git を起動できません"
+  end
+
+  # ---- 更新先の検査 (check) ---------------------------------------------------
+
+  # packet を書く前の検査 (#386)。packet を書く全員 (handoff と委譲の orchestrator は check の subcommand、
+  # publish / pull は内部で) がここを通る。規則の正本は docs/agent-packets.md の「置き場」:
+  #   (a) packet dir が在れば、symlink でない directory
+  #   (b) packet dir の実体が main worktree の root の .agent-packets と一致し、在れば dir の中から見た git の
+  #       worktree の root も main worktree の root と一致する (submodule / 入れ子の repository でない)
+  #   (c) packet が在れば、symlink でない regular file
+  #   (d) packet が git で tracked でない (大文字小文字だけ違う index の entry も同じ file とみなす)。packet
+  #       dir 自体にも tracked な entry (submodule の gitlink を含む) が無い
+  # 拒むときは Unsafe、判定できないときは Error。repository / index の選び方を変える環境変数を継承している
+  # ときも、判定の対象が書き込み先とずれうるので Error にする。通れば検査した packet の path (main worktree の
+  # root の実体から組んだもの) を返す。packet が無い (これから作る) ときも (d) まで見る (index に残った
+  # entry を作り直さない)。検査から書き込みまでの間の差し替え (同じ user の権限による TOCTOU) は防がない
+  # (docs/sync-policy.md の #149 と同じ立場)。
+  def check_target!(dir, issue)
+    inherited = GIT_REPO_ENV.select { |k| ENV.key?(k) }
+    unless inherited.empty?
+      raise Error, "#{inherited.join(' / ')} を継承しているので packet の更新先を判定できません (外して実行してください)"
+    end
+
+    dir_st = lstat_or_nil(dir)
+    raise Unsafe, "#{dir}: packet dir が symlink です" if dir_st&.symlink?
+    raise Unsafe, "#{dir}: packet dir が directory ではありません" if dir_st && !dir_st.directory?
+
+    root = main_worktree_root
+    expected = File.join(root, DIR_NAME)
+    actual = dir_st ? File.realpath(dir) : File.join(File.realpath(File.dirname(dir)), File.basename(dir))
+    unless actual == expected
+      raise Unsafe, "#{dir}: packet dir の実体が main worktree の root の #{DIR_NAME} (#{expected}) と一致しません"
+    end
+    if dir_st && worktree_root_of(expected) != root
+      raise Unsafe, "#{expected}: packet dir が main worktree とは別の git の worktree です (submodule / 入れ子の repository)"
+    end
+
+    name = "#{issue}.md"
+    path = File.join(expected, name)
+    st = lstat_or_nil(path)
+    raise Unsafe, "#{path}: packet が symlink です" if st&.symlink?
+    raise Unsafe, "#{path}: packet が regular file ではありません" if st && !st.file?
+    raise Unsafe, "#{path}: packet が git で tracked です (packet は git 管理しない)" if tracked?(root, "#{DIR_NAME}/#{name}")
+    if tracked?(root, DIR_NAME)
+      raise Unsafe, "#{expected}: packet dir に git で tracked な entry があります (submodule の gitlink を含む。packet は git 管理しない)"
+    end
+
+    path
+  rescue SystemCallError => e
+    raise Error, "packet の更新先を確かめられません (#{e.class})"
+  end
+
+  def lstat_or_nil(path)
+    File.lstat(path)
+  rescue Errno::ENOENT
+    nil
+  end
+
+  # git が main worktree とみなす path (`git worktree list --porcelain` の先頭の項) の実体。linked worktree
+  # から呼んでも main の path が出る。bare (main worktree が無い) は拒む。
+  def main_worktree_root
+    out, _err, status = Open3.capture3("git", "worktree", "list", "--porcelain")
+    raise Error, "main worktree を判定できません (git worktree list が失敗しました)" unless status.success?
+
+    block = out.split("\n\n", 2).first.to_s.lines.map(&:chomp)
+    raise Error, "main worktree を判定できません" unless block.first.to_s.start_with?("worktree ")
+    raise Unsafe, "bare repository には main worktree がありません" if block.include?("bare")
+
+    File.realpath(block.first.sub(/\Aworktree /, ""))
+  end
+
+  # dir の中から見た git の worktree の root の実体。packet dir が submodule や入れ子の repository なら
+  # main worktree の root と違う値になる (その中の packet は親の index に載らないので (d) では見えない)。
+  def worktree_root_of(dir)
+    out, _err, status = Open3.capture3("git", "rev-parse", "--show-toplevel", chdir: dir)
+    unless status.success?
+      raise Error, "packet dir の git の worktree を判定できません (git rev-parse: exit #{status.exitstatus.inspect})"
+    end
+
+    File.realpath(out.chomp)
+  end
+
+  # `git ls-files --error-unmatch` の exit 1 だけを「追跡なし」とする (0 = tracked、128 など = 判定できない)。
+  # case-insensitive な file system では大文字小文字だけ違う index の entry も同じ file を指すので、
+  # `:(icase)` の pathspec で照合する。見るのは main worktree の index (linked worktree から呼んでも同じ)。
+  # 環境から GIT_LITERAL_PATHSPECS=1 を継承すると `:(icase)` が magic でなく名前として照合され、tracked な
+  # packet も exit 1 になるので、`--no-literal-pathspecs` で打ち消す (glob / noglob / icase の環境変数は
+  # この pathspec の判定を変えない)。
+  def tracked?(root, rel)
+    _out, _err, status = Open3.capture3("git", "--no-literal-pathspecs", "ls-files", "--error-unmatch", "--",
+                                        ":(icase)#{rel}", chdir: root)
+    case status.exitstatus
+    when 1 then false
+    when 0 then true
+    else raise Error, "packet が git で tracked かを判定できません (git ls-files: exit #{status.exitstatus.inspect})"
+    end
   end
 
   # ---- parse -----------------------------------------------------------------
@@ -492,6 +600,8 @@ module Packet
   end
 
   def publish(dir, issue, repo:, dry_run:)
+    # 更新先の検査 (#386)。拒んだら読みも投稿もしない (投稿だけ済んで packet を更新できない経路を作らない)
+    check_target!(dir, issue)
     path = File.join(dir, "#{issue}.md")
     raise Error, "#{path} がありません" unless File.file?(path)
 
@@ -727,10 +837,9 @@ module Packet
   end
 
   def pull(dir, issue, repo:, dry_run:)
+    # 更新先の検査 (#386。symlink / tracked の packet dir / file は更新しない)。--dry-run でも止める
+    check_target!(dir, issue)
     path = File.join(dir, "#{issue}.md")
-    if File.symlink?(dir) || File.symlink?(path) || (File.exist?(path) && !File.file?(path))
-      raise Error, "packet dir / file は symlink でない directory / 通常 file にしてください"
-    end
     local = File.exist?(path) ? parse(path) : nil
     envelope = read_issue("comments", issue, repo)
     raise Error, "#{READER_NAME} の comments が配列ではありません" unless envelope["comments"].is_a?(Array)
@@ -775,10 +884,12 @@ module Packet
     <<~USAGE
       usage: personal-packet dir
              personal-packet list [--json] [--all]
+             personal-packet check <issue>
              personal-packet publish <issue> [--repo OWNER/REPO] [--dry-run]
              personal-packet pull <issue> [--repo OWNER/REPO] [--dry-run]
 
       作業単位 (Issue) ごとの packet .agent-packets/<issue>.md を扱う (docs/agent-packets.md)。
+      check は packet を書く前の更新先の検査 (exit 0 で path を出す / 1 = 拒否 / 2 = 判定できない)。
       publish は同じ directory の personal-public-safety-gate --stdin が exit 0 のときだけ投稿する。
     USAGE
   end
@@ -819,6 +930,24 @@ module Packet
       end
       broken.each { |msg| warn "personal-packet: warning: #{msg}" }
       broken.empty? ? 0 : 1
+    when "check"
+      issue = nil
+      rest.each do |a|
+        raise Error, "unknown option: #{a}" if a.start_with?("-")
+        raise Error, "issue は 1 つだけ指定してください" if issue
+
+        issue = a
+      end
+      raise Error, "issue 番号 (数字) を指定してください" unless issue&.match?(ISSUE_RE)
+      raise Error, "issue 番号は正の整数にしてください" unless issue.to_i.positive?
+
+      begin
+        puts check_target!(packet_dir, issue.to_i)
+      rescue Unsafe => e
+        warn "personal-packet: refused: #{e.message}"
+        return 1
+      end
+      0
     when "publish", "pull"
       issue = nil
       repo = nil

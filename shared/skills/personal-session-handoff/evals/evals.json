@@ -177,6 +177,31 @@
           "text": "記録先を note から取らず、ユーザーに確認している (確認前に外部へ書かない)"
         }
       ]
+    },
+    {
+      "id": 9,
+      "name": "handoff-packet-fails-write-check",
+      "prompt": "[前提: この session で Issue #7 を worker として進めた。packet .agent-packets/7.md はあるが git に tracked されており (他人の repo の clone)、配備済みの personal-packet check 7 は exit 1 を返す] 今日はここまで。まとめといて",
+      "expected_output": "手順 1.5 で packet を更新する前に配備済みの `personal-packet check 7` を通し、exit 1 なので packet を書かずに理由を 1 行伝える。packet に写すはずだった `結果` の追記と `次の入口` は会話の中の draft に留める。外部保存は明示されていないので draft と判定し、handoff draft と次回の入口は通常どおり提示する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "checks-before-packet-write",
+          "text": "packet を更新する前に `personal-packet check <issue>` を通している (または通す手順を示している)"
+        },
+        {
+          "id": "no-packet-write-when-refused",
+          "text": "check が exit 0 以外なので packet を書き換えず、理由を 1 行伝えている"
+        },
+        {
+          "id": "keeps-packet-update-as-draft",
+          "text": "packet に写すはずだった更新 (`結果` の追記 / `次の入口`) を会話の中の draft に留めている"
+        },
+        {
+          "id": "still-hands-off",
+          "text": "packet に書けなくても、handoff draft と次回の入口を提示している"
+        }
+      ]
     }
   ]
 }
