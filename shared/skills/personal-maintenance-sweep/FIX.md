@@ -104,7 +104,8 @@ fix モードは明示されたときだけです (「監査して、docs のず
 
 ## 検証 (累積差分に対して)
 
-commit のあと、`base` から branch の `HEAD` までの累積差分に対して行います (最後の commit だけを見ない)。
+commit のあと、`base` から branch の `HEAD` までの累積差分に対して行います (最後の commit だけを見ない)。review の
+指摘を直して commit を足したときも、追加の push の前にこの節の検証と gate をすべてやり直します。
 
 - `git diff --check "$base" HEAD`。
 - 変えた file が修正の仕様の「変えてよい箇所」の中だけであること (`git diff --name-only "$base" HEAD`)。
@@ -112,9 +113,23 @@ commit のあと、`base` から branch の `HEAD` までの累積差分に対�
   (静的な review の verdict とは分けて報告する)。
 - 変えた Markdown に `personal-repo-audit` の `PRESCAN.md` の「docs の壊れた path の参照」を当て、新しい候補が
   無いこと。候補検出なので、変えた参照の意味と anchor は別に読んで確かめます。
-- **公開する内容の gate**: 累積差分そのもの (`git diff "$base" HEAD`) と、PR の題名と本文を public-safety の gate に
-  通し、exit 0 のときだけ push と PR へ進みます。
-- commit の message は Claude の trailer 付きで、file に書いて `-F` で渡します。
+- **公開する内容の gate**: 累積差分そのもの (`git diff "$base" HEAD`)、`base` 以降の全 commit の message
+  (`git log --format=%B "$base"..HEAD`。push で一緒に公開されるが、累積差分には入らない)、PR の題名と本文を
+  まとめて public-safety の gate に通し、exit 0 のときだけ push と PR へ進みます。
+
+  ```sh
+  gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"
+  ( set -o pipefail
+    { git diff "$base" HEAD && git log --format=%B "$base"..HEAD &&
+      printf '%s\n\n' "$title" && cat "$body_file"; } | "$gate" --stdin )
+  ```
+
+  gate は `RECORD.md` の Issue の gate と同じく、Claude Code の home に配備されたもの。`base`・`title`・
+  `body_file` は literal の変数で渡します。`pipefail` は、材料の `git` が失敗したときに gate が残りだけを読んで
+  exit 0 になるのを防ぎます。gate が無い・exit 0 でないときは push も PR もせず、gate の出力 (どの規則に
+  当たったか) を報告します。直したら、この節の検証からやり直します。
+- commit の message は Claude の trailer 付きで、file に書いて `-F` で渡します。commit の前にその file を同じ gate
+  (上の `gate` の path) の `--stdin` に通しておくと、push の前の gate で止まってから書き直す手間が減ります。
 
 ## PR
 
@@ -154,9 +169,9 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
 - 再開で `reviewing` の記録に結果の無い round があれば、新しい round を起動する前にその run dir の `done.txt` と
   `result.md` を回収します (nonce 一致・exit=0・空でない result)。回収できなければ (run dir が無い、結果が無い) 完了した
   回数を確定できないので、その round を未完として `blocked` にし、人に渡します (4 回目を起動する余地を作らない)。
-- 指摘の扱い: 🔴 must は修正の仕様の範囲内で妥当なものだけ直す。範囲外の must や契約の変更が要る must は、
-  scope を広げず `blocked` にして人に渡す。🟡 should は採否と理由を残す (採用しなくても verdict を書き換えない)。
-  ⚪ nit は caller の判断。
+- 指摘の扱い: 🔴 must は修正の仕様の範囲内で妥当なものだけ直す (直して commit を足したら、追加の push の前に
+  「検証」をやり直す)。範囲外の must や契約の変更が要る must は、scope を広げず `blocked` にして人に渡す。
+  🟡 should は採否と理由を残す (採用しなくても verdict を書き換えない)。⚪ nit は caller の判断。
 - **完了した review は最大 3 回**です。3 回目のあとに修正した head は未レビューとして扱い、APPROVE を引き継ぎ
   ません。収束しなければ PR を残して `blocked` にし、未解決の項目と次の入口を記録して報告します。
 - reviewer が起動できない (BLOCKED、usage limit) ときも、PR を残して `blocked` にします。未レビューの PR を
