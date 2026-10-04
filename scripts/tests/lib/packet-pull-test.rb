@@ -131,6 +131,9 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   env = { "GIT_CONFIG_SYSTEM" => "/dev/null", "GIT_CONFIG_GLOBAL" => "/dev/null",
           "GIT_AUTHOR_NAME" => "test", "GIT_AUTHOR_EMAIL" => "test@example.com",
           "GIT_COMMITTER_NAME" => "test", "GIT_COMMITTER_EMAIL" => "test@example.com" }
+  # repository / index を選ぶ git の環境変数を継承していると更新先の検査が判定できない (exit 2) ので外す
+  %w[GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
+     GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE].each { |key| env[key] = nil }
   _out, err, status = Open3.capture3(env, "git", "init", "-q", repo)
   assert(status.success?, "fixture git init: #{err}")
   packet = File.join(deploy, "personal-packet")

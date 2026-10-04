@@ -28,6 +28,12 @@ git config --file "$GIT_CONFIG_GLOBAL" user.name test
 git config --file "$GIT_CONFIG_GLOBAL" user.email test@example.com
 git config --file "$GIT_CONFIG_GLOBAL" init.defaultBranch main
 git config --file "$GIT_CONFIG_GLOBAL" core.hooksPath /dev/null
+# 既定の excludes ($XDG_CONFIG_HOME/git/ignore) は GIT_CONFIG_GLOBAL の隔離を素通りする。`.agent-packets/`
+# を global ignore に置いた machine でも submodule の fixture を作れるように外す。file:// の submodule も許す
+git config --file "$GIT_CONFIG_GLOBAL" core.excludesFile /dev/null
+git config --file "$GIT_CONFIG_GLOBAL" protocol.file.allow always
+# repository / index を選ぶ git の環境変数を継承していると check は判定できない (exit 2) ので外す
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
 
 gh_token=$(printf 'ghp'; printf '_'; printf 'aaaaaaaaaabbbbbbbbbbccccccccccdddddd')
 
@@ -811,6 +817,29 @@ for pathspec_env in GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPEC
   set -e
   [ "$rc" -eq 0 ] || fail "check (untracked packet with $pathspec_env=1 inherited) should pass (rc=$rc): $(cat "$tmp/chk.err")"
 done
+# repository / index を選ぶ環境変数を継承していると判定できない (exit 2)。別の index を指す GIT_INDEX_FILE
+# では tracked な packet も ls-files の上では追跡なしに見えるので、書いてよい判定 (exit 0) にしない
+(cd "$trk" && GIT_INDEX_FILE="$tmp/chk-other.index" git read-tree --empty)
+for repo_env in "GIT_INDEX_FILE=$tmp/chk-other.index" "GIT_DIR=$trk/.git" "GIT_WORK_TREE=$trk" \
+  "GIT_COMMON_DIR=$trk/.git" "GIT_OBJECT_DIRECTORY=$trk/.git/objects" \
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES=$trk/.git/objects" "GIT_NAMESPACE=chk"; do
+  set +e
+  (cd "$trk" && env "$repo_env" "$pkt" check 7 > "$tmp/chk.out" 2> "$tmp/chk.err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "check (tracked packet with ${repo_env%%=*} inherited) should be undeterminable, exit 2 (rc=$rc): $(cat "$tmp/chk.err")"
+  [ ! -s "$tmp/chk.out" ] || fail "check (${repo_env%%=*} inherited) must not print a path"
+  grep -q "${repo_env%%=*} を継承しているので" "$tmp/chk.err" || fail "check (${repo_env%%=*} inherited) should name the variable: $(cat "$tmp/chk.err")"
+done
+pub_calls=$(gh_calls)
+set +e
+(cd "$trk" && with_gh env "GIT_INDEX_FILE=$tmp/chk-other.index" "$pkt" publish 7 > "$tmp/pub.out" 2> "$tmp/pub.err")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "publish (tracked packet with another GIT_INDEX_FILE) should stop with exit 2 (rc=$rc): $(cat "$tmp/pub.err")"
+[ "$(gh_calls)" -eq "$pub_calls" ] || fail "publish (tracked packet with another GIT_INDEX_FILE) must not call gh"
+grep -q "GIT_INDEX_FILE を継承しているので" "$tmp/pub.err" || fail "publish should name GIT_INDEX_FILE: $(cat "$tmp/pub.err")"
+cmp -s "$tmp/chk-tracked.bak" "$trk/.agent-packets/7.md" || fail "publish with another GIT_INDEX_FILE must not modify the packet"
 rm "$trk/.agent-packets/7.md"
 expect_refused "$trk" 7 "tracked packet removed from the worktree" "tracked です"
 # (d) 大文字小文字だけ違う名前で tracked (case-insensitive な file system では同じ file)
@@ -840,6 +869,35 @@ expect_refused "$tmp/chksep" 7 "packet dir outside the main worktree (separate g
 [ ! -e "$tmp/.agent-packets" ] || fail "check must not create a packet dir outside the worktree"
 git init -q --bare "$tmp/chkbare.git"
 expect_refused "$tmp/chkbare.git" 7 "bare repository" "bare repository"
+# (b) packet dir が submodule / 入れ子の repository: 中で tracked な packet は親の index に載らないので、
+# dir の中から見た worktree の root で拒否する。publish も書かずに止まる
+subsrc="$tmp/chksubsrc"
+git init -q "$subsrc"
+chk_packet "$subsrc/7.md" 7
+(cd "$subsrc" && git add 7.md && git commit -q -m packet)
+sub="$tmp/chksub"
+git init -q "$sub"
+(cd "$sub" && git commit -q --allow-empty -m seed && git submodule add -q "file://$subsrc" .agent-packets && git commit -q -m submodule)
+cp "$sub/.agent-packets/7.md" "$tmp/chk-sub.bak"
+expect_refused "$sub" 7 "packet tracked inside a submodule packet dir" "別の git の worktree です"
+expect_publish_refused "$sub" 7 "packet tracked inside a submodule packet dir"
+cmp -s "$tmp/chk-sub.bak" "$sub/.agent-packets/7.md" || fail "publish must not modify a packet inside a submodule"
+nested="$tmp/chknested"
+git init -q "$nested"
+git init -q "$nested/.agent-packets"
+chk_packet "$nested/.agent-packets/7.md" 7
+(cd "$nested/.agent-packets" && git add 7.md)
+expect_refused "$nested" 7 "packet dir that is a nested repository" "別の git の worktree です"
+# (d) packet dir 自体に tracked な entry: deinit した submodule の gitlink だけが残る / 隣の packet が tracked
+(cd "$sub" && git submodule deinit -q -f .agent-packets)
+expect_refused "$sub" 7 "packet dir left as a gitlink (deinitialized submodule)" "packet dir に git で tracked な entry"
+othertrk="$tmp/chkothertracked"
+git init -q "$othertrk"
+mkdir "$othertrk/.agent-packets"
+chk_packet "$othertrk/.agent-packets/8.md" 8
+(cd "$othertrk" && git add -f .agent-packets/8.md)
+chk_packet "$othertrk/.agent-packets/7.md" 7
+expect_refused "$othertrk" 7 "untracked packet next to a tracked one" "packet dir に git で tracked な entry"
 
 # git の外: 判定できない (exit 2)
 set +e

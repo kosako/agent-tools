@@ -55,6 +55,11 @@ module Packet
   REPO_RE = %r{\A[\w.-]+/[\w.-]+\z}.freeze
   FILE_RE = /\A(\d+)\.md\z/.freeze
   FRONT_RE = /\A---\n(.*?\n)---\n(.*)\z/m.freeze
+  # repository / index の選び方を変える git の環境変数 (#386)。継承していると、check が見る main worktree /
+  # index と書き込み先がずれうる (別の index を指す GIT_INDEX_FILE なら tracked な packet も追跡なしに
+  # 見える) ので、1 つでも在れば check は判定できないとして止める (fail-closed)。
+  GIT_REPO_ENV = %w[GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
+                    GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE].freeze
 
   # 入力・構成のエラー (exit 2)。message は公開してよい内容に限る (packet 本文を含めない)。
   class Error < StandardError; end
@@ -119,14 +124,22 @@ module Packet
   # packet を書く前の検査 (#386)。packet を書く全員 (handoff と委譲の orchestrator は check の subcommand、
   # publish / pull は内部で) がここを通る。規則の正本は docs/agent-packets.md の「置き場」:
   #   (a) packet dir が在れば、symlink でない directory
-  #   (b) packet dir の実体が main worktree の root の .agent-packets と一致する
+  #   (b) packet dir の実体が main worktree の root の .agent-packets と一致し、在れば dir の中から見た git の
+  #       worktree の root も main worktree の root と一致する (submodule / 入れ子の repository でない)
   #   (c) packet が在れば、symlink でない regular file
-  #   (d) packet が git で tracked でない (大文字小文字だけ違う index の entry も同じ file とみなす)
-  # 拒むときは Unsafe、判定できないときは Error。通れば検査した packet の path (main worktree の root の
-  # 実体から組んだもの) を返す。packet が無い (これから作る) ときも (d) まで見る (index に残った entry を
-  # 作り直さない)。検査から書き込みまでの間の差し替え (同じ user の権限による TOCTOU) は防がない
+  #   (d) packet が git で tracked でない (大文字小文字だけ違う index の entry も同じ file とみなす)。packet
+  #       dir 自体にも tracked な entry (submodule の gitlink を含む) が無い
+  # 拒むときは Unsafe、判定できないときは Error。repository / index の選び方を変える環境変数を継承している
+  # ときも、判定の対象が書き込み先とずれうるので Error にする。通れば検査した packet の path (main worktree の
+  # root の実体から組んだもの) を返す。packet が無い (これから作る) ときも (d) まで見る (index に残った
+  # entry を作り直さない)。検査から書き込みまでの間の差し替え (同じ user の権限による TOCTOU) は防がない
   # (docs/sync-policy.md の #149 と同じ立場)。
   def check_target!(dir, issue)
+    inherited = GIT_REPO_ENV.select { |k| ENV.key?(k) }
+    unless inherited.empty?
+      raise Error, "#{inherited.join(' / ')} を継承しているので packet の更新先を判定できません (外して実行してください)"
+    end
+
     dir_st = lstat_or_nil(dir)
     raise Unsafe, "#{dir}: packet dir が symlink です" if dir_st&.symlink?
     raise Unsafe, "#{dir}: packet dir が directory ではありません" if dir_st && !dir_st.directory?
@@ -137,6 +150,9 @@ module Packet
     unless actual == expected
       raise Unsafe, "#{dir}: packet dir の実体が main worktree の root の #{DIR_NAME} (#{expected}) と一致しません"
     end
+    if dir_st && worktree_root_of(expected) != root
+      raise Unsafe, "#{expected}: packet dir が main worktree とは別の git の worktree です (submodule / 入れ子の repository)"
+    end
 
     name = "#{issue}.md"
     path = File.join(expected, name)
@@ -144,6 +160,9 @@ module Packet
     raise Unsafe, "#{path}: packet が symlink です" if st&.symlink?
     raise Unsafe, "#{path}: packet が regular file ではありません" if st && !st.file?
     raise Unsafe, "#{path}: packet が git で tracked です (packet は git 管理しない)" if tracked?(root, "#{DIR_NAME}/#{name}")
+    if tracked?(root, DIR_NAME)
+      raise Unsafe, "#{expected}: packet dir に git で tracked な entry があります (submodule の gitlink を含む。packet は git 管理しない)"
+    end
 
     path
   rescue SystemCallError => e
@@ -167,6 +186,17 @@ module Packet
     raise Unsafe, "bare repository には main worktree がありません" if block.include?("bare")
 
     File.realpath(block.first.sub(/\Aworktree /, ""))
+  end
+
+  # dir の中から見た git の worktree の root の実体。packet dir が submodule や入れ子の repository なら
+  # main worktree の root と違う値になる (その中の packet は親の index に載らないので (d) では見えない)。
+  def worktree_root_of(dir)
+    out, _err, status = Open3.capture3("git", "rev-parse", "--show-toplevel", chdir: dir)
+    unless status.success?
+      raise Error, "packet dir の git の worktree を判定できません (git rev-parse: exit #{status.exitstatus.inspect})"
+    end
+
+    File.realpath(out.chomp)
   end
 
   # `git ls-files --error-unmatch` の exit 1 だけを「追跡なし」とする (0 = tracked、128 など = 判定できない)。

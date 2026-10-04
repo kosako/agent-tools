@@ -64,8 +64,12 @@ orchestrator 向けの判断は `結果` の「判断」に残す。
 - **symlink / tracked の packet は誰も更新しない** (#386)。packet を書く全員 (handoff、委譲の
   orchestrator、`publish` / `pull`) が、書く前に `personal-packet check <issue>` と同じ検査を通す:
   packet dir が在れば symlink でない directory で、その実体が main worktree の root の `.agent-packets`
-  と一致し、packet が在れば symlink でない regular file で、git で tracked でない (大文字小文字だけ違う
-  index の entry も同じ file とみなす。tracked かを判定できないときも書かない)。exit 0 以外なら packet を
+  と一致し、submodule や入れ子の repository でない (dir の中から見た git の worktree の root も main worktree
+  の root)。packet が在れば symlink でない regular file で、git で tracked でない (大文字小文字だけ違う
+  index の entry も同じ file とみなす)。packet dir 自体にも tracked な entry (submodule の gitlink を含む)
+  が無い。tracked かを判定できないとき、repository / index の選び方を変える環境変数 (`GIT_DIR` /
+  `GIT_WORK_TREE` / `GIT_INDEX_FILE` / `GIT_COMMON_DIR` / `GIT_OBJECT_DIRECTORY` /
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES` / `GIT_NAMESPACE`) を継承しているときも書かない。exit 0 以外なら packet を
   書かない (skill は 1 行伝えて更新の内容を会話の中の draft に留め、`publish` / `pull` は exit 2 で止まる)。
   第三者の repo が `.agent-packets/` を commit している場合に private な記録を tracked file に乗せず、
   dir / file の symlink で packet の外の文書を書き換えないための規則。handoff が packet を「常時」更新する
@@ -230,7 +234,7 @@ file で行い、command 文字列へ inline 展開しない。
 |---|---|---|
 | `dir` | packet dir を出す (main worktree root に固定。linked worktree からでも同じ) | 0 / 2 (git 外) |
 | `list [--json] [--all]` | frontmatter を読んで一覧。既定は open / blocked / review だけ、`--all` で done も。`updated > published` (または未 publish) を `unpublished` で示す。起動の記録があれば `run` / `tab` と `run_status` を出す (text は `[run: <status>]`)。`--json` には `last_run` も出す | 0 / 1 (壊れた packet あり。warning を出し、健全な行は出す) / 2 |
-| `check <issue>` | packet を書く前の更新先の検査 (置き場の「symlink / tracked の packet は誰も更新しない」)。通れば packet の path (main worktree の root の実体から組んだもの) を 1 行出す。packet が無い (これから作る) ときも、dir と index を見て通れば出す (file も dir も作らない) | 0 / 1 (拒否。理由を stderr に出す) / 2 (判定できない: git の外・git の失敗・usage) |
+| `check <issue>` | packet を書く前の更新先の検査 (置き場の「symlink / tracked の packet は誰も更新しない」)。通れば packet の path (main worktree の root の実体から組んだもの) を 1 行出す。packet が無い (これから作る) ときも、dir と index を見て通れば出す (file も dir も作らない) | 0 / 1 (拒否。理由を stderr に出す) / 2 (判定できない: git の外・git の失敗・repository / index を選ぶ環境変数の継承・usage) |
 | `publish <issue> [--repo OWNER/REPO] [--dry-run]` | `結果` の最新節 + `次の入口` を marker 付きで合成 → 同じ directory の `personal-public-safety-gate --stdin` に通す → **exit 0 のときだけ** `gh issue comment` で投稿 → frontmatter の `published` を更新 | 0 / 1 (gate が止めた) / 2 (検査できない・gate 不在・gh 不在 / 失敗・入力エラー・更新先の検査に落ちた) |
 | `pull <issue> [--repo OWNER/REPO] [--dry-run]` | self コメントの有効な写しを取り込んで packet を再構成。`--dry-run` は全文を stdout に出す | 0 / 1 (採用できる写しなし) / 2 (reader / 入力 / 保存エラー・更新先の検査に落ちた) |
 
