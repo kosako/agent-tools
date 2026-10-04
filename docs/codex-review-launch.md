@@ -11,7 +11,10 @@ Claude Code の Bash sandbox (macOS では Seatbelt) が有効な環境で、そ
 起動すると、Codex は自前の sandbox を適用できず (`sandbox-exec: sandbox_apply: Operation not
 permitted`)、model がローカル command を一切実行できません。Seatbelt は入れ子に適用できないため
 で、Codex 側の欠陥ではなく起動経路の問題です。Codex TUI の中で `codex exec` を起動しても同じ構図に
-なります (`CODEX_SANDBOX=seatbelt` が立つ環境)。
+なります (`CODEX_SANDBOX=seatbelt` が立つ環境)。この構図 (Codex の sandbox の中から入れ子で `codex exec` を
+起動する場合) では、起動直後に `failed to initialize in-process app-server client: Operation not permitted` で
+終了することもあります。過去の観測 (#246) はすべて外側の Codex session が read-only の sandbox で入れ子の
+`codex exec` を起動した場合で、今の起動経路 (herdr の pane と、sandbox の外での直接起動だけ) はこの形を選びません。
 
 sandbox が無効な環境では同じ flag の `codex exec -s read-only` が command 実行に成功します
 (2026-09-14 実測)。つまり挙動は「どの環境で skill を使うか」で変わります。
@@ -107,5 +110,5 @@ top-level の `wait` command は herdr 0.7.5 で `pane wait-output` (と `agent 
   読めたことを command 実行の成否で確認すること。
 - herdr が無く sandbox 有効: 実行前に理由つき BLOCKED と人手用コマンドが返ること。
 
-関連 Issue: #244 (起動経路) / #230 (起動契約の CLI 追随) / #245 (空振り検知) / #246 (別原因の
-起動失敗)。
+関連 Issue: #244 (起動経路) / #230 (起動契約の CLI 追随) / #245 (空振り検知) / #246 (入れ子起動での
+app-server 初期化失敗)。
