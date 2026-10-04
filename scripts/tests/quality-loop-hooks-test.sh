@@ -300,6 +300,145 @@ out=$(cd "$repo" && run_qa false) || fail "invalid check declaration should exit
 assert_qa_warning "$out"
 echo "$out" | grep -q "設定エラー" || fail "invalid declaration should warn: $out"
 
+# ---- #373: signal で終わった check は起動失敗ではなく実 failure (block 1 回、診断に signal 名) ----
+# (hook の timeout や中断では hook 自身も止まるので、ここに来るのは check だけが落ちたとき)
+cat > "$tmp/sig-check" <<'EOF'
+#!/bin/sh
+kill -TERM $$
+EOF
+chmod +x "$tmp/sig-check"
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "sig", "command" => [ARGV[1]]}]}}))
+' "$repo_real" "$tmp/sig-check" "$conf"
+echo signaled >> "$repo/u.txt"
+set +e
+err=$(cd "$repo" && run_qa false 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "signaled check must block as a failure (rc=$rc): $err"
+echo "$err" | grep -q "SIGTERM" || fail "block message should name the signal: $err"
+# 同じ scope では failure として cache され、未実行 (missing) として扱われない
+set +e
+out=$(cd "$repo" && run_qa false 2>/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "cached signaled failure must not re-block (rc=$rc)"
+echo "$out" | grep -q "未解消" || fail "cached signaled failure should warn as unresolved: $out"
+if echo "$out" | grep -q "実行できません"; then fail "signaled check must not be reported as missing: $out"; fi
+# 出力が要約の打ち切り (2000 文字) より長くても、signal 名は要約に残る (#381 review CSQA-02)
+cat > "$tmp/sig-long-check" <<'EOF'
+#!/bin/sh
+awk 'BEGIN { for (i = 0; i < 80; i++) printf "%s\n", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }'
+kill -TERM $$
+EOF
+chmod +x "$tmp/sig-long-check"
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "sig-long", "command" => [ARGV[1]]}]}}))
+' "$repo_real" "$tmp/sig-long-check" "$conf"
+echo signaled-long >> "$repo/u.txt"
+set +e
+err=$(cd "$repo" && run_qa false 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "signaled check with long output must block (rc=$rc)"
+echo "$err" | grep -q "truncated" || fail "long output should be truncated in the summary: $err"
+echo "$err" | grep -q "SIGTERM" || fail "signal name must survive truncation of a long output"
+# 複数の check: 長い出力で exit 1 の check の後ろに signal で終わる check があっても、全体の打ち切りで後ろの
+# check の理由が消えない (理由の一覧をログより前に置く。#381 review CSQA-02 round 2)
+cat > "$tmp/long-fail-check" <<'EOF'
+#!/bin/sh
+awk 'BEGIN { for (i = 0; i < 80; i++) printf "%s\n", "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy" }'
+exit 1
+EOF
+chmod +x "$tmp/long-fail-check"
+ruby -rjson -e '
+File.write(ARGV[3], JSON.generate({ARGV[0] => {"qa_checks" => [
+  {"name" => "long-fail", "command" => [ARGV[1]]}, {"name" => "sig-after", "command" => [ARGV[2]]}
+]}}))
+' "$repo_real" "$tmp/long-fail-check" "$tmp/sig-check" "$conf"
+echo signaled-multi >> "$repo/u.txt"
+set +e
+err=$(cd "$repo" && run_qa false 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "multiple failing checks must block (rc=$rc)"
+echo "$err" | grep -q "truncated" || fail "combined summary should be truncated: $err"
+echo "$err" | grep -q -- "- long-fail: exit 1" || fail "summary should list the exit reason of the first check: $err"
+echo "$err" | grep -q -- "- sig-after: terminated by SIGTERM" || fail "signal of a later check must survive the overall truncation"
+
+# ---- #373: 初回 commit 前 (HEAD が無い) の repo でも、stage 済み / 未 stage の内容の変化で再検査する ----
+unborn="$tmp/unborn"
+git init -q "$unborn"
+unborn_real=$(ruby -e 'puts File.realpath(ARGV[0])' "$unborn")
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "fake-suite", "command" => [ARGV[1]]}]}}))
+' "$unborn_real" "$tmp/fake-check" "$conf"
+echo v1 > "$unborn/f.txt"
+(cd "$unborn" && git add f.txt)
+: > "$tmp/check-argv.log"
+(cd "$unborn" && run_qa false >/dev/null) || fail "unborn staged v1 should pass"
+[ -s "$tmp/check-argv.log" ] || fail "unborn repo should run checks"
+: > "$tmp/check-argv.log"
+(cd "$unborn" && run_qa false >/dev/null) || fail "unborn cache hit should pass"
+[ ! -s "$tmp/check-argv.log" ] || fail "unborn same scope should hit the cache"
+# 内容を変えて再 stage しても status は "A " のまま。stage 済みの内容が指紋に入っていないと cache に当たる
+echo v2 > "$unborn/f.txt"
+(cd "$unborn" && git add f.txt)
+(cd "$unborn" && run_qa false >/dev/null) || fail "unborn staged v2 should pass"
+[ -s "$tmp/check-argv.log" ] || fail "re-staged content change must rerun checks in an unborn repo"
+# 未 stage の内容だけを変えても status は "AM" のまま。未 stage の差分も指紋に入る
+echo v3 > "$unborn/f.txt"
+(cd "$unborn" && run_qa false >/dev/null) || fail "unborn unstaged v3 should pass"
+: > "$tmp/check-argv.log"
+echo v4 > "$unborn/f.txt"
+(cd "$unborn" && run_qa false >/dev/null) || fail "unborn unstaged v4 should pass"
+[ -s "$tmp/check-argv.log" ] || fail "unstaged content change must rerun checks in an unborn repo"
+
+# ---- #373: 指紋の材料の git が失敗したら判定不能として gate しない (check を走らせず、cache もしない) ----
+realgit=$(command -v git)
+mkdir -p "$tmp/failgit"
+cat > "$tmp/failgit/git" <<EOF
+#!/bin/sh
+for a in "\$@"; do [ "\$a" = diff ] && exit 128; done
+exec $(shq "$realgit") "\$@"
+EOF
+chmod +x "$tmp/failgit/git"
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "fake-suite", "command" => [ARGV[1]]}]}}))
+' "$repo_real" "$tmp/fake-check" "$conf"
+touch "$tmp/check-fail"
+echo diff-fails >> "$repo/u.txt"
+: > "$tmp/check-argv.log"
+set +e
+out=$(cd "$repo" && PATH="$tmp/failgit:$PATH" && export PATH && run_qa false 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "failed git diff must not gate (rc=$rc): $out"
+[ ! -s "$tmp/check-argv.log" ] || fail "failed git diff must not run checks"
+# 同じ scope を git が使える状態で回すと、cache に当たらず検査して block する
+set +e
+err=$(cd "$repo" && run_qa false 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "after git recovers the scope must be checked (rc=$rc): $err"
+# HEAD の検出が unborn (exit 1) 以外で失敗したら (128 など)、unborn とみなさず判定不能にする (#381 review CSQA-01)
+cat > "$tmp/failgit/git" <<EOF
+#!/bin/sh
+# repo root の検出 (rev-parse --show-toplevel) は通し、HEAD の検出 (rev-parse --verify) だけを失敗させる
+for a in "\$@"; do [ "\$a" = --verify ] && exit 128; done
+exec $(shq "$realgit") "\$@"
+EOF
+chmod +x "$tmp/failgit/git"
+echo head-fails >> "$repo/u.txt"
+: > "$tmp/check-argv.log"
+set +e
+out=$(cd "$repo" && PATH="$tmp/failgit:$PATH" && export PATH && run_qa false 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "failed HEAD lookup must not gate (rc=$rc): $out"
+[ ! -s "$tmp/check-argv.log" ] || fail "failed HEAD lookup must not be treated as unborn (checks ran)"
+rm "$tmp/check-fail"
+
 # ---- R1 回帰: fast-edit-check の不正 entry 可視化と総量 truncate ---------------
 ruby -rjson -e '
 File.write(ARGV[2], JSON.generate({ARGV[0] => {"edit_checks" => [

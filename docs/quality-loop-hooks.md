@@ -94,7 +94,9 @@
   tree の **dirty scope 全体** (tracked の変更 + untracked) を対象にする。ユーザー自身の
   書きかけ変更も検査対象になる (明記)。
 - dirty かつ宣言 repo なら `qa_checks` を実行。全 pass → scope 指紋 (HEAD / status / tracked diff /
-  untracked 内容 / check 定義を含む sha256) と結果を state に cache して無言 pass。
+  untracked 内容 / check 定義を含む sha256) と結果を state に cache して無言 pass。初回 commit 前 (HEAD が
+  無い) は tracked diff の代わりに stage 済みと未 stage の diff を使う。指紋の材料の git が失敗したら判定
+  不能として gate しない (check を走らせず cache もしない、#373)。
   失敗 → **exit 2 + stderr 要約で block**
   (モデルに修正の続行を促す)。
 - **無限ループ対策 (仕様)**:
@@ -102,7 +104,10 @@
     (新しい scope なら check は走らせ、失敗は `systemMessage` のユーザー向け警告で返す)。
   - 同一 scope 指紋の再 Stop は check を**再実行しない** (pass 済み = 無言 / fail 済み =
     ユーザー向け警告のみ。block は新しい scope に 1 回だけ → 直せない失敗は人間に戻る)。
-  - check コマンド不在・spawn 失敗はユーザー向け警告に降格して block しない。未実行の
+  - check コマンド不在・spawn 失敗 (起動時の例外) はユーザー向け警告に降格して block しない。
+    起動した check が signal で終わったのは spawn 失敗ではなく実 failure として扱い、block の要約に
+    signal 名を出す (#373。hook の timeout や中断では hook 自身も止まって state を書かないので、ここで
+    観測するのは check だけが crash や外からの kill で落ちたとき)。未実行の
     check は cache 内で `missing` として分離し、同一 scope でも次の Stop で再試行する。
     復旧して全 check が pass になれば無言になる。
 - 警告は **exit 0 + `{"systemMessage":"..."}`** のみを出力する (本文は 2000 文字で打ち切り /

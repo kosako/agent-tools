@@ -29,14 +29,17 @@
 # - scope 指紋 + 結果を state file に cache し、**同一 scope への block は 1 回だけ**。
 #   pass 済み scope は無言 pass / fail 済み scope は非ブロッキング警告のみ。
 # - check コマンドの spawn 失敗 (不在 ENOENT・権限 EACCES・不正形式 ENOEXEC) は
-#   「警告に降格」して block しない。spawn 失敗した check は cache で確定させず、
+#   「警告に降格」して block しない。起動した check が signal で終わったのは spawn 失敗ではなく
+#   実 failure (#373)。spawn 失敗した check は cache で確定させず、
 #   state に missing として分離保持して cache-hit 時にもそれだけ再試行する
 #   (環境が直れば拾われる。実 failure の再 block はしない)。
 #
 # scope 指紋 (false pass を防ぐため QA の実入力を全部含める):
 #   HEAD sha + `git status --porcelain -z -uall` + `git diff HEAD` + untracked file の
 #   内容 digest + 宣言 check 定義の JSON。untracked の内容変更・dirty を保った branch
-#   切替・check 定義の変更のどれでも指紋が変わり、再検査される。
+#   切替・check 定義の変更のどれでも指紋が変わり、再検査される。初回 commit 前 (HEAD が無い)
+#   は `git diff HEAD` の代わりに stage 済み (`--cached`) と未 stage の diff を使う。材料の git が
+#   失敗したら判定不能として gate しない (#373)。
 #
 # 検査対象の帰属 (#203 裁定): agent の変更とユーザーの手元変更を区別せず、**working tree の
 # dirty scope 全体** (tracked の変更 + untracked) を対象にする。単純さを優先し、ユーザー
@@ -145,20 +148,46 @@ module ChangedScopeQa
     parts.join("\n")
   end
 
-  # dirty scope の指紋。nil = 判定不能 / 空 = clean。
+  # dirty scope の指紋。nil = 判定不能 / 空 = clean。材料の git のどれかが失敗したら判定不能にする
+  # (空の diff として指紋を作ると、変わった内容を同じ scope とみなして cache に当たる。#373)。
   def scope_fingerprint(root, checks)
-    status = IO.popen(["git", "-C", root, "status", "--porcelain", "-z", "-uall"], &:read)
-    return nil unless $?.success?
+    status = git_output(root, "status", "--porcelain", "-z", "-uall")
+    return nil if status.nil?
     return "" if status.empty?
 
-    diff = IO.popen(["git", "-C", root, "diff", "HEAD", "--no-color", "--no-ext-diff"],
-                    err: File::NULL, &:read)
-    head = IO.popen(["git", "-C", root, "rev-parse", "HEAD"], err: File::NULL, &:read)
-    head = "unborn" unless $?.success?
+    head, head_status = git_run(root, "rev-parse", "--verify", "-q", "HEAD")
+    # `--verify -q` は HEAD が無い (初回 commit 前) ときだけ exit 1 になる。それ以外の失敗 (128 や signal) は
+    # unborn と区別して判定不能にする。
+    unborn = head_status.exitstatus == 1
+    return nil unless head_status.success? || unborn
+
+    diff = unborn ? unborn_diff(root) : git_output(root, "diff", "HEAD", "--no-color", "--no-ext-diff")
+    return nil if diff.nil?
+
     Digest::SHA256.hexdigest(
-      [head.to_s.chomp, status, diff.to_s, untracked_digest(status, root),
+      [unborn ? "unborn" : head.chomp, status, diff, untracked_digest(status, root),
        JSON.generate(checks)].join("\0")
     )
+  end
+
+  # 初回 commit 前 (HEAD が無い) は `git diff HEAD` が使えない。stage 済み (index と空の tree の差) と
+  # 未 stage (作業ツリーと index の差) を合わせて読む (#373)。どちらかが失敗したら nil。
+  def unborn_diff(root)
+    staged = git_output(root, "diff", "--cached", "--no-color", "--no-ext-diff")
+    unstaged = git_output(root, "diff", "--no-color", "--no-ext-diff")
+    staged && unstaged && "#{staged}\0#{unstaged}"
+  end
+
+  # git の出力と終了状態。
+  def git_run(root, *args)
+    out = IO.popen(["git", "-C", root, *args], err: File::NULL, &:read)
+    [out, $?]
+  end
+
+  # git の出力 (exit 0 のときだけ)。失敗は nil。
+  def git_output(root, *args)
+    out, status = git_run(root, *args)
+    status.success? ? out : nil
   end
 
   def state_path(root)
@@ -183,13 +212,18 @@ module ChangedScopeQa
                              "missing" => missing))
   end
 
+  # 起動の失敗は spawn 時の例外だけで判定する。起動した check が signal で終わったのは、実行して異常
+  # 終了した (crash や外からの kill) ので実 failure として扱い、終了の理由に signal 名を残す (#373。hook の
+  # timeout や中断では hook 自身も止まるので、ここで観測するのは check だけが落ちたとき)。
   def run_check(check, root)
     out = IO.popen(check["command"], chdir: root, err: %i[child out], &:read)
-    status = $?.exitstatus
-    { name: check_name(check), ok: status == 0, output: out.to_s, spawn_failed: status.nil? }
+    status = $?
+    reason = status.signaled? ? "terminated by SIG#{Signal.signame(status.termsig)}" : "exit #{status.exitstatus}"
+    { name: check_name(check), ok: status.success?, output: out.to_s, reason: reason, spawn_failed: false }
   rescue Errno::ENOENT, Errno::EACCES, Errno::ENOEXEC => e
     # 不在だけでなく権限喪失・不正形式も spawn 失敗として可視化する (無言の恒久不活性を防ぐ)
-    { name: check_name(check), ok: false, output: "(#{e.class})", spawn_failed: true }
+    { name: check_name(check), ok: false, output: "(#{e.class})", reason: "spawn failed (#{e.class})",
+      spawn_failed: true }
   end
 
   def truncate(text)
@@ -204,8 +238,12 @@ module ChangedScopeQa
     puts JSON.generate("systemMessage" => truncate(message))
   end
 
+  # 失敗した check の名前と終了の理由を先にまとめ、ログはその後ろに置く。呼び出し側は要約全体を先頭から
+  # 打ち切るので、長いログの後ろにある check の理由が消えないようにする (#381 review CSQA-02)。
   def failure_summary(failures)
-    failures.map { |r| "[#{r[:name]}]\n#{truncate(r[:output])}" }.join("\n")
+    reasons = failures.map { |r| "- #{r[:name]}: #{r[:reason]}" }
+    logs = failures.map { |r| "[#{r[:name]}]\n#{truncate(r[:output])}" }
+    (reasons + logs).join("\n")
   end
 
   # 同一 scope の cache hit。block は消費済みなので二度と block しない。
