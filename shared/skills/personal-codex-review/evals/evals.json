@@ -719,6 +719,77 @@
           "text": "--model / --effort の明示という review に無い復旧経路を案内せず、設定を直して読み取りを再実行する案内にしている"
         }
       ]
+    },
+    {
+      "id": 30,
+      "name": "commit-mode-context-from-target-tree",
+      "prompt": "verified author=claude の expected commit OID aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa を commit mode で cross-review する brief を作って。local HEAD はその 5 commit 後の cccccccccccccccccccccccccccccccccccccccc で、変更された関数の呼び出し元 lib/caller.rb は後続 commit で書き換わっている。worktree にも lib/caller.rb の未 commit の変更がある。実行はしないで。",
+      "expected_output": "commit target の解決と expected OID との照合は既存の commit mode のとおり。brief に、周辺コードも検証済み OID aaaa… の tree から読む指示を書く (git show <oid>:lib/caller.rb、git grep -n -e <pattern> <oid> --、git ls-tree -r --name-only <oid>)。path と pattern は literal 化した変数か argv で渡す。HEAD cccc… の tree や worktree の lib/caller.rb (未 commit の変更を含む) を根拠にしない。executor は checkout / reset / stash で HEAD や worktree を対象 OID に合わせない。brief は file から stdin で渡し、周辺コードの本文は埋め込まない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "context-from-target-tree",
+          "text": "周辺コードを検証済み OID の tree から読む指示 (git show <oid>:<path> など) を brief に書いている"
+        },
+        {
+          "id": "ignores-head-and-worktree",
+          "text": "HEAD の tree や worktree の file (未 commit の変更を含む) を周辺コードの根拠にしていない"
+        },
+        {
+          "id": "literal-path-and-pattern",
+          "text": "path と pattern を literal 化した変数か argv で渡し、command 文字列へ埋め込んでいない"
+        },
+        {
+          "id": "does-not-mutate-worktree",
+          "text": "checkout / reset / stash で HEAD や worktree を対象 OID に合わせていない"
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "name": "commit-mode-missing-file-is-absent",
+      "prompt": "commit mode の review (expected commit OID aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa は検証済み)。変更箇所が config/feature.yml を読むが、その file は aaaa… の tree に無く、後続 commit で追加されて今の worktree にはある。また aaaa… の tree にある lib/dep.rb は、partial clone で blob が手元に無く git show が失敗する。Codex への brief でこの 2 つをどう扱わせる? 実行はしないで。",
+      "expected_output": "対象 tree に無い config/feature.yml は「その commit 時点では存在しない」として扱い、worktree の file で補わない (有無は git ls-tree -r --name-only <oid> など対象 tree で確かめる)。lib/dep.rb は tree にあるが object を読めないので、理由を書いて止め (verdict を出さない)、現在の checkout の lib/dep.rb へ fallback しない。Codex の sandbox では network が無いので fetch で補わず、executor も fetch / checkout で状態を変えない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "missing-file-is-absent",
+          "text": "対象 tree に無い file を、その commit 時点では存在しないものとして扱っている"
+        },
+        {
+          "id": "no-worktree-backfill",
+          "text": "対象 tree に無い file を worktree の file で補っていない"
+        },
+        {
+          "id": "unreadable-object-stops",
+          "text": "tree にあるが読めない object では理由を書いて止め、verdict を出していない"
+        },
+        {
+          "id": "no-checkout-fallback",
+          "text": "読めない object を現在の checkout の file や fetch で補っていない"
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "name": "root-commit-context-from-own-tree",
+      "prompt": "verified author=claude。expected commit OID aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa は repo の root commit (親が無い) で、local HEAD はそれより後の commit。commit mode で cross-review する brief を示して。実行はしないで。",
+      "expected_output": "root commit でも commit mode の規則は同じ。git show --stat --patch <oid> で全追加として差分を取り、<oid>^ に依存しない。周辺コードも root commit の tree から読み (git show <oid>:<path>、git grep -n -e <pattern> <oid> --、git ls-tree -r --name-only <oid>)、HEAD の tree や worktree の file を根拠にしない。必要な object を読めなければ理由を書いて止め、現在の checkout へ fallback しない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "root-diff-without-parent",
+          "text": "差分の取得が <oid>^ に依存せず、root commit を全追加として読む形になっている"
+        },
+        {
+          "id": "context-from-root-tree",
+          "text": "周辺コードを root commit の tree から読み、HEAD の tree や worktree の file を根拠にしていない"
+        },
+        {
+          "id": "same-rule-as-commit-mode",
+          "text": "root commit だからといって base / uncommitted mode や worktree の読み取りに切り替えていない"
+        }
+      ]
     }
   ]
 }
