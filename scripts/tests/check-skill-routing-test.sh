@@ -196,11 +196,18 @@ run_case "negative-tokens" 2 "prompt_tokens must be a non-negative integer" -- -
 printf '{"schema_version": 2, "tool": "codex", "model": "m", "variant": "v", "runs": []}\n' > "$tmp/bad-version.json"
 run_case "results-schema-version" 2 "schema_version must be 1" -- --cases "$tmp/cases.json" --results "$tmp/bad-version.json"
 
-# --- case 17: case set 自体の不備も exit 2 (primary が inventory 外 / id 重複 / prompt の制御文字 / primary が must_not に含まれる) ---
+# --- case 17: case set 自体の不備も exit 2 (primary が inventory 外 / id 重複 / id の文字集合 / prompt の制御文字 / primary が must_not に含まれる) ---
 sed 's/"primary": "skill-a"/"primary": "skill-z"/' "$tmp/cases.json" > "$tmp/cases-bad-primary.json"
 run_case "cases-primary-outside-inventory" 2 "primary must be null or an inventory skill" -- --cases "$tmp/cases-bad-primary.json" --results "$tmp/ok.json"
 sed 's/"id": "b-primary"/"id": "a-primary"/' "$tmp/cases.json" > "$tmp/cases-dup.json"
 run_case "cases-duplicate-id" 2 "duplicate case id" -- --cases "$tmp/cases-dup.json" --results "$tmp/ok.json"
+# id は probe の raw log の file 名に使うので、path の区切りや '..' を含む id は入力エラー
+sed 's/"id": "a-primary"/"id": "..\/a-primary"/' "$tmp/cases.json" > "$tmp/cases-id-traversal.json"
+run_case "cases-id-traversal" 2 "cases\[0\]\.id must match" -- --cases "$tmp/cases-id-traversal.json" --results "$tmp/ok.json"
+sed 's/"id": "a-primary"/"id": "a\/primary"/' "$tmp/cases.json" > "$tmp/cases-id-slash.json"
+run_case "cases-id-slash" 2 "cases\[0\]\.id must match" -- --cases "$tmp/cases-id-slash.json" --results "$tmp/ok.json"
+sed 's/"id": "a-primary"/"id": ".a-primary"/' "$tmp/cases.json" > "$tmp/cases-id-dot.json"
+run_case "cases-id-leading-dot" 2 "cases\[0\]\.id must match" -- --cases "$tmp/cases-id-dot.json" --results "$tmp/ok.json"
 sed 's/"prompt": "do a"/"prompt": "do\\na"/' "$tmp/cases.json" > "$tmp/cases-cntrl.json"
 run_case "cases-prompt-control-char" 2 "prompt must be a non-empty string without control characters" -- --cases "$tmp/cases-cntrl.json" --results "$tmp/ok.json"
 sed 's/"must_not": \["skill-b"\]/"must_not": ["skill-b", "skill-a"]/' "$tmp/cases.json" > "$tmp/cases-self.json"

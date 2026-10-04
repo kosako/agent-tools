@@ -90,7 +90,9 @@ module CheckSkillRouting
 
   def self.validate_case!(c, index, inventory)
     raise Error, "cases[#{index}] must be an object" unless c.is_a?(Hash)
-    raise Error, "cases[#{index}].id must be a non-empty string" unless label?(c["id"])
+    unless case_id?(c["id"])
+      raise Error, "cases[#{index}].id must match [A-Za-z0-9][A-Za-z0-9._-]* (used as a raw log file name)"
+    end
     raise Error, "cases[#{index}].cluster must be a non-empty string" unless label?(c["cluster"])
     unless c["prompt"].is_a?(String) && !c["prompt"].empty? && c["prompt"] !~ /[[:cntrl:]]/
       raise Error, "cases[#{index}].prompt must be a non-empty string without control characters"
@@ -145,6 +147,12 @@ module CheckSkillRouting
   # skill 名は失敗メッセージへ interpolate されるので、制御文字を入力エラーで弾く (出力偽造の防止)。
   def self.skill_name?(value)
     value.is_a?(String) && value.match?(/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/)
+  end
+
+  # case id は probe の raw log の file 名 (<out>.raw/<id>-<n>.jsonl) に使うので、skill 名と同じ安全な
+  # 文字集合に限る (path の区切りや '..' で raw dir の外を指させない)。
+  def self.case_id?(value)
+    skill_name?(value)
   end
 
   def self.label?(value)

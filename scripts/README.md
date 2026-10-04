@@ -136,9 +136,11 @@ usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
 - **CI では実行しない** (CLI 認証と network が要る)。証跡は raw log (`<out>.raw/`) と judge の
   summary。`--smoke` で隔離と event 形式を先に確認する (実測した版: Claude Code 2.1.277 /
   Codex CLI 0.153.4、境界つきの起動は 0.159.3)。
-- self-test: `tests/probe-skill-routing-test.sh` は Codex の起動の境界 (argv と、起動の前の flag と
-  feature の確認) だけを偽の `codex` で確かめる。event の解析と CLI の実起動は対象外 (実機で
-  `--smoke`)。`--dry-run` / `--help` の引数契約は `tests/cli-args-test.sh` の対象外。
+- self-test: `tests/probe-skill-routing-test.sh` は、Codex の起動の境界 (argv と、起動の前の flag と
+  feature の確認)、config からの model の選択 (top-level だけを読む)、raw dir の外を指す case id での停止を
+  偽の `codex` と fixture の `CODEX_HOME` で確かめ、event の解析 (`parse_claude` / `parse_codex`) を固定の
+  JSONL で、`--max-turns` の打ち切りの扱いを偽の `claude` で確かめる。CLI の実起動と、実際の event 形式との
+  一致は対象外 (実機で `--smoke`)。`--dry-run` / `--help` の引数契約は `tests/cli-args-test.sh` の対象外。
 
 - `probe-opencode-plugin.sh`: OpenCode plugin probe の runner (実機・#295)。HOME / XDG / DB /
   git config を tmp に向けた隔離環境で `opencode` を起動し、計測用 plugin と 127.0.0.1 の mock
