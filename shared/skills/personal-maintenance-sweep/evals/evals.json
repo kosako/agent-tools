@@ -187,7 +187,7 @@
       "id": 10,
       "name": "fix-mode-after-issues",
       "prompt": "[前提: Claude Code の session。追跡 Issue あり。残量は読めて medium と fix 2 本が収まる。local の HEAD は remote の main と一致し clean] この repo を監査して、見つかった docs のずれは直して PR まで出して",
-      "expected_output": "issues モードの手順 (監査 → 反証 → triage → 重複の照合 → 起票 → 記録) を終えたあと、fix モード (入口 (a)) で、この run で起票した所見のうち「論点なし」の印が付いた docs-drift で docs/ か root の Markdown のものだけを対象にする。着手の直前に base の tree で問題の存続と正本を確かめ直し、fixes.json と既存の open PR / branch を照合してから、run dir の下の linked worktree に 1 所見 = 1 PR で直す。累積差分に diff --check / gate / 壊れた参照の検査 / public-safety の gate を当て、push と PR (label 付き、Closes) を作り、personal-review-request に cross-review を依頼する。merge はしない。fix_cap を超える分と条件を満たさない所見は理由つきで報告する。",
+      "expected_output": "issues モードの手順 (監査 → 反証 → triage → 重複の照合 → 起票 → 記録) を終えたあと、fix モード (入口 (a)) で、この run で起票した所見のうち「論点なし」の印が付いた docs-drift で docs/ か root の Markdown のものだけを対象にする。着手の直前に base の tree で問題の存続と正本を確かめ直し、fixes.json と既存の open PR / branch を照合してから、run dir の下の linked worktree に 1 所見 = 1 PR で直す。累積差分に diff --check / gate / 壊れた参照の検査を当て、累積差分と base 以降の全 commit の message と PR の題名・本文を public-safety の gate に通してから、push と PR (label 付き、Closes) を作り、personal-review-request に cross-review を依頼する。merge はしない。fix_cap を超える分と条件を満たさない所見は理由つきで報告する。",
       "files": [],
       "assertions": [
         {
@@ -208,7 +208,7 @@
         },
         {
           "id": "verify-then-publish",
-          "text": "累積差分の検査と public-safety の gate を通してから push と PR を作り、review は personal-review-request に依頼している"
+          "text": "累積差分の検査をし、累積差分と base 以降の全 commit の message と PR の題名・本文を public-safety の gate に通してから push と PR を作り、review は personal-review-request に依頼している"
         },
         {
           "id": "no-merge",
