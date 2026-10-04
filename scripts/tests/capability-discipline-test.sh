@@ -7,15 +7,27 @@
 #   作らない (手順 4 の節と、やってはいけないことの節)。条件の無い「従来どおり memory に委ねます」は残さない。
 # - personal-github-safe-reader: safe-gh を配備していない・実行できない・exit が想定外のときは、生の
 #   `gh` へ fallback せず、本文を読まずに停止して hand-off する (安全な読み口の節と、やってはいけない
-#   ことの節)。
-# - 両 skill の evals.json に、その場合の case (name と assertion の id) がある。
+#   ことの節)。呼び直してよいのは、呼び方の誤りが safe-gh の固定の message から明らかなときの 1 度だけで、
+#   それでも exit 0 にならなければ停止する (安全な読み口の節)。
+# - 両 skill の evals.json に、その場合の case (name と assertion の id) がある。safe-reader には、gh api の
+#   失敗では呼び直さない assertion と、呼び方の誤りで 1 度だけ呼び直す case・呼び直しも失敗したら停止する
+#   case がある。evals.json の root が object でなければ失敗にする。
 # 節の外にだけ語があっても規則として読まれないので、節に範囲を絞る。
+# 検査そのものの確認として、evals.json の root を [] / null に置き換えた copy で検査が失敗することも
+# 確かめる (必要な case が消えても成功する経路が無いことの確認)。
 # 引数で skill の directory の親 (既定は shared/skills) を差し替えられる (変異での確認用)。
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-skills_dir=${1:-"$script_dir/../../shared/skills"}
-ruby - "$skills_dir" <<'RUBY'
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
+
+skills_dir=${1:-"$repo_root/shared/skills"}
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+cat > "$tmp/check.rb" <<'RUBY'
 require "json"
 
 skills_dir = ARGV.fetch(0)
@@ -35,7 +47,9 @@ TEXT_TARGETS = [
    ["memory", "新しい file", "sink"]],
   ["#{READER}/SKILL.md", "安全な読み口の節", /\A## 安全な読み口/, H2,
    ["配備", "実行できない", "exit", "fallback", "gh issue view --comments", "gh api",
-    "本文を読まず", "停止", "hand-off"]],
+    "本文を読まず", "停止", "hand-off",
+    # 呼び直しの例外の条件と回数の制限。
+    "呼び方の誤り", "固定の message", "1 度だけ呼び直", "exit 0 にならなければ停止"]],
   ["#{READER}/SKILL.md", "やってはいけないことの節", DONTS, H2,
    ["safe-gh", "fallback", "生の `gh`"]],
 ].freeze
@@ -54,7 +68,11 @@ EVAL_TARGETS = [
   ["#{READER}/evals/evals.json", "safe-gh-not-deployed-no-raw-fallback",
    %w[no-raw-gh-fallback no-body-read stops-and-hands-off]],
   ["#{READER}/evals/evals.json", "safe-gh-fails-no-raw-fallback",
-   %w[no-raw-gh-fallback no-body-read stops-and-hands-off]],
+   %w[no-raw-gh-fallback no-body-read stops-and-hands-off no-retry-on-api-failure]],
+  ["#{READER}/evals/evals.json", "safe-gh-usage-error-retries-once",
+   %w[retries-once-with-fix no-raw-gh-fallback stops-if-retry-fails]],
+  ["#{READER}/evals/evals.json", "safe-gh-retry-fails-stops",
+   %w[no-second-retry no-raw-gh-fallback no-body-read stops-and-hands-off]],
 ].freeze
 
 def section(lines, start_re, stop_re)
@@ -107,6 +125,10 @@ EVAL_TARGETS.each do |rel, name, ids|
         :invalid
       end
     errors << "#{rel}: file が無い" if parsed[rel] == :missing
+    # root が [] / null などなら case を探さずに飛ばすことになるので、黙って通さず失敗にする。
+    unless [:missing, :invalid].include?(parsed[rel]) || parsed[rel].is_a?(Hash)
+      errors << "#{rel}: root が object でない (#{parsed[rel].class})"
+    end
     if parsed[rel].is_a?(Hash)
       case_ids = Array(parsed[rel]["evals"]).map { |c| c["id"] }
       dup = case_ids.select { |i| case_ids.count(i) > 1 }.uniq
@@ -127,5 +149,23 @@ EVAL_TARGETS.each do |rel, name, ids|
 end
 
 abort "FAIL: capability-discipline\n  " + errors.join("\n  ") unless errors.empty?
-puts "ok: capability-discipline"
 RUBY
+
+ruby "$tmp/check.rb" "$skills_dir"
+
+# 検査そのものの確認: evals.json の root を [] / null に置き換えた copy では、検査が root の形を理由に失敗する。
+for skill in personal-session-handoff personal-github-safe-reader; do
+  for root in '[]' 'null'; do
+    rm -rf "$tmp/skills"
+    mkdir "$tmp/skills"
+    cp -R "$skills_dir/personal-session-handoff" "$skills_dir/personal-github-safe-reader" "$tmp/skills/"
+    printf '%s\n' "$root" > "$tmp/skills/$skill/evals/evals.json"
+    if ruby "$tmp/check.rb" "$tmp/skills" > "$tmp/out" 2>&1; then
+      fail "capability-discipline: $skill の evals.json の root が $root でも検査が成功した"
+    fi
+    grep -qF "$skill/evals/evals.json: root が object でない" "$tmp/out" ||
+      fail "capability-discipline: $skill の evals.json の root が $root のとき、root の形を理由に失敗しない"
+  done
+done
+
+echo "ok: capability-discipline"
