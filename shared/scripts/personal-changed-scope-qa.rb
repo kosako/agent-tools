@@ -155,12 +155,17 @@ module ChangedScopeQa
     return nil if status.nil?
     return "" if status.empty?
 
-    head = git_output(root, "rev-parse", "--verify", "-q", "HEAD")
-    diff = head ? git_output(root, "diff", "HEAD", "--no-color", "--no-ext-diff") : unborn_diff(root)
+    head, head_status = git_run(root, "rev-parse", "--verify", "-q", "HEAD")
+    # `--verify -q` は HEAD が無い (初回 commit 前) ときだけ exit 1 になる。それ以外の失敗 (128 や signal) は
+    # unborn と区別して判定不能にする。
+    unborn = head_status.exitstatus == 1
+    return nil unless head_status.success? || unborn
+
+    diff = unborn ? unborn_diff(root) : git_output(root, "diff", "HEAD", "--no-color", "--no-ext-diff")
     return nil if diff.nil?
 
     Digest::SHA256.hexdigest(
-      [head ? head.chomp : "unborn", status, diff, untracked_digest(status, root),
+      [unborn ? "unborn" : head.chomp, status, diff, untracked_digest(status, root),
        JSON.generate(checks)].join("\0")
     )
   end
@@ -173,10 +178,16 @@ module ChangedScopeQa
     staged && unstaged && "#{staged}\0#{unstaged}"
   end
 
+  # git の出力と終了状態。
+  def git_run(root, *args)
+    out = IO.popen(["git", "-C", root, *args], err: File::NULL, &:read)
+    [out, $?]
+  end
+
   # git の出力 (exit 0 のときだけ)。失敗は nil。
   def git_output(root, *args)
-    out = IO.popen(["git", "-C", root, *args], err: File::NULL, &:read)
-    $?.success? ? out : nil
+    out, status = git_run(root, *args)
+    status.success? ? out : nil
   end
 
   def state_path(root)
@@ -208,7 +219,8 @@ module ChangedScopeQa
     out = IO.popen(check["command"], chdir: root, err: %i[child out], &:read)
     status = $?
     output = out.to_s
-    output += "\n(terminated by SIG#{Signal.signame(status.termsig)})" if status.signaled?
+    # 要約は先頭から打ち切るので、終了の理由は出力より前に置く。
+    output = "(terminated by SIG#{Signal.signame(status.termsig)})\n#{output}" if status.signaled?
     { name: check_name(check), ok: status.success?, output: output, spawn_failed: false }
   rescue Errno::ENOENT, Errno::EACCES, Errno::ENOEXEC => e
     # 不在だけでなく権限喪失・不正形式も spawn 失敗として可視化する (無言の恒久不活性を防ぐ)

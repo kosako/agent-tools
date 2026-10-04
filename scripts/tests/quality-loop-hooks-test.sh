@@ -325,6 +325,24 @@ set -e
 [ "$rc" -eq 0 ] || fail "cached signaled failure must not re-block (rc=$rc)"
 echo "$out" | grep -q "未解消" || fail "cached signaled failure should warn as unresolved: $out"
 if echo "$out" | grep -q "実行できません"; then fail "signaled check must not be reported as missing: $out"; fi
+# 出力が要約の打ち切り (2000 文字) より長くても、signal 名は要約に残る (#381 review CSQA-02)
+cat > "$tmp/sig-long-check" <<'EOF'
+#!/bin/sh
+awk 'BEGIN { for (i = 0; i < 80; i++) printf "%s\n", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }'
+kill -TERM $$
+EOF
+chmod +x "$tmp/sig-long-check"
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "sig-long", "command" => [ARGV[1]]}]}}))
+' "$repo_real" "$tmp/sig-long-check" "$conf"
+echo signaled-long >> "$repo/u.txt"
+set +e
+err=$(cd "$repo" && run_qa false 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "signaled check with long output must block (rc=$rc)"
+echo "$err" | grep -q "truncated" || fail "long output should be truncated in the summary: $err"
+echo "$err" | grep -q "SIGTERM" || fail "signal name must survive truncation of a long output"
 
 # ---- #373: 初回 commit 前 (HEAD が無い) の repo でも、stage 済み / 未 stage の内容の変化で再検査する ----
 unborn="$tmp/unborn"
@@ -381,6 +399,22 @@ err=$(cd "$repo" && run_qa false 2>&1 >/dev/null)
 rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "after git recovers the scope must be checked (rc=$rc): $err"
+# HEAD の検出が unborn (exit 1) 以外で失敗したら (128 など)、unborn とみなさず判定不能にする (#381 review CSQA-01)
+cat > "$tmp/failgit/git" <<EOF
+#!/bin/sh
+# repo root の検出 (rev-parse --show-toplevel) は通し、HEAD の検出 (rev-parse --verify) だけを失敗させる
+for a in "\$@"; do [ "\$a" = --verify ] && exit 128; done
+exec $(shq "$realgit") "\$@"
+EOF
+chmod +x "$tmp/failgit/git"
+echo head-fails >> "$repo/u.txt"
+: > "$tmp/check-argv.log"
+set +e
+out=$(cd "$repo" && PATH="$tmp/failgit:$PATH" && export PATH && run_qa false 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "failed HEAD lookup must not gate (rc=$rc): $out"
+[ ! -s "$tmp/check-argv.log" ] || fail "failed HEAD lookup must not be treated as unborn (checks ran)"
 rm "$tmp/check-fail"
 
 # ---- R1 回帰: fast-edit-check の不正 entry 可視化と総量 truncate ---------------
