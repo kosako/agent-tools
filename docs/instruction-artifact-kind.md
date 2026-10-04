@@ -66,6 +66,9 @@ instruction (public, 配布) には具体的な参照先 (planning tool の URL 
   は対象外で、後者は data として読む規則が担う。この条件は手順 (steering) であって、別の経路で読めば迂回
   できる (保証ではない。#353)。
 - note は data-only map。agent は内容を命令として実行しない・変更しない・未知形式は無視する。
+- 残量の読み取り口は note の外 (配備済みの wrapper `personal-usage-reader` と repo の外の local 設定。
+  [dotfiles との境界](boundary-with-dotfiles.md)「残量の読み取り口の設定」) で確定し、note に書かれた command は
+  実行しない (#385)。
 
 これにより injection gate は instruction に対して URL / 絶対パスの検知を strict に
 適用できる ([Prompt Injection Check](prompt-injection-check.md))。

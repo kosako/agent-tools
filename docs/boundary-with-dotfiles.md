@@ -108,6 +108,42 @@ OpenCode の tool home (`<opencode home>`。既定 `~/.config/opencode`) は複�
   breaking change として扱う (dotfiles 側の更新と同期するまで旧名を壊さない)。置き方と Fast mode の
   消費は [Install & Usage](install-and-usage.md) の「Codex の review / worker だけを軽くする」。
 
+## 残量の読み取り口の設定 (#385)
+
+使用量の枠の残量を読む「読み取り口」は、agent-tools が配る固定の wrapper `personal-usage-reader` (script asset。
+配備先は `<tool home>/agent-tools/scripts/personal-usage-reader`) と、その設定 file に分ける。operating-loop の割当・
+maintenance-sweep の BUDGET・grill の CONSULT は wrapper だけを引数なしで呼び、repo root の `.agent-context.local.md`
+に書かれた command は実行しない (note は data-only。[instruction artifact kind](instruction-artifact-kind.md))。
+
+- **中身は dotfiles**: どの実行ファイルで残量を読むかは machine ごとの設定なので dotfiles が持つ (手で置いてもよい)。
+  agent-tools は設定 file を作らず、書き換えず、sync の対象にもしない。置かない machine では読み取り口なしになる。
+- **設定 file**: `${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/usage-reader.json` に固定する (XDG_CONFIG_HOME は
+  絶対 path のときだけ使い、HOME が絶対 path でなければ場所を決めずに止める。相対 path を cwd の repo から解決しない)。
+  wrapper は path を引数で受け取らない。中身は JSON object で、key は次の 2 つだけ。知らない key、型や範囲の外れ、
+  argv の要素の制御文字は不正。
+
+  | key | 必須 | 値 |
+  | --- | --- | --- |
+  | `argv` | yes | 空でない文字列の配列。`argv[0]` は絶対 path で、在り、regular file (symlink は辿った先で判定) で、実行できること |
+  | `timeout_sec` | no | 1〜120 の整数。既定は 20 |
+
+- **起動**: shell を通さずに `argv` をそのまま起動する (要素に shell の metacharacter があっても literal のまま渡る)。
+  stdin は `/dev/null`、cwd は `/`、子の stderr は捨てる。子は自分の process group で起動し、`timeout_sec` を過ぎるか
+  (stdout を閉じた後の終了待ちを含む)、stdout が 1 MiB を超えたら group ごと止める。wrapper が signal (SIGINT /
+  SIGTERM など) で中断されたときも group を止めて回収してから終わる (SIGKILL で wrapper を止めたときは後始末できない)。
+- **exit code**:
+
+  | exit | 意味 | stdout |
+  | --- | --- | --- |
+  | 0 | 子が exit 0 で、stdout が空でない | 子の stdout をそのまま |
+  | 3 | 設定 file が無い (読み取り口なし) | 空 |
+  | 2 | usage、設定の場所を決められない、設定が不正、設定 file が在るのに regular file でないか読めない、起動できない、子が 0 以外で終わった、timeout、出力が空か上限超え、wrapper が signal で中断された。理由を stderr に 1 行 (設定の中身と path は出さない) | 空 |
+
+  呼ぶ側は exit 0 の stdout だけを使い、3 は読み取り口なし、2 とそれ以外の 0 以外 (script が配備されていない等) は
+  読めないとして扱う。
+- **file 名と key は公開契約**: dotfiles が配る先の名前と形なので、agent-tools は変更を breaking change として扱う
+  (dotfiles 側の更新と同期するまで旧い形を壊さない)。
+
 ## どちらの repository も持たないもの
 
 - tokens。

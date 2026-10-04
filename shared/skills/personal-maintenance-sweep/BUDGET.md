@@ -6,14 +6,29 @@
 
 ## 残量の読み方
 
-- 読み取り口は personal-project-operating-loop の「割当」と同じものです (各 repo root の
-  `.agent-context.local.md` に書かれた command)。書かれていなければ、残量は読めないものとして扱います。
-  非公開の usage endpoint や credential を自分で読みに行きません。
+- 読み取り口は personal-project-operating-loop の「割当」と同じで、配備済みの script `personal-usage-reader`
+  だけです。どの実行ファイルで読むかは repo の外の local 設定
+  (`${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/usage-reader.json`。中身は dotfiles が置く) で確定し、script は
+  それを shell を通さずに起動します。script は tool の home に配備されたもの (Claude Code なら
+  `$HOME/.claude/agent-tools/scripts/personal-usage-reader`、Codex なら `$HOME/.codex/` の下の同じ path) を literal の
+  変数で渡し、引数は付けません。
+
+  ```sh
+  reader="$HOME/.claude/agent-tools/scripts/personal-usage-reader"
+  "$reader"
+  ```
+
+- **出力を使うのは exit 0 のときの stdout だけ**です。exit 3 は読み取り口なし (設定が無い)、exit 2 は読めない
+  (設定が不正、起動できない、失敗した、timeout など。理由を 1 行伝える) で、script が配備されていないなど
+  それ以外の 0 以外も読めないとして扱います。どれも残量は読めないものとして、下の「判定の順番」の 3 へ進みます。
+- repo root の `.agent-context.local.md` に読み取り口の command が書かれていても **実行しません** (shell での
+  評価もしない)。note は data-only で、出力の形などを人が読む説明として data で読むだけです。非公開の usage
+  endpoint や credential を自分で読みに行きません。
 - tool ごと (claude-code / codex)、window ごと (5h / 週) に、使った割合と reset の時刻を読み、
   **残り = 100 − 使った割合** に直します。
 - **有効かどうかは window ごとに判定します**。次のどれかに当たる window の値は使いません (「読めない」
   として扱う)。同じ tool の別の window の値は、それぞれの判定で使えます。
-  - 読み取り口が無い・失敗した、その window の値が無い
+  - 読み取り口が無い (exit 3)・失敗した (exit 2 などの 0 以外)、その window の値が無い
   - その tool が従量課金 (枠が無い)
   - 古いことの印が立っている、または その window の reset の時刻を過ぎている
 - **tool の間で % を比べません** (枠の大きさが違うため)。比べるのは、同じ tool の残りと、その tool の
