@@ -196,6 +196,7 @@ codex は `--tool codex` で同じ手順。両 tool で回帰なしを確認し�
 - prompt は `-` で始めない (CLI の option と衝突する)。制御文字は入力エラー。
 - case id は raw log の file 名 (`<out>.raw/<case>-<n>.jsonl`) に使うので、英数字と `._-` に限る (先頭は
   英数字)。外れたら入力エラー。
+- `personal-resume-project` はどの case の `must_not` にも入れない (理由は下の「検証境界」。self-test が検査する)。
 
 ## 検証境界
 
@@ -203,6 +204,11 @@ codex は `--tool codex` で同じ手順。両 tool で回帰なしを確認し�
   訂正) を含まない。user scope の instruction が skill 名に触れる環境では、その影響は before /
   after の両方に等しく乗る。
 - model を固定しても揺れはある。`--repeat` と「同条件比較」で扱い、絶対値を保証にしない。
+- 単発 headless の probe は毎 run が session の冒頭にあたる。常時 instruction が session 開始時に resume を使うよう
+  指示しているので、依頼の内容に関係なく `personal-resume-project` が読まれうる (Codex の `session-placement-question`
+  では既存の drift として before / after の両方で観測された。#301)。これは依頼の routing ではなく session 冒頭の
+  gate なので、production-rail と同じく secondary として扱い、resume の読み取りを `must_not` に入れない。harness が
+  観測しているのは skill の読み取り / 起動であり、resume の内容 (status の報告や continuation) を生成したかではない。
 - Codex の観測は skill file の読み取りで判定する。skill を読まずに listing の description だけで
   振る舞う run は observed に出ない (Claude Code の `Skill` tool_use と同じ意味の「起動」で揃えている)。
   探索読みの扱い (最初の 1 本だけを採る) は heuristic で、閾値は runner の定数。
