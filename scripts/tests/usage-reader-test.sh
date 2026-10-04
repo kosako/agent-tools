@@ -2,10 +2,11 @@
 # personal-usage-reader.rb の self-test (#385)。
 # 配備と同じ layout (拡張子なしの名前で 1 つの directory に置く) に copy して CLI として実行する。HOME と
 # XDG_CONFIG_HOME は一時 dir に向け、実物の ~/.config には触れない。設定の契約 (path は固定、key は argv と
-# timeout_sec だけ)、exit の契約 (0 = 読めた / 3 = 設定が無い / 2 = 不正・失敗、2 と 3 は stdout が空で理由が
+# timeout_sec だけ)、exit の契約 (0 = 読めた / 3 = 設定が無い / 2 = 不正・失敗・中断、2 と 3 は stdout が空で理由が
 # stderr に 1 行、理由に設定の中身と path を出さない)、起動の契約 (shell を通さない、stdin は /dev/null、cwd は
-# /、子の stderr は捨てる、timeout と出力の上限で process group ごと止める) を固定する。repo root の note
-# (`.agent-context.local.md`) にだけ command が書かれた repo を cwd にしても、その command は実行されない。
+# /、子の stderr は捨てる、timeout (stdout を閉じた後の終了待ちを含む) と出力の上限と wrapper への signal で
+# process group ごと止める) を固定する。repo root の note (`.agent-context.local.md`) にだけ command が書かれた
+# repo を cwd にしても、その command は実行されない。
 # 引数で script の source を差し替えられる (変異での確認用)。
 set -eu
 
@@ -17,11 +18,13 @@ src=${1:-"$repo_root/shared/scripts/personal-usage-reader.rb"}
 [ -f "$src" ] || fail "missing $src"
 
 tmp=$(mktemp -d)
-# timeout の case で止まらなかった子が残っても消し、chmod 000 にした fixture も消せるように権限を戻す。
+# 止まらなかった子 (pid は偽の reader が pids* に書く) が残っても消し、chmod 000 にした fixture も消せるように
+# 権限を戻す。
 cleanup() {
-  if [ -f "$tmp/pids" ]; then
-    for p in $(cat "$tmp/pids"); do kill -9 "$p" 2>/dev/null || :; done
-  fi
+  for f in "$tmp"/pids*; do
+    [ -f "$f" ] || continue
+    for p in $(cat "$f"); do kill -9 "$p" 2>/dev/null || :; done
+  done
   chmod -R u+rwx "$tmp" 2>/dev/null || :
   rm -rf "$tmp"
 }
@@ -94,6 +97,15 @@ printf '%s %s\n' "$$" "$!" > "$1"
 echo partial
 wait
 EOF
+# 出力してから stdout を閉じ (wrapper には EOF が届く)、背景の孫と自分の pid を $1 に書いて待ち続ける。
+cat > "$bin/hang-closed" <<'EOF'
+#!/bin/sh
+echo partial
+exec >/dev/null
+sleep 30 &
+printf '%s %s\n' "$$" "$!" > "$1"
+wait
+EOF
 # 上限ちょうど (1 MiB) を出す / 1 byte 超える / 止めるまで出し続ける。
 cat > "$bin/exact-cap" <<'EOF'
 #!/bin/sh
@@ -116,7 +128,7 @@ EOF
 # 実行権限の無い file。
 printf '#!/bin/sh\necho no\n' > "$bin/not-exec"
 chmod +x "$bin/echo-args" "$bin/print-cwd" "$bin/read-stdin" "$bin/fail-7" "$bin/silent" "$bin/hang" \
-  "$bin/exact-cap" "$bin/over-cap" "$bin/flood" "$odd"
+  "$bin/hang-closed" "$bin/exact-cap" "$bin/over-cap" "$bin/flood" "$odd"
 ln -s "$bin/echo-args" "$bin/linked-reader"
 
 # write_argv <file> <argv...>: {"argv": [...]} を JSON で書く (値は argv で渡し、JSON の quote は Ruby に任せる)。
@@ -233,27 +245,84 @@ write_argv "$config" "$bin/silent"
 run_reader
 expect_error "empty output" "読み取り口の出力が空です"
 
+# expect_group_stopped <label> <pids file>: 偽の reader が書いた子と孫の pid が、どれも残っていない。kill された
+# 孫は init に回収されるまで zombie で残りうるので、少し待って確かめる。
+expect_group_stopped() {
+  [ -s "$2" ] || fail "$1: the reader did not record its pids"
+  egs_alive=""
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    egs_alive=""
+    for p in $(cat "$2"); do
+      if kill -0 "$p" 2>/dev/null; then egs_alive="$egs_alive $p"; fi
+    done
+    [ -n "$egs_alive" ] || break
+    sleep 0.1
+  done
+  [ -z "$egs_alive" ] || fail "$1 must stop the child and its process group (still alive:$egs_alive)"
+}
+
+# write_hang_config <reader> <pids file> <timeout_sec>: 偽の reader に pid の書き先を渡す設定を書く。
+write_hang_config() {
+  ruby -rjson -e 'File.write(ARGV[0], JSON.generate("argv" => [ARGV[1], ARGV[2]], "timeout_sec" => ARGV[3].to_i))' \
+    "$config" "$1" "$2" "$3"
+}
+
 # timeout: 子と孫 (同じ process group) を止めて戻る。止めずに待つ実装は 30 秒かかる (上限の case より先に置き、
 # 止めない実装が出し続ける子を待って詰まる前にここで落とす)。
-ruby -rjson -e 'File.write(ARGV[0], JSON.generate("argv" => [ARGV[1], ARGV[2]], "timeout_sec" => 1))' \
-  "$config" "$bin/hang" "$tmp/pids"
+write_hang_config "$bin/hang" "$tmp/pids" 1
 started=$(date +%s)
 run_reader
 elapsed=$(($(date +%s) - started))
 expect_error "timeout" "読み取り口が timeout_sec の時間内に終わらなかったので止めました"
 [ "$elapsed" -lt 10 ] || fail "timeout should return promptly (took ${elapsed}s)"
-[ -s "$tmp/pids" ] || fail "hang reader did not record its pids"
-# kill された孫は init に回収されるまで zombie で残りうるので、少し待って確かめる。
-alive=""
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-  alive=""
-  for p in $(cat "$tmp/pids"); do
-    if kill -0 "$p" 2>/dev/null; then alive="$alive $p"; fi
-  done
-  [ -n "$alive" ] || break
-  sleep 0.1
+expect_group_stopped "timeout" "$tmp/pids"
+
+# timeout は stdout を閉じた後の終了待ちにも効く (EOF の後も止まらない子を timeout_sec で止める)
+write_hang_config "$bin/hang-closed" "$tmp/pids-closed" 1
+started=$(date +%s)
+run_reader
+elapsed=$(($(date +%s) - started))
+expect_error "timeout after stdout is closed" "読み取り口が timeout_sec の時間内に終わらなかったので止めました"
+[ "$elapsed" -lt 10 ] || fail "timeout after stdout is closed should return promptly (took ${elapsed}s)"
+expect_group_stopped "timeout after stdout is closed" "$tmp/pids-closed"
+
+# wrapper への signal (SIGTERM / SIGINT): 子と孫を止めて回収し、exit 2 で理由を 1 行 (stdout は空)。timeout は
+# 長くして、timeout ではなく signal で止まることを見る。SIGINT は非対話の sh が背景の job で無視にするので、
+# 既定の扱いに戻した Ruby から起動して送る。
+for sig in TERM INT; do
+  write_hang_config "$bin/hang" "$tmp/pids-$sig" 60
+  set +e
+  status=$(env HOME="$fake_home" XDG_CONFIG_HOME="$xdg" ruby - "$sig" "$reader" "$tmp/pids-$sig" "$tmp/out" "$tmp/err" <<'RUBY'
+sig, reader, pids, out, err = ARGV
+clock = -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
+trap("INT", "SYSTEM_DEFAULT")
+pid = Process.spawn([reader, reader], in: File::NULL, out: out, err: err, chdir: File.dirname(out))
+deadline = clock.call + 10
+sleep 0.05 until File.size?(pids) || clock.call > deadline
+sleep 0.2
+Process.kill(sig, pid)
+deadline = clock.call + 10
+st = nil
+until (st = Process.waitpid2(pid, Process::WNOHANG)) || clock.call > deadline
+  sleep 0.05
+end
+if st.nil?
+  Process.kill("KILL", pid)
+  Process.wait(pid)
+  puts "hung"
+else
+  puts st[1].exited? ? "exit #{st[1].exitstatus}" : "signal #{st[1].termsig}"
+end
+RUBY
+)
+  set -e
+  out=$(cat "$tmp/out")
+  err=$(cat "$tmp/err")
+  [ "$status" = "exit 2" ] || fail "SIG$sig to the wrapper should end it with exit 2 ($status): $err"
+  rc=2
+  expect_error "SIG$sig to the wrapper" "signal (SIG$sig) で中断しました"
+  expect_group_stopped "SIG$sig to the wrapper" "$tmp/pids-$sig"
 done
-[ -z "$alive" ] || fail "timeout must stop the child and its process group (still alive:$alive)"
 
 # 出力の上限: ちょうど 1 MiB は通し、超えたら止める (出し続ける子も止まる)
 write_argv "$config" "$bin/exact-cap"

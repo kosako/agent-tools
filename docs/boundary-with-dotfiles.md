@@ -129,14 +129,15 @@ maintenance-sweep の BUDGET・grill の CONSULT は wrapper だけを引数な�
 
 - **起動**: shell を通さずに `argv` をそのまま起動する (要素に shell の metacharacter があっても literal のまま渡る)。
   stdin は `/dev/null`、cwd は `/`、子の stderr は捨てる。子は自分の process group で起動し、`timeout_sec` を過ぎるか
-  stdout が 1 MiB を超えたら group ごと止める。
+  (stdout を閉じた後の終了待ちを含む)、stdout が 1 MiB を超えたら group ごと止める。wrapper が signal (SIGINT /
+  SIGTERM など) で中断されたときも group を止めて回収してから終わる (SIGKILL で wrapper を止めたときは後始末できない)。
 - **exit code**:
 
   | exit | 意味 | stdout |
   | --- | --- | --- |
   | 0 | 子が exit 0 で、stdout が空でない | 子の stdout をそのまま |
   | 3 | 設定 file が無い (読み取り口なし) | 空 |
-  | 2 | usage、設定の場所を決められない、設定が不正、設定 file が在るのに regular file でないか読めない、起動できない、子が 0 以外で終わった、timeout、出力が空か上限超え。理由を stderr に 1 行 (設定の中身と path は出さない) | 空 |
+  | 2 | usage、設定の場所を決められない、設定が不正、設定 file が在るのに regular file でないか読めない、起動できない、子が 0 以外で終わった、timeout、出力が空か上限超え、wrapper が signal で中断された。理由を stderr に 1 行 (設定の中身と path は出さない) | 空 |
 
   呼ぶ側は exit 0 の stdout だけを使い、3 は読み取り口なし、2 とそれ以外の 0 以外 (script が配備されていない等) は
   読めないとして扱う。

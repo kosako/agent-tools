@@ -18,14 +18,16 @@
 #
 # 起動は shell を通さない (`Process.spawn([argv0, argv0], *rest)`。要素が 1 つでも shell に渡らない形)。stdin は
 # /dev/null、cwd は / (呼び出し元の repo の内容に左右されない)、子の stderr は捨てる。子は自分の process group
-# で起動し、timeout と出力の上限 (1 MiB) を超えたら group ごと SIGKILL で止める。
+# で起動し、timeout (stdout を閉じた後の終了待ちを含む) と出力の上限 (1 MiB) を超えたら group ごと SIGKILL で
+# 止める。wrapper が signal (SIGINT / SIGTERM など) で中断されたときも group を止めて回収してから終わる
+# (SIGKILL で wrapper を止めたときは後始末できない)。
 #
 # exit:
 # - 0: 子が exit 0 で、stdout が空でない。stdout をそのまま出す。
 # - 3: 設定 file が無い (読み取り口なし)。stdout は空。
 # - 2: usage / 設定の場所を決められない / 設定が不正 / 設定 file が在るのに regular file でない・確かめられない・
 #   読めない / 実行ファイルが上の条件を満たさない / 起動できない / 子が 0 以外で終わった / timeout / 出力が空か
-#   上限を超えた。理由を stderr に 1 行出し、stdout は空。
+#   上限を超えた / wrapper が signal で中断された。理由を stderr に 1 行出し、stdout は空。
 # 理由文に設定の中身 (argv の値・知らない key の名前) と path は出さない。
 
 require "json"
@@ -172,19 +174,34 @@ module UsageReader
     [out, status, stopped]
   end
 
+  # 止めて回収する (collect を途中で抜けたときの後始末)。回収済みなら ECHILD で何もしない。
+  def stop_and_reap(pid)
+    kill_group(pid)
+    Process.waitpid(pid)
+  rescue Errno::ECHILD
+    nil
+  end
+
   def run_reader(argv, timeout)
     reader, writer = IO.pipe
+    pid = nil
+    collected = false
     begin
-      pid = Process.spawn([argv[0], argv[0]], *argv[1..-1],
-                          in: File::NULL, out: writer, err: File::NULL, chdir: "/", pgroup: true)
-    rescue SystemCallError => e
-      raise ArgumentError, "読み取り口を起動できません (#{e.class})"
-    ensure
+      begin
+        pid = Process.spawn([argv[0], argv[0]], *argv[1..-1],
+                            in: File::NULL, out: writer, err: File::NULL, chdir: "/", pgroup: true)
+      rescue SystemCallError => e
+        raise ArgumentError, "読み取り口を起動できません (#{e.class})"
+      end
       writer.close
-    end
-    begin
       out, status, stopped = collect(pid, reader, now + timeout)
+      collected = true
     ensure
+      # wrapper への signal (SIGINT の Interrupt、SIGTERM の SignalException など) や想定外の例外で collect を
+      # 抜けたときも、子の group を止めて回収する。子は別の process group にいるので、ここで止めないと wrapper が
+      # 終わっても子と孫が残り、timeout も効かなくなる。collect を終えた経路では collect が回収済み。
+      stop_and_reap(pid) if pid && !collected
+      writer.close unless writer.closed?
       reader.close
     end
     raise ArgumentError, "読み取り口が timeout_sec の時間内に終わらなかったので止めました" if stopped == :timeout
@@ -214,6 +231,10 @@ module UsageReader
     EXIT_ABSENT
   rescue ArgumentError => e
     warn "personal-usage-reader: #{e.message}"
+    EXIT_ERROR
+  rescue SignalException => e
+    # 中断も失敗の 1 つとして exit 2 にそろえる (子の group は run_reader の後始末で止めて回収済み)。
+    warn "personal-usage-reader: signal (SIG#{Signal.signame(e.signo)}) で中断しました"
     EXIT_ERROR
   rescue StandardError => e
     warn "personal-usage-reader: unexpected error (#{e.class})"
