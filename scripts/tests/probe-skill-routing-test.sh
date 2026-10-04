@@ -1,9 +1,15 @@
 #!/bin/sh
-# scripts/lib/probe_skill_routing.rb の Codex 側の起動の境界の self-test (#372)。
-# probe の Codex の起動に、監査 / review と同じ境界 (user config の MCP / connector と rules を外し、
-# sandbox の外へ届く feature を disable する) が付くこと、起動の前に flag と feature の在否を確かめて
-# 欠けていれば Codex を起動せずに exit 2 になることを、PATH 上の偽の codex で確かめる (実 codex /
-# network / 実 ~/.codex には触れない)。event の解析 (parse_claude / parse_codex) はこの suite の対象外。
+# scripts/lib/probe_skill_routing.rb の self-test (#372 / #384)。
+# - Codex の起動の境界: probe の Codex の起動に、監査 / review と同じ境界 (user config の MCP /
+#   connector と rules を外し、sandbox の外へ届く feature を disable する) が付くこと、起動の前に flag と
+#   feature の在否を確かめて欠けていれば Codex を起動せずに exit 2 になることを、PATH 上の偽の codex で
+#   確かめる。
+# - model の選択: --model が無いときは CODEX_HOME の fixture の config.toml の top-level (最初の table
+#   header より前) の model だけを使い、無ければエラーにする。
+# - raw log の保存先: raw dir の外を指す case id では CLI を起動せずに exit 2 で止まり、raw dir の外に
+#   何も作らない。
+# 実 codex / network / 実 ~/.codex には触れない。event の解析 (parse_claude / parse_codex) はこの suite の
+# 対象外。
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -43,6 +49,67 @@ argv = P.codex_argv({ model: "m-x" }, "/proj", ["personal-a"])
 check("境界の flag は skills.config の override と両立する",
       argv.include?("--ignore-user-config") && argv.include?("--ignore-rules") &&
       argv[-3] == "-c" && argv[-2].start_with?("skills.config=[{path=") && argv[-1] == "-")
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
+# ---- Ruby unit checks: config からの model の選択 ---------------------------------------
+# top-level に model が無く profile の table にだけある config と、両方にある config
+profile_home="$tmp/codex-home-profile-model"
+mkdir -p "$profile_home"
+printf '%s\n' '# top-level に model は無い' '' 'approval_policy = "never"' '' '[profiles.other]' 'model = "CANARY-PROFILE"' \
+  > "$profile_home/config.toml"
+top_home="$tmp/codex-home-top-model"
+mkdir -p "$top_home"
+printf '%s\n' '# comment' '' 'approval_policy = "never"' 'model = "m-top"' '' '[profiles.other]' 'model = "CANARY-PROFILE"' \
+  > "$top_home/config.toml"
+
+ruby -r"$script_dir/lib/check_helper" - "$src" "$profile_home" "$top_home" "$empty_home" <<'RUBY'
+load ARGV[0]
+P = ProbeSkillRouting
+
+# model が無い config で codex_model / codex_argv が --model is required のエラーになるか
+def model_required_error?
+  yield
+  false
+rescue ProbeSkillRouting::Error => e
+  e.message.include?("--model is required")
+end
+
+ENV["CODEX_HOME"] = ARGV[1]
+check("profile の table にだけある model は top-level の model として使わない (エラーにする)",
+      model_required_error? { P.codex_model({}) })
+check("profile の table にだけある model で Codex を起動しない",
+      model_required_error? { P.codex_argv({}, "/proj", []) })
+
+ENV["CODEX_HOME"] = ARGV[2]
+check("top-level の model を使う", P.codex_model({}) == "m-top")
+argv = P.codex_argv({}, "/proj", [])
+check("top-level の model を -m に渡す", argv[argv.index("-m") + 1] == "m-top")
+check("--model があれば config より優先する", P.codex_model({ model: "m-x" }) == "m-x")
+
+ENV["CODEX_HOME"] = ARGV[3]
+check("config.toml が無ければ --model is required のエラーにする", model_required_error? { P.codex_model({}) })
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
+# ---- Ruby unit checks: raw log の保存先 -------------------------------------------------
+ruby -r"$script_dir/lib/check_helper" - "$src" <<'RUBY'
+load ARGV[0]
+P = ProbeSkillRouting
+
+raw = File.join("out", "results.json.raw")
+check("raw log は raw dir の直下に <case id>-<n>.<ext> で保存する",
+      P.raw_log_path(raw, "a-primary", 1, "jsonl") == File.join(raw, "a-primary-1.jsonl") &&
+      P.raw_log_path(raw, "a.b_c-2", 3, "stderr") == File.join(raw, "a.b_c-2-3.stderr"))
+["../escaped", "../../escaped", "sub/escaped"].each do |id|
+  stopped = begin
+    P.raw_log_path(raw, id, 1, "jsonl")
+    false
+  rescue P::Error => e
+    e.message.include?("outside")
+  end
+  check("raw dir の外を指す case id (#{id}) は保存の前に止める", stopped)
+end
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -147,5 +214,24 @@ run_probe --dry-run
 [ "$rc" -eq 0 ] || fail "dry-run should exit 0 (rc=$rc): $out"
 [ ! -s "$log" ] || fail "dry-run must not call codex: $(cat "$log")"
 case "$out" in *'"--ignore-user-config" "--ignore-rules"'*'"--disable" "browser_use"'*) : ;; *) fail "dry-run argv should show the boundary: $out" ;; esac
+
+# case id は raw log の file 名に使う。raw dir の外を指す id では Codex を起動せずに exit 2 で止まり、
+# raw dir の外 (ここでは --out の directory) に何も作らない
+cat > "$tmp/escape-cases.json" <<'EOF'
+{
+  "schema_version": 1,
+  "inventory": ["personal-a"],
+  "cases": [
+    { "id": "../escaped", "cluster": "x", "prompt": "do a", "primary": "personal-a", "must_not": [] }
+  ]
+}
+EOF
+mkdir -p "$tmp/escape"
+run_probe --cases "$tmp/escape-cases.json" --out "$tmp/escape/out/results.json"
+[ "$rc" -eq 2 ] || fail "case id outside the raw dir must exit 2 (rc=$rc): $out"
+case "$out" in *error:*) : ;; *) fail "case id outside the raw dir should be reported as an error: $out" ;; esac
+if grep -q '^exec --json' "$log"; then fail "codex must not be launched for a case id outside the raw dir: $(cat "$log")"; fi
+find "$tmp/escape" -type f > "$tmp/escape-files"
+[ ! -s "$tmp/escape-files" ] || fail "nothing may be written for a case id outside the raw dir: $(cat "$tmp/escape-files")"
 
 echo "probe-skill-routing-test: ok"

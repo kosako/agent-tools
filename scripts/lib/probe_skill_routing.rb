@@ -278,13 +278,19 @@ module ProbeSkillRouting
   end
 
   # --model が無ければ $CODEX_HOME/config.toml の top-level model を使う。どちらも無ければ
-  # エラー (model 不明のまま比較しない)。
+  # エラー (model 不明のまま比較しない)。top-level は最初の table header より前で、profile 等の
+  # table の model は読まない (probe は --ignore-user-config で起動するので、Codex 側も profile を
+  # 解釈し直さない)。
   def self.codex_model(opts)
     return opts[:model] if opts[:model]
 
     config = File.join(codex_home, "config.toml")
     if File.file?(config)
       File.foreach(config) do |line|
+        stripped = line.strip
+        next if stripped.empty? || stripped.start_with?("#")
+        break if stripped.start_with?("[")
+
         m = line.match(/\A\s*model\s*=\s*"([^"]+)"/)
         return m[1] if m
       end
@@ -445,6 +451,17 @@ module ProbeSkillRouting
     parsed.merge(argv: argv, stdout: out, stderr: err, exit: status&.exitstatus, status: ok ? "ok" : "error")
   end
 
+  # raw log の保存先 (<raw_dir>/<case id>-<n>.<ext>)。case id の文字集合は parse_cases が限っているが、
+  # 多層防御として、展開した保存先の directory が raw dir と一致しなければ書かずに止める (raw dir の
+  # 外に file を作らない)。
+  def self.raw_log_path(raw_dir, id, n, ext)
+    path = File.join(raw_dir, "#{id}-#{n}.#{ext}")
+    unless File.dirname(File.absolute_path(path)) == File.absolute_path(raw_dir)
+      raise Error, "raw log path for case id #{id.inspect} is outside #{raw_dir}"
+    end
+    path
+  end
+
   def self.main(argv, root:)
     if argv.length == 1 && %w[-h --help].include?(argv[0])
       puts USAGE
@@ -502,10 +519,13 @@ module ProbeSkillRouting
       model = nil
       cases.each do |c|
         opts[:repeat].times do |n|
+          # 保存先は CLI を起動する前に確かめる (保存できない run を走らせない)。
+          jsonl_path = raw_log_path(raw_dir, c["id"], n + 1, "jsonl")
+          stderr_path = raw_log_path(raw_dir, c["id"], n + 1, "stderr")
           r = run_one(opts, proj, names, c["prompt"])
           model ||= r[:model]
-          File.write(File.join(raw_dir, "#{c['id']}-#{n + 1}.jsonl"), r[:stdout])
-          File.write(File.join(raw_dir, "#{c['id']}-#{n + 1}.stderr"), r[:stderr]) unless r[:stderr].to_s.empty?
+          File.write(jsonl_path, r[:stdout])
+          File.write(stderr_path, r[:stderr]) unless r[:stderr].to_s.empty?
           run = { "case" => c["id"], "observed" => r[:observed], "prompt_tokens" => r[:prompt_tokens] || 0,
                   "output_tokens" => r[:output_tokens] || 0, "status" => r[:status] }
           # first_prompt_tokens は取れた tool (claude-code) だけ書く。judge では任意 field。

@@ -153,6 +153,8 @@ codex は `--tool codex` で同じ手順。両 tool で回帰なしを確認し�
 - 新しい skill を足したら `inventory` と、その skill が primary になる case と near-miss の負例を
   足す。self-test が「production-rail 以外の全 inventory skill に primary case がある」ことを検査する。
 - prompt は `-` で始めない (CLI の option と衝突する)。制御文字は入力エラー。
+- case id は raw log の file 名 (`<out>.raw/<case>-<n>.jsonl`) に使うので、英数字と `._-` に限る (先頭は
+  英数字)。外れたら入力エラー。
 
 ## 検証境界
 
