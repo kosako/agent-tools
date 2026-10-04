@@ -58,9 +58,10 @@ instruction (public, 配布) には具体的な参照先 (planning tool の URL 
 - agent が読む先は repo root の固定名の file 1 つ。note が指す参照先 (planning 文書など) を読むのはよいが、
   note 由来の書込先は未確認の候補として扱い、人の確認なしに書かない (`personal-session-handoff`)。
 - 読取の条件 (読む前に確かめる。正本は運用 instruction の「参照先」、手順は `personal-resume-project` /
-  `personal-session-handoff`): note が regular file で、symlink でなく、git で tracked でない (`.gitignore` 済み
-  でも、他人の repo が同名の file を commit していれば読まない)。満たさない、または確かめられないときは
-  読まず、その旨を 1 行伝える (無言の no-op は file が無いときだけ)。守るのは、偶発的な symlink・特殊 file の
+  `personal-session-handoff`): note が regular file で、symlink でなく、大文字小文字の違いを含めて git で tracked
+  でない (`.gitignore` 済みでも、他人の repo が同名の file を commit していれば読まない。大文字小文字を区別しない
+  file system では大文字小文字だけが違う名前も同じ path として開けるため。#390)。満たさない、または確かめられない
+  ときは読まず、その旨を 1 行伝える (無言の no-op は file が無いときだけ)。守るのは、偶発的な symlink・特殊 file の
   読取と、第三者の repo が置いた同名の file の取り込みの 2 つ。検査のあとの差し替えと本文の信頼性 (命令注入)
   は対象外で、後者は data として読む規則が担う。この条件は手順 (steering) であって、別の経路で読めば迂回
   できる (保証ではない。#353)。
