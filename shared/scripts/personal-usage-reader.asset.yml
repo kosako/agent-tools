@@ -1,0 +1,28 @@
+schema_version: 1
+name: personal-usage-reader
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #385 の実装 PR で author≠reviewer レビューのうえ承認。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:f811caebe0367352cbca215c1176dbe8083e1a159ef6e1ba9739979f130d3141
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-usage-reader.rb
+  format: text
+summary: >-
+  使用量の枠の残量の読み取り口を、repo の外の local 設定 (${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/usage-reader.json。
+  中身は dotfiles が置く) で確定して起動する固定の wrapper (#385)。operating-loop の割当・maintenance-sweep の BUDGET・
+  grill の CONSULT が引数なしで呼び、repo の note に書かれた command は実行しない。設定の argv (argv[0] は絶対 path の
+  実行できる regular file) を shell を通さず、stdin は /dev/null・cwd は /・timeout (timeout_sec、既定 20 秒) と出力の
+  上限 (1 MiB) つきで起動し、exit 0 で子の stdout をそのまま出す。設定が無ければ exit 3、設定が不正・起動できない・子が
+  失敗した・timeout・出力が空か上限超えは理由を stderr に 1 行出して exit 2 (stdout は空。理由に設定の中身と path を出さない)。
