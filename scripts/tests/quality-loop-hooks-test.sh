@@ -300,6 +300,89 @@ out=$(cd "$repo" && run_qa false) || fail "invalid check declaration should exit
 assert_qa_warning "$out"
 echo "$out" | grep -q "設定エラー" || fail "invalid declaration should warn: $out"
 
+# ---- #373: signal で終わった check は起動失敗ではなく実 failure (block 1 回、診断に signal 名) ----
+# (hook の timeout や中断では hook 自身も止まるので、ここに来るのは check だけが落ちたとき)
+cat > "$tmp/sig-check" <<'EOF'
+#!/bin/sh
+kill -TERM $$
+EOF
+chmod +x "$tmp/sig-check"
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "sig", "command" => [ARGV[1]]}]}}))
+' "$repo_real" "$tmp/sig-check" "$conf"
+echo signaled >> "$repo/u.txt"
+set +e
+err=$(cd "$repo" && run_qa false 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "signaled check must block as a failure (rc=$rc): $err"
+echo "$err" | grep -q "SIGTERM" || fail "block message should name the signal: $err"
+# 同じ scope では failure として cache され、未実行 (missing) として扱われない
+set +e
+out=$(cd "$repo" && run_qa false 2>/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "cached signaled failure must not re-block (rc=$rc)"
+echo "$out" | grep -q "未解消" || fail "cached signaled failure should warn as unresolved: $out"
+if echo "$out" | grep -q "実行できません"; then fail "signaled check must not be reported as missing: $out"; fi
+
+# ---- #373: 初回 commit 前 (HEAD が無い) の repo でも、stage 済み / 未 stage の内容の変化で再検査する ----
+unborn="$tmp/unborn"
+git init -q "$unborn"
+unborn_real=$(ruby -e 'puts File.realpath(ARGV[0])' "$unborn")
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "fake-suite", "command" => [ARGV[1]]}]}}))
+' "$unborn_real" "$tmp/fake-check" "$conf"
+echo v1 > "$unborn/f.txt"
+(cd "$unborn" && git add f.txt)
+: > "$tmp/check-argv.log"
+(cd "$unborn" && run_qa false >/dev/null) || fail "unborn staged v1 should pass"
+[ -s "$tmp/check-argv.log" ] || fail "unborn repo should run checks"
+: > "$tmp/check-argv.log"
+(cd "$unborn" && run_qa false >/dev/null) || fail "unborn cache hit should pass"
+[ ! -s "$tmp/check-argv.log" ] || fail "unborn same scope should hit the cache"
+# 内容を変えて再 stage しても status は "A " のまま。stage 済みの内容が指紋に入っていないと cache に当たる
+echo v2 > "$unborn/f.txt"
+(cd "$unborn" && git add f.txt)
+(cd "$unborn" && run_qa false >/dev/null) || fail "unborn staged v2 should pass"
+[ -s "$tmp/check-argv.log" ] || fail "re-staged content change must rerun checks in an unborn repo"
+# 未 stage の内容だけを変えても status は "AM" のまま。未 stage の差分も指紋に入る
+echo v3 > "$unborn/f.txt"
+(cd "$unborn" && run_qa false >/dev/null) || fail "unborn unstaged v3 should pass"
+: > "$tmp/check-argv.log"
+echo v4 > "$unborn/f.txt"
+(cd "$unborn" && run_qa false >/dev/null) || fail "unborn unstaged v4 should pass"
+[ -s "$tmp/check-argv.log" ] || fail "unstaged content change must rerun checks in an unborn repo"
+
+# ---- #373: 指紋の材料の git が失敗したら判定不能として gate しない (check を走らせず、cache もしない) ----
+realgit=$(command -v git)
+mkdir -p "$tmp/failgit"
+cat > "$tmp/failgit/git" <<EOF
+#!/bin/sh
+for a in "\$@"; do [ "\$a" = diff ] && exit 128; done
+exec $(shq "$realgit") "\$@"
+EOF
+chmod +x "$tmp/failgit/git"
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "fake-suite", "command" => [ARGV[1]]}]}}))
+' "$repo_real" "$tmp/fake-check" "$conf"
+touch "$tmp/check-fail"
+echo diff-fails >> "$repo/u.txt"
+: > "$tmp/check-argv.log"
+set +e
+out=$(cd "$repo" && PATH="$tmp/failgit:$PATH" && export PATH && run_qa false 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "failed git diff must not gate (rc=$rc): $out"
+[ ! -s "$tmp/check-argv.log" ] || fail "failed git diff must not run checks"
+# 同じ scope を git が使える状態で回すと、cache に当たらず検査して block する
+set +e
+err=$(cd "$repo" && run_qa false 2>&1 >/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "after git recovers the scope must be checked (rc=$rc): $err"
+rm "$tmp/check-fail"
+
 # ---- R1 回帰: fast-edit-check の不正 entry 可視化と総量 truncate ---------------
 ruby -rjson -e '
 File.write(ARGV[2], JSON.generate({ARGV[0] => {"edit_checks" => [
