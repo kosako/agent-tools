@@ -116,10 +116,11 @@ source format / output path の確認のみ)。build できない target-artifac
 - 単位は repository 全体。register の実行は catalog を丸ごと再生成する。
 - register = 致命 gate + medium 突き合わせ + catalog 書き込み。
 - catalog 書き込みが唯一の副作用で、書き込み先は `generated/` のみ。
-- 出力の経路 (`generated/` そのものから書き込み先まで) に symlink があれば、register も build も見つけた
-  時点でそれ以上書かず、理由を出して exit 1 で止める。設定ミスで出力先が `generated/` の外を指したときの
-  事故よけで、攻撃の防御としては扱わない (検査の後の差し替えは [sync-policy](sync-policy.md) の既知の限界と
-  同じく対象外, #386)。
+- 出力の経路 (`generated/` そのものから書き込み先まで) に symlink があるとき、単一 file の書き込み先が
+  regular file でない (directory など) とき、build が旧い skill の dir を消しきれないときは、register も
+  build もその時点でそれ以上書かず、理由を出して exit 1 で止める。設定ミスで出力先が `generated/` の外を
+  指したときの事故よけで、攻撃の防御としては扱わない (検査の後の差し替えは [sync-policy](sync-policy.md) の
+  既知の限界と同じく対象外, #386)。
 
 ## Medium finding と human review の解決
 

@@ -616,6 +616,59 @@ expect_output_symlink_stop "plugin leaf is a symlink" "$tmp/sym-plugin-outside" 
   generated/opencode/plugins/personal-demo-plugin.js generated/opencode/plugins/personal-demo-plugin.js \
   "$build" --root "$tmp/sym-plugin"
 
+# 単一 file の書き込み先が directory なら止める。FileUtils.cp は directory の中
+# (<leaf>/<source の basename>) に書くので、そこに外への symlink があると辿って外を書き換える
+sym_fixture "$tmp/dir-body" script
+mkdir -p "$tmp/dir-body-outside" "$tmp/dir-body/generated/claude-code/scripts/personal-wrap"
+echo "outside" > "$tmp/dir-body-outside/target"
+ln -s "$tmp/dir-body-outside/target" "$tmp/dir-body/generated/claude-code/scripts/personal-wrap/personal-wrap.sh"
+expect_output_not_file_stop "script body leaf is a directory" "$tmp/dir-body-outside" \
+  generated/claude-code/scripts/personal-wrap "$build" --root "$tmp/dir-body"
+
+# sidecar / instruction / plugin の leaf が directory でも同じく理由を出して止める (File.write は
+# directory の中へは書かず Errno::EISDIR で落ちるが、落ちる代わりに止める)
+sym_fixture "$tmp/dir-sidecar" script
+mkdir -p "$tmp/dir-sidecar-outside" \
+  "$tmp/dir-sidecar/generated/claude-code/scripts/personal-wrap.agent-tools-managed.yml"
+echo "outside" > "$tmp/dir-sidecar-outside/keep.txt"
+expect_output_not_file_stop "script sidecar leaf is a directory" "$tmp/dir-sidecar-outside" \
+  generated/claude-code/scripts/personal-wrap.agent-tools-managed.yml "$build" --root "$tmp/dir-sidecar"
+
+sym_fixture "$tmp/dir-instr" instruction
+mkdir -p "$tmp/dir-instr-outside" "$tmp/dir-instr/generated/claude-code/instructions/CLAUDE.md"
+echo "outside" > "$tmp/dir-instr-outside/keep.txt"
+expect_output_not_file_stop "instruction leaf is a directory" "$tmp/dir-instr-outside" \
+  generated/claude-code/instructions/CLAUDE.md "$build" --root "$tmp/dir-instr"
+
+sym_fixture "$tmp/dir-plugin" plugin
+mkdir -p "$tmp/dir-plugin-outside" "$tmp/dir-plugin/generated/opencode/plugins/personal-demo-plugin.js"
+echo "outside" > "$tmp/dir-plugin-outside/keep.txt"
+expect_output_not_file_stop "plugin leaf is a directory" "$tmp/dir-plugin-outside" \
+  generated/opencode/plugins/personal-demo-plugin.js "$build" --root "$tmp/dir-plugin"
+
+# 旧い skill の dir を消しきれない (書き込み不可) なら、残った中身を辿って書かずに止める。rm_rf は削除の
+# 失敗を握りつぶし、mkdir_p は残った dir を受け入れるので、消えたことを確かめる。root は mode によらず
+# 消せるので、この case は root では走らせない
+if [ "$(id -u)" -ne 0 ]; then
+  sym_fixture "$tmp/stuck" skill
+  mkdir -p "$tmp/stuck-outside" "$tmp/stuck/generated/claude-code/skills/personal-demo"
+  echo "outside" > "$tmp/stuck-outside/SKILL.md"
+  ln -s "$tmp/stuck-outside/SKILL.md" "$tmp/stuck/generated/claude-code/skills/personal-demo/SKILL.md"
+  chmod 0555 "$tmp/stuck/generated/claude-code/skills/personal-demo"
+  # 後始末: build の直後に mode を戻す (assertion の前。trap の rm -rf が消せるように)
+  build_stuck() {
+    bs_status=0
+    "$build" --root "$tmp/stuck" || bs_status=$?
+    chmod 0755 "$tmp/stuck/generated/claude-code/skills/personal-demo"
+    return "$bs_status"
+  }
+  expect_output_stop "old skill dir cannot be removed" "$tmp/stuck-outside" \
+    "fail: could not remove the old output dir generated/claude-code/skills/personal-demo; refusing to write into it" \
+    build_stuck
+else
+  echo "skip: old skill dir cannot be removed (root ignores the directory mode)" >&2
+fi
+
 # prune の削除: kind の dir が symlink なら、辿った先の managed な artifact を消さない (kind ごと)
 sym_fixture "$tmp/sym-pskill" skill
 mkdir -p "$tmp/sym-pskill-outside/personal-old" "$tmp/sym-pskill/generated/codex"

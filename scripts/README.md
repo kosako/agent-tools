@@ -176,7 +176,8 @@ usage: build.sh [--root DIR] [--prune] [--quiet]
   instruction / script、opencode は plugin)。表に無い組は `unsupported artifact_kind` として skip
   し、`generated/opencode/skills/` などは走査しない。
 - 書き込み先は `generated/` のみ。tool directories には書き込まない。出力の経路 (`generated/`
-  を含む) に symlink があれば、それ以上書かずに exit 1 で止める ([Register / Catalog](../docs/register-catalog.md))。
+  を含む) の symlink、regular file でない単一 file の書き込み先、消しきれない旧い skill の dir では、
+  それ以上書かずに exit 1 で止める ([Register / Catalog](../docs/register-catalog.md))。
 - `--prune` で manifest に対応しなくなった generated artifact を削除する。対象は
   agent-tools marker を持つ skill directory / instruction file / script (本体 + sidecar) /
   plugin file のみで、marker のない directory / file は警告して残す。
@@ -279,7 +280,7 @@ usage: register.sh [--root DIR] [--quiet]
   が target の resolve 済み artifact_kind と一致するときだけ効く (内容と配布形態に紐づく
   承認, #148 #184)。
 - exit code: 0 (human_review_required なし) / 3 (human_review_required あり) / 1 (gate fail /
-  catalog の経路の symlink)。
+  catalog の経路の symlink / catalog.json が regular file でない)。
   unsupported は exit code に影響しない。
 - resolve 後の artifact_kind が `script` / `plugin` の asset は、risk / finding によらず常に human
   review 必須 (`Register::Runner#review_needed?`。実行コードの配布)。catalog_version は 4 のまま

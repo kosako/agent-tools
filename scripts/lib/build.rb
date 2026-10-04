@@ -22,11 +22,12 @@ require_relative "cli"
 module Build
   TOOLS = ArtifactTargets::TOOLS
 
-  # 出力 (generated/ の下) の経路に symlink を見つけたときの error (#386)。
-  class OutputSymlinkError < StandardError; end
+  # 出力 (generated/ の下) の書き込み先を安全に書き換えられないときの error (#386)。
+  # 経路の symlink、単一 file の書き込み先が regular file でない、旧い出力 dir を消しきれない。
+  class OutputPathError < StandardError; end
 
   # root の generated/ から path までの各要素を lstat で順に調べ、symlink があれば
-  # OutputSymlinkError で止める。build と register が書き込み・削除の前に呼ぶ (#386)。
+  # OutputPathError で止める。build と register が書き込み・削除の前に呼ぶ (#386)。
   # 設定ミスで出力先が generated/ の外 (tool home など) を指したときに、同名の dir を確かめずに
   # 消して書く事故よけで、攻撃の防御ではない: 同じ user による検査の後の差し替えは扱わない
   # (docs/sync-policy.md の TOCTOU と同じ立場)。root より上の要素は調べない (repo が
@@ -49,10 +50,27 @@ module Build
       end
       next unless stat.symlink?
 
-      raise OutputSymlinkError,
+      raise OutputPathError,
             "symlink at #{Assets.rel(root, current)} in the output path #{Assets.rel(root, path)}; " \
             "refusing to write or delete through it"
     end
+  end
+
+  # 単一 file の書き込み先: guard_output_path! に加えて、leaf が無いか regular file であることを
+  # 確かめる。leaf が directory だと FileUtils.cp はその中 (<leaf>/<source の basename>) に書き、
+  # 調べた leaf の外へ出るため (#386)。書き込みは検査した leaf そのものに向く。
+  def self.guard_output_file!(root, path)
+    guard_output_path!(root, path)
+    begin
+      stat = File.lstat(path)
+    rescue Errno::ENOENT, Errno::ENOTDIR
+      return
+    end
+    return if stat.file?
+
+    raise OutputPathError,
+          "output path #{Assets.rel(File.expand_path(root), path)} exists and is not a regular file; " \
+          "refusing to write through it"
   end
 
   class Runner
@@ -100,10 +118,15 @@ module Build
       format = asset[:source]["format"]
       out_dir = ArtifactTargets.generated_path(@root, tool, name, "skill")
 
-      # rm_rf と mkdir_p の前に経路を調べる。SKILL.md・directory の中身・marker は、この後に
-      # 作り直した dir の中に書くので、この 1 回で足りる (#386)。
+      # rm_rf と mkdir_p の前に経路を調べる。SKILL.md・directory の中身・marker は、旧 dir を
+      # 消しきって作り直した空の dir の中に書くので、経路の検査はこの 1 回で足りる (#386)。
       guard(out_dir)
       FileUtils.rm_rf(out_dir)
+      # rm_rf は削除の失敗 (書き込み不可の dir など) を握りつぶし、mkdir_p は残った dir を受け入れる。
+      # 旧 dir が残ったまま書くと、残った中身 (外への symlink など) を辿りうるので止める (#386)。
+      if File.exist?(out_dir)
+        raise OutputPathError, "could not remove the old output dir #{rel(out_dir)}; refusing to write into it"
+      end
       FileUtils.mkdir_p(out_dir)
 
       if format == "directory"
@@ -135,7 +158,7 @@ module Build
         return
       end
 
-      guard(out)
+      guard_file(out)
       FileUtils.mkdir_p(File.dirname(out))
       content = File.read(File.join(@root, source))
       build_id = Build.build_id_for(@root, source, format)
@@ -158,7 +181,7 @@ module Build
 
       out = ArtifactTargets.generated_path(@root, tool, name, "script")
       sidecar = ArtifactTargets.sidecar_marker_path(out)
-      guard(out, sidecar)
+      guard_file(out, sidecar)
       FileUtils.mkdir_p(File.dirname(out))
       FileUtils.cp(File.join(@root, source), out)
       File.chmod(0o755, out) # script は配置先で実行されるため実行可能にする
@@ -181,7 +204,7 @@ module Build
       end
 
       out = ArtifactTargets.generated_path(@root, tool, name, "plugin")
-      guard(out)
+      guard_file(out)
       FileUtils.mkdir_p(File.dirname(out))
       build_id = Build.build_id_for(@root, source, format)
       marker = PluginMarker.render(name: name, target: tool, source: source, build_id: build_id)
@@ -219,9 +242,14 @@ module Build
     end
 
     # 書き込み・削除の前に、出力の経路 (leaf と途中の dir) に symlink が無いことを確かめる。
-    # 見つけたら OutputSymlinkError で止め、それ以上書かない (#386)。
+    # 見つけたら OutputPathError で止め、それ以上書かない (#386)。
     def guard(*paths)
       paths.each { |path| Build.guard_output_path!(@root, path) }
+    end
+
+    # 単一 file の書き込みの前に、経路に加えて leaf が無いか regular file であることを確かめる (#386)。
+    def guard_file(*paths)
+      paths.each { |path| Build.guard_output_file!(@root, path) }
     end
 
     public
@@ -447,8 +475,8 @@ module Build
     end
     puts "ok: #{built.size} artifact(s) built" unless quiet
     0
-  rescue OutputSymlinkError => e
-    # 出力の経路の symlink では、それ以上書かずに理由を出して止める (#386)。
+  rescue OutputPathError => e
+    # 書き込み先を安全に書き換えられないときは、それ以上書かずに理由を出して止める (#386)。
     warn "fail: #{e.message}"
     1
   end

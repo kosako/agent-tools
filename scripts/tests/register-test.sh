@@ -408,4 +408,12 @@ ln -s "$tmp/sym-cat-outside/catalog.json" "$tmp/sym-cat/generated/catalog.json"
 expect_output_symlink_stop "catalog.json is a symlink" "$tmp/sym-cat-outside" \
   generated/catalog.json generated/catalog.json "$register" --root "$tmp/sym-cat"
 
+# catalog.json が directory (regular file でない) なら、Errno::EISDIR で落ちる代わりに理由を出して止める
+mkdir -p "$tmp/dir-cat/shared/workflows" "$tmp/dir-cat/generated/catalog.json" "$tmp/dir-cat-outside"
+echo "# demo" | write_demo_source "$tmp/dir-cat/shared/workflows"
+write_manifest "$tmp/dir-cat/shared/workflows"
+echo "outside" > "$tmp/dir-cat-outside/keep.txt"
+expect_output_not_file_stop "catalog.json is a directory" "$tmp/dir-cat-outside" \
+  generated/catalog.json "$register" --root "$tmp/dir-cat"
+
 echo "ok: register self-test passed"
