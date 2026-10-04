@@ -6,7 +6,8 @@
 # stderr に 1 行、理由に設定の中身と path を出さない)、起動の契約 (shell を通さない、stdin は /dev/null、cwd は
 # /、子の stderr は捨てる、timeout (stdout を閉じた後の終了待ちを含む) と出力の上限と wrapper への signal で
 # process group ごと止める) を固定する。repo root の note (`.agent-context.local.md`) にだけ command が書かれた
-# repo を cwd にしても、その command は実行されない。
+# repo を cwd にしても、その command は実行されない。`--check` (#400) は通常の起動と同じ検査を通って同じ exit code と
+# 理由を返し、argv を起動せず stdout は空。対応していることは `--help` の 1 行目の `[--check]` で分かる。
 # 引数で script の source を差し替えられる (変異での確認用)。
 set -eu
 
@@ -167,12 +168,52 @@ expect_output() {
   [ ! -s "$tmp/err" ] || fail "$1 must not print on stderr (child stderr is discarded): $err"
 }
 
+# expect_check_same <label> [env...]: 直前の起動 (引数なし) と同じ設定で --check を起動し、exit code と理由が一致し、
+# stdout は空。--check は通常の起動と同じ検査を通り、違うのは argv を起動しないことだけ (#400)。env を渡すと、
+# 一時 dir の HOME / XDG_CONFIG_HOME の代わりにその env で起動する (cwd は $run_cwd)。
+expect_check_same() {
+  ecs_label=$1
+  shift
+  ecs_rc=$rc
+  ecs_err=$err
+  if [ "$#" -eq 0 ]; then
+    run_reader --check
+  else
+    set +e
+    (cd "$run_cwd" && env "$@" "$reader" --check <"$run_stdin" >"$tmp/out" 2>"$tmp/err")
+    rc=$?
+    set -e
+    out=$(cat "$tmp/out")
+    err=$(cat "$tmp/err")
+  fi
+  [ "$rc" -eq "$ecs_rc" ] || fail "$ecs_label: --check should exit like the normal run ($ecs_rc, got $rc): $err"
+  [ "$err" = "$ecs_err" ] || fail "$ecs_label: --check should give the same reason as the normal run: normal=$ecs_err check=$err"
+  [ ! -s "$tmp/out" ] || fail "$ecs_label: --check must not print on stdout: $out"
+}
+
+# expect_check_ok <label>: 今の設定で --check が exit 0、stdout も stderr も空。
+expect_check_ok() {
+  run_reader --check
+  [ "$rc" -eq 0 ] || fail "$1: --check should exit 0 (rc=$rc): $err"
+  [ ! -s "$tmp/out" ] || fail "$1: --check must not print on stdout: $out"
+  [ ! -s "$tmp/err" ] || fail "$1: --check must not print on stderr: $err"
+}
+
 # ---- 設定が無い → exit 3、stdout は空 --------------------------------------------
 run_reader
 [ "$rc" -eq 3 ] || fail "absent config should exit 3 (rc=$rc): $out $err"
 [ ! -s "$tmp/out" ] || fail "absent config must not print on stdout: $out"
 case "$err" in *"設定 file がありません"*) : ;; *) fail "absent config should say so: $err" ;; esac
 case "$err" in *"$tmp"*) fail "absent config must not echo the path: $err" ;; esac
+expect_check_same "absent config"
+
+# 指す先の無い symlink の設定 file も「無い」(exit 3)。--check も同じ
+ln -s "$tmp/no-such-config" "$config"
+run_reader
+[ "$rc" -eq 3 ] || fail "dangling symlink config should exit 3 (rc=$rc): $out $err"
+[ ! -s "$tmp/out" ] || fail "dangling symlink config must not print on stdout: $out"
+expect_check_same "dangling symlink config"
+rm "$config"
 
 # ---- shell を通さない: metacharacter を含む要素は literal のまま渡り、canary は作られない ----
 write_argv "$config" "$bin/echo-args" ";touch $tmp/pwned" "\$(touch $tmp/pwned2)" "\`touch $tmp/pwned3\`" "| touch $tmp/pwned4"
@@ -207,6 +248,7 @@ ln -s "$tmp/real-config.json" "$config"
 run_reader
 printf 'linked\n' > "$tmp/expect"
 expect_output "symlinked config and executable" "$tmp/expect"
+expect_check_ok "symlinked config and executable"
 rm "$config"
 
 # XDG_CONFIG_HOME が空なら HOME/.config の下
@@ -218,7 +260,33 @@ rc=$?
 set -e
 printf 'from-home\n' > "$tmp/expect"
 expect_output "empty XDG_CONFIG_HOME falls back to HOME/.config" "$tmp/expect"
+set +e
+(cd "$tmp" && env HOME="$fake_home" XDG_CONFIG_HOME="" "$reader" --check </dev/null >"$tmp/out" 2>"$tmp/err")
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "--check with an empty XDG_CONFIG_HOME should read HOME/.config (rc=$rc): $(cat "$tmp/err")"
+[ ! -s "$tmp/out" ] && [ ! -s "$tmp/err" ] || fail "--check with an empty XDG_CONFIG_HOME must print nothing"
 rm "$fake_home/.config/agent-tools/usage-reader.json"
+
+# ---- --check: argv を起動しない (#400) ----------------------------------------------
+# 起動すれば canary を作る設定で、--check は exit 0 で canary を作らない。対照として、同じ設定の通常の起動は
+# canary を作る (touch は何も出さないので exit 2 = 出力が空)。
+write_argv "$config" /usr/bin/touch "$tmp/check-spawned"
+expect_check_ok "--check with a spawning config"
+[ ! -e "$tmp/check-spawned" ] || fail "--check must not run argv (canary check-spawned created)"
+run_reader
+[ -e "$tmp/check-spawned" ] || fail "control: the normal run should run argv (canary check-spawned missing)"
+rm "$tmp/check-spawned"
+# 終わらない読み取り口でも、--check は待たずに戻る (timeout_sec は長くする。起動すれば pid の file ができる)
+ruby -rjson -e 'File.write(ARGV[0], JSON.generate("argv" => [ARGV[1], ARGV[2]], "timeout_sec" => 60))' \
+  "$config" "$bin/hang" "$tmp/pids-check"
+started=$(date +%s)
+expect_check_ok "--check with a hanging reader"
+elapsed=$(($(date +%s) - started))
+[ "$elapsed" -lt 10 ] || fail "--check must not wait for the reader (took ${elapsed}s)"
+sleep 0.2
+[ ! -e "$tmp/pids-check" ] || fail "--check must not run argv (the hanging reader wrote its pids)"
+rm "$config"
 
 # ---- 起動の環境: cwd は /、stdin は /dev/null、子の stderr は捨てる ----------------------
 write_argv "$config" "$bin/print-cwd"
@@ -337,11 +405,12 @@ run_reader
 expect_error "output over the cap" "読み取り口の出力が上限 (1048576 byte) を超えました"
 
 # ---- 設定が不正 → exit 2、stdout は空、理由あり ----------------------------------------
-# bad_config <name> <json> <理由>: 設定 file に json を書いて起動する。
+# bad_config <name> <json> <理由>: 設定 file に json を書いて起動する。--check も同じ exit code と理由を返す。
 bad_config() {
   printf '%s' "$2" > "$config"
   run_reader
   expect_error "$1" "$3"
+  expect_check_same "$1"
 }
 bad_config "not JSON" '{"argv": ["CANARY"' "設定 file が JSON として読めません"
 bad_config "top-level array" '["CANARY"]' "設定 file の top-level が object ではありません"
@@ -352,45 +421,58 @@ bad_config "argv not array" '{"argv": "CANARY"}' "設定 file の argv が空で
 bad_config "argv non-string element" "{\"argv\":[\"$bin/echo-args\",1]}" "設定 file の argv が空でない文字列の配列ではありません"
 bad_config "control character" "{\"argv\":[\"$bin/echo-args\",\"CANARY\\nx\"]}" "設定 file の argv の要素に制御文字か UTF-8 として読めない文字があります"
 bad_config "NUL" "{\"argv\":[\"$bin/echo-args\",\"CANARY\\u0000x\"]}" "設定 file の argv の要素に制御文字か UTF-8 として読めない文字があります"
+# C1 の制御文字 (U+0080〜U+009F) も制御文字 (ASCII の範囲だけを見る検査では通ってしまう)
+bad_config "C1 control character (NEL)" "{\"argv\":[\"$bin/echo-args\",\"CANARY\\u0085x\"]}" "設定 file の argv の要素に制御文字か UTF-8 として読めない文字があります"
+bad_config "C1 control character (CSI)" "{\"argv\":[\"$bin/echo-args\",\"CANARY\\u009bx\"]}" "設定 file の argv の要素に制御文字か UTF-8 として読めない文字があります"
+bad_config "control character in argv[0]" "{\"argv\":[\"$bin/CANARY\\tx\"]}" "設定 file の argv の要素に制御文字か UTF-8 として読めない文字があります"
 bad_config "relative path" '{"argv": ["CANARY-reader"]}' "設定 file の argv[0] が絶対 path ではありません"
 bad_config "relative path (dot)" '{"argv": ["./CANARY-reader"]}' "設定 file の argv[0] が絶対 path ではありません"
-for t in 0 121 -1 '"20"' 1.5 true null; do
+# 20.0 / 2e1 は値が整数でも JSON の数としては小数なので不正 (整数に正規化して通さない)
+for t in 0 121 -1 '"20"' 1.5 20.0 2e1 true null; do
   bad_config "timeout_sec $t" "{\"argv\":[\"$bin/echo-args\"],\"timeout_sec\":$t}" "設定 file の timeout_sec が 1〜120 の整数ではありません"
 done
 printf '{"argv": ["/CANARY\377"]}' > "$config"
 run_reader
 expect_error "invalid UTF-8" "設定 file が UTF-8 として読めません"
+expect_check_same "invalid UTF-8"
 
-# 実行ファイルの検査
+# 実行ファイルの検査 (--check も同じ)
 write_argv "$config" "$bin/not-exec"
 run_reader
 expect_error "not executable" "読み取り口の実行ファイルを実行できません"
+expect_check_same "not executable"
 write_argv "$config" "$tmp/no-such-CANARY"
 run_reader
 expect_error "missing executable" "読み取り口の実行ファイルが在りません"
+expect_check_same "missing executable"
 write_argv "$config" "$bin"
 run_reader
 expect_error "executable is a directory" "読み取り口の実行ファイルが regular file ではありません"
+expect_check_same "executable is a directory"
 ln -s "$tmp/no-such-target" "$bin/dangling"
 write_argv "$config" "$bin/dangling"
 run_reader
 expect_error "dangling symlink executable" "読み取り口の実行ファイルが在りません"
+expect_check_same "dangling symlink executable"
 
-# 設定 file が在るのに regular file でない・読めない → 無いことにせず exit 2
+# 設定 file が在るのに regular file でない・読めない → 無いことにせず exit 2 (--check も同じ)
 rm "$config"
 mkdir "$config"
 run_reader
 expect_error "config is a directory" "設定 file が regular file ではありません"
+expect_check_same "config is a directory"
 rmdir "$config"
 if [ "$(id -u)" -ne 0 ]; then
   write_argv "$config" "$bin/echo-args" "CANARY"
   chmod 000 "$config"
   run_reader
   expect_error "unreadable config" "設定 file を確かめられないか読めません (Errno::EACCES)"
+  expect_check_same "unreadable config"
   chmod 644 "$config"
   chmod 000 "$xdg/agent-tools"
   run_reader
   expect_error "unsearchable config dir" "設定 file を確かめられないか読めません (Errno::EACCES)"
+  expect_check_same "unsearchable config dir"
   chmod 755 "$xdg/agent-tools"
   rm "$config"
 fi
@@ -415,6 +497,10 @@ err=$(cat "$tmp/err")
 [ ! -e "$tmp/repo-config-pwned" ] || fail "a relative XDG_CONFIG_HOME must not be resolved from the cwd (canary created)"
 [ "$rc" -eq 3 ] || fail "repo with only a note command should exit 3 (rc=$rc): $err"
 [ ! -s "$tmp/out" ] || fail "repo with only a note command must not print on stdout"
+run_cwd=$repo
+expect_check_same "repo with only a note command" HOME="$fake_home" XDG_CONFIG_HOME=".config"
+run_cwd=$tmp
+[ ! -e "$tmp/note-pwned" ] && [ ! -e "$tmp/repo-config-pwned" ] || fail "--check must not run the note or repo config command"
 # HOME が相対 path なら設定の場所を決めず exit 2 (cwd の repo の中の設定を読まない)
 set +e
 (cd "$repo" && env HOME="relhome" XDG_CONFIG_HOME="" "$reader" </dev/null >"$tmp/out" 2>"$tmp/err")
@@ -424,12 +510,19 @@ err=$(cat "$tmp/err")
 [ ! -e "$tmp/repo-home-pwned" ] || fail "a relative HOME must not be resolved from the cwd (canary created)"
 [ "$rc" -eq 2 ] || fail "a relative HOME should exit 2 (rc=$rc): $err"
 [ ! -s "$tmp/out" ] || fail "a relative HOME must not print on stdout"
+run_cwd=$repo
+expect_check_same "a relative HOME" HOME="relhome" XDG_CONFIG_HOME=""
+run_cwd=$tmp
+[ ! -e "$tmp/repo-home-pwned" ] || fail "--check must not run the repo home config command"
 
-# ---- 引数: --help だけ受け付け、それ以外は usage error -----------------------------------
+# ---- 引数: --help と --check だけ (どちらも単独で) 受け付け、それ以外は usage error -------------
+# --help の 1 行目 (usage 行) は公開契約: 呼ぶ側はここに `[--check]` があるときだけ --check を使う (#400)。
 run_reader --help
 [ "$rc" -eq 0 ] || fail "--help should exit 0 (rc=$rc): $err"
-case "$out" in *"usage: personal-usage-reader"*) : ;; *) fail "--help should print usage: $out" ;; esac
-for args in "--config $tmp/x" "extra" "--help extra" "-h"; do
+[ "$(head -n 1 "$tmp/out")" = "usage: personal-usage-reader [--help] [--check]" ] ||
+  fail "--help should start with the usage line that lists --check: $(head -n 1 "$tmp/out")"
+for args in "--config $tmp/x" "extra" "--help extra" "-h" "--check extra" "--check --check" "--help --check" \
+  "--check --help" "-c" "--check=1"; do
   # 引数の分割は意図どおり (値に空白を含めない fixture)
   # shellcheck disable=SC2086
   run_reader $args

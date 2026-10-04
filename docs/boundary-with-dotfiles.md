@@ -141,8 +141,17 @@ maintenance-sweep の BUDGET・grill の CONSULT は wrapper だけを引数な�
 
   呼ぶ側は exit 0 の stdout だけを使い、3 は読み取り口なし、2 とそれ以外の 0 以外 (script が配備されていない等) は
   読めないとして扱う。
+- **設定の検証だけ (`--check`、#400)**: 設定の場所の決め方と検査 (`argv[0]` の在否・regular file・実行できること
+  を含む) を通常の起動と同じコードで行い、`argv` を起動しない。**副作用なし** (file を書かない、子 process を起動
+  しない、network を使わない) なので、dotfiles の doctor が副作用なしのまま呼べる。exit は通常の起動と同じ値と理由で、
+  0 = 設定が契約どおり / 3 = 設定 file が無い (指す先の無い symlink を含む) / 2 = 不正 (理由を stderr に 1 行、設定の
+  中身と path は出さない)。stdout は常に空。検査の規則を写さずに、この mode を呼んで確かめる。
+- **`--check` への対応の判別**: `--help` の 1 行目 (usage 行) が `usage: personal-usage-reader [--help] [--check]`
+  のように `[--check]` を含むことで分かる (この行も公開契約)。`--check` を知らない旧い wrapper は、`--check` を
+  usage error の exit 2 にするので「設定が不正」と区別できない。呼ぶ側は先に `--help` を呼び (副作用なし)、exit 0 で
+  1 行目に `[--check]` があるときだけ `--check` を使い、無ければ「wrapper が旧く `--check` に未対応」と扱う。
 - **file 名と key は公開契約**: dotfiles が配る先の名前と形なので、agent-tools は変更を breaking change として扱う
-  (dotfiles 側の更新と同期するまで旧い形を壊さない)。
+  (dotfiles 側の更新と同期するまで旧い形を壊さない)。`--check` の exit と、`--help` の 1 行目の `[--check]` も同じ。
 
 ## どちらの repository も持たないもの
 

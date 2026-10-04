@@ -29,6 +29,12 @@
 #   読めない / 実行ファイルが上の条件を満たさない / 起動できない / 子が 0 以外で終わった / timeout / 出力が空か
 #   上限を超えた / wrapper が signal で中断された。理由を stderr に 1 行出し、stdout は空。
 # 理由文に設定の中身 (argv の値・知らない key の名前) と path は出さない。
+#
+# `--check` (#400): 設定の場所の決め方と検査 (argv[0] の実行ファイルの検査を含む) を通常の起動と同じコードで行い、
+# argv を起動しない。file を書かず、子 process を起動せず、network を使わない (dotfiles の doctor が副作用なしの
+# まま呼べる)。exit は通常の起動と同じ値と理由で、0 = 設定が契約どおり / 3 = 設定 file が無い / 2 = 不正。stdout は
+# 常に空。`--check` に対応していることは `--help` の 1 行目 (usage 行) の `[--check]` で分かる (公開契約。`--check`
+# を知らない旧い wrapper は `--check` を usage error の exit 2 にするので、呼ぶ側は先に `--help` で確かめる)。
 
 require "json"
 
@@ -46,8 +52,9 @@ module UsageReader
 
   module_function
 
+  # 1 行目は公開契約 (呼ぶ側は `[--check]` の有無で --check への対応を判別する)。
   def usage
-    "usage: personal-usage-reader [--help]"
+    "usage: personal-usage-reader [--help] [--check]"
   end
 
   def help
@@ -55,6 +62,8 @@ module UsageReader
       #{usage}
       ${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/usage-reader.json の argv を shell を通さずに起動し、
       その stdout を出す。exit 0 = 読めた / 3 = 設定 file が無い / 2 = 不正・失敗 (理由を stderr に 1 行)。
+      --check: 設定と実行ファイルを同じ規則で検査するだけで argv を起動しない (stdout は空)。
+      exit 0 = 設定が契約どおり / 3 = 設定 file が無い / 2 = 不正 (理由を stderr に 1 行)。
     TEXT
   end
 
@@ -213,15 +222,25 @@ module UsageReader
     out
   end
 
+  # 設定の場所を決めて読み、検査し、argv[0] の実行ファイルを確かめる。通常の起動と --check が共有する入口
+  # (検査の規則を 1 箇所に保つ)。
+  def load_config
+    argv, timeout = parse_config(read_config(config_path))
+    check_executable(argv[0])
+    [argv, timeout]
+  end
+
   def run(args)
     if args == ["--help"]
       $stdout.write(help)
       return EXIT_OK
     end
-    raise ArgumentError, usage unless args.empty?
+    check = args == ["--check"]
+    raise ArgumentError, usage unless args.empty? || check
 
-    argv, timeout = parse_config(read_config(config_path))
-    check_executable(argv[0])
+    argv, timeout = load_config
+    return EXIT_OK if check
+
     out = run_reader(argv, timeout)
     $stdout.binmode
     $stdout.write(out)
