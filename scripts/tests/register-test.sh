@@ -388,4 +388,24 @@ ruby -r"$script_dir/../lib/artifact_targets" -e '
   abort "skill must stay buildable for claude-code" unless ArtifactTargets.buildable?(skill, "claude-code")
 ' || fail "ArtifactTargets.buildable? must follow TOOL_KINDS and the single-.js rule"
 
+# --- case 14: catalog の経路に symlink があれば、書かずに exit 1 で止める (#386) ---
+# 設定ミスで出力先が generated/ の外を指したときの事故よけ。symlink の先は fixture の root の外。
+# generated/ そのものが symlink
+mkdir -p "$tmp/sym-gen/shared/workflows" "$tmp/sym-gen-outside"
+echo "# demo" | write_demo_source "$tmp/sym-gen/shared/workflows"
+write_manifest "$tmp/sym-gen/shared/workflows"
+echo "outside" > "$tmp/sym-gen-outside/catalog.json"
+ln -s "$tmp/sym-gen-outside" "$tmp/sym-gen/generated"
+expect_output_symlink_stop "generated/ is a symlink" "$tmp/sym-gen-outside" \
+  generated generated/catalog.json "$register" --root "$tmp/sym-gen"
+
+# catalog.json (leaf) が symlink
+mkdir -p "$tmp/sym-cat/shared/workflows" "$tmp/sym-cat/generated" "$tmp/sym-cat-outside"
+echo "# demo" | write_demo_source "$tmp/sym-cat/shared/workflows"
+write_manifest "$tmp/sym-cat/shared/workflows"
+echo "outside" > "$tmp/sym-cat-outside/catalog.json"
+ln -s "$tmp/sym-cat-outside/catalog.json" "$tmp/sym-cat/generated/catalog.json"
+expect_output_symlink_stop "catalog.json is a symlink" "$tmp/sym-cat-outside" \
+  generated/catalog.json generated/catalog.json "$register" --root "$tmp/sym-cat"
+
 echo "ok: register self-test passed"

@@ -22,6 +22,39 @@ require_relative "cli"
 module Build
   TOOLS = ArtifactTargets::TOOLS
 
+  # 出力 (generated/ の下) の経路に symlink を見つけたときの error (#386)。
+  class OutputSymlinkError < StandardError; end
+
+  # root の generated/ から path までの各要素を lstat で順に調べ、symlink があれば
+  # OutputSymlinkError で止める。build と register が書き込み・削除の前に呼ぶ (#386)。
+  # 設定ミスで出力先が generated/ の外 (tool home など) を指したときに、同名の dir を確かめずに
+  # 消して書く事故よけで、攻撃の防御ではない: 同じ user による検査の後の差し替えは扱わない
+  # (docs/sync-policy.md の TOCTOU と同じ立場)。root より上の要素は調べない (repo が
+  # /var → /private/var のような symlink の下にあってもよい)。途中の要素がまだ無ければ、
+  # その先も無いので検査を終える (作るのは呼び出し側の mkdir_p)。
+  def self.guard_output_path!(root, path)
+    root = File.expand_path(root)
+    base = File.join(root, "generated")
+    unless path == base || path.start_with?("#{base}/")
+      raise ArgumentError, "output path is not under generated/: #{path}"
+    end
+
+    current = root
+    path[(root.length + 1)..-1].split("/").each do |part|
+      current = File.join(current, part)
+      begin
+        stat = File.lstat(current)
+      rescue Errno::ENOENT, Errno::ENOTDIR
+        return
+      end
+      next unless stat.symlink?
+
+      raise OutputSymlinkError,
+            "symlink at #{Assets.rel(root, current)} in the output path #{Assets.rel(root, path)}; " \
+            "refusing to write or delete through it"
+    end
+  end
+
   class Runner
     def initialize(root)
       @root = File.expand_path(root)
@@ -67,6 +100,9 @@ module Build
       format = asset[:source]["format"]
       out_dir = ArtifactTargets.generated_path(@root, tool, name, "skill")
 
+      # rm_rf と mkdir_p の前に経路を調べる。SKILL.md・directory の中身・marker は、この後に
+      # 作り直した dir の中に書くので、この 1 回で足りる (#386)。
+      guard(out_dir)
       FileUtils.rm_rf(out_dir)
       FileUtils.mkdir_p(out_dir)
 
@@ -99,6 +135,7 @@ module Build
         return
       end
 
+      guard(out)
       FileUtils.mkdir_p(File.dirname(out))
       content = File.read(File.join(@root, source))
       build_id = Build.build_id_for(@root, source, format)
@@ -120,12 +157,13 @@ module Build
       end
 
       out = ArtifactTargets.generated_path(@root, tool, name, "script")
+      sidecar = ArtifactTargets.sidecar_marker_path(out)
+      guard(out, sidecar)
       FileUtils.mkdir_p(File.dirname(out))
       FileUtils.cp(File.join(@root, source), out)
       File.chmod(0o755, out) # script は配置先で実行されるため実行可能にする
       build_id = Build.build_id_for(@root, source, format)
-      File.write(ArtifactTargets.sidecar_marker_path(out),
-                 YamlMarker.render(name: name, target: tool, source: source, build_id: build_id))
+      File.write(sidecar, YamlMarker.render(name: name, target: tool, source: source, build_id: build_id))
       @built << rel(out)
     end
 
@@ -143,6 +181,7 @@ module Build
       end
 
       out = ArtifactTargets.generated_path(@root, tool, name, "plugin")
+      guard(out)
       FileUtils.mkdir_p(File.dirname(out))
       build_id = Build.build_id_for(@root, source, format)
       marker = PluginMarker.render(name: name, target: tool, source: source, build_id: build_id)
@@ -177,6 +216,12 @@ module Build
 
     def rel(path)
       Assets.rel(@root, path)
+    end
+
+    # 書き込み・削除の前に、出力の経路 (leaf と途中の dir) に symlink が無いことを確かめる。
+    # 見つけたら OutputSymlinkError で止め、それ以上書かない (#386)。
+    def guard(*paths)
+      paths.each { |path| Build.guard_output_path!(@root, path) }
     end
 
     public
@@ -231,6 +276,7 @@ module Build
         next if names.include?(File.basename(dir))
 
         if managed_marker?(dir)
+          guard(dir)
           FileUtils.rm_rf(dir)
           pruned << rel(dir)
         else
@@ -251,8 +297,10 @@ module Build
         next if names.include?(File.basename(path))
 
         if script_managed_marker?(path)
+          sidecar = ArtifactTargets.sidecar_marker_path(path)
+          guard(path, sidecar)
           FileUtils.rm_f(path)
-          FileUtils.rm_f(ArtifactTargets.sidecar_marker_path(path))
+          FileUtils.rm_f(sidecar)
           pruned << rel(path)
         else
           kept << rel(path)
@@ -272,6 +320,7 @@ module Build
         next if keep && File.basename(file) == keep
 
         if InstructionMarker.parse(File.read(file))
+          guard(file)
           FileUtils.rm_f(file)
           pruned << rel(file)
         else
@@ -292,6 +341,7 @@ module Build
         next if expected_files.include?(File.basename(path))
 
         if PluginMarker.parse(File.binread(path))
+          guard(path)
           FileUtils.rm_f(path)
           pruned << rel(path)
         else
@@ -397,6 +447,10 @@ module Build
     end
     puts "ok: #{built.size} artifact(s) built" unless quiet
     0
+  rescue OutputSymlinkError => e
+    # 出力の経路の symlink では、それ以上書かずに理由を出して止める (#386)。
+    warn "fail: #{e.message}"
+    1
   end
 
   # build 前の必須 gate。register と同じ致命 gate を共有する (Gate.fatal_errors)。

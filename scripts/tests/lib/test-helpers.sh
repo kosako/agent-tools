@@ -163,5 +163,43 @@ make_demo_repo() {
     codex claude-code
 }
 
+# dir の下の中身 (相対 path・mode・file の内容の sha256) を 1 行ずつ出す。前後で比べて、dir の中が
+# 変わっていない (消えていない・書き換わっていない・mode が変わっていない) ことを確かめるのに使う。
+# 使い方: tree_snapshot <dir>
+tree_snapshot() {
+  ruby -rdigest -e '
+    root = ARGV[0]
+    Dir.glob(File.join(root, "**", "*"), File::FNM_DOTMATCH).sort.each do |path|
+      next if %w[. ..].include?(File.basename(path))
+      stat = File.lstat(path)
+      digest = stat.file? ? Digest::SHA256.file(path).hexdigest : "-"
+      puts [path[root.length..-1], stat.mode.to_s(8), digest].join(" ")
+    end
+  ' "$1"
+}
+
+# 出力の経路に symlink があるとき、command (build / register) が書かずに止まることを確かめる (#386)。
+# 見るのは 3 つ: symlink の先 (<outside>、fixture の root の外の dir) の中が変わらない、exit 1、
+# 理由に symlink の要素と出力の path が repo 相対で出る。作業用の file は <outside> の隣
+# (<outside>.before / .after / .out) に置く。
+# 使い方: expect_output_symlink_stop <label> <outside> <symlink の要素> <出力の path> <command>...
+expect_output_symlink_stop() {
+  eoss_label=$1
+  eoss_outside=$2
+  eoss_link=$3
+  eoss_path=$4
+  shift 4
+  tree_snapshot "$eoss_outside" > "$eoss_outside.before"
+  eoss_status=0
+  "$@" > "$eoss_outside.out" 2>&1 || eoss_status=$?
+  tree_snapshot "$eoss_outside" > "$eoss_outside.after"
+  cmp -s "$eoss_outside.before" "$eoss_outside.after" \
+    || fail "$eoss_label: files outside generated/ must not change: $(diff "$eoss_outside.before" "$eoss_outside.after" || true); output: $(cat "$eoss_outside.out")"
+  [ "$eoss_status" -eq 1 ] \
+    || fail "$eoss_label: must stop with exit 1 on a symlink in the output path, got $eoss_status: $(cat "$eoss_outside.out")"
+  grep -qF "fail: symlink at $eoss_link in the output path $eoss_path; refusing to write or delete through it" "$eoss_outside.out" \
+    || fail "$eoss_label: missing the reason (symlink at $eoss_link in $eoss_path): $(cat "$eoss_outside.out")"
+}
+
 # repo root (scripts/tests/ の 2 つ上)。実 repo を対象にする case が使う。
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
