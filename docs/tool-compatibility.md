@@ -53,6 +53,26 @@ check-manifests の manifest error になります ([Asset Manifest Schema](asse
 - target-specific implementation details は、compatibility metadata として明示 modeling
   しない限り shared assets に置かない。
 
+## 時点依存の記述
+
+host (Claude Code / Codex / OpenCode) の版で変わりうる事実 (hook や plugin の挙動、CLI の flag、
+読み込み先) を docs に書くときの規則です。
+
+- 観測日と host の版を添え、根拠が実測 / 公式 docs の確認 / 未確認のどれかを書き分ける。
+- 過去の実測を現行の保証として書かない。確かめ直していない古い観測は日付と版つきの履歴として、
+  現行の記述と分けて残す。
+- 起動 (flag・sandbox・完了判定) は docs に写さず、起動の正本へのリンクを 1 つだけ置く。正本は
+  Codex review の起動が `shared/skills/personal-codex-review/LAUNCH.md`、worker の起動が
+  `shared/skills/personal-codex-worker/LAUNCH.md`、監査の起動が
+  `shared/skills/personal-repo-audit/CODEX-LAUNCH.md` (review と worker の `LAUNCH.md` は手順の正本で、
+  それぞれ冒頭で契約の正本の `SKILL.md` を指す)。[Codex review の起動経路](codex-review-launch.md) と
+  [herdr 前提の運用](herdr-operations.md) は背景の説明で、起動の正本ではない。
+
+実践の例: [Runtime GitHub Injection 防御](runtime-injection-defense.md) の「PreToolUse hook」の節
+(「履歴 (2026-07-07 調査)」と「現行仕様 (2026-09-05 確認)」を分け、OpenCode の verdict を
+「1.18.30 のこの環境で観測した」の意味に限り、未実測の点は公式 docs の記述と明記する)。この文書の
+「tool と artifact_kind の組」も、OpenCode の読み込み先を観測日・版・probe の項目つきで書いている。
+
 ## v1 で扱わないもの
 
 - `AGENTS.md` の automatic sync。
