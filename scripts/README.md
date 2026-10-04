@@ -138,8 +138,9 @@ usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
   Codex CLI 0.153.4、境界つきの起動は 0.159.3)。
 - self-test: `tests/probe-skill-routing-test.sh` は、Codex の起動の境界 (argv と、起動の前の flag と
   feature の確認)、config からの model の選択 (top-level だけを読む)、raw dir の外を指す case id での停止を
-  偽の `codex` と fixture の `CODEX_HOME` で確かめる。event の解析と CLI の実起動は対象外 (実機で
-  `--smoke`)。`--dry-run` / `--help` の引数契約は `tests/cli-args-test.sh` の対象外。
+  偽の `codex` と fixture の `CODEX_HOME` で確かめ、event の解析 (`parse_claude` / `parse_codex`) を固定の
+  JSONL で、`--max-turns` の打ち切りの扱いを偽の `claude` で確かめる。CLI の実起動と、実際の event 形式との
+  一致は対象外 (実機で `--smoke`)。`--dry-run` / `--help` の引数契約は `tests/cli-args-test.sh` の対象外。
 
 - `probe-opencode-plugin.sh`: OpenCode plugin probe の runner (実機・#295)。HOME / XDG / DB /
   git config を tmp に向けた隔離環境で `opencode` を起動し、計測用 plugin と 127.0.0.1 の mock
