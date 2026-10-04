@@ -31,6 +31,7 @@ if ARGV[2] == "--mutations"
     "launch record run" => ['data["run"] = local.run if local && local.run', ''],
     "launch record tab" => ['data["tab"] = local.tab if local && local.tab', ''],
     "last run" => ['data["last_run"] = local.last_run if local && local.last_run', ''],
+    "target check" => ['--dry-run でも止める\n    check_target!(dir, issue)', '--dry-run でも止める'],
     "invalid frontmatter" =>['"issue" => issue,\n      "title" => local', '"issue" => issue.to_s,\n      "title" => local']
   }
   original = File.read(source)
@@ -39,7 +40,7 @@ if ARGV[2] == "--mutations"
       if label == "invalid frontmatter"
         from = from.gsub('\\n', "\n")
         to = to.gsub('\\n', "\n")
-      elsif label == "read repo forwarding"
+      elsif label == "read repo forwarding" || label == "target check"
         from = from.gsub('\\n', "\n")
         to = to.gsub('\\n', "\n")
       end
@@ -401,6 +402,15 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   File.symlink(target, path)
   _out, _err, status = run.call("pull", "7")
   assert(status.exitstatus == 2 && File.read(target) == LOCAL, "symlink packet must not be followed")
+  File.unlink(path)
+  # git で tracked な packet も更新しない (更新先の検査は publish / check と共通。#386)。
+  File.write(path, LOCAL)
+  _out, err, status = Open3.capture3(env, "git", "add", "-f", "--", ".agent-packets/7.md", chdir: repo)
+  assert(status.success?, "fixture git add: #{err}")
+  _out, _err, status = run.call("pull", "7")
+  assert(status.exitstatus == 2 && File.read(path) == LOCAL, "tracked packet must not be updated")
+  _out, err, status = Open3.capture3(env, "git", "rm", "-q", "--cached", "--", ".agent-packets/7.md", chdir: repo)
+  assert(status.success?, "fixture git rm --cached: #{err}")
   File.unlink(path)
 
   # 引数の負例と argv の形。実行文字列への inline 展開があれば shell sentinel が作られる。

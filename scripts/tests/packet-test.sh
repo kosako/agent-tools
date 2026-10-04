@@ -1,7 +1,7 @@
 #!/bin/sh
 # personal-packet.rb の self-test (#253 PR-2)。
 # dir の worktree 解決 / list の frontmatter 判定 / publish の合成・gate 連携・gh 連携・
-# published 更新を tmp repo で検証する。gh は PATH 先頭の fake で置き換え、実 HOME /
+# published 更新 / check (更新先の検査。#386) を tmp repo で検証する。gh は PATH 先頭の fake で置き換え、実 HOME /
 # 実 gh には触れない (HOME を隔離、network なし)。secret 形の fixture は実行時に連結する。
 set -eu
 
@@ -701,6 +701,138 @@ else
   grep -q "^published:" "$repo/.agent-packets/7.md" && fail "missing gh must not mark published"
 fi
 
+# ---- check: packet を書く前の更新先の検査 (#386) ------------------------------------------
+# 通れば exit 0 で packet の path を 1 行、拒めば exit 1 で理由 (stderr)、判定できなければ exit 2。
+# publish も書く前に同じ検査を通し、拒まれたら gh を呼ばず、packet も外の file も変えない。
+chk_packet() { # path issue
+  printf -- '---\nissue: %s\ntitle: chk\nstate: open\nworker: claude\nupdated: 2026-09-23T10:00:00+09:00\n---\n\n## 結果\n\n### 2026-09-23 worker/claude\n- CHK-RESULT\n\n## 次の入口\n\nCHK-NEXT\n' "$2" > "$1"
+}
+run_check() { # cwd issue -> rc / $tmp/chk.out / $tmp/chk.err
+  set +e
+  (cd "$1" && "$pkt" check "$2" > "$tmp/chk.out" 2> "$tmp/chk.err")
+  rc=$?
+  set -e
+}
+expect_refused() { # cwd issue 説明 理由の文言
+  run_check "$1" "$2"
+  [ "$rc" -eq 1 ] || fail "check ($3) should refuse with exit 1 (rc=$rc): $(cat "$tmp/chk.err")"
+  [ ! -s "$tmp/chk.out" ] || fail "check ($3) must not print a path when refused: $(cat "$tmp/chk.out")"
+  grep -q "$4" "$tmp/chk.err" || fail "check ($3) should say why ($4): $(cat "$tmp/chk.err")"
+}
+expect_publish_refused() { # cwd issue 説明
+  pub_calls=$(gh_calls)
+  set +e
+  (cd "$1" && with_gh "$pkt" publish "$2" > "$tmp/pub.out" 2> "$tmp/pub.err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "publish ($3) should stop before writing with exit 2 (rc=$rc): $(cat "$tmp/pub.err")"
+  [ "$(gh_calls)" -eq "$pub_calls" ] || fail "publish ($3) must not call gh"
+}
+
+# 通常の untracked な packet: main worktree の root の実体からの path。subdir / linked worktree からも同じ
+chk="$tmp/chkrepo"
+git init -q "$chk"
+(cd "$chk" && git commit -q --allow-empty -m seed)
+mkdir -p "$chk/.agent-packets" "$chk/sub"
+chk_packet "$chk/.agent-packets/7.md" 7
+chk_path="$(cd "$chk" && pwd -P)/.agent-packets"
+(cd "$chk" && git worktree add -q "$tmp/chkwt" -b chkwt)
+for where in "$chk" "$chk/sub" "$tmp/chkwt"; do
+  run_check "$where" 7
+  [ "$rc" -eq 0 ] || fail "check on a plain untracked packet should pass from $where (rc=$rc): $(cat "$tmp/chk.err")"
+  [ "$(cat "$tmp/chk.out")" = "$chk_path/7.md" ] || fail "check should print the main packet path from $where: $(cat "$tmp/chk.out")"
+  [ ! -s "$tmp/chk.err" ] || fail "check should be quiet on success: $(cat "$tmp/chk.err")"
+done
+# packet が無い (これから作る) / dir も無い: exit 0。検査は file も dir も作らない
+run_check "$chk" 8
+[ "$rc" -eq 0 ] || fail "check on a missing packet should pass (rc=$rc): $(cat "$tmp/chk.err")"
+[ "$(cat "$tmp/chk.out")" = "$chk_path/8.md" ] || fail "check should print the path of the packet to create: $(cat "$tmp/chk.out")"
+[ ! -e "$chk/.agent-packets/8.md" ] || fail "check must not create the packet"
+nodir="$tmp/chknodir"
+git init -q "$nodir"
+run_check "$nodir" 7
+[ "$rc" -eq 0 ] || fail "check without a packet dir should pass (rc=$rc): $(cat "$tmp/chk.err")"
+[ "$(cat "$tmp/chk.out")" = "$(cd "$nodir" && pwd -P)/.agent-packets/7.md" ] || fail "check without a packet dir should print the path: $(cat "$tmp/chk.out")"
+[ ! -e "$nodir/.agent-packets" ] || fail "check must not create the packet dir"
+
+# (a) packet dir が外を指す symlink: 拒否。publish も外の file を変えない
+lnk="$tmp/chklink"
+git init -q "$lnk"
+mkdir -p "$tmp/chk-outside"
+chk_packet "$tmp/chk-outside/7.md" 7
+cp "$tmp/chk-outside/7.md" "$tmp/chk-outside.bak"
+ln -s "$tmp/chk-outside" "$lnk/.agent-packets"
+expect_refused "$lnk" 7 "symlinked packet dir" "packet dir が symlink"
+expect_publish_refused "$lnk" 7 "symlinked packet dir"
+cmp -s "$tmp/chk-outside.bak" "$tmp/chk-outside/7.md" || fail "publish through a symlinked packet dir must not change the file outside"
+[ "$(ls -A "$tmp/chk-outside")" = "7.md" ] || fail "publish through a symlinked packet dir must not leave files outside: $(ls -A "$tmp/chk-outside")"
+# (a) packet dir が directory でない
+filedir="$tmp/chkfiledir"
+git init -q "$filedir"
+: > "$filedir/.agent-packets"
+expect_refused "$filedir" 7 "packet dir that is a regular file" "packet dir が directory ではありません"
+
+# (c) packet が外を指す symlink / 先の無い symlink / directory: 拒否。publish は symlink を差し替えない
+rm "$lnk/.agent-packets"
+mkdir "$lnk/.agent-packets"
+ln -s "$tmp/chk-outside/7.md" "$lnk/.agent-packets/7.md"
+expect_refused "$lnk" 7 "symlinked packet file" "packet が symlink"
+expect_publish_refused "$lnk" 7 "symlinked packet file"
+cmp -s "$tmp/chk-outside.bak" "$tmp/chk-outside/7.md" || fail "publish through a symlinked packet must not change the file outside"
+[ -L "$lnk/.agent-packets/7.md" ] || fail "publish must not replace the symlinked packet"
+ln -s "$tmp/chk-outside/8.md" "$lnk/.agent-packets/8.md"
+expect_refused "$lnk" 8 "dangling symlinked packet (not a missing packet)" "packet が symlink"
+[ ! -e "$tmp/chk-outside/8.md" ] || fail "check must not create the symlink target"
+mkdir "$lnk/.agent-packets/9.md"
+expect_refused "$lnk" 9 "directory in place of the packet" "packet が regular file ではありません"
+
+# (d) git で tracked な packet: 拒否。publish は packet を変えない。worktree から消しても index にあれば拒否
+trk="$tmp/chktracked"
+git init -q "$trk"
+mkdir "$trk/.agent-packets"
+chk_packet "$trk/.agent-packets/7.md" 7
+(cd "$trk" && git add -f .agent-packets/7.md)
+cp "$trk/.agent-packets/7.md" "$tmp/chk-tracked.bak"
+expect_refused "$trk" 7 "tracked packet" "tracked です"
+expect_publish_refused "$trk" 7 "tracked packet"
+cmp -s "$tmp/chk-tracked.bak" "$trk/.agent-packets/7.md" || fail "publish must not modify a tracked packet"
+rm "$trk/.agent-packets/7.md"
+expect_refused "$trk" 7 "tracked packet removed from the worktree" "tracked です"
+# (d) 大文字小文字だけ違う名前で tracked (case-insensitive な file system では同じ file)
+cis="$tmp/chkcase"
+git init -q "$cis"
+mkdir "$cis/.agent-packets"
+chk_packet "$cis/.agent-packets/7.MD" 7
+if [ -e "$cis/.agent-packets/7.md" ]; then
+  (cd "$cis" && git add -f .agent-packets/7.MD)
+  expect_refused "$cis" 7 "packet tracked under a case-only different name" "tracked です"
+else
+  echo "skip: case-sensitive file system; the case-only tracked packet case does not apply" >&2
+fi
+# (d) tracked かを判定できない (index が壊れている): exit 2
+badidx="$tmp/chkbadindex"
+git init -q "$badidx"
+mkdir "$badidx/.agent-packets"
+chk_packet "$badidx/.agent-packets/7.md" 7
+printf 'not an index' > "$badidx/.git/index"
+run_check "$badidx" 7
+[ "$rc" -eq 2 ] || fail "check should exit 2 when git cannot tell whether the packet is tracked (rc=$rc): $(cat "$tmp/chk.err")"
+[ ! -s "$tmp/chk.out" ] || fail "undeterminable check must not print a path"
+
+# (b) packet dir の実体が main worktree の root の .agent-packets でない (git dir を外に置いた repo / bare)
+git init -q --separate-git-dir="$tmp/chksep.git" "$tmp/chksep"
+expect_refused "$tmp/chksep" 7 "packet dir outside the main worktree (separate git dir)" "一致しません"
+[ ! -e "$tmp/.agent-packets" ] || fail "check must not create a packet dir outside the worktree"
+git init -q --bare "$tmp/chkbare.git"
+expect_refused "$tmp/chkbare.git" 7 "bare repository" "bare repository"
+
+# git の外: 判定できない (exit 2)
+set +e
+(cd "$tmp" && "$pkt" check 7 >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "check outside git should be exit 2 (rc=$rc)"
+
 # ---- 引数 ----------------------------------------------------------------------------
 # fake gh を当てたまま走らせる (検証が退行して投稿処理に到達したら fake の呼び出し数で分かる。R293-04)
 calls_before=$(gh_calls)
@@ -710,11 +842,17 @@ set +e
 (cd "$repo" && with_gh "$pkt" publish 7 --repo -x/y >/dev/null 2>&1); [ $? -eq 2 ] || fail "leading-dash repo should be exit 2"
 (cd "$repo" && with_gh "$pkt" publish 7 --bogus >/dev/null 2>&1); [ $? -eq 2 ] || fail "unknown publish option should be exit 2"
 (cd "$repo" && with_gh "$pkt" list --bogus >/dev/null 2>&1); [ $? -eq 2 ] || fail "unknown list option should be exit 2"
+(cd "$repo" && with_gh "$pkt" check >/dev/null 2>&1); [ $? -eq 2 ] || fail "check without issue should be exit 2"
+(cd "$repo" && with_gh "$pkt" check seven >/dev/null 2>&1); [ $? -eq 2 ] || fail "non-numeric check issue should be exit 2"
+(cd "$repo" && with_gh "$pkt" check 0 >/dev/null 2>&1); [ $? -eq 2 ] || fail "check issue 0 should be exit 2"
+(cd "$repo" && with_gh "$pkt" check 7 8 >/dev/null 2>&1); [ $? -eq 2 ] || fail "check with two issues should be exit 2"
+(cd "$repo" && with_gh "$pkt" check 7 --bogus >/dev/null 2>&1); [ $? -eq 2 ] || fail "unknown check option should be exit 2"
 (cd "$repo" && with_gh "$pkt" frobnicate >/dev/null 2>"$tmp/err"); [ $? -eq 2 ] || fail "unknown command should be exit 2"
 grep -q "^usage:" "$tmp/err" || fail "unknown command should print usage on stderr"
 (cd "$repo" && with_gh "$pkt" >/dev/null 2>&1); [ $? -eq 2 ] || fail "no args should be exit 2"
 (cd "$repo" && with_gh "$pkt" --help > "$tmp/out" 2>&1); [ $? -eq 0 ] || fail "--help should be exit 0"
 grep -q "^usage:" "$tmp/out" || fail "--help should print usage on stdout"
+grep -q "personal-packet check <issue>" "$tmp/out" || fail "usage should list check"
 [ "$(gh_calls)" -eq "$calls_before" ] || fail "argument errors must not call gh (calls=$(gh_calls))"
 set -e
 
