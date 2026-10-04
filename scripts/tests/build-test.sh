@@ -524,4 +524,217 @@ grep -q "kept (unmanaged, no agent-tools marker): generated/opencode/plugins/per
 grep -q "personal-ghost" "$tmp/out-pprune" \
   && fail "paths outside TOOL_KINDS must not be reported by prune: $(cat "$tmp/out-pprune")" || true
 
+# --- case: 出力の経路に symlink があれば、書かずに exit 1 で止める (#386) ---
+# 設定ミスで出力先が generated/ の外 (tool home など) を指したときの事故よけ。symlink の先は fixture の
+# root の外 ($tmp/sym-*-outside)。fixture は asset を 1 つだけ持ち、検査の呼び出しを経路ごとに外したときに
+# 落ちる case が 1 対 1 になるようにする。
+# 使い方: sym_fixture <root> skill|instruction|script|plugin
+sym_fixture() {
+  case $2 in
+    skill)
+      mkdir -p "$1/shared/workflows"
+      write_skill_source "$1/shared/workflows/personal-demo.md" "# demo"
+      write_asset_manifest "$1/shared/workflows/personal-demo.asset.yml" \
+        personal-demo workflow public shared/workflows/personal-demo.md markdown claude-code ;;
+    instruction)
+      mkdir -p "$1/shared/instructions"
+      printf '# ops\n' > "$1/shared/instructions/personal-ops.md"
+      write_asset_manifest "$1/shared/instructions/personal-ops.asset.yml" \
+        personal-ops instruction public shared/instructions/personal-ops.md markdown claude-code ;;
+    script)
+      mkdir -p "$1/shared/scripts"
+      printf '#!/bin/sh\necho hi\n' > "$1/shared/scripts/personal-wrap.sh"
+      write_asset_manifest "$1/shared/scripts/personal-wrap.asset.yml" \
+        personal-wrap script personal shared/scripts/personal-wrap.sh text claude-code ;;
+    plugin)
+      mkdir -p "$1/shared/plugins"
+      printf 'export default { id: "personal-demo-plugin", server: async () => ({}) };\n' \
+        > "$1/shared/plugins/personal-demo-plugin.js"
+      write_asset_manifest "$1/shared/plugins/personal-demo-plugin.asset.yml" \
+        personal-demo-plugin plugin personal shared/plugins/personal-demo-plugin.js text opencode ;;
+  esac
+}
+
+# generated/ そのものが symlink: skill の rm_rf が辿った先の同名の dir を消さない
+sym_fixture "$tmp/sym-gen" skill
+mkdir -p "$tmp/sym-gen-outside/claude-code/skills/personal-demo"
+echo "outside" > "$tmp/sym-gen-outside/claude-code/skills/personal-demo/keep.txt"
+ln -s "$tmp/sym-gen-outside" "$tmp/sym-gen/generated"
+expect_output_symlink_stop "generated/ is a symlink" "$tmp/sym-gen-outside" \
+  generated generated/claude-code/skills/personal-demo "$build" --root "$tmp/sym-gen"
+
+# tool の dir が symlink: instruction が辿った先の file を書き換えない
+sym_fixture "$tmp/sym-tool" instruction
+mkdir -p "$tmp/sym-tool-outside/instructions" "$tmp/sym-tool/generated"
+echo "outside" > "$tmp/sym-tool-outside/instructions/CLAUDE.md"
+ln -s "$tmp/sym-tool-outside" "$tmp/sym-tool/generated/claude-code"
+expect_output_symlink_stop "tool dir is a symlink" "$tmp/sym-tool-outside" \
+  generated/claude-code generated/claude-code/instructions/CLAUDE.md "$build" --root "$tmp/sym-tool"
+
+# skill の出力 dir が symlink
+sym_fixture "$tmp/sym-skill" skill
+mkdir -p "$tmp/sym-skill-outside" "$tmp/sym-skill/generated/claude-code/skills"
+echo "outside" > "$tmp/sym-skill-outside/keep.txt"
+ln -s "$tmp/sym-skill-outside" "$tmp/sym-skill/generated/claude-code/skills/personal-demo"
+expect_output_symlink_stop "skill output dir is a symlink" "$tmp/sym-skill-outside" \
+  generated/claude-code/skills/personal-demo generated/claude-code/skills/personal-demo \
+  "$build" --root "$tmp/sym-skill"
+
+# 単一 file の leaf が symlink: instruction / script の本体 / script の sidecar / plugin は辿って書かない
+sym_fixture "$tmp/sym-instr" instruction
+mkdir -p "$tmp/sym-instr-outside" "$tmp/sym-instr/generated/claude-code/instructions"
+echo "outside" > "$tmp/sym-instr-outside/CLAUDE.md"
+ln -s "$tmp/sym-instr-outside/CLAUDE.md" "$tmp/sym-instr/generated/claude-code/instructions/CLAUDE.md"
+expect_output_symlink_stop "instruction leaf is a symlink" "$tmp/sym-instr-outside" \
+  generated/claude-code/instructions/CLAUDE.md generated/claude-code/instructions/CLAUDE.md \
+  "$build" --root "$tmp/sym-instr"
+
+sym_fixture "$tmp/sym-body" script
+mkdir -p "$tmp/sym-body-outside" "$tmp/sym-body/generated/claude-code/scripts"
+echo "outside" > "$tmp/sym-body-outside/personal-wrap"
+chmod 0644 "$tmp/sym-body-outside/personal-wrap"
+ln -s "$tmp/sym-body-outside/personal-wrap" "$tmp/sym-body/generated/claude-code/scripts/personal-wrap"
+expect_output_symlink_stop "script body leaf is a symlink" "$tmp/sym-body-outside" \
+  generated/claude-code/scripts/personal-wrap generated/claude-code/scripts/personal-wrap \
+  "$build" --root "$tmp/sym-body"
+
+sym_fixture "$tmp/sym-sidecar" script
+mkdir -p "$tmp/sym-sidecar-outside" "$tmp/sym-sidecar/generated/claude-code/scripts"
+echo "outside" > "$tmp/sym-sidecar-outside/marker.yml"
+ln -s "$tmp/sym-sidecar-outside/marker.yml" \
+  "$tmp/sym-sidecar/generated/claude-code/scripts/personal-wrap.agent-tools-managed.yml"
+expect_output_symlink_stop "script sidecar leaf is a symlink" "$tmp/sym-sidecar-outside" \
+  generated/claude-code/scripts/personal-wrap.agent-tools-managed.yml \
+  generated/claude-code/scripts/personal-wrap.agent-tools-managed.yml "$build" --root "$tmp/sym-sidecar"
+
+sym_fixture "$tmp/sym-plugin" plugin
+mkdir -p "$tmp/sym-plugin-outside" "$tmp/sym-plugin/generated/opencode/plugins"
+echo "outside" > "$tmp/sym-plugin-outside/plugin.js"
+chmod 0600 "$tmp/sym-plugin-outside/plugin.js"
+ln -s "$tmp/sym-plugin-outside/plugin.js" "$tmp/sym-plugin/generated/opencode/plugins/personal-demo-plugin.js"
+expect_output_symlink_stop "plugin leaf is a symlink" "$tmp/sym-plugin-outside" \
+  generated/opencode/plugins/personal-demo-plugin.js generated/opencode/plugins/personal-demo-plugin.js \
+  "$build" --root "$tmp/sym-plugin"
+
+# 単一 file の書き込み先が directory なら止める。FileUtils.cp は directory の中
+# (<leaf>/<source の basename>) に書くので、そこに外への symlink があると辿って外を書き換える
+sym_fixture "$tmp/dir-body" script
+mkdir -p "$tmp/dir-body-outside" "$tmp/dir-body/generated/claude-code/scripts/personal-wrap"
+echo "outside" > "$tmp/dir-body-outside/target"
+ln -s "$tmp/dir-body-outside/target" "$tmp/dir-body/generated/claude-code/scripts/personal-wrap/personal-wrap.sh"
+expect_output_not_file_stop "script body leaf is a directory" "$tmp/dir-body-outside" \
+  generated/claude-code/scripts/personal-wrap "$build" --root "$tmp/dir-body"
+
+# sidecar / instruction / plugin の leaf が directory でも同じく理由を出して止める (File.write は
+# directory の中へは書かず Errno::EISDIR で落ちるが、落ちる代わりに止める)
+sym_fixture "$tmp/dir-sidecar" script
+mkdir -p "$tmp/dir-sidecar-outside" \
+  "$tmp/dir-sidecar/generated/claude-code/scripts/personal-wrap.agent-tools-managed.yml"
+echo "outside" > "$tmp/dir-sidecar-outside/keep.txt"
+expect_output_not_file_stop "script sidecar leaf is a directory" "$tmp/dir-sidecar-outside" \
+  generated/claude-code/scripts/personal-wrap.agent-tools-managed.yml "$build" --root "$tmp/dir-sidecar"
+
+sym_fixture "$tmp/dir-instr" instruction
+mkdir -p "$tmp/dir-instr-outside" "$tmp/dir-instr/generated/claude-code/instructions/CLAUDE.md"
+echo "outside" > "$tmp/dir-instr-outside/keep.txt"
+expect_output_not_file_stop "instruction leaf is a directory" "$tmp/dir-instr-outside" \
+  generated/claude-code/instructions/CLAUDE.md "$build" --root "$tmp/dir-instr"
+
+sym_fixture "$tmp/dir-plugin" plugin
+mkdir -p "$tmp/dir-plugin-outside" "$tmp/dir-plugin/generated/opencode/plugins/personal-demo-plugin.js"
+echo "outside" > "$tmp/dir-plugin-outside/keep.txt"
+expect_output_not_file_stop "plugin leaf is a directory" "$tmp/dir-plugin-outside" \
+  generated/opencode/plugins/personal-demo-plugin.js "$build" --root "$tmp/dir-plugin"
+
+# 旧い skill の dir を消しきれない (書き込み不可) なら、残った中身を辿って書かずに止める。rm_rf は削除の
+# 失敗を握りつぶし、mkdir_p は残った dir を受け入れるので、消えたことを確かめる。root は mode によらず
+# 消せるので、この case は root では走らせない
+if [ "$(id -u)" -ne 0 ]; then
+  sym_fixture "$tmp/stuck" skill
+  mkdir -p "$tmp/stuck-outside" "$tmp/stuck/generated/claude-code/skills/personal-demo"
+  echo "outside" > "$tmp/stuck-outside/SKILL.md"
+  ln -s "$tmp/stuck-outside/SKILL.md" "$tmp/stuck/generated/claude-code/skills/personal-demo/SKILL.md"
+  chmod 0555 "$tmp/stuck/generated/claude-code/skills/personal-demo"
+  # 後始末: build の直後に mode を戻す (assertion の前。trap の rm -rf が消せるように)
+  build_stuck() {
+    bs_status=0
+    "$build" --root "$tmp/stuck" || bs_status=$?
+    chmod 0755 "$tmp/stuck/generated/claude-code/skills/personal-demo"
+    return "$bs_status"
+  }
+  expect_output_stop "old skill dir cannot be removed" "$tmp/stuck-outside" \
+    "fail: could not remove the old output dir generated/claude-code/skills/personal-demo; refusing to write into it" \
+    build_stuck
+else
+  echo "skip: old skill dir cannot be removed (root ignores the directory mode)" >&2
+fi
+
+# prune の削除: kind の dir が symlink なら、辿った先の managed な artifact を消さない (kind ごと)
+sym_fixture "$tmp/sym-pskill" skill
+mkdir -p "$tmp/sym-pskill-outside/personal-old" "$tmp/sym-pskill/generated/codex"
+printf 'repo: agent-tools\nname: personal-old\ntarget: codex\nsource: x\nbuild_id: sha256:x\n' \
+  > "$tmp/sym-pskill-outside/personal-old/.agent-tools-managed.yml"
+ln -s "$tmp/sym-pskill-outside" "$tmp/sym-pskill/generated/codex/skills"
+expect_output_symlink_stop "prune: skills dir is a symlink" "$tmp/sym-pskill-outside" \
+  generated/codex/skills generated/codex/skills/personal-old "$build" --root "$tmp/sym-pskill" --prune
+
+sym_fixture "$tmp/sym-pscript" skill
+mkdir -p "$tmp/sym-pscript-outside" "$tmp/sym-pscript/generated/codex"
+echo "old script" > "$tmp/sym-pscript-outside/personal-old-script"
+printf 'repo: agent-tools\nname: personal-old-script\ntarget: codex\nsource: x\nbuild_id: sha256:x\n' \
+  > "$tmp/sym-pscript-outside/personal-old-script.agent-tools-managed.yml"
+ln -s "$tmp/sym-pscript-outside" "$tmp/sym-pscript/generated/codex/scripts"
+expect_output_symlink_stop "prune: scripts dir is a symlink" "$tmp/sym-pscript-outside" \
+  generated/codex/scripts generated/codex/scripts/personal-old-script \
+  "$build" --root "$tmp/sym-pscript" --prune
+
+# prune の script は本体と sidecar の leaf も別々に調べる (どちらか一方が symlink でも止める)
+sym_fixture "$tmp/sym-pbody" skill
+mkdir -p "$tmp/sym-pbody-outside" "$tmp/sym-pbody/generated/codex/scripts"
+echo "old script" > "$tmp/sym-pbody-outside/personal-old-script"
+ln -s "$tmp/sym-pbody-outside/personal-old-script" "$tmp/sym-pbody/generated/codex/scripts/personal-old-script"
+printf 'repo: agent-tools\nname: personal-old-script\ntarget: codex\nsource: x\nbuild_id: sha256:x\n' \
+  > "$tmp/sym-pbody/generated/codex/scripts/personal-old-script.agent-tools-managed.yml"
+expect_output_symlink_stop "prune: script body leaf is a symlink" "$tmp/sym-pbody-outside" \
+  generated/codex/scripts/personal-old-script generated/codex/scripts/personal-old-script \
+  "$build" --root "$tmp/sym-pbody" --prune
+
+sym_fixture "$tmp/sym-psidecar" skill
+mkdir -p "$tmp/sym-psidecar-outside" "$tmp/sym-psidecar/generated/codex/scripts"
+echo "old script" > "$tmp/sym-psidecar/generated/codex/scripts/personal-old-script"
+printf 'repo: agent-tools\nname: personal-old-script\ntarget: codex\nsource: x\nbuild_id: sha256:x\n' \
+  > "$tmp/sym-psidecar-outside/marker.yml"
+ln -s "$tmp/sym-psidecar-outside/marker.yml" \
+  "$tmp/sym-psidecar/generated/codex/scripts/personal-old-script.agent-tools-managed.yml"
+expect_output_symlink_stop "prune: script sidecar leaf is a symlink" "$tmp/sym-psidecar-outside" \
+  generated/codex/scripts/personal-old-script.agent-tools-managed.yml \
+  generated/codex/scripts/personal-old-script.agent-tools-managed.yml \
+  "$build" --root "$tmp/sym-psidecar" --prune
+
+sym_fixture "$tmp/sym-pinstr" skill
+mkdir -p "$tmp/sym-pinstr-outside" "$tmp/sym-pinstr/generated/codex"
+printf '<!-- agent-tools:managed v=1 repo=agent-tools name=personal-old target=codex artifact_kind=instruction source=shared/x.md build_id=sha256:old -->\nstale\n' \
+  > "$tmp/sym-pinstr-outside/STRAY.md"
+ln -s "$tmp/sym-pinstr-outside" "$tmp/sym-pinstr/generated/codex/instructions"
+expect_output_symlink_stop "prune: instructions dir is a symlink" "$tmp/sym-pinstr-outside" \
+  generated/codex/instructions generated/codex/instructions/STRAY.md \
+  "$build" --root "$tmp/sym-pinstr" --prune
+
+sym_fixture "$tmp/sym-pplugin" skill
+mkdir -p "$tmp/sym-pplugin-outside" "$tmp/sym-pplugin/generated/opencode"
+printf '/* agent-tools:managed v=1 repo=agent-tools name=personal-old-plugin target=opencode artifact_kind=plugin source=shared/plugins/personal-old-plugin.js build_id=sha256:old */\nexport default {};\n' \
+  > "$tmp/sym-pplugin-outside/personal-old-plugin.js"
+ln -s "$tmp/sym-pplugin-outside" "$tmp/sym-pplugin/generated/opencode/plugins"
+expect_output_symlink_stop "prune: plugins dir is a symlink" "$tmp/sym-pplugin-outside" \
+  generated/opencode/plugins generated/opencode/plugins/personal-old-plugin.js \
+  "$build" --root "$tmp/sym-pplugin" --prune
+
+# root より上の symlink は調べない (repo が symlink の下にあってもよい)。検査は generated/ から下だけ
+sym_fixture "$tmp/sym-above-real" skill
+ln -s "$tmp/sym-above-real" "$tmp/sym-above"
+"$build" --root "$tmp/sym-above" > "$tmp/out-sym-above" 2>&1 \
+  || fail "a symlink above generated/ must not stop the build: $(cat "$tmp/out-sym-above")"
+[ -f "$tmp/sym-above-real/generated/claude-code/skills/personal-demo/SKILL.md" ] \
+  || fail "build through a symlinked root should write under generated/"
+
 echo "ok: build self-test passed"

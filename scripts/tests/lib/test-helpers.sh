@@ -163,5 +163,62 @@ make_demo_repo() {
     codex claude-code
 }
 
+# dir の下の中身 (相対 path・mode・file の内容の sha256) を 1 行ずつ出す。前後で比べて、dir の中が
+# 変わっていない (消えていない・書き換わっていない・mode が変わっていない) ことを確かめるのに使う。
+# 使い方: tree_snapshot <dir>
+tree_snapshot() {
+  ruby -rdigest -e '
+    root = ARGV[0]
+    Dir.glob(File.join(root, "**", "*"), File::FNM_DOTMATCH).sort.each do |path|
+      next if %w[. ..].include?(File.basename(path))
+      stat = File.lstat(path)
+      digest = stat.file? ? Digest::SHA256.file(path).hexdigest : "-"
+      puts [path[root.length..-1], stat.mode.to_s(8), digest].join(" ")
+    end
+  ' "$1"
+}
+
+# 書き込み先を安全に書き換えられないとき、command (build / register) が書かずに止まることを確かめる (#386)。
+# 見るのは 3 つ: 辿りうる先 (<outside>、fixture の root の外の dir) の中が変わらない、exit 1、
+# 出力に理由の行 (<fail の行>、そのままの文字列) が出る。作業用の file は <outside> の隣
+# (<outside>.before / .after / .out) に置く。
+# 使い方: expect_output_stop <label> <outside> <fail の行> <command>...
+expect_output_stop() {
+  eos_label=$1
+  eos_outside=$2
+  eos_reason=$3
+  shift 3
+  tree_snapshot "$eos_outside" > "$eos_outside.before"
+  eos_status=0
+  "$@" > "$eos_outside.out" 2>&1 || eos_status=$?
+  tree_snapshot "$eos_outside" > "$eos_outside.after"
+  cmp -s "$eos_outside.before" "$eos_outside.after" \
+    || fail "$eos_label: files outside generated/ must not change: $(diff "$eos_outside.before" "$eos_outside.after" || true); output: $(cat "$eos_outside.out")"
+  [ "$eos_status" -eq 1 ] \
+    || fail "$eos_label: must stop with exit 1, got $eos_status: $(cat "$eos_outside.out")"
+  grep -qF "$eos_reason" "$eos_outside.out" \
+    || fail "$eos_label: missing the reason '$eos_reason': $(cat "$eos_outside.out")"
+}
+
+# 出力の経路に symlink があるときの expect_output_stop。理由は symlink の要素と出力の path (repo 相対)。
+# 使い方: expect_output_symlink_stop <label> <outside> <symlink の要素> <出力の path> <command>...
+expect_output_symlink_stop() {
+  eoss_label=$1
+  eoss_outside=$2
+  eoss_reason="fail: symlink at $3 in the output path $4; refusing to write or delete through it"
+  shift 4
+  expect_output_stop "$eoss_label" "$eoss_outside" "$eoss_reason" "$@"
+}
+
+# 単一 file の書き込み先が regular file でない (directory など) ときの expect_output_stop。
+# 使い方: expect_output_not_file_stop <label> <outside> <出力の path> <command>...
+expect_output_not_file_stop() {
+  eonf_label=$1
+  eonf_outside=$2
+  eonf_reason="fail: output path $3 exists and is not a regular file; refusing to write through it"
+  shift 3
+  expect_output_stop "$eonf_label" "$eonf_outside" "$eonf_reason" "$@"
+}
+
 # repo root (scripts/tests/ の 2 つ上)。実 repo を対象にする case が使う。
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)

@@ -47,8 +47,11 @@ module Register
       }
     end
 
+    # 出力の経路 (generated/ と catalog.json) に symlink があるか、catalog.json が regular file で
+    # なければ、書かずに Build::OutputPathError で止める (build と同じ検査, #386)。
     def write(catalog)
       path = File.join(@root, ArtifactTargets::CATALOG_PATH)
+      Build.guard_output_file!(@root, path)
       FileUtils.mkdir_p(File.dirname(path))
       File.write(path, JSON.pretty_generate(catalog) + "\n")
     end
@@ -187,7 +190,12 @@ module Register
       return 1
     end
 
-    runner.write(catalog)
+    begin
+      runner.write(catalog)
+    rescue Build::OutputPathError => e
+      warn "fail: #{e.message}"
+      return 1
+    end
     entries = catalog["assets"]
     registered = entries.count { |a| a["registration"] == "registered" }
     pending = entries.count { |a| a["registration"] == "human_review_required" }
