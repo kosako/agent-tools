@@ -175,6 +175,40 @@ write_results "$tmp/repeat.json" claude-code model-x baseline \
 run_case "compare-run-count-mismatch" 2 "comparison: run count differs for case 'a-primary' (2 vs 1)" \
   -- --cases "$tmp/cases.json" --results "$tmp/ok.json" --baseline "$tmp/repeat.json"
 
+# --- case 21: error run が candidate / baseline のどちらにあっても、baseline 比較 (delta と回帰の判定) を
+# 飛ばして構造エラー (exit 2) にする。回帰に見える差があっても判定しない。candidate 自身の must_not 違反は
+# exit 1 として残る (docs の「既知の挙動」、#302) ---
+assert_no_comparison() {
+  if grep -q "regression:" "$tmp/out"; then fail "$1: regression judged despite an error run: $(cat "$tmp/out")"; fi
+  if grep -q "delta candidate-baseline" "$tmp/out"; then fail "$1: delta reported despite an error run: $(cat "$tmp/out")"; fi
+}
+# 判定すれば primary hits decreased (2/2 -> 0/1) になる差
+write_results "$tmp/err-miss.json" claude-code model-x candidate \
+  "$(run_line a-primary ok 100 10 '[]')" \
+  "$(run_line b-primary error 0 0 '[]')" \
+  "$(run_line none ok 80 8 '[]')"
+run_case "compare-candidate-error-run" 2 "candidate: case 'b-primary' has a run with status 'error'" \
+  -- --cases "$tmp/cases.json" --results "$tmp/err-miss.json" --baseline "$tmp/ok.json"
+assert_no_comparison "compare-candidate-error-run"
+# baseline 側の error run でも同じ (判定すれば primary hits decreased (1/1 -> 0/2) になる差)
+write_results "$tmp/miss-all.json" claude-code model-x candidate \
+  "$(run_line a-primary ok 100 10 '[]')" \
+  "$(run_line b-primary ok 120 12 '[]')" \
+  "$(run_line none ok 80 8 '[]')"
+run_case "compare-baseline-error-run" 2 "baseline: case 'b-primary' has a run with status 'error'" \
+  -- --cases "$tmp/cases.json" --results "$tmp/miss-all.json" --baseline "$tmp/err.json"
+assert_no_comparison "compare-baseline-error-run"
+# candidate 自身の must_not 違反は exit 1。error run も併せて報告し、回帰の判定はしない
+write_results "$tmp/err-viol.json" claude-code model-x candidate \
+  "$(run_line a-primary ok 100 10 '["skill-a", "skill-b"]')" \
+  "$(run_line b-primary error 0 0 '[]')" \
+  "$(run_line none ok 80 8 '[]')"
+run_case "compare-error-run-with-violation" 1 "candidate: case 'a-primary' triggered must_not skill(s) skill-b" \
+  -- --cases "$tmp/cases.json" --results "$tmp/err-viol.json" --baseline "$tmp/ok.json"
+grep -q "candidate: case 'b-primary' has a run with status 'error'" "$tmp/out" \
+  || fail "compare-error-run-with-violation: error run not reported alongside: $(cat "$tmp/out")"
+assert_no_comparison "compare-error-run-with-violation"
+
 # --- case 15: 複数 run (repeat) は run 単位で集計する (exit 0、runs=4 primary=2/3) ---
 write_results "$tmp/repeat-cand.json" claude-code model-x candidate \
   "$(run_line a-primary ok 100 10 '["skill-a"]')" \

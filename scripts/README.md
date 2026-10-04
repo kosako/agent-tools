@@ -117,7 +117,8 @@ usage: check-skill-routing.sh --cases <cases.json> --results <results.json> [--b
 
 - exit code: pass は 0、観測された破れ (must_not violation / baseline からの回帰) は 1、
   usage / 入力・構造エラー (coverage 欠落・error run・比較条件不一致) は 2。token は gate にせず
-  delta を報告するだけ。
+  delta を報告するだけ。構造エラーが baseline / candidate のどちらかにあると、baseline との比較 (delta と
+  回帰の判定) をしない。
 - case set の正本は `lib/skill_routing_cases.json`。
 - self-test: `tests/check-skill-routing-test.sh`
 
@@ -136,6 +137,11 @@ usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
 - **CI では実行しない** (CLI 認証と network が要る)。証跡は raw log (`<out>.raw/`) と judge の
   summary。`--smoke` で隔離と event 形式を先に確認する (実測した版: Claude Code 2.1.277 /
   Codex CLI 0.153.4、境界つきの起動は 0.159.3)。
+- raw log は model が実行した command の出力や読んだ file の中身を含みうる (採掘の case では実 session log の
+  中身)。Issue / PR / comment には貼らず、貼るのは judge の summary だけにする (docs の「raw log の扱い」)。
+- 既知の挙動 (#302): Codex では case `audit-mine-session-logs` が asset-miner を読んだあと実際の採掘を始め、
+  `--timeout` (既定 300 秒) で error run になりやすい。error run があると judge は構造エラーになり baseline との
+  比較を飛ばすので、この case を含む Codex の run は subset から外すか per-case で読む (docs の「既知の挙動」)。
 - self-test: `tests/probe-skill-routing-test.sh` は、Codex の起動の境界 (argv と、起動の前の flag と
   feature の確認)、config からの model の選択 (top-level だけを読む)、raw dir の外を指す case id での停止を
   偽の `codex` と fixture の `CODEX_HOME` で確かめ、event の解析 (`parse_claude` / `parse_codex`) を固定の
