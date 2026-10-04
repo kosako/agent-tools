@@ -17,6 +17,7 @@
 #
 # 値は shell 文字列に埋め込まず argv 配列で渡す (#266 の欠陥クラスを持ち込まない)。
 
+require "digest"
 require "fileutils"
 require "json"
 require "securerandom"
@@ -43,6 +44,8 @@ module ProbeOpencodePlugin
   REAL_PROMPT = "This is an automated probe. Use the bash tool exactly once to run: echo PROBE-BASH-OK -- " \
                 "then reply with only the first line of the bash tool result, copied verbatim, and nothing else."
   NOTIFY_MODES = %w[annotate mark notify].freeze
+  # OpenCode が config dir に書く lockfile の名前 (OpenCode が同じ dir に書く .gitignore に載る 2 つ)。先が優先。
+  LOCKFILES = %w[package-lock.json bun.lock].freeze
 
   # mock stage の run。label は記録の突き合わせに使う (judge.rb が同じ label を読む)。
   MOCK_RUNS = [
@@ -468,9 +471,46 @@ module ProbeOpencodePlugin
     Dir.glob(File.join(layout.log_dir, "*")).select { |f| File.read(f).include?("probe-log-#{nonce}") }.map { |f| File.join("<data>", "opencode", "log", File.basename(f)) }
   end
 
+  # 隔離 dir (layout.base) の中の regular file なら、その realpath を返す。symlink は辿った先が隔離 dir の
+  # 中のときだけ使い、外を指すとき・無いとき・読めないときは nil (隔離の外の file を読まない)。
+  def self.isolated_file(layout, path)
+    real = File.realpath(path)
+    real.start_with?(layout.base + File::SEPARATOR) && File.file?(real) ? real : nil
+  rescue SystemCallError
+    nil
+  end
+
+  # install された @opencode-ai/plugin の package.json から version の文字列だけを読む (他の field は
+  # 記録しない)。無い・JSON として読めない・version が文字列でないときは nil。UTF-8 として不正な文字列も
+  # nil にする (facts.json の JSON に書けず、ensure の中で facts ごと失われるため)。
+  def self.plugin_version(layout, dir)
+    file = isolated_file(layout, File.join(dir, "node_modules", "@opencode-ai", "plugin", "package.json"))
+    pkg = file && JSON.parse(File.read(file))
+    version = pkg.is_a?(Hash) ? pkg["version"] : nil
+    version.is_a?(String) && version.encoding == Encoding::UTF_8 && version.valid_encoding? ? version : nil
+  rescue JSON::ParserError, EncodingError, SystemCallError
+    nil
+  end
+
+  # lockfile の sha256 (hex)。LOCKFILES の先にある名前を使い、それが隔離の中の regular file でなければ
+  # (外を指す symlink など) 後ろの名前に代えず nil にする。どれも無ければ nil。
+  def self.lockfile_sha256(layout, dir)
+    path = LOCKFILES.map { |name| File.join(dir, name) }.find { |p| File.exist?(p) || File.symlink?(p) }
+    file = path && isolated_file(layout, path)
+    file && Digest::SHA256.file(file).hexdigest
+  rescue SystemCallError
+    nil
+  end
+
+  # global (OpenCode の config dir) と project (.opencode) の install の状態。真偽値は dir の有無、
+  # version と sha256 は上の 2 つ (path は記録しない。provider の package の版は探さない)。
   def self.install_state(layout)
-    { "global_plugin_pkg" => File.directory?(File.join(layout.opencode_config_dir, "node_modules", "@opencode-ai", "plugin")),
-      "project_plugin_pkg" => File.directory?(File.join(layout.project, ".opencode", "node_modules", "@opencode-ai", "plugin")) }
+    global = layout.opencode_config_dir
+    project = File.join(layout.project, ".opencode")
+    { "global_plugin_pkg" => File.directory?(File.join(global, "node_modules", "@opencode-ai", "plugin")),
+      "project_plugin_pkg" => File.directory?(File.join(project, "node_modules", "@opencode-ai", "plugin")),
+      "global_plugin_version" => plugin_version(layout, global), "global_lockfile_sha256" => lockfile_sha256(layout, global),
+      "project_plugin_version" => plugin_version(layout, project), "project_lockfile_sha256" => lockfile_sha256(layout, project) }
   end
 
   def self.opencode_version(ctx)

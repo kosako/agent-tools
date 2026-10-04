@@ -83,6 +83,9 @@ data が欠けた項目は unknown にして pass に数えない。
 - 子 process は argv 配列で起動し、`unsetenv_others: true` と allowlist の env だけを渡す。
   CLAUDECODE / CODEX_* / OPENCODE_CONFIG* / GH_TOKEN などは渡らない (T2)。起動時の通信を減らすため
   OPENCODE_DISABLE_AUTOUPDATE=1 と OPENCODE_DISABLE_MODELS_FETCH=1 を立てる (models は同梱の snapshot を使う)。
+- install された `@opencode-ai/plugin` の版と lockfile (`package-lock.json`、無ければ `bun.lock`) の sha256 を、global と
+  project の config dir ごとに facts の `install` に残す (M1 の observed にも載る。無い・読めない・隔離 dir の外を指す
+  symlink なら null)。provider の package の版は記録しない。
 - **限界**:
   - system の managed config は env では外せない (隔離の外に残る)。
   - mock / serve の stage でも外部通信は起きる。OpenCode は config dir ごとに `@opencode-ai/plugin` を npm

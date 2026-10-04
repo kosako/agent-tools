@@ -1,11 +1,14 @@
 # frozen_string_literal: true
 
-# probe-opencode-plugin-test.sh の Ruby 側 (T3 / T4 / T5 / T8)。opencode も外部の network も使わない
-# (T4 の mock は loopback だけ)。使い方: ruby probe-opencode-test.rb <t3|t4|t5|t8> <work dir>
+# probe-opencode-plugin-test.sh の Ruby 側 (T3 / T4 / T5 / T6 / T8)。opencode も外部の network も使わない
+# (T4 の mock は loopback だけ)。使い方: ruby probe-opencode-test.rb <t3|t4|t5|t6|t8> <work dir>
 # 失敗は "FAIL: ..." を stderr に出して exit 1。
 
+require "digest"
+require "fileutils"
 require "json"
 require "net/http"
+require_relative "../../lib/probe_opencode_plugin"
 require_relative "../../lib/probe_opencode/isolation"
 require_relative "../../lib/probe_opencode/judge"
 require_relative "../../lib/probe_opencode/mock_openai"
@@ -336,6 +339,105 @@ def t5(dir)
   puts "ok T5"
 end
 
+# T6 (Ruby 側、#397): facts の install。install された @opencode-ai/plugin の version の文字列と lockfile の
+# sha256 だけを読み、無い・壊れた JSON・文字列でない version・隔離 dir の外を指す symlink は null にする。
+def t6(dir)
+  root = File.realpath(dir)
+  outside = File.join(root, "outside")
+  FileUtils.mkdir_p(outside)
+  File.write(File.join(outside, "package.json"), JSON.generate("version" => "9.9.9-outside"))
+  File.write(File.join(outside, "lock"), "outside-lock\n")
+  sha = ->(s) { Digest::SHA256.hexdigest(s) }
+  pkg_dir = ->(d) { File.join(d, "node_modules", "@opencode-ai", "plugin") }
+  write_pkg = lambda do |d, body|
+    FileUtils.mkdir_p(pkg_dir.call(d))
+    File.write(File.join(pkg_dir.call(d), "package.json"), body)
+  end
+  # case ごとに隔離 dir (root/<name>) を作り、setup が global (config dir) と project (.opencode) に置く。
+  state = lambda do |name, &setup|
+    layout = ProbeOpencode::Isolation.layout(File.join(root, name))
+    global = layout.opencode_config_dir
+    project = File.join(layout.project, ".opencode")
+    [global, project].each { |d| FileUtils.mkdir_p(d) }
+    setup&.call(global, project)
+    begin
+      st = ProbeOpencodePlugin.install_state(layout)
+      JSON.generate(st)
+    rescue StandardError => e
+      fail!("T6 #{name}: install_state must not raise and must be writable to facts.json: #{e.class}: #{e.message}")
+    end
+    st
+  end
+
+  none = state.call("absent")
+  check(none == { "global_plugin_pkg" => false, "project_plugin_pkg" => false, "global_plugin_version" => nil,
+                  "global_lockfile_sha256" => nil, "project_plugin_version" => nil, "project_lockfile_sha256" => nil },
+        "T6 absent: nothing installed must give false / null: #{none.inspect}")
+
+  ok = state.call("read") do |g, p|
+    write_pkg.call(g, JSON.generate("name" => "@opencode-ai/plugin", "version" => "1.2.3", "description" => "OTHER-FIELD"))
+    File.write(File.join(g, "package-lock.json"), "lock-npm\n")
+    File.write(File.join(g, "bun.lock"), "lock-bun-global\n")
+    write_pkg.call(p, JSON.generate("version" => "4.5.6"))
+    File.write(File.join(p, "bun.lock"), "lock-bun\n")
+  end
+  check(ok["global_plugin_version"] == "1.2.3" && ok["global_plugin_pkg"] == true, "T6 read: global_plugin_version must be the version string: #{ok.inspect}")
+  check(ok["global_lockfile_sha256"] == sha.call("lock-npm\n"), "T6 read: package-lock.json must come before bun.lock: #{ok.inspect}")
+  check(ok["project_plugin_version"] == "4.5.6" && ok["project_plugin_pkg"] == true, "T6 read: project_plugin_version must be the version string: #{ok.inspect}")
+  check(ok["project_lockfile_sha256"] == sha.call("lock-bun\n"), "T6 read: bun.lock must be used without package-lock.json: #{ok.inspect}")
+  check(!JSON.generate(ok).include?("OTHER-FIELD"), "T6 read: package.json fields other than version must not be recorded: #{ok.inspect}")
+
+  broken = state.call("broken") do |g, _|
+    write_pkg.call(g, '{"version": "1.0.0"')
+    File.write(File.join(g, "package-lock.json"), "lock-broken\n")
+  end
+  check(broken["global_plugin_version"].nil? && broken["global_plugin_pkg"] == true,
+        "T6 broken: a package.json that is not JSON must give a null version: #{broken.inspect}")
+  check(broken["global_lockfile_sha256"] == sha.call("lock-broken\n"), "T6 broken: the lockfile digest must not depend on package.json: #{broken.inspect}")
+
+  { "number" => '{"version":123}', "array" => '{"version":["1.0.0"]}', "null" => '{"version":null}',
+    "top-level-array" => '["1.0.0"]', "invalid-utf8" => "{\"version\":\"\xFF\"}".b }.each do |label, body|
+    st = state.call("non-string-#{label}") { |g, _| write_pkg.call(g, body) }
+    check(st["global_plugin_version"].nil?, "T6 non-string #{label}: a version that is not a valid string must be null: #{st.inspect}")
+  end
+
+  out = state.call("symlink-out") do |g, p|
+    FileUtils.mkdir_p(pkg_dir.call(g))
+    File.symlink(File.join(outside, "package.json"), File.join(pkg_dir.call(g), "package.json"))
+    File.symlink(File.join(outside, "lock"), File.join(g, "package-lock.json"))
+    File.write(File.join(g, "bun.lock"), "lock-bun-inside\n")
+    FileUtils.mkdir_p(File.dirname(pkg_dir.call(p)))
+    File.symlink(outside, pkg_dir.call(p))
+    File.symlink(File.join(outside, "lock"), File.join(p, "bun.lock"))
+  end
+  check(out["global_plugin_version"].nil?, "T6 symlink-out: a package.json symlink to outside the isolation dir must give null: #{out.inspect}")
+  check(out["global_lockfile_sha256"].nil?,
+        "T6 symlink-out: a package-lock.json symlink to outside must give null, not the bun.lock digest: #{out.inspect}")
+  check(out["project_plugin_version"].nil?, "T6 symlink-out: a plugin dir symlink to outside must give null: #{out.inspect}")
+  check(out["project_lockfile_sha256"].nil?, "T6 symlink-out: a bun.lock symlink to outside must give null: #{out.inspect}")
+
+  # 隔離 dir の名前を前方に含むだけの外の dir (root/prefix と root/prefix-evil) は、隔離の中に数えない。
+  evil = File.join(root, "prefix-evil")
+  FileUtils.mkdir_p(evil)
+  File.write(File.join(evil, "package.json"), JSON.generate("version" => "6.6.6-evil"))
+  prefix = state.call("prefix") do |g, _|
+    FileUtils.mkdir_p(pkg_dir.call(g))
+    File.symlink(File.join(evil, "package.json"), File.join(pkg_dir.call(g), "package.json"))
+  end
+  check(prefix["global_plugin_version"].nil?, "T6 prefix: a sibling dir that shares the isolation dir prefix is outside: #{prefix.inspect}")
+
+  inside = state.call("symlink-in") do |g, _|
+    File.write(File.join(g, "real-package.json"), JSON.generate("version" => "7.7.7"))
+    FileUtils.mkdir_p(pkg_dir.call(g))
+    File.symlink(File.join(g, "real-package.json"), File.join(pkg_dir.call(g), "package.json"))
+    File.write(File.join(g, "real-lock"), "lock-in\n")
+    File.symlink(File.join(g, "real-lock"), File.join(g, "package-lock.json"))
+  end
+  check(inside["global_plugin_version"] == "7.7.7" && inside["global_lockfile_sha256"] == sha.call("lock-in\n"),
+        "T6 symlink-in: symlinks that stay inside the isolation dir are read: #{inside.inspect}")
+  puts "ok T6 (install_state)"
+end
+
 # T8: 子 process の後始末 (#336 review F2 / F3)。
 # kill(0) は zombie にも成功するので、ps の状態 (Z でない) と command (PID の再利用でない) も見る。
 def pid_alive?(pid, command)
@@ -414,6 +516,7 @@ case cmd
 when "t3" then t3(dir)
 when "t4" then t4(dir)
 when "t5" then t5(dir)
+when "t6" then t6(dir)
 when "t8" then t8(dir)
-else fail!("usage: probe-opencode-test.rb <t3|t4|t5|t8> <dir>")
+else fail!("usage: probe-opencode-test.rb <t3|t4|t5|t6|t8> <dir>")
 end
