@@ -99,6 +99,8 @@ else
       errors << "公開前の gate の入力が「#{what}」(#{needle}) を含まない" unless input.include?(needle)
     end
     errors << "gate の block が cwd の HEAD を基準にしている (main の checkout から走らせると累積差分が空になる。#419)" if block =~ /\bHEAD\b/
+    # PR の作成は cwd の今の branch に頼らない (main の checkout から続けても fix の branch の PR にする。#419 F4)。
+    errors << "FIX.md の PR の作成が --head \"$branch\" を明示していない" unless fix.include?(%q{gh pr create --head "$branch"})
     if block =~ /\bgit push\b|\bgh\s/
       errors << "gate の block に push / gh がある (test で走らせられない。push と PR は block の外に書く)"
       block = nil

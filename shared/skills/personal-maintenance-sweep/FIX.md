@@ -164,8 +164,11 @@ git の command は cwd の `HEAD` ではなく branch の ref を基準にし�
 
 ## PR
 
-- `git push -u origin "$branch"` のあと `gh pr create` で PR を作ります。題名は `docs: <短い要約> (sweep #<Issue>)`、
-  本文は下の形で `--body-file` で渡します。label `maintenance-sweep` を PR にも付けます。
+- `git push -u origin "$branch"` のあと `gh pr create --head "$branch" --base "$default_branch"` で PR を作ります
+  (`default_branch` は前提で照合した remote の default branch の名前。literal の変数で渡す)。`--head` を省くと
+  gh は cwd の今の branch を head にするので、main の checkout から続けたときに fix の branch の PR にならない (#419)。
+  題名は `docs: <短い要約> (sweep #<Issue>)`、本文は下の形で `--body-file` で渡します。label `maintenance-sweep` を
+  PR にも付けます。
 - PR の作成の **前に** `fixes.json` を `pushed` にし、作成の **後に** PR 番号と head の OID を書いて `pr_created` に
   します。作成の応答を失ったら、作り直さず、branch に紐づく PR を remote で照合してから続けます。
 
