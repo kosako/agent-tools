@@ -33,6 +33,8 @@ GIT_CONFIG_GLOBAL="$tmp/gitconfig"
 export GIT_CONFIG_GLOBAL
 git config --file "$GIT_CONFIG_GLOBAL" user.name test
 git config --file "$GIT_CONFIG_GLOBAL" user.email test@example.com
+# 既定の global ignore (実 HOME / XDG の下) が fixture を除外しないようにする。
+git config --file "$GIT_CONFIG_GLOBAL" core.excludesFile /dev/null
 
 repo="$tmp/repo"
 git init -q "$repo"

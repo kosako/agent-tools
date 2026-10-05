@@ -116,9 +116,19 @@ git の command は cwd の `HEAD` ではなく branch の ref を基準にし�
 - 変えた file が修正の仕様の「変えてよい箇所」の中だけであること (`git diff --name-only "$base" "$branch"`)。
 - repo の gate: `scripts/check-manifests.sh` と `scripts/check-injection.sh` が在れば、worktree を cwd にして実行する
   (静的な review の verdict とは分けて報告する)。check-manifests は 0 以外で止める。check-injection は exit 1 と 2 で
-  止める。exit 3 (medium だけ。human review 必須) は、main の checkout (`base`) で同じ command を走らせた結果と
-  finding の行 (file と category) を比べ、branch にだけある medium が無ければ続行して報告に書く (CI と同じく、
-  承認済みの既存の medium は許す)。branch にだけある medium があれば止める。
+  止める。exit 3 (medium だけ。human review 必須) は、worktree での出力を `$inj_branch` に、main の checkout
+  (`base`) で同じ command を走らせた出力を `$inj_base` に保存し、次の block で比べる。exit 0 (branch にだけある
+  finding の行が無い) なら続行して報告に書く (CI と同じく、承認済みの既存の medium は許す)。exit 1 なら止める。
+  比べるのは行番号まで含めた finding の行で、件数も数えるので、同じ file・同じ category の finding が増えても
+  止まる (check-injection の出力は抜粋を含まず、file と category だけでは区別できないため)。既存の finding の
+  行番号がずれただけでも止まるので、そのときは出力を人に見せて判断する。
+
+  ```sh
+  ( grep -E '^[^[:space:]].*:[0-9]+: \[(high|medium|low)\] ' "$inj_base" | LC_ALL=C sort > "$inj_base.findings"
+    grep -E '^[^[:space:]].*:[0-9]+: \[(high|medium|low)\] ' "$inj_branch" | LC_ALL=C sort > "$inj_branch.findings"
+    new=$(LC_ALL=C comm -13 "$inj_base.findings" "$inj_branch.findings")
+    [ -z "$new" ] || { printf 'branch にだけある finding:\n%s\n' "$new"; exit 1; } )
+  ```
 - 変えた Markdown に `personal-repo-audit` の `PRESCAN.md` の「docs の壊れた path の参照」を当て、新しい候補が
   無いこと。変えた file ごとに、その file (または file の directory) を scope にして worktree を cwd に走らせ、
   同じ scope で main の checkout (`base`) でも走らせる。出力を行番号を除いた「file: 参照」の組で比べ、branch に
