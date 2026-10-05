@@ -103,6 +103,9 @@ else
     errors << "FIX.md の PR の作成が --head \"$branch\" を明示していない" unless fix.include?(%q{gh pr create --head "$branch"})
     # review の preflight は cwd の local HEAD を PR の head と照合するので、worktree で走らせる (#419 F5)。
     errors << "FIX.md の review が worktree ($fixdir) での実行を指定していない" unless fix.include?("review の依頼から executor の起動までは、worktree (`$fixdir`) を cwd にして")
+    # 比べる側は保存した base に固定した worktree で走らせ、main の checkout を使わない (#419 F6)。
+    errors << "FIX.md の比べる側が base に固定した worktree ($basedir) を作っていない" unless fix.include?(%q{git worktree add --detach "$basedir" "$base"})
+    errors << "FIX.md の比べる側が main の checkout を使っている (再開で main が進むと base からずれる)" if fix.include?("main の checkout (`base`)")
     if block =~ /\bgit push\b|\bgh\s/
       errors << "gate の block に push / gh がある (test で走らせられない。push と PR は block の外に書く)"
       block = nil

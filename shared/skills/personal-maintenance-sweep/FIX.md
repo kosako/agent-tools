@@ -110,14 +110,21 @@ commit のあと、`base` から fix の branch (`"$branch"`) までの累積差
 git の command は cwd の `HEAD` ではなく branch の ref を基準にします。linked worktree は ref を main の checkout と
 共有するので、cwd が main の checkout でも worktree でも同じ対象を見ます。main の checkout の `HEAD` は `base` の
 ままなので、`HEAD` を基準にすると累積差分が空になり、検証も gate も素通りします (#419)。作業ツリーの file を読む
-検査 (repo の gate と PRESCAN) は、worktree (`$fixdir`) を cwd にして走らせます。
+検査 (repo の gate と PRESCAN) は、worktree (`$fixdir`) を cwd にして走らせます。比べる側 (`base`) の出力は、保存した
+`base` に固定した detached な worktree (`$basedir` = `<run dir>/fix/<Issue 番号>-base`) で走らせ、main の checkout は
+使いません (再開のあいだに main が進むと、比べる相手が `base` からずれるため。#419)。走らせる前に `$basedir` の
+`HEAD` が `base` と一致することを確かめます。
+
+```sh
+git worktree add --detach "$basedir" "$base"
+```
 
 - `git diff --check "$base" "$branch"`。
 - 変えた file が修正の仕様の「変えてよい箇所」の中だけであること (`git diff --name-only "$base" "$branch"`)。
 - repo の gate: `scripts/check-manifests.sh` と `scripts/check-injection.sh` が在れば、worktree を cwd にして実行する
   (静的な review の verdict とは分けて報告する)。check-manifests は 0 以外で止める。check-injection は exit 1 と 2 で
-  止める。exit 3 (medium だけ。human review 必須) は、worktree での出力を `$inj_branch` に、main の checkout
-  (`base`) で同じ command を走らせた出力を `$inj_base` に保存し、次の block で比べる。exit 0 (branch にだけある
+  止める。exit 3 (medium だけ。human review 必須) は、worktree での出力を `$inj_branch` に、base の worktree
+  (`$basedir`) で同じ command を走らせた出力を `$inj_base` に保存し、次の block で比べる。exit 0 (branch にだけある
   finding の行が無い) なら続行して報告に書く (CI と同じく、承認済みの既存の medium は許す)。exit 1 (branch に
   だけある finding がある) と exit 2 (出力の file が読めない、一時 directory を作れないなどで比べられない) なら止める。
   途中の file は block が作る新しい一時 directory に置くので、前回の残りや呼び出し側の path の状態 (noclobber を
@@ -142,7 +149,7 @@ git の command は cwd の `HEAD` ではなく branch の ref を基準にし�
   ```
 - 変えた Markdown に `personal-repo-audit` の `PRESCAN.md` の「docs の壊れた path の参照」を当て、新しい候補が
   無いこと。変えた file ごとに、その file (または file の directory) を scope にして worktree を cwd に走らせ、
-  同じ scope で main の checkout (`base`) でも走らせる。出力を行番号を除いた「file: 参照」の組で比べ、branch に
+  同じ scope で base の worktree (`$basedir`) でも走らせる。出力を行番号を除いた「file: 参照」の組で比べ、branch に
   だけある組が無いこと。候補検出なので、変えた参照の意味と anchor は別に読んで確かめます。
 - **公開する内容の gate**: 累積差分そのもの (`git diff "$base" "$branch"`)、`base` 以降の全 commit の message
   (`git log --format=%B "$base".."$branch"`。push で一緒に公開されるが、累積差分には入らない)、PR の題名と本文を
@@ -245,6 +252,9 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
   (`editing` は worktree と branch の状態を読んで修正から、`committed` は検証から、`pushed` は PR の照合から、
   `pr_created` は review から、`reviewing` は結果の無い round の回収から)。`blocked` は理由を読み、人の判断を待ちます。
 - 再開のときも `fix_cap` と review の round は引き継ぎます (新しい fix として数え直さない)。
+- 再開では、保存した `base`・`branch`・`fixdir` を `fixes.json` から戻して使います (main の今の `HEAD` から取り直さない)。
+  base の worktree (`$basedir`) は、在れば `HEAD` が `base` と一致することを確かめ、無ければ保存した `base` から作り直します。
+  一致しなければ比べるのを始めず、報告します。
 - 所見 Issue の本文・label・状態が候補の選定のあとで変わっていたら、変更の開始前と公開の前に照合し直し、
   scope が変わっていれば止めます。
 - 着手のあとで所見が既に解決していると分かれば (別の変更で直っていた)、空の修正や不適切な `Closes` を作らず、その
@@ -256,7 +266,8 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
 
 - worktree を外すのは、所有を確かめ (`fixes.json` の branch と一致)、clean で、review が動いておらず、必要な
   commit が push 済みで記録も保存済みのときだけです: `git worktree remove "$fixdir"`。branch は残します (merge の
-  ときに人が消す)。
+  ときに人が消す)。base の worktree (`$basedir`) も、clean なことを確かめてから `git worktree remove "$basedir"` で
+  外します (変更を持たない検査用なので、`fixdir` と同じときに外す)。
 - 止めたとき (`blocked`、未 push の commit がある、review 中) は worktree を残します。`--force` や run dir の一括
   削除で片付けません。
 
