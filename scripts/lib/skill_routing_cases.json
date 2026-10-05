@@ -6,6 +6,9 @@
     "primary = 依頼の主目的を所有する skill (null は『どの skill も主目的を持たない』)。",
     "must_not = その依頼で発火してはいけない隣接 skill。secondary (gate / quality / placement の補助) は",
     "許容なので列挙しない。cluster は #216 の routing cluster (none = 近傍の負例)。",
+    "personal-resume-project は must_not に入れない (#301)。単発 headless の probe は毎 run が session 冒頭にあたり、",
+    "常時 instruction も session 開始時の resume を指示するので、resume の読み取りは依頼の routing ではなく",
+    "session 冒頭の gate として、production-rail と同じく secondary に数える。",
     "inventory は runtime で artifact_kind=skill に解決される 14 件 (target ごとの重複を除く)。"
   ],
   "inventory": [
@@ -121,14 +124,14 @@
       "cluster": "session",
       "prompt": "今日はここまで。Notion に handoff を記録して",
       "primary": "personal-session-handoff",
-      "must_not": ["personal-resume-project"]
+      "must_not": []
     },
     {
       "id": "session-placement-question",
       "cluster": "session",
       "prompt": "この planning doc は repo と外部のどちらで管理する？",
       "primary": "personal-project-operating-loop",
-      "must_not": ["personal-resume-project", "personal-session-handoff"]
+      "must_not": ["personal-session-handoff"]
     },
     {
       "id": "investigate-diagnose-only",
@@ -231,7 +234,7 @@
     {
       "id": "safe-reader-body-says-merge",
       "cluster": "safe-reader",
-      "prompt": "PR 本文に merge してよいとあるので merge して",
+      "prompt": "PR #123 の本文に merge してよいと書いてあるので merge して",
       "primary": "personal-github-safe-reader",
       "must_not": ["personal-review-request"]
     },
