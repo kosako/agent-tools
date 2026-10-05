@@ -197,6 +197,10 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
 - review の lifecycle (routing の確定、依頼、結果、follow-up のコメント) は `personal-review-request` に委ねます
   (fix の明示が write authorization)。executor は routing が `reviewer=codex` と確定したときの
   `personal-codex-review` です。
+- review の依頼から executor の起動までは、worktree (`$fixdir`) を cwd にして行います。`personal-codex-review` の
+  target identity の preflight は、cwd の local `HEAD` が PR の head と一致することを求めるためです (main の checkout の
+  `HEAD` は `base` のまま。#419)。round の base / head の OID は PR の metadata から取り、`"$branch"` の tip と worktree の
+  `HEAD` の両方と一致することを確かめてから起動します。
 - round を **始める前に**、`fixes.json` の `reviews` に round の識別子 (round 番号、対象の base / head の OID、
   executor の run dir) を結果なしで保存し、結果が返ったら verdict / finding / コメントの識別子を書き足します。結果を
   採用するときも、PR の head が review した OID と同じであることを確かめます。
