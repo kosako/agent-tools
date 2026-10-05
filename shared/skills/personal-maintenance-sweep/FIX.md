@@ -112,11 +112,25 @@ git の command は cwd の `HEAD` ではなく branch の ref を基準にし�
 ままなので、`HEAD` を基準にすると累積差分が空になり、検証も gate も素通りします (#419)。作業ツリーの file を読む
 検査 (repo の gate と PRESCAN) は、worktree (`$fixdir`) を cwd にして走らせます。比べる側 (`base`) の出力は、保存した
 `base` に固定した detached な worktree (`$basedir` = `<run dir>/fix/<Issue 番号>-base`) で走らせ、main の checkout は
-使いません (再開のあいだに main が進むと、比べる相手が `base` からずれるため。#419)。走らせる前に `$basedir` の
-`HEAD` が `base` と一致することを確かめます。
+使いません (再開のあいだに main が進むと、比べる相手が `base` からずれるため。#419)。
+
+**base の worktree の用意** (検証のたびと再開で同じ手順。比べる前に毎回走らせる): `$basedir` が在れば、この repo の
+worktree であること・`HEAD` が `base` で detached であること・clean であることを確かめて再利用します。無ければ作り、
+`HEAD` が `base` であることを確かめます。exit 0 のときだけ比べに進み、exit 2 なら比べず公開にも進まず、状態を報告
+します (自動で消したり作り直したりしない)。
 
 ```sh
-git worktree add --detach "$basedir" "$base"
+( common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 2
+  if [ -e "$basedir" ]; then
+    [ "$(git -C "$basedir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" = "$common" ] \
+      || { printf 'base の worktree がこの repo の worktree でない\n' >&2; exit 2; }
+    ! git -C "$basedir" symbolic-ref -q HEAD >/dev/null || { printf 'base の worktree が branch を checkout している\n' >&2; exit 2; }
+  else
+    git worktree add --quiet --detach "$basedir" "$base" || { printf 'base の worktree を作れない\n' >&2; exit 2; }
+  fi
+  [ "$(git -C "$basedir" rev-parse --verify -q HEAD)" = "$base" ] || { printf 'base の worktree の HEAD が base でない\n' >&2; exit 2; }
+  st=$(git -C "$basedir" status --porcelain=v1 --untracked-files=all) || exit 2
+  [ -z "$st" ] || { printf 'base の worktree が clean でない\n' >&2; exit 2; } )
 ```
 
 - `git diff --check "$base" "$branch"`。
@@ -252,9 +266,10 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
   (`editing` は worktree と branch の状態を読んで修正から、`committed` は検証から、`pushed` は PR の照合から、
   `pr_created` は review から、`reviewing` は結果の無い round の回収から)。`blocked` は理由を読み、人の判断を待ちます。
 - 再開のときも `fix_cap` と review の round は引き継ぎます (新しい fix として数え直さない)。
-- 再開では、保存した `base`・`branch`・`fixdir` を `fixes.json` から戻して使います (main の今の `HEAD` から取り直さない)。
-  base の worktree (`$basedir`) は、在れば `HEAD` が `base` と一致することを確かめ、無ければ保存した `base` から作り直します。
-  一致しなければ比べるのを始めず、報告します。
+- 再開では、`base` と `branch` を `fixes.json` の記録から戻して使います (main の今の `HEAD` から取り直さない)。
+  `fixdir` と `basedir` は保存せず、記録の `run_id` と Issue 番号から導出します (run dir は `RECORD.md` の local の
+  state の `runs/<run_id>/`、`fixdir` = `<run dir>/fix/<Issue 番号>`、`basedir` = `<run dir>/fix/<Issue 番号>-base`)。
+  base の worktree は、検証と同じ「base の worktree の用意」の手順で用意します。
 - 所見 Issue の本文・label・状態が候補の選定のあとで変わっていたら、変更の開始前と公開の前に照合し直し、
   scope が変わっていれば止めます。
 - 着手のあとで所見が既に解決していると分かれば (別の変更で直っていた)、空の修正や不適切な `Closes` を作らず、その

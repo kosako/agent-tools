@@ -104,8 +104,11 @@ else
     # review の preflight は cwd の local HEAD を PR の head と照合するので、worktree で走らせる (#419 F5)。
     errors << "FIX.md の review が worktree ($fixdir) での実行を指定していない" unless fix.include?("review の依頼から executor の起動までは、worktree (`$fixdir`) を cwd にして")
     # 比べる側は保存した base に固定した worktree で走らせ、main の checkout を使わない (#419 F6)。
-    errors << "FIX.md の比べる側が base に固定した worktree ($basedir) を作っていない" unless fix.include?(%q{git worktree add --detach "$basedir" "$base"})
+    errors << "FIX.md の比べる側が base に固定した worktree ($basedir) を作っていない" unless fix.include?(%q{--detach "$basedir" "$base"})
     errors << "FIX.md の比べる側が main の checkout を使っている (再開で main が進むと base からずれる)" if fix.include?("main の checkout (`base`)")
+    # fixdir と basedir は fixes.json に保存しないので、再開では run_id と Issue 番号から導出する (#419 F8)。
+    errors << "FIX.md の再開が fixdir と basedir を run_id と Issue 番号から導出していない" unless fix.include?("`fixdir` と `basedir` は保存せず、記録の `run_id` と Issue 番号から導出します")
+    errors << "FIX.md の再開が保存していない fixdir を fixes.json から戻すと書いている" if fix.include?("`fixdir` を `fixes.json` から戻して")
     if block =~ /\bgit push\b|\bgh\s/
       errors << "gate の block に push / gh がある (test で走らせられない。push と PR は block の外に書く)"
       block = nil
