@@ -11,6 +11,9 @@
 // - 目印: model の bash の env に AGENT_TOOLS_OPENCODE=1 を立て、他の agent の目印
 //   (CLAUDECODE / CODEX_THREAD_ID / CODEX_SANDBOX) を空にする。personal-ai-trailer-gate が
 //   OpenCode の commit を見分けるため (docs/git-hook-gates.md)。人が打つ `!` と PTY には立てない。
+// - init の目印: server() が hooks を組み終えた時点で、固定の接頭辞の INFO 行を 1 回だけ client.app.log に
+//   出す (#343)。dotfiles の doctor が「OpenCode が plugin を読み込んで init を終えたか」を log から
+//   確かめるための公開契約 (docs/boundary-with-dotfiles.md「OpenCode plugin の init の目印」)。
 //
 // 強度ラベル (偽らない): steering / fail-open であって enforcement ではない。OpenCode に
 // 実行前の steer は無いので、注記は実行が済んだ後の同じ tool 結果に載る (model には届くが、
@@ -23,12 +26,14 @@
 // 無い / 実行できない / 非 0 / stdout が JSON でない / timeout のどれでも tool 結果を
 // そのまま返し、warn を script ごとに 1 回だけ client.app.log に出す。
 //
-// 依存: node:child_process / node:os / node:path だけ (外部 package なし)。Bun 専用の API と
-// `$` (BunShell) は使わず、子 process は argv 配列 + stdin で起動する (shell: true は使わない)。
+// 依存: node:child_process / node:fs / node:os / node:path / node:url だけ (外部 package なし)。Bun 専用の
+// API と `$` (BunShell) は使わず、子 process は argv 配列 + stdin で起動する (shell: true は使わない)。
 // 名前付き export は置かない (legacy の loader は名前付き export をすべて plugin 関数とみなす)。
 import { spawn } from "node:child_process"
+import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { isAbsolute, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 
 const ID = "personal-agent-tools"
 
@@ -71,6 +76,62 @@ const OPENCODE_MARKER = "AGENT_TOOLS_OPENCODE"
 const FOREIGN_MARKERS = ["CLAUDECODE", "CODEX_THREAD_ID", "CODEX_SANDBOX"]
 // 目印を立てる callID の記録の上限 (after が呼ばれない失敗で記録が残っても、増え続けないように)。
 const MODEL_BASH_CALLS_MAX = 256
+
+// init の目印の行 (#343)。message は `agent-tools:plugin-init v=1 name=<ID> build_id=<sha256:… か unknown>`
+// の 1 行で、token は単一の空白区切りでこの順。形を変えるときは v を上げる (旧い reader が新しい形を
+// 目印とみなさず、未確認に倒れるように)。
+const INIT_LINE_PREFIX = "agent-tools:plugin-init v=1"
+const UNKNOWN_BUILD_ID = "unknown"
+
+// 配置された file の 1 行目の管理 marker (scripts/lib/plugin_marker.rb の PluginMarker.render が build で
+// 前置する形)。解析は PluginMarker.owned と同じ規則 (先頭行だけ・単一の空白区切りの key=value・key の
+// 重複なし・必須 key と完全一致・制御文字と不正な UTF-8 の行は拒否・name と target が自分) で、build_id は
+// さらに生成の形 (sha256: + 64 桁の小文字 hex) に限る。どれかに外れれば unknown。
+const MARKER_PREFIX = "/* agent-tools:managed "
+const MARKER_SUFFIX = " */"
+const MARKER_KEYS = ["artifact_kind", "build_id", "name", "repo", "source", "target", "v"]
+const MARKER_FIXED = Object.freeze({ v: "1", repo: "agent-tools", artifact_kind: "plugin", name: ID, target: "opencode" })
+const BUILD_ID_FORM = /^sha256:[0-9a-f]{64}$/
+// Ruby の [[:cntrl:]] (Unicode の Cc) と同じ範囲。
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/
+
+// content (bytes) の先頭行が自分の marker なら build_id を、そうでなければ null を返す。不正な UTF-8 は
+// TextDecoder が throw する (呼び出し側が unknown に倒す)。BOM は剥がさない (Ruby と同じく拒否する)。
+function markerBuildId(content) {
+  const end = content.indexOf(0x0a)
+  const first = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(end === -1 ? content : content.subarray(0, end))
+  if (CONTROL_CHARS.test(first)) return null
+  if (!first.startsWith(MARKER_PREFIX) || !first.endsWith(MARKER_SUFFIX)) return null
+  const pairs = new Map()
+  for (const token of first.slice(MARKER_PREFIX.length, -MARKER_SUFFIX.length).split(" ")) {
+    const eq = token.indexOf("=")
+    if (eq <= 0 || eq === token.length - 1) return null
+    const key = token.slice(0, eq)
+    if (pairs.has(key)) return null
+    pairs.set(key, token.slice(eq + 1))
+  }
+  if ([...pairs.keys()].sort().join(" ") !== MARKER_KEYS.join(" ")) return null
+  for (const [key, value] of Object.entries(MARKER_FIXED)) {
+    if (pairs.get(key) !== value) return null
+  }
+  if (pairs.get("source").startsWith("/")) return null
+  const buildId = pairs.get("build_id")
+  return BUILD_ID_FORM.test(buildId) ? buildId : null
+}
+
+// 自分の file (import.meta.url) を読み、marker の build_id を返す。module の評価の中で 1 回だけ呼ぶので、
+// 読み込んだ時点の file の値になる (同じ process で後から sync が file を置き換えても、読み込み済みの
+// code の build_id を出し続ける)。ここで throw すると plugin の読込ごと失敗するので、例外は外に出さず
+// unknown に倒す (file でない URL・読めない・marker が無い / 形が違う)。
+function deployedBuildId() {
+  try {
+    return markerBuildId(readFileSync(fileURLToPath(import.meta.url))) ?? UNKNOWN_BUILD_ID
+  } catch {
+    return UNKNOWN_BUILD_ID
+  }
+}
+
+const BUILD_ID = deployedBuildId()
 
 function childEnv(extra) {
   const env = {}
@@ -367,7 +428,7 @@ async function server(input, options) {
     for (const name of FOREIGN_MARKERS) env[name] = ""
   }
 
-  return {
+  const hooks = {
     // 記録専用。throw も args の書き換えもしない (実行を止める経路は使わない)。
     "tool.execute.before": async (input) => {
       await failOpen("tool.execute.before", "the OpenCode marker may be missing", () => rememberModelBash(input))
@@ -383,6 +444,11 @@ async function server(input, options) {
     // OpenCode は event hook を待たないが、処理の promise を返す (test から await できるように)。
     event: (input) => failOpen("event", "no changed-scope-qa report was made", () => reportChangedScope(input ? input.event : undefined)),
   }
+
+  // init の目印 (#343): hooks を組み終えて return する直前に 1 回だけ出す。途中で throw した server() は
+  // ここに来ないので出さない。log は待たず、失敗も握る (log の成否で init の結果を変えない)。
+  log("info", `${INIT_LINE_PREFIX} name=${ID} build_id=${BUILD_ID}`)
+  return hooks
 }
 
 export default { id: ID, server }

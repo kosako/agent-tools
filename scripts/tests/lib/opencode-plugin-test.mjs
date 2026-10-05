@@ -1,8 +1,9 @@
 // opencode-plugin-test.sh の node 側。build が生成した plugin (marker 行つき) を import し、
 // server(fakeCtx, {timeoutMs}) が返す hooks (入口) 経由で、safe-gh の注記、品質ループ
-// (fast-edit-check / changed-scope-qa)、fail-open を確かめる。
+// (fast-edit-check / changed-scope-qa)、fail-open、init の目印の行 (#343) を確かめる。
 // 使い方: node opencode-plugin-test.mjs <generated plugin.js> <personal-safe-gh-hook.rb>
 //           <personal-fast-edit-check.rb> <personal-changed-scope-qa.rb> <work dir>
+//           <生成物の marker の build_id> <scripts/lib/plugin_marker.rb>
 // HOME は case ごとに process.env.HOME で tmp の home に向ける (plugin は os.homedir() から
 // script を解決する)。check の宣言は AGENT_TOOLS_CHECKS_CONFIG で tmp の file に向け、XDG の dir も
 // tmp に向ける。実物の tool home は読まない。
@@ -11,9 +12,9 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSy
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 
-const [pluginPath, safeGhSource, fastEditSource, qaSource, workDir] = process.argv.slice(2)
-if (!pluginPath || !safeGhSource || !fastEditSource || !qaSource || !workDir) {
-  console.error("usage: node opencode-plugin-test.mjs <plugin.js> <personal-safe-gh-hook.rb> <personal-fast-edit-check.rb> <personal-changed-scope-qa.rb> <work dir>")
+const [pluginPath, safeGhSource, fastEditSource, qaSource, workDir, expectedBuildId, pluginMarkerLib] = process.argv.slice(2)
+if (!pluginPath || !safeGhSource || !fastEditSource || !qaSource || !workDir || !expectedBuildId || !pluginMarkerLib) {
+  console.error("usage: node opencode-plugin-test.mjs <plugin.js> <personal-safe-gh-hook.rb> <personal-fast-edit-check.rb> <personal-changed-scope-qa.rb> <work dir> <build_id> <plugin_marker.rb>")
   process.exit(2)
 }
 
@@ -26,6 +27,11 @@ const QA_STATE_REL = [".cache", "agent-tools", "changed-scope-qa-opencode"]
 const QA_DEFAULT_STATE_REL = [".cache", "agent-tools", "changed-scope-qa"]
 const SERVICE = "personal-agent-tools"
 const LOG_LEVELS = ["debug", "info", "error", "warn"]
+// init の目印の行 (#343。公開契約: docs/boundary-with-dotfiles.md)。fake client は、この語で始まる
+// message を init の行として calls と分けて inits に数える (既存の件数の assertion は init の行を含めない)。
+const INIT_WORD = "agent-tools:plugin-init"
+const INIT_PREFIX = `${INIT_WORD} v=1`
+const UNKNOWN_BUILD_ID = "unknown"
 const SHORT_TIMEOUT_MS = 500
 const REAL_TIMEOUT_MS = 20000
 const DEADLINE_MARGIN_MS = 1500
@@ -36,6 +42,9 @@ function fail(msg) {
   console.error(`FAIL: ${msg}`)
   process.exit(1)
 }
+
+// log の失敗 (reject) を plugin が握り損ねたら、ここで落とす (Node の既定でも落ちるが、理由を明示する)。
+process.on("unhandledRejection", (reason) => fail(`unhandled rejection (a log failure must be swallowed): ${reason && reason.stack ? reason.stack : reason}`))
 
 function assert(cond, msg) {
   if (!cond) fail(msg)
@@ -198,15 +207,23 @@ function forbidden(name) {
   return () => fail(`${name} must never be called (the plugin must not continue the model or show a toast)`)
 }
 
+function isInitLog(arg) {
+  return arg.body.message.startsWith(INIT_WORD)
+}
+
+// app.log の mode: "ok" / "throw" / "reject" / "pending" (決して settle しない)。init の行は inits に、
+// それ以外は calls に記録する (どちらも throw / reject の前に記録するので「試みた」回数になる)。
 // session.get: parents[id] があればその parentID を持つ子 session として返す。waits[id] があれば、
 // その promise が解決するまで返さない (lookup の遅れを再現する)。getMode: "ok" / "throw" / "empty" (data が無い)。
 function makeClient(mode, { parents = {}, waits = {}, getMode = "ok" } = {}) {
   const calls = []
+  const inits = []
   const log = (arg) => {
     assertLogShape(arg)
-    calls.push(arg)
+    ;(isInitLog(arg) ? inits : calls).push(arg)
     if (mode === "throw") throw new Error("fake app.log throws")
     if (mode === "reject") return Promise.reject(new Error("fake app.log rejects"))
+    if (mode === "pending") return new Promise(() => {})
     return Promise.resolve({ data: true })
   }
   const get = async (arg) => {
@@ -219,6 +236,7 @@ function makeClient(mode, { parents = {}, waits = {}, getMode = "ok" } = {}) {
   }
   return {
     calls,
+    inits,
     app: { log },
     session: { get, prompt: forbidden("session.prompt"), promptAsync: forbidden("session.promptAsync") },
     tui: { showToast: forbidden("tui.showToast"), appendPrompt: forbidden("tui.appendPrompt"), submitPrompt: forbidden("tui.submitPrompt") },
@@ -274,9 +292,43 @@ const plugin = mod.default
 assert(typeof plugin.id === "string" && plugin.id !== "", "default export id must be a non-empty string")
 assert(typeof plugin.server === "function", "default export server must be a function")
 
+// init の行の期待値 (契約の形そのもの。token は単一の空白区切りでこの順)。
+function initMessage(buildId) {
+  return `${INIT_PREFIX} name=${SERVICE} build_id=${buildId}`
+}
+
+// client が受けた init の行が count 件で、どれも契約の形 (level info / service / message) か。
+function assertInits(client, count, buildId, label) {
+  assert(client.inits.length === count, `${label}: expected ${count} init line(s), got ${client.inits.length}: ${JSON.stringify(client.inits)}`)
+  for (const call of client.inits) {
+    assert(call.body.level === "info", `${label}: the init line must be level info, got ${JSON.stringify(call.body.level)}`)
+    assert(call.body.service === SERVICE, `${label}: the init line must be service ${SERVICE}, got ${JSON.stringify(call.body.service)}`)
+    assert(call.body.message === initMessage(buildId), `${label}: the init line must be ${JSON.stringify(initMessage(buildId))}, got ${JSON.stringify(call.body.message)}`)
+    assert(Object.keys(call.body).sort().join(",") === "level,message,service", `${label}: the init line must carry only service / level / message, got ${JSON.stringify(call.body)}`)
+  }
+}
+
+// server() は 1 回の呼び出し (= directory の instance 1 つ) ごとに init の行を 1 行だけ出す。
 async function makeHooks(client, options, directory = ctxDir) {
   const ctx = { client, directory, worktree: directory, project: { id: "p1" } }
-  return plugin.server(ctx, options)
+  const before = client.inits.length
+  let hooks
+  try {
+    hooks = await plugin.server(ctx, options)
+  } catch (error) {
+    fail(`server() must not throw for valid options (a log failure must be swallowed): ${error && error.stack ? error.stack : error}`)
+  }
+  assertInits(client, before + 1, expectedBuildId, "server()")
+  return hooks
+}
+
+// 読込 (module の評価) が throw しないことも契約 (build_id の読み取りは fail-open)。
+async function importPlugin(url, label) {
+  try {
+    return (await import(url)).default
+  } catch (error) {
+    fail(`${label}: importing the plugin must not throw (the build_id read must be fail-open): ${error && error.stack ? error.stack : error}`)
+  }
 }
 
 function withDeadline(promise, ms, label) {
@@ -358,6 +410,8 @@ function idle(sessionID = "s1") {
     rejectedTable = error instanceof TypeError
   }
   assert(rejectedTable, "P1: server must reject a non-object options.timeoutMs with TypeError")
+  // throw した server() は init の行を出さない (最初の makeHooks の 1 行だけが残る)。
+  assertInits(client, 1, expectedBuildId, "P1 (a server() that throws must not log the init line)")
   console.log("ok P1 hooks shape")
 }
 
@@ -920,6 +974,173 @@ console.log("ok Q4 log failures are swallowed")
   // 凍結された env と throw する getter は同じ hook の失敗なので warn は 1 回だけ。
   assertWarns(client, 1, "S2 shell.env failures")
   console.log("ok S2 shell.env and before never throw")
+}
+
+// === init の目印の行 (#343。公開契約: docs/boundary-with-dotfiles.md) ===========================
+
+// I1: server() が return まで到達したら init の行を 1 行だけ出す。hook をどれだけ呼んでも増えず、
+// server() を呼ぶ (= directory の instance を作る) たびに 1 行。build_id は生成物の marker の値。
+{
+  const client = makeClient("ok")
+  const short = { timeoutMs: { safeGh: SHORT_TIMEOUT_MS, fastEditCheck: SHORT_TIMEOUT_MS, changedScopeQa: SHORT_TIMEOUT_MS } }
+  const hooks = await makeHooks(client, short)
+  await withDeadline(hooks["tool.execute.before"]({ tool: "bash", sessionID: "s1", callID: "i1" }, { args: { command: "gh issue view 1" } }), DEADLINE_MARGIN_MS, "I1 before")
+  await withDeadline(hooks["shell.env"]({ cwd: ctxDir, sessionID: "s1", callID: "i1" }, { env: {} }), DEADLINE_MARGIN_MS, "I1 shell.env")
+  await runAfter(hooks, homes.missing, { ...bashInput("gh issue view 1"), callID: "i1" }, toolOutput(), SHORT_TIMEOUT_MS + DEADLINE_MARGIN_MS, "I1 after")
+  await runAfter(hooks, homes.missing, editInput("edit", join(editRepo, "a.rb")), toolOutput(), SHORT_TIMEOUT_MS + DEADLINE_MARGIN_MS, "I1 edit")
+  await runEvent(hooks, homes.missing, idle(), SHORT_TIMEOUT_MS + DEADLINE_MARGIN_MS, "I1 idle")
+  assertWarns(client, 3, "I1 (each hook script warns once; fixture assumption)")
+  assertInits(client, 1, expectedBuildId, "I1 (the hooks must not log the init line again)")
+  await makeHooks(client, {}, editRepo)
+  assertInits(client, 2, expectedBuildId, "I1 (a second directory instance logs its own line)")
+  console.log("ok I1 the init line is logged once per server() with the marker build_id")
+}
+
+// I2: server() が途中で throw したら init の行を出さない (options の誤り)。
+{
+  const client = makeClient("ok")
+  for (const options of [{ timeoutMs: 5 }, { timeoutMs: { safeGh: 0 } }, { timeoutMs: { fastEditCheck: Number.NaN } }, { timeoutMs: { changedScopeQa: "1" } }]) {
+    let threw = false
+    try {
+      await plugin.server({ client, directory: ctxDir }, options)
+    } catch {
+      threw = true
+    }
+    assert(threw, `I2: server() must throw for ${JSON.stringify(options)} (fixture assumption)`)
+  }
+  assertInits(client, 0, expectedBuildId, "I2 (a server() that throws must not log the init line)")
+  assert(client.calls.length === 0, `I2: no log expected, got ${JSON.stringify(client.calls)}`)
+  console.log("ok I2 a server() that throws logs no init line")
+}
+
+// I3: log の失敗は fail-open。app.log が throw / reject / settle しない、client が無い・形が違うときも
+// server() は log を待たずに hooks を返し、hooks は普段どおり動く。
+{
+  const expected = expectedContext("gh issue view 1")
+  const assertWorks = async (hooks, label) => {
+    assert(hooks && typeof hooks["tool.execute.after"] === "function", `${label}: server() must still return the hooks`)
+    const output = toolOutput()
+    await runAfter(hooks, homes.real, bashInput("gh issue view 1"), output, 5000 + DEADLINE_MARGIN_MS, label)
+    assert(output.output === `${expected}\n\n${ORIGINAL_OUTPUT}`, `${label}: the hooks must work as usual, got ${JSON.stringify(output.output)}`)
+  }
+  const serverWithin = async (client, label) => {
+    try {
+      return await withDeadline(plugin.server({ client, directory: ctxDir }, { timeoutMs: { safeGh: 5000 } }), DEADLINE_MARGIN_MS, label)
+    } catch (error) {
+      fail(`${label}: server() must neither throw nor wait for the log: ${error && error.stack ? error.stack : error}`)
+    }
+  }
+  for (const mode of ["throw", "reject", "pending"]) {
+    const client = makeClient(mode)
+    const hooks = await serverWithin(client, `I3 app.log ${mode}`)
+    assertInits(client, 1, expectedBuildId, `I3 app.log ${mode} (attempted once)`)
+    await assertWorks(hooks, `I3 app.log ${mode}`)
+  }
+  for (const [label, client] of [["no client", undefined], ["no app", {}], ["log is not a function", { app: { log: "x" } }]]) {
+    await assertWorks(await serverWithin(client, `I3 ${label}`), `I3 ${label}`)
+  }
+  // reject を握り損ねていれば、ここまでに unhandledRejection で落ちる (1 tick 以上待つ)。
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  console.log("ok I3 log failures do not break server() or the hooks")
+}
+
+// I4: build_id は配置された file の 1 行目の marker から読む。marker の形は scripts/lib/plugin_marker.rb
+// (PluginMarker.owned) と同じで、加えて build_id は生成の形 (sha256: + 64 桁の小文字 hex) に限る。
+// それ以外 (marker が無い・形が違う・別の name / target・読めない) は unknown。各 variant の期待値は、
+// 同じ file を Ruby の PluginMarker.owned で読んだ結果からも導けることを確かめる (2 つの解析の drift の検出)。
+{
+  const generated = readFileSync(pluginPath)
+  const newline = generated.indexOf(0x0a)
+  const markerLine = generated.subarray(0, newline).toString("utf8")
+  const rest = generated.subarray(newline)
+  const otherBuildId = `sha256:${"ab".repeat(32)}`
+  const line = (text) => Buffer.concat([Buffer.from(text, "utf8"), rest])
+  const replaced = (from, to) => {
+    assert(markerLine.includes(from), `I4: the marker line must contain ${JSON.stringify(from)} (fixture assumption): ${markerLine}`)
+    return line(markerLine.replace(from, to))
+  }
+  const [beforeSource, afterSource] = markerLine.split("source=shared/")
+  const variants = [
+    ["copy (control)", generated, expectedBuildId],
+    ["another valid build_id", replaced(`build_id=${expectedBuildId}`, `build_id=${otherBuildId}`), otherBuildId],
+    ["no marker", rest.subarray(1), UNKNOWN_BUILD_ID],
+    ["marker on line 2", Buffer.concat([Buffer.from("// first\n"), generated]), UNKNOWN_BUILD_ID],
+    ["BOM before the marker", Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), generated]), UNKNOWN_BUILD_ID],
+    ["CR before the newline", line(`${markerLine}\r`), UNKNOWN_BUILD_ID],
+    ["trailing space", line(`${markerLine} `), UNKNOWN_BUILD_ID],
+    ["tab", replaced(" repo=", "\trepo="), UNKNOWN_BUILD_ID],
+    ["C0 control in a value", replaced("source=shared/", "source=shared/\u0001"), UNKNOWN_BUILD_ID],
+    ["C1 control in a value", replaced("source=shared/", "source=shared/\u0085"), UNKNOWN_BUILD_ID],
+    ["double space", replaced(" repo=", "  repo="), UNKNOWN_BUILD_ID],
+    ["other name", replaced(`name=${SERVICE}`, "name=personal-other"), UNKNOWN_BUILD_ID],
+    ["other target", replaced("target=opencode", "target=codex"), UNKNOWN_BUILD_ID],
+    ["other version", replaced("v=1", "v=2"), UNKNOWN_BUILD_ID],
+    ["other repo", replaced("repo=agent-tools", "repo=other"), UNKNOWN_BUILD_ID],
+    ["other artifact_kind", replaced("artifact_kind=plugin", "artifact_kind=skill"), UNKNOWN_BUILD_ID],
+    ["absolute source", replaced("source=shared/", "source=/shared/"), UNKNOWN_BUILD_ID],
+    ["extra key", replaced(" */", " extra=1 */"), UNKNOWN_BUILD_ID],
+    ["missing key", replaced(" repo=agent-tools", ""), UNKNOWN_BUILD_ID],
+    ["duplicate key", replaced(" repo=agent-tools", " repo=agent-tools repo=agent-tools"), UNKNOWN_BUILD_ID],
+    ["empty value", replaced("target=opencode", "target="), UNKNOWN_BUILD_ID],
+    ["build_id not sha256", replaced(`build_id=${expectedBuildId}`, "build_id=md5:abc"), UNKNOWN_BUILD_ID],
+    // 以下 2 つは Ruby の parse は通すが、生成の形 (64 桁の小文字 hex) ではないので unknown。
+    ["short build_id", replaced(`build_id=${expectedBuildId}`, "build_id=sha256:abc"), UNKNOWN_BUILD_ID],
+    ["uppercase build_id", replaced(`build_id=${expectedBuildId}`, `build_id=sha256:${expectedBuildId.slice(7).toUpperCase()}`), UNKNOWN_BUILD_ID],
+    ["invalid UTF-8", Buffer.concat([Buffer.from(`${beforeSource}source=shared/`, "utf8"), Buffer.from([0xff]), Buffer.from(afterSource, "utf8"), rest]), UNKNOWN_BUILD_ID],
+  ]
+  const files = variants.map(([, bytes], index) => {
+    const dir = join(workDir, "variants", String(index))
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, "package.json"), '{"type":"module"}\n')
+    const file = join(dir, "personal-agent-tools.js")
+    writeFileSync(file, bytes)
+    return file
+  })
+
+  // Ruby の解析 (実装の PluginMarker.owned) で同じ file を読み、plugin が出すべき値を導く。
+  const ruby = spawnSync("ruby", ["-r", pluginMarkerLib, "-e", `
+    ARGV.each do |path|
+      marker = PluginMarker.owned(File.binread(path), target: "opencode", name: ${JSON.stringify(SERVICE)})
+      puts(marker ? marker["build_id"] : "nil")
+    end
+  `, ...files], { encoding: "utf8" })
+  assert(ruby.status === 0, `I4: the Ruby parser failed: ${ruby.stderr}`)
+  const rubyIds = ruby.stdout.split("\n").filter((l) => l !== "")
+  assert(rubyIds.length === files.length, `I4: the Ruby parser must answer for each variant, got ${JSON.stringify(rubyIds)}`)
+
+  for (const [index, [label, , want]] of variants.entries()) {
+    const derived = /^sha256:[0-9a-f]{64}$/.test(rubyIds[index]) ? rubyIds[index] : UNKNOWN_BUILD_ID
+    assert(derived === want, `I4 ${label}: the expectation must follow PluginMarker.owned + the generated form (ruby: ${rubyIds[index]}, want: ${want})`)
+    const variant = await importPlugin(pathToFileURL(files[index]).href, `I4 ${label}`)
+    const client = makeClient("ok")
+    await variant.server({ client, directory: ctxDir }, {})
+    assertInits(client, 1, want, `I4 ${label}`)
+  }
+
+  // file として読めない (import.meta.url が file: でない) ときも unknown で、server() は通る。
+  const fromData = await importPlugin(`data:text/javascript;base64,${generated.toString("base64")}`, "I4 not a file (data: URL)")
+  const client = makeClient("ok")
+  await fromData.server({ client, directory: ctxDir }, {})
+  assertInits(client, 1, UNKNOWN_BUILD_ID, "I4 not a file (data: URL)")
+  console.log("ok I4 the build_id comes from the deployed file's own marker, otherwise unknown")
+}
+
+// I5: build_id は module を読み込んだ時点の file から読む。読み込んだ後に file が置き換わっても
+// (sync が新しい版を置いた)、同じ process の後の server() は読み込み済みの code の build_id を出す。
+{
+  const dir = join(workDir, "variants", "reloaded")
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, "package.json"), '{"type":"module"}\n')
+  const file = join(dir, "personal-agent-tools.js")
+  const generated = readFileSync(pluginPath)
+  writeFileSync(file, generated)
+  const loaded = await importPlugin(pathToFileURL(file).href, "I5")
+  writeFileSync(file, generated.toString("utf8").replace(`build_id=${expectedBuildId}`, `build_id=sha256:${"cd".repeat(32)}`))
+  const client = makeClient("ok")
+  await loaded.server({ client, directory: ctxDir }, {})
+  await loaded.server({ client, directory: editRepo }, {})
+  assertInits(client, 2, expectedBuildId, "I5 (the build_id read when the module was loaded)")
+  console.log("ok I5 the build_id is the one read when the module was loaded")
 }
 
 console.log("all opencode-plugin node cases passed")

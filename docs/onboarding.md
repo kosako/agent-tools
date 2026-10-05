@@ -190,9 +190,11 @@ open issue の**正本は GitHub Issues** (この一覧は代表的な設計系�
 
 - **#43 external skill scanner 連携**: 設計確定済み、実装は需要待ち
   (script を含む skill を扱う時 or CI に pip 層を足す時)。
-- **#343 OpenCode plugin の init 成功の目印 log**: #295 (OpenCode 対応 Phase 2。PR 0〜3b) は完了済みで、
-  残る follow-up は dotfiles の doctor の読込確認に使う目印の log だけ。前提の実測は
-  [opencode-plugin-probe](opencode-plugin-probe.md)。
+
+OpenCode plugin の init の目印 (#343) は、plugin 側と公開契約 ([boundary-with-dotfiles](boundary-with-dotfiles.md)
+「OpenCode plugin の init の目印」) を実装し、OpenCode 1.18.30 の実機で確かめて close した。log を読む
+doctor の reader は dotfiles 側の follow-up (kosako/dotfiles#311)。前提の実測は
+[opencode-plugin-probe](opencode-plugin-probe.md)。
 
 追加 artifact kind (#24。`agent` 定義や共有 reference を独立 kind にする設計) は not planned で
 close した。配れる tool と kind の組は 4 章の `ArtifactTargets::TOOL_KINDS` (skill / instruction /
