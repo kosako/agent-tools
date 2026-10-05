@@ -166,7 +166,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 - 1 所見 = 1 PR。run dir の下の linked worktree で、修正の仕様 (正本 / 変えてよい箇所 / 受け入れ条件) の範囲だけを
   直す。累積差分に `diff --check`、repo の gate、壊れた参照の検査を当て、累積差分と `base` 以降の全 commit の message と
   PR の題名・本文を public-safety の gate に通してから push と PR (review の修正で commit を足したら、追加の push の前に
-  やり直す)。
+  やり直す)。git の command は cwd の `HEAD` ではなく branch の ref を基準にし、作業ツリーを読む検査は worktree で
+  走らせる。check-injection の exit 3 は、`base` の結果と比べて branch にだけある medium が無ければ続行する。
 - review は `personal-review-request` に委ね (fix の明示が write authorization)、must は範囲内だけ直し、範囲外は
   `blocked`。完了した review は最大 3 回。未レビューの PR を完了扱いにしない。
 - `fix_cap` (再開をまたいだ累計) まで。PR の前と review の round の前後で残量を読み直す ([BUDGET.md](BUDGET.md))。

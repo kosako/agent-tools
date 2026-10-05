@@ -45,8 +45,9 @@ sh -c '
 top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "prescan: git 管理外" >&2; exit 2; }
 cd "$top" || exit 2
 scope=$1
+if [ -d "$scope" ]; then spec=$scope/*.md; else spec=$scope; fi
 echo "## link"
-git ls-files -z -- "$scope/*.md" | xargs -0 grep -HnoE "\]\([^()[:space:]]+\)" -- | while IFS= read -r hit; do
+git ls-files -z -- "$spec" | xargs -0 grep -HnoE "\]\([^()[:space:]]+\)" -- | while IFS= read -r hit; do
   file=${hit%%:*}; rest=${hit#*:}; line=${rest%%:*}; ref=${rest#*:}
   ref=${ref#"]("}; ref=${ref%")"}; ref=${ref%%#*}; ref=${ref%%\?*}
   case $ref in ""|*:*) continue ;; esac
@@ -54,7 +55,7 @@ git ls-files -z -- "$scope/*.md" | xargs -0 grep -HnoE "\]\([^()[:space:]]+\)" -
   [ -e "$target" ] || printf "%s:%s: %s\n" "$file" "$line" "$ref"
 done
 echo "## backtick"
-git ls-files -z -- "$scope/*.md" | xargs -0 grep -HnoE "\`[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+/?\`" -- | while IFS= read -r hit; do
+git ls-files -z -- "$spec" | xargs -0 grep -HnoE "\`[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+/?\`" -- | while IFS= read -r hit; do
   file=${hit%%:*}; rest=${hit#*:}; line=${rest%%:*}; ref=${rest#*:}
   ref=${ref#"\`"}; ref=${ref%"\`"}; dir=$(dirname -- "$file")
   [ -e "${ref%%/*}" ] || [ -e "$dir/${ref%%/*}" ] || continue
@@ -63,6 +64,8 @@ done
 ' sh '.'
 ```
 
+- **scope**: directory ならその下の Markdown を、file ならその file だけを見ます (#419。以前は directory だけを
+  想定していて、file を渡すと対象が 0 件になり、候補が無いように見えた)。
 - **link**: Markdown の link `[…](path)` のうち、参照先が無いもの。URL や `mailto:` など `:` を含む
   参照と、anchor だけの参照は見ません。`/` で始まる参照は repo の root から、それ以外は file の
   directory から解決します。

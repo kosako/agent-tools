@@ -104,27 +104,37 @@ fix モードは明示されたときだけです (「監査して、docs のず
 
 ## 検証 (累積差分に対して)
 
-commit のあと、`base` から branch の `HEAD` までの累積差分に対して行います (最後の commit だけを見ない)。review の
-指摘を直して commit を足したときも、追加の push の前にこの節の検証と gate をすべてやり直します。
+commit のあと、`base` から fix の branch (`"$branch"`) までの累積差分に対して行います (最後の commit だけを
+見ない)。review の指摘を直して commit を足したときも、追加の push の前にこの節の検証と gate をすべてやり直します。
 
-- `git diff --check "$base" HEAD`。
-- 変えた file が修正の仕様の「変えてよい箇所」の中だけであること (`git diff --name-only "$base" HEAD`)。
-- repo の gate: `scripts/check-manifests.sh` と `scripts/check-injection.sh` が在れば実行し、失敗したら止める
-  (静的な review の verdict とは分けて報告する)。
+git の command は cwd の `HEAD` ではなく branch の ref を基準にします。linked worktree は ref を main の checkout と
+共有するので、cwd が main の checkout でも worktree でも同じ対象を見ます。main の checkout の `HEAD` は `base` の
+ままなので、`HEAD` を基準にすると累積差分が空になり、検証も gate も素通りします (#419)。作業ツリーの file を読む
+検査 (repo の gate と PRESCAN) は、worktree (`$fixdir`) を cwd にして走らせます。
+
+- `git diff --check "$base" "$branch"`。
+- 変えた file が修正の仕様の「変えてよい箇所」の中だけであること (`git diff --name-only "$base" "$branch"`)。
+- repo の gate: `scripts/check-manifests.sh` と `scripts/check-injection.sh` が在れば、worktree を cwd にして実行する
+  (静的な review の verdict とは分けて報告する)。check-manifests は 0 以外で止める。check-injection は exit 1 と 2 で
+  止める。exit 3 (medium だけ。human review 必須) は、main の checkout (`base`) で同じ command を走らせた結果と
+  finding の行 (file と category) を比べ、branch にだけある medium が無ければ続行して報告に書く (CI と同じく、
+  承認済みの既存の medium は許す)。branch にだけある medium があれば止める。
 - 変えた Markdown に `personal-repo-audit` の `PRESCAN.md` の「docs の壊れた path の参照」を当て、新しい候補が
-  無いこと。候補検出なので、変えた参照の意味と anchor は別に読んで確かめます。
-- **公開する内容の gate**: 累積差分そのもの (`git diff "$base" HEAD`)、`base` 以降の全 commit の message
-  (`git log --format=%B "$base"..HEAD`。push で一緒に公開されるが、累積差分には入らない)、PR の題名と本文を
+  無いこと。変えた file ごとに、その file (または file の directory) を scope にして worktree を cwd に走らせ、
+  同じ scope で main の checkout (`base`) でも走らせる。出力を行番号を除いた「file: 参照」の組で比べ、branch に
+  だけある組が無いこと。候補検出なので、変えた参照の意味と anchor は別に読んで確かめます。
+- **公開する内容の gate**: 累積差分そのもの (`git diff "$base" "$branch"`)、`base` 以降の全 commit の message
+  (`git log --format=%B "$base".."$branch"`。push で一緒に公開されるが、累積差分には入らない)、PR の題名と本文を
   まとめて public-safety の gate に通し、exit 0 のときだけ push と PR へ進みます。
 
   ```sh
   gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"
   ( set -o pipefail
-    { git diff "$base" HEAD && git log --format=%B "$base"..HEAD &&
+    { git diff "$base" "$branch" && git log --format=%B "$base".."$branch" &&
       printf '%s\n\n' "$title" && cat "$body_file"; } | "$gate" --stdin )
   ```
 
-  gate は `RECORD.md` の Issue の gate と同じく、Claude Code の home に配備されたもの。`base`・`title`・
+  gate は `RECORD.md` の Issue の gate と同じく、Claude Code の home に配備されたもの。`base`・`branch`・`title`・
   `body_file` は literal の変数で渡します。`pipefail` は、材料の `git` が失敗したときに gate が残りだけを読んで
   exit 0 になるのを防ぎます。gate が無い・exit 0 でないときは push も PR もせず、gate の出力 (どの規則に
   当たったか) を報告します。直したら、この節の検証からやり直します。
