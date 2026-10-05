@@ -16,6 +16,13 @@
 #
 # check_credential_isolation.rb は error 時 usage を stderr に出す別契約のため対象外。
 module Cli
+  # 外部 encoding を UTF-8 に固定する (#418)。LANG / LC_ALL が未設定か C の環境では
+  # Encoding.default_external が US-ASCII になり、encoding を指定しない File.read の結果
+  # (日本語を含む source・generated・marker) への正規表現や scrub が例外で落ちる。source と
+  # generated は UTF-8 の text なので、locale ではなくこの前提に合わせる。全 entrypoint が
+  # この file を require し、file を読むのはその後なので、ここで 1 回だけ設定する。
+  Encoding.default_external = Encoding::UTF_8 unless Encoding.default_external == Encoding::UTF_8
+
   # --root 省略時の repo root。この file (scripts/lib/cli.rb) の 2 つ上。__dir__ は realpath
   # なので、symlink 経由で起動しても実体の repo を指す。repo 外の cwd から絶対 path で
   # 起動したときに cwd を root とみなして空ツリーを処理しないため、cwd は使わない (#305)。
