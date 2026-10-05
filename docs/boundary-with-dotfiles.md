@@ -119,7 +119,9 @@ doctor が既にある log を読んで判定する。以下は **公開契約**
   return まで到達した」ことまでで、return の後に OpenCode 側で起きる失敗は含まない。`server()` が途中で throw
   したとき (options の誤りなど) は出さない (失敗を示す行も無い)。
 - **回数**: `server()` の 1 回の呼び出しに 1 行。OpenCode は directory の instance ごとに `server()` を呼ぶ
-  (source の読みでは instance を作り直したときも呼ぶ。未実測) ので、1 つの process から複数の行が出うる。
+  ので、1 つの process から複数の行が出うる (2026-10-05 に 1.18.30 の `opencode serve` で実測: directory A に
+  2 回・B に 1 回 request して行は 2 行。`--pure` の起動では行が出ない。instance を作り直したときも呼ぶのは
+  source の読みで、未実測)。
   行の数に意味を持たせない。build_id は module の読込の時点で 1 回だけ読むので、同じ process の中では、後から
   sync が file を置き換えても読み込み済みの code の build_id を出し続ける (OpenCode が file を読み込んでから
   plugin が同じ file を読み直すまでの短い間に置き換わったときだけ食い違いうる)。
@@ -130,8 +132,12 @@ doctor が既にある log を読んで判定する。以下は **公開契約**
   `<data>/opencode/log/opencode.log`。[opencode-plugin-probe](opencode-plugin-probe.md) の M11)。log file の場所・
   rotate・message を囲む行の形は OpenCode のもので、この契約に含めない (OpenCode を更新したら実機で確かめる)。
   1.18.30 の行には service 名が出ない ([quality-loop-hooks](quality-loop-hooks.md)) ので、reader は message の
-  接頭辞で探す。level は INFO なので、`--log-level` で WARN / ERROR に絞った起動では書かれない (source の読み。
-  未実測)。
+  接頭辞で探す。2026-10-05 に OpenCode 1.18.30 (@opencode-ai/plugin 1.18.30) で実測した行の形は
+  `timestamp=<ISO 8601> level=INFO run=<id> message="agent-tools:plugin-init v=1 name=personal-agent-tools build_id=sha256:<64 桁>"`
+  で、message は二重引用符で囲まれる (行の末尾は `"`)。reader は行の末尾の位置に頼らず、接頭辞の後の
+  `build_id=` の値を `sha256:` + 64 桁の小文字 hex か `unknown` の形で取り出す (message は空白と `"` を含まない
+  token だけでできている)。level は INFO なので、`--log-level` で WARN / ERROR に絞った起動では書かれない
+  (source の読み。未実測)。
 - **doctor の判定 (reader は dotfiles)**: 「確認できた」とするのは、log の中でいちばん新しい
   `name=personal-agent-tools` の目印の行の build_id が、いま配置されている `plugins/personal-agent-tools.js` の
   1 行目の marker の build_id と一致するときだけ。次はどれも「未確認」とし、成功とも失敗とも言わない。
