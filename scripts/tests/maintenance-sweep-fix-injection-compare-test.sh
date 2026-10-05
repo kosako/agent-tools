@@ -3,6 +3,7 @@
 # FIX.md の「## 検証 (累積差分に対して)」の節にある比べ方の sh の code block (comm -13 を含むもの) を切り出し、
 # 合成した check-injection の出力 (base と branch) で sh と zsh で走らせる。branch にだけある finding の行が
 # あれば exit 1、無ければ exit 0。同じ file・同じ category の finding が増えた場合も止まる (Codex review の F1)。
+# 出力の file が無い、途中の file を書けないなど、比べられないときは exit 2 で止まる (fail-closed。F3)。
 # 引数で sweep の skill の directory を差し替えられる (変異での確認用)。network access なし。
 set -eu
 
@@ -12,7 +13,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 sweep_dir=${1:-"$script_dir/../../shared/skills/personal-maintenance-sweep"}
 
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+trap 'chmod -R u+w "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
 
 ruby - "$sweep_dir/FIX.md" "$tmp/compare.sh" <<'RUBY'
 src, out = ARGV
@@ -71,6 +72,23 @@ for shell in sh zsh; do
   # (e) 行番号がずれただけでも止まる (安全側。人に見せて判断する)。
   run_compare "$shell_argv" "$warn_line" "$f31" "$f32"
   [ "$rc" -eq 1 ] || fail "[$shell] shifted line numbers did not stop (rc=$rc)"
+
+  # (f) branch の出力の file が無ければ、比べられないので止まる (exit 2。F3)。
+  rc=0
+  # shellcheck disable=SC2086
+  (cd "$tmp" && env inj_base="$tmp/base.out" inj_branch="$tmp/missing.out" $shell_argv "$tmp/compare.sh") > "$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "[$shell] a missing branch output did not stop with exit 2 (rc=$rc): $(cat "$tmp/out")"
+
+  # (g) 途中の file (.findings) を書けなければ止まる (exit 2。F3)。
+  rm -rf "$tmp/ro"
+  mkdir -p "$tmp/ro"
+  cp "$tmp/base.out" "$tmp/ro/base.out"
+  chmod 555 "$tmp/ro"
+  rc=0
+  # shellcheck disable=SC2086
+  (cd "$tmp" && env inj_base="$tmp/ro/base.out" inj_branch="$tmp/branch.out" $shell_argv "$tmp/compare.sh") > "$tmp/out" 2>&1 || rc=$?
+  chmod 755 "$tmp/ro"
+  [ "$rc" -eq 2 ] || fail "[$shell] an unwritable intermediate file did not stop with exit 2 (rc=$rc): $(cat "$tmp/out")"
 done
 [ "$ran" -gt 0 ] || fail "比べ方の command を走らせる shell (sh / zsh) が無い"
 

@@ -118,15 +118,21 @@ git の command は cwd の `HEAD` ではなく branch の ref を基準にし�
   (静的な review の verdict とは分けて報告する)。check-manifests は 0 以外で止める。check-injection は exit 1 と 2 で
   止める。exit 3 (medium だけ。human review 必須) は、worktree での出力を `$inj_branch` に、main の checkout
   (`base`) で同じ command を走らせた出力を `$inj_base` に保存し、次の block で比べる。exit 0 (branch にだけある
-  finding の行が無い) なら続行して報告に書く (CI と同じく、承認済みの既存の medium は許す)。exit 1 なら止める。
+  finding の行が無い) なら続行して報告に書く (CI と同じく、承認済みの既存の medium は許す)。exit 1 (branch に
+  だけある finding がある) と exit 2 (出力の file が読めない、途中の file を書けないなどで比べられない) なら止める。
   比べるのは行番号まで含めた finding の行で、件数も数えるので、同じ file・同じ category の finding が増えても
   止まる (check-injection の出力は抜粋を含まず、file と category だけでは区別できないため)。既存の finding の
   行番号がずれただけでも止まるので、そのときは出力を人に見せて判断する。
 
   ```sh
-  ( grep -E '^[^[:space:]].*:[0-9]+: \[(high|medium|low)\] ' "$inj_base" | LC_ALL=C sort > "$inj_base.findings"
-    grep -E '^[^[:space:]].*:[0-9]+: \[(high|medium|low)\] ' "$inj_branch" | LC_ALL=C sort > "$inj_branch.findings"
-    new=$(LC_ALL=C comm -13 "$inj_base.findings" "$inj_branch.findings")
+  ( pat='^[^[:space:]].*:[0-9]+: \[(high|medium|low)\] '
+    for f in "$inj_base" "$inj_branch"; do
+      [ -f "$f" ] && [ -r "$f" ] || { printf '比べられない: 出力の file が読めない\n' >&2; exit 2; }
+      rc=0; grep -E "$pat" "$f" > "$f.findings" || rc=$?
+      [ "$rc" -le 1 ] || { printf '比べられない: finding の抽出に失敗した\n' >&2; exit 2; }
+      LC_ALL=C sort -o "$f.findings" "$f.findings" || { printf '比べられない: 並べ替えに失敗した\n' >&2; exit 2; }
+    done
+    new=$(LC_ALL=C comm -13 "$inj_base.findings" "$inj_branch.findings") || { printf '比べられない\n' >&2; exit 2; }
     [ -z "$new" ] || { printf 'branch にだけある finding:\n%s\n' "$new"; exit 1; } )
   ```
 - 変えた Markdown に `personal-repo-audit` の `PRESCAN.md` の「docs の壊れた path の参照」を当て、新しい候補が
