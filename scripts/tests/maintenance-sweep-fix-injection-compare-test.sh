@@ -3,7 +3,8 @@
 # FIX.md の「## 検証 (累積差分に対して)」の節にある比べ方の sh の code block (comm -13 を含むもの) を切り出し、
 # 合成した check-injection の出力 (base と branch) で sh と zsh で走らせる。branch にだけある finding の行が
 # あれば exit 1、無ければ exit 0。同じ file・同じ category の finding が増えた場合も止まる (Codex review の F1)。
-# 出力の file が無い、途中の file を書けないなど、比べられないときは exit 2 で止まる (fail-closed。F3)。
+# 出力の file が無い、一時 directory を作れないなど、比べられないときは exit 2 で止まる (fail-closed。F3)。
+# noclobber の再実行でも、前回の途中の file に引きずられない。
 # 引数で sweep の skill の directory を差し替えられる (変異での確認用)。network access なし。
 set -eu
 
@@ -79,16 +80,29 @@ for shell in sh zsh; do
   (cd "$tmp" && env inj_base="$tmp/base.out" inj_branch="$tmp/missing.out" $shell_argv "$tmp/compare.sh") > "$tmp/out" 2>&1 || rc=$?
   [ "$rc" -eq 2 ] || fail "[$shell] a missing branch output did not stop with exit 2 (rc=$rc): $(cat "$tmp/out")"
 
-  # (g) 途中の file (.findings) を書けなければ止まる (exit 2。F3)。
-  rm -rf "$tmp/ro"
-  mkdir -p "$tmp/ro"
-  cp "$tmp/base.out" "$tmp/ro/base.out"
-  chmod 555 "$tmp/ro"
+  # (g) 一時 directory を作れなければ止まる (exit 2。F3)。PATH の先頭の偽の mktemp で失敗させる。
+  mkdir -p "$tmp/fakebin"
+  printf '#!/bin/sh\nexit 1\n' > "$tmp/fakebin/mktemp"
+  chmod +x "$tmp/fakebin/mktemp"
   rc=0
   # shellcheck disable=SC2086
-  (cd "$tmp" && env inj_base="$tmp/ro/base.out" inj_branch="$tmp/branch.out" $shell_argv "$tmp/compare.sh") > "$tmp/out" 2>&1 || rc=$?
-  chmod 755 "$tmp/ro"
-  [ "$rc" -eq 2 ] || fail "[$shell] an unwritable intermediate file did not stop with exit 2 (rc=$rc): $(cat "$tmp/out")"
+  (cd "$tmp" && env PATH="$tmp/fakebin:$PATH" inj_base="$tmp/base.out" inj_branch="$tmp/branch.out" $shell_argv "$tmp/compare.sh") > "$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || fail "[$shell] a failing mktemp did not stop with exit 2 (rc=$rc): $(cat "$tmp/out")"
+
+  # (h) noclobber (set -C) で再実行しても、前回の結果に引きずられず新しい finding で止まる (F3 の round 3)。
+  #     呼び出し側の path の横に古い途中の file を置いても使わない。
+  printf '%s\n' "$warn_line" "$f30" "$f31" > "$tmp/branch.out"
+  : > "$tmp/base.out.findings"
+  : > "$tmp/branch.out.findings"
+  rc=0
+  # shellcheck disable=SC2086
+  (cd "$tmp" && env inj_base="$tmp/base.out" inj_branch="$tmp/branch.out" $shell_argv -C "$tmp/compare.sh") > "$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || fail "[$shell] identical findings under noclobber did not pass (rc=$rc): $(cat "$tmp/out")"
+  printf '%s\n' "$warn_line" "$f30" "$f31" "$f40" > "$tmp/branch.out"
+  rc=0
+  # shellcheck disable=SC2086
+  (cd "$tmp" && env inj_base="$tmp/base.out" inj_branch="$tmp/branch.out" $shell_argv -C "$tmp/compare.sh") > "$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || fail "[$shell] a new finding on a noclobber re-run did not stop (rc=$rc): $(cat "$tmp/out")"
 done
 [ "$ran" -gt 0 ] || fail "比べ方の command を走らせる shell (sh / zsh) が無い"
 
