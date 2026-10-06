@@ -361,6 +361,9 @@ module Packet
     rescue SystemCallError => e
       # 読めない 1 件で一覧全体を止めない (R293-18)。診断は class 名だけ (内容を含まない)。
       broken << "#{File.join(dir, name)}: 読めません (#{e.class})"
+    rescue StandardError => e
+      # 想定外の例外でも、その 1 件だけを broken にする (#428)。診断は class 名だけ (内容を含まない)。
+      broken << "#{File.join(dir, name)}: 読めません (#{e.class})"
     end
     packets.select! { |p| ACTIVE_STATES.include?(p.state) } unless all
     [packets, broken]
@@ -534,7 +537,9 @@ module Packet
   # AST の値は符号化文字列のままで構造検査と食い違う。mapping / sequence を key にした形も同様。
   # R293-20)。読み取り (list) と更新 (publish) で同じ解釈にするため parse 段階で検査する。
   def key_nodes(front_yaml, path)
-    root = Psych.parse(front_yaml)&.root
+    # 文書の無い入力 (空行・空白・comment だけ) では、Psych.parse は nil ではなく false を返す (#428)。
+    doc = Psych.parse(front_yaml)
+    root = doc.is_a?(Psych::Nodes::Document) ? doc.root : nil
     raise Error, "#{path}: frontmatter が key: value の mapping ではありません" unless root.is_a?(Psych::Nodes::Mapping)
 
     check_tags!(root, path)
@@ -552,12 +557,23 @@ module Packet
   # frontmatter の AST 全体で YAML tag を許さない。tag 付きの値は Psych が UTF-8 でない String
   # (`!!binary`) や型変換の例外 (`!!float invalid`) を生む唯一の入口で、後段の型検査 (String かどうか)
   # をすり抜けて JSON 生成で全体が落ちる (R293-22)。key の tag (R293-20) も同じ検査に含める。
-  def check_tags!(node, path)
-    if node.respond_to?(:tag) && !node.tag.nil?
-      raise Error, "#{path}: frontmatter に YAML tag (`!!…`) は使えません (plain な値にしてください)"
-    end
+  # 再帰せずに走査し、深さに上限を付ける (#428)。深い入れ子は再帰で SystemStackError になり、これは
+  # StandardError ではないので list の 1 件単位の rescue をすり抜ける。後段の safe_load も再帰するので、
+  # ここで止めておく (frontmatter は 1 行 1 field の block mapping なので、上限に届く正当な形は無い)。
+  MAX_FRONT_DEPTH = 32
 
-    node.children&.each { |c| check_tags!(c, path) }
+  def check_tags!(node, path)
+    stack = [[node, 0]]
+    until stack.empty?
+      current, depth = stack.pop
+      raise Error, "#{path}: frontmatter の入れ子が深すぎます" if depth > MAX_FRONT_DEPTH
+      if current.respond_to?(:tag) && !current.tag.nil?
+        raise Error, "#{path}: frontmatter に YAML tag (`!!…`) は使えません (plain な値にしてください)"
+      end
+
+      children = current.respond_to?(:children) ? current.children : nil
+      children&.each { |c| stack << [c, depth + 1] }
+    end
   end
 
   def check_keys!(front_yaml, path)
@@ -609,6 +625,12 @@ module Packet
     front = parse_text(original, path)
     at = Time.now
     text = compose(front, at)
+    # pull が読めない形の写しは投稿しない (#428)。投稿の前に、pull と同じ読み方 (published_copy) で読み直す。
+    # 読めない写しを投稿すると、pull はそれを捨てて古い写しを現在地として採用する。
+    if published_copy({ "author_trust" => "self", "body" => text }, front.issue).nil?
+      raise Error, "#{path}: この写しは pull で読めない形です。結果は「### YYYY-MM-DD 役割/agent」の entry 見出しで" \
+                   "始め、本文に「**次の入口**」や「**結果 (最新節)**」だけの行を置かないでください。投稿しません"
+    end
     scan(text)
     if dry_run
       $stdout.print text
@@ -734,6 +756,17 @@ module Packet
     entries
   end
 
+  # self の写しの marker を先頭の行に持つ comment か。形が読めずに捨てた写しを数えるためだけに使う (#428)。
+  def copy_marked?(comment, issue)
+    return false unless comment.is_a?(Hash) && comment["author_trust"] == "self"
+
+    body = comment["body"]
+    return false unless body.is_a?(String) && body.valid_encoding?
+
+    mark = COPY_MARKER_RE.match(body.lines.first.to_s)
+    !mark.nil? && mark[1].to_i == issue
+  end
+
   # 一般コメントや壊れた写しは候補から外す (採用ゼロなら caller が exit 1)。本文を診断へ出さない。
   # publisher の envelope を原文のまま検証し、payload 内の行頭 H2 / HTML comment を許さない。
   def published_copy(comment, issue)
@@ -844,7 +877,11 @@ module Packet
     envelope = read_issue("comments", issue, repo)
     raise Error, "#{READER_NAME} の comments が配列ではありません" unless envelope["comments"].is_a?(Array)
 
-    copies = envelope["comments"].map { |comment| published_copy(comment, issue) }.compact.sort_by(&:published)
+    parsed = envelope["comments"].map { |comment| [comment, published_copy(comment, issue)] }
+    # marker を持つ self の写しを形が読めずに捨てたら、その件数を出す (本文は出さない。#428)。
+    dropped = parsed.count { |comment, copy| copy.nil? && copy_marked?(comment, issue) }
+    warn "personal-packet: 写しの形が読めないため、#{dropped} 件の写しを採用しませんでした" if dropped.positive?
+    copies = parsed.map(&:last).compact.sort_by(&:published)
     raise NoCopy if copies.empty?
 
     need_issue = !local || !sections(local.body).key?("依頼")

@@ -196,7 +196,41 @@ rc=$?
 set -e
 [ "$rc" -eq 1 ] || fail "invalid state should exit 1 (rc=$rc)"
 grep -q "state" "$tmp/err" || fail "warning should name the field: $(cat "$tmp/err")"
+# frontmatter が空行・空白・comment だけでも、深い入れ子でも、その packet だけ broken (#428)。
+# 以前は Psych.parse の false で NoMethodError になり、list 全体が exit 2 で健全な行も出さなかった。
+deep=$(ruby -e 'print "[" * 5000 + "]" * 5000')
+for bad in empty comment deep; do
+  case $bad in
+    empty) printf -- '---\n\n---\n\n## 結果\n' > "$repo/.agent-packets/6.md" ;;
+    comment) printf -- '---\n# comment only\n  \n---\n\n## 結果\n' > "$repo/.agent-packets/6.md" ;;
+    deep) printf -- '---\nissue: 6\ntitle: t\nstate: open\nworker: claude\nupdated: 2026-09-21T00:00:00+09:00\nrun: %s\n---\n' "$deep" > "$repo/.agent-packets/6.md" ;;
+  esac
+  set +e
+  out=$(cd "$repo" && "$pkt" list 2>"$tmp/err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "frontmatter ($bad) should be a broken row, exit 1 (#428) (rc=$rc): $(cat "$tmp/err")"
+  echo "$out" | grep -q "^#7 " || fail "frontmatter ($bad) must not hide healthy rows (#428): $out"
+  grep -q "6.md" "$tmp/err" || fail "frontmatter ($bad): warning should name the packet: $(cat "$tmp/err")"
+done
 rm "$repo/.agent-packets/6.md"
+
+# publish は pull が読めない形の写しを投稿しない (#428)。結果に規約の entry 見出しが無い / ラベルだけの行がある。
+for bad in no-entry label-line; do
+  case $bad in
+    no-entry) body='## 結果\n\nFREE-RESULT\n\n## 次の入口\n\nNEXT\n' ;;
+    label-line) body='## 結果\n\n### 2026-09-23 worker/claude\n- R\n\n**次の入口**\n\n## 次の入口\n\nNEXT\n' ;;
+  esac
+  printf -- '---\nissue: 31\ntitle: t\nstate: open\nworker: claude\nupdated: 2026-09-23T10:00:00+09:00\n---\n\n'"$body" > "$repo/.agent-packets/31.md"
+  set +e
+  (cd "$repo" && "$pkt" publish 31 --dry-run > "$tmp/out" 2> "$tmp/err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "publish of a copy pull cannot read ($bad) should stop with exit 2 (#428) (rc=$rc)"
+  grep -q "pull で読めない" "$tmp/err" || fail "publish ($bad) should explain the unreadable copy: $(cat "$tmp/err")"
+  [ ! -s "$tmp/out" ] || fail "publish ($bad) must not print the copy"
+done
+rm "$repo/.agent-packets/31.md"
 
 # 型変換で例外を投げる YAML (`!!float invalid`) が key / 値にあっても、その packet だけ broken (R293-21)
 # `title: !!binary /w==` は UTF-8 でない String になり list --json の JSON 生成で落ちる (R293-22)。tag は AST で拒否

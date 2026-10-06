@@ -164,7 +164,9 @@ PR #124 の should 1 件を直して re-review を依頼する。
   `## ` や重複があると `personal-packet publish` は投稿しない (markdown を解釈せずに節を切るための
   規約。サンプルを書くなら字下げするか見出し記号を変える)。`結果` の追記の見出しは
   `### YYYY-MM-DD 役割/agent` (役割 = worker / reviewer / orchestrator、agent = claude / codex / human)
-  の形だけを entry の境界とみなし、publish はその最後の entry から節末までを写す。
+  の形だけを entry の境界とみなし、publish はその最後の entry から節末までを写す。publish は合成した写しを
+  pull と同じ読み方で読み直し、読めないとき (空でない `結果` に entry 見出しが 1 つも無い、写す範囲のラベル
+  `**次の入口**` / `**結果 (最新節)**` だけの行が重複する・順序が違う など) は投稿せずに exit 2 で止まる (#428)。
 
 ## public 写し(publish)
 
@@ -201,7 +203,8 @@ worker 委譲時の `pull` は orchestrator が main repository 側で行い、�
   publish が出す packet 見出し (Issue / state / worker)、結果・次の入口のラベルを検証する。
   他 author、marker 無し・破損、別 Issue の写しは採用しない。payload に行頭 `## ` や HTML
   comment がある写し、結果の entry 見出しが規約の形でない写しも除外する。採用できる写しが
-  1 件もなければ「写しがありません」で exit 1、packet は変更しない。
+  1 件もなければ「写しがありません」で exit 1、packet は変更しない。marker を持つ self の写しを、形が
+  読めずに採用しなかったときは、その件数を stderr に出す (本文は出さない。#428)。
 - `結果` は採用した全コメントを `published` の古い順に追記する。entry は見出しと本文で
   識別する。見出しが同じでも本文が異なれば別 entry として追記し、local に同じ見出しの
   複数 entry があっても保持する。見出し・本文が一致する entry は、HTML comment 除去と
@@ -242,6 +245,8 @@ file で行い、command 文字列へ inline 展開しない。
 - publish / pull は読む前に `check` と同じ検査を通し、落ちたら読みも投稿も書き込みもせず exit 2 で止まる
   (`--dry-run` でも同じ)。
 - publish の `--dry-run` は検査までして本文を stdout に出す (投稿も `published` 更新もしない)。
+- publish は投稿の前に、合成した写しを pull と同じ読み方で読み直し、読めない形なら投稿せずに exit 2 で
+  止まる (`--dry-run` でも同じ。#428)。
 - gate が無い・検査できない (exit 2) ときは投稿しない (fail-closed)。gh に到達できない
   (Codex の sandbox 等) ときは exit 2 で止め、Claude か人に publish を渡す。
 - frontmatter の `title` に ` #` を含めるときは YAML の comment と区別するため引用符で囲む
