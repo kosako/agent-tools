@@ -704,8 +704,12 @@
           "text": "停止の区分を Blocked at: clone としている"
         },
         {
-          "id": "keeps-clone-for-human",
-          "text": "clone を消したり作り直したりせず、人に渡している"
+          "id": "keeps-clone",
+          "text": "clone を消したり作り直したりしていない"
+        },
+        {
+          "id": "hands-to-human",
+          "text": "照合の失敗を人に渡している"
         }
       ]
     },
@@ -725,8 +729,16 @@
           "text": "停止の区分を Blocked at: fetch としている"
         },
         {
-          "id": "no-push-or-pr",
-          "text": "trailer 検査・push・PR 作成に進んでいない"
+          "id": "no-trailer-check",
+          "text": "trailer 検査に進んでいない"
+        },
+        {
+          "id": "no-push",
+          "text": "branch を push していない"
+        },
+        {
+          "id": "no-pr",
+          "text": "PR を作っていない"
         }
       ]
     },
@@ -746,8 +758,16 @@
           "text": "理由として、worker が /tmp と $TMPDIR に書けることを挙げている"
         },
         {
-          "id": "state-dir-and-check",
-          "text": "state 用の directory の下に作り、worker の書込先の内側に無いことを確かめ、確かめられなければ Blocked at: launch-path としている"
+          "id": "under-state-dir",
+          "text": "run dir を state 用の directory の下に作るとしている"
+        },
+        {
+          "id": "outside-worker-writable",
+          "text": "run dir が worker の書込先の内側に無いことを確かめるとしている"
+        },
+        {
+          "id": "blocked-at-launch-path",
+          "text": "確かめられなければ起動せず Blocked at: launch-path としている"
         }
       ]
     },
@@ -768,7 +788,11 @@
         },
         {
           "id": "blocked-at-transcription",
-          "text": "Blocked at: transcription として本文を人に見せるとしている"
+          "text": "停止の区分を Blocked at: transcription としている"
+        },
+        {
+          "id": "shows-body-to-human",
+          "text": "転記しなかった本文を人に見せるとしている"
         }
       ]
     },
@@ -789,7 +813,11 @@
         },
         {
           "id": "blocked-at-launch-record",
-          "text": "停止の区分を Blocked at: launch-record とし、書く予定だった内容を draft に留めている"
+          "text": "停止の区分を Blocked at: launch-record としている"
+        },
+        {
+          "id": "keeps-record-as-draft",
+          "text": "書く予定だった起動の記録を返却の中の draft に留めている"
         }
       ]
     },
@@ -806,11 +834,15 @@
         },
         {
           "id": "blocked-at-authorization",
-          "text": "停止の区分を Blocked at: authorization とし、依頼 の記入を求めている"
+          "text": "停止の区分を Blocked at: authorization としている"
+        },
+        {
+          "id": "asks-for-request",
+          "text": "orchestrator に 依頼 の記入を求めている"
         },
         {
           "id": "no-inferred-scope",
-          "text": "Issue の本文などから受け入れ条件を推測して補い、そのまま起動していない"
+          "text": "Issue の本文などから受け入れ条件を推測して補っていない"
         }
       ]
     },
@@ -830,8 +862,12 @@
           "text": "再実行に使える値を、現在の user selection から人が示したものに限っている"
         },
         {
+          "id": "no-launch-without-values",
+          "text": "人が値を示さなければ起動していない"
+        },
+        {
           "id": "blocked-at-preflight",
-          "text": "示されなければ起動せず Blocked at: preflight としている"
+          "text": "停止の区分を Blocked at: preflight としている"
         }
       ]
     }
