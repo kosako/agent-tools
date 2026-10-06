@@ -81,6 +81,15 @@ check("trailing comment with backslash keeps the next gh (#429)", reason("ls # n
   "gh issue list --search a#b \\\n  --json number,body" => SafeGhHook::REASON_LIST,
   # double quote の中の継続は結合する (shell と同じ)
   "gh issue list --search \"a \\\n b\" --json number,body" => SafeGhHook::REASON_LIST,
+  # 走査が扱わない構文を含む command は結合せず、修正前と同じく改行で割る (SGH-429-04 / 05)。
+  # double quote の中の command substitution の comment
+  "out=\"$(true # note \\\ngh pr view 12)\"" => SafeGhHook::REASON_VIEW,
+  # backtick の中の comment
+  "out=`true # note \\\ngh pr view 12`" => SafeGhHook::REASON_VIEW,
+  # heredoc の本文の引用符
+  "cat <<'EOF'\n\"\nEOF\n# note \\\ngh pr view 12\n" => SafeGhHook::REASON_VIEW,
+  # $'…' の中の escape された single quote
+  "echo $'a\\'b' # note \\\ngh pr view 12" => SafeGhHook::REASON_VIEW,
 }.each do |cmd, want|
   check("continuation lexing: #{cmd.inspect} -> #{want} (#429)", reason(cmd) == want)
 end

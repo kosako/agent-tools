@@ -143,12 +143,20 @@ module SafeGhHook
   # comment が始まりうる直前の文字 (nil = 先頭)。shell は word の先頭の `#` からを comment にする。
   COMMENT_PREV = [nil, " ", "\t", "\n", ";", "&", "|", "(", ")", "`"].freeze
 
+  # 下の字句の走査が扱わない構文。command substitution (`$(` と backtick) と process substitution の中は別の
+  # shell context で、heredoc の本文は quote を持たず、`$'…'` は single quote の中に escape がある。これらを
+  # 含む command は結合せず、修正前と同じく改行で割る (#429 review SGH-429-04 / 05)。結合は見落としを作りうる
+  # ので、扱えない入力は修正前の挙動 (どの行頭の gh も見る) に倒す。
+  UNMODELED_SYNTAX = /\$\(|`|<<|<\(|>\(|\$'/.freeze
+
   # quote の外と double quote の中の、escape されていない `\` + 改行 (継続行) だけを空白にする (#429)。
   # 正規表現で行末を見るのではなく 1 文字ずつ走査するのは、次の 3 つを区別するため (#429 review):
   # - comment の中の `\` は継続ではない (comment は行頭・空白・制御演算子の直後の `#` から改行まで)。
   # - `\\` は escape された backslash で、その後ろの改行は command の区切りのまま。
   # - single quote の中の `\` は文字どおりで、改行も区切りのまま (従来どおり)。
   def join_continuations(command)
+    return command if command.match?(UNMODELED_SYNTAX)
+
     chars = command.chars
     out = +""
     quote = nil
