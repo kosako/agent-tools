@@ -148,7 +148,8 @@ PR #124 の should 1 件を直して re-review を依頼する。
     `updated` を変えない (未 publish の印を立てない)。pull は local の値を保持する。
   - `list` は `run` があれば run dir の状態を stat だけで見て `run_status` に出す: `finished` (`done.txt`
     がある = 完了・未転記) / `unfinished` (run dir はあるが `done.txt` が無い = 実行中 / 不明) /
-    `missing` (run dir が無い = 消失。worker の commit は clone から回収する)。
+    `missing` (run dir が無い = 消失。snapshot が無く clone を照合できないので、clone から自動では回収
+    しない。人が確かめる)。
 - `last_run` (#325): **最後の run dir**。完了の転記で `run` / `tab` を消すときに、orchestrator が `run` の値を
   `last_run` に移す。次の起動で `run` を書くときに `last_run` は消す (`run` と同時には置かない。両方あれば
   壊れた packet として報告する)。`state: blocked` の停止では従来どおり `run` に残す (退避物の置き場)。
