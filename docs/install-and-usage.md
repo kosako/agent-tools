@@ -164,7 +164,7 @@ user の Codex の設定を使います。既定のままだと、機械的な r
 
 | file | 効く先 | 読まれ方 |
 | --- | --- | --- |
-| `agent-tools-review.config.toml` | personal-codex-review | top-level の `model` / `model_reasoning_effort` だけを読み、`config.toml` の top-level の上に key ごとに重ねて `-c` で再指定する (`--ignore-user-config` の起動に他の key を持ち込まない。#358) |
+| `agent-tools-review.config.toml` | personal-codex-review。`model` は personal-maintenance-sweep の Codex の監査・反証と grill の事前相談にも効く (effort はそれらには効かない。[dotfiles との境界](boundary-with-dotfiles.md)) | top-level の `model` / `model_reasoning_effort` だけを読み、`config.toml` の top-level の上に key ごとに重ねて `-c` で再指定する (`--ignore-user-config` の起動に他の key を持ち込まない。#358) |
 | `agent-tools-worker.config.toml` | personal-codex-worker | preflight が top-level の `model` / `model_reasoning_effort` だけを読み、`-c` で再指定する (`--ignore-user-config` の起動に他の key を持ち込まない) |
 
 例 (値は dotfiles 側で machine ごとに決める。fast を外す値は未実測なので、まず effort だけ):

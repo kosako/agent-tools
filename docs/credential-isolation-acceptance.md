@@ -13,8 +13,10 @@ session で読む」前提で成り立つ。その **credential 隔離床 (P0-B)
 
 ## 何が hard で何が hard でないか (honest-label)
 
-- **hard に保証するのは**: 管理された `gh` / `git` / `curl` invocation の **既定 credential
-  探索が空** であること (実機 negative + positive control で証明)。
+- **hard に保証するのは**: 管理された invocation の **既定 credential 探索が空** であること (実機
+  negative + positive control で証明)。常に検証するのは required の `gh` と `git-https` で、`git-ssh` と
+  `curl` (`~/.netrc`) は config で opt-in したときだけ検証する (下の「git-ssh / curl は opt-in チャネル」)。
+  既定の config の緑は、`git-ssh` と `curl` の隔離の証明ではない。
 - **射程外 (OS sandbox tier が必須・本 Phase スコープ外)**: keychain 直読み (`security`)、
   absolute path 読み、browser / MCP / connector の login 済み session、任意コマンド実行。
   これらに対する構造的遮断は env / config 隔離では不能。

@@ -184,7 +184,8 @@ Issue コメントへ写すのは **`結果` の最新節 + `次の入口` の�
   packet を書くまで (local で完結) とし、委譲された Codex worker は packet に書かず orchestrator が
   転記する (下記「worker 委譲との関係」)。publish はどちらの場合も Claude か人が行う。ただし
   MCP connector (GitHub app 等) は sandbox の外から GitHub に届きうるので、「network に届かない」を
-  write 境界として当てにしない。委譲した worker の write は起動側が承認設定で止める (同節)。
+  write 境界として当てにしない。委譲した worker の write は、起動側が固定の起動形で connector・MCP・rules を
+  外して止める (同節)。
 - 投稿後に frontmatter の `published` を更新する。resume は `updated > published` を
   「未 publish の追記あり」として表示する。
 
@@ -290,9 +291,11 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
   中) に切る。外に切ると user.email が空になり commit が fail-closed で落ちる。
 - **worker の権限境界**: packet の編集、GitHub への write (Issue / PR の操作、push)、別 agent の
   起動、clone の外への書込は worker がしない。起動側は Codex の approval policy を「承認を求める
-  操作は失敗する」側に固定する。これで止まるのは承認を求める操作だけなので、起動側は有効な承認設定
-  (approval policy と、MCP connector の tool ごとの承認設定) を起動前に検査し、GitHub への write が
-  無承認で通る設定なら起動しない (検査は委譲 skill の preflight が持つ)。worker は作業単位ごとに
+  操作は失敗する」側に固定する。これで止まるのは承認を求める操作だけなので、起動側は固定の起動形
+  (launch argv。`--ignore-user-config --ignore-rules --disable apps` など) で user config・account 側の
+  connector・MCP server・rules を外して起動する。委譲 skill の preflight が起動前に確かめるのは、その起動形に
+  要る CLI の flag と feature 行が在ることまでで、承認設定は読まない。外した結果の実際の tool surface は、
+  起動の実測 (acceptance probe) で確かめる (正本は `personal-codex-worker` の §2 と preflight)。worker は作業単位ごとに
   commit し、自分を示す `Co-Authored-By: Codex …` trailer を付ける (commit-msg の gate が検査する)。
 - **結果の転記**: worker は最終 message に到達点 / 判断 / 未完 / 停止理由 / commit 一覧 /
   次の 1 アクション (`次の入口` の転記元) を書き、orchestrator がそれを `結果` に

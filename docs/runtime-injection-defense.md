@@ -73,7 +73,9 @@ command-string allowlist — は **steering**、hostname allowlist は **best-ef
 
 - 隔離 session から次の**shell env / config 由来の**認証源が**すべて参照不能**であること:
   keychain / git credential helper (`git-credential-osxkeychain` 等) / OAuth cache / `~/.netrc` /
-  `gh` の `hosts.yml`。
+  `gh` の `hosts.yml`。このうち実装の harness が既定で検証するのは `gh` と `git-https` の経路で、
+  `~/.netrc` (`curl`) と ssh の認証源 (`git-ssh`) は config で opt-in したときだけ検証する (下の「実装
+  harness のスコープ」)。
 - **MCP github server の token store は本 acceptance の射程外**: MCP token は shell env の認証源
   ではなく agent の MCP context 側にあり、env 隔離 harness では断てない。これは **P0-A (reader の
   tool surface 制限)** / OS sandbox tier の担当。以前この列挙に MCP token store を含めていたのは
@@ -87,8 +89,8 @@ command-string allowlist — は **steering**、hostname allowlist は **best-ef
   だからこそ隔離は「別 HOME 等で認証源を**構造的に**断つ」実装にし、列挙に依存しない。
 - **実装 harness のスコープ (honest-label)**: 実装
   ([credential-isolation-acceptance.md](credential-isolation-acceptance.md)) の env 隔離が hard に
-  検証するのは、管理された `gh` / `git` / `curl` invocation の**既定 credential 探索が空**である
-  ことまで。keychain 直読みや MCP token store は env 隔離の射程外 (P0-A の tool surface 制限 /
+  検証するのは、管理された invocation の**既定 credential 探索が空**であることまで。常に検証するのは
+  required の `gh` / `git-https` で、`git-ssh` / `curl` は config で opt-in したときだけ検証する。keychain 直読みや MCP token store は env 隔離の射程外 (P0-A の tool surface 制限 /
   OS sandbox tier の担当) で、harness の緑をこの節の認証源列挙すべての検証と読まない。
   上の認証源列挙は PR-2 で env 隔離の射程 (shell env / config 由来) に是正済み。
 
