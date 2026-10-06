@@ -145,7 +145,9 @@ objects / refs / 他 worktree の index / config を worker に開けること�
   以降 (preflight / 起動) は preflight が返す `clone_root` (検査した物理 path) を使う。
   `--no-hardlinks` は必須 (既定の local clone は object を main と hardlink 共有するので、分離が
   成立しない)。branch は「clone の local branch → `origin/<branch>` → 新規」の順で解決する
-  (`switch -c` だけだと、main 側にある同名 branch の tip を取り違える)。branch 名は packet の
+  (`switch -c` だけだと、main 側にある同名 branch の tip を取り違える)。新規は基点を明示し、§7 の
+  trailer 検査の base と同じ fetch 済みの `origin/main` の tip から切る (基点を書かないと、main worktree
+  が checkout している branch から切られる。手順は `LAUNCH.md` §2)。branch 名は packet の
   `branch`。無ければ orchestrator が決めて packet に書く。
 - **起動前に clone 側の commit 前提を確認する**: `user.email` / `user.name` が解決でき、git hook gate
   (public-safety / git-identity / ai-trailer) の hook が clone から見えること。clone には main の

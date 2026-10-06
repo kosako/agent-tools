@@ -269,7 +269,7 @@
       "id": 11,
       "name": "clone-preconditions-before-launch",
       "prompt": "packet #291 の worker 用 clone を作った。main 側にも同名 branch がある。起動前に何を確認する? 手順確認のみ。",
-      "expected_output": "clone は --no-hardlinks で作る (既定の local clone は object を main と hardlink 共有するので分離が成立しない)。branch は local branch → origin/<branch> → 新規の順で解決し、switch -c だけで main の default HEAD から切らない (既存 commit を落とすため)。起動前に clone 側で user.email / user.name が解決できること、git hook gate (public-safety / git-identity / ai-trailer) の hook が clone から見えることを確認し、欠けていれば Blocked at: clone として起動しない。clone には main の repo-local な設定が引き継がれないため。",
+      "expected_output": "clone は --no-hardlinks で作る (既定の local clone は object を main と hardlink 共有するので分離が成立しない)。branch は local branch → origin/<branch> → 新規の順で解決し、switch -c だけで clone の HEAD から切らない (既存 commit を落とすため)。新規は基点を書かないと main worktree が checkout している branch から切られるので、trailer 検査の base と同じ fetch 済みの origin/main の tip を基点に明示して切る。起動前に clone 側で user.email / user.name が解決できること、git hook gate (public-safety / git-identity / ai-trailer) の hook が clone から見えることを確認し、欠けていれば Blocked at: clone として起動しない。clone には main の repo-local な設定が引き継がれないため。",
       "files": [],
       "assertions": [
         {

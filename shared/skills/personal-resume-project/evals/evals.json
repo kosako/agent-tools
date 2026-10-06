@@ -169,8 +169,8 @@
     },
     {
       "id": 8,
-      "prompt": "状況教えて。この repo の personal-packet list --json は次のとおり: [{\"issue\":42,\"state\":\"open\",\"worker\":\"codex\",\"run\":\"/tmp/run-a\",\"tab\":\"#42\",\"run_status\":\"unfinished\"},{\"issue\":43,\"state\":\"open\",\"worker\":\"codex\",\"run\":\"/tmp/run-b\",\"tab\":\"#43\",\"run_status\":\"finished\"},{\"issue\":44,\"state\":\"blocked\",\"worker\":\"codex\",\"run\":\"/tmp/run-c\",\"tab\":\"#44\",\"run_status\":\"finished\"},{\"issue\":45,\"state\":\"open\",\"worker\":\"codex\",\"run\":\"/tmp/run-d\",\"tab\":\"#45\",\"run_status\":\"missing\"}]。herdr の agent list には codex の agent が 1 つも無い。",
-      "expected_output": "status-only と判定し、表示だけで止まる。#42 は「起動済み・未回収 (実行中 / 不明)」で、herdr に codex の worker が見えないので、起動し直さず人に確かめる必要があると示す。#43 は「起動済み・未回収 (完了・未転記)」で、結果の回収と転記が次の手。#45 は「起動済み・未回収 (run dir 消失)」で、worker の commit は clone から回収する。#44 は state: blocked なので未回収ではなく「停止中 (退避物: run dir)」。どの packet にも着手せず、worker の起動・回収・run / tab の削除をしない。",
+      "prompt": "状況教えて。この repo の personal-packet list --json は次のとおり: [{\"issue\":42,\"state\":\"open\",\"worker\":\"codex\",\"run\":\"/tmp/run-a\",\"tab\":\"#42\",\"run_status\":\"unfinished\"},{\"issue\":43,\"state\":\"open\",\"worker\":\"codex\",\"run\":\"/tmp/run-b\",\"tab\":\"#43\",\"run_status\":\"finished\"},{\"issue\":44,\"state\":\"blocked\",\"worker\":\"codex\",\"run\":\"/tmp/run-c\",\"tab\":\"#44\",\"run_status\":\"finished\"},{\"issue\":45,\"state\":\"open\",\"worker\":\"codex\",\"run\":\"/tmp/run-d\",\"tab\":\"#45\",\"run_status\":\"missing\"}]。herdr では、tab #42 にある worker-42 の pane の foreground に codex がいない。",
+      "expected_output": "status-only と判定し、表示だけで止まる。#42 は「起動済み・未回収 (実行中 / 不明)」で、worker の pane の foreground に codex が見えないので、起動し直さず人に確かめる必要があると示す。#43 は「起動済み・未回収 (完了・未転記)」で、結果の回収と転記が次の手。#45 は「起動済み・未回収 (run dir 消失)」で、snapshot が無く clone を照合できないので、clone から自動で回収せず人が確かめる。#44 は state: blocked なので未回収ではなく「停止中 (退避物: run dir)」。どの packet にも着手せず、worker の起動・回収・run / tab の削除をしない。",
       "files": [],
       "assertions": [
         {
@@ -187,7 +187,11 @@
         },
         {
           "id": "no-relaunch-when-unknown",
-          "text": "unfinished で worker が herdr に見えない #42 について、起動し直さず人に確かめる必要があると示している"
+          "text": "unfinished で worker の pane の foreground に codex が見えない #42 について、起動し直さず人に確かめる必要があると示している"
+        },
+        {
+          "id": "missing-not-auto-recovered",
+          "text": "run dir が消えた #45 について、clone から回収するとは案内せず、照合できないので人が確かめると示している"
         },
         {
           "id": "status-only-no-action",

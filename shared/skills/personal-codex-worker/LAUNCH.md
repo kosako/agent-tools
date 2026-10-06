@@ -65,7 +65,11 @@ if git -C "$clone" rev-parse --verify --quiet --end-of-options "refs/heads/$bran
 elif git -C "$clone" rev-parse --verify --quiet --end-of-options "refs/remotes/origin/$branch" >/dev/null; then
   git -C "$clone" switch -c "$branch" --no-track "refs/remotes/origin/$branch"
 else
-  git -C "$clone" switch -c "$branch"
+  # 新規の基点は §9 の trailer 検査の base と同じ、fetch 済みの origin/main の tip
+  git -C "$main" fetch --quiet origin '+refs/heads/main:refs/remotes/origin/main' || exit 1
+  start=$(git -C "$main" rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}') || exit 1
+  git -C "$clone" fetch --quiet --no-tags --no-write-fetch-head origin 'refs/remotes/origin/main' || exit 1
+  git -C "$clone" switch -c "$branch" "$start"
 fi
 ```
 
@@ -74,9 +78,16 @@ fi
   成立しない (実測: 既定 clone は object の link 数 2、`--no-hardlinks` は 1)。再利用してよいのは
   **この手順で作った clone だけ**で、素性が不明なら作り直す。
 - **branch は取り違えない**。main 側に同名 branch があると clone にも `origin/<branch>` として入って
-  いるので、`switch -c` だけで作ると clone の既定 HEAD (main の default branch) から切ってしまい、
-  既存の commit を含まない履歴で worker が始まる。上のように「local branch → `origin/<branch>` →
-  新規」の順で分岐する。
+  いるので、`switch -c` だけで作ると clone の HEAD から切ってしまい、既存の commit を含まない履歴で
+  worker が始まる。上のように「local branch → `origin/<branch>` → 新規」の順で分岐する。
+- **新規の基点は明示する**。基点を書かない `switch -c` は clone の HEAD から切る。local path の
+  `git clone` が checkout するのは、clone した時点で main worktree が checkout していた branch で、
+  default branch とは限らない。orchestrator が自分の作業 branch に居ると、worker の branch はその
+  未 merge の commit の上にでき、それが §9 の trailer 検査に入って `Blocked at: trailer` で止まる。
+  基点は §9 の検査の base と同じ、fetch 済みの `origin/main` (main 側の `refs/remotes/origin/main`) の
+  tip にする。clone の `origin` は main の path なので、その ref を clone へ fetch してから OID で切る
+  (clone の `origin/main` は main 側の local の main で、未 push の commit を含みうるので使わない)。
+  fetch か基点の解決に失敗したら `Blocked at: clone`。
 - `$clone` は `<main worktree>-clones/<issue>` のように **main と同じ identity context の中**に切る
   (`SKILL.md` §3。context の外に切ると user.email が空になり、worker の commit が落ちる)。
 - upstream は当てにしない (`--no-track` で作るのは新規分のみで、clone が最初に作った branch や

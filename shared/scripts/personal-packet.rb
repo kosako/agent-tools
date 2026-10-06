@@ -82,7 +82,7 @@ module Packet
     # run dir の状態を read-only に見る (stat だけ。中身は読まない)。run が無ければ nil。
     #   finished   = done.txt がある (完了・未転記)
     #   unfinished = run dir はあるが done.txt が無い (実行中 / 不明)
-    #   missing    = run dir が無い (消失。worker の commit は clone から回収する)
+    #   missing    = run dir が無い (消失。snapshot が無く clone を照合できないので自動では回収しない)
     def run_status
       return nil unless run
       return "missing" unless File.directory?(run)

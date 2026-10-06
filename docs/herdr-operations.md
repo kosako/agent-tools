@@ -83,9 +83,11 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
 
 ## dashboard (毎回導出する)
 
-- 「今どの作業単位がどの状態で、誰が動いているか」の正本は、packet と herdr の agent 一覧です。
+- 「今どの作業単位がどの状態で、誰が動いているか」の正本は、packet と herdr の状態です。
   `personal-resume-project` の workspace 節が、毎回この 2 つを突き合わせて出します (#253 で決めた
-  「workspace 単位の索引 file を作らない」のまま)。
+  「workspace 単位の索引 file を作らない」のまま)。herdr の状態は agent 一覧 (cwd がこの repo) で見ますが、
+  委譲した worker は repo の外の clone を cwd にして動くので、下の命名の tab / pane と、その pane の
+  foreground に `codex` がいるかで見ます (#423)。
 - herdr 側で常に見えるのは、agent panel (`agent_panel_sort = "priority"` なら注意が必要な順に並ぶ) と、
   上の命名による tab / pane の名前です。1 + 1 の規模なら、どの pane が何の作業単位かはこれで分かります。
 - herdr の sidebar に状態を送る仕組み (pane / workspace の metadata token を report して表示する) は
