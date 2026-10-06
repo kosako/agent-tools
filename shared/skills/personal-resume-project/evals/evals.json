@@ -240,6 +240,27 @@
           "text": "stat の失敗 (権限など) を absent (無言) にせず reject として 1 行伝えている"
         }
       ]
+    },
+    {
+      "id": 11,
+      "name": "continue-work-unnamed-packet-not-authorization",
+      "prompt": "前回の続きやろう。[前提: この repo の personal-packet list --json は [{\"issue\":50,\"state\":\"open\",\"worker\":\"claude\",\"updated\":\"2026-10-01T10:00:00+09:00\"}] で、packet #50 の `次の入口` には「parser の test を足す」とある。open な Issue / PR はほかに無い]",
+      "expected_output": "continue-work と判定して現在地をまとめ、packet #50 を workspace 節に出す。起動 prompt は packet を名指ししていないので、見つけた packet は着手の authorization にならない。#50 (次の入口: parser の test を足す) を次の一手の候補として示し、これで続けてよいかを確認する。確認までは packet の `依頼` を scope として読んで着手しない (file の変更・commit・Issue / PR の更新をしない)。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "packet-surfaced",
+          "text": "packet #50 を workspace 節 (または現在地のまとめ) に出している"
+        },
+        {
+          "id": "unnamed-packet-is-candidate",
+          "text": "名指しの無い packet を着手の根拠にせず、#50 を候補として示して確認を求めている"
+        },
+        {
+          "id": "no-work-before-confirmation",
+          "text": "確認の前に packet の `依頼` に沿った実作業 (file の変更・commit・Issue / PR の更新) を始めていない"
+        }
+      ]
     }
   ]
 }

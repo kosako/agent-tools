@@ -60,16 +60,24 @@
     {
       "id": 3,
       "prompt": "この設計の議論、結論出たから記録して次に活かせるようにして",
-      "expected_output": "下した判断と理由を記録(仕様は上書き、議論ログは追記)。次回どう活かすかの入口を示す。",
+      "expected_output": "「記録して」は write intent だが、具体的な記録先は指定されていない。下した判断と理由を、種別ごとの書き方 (仕様は上書き、議論ログは追記) で draft にまとめ、記録先をユーザーに確認する (`.agent-context.local.md` に候補があれば、候補と保存内容を示す)。確認の前には connector / API / file への書き込みをしない。次回どう活かすかの入口を示す。",
       "files": [],
       "assertions": [
         {
           "id": "records-decision-with-why",
-          "text": "下した判断と、その理由を記録している"
+          "text": "下した判断と、その理由をまとめている (確認前は draft として)"
         },
         {
           "id": "applies-doc-type-rules",
           "text": "仕様は上書き・ログは追記など、ドキュメント種別に応じた書き方をしている"
+        },
+        {
+          "id": "confirms-destination-first",
+          "text": "記録先が指定されていないので、記録先 (note 由来の候補を含む) と保存内容を示してユーザーに確認している"
+        },
+        {
+          "id": "no-write-before-confirmation",
+          "text": "記録先の確認の前に、connector / API / file への書き込み (repo に file を作る、既定の page に書くなど) をしていない"
         }
       ]
     },
@@ -238,6 +246,56 @@
         {
           "id": "still-hands-off",
           "text": "会話内に handoff draft と次回の入口を提示している"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "name": "handoff-worker-packet-local-update-no-publish",
+      "prompt": "[前提: この session で Issue #7 を worker (Claude) として進め、PR #30 を出して review 待ちにした。packet .agent-packets/7.md があり、配備済みの personal-packet check 7 は exit 0 を返す] 今日はここまで。まとめといて",
+      "expected_output": "外部保存は明示されていないので draft と判定する。packet は local で agent 所有なので、check が exit 0 なら更新する: `結果` に `### <日付> worker/claude` の見出しで到達点・判断と理由を追記し (過去の節は書き換えない)、自分が worker なので `次の入口` を上書きし、`updated` を今の日時、`state` を review にする。`依頼` は書き換えない。Issue コメントへの publish (`personal-packet publish 7`) は external write なので draft では実行せず、候補として示すだけにする。planning ドキュメントにも書かない。handoff draft と次回の入口を提示する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "updates-packet-locally",
+          "text": "check が exit 0 なので、packet の `結果` への追記と `次の入口` の上書きを行っている (または行う手順を示している)"
+        },
+        {
+          "id": "no-publish-in-draft",
+          "text": "draft なので `personal-packet publish` などの Issue コメントへの publish を実行していない"
+        },
+        {
+          "id": "keeps-request-intact",
+          "text": "packet の `依頼` を書き換えていない"
+        },
+        {
+          "id": "state-and-updated",
+          "text": "`updated` を今の日時にし、`state` を review (PR を出して review 待ち) にしている"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "name": "handoff-reviewer-does-not-overwrite-next-entry",
+      "prompt": "[前提: この session では Issue #8 の PR #31 を reviewer として review した。verdict は Warning (🟡 should 2 件)。packet .agent-packets/8.md があり、worker は codex、配備済みの personal-packet check 8 は exit 0 を返す] 今日はここまで。まとめといて",
+      "expected_output": "draft と判定する。reviewer なので、packet の `結果` に `### <日付> reviewer/claude` の見出しで verdict (Warning、should 2 件) を追記し、`updated` を今の日時にするところまで。`次の入口` は worker の再開指示なので上書きしない。`state` も worker の役目なので変えない。`依頼` は書き換えない。Issue コメントへの publish はしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "appends-verdict",
+          "text": "packet の `結果` に reviewer の見出しで verdict を追記している (または追記する手順を示している)"
+        },
+        {
+          "id": "no-next-entry-overwrite",
+          "text": "reviewer として `次の入口` を上書きしていない"
+        },
+        {
+          "id": "no-state-or-request-change",
+          "text": "`state` と `依頼` を変えていない"
+        },
+        {
+          "id": "no-publish-in-draft",
+          "text": "draft なので Issue コメントへの publish を実行していない"
         }
       ]
     }
