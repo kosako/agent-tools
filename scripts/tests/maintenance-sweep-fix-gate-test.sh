@@ -1,7 +1,9 @@
 #!/bin/sh
 # personal-maintenance-sweep の fix モードの、push の前の public-safety の gate を検査する (#383)。
 # - FIX.md の「## 検証 (累積差分に対して)」の節にある gate の command (sh の code block) が、累積差分・`base`
-#   以降の全 commit の message (`git log --format=%B "$base"..HEAD`)・PR の題名と本文を gate の入力にしている。
+#   以降の全 commit の message (`git log --format=%B "$base".."$branch"`)・PR の題名と本文を gate の入力にしている。
+#   git の command は cwd の HEAD ではなく fix の branch の ref を基準にする (#419。main の checkout から走らせても
+#   累積差分が空にならない)。
 #   gate は RECORD.md の Issue の gate と同じ deploy 先。review の修正で commit を足したときに、追加の push の
 #   前に検証と gate をやり直すことが書いてある。
 # - 入口経由: 切り出した command を temp repo で実際に走らせる。差分・commit の message (最後の commit でない
@@ -89,13 +91,24 @@ else
     input = block[0...block.index('"$gate" --stdin')].lines.reject { |l| l.start_with?("gate=") }.join
     errors << "公開前の gate に pipe で入力を渡していない" unless input.rstrip.end_with?("|")
     {
-      'git diff "$base" HEAD' => "累積差分",
-      'git log --format=%B "$base"..HEAD' => "base 以降の全 commit の message",
+      'git diff "$base" "$branch"' => "累積差分",
+      'git log --format=%B "$base".."$branch"' => "base 以降の全 commit の message",
       '"$title"' => "PR の題名",
       '"$body_file"' => "PR の本文",
     }.each do |needle, what|
       errors << "公開前の gate の入力が「#{what}」(#{needle}) を含まない" unless input.include?(needle)
     end
+    errors << "gate の block が cwd の HEAD を基準にしている (main の checkout から走らせると累積差分が空になる。#419)" if block =~ /\bHEAD\b/
+    # PR の作成は cwd の今の branch に頼らない (main の checkout から続けても fix の branch の PR にする。#419 F4)。
+    errors << "FIX.md の PR の作成が --head \"$branch\" を明示していない" unless fix.include?(%q{gh pr create --head "$branch"})
+    # review の preflight は cwd の local HEAD を PR の head と照合するので、worktree で走らせる (#419 F5)。
+    errors << "FIX.md の review が worktree ($fixdir) での実行を指定していない" unless fix.include?("review の依頼から executor の起動までは、worktree (`$fixdir`) を cwd にして")
+    # 比べる側は保存した base に固定した worktree で走らせ、main の checkout を使わない (#419 F6)。
+    errors << "FIX.md の比べる側が base に固定した worktree ($basedir) を作っていない" unless fix.include?(%q{--detach "$basedir" "$base"})
+    errors << "FIX.md の比べる側が main の checkout を使っている (再開で main が進むと base からずれる)" if fix.include?("main の checkout (`base`)")
+    # fixdir と basedir は fixes.json に保存しないので、再開では run_id と Issue 番号から導出する (#419 F8)。
+    errors << "FIX.md の再開が fixdir と basedir を run_id と Issue 番号から導出していない" unless fix.include?("`fixdir` と `basedir` は保存せず、記録の `run_id` と Issue 番号から導出します")
+    errors << "FIX.md の再開が保存していない fixdir を fixes.json から戻すと書いている" if fix.include?("`fixdir` を `fixes.json` から戻して")
     if block =~ /\bgit push\b|\bgh\s/
       errors << "gate の block に push / gh がある (test で走らせられない。push と PR は block の外に書く)"
       block = nil
@@ -163,7 +176,7 @@ printf 'body %s\n' "$marker" > "$tmp/body-dirty.md"
 # base の上に fix の commit を作り直す。$1 = doc.md に足す行、残りの引数 = commit ごとの message の本文の行
 # (1 つ目が最初の commit。2 つ目以降は空の commit を重ねる)。
 make_fix() {
-  git -C "$repo" reset -q --hard "$base"
+  git -C "$repo" checkout -q -B sweep/fix-1 "$base"
   printf '%s\n' "$1" >> "$repo/doc.md"
   shift
   git -C "$repo" commit -q -a -m 'docs: fix (sweep #1)' -m "$1"
@@ -179,7 +192,7 @@ run_block() {
   rc=0
   # shell_argv は下の case で決めた定数 (sh / zsh -f) なので、分割して渡す。
   # shellcheck disable=SC2086
-  (cd "$repo" && env -u BASH_ENV -u ENV HOME="$home" base="$1" title="$2" body_file="$3" \
+  (cd "$repo" && env -u BASH_ENV -u ENV HOME="$home" base="$1" branch=sweep/fix-1 title="$2" body_file="$3" \
     $shell_argv "$tmp/gate-block.sh") > "$tmp/out" 2>&1 || rc=$?
 }
 
@@ -224,6 +237,12 @@ for shell in sh zsh; do
   # (f) PR の本文にだけ値がある。
   run_block "$base" "$title_clean" "$tmp/body-dirty.md"
   blocked || fail "[$shell] PR の本文にだけある値で止まらない (rc=$rc)"
+
+  # (h) main の checkout (HEAD = base) から走らせても、fix の branch の差分と message で止まる (#419)。
+  make_fix 'clean line' "message $marker"
+  git -C "$repo" checkout -q --detach "$base"
+  run_block "$base" "$title_clean" "$tmp/body-clean.md"
+  blocked || fail "[$shell] HEAD が base の checkout から走らせると、branch の commit の message にある値で止まらない (rc=$rc)"
 
   # (g) 材料の git が失敗したら (base が無い)、gate が残りだけを読んで exit 0 にならない。
   run_block 0000000000000000000000000000000000000001 "$title_clean" "$tmp/body-clean.md"

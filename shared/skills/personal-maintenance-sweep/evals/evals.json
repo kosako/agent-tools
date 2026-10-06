@@ -208,7 +208,7 @@
         },
         {
           "id": "verify-then-publish",
-          "text": "累積差分の検査をし、累積差分と base 以降の全 commit の message と PR の題名・本文を public-safety の gate に通してから push と PR を作り、review は personal-review-request に依頼している"
+          "text": "累積差分の検査を fix の branch の ref 基準 (cwd の HEAD ではない) で行い、check-injection の exit 3 は base の結果と比べて新しい medium が無いときだけ続行し、累積差分と base 以降の全 commit の message と PR の題名・本文を public-safety の gate に通してから push と PR を作り、review は personal-review-request に依頼している"
         },
         {
           "id": "no-merge",
