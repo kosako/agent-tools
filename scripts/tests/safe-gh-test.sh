@@ -366,6 +366,21 @@ rc_empty = silently { SafeGh.main(["-R", "", "issue", "view", "1"]) }
 check("main rejects empty -R with usage exit 2", rc_empty == 2)
 check("main does not call gh for empty -R", SafeGh.calls.empty?)
 
+# 余分な引数・連結形の -R・2 個目の -R・`-` で始まる残りの token は usage exit 2 (#429)。黙って無視すると
+# 指定した repo ではなく cwd の repo の同じ番号を読む。
+[
+  ["pr", "view", "12", "--repo=other/repo"],
+  ["-Rother/repo", "pr", "view", "12"],
+  ["issue", "view", "12", "13"],
+  ["pr", "view", "12", "--comments"],
+  ["-R", "a/b", "-R", "c/d", "pr", "view", "12"],
+].each do |argv|
+  SafeGh.reset_calls!
+  rc = silently { SafeGh.main(argv) }
+  check("main rejects `#{argv.join(' ')}` with usage exit 2 (#429)", rc == 2)
+  check("main does not call gh for `#{argv.join(' ')}` (#429)", SafeGh.calls.empty?)
+end
+
 # 解決値が不正なら exit 1 (fail-closed) で、対象 API へは到達しない。
 module SafeGh
   def self.gh_capture(args)

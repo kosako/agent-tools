@@ -209,7 +209,7 @@ boundary でない)。
 **steering**(迂回可・block しない・boundary でない)。
 
 - **検出 (best-effort)**: `gh issue|pr view`(既定で本文を含む)/ `--comments` / `--json` に
-  `body`・`comments` を含む read / `gh api` の issues・pulls・comments path。`gh` を command word
+  `body`・`comments`・`reviews`・`latestReviews`・`commits` を含む read (#429) / `gh api` の issues・pulls・comments path。`gh` を command word
   として持つ各 segment を見る純粋な文字列照合で、**network I/O も `gh` 呼び出しもしない**(PreToolUse は
   毎コマンド前に同期実行されるため)。author が self かは safe-gh 側が判定する。shell の厳密な構文解析は
   せず over/under-match を許容する(steering ゆえ honest-label)。

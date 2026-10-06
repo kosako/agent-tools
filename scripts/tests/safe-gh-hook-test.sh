@@ -35,6 +35,11 @@ check("api pulls -> api", reason("gh api repos/o/r/pulls/9") == SafeGhHook::REAS
 # env 前置・segment・subshell・pipe を跨いでも検出する
 check("env prefix", reason("GH_PAGER=cat gh issue view 1") == SafeGhHook::REASON_VIEW)
 check("after &&", reason("ls && gh pr view 2 --comments") == SafeGhHook::REASON_COMMENTS)
+# --json の reviews / latestReviews / commits も他人の本文を返す (#429)
+%w[reviews latestReviews commits].each do |f|
+  check("pr view --json #{f} -> view (#429)", reason("gh pr view 12 --json #{f}") == SafeGhHook::REASON_VIEW)
+end
+check("pr list --json number,reviews -> list (#429)", reason("gh pr list --json number,reviews") == SafeGhHook::REASON_LIST)
 check("before pipe", reason("gh pr view 2 | cat") == SafeGhHook::REASON_VIEW)
 check("command substitution", reason("x=$(gh issue view 9)") == SafeGhHook::REASON_VIEW)
 # api の path を flag 値と取り違えない
