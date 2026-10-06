@@ -64,6 +64,26 @@ check("continued pr view --json state -> nil (#429)", reason("gh pr view 12 \\\n
 # comment を含む行の行末の `\` は継続ではないので、次の行の gh を検出する (#429 review SGH-429-01)
 check("comment line ending with backslash keeps the next gh (#429)", reason("# inspect PR \\\ngh pr view 12") == SafeGhHook::REASON_VIEW)
 check("trailing comment with backslash keeps the next gh (#429)", reason("ls # note \\\ngh pr view 12") == SafeGhHook::REASON_VIEW)
+# 継続行の判定は quote・escape・comment を字句として追う (#429 review SGH-429-02 / 03)。
+# 各 case の文字列は Ruby の double quote で、\\ = backslash 1 文字、\n = 改行。
+{
+  # 制御演算子の直後の # も comment の始まり (SGH-429-02)
+  "true;# note \\\ngh pr view 12" => SafeGhHook::REASON_VIEW,
+  "true&&# note \\\ngh pr view 12" => SafeGhHook::REASON_VIEW,
+  "(# note \\\ngh pr view 12" => SafeGhHook::REASON_VIEW,
+  # 行末の backslash が偶数個なら escape された backslash で、改行は区切りのまま (SGH-429-03)
+  "echo \\\\\ngh pr view 12" => SafeGhHook::REASON_VIEW,
+  # 奇数個 (escape された backslash + 継続) なら結合する
+  "gh issue list --search x\\\\ \\\n  --json number,body" => SafeGhHook::REASON_LIST,
+  # quote の中の # は comment ではなく、後ろの継続は結合する
+  "gh issue list --search '#1' \\\n  --json number,body" => SafeGhHook::REASON_LIST,
+  # word の途中の # も comment ではない
+  "gh issue list --search a#b \\\n  --json number,body" => SafeGhHook::REASON_LIST,
+  # double quote の中の継続は結合する (shell と同じ)
+  "gh issue list --search \"a \\\n b\" --json number,body" => SafeGhHook::REASON_LIST,
+}.each do |cmd, want|
+  check("continuation lexing: #{cmd.inspect} -> #{want} (#429)", reason(cmd) == want)
+end
 check("issue view --json safe fields", reason("gh pr view 5 --json state,mergeable -q .state").nil?)
 check("plain issue list (title のみ)", reason("gh issue list").nil?)
 check("api user (untrusted でない)", reason("gh api user").nil?)

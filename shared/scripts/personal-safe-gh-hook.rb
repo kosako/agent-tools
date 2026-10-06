@@ -140,16 +140,52 @@ module SafeGhHook
     join_continuations(command).split(SEGMENT_BOUNDARY).map { |segment| gh_args(tokenize(segment)) }.compact
   end
 
-  # comment を含む行の行末の `\` は継続ではない (shell は comment の中の `\` を読まない)。結合すると次の行の
-  # command を comment の中に取り込んで見落とすので、行頭の `#` か空白のあとの `#` を含む行は結合しない
-  # (#429 review。quote の中の `#` は区別しない best-effort)。
-  def join_continuations(command)
-    command.each_line.map do |line|
-      next line unless line.match?(/\\r?\n\z/)
-      next line if line.match?(/(?:\A|\s)#/)
+  # comment が始まりうる直前の文字 (nil = 先頭)。shell は word の先頭の `#` からを comment にする。
+  COMMENT_PREV = [nil, " ", "\t", "\n", ";", "&", "|", "(", ")", "`"].freeze
 
-      line.sub(/\\r?\n\z/, " ")
-    end.join
+  # quote の外と double quote の中の、escape されていない `\` + 改行 (継続行) だけを空白にする (#429)。
+  # 正規表現で行末を見るのではなく 1 文字ずつ走査するのは、次の 3 つを区別するため (#429 review):
+  # - comment の中の `\` は継続ではない (comment は行頭・空白・制御演算子の直後の `#` から改行まで)。
+  # - `\\` は escape された backslash で、その後ろの改行は command の区切りのまま。
+  # - single quote の中の `\` は文字どおりで、改行も区切りのまま (従来どおり)。
+  def join_continuations(command)
+    chars = command.chars
+    out = +""
+    quote = nil
+    comment = false
+    prev = nil
+    i = 0
+    while i < chars.size
+      c = chars[i]
+      if comment
+        comment = false if c == "\n"
+      elsif quote == "'"
+        quote = nil if c == "'"
+      elsif c == "\\"
+        if chars[i + 1] == "\n" || (chars[i + 1] == "\r" && chars[i + 2] == "\n")
+          out << " "
+          i += chars[i + 1] == "\n" ? 2 : 3
+          prev = " "
+          next
+        end
+        # escape された 1 文字は、そのまま写して読み飛ばす (`\\` の 2 個目を継続と取り違えない)。
+        out << c
+        out << chars[i + 1] if chars[i + 1]
+        prev = chars[i + 1]
+        i += 2
+        next
+      elsif quote == '"'
+        quote = nil if c == '"'
+      elsif c == "'" || c == '"'
+        quote = c
+      elsif c == "#" && COMMENT_PREV.include?(prev)
+        comment = true
+      end
+      out << c
+      prev = c
+      i += 1
+    end
+    out
   end
 
   def tokenize(segment)
