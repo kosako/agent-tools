@@ -662,6 +662,31 @@
           "text": "検査の規則を「Codex 以外の AI (Claude / OpenCode) の trailer が無く、欠落も無い」と述べている (Claude が無いことだけを見ていない)"
         }
       ]
+    },
+    {
+      "id": 29,
+      "name": "new-branch-start-point",
+      "prompt": "packet #420 の worker 用に clone を新しく作る。branch は main 側にも origin にもまだ無い新規。orchestrator の main worktree は今、自分の作業 branch (未 merge の commit あり) を checkout している。worker の branch はどこから切る? 手順確認のみ。",
+      "expected_output": "基点を書かない switch -c では切らない。local path の git clone は main worktree が checkout している branch を checkout するので、そのまま切ると orchestrator の未 merge の commit の上に worker の branch ができ、trailer 検査に入って Blocked at: trailer になる。main 側で origin/main を明示した refspec で fetch し、その tip の OID を解決して clone へ fetch し、その OID を基点に switch -c で切る (trailer 検査の base と同じ)。clone の origin/main (main 側の local の main) は未 push の commit を含みうるので基点にしない。fetch か基点の解決に失敗したら Blocked at: clone。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-implicit-start",
+          "text": "基点を書かない switch -c で切らず、それだと main worktree が checkout している branch から切られると述べている"
+        },
+        {
+          "id": "fetched-origin-main-tip",
+          "text": "基点を、main 側で fetch した origin/main の tip (trailer 検査の base と同じ) にしている"
+        },
+        {
+          "id": "not-local-main",
+          "text": "clone の origin/main (main 側の local の main) や main worktree の HEAD を基点にしていない"
+        },
+        {
+          "id": "blocked-at-clone",
+          "text": "fetch か基点の解決に失敗したら Blocked at: clone で止めるとしている"
+        }
+      ]
     }
   ]
 }
