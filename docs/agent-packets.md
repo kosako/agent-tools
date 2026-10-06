@@ -164,9 +164,9 @@ PR #124 の should 1 件を直して re-review を依頼する。
   `## ` や重複があると `personal-packet publish` は投稿しない (markdown を解釈せずに節を切るための
   規約。サンプルを書くなら字下げするか見出し記号を変える)。`結果` の追記の見出しは
   `### YYYY-MM-DD 役割/agent` (役割 = worker / reviewer / orchestrator、agent = claude / codex / human)
-  の形だけを entry の境界とみなし、publish はその最後の entry から節末までを写す。entry 見出しが 1 つも
-  無い `結果` や、写す範囲にラベル (`**次の入口**` / `**結果 (最新節)**`) だけの行がある写しは pull が読めない
-  ので、publish は投稿せずに exit 2 で止まる (#428)。
+  の形だけを entry の境界とみなし、publish はその最後の entry から節末までを写す。publish は合成した写しを
+  pull と同じ読み方で読み直し、読めないとき (空でない `結果` に entry 見出しが 1 つも無い、写す範囲のラベル
+  `**次の入口**` / `**結果 (最新節)**` だけの行が重複する・順序が違う など) は投稿せずに exit 2 で止まる (#428)。
 
 ## public 写し(publish)
 
