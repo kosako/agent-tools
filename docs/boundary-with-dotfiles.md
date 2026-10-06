@@ -166,6 +166,11 @@ doctor が既にある log を読んで判定する。以下は **公開契約**
   `model` / `model_reasoning_effort` を優先して読み、`-c` で再指定する (#358。review は worker の preflight と同じ
   library で読む)。profile の他の key (例: `service_tier`) は読まれない。file が無ければ `config.toml` の top-level の
   値 (それも無ければ Codex の既定) なので、置かない machine (例: 会社機) があってよい。
+- **review 用 profile の `model` は review の外にも効く**: `agent-tools-review.config.toml` の `model` は、
+  `personal-codex-review` のほか、`personal-maintenance-sweep` で Codex が担う監査役・検証役と、grill の事前相談
+  (`personal-grill-me` の CONSULT) にも使われる (読み方は同じ `personal-codex-model-selection --profile review`)。
+  effort はこれらには効かない: sweep はプリセットの effort を、相談は前相談 high・追加の相談 medium を、それぞれ
+  自分で渡す。review を軽くするつもりで軽い model を置くと、sweep と相談もその model で動く。
 - **file 名は公開契約**: 2 つの file 名は dotfiles が配る先の名前なので、agent-tools は名前の変更を
   breaking change として扱う (dotfiles 側の更新と同期するまで旧名を壊さない)。置き方と Fast mode の
   消費は [Install & Usage](install-and-usage.md) の「Codex の review / worker だけを軽くする」。
