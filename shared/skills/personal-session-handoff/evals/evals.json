@@ -258,7 +258,7 @@
       "assertions": [
         {
           "id": "updates-packet-locally",
-          "text": "check が exit 0 なので、packet の `結果` への追記と `次の入口` の上書きを行っている (または行う手順を示している)"
+          "text": "check が exit 0 なので、packet の `結果` に追記し、`次の入口` を上書きしている (説明だけで済ませず、更新している)"
         },
         {
           "id": "no-publish-in-draft",
@@ -283,7 +283,11 @@
       "assertions": [
         {
           "id": "appends-verdict",
-          "text": "packet の `結果` に reviewer の見出しで verdict を追記している (または追記する手順を示している)"
+          "text": "packet の `結果` に reviewer の見出しで verdict を追記している (説明だけで済ませず、更新している)"
+        },
+        {
+          "id": "updated-to-now",
+          "text": "packet の `updated` を今の日時にしている"
         },
         {
           "id": "no-next-entry-overwrite",
