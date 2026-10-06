@@ -766,8 +766,12 @@
           "text": "run dir が worker の書込先の内側に無いことを確かめるとしている"
         },
         {
+          "id": "no-launch-if-unverified",
+          "text": "確かめられなければ起動しないとしている"
+        },
+        {
           "id": "blocked-at-launch-path",
-          "text": "確かめられなければ起動せず Blocked at: launch-path としている"
+          "text": "停止の区分を Blocked at: launch-path としている"
         }
       ]
     },
