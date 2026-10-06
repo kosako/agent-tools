@@ -271,6 +271,16 @@ Dir.mktmpdir("packet-pull-") do |tmp|
     assert(Packet.compose(restored, restored.published) == body, "single section / timezone round trip")
   end
 
+  # 形の読めない self の写しは採用せず、その件数を stderr に出す (本文は出さない。#428)。
+  File.unlink(path) if File.exist?(path)
+  unreadable = copy(at: "2026-09-23T00:00:00Z", date: "2026-09-23", result: "UNREADABLE-RESULT").sub("### 2026-09-23 worker/codex\n", "")
+  comments.call([self_comment(copy), self_comment(unreadable)])
+  _out, err, status = run.call("pull", "7")
+  assert(status.success?, "pull with an unreadable copy should still adopt the readable one: #{err}")
+  assert(err.include?("1 件の写しを採用しませんでした"), "pull must report the dropped copy count (#428): #{err}")
+  assert(!err.include?("UNREADABLE-RESULT"), "pull must not print the dropped copy body")
+  assert(!File.read(path).include?("UNREADABLE-RESULT"), "the unreadable copy must not be adopted")
+
   # 履歴のない新規 packet にも採用した全 entry が published の順で戻る。
   File.unlink(path)
   comments.call([self_comment(copy), self_comment(copy(at: "2026-09-20T00:00:00Z", date: "2026-09-20", result: "FIRST-RESULT"))])
