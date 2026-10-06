@@ -137,7 +137,19 @@ module SafeGhHook
   # `\` で継続した改行は 1 つの command の中なので、分割の前に空白にする (#429。改行を区切りに
   # すると、複数行に折った 1 つの gh command が別々の segment に割れて flag や path を見落とす)。
   def gh_arg_lists(command)
-    command.gsub(/\\r?\n/, " ").split(SEGMENT_BOUNDARY).map { |segment| gh_args(tokenize(segment)) }.compact
+    join_continuations(command).split(SEGMENT_BOUNDARY).map { |segment| gh_args(tokenize(segment)) }.compact
+  end
+
+  # comment を含む行の行末の `\` は継続ではない (shell は comment の中の `\` を読まない)。結合すると次の行の
+  # command を comment の中に取り込んで見落とすので、行頭の `#` か空白のあとの `#` を含む行は結合しない
+  # (#429 review。quote の中の `#` は区別しない best-effort)。
+  def join_continuations(command)
+    command.each_line.map do |line|
+      next line unless line.match?(/\\r?\n\z/)
+      next line if line.match?(/(?:\A|\s)#/)
+
+      line.sub(/\\r?\n\z/, " ")
+    end.join
   end
 
   def tokenize(segment)

@@ -61,6 +61,9 @@ check("single-quoted --json body", reason("gh issue view 1 --json 'body'") == Sa
 check("continued metadata-only pr view -> nil (#429)",
       reason("gh pr view \"$pr\" \\\n  --json baseRefName,baseRefOid,headRefOid \\\n  --jq '{base_ref: .baseRefName}'").nil?)
 check("continued pr view --json state -> nil (#429)", reason("gh pr view 12 \\\n  --json state").nil?)
+# comment を含む行の行末の `\` は継続ではないので、次の行の gh を検出する (#429 review SGH-429-01)
+check("comment line ending with backslash keeps the next gh (#429)", reason("# inspect PR \\\ngh pr view 12") == SafeGhHook::REASON_VIEW)
+check("trailing comment with backslash keeps the next gh (#429)", reason("ls # note \\\ngh pr view 12") == SafeGhHook::REASON_VIEW)
 check("issue view --json safe fields", reason("gh pr view 5 --json state,mergeable -q .state").nil?)
 check("plain issue list (title のみ)", reason("gh issue list").nil?)
 check("api user (untrusted でない)", reason("gh api user").nil?)
