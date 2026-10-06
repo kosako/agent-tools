@@ -53,9 +53,11 @@ module SafeGhHook
   ENV_ASSIGN = /\A[A-Za-z_][A-Za-z0-9_]*=/.freeze
 
   # --json で untrusted 本文を引くフィールド。title は安全側だが injection 面ではあるので
-  # safe-gh が withhold する一方、ここでは noise を避けて body / comments のみを steer 対象に
-  # する (honest-label: title だけの読みは検出しない。docs「PreToolUse hook」節の検出項)。
-  UNTRUSTED_JSON_FIELDS = %w[body comments].freeze
+  # safe-gh が withhold する一方、ここでは noise を避けて本文を返すものだけを steer 対象にする:
+  # body / comments、他人の review 本文を含む reviews / latestReviews、commit message を含む commits
+  # (#429。safe-gh は pr reviews で他人の review 本文を withhold している)。honest-label: title だけの
+  # 読みは検出しない。docs「PreToolUse hook」節の検出項。
+  UNTRUSTED_JSON_FIELDS = %w[body comments reviews latestReviews commits].freeze
 
   # `gh api` の path に現れたら untrusted な read とみなす語 (issues / pulls / comments
   # endpoint は他人由来の本文・コメントを返す)。
@@ -132,8 +134,10 @@ module SafeGhHook
 
   # 各 segment の先頭コマンドが `gh` のものについて、その引数列を集める。
   # "ls && gh pr view 2 --comments" -> [["pr","view","2","--comments"]]
+  # `\` で継続した改行は 1 つの command の中なので、分割の前に空白にする (#429。改行を区切りに
+  # すると、複数行に折った 1 つの gh command が別々の segment に割れて flag や path を見落とす)。
   def gh_arg_lists(command)
-    command.split(SEGMENT_BOUNDARY).map { |segment| gh_args(tokenize(segment)) }.compact
+    command.gsub(/\\r?\n/, " ").split(SEGMENT_BOUNDARY).map { |segment| gh_args(tokenize(segment)) }.compact
   end
 
   def tokenize(segment)

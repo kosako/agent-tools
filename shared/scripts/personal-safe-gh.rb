@@ -342,8 +342,12 @@ module SafeGh
 
     repo, repo_ok = extract_repo_flag(args)
     noun, verb, number = args
+    # -R を取り除いた後は、ちょうど <noun> <verb> <number> の 3 個だけを受ける (#429)。余分な引数、
+    # 2 個目の -R、`--repo=OWNER/REPO` / `-ROWNER/REPO` の連結形、`-` で始まる残りの token を黙って
+    # 無視すると、指定した repo ではなく cwd の repo の同じ番号を読んでしまう。
+    exact = args.size == 3 && args.none? { |a| a.start_with?("-") }
     # -R が与えられたなら、その場で形を検査する (空文字で現在 repo へ黙って倒さない)。
-    unless repo_ok && (repo.nil? || valid_repo?(repo)) && valid_invocation?(noun, verb, number)
+    unless repo_ok && exact && (repo.nil? || valid_repo?(repo)) && valid_invocation?(noun, verb, number)
       print_usage
       return 2
     end

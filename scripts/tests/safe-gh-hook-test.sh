@@ -35,6 +35,14 @@ check("api pulls -> api", reason("gh api repos/o/r/pulls/9") == SafeGhHook::REAS
 # env 前置・segment・subshell・pipe を跨いでも検出する
 check("env prefix", reason("GH_PAGER=cat gh issue view 1") == SafeGhHook::REASON_VIEW)
 check("after &&", reason("ls && gh pr view 2 --comments") == SafeGhHook::REASON_COMMENTS)
+# `\` で継続した改行は 1 つの command の中 (#429)
+check("continued api comments -> api (#429)", reason("gh api \\\n  repos/o/r/issues/1/comments") == SafeGhHook::REASON_API)
+check("continued issue list --json body -> list (#429)", reason("gh issue list \\\n  --json number,body") == SafeGhHook::REASON_LIST)
+# --json の reviews / latestReviews / commits も他人の本文を返す (#429)
+%w[reviews latestReviews commits].each do |f|
+  check("pr view --json #{f} -> view (#429)", reason("gh pr view 12 --json #{f}") == SafeGhHook::REASON_VIEW)
+end
+check("pr list --json number,reviews -> list (#429)", reason("gh pr list --json number,reviews") == SafeGhHook::REASON_LIST)
 check("before pipe", reason("gh pr view 2 | cat") == SafeGhHook::REASON_VIEW)
 check("command substitution", reason("x=$(gh issue view 9)") == SafeGhHook::REASON_VIEW)
 # api の path を flag 値と取り違えない
@@ -49,6 +57,10 @@ check("quoted --json body", reason('gh issue view 1 --json "body,comments"') == 
 check("single-quoted --json body", reason("gh issue view 1 --json 'body'") == SafeGhHook::REASON_VIEW)
 
 # ---- untrusted_gh_read_reason: 検出しない (negative) ----
+# `\` で継続した metadata だけの read は、1 行のときと同じく検出しない (#429。review-request の手順の形)
+check("continued metadata-only pr view -> nil (#429)",
+      reason("gh pr view \"$pr\" \\\n  --json baseRefName,baseRefOid,headRefOid \\\n  --jq '{base_ref: .baseRefName}'").nil?)
+check("continued pr view --json state -> nil (#429)", reason("gh pr view 12 \\\n  --json state").nil?)
 check("issue view --json safe fields", reason("gh pr view 5 --json state,mergeable -q .state").nil?)
 check("plain issue list (title のみ)", reason("gh issue list").nil?)
 check("api user (untrusted でない)", reason("gh api user").nil?)
