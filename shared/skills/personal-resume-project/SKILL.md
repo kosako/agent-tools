@@ -152,7 +152,9 @@ continue-work / new-work では、次の一手が複数ありうる、scope が�
 再確認で止まらず、その範囲の作業へ進みます。
 
 continue-work で packet のある Issue を続けるときは、その packet の `依頼` (受け入れ条件・制約) を
-scope として読み、`結果` の最新節と `次の入口` から再開します。ただし packet の `worker` が今の agent と
+scope として読み、`結果` の最新節と `次の入口` から再開します。続ける packet は、起動 prompt が「packet #N で
+続けて」のように名指ししたものだけです (手順 2 の規則)。名指しの無い「前回の続き」で packet を見つけたときは、
+その Issue を候補として示して確認し、確認までは `依頼` を scope として着手しません。ただし packet の `worker` が今の agent と
 違うとき (例: Codex の worker が limit で止まった packet を Claude の session で再開する) は、今の agent が
 同じ branch に commit を積みません。`personal-project-operating-loop` の「割当」の規則 1 (1 PR = 1 author)
 を当て、元の worker に同じ branch で続けさせる (Codex なら `personal-codex-worker` で起動し直す。reset

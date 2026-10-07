@@ -4,7 +4,8 @@
 #   切り出し、sh と zsh で走らせる。
 # - note が無い → absent / untracked な regular file → ok / 同じ名前で tracked → reject /
 #   大文字小文字だけ違う名前で tracked → reject / symlink → reject / git 管理外の directory → reject /
-#   index を読めない → reject / 環境に GIT_LITERAL_PATHSPECS があっても tracked なら reject。
+#   index を読めない → reject / 環境に GIT_LITERAL_PATHSPECS があっても tracked なら reject /
+#   repo の subdir から走らせても root の note を見る / git 管理外で note が無い → reject (#426)。
 # - 大文字小文字だけ違う名前の case は、大文字小文字を区別しない file system (違う大文字小文字の名前で同じ
 #   file を開ける) のときだけ意味があるので、そうでなければ skip を明示する。
 # 引数で skill の directory か SKILL.md を差し替えられる (変異での確認用)。
@@ -185,6 +186,29 @@ for shell in sh zsh; do
   git -C "$repo" add -- "$note"
   run_check "$repo" GIT_LITERAL_PATHSPECS=1
   expect reject "環境に GIT_LITERAL_PATHSPECS=1 があるときの同じ名前で tracked"
+
+  # (i)〜(k) は repo root の解決 (rev-parse --show-toplevel と cd) を確かめる (#426)。root を解決しないと、
+  # subdir では subdir の同名 file を見る / root の note を見つけない、git 管理外では note が無いと absent になる。
+  # (i) repo の subdir から: root の note は tracked、subdir に untracked な同名 file がある。
+  new_repo
+  printf 'note\n' > "$repo/$note"
+  git -C "$repo" add -- "$note"
+  mkdir -p "$repo/sub/dir"
+  printf 'decoy\n' > "$repo/sub/dir/$note"
+  run_check "$repo/sub/dir"
+  expect reject "subdir から走らせ、root の note が tracked (subdir の同名 file を見ない)"
+
+  # (j) repo の subdir から: root の note は untracked な regular file、subdir には無い。
+  new_repo
+  printf 'note\n' > "$repo/$note"
+  mkdir -p "$repo/sub"
+  run_check "$repo/sub"
+  expect ok "subdir から走らせ、root の note が untracked (root の note を見る)"
+
+  # (k) git 管理外の directory で note も無い (root を解決できないので、file の有無を見る前に reject)。
+  mkdir -p "$tmp/nogit-empty"
+  run_check "$tmp/nogit-empty"
+  expect reject "git 管理外の directory で note が無い"
 done
 [ "$ran" -gt 0 ] || fail "検査の command を走らせる shell (sh / zsh) が無い"
 
