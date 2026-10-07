@@ -24,7 +24,8 @@
         { "id": "invokes-3-strike", "text": "3つ外れたら立ち止まる規律を発動している" },
         { "id": "suspects-framing", "text": "前提/アーキテクチャの誤りを疑い、枠組みを見直す方向に振っている" },
         { "id": "no-more-guessing", "text": "さらなる当てずっぽうの書き換えをそのまま推奨していない" },
-        { "id": "diagnose-only-mode", "text": "修正の依頼が無い「直らない」なので diagnose-only と判定し、自分で source / config / tracked file を書き換えていない" }
+        { "id": "diagnose-only-mode", "text": "修正の依頼が無い「直らない」なので diagnose-only と判定している" },
+        { "id": "no-file-change", "text": "自分で source / config / tracked file を書き換えていない" }
       ]
     },
     {

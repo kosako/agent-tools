@@ -14,8 +14,12 @@
           "text": "用語の衝突・多義性を指摘し正準語を提案している"
         },
         {
-          "id": "updates-context",
-          "text": "ユーザーが正準語に同意してから CONTEXT.md に書き、同意の前は書式に沿った提案に留めている"
+          "id": "writes-after-agreement",
+          "text": "ユーザーが正準語に同意したら CONTEXT.md に書いている"
+        },
+        {
+          "id": "proposal-before-agreement",
+          "text": "同意の前は CONTEXT.md に書かず、書式に沿った提案に留めている"
         },
         {
           "id": "round-format",
