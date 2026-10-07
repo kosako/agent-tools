@@ -97,7 +97,8 @@ public に出せない情報だからです。固定名 `.agent-context.local.md
 - **workspace (packet + herdr)**: 配備済みの `personal-packet list --json` (`<tool home>/agent-tools/
   scripts/personal-packet`) で、この repo の packet (`.agent-packets/<issue>.md`、規約は agent-tools の
   `docs/agent-packets.md`) のうち open / blocked / review のものを出します。`unpublished` が立って
-  いれば「Issue コメントへ未 publish の追記がある」と読みます。exit 1 (壊れた packet) は warning を
+  いれば「Issue コメントへ未 publish の追記がある」と読みます。exit 1 (壊れた packet、または読まなかった packet。
+  git で tracked / symlink の packet は現在地として出さず、path と理由だけが warning に出る) は warning を
   そのまま提示に含めます。`personal-packet` が未配備なら、規約の置き場 (main worktree root の
   `.agent-packets/*.md`) を直接読んで frontmatter (issue / state / worker / updated / published /
   run / tab) を拾い、未 publish は「`published` が無い、または `updated > published`」で判定します。

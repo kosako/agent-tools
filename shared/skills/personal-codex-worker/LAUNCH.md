@@ -264,7 +264,7 @@ tab: "#<issue>"    # 引用符が要る (無いと `#` 以降が YAML の commen
 
 ```sh
 # list の終了コードを pipe で失わないよう、出力を受けてから照合する。exit 1 (どれかの packet が
-# 壊れている) も止める: 壊れた packet の中に他の Issue の未回収の記録が隠れうる
+# 壊れている、または読まなかった packet がある) も止める: 壊れた packet の中に他の Issue の未回収の記録が隠れうる
 packets=$("$packet_cli" list --json --all) || exit 1
 printf '%s' "$packets" \
   | jq -e --argjson issue "$issue" --arg run "$run" --arg tab "#$issue" \

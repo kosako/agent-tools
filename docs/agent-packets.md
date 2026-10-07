@@ -210,17 +210,20 @@ worker 委譲時の `pull` は orchestrator が main repository 側で行い、�
   識別する。見出しが同じでも本文が異なれば別 entry として追記し、local に同じ見出しの
   複数 entry があっても保持する。見出し・本文が一致する entry は、HTML comment 除去と
   前後空白の strip をした本文が一致するときだけ重複として追記しない。
-- `次の入口` は最新の写しの `published` が local より新しければ上書きする。local に
-  `published` がなければ写しを採用し、同時刻・古い写しでは local を保つ。state / worker も
-  同じ判断で更新する。最新の写しに次の入口がない場合は空にする。
+- **分岐したら止める** (#412): local に未 publish の更新 (`published` 無し、または `updated > published`) があり、
+  最新の写しの `published` が local の `published` より新しい (local に `published` が無いときは写しがあれば)
+  ときは、両方で書かれているので上書きせず exit 2 で止める (`--dry-run` も同じ)。local を先に publish するか、
+  local を退避してから pull するかは人が決める。
+- `次の入口` は最新の写しの `published` が local より新しければ上書きする。同時刻・古い写しでは
+  local を保つ。state / worker も同じ判断で更新する。最新の写しに次の入口がない場合は空にする。
 - `依頼` は既存 local の節を保持し、節が無い場合だけ `personal-safe-gh issue view` の self
   本文から起こす。Issue 本文の行頭 `## ` は 4 空白で字下げし、packet の節境界と区別する。
   本文が withhold されていれば exit 2 で止める。
 - title / branch / pr / run / tab / last_run は既存 local を保持する (run / tab / last_run は写しに載らない)。新規 title は Issue の title、state / worker は
   最新の写しから取る。`updated` は local の `updated` と最新写しの `published` の大きい方、
   `published` は採用した最新写しの日時 (同時刻・古い写しなら local の日時) にする。新規 packet
-  は両方とも写しの日時にする。local が未 publish (`published` 無し、または `updated > published`)
-  なら、その状態を pull 後も保つ。必要なら `updated` を `published` より 1 秒先に置く。
+  は両方とも写しの日時にする。未 publish の local は、分岐していなければ写しより新しいので、pull 後も
+  未 publish のまま残る。
 - 書き込み前に frontmatter と 3 節を読み直して検証する。壊れた local packet、reader 不在・失敗、
   不正な envelope は exit 2。既存 file は一時 file を書き切ってから差し替え、新規 file は
   内容を確定してから作成する。更新先の検査 (置き場の「symlink / tracked の packet は誰も更新しない」)
@@ -238,7 +241,7 @@ file で行い、command 文字列へ inline 展開しない。
 | command | すること | exit |
 |---|---|---|
 | `dir` | packet dir を出す (main worktree root に固定。linked worktree からでも同じ) | 0 / 2 (git 外) |
-| `list [--json] [--all]` | frontmatter を読んで一覧。既定は open / blocked / review だけ、`--all` で done も。`updated > published` (または未 publish) を `unpublished` で示す。起動の記録があれば `run` / `tab` と `run_status` を出す (text は `[run: <status>]`)。`--json` には `last_run` も出す | 0 / 1 (壊れた packet あり。warning を出し、健全な行は出す) / 2 |
+| `list [--json] [--all]` | frontmatter を読んで一覧。既定は open / blocked / review だけ、`--all` で done も。`updated > published` (または未 publish) を `unpublished` で示す。起動の記録があれば `run` / `tab` と `run_status` を出す (text は `[run: <status>]`)。`--json` には `last_run` も出す。`check` が拒む packet (symlink / regular file でない / git で tracked) は中身を読まずに飛ばし、path と理由だけを warning に出す (#412。packet dir が symlink、または tracked かを判定できないときは 1 件も出さない) | 0 / 1 (壊れた packet か、読まなかった packet がある。warning を出し、健全な行は出す) / 2 |
 | `check <issue>` | packet を書く前の更新先の検査 (置き場の「symlink / tracked の packet は誰も更新しない」)。通れば packet の path (main worktree の root の実体から組んだもの) を 1 行出す。packet が無い (これから作る) ときも、dir と index を見て通れば出す (file も dir も作らない) | 0 / 1 (拒否。理由を stderr に出す) / 2 (判定できない: git の外・git の失敗・repository / index を選ぶ環境変数の継承・usage) |
 | `publish <issue> [--repo OWNER/REPO] [--dry-run]` | `結果` の最新節 + `次の入口` を marker 付きで合成 → 同じ directory の `personal-public-safety-gate --stdin` に通す → **exit 0 のときだけ** `gh issue comment` で投稿 → frontmatter の `published` を更新 | 0 / 1 (gate が止めた) / 2 (検査できない・gate 不在・gh 不在 / 失敗・入力エラー・更新先の検査に落ちた) |
 | `pull <issue> [--repo OWNER/REPO] [--dry-run]` | self コメントの有効な写しを取り込んで packet を再構成。`--dry-run` は全文を stdout に出す | 0 / 1 (採用できる写しなし) / 2 (reader / 入力 / 保存エラー・更新先の検査に落ちた) |

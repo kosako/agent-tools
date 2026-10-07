@@ -349,13 +349,30 @@ module Packet
   # ---- list ------------------------------------------------------------------
 
   # [packets, broken_messages]。dir が無ければ空 (packet 未運用の repo は正常)。
+  # check (#386) と同じ規則で、symlink の packet dir / packet、regular file でない packet、git で tracked な
+  # packet は読まずに飛ばし、path と理由だけを broken に入れる (#412。中身を出さず、run の path も stat しない)。
   def list(dir, all:)
-    return [[], []] unless Dir.exist?(dir)
+    dir_st = lstat_or_nil(dir)
+    return [[], []] if dir_st.nil?
+    return [[], ["#{dir}: packet dir が symlink なので読みませんでした"]] if dir_st.symlink?
+    return [[], []] unless dir_st.directory?
+
+    begin
+      tracked = tracked_packet_names
+    rescue Error => e
+      return [[], ["#{dir}: #{e.message}。一覧を出しません"]]
+    end
 
     packets = []
     broken = []
     Dir.children(dir).select { |n| n.match?(FILE_RE) }.sort_by(&:to_i).each do |name|
-      packets << parse(File.join(dir, name))
+      path = File.join(dir, name)
+      reason = skip_reason(path, name, tracked)
+      if reason
+        broken << "#{path}: 読みませんでした (#{reason})"
+        next
+      end
+      packets << parse(path)
     rescue Error => e
       broken << e.message
     rescue SystemCallError => e
@@ -367,6 +384,37 @@ module Packet
     end
     packets.select! { |p| ACTIVE_STATES.include?(p.state) } unless all
     [packets, broken]
+  end
+
+  # main worktree の index で packet dir の下にある tracked な entry の名前 (小文字)。packet dir 自体が tracked
+  # (submodule の gitlink など) なら :all。git の呼び出しは 1 回。判定の規則は tracked? と同じ (`:(icase)`、
+  # GIT_LITERAL_PATHSPECS の打ち消し、repository を選ぶ環境変数の継承は判定できない扱い)。
+  def tracked_packet_names
+    inherited = GIT_REPO_ENV.select { |k| ENV.key?(k) }
+    unless inherited.empty?
+      raise Error, "#{inherited.join(' / ')} を継承しているので packet が git で tracked かを判定できません"
+    end
+
+    out, _err, status = Open3.capture3("git", "--no-literal-pathspecs", "ls-files", "-z", "--",
+                                       ":(icase)#{DIR_NAME}", chdir: main_worktree_root)
+    unless status.success?
+      raise Error, "packet が git で tracked かを判定できません (git ls-files: exit #{status.exitstatus.inspect})"
+    end
+
+    prefix = "#{DIR_NAME.downcase}/"
+    entries = out.split("\0").map(&:downcase)
+    return :all if entries.include?(DIR_NAME.downcase)
+
+    entries.select { |e| e.start_with?(prefix) }.map { |e| e.delete_prefix(prefix) }
+  end
+
+  def skip_reason(path, name, tracked)
+    st = File.lstat(path)
+    return "symlink" if st.symlink?
+    return "regular file でない" unless st.file?
+    return "git で tracked" if tracked == :all || tracked.include?(name.downcase)
+
+    nil
   end
 
   def render_list(packets)
@@ -812,6 +860,13 @@ module Packet
     nil
   end
 
+  # local に未 publish の更新があり、写しにも local の最後の publish より後の更新がある (= 両方で書かれた) か
+  # (#412)。一度も publish していない local に写しがあるのも分岐に数える。分岐していなければ、未 publish の
+  # local は写しより新しいので local の値を保ち、updated も published より後のまま残る。
+  def diverged?(local, latest)
+    local.unpublished? && (local.published.nil? || local.published < latest.published)
+  end
+
   def pull_text(path, issue, local, copies, issue_data)
     secs = local ? sections(local.body) : {}
     request = secs["依頼"]
@@ -838,13 +893,14 @@ module Packet
       end
     end
     latest = copies.last
+    if local && diverged?(local, latest)
+      raise Error, "local に未 publish の更新があり、Issue の写しにも local の最後の publish より後の更新があります " \
+                   "(分岐)。上書きせずに止めました。local を先に publish するか、local を退避してから pull するかを決めてください"
+    end
     newer = !local || !local.published || latest.published > local.published
     following = newer ? latest.next_entry : secs.fetch("次の入口", "")
     published_at = newer ? latest.published : local.published
     updated_at = local ? [local.updated, latest.published].max : latest.published
-    if local && local.unpublished? && updated_at <= published_at
-      updated_at = published_at + 1
-    end
     data = {
       "issue" => issue,
       "title" => local ? local.title : required_string(issue_data, "title", "Issue"),

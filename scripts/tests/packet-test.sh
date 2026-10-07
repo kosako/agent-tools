@@ -259,6 +259,54 @@ out=$(cd "$empty" && "$pkt" list)
 [ "$out" = "no active packets" ] || fail "no dir should be empty list: $out"
 [ "$(cd "$empty" && "$pkt" list --json)" = "[]" ] || fail "no dir json should be []"
 
+# ---- list: tracked / symlink の packet は読まずに飛ばす (#412) ------------------------------
+# check (#386) が書き込みを拒む packet を、list も現在地として出さない。中身 (title / run) を出さず、path と
+# 理由だけを warning にして exit 1。健全な packet は出し続ける。
+skip_packet() { # path issue title
+  printf -- '---\nissue: %s\ntitle: %s\nstate: open\nworker: claude\nupdated: 2026-09-23T10:00:00+09:00\nrun: %s\n---\n\n## 結果\n\n### 2026-09-23 worker/claude\n- R\n\n## 次の入口\n\nN\n' "$2" "$3" "$tmp/skip-run-$2" > "$1"
+}
+run_list() { # cwd [list の引数...] -> rc / $tmp/ls.out / $tmp/ls.err
+  ls_cwd=$1
+  shift
+  set +e
+  (cd "$ls_cwd" && "$pkt" list "$@" > "$tmp/ls.out" 2> "$tmp/ls.err")
+  rc=$?
+  set -e
+}
+lsk="$tmp/listskip"
+git init -q "$lsk"
+mkdir -p "$lsk/.agent-packets" "$tmp/skip-outside"
+skip_packet "$lsk/.agent-packets/7.md" 7 "HEALTHY-SEVEN"
+skip_packet "$lsk/.agent-packets/8.md" 8 "TRACKED-TITLE"
+(cd "$lsk" && git add -f .agent-packets/8.md)
+skip_packet "$tmp/skip-outside/9.md" 9 "LINKED-TITLE"
+ln -s "$tmp/skip-outside/9.md" "$lsk/.agent-packets/9.md"
+for fmt in "" "--json"; do
+  run_list "$lsk" $fmt
+  [ "$rc" -eq 1 ] || fail "list $fmt with skipped packets should exit 1 (rc=$rc): $(cat "$tmp/ls.err")"
+  grep -q "HEALTHY-SEVEN" "$tmp/ls.out" || fail "list $fmt must still show the healthy packet: $(cat "$tmp/ls.out")"
+  grep -q -e "TRACKED-TITLE" -e "LINKED-TITLE" -e "skip-run-8" -e "skip-run-9" "$tmp/ls.out" "$tmp/ls.err" \
+    && fail "list $fmt must not show the content of skipped packets: $(cat "$tmp/ls.out" "$tmp/ls.err")"
+  grep -q "8.md: 読みませんでした (git で tracked)" "$tmp/ls.err" || fail "list $fmt should say the tracked packet was skipped: $(cat "$tmp/ls.err")"
+  grep -q "9.md: 読みませんでした (symlink)" "$tmp/ls.err" || fail "list $fmt should say the symlinked packet was skipped: $(cat "$tmp/ls.err")"
+done
+# packet dir 自体が symlink: 何も読まずに exit 1
+lskd="$tmp/listskipdir"
+git init -q "$lskd"
+ln -s "$lsk/.agent-packets" "$lskd/.agent-packets"
+run_list "$lskd" --json
+[ "$rc" -eq 1 ] || fail "list through a symlinked packet dir should exit 1 (rc=$rc)"
+[ "$(cat "$tmp/ls.out")" = "[]" ] || fail "list through a symlinked packet dir must not read packets: $(cat "$tmp/ls.out")"
+grep -q "packet dir が symlink なので読みませんでした" "$tmp/ls.err" || fail "list should say the packet dir is a symlink: $(cat "$tmp/ls.err")"
+# tracked かを判定できない (repository / index を選ぶ環境変数を継承): 何も出さずに exit 1
+set +e
+(cd "$lsk" && env "GIT_INDEX_FILE=$tmp/skip-other.index" "$pkt" list --json > "$tmp/ls.out" 2> "$tmp/ls.err")
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "list with GIT_INDEX_FILE inherited should exit 1 (rc=$rc)"
+[ "$(cat "$tmp/ls.out")" = "[]" ] || fail "list must not show packets when tracked cannot be determined: $(cat "$tmp/ls.out")"
+grep -q "GIT_INDEX_FILE を継承しているので" "$tmp/ls.err" || fail "list should name the inherited variable: $(cat "$tmp/ls.err")"
+
 # ---- list: 起動の記録 (run / tab。#315) ------------------------------------------------
 # run dir の状態は done.txt の有無で分ける (stat だけ)。記録の無い packet は今までと同じ。
 runrepo="$tmp/runrepo"
