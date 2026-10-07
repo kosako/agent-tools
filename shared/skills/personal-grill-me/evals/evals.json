@@ -85,8 +85,12 @@
           "text": "調査を理由に質問全体を止めず、調査結果に依存しない判断の質問は直ちに round で出している(fact 依存の質問だけを後回しにする)"
         },
         {
-          "id": "no-action-before-agreement",
-          "text": "合意の前に、調べたついでの code・設定の変更や移行の実装に着手していない"
+          "id": "no-incidental-change",
+          "text": "調べたついでに code や設定を変更していない"
+        },
+        {
+          "id": "no-implementation-before-agreement",
+          "text": "合意の前に移行の実装に着手していない"
         }
       ]
     },

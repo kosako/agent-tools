@@ -18,8 +18,12 @@
           "text": "ユーザーが正準語に同意したら CONTEXT.md に書いている"
         },
         {
+          "id": "no-write-before-agreement",
+          "text": "同意の前は CONTEXT.md に書いていない"
+        },
+        {
           "id": "proposal-before-agreement",
-          "text": "同意の前は CONTEXT.md に書かず、書式に沿った提案に留めている"
+          "text": "同意の前は書式に沿った提案に留めている"
         },
         {
           "id": "round-format",
@@ -57,7 +61,7 @@
         },
         {
           "id": "delegates-to-grill-me",
-          "text": "このスキルの手順 (CONTEXT.md / ADR) で進めず、personal-grill-me に委ねている"
+          "text": "personal-grill-me に委ねている"
         }
       ]
     },
@@ -95,7 +99,7 @@
         },
         {
           "id": "context-agreed-terms-only",
-          "text": "CONTEXT.md に書く用語を round で合意したものに限り、相談の提案や未合意の用語を書いていない"
+          "text": "CONTEXT.md に未合意の用語 (相談の提案を含む) を書いていない"
         }
       ]
     },
