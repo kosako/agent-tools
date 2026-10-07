@@ -24,6 +24,7 @@ if ARGV[2] == "--mutations"
     "read repo forwarding" => ['args = [reader, "issue", verb, issue.to_s]\\n    args += ["--repo", repo] if repo', 'args = [reader, "issue", verb, issue.to_s]'],
     "divergent pull" => ['if local && diverged?(local, latest)', 'if false'],
     "never published local" => ['local.published.nil? || local.published < latest.published', 'local.published < latest.published'],
+    "sub-second unpublished" => ['updated_at = published_at - published_at.subsec + 1', 'updated_at = updated_at'],
     "request overwrite" => ['request = secs["依頼"]', 'request = nil'],
     "stale next entry" => ['latest.published > local.published', 'true'],
     "remote H2" => [' || lines.any? { |l| l.start_with?("## ") }', ''],
@@ -338,6 +339,24 @@ Dir.mktmpdir("packet-pull-") do |tmp|
       assert(File.read(path) == local, "#{label}: local packet must not change")
     end
   end
+
+  # 小数秒の未 publish (published と同じ秒の updated) も、保存の秒の精度に丸めたあと未 publish のまま残る。
+  # 残らないと、次の新しい写しの pull が分岐の検査を素通りして local を上書きする (#412 review)。
+  comments.call([self_comment(copy)])
+  subsecond = LOCAL.sub("updated: 2026-09-21T00:00:00Z", "updated: 2026-09-22T00:00:00.5Z")
+                   .sub("published: 2026-09-21T00:00:00Z", "published: 2026-09-22T00:00:00Z")
+  File.write(path, subsecond)
+  _out, err, status = run.call("pull", "7")
+  assert(status.success?, "pull of a same-time copy onto a sub-second unpublished local: #{err}")
+  front = Packet.parse(path)
+  assert(front.unpublished? && front.updated > front.published, "sub-second unpublished local must stay unpublished after pull")
+  assert(Packet.sections(front.body)["次の入口"].strip == "LOCAL-NEXT", "same-time copy must not overwrite the sub-second local")
+  kept = File.read(path)
+  comments.call([self_comment(copy), self_comment(copy(at: "2026-09-23T00:00:00Z", date: "2026-09-23", result: "LATER-RESULT"))])
+  _out, err, status = run.call("pull", "7")
+  assert(status.exitstatus == 2 && err.include?("分岐") && File.read(path) == kept,
+         "a newer copy after the sub-second pull must stop as diverged (rc=#{status.exitstatus}): #{err}")
+  comments.call([self_comment(copy), self_comment(older), self_comment(copy)])
 
   # 同時刻 / 古い写しは次の入口と state/worker を巻き戻さない。未 publish の updated も保持。
   newer_local = LOCAL.sub("published: 2026-09-21", "published: 2026-09-23").sub("updated: 2026-09-21", "updated: 2026-09-24")

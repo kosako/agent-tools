@@ -281,6 +281,13 @@ skip_packet "$lsk/.agent-packets/8.md" 8 "TRACKED-TITLE"
 (cd "$lsk" && git add -f .agent-packets/8.md)
 skip_packet "$tmp/skip-outside/9.md" 9 "LINKED-TITLE"
 ln -s "$tmp/skip-outside/9.md" "$lsk/.agent-packets/9.md"
+# regular file でない (directory) と、大文字小文字だけ違う path で index にある packet (`:(icase)` で同じ file とみなす)
+mkdir "$lsk/.agent-packets/10.md"
+skip_packet "$lsk/.agent-packets/11.md" 11 "ICASE-TITLE"
+icase_blob=$(cd "$lsk" && git hash-object -w .agent-packets/11.md)
+(cd "$lsk" && git update-index --add --cacheinfo "100644,$icase_blob,.AGENT-PACKETS/11.md")
+# 飛ばす packet の中身を読まないこと: 読めない権限にしておく (読みに行けば「読めません」の warning になる)
+chmod 000 "$lsk/.agent-packets/8.md" "$lsk/.agent-packets/11.md" "$tmp/skip-outside/9.md"
 for fmt in "" "--json"; do
   run_list "$lsk" $fmt
   [ "$rc" -eq 1 ] || fail "list $fmt with skipped packets should exit 1 (rc=$rc): $(cat "$tmp/ls.err")"
@@ -289,7 +296,33 @@ for fmt in "" "--json"; do
     && fail "list $fmt must not show the content of skipped packets: $(cat "$tmp/ls.out" "$tmp/ls.err")"
   grep -q "8.md: 読みませんでした (git で tracked)" "$tmp/ls.err" || fail "list $fmt should say the tracked packet was skipped: $(cat "$tmp/ls.err")"
   grep -q "9.md: 読みませんでした (symlink)" "$tmp/ls.err" || fail "list $fmt should say the symlinked packet was skipped: $(cat "$tmp/ls.err")"
+  grep -q "10.md: 読みませんでした (regular file でない)" "$tmp/ls.err" || fail "list $fmt should say the non-regular packet was skipped: $(cat "$tmp/ls.err")"
+  grep -q "11.md: 読みませんでした (git で tracked)" "$tmp/ls.err" || fail "list $fmt should skip a packet tracked under a different case: $(cat "$tmp/ls.err")"
+  grep -q "読めません" "$tmp/ls.err" && fail "list $fmt must not try to read skipped packets: $(cat "$tmp/ls.err")"
+  grep -q "ICASE-TITLE" "$tmp/ls.out" && fail "list $fmt must not show the case-variant tracked packet: $(cat "$tmp/ls.out")"
 done
+chmod 600 "$lsk/.agent-packets/8.md" "$lsk/.agent-packets/11.md" "$tmp/skip-outside/9.md"
+# packet dir 自体が tracked (submodule の gitlink): どの packet も読まない
+lskg="$tmp/listskipgitlink"
+git init -q "$lskg"
+(cd "$lskg" && git commit -q --allow-empty -m seed)
+mkdir "$lskg/.agent-packets"
+skip_packet "$lskg/.agent-packets/7.md" 7 "GITLINK-SEVEN"
+(cd "$lskg" && git update-index --add --cacheinfo "160000,$(git rev-parse HEAD),.agent-packets")
+run_list "$lskg" --json
+[ "$rc" -eq 1 ] || fail "list under a gitlink packet dir should exit 1 (rc=$rc)"
+[ "$(cat "$tmp/ls.out")" = "[]" ] || fail "list under a gitlink packet dir must not show packets: $(cat "$tmp/ls.out")"
+grep -q "7.md: 読みませんでした (git で tracked)" "$tmp/ls.err" || fail "list should say the packet under a gitlink was skipped: $(cat "$tmp/ls.err")"
+# tracked かを判定できない (index が壊れていて git ls-files が失敗): 何も出さずに exit 1
+lskb="$tmp/listskipbroken"
+git init -q "$lskb"
+mkdir "$lskb/.agent-packets"
+skip_packet "$lskb/.agent-packets/7.md" 7 "BROKEN-INDEX-SEVEN"
+printf 'broken' > "$lskb/.git/index"
+run_list "$lskb" --json
+[ "$rc" -eq 1 ] || fail "list with an unreadable index should exit 1 (rc=$rc)"
+[ "$(cat "$tmp/ls.out")" = "[]" ] || fail "list with an unreadable index must not show packets: $(cat "$tmp/ls.out")"
+grep -q "判定できません" "$tmp/ls.err" || fail "list should say tracked cannot be determined: $(cat "$tmp/ls.err")"
 # packet dir 自体が symlink: 何も読まずに exit 1
 lskd="$tmp/listskipdir"
 git init -q "$lskd"
@@ -306,6 +339,14 @@ set -e
 [ "$rc" -eq 1 ] || fail "list with GIT_INDEX_FILE inherited should exit 1 (rc=$rc)"
 [ "$(cat "$tmp/ls.out")" = "[]" ] || fail "list must not show packets when tracked cannot be determined: $(cat "$tmp/ls.out")"
 grep -q "GIT_INDEX_FILE を継承しているので" "$tmp/ls.err" || fail "list should name the inherited variable: $(cat "$tmp/ls.err")"
+# 継承した GIT_DIR が packet dir の無い repository を指していても、「packet 未運用」(0 件・exit 0) にしない
+set +e
+(cd "$lsk" && env "GIT_DIR=$empty/.git" "$pkt" list --json > "$tmp/ls.out" 2> "$tmp/ls.err")
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "list with GIT_DIR inherited (no packet dir there) should exit 1, not report no packets (rc=$rc): $(cat "$tmp/ls.err")"
+[ "$(cat "$tmp/ls.out")" = "[]" ] || fail "list with GIT_DIR inherited must not show packets: $(cat "$tmp/ls.out")"
+grep -q "GIT_DIR を継承しているので" "$tmp/ls.err" || fail "list should name GIT_DIR: $(cat "$tmp/ls.err")"
 
 # ---- list: 起動の記録 (run / tab。#315) ------------------------------------------------
 # run dir の状態は done.txt の有無で分ける (stat だけ)。記録の無い packet は今までと同じ。

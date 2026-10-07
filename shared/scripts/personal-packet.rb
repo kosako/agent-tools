@@ -352,6 +352,13 @@ module Packet
   # check (#386) と同じ規則で、symlink の packet dir / packet、regular file でない packet、git で tracked な
   # packet は読まずに飛ばし、path と理由だけを broken に入れる (#412。中身を出さず、run の path も stat しない)。
   def list(dir, all:)
+    # repository / index を選ぶ環境変数を継承していると、dir 自体が別の repository を指しうる。dir の有無を
+    # 見る前に止め、「packet 未運用」(dir が無い) と取り違えない。
+    inherited = GIT_REPO_ENV.select { |k| ENV.key?(k) }
+    unless inherited.empty?
+      return [[], ["#{inherited.join(' / ')} を継承しているので packet が git で tracked かを判定できません。一覧を出しません"]]
+    end
+
     dir_st = lstat_or_nil(dir)
     return [[], []] if dir_st.nil?
     return [[], ["#{dir}: packet dir が symlink なので読みませんでした"]] if dir_st.symlink?
@@ -388,13 +395,8 @@ module Packet
 
   # main worktree の index で packet dir の下にある tracked な entry の名前 (小文字)。packet dir 自体が tracked
   # (submodule の gitlink など) なら :all。git の呼び出しは 1 回。判定の規則は tracked? と同じ (`:(icase)`、
-  # GIT_LITERAL_PATHSPECS の打ち消し、repository を選ぶ環境変数の継承は判定できない扱い)。
+  # GIT_LITERAL_PATHSPECS の打ち消し)。repository を選ぶ環境変数の継承は、呼び出し元の list が先に止める。
   def tracked_packet_names
-    inherited = GIT_REPO_ENV.select { |k| ENV.key?(k) }
-    unless inherited.empty?
-      raise Error, "#{inherited.join(' / ')} を継承しているので packet が git で tracked かを判定できません"
-    end
-
     out, _err, status = Open3.capture3("git", "--no-literal-pathspecs", "ls-files", "-z", "--",
                                        ":(icase)#{DIR_NAME}", chdir: main_worktree_root)
     unless status.success?
@@ -901,6 +903,11 @@ module Packet
     following = newer ? latest.next_entry : secs.fetch("次の入口", "")
     published_at = newer ? latest.published : local.published
     updated_at = local ? [local.updated, latest.published].max : latest.published
+    # 未 publish の local は、保存する秒の精度 (iso8601 は小数秒を落とす) に丸めたあとも updated > published を
+    # 保つ。保たないと未 publish の印が消え、次の pull の分岐の検査を素通りする (#412)。
+    if local && local.unpublished? && updated_at.to_i <= published_at.to_i
+      updated_at = published_at - published_at.subsec + 1
+    end
     data = {
       "issue" => issue,
       "title" => local ? local.title : required_string(issue_data, "title", "Issue"),
