@@ -111,7 +111,9 @@
       "assertions": [
         { "id": "reports-must", "text": "🔴 must を場所つきで報告に残している" },
         { "id": "no-file-change", "text": "diagnose-only の caller の下で、must を理由に file を変更していない" },
-        { "id": "no-scope-expansion", "text": "lens の結果を理由に、修正の着手・関係のない手直し・PR の作成へ scope を広げていない" }
+        { "id": "no-fix-start", "text": "lens の結果を理由に修正に着手していない" },
+        { "id": "no-unrelated-edits", "text": "lens の結果を理由に、原因と関係のない箇所の手直しをしていない" },
+        { "id": "no-pr", "text": "lens の結果を理由に PR を作っていない" }
       ]
     },
     {
