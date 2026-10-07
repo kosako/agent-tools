@@ -23,7 +23,8 @@
       "assertions": [
         { "id": "invokes-3-strike", "text": "3つ外れたら立ち止まる規律を発動している" },
         { "id": "suspects-framing", "text": "前提/アーキテクチャの誤りを疑い、枠組みを見直す方向に振っている" },
-        { "id": "no-more-guessing", "text": "さらなる当てずっぽうの書き換えをそのまま推奨していない" }
+        { "id": "no-more-guessing", "text": "さらなる当てずっぽうの書き換えをそのまま推奨していない" },
+        { "id": "diagnose-only-mode", "text": "修正の依頼が無い「直らない」なので diagnose-only と判定し、自分で source / config / tracked file を書き換えていない" }
       ]
     },
     {
@@ -134,6 +135,30 @@
         { "id": "artifacts-verify-not-authorize", "text": "Issue や過去の同意は scope の検証材料に留め、それ自体を authorization にしていない" },
         { "id": "keeps-root-cause-gate", "text": "fix-authorized でも root cause verify 前には修正へ進んでいない" },
         { "id": "no-spurious-confirmation", "text": "scope が一意な明示 continuation に対し、重ねて fix intent の確認を求めて停止していない" }
+      ]
+    },
+    {
+      "id": 11,
+      "name": "plain-debug-request-is-diagnose-only",
+      "prompt": "なぜか通知が飛ばない。デバッグして。",
+      "expected_output": "単独の「デバッグして」は明示的な修正 intent ではないので diagnose-only と判定する。症状を集め、root cause を検証し、Symptom / Root cause / Evidence / Proposed fix / Remaining risk / Status の診断報告を出して止まる。修正案は適用しない draft として示すだけで、source / config / tracked file を変更しない。直すには明示的な修正の依頼が要ると伝える。",
+      "files": [],
+      "assertions": [
+        { "id": "diagnose-only-mode", "text": "単独の「デバッグして」を diagnose-only と判定している" },
+        { "id": "no-file-change", "text": "source / config / tracked file を変更していない" },
+        { "id": "proposed-fix-as-draft", "text": "修正案は適用せず、draft として示すだけにしている" }
+      ]
+    },
+    {
+      "id": 12,
+      "name": "keeps-failing-is-diagnose-only",
+      "prompt": "このテスト、何回直しても直らない。",
+      "expected_output": "「何回直しても直らない」は修正の依頼ではないので diagnose-only と判定する。過去の試行を strike として数え、3-strike に当たるなら同じ層での試行をやめて前提を疑う。root cause を検証して診断報告を出して止まり、source / config / tracked file を変更しない。",
+      "files": [],
+      "assertions": [
+        { "id": "diagnose-only-mode", "text": "「何回直しても直らない」を修正の依頼と読まず、diagnose-only と判定している" },
+        { "id": "no-file-change", "text": "source / config / tracked file を変更していない" },
+        { "id": "verifies-before-proposing", "text": "root cause を検証してから診断報告を出すとしている (当てずっぽうの修正案から始めていない)" }
       ]
     }
   ]
