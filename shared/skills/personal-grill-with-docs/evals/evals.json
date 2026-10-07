@@ -60,6 +60,10 @@
           "text": "成果物を残さない素の壁打ちにドメインモデル生成を押し付けていない"
         },
         {
+          "id": "no-docs-procedure",
+          "text": "CONTEXT.md / ADR を作成・更新していない"
+        },
+        {
           "id": "delegates-to-grill-me",
           "text": "personal-grill-me に委ねている"
         }
