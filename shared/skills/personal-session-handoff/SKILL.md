@@ -129,9 +129,10 @@ write authorization と具体的な記録先の両方が trusted な指示で確
 
 1. **Issue コメントへの publish** (write-authorized のとき): `personal-packet publish <issue>` を
    使います (`結果` の最新節 + `次の入口` を marker 付きで写す)。投稿されるのは同じ directory の
-   public-safety gate が exit 0 を返した本文だけで、exit 1 (definite) / exit 2 (検査できない・gh に
-   到達できない) では投稿されません。止まった理由と、Claude か人が publish する必要があるかを
-   報告します。
+   public-safety gate が exit 0 を返した本文だけで、exit 1 (definite、または gate の警告。#413) / exit 2
+   (検査できない・gh に到達できない) では投稿されません。止まった理由と、Claude か人が publish する必要が
+   あるかを報告します。警告で止まったときは、`--dry-run` の本文と警告を人に見せ、人が意図した内容だと
+   確かめたときだけ `--accept-warnings` を付けて publish し直します (自分の判断で付けない)。
 2. **planning ドキュメント** (write-authorized のとき): project 単位の判断ログとダッシュボードだけを
    更新します。Issue 単位の細かい進捗は packet と Issue コメントに任せ、二重に書きません。
 

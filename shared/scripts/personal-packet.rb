@@ -14,10 +14,12 @@
 #   personal-packet check <issue>
 #       packet を書く前の更新先の検査 (#386)。通れば packet の path を 1 行出して exit 0、拒めば理由を
 #       出して exit 1、判定できなければ exit 2。publish / pull も書く前に同じ検査を通す。
-#   personal-packet publish <issue> [--repo OWNER/REPO] [--dry-run]
+#   personal-packet publish <issue> [--repo OWNER/REPO] [--dry-run] [--accept-warnings]
 #       `## 結果` の最新節 + `## 次の入口` を marker 付きで 1 コメントにまとめ、同じ directory の
 #       personal-public-safety-gate (--stdin) に通し、exit 0 のときだけ `gh issue comment` で
 #       投稿して frontmatter の published を更新する。--dry-run は検査までして本文を stdout に出す。
+#       gate が警告 (suspicious) を出したら、exit 0 でも投稿せず exit 1 で止める (#413)。人が --dry-run の
+#       本文と警告を確かめたあと、--accept-warnings を付けたときだけ投稿する。
 #   personal-packet pull <issue> [--repo OWNER/REPO] [--dry-run]
 #       personal-safe-gh の self コメントから検証できる写しを取り込み、local packet を再構成する。
 #       --dry-run は再構成後の全文を stdout に出す。写しも再構成した packet も data として扱う。
@@ -65,6 +67,8 @@ module Packet
   class Error < StandardError; end
   # gate が definite finding で止めた (exit 1)。診断は gate 自身が stderr に出している。
   class Rejected < StandardError; end
+  # gate が exit 0 で警告 (suspicious) を出した。人の確認なしには投稿しない (#413)。
+  class Warned < StandardError; end
   class NoCopy < StandardError; end
   # packet の更新先が検査を通らない (#386)。check は exit 1、書き込む subcommand (publish / pull) は
   # Error と同じ exit 2 で止まる。
@@ -539,7 +543,8 @@ module Packet
     File.join(File.dirname(File.realpath(__FILE__)), GATE_NAME)
   end
 
-  # exit 0 だけを「投稿してよい」とする。1 は Rejected、2 (検査できていない) は Error。
+  # exit 0 だけを「投稿してよい」とする。1 は Rejected、2 (検査できていない) は Error。exit 0 のとき、
+  # 警告 (suspicious) の行を出したかを返す (投稿してよいかは呼び出し側が人の確認で決める。#413)。
   def scan(text)
     gate = gate_path
     raise Error, "#{GATE_NAME} が同じ directory にありません (配備を確認してください)" unless File.executable?(gate)
@@ -547,7 +552,7 @@ module Packet
     _out, err, status = Open3.capture3(gate, "--stdin", stdin_data: text)
     $stderr.print err unless err.empty?
     case status.exitstatus
-    when 0 then nil
+    when 0 then err.each_line.any? { |line| line.start_with?("public-safety-gate: warning:") }
     when 1 then raise Rejected
     else raise Error, "#{GATE_NAME} が検査できませんでした (exit #{status.exitstatus.inspect})。投稿しません"
     end
@@ -665,7 +670,7 @@ module Packet
     %i[issue title branch pr state worker run tab last_run body].all? { |k| a[k] == b[k] } && a.updated.to_i == b.updated.to_i
   end
 
-  def publish(dir, issue, repo:, dry_run:)
+  def publish(dir, issue, repo:, dry_run:, accept_warnings: false)
     # 更新先の検査 (#386)。拒んだら読みも投稿もしない (投稿だけ済んで packet を更新できない経路を作らない)
     check_target!(dir, issue)
     path = File.join(dir, "#{issue}.md")
@@ -681,11 +686,12 @@ module Packet
       raise Error, "#{path}: この写しは pull で読めない形です。結果は「### YYYY-MM-DD 役割/agent」の entry 見出しで" \
                    "始め、本文に「**次の入口**」や「**結果 (最新節)**」だけの行を置かないでください。投稿しません"
     end
-    scan(text)
+    warned = scan(text)
     if dry_run
       $stdout.print text
       return
     end
+    raise Warned if warned && !accept_warnings
 
     # 投稿前に更新後の packet を作り、読み直して published が at になり、それ以外の field と
     # body が元と同じことまで確かめる。投稿だけ成功して更新が失敗する経路 (再試行で二重投稿) と、
@@ -985,12 +991,13 @@ module Packet
       usage: personal-packet dir
              personal-packet list [--json] [--all]
              personal-packet check <issue>
-             personal-packet publish <issue> [--repo OWNER/REPO] [--dry-run]
+             personal-packet publish <issue> [--repo OWNER/REPO] [--dry-run] [--accept-warnings]
              personal-packet pull <issue> [--repo OWNER/REPO] [--dry-run]
 
       作業単位 (Issue) ごとの packet .agent-packets/<issue>.md を扱う (docs/agent-packets.md)。
       check は packet を書く前の更新先の検査 (exit 0 で path を出す / 1 = 拒否 / 2 = 判定できない)。
-      publish は同じ directory の personal-public-safety-gate --stdin が exit 0 のときだけ投稿する。
+      publish は同じ directory の personal-public-safety-gate --stdin が exit 0 のときだけ投稿する。gate が
+      警告を出したら投稿せず exit 1 (人が --dry-run で確かめてから --accept-warnings で投稿する)。
     USAGE
   end
 
@@ -1052,11 +1059,16 @@ module Packet
       issue = nil
       repo = nil
       dry_run = false
+      accept_warnings = false
       i = 0
       while i < rest.size
         a = rest[i]
         case a
         when "--dry-run" then dry_run = true
+        when "--accept-warnings"
+          raise Error, "--accept-warnings は publish だけの option です" unless cmd == "publish"
+
+          accept_warnings = true
         when "--repo"
           repo = rest[i + 1]
           raise Error, "--repo は OWNER/REPO 形式で指定してください" unless repo&.match?(REPO_RE) && !repo.start_with?("-")
@@ -1077,7 +1089,7 @@ module Packet
 
         pull(packet_dir, issue.to_i, repo: repo, dry_run: dry_run)
       else
-        publish(packet_dir, issue, repo: repo, dry_run: dry_run)
+        publish(packet_dir, issue, repo: repo, dry_run: dry_run, accept_warnings: accept_warnings)
       end
       0
     else
@@ -1088,6 +1100,10 @@ module Packet
     1
   rescue Rejected
     warn "personal-packet: #{GATE_NAME} が止めました。投稿しません"
+    1
+  rescue Warned
+    warn "personal-packet: #{GATE_NAME} が警告を出しました。投稿しません。--dry-run で本文と警告を人に見せ、" \
+         "意図した内容だと確かめたら --accept-warnings を付けて再実行してください"
     1
   rescue Error => e
     warn "personal-packet: error: #{e.message}"
