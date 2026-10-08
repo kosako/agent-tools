@@ -165,21 +165,31 @@ worktree であること・`HEAD` が `base` で detached であること・clea
   無いこと。変えた file ごとに、その file (または file の directory) を scope にして worktree を cwd に走らせ、
   同じ scope で base の worktree (`$basedir`) でも走らせる。出力を行番号を除いた「file: 参照」の組で比べ、branch に
   だけある組が無いこと。候補検出なので、変えた参照の意味と anchor は別に読んで確かめます。
-- **公開する内容の gate**: 累積差分そのもの (`git diff "$base" "$branch"`)、`base` 以降の全 commit の message
-  (`git log --format=%B "$base".."$branch"`。push で一緒に公開されるが、累積差分には入らない)、PR の題名と本文を
-  まとめて public-safety の gate に通し、exit 0 のときだけ push と PR へ進みます。
+- **公開する内容の gate**: 累積差分そのもの (`git diff "$base" "$branch"`)、`base` 以降の各 commit の差分
+  (`git log -p`。途中の commit で足して後の commit で消した内容も、その commit ごと push で公開されるため。#413)、
+  `base` 以降の全 commit の message
+  (`git log --format=%B "$base".."$branch"`。push で一緒に公開されるが、累積差分には入らない)、branch 名 (push で
+  公開される。#413)、PR の題名と本文を
+  まとめて public-safety の gate に通し、exit 0 で警告 (`public-safety-gate: warning:` の行) が無いときだけ push と PR へ進みます。
+  警告があれば push も PR もせず、gate の出力を人に見せて判断を仰ぎます (#413)。下の command は、gate が止めたら
+  その exit code (1 / 2)、警告があれば 3、どちらも無ければ 0 で終わり、gate の出力を stderr に出します。
 
   ```sh
   gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"
-  ( set -o pipefail
-    { git diff "$base" "$branch" && git log --format=%B "$base".."$branch" &&
-      printf '%s\n\n' "$title" && cat "$body_file"; } | "$gate" --stdin )
+  ( gate_out=$( set -o pipefail
+      { git diff "$base" "$branch" && git log --format=%B "$base".."$branch" &&
+        git log -p --format= "$base".."$branch" &&
+        printf '%s\n%s\n\n' "$branch" "$title" && cat "$body_file"; } | "$gate" --stdin 2>&1 )
+    gate_rc=$?
+    printf '%s\n' "$gate_out" >&2
+    [ "$gate_rc" -eq 0 ] || exit "$gate_rc"
+    case $gate_out in *'public-safety-gate: warning:'*) exit 3 ;; esac )
   ```
 
   gate は `RECORD.md` の Issue の gate と同じく、Claude Code の home に配備されたもの。`base`・`branch`・`title`・
   `body_file` は literal の変数で渡します。`pipefail` は、材料の `git` が失敗したときに gate が残りだけを読んで
-  exit 0 になるのを防ぎます。gate が無い・exit 0 でないときは push も PR もせず、gate の出力 (どの規則に
-  当たったか) を報告します。直したら、この節の検証からやり直します。
+  exit 0 になるのを防ぎます。gate が無い・exit 0 でない・警告 (exit 3) のときは push も PR もせず、gate の出力 (どの
+  規則に当たったか) を報告します。直したら、この節の検証からやり直します。
 - commit の message は Claude の trailer 付きで、file に書いて `-F` で渡します。commit の前にその file を同じ gate
   (上の `gate` の path) の `--stdin` に通しておくと、push の前の gate で止まってから書き直す手間が減ります。
 

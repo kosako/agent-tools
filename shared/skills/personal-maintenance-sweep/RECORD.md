@@ -196,17 +196,26 @@ personal-maintenance-sweep の run `<run id>` で起票 (観点: <観点> / 種�
 - `no-contention` の marker は、triage で「論点なし」の印が付いた所見だけに書く (付かなければ行ごと省く)。fix モードは
   この marker で候補を抽出し、着手の直前に適格性を確かめ直す (`FIX.md`)。
 - fingerprint に `-->` を含めない (含むなら、場所の key から単位の名前を除いた形にする)。
-- 投稿の前に、**題名と本文の両方**を public-safety の gate に通し、exit 0 のときだけ投稿する (題名も
+- 投稿の前に、**題名と本文の両方**を public-safety の gate に通し、exit 0 で警告の行が無いときだけ投稿する (題名も
   所見から作るので、本文だけを通すと題名に残った値が素通りする)。
 
 ```sh
 gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"
-{ printf '%s\n\n' "$title"; cat "$body_file"; } | "$gate" --stdin \
-  && gh issue create --title "$title" --body-file "$body_file" --label maintenance-sweep
+if ( set -o pipefail
+     { printf '%s\n\n' "$title" && cat "$body_file"; } | "$gate" --stdin ) 2> "$gate_err" &&
+   { grep -q '^public-safety-gate: warning:' "$gate_err"; [ $? -eq 1 ]; }; then   # grep は 1 (警告なし) のときだけ
+  gh issue create --title "$title" --body-file "$body_file" --label maintenance-sweep
+else
+  cat "$gate_err"   # 投稿せず、題名・本文と gate の出力を人に見せる
+fi
 ```
 
   gate は Claude Code の home に配備されたもの (投稿するのは Claude の session だけ)。`title` と
-  `body_file` は literal の変数で渡す。gate が無い・exit 0 でないときは投稿せず、gate の出力 (どの規則に
+  `body_file`・`gate_err` (repository の外の一時 file) は literal の変数で渡す。gate の exit だけで投稿へ進めず、
+  上のように警告の行まで確かめてから投稿する。`pipefail` と `&&` は、本文の読み取りが失敗したときに gate が題名だけを
+  読んで exit 0 になり、未検査の本文を投稿するのを防ぐ。
+  gate が exit 0 でも stderr に警告 (`public-safety-gate: warning:`) の行があれば投稿せず、題名・本文と警告を人に見せて判断を仰ぐ
+  (#413。packet の publish と同じ扱い)。gate が無い・exit 0 でないときは投稿せず、gate の出力 (どの規則に
   当たったか) を報告して、題名と本文を直すか report モードに切り替えるかを確認する。追跡 Issue の本文と
   run のコメントも、同じく gate を通してから `gh issue edit --body-file` / `gh issue comment --body-file` で
   書く (追跡 Issue を作るときは題名も一緒に通す)。
