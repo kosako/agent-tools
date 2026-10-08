@@ -114,8 +114,10 @@ text を stdin で渡し、exit 0 のときだけ投稿へ進む (1 = definite �
 渡す。pre-commit mode と同じ pattern で、message の file **全体**を scan する。comment 行 (`#` 始まり) や
 scissors 行より後 (`git commit -v` の差分) も除かない。commit に残る行は cleanup の mode で変わり
 (`-m` / `-F` の既定の whitespace や `--cleanup=verbatim` では `#` 行も残る)、CLI の `--cleanup` は hook から
-確かめられないため、過検出の側に倒す。止まったときは、該当行を直すか allow pragma を書く。`-v` の差分は
-pre-commit を通った内容なので、新たに止まることは基本的に無い。finding は `commit-msg:<line>` で報告し、
+確かめられないため、過検出の側に倒す。止まったときは、該当行を直すか allow pragma を書く。既知の過検出:
+`git commit -v` の差分は削除行と文脈行も含む (pre-commit が見るのは追加行だけ) ので、既存の token や home path を
+**消す** commit を `-v` で行うと、その削除行で止まる。そのときは `-v` を付けずに (`--no-verbose`) commit するか、
+editor で scissors 行より下を消してから保存する。finding は `commit-msg:<line>` で報告し、
 exit 契約も同じ。有効な trailer があっても、message に definite があれば commit-msg stage で止まる。
 
 ## personal-git-identity-gate(pre-commit)
