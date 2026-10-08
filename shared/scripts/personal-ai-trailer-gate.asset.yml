@@ -15,7 +15,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:b6327e2e05113af0daaac8073cd1a1450a3fc5253e374423c01e9d6094927699
+  approved_build_id: sha256:981717bb820b93ad9260dca390ffaaf7f7f98e1da07a77d69b3cfb8c8bc073a7
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-ai-trailer-gate.rb
@@ -25,5 +25,6 @@ summary: >-
   AGENT_TOOLS_OPENCODE。最後のものは OpenCode の plugin が model の bash に立てる) の commit に
   相互レビュー routing の正本 Co-Authored-By トレーラを要求する (欠落 / Claude・Codex・OpenCode の
   混在 / 非 no-reply email / OpenCode の name の形の不正 / 1 commit に model の異なる OpenCode を block)。
-  人間 commit と merge commit は無言 pass の opt-in 設計。squash / rebase での喪失は消費側 preflight の
+  人間 commit (人間の merge commit を含む) は無言 pass の opt-in 設計。agent の session の merge commit にもトレーラを
+  求める (#415)。squash / rebase での喪失は消費側 preflight の
   領分 (docs/git-hook-gates.md)。

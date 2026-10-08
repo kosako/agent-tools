@@ -68,6 +68,7 @@ module ReviewRoutingPreflight
     opencode_unknown: "opencode(unknown)",
     mixed: "mixed",
     none: "none",
+    merge_none: "none (merge commit)",
   }.freeze
 
   module_function
@@ -154,6 +155,10 @@ module ReviewRoutingPreflight
       return { verdict: :fail_closed,
                reason: "1 つの commit に複数 AI (または model の異なる OpenCode) のトレーラが混在 (単一 reviewer で author ≠ reviewer を満たせない)" }
     end
+    if kinds.include?(:merge_none)
+      return { verdict: :fail_closed,
+               reason: "トレーラの無い merge commit がある (PR の branch は rebase で更新するか、merge commit にトレーラを付ける)" }
+    end
     if kinds.include?(:none)
       return { verdict: :fail_closed,
                reason: "トレーラ欠落 (人間または不明) の commit がある (自動 routing しない)" }
@@ -218,7 +223,10 @@ module ReviewRoutingPreflight
     commits = fetch_commits(pr_number, repo)
     oid_kinds = commits.map do |c|
       message = c["commit"].is_a?(Hash) ? c["commit"]["message"] : nil
-      [short_oid(c["sha"]), classify_message(message)]
+      kind = classify_message(message)
+      # トレーラの無い merge commit (親が 2 つ以上) は、理由を分けて示す (#415)。
+      kind = :merge_none if kind == :none && c["parents"].is_a?(Array) && c["parents"].size > 1
+      [short_oid(c["sha"]), kind]
     end
 
     oid_kinds.each { |oid, kind| puts "commit #{oid}: #{label(kind)}" }

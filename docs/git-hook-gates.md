@@ -185,8 +185,9 @@ AI agent セッション由来の commit に相互レビュー routing の正本
 - OpenCode のトレーラの email は `noreply@opencode.invalid` (RFC 2606 の予約 domain で、どの account にも
   紐づかない) を使う。gate は OpenCode の email を固定せず、上の no-reply の床を Claude / Codex と共通に保つ。
 - 人間の co-author トレーラ (AI 名以外) は自由 (検査対象外)。
-- **merge commit (MERGE_HEAD あり) は対象外** (authored commit の契約。merge は
-  レビュー済み作業の合成)。
+- **merge commit (MERGE_HEAD あり) も、agent の session なら対象** (#415)。競合の解消は authored な変更で、PR の
+  routing-preflight も trailer の無い merge commit を fail-closed にするので、そろえる。人間の merge は「marker なし」
+  として今までどおり pass する。PR の branch は rebase で更新すると、merge commit 自体が入らない。
 - commit message の comment 除去は既定 `commentChar` (`#`) と scissors 行のみ対応。
 - env marker は**観測された事実であって両 CLI の公開契約ではない** (#201 実測,
   Claude Code 2.1.207 / codex 0.144.1)。CLI 更新で消えた場合、gate は人間 commit と

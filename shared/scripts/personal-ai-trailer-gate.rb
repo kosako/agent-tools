@@ -29,8 +29,9 @@
 #   トレーラ義務はない。
 # - 複数の marker が立つ nested 実行 (Claude → codex exec 等) は agent 名を特定できないので、
 #   「env にある agent のどれかの有効なトレーラがあること」まで緩めて要求する。
-# - merge commit (MERGE_HEAD あり) は対象外 (authored commit の契約であり、merge は
-#   レビュー済み作業の合成)。
+# - merge commit (MERGE_HEAD あり) も agent の session なら対象 (#415)。競合の解消は authored な変更で、
+#   PR の routing-preflight も trailer の無い merge commit を fail-closed にするので、そろえる。人間の merge は
+#   上の「marker なし」で pass する。
 #
 # 検証内容 (agent 識別時):
 # - 期待 agent のトレーラが 1 本以上ある (Claude 環境 → name が "Claude" 始まり /
@@ -42,7 +43,8 @@
 # - 1 commit に複数の AI (Claude / Codex / OpenCode) のトレーラが混在したら fail-closed
 #   (相互レビュー routing が判定不能になる)。
 #
-# exit code: 0 = pass (人間 commit / merge / 検証通過) / 1 = 検証 fail / 2 = usage・
+# exit code: 0 = pass (人間 commit (人間の merge を含む) / 検証通過) / 1 = 検証 fail (agent の merge commit の
+# トレーラ欠落を含む) / 2 = usage・
 # 入力エラー (message file が読めない等)。
 
 module AiTrailerGate
@@ -150,13 +152,6 @@ module AiTrailerGate
     trailers
   end
 
-  def merge_in_progress?
-    out = IO.popen(%w[git rev-parse --git-path MERGE_HEAD], &:read)
-    return false unless $?.success?
-
-    File.exist?(out.chomp)
-  end
-
   # 純粋な判定 (env / message から結論と診断文言)。exit code を返す。
   def judge(agents, lines)
     return 0 if agents.empty?
@@ -207,7 +202,6 @@ module AiTrailerGate
       warn "ai-trailer-gate: usage: personal-ai-trailer-gate <commit-msg-file>"
       return 2
     end
-    return 0 if merge_in_progress?
 
     # 非 UTF-8 混入で regex が例外にならないよう scrub (#149 と同じ方式・判定用のみ)。
     text = File.read(path)
