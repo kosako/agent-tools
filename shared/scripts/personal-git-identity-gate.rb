@@ -12,10 +12,12 @@
 # を止めるだけで「明示的に空」は止められず、gitconfig の include 順や値でも表現できない。
 # dotfiles 側の identity reset (非 personal context で `[user] name = / email =` の空値を
 # 挟む設計) と、context の identity file が name だけの partial な状態が重なると、この穴を
-# 踏む。可視化 (prompt / doctor) は既にあるので、機械的に止める最後の 1 段がこの gate。
+# 踏む。可視化 (prompt / doctor) は既にあり、`git commit` の経路で機械的に止めるのがこの gate (`git commit` 以外で作る commit (競合の無い自動の merge (pull を含む)・rebase・cherry-pick・revert)
+# では pre-commit が走らないので止まらない。#414)。
 #
 # 強度ラベル (偽らない): 通常経路 (git commit) に対する best-effort guardrail。
-# `--no-verify` / repo local の core.hooksPath / hook gates を無効化した環境では守れない。
+# `--no-verify` / repo local の core.hooksPath / hook gates を無効化した環境、`git commit` 以外で作る commit (競合の無い自動の merge (pull を含む)・rebase・cherry-pick・revert) では
+# 守れない (#414)。
 # enforcement boundary ではない。
 #
 # 検査内容:

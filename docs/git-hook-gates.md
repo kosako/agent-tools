@@ -14,6 +14,12 @@ enforcement boundary ではない:
 - repo local の `core.hooksPath` (husky 等) は global 設定を上書きし、gate は黙って
   外れる (実測 #201)。
 - 別 client / 他マシンからの commit・GitHub 上の操作 (squash merge 等) は対象外。
+- `git commit` 以外で作る commit (競合の無い自動の merge (pull を含む)・rebase・cherry-pick・revert) では pre-commit が走らない (#414)。競合の無い自動の merge は pre-merge-commit を呼び
+  (この配線には無い)、commit-msg だけが走る。rebase・cherry-pick・revert では pre-commit も commit-msg も
+  走らない (git 2.54.0 で観察。競合を解いてから続ける場合は確かめていない)。そのため、これらの経路では
+  差分の public-safety の検査と git-identity の検査は走らない (自動の merge では commit-msg が走るので、message の
+  public-safety の検査 (`--commit-msg`) は残る)。別の hook (prepare-commit-msg / pre-merge-commit) への配線は
+  #449 で実測してから決める。
 
 hard な床は従来どおりここに載せない (credential 隔離 / egress / CI)。公開する内容の検査は
 公開の前に置く (#413): 差分は pre-commit、commit message は commit-msg (public-safety の
@@ -82,7 +88,8 @@ global `core.hooksPath` は per-repo `.git/hooks` を**完全に置換**し、fa
 ## personal-public-safety-gate(pre-commit)
 
 staged diff の**追加行**を scan する。読むのは `git diff --cached` / staged file 一覧 /
-local pattern file のみ。network なし・値そのものは出力しない (file:line と種別のみ)。
+local pattern file のみ。diff は `--text --no-textconv` で取る (#414): binary とみなす file (`-diff` / `binary`
+属性、NUL を含む内容) も追加行として見て、textconv を設定した file は変換前の内容を見る (変換 command は起動しない)。network なし・値そのものは出力しない (file:line と種別のみ)。
 
 | クラス | 対象 | 挙動 |
 |---|---|---|
@@ -135,8 +142,8 @@ commit に使われる author / committer の identity が name / email とも�
 - 背景: `user.useConfigOnly` は「未設定」を止めるだけで「明示的に空」は止められず、
   gitconfig の include 順や値でも表現できない。dotfiles の identity reset (非 personal
   context で空値を挟む設計) と、context の identity file が name だけの partial な状態が
-  重なるとこの穴を踏む。可視化 (prompt / doctor) は既にあり、機械的に止める最後の 1 段が
-  この gate。
+  重なるとこの穴を踏む。可視化 (prompt / doctor) は既にあり、`git commit` の経路で機械的に止めるのが
+  この gate。`git commit` 以外で作る commit (競合の無い自動の merge (pull を含む)・rebase・cherry-pick・revert) では pre-commit が走らないので止まらない (#414。上の強度ラベル)。
 - **出力の規律**: identity の**値**は stdout / stderr に出さない。出すのは key 名 (author
   name / author email / committer name / committer email) と「空」であることだけ。git の
   stderr (`for <email>` を含みうる) も捨てる。

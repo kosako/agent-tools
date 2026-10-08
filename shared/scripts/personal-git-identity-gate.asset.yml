@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:e11fcf6ae20a075889ddc132203d26f95c9fbf340df0c76b0e005ca5226136bb
+  approved_build_id: sha256:c8a049fda771f9258c8f0fbbbdd851ad0da6c3fda2591c5621f62e3b5bbfe3ef
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-git-identity-gate.rb

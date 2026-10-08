@@ -9,7 +9,8 @@
 # 正本: docs/git-hook-gates.md。#200 §4.1。
 #
 # 強度ラベル (偽らない): 通常経路 (git commit) に対する best-effort guardrail。
-# `--no-verify` / hooksPath 差し替え / 別 client で迂回できる。検出も列挙依存の
+# `--no-verify` / hooksPath 差し替え / 別 client、`git commit` 以外で作る commit (競合の無い自動の merge (pull を含む)・rebase・cherry-pick・revert) で迂回できる
+# (pre-commit が走らないので差分の検査を通らない。自動の merge では commit-msg の message の検査は走る。#414)。検出も列挙依存の
 # regex なので網羅ではない (「秘密は書かない」判断そのものは人間 / skill の領分)。
 # 公開する内容の検査は、差分は pre-commit (引数ゼロ)、commit message は commit-msg (`--commit-msg`)、
 # Issue / PR / コメントの本文は投稿の前の `--stdin` で行う。push / CI には置かない (push した時点で public
@@ -32,7 +33,8 @@
 # regex は exit 2 で止める (ユーザー設定の壊れを黙って無視しない)。
 #
 # 副作用ゼロ・network なし。読むのは `git diff --cached` / staged file 一覧 /
-# local pattern file のみ。
+# local pattern file のみ。diff は `--text --no-textconv` で取るので、binary とみなす file の中身も見て、
+# textconv の変換 command は起動しない (#414)。
 #
 # stdin mode (`--stdin`): 引数ゼロの pre-commit mode と同じ pattern で stdin の text を
 # 行単位に scan する (git には触らない。path 判定は対象外)。packet の public 写しを
@@ -191,8 +193,10 @@ module PublicSafetyGate
   end
 
   # 出力形式を pin した diff 用の共通 flag (parser の前提を git 設定から独立させる)。
+  # --text / --no-textconv: binary とみなす file (`-diff` / `binary` 属性、NUL を含む内容) も中身の追加行として出し、
+  # textconv の変換 command を起動せずに元の内容を見る (#414)。
   GIT_DIFF_PIN = %w[git -c diff.noprefix=false -c diff.mnemonicprefix=false
-                    -c core.quotepath=true diff --cached --no-color --no-ext-diff].freeze
+                    -c core.quotepath=true diff --cached --no-color --no-ext-diff --text --no-textconv].freeze
 
   def git_read(argv)
     out = IO.popen(argv, &:read)
