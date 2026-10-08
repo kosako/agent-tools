@@ -253,12 +253,13 @@ run: "<run dir>"   # double-quoted。run dir に `"` / `\` / 制御文字が無�
 tab: "#<issue>"    # 引用符が要る (無いと `#` 以降が YAML の comment になり、list が壊れた packet として報告する)
 ```
 
-- 既にあれば (停止からの再起動) 新しい値で置き換える。`last_run` (前の run の転記の後に残した最後の run dir。
+- 既にあれば (停止からの再起動) 新しい値で置き換える。停止 (`state: blocked`) からの再起動では、同じ書き込みで
+  `state` を `open` にし、`updated` を今の日時にする (`SKILL.md` §1。#412。state は写しの対象なので)。`last_run` (前の run の転記の後に残した最後の run dir。
   #325) があれば、同じ書き込みで消す (`run` と同時に置くと `list` が壊れた packet として止める)。消す前に、
-  §2 の照合と §5 の所有の確認に使う前の run dir を控えておく。`updated` は変えない (写しの対象ではない)。
+  §2 の照合と §5 の所有の確認に使う前の run dir を控えておく。それ以外では `updated` は変えない (起動の記録は写しの対象ではない)。
   書くのは packet の frontmatter だけで、`依頼` / `結果` / `次の入口` には触らない。
 - 書いたら読み直して確かめる。`list` が exit 0 で、その Issue の行の `run` が run dir と一致し、
-  `tab` が `#<issue>`、`run_status` が `unfinished` (まだ `done.txt` が無い)、`last_run` が null であること。どれかが違えば
+  `tab` が `#<issue>`、`run_status` が `unfinished` (まだ `done.txt` が無い)、`last_run` が null、`state` が `open` であること。どれかが違えば
   起動せず `Blocked at: launch-record` (記録が効かないまま起動すると、session を失ったときに回収も
   二重起動の防止もできない)。
 
@@ -269,7 +270,7 @@ packets=$("$packet_cli" list --json --all) || exit 1
 printf '%s' "$packets" \
   | jq -e --argjson issue "$issue" --arg run "$run" --arg tab "#$issue" \
     '[.[] | select(.issue == $issue)] | length == 1 and
-     (.[0] | .run == $run and .tab == $tab and .run_status == "unfinished" and .last_run == null)' >/dev/null || exit 1
+     (.[0] | .run == $run and .tab == $tab and .run_status == "unfinished" and .last_run == null and .state == "open")' >/dev/null || exit 1
 ```
 
 (`$packet_cli` は `<tool home>/agent-tools/scripts/personal-packet`。`$issue` は §0 で `\A\d+\z` を通した値。
@@ -417,9 +418,15 @@ herdr pane wait-output <pane-id> --match CODEX-WORKER-DONE-<nonce> --timeout 300
   --lines 200` の生出力を `<run dir>/pane.log` に保存し、空でないことを確認する。pane と tab は
   **閉じない** (tab は packet が `done` になるまで残し、§11 で閉じる)。人手実行 (§10 の未起動
   hand-off) には pane が無いので、pane.log の保存は行わず、同じ続行条件を確認して §8 へ進む。
-- `exit=0` なのに `result.md` が欠落 / 空なら、新しい nonce で同じ run dir から 1 回だけ再実行
-  (`run.zsh` は既存の file を編集して使い回さず、§3 の preflight を実行し直して、その `launch_argv`
-  から §4 の手順で作り直す。#324)。2 回目も空なら `Blocked at: executor-result`。
+- `exit=0` なのに `result.md` が欠落 / 空なら、新しい nonce で 1 回だけ再実行する。再実行は**新しい run dir**
+  で行う (#412。同じ run dir では 1 回目の `done.txt` が残り、`run_status` が `finished` のままなので §4 の
+  読み直しを通らず、session を失うと次の session が完了済みの run として回収に入る)。§1 で run dir を作り直し、
+  §2 の再利用する clone の照合を 1 回目の run dir の `preflight.json` で通してから (`previous_run` は 1 回目の
+  run dir。不一致なら `Blocked at: clone`。照合せずに preflight を実行し直すと、1 回目の worker が変えた `.git`
+  を新しい snapshot の基準に取り込んでしまう)、§3 の preflight を実行し直して、その `launch_argv` から §4 の手順で brief と run script を作る (`run.zsh` は
+  既存の file を編集して使い回さない。#324)。§4 の起動の記録で `run` を新しい run dir に書き換えて読み直しを
+  通してから、§5 の手順で同じ tab に pane を足して起動する (所有の確認には 1 回目の run dir の `tab-id` を使う)。
+  1 回目の run dir は空振りの記録として残す。2 回目も空なら `Blocked at: executor-result`。
 - `exit` が 0 以外 (limit を含む) / RUNNING / 空振りが尽きたときも、pane と tab を閉じない
   (調べられるように残す)。
 
@@ -555,7 +562,7 @@ title / body は orchestrator が packet から書く (一時 file は repositor
   自分の terminal で実行したあと、caller は `done.txt` (nonce 一致・`exit=0`) と空でない `result.md`
   を確認してから §8 (転記) 以降を続ける (pane は無いので §7 の pane.log の保存は行わない。空振り
   なら §7 の再実行規則どおり、新しい nonce の run script を人に 1 回だけ渡す)。端末に出た sentinel
-  や口頭報告だけで完了とみなさない。起動の記録は §4 の最後で書いたまま残して渡すので、caller の
+  や口頭報告だけで完了とみなさない。起動の記録は §4 の最後で書いたまま残し、`state` も変えずに (`blocked` にしない。#412) 渡すので、caller の
   session が先に終わっても、次の session が `SKILL.md` §1 で `run_status` を見て回収に入れる
   (`finished` なら回収、`unfinished` なら人に確かめる)。
 - **起動済み (`RUNNING`)**: worker はまだ生きている。run script を再実行させない。Next step は

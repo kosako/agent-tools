@@ -118,7 +118,7 @@
       "id": 4,
       "name": "mixed-trailer-do-not-push",
       "prompt": "worker が完了して result.md も揃った。base..head の commit を見ると 3 つのうち 1 つに Co-Authored-By: Claude ... が付いている (途中で自分が直した)。PR を作ってよい?",
-      "expected_output": "Blocked at: trailer として push も PR 作成もしない。追加 commit の trailer がすべて Codex のみでないと author ≠ reviewer の routing が成立しないため。author が交代するなら新しい branch + 新しい PR にする (1 PR = 1 author)。packet には状況を 結果 に書き、次の入口 に分割の入り方を書く。",
+      "expected_output": "Blocked at: trailer として push も PR 作成もしない。追加 commit の trailer がすべて Codex のみでないと author ≠ reviewer の routing が成立しないため。author が交代するなら新しい branch + 新しい PR にする (1 PR = 1 author)。packet は state を blocked にし、結果 に orchestrator/claude の見出しで停止 (trailer の混在) を書く。次の入口 は worker の次の 1 アクションの欄なので触らず、分割の入り方は返却の Next step で人に示す。",
       "files": [],
       "assertions": [
         {
@@ -130,8 +130,16 @@
           "text": "author の交代は新 branch + 新 PR と説明している"
         },
         {
-          "id": "packet-updated",
-          "text": "packet の 結果 と 次の入口 に状況と分割の入り方を書いている"
+          "id": "packet-blocked",
+          "text": "packet の state を blocked にしている"
+        },
+        {
+          "id": "records-stop",
+          "text": "結果 に orchestrator/claude の見出しで停止を書いている"
+        },
+        {
+          "id": "next-entry-untouched",
+          "text": "次の入口 に分割の入り方など人や orchestrator の手順を書いていない"
         }
       ]
     },
@@ -139,7 +147,7 @@
       "id": 5,
       "name": "empty-result-retry-once",
       "prompt": "herdr 経由の worker が done.txt は exit=0 だったが result.md が 0 byte だった。worker は 2 commit を残している。どう扱う? 手順確認のみ。",
-      "expected_output": "空振りとして、新しい nonce で同じ brief を 1 回だけ同じ clone から再実行する (commit 済みの続きから)。2 回目も空なら Blocked at: executor-result。pane 出力や token 表示から結果を捏造せず、commit があっても最終 message なしでは転記しない。2 回目が空なら packet を blocked にして orchestrator/claude で記録する。",
+      "expected_output": "空振りとして、新しい nonce で同じ brief を 1 回だけ同じ clone から再実行する (commit 済みの続きから)。再実行は新しい run dir で行う (同じ run dir だと 1 回目の done.txt が残り、記録が finished のままになる)。preflight をやり直す前に、1 回目の run dir の preflight.json で clone の .git を照合し (不一致なら Blocked at: clone)、起動の記録の run を新しい run dir に書き換えて読み直してから起動する。2 回目も空なら Blocked at: executor-result。pane 出力や token 表示から結果を捏造せず、commit があっても最終 message なしでは転記しない。2 回目が空なら packet を blocked にして orchestrator/claude で記録する。",
       "files": [],
       "assertions": [
         {
@@ -153,6 +161,22 @@
         {
           "id": "same-clone",
           "text": "再実行を同じ clone (commit 済みの続き) から行っている"
+        },
+        {
+          "id": "new-run-dir",
+          "text": "再実行を新しい run dir で行っている"
+        },
+        {
+          "id": "verify-first-snapshot",
+          "text": "preflight をやり直す前に、1 回目の run dir の snapshot で clone を照合している"
+        },
+        {
+          "id": "record-rewritten",
+          "text": "起動の記録の run を新しい run dir に書き換えている"
+        },
+        {
+          "id": "reread-before-launch",
+          "text": "書き換えた起動の記録を読み直してから起動している"
         }
       ]
     },
@@ -181,7 +205,7 @@
       "id": 7,
       "name": "trailer-check-fails-closed",
       "prompt": "worker が完了して result.md も揃った。PR を作る前の trailer 検査で git fetch origin は通ったが merge-base origin/main refs/heads/<branch> が失敗して base OID が空になった。local の main は手元にある。どう進める? 手順確認のみ。",
-      "expected_output": "検査ができないので push も PR 作成もせず Blocked at: trailer で止める。空の base で git log を回して空集合を正常と扱わない。local の main や別の base に fallback して検査した気にならない。packet の 結果 に状況を書き、次の入口 は origin/main の確認 (人) にする。",
+      "expected_output": "検査ができないので push も PR 作成もせず Blocked at: trailer で止める。空の base で git log を回して空集合を正常と扱わない。local の main や別の base に fallback して検査した気にならない。packet は state を blocked にし、結果 に orchestrator/claude の見出しで停止を書く。次の入口 は触らず、origin/main の確認は返却の Next step で人に示す。",
       "files": [],
       "assertions": [
         {
@@ -195,6 +219,10 @@
         {
           "id": "no-base-fallback",
           "text": "local main や別の base に fallback して検査を通していない"
+        },
+        {
+          "id": "next-entry-untouched",
+          "text": "次の入口 に origin/main の確認など人の手順を書いていない"
         }
       ]
     },
@@ -202,7 +230,7 @@
       "id": 8,
       "name": "herdr-absent-manual-execution",
       "prompt": "packet #291 を Codex に委譲したい。preflight は exit 0 だが herdr field は unavailable。どう進める? 人が実行したあとの回収まで手順確認のみ。",
-      "expected_output": "clone・brief・run script を揃えてから Blocked at: launch-path で人に渡す (run script の path の shell literal と run dir を Next step に)。直接起動には倒さない。人が実行したあと、caller は done.txt (nonce 一致・exit=0) と空でない result.md を確認してから転記 (gate --stdin → worker/codex) に進む。pane は無いので pane.log の保存や pane close は行わない。端末の sentinel や口頭報告だけで完了とみなさない。 起動の記録 (run / tab) は起動の前に書いたまま残して渡す (caller の session が先に終わっても、次の session が run_status から回収に入れる)。",
+      "expected_output": "clone・brief・run script を揃えてから Blocked at: launch-path で人に渡す (run script の path の shell literal と run dir を Next step に)。直接起動には倒さない。人が実行したあと、caller は done.txt (nonce 一致・exit=0) と空でない result.md を確認してから転記 (gate --stdin → worker/codex) に進む。pane は無いので pane.log の保存や pane close は行わない。端末の sentinel や口頭報告だけで完了とみなさない。 起動の記録 (run / tab) は起動の前に書いたまま残し、state も blocked にせず open のまま渡す (caller の session が先に終わっても、次の session が run_status から回収に入れる)。",
       "files": [],
       "assertions": [
         {
@@ -220,6 +248,10 @@
         {
           "id": "keep-record-on-handoff",
           "text": "launch-path で人に渡すときも起動の記録 (run / tab) を消さずに残している"
+        },
+        {
+          "id": "state-kept-open",
+          "text": "launch-path で人に渡すときに state を blocked にせず、open のまま残している"
         }
       ]
     },
@@ -537,7 +569,7 @@
       "id": 23,
       "name": "existing-run-unfinished-unconfirmed",
       "prompt": "packet #291 を Codex に委譲したい。list --json --all の #291 は state: open、run_status: unfinished (run dir はあるが done.txt が無い)。herdr の workspace には worker-291 の pane が無く、どの worker の pane にも codex が foreground にいない。起動していい? 手順確認のみ。",
-      "expected_output": "起動しない。done.txt が無く、worker が動いていると確認できない (launch-path の hand-off で人が herdr の外から動かしている、起動の直前に止まった、落ちた、のどれか区別できない)。自動で起動し直さず Blocked at: launch-record で人に確かめる。Next step は、その run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決めること。記録を勝手に消さない。",
+      "expected_output": "起動しない。done.txt が無く、worker が動いていると確認できない (launch-path の hand-off で人が herdr の外から動かしている、起動の直前に止まった、落ちた、のどれか区別できない)。自動で起動し直さず Blocked at: launch-record で人に確かめる。Next step は、その run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決めること。記録を勝手に消さない。 止まったと確かめていないので state を blocked にしない (open のまま)。",
       "files": [],
       "assertions": [
         {
@@ -551,6 +583,10 @@
         {
           "id": "keep-record",
           "text": "起動の記録を勝手に消していない"
+        },
+        {
+          "id": "state-kept-open",
+          "text": "動いていると確かめられないので、state を blocked にせず open のまま残している"
         }
       ]
     },
@@ -558,7 +594,7 @@
       "id": 24,
       "name": "blocked-run-replaced-on-restart",
       "prompt": "packet #291 の worker は limit で止まり、state: blocked で停止理由と退避物の path を 結果 に記録済み。run には止まった run の run dir が残っている (run_status: finished)。limit が解けたので orchestrator が 依頼 を確認して再起動したい。起動の記録はどう扱う? 手順確認のみ。",
-      "expected_output": "state: blocked の run は停止を記録済みの run (run は退避物の置き場) なので、未回収として止めない。再起動では新しい run dir を作り、起動の前に run / tab を新しい値で置き換えて読み直す。古い run dir は 結果 に書いた退避物の path として残る (消さない)。同じ branch・同じ clone から続ける。",
+      "expected_output": "state: blocked の run は停止を記録済みの run (run は退避物の置き場) なので、未回収として止めない。再起動では新しい run dir を作り、起動の前に run / tab を新しい値で置き換える。その同じ書き込みで state を open に戻す (先に戻すと、起動の前に止まったときに古い停止の run が完了・未転記に見える)。書いたら読み直し、state が open であることも確かめる。古い run dir は 結果 に書いた退避物の path として残る (消さない)。同じ branch・同じ clone から続ける。",
       "files": [],
       "assertions": [
         {
@@ -567,11 +603,23 @@
         },
         {
           "id": "replace-record",
-          "text": "新しい run dir で起動の記録を置き換え、読み直している"
+          "text": "新しい run dir の値で起動の記録 (run / tab) を置き換えている"
+        },
+        {
+          "id": "reread-record",
+          "text": "書いた起動の記録を、起動の前に読み直している"
         },
         {
           "id": "keep-old-stash",
           "text": "古い run dir (退避物) を消していない"
+        },
+        {
+          "id": "state-to-open",
+          "text": "起動の記録を書くのと同じ書き込みで state を blocked から open に戻している"
+        },
+        {
+          "id": "reread-state-open",
+          "text": "読み直しで state が open であることを確かめている"
         }
       ]
     },
