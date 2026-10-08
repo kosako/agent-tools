@@ -212,9 +212,13 @@ write-authorized のときだけ、レビューを始める前に、何をどの
 
 ```sh
 body=<一時ファイル path の shell literal>
+gate_err=<一時ファイル path の shell literal>
 gate=<tool home>/agent-tools/scripts/personal-public-safety-gate
-"$gate" --stdin < "$body"   # exit 0 で、stderr に警告の行が無いときだけ次へ
-gh pr comment "$pr" [--repo "$repo"] --body-file "$body"
+if "$gate" --stdin < "$body" 2> "$gate_err" && ! grep -q '^public-safety-gate: warning:' "$gate_err"; then
+  gh pr comment "$pr" [--repo "$repo"] --body-file "$body"
+else
+  cat "$gate_err"   # 投稿せず、本文と gate の出力を人に見せて確認を取る
+fi
 ```
 
 投稿の前に、本文を public-safety の gate に通します (#413。運用 instruction の public safety)。exit 0 で、stderr に

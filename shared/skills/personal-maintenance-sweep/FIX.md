@@ -166,7 +166,8 @@ worktree であること・`HEAD` が `base` で detached であること・clea
   同じ scope で base の worktree (`$basedir`) でも走らせる。出力を行番号を除いた「file: 参照」の組で比べ、branch に
   だけある組が無いこと。候補検出なので、変えた参照の意味と anchor は別に読んで確かめます。
 - **公開する内容の gate**: 累積差分そのもの (`git diff "$base" "$branch"`)、`base` 以降の全 commit の message
-  (`git log --format=%B "$base".."$branch"`。push で一緒に公開されるが、累積差分には入らない)、PR の題名と本文を
+  (`git log --format=%B "$base".."$branch"`。push で一緒に公開されるが、累積差分には入らない)、branch 名 (push で
+  公開される。#413)、PR の題名と本文を
   まとめて public-safety の gate に通し、exit 0 で警告 (`public-safety-gate: warning:` の行) が無いときだけ push と PR へ進みます。
   警告があれば push も PR もせず、gate の出力を人に見せて判断を仰ぎます (#413)。
 
@@ -174,7 +175,7 @@ worktree であること・`HEAD` が `base` で detached であること・clea
   gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"
   ( set -o pipefail
     { git diff "$base" "$branch" && git log --format=%B "$base".."$branch" &&
-      printf '%s\n\n' "$title" && cat "$body_file"; } | "$gate" --stdin )
+      printf '%s\n%s\n\n' "$branch" "$title" && cat "$body_file"; } | "$gate" --stdin )
   ```
 
   gate は `RECORD.md` の Issue の gate と同じく、Claude Code の home に配備されたもの。`base`・`branch`・`title`・

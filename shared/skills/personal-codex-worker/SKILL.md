@@ -308,7 +308,7 @@ worker の最終 message が「完了」で、`依頼` の受け入れ条件を�
    log の失敗、base OID が取れない、commit が 0 件) ときも push せず `Blocked at: trailer` (別の base
    に fallback しない)。
 3. **公開する内容の gate** (#413): push と PR 作成の前に、追加 commit の累積差分 (merge-base から branch まで)、
-   その全 commit の message、PR の題名と本文をまとめて public-safety の gate (`--stdin`) に通す。exit 0 で警告の行
+   その全 commit の message、branch 名、PR の題名と本文をまとめて public-safety の gate (`--stdin`) に通す。exit 0 で警告の行
    が無いときだけ次に進む。警告が出たら push も PR 作成もせず、gate の出力を人に見せて判断を仰ぐ (人が意図した
    内容だと確かめたら進む)。gate が無い・exit 0 でないときは push も PR 作成もせず `Blocked at: public-safety`。
    手順は `LAUNCH.md` §9。
