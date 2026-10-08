@@ -167,7 +167,8 @@ worktree であること・`HEAD` が `base` で detached であること・clea
   だけある組が無いこと。候補検出なので、変えた参照の意味と anchor は別に読んで確かめます。
 - **公開する内容の gate**: 累積差分そのもの (`git diff "$base" "$branch"`)、`base` 以降の全 commit の message
   (`git log --format=%B "$base".."$branch"`。push で一緒に公開されるが、累積差分には入らない)、PR の題名と本文を
-  まとめて public-safety の gate に通し、exit 0 のときだけ push と PR へ進みます。
+  まとめて public-safety の gate に通し、exit 0 で警告 (`public-safety-gate: warning:` の行) が無いときだけ push と PR へ進みます。
+  警告があれば push も PR もせず、gate の出力を人に見せて判断を仰ぎます (#413)。
 
   ```sh
   gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"

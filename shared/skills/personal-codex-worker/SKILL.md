@@ -307,9 +307,14 @@ worker の最終 message が「完了」で、`依頼` の受け入れ条件を�
    `Blocked at: trailer` (author 交代は新 branch + 新 PR)。検査そのものができない (fetch / merge-base /
    log の失敗、base OID が取れない、commit が 0 件) ときも push せず `Blocked at: trailer` (別の base
    に fallback しない)。
-3. push して PR を作る (title / body は packet の `依頼` と `結果` から orchestrator が書く。worker の
-   本文をそのまま貼らない)。
-4. 書く前の検査 (「副作用と組み合わせ」) を通してから、packet に `pr:` と `state: review` を入れる
+3. **公開する内容の gate** (#413): push と PR 作成の前に、追加 commit の累積差分 (merge-base から branch まで)、
+   その全 commit の message、PR の題名と本文をまとめて public-safety の gate (`--stdin`) に通す。exit 0 で警告の行
+   が無いときだけ次に進む。警告が出たら push も PR 作成もせず、gate の出力を人に見せて判断を仰ぐ (人が意図した
+   内容だと確かめたら進む)。gate が無い・exit 0 でないときは push も PR 作成もせず `Blocked at: public-safety`。
+   手順は `LAUNCH.md` §9。
+4. push して PR を作る (title / body は packet の `依頼` と `結果` から orchestrator が書く。worker の
+   本文をそのまま貼らない。`依頼` の割当の行 (残量の値と取得元) は写さない)。
+5. 書く前の検査 (「副作用と組み合わせ」) を通してから、packet に `pr:` と `state: review` を入れる
    (落ちたら書かず、PR 番号と state を返却の中の draft に留める)。review は `personal-review-request` に渡す
    (author=codex なので reviewer は Claude route)。修正 round の push の後も、同じく `state: review` に
    戻す (PR は既にあるので作らない。#325)。
@@ -319,7 +324,7 @@ worker の最終 message が「完了」で、`依頼` の受け入れ条件を�
 - **受け入れ条件を満たさない** と orchestrator が判断したとき: push も PR 作成もしない。review の修正 round と
   同じ規則で、`依頼` に「修正 round N」の項 (満たさない受け入れ条件) を足し、`次の入口` を「修正 round N
   (`依頼` の該当項) を実装する」に上書きする (`state` は `open` のまま)。再起動するかは §1 の authorization に従う。
-- **`Blocked at: fetch` / `Blocked at: trailer`**: push も PR 作成もしない。`state` を `blocked` にし、`結果` に
+- **`Blocked at: fetch` / `Blocked at: trailer` / `Blocked at: public-safety`**: push も PR 作成もしない。`state` を `blocked` にし、`結果` に
   `### <日付> orchestrator/claude` の見出しで停止の区分と public-safe な理由を書く。`次の入口` は worker の
   次の 1 アクションの欄なので触らない。人の手順 (fetch の失敗を調べる、author が交代するなら新しい branch +
   新しい PR に分ける、`origin/main` を確かめる) は返却の `Next step` に書く。
@@ -336,7 +341,7 @@ merge はしない (人が行う)。
   `state`、起動の記録を `last_run` に移したか残したか)、PR を作ったなら番号、run directory の path。
   受け入れ条件を満たさないときは `Status: DONE` で、`依頼` に足した修正 round を書く (§7)。
 - 停止時は `Status: BLOCKED`、`Blocked at:` (authorization | launch-record | preflight | launch-path |
-  clone | executor-exit | executor-result | limit | fetch | transcription | trailer)、public-safe な `Reason`、
+  clone | executor-exit | executor-result | limit | fetch | transcription | trailer | public-safety)、public-safe な `Reason`、
   `Next step` (人が実行する run script の path と run dir / 退避物の path / `依頼` の更新 / limit の
   reset 待ち / 起動の記録の run を確かめる)。worker の本文や secret を停止結果に転記しない。
 

@@ -46,15 +46,15 @@ state の扱い (#412): 止まったことを確かめた停止 (`executor-exit`
 記録を書いた後の人手実行待ち (`launch-path`)・生存を確かめられない (`launch-record`) は **state を変えない**
 (人が外で起動した worker や、動いているかもしれない worker を「停止中」にしないため)。
 
-転記の後に止まった場合 (回収・trailer 検査。`SKILL.md` §7):
+転記の後に止まった場合 (回収・trailer 検査・公開する内容の gate。`SKILL.md` §7):
 
 ```text
 Status: BLOCKED
-Blocked at: fetch | trailer
+Blocked at: fetch | trailer | public-safety
 Reason: <public-safe な停止理由>
 Packet: #<issue> — 結果 "### <日付> worker/codex" を転記済み / 結果 "### <日付> orchestrator/claude" に停止を追記 / state: blocked / 次の入口は触らない / 起動の記録は転記で last_run に移した
 Run dir: <path>
-Next step: <fetch の失敗を人が調べる | author が交代するなら新 branch + 新 PR に分ける | origin/main を人が確かめる>
+Next step: <fetch の失敗を人が調べる | author が交代するなら新 branch + 新 PR に分ける | origin/main を人が確かめる | gate が止めた行を直す、または警告を人が確かめる>
 ```
 
 worker の本文 (最終 message / diff / commit message) を停止結果へ転記しません。secret / 実 home

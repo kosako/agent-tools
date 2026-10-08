@@ -33,7 +33,7 @@ URL、local path、secret、credential、client/work material は含めません
 2. 作業単位が具体化したら GitHub Issue を作る。
 3. Issue ごとに branch を切り、実装担当を決める (下の「割当」)。
 4. 変更は小さく保ち、関連する docs / assets / scripts だけを触る。
-5. commit 前に public safety check を行う。
+5. commit・push と、Issue・PR・コメントの投稿の前に public safety check を行う (下の Public safety check)。
 6. PR を作り、対応する Issue に紐づける。
 7. PR の結果や新しい判断は repository 外の planning docs に反映する。
 
@@ -143,8 +143,9 @@ honest-label: 値は読み取り口が最後に更新した時点のもの (例:
 **記録**: 割当を決めた orchestrator は、packet の `依頼` に担当・残量の扱い・理由を 1 行で残します。残量を
 読んだなら値・取得時刻・取得元 (どの読み取り口から読んだか)、読まなかったならその理由 (従量課金 / 読み取り口
 なし / 読めない / 値が古い) を書きます。packet は local の file で private な詳細を含んでよく、publish が Issue に写すのは
-`結果` の最新節と `次の入口` だけなので、残量の値も取得元も外に出ません (この workflow の例では取得元を
-`<取得元>` と書く)。
+`結果` の最新節と `次の入口` だけです。PR の題名と本文 (委譲 worker の PR は orchestrator が packet から書く) にも
+`依頼` の割当の行を写さないので、残量の値も取得元も外に出ません (公開する text は投稿・push の前に public-safety の
+gate に通す。下の Public safety check。この workflow の例では取得元を `<取得元>` と書く)。
 
 ```text
 - 割当: claude (規則 3 の既定。残量 2026-10-01 10:50 <取得元> から読み取り: Claude 週 57% / 5h 91% = 枯渇なし)
@@ -159,13 +160,17 @@ Claude で枠が詰まった)、この workflow の正本がある agent-tools r
 
 ## Public safety check
 
-commit / PR 前に、少なくとも以下を確認します。
+commit・push と、Issue・PR・コメントの投稿の前に、少なくとも以下を確認します。
 
 - private planning tool の種類や URL が tracked files に入っていない。
 - local machine path が tracked files に入っていない。
 - secret-like string が tracked files に入っていない。
 - generated artifacts が意図せず tracked files に入っていない。
 - work / client / customer / third-party confidential material が入っていない。
+- public に出す GitHub の text (Issue / PR の題名・本文・コメント、commit message、branch 名) にも、上のものが
+  入っていない。投稿・push の前に、その text を `personal-public-safety-gate --stdin` に通し、exit 0 で警告の行が
+  無いときだけ公開する (#413)。gate が無い・exit 0 でない・警告が出たときは公開せず、本文と gate の出力を人に
+  見せて確認を取る。commit message は commit-msg の hook でも検査される。
 
 ## PR の完了条件
 

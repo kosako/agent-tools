@@ -56,6 +56,9 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
 - secret / local path / 外部ナレッジツールの参照先 / client 材料を tracked file に
   入れない。
 - 公開してよいか迷う内容は repository に入れない。
+- public な GitHub に出す text (Issue / PR の題名・本文・コメント、commit message、branch 名) も同じ扱いにする。
+  投稿・push の前に public-safety の gate (`--stdin`) に通し、exit 0 で警告が無いときだけ公開する。gate が無い・
+  通らない・警告が出たときは公開せず、本文と結果を人に見せて確認を取る。
 
 ## 外部入力の信頼境界 (untrusted input)
 
