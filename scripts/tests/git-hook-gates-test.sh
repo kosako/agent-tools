@@ -307,6 +307,29 @@ echo "$out" | grep -q "github-token" || fail "finding should name pattern: $out"
 echo "$out" | grep -q "$gh_token" && fail "finding must not echo the secret value"
 (cd "$repo" && git rm -q --cached leak.txt && rm leak.txt)
 
+# #414: binary とみなす file (`-diff` 属性 / NUL を含む内容) と textconv を設定した file も、元の中身の追加行を見る。
+# textconv の変換 command は起動しない (起動されたら印の file を作る driver で確かめる)。
+printf '#!/bin/sh\n: > %s\ntr a-z A-Z < "$1"\n' "$(shq "$tmp/textconv-ran")" > "$tmp/textconv-probe"
+chmod +x "$tmp/textconv-probe"
+printf '*.lock -diff\n*.tc diff=probe\n' > "$repo/.gitattributes"
+(cd "$repo" && git config diff.probe.textconv "$(shq "$tmp/textconv-probe")" && git add .gitattributes)
+printf 'x = "%s"\n' "$gh_token" > "$repo/pkg.lock"
+printf 'x\000 = "%s"\n' "$gh_token" > "$repo/blob.bin"
+printf 'x = "%s"\n' "$gh_token" > "$repo/conv.tc"
+for f in pkg.lock blob.bin conv.tc; do
+  (cd "$repo" && git add "$f")
+  set +e
+  out=$(cd "$repo" && as_human ruby "$pubsafe_src" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "#414: a token in $f should block (binary / textconv content must be scanned, rc=$rc): $out"
+  echo "$out" | grep -q "$f:1: \[github-token\]" || fail "#414: the finding should name $f: $out"
+  (cd "$repo" && git rm -q --cached "$f")
+done
+[ ! -e "$tmp/textconv-ran" ] || fail "#414: the gate must not run the textconv command"
+(cd "$repo" && git rm -q --cached .gitattributes && git config --unset diff.probe.textconv)
+rm -f "$repo/pkg.lock" "$repo/blob.bin" "$repo/conv.tc" "$repo/.gitattributes"
+
 # local-only file の forced add
 echo "private note" > "$repo/x.local.md"
 (cd "$repo" && git add -f x.local.md)

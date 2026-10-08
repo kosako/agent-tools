@@ -554,16 +554,17 @@ repository の外):
 ```sh
 gate=<tool home>/agent-tools/scripts/personal-public-safety-gate
 ( set -o pipefail
-  { git -C "$main" diff "$base_oid" "refs/heads/$branch" &&
+  { git -C "$main" diff "$base_oid" "refs/heads/$branch" --text --no-textconv --no-ext-diff &&
     git -C "$main" log --format=%B "$base_oid".."refs/heads/$branch" &&
-    git -C "$main" log -p --format= "$base_oid".."refs/heads/$branch" &&
+    git -C "$main" log -p --format= "$base_oid".."refs/heads/$branch" --text --no-textconv --no-ext-diff &&
     printf '%s\n%s\n\n' "$branch" "$title" && cat "$body_file"; } | "$gate" --stdin ) 2> "$run/gate-publish.err" || exit 1
 grep -q '^public-safety-gate: warning:' "$run/gate-publish.err"; [ $? -eq 1 ] || exit 1   # 1 (警告なし) のときだけ進む
 ```
 
 (`exit 1` は「その段で止めて push しない」の意。gate が無い・exit 0 でないときは `Blocked at: public-safety`。警告の行が
 あるときは `gate-publish.err` を人に見せて判断を仰ぎ、人が意図した内容だと確かめたら push へ進む。`pipefail` は、材料の
-`git` が失敗したときに gate が残りだけを読んで exit 0 になるのを防ぐ。`grep` は 1 (一致なし) のときだけ進む
+`git` が失敗したときに gate が残りだけを読んで exit 0 になるのを防ぐ。`--text --no-textconv --no-ext-diff` は、binary
+とみなす file の中身も差分に出し、textconv や外部 diff の command を起動しないため (#414)。`grep` は 1 (一致なし) のときだけ進む
 (`! grep` は読み取りの失敗 (2) も成功に反転するので使わない)。`title` と `body_file` は literal の変数で渡す。)
 
 通ったら:

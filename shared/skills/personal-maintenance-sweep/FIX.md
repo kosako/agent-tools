@@ -177,8 +177,8 @@ worktree であること・`HEAD` が `base` で detached であること・clea
   ```sh
   gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"
   ( gate_out=$( set -o pipefail
-      { git diff "$base" "$branch" && git log --format=%B "$base".."$branch" &&
-        git log -p --format= "$base".."$branch" &&
+      { git diff "$base" "$branch" --text --no-textconv --no-ext-diff && git log --format=%B "$base".."$branch" &&
+        git log -p --format= "$base".."$branch" --text --no-textconv --no-ext-diff &&
         printf '%s\n%s\n\n' "$branch" "$title" && cat "$body_file"; } | "$gate" --stdin 2>&1 )
     gate_rc=$?
     printf '%s\n' "$gate_out" >&2
@@ -187,7 +187,8 @@ worktree であること・`HEAD` が `base` で detached であること・clea
   ```
 
   gate は `RECORD.md` の Issue の gate と同じく、Claude Code の home に配備されたもの。`base`・`branch`・`title`・
-  `body_file` は literal の変数で渡します。`pipefail` は、材料の `git` が失敗したときに gate が残りだけを読んで
+  `body_file` は literal の変数で渡します。`--text --no-textconv --no-ext-diff` は、binary とみなす file の中身も差分に
+  出し、textconv や外部 diff の command を起動しないためです (#414)。`pipefail` は、材料の `git` が失敗したときに gate が残りだけを読んで
   exit 0 になるのを防ぎます。gate が無い・exit 0 でない・警告 (exit 3) のときは push も PR もせず、gate の出力 (どの
   規則に当たったか) を報告します。直したら、この節の検証からやり直します。
 - commit の message は Claude の trailer 付きで、file に書いて `-F` で渡します。commit の前にその file を同じ gate

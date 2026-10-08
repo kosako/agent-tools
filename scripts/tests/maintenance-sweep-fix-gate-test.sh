@@ -258,6 +258,15 @@ for shell in sh zsh; do
   run_block "$base" "$title_clean" "$tmp/body-clean.md"
   blocked || fail "[$shell] 途中の commit で足して後で消した値で止まらない (各 commit の差分を見ていない。rc=$rc)"
 
+  # (k) binary とみなす file (`-diff` 属性) にある値でも止まる (差分を --text --no-textconv で取る。#414)
+  git -C "$repo" checkout -q -B sweep/fix-1 "$base"
+  printf '*.bin -diff\n' > "$repo/.gitattributes"
+  printf 'data %s\n' "$marker" > "$repo/data.bin"
+  git -C "$repo" add .gitattributes data.bin
+  git -C "$repo" commit -q -m 'docs: fix (sweep #1)' -m 'clean message'
+  run_block "$base" "$title_clean" "$tmp/body-clean.md"
+  blocked || fail "[$shell] binary とみなす file にある値で止まらない (差分に --text が無い。rc=$rc)"
+
   # (j) gate が警告 (suspicious) だけを出したら exit 3 で止まり、警告を出す (exit 0 で push に進まない。#413)
   make_fix 'clean line' 'clean message'
   printf 'password = "hunter2secret"\n' > "$tmp/body-warn.md"
