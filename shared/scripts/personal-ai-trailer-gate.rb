@@ -43,7 +43,8 @@
 # - 1 commit に複数の AI (Claude / Codex / OpenCode) のトレーラが混在したら fail-closed
 #   (相互レビュー routing が判定不能になる)。
 #
-# exit code: 0 = pass (人間 commit / merge / 検証通過) / 1 = 検証 fail / 2 = usage・
+# exit code: 0 = pass (人間 commit (人間の merge を含む) / 検証通過) / 1 = 検証 fail (agent の merge commit の
+# トレーラ欠落を含む) / 2 = usage・
 # 入力エラー (message file が読めない等)。
 
 module AiTrailerGate
