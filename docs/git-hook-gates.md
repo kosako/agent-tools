@@ -111,11 +111,12 @@ text を stdin で渡し、exit 0 のときだけ投稿へ進む (1 = definite �
 どちらも投稿しない)。
 
 **commit-msg mode (`--commit-msg <file>`)** (#413): commit-msg stage で dispatcher が message の file を
-渡す。pre-commit mode と同じ pattern で、commit に残る本文だけを scan する。comment 行 (`#` 始まり) と
-scissors 行より後 (`git commit -v` の差分) は除く (ai-trailer-gate の本文の取り出しと同じ規則。
-commentChar の変更には追随しない)。差分の検査は pre-commit の役目なので、ここでは見ない。finding は
-`commit-msg:<line>` で報告し、exit 契約も同じ。有効な trailer があっても、本文に definite があれば
-commit-msg stage で止まる。
+渡す。pre-commit mode と同じ pattern で、message の file **全体**を scan する。comment 行 (`#` 始まり) や
+scissors 行より後 (`git commit -v` の差分) も除かない。commit に残る行は cleanup の mode で変わり
+(`-m` / `-F` の既定の whitespace や `--cleanup=verbatim` では `#` 行も残る)、CLI の `--cleanup` は hook から
+確かめられないため、過検出の側に倒す。止まったときは、該当行を直すか allow pragma を書く。`-v` の差分は
+pre-commit を通った内容なので、新たに止まることは基本的に無い。finding は `commit-msg:<line>` で報告し、
+exit 契約も同じ。有効な trailer があっても、message に definite があれば commit-msg stage で止まる。
 
 ## personal-git-identity-gate(pre-commit)
 

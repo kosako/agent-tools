@@ -441,7 +441,7 @@ rm "$tmp/home/.config/agent-tools/public-safety-patterns.local"
 echo "$out" | grep -q "^usage:" || fail "unknown argument should print usage even with broken local pattern: $out"
 
 # ---- #413: commit-msg mode (commit message の本文の検査口) ---------------------------
-# 本文の token / home path は block し、comment 行と scissors 行より後 (`git commit -v` の差分) は見ない。
+# message の file 全体を見る。comment 行や scissors 行より後も除かない (cleanup の mode によっては commit に残るため)。
 msgf="$tmp/commit-msg.txt"
 printf 'subject\n\nbody line\n' > "$msgf"
 (cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --commit-msg "$msgf") || fail "commit-msg mode: clean message should pass"
@@ -454,7 +454,7 @@ set -e
 echo "$out" | grep -q "commit-msg:3: \[github-token\]" || fail "commit-msg finding should carry commit-msg:line: $out"
 echo "$out" | grep -q "$gh_token" && fail "commit-msg mode must not echo the secret value"
 echo "$out" | grep -q "commit message を直して" || fail "commit-msg mode hint should mention the commit message: $out"
-# local pattern (私物の語) も本文では block し、comment 行と scissors 行より後では見ない
+# local pattern (私物の語) も block する。comment 行、scissors に似た行、正規の scissors 行より後も見る
 echo "secret-project-zeta" > "$tmp/home/.config/agent-tools/public-safety-patterns.local"
 printf 'subject\n\nabout secret-project-zeta\n' > "$msgf"
 set +e
@@ -462,9 +462,18 @@ set +e
 rc=$?
 set -e
 [ "$rc" -eq 1 ] || fail "commit-msg mode: a local pattern in the body should block (rc=$rc)"
-printf 'subject\n\nbody\n# comment mentions secret-project-zeta\n# ------------------------ >8 ------------------------\n+x = "%s"\n' "$gh_token" > "$msgf"
-(cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --commit-msg "$msgf" >/dev/null 2>&1) \
-  || fail "commit-msg mode: comment lines and the part after scissors should not be scanned"
+for variant in "comment" "scissors-like" "scissors"; do
+  case $variant in
+    comment) printf 'subject\n\nbody\n# comment mentions secret-project-zeta\n' > "$msgf" ;;
+    scissors-like) printf 'subject\n\n# - >8 -\nx = "%s"\n' "$gh_token" > "$msgf" ;;
+    scissors) printf 'subject\r\n\r\n# ------------------------ >8 ------------------------\r\nx = "%s"\r\n' "$gh_token" > "$msgf" ;;
+  esac
+  set +e
+  (cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --commit-msg "$msgf" >/dev/null 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "commit-msg mode: the whole message file should be scanned ($variant, rc=$rc)"
+done
 rm "$tmp/home/.config/agent-tools/public-safety-patterns.local"
 printf 'subject\n\npassword = "hunter2secret"\n' > "$msgf"
 set +e
@@ -553,6 +562,14 @@ rc=$?
 set -e
 rm "$tmp/home/.config/agent-tools/public-safety-patterns.local"
 [ "$rc" -ne 0 ] || fail "a local pattern in a human commit message should be blocked at commit-msg"
+# `-m` の既定の cleanup (whitespace) では `#` 始まりの行も commit に残るので、その行の token も止める
+set +e
+(cd "$repo2" && as_human git commit -qm "subject for m
+
+# x = \"$gh_token\"" >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "a token on a #-line kept by -m should be blocked at commit-msg"
 (cd "$repo2" && as_human git commit -qm "clean message for m") || fail "a clean message should pass after the blocked attempts"
 
 # codex marker + Codex trailer

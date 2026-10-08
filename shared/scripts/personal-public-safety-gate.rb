@@ -39,9 +39,10 @@
 # Issue コメントへ投稿する前の検査口 (#253、docs/agent-packets.md)。exit 契約は同じ。
 #
 # commit-msg mode (`--commit-msg <file>`): commit-msg stage の dispatcher から呼ばれ、commit message の
-# file の本文を同じ pattern で scan する (#413)。comment 行 (`#` 始まり) と scissors 行より後 (`git commit -v`
-# の差分) は commit に残らないので除く (ai-trailer-gate の message_lines と同じ規則。commentChar の変更には
-# 追随しない)。差分の検査は pre-commit stage の役目なので、ここでは見ない。exit 契約は同じ。
+# file を同じ pattern で scan する (#413)。comment 行 (`#` 始まり) や scissors 行より後 (`git commit -v` の差分) も
+# 除かずに file 全体を見る。commit に残る行は cleanup の mode (`-m` / `-F` の既定の whitespace、`--cleanup=verbatim`
+# などでは `#` 行も残る) で変わり、CLI の `--cleanup` は hook から確かめられないため (過検出の側に倒す)。
+# exit 契約は同じ。
 
 module PublicSafetyGate
   VERSION = "1"
@@ -214,26 +215,12 @@ module PublicSafetyGate
     findings
   end
 
-  SCISSORS_RE = /\A# -+ >8 -+/.freeze
-
-  # commit に残る本文だけを、元の行番号のまま残す (comment 行は空行にし、scissors 行で打ち切る)。
-  def commit_message_text(text)
-    kept = []
-    text.each_line do |raw|
-      line = raw.chomp
-      break if SCISSORS_RE.match?(line)
-
-      kept << (line.start_with?("#") ? "" : line)
-    end
-    kept.join("\n")
-  end
-
   def commit_msg_findings(path, extra)
     raise ArgumentError, "commit message の file を読めません" unless File.file?(path)
 
     text = File.read(path).force_encoding(Encoding::UTF_8)
     text = text.scrub("�") unless text.valid_encoding?
-    scan_text(commit_message_text(text), extra, home_needle, "commit-msg")
+    scan_text(text, extra, home_needle, "commit-msg")
   end
 
   def staged_findings(extra)
