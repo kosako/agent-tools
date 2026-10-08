@@ -201,7 +201,8 @@ personal-maintenance-sweep の run `<run id>` で起票 (観点: <観点> / 種�
 
 ```sh
 gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"
-if { printf '%s\n\n' "$title"; cat "$body_file"; } | "$gate" --stdin 2> "$gate_err" &&
+if ( set -o pipefail
+     { printf '%s\n\n' "$title" && cat "$body_file"; } | "$gate" --stdin ) 2> "$gate_err" &&
    { grep -q '^public-safety-gate: warning:' "$gate_err"; [ $? -eq 1 ]; }; then   # grep は 1 (警告なし) のときだけ
   gh issue create --title "$title" --body-file "$body_file" --label maintenance-sweep
 else
@@ -211,7 +212,8 @@ fi
 
   gate は Claude Code の home に配備されたもの (投稿するのは Claude の session だけ)。`title` と
   `body_file`・`gate_err` (repository の外の一時 file) は literal の変数で渡す。gate の exit だけで投稿へ進めず、
-  上のように警告の行まで確かめてから投稿する。
+  上のように警告の行まで確かめてから投稿する。`pipefail` と `&&` は、本文の読み取りが失敗したときに gate が題名だけを
+  読んで exit 0 になり、未検査の本文を投稿するのを防ぐ。
   gate が exit 0 でも stderr に警告 (`public-safety-gate: warning:`) の行があれば投稿せず、題名・本文と警告を人に見せて判断を仰ぐ
   (#413。packet の publish と同じ扱い)。gate が無い・exit 0 でないときは投稿せず、gate の出力 (どの規則に
   当たったか) を報告して、題名と本文を直すか report モードに切り替えるかを確認する。追跡 Issue の本文と
