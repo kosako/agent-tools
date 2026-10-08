@@ -620,7 +620,7 @@ esac
 Co-Authored-By: OpenCode (opencode-go/kimi-k3) <noreply@opencode.invalid>") \
   || fail "opencode commit with trailer should pass"
 
-# merge commit (MERGE_HEAD) は trailer 対象外
+# merge commit (MERGE_HEAD) も agent の session なら trailer が要る (#415)。人間の merge は今までどおり対象外
 (cd "$repo2" && git checkout -q -b feature && echo m > m.txt && git add m.txt \
   && as_claude git commit -qm "feature work
 
@@ -630,8 +630,20 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>" \
   && as_claude git commit -qm "base work
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>")
-(cd "$repo2" && as_claude git merge --no-ff -q -m "merge feature (no trailer)" feature) \
-  || fail "merge commit without trailer should pass (MERGE_HEAD exemption)"
+set +e
+(cd "$repo2" && as_claude git merge --no-ff -q -m "merge feature (no trailer)" feature >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "#415: a claude merge commit without trailer should be blocked"
+(cd "$repo2" && git merge --abort)
+(cd "$repo2" && as_claude git merge --no-ff -q -m "merge feature
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>" feature) \
+  || fail "#415: a claude merge commit with trailer should pass"
+(cd "$repo2" && git checkout -q -b feature2 && echo h2 > h2.txt && git add h2.txt \
+  && as_human git commit -qm "human feature work" && git checkout -q main)
+(cd "$repo2" && as_human git merge --no-ff -q -m "human merge (no trailer)" feature2) \
+  || fail "#415: a human merge commit without trailer should still pass"
 
 # repo 自身の hook への chain: 実行される + 失敗が伝播する
 repo3="$tmp/repo3"

@@ -71,6 +71,11 @@ r = judge([["aaaaaaaa", :codex]])
 check("全 codex -> reviewer claude", r[:verdict] == :ok && r[:reviewer] == :claude)
 check("mixed commit で fail-closed", judge([["a" * 8, :mixed]])[:verdict] == :fail_closed)
 check("trailer 欠落で fail-closed", judge([["a" * 8, :claude], ["b" * 8, :none]])[:verdict] == :fail_closed)
+# trailer の無い merge commit は理由を分けて示す (#415)
+r = judge([["a" * 8, :claude], ["b" * 8, :merge_none]])
+check("trailer の無い merge commit で fail-closed", r[:verdict] == :fail_closed)
+check("merge commit の理由に rebase を案内する", r[:reason].include?("merge commit") && r[:reason].include?("rebase"))
+check("ふつうの trailer 欠落の理由は merge commit と言わない", !judge([["b" * 8, :none]])[:reason].include?("merge commit"))
 check("複数 AI 混在で fail-closed", judge([["a" * 8, :claude], ["b" * 8, :codex]])[:verdict] == :fail_closed)
 check("commit ゼロは error", judge([])[:verdict] == :error)
 
@@ -130,6 +135,16 @@ File.write(ARGV[2], JSON.generate([[
   c.call(sha.call(1), "y\n\n#{codex_tr}"),
 ]]))
 File.write(ARGV[3], JSON.generate([[c.call(sha.call(0), "no trailer here")]]))
+# trailer の無い merge commit (親が 2 つ) と、Claude の commit (#415)
+File.write(ARGV[7], JSON.generate([[
+  c.call(sha.call(0), "x\n\n#{claude_tr}"),
+  c.call(sha.call(1), "Merge branch main into feat").merge("parents" => [{ "sha" => sha.call(0) }, { "sha" => sha.call(2) }]),
+]]))
+# 親が 1 つで trailer の無い commit は、ふつうの trailer 欠落のまま
+File.write(ARGV[8], JSON.generate([[
+  c.call(sha.call(0), "x\n\n#{claude_tr}"),
+  c.call(sha.call(1), "no trailer").merge("parents" => [{ "sha" => sha.call(0) }]),
+]]))
 # 2 page (100 + 50)。全部 claude なら ok / 2 page 目の末尾だけ codex なら fail-closed —
 # 後者が検出されることで「先頭 page だけ見ていない」ことを固定する。
 pages_ok = [
@@ -147,7 +162,8 @@ File.write(ARGV[6], JSON.generate([[
   c.call(sha.call(1), "y\n\nCo-Authored-By: OpenCode (canaryprov/claude-OCCANARY-model) <#{oc_email}>"),
 ]]))
 ' "$canary" "$tmp/fx-claude.json" "$tmp/fx-mixed.json" "$tmp/fx-none.json" \
-  "$tmp/fx-2page-ok.json" "$tmp/fx-2page-tail.json" "$tmp/fx-opencode.json"
+  "$tmp/fx-2page-ok.json" "$tmp/fx-2page-tail.json" "$tmp/fx-opencode.json" \
+  "$tmp/fx-merge.json" "$tmp/fx-single-parent.json"
 
 run_pf() {
   env PATH="$fakebin:$PATH" FAKE_GH_FIXTURE="$1" ruby "$src" "$2" ${3:+--repo "$3"}
@@ -214,6 +230,21 @@ run_pf "$tmp/fx-none.json" 206 >/dev/null 2>&1
 rc=$?
 set -e
 [ "$rc" -eq 1 ] || fail "trailer-less PR should fail closed (rc=$rc)"
+
+# trailer の無い merge commit -> fail-closed で、理由が merge commit と rebase を示す (#415)
+set +e
+out=$(run_pf "$tmp/fx-merge.json" 206 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "a PR with a trailer-less merge commit should fail closed (rc=$rc): $out"
+echo "$out" | grep -q "none (merge commit)" || fail "the merge commit should be labelled: $out"
+echo "$out" | grep -q "merge commit がある (PR の branch は rebase" || fail "the reason should point at the merge commit: $out"
+set +e
+out=$(run_pf "$tmp/fx-single-parent.json" 206 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "a single-parent trailer-less commit should fail closed (rc=$rc)"
+echo "$out" | grep -q "merge commit" && fail "a single-parent commit must not be called a merge commit: $out"
 
 # gh 失敗 -> exit 2
 set +e
