@@ -15,9 +15,12 @@ enforcement boundary ではない:
   外れる (実測 #201)。
 - 別 client / 他マシンからの commit・GitHub 上の操作 (squash merge 等) は対象外。
 
-hard な床は従来どおりここに載せない (credential 隔離 / egress / CI)。公開前の最終
-確認点は push / CI 側に置く (follow-up は #202)。トレーラ喪失 (squash / rebase) への
-対処は消費側 preflight (#202 の routing-preflight) の領分。
+hard な床は従来どおりここに載せない (credential 隔離 / egress / CI)。公開する内容の検査は
+公開の前に置く (#413): 差分は pre-commit、commit message は commit-msg (public-safety の
+`--commit-msg`)、Issue / PR / コメントの本文は投稿の前の public-safety の `--stdin` (各 skill と
+運用 instruction)。push / CI には置かない (push した時点で public になるので、公開前の確認に
+ならない)。トレーラ喪失 (squash / rebase) への対処は消費側 preflight (#202 の routing-preflight) の
+領分。
 
 ## 構成と配線(所有分界)
 
@@ -31,9 +34,9 @@ global git config: core.hooksPath = <dotfiles 所有の hooks dir>
 
 <deploy> = <tool home>/agent-tools/scripts (sync の script 配備先。公開契約)
   personal-git-hook-dispatcher   … stage ごとの gate 実行 + repo hook への chain
-  personal-public-safety-gate    … pre-commit stage の gate (1 本目)
+  personal-public-safety-gate    … pre-commit stage の gate (1 本目) / commit-msg stage の gate (1 本目。#413)
   personal-git-identity-gate     … pre-commit stage の gate (2 本目。#281)
-  personal-ai-trailer-gate       … commit-msg stage の gate
+  personal-ai-trailer-gate       … commit-msg stage の gate (2 本目)
 ```
 
 - dispatcher は gate を**自分と同じ directory** から解決する。gate が欠けていれば
@@ -41,7 +44,8 @@ global git config: core.hooksPath = <dotfiles 所有の hooks dir>
 - shim がどちらの tool home の deploy を指すかは dotfiles 側の裁定 (両 home に同一
   byte が配備される)。
 - 同じ stage の gate は配列順に実行し、最初に fail した gate の exit code で止まる (後続の
-  gate は走らない)。pre-commit は public-safety → git-identity の順。
+  gate は走らない)。pre-commit は public-safety → git-identity の順、commit-msg は public-safety
+(`--commit-msg`) → ai-trailer の順 (#413)。
 - dotfiles 側の readiness probe / doctor は配備本数を数える。gate を増やしたら dotfiles 側も
   追随が要る (#281 で 3 本 → 4 本。follow-up は dotfiles 側の Issue)。
 - **再入 sentinel の既知の副作用**: dispatcher は chain 実行時に stage 単位の env
@@ -105,6 +109,13 @@ path 判定 (`local-only-file`) は対象外。finding は `stdin:<line>` で報
 同じ。packet の public 写しを Issue コメントへ投稿する前の検査口 (#253)。呼び出し側は
 text を stdin で渡し、exit 0 のときだけ投稿へ進む (1 = definite あり、2 = 検査できていない。
 どちらも投稿しない)。
+
+**commit-msg mode (`--commit-msg <file>`)** (#413): commit-msg stage で dispatcher が message の file を
+渡す。pre-commit mode と同じ pattern で、commit に残る本文だけを scan する。comment 行 (`#` 始まり) と
+scissors 行より後 (`git commit -v` の差分) は除く (ai-trailer-gate の本文の取り出しと同じ規則。
+commentChar の変更には追随しない)。差分の検査は pre-commit の役目なので、ここでは見ない。finding は
+`commit-msg:<line>` で報告し、exit 契約も同じ。有効な trailer があっても、本文に definite があれば
+commit-msg stage で止まる。
 
 ## personal-git-identity-gate(pre-commit)
 

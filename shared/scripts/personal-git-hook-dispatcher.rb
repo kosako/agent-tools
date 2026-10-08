@@ -27,11 +27,13 @@
 # (#274。Ruby 既定の例外終了は exit 1 で、gate の finding による block と区別がつかない)。
 
 module GitHookDispatcher
-  # stage ごとの gate を配列順に実行し、最初に fail した gate の exit code で止まる。
+  # stage ごとの gate を配列順に実行し、最初に fail した gate の exit code で止まる。各 entry は
+  # [gate 名, git の引数より前に渡す固定の引数]。
   # pre-commit は public-safety (staged diff) → git-identity (#281。partial な identity) の順。
+  # commit-msg は public-safety (commit message の本文。#413) → ai-trailer の順。
   STAGE_GATES = {
-    "pre-commit" => %w[personal-public-safety-gate personal-git-identity-gate],
-    "commit-msg" => %w[personal-ai-trailer-gate],
+    "pre-commit" => [["personal-public-safety-gate", []], ["personal-git-identity-gate", []]],
+    "commit-msg" => [["personal-public-safety-gate", ["--commit-msg"]], ["personal-ai-trailer-gate", []]],
   }.freeze
 
   # 再入 sentinel (stage 単位)。repo hook が shim (→ dispatcher) を指す誤設定でも、
@@ -73,7 +75,7 @@ module GitHookDispatcher
     args = argv[1..-1] || []
     own_dir = File.dirname(File.realpath(__FILE__))
 
-    STAGE_GATES.fetch(stage).each do |gate|
+    STAGE_GATES.fetch(stage).each do |gate, gate_args|
       gate_path = File.join(own_dir, gate)
       unless File.executable?(gate_path)
         warn "git-hook-dispatcher: gate #{gate} is missing or not executable at #{gate_path}; " \
@@ -88,7 +90,7 @@ module GitHookDispatcher
       # 落ちる経路は残るが、その場合も path は script file 名の引数として渡され、
       # command 文字列として parse されない)。この冗長に見える形は #267 の回帰防止
       # なので単純化しない。
-      started = system([gate_path, gate_path], *args)
+      started = system([gate_path, gate_path], *gate_args, *args)
       if started.nil?
         # spawn 自体の失敗 (executable? 確認後に gate が消えた / 実行不能になった TOCTOU)。
         # このとき $?.exitstatus は nil ではなく 127 なので、下の nil guard (signal 死) では
