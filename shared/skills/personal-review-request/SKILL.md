@@ -214,7 +214,8 @@ write-authorized のときだけ、レビューを始める前に、何をどの
 body=<一時ファイル path の shell literal>
 gate_err=<一時ファイル path の shell literal>
 gate=<tool home>/agent-tools/scripts/personal-public-safety-gate
-if "$gate" --stdin < "$body" 2> "$gate_err" && ! grep -q '^public-safety-gate: warning:' "$gate_err"; then
+if "$gate" --stdin < "$body" 2> "$gate_err" &&
+   { grep -q '^public-safety-gate: warning:' "$gate_err"; [ $? -eq 1 ]; }; then   # grep は 1 (警告なし) のときだけ
   gh pr comment "$pr" [--repo "$repo"] --body-file "$body"
 else
   cat "$gate_err"   # 投稿せず、本文と gate の出力を人に見せて確認を取る

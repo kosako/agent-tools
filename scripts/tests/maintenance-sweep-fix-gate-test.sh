@@ -247,6 +247,23 @@ for shell in sh zsh; do
   # (g) 材料の git が失敗したら (base が無い)、gate が残りだけを読んで exit 0 にならない。
   run_block 0000000000000000000000000000000000000001 "$title_clean" "$tmp/body-clean.md"
   [ "$rc" -ne 0 ] || fail "[$shell] 材料の git が失敗しても gate の command が exit 0 になる (fail-open)"
+
+  # (i) 途中の commit で足して後の commit で消した値でも止まる (累積差分には残らないが、commit ごと push で公開される。#413)
+  git -C "$repo" checkout -q -B sweep/fix-1 "$base"
+  printf 'line %s\n' "$marker" >> "$repo/doc.md"
+  git -C "$repo" commit -q -a -m 'docs: fix (sweep #1)' -m 'clean message'
+  git -C "$repo" checkout -q "$base" -- doc.md
+  git -C "$repo" commit -q -a -m 'docs: review (sweep #1)' -m 'clean review message'
+  [ -z "$(git -C "$repo" diff "$base" sweep/fix-1)" ] || fail "[$shell] (i) の前提が崩れた: 累積差分が空でない"
+  run_block "$base" "$title_clean" "$tmp/body-clean.md"
+  blocked || fail "[$shell] 途中の commit で足して後で消した値で止まらない (各 commit の差分を見ていない。rc=$rc)"
+
+  # (j) gate が警告 (suspicious) だけを出したら exit 3 で止まり、警告を出す (exit 0 で push に進まない。#413)
+  make_fix 'clean line' 'clean message'
+  printf 'password = "hunter2secret"\n' > "$tmp/body-warn.md"
+  run_block "$base" "$title_clean" "$tmp/body-warn.md"
+  [ "$rc" -eq 3 ] || fail "[$shell] gate の警告で exit 3 にならない (rc=$rc): $(cat "$tmp/out")"
+  grep -q '^public-safety-gate: warning:' "$tmp/out" || fail "[$shell] 警告で止まったのに gate の出力を出していない: $(cat "$tmp/out")"
 done
 [ "$ran" -gt 0 ] || fail "gate の command を走らせる shell (sh / zsh) が無い"
 

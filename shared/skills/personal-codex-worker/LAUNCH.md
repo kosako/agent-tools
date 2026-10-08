@@ -546,8 +546,8 @@ commit ごとに trailer の name を見て、`Codex` 始まりが 1 つ以上�
 0 件なら push するものが無いので同じく停止)。判定の正本は `personal-review-request` の「レビュアーの
 決定」と ai-trailer gate で、ここでは push 前の消費側検査として同じ規則を当てる。
 
-通ったら、push の前に **公開する内容の gate** を通す (#413。`SKILL.md` §7)。累積差分・全 commit の message・branch 名・
-PR の題名と本文をまとめて public-safety の gate に通し、exit 0 で、gate の stderr に警告 (`public-safety-gate: warning:`) の行が無いときだけ
+通ったら、push の前に **公開する内容の gate** を通す (#413。`SKILL.md` §7)。累積差分・各 commit の差分 (途中で足して後で
+消した内容も、その commit ごと公開されるため)・全 commit の message・branch 名・PR の題名と本文をまとめて public-safety の gate に通し、exit 0 で、gate の stderr に警告 (`public-safety-gate: warning:`) の行が無いときだけ
 push へ進む。題名と本文は先に orchestrator が packet から書いておく (`依頼` の割当の行は写さない。本文の一時 file は
 repository の外):
 
@@ -556,13 +556,15 @@ gate=<tool home>/agent-tools/scripts/personal-public-safety-gate
 ( set -o pipefail
   { git -C "$main" diff "$base_oid" "refs/heads/$branch" &&
     git -C "$main" log --format=%B "$base_oid".."refs/heads/$branch" &&
+    git -C "$main" log -p --format= "$base_oid".."refs/heads/$branch" &&
     printf '%s\n%s\n\n' "$branch" "$title" && cat "$body_file"; } | "$gate" --stdin ) 2> "$run/gate-publish.err" || exit 1
-! grep -q '^public-safety-gate: warning:' "$run/gate-publish.err" || exit 1
+grep -q '^public-safety-gate: warning:' "$run/gate-publish.err"; [ $? -eq 1 ] || exit 1   # 1 (警告なし) のときだけ進む
 ```
 
 (`exit 1` は「その段で止めて push しない」の意。gate が無い・exit 0 でないときは `Blocked at: public-safety`。警告の行が
 あるときは `gate-publish.err` を人に見せて判断を仰ぎ、人が意図した内容だと確かめたら push へ進む。`pipefail` は、材料の
-`git` が失敗したときに gate が残りだけを読んで exit 0 になるのを防ぐ。`title` と `body_file` は literal の変数で渡す。)
+`git` が失敗したときに gate が残りだけを読んで exit 0 になるのを防ぐ。`grep` は 1 (一致なし) のときだけ進む
+(`! grep` は読み取りの失敗 (2) も成功に反転するので使わない)。`title` と `body_file` は literal の変数で渡す。)
 
 通ったら:
 

@@ -202,7 +202,7 @@ personal-maintenance-sweep の run `<run id>` で起票 (観点: <観点> / 種�
 ```sh
 gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"
 if { printf '%s\n\n' "$title"; cat "$body_file"; } | "$gate" --stdin 2> "$gate_err" &&
-   ! grep -q '^public-safety-gate: warning:' "$gate_err"; then
+   { grep -q '^public-safety-gate: warning:' "$gate_err"; [ $? -eq 1 ]; }; then   # grep は 1 (警告なし) のときだけ
   gh issue create --title "$title" --body-file "$body_file" --label maintenance-sweep
 else
   cat "$gate_err"   # 投稿せず、題名・本文と gate の出力を人に見せる
