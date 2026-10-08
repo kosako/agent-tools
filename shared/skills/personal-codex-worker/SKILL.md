@@ -53,9 +53,10 @@ orchestrator が行います。
 - **scope は packet の `依頼`** (orchestrator 著)。`依頼` が無い / 受け入れ条件が空なら起動せず、
   orchestrator に `依頼` の記入を求めて `Blocked at: authorization` で止まる。
 - packet の `state` が `blocked` (質問待ち・limit などで停止) のときは、`結果` の質問に orchestrator が `依頼`
-  で答えてから (質問の無い停止ならそのまま) 再起動する。再起動では、起動の記録を書く前 (§5) に orchestrator が
-  `state` を `open` に戻す (#412。`blocked` のまま新しい run の記録を書くと、動いている worker が「停止中」に
-  見え、下の二重起動の確認と resume の表示をすり抜ける)。`review` / `done` の packet は起動しない。review の修正 round は、orchestrator が
+  で答えてから (質問の無い停止ならそのまま) 再起動する。再起動では、起動の記録 (§5) を書くのと同じ書き込みで
+  orchestrator が `state` を `open` に戻す (#412。`blocked` のまま新しい run の記録を書くと、動いている worker が
+  「停止中」に見え、下の二重起動の確認と resume の表示をすり抜ける。記録より先に戻すと、起動の前に止まったときに
+  古い停止の run が「完了・未転記」に見える)。`review` / `done` の packet は起動しない。review の修正 round は、orchestrator が
   `依頼` に「修正 round N」の項を足し、同時に `state` を `open` に戻して `次の入口` を「修正 round N
   (`依頼` の該当項) を実装する」に上書きしてから起動する (規約は `docs/agent-packets.md`、#325)。
 - 同時に走らせる worker は orchestrator session あたり 1 つ。走っている worker (workspace の中の
@@ -66,8 +67,8 @@ orchestrator が行います。
   規約は `docs/agent-packets.md`) を `personal-packet list --json --all` で読み、その Issue の行を見る:
   - 記録なし → そのまま進む。`last_run` (最後の run dir。#325) だけがあるときも同じ (起動の記録では
     ない。§5 で `run` を書くときに消す)。
-  - `state: blocked` → 停止を記録済みの run (`run` はその退避物の置き場)。再起動では `state` を `open` に
-    戻してから (上の項)、新しい run で記録を置き換える (古い run dir は `結果` に書いた退避物の path として残る)。
+  - `state: blocked` → 停止を記録済みの run (`run` はその退避物の置き場)。再起動では、新しい run で記録を置き換える
+    のと同じ書き込みで `state` を `open` に戻す (上の項) (古い run dir は `結果` に書いた退避物の path として残る)。
   - それ以外で `run_status: finished` (`done.txt` がある) → 新しく起動しない。先にその run の結果を
     回収・転記する (§5 の完了判定から、その run dir で続ける)。
   - それ以外で `unfinished` (`done.txt` が無い) → その run の worker が動いているかを見る (run dir の

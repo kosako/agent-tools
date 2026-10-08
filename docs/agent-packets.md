@@ -138,9 +138,12 @@ PR #124 の should 1 件を直して re-review を依頼する。
     行う (review 待ちの packet を誤って起動しない歯止めを残す)。同じ PR を同じ author が続けるので、割当は
     し直さない。
   - **blocked からの再起動** (#412): 委譲した worker を `blocked` から再起動するときは、`blocked` → `open` と
-    遷移させる。戻すのは再起動する orchestrator で、質問に `依頼` で答えるのと同じ時点 (起動の記録を書く前) に
-    戻す。`blocked` のまま新しい run の記録を書くと、その記録が「停止を記録済みの run」に見え、委譲 skill の
-    二重起動の確認と resume の表示が実行中の worker を見落とす。
+    遷移させる。戻すのは再起動する orchestrator で、新しい run の起動の記録 (`run` / `tab`) を書くのと**同じ
+    書き込み**で戻す (質問への回答を `依頼` に書くのはその前)。`blocked` のまま新しい run の記録を書くと、その
+    記録が「停止を記録済みの run」に見え、委譲 skill の二重起動の確認と resume の表示が実行中の worker を見落とす。
+    逆に記録より先に `open` に戻すと、起動の前に止まった (preflight など) ときに、古い停止の run が「完了・未転記」
+    に見える。記録を書いた後に人手の実行に渡す (`launch-path`) ときや、worker が動いているか確かめられない
+    (`launch-record`) ときは、`open` と記録をそのまま残す (止まったと確かめていないので `blocked` にしない)。
 - `run` / `tab` (#315): 委譲した worker の**起動の記録**。`run` は run dir の絶対 path、`tab` は
   worker を動かしている herdr の tab 名 (`#<issue>`)。書くのは **orchestrator だけ** (worker は packet に
   書かない)。書く時点・消す時点は [herdr-operations](herdr-operations.md) の「起動の記録」(手順は
@@ -156,7 +159,9 @@ PR #124 の should 1 件を直して re-review を依頼する。
     しない。人が確かめる)。
 - `last_run` (#325): **最後の run dir**。完了の転記で `run` / `tab` を消すときに、orchestrator が `run` の値を
   `last_run` に移す。次の起動で `run` を書くときに `last_run` は消す (`run` と同時には置かない。両方あれば
-  壊れた packet として報告する)。`state: blocked` の停止では従来どおり `run` に残す (退避物の置き場)。
+  壊れた packet として報告する)。worker が止まった (転記の前の) `state: blocked` では従来どおり `run` に残す
+  (退避物の置き場)。転記の後に回収・trailer 検査で止まった `state: blocked` (#412) では、転記で `last_run` に
+  移したままにする (`run` は無い)。
   `done` の後も残す。用途は、転記で起動の記録が消えた後も、前の run の成果物 (clone の `.git` の
   snapshot、tab の所有の確認に使う `tab-id`) を別の session から辿れるようにすること。
   - 書くのは orchestrator だけ。検証は `run` と同じ (引用符付きの 1 行・制御文字なし・絶対 path)。

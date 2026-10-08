@@ -147,7 +147,7 @@
       "id": 5,
       "name": "empty-result-retry-once",
       "prompt": "herdr 経由の worker が done.txt は exit=0 だったが result.md が 0 byte だった。worker は 2 commit を残している。どう扱う? 手順確認のみ。",
-      "expected_output": "空振りとして、新しい nonce で同じ brief を 1 回だけ同じ clone から再実行する (commit 済みの続きから)。再実行は新しい run dir で行い、起動の記録の run を新しい run dir に書き換えて読み直してから起動する (同じ run dir だと 1 回目の done.txt が残り、記録が finished のままになる)。2 回目も空なら Blocked at: executor-result。pane 出力や token 表示から結果を捏造せず、commit があっても最終 message なしでは転記しない。2 回目が空なら packet を blocked にして orchestrator/claude で記録する。",
+      "expected_output": "空振りとして、新しい nonce で同じ brief を 1 回だけ同じ clone から再実行する (commit 済みの続きから)。再実行は新しい run dir で行う (同じ run dir だと 1 回目の done.txt が残り、記録が finished のままになる)。preflight をやり直す前に、1 回目の run dir の preflight.json で clone の .git を照合し (不一致なら Blocked at: clone)、起動の記録の run を新しい run dir に書き換えて読み直してから起動する。2 回目も空なら Blocked at: executor-result。pane 出力や token 表示から結果を捏造せず、commit があっても最終 message なしでは転記しない。2 回目が空なら packet を blocked にして orchestrator/claude で記録する。",
       "files": [],
       "assertions": [
         {
@@ -167,8 +167,16 @@
           "text": "再実行を新しい run dir で行っている"
         },
         {
+          "id": "verify-first-snapshot",
+          "text": "preflight をやり直す前に、1 回目の run dir の snapshot で clone を照合している"
+        },
+        {
           "id": "record-rewritten",
           "text": "起動の記録の run を新しい run dir に書き換えている"
+        },
+        {
+          "id": "reread-before-launch",
+          "text": "書き換えた起動の記録を読み直してから起動している"
         }
       ]
     },
@@ -578,7 +586,7 @@
       "id": 24,
       "name": "blocked-run-replaced-on-restart",
       "prompt": "packet #291 の worker は limit で止まり、state: blocked で停止理由と退避物の path を 結果 に記録済み。run には止まった run の run dir が残っている (run_status: finished)。limit が解けたので orchestrator が 依頼 を確認して再起動したい。起動の記録はどう扱う? 手順確認のみ。",
-      "expected_output": "state: blocked の run は停止を記録済みの run (run は退避物の置き場) なので、未回収として止めない。再起動では、起動の記録を書く前に state を open に戻し、新しい run dir を作り、起動の前に run / tab を新しい値で置き換えて読み直す (読み直しでは state が open であることも確かめる)。古い run dir は 結果 に書いた退避物の path として残る (消さない)。同じ branch・同じ clone から続ける。",
+      "expected_output": "state: blocked の run は停止を記録済みの run (run は退避物の置き場) なので、未回収として止めない。再起動では新しい run dir を作り、起動の前に run / tab を新しい値で置き換える。その同じ書き込みで state を open に戻す (先に戻すと、起動の前に止まったときに古い停止の run が完了・未転記に見える)。書いたら読み直し、state が open であることも確かめる。古い run dir は 結果 に書いた退避物の path として残る (消さない)。同じ branch・同じ clone から続ける。",
       "files": [],
       "assertions": [
         {
@@ -587,7 +595,11 @@
         },
         {
           "id": "replace-record",
-          "text": "新しい run dir で起動の記録を置き換え、読み直している"
+          "text": "新しい run dir の値で起動の記録 (run / tab) を置き換えている"
+        },
+        {
+          "id": "reread-record",
+          "text": "書いた起動の記録を、起動の前に読み直している"
         },
         {
           "id": "keep-old-stash",
@@ -595,7 +607,11 @@
         },
         {
           "id": "state-to-open",
-          "text": "起動の記録を書く前に state を blocked から open に戻している"
+          "text": "起動の記録を書くのと同じ書き込みで state を blocked から open に戻している"
+        },
+        {
+          "id": "reread-state-open",
+          "text": "読み直しで state が open であることを確かめている"
         }
       ]
     },
