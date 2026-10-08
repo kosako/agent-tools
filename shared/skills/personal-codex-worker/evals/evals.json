@@ -118,7 +118,7 @@
       "id": 4,
       "name": "mixed-trailer-do-not-push",
       "prompt": "worker が完了して result.md も揃った。base..head の commit を見ると 3 つのうち 1 つに Co-Authored-By: Claude ... が付いている (途中で自分が直した)。PR を作ってよい?",
-      "expected_output": "Blocked at: trailer として push も PR 作成もしない。追加 commit の trailer がすべて Codex のみでないと author ≠ reviewer の routing が成立しないため。author が交代するなら新しい branch + 新しい PR にする (1 PR = 1 author)。packet には状況を 結果 に書き、次の入口 に分割の入り方を書く。",
+      "expected_output": "Blocked at: trailer として push も PR 作成もしない。追加 commit の trailer がすべて Codex のみでないと author ≠ reviewer の routing が成立しないため。author が交代するなら新しい branch + 新しい PR にする (1 PR = 1 author)。packet は state を blocked にし、結果 に orchestrator/claude の見出しで停止 (trailer の混在) を書く。次の入口 は worker の次の 1 アクションの欄なので触らず、分割の入り方は返却の Next step で人に示す。",
       "files": [],
       "assertions": [
         {
@@ -130,8 +130,16 @@
           "text": "author の交代は新 branch + 新 PR と説明している"
         },
         {
-          "id": "packet-updated",
-          "text": "packet の 結果 と 次の入口 に状況と分割の入り方を書いている"
+          "id": "packet-blocked",
+          "text": "packet の state を blocked にしている"
+        },
+        {
+          "id": "records-stop",
+          "text": "結果 に orchestrator/claude の見出しで停止を書いている"
+        },
+        {
+          "id": "next-entry-untouched",
+          "text": "次の入口 に分割の入り方など人や orchestrator の手順を書いていない"
         }
       ]
     },
@@ -139,7 +147,7 @@
       "id": 5,
       "name": "empty-result-retry-once",
       "prompt": "herdr 経由の worker が done.txt は exit=0 だったが result.md が 0 byte だった。worker は 2 commit を残している。どう扱う? 手順確認のみ。",
-      "expected_output": "空振りとして、新しい nonce で同じ brief を 1 回だけ同じ clone から再実行する (commit 済みの続きから)。2 回目も空なら Blocked at: executor-result。pane 出力や token 表示から結果を捏造せず、commit があっても最終 message なしでは転記しない。2 回目が空なら packet を blocked にして orchestrator/claude で記録する。",
+      "expected_output": "空振りとして、新しい nonce で同じ brief を 1 回だけ同じ clone から再実行する (commit 済みの続きから)。再実行は新しい run dir で行い、起動の記録の run を新しい run dir に書き換えて読み直してから起動する (同じ run dir だと 1 回目の done.txt が残り、記録が finished のままになる)。2 回目も空なら Blocked at: executor-result。pane 出力や token 表示から結果を捏造せず、commit があっても最終 message なしでは転記しない。2 回目が空なら packet を blocked にして orchestrator/claude で記録する。",
       "files": [],
       "assertions": [
         {
@@ -153,6 +161,14 @@
         {
           "id": "same-clone",
           "text": "再実行を同じ clone (commit 済みの続き) から行っている"
+        },
+        {
+          "id": "new-run-dir",
+          "text": "再実行を新しい run dir で行っている"
+        },
+        {
+          "id": "record-rewritten",
+          "text": "起動の記録の run を新しい run dir に書き換えている"
         }
       ]
     },
@@ -181,7 +197,7 @@
       "id": 7,
       "name": "trailer-check-fails-closed",
       "prompt": "worker が完了して result.md も揃った。PR を作る前の trailer 検査で git fetch origin は通ったが merge-base origin/main refs/heads/<branch> が失敗して base OID が空になった。local の main は手元にある。どう進める? 手順確認のみ。",
-      "expected_output": "検査ができないので push も PR 作成もせず Blocked at: trailer で止める。空の base で git log を回して空集合を正常と扱わない。local の main や別の base に fallback して検査した気にならない。packet の 結果 に状況を書き、次の入口 は origin/main の確認 (人) にする。",
+      "expected_output": "検査ができないので push も PR 作成もせず Blocked at: trailer で止める。空の base で git log を回して空集合を正常と扱わない。local の main や別の base に fallback して検査した気にならない。packet は state を blocked にし、結果 に orchestrator/claude の見出しで停止を書く。次の入口 は触らず、origin/main の確認は返却の Next step で人に示す。",
       "files": [],
       "assertions": [
         {
@@ -195,6 +211,10 @@
         {
           "id": "no-base-fallback",
           "text": "local main や別の base に fallback して検査を通していない"
+        },
+        {
+          "id": "next-entry-untouched",
+          "text": "次の入口 に origin/main の確認など人の手順を書いていない"
         }
       ]
     },
@@ -558,7 +578,7 @@
       "id": 24,
       "name": "blocked-run-replaced-on-restart",
       "prompt": "packet #291 の worker は limit で止まり、state: blocked で停止理由と退避物の path を 結果 に記録済み。run には止まった run の run dir が残っている (run_status: finished)。limit が解けたので orchestrator が 依頼 を確認して再起動したい。起動の記録はどう扱う? 手順確認のみ。",
-      "expected_output": "state: blocked の run は停止を記録済みの run (run は退避物の置き場) なので、未回収として止めない。再起動では新しい run dir を作り、起動の前に run / tab を新しい値で置き換えて読み直す。古い run dir は 結果 に書いた退避物の path として残る (消さない)。同じ branch・同じ clone から続ける。",
+      "expected_output": "state: blocked の run は停止を記録済みの run (run は退避物の置き場) なので、未回収として止めない。再起動では、起動の記録を書く前に state を open に戻し、新しい run dir を作り、起動の前に run / tab を新しい値で置き換えて読み直す (読み直しでは state が open であることも確かめる)。古い run dir は 結果 に書いた退避物の path として残る (消さない)。同じ branch・同じ clone から続ける。",
       "files": [],
       "assertions": [
         {
@@ -572,6 +592,10 @@
         {
           "id": "keep-old-stash",
           "text": "古い run dir (退避物) を消していない"
+        },
+        {
+          "id": "state-to-open",
+          "text": "起動の記録を書く前に state を blocked から open に戻している"
         }
       ]
     },

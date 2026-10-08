@@ -30,8 +30,8 @@ Codex の sandbox から読める場所に置くため。
 | 節 | 書けるのは | 操作 |
 |---|---|---|
 | `## 依頼` | orchestrator のみ | 上書き |
-| `## 結果` | worker (実装) / reviewer (verdict) / orchestrator (委譲した worker の停止記録だけ。見出しは `orchestrator/claude`)。packet に書けない worker (委譲した Codex) の分は orchestrator が worker の最終 message から転記する (見出しは `worker/codex`) | `### <日付> <役割/agent>` 見出しで区切って追記 |
-| `## 次の入口` | worker (委譲した worker の分は orchestrator が worker の最終 message から写す。worker が止まって最終 message が無いときは orchestrator が続きの入り方を書く。review の修正 round を始めるときは orchestrator が書く。下記) | 現在地に上書き |
+| `## 結果` | worker (実装) / reviewer (verdict) / orchestrator (委譲した worker の停止記録と、転記の後の回収・trailer 検査の停止 (#412) だけ。見出しは `orchestrator/claude`)。packet に書けない worker (委譲した Codex) の分は orchestrator が worker の最終 message から転記する (見出しは `worker/codex`) | `### <日付> <役割/agent>` 見出しで区切って追記 |
+| `## 次の入口` | worker (委譲した worker の分は orchestrator が worker の最終 message から写す。worker が止まって最終 message が無いときは orchestrator が続きの入り方を書く。修正 round (review の指摘、または転記の後に受け入れ条件を満たさないと判断したとき。#412) を始めるときは orchestrator が書く。下記) | 現在地に上書き |
 
 frontmatter の `run` / `tab` (起動の記録) と `last_run` (最後の run dir) を書く・消すのも orchestrator だけ。
 
@@ -137,6 +137,10 @@ PR #124 の should 1 件を直して re-review を依頼する。
     委譲の skill は `review` / `done` の packet を起動しないので、修正 round の起動は `open` に戻してから
     行う (review 待ちの packet を誤って起動しない歯止めを残す)。同じ PR を同じ author が続けるので、割当は
     し直さない。
+  - **blocked からの再起動** (#412): 委譲した worker を `blocked` から再起動するときは、`blocked` → `open` と
+    遷移させる。戻すのは再起動する orchestrator で、質問に `依頼` で答えるのと同じ時点 (起動の記録を書く前) に
+    戻す。`blocked` のまま新しい run の記録を書くと、その記録が「停止を記録済みの run」に見え、委譲 skill の
+    二重起動の確認と resume の表示が実行中の worker を見落とす。
 - `run` / `tab` (#315): 委譲した worker の**起動の記録**。`run` は run dir の絶対 path、`tab` は
   worker を動かしている herdr の tab 名 (`#<issue>`)。書くのは **orchestrator だけ** (worker は packet に
   書かない)。書く時点・消す時点は [herdr-operations](herdr-operations.md) の「起動の記録」(手順は
