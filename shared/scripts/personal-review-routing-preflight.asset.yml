@@ -15,7 +15,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:c590d11aa47eba1c44f4a296a8195846acb7b6cef79d9b442a62cc9640c915bc
+  approved_build_id: sha256:ab31de2459a15935892809de281b46c534d9bad43605bec1de9cbd1963e7a571
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-review-routing-preflight.rb
