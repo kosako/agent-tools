@@ -186,8 +186,10 @@ Issue コメントへ写すのは **`結果` の最新節 + `次の入口` の�
 
 - 写す前に `personal-public-safety-gate --stdin` に本文を通し、**exit 0 のときだけ投稿へ進む**。
   exit 1 (definite: secret / 実 home path / local pattern が 1 件でもある) と exit 2 (検査エラー:
-  local pattern file の regex 壊れ等。本文を検査できていない) はどちらも投稿しない。suspicious は
-  exit 0 のまま警告が出るので、人に見せて判断する。
+  local pattern file の regex 壊れ等。本文を検査できていない) はどちらも投稿しない。suspicious (gate は
+  exit 0 のまま警告を出す) でも、`publish` は投稿せず exit 1 で止まる (#413)。`--dry-run` で本文と警告を
+  人に見せ、人が意図した内容だと確かめたときだけ `--accept-warnings` を付けて投稿する (agent が自分の
+  判断で付けない)。
   レビュー済みの誤検知は該当行に `public-safety: allow` を書く (commit と同じ escape)。
   **planning tool の URL は local pattern file (`~/.config/agent-tools/public-safety-patterns.local`)
   に domain を置いてはじめて止まる** (gate 本体は public repo なので持たない。不在なら外部 URL は
@@ -253,7 +255,7 @@ file で行い、command 文字列へ inline 展開しない。
 | `dir` | packet dir を出す (main worktree root に固定。linked worktree からでも同じ) | 0 / 2 (git 外) |
 | `list [--json] [--all]` | frontmatter を読んで一覧。既定は open / blocked / review だけ、`--all` で done も。`updated > published` (または未 publish) を `unpublished` で示す。起動の記録があれば `run` / `tab` と `run_status` を出す (text は `[run: <status>]`)。`--json` には `last_run` も出す。`check` が拒む packet (symlink / regular file でない / git で tracked) は中身を読まずに飛ばし、path と理由だけを warning に出す (#412。packet dir が symlink、または tracked かを判定できないときは 1 件も出さない) | 0 / 1 (壊れた packet か、読まなかった packet がある。warning を出し、健全な行は出す) / 2 |
 | `check <issue>` | packet を書く前の更新先の検査 (置き場の「symlink / tracked の packet は誰も更新しない」)。通れば packet の path (main worktree の root の実体から組んだもの) を 1 行出す。packet が無い (これから作る) ときも、dir と index を見て通れば出す (file も dir も作らない) | 0 / 1 (拒否。理由を stderr に出す) / 2 (判定できない: git の外・git の失敗・repository / index を選ぶ環境変数の継承・usage) |
-| `publish <issue> [--repo OWNER/REPO] [--dry-run]` | `結果` の最新節 + `次の入口` を marker 付きで合成 → 同じ directory の `personal-public-safety-gate --stdin` に通す → **exit 0 のときだけ** `gh issue comment` で投稿 → frontmatter の `published` を更新 | 0 / 1 (gate が止めた) / 2 (検査できない・gate 不在・gh 不在 / 失敗・入力エラー・更新先の検査に落ちた) |
+| `publish <issue> [--repo OWNER/REPO] [--dry-run] [--accept-warnings]` | `結果` の最新節 + `次の入口` を marker 付きで合成 → 同じ directory の `personal-public-safety-gate --stdin` に通す → **exit 0 で警告が無いとき** (警告があれば、人が確かめて `--accept-warnings` を付けたときだけ) `gh issue comment` で投稿 → frontmatter の `published` を更新 | 0 / 1 (gate が止めた、または警告を出した。#413) / 2 (検査できない・gate 不在・gh 不在 / 失敗・入力エラー・更新先の検査に落ちた) |
 | `pull <issue> [--repo OWNER/REPO] [--dry-run]` | self コメントの有効な写しを取り込んで packet を再構成。`--dry-run` は全文を stdout に出す | 0 / 1 (採用できる写しなし) / 2 (reader / 入力 / 保存エラー・更新先の検査に落ちた) |
 
 - publish / pull は読む前に `check` と同じ検査を通し、落ちたら読みも投稿も書き込みもせず exit 2 で止まる

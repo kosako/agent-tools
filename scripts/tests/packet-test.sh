@@ -560,6 +560,38 @@ echo "$out" | grep -q "$gh_token" && fail "secret value must not be echoed"
 [ "$(gh_calls)" -eq 0 ] || fail "rejected publish must not call gh"
 cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
 
+# ---- publish: gate の警告 (suspicious) → 投稿せず exit 1。--dry-run は本文と警告を見せる。--accept-warnings で投稿 (#413) ----
+printf '\npassword = "hunter2secret"\n' >> "$repo/.agent-packets/7.md"
+set +e
+out=$(cd "$repo" && with_gh "$pkt" publish 7 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "a suspicious warning should stop publish with exit 1 (rc=$rc): $out"
+echo "$out" | grep -q "credential-assignment" || fail "the gate warning should be relayed: $out"
+echo "$out" | grep -q "警告を出しました" || fail "publish should say why it stopped: $out"
+echo "$out" | grep -q -- "--accept-warnings" || fail "publish should tell how to proceed after review: $out"
+[ "$(gh_calls)" -eq 0 ] || fail "a warned publish must not call gh"
+grep -q "^published:" "$repo/.agent-packets/7.md" && fail "a warned publish must not mark published"
+set +e
+(cd "$repo" && with_gh "$pkt" publish 7 --dry-run > "$tmp/warn.out" 2> "$tmp/warn.err")
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "--dry-run should still show the text when the gate only warns (rc=$rc)"
+grep -q "^<!-- agent-packet issue=7 published=" "$tmp/warn.out" || fail "--dry-run should print the text to review"
+grep -q "credential-assignment" "$tmp/warn.err" || fail "--dry-run should show the warning: $(cat "$tmp/warn.err")"
+[ "$(gh_calls)" -eq 0 ] || fail "--dry-run must not call gh"
+set +e
+(cd "$repo" && with_gh "$pkt" pull 7 --accept-warnings > /dev/null 2> "$tmp/warn.err")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "--accept-warnings should be publish-only (rc=$rc)"
+grep -q "publish だけの option" "$tmp/warn.err" || fail "pull should refuse --accept-warnings as a publish-only option: $(cat "$tmp/warn.err")"
+(cd "$repo" && with_gh "$pkt" publish 7 --accept-warnings > /dev/null 2>&1) || fail "--accept-warnings should post after review"
+[ "$(gh_calls)" -eq 1 ] || fail "--accept-warnings should call gh once"
+grep -q "^published:" "$repo/.agent-packets/7.md" || fail "--accept-warnings should mark published"
+cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
+rm -f "$gh_log" "$gh_body"
+
 # ---- publish: gate が検査できない (壊れた local regex) → exit 2、gh を呼ばない ----------
 echo "([" > "$HOME/.config/agent-tools/public-safety-patterns.local"
 set +e
