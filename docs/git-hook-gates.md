@@ -17,7 +17,8 @@ enforcement boundary ではない:
 - `git commit` 以外で作る commit (競合の無い自動の merge (pull を含む)・rebase・cherry-pick・revert) では pre-commit が走らない (#414)。競合の無い自動の merge は pre-merge-commit を呼び
   (この配線には無い)、commit-msg だけが走る。rebase・cherry-pick・revert では pre-commit も commit-msg も
   走らない (git 2.54.0 で観察。競合を解いてから続ける場合は確かめていない)。そのため、これらの経路では
-  public-safety も git-identity も止めない。別の hook (prepare-commit-msg / pre-merge-commit) への配線は
+  差分の public-safety の検査と git-identity の検査は走らない (自動の merge では commit-msg が走るので、message の
+  public-safety の検査 (`--commit-msg`) は残る)。別の hook (prepare-commit-msg / pre-merge-commit) への配線は
   #449 で実測してから決める。
 
 hard な床は従来どおりここに載せない (credential 隔離 / egress / CI)。公開する内容の検査は

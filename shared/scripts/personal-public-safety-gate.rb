@@ -10,7 +10,7 @@
 #
 # 強度ラベル (偽らない): 通常経路 (git commit) に対する best-effort guardrail。
 # `--no-verify` / hooksPath 差し替え / 別 client、`git commit` 以外で作る commit (競合の無い自動の merge (pull を含む)・rebase・cherry-pick・revert) で迂回できる
-# (pre-commit が走らない。#414)。検出も列挙依存の
+# (pre-commit が走らないので差分の検査を通らない。自動の merge では commit-msg の message の検査は走る。#414)。検出も列挙依存の
 # regex なので網羅ではない (「秘密は書かない」判断そのものは人間 / skill の領分)。
 # 公開する内容の検査は、差分は pre-commit (引数ゼロ)、commit message は commit-msg (`--commit-msg`)、
 # Issue / PR / コメントの本文は投稿の前の `--stdin` で行う。push / CI には置かない (push した時点で public
