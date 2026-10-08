@@ -440,6 +440,57 @@ rm "$tmp/home/.config/agent-tools/public-safety-patterns.local"
 [ "$rc" -eq 2 ] || fail "unknown argument with broken local pattern should still be exit 2 (rc=$rc)"
 echo "$out" | grep -q "^usage:" || fail "unknown argument should print usage even with broken local pattern: $out"
 
+# ---- #413: commit-msg mode (commit message の本文の検査口) ---------------------------
+# message の file 全体を見る。comment 行や scissors 行より後も除かない (cleanup の mode によっては commit に残るため)。
+msgf="$tmp/commit-msg.txt"
+printf 'subject\n\nbody line\n' > "$msgf"
+(cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --commit-msg "$msgf") || fail "commit-msg mode: clean message should pass"
+printf 'subject\n\nsee x = "%s"\n' "$gh_token" > "$msgf"
+set +e
+out=$(cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --commit-msg "$msgf" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "commit-msg mode: token in the body should block (rc=$rc)"
+echo "$out" | grep -q "commit-msg:3: \[github-token\]" || fail "commit-msg finding should carry commit-msg:line: $out"
+echo "$out" | grep -q "$gh_token" && fail "commit-msg mode must not echo the secret value"
+echo "$out" | grep -q "commit message を直して" || fail "commit-msg mode hint should mention the commit message: $out"
+# local pattern (私物の語) も block する。comment 行、scissors に似た行、正規の scissors 行より後も見る
+echo "secret-project-zeta" > "$tmp/home/.config/agent-tools/public-safety-patterns.local"
+printf 'subject\n\nabout secret-project-zeta\n' > "$msgf"
+set +e
+(cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --commit-msg "$msgf" >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "commit-msg mode: a local pattern in the body should block (rc=$rc)"
+for variant in "comment" "scissors-like" "scissors"; do
+  case $variant in
+    comment) printf 'subject\n\nbody\n# comment mentions secret-project-zeta\n' > "$msgf" ;;
+    scissors-like) printf 'subject\n\n# - >8 -\nx = "%s"\n' "$gh_token" > "$msgf" ;;
+    scissors) printf 'subject\r\n\r\n# ------------------------ >8 ------------------------\r\nx = "%s"\r\n' "$gh_token" > "$msgf" ;;
+  esac
+  set +e
+  (cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --commit-msg "$msgf" >/dev/null 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "commit-msg mode: the whole message file should be scanned ($variant, rc=$rc)"
+done
+rm "$tmp/home/.config/agent-tools/public-safety-patterns.local"
+printf 'subject\n\npassword = "hunter2secret"\n' > "$msgf"
+set +e
+out=$(cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --commit-msg "$msgf" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "commit-msg mode: suspicious should not block (rc=$rc)"
+echo "$out" | grep -q "credential-assignment" || fail "commit-msg mode: suspicious should warn: $out"
+for bad in "--commit-msg" "--commit-msg $tmp/no-such-msg" "--commit-msg $msgf --stdin"; do
+  set +e
+  # shellcheck disable=SC2086
+  (cd "$tmp/nogit" && as_human ruby "$pubsafe_src" $bad </dev/null >/dev/null 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "commit-msg mode: '$bad' should be exit 2 (rc=$rc)"
+done
+
 # ---- integration: dispatcher (配備形) + core.hooksPath 経由の git commit ------
 deploy="$tmp/deploy"
 mkdir -p "$deploy"
@@ -491,6 +542,35 @@ set -e
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>") \
   || fail "claude commit with trailer should pass"
+
+# #413: commit-msg stage は message の本文も public-safety で検査する。有効な trailer があっても、
+# 差分が clean でも、本文の token / home path は block する
+echo msgleak > "$repo2/m.txt"
+(cd "$repo2" && git add m.txt)
+set +e
+out=$(cd "$repo2" && as_claude git commit -qm "agent commit mentions x = \"$gh_token\"
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>" 2>&1)
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "a token in the commit message should be blocked at commit-msg even with a valid trailer"
+echo "$out" | grep -q "commit-msg:1: \[github-token\]" || fail "the commit-msg block should name the message line: $out"
+echo "secret-project-zeta" > "$tmp/home/.config/agent-tools/public-safety-patterns.local"
+set +e
+(cd "$repo2" && as_human git commit -qm "notes about secret-project-zeta" >/dev/null 2>&1)
+rc=$?
+set -e
+rm "$tmp/home/.config/agent-tools/public-safety-patterns.local"
+[ "$rc" -ne 0 ] || fail "a local pattern in a human commit message should be blocked at commit-msg"
+# `-m` の既定の cleanup (whitespace) では `#` 始まりの行も commit に残るので、その行の token も止める
+set +e
+(cd "$repo2" && as_human git commit -qm "subject for m
+
+# x = \"$gh_token\"" >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || fail "a token on a #-line kept by -m should be blocked at commit-msg"
+(cd "$repo2" && as_human git commit -qm "clean message for m") || fail "a clean message should pass after the blocked attempts"
 
 # codex marker + Codex trailer
 echo three > "$repo2/h.txt"

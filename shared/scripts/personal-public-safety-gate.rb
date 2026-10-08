@@ -11,7 +11,9 @@
 # 強度ラベル (偽らない): 通常経路 (git commit) に対する best-effort guardrail。
 # `--no-verify` / hooksPath 差し替え / 別 client で迂回できる。検出も列挙依存の
 # regex なので網羅ではない (「秘密は書かない」判断そのものは人間 / skill の領分)。
-# 公開前の最終確認点は push / CI 側に置く。
+# 公開する内容の検査は、差分は pre-commit (引数ゼロ)、commit message は commit-msg (`--commit-msg`)、
+# Issue / PR / コメントの本文は投稿の前の `--stdin` で行う。push / CI には置かない (push した時点で public
+# なので、公開前の確認にならない。#413)。
 #
 # 検出クラス:
 # - definite (exit 1 で block): private key block / 既知 token 形 / 実 HOME path の
@@ -35,6 +37,12 @@
 # stdin mode (`--stdin`): 引数ゼロの pre-commit mode と同じ pattern で stdin の text を
 # 行単位に scan する (git には触らない。path 判定は対象外)。packet の public 写しを
 # Issue コメントへ投稿する前の検査口 (#253、docs/agent-packets.md)。exit 契約は同じ。
+#
+# commit-msg mode (`--commit-msg <file>`): commit-msg stage の dispatcher から呼ばれ、commit message の
+# file を同じ pattern で scan する (#413)。comment 行 (`#` 始まり) や scissors 行より後 (`git commit -v` の差分) も
+# 除かずに file 全体を見る。commit に残る行は cleanup の mode (`-m` / `-F` の既定の whitespace、`--cleanup=verbatim`
+# などでは `#` 行も残る) で変わり、CLI の `--cleanup` は hook から確かめられないため (過検出の側に倒す)。
+# exit 契約は同じ。
 
 module PublicSafetyGate
   VERSION = "1"
@@ -197,14 +205,22 @@ module PublicSafetyGate
   end
 
   # stdin の text を行単位に scan する (path 判定は無い)。
-  def scan_text(text, extra_patterns, home)
+  def scan_text(text, extra_patterns, home, label = "stdin")
     findings = []
     text.each_line.with_index(1) do |raw, lineno|
       scan_line(raw.chomp, extra_patterns, home).each do |name, severity|
-        findings << Finding.new("stdin", lineno, name, severity)
+        findings << Finding.new(label, lineno, name, severity)
       end
     end
     findings
+  end
+
+  def commit_msg_findings(path, extra)
+    raise ArgumentError, "commit message の file を読めません" unless File.file?(path)
+
+    text = File.read(path).force_encoding(Encoding::UTF_8)
+    text = text.scrub("�") unless text.valid_encoding?
+    scan_text(text, extra, home_needle, "commit-msg")
   end
 
   def staged_findings(extra)
@@ -247,14 +263,16 @@ module PublicSafetyGate
   def run(argv)
     # 未知の引数で黙って staged mode に倒さない (dispatcher は pre-commit に引数を渡さない)。
     # 引数の判定は local pattern の読み込みより前に置く (壊れた regex があっても usage を出す)。
-    unless [[], ["--stdin"]].include?(argv)
-      warn "usage: personal-public-safety-gate [--stdin]"
+    unless [[], ["--stdin"]].include?(argv) || (argv.size == 2 && argv[0] == "--commit-msg")
+      warn "usage: personal-public-safety-gate [--stdin | --commit-msg <file>]"
       return 2
     end
 
     extra = load_local_patterns(LOCAL_PATTERNS_PATH)
     if argv.empty?
       report(staged_findings(extra), "再 commit してください")
+    elsif argv[0] == "--commit-msg"
+      report(commit_msg_findings(argv[1], extra), "commit message を直して再 commit してください")
     else
       report(stdin_findings(extra), "再実行してください")
     end
