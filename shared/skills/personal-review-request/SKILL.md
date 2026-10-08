@@ -72,8 +72,8 @@ draft から write-authorized へ移るには、投稿対象とコメント内�
   - OpenCode の系列の混在 (系列の違う OpenCode の commit が PR にある、または 1 つの commit に
     model の異なる OpenCode の trailer が付く)。
   - author を判定できない commit が 1 つでもある（trailer 欠落 = 人間または不明）。
-  - trailer の無い merge commit がある (PR の branch は rebase で更新するか、merge commit に trailer を
-    付ける。#415)。
+  - trailer の無い merge commit がある (PR の branch は rebase で更新するか、merge commit を作った author を
+    確かめられるときだけ trailer を付ける。確かめられなければ人が review する。#415)。
   - AI トレーラが PR に皆無（人間のみ・不明）。
 - **fail-closed の後** (#415): 人に伝え、原因に合わせて次のどれかで終える。人に reviewer を選ばせて AI の review へ
   進めることはしない。

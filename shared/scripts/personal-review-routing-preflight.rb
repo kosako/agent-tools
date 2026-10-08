@@ -157,7 +157,7 @@ module ReviewRoutingPreflight
     end
     if kinds.include?(:merge_none)
       return { verdict: :fail_closed,
-               reason: "トレーラの無い merge commit がある (PR の branch は rebase で更新するか、merge commit にトレーラを付ける)" }
+               reason: "トレーラの無い merge commit がある (PR の branch は rebase で更新するか、merge commit を作った author を確かめられるときだけトレーラを付ける)" }
     end
     if kinds.include?(:none)
       return { verdict: :fail_closed,
