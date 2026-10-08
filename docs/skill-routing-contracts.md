@@ -57,7 +57,7 @@ secondary は gate / quality / placement の補助または後段 hand-off に�
 | 「PR #123 に review 依頼と結果をコメントして」 | review-request (`write-authorized`) | safe-reader、trailer routing、opposite-author executor | author と同じ AI の independent review |
 | 「この branch diff を Codex に second opinion して」 | codex-review (non-independent label) | production-rail | review-request / GitHub write |
 | 「この PR をレビューして」 | review-request (`draft`) | safe metadata read | comment write、review 実行 before confirmation |
-| 「mixed author の PR を速い方の AI に review させて」 | review-request (`fail-closed`) | human 裁定または PR 分割 | codex-review / reviewer の自動選択 |
+| 「mixed author の PR を速い方の AI に review させて」 | review-request (`fail-closed`) | PR 分割・human review (実際の混在では trailer を付け直さない) | codex-review / reviewer の自動選択 |
 | 「設計を壁打ちしたい。成果物は不要」 | grill-me | — | grill-with-docs / repo write |
 | 「用語集と ADR を育てながら設計を詰めて」 | grill-with-docs | grill-me の interview 規律 | 合意前の実装 |
 | 「この関数を仕様どおり実装して」 | task-specific implementation | production-rail | grill-me / grill-with-docs |

@@ -31,7 +31,7 @@ Blocked at: author-guard | capability-preflight | launch-path | target-identity 
 Reason: <public-safe な停止理由>
 Expected target: base <OID> / head <OID> (target identity の場合)
 Actual target: base <OID または unavailable> / head <OID または unavailable>
-Next step: <verified route へ戻す、human 裁定、clean worktree の準備、または人手で実行する run script と結果 file の場所>
+Next step: <verified route へ戻す、human へ渡す (元の author を確かめられる trailer の付け直し・分割・human review)、clean worktree の準備、または人手で実行する run script と結果 file の場所>
 Independence: not-established
 ```
 

@@ -15,7 +15,7 @@
 # - fail-closed (exit 1・自動で片側に倒さない): 1 commit に複数 AI トレーラ (1 commit に model の
 #   異なる OpenCode トレーラを含む) / 複数 AI の commit 混在 / トレーラ欠落 commit (人間・不明) /
 #   AI トレーラ皆無 / OpenCode トレーラの形が不正か系列が曖昧 / 表に無い分類。
-# - fail-closed 後の扱い (人間の裁定・--reviewer 上書き) は skill の領分。
+# - fail-closed 後の扱い (元の author を確かめられる trailer の付け直し・分割・human review。reviewer の上書きは無い。#415) は skill の領分。
 # - 系列の判定は provider/model の文字列への regex で、alias で系列が隠れた model は「それ以外」
 #   (reviewer = Claude) に倒れる (honest-label)。
 #
@@ -157,7 +157,7 @@ module ReviewRoutingPreflight
     end
     if kinds.include?(:merge_none)
       return { verdict: :fail_closed,
-               reason: "トレーラの無い merge commit がある (PR の branch は rebase で更新するか、merge commit にトレーラを付ける)" }
+               reason: "トレーラの無い merge commit がある (PR の branch は rebase で更新するか、merge commit を作った author を確かめられるときだけトレーラを付ける)" }
     end
     if kinds.include?(:none)
       return { verdict: :fail_closed,
@@ -166,14 +166,14 @@ module ReviewRoutingPreflight
     authors = kinds.uniq
     if authors.size > 1
       return { verdict: :fail_closed,
-               reason: "複数 AI の commit が混在 (PR を著者ごとに分割するか人間が裁定)" }
+               reason: "複数 AI の commit が混在 (PR を著者ごとに分割する)" }
     end
 
     author = authors.first
     reviewer = REVIEWER[author]
     if reviewer.nil?
       return { verdict: :fail_closed,
-               reason: "著者の分類から reviewer を決められない (OpenCode のトレーラの形が不正か model の系列が曖昧。人間が裁定)" }
+               reason: "著者の分類から reviewer を決められない (OpenCode のトレーラの形が不正か model の系列が曖昧。元の author を確かめられればトレーラを直し、確かめられなければ人が review する)" }
     end
 
     { verdict: :ok, author: author, reviewer: reviewer }
