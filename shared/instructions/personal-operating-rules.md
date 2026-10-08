@@ -30,7 +30,8 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
 - 判定の正本は PR の commit trailers。複数 AI の混在・AI トレーラ無し・OpenCode の model の系列を
   判定できない / 系列違いの混在は fail-closed とし、
   黙って自分でレビューせず人間に確認する。routing の詳細 (fail-closed 分岐・hand-off・
-  fail-closed の後の進め方 (trailer の付け直し・分割・人の review。人による reviewer の上書きはしない)) は
+  fail-closed の後の進め方 (元の author を確かめられるときの trailer の付け直し・分割・人の review。人による
+  reviewer の上書きはしない)) は
   `personal-review-request` の「レビュアーの決定」。
 
 ## production レール (品質ポリシー)

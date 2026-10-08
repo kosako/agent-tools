@@ -64,9 +64,7 @@ draft から write-authorized へ移るには、投稿対象とコメント内�
   - OpenCode は reviewer にしない。
   - model の系列の判定 (系列表) の正本は `personal-review-routing-preflight` にあり、この skill には
     書き写さない。label だけを使い、trailer の provider/model を自分で分類しない。
-- 次のいずれかは fail-closed とする（自動で片側に倒さない。人に伝え、trailer を付け直して preflight をやり直す・PR を著者ごとに分ける・人が review する
-  (`Independence: human review`)、のどれかで終える。人に reviewer を選ばせて AI の review へ進めることは
-  しない。#415）:
+- 次のいずれかは fail-closed とする（自動で片側に倒さない。その後は下の「fail-closed の後」）:
   - 複数 AI の commit が混在する、または 1 つの commit に複数 AI の `Co-Authored-By:` が
     付く（いずれも単一 reviewer では author ≠ reviewer を満たせない）。OpenCode と Claude / Codex の
     混在もこれに当たる。
@@ -77,13 +75,19 @@ draft から write-authorized へ移るには、投稿対象とコメント内�
   - trailer の無い merge commit がある (PR の branch は rebase で更新するか、merge commit に trailer を
     付ける。#415)。
   - AI トレーラが PR に皆無（人間のみ・不明）。
+- **fail-closed の後** (#415): 人に伝え、原因に合わせて次のどれかで終える。人に reviewer を選ばせて AI の review へ
+  進めることはしない。
+  - 実際に複数の author が混在する → PR を author ごとに分ける、または人が review する (`Independence: human review`)。
+  - trailer の欠落・誤記で、元の author を確かめられる → 人が trailer を直してから preflight をやり直す。直すのは
+    commit の書き直しなので人が行う (AI に任せるなら、review の許可とは別に、人の明示の許可を取る)。実際の author と
+    違う trailer に付け替えない (単一の author に見せると、author ≠ reviewer を偽れる)。
+  - author を確かめられない → 人が review する。
 - 相手エージェントを起動できない場合は、自分でレビューせず人間に hand-off する。
   Codex 環境から Claude を呼ぶ vehicle は「レビュー実行」の `claude -p` 契約 — それが
   capability 不足や起動失敗で使えないときが「起動できない場合」に当たる。
 - trailer の喪失: squash / rebase / cherry-pick で trailer は保持されないことがある
   (git の標準動作依存で、保証はしない)。trailer を失った PR は fail-closed になる。人による
-  上書きはしない (#415): trailer を付け直して (commit を書き直して) preflight をやり直すか、PR を分けるか、
-  人が review する。
+  上書きはせず、上の「fail-closed の後」に従う (#415。元の author を確かめられるときだけ、人が trailer を直す)。
 
 ## review output contract
 
