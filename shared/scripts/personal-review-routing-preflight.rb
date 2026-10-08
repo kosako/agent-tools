@@ -173,7 +173,7 @@ module ReviewRoutingPreflight
     reviewer = REVIEWER[author]
     if reviewer.nil?
       return { verdict: :fail_closed,
-               reason: "著者の分類から reviewer を決められない (OpenCode のトレーラの形が不正か model の系列が曖昧。トレーラを付け直すか人が review する)" }
+               reason: "著者の分類から reviewer を決められない (OpenCode のトレーラの形が不正か model の系列が曖昧。元の author を確かめられればトレーラを直し、確かめられなければ人が review する)" }
     end
 
     { verdict: :ok, author: author, reviewer: reviewer }
