@@ -22,7 +22,9 @@ if ARGV[2] == "--mutations"
     "envelope source" => ['data["source"] == source', 'true'],
     "envelope repo" => ['(repo.nil? || data["repo"].casecmp(repo).zero?)', 'true'],
     "read repo forwarding" => ['args = [reader, "issue", verb, issue.to_s]\\n    args += ["--repo", repo] if repo', 'args = [reader, "issue", verb, issue.to_s]'],
-    "unpublished local" => ['updated_at = published_at + 1', 'updated_at = published_at'],
+    "divergent pull" => ['if local && diverged?(local, latest)', 'if false'],
+    "never published local" => ['local.published.nil? || local.published < latest.published', 'local.published < latest.published'],
+    "sub-second unpublished" => ['updated_at = published_at - published_at.subsec + 1', 'updated_at = updated_at'],
     "request overwrite" => ['request = secs["依頼"]', 'request = nil'],
     "stale next entry" => ['latest.published > local.published', 'true'],
     "remote H2" => [' || lines.any? { |l| l.start_with?("## ") }', ''],
@@ -95,7 +97,7 @@ LOCAL = <<~TEXT
   pr: 8
   state: blocked
   worker: claude
-  updated: 2026-09-21T12:00:00Z
+  updated: 2026-09-21T00:00:00Z
   published: 2026-09-21T00:00:00Z
   run: /tmp/agent-packet-run-7
   tab: "#7"
@@ -315,14 +317,46 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   front = Packet.parse_text(out, path)
   assert(status.success? && front.last_run == "/tmp/agent-packet-run-6" && front.run.nil?, "local last_run must survive pull (#325): #{err}")
 
-  # 空の依頼節は既存 local として保持。published 無しなら写しを採用する。
-  unpublished = LOCAL.sub(/^published:.*\n/, "").sub("LOCAL-REQUEST", "")
-  File.write(path, unpublished)
+  # 空の依頼節は既存 local として保持 (Issue を読みに行かない)。
+  empty_request = LOCAL.sub("LOCAL-REQUEST", "")
+  File.write(path, empty_request)
   _out, err, status = run.call("pull", "7")
-  assert(status.success?, "unpublished local with existing request: #{err}")
+  assert(status.success?, "published local with an empty request section: #{err}")
   front = Packet.parse(path)
-  assert(Packet.sections(front.body)["次の入口"].strip == "REMOTE-NEXT", "unpublished local accepts copy")
-  assert(front.unpublished? && front.updated > front.published, "unpublished local must remain unpublished after pull")
+  assert(Packet.sections(front.body).key?("依頼") && !File.read(path).include?("ISSUE-REQUEST"), "empty local request must be kept")
+  assert(Packet.sections(front.body)["次の入口"].strip == "REMOTE-NEXT", "published local accepts a newer copy")
+
+  # 分岐 (#412): local に未 publish の更新があり、写しも local の最後の publish より新しいときは、上書きせずに
+  # exit 2。一度も publish していない local に写しがあるのも分岐。--dry-run でも同じ。
+  diverged = LOCAL.sub("updated: 2026-09-21T00:00:00Z", "updated: 2026-09-24T00:00:00Z")
+  never_published = LOCAL.sub(/^published:.*\n/, "")
+  { "unpublished local with a newer copy" => diverged, "never published local" => never_published }.each do |label, local|
+    [[], ["--dry-run"]].each do |extra|
+      File.write(path, local)
+      out, err, status = run.call("pull", "7", *extra)
+      assert(status.exitstatus == 2, "#{label}#{extra.empty? ? '' : ' (dry-run)'} must stop with exit 2 (rc=#{status.exitstatus}): #{err}")
+      assert(err.include?("分岐") && out.empty?, "#{label}: must say it diverged and print nothing: #{err}")
+      assert(File.read(path) == local, "#{label}: local packet must not change")
+    end
+  end
+
+  # 小数秒の未 publish (published と同じ秒の updated) も、保存の秒の精度に丸めたあと未 publish のまま残る。
+  # 残らないと、次の新しい写しの pull が分岐の検査を素通りして local を上書きする (#412 review)。
+  comments.call([self_comment(copy)])
+  subsecond = LOCAL.sub("updated: 2026-09-21T00:00:00Z", "updated: 2026-09-22T00:00:00.5Z")
+                   .sub("published: 2026-09-21T00:00:00Z", "published: 2026-09-22T00:00:00Z")
+  File.write(path, subsecond)
+  _out, err, status = run.call("pull", "7")
+  assert(status.success?, "pull of a same-time copy onto a sub-second unpublished local: #{err}")
+  front = Packet.parse(path)
+  assert(front.unpublished? && front.updated > front.published, "sub-second unpublished local must stay unpublished after pull")
+  assert(Packet.sections(front.body)["次の入口"].strip == "LOCAL-NEXT", "same-time copy must not overwrite the sub-second local")
+  kept = File.read(path)
+  comments.call([self_comment(copy), self_comment(copy(at: "2026-09-23T00:00:00Z", date: "2026-09-23", result: "LATER-RESULT"))])
+  _out, err, status = run.call("pull", "7")
+  assert(status.exitstatus == 2 && err.include?("分岐") && File.read(path) == kept,
+         "a newer copy after the sub-second pull must stop as diverged (rc=#{status.exitstatus}): #{err}")
+  comments.call([self_comment(copy), self_comment(older), self_comment(copy)])
 
   # 同時刻 / 古い写しは次の入口と state/worker を巻き戻さない。未 publish の updated も保持。
   newer_local = LOCAL.sub("published: 2026-09-21", "published: 2026-09-23").sub("updated: 2026-09-21", "updated: 2026-09-24")
