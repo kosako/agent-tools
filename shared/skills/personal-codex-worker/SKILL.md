@@ -217,7 +217,9 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   `Blocked at: launch-record`)、packet の frontmatter に `run` (run dir) と `tab` (`#<issue>`) を書き
   (`last_run` があれば同時に消す。`run` と同時に置くと `list` が壊れた packet として止める)、
   `personal-packet list --json --all` で読み直して一致と `run_status: unfinished` を確かめる (一致
-  しなければ起動せず `Blocked at: launch-record`)。`updated` は変えない。書き方は `LAUNCH.md` §4。
+  しなければ起動せず `Blocked at: launch-record`)。`blocked` からの再起動では、同じ書き込みで `state` を `open`
+  にし `updated` を今の日時にする (state は写しの対象なので。§1)。それ以外では `updated` は変えない (起動の記録は
+  写しの対象ではない)。書き方は `LAUNCH.md` §4。
   session が起動の前後や worker の途中で終わっても、次の session が §1 でこの記録から回収する。
 - **起動形は preflight の `launch_argv` そのまま** (`<run dir>` の置換だけ)。run script は clone に
   `cd` してから起動し、stdout / stderr を `codex.log` に tee する。`--add-dir` を**自分で足さない**

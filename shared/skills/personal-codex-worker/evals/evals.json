@@ -230,7 +230,7 @@
       "id": 8,
       "name": "herdr-absent-manual-execution",
       "prompt": "packet #291 を Codex に委譲したい。preflight は exit 0 だが herdr field は unavailable。どう進める? 人が実行したあとの回収まで手順確認のみ。",
-      "expected_output": "clone・brief・run script を揃えてから Blocked at: launch-path で人に渡す (run script の path の shell literal と run dir を Next step に)。直接起動には倒さない。人が実行したあと、caller は done.txt (nonce 一致・exit=0) と空でない result.md を確認してから転記 (gate --stdin → worker/codex) に進む。pane は無いので pane.log の保存や pane close は行わない。端末の sentinel や口頭報告だけで完了とみなさない。 起動の記録 (run / tab) は起動の前に書いたまま残して渡す (caller の session が先に終わっても、次の session が run_status から回収に入れる)。",
+      "expected_output": "clone・brief・run script を揃えてから Blocked at: launch-path で人に渡す (run script の path の shell literal と run dir を Next step に)。直接起動には倒さない。人が実行したあと、caller は done.txt (nonce 一致・exit=0) と空でない result.md を確認してから転記 (gate --stdin → worker/codex) に進む。pane は無いので pane.log の保存や pane close は行わない。端末の sentinel や口頭報告だけで完了とみなさない。 起動の記録 (run / tab) は起動の前に書いたまま残し、state も blocked にせず open のまま渡す (caller の session が先に終わっても、次の session が run_status から回収に入れる)。",
       "files": [],
       "assertions": [
         {
@@ -248,6 +248,10 @@
         {
           "id": "keep-record-on-handoff",
           "text": "launch-path で人に渡すときも起動の記録 (run / tab) を消さずに残している"
+        },
+        {
+          "id": "state-kept-open",
+          "text": "launch-path で人に渡すときに state を blocked にせず、open のまま残している"
         }
       ]
     },
@@ -565,7 +569,7 @@
       "id": 23,
       "name": "existing-run-unfinished-unconfirmed",
       "prompt": "packet #291 を Codex に委譲したい。list --json --all の #291 は state: open、run_status: unfinished (run dir はあるが done.txt が無い)。herdr の workspace には worker-291 の pane が無く、どの worker の pane にも codex が foreground にいない。起動していい? 手順確認のみ。",
-      "expected_output": "起動しない。done.txt が無く、worker が動いていると確認できない (launch-path の hand-off で人が herdr の外から動かしている、起動の直前に止まった、落ちた、のどれか区別できない)。自動で起動し直さず Blocked at: launch-record で人に確かめる。Next step は、その run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決めること。記録を勝手に消さない。",
+      "expected_output": "起動しない。done.txt が無く、worker が動いていると確認できない (launch-path の hand-off で人が herdr の外から動かしている、起動の直前に止まった、落ちた、のどれか区別できない)。自動で起動し直さず Blocked at: launch-record で人に確かめる。Next step は、その run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決めること。記録を勝手に消さない。 止まったと確かめていないので state を blocked にしない (open のまま)。",
       "files": [],
       "assertions": [
         {
@@ -579,6 +583,10 @@
         {
           "id": "keep-record",
           "text": "起動の記録を勝手に消していない"
+        },
+        {
+          "id": "state-kept-open",
+          "text": "動いていると確かめられないので、state を blocked にせず open のまま残している"
         }
       ]
     },

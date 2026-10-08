@@ -142,7 +142,7 @@ PR #124 の should 1 件を直して re-review を依頼する。
     書き込み**で戻す (質問への回答を `依頼` に書くのはその前)。`blocked` のまま新しい run の記録を書くと、その
     記録が「停止を記録済みの run」に見え、委譲 skill の二重起動の確認と resume の表示が実行中の worker を見落とす。
     逆に記録より先に `open` に戻すと、起動の前に止まった (preflight など) ときに、古い停止の run が「完了・未転記」
-    に見える。記録を書いた後に人手の実行に渡す (`launch-path`) ときや、worker が動いているか確かめられない
+    に見える。`state` は写しの対象なので、この書き込みでは `updated` も今の日時にする。記録を書いた後に人手の実行に渡す (`launch-path`) ときや、worker が動いているか確かめられない
     (`launch-record`) ときは、`open` と記録をそのまま残す (止まったと確かめていないので `blocked` にしない)。
 - `run` / `tab` (#315): 委譲した worker の**起動の記録**。`run` は run dir の絶対 path、`tab` は
   worker を動かしている herdr の tab 名 (`#<issue>`)。書くのは **orchestrator だけ** (worker は packet に
@@ -152,7 +152,8 @@ PR #124 の should 1 件を直して re-review を依頼する。
     消えるので、key があって値が空の packet は壊れた packet として報告する (記録が黙って消えると
     二重起動の検査が効かない)。改行などの制御文字、相対 path の `run` も同じく壊れた packet。
   - 写しの対象ではない (publish は写さない。`run` は local の path)。なので書き込み・削除で
-    `updated` を変えない (未 publish の印を立てない)。pull は local の値を保持する。
+    `updated` を変えない (未 publish の印を立てない)。ただし `blocked` からの再起動で同じ書き込みに `state` の変更を
+    含めるときは、state の変更として `updated` を今の日時にする (#412)。pull は local の値を保持する。
   - `list` は `run` があれば run dir の状態を stat だけで見て `run_status` に出す: `finished` (`done.txt`
     がある = 完了・未転記) / `unfinished` (run dir はあるが `done.txt` が無い = 実行中 / 不明) /
     `missing` (run dir が無い = 消失。snapshot が無く clone を照合できないので、clone から自動では回収

@@ -102,7 +102,7 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   - 起動に失敗して人に渡す (`launch-path`) ときも消しません。人がその run script を実行するためです。
   - 消すのは、転記が済んだときか、人がその run を破棄すると決めたときだけです。転記が済んだら `run` の値を
     `last_run` に移し、`run` と `tab` を消します (#325)。worker が止まって `state: blocked` にした間は、`run`
-    をその退避物の置き場として残し、再起動で新しい run に置き換えます (置き換える前に `state` を `open` に戻す。#412)。
+    をその退避物の置き場として残し、再起動で新しい run に置き換えます (置き換えるのと同じ書き込みで `state` を `open` に戻す。#412)。
   - `last_run` は起動の記録ではなく、前の run の成果物 (clone の `.git` の snapshot、tab の `tab-id`) を別の
     session からも辿るための口です。次の起動で `run` を書くときに消し、`done` の後も残します (tab を閉じる
     ときに使う)。`run` と同時には置きません。
