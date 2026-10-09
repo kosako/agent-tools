@@ -1114,8 +1114,9 @@ grep -q "^v5$" "$atarget/SKILL.md" || fail "the new version should be deployed o
 
 # --- case 46: 配置の rename だけが失敗したら、退避した旧版を戻して止まり、staging も old も残らない (#469 review 2) ---
 # sync.sh は `exec ruby lib/sync.rb` で起動するので、RUBYOPT=-r<file> でその ruby だけに test 専用の patch を読ませる
-# (実装に test 用の hook は入れない)。patch は source が staging で destination が配置先の File.rename だけを
-# INJECT_RENAME_ERROR の例外にする (退避の rename と復旧の rename はそのまま通る)。RUBYOPT は空白で分割されるので、
+# (実装に test 用の hook は入れない)。patch は INJECT_RENAME_AT で選んだ File.rename (placement = source が staging で
+# destination が配置先 / evacuation = source が配置先で destination が .agent-tools-old-) だけを INJECT_RENAME_ERROR の
+# 例外にする (INJECT_RENAME_AFTER=1 なら実処理を行ってから raise。復旧の rename はどちらにも当たらない)。RUBYOPT は空白で分割されるので、
 # path に空白があれば理由を出して fail。patch が効いた根拠は fail: の行の例外 class (Errno::EIO)。RUBYOPT を付けない対照
 # (46c) が同じ fixture で v6 に更新されることで、注入が他の起動に漏れていないことも見る。
 case $tmp in *[[:space:]]*) fail "case 46 needs a tmp path without whitespace for RUBYOPT: $tmp" ;; esac
@@ -1124,15 +1125,19 @@ cat > "$inject" <<'RB'
 class << File
   alias_method :rename_without_injection, :rename
   def rename(from, to)
-    if File.basename(from).start_with?(".agent-tools-staging-") && File.basename(to) == "personal-atomic"
-      raise Object.const_get(ENV.fetch("INJECT_RENAME_ERROR")), "injected"
-    end
-    rename_without_injection(from, to)
+    at = ENV.fetch("INJECT_RENAME_AT")
+    hit = (at == "placement" && File.basename(from).start_with?(".agent-tools-staging-") && File.basename(to) == "personal-atomic") ||
+          (at == "evacuation" && File.basename(from) == "personal-atomic" && File.basename(to).start_with?(".agent-tools-old-"))
+    return rename_without_injection(from, to) unless hit
+
+    rename_without_injection(from, to) if ENV.fetch("INJECT_RENAME_AFTER") == "1"
+    raise Object.const_get(ENV.fetch("INJECT_RENAME_ERROR")), "injected"
   end
 end
 RB
+# 使い方: run46 <例外 class> <placement|evacuation> <実処理を行ってから raise するなら 1、しないなら 0>
 run46() {
-  RUBYOPT="-r$inject" INJECT_RENAME_ERROR=$1 "$sync" --root "$tmp/arepo" --codex-home "$tmp/acodex" \
+  RUBYOPT="-r$inject" INJECT_RENAME_ERROR=$1 INJECT_RENAME_AT=$2 INJECT_RENAME_AFTER=$3 "$sync" --root "$tmp/arepo" --codex-home "$tmp/acodex" \
     --claude-home "$tmp/aclaude" --opencode-home "$tmp/aopencode" --apply
 }
 write_atomic_skill v6
@@ -1141,7 +1146,7 @@ write_atomic_skill v6
 tree_snapshot "$atarget" > "$tmp/out46-before"
 # 46a: 例外 (Errno::EIO) は ApplyError に変えて fail: で止める。旧版は戻る
 status=0
-run46 Errno::EIO > "$tmp/out46a" 2>&1 || status=$?
+run46 Errno::EIO placement 0 > "$tmp/out46a" 2>&1 || status=$?
 [ "$status" -eq 1 ] || fail "placement rename failure should exit 1, got $status: $(cat "$tmp/out46a")"
 grep -q "fail: could not put the new version at .*personal-atomic (Errno::EIO); the old version was put back" "$tmp/out46a" \
   || fail "the stop must say the old version was put back: $(cat "$tmp/out46a")"
@@ -1153,7 +1158,7 @@ cmp -s "$tmp/out46-before" "$tmp/out46a-after" \
 # 46b: 割り込み (Interrupt。SystemCallError ではない) でも ensure が旧版を戻す。uncaught の Interrupt で ruby は
 # SIGINT で終わる (実測 exit 130) ので、exit code は 0 でないことだけを見る
 status=0
-run46 Interrupt > "$tmp/out46b" 2>&1 || status=$?
+run46 Interrupt placement 0 > "$tmp/out46b" 2>&1 || status=$?
 [ "$status" -ne 0 ] || fail "an interrupt during the placement must not exit 0: $(cat "$tmp/out46b")"
 tree_snapshot "$atarget" > "$tmp/out46b-after"
 cmp -s "$tmp/out46-before" "$tmp/out46b-after" \
@@ -1165,5 +1170,24 @@ run39 --apply > "$tmp/out46c" 2>&1 || fail "apply without the injection should s
 grep -q "^v6$" "$atarget/SKILL.md" || fail "the new version should be deployed without the injection"
 [ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
   || fail "skills/ must hold only the target after the control run: $(ls -A "$tmp/aclaude/skills")"
+
+# --- case 47: 退避の rename を行った直後に割り込まれても、退避先と配置先の実在で判断して旧版を戻す (#469 review 3) ---
+# 「退避した / 配置した」の flag で判断すると、退避の rename が済んでから flag が立つまでの隙間で割り込まれたときに
+# 配置先が欠落したまま終わる。注入は退避の rename を実際に行ってから Interrupt を raise する。
+write_atomic_skill v7
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+tree_snapshot "$atarget" > "$tmp/out47-before"
+status=0
+run46 Interrupt evacuation 1 > "$tmp/out47" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "an interrupt right after the evacuation must not exit 0: $(cat "$tmp/out47")"
+tree_snapshot "$atarget" > "$tmp/out47-after"
+cmp -s "$tmp/out47-before" "$tmp/out47-after" \
+  || fail "the old version must be back at the target after an interrupt right after the evacuation: $(diff "$tmp/out47-before" "$tmp/out47-after" || true)"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "neither staging nor old may remain after an interrupt right after the evacuation: $(ls -A "$tmp/aclaude/skills")"
+# 対照: 注入が無ければ v7 に更新される
+run39 --apply > "$tmp/out47c" 2>&1 || fail "apply without the injection should succeed: $(cat "$tmp/out47c")"
+grep -q "^v7$" "$atarget/SKILL.md" || fail "the new version should be deployed without the injection"
 
 echo "ok: sync self-test passed"

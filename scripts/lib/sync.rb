@@ -159,24 +159,23 @@ module Sync
         raise ApplyError,
               "could not remove the leftover copy of the old version #{old}; the new version was not applied"
       end
-      moved = false
-      placed = false
       begin
         FileUtils.cp_r(gen, staging)
-        if File.exist?(target)
-          File.rename(target, old)
-          moved = true
-        end
+        File.rename(target, old) if File.exist?(target)
         begin
           File.rename(staging, target)
         rescue SystemCallError => e
-          outcome = moved ? "the old version was put back" : "nothing was placed"
+          # 退避済みなら ensure が旧版を戻す。退避していない (create) なら配置先には何も無い。
+          outcome = File.exist?(old) ? "the old version was put back" : "nothing was placed"
           raise ApplyError, "could not put the new version at #{target} (#{e.class}); #{outcome}"
         end
-        placed = true
       ensure
-        # 退避の後・配置の前で止まったら (例外・割り込み)、退避した旧版を戻して配置先を欠落させない。
-        File.rename(old, target) if moved && !placed && File.exist?(old) && !File.exist?(target)
+        # 退避の後・配置の前で止まったら (例外・割り込み)、退避した旧版を戻して配置先を欠落させない。判断は
+        # flag ではなく退避先と配置先の実在で行う (flag だと退避の rename が済んでから flag が立つまでの隙間で
+        # 割り込まれたときに戻らない, #469 review 3)。何も動かす前 (cp_r の失敗など) は old が無い (冒頭で消した)
+        # ので戻さない / 退避の直後なら old があり target が無いので戻す / 配置の直後なら target があるので
+        # 戻さない (old は残るが、target があるので次の apply の冒頭が復旧せずに消す)。
+        File.rename(old, target) if File.exist?(old) && !File.exist?(target)
         FileUtils.rm_rf(staging)
       end
       return if removed?(old)
