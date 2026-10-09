@@ -38,12 +38,15 @@ module CheckInjection
                 /-----BEGIN\s[A-Z ]*PRIVATE KEY-----/,
                 "contains private key material"),
 
-    # hidden instruction patterns
+    # hidden instruction patterns。不可視の文字は Unicode の書式文字 (Cf: zero-width、bidi 制御、
+    # soft hyphen、tag 文字など) 全体と、tag block の U+E0000〜E007F を見る。絵文字の ZWJ や RTL の
+    # bidi mark のような正当な用途も medium になり、human review で承認して通す (#427 の 6)。
     Pattern.new("hidden", "medium",
-                /[\u200B\u200C\u200D\u2060\uFEFF]/,
-                "contains invisible zero-width characters"),
+                /[\p{Cf}\u{E0000}-\u{E007F}]/,
+                "contains invisible or formatting characters (zero-width, bidi control, tag, soft hyphen)"),
+    # keyword を含む HTML コメントは長さによらず見る (前後 400 文字の上限を外した。#427 の 6)。
     Pattern.new("hidden", "medium",
-                /<!--(?:(?!-->).){0,400}\b(?:ignore|instruction|system\s+prompt|do\s+not\s+tell|secretly)\b(?:(?!-->).){0,400}-->/im,
+                /<!--(?:(?!-->).)*\b(?:ignore|instruction|system\s+prompt|do\s+not\s+tell|secretly)\b(?:(?!-->).)*-->/im,
                 "HTML comment containing instruction-like content"),
 
     # tool permission / approval policy の bypass 試行
@@ -145,14 +148,15 @@ module CheckInjection
 
     private
 
-    # shared/ 配下のすべての text files を scan する。manifest も text として含める。
+    # shared/ 配下のすべての text files を scan する。manifest も text として含める。build は
+    # directory skill の dotfile (.gitkeep を含む) もそのまま配るので、配られる byte は名前によらず
+    # すべて scan する (#427 の 5)。
     # directory skill の evals/ (テスト材料。意図的に攻撃的文字列を含みうる) は
     # injection 攻撃文字列・fake path・email の scan からは外すが、inline private key leak
     # のみ引き続き scan する (run で per-file に判定する)。
     def target_files
       PathGlob.under(@root, "shared/**/*", File::FNM_DOTMATCH)
          .select { |p| File.file?(p) }
-         .reject { |p| File.basename(p) == ".gitkeep" }
          .sort
     end
 
