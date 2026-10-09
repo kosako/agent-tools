@@ -102,8 +102,10 @@ module ChangedScopeQa
     valid = []
     invalid = []
     checks.each_with_index do |c, i|
+      # 要素に NUL を含む command は IO.popen が ArgumentError にして包括 rescue に落ちる (無言の exit 0) ので、
+      # 設定の検証で不正な entry として除外する (#462 review)
       if c.is_a?(Hash) && c["command"].is_a?(Array) && !c["command"].empty? &&
-         c["command"].all? { |a| a.is_a?(String) }
+         c["command"].all? { |a| a.is_a?(String) && !a.include?("\0") }
         valid << c
       else
         invalid << "qa_checks[#{i}]"
@@ -161,8 +163,9 @@ module ChangedScopeQa
     unborn = head_status.exitstatus == 1
     return nil unless head_status.success? || unborn
 
-    # --no-ext-diff: 外部 diff の出力を指紋に使うと、内容が変わっても指紋が同じになり cache で false pass になる。
-    # --no-color: 色の設定で指紋が変わらないようにする (test で固定。#430 の 5)
+    # --no-ext-diff: 外部 diff の出力を指紋に使うと、内容が変わっても指紋が同じになり cache で false pass になる
+    # (test で固定。#430 の 5)。--no-color: 色の設定を変えても指紋が変わらないようにする (false pass の防止では
+    # ないので、test では固定していない)。
     diff = unborn ? unborn_diff(root) : git_output(root, "diff", "HEAD", "--no-color", "--no-ext-diff")
     return nil if diff.nil?
 

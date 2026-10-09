@@ -505,6 +505,34 @@ out=$(run_edit "$repo/a.rb") || fail "#430: edit-check with an ENOTDIR command s
 echo "$out" | grep -q "実行できません" || fail "#430: ENOTDIR edit check must be visible: $out"
 echo "$out" | grep -q "edit_checks\[1\]" || fail "#430: a non-string name with a broken regex must be named by index: $out"
 
+# ---- #462 review: command の要素に NUL を含む entry は設定エラーとして除外し、他の check は走る ----
+# IO.popen は NUL を含む引数で ArgumentError を出すので、検証で除外しないと包括 rescue の無言 exit 0 に落ちる。
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [
+  {"name" => "nul-arg", "command" => [ARGV[1], "a\0b"]},
+  {"name" => "fake-suite", "command" => [ARGV[1]]}
+]}}))
+' "$repo_real" "$tmp/fake-check" "$conf"
+rm -rf "$tmp/qa-state"
+: > "$tmp/check-fail"
+echo nul >> "$repo/u.txt"
+set +e
+out=$(cd "$repo" && run_qa false 2>"$tmp/qa-nul.err")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "#462: a NUL-arg entry must not hide the other failing check (rc=$rc): $out $(cat "$tmp/qa-nul.err")"
+grep -q "fake-suite" "$tmp/qa-nul.err" || fail "#462: the failing check must be reported alongside a NUL-arg entry: $(cat "$tmp/qa-nul.err")"
+rm -f "$tmp/check-fail"
+rm -rf "$tmp/qa-state"
+echo nul2 >> "$repo/u.txt"
+out=$(cd "$repo" && run_qa false 2>/dev/null) || fail "#462: a NUL-arg entry alone must not block"
+echo "$out" | grep -q "設定エラー" || fail "#462: a NUL-arg entry must be reported as a config error: $out"
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"edit_checks" => [{"name" => "nul-arg", "pattern" => "\.rb$", "command" => [ARGV[1], "a\0b"]}]}}))
+' "$repo_real" "$tmp/fake-check" "$conf"
+out=$(run_edit "$repo/a.rb") || fail "#462: edit-check with a NUL-arg entry should exit 0"
+echo "$out" | grep -q "設定エラー" || fail "#462: a NUL-arg edit entry must be reported as a config error: $out"
+
 # ---- #430 の 5: 指紋の diff の pin (--no-ext-diff / --no-color) ----
 # 外部 diff の固定出力を指紋に使うと、内容を変えても指紋が同じになり、fail 済みの cache で再検査されない。
 pins_cfg="$tmp/gitconfig-pins"

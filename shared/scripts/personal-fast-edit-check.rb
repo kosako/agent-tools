@@ -159,8 +159,10 @@ module FastEditCheck
     matched = []
     invalid = []
     checks.each_with_index do |c, i|
+      # 要素に NUL を含む command は IO.popen が ArgumentError にして包括 rescue に落ちる (無言の exit 0) ので、
+      # 設定の検証で不正な entry として除外する (#462 review)
       unless c.is_a?(Hash) && c["pattern"].is_a?(String) && c["command"].is_a?(Array) &&
-             !c["command"].empty? && c["command"].all? { |a| a.is_a?(String) }
+             !c["command"].empty? && c["command"].all? { |a| a.is_a?(String) && !a.include?("\0") }
         invalid << "edit_checks[#{i}]"
         next
       end
