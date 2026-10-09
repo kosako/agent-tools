@@ -23,10 +23,12 @@ run_hook() {
     HOME="$tmp/home" XDG_STATE_HOME= PATH="$tmp/bin:$PATH" \
     AGENT_TOOLS_TOOL_CALL_RECORD_DIR="${RECORD_DIR:-$records}" ruby "$src" 2> "$tmp/err"
 }
-# 記録 file の n 行目 (0 始まり) の key の値を inspect 表記で出す
+# 記録 file の n 行目 (0 始まり) の key の値を JSON 表記で出す (key が無ければ __absent__)。
+# inspect は Ruby の版で Hash の表記が変わるので使わない。
 field() { # $1=file $2=index $3=key
   ruby -rjson -e 'rows = File.readlines(ARGV[0]).map { |l| JSON.parse(l) }
-                  puts rows[ARGV[1].to_i].fetch(ARGV[2], :absent).inspect' "$1" "$2" "$3"
+                  row = rows[ARGV[1].to_i]
+                  puts(row.key?(ARGV[2]) ? JSON.generate(row[ARGV[2]]) : "__absent__")' "$1" "$2" "$3"
 }
 lines() { # $1=file
   [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || echo 0
@@ -51,12 +53,12 @@ out=$(run_hook CLAUDECODE=1 "$payload") || fail "PreToolUse should exit 0"
 [ "$(field "$claude_log" 0 permission_mode)" = '"auto"' ] || fail "permission_mode"
 [ "$(field "$claude_log" 0 tool)" = '"mcp__plugin_Notion_notion__notion-update-page"' ] || fail "tool"
 [ "$(field "$claude_log" 0 tool_use_id)" = '"tu1"' ] || fail "tool_use_id"
-[ "$(field "$claude_log" 0 arg_keys)" = '["command", "content", "page_id"]' ] || fail "arg_keys sorted"
+[ "$(field "$claude_log" 0 arg_keys)" = '["command","content","page_id"]' ] || fail "arg_keys sorted"
 [ "$(field "$claude_log" 0 op)" = '"append"' ] || fail "notion op append"
-[ "$(field "$claude_log" 0 mcp_server)" = '{"name"=>"notion", "source"=>"plugin"}' ] || fail "mcp_server"
-[ "$(field "$claude_log" 0 result)" = ':absent' ] || fail "Pre has no result"
-[ "$(field "$claude_log" 0 cwd)" = ':absent' ] || fail "cwd must not be recorded"
-[ "$(field "$claude_log" 0 transcript_path)" = ':absent' ] || fail "transcript_path must not be recorded"
+[ "$(field "$claude_log" 0 mcp_server)" = '{"name":"notion","source":"plugin"}' ] || fail "mcp_server"
+[ "$(field "$claude_log" 0 result)" = '__absent__' ] || fail "Pre has no result"
+[ "$(field "$claude_log" 0 cwd)" = '__absent__' ] || fail "cwd must not be recorded"
+[ "$(field "$claude_log" 0 transcript_path)" = '__absent__' ] || fail "transcript_path must not be recorded"
 grep -q 'CANARY_VALUE_8731' "$claude_log" && fail "argument value leaked into record"
 grep -q 'CANARY_CWD' "$claude_log" && fail "cwd leaked into record"
 grep -q 'CANARY_TRANSCRIPT' "$claude_log" && fail "transcript_path leaked into record"
@@ -71,7 +73,7 @@ run_hook CLAUDECODE=1 '{"hook_event_name":"PostToolUse","session_id":"s1","tool_
 [ "$(field "$claude_log" 1 result)" = '"output"' ] || fail "PostToolUse result"
 [ "$(field "$claude_log" 1 duration_ms)" = '12' ] || fail "duration_ms"
 [ "$(field "$claude_log" 1 arg_keys)" = '["command"]' ] || fail "Bash arg_keys"
-[ "$(field "$claude_log" 1 op)" = ':absent' ] || fail "op only for notion update-page"
+[ "$(field "$claude_log" 1 op)" = '__absent__' ] || fail "op only for notion update-page"
 grep -q 'CANARY_CMD_1' "$claude_log" && fail "Bash command leaked"
 grep -q 'CANARY_STDOUT' "$claude_log" && fail "tool_response leaked"
 
@@ -105,7 +107,7 @@ done
 run_hook CLAUDECODE=1 '{"hook_event_name":"PreToolUse","tool_name":"mcp__plugin_Notion_notion__notion-update-page",
   "tool_use_id":"tu7","tool_input":{"page_id":"p"}}' > /dev/null || fail "notion without command"
 last=$(($(lines "$claude_log") - 1))
-[ "$(field "$claude_log" "$last" op)" = ':absent' ] || fail "no command -> no op"
+[ "$(field "$claude_log" "$last" op)" = '__absent__' ] || fail "no command -> no op"
 
 # ---- 対象外の event・不正な stdin: 無言 no-op / stderr 1 行、file は変わらない ------------
 before=$(lines "$claude_log")
@@ -163,7 +165,7 @@ run_hook CLAUDECODE=1 '{"hook_event_name":"SessionStart","session_id":"s2","sour
   || fail "SessionStart should exit 0"
 last=$(($(lines "$claude_log") - 1))
 [ "$(field "$claude_log" "$last" version)" = '"9.9.9 (Claude Code)"' ] || fail "version from claude --version"
-[ "$(field "$claude_log" "$last" tool)" = ':absent' ] || fail "SessionStart has no tool"
+[ "$(field "$claude_log" "$last" tool)" = '__absent__' ] || fail "SessionStart has no tool"
 cat > "$tmp/bin/claude" <<'EOF'
 #!/bin/sh
 echo "boom" >&2
