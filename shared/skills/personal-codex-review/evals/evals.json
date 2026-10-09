@@ -794,6 +794,31 @@
           "text": "root commit だからといって base / uncommitted mode や worktree の読み取りに切り替えていない"
         }
       ]
+    },
+    {
+      "id": 33,
+      "name": "direct-branch-diff-second-opinion-pins-target",
+      "prompt": "この branch diff を Codex に second opinion してほしい。base は特に指定しない。手順確認だけで実行はしない。",
+      "expected_output": "explicit second opinion として base mode で扱う。base ref の名指しが無いので、origin の default branch の remote-tracking ref (git symbolic-ref --short refs/remotes/origin/HEAD が返すもの) を使い、fetch はしない (解決できなければ聞き返す)。base ref に値検査と literal 化を当て、その時点の base / head の OID を解決し、worktree が clean であることを確かめる。解決した OID を brief と結果の Target の行に書いて固定する。保証は「何を review したかの固定と記録」で、PR の対象との照合ではない。Independence は second-opinion only (#416)。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "default-base-remote-tracking",
+          "text": "base の名指しが無いので、origin の default branch の remote-tracking ref を使うとしている (fetch しない)"
+        },
+        {
+          "id": "pins-oids",
+          "text": "その時点の base / head の OID を解決して brief に固定するとしている"
+        },
+        {
+          "id": "records-target",
+          "text": "結果に review した対象 (Target の行) を書くとしている"
+        },
+        {
+          "id": "second-opinion-only",
+          "text": "Independence を second-opinion only とし、独立の承認として扱っていない"
+        }
+      ]
     }
   ]
 }

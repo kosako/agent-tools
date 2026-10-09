@@ -11,6 +11,7 @@ Review process verdict: REJECT | Warning | APPROVE
 Finding summary: 🔴 must N / 🟡 should N / ⚪ nit N
 Independence: cross-review verified (author=claude) | cross-review verified (author=opencode(anthropic)) | second-opinion only
 Model selection: model=<review profile | user config | codex default> / effort=<review profile | user config | codex default>
+Target: base <base ref> @ <base OID 8 桁> / head <head OID 8 桁> (base mode) | commit <OID 8 桁> (commit mode) | uncommitted (#416。direct の依頼では必須)
 
 🔴 must
 - path/to/file:123 — finding
