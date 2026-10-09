@@ -1,0 +1,24 @@
+schema_version: 1
+name: personal-tool-call-record-hook
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  # 実行時に tool 呼び出しの記録 (tool 名・引数の key・session_id) をユーザーの state dir に書く。
+  # 値は書かないが、記録そのものが private な runtime state なので medium。
+  privacy: medium
+# script kind は実行コード配布のため常に human review 必須 (#147)。承認は内容と配布形態に紐づく
+# (#148, #184)。本 script の review block は #454 の PR で author≠reviewer レビューののち、人が
+# approved_build_id を入れる。それまで register は human_review_required とし sync は配備しない。
+source:
+  path: shared/scripts/personal-tool-call-record-hook.rb
+  format: text
+summary: >-
+  SessionStart / PreToolUse / PostToolUse / PostToolUseFailure / PermissionDenied hook body。
+  event ごとに 1 行の JSON (時刻・client・session・tool 名・引数の key・結果の印) をユーザーの
+  state dir の JSONL に追記する記録 hook。判断しない・stdout 無し・exit 0 固定 (fail-open)。
+  引数の値・tool_response・path は書かない。主体は client の自己申告まで (guardrail であって
+  境界ではない)。docs/tool-call-record-hook.md が正本。
