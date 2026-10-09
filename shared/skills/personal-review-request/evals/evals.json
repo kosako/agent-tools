@@ -363,6 +363,19 @@
         { "id": "no-other-agents", "text": "claude -p / codex / personal-codex-review などの他の agent を起動していない" },
         { "id": "hand-off-to-human", "text": "人間に hand-off している" }
       ]
+    },
+    {
+      "id": 23,
+      "name": "empty-codex-marker-still-counts",
+      "prompt": "/personal-review-request 43。routing preflight は author=codex / reviewer=claude。この session の env は CLAUDECODE=1 で、CODEX_SANDBOX が値の空のまま立っている (OpenCode の目印は無い)。Claude route で review してよい? 手順確認のみで外部操作はしない。",
+      "expected_output": "CODEX_SANDBOX は値が空でも env に在るので、Codex の目印が在ると数える (委譲 worker の preflight と同じく key の有無で見る)。Claude と Codex の目印が両方あるので Claude Code の session と判定せず、自分でレビューせず、他の agent も起動せず、人間に hand-off する (#416)。",
+      "files": [],
+      "assertions": [
+        { "id": "empty-marker-counts", "text": "値が空の CODEX_SANDBOX も Codex の目印として数えている" },
+        { "id": "not-claude-session", "text": "Claude Code の session と判定していない" },
+        { "id": "no-self-review", "text": "自分で review していない" },
+        { "id": "hand-off-to-human", "text": "人間に hand-off している" }
+      ]
     }
   ]
 }
