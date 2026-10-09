@@ -86,7 +86,16 @@ directory 形式の配置ルールと、両 source 形式に共通する frontma
   (Codex の `agents/openai.yaml` 等) も拒否する。理由は下記「Native skill 機能」の target metadata。
 - **asset source の入れ子・重複所有を禁止**する (#177 H-01)。directory asset の source dir 配下に
   その asset 自身の manifest 以外の manifest を置くと fail-closed で拒否する (子 asset が独立
-  配布されつつ親の evals/ 抑止で injection check を回避する経路を断つ)。
+  配布されつつ親の evals/ 抑止で injection check を回避する経路を断つ)。入れ子の検査の root は
+  directory 形式を宣言したすべての manifest の dir で、`asset.yml` 以外 (sidecar) の宣言も root に
+  数える (#427 の 2)。
+- **`source.format: directory` を宣言できるのは `<dir>/asset.yml` だけ** (#427 の 2)。sidecar
+  (`<name>.asset.yml`) が directory 形式を宣言すると fail-closed で拒否する (「`asset.yml` は directory
+  形式を要する」と対称)。check-injection も、evals/ を leak 検査だけにする directory asset を
+  `asset.yml` の manifest に限る。
+- **sidecar の名前は source の拡張子を除いた名前 + `.asset.yml`** で、**1 つの source.path を所有する
+  manifest は repository 全体で 1 つ** (#427 の 3)。別名の sidecar (`personal-a.asset.yml` が
+  `personal-b.md` を指す) と、同じ source を 2 つの manifest が指す構成は fail-closed で拒否する。
 
 manifest metadata を asset 本体の frontmatter と分ける理由:
 

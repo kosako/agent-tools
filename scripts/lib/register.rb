@@ -58,17 +58,19 @@ module Register
 
     private
 
-    # medium finding の path を asset の source path / manifest path に対応づける。
+    # medium finding の path を asset の source path / manifest path に対応づける。所有する asset が
+    # 複数あれば、そのすべてに flag を付ける (fail-closed。check-manifests が重複所有を拒むので通常は 1 つ。
+    # #427 の 3)。
     def assign_findings(assets, mediums)
       mediums.each do |finding|
-        asset = assets.find { |a| owns_path?(a, finding.path) }
-        unless asset
+        owners = assets.select { |a| owns_path?(a, finding.path) }
+        if owners.empty?
           raise Error, "medium finding on #{finding.path}, which is not part of any asset; " \
                        "clean the file or move it out of shared/"
         end
 
         warn finding.to_s
-        asset[:flagged] = true
+        owners.each { |asset| asset[:flagged] = true }
       end
     end
 

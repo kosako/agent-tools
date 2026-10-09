@@ -1183,5 +1183,55 @@ if "$check" --root "$weird" > "$tmp/out-weird-exec" 2>&1; then
 fi
 grep -q "must not contain an executable file (shared/skills/personal-weird/run.sh)" "$tmp/out-weird-exec" \
   || fail "missing executable error under a glob-special root: $(cat "$tmp/out-weird-exec")"
+# --- case: sidecar は source.format: directory を宣言できず、宣言した dir の下の manifest は入れ子として出る (#427 の 2) ---
+# sidecar `shared/skills/personal-cat.asset.yml` が自分の category dir (shared/skills) を directory asset として所有すると、
+# 従来は「自分の dir を指す」規則を通り、入れ子の検査 (root は asset.yml だけ) も素通りしていた。
+mkdir -p "$tmp/sidedir/shared/skills/personal-inner"
+cat > "$tmp/sidedir/shared/skills/SKILL.md" <<'EOF'
+---
+name: personal-cat
+description: category claimed by a sidecar
+---
+# cat
+EOF
+write_asset_manifest "$tmp/sidedir/shared/skills/personal-cat.asset.yml" \
+  personal-cat skill personal shared/skills directory claude-code
+cat > "$tmp/sidedir/shared/skills/personal-inner/SKILL.md" <<'EOF'
+---
+name: personal-inner
+description: inner skill
+---
+# inner
+EOF
+write_asset_manifest "$tmp/sidedir/shared/skills/personal-inner/asset.yml" \
+  personal-inner skill personal shared/skills/personal-inner directory claude-code
+if "$check" --root "$tmp/sidedir" > "$tmp/out-sidedir" 2>&1; then
+  fail "a sidecar manifest declaring source.format: directory must be rejected"
+fi
+grep -q "personal-cat.asset.yml: sidecar manifest must not declare source.format: directory" "$tmp/out-sidedir" \
+  || fail "missing sidecar-directory rejection: $(cat "$tmp/out-sidedir")"
+grep -q "personal-inner/asset.yml: asset manifest is nested inside directory asset \"shared/skills\"" "$tmp/out-sidedir" \
+  || fail "the asset under the sidecar-claimed dir must be reported as nested: $(cat "$tmp/out-sidedir")"
+
+# --- case: sidecar は source の名前で対応づき、1 つの source を 2 つの manifest が所有できない (#427 の 3) ---
+# personal-a.asset.yml が personal-b.md を指しても、従来は「同じ dir にある」検査だけで通り、
+# personal-b.md を personal-a と personal-b の 2 つの manifest が所有できた。
+mkdir -p "$tmp/twoown/shared/workflows"
+write_skill_source "$tmp/twoown/shared/workflows/personal-b.md" '# b'
+write_asset_manifest "$tmp/twoown/shared/workflows/personal-b.asset.yml" \
+  personal-b workflow public shared/workflows/personal-b.md markdown claude-code
+write_asset_manifest "$tmp/twoown/shared/workflows/personal-a.asset.yml" \
+  personal-a workflow public shared/workflows/personal-b.md markdown claude-code
+if "$check" --root "$tmp/twoown" > "$tmp/out-twoown" 2>&1; then
+  fail "two manifests owning one source must be rejected"
+fi
+grep -q "personal-a.asset.yml: sidecar manifest must be named after its source file (expected personal-b.asset.yml)" "$tmp/out-twoown" \
+  || fail "missing sidecar naming rejection: $(cat "$tmp/out-twoown")"
+grep -q "personal-a.asset.yml: source.path \"shared/workflows/personal-b.md\" is also declared by shared/workflows/personal-b.asset.yml" "$tmp/out-twoown" \
+  || fail "missing duplicate ownership error on personal-a: $(cat "$tmp/out-twoown")"
+grep -q "personal-b.asset.yml: source.path \"shared/workflows/personal-b.md\" is also declared by shared/workflows/personal-a.asset.yml" "$tmp/out-twoown" \
+  || fail "missing duplicate ownership error on personal-b: $(cat "$tmp/out-twoown")"
+! grep -q "personal-b.asset.yml: sidecar manifest must be named" "$tmp/out-twoown" \
+  || fail "the correctly named sidecar must not get the naming error: $(cat "$tmp/out-twoown")"
 
 echo "ok: check-manifests self-test passed"

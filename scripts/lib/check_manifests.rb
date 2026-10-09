@@ -66,12 +66,17 @@ module CheckManifests
       @errors = []
       @declared_names = Hash.new { |h, k| h[k] = [] }
       @instruction_targets = Hash.new { |h, k| h[k] = [] }
+      # source.path ごとの所有 manifest (重複所有の検査, #427 の 3) と、directory 形式の asset の
+      # source dir (入れ子の検査の root, #427 の 2)。validate_source が記録する。
+      @source_owners = Hash.new { |h, k| h[k] = [] }
+      @directory_roots = []
     end
 
     def run
       manifests = discover_manifests
       manifests.each { |path| validate_manifest(path) }
       check_duplicate_names
+      check_source_ownership
       check_nested_asset_sources(manifests)
       check_sources_have_manifests
       check_instruction_uniqueness
@@ -300,16 +305,26 @@ module CheckManifests
       unless source_path.start_with?("shared/")
         error(path, "source.path must be under shared/, got #{source_path.inspect}")
       end
+      @source_owners[source_path.chomp("/")] << path
 
       full = File.join(@root, source_path)
       if format == "directory"
+        # directory 形式を宣言できるのは <dir>/asset.yml だけ (「asset.yml は directory を要する」と
+        # 対称)。sidecar が自分の category dir を directory asset として所有すると、その下の独立 asset が
+        # 入れ子の検査を通り、evals/ の抑止も及んでしまう (#427 の 2)。
+        unless File.basename(path) == "asset.yml"
+          error(path, "sidecar manifest must not declare source.format: directory " \
+                      "(a directory asset's manifest is <dir>/asset.yml)")
+        end
         if File.directory?(full)
           check_directory_no_symlinks(path, full)
         else
           error(path, "source.path #{source_path.inspect} is not a directory")
         end
         expected_dir = File.dirname(path)
-        unless source_path.chomp("/") == expected_dir
+        if source_path.chomp("/") == expected_dir
+          @directory_roots << expected_dir
+        else
           error(path, "directory manifest must point at its own directory #{expected_dir.inspect}")
         end
       else
@@ -326,6 +341,32 @@ module CheckManifests
           error(path, "directory manifest requires source.format: directory")
         elsif File.dirname(source_path) != File.dirname(path)
           error(path, "sidecar manifest must sit next to its source file")
+        elsif File.basename(path) != "#{sidecar_stem(File.basename(source_path))}.asset.yml"
+          # sidecar は source の拡張子を除いた名前で対応づく (check_sources_have_manifests と同じ規則)。
+          # 別名の sidecar を許すと、1 つの source を 2 つの manifest が所有できる (#427 の 3)。
+          error(path, "sidecar manifest must be named after its source file " \
+                      "(expected #{sidecar_stem(File.basename(source_path))}.asset.yml)")
+        end
+      end
+    end
+
+    # source file の名前から sidecar manifest の stem (拡張子を除いた名前) を得る。
+    # 対応づけの規則はここ 1 か所に置く (validate_source と check_sources_have_manifests が使う)。
+    def sidecar_stem(basename)
+      basename.sub(/\.[^.]+\z/, "")
+    end
+
+    # 1 つの source.path を所有する manifest は repository 全体で 1 つ (#427 の 3)。sidecar の名前の規則と
+    # 「自分の dir を指す」規則で通常は起きないが、register の finding の帰属 (docs/register-catalog.md) と
+    # #177 の重複所有の禁止が前提にするので、全体でも検査する。
+    def check_source_ownership
+      @source_owners.each do |source_path, paths|
+        next if paths.size < 2
+
+        paths.sort.each do |path|
+          others = (paths - [path]).sort.join(", ")
+          error(path, "source.path #{source_path.inspect} is also declared by #{others}; " \
+                      "one source must be owned by exactly one manifest")
         end
       end
     end
@@ -671,7 +712,10 @@ module CheckManifests
     def check_nested_asset_sources(manifests)
       # directory asset の source dir = その manifest (asset.yml) の置かれた dir
       # (validate_source が「directory manifest は自分の dir を指す」ことを保証する)。
-      dir_roots = manifests.select { |m| File.basename(m) == "asset.yml" }.map { |m| File.dirname(m) }
+      # asset.yml 以外で directory 形式を宣言した manifest (validate_source が拒む) も root に数え、
+      # その下の manifest を入れ子として出す (#427 の 2)。
+      dir_roots = (manifests.select { |m| File.basename(m) == "asset.yml" }.map { |m| File.dirname(m) } +
+                   @directory_roots).uniq
       manifests.each do |m|
         dir_roots.each do |root_dir|
           # root_dir 自身の root manifest (root_dir/asset.yml) は自己なので除外する。
@@ -718,7 +762,7 @@ module CheckManifests
               error(rel(full), "directory asset is missing asset.yml")
             end
           else
-            sidecar = File.join(dir, "#{entry.sub(/\.[^.]+\z/, '')}.asset.yml")
+            sidecar = File.join(dir, "#{sidecar_stem(entry)}.asset.yml")
             if File.file?(sidecar)
               sidecar_sources[sidecar] << full
             else
