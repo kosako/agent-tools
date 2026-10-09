@@ -35,10 +35,12 @@ default は必ず conservative にします。
   (`.agent-tools-staging-<name>`) に copy し、旧 dir を `.agent-tools-old-<name>` に rename で退避してから
   一時 dir を rename で配置先に置き、最後に退避した旧 dir を消す (退避 → 配置 → 削除。配置先が無い時間は
   2 つの rename の間だけで、marker は一時 dir の中にあり rename で初めて有効になる)。copy の途中で止まれば
-  旧版はそのまま、配置の rename に失敗すれば退避した旧版を戻す。前回の残り (一時 dir / 退避 dir) を消せなければ
-  何も書かずに `fail:` で止める (exit 1)。退避した旧 dir を消し残したら、新版は配置済みのまま `fail:` で止め、
-  旧の写しの path を出す (手で消す。次の sync は新版を up-to-date と見る)。script は本体 → sidecar marker の
-  順に、それぞれ一時 file に書いて rename する (一時 file の path に directory や消せない file があれば止める)。
+  旧版はそのまま。配置の rename に失敗したら退避した旧版を戻して `fail:` で止める (例外でも割り込みでも戻す。
+  SIGKILL は除く)。前回の中断で配置先が無く退避した旧 dir だけがあれば、消さずに配置先へ戻してから進める。
+  前回の残り (一時 dir / 戻した後の退避 dir) を消せなければ何も書かずに `fail:` で止める (exit 1)。退避した
+  旧 dir を消し残したら、新版は配置済みのまま `fail:` で止め、旧の写しの path を出す (手で消す。次の sync は
+  新版を up-to-date と見る)。script は本体 → sidecar marker の順に、それぞれ一時 file に書いて rename する
+  (一時 file の path に directory や消せない file があれば止める)。
   create の途中で止まると marker の無い本体が残り、次の sync は unmanaged の conflict で止まる (fail-closed)。
 - 走査する tool と kind の組は `ArtifactTargets::TOOL_KINDS` に従う (plan も prune も)。
   codex / claude-code は skill / instruction / script、opencode は plugin だけで、opencode home の

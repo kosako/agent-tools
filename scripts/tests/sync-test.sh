@@ -1090,4 +1090,80 @@ rmdir "$ascripts/.agent-tools-staging-personal-atool"
 run39 --apply --quiet > /dev/null
 [ -x "$ascripts/personal-atool" ] || fail "script should converge after the directory is removed"
 
+# --- case 45: 退避の後・配置の前で止まった状態 (配置先が無く退避した旧 dir だけ) からの再実行は、旧版を消さずに戻す (#469 review 2) ---
+# fixture: v4 を配置した状態から mv で中断状態を作り、v5 を build + register する。(a) copy が失敗する apply (generated の
+# SKILL.md を mode 000。case 39 と同じ) でも配置先に v4 が戻り、old も staging も残らない。(b) 障害を取り除くと v5 が配置される。
+# 旧実装は old を「前回の残り」として消してから copy したので、そこで copy が失敗すると唯一の旧版も失われた。
+mv "$atarget" "$aold"
+write_atomic_skill v5
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+chmod 0000 "$agen/SKILL.md"
+status=0
+run39 --apply > "$tmp/out45a" 2>&1 || status=$?
+chmod 0644 "$agen/SKILL.md"
+[ "$status" -eq 1 ] || fail "copy failure after an interrupted switch should exit 1, got $status: $(cat "$tmp/out45a")"
+grep -q "^v4$" "$atarget/SKILL.md" || fail "the old version must be put back at the target before the copy is attempted"
+[ ! -e "$aold" ] || fail "the old copy must not remain after it was put back"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "skills/ must hold only the target after the recovery: $(ls -A "$tmp/aclaude/skills")"
+run39 --apply > "$tmp/out45b" 2>&1 || fail "apply after the obstacle is removed should succeed: $(cat "$tmp/out45b")"
+grep -q "^v5$" "$atarget/SKILL.md" || fail "the new version should be deployed once the copy succeeds"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "skills/ must hold only the target after convergence: $(ls -A "$tmp/aclaude/skills")"
+
+# --- case 46: 配置の rename だけが失敗したら、退避した旧版を戻して止まり、staging も old も残らない (#469 review 2) ---
+# sync.sh は `exec ruby lib/sync.rb` で起動するので、RUBYOPT=-r<file> でその ruby だけに test 専用の patch を読ませる
+# (実装に test 用の hook は入れない)。patch は source が staging で destination が配置先の File.rename だけを
+# INJECT_RENAME_ERROR の例外にする (退避の rename と復旧の rename はそのまま通る)。RUBYOPT は空白で分割されるので、
+# path に空白があれば理由を出して fail。patch が効いた根拠は fail: の行の例外 class (Errno::EIO)。RUBYOPT を付けない対照
+# (46c) が同じ fixture で v6 に更新されることで、注入が他の起動に漏れていないことも見る。
+case $tmp in *[[:space:]]*) fail "case 46 needs a tmp path without whitespace for RUBYOPT: $tmp" ;; esac
+inject="$tmp/inject-rename.rb"
+cat > "$inject" <<'RB'
+class << File
+  alias_method :rename_without_injection, :rename
+  def rename(from, to)
+    if File.basename(from).start_with?(".agent-tools-staging-") && File.basename(to) == "personal-atomic"
+      raise Object.const_get(ENV.fetch("INJECT_RENAME_ERROR")), "injected"
+    end
+    rename_without_injection(from, to)
+  end
+end
+RB
+run46() {
+  RUBYOPT="-r$inject" INJECT_RENAME_ERROR=$1 "$sync" --root "$tmp/arepo" --codex-home "$tmp/acodex" \
+    --claude-home "$tmp/aclaude" --opencode-home "$tmp/aopencode" --apply
+}
+write_atomic_skill v6
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+tree_snapshot "$atarget" > "$tmp/out46-before"
+# 46a: 例外 (Errno::EIO) は ApplyError に変えて fail: で止める。旧版は戻る
+status=0
+run46 Errno::EIO > "$tmp/out46a" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "placement rename failure should exit 1, got $status: $(cat "$tmp/out46a")"
+grep -q "fail: could not put the new version at .*personal-atomic (Errno::EIO); the old version was put back" "$tmp/out46a" \
+  || fail "the stop must say the old version was put back: $(cat "$tmp/out46a")"
+tree_snapshot "$atarget" > "$tmp/out46a-after"
+cmp -s "$tmp/out46-before" "$tmp/out46a-after" \
+  || fail "the old version must be back at the target after the placement fails: $(diff "$tmp/out46-before" "$tmp/out46a-after" || true)"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "neither staging nor old may remain after the placement fails: $(ls -A "$tmp/aclaude/skills")"
+# 46b: 割り込み (Interrupt。SystemCallError ではない) でも ensure が旧版を戻す。uncaught の Interrupt で ruby は
+# SIGINT で終わる (実測 exit 130) ので、exit code は 0 でないことだけを見る
+status=0
+run46 Interrupt > "$tmp/out46b" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "an interrupt during the placement must not exit 0: $(cat "$tmp/out46b")"
+tree_snapshot "$atarget" > "$tmp/out46b-after"
+cmp -s "$tmp/out46-before" "$tmp/out46b-after" \
+  || fail "the old version must be back at the target after an interrupt: $(diff "$tmp/out46-before" "$tmp/out46b-after" || true)"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "neither staging nor old may remain after an interrupt: $(ls -A "$tmp/aclaude/skills")"
+# 46c: 対照。注入が無ければ同じ fixture で v6 に更新される
+run39 --apply > "$tmp/out46c" 2>&1 || fail "apply without the injection should succeed: $(cat "$tmp/out46c")"
+grep -q "^v6$" "$atarget/SKILL.md" || fail "the new version should be deployed without the injection"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "skills/ must hold only the target after the control run: $(ls -A "$tmp/aclaude/skills")"
+
 echo "ok: sync self-test passed"

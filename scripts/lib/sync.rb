@@ -142,9 +142,9 @@ module Sync
     # skill (directory) の create / update。generated を一時 dir に copy し、旧 dir を退避先に rename で退け、
     # 一時 dir を rename で配置先に置いてから、退避した旧 dir を消す (退避 → 配置 → 削除)。配置先が無い時間は
     # 2 つの rename の間だけで、marker は一時 dir の中にあるので rename で初めて有効になる。copy の途中で
-    # 止まれば旧版はそのまま、配置の rename に失敗すれば退避した旧版を戻す。旧 dir を消し残しても新版は配置済み
-    # なので、残った写しの path を伝えて止める (rm_rf は削除の失敗を握りつぶす。build.rb と同じ検査)。
-    # 例外のときも一時 dir は片付ける (#431 の 3, #469 review)。
+    # 止まれば旧版はそのまま。配置の rename に失敗したら ensure で退避した旧版を戻す (例外でも割り込みでも。
+    # SIGKILL は対象外)。旧 dir を消し残しても新版は配置済みなので、残った写しの path を伝えて止める (rm_rf は
+    # 削除の失敗を握りつぶす。build.rb と同じ検査)。例外のときも一時 dir は片付ける (#431 の 3, #469 review)。
     def replace_skill_dir(gen, target)
       FileUtils.mkdir_p(File.dirname(target))
       staging = work_path(target, "staging")
@@ -152,21 +152,31 @@ module Sync
       unless removed?(staging)
         raise ApplyError, "could not remove the leftover staging dir #{staging}; the new version was not applied"
       end
+      # 前回の中断からの復旧: 配置先が無く退避した旧 dir だけがあるのは、退避の後・配置の前で止まった状態
+      # (SIGKILL 等で ensure が走らなかった)。唯一の旧版なので、前回の残りとして消さずに配置先へ戻してから進める。
+      File.rename(old, target) if File.exist?(old) && !File.exist?(target)
       unless removed?(old)
         raise ApplyError,
               "could not remove the leftover copy of the old version #{old}; the new version was not applied"
       end
+      moved = false
+      placed = false
       begin
         FileUtils.cp_r(gen, staging)
-        File.rename(target, old) if File.exist?(target)
+        if File.exist?(target)
+          File.rename(target, old)
+          moved = true
+        end
         begin
           File.rename(staging, target)
-        rescue SystemCallError
-          # 新版を置けなかったので、退避した旧版を戻してから伝える (配置先を欠落させない)。
-          File.rename(old, target) if File.exist?(old) && !File.exist?(target)
-          raise
+        rescue SystemCallError => e
+          outcome = moved ? "the old version was put back" : "nothing was placed"
+          raise ApplyError, "could not put the new version at #{target} (#{e.class}); #{outcome}"
         end
+        placed = true
       ensure
+        # 退避の後・配置の前で止まったら (例外・割り込み)、退避した旧版を戻して配置先を欠落させない。
+        File.rename(old, target) if moved && !placed && File.exist?(old) && !File.exist?(target)
         FileUtils.rm_rf(staging)
       end
       return if removed?(old)
