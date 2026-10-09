@@ -9,6 +9,7 @@
 
 require_relative "assets"
 require_relative "artifact_targets"
+require_relative "path_glob"
 require_relative "cli"
 
 module CheckInjection
@@ -149,7 +150,7 @@ module CheckInjection
     # injection 攻撃文字列・fake path・email の scan からは外すが、inline private key leak
     # のみ引き続き scan する (run で per-file に判定する)。
     def target_files
-      Dir.glob(File.join(@root, "shared/**/*"), File::FNM_DOTMATCH)
+      PathGlob.under(@root, "shared/**/*", File::FNM_DOTMATCH)
          .select { |p| File.file?(p) }
          .reject { |p| File.basename(p) == ".gitkeep" }
          .sort

@@ -16,6 +16,7 @@ require_relative "status"
 require_relative "build"
 require_relative "artifact_targets"
 require_relative "catalog"
+require_relative "path_glob"
 require_relative "plugin_marker"
 require_relative "cli"
 
@@ -117,7 +118,7 @@ module Doctor
     def deployed_summary(tool, home)
       if ArtifactTargets.tool_supports?(tool, "skill")
         skills = File.join(home, "skills")
-        count = File.directory?(skills) ? Dir.glob(File.join(skills, "personal-*")).size : 0
+        count = File.directory?(skills) ? PathGlob.under(skills, "personal-*").size : 0
         "#{count} personal skill(s)"
       elsif ArtifactTargets.tool_supports?(tool, "plugin")
         "#{managed_plugin_count(tool, home)} personal plugin(s)"
@@ -127,7 +128,7 @@ module Doctor
     end
 
     def managed_plugin_count(tool, home)
-      Dir.glob(File.join(home, "plugins", ArtifactTargets.plugin_filename("personal-*"))).count do |path|
+      PathGlob.under(File.join(home, "plugins"), ArtifactTargets.plugin_filename("personal-*")).count do |path|
         # 数える条件は sync の所有判定と同じ (marker の target と、file 名と同じ name)。
         File.file?(path) && PluginMarker.managed?(File.binread(path), tool, File.basename(path, ".js"))
       end
@@ -162,7 +163,7 @@ module Doctor
         File.join(claude, "sessions"),
         File.join(claude, "projects"),
       ]
-      paths + Dir.glob(File.join(@agents_home, "skills", "*", "{db,teams}"))
+      paths + PathGlob.under(@agents_home, "skills/*/{db,teams}")
     end
 
     # catalog の存在と鮮度 (docs/register-catalog.md)。

@@ -11,6 +11,7 @@ require "yaml"
 require_relative "yaml_util"
 require_relative "assets"
 require_relative "artifact_targets"
+require_relative "path_glob"
 require_relative "plugin_marker"
 require_relative "cli"
 
@@ -334,7 +335,7 @@ module CheckManifests
     # regular file / directory 以外を reject して fail-closed にする (gate 経由で build /
     # register が止まる)。
     def check_directory_no_symlinks(path, dir)
-      Dir.glob(File.join(dir, "**/*"), File::FNM_DOTMATCH).sort.each do |entry|
+      PathGlob.under(dir, "**/*", File::FNM_DOTMATCH).sort.each do |entry|
         base = File.basename(entry)
         next if base == "." || base == ".."
 
@@ -477,7 +478,7 @@ module CheckManifests
       # (2) 実行ビットの立った regular file を拒否する。evals/ (非配置 fixture) も除外しない:
       # 配布されないが、実行コードの持ち込み自体を gate で止める fail-closed 方針を保つ。
       # symlink / 特殊ファイルは validate_source の check_directory_no_symlinks が別途 reject。
-      Dir.glob(File.join(dir, "**/*"), File::FNM_DOTMATCH).sort.each do |entry|
+      PathGlob.under(dir, "**/*", File::FNM_DOTMATCH).sort.each do |entry|
         base = File.basename(entry)
         next if base == "." || base == ".."
         next if File.symlink?(entry)

@@ -2,6 +2,7 @@
 
 require "digest"
 
+require_relative "path_glob"
 require_relative "yaml_util"
 
 # shared asset の discovery と load を 1 箇所に集約する。
@@ -38,8 +39,8 @@ module Assets
   # EISDIR を踏まないよう file だけに絞る (directory manifest は File.file? で残る)。
   def self.manifest_paths(root)
     root = File.expand_path(root)
-    (Dir.glob(File.join(root, "shared/**/*.asset.yml")) +
-     Dir.glob(File.join(root, "shared/**/asset.yml")))
+    (PathGlob.under(root, "shared/**/*.asset.yml") +
+     PathGlob.under(root, "shared/**/asset.yml"))
       .select { |p| File.file?(p) }
       .sort
   end

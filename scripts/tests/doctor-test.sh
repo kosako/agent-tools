@@ -239,4 +239,28 @@ run_pdoctor "$tmp/plopen" > "$tmp/d12" 2>&1 || status=$?
 grep -q "warn: target: \[opencode\] personal-plug deployed_but_inactive" "$tmp/d12" \
   || fail "missing plugin deployed_but_inactive warn: $(cat "$tmp/d12")"
 
+# --- case: home の path に glob の特殊文字があっても配置済みの skill を数え、禁止 target の marker を見つける (#427 の 1) ---
+# home を pattern に連結すると `[me]` と `{x}` が glob として読まれ、skill が 0 件に見え、
+# agents home の skills/*/{db,teams} の marker も見えない。
+whome="$tmp/ho[me] {x}"
+mkdir -p "$whome/codex/skills" "$whome/claude/skills" "$whome/agents/skills/foo/db"
+WAM_EXTRA='summary: demo workflow'
+make_demo_repo "$tmp/wrepo" workflows personal-demo workflow '# demo'
+"$build" --root "$tmp/wrepo" --quiet > /dev/null
+"$script_dir/../register.sh" --root "$tmp/wrepo" --quiet > /dev/null
+"$sync" --root "$tmp/wrepo" --codex-home "$whome/codex" --claude-home "$whome/claude" --opencode-home "$whome/opencode" --apply --quiet > /dev/null
+run_wdoctor() {
+  "$doctor" --root "$tmp/wrepo" --codex-home "$whome/codex" \
+    --claude-home "$whome/claude" --opencode-home "$whome/opencode" --agents-home "$whome/agents"
+}
+run_wdoctor > "$tmp/dw" 2>&1 || fail "doctor with a glob-special home should pass: $(cat "$tmp/dw")"
+grep -q "ok: home: \[codex\] <codex home> present, 1 personal skill(s)" "$tmp/dw" \
+  || fail "doctor must count the skill deployed under a glob-special home: $(cat "$tmp/dw")"
+cp "$whome/claude/skills/personal-demo/.agent-tools-managed.yml" "$whome/agents/skills/foo/db/"
+status=0
+run_wdoctor > "$tmp/dw2" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "doctor must fail on a marker in a forbidden target under a glob-special agents home: $(cat "$tmp/dw2")"
+grep -q "fail: forbidden: agent-tools marker found in forbidden target <agents home>/skills/foo/db" "$tmp/dw2" \
+  || fail "missing forbidden marker finding under a glob-special agents home: $(cat "$tmp/dw2")"
+
 echo "ok: doctor self-test passed"

@@ -23,6 +23,7 @@ require_relative "yaml_marker"
 require_relative "artifact_targets"
 require_relative "catalog"
 require_relative "instruction_marker"
+require_relative "path_glob"
 require_relative "plugin_marker"
 require_relative "assets"
 require_relative "cli"
@@ -161,7 +162,7 @@ module Sync
       return [] unless File.directory?(skills_dir)
 
       known = catalog_names(tool, "skill")
-      Dir.glob(File.join(skills_dir, "personal-*")).sort.map do |target|
+      PathGlob.under(skills_dir, "personal-*").sort.map do |target|
         name = File.basename(target)
         next if known.include?(name)
 
@@ -184,7 +185,7 @@ module Sync
       return [] unless File.directory?(scripts_dir)
 
       known = catalog_names(tool, "script")
-      Dir.glob(File.join(scripts_dir, "personal-*")).sort.map do |target|
+      PathGlob.under(scripts_dir, "personal-*").sort.map do |target|
         # sidecar marker は本体の delete と対で消すため、単体では列挙しない。
         next if target.end_with?(ArtifactTargets::MARKER_BASENAME)
 
@@ -214,7 +215,7 @@ module Sync
       return [] unless File.directory?(plugins_dir)
 
       known = catalog_names(tool, "plugin")
-      Dir.glob(File.join(plugins_dir, ArtifactTargets.plugin_filename("personal-*"))).sort.map do |target|
+      PathGlob.under(plugins_dir, ArtifactTargets.plugin_filename("personal-*")).sort.map do |target|
         name = File.basename(target, ".js")
         next if known.include?(name)
 
