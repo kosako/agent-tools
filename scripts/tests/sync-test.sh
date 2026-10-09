@@ -873,4 +873,35 @@ printf '%s\nexport default {};\n' "$(plugin_marker personal-victim opencode "$pb
 ! grep -q "delete:" "$tmp/out38" || fail "empty catalog must not plan plugin deletes: $(cat "$tmp/out38")"
 [ -f "$tmp/pleopen/plugins/personal-victim.js" ] || fail "managed plugin must survive prune with an empty catalog"
 
+# --- case: home の path に glob の特殊文字があっても orphan を列挙する (#427 の 1) ---
+# home の skills/ を pattern に連結すると `[me]` と `{x}` が glob として読まれ、orphan が見えないまま prune が空振りする。
+whome="$tmp/ho[me] {x}"
+mkdir -p "$tmp/wrepo/shared/skills/personal-wkeep" "$tmp/wrepo/shared/skills/personal-wgone" \
+  "$whome/codex" "$whome/claude"
+for n in wkeep wgone; do
+  cat > "$tmp/wrepo/shared/skills/personal-$n/SKILL.md" <<EOF
+---
+name: personal-$n
+description: demo skill $n
+---
+body $n
+EOF
+  write_asset_manifest "$tmp/wrepo/shared/skills/personal-$n/asset.yml" \
+    "personal-$n" skill public "shared/skills/personal-$n" directory claude-code
+done
+runw() { "$sync" --root "$tmp/wrepo" --codex-home "$whome/codex" --claude-home "$whome/claude" --opencode-home "$whome/opencode" "$@"; }
+"$build" --root "$tmp/wrepo" --quiet > /dev/null
+"$register" --root "$tmp/wrepo" --quiet > /dev/null
+runw --apply --quiet > /dev/null
+[ -f "$whome/claude/skills/personal-wgone/SKILL.md" ] || fail "glob-special home fixture should deploy personal-wgone"
+rm -rf "$tmp/wrepo/shared/skills/personal-wgone"
+"$build" --root "$tmp/wrepo" --prune --quiet > /dev/null
+"$register" --root "$tmp/wrepo" --quiet > /dev/null
+runw --prune > "$tmp/outw-dry" 2>&1 || fail "prune dry-run with a glob-special home should succeed: $(cat "$tmp/outw-dry")"
+grep -q "delete: \[claude-code\].*personal-wgone (not in catalog)" "$tmp/outw-dry" \
+  || fail "orphan under a glob-special home must be listed: $(cat "$tmp/outw-dry")"
+runw --prune --apply > "$tmp/outw-apply" 2>&1 || fail "prune apply with a glob-special home should succeed: $(cat "$tmp/outw-apply")"
+[ ! -e "$whome/claude/skills/personal-wgone" ] || fail "orphan under a glob-special home should be deleted"
+[ -f "$whome/claude/skills/personal-wkeep/SKILL.md" ] || fail "prune under a glob-special home must keep the catalog-backed skill"
+
 echo "ok: sync self-test passed"

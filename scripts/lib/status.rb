@@ -16,6 +16,7 @@ require_relative "check_injection"
 require_relative "build"
 require_relative "sync"
 require_relative "artifact_targets"
+require_relative "path_glob"
 require_relative "catalog"
 require_relative "yaml_marker"
 require_relative "instruction_marker"
@@ -97,7 +98,7 @@ module Status
     # generated/<tool>/<kind の subdir>/ 直下の artifact 本体。skill は directory、それ以外は
     # 単一ファイル (script の sidecar marker は本体と一緒に数えるので除く)。
     def generated_artifacts(tool, kind)
-      Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, kind), "*")).sort.select do |artifact|
+      PathGlob.under(ArtifactTargets.generated_dir(@root, tool, kind), "*").sort.select do |artifact|
         case kind
         when "skill" then File.directory?(artifact)
         when "script" then File.file?(artifact) && !artifact.end_with?(ArtifactTargets::MARKER_BASENAME)

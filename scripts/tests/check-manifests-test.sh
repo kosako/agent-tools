@@ -1151,4 +1151,37 @@ fi
 grep -q "missing sidecar manifest personal-porphan.asset.yml" "$tmp/out-porphan" \
   || fail "missing orphan plugin error in: $(cat "$tmp/out-porphan")"
 
+# --- case: checkout path に glob の特殊文字があっても manifest と directory asset の中身を走査する (#427 の 1) ---
+# directory を glob の pattern に連結すると `[ird]` が文字 class、`{x}` が brace として読まれ、走査が空になる
+# (manifest 0 件のまま ok、directory asset の symlink と実行 file も見えない)。
+weird="$tmp/we[ird] {x}"
+mkdir -p "$weird/shared/skills/personal-weird"
+cat > "$weird/shared/skills/personal-weird/SKILL.md" <<'EOF'
+---
+name: personal-weird
+description: demo weird
+---
+# weird
+EOF
+write_asset_manifest "$weird/shared/skills/personal-weird/asset.yml" \
+  personal-weird skill personal shared/skills/personal-weird directory claude-code
+"$check" --root "$weird" > "$tmp/out-weird" 2>&1 \
+  || fail "manifests under a glob-special root should validate: $(cat "$tmp/out-weird")"
+grep -q "ok: 1 manifest(s) validated" "$tmp/out-weird" \
+  || fail "manifest under a glob-special root must be found: $(cat "$tmp/out-weird")"
+ln -s SKILL.md "$weird/shared/skills/personal-weird/link.md"
+if "$check" --root "$weird" > "$tmp/out-weird-sym" 2>&1; then
+  fail "symlink inside a directory asset under a glob-special root must be rejected"
+fi
+grep -q "directory asset must not contain symlinks: shared/skills/personal-weird/link.md" "$tmp/out-weird-sym" \
+  || fail "missing symlink error under a glob-special root: $(cat "$tmp/out-weird-sym")"
+rm "$weird/shared/skills/personal-weird/link.md"
+printf 'echo x\n' > "$weird/shared/skills/personal-weird/run.sh"
+chmod +x "$weird/shared/skills/personal-weird/run.sh"
+if "$check" --root "$weird" > "$tmp/out-weird-exec" 2>&1; then
+  fail "executable file inside a directory asset under a glob-special root must be rejected"
+fi
+grep -q "must not contain an executable file (shared/skills/personal-weird/run.sh)" "$tmp/out-weird-exec" \
+  || fail "missing executable error under a glob-special root: $(cat "$tmp/out-weird-exec")"
+
 echo "ok: check-manifests self-test passed"

@@ -275,4 +275,16 @@ run_pstatus > "$tmp/s15d" 2>&1 || fail "status must not crash on a generated plu
 [ "$(jget "$tmp/s15d" generated stale)" = "1" ] || fail "unmarked generated plugin should be stale: $(cat "$tmp/s15d")"
 grep -q "$tmp" "$tmp/s15b" && fail "status output must not contain the opencode home path"
 
+# --- case: checkout path に glob の特殊文字があっても asset と generated を数える (#427 の 1) ---
+weird="$tmp/we[ird] {x}"
+mkdir -p "$tmp/wcodex/skills" "$tmp/wclaude/skills"
+WAM_EXTRA='summary: demo workflow'
+make_demo_repo "$weird" workflows personal-demo workflow '# demo'
+"$build" --root "$weird" --quiet > /dev/null
+"$script_dir/../register.sh" --root "$weird" --quiet > /dev/null
+"$status_sh" --root "$weird" --codex-home "$tmp/wcodex" --claude-home "$tmp/wclaude" --opencode-home "$tmp/wopencode" --json > "$tmp/sw" 2>&1 \
+  || fail "status under a glob-special root should succeed: $(cat "$tmp/sw")"
+[ "$(jget "$tmp/sw" assets total)" = "1" ] || fail "assets.total under a glob-special root should be 1: $(cat "$tmp/sw")"
+[ "$(jget "$tmp/sw" generated total)" = "2" ] || fail "generated.total under a glob-special root should be 2: $(cat "$tmp/sw")"
+
 echo "ok: status self-test passed"

@@ -416,4 +416,13 @@ echo "outside" > "$tmp/dir-cat-outside/keep.txt"
 expect_output_not_file_stop "catalog.json is a directory" "$tmp/dir-cat-outside" \
   generated/catalog.json "$register" --root "$tmp/dir-cat"
 
+# --- case: checkout path に glob の特殊文字があっても asset を見つけて登録する (#427 の 1) ---
+weird="$tmp/we[ird] {x}"
+mkdir -p "$weird/shared/workflows"
+echo "# demo" | write_demo_source "$weird/shared/workflows"
+write_manifest "$weird/shared/workflows"
+"$register" --root "$weird" > "$tmp/rw" 2>&1 || fail "register under a glob-special root should pass: $(cat "$tmp/rw")"
+[ "$(jget "$weird/generated/catalog.json" assets 0 name)" = '"personal-demo"' ] \
+  || fail "asset under a glob-special root must be registered: $(cat "$tmp/rw")"
+
 echo "ok: register self-test passed"

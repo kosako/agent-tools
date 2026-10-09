@@ -15,6 +15,7 @@ require_relative "assets"
 require_relative "gate"
 require_relative "artifact_targets"
 require_relative "instruction_marker"
+require_relative "path_glob"
 require_relative "plugin_marker"
 require_relative "yaml_marker"
 require_relative "cli"
@@ -299,7 +300,7 @@ module Build
     def prune_skills(tool, names)
       pruned = []
       kept = []
-      Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "skill"), "*")).sort.each do |dir|
+      PathGlob.under(ArtifactTargets.generated_dir(@root, tool, "skill"), "*").sort.each do |dir|
         next unless File.directory?(dir)
         next if names.include?(File.basename(dir))
 
@@ -319,7 +320,7 @@ module Build
     def prune_scripts(tool, names)
       pruned = []
       kept = []
-      Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "script"), "*")).sort.each do |path|
+      PathGlob.under(ArtifactTargets.generated_dir(@root, tool, "script"), "*").sort.each do |path|
         next unless File.file?(path)
         next if path.end_with?(ArtifactTargets::MARKER_BASENAME)
         next if names.include?(File.basename(path))
@@ -343,7 +344,7 @@ module Build
       pruned = []
       kept = []
       keep = names.empty? ? nil : ArtifactTargets::INSTRUCTION_FILENAMES[tool]
-      Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "instruction"), "*")).sort.each do |file|
+      PathGlob.under(ArtifactTargets.generated_dir(@root, tool, "instruction"), "*").sort.each do |file|
         next unless File.file?(file)
         next if keep && File.basename(file) == keep
 
@@ -364,7 +365,7 @@ module Build
       pruned = []
       kept = []
       expected_files = names.map { |name| ArtifactTargets.plugin_filename(name) }
-      Dir.glob(File.join(ArtifactTargets.generated_dir(@root, tool, "plugin"), "*")).sort.each do |path|
+      PathGlob.under(ArtifactTargets.generated_dir(@root, tool, "plugin"), "*").sort.each do |path|
         next unless File.file?(path)
         next if expected_files.include?(File.basename(path))
 
@@ -422,7 +423,7 @@ module Build
       # FNM_DOTMATCH で dotfile も hash に含める。含めないと dotfile だけ変えた更新が
       # build_id 不変となり sync が up-to-date で skip し、永久に配布されない。
       # FNM_DOTMATCH では `.` 等の dir entry も返りうるが、File.file? が非ファイルを弾く。
-      Dir.glob(File.join(src_dir, "**/*"), File::FNM_DOTMATCH).sort.each do |f|
+      PathGlob.under(src_dir, "**/*", File::FNM_DOTMATCH).sort.each do |f|
         next unless File.file?(f)
         # copy と同じく、manifest として除外するのは top-level の asset.yml のみ。
         next if f == File.join(src_dir, "asset.yml")

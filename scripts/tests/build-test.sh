@@ -737,4 +737,38 @@ ln -s "$tmp/sym-above-real" "$tmp/sym-above"
 [ -f "$tmp/sym-above-real/generated/claude-code/skills/personal-demo/SKILL.md" ] \
   || fail "build through a symlinked root should write under generated/"
 
+# --- case: checkout path に glob の特殊文字があっても build_id は中身を見て、prune は generated を列挙する (#427 の 1) ---
+# source dir を pattern に連結すると走査が空になり、中身を変えても build_id が変わらない (sync が up-to-date と
+# 判定して更新を配らない)。generated dir の列挙も空になり、prune が orphan を消さない。
+weird="$tmp/we[ird] {x}"
+mkdir -p "$weird/shared/skills/personal-weird"
+cat > "$weird/shared/skills/personal-weird/SKILL.md" <<'EOF'
+---
+name: personal-weird
+description: demo weird
+---
+# weird v1
+EOF
+write_asset_manifest "$weird/shared/skills/personal-weird/asset.yml" \
+  personal-weird skill personal shared/skills/personal-weird directory claude-code
+wbid1=$(bid "$weird" shared/skills/personal-weird directory)
+printf '# weird v2\n' >> "$weird/shared/skills/personal-weird/SKILL.md"
+wbid2=$(bid "$weird" shared/skills/personal-weird directory)
+[ "$wbid1" != "$wbid2" ] \
+  || fail "build_id must change when a file inside a directory asset under a glob-special root changes"
+# 同じ内容を特殊文字の無い root に置いた build_id と一致する (root の path は digest に入らない)
+mkdir -p "$tmp/plain-root/shared/skills"
+cp -R "$weird/shared/skills/personal-weird" "$tmp/plain-root/shared/skills/"
+[ "$(bid "$tmp/plain-root" shared/skills/personal-weird directory)" = "$wbid2" ] \
+  || fail "build_id must not depend on the root path"
+"$build" --root "$weird" --quiet > /dev/null || fail "build under a glob-special root should pass"
+wmarker="$weird/generated/claude-code/skills/personal-weird/.agent-tools-managed.yml"
+[ -f "$wmarker" ] || fail "build under a glob-special root should write the skill marker"
+mkdir -p "$weird/generated/claude-code/skills/personal-wstray"
+cp "$wmarker" "$weird/generated/claude-code/skills/personal-wstray/.agent-tools-managed.yml"
+"$build" --root "$weird" --prune > "$tmp/out-wprune" 2>&1 || fail "prune under a glob-special root should pass: $(cat "$tmp/out-wprune")"
+grep -q "pruned: generated/claude-code/skills/personal-wstray" "$tmp/out-wprune" \
+  || fail "prune under a glob-special root must list the orphan: $(cat "$tmp/out-wprune")"
+[ ! -e "$weird/generated/claude-code/skills/personal-wstray" ] || fail "orphan under a glob-special root should be pruned"
+
 echo "ok: build self-test passed"
