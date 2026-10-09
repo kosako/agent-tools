@@ -171,8 +171,9 @@ done
 ```
 
 - rc が 0 以外なら停止 (`SKILL.md` §2)。exit 2 には clone の検査 (`<clone>/.git` が directory でない =
-  linked worktree、orchestrator 自身の repository、git dir の不一致) も含まれる。`--add-dir` を自分で
-  足して回避しない。
+  linked worktree、orchestrator 自身の repository、git dir の不一致、`.git` の中に hardlink で共有された
+  file がある = `--no-hardlinks` 無しの clone) も含まれる。`--add-dir` を自分で足して回避しない。
+  hardlink の拒否は `git clone --no-hardlinks` で clone を作り直す (§2)。
 - 成功時の `preflight.json` には `.git` snapshot が入る。worker 終了後は §8 / §9 で clone に git を
   実行する直前に `"$preflight" --verify-git-snapshot "$run/preflight.json" --clone "$clone_root"` を実行し、
   exit 0 を確かめる。照合不能 / 不一致ならそこで止める。

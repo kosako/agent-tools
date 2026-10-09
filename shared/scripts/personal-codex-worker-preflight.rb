@@ -69,7 +69,7 @@ require "json"
 require "digest"
 
 module CodexWorkerPreflight
-  VERSION = "7"
+  VERSION = "8"
   GIT_MUTABLE_FILES = %w[HEAD index COMMIT_EDITMSG ORIG_HEAD packed-refs].freeze
   GIT_MUTABLE_DIRS = %w[objects refs logs].freeze
   MAX_CHANGED_PATHS = 20
@@ -149,28 +149,45 @@ module CodexWorkerPreflight
     true
   end
 
-  def git_snapshot(root)
-    entries = {}
+  # `.git` 配下を名前順に lstat で走査する (symlink は辿らない)。block には相対 path、実 path、lstat の
+  # 結果を渡す。snapshot と hardlink 共有の検査が同じ走査を使う。
+  def each_git_entry(root)
     walk = lambda do |dir, prefix|
       Dir.children(dir).sort.each do |name|
         path = [prefix, name].reject(&:empty?).join("/")
         full = File.join(dir, name)
         stat = File.lstat(full)
-        entry = if stat.symlink?
-                  { "type" => "symlink", "target" => File.readlink(full) }
-                elsif stat.directory?
-                  { "type" => "dir" }
-                elsif stat.file?
-                  { "type" => "file", "sha256" => Digest::SHA256.file(full).hexdigest }
-                else
-                  { "type" => "other" }
-                end
-        entries[path] = entry
+        yield path, full, stat
         walk.call(full, path) if stat.directory?
       end
     end
     walk.call(root, "")
+  end
+
+  def git_snapshot(root)
+    entries = {}
+    each_git_entry(root) do |path, full, stat|
+      entries[path] = if stat.symlink?
+                        { "type" => "symlink", "target" => File.readlink(full) }
+                      elsif stat.directory?
+                        { "type" => "dir" }
+                      elsif stat.file?
+                        { "type" => "file", "sha256" => Digest::SHA256.file(full).hexdigest }
+                      else
+                        { "type" => "other" }
+                      end
+    end
     entries
+  end
+
+  # link 数が 2 以上の regular file (他の path と inode を共有している) の相対 path。既定の local
+  # `git clone` は object / pack を元の repository と hardlink で共有する (実測: link 数 2。
+  # `--no-hardlinks` なら 1) ので、その clone の `.git` を `--add-dir` で開けると main の object の
+  # 実体を worker に書かせることになる。
+  def hardlinked_git_files(git_dir)
+    shared = []
+    each_git_entry(git_dir) { |path, _full, stat| shared << path if stat.file? && stat.nlink > 1 }
+    shared
   end
 
   def snapshot_git_dir(path)
@@ -383,6 +400,14 @@ module CodexWorkerPreflight
     unless toplevel == root
       raise ArgumentError, "clone: Git が使う作業ツリーが clone と一致しません " \
         "(core.worktree / bare repository は不可): #{path}"
+    end
+
+    # `.git` の中身が別の path と inode を共有していないこと。`--no-hardlinks` を付けずに作った clone は
+    # 上の検査をすべて通るので、ここで実体の共有を直接見る (orchestrator の手順だけに依存させない)。
+    shared = hardlinked_git_files(git_dir)
+    unless shared.empty?
+      raise ArgumentError, "clone: <clone>/.git に hardlink で共有された file があります " \
+        "(#{shared.size} 件。`git clone --no-hardlinks` で作り直してください): #{path}"
     end
 
     [root, git_dir]
