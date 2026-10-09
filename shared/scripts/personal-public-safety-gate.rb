@@ -29,8 +29,9 @@
 # 私物パターン (planning tool の domain 等、public repo に書けないもの) は tracked な
 # 本体に持たず、untracked の local pattern file から読む:
 #   ~/.config/agent-tools/public-safety-patterns.local (1 行 1 Ruby regex、# コメント可)
-# 不在は「追加パターンなし」として扱う (設計上 optional)。読めるのに parse できない
-# regex は exit 2 で止める (ユーザー設定の壊れを黙って無視しない)。
+# 不在 (lstat が ENOENT) は「追加パターンなし」として扱う (設計上 optional)。在るのに使えない
+# (stat できない・symlink の先が無い・regular file でない・読めない) と、parse できない regex は
+# exit 2 で止める (私物パターンが黙って外れた状態で通さない。#430)。
 #
 # 副作用ゼロ・network なし。読むのは `git diff --cached` / staged file 一覧 /
 # local pattern file のみ。diff は `--text --no-textconv` で取るので、binary とみなす file の中身も見て、
@@ -57,12 +58,15 @@ module PublicSafetyGate
   # 既知の token 形。誤検知が実質出ない精度の高いものだけを definite に置く。
   # 汎用の「それっぽい代入」は SUSPICIOUS_PATTERN (警告どまり) 側。
   DEFINITE_PATTERNS = {
-    "private-key-block" => /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+    # PGP の armor は `PRIVATE KEY BLOCK` (#430)。
+    "private-key-block" => /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----/,
     "github-token" => /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b/,
     "aws-access-key" => /\bAKIA[0-9A-Z]{16}\b/,
     "slack-token" => /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/,
     "anthropic-key" => /\bsk-ant-[A-Za-z0-9_-]{20,}\b/,
-    "openai-key" => /\bsk-proj-[A-Za-z0-9_-]{20,}\b/,
+    # OpenAI は project / service account / admin の接頭辞と、旧形式 (sk- + 英数字 48 文字) (#430)。
+    "openai-key" => /\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}\b/,
+    "openai-key-legacy" => /\bsk-[A-Za-z0-9]{48}\b/,
     "stripe-key" => /\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b/,
   }.freeze
 
@@ -91,8 +95,24 @@ module PublicSafetyGate
     home if home.match?(%r{\A/(?:#{HOME_PARENTS.join('|')})/[^/]+})
   end
 
+  # 不在だけを「追加パターンなし」にする。stat できない (親 dir が検索不可など)・symlink の先が無い・
+  # regular file でないときは、私物パターンが外れたまま通さず exit 2 にする (#430)。
   def load_local_patterns(path)
-    return [] unless File.file?(path)
+    begin
+      stat = File.lstat(path)
+    rescue Errno::ENOENT
+      return []
+    rescue SystemCallError => e
+      raise ArgumentError, "#{path}: local pattern file を stat できません (#{e.class})"
+    end
+    if stat.symlink?
+      begin
+        stat = File.stat(path)
+      rescue SystemCallError => e
+        raise ArgumentError, "#{path}: local pattern file の symlink の先を読めません (#{e.class})"
+      end
+    end
+    raise ArgumentError, "#{path}: local pattern file が regular file ではありません" unless stat.file?
 
     patterns = []
     File.readlines(path).each_with_index do |raw, i|
@@ -193,6 +213,8 @@ module PublicSafetyGate
   end
 
   # 出力形式を pin した diff 用の共通 flag (parser の前提を git 設定から独立させる)。
+  # --no-color / --no-ext-diff: scan_diff は行頭の `+` と hunk header を読むので、`color.ui=always` や
+  # `diff.external` の設定下では pin が無いと検出が黙って効かなくなる (test で固定。#430)。
   # --text / --no-textconv: binary とみなす file (`-diff` / `binary` 属性、NUL を含む内容) も中身の追加行として出し、
   # textconv の変換 command を起動せずに元の内容を見る (#414)。
   GIT_DIFF_PIN = %w[git -c diff.noprefix=false -c diff.mnemonicprefix=false

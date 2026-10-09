@@ -37,6 +37,7 @@ hard な床は従来どおりここに載せない (credential 隔離 / egress /
 global git config: core.hooksPath = <dotfiles 所有の hooks dir>
   <hooks dir>/pre-commit   →  exec <deploy>/personal-git-hook-dispatcher pre-commit "$@"
   <hooks dir>/commit-msg   →  exec <deploy>/personal-git-hook-dispatcher commit-msg "$@"
+  <hooks dir>/<他の stage> →  exec <deploy>/personal-git-hook-dispatcher <stage> "$@"   (gate なし。repo hook に chain するだけ)
 
 <deploy> = <tool home>/agent-tools/scripts (sync の script 配備先。公開契約)
   personal-git-hook-dispatcher   … stage ごとの gate 実行 + repo hook への chain
@@ -69,6 +70,12 @@ global `core.hooksPath` は per-repo `.git/hooks` を**完全に置換**し、fa
 2. 全 gate pass 後、`git rev-parse --git-common-dir` 直下の `hooks/<stage>` が実行可能
    なら `exec` で chain する (exit code はそのまま repo hook のもの)。worktree でも
    共有側 hooks が対象 (実測 #201 と同じ挙動)。
+   gate の無い stage (git の既知の hook 名。dispatcher の `GIT_HOOK_STAGES`) は 1. を飛ばして
+   この chain だけを行う (#430 の 3)。global `core.hooksPath` は shim の無い stage の repo hook を
+   黙って無効にするので、repo hook を全 stage で生かすには dotfiles 側が全 stage の shim を置く
+   (置かない stage の repo hook は走らない)。未知の名前 (typo) は exit 2。stdin を読む hook
+   (pre-push / pre-receive / post-rewrite / reference-transaction など) は `exec` が stdin を
+   そのまま渡す。
 3. gate 起動と chain は、いずれも Ruby の `[cmdname, argv0]` 2 要素配列形で行う。Ruby は
    引数の **個数** で shell 経由かを決めるため、引数ゼロの pre-commit では path がそのまま
    shell 解釈される (#267。空白で word split、`$( )` で command 置換。`.gitmodules` の
@@ -93,14 +100,19 @@ local pattern file のみ。diff は `--text --no-textconv` で取る (#414): bi
 
 | クラス | 対象 | 挙動 |
 |---|---|---|
-| definite | private key block / 既知 token 形 (GitHub・AWS・Slack・Anthropic・OpenAI・Stripe) / 実 `$HOME` path の literal / `*.local` `*.local.md` `.agent-packets/` 配下の staged 追加 / local pattern 一致 | exit 1 で block |
+| definite | private key block (`-----BEGIN ... PRIVATE KEY-----` と PGP の `PRIVATE KEY BLOCK`) / 既知 token 形 (GitHub `ghp_` `gho_` `ghu_` `ghs_` `ghr_` `github_pat_`、AWS `AKIA`、Slack `xox[baprs]-`、Anthropic `sk-ant-`、OpenAI `sk-proj-` `sk-svcacct-` `sk-admin-` と旧形式の `sk-` + 英数字 48 文字、Stripe `sk_live_` `sk_test_`) / 実 `$HOME` path の literal / `*.local` `*.local.md` `.agent-packets/` 配下の staged 追加 / local pattern 一致 | exit 1 で block |
 | suspicious | 汎用 credential 代入ヒューリスティック | 警告のみ (block しない) |
 
 - **escape (明示確認)**: レビュー済みの誤検知は該当行に `public-safety: allow` を書く。
 - **local pattern file**: `~/.config/agent-tools/public-safety-patterns.local`
   (1 行 1 Ruby regex、`#` コメント可・untracked のユーザー正本)。planning tool の
   domain 等、**public repo に書けないパターンはここに置く** (tracked な gate 本体には
-  持たない)。不在は追加パターンなし。regex が壊れていれば exit 2 で止める。
+  持たない)。不在 (lstat が ENOENT) は追加パターンなし。在るのに使えない (stat できない・symlink の
+  先が無い・regular file でない・読めない) と、regex が壊れているときは exit 2 で止める
+  (私物パターンが黙って外れた状態で通さない。#430)。
+- diff は `--no-color --no-ext-diff` を付けて取る。parser は行頭の `+` と hunk header を読むので、
+  `color.ui=always` や `diff.external` の設定から独立させるために必要 (外すと検出が黙って効かなくなる。
+  test で固定。#430)。
 - 実 `$HOME` の判定は `$HOME` が `/Users/<name>` / `/home/<name>` 形のときだけ有効
   (汎用の `/Users/...` 例示は検出しない)。
 - `.agent-packets/` (作業単位の packet、[agent-packets](agent-packets.md)) は global

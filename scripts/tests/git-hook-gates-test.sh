@@ -94,6 +94,17 @@ check("aws key を検出", hits("key: " + "AKIA" + "IOSFODNN7EXAMPLE").include?(
 check("private key block を検出",
       hits("-----BEGIN " + "RSA PRIVATE KEY-----").include?("private-key-block"))
 check("平文は検出しない", hits("plain text line").empty?)
+# #430 の 1: PGP の armor と OpenAI の他の接頭辞・旧形式 (fixture は実行時連結)
+check("PGP の armor を検出",
+      hits("-----BEGIN " + "PGP PRIVATE KEY BLOCK-----").include?("private-key-block"))
+check("OpenAI の service account key を検出",
+      hits("k = " + "sk-svcacct-" + "a" * 24).include?("openai-key"))
+check("OpenAI の admin key を検出",
+      hits("k = " + "sk-admin-" + "b" * 24).include?("openai-key"))
+check("OpenAI の旧形式 (sk- + 48 文字) を検出",
+      hits("k = " + "sk-" + "c" * 48).include?("openai-key-legacy"))
+check("sk- の短い値は検出しない",
+      hits("k = " + "sk-" + "d" * 10).empty?)
 check("regex source 自身は検出しない (self-hosting)",
       hits("/\\bAKIA[0-9A-Z]{16}\\b/").empty?)
 check("allow pragma で skip",
@@ -1025,5 +1036,92 @@ set -e
 (cd "$repo281" && git config user.email "$email281")
 (cd "$repo281" && as_human "$deploy/personal-git-identity-gate" >/dev/null 2>&1) \
   || fail "#281: 完全な identity で gate 単体は exit 0"
+
+# ---- #430 の 2: local pattern file は不在だけを「追加パターンなし」にし、使えないときは exit 2 ----
+pat_text=$(printf 'see %s\n' "internal-tool-x")
+for variant in dangling-symlink unsearchable-parent; do
+  h="$tmp/home-$variant"
+  mkdir -p "$h/.config/agent-tools"
+  case $variant in
+    dangling-symlink) ln -s "$h/.config/agent-tools/missing.local" "$h/.config/agent-tools/public-safety-patterns.local" ;;
+    unsearchable-parent)
+      if [ "$(id -u)" -eq 0 ]; then echo "skip: unsearchable-parent (root)"; continue; fi
+      printf 'internal-tool-x\n' > "$h/.config/agent-tools/public-safety-patterns.local"
+      chmod 000 "$h/.config/agent-tools" ;;
+  esac
+  set +e
+  out=$(printf '%s' "$pat_text" | env HOME="$h" ruby "$pubsafe_src" --stdin 2>&1)
+  rc=$?
+  set -e
+  [ "$variant" != unsearchable-parent ] || chmod 755 "$h/.config/agent-tools"
+  [ "$rc" -eq 2 ] || fail "#430: unusable local pattern file ($variant) must exit 2, got $rc: $out"
+  echo "$out" | grep -q "local pattern file" || fail "#430: missing diagnosis for $variant: $out"
+done
+# 不在は今までどおり追加パターンなし (exit 0)、regular file なら一致で exit 1
+h="$tmp/home-absent"; mkdir -p "$h"
+printf '%s' "$pat_text" | env HOME="$h" ruby "$pubsafe_src" --stdin >/dev/null 2>&1 \
+  || fail "#430: absent local pattern file must still pass"
+h="$tmp/home-present"; mkdir -p "$h/.config/agent-tools"
+printf 'internal-tool-x\n' > "$h/.config/agent-tools/public-safety-patterns.local"
+set +e
+printf '%s' "$pat_text" | env HOME="$h" ruby "$pubsafe_src" --stdin >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "#430: regular local pattern file must still block (rc=$rc)"
+
+# ---- #430 の 6: home_needle は HOME が個人 home の形のときだけ needle を立てる ----
+ghost_home=$(printf '/%s/%s' Users ghost-no-such-user-430)
+set +e
+out=$(printf 'see %s/src/x\n' "$ghost_home" | env HOME="$ghost_home" ruby "$pubsafe_src" --stdin 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "#430: HOME shaped like a personal home must be detected via home_needle (rc=$rc): $out"
+echo "$out" | grep -q 'stdin:1: \[home-path\]' || fail "#430: home-path finding missing: $out"
+printf 'see %s/src/x\n' "$ghost_home" | env HOME="$tmp/home" ruby "$pubsafe_src" --stdin >/dev/null 2>&1 \
+  || fail "#430: HOME outside the personal-home shape must not derive a needle"
+
+# ---- #430 の 5: diff の pin (--no-color / --no-ext-diff) は git 設定から独立させるために要る ----
+pins_cfg="$tmp/gitconfig-pins"
+cp "$GIT_CONFIG_GLOBAL" "$pins_cfg"
+git config --file "$pins_cfg" color.ui always
+extdiff="$tmp/extdiff"
+printf '#!/bin/sh\nprintf %%s "diff --git a/x b/x\\n--- a/x\\n+++ b/x\\n@@ -0,0 +1,1 @@\\n+external diff hides the content\\n"\n' > "$extdiff"
+chmod +x "$extdiff"
+git config --file "$pins_cfg" diff.external "$extdiff"
+repo430="$tmp/repo430"
+git init -q "$repo430"
+printf 'x = "%s"\n' "$gh_token" > "$repo430/leak.txt"
+(cd "$repo430" && git add leak.txt)
+set +e
+out=$(cd "$repo430" && env GIT_CONFIG_GLOBAL="$pins_cfg" HOME="$tmp/home" ruby "$pubsafe_src" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "#430: staged secret must be blocked under color.ui=always + diff.external (rc=$rc): $out"
+echo "$out" | grep -q 'leak.txt:1: \[github-token\]' || fail "#430: github-token finding missing under pinned diff: $out"
+
+# ---- #430 の 3: gate の無い stage は repo hook への chain だけを行い、未知の名前は exit 2 ----
+repo430b="$tmp/repo430b"
+git init -q "$repo430b"
+printf '#!/bin/sh\nprintf post-commit-ran > %s\n' "$(shq "$repo430b/marker.post-commit")" > "$repo430b/.git/hooks/post-commit"
+printf '#!/bin/sh\ncat > %s\nprintf %%s "$*" > %s\n' "$(shq "$repo430b/marker.pre-push.in")" "$(shq "$repo430b/marker.pre-push.args")" > "$repo430b/.git/hooks/pre-push"
+chmod +x "$repo430b/.git/hooks/post-commit" "$repo430b/.git/hooks/pre-push"
+(cd "$repo430b" && as_human "$deploy/personal-git-hook-dispatcher" post-commit) \
+  || fail "#430: a gate-less stage must chain to the repo hook and pass"
+[ "$(cat "$repo430b/marker.post-commit")" = "post-commit-ran" ] || fail "#430: repo post-commit hook must run through the dispatcher"
+(cd "$repo430b" && printf 'refs/heads/x 0000 refs/heads/x 0000\n' | as_human "$deploy/personal-git-hook-dispatcher" pre-push origin git@example.invalid:x.git) \
+  || fail "#430: pre-push must chain with args and stdin"
+[ "$(cat "$repo430b/marker.pre-push.in")" = "refs/heads/x 0000 refs/heads/x 0000" ] || fail "#430: stdin must reach the chained pre-push hook"
+[ "$(cat "$repo430b/marker.pre-push.args")" = "origin git@example.invalid:x.git" ] || fail "#430: args must reach the chained pre-push hook"
+(cd "$repo430b" && as_human "$deploy/personal-git-hook-dispatcher" post-checkout 0 0 1) \
+  || fail "#430: a gate-less stage without a repo hook must exit 0"
+set +e
+(cd "$repo430b" && as_human "$deploy/personal-git-hook-dispatcher" post-commmit >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "#430: a misspelled stage must still exit 2 (rc=$rc)"
+# 再入 sentinel は gate の無い stage でも効く
+(cd "$repo430b" && rm -f marker.post-commit && as_human env AGENT_TOOLS_GIT_HOOK_ACTIVE_POST_COMMIT=1 "$deploy/personal-git-hook-dispatcher" post-commit 2>/dev/null) \
+  || fail "#430: loop guard must short-circuit gate-less stages"
+[ ! -e "$repo430b/marker.post-commit" ] || fail "#430: loop guard must not chain again"
 
 echo "ok: git-hook-gates self-test"
