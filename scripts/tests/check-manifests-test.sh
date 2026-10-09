@@ -1267,4 +1267,29 @@ write_skill_source "$tmp/dashstart/shared/workflows/personal-dash.md" '# dash'
 grep -q "ok: 1 manifest(s) validated" "$tmp/out-dashstart" \
   || fail "manifest with a leading --- should count as validated: $(cat "$tmp/out-dashstart")"
 
+# --- case: manifest の tag 付きの key は error (#427 の 4、Codex review round 1) ---
+# `!!binary a2luZA==` は load 後に "kind" になる。旧実装では後の kind と同じ値なので ok で通る。
+mkdir -p "$tmp/tagkey/shared/workflows"
+write_skill_source "$tmp/tagkey/shared/workflows/personal-tagkey.md" '# tagkey'
+cat > "$tmp/tagkey/shared/workflows/personal-tagkey.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-tagkey
+!!binary a2luZA==: workflow
+kind: workflow
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/workflows/personal-tagkey.md
+  format: markdown
+EOF
+if "$check" --root "$tmp/tagkey" > "$tmp/out-tagkey" 2>&1; then
+  fail "a manifest with a tagged key must be rejected"
+fi
+grep -q 'personal-tagkey.asset.yml: YAML parse error: .*explicit tags are not allowed (tag:yaml.org,2002:binary) at line 3' "$tmp/out-tagkey" \
+  || fail "missing tagged-key error: $(cat "$tmp/out-tagkey")"
+
 echo "ok: check-manifests self-test passed"

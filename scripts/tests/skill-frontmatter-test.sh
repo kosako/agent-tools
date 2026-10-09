@@ -76,6 +76,26 @@ end
              valid.sub("description: Public fixture", "description: Public fixture\ndescription: again"),
              %w[codex], "duplicate key \"description\"")
 end
+# tag の解決と merge key でも key は衝突する (#427 の 4、Codex review round 1)。
+%w[directory markdown].each do |format|
+  # `!!binary bmFtZQ==` は load 後に "name" になり、先の値を上書きする
+  check_case(format, "tagged-key",
+             "---\n!!binary bmFtZQ==: personal-other\nname: personal-frontmatter\ndescription: Public fixture\n---\n\n# Fixture\n",
+             %w[codex claude-code], "explicit tags are not allowed")
+  check_case(format, "omap",
+             "---\n!!omap\n- name: personal-other\n- name: personal-frontmatter\n- description: Public fixture\n---\n\n# Fixture\n",
+             %w[codex claude-code], "explicit tags are not allowed")
+  check_case(format, "tagged-value",
+             valid.sub("description: Public fixture", "description: !!str Public fixture"),
+             %w[codex claude-code], "explicit tags are not allowed")
+  check_case(format, "merge-key",
+             "---\nname: personal-other\n<<: {name: personal-frontmatter}\ndescription: Public fixture\n---\n\n# Fixture\n",
+             %w[codex claude-code], "merge keys (<<) are not allowed")
+  # plain scalar の解決後の衝突 (`true` と `yes` は同じ key になる)
+  check_case(format, "resolved-collision",
+             valid.sub("description: Public fixture", "description: Public fixture\ntrue: a\nyes: b"),
+             %w[codex claude-code], "collide after YAML resolution")
+end
 # 単一 file の skill も directory と同じ規則 (build は frontmatter を生成しない、#376)。
 %w[directory markdown].each do |format|
   check_case(format, "codex-frontmatter-required", "# Fixture\n", %w[codex], "must contain YAML frontmatter")
