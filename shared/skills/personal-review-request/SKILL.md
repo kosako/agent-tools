@@ -288,19 +288,20 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
   `Independence: cross-review verified (author=<label>)` (例: `author=codex`、`author=opencode(openai)`) として
   結果へ残す。
   - **どの session で動いているかは、model の自認ではなく env で決める** (名前を指定して確かめ、env の
-    一覧は出さない):
-    - `CLAUDECODE` が非空で、かつ `OPENCODE` と `AGENT_TOOLS_OPENCODE` (OpenCode の目印) と
-      `CODEX_THREAD_ID` と `CODEX_SANDBOX` (Codex の目印) がどれも env に無いとき → Claude Code セッション。
-      そのセッション自身がレビュアーとして実行する。Codex の目印は、値が空でも env に在れば「在る」と数える
-      (委譲 worker の preflight と同じく key の有無で見る。#416)。
-    - `CLAUDECODE` と Codex の目印が両方あるとき → 内側の agent を決められない (Claude から `codex exec` を
+    一覧は出さない)。目印は **非空なら立っている** と読み、空の値は無い扱いにする (repo 全体の契約。
+    正本は `docs/git-hook-gates.md`。OpenCode の plugin は model の bash で他の agent の目印を空文字にして
+    消した扱いにするので、key の有無で見ると OpenCode の session を Codex の session と誤判定する。#431)。
+    見る順は OpenCode の目印 → Claude / Codex の目印:
+    - `OPENCODE` か `AGENT_TOOLS_OPENCODE` (OpenCode の目印) が非空のとき → OpenCode の session。自分で
+      レビューせず、他の agent (`claude -p` / `codex` / `personal-codex-review`) も起動せず、人間に hand-off
+      する。`OPENCODE` も見るのは、plugin が読まれず `CLAUDECODE` の漏れが残る場合でも自分でレビューしない
+      ため (誤判定しても hand-off になるだけで、安全側)。
+    - OpenCode の目印が無く、`CLAUDECODE` が非空で、`CODEX_THREAD_ID` と `CODEX_SANDBOX` (Codex の目印) が
+      どちらも非空でないとき → Claude Code セッション。そのセッション自身がレビュアーとして実行する。
+    - `CLAUDECODE` と Codex の目印が両方非空のとき → 内側の agent を決められない (Claude から `codex exec` を
       入れ子で起動したときや、Codex の session に `CLAUDECODE` が漏れたとき。#416)。自分でレビューせず、
       他の agent も起動せず、人間に hand-off する。
-    - Codex の目印があり、Claude と OpenCode の目印が無いとき → Codex の session (下の「Codex 環境から呼ぶとき」)。
-    - `OPENCODE` か `AGENT_TOOLS_OPENCODE` があるとき → OpenCode の session。自分でレビューせず、他の
-      agent (`claude -p` / `codex` / `personal-codex-review`) も起動せず、人間に hand-off する。
-      `OPENCODE` も見るのは、plugin が読まれず `CLAUDECODE` の漏れが残る場合でも自分でレビューしない
-      ため (誤判定しても hand-off になるだけで、安全側)。
+    - Codex の目印が非空で、`CLAUDECODE` が非空でないとき → Codex の session (下の「Codex 環境から呼ぶとき」)。
   - **Codex 環境から呼ぶときは `claude -p`（headless）を起動 vehicle にする**:
     - 実行前に `claude --version` / `claude --help` で `-p` と read-only 化に使う flag
       （tool allowlist 等）の実在を capability preflight する。無ければ存在しない flag を

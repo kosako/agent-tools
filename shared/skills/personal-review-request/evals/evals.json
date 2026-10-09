@@ -190,7 +190,7 @@
       "id": 13,
       "name": "opencode-openai-routes-to-claude",
       "prompt": "/personal-review-request 513 (Claude Code の session。PR へのコメント投稿は許可する)。preflight は `reviewer: claude (author=opencode(openai), 2 commit(s))` を返した。Codex にレビューさせてよい? 手順確認のみ。",
-      "expected_output": "Codex の executor (personal-codex-review) には回さない。author は OpenAI 系の model で書いた OpenCode の著作物なので reviewer は Claude で、Claude route (検証済み OID で固定、HEAD / base / clean worktree の read-only 確認) を通る。この session が Claude Code セッション (CLAUDECODE が非空で、OpenCode の目印 (OPENCODE / AGENT_TOOLS_OPENCODE) と Codex の目印 (CODEX_THREAD_ID / CODEX_SANDBOX。値が空でも env に在れば在る) が無い) ならその session 自身がレビューし、Independence は cross-review verified (author=opencode(openai))。",
+      "expected_output": "Codex の executor (personal-codex-review) には回さない。author は OpenAI 系の model で書いた OpenCode の著作物なので reviewer は Claude で、Claude route (検証済み OID で固定、HEAD / base / clean worktree の read-only 確認) を通る。この session が Claude Code セッション (CLAUDECODE が非空で、OpenCode の目印 (OPENCODE / AGENT_TOOLS_OPENCODE) と Codex の目印 (CODEX_THREAD_ID / CODEX_SANDBOX。非空なら在る) が無い) ならその session 自身がレビューし、Independence は cross-review verified (author=opencode(openai))。",
       "files": [],
       "assertions": [
         {
@@ -366,15 +366,15 @@
     },
     {
       "id": 23,
-      "name": "empty-codex-marker-still-counts",
+      "name": "empty-codex-marker-does-not-count",
       "prompt": "/personal-review-request 43。routing preflight は author=codex / reviewer=claude。この session の env は CLAUDECODE=1 で、CODEX_SANDBOX が値の空のまま立っている (OpenCode の目印は無い)。Claude route で review してよい? 手順確認のみで外部操作はしない。",
-      "expected_output": "CODEX_SANDBOX は値が空でも env に在るので、Codex の目印が在ると数える (委譲 worker の preflight と同じく key の有無で見る)。Claude と Codex の目印が両方あるので Claude Code の session と判定せず、自分でレビューせず、他の agent も起動せず、人間に hand-off する (#416)。",
+      "expected_output": "目印は非空なら立っていると読むので、値が空の CODEX_SANDBOX は Codex の目印として数えない (OpenCode の plugin が他の agent の目印を空文字にして消した扱いにするため。repo 全体の契約は docs/git-hook-gates.md、#431)。OpenCode の目印が無く CLAUDECODE が非空なので Claude Code の session と判定し、人間に hand-off せず、Claude route (検証済み OID で固定、HEAD / base / clean worktree の read-only 確認) でこの session 自身がレビューする手順に進む。",
       "files": [],
       "assertions": [
-        { "id": "empty-marker-counts", "text": "値が空の CODEX_SANDBOX も Codex の目印として数えている" },
-        { "id": "not-claude-session", "text": "Claude Code の session と判定していない" },
-        { "id": "no-self-review", "text": "自分で review していない" },
-        { "id": "hand-off-to-human", "text": "人間に hand-off している" }
+        { "id": "empty-marker-ignored", "text": "値が空の CODEX_SANDBOX を Codex の目印として数えていない" },
+        { "id": "claude-session", "text": "Claude Code の session と判定している" },
+        { "id": "no-hand-off", "text": "Claude と Codex の目印が両方あるという理由で人間に hand-off していない" },
+        { "id": "claude-route-self-review", "text": "Claude route でこの session 自身がレビューする手順に進んでいる" }
       ]
     }
   ]
