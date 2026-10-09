@@ -30,8 +30,10 @@ grill の round 1 の質問を人に出す前に、**自分以外の系列の mo
 ## 相手と経路
 
 相手は自分以外の系列です (Anthropic 系 ↔ OpenAI 系)。どの session で動いているかは、model の自認ではなく env で
-決めます (名前を指定して確かめ、env の一覧は出さない): `CLAUDECODE` が非空で `OPENCODE` と `AGENT_TOOLS_OPENCODE`
-が無ければ Claude Code、`CODEX_SANDBOX` などが在れば Codex、`OPENCODE` か `AGENT_TOOLS_OPENCODE` が在れば OpenCode。
+決めます (名前を指定して確かめ、env の一覧は出さない): `CLAUDECODE` が非空で、OpenCode の目印 (`OPENCODE` /
+`AGENT_TOOLS_OPENCODE`) と Codex の目印 (`CODEX_THREAD_ID` / `CODEX_SANDBOX`) が無ければ Claude Code、Codex の目印が
+在って Claude と OpenCode の目印が無ければ Codex、OpenCode の目印が在れば OpenCode。Claude と Codex の目印が両方
+在るときは、session を判定できないものとして扱う (#416。`personal-review-request` の「どの session で動いているか」と同じ)。
 v1 の経路は次の 2 つで、OpenCode の session と、session を判定できないときは相談を省きます。
 
 ### Claude Code の session → Codex

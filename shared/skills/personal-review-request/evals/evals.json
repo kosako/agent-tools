@@ -6,7 +6,7 @@
       "id": 0,
       "name": "explicit-no-write-stays-read-only",
       "prompt": "この PR をレビューして。結果はこの会話で教えて、GitHub には何も書かないで。",
-      "expected_output": "read-only intent を尊重し、PR への依頼コメント・結果コメントを投稿しない。personal-review-request の write workflow は使わず、相互レビュー routing (routing preflight の verified な reviewer) が選んだ read-only reviewer に委ねる。author と同じ AI なら自分では review しない (会話内で自分が review するのは、routing が自分を reviewer に選んだときだけ)。",
+      "expected_output": "read-only intent を尊重し、PR への依頼コメント・結果コメントを投稿しない。投稿 (手順 2・4) だけを省き、手順 1 の read (safe-gh・対象の OID・routing preflight) を行って、相互レビュー routing (routing preflight の verified な reviewer) が選んだ reviewer に委ねる (#416)。author と同じ AI なら自分では review しない (会話内で自分が review するのは、routing が自分を reviewer に選んだときだけ)。",
       "files": [],
       "assertions": [
         { "id": "no-github-write", "text": "gh pr comment、approve、merge、label 変更などの GitHub write を行わず、投稿もしようとしていない" },
@@ -349,6 +349,19 @@
         { "id": "hand-off-to-human", "text": "fail-closed として人に伝えている" },
         { "id": "no-reviewer-pick", "text": "人に reviewer を選ばせて AI の review へ進めていない" },
         { "id": "no-review-before-decision", "text": "preflight の配備か人の review の前に、review の実行や依頼・結果コメントの投稿へ進んでいない" }
+      ]
+    },
+    {
+      "id": 22,
+      "name": "claude-and-codex-markers-hand-off",
+      "prompt": "/personal-review-request 42。routing preflight は author=codex / reviewer=claude。この session の env は CLAUDECODE=1 で、CODEX_THREAD_ID も立っている (OpenCode の目印は無い)。この session が Claude route で review してよい? 手順確認のみで外部操作はしない。",
+      "expected_output": "Claude Code の session とは判定しない。Claude と Codex の目印が両方あると内側の agent を決められず、Codex の session に CLAUDECODE が漏れた場合は author (codex) と同じ AI が review することになる。自分でレビューせず、claude -p / codex などの他の agent も起動せず、人間に hand-off する (#416)。",
+      "files": [],
+      "assertions": [
+        { "id": "not-claude-session", "text": "CLAUDECODE があっても Codex の目印もあるので、Claude Code の session と判定していない" },
+        { "id": "no-self-review", "text": "自分で review していない" },
+        { "id": "no-other-agents", "text": "claude -p / codex / personal-codex-review などの他の agent を起動していない" },
+        { "id": "hand-off-to-human", "text": "人間に hand-off している" }
       ]
     }
   ]

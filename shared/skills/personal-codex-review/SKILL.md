@@ -152,6 +152,21 @@ base ref は `git check-ref-format --branch` で妥当性を確認し、`rev-par
 返します。この executor は checkout / fetch / pull / reset / stash で状態を合わせません。caller または
 human に、正しい commit と base ref を持つ clean な worktree の準備を求めます。
 
+### 直接の依頼 (explicit second opinion) の対象 (#416)
+
+PR を経ない直接の依頼 (「この branch diff を Codex に second opinion して」など) では caller の expected 値が無いので、
+この executor が対象を解決して固定します。
+
+- **base mode**: base ref はユーザーが名指ししたもの。名指しが無ければ、origin の default branch の remote-tracking
+  ref (`git symbolic-ref --short refs/remotes/origin/HEAD` が返すもの。fetch はしない) を使い、解決できなければ
+  聞き返します。base ref には上と同じ値検査と literal 化を当て、`git rev-parse --verify --end-of-options
+  "$base_ref^{commit}"` と `git rev-parse --verify HEAD` で、その時点の base / head の OID を解決します。worktree
+  が clean であることも上と同じく確かめます。
+- **commit mode**: ユーザーが名指しした commit を §3 の規則で OID に解決します。
+- 解決した OID を、§3 の brief と §6 の結果 (`Target:` の行) に書いて固定します。保証するのは「何を review したか
+  が固定され、記録される」ことで、PR の対象との照合ではありません (照合の相手が自分で解決した値なので)。
+  結果は `Independence: second-opinion only` のままです。
+
 ## 3. 対象 mode を1つ選び、brief に固定する
 
 対象に一致する mode を1つだけ選び、brief に「何を diff として読むか」を検証済み OID で書きます。
@@ -262,7 +277,8 @@ review 本文と停止結果の雛形は **`RESULT-FORMAT.md` を読んで、そ
   ⚪ nit の件数)、`Independence` (cross-review verified (author=claude) | cross-review verified (author=opencode(anthropic)) |
   second-opinion only) を別 field
   で返し、各 finding に `file:line` と severity を付ける。model / effort の出所 (review profile / user config /
-  codex default) を `Model selection` の 1 行で添える (値は書かない)。
+  codex default) を `Model selection` の 1 行で添える (値は書かない)。review した対象を `Target` の 1 行で添える
+  (base mode は base ref と base / head の OID、commit mode は OID、uncommitted はその旨。#416)。
 - author guard / capability / 起動経路 / target identity / 実行で停止したときは verdict を作らず、
   `Status: BLOCKED`、`Blocked at:` (author-guard | capability-preflight | launch-path | target-identity |
   executor-exit | executor-result)、public-safe な Reason、target identity なら expected / actual の
