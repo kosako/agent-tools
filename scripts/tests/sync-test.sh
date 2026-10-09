@@ -904,4 +904,321 @@ runw --prune --apply > "$tmp/outw-apply" 2>&1 || fail "prune apply with a glob-s
 [ ! -e "$whome/claude/skills/personal-wgone" ] || fail "orphan under a glob-special home should be deleted"
 [ -f "$whome/claude/skills/personal-wkeep/SKILL.md" ] || fail "prune under a glob-special home must keep the catalog-backed skill"
 
+# --- case 39: update の途中で generated の copy が失敗しても、配置先は旧版のまま残り、一時 dir も残らない (#431 の 3) ---
+# fixture: directory skill を v1 で配置し、v2 を build + register してから generated の SKILL.md を読めなくする。
+# 旧実装は rm_rf(target) → cp_r なので、copy が途中で落ちると配置先が marker だけ (または空) になり、次の sync は
+# それを up-to-date と見る。root は mode によらず読めるので再現できない (黙って通さず、理由を出して fail)。
+[ "$(id -u)" -ne 0 ] || fail "case 39 needs a non-root user: root reads a mode-000 file, so the copy failure cannot be reproduced"
+mkdir -p "$tmp/arepo/shared/skills/personal-atomic" "$tmp/arepo/shared/scripts" "$tmp/acodex" "$tmp/aclaude"
+write_atomic_skill() {
+  cat > "$tmp/arepo/shared/skills/personal-atomic/SKILL.md" <<EOS
+---
+name: personal-atomic
+description: demo skill atomic
+---
+$1
+EOS
+}
+write_atomic_skill v1
+write_asset_manifest "$tmp/arepo/shared/skills/personal-atomic/asset.yml" \
+  personal-atomic skill public shared/skills/personal-atomic directory claude-code
+run39() { "$sync" --root "$tmp/arepo" --codex-home "$tmp/acodex" --claude-home "$tmp/aclaude" --opencode-home "$tmp/aopencode" "$@"; }
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+run39 --apply --quiet > /dev/null
+atarget="$tmp/aclaude/skills/personal-atomic"
+agen="$tmp/arepo/generated/claude-code/skills/personal-atomic"
+grep -q "^v1$" "$atarget/SKILL.md" || fail "case 39 fixture should deploy v1"
+tree_snapshot "$atarget" > "$tmp/out39-before"
+write_atomic_skill v2
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+chmod 0000 "$agen/SKILL.md"
+status=0
+run39 --apply > "$tmp/out39" 2>&1 || status=$?
+chmod 0644 "$agen/SKILL.md"
+[ "$status" -eq 1 ] || fail "copy failure during update should exit 1, got $status: $(cat "$tmp/out39")"
+tree_snapshot "$atarget" > "$tmp/out39-after"
+cmp -s "$tmp/out39-before" "$tmp/out39-after" \
+  || fail "target must keep the old version when the copy fails: $(diff "$tmp/out39-before" "$tmp/out39-after" || true)"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "no staging dir may remain next to the target after a failed copy: $(ls -A "$tmp/aclaude/skills")"
+run39 > "$tmp/out39-next" 2>&1 || fail "sync after a failed update should succeed: $(cat "$tmp/out39-next")"
+grep -q "update: \[claude-code\].*personal-atomic" "$tmp/out39-next" \
+  || fail "the next sync must still plan the update, not up-to-date: $(cat "$tmp/out39-next")"
+
+# --- case 40: 退避した旧 dir を消し残したら、新版は配置済みのまま理由を出して止まり、旧の写しが残る (#431 の 3, #469 review) ---
+# fixture: 配置済み (v1) の skill の中に書き込み不可の subdir (中に file) を置く。rm_rf はその file を消せず、例外も
+# 出さない。旧実装は残った dir の中へ cp_r が入れ子に copy し、apply は成功と出していた。今は旧 dir を
+# .agent-tools-old-<name> に退避してから新版を rename で置くので、消し残しは退避先に残り、配置先は新版で揃う。
+# v2 は case 39 で build + register 済み (update のまま)。root は mode によらず消せるので、case 39 と同じく非 root が前提。
+aold="$tmp/aclaude/skills/.agent-tools-old-personal-atomic"
+mkdir -p "$atarget/stuck"
+echo "keep" > "$atarget/stuck/keep"
+chmod 0555 "$atarget/stuck"
+status=0
+run39 --apply > "$tmp/out40" 2>&1 || status=$?
+if [ -d "$aold/stuck" ]; then chmod 0755 "$aold/stuck"; fi
+if [ -d "$atarget/stuck" ]; then chmod 0755 "$atarget/stuck"; fi
+[ "$status" -eq 1 ] || fail "unremovable old copy should exit 1, got $status: $(cat "$tmp/out40")"
+grep -q "fail: could not remove the copy of the old version .*/\.agent-tools-old-personal-atomic" "$tmp/out40" \
+  || fail "the stop must name the leftover old copy: $(cat "$tmp/out40")"
+grep -q "^v2$" "$atarget/SKILL.md" || fail "the new version must be in place after the stop"
+cmp -s "$agen/.agent-tools-managed.yml" "$atarget/.agent-tools-managed.yml" || fail "the new marker must be in place after the stop"
+[ -f "$aold/stuck/keep" ] || fail "the old copy must remain at the old path: $(ls -A "$tmp/aclaude/skills")"
+[ "$(ls -A "$tmp/aclaude/skills" | tr '\n' ' ')" = ".agent-tools-old-personal-atomic personal-atomic " ] \
+  || fail "skills/ must hold only the target and the old copy (no staging dir): $(ls -A "$tmp/aclaude/skills")"
+run39 > "$tmp/out40-next" 2>&1 || fail "sync after the stop should succeed: $(cat "$tmp/out40-next")"
+grep -q "skip: \[claude-code\].*personal-atomic (up-to-date)" "$tmp/out40-next" \
+  || fail "the next sync must see the new version as up-to-date: $(cat "$tmp/out40-next")"
+rm -rf "$aold"
+
+# --- case 41: 正常の create / update の後に一時 dir / 一時 file が残らず、marker と本体が揃う (#431 の 3) ---
+# skill は create (case 40 の残骸を消してから) と update、script は create と update を見る。
+rm -rf "$atarget"
+printf '#!/bin/sh\necho atool v1\n' > "$tmp/arepo/shared/scripts/personal-atool.sh"
+write_atool_manifest() {
+  write_approved_script_manifest "$tmp/arepo" shared/scripts/personal-atool.sh personal-atool personal claude-code
+}
+write_atool_manifest
+ascripts="$tmp/aclaude/agent-tools/scripts"
+# 使い方: expect_clean_deploy <label> <SKILL.md の本文の行> <script の本文の行>
+expect_clean_deploy() {
+  "$build" --root "$tmp/arepo" --quiet > /dev/null
+  "$register" --root "$tmp/arepo" --quiet > /dev/null
+  run39 --apply > "$tmp/out41" 2>&1 || fail "$1 should succeed: $(cat "$tmp/out41")"
+  grep -q "^$2$" "$atarget/SKILL.md" || fail "$1: skill body not deployed"
+  cmp -s "$agen/.agent-tools-managed.yml" "$atarget/.agent-tools-managed.yml" || fail "$1: skill marker must match generated"
+  [ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+    || fail "$1: skills/ must hold only the target (no staging dir): $(ls -A "$tmp/aclaude/skills")"
+  [ -x "$ascripts/personal-atool" ] || fail "$1: script body missing or not executable"
+  grep -q "$3" "$ascripts/personal-atool" || fail "$1: script body not deployed"
+  cmp -s "$tmp/arepo/generated/claude-code/scripts/personal-atool.agent-tools-managed.yml" \
+    "$ascripts/personal-atool.agent-tools-managed.yml" || fail "$1: script sidecar marker must match generated"
+  [ "$(ls -A "$ascripts" | tr '\n' ' ')" = "personal-atool personal-atool.agent-tools-managed.yml " ] \
+    || fail "$1: scripts/ must hold only the body and the sidecar (no staging file): $(ls -A "$ascripts")"
+}
+expect_clean_deploy "create" v2 "echo atool v1"
+write_atomic_skill v3
+printf '#!/bin/sh\necho atool v2\n' > "$tmp/arepo/shared/scripts/personal-atool.sh"
+write_atool_manifest
+expect_clean_deploy "update" v3 "echo atool v2"
+
+# 使い方: mode_of <file>  (permission bits を 8 進で出す。mode を 000 にして戻す case が使う)
+mode_of() { ruby -e 'printf("%o", File.stat(ARGV[0]).mode & 0o777)' "$1"; }
+
+# --- case 42: script の本体の copy が失敗したら、旧本体と旧 sidecar はそのまま残り、一時 file も残らない (#469 review) ---
+# fixture: case 41 の配置 (v2) に対して v3 を build + register し、generated の本体を読めなくする。
+printf '#!/bin/sh\necho atool v3\n' > "$tmp/arepo/shared/scripts/personal-atool.sh"
+write_atool_manifest
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+agen_script="$tmp/arepo/generated/claude-code/scripts/personal-atool"
+agen_sidecar="$agen_script.agent-tools-managed.yml"
+tree_snapshot "$ascripts" > "$tmp/out42-before"
+body_mode=$(mode_of "$agen_script")
+chmod 0000 "$agen_script"
+status=0
+run39 --apply > "$tmp/out42" 2>&1 || status=$?
+chmod "$body_mode" "$agen_script"
+[ "$status" -eq 1 ] || fail "script body copy failure should exit 1, got $status: $(cat "$tmp/out42")"
+tree_snapshot "$ascripts" > "$tmp/out42-after"
+cmp -s "$tmp/out42-before" "$tmp/out42-after" \
+  || fail "old body and old sidecar must stay and no staging file may remain: $(diff "$tmp/out42-before" "$tmp/out42-after" || true)"
+
+# --- case 43: sidecar の配置が失敗したら、本体は新・sidecar は旧のまま止まり、取り除いて再実行すると update で収束する (#469 review) ---
+# generated の sidecar を読めなくしても plan が先に読んで止まる (apply に届かない) ので、sidecar の一時 file の path に
+# directory を置いて、本体の配置の後・sidecar の配置の前で止める (本体 → sidecar の順の途中の状態)。
+cp "$ascripts/personal-atool.agent-tools-managed.yml" "$tmp/out43-old-sidecar"
+sidecar_staging="$ascripts/.agent-tools-staging-personal-atool.agent-tools-managed.yml"
+mkdir "$sidecar_staging"
+status=0
+run39 --apply > "$tmp/out43" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "sidecar placement failure should exit 1, got $status: $(cat "$tmp/out43")"
+grep -q "fail: could not remove the leftover staging file .*/\.agent-tools-staging-personal-atool\.agent-tools-managed\.yml" "$tmp/out43" \
+  || fail "the stop must name the sidecar staging file: $(cat "$tmp/out43")"
+grep -q "echo atool v3" "$ascripts/personal-atool" || fail "body must already be the new version when the sidecar placement fails"
+cmp -s "$tmp/out43-old-sidecar" "$ascripts/personal-atool.agent-tools-managed.yml" \
+  || fail "sidecar must stay the old version when its placement fails"
+[ "$(ls -A "$ascripts" | tr '\n' ' ')" = ".agent-tools-staging-personal-atool.agent-tools-managed.yml personal-atool personal-atool.agent-tools-managed.yml " ] \
+  || fail "scripts/ must hold only the body, the sidecar and the directory that blocked the sidecar: $(ls -A "$ascripts")"
+rmdir "$sidecar_staging"
+run39 > "$tmp/out43-next" 2>&1 || fail "sync after the sidecar failure should succeed: $(cat "$tmp/out43-next")"
+grep -q "update: \[claude-code\].*personal-atool" "$tmp/out43-next" \
+  || fail "the old sidecar must make the next sync plan an update: $(cat "$tmp/out43-next")"
+run39 --apply > "$tmp/out43-apply" 2>&1 || fail "re-run should converge: $(cat "$tmp/out43-apply")"
+cmp -s "$agen_sidecar" "$ascripts/personal-atool.agent-tools-managed.yml" || fail "re-run must bring the sidecar to the new version"
+[ "$(ls -A "$ascripts" | tr '\n' ' ')" = "personal-atool personal-atool.agent-tools-managed.yml " ] \
+  || fail "no staging file may remain after convergence: $(ls -A "$ascripts")"
+
+# --- case 44: 一時 dir / 一時 file の path に消せないものがあれば、何も書かずに止まる (#469 review) ---
+# 44a: skill。一時 dir の path に消せない dir (書き込み不可の subdir の中に file) を置く。前回の残りなら消して使うが、
+# 消せなければ止める (残った dir の中へ入れ子に copy しない)。
+write_atomic_skill v4
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+astaging="$tmp/aclaude/skills/.agent-tools-staging-personal-atomic"
+mkdir -p "$astaging/stuck"
+echo "keep" > "$astaging/stuck/keep"
+chmod 0555 "$astaging/stuck"
+tree_snapshot "$atarget" > "$tmp/out44a-before"
+status=0
+run39 --apply > "$tmp/out44a" 2>&1 || status=$?
+chmod 0755 "$astaging/stuck"
+[ "$status" -eq 1 ] || fail "unremovable staging dir should exit 1, got $status: $(cat "$tmp/out44a")"
+grep -q "fail: could not remove the leftover staging dir .*/\.agent-tools-staging-personal-atomic" "$tmp/out44a" \
+  || fail "the stop must name the staging dir: $(cat "$tmp/out44a")"
+tree_snapshot "$atarget" > "$tmp/out44a-after"
+cmp -s "$tmp/out44a-before" "$tmp/out44a-after" || fail "target must not change when the staging dir cannot be removed"
+[ ! -e "$astaging/personal-atomic" ] || fail "generated must not be copied into the leftover staging dir"
+rm -rf "$astaging"
+run39 --apply --quiet > /dev/null
+grep -q "^v4$" "$atarget/SKILL.md" || fail "skill should converge after the staging dir is removed"
+# 44b: script。一時 file の path に directory を置く (create の状態)。rm_f は directory を消せず、cp はその中へ入れ子に
+# copy し、create なら続く rename が配置先に directory を置いて成功と出てしまう。
+rm -f "$ascripts/personal-atool" "$ascripts/personal-atool.agent-tools-managed.yml"
+mkdir "$ascripts/.agent-tools-staging-personal-atool"
+status=0
+run39 --apply > "$tmp/out44b" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "directory at the staging file path should exit 1, got $status: $(cat "$tmp/out44b")"
+grep -q "fail: could not remove the leftover staging file .*/\.agent-tools-staging-personal-atool" "$tmp/out44b" \
+  || fail "the stop must name the staging file: $(cat "$tmp/out44b")"
+[ ! -e "$ascripts/personal-atool" ] || fail "nothing may be placed at the script path when the staging path is taken"
+[ ! -e "$ascripts/personal-atool.agent-tools-managed.yml" ] || fail "no sidecar may be written when the body was not placed"
+[ -z "$(ls -A "$ascripts/.agent-tools-staging-personal-atool")" ] || fail "generated must not be copied into the directory at the staging path"
+rmdir "$ascripts/.agent-tools-staging-personal-atool"
+run39 --apply --quiet > /dev/null
+[ -x "$ascripts/personal-atool" ] || fail "script should converge after the directory is removed"
+
+# --- case 45: 退避の後・配置の前で止まった状態 (配置先が無く退避した旧 dir だけ) からの再実行は、旧版を消さずに戻す (#469 review 2) ---
+# fixture: v4 を配置した状態から mv で中断状態を作り、v5 を build + register する。(a) copy が失敗する apply (generated の
+# SKILL.md を mode 000。case 39 と同じ) でも配置先に v4 が戻り、old も staging も残らない。(b) 障害を取り除くと v5 が配置される。
+# 旧実装は old を「前回の残り」として消してから copy したので、そこで copy が失敗すると唯一の旧版も失われた。
+mv "$atarget" "$aold"
+write_atomic_skill v5
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+chmod 0000 "$agen/SKILL.md"
+status=0
+run39 --apply > "$tmp/out45a" 2>&1 || status=$?
+chmod 0644 "$agen/SKILL.md"
+[ "$status" -eq 1 ] || fail "copy failure after an interrupted switch should exit 1, got $status: $(cat "$tmp/out45a")"
+grep -q "^v4$" "$atarget/SKILL.md" || fail "the old version must be put back at the target before the copy is attempted"
+[ ! -e "$aold" ] || fail "the old copy must not remain after it was put back"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "skills/ must hold only the target after the recovery: $(ls -A "$tmp/aclaude/skills")"
+run39 --apply > "$tmp/out45b" 2>&1 || fail "apply after the obstacle is removed should succeed: $(cat "$tmp/out45b")"
+grep -q "^v5$" "$atarget/SKILL.md" || fail "the new version should be deployed once the copy succeeds"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "skills/ must hold only the target after convergence: $(ls -A "$tmp/aclaude/skills")"
+
+# --- case 46: 配置の rename だけが失敗したら、退避した旧版を戻して止まり、staging も old も残らない (#469 review 2) ---
+# sync.sh は `exec ruby lib/sync.rb` で起動するので、RUBYOPT=-r<file> でその ruby だけに test 専用の patch を読ませる
+# (実装に test 用の hook は入れない)。patch は INJECT_RENAME_AT で選んだ File.rename (placement = source が staging で
+# destination が配置先 / evacuation = source が配置先で destination が .agent-tools-old-) だけを INJECT_RENAME_ERROR の
+# 例外にする (INJECT_RENAME_AFTER=1 なら実処理を行ってから raise。復旧の rename はどちらにも当たらない)。RUBYOPT は空白で分割されるので、
+# path に空白があれば理由を出して fail。patch が効いた根拠は fail: の行の例外 class (Errno::EIO)。RUBYOPT を付けない対照
+# (46c) が同じ fixture で v6 に更新されることで、注入が他の起動に漏れていないことも見る。
+case $tmp in *[[:space:]]*) fail "case 46 needs a tmp path without whitespace for RUBYOPT: $tmp" ;; esac
+inject="$tmp/inject-rename.rb"
+cat > "$inject" <<'RB'
+class << File
+  alias_method :rename_without_injection, :rename
+  def rename(from, to)
+    at = ENV.fetch("INJECT_RENAME_AT")
+    hit = (at == "placement" && File.basename(from).start_with?(".agent-tools-staging-") && File.basename(to) == "personal-atomic") ||
+          (at == "evacuation" && File.basename(from) == "personal-atomic" && File.basename(to).start_with?(".agent-tools-old-"))
+    return rename_without_injection(from, to) unless hit
+
+    rename_without_injection(from, to) if ENV.fetch("INJECT_RENAME_AFTER") == "1"
+    raise Object.const_get(ENV.fetch("INJECT_RENAME_ERROR")), "injected"
+  end
+end
+RB
+# 使い方: run46 <例外 class> <placement|evacuation> <実処理を行ってから raise するなら 1、しないなら 0>
+run46() {
+  RUBYOPT="-r$inject" INJECT_RENAME_ERROR=$1 INJECT_RENAME_AT=$2 INJECT_RENAME_AFTER=$3 "$sync" --root "$tmp/arepo" --codex-home "$tmp/acodex" \
+    --claude-home "$tmp/aclaude" --opencode-home "$tmp/aopencode" --apply
+}
+write_atomic_skill v6
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+tree_snapshot "$atarget" > "$tmp/out46-before"
+# 46a: 例外 (Errno::EIO) は ApplyError に変えて fail: で止める。旧版は戻る
+status=0
+run46 Errno::EIO placement 0 > "$tmp/out46a" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "placement rename failure should exit 1, got $status: $(cat "$tmp/out46a")"
+grep -q "fail: could not put the new version at .*personal-atomic (Errno::EIO); the old version was put back" "$tmp/out46a" \
+  || fail "the stop must say the old version was put back: $(cat "$tmp/out46a")"
+tree_snapshot "$atarget" > "$tmp/out46a-after"
+cmp -s "$tmp/out46-before" "$tmp/out46a-after" \
+  || fail "the old version must be back at the target after the placement fails: $(diff "$tmp/out46-before" "$tmp/out46a-after" || true)"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "neither staging nor old may remain after the placement fails: $(ls -A "$tmp/aclaude/skills")"
+# 46b: 割り込み (Interrupt。SystemCallError ではない) でも ensure が旧版を戻す。uncaught の Interrupt で ruby は
+# SIGINT で終わる (実測 exit 130) ので、exit code は 0 でないことだけを見る
+status=0
+run46 Interrupt placement 0 > "$tmp/out46b" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "an interrupt during the placement must not exit 0: $(cat "$tmp/out46b")"
+tree_snapshot "$atarget" > "$tmp/out46b-after"
+cmp -s "$tmp/out46-before" "$tmp/out46b-after" \
+  || fail "the old version must be back at the target after an interrupt: $(diff "$tmp/out46-before" "$tmp/out46b-after" || true)"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "neither staging nor old may remain after an interrupt: $(ls -A "$tmp/aclaude/skills")"
+# 46c: 対照。注入が無ければ同じ fixture で v6 に更新される
+run39 --apply > "$tmp/out46c" 2>&1 || fail "apply without the injection should succeed: $(cat "$tmp/out46c")"
+grep -q "^v6$" "$atarget/SKILL.md" || fail "the new version should be deployed without the injection"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "skills/ must hold only the target after the control run: $(ls -A "$tmp/aclaude/skills")"
+
+# --- case 47: 退避の rename を行った直後に割り込まれても、退避先と配置先の実在で判断して旧版を戻す (#469 review 3) ---
+# 「退避した / 配置した」の flag で判断すると、退避の rename が済んでから flag が立つまでの隙間で割り込まれたときに
+# 配置先が欠落したまま終わる。注入は退避の rename を実際に行ってから Interrupt を raise する。
+write_atomic_skill v7
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+tree_snapshot "$atarget" > "$tmp/out47-before"
+status=0
+run46 Interrupt evacuation 1 > "$tmp/out47" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "an interrupt right after the evacuation must not exit 0: $(cat "$tmp/out47")"
+tree_snapshot "$atarget" > "$tmp/out47-after"
+cmp -s "$tmp/out47-before" "$tmp/out47-after" \
+  || fail "the old version must be back at the target after an interrupt right after the evacuation: $(diff "$tmp/out47-before" "$tmp/out47-after" || true)"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "neither staging nor old may remain after an interrupt right after the evacuation: $(ls -A "$tmp/aclaude/skills")"
+# 対照: 注入が無ければ v7 に更新される
+run39 --apply > "$tmp/out47c" 2>&1 || fail "apply without the injection should succeed: $(cat "$tmp/out47c")"
+grep -q "^v7$" "$atarget/SKILL.md" || fail "the new version should be deployed without the injection"
+
+# --- case 48: 配置の rename を行った直後に割り込まれたら、新版は配置済みで退避 dir が残り、その skill の次の update が復旧せずに消す (#469 review 3) ---
+# 注入は配置の rename を実際に行ってから Interrupt を raise する。ensure は target があるので戻さない (old は残る)。
+# up-to-date の target に apply は触れない (plan が skip) ので、注入なしの apply の後も old は残り、その skill の次の
+# create / update の冒頭 (removed?(old)) が、target があるので復旧の rename をせずに消す。
+write_atomic_skill v8
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+status=0
+run46 Interrupt placement 1 > "$tmp/out48" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "an interrupt right after the placement must not exit 0: $(cat "$tmp/out48")"
+grep -q "^v8$" "$atarget/SKILL.md" || fail "the new version must be in place after an interrupt right after the placement"
+cmp -s "$agen/.agent-tools-managed.yml" "$atarget/.agent-tools-managed.yml" \
+  || fail "the new marker must be in place after an interrupt right after the placement"
+grep -q "^v7$" "$aold/SKILL.md" || fail "the old copy must remain at the old path after an interrupt right after the placement"
+[ "$(ls -A "$tmp/aclaude/skills" | tr '\n' ' ')" = ".agent-tools-old-personal-atomic personal-atomic " ] \
+  || fail "skills/ must hold the target and the old copy, no staging: $(ls -A "$tmp/aclaude/skills")"
+# 注入なしで同じ generated を apply: 新 marker なので up-to-date。apply は触れないので old はまだ残る
+run39 --apply > "$tmp/out48b" 2>&1 || fail "apply after the interrupt should succeed: $(cat "$tmp/out48b")"
+grep -q "skip: \[claude-code\].*personal-atomic (up-to-date)" "$tmp/out48b" \
+  || fail "the next sync must see the new version as up-to-date: $(cat "$tmp/out48b")"
+grep -q "^v8$" "$atarget/SKILL.md" || fail "an up-to-date apply must leave the new version in place"
+[ -d "$aold" ] || fail "an up-to-date apply does not touch the target, so the old copy stays until the next update"
+# その skill の次の update (v9) の冒頭が、target があるので復旧せずに old を消してから進む
+write_atomic_skill v9
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+run39 --apply > "$tmp/out48c" 2>&1 || fail "the next update should succeed: $(cat "$tmp/out48c")"
+grep -q "^v9$" "$atarget/SKILL.md" || fail "the next update should deploy the new version"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "the next update must remove the leftover old copy and leave no staging: $(ls -A "$tmp/aclaude/skills")"
+
 echo "ok: sync self-test passed"
