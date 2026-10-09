@@ -13,7 +13,44 @@ require_relative "path_glob"
 require_relative "cli"
 
 module CheckInjection
-  Pattern = Struct.new(:category, :risk, :regexp, :message)
+  # matcher は Regexp か、content を受けて一致の開始位置の配列を返す callable。
+  Pattern = Struct.new(:category, :risk, :matcher, :message)
+
+  # HTML コメントの本文に在れば hidden とみなす keyword。本文だけに当てる (下の html_comment_positions)。
+  HTML_COMMENT_KEYWORDS = /\b(?:ignore|instruction|system\s+prompt|do\s+not\s+tell|secretly)\b/i.freeze
+
+  # `<!--` ... `-->` を一方向に走査し、本文に keyword を含むコメントの開始位置 (文字 offset) を返す。
+  # 1 つの regex で `<!--(?:(?!-->).)*keyword(?:(?!-->).)*-->` と書くと、keyword を含まない開始記号が
+  # 多い入力で各開始位置から終端まで backtrack して二次時間になり、gate を長時間占有できる (#459 review)。
+  # 走査は byte 単位の写し (String#b) に対して行う。文字 index の文字列では、非 ASCII の UTF-8 で
+  # String#index と文字単位の slice が位置の変換のために既読部分を再走査し、やはり二次時間になるため。
+  # 報告用の文字 offset は、消費した byte 範囲の文字数を累積して求める (全体で入力の長さに線形)。
+  # 意味: 本文は最初の `-->` で閉じる。終端と重なる opener (`<!-->`) は新しいコメントの開始ではない
+  # (HTML の abrupt close と同じで、その後の text は表示される)。閉じないコメントは一致しない。
+  # 旧 regex は `<!-- <!--> ignore -->` を内側の opener から一致させていたが、これは意図した意味変更。
+  def self.html_comment_positions(content)
+    bytes = content.b
+    positions = []
+    byte_pos = 0
+    char_pos = 0
+    while (start = bytes.index("<!--", byte_pos))
+      finish = bytes.index("-->", start + 4)
+      break unless finish
+
+      char_pos += char_count(bytes, byte_pos, start, content.encoding)
+      body = bytes.byteslice(start + 4, finish - start - 4).force_encoding(content.encoding)
+      positions << char_pos if body.match?(HTML_COMMENT_KEYWORDS)
+      char_pos += char_count(bytes, start, finish + 3, content.encoding)
+      byte_pos = finish + 3
+    end
+    positions
+  end
+
+  # bytes の [from, to) の範囲の文字数 (encoding で数える)。delimiter は ASCII なので、範囲の両端は
+  # 文字の境界にある (UTF-8 では ASCII の byte が多バイト列の中に現れない)。
+  def self.char_count(bytes, from, to, encoding)
+    bytes.byteslice(from, to - from).force_encoding(encoding).length
+  end
 
   PATTERNS = [
     # system / developer instructions の override 試行
@@ -38,12 +75,16 @@ module CheckInjection
                 /-----BEGIN\s[A-Z ]*PRIVATE KEY-----/,
                 "contains private key material"),
 
-    # hidden instruction patterns
+    # hidden instruction patterns。不可視の文字は Unicode の書式文字 (Cf: zero-width、bidi 制御、
+    # soft hyphen、tag 文字など) 全体と、tag block の U+E0000〜E007F を見る。絵文字の ZWJ や RTL の
+    # bidi mark のような正当な用途も medium になり、human review で承認して通す (#427 の 6)。
     Pattern.new("hidden", "medium",
-                /[\u200B\u200C\u200D\u2060\uFEFF]/,
-                "contains invisible zero-width characters"),
+                /[\p{Cf}\u{E0000}-\u{E007F}]/,
+                "contains invisible or formatting characters (zero-width, bidi control, tag, soft hyphen)"),
+    # keyword を含む HTML コメントは長さによらず見る (前後 400 文字の上限を外した。#427 の 6)。
+    # 走査は線形時間の html_comment_positions で行う。
     Pattern.new("hidden", "medium",
-                /<!--(?:(?!-->).){0,400}\b(?:ignore|instruction|system\s+prompt|do\s+not\s+tell|secretly)\b(?:(?!-->).){0,400}-->/im,
+                method(:html_comment_positions),
                 "HTML comment containing instruction-like content"),
 
     # tool permission / approval policy の bypass 試行
@@ -145,14 +186,15 @@ module CheckInjection
 
     private
 
-    # shared/ 配下のすべての text files を scan する。manifest も text として含める。
+    # shared/ 配下のすべての text files を scan する。manifest も text として含める。build は
+    # directory skill の dotfile (.gitkeep を含む) もそのまま配るので、配られる byte は名前によらず
+    # すべて scan する (#427 の 5)。
     # directory skill の evals/ (テスト材料。意図的に攻撃的文字列を含みうる) は
     # injection 攻撃文字列・fake path・email の scan からは外すが、inline private key leak
     # のみ引き続き scan する (run で per-file に判定する)。
     def target_files
       PathGlob.under(@root, "shared/**/*", File::FNM_DOTMATCH)
          .select { |p| File.file?(p) }
-         .reject { |p| File.basename(p) == ".gitkeep" }
          .sort
     end
 
@@ -203,18 +245,26 @@ module CheckInjection
     def scan(path, content, leak_only)
       patterns = leak_only ? PATTERNS.select { |p| LEAK_CATEGORIES.include?(p.category) } : PATTERNS
       patterns.flat_map do |pattern|
-        positions = []
-        pos = 0
-        while (match = pattern.regexp.match(content, pos))
-          positions << match.begin(0)
-          pos = match.begin(0) + [match[0].length, 1].max
-        end
+        positions = CheckInjection.match_positions(pattern.matcher, content)
         positions.map do |offset|
           line = content[0...offset].count("\n") + 1
           Finding.new(path, line, pattern.risk, pattern.category, pattern.message)
         end
       end
     end
+  end
+
+  # matcher ごとの一致の開始位置。Regexp は重ならない一致を順に、callable はその返り値。
+  def self.match_positions(matcher, content)
+    return matcher.call(content) unless matcher.is_a?(Regexp)
+
+    positions = []
+    pos = 0
+    while (match = matcher.match(content, pos))
+      positions << match.begin(0)
+      pos = match.begin(0) + [match[0].length, 1].max
+    end
+    positions
   end
 
   def self.main(argv)
