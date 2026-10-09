@@ -158,6 +158,32 @@ Dir.mktmpdir("fast-edit-payload-") do |tmp|
          "invalid config entries must not hide valid check failures")
   File.write(config, valid_config)
 
+  # A single-file edit is identified by its repo-relative path too (#431 の 4): the OpenCode plugin calls
+  # the hook once per file and drops identical summaries, so a basename label would collapse same-name
+  # failures into one. The payload path may go through a symlinked prefix (macOS /var -> /private/var);
+  # the label follows the repo root that git resolves, while the check still receives the path as given.
+  alias_dir = File.join(tmp, "alias")
+  File.symlink(repo, alias_dir)
+  [File.join(repo, "lib", "a.rb"), File.join(alias_dir, "lib", "a.rb")].each do |file|
+    out, calls = invoke.call({ "tool_name" => "Edit", "tool_input" => { "file_path" => file } }, "short")
+    message = JSON.parse(out).fetch("hookSpecificOutput").fetch("additionalContext")
+    assert(message.include?("fast-edit-check: lib/a.rb への編集"),
+           "a single-file failure must identify its repo-relative path (payload path #{file}): #{message}")
+    assert(calls.map { |call| call["argv"] } == [[file]], "the check must receive the payload path as given")
+  end
+
+  # A symlinked file inside the repo keeps the repo path of the link as its label (the file itself is not
+  # resolved; only its directory is), even when the link points outside the repo.
+  outside = File.join(tmp, "outside.rb")
+  File.write(outside, "puts 1\n")
+  link = File.join(repo, "lib", "link.rb")
+  File.symlink(outside, link)
+  out, calls = invoke.call({ "tool_name" => "Edit", "tool_input" => { "file_path" => link } }, "short")
+  message = JSON.parse(out).fetch("hookSpecificOutput").fetch("additionalContext")
+  assert(message.include?("fast-edit-check: lib/link.rb への編集"),
+         "a symlinked file must be labeled by its repo path, not the link target: #{message}")
+  assert(calls.map { |call| call["argv"] } == [[link]], "the check must receive the symlink path as given")
+
   relative = patch_payload(File.join(repo, "nested"), <<~PATCH)
     *** Begin Patch
     *** Update File: ../a.rb

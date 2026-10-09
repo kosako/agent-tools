@@ -68,7 +68,9 @@
   shell wrapper や `*** Environment ID` による別環境指定を local path と推測しない。
 - 失敗時のみ `hookSpecificOutput.additionalContext` で失敗要約 (上限 2000 文字 /
   非 UTF-8 は scrub) をモデルに返す。成功は無言 (ノイズ規律)。
-  複数ファイルの失敗は repo 相対 path で対象を識別し、不正な check 宣言の警告は
+  失敗の対象は常に repo 相対 path で識別し (1 ファイルの編集でも basename にしない。OpenCode
+  plugin は file ごとの要約の同文を除くため、同名ファイルの失敗を区別する。payload の path が
+  symlink 越しでも git が返す repo root 基準で相対にする)、不正な check 宣言の警告は
   同じ repo について 1 回だけ返す。
 - 設定ファイルが壊れているときは無言で握り潰さず、設定エラーを additionalContext で
   1 行知らせる (それでも exit 0)。

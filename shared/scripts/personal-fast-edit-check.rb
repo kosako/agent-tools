@@ -199,6 +199,16 @@ module FastEditCheck
     name.is_a?(String) && !name.empty? ? name : check["command"].first
   end
 
+  # 失敗要約の label は常に repo 相対 path にする (#431 の 4): OpenCode plugin は file ごとに本 script を呼んで
+  # 同文の要約を除くので、basename だと同名 file (a/index.rb と b/index.rb) の失敗が 1 件に潰れる。
+  # payload の path は symlink 越し (macOS の /var → /private/var など) があり得るので、directory を realpath に
+  # して git が realpath で返す repo root と揃えてから prefix を削る。file 自体の symlink は辿らない (repo の外を
+  # 指す link でも label は repo の中の path)。check に渡す path は payload のまま。
+  def relative_label(file, repo_root)
+    real = File.join(File.realpath(File.dirname(file)), File.basename(file))
+    real.delete_prefix(repo_root + File::SEPARATOR)
+  end
+
   def truncate(text)
     text = text.dup
     text.force_encoding(Encoding::UTF_8)
@@ -244,7 +254,7 @@ module FastEditCheck
       failures = checks.map { |c| run_check(c, file, repo_root) }.reject { |r| r[:ok] }
       unless failures.empty?
         body = failures.map { |r| "[#{r[:name]}]\n#{truncate(r[:output])}" }.join("\n")
-        label = files.length > 1 ? file.delete_prefix(repo_root + File::SEPARATOR) : File.basename(file)
+        label = relative_label(file, repo_root)
         parts << "fast-edit-check: #{label} への編集が repo 宣言の check に失敗しました。" \
                  "いま直してください (自動修正はしません):\n#{body}"
       end
