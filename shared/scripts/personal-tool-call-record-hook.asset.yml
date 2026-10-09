@@ -20,5 +20,6 @@ summary: >-
   SessionStart / PreToolUse / PostToolUse / PostToolUseFailure / PermissionDenied hook body。
   event ごとに 1 行の JSON (時刻・client・session・tool 名・引数の key・結果の印) をユーザーの
   state dir の JSONL に追記する記録 hook。判断しない・stdout 無し・exit 0 固定 (fail-open)。
-  引数の値・tool_response・path は書かない。主体は client の自己申告まで (guardrail であって
+  引数の値・tool_response・path は書かない (例外は PermissionDenied の reason の先頭 200 字で、
+  client が作る自由文のため値や path を含みうる)。主体は client の自己申告まで (guardrail であって
   境界ではない)。docs/tool-call-record-hook.md が正本。

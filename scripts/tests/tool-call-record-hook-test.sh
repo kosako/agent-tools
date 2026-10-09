@@ -155,17 +155,19 @@ printf '%s' '{"hook_event_name":"PreToolUse","tool_name":"Read","tool_use_id":"x
   || fail "no HOME should exit 0"
 [ -s "$tmp/err" ] || fail "no HOME should leave a stderr line"
 
-# ---- SessionStart: 版は fake claude から。失敗したら unknown ---------------------------
+# ---- SessionStart: 版は fake claude の stdout から。stderr は捨てる。失敗したら unknown ------
 cat > "$tmp/bin/claude" <<'EOF'
 #!/bin/sh
+echo "warning: CANARY_WARNING_LINE" >&2
 echo "9.9.9 (Claude Code)"
 EOF
 chmod +x "$tmp/bin/claude"
 run_hook CLAUDECODE=1 '{"hook_event_name":"SessionStart","session_id":"s2","source":"startup"}' > /dev/null \
   || fail "SessionStart should exit 0"
 last=$(($(lines "$claude_log") - 1))
-[ "$(field "$claude_log" "$last" version)" = '"9.9.9 (Claude Code)"' ] || fail "version from claude --version"
+[ "$(field "$claude_log" "$last" version)" = '"9.9.9 (Claude Code)"' ] || fail "version from claude --version stdout"
 [ "$(field "$claude_log" "$last" tool)" = '__absent__' ] || fail "SessionStart has no tool"
+grep -q 'CANARY_WARNING_LINE' "$claude_log" && fail "claude --version stderr leaked into version"
 cat > "$tmp/bin/claude" <<'EOF'
 #!/bin/sh
 echo "boom" >&2
@@ -177,5 +179,27 @@ last=$(($(lines "$claude_log") - 1))
 [ ! -s "$tmp/err" ] || fail "version failure should not be reported as an error: $(cat "$tmp/err")"
 run_hook NONE= '{"hook_event_name":"SessionStart","session_id":"s4"}' > /dev/null || fail "unknown client SessionStart"
 [ "$(field "$records/unknown.jsonl" 1 version)" = '"unknown"' ] || fail "unknown client has no version command"
+
+# ---- 保護範囲 (unit): stdin の読み取りと stderr への診断が失敗しても exit 0 -----------------
+# process 境界では ruby が閉じた std fd を /dev/null に開き直すので、IO の失敗は object の差し替えで起こす。
+ruby -r"$script_dir/lib/check_helper" - "$src" <<'RUBY'
+require ARGV[0]
+require "stringio"
+class FailingIO
+  def read
+    raise IOError, "closed stream"
+  end
+
+  def puts(*)
+    raise Errno::EBADF, "stderr"
+  end
+end
+err = StringIO.new
+check("run returns 0 when stdin read raises", ToolCallRecordHook.run(stdin: FailingIO.new, err: err) == 0)
+check("stdin failure is reported in one line", err.string.lines.length == 1)
+check("main returns 0 when stderr write raises", ToolCallRecordHook.main("not json", err: FailingIO.new) == 0)
+check("run returns 0 when stdin and stderr both fail", ToolCallRecordHook.run(stdin: FailingIO.new, err: FailingIO.new) == 0)
+exit(@failed.zero? ? 0 : 1)
+RUBY
 
 echo "ok: tool-call-record-hook self-test passed"

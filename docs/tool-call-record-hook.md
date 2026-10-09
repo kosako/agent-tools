@@ -34,10 +34,12 @@ event ごとに 1 行。無い field は省く (`null` を書かない)。
 | `op` | Notion の `update-page` の `command` (固定 enum) を分類 | `append` / `edit` / `replace` / `other`。他の tool には無い |
 | `result` | event から | `PostToolUse` → `output`、`PostToolUseFailure` → `error` (`is_interrupt` なら `interrupted`)。「成功」とは書かない |
 | `duration_ms` | Post 系の任意 field | 数値のときだけ |
-| `reason` | `PermissionDenied` の `reason` | 200 文字で切る |
+| `reason` | `PermissionDenied` の `reason` | client が作る自由文。**引数の値や path を含みうる** (この hook が書く唯一の自由文)。200 文字で切るのは長さの上限であって匿名化ではない |
 
 **書かないもの**: `tool_input` の値、`tool_response`、error の本文、`cwd`、`transcript_path`、prompt。
-self-test は canary 値でこれらが file に出ないことを確かめる。
+self-test は canary 値でこれらが file に出ないことを確かめる。例外は上の `reason` だけで、値を書かない保証は
+`reason` には及ばない (受け入れ条件として残すことを選んだ。要らなければ登録側で `PermissionDenied` を
+外せば行ごと出なくなる)。
 
 ## 出力先
 
@@ -103,4 +105,5 @@ Codex への登録 (`~/.codex/hooks.json`、`features.hooks`、hook の trust) �
 fake `claude` で代替する。1 行できる / 値 (引数・tool_response・error 本文・cwd・transcript_path・絶対 path)
 が出ない / Post 系の `result` / `PermissionDenied` の `reason` の上限 / Notion の `command` の分類 /
 対象外 event と不正な stdin の no-op / 書込先に書けないときと相対 path の fail-open / client の判定と既定の
-出力先 / `SessionStart` の版と失敗時の `unknown`、を確かめる。
+出力先 / `SessionStart` の版 (stdout だけ。stderr の警告は捨てる) と失敗時の `unknown` / stdin の読み取りと
+stderr への診断が失敗しても exit 0 (unit)、を確かめる。

@@ -19,8 +19,9 @@
 # mcp_server (name / source)、tool_input の key (sorted)、result (output / error / interrupted)、
 # duration_ms、PermissionDenied の reason (REASON_CAP 文字まで)、SessionStart の版。
 # 記録しないもの: tool_input の値、tool_response、error の本文、cwd、transcript_path、prompt。
-# 例外は Notion の update-page の command (固定の enum) で、append / edit / replace / other に
-# 分類した結果だけを書く (値そのものは書かない)。
+# 例外が 2 つ: Notion の update-page の command (固定の enum) は append / edit / replace / other に
+# 分類した結果だけを書く (値そのものは書かない)。PermissionDenied の reason は client が作る自由文で、
+# 引数の値や path を含みうる (この hook が書く唯一の自由文。REASON_CAP は長さの上限であって匿名化ではない)。
 #
 # 出力先: $AGENT_TOOLS_TOOL_CALL_RECORD_DIR (絶対 path)。無ければ
 # ${XDG_STATE_HOME:-~/.local/state}/agent-tools/personal-tool-call-record-hook/<client>.jsonl。
@@ -59,11 +60,19 @@ module ToolCallRecordHook
 
   module_function
 
+  # entrypoint。stdin の読み取りも保護範囲に入れる (読めなければ何も記録せず exit 0)。
+  def run(stdin: $stdin, err: $stderr)
+    main(stdin.read, err: err)
+  rescue SystemCallError, IOError => e
+    report(err, "could not read stdin (#{e.class}); nothing recorded")
+    0
+  end
+
   # 戻り値は exit code (常に 0)。env / err / now は test の差し替え口。
   def main(stdin_text, env: ENV, err: $stderr, now: Time.now)
     payload = parse(stdin_text)
     if payload.nil?
-      err.puts "#{NAME}: stdin is not a JSON object; nothing recorded"
+      report(err, "stdin is not a JSON object; nothing recorded")
       return 0
     end
     event = payload["hook_event_name"]
@@ -72,17 +81,24 @@ module ToolCallRecordHook
     client = detect_client(env)
     path = record_path(env, client)
     if path.nil?
-      err.puts "#{NAME}: no absolute record location (set #{DIR_ENV}, XDG_STATE_HOME or HOME); nothing recorded"
+      report(err, "no absolute record location (set #{DIR_ENV}, XDG_STATE_HOME or HOME); nothing recorded")
       return 0
     end
     append(path, build_record(payload, event, client, now))
     0
   rescue SystemCallError, IOError => e
-    err.puts "#{NAME}: could not write record (#{e.class}); nothing recorded"
+    report(err, "could not write record (#{e.class}); nothing recorded")
     0
   rescue StandardError => e
-    err.puts "#{NAME}: unexpected #{e.class}; nothing recorded"
+    report(err, "unexpected #{e.class}; nothing recorded")
     0
+  end
+
+  # 診断の 1 行。stderr が閉じていても exit 0 を保つ (診断の失敗で tool call を止めない)。
+  def report(err, message)
+    err.puts "#{NAME}: #{message}"
+  rescue SystemCallError, IOError
+    nil
   end
 
   def parse(text)
@@ -176,7 +192,8 @@ module ToolCallRecordHook
     command = VERSION_COMMANDS[client]
     return "unknown" if command.nil?
 
-    output = IO.popen(command, err: %i[child out], &:read)
+    # stderr は捨てる (警告が版として残り、警告中の path が記録に入るのを防ぐ)。
+    output = IO.popen(command, err: File::NULL, &:read)
     return "unknown" unless $CHILD_STATUS&.success?
 
     line = output.to_s.lines.first.to_s.strip
@@ -201,4 +218,4 @@ module ToolCallRecordHook
   end
 end
 
-exit ToolCallRecordHook.main($stdin.read) if $PROGRAM_NAME == __FILE__
+exit ToolCallRecordHook.run if $PROGRAM_NAME == __FILE__
