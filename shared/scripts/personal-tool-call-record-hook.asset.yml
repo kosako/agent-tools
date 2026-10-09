@@ -13,6 +13,10 @@ risk:
 # script kind は実行コード配布のため常に human review 必須 (#147)。承認は内容と配布形態に紐づく
 # (#148, #184)。本 script の review block は #454 の PR で author≠reviewer レビューののち、人が
 # approved_build_id を入れる。それまで register は human_review_required とし sync は配備しない。
+review:
+  human_review: approved
+  approved_build_id: sha256:5bea77bf6b4f59c22074ef6e525abddaa0ee659257409cbe444da97df1d50f8b
+  approved_artifact_kind: script
 source:
   path: shared/scripts/personal-tool-call-record-hook.rb
   format: text
