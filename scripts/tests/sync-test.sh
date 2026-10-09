@@ -947,22 +947,31 @@ run39 > "$tmp/out39-next" 2>&1 || fail "sync after a failed update should succee
 grep -q "update: \[claude-code\].*personal-atomic" "$tmp/out39-next" \
   || fail "the next sync must still plan the update, not up-to-date: $(cat "$tmp/out39-next")"
 
-# --- case 40: 旧 dir を消し残したら、入れ子に copy せず理由を出して止まり、一時 dir も残らない (#431 の 3) ---
+# --- case 40: 退避した旧 dir を消し残したら、新版は配置済みのまま理由を出して止まり、旧の写しが残る (#431 の 3, #469 review) ---
 # fixture: 配置済み (v1) の skill の中に書き込み不可の subdir (中に file) を置く。rm_rf はその file を消せず、例外も
-# 出さない。旧実装は残った dir の中へ cp_r が入れ子に copy し、apply は成功と出していた。v2 は case 39 で
-# build + register 済み (update のまま)。root は mode によらず消せるので、case 39 と同じく非 root が前提。
+# 出さない。旧実装は残った dir の中へ cp_r が入れ子に copy し、apply は成功と出していた。今は旧 dir を
+# .agent-tools-old-<name> に退避してから新版を rename で置くので、消し残しは退避先に残り、配置先は新版で揃う。
+# v2 は case 39 で build + register 済み (update のまま)。root は mode によらず消せるので、case 39 と同じく非 root が前提。
+aold="$tmp/aclaude/skills/.agent-tools-old-personal-atomic"
 mkdir -p "$atarget/stuck"
 echo "keep" > "$atarget/stuck/keep"
 chmod 0555 "$atarget/stuck"
 status=0
 run39 --apply > "$tmp/out40" 2>&1 || status=$?
-chmod 0755 "$atarget/stuck"
-[ "$status" -eq 1 ] || fail "unremovable old target should exit 1, got $status: $(cat "$tmp/out40")"
-grep -q "fail: could not remove the old target .*personal-atomic" "$tmp/out40" \
-  || fail "missing the reason for the stop: $(cat "$tmp/out40")"
-[ ! -e "$atarget/personal-atomic" ] || fail "generated must not be copied into the leftover dir (nested copy)"
-[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
-  || fail "no staging dir may remain after the stop: $(ls -A "$tmp/aclaude/skills")"
+if [ -d "$aold/stuck" ]; then chmod 0755 "$aold/stuck"; fi
+if [ -d "$atarget/stuck" ]; then chmod 0755 "$atarget/stuck"; fi
+[ "$status" -eq 1 ] || fail "unremovable old copy should exit 1, got $status: $(cat "$tmp/out40")"
+grep -q "fail: could not remove the copy of the old version .*/\.agent-tools-old-personal-atomic" "$tmp/out40" \
+  || fail "the stop must name the leftover old copy: $(cat "$tmp/out40")"
+grep -q "^v2$" "$atarget/SKILL.md" || fail "the new version must be in place after the stop"
+cmp -s "$agen/.agent-tools-managed.yml" "$atarget/.agent-tools-managed.yml" || fail "the new marker must be in place after the stop"
+[ -f "$aold/stuck/keep" ] || fail "the old copy must remain at the old path: $(ls -A "$tmp/aclaude/skills")"
+[ "$(ls -A "$tmp/aclaude/skills" | tr '\n' ' ')" = ".agent-tools-old-personal-atomic personal-atomic " ] \
+  || fail "skills/ must hold only the target and the old copy (no staging dir): $(ls -A "$tmp/aclaude/skills")"
+run39 > "$tmp/out40-next" 2>&1 || fail "sync after the stop should succeed: $(cat "$tmp/out40-next")"
+grep -q "skip: \[claude-code\].*personal-atomic (up-to-date)" "$tmp/out40-next" \
+  || fail "the next sync must see the new version as up-to-date: $(cat "$tmp/out40-next")"
+rm -rf "$aold"
 
 # --- case 41: 正常の create / update の後に一時 dir / 一時 file が残らず、marker と本体が揃う (#431 の 3) ---
 # skill は create (case 40 の残骸を消してから) と update、script は create と update を見る。
@@ -994,5 +1003,91 @@ write_atomic_skill v3
 printf '#!/bin/sh\necho atool v2\n' > "$tmp/arepo/shared/scripts/personal-atool.sh"
 write_atool_manifest
 expect_clean_deploy "update" v3 "echo atool v2"
+
+# 使い方: mode_of <file>  (permission bits を 8 進で出す。mode を 000 にして戻す case が使う)
+mode_of() { ruby -e 'printf("%o", File.stat(ARGV[0]).mode & 0o777)' "$1"; }
+
+# --- case 42: script の本体の copy が失敗したら、旧本体と旧 sidecar はそのまま残り、一時 file も残らない (#469 review) ---
+# fixture: case 41 の配置 (v2) に対して v3 を build + register し、generated の本体を読めなくする。
+printf '#!/bin/sh\necho atool v3\n' > "$tmp/arepo/shared/scripts/personal-atool.sh"
+write_atool_manifest
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+agen_script="$tmp/arepo/generated/claude-code/scripts/personal-atool"
+agen_sidecar="$agen_script.agent-tools-managed.yml"
+tree_snapshot "$ascripts" > "$tmp/out42-before"
+body_mode=$(mode_of "$agen_script")
+chmod 0000 "$agen_script"
+status=0
+run39 --apply > "$tmp/out42" 2>&1 || status=$?
+chmod "$body_mode" "$agen_script"
+[ "$status" -eq 1 ] || fail "script body copy failure should exit 1, got $status: $(cat "$tmp/out42")"
+tree_snapshot "$ascripts" > "$tmp/out42-after"
+cmp -s "$tmp/out42-before" "$tmp/out42-after" \
+  || fail "old body and old sidecar must stay and no staging file may remain: $(diff "$tmp/out42-before" "$tmp/out42-after" || true)"
+
+# --- case 43: sidecar の配置が失敗したら、本体は新・sidecar は旧のまま止まり、取り除いて再実行すると update で収束する (#469 review) ---
+# generated の sidecar を読めなくしても plan が先に読んで止まる (apply に届かない) ので、sidecar の一時 file の path に
+# directory を置いて、本体の配置の後・sidecar の配置の前で止める (本体 → sidecar の順の途中の状態)。
+cp "$ascripts/personal-atool.agent-tools-managed.yml" "$tmp/out43-old-sidecar"
+sidecar_staging="$ascripts/.agent-tools-staging-personal-atool.agent-tools-managed.yml"
+mkdir "$sidecar_staging"
+status=0
+run39 --apply > "$tmp/out43" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "sidecar placement failure should exit 1, got $status: $(cat "$tmp/out43")"
+grep -q "fail: could not remove the leftover staging file .*/\.agent-tools-staging-personal-atool\.agent-tools-managed\.yml" "$tmp/out43" \
+  || fail "the stop must name the sidecar staging file: $(cat "$tmp/out43")"
+grep -q "echo atool v3" "$ascripts/personal-atool" || fail "body must already be the new version when the sidecar placement fails"
+cmp -s "$tmp/out43-old-sidecar" "$ascripts/personal-atool.agent-tools-managed.yml" \
+  || fail "sidecar must stay the old version when its placement fails"
+[ "$(ls -A "$ascripts" | tr '\n' ' ')" = ".agent-tools-staging-personal-atool.agent-tools-managed.yml personal-atool personal-atool.agent-tools-managed.yml " ] \
+  || fail "scripts/ must hold only the body, the sidecar and the directory that blocked the sidecar: $(ls -A "$ascripts")"
+rmdir "$sidecar_staging"
+run39 > "$tmp/out43-next" 2>&1 || fail "sync after the sidecar failure should succeed: $(cat "$tmp/out43-next")"
+grep -q "update: \[claude-code\].*personal-atool" "$tmp/out43-next" \
+  || fail "the old sidecar must make the next sync plan an update: $(cat "$tmp/out43-next")"
+run39 --apply > "$tmp/out43-apply" 2>&1 || fail "re-run should converge: $(cat "$tmp/out43-apply")"
+cmp -s "$agen_sidecar" "$ascripts/personal-atool.agent-tools-managed.yml" || fail "re-run must bring the sidecar to the new version"
+[ "$(ls -A "$ascripts" | tr '\n' ' ')" = "personal-atool personal-atool.agent-tools-managed.yml " ] \
+  || fail "no staging file may remain after convergence: $(ls -A "$ascripts")"
+
+# --- case 44: 一時 dir / 一時 file の path に消せないものがあれば、何も書かずに止まる (#469 review) ---
+# 44a: skill。一時 dir の path に消せない dir (書き込み不可の subdir の中に file) を置く。前回の残りなら消して使うが、
+# 消せなければ止める (残った dir の中へ入れ子に copy しない)。
+write_atomic_skill v4
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+astaging="$tmp/aclaude/skills/.agent-tools-staging-personal-atomic"
+mkdir -p "$astaging/stuck"
+echo "keep" > "$astaging/stuck/keep"
+chmod 0555 "$astaging/stuck"
+tree_snapshot "$atarget" > "$tmp/out44a-before"
+status=0
+run39 --apply > "$tmp/out44a" 2>&1 || status=$?
+chmod 0755 "$astaging/stuck"
+[ "$status" -eq 1 ] || fail "unremovable staging dir should exit 1, got $status: $(cat "$tmp/out44a")"
+grep -q "fail: could not remove the leftover staging dir .*/\.agent-tools-staging-personal-atomic" "$tmp/out44a" \
+  || fail "the stop must name the staging dir: $(cat "$tmp/out44a")"
+tree_snapshot "$atarget" > "$tmp/out44a-after"
+cmp -s "$tmp/out44a-before" "$tmp/out44a-after" || fail "target must not change when the staging dir cannot be removed"
+[ ! -e "$astaging/personal-atomic" ] || fail "generated must not be copied into the leftover staging dir"
+rm -rf "$astaging"
+run39 --apply --quiet > /dev/null
+grep -q "^v4$" "$atarget/SKILL.md" || fail "skill should converge after the staging dir is removed"
+# 44b: script。一時 file の path に directory を置く (create の状態)。rm_f は directory を消せず、cp はその中へ入れ子に
+# copy し、create なら続く rename が配置先に directory を置いて成功と出てしまう。
+rm -f "$ascripts/personal-atool" "$ascripts/personal-atool.agent-tools-managed.yml"
+mkdir "$ascripts/.agent-tools-staging-personal-atool"
+status=0
+run39 --apply > "$tmp/out44b" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "directory at the staging file path should exit 1, got $status: $(cat "$tmp/out44b")"
+grep -q "fail: could not remove the leftover staging file .*/\.agent-tools-staging-personal-atool" "$tmp/out44b" \
+  || fail "the stop must name the staging file: $(cat "$tmp/out44b")"
+[ ! -e "$ascripts/personal-atool" ] || fail "nothing may be placed at the script path when the staging path is taken"
+[ ! -e "$ascripts/personal-atool.agent-tools-managed.yml" ] || fail "no sidecar may be written when the body was not placed"
+[ -z "$(ls -A "$ascripts/.agent-tools-staging-personal-atool")" ] || fail "generated must not be copied into the directory at the staging path"
+rmdir "$ascripts/.agent-tools-staging-personal-atool"
+run39 --apply --quiet > /dev/null
+[ -x "$ascripts/personal-atool" ] || fail "script should converge after the directory is removed"
 
 echo "ok: sync self-test passed"

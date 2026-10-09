@@ -32,8 +32,9 @@ require_relative "plan_report"
 module Sync
   TOOLS = ArtifactTargets::TOOLS
 
-  # apply で配置先を安全に入れ替えられないときの error (#431 の 3): 旧 dir や前回の一時 dir を消しきれない。
-  # main が `fail:` の行と exit 1 で止める (build の OutputPathError と同じ伝え方)。
+  # apply で配置先を安全に入れ替えられないときの error (#431 の 3): 前回の残り (一時 dir / file、退避した旧 dir)
+  # や、新版を置いた後の退避した旧 dir を消しきれない。main が `fail:` の行と exit 1 で止める (build の
+  # OutputPathError と同じ伝え方)。
   class ApplyError < StandardError; end
 
   # code は reason (人間向け表示文言) と対になる機械可読な skip 理由。status が contract
@@ -129,38 +130,62 @@ module Sync
 
     private
 
-    # apply の一時 dir / file の path。配置先と同じ親 dir に置く (rename が同じ filesystem の中で済む)。
-    # `personal-` で始めないので plan / prune / status / doctor の走査 (personal-*) には拾われない。pid を
-    # 含めず固定の名前にして、前回の中断 (kill 等で ensure が走らなかったとき) の残りを次の run が同じ名前で
-    # 見つけて消せるようにする (同時実行は前提にしない。docs/sync-policy.md の TOCTOU の項と同じ立場)。
-    def staging_path(target)
-      File.join(File.dirname(target), ".agent-tools-staging-#{File.basename(target)}")
+    # apply の作業用 path (一時 dir / file = staging、退避した旧 dir = old)。配置先と同じ親 dir に置く (rename が
+    # 同じ filesystem の中で済む)。`personal-` で始めないので plan / prune / status / doctor の走査 (personal-*)
+    # には拾われない。pid を含めず固定の名前にして、前回の中断 (kill 等で ensure が走らなかったとき) の残りを
+    # 次の run が同じ名前で見つけて消せるようにする (同時実行は前提にしない。docs/sync-policy.md の TOCTOU の項と
+    # 同じ立場)。
+    def work_path(target, label)
+      File.join(File.dirname(target), ".agent-tools-#{label}-#{File.basename(target)}")
     end
 
-    # skill (directory) の create / update。generated を一時 dir に copy してから旧 dir を消し、rename で
-    # 入れ替える。marker は一時 dir の中にあるので、rename の時点で初めて配置先として有効になる (copy の途中で
-    # 止まっても marker だけの dir は残らず、旧版はそのまま)。rm_rf は削除の失敗を握りつぶすので、消えたことを
-    # 確かめてから rename する (残った dir に cp_r すると入れ子に copy される。build.rb と同じ検査)。
-    # 例外のときも一時 dir は片付ける (#431 の 3)。
+    # skill (directory) の create / update。generated を一時 dir に copy し、旧 dir を退避先に rename で退け、
+    # 一時 dir を rename で配置先に置いてから、退避した旧 dir を消す (退避 → 配置 → 削除)。配置先が無い時間は
+    # 2 つの rename の間だけで、marker は一時 dir の中にあるので rename で初めて有効になる。copy の途中で
+    # 止まれば旧版はそのまま、配置の rename に失敗すれば退避した旧版を戻す。旧 dir を消し残しても新版は配置済み
+    # なので、残った写しの path を伝えて止める (rm_rf は削除の失敗を握りつぶす。build.rb と同じ検査)。
+    # 例外のときも一時 dir は片付ける (#431 の 3, #469 review)。
     def replace_skill_dir(gen, target)
       FileUtils.mkdir_p(File.dirname(target))
-      staging = staging_path(target)
-      remove_dir!(staging, "the leftover staging dir")
+      staging = work_path(target, "staging")
+      old = work_path(target, "old")
+      unless removed?(staging)
+        raise ApplyError, "could not remove the leftover staging dir #{staging}; the new version was not applied"
+      end
+      unless removed?(old)
+        raise ApplyError,
+              "could not remove the leftover copy of the old version #{old}; the new version was not applied"
+      end
       begin
         FileUtils.cp_r(gen, staging)
-        remove_dir!(target, "the old target")
-        File.rename(staging, target)
+        File.rename(target, old) if File.exist?(target)
+        begin
+          File.rename(staging, target)
+        rescue SystemCallError
+          # 新版を置けなかったので、退避した旧版を戻してから伝える (配置先を欠落させない)。
+          File.rename(old, target) if File.exist?(old) && !File.exist?(target)
+          raise
+        end
       ensure
         FileUtils.rm_rf(staging)
       end
+      return if removed?(old)
+
+      raise ApplyError,
+            "could not remove the copy of the old version #{old}; the new version is in place, remove the copy by hand"
     end
 
     # 単一 file の create / update。一時 file に copy し、mode があれば付けてから rename で入れ替える。cp は
     # 新規 file の mode を source に合わせる (umask で落とす) ので、mode を渡さない sidecar marker は従来の
-    # cp と同じ mode になる。例外のときも一時 file は片付ける (#431 の 3)。
+    # cp と同じ mode になる。一時 file の path に directory や消せない file があれば止める (rm_f は失敗を
+    # 握りつぶし、cp は directory の中へ入れ子に copy して、create なら rename が配置先に directory を置く)。
+    # 例外のときも一時 file は片付ける (#431 の 3, #469 review)。
     def replace_file(gen, target, mode = nil)
-      staging = staging_path(target)
+      staging = work_path(target, "staging")
       FileUtils.rm_f(staging)
+      if File.exist?(staging)
+        raise ApplyError, "could not remove the leftover staging file #{staging}; the new version was not applied"
+      end
       begin
         FileUtils.cp(gen, staging)
         File.chmod(mode, staging) if mode
@@ -170,13 +195,11 @@ module Sync
       end
     end
 
-    # rm_rf は削除の失敗 (書き込み不可の dir の中の file など) を握りつぶす。消えたことを確かめ、残っていれば
-    # ApplyError で止める (build.rb の旧い出力 dir の検査と同じ)。
-    def remove_dir!(path, what)
+    # rm_rf は削除の失敗 (書き込み不可の dir の中の file など) を握りつぶすので、消えたことを返り値で確かめる
+    # (build.rb の旧い出力 dir の検査と同じ)。
+    def removed?(path)
       FileUtils.rm_rf(path)
-      return unless File.exist?(path)
-
-      raise ApplyError, "could not remove #{what} #{path}; the new version was not applied"
+      !File.exist?(path)
     end
 
     # catalog を source of truth として読む (target-artifact 単位)。不在 / version 不一致 /

@@ -32,11 +32,14 @@ default は必ず conservative にします。
     本体先頭の 1 行 JS ブロックコメントで、sidecar は無い。connect 不要で、未配置なら sync が
     `plugins/` を mkdir_p して直接 create する。詳細は下記「v1 OpenCode targets」。
 - apply の書き込み (skill / script)。skill は generated を配置先と同じ親 dir の一時 dir
-  (`.agent-tools-staging-<name>`) に copy し、旧 dir を `rm_rf` してから rename で入れ替える (marker は
-  一時 dir の中にあり、rename で初めて配置先として有効になる)。`rm_rf` が旧 dir を消し残したら、一時 dir を
-  片付けて `fail:` で止める (exit 1。残った dir の中へ入れ子に copy しない)。script は本体 → sidecar marker の
-  順に、それぞれ一時 file に書いて rename する。create の途中で止まると marker の無い本体が残り、次の sync は
-  unmanaged の conflict で止まる (fail-closed)。
+  (`.agent-tools-staging-<name>`) に copy し、旧 dir を `.agent-tools-old-<name>` に rename で退避してから
+  一時 dir を rename で配置先に置き、最後に退避した旧 dir を消す (退避 → 配置 → 削除。配置先が無い時間は
+  2 つの rename の間だけで、marker は一時 dir の中にあり rename で初めて有効になる)。copy の途中で止まれば
+  旧版はそのまま、配置の rename に失敗すれば退避した旧版を戻す。前回の残り (一時 dir / 退避 dir) を消せなければ
+  何も書かずに `fail:` で止める (exit 1)。退避した旧 dir を消し残したら、新版は配置済みのまま `fail:` で止め、
+  旧の写しの path を出す (手で消す。次の sync は新版を up-to-date と見る)。script は本体 → sidecar marker の
+  順に、それぞれ一時 file に書いて rename する (一時 file の path に directory や消せない file があれば止める)。
+  create の途中で止まると marker の無い本体が残り、次の sync は unmanaged の conflict で止まる (fail-closed)。
 - 走査する tool と kind の組は `ArtifactTargets::TOOL_KINDS` に従う (plan も prune も)。
   codex / claude-code は skill / instruction / script、opencode は plugin だけで、opencode home の
   `skills/` と `agent-tools/scripts/` は一切走査しない (#295)。
