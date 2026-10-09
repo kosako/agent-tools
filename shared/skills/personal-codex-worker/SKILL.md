@@ -94,8 +94,9 @@ orchestrator が行います。
 検査するので **§3 の clone を作ってから** 実行します (順番は `LAUNCH.md`)。
 
 - exit 1 (BLOCKED): `blocked_at` (asymmetry / capability) と `reason` をそのまま `Blocked at: preflight`
-  として返す。Codex の session 内 (`CODEX_SANDBOX` / `CODEX_THREAD_ID`) からの起動は非対称なので
-  常に BLOCKED になる (委譲は Claude → Codex の一方通行。Codex 側から Claude は起動できない)。
+  として返す。Codex の session 内 (`CODEX_SANDBOX` / `CODEX_THREAD_ID` が非空。空の値は無い扱い。
+  `docs/git-hook-gates.md` の env marker の読み方) からの起動は非対称なので常に BLOCKED になる
+  (委譲は Claude → Codex の一方通行。Codex 側から Claude は起動できない)。
 - exit 2 (検査できない): user config か worker 用 profile の top-level を安全に読めない等。`--model` /
   `--effort` を明示して再実行できるが、値は現在の user selection (Codex の設定) から人が示したものだけを
   使い、推測で model を選ばない。示されなければ `Blocked at: preflight`。

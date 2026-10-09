@@ -182,6 +182,13 @@ AI agent セッション由来の commit に相互レビュー routing の正本
 | `AGENT_TOOLS_OPENCODE` のみ (#295。OpenCode の plugin が model の bash に立てる) | name が `OpenCode (<provider>/<model>)` のトレーラ 1 本以上 |
 | 複数 (nested 実行: Claude → codex exec 等) | env にある agent のどれかの有効なトレーラ 1 本以上 (env に無い agent のトレーラだけでは通さない) |
 
+- **env marker は repo 全体で「非空なら立っている」と読む** (#431)。空の値は無い扱いで、key の有無では
+  判定しない。この読み方は、この gate、`personal-tool-call-record-hook`、`personal-codex-worker-preflight`
+  (Codex の session 内からの起動を止める asymmetry の判定)、skill の session 判定 (`personal-review-request` /
+  `personal-grill-me` の相談) で共通。理由は、OpenCode の plugin が model の bash で他の agent の marker を
+  空文字にして消した扱いにするため (下の「漏れ対策」。`shell.env` では変数を消せない)。key の有無で読む
+  箇所が 1 つでもあると、その箇所は OpenCode の session を Claude / Codex の session と誤判定する。
+  session を判定する skill は OpenCode の marker (`OPENCODE` / `AGENT_TOOLS_OPENCODE`) を先に見る。
 - AI トレーラの email は no-reply 形式 (`no-?reply` を含む) のみ許可。この regex が
   「email は公開してよい no-reply / bot 用に限る」(operating-rules) の機械判定可能な
   床であり、**許可 email 形式の policy source はこの gate が SSOT**。

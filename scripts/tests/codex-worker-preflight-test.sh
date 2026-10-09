@@ -601,6 +601,13 @@ set -e
 [ "$rc" -eq 1 ] || fail "CODEX_THREAD_ID must be BLOCKED (rc=$rc): $out"
 echo "$out" | grep -q "BLOCKED (asymmetry)" || fail "should name asymmetry for CODEX_THREAD_ID: $out"
 
+# 目印は非空で読む (#431): 空の値 (OpenCode の plugin が消した扱いにした目印) では asymmetry で止めない
+set +e
+out=$(env CODEX_SANDBOX= CODEX_THREAD_ID= PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" --clone "$clone" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "empty markers must not be BLOCKED as asymmetry (rc=$rc): $out"
+
 # --json でも BLOCKED は JSON で返る (exit 1 のまま、reason も載る)
 set +e
 out=$(env -u CODEX_THREAD_ID CODEX_SANDBOX=1 PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" --json 2>/dev/null)

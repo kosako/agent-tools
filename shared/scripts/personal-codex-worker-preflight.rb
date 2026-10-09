@@ -41,7 +41,7 @@
 # 1 行で、charset は `[A-Za-z0-9._-]+` に限る。
 #
 # 判定:
-# - exit 1 (BLOCKED): Codex の session 内 (CODEX_SANDBOX / CODEX_THREAD_ID) から呼ばれた
+# - exit 1 (BLOCKED): Codex の session 内 (CODEX_SANDBOX / CODEX_THREAD_ID が非空) から呼ばれた
 #   (委譲は Claude → Codex の一方通行) / codex CLI が無い・版が読めない / `codex exec --help` に
 #   要る flag が無い / `codex features list` に disable 対象の feature 行が無い。Codex の 3 command
 #   (`--version` / `exec --help` / `features list`) は exit 0 のときだけ出力を信用する
@@ -73,6 +73,11 @@ module CodexWorkerPreflight
   GIT_MUTABLE_FILES = %w[HEAD index COMMIT_EDITMSG ORIG_HEAD packed-refs].freeze
   GIT_MUTABLE_DIRS = %w[objects refs logs].freeze
   MAX_CHANGED_PATHS = 20
+
+  # Codex の session の目印。非空なら立っていると読む (空の値は無い扱い。repo 全体の契約は
+  # docs/git-hook-gates.md)。OpenCode の plugin は model の bash で他の agent の目印を空文字にして
+  # 消した扱いにするので、key の有無で見ると OpenCode の session を Codex の session と誤判定する (#431)。
+  CODEX_MARKERS = %w[CODEX_SANDBOX CODEX_THREAD_ID].freeze
 
   # 起動時に `--disable` で外す feature。`codex features list` に行が無ければ BLOCKED
   # (存在しない feature を disable しようとして CLI が止まる形へ倒さない)。
@@ -516,7 +521,7 @@ module CodexWorkerPreflight
   end
 
   def inspect_environment(opts)
-    if ENV.key?("CODEX_SANDBOX") || ENV.key?("CODEX_THREAD_ID")
+    if CODEX_MARKERS.any? { |k| !ENV[k].to_s.empty? }
       raise Blocked, "asymmetry: Codex の session 内から worker は起動しない (委譲は Claude → Codex の一方通行)"
     end
 
