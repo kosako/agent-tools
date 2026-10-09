@@ -461,6 +461,76 @@ echo "$out" | grep -q "broken-re" || fail "broken regex entry should be named: $
 [ "${#out}" -lt 3500 ] || fail "total output should be capped (R1): length=${#out}"
 echo "$out" | grep -q "truncated" || fail "total cap should be visible: $out"
 
+# ---- #430 の 4: 起動時の SystemCallError (ENOTDIR 等) は無言の exit 0 ではなく spawn 失敗として可視化し、他の check の結果も出す ----
+: > "$tmp/plainfile"
+ruby -rjson -e '
+File.write(ARGV[3], JSON.generate({ARGV[0] => {"qa_checks" => [
+  {"name" => "notdir", "command" => [ARGV[1]]},
+  {"name" => "fake-suite", "command" => [ARGV[2]]}
+]}}))
+' "$repo_real" "$tmp/plainfile/under-a-file" "$tmp/fake-check" "$conf"
+rm -rf "$tmp/qa-state"
+: > "$tmp/check-fail"
+echo enotdir >> "$repo/u.txt"
+set +e
+out=$(cd "$repo" && run_qa false 2>"$tmp/qa-enotdir.err")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "#430: ENOTDIR check must not hide the other failing check (rc=$rc): $out $(cat "$tmp/qa-enotdir.err")"
+grep -q "fake-suite" "$tmp/qa-enotdir.err" || fail "#430: the failing check must still be reported alongside ENOTDIR: $(cat "$tmp/qa-enotdir.err")"
+grep -q "notdir" "$tmp/qa-enotdir.err" || fail "#430: the ENOTDIR check must be named as missing: $(cat "$tmp/qa-enotdir.err")"
+rm -f "$tmp/check-fail"
+# ENOTDIR だけなら警告に降格して block しない
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "notdir", "command" => [ARGV[1]]}]}}))
+' "$repo_real" "$tmp/plainfile/under-a-file" "$conf"
+rm -rf "$tmp/qa-state"
+echo enotdir2 >> "$repo/u.txt"
+set +e
+out=$(cd "$repo" && run_qa false 2>/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "#430: ENOTDIR alone must not block (rc=$rc)"
+assert_qa_warning "$out"
+echo "$out" | grep -q "実行できません" || fail "#430: ENOTDIR should warn as missing: $out"
+
+# fast-edit-check: ENOTDIR の command は無言ではなく「実行できません」を出し、数値の name + 壊れた regex でも落ちない
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"edit_checks" => [
+  {"name" => "notdir", "pattern" => "\\.rb$", "command" => [ARGV[1]]},
+  {"name" => 42, "pattern" => "([", "command" => [ARGV[1]]}
+]}}))
+' "$repo_real" "$tmp/plainfile/under-a-file" "$conf"
+out=$(run_edit "$repo/a.rb") || fail "#430: edit-check with an ENOTDIR command should exit 0"
+echo "$out" | grep -q "実行できません" || fail "#430: ENOTDIR edit check must be visible: $out"
+echo "$out" | grep -q "edit_checks\[1\]" || fail "#430: a non-string name with a broken regex must be named by index: $out"
+
+# ---- #430 の 5: 指紋の diff の pin (--no-ext-diff / --no-color) ----
+# 外部 diff の固定出力を指紋に使うと、内容を変えても指紋が同じになり、fail 済みの cache で再検査されない。
+pins_cfg="$tmp/gitconfig-pins"
+cp "$GIT_CONFIG_GLOBAL" "$pins_cfg"
+git config --file "$pins_cfg" color.ui always
+extdiff="$tmp/extdiff"
+printf '#!/bin/sh\nprintf %%s "diff --git a/x b/x\\n--- a/x\\n+++ b/x\\n@@ -0,0 +1,1 @@\\n+fixed external diff output\\n"\n' > "$extdiff"
+chmod +x "$extdiff"
+git config --file "$pins_cfg" diff.external "$extdiff"
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "fake-suite", "command" => [ARGV[1]]}]}}))
+' "$repo_real" "$tmp/fake-check" "$conf"
+rm -rf "$tmp/qa-state"
+(cd "$repo" && git add -A && git commit -qm "pins base" && git checkout -q -- .)
+echo pins-v1 > "$repo/base.txt"   # tracked file の unstaged な変更 (diff HEAD に出る)
+: > "$tmp/check-fail"
+set +e
+(cd "$repo" && export GIT_CONFIG_GLOBAL="$pins_cfg" && run_qa false >/dev/null 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "#430: failing check under pinned diff should block first (rc=$rc)"
+rm -f "$tmp/check-fail"
+echo pins-v2 > "$repo/base.txt"   # 内容を変える → 指紋が変わり、check が再び走って pass する
+out=$(cd "$repo" && export GIT_CONFIG_GLOBAL="$pins_cfg" && run_qa false 2>/dev/null) || fail "#430: content change must re-run the check and pass"
+[ -z "$out" ] || fail "#430: with the diff pinned, a content change must produce a fresh pass (no cached failure warning): $out"
+
 ruby "$script_dir/fast-edit-check-payload-test.rb" "$edit_src"
 
 echo "ok: quality-loop-hooks self-test"

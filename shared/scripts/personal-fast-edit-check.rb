@@ -167,22 +167,34 @@ module FastEditCheck
       begin
         matched << c if Regexp.new(c["pattern"]).match?(file)
       rescue RegexpError
-        invalid << (c["name"] || "edit_checks[#{i}]") + " (壊れた regex)"
+        invalid << check_name(c, i) + " (壊れた regex)"
       end
     end
     [matched, invalid]
   end
 
+  # 表示用の名前。name が文字列でない entry (数値など) でも連結で落ちないよう、文字列に限って使う (#430 の 4)。
+  def check_name(check, index)
+    name = check["name"]
+    name.is_a?(String) && !name.empty? ? name : "edit_checks[#{index}]"
+  end
+
   def run_check(check, file, repo_root)
     out = IO.popen(check["command"] + [file], chdir: repo_root, err: %i[child out], &:read)
     status = $?.exitstatus
-    { name: check["name"] || check["command"].first, ok: status == 0,
+    { name: display_name(check), ok: status == 0,
       output: out.to_s, spawn_failed: status.nil? }
-  rescue Errno::ENOENT, Errno::EACCES, Errno::ENOEXEC => e
-    # コマンド不在だけでなく実行権限喪失・不正な実行形式も spawn 失敗として可視化する
-    # (包括 rescue の無言 exit 0 に落とすと check の恒久不活性に気づけない)
-    { name: check["name"] || check["command"].first, ok: false,
+  rescue SystemCallError => e
+    # コマンド不在だけでなく実行権限喪失・不正な実行形式・path の途中が file (ENOTDIR)・symlink の loop (ELOOP)
+    # など、起動時の SystemCallError はすべて spawn 失敗として可視化する (包括 rescue の無言 exit 0 に落とすと
+    # check の恒久不活性に気づけない。#430 の 4)
+    { name: display_name(check), ok: false,
       output: "(check を実行できません: #{e.class})", spawn_failed: true }
+  end
+
+  def display_name(check)
+    name = check["name"]
+    name.is_a?(String) && !name.empty? ? name : check["command"].first
   end
 
   def truncate(text)

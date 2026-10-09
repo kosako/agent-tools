@@ -161,6 +161,8 @@ module ChangedScopeQa
     unborn = head_status.exitstatus == 1
     return nil unless head_status.success? || unborn
 
+    # --no-ext-diff: 外部 diff の出力を指紋に使うと、内容が変わっても指紋が同じになり cache で false pass になる。
+    # --no-color: 色の設定で指紋が変わらないようにする (test で固定。#430 の 5)
     diff = unborn ? unborn_diff(root) : git_output(root, "diff", "HEAD", "--no-color", "--no-ext-diff")
     return nil if diff.nil?
 
@@ -220,8 +222,10 @@ module ChangedScopeQa
     status = $?
     reason = status.signaled? ? "terminated by SIG#{Signal.signame(status.termsig)}" : "exit #{status.exitstatus}"
     { name: check_name(check), ok: status.success?, output: out.to_s, reason: reason, spawn_failed: false }
-  rescue Errno::ENOENT, Errno::EACCES, Errno::ENOEXEC => e
-    # 不在だけでなく権限喪失・不正形式も spawn 失敗として可視化する (無言の恒久不活性を防ぐ)
+  rescue SystemCallError => e
+    # 不在だけでなく権限喪失・不正形式・path の途中が file (ENOTDIR)・symlink の loop (ELOOP) など、起動時の
+    # SystemCallError はすべて spawn 失敗として可視化する (包括 rescue の無言 exit 0 に落とすと、その repo の
+    # 他の check の結果も出ないまま恒久不活性になる。#430 の 4)
     { name: check_name(check), ok: false, output: "(#{e.class})", reason: "spawn failed (#{e.class})",
       spawn_failed: true }
   end

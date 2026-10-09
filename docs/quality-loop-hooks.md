@@ -104,7 +104,9 @@
     (新しい scope なら check は走らせ、失敗は `systemMessage` のユーザー向け警告で返す)。
   - 同一 scope 指紋の再 Stop は check を**再実行しない** (pass 済み = 無言 / fail 済み =
     ユーザー向け警告のみ。block は新しい scope に 1 回だけ → 直せない失敗は人間に戻る)。
-  - check コマンド不在・spawn 失敗 (起動時の例外) はユーザー向け警告に降格して block しない。
+  - check コマンド不在・spawn 失敗 (起動時の例外。不在・権限・不正な実行形式のほか、path の途中が
+    file や symlink の loop など `SystemCallError` 全般。#430) はユーザー向け警告に降格して block しない。
+    同じ repo の他の check は通常どおり走り、その結果 (失敗なら block) も出す。
     起動した check が signal で終わったのは spawn 失敗ではなく実 failure として扱い、block の要約に
     signal 名を出す (#373。hook の timeout や中断では hook 自身も止まって state を書かないので、ここで
     観測するのは check だけが crash や外からの kill で落ちたとき)。未実行の
