@@ -904,4 +904,95 @@ runw --prune --apply > "$tmp/outw-apply" 2>&1 || fail "prune apply with a glob-s
 [ ! -e "$whome/claude/skills/personal-wgone" ] || fail "orphan under a glob-special home should be deleted"
 [ -f "$whome/claude/skills/personal-wkeep/SKILL.md" ] || fail "prune under a glob-special home must keep the catalog-backed skill"
 
+# --- case 39: update の途中で generated の copy が失敗しても、配置先は旧版のまま残り、一時 dir も残らない (#431 の 3) ---
+# fixture: directory skill を v1 で配置し、v2 を build + register してから generated の SKILL.md を読めなくする。
+# 旧実装は rm_rf(target) → cp_r なので、copy が途中で落ちると配置先が marker だけ (または空) になり、次の sync は
+# それを up-to-date と見る。root は mode によらず読めるので再現できない (黙って通さず、理由を出して fail)。
+[ "$(id -u)" -ne 0 ] || fail "case 39 needs a non-root user: root reads a mode-000 file, so the copy failure cannot be reproduced"
+mkdir -p "$tmp/arepo/shared/skills/personal-atomic" "$tmp/arepo/shared/scripts" "$tmp/acodex" "$tmp/aclaude"
+write_atomic_skill() {
+  cat > "$tmp/arepo/shared/skills/personal-atomic/SKILL.md" <<EOS
+---
+name: personal-atomic
+description: demo skill atomic
+---
+$1
+EOS
+}
+write_atomic_skill v1
+write_asset_manifest "$tmp/arepo/shared/skills/personal-atomic/asset.yml" \
+  personal-atomic skill public shared/skills/personal-atomic directory claude-code
+run39() { "$sync" --root "$tmp/arepo" --codex-home "$tmp/acodex" --claude-home "$tmp/aclaude" --opencode-home "$tmp/aopencode" "$@"; }
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+run39 --apply --quiet > /dev/null
+atarget="$tmp/aclaude/skills/personal-atomic"
+agen="$tmp/arepo/generated/claude-code/skills/personal-atomic"
+grep -q "^v1$" "$atarget/SKILL.md" || fail "case 39 fixture should deploy v1"
+tree_snapshot "$atarget" > "$tmp/out39-before"
+write_atomic_skill v2
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+chmod 0000 "$agen/SKILL.md"
+status=0
+run39 --apply > "$tmp/out39" 2>&1 || status=$?
+chmod 0644 "$agen/SKILL.md"
+[ "$status" -eq 1 ] || fail "copy failure during update should exit 1, got $status: $(cat "$tmp/out39")"
+tree_snapshot "$atarget" > "$tmp/out39-after"
+cmp -s "$tmp/out39-before" "$tmp/out39-after" \
+  || fail "target must keep the old version when the copy fails: $(diff "$tmp/out39-before" "$tmp/out39-after" || true)"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "no staging dir may remain next to the target after a failed copy: $(ls -A "$tmp/aclaude/skills")"
+run39 > "$tmp/out39-next" 2>&1 || fail "sync after a failed update should succeed: $(cat "$tmp/out39-next")"
+grep -q "update: \[claude-code\].*personal-atomic" "$tmp/out39-next" \
+  || fail "the next sync must still plan the update, not up-to-date: $(cat "$tmp/out39-next")"
+
+# --- case 40: 旧 dir を消し残したら、入れ子に copy せず理由を出して止まり、一時 dir も残らない (#431 の 3) ---
+# fixture: 配置済み (v1) の skill の中に書き込み不可の subdir (中に file) を置く。rm_rf はその file を消せず、例外も
+# 出さない。旧実装は残った dir の中へ cp_r が入れ子に copy し、apply は成功と出していた。v2 は case 39 で
+# build + register 済み (update のまま)。root は mode によらず消せるので、case 39 と同じく非 root が前提。
+mkdir -p "$atarget/stuck"
+echo "keep" > "$atarget/stuck/keep"
+chmod 0555 "$atarget/stuck"
+status=0
+run39 --apply > "$tmp/out40" 2>&1 || status=$?
+chmod 0755 "$atarget/stuck"
+[ "$status" -eq 1 ] || fail "unremovable old target should exit 1, got $status: $(cat "$tmp/out40")"
+grep -q "fail: could not remove the old target .*personal-atomic" "$tmp/out40" \
+  || fail "missing the reason for the stop: $(cat "$tmp/out40")"
+[ ! -e "$atarget/personal-atomic" ] || fail "generated must not be copied into the leftover dir (nested copy)"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "no staging dir may remain after the stop: $(ls -A "$tmp/aclaude/skills")"
+
+# --- case 41: 正常の create / update の後に一時 dir / 一時 file が残らず、marker と本体が揃う (#431 の 3) ---
+# skill は create (case 40 の残骸を消してから) と update、script は create と update を見る。
+rm -rf "$atarget"
+printf '#!/bin/sh\necho atool v1\n' > "$tmp/arepo/shared/scripts/personal-atool.sh"
+write_atool_manifest() {
+  write_approved_script_manifest "$tmp/arepo" shared/scripts/personal-atool.sh personal-atool personal claude-code
+}
+write_atool_manifest
+ascripts="$tmp/aclaude/agent-tools/scripts"
+# 使い方: expect_clean_deploy <label> <SKILL.md の本文の行> <script の本文の行>
+expect_clean_deploy() {
+  "$build" --root "$tmp/arepo" --quiet > /dev/null
+  "$register" --root "$tmp/arepo" --quiet > /dev/null
+  run39 --apply > "$tmp/out41" 2>&1 || fail "$1 should succeed: $(cat "$tmp/out41")"
+  grep -q "^$2$" "$atarget/SKILL.md" || fail "$1: skill body not deployed"
+  cmp -s "$agen/.agent-tools-managed.yml" "$atarget/.agent-tools-managed.yml" || fail "$1: skill marker must match generated"
+  [ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+    || fail "$1: skills/ must hold only the target (no staging dir): $(ls -A "$tmp/aclaude/skills")"
+  [ -x "$ascripts/personal-atool" ] || fail "$1: script body missing or not executable"
+  grep -q "$3" "$ascripts/personal-atool" || fail "$1: script body not deployed"
+  cmp -s "$tmp/arepo/generated/claude-code/scripts/personal-atool.agent-tools-managed.yml" \
+    "$ascripts/personal-atool.agent-tools-managed.yml" || fail "$1: script sidecar marker must match generated"
+  [ "$(ls -A "$ascripts" | tr '\n' ' ')" = "personal-atool personal-atool.agent-tools-managed.yml " ] \
+    || fail "$1: scripts/ must hold only the body and the sidecar (no staging file): $(ls -A "$ascripts")"
+}
+expect_clean_deploy "create" v2 "echo atool v1"
+write_atomic_skill v3
+printf '#!/bin/sh\necho atool v2\n' > "$tmp/arepo/shared/scripts/personal-atool.sh"
+write_atool_manifest
+expect_clean_deploy "update" v3 "echo atool v2"
+
 echo "ok: sync self-test passed"

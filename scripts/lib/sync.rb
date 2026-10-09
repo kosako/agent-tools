@@ -32,6 +32,10 @@ require_relative "plan_report"
 module Sync
   TOOLS = ArtifactTargets::TOOLS
 
+  # apply で配置先を安全に入れ替えられないときの error (#431 の 3): 旧 dir や前回の一時 dir を消しきれない。
+  # main が `fail:` の行と exit 1 で止める (build の OutputPathError と同じ伝え方)。
+  class ApplyError < StandardError; end
+
   # code は reason (人間向け表示文言) と対になる機械可読な skip 理由。status が contract
   # の target state 判定に読む (#152: 表示文言の変更で contract を壊さないための分離)。
   Plan = Struct.new(:action, :tool, :name, :target, :reason, :kind, :gen, :code) do
@@ -105,11 +109,12 @@ module Sync
           FileUtils.mkdir_p(File.dirname(p.target))
           FileUtils.cp(p.gen, p.target)
         when "script"
-          # script は単一実行ファイル + sidecar marker。本体を実行可能にして配置する。
+          # script は単一実行ファイル + sidecar marker。本体 (実行可能) → marker の順に、それぞれ一時 file に
+          # 書いて rename で入れ替える。create の途中で止まると marker の無い本体が残り、次の sync は unmanaged の
+          # conflict で止まる (fail-closed, #431 の 3)。
           FileUtils.mkdir_p(File.dirname(p.target))
-          FileUtils.cp(p.gen, p.target)
-          File.chmod(0o755, p.target)
-          FileUtils.cp(ArtifactTargets.sidecar_marker_path(p.gen), ArtifactTargets.sidecar_marker_path(p.target))
+          replace_file(p.gen, p.target, 0o755)
+          replace_file(ArtifactTargets.sidecar_marker_path(p.gen), ArtifactTargets.sidecar_marker_path(p.target))
         when "plugin"
           # plugin は先頭行に marker を持つ単一ファイル。OpenCode が import して読むので
           # 実行ビットは立てない (build と同じ 0644)。
@@ -117,14 +122,62 @@ module Sync
           FileUtils.cp(p.gen, p.target)
           File.chmod(0o644, p.target)
         else
-          FileUtils.rm_rf(p.target)
-          FileUtils.mkdir_p(File.dirname(p.target))
-          FileUtils.cp_r(p.gen, p.target)
+          replace_skill_dir(p.gen, p.target)
         end
       end
     end
 
     private
+
+    # apply の一時 dir / file の path。配置先と同じ親 dir に置く (rename が同じ filesystem の中で済む)。
+    # `personal-` で始めないので plan / prune / status / doctor の走査 (personal-*) には拾われない。pid を
+    # 含めず固定の名前にして、前回の中断 (kill 等で ensure が走らなかったとき) の残りを次の run が同じ名前で
+    # 見つけて消せるようにする (同時実行は前提にしない。docs/sync-policy.md の TOCTOU の項と同じ立場)。
+    def staging_path(target)
+      File.join(File.dirname(target), ".agent-tools-staging-#{File.basename(target)}")
+    end
+
+    # skill (directory) の create / update。generated を一時 dir に copy してから旧 dir を消し、rename で
+    # 入れ替える。marker は一時 dir の中にあるので、rename の時点で初めて配置先として有効になる (copy の途中で
+    # 止まっても marker だけの dir は残らず、旧版はそのまま)。rm_rf は削除の失敗を握りつぶすので、消えたことを
+    # 確かめてから rename する (残った dir に cp_r すると入れ子に copy される。build.rb と同じ検査)。
+    # 例外のときも一時 dir は片付ける (#431 の 3)。
+    def replace_skill_dir(gen, target)
+      FileUtils.mkdir_p(File.dirname(target))
+      staging = staging_path(target)
+      remove_dir!(staging, "the leftover staging dir")
+      begin
+        FileUtils.cp_r(gen, staging)
+        remove_dir!(target, "the old target")
+        File.rename(staging, target)
+      ensure
+        FileUtils.rm_rf(staging)
+      end
+    end
+
+    # 単一 file の create / update。一時 file に copy し、mode があれば付けてから rename で入れ替える。cp は
+    # 新規 file の mode を source に合わせる (umask で落とす) ので、mode を渡さない sidecar marker は従来の
+    # cp と同じ mode になる。例外のときも一時 file は片付ける (#431 の 3)。
+    def replace_file(gen, target, mode = nil)
+      staging = staging_path(target)
+      FileUtils.rm_f(staging)
+      begin
+        FileUtils.cp(gen, staging)
+        File.chmod(mode, staging) if mode
+        File.rename(staging, target)
+      ensure
+        FileUtils.rm_f(staging)
+      end
+    end
+
+    # rm_rf は削除の失敗 (書き込み不可の dir の中の file など) を握りつぶす。消えたことを確かめ、残っていれば
+    # ApplyError で止める (build.rb の旧い出力 dir の検査と同じ)。
+    def remove_dir!(path, what)
+      FileUtils.rm_rf(path)
+      return unless File.exist?(path)
+
+      raise ApplyError, "could not remove #{what} #{path}; the new version was not applied"
+    end
 
     # catalog を source of truth として読む (target-artifact 単位)。不在 / version 不一致 /
     # 壊れた JSON は catalog なし扱い (Catalog.read が fail-closed に判定)。
@@ -510,6 +563,11 @@ module Sync
 
     PlanReport.finish(plans, runner, apply: apply, quiet: quiet,
                       change_actions: %w[create update delete])
+  rescue ApplyError => e
+    # 配置先を安全に入れ替えられないときは、それ以上書かずに理由を出して止める (#431 の 3)。
+    # 表示は他の行と同じく tilde 表記 (PlanReport と同じ正規化)。
+    warn "fail: #{e.message.sub(Dir.home, '~')}"
+    1
   end
 
   USAGE = "usage: sync.sh [--root DIR] [--apply] [--prune] [--codex-home DIR] [--claude-home DIR] " \
