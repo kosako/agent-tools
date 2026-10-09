@@ -59,7 +59,17 @@ ${XDG_STATE_HOME:-~/.local/state}/agent-tools/personal-tool-call-record-hook/<cl
   自動拒否だけで、人が dialog で断った場合・`permissions.deny` の一致・別の PreToolUse hook の deny では
   Post 系も `PermissionDenied` も出ない (下記の時点依存)。集計がこれらを「拒否」と書くことはできない。
 - hook は event をそのまま 1 行ずつ書く。判断 (許可 / 拒否 / 不明) と結果の列を導くのは集計側で、
-  この repo の scope 外 (#454)。
+  この repo の scope 外 (#454。集計 script は #461)。
+- 集計の規則 (2026-10-09 の実測から。#463):
+  1. `tool` が `ToolSearch` の行は除外する。deferred な MCP tool では model が先に `ToolSearch` を呼ぶので、
+     その Pre / Post 行が call の前に混ざる。
+  2. 版は `session_id` で `SessionStart` 行と結合する。無ければ `unknown` (hook が書けなかった session は
+     `SessionStart` 行も残らない)。
+  3. `result: error` を「未実行」と読まない。MCP tool の `isError: true` も Bash の非 0 終了も同じ `error`
+     で、どちらも「実行されて失敗を返した」。`result` だけでは両者を区別できず (tool の種類は `tool` と
+     `mcp_server` で分かる)、`isError` の本文や終了 code などの失敗の詳細は記録しない。
+  4. 同一 `tool_use_id` の Pre / Post の順序は `ts` ではなく追記順で見る (`ts` は秒精度で、同じ call の
+     Pre と Post が同じ `ts` になる)。
 
 ## 登録(dotfiles 側)
 
@@ -95,9 +105,22 @@ Codex への登録 (`~/.codex/hooks.json`、`features.hooks`、hook の trust) �
 - **実測 (2026-10-04、Claude Code 2.1.289 / Codex 0.159.x)**: 同型の記録 script が Claude Code と Codex の
   PreToolUse / PostToolUse で無修正で動き、headless で拒否された call は PreToolUse だけが残った
   (当時の版では `PermissionDenied` が発火しなかった)。
-- **未確認**: `permissions.deny` の一致で PreToolUse が発火するか、MCP tool が error を返したとき
-  `PostToolUse` と `PostToolUseFailure` のどちらが出るか、Codex の `SessionStart` の有無。本 hook を実際に
-  登録した後の実測は PR と Issue に記録する。
+- **実測 (2026-10-09、Claude Code 2.1.295、headless `-p`、偽の MCP server、`--settings` で rule を渡した
+  11 session。#463)**:
+  - `permissions.deny` の pattern (`Bash(echo *)`、dontAsk) に一致した call は PreToolUse だけが出て、
+    `PermissionDenied` も Post 系も出ない (集計では `unknown`)。MCP tool を名前で deny すると tool 一覧から
+    消えて call 自体が起きず、行は 1 つも残らない。
+  - MCP tool が `isError: true` を返すと `PostToolUseFailure` (`result: error`) が出て `PostToolUse` は
+    出ない。Bash の非 0 終了も同じ `error`。
+  - `PermissionDenied` が出たのは auto mode の classifier の拒否だけ (`reason` は category label のみ)。
+    ask rule に一致して headless で自動拒否された call は PreToolUse だけ。
+  - `duration_ms` は tool の実行時間だけで、permission 判定の待ち (数秒になることがある) を含まない。
+    拒否された call には無い。
+  - 書込先に書けないとき call は止まらず (fail-open)、その session の行は `SessionStart` を含めて残らない。
+    Claude Code は stderr 付きでも hook を success と扱う。
+  - `settings.json` の hooks の変更は、動いている session にも再起動なしで反映された (観測)。
+- **未確認 (2026-10-09 時点)**: auto mode で deny rule に一致したとき、人が dialog で断ったとき、
+  `is_interrupt` (`interrupted`)、subagent 以外の文脈での `agent_type`、Codex の `SessionStart` の有無。
 
 ## Test
 
