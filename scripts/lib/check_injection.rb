@@ -19,21 +19,37 @@ module CheckInjection
   # HTML コメントの本文に在れば hidden とみなす keyword。本文だけに当てる (下の html_comment_positions)。
   HTML_COMMENT_KEYWORDS = /\b(?:ignore|instruction|system\s+prompt|do\s+not\s+tell|secretly)\b/i.freeze
 
-  # `<!--` ... `-->` を String#index で一方向に走査し、本文に keyword を含むコメントの開始位置を返す。
+  # `<!--` ... `-->` を一方向に走査し、本文に keyword を含むコメントの開始位置 (文字 offset) を返す。
   # 1 つの regex で `<!--(?:(?!-->).)*keyword(?:(?!-->).)*-->` と書くと、keyword を含まない開始記号が
   # 多い入力で各開始位置から終端まで backtrack して二次時間になり、gate を長時間占有できる (#459 review)。
-  # 本文は最初の `-->` で閉じる (従来の regex と同じ)。閉じないコメントは一致しない。
+  # 走査は byte 単位の写し (String#b) に対して行う。文字 index の文字列では、非 ASCII の UTF-8 で
+  # String#index と文字単位の slice が位置の変換のために既読部分を再走査し、やはり二次時間になるため。
+  # 報告用の文字 offset は、消費した byte 範囲の文字数を累積して求める (全体で入力の長さに線形)。
+  # 意味: 本文は最初の `-->` で閉じる。終端と重なる opener (`<!-->`) は新しいコメントの開始ではない
+  # (HTML の abrupt close と同じで、その後の text は表示される)。閉じないコメントは一致しない。
+  # 旧 regex は `<!-- <!--> ignore -->` を内側の opener から一致させていたが、これは意図した意味変更。
   def self.html_comment_positions(content)
+    bytes = content.b
     positions = []
-    pos = 0
-    while (start = content.index("<!--", pos))
-      finish = content.index("-->", start + 4)
+    byte_pos = 0
+    char_pos = 0
+    while (start = bytes.index("<!--", byte_pos))
+      finish = bytes.index("-->", start + 4)
       break unless finish
 
-      positions << start if content[(start + 4)...finish].match?(HTML_COMMENT_KEYWORDS)
-      pos = finish + 3
+      char_pos += char_count(bytes, byte_pos, start, content.encoding)
+      body = bytes.byteslice(start + 4, finish - start - 4).force_encoding(content.encoding)
+      positions << char_pos if body.match?(HTML_COMMENT_KEYWORDS)
+      char_pos += char_count(bytes, start, finish + 3, content.encoding)
+      byte_pos = finish + 3
     end
     positions
+  end
+
+  # bytes の [from, to) の範囲の文字数 (encoding で数える)。delimiter は ASCII なので、範囲の両端は
+  # 文字の境界にある (UTF-8 では ASCII の byte が多バイト列の中に現れない)。
+  def self.char_count(bytes, from, to, encoding)
+    bytes.byteslice(from, to - from).force_encoding(encoding).length
   end
 
   PATTERNS = [

@@ -344,4 +344,20 @@ ruby -rtimeout -r"$script_dir/../lib/check_injection" -e '
 ' "$tmp/manystarts" > "$tmp/out-manystarts" 2>&1 \
   || fail "comment scan must stay linear and report each keyword comment once: $(cat "$tmp/out-manystarts")"
 
+# --- case: 非 ASCII の入力でもコメントの走査は線形で、多バイト文字の前でも行番号が合う (#427 の 6、Codex review round 2) ---
+# 文字 index の文字列では、String#index と文字単位の slice が位置の変換のために既読部分を再走査し、
+# `あ<!-- nothing -->` を大量に並べた入力で二次時間になっていた (80000 行で約 60 秒。byte 単位の走査では 1 秒未満)。
+# 終端と重なる opener (`<!-->`) は新しい開始に数えない (HTML の abrupt close と同じ。意図した意味変更)。
+mkdir -p "$tmp/utf8scan/shared/prompts"
+ruby -e 'File.write(ARGV[0], "あ<!-- nothing -->\n" * 80000)' "$tmp/utf8scan/shared/prompts/personal-wide.md"
+printf '\346\227\245\346\234\254\350\252\236\n<!-- ignore -->\n<!-- <!--> ignore -->\n<!-- a --> <!-- secretly -->\n' \
+  > "$tmp/utf8scan/shared/prompts/personal-lines.md"
+ruby -rtimeout -r"$script_dir/../lib/check_injection" -e '
+  _, findings = Timeout.timeout(30) { CheckInjection::Runner.new(ARGV[0]).run }
+  lines = findings.select { |f| f.category == "hidden" }.map { |f| "#{File.basename(f.path)}:#{f.line}" }.sort
+  expected = %w[personal-lines.md:2 personal-lines.md:4]
+  abort "unexpected hidden findings: #{lines.inspect}" unless lines == expected
+' "$tmp/utf8scan" > "$tmp/out-utf8scan" 2>&1 \
+  || fail "comment scan must stay linear on non-ASCII input and report the right lines: $(cat "$tmp/out-utf8scan")"
+
 echo "ok: check-injection self-test passed"
