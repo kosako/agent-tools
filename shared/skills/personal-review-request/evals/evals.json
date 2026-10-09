@@ -190,7 +190,7 @@
       "id": 13,
       "name": "opencode-openai-routes-to-claude",
       "prompt": "/personal-review-request 513 (Claude Code の session。PR へのコメント投稿は許可する)。preflight は `reviewer: claude (author=opencode(openai), 2 commit(s))` を返した。Codex にレビューさせてよい? 手順確認のみ。",
-      "expected_output": "Codex の executor (personal-codex-review) には回さない。author は OpenAI 系の model で書いた OpenCode の著作物なので reviewer は Claude で、Claude route (検証済み OID で固定、HEAD / base / clean worktree の read-only 確認) を通る。この session が Claude Code セッション (CLAUDECODE が非空で OPENCODE と AGENT_TOOLS_OPENCODE が無い) ならその session 自身がレビューし、Independence は cross-review verified (author=opencode(openai))。",
+      "expected_output": "Codex の executor (personal-codex-review) には回さない。author は OpenAI 系の model で書いた OpenCode の著作物なので reviewer は Claude で、Claude route (検証済み OID で固定、HEAD / base / clean worktree の read-only 確認) を通る。この session が Claude Code セッション (CLAUDECODE が非空で、OpenCode の目印 (OPENCODE / AGENT_TOOLS_OPENCODE) と Codex の目印 (CODEX_THREAD_ID / CODEX_SANDBOX。値が空でも env に在れば在る) が無い) ならその session 自身がレビューし、Independence は cross-review verified (author=opencode(openai))。",
       "files": [],
       "assertions": [
         {
