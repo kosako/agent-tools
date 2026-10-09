@@ -704,6 +704,36 @@ console.log("ok E6 warn path failures are swallowed")
   console.log("ok E7 a failing file does not drop the other files")
 }
 
+// E8: 同名の 2 file (a/index.rb と b/index.rb) が path を含まない同じ出力で失敗しても、要約は file ごとに
+// repo 相対 path の label で区別され、2 件とも足される (#431 の 4)。label が basename だと 2 件が同文になり、
+// E3 の重複除去 (設定エラーのための 1 回だけ) に潰されて 1 件しか届かず、どの file かも分からない。
+// editRepo は mktemp の symlink 越しの path (macOS の /var → /private/var) なので、label が repo root
+// (git が realpath で返す) 基準で相対になることも同時に確かめる。
+{
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, { timeoutMs: { fastEditCheck: REAL_TIMEOUT_MS } }, editRepo)
+  const files = ["a", "b"].map((dir) => {
+    mkdirSync(join(editRepo, dir), { recursive: true })
+    const file = join(editRepo, dir, "index.rb")
+    writeFileSync(file, "puts 1\n")
+    return file
+  })
+  setCheckFails(true)
+  const expected = files.map((file) => expectedEditContext(file))
+  const before = readLines(checkLog).length
+  const output = toolOutput({ files: files.map((filePath) => ({ filePath, type: "update" })) })
+  await runAfter(hooks, homes.real, patchInput(), output, REAL_TIMEOUT_MS, "E8 same basename")
+  setCheckFails(false)
+  for (const [i, rel] of ["a/index.rb", "b/index.rb"].entries()) {
+    assert(expected[i] !== null && expected[i].startsWith(`fast-edit-check: ${rel} への編集`), `E8: the summary for ${files[i]} must be labeled with the repo-relative path ${rel}, got: ${expected[i]}`)
+  }
+  const ran = readLines(checkLog).slice(before)
+  assert(JSON.stringify(ran) === JSON.stringify(files), `E8: both files must be checked, got ${JSON.stringify(ran)}`)
+  assert(output.output === `${ORIGINAL_OUTPUT}\n\n${expected.join("\n\n")}`, `E8: both same-basename summaries must be appended, got: ${JSON.stringify(output.output)}`)
+  assert(client.calls.length === 0, `E8: no warn expected, got ${client.calls.length}`)
+  console.log("ok E8 same-basename failures are kept apart by their repo-relative labels")
+}
+
 // === 品質ループ: changed-scope-qa (event の session.idle、report-only) ===========================
 
 const qaStateDir = (home) => join(home, ...QA_STATE_REL)
