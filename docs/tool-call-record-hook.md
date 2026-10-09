@@ -66,7 +66,8 @@ ${XDG_STATE_HOME:-~/.local/state}/agent-tools/personal-tool-call-record-hook/<cl
   2. 版は `session_id` で `SessionStart` 行と結合する。無ければ `unknown` (hook が書けなかった session は
      `SessionStart` 行も残らない)。
   3. `result: error` を「未実行」と読まない。MCP tool の `isError: true` も Bash の非 0 終了も同じ `error`
-     で、どちらも「実行されて失敗を返した」。両者は JSONL からは区別できない。
+     で、どちらも「実行されて失敗を返した」。`result` だけでは両者を区別できず (tool の種類は `tool` と
+     `mcp_server` で分かる)、`isError` の本文や終了 code などの失敗の詳細は記録しない。
   4. 同一 `tool_use_id` の Pre / Post の順序は `ts` ではなく追記順で見る (`ts` は秒精度で、同じ call の
      Pre と Post が同じ `ts` になる)。
 
