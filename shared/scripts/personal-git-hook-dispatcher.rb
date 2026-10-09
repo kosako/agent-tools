@@ -18,7 +18,8 @@
 #   commit-msg:  exec <deploy path>/personal-git-hook-dispatcher commit-msg "$@"
 #   他の stage:  exec <deploy path>/personal-git-hook-dispatcher <stage> "$@"
 # gate の無い stage (git の既知の hook 名に限る。GIT_HOOK_STAGES) は gate なしで repo 自身の hook に
-# chain するだけの素通し (#430 の 3)。global hooksPath は shim の無い stage の repo hook を黙って
+# chain するだけの素通し (#430 の 3)。push-to-checkout / proc-receive / fsmonitor-watchman は素通しに
+# 使えない (UNSUPPORTED_STAGES。shim を置かない)。global hooksPath は shim の無い stage の repo hook を黙って
 # 無効にするので、dotfiles 側が全 stage の shim を置けば repo hook の合成が全 stage で成り立つ。
 # 未知の名前は exit 2 (typo を素通りさせない)。
 # gate 本体は dispatcher と同じ directory に配備されている前提 (sync の script 配備先)。
@@ -41,15 +42,21 @@ module GitHookDispatcher
     "commit-msg" => [["personal-public-safety-gate", ["--commit-msg"]], ["personal-ai-trailer-gate", []]],
   }.freeze
 
-  # git が呼ぶ hook の名前 (githooks(5))。この一覧にある stage は、gate が無くても repo hook への chain だけを
-  # 行う (#430 の 3)。一覧に無い名前は unknown として exit 2。
+  # git が呼ぶ hook の名前 (githooks(5)) のうち、「hook が在って何もせず exit 0 で終わる」ことが「hook が無い」と
+  # 同じ意味になるもの。この一覧にある stage は、gate が無くても repo hook への chain だけを行う (#430 の 3)。
+  # 一覧に無い名前は unknown として exit 2。
+  # 除外 (素通しに使えない): push-to-checkout (hook が在ると git は既定の作業ツリーの更新を省くので、repo hook が
+  # 無いまま 0 を返すと push 後に ref と作業ツリーがずれる)、proc-receive (hook が在ると git は hook が protocol で
+  # 結果を返すことを前提にする)、fsmonitor-watchman (hook は決まった形式の出力を返す契約)。これらの shim は置かない。
   GIT_HOOK_STAGES = %w[
     applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg
     commit-msg post-commit pre-rebase post-checkout post-merge pre-push pre-receive update
-    proc-receive post-receive post-update reference-transaction push-to-checkout pre-auto-gc
-    post-rewrite sendemail-validate fsmonitor-watchman p4-changelist p4-prepare-changelist
-    p4-post-changelist p4-pre-submit post-index-change
+    post-receive post-update reference-transaction pre-auto-gc post-rewrite sendemail-validate
+    p4-changelist p4-prepare-changelist p4-post-changelist p4-pre-submit post-index-change
   ].freeze
+
+  # 素通しに使えない stage (上の除外)。unknown と区別して理由を出す。
+  UNSUPPORTED_STAGES = %w[push-to-checkout proc-receive fsmonitor-watchman].freeze
 
   # 再入 sentinel (stage 単位)。repo hook が shim (→ dispatcher) を指す誤設定でも、
   # realpath 比較では検出できない間接参照で無限再帰になる (H206-04)。chain 実行時に
@@ -75,6 +82,11 @@ module GitHookDispatcher
 
   def run(argv)
     stage = argv[0]
+    if UNSUPPORTED_STAGES.include?(stage)
+      warn "git-hook-dispatcher: stage #{stage.inspect} cannot be passed through " \
+           "(a present hook that exits 0 is not the same as no hook); do not install a shim for it"
+      return 2
+    end
     unless GIT_HOOK_STAGES.include?(stage)
       warn "git-hook-dispatcher: unknown stage #{stage.inspect} " \
            "(expected a git hook name; gates: #{STAGE_GATES.keys.join(' / ')})"

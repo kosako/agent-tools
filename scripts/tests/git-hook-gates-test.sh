@@ -1077,7 +1077,9 @@ rc=$?
 set -e
 [ "$rc" -eq 1 ] || fail "#430: HOME shaped like a personal home must be detected via home_needle (rc=$rc): $out"
 echo "$out" | grep -q 'stdin:1: \[home-path\]' || fail "#430: home-path finding missing: $out"
-printf 'see %s/src/x\n' "$ghost_home" | env HOME="$tmp/home" ruby "$pubsafe_src" --stdin >/dev/null 2>&1 \
+# 負例の入力には環境の HOME ($tmp/home) の path も含める。形の制限を外して常に HOME を返す実装なら
+# $tmp/home が home-path として exit 1 になる (個人 home 形以外は対象外、という契約の検証)。
+printf 'see %s/src/x and %s/y\n' "$ghost_home" "$tmp/home" | env HOME="$tmp/home" ruby "$pubsafe_src" --stdin >/dev/null 2>&1 \
   || fail "#430: HOME outside the personal-home shape must not derive a needle"
 
 # ---- #430 の 5: diff の pin (--no-color / --no-ext-diff) は git 設定から独立させるために要る ----
@@ -1119,6 +1121,15 @@ set +e
 rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "#430: a misspelled stage must still exit 2 (rc=$rc)"
+# 「hook が在って exit 0」が「hook が無い」と同義でない stage は素通しに使えず、repo hook の有無によらず exit 2
+for stage in push-to-checkout proc-receive fsmonitor-watchman; do
+  set +e
+  out=$(cd "$repo430b" && as_human "$deploy/personal-git-hook-dispatcher" "$stage" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "#430: $stage must not be passed through (rc=$rc): $out"
+  echo "$out" | grep -q "cannot be passed through" || fail "#430: $stage must say why it is refused: $out"
+done
 # 再入 sentinel は gate の無い stage でも効く
 (cd "$repo430b" && rm -f marker.post-commit && as_human env AGENT_TOOLS_GIT_HOOK_ACTIVE_POST_COMMIT=1 "$deploy/personal-git-hook-dispatcher" post-commit 2>/dev/null) \
   || fail "#430: loop guard must short-circuit gate-less stages"

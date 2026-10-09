@@ -37,7 +37,8 @@ hard な床は従来どおりここに載せない (credential 隔離 / egress /
 global git config: core.hooksPath = <dotfiles 所有の hooks dir>
   <hooks dir>/pre-commit   →  exec <deploy>/personal-git-hook-dispatcher pre-commit "$@"
   <hooks dir>/commit-msg   →  exec <deploy>/personal-git-hook-dispatcher commit-msg "$@"
-  <hooks dir>/<他の stage> →  exec <deploy>/personal-git-hook-dispatcher <stage> "$@"   (gate なし。repo hook に chain するだけ)
+  <hooks dir>/<他の stage> →  exec <deploy>/personal-git-hook-dispatcher <stage> "$@"   (gate なし。repo hook に chain するだけ。
+                              push-to-checkout / proc-receive / fsmonitor-watchman には置かない)
 
 <deploy> = <tool home>/agent-tools/scripts (sync の script 配備先。公開契約)
   personal-git-hook-dispatcher   … stage ごとの gate 実行 + repo hook への chain
@@ -70,12 +71,15 @@ global `core.hooksPath` は per-repo `.git/hooks` を**完全に置換**し、fa
 2. 全 gate pass 後、`git rev-parse --git-common-dir` 直下の `hooks/<stage>` が実行可能
    なら `exec` で chain する (exit code はそのまま repo hook のもの)。worktree でも
    共有側 hooks が対象 (実測 #201 と同じ挙動)。
-   gate の無い stage (git の既知の hook 名。dispatcher の `GIT_HOOK_STAGES`) は 1. を飛ばして
-   この chain だけを行う (#430 の 3)。global `core.hooksPath` は shim の無い stage の repo hook を
-   黙って無効にするので、repo hook を全 stage で生かすには dotfiles 側が全 stage の shim を置く
-   (置かない stage の repo hook は走らない)。未知の名前 (typo) は exit 2。stdin を読む hook
-   (pre-push / pre-receive / post-rewrite / reference-transaction など) は `exec` が stdin を
-   そのまま渡す。
+   gate の無い stage (git の既知の hook 名のうち、dispatcher の `GIT_HOOK_STAGES` にあるもの) は 1. を
+   飛ばしてこの chain だけを行う (#430 の 3)。global `core.hooksPath` は shim の無い stage の repo hook を
+   黙って無効にするので、repo hook を生かしたい stage には dotfiles 側が shim を置く (置かない stage の
+   repo hook は走らない)。未知の名前 (typo) は exit 2。stdin を読む hook (pre-push / pre-receive /
+   post-rewrite / reference-transaction など) は `exec` が stdin をそのまま渡す。
+   **素通しに使えない stage** (`UNSUPPORTED_STAGES`。shim を置かず、呼ばれたら exit 2): `push-to-checkout`
+   (hook が在ると git は既定の作業ツリーの更新を省くので、repo hook が無いまま 0 を返すと
+   `receive.denyCurrentBranch=updateInstead` の push 後に ref と作業ツリーがずれる)、`proc-receive` (hook が
+   在ると git は protocol で結果を返すことを前提にする)、`fsmonitor-watchman` (決まった形式の出力を返す契約)。
 3. gate 起動と chain は、いずれも Ruby の `[cmdname, argv0]` 2 要素配列形で行う。Ruby は
    引数の **個数** で shell 経由かを決めるため、引数ゼロの pre-commit では path がそのまま
    shell 解釈される (#267。空白で word split、`$( )` で command 置換。`.gitmodules` の
