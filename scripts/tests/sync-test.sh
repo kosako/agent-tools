@@ -1190,4 +1190,35 @@ cmp -s "$tmp/out47-before" "$tmp/out47-after" \
 run39 --apply > "$tmp/out47c" 2>&1 || fail "apply without the injection should succeed: $(cat "$tmp/out47c")"
 grep -q "^v7$" "$atarget/SKILL.md" || fail "the new version should be deployed without the injection"
 
+# --- case 48: 配置の rename を行った直後に割り込まれたら、新版は配置済みで退避 dir が残り、その skill の次の update が復旧せずに消す (#469 review 3) ---
+# 注入は配置の rename を実際に行ってから Interrupt を raise する。ensure は target があるので戻さない (old は残る)。
+# up-to-date の target に apply は触れない (plan が skip) ので、注入なしの apply の後も old は残り、その skill の次の
+# create / update の冒頭 (removed?(old)) が、target があるので復旧の rename をせずに消す。
+write_atomic_skill v8
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+status=0
+run46 Interrupt placement 1 > "$tmp/out48" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "an interrupt right after the placement must not exit 0: $(cat "$tmp/out48")"
+grep -q "^v8$" "$atarget/SKILL.md" || fail "the new version must be in place after an interrupt right after the placement"
+cmp -s "$agen/.agent-tools-managed.yml" "$atarget/.agent-tools-managed.yml" \
+  || fail "the new marker must be in place after an interrupt right after the placement"
+grep -q "^v7$" "$aold/SKILL.md" || fail "the old copy must remain at the old path after an interrupt right after the placement"
+[ "$(ls -A "$tmp/aclaude/skills" | tr '\n' ' ')" = ".agent-tools-old-personal-atomic personal-atomic " ] \
+  || fail "skills/ must hold the target and the old copy, no staging: $(ls -A "$tmp/aclaude/skills")"
+# 注入なしで同じ generated を apply: 新 marker なので up-to-date。apply は触れないので old はまだ残る
+run39 --apply > "$tmp/out48b" 2>&1 || fail "apply after the interrupt should succeed: $(cat "$tmp/out48b")"
+grep -q "skip: \[claude-code\].*personal-atomic (up-to-date)" "$tmp/out48b" \
+  || fail "the next sync must see the new version as up-to-date: $(cat "$tmp/out48b")"
+grep -q "^v8$" "$atarget/SKILL.md" || fail "an up-to-date apply must leave the new version in place"
+[ -d "$aold" ] || fail "an up-to-date apply does not touch the target, so the old copy stays until the next update"
+# その skill の次の update (v9) の冒頭が、target があるので復旧せずに old を消してから進む
+write_atomic_skill v9
+"$build" --root "$tmp/arepo" --quiet > /dev/null
+"$register" --root "$tmp/arepo" --quiet > /dev/null
+run39 --apply > "$tmp/out48c" 2>&1 || fail "the next update should succeed: $(cat "$tmp/out48c")"
+grep -q "^v9$" "$atarget/SKILL.md" || fail "the next update should deploy the new version"
+[ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
+  || fail "the next update must remove the leftover old copy and leave no staging: $(ls -A "$tmp/aclaude/skills")"
+
 echo "ok: sync self-test passed"

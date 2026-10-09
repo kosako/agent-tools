@@ -174,7 +174,8 @@ module Sync
         # flag ではなく退避先と配置先の実在で行う (flag だと退避の rename が済んでから flag が立つまでの隙間で
         # 割り込まれたときに戻らない, #469 review 3)。何も動かす前 (cp_r の失敗など) は old が無い (冒頭で消した)
         # ので戻さない / 退避の直後なら old があり target が無いので戻す / 配置の直後なら target があるので
-        # 戻さない (old は残るが、target があるので次の apply の冒頭が復旧せずに消す)。
+        # 戻さない (old は残る。up-to-date の間 apply は触れず、その skill の次の create / update の冒頭が、
+        # target があるので復旧せずに消す)。
         File.rename(old, target) if File.exist?(old) && !File.exist?(target)
         FileUtils.rm_rf(staging)
       end
