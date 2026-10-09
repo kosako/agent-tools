@@ -1233,5 +1233,63 @@ grep -q "personal-b.asset.yml: source.path \"shared/workflows/personal-b.md\" is
   || fail "missing duplicate ownership error on personal-b: $(cat "$tmp/out-twoown")"
 ! grep -q "personal-b.asset.yml: sidecar manifest must be named" "$tmp/out-twoown" \
   || fail "the correctly named sidecar must not get the naming error: $(cat "$tmp/out-twoown")"
+# --- case: manifest の重複 key は error、YAML.dump が付ける先頭の --- は許す (#427 の 4) ---
+# safe_load は重複 key を後の値で黙って上書きするので、先に書いた値が review を通っても後の値で動いていた
+# (この fixture は後の値も valid で、旧実装では ok: 1 manifest(s) で通る)。
+mkdir -p "$tmp/dupkey/shared/workflows"
+write_skill_source "$tmp/dupkey/shared/workflows/personal-dupkey.md" '# dupkey'
+cat > "$tmp/dupkey/shared/workflows/personal-dupkey.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-dupkey
+kind: workflow
+visibility: personal
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/workflows/personal-dupkey.md
+  format: markdown
+visibility: public
+EOF
+if "$check" --root "$tmp/dupkey" > "$tmp/out-dupkey" 2>&1; then
+  fail "a manifest with a duplicate key must be rejected"
+fi
+grep -q 'personal-dupkey.asset.yml: YAML parse error: .*duplicate key "visibility" at line 13 column 1' "$tmp/out-dupkey" \
+  || fail "missing duplicate-key error with its line: $(cat "$tmp/out-dupkey")"
+mkdir -p "$tmp/dashstart/shared/workflows"
+write_skill_source "$tmp/dashstart/shared/workflows/personal-dash.md" '# dash'
+{ printf -- '---\n'; sed '$d' "$tmp/dupkey/shared/workflows/personal-dupkey.asset.yml" | sed 's/personal-dupkey/personal-dash/g'; } \
+  > "$tmp/dashstart/shared/workflows/personal-dash.asset.yml"
+"$check" --root "$tmp/dashstart" > "$tmp/out-dashstart" 2>&1 \
+  || fail "a manifest starting with an explicit --- must still validate: $(cat "$tmp/out-dashstart")"
+grep -q "ok: 1 manifest(s) validated" "$tmp/out-dashstart" \
+  || fail "manifest with a leading --- should count as validated: $(cat "$tmp/out-dashstart")"
+
+# --- case: manifest の tag 付きの key は error (#427 の 4、Codex review round 1) ---
+# `!!binary a2luZA==` は load 後に "kind" になる。旧実装では後の kind と同じ値なので ok で通る。
+mkdir -p "$tmp/tagkey/shared/workflows"
+write_skill_source "$tmp/tagkey/shared/workflows/personal-tagkey.md" '# tagkey'
+cat > "$tmp/tagkey/shared/workflows/personal-tagkey.asset.yml" <<'EOF'
+schema_version: 1
+name: personal-tagkey
+!!binary a2luZA==: workflow
+kind: workflow
+visibility: public
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/workflows/personal-tagkey.md
+  format: markdown
+EOF
+if "$check" --root "$tmp/tagkey" > "$tmp/out-tagkey" 2>&1; then
+  fail "a manifest with a tagged key must be rejected"
+fi
+grep -q 'personal-tagkey.asset.yml: YAML parse error: .*explicit tags are not allowed (tag:yaml.org,2002:binary) at line 3' "$tmp/out-tagkey" \
+  || fail "missing tagged-key error: $(cat "$tmp/out-tagkey")"
 
 echo "ok: check-manifests self-test passed"
