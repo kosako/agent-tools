@@ -405,6 +405,59 @@ set -e
 [ "$rc" -eq 2 ] || fail ".git symlink must fail closed (rc=$rc): $out"
 rm "$clone/.git"
 mv "$clone/.git-real" "$clone/.git"
+# 固定 directory (objects / refs / logs) 自体の型変更も拒否する (#431): clone の外を指す symlink への
+# 差し替えと、regular file への差し替え。regular file への差し替えは dir 型の検査だけが捕捉する
+# (symlink は allowlist 内の symlink 拒否でも落ちる)。logs は commit するまで無いので先に作る。
+mkdir -p "$clone/.git/logs"
+outside_dirs="$tmp/outside-git-dirs"
+for dir in objects refs logs; do
+  mkdir -p "$outside_dirs/$dir"
+  out=$(run_pf --json)
+  printf '%s' "$out" > "$tmp/preflight.json"
+  mv "$clone/.git/$dir" "$tmp/$dir.saved"
+  ln -s "$outside_dirs/$dir" "$clone/.git/$dir"
+  set +e
+  out=$(verify_snapshot 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "$dir symlink replacement must fail closed (rc=$rc): $out"
+  case "$out" in *"\"$dir\""*) : ;; *) fail "diagnostic must name $dir symlink replacement: $out" ;; esac
+  rm "$clone/.git/$dir"
+  printf 'not a directory\n' > "$clone/.git/$dir"
+  set +e
+  out=$(verify_snapshot 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "$dir regular file replacement must fail closed (rc=$rc): $out"
+  case "$out" in *"\"$dir\""*) : ;; *) fail "diagnostic must name $dir regular file replacement: $out" ;; esac
+  rm "$clone/.git/$dir"
+  mv "$tmp/$dir.saved" "$clone/.git/$dir"
+done
+# 別の clone の snapshot を渡したら、entry の比較に入る前に git_dir の不一致で拒否する (#431)。
+other_clone="$tmp/clone-other"
+git init -q "$other_clone"
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" \
+  --clone "$other_clone" --json)
+printf '%s' "$out" > "$tmp/preflight-other.json"
+set +e
+out=$(ruby "$src" --verify-git-snapshot "$tmp/preflight-other.json" --clone "$clone" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "snapshot of another clone must fail closed (rc=$rc): $out"
+case "$out" in *"clone の .git path が一致しません"*) : ;; *) fail "diagnostic must report the git_dir mismatch: $out" ;; esac
+# schema が 1 以外の snapshot は照合せず拒否する (#431)。
+out=$(run_pf --json)
+printf '%s' "$out" | ruby -rjson -e '
+j = JSON.parse(STDIN.read)
+j["git_snapshot"]["schema"] = 2
+File.write(ARGV[0], JSON.generate(j))
+' "$tmp/preflight-schema2.json"
+set +e
+out=$(ruby "$src" --verify-git-snapshot "$tmp/preflight-schema2.json" --clone "$clone" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "snapshot with another schema must fail closed (rc=$rc): $out"
+case "$out" in *"形式が不正"*) : ;; *) fail "diagnostic must report the invalid snapshot format: $out" ;; esac
 
 # --model / --effort の明示: config を読まない (解釈できない config でも exit 0)
 home2="$tmp/codex-home-bad"
@@ -917,6 +970,35 @@ root = ARGV[0]
 abort "clone_root は物理 path" unless j["clone_root"] == root
 abort "clone_git_dir は clone_root の直下" unless j["clone_git_dir"] == File.join(root, ".git")
 ' "$(cd -P "$clone" && pwd -P)" || fail "clone_root が canonical でない: $out"
+
+# (p) 既定の local `git clone` は object を元の repository と hardlink で共有する (link 数 2) ので
+#     拒否し、`--no-hardlinks` の clone は通す (#431)。fixture の前提 (既定の clone に link 数 2 以上の
+#     file がある / --no-hardlinks の clone には無い) は先に確かめ、崩れていれば理由を出して落とす。
+hl_src="$clone_cases_dir/hardlink-src"
+git init -q "$hl_src"
+git -C "$hl_src" commit -q --allow-empty -m base
+hl_default="$clone_cases_dir/hardlink-default"
+hl_nohl="$clone_cases_dir/hardlink-none"
+git clone -q -- "$hl_src" "$hl_default"
+git clone -q --no-hardlinks -- "$hl_src" "$hl_nohl"
+[ -n "$(find "$hl_default/.git" -type f -links +1)" ] \
+  || fail "fixture: 既定の git clone に link 数 2 以上の file が無い (hardlink 共有の前提が成り立たない)"
+[ -z "$(find "$hl_nohl/.git" -type f -links +1)" ] \
+  || fail "fixture: --no-hardlinks の clone に link 数 2 以上の file がある"
+set +e
+out=$(pf_clone_rc "$hl_default")
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "hardlink 共有の clone は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "hardlink で共有" || fail "hardlink 共有の理由で落ちるべき: $out"
+echo "$out" | grep -q -- "--no-hardlinks" || fail "作り直し方 (--no-hardlinks) を理由に出すべき: $out"
+case "$out" in *"--add-dir"*) fail "hardlink 共有の clone で launch argv を出してはいけない: $out" ;; esac
+set +e
+out=$(pf_clone_rc "$hl_nohl")
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "--no-hardlinks の clone は通るべき (rc=$rc): $out"
+echo "$out" | grep -q "^launch: " || fail "--no-hardlinks の clone には launch argv を出すべき: $out"
 
 # (f) 正しい clone: --add-dir はその clone の git dir 1 つだけで、main の path が現れない
 out=$(run_pf --json)

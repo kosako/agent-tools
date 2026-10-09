@@ -147,7 +147,8 @@ objects / refs / 他 worktree の index / config を worker に開けること�
 - `git clone --no-hardlinks <main worktree> <clone path>` で切り、branch は clone 側で選ぶ。
   以降 (preflight / 起動) は preflight が返す `clone_root` (検査した物理 path) を使う。
   `--no-hardlinks` は必須 (既定の local clone は object を main と hardlink 共有するので、分離が
-  成立しない)。branch は「clone の local branch → `origin/<branch>` → 新規」の順で解決する
+  成立しない)。preflight は `.git` の中に hardlink で共有された file がある clone を exit 2 で拒否する
+  (手順だけに依存させない。#431)。branch は「clone の local branch → `origin/<branch>` → 新規」の順で解決する
   (`switch -c` だけだと、main 側にある同名 branch の tip を取り違える)。新規は基点を明示し、§7 の
   trailer 検査の base と同じ fetch 済みの `origin/main` の tip から切る (基点を書かないと、main worktree
   が checkout している branch から切られる。手順は `LAUNCH.md` §2)。branch 名は packet の
