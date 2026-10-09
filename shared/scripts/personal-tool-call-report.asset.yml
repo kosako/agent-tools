@@ -1,0 +1,29 @@
+schema_version: 1
+name: personal-tool-call-report
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  # 実行時に tool 呼び出しの記録 (ユーザーの state dir の JSONL) を読む。出力は件数だけで session_id・
+  # 引数の値・絶対 path・reason の本文は出さないが、読む対象が private な runtime state なので medium。
+  privacy: medium
+# script kind は実行コード配布のため常に human review 必須 (#147)。承認は内容と配布形態に紐づく
+# (#148, #184)。本 script の review block は #461 の PR で author≠reviewer レビューののち、人が
+# approved_build_id を入れる。それまで register は human_review_required とし sync は配備しない。
+review:
+  human_review: approved
+  approved_build_id: sha256:fa48a5e49d03deeec10984167c814cb1036fc97dfd56d9b6999284995dc9a8f1
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-tool-call-report.rb
+  format: text
+summary: >-
+  personal-tool-call-record-hook の JSONL を読み、期間内の tool call を session_id + tool_use_id で
+  結合して件数の report (md / json) を出す集計 script。判断 (allowed / denied / unknown) と結果
+  (output / error / interrupted / unknown) は記録の event から導き、Pre だけの call は拒否と書かない。
+  session_id・引数の値・絶対 path・PermissionDenied の reason の本文は出さない (件数だけ)。読むだけで
+  file にも network にも書かない。主体は記録と同じく client の自己申告まで。
+  docs/tool-call-record-hook.md の「集計」の節が正本。
