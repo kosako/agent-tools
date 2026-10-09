@@ -77,6 +77,8 @@ rec "$log" "{\"ts\":\"2026-10-07T10:07:00+00:00\",\"event\":\"PreToolUse\",$sa,\
 rec "$log" "{\"ts\":\"2026-10-07T10:07:01+00:00\",\"event\":\"PermissionDenied\",$sa,\"tool\":\"Bash\",\"tool_use_id\":\"tu_a11\",\"reason\":\"   \"}"
 # 知らない event (ts あり) → 結合不能
 rec "$log" "{\"ts\":\"2026-10-07T10:08:00+00:00\",\"event\":\"Stop\",$sa}"
+# session_id の無い tool 行 (tool_use_id は session A の tu_a1 と同じ) → 結合不能 (別 session の call と混ぜない)
+rec "$log" "{\"ts\":\"2026-10-07T10:08:30+00:00\",\"event\":\"PostToolUse\",\"client\":\"claude-code\",\"tool\":\"Bash\",\"tool_use_id\":\"tu_a1\",\"result\":\"output\",\"duration_ms\":999}"
 # a12: ToolSearch (deferred な tool の探索) → 集計から除外し件数だけ出す (duration 2 は 6 節に入らない)
 rec "$log" "{\"ts\":\"2026-10-07T10:09:00+00:00\",\"event\":\"PreToolUse\",$sa,\"tool\":\"ToolSearch\",\"tool_use_id\":\"tu_a12\",\"arg_keys\":[\"max_results\",\"query\"]}"
 rec "$log" "{\"ts\":\"2026-10-07T10:09:01+00:00\",\"event\":\"PostToolUse\",$sa,\"tool\":\"ToolSearch\",\"tool_use_id\":\"tu_a12\",\"arg_keys\":[\"max_results\",\"query\"],\"result\":\"output\",\"duration_ms\":2}"
@@ -103,7 +105,7 @@ rec "$log" "{\"ts\":123,\"event\":\"PreToolUse\",$sa,\"tool\":\"Bash\",\"tool_us
 # 期間外の call (09-01): 2 行
 rec "$log" "{\"ts\":\"2026-09-01T09:00:00+00:00\",\"event\":\"PreToolUse\",$sa,\"tool\":\"Bash\",\"tool_use_id\":\"tu_old\"}"
 rec "$log" "{\"ts\":\"2026-09-01T09:00:01+00:00\",\"event\":\"PostToolUse\",$sa,\"tool\":\"Bash\",\"tool_use_id\":\"tu_old\",\"result\":\"output\",\"duration_ms\":1}"
-[ "$(wc -l < "$log" | tr -d ' ')" = 40 ] || fail "fixture should have 40 lines"
+[ "$(wc -l < "$log" | tr -d ' ')" = 41 ] || fail "fixture should have 41 lines"
 
 # ---- md: 1〜7 が期待値どおり ------------------------------------------------------------------------
 md="$tmp/report.md"
@@ -112,10 +114,10 @@ run_report --file "$log" --since 2026-10-05 --until 2026-10-09 > "$md" || fail "
 row "$md" "| 期間 | 2026-10-05 〜 2026-10-09 (local の日付) |" "1 期間"
 row "$md" "| 読んだ file | claude-code.jsonl |" "1 読んだ file"
 row "$md" "| 読めなかった file | 0 |" "1 読めなかった file"
-row "$md" "| 行数 | 40 |" "1 行数"
+row "$md" "| 行数 | 41 |" "1 行数"
 row "$md" "| 壊れた行 | 6 |" "1 壊れた行"
 row "$md" "| 期間外の行 | 3 |" "1 期間外の行"
-row "$md" "| 結合不能の行 (tool_use_id 無し / 知らない event) | 2 |" "1 結合不能"
+row "$md" "| 結合不能の行 (session_id / tool_use_id 無し / 知らない event) | 3 |" "1 結合不能 (tool_use_id 無し / 知らない event / session_id 無し)"
 row "$md" "| call 数 | 14 |" "1 call 数 (同じ tool_use_id でも session が違えば別の call。ToolSearch は数えない)"
 row "$md" "| 除外した call (ToolSearch) | 1 |" "1 除外した call"
 grep -q "| ToolSearch | " "$md" && fail "ToolSearch must not appear as a tool row (excluded)"
@@ -182,10 +184,10 @@ jv '"2026-10-09"' period.until period until
 jv 'nil' period.days period days
 jv '["claude-code.jsonl"]' files.read files read
 jv '0' files.unreadable files unreadable
-jv '40' lines.total lines total
+jv '41' lines.total lines total
 jv '6' lines.broken lines broken
 jv '3' lines.out_of_period lines out_of_period
-jv '2' lines.unjoinable lines unjoinable
+jv '3' lines.unjoinable lines unjoinable
 jv '14' calls calls
 jv '["ToolSearch"]' excluded_calls.tools excluded_calls tools
 jv '1' excluded_calls.count excluded_calls count
@@ -244,7 +246,7 @@ rec "$records/codex.jsonl" "{\"ts\":\"2026-10-08T12:00:00+00:00\",\"event\":\"Pr
 rec "$records/codex.jsonl" "{\"ts\":\"2026-10-08T12:00:01+00:00\",\"event\":\"PostToolUse\",$sd,\"tool\":\"shell\",\"tool_use_id\":\"tu_d1\",\"result\":\"output\",\"duration_ms\":60}"
 run_report --file "$log" --file "$records/codex.jsonl" --since 2026-10-05 --until 2026-10-09 > "$md" || fail "two files should exit 0"
 row "$md" "| 読んだ file | claude-code.jsonl, codex.jsonl |" "複数 file 読んだ file"
-row "$md" "| 行数 | 42 |" "複数 file 行数"
+row "$md" "| 行数 | 43 |" "複数 file 行数"
 row "$md" "| call 数 | 15 |" "複数 file call 数"
 row "$md" "| session 数 | 5 |" "複数 file session 数"
 row "$md" "| codex | unknown | 1 |" "複数 file codex の版"
@@ -317,6 +319,14 @@ status=$(status_of env TZ=UTC0 HOME= XDG_STATE_HOME= ruby "$src" 2> "$tmp/err")
 [ "$(wc -l < "$tmp/err" | tr -d ' ')" = 1 ] || fail "no HOME should leave 1 stderr line: $(cat "$tmp/err")"
 status=$(status_of env TZ=UTC0 HOME= XDG_STATE_HOME=relative/state ruby "$src" 2> "$tmp/err")
 [ "$status" = 1 ] || fail "relative XDG_STATE_HOME should exit 1, got $status"
+# 記録 hook と同じく AGENT_TOOLS_TOOL_CALL_RECORD_DIR が最優先 (HOME / XDG より先)。相対 path は exit 1
+mkdir -p "$tmp/override"
+cp "$records/codex.jsonl" "$tmp/override/claude-code.jsonl"
+env TZ=UTC0 HOME="$tmp/home" XDG_STATE_HOME="$tmp/xdg" AGENT_TOOLS_TOOL_CALL_RECORD_DIR="$tmp/override" \
+  ruby "$src" --since 2026-10-05 --until 2026-10-09 > "$md" 2> "$tmp/err" || fail "record dir override should exit 0: $(cat "$tmp/err")"
+row "$md" "| call 数 | 1 |" "AGENT_TOOLS_TOOL_CALL_RECORD_DIR 既定の入力先 (HOME / XDG より優先)"
+status=$(status_of env TZ=UTC0 HOME="$tmp/home" AGENT_TOOLS_TOOL_CALL_RECORD_DIR=relative/dir ruby "$src" 2> "$tmp/err")
+[ "$status" = 1 ] || fail "relative AGENT_TOOLS_TOOL_CALL_RECORD_DIR should exit 1, got $status"
 
 # ---- 読めない file: warn して続け、1 つも読めなければ exit 1 ------------------------------------------
 status=$(status_of run_report --file "$tmp/none.jsonl")
@@ -327,6 +337,8 @@ status=$(status_of run_report --file "$records")
 [ "$status" = 1 ] || fail "directory should exit 1, got $status"
 run_report --file "$tmp/none.jsonl" --file "$log" --since 2026-10-05 --until 2026-10-09 > "$md" || fail "one readable file should exit 0"
 [ "$(wc -l < "$tmp/err" | tr -d ' ')" = 1 ] || fail "unreadable file should leave 1 stderr line: $(cat "$tmp/err")"
+grep -qF -- "$tmp" "$tmp/err" && fail "stderr must not carry the absolute path of the unreadable file: $(cat "$tmp/err")" || :
+grep -q "none.jsonl" "$tmp/err" || fail "stderr should name the unreadable file by basename: $(cat "$tmp/err")"
 row "$md" "| 読んだ file | claude-code.jsonl |" "読めない file は読んだ file に入らない"
 row "$md" "| 読めなかった file | 1 |" "読めなかった file の数"
 row "$md" "| call 数 | 14 |" "読める file だけで集計"
@@ -357,6 +369,14 @@ grep -q "^usage: personal-tool-call-report" "$tmp/out" || fail "-h should print 
 # 不正な option は入力を読む前に止まる (file が無くても exit 2)
 status=$(status_of run_report --file "$tmp/none.jsonl" --days x)
 [ "$status" = 2 ] || fail "option errors win over missing files, got $status"
+# 余分な位置引数は値 (path かもしれない) を stderr に出さない。未知の option は名前だけ出す
+status=$(status_of run_report --file "$log" "$tmp/CANARY_POSITIONAL")
+[ "$status" = 2 ] || fail "positional argument should exit 2, got $status"
+grep -qF -- "$tmp" "$tmp/err" && fail "stderr must not echo a positional value: $(cat "$tmp/err")" || :
+grep -q "CANARY_POSITIONAL" "$tmp/err" && fail "stderr must not echo a positional value (canary): $(cat "$tmp/err")" || :
+status=$(status_of run_report --file "$log" --bogus-option)
+[ "$status" = 2 ] || fail "unknown option should exit 2, got $status"
+grep -q "unknown option: --bogus-option" "$tmp/err" || fail "unknown option should be named: $(cat "$tmp/err")"
 
 # ---- unit: 中央値と p95 (nearest-rank)、call の結合の規則 --------------------------------------------------
 ruby -r"$script_dir/lib/check_helper" - "$src" <<'RUBY'
@@ -382,6 +402,8 @@ check("median of odd count", R.median([3, 1, 2].sort) == 2)
 check("median of even count averages the middle two", R.median([1, 2, 3, 4]) == 2.5)
 check("median of whole average is an integer", R.median([2, 4]) == 3 && R.median([2, 4]).is_a?(Integer))
 check("median of empty is nil", R.median([]).nil?)
+check("median keeps a fractional value (no rounding)", R.median([1.25]) == 1.25 && R.median([1.2, 1.3]) == 1.25)
+check("p95 keeps a fractional value (no rounding)", R.p95([0.75]) == 0.75)
 check("p95 of 1..100 is 95 (nearest-rank)", R.p95((1..100).to_a) == 95)
 check("p95 of 1..20 is 19", R.p95((1..20).to_a) == 19)
 check("p95 of 1..21 is 20", R.p95((1..21).to_a) == 20)

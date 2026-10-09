@@ -16,15 +16,15 @@
 #
 # 仕組み:
 # - option を先に全部解決してから集計する。不正な option は理由と usage を stderr に出して exit 2。
-# - 入力は --file (複数可)。無ければ ${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/
-#   personal-tool-call-record-hook/claude-code.jsonl (記録 hook の既定と同じ場所)。読めない file は stderr に
-#   1 行出して続け、1 つも読めなければ exit 1。
+# - 入力は --file (複数可)。無ければ記録 hook と同じ規則で決める (AGENT_TOOLS_TOOL_CALL_RECORD_DIR が最優先、
+#   無ければ ${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/personal-tool-call-record-hook) の
+#   claude-code.jsonl。読めない file は stderr に 1 行 (名前だけ) 出して続け、1 つも読めなければ exit 1。
 # - 使う行は JSON object で ts が ISO 8601 のもの。それ以外は「壊れた行」として数えて skip する (落ちない)。
 # - 期間は行ごとに ts の local 日付 (offset を尊重して local time に直した日付) で判定する。until は含む。
 #   既定は --days 7 (今日を含む直近 7 日)。--since / --until は片方だけでもよい (--days とは併用しない)。
 #   SessionStart は期間に関わらず版の結合に使う (期間外なら期間外の行としても数える)。
-# - 結合は session_id + tool_use_id (同じ tool_use_id でも session が違えば別の call)。tool_use_id の無い tool 行
-#   (と知らない event の行) は「結合不能」として数え、call には数えない。
+# - 結合は session_id + tool_use_id (同じ tool_use_id でも session が違えば別の call)。session_id か tool_use_id
+#   の無い tool 行 (と知らない event の行) は「結合不能」として数え、call には数えない。
 # - 除外: tool が ToolSearch の call は集計から外し、件数だけ 1 節に出す。deferred な MCP tool では model が
 #   先に ToolSearch を呼ぶので、その Pre / Post が call の前に混ざる (2026-10-09 の実測、記録 hook の docs の
 #   「集計側の約束」)。
@@ -45,6 +45,7 @@ require "time"
 module ToolCallReport
   NAME = "personal-tool-call-report"
   RECORD_HOOK = "personal-tool-call-record-hook"
+  RECORD_DIR_ENV = "AGENT_TOOLS_TOOL_CALL_RECORD_DIR"
   SCHEMA_VERSION = 1
   DEFAULT_DAYS = 7
   DEFAULT_TOP = 20
@@ -133,7 +134,8 @@ module ToolCallReport
 
         opts[:format] = value
       else
-        raise UsageError, "unknown argument: #{arg}"
+        # 値 (path かもしれない) は stderr にも出さない。option らしい token だけ名前を出す。
+        raise UsageError, arg.start_with?("-") ? "unknown option: #{plain(arg)}" : "unexpected positional argument (value not shown)"
       end
     end
     raise UsageError, "--days cannot be combined with --since / --until" if opts[:days] && (opts[:since] || opts[:until])
@@ -171,18 +173,23 @@ module ToolCallReport
     [today - (days - 1), today, days]
   end
 
-  # 既定の記録の場所 (記録 hook の record_path と同じ規則)。絶対 path に決められなければ nil。
+  # 既定の記録の場所 (記録 hook の record_path と同じ規則: AGENT_TOOLS_TOOL_CALL_RECORD_DIR が最優先、無ければ
+  # ${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/<hook 名>)。絶対 path に決められなければ nil。
   def default_record_path(env)
-    state = env["XDG_STATE_HOME"].to_s
-    if state.empty?
-      home = env["HOME"].to_s
-      return nil if home.empty?
+    dir = env[RECORD_DIR_ENV].to_s
+    if dir.empty?
+      state = env["XDG_STATE_HOME"].to_s
+      if state.empty?
+        home = env["HOME"].to_s
+        return nil if home.empty?
 
-      state = File.join(home, ".local", "state")
+        state = File.join(home, ".local", "state")
+      end
+      dir = File.join(state, "agent-tools", RECORD_HOOK)
     end
-    return nil unless state.start_with?("/")
+    return nil unless dir.start_with?("/")
 
-    File.join(state, "agent-tools", RECORD_HOOK, "claude-code.jsonl")
+    File.join(dir, "claude-code.jsonl")
   end
 
   # ---- 読み取り ---------------------------------------------------------------------------------
@@ -201,7 +208,8 @@ module ToolCallReport
         File.open(path, "r:UTF-8") { |io| io.each_line { |line| scan_line(scan, line, since, until_date) } }
       rescue SystemCallError, IOError => e
         scan[:unreadable] += 1
-        err.puts "#{NAME}: cannot read #{plain(path)} (#{e.class})"
+        # stderr にも絶対 path は出さない (名前だけ)。
+        err.puts "#{NAME}: cannot read #{plain(File.basename(path))} (#{e.class})"
         next
       end
       scan[:read] << File.basename(path).dup.force_encoding("UTF-8").scrub
@@ -228,7 +236,9 @@ module ToolCallReport
     return if data["event"] == "SessionStart"
 
     tool_use_id = string_or_nil(data["tool_use_id"])
-    if TOOL_EVENTS.include?(data["event"]) && tool_use_id
+    # session_id と tool_use_id の両方がある tool 行だけ結合する (片方でも無ければ、別 session の同じ
+    # tool_use_id と混ざりうるので結合不能に数える)。
+    if TOOL_EVENTS.include?(data["event"]) && tool_use_id && session_id
       (scan[:groups][[session_id, tool_use_id]] ||= []) << data
     else
       scan[:unjoinable] += 1
@@ -391,12 +401,12 @@ module ToolCallReport
     number(sorted[(95 * sorted.length + 99) / 100 - 1])
   end
 
-  # 整数に等しい float は整数で出す (md と json で同じ見え方にする)。それ以外は小数 1 桁。
+  # 整数に等しい float は整数で出す (md と json で同じ見え方にする)。それ以外はそのまま (丸めて値を変えない)。
   def number(value)
     return value unless value.is_a?(Float)
     return value.to_i if value.finite? && value == value.floor
 
-    value.round(1)
+    value
   end
 
   # ---- 出力 (md) --------------------------------------------------------------------------------
@@ -410,7 +420,7 @@ module ToolCallReport
       ["行数", r["lines"]["total"]],
       ["壊れた行", r["lines"]["broken"]],
       ["期間外の行", r["lines"]["out_of_period"]],
-      ["結合不能の行 (tool_use_id 無し / 知らない event)", r["lines"]["unjoinable"]],
+      ["結合不能の行 (session_id / tool_use_id 無し / 知らない event)", r["lines"]["unjoinable"]],
       ["call 数", r["calls"]],
       ["除外した call (#{r['excluded_calls']['tools'].join(' / ')})", r["excluded_calls"]["count"]],
       ["session 数", r["sessions"]],

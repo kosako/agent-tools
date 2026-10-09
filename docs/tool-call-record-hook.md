@@ -86,8 +86,9 @@ ${XDG_STATE_HOME:-~/.local/state}/agent-tools/personal-tool-call-record-hook/<cl
 usage: personal-tool-call-report [--file <path>]... [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--days N] [--top N] [--format md|json] [--help|-h]
 ```
 
-- 入力: `--file` (複数可)。無ければ上の既定の出力先の `claude-code.jsonl`。読めない file は stderr に 1 行出して
-  続け (path は制御文字を空白にして出す。report 本体には出ない)、1 つも読めなければ exit 1。引数の誤り (値の形・`--since` > `--until`・`--days` と `--since` / `--until`
+- 入力: `--file` (複数可)。無ければ記録 hook と同じ規則で決める (`AGENT_TOOLS_TOOL_CALL_RECORD_DIR` が最優先、
+  無ければ上の既定の出力先) の `claude-code.jsonl`。読めない file は stderr に 1 行出して続け (file の名前だけ。
+  絶対 path は stderr にも出ない)、1 つも読めなければ exit 1。引数の誤り (値の形・`--since` > `--until`・`--days` と `--since` / `--until`
   の併用・知らない引数) は理由と usage を stderr に出して exit 2。正常は exit 0。option は入力を読む前に全部解決する。
 - 行: JSON object で `ts` が ISO 8601 の文字列のものだけ使う。それ以外 (JSON でない・object でない・`ts` が無い・
   `ts` が文字列でない・ISO 8601 でない) は「壊れた行」として数えて skip する (落ちない)。
@@ -95,8 +96,8 @@ usage: personal-tool-call-report [--file <path>]... [--since YYYY-MM-DD] [--unti
   既定は `--days 7` (今日を含む直近 7 日)。`--since` / `--until` は片方だけでもよく (他方は制限なし)、`--days`
   とは併用できない。期間の境界 (午前 0 時) をまたぐ call は Pre と Post が別の期間に分かれうる。`SessionStart`
   は期間に関わらず版の結合に使う (期間外なら期間外の行としても数える)。
-- 結合: `session_id` + `tool_use_id` (同じ `tool_use_id` でも session が違えば別の call)。`tool_use_id` の無い
-  tool 行 (と知らない event の行) は「結合不能」として数え、call には数えない。Pre が無く Post 系だけの call は
+- 結合: `session_id` + `tool_use_id` (同じ `tool_use_id` でも session が違えば別の call)。`session_id` か
+  `tool_use_id` の無い tool 行 (と知らない event の行) は「結合不能」として数え、call には数えない。Pre が無く Post 系だけの call は
   Post の行から列を取る (allowed)。
 - 除外: `tool` が `ToolSearch` の call は集計から外し、件数だけ 1 節に出す (json は `excluded_calls`)。deferred な
   MCP tool では model が先に `ToolSearch` を呼ぶので、その Pre / Post が業務の call の前に混ざる (2026-10-09 の
