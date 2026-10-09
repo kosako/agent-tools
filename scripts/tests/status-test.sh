@@ -54,7 +54,9 @@ run_status > "$tmp/s3" 2>&1
 
 # --- case 3b: managed でも register 後に manifest を変えたら target は stale (#148) ---
 # (source 不変で managed のままでも、登録判断が古いと再 register が要る = stale 表示)
-printf '\nsummary: demo workflow (edited)\n' >> "$tmp/repo/shared/workflows/personal-demo.asset.yml"
+# summary の行を置き換える (manifest の重複 key は check-manifests が拒む, #427 の 4)
+ruby -pi -e 'sub(/\Asummary: demo workflow$/, "summary: demo workflow (edited)")' "$tmp/repo/shared/workflows/personal-demo.asset.yml"
+grep -q "^summary: demo workflow (edited)$" "$tmp/repo/shared/workflows/personal-demo.asset.yml" || fail "manifest edit fixture did not apply"
 run_status > "$tmp/s3b" 2>&1
 [ "$(jget "$tmp/s3b" sync_targets 0 state)" = '"stale"' ] \
   || fail "manifest change should make managed target stale: $(cat "$tmp/s3b")"

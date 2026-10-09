@@ -58,6 +58,24 @@ missing_description = "---\nname: personal-frontmatter\n---\n\n# Fixture\n"
   check_case(format, "mapping", "---\n- item\n---\n", %w[codex], "YAML mapping")
   check_case(format, "alias", "---\nname: &name personal-frontmatter\ndescription: *name\n---\n", %w[codex], "YAML error")
 end
+# frontmatter は 1 文書・明示の marker なし・重複 key なし (#427 の 4)。safe_load は最初の文書だけを返し、
+# 重複 key は後勝ちなので、2 文書目の key と重複した name の先の値が allowlist と照合をすり抜けていた。
+%w[directory markdown].each do |format|
+  # `--- ` (末尾に空白) は閉じ marker の split (`^---\r?\n`) に当たらず、frontmatter の中で 2 文書目を始める
+  check_case(format, "second-document",
+             "---\nname: personal-frontmatter\ndescription: Public fixture\n--- \nallowed-tools: Read\n---\n\n# Fixture\n",
+             %w[codex claude-code], "exactly one YAML document")
+  check_case(format, "explicit-end",
+             "---\nname: personal-frontmatter\ndescription: Public fixture\n...\n---\n\n# Fixture\n",
+             %w[codex claude-code], "explicit document markers")
+  # 先の値が別の identity、後の値が manifest name: safe_load の後勝ちでは照合を通っていた
+  check_case(format, "duplicate-name",
+             "---\nname: personal-other\nname: personal-frontmatter\ndescription: Public fixture\n---\n\n# Fixture\n",
+             %w[codex claude-code], "duplicate key \"name\"")
+  check_case(format, "duplicate-description",
+             valid.sub("description: Public fixture", "description: Public fixture\ndescription: again"),
+             %w[codex], "duplicate key \"description\"")
+end
 # 単一 file の skill も directory と同じ規則 (build は frontmatter を生成しない、#376)。
 %w[directory markdown].each do |format|
   check_case(format, "codex-frontmatter-required", "# Fixture\n", %w[codex], "must contain YAML frontmatter")

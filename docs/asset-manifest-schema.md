@@ -64,6 +64,11 @@ directory 形式の配置ルールと、両 source 形式に共通する frontma
   directory の `SKILL.md` と、既存 frontmatter を持つ単一 source に共通で適用する。
   frontmatter が在る (先頭が `---` 行) のに閉じ marker 欠落 / YAML parse 不能 (alias 等) /
   非 mapping / name 欠落・空・型不正なら **fail-closed** で拒否する。LF / CRLF に対応する。
+  frontmatter の YAML が 1 文書でない (`--- ` のように newline 以外が続く marker で始まる 2 文書目を
+  含む)、明示の document marker (`---` / `...`) を含む、重複 key を含む場合も同じく拒否する
+  (#427 の 4)。safe_load は最初の文書だけを返し重複 key を後の値で上書きするので、そのまま読むと
+  2 文書目の key と重複 key の先の値が allowlist と name の照合をすり抜ける。配布先の parser が
+  これらをどう読むかは確かめていないので、validator の側で形を 1 つに限る。
 - **Codex に skill として生成する場合、非空 string の `description` も必須** (#234)。
   [Codex の skill 契約](https://learn.chatgpt.com/docs/build-skills) に合わせ、frontmatter の無い
   skill は directory でも単一 source でも拒否する。build は manifest から frontmatter を生成しない
@@ -289,6 +294,8 @@ source:
 
 manifest に書けるキーはこの schema が列挙するものに限ります。**top-level・入れ子を問わず
 未知キーは check-manifests が error にします** (fail-closed。typo を silent に無視しない)。
+manifest は 1 つの YAML 文書で、**重複する key は top-level・入れ子を問わず error** です (後の値で
+黙って上書きしない。#427 の 4)。`YAML.dump` が付ける先頭の `---` は許します。
 
 ### `schema_version`
 

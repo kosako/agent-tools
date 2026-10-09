@@ -628,7 +628,8 @@ module CheckManifests
         return
       end
       fm = begin
-        YamlUtil.load(parts[0], skill_md)
+        # 1 文書・明示の marker なし・重複 key なし (YamlUtil.load_frontmatter, #427 の 4)
+        YamlUtil.load_frontmatter(parts[0], skill_md)
       rescue Psych::Exception => e
         error(path, "#{source_path} frontmatter has a YAML error: #{e.message}")
         return
