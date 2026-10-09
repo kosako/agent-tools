@@ -424,5 +424,18 @@ write_manifest "$weird/shared/workflows"
 "$register" --root "$weird" > "$tmp/rw" 2>&1 || fail "register under a glob-special root should pass: $(cat "$tmp/rw")"
 [ "$(jget "$weird/generated/catalog.json" assets 0 name)" = '"personal-demo"' ] \
   || fail "asset under a glob-special root must be registered: $(cat "$tmp/rw")"
+# --- case: medium finding は、その path を所有するすべての asset に付く (#427 の 3) ---
+# check-manifests が重複所有を拒むので register.sh 経由では再現できない。割り当てだけを単体で確かめる
+# (従来は最初に一致した 1 asset にだけ flag が付いた)。
+ruby -r"$script_dir/../lib/register" -e '
+  runner = Register::Runner.new(ARGV[0])
+  assets = %w[personal-demo personal-other].map do |name|
+    { source: { "path" => "shared/workflows/personal-demo.md" }, manifest_path: "shared/workflows/#{name}.asset.yml", flagged: false }
+  end
+  finding = CheckInjection::Finding.new("shared/workflows/personal-demo.md", 1, "medium", "hidden", "test")
+  runner.send(:assign_findings, assets, [finding])
+  flagged = assets.map { |a| a[:flagged] }
+  abort "expected both owners flagged, got #{flagged.inspect}" unless flagged == [true, true]
+' "$tmp/ok" > "$tmp/r-owners" 2>&1 || fail "assign_findings must flag every owner: $(cat "$tmp/r-owners")"
 
 echo "ok: register self-test passed"

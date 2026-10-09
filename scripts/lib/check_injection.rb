@@ -180,6 +180,9 @@ module CheckInjection
 
         next unless source["format"] == "directory"
         next unless source["path"].is_a?(String)
+        # directory 形式を宣言できるのは <dir>/asset.yml だけ (check-manifests が sidecar の宣言を拒む)。
+        # sidecar の宣言で category dir の evals/ まで leak_only になる経路を、この gate でも閉じる (#427 の 2)。
+        next unless File.basename(asset[:manifest_path].to_s) == "asset.yml"
         next unless ArtifactTargets.resolves_any?(asset, "skill")
 
         ArtifactTargets::SKILL_NON_DEPLOY_DIRS.each do |sub|

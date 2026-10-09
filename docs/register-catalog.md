@@ -125,7 +125,9 @@ source format / output path の確認のみ)。build できない target-artifac
 ## Medium finding と human review の解決
 
 medium finding は「human review 必須」を意味する。register は finding の path を
-asset の source path に対応づけ、manifest の `review.human_review` と突き合わせる。
+asset の source path に対応づけ、manifest の `review.human_review` と突き合わせる。finding の path を
+所有する asset が複数あれば、そのすべてに finding を付ける (fail-closed。check-manifests が重複所有を
+拒むので、gate を通った構成では 1 つ。#427 の 3)。
 
 - `review.human_review: approved` **かつ** `review.approved_build_id` が現在の build_id と
   一致 **かつ** `review.approved_artifact_kind` が target の resolve 済み artifact_kind と
