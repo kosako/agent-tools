@@ -13,7 +13,28 @@ require_relative "path_glob"
 require_relative "cli"
 
 module CheckInjection
-  Pattern = Struct.new(:category, :risk, :regexp, :message)
+  # matcher は Regexp か、content を受けて一致の開始位置の配列を返す callable。
+  Pattern = Struct.new(:category, :risk, :matcher, :message)
+
+  # HTML コメントの本文に在れば hidden とみなす keyword。本文だけに当てる (下の html_comment_positions)。
+  HTML_COMMENT_KEYWORDS = /\b(?:ignore|instruction|system\s+prompt|do\s+not\s+tell|secretly)\b/i.freeze
+
+  # `<!--` ... `-->` を String#index で一方向に走査し、本文に keyword を含むコメントの開始位置を返す。
+  # 1 つの regex で `<!--(?:(?!-->).)*keyword(?:(?!-->).)*-->` と書くと、keyword を含まない開始記号が
+  # 多い入力で各開始位置から終端まで backtrack して二次時間になり、gate を長時間占有できる (#459 review)。
+  # 本文は最初の `-->` で閉じる (従来の regex と同じ)。閉じないコメントは一致しない。
+  def self.html_comment_positions(content)
+    positions = []
+    pos = 0
+    while (start = content.index("<!--", pos))
+      finish = content.index("-->", start + 4)
+      break unless finish
+
+      positions << start if content[(start + 4)...finish].match?(HTML_COMMENT_KEYWORDS)
+      pos = finish + 3
+    end
+    positions
+  end
 
   PATTERNS = [
     # system / developer instructions の override 試行
@@ -45,8 +66,9 @@ module CheckInjection
                 /[\p{Cf}\u{E0000}-\u{E007F}]/,
                 "contains invisible or formatting characters (zero-width, bidi control, tag, soft hyphen)"),
     # keyword を含む HTML コメントは長さによらず見る (前後 400 文字の上限を外した。#427 の 6)。
+    # 走査は線形時間の html_comment_positions で行う。
     Pattern.new("hidden", "medium",
-                /<!--(?:(?!-->).)*\b(?:ignore|instruction|system\s+prompt|do\s+not\s+tell|secretly)\b(?:(?!-->).)*-->/im,
+                method(:html_comment_positions),
                 "HTML comment containing instruction-like content"),
 
     # tool permission / approval policy の bypass 試行
@@ -207,18 +229,26 @@ module CheckInjection
     def scan(path, content, leak_only)
       patterns = leak_only ? PATTERNS.select { |p| LEAK_CATEGORIES.include?(p.category) } : PATTERNS
       patterns.flat_map do |pattern|
-        positions = []
-        pos = 0
-        while (match = pattern.regexp.match(content, pos))
-          positions << match.begin(0)
-          pos = match.begin(0) + [match[0].length, 1].max
-        end
+        positions = CheckInjection.match_positions(pattern.matcher, content)
         positions.map do |offset|
           line = content[0...offset].count("\n") + 1
           Finding.new(path, line, pattern.risk, pattern.category, pattern.message)
         end
       end
     end
+  end
+
+  # matcher ごとの一致の開始位置。Regexp は重ならない一致を順に、callable はその返り値。
+  def self.match_positions(matcher, content)
+    return matcher.call(content) unless matcher.is_a?(Regexp)
+
+    positions = []
+    pos = 0
+    while (match = matcher.match(content, pos))
+      positions << match.begin(0)
+      pos = match.begin(0) + [match[0].length, 1].max
+    end
+    positions
   end
 
   def self.main(argv)

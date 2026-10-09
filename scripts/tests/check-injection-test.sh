@@ -329,4 +329,19 @@ grep -q "shared/prompts/personal-long.md:1: \[medium\] hidden: HTML comment cont
 ! grep -q "personal-benign.md" "$tmp/out-comment" \
   || fail "a long comment without keywords must not be a finding: $(cat "$tmp/out-comment")"
 
+# --- case: HTML コメントの走査は入力の長さに線形 (#427 の 6、Codex review round 1) ---
+# keyword を含まない開始記号を大量に並べた入力で、regex の backtrack は二次時間になっていた。線形の走査なら
+# 数十万文字でも数秒で終わる (旧実装は Timeout で落ちる)。未終端と複数コメントも同じ走査で確かめる。
+mkdir -p "$tmp/manystarts/shared/prompts"
+ruby -e 'File.write(ARGV[0], ("<!-- ignorex " * 20000) + "-->\n")' "$tmp/manystarts/shared/prompts/personal-many.md"
+ruby -e 'File.write(ARGV[0], ("<!-- ignore " * 20000) + "\n")' "$tmp/manystarts/shared/prompts/personal-open.md"
+printf '<!-- ignore one -->\n<!-- nothing -->\n<!-- do not tell -->\n<!-- a <!-- secretly --> b\n' > "$tmp/manystarts/shared/prompts/personal-multi.md"
+ruby -rtimeout -r"$script_dir/../lib/check_injection" -e '
+  _, findings = Timeout.timeout(30) { CheckInjection::Runner.new(ARGV[0]).run }
+  lines = findings.select { |f| f.category == "hidden" }.map { |f| "#{File.basename(f.path)}:#{f.line}" }.sort
+  expected = %w[personal-multi.md:1 personal-multi.md:3 personal-multi.md:4]
+  abort "unexpected hidden findings: #{lines.inspect}" unless lines == expected
+' "$tmp/manystarts" > "$tmp/out-manystarts" 2>&1 \
+  || fail "comment scan must stay linear and report each keyword comment once: $(cat "$tmp/out-manystarts")"
+
 echo "ok: check-injection self-test passed"
