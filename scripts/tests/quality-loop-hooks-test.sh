@@ -1,5 +1,7 @@
 #!/bin/sh
 # personal-fast-edit-check.rb / personal-changed-scope-qa.rb の self-test。
+# 配備と同じ layout (2 つの hook と personal-safe-run を拡張子なしで同じ dir) を tmp に作って起動する (hook は
+# 同じ dir の safe-run の子として check を起動する。#467。safe-run 経由の分岐は quality-loop-safe-run-test.sh)。
 # 設定は AGENT_TOOLS_CHECKS_CONFIG、state は AGENT_TOOLS_QA_STATE_DIR で隔離し、
 # 実 HOME / 実 config には触れない。check コマンドは tmp 内の記録付き fake を使う。
 # hook payload は stdin JSON fixture。network access なし。
@@ -11,12 +13,22 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 edit_src="$repo_root/shared/scripts/personal-fast-edit-check.rb"
 qa_src="$repo_root/shared/scripts/personal-changed-scope-qa.rb"
-for f in "$edit_src" "$qa_src"; do
+sr_src="$repo_root/shared/scripts/personal-safe-run.rb"
+for f in "$edit_src" "$qa_src" "$sr_src"; do
   [ -f "$f" ] || fail "missing $f"
 done
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+
+deploy="$tmp/deploy"
+mkdir -p "$deploy"
+cp "$edit_src" "$deploy/personal-fast-edit-check"
+cp "$qa_src" "$deploy/personal-changed-scope-qa"
+cp "$sr_src" "$deploy/personal-safe-run"
+chmod +x "$deploy/personal-fast-edit-check" "$deploy/personal-changed-scope-qa" "$deploy/personal-safe-run"
+edit_hook="$deploy/personal-fast-edit-check"
+qa_hook="$deploy/personal-changed-scope-qa"
 
 GIT_CONFIG_SYSTEM=/dev/null
 export GIT_CONFIG_SYSTEM
@@ -57,12 +69,12 @@ File.write(ARGV[2], JSON.generate({
 
 run_edit() { # $1=file_path (payload)  env: config
   printf '{"hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"%s"}}' "$1" \
-    | env AGENT_TOOLS_CHECKS_CONFIG="$conf" HOME="$tmp/home" ruby "$edit_src"
+    | env AGENT_TOOLS_CHECKS_CONFIG="$conf" HOME="$tmp/home" "$edit_hook"
 }
 run_qa() { # $1=stop_hook_active  cwd 前提: repo 内
   printf '{"hook_event_name":"Stop","stop_hook_active":%s}' "$1" \
     | env AGENT_TOOLS_CHECKS_CONFIG="$conf" AGENT_TOOLS_QA_STATE_DIR="$tmp/qa-state" \
-        HOME="$tmp/home" ruby "$qa_src"
+        HOME="$tmp/home" "$qa_hook"
 }
 assert_qa_warning() {
   printf '%s' "$1" | ruby -rjson -e '
@@ -109,13 +121,13 @@ out=$(run_edit "$tmp/loose.rb") || fail "non-repo file should exit 0"
 # 壊れた設定 -> 設定エラーを steer (無言で握り潰さない)・exit 0
 echo '{broken' > "$tmp/broken.json"
 out=$(printf '{"tool_input":{"file_path":"%s"}}' "$repo/a.rb" \
-  | env AGENT_TOOLS_CHECKS_CONFIG="$tmp/broken.json" HOME="$tmp/home" ruby "$edit_src") \
+  | env AGENT_TOOLS_CHECKS_CONFIG="$tmp/broken.json" HOME="$tmp/home" "$edit_hook") \
   || fail "broken config should still exit 0"
 echo "$out" | grep -q "設定エラー" || fail "broken config should be surfaced: $out"
 
 # 設定ファイル自体なし -> 無言 no-op
 out=$(printf '{"tool_input":{"file_path":"%s"}}' "$repo/a.rb" \
-  | env AGENT_TOOLS_CHECKS_CONFIG="$tmp/nonexistent.json" HOME="$tmp/home" ruby "$edit_src") \
+  | env AGENT_TOOLS_CHECKS_CONFIG="$tmp/nonexistent.json" HOME="$tmp/home" "$edit_hook") \
   || fail "absent config should exit 0"
 [ -z "$out" ] || fail "absent config should be silent: $out"
 
@@ -559,6 +571,6 @@ echo pins-v2 > "$repo/base.txt"   # 内容を変える → 指紋が変わり、
 out=$(cd "$repo" && export GIT_CONFIG_GLOBAL="$pins_cfg" && run_qa false 2>/dev/null) || fail "#430: content change must re-run the check and pass"
 [ -z "$out" ] || fail "#430: with the diff pinned, a content change must produce a fresh pass (no cached failure warning): $out"
 
-ruby "$script_dir/fast-edit-check-payload-test.rb" "$edit_src"
+ruby "$script_dir/fast-edit-check-payload-test.rb" "$edit_hook"
 
 echo "ok: quality-loop-hooks self-test"

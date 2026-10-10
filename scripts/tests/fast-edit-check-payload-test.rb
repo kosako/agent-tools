@@ -5,8 +5,10 @@ require "json"
 require "open3"
 require "tmpdir"
 
+# 配備と同じ layout の hook (拡張子なし。同じ dir に personal-safe-run が在る。#467) を受け取るので、require では
+# なく load で読む (main guard があるので起動はしない)。
 script = File.expand_path(ARGV.fetch(0))
-require script
+load script
 
 def assert(condition, message)
   raise message unless condition
