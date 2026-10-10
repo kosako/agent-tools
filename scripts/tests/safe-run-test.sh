@@ -445,6 +445,21 @@ module SafeRunInjection
   end
 end
 SafeRun.singleton_class.prepend(SafeRunInjection)
+
+# select-lies: stderr への書き込みを確かめる select に「書き込める」と返す (実際は pipe が満杯で読まれない。select
+# の後に別の writer が pipe を埋めた状態)。stderr は詰まっているので、効いた印は file に書く。
+if SafeRunInjection::MODE == "select-lies"
+  module SafeRunSelectLies
+    def select(read, write = nil, error = nil, timeout = nil)
+      if write && write.include?($stderr)
+        File.write(ENV.fetch("SAFE_RUN_INJECT_LOG"), "select-lies\n", mode: "a")
+        return [[], [$stderr], []]
+      end
+      super
+    end
+  end
+  IO.singleton_class.prepend(SafeRunSelectLies)
+end
 RB
 
 # ---- case 1: unit。decode は phys_footprint (offset 72) と exit 時刻 (offset 88) を返す ----------------------
@@ -475,6 +490,8 @@ RUBY
 
 # ---- case 2: 動いている process の phys_footprint を script の計測と footprint CLI で比べて一致 (offset の回帰) ---
 # 全体を harness の期限つきで走らせ (fixture の pgid は cli.pgid に書く)、CLI も 1 回ごとに期限で止めて回収する。
+# CLI は自分の process group で起動して pgid を clicmd.pgid に書く (watchdog が比較の script を止めても、test の終わり
+# の片付けが CLI を止める)。
 cat > "$tmp/cli-check.rb" <<'RUBY'
 load ARGV[0]
 S = SafeRun
@@ -483,32 +500,40 @@ def now
   Process.clock_gettime(Process::CLOCK_MONOTONIC)
 end
 
-# argv を起動し、期限までに終われば出力 (stdout と stderr) を、終わらなければ KILL して回収し nil を返す。
-def run_cli(argv, seconds)
+# argv を自分の process group で起動し、期限までに終わって出力の EOF まで読めたら出力 (stdout と stderr) を返す。
+# EOF の後も終了の回収は同じ期限で WNOHANG の poll にする (出力を閉じてから止まる CLI で無期限に待たない)。期限か
+# 例外で抜けたら、ensure で group に KILL を送って回収する (回収の待ちにも期限)。
+def run_cli(argv, seconds, pgid_file)
   r, w = IO.pipe
-  pid = Process.spawn(*argv, out: w, err: w, in: File::NULL)
+  pid = Process.spawn(*argv, out: w, err: w, in: File::NULL, pgroup: true)
   w.close
+  File.write(pgid_file, "#{pid}\n")
   out = String.new
+  status = nil
   deadline = now + seconds
   loop do
-    left = deadline - now
-    if left <= 0
-      Process.kill("KILL", pid) rescue nil
-      Process.wait(pid)
-      return nil
+    return nil if now >= deadline
+
+    if r.closed?
+      sleep 0.02
+    elsif IO.select([r], nil, nil, 0.05)
+      chunk = r.read_nonblock(65_536, exception: false)
+      if chunk.nil?
+        r.close
+      elsif chunk != :wait_readable
+        out << chunk
+      end
     end
-    next unless IO.select([r], nil, nil, left)
-
-    chunk = r.read_nonblock(65_536, exception: false)
-    next if chunk == :wait_readable
-    break if chunk.nil?
-
-    out << chunk
+    _, status = Process.waitpid2(pid, Process::WNOHANG) unless status
+    return out if status && r.closed?
   end
-  Process.wait(pid)
-  out
 ensure
-  r.close
+  r.close if r && !r.closed?
+  if pid && status.nil?
+    Process.kill("KILL", -pid) rescue nil
+    reap_deadline = now + 5
+    sleep 0.02 until Process.waitpid2(pid, Process::WNOHANG) || now > reap_deadline
+  end
 end
 
 S.load_libproc
@@ -523,7 +548,7 @@ begin
   seen = []
   5.times do
     before = S.member_state(pid, pid)
-    cli = run_cli(["/usr/bin/footprint", "--noCategories", "-f", "bytes", "-p", pid.to_s], 15)
+    cli = run_cli(["/usr/bin/footprint", "--noCategories", "-f", "bytes", "-p", pid.to_s], 15, ARGV[2])
     after = S.member_state(pid, pid)
     value = cli && cli[/^\s*phys_footprint: (\d+) B$/, 1]
     seen << [before, cli.nil? ? :timeout : value, after]
@@ -542,7 +567,7 @@ ensure
 end
 exit(@failed.zero? ? 0 : 1)
 RUBY
-run_case cli 120 -- ruby -r"$script_dir/lib/check_helper" "$tmp/cli-check.rb" "$src" "$tmp/cli.pgid"
+run_case cli 120 -- ruby -r"$script_dir/lib/check_helper" "$tmp/cli-check.rb" "$src" "$tmp/cli.pgid" "$tmp/clicmd.pgid"
 expect_exit cli 0
 
 # ---- case 3: usage と前提の誤り → exit 2、command を起動せず、report を書かない -------------------------------
@@ -867,5 +892,13 @@ expect_exit stuck 137
 expect_report stuck 'reason="time"' exit_status=137 cleanup_complete=true
 expect_group_gone stuck
 ruby -e 'exit(Float(ARGV[0]) < 8 ? 0 : 1)' "$elapsed" || fail "stuck: should finish within a few seconds, took $elapsed"
+# 21b: select が書き込めると返した後に pipe が埋まっている (注入) → 書き込みの thread を期限で止め、期限内に終わる
+run_case lies 20 --stuck-stderr -- env RUBYOPT="-r$tmp/inject.rb" SAFE_RUN_INJECT=select-lies SAFE_RUN_INJECT_LOG="$tmp/lies.log" \
+  "$sr" --max-footprint-mb 100 --max-seconds 1 --report "$tmp/lies.json" -- perl "$tmp/fx-flood.pl" "$tmp/lies.pgid"
+expect_exit lies 137
+[ -s "$tmp/lies.log" ] || fail "lies: the injection should make select report stderr as writable"
+expect_report lies 'reason="time"' exit_status=137 cleanup_complete=true
+expect_group_gone lies
+ruby -e 'exit(Float(ARGV[0]) < 8 ? 0 : 1)' "$elapsed" || fail "lies: should finish within a few seconds, took $elapsed"
 
 echo "ok: safe-run self-test passed"

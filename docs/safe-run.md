@@ -32,10 +32,12 @@ personal-safe-run --max-footprint-mb N --max-seconds N [--report FILE] -- <comma
   `personal-safe-run: stopped (reason=<reason>): ...` の行を、残りを止めたときや後始末が終わり切らないときは
   `personal-safe-run: warning: ...` の行を出す。
 - 順序は **後始末 → report → 診断**。stderr は command と共有しうる (読まれずに詰まっていることもある) ので、
-  診断は後始末と report の後にまとめて出す。1 行ずつ、書き込めることを `select` で確かめてから (最大 0.2 秒)、
-  PIPE_BUF (512 byte) 以下に切り詰めて書き、書けなければ捨てる。stderr に `O_NONBLOCK` は立てない (command と
-  open file description を共有しているので、command の書き込みまで失敗させる)。診断の失敗は終了の理由と report
-  に影響させない。
+  診断は後始末と report の後にまとめて出す。1 行ずつ PIPE_BUF (512 byte) 以下に切り詰め、書き込めることを
+  `select` で確かめてから、書き込み自体は**専用の thread** で行う。1 行 0.2 秒・診断全体 1 秒の期限で終わらなければ
+  thread を止めてその行を捨てる (`select` の後に別の writer が pipe を埋めると同期の write は無期限に待つ。
+  PIPE_BUF は原子性を保証するだけで空きを予約しない)。write で止まった thread は exit を妨げない (2026-10-10 に
+  Ruby 2.6 で実測)。stderr に `O_NONBLOCK` は立てない (command と open file description を共有しているので、
+  command の書き込みまで失敗させる)。診断の失敗は終了の理由と report に影響させない。
 - `--help` は usage を stdout に出して exit 0。
 
 ## exit code

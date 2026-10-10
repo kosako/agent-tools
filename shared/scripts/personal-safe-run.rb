@@ -57,9 +57,11 @@
 # 閉じる。
 #
 # 順序と診断: 後始末 → report → 診断。stderr は command と共有しうる (読まれずに詰まっていることもある) ので、診断は
-# 後始末と report の後にまとめて出し、1 行ずつ、書き込めることを select で確かめてから (最大 0.2 秒) PIPE_BUF 以下
-# に切り詰めて書き、書けなければ捨てる。stderr に O_NONBLOCK は立てない (command と open file description を共有して
-# いるので、command の書き込みまで失敗させる)。診断の失敗は終了の理由と report に影響させない。
+# 後始末と report の後にまとめて出す。1 行ずつ PIPE_BUF 以下に切り詰め、書き込めることを select で確かめてから、
+# 書き込み自体は専用の thread で行い、1 行 0.2 秒・全体 1 秒の期限で終わらなければ thread を止めてその行を捨てる
+# (select の後に別の writer が pipe を埋めると同期の write は無期限に待つため)。stderr に O_NONBLOCK は立てない
+# (command と open file description を共有しているので、command の書き込みまで失敗させる)。診断の失敗は終了の理由と
+# report に影響させない。
 #
 # report (--report のとき。起動を試みた後は exit の直前に必ず試行する。同じ dir に排他で作った一時 file (0600)
 # に書いて rename で置く。書けなければ一時 file を消して stderr に warning を出し、exit code は変えない):
@@ -87,9 +89,11 @@ module SafeRun
   INCOMPLETE_LIMIT = 3
   GRACE_SECONDS = 2.0
   POLL_SECONDS = 0.05
-  # 診断の 1 行の上限 (改行を含む)。pipe への PIPE_BUF 以下の書き込みは分割されず、select が書き込めると返せば待たない。
+  # 診断の 1 行の上限 (改行を含む)。pipe への PIPE_BUF 以下の書き込みは分割されない。
   PIPE_BUF = 512
+  # 診断の 1 行の待ちの上限と、診断全体の待ちの上限 (秒)。
   DIAG_WAIT_SECONDS = 0.2
+  DIAG_TOTAL_SECONDS = 1.0
   TRAPPED_SIGNALS = %w[INT TERM HUP QUIT TSTP].freeze
   REPORT_VERSION = 1
   EXIT_USAGE = 2
@@ -143,15 +147,31 @@ module SafeRun
     Process.clock_gettime(Process::CLOCK_MONOTONIC)
   end
 
-  # safe-run 自身の診断を 1 行出す。stderr は command と共有しうる (読まれずに詰まっていることもある) ので、書き込める
-  # ことを select で確かめてから (最大 DIAG_WAIT_SECONDS)、PIPE_BUF 以下に切り詰めて書き、書けなければ捨てる。
-  # stderr に O_NONBLOCK は立てない (command と open file description を共有しているので、command の書き込みまで
-  # 失敗させる)。書き込みの失敗 (EPIPE など) は終了の理由と report に影響させない。
+  # safe-run 自身の診断を 1 行出す (待ちは最大 DIAG_WAIT_SECONDS)。
   def diag(message)
-    line = "#{NAME}: #{message}".byteslice(0, PIPE_BUF - 1).scrub("") + "\n"
-    return unless IO.select(nil, [$stderr], nil, DIAG_WAIT_SECONDS)
+    diag_until(message, now + DIAG_WAIT_SECONDS)
+  end
 
-    $stderr.write(line)
+  # 診断を 1 行、deadline までに書き、書けなければ捨てる。stderr は command と共有しうる (読まれずに詰まっている
+  # こともある) ので、PIPE_BUF 以下に切り詰め、書き込めることを select で確かめてから、書き込み自体は専用の thread
+  # で行う。select の後に別の writer が pipe を埋めると同期の write は無期限に待つ (PIPE_BUF は空きを予約しない)
+  # ので、deadline までに終わらなければ thread を止めて先へ進む (exit も止まった thread に妨げられない。2026-10-10
+  # 実測)。stderr に O_NONBLOCK は立てない (command と open file description を共有しているので、command の書き込み
+  # まで失敗させる)。書き込みの失敗 (EPIPE など) は終了の理由と report に影響させない。
+  def diag_until(message, deadline)
+    line = "#{NAME}: #{message}".byteslice(0, PIPE_BUF - 1).scrub("") + "\n"
+    left = deadline - now
+    return if left <= 0 || !IO.select(nil, [$stderr], nil, left)
+
+    writer = Thread.new(line) { |text| write_stderr(text) }
+    writer.report_on_exception = false
+    writer.kill unless writer.join([deadline - now, 0].max)
+  rescue SystemCallError, IOError
+    nil
+  end
+
+  def write_stderr(text)
+    $stderr.write(text)
   rescue SystemCallError, IOError
     nil
   end
@@ -161,8 +181,10 @@ module SafeRun
     @notes << message
   end
 
+  # 溜めた診断を出す。1 行の待ちは DIAG_WAIT_SECONDS、全体の待ちは DIAG_TOTAL_SECONDS まで (残りは捨てる)。
   def flush_notes
-    @notes.each { |message| diag(message) }
+    total = now + DIAG_TOTAL_SECONDS
+    @notes.each { |message| diag_until(message, [now + DIAG_WAIT_SECONDS, total].min) }
     @notes.clear
   end
 
