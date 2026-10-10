@@ -9,11 +9,12 @@ risk:
   privacy: low
 # plugin kind は OpenCode の process の中で動く実行コード配布のため常に human review 必須 (#295)。
 # 本 plugin は #295 PR 1 で author≠reviewer レビューのうえ承認し、PR 2 (品質ループ) と PR 3a (目印)、
-# #343 (init の目印の行) で再レビューする。承認は内容と配布形態に紐づく (#148, #184)。source 変更時は
-# 再レビューして approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+# #343 (init の目印の行)、#467 (timeout の止め方) で再レビューする。承認は内容と配布形態に紐づく
+# (#148, #184)。source 変更時は再レビューして approved_build_id を、kind 変更時は approved_artifact_kind を
+# 更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:a634f35a35a79197b3dbfc03794bce9da995f94ab0b7342f88dd7c6787c5df47
+  approved_build_id: sha256:3f979d936bc6419f8909764fb2d9f09a70cc7eb37ec4c2202f45a3bf8f4b4751
   approved_artifact_kind: plugin
 source:
   path: shared/plugins/personal-agent-tools.js

@@ -1,8 +1,9 @@
 #!/bin/sh
 # shared/plugins/personal-agent-tools.js (OpenCode plugin, #295 PR 1 / PR 2) の self-test。
 # build.sh で tmp の最小 fixture から生成した plugin (marker 行つき) を node で import し、
-# server(fakeCtx, {timeoutMs}) が返す hooks 経由で safe-gh の注記、品質ループ (fast-edit-check /
-# changed-scope-qa)、fail-open、init の目印の行 (#343) を確かめる (node 側: lib/opencode-plugin-test.mjs)。
+# server(fakeCtx, {timeoutMs, termGraceMs}) が返す hooks 経由で safe-gh の注記、品質ループ (fast-edit-check /
+# changed-scope-qa)、fail-open、timeout の止め方 (#467。TERM → 猶予 → KILL)、init の目印の行 (#343) を確かめる
+# (node 側: lib/opencode-plugin-test.mjs)。
 # hook script は shared/scripts の実物を tmp の home に置いて呼ぶ。check は tmp の git repo と記録つきの
 # fake を使う。目印の行の build_id の期待値は、生成物の 1 行目を実装の PluginMarker.owned で読んだ値。
 # 実物の tool home も network も使わない。node が無ければ fail にする (skip にしない)。

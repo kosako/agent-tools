@@ -1,6 +1,6 @@
 // opencode-plugin-test.sh の node 側。build が生成した plugin (marker 行つき) を import し、
-// server(fakeCtx, {timeoutMs}) が返す hooks (入口) 経由で、safe-gh の注記、品質ループ
-// (fast-edit-check / changed-scope-qa)、fail-open、init の目印の行 (#343) を確かめる。
+// server(fakeCtx, {timeoutMs, termGraceMs}) が返す hooks (入口) 経由で、safe-gh の注記、品質ループ
+// (fast-edit-check / changed-scope-qa)、fail-open、timeout の止め方 (#467)、init の目印の行 (#343) を確かめる。
 // 使い方: node opencode-plugin-test.mjs <generated plugin.js> <personal-safe-gh-hook.rb>
 //           <personal-fast-edit-check.rb> <personal-changed-scope-qa.rb> <work dir>
 //           <生成物の marker の build_id> <scripts/lib/plugin_marker.rb>
@@ -36,6 +36,13 @@ const SHORT_TIMEOUT_MS = 500
 const REAL_TIMEOUT_MS = 20000
 const DEADLINE_MARGIN_MS = 1500
 const KILL_SETTLE_MS = 300
+// timeout の止め方 (#467) の case の猶予。SHORT は猶予を待ち切る case、LONG は待たずに終わるべき case に使う。
+const SHORT_GRACE_MS = 1000
+const LONG_GRACE_MS = 4000
+// termGraceMs を渡さないとき、この時間ではまだ reject しないこと (既定の猶予 10 秒が効いていること) を見る。
+const DEFAULT_GRACE_PROBE_MS = 1500
+// hook が返った後、node の process が終わるまでの許容 (timer が残れば猶予の残りぶん待つ)。
+const EXIT_LAG_MS = 1000
 const ORIGINAL_OUTPUT = "original tool output\nline 2"
 
 function fail(msg) {
@@ -59,6 +66,13 @@ function readLines(path) {
 }
 
 // --- fixture: case ごとの home (3 本の script を同じ body で置く) ---------------------------
+
+// timeout の止め方 (#467) の fixture の body。TERM を受けたら cwd の term.log に 1 行書いて終わる親が、同じ group
+// に子 (寿命は有限) を 1 つ起動し、親と子の pid を cwd の leaders.pids / children.pids に足す。引数 warmup では
+// 何もせずに終わる (下の P7 の前の warm-up 用。plugin は引数を渡さない)。
+function termScript(startChild) {
+  return `#!/bin/sh\ncase "$1" in warmup) exit 0 ;; esac\ntrap 'echo term >> term.log; exit 0' TERM\necho $$ >> leaders.pids\n${startChild}\necho $! >> children.pids\nwait\n`
+}
 
 // 記録用 script の 1 行: <script>\t<sentinel か unset>\t<AGENT_TOOLS_CHECKS_CONFIG か unset>
 const ENV_SENTINEL = "OPENCODE_PLUGIN_TEST_SENTINEL"
@@ -92,6 +106,10 @@ const homes = {
   // pid を cwd (= fake ctx の directory) に書いてから寝る。group kill で子 (sh) と孫 (sleep) が
   // 消えることを確かめるため。
   slow: makeHome("slow", "#!/bin/sh\necho $$ > child.pid\nsleep 5 &\necho $! > grandchild.pid\nwait\n", 0o755),
+  // timeout の止め方 (#467)。termClean の子は TERM で終わる。termIgnorer の子は TERM を無視し、stdio を閉じて
+  // 残る (親が TERM で終わると、group に member が居ても close が先に来る形)。
+  termClean: makeHome("term-clean", termScript("sleep 15 &"), 0o755),
+  termIgnorer: makeHome("term-ignorer", termScript("( trap '' TERM; exec sleep 15 ) </dev/null >/dev/null 2>&1 &"), 0o755),
   // 起動と payload / env / cwd を $HOME の下に記録する (出力なしの exit 0)。env.log には、許可外の
   // sentinel と AGENT_TOOLS_CHECKS_CONFIG が子 process から見えるかを script ごとに書く。
   // changed-scope-qa は実行中の idle を skip することを確かめるため少し寝る。
@@ -410,6 +428,15 @@ function idle(sessionID = "s1") {
     rejectedTable = error instanceof TypeError
   }
   assert(rejectedTable, "P1: server must reject a non-object options.timeoutMs with TypeError")
+  for (const termGraceMs of [-1, 0, Number.NaN, Number.POSITIVE_INFINITY, "1"]) {
+    let rejected = false
+    try {
+      await plugin.server({ client, directory: ctxDir }, { termGraceMs })
+    } catch (error) {
+      rejected = error instanceof TypeError
+    }
+    assert(rejected, `P1: server must reject options.termGraceMs=${String(termGraceMs)} with TypeError`)
+  }
   // throw した server() は init の行を出さない (最初の makeHooks の 1 行だけが残る)。
   assertInits(client, 1, expectedBuildId, "P1 (a server() that throws must not log the init line)")
   console.log("ok P1 hooks shape")
@@ -538,6 +565,160 @@ for (const mode of ["throw", "reject"]) {
   assert(output.output === ORIGINAL_OUTPUT, "P6 no client: output must be unchanged")
 }
 console.log("ok P6 warn path failures are swallowed")
+
+// --- P7-P10: timeout の止め方 (#467)。group に TERM → group が空になるまで最大 termGraceMs → KILL ---------------
+// 経路は 3 本の script で共通 (spawnScript) なので safe-gh で確かめ、直列の契約だけ changed-scope-qa (Q5) で見る。
+// fixture は cwd (= ctxDir) に書く。case の終わりに、記録した pid を待って残りを KILL し、記録を消す。
+const TERM_LOG = join(ctxDir, "term.log")
+const LEADER_PIDS = join(ctxDir, "leaders.pids")
+const CHILD_PIDS = join(ctxDir, "children.pids")
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code !== "ESRCH"
+  }
+}
+
+async function waitFor(predicate, ms) {
+  const deadline = Date.now() + ms
+  while (!predicate()) {
+    if (Date.now() >= deadline) return false
+    await sleep(20)
+  }
+  return true
+}
+
+// 記録した pid が KILL_SETTLE_MS 以内に消えるのを待ってから、fixture の記録 (TERM を受けた回数・起動した親と子の
+// 数) と残っていた pid を返す。残りは KILL し、記録は消す (次の case に持ち越さない)。
+async function settleGroup() {
+  const pids = [...readLines(LEADER_PIDS), ...readLines(CHILD_PIDS)].map(Number)
+  await waitFor(() => !pids.some(isAlive), KILL_SETTLE_MS)
+  const record = { terms: readLines(TERM_LOG).length, leaders: readLines(LEADER_PIDS).length, children: readLines(CHILD_PIDS).length }
+  const alive = pids.filter(isAlive)
+  for (const pid of alive) process.kill(pid, "SIGKILL")
+  for (const file of [TERM_LOG, LEADER_PIDS, CHILD_PIDS]) rmSync(file, { force: true })
+  return { ...record, alive }
+}
+
+// 新しく書いた script の初回の実行は遅いことがある (2026-10-10 の macOS の実測で 90〜720 ms。2 回目からは数 ms)。
+// trap を置く前に TERM が届かないように、timeout の case で使う fixture の script を 1 回ずつ実行しておく。
+for (const home of [homes.termClean, homes.termIgnorer]) {
+  for (const name of Object.keys(SCRIPT_SOURCES)) {
+    const res = spawnSync(join(home, ...SCRIPTS_DIR, name), ["warmup"])
+    assert(res.status === 0, `warm-up of ${name} in ${home} must exit 0, got ${res.status} ${res.error}`)
+  }
+}
+
+// timeout の warn は今と同じ文言で 1 回だけ。
+function assertTimeoutWarn(client, script, timeoutMs, consequence, label) {
+  assertWarns(client, 1, label)
+  const want = `${script}: timed out after ${timeoutMs} ms; ${consequence} (fail-open)`
+  assert(client.calls[0].body.message === want, `${label}: the timeout warn must stay ${JSON.stringify(want)}, got ${JSON.stringify(client.calls[0].body.message)}`)
+}
+
+// P7: TERM で後始末して終わる script は、group が空と分かった時点で終わる (猶予を待たず、KILL まで行かない)。
+{
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, { timeoutMs: { safeGh: SHORT_TIMEOUT_MS }, termGraceMs: LONG_GRACE_MS })
+  const output = toolOutput()
+  const started = Date.now()
+  await runAfter(hooks, homes.termClean, bashInput("gh issue view 1"), output, SHORT_TIMEOUT_MS + LONG_GRACE_MS + DEADLINE_MARGIN_MS, "P7")
+  const elapsed = Date.now() - started
+  const { terms, alive } = await settleGroup()
+  assert(terms === 1, `P7: the timed-out script must receive SIGTERM once, got ${terms} term.log line(s)`)
+  assert(elapsed >= SHORT_TIMEOUT_MS - 50, `P7: resolved before the timeout (${elapsed} ms)`)
+  assert(elapsed < SHORT_TIMEOUT_MS + LONG_GRACE_MS / 2, `P7: a group emptied by SIGTERM must not wait for the grace (${elapsed} ms)`)
+  assert(alive.length === 0, `P7: the group must be empty, but ${alive.join(", ")} survived`)
+  assert(output.output === ORIGINAL_OUTPUT, "P7: output must be unchanged")
+  assertTimeoutWarn(client, SAFE_GH, SHORT_TIMEOUT_MS, "the tool result was left unchanged", "P7")
+  console.log("ok P7 a group that SIGTERM empties ends the timeout without the grace")
+}
+
+// P8: 親は TERM で終わり、TERM を無視する子が stdio を閉じて残る (close は先に来る)。group が空になるまで待ち、
+// 猶予を過ぎたら KILL で子も消す。reject は KILL を送った後。
+{
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, { timeoutMs: { safeGh: SHORT_TIMEOUT_MS }, termGraceMs: SHORT_GRACE_MS })
+  const output = toolOutput()
+  const started = Date.now()
+  await runAfter(hooks, homes.termIgnorer, bashInput("gh issue view 1"), output, SHORT_TIMEOUT_MS + SHORT_GRACE_MS + DEADLINE_MARGIN_MS, "P8")
+  const elapsed = Date.now() - started
+  const { terms, children, alive } = await settleGroup()
+  assert(children === 1, `P8: the fixture must start one child, got ${children}`)
+  assert(terms === 1, `P8: the parent must receive SIGTERM once, got ${terms} term.log line(s)`)
+  assert(elapsed >= SHORT_TIMEOUT_MS + SHORT_GRACE_MS - 50, `P8: must not resolve before the grace ends while the group has members (${elapsed} ms)`)
+  assert(alive.length === 0, `P8: SIGKILL after the grace must remove the child that ignores SIGTERM, but ${alive.join(", ")} survived`)
+  assert(output.output === ORIGINAL_OUTPUT, "P8: output must be unchanged")
+  assertTimeoutWarn(client, SAFE_GH, SHORT_TIMEOUT_MS, "the tool result was left unchanged", "P8")
+  console.log("ok P8 a child that ignores SIGTERM is killed after the grace, before the timeout resolves")
+}
+
+// P9: termGraceMs を渡さなければ既定の猶予を待つ (DEFAULT_GRACE_PROBE_MS ではまだ返らない)。猶予の途中でも
+// group が空になれば (ここでは test が子を KILL する) 次の確認で返る。
+{
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, { timeoutMs: { safeGh: SHORT_TIMEOUT_MS } })
+  const output = toolOutput()
+  let resolved = false
+  const pending = runAfter(hooks, homes.termIgnorer, bashInput("gh issue view 1"), output, SHORT_TIMEOUT_MS + DEFAULT_GRACE_PROBE_MS + DEADLINE_MARGIN_MS, "P9").then(() => {
+    resolved = true
+  })
+  await sleep(SHORT_TIMEOUT_MS + DEFAULT_GRACE_PROBE_MS)
+  const waitedForDefault = !resolved
+  const children = readLines(CHILD_PIDS).map(Number)
+  for (const pid of children.filter(isAlive)) process.kill(pid, "SIGKILL")
+  const emptiedAt = Date.now()
+  await pending
+  const lag = Date.now() - emptiedAt
+  const { alive } = await settleGroup()
+  assert(children.length === 1, `P9: the fixture must start one child, got ${children.length}`)
+  assert(waitedForDefault, `P9: without options.termGraceMs the default grace must still be running after ${DEFAULT_GRACE_PROBE_MS} ms`)
+  assert(lag < 500, `P9: a group emptied during the grace must end the wait at the next check (${lag} ms)`)
+  assert(alive.length === 0, `P9: nothing must be left, but ${alive.join(", ")} survived`)
+  assert(output.output === ORIGINAL_OUTPUT, "P9: output must be unchanged")
+  assertTimeoutWarn(client, SAFE_GH, SHORT_TIMEOUT_MS, "the tool result was left unchanged", "P9")
+  console.log("ok P9 the default grace is waited, and an emptied group ends it early")
+}
+
+// P10: 後始末が済んだら timer を残さない (OpenCode の process を待たせない)。別の node で plugin を読み、TERM で
+// 終わる script の timeout を 1 回起こし、hook が返った後に node が猶予の残りを待たずに終わることを確かめる。
+{
+  const helper = join(workDir, "timer-leak-helper.mjs")
+  writeFileSync(helper, `import { pathToFileURL } from "node:url"
+const [pluginPath, directory, timeoutMs, graceMs] = process.argv.slice(2)
+const plugin = (await import(pathToFileURL(pluginPath).href)).default
+const warns = []
+const client = { app: { log: ({ body }) => { if (body.level === "warn") warns.push(body.message); return Promise.resolve({}) } } }
+const hooks = await plugin.server({ client, directory }, { timeoutMs: { safeGh: Number(timeoutMs) }, termGraceMs: Number(graceMs) })
+const output = { title: "t", output: "unchanged", metadata: {} }
+const started = Date.now()
+await hooks["tool.execute.after"]({ tool: "bash", sessionID: "s1", callID: "c1", args: { command: "gh issue view 1" } }, output)
+const resolvedAt = Date.now()
+console.log(JSON.stringify({ elapsed: resolvedAt - started, resolvedAt, warns, output: output.output }))
+`)
+  const res = spawnSync(process.execPath, [helper, pluginPath, ctxDir, String(SHORT_TIMEOUT_MS), String(LONG_GRACE_MS)], {
+    env: { ...process.env, HOME: homes.termClean },
+    encoding: "utf8",
+    timeout: SHORT_TIMEOUT_MS + LONG_GRACE_MS + DEADLINE_MARGIN_MS * 2,
+  })
+  const exitedAt = Date.now()
+  const { alive } = await settleGroup()
+  assert(res.status === 0, `P10: the helper node must exit 0, got ${res.status} ${res.signal}: ${res.stderr}`)
+  const report = JSON.parse(res.stdout)
+  assert(report.warns.length === 1 && report.warns[0].startsWith(`${SAFE_GH}: timed out after`), `P10: the helper must hit the timeout once (fixture assumption), got ${JSON.stringify(report.warns)}`)
+  assert(report.output === "unchanged", "P10: output must be unchanged")
+  assert(report.elapsed < SHORT_TIMEOUT_MS + LONG_GRACE_MS / 2, `P10: the group must be emptied by SIGTERM (fixture assumption, ${report.elapsed} ms)`)
+  assert(exitedAt - report.resolvedAt < EXIT_LAG_MS, `P10: node must exit right after the hook resolves (no timer left), but it took ${exitedAt - report.resolvedAt} ms`)
+  assert(alive.length === 0, `P10: nothing must be left, but ${alive.join(", ")} survived`)
+  console.log("ok P10 no timer is left after the cleanup")
+}
 
 // === 品質ループ: fast-edit-check (tool.execute.after) ==========================================
 
@@ -866,6 +1047,28 @@ for (const mode of ["throw", "reject"]) {
 }
 console.log("ok Q4 log failures are swallowed")
 
+// Q5: timeout の後始末の間 (猶予中) も実行中に含める (#467)。その間に来た idle では起動せず、warn は後始末の後に 1 回。
+{
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, { timeoutMs: { changedScopeQa: SHORT_TIMEOUT_MS }, termGraceMs: SHORT_GRACE_MS })
+  process.env.HOME = homes.termIgnorer
+  const started = Date.now()
+  const first = hooks.event({ event: idle() })
+  const termed = await waitFor(() => readLines(TERM_LOG).length > 0, SHORT_TIMEOUT_MS + DEADLINE_MARGIN_MS)
+  const secondAt = Date.now() - started
+  await runEvent(hooks, homes.termIgnorer, idle(), DEADLINE_MARGIN_MS, "Q5 idle during the grace")
+  await withDeadline(first, SHORT_TIMEOUT_MS + SHORT_GRACE_MS + DEADLINE_MARGIN_MS, "Q5 first")
+  const elapsed = Date.now() - started
+  const { leaders, alive } = await settleGroup()
+  assert(termed, "Q5: the timed-out script must receive SIGTERM (fixture assumption)")
+  assert(secondAt < SHORT_TIMEOUT_MS + SHORT_GRACE_MS, `Q5: the second idle must arrive within the grace (fixture assumption, ${secondAt} ms)`)
+  assert(leaders === 1, `Q5: an idle during the cleanup grace must not start the script again, got ${leaders} start(s)`)
+  assert(elapsed >= SHORT_TIMEOUT_MS + SHORT_GRACE_MS - 50, `Q5: the run must stay running until the cleanup ends (${elapsed} ms)`)
+  assert(alive.length === 0, `Q5: nothing must be left, but ${alive.join(", ")} survived`)
+  assertTimeoutWarn(client, QA, SHORT_TIMEOUT_MS, "no changed-scope-qa report was made", "Q5")
+  console.log("ok Q5 an idle during the cleanup grace does not start a second run")
+}
+
 // V1: 子 process の env は絞る。許可外の sentinel は 3 本のどれからも見えず、AGENT_TOOLS_CHECKS_CONFIG は
 // 渡り、changed-scope-qa の state dir は親の AGENT_TOOLS_QA_STATE_DIR ではなく plugin の値になる。
 {
@@ -1029,7 +1232,7 @@ console.log("ok Q4 log failures are swallowed")
 // I2: server() が途中で throw したら init の行を出さない (options の誤り)。
 {
   const client = makeClient("ok")
-  for (const options of [{ timeoutMs: 5 }, { timeoutMs: { safeGh: 0 } }, { timeoutMs: { fastEditCheck: Number.NaN } }, { timeoutMs: { changedScopeQa: "1" } }]) {
+  for (const options of [{ timeoutMs: 5 }, { timeoutMs: { safeGh: 0 } }, { timeoutMs: { fastEditCheck: Number.NaN } }, { timeoutMs: { changedScopeQa: "1" } }, { termGraceMs: 0 }]) {
     let threw = false
     try {
       await plugin.server({ client, directory: ctxDir }, options)

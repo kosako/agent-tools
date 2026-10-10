@@ -304,7 +304,8 @@ boundary でない)。
     注記は消える (plugins dir の global → project の順は M2 で確認。config 由来の plugin との前後は公式
     docs の記述で、未実測)。
   - **fail-open の形**: script が無い (ENOENT) / 実行権限が無い / 非 0 終了 / stdout が JSON でない /
-    timeout (plugin の定数。safe-gh-hook は 10 秒) のどれでも無変更で resolve し、throw しない
+    timeout (plugin の定数。safe-gh-hook は 10 秒。止め方と後始末の猶予は [quality-loop-hooks](quality-loop-hooks.md)
+    「OpenCode」節) のどれでも無変更で resolve し、throw しない
     (after の throw は実行済みでも tool 結果を error にする — M7)。warn は script ごとに 1 回だけ
     `client.app.log` に出す (log file 行き。M11)。
   - **登録は配置と同じ**: 上の「登録の所有」と違い、OpenCode では file を置くこと自体が登録なので、
