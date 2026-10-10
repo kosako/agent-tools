@@ -77,6 +77,8 @@ module FastEditCheck
     WRAPPER_GRACE_SECONDS = 20
     WRAPPER_KILL_SECONDS = 10
     REASONS = [nil, "time", "footprint", "monitor", "interrupted"].freeze
+    # report の必須 field (null を取りうる reason / command_exit / command_signal も、欠落は不正)。
+    REPORT_KEYS = %w[version command_started reason exit_status command_exit command_signal cleanup_complete].freeze
     TRAPPED_SIGNALS = %w[INT TERM HUP].freeze
 
     # hook 自身が中断された。呼び出し側は後続の check を起動せず、state を書かず、何も出さずに終わる。
@@ -218,7 +220,7 @@ module FastEditCheck
     end
 
     def valid_report?(data)
-      return false unless data.is_a?(Hash) && data["version"] == 1
+      return false unless data.is_a?(Hash) && REPORT_KEYS.all? { |key| data.key?(key) } && data["version"] == 1
       return false unless [true, false].include?(data["command_started"]) &&
                           [true, false].include?(data["cleanup_complete"])
       return false unless REASONS.include?(data["reason"]) && data["exit_status"].is_a?(Integer)

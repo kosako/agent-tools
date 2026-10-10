@@ -84,7 +84,7 @@
 
   | 条件 | 扱い |
   | --- | --- |
-  | report が無い・読めない・不正 (version、必須 field の型、既知の reason、exit code と signal のちょうど一方) | missing |
+  | report が無い・読めない・不正 (version、必須 field の存在 (null を取りうる field も) と型、既知の reason、exit code と signal のちょうど一方) | missing |
   | `command_started: false` (check を起動できない: 不在・権限・不正形式・ENOTDIR など) | missing |
   | `reason: "interrupted"` | hook が中断中なら下の「中断」。そうでなければ missing |
   | `reason: "time"` で、総予算で `--max-seconds` を短くしていた | missing (予算切れ) |
@@ -98,7 +98,9 @@
   ように)。
 - **hook 自身の中断**: hook は INT / TERM / HUP を受けたら flag を立て、動いている safe-run に TERM を送り (safe-run
   が check の group を止める)、後続の check を起動しない。safe-run を上の期限の規則で回収し、一時 dir を消し、
-  **state も出力も残さずに** exit 0 で終わる (次の Stop で同じ scope を検査し直す)。
+  **state も出力も残さずに** exit 0 で終わる (次の Stop で同じ scope を検査し直す)。changed-scope-qa は state を
+  一時 file に書いて rename で置き、書いている途中で中断されても今回の state を置かない (rename の前) か書く前の
+  state に戻す (rename の後)。出力 (警告・block) の直前にも中断を確かめる。
 - **限界**: hook の pid だけが SIGKILL されたときは、safe-run が自分の上限で check を止める。hook の group ごと
   SIGKILL されると safe-run も死に、safe-run が別 group で起動した check の group が残る。Claude Code / Codex の
   hook の timeout が送る signal と宛先 (pid か group か) は公式 docs に書かれておらず未確認なので、内側の総予算を

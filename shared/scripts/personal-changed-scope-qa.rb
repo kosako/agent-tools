@@ -93,6 +93,8 @@ module ChangedScopeQa
     WRAPPER_GRACE_SECONDS = 20
     WRAPPER_KILL_SECONDS = 10
     REASONS = [nil, "time", "footprint", "monitor", "interrupted"].freeze
+    # report の必須 field (null を取りうる reason / command_exit / command_signal も、欠落は不正)。
+    REPORT_KEYS = %w[version command_started reason exit_status command_exit command_signal cleanup_complete].freeze
     TRAPPED_SIGNALS = %w[INT TERM HUP].freeze
 
     # hook 自身が中断された。呼び出し側は後続の check を起動せず、state を書かず、何も出さずに終わる。
@@ -234,7 +236,7 @@ module ChangedScopeQa
     end
 
     def valid_report?(data)
-      return false unless data.is_a?(Hash) && data["version"] == 1
+      return false unless data.is_a?(Hash) && REPORT_KEYS.all? { |key| data.key?(key) } && data["version"] == 1
       return false unless [true, false].include?(data["command_started"]) &&
                           [true, false].include?(data["cleanup_complete"])
       return false unless REASONS.include?(data["reason"]) && data["exit_status"].is_a?(Integer)
@@ -428,15 +430,45 @@ module ChangedScopeQa
     nil
   end
 
+  # state は一時 file に書いて rename で置く。hook が中断されたら今回の state を残さない (次の Stop で同じ scope を
+  # 検査し直す): rename の前に中断に気づいたら一時 file を消して中断し、rename の後なら run の rescue が書く前の
+  # state に戻す (restore_state。書く前の内容をここで保持する)。
   def write_state(root, fingerprint, outcome, missing)
-    # hook が中断されたら state を書かない (次の Stop で同じ scope を検査し直す)
     raise SafeRunCheck::Interrupted if SafeRunCheck.interrupted?
 
     require "fileutils"
     FileUtils.mkdir_p(state_dir)
-    File.write(state_path(root),
-               JSON.generate("fingerprint" => fingerprint, "outcome" => outcome,
-                             "missing" => missing))
+    path = state_path(root)
+    @state_before ||= [path, File.file?(path) ? File.binread(path) : nil]
+    replace_file(path, JSON.generate("fingerprint" => fingerprint, "outcome" => outcome, "missing" => missing)) do
+      raise SafeRunCheck::Interrupted if SafeRunCheck.interrupted?
+    end
+    raise SafeRunCheck::Interrupted if SafeRunCheck.interrupted?
+  end
+
+  # 一時 file に書いて rename で置く。block は rename の直前に呼ぶ (例外を出したら置かない)。一時 file は残さない。
+  def replace_file(path, content)
+    tmp = "#{path}.#{Process.pid}.tmp"
+    File.write(tmp, content)
+    yield if block_given?
+    File.rename(tmp, path)
+  ensure
+    File.delete(tmp) if tmp && File.exist?(tmp)
+  end
+
+  # 中断された実行が置いた state を、書く前の内容に戻す (書く前に無ければ消す)。中断の後は何も出さないので、戻せな
+  # かったとき (I/O の失敗) も黙って終わる (次の Stop は中断された実行の state を読む)。
+  def restore_state
+    return if @state_before.nil?
+
+    path, before = @state_before
+    if before.nil?
+      File.delete(path) if File.exist?(path)
+    else
+      replace_file(path, before)
+    end
+  rescue SystemCallError
+    nil
   end
 
   # check を safe-run の子として、memory と時間の上限を付けて起動する (#467)。結果は safe-run の report で分類する:
@@ -497,7 +529,8 @@ module ChangedScopeQa
       write_state(root, fingerprint, "fail", still_missing)
       [0, "changed-scope-qa: 前回と同一の変更 scope で未解消の check 失敗があります " \
           "(再 block はしません。人間の判断に委ねます)。" +
-          (new_failures.empty? ? "" : "\n#{failure_summary(new_failures)}")]
+          (new_failures.empty? ? "" : "\n#{failure_summary(new_failures)}") +
+          (still.empty? ? "" : "\n(未実行の check: #{missing_list(still)})")]
     elsif still_missing.empty?
       write_state(root, fingerprint, "pass", [])
       [0, nil]
@@ -512,6 +545,7 @@ module ChangedScopeQa
   # notes に非ブロッキングの伝達事項を集め、最後にまとめて 1 回 emit する。
   def run
     SafeRunCheck.install_traps
+    @state_before = nil
     budget_deadline = SafeRunCheck.now + BUDGET_SECONDS
     payload = JSON.parse($stdin.read) rescue {}
     already_continued = payload["stop_hook_active"] == true
@@ -533,10 +567,16 @@ module ChangedScopeQa
 
     code = gate(root, checks, already_continued, notes, budget_deadline) unless checks.empty?
     code ||= 0
-    emit_warning(notes.join("\n")) unless notes.empty? || code != 0
+    unless notes.empty? || code != 0
+      raise SafeRunCheck::Interrupted if SafeRunCheck.interrupted? # 出力の直前にも中断を確かめる
+
+      emit_warning(notes.join("\n"))
+    end
     code
   rescue SafeRunCheck::Interrupted
-    0 # hook が中断された: 動いていた check は safe-run が止めた。state も出力も残さない (次の Stop で再検査)
+    # hook が中断された: 動いていた check は safe-run が止めた。今回の state を戻し、何も出さない (次の Stop で再検査)
+    restore_state
+    0
   rescue StandardError
     0 # fail-open: hook 内部の想定外でセッションを塞がない
   end
@@ -581,6 +621,8 @@ module ChangedScopeQa
                "しません):\n#{summary}"
       return 0
     end
+
+    raise SafeRunCheck::Interrupted if SafeRunCheck.interrupted? # block の直前にも中断を確かめる
 
     warn truncate("changed-scope-qa: 変更 scope に対する repo 宣言の check が失敗しています。" \
                   "終了する前に修正してください:\n#{summary}")

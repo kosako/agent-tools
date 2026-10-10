@@ -78,6 +78,8 @@ deploy_hooks "$tmp/fake"
 # fake の safe-run: argv を FAKE_SR_LOG に JSON で 1 行ずつ記録し、FAKE_SR_PLAN (JSON の配列) の先頭の step を消費する。
 # step: elapse (時計 FAKE_CLOCK を進める秒) / report (--report の path に書く文字列) / output_bytes (stdout に書く量) /
 # hang (true なら寝続ける。寿命は 60 秒) / ignore_term (true なら TERM で時計を 30 秒進めて寝続ける) / exit (exit code)。
+# hang の step は、時計を進める前に TERM の handler を置き、TERM を受けたら FAKE_SR_TERM_MARK に印を書く (ignore_term で
+# なければ 143 で終わる)。時計は一時 file + rename で進める (hook が読む途中の空の file を見せない)。
 cat > "$tmp/fake/personal-safe-run" <<'RB'
 #!/usr/bin/env ruby
 require "json"
@@ -87,15 +89,22 @@ plan = JSON.parse(File.read(plan_path))
 step = plan.shift || abort("fake safe-run: the plan is empty")
 File.write(plan_path, JSON.generate(plan))
 clock = ENV.fetch("FAKE_CLOCK")
-bump = lambda { |seconds| File.write(clock, (Float(File.read(clock)) + seconds).to_s) }
+bump = lambda do |seconds|
+  tmp = "#{clock}.#{Process.pid}.tmp"
+  File.write(tmp, (Float(File.read(clock)) + seconds).to_s)
+  File.rename(tmp, clock)
+end
+if step["hang"]
+  trap("TERM") do
+    File.open(ENV.fetch("FAKE_SR_TERM_MARK"), "a") { |f| f.puts "term" }
+    step["ignore_term"] ? bump.call(30) : exit(143)
+  end
+end
 bump.call(step.fetch("elapse", 0))
 report = ARGV[ARGV.index("--report") + 1]
 File.write(report, step["report"]) if step.key?("report")
 $stdout.write("x" * step["output_bytes"]) if step.key?("output_bytes")
 $stdout.flush
-if step["ignore_term"]
-  trap("TERM") { bump.call(30) }
-end
 sleep 60 if step["hang"]
 exit step.fetch("exit", 0)
 RB
@@ -116,6 +125,37 @@ ChangedScopeQa::SafeRunCheck.singleton_class.prepend(FakeClock)
 FastEditCheck::SafeRunCheck.singleton_class.prepend(FakeClock)
 RB
 
+# 注入: changed-scope-qa の state の書き込みの途中で自分に TERM を送り、handler が flag を立てるまで待つ (1 回だけ)。
+# STATE_INTERRUPT=before-rename は一時 file (*.tmp) を書いた直後、after-rename は一時 file を state (*.json) に rename
+# した直後。効いた印を STATE_INTERRUPT_LOG に書く。
+cat > "$tmp/state-interrupt.rb" <<'RB'
+module ChangedScopeQa; module SafeRunCheck; end; end
+module StateInterrupt
+  def write(*args, **kw)
+    result = kw.empty? ? super(*args) : super(*args, **kw)
+    state_interrupt("before-rename") if args[0].to_s.end_with?(".tmp")
+    result
+  end
+
+  def rename(from, to)
+    result = super
+    state_interrupt("after-rename") if from.to_s.end_with?(".tmp") && to.to_s.end_with?(".json")
+    result
+  end
+
+  def state_interrupt(mode)
+    return unless ENV["STATE_INTERRUPT"] == mode && !$state_interrupted
+
+    $state_interrupted = true
+    File.open(ENV.fetch("STATE_INTERRUPT_LOG"), "a") { |f| f.puts mode }
+    Process.kill("TERM", Process.pid)
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 2
+    sleep 0.01 until ChangedScopeQa::SafeRunCheck.interrupted? || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+  end
+end
+File.singleton_class.prepend(StateInterrupt)
+RB
+
 # ---- 1. 2 つの hook の SafeRunCheck は同じ本文 -----------------------------------------------------
 ruby -e '
 blocks = ARGV.map do |path|
@@ -132,7 +172,7 @@ abort "the SafeRunCheck blocks of the two hooks must be identical" unless blocks
 cat > "$tmp/fake-cases.rb" <<'RUBY'
 require "json"
 require "fileutils"
-deploy, clock_rb, tmp, repo = ARGV
+deploy, clock_rb, tmp, repo, state_rb = ARGV
 QA = File.join(deploy, "personal-changed-scope-qa")
 EDIT = File.join(deploy, "personal-fast-edit-check")
 LOG = File.join(tmp, "fake-sr.log")
@@ -140,6 +180,8 @@ PLAN = File.join(tmp, "fake-sr-plan.json")
 CLOCK = File.join(tmp, "fake-clock")
 CONFIG = File.join(tmp, "fake-checks.json")
 STATE = File.join(tmp, "fake-qa-state")
+TERM_MARK = File.join(tmp, "fake-sr-term.mark")
+INTERRUPT_LOG = File.join(tmp, "state-interrupt.log")
 
 def report(reason: nil, exit: 0, signal: nil, started: true, cleanup: true, status: nil)
   JSON.generate("version" => 1, "command_started" => started, "reason" => reason, "signal" => nil,
@@ -156,13 +198,18 @@ def write_config(qa: nil, edit: nil)
 end
 
 # hook を 1 回起動する (期限つき)。戻り値は [exit code, stdout, stderr, fake の呼び出しの argv の配列]。
-def run_hook(path, payload, plan, fresh_state: true, cwd: ARGV[3])
+# state_interrupt を渡すと、state の書き込みの途中で TERM を送る注入 (STATE_INTERRUPT) も読ませる。
+def run_hook(path, payload, plan, fresh_state: true, cwd: ARGV[3], state_interrupt: nil)
   FileUtils.rm_rf(STATE) if fresh_state
   File.write(LOG, "")
   File.write(PLAN, JSON.generate(plan))
   File.write(CLOCK, "1000.0")
+  FileUtils.rm_f([TERM_MARK, INTERRUPT_LOG])
+  rubyopt = "-r#{ARGV[1]}"
+  rubyopt += " -r#{ARGV[4]}" if state_interrupt
   env = { "AGENT_TOOLS_CHECKS_CONFIG" => CONFIG, "AGENT_TOOLS_QA_STATE_DIR" => STATE, "HOME" => File.join(ARGV[2], "home"),
-          "RUBYOPT" => "-r#{ARGV[1]}", "FAKE_CLOCK" => CLOCK, "FAKE_SR_PLAN" => PLAN, "FAKE_SR_LOG" => LOG }
+          "RUBYOPT" => rubyopt, "FAKE_CLOCK" => CLOCK, "FAKE_SR_PLAN" => PLAN, "FAKE_SR_LOG" => LOG,
+          "FAKE_SR_TERM_MARK" => TERM_MARK, "STATE_INTERRUPT" => state_interrupt.to_s, "STATE_INTERRUPT_LOG" => INTERRUPT_LOG }
   out_r, out_w = IO.pipe
   err_r, err_w = IO.pipe
   in_r, in_w = IO.pipe
@@ -256,6 +303,12 @@ bad_reports = {
   "no cleanup_complete" => report.sub(',"cleanup_complete":true', ""),
   "bool started as string" => report.sub('"command_started":true', '"command_started":"true"')
 }
+# 必須 field (null を取りうる reason / command_exit / command_signal を含む) を 1 つずつ欠いた report
+%w[version command_started reason exit_status command_exit command_signal cleanup_complete].each do |key|
+  data = JSON.parse(report)
+  data.delete(key)
+  bad_reports["without #{key}"] = JSON.generate(data)
+end
 bad_reports.each do |label, rep|
   step = rep.nil? ? { "exit" => 2 } : { "report" => rep }
   code, out, err, = run_hook(QA, STOP, [step])
@@ -284,6 +337,20 @@ check("2d: the same scope runs the check again (#{calls.size})", calls.size == 1
 code, _out, err, = run_hook(QA, STOP, [{ "report" => report(exit: 1, status: 1, cleanup: false) }])
 check("2d: a failure with an incomplete cleanup still blocks and says so: #{err}",
       code == 2 && err.include?("process group を止め切れませんでした"))
+
+# 2d-2: failure と missing が混在する scope の cache-hit。再試行した check がまだ実行できなければ、その名前と理由を
+# 警告に出す (cleanup の未完了の警告が cache-hit で消えない)
+write_config(qa: [{ "name" => "failing", "command" => ["true"] }, { "name" => "flaky", "command" => ["true"] }])
+code, _out, err, = run_hook(QA, STOP, [{ "report" => report(exit: 1, status: 1) }, { "report" => report(cleanup: false) }])
+check("2d-2: the failure blocks and lists the missing check (#{code}): #{err}",
+      code == 2 && err.include?("(未実行の check: flaky (safe-run が check の process group を止め切れませんでした))"))
+check("2d-2: the state keeps the failure and the missing check", state && state["outcome"] == "fail" && state["missing"] == ["flaky"])
+code, out, _err, calls = run_hook(QA, STOP, [{ "report" => report(cleanup: false) }], fresh_state: false)
+check("2d-2: the cache-hit retries only the missing check (#{calls.size})", calls.size == 1 && code.zero?)
+check("2d-2: the cache-hit warning names the retried check and its reason: #{out}",
+      message(out).include?("未解消の check 失敗") &&
+      message(out).include?("flaky (safe-run が check の process group を止め切れませんでした)"))
+write_config(qa: suite)
 
 # 2e: 総予算 (540 秒)。check の --max-seconds は min(上限, 残り)。総予算で短くした期限の time は予算切れ (missing)
 two = [{ "name" => "first", "command" => ["true"] }, { "name" => "second", "command" => ["true"] }]
@@ -323,9 +390,40 @@ write_config(qa: suite)
 code, out, err, = run_hook(QA, STOP, [{ "elapse" => 400, "hang" => true }])
 check("2g: an overdue safe-run is stopped and reported as a missing (#{code} #{err}): #{out}",
       code.zero? && message(out).include?("suite (safe-run が期限 (320 秒) までに終わりませんでした)"))
+check("2g: the overdue safe-run received TERM", File.file?(TERM_MARK) && File.readlines(TERM_MARK) == ["term\n"])
+# TERM を無視する fake は 60 秒寝続けるので、hook が期限 (30 秒) の内に終わるのは KILL まで進んだときだけ
+started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 code, out, err, = run_hook(QA, STOP, [{ "elapse" => 400, "hang" => true, "ignore_term" => true }])
 check("2g: a safe-run that ignores TERM is killed (#{code} #{err}): #{out}",
       code.zero? && message(out).include?("suite (safe-run が期限 (320 秒) までに終わりませんでした)"))
+check("2g: the TERM-ignoring safe-run received TERM before the KILL", File.file?(TERM_MARK) && File.readlines(TERM_MARK) == ["term\n"])
+check("2g: the TERM-ignoring safe-run is gone well before its 60 s sleep ends",
+      Process.clock_gettime(Process::CLOCK_MONOTONIC) - started < 20)
+
+# 2g-2: hook が state を書いている途中で中断されたら、今回の state を置かず (rename の前) / 前の state に戻し (rename の
+# 直後)、何も出さずに exit 0。block になる failure の scope と、無言の pass の scope で確かめる
+[["fail", { "report" => report(exit: 1, status: 1) }], ["pass", { "report" => report }]].each do |label, step|
+  %w[before-rename after-rename].each do |mode|
+    [nil, "previous"].each do |previous|
+      FileUtils.rm_rf(STATE)
+      before = nil
+      if previous
+        # 別の scope で pass した state を先に置く (中断の後もこの内容のまま残ること)
+        File.write(File.join(repo, "other-scope.txt"), "previous\n")
+        run_hook(QA, STOP, [{ "report" => report }], fresh_state: false)
+        File.delete(File.join(repo, "other-scope.txt"))
+        before = Dir.glob(File.join(STATE, "*.json")).map { |f| [f, File.read(f)] }
+      end
+      code, out, err, = run_hook(QA, STOP, [step], fresh_state: false, state_interrupt: mode)
+      name = "2g-2 #{label} #{mode}#{previous ? ' over a previous state' : ''}"
+      check("#{name}: the injection fired", File.file?(INTERRUPT_LOG) && File.read(INTERRUPT_LOG) == "#{mode}\n")
+      check("#{name}: exits 0 without output (#{code}): out=#{out} err=#{err}", code.zero? && out.empty? && err.empty?)
+      after = Dir.exist?(STATE) ? Dir.glob(File.join(STATE, "*.json")).map { |f| [f, File.read(f)] } : []
+      check("#{name}: the state is left as it was (#{after.inspect})", after == (before || []))
+      check("#{name}: no temporary state file is left", Dir.glob(File.join(STATE, "*.tmp")).empty?)
+    end
+  end
+end
 
 # 2h: fast-edit-check。既定の上限 (30 秒)、command の後に file、失敗の理由、予算 (120 秒)、不正な report、cleanup
 file = File.join(repo, "a.rb")
@@ -375,7 +473,7 @@ load EDIT
 end
 exit(@failed.zero? ? 0 : 1)
 RUBY
-ruby -r"$script_dir/lib/check_helper" "$tmp/fake-cases.rb" "$tmp/fake" "$tmp/clock.rb" "$tmp" "$repo" \
+ruby -r"$script_dir/lib/check_helper" "$tmp/fake-cases.rb" "$tmp/fake" "$tmp/clock.rb" "$tmp" "$repo" "$tmp/state-interrupt.rb" \
   || fail "case 2: the fake safe-run cases failed"
 rm -f "$repo/dirty.txt"
 
