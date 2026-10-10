@@ -1,0 +1,30 @@
+schema_version: 1
+name: personal-safe-run
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  # 呼び出し側が渡した command を起動して、その process group の memory と時間を測るだけ。report は呼び出し側が
+  # 渡した path に件数と数値だけを書き、command の出力・引数・環境変数は記録しない。
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。承認は内容と配布形態に紐づく
+# (#148, #184)。本 script の review block は #466 の PR で author≠reviewer レビューののち、人が
+# approved_build_id を入れる。それまで register は human_review_required とし sync は配備しない。
+review:
+  human_review: approved
+  approved_build_id: sha256:c98a2bc71624061f1dc8eb6f604f79014a5a5fd7a8769de761c1ce7b3474d0fb
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-safe-run.rb
+  format: text
+summary: >-
+  test や長時間の command を、新しい process group と、memory (group の phys_footprint の合計、MiB) と時間 (秒) の
+  上限で守って起動する wrapper (#466。macOS 専用)。command は shell を通さず argv のまま起動し、stdin が端末なら
+  /dev/null に替え、stdout / stderr は透過する。0.25 秒ごとに leader の終了を回収せずに確かめ、libproc で group の
+  member の phys_footprint を測り (圧縮・swap の分を含む。RSS は使わない)、上限を超えたら group に TERM → 2 秒 →
+  KILL で止めて exit 137。測れない巡回が 3 回続いても止める (monitor)。leader が終わった後に残った process も
+  止める。INT / TERM / HUP / QUIT / TSTP を受けたら group を止めて 128 + signo。任意の --report に終了の理由と
+  peak を JSON で書く。docs/safe-run.md が正本。
