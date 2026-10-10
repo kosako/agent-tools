@@ -14,7 +14,7 @@ risk:
 # 更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:3f979d936bc6419f8909764fb2d9f09a70cc7eb37ec4c2202f45a3bf8f4b4751
+  approved_build_id: sha256:66d0b1db74e9c2246f8679bedf609527abce7918a71f3e7d95233012d47543ef
   approved_artifact_kind: plugin
 source:
   path: shared/plugins/personal-agent-tools.js

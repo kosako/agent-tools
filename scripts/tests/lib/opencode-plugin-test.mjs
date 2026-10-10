@@ -39,8 +39,14 @@ const KILL_SETTLE_MS = 300
 // timeout の止め方 (#467) の case の猶予。SHORT は猶予を待ち切る case、LONG は待たずに終わるべき case に使う。
 const SHORT_GRACE_MS = 1000
 const LONG_GRACE_MS = 4000
-// termGraceMs を渡さないとき、この時間ではまだ reject しないこと (既定の猶予 10 秒が効いていること) を見る。
-const DEFAULT_GRACE_PROBE_MS = 1500
+// 既定の猶予 (docs の契約。plugin の TERM_GRACE_MS)。P9 は単調時計を進めて、この前後で KILL の有無を見る。
+const DEFAULT_GRACE_MS = 10000
+// P9 で時計を合わせる位置: 既定の猶予の GRACE_EDGE_MS 手前で GRACE_EDGE_OBSERVE_MS (確認が数回通る長さ) 見て
+// から、GRACE_EDGE_MS 先へ進める。
+const GRACE_EDGE_MS = 1000
+const GRACE_EDGE_OBSERVE_MS = 300
+// P11 で Date.now を進める量 (system の時計の補正の再現)。猶予 (SHORT_GRACE_MS) よりずっと大きい。
+const CLOCK_JUMP_MS = 60000
 // hook が返った後、node の process が終わるまでの許容 (timer が残れば猶予の残りぶん待つ)。
 const EXIT_LAG_MS = 1000
 const ORIGINAL_OUTPUT = "original tool output\nline 2"
@@ -623,6 +629,28 @@ function assertTimeoutWarn(client, script, timeoutMs, consequence, label) {
   assert(client.calls[0].body.message === want, `${label}: the timeout warn must stay ${JSON.stringify(want)}, got ${JSON.stringify(client.calls[0].body.message)}`)
 }
 
+// 停止を確認できないときの warn は、固定の文と理由を足す (#476 review)。
+function assertUnconfirmedWarn(client, script, timeoutMs, detail, consequence, label) {
+  assertWarns(client, 1, label)
+  const want = `${script}: timed out after ${timeoutMs} ms; its process group may not have stopped (${detail}); ${consequence} (fail-open)`
+  assert(client.calls[0].body.message === want, `${label}: the warn must be ${JSON.stringify(want)}, got ${JSON.stringify(client.calls[0].body.message)}`)
+}
+
+// body の間だけ、group 宛て (pid が負) の process.kill のうち faults に挙げた signal は、送らずに faults[signal] の
+// code の error を throw させる (EPERM / 想定外の失敗の再現)。signal 0 と pid が正のものはそのまま通す。
+async function withGroupKillFaults(faults, body) {
+  const realKill = process.kill
+  process.kill = (pid, signal) => {
+    if (pid < 0 && Object.hasOwn(faults, signal)) throw Object.assign(new Error(`injected ${faults[signal]}`), { code: faults[signal] })
+    return realKill.call(process, pid, signal)
+  }
+  try {
+    return await body()
+  } finally {
+    process.kill = realKill
+  }
+}
+
 // P7: TERM で後始末して終わる script は、group が空と分かった時点で終わる (猶予を待たず、KILL まで行かない)。
 {
   const client = makeClient("ok")
@@ -660,31 +688,43 @@ function assertTimeoutWarn(client, script, timeoutMs, consequence, label) {
   console.log("ok P8 a child that ignores SIGTERM is killed after the grace, before the timeout resolves")
 }
 
-// P9: termGraceMs を渡さなければ既定の猶予を待つ (DEFAULT_GRACE_PROBE_MS ではまだ返らない)。猶予の途中でも
-// group が空になれば (ここでは test が子を KILL する) 次の確認で返る。
+// P9: termGraceMs を渡さなければ既定の猶予 (10 秒) を待つ。猶予を計る単調時計 (performance.now) を test が
+// 進め、10 秒の手前では KILL せず、10 秒を過ぎたら次の確認で KILL することを、実時間で 10 秒待たずに確かめる。
+// 時計は TERM の後に進める (plugin は TERM の時点の実時間で期限を決めている)。
 {
   const client = makeClient("ok")
   const hooks = await makeHooks(client, { timeoutMs: { safeGh: SHORT_TIMEOUT_MS } })
   const output = toolOutput()
   let resolved = false
-  const pending = runAfter(hooks, homes.termIgnorer, bashInput("gh issue view 1"), output, SHORT_TIMEOUT_MS + DEFAULT_GRACE_PROBE_MS + DEADLINE_MARGIN_MS, "P9").then(() => {
+  const pending = runAfter(hooks, homes.termIgnorer, bashInput("gh issue view 1"), output, SHORT_TIMEOUT_MS + DEADLINE_MARGIN_MS * 3, "P9").then(() => {
     resolved = true
   })
-  await sleep(SHORT_TIMEOUT_MS + DEFAULT_GRACE_PROBE_MS)
-  const waitedForDefault = !resolved
+  const termed = await waitFor(() => readLines(TERM_LOG).length > 0, SHORT_TIMEOUT_MS + DEADLINE_MARGIN_MS)
   const children = readLines(CHILD_PIDS).map(Number)
+  const realNow = performance.now
+  let offset = DEFAULT_GRACE_MS - GRACE_EDGE_MS
+  performance.now = () => realNow.call(performance) + offset
+  let beforeEdge
+  let afterEdge
+  try {
+    await sleep(GRACE_EDGE_OBSERVE_MS)
+    beforeEdge = { resolved, alive: children.filter(isAlive).length }
+    offset = DEFAULT_GRACE_MS + GRACE_EDGE_MS
+    afterEdge = await waitFor(() => resolved, DEADLINE_MARGIN_MS)
+  } finally {
+    performance.now = realNow
+  }
+  // 変異 (既定の猶予が長い) で返らないときに test を止めないよう、残った子を消して後始末を終わらせる。
   for (const pid of children.filter(isAlive)) process.kill(pid, "SIGKILL")
-  const emptiedAt = Date.now()
   await pending
-  const lag = Date.now() - emptiedAt
   const { alive } = await settleGroup()
-  assert(children.length === 1, `P9: the fixture must start one child, got ${children.length}`)
-  assert(waitedForDefault, `P9: without options.termGraceMs the default grace must still be running after ${DEFAULT_GRACE_PROBE_MS} ms`)
-  assert(lag < 500, `P9: a group emptied during the grace must end the wait at the next check (${lag} ms)`)
+  assert(termed && children.length === 1, `P9: the parent must receive SIGTERM after starting one child (fixture assumption), got ${termed} / ${children.length}`)
+  assert(!beforeEdge.resolved && beforeEdge.alive === 1, `P9: ${GRACE_EDGE_MS} ms before the default grace (${DEFAULT_GRACE_MS} ms) ends, the child must not be killed yet, got ${JSON.stringify(beforeEdge)}`)
+  assert(afterEdge, `P9: once the default grace (${DEFAULT_GRACE_MS} ms) has passed, the next check must send SIGKILL and resolve`)
   assert(alive.length === 0, `P9: nothing must be left, but ${alive.join(", ")} survived`)
   assert(output.output === ORIGINAL_OUTPUT, "P9: output must be unchanged")
   assertTimeoutWarn(client, SAFE_GH, SHORT_TIMEOUT_MS, "the tool result was left unchanged", "P9")
-  console.log("ok P9 the default grace is waited, and an emptied group ends it early")
+  console.log("ok P9 the default grace is 10 s on the monotonic clock")
 }
 
 // P10: 後始末が済んだら timer を残さない (OpenCode の process を待たせない)。別の node で plugin を読み、TERM で
@@ -718,6 +758,87 @@ console.log(JSON.stringify({ elapsed: resolvedAt - started, resolvedAt, warns, o
   assert(exitedAt - report.resolvedAt < EXIT_LAG_MS, `P10: node must exit right after the hook resolves (no timer left), but it took ${exitedAt - report.resolvedAt} ms`)
   assert(alive.length === 0, `P10: nothing must be left, but ${alive.join(", ")} survived`)
   console.log("ok P10 no timer is left after the cleanup")
+}
+
+// P11: 猶予は単調時計で計る (#476 review)。TERM の直後に Date.now を大きく進めても (system の時計の補正)、TERM を
+// 無視する子は猶予の間は KILL されず、呼び出しは猶予の後に返る。
+{
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, { timeoutMs: { safeGh: SHORT_TIMEOUT_MS }, termGraceMs: SHORT_GRACE_MS })
+  const output = toolOutput()
+  const started = performance.now()
+  let resolved = false
+  const pending = runAfter(hooks, homes.termIgnorer, bashInput("gh issue view 1"), output, SHORT_TIMEOUT_MS + SHORT_GRACE_MS + DEADLINE_MARGIN_MS, "P11").then(() => {
+    resolved = true
+  })
+  const termed = await waitFor(() => readLines(TERM_LOG).length > 0, SHORT_TIMEOUT_MS + DEADLINE_MARGIN_MS)
+  const children = readLines(CHILD_PIDS).map(Number)
+  const realDateNow = Date.now
+  Date.now = () => realDateNow() + CLOCK_JUMP_MS
+  let midGrace
+  try {
+    await sleep(SHORT_GRACE_MS / 2)
+    midGrace = { resolved, alive: children.filter(isAlive).length }
+  } finally {
+    Date.now = realDateNow
+  }
+  await pending
+  const elapsed = performance.now() - started
+  const { alive } = await settleGroup()
+  assert(termed && children.length === 1, `P11: the parent must receive SIGTERM after starting one child (fixture assumption), got ${termed} / ${children.length}`)
+  assert(!midGrace.resolved && midGrace.alive === 1, `P11: a forward jump of Date.now must not cut the grace short, got ${JSON.stringify(midGrace)} at mid-grace`)
+  assert(elapsed >= SHORT_TIMEOUT_MS + SHORT_GRACE_MS - 50, `P11: must not resolve before the grace ends (${Math.round(elapsed)} ms)`)
+  assert(alive.length === 0, `P11: SIGKILL after the grace must remove the child, but ${alive.join(", ")} survived`)
+  assertTimeoutWarn(client, SAFE_GH, SHORT_TIMEOUT_MS, "the tool result was left unchanged", "P11")
+  console.log("ok P11 the grace is measured on the monotonic clock, not Date.now")
+}
+
+// P12: TERM / KILL を送れない (EPERM) とき (#476 review)。KILL を送れず members が残れば、warn に「停止を確認できない」
+// と理由を足す。TERM を送れなくても、猶予の後の KILL で group が空と確かめられたら通常の warn のまま。
+{
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, { timeoutMs: { safeGh: SHORT_TIMEOUT_MS }, termGraceMs: SHORT_GRACE_MS })
+  const output = toolOutput()
+  await withGroupKillFaults({ SIGKILL: "EPERM" }, () =>
+    runAfter(hooks, homes.termIgnorer, bashInput("gh issue view 1"), output, SHORT_TIMEOUT_MS + SHORT_GRACE_MS + DEADLINE_MARGIN_MS * 2, "P12 SIGKILL EPERM"),
+  )
+  const { terms, alive } = await settleGroup()
+  assert(terms === 1, `P12 SIGKILL EPERM: SIGTERM must still be sent (fixture assumption), got ${terms} term.log line(s)`)
+  assert(alive.length === 1, `P12 SIGKILL EPERM: the child must be left as the plugin could not kill it (fixture assumption), got ${alive.length}`)
+  assert(output.output === ORIGINAL_OUTPUT, "P12 SIGKILL EPERM: output must be unchanged")
+  assertUnconfirmedWarn(client, SAFE_GH, SHORT_TIMEOUT_MS, "SIGKILL EPERM, members remained after SIGKILL", "the tool result was left unchanged", "P12 SIGKILL EPERM")
+}
+{
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, { timeoutMs: { safeGh: SHORT_TIMEOUT_MS }, termGraceMs: SHORT_GRACE_MS })
+  const output = toolOutput()
+  await withGroupKillFaults({ SIGTERM: "EPERM" }, () =>
+    runAfter(hooks, homes.termIgnorer, bashInput("gh issue view 1"), output, SHORT_TIMEOUT_MS + SHORT_GRACE_MS + DEADLINE_MARGIN_MS * 2, "P12 SIGTERM EPERM"),
+  )
+  const { terms, alive } = await settleGroup()
+  assert(terms === 0, `P12 SIGTERM EPERM: SIGTERM must not reach the script (fixture assumption), got ${terms} term.log line(s)`)
+  assert(alive.length === 0, `P12 SIGTERM EPERM: SIGKILL after the grace must still empty the group, but ${alive.join(", ")} survived`)
+  assert(output.output === ORIGINAL_OUTPUT, "P12 SIGTERM EPERM: output must be unchanged")
+  assertTimeoutWarn(client, SAFE_GH, SHORT_TIMEOUT_MS, "the tool result was left unchanged", "P12 SIGTERM EPERM (a stop confirmed by SIGKILL keeps the usual warn)")
+  console.log("ok P12 EPERM on SIGTERM / SIGKILL is reported only when the stop is not confirmed")
+}
+
+// P13: 想定外の失敗 (EPERM / ESRCH 以外) では後始末をやめ、どの signal で失敗したかを「停止を確認できない」の理由に
+// 載せる。猶予は待たない。
+{
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, { timeoutMs: { safeGh: SHORT_TIMEOUT_MS }, termGraceMs: SHORT_GRACE_MS })
+  const output = toolOutput()
+  const started = performance.now()
+  await withGroupKillFaults({ SIGTERM: "EINVAL" }, () =>
+    runAfter(hooks, homes.termIgnorer, bashInput("gh issue view 1"), output, SHORT_TIMEOUT_MS + SHORT_GRACE_MS + DEADLINE_MARGIN_MS, "P13"),
+  )
+  const elapsed = performance.now() - started
+  await settleGroup()
+  assert(elapsed < SHORT_TIMEOUT_MS + SHORT_GRACE_MS / 2, `P13: an unexpected failure must end the cleanup without the grace (${Math.round(elapsed)} ms)`)
+  assert(output.output === ORIGINAL_OUTPUT, "P13: output must be unchanged")
+  assertUnconfirmedWarn(client, SAFE_GH, SHORT_TIMEOUT_MS, "SIGTERM EINVAL", "the tool result was left unchanged", "P13")
+  console.log("ok P13 an unexpected kill failure is reported as an unconfirmed stop")
 }
 
 // === 品質ループ: fast-edit-check (tool.execute.after) ==========================================

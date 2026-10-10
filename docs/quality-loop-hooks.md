@@ -191,13 +191,20 @@ M13 / M14 / M17 (OpenCode 1.18.30)。
     JSON でない / timeout (fast-edit-check は総予算、changed-scope-qa は 120 秒) のどれでも、tool 結果を
     変えず・何も報告せず、warn を script ごとに 1 回だけ log に出す。
   - timeout の止め方 (#467): script の process group に TERM を送り、group が空になるまで最大 10 秒待って
-    (100 ms ごとに確かめる)、members が残っていれば KILL を送る。script が TERM で終わっても、TERM を
-    無視する子が stdio を閉じて残りうるので、終わりは script の終了ではなく group が空かどうかで決める。
-    10 秒は、hook script の子 (#467 で hook が check の起動に使う safe-run) が check を止めて回収し終え
-    られるように、safe-run の後始末の最悪 (約 8 秒) より長くした値。
-    - timeout のときだけ、呼び出しは後始末が済むまで (最大で猶予の 10 秒ぶん) 遅れて返る (safe-gh は
-      10 秒 + 最大 10 秒、fast-edit-check は総予算 + 最大 10 秒、changed-scope-qa は 120 秒 + 最大 10 秒)。
-      changed-scope-qa は後始末の間も実行中に含める (その間に来た idle は skip し、直列を保つ)。
+    (100 ms ごとに確かめる)、members が残っていれば KILL を送り、空になるのを最大 1 秒確かめる。script が
+    TERM で終わっても、TERM を無視する子が stdio を閉じて残りうるので、終わりは script の終了ではなく group
+    が空かどうかで決める。10 秒は、hook script の子 (#467 で hook が check の起動に使う safe-run) が check を
+    止めて回収し終えられるように、safe-run の後始末の最悪 (約 8 秒) より長くした値。猶予と確認の時間は単調
+    時計 (`performance.now`) で計る (system の時計の補正で猶予が縮んで後始末中の子を KILL したり、延びたり
+    しない)。
+    - timeout のときだけ、呼び出しは後始末が済むまで (最大で猶予の 10 秒 + 確認の 1 秒ぶん) 遅れて返る
+      (safe-gh は 10 秒 + 最大 11 秒、fast-edit-check は総予算 + 最大 11 秒、changed-scope-qa は 120 秒 +
+      最大 11 秒)。changed-scope-qa は後始末の間も実行中に含める (その間に来た idle は skip し、直列を保つ)。
+    - 停止を確認できないとき: KILL の後も group に members が残る (TERM / KILL を送れない member が居る
+      EPERM を含む) ときと、kill が想定外の理由で失敗したとき (後始末をやめる) は、timeout の warn に
+      `; its process group may not have stopped (<理由>)` を足す。理由は送れなかった signal (`SIGKILL EPERM`
+      など) と `members remained after SIGKILL`、または失敗した signal と code (`SIGTERM EINVAL` など)。TERM を
+      送れなくても、KILL の後に group が空と確かめられれば通常の warn のまま (停止は確認できている)。
     - 限界: script (group の leader) は plugin の process が回収するので、pgid は members が居る間だけ有効。KILL は
       members が居ると確かめた直後に送るが、その間に group が空になって同じ番号が別の process group に
       再利用される窓は残る (番号の再利用には pid の一巡が要るので実害は小さい)。猶予の途中で OpenCode
