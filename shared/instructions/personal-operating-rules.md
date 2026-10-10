@@ -53,6 +53,16 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
 - 断られたら同じ作業/話題では再提案しない。escalation を内蔵する skill が発火している
   ときは二重提案しない (skill に委ねる)。
 
+## test と長時間の command (実行環境の守り)
+
+- test や長時間の command (test runner・build・watch など) は、配備済みの `personal-safe-run`
+  (`<tool home>/agent-tools/scripts/`) 経由で、memory と時間の上限を付けて走らせる (上限は作業に合わせて決める。
+  例: `personal-safe-run --max-footprint-mb 4096 --max-seconds 600 -- npm test`)。子 process の暴走で machine
+  全体を止めないため。safe-run が使えない環境 (macOS 以外など。exit 2 で起動しない) では、上限を付けられる同等の
+  手段を使う。
+- 終わったら、自分が起動した process が残っていないことを確かめ、残っていれば止める (safe-run の外で起動した
+  ものも同じ)。
+
 ## public safety
 
 - secret / local path / 外部ナレッジツールの参照先 / client 材料を tracked file に
