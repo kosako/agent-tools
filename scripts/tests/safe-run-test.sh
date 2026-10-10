@@ -460,6 +460,18 @@ if SafeRunInjection::MODE == "select-lies"
   end
   IO.singleton_class.prepend(SafeRunSelectLies)
 end
+
+# thread-error: 診断の thread を作る Thread.new が ThreadError を送出する (資源不足などで thread を作れない)。
+# safe-run は診断にしか thread を使わない。効いた印は file に書く。
+if SafeRunInjection::MODE == "thread-error"
+  module SafeRunThreadError
+    def new(*)
+      File.write(ENV.fetch("SAFE_RUN_INJECT_LOG"), "thread-error\n", mode: "a")
+      raise ThreadError, "can't create Thread (injected)"
+    end
+  end
+  Thread.singleton_class.prepend(SafeRunThreadError)
+end
 RB
 
 # ---- case 1: unit。decode は phys_footprint (offset 72) と exit 時刻 (offset 88) を返す ----------------------
@@ -900,5 +912,13 @@ expect_exit lies 137
 expect_report lies 'reason="time"' exit_status=137 cleanup_complete=true
 expect_group_gone lies
 ruby -e 'exit(Float(ARGV[0]) < 8 ? 0 : 1)' "$elapsed" || fail "lies: should finish within a few seconds, took $elapsed"
+
+# ---- case 22: 診断の thread を作れない (ThreadError) → 確定した exit code・report・group の回収は変わらない ----------
+run_case terr 30 -- env RUBYOPT="-r$tmp/inject.rb" SAFE_RUN_INJECT=thread-error SAFE_RUN_INJECT_LOG="$tmp/terr.log" \
+  "$sr" --max-footprint-mb 100 --max-seconds 1 --report "$tmp/terr.json" -- sh "$tmp/fx-ignore-term.sh" "$tmp/terr.pgid"
+expect_exit terr 137
+[ -s "$tmp/terr.log" ] || fail "terr: the injection should make Thread.new raise"
+expect_report terr 'reason="time"' exit_status=137 cleanup_complete=true
+expect_group_gone terr
 
 echo "ok: safe-run self-test passed"

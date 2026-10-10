@@ -166,7 +166,9 @@ module SafeRun
     writer = Thread.new(line) { |text| write_stderr(text) }
     writer.report_on_exception = false
     writer.kill unless writer.join([deadline - now, 0].max)
-  rescue SystemCallError, IOError
+  rescue StandardError
+    # 診断の失敗 (書き込みの失敗のほか、thread を作れない ThreadError なども) は、確定した exit code と report に
+    # 影響させない (#472 review 3)。
     nil
   end
 
