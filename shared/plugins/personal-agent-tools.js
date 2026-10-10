@@ -49,6 +49,18 @@ const CHANGED_SCOPE_QA_SCRIPT = "personal-changed-scope-qa"
 // それに合わせる)。options.timeoutMs はこれより短くする方向だけ受け付ける (既定との min)。
 const DEFAULT_TIMEOUT_MS = Object.freeze({ safeGh: 10000, fastEditCheck: 30000, changedScopeQa: 120000 })
 
+// timeout の後始末の猶予 (ms)。group に TERM を送ってから group が空になるのを最大この長さ待ち、members が
+// 残っていれば KILL を送る。hook script の子 (hook が check の起動に使う safe-run) が check を止めて回収し
+// 終えられるように、safe-run の後始末の最悪 (約 8 秒) より長くする (#467)。options.termGraceMs はこれより
+// 短くする方向だけ受け付ける (既定との min)。
+const TERM_GRACE_MS = 10000
+// 猶予の間に group が空になったかを確かめる間隔 (ms)。
+const GROUP_POLL_MS = 100
+// KILL の後に group が空になるのを確かめる長さ (ms)。KILL された member は親 (孤児なら launchd / init) に
+// 回収されるまで group に残る (2026-10-10 の macOS の実測で 20 ms 以内)。過ぎても members が残れば、停止を
+// 確認できないと伝える。
+const KILL_CONFIRM_MS = 1000
+
 // 子 process に渡す env は最低限に絞る (script の起動に PATH、home の解決に HOME、Ruby の
 // encoding に LANG 系、check 宣言の場所の上書きに AGENT_TOOLS_CHECKS_CONFIG。最後のものは
 // Claude Code / Codex の hook が env ごと継承して読むので揃える)。token 等の secret は渡さない。
@@ -145,21 +157,28 @@ function scriptPath(name) {
   return join(homedir(), ...SCRIPTS_DIR_SEGMENTS, name)
 }
 
-// options.timeoutMs.<key> は既定より短い正の有限値だけを採る。それ以外の値は options の
+// options の時間 (ms) は既定より短い正の有限値だけを採る (undefined は既定)。それ以外の値は options の
 // 渡し方の誤りなので、hook ではなく server() の時点で fail fast する (file plugin として
 // 読まれるときは options が渡らないので、ここで throw しても OpenCode の起動には関わらない)。
+function shorterThanDefault(name, given, defaultMs) {
+  if (given === undefined) return defaultMs
+  if (typeof given !== "number" || !Number.isFinite(given) || given <= 0) {
+    throw new TypeError(`${ID}: options.${name} must be a positive finite number`)
+  }
+  return Math.min(given, defaultMs)
+}
+
 function resolveTimeout(options, key) {
   const table = options ? options.timeoutMs : undefined
   if (table === undefined) return DEFAULT_TIMEOUT_MS[key]
   if (typeof table !== "object" || table === null) {
     throw new TypeError(`${ID}: options.timeoutMs must be an object`)
   }
-  const given = table[key]
-  if (given === undefined) return DEFAULT_TIMEOUT_MS[key]
-  if (typeof given !== "number" || !Number.isFinite(given) || given <= 0) {
-    throw new TypeError(`${ID}: options.timeoutMs.${key} must be a positive finite number`)
-  }
-  return Math.min(given, DEFAULT_TIMEOUT_MS[key])
+  return shorterThanDefault(`timeoutMs.${key}`, table[key], DEFAULT_TIMEOUT_MS[key])
+}
+
+function resolveTermGrace(options) {
+  return shorterThanDefault("termGraceMs", options ? options.termGraceMs : undefined, TERM_GRACE_MS)
 }
 
 class ScriptFailure extends Error {
@@ -169,11 +188,58 @@ class ScriptFailure extends Error {
   }
 }
 
+// process group に signal を送る。"sent" (届いた) / "empty" (ESRCH。group が空) / "denied" (EPERM。送れない
+// member が居る。macOS の kill(2) は group の中に送れない member が 1 つでもあれば EPERM) を返す。それ以外の
+// 失敗は、どの signal で起きたかを message にして throw する (呼び出し側が停止を確認できないと伝える)。
+function signalGroup(pgid, signal) {
+  try {
+    process.kill(-pgid, signal)
+    return "sent"
+  } catch (error) {
+    if (error.code === "ESRCH") return "empty"
+    if (error.code === "EPERM") return "denied"
+    throw new Error(`${signal === 0 ? "signal 0" : signal} ${error.code || error.message}`, { cause: error })
+  }
+}
+
+// GROUP_POLL_MS ごとに signal 0 で確かめ、ms 以内に group が空になれば true (signal 0 の EPERM は members が
+// 居る扱い)。時間は単調時計 (performance.now) で計る。Date.now だと system の時計の補正で猶予が縮み
+// (後始末中の子を KILL してしまう)、逆向きの補正では延びる。
+async function waitForEmptyGroup(pgid, ms) {
+  const deadline = performance.now() + ms
+  while (performance.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, GROUP_POLL_MS))
+    if (signalGroup(pgid, 0) === "empty") return true
+  }
+  return false
+}
+
+// timeout の後始末: group に TERM を送り、graceMs まで group が空になるのを待ち、members が残っていれば KILL を
+// 送って、空になるのを KILL_CONFIRM_MS まで確かめる。終わりは close ではなく group が空かどうかで決める
+// (script が TERM で終わっても、TERM を無視する子が stdio を閉じて残りうる)。script (leader) は plugin の
+// process が回収するので、pgid は members が居る間だけ有効。KILL は members が居ると確かめた直後に送る (その
+// 間に group が空になり、番号が別の group に再利用される窓は残る)。group が空と確かめられたら null、確かめ
+// られなければ理由 (送れなかった signal と、KILL の後も members が残ったこと) を返す。
+async function stopGroup(pgid, graceMs) {
+  const denied = []
+  const send = (signal) => {
+    const result = signalGroup(pgid, signal)
+    if (result === "denied") denied.push(`${signal} EPERM`)
+    return result
+  }
+  if (send("SIGTERM") === "empty") return null
+  if (await waitForEmptyGroup(pgid, graceMs)) return null
+  if (send("SIGKILL") === "empty") return null
+  if (await waitForEmptyGroup(pgid, KILL_CONFIRM_MS)) return null
+  return [...denied, "members remained after SIGKILL"].join(", ")
+}
+
 // hook script を起動し、終わったら {code, signal, stdout, stderr} で resolve する。起動できない
 // ときと timeout だけを ScriptFailure で reject する (exit code の解釈は呼び出し側が持つ)。
-// detached: true で process group を分け、timeout では group ごと SIGKILL する (script が
-// 起動した孫 process を残さないため)。
-function spawnScript(script, payload, { cwd, timeoutMs, env }) {
+// detached: true で process group を分け、timeout では group を stopGroup で止める (script が
+// 起動した孫 process を残さないため)。timeout の reject は後始末が済んでから出す (呼び出し側の
+// 実行中の印を後始末の間も保つ。changed-scope-qa の直列)。
+function spawnScript(script, payload, { cwd, timeoutMs, graceMs, env }) {
   return new Promise((resolve, reject) => {
     const child = spawn(scriptPath(script), [], {
       cwd,
@@ -192,12 +258,15 @@ function spawnScript(script, payload, { cwd, timeoutMs, env }) {
       fn(value)
     }
     timer = setTimeout(() => {
-      try {
-        process.kill(-child.pid, "SIGKILL")
-      } catch {
-        // 既に終わっていれば ESRCH。timeout の扱いは変わらない。
-      }
-      settle(reject, new ScriptFailure(script, `timed out after ${timeoutMs} ms`))
+      // 結果はここで timeout に決まる。後始末の間に届く close / error では settle しない。
+      settled = true
+      // 停止を確認できないときだけ、固定の文と理由を足す (通常の timeout の warn は変えない)。
+      const reason = `timed out after ${timeoutMs} ms`
+      const unconfirmed = (detail) => `${reason}; its process group may not have stopped (${detail})`
+      stopGroup(child.pid, graceMs).then(
+        (detail) => reject(new ScriptFailure(script, detail === null ? reason : unconfirmed(detail))),
+        (error) => reject(new ScriptFailure(script, unconfirmed(error.message))),
+      )
     }, timeoutMs)
 
     child.on("error", (error) => settle(reject, new ScriptFailure(script, `cannot start (${error.code || error.message})`)))
@@ -269,6 +338,7 @@ async function server(input, options) {
     fastEditCheck: resolveTimeout(options, "fastEditCheck"),
     changedScopeQa: resolveTimeout(options, "changedScopeQa"),
   }
+  const termGraceMs = resolveTermGrace(options)
   const cwd = typeof input.directory === "string" ? input.directory : undefined
   const client = input.client
   const warned = new Set()
@@ -315,7 +385,7 @@ async function server(input, options) {
     if (typeof output.output !== "string") return
 
     const payload = { tool_name: "Bash", tool_input: { command } }
-    const result = await runScript(SAFE_GH_SCRIPT, payload, { cwd, timeoutMs: timeoutMs.safeGh })
+    const result = await runScript(SAFE_GH_SCRIPT, payload, { cwd, timeoutMs: timeoutMs.safeGh, graceMs: termGraceMs })
     const ctx = additionalContext(result)
     if (ctx === null) return
     output.output = `${ctx}\n\n${output.output}`
@@ -358,7 +428,7 @@ async function server(input, options) {
       }
       const payload = { hook_event_name: "PostToolUse", tool_name: toolName, tool_input: { file_path: file } }
       try {
-        const ctx = additionalContext(await runScript(FAST_EDIT_CHECK_SCRIPT, payload, { cwd, timeoutMs: remaining }))
+        const ctx = additionalContext(await runScript(FAST_EDIT_CHECK_SCRIPT, payload, { cwd, timeoutMs: remaining, graceMs: termGraceMs }))
         if (ctx !== null && !messages.includes(ctx)) messages.push(ctx)
       } catch (error) {
         if (!(error instanceof ScriptFailure)) throw error
@@ -391,7 +461,7 @@ async function server(input, options) {
       if (await isChildSession(event.properties ? event.properties.sessionID : undefined)) return
       const payload = { hook_event_name: "Stop", stop_hook_active: false }
       const env = { [QA_STATE_DIR_ENV]: qaStateDir() }
-      const report = qaReport(await spawnScript(CHANGED_SCOPE_QA_SCRIPT, payload, { cwd, timeoutMs: timeoutMs.changedScopeQa, env }))
+      const report = qaReport(await spawnScript(CHANGED_SCOPE_QA_SCRIPT, payload, { cwd, timeoutMs: timeoutMs.changedScopeQa, graceMs: termGraceMs, env }))
       if (report !== null) log(report.level, report.message)
     } finally {
       qaRunning = false

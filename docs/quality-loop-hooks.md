@@ -188,8 +188,27 @@ M13 / M14 / M17 (OpenCode 1.18.30)。
   - `opencode run` では idle の後の非同期の処理が打ち切られうる (M10) ので、run では changed-scope-qa
     の結果が残らないことがある (TUI と serve では残る)。
   - fail-open: script が無い / 実行できない / 非 0 (changed-scope-qa の exit 2 を除く) / stdout が
-    JSON でない / timeout (fast-edit-check は総予算、changed-scope-qa は 120 秒。process group ごと
-    kill する) のどれでも、tool 結果を変えず・何も報告せず、warn を script ごとに 1 回だけ log に出す。
+    JSON でない / timeout (fast-edit-check は総予算、changed-scope-qa は 120 秒) のどれでも、tool 結果を
+    変えず・何も報告せず、warn を script ごとに 1 回だけ log に出す。
+  - timeout の止め方 (#467): script の process group に TERM を送り、group が空になるまで最大 10 秒待って
+    (100 ms ごとに確かめる)、members が残っていれば KILL を送り、空になるのを最大 1 秒確かめる。script が
+    TERM で終わっても、TERM を無視する子が stdio を閉じて残りうるので、終わりは script の終了ではなく group
+    が空かどうかで決める。10 秒は、hook script の子 (#467 で hook が check の起動に使う safe-run) が check を
+    止めて回収し終えられるように、safe-run の後始末の最悪 (約 8 秒) より長くした値。猶予と確認の時間は単調
+    時計 (`performance.now`) で計る (system の時計の補正で猶予が縮んで後始末中の子を KILL したり、延びたり
+    しない)。
+    - timeout のときだけ、呼び出しは後始末が済むまで (最大で猶予の 10 秒 + 確認の 1 秒ぶん) 遅れて返る
+      (safe-gh は 10 秒 + 最大 11 秒、fast-edit-check は総予算 + 最大 11 秒、changed-scope-qa は 120 秒 +
+      最大 11 秒)。changed-scope-qa は後始末の間も実行中に含める (その間に来た idle は skip し、直列を保つ)。
+    - 停止を確認できないとき: KILL の後も group に members が残る (TERM / KILL を送れない member が居る
+      EPERM を含む) ときと、kill が想定外の理由で失敗したとき (後始末をやめる) は、timeout の warn に
+      `; its process group may not have stopped (<理由>)` を足す。理由は送れなかった signal (`SIGKILL EPERM`
+      など) と `members remained after SIGKILL`、または失敗した signal と code (`SIGTERM EINVAL` など)。TERM を
+      送れなくても、KILL の後に group が空と確かめられれば通常の warn のまま (停止は確認できている)。
+    - 限界: script (group の leader) は plugin の process が回収するので、pgid は members が居る間だけ有効。KILL は
+      members が居ると確かめた直後に送るが、その間に group が空になって同じ番号が別の process group に
+      再利用される窓は残る (番号の再利用には pid の一巡が要るので実害は小さい)。猶予の途中で OpenCode
+      自身が終わると KILL は送られない。
   - 一時的に外すには `opencode --pure` で起動する。
 
 ## 検証境界
@@ -200,7 +219,7 @@ M13 / M14 / M17 (OpenCode 1.18.30)。
   build した plugin を入口 (`server(ctx)` が返す hooks) 経由で動かし、実物の script を tmp の home に
   置いて、tmp の git repo と記録つきの fake check で確かめる (追記の位置、apply_patch の file の取り方、
   総予算、payload の形、state dir、子 session の除外と直列化、model を続けさせる API と toast を呼ばない
-  こと、fail-open)。OpenCode の実機での確認は CI 外の smoke (人 + Claude) で行う。2026-09-30 に
+  こと、fail-open、timeout の止め方 (TERM → 猶予 → KILL と、後始末の間の直列))。OpenCode の実機での確認は CI 外の smoke (人 + Claude) で行う。2026-09-30 に
   OpenCode 1.18.30 (`opencode-go/kimi-k3`、`opencode serve` + `opencode run --attach`) で次を確かめた:
   構文エラーを入れた `edit` の結果の末尾に要約が載り model に届く / 直した `edit` には載らない /
   壊れた scope の `session.idle` で changed-scope-qa の `ERROR` が log に出て、直した後は何も出ない。根拠は
