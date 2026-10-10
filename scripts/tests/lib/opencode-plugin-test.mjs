@@ -3,7 +3,8 @@
 // (fast-edit-check / changed-scope-qa)、fail-open、timeout の止め方 (#467)、init の目印の行 (#343) を確かめる。
 // 使い方: node opencode-plugin-test.mjs <generated plugin.js> <personal-safe-gh-hook.rb>
 //           <personal-fast-edit-check.rb> <personal-changed-scope-qa.rb> <work dir>
-//           <生成物の marker の build_id> <scripts/lib/plugin_marker.rb>
+//           <生成物の marker の build_id> <scripts/lib/plugin_marker.rb> <personal-safe-run.rb>
+// 実物の hook は同じ dir の personal-safe-run の子として check を起動する (#467) ので、home には safe-run も置く。
 // HOME は case ごとに process.env.HOME で tmp の home に向ける (plugin は os.homedir() から
 // script を解決する)。check の宣言は AGENT_TOOLS_CHECKS_CONFIG で tmp の file に向け、XDG の dir も
 // tmp に向ける。実物の tool home は読まない。
@@ -12,9 +13,9 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSy
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 
-const [pluginPath, safeGhSource, fastEditSource, qaSource, workDir, expectedBuildId, pluginMarkerLib] = process.argv.slice(2)
-if (!pluginPath || !safeGhSource || !fastEditSource || !qaSource || !workDir || !expectedBuildId || !pluginMarkerLib) {
-  console.error("usage: node opencode-plugin-test.mjs <plugin.js> <personal-safe-gh-hook.rb> <personal-fast-edit-check.rb> <personal-changed-scope-qa.rb> <work dir> <build_id> <plugin_marker.rb>")
+const [pluginPath, safeGhSource, fastEditSource, qaSource, workDir, expectedBuildId, pluginMarkerLib, safeRunSource] = process.argv.slice(2)
+if (!pluginPath || !safeGhSource || !fastEditSource || !qaSource || !workDir || !expectedBuildId || !pluginMarkerLib || !safeRunSource) {
+  console.error("usage: node opencode-plugin-test.mjs <plugin.js> <personal-safe-gh-hook.rb> <personal-fast-edit-check.rb> <personal-changed-scope-qa.rb> <work dir> <build_id> <plugin_marker.rb> <personal-safe-run.rb>")
   process.exit(2)
 }
 
@@ -22,7 +23,8 @@ const SCRIPTS_DIR = [".claude", "agent-tools", "scripts"]
 const SAFE_GH = "personal-safe-gh-hook"
 const FAST_EDIT = "personal-fast-edit-check"
 const QA = "personal-changed-scope-qa"
-const SCRIPT_SOURCES = { [SAFE_GH]: safeGhSource, [FAST_EDIT]: fastEditSource, [QA]: qaSource }
+const SAFE_RUN = "personal-safe-run"
+const SCRIPT_SOURCES = { [SAFE_GH]: safeGhSource, [FAST_EDIT]: fastEditSource, [QA]: qaSource, [SAFE_RUN]: safeRunSource }
 const QA_STATE_REL = [".cache", "agent-tools", "changed-scope-qa-opencode"]
 const QA_DEFAULT_STATE_REL = [".cache", "agent-tools", "changed-scope-qa"]
 const SERVICE = "personal-agent-tools"
@@ -926,9 +928,10 @@ console.log(JSON.stringify({ elapsed: resolvedAt - started, resolvedAt, warns, o
 }
 
 // E4: 総予算を超えたら残りの file は check しない。予算の内に resolve する。予算は、最初の file で
-// ruby と slow check が起動して記録を書き終える余裕を持たせる。
+// ruby (hook と、hook が check を起動する personal-safe-run。#467) と slow check が起動して記録を書き終える余裕を
+// 持たせ、slow check の 5 秒より短くする。
 {
-  const budgetMs = 1500
+  const budgetMs = 3000
   const client = makeClient("ok")
   const hooks = await makeHooks(client, { timeoutMs: { fastEditCheck: budgetMs } }, editRepo)
   process.env.AGENT_TOOLS_CHECKS_CONFIG = configs.slow

@@ -19,10 +19,12 @@ node_cases="$script_dir/lib/opencode-plugin-test.mjs"
 hook_source="$repo_root/shared/scripts/personal-safe-gh-hook.rb"
 fast_edit_source="$repo_root/shared/scripts/personal-fast-edit-check.rb"
 qa_source="$repo_root/shared/scripts/personal-changed-scope-qa.rb"
+# 実物の hook は同じ dir の personal-safe-run の子として check を起動する (#467)
+safe_run_source="$repo_root/shared/scripts/personal-safe-run.rb"
 plugin_marker_lib="$repo_root/scripts/lib/plugin_marker.rb"
 
 command -v node >/dev/null 2>&1 || fail "node is required (the plugin cases run with node)"
-for source in "$hook_source" "$fast_edit_source" "$qa_source"; do
+for source in "$hook_source" "$fast_edit_source" "$qa_source" "$safe_run_source"; do
   [ -f "$source" ] || fail "missing hook script source: $source"
 done
 
@@ -61,12 +63,12 @@ echo "ok build fixture"
 # import する生成物の隣に {"type":"module"} の package.json を置いて、モジュール形式を明示する (#396)。
 printf '{"type":"module"}\n' > "$fixture/generated/opencode/plugins/package.json"
 mkdir -p "$tmp/work"
-node "$node_cases" "$generated" "$hook_source" "$fast_edit_source" "$qa_source" "$tmp/work" "$build_id" "$plugin_marker_lib" \
+node "$node_cases" "$generated" "$hook_source" "$fast_edit_source" "$qa_source" "$tmp/work" "$build_id" "$plugin_marker_lib" "$safe_run_source" \
   || fail "node cases failed"
 # 構文の自動判定の無い Node の再現 (flag を受け付ける Node のときだけ。work dir は分ける)。
 if no_detect=$(node_options_without_detect_module); then
   mkdir -p "$tmp/work-no-detect"
-  NODE_OPTIONS=$no_detect node "$node_cases" "$generated" "$hook_source" "$fast_edit_source" "$qa_source" "$tmp/work-no-detect" "$build_id" "$plugin_marker_lib" \
+  NODE_OPTIONS=$no_detect node "$node_cases" "$generated" "$hook_source" "$fast_edit_source" "$qa_source" "$tmp/work-no-detect" "$build_id" "$plugin_marker_lib" "$safe_run_source" \
     || fail "node cases failed without the syntax detection (NODE_OPTIONS=$no_detect)"
   echo "ok node cases without the syntax detection"
 else

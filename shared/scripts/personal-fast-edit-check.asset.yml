@@ -16,7 +16,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:77d92c44ea8bc1713dec9746288c86049b4ba27e0d3ab8d532aac44aad75cbb7
+  approved_build_id: sha256:bf7b4067807e0d34030570c88383f51ef1b8552ad5ff8773fea48cac3aa569ec
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-fast-edit-check.rb
@@ -26,4 +26,5 @@ summary: >-
   local 設定 (checks.local.json) で宣言された高速 check を実行し、失敗要約だけを
   additionalContext で返す steering (fail-open・block しない・自動 fix しない)。宣言の
   無い repo では無言 no-op。repo 内の宣言は読まない (第三者 repo の任意コマンド宣言を
-  防ぐ)。docs/quality-loop-hooks.md が正本。
+  防ぐ)。check は同じ dir の personal-safe-run の子として memory と時間の上限 (既定 4096 MiB / 30 秒、hook 1 回の
+  総予算 120 秒) を付けて起動し、safe-run が無ければ走らせない (#467)。docs/quality-loop-hooks.md が正本。

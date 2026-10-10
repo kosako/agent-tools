@@ -15,7 +15,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:02344ceb4f650ba8a5099bb0fbd73b4258269d56b9dc206ac77b2eef56a1f6fa
+  approved_build_id: sha256:4f609c19dfc9f4dc6f90a564bb545fb96fec6f5b71a57802373ae2ef701247fd
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-changed-scope-qa.rb
@@ -24,5 +24,6 @@ summary: >-
   Stop hook body。turn 終了時に dirty scope (帰属なし・working tree 全体) へ repo 宣言の
   QA check が未実行 / stale なら一度だけ block して続行させる gate。scope 指紋 + 結果を
   cache し同一 scope を再検査しない / stop_hook_active 時と同一失敗の再発は非ブロッキング
-  警告に降格 / check 不在も警告降格 (無限ループ対策・#200 §4.5)。宣言の無い repo では
-  無言 no-op。docs/quality-loop-hooks.md が正本。
+  警告に降格 / check 不在も警告降格 (無限ループ対策・#200 §4.5)。check は同じ dir の
+  personal-safe-run の子として memory と時間の上限 (既定 4096 MiB / 300 秒、hook 1 回の総予算 540 秒) を付けて
+  起動し、safe-run が無ければ走らせない (#467)。宣言の無い repo では無言 no-op。docs/quality-loop-hooks.md が正本。

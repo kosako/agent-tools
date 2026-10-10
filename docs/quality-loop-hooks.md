@@ -51,6 +51,64 @@
   `qa_checks.command` は引数追記なし。どちらも **cwd = repo root** で実行される。
 - 宣言する check の目安: edit_checks は「1 ファイル・数百 ms」(編集のたびに同期実行)、
   qa_checks は「repo 全体で数秒・決定的」(Stop のたびに走りうる。決定性は cache の前提)。
+- check ごとに memory と時間の上限 (`max_footprint_mb` / `max_seconds`) を宣言できる (下の「check の起動」)。
+
+## check の起動 (personal-safe-run 経由、#467)
+
+両 hook は宣言された check を直接起動せず、配備先の同じ dir (`<tool home>/agent-tools/scripts/`) の
+`personal-safe-run` ([safe-run](safe-run.md)) の子として、新しい process group と memory (phys_footprint の合計) と
+時間の上限を付けて起動する。check の test runner が子 process ごと暴走しても、hook から孤児と memory の枯渇が
+生まれないようにする (#466 の背景の事故)。
+
+- **safe-run が無い・実行できない**ときは、check を走らせない (上限なしでは走らせない)。その check は起動の失敗
+  (missing) として警告する。safe-run は PATH からは探さない。
+- **上限**: check ごとに `max_footprint_mb` (MiB) と `max_seconds` (秒) を宣言できる。無ければ既定 (memory 4096
+  MiB、時間は qa_checks 300 秒 / edit_checks 30 秒)。safe-run の範囲 (1〜1048576 / 1〜86400) の整数でなければ
+  (bool・小数・文字列を含む) 不正な check 宣言として扱う (「不正な check 宣言を無視しました」の経路)。
+
+  ```json
+  {"name": "suite", "command": ["scripts/tests/run.sh"], "max_footprint_mb": 2048, "max_seconds": 120}
+  ```
+
+- **総予算**: hook 1 回の時間の総予算は changed-scope-qa 540 秒、fast-edit-check 120 秒 (Claude Code / Codex の
+  hook の timeout の既定 600 秒より短い)。check の `--max-seconds` は min(上限, 残りの予算の切り捨て) で、残りが
+  1 秒未満なら起動しない。総予算で短くした期限で止まった check は failure ではなく**予算切れ** (missing。
+  changed-scope-qa は cache で確定させず次の Stop で再試行、fast-edit-check は「実行できません」として要約に出す)。
+- **出力**: stdout と stderr をまとめて読み、先頭 64 KiB だけ保持して残りは読み捨てる (check を pipe の詰まりで
+  止めない。要約の 2000 文字の打ち切りは別)。safe-run の終了は pipe の EOF と分けて観測し、終わったら pipe を最大
+  0.5 秒だけ読んでから閉じる (group を抜けた子が書き込み側を持ち続けても待たない)。
+- **safe-run の期限**: safe-run が `max_seconds` + 20 秒を過ぎても終わらなければ TERM (safe-run は check の group を
+  止めてから終わる) → 10 秒 → KILL で止め、その check を missing にする。
+- **結果の分類** (safe-run の report を検証してから、上から順に排他的に。safe-run の exit code は使わない。137 は
+  command 自身の SIGKILL と区別できないため):
+
+  | 条件 | 扱い |
+  | --- | --- |
+  | report が無い・読めない・不正 (version、必須 field の存在 (null を取りうる field も) と型、既知の reason、exit code と signal のちょうど一方) | missing |
+  | `command_started: false` (check を起動できない: 不在・権限・不正形式・ENOTDIR など) | missing |
+  | `reason: "interrupted"` | hook が中断中なら下の「中断」。そうでなければ missing |
+  | `reason: "time"` で、総予算で `--max-seconds` を短くしていた | missing (予算切れ) |
+  | `reason: "time"` / `"footprint"` / `"monitor"` | failure (「safe-run が止めました (時間の上限 N 秒 / memory の上限 N MiB / memory を監視できません)」) |
+  | `reason: null` で `command_exit` が 0 | pass |
+  | `reason: null` で `command_exit` が 0 以外 | failure (`exit N`。2 / 126 / 127 も command の exit) |
+  | `reason: null` で `command_signal` | failure (`terminated by SIGxxx`。#373) |
+
+  `cleanup_complete: false` (safe-run が check の group を止め切れなかった) は、上の扱いに加えて警告を出す。
+  changed-scope-qa はその check を pass として cache せず、次の Stop で再実行する (警告が cache-hit で消えない
+  ように)。
+- **hook 自身の中断**: hook は INT / TERM / HUP を受けたら flag を立て、動いている safe-run に TERM を送り (safe-run
+  が check の group を止める)、後続の check を起動しない。safe-run を上の期限の規則で回収し、一時 dir を消し、
+  **state も出力も残さずに** exit 0 で終わる (次の Stop で同じ scope を検査し直す)。changed-scope-qa は state を
+  一時 file に書いて rename で置き、書いている途中で中断されても今回の state を置かない (rename の前) か書く前の
+  state に戻す (rename の後)。出力 (警告・block) の直前にも中断を確かめる。
+- **限界**: hook の pid だけが SIGKILL されたときは、safe-run が自分の上限で check を止める。hook の group ごと
+  SIGKILL されると safe-run も死に、safe-run が別 group で起動した check の group が残る。Claude Code / Codex の
+  hook の timeout が送る signal と宛先 (pid か group か) は公式 docs に書かれておらず未確認なので、内側の総予算を
+  外側の既定 600 秒より短く保つ。
+- **配備の順序**: OpenCode の plugin は timeout で hook の group を止める。group への SIGKILL だけで止める旧い plugin
+  のままこの変更を配ると、safe-run ごと殺されて check の group が残る。plugin の止め方を TERM → 猶予 → KILL に
+  変えた版 (#467 の PR B) を先に配備し、**稼働中の OpenCode を起動し直して新しい plugin を読み込ませてから**、
+  この変更 (hook が safe-run を使う) を配備する。
 
 ## personal-fast-edit-check(PostToolUse / `Edit|Write|apply_patch`)
 
@@ -72,6 +130,8 @@
   plugin は file ごとの要約の同文を除くため、同名ファイルの失敗を区別する。payload の path が
   symlink 越しでも git が返す repo root 基準で相対にする)、不正な check 宣言の警告は
   同じ repo について 1 回だけ返す。
+  失敗した check は `[名前] 理由` (`exit N` / `terminated by SIGxxx` / safe-run が止めた理由 / 実行できなかった
+  理由) の後に出力を続ける (#467)。
 - 設定ファイルが壊れているときは無言で握り潰さず、設定エラーを additionalContext で
   1 行知らせる (それでも exit 0)。
 - **互換性の根拠**: [Codex Hooks](https://learn.chatgpt.com/docs/hooks#posttooluse)、
@@ -106,8 +166,9 @@
     (新しい scope なら check は走らせ、失敗は `systemMessage` のユーザー向け警告で返す)。
   - 同一 scope 指紋の再 Stop は check を**再実行しない** (pass 済み = 無言 / fail 済み =
     ユーザー向け警告のみ。block は新しい scope に 1 回だけ → 直せない失敗は人間に戻る)。
-  - check コマンド不在・spawn 失敗 (起動時の例外。不在・権限・不正な実行形式のほか、path の途中が
-    file や symlink の loop など `SystemCallError` 全般。#430) はユーザー向け警告に降格して block しない。
+  - 実行できなかった check (missing: check コマンドの不在・権限・不正な実行形式のほか、path の途中が
+    file や symlink の loop など起動の失敗全般 (#430)、safe-run を使えない・report が不正・予算切れ・safe-run が
+    期限までに終わらない (#467)) はユーザー向け警告 (名前と理由) に降格して block しない。
     同じ repo の他の check は通常どおり走り、その結果 (失敗なら block) も出す。
     起動した check が signal で終わったのは spawn 失敗ではなく実 failure として扱い、block の要約に
     signal 名を出す (#373。hook の timeout や中断では hook 自身も止まって state を書かないので、ここで
@@ -215,6 +276,10 @@ M13 / M14 / M17 (OpenCode 1.18.30)。
 
 - 純粋ロジックと git 連携・cache・ループ対策は `scripts/tests/quality-loop-hooks-test.sh`
   が CI で検証する (設定 / state / HOME / git config を隔離・fake check 使用)。
+- safe-run 経由の起動 (#467) は `scripts/tests/quality-loop-safe-run-test.sh` が検証する。report の分類・不正な
+  report・予算 (`--max-seconds` の値)・cache・上限の上書き・safe-run の期限・出力の保持量は fake の safe-run と
+  注入した時計で決定的に、memory と時間の上限で止まって group が空になること・safe-run が無い / 実行できない・
+  pipe を持ち続ける子・hook への TERM は実物の safe-run で確かめる。
 - OpenCode の plugin からの呼び出しは `scripts/tests/opencode-plugin-test.sh` (node) が CI で検証する。
   build した plugin を入口 (`server(ctx)` が返す hooks) 経由で動かし、実物の script を tmp の home に
   置いて、tmp の git repo と記録つきの fake check で確かめる (追記の位置、apply_patch の file の取り方、
