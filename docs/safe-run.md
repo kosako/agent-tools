@@ -30,8 +30,12 @@ personal-safe-run --max-footprint-mb N --max-seconds N [--report FILE] -- <comma
   読むと SIGTTIN で止まる)。pipe と file はそのまま渡す。stdout / stderr は継承する (透過)。
 - safe-run 自身の診断は stderr の `personal-safe-run: ` で始まる行だけ。上限か signal で止めたときは
   `personal-safe-run: stopped (reason=<reason>): ...` の行を、残りを止めたときや後始末が終わり切らないときは
-  `personal-safe-run: warning: ...` の行を出す。stderr への書き込みの失敗 (EPIPE など) は終了の
-  理由と report に影響させない。
+  `personal-safe-run: warning: ...` の行を出す。
+- 順序は **後始末 → report → 診断**。stderr は command と共有しうる (読まれずに詰まっていることもある) ので、
+  診断は後始末と report の後にまとめて出す。1 行ずつ、書き込めることを `select` で確かめてから (最大 0.2 秒)、
+  PIPE_BUF (512 byte) 以下に切り詰めて書き、書けなければ捨てる。stderr に `O_NONBLOCK` は立てない (command と
+  open file description を共有しているので、command の書き込みまで失敗させる)。診断の失敗は終了の理由と report
+  に影響させない。
 - `--help` は usage を stdout に出して exit 0。
 
 ## exit code
@@ -87,6 +91,8 @@ personal-safe-run --max-footprint-mb N --max-seconds N [--report FILE] -- <comma
   `phys_footprint` と一致する (self-test で比べる)。
 - 生きている member は `proc_pidinfo` で pgid が command の group と一致することを確かめてから足す (列挙と計測の
   間に pid が再利用された別 process を数えない)。zombie と消えた pid (ESRCH) は 0。
+- 後始末が終わるまで leader を回収しないので、group には常に leader (生きているか zombie) が居る。列挙の結果が
+  **空か leader を含まなければ列挙の失敗**とみなす (libproc の `proc_listpids` は syscall の失敗を 0 件に変える)。
 - それ以外の失敗 (EPERM など) と列挙の失敗は、その巡回を **incomplete** にして合計で判定しない (member 0 とは
   扱わない)。incomplete が **3 巡回続いたら `monitor`** で止める (測れないまま走らせ続けない)。完全に測れた
   巡回でだけ連続回数を 0 に戻す。
@@ -96,24 +102,37 @@ personal-safe-run --max-footprint-mb N --max-seconds N [--report FILE] -- <comma
 
 - **leader は最後まで回収しない**。leader の zombie が pgid を保持するので、後始末の間に pgid が別の group に
   再利用されない。
-- group に TERM → 生きている member (leader を含む。zombie は数えない) が 0 になるまで最大 2 秒 poll → 残れば group に
-  KILL → 最大 2 秒 poll → leader が終わっていなければ leader に KILL (group を抜けた leader にも届く) → leader を
-  回収 (最大 2 秒)。無期限には待たない。
-- kill の ESRCH は「生きた member が無い」、EPERM は「止められない member がいる」として扱う (warning を出す)。
-  期限を過ぎても生きた member が残るか leader を回収できなければ `cleanup_complete: false` と warning。
-- leader が自分で終わったときも、残っている member を同じ手順で止め、止める前に数えた数を `leftover_killed` と
-  warning に出す。exit code は leader のもの。
+- 後始末は 1 回だけ走り、次の段階を順に行う。無期限には待たない。
+  1. group に TERM → 生きている member (leader を含む。zombie は数えない) が 0 になるまで最大 2 秒 poll → 残れば
+     group に KILL → 最大 2 秒 poll。観測 (列挙や計測) が失敗するか例外を出したら「未確定」として、その段階の
+     poll を打ち切って次の段階へ進む。
+  2. 観測の結果にかかわらず、**最後に group へ KILL を必ず送る** (leader の zombie だけなら無害。列挙の後に fork
+     された子も止める)。leader が終わっていなければ leader にも KILL を送る (group を抜けた leader にも届く)。
+  3. leader 以外の生きた member が 0 であることを、**間を置いた (0.05 秒) 2 回の連続した列挙**で確かめる (見つけ
+     たら KILL を送り直す)。最大 2 秒で確定できなければ `cleanup_complete: false`。
+  4. leader を回収する (最大 2 秒)。回収できなければ `cleanup_complete: false`。
+- 各段階は前の段階の例外にかかわらず走る (最後の KILL・leader への KILL・確認・回収・report は必ず試行する)。
+  後始末の中で例外が起きたら `cleanup_complete: false` と warning。
+- group への kill の ESRCH と EPERM は、止まったかを観測で確かめる (macOS は zombie だけの group への kill に
+  EPERM を返すので、EPERM は「止められない member がいる」とは限らない。2026-10-10 実測)。生きた member が
+  残れば 3. で `cleanup_complete: false` になる。
+- leader が自分で終わったときは、残っている member が見えれば 1. から、見えなければ 2. から行う。
+  `leftover_killed` は TERM の前に数えた数と、3. で新たに見つけた数の合計で、warning にも出す。exit code は
+  leader のもの。
 - signal (INT / TERM / HUP / QUIT / TSTP) は spawn の前に trap し、handler は最初の 1 つを記録して self-pipe に
   1 byte 書くだけ。後始末は handler の外で 1 回だけ走る (2 回目の signal で猶予を延ばさず、理由も上書きしない)。
   TSTP (Ctrl-Z) も中断として扱う (safe-run だけが止まって command が動き続けるのを防ぐ)。起動時に無視されて
   いた signal (`nohup` の HUP など) は trap せず無視のまま残し、command にも無視を継承させる (shell と同じ。
-  `nohup personal-safe-run ...` で端末を閉じても止まらない)。
+  `nohup personal-safe-run ...` で端末を閉じても止まらない)。handler は self-pipe に書けなくても (閉じた後など)
+  flag を立てたまま握り、self-pipe は書く側を先に閉じる。
 - SIGCHLD は既定の扱いに戻してから起動する (無視を継承すると子が自動で回収され、leader の zombie も終了 status も
   残らないため)。
 
 ## 限界
 
 - **group を抜けた子は追えない**。`setsid` / `setpgid` で別の group に移った process は計測にも停止にも入らない。
+  leader が group を抜けると、列挙に leader が出ないので列挙の失敗として 3 巡回で `monitor` で止まる。
+- **stderr が読まれずに詰まっていると、safe-run の診断は捨てられる** (後始末と report は先に済む)。
 - **safe-run への SIGKILL / SIGSTOP は捕捉できない**。safe-run が SIGKILL で消えると command の group は残る。
   外側 (hook の timeout など) から止めるときは、先に TERM で猶予を取り、内側の上限を外側より短くする
   (#467 で hook から使うときの前提)。

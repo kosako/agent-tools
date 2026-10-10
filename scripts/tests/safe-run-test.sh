@@ -8,9 +8,11 @@
 # 固定するもの: usage と前提 (exit 2、command を起動しない、report を書かない)、起動できない (127 / 126)、透過
 # (exit code、stdout / stderr、argv、stdin)、時間の上限と KILL への escalation、footprint の上限 (node --test の
 # 子、group の合計)、leader の終了後に残った process の片付け (leader は最後まで回収しない)、中断 (TERM / TSTP、
-# 2 回目の signal、同じ巡回の 2 つの signal)、終了と期限の競合、計測不能 (monitor) と一部だけの回復、別 group の
-# pid を数えない、phys_footprint の decode と footprint CLI との一致、report の書き込みの失敗、端末の stdin、
-# SIGCHLD を無視する親、起動時に無視されていた signal (nohup の HUP)。
+# 2 回目の signal、同じ巡回の 2 つの signal)、終了と期限の競合、計測不能 (monitor。proc_listpids の 0 件を含む) と
+# 一部だけの回復、別 group の pid を数えない、phys_footprint の decode と footprint CLI との一致、report の書き込みの
+# 失敗、端末の stdin、SIGCHLD を無視する親、起動時に無視されていた signal (nohup の HUP)、後始末の中の観測の例外、
+# 後始末の列挙の直後の fork、self-pipe の close の境界の signal、読まれずに詰まった stderr。
+# fixture は寿命を自分で有限にする (TERM を無視するものも 30 秒前後で自分から終わる)。
 # 注入 (RUBYOPT=-r) は safe-run の 1 起動だけに付け、本体の module の singleton class に prepend する。
 # 引数で script の source を差し替えられる (変異での確認用)。
 set -eu
@@ -52,8 +54,9 @@ chmod +x "$deploy/personal-safe-run"
 sr="$deploy/personal-safe-run"
 
 # ---- harness ------------------------------------------------------------------------------------
-# 使い方: ruby harness.rb <result> <timeout 秒> <pgid file> [--stdin FILE | --hold-stdin] [--at FILE ACTION]... -- <command...>
-# command を shell を通さずに起動し、終わるまで待つ。--at は順に、FILE が現れたら ACTION を行う (ACTION は signal 名
+# 使い方: ruby harness.rb <result> <timeout 秒> <pgid file> [--stdin FILE | --hold-stdin] [--stuck-stderr] [--at FILE ACTION]... -- <command...>
+# command を shell を通さずに起動し、終わるまで待つ。--hold-stdin は書かずに開けたままの pipe を stdin に、
+# --stuck-stderr は読まずに開けたままの pipe を stderr にする (command が書けば詰まる)。--at は順に、FILE が現れたら ACTION を行う (ACTION は signal 名
 # なら command に送る、run:<script> なら sh <script> を同期で走らせる)。期限を過ぎたら command と pgid file の group に
 # KILL して "timeout" を書く。result の 1 行: <exit|signal|timeout> <値> <経過秒> <最初の signal からの秒|-> <行った --at の数>
 cat > "$tmp/harness.rb" <<'RB'
@@ -66,11 +69,13 @@ opts = rest[0...sep]
 cmd = rest[(sep + 1)..-1]
 stdin = File::NULL
 hold_r = hold_w = nil
+stuck_r = stuck_w = nil
 ats = []
 until opts.empty?
   case (opt = opts.shift)
   when "--stdin" then stdin = opts.shift
   when "--hold-stdin" then hold_r, hold_w = IO.pipe; stdin = hold_r
+  when "--stuck-stderr" then stuck_r, stuck_w = IO.pipe
   when "--at" then ats << [opts.shift, opts.shift]
   else abort("harness: unknown option #{opt}")
   end
@@ -80,8 +85,11 @@ end
 %w[INT TERM HUP QUIT TSTP].each { |name| Signal.trap(name, "SYSTEM_DEFAULT") }
 started = now
 deadline = started + Float(timeout)
-pid = Process.spawn([cmd[0], cmd[0]], *cmd[1..-1], in: stdin)
+spawn_opts = { in: stdin }
+spawn_opts[:err] = stuck_w if stuck_w
+pid = Process.spawn([cmd[0], cmd[0]], *cmd[1..-1], **spawn_opts)
 hold_r&.close
+stuck_w&.close
 first_signal = nil
 done = 0
 status = nil
@@ -110,6 +118,7 @@ loop do
   sleep 0.02
 end
 hold_w&.close
+stuck_r&.close
 finished = now
 kind = status.exited? ? "exit" : "signal"
 value = status.exited? ? status.exitstatus : status.termsig
@@ -199,25 +208,26 @@ sleep "$3" &
 : > "$2"
 wait
 SH
-# fx-ignore-term.sh <pgid>: TERM を無視する leader と子と孫 (無視は exec を越えて継承される)
+# fx-ignore-term.sh <pgid>: TERM を無視する leader と子と孫 (無視は exec を越えて継承される)。寿命は孫の sleep の 30 秒
 cat > "$tmp/fx-ignore-term.sh" <<'SH'
 trap '' TERM
 echo $$ > "$1"
-sh -c 'sleep 300 & wait' &
+sh -c 'sleep 30 & wait' &
 wait
 SH
-# fx-leftover.sh <pgid> <孫の pid>: sleep 300 の孫を残して exit 0
+# fx-leftover.sh <pgid> <孫の pid>: sleep 30 の孫を残して exit 0
 cat > "$tmp/fx-leftover.sh" <<'SH'
 echo $$ > "$1"
-sleep 300 &
+sleep 30 &
 echo $! > "$2"
 exit 0
 SH
-# fx-trapper.sh <got_term> <ready>: TERM を受けたら印を書いて動き続ける (KILL でしか止まらない)
+# fx-trapper.sh <got_term> <ready>: TERM を受けたら印を書いて動き続ける (KILL でしか止まらない。寿命は 30 巡)
 cat > "$tmp/fx-trapper.sh" <<'SH'
 trap 'echo t >> "$1"' TERM
 : > "$2"
-while :; do sleep 1; done
+i=0
+while [ "$i" -lt 30 ]; do sleep 1; i=$((i + 1)); done
 SH
 # fx-leftover-trap.sh <pgid> <got_term> <ready> <trapper>: trapper を残し、trap を入れ終えてから exit 0 (待ちは上限つき)
 cat > "$tmp/fx-leftover-trap.sh" <<'SH'
@@ -227,11 +237,30 @@ i=0
 while [ ! -e "$3" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
 exit 0
 SH
-# fx-term-loop.sh <pgid> <got_term>: leader が TERM を受けたら印を書いて動き続ける
+# fx-term-loop.sh <pgid> <got_term>: leader が TERM を受けたら印を書いて動き続ける (寿命は 30 巡)
 cat > "$tmp/fx-term-loop.sh" <<'SH'
 trap 'echo t >> "$2"' TERM
 echo $$ > "$1"
-while :; do sleep 1; done
+i=0
+while [ "$i" -lt 30 ]; do sleep 1; i=$((i + 1)); done
+SH
+# fx-forker.sh <go> <child> <ready>: 合図 (go) を待ち、子 (sleep 30) を fork して pid を child に書いてから自分は
+# 終わる (待ちは上限つき)
+cat > "$tmp/fx-forker.sh" <<'SH'
+: > "$3"
+i=0
+while [ ! -e "$1" ] && [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done
+sleep 30 &
+echo $! > "$2"
+exit 0
+SH
+# fx-fork-leader.sh <pgid> <go> <child> <ready> <forker>: forker を残し、forker が動き出してから exit 0
+cat > "$tmp/fx-fork-leader.sh" <<'SH'
+echo $$ > "$1"
+sh "$5" "$2" "$3" "$4" &
+i=0
+while [ ! -e "$4" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+exit 0
 SH
 # fx-alloc.rb <MiB> <寿命 秒>: MiB を確保して書き込み (footprint に乗る)、寿命まで待って終わる
 cat > "$tmp/fx-alloc.rb" <<'RB'
@@ -273,6 +302,14 @@ cat > "$tmp/fx-node.sh" <<'SH'
 echo $$ > "$1"
 exec node --test "$2"
 SH
+# fx-flood.pl <pgid>: leader として stderr に書き続ける (読まれない pipe なら詰まって止まる)。寿命は alarm の 30 秒
+cat > "$tmp/fx-flood.pl" <<'PL'
+open(my $f, ">", $ARGV[0]) or die "pgid: $!";
+print $f "$$\n";
+close $f;
+alarm 30;
+print STDERR ("x" x 1000), "\n" while 1;
+PL
 
 # 注入: 本体より前に -r で読まれるので、module を先に開いて singleton class に prepend する (module_function の
 # 定義より前に入っても、lookup は prepend した module が先)。RUBYOPT は command に漏らさない。効いた印を stderr に書く。
@@ -282,14 +319,35 @@ module SafeRun; end
 module SafeRunInjection
   MODE = ENV.fetch("SAFE_RUN_INJECT")
 
-  # 最初の巡回を 1.5 秒遅らせる。signal の handler で sleep が早く戻っても、1.5 秒は巡回に戻らない。
+  def inject_now
+    Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  end
+
+  # listpids-zero: Fiddle の呼び出しの境界で、command の group の proc_listpids を 0 にする (libproc が syscall の
+  # 失敗を変えた値)。自分の group (起動前の自己検査) には効かせない。
+  def bind_libproc
+    super
+    return unless MODE == "listpids-zero"
+
+    real = @listpids
+    own = Process.getpgrp
+    @listpids = Object.new
+    @listpids.define_singleton_method(:call) do |type, pgid, buf, size|
+      next real.call(type, pgid, buf, size) if pgid == own
+
+      $stderr.write("inject: listpids-zero\n")
+      0
+    end
+  end
+
+  # delay-first: 最初の巡回を 1.5 秒遅らせる。signal の handler で sleep が早く戻っても、1.5 秒は巡回に戻らない。
   def wait_tick(reader, seconds)
     if MODE == "delay-first" && !@inject_delayed
       @inject_delayed = true
       $stderr.write("inject: delay-first\n")
-      until_at = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 1.5
+      until_at = inject_now + 1.5
       loop do
-        left = until_at - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        left = until_at - inject_now
         break if left <= 0
 
         sleep left
@@ -307,15 +365,38 @@ module SafeRunInjection
     @inject_measuring = false
   end
 
-  def list_group(pgid)
-    if @inject_measuring && MODE == "list-fail"
-      $stderr.write("inject: list-fail\n")
-      return nil
+  # cleanup-raise: 後始末の中 (計測の外) の列挙で例外を出す。
+  # fork-race: 後始末の最初の列挙の直後に member へ合図し、member が子を fork して自分は終わるのを待ってから古い
+  # 結果を返す (列挙と計測の間に起きた fork を同期して再現する)。
+  def list_group(leader)
+    if MODE == "cleanup-raise" && !@inject_measuring
+      $stderr.write("inject: cleanup-raise\n")
+      raise "injected"
     end
-    super
+    pids = super
+    if MODE == "fork-race" && !@inject_measuring && !@inject_forked
+      @inject_forked = true
+      inject_fork_race(leader, pids)
+    end
+    pids
   end
 
-  # 計測の中だけ、leader 以外の member を EPERM にする (後始末の生死の判定には効かせない)。
+  def inject_fork_race(leader, pids)
+    File.write(ENV.fetch("SAFE_RUN_INJECT_GO"), "")
+    child = ENV.fetch("SAFE_RUN_INJECT_CHILD")
+    others = Array(pids) - [leader]
+    deadline = inject_now + 5
+    until File.size?(child) && !others.empty? && others.none? { |pid| member_state(pid, leader).first == :alive }
+      if inject_now > deadline
+        $stderr.write("inject: fork-race timeout\n")
+        return
+      end
+      sleep 0.02
+    end
+    $stderr.write("inject: fork-race ready\n")
+  end
+
+  # eperm / eperm-recover: 計測の中だけ、leader 以外の member を EPERM にする (後始末の生死の判定には効かせない)。
   def pid_rusage(pid)
     if @inject_measuring && pid != @inject_pgid &&
        (MODE == "eperm" || (MODE == "eperm-recover" && (@inject_measures % 3) != 0))
@@ -325,13 +406,42 @@ module SafeRunInjection
     super
   end
 
-  # 計測の中だけ、leader 以外の member を別の group の process に見せる (列挙の後に pid が再利用された状態)。
+  # foreign-pgid: 計測の中だけ、leader 以外の member を別の group の process に見せる (列挙の後に pid が再利用された状態)。
   def pid_pgid(pid)
     if @inject_measuring && pid != @inject_pgid && MODE == "foreign-pgid"
       $stderr.write("inject: foreign-pgid\n")
       return [:ok, @inject_pgid + 1]
     end
     super
+  end
+
+  # close-signal: self-pipe の close の境界 (最初に閉じた側の直後) で自分に TERM を送り、handler が走るまで待つ。
+  def install_traps(writer)
+    inject_arm_close(writer) if MODE == "close-signal"
+    super
+  end
+
+  def watch(leader, options, reader, started)
+    inject_arm_close(reader) if MODE == "close-signal"
+    super
+  end
+
+  def inject_arm_close(io)
+    injection = self
+    io.define_singleton_method(:close) do
+      super()
+      injection.inject_close_boundary
+    end
+  end
+
+  def inject_close_boundary
+    return if @inject_closed
+
+    @inject_closed = true
+    $stderr.write("inject: close-signal\n")
+    Process.kill("TERM", Process.pid)
+    deadline = inject_now + 2
+    sleep 0.01 until @signal || inject_now > deadline
   end
 end
 SafeRun.singleton_class.prepend(SafeRunInjection)
@@ -364,24 +474,59 @@ exit(@failed.zero? ? 0 : 1)
 RUBY
 
 # ---- case 2: 動いている process の phys_footprint を script の計測と footprint CLI で比べて一致 (offset の回帰) ---
-ruby -r"$script_dir/lib/check_helper" - "$src" <<'RUBY'
+# 全体を harness の期限つきで走らせ (fixture の pgid は cli.pgid に書く)、CLI も 1 回ごとに期限で止めて回収する。
+cat > "$tmp/cli-check.rb" <<'RUBY'
 load ARGV[0]
 S = SafeRun
+
+def now
+  Process.clock_gettime(Process::CLOCK_MONOTONIC)
+end
+
+# argv を起動し、期限までに終われば出力 (stdout と stderr) を、終わらなければ KILL して回収し nil を返す。
+def run_cli(argv, seconds)
+  r, w = IO.pipe
+  pid = Process.spawn(*argv, out: w, err: w, in: File::NULL)
+  w.close
+  out = String.new
+  deadline = now + seconds
+  loop do
+    left = deadline - now
+    if left <= 0
+      Process.kill("KILL", pid) rescue nil
+      Process.wait(pid)
+      return nil
+    end
+    next unless IO.select([r], nil, nil, left)
+
+    chunk = r.read_nonblock(65_536, exception: false)
+    next if chunk == :wait_readable
+    break if chunk.nil?
+
+    out << chunk
+  end
+  Process.wait(pid)
+  out
+ensure
+  r.close
+end
+
 S.load_libproc
 r, w = IO.pipe
 pid = Process.spawn("ruby", "-e", 'held = "x" * (40 * 1024 * 1024); STDOUT.puts "ready"; STDOUT.flush; sleep 20; held.size',
                     out: w, pgroup: true)
 w.close
+File.write(ARGV[1], "#{pid}\n")
 begin
   check("fixture が ready を出す", IO.select([r], nil, nil, 15) && r.gets == "ready\n")
   matched = false
   seen = []
   5.times do
     before = S.member_state(pid, pid)
-    cli = `/usr/bin/footprint --noCategories -f bytes -p #{pid} 2>&1`
+    cli = run_cli(["/usr/bin/footprint", "--noCategories", "-f", "bytes", "-p", pid.to_s], 15)
     after = S.member_state(pid, pid)
-    value = cli[/^\s*phys_footprint: (\d+) B$/, 1]
-    seen << [before, value, after]
+    value = cli && cli[/^\s*phys_footprint: (\d+) B$/, 1]
+    seen << [before, cli.nil? ? :timeout : value, after]
     next if value.nil?
 
     if [before, after].include?([:alive, Integer(value)])
@@ -397,6 +542,8 @@ ensure
 end
 exit(@failed.zero? ? 0 : 1)
 RUBY
+run_case cli 120 -- ruby -r"$script_dir/lib/check_helper" "$tmp/cli-check.rb" "$src" "$tmp/cli.pgid"
+expect_exit cli 0
 
 # ---- case 3: usage と前提の誤り → exit 2、command を起動せず、report を書かない -------------------------------
 marker="$tmp/usage-marker"
@@ -598,13 +745,16 @@ expect_exit eperm 137
 expect_report eperm 'reason="monitor"' exit_status=137 'peak_footprint_mib=nil' cleanup_complete=true
 expect_err_has eperm "personal-safe-run: stopped (reason=monitor)"
 expect_group_gone eperm
-run_case listfail 30 -- env RUBYOPT="-r$tmp/inject.rb" SAFE_RUN_INJECT=list-fail \
-  "$sr" --max-footprint-mb 100 --max-seconds 20 --report "$tmp/listfail.json" \
-  -- sh "$tmp/fx-sleep.sh" "$tmp/listfail.pgid" "$tmp/listfail.ready" 30
-expect_exit listfail 137
-[ "$(grep -c '^inject: list-fail$' "$tmp/listfail.err")" -eq 3 ] || fail "listfail: exactly 3 failed listings should stop it: $(cat "$tmp/listfail.err")"
-expect_report listfail 'reason="monitor"' cleanup_complete=true
-expect_group_gone listfail
+# 12a: proc_listpids が 0 件を返す (libproc は syscall の失敗を 0 に変える)。leader の居ない列挙は失敗として扱い、
+# 監視では 3 巡回で monitor、後始末では止まったと確定できないので cleanup_complete が false (最後の KILL で group は空)
+run_case listzero 30 -- env RUBYOPT="-r$tmp/inject.rb" SAFE_RUN_INJECT=listpids-zero \
+  "$sr" --max-footprint-mb 100 --max-seconds 5 --report "$tmp/listzero.json" \
+  -- sh "$tmp/fx-sleep.sh" "$tmp/listzero.pgid" "$tmp/listzero.ready" 30
+expect_exit listzero 137
+[ "$(grep -c '^inject: listpids-zero$' "$tmp/listzero.err")" -ge 3 ] || fail "listzero: the injection should hit: $(cat "$tmp/listzero.err")"
+expect_report listzero 'reason="monitor"' exit_status=137 'peak_footprint_mib=nil' cleanup_complete=false
+expect_err_has listzero "personal-safe-run: warning: process group を止め切れませんでした (cleanup incomplete)"
+expect_group_gone listzero
 # 対照: 注入なしの同じ fixture は monitor では止まらず、時間の上限で止まる
 run_case noinject 30 -- "$sr" --max-footprint-mb 100 --max-seconds 1 --report "$tmp/noinject.json" \
   -- sh "$tmp/fx-sleep.sh" "$tmp/noinject.pgid" "$tmp/noinject.ready" 30
@@ -680,5 +830,42 @@ run_case hup 30 --at "$tmp/hup.ready" HUP -- "$sr" --max-footprint-mb 100 --max-
 expect_exit hup 129
 expect_report hup 'reason="interrupted"' 'signal="HUP"' exit_status=129
 expect_group_gone hup
+
+# ---- case 18: 後始末の中の観測が例外を出しても、TERM を無視する子を KILL で止め、leader を回収し、report を書く --
+run_case craise 30 -- env RUBYOPT="-r$tmp/inject.rb" SAFE_RUN_INJECT=cleanup-raise \
+  "$sr" --max-footprint-mb 100 --max-seconds 1 --report "$tmp/craise.json" -- sh "$tmp/fx-ignore-term.sh" "$tmp/craise.pgid"
+expect_exit craise 137
+expect_err_has craise "inject: cleanup-raise"
+expect_report craise 'reason="time"' exit_status=137 command_signal=9 cleanup_complete=false
+expect_err_has craise "personal-safe-run: warning: 後始末の観測が例外を出しました (RuntimeError)"
+expect_group_gone craise
+ruby -e 'exit(Float(ARGV[0]) < 8 ? 0 : 1)' "$elapsed" || fail "craise: should finish within a few seconds, took $elapsed"
+
+# ---- case 19: 後始末の列挙の直後に member が子を fork して自分は終わっても、最後の KILL でその子を止める -----------
+run_case fork 30 -- env RUBYOPT="-r$tmp/inject.rb" SAFE_RUN_INJECT=fork-race \
+  SAFE_RUN_INJECT_GO="$tmp/fork.go" SAFE_RUN_INJECT_CHILD="$tmp/fork.child" \
+  "$sr" --max-footprint-mb 100 --max-seconds 20 --report "$tmp/fork.json" \
+  -- sh "$tmp/fx-fork-leader.sh" "$tmp/fork.pgid" "$tmp/fork.go" "$tmp/fork.child" "$tmp/fork.ready" "$tmp/fx-forker.sh"
+expect_exit fork 0
+expect_err_has fork "inject: fork-race ready"
+expect_report fork 'reason=nil' exit_status=0 command_exit=0 cleanup_complete=true 'leftover_killed<2'
+expect_group_gone fork
+forked=$(cat "$tmp/fork.child")
+if kill -0 "$forked" 2>/dev/null; then fail "fork: the child forked after the listing ($forked) must be gone"; fi
+
+# ---- case 20: self-pipe の close の境界で signal が届いても、exit と report が一致する ---------------------------
+run_case closesig 20 -- env RUBYOPT="-r$tmp/inject.rb" SAFE_RUN_INJECT=close-signal \
+  "$sr" --max-footprint-mb 100 --max-seconds 10 --report "$tmp/closesig.json" -- sh -c 'exit 6'
+expect_exit closesig 6
+expect_err_has closesig "inject: close-signal"
+expect_report closesig 'reason=nil' exit_status=6 command_exit=6
+
+# ---- case 21: stderr が読まれずに詰まっていても、group を止めて report を書き、期限内に終わる (診断は捨てる) -------
+run_case stuck 15 --stuck-stderr -- "$sr" --max-footprint-mb 100 --max-seconds 1 --report "$tmp/stuck.json" \
+  -- perl "$tmp/fx-flood.pl" "$tmp/stuck.pgid"
+expect_exit stuck 137
+expect_report stuck 'reason="time"' exit_status=137 cleanup_complete=true
+expect_group_gone stuck
+ruby -e 'exit(Float(ARGV[0]) < 8 ? 0 : 1)' "$elapsed" || fail "stuck: should finish within a few seconds, took $elapsed"
 
 echo "ok: safe-run self-test passed"
