@@ -258,11 +258,15 @@ rec "$tz" "{\"ts\":\"2026-10-05T20:00:00-05:00\",\"event\":\"PreToolUse\",$st,\"
 rec "$tz" "{\"ts\":\"2026-10-05T20:00:30-05:00\",\"event\":\"PostToolUse\",$st,\"tool\":\"Bash\",\"tool_use_id\":\"tu_t1\",\"result\":\"output\"}"
 run_report --file "$tz" --since 2026-10-06 --until 2026-10-06 > "$md" || fail "tz UTC0 should exit 0"
 row "$md" "| call 数 | 1 |" "UTC0 では 10-06"
-REPORT_TZ=EST5 run_report --file "$tz" --since 2026-10-06 --until 2026-10-06 > "$md" || fail "tz EST5 should exit 0"
+# REPORT_TZ は subshell の中だけで立てる。/bin/sh (macOS の bash 3.2) では、関数の呼び出しの前に置いた代入が
+# 呼び出しの後も残り、後続の run_report がすべて EST5 で走る (UTC 0〜5 時に既定の 7 日の case が落ちた。#473)。
+(REPORT_TZ=EST5 run_report --file "$tz" --since 2026-10-06 --until 2026-10-06 > "$md") || fail "tz EST5 should exit 0"
 row "$md" "| call 数 | 0 |" "EST5 では 10-05 (期間外)"
 row "$md" "| 期間外の行 | 2 |" "EST5 期間外の行"
-REPORT_TZ=EST5 run_report --file "$tz" --since 2026-10-05 --until 2026-10-05 > "$md" || fail "tz EST5 10-05 should exit 0"
+(REPORT_TZ=EST5 run_report --file "$tz" --since 2026-10-05 --until 2026-10-05 > "$md") || fail "tz EST5 10-05 should exit 0"
 row "$md" "| call 数 | 1 |" "EST5 では 10-05 に入る"
+# 後続の case が既定の UTC0 で走ることを、時刻によらず確かめる (残ると UTC 0〜5 時にだけ落ちる)。
+[ -z "${REPORT_TZ-}" ] || fail "REPORT_TZ must not leak past the EST5 cases (#473): $REPORT_TZ"
 
 # ---- --days: 既定は今日を含む直近 7 日 (境界の日は使わず、日付が変わっても結果が同じ行だけ置く) -----------
 days="$records/days.jsonl"
