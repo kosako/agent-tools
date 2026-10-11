@@ -7,7 +7,7 @@ catalog に記録する step です。
 
 ## 目的
 
-- build / sync / status が「どの asset を扱ってよいか」を catalog で判断できるようにする。
+- build / sync / connect / status が「どの asset を扱ってよいか」を catalog で判断できるようにする。
 - 自動 check の結果と human review の関係を機械可読にする。
 - tracked manifest を自動書き換えしない。
 
@@ -64,7 +64,8 @@ source content の決定的 hash (build の marker と同じ計算)。doctor が
 登録判断 (risk / review / targets) は manifest に依存する。register 時の manifest file
 bytes の SHA256 を entry に記録し、reader が「register 後に manifest が変わった catalog」を
 検出できるようにする。**sync は不一致の entry を配置せず** `manifest changed; run
-scripts/register.sh first` で skip し (fail-closed)、**doctor は stale として warn** する。
+scripts/register.sh first` で skip し (fail-closed)、**connect も同じ理由で instruction の所有確立を
+skip** し、**doctor は stale として warn** する。
 digest 計算は `Assets.manifest_digest` に一元化 (register と reader で割れない)。
 
 ### `registration`
@@ -107,6 +108,9 @@ source format / output path の確認のみ)。build できない target-artifac
   `registered` / `human_review_required` を記録する (次節)。
 - **sync**: catalog を読み、`registration: registered` の artifact だけ配置する。
   `human_review_required` / catalog 不在の artifact は配置せず、理由つきで skip する。
+- **connect**: instruction の所有確立 (初回配置) の前に catalog を読み、`registered` で
+  `manifest_digest` が一致し、generated の marker が entry と一致する instruction だけを配置する。
+  それ以外は理由つきで skip する (初回配置で sync の gate を迂回させないため)。
 
 これにより「build は生成するが、human review 未解決のものは sync が止める」という
 一貫した流れになる。
@@ -136,6 +140,9 @@ asset の source path に対応づけ、manifest の `review.human_review` と�
   `human_review_required`。
 - `review.human_review: rejected` の asset は、finding の有無によらず register fail
   とする (reject 済み asset が shared/ に残っている状態は矛盾なので、修正か削除を促す)。
+- どの asset にも属さない file (`shared/README.md` など) の medium finding は register fail
+  (exit 1、catalog を更新しない)。build は medium で止まらないので、この場合は build が通って
+  register だけが止まる。
 
 ### 承認は内容と配布形態に紐づく (`approved_build_id` + `approved_artifact_kind`, #148 #184)
 
@@ -214,7 +221,7 @@ checkout の `register` で一緒に更新されるので、この混在は想�
 ## Status / doctor / dotfiles への露出
 
 - catalog は repository 内部の中間生成物。dotfiles は catalog を直接読まない。
-- catalog の reader (sync / status / doctor) は `catalog_version` が一致しない catalog を
+- catalog の reader (sync / connect / status / doctor) は `catalog_version` が一致しない catalog を
   古いものとして無視する (再度 register を実行して再生成する)。これにより古い catalog が
   残った状態で reader 間の判断がずれることを防ぐ。
 - `status.sh` には register summary を追加する (導入時に contract_version 2 へ bump。現行版は
@@ -228,7 +235,8 @@ checkout の `register` で一緒に更新されるので、この混在は想�
 - 致命 gate (`scripts/lib/gate.rb`): build と register が共有。
 - `scripts/register.sh`: catalog 生成、human_review 突き合わせ。
   exit code は 0 (human_review_required なし) / 3 (human_review_required あり) /
-  1 (gate fail)。`unsupported` は exit code に影響しない (catalog に `unsupported` として
+  1 (gate fail / どの asset にも属さない file の medium finding) / 2 (usage の誤り)。
+  `unsupported` は exit code に影響しない (catalog に `unsupported` として
   記録され sync が skip する設計上の想定状態で、0 は「全 registered」を意味しない)。
 - `scripts/sync.sh`: catalog を尊重し registered のみ配置。
 - status contract の register summary (v2 で導入) / doctor の鮮度 check: 実装済み。

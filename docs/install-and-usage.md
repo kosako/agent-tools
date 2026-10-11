@@ -162,11 +162,11 @@ AGENT_TOOLS="${AGENT_TOOLS:-$HOME/src/agent/agent-tools}"
 [ -d "$AGENT_TOOLS" ] || { echo "agent-tools: absent"; exit 0; }
 
 # 2. status を read-only で読む(health)
-status=$("$AGENT_TOOLS/scripts/status.sh" --json) \
+status_json=$("$AGENT_TOOLS/scripts/status.sh" --json) \
   || { echo "agent-tools: status unavailable"; exit 0; }
 
 # 3. contract が許可した field だけ拾って表示(例: jq)
-echo "$status" | jq -r '
+echo "$status_json" | jq -r '
   "agent-tools: " +
   (if .repo.clean then "clean" else "dirty" end) +
   " / injection=" + .checks.prompt_injection_static +

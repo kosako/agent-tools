@@ -78,7 +78,8 @@ directory 形式の配置ルールと、両 source 形式に共通する frontma
   承認した bytes (build_id の対象) と配る bytes が、どの skill でも一致する。
   [Claude Code の省略規則](https://code.claude.com/docs/en/skills#frontmatter-reference) に沿い、
   Claude-only skill の frontmatter 不在・description 省略は許可する。判定は manifest の
-  kind ではなく target ごとの解決済み artifact_kind に従い、instruction / script は対象外。
+  kind ではなく target ごとの解決済み artifact_kind に従い、instruction / script / plugin は対象外
+  (plugin には下記「plugin source の制約」の gate が当たる)。
   build / register はこの静的検証を共有する。根拠は 2026-09-06 に確認した上記公式契約:
   Claude Code は全 frontmatter field が任意で、name の省略時は directory 名、description の
   省略時は本文の先頭段落を使う。runtime loader を起動した検証ではない。
@@ -120,7 +121,7 @@ shell command も host が実行する機能なので、通常の説明文と分
 | --- | --- |
 | `claude-code` の `skill` | `allowed-tools` / `hooks` / dynamic shell command を拒否 |
 | `codex` のみの `skill` | Claude 固有の dynamic shell command の拒否は適用しない。`allowed-tools` / `hooks` は下記 target metadata の allowlist で拒否する。Codex の必須 frontmatter 検証は適用する |
-| `instruction` / `script` | この skill 用検査の対象外。既存の kind 別 gate を適用する |
+| `instruction` / `script` / `plugin` | この skill 用検査の対象外。既存の kind 別 gate を適用する (plugin は下記「plugin source の制約」) |
 
 一つの source を両 target の skill に配る場合は、Claude Code 向けに拒否された時点で asset の
 build / register 全体が停止する。片側だけ登録しない。これは host の permissions を変更したり、
@@ -272,8 +273,9 @@ shebang は import される module に意味が無く、marker の prefix は b
 側にあると先頭行が二重になる。UTF-8 の検査を source 全体に当てるのは、配置後の所有判定
 (`PluginMarker.parse`) が先頭行しか見ないため、file 全体の正しさをここで担保するためです。
 形は ESM の単一 file で、export は `export default { id, server }` だけに限ります (名前付き export は
-OpenCode の legacy loader がすべて plugin 関数として扱うため置かない。形の詳細は
-[adapters/opencode/README.md](../adapters/opencode/README.md))。
+OpenCode の legacy loader がすべて plugin 関数として扱うため置かない)。実例の
+`shared/plugins/personal-agent-tools.js` では、`id` は asset 名の string、`server` は hook の object を返す
+async 関数です。この形は慣例で、check-manifests は検査しません (検査するのは上の表の条件だけ)。
 
 ## Required fields
 
@@ -312,6 +314,9 @@ rules:
 - `personal-` で始める。
 - lower kebab-case にする。
 - target tool へ生成される artifact name の base に使える名前にする。
+- sidecar manifest では source の拡張子を除いた名前 (sidecar の名前から `.asset.yml` を除いた名前)、
+  directory asset では directory 名と一致させる。
+- repository 全体で一意にする (generated artifact の path になるため)。
 
 ### `kind`
 
@@ -330,7 +335,7 @@ asset の種類を表す意味ラベルです。**用途に応じて選びます
 | `prompt` | 定型のプロンプト断片やテンプレート的な指示。 | `skill` (skill として配置) |
 | `workflow` | 複数ステップの再利用可能な作業手順。 | `skill` |
 | `instruction` | 常時読まれる運用ルール。tool 別の `CLAUDE.md` / `AGENTS.md` として生成。詳細は [Instruction Artifact Kind](instruction-artifact-kind.md)。 | `instruction` |
-| `script` | tool home に配る実行可能な script body (hook / wrapper 等)。単一ファイルのみ。 | `script` |
+| `script` | tool home に配る実行可能な script body (hook / wrapper 等)。単一ファイルのみ。常に human review 必須 ([Register / Catalog](register-catalog.md))。 | `script` |
 | `plugin` | OpenCode の process の中で動く plugin (ESM の単一 `.js`)。target は `opencode` のみ。常に human review 必須 ([Register / Catalog](register-catalog.md))。 | `plugin` |
 | `agent` | サブエージェント定義。**現状は配備未対応** (各 tool の agent 形式へのマッピングが未設計)。register では `unsupported` になる。 | 未対応 |
 
@@ -379,7 +384,7 @@ v1 allowed values:
 - `claude-code`
 - `opencode` (#295)
 
-empty list は不可です。target 未定の場合は register 対象にしません。
+empty list は不可です。同じ tool の重複も不可です。target 未定の場合は register 対象にしません。
 
 tool ごとに受け取れる artifact_kind は `scripts/lib/artifact_targets.rb` の `TOOL_KINDS` で
 決まります。check-manifests は、targets の各 tool について resolve 後の artifact_kind がこの表に
@@ -427,8 +432,11 @@ required keys:
 rules:
 
 - absolute path は禁止。
+- `..` の段を含めない。
 - private planning tool の URL は書かない。
 - source path は `shared/` 配下に置く。
+- `shared/<category>/` 直下に、拡張子だけが違う同名の source (例: `personal-a.md` と `personal-a.sh`) を
+  置かない。1 つの sidecar を相乗りすると manifest の欠落を見逃すため、check-manifests が error にする (#149)。
 - skill に生成する source は、形式によらず上記の [skill source の制約](#skill-source-の制約) に従う。
 
 ## Optional fields
@@ -445,11 +453,13 @@ compatibility:
 
 ### `summary`
 
-短い説明です。生成された catalog や status output に表示できます。
+人間向けの短い説明です。書くなら空でない string にします。現状はどの script (catalog・status・doctor を
+含む) も表示しません。
 
 ### `description`
 
-長めの説明です。secret、private endpoint、local path、private planning tool の情報を含めません。
+長めの説明です。書くなら空でない string にします。secret、private endpoint、local path、private
+planning tool の情報を含めません。
 
 ### `review`
 
@@ -462,6 +472,14 @@ allowed values:
   `human_review: approved` と対で使う (単独はエラー)。
 - `approved_artifact_kind`: `skill` / `instruction` / `script` / `plugin`。`human_review: approved`
   と対で使う (単独はエラー)。
+
+`human_review` の値ごとの効果 (詳細は [register-catalog.md](register-catalog.md)):
+
+- `approved`: human review が要る asset (medium finding がある・宣言 risk に `medium` / `unknown` がある・
+  script / plugin artifact に解決される) を、下記の承認 identity が一致する target だけ `registered` にする。
+- `pending` / `not_needed`: register 上の効果は無い (情報だけ)。`not_needed` は承認の代わりにならず、
+  human review が要る asset は `human_review_required` のまま。
+- `rejected`: build / register を止める致命 gate。asset を直すか消すまで fail する。
 
 `human_review` は人間が宣言する値で、register が medium finding の解決に参照します。
 承認 identity は **(内容, 配布形態) の対** です (#148, #184): `approved_build_id`

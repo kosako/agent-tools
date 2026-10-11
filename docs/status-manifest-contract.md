@@ -1,6 +1,9 @@
 # Status / Manifest Contract
 
-`dotfiles` と `agent-tools` が将来連携するための contract 設計です。
+`dotfiles` (doctor) が report-only で読む、`dotfiles` と `agent-tools` の間の contract です。
+dotfiles 側に既に reader があるので、変更は breaking change として扱います (`contract_version` を
+上げるかの判断は下の「Fields」の `contract_version`。dotfiles との境界は
+[boundary-with-dotfiles.md](boundary-with-dotfiles.md)「連携 rule」)。
 
 この document は設計です。`status` / `doctor` の実装コード、build / sync の実装、
 dotfiles 側の実装は含めません。
@@ -69,7 +72,9 @@ dotfiles 側の実装は含めません。
 - `repo.clean`: working tree が clean か。
 - `assets.total`: tracked manifest の数。
 - `assets.manifest_errors`: manifest validation error の数。
-- `checks.*`: 各 check の最新結果。`pass`, `fail`, `human_review`, `not_run`。
+- `checks.*`: 各 check の最新結果。`manifest_validation` は `pass` / `fail`、
+  `prompt_injection_static` は `pass` / `human_review` / `fail`。`not_run` は予約値で、現行の status は
+  出さない (status は毎回両方の check を実行する)。
 - `generated.total`: 生成済み artifact の数。
 - `generated.stale`: source より古い artifact の数。
 - `register.*`: [catalog](register-catalog.md) の summary。target-artifact 単位の
@@ -174,12 +179,14 @@ build_id: sha256:...
 
 - status output contract の JSON 全体。
 - 各 target の state (`managed` / `stale` / `conflict` / `missing` / `deployed_but_inactive`)。
-- checks の結果 (`pass` / `fail` / `human_review` / `not_run`)。
+- checks の結果 (`pass` / `fail` / `human_review`。`not_run` は予約値で、現行の status は出さない)。
 
 ## dotfiles が読まない・status に含めない情報
 
 - secrets、tokens、credentials、private keys、private endpoints。
-- absolute local paths。target は `~/` 始まりの tilde 表記に正規化する。
+- absolute local paths。status は target path を出さない (`sync_targets` は `tool` / `name` / `state`
+  のみ)。doctor の表示は user の home directory 配下を `~` に、その外に置いた設定済みの tool home /
+  agents home を `<codex home>` / `<agents home>` のようなラベルに置き換える。
 - private planning tool の種類、URL、document list。
 - work / client / customer / third-party confidential material。
 - asset 本体の content。status は metadata と state のみを扱う。

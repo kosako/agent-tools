@@ -65,7 +65,10 @@ host (Claude Code / Codex / OpenCode) の版で変わりうる事実 (hook や p
   Codex review の起動が `shared/skills/personal-codex-review/LAUNCH.md`、worker の起動が
   `shared/skills/personal-codex-worker/LAUNCH.md`、監査の起動が
   `shared/skills/personal-repo-audit/CODEX-LAUNCH.md` (review と worker の `LAUNCH.md` は手順の正本で、
-  それぞれ冒頭で契約の正本の `SKILL.md` を指す)。[Codex review の起動経路](codex-review-launch.md) と
+  それぞれ冒頭で契約の正本の `SKILL.md` を指す)。grill の事前相談は
+  `shared/skills/personal-grill-me/CONSULT.md`、sweep の反証は
+  `shared/skills/personal-maintenance-sweep/REFUTE.md` で、どちらも `CODEX-LAUNCH.md` との差分の正本。
+  [Codex review の起動経路](codex-review-launch.md) と
   [herdr 前提の運用](herdr-operations.md) は背景の説明で、起動の正本ではない。
   ただし背景の docs は、理由の説明に要る範囲で flag 名を挙げてよい (正本は上の `LAUNCH.md` /
   `CODEX-LAUNCH.md` のまま)。完了判定や再実行のような手順は写さず、正本へリンクする。
