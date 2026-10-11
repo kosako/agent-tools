@@ -603,8 +603,11 @@ title / body は orchestrator が packet から書く (一時 file は repositor
 
 worker の tab を閉じ、clone を消すのは、PR が merge されて packet が `done` になった後に、人が後始末を明示
 したときだけです (`SKILL.md` の「モード」と §9。時点は `SKILL.md` §3)。`blocked` の間と
-RUNNING の間は、調べられるように残します。順番は「前提 → tab → clone」で、前提を確かめられなければどちらにも
-触りません。packet は書きません。
+RUNNING の間は、調べられるように残します。packet は書きません。
+
+順番は「前提 (done・merge) → tab の確認 → clone の確認 → すべて通ったら tab を閉じる → clone を消す」です。確認の
+段では何も閉じず消しません。どれか 1 つでも確かめられなければ、tab にも clone にも触らず `Blocked at: cleanup` で
+人に渡します (確認の途中で片方だけ片付けると、残った方を調べる手掛かり (pane の出力、clone の中身) が欠ける)。
 
 ### 前提 (done と merge)
 
@@ -628,7 +631,7 @@ head_oid=$(printf '%s' "$meta" | jq -er '.headRefOid') || exit 1
 を通した値。`prev_run` / `branch` は packet 由来の値なので、以降も変数で渡す。jq は行が無い・2 件以上・条件に
 合わないときに出力が無く、`-e` で非 0 になる。gh の `state` は merge 済みの PR で `MERGED`。)
 
-### tab
+### tab の確認 (まだ閉じない)
 
 ```sh
 ws=$HERDR_WORKSPACE_ID
@@ -641,47 +644,71 @@ printf '%s' "$tabs"  | jq -e '.result.tabs  | type == "array"' >/dev/null || exi
 printf '%s' "$panes" | jq -e '.result.panes | type == "array"' >/dev/null || exit 1
 printf '%s' "$tabs" \
   | jq -r --arg label "$label" '.result.tabs[] | select(.label == $label) | .tab_id'
-# 1 件で、§5 の所有の確認 (最後の run dir = packet の last_run の tab-id との一致 + 命名) を通り、
-# その tab のどの pane の foreground にも codex がいないときだけ
-herdr tab close <tab-id>
+# 0 件なら tab= (閉じる tab は無い)。1 件なら、§5 の所有の確認 (最後の run dir = packet の last_run の tab-id との
+# 一致 + 命名) を通り、その tab のどの pane の foreground にも codex がいないことを確かめてから、その ID を tab= に
+# 控える (閉じるのは「片付ける」の段)
 ```
 
-(`exit 1` は「その段で止めて閉じない」の意。)
+(`exit 1` は「その段で止めて、tab にも clone にも触らず `Blocked at: cleanup`」の意。)
 
-- 0 件なら何もしない (人が既に閉じた)。一覧の取得か形の確認に失敗した、2 件以上、所有を確かめられ
+- 0 件なら閉じる tab は無い (人が既に閉じた)。一覧の取得か形の確認に失敗した、2 件以上、所有を確かめられ
   ない (最後の run dir が分からない場合を含む)、codex がまだ foreground にいる、process-info で判定
-  できない、のどれかなら閉じずに、人に「tab `#<issue>` を確かめて閉じてください」と伝える (人の tab
-  と、走っている worker を閉じない。一覧が読めないことを「0 件」と取り違えない)。
+  できない、のどれかなら、tab にも clone にも触らず `Blocked at: cleanup` とし、人に「tab `#<issue>` を
+  確かめてください」と伝える (人の tab と、走っている worker を閉じない。一覧が読めないことを「0 件」と
+  取り違えない)。
 - orchestrator 自身がいる tab (`personal-codex-review` の review pane もここに置かれる) は、記録した
   tab ID と一致せず、pane の名前も `worker-<issue>` の形でないので、閉じる対象にならない。
 
-### clone
+### clone の確認 (まだ消さない)
 
 ```sh
 clone=<§2 の置き場 (<main worktree>-clones/<issue>) の path の shell literal>
+clone_root=
 if [ -e "$clone" ]; then
   clone_root=$(jq -er '.clone_root' "$prev_run/preflight.json") || exit 1
   clone_p=$(cd -P "$clone" && pwd -P) || exit 1
   [ "$clone_p" = "$clone_root" ] || exit 1    # 最後の run が検査した clone が、置き場の path の実体
   # clone に git を実行する前に照合する (§3)
   "$preflight" --verify-git-snapshot "$prev_run/preflight.json" --clone "$clone_root" || exit 1
-  # fetch 済み: clone の branch の tip が merge された PR の head と一致する (clone にだけある commit が無い)
+  # fetch 済み: clone の branch の tip が merge された PR の head と一致する
   tip=$(git -C "$clone_root" rev-parse --verify --quiet --end-of-options "refs/heads/${branch}^{commit}") || exit 1
   [ "$tip" = "$head_oid" ] || exit 1
+  # 未回収の commit が無い: HEAD と local の全 ref (branches / tags / stash) から辿れて、PR の head から辿れない
+  # commit が 1 つも無い。remote-tracking の ref (clone の origin = main の ref) は回収済みとみなして除く
+  extra=$(git -C "$clone_root" rev-list --all --not --remotes --end-of-options "$head_oid") || exit 1
+  [ -z "$extra" ] || exit 1
   # 未 commit の変更が無い (status の失敗を「空」と取り違えないよう、出力を受けてから見る)
   st=$(git -C "$clone_root" status --porcelain=v1 --untracked-files=all) || exit 1
   [ -z "$st" ] || exit 1
-  # worker の pane (worker-<issue>[-r<N>]) のどの foreground にも codex がいない (§5 の手順 0〜1 と同じ読み方)
-  rm -rf -- "$clone_root"
+  # worker の pane (worker-<issue>[-r<N>]) のどの foreground にも codex がいない (上の tab の確認で読んだ
+  # $panes を、§5 の手順 1 と同じ読み方で見る)
 fi
 ```
 
-(`exit 1` は「その段で止めて消さない」の意。)
+(`exit 1` は「その段で止めて、tab にも clone にも触らず `Blocked at: cleanup`」の意。)
 
-- 置き場の path に何も無ければ何もしない (人が既に消した)。`last_run` の `preflight.json` が無い・読めない、
-  `clone_root` が置き場の path の実体と一致しない (別の場所に切った clone を含む)、照合の失敗、branch の tip が
-  PR の head と違う (clone にだけある commit がある、または PR に別の commit が足された)、未 commit の変更が
-  ある、codex がまだ foreground にいる、herdr の一覧や process-info で判定できない、のどれかなら消さずに、人に
-  「clone を確かめてから消してください」と伝える (照合の失敗なら、clone に git を実行する前に `.git` の entry を
-  調べる)。回収していない commit や変更、走っている worker の clone を消さない。
-- 確認から `rm -rf` までの間の差し替え (同じ user の権限による TOCTOU) は防がない (packet の `check` と同じ立場)。
+- 置き場の path に何も無ければ clone の確認を飛ばす (消す clone は無い。tab の確認が通れば tab だけ閉じる)。
+- `last_run` の `preflight.json` が無い・読めない、`clone_root` が置き場の path の実体と一致しない (別の場所に
+  切った clone を含む)、照合の失敗、branch の tip が PR の head と違う、未回収の commit がある (別の local
+  branch・detached HEAD・stash・tag に、PR の head から辿れない commit がある)、未 commit の変更がある、codex が
+  まだ foreground にいる、`rev-list` / `status` / herdr の一覧や process-info で判定できない、のどれかなら、
+  tab にも clone にも触らず `Blocked at: cleanup` とし、人に「clone を確かめてください」と伝える (照合の失敗なら、
+  clone に git を実行する前に `.git` の entry を調べる。未回収の commit なら、`rev-list` が出した commit を人が
+  取り出してから後始末をやり直す)。回収していない commit や変更、走っている worker の clone を消さない。
+- `rev-list` の確認は、一時 repo で実測した: 別の local branch・detached HEAD・stash・tag に PR の head から
+  辿れない commit があると 1 件以上出て止まり、無いと空で通る。main から来た remote-tracking の branch の commit は
+  出ない。PR の head が clone に無いと exit 128 で止まる。
+- honest-label: 未回収の commit の確認が見るのは、HEAD と `refs/` の下の ref (`--all`) から辿れる commit だけ。
+  reflog にだけ残る commit (消した branch や、HEAD を動かした後の detached の commit、2 つ目以降の stash。stash は
+  1 つでも残っていれば最新の entry で止まる) と、ignored な file は見ない。確認から `rm -rf` までの間の差し替え (同じ user の権限による TOCTOU) は防がない
+  (packet の `check` と同じ立場)。
+
+### 片付ける (確認がすべて通った後)
+
+```sh
+if [ -n "$tab" ]; then herdr tab close "$tab" || exit 1; fi        # 0 件なら閉じる tab は無い
+if [ -n "$clone_root" ]; then rm -rf -- "$clone_root" || exit 1; fi  # 置き場に無ければ消す clone は無い
+```
+
+(`exit 1` は「その段で止めて `Blocked at: cleanup`」の意。tab を閉じられなければ clone を消さない。`rm -rf` が
+途中で失敗したら、残った中身を人が確かめる。どちらも、何が済んだかを返却に書く。)

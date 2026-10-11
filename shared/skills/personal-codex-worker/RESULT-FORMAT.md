@@ -65,15 +65,16 @@ Next step: <fetch の失敗を人が調べる | author が交代するなら新 
 ```text
 Status: CLEANED | BLOCKED
 Blocked at: cleanup (BLOCKED のとき)
-Reason: <前提を確かめられない理由、または残したものとその理由 (BLOCKED のとき)>
-Packet: #<issue> — state: done / PR #<number>: merged (確かめた前提) / packet は書かない (last_run は残す)
-Tab: #<issue> を閉じた | 無かった | 残した (<所有を確かめられない | codex が動いている | 一覧・process-info で判定できない | 2 件以上 | 前提を確かめられないので触っていない>)
-Clone: <clone path> を消した | 無かった | 残した (<last_run の preflight.json を読めない | 置き場の path と clone_root が一致しない | 照合の失敗 | branch の tip が PR の head と違う | 未 commit の変更がある | codex が動いている・判定できない | 前提を確かめられないので触っていない>)
-Next step: <なし | 残した tab / clone を人が確かめて片付ける (照合の失敗なら、clone に git を実行する前に .git の entry を調べる)>
+Reason: <確かめられなかったものとその理由 (BLOCKED のとき)>
+Packet: #<issue> — state: <読んだ state (done / review / open / blocked) | packet を読めない> / PR #<number>: <読んだ状態 (MERGED / OPEN / CLOSED) と head の branch の一致 | 読めない | 確かめていない (packet の前提で止まった)> / packet は書かない (last_run は残す)
+Tab: #<issue> — 閉じた | 無かった | 触っていない (<所有を確かめられない | codex が動いている | 一覧・process-info で判定できない | 2 件以上 | 前提か clone の確認が通らない | close の失敗>)
+Clone: <clone path> — 消した | 無かった | 触っていない (<last_run の preflight.json を読めない | 置き場の path と clone_root が一致しない | 照合の失敗 | branch の tip が PR の head と違う | 未回収の commit がある | 未 commit の変更がある | codex が動いている・判定できない | 前提か tab の確認が通らない | tab を閉じられなかった>) | 消しきれなかった (rm -rf の失敗)
+Next step: <なし | 理由に応じて人が確かめる (照合の失敗なら clone に git を実行する前に .git の entry を調べる。未回収の commit なら取り出してから後始末をやり直す。消しきれなかったなら残った中身を確かめる)>
 ```
 
-`CLEANED` は、前提 (`done`・merge) を確かめ、tab と clone のどちらも片付けた (または無かった) とき。前提を確かめ
-られないとき (tab にも clone にも触らない) と、どちらかを残したときは `BLOCKED` (`Blocked at: cleanup`)。
+`CLEANED` は、前提・tab・clone の確認がすべて通り、tab を閉じて clone を消した (無かったものは飛ばした) とき。
+どれかの確認が通らなければ、tab にも clone にも触らず `BLOCKED` (`Blocked at: cleanup`)。確認の後の close / 削除が
+失敗したときも `BLOCKED` で、何が済んだかを Tab / Clone に書く。
 
 worker の本文 (最終 message / diff / commit message) を停止結果へ転記しません。secret / 実 home
 path / 外部 URL も同様です。この結果は委譲 process の判定であり、PR の merge readiness ではありません。

@@ -984,7 +984,7 @@
       "id": 38,
       "name": "cleanup-after-merge",
       "prompt": "packet #438 の PR が merge されたので、packet を state: done にした。worker の tab と clone の後始末をして。手順確認のみ。",
-      "expected_output": "人が後始末を明示したので後始末モードで進める (起動・転記・PR の作成はしない)。先に前提を確かめる: personal-packet list --json --all が exit 0 で、#438 の行の state が done、run が無く、last_run / pr / branch がある。PR は metadata (state / headRefName / headRefOid。title / body は読まない) で MERGED と、head の branch が packet の branch であることを確かめる。どれかを確かめられなければ何も閉じず消さずに Blocked at: cleanup。tab は label #438 の tab が 1 件で、last_run の run dir の tab-id との一致と命名 (worker-438[-rN]) の両方の所有の確認を通り、どの pane の foreground にも codex がいないときだけ閉じる。clone は、last_run の preflight.json の clone_root が置き場 (<main worktree>-clones/438) の path の実体と一致し、clone に git を実行する前に last_run の preflight.json で .git を照合して通り、clone の branch の tip が PR の headRefOid と一致し (clone にだけある commit が無い)、未 commit の変更が無く、worker の pane に codex がいないときだけ消す。packet は書かない (last_run は done の後も残す)。結果は Status: CLEANED、どれかを残したら Status: BLOCKED / Blocked at: cleanup と残した理由で返す。",
+      "expected_output": "人が後始末を明示したので後始末モードで進める (起動・転記・PR の作成はしない)。先に前提を確かめる: personal-packet list --json --all が exit 0 で、#438 の行の state が done、run が無く、last_run / pr / branch がある。PR は metadata (state / headRefName / headRefOid。title / body は読まない) で MERGED と、head の branch が packet の branch であることを確かめる。次に tab の確認: label #438 の tab が 1 件で、last_run の run dir の tab-id との一致と命名 (worker-438[-rN]) の両方の所有の確認を通り、どの pane の foreground にも codex がいない (まだ閉じない)。次に clone の確認: last_run の preflight.json の clone_root が置き場 (<main worktree>-clones/438) の path の実体と一致し、clone に git を実行する前に last_run の preflight.json で .git を照合して通り、clone の branch の tip が PR の headRefOid と一致し、HEAD と local の全 ref (branches / tags / stash。remote-tracking は除く) から辿れて PR の head から辿れない commit が無く (git rev-list --all --not --remotes <head> が空)、未 commit の変更が無く、worker の pane に codex がいない (まだ消さない)。確認がすべて通ってから tab を閉じ、clone を消す。どれかを確かめられなければ、tab にも clone にも触らず Blocked at: cleanup。packet は書かない (last_run は done の後も残す)。結果は Status: CLEANED と、確かめた前提、tab と clone のそれぞれに何をしたかを返す。",
       "files": [],
       "assertions": [
         {
@@ -1020,6 +1020,14 @@
           "text": "clone に未 commit の変更が無いことを確かめてから消している"
         },
         {
+          "id": "no-unrecovered-commits",
+          "text": "HEAD と local の全 ref から辿れて PR の head から辿れない commit が無いことを確かめてから消している"
+        },
+        {
+          "id": "close-after-all-checks",
+          "text": "前提・tab・clone の確認がすべて通ってから tab を閉じ、clone を消している (確認の途中で閉じていない)"
+        },
+        {
           "id": "no-packet-write",
           "text": "packet を書き換えていない (last_run を残している)"
         }
@@ -1027,9 +1035,9 @@
     },
     {
       "id": 39,
-      "name": "cleanup-refused-before-done",
-      "prompt": "packet #439 の worker の後始末をして。[前提: packet は state: review で、PR はまだ merge されていない]",
-      "expected_output": "前提を満たさないので、tab を閉じず clone も消さない。後始末は packet が done で PR が merge 済みのときだけ (review の間は、修正 round で同じ clone と tab を使う)。Status: BLOCKED / Blocked at: cleanup とし、Reason に state が review で PR が merge されていないことを書く。後始末のために packet の state を done に書き換えたり、PR を merge したりしない。",
+      "name": "cleanup-refused-not-done",
+      "prompt": "packet #439 の worker の後始末をして。[前提: PR は merge 済み (gh の metadata の state は MERGED、head の branch は packet の branch と同じ)。packet は state: review のままで、run は無く、last_run / pr / branch はある。label #439 の tab は所有を確かめられ、codex は動いていない]",
+      "expected_output": "packet が done でないので、PR が merge 済みでも後始末しない。tab を閉じず clone も消さない。後始末の前提は packet が done で、かつ PR が merge 済みであること (packet の確認で止まる)。Status: BLOCKED / Blocked at: cleanup とし、Reason に packet の state が review であることを書く。後始末のために packet の state を done に書き換えない (後始末モードは packet を書かない)。",
       "files": [],
       "assertions": [
         {
@@ -1041,12 +1049,12 @@
           "text": "停止の区分を Blocked at: cleanup としている"
         },
         {
-          "id": "no-state-change",
-          "text": "packet の state を done に書き換えていない"
+          "id": "checks-packet-done",
+          "text": "PR が merge 済みでも、packet の state が done でないことで止めている"
         },
         {
-          "id": "no-merge",
-          "text": "PR を merge していない"
+          "id": "no-state-change",
+          "text": "packet の state を done に書き換えていない"
         }
       ]
     },
@@ -1068,6 +1076,85 @@
         {
           "id": "leftover-tab-not-blocking",
           "text": "codex が動いていない #440 の残った tab を、#441 の起動を止める理由にしていない"
+        }
+      ]
+    },
+    {
+      "id": 41,
+      "name": "cleanup-refused-pr-not-merged",
+      "prompt": "packet #451 の worker の後始末をして。[前提: packet は state: done で、run は無く、last_run / pr / branch はある。gh pr view の metadata では PR の state が OPEN (merge されていない)。label #451 の tab は所有を確かめられ、codex は動いていない]",
+      "expected_output": "PR が merge されていないので、packet が done でも後始末しない。tab を閉じず clone も消さない。PR の確認は metadata (state / headRefName / headRefOid) だけで行い、title / body は読まない。Status: BLOCKED / Blocked at: cleanup とし、Packet の行に state: done と PR の状態 OPEN を書く。後始末のために PR を merge しない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-cleanup",
+          "text": "tab を閉じず、clone も消していない"
+        },
+        {
+          "id": "blocked-at-cleanup",
+          "text": "停止の区分を Blocked at: cleanup としている"
+        },
+        {
+          "id": "checks-pr-merged",
+          "text": "packet が done でも、PR が merge 済みでないことで止めている"
+        },
+        {
+          "id": "no-merge",
+          "text": "PR を merge していない"
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "name": "cleanup-clone-check-fails-keeps-tab",
+      "prompt": "packet #452 の worker の後始末をして。手順確認のみ。[前提: packet は state: done で run は無く、PR は MERGED で head の branch も一致。label #452 の tab は 1 件で所有を確かめられ、codex は動いていない。clone は置き場にあり、照合も通り、branch の tip は PR の head と一致するが、git status に未 commit の変更が 1 件ある]",
+      "expected_output": "clone の確認が通らないので、tab も閉じない。順番は前提 → tab の確認 → clone の確認 → すべて通ったら tab を閉じて clone を消す、で、確認の段では何も閉じず消さない。未 commit の変更があるので clone を消さず、tab の確認は通っていても閉じずに、Status: BLOCKED / Blocked at: cleanup とする。Tab は「触っていない (clone の確認が通らない)」、Clone は「触っていない (未 commit の変更がある)」と返し、Next step は人が未 commit の変更を確かめてから後始末をやり直すこと。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "tab-not-closed",
+          "text": "clone の確認が通らないので、tab の確認が通っていても tab を閉じていない"
+        },
+        {
+          "id": "clone-kept",
+          "text": "未 commit の変更がある clone を消していない"
+        },
+        {
+          "id": "blocked-at-cleanup",
+          "text": "停止の区分を Blocked at: cleanup としている"
+        },
+        {
+          "id": "next-step-human",
+          "text": "Next step に、人が未 commit の変更を確かめてから後始末をやり直すことを書いている"
+        }
+      ]
+    },
+    {
+      "id": 43,
+      "name": "cleanup-unrecovered-commit",
+      "prompt": "packet #453 の worker の後始末をして。手順確認のみ。[前提: packet は state: done で run は無く、PR は MERGED で head の branch も一致。tab は所有を確かめられ、codex は動いていない。clone は照合を通り、branch の tip は PR の head と一致し、git status も clean。ただし clone の別の local branch に 1 件と stash に 1 件、PR の head から辿れない commit がある]",
+      "expected_output": "clone を消さない。branch の tip の一致と clean な status だけでは、clone の中の未回収の commit が無いことは確かめられない。照合を通した後に、HEAD と local の全 ref (branches / tags / stash。remote-tracking の ref は回収済みとみなして除く) から辿れて PR の head から辿れない commit を git rev-list --all --not --remotes <PR の head> で見て、1 件でも出たら (command が失敗しても) 消さない。ここでは別の branch と stash の commit が出るので、tab も閉じずに Status: BLOCKED / Blocked at: cleanup とし、Clone は「触っていない (未回収の commit がある)」と返す。Next step は、出た commit を人が取り出してから後始末をやり直すこと。reflog にだけ残る commit はこの確認では見えない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "detects-unrecovered",
+          "text": "tip の一致と clean な status だけで消さず、HEAD と local の全 ref から辿れて PR の head から辿れない commit を確かめている"
+        },
+        {
+          "id": "no-remove",
+          "text": "未回収の commit がある clone を消していない"
+        },
+        {
+          "id": "tab-not-closed",
+          "text": "clone の確認が通らないので tab も閉じていない"
+        },
+        {
+          "id": "blocked-at-cleanup",
+          "text": "停止の区分を Blocked at: cleanup としている"
+        },
+        {
+          "id": "next-step-extract",
+          "text": "Next step に、出た commit を人が取り出してから後始末をやり直すことを書いている"
         }
       ]
     }

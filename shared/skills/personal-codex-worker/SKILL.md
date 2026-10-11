@@ -367,9 +367,10 @@ merge はしない (人が行う)。
   clone | executor-exit | executor-result | limit | fetch | transcription | trailer | public-safety)、public-safe な `Reason`、
   `Next step` (人が実行する run script の path と run dir / 退避物の path / `依頼` の更新 / limit の
   reset 待ち / 起動の記録の run を確かめる)。worker の本文や secret を停止結果に転記しない。
-- 後始末モード (§9) は `Status: CLEANED` (tab と clone を片付けた、または無かった) か、`Status: BLOCKED` と
-  `Blocked at: cleanup` (前提を確かめられない、または残したものがある)。tab と clone のそれぞれに、何をしたか
-  (閉じた・消した / 無かった / 残した理由) を書く。
+- 後始末モード (§9) は `Status: CLEANED` (確認がすべて通り、tab と clone を片付けた、または無かった) か、
+  `Status: BLOCKED` と `Blocked at: cleanup` (前提・tab・clone のどれかを確かめられないときで、tab にも clone にも
+  触らない。確認の後の close / 削除が失敗したときも同じ区分で、何が済んだかを書く)。確かめた前提 (packet の
+  state、PR の状態) と、tab と clone のそれぞれに何をしたか (閉じた・消した / 無かった / 触っていない理由) を書く。
 
 **この skill の完了と停止**: packet を更新して返却した時点で完了 (PR を作った場合は `state: review`
 まで)。review / merge / publish / planning tool の更新はこの skill の外。`done` の後の後始末は、人が明示した
@@ -380,19 +381,24 @@ merge はしない (人が行う)。
 人が後始末を明示したとき (「モード」) だけ、`done` の packet の worker の tab を閉じ、clone を消します。手順は
 `LAUNCH.md` §11。packet は書きません (`done` の後も `last_run` を残す。`docs/agent-packets.md`)。
 
-- **前提を先に確かめる**: packet が `done` (`personal-packet list --json --all` が exit 0 で、その Issue の行の
-  `state` が `done`、起動の記録の `run` が無く、`last_run` / `pr` / `branch` がある) で、PR が merge 済み (PR の
-  metadata の state が merged で、head の branch が packet の `branch`。title / body は読まない)。どれかを確かめ
-  られなければ、tab にも clone にも触らず `Blocked at: cleanup` で返す。
-- **tab**: §5 と同じ所有の確認 (`last_run` の run dir の `tab-id` との一致 + 命名) を通り、その tab のどの pane の
-  foreground にも `codex` がいないときだけ閉じる。
-- **clone**: 消してよいのは、`last_run` の `preflight.json` の `clone_root` (最後の run が検査した clone) が、§3 の
-  置き場 (`<main worktree>-clones/<issue>`) の path と物理 path で一致するものだけ。消す前に fetch 済みを確かめる:
-  clone に git を実行する前に `last_run` の `preflight.json` で `.git` を照合し (§2)、clone の branch の tip が merge
-  された PR の head の commit と一致し (clone にだけある commit が無い)、未 commit の変更が無いこと。加えて、
-  worker の pane (`worker-<issue>[-r<N>]`) の foreground に `codex` がいないこと。
-- 確かめられなかったもの (tab / clone) は残し、残した理由と人が確かめる手順を返す。人の tab、走っている worker、
-  回収していない commit や変更を消さない。
+順番は「前提 → tab の確認 → clone の確認 → すべて通ったら tab を閉じる → clone を消す」。確認の段では何も閉じず
+消さない。どれか 1 つでも確かめられなければ、tab にも clone にも触らず `Blocked at: cleanup` で返す (人の tab、
+走っている worker、回収していない commit や変更を消さない)。
+
+- **前提**: packet が `done` (`personal-packet list --json --all` が exit 0 で、その Issue の行の `state` が
+  `done`、起動の記録の `run` が無く、`last_run` / `pr` / `branch` がある) で、PR が merge 済み (PR の metadata の
+  state が merged で、head の branch が packet の `branch`。title / body は読まない)。
+- **tab の確認**: label が `#<issue>` の tab が 0 件なら閉じる tab は無い。1 件なら、§5 と同じ所有の確認
+  (`last_run` の run dir の `tab-id` との一致 + 命名) を通り、その tab のどの pane の foreground にも `codex` が
+  いないこと。
+- **clone の確認**: 置き場に clone が無ければ飛ばす (tab だけ閉じる)。あれば、`last_run` の `preflight.json` の
+  `clone_root` (最後の run が検査した clone) が §3 の置き場 (`<main worktree>-clones/<issue>`) の path と物理 path で
+  一致し、clone に git を実行する前に `last_run` の `preflight.json` で `.git` を照合し (§2)、fetch 済みであること:
+  clone の branch の tip が merge された PR の head の commit と一致し、HEAD と local の全 ref (branches / tags /
+  stash。remote-tracking の ref は除く) から辿れて PR の head から辿れない commit (未回収の commit) が無く、未 commit
+  の変更が無い。加えて、worker の pane (`worker-<issue>[-r<N>]`) の foreground に `codex` がいないこと。reflog に
+  だけ残る commit は見ない (`LAUNCH.md` §11 の honest-label)。
+- **片付ける**: すべて通ったら tab を閉じ、clone を消す。tab を閉じられなければ clone を消さずに止める。
 
 ## やってはいけないこと
 
@@ -408,6 +414,6 @@ merge はしない (人が行う)。
 - worker を orchestrator の tab の分割で動かす。packet が `done` になる前に worker の tab を閉じる。
   所有を確かめずに tab を閉じる / 人の tab に pane を足す。
 - 人の明示の指示なしに (resume で `done` を見つけただけで) 後始末する。`done`・merge・fetch 済みを確かめずに
-  clone を消す。
+  clone を消す。後始末の確認をすべて通す前に tab を閉じる・clone を消す。
 - 起動の記録を書かずに起動する。記録のある Issue を、§1 の確認なしに起動し直す。転記の前や停止中に
   記録を消す。
