@@ -102,7 +102,10 @@ public に出せない情報だからです。固定名 `.agent-context.local.md
   そのまま提示に含めます。`personal-packet` が未配備なら、規約の置き場 (main worktree root の
   `.agent-packets/*.md`) を直接読んで frontmatter (issue / state / worker / updated / published /
   run / tab) を拾い、未 publish は「`published` が無い、または `updated > published`」で判定します。
-  直接読むときも `list` と同じ除外 (#412) を先に当てます: packet dir が symlink なら 1 件も読まず、symlink /
+  直接読むときも `list` と同じ除外 (#412) を先に当てます: repository / index を選ぶ git の env (`GIT_DIR` /
+  `GIT_WORK_TREE` / `GIT_INDEX_FILE` / `GIT_COMMON_DIR` / `GIT_OBJECT_DIRECTORY` /
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES` / `GIT_NAMESPACE`) を 1 つでも継承していれば (値が空でも)、main worktree の
+  解決と一覧の前に止め、tracked かを判定できないので 1 件も読みません。packet dir が symlink なら 1 件も読まず、symlink /
   regular file でない / git で tracked の packet も中身を読まずに、path と理由だけを出します (tracked は
   main worktree root で `git --no-literal-pathspecs ls-files -- ':(icase).agent-packets'` に出る path と
   大文字小文字を無視して照合し、packet dir そのものが出れば全件)。直接読めないとき (tracked かを確かめられない
