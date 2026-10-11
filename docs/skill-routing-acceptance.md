@@ -12,7 +12,7 @@ harness です。#216 の cross-skill routing suite の最小 slice で、
 | 部品 | path | 役割 | CI |
 | --- | --- | --- | --- |
 | case set | `scripts/lib/skill_routing_cases.json` | 依頼 prompt と期待 (primary / must_not) の正本 | schema を self-test で検証 |
-| probe runner | `scripts/probe-skill-routing.sh` | 隔離 project で `claude -p` / `codex exec` を流し、発火した skill と token を観測して `results.json` を書く | 実行しない (CLI 認証と network が要る) |
+| probe runner | `scripts/probe-skill-routing.sh` | 隔離 project で `claude -p` / `codex exec` を流し、発火した skill と token を観測して `results.json` を書く | probe は実行しない (CLI 認証と network が要る)。起動の argv・起動の前の flag の確認・event の解析は self-test (`scripts/tests/probe-skill-routing-test.sh`。偽の CLI と固定の JSONL) |
 | judge | `scripts/check-skill-routing.sh` | case set と `results.json` から coverage / primary hit / must_not violation / token を判定・報告する。`--baseline` で before / after を比較する | self-test (`scripts/tests/check-skill-routing-test.sh`) |
 
 ## 何が hard で何が hard でないか (honest-label)
@@ -52,7 +52,8 @@ codex の「起動」= **command 文字列に `/<name>/SKILL.md` が現れた読
 問わない: listing から外した user scope (`~/.codex/skills/<name>/`) や `.system/../<name>/` を model が推測して
 読む run が実測で多く (baseline 24 run 中 10 run 以上)、project path だけでは起動を取りこぼす。command の出力
 (`aggregated_output`) は見ない (`ls` の結果に全 skill の path が並ぶと全件起動に化ける。初版で実際に起きた)。
-1 run で inventory の半数 (6 本) 以上を読んだ run は **探索読み**とみなし、最初に読んだ skill だけを
+1 run で 6 本 (runner の定数 `CODEX_SURVEY_THRESHOLD`。初版の inventory 12 本の半数で、inventory の数からは計算しない)
+以上を読んだ run は **探索読み**とみなし、最初に読んだ skill だけを
 `observed` にして残りを `note` に残す (Claude Code の `Skill` 呼び出しと違い、codex は file を読むだけなので
 安価に全部読める run がある。baseline 24 run 中 1 run)。これは heuristic であり、raw log で確認できるように
 しておく。
@@ -103,7 +104,9 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
 - `listing_chars`: 候補 skill の description の合計文字数 (毎 turn 載る静的な context 量の指標)。
   Claude Code は description を 1,536 文字で切り、Codex は listing 全体を context の 2% または
   8,000 文字に収める (2026-09-19 時点の公式 docs)。
-- `status`: CLI が非ゼロで終わった / usage が取れなかった run は `error`。judge は緑に数えない。
+- `status`: 上の `--max-turns` の打ち切りを除き、CLI が非ゼロで終わった run、`--timeout` で kill した run、CLI が
+  exit 0 で終わっても出力を最後まで読み切れなかった run (CLI が残した子 process が pipe を握ったまま、待つ上限の
+  5 秒を過ぎた) は `error`。usage が取れなかった run も `error`。judge は緑に数えない。
 - raw log は `<out>.raw/<case>-<n>.jsonl` に残す。observed が正しいかはこの log で人が確認する
   (judge は runner の観測を信頼する。信頼境界は judge の冒頭コメント参照)。raw log は private な内容を
   含みうるので、Issue / PR / comment には貼らない (下の「raw log の扱い」)。

@@ -51,10 +51,10 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
 
 ## tab と pane
 
-- **worker**: orchestrator が起動時に tab を作り (`herdr tab create --label '#<Issue 番号>'
-  --no-focus`)、応答の `.result.root_pane` の pane を `worker-<Issue 番号>[-r<round>]` と名付けて、そこで
-  worker を動かす (ID は応答の JSON から読み、推測しない。手順は `personal-codex-worker` の LAUNCH
-  §5)。worker は 10 分以上動くので、orchestrator が別の作業単位を進める tab と分ける。同じ Issue の
+- **worker**: orchestrator が起動時に `#<Issue 番号>` の tab を作り、応答の `.result.root_pane` の pane を
+  `worker-<Issue 番号>[-r<round>]` と名付けて、そこで worker を動かす (ID は応答の JSON から読み、推測しない。
+  command と flag の正本は `personal-codex-worker` の LAUNCH §5)。worker は 10 分以上動くので、orchestrator が
+  別の作業単位を進める tab と分ける。同じ Issue の
   2 回目以降の起動 (review の修正 round、停止からの再開) は、残っている `#<Issue 番号>` の tab に
   `-r<round>` の pane を足す (作業単位ごとに tab は 1 つ)。
 - **review**: review の pane は、呼び出し元 (orchestrator) の pane を分割して置きます (1 役割 = 1 pane。
@@ -116,8 +116,8 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   - `last_run` は起動の記録ではなく、前の run の成果物 (clone の `.git` の snapshot、tab の `tab-id`) を別の
     session からも辿るための口です。次の起動で `run` を書くときに消し、`done` の後も残します (tab を閉じる
     ときに使う)。`run` と同時には置きません。
-  - resume は `run` を見て「起動済み・未回収」と出し、orchestrator は新しく起動する前に `run` を確かめます
-    (`last_run` は未回収の印ではありません)。
+  - resume は `run` を見て「起動済み・未回収」(`state: blocked` なら「停止中」) と出し、orchestrator は新しく
+    起動する前に `run` を確かめます (`last_run` は未回収の印ではありません)。
   - `run` があるのに、その run の `done.txt` も、生きている worker の process も確認できないとき (起動の
     直前に止まった、落ちた、判定できない) は、自動で起動し直さず人に確認します。
 
@@ -125,7 +125,8 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   session が回収できます。`personal-packet` は `run` / `tab` を解析し、`list` に run dir の状態
   (`run_status`: `finished` / `unfinished` / `missing`) を出し、publish / pull で保持します (書式は
   [agent-packets](agent-packets.md))。worker の起動手順 (`personal-codex-worker`) が起動の前に書いて
-  起動の前に確かめ、resume (`personal-resume-project`) が「起動済み・未回収」を出します。
+  起動の前に確かめ、resume (`personal-resume-project`) が「起動済み・未回収」(`state: blocked` なら「停止中」) を
+  出します。
 
 ## 通知
 

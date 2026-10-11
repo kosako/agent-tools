@@ -42,7 +42,7 @@ target ごとの重複を除くと、現行 inventory は次の 14 件です。
 | `personal-repo-audit` | explicit / intent-based | repo 横断の健全性・負債監査 | 単一 bug / diff、session log mining | read-only report | 個別原因は investigate、ログは asset-miner |
 | `personal-resume-project` | automatic / explicit | status-only または既存 / 明示された新規 scope の着手前確認 | session-end handoff、placement 判断 | status read-only、work / external write は別 gate | session-handoff、operating-loop |
 | `personal-review-request` | mode-gated | GitHub PR review lifecycle | unbound diff、merge / approve / fix / push | explicit authorization 時だけ GitHub comment write | safe-reader、trailer routing、opposite-author executor |
-| `personal-session-handoff` | intent-based | 到達点と次回入口の handoff | session-start status / continuation | authorized external write、他は conversation draft | resume-project、operating-loop |
+| `personal-session-handoff` | intent-based | 到達点と次回入口の handoff | session-start status / continuation | packet の local 更新 (常に)、authorized external write、他は conversation draft | resume-project、operating-loop |
 | `personal-project-operating-loop` | explicit / intent-based | planning / Issue / PR / repo の置き場所 | task 実装、review 実行、session 本文 | advisory read-only、writes は別 workflow gate | resume、handoff、review-request |
 
 ## Representative routing queries
@@ -58,6 +58,8 @@ secondary は gate / quality / placement の補助または後段 hand-off に�
 | 「この branch diff を Codex に second opinion して」 | codex-review (non-independent label) | production-rail | review-request / GitHub write |
 | 「この PR をレビューして」 | review-request (`draft`) | safe metadata read | comment write、review 実行 before confirmation |
 | 「mixed author の PR を速い方の AI に review させて」 | review-request (`fail-closed`) | PR 分割・human review (実際の混在では trailer を付け直さない) | codex-review / reviewer の自動選択 |
+| 「packet #291 を Codex に委譲して実装させて」 | codex-worker | — | codex-review / review-request |
+| 「Codex worker が出した PR #300 に review 結果をコメントして」 | review-request (`write-authorized`) | safe-reader、trailer routing、Claude route | codex-worker |
 | 「設計を壁打ちしたい。成果物は不要」 | grill-me | — | grill-with-docs / repo write |
 | 「用語集と ADR を育てながら設計を詰めて」 | grill-with-docs | grill-me の interview 規律 | 合意前の実装 |
 | 「この関数を仕様どおり実装して」 | task-specific implementation | production-rail | grill-me / grill-with-docs |
