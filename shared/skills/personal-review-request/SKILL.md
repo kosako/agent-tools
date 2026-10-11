@@ -12,8 +12,8 @@ description: GitHub PR 上で review 依頼・結果・follow-up の lifecycle �
 ## 副作用と組み合わせ
 
 - 副作用: GitHub comment write は現在の trusted user の明示 authorization がある場合だけ行う。
-- 組み合わせ: personal-github-safe-reader と trailer routing を前段に置き、verified author=Claude の
-  とき personal-codex-review executor と組み合わせる。
+- 組み合わせ: personal-github-safe-reader と trailer routing を前段に置き、verified author=Claude か
+  opencode(anthropic) のとき personal-codex-review executor と組み合わせる。
 
 ## 実行モード (write authorization gate)
 
@@ -42,7 +42,8 @@ draft から write-authorized へ移るには、投稿対象とコメント内�
 - PR 番号: 必須。省略されたら聞き返す。
 - レビュアー: **相互レビュー契約に従って routing preflight が決める** (下記)。人が reviewer を上書きする
   引数や PR の label は無い (#415。上書きを求められても使わず、preflight の結果で進める)。
-- リポジトリ: 省略時は cwd の origin。
+- リポジトリ: 省略時は gh が解決する現在の directory の repository (env の `GH_REPO` で指定されていれば
+  それ。`gh repo set-default` の設定も効くので、origin とは限らない)。確実にするなら `--repo` を付ける。
 
 ## レビュアーの決定（相互レビュー）
 
@@ -118,7 +119,7 @@ read-only は手順 1 の read と手順 3 の review を write-authorized と�
 情報収集では、最初に safe-gh で author trust と安全な metadata を確認し、そのあとで review target の
 identity (OID 2 つと base ref 名)、routing preflight、最後に必要な diff の順で読みます。OID は形が
 閉じていますが、**base ref 名は作者が決める自由値**なので untrusted として扱います (下記「値の受け渡し」
-と、Claude route の preflight 参照)。cwd の origin 以外を見る
+と、Claude route の preflight 参照)。省略時に gh が解決する repository (上の「引数」) 以外を見る
 ときは、safe-gh には `-R`、preflight / `gh` にはそれぞれの `--repo` を付けます。
 
 #### 値の受け渡し (PR 番号 / repo slug / 一時ファイル path)
@@ -149,8 +150,8 @@ metacharacter を含みえます)。
 
 ```sh
 # 0. 検証を通した値だけを shell literal として変数へ入れる (上記「値の受け渡し」)。
-#    角括弧は省略可を示す記法で、実行時には角括弧ごと除く。repo を省く (cwd の origin を
-#    使う) ときは -R / --repo ごと付けない。
+#    角括弧は省略可を示す記法で、実行時には角括弧ごと除く。repo を省く (gh が解決する
+#    repository を使う。上の「引数」) ときは -R / --repo ごと付けない。
 pr=<PR 番号の shell literal>        # \A\d+\z を確認済み
 repo=<owner/repo の shell literal>  # \A[\w.-]+/[\w.-]+\z を確認済み
 
@@ -244,8 +245,8 @@ gate の出力を人に見せて確認を取ります。手順 4 の結果コメ
 
 ### 3. レビュー実行
 
-**OpenCode の session では、route にかかわらずレビューを実行しない**: env に `OPENCODE` か
-`AGENT_TOOLS_OPENCODE` があれば、自分でレビューせず、他の agent (`claude -p` / `codex` /
+**OpenCode の session では、route にかかわらずレビューを実行しない**: env の `OPENCODE` か
+`AGENT_TOOLS_OPENCODE` が非空なら、自分でレビューせず、他の agent (`claude -p` / `codex` /
 `personal-codex-review` / `personal-codex-worker`) も起動せず、人間に hand-off する (判定の詳細は
 下の Claude route の「どの session で動いているか」)。
 
@@ -293,9 +294,9 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
     消した扱いにするので、key の有無で見ると OpenCode の session を Codex の session と誤判定する。#431)。
     見る順は OpenCode の目印 → Claude / Codex の目印:
     - `OPENCODE` か `AGENT_TOOLS_OPENCODE` (OpenCode の目印) が非空のとき → OpenCode の session。自分で
-      レビューせず、他の agent (`claude -p` / `codex` / `personal-codex-review`) も起動せず、人間に hand-off
-      する。`OPENCODE` も見るのは、plugin が読まれず `CLAUDECODE` の漏れが残る場合でも自分でレビューしない
-      ため (誤判定しても hand-off になるだけで、安全側)。
+      レビューせず、他の agent (`claude -p` / `codex` / `personal-codex-review` / `personal-codex-worker`) も
+      起動せず、人間に hand-off する。`OPENCODE` も見るのは、plugin が読まれず `CLAUDECODE` の漏れが残る
+      場合でも自分でレビューしないため (誤判定しても hand-off になるだけで、安全側)。
     - OpenCode の目印が無く、`CLAUDECODE` が非空で、`CODEX_THREAD_ID` と `CODEX_SANDBOX` (Codex の目印) が
       どちらも非空でないとき → Claude Code セッション。そのセッション自身がレビュアーとして実行する。
     - `CLAUDECODE` と Codex の目印が両方非空のとき → 内側の agent を決められない (Claude から `codex exec` を

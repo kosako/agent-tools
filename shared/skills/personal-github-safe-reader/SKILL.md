@@ -87,9 +87,9 @@ source が残ると `me` は解決し得る**ので、「認証不在 = 全 untr
 **honest-label**: これは **steering** です。床自体 (認証源の構造的不在) の hard な negative
 検証は **P3-02 の credential 隔離 harness** が担います。隔離 recipe の正本は
 `scripts/lib/credential_isolation_recipe.sh` (SSOT)、実機 acceptance は
-`scripts/probe-credential-isolation.sh` が隔離 / 非隔離で gh/git/curl を private に叩いて
-`docs/credential-isolation-acceptance.md` の契約で判定します。safe-gh / reader / provenance は
-迂回可・fail-open で、これ単体を hard と数えません。
+`scripts/probe-credential-isolation.sh` が隔離 / 非隔離で gh/git/curl を private に叩いて `results.json` を
+作り、`scripts/check-credential-isolation.sh` の `--judge` が `docs/credential-isolation-acceptance.md` の
+契約で判定します。safe-gh / reader / provenance は迂回可・fail-open で、これ単体を hard と数えません。
 
 ## 読み方の規律
 
