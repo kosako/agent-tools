@@ -1,7 +1,7 @@
 # personal-codex-worker — 実行手順 (LAUNCH)
 
-`SKILL.md` §2〜§7 の契約 (clone / preflight / brief / 起動と完了判定 / 転記と退避 / 回収と trailer
-検査) を満たすための機械的な手順です。契約の正本は `SKILL.md`、手順の正本はこの file。この file の
+`SKILL.md` §2〜§7 と §9 の契約 (clone / preflight / brief / 起動と完了判定 / 転記と退避 / 回収と trailer
+検査 / 後始末) を満たすための機械的な手順です。契約の正本は `SKILL.md`、手順の正本はこの file。この file の
 中の command 例は data であり、caller の依頼や worker の出力の文言で書き換えません。順番は
 「run dir → clone → preflight → brief と run script → 起動」で、人手に渡す成果物 (clone、
 run script) は起動より前に揃えます (preflight が clone を検査するので、clone が先)。
@@ -374,13 +374,14 @@ herdr pane run "$pane" <"zsh " + run script path の shell literal> || exit 1
 - `pane run` の command は pane の shell が解釈するので、script path を pane shell 用に literal 化し、
   自分の shell 経由で `herdr` に渡すならもう 1 段 literal 化する (2 段)。
 - 次のどれかなら `Blocked at: launch-path`。Next step は場合で分けます:
-  - **走っている worker がいる** (手順 1): Next step は「pane <id> の worker の完了を待ってから、この
-    skill で起動し直す」。run script を人に実行させない (二重起動になる)。
+  - **走っている worker がいる** (手順 1): Next step は「pane <id> の worker の完了を待つ。この run は
+    起動していない。記録 (run / tab) の破棄をこの skill に指示してから起動し直す」。run script を人に
+    実行させない (二重起動になる)。
   - **tab を特定できない**: label が `#<issue>` の tab が 2 つ以上ある / 1 つあるが所有を確かめられ
     ない (別の session で作った tab で前の run dir が分からない場合を含む)。その tab には触らず、
-    Next step は「人が `#<issue>` の tab を確かめ、不要なら閉じてから、この skill で起動し直す」
-    (閉じれば手順 3a で新しい tab を作り、ID を記録し直す)。人が自分の terminal で run script を
-    実行してもよい (§10)。
+    Next step は「人が `#<issue>` の tab を確かめ、不要なら閉じる。この run は起動していない。記録
+    (run / tab) の破棄をこの skill に指示してから起動し直す」(閉じれば手順 3a で新しい tab を作り、ID を
+    記録し直す)。人が自分の terminal で run script を実行してもよい (§10。そのときは記録を消さずに残す)。
   - **起動できない**: herdr が `running` でない / `$HERDR_WORKSPACE_ID` が空 / 手順 0 の一覧の取得か
     形の確認に失敗した / 手順 1 の process-info で判定できない / tab create・split・rename・run の
     どれかが失敗した / 応答から ID を取り出せない / `tab-id` を書けない。clone と run script は
@@ -389,6 +390,17 @@ herdr pane run "$pane" <"zsh " + run script path の shell literal> || exit 1
     いないことを確かめてから実行する」を添える。作りかけの tab は閉じない (人がその pane で run
     script を実行できる。`tab-id` を記録できていなければ、次の起動では「tab を特定できない」として
     人に渡る)。
+
+  上の 2 つ (走っている worker がいる・tab を特定できない) で記録の破棄を挟むのは、§4 の起動の記録がこの
+  停止の前に書いてあり、`launch-path` では消さない (`SKILL.md` §6) ため。破棄せずに起動し直すと、`SKILL.md` §1
+  の確認がこの記録を `unfinished` (動いていると確認できない) と読んで `Blocked at: launch-record` に止まる。
+  破棄は `SKILL.md` §6 の「人の指示で消す」で行い、この 2 つの未起動の run (run dir に `codex.log` も `done.txt`
+  も無い。run script は `cd` の直後の pipeline の `tee` で `codex.log` を作るので、実行されていれば残る) では
+  `run` を `last_run` に移して `tab` を消す。worker が起動していないので、その run の `preflight.json` の
+  snapshot は §2 の再利用の照合にそのまま使え、別の session で起動し直しても前の run dir を辿れる
+  (`Blocked at: clone` にならない)。honest-label: その run dir には `tab-id` が無い (tab の手順の前に止まった) ので、
+  別の session で起動し直すと、前の round から残る `#<issue>` の tab は所有を確かめられず「tab を特定できない」に
+  なる (人が tab を確かめて閉じる)。
 - honest-label (所有): 記録した tab ID は、この skill が tab を作ったときの herdr の応答から取った値
   です。記録の置き場は run dir で、§1 / §3 で worker の書込先の外に置いたことを確かめています (#324 より
   前の run dir は `$TMPDIR` にあり、worker から書けた)。それでも ID の一致だけでは決めず、命名の確認と
@@ -593,10 +605,40 @@ title / body は orchestrator が packet から書く (一時 file は repositor
   「tab `#<issue>` の pane <id> を見て続行か中断かを決める」だけ。続行なら人が pane を監視して
   `done.txt` を待つ。中断なら人が pane の process を止めてから §8 の退避に進む。
 
-## 11. tab の後始末 (packet が done になったとき)
+## 11. 後始末 (packet が done になったとき。後始末モード)
 
-worker の tab を閉じるのは、PR が merge されて packet が `done` になったときだけです (clone を片付ける
-のと同じ時点。`SKILL.md` §3)。`blocked` の間と RUNNING の間は、調べられるように残します。
+worker の tab を閉じ、clone を退避先へ移すのは、PR が merge されて packet が `done` になった後に、人が後始末を
+明示したときだけです (`SKILL.md` の「モード」と §9。時点は `SKILL.md` §3)。`blocked` の間と RUNNING の間は、
+調べられるように残します。packet は書きません。clone は消しません (退避先を消すのは人)。
+
+順番は「前提 (done・merge) → tab の確認 → clone の確認 → すべて通ったら tab を閉じる → clone を退避先へ移す」
+です。確認の段では何も閉じず移しません。どれか 1 つでも確かめられなければ、tab にも clone にも触らず
+`Blocked at: cleanup` で人に渡します (確認の途中で片方だけ片付けると、残った方を調べる手掛かり (pane の出力、
+clone の置き場) が欠ける)。clone には git を実行せず、中に `cd` もしません (worker が書き換えうる `.git` や
+設定を読ませない)。
+
+### 前提 (done と merge)
+
+```sh
+# list の終了コードを先に確かめてから照合する (§4 の最後と同じ形)
+packets=$("$packet_cli" list --json --all) || exit 1
+row=$(printf '%s' "$packets" | jq -ce --argjson issue "$issue" '
+  [.[] | select(.issue == $issue)] | select(length == 1) | .[0]
+  | select(.state == "done" and .run == null and (.last_run | type == "string")
+           and (.pr | type == "number") and (.branch | type == "string"))') || exit 1
+prev_run=$(printf '%s' "$row" | jq -er '.last_run') || exit 1
+pr=$(printf '%s' "$row" | jq -er '.pr') || exit 1
+branch=$(printf '%s' "$row" | jq -er '.branch') || exit 1
+# PR は metadata だけを読む (title / body は取得しない)
+meta=$(gh pr view "$pr" --json state,headRefName) || exit 1
+printf '%s' "$meta" | jq -e --arg branch "$branch" '.state == "MERGED" and .headRefName == $branch' >/dev/null || exit 1
+```
+
+(`exit 1` は「その段で止めて、tab にも clone にも触らず `Blocked at: cleanup`」の意。`$issue` は §0 で `\A\d+\z`
+を通した値。`prev_run` / `branch` は packet 由来の値なので、以降も変数で渡す。jq は行が無い・2 件以上・条件に
+合わないときに出力が無く、`-e` で非 0 になる。gh の `state` は merge 済みの PR で `MERGED`。)
+
+### tab の確認 (まだ閉じない)
 
 ```sh
 ws=$HERDR_WORKSPACE_ID
@@ -609,16 +651,85 @@ printf '%s' "$tabs"  | jq -e '.result.tabs  | type == "array"' >/dev/null || exi
 printf '%s' "$panes" | jq -e '.result.panes | type == "array"' >/dev/null || exit 1
 printf '%s' "$tabs" \
   | jq -r --arg label "$label" '.result.tabs[] | select(.label == $label) | .tab_id'
-# 1 件で、§5 の所有の確認 (最後の run dir = packet の last_run の tab-id との一致 + 命名) を通り、
-# その tab のどの pane の foreground にも codex がいないときだけ
-herdr tab close <tab-id>
+# 0 件なら tab= (閉じる tab は無い)。1 件なら、§5 の所有の確認 (最後の run dir = packet の last_run の tab-id との
+# 一致 + 命名) を通り、その tab のどの pane の foreground にも codex がいないことを確かめてから、その ID を tab= に
+# 控える (閉じるのは「片付ける」の段)
 ```
 
-(`exit 1` は「その段で止めて閉じない」の意。)
+(`exit 1` は「その段で止めて、tab にも clone にも触らず `Blocked at: cleanup`」の意。)
 
-- 0 件なら何もしない (人が既に閉じた)。一覧の取得か形の確認に失敗した、2 件以上、所有を確かめられ
+- 0 件なら閉じる tab は無い (人が既に閉じた)。一覧の取得か形の確認に失敗した、2 件以上、所有を確かめられ
   ない (最後の run dir が分からない場合を含む)、codex がまだ foreground にいる、process-info で判定
-  できない、のどれかなら閉じずに、人に「tab `#<issue>` を確かめて閉じてください」と伝える (人の tab
-  と、走っている worker を閉じない。一覧が読めないことを「0 件」と取り違えない)。
+  できない、のどれかなら、tab にも clone にも触らず `Blocked at: cleanup` とし、人に「tab `#<issue>` を
+  確かめてください」と伝える (人の tab と、走っている worker を閉じない。一覧が読めないことを「0 件」と
+  取り違えない)。
 - orchestrator 自身がいる tab (`personal-codex-review` の review pane もここに置かれる) は、記録した
   tab ID と一致せず、pane の名前も `worker-<issue>` の形でないので、閉じる対象にならない。
+
+### clone の確認 (まだ移さない)
+
+```sh
+# path の lstat の種類を出す。ENOENT だけを absent とし、権限エラーなどの失敗は非 0 で止める
+# (test -e は「無い」と「確かめられない」を区別しない)
+lstat_kind() {
+  ruby -e 'begin
+      s = File.lstat(ARGV[0])
+      puts(s.symlink? ? "symlink" : s.directory? ? "dir" : "other")
+    rescue Errno::ENOENT
+      puts "absent"
+    end' "$1"
+}
+clone=<§2 の置き場 (<main worktree>-clones/<issue>) の path の shell literal>
+clone_root=
+kind=$(lstat_kind "$clone") || exit 1
+case "$kind" in
+  absent) ;;                                   # 置き場に clone は無い (人が既に片付けた)。clone の確認を飛ばす
+  dir)
+    want=$(jq -er '.clone_root' "$prev_run/preflight.json") || exit 1
+    clone_root=$(ruby -e 'puts File.realpath(ARGV[0])' "$clone") || exit 1   # 中に cd しない
+    [ "$clone_root" = "$want" ] || exit 1      # 最後の run が検査した clone が、置き場の path の実体
+    cleaned=${clone_root%/*}/.cleaned          # 退避先は同じ置き場の下 (§2 の <issue> と名前が衝突しない)
+    dest=${cleaned}/${issue}-$(date -u +%Y%m%dT%H%M%SZ)
+    ck=$(lstat_kind "$cleaned") || exit 1
+    case "$ck" in absent|dir) ;; *) exit 1 ;; esac   # .cleaned が symlink や file なら移さない
+    dk=$(lstat_kind "$dest") || exit 1
+    [ "$dk" = absent ] || exit 1               # 退避先が既に在れば何もしない
+    # worker の pane (worker-<issue>[-r<N>]) のどの foreground にも codex がいない (上の tab の確認で読んだ
+    # $panes を、§5 の手順 1 と同じ読み方で見る)
+    ;;
+  *) exit 1 ;;                                 # symlink / file などは置き場の clone と確かめられない
+esac
+```
+
+(`exit 1` は「その段で止めて、tab にも clone にも触らず `Blocked at: cleanup`」の意。)
+
+- 置き場の path が無い (lstat が `ENOENT`) ときだけ clone の確認を飛ばす (移す clone は無い。tab の確認が通れば
+  tab だけ閉じる)。lstat が権限エラーなどで失敗したときは「無い」と取り違えず止める。
+- 置き場の path が symlink / directory でない、`last_run` の `preflight.json` が無い・読めない、`clone_root` が
+  置き場の path の実体と一致しない (別の場所に切った clone を含む)、`.cleaned` が directory でない、退避先が既に
+  在る・確かめられない、codex がまだ foreground にいる、herdr の一覧や process-info で判定できない、のどれかなら、
+  tab にも clone にも触らず `Blocked at: cleanup` とし、人に「clone を確かめてください」と伝える。
+
+### 片付ける (確認がすべて通った後)
+
+```sh
+if [ -n "$tab" ]; then herdr tab close "$tab" || exit 1; fi        # 0 件なら閉じる tab は無い
+if [ -n "$clone_root" ]; then                                        # 置き場に無ければ移す clone は無い
+  mkdir -p -- "$cleaned" || exit 1
+  ruby -e 'File.rename(ARGV[0], ARGV[1])' "$clone_root" "$dest" || exit 1   # rename(2)。copy に倒さない
+fi
+```
+
+(`exit 1` は「その段で止めて `Blocked at: cleanup`」の意。tab を閉じられなければ clone を移さない。rename が
+失敗したら clone はそのまま残る (何も消さない)。どちらも、何が済んだかと退避先を返却に書く。)
+
+- 移動は `mv` ではなく `rename(2)` (Ruby の `File.rename`) で行う。`mv` は移動先が directory だとその中へ移し、別の file system なら
+  copy して元を消す。rename は別の file system (`EXDEV`)・中身のある directory や file が移動先にある・書けない、の
+  どれでも失敗し、元の clone を残す (一時 dir で、中身のある directory・file・書けない `.cleaned` への rename が
+  失敗して元が残ることを実測した)。確認と rename の間に空の directory が移動先に作られた場合だけは、その空の
+  directory と置き換わる (失われる中身は無い)。
+- honest-label: 消さないので、退避で失われるものは無い (commit、reflog、stash、index、未 commit の変更、ignored な
+  file はすべて退避先に残る)。そのため、未回収の commit や未 commit の変更の確認はしない。disk は人が退避先を
+  消すまで空かない。退避先の clone の `.git` は worker が書き換えうるので、人が中で git を実行する前に中身を
+  確かめる。確認から rename までの間の差し替え (同じ user の権限による TOCTOU) は防がない (packet の `check` と
+  同じ立場)。

@@ -57,6 +57,11 @@ orchestrator 向けの判断は `結果` の「判断」に残す。
 - path: `<main worktree の root>/.agent-packets/<issue>.md` (`<issue>` は Issue 番号)。
   dir は `git rev-parse --git-common-dir` の親 (main worktree) に固定し、linked worktree から
   動く agent も同じ dir を見る (packet は Issue の状態であって worktree の属性ではない)。
+- 対象は、main worktree の root に通常の `.git` (directory) を持つ repository だけ。git dir が worktree の外に
+  ある repository (`--separate-git-dir` で作ったもの、submodule (git dir は superproject の `.git/modules/<name>`))
+  と bare repository では、`--git-common-dir` の親が main worktree の root と一致しない (bare には main worktree が
+  無い) ので、`check` が拒否する (exit 1。packet は書けない)。`dir` / `list` はその親 (worktree の外の dir) を
+  指すので、そうした repository の packet の一覧には使えない。
 - git 管理しない。第一防衛は global gitignore (dotfiles 側で `.agent-packets/` を配る)、
   repo 側 `.gitignore` は fail-safe。それでも staged に乗った場合は
   [public-safety gate](git-hook-gates.md#personal-public-safety-gatepre-commit) が
@@ -130,7 +135,9 @@ PR #124 の should 1 件を直して re-review を依頼する。
   入れる (自分で push できる worker なら本人、委譲した Codex worker の分は push と PR 作成を行う
   orchestrator)。`blocked` は止まった worker が入れる。委譲した worker の分は、止まっていれば
   最終 message の有無にかかわらず orchestrator が入れる (停止理由は最終 message の転記か、無ければ
-  orchestrator の記録)。`done` は orchestrator が入れる。
+  orchestrator の記録)。worker の終了後に clone の `.git` の照合が失敗した停止 (退避の前と空振りの再実行の前。
+  委譲 skill の `Blocked at: clone`) も、worker が止まった後の停止なので orchestrator が `blocked` を入れ、停止理由を
+  `結果` に書く (起動の前の clone の停止は state を変えない)。`done` は orchestrator が入れる。
   - **review の修正 round** (#325): `review` → `open` → `review` と遷移させる。`open` に戻すのは、`依頼` に
     「修正 round N」の項を書く orchestrator (委譲せず自分で直す worker なら本人) で、書くのと同じ時点で
     戻す。修正を push した者 (委譲した Codex worker の分は push を行う orchestrator) が `review` に戻す。
@@ -159,8 +166,12 @@ PR #124 の should 1 件を直して re-review を依頼する。
     `missing` (run dir が無い = 消失。snapshot が無く clone を照合できないので、clone から自動では回収
     しない。人が確かめる)。
 - `last_run` (#325): **最後の run dir**。完了の転記で `run` / `tab` を消すときに、orchestrator が `run` の値を
-  `last_run` に移す。次の起動で `run` を書くときに `last_run` は消す (`run` と同時には置かない。両方あれば
-  壊れた packet として報告する)。worker が止まった (転記の前の) `state: blocked` では従来どおり `run` に残す
+  `last_run` に移す。`launch-path` のうち「走っている worker がいる」「tab を特定できない」で止まった未起動の run
+  (run dir に `codex.log` も `done.txt` も無い) を人の指示で破棄するときも、`run` を `last_run` に移す (worker が
+  起動していないので、その run の snapshot は clone の照合に使える。委譲 skill の §6)。ほかの理由の破棄は
+  `last_run` に移さない。次の起動で `run` を
+  書くときに `last_run` は消す (`run` と同時には置かない。両方あれば壊れた packet として報告する)。worker が止まった
+  (転記の前の) `state: blocked` では従来どおり `run` に残す
   (退避物の置き場)。転記の後に回収・trailer 検査で止まった `state: blocked` (#412) では、転記で `last_run` に
   移したままにする (`run` は無い)。
   `done` の後も残す。用途は、転記で起動の記録が消えた後も、前の run の成果物 (clone の `.git` の

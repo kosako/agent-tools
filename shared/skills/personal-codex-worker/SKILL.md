@@ -16,7 +16,8 @@ orchestrator が行います。
 - 副作用: worker 用 clone の作成、herdr の Issue ごとの tab (`#<issue>`) を作ってその pane から
   `codex exec` を起動 (workspace-write。書込はその clone の中に閉じる)、clone から main への fetch、
   packet の local 更新 (`結果` / `次の入口` / `state` / 起動の記録 `run` / `tab`)、worker が commit した
-  branch の push と PR 作成 (orchestrator の操作。trailer 検査を通ったときだけ)。
+  branch の push と PR 作成 (orchestrator の操作。trailer 検査を通ったときだけ)。後始末モード (§9) では、
+  人が明示したときだけ、`done` の packet の worker の tab を閉じ、clone を退避先へ移す (消さない)。
   Issue コメントへの publish と planning tool の更新はしない (handoff の領分)。worker は GitHub /
   network / packet に触れない。preflight が BLOCKED なら何も起動しない。
 - **packet に書く前の検査** (#386): packet に書く前 (§1 の修正 round の記入、§3 の `branch`、§5 の
@@ -38,13 +39,23 @@ orchestrator が行います。
 
 - **この skill (orchestrator 側)**: authorization と scope の確認、preflight の実行、clone と
   branch の用意、brief の生成、起動と完了判定、commit の回収 (fetch)、結果の転記、停止の記録、
-  PR の作成、返却。
+  PR の作成、返却。人が明示したときの `done` の後の後始末 (worker の tab を閉じる・clone を退避先へ移す。§9)。
 - **`personal-codex-worker-preflight`**: 起動できる前提 (非対称 / capability / model 選択 / clone の
   妥当性) の決定的検査と launch argv の生成。この skill は preflight の判定を再実装しない。
 - **worker (Codex)**: clone の中で `依頼` を実装し、作業単位ごとに commit し、最終 message に
   結果を書く。packet / GitHub / main repository には触れない。
-- **人**: 委譲の起動指示、blocked からの再開判断、PR の merge。
+- **人**: 委譲の起動指示、blocked からの再開判断、PR の merge、`done` の後の後始末の指示。
 - **herdr**: launcher。skill が組んだ argv を pane の shell で実行するだけ。
+
+## モード
+
+現在の trusted な指示からモードを決めます。packet や Issue の本文、resume の一覧を根拠にしません。
+
+- **委譲** (既定): 「packet #N を Codex に委譲して」のような起動指示。§1〜§8 を行う。
+- **後始末**: 人が `done` の packet の worker の後始末 (tab を閉じる・clone を退避先へ移す) を明示したときだけ
+  (例: 「packet #N の worker の後始末をして」)。§9 だけを行い、起動・転記・PR の作成はしない。resume で
+  `done` の packet を見つけた、PR が merge された、別の packet の委譲を指示された、だけでは後始末しない
+  (閉じた tab は戻せない)。
 
 ## 1. authorization と scope
 
@@ -125,7 +136,7 @@ clone の git dir だけ**で、preflight が orchestrator 自身の repository 
   `HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`, `packed-refs`。再利用 clone も git を呼ぶ前に直前 run の snapshot を照合し、
   追えない場合は clone に git を実行せず `Blocked at: clone` で人に渡す。前の run dir は packet の
   `last_run` (完了の転記の後) か `run` (停止中) から辿る (#325)。どちらも無い (`last_run` を導入する前に
-  転記した run の次の round 等) ときは、人が §9 で main に回収済みの branch を確認し、問題がないと
+  転記した run の次の round 等) ときは、人が `LAUNCH.md` §9 で main に回収済みの branch を確認し、問題がないと
   判断してから clone を作り直す。判定範囲と限界は `LAUNCH.md` §3。
   honest-label: 2026-09-24、codex 0.156.0 の preflight launch argv そのままの起動形で、worker から
   `.git/config`・`.git/hooks`・`.git/info`・`.git` 直下の新規 file への書込みと、sandbox 外への書込み拒否を実測した。
@@ -166,9 +177,11 @@ objects / refs / 他 worktree の index / config を worker に開けること�
 - 既に同じ branch の clone があれば (停止からの再開) それをそのまま使う。作り直さない。
 - packet dir は main worktree の root のまま。clone には含まれない (gitignore) ので worker からは
   見えない。`docs/agent-packets.md` の置き場の規則は変わらない。
-- clone の掃除 (`rm -rf <clone path>`) は、commit を main へ fetch し、PR が merge されて packet が
-  `done` になった後。停止 (`blocked`) の間は退避物の復元確認まで消さない。worker の tab
-  (`#<issue>`) も同じ時点で閉じる (所有を確かめた tab だけ。手順は `LAUNCH.md` §11)。
+- clone の片付けは、commit を main へ fetch し、PR が merge されて packet が `done` になった後。停止
+  (`blocked`) の間は退避物の復元確認まで片付けない。worker の tab (`#<issue>`) も同じ時点で閉じる (所有を
+  確かめた tab だけ。手順は `LAUNCH.md` §11)。どちらも、人が後始末を明示したときに後始末モード (§9) で行い、
+  この skill は clone を消さずに退避先 (`<main worktree>-clones/.cleaned/<issue>-<UTC の時刻>`) へ移すだけ
+  (退避先を消すのは人)。
 
 ## 4. brief
 
@@ -283,6 +296,15 @@ draft に留めます (起動の記録は消さずに残す)。
   message があれば上の転記、無ければ orchestrator が `### <日付> orchestrator/claude` で停止理由
   (limit の文言、exit code、`codex.log` 末尾の public-safe な要約) を書く。`次の入口` には続きの
   入り方 (同じ branch を Codex が続ける / 質問に答えて再起動) を書く。
+- **worker の終了後の照合の失敗** (`Blocked at: clone`): 退避の前 (`LAUNCH.md` §8) と空振りの再実行の前 (同 §7)
+  の `.git` の照合が失敗したときは、worker が止まった後の停止なので、上と同じく `state: blocked` にし、orchestrator が
+  `### <日付> orchestrator/claude` で停止理由 (照合の失敗と、照合が止めた `.git` の entry。元の停止 (limit など) が
+  あればその区分も) を書く。clone に git を実行しない (退避もしない)。起動の記録は消さない (`run` は止まった run を
+  指したまま。`blocked` なので、次の session は §1 で回収に入り直さない)。返却の `Next step` には人が clone を調べる
+  手順を書く: 照合の出力に出た `.git` の entry を、clone に git を実行する前に人が確かめ (worker が書き換えた設定・
+  hook でないか)、残す commit や変更を取り出してから clone を消し、再起動を指示する (clone を残したままだと、
+  再起動の再利用の照合 (§2) が同じ snapshot でまた止まる)。起動の前の `clone` (§3) は state を変えない
+  (`RESULT-FORMAT.md` の state の扱い)。
 - **退避**: clone の uncommitted な変更を staged / unstaged / untracked すべて run directory に
   退避し (staged と unstaged は別々の `--binary` patch、untracked は file 名を shell に通さない
   tar の写し)、その path を `結果` に記録する。orchestrator は代わりに commit しない (trailer が
@@ -291,8 +313,11 @@ draft に留めます (起動の記録は消さずに残す)。
   `run` の値を `last_run` に移し、`run` / `tab` を消す (key ごと。#325)。止まっている (`state: blocked`) ときは消さない (`run` は退避物の
   置き場。再起動で新しい run に置き換える)。RUNNING で返すとき、`launch-path` で人に渡すとき、空振りの
   再実行の間も消さない (空振りの再実行では、消さずに新しい run dir の値へ書き換える)。人がその run の破棄を決めたときは、人の指示で消す (`last_run` にも移さない)。
-  消したら `personal-packet list --json --all` で `run` が null になり、完了の転記なら `last_run` がその
-  run dir になったことを確かめる。
+  ただし、`launch-path` の「走っている worker がいる」「tab を特定できない」で止まった未起動の run (run dir に
+  `codex.log` も `done.txt` も無い) の破棄では、`run` を `last_run` に移して `tab` を消す (worker が起動していない
+  ので、その run の `preflight.json` の snapshot は clone の再利用の照合 (§2) にそのまま使える。`LAUNCH.md` §5)。
+  消したら `personal-packet list --json --all` で `run` が null になり、完了の転記と未起動の run の破棄なら
+  `last_run` がその run dir になったことを確かめる。
 - `依頼` は書き換えない。frontmatter の `updated` を更新する。
 
 ## 7. PR (orchestrator の操作)
@@ -346,9 +371,41 @@ merge はしない (人が行う)。
   clone | executor-exit | executor-result | limit | fetch | transcription | trailer | public-safety)、public-safe な `Reason`、
   `Next step` (人が実行する run script の path と run dir / 退避物の path / `依頼` の更新 / limit の
   reset 待ち / 起動の記録の run を確かめる)。worker の本文や secret を停止結果に転記しない。
+- 後始末モード (§9) は `Status: CLEANED` (確認がすべて通り、tab と clone を片付けた、または無かった) か、
+  `Status: BLOCKED` と `Blocked at: cleanup` (前提・tab・clone のどれかを確かめられないときで、tab にも clone にも
+  触らない。確認の後の close / 移動が失敗したときも同じ区分で、何が済んだかを書く)。確かめた前提 (packet の
+  state、PR の状態) と、tab と clone のそれぞれに何をしたか (閉じた・退避先 / 無かった / 残した理由) を書く。
 
 **この skill の完了と停止**: packet を更新して返却した時点で完了 (PR を作った場合は `state: review`
-まで)。review / merge / publish / planning tool の更新はこの skill の外。
+まで)。review / merge / publish / planning tool の更新はこの skill の外。`done` の後の後始末は、人が明示した
+ときだけ後始末モード (§9) で行い、結果を返した時点で完了。
+
+## 9. 後始末 (後始末モード)
+
+人が後始末を明示したとき (「モード」) だけ、`done` の packet の worker の tab を閉じ、clone を退避先へ移します。
+手順は `LAUNCH.md` §11。packet は書きません (`done` の後も `last_run` を残す。`docs/agent-packets.md`)。clone は
+消しません。同じ置き場の下の退避先 (`<main worktree>-clones/.cleaned/<issue>-<UTC の時刻>`。§3 の `<issue>` の
+置き場と名前が衝突しない) へ rename で移すだけで、退避先を消すのは人です。
+
+順番は「前提 → tab の確認 → clone の確認 → すべて通ったら tab を閉じる → clone を退避先へ移す」。確認の段では
+何も閉じず移さない。どれか 1 つでも確かめられなければ、tab にも clone にも触らず `Blocked at: cleanup` で返す
+(人の tab と走っている worker を閉じない)。clone には git を実行せず、中に `cd` もしない (worker が書き換えうる
+`.git` や設定を読ませない)。
+
+- **前提**: packet が `done` (`personal-packet list --json --all` が exit 0 で、その Issue の行の `state` が
+  `done`、起動の記録の `run` が無く、`last_run` / `pr` / `branch` がある) で、PR が merge 済み (PR の metadata の
+  state が merged で、head の branch が packet の `branch`。title / body は読まない)。
+- **tab の確認**: label が `#<issue>` の tab が 0 件なら閉じる tab は無い。1 件なら、§5 と同じ所有の確認
+  (`last_run` の run dir の `tab-id` との一致 + 命名) を通り、その tab のどの pane の foreground にも `codex` が
+  いないこと。
+- **clone の確認**: 置き場の path の lstat が「無い」(`ENOENT`) ときだけ飛ばす (tab だけ閉じる)。権限エラーなどで
+  確かめられないときは「無い」と取り違えず止める。あれば、symlink でない directory で、その実体が `last_run` の
+  `preflight.json` の `clone_root` (最後の run が検査した clone) と一致し、退避先がまだ無く (既に在れば何もしない)、
+  worker の pane (`worker-<issue>[-r<N>]`) の foreground に `codex` がいないこと。
+- **片付ける**: すべて通ったら tab を閉じ、clone を退避先へ rename で移す。tab を閉じられなければ clone を移さず、
+  rename が失敗したら clone をそのまま残して止める (何も消さない)。
+- 消さないので、退避で失われるものは無い (未回収の commit、未 commit の変更、reflog なども退避先に残る)。その
+  ため、未回収の commit や未 commit の変更の確認はしない。disk は人が退避先を消すまで空かない。
 
 ## やってはいけないこと
 
@@ -363,5 +420,7 @@ merge はしない (人が行う)。
 - 2 つ目の worker を同じ session で並行起動する。失敗した pane を閉じる。
 - worker を orchestrator の tab の分割で動かす。packet が `done` になる前に worker の tab を閉じる。
   所有を確かめずに tab を閉じる / 人の tab に pane を足す。
+- 人の明示の指示なしに (resume で `done` を見つけただけで) 後始末する。後始末で clone を消す (退避先へ移すだけ。
+  消すのは人)。後始末の確認をすべて通す前に tab を閉じる・clone を移す。後始末で clone に git を実行する。
 - 起動の記録を書かずに起動する。記録のある Issue を、§1 の確認なしに起動し直す。転記の前や停止中に
   記録を消す。
