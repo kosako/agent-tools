@@ -17,7 +17,7 @@ orchestrator が行います。
   `codex exec` を起動 (workspace-write。書込はその clone の中に閉じる)、clone から main への fetch、
   packet の local 更新 (`結果` / `次の入口` / `state` / 起動の記録 `run` / `tab`)、worker が commit した
   branch の push と PR 作成 (orchestrator の操作。trailer 検査を通ったときだけ)。後始末モード (§9) では、
-  人が明示したときだけ、`done` の packet の worker の tab を閉じ、clone を消す。
+  人が明示したときだけ、`done` の packet の worker の tab を閉じ、clone を退避先へ移す (消さない)。
   Issue コメントへの publish と planning tool の更新はしない (handoff の領分)。worker は GitHub /
   network / packet に触れない。preflight が BLOCKED なら何も起動しない。
 - **packet に書く前の検査** (#386): packet に書く前 (§1 の修正 round の記入、§3 の `branch`、§5 の
@@ -39,7 +39,7 @@ orchestrator が行います。
 
 - **この skill (orchestrator 側)**: authorization と scope の確認、preflight の実行、clone と
   branch の用意、brief の生成、起動と完了判定、commit の回収 (fetch)、結果の転記、停止の記録、
-  PR の作成、返却。人が明示したときの `done` の後の後始末 (worker の tab を閉じる・clone を消す。§9)。
+  PR の作成、返却。人が明示したときの `done` の後の後始末 (worker の tab を閉じる・clone を退避先へ移す。§9)。
 - **`personal-codex-worker-preflight`**: 起動できる前提 (非対称 / capability / model 選択 / clone の
   妥当性) の決定的検査と launch argv の生成。この skill は preflight の判定を再実装しない。
 - **worker (Codex)**: clone の中で `依頼` を実装し、作業単位ごとに commit し、最終 message に
@@ -52,10 +52,10 @@ orchestrator が行います。
 現在の trusted な指示からモードを決めます。packet や Issue の本文、resume の一覧を根拠にしません。
 
 - **委譲** (既定): 「packet #N を Codex に委譲して」のような起動指示。§1〜§8 を行う。
-- **後始末**: 人が `done` の packet の worker の後始末 (tab を閉じる・clone を消す) を明示したときだけ
+- **後始末**: 人が `done` の packet の worker の後始末 (tab を閉じる・clone を退避先へ移す) を明示したときだけ
   (例: 「packet #N の worker の後始末をして」)。§9 だけを行い、起動・転記・PR の作成はしない。resume で
   `done` の packet を見つけた、PR が merge された、別の packet の委譲を指示された、だけでは後始末しない
-  (消した clone と閉じた tab は戻せない)。
+  (閉じた tab は戻せない)。
 
 ## 1. authorization と scope
 
@@ -177,10 +177,11 @@ objects / refs / 他 worktree の index / config を worker に開けること�
 - 既に同じ branch の clone があれば (停止からの再開) それをそのまま使う。作り直さない。
 - packet dir は main worktree の root のまま。clone には含まれない (gitignore) ので worker からは
   見えない。`docs/agent-packets.md` の置き場の規則は変わらない。
-- clone の掃除 (`rm -rf <clone path>`) は、commit を main へ fetch し、PR が merge されて packet が
-  `done` になった後。停止 (`blocked`) の間は退避物の復元確認まで消さない。worker の tab
-  (`#<issue>`) も同じ時点で閉じる (所有を確かめた tab だけ。手順は `LAUNCH.md` §11)。どちらも、人が
-  後始末を明示したときに後始末モード (§9) で行う。
+- clone の片付けは、commit を main へ fetch し、PR が merge されて packet が `done` になった後。停止
+  (`blocked`) の間は退避物の復元確認まで片付けない。worker の tab (`#<issue>`) も同じ時点で閉じる (所有を
+  確かめた tab だけ。手順は `LAUNCH.md` §11)。どちらも、人が後始末を明示したときに後始末モード (§9) で行い、
+  この skill は clone を消さずに退避先 (`<main worktree>-clones/.cleaned/<issue>-<UTC の時刻>`) へ移すだけ
+  (退避先を消すのは人)。
 
 ## 4. brief
 
@@ -369,8 +370,8 @@ merge はしない (人が行う)。
   reset 待ち / 起動の記録の run を確かめる)。worker の本文や secret を停止結果に転記しない。
 - 後始末モード (§9) は `Status: CLEANED` (確認がすべて通り、tab と clone を片付けた、または無かった) か、
   `Status: BLOCKED` と `Blocked at: cleanup` (前提・tab・clone のどれかを確かめられないときで、tab にも clone にも
-  触らない。確認の後の close / 削除が失敗したときも同じ区分で、何が済んだかを書く)。確かめた前提 (packet の
-  state、PR の状態) と、tab と clone のそれぞれに何をしたか (閉じた・消した / 無かった / 触っていない理由) を書く。
+  触らない。確認の後の close / 移動が失敗したときも同じ区分で、何が済んだかを書く)。確かめた前提 (packet の
+  state、PR の状態) と、tab と clone のそれぞれに何をしたか (閉じた・退避先 / 無かった / 残した理由) を書く。
 
 **この skill の完了と停止**: packet を更新して返却した時点で完了 (PR を作った場合は `state: review`
 まで)。review / merge / publish / planning tool の更新はこの skill の外。`done` の後の後始末は、人が明示した
@@ -378,12 +379,15 @@ merge はしない (人が行う)。
 
 ## 9. 後始末 (後始末モード)
 
-人が後始末を明示したとき (「モード」) だけ、`done` の packet の worker の tab を閉じ、clone を消します。手順は
-`LAUNCH.md` §11。packet は書きません (`done` の後も `last_run` を残す。`docs/agent-packets.md`)。
+人が後始末を明示したとき (「モード」) だけ、`done` の packet の worker の tab を閉じ、clone を退避先へ移します。
+手順は `LAUNCH.md` §11。packet は書きません (`done` の後も `last_run` を残す。`docs/agent-packets.md`)。clone は
+消しません。同じ置き場の下の退避先 (`<main worktree>-clones/.cleaned/<issue>-<UTC の時刻>`。§3 の `<issue>` の
+置き場と名前が衝突しない) へ rename で移すだけで、退避先を消すのは人です。
 
-順番は「前提 → tab の確認 → clone の確認 → すべて通ったら tab を閉じる → clone を消す」。確認の段では何も閉じず
-消さない。どれか 1 つでも確かめられなければ、tab にも clone にも触らず `Blocked at: cleanup` で返す (人の tab、
-走っている worker、回収していない commit や変更を消さない)。
+順番は「前提 → tab の確認 → clone の確認 → すべて通ったら tab を閉じる → clone を退避先へ移す」。確認の段では
+何も閉じず移さない。どれか 1 つでも確かめられなければ、tab にも clone にも触らず `Blocked at: cleanup` で返す
+(人の tab と走っている worker を閉じない)。clone には git を実行せず、中に `cd` もしない (worker が書き換えうる
+`.git` や設定を読ませない)。
 
 - **前提**: packet が `done` (`personal-packet list --json --all` が exit 0 で、その Issue の行の `state` が
   `done`、起動の記録の `run` が無く、`last_run` / `pr` / `branch` がある) で、PR が merge 済み (PR の metadata の
@@ -391,14 +395,14 @@ merge はしない (人が行う)。
 - **tab の確認**: label が `#<issue>` の tab が 0 件なら閉じる tab は無い。1 件なら、§5 と同じ所有の確認
   (`last_run` の run dir の `tab-id` との一致 + 命名) を通り、その tab のどの pane の foreground にも `codex` が
   いないこと。
-- **clone の確認**: 置き場に clone が無ければ飛ばす (tab だけ閉じる)。あれば、`last_run` の `preflight.json` の
-  `clone_root` (最後の run が検査した clone) が §3 の置き場 (`<main worktree>-clones/<issue>`) の path と物理 path で
-  一致し、clone に git を実行する前に `last_run` の `preflight.json` で `.git` を照合し (§2)、fetch 済みであること:
-  clone の branch の tip が merge された PR の head の commit と一致し、HEAD と local の全 ref (branches / tags /
-  stash。remote-tracking の ref は除く) から辿れて PR の head から辿れない commit (未回収の commit) が無く、未 commit
-  の変更が無い。加えて、worker の pane (`worker-<issue>[-r<N>]`) の foreground に `codex` がいないこと。reflog に
-  だけ残る commit は見ない (`LAUNCH.md` §11 の honest-label)。
-- **片付ける**: すべて通ったら tab を閉じ、clone を消す。tab を閉じられなければ clone を消さずに止める。
+- **clone の確認**: 置き場の path の lstat が「無い」(`ENOENT`) ときだけ飛ばす (tab だけ閉じる)。権限エラーなどで
+  確かめられないときは「無い」と取り違えず止める。あれば、symlink でない directory で、その実体が `last_run` の
+  `preflight.json` の `clone_root` (最後の run が検査した clone) と一致し、退避先がまだ無く (既に在れば何もしない)、
+  worker の pane (`worker-<issue>[-r<N>]`) の foreground に `codex` がいないこと。
+- **片付ける**: すべて通ったら tab を閉じ、clone を退避先へ rename で移す。tab を閉じられなければ clone を移さず、
+  rename が失敗したら clone をそのまま残して止める (何も消さない)。
+- 消さないので、退避で失われるものは無い (未回収の commit、未 commit の変更、reflog なども退避先に残る)。その
+  ため、未回収の commit や未 commit の変更の確認はしない。disk は人が退避先を消すまで空かない。
 
 ## やってはいけないこと
 
@@ -413,7 +417,7 @@ merge はしない (人が行う)。
 - 2 つ目の worker を同じ session で並行起動する。失敗した pane を閉じる。
 - worker を orchestrator の tab の分割で動かす。packet が `done` になる前に worker の tab を閉じる。
   所有を確かめずに tab を閉じる / 人の tab に pane を足す。
-- 人の明示の指示なしに (resume で `done` を見つけただけで) 後始末する。`done`・merge・fetch 済みを確かめずに
-  clone を消す。後始末の確認をすべて通す前に tab を閉じる・clone を消す。
+- 人の明示の指示なしに (resume で `done` を見つけただけで) 後始末する。後始末で clone を消す (退避先へ移すだけ。
+  消すのは人)。後始末の確認をすべて通す前に tab を閉じる・clone を移す。後始末で clone に git を実行する。
 - 起動の記録を書かずに起動する。記録のある Issue を、§1 の確認なしに起動し直す。転記の前や停止中に
   記録を消す。

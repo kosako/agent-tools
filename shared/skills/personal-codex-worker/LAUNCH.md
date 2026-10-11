@@ -601,13 +601,15 @@ title / body は orchestrator が packet から書く (一時 file は repositor
 
 ## 11. 後始末 (packet が done になったとき。後始末モード)
 
-worker の tab を閉じ、clone を消すのは、PR が merge されて packet が `done` になった後に、人が後始末を明示
-したときだけです (`SKILL.md` の「モード」と §9。時点は `SKILL.md` §3)。`blocked` の間と
-RUNNING の間は、調べられるように残します。packet は書きません。
+worker の tab を閉じ、clone を退避先へ移すのは、PR が merge されて packet が `done` になった後に、人が後始末を
+明示したときだけです (`SKILL.md` の「モード」と §9。時点は `SKILL.md` §3)。`blocked` の間と RUNNING の間は、
+調べられるように残します。packet は書きません。clone は消しません (退避先を消すのは人)。
 
-順番は「前提 (done・merge) → tab の確認 → clone の確認 → すべて通ったら tab を閉じる → clone を消す」です。確認の
-段では何も閉じず消しません。どれか 1 つでも確かめられなければ、tab にも clone にも触らず `Blocked at: cleanup` で
-人に渡します (確認の途中で片方だけ片付けると、残った方を調べる手掛かり (pane の出力、clone の中身) が欠ける)。
+順番は「前提 (done・merge) → tab の確認 → clone の確認 → すべて通ったら tab を閉じる → clone を退避先へ移す」
+です。確認の段では何も閉じず移しません。どれか 1 つでも確かめられなければ、tab にも clone にも触らず
+`Blocked at: cleanup` で人に渡します (確認の途中で片方だけ片付けると、残った方を調べる手掛かり (pane の出力、
+clone の置き場) が欠ける)。clone には git を実行せず、中に `cd` もしません (worker が書き換えうる `.git` や
+設定を読ませない)。
 
 ### 前提 (done と merge)
 
@@ -622,9 +624,8 @@ prev_run=$(printf '%s' "$row" | jq -er '.last_run') || exit 1
 pr=$(printf '%s' "$row" | jq -er '.pr') || exit 1
 branch=$(printf '%s' "$row" | jq -er '.branch') || exit 1
 # PR は metadata だけを読む (title / body は取得しない)
-meta=$(gh pr view "$pr" --json state,headRefName,headRefOid) || exit 1
+meta=$(gh pr view "$pr" --json state,headRefName) || exit 1
 printf '%s' "$meta" | jq -e --arg branch "$branch" '.state == "MERGED" and .headRefName == $branch' >/dev/null || exit 1
-head_oid=$(printf '%s' "$meta" | jq -er '.headRefOid') || exit 1
 ```
 
 (`exit 1` は「その段で止めて、tab にも clone にも触らず `Blocked at: cleanup`」の意。`$issue` は §0 で `\A\d+\z`
@@ -659,56 +660,70 @@ printf '%s' "$tabs" \
 - orchestrator 自身がいる tab (`personal-codex-review` の review pane もここに置かれる) は、記録した
   tab ID と一致せず、pane の名前も `worker-<issue>` の形でないので、閉じる対象にならない。
 
-### clone の確認 (まだ消さない)
+### clone の確認 (まだ移さない)
 
 ```sh
+# path の lstat の種類を出す。ENOENT だけを absent とし、権限エラーなどの失敗は非 0 で止める
+# (test -e は「無い」と「確かめられない」を区別しない)
+lstat_kind() {
+  ruby -e 'begin
+      s = File.lstat(ARGV[0])
+      puts(s.symlink? ? "symlink" : s.directory? ? "dir" : "other")
+    rescue Errno::ENOENT
+      puts "absent"
+    end' "$1"
+}
 clone=<§2 の置き場 (<main worktree>-clones/<issue>) の path の shell literal>
 clone_root=
-if [ -e "$clone" ]; then
-  clone_root=$(jq -er '.clone_root' "$prev_run/preflight.json") || exit 1
-  clone_p=$(cd -P "$clone" && pwd -P) || exit 1
-  [ "$clone_p" = "$clone_root" ] || exit 1    # 最後の run が検査した clone が、置き場の path の実体
-  # clone に git を実行する前に照合する (§3)
-  "$preflight" --verify-git-snapshot "$prev_run/preflight.json" --clone "$clone_root" || exit 1
-  # fetch 済み: clone の branch の tip が merge された PR の head と一致する
-  tip=$(git -C "$clone_root" rev-parse --verify --quiet --end-of-options "refs/heads/${branch}^{commit}") || exit 1
-  [ "$tip" = "$head_oid" ] || exit 1
-  # 未回収の commit が無い: HEAD と local の全 ref (branches / tags / stash) から辿れて、PR の head から辿れない
-  # commit が 1 つも無い。remote-tracking の ref (clone の origin = main の ref) は回収済みとみなして除く
-  extra=$(git -C "$clone_root" rev-list --all --not --remotes --end-of-options "$head_oid") || exit 1
-  [ -z "$extra" ] || exit 1
-  # 未 commit の変更が無い (status の失敗を「空」と取り違えないよう、出力を受けてから見る)
-  st=$(git -C "$clone_root" status --porcelain=v1 --untracked-files=all) || exit 1
-  [ -z "$st" ] || exit 1
-  # worker の pane (worker-<issue>[-r<N>]) のどの foreground にも codex がいない (上の tab の確認で読んだ
-  # $panes を、§5 の手順 1 と同じ読み方で見る)
-fi
+kind=$(lstat_kind "$clone") || exit 1
+case "$kind" in
+  absent) ;;                                   # 置き場に clone は無い (人が既に片付けた)。clone の確認を飛ばす
+  dir)
+    want=$(jq -er '.clone_root' "$prev_run/preflight.json") || exit 1
+    clone_root=$(ruby -e 'puts File.realpath(ARGV[0])' "$clone") || exit 1   # 中に cd しない
+    [ "$clone_root" = "$want" ] || exit 1      # 最後の run が検査した clone が、置き場の path の実体
+    cleaned=${clone_root%/*}/.cleaned          # 退避先は同じ置き場の下 (§2 の <issue> と名前が衝突しない)
+    dest=${cleaned}/${issue}-$(date -u +%Y%m%dT%H%M%SZ)
+    ck=$(lstat_kind "$cleaned") || exit 1
+    case "$ck" in absent|dir) ;; *) exit 1 ;; esac   # .cleaned が symlink や file なら移さない
+    dk=$(lstat_kind "$dest") || exit 1
+    [ "$dk" = absent ] || exit 1               # 退避先が既に在れば何もしない
+    # worker の pane (worker-<issue>[-r<N>]) のどの foreground にも codex がいない (上の tab の確認で読んだ
+    # $panes を、§5 の手順 1 と同じ読み方で見る)
+    ;;
+  *) exit 1 ;;                                 # symlink / file などは置き場の clone と確かめられない
+esac
 ```
 
 (`exit 1` は「その段で止めて、tab にも clone にも触らず `Blocked at: cleanup`」の意。)
 
-- 置き場の path に何も無ければ clone の確認を飛ばす (消す clone は無い。tab の確認が通れば tab だけ閉じる)。
-- `last_run` の `preflight.json` が無い・読めない、`clone_root` が置き場の path の実体と一致しない (別の場所に
-  切った clone を含む)、照合の失敗、branch の tip が PR の head と違う、未回収の commit がある (別の local
-  branch・detached HEAD・stash・tag に、PR の head から辿れない commit がある)、未 commit の変更がある、codex が
-  まだ foreground にいる、`rev-list` / `status` / herdr の一覧や process-info で判定できない、のどれかなら、
-  tab にも clone にも触らず `Blocked at: cleanup` とし、人に「clone を確かめてください」と伝える (照合の失敗なら、
-  clone に git を実行する前に `.git` の entry を調べる。未回収の commit なら、`rev-list` が出した commit を人が
-  取り出してから後始末をやり直す)。回収していない commit や変更、走っている worker の clone を消さない。
-- `rev-list` の確認は、一時 repo で実測した: 別の local branch・detached HEAD・stash・tag に PR の head から
-  辿れない commit があると 1 件以上出て止まり、無いと空で通る。main から来た remote-tracking の branch の commit は
-  出ない。PR の head が clone に無いと exit 128 で止まる。
-- honest-label: 未回収の commit の確認が見るのは、HEAD と `refs/` の下の ref (`--all`) から辿れる commit だけ。
-  reflog にだけ残る commit (消した branch や、HEAD を動かした後の detached の commit、2 つ目以降の stash。stash は
-  1 つでも残っていれば最新の entry で止まる) と、ignored な file は見ない。確認から `rm -rf` までの間の差し替え (同じ user の権限による TOCTOU) は防がない
-  (packet の `check` と同じ立場)。
+- 置き場の path が無い (lstat が `ENOENT`) ときだけ clone の確認を飛ばす (移す clone は無い。tab の確認が通れば
+  tab だけ閉じる)。lstat が権限エラーなどで失敗したときは「無い」と取り違えず止める。
+- 置き場の path が symlink / directory でない、`last_run` の `preflight.json` が無い・読めない、`clone_root` が
+  置き場の path の実体と一致しない (別の場所に切った clone を含む)、`.cleaned` が directory でない、退避先が既に
+  在る・確かめられない、codex がまだ foreground にいる、herdr の一覧や process-info で判定できない、のどれかなら、
+  tab にも clone にも触らず `Blocked at: cleanup` とし、人に「clone を確かめてください」と伝える。
 
 ### 片付ける (確認がすべて通った後)
 
 ```sh
 if [ -n "$tab" ]; then herdr tab close "$tab" || exit 1; fi        # 0 件なら閉じる tab は無い
-if [ -n "$clone_root" ]; then rm -rf -- "$clone_root" || exit 1; fi  # 置き場に無ければ消す clone は無い
+if [ -n "$clone_root" ]; then                                        # 置き場に無ければ移す clone は無い
+  mkdir -p -- "$cleaned" || exit 1
+  ruby -e 'File.rename(ARGV[0], ARGV[1])' "$clone_root" "$dest" || exit 1   # rename(2)。copy に倒さない
+fi
 ```
 
-(`exit 1` は「その段で止めて `Blocked at: cleanup`」の意。tab を閉じられなければ clone を消さない。`rm -rf` が
-途中で失敗したら、残った中身を人が確かめる。どちらも、何が済んだかを返却に書く。)
+(`exit 1` は「その段で止めて `Blocked at: cleanup`」の意。tab を閉じられなければ clone を移さない。rename が
+失敗したら clone はそのまま残る (何も消さない)。どちらも、何が済んだかと退避先を返却に書く。)
+
+- 移動は `mv` ではなく `rename(2)` (Ruby の `File.rename`) で行う。`mv` は移動先が directory だとその中へ移し、別の file system なら
+  copy して元を消す。rename は別の file system (`EXDEV`)・中身のある directory や file が移動先にある・書けない、の
+  どれでも失敗し、元の clone を残す (一時 dir で、中身のある directory・file・書けない `.cleaned` への rename が
+  失敗して元が残ることを実測した)。確認と rename の間に空の directory が移動先に作られた場合だけは、その空の
+  directory と置き換わる (失われる中身は無い)。
+- honest-label: 消さないので、退避で失われるものは無い (commit、reflog、stash、index、未 commit の変更、ignored な
+  file はすべて退避先に残る)。そのため、未回収の commit や未 commit の変更の確認はしない。disk は人が退避先を
+  消すまで空かない。退避先の clone の `.git` は worker が書き換えうるので、人が中で git を実行する前に中身を
+  確かめる。確認から rename までの間の差し替え (同じ user の権限による TOCTOU) は防がない (packet の `check` と
+  同じ立場)。

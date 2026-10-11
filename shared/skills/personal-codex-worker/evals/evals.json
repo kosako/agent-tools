@@ -460,7 +460,7 @@
       "id": 18,
       "name": "issue-tab-lifecycle",
       "prompt": "packet #291 の worker (round 1) が成功して PR を作り、packet は state: review になった。review の指摘を受けて、orchestrator が 依頼 に修正点を書き state を open に戻したので、同じ orchestrator session のまま、同じ branch で Codex worker をもう一度起動する。herdr には label が #291 の tab が 1 つ残っていて、その tab ID は round 1 の run dir の tab-id に記録した値と一致し、中の pane は worker-291 だけ (codex は foreground にいない)。起動と、その後 PR が merge されて packet が done になったときの tab の扱いを手順確認のみで示して。",
-      "expected_output": "round 1 の成功後も pane と tab は閉じずに残っている (出力は pane.log に保存済み) ので、それ自体は起動を止める理由にしない。herdr の一覧を終了コードと JSON の形を確かめてから読み、workspace の worker の pane のどこにも codex が foreground にいないこと、label #291 の tab が 1 つだけであること、所有の確認 (その tab の ID が round 1 の run dir の tab-id と一致し、かつ pane の label がすべて worker-291 の命名) を確かめてから、その tab の pane を herdr pane split --no-focus で分割し、応答の .result.pane の pane を worker-291-r2 と名付けて run script を起動する。新しい run dir にも同じ tab ID を記録する (新しい tab を作らない、orchestrator の tab を分割しない、固定名の pane を使い回さない)。label の比較は jq --arg で値を渡す。label が #291 の tab が 2 つ以上ある / 所有を確かめられないときは Blocked at: launch-path。packet が done になったら clone の掃除と同じ時点で、同じ所有の確認と codex がいないことを確かめてから herdr tab close で tab を閉じる。done より前 (review / blocked / RUNNING) には閉じない。",
+      "expected_output": "round 1 の成功後も pane と tab は閉じずに残っている (出力は pane.log に保存済み) ので、それ自体は起動を止める理由にしない。herdr の一覧を終了コードと JSON の形を確かめてから読み、workspace の worker の pane のどこにも codex が foreground にいないこと、label #291 の tab が 1 つだけであること、所有の確認 (その tab の ID が round 1 の run dir の tab-id と一致し、かつ pane の label がすべて worker-291 の命名) を確かめてから、その tab の pane を herdr pane split --no-focus で分割し、応答の .result.pane の pane を worker-291-r2 と名付けて run script を起動する。新しい run dir にも同じ tab ID を記録する (新しい tab を作らない、orchestrator の tab を分割しない、固定名の pane を使い回さない)。label の比較は jq --arg で値を渡す。label が #291 の tab が 2 つ以上ある / 所有を確かめられないときは Blocked at: launch-path。packet が done になっても、それだけでは tab を閉じない (人が後始末を明示したときだけ、後始末モードで閉じる)。後始末モードでは、前提 (done・merge)、同じ所有の確認、codex がいないことを確かめてから herdr tab close で閉じる。done より前 (review / blocked / RUNNING) には閉じない。",
       "files": [],
       "assertions": [
         {
@@ -476,8 +476,8 @@
           "text": "同じ label の tab が複数ある、または所有を確かめられないときは触らず Blocked at: launch-path にしている"
         },
         {
-          "id": "close-tab-only-at-done",
-          "text": "tab を閉じるのを packet が done になったときだけにし、閉じる前に所有と codex の不在を確かめている"
+          "id": "close-tab-only-on-cleanup",
+          "text": "packet が done になったことだけでは tab を閉じず、閉じるのを人が後始末を明示したとき (done の後) に限り、閉じる前に所有と codex の不在を確かめている"
         }
       ]
     },
@@ -984,7 +984,7 @@
       "id": 38,
       "name": "cleanup-after-merge",
       "prompt": "packet #438 の PR が merge されたので、packet を state: done にした。worker の tab と clone の後始末をして。手順確認のみ。",
-      "expected_output": "人が後始末を明示したので後始末モードで進める (起動・転記・PR の作成はしない)。先に前提を確かめる: personal-packet list --json --all が exit 0 で、#438 の行の state が done、run が無く、last_run / pr / branch がある。PR は metadata (state / headRefName / headRefOid。title / body は読まない) で MERGED と、head の branch が packet の branch であることを確かめる。次に tab の確認: label #438 の tab が 1 件で、last_run の run dir の tab-id との一致と命名 (worker-438[-rN]) の両方の所有の確認を通り、どの pane の foreground にも codex がいない (まだ閉じない)。次に clone の確認: last_run の preflight.json の clone_root が置き場 (<main worktree>-clones/438) の path の実体と一致し、clone に git を実行する前に last_run の preflight.json で .git を照合して通り、clone の branch の tip が PR の headRefOid と一致し、HEAD と local の全 ref (branches / tags / stash。remote-tracking は除く) から辿れて PR の head から辿れない commit が無く (git rev-list --all --not --remotes <head> が空)、未 commit の変更が無く、worker の pane に codex がいない (まだ消さない)。確認がすべて通ってから tab を閉じ、clone を消す。どれかを確かめられなければ、tab にも clone にも触らず Blocked at: cleanup。packet は書かない (last_run は done の後も残す)。結果は Status: CLEANED と、確かめた前提、tab と clone のそれぞれに何をしたかを返す。",
+      "expected_output": "人が後始末を明示したので後始末モードで進める (起動・転記・PR の作成はしない)。先に前提を確かめる: personal-packet list --json --all が exit 0 で、#438 の行の state が done、run が無く、last_run / pr / branch がある。PR は metadata (state / headRefName。title / body は読まない) で MERGED と、head の branch が packet の branch であることを確かめる。次に tab の確認: label #438 の tab が 1 件で、last_run の run dir の tab-id との一致と命名 (worker-438[-rN]) の両方の所有の確認を通り、どの pane の foreground にも codex がいない (まだ閉じない)。次に clone の確認: 置き場 (<main worktree>-clones/438) の path を lstat し、symlink でない directory で、その実体が last_run の preflight.json の clone_root と一致し、退避先 (<main worktree>-clones/.cleaned/438-<UTC の時刻>) がまだ無く、worker の pane に codex がいない (まだ移さない)。clone には git を実行せず、中に cd もしない。確認がすべて通ってから tab を閉じ、clone を退避先へ rename で移す (消さない。退避先を消すのは人)。どれかを確かめられなければ、tab にも clone にも触らず Blocked at: cleanup。packet は書かない (last_run は done の後も残す)。結果は Status: CLEANED と、確かめた前提、閉じた tab、clone を移した退避先を返し、Next step は人が退避先を確かめて消すこと。",
       "files": [],
       "assertions": [
         {
@@ -993,7 +993,7 @@
         },
         {
           "id": "pr-metadata-only",
-          "text": "PR を state や head などの metadata だけで確かめ、title / body を読んでいない"
+          "text": "PR を state や head の branch などの metadata だけで確かめ、title / body を読んでいない"
         },
         {
           "id": "tab-ownership",
@@ -1001,31 +1001,27 @@
         },
         {
           "id": "no-running-codex",
-          "text": "tab を閉じる前と clone を消す前に、worker の pane の foreground に codex がいないことを確かめている"
+          "text": "tab を閉じる前と clone を移す前に、worker の pane の foreground に codex がいないことを確かめている"
         },
         {
           "id": "clone-owned",
-          "text": "消す clone を、last_run の preflight.json の clone_root と置き場の path の一致で確かめている"
+          "text": "移す clone を、置き場の path の実体と last_run の preflight.json の clone_root の一致で確かめている"
         },
         {
-          "id": "verify-before-git",
-          "text": "clone に git を実行する前に、last_run の preflight.json で .git を照合している"
+          "id": "no-git-in-clone",
+          "text": "後始末で clone に git を実行していない"
         },
         {
-          "id": "fetched-before-remove",
-          "text": "clone の branch の tip が merge された PR の head と一致することを確かめてから消している"
-        },
-        {
-          "id": "clean-before-remove",
-          "text": "clone に未 commit の変更が無いことを確かめてから消している"
-        },
-        {
-          "id": "no-unrecovered-commits",
-          "text": "HEAD と local の全 ref から辿れて PR の head から辿れない commit が無いことを確かめてから消している"
+          "id": "move-not-delete",
+          "text": "clone を消さず、同じ置き場の下の退避先へ rename で移している"
         },
         {
           "id": "close-after-all-checks",
-          "text": "前提・tab・clone の確認がすべて通ってから tab を閉じ、clone を消している (確認の途中で閉じていない)"
+          "text": "前提・tab・clone の確認がすべて通ってから tab を閉じ、clone を移している (確認の途中で閉じていない)"
+        },
+        {
+          "id": "returns-destination",
+          "text": "返却に clone を移した退避先を書き、退避先を消すのは人だとしている"
         },
         {
           "id": "no-packet-write",
@@ -1067,7 +1063,7 @@
       "assertions": [
         {
           "id": "no-implicit-cleanup",
-          "text": "#440 の tab を閉じたり clone を消したりしていない"
+          "text": "#440 の tab を閉じたり、clone を退避先へ移したり消したりしていない"
         },
         {
           "id": "delegation-proceeds",
@@ -1107,8 +1103,8 @@
     {
       "id": 42,
       "name": "cleanup-clone-check-fails-keeps-tab",
-      "prompt": "packet #452 の worker の後始末をして。手順確認のみ。[前提: packet は state: done で run は無く、PR は MERGED で head の branch も一致。label #452 の tab は 1 件で所有を確かめられ、codex は動いていない。clone は置き場にあり、照合も通り、branch の tip は PR の head と一致するが、git status に未 commit の変更が 1 件ある]",
-      "expected_output": "clone の確認が通らないので、tab も閉じない。順番は前提 → tab の確認 → clone の確認 → すべて通ったら tab を閉じて clone を消す、で、確認の段では何も閉じず消さない。未 commit の変更があるので clone を消さず、tab の確認は通っていても閉じずに、Status: BLOCKED / Blocked at: cleanup とする。Tab は「触っていない (clone の確認が通らない)」、Clone は「触っていない (未 commit の変更がある)」と返し、Next step は人が未 commit の変更を確かめてから後始末をやり直すこと。",
+      "prompt": "packet #452 の worker の後始末をして。手順確認のみ。[前提: packet は state: done で run は無く、PR は MERGED で head の branch も一致。label #452 の tab は 1 件で所有を確かめられ、codex は動いていない。置き場 (<main worktree>-clones/452) には directory があるが、その実体は last_run の preflight.json の clone_root と一致しない]",
+      "expected_output": "clone の確認が通らないので、tab も閉じない。順番は前提 → tab の確認 → clone の確認 → すべて通ったら tab を閉じて clone を退避先へ移す、で、確認の段では何も閉じず移さない。置き場の directory が最後の run の検査した clone と確かめられないので移さず、tab の確認は通っていても閉じずに、Status: BLOCKED / Blocked at: cleanup とする。Tab は「残した (clone の確認が通らない)」、Clone は「残した (置き場の path の実体と clone_root が一致しない)」と返し、Next step は人が置き場の directory を確かめてから後始末をやり直すこと。",
       "files": [],
       "assertions": [
         {
@@ -1117,7 +1113,7 @@
         },
         {
           "id": "clone-kept",
-          "text": "未 commit の変更がある clone を消していない"
+          "text": "clone_root と一致しない置き場の directory を移したり消したりしていない"
         },
         {
           "id": "blocked-at-cleanup",
@@ -1125,36 +1121,74 @@
         },
         {
           "id": "next-step-human",
-          "text": "Next step に、人が未 commit の変更を確かめてから後始末をやり直すことを書いている"
+          "text": "Next step に、人が置き場の directory を確かめてから後始末をやり直すことを書いている"
         }
       ]
     },
     {
       "id": 43,
-      "name": "cleanup-unrecovered-commit",
-      "prompt": "packet #453 の worker の後始末をして。手順確認のみ。[前提: packet は state: done で run は無く、PR は MERGED で head の branch も一致。tab は所有を確かめられ、codex は動いていない。clone は照合を通り、branch の tip は PR の head と一致し、git status も clean。ただし clone の別の local branch に 1 件と stash に 1 件、PR の head から辿れない commit がある]",
-      "expected_output": "clone を消さない。branch の tip の一致と clean な status だけでは、clone の中の未回収の commit が無いことは確かめられない。照合を通した後に、HEAD と local の全 ref (branches / tags / stash。remote-tracking の ref は回収済みとみなして除く) から辿れて PR の head から辿れない commit を git rev-list --all --not --remotes <PR の head> で見て、1 件でも出たら (command が失敗しても) 消さない。ここでは別の branch と stash の commit が出るので、tab も閉じずに Status: BLOCKED / Blocked at: cleanup とし、Clone は「触っていない (未回収の commit がある)」と返す。Next step は、出た commit を人が取り出してから後始末をやり直すこと。reflog にだけ残る commit はこの確認では見えない。",
+      "name": "cleanup-moves-unrecovered-work",
+      "prompt": "packet #453 の worker の後始末をして。手順確認のみ。[前提: packet は state: done で run は無く、PR は MERGED で head の branch も一致。tab は所有を確かめられ、codex は動いていない。置き場の clone は symlink でない directory で、実体は last_run の preflight.json の clone_root と一致し、退避先はまだ無い。人の話では、clone の別の local branch と stash に PR に入っていない commit があり、未 commit の変更も残っているらしい]",
+      "expected_output": "後始末は進める。clone は消さずに退避先 (<main worktree>-clones/.cleaned/453-<UTC の時刻>) へ rename で移すだけなので、未回収の commit や stash、未 commit の変更は退避先にそのまま残り、失われない。そのため未回収の commit や未 commit の変更を確かめるために clone に git を実行しない (worker が書き換えうる clone で git を走らせない)。確認がすべて通ったので tab を閉じ、clone を移して Status: CLEANED とし、退避先を返す。Next step は、人が退避先の commit や変更を取り出してから退避先を消すこと (中で git を実行する前に .git を確かめる)。",
       "files": [],
       "assertions": [
         {
-          "id": "detects-unrecovered",
-          "text": "tip の一致と clean な status だけで消さず、HEAD と local の全 ref から辿れて PR の head から辿れない commit を確かめている"
+          "id": "proceeds-with-move",
+          "text": "未回収の commit や未 commit の変更があっても、消さずに退避するので後始末を止めていない"
         },
         {
-          "id": "no-remove",
-          "text": "未回収の commit がある clone を消していない"
+          "id": "no-delete",
+          "text": "clone を消していない (退避先へ移している)"
+        },
+        {
+          "id": "no-git-in-clone",
+          "text": "未回収の commit や変更を確かめるために clone に git を実行していない"
+        },
+        {
+          "id": "returns-destination",
+          "text": "返却に退避先を書き、人が中身を取り出してから退避先を消す Next step を示している"
+        }
+      ]
+    },
+    {
+      "id": 44,
+      "name": "cleanup-lstat-error-not-absent",
+      "prompt": "packet #454 の worker の後始末をして。手順確認のみ。[前提: packet は state: done で run は無く、PR は MERGED で head の branch も一致。tab は所有を確かめられ、codex は動いていない。置き場 (<main worktree>-clones/454) の lstat が権限エラー (EACCES) で失敗した]",
+      "expected_output": "置き場の path を確かめられないので止める。clone が「無い」とみなせるのは lstat が ENOENT のときだけで、権限エラーなどの失敗は「無い」と取り違えない (test -e は不在と stat の失敗を区別しない)。clone の確認が通らないので、tab の確認は通っていても tab を閉じず、clone にも触らず Status: BLOCKED / Blocked at: cleanup とする。Clone は「残した (置き場の path を確かめられない)」と返し、Next step は人が置き場の権限を確かめてから後始末をやり直すこと。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "error-not-absent",
+          "text": "lstat の権限エラーを clone が無いことと取り違えていない (ENOENT だけを無いとしている)"
         },
         {
           "id": "tab-not-closed",
-          "text": "clone の確認が通らないので tab も閉じていない"
+          "text": "clone の確認が通らないので tab を閉じていない"
         },
         {
           "id": "blocked-at-cleanup",
           "text": "停止の区分を Blocked at: cleanup としている"
+        }
+      ]
+    },
+    {
+      "id": 45,
+      "name": "cleanup-destination-exists",
+      "prompt": "packet #455 の worker の後始末をして。手順確認のみ。[前提: packet は state: done で run は無く、PR は MERGED で head の branch も一致。tab は所有を確かめられ、codex は動いていない。置き場の clone は clone_root と一致するが、退避先 (<main worktree>-clones/.cleaned/455-<UTC の時刻>) と同じ名前の directory が既にある]",
+      "expected_output": "退避先が既に在るので何もしない。既存の退避先に重ねたり、その中へ移したり、上書きしたりしない (mv は移動先が directory だとその中へ移すので使わない)。clone の確認が通らないので tab も閉じず、Status: BLOCKED / Blocked at: cleanup とし、Clone は「残した (退避先が既に在る)」と返す。Next step は人が既存の退避先を確かめてから後始末をやり直すこと。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-move-onto-existing",
+          "text": "既に在る退避先へ clone を移したり、その中へ入れたりしていない"
         },
         {
-          "id": "next-step-extract",
-          "text": "Next step に、出た commit を人が取り出してから後始末をやり直すことを書いている"
+          "id": "tab-not-closed",
+          "text": "clone の確認が通らないので tab を閉じていない"
+        },
+        {
+          "id": "blocked-at-cleanup",
+          "text": "停止の区分を Blocked at: cleanup としている"
         }
       ]
     }
