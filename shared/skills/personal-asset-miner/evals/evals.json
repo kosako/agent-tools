@@ -29,7 +29,7 @@
       "id": 2,
       "name": "taxonomy-and-dedup",
       "prompt": "ログから資産化候補を分類して出して。",
-      "expected_output": "各候補を skill / 運用ルール(CLAUDE.md)/ memory / reference・script の 4 種別で分類し、既存カタログ(docs/register-catalog.md・shared/skills 等)と dedup したうえで優先度ランク(🔴/🟡/⚪)と推奨受け皿を付ける。",
+      "expected_output": "各候補を skill / 運用ルール(CLAUDE.md)/ memory / reference・script の 4 種別で分類し、既存カタログ(docs/skill-routing-contracts.md の Runtime inventory・shared/skills 等)と dedup したうえで優先度ランク(🔴/🟡/⚪)と推奨受け皿を付ける。",
       "files": [],
       "assertions": [
         { "id": "four-taxonomy", "text": "4 種別(skill/運用ルール/memory/reference・script)で分類している" },

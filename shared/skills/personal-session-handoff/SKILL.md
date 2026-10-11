@@ -90,12 +90,25 @@ CLI / file write を行いません。
 - frontmatter の `updated` を今の日時にする。`state` を実態に合わせるのも worker (`review` = PR を
   出して review 待ち / `blocked` = 質問待ち・limit 到達・CI 赤 / `open` = 作業中)。`done` は
   orchestrator が入れる。`依頼` は worker も reviewer も書き換えない (曖昧なら `結果` に質問を書く)。
-- 例外は orchestrator として Codex worker に委譲した session (規約の「worker 委譲との関係」)。
-  worker は packet に書けないので、orchestrator が worker の最終 message から `結果` (見出しは
-  `worker/codex`) と `次の入口` (最終 message の「次の 1 アクション」) を転記し、PR を出したら `pr:` と
-  `state: review` を入れる。worker が止まっている (質問・失敗・limit) なら最終 message の有無に
-  かかわらず `state: blocked` にし、最終 message があれば転記、無ければ `orchestrator/claude` の
-  見出しで停止理由を書き、`次の入口` に続きの入り方を入れる。
+- 例外は orchestrator として Codex worker に委譲した session。worker は packet に書けないので、次を
+  orchestrator が書く (正本は `docs/agent-packets.md` の書き手の表・`state` の規則・「worker 委譲との関係」、
+  手順は `personal-codex-worker`):
+  - 完了の転記: worker の最終 message から `結果` (見出しは `worker/codex`) と `次の入口` (最終 message の
+    「次の 1 アクション」) を写し、`run` を `last_run` に移して `tab` を消す (#325)。PR を出したら `pr:` と
+    `state: review` を入れる。
+  - 停止: worker が止まっている (質問・失敗・limit) なら最終 message の有無にかかわらず
+    `state: blocked` にし、最終 message があれば転記、無ければ `orchestrator/claude` の見出しで停止理由を
+    書き、`次の入口` に続きの入り方を入れる。worker の終了後の clone の照合の失敗も `state: blocked` にし、
+    `orchestrator/claude` の見出しで停止理由を書く。どちらも `run` / `tab` は消さない。
+  - 転記の後の停止: 回収・trailer 検査 (#412)・公開する内容の gate (#413) で止まったら、push も PR 作成も
+    せずに `state: blocked` にし、`orchestrator/claude` の見出しで停止の区分と理由を書く (`次の入口` は
+    触らない)。
+  - 修正 round: review の指摘を直すとき、または転記の後に受け入れ条件を満たさないと判断したとき (#412) は、
+    `依頼` に「修正 round N」の項を足し、`次の入口` を「修正 round N (`依頼` の該当項) を実装する」に上書き
+    する。review の修正 round では同じ時点で `state` を `open` に戻し、修正を push したら `review` に戻す
+    (#325)。
+  - 起動の記録: 起動の前に `run` / `tab` を書く (`last_run` は同時に消す)。`blocked` からの再起動では、
+    質問があればその回答を `依頼` に書いてから、記録を書くのと同じ書き込みで `state` を `open` に戻す (#412)。
 - packet が無い Issue は作らない (起こすのは orchestrator の役目)。必要なら「packet を起こすか」を
   次の入口に書く。
 
