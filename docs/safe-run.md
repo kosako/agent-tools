@@ -70,7 +70,7 @@ personal-safe-run --max-footprint-mb N --max-seconds N [--report FILE] -- <comma
 | `signal` | reason が `interrupted` のとき、最初に受けた signal の名前 (`TERM` など)。他は `null` |
 | `exit_status` | safe-run の exit code |
 | `command_exit` / `command_signal` | 回収した leader の exit code / 終わらせた signal の番号 (どちらか一方。回収できなければ両方 `null`) |
-| `peak_footprint_mib` | 完全に測れた巡回の合計の最大 (MiB、小数 1 桁)。一度も測れなければ `null` |
+| `peak_footprint_mib` | 完全に測れた巡回の合計の最大 (MiB、小数 1 桁)。監視が想定外の error で止まったとき (`monitor`) も、それまでの最大を出す。一度も測れなければ `null` |
 | `elapsed_seconds` | 起動から leader の終了の観測 (または止める判断) まで |
 | `leftover_killed` | leader が自分で終わった後に残っていて止めた process の数 |
 | `cleanup_complete` | group を止め切って leader を回収できたか |

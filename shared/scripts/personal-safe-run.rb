@@ -69,8 +69,8 @@
 #    "signal":null|"TERM"|...,"exit_status":<safe-run の exit code>,"command_exit":int|null,
 #    "command_signal":int|null,"peak_footprint_mib":number|null,"elapsed_seconds":number,
 #    "leftover_killed":int,"cleanup_complete":bool}
-# peak は完全に測れた巡回の合計の最大 (一度も測れなければ null)。elapsed は起動から leader の終了の観測 (または
-# 止める判断) まで。
+# peak は完全に測れた巡回の合計の最大 (監視が想定外の error で止まったときも、それまでの最大。一度も測れなければ
+# null)。elapsed は起動から leader の終了の観測 (または止める判断) まで。
 #
 # 限界 (docs/safe-run.md): group を抜けた子 (setsid / setpgid) は追えない (leader が抜けると列挙の失敗として
 # monitor で止まる)。safe-run への SIGKILL / SIGSTOP は捕捉できない。setuid の program は計測できず monitor で
@@ -424,30 +424,30 @@ module SafeRun
     IO.select([reader], nil, nil, seconds)
   end
 
+  # peak (完全に測れた巡回の合計の最大) は @peak に持つ (監視が例外で止まったときも supervise が report に出す)。
   def watch(leader, options, reader, started)
     deadline = started + options.max_seconds
     limit = options.max_footprint_mb * MIB
     streak = 0
-    peak = nil
     loop do
       wait_tick(reader, INTERVAL)
-      return Outcome.new("interrupted", @signal, now - started, peak) if @signal
-      return Outcome.new(nil, nil, now - started, peak) if leader_exited?(leader)
-      return Outcome.new("time", nil, now - started, peak) if now >= deadline
+      return Outcome.new("interrupted", @signal, now - started, @peak) if @signal
+      return Outcome.new(nil, nil, now - started, @peak) if leader_exited?(leader)
+      return Outcome.new("time", nil, now - started, @peak) if now >= deadline
 
       total = measure_group(leader)
       if total.nil?
         streak += 1
-        return Outcome.new("monitor", nil, now - started, peak) if streak >= INCOMPLETE_LIMIT
+        return Outcome.new("monitor", nil, now - started, @peak) if streak >= INCOMPLETE_LIMIT
 
         next
       end
       streak = 0
-      peak = total if peak.nil? || total > peak
+      @peak = total if @peak.nil? || total > @peak
       next unless total > limit
-      return Outcome.new(nil, nil, now - started, peak) if leader_exited?(leader)
+      return Outcome.new(nil, nil, now - started, @peak) if leader_exited?(leader)
 
-      return Outcome.new("footprint", nil, now - started, peak, total)
+      return Outcome.new("footprint", nil, now - started, @peak, total)
     end
   end
 
@@ -599,11 +599,13 @@ module SafeRun
     end
 
     outcome = nil
+    @peak = nil
     begin
       outcome = watch(leader, options, reader, started)
     rescue StandardError => e
       note("監視を続けられないので command の process group を止めます (#{e.class})")
-      outcome = Outcome.new("monitor", nil, now - started, nil)
+      # それまでに完全に測れた巡回の peak を report に残す (一度も測れなければ nil)。
+      outcome = Outcome.new("monitor", nil, now - started, @peak)
     ensure
       cleanup = finish(leader, outcome ? outcome.reason : "monitor")
     end
