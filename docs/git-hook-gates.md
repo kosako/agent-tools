@@ -23,11 +23,12 @@ enforcement boundary ではない:
 
 hard な床は従来どおりここに載せない (credential 隔離 / egress / CI)。公開する内容の検査は
 公開の前に置く (#413): 差分は pre-commit、commit message は commit-msg (public-safety の
-`--commit-msg`)、Issue / PR / コメントの本文は投稿の前の public-safety の `--stdin` (各 skill と
-運用 instruction)。push の前には、push で公開される累積差分・各 commit の差分と message・branch 名を
-`--stdin` に通す (#413。hook ではなく手順の側で、各 skill と運用 instruction。pre-push の stage には gate を
-置かない)。CI には置かない (push した時点で public になるので、公開前の確認にならない)。トレーラ喪失
-(squash / rebase) への対処は消費側 preflight (#202 の routing-preflight) の領分。
+`--commit-msg`)、Issue / PR / コメントの題名と本文は投稿の前の public-safety の `--stdin` (各 skill と
+運用 instruction)。push の前には、push で公開される累積差分・各 commit の差分と message・branch 名と、
+その push で作る PR の題名と本文をまとめて `--stdin` に通す (#413。hook ではなく手順の側で、各 skill と
+運用 instruction。pre-push の stage には gate を置かない)。CI には置かない (push した時点で public に
+なるので、公開前の確認にならない)。トレーラ喪失 (squash / rebase) への対処は消費側 preflight (#202 の
+routing-preflight) の領分。
 
 ## 構成と配線(所有分界)
 
