@@ -32,7 +32,10 @@ secret access / external send`。
 **断ち方の原則**: trifecta は **脚を 1 本でも構造的に外せば崩れる**。本 Phase の本命は脚 1+2 を
 同時に外す **隔離** — untrusted content を読む session を「secret を持たない・write できない」
 別 session に隔離し、構造化 metadata のみ親へ渡す。読む側に**盗む対象も privileged action も
-無い**ので、injection が刺さっても成立しない。
+無い**ので、injection が刺さっても成立しない。これは隔離の設計の目標で、本 Phase で hard に保証するのは
+P0-B (credential 隔離) の射程、つまり管理された invocation の既定 credential 探索が空であることまで。任意
+コマンドによる escape を塞ぐ OS sandbox tier は未実装で、今はどの hard 層もそれを塞いでいない (下の
+「実装 harness のスコープ」)。
 
 ## 防御層と強度ラベル (hard / best-effort / steering を偽らない)
 
