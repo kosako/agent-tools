@@ -66,7 +66,8 @@ module Sync
     # --prune: catalog に載らなくなった deployed asset の撤去 plan を作る (#154)。
     # build --prune (generated/ の orphan 削除) の sync 版。削除は 3 条件をすべて満たす
     # ものだけ (marker-gated delete): 許可 namespace 内 (skills/personal-* /
-    # agent-tools/scripts/personal-*) + agent-tools 管理 marker が tool / name と一致 (skill は撤去の途中で退避した
+    # agent-tools/scripts/personal-* / plugins/personal-*.js) +
+    # agent-tools 管理 marker が tool / name と一致 (skill は撤去の途中で退避した
     # marker も含む。resumed_removal?) +
     # catalog に同 target + name + artifact_kind の entry が無い。kind 単位で照合するのは
     # build --prune と同じ判断 (kind 変更後の stale 配置物を保護して残さない)。
@@ -450,7 +451,7 @@ module Sync
     end
 
     # registered でない entry の skip 表示に使う target path。
-    # path 解決は ArtifactTargets.target_path が単一 source (skill / instruction 共通)。
+    # path 解決は ArtifactTargets.target_path が単一 source (全 kind 共通)。
     def target_path(tool, name, kind)
       ArtifactTargets.target_path(@homes.fetch(tool), tool, name, kind)
     end

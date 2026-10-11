@@ -28,5 +28,6 @@ source:
 summary: >-
   global core.hooksPath から呼ばれる git hook の入口。stage (pre-commit / commit-msg) ごとの
   personal gate を実行し、全 pass なら repo 自身の hooks/<stage> に chain して「置換」を
-  「合成」に変える (#201 裁定)。best-effort guardrail で --no-verify 等で迂回可能
+  「合成」に変える (#201 裁定)。gate の無い stage (git の既知の hook 名) は chain だけを行う素通し
+  (#430 の 3。素通しに使えない stage と未知の名前は exit 2)。best-effort guardrail で --no-verify 等で迂回可能
   (docs/git-hook-gates.md)。登録・配線 (shim + git config) は dotfiles 所有。

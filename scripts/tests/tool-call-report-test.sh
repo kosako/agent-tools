@@ -331,6 +331,9 @@ env TZ=UTC0 HOME="$tmp/home" XDG_STATE_HOME="$tmp/xdg" AGENT_TOOLS_TOOL_CALL_REC
 row "$md" "| call 数 | 1 |" "AGENT_TOOLS_TOOL_CALL_RECORD_DIR 既定の入力先 (HOME / XDG より優先)"
 status=$(status_of env TZ=UTC0 HOME="$tmp/home" AGENT_TOOLS_TOOL_CALL_RECORD_DIR=relative/dir ruby "$src" 2> "$tmp/err")
 [ "$status" = 1 ] || fail "relative AGENT_TOOLS_TOOL_CALL_RECORD_DIR should exit 1, got $status"
+# 決められないときの案内は env も挙げる (相対 path の env は HOME / XDG_STATE_HOME を直しても解けない。記録 hook の文と揃える)
+grep -qF "AGENT_TOOLS_TOOL_CALL_RECORD_DIR" "$tmp/err" || fail "the default-location error should name AGENT_TOOLS_TOOL_CALL_RECORD_DIR: $(cat "$tmp/err")"
+grep -q "absolute" "$tmp/err" || fail "the default-location error should say the location must be absolute: $(cat "$tmp/err")"
 
 # ---- 読めない file: warn して続け、1 つも読めなければ exit 1 ------------------------------------------
 status=$(status_of run_report --file "$tmp/none.jsonl")
@@ -368,6 +371,7 @@ run_report --help > "$tmp/out" || fail "--help should exit 0"
 grep -q "^usage: personal-tool-call-report" "$tmp/out" || fail "--help should print usage on stdout"
 grep -q -- "--help|-h" "$tmp/out" || fail "usage should name -h as well as --help"
 [ ! -s "$tmp/err" ] || fail "--help should be silent on stderr"
+grep -qF '$AGENT_TOOLS_TOOL_CALL_RECORD_DIR/claude-code.jsonl' "$tmp/out" || fail "--help should name AGENT_TOOLS_TOOL_CALL_RECORD_DIR in the default input"
 run_report -h > "$tmp/out" || fail "-h should exit 0"
 grep -q "^usage: personal-tool-call-report" "$tmp/out" || fail "-h should print usage on stdout"
 # 不正な option は入力を読む前に止まる (file が無くても exit 2)
