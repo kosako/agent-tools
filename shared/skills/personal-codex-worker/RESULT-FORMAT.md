@@ -38,13 +38,16 @@ Blocked at: authorization | launch-record | preflight | launch-path | clone | ex
 Reason: <public-safe な停止理由>
 Packet: #<issue> — <state の扱い (下記)> / 結果 "### <日付> orchestrator/claude" (書いた場合) / 起動の記録は残す
 Run dir: <path> / 退避: <path> (あれば)
-Next step: <人が実行する run script の shell literal と run dir | 依頼の更新 | limit の reset 待ち (reset 時刻) | 記録された run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決める (launch-record)>
+Next step: <人が実行する run script の shell literal と run dir | 依頼の更新 | limit の reset 待ち (reset 時刻) | 記録された run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決める (launch-record) | 照合が止めた .git の entry を clone に git を実行する前に人が調べ、残す commit・変更を取り出してから clone を消し、再起動を指示する (worker の終了後の clone)>
 ```
 
-state の扱い (#412): 止まったことを確かめた停止 (`executor-exit` / `executor-result` / `limit` / `transcription`) は
-`state: blocked`。起動の前の停止 (`authorization` / `preflight` / `clone`、記録を書けなかった `launch-record`) と、
-記録を書いた後の人手実行待ち (`launch-path`)・生存を確かめられない (`launch-record`) は **state を変えない**
-(人が外で起動した worker や、動いているかもしれない worker を「停止中」にしないため)。
+state の扱い (#412): 止まったことを確かめた停止 (`executor-exit` / `executor-result` / `limit` / `transcription`、
+worker の終了後の `clone`) は `state: blocked`。worker の終了後の `clone` は、退避の前 (`LAUNCH.md` §8) と空振りの
+再実行の前 (同 §7) の `.git` の照合の失敗で、停止理由は orchestrator が `結果` に書く (`SKILL.md` §6)。起動の前の停止
+(`authorization` / `preflight`、起動の前の `clone` (clone の作成・branch・commit 前提、再起動・修正 round での
+再利用の照合)、記録を書けなかった `launch-record`) と、記録を書いた後の人手実行待ち (`launch-path`)・生存を
+確かめられない (`launch-record`) は **state を変えない** (人が外で起動した worker や、動いているかもしれない worker を
+「停止中」にしないため)。
 
 転記の後に止まった場合 (回収・trailer 検査・公開する内容の gate。`SKILL.md` §7):
 
@@ -56,6 +59,21 @@ Packet: #<issue> — 結果 "### <日付> worker/codex" を転記済み / 結果
 Run dir: <path>
 Next step: <fetch の失敗を人が調べる | author が交代するなら新 branch + 新 PR に分ける | origin/main を人が確かめる | gate が止めた行を直す、または警告を人が確かめる>
 ```
+
+後始末モード (`SKILL.md` §9。人が明示したときだけ。packet は書かない):
+
+```text
+Status: CLEANED | BLOCKED
+Blocked at: cleanup (BLOCKED のとき)
+Reason: <前提を確かめられない理由、または残したものとその理由 (BLOCKED のとき)>
+Packet: #<issue> — state: done / PR #<number>: merged (確かめた前提) / packet は書かない (last_run は残す)
+Tab: #<issue> を閉じた | 無かった | 残した (<所有を確かめられない | codex が動いている | 一覧・process-info で判定できない | 2 件以上 | 前提を確かめられないので触っていない>)
+Clone: <clone path> を消した | 無かった | 残した (<last_run の preflight.json を読めない | 置き場の path と clone_root が一致しない | 照合の失敗 | branch の tip が PR の head と違う | 未 commit の変更がある | codex が動いている・判定できない | 前提を確かめられないので触っていない>)
+Next step: <なし | 残した tab / clone を人が確かめて片付ける (照合の失敗なら、clone に git を実行する前に .git の entry を調べる)>
+```
+
+`CLEANED` は、前提 (`done`・merge) を確かめ、tab と clone のどちらも片付けた (または無かった) とき。前提を確かめ
+られないとき (tab にも clone にも触らない) と、どちらかを残したときは `BLOCKED` (`Blocked at: cleanup`)。
 
 worker の本文 (最終 message / diff / commit message) を停止結果へ転記しません。secret / 実 home
 path / 外部 URL も同様です。この結果は委譲 process の判定であり、PR の merge readiness ではありません。
