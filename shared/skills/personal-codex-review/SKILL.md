@@ -113,7 +113,9 @@ hand-off します。reviewer を推測せず、user config も無断で変更�
    `managed-settings.json` のほか MDM policy や claude.ai console (server-managed settings) からも
    配布されるため、file が無いことを policy が無い根拠にしません。組織が Claude Code を管理して
    いる環境、または managed settings を読めない環境では直接起動を選ばず 3 へ進みます。Codex
-   環境なら `CODEX_SANDBOX` が未設定であること。`sandbox-exec` などの probe を打って sandbox を
+   環境なら `CODEX_SANDBOX` が未設定であること。値が空でも設定ありとみなし、sandbox の中として扱います
+   (どの agent の session かの判定は値が非空かで読みますが、sandbox の内外の判定はその例外で、入れ子の
+   sandbox を避けるため直接起動しない側に倒します)。`sandbox-exec` などの probe を打って sandbox を
    検査しません (strict な環境では回避操作と判定されます)。
 3. **BLOCKED + 人手 hand-off**: どちらも使えない。`Blocked at: launch-path` とし、Next step に
    §5 の run script を人が自分の terminal で実行する手順と、結果 file の場所を書きます。
