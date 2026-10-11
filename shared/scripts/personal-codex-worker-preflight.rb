@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 # codex-worker-preflight: Claude が Codex を worker として委譲起動する前に行う、capability と
-# 境界の決定的検査 (#254。規範の正本は personal-codex-worker skill の「起動前 preflight」)。
+# 境界の決定的検査 (#254。規範の正本は personal-codex-worker skill の §2 preflight)。
 #
 # 何を守るか: worker の Codex に、GitHub connector (account 側の app)、MCP server (config.toml
 # で定義したもの、ChatGPT app が Codex home に足す bootstrap のもの)、computer / browser 系の

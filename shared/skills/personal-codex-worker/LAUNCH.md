@@ -215,7 +215,7 @@ done
 
 `brief.md` は `SKILL.md` §4 のとおり。run script は次の形で、`codex exec` の argv は
 `preflight.json` の `launch_argv` を **そのまま** (要素ごとに literal 化して) 並べます。この例の
-flag は 2026-09-22 時点の preflight が出す形で、手で編集しません。
+flag は 2026-09-23 (#308 で `--add-dir` が入った) 時点の preflight が出す形で、手で編集しません。
 
 ```sh
 #!/bin/zsh
@@ -276,8 +276,8 @@ printf '%s' "$packets" \
 
 (`$packet_cli` は `<tool home>/agent-tools/scripts/personal-packet`。`$issue` は §0 で `\A\d+\z` を通した値。
 `exit 1` は「その段で止めて `Blocked at: launch-record` にする」の意。JSON が読めない・行が無いときも
-jq が非 0 で止まる。`SKILL.md` §1 の起動前の確認と §8 の記録を消した後の読み直しも、同じく `list` の
-終了コードを先に確かめてから照合する。)
+jq が非 0 で止まる。`SKILL.md` §1 の起動前の確認と、この file の §8 の記録を消した後の読み直しも、同じく
+`list` の終了コードを先に確かめてから照合する。)
 
 ## 5. herdr 経由の起動
 
@@ -420,7 +420,8 @@ herdr pane wait-output <pane-id> --match CODEX-WORKER-DONE-<nonce> --timeout 300
   繰り返す (開始から 120 分まで)。**居ないと確認できて** `done.txt` が無ければ
   `Blocked at: executor-exit` (pane は残す)。process-info が失敗する・解釈できないときは「消滅」に
   倒さず wait を続け、cap に達したら RUNNING として人に渡す。
-- 120 分に達したら kill せず、`Status: RUNNING` で pane id / run dir / 経過時間を返す (§9)。
+- 120 分に達したら kill せず、`Status: RUNNING` で pane id / run dir / 経過時間を返す (§10 の「起動済み
+  (`RUNNING`)」。雛形は `RESULT-FORMAT.md`)。
 - 待っている間に `codex.log` に `You've hit your usage limit` が現れたら (前方一致)、process の
   終了を待ってから `Blocked at: limit`。
 
@@ -507,7 +508,7 @@ git -C "$clone" ls-files --others --exclude-standard -z \
   ため。`--binary` で binary も復元できる形にする。
 - untracked は file 名を shell に通さず、NUL 区切りの list を `tar --null -T -` に渡す (bsdtar は
   list の名前を option として解釈しない。GNU tar なら `--verbatim-files-from` を足す)。
-  untracked が無ければ tar は作らない。
+  untracked が無くても tar はでき、中身が空 (entry 0 件) の tar になる (bsdtar で実測)。
 - 退避した path を packet の `結果` に書く。`git stash` は使わない (clone の状態を動かさない)。
 - 起動の記録 (`run` / `tab`): 完了の転記が済んだら、`run` の値を `last_run` に移して `run` / `tab` を key ごと
   消し (#325)、`list --json --all` が exit 0 で、その Issue の行の `run` が null、`last_run` がその run dir に
