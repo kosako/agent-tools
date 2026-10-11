@@ -209,7 +209,12 @@ module Sync
         # marker は本体の先頭行にあるので、消し残せば marker ごと残る。
         raise ApplyError, kept_marker_message(plan.target) unless file_removed?(plan.target)
       else
-        delete_skill_dir(plan.target)
+        # 撤去の経路は plan で決める (apply の時点の marker の有無で切り替えない, #482 review round 3)。
+        if plan.code == :orphan_resume
+          resume_skill_removal(plan.target, moved_marker_path(plan.target))
+        else
+          delete_skill_dir(plan.target)
+        end
       end
     end
 
@@ -234,13 +239,15 @@ module Sync
     # 同じ親 dir の作業用 path (moved_marker_path) に rename で退避してから空の dir を消し、最後に退避した marker を
     # 消す (marker を unlink してから dir を消すと、親 dir に書けないときに marker の無い空の dir が残る。退避の
     # rename には親 dir と dir の両方への書き込みが要るので、書けなければここで止まり marker は残る。前回の中断で
-    # 残った退避先の file は rename が上書きする)。前回の撤去が退避の後で止まり、marker が退避先にだけある dir
-    # (prune_skills が resumed_removal? で空のときだけ plan する) は、resume_skill_removal が続きを行う。
+    # 残った退避先の file は rename が上書きする)。plan の後に marker が消えていたら、撤去の続きに切り替えず、何も
+    # 消さずに止める (続きは prune_skills が :orphan_resume で plan したときだけ, #482 review round 3)。
     def delete_skill_dir(target)
       marker_name = ArtifactTargets::MARKER_BASENAME
       marker = File.join(target, marker_name)
       moved = moved_marker_path(target)
-      return resume_skill_removal(target, moved) unless present?(marker)
+      unless present?(marker)
+        raise ApplyError, "could not remove #{target}: its marker is gone since the plan, so nothing was removed"
+      end
 
       left = begin
         (Dir.children(target) - [marker_name]).each { |child| FileUtils.rm_rf(File.join(target, child)) }
@@ -270,9 +277,10 @@ module Sync
       raise ApplyError, "removed #{target} but could not remove its marker moved to #{moved}; remove it by hand"
     end
 
-    # 撤去の続き (marker が退避先にだけある dir)。plan は空の dir だけを続きの対象にするので、中身は消さず、marker も
-    # dir の中へ戻さずに rmdir (非再帰) だけを行う。plan の後に dir へ file が置かれていれば rmdir が失敗して止まり、
-    # 中身も退避した marker もそのまま残る (次の prune は空でない dir を unmanaged の skip にする, #482 review round 2)。
+    # 撤去の続き (prune_skills が :orphan_resume で plan した、marker が退避先にだけある dir)。plan は空の dir だけを
+    # 続きの対象にするので、中身は消さず、marker も dir の中へ戻さずに rmdir (非再帰) だけを行う。plan の後に dir へ
+    # file (marker と同じ名前の file も) が置かれていれば rmdir が失敗して止まり、中身も退避した marker もそのまま残る
+    # (次の prune は空でない dir を unmanaged の skip にする, #482 review round 2・3)。
     def resume_skill_removal(target, moved)
       begin
         Dir.rmdir(target)
@@ -347,11 +355,11 @@ module Sync
           next Plan.new("delete", tool, name, target, "not in catalog", "skill", nil, :orphan)
         end
 
-        # 前回の撤去が marker を退避した後で止まった dir は、退避した marker で管理下と判断して続きから撤去する
-        # (apply の delete_skill_dir が退避を飛ばす, #482)。
+        # 前回の撤去が marker を退避した後で止まった dir は、退避した marker で管理下と判断して続きから撤去する。
+        # code を :orphan_resume にして、apply が plan どおり resume_skill_removal だけを通るようにする (#482)。
         if resumed_removal?(target, tool, name)
           next Plan.new("delete", tool, name, target, "not in catalog; resumes an interrupted removal", "skill", nil,
-                        :orphan)
+                        :orphan_resume)
         end
         Plan.new("skip", tool, name, target, "orphan is unmanaged; left in place", "skill", nil, :orphan_unmanaged)
       end.compact

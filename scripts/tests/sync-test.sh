@@ -1297,6 +1297,8 @@ cmp -s "$tmp/jrepo/generated/opencode/plugins/personal-jplug.js" "$jtarget" || f
 # - 移動先の名前が INJECT_RENAME_FAIL と同じ File.rename を INJECT_RENAME_ERROR にする (INJECT_RENAME_AFTER=1 なら
 #   実処理を行ってから raise)。
 # - INJECT_EMPTY_LIE と同じ名前の dir の Dir.empty? を true にする (plan の後に dir へ file が置かれた状態を作る)。
+# - INJECT_DROP_MARKER_OF と同じ名前の dir の中の marker を、File.read で読んだ直後に消す (plan の後に marker が
+#   消えた状態を作る)。
 # Interrupt は SystemCallError ではないので、割り込みの代わりに使う。RUBYOPT は空白で分割されるので、path に空白が
 # あれば理由を出して fail。
 case $tmp in *[[:space:]]*) fail "case 51 needs a tmp path without whitespace for RUBYOPT: $tmp" ;; esac
@@ -1316,6 +1318,16 @@ class << File
 
     rename_without_injection(from, to) if ENV["INJECT_RENAME_AFTER"] == "1"
     raise Object.const_get(ENV.fetch("INJECT_RENAME_ERROR")), "injected"
+  end
+
+  alias_method :read_without_injection, :read
+  def read(*args, **kw)
+    data = read_without_injection(*args, **kw)
+    path = args.first.to_s
+    if File.basename(path) == ".agent-tools-managed.yml" && File.basename(File.dirname(path)) == ENV["INJECT_DROP_MARKER_OF"]
+      unlink_without_injection(path)
+    end
+    data
   end
 end
 class << Dir
@@ -1435,6 +1447,19 @@ status=0
 prune_injected INJECT_RMDIR_FAIL=personal-dgone INJECT_RMDIR_ERROR=Interrupt > "$tmp/out51f" 2>&1 || status=$?
 [ "$status" -ne 0 ] || fail "an interrupt right before removing the dir must not exit 0: $(cat "$tmp/out51f")"
 expect_marker_in_dgone "interrupt right before removing the dir"
+# 通常の撤去の plan の後に marker が消えたら (plan が marker を読んだ直後に消す注入)、apply は続きの撤去に切り替えず、
+# 何も消さずに止まる (撤去の経路は plan で決める。review round 3)
+cp "$dgone/.agent-tools-managed.yml" "$tmp/out51f-marker"
+status=0
+prune_injected INJECT_DROP_MARKER_OF=personal-dgone > "$tmp/out51f-drop" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "a marker gone after the plan should exit 1, got $status: $(cat "$tmp/out51f-drop")"
+grep -q "delete: \[claude-code\].*personal-dgone (not in catalog)$" "$tmp/out51f-drop" \
+  || fail "the plan must be the normal removal: $(cat "$tmp/out51f-drop")"
+grep -q "fail: could not remove .*/personal-dgone: its marker is gone since the plan, so nothing was removed" "$tmp/out51f-drop" \
+  || fail "the stop must say the marker is gone: $(cat "$tmp/out51f-drop")"
+[ -d "$dgone" ] || fail "a normal removal must not switch to the resumed removal when the marker is gone"
+cp "$tmp/out51f-marker" "$dgone/.agent-tools-managed.yml"
+expect_marker_in_dgone "marker gone after the plan"
 # 51g: 空の dir を消せず、marker を戻す rename も失敗する (注入)。dir と退避先の両方の path を出して止める。次の prune は、
 # marker の無い dir の隣にある同じ name の退避した marker で管理下と判断し、退避を飛ばして続きから撤去する。dry-run は
 # 何も書かない (review round 1)
@@ -1504,6 +1529,20 @@ grep -q "fail: could not remove .*/personal-dgone (Errno::ENOTEMPTY); its marker
 [ -f "$dgone/hand.md" ] || fail "resuming must not remove the contents of the dir"
 [ -f "$dmoved" ] && [ ! -e "$dgone/.agent-tools-managed.yml" ] \
   || fail "resuming must not move the marker into a non-empty dir: $(ls -A "$dgone")"
+# 続きの plan の後に、人の file に加えて marker と同じ名前の file (管理の内容ではないもの) が置かれても、apply は通常の
+# 撤去に切り替えず、rmdir だけで止まる (撤去の経路は plan で決める。review round 3)
+printf 'not a marker\n' > "$dgone/.agent-tools-managed.yml"
+status=0
+prune_injected INJECT_EMPTY_LIE=personal-dgone > "$tmp/out51i-race2" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "resuming into a dir with a marker-named file should exit 1, got $status: $(cat "$tmp/out51i-race2")"
+grep -q "delete: \[claude-code\].*personal-dgone (not in catalog; resumes an interrupted removal)" "$tmp/out51i-race2" \
+  || fail "the plan must be the resumed removal: $(cat "$tmp/out51i-race2")"
+grep -q "fail: could not remove .*/personal-dgone (Errno::ENOTEMPTY); its marker stays at .*/\.agent-tools-marker-personal-dgone" "$tmp/out51i-race2" \
+  || fail "the resumed removal must stop at rmdir: $(cat "$tmp/out51i-race2")"
+[ -f "$dgone/hand.md" ] || fail "a resumed removal must not remove the user's file even with a marker-named file"
+[ "$(cat "$dgone/.agent-tools-managed.yml")" = "not a marker" ] || fail "the marker-named file must be left as it was"
+[ -f "$dmoved" ] || fail "the moved marker must stay"
+rm -f "$dgone/.agent-tools-managed.yml"
 # 空の dir なら、続きとして撤去する
 rm -f "$dgone/hand.md"
 run51 --prune --apply > "$tmp/out51i-empty" 2>&1 || fail "resuming with an empty dir should succeed: $(cat "$tmp/out51i-empty")"

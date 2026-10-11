@@ -199,6 +199,8 @@ dir (tool-managed) で、後者は user が plugin を置く dir (OpenCode は `
     中身を消さず、marker も dir の中へ戻さずに rmdir (非再帰) だけを行う (plan の後に dir へ file が置かれていれば
     止まり、中身も退避した marker も残る)。dry-run では何も書かない。退避した marker が別の name を示す / symlink /
     読めない、または dir を列挙できないなら、その dir は unmanaged の skip で、他の対象の plan は続ける。
+  - 撤去の経路 (通常か続きか) は plan で決め、apply の時点の marker の有無で切り替えない。続きの plan の後に marker と
+    同じ名前の file が置かれても rmdir だけで止まり、通常の撤去の plan の後に marker が消えていれば、何も消さずに止める。
   - script は本体 → sidecar marker の順に消す。sidecar marker だけを消し残したときは、その path を出して止める
     (sidecar 単体は prune が列挙しないので、手で消す)。
   - 単一 file の kind (script の本体と sidecar marker、plugin) は非再帰に消す (unlink)。directory に置き換わって
