@@ -73,7 +73,7 @@ private なログを読み、最終的に public-safe な資産になりうる�
 
 既存の資産と重複していないか必ず確認する。重複は格下げ or 除外:
 
-- 既存 skill カタログ: `docs/register-catalog.md`、`shared/skills/`、配備済み `~/.claude/skills/` ・ `~/.codex/skills/`。
+- 既存 skill カタログ: `docs/skill-routing-contracts.md` の「Runtime inventory」(正本は `generated/catalog.json` の `artifact_kind=skill`)、`shared/skills/`、配備済み `~/.claude/skills/` ・ `~/.codex/skills/`。
 - 既存ルール: `CLAUDE.md` / operating-rules。
 - 「grill 系で概ねカバー済み」のように、既存のどれに当たるかを明記する。
 

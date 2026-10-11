@@ -80,7 +80,7 @@ preflight / self-check / review で何を確認し、どの観点でどう判断
 
 **良い応答(この skill 適用後)**:
 
-> production レールとして進めます。索引(policy-index)を見て、generation 向けの `ai-antipattern` を load します。
+> production レールとして進めます。索引(policy-index)を見て、generation 向けの `ai-antipattern` と `coding` を load します(新規の実装なので `existing-system-respect` は優先度低)。
 > - 実装前 preflight: 要求一致(何を解くか)/ 実在性(その API・フィールドは実在するか)/ 最小差分 / 契約維持 を確認。
 > - 実装後 self-check: 過剰実装・見かけ上の修正・到達不能コード・スコープ逸脱を自己点検。
 > ポリシーは基準として読み、最後に「どの観点をどう満たしたか」を報告に残します。

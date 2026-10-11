@@ -39,7 +39,7 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
 - コードに関わる作業は**既定で production 品質** (明示がなくても on)。off は vibe coding /
   prototype / spike / 使い捨てを**明示**したときだけ (推測で off に倒さない)。
 - 品質のバーは production で固定し、手順の重さは変更規模に比例させる (バーは下げず、
-  手順だけ軽くする)。適用手順 (索引で 2〜4 本に間引く・preflight / self-check) は
+  手順だけ軽くする)。適用手順 (索引で最大 4 本に間引く・preflight / self-check) は
   `personal-production-rail` skill に従う。
 
 ## reasoning escalation のサジェスト
@@ -57,9 +57,9 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
 
 - test や長時間の command (test runner・build・watch など) は、配備済みの `personal-safe-run`
   (`<tool home>/agent-tools/scripts/`) 経由で、memory と時間の上限を付けて走らせる (上限は作業に合わせて決める。
-  例: `personal-safe-run --max-footprint-mb 4096 --max-seconds 600 -- npm test`)。子 process の暴走で machine
-  全体を止めないため。safe-run が使えない環境 (macOS 以外など。exit 2 で起動しない) では、上限を付けられる同等の
-  手段を使う。
+  例: `~/.claude/agent-tools/scripts/personal-safe-run --max-footprint-mb 4096 --max-seconds 600 -- npm test`、
+  Codex は `~/.codex/` の下の同じ path)。子 process の暴走で machine 全体を止めないため。safe-run が使えない
+  環境 (macOS 以外など。exit 2 で起動しない) では、上限を付けられる同等の手段を使う。
 - 終わったら、自分が起動した process が残っていないことを確かめ、残っていれば止める (safe-run の外で起動した
   ものも同じ)。
 
