@@ -15,11 +15,12 @@ enforcement boundary ではない:
   外れる (実測 #201)。
 - 別 client / 他マシンからの commit・GitHub 上の操作 (squash merge 等) は対象外。
 - `git commit` 以外で作る commit (競合の無い自動の merge (pull を含む)・rebase・cherry-pick・revert) では pre-commit が走らない (#414)。競合の無い自動の merge は pre-merge-commit を呼び
-  (この配線には無い)、commit-msg だけが走る。rebase・cherry-pick・revert では pre-commit も commit-msg も
+  (pre-merge-commit には gate が無い。shim があっても repo hook への素通しだけ)、gate は commit-msg のものだけが走る。
+  rebase・cherry-pick・revert では pre-commit も commit-msg も
   走らない (git 2.54.0 で観察。競合を解いてから続ける場合は確かめていない)。そのため、これらの経路では
   差分の public-safety の検査と git-identity の検査は走らない (自動の merge では commit-msg が走るので、message の
-  public-safety の検査 (`--commit-msg`) は残る)。別の hook (prepare-commit-msg / pre-merge-commit) への配線は
-  #449 で実測してから決める。
+  public-safety の検査 (`--commit-msg`) は残る)。prepare-commit-msg / pre-merge-commit は dispatcher が gate の
+  無い素通しの stage として受ける (下の「dispatcher の chain 契約」)。これらに gate を置くかは #449 で実測してから決める。
 
 hard な床は従来どおりここに載せない (credential 隔離 / egress / CI)。公開する内容の検査は
 公開の前に置く (#413): 差分は pre-commit、commit message は commit-msg (public-safety の
@@ -60,9 +61,10 @@ global git config: core.hooksPath = <dotfiles 所有の hooks dir>
   追随が要る (#281 で 3 本 → 4 本。follow-up は dotfiles 側の Issue)。
 - **再入 sentinel の既知の副作用**: dispatcher は chain 実行時に stage 単位の env
   (`AGENT_TOOLS_GIT_HOOK_ACTIVE_<STAGE>`) を立て、再入を検出したら gate 済みとして
-  即 pass する (shim 経由の間接自己参照 loop 対策)。このため、chain 先の repo hook が
-  **別 repository へ同じ stage の commit を行う**場合、その内側の commit は gate を
-  通らない。
+  warning を 1 行出して即 pass する (shim 経由の間接自己参照 loop 対策)。sentinel は gate の無い stage
+  (pre-push など) の chain でも立つ (#430 の 3)。このため、chain 先の repo hook が
+  **同じ stage の hook を呼ぶ git 操作 (commit・push など) を別の repository で行う**と、その内側の
+  操作のその stage では gate も、その repository 自身の hook も走らない。
 
 ## dispatcher の chain 契約
 

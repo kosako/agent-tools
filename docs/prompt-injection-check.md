@@ -34,9 +34,9 @@ harness / 隔離 reader / trust 判定) は agent-tools、control plane (setting
 
 static checks はすべての asset で必須です。少なくとも以下を検出します。
 
-- system / developer instructions を override しようとする内容。
+- system / developer instructions を override しようとする内容 ("ignore previous instructions" など)。
 - secrets、tokens、credentials、private keys の開示または収集要求。
-- "ignore previous instructions" などの hidden instruction patterns。人が diff で見落としやすい
+- hidden instruction patterns。人が diff で見落としやすい
   不可視の文字 (Unicode の書式文字 Cf = zero-width、bidi 制御、soft hyphen、tag 文字など、と
   U+E0000〜E007F) と、keyword (ignore / instruction / system prompt / do not tell / secretly) を含む
   HTML コメント (長さによらない。本文は最初の `-->` で閉じ、終端と重なる `<!-->` は新しい開始に
@@ -74,7 +74,16 @@ directory skill の `evals/` (adversarial なテスト材料) は例外です。
 
 ## LLM Review
 
-LLM review は supplemental gate です。
+LLM review は supplemental gate として置く方針ですが、**未実装**です。今動いている検査は上の static checks
+(`scripts/check-injection.sh`) だけで、static checks を通ったことは LLM review を通ったことを意味しません。
+
+検査は二層で考えます ([onboarding](onboarding.md)「4.2 prompt injection 検査の二層構造」と同じ):
+
+- **必須層**: 自前の static checker (`scripts/check-injection.sh`)。依存ゼロ・network 不要・常に動く。
+- **opt-in 拡張層** (未実装): 外部 skill scanner。SARIF 契約・有効時 fail-closed。設計は GitHub Issue #43。
+
+LLM review は、この拡張層の LLM mode に統合する方針です (#43 の設計にあわせる)。以下の「送ってよいもの」
+「送ってはいけないもの」は、その層を作るときに守る条件です。
 
 LLM review に送ってよいもの:
 
@@ -110,10 +119,14 @@ human review 必須にします。
 static checks は `scripts/check-injection.sh` として実装済みです。
 
 - deterministic で、外部依存ゼロ・network access なしで実行できる。
-- 対象は `shared/` 配下の asset files のみ。policy docs は対象外。
+- 対象は `shared/` 配下のすべての file。asset の source に限らず、manifest と、どの manifest にも属さない
+  file (`shared/README.md` など) も含む。build は directory skill の dotfile (`.gitkeep` を含む) もそのまま
+  配るので、名前で除外しない (#427 の 5)。NUL を含む file は上記のとおり high。directory skill の `evals/` で
+  当てる pattern は上記の例外のとおり。policy docs (`docs/`) は対象外。
 - findings は `path:line: [risk] category: message` 形式で出力する。
 - exit code は risk outcome に対応する: high は 1 (registration fail)、
   medium のみは 3 (human review 必須)、findings なしまたは low のみは 0。
+  未知の option と option の値の欠落は usage を出して 2 (usage error。scan はしない)。
 
 ## Follow-up 実装メモ
 

@@ -40,11 +40,14 @@ P0-B (credential 隔離) の射程、つまり管理された invocation の既�
 ## 防御層と強度ラベル (hard / best-effort / steering を偽らない)
 
 > **最重要テーゼ**: command-string allowlist / hook / provenance は **steering** であって
-> enforcement boundary では**ない**。`$()` / 等価 read path (`gh` を `--comments` 無し / `gh api` /
-> graphql / fork を `git fetch` + `git show` / `curl` / `python` / base64) / MCP github tool は
-> Bash matcher を素通りし、WebFetch も逃げ道となり、本 steering hook は全失敗モードで
-> fail-open。出口 (push / commit message / branch / PR title / gist / DNS exfil) も
-> 列挙し切れない。**列挙非依存の hard 防御だけが本命**。
+> enforcement boundary では**ない**。command-string allowlist (permission の Bash matcher) は `$()` /
+> 等価 read path (`gh` を `--comments` 無し / `gh api` / graphql / fork を `git fetch` + `git show` /
+> `curl` / `python` / base64) / MCP github tool を素通りさせる。本 steering hook はこのうち、`$()` の中を
+> 含めて `--comments` 無しの `gh issue|pr view` と issues / pulls / comments の path の `gh api` を検出するが
+> (best-effort。下の「PreToolUse hook」節)、block はしない。`gh api graphql` / fork を `git fetch` +
+> `git show` / `curl` / `python` / base64 / MCP github tool / hook 自体の無効化は hook も素通りし、hook は
+> 全失敗モードで fail-open。WebFetch も逃げ道となる。出口 (push / commit message / branch / PR title /
+> gist / DNS exfil) も列挙し切れない。**列挙非依存の hard 防御だけが本命**。
 
 Claude Code の現行[公式 subagent 契約](https://code.claude.com/docs/en/sub-agents#define-hooks-for-subagents)
 では、settings / managed policy / plugin の hooks は subagent 内にも適用され、`PreToolUse` /
@@ -165,16 +168,18 @@ P3-03b で `script` kind の解決を足す)。
 
 agent に渡すデータの trust 判定は 3 軸で行う (spec の防御層表で定義済み):
 
-- **`is_self`** — `gh api user` で取得する自分の login + numeric id と照合 (agent が改竄しにくい
-  最堅信号なので最優先評価)。実値は dotfiles 側の非コミット local config に置く。
+- **`is_self`** — `gh api user` で取得する自分の login + numeric id と照合 (numeric id を login より
+  優先して照合する。agent が改竄しにくい最堅信号)。分類の順は `is_bot` → `is_self` で、self の id と
+  一致する bot も bot に分類する (下の「safe-gh wrapper」)。実値は dotfiles 側の非コミット local config に置く。
 - **`is_bot`** — login 末尾 `[bot]` / `type == Bot`。`association` より**先に**評価する
   (bot は `association` が `NONE` に化けるため)。bot は全 untrusted。
 - **`association`** — author association。ただし token scope 依存で揺れるので**単体の許可ソースに
   しない** (補助信号)。
 
 **honest-label**: provenance は最終的に agent が読むフィールドであり、agent 制御フィールドなら
-**捏造可能**。よって best-effort。hook が provenance 無しの書き込み系 tool call を拒否するのも
-steering (fail-open で消える)。
+**捏造可能**。よって best-effort。今の hook (下の「PreToolUse hook」) は raw な `gh` の読み取りを
+steer するだけで、provenance の無い書き込み系 tool call を拒否する hook は agent-tools には無い。将来 hook で拒否しても
+steering にとどまる (fail-open で消える)。
 
 ## safe-gh wrapper (実装: steering・配備名 `personal-safe-gh`)
 
@@ -187,9 +192,15 @@ boundary でない)。
   `personal-safe-gh [-R OWNER/REPO] pr <view|comments|review-comments|reviews> <number>`。
   出力は JSON。「safe-gh」は本文書の概念名で、**実行コマンド名は配備名 `personal-safe-gh`**
   (上記「script body の配置先」のとおり PATH には載せないので、呼び出しは tool 別の絶対 path)。
+- 引数と exit code の契約: `-R` は長い形の `--repo OWNER/REPO` でも受ける。`-R` / `--repo` とその値を
+  除いた残りは、ちょうど `<noun> <verb> <number>` の 3 個に限る。余分な引数・2 個目の `-R`・値を続けた
+  連結形 (`--repo=OWNER/REPO` など)・`-` で始まる残りと、形の合わない値 (owner/repo でない repo・数字で
+  ない number・未知の noun / verb) は、usage を出して exit 2 (gh は呼ばない。#429)。gh の呼び出しの失敗と
+  repository の解決の失敗は exit 1。self を確定できないときは warn を出し、全 author を untrusted (self
+  以外) として続ける (成功すれば exit 0)。`-h` / `--help` は usage を出して exit 0。
 - 上の 3 signal のうち **分類に使うのは `is_bot` → `is_self` の 2 つ**で、author を `self` / `bot` /
   `other` に決める。`association` は分類に使わず envelope の補助信号として載るだけ (上記のとおり
-  単体の許可ソースにしない)。self を確定できなければ全 `other` に倒す(fail-closed)。
+  単体の許可ソースにしない)。self を確定できなければ、bot は `bot`、それ以外は `other` に分類する (どちらも untrusted。fail-closed)。
 - **self identity source の信頼境界 (honest-label)**: self identity は local の trust file /
   env override を最優先で読むため、それらを書ける主体は任意 author を self と詐称でき、
   その author の body withhold が外れる。local file / env の改変は本 wrapper の脅威モデル外
@@ -383,12 +394,14 @@ untrusted-input の境界と、runtime の値を shell へ渡すときの escape
 
 ## 検証境界 (CI vs 実機手動)
 
-CI (`.github/workflows/test.yml`) は `build` / `register` / `status` / `doctor` と
-`scripts/tests/*.sh` の self-test を走らせるが、**`sync` / `connect` は走らせず、
-`persist-credentials: false` で credential も存在しない**。よって各 PR の acceptance を二分する:
+CI (`.github/workflows/test.yml`) は `scripts/tests/*.sh` の self-test、`check-manifests` /
+`check-injection`、`build` / `register` / `status` / `doctor` を走らせるが、
+**実 home に対する `sync` / `connect` は走らせず** (self-test は一時 home に対して `sync` / `connect` を
+実行する)、**`persist-credentials: false` で credential も存在しない**。よって各 PR の acceptance を二分する:
 
 - **CI 機械検証可**: build / register が high/medium 0 で registered になる、catalog 整合、
-  self-test (`scripts/tests/*.sh`)、`check-injection` (対象は `shared/**/*` のみ)。
+  self-test (`scripts/tests/*.sh`。一時 home での `sync` / `connect` を含む)、`check-manifests`、
+  `check-injection` (対象は `shared/**/*` のみ)。
 - **実機手動検証 + 結果ログ PR 添付**: `sync` による実 home 配布 / credential 隔離の negative test /
   (将来の) firewall egress。これらは CI 範囲外。
 

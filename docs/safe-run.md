@@ -118,7 +118,8 @@ personal-safe-run --max-footprint-mb N --max-seconds N [--report FILE] -- <comma
 - group への kill の ESRCH と EPERM は、止まったかを観測で確かめる (macOS は zombie だけの group への kill に
   EPERM を返すので、EPERM は「止められない member がいる」とは限らない。2026-10-10 実測)。生きた member が
   残れば 3. で `cleanup_complete: false` になる。
-- leader が自分で終わったときは、残っている member が見えれば 1. から、見えなければ 2. から行う。
+- leader が自分で終わったときは、列挙できて残っている member が 0 のときだけ 2. から行い、残っている member が
+  見えるか、列挙できない (失敗か例外) ときは 1. から行う。
   `leftover_killed` は TERM の前に数えた数と、3. で新たに見つけた数の合計で、warning にも出す。exit code は
   leader のもの。
 - signal (INT / TERM / HUP / QUIT / TSTP) は spawn の前に trap し、handler は最初の 1 つを記録して self-pipe に
