@@ -76,7 +76,8 @@ module ToolCallReport
     <<~TEXT
       #{usage}
       #{RECORD_HOOK} の JSONL を読み、期間内の tool call を session_id + tool_use_id で結合して件数を出す。
-      --file <path>      読む JSONL (繰り返して複数可)。既定は
+      --file <path>      読む JSONL (繰り返して複数可)。既定は記録 hook と同じ規則で
+                         $#{RECORD_DIR_ENV}/claude-code.jsonl (絶対 path。最優先)、無ければ
                          ${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/#{RECORD_HOOK}/claude-code.jsonl
       --since / --until  期間 (local の日付。until は含む。片方だけでもよい)
       --days N           今日を含む直近 N 日 (既定 #{DEFAULT_DAYS})。--since / --until とは併用できない
@@ -96,7 +97,8 @@ module ToolCallReport
     since, until_date, days = resolve_period(opts, today)
     files = opts[:files].empty? ? [default_record_path(env)].compact : opts[:files]
     if files.empty?
-      err.puts "#{NAME}: cannot resolve the default record location (set HOME or XDG_STATE_HOME, or pass --file)"
+      err.puts "#{NAME}: cannot resolve an absolute default record location " \
+               "(set #{RECORD_DIR_ENV}, XDG_STATE_HOME or HOME, or pass --file)"
       return EXIT_NO_INPUT
     end
     scan = scan_files(files, since, until_date, err)

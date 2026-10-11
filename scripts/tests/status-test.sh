@@ -41,7 +41,7 @@ run_status > "$tmp/s1" 2>&1 || fail "status should succeed: $(cat "$tmp/s1")"
 run_status > "$tmp/s2" 2>&1
 [ "$(jget "$tmp/s2" generated total)" = "2" ] || fail "generated.total should be 2"
 [ "$(jget "$tmp/s2" generated stale)" = "0" ] || fail "generated.stale should be 0"
-# catalog は target-artifact 単位 (catalog_version 3)。2 target なので registered=2。
+# catalog は target-artifact 単位。2 target なので registered=2。
 [ "$(jget "$tmp/s2" register registered)" = "2" ] || fail "register.registered should be 2 (target-artifact unit)"
 [ "$(jget "$tmp/s2" register unsupported)" = "0" ] || fail "register.unsupported should be present and 0"
 [ "$(jget "$tmp/s2" sync_targets 0 state)" = '"missing"' ] || fail "target should be missing"

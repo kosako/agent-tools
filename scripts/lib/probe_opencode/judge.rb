@@ -8,7 +8,8 @@
 #   confirmed = source からの予測と一致 / differs = 食い違う /
 #   unknown   = data が欠けている (pass には数えない。reason を付ける) /
 #   observed  = source からの予測が無い項目で、観測した値だけを載せる。
-# 予測は OpenCode 1.18.30 の source を読んで立てたもの (docs の「既知の事実」)。
+# 予測は OpenCode 1.18.30 の source を読んで立てたもの (docs/opencode-plugin-probe.md の「結果」の表の
+# 「source からの予測」列)。
 
 require "json"
 
