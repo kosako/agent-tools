@@ -87,10 +87,14 @@ model-specific config を足しません。別 agent / wrapper に代行させ�
 
 ```sh
 herdr pane split --current --direction down --ratio 0.3 --cwd <repo root> --no-focus
-herdr pane rename <pane-id> review-<short-target>
+herdr pane rename <pane-id> review-<PR 番号、無ければ mode の形>
 herdr pane run <pane-id> <"zsh " + run script path の shell literal>
 herdr pane wait-output <pane-id> --match CODEX-REVIEW-DONE-<nonce> --timeout 300000
 ```
+
+pane の名前は、PR の review なら `review-<PR 番号>` です。PR の無い対象は §3 の mode ごとに、base は
+`review-<head の OID の先頭 7 文字>`、commit は `review-<対象 commit の OID の先頭 7 文字>`、uncommitted は
+`review-uncommitted` です (規約は agent-tools の `docs/herdr-operations.md`)。
 
 呼び出し元の shell を経由して打つ場合は、上の各 argument をさらにもう一段 literal 化します
 (`pane run` の command は内側と合わせて 2 段)。

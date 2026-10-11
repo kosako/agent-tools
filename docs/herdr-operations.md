@@ -57,18 +57,27 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   §5)。worker は 10 分以上動くので、orchestrator が別の作業単位を進める tab と分ける。同じ Issue の
   2 回目以降の起動 (review の修正 round、停止からの再開) は、残っている `#<Issue 番号>` の tab に
   `-r<round>` の pane を足す (作業単位ごとに tab は 1 つ)。
-- **review**: review の pane は、対象 PR の作業単位の tab に置きます (1 役割 = 1 pane)。Codex が review
-  するのは Claude が書いた PR、つまり orchestrator 自身の作業単位なので、置き場は orchestrator の tab に
-  なります (「1 作業単位 = 1 tab」の例外ではない)。Codex が書いた PR は orchestrator の Claude が自分の
-  pane で review するので、pane は増えません。review は短時間 (1〜5 分) で終わるので、今のまま tab を
-  分割した pane で動かし、成功したら閉じます (`personal-codex-review`)。明示的な second opinion (Codex
-  の PR を Codex が見る) は 1 + 1 の枠の外の補助として、orchestrator の tab に置きます。
-- **命名**:
+- **review**: review の pane は、呼び出し元 (orchestrator) の pane を分割して置きます (1 役割 = 1 pane。
+  `personal-codex-review` の LAUNCH が `herdr pane split --current` で作る)。置き場は対象 PR の作業単位
+  ではなく呼び出し元で決まるので、orchestrator の tab になります。reviewer は PR の author で決まります
+  (正本は `personal-review-request` の「レビュアーの決定」)。
+  - Claude が書いた PR と、OpenCode が Anthropic 系の model で書いた PR (`opencode(anthropic)`) は、Codex
+    が review します。orchestrator の pane を分割した pane で Codex を動かします。
+  - Codex が書いた PR と、OpenCode が OpenAI 系・その他の model で書いた PR (`opencode(openai)` /
+    `opencode(other)`) は、orchestrator の Claude が自分の pane で review します。pane は増えません。
+
+  OpenCode の PR は人が起動した OpenCode の作業単位で、orchestrator の作業単位とは限りませんが、置き場は
+  同じく orchestrator の tab です。review は短時間 (1〜5 分) で終わるので、分割した pane で動かし、成功
+  したら閉じます (`personal-codex-review`)。明示的な second opinion (Codex の PR を Codex が見る) も同じく
+  呼び出し元の pane を分割して置き、1 + 1 の枠の外の補助として扱います。
+- **命名** (正本はこの表。review の pane の名前は `personal-codex-review` の LAUNCH にも同じ形で書く):
 
   | 対象 | 名前 | 例 |
   | --- | --- | --- |
   | worker の tab | `#<Issue 番号>` | `#291` |
-  | pane | `<役割>-<番号>[-r<round>]`。worker は Issue 番号、review は PR 番号 | `worker-291-r2` / `review-312` |
+  | worker の pane | `worker-<Issue 番号>[-r<round>]` | `worker-291-r2` |
+  | review の pane (PR の review) | `review-<PR 番号>` | `review-312` |
+  | review の pane (PR の無い対象) | mode ごとに、base は `review-<head の OID の先頭 7 文字>`、commit は `review-<対象 commit の OID の先頭 7 文字>`、uncommitted は `review-uncommitted` | `review-f6765af` / `review-uncommitted` |
 
 - 名前を付けたり閉じたりするのは、**自分が作った tab と pane だけ**です。人の tab (orchestrator 自身が
   いる tab も含む) の名前は変えません。自分が作った tab かどうかは、tab を作ったときに記録した tab ID
