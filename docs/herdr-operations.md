@@ -77,9 +77,10 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   (別の session で run dir が分からない) ときや、確かめられないときは触らず人に渡します。session を
   またいで記録を辿る口は、packet の起動の記録 (`run`、#315) と、転記の後に残す最後の run dir
   (`last_run`、#325) です。
-- worker の tab を閉じるのは packet が `done` になったとき (clone を片付けるのと同じ時点) です。止まって
-  いる間 (`blocked`) と、上限時間を超えて走っている間 (RUNNING) は、調べられるように残します。worker が
-  成功した後も pane は閉じず (出力は `pane.log` に保存)、tab ごと `done` で閉じます。
+- worker の tab を閉じるのは、packet が `done` になった後に、人が後始末を明示したときだけです (clone を退避先へ
+  移すのと同じ時点。`personal-codex-worker` の後始末モードで、確認の手順は同 skill の `LAUNCH.md` §11)。`done`
+  になっただけでは閉じません。止まっている間 (`blocked`) と、上限時間を超えて走っている間 (RUNNING) は、調べられる
+  ように残します。worker が成功した後も pane は閉じず (出力は `pane.log` に保存)、後始末で tab ごと閉じます。
 
 ## dashboard (毎回導出する)
 
