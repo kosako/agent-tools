@@ -10,14 +10,23 @@
 - **pipeline scripts**(build / register / connect / sync / status / doctor と各種 check)は
   ネットワーク不要・追加 gem 不要で、手元だけで完結します(status / doctor は repo 状態の
   確認に `git` 実行ファイルを使う。無い環境でも crash せず該当項目が degrade するだけ)。
-  例外は `scripts/probe-credential-isolation.sh`(credential 隔離の実機検証 harness。
-  `gh` / `git` / `curl` と network に依存)と、配布 asset の `personal-safe-gh`
-  (`gh` CLI 依存)。
+  例外は実機の probe 3 本と、配布 asset の `personal-safe-gh`(`gh` CLI 依存)です。probe は
+  `scripts/probe-credential-isolation.sh`(credential 隔離の実機検証 harness。`gh` / `git` / `curl` と
+  network に依存)、`scripts/probe-skill-routing.sh`(skill routing の実機観測。`claude` / `codex` CLI と
+  network に依存)、`scripts/probe-opencode-plugin.sh`(OpenCode plugin の前提の実機観測。`opencode` CLI と
+  起動時の npm install の network に依存)で、どれも CI では実行しません
+  ([scripts/README.md](../scripts/README.md) の冒頭が正本)。
 - `gh`(GitHub CLI)は asset の利用には不要です。repository へ変更を出す
-  (Issue / PR)とき、および上記 probe / `personal-safe-gh` を使うときだけ使います。
-- [herdr](https://herdr.dev)(任意)は `personal-codex-review` が Codex を起動する launcher です。
-  無い環境では、呼び出し元の Bash sandbox が無効なときだけ直接起動し、それ以外は BLOCKED で
-  人手へ渡します。背景と経路の選び方は [codex-review-launch.md](codex-review-launch.md)。
+  (Issue / PR)とき、および `probe-credential-isolation.sh` / `personal-safe-gh` を使うときだけ使います。
+- [herdr](https://herdr.dev)(任意)は Codex を起動する skill の launcher です。
+  - `personal-codex-review` と、`personal-repo-audit` の Codex の監査 (`personal-maintenance-sweep` の監査・反証を
+    含む) は herdr の pane を primary に使います。無い環境では、呼び出し元が sandbox の外にいると確かめられた
+    ときだけ直接起動し、それ以外は BLOCKED で人手へ渡します。背景と経路の選び方は
+    [codex-review-launch.md](codex-review-launch.md) と
+    [personal-repo-audit の CODEX-LAUNCH.md](../shared/skills/personal-repo-audit/CODEX-LAUNCH.md)。
+  - `personal-codex-worker` は herdr の pane からしか worker を起動しません。無い環境では常に、人が自分の
+    terminal で run script を実行する hand-off になります
+    ([personal-codex-worker の LAUNCH.md](../shared/skills/personal-codex-worker/LAUNCH.md))。
 - この repo に commit / push する場合、配置先ディレクトリに応じた git identity の出し分けは
   各自の git 設定(`dotfiles` 等)側で行います(本 repo の管理対象外)。
 
@@ -88,9 +97,10 @@ build / register は毎回実行するため、repo 内の中間物 (`generated/
 - `connect` は冪等です。既に import 行があれば no-op。symlink / 既存の手書き内容が
   ある所有先は触らず conflict で停止します(何も書きません)。
 - instruction を配らない(skill だけの)構成なら connect は不要です。
-- `register` と `connect` はどちらも `build` の後・`sync` の前であればよく、相互に依存
-  しません。`sync` だけが両者(catalog と所有確立)を前提とします。`setup.sh` はこの
-  順序で通します。
+- `connect` は `register` の後に実行します。catalog に registered な instruction entry が
+  無いと、connect は理由つきで skip して何も書きません(`no catalog; run scripts/register.sh first` など)。
+  `sync` は両者(catalog と所有確立)の後です。`setup.sh` の順序(build → register → connect → sync)が
+  必須の順です。
 - `shared/` から asset を消したときは `sync --prune`(dry-run)→ `sync --prune --apply`
   で deployed コピーを撤去できます(管理 marker が一致する orphan のみ削除。詳細は
   [sync-policy](sync-policy.md) の「撤去」)。
@@ -109,6 +119,11 @@ git pull
   `build → register → sync --apply`(connect は所有確立済みなら不要)。
 - source asset を編集したときも同じ流れです(`build` が source の sha256 で
   `build_id` を再計算し、`sync` が差分のある target だけ `update` します)。
+- ただし script / plugin に解決される asset と、宣言 risk が `medium` / `unknown` か medium finding を持つ asset は、
+  承認が `review.approved_build_id` に紐づきます。source を変えたら review のうえ `approved_build_id` を
+  新しい build_id に焼き直してから `register` します。焼き直すまでは register が exit 3 を返し、sync が
+  `human_review_required` で skip して旧版が配置されたまま残ります(下の「トラブルシュート」と
+  [register-catalog.md](register-catalog.md) の「承認は内容と配布形態に紐づく」)。
 
 ## 日常の使い方
 
@@ -123,11 +138,21 @@ git pull
 
 ### dotfiles から参照する(report-only)
 
-`dotfiles` は `agent-tools` を自動 clone / pull / sync しません。連携は
-**`status.sh --json` を read-only で読むだけ**(presence + health の表示)です。
-読んでよい情報・読まない情報の境界は
-[status-manifest-contract.md](status-manifest-contract.md) と
-[boundary-with-dotfiles.md](boundary-with-dotfiles.md) が正本です。
+`dotfiles` は `agent-tools` を自動 clone / pull / sync せず、agent-tools の state を書き換えません。
+dotfiles が担う連携は次のとおりです (各項目の link 先が正本)。
+
+- status の読み取り: **`status.sh --json` を read-only で読む**(presence + health の表示)。読んでよい
+  情報・読まない情報の境界は [status-manifest-contract.md](status-manifest-contract.md) と
+  [boundary-with-dotfiles.md](boundary-with-dotfiles.md) が正本です。下の参照例はこの連携だけを扱います。
+- hook の配線: sync が配った hook の script (実体) を、git の hooks dir の shim や tool の hook 宣言から
+  呼ぶよう登録する ([git-hook-gates.md](git-hook-gates.md)「構成と配線(所有分界)」、
+  [boundary-with-dotfiles.md](boundary-with-dotfiles.md)「runtime GitHub injection 防御の分担」)。
+- Codex の review / worker 用 profile file の配置 ([boundary-with-dotfiles.md](boundary-with-dotfiles.md)
+  「Codex の review / worker 用 profile file (#339)」。下の「Codex の review / worker だけを軽くする」)。
+- 残量の読み取り口の設定 file (`usage-reader.json`) の配置と、`personal-usage-reader --check` による設定の検証
+  ([boundary-with-dotfiles.md](boundary-with-dotfiles.md)「残量の読み取り口の設定 (#385)」)。
+- OpenCode plugin の init の目印の読み取り (dotfiles の doctor が OpenCode の log を読む。
+  [boundary-with-dotfiles.md](boundary-with-dotfiles.md)「OpenCode plugin の init の目印 (#343)」)。
 
 最小の参照例(dotfiles 側に置く想定。illustrative):
 
@@ -194,11 +219,19 @@ model_reasoning_effort = "high"
 
 ### asset を追加する
 
-1. `shared/<category>/` に source と sidecar manifest(`<name>.asset.yml`)を置く。
-   manifest の書式は [asset-manifest-schema.md](asset-manifest-schema.md)。
+1. `shared/<category>/` に source と manifest を置く。単一 file の source は sidecar manifest
+   (`<name>.asset.yml`)、directory 形式の skill(`shared/skills/<name>/`)は `<dir>/asset.yml` で宣言する
+   (directory 形式は `asset.yml` でしか宣言できない)。manifest の書式と置き方は
+   [asset-manifest-schema.md](asset-manifest-schema.md)。
    name は `personal-` 始まりが必須。
-2. `./scripts/check-manifests.sh` と `./scripts/check-injection.sh` で検証。
+2. `./scripts/check-manifests.sh` と `./scripts/check-injection.sh` で検証。`evals/evals.json` を持つ
+   skill では `ruby scripts/lib/check_evals.rb` も通す(check-manifests には入らず、CI では self-test が通す。
+   形式は [asset-manifest-schema.md](asset-manifest-schema.md) の「evals の形式」)。
 3. `build` → `register` → `sync --apply` で配置(上の「アップデート」と同じ)。
+   script / plugin に解決される asset と、宣言 risk が `medium` / `unknown` か medium finding を持つ asset は、
+   review のうえ manifest に承認(`review.human_review: approved`・
+   `review.approved_build_id`・`review.approved_artifact_kind`)を書いてから `register` します(下の
+   「トラブルシュート」の `human_review_required` の行と [register-catalog.md](register-catalog.md))。
 
 ## トラブルシュート
 
@@ -215,6 +248,8 @@ model_reasoning_effort = "high"
 
 `--codex-home` / `--claude-home` / `--opencode-home` で home を上書きできます(検証用。
 `--opencode-home` は sync / status / doctor / setup が受け付け、connect は受け付けません)。
+doctor はさらに `--agents-home`(既定 `~/.agents`。禁止 target の `skills/*/{db,teams}` の検査先)も
+受け付けます。
 
 ## 関連ドキュメント
 

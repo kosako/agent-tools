@@ -44,6 +44,10 @@ GitHub Issue / PR / repository docs の置き場所を判断します。
 
 ## 最初の issue
 
+> これは初期計画時点の記録です。現在地は [onboarding](onboarding.md) を参照。
+> scaffold は初回 commit で済み、out of scope に挙げた build / sync / registration script と
+> prompt injection checker もその後に実装済みです。
+
 タイトル:
 
 ```text
