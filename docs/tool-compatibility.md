@@ -67,6 +67,8 @@ host (Claude Code / Codex / OpenCode) の版で変わりうる事実 (hook や p
   `shared/skills/personal-repo-audit/CODEX-LAUNCH.md` (review と worker の `LAUNCH.md` は手順の正本で、
   それぞれ冒頭で契約の正本の `SKILL.md` を指す)。[Codex review の起動経路](codex-review-launch.md) と
   [herdr 前提の運用](herdr-operations.md) は背景の説明で、起動の正本ではない。
+  ただし背景の docs は、理由の説明に要る範囲で flag 名を挙げてよい (正本は上の `LAUNCH.md` /
+  `CODEX-LAUNCH.md` のまま)。完了判定や再実行のような手順は写さず、正本へリンクする。
 
 実践の例: [Runtime GitHub Injection 防御](runtime-injection-defense.md) の「PreToolUse hook」の節
 (「履歴 (2026-07-07 調査)」と「現行仕様 (2026-09-05 確認)」を分け、OpenCode の verdict を

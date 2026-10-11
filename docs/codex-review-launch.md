@@ -50,17 +50,11 @@ session rollout を Codex 側に残して利用量の集計に使います (#297
 
 ## 完了判定と結果
 
-run script は run dir と repo root と nonce を shell literal として script 先頭の変数に 1 回だけ
-埋め込み、以降は `"$run"` のように参照します (値を command 行へ直接展開しません。契約の正本は
-SKILL.md)。実行するのは `codex exec … -o "$run/result.md" - < "$run/brief.md"` で、その exit code を
-`CODEX-REVIEW-DONE-<nonce> exit=<rc>` の形で端末と `"$run/done.txt"` の両方に書きます。
-`herdr pane wait-output --match` は端末側の行を起床信号として待つだけで、完了の正本は `done.txt`
-(nonce 一致・`exit=0`) と空でない `result.md` です。人手 hand-off で人が terminal から実行した場合も
-同じ file で確認するので、経路によらず判定は同じです。`result.md` が欠落または空なら空振りとして
-1 回だけ再実行し、2 回目も空なら `Status: BLOCKED` (`executor-result`) で停止します。続行条件を
-満たした pane は `herdr pane read` の生出力を `pane.log` として run dir に保存し、空でないことを
-確認してから閉じ、満たさなかった pane (exit≠0、空振り、BLOCKED、`pane.log` が空) だけを一次情報として
-残します。review のたびに pane が溜まらないようにするためです。
+run script の組み方、完了判定 (`done.txt` と `result.md`)、空振りの再実行、pane の後始末の手順は
+[LAUNCH.md](../shared/skills/personal-codex-review/LAUNCH.md) が正本で、ここには写しません (契約の正本は
+SKILL.md §5)。完了の正本は端末に出る行ではなく run dir の file です。人手 hand-off で人が terminal から
+実行した場合も同じ file で確認するので、経路によらず判定は同じです。LAUNCH.md の続行条件を満たした pane は
+閉じ、満たさなかった pane だけを一次情報として残します。review のたびに pane が溜まらないようにするためです。
 
 ## brief と target
 

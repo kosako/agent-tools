@@ -9,9 +9,10 @@
 - directory conventions。
 - local machine setup の safety gates (settings.json の permission deny floor / sandbox / MCP gate)。
 - runtime GitHub injection 防御の **control plane**: settings.json の permission / sandbox / hook
-  宣言 (参照)、capability gate、trust list / egress local の置き場規約、body 配布先の絶対 path 参照、
-  doctor の presence report、射程と限界の docs。**body (trust 判定 / safe reader / hook script /
-  token 隔離 / 隔離 reader) は持たない** (下記「runtime GitHub injection 防御の分担」)。
+  宣言 (参照)、capability gate、token store 隔離、trust list / egress local の置き場規約、body 配布先の
+  絶対 path 参照、doctor の presence report、射程と限界の docs。**body (trust 判定 / safe reader / hook
+  script / credential 隔離の recipe と acceptance harness / 隔離 reader) は持たない** (下記「runtime GitHub
+  injection 防御の分担」)。
 - optional companion repositories が存在するかどうかの report-only checks。
 
 ## agent-tools が持つ責務
@@ -25,7 +26,8 @@
 - runtime GitHub injection 防御の **body / 振る舞い**: provenance の trust 判定ロジック
   (signal の定義と分類規則は `docs/runtime-injection-defense.md` が正本)、
   `safe-gh` wrapper 本体、`PreToolUse` hook の script body と home 配布 (build / sync)、
-  隔離 reader workflow、policy data の single source (tool 別 render)、Codex hook 用の body 互換 (登録・配線は dotfiles)
+  隔離 reader workflow、credential 隔離の recipe と acceptance harness、policy data の single source
+  (tool 別 render)、Codex hook 用の body 互換 (登録・配線は dotfiles)
   (下記「runtime GitHub injection 防御の分担」)。
 - registered assets 向け prompt injection review policy (supply-side: 配布する asset 自体に
   injection が仕込まれていないかを register / sync 前に検査する。runtime の外部入力防御とは
@@ -41,11 +43,11 @@ review policy」) とは攻撃面が逆向きの別レイヤー。設計の spec
 正本は [Runtime GitHub Injection 防御 (Phase 3)](runtime-injection-defense.md) を参照。
 
 - **dotfiles (control plane)**: capability gate、settings.json の permission deny floor / sandbox /
-  MCP github gate / hook 宣言 (参照)、trust list・egress local の置き場規約、body 配布先の絶対 path
-  参照、doctor の presence report、射程と限界の docs。
+  MCP github gate / hook 宣言 (参照)、token store 隔離、trust list・egress local の置き場規約、body 配布先の
+  絶対 path 参照、doctor の presence report、射程と限界の docs。
 - **agent-tools (body)**: trust 判定ロジック (provenance。定義は runtime-injection-defense.md)、`safe-gh` wrapper 本体、hook の
-  script body とその home 配布 (build / sync)、隔離 reader workflow、policy data の single source、
-  Codex hook 用の body 互換 (登録・配線は dotfiles)。
+  script body とその home 配布 (build / sync)、隔離 reader workflow、credential 隔離の recipe と acceptance
+  harness、policy data の single source、Codex hook 用の body 互換 (登録・配線は dotfiles)。
 
 原則は「runtime / invocation に属するものは agent-tools、宣言 / 規約 / capability に属するものは
 dotfiles」。command-string allowlist / hook / provenance は enforcement boundary ではなく steering で

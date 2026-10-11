@@ -251,6 +251,14 @@ M13 / M14 / M17 (OpenCode 1.18.30)。
   - fail-open: script が無い / 実行できない / 非 0 (changed-scope-qa の exit 2 を除く) / stdout が
     JSON でない / timeout (fast-edit-check は総予算、changed-scope-qa は 120 秒) のどれでも、tool 結果を
     変えず・何も報告せず、warn を script ごとに 1 回だけ log に出す。
+  - **plugin の timeout が先に効く**: plugin の timeout (fast-edit-check は 1 回の after の総予算 30 秒、
+    changed-scope-qa は 120 秒) は、hook の総予算 (上の「check の起動」。fast-edit-check 120 秒 /
+    changed-scope-qa 540 秒) より短い。OpenCode ではこの timeout が実質の上限で、hook の総予算と check の
+    `max_seconds` は、plugin の timeout を超える分は効かない。changed-scope-qa で 120 秒を超える check は、
+    `session.idle` のたびに約 120 秒走ってから止められる。hook は中断として state も出力も残さない (上の
+    「check の起動」の「hook 自身の中断」) ので、結果は cache されず、次の idle で同じ scope を検査し直す。
+    timeout の warn は script ごとに 1 回だけなので、2 回目以降の中断は log に出ない。fast-edit-check で
+    1 回の after の残りの時間を超える check は、編集のたびに止められ、その file は検査されない。
   - timeout の止め方 (#467): script の process group に TERM を送り、group が空になるまで最大 10 秒待って
     (100 ms ごとに確かめる)、members が残っていれば KILL を送り、空になるのを最大 1 秒確かめる。script が
     TERM で終わっても、TERM を無視する子が stdio を閉じて残りうるので、終わりは script の終了ではなく group
