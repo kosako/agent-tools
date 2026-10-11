@@ -1296,6 +1296,7 @@ cmp -s "$tmp/jrepo/generated/opencode/plugins/personal-jplug.js" "$jtarget" || f
 # - INJECT_RMDIR_FAIL と同じ名前の dir の Dir.rmdir を INJECT_RMDIR_ERROR (既定 Errno::ENOTEMPTY) にする。
 # - 移動先の名前が INJECT_RENAME_FAIL と同じ File.rename を INJECT_RENAME_ERROR にする (INJECT_RENAME_AFTER=1 なら
 #   実処理を行ってから raise)。
+# - INJECT_EMPTY_LIE と同じ名前の dir の Dir.empty? を true にする (plan の後に dir へ file が置かれた状態を作る)。
 # Interrupt は SystemCallError ではないので、割り込みの代わりに使う。RUBYOPT は空白で分割されるので、path に空白が
 # あれば理由を出して fail。
 case $tmp in *[[:space:]]*) fail "case 51 needs a tmp path without whitespace for RUBYOPT: $tmp" ;; esac
@@ -1325,6 +1326,13 @@ class << Dir
     end
 
     rmdir_without_injection(path)
+  end
+
+  alias_method :empty_without_injection, :empty?
+  def empty?(path)
+    return true if File.basename(path) == ENV["INJECT_EMPTY_LIE"]
+
+    empty_without_injection(path)
   end
 end
 RB
@@ -1454,6 +1462,16 @@ grep -q "skip: \[claude-code\].*personal-dfake (orphan is unmanaged; left in pla
   || fail "a moved marker of another name must not make the dir managed: $(cat "$tmp/out51g-dry")"
 grep -q "skip: \[claude-code\].*personal-dlink (orphan is unmanaged; left in place)" "$tmp/out51g-dry" \
   || fail "a symlinked moved marker must not make the dir managed: $(cat "$tmp/out51g-dry")"
+# 退避した marker を読めない (mode 000) なら、続きの根拠にせず unmanaged の skip にし、他の対象の plan は続ける (review round 2)
+chmod 0000 "$dmoved"
+status=0
+run51 --prune > "$tmp/out51g-unreadable" 2>&1 || status=$?
+chmod 0644 "$dmoved"
+[ "$status" -eq 0 ] || fail "an unreadable moved marker must not stop the prune, got $status: $(cat "$tmp/out51g-unreadable")"
+grep -q "skip: \[claude-code\].*personal-dgone (orphan is unmanaged; left in place)" "$tmp/out51g-unreadable" \
+  || fail "an unreadable moved marker must not make the dir managed: $(cat "$tmp/out51g-unreadable")"
+grep -q "skip: \[claude-code\].*personal-dkeep (up-to-date)" "$tmp/out51g-unreadable" \
+  || fail "the other targets must still be planned: $(cat "$tmp/out51g-unreadable")"
 rm -rf "$dskills/personal-dfake" "$dskills/personal-dlink" "$dskills/.agent-tools-marker-personal-dfake" \
   "$dskills/.agent-tools-marker-personal-dlink"
 run51 --prune --apply > "$tmp/out51g-apply" 2>&1 || fail "the resumed removal should succeed: $(cat "$tmp/out51g-apply")"
@@ -1469,11 +1487,47 @@ grep -q "fail: removed .*/personal-dgone but could not remove its marker moved t
   || fail "the stop must name the moved marker: $(cat "$tmp/out51h")"
 [ "$(ls -A "$dskills" | tr '\n' ' ')" = ".agent-tools-marker-personal-dgone personal-dkeep " ] \
   || fail "only the moved marker may remain of the orphan: $(ls -A "$dskills")"
-rm -f "$dmoved"
+# 51i: 撤去しきった後に残った退避した marker は、同じ名前で人が作った dir の撤去の根拠にしない。続きの撤去は空の dir
+# だけで、apply も中身を消さず rmdir (非再帰) だけを行い、marker を dir の中へ戻さない (review round 2)
+mkdir "$dgone"
+echo "hand made" > "$dgone/hand.md"
+run51 --prune --apply > "$tmp/out51i" 2>&1 || fail "prune with a reused name should succeed: $(cat "$tmp/out51i")"
+grep -q "skip: \[claude-code\].*personal-dgone (orphan is unmanaged; left in place)" "$tmp/out51i" \
+  || fail "a non-empty dir must not be resumed from a moved marker: $(cat "$tmp/out51i")"
+[ -f "$dgone/hand.md" ] || fail "the files in a dir of a reused name must be left in place"
+# plan の後に dir へ file が置かれた場合 (Dir.empty? を注入で偽る) も、apply は中身を消さずに止まる
+status=0
+prune_injected INJECT_EMPTY_LIE=personal-dgone > "$tmp/out51i-race" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "resuming into a non-empty dir should exit 1, got $status: $(cat "$tmp/out51i-race")"
+grep -q "fail: could not remove .*/personal-dgone (Errno::ENOTEMPTY); its marker stays at .*/\.agent-tools-marker-personal-dgone" "$tmp/out51i-race" \
+  || fail "the stop must name the dir and the moved marker: $(cat "$tmp/out51i-race")"
+[ -f "$dgone/hand.md" ] || fail "resuming must not remove the contents of the dir"
+[ -f "$dmoved" ] && [ ! -e "$dgone/.agent-tools-managed.yml" ] \
+  || fail "resuming must not move the marker into a non-empty dir: $(ls -A "$dgone")"
+# 空の dir なら、続きとして撤去する
+rm -f "$dgone/hand.md"
+run51 --prune --apply > "$tmp/out51i-empty" 2>&1 || fail "resuming with an empty dir should succeed: $(cat "$tmp/out51i-empty")"
+grep -q "delete: \[claude-code\].*personal-dgone (not in catalog; resumes an interrupted removal)" "$tmp/out51i-empty" \
+  || fail "an empty dir next to the moved marker must be resumed: $(cat "$tmp/out51i-empty")"
+[ "$(ls -A "$dskills")" = "personal-dkeep" ] || fail "the resumed removal must remove the dir and the moved marker: $(ls -A "$dskills")"
 # 対照: 注入の無い run は撤去するものが無く、成功する
-run51 --prune --apply > "$tmp/out51i" 2>&1 || fail "prune without the injection should succeed: $(cat "$tmp/out51i")"
-! grep -q "personal-dgone" "$tmp/out51i" || fail "nothing of personal-dgone may be left to prune: $(cat "$tmp/out51i")"
+run51 --prune --apply > "$tmp/out51j" 2>&1 || fail "prune without the injection should succeed: $(cat "$tmp/out51j")"
+! grep -q "personal-dgone" "$tmp/out51j" || fail "nothing of personal-dgone may be left to prune: $(cat "$tmp/out51j")"
 [ "$(ls -A "$dskills")" = "personal-dkeep" ] || fail "only the catalog-backed skill may remain: $(ls -A "$dskills")"
+# 51k: marker が symlink の skill の dir は、管理外として触らない (sync が置く marker は通常の file。相対 symlink の
+# marker は退避するとリンク切れになり、戻せなくなる。review round 2)
+mkdir "$dskills/personal-dsym"
+sed 's/personal-dkeep/personal-dsym/' "$dskills/personal-dkeep/.agent-tools-managed.yml" > "$dskills/personal-dsym/real-marker.yml"
+ln -s real-marker.yml "$dskills/personal-dsym/.agent-tools-managed.yml"
+echo "body dsym" > "$dskills/personal-dsym/SKILL.md"
+tree_snapshot "$dskills/personal-dsym" > "$tmp/out51k-before"
+run51 --prune --apply > "$tmp/out51k" 2>&1 || fail "prune with a symlinked marker should succeed: $(cat "$tmp/out51k")"
+grep -q "skip: \[claude-code\].*personal-dsym (orphan is unmanaged; left in place)" "$tmp/out51k" \
+  || fail "a skill dir with a symlinked marker must be skipped as unmanaged: $(cat "$tmp/out51k")"
+tree_snapshot "$dskills/personal-dsym" > "$tmp/out51k-after"
+cmp -s "$tmp/out51k-before" "$tmp/out51k-after" \
+  || fail "a skill dir with a symlinked marker must be left untouched: $(diff "$tmp/out51k-before" "$tmp/out51k-after" || true)"
+rm -rf "$dskills/personal-dsym"
 
 # --- case 52: script の撤去は本体 → sidecar marker の順。本体を消し残したら marker を残して fail で止まる (#482 の項目 3) ---
 # 本体と sidecar は同じ dir にあるので、dir の mode では本体だけを消せなくすることができない。case 51 の注入で本体の
@@ -1510,9 +1564,32 @@ grep -q "fail: removed .*/personal-dtool but could not remove its marker .*/pers
 [ ! -e "$dtool" ] || fail "the body must be removed before the marker"
 [ -f "$dtool.agent-tools-managed.yml" ] || fail "the injected failure must leave the sidecar marker in place"
 rm -f "$dtool.agent-tools-managed.yml"
+# 52c: 本体が directory に置き換わっていたら、中身ごと消さずに (単一 file の kind の撤去は非再帰)、marker を残して止める
+# (review round 2)
+printf '#!/bin/sh\necho ddir\n' > "$tmp/drepo/shared/scripts/personal-ddir.sh"
+write_approved_script_manifest "$tmp/drepo" shared/scripts/personal-ddir.sh personal-ddir personal claude-code
+"$build" --root "$tmp/drepo" --quiet > /dev/null
+"$register" --root "$tmp/drepo" --quiet > /dev/null
+run51 --apply --quiet > /dev/null
+ddir="$tmp/dclaude/agent-tools/scripts/personal-ddir"
+[ -f "$ddir" ] || fail "case 52c fixture should deploy personal-ddir"
+rm -f "$tmp/drepo/shared/scripts/personal-ddir.sh" "$tmp/drepo/shared/scripts/personal-ddir.asset.yml"
+"$build" --root "$tmp/drepo" --prune --quiet > /dev/null
+"$register" --root "$tmp/drepo" --quiet > /dev/null
+rm -f "$ddir"
+mkdir "$ddir"
+echo "inner" > "$ddir/inner"
+status=0
+run51 --prune --apply > "$tmp/out52c" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "a directory at the script path should exit 1, got $status: $(cat "$tmp/out52c")"
+grep -q "fail: could not remove .*/personal-ddir; the marker was kept, so the next prune retries" "$tmp/out52c" \
+  || fail "the stop must name the script path: $(cat "$tmp/out52c")"
+[ -f "$ddir/inner" ] || fail "the contents of a directory at the script path must not be removed"
+[ -f "$ddir.agent-tools-managed.yml" ] || fail "the sidecar marker must stay while the script path remains"
+rm -rf "$ddir" "$ddir.agent-tools-managed.yml"
 # 対照: 注入の無い run は撤去するものが無く、成功する
-run51 --prune --apply > "$tmp/out52c" 2>&1 || fail "prune without the injection should succeed: $(cat "$tmp/out52c")"
-! grep -q "personal-dtool" "$tmp/out52c" || fail "nothing of personal-dtool may be left to prune: $(cat "$tmp/out52c")"
+run51 --prune --apply > "$tmp/out52d" 2>&1 || fail "prune without the injection should succeed: $(cat "$tmp/out52d")"
+! grep -qE "personal-dtool|personal-ddir" "$tmp/out52d" || fail "nothing of the scripts may be left to prune: $(cat "$tmp/out52d")"
 
 # --- case 53: plugin の撤去で消し残したら fail で止まり、marker ごと残って次の prune がまた撤去の対象にする (#482 の項目 3) ---
 # plugin は marker が本体の先頭行にあるので、本体と一緒に残る。plugins/ を書き込みできなくして消せなくする。

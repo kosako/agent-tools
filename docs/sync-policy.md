@@ -183,19 +183,26 @@ dir (tool-managed) で、後者は user が plugin を置く dir (OpenCode は `
 - 削除の後に消えたことを確かめ、消し残したら `fail:` で止める (exit 1。rm_f / rm_rf は削除の失敗を握りつぶす
   ため。同じ run の後続の plan は適用しない)。marker は本体が消えたのを確かめてから最後に消すので、消し残しても
   marker が残り、次の prune がまた撤去の対象にする (marker が先に消えると、残りは unmanaged の skip になる, #482)。
+  - skill は、dir の中の marker が symlink なら管理外として skip する (sync が置く marker は通常の file。相対 symlink の
+    marker は退避するとリンク切れになり、戻せなくなる)。
   - skill は marker 以外を先に消す (dir の中を列挙できなければ、marker を残して止める)。marker だけになったら、
     marker を同じ親 dir の `.agent-tools-marker-personal-<name>` に rename で退避してから空の dir を消し、最後に
     退避した marker を消す。親 dir に書けなければ退避の時点で止まり、marker は dir の中に残る。退避の後・dir の削除の
     前で止まったら (空の dir を消せない例外も、割り込みも。SIGKILL は除く)、marker を dir の中へ戻して止める。戻す
-    かどうかは退避先と dir の実在で判断する (退避の rename の直後の割り込みでも戻す)。dir を消した後に退避した
-    marker を消せなければ、その path を出して止める (手で消す)。
-  - marker を dir の中へ戻す rename も失敗したら、dir と退避先の両方の path を出して止める。次の prune は、marker の
-    無い skill の dir の隣 (同じ親 dir) に、同じ name の退避した marker (`.agent-tools-marker-personal-<name>`) が
-    あり、それが symlink でない file で、dir の中の marker と同じ検査 (tool と name の一致) を通れば、その dir を
-    撤去の対象にする (`not in catalog; resumes an interrupted removal`)。apply は退避を飛ばして続きから消す。dry-run
-    では何も書かない。退避した marker が別の name を示す / symlink / 読めないなら、その dir は unmanaged の skip。
+    かどうかは退避先と dir の実在 (symlink ならリンク自体) で判断する (退避の rename の直後の割り込みでも戻す)。dir を
+    消した後に退避した marker を消せなければ、その path を出して止める (手で消す)。
+  - marker を dir の中へ戻す rename も失敗したら、dir と退避先の両方の path を出して止める。次の prune は、**空の** skill
+    の dir の隣 (同じ親 dir) に、同じ name の退避した marker (`.agent-tools-marker-personal-<name>`) があり、それが
+    symlink でない file で、dir の中の marker と同じ検査 (tool と name の一致) を通れば、その dir を撤去の対象にする
+    (`not in catalog; resumes an interrupted removal`)。退避した時点で dir には marker しか無かったので、中断の続きなら
+    dir は空のはず。空でない dir は、同じ名前で作り直されたものかもしれないので unmanaged の skip にする。apply は
+    中身を消さず、marker も dir の中へ戻さずに rmdir (非再帰) だけを行う (plan の後に dir へ file が置かれていれば
+    止まり、中身も退避した marker も残る)。dry-run では何も書かない。退避した marker が別の name を示す / symlink /
+    読めない、または dir を列挙できないなら、その dir は unmanaged の skip で、他の対象の plan は続ける。
   - script は本体 → sidecar marker の順に消す。sidecar marker だけを消し残したときは、その path を出して止める
     (sidecar 単体は prune が列挙しないので、手で消す)。
+  - 単一 file の kind (script の本体と sidecar marker、plugin) は非再帰に消す (unlink)。directory に置き換わって
+    いれば中身ごと消さず、marker を残して止める。
   - plugin は marker が本体の先頭行にあるので、消し残せば marker ごと残る。
 - instruction は prune 対象外。所有ファイルは人間の instruction ファイルと絡めて connect
   が管理しており、撤去 (所有解除) は人間の判断で行う。
