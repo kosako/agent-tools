@@ -1,8 +1,9 @@
 # Instruction Artifact Kind
 
-共通の運用ルール (言語既定 / セッション標準動作 / ドキュメント運用ルール / 正本の所在 /
-public safety) を、claude-code には `CLAUDE.md`、codex には `AGENTS.md` として両 tool へ
-配布するための artifact kind です。skill が directory を丸ごと所有するのに対し、
+共通の運用ルール (言語・セッション・相互レビュー・品質・安全など。節の正本は
+`shared/instructions/personal-operating-rules.md` の見出し) を、claude-code には `CLAUDE.md`、
+codex には `AGENTS.md` として両 tool へ配布するための artifact kind です。skill が directory を
+丸ごと所有するのに対し、
 instruction は **tool 別の単一ファイル**を所有します。
 
 ## 所有モデル: 丸ごと所有
@@ -36,17 +37,18 @@ instruction は単一ファイル所有なので、skill の directory sidecar m
 ```
 
 marker は HTML コメントなので tool が読んでも指示として解釈されず、表示もされない。
-sync はこの marker を厳密にパースして所有を判定し、injection checker は
-自分の marker 行を検査対象から除外する。
+sync はこの marker を厳密にパースして所有を判定する。injection checker は `shared/` の source
+だけを検査する。marker は build が足すので検査対象に現れない。
 
 ## 接続 (connect) と日常 sync の分離
 
 人間のファイルに触る操作 (import 1 行追加 / グローバル所有開始) は専用 connect 操作だけに
 閉じ込める。日常の build / sync は「人間のファイルに触らない」を不変条件として厳守する。
 
-- connect は default dry-run + apply、冪等。symlink 拒否 / 改行スタイル保持 /
-  完全一致 import は no-op / 空判定は lstat ベース。
-- sync は未接続なら案内して停止し、自動では人間のファイルを触らない (create に落ちない)。
+- connect は default dry-run + apply、冪等。symlink は lstat で拒否してから中身を読む / 改行スタイル保持 /
+  行の前後の空白を除いて import 行と一致すれば no-op / 空判定は中身を読み、空白だけなら空とみなす。
+- sync は未接続なら `run connect first` で skip して案内し (他の asset の配置は続け、未接続だけなら
+  exit 0)、自動では人間のファイルを触らない (create に落ちない)。
 
 ## 参照先の分離: 間接ポインタ
 
@@ -103,7 +105,7 @@ connect / sync (所有判定) が同じ format を共有する。
   ビルド可能性証明、connect (`scripts/connect.sh`)、sync の instruction 配置
   (catalog を source of truth として列挙)、status / doctor の instruction generated
   カウントと鮮度判定、build --prune の instruction 対応、injection の instruction strict
-  (external URL を high に昇格)、検証用の実 instruction asset
-  (`shared/instructions/personal-operating-rules`)。
+  (external URL を high に昇格)、実 instruction asset
+  (`shared/instructions/personal-operating-rules.md`)。
 - これで instruction の pipeline (build → register → connect → sync、観測は status /
   doctor) が一通り完成した。

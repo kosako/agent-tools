@@ -2,7 +2,7 @@
 
 `agent-tools` はひとつの shared source of truth を持ち、そこから tool-specific artifacts を生成します。
 
-## 初期 target tools
+## v1 の target tools
 
 | Tool | Source | Generated target | v1 sync |
 | --- | --- | --- | --- |

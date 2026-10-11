@@ -9,7 +9,7 @@
 ## 1. このプロジェクトは何か
 
 `agent-tools` は、再利用可能な AI agent asset (skills / prompts / workflows /
-agent definitions / instruction templates / scripts) を **管理・運用するフレームワーク**です。
+agent definitions / instruction templates / scripts / plugins) を **管理・運用するフレームワーク**です。
 asset を量産することが目的ではなく、**asset を安全に検証・生成・配置する仕組み**が本体です。
 
 - Codex と Claude Code の共通 source repository。OpenCode には plugin だけを配る (#295)。
@@ -42,11 +42,15 @@ shared/<category>/personal-*        ← source asset + manifest (sidecar .asset.
   status.sh / doctor.sh             pipeline の状態を read-only で観測
 ```
 
-実行は手動。典型的には `build.sh && register.sh && sync.sh`
-(dry-run で確認 → `sync.sh --apply`)。instruction を初めて配るときは sync の前に
-`connect.sh --apply` で所有を確立する(冪等・初回のみ)。`register` と `connect` は
-build 後・sync 前であればよく相互依存しない(図は直列に見えるが推奨順)。CI が PR ごとに
-全 self-test + 上記一周を回す。新環境への install / update 手順は
+実行は手動。典型的には `setup.sh` で build → register → connect → sync を通す
+(dry-run で確認 → `setup.sh --apply`)。setup は register の exit 3 (human review 待ちの entry がある) を
+致命にせず先へ進む。個別に `build.sh && register.sh && sync.sh` と繋ぐと、review 待ちが 1 つでも
+あれば sync に進まない。個別に回して instruction を初めて配るときは sync の前に
+`connect.sh --apply` で所有を確立する(冪等・初回のみ)。connect は catalog に registered な
+instruction entry が無いと skip するので、register の後に回す。sync は register と connect の両方の後。
+図の順 (`setup.sh` と同じ build → register → connect → sync) は推奨ではなく必須の順。CI は PR ごとに
+全 self-test と check-manifests / check-injection / build / register / status / doctor を回す
+(connect と sync は self-test が一時 home で確かめ、一周の中では回さない)。新環境への install / update 手順は
 [install-and-usage](install-and-usage.md)。
 
 ## 3. コンポーネントとコードの場所
@@ -59,15 +63,24 @@ build 後・sync 前であればよく相互依存しない(図は直列に見�
 | manifest schema 検証 | `check-manifests.sh` | `scripts/lib/check_manifests.rb` (`CheckManifests::Runner#run`) |
 | static prompt injection 検査 | `check-injection.sh` | `scripts/lib/check_injection.rb` (`CheckInjection::Runner#run`, `PATTERNS`) |
 | credential 隔離 acceptance 判定 | `check-credential-isolation.sh` | `scripts/lib/check_credential_isolation.rb` (`CheckCredentialIsolation.judge`) |
+| skill routing acceptance 判定 | `check-skill-routing.sh` | `scripts/lib/check_skill_routing.rb` (`CheckSkillRouting.evaluate`) |
 | build (生成 + marker) | `build.sh` | `scripts/lib/build.rb` (`Build::Runner#run`, `Build.build_id_for`, `Build.run_gates`) |
 | instruction marker の生成・解析 | — | `scripts/lib/instruction_marker.rb` (`InstructionMarker.render` / `parse`) |
 | plugin marker (先頭 1 行 JS コメント) の生成・解析 | — | `scripts/lib/plugin_marker.rb` (`PluginMarker.render` / `parse` / `managed?` / `matches?`) |
+| skill / script の YAML marker の生成・解析 | — | `scripts/lib/yaml_marker.rb` (`YamlMarker.render` / `read_file` / `managed?`) |
 | register (catalog 生成) | `register.sh` | `scripts/lib/register.rb` (`Register::Runner#run`, `catalog_entries`) |
+| catalog の共有 reader (sync / connect / status / doctor) | — | `scripts/lib/catalog.rb` (`Catalog.read`) |
 | connect (instruction 所有確立) | `connect.sh` | `scripts/lib/connect.rb` (`Connect::Runner#plan` / `apply`) |
 | sync (配置) | `sync.sh` | `scripts/lib/sync.rb` (`Sync::Runner#plan` / `plan_for_entry` / `apply`) |
 | status (観測) | `status.sh` | `scripts/lib/status.rb` (`Status::Runner#report`, `target_state`) |
 | doctor (環境点検) | `doctor.sh` | `scripts/lib/doctor.rb` (`Doctor::Runner#run`, `check_catalog`) |
 | psych 3/4 両対応 YAML loader | — | `scripts/lib/yaml_util.rb` (`YamlUtil.load`) |
+
+補助: 実機の probe 3 本 (`probe-credential-isolation.sh` / `probe-skill-routing.sh` / `probe-opencode-plugin.sh`。
+network と各 CLI に依存し、CI では回さない。[scripts/README](../scripts/README.md))。共有 lib は CLI 引数解析
+(`scripts/lib/cli.rb`)、sync / connect の plan 表示と集計 (`scripts/lib/plan_report.rb`)、literal な directory の下の
+glob (`scripts/lib/path_glob.rb`)、directory skill の `evals/evals.json` 検査 (`scripts/lib/check_evals.rb`。
+CI の self-test が通す)。
 
 self-test は `scripts/tests/*-test.sh`。各 entrypoint に対応するほか、配布される shared script
 asset (safe-gh / safe-gh-hook など) にも純ロジックの test がある。
@@ -92,6 +105,9 @@ medium の扱いは段階で異なる:
 - **build** (`Build.run_gates`): medium で止めない。artifact は中間物として生成する。
 - **register** (`Register::Runner#run`): medium を `review.human_review` と
   突き合わせ、catalog に `registered` / `human_review_required` を記録する。
+  script / plugin に解決される asset と、宣言 risk が `medium` / `unknown` の asset も、finding の
+  有無によらず human review 必須 (`Register::Runner#review_needed?`。[register-catalog](register-catalog.md)
+  「script / plugin artifact は常に human review 必須」「宣言 risk の enforce」)。
 - **sync** (`Sync::Runner#plan_for_entry`): catalog を読み、`registered` の artifact
   だけ配置する。`human_review_required` / catalog 不在は理由つきで skip。
 
@@ -165,7 +181,8 @@ check 結果を manifest に書き戻さない (diff churn を避ける)。
    sync が catalog を尊重するように再構成。asset discovery を `assets.rb` に集約。
 
 **現在地**: check-manifests / check-injection / check-credential-isolation / build /
-register / connect / sync / status / doctor / setup の 10 script が揃い、各 entrypoint に
+register / connect / sync / status / doctor / setup の pipeline の 10 script が揃い (`scripts/*.sh` は
+ほかに check-skill-routing と probe 3 本)、各 entrypoint に
 self-test が対応して CI で回る (加えて配布 script asset の純ロジック test)。gate 一本化で
 安全判定が pipeline 全体で一貫した状態。
 
@@ -207,7 +224,8 @@ script / plugin) のまま。
 に従う。要点:
 
 - 作業単位は GitHub Issue に切り、変更は PR で管理する。
-- Issue ごとに branch → 実装 → self-test → public safety check → PR → CI green → squash merge。
+- Issue ごとに branch → 実装 → self-test → public safety check → PR → CI green →
+  相互レビュー (author ≠ reviewer、`personal-review-request`) → squash merge。
 - project planning / management docs は repository 外で別管理 (tracked file に
   tool 名や URL を書かない)。
 - commit / PR 前に public safety check: secrets / private path / planning tool の

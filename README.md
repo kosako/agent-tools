@@ -1,7 +1,8 @@
 # agent-tools
 
 `agent-tools` は、再利用可能な skills、prompts、workflows、agent definitions、
-instruction templates、scripts を管理するための個人用 AI agent asset repository です。
+instruction templates、scripts、OpenCode plugins を管理するための個人用 AI agent asset
+repository です。
 
 > 全体像・設計・現在地を一度に把握したい場合は
 > [docs/onboarding.md](docs/onboarding.md) から読んでください。
@@ -82,25 +83,30 @@ shared/
   workflows/      共通 reusable workflows
   instructions/   共通 instruction templates
   scripts/        共通 source scripts (配布される wrapper / hook body)
+  plugins/        OpenCode 向け plugin source (単一の .js)
                   (prompts / agents などの category は asset 追加時に作成する)
 
 adapters/
   codex/          Codex 向け build adapter specs
   claude-code/    Claude Code 向け build adapter specs
+  opencode/       OpenCode 向け build adapter specs (plugin だけ)
 
 generated/
   codex/          生成された Codex artifacts。README と .gitkeep 以外は ignored。
   claude-code/    生成された Claude Code artifacts。README と .gitkeep 以外は ignored。
+  opencode/       生成された OpenCode artifacts。build 時に作られ、すべて ignored。
 
 scripts/          check-manifests / check-injection / check-credential-isolation /
-                  build / register / connect / sync / status / doctor / setup scripts。
+                  check-skill-routing / build / register / connect / sync / status /
+                  doctor / setup scripts と、実機観測の probe-credential-isolation /
+                  probe-skill-routing / probe-opencode-plugin harness。
                   usage は scripts/README.md を参照。
 docs/             boundary と policy documents。
 ```
 
 `shared/` 配下のサブディレクトリは整理のための置き場所で、asset の種類は manifest の
 `kind` で決まります。各 `kind` (`skill` / `prompt` / `workflow` / `instruction` /
-`script` / `agent`) の意味・使い分け・配置のされ方は
+`script` / `plugin` / `agent`) の意味・使い分け・配置のされ方は
 [Asset Manifest Schema の「kind」](docs/asset-manifest-schema.md#kind) を参照してください。
 
 ## 現在の scope
