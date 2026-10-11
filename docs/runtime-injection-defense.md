@@ -200,7 +200,7 @@ boundary でない)。
   以外) として続ける (成功すれば exit 0)。`-h` / `--help` は usage を出して exit 0。
 - 上の 3 signal のうち **分類に使うのは `is_bot` → `is_self` の 2 つ**で、author を `self` / `bot` /
   `other` に決める。`association` は分類に使わず envelope の補助信号として載るだけ (上記のとおり
-  単体の許可ソースにしない)。self を確定できなければ全 `other` に倒す(fail-closed)。
+  単体の許可ソースにしない)。self を確定できなければ、bot は `bot`、それ以外は `other` に分類する (どちらも untrusted。fail-closed)。
 - **self identity source の信頼境界 (honest-label)**: self identity は local の trust file /
   env override を最優先で読むため、それらを書ける主体は任意 author を self と詐称でき、
   その author の body withhold が外れる。local file / env の改変は本 wrapper の脅威モデル外

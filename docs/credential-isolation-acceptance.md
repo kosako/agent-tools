@@ -162,8 +162,9 @@ probe target は public repo にハードコードせず local config から読�
 `--config` で上書き)。必須キー (required channels): `PROBE_GH_REPO` (owner/private-repo) /
 `PROBE_GIT_HTTPS`。任意キー (opt-in channels・ambient 認証源がアクティブなときだけ設定):
 `PROBE_GIT_SSH` / `PROBE_CURL_URL`。いずれも**認証必須の private リソース**を指す (public だと
-未認証でも通り negative が空振りになる)。`PROBE_GIT_SSH` は scp 形式 (`git@host:path`) に限る
-(reachability control が host を取り出すため。`ssh://` 形式などそれ以外は exit 2)。必須キー不在・
+未認証でも通り negative が空振りになる)。`PROBE_GIT_SSH` は scp 形式 (`git@host:path`) だけに対応する
+(reachability control が host を取り出すため)。検査は `*@*:*` の形との一致だけで、一致しない値は exit 2
+(`ssh://` 形式でも、この形に一致する値は検査を通るが、対応の外)。必須キー不在・
 欠落時は明示 fail (silent skip しない)。
 
 > **注意 (config は shell として source される, #180 H-03)**: runner はこの config を
