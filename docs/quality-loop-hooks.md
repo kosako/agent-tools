@@ -106,9 +106,11 @@
   hook の timeout が送る signal と宛先 (pid か group か) は公式 docs に書かれておらず未確認なので、内側の総予算を
   外側の既定 600 秒より短く保つ。
 - **配備の順序**: OpenCode の plugin は timeout で hook の group を止める。group への SIGKILL だけで止める旧い plugin
-  のままこの変更を配ると、safe-run ごと殺されて check の group が残る。plugin の止め方を TERM → 猶予 → KILL に
-  変えた版 (#467 の PR B) を先に配備し、**稼働中の OpenCode を起動し直して新しい plugin を読み込ませてから**、
-  この変更 (hook が safe-run を使う) を配備する。
+  のままこの変更 (hook が safe-run を使う、#477) を動かすと、safe-run ごと殺されて check の group が残る。plugin の
+  止め方を TERM → 猶予 → KILL に変えた版 (#476) とこの変更はどちらも main にあり、main からの配備では同じ
+  `sync --apply` で一緒に配られる (sync に asset を選ぶ option は無い)。稼働中の OpenCode は起動時に読んだ旧い
+  plugin のまま新しい hook を呼ぶので、**`sync --apply` の前に稼働中の OpenCode を止める** (止められなければ
+  直後に起動し直して、新しい plugin を読み込ませる)。
 
 ## personal-fast-edit-check(PostToolUse / `Edit|Write|apply_patch`)
 

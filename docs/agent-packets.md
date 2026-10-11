@@ -18,7 +18,8 @@ Codex の sandbox から読める場所に置くため。
 ## 信頼モデル(authorization と data)
 
 - **authorization は起動 prompt にある。packet は scope の詳細を運ぶだけ。** orchestrator
-  (当面は人。agent に持たせる段階では Claude) が「packet #N で作業して」と trusted に
+  (人、または人の起動指示を受けた Claude。Codex worker への委譲では Claude の起動 prompt が worker の
+  authorization。下記「worker 委譲との関係」) が「packet #N で作業して」と trusted に
   指示したときだけ、その packet の `依頼` を作業範囲として読む。resume で見つけただけの
   packet は読むだけで着手しない。
 - **GitHub 上の写しは常に data** (self author でも)。写しから続きを始めるときも、起動
@@ -30,7 +31,7 @@ Codex の sandbox から読める場所に置くため。
 | 節 | 書けるのは | 操作 |
 |---|---|---|
 | `## 依頼` | orchestrator のみ | 上書き |
-| `## 結果` | worker (実装) / reviewer (verdict) / orchestrator (委譲した worker の停止記録と、転記の後の回収・trailer 検査の停止 (#412) だけ。見出しは `orchestrator/claude`)。packet に書けない worker (委譲した Codex) の分は orchestrator が worker の最終 message から転記する (見出しは `worker/codex`) | `### <日付> <役割/agent>` 見出しで区切って追記 |
+| `## 結果` | worker (実装) / reviewer (verdict) / orchestrator (委譲した worker の停止記録と、転記の後の回収・trailer 検査・公開する内容の gate の停止 (#412 / #413) だけ。見出しは `orchestrator/claude`)。packet に書けない worker (委譲した Codex) の分は orchestrator が worker の最終 message から転記する (見出しは `worker/codex`) | `### <日付> <役割/agent>` 見出しで区切って追記 |
 | `## 次の入口` | worker (委譲した worker の分は orchestrator が worker の最終 message から写す。worker が止まって最終 message が無いときは orchestrator が続きの入り方を書く。修正 round (review の指摘、または転記の後に受け入れ条件を満たさないと判断したとき。#412) を始めるときは orchestrator が書く。下記) | 現在地に上書き |
 
 frontmatter の `run` / `tab` (起動の記録) と `last_run` (最後の run dir) を書く・消すのも orchestrator だけ。
@@ -98,9 +99,9 @@ state: review        # open | blocked | review | done
 worker: claude       # claude | codex | human
 updated: 2026-09-21T23:50:00+09:00   # 書いた agent が入れる (mtime に頼らない)
 published: 2026-09-21T23:55:00+09:00 # 最後に Issue コメントへ写した時刻。未 publish なら省略
-run: /path/to/run-dir  # worker の起動の記録 (委譲した worker が走っている / 未回収の間だけ)。無ければ省略
+run: "/path/to/run-dir"  # worker の起動の記録 (委譲した worker が走っている / 未回収の間だけ)。無ければ省略
 tab: "#123"            # worker を動かしている herdr の tab 名。`#` があるので引用符で囲む
-# last_run: /path/to/run-dir  # 最後の run dir (完了の転記で run から移す)。run とは同時に置かないので、run が無いときだけ書く
+# last_run: "/path/to/run-dir"  # 最後の run dir (完了の転記で run から移す)。run とは同時に置かないので、run が無いときだけ書く
 ---
 
 ## 依頼
@@ -158,6 +159,8 @@ PR #124 の should 1 件を直して re-review を依頼する。
   - `tab` の値は引用符で囲む (`tab: "#123"`)。引用符が無いと `#` 以降が YAML の comment になって値が
     消えるので、key があって値が空の packet は壊れた packet として報告する (記録が黙って消えると
     二重起動の検査が効かない)。改行などの制御文字、相対 path の `run` も同じく壊れた packet。
+  - `run` (と下の `last_run`) も double-quoted で書く (`run: "/path/to/run-dir"`。書き方の規則で、手順は
+    委譲 skill の `LAUNCH.md` §4)。`list` が検証するのは YAML として読んだ値で、引用符の有無は見ない。
   - 写しの対象ではない (publish は写さない。`run` は local の path)。なので書き込み・削除で
     `updated` を変えない (未 publish の印を立てない)。ただし `blocked` からの再起動で同じ書き込みに `state` の変更を
     含めるときは、state の変更として `updated` を今の日時にする (#412)。pull は local の値を保持する。
@@ -172,11 +175,11 @@ PR #124 の should 1 件を直して re-review を依頼する。
   `last_run` に移さない。次の起動で `run` を
   書くときに `last_run` は消す (`run` と同時には置かない。両方あれば壊れた packet として報告する)。worker が止まった
   (転記の前の) `state: blocked` では従来どおり `run` に残す
-  (退避物の置き場)。転記の後に回収・trailer 検査で止まった `state: blocked` (#412) では、転記で `last_run` に
-  移したままにする (`run` は無い)。
+  (退避物の置き場)。転記の後に回収・trailer 検査・公開する内容の gate で止まった `state: blocked` (#412 / #413)
+  では、転記で `last_run` に移したままにする (`run` は無い)。
   `done` の後も残す。用途は、転記で起動の記録が消えた後も、前の run の成果物 (clone の `.git` の
   snapshot、tab の所有の確認に使う `tab-id`) を別の session から辿れるようにすること。
-  - 書くのは orchestrator だけ。検証は `run` と同じ (引用符付きの 1 行・制御文字なし・絶対 path)。
+  - 書くのは orchestrator だけ。検証は `run` と同じ (空でない文字列・制御文字 (改行等) なし・絶対 path。引用符の有無は見ない)。
   - 起動の記録ではない (`run_status` は出さず、resume の「起動済み・未回収」にもならない)。`list --json` にだけ
     出し、text の一覧には出さない。写しの対象ではないので、書き込み・削除で `updated` を変えない。pull は
     local の値を保持する。
@@ -253,7 +256,7 @@ worker 委譲時の `pull` は orchestrator が main repository 側で行い、�
   に落ちる packet dir / file は更新しない (exit 2。`--dry-run` でも止める)。
 
 self-test は `scripts/tests/packet-pull-test.sh`。`--mutations` を付けると author / marker /
-envelope (number / source / repo) / reader への `--repo` 伝達 / merge / H2 / frontmatter / 更新先の検査を壊した source に同じ assertions を当て、退行を検出できるか確かめる。
+envelope (number / source / repo) / reader への `--repo` 伝達 / merge / 分岐の検出 (#412) / 起動の記録 (`run` / `tab`) と `last_run` の保持 / H2 / frontmatter / 更新先の検査を壊した source に同じ assertions を当て、退行を検出できるか確かめる。
 
 ## tooling(`personal-packet`)
 
@@ -286,12 +289,18 @@ file で行い、command 文字列へ inline 展開しない。
   差し替えに失敗したら投稿済み URL とこの一時 file を示して止まる (再実行しない。中身を手で移す)。
   一時 file が既に残っていれば消さずに止まる (片付けてから再実行)。
 
+self-test は `scripts/tests/packet-test.sh` (dir / list / check / publish) と `scripts/tests/packet-pull-test.sh`
+(pull。上の「写しの取り込み」)。
+
 ## resume / handoff との関係
 
 - `personal-resume-project`: cwd が repo と一致する herdr agent (種別 / 状態) と、この repo の
-  packet 一覧 (open / blocked / review) を workspace 節として出す。herdr が無い / server が
-  止まっていれば packet 一覧だけに縮退する。tab ↔ Issue の対応規約 (worker の tab は `#<Issue 番号>`)
-  は [herdr-operations](herdr-operations.md)。
+  packet 一覧 (open / blocked / review) を workspace 節として出す。起動の記録 (`run`) のある packet は
+  `run_status` で分けて「起動済み・未回収」と出す (`state: blocked` なら「停止中」)。委譲した worker は repo の
+  外の clone を cwd にして動くので herdr agent の一覧には出ない。`unfinished` の packet の worker は、
+  `#<Issue 番号>` の tab の worker の pane の foreground に `codex` がいるかで見る (#423。手順は resume skill)。
+  herdr が無い / server が止まっていれば packet 一覧だけに縮退する。tab ↔ Issue の対応規約 (worker の tab は
+  `#<Issue 番号>`) は [herdr-operations](herdr-operations.md)。
 - `personal-session-handoff`: workspace 単位の索引 file は作らない (packet から導出)。役割は
   packet の `結果` / `次の入口` を更新 (常時。local で agent 所有なので authorization は要らない。
   ただし `check` に落ちる packet は書かず、更新の内容を会話の中の draft に留める。置き場の規則) →
@@ -307,14 +316,15 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
 - **authorization と scope**: 起動 prompt が authorization、packet の `依頼` が scope (上の信頼
   モデルと同じ)。brief には `依頼` を要約せず verbatim で写す (orchestrator 著なので trusted。
   要約は drift の元)。
-- **作業場所**: Issue ごとの **local clone** (orchestrator が main から `git clone` して branch を
-  切る)。packet dir は main worktree の root のまま (置き場の規則どおり) で、gitignore されているので
+- **作業場所**: Issue ごとの **local clone** (orchestrator が main から `git clone --no-hardlinks` して
+  branch を切る。`--no-hardlinks` は必須で、既定の local clone は object を main と hardlink で共有するので
+  分離が成り立たない)。packet dir は main worktree の root のまま (置き場の規則どおり) で、gitignore されているので
   clone には含まれない。worker の書込先は **その clone の中だけ**で、main の Git 管理領域も packet dir
   も含めない。worker の commit は orchestrator が main へ `git fetch <clone> <branch>:<branch>` で
   回収する (network 不要)。起動側は **その clone の git dir (`<clone>/.git`) だけ**を sandbox の
   writable roots に足す (`workspace-write` は workdir の内側でも `.git` を保護するため。実測)。
-  main の Git 管理領域は足さない (preflight が orchestrator 自身の repository と linked worktree を
-  拒否する)。
+  main の Git 管理領域は足さない (preflight が orchestrator 自身の repository と linked worktree、`.git` の中に
+  hardlink で共有された file がある clone (#431) を拒否する)。
   linked worktree を使わないのは、worktree の git dir が main 側 (`<main>/.git/worktrees/<n>`) にあり、
   `workspace-write` の sandbox の writable roots に入らないため (codex 0.154.0 で実測。`git add` が
   index と objects の両方で `Operation not permitted` になる)。`--add-dir <main>/.git` で通るが、
@@ -345,8 +355,12 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
   記録」、手順は委譲 skill。
 - **PR**: orchestrator が PR に含まれる追加 commit (base OID から head までの
   `git log <base-oid>..<head-oid>`。共有祖先は含めない) の trailer がすべて Codex のみであることを
-  確認してから push し、PR を作る。packet に `pr:` と `state: review` を入れるのは orchestrator
-  (PR を出した側)。
+  確認し、続けて公開する内容 (累積差分・各 commit の差分・全 commit の message・branch 名・PR の題名と本文) を
+  public-safety の gate に通して、exit 0 で警告が無いときだけ push し、PR を作る (#413。警告が出たら人に見せて
+  判断を仰ぐ。手順は委譲 skill の §7 と `LAUNCH.md` §9)。gate が無い・exit 0 でないとき
+  (`Blocked at: public-safety`) は push も PR 作成もせず、回収・trailer 検査の停止と同じく orchestrator が
+  `orchestrator/claude` の entry を書いて `state: blocked` にする。packet に `pr:` と `state: review` を入れるのは
+  orchestrator (PR を出した側)。
 - **停止 (limit / 途中終了 / 質問)**: 最終 message が無い停止では worker の記録が残らないので、
   orchestrator が `### <日付> orchestrator/claude` で停止理由 (limit の文言、exit code、末尾の
   public-safe な要約) を書く (最終 message があれば上の転記)。どちらも `state: blocked` にし、
