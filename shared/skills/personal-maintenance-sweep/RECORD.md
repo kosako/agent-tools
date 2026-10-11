@@ -65,8 +65,11 @@ end' "$me"
 
 - `tracking` の行が追跡 Issue (番号、状態、前回の監査の対象の commit、前回の監査役)。2 行以上あれば、
   どれを使うかを人に確認する。
-- `finding` の行が所見の Issue (番号、状態、close の理由、論点なしの印、fingerprint)。close の理由は `completed` /
-  `not_planned` / `reopened`、open なら `-`。印は `no-contention` か `-` (fix モードの候補の抽出に使う。`FIX.md`)。
+- `finding` の行が所見の Issue (番号、状態、close の理由、論点なしの印、fingerprint)。close の理由は REST の
+  `state_reason` を状態に関わらずそのまま出す。close した Issue なら `completed` / `not_planned` / `duplicate`、
+  close の後に reopen した open の Issue なら `reopened`、一度も close していない open の Issue なら `-`。
+  `duplicate` は gh の close の理由 (`--reason duplicate`) からの推定で、REST の応答の値は未確認。印は
+  `no-contention` か `-` (fix モードの候補の抽出に使う。`FIX.md`)。
 - 一覧の取得 (`gh api`) は変数に受けてから解析するので、取得が途中で失敗すれば全体が 0 以外で終わる (pipe の
   後ろの ruby の成功で失敗が隠れない)。command が失敗したら (gh の認証、network、rate limit)、照合が
   終わっていないものとして起票しない (report モードに切り替えるかを確認する)。

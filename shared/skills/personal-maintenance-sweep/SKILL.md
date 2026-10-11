@@ -148,6 +148,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   fingerprint も読み比べる (関数や見出しの名前が変わることがあるため)。
 - open の Issue と同じ問題 → 起票しない (報告に既存の番号を書く)。
 - not planned で close された Issue と同じ問題 → 却下として扱い、新しい根拠が無ければ起票しない。
+- duplicate で close された Issue と同じ問題 → not planned と同じく却下として扱い、新しい根拠が無ければ起票
+  しない (報告にその Issue の番号を書く)。
 - completed で close された Issue と同じ問題 → 再発として起票してよい (本文に前の番号を書く)。
 
 ### 7. 起票する (issues モードだけ)
