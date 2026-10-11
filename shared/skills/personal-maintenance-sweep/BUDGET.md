@@ -37,8 +37,11 @@
 ## 設定 (local)
 
 `${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/maintenance-sweep.json` に置きます (repo には置かない)。
+`XDG_CONFIG_HOME` は絶対 path のときだけ使い、`HOME` が絶対 path でなければ場所を決めずに止めます (相対 path を
+cwd の repo から解決しない。`personal-usage-reader` と同じ規則)。
 key は省いてよく、省いた key は既定値を使います。在る key の値が範囲の外、知らない key がある、JSON と
-して読めない、のどれかなら、**既定値に黙って倒さず、開始せずに**その旨を報告します。
+して読めない、file は在るが regular file でない・確かめられない・読めない、のどれかなら、**既定値に黙って倒さず、
+開始せずに**その旨を報告します。
 
 | key | 既定値 | 範囲 | 意味 |
 | --- | --- | --- | --- |
@@ -50,7 +53,9 @@ key は省いてよく、省いた key は既定値を使います。在る key 
 | `fix_cap` | 2 | 0〜20 の整数 | fix モードで出す PR の上限 (再開をまたいだ累計。0 なら fix をしない) |
 
 `<tool>` は `claude-code` と `codex` だけです。次の command で、検証した実効値を出します (exit 0 で実効値の
-JSON、exit 2 で理由を stderr に出す)。
+JSON、exit 2 で理由を stderr に出す。理由に path は出さない)。**出力を採用するのは exit 0 のときだけ**で、
+それ以外 (exit 2 のほか、ruby が起動できないなどで 0 以外で終わった場合も) は「設定が不正」として開始せず、
+理由を報告します。
 
 ```sh
 ruby -rjson -e '
@@ -61,14 +66,24 @@ DEFAULTS = {
   },
   "start_5h_min_pct" => 30, "stop_5h_min_pct" => 10, "issue_cap" => 5, "fix_cap" => 2,
 }
-base = ENV["XDG_CONFIG_HOME"].to_s.empty? ? File.join(Dir.home, ".config") : ENV["XDG_CONFIG_HOME"]
-path = File.join(base, "agent-tools", "maintenance-sweep.json")
 fail_with = ->(msg) { warn "maintenance-sweep.json: #{msg}"; exit 2 }
+base = ENV["XDG_CONFIG_HOME"].to_s
+base = File.join(Dir.home, ".config") unless base.start_with?("/")
+fail_with.call("場所を決められない (HOME が絶対 path でない)") unless base.start_with?("/")
+path = File.join(base, "agent-tools", "maintenance-sweep.json")
 pct = ->(v) { v.is_a?(Numeric) && v >= 0 && v <= 100 }
 eff = JSON.parse(JSON.generate(DEFAULTS))
-if File.exist?(path)
+text = begin
+  fail_with.call("regular file でない") unless File.stat(path).file?
+  File.read(path)
+rescue Errno::ENOENT
+  nil
+rescue SystemCallError => e
+  fail_with.call("確かめられないか読めない (#{e.class})")
+end
+unless text.nil?
   user = begin
-    JSON.parse(File.read(path))
+    JSON.parse(text)
   rescue JSON::ParserError
     fail_with.call("JSON として読めない")
   end

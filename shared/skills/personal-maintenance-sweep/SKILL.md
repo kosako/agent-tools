@@ -28,7 +28,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 
 ## 発火とモード
 
-- **発火は明示されたときだけ**: skill の名指し、監査と起票 (書き込み) の両方の依頼、残量の消化の依頼。
+- **発火は明示されたときだけ**: skill の名指し、監査と起票 (書き込み) の両方の依頼、sweep の所見の修正の依頼
+  (fix モード)、残量の消化の依頼。
   「監査して」だけの依頼は personal-repo-audit の report で、この skill は起動しない。scheduler は持たない。
 - **モード**:
   - **issues** (既定): 起票まで進む。
@@ -116,8 +117,9 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 
 - **監査役が Claude**: personal-repo-audit の手順で監査し (観点の fan-out は repo-audit のとおり)、結果を
   repo-audit の `findings.schema.json` の形の JSON にして run dir に保存する。
-- **監査役が Codex**: personal-repo-audit の `CODEX-LAUNCH.md` の起動で Codex に監査させる。model と
-  effort はプリセットの値を渡す。
+- **監査役が Codex**: personal-repo-audit の `CODEX-LAUNCH.md` の起動で Codex に監査させる。effort は
+  プリセットの値を渡す。model は [BUDGET.md](BUDGET.md) の `personal-codex-model-selection` の出力を渡す (採用は
+  exit 0 のときだけで、それ以外は開始しない。空なら model を渡さない)。
 - 単位が終わるたびに local の state を保存し、残量を読み直す。停止の条件 ([BUDGET.md](BUDGET.md)) に
   当たったら、残りの単位は state に残して次の run に回す。
 
@@ -169,7 +171,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   直す。累積差分に `diff --check`、repo の gate、壊れた参照の検査を当て、累積差分と `base` 以降の全 commit の message と
   PR の題名・本文を public-safety の gate に通してから push と PR (review の修正で commit を足したら、追加の push の前に
   やり直す)。git の command は cwd の `HEAD` ではなく branch の ref を基準にし、作業ツリーを読む検査は worktree で
-  走らせる。check-injection の exit 3 は、`base` の結果と比べて branch にだけある medium が無ければ続行する。
+  走らせる。check-injection の exit 3 は、`base` の結果と比べて branch にだけある finding の行 (行番号を含む) が
+  無ければ続行する。
 - review は `personal-review-request` に委ね (fix の明示が write authorization)、must は範囲内だけ直し、範囲外は
   `blocked`。完了した review は最大 3 回。未レビューの PR を完了扱いにしない。
 - `fix_cap` (再開をまたいだ累計) まで。PR の前と review の round の前後で残量を読み直す ([BUDGET.md](BUDGET.md))。
