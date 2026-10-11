@@ -21,14 +21,17 @@ Run dir: <path>
 Next step: 修正 round N で再起動するか (§1 の authorization) を決める
 ```
 
-worker がまだ走っている (hard cap) 場合:
+worker がまだ走っている (hard cap に達した、または `SKILL.md` §1 で未回収の run の worker が動いているのを
+見つけた) 場合:
 
 ```text
 Status: RUNNING
-Tab: #<issue> / Pane: <pane id> / Run dir: <path> / Elapsed: <分>
+Tab: #<issue> / Pane: <pane id> / Run dir: <path> / Elapsed: <分> (分かるときだけ)
 Next step: worker はまだ生きている (run script を再実行しない)。tab #<issue> の pane を見て続行か中断かを決める。
 続行なら pane を監視して done.txt を待つ。中断なら worker の process を止めてから退避 (LAUNCH §8)
 ```
+
+`Elapsed` は分かるとき (hard cap まで自分で待ったとき) だけ書き、`SKILL.md` §1 で見つけた run では推測で埋めない。
 
 停止した場合 (転記の前。verdict は作らない):
 

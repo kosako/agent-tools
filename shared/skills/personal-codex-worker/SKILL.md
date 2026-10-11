@@ -113,8 +113,9 @@ orchestrator が行います。
   使い、推測で model を選ばない。示されなければ `Blocked at: preflight`。
 - model / effort の出所は preflight が決め、上ほど優先する: `--model` / `--effort` の明示 → Codex home の
   worker 用 profile file `agent-tools-worker.config.toml` の top-level (dotfiles か user が置く。無ければ読まない) →
-  `config.toml` の top-level。出所は出力の `model_source` / `model_reasoning_effort_source` に出る (#339)。
-  この skill は profile を作らず、書き換えない。
+  `config.toml` の top-level。`--model` / `--effort` のどちらか 1 つでも明示すると profile と `config.toml` を
+  読まない (明示しなかった方は `launch_argv` に `-c` が出ず、Codex の既定になる)。出所は出力の
+  `model_source` / `model_reasoning_effort_source` に出る (#339)。この skill は profile を作らず、書き換えない。
 - preflight が無い・実行できない (配備欠損) ときも `Blocked at: preflight`。generic な `codex exec`
   に fallback しない。
 
@@ -125,8 +126,9 @@ orchestrator が行います。
 `-s danger-full-access` や `--dangerously-…` は使わない。`--add-dir` を自分で足さない)。
 
 `--add-dir` が 1 つ入るのは、`workspace-write` の sandbox が **workdir の内側でも `.git` を保護する**
-ため (Codex CLI 0.156.0 を 2026-09-24 に確認。`.git` 保護の挙動は 0.154.0 の実測が根拠で、
-0.156.0 での起動 probe は未実施)。開けるのは **worker 自身の
+ため (`--add-dir` 無しで `.git` が保護されることの実測は codex 0.154.0。0.156.0 では 2026-09-24 に
+`--add-dir` 付きの起動形で書込先を実測した (下の honest-label) が、`--add-dir` 無しの保護は確かめ直して
+いない)。開けるのは **worker 自身の
 clone の git dir だけ**で、preflight が orchestrator 自身の repository と linked worktree を拒否する
 (exit 2)。main の Git 管理領域・packet dir・home は開かない。
 
