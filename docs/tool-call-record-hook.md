@@ -44,7 +44,7 @@ self-test は canary 値でこれらが file に出ないことを確かめる�
 ## 出力先
 
 ```text
-$AGENT_TOOLS_TOOL_CALL_RECORD_DIR/<client>.jsonl                                  (絶対 path。test / OpenCode 用の上書き)
+$AGENT_TOOLS_TOOL_CALL_RECORD_DIR/<client>.jsonl                                  (絶対 path。test 用の上書き。OpenCode から呼ぶようになったときの分離にも使う想定)
 ${XDG_STATE_HOME:-~/.local/state}/agent-tools/personal-tool-call-record-hook/<client>.jsonl   (既定)
 ```
 
