@@ -3,15 +3,22 @@
 OpenCode 対応 Phase 2 (#295) の PR 1〜3 は、OpenCode の plugin の挙動を前提にしている (出力を
 書き換えた注記が model に届くか、bash の env に目印を立てられるか、hook が throw したら何が起きるか
 など)。前提の多くは upstream の source と型定義から予測したものなので、**実装に入る前に実機で
-確かめる**ための harness がこの probe である。測る項目を M1〜M20 とし、結果を PR 1〜3 の入力にする。
+確かめる**ために作った harness がこの probe である。測る項目を M1〜M20 とし、結果を PR 1〜3 の入力にした。
+
+#295 は完了し、PR 1〜3 は実装済みである。今の用途は、OpenCode の CLI を更新したときの測り直し (「強度のラベル」)。
+「PR 1〜3 への入力」は当時の判断の記録で、現行の契約は [quality-loop-hooks](quality-loop-hooks.md) (品質ループ)・
+[runtime-injection-defense](runtime-injection-defense.md) (safe-gh)・[git-hook-gates](git-hook-gates.md) (目印とトレーラ) の
+OpenCode の記述にある。
 
 | 部品 | path | 役割 | CI |
 | --- | --- | --- | --- |
 | runner | `scripts/probe-opencode-plugin.sh` (`scripts/lib/probe_opencode_plugin.rb`) | 隔離した tmp で `opencode` を stage ごとに起動し、raw の記録と summary を `--out` に書く | 実行しない (opencode CLI と network が要る) |
+| 隔離 | `scripts/lib/probe_opencode/isolation.rb` | tmp に HOME / XDG / DB / git config / project を作り、`opencode.json` と子 process に渡す allowlist の env を決める | T2 (env) / T3 (`opencode.json`) で検証 |
+| 子 process | `scripts/lib/probe_opencode/process.rb` | 子 process と serve を argv 配列で起動し、timeout と停止では process group ごと止める。serve の HTTP client | T8 で serve の停止を検証 |
 | 計測用 plugin | `scripts/lib/probe_opencode/probe-plugin.js` | v1 形 (`export default { id, server }`)。hook ごとの allowlist で記録する | T7 で allowlist を検証 |
 | mock provider | `scripts/lib/probe_opencode/mock_openai.rb` | 127.0.0.1 の OpenAI 互換 SSE。prompt の `PROBE-SCENARIO:<name>` で tool call の列を返す | T4 で検証 |
 | 判定 | `scripts/lib/probe_opencode/judge.rb` | 記録から M1〜M20 の observed と verdict を出す | T5 で検証 |
-| self-test | `scripts/tests/probe-opencode-plugin-test.sh` | T1〜T7。opencode も外部の network も使わない (T2 / T6 は偽の `opencode` で runner を通す) | 実行する (Ruby matrix の 2 行) |
+| self-test | `scripts/tests/probe-opencode-plugin-test.sh` | T1〜T8。opencode も外部の network も使わない (T2 / T6 は偽の `opencode` で runner を通す) | 実行する (Ruby matrix の 2 行) |
 
 ## 使い方
 
@@ -131,7 +138,7 @@ verdict になった (最後の round は判定だけの修正で記録を変え
 
 ## PR 1〜3 への入力
 
-PR 0 の merge の後、orchestrator がこの表に従って #295 の PR 1〜3 の項を更新する。
+PR 0 の merge の後に #295 の PR 1〜3 の項へ反映するために作った表で、当時の判断の記録である (現行の契約は冒頭に挙げた文書)。
 
 | M | 影響する PR の項 | differs / unknown のときの扱い (事前に決めたもの) | 今回の結果と扱い |
 | --- | --- | --- | --- |

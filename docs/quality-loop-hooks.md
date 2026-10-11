@@ -77,8 +77,8 @@
 - **出力**: stdout と stderr をまとめて読み、先頭 64 KiB だけ保持して残りは読み捨てる (check を pipe の詰まりで
   止めない。要約の 2000 文字の打ち切りは別)。safe-run の終了は pipe の EOF と分けて観測し、終わったら pipe を最大
   0.5 秒だけ読んでから閉じる (group を抜けた子が書き込み側を持ち続けても待たない)。
-- **safe-run の期限**: safe-run が `max_seconds` + 20 秒を過ぎても終わらなければ TERM (safe-run は check の group を
-  止めてから終わる) → 10 秒 → KILL で止め、その check を missing にする。
+- **safe-run の期限**: safe-run が、渡した `--max-seconds` (min(上限, 残りの予算の切り捨て)) + 20 秒を過ぎても
+  終わらなければ TERM (safe-run は check の group を止めてから終わる) → 10 秒 → KILL で止め、その check を missing にする。
 - **結果の分類** (safe-run の report を検証してから、上から順に排他的に。safe-run の exit code は使わない。137 は
   command 自身の SIGKILL と区別できないため):
 
