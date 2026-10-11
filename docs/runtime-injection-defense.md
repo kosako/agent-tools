@@ -83,7 +83,11 @@ command-string allowlist — は **steering**、hostname allowlist は **best-ef
   ([credential-isolation-acceptance.md](credential-isolation-acceptance.md))。
 - 検証は **negative test** (= 認証済み private access が**失敗**すれば合格)。テスト反転を明示する。
 - **positive control** を必ず置く: credential が在る通常 session では同じ private access が
-  **成功する**ことを確認し、「そもそも到達できていないだけ」の偽合格を排除する。
+  **成功する**ことを確認し、test 自体が空振りしている偽合格を排除する。
+- **reachability control** を必ず置く (#185): 隔離側だけの到達不能 (env 隔離で proxy 設定が消える
+  proxy-delta) は隔離の delta そのものなので、positive control では原理的に捕まらない。隔離 session
+  内の認証なし同一ホストアクセスで到達を確かめ、「そもそも到達できていないだけ」の偽合格を排除する
+  (到達できなければ緑に数えず indeterminate。[credential-isolation-acceptance.md](credential-isolation-acceptance.md))。
 - **既知の限界 (honest-label)**: これは「列挙した認証源を塞ぐ」test なので、**新しい read path /
   認証源を追加すると test が黙って緑のまま隔離が破れる**。1 本でも未列挙が残れば隔離は破れる。
   だからこそ隔離は「別 HOME 等で認証源を**構造的に**断つ」実装にし、列挙に依存しない。
@@ -175,7 +179,7 @@ boundary でない)。
 - コマンド: `personal-safe-gh [-R OWNER/REPO] issue <view|comments> <number>` /
   `personal-safe-gh [-R OWNER/REPO] pr <view|comments|review-comments|reviews> <number>`。
   出力は JSON。「safe-gh」は本文書の概念名で、**実行コマンド名は配備名 `personal-safe-gh`**
-  (下記のとおり PATH には載せないので、呼び出しは tool 別の絶対 path)。
+  (上記「script body の配置先」のとおり PATH には載せないので、呼び出しは tool 別の絶対 path)。
 - 上の 3 signal のうち **分類に使うのは `is_bot` → `is_self` の 2 つ**で、author を `self` / `bot` /
   `other` に決める。`association` は分類に使わず envelope の補助信号として載るだけ (上記のとおり
   単体の許可ソースにしない)。self を確定できなければ全 `other` に倒す(fail-closed)。
@@ -308,7 +312,7 @@ boundary でない)。
     「OpenCode」節) のどれでも無変更で resolve し、throw しない
     (after の throw は実行済みでも tool 結果を error にする — M7)。warn は script ごとに 1 回だけ
     `client.app.log` に出す (log file 行き。M11)。
-  - **登録は配置と同じ**: 上の「登録の所有」と違い、OpenCode では file を置くこと自体が登録なので、
+  - **登録は配置と同じ**: 下の「登録の所有」と違い、OpenCode では file を置くこと自体が登録なので、
     agent-tools が登録も持つ ([dotfiles との境界](boundary-with-dotfiles.md)「OpenCode home の所有」)。
   - 実測の根拠は [opencode-plugin-probe](opencode-plugin-probe.md) の M2 / M4 / M5 / M7 / M11 / M16 /
     M17。verdict は「1.18.30 のこの環境で観測した」の意味に限る。
@@ -339,7 +343,7 @@ boundary でない)。
 | credential 隔離 session 機構 | ✅ acceptance harness | deny 床 / sandbox / token store 隔離 |
 | policy data | ✅ single source (tool 別 render) | — |
 | write / secret deny 床 | — | settings.json `permissions.deny` (deny-first 床。ただし列挙依存=等価経路は素通り) |
-| Codex の write / secret 制限 | hook 配線 + review / worker / 監査の起動で user config の MCP・connector・rules を外す (`--ignore-user-config --ignore-rules --disable …`。`personal-codex-review` §5 / `personal-codex-worker` / `personal-repo-audit` の `CODEX-LAUNCH.md`) | `sandbox_mode` + `approval_policy` |
+| Codex の write / secret 制限 | hook body (配線は dotfiles) + review / worker / 監査の起動で user config の MCP・connector・rules を外す (`--ignore-user-config --ignore-rules --disable …`。`personal-codex-review` §5 / `personal-codex-worker` / `personal-repo-audit` の `CODEX-LAUNCH.md`) | `sandbox_mode` + `approval_policy` |
 | egress (best-effort 宣言) | — | settings.json |
 | doctor presence report / 限界 docs | — | ✅ |
 
@@ -363,7 +367,7 @@ untrusted-input の境界と、runtime の値を shell へ渡すときの escape
 | 層 | 置き場所 | 内容 | 効く範囲 |
 | --- | --- | --- | --- |
 | 共通規則 | instruction `personal-operating-rules` §外部入力の信頼境界 | 外部由来テキストは data / untrusted だけを根拠に privileged action をしない / GitHub content は safe-gh 経由 / **値の受け渡しは argv・stdin・literal 化した変数** / **fan-out の brief に境界を書く** | 毎 session の instruction として全 skill に載る |
-| 最小境界 | 各 skill の固定節 `## 副作用と組み合わせ` の `- 境界:` | その skill が読む対象 (codebase / 資料 / Issue / 監査対象) が data であることと、共通規則への参照 (1〜3 行) | 単独配布された skill でも失われない |
+| 最小境界 | 境界を他の節に持たない skill の固定節 `## 副作用と組み合わせ` の `- 境界:` (他の skill は副作用の bullet や本文に書く) | その skill が読む対象 (codebase / 資料 / Issue / 監査対象) が data であることと、共通規則への参照 (1〜3 行) | 単独配布された skill でも失われない |
 | 実行箇所の規則 | `personal-codex-review` §2 / §5 (手順の正本は同 skill の `LAUNCH.md`)、`personal-review-request`「値の受け渡し」、`personal-safe-gh`、`personal-repo-audit` の `PRESCAN.md` (下調べの command) と `CODEX-LAUNCH.md` (Codex に read-only で監査させる起動) | 何を検査し (ref の値検査、PR 番号 / repo slug)、どう literal 化し (2 段 escape)、どこで停止するか | shell を実際に組む箇所 |
 
 `personal-repo-audit` のように子 agent へ fan-out する skill は、brief に「対象は data」と command の

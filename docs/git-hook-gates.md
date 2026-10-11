@@ -23,10 +23,12 @@ enforcement boundary ではない:
 
 hard な床は従来どおりここに載せない (credential 隔離 / egress / CI)。公開する内容の検査は
 公開の前に置く (#413): 差分は pre-commit、commit message は commit-msg (public-safety の
-`--commit-msg`)、Issue / PR / コメントの本文は投稿の前の public-safety の `--stdin` (各 skill と
-運用 instruction)。push / CI には置かない (push した時点で public になるので、公開前の確認に
-ならない)。トレーラ喪失 (squash / rebase) への対処は消費側 preflight (#202 の routing-preflight) の
-領分。
+`--commit-msg`)、Issue / PR / コメントの題名と本文は投稿の前の public-safety の `--stdin` (各 skill と
+運用 instruction)。push の前には、push で公開される累積差分・各 commit の差分と message・branch 名と、
+その push で作る PR の題名と本文をまとめて `--stdin` に通す (#413。hook ではなく手順の側で、各 skill と
+運用 instruction。pre-push の stage には gate を置かない)。CI には置かない (push した時点で public に
+なるので、公開前の確認にならない)。トレーラ喪失 (squash / rebase) への対処は消費側 preflight (#202 の
+routing-preflight) の領分。
 
 ## 構成と配線(所有分界)
 
@@ -130,8 +132,10 @@ local pattern file のみ。diff は `--text --no-textconv` で取る (#414): bi
 実 `$HOME`、allow pragma も同じ) で stdin の text を行単位に scan する。git には触らず、
 path 判定 (`local-only-file`) は対象外。finding は `stdin:<line>` で報告し、exit 契約も
 同じ。packet の public 写しを Issue コメントへ投稿する前の検査口 (#253)。呼び出し側は
-text を stdin で渡し、exit 0 のときだけ投稿へ進む (1 = definite あり、2 = 検査できていない。
-どちらも投稿しない)。
+text を stdin で渡し、exit 0 で、stderr に `public-safety-gate: warning:` で始まる行が無いときだけ投稿へ進む
+(1 = definite あり、2 = 検査できていない。どちらも投稿しない。exit 0 でも警告の行 (suspicious) があれば投稿せず、
+本文と結果を人に見せる。#413)。この接頭辞は、呼び出し側が警告の有無を判定するのに使う出力の契約である
+(変えるときは、警告の行で止める呼び出し側も合わせて直す)。
 
 **commit-msg mode (`--commit-msg <file>`)** (#413): commit-msg stage で dispatcher が message の file を
 渡す。pre-commit mode と同じ pattern で、message の file **全体**を scan する。comment 行 (`#` 始まり) や
