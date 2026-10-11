@@ -40,7 +40,8 @@ static checks はすべての asset で必須です。少なくとも以下を�
   不可視の文字 (Unicode の書式文字 Cf = zero-width、bidi 制御、soft hyphen、tag 文字など、と
   U+E0000〜E007F) と、keyword (ignore / instruction / system prompt / do not tell / secretly) を含む
   HTML コメント (長さによらない。本文は最初の `-->` で閉じ、終端と重なる `<!-->` は新しい開始に
-  数えない) は medium (human review)。絵文字の ZWJ のような正当な用途も medium に
+  数えない。`-->` で閉じない `<!--` は、描画で隠れる file 末尾までを本文とみなす (#482 の 4))
+  は medium (human review)。絵文字の ZWJ のような正当な用途も medium に
   なり、承認で通す (#427 の 6)。
 - tool permission または approval policy の bypass attempts。
 - external exfiltration、network tunnel、production access requests。

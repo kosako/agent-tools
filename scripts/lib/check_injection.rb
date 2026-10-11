@@ -26,7 +26,8 @@ module CheckInjection
   # String#index と文字単位の slice が位置の変換のために既読部分を再走査し、やはり二次時間になるため。
   # 報告用の文字 offset は、消費した byte 範囲の文字数を累積して求める (全体で入力の長さに線形)。
   # 意味: 本文は最初の `-->` で閉じる。終端と重なる opener (`<!-->`) は新しいコメントの開始ではない
-  # (HTML の abrupt close と同じで、その後の text は表示される)。閉じないコメントは一致しない。
+  # (HTML の abrupt close と同じで、その後の text は表示される)。閉じないコメントは file 末尾までを
+  # 本文とみなす (描画では末尾まで隠れるため。#482 の 4)。その後ろに別のコメントは無いので、走査はそこで終わる。
   # 旧 regex は `<!-- <!--> ignore -->` を内側の opener から一致させていたが、これは意図した意味変更。
   def self.html_comment_positions(content)
     bytes = content.b
@@ -35,11 +36,12 @@ module CheckInjection
     char_pos = 0
     while (start = bytes.index("<!--", byte_pos))
       finish = bytes.index("-->", start + 4)
+      body_end = finish || bytes.bytesize
+      char_pos += char_count(bytes, byte_pos, start, content.encoding)
+      body = bytes.byteslice(start + 4, body_end - start - 4).force_encoding(content.encoding)
+      positions << char_pos if body.match?(HTML_COMMENT_KEYWORDS)
       break unless finish
 
-      char_pos += char_count(bytes, byte_pos, start, content.encoding)
-      body = bytes.byteslice(start + 4, finish - start - 4).force_encoding(content.encoding)
-      positions << char_pos if body.match?(HTML_COMMENT_KEYWORDS)
       char_pos += char_count(bytes, start, finish + 3, content.encoding)
       byte_pos = finish + 3
     end
@@ -111,7 +113,7 @@ module CheckInjection
                 %r{~/\.(?:codex|claude)/(?:auth\.json|config\.toml|cache|sessions?|projects|plugins)},
                 "references tool-managed or runtime state paths"),
     Pattern.new("runtime-state", "medium",
-                /(?:modify|write\s+to|edit|delete)\b.{0,50}\b(?:tool-managed|company-managed|auth|session|runtime\s+state)/i,
+                /(?:modify|write\s+to|edit|delete)\b.{0,50}\b(?:tool-managed|company-managed|auth|cache|session|runtime\s+state)/i,
                 "instructs modification of managed or runtime state"),
 
     # public repository に出してはいけない個人環境・個人情報の混入。
