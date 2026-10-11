@@ -265,7 +265,8 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
   `pushed` → `pr_created` → `reviewing` → `review_complete`、または `blocked`)、branch、base、head、PR 番号、
   修正の仕様、review の round、停止の理由。外部に書く操作 (push、PR、コメント) の前に段階を、後に結果を保存
   します。merge は人がするので、次の run が PR の状態を読んで `merged` を補います。
-- run の `state.json` には、この run で扱った Issue と `fix_cap` の累計を残します。
+- run の `state.json` には fix の記録を持ちません (記録は `fixes.json` だけに置く)。この run で扱った Issue は
+  `fixes.json` の `run_id` が同じ記録で、`fix_cap` の累計も同じ file から数えます (`RECORD.md`)。
 - 追跡 Issue の run のコメントに「修正 PR: #<PR> (所見 #A、round N <verdict>)」と、直さなかった所見の件数と
   理由を足します。本文の表は変えません。
 - 所見 Issue は PR の merge で close されます (`Closes`)。次の run の重複の照合は v1 のまま (completed で close →

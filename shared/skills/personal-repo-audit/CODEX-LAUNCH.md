@@ -20,15 +20,17 @@ review (`personal-codex-review`) や worker (`personal-codex-worker`) の起動�
 - **model と effort は呼び出し側が明示する**: `--ignore-user-config` で user の model 設定も読まれ
   なくなるので、`-c model="<model>"` と `-c model_reasoning_effort="<effort>"` を渡します (どちらも
   省けば Codex の既定)。値は `\A[A-Za-z0-9._-]+\z` に合うものだけを受け付け、run script の先頭で
-  literal の変数にします。sweep は予算のプリセットごとにここを選びます。`-p` は使いません
+  literal の変数にします。sweep は effort を予算のプリセットごとに選び、model は sweep の `BUDGET.md` の
+  読み方で決めます。`-p` は使いません
   (profile の他の key、例えば MCP server を、`--ignore-user-config` の起動へ持ち込まないため)。
 - **最終出力は schema つきの JSON**: `--output-schema <findings.schema.json>` と
   `-o <result.json>`。
 - **heredoc を使わない**: Codex が read-only の sandbox で実行する command は、heredoc の一時 file を
   作れずに失敗します (`temp file for here document: Operation not permitted`、2026-10-01 実測)。
   `PRESCAN.md` は `sh -c` の形なので、そのまま動きます。brief でも heredoc を使わせません。
-- **session rollout は残す**: `--ephemeral` は付けません。sweep が消費の実績を rollout から読むためです。
-  安全の境界は上の flag で、rollout の有無ではありません。
+- **session rollout は残す**: `--ephemeral` は付けません。session rollout を Codex 側に残して利用量の集計に
+  使い (`personal-codex-review` と同じ。#297)、起動の境界と実行した command の裏取りにも使うためです (下の
+  「実測」は rollout で確かめた)。安全の境界は上の flag で、rollout の有無ではありません。
 - **subagent は使わない (v1)**: Codex の中で subagent を起動させず、観点は順に調べさせます。
 
 ## capability preflight
