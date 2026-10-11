@@ -77,9 +77,10 @@ command-string allowlist — は **steering**、hostname allowlist は **best-ef
   `~/.netrc` (`curl`) と ssh の認証源 (`git-ssh`) は config で opt-in したときだけ検証する (下の「実装
   harness のスコープ」)。
 - **MCP github server の token store は本 acceptance の射程外**: MCP token は shell env の認証源
-  ではなく agent の MCP context 側にあり、env 隔離 harness では断てない。これは **P0-A (reader の
-  tool surface 制限)** / OS sandbox tier の担当。以前この列挙に MCP token store を含めていたのは
-  分界の誤りで、PR-2 (実機 harness) で env 隔離の射程に合わせて是正した
+  ではなく agent の MCP context 側にあり、env 隔離 harness では断てない。これは dotfiles の
+  **MCP github gate** (control plane) / OS sandbox tier の担当。P0-A (隔離 reader) は tool surface を
+  制限しない steering なので、この担当に数えない (下の「隔離 reader (P0-A) の位置づけ」)。以前この列挙に
+  MCP token store を含めていたのは分界の誤りで、PR-2 (実機 harness) で env 隔離の射程に合わせて是正した
   ([credential-isolation-acceptance.md](credential-isolation-acceptance.md))。
 - 検証は **negative test** (= 認証済み private access が**失敗**すれば合格)。テスト反転を明示する。
 - **positive control** を必ず置く: credential が在る通常 session では同じ private access が
@@ -94,8 +95,11 @@ command-string allowlist — は **steering**、hostname allowlist は **best-ef
 - **実装 harness のスコープ (honest-label)**: 実装
   ([credential-isolation-acceptance.md](credential-isolation-acceptance.md)) の env 隔離が hard に
   検証するのは、管理された invocation の**既定 credential 探索が空**であることまで。常に検証するのは
-  required の `gh` / `git-https` で、`git-ssh` / `curl` は config で opt-in したときだけ検証する。keychain 直読みや MCP token store は env 隔離の射程外 (P0-A の tool surface 制限 /
-  OS sandbox tier の担当) で、harness の緑をこの節の認証源列挙すべての検証と読まない。
+  required の `gh` / `git-https` で、`git-ssh` / `curl` は config で opt-in したときだけ検証する。keychain 直読みや
+  MCP token store は env 隔離の射程外で、harness の緑をこの節の認証源列挙すべての検証と読まない。担当は、
+  MCP token store が dotfiles の MCP github gate / OS sandbox tier、keychain 直読みが OS sandbox tier。
+  任意コマンド実行による escape も OS sandbox tier の担当で、この tier は未実装 (本 Phase スコープ外) なので、
+  **今はどの hard 層も塞いでいない**。
   上の認証源列挙は PR-2 で env 隔離の射程 (shell env / config 由来) に是正済み。
 
 ### P0-C OS egress firewall (本 Phase スコープ外・別 tier)
@@ -110,9 +114,9 @@ egress を OS レベル (sandbox-exec / Seatbelt / pf 等) で宛先制限する
    形で漏らせる。DNS は名前解決のため通すので、情報を DNS クエリに符号化して漏らせる。
 
 → 防ぎたい exfil レイヤーでは hard 部分が実質薄く、marginal protection が小さい。OS / dotfiles
-依存で **CI で positive 検証できず実機手動のみ**。trifecta は隔離 (P0-A + P0-B) で構造的に断つので、
-P0-C は「隔離が破れたときの最後の砦」= belt-and-suspenders。本当に必要になったとき別 tier で
-opt-in する。
+依存で **CI で positive 検証できず実機手動のみ**。trifecta は credential 隔離 (P0-B。射程は上の
+「実装 harness のスコープ」) で構造的に断つので、P0-C は「隔離が破れたときの最後の砦」=
+belt-and-suspenders。本当に必要になったとき別 tier で opt-in する。
 
 ### 隔離 reader (P0-A) の位置づけ — steering であって hard ではない
 

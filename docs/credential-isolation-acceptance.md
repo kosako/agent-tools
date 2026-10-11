@@ -20,10 +20,12 @@ session で読む」前提で成り立つ。その **credential 隔離床 (P0-B)
 - **射程外 (OS sandbox tier が必須・本 Phase スコープ外)**: keychain 直読み (`security`)、
   absolute path 読み、browser / MCP / connector の login 済み session、任意コマンド実行。
   これらに対する構造的遮断は env / config 隔離では不能。
-- arbitrary-escape の防止は **P0-A (reader の tool surface 制限)** の担当。P0-B (env 隔離)
-  単独では床にならない。両者を合わせて床。
+- arbitrary-escape (任意コマンド実行による escape) の防止は OS sandbox tier の担当で、この tier は未実装
+  なので、今はどの hard 層も塞いでいない。P0-A (隔離 reader) は tool surface を制限しない steering で、
+  この防止に数えない。本 Phase の床は P0-B (上の「hard に保証するのは」の射程) だけを指す (egress の
+  L3/L4 遮断 = P0-C は別 tier)。
 - **MCP GitHub token store の扱い (是正済み)**: MCP token は shell env の認証源ではなく agent の
-  MCP context 側にあり、env 隔離 harness (本 doc) の射程外で、reader の tool surface 制限 (P0-A) /
+  MCP context 側にあり、env 隔離 harness (本 doc) の射程外で、dotfiles の MCP github gate (control plane) /
   OS sandbox tier が担当する。正本 [runtime-injection-defense.md](runtime-injection-defense.md) の
   P0-B 認証源列挙は当初 MCP token store を含めていたが、PR-2 で env 隔離の射程 (shell env / config
   由来) に是正した。

@@ -49,7 +49,8 @@ iso_make_scratch() {
 # hard に保証する射程 (honest-label): 管理された gh / git / curl invocation の
 # 「既定 credential 探索が空」であることまで。keychain 直読み (security) /
 # absolute path 読み / MCP・browser の login 済み session は env 隔離の射程外
-# (P0-A の tool surface 制限 / OS sandbox tier の担当)。
+# (MCP の token store は dotfiles の MCP github gate / OS sandbox tier、それ以外は
+# OS sandbox tier の担当。OS sandbox tier は未実装)。
 iso_run() {
   iso_scratch=$1
   shift
