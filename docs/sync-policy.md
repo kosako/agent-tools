@@ -169,7 +169,7 @@ dir (tool-managed) で、後者は user が plugin を置く dir (OpenCode は `
 - 削除するのは次の 3 条件をすべて満たすものだけ (marker-gated delete):
   1. 許可 namespace 内 (`<tool home>/skills/personal-*` / `<tool home>/agent-tools/scripts/personal-*` /
      `<opencode home>/plugins/personal-*.js`。走査する組は `TOOL_KINDS` に従う)
-  2. agent-tools management marker が tool / name と一致
+  2. agent-tools management marker が tool / name と一致 (skill は、撤去の途中で退避した marker も含む。下記)
   3. catalog に同 target + name + artifact_kind の entry が無い
 - 照合は artifact_kind 単位。kind を変更した asset の旧配置物は保護されず撤去される
   (`build --prune` と同じ判断)。
@@ -183,10 +183,17 @@ dir (tool-managed) で、後者は user が plugin を置く dir (OpenCode は `
 - 削除の後に消えたことを確かめ、消し残したら `fail:` で止める (exit 1。rm_f / rm_rf は削除の失敗を握りつぶす
   ため。同じ run の後続の plan は適用しない)。marker は本体が消えたのを確かめてから最後に消すので、消し残しても
   marker が残り、次の prune がまた撤去の対象にする (marker が先に消えると、残りは unmanaged の skip になる, #482)。
-  - skill は marker 以外を先に消す。marker だけになったら、marker を同じ親 dir の
-    `.agent-tools-marker-personal-<name>` に rename で退避してから空の dir を消し、最後に退避した marker を消す。
-    親 dir に書けなければ退避の時点で止まり、marker は dir の中に残る。空の dir を消せなければ marker を dir の中へ
-    戻して止め、dir を消した後に退避した marker を消せなければ、その path を出して止める (手で消す)。
+  - skill は marker 以外を先に消す (dir の中を列挙できなければ、marker を残して止める)。marker だけになったら、
+    marker を同じ親 dir の `.agent-tools-marker-personal-<name>` に rename で退避してから空の dir を消し、最後に
+    退避した marker を消す。親 dir に書けなければ退避の時点で止まり、marker は dir の中に残る。退避の後・dir の削除の
+    前で止まったら (空の dir を消せない例外も、割り込みも。SIGKILL は除く)、marker を dir の中へ戻して止める。戻す
+    かどうかは退避先と dir の実在で判断する (退避の rename の直後の割り込みでも戻す)。dir を消した後に退避した
+    marker を消せなければ、その path を出して止める (手で消す)。
+  - marker を dir の中へ戻す rename も失敗したら、dir と退避先の両方の path を出して止める。次の prune は、marker の
+    無い skill の dir の隣 (同じ親 dir) に、同じ name の退避した marker (`.agent-tools-marker-personal-<name>`) が
+    あり、それが symlink でない file で、dir の中の marker と同じ検査 (tool と name の一致) を通れば、その dir を
+    撤去の対象にする (`not in catalog; resumes an interrupted removal`)。apply は退避を飛ばして続きから消す。dry-run
+    では何も書かない。退避した marker が別の name を示す / symlink / 読めないなら、その dir は unmanaged の skip。
   - script は本体 → sidecar marker の順に消す。sidecar marker だけを消し残したときは、その path を出して止める
     (sidecar 単体は prune が列挙しないので、手で消す)。
   - plugin は marker が本体の先頭行にあるので、消し残せば marker ごと残る。

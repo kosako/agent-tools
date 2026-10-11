@@ -66,7 +66,8 @@ module Sync
     # --prune: catalog に載らなくなった deployed asset の撤去 plan を作る (#154)。
     # build --prune (generated/ の orphan 削除) の sync 版。削除は 3 条件をすべて満たす
     # ものだけ (marker-gated delete): 許可 namespace 内 (skills/personal-* /
-    # agent-tools/scripts/personal-*) + agent-tools 管理 marker が tool / name と一致 +
+    # agent-tools/scripts/personal-*) + agent-tools 管理 marker が tool / name と一致 (skill は撤去の途中で退避した
+    # marker も含む。resumed_removal?) +
     # catalog に同 target + name + artifact_kind の entry が無い。kind 単位で照合するのは
     # build --prune と同じ判断 (kind 変更後の stale 配置物を保護して残さない)。
     # 条件を満たさない orphan は削除せず skip で可視化する (prune は conflict でブロック
@@ -216,33 +217,70 @@ module Sync
     end
 
     # skill (directory) の撤去。rm_rf は削除の順を選べず marker を先に消しうるので、marker 以外 → marker の順に
-    # 消す。marker 以外を消し残したら marker を残して止める。marker だけになったら、marker を同じ親 dir の作業用
-    # path に rename で退避してから空の dir を消し、最後に退避した marker を消す (marker を unlink してから dir を
-    # 消すと、親 dir に書けないときに marker の無い空の dir が残る。退避の rename には親 dir と dir の両方への
-    # 書き込みが要るので、書けなければここで止まり marker は残る。前回の中断で残った退避先の file は rename が
-    # 上書きする)。
+    # 消す。marker 以外を消し残したら (列挙できないときも) marker を残して止める。marker だけになったら、marker を
+    # 同じ親 dir の作業用 path (moved_marker_path) に rename で退避してから空の dir を消し、最後に退避した marker を
+    # 消す (marker を unlink してから dir を消すと、親 dir に書けないときに marker の無い空の dir が残る。退避の
+    # rename には親 dir と dir の両方への書き込みが要るので、書けなければここで止まり marker は残る。前回の中断で
+    # 残った退避先の file は rename が上書きする)。前回の撤去が退避の後で止まり、marker が退避先にだけある dir
+    # (prune_skills が resumed_removal? で plan する) は、退避を飛ばして続きから消す。
     def delete_skill_dir(target)
       marker_name = ArtifactTargets::MARKER_BASENAME
-      (Dir.children(target) - [marker_name]).each { |child| FileUtils.rm_rf(File.join(target, child)) }
-      left = Dir.children(target) - [marker_name]
+      left = begin
+        (Dir.children(target) - [marker_name]).each { |child| FileUtils.rm_rf(File.join(target, child)) }
+        Dir.children(target) - [marker_name]
+      rescue SystemCallError => e
+        raise ApplyError, "could not list #{target} (#{e.class}); the marker was kept, so the next prune retries"
+      end
       raise ApplyError, kept_marker_message(File.join(target, left.min)) unless left.empty?
 
       marker = File.join(target, marker_name)
-      moved = work_path(target, "marker")
+      moved = moved_marker_path(target)
+      failure = nil
       begin
-        File.rename(marker, moved)
-      rescue SystemCallError => e
-        raise ApplyError, kept_marker_message("#{target} (#{e.class})")
-      end
-      begin
+        File.rename(marker, moved) if File.exist?(marker)
         Dir.rmdir(target)
       rescue SystemCallError => e
-        File.rename(moved, marker)
-        raise ApplyError, "could not remove #{target} (#{e.class}); the marker was put back, so the next prune retries"
+        failure = e
+      ensure
+        # 退避の後・dir の削除の前で止まったら (例外・割り込み。SIGKILL は除く)、退避した marker を dir の中へ戻す。
+        # 判断は flag ではなく実在で行う (退避の rename の直後の割り込みでも戻す。#469 review 3 と同じ考え方)。
+        put_back = put_marker_back(target, marker, moved, failure || $!)
+      end
+      if failure
+        outcome = put_back ? "the marker was put back" : "the marker was kept"
+        raise ApplyError, "could not remove #{target} (#{failure.class}); #{outcome}, so the next prune retries"
       end
       return if removed?(moved)
 
       raise ApplyError, "removed #{target} but could not remove its marker moved to #{moved}; remove it by hand"
+    end
+
+    # 退避した marker を dir の中へ戻す。退避先に marker があり、dir がまだ在り、dir の中に marker が無いときだけ戻し、
+    # 戻したら true。戻す rename も失敗したら、dir と退避先の両方の path を出して止める (次の prune は退避した marker
+    # から続きを撤去する)。cause は dir を消せなかった理由 (例外・割り込み)。
+    def put_marker_back(target, marker, moved, cause)
+      return false unless File.exist?(moved) && File.directory?(target) && !File.exist?(marker)
+
+      File.rename(moved, marker)
+      true
+    rescue SystemCallError => e
+      raise ApplyError, "could not remove #{target} (#{cause.class}) and could not put its marker back from #{moved} " \
+                        "(#{e.class}); the next prune resumes the removal from the moved marker"
+    end
+
+    # skill の撤去で marker を退避する先 (同じ親 dir の .agent-tools-marker-personal-<name>)。
+    def moved_marker_path(target)
+      work_path(target, "marker")
+    end
+
+    # 前回の撤去が marker を退避した後で止まり、marker が退避先にだけある skill の dir か。dir の中に marker が無く
+    # (symlink も無く)、退避先が symlink でない file で、その marker がこの tool と name の管理を示すとき (dir の中の
+    # marker と同じ YamlMarker の検査) に true。読むだけで何も書かない。
+    def resumed_removal?(target, tool, name)
+      marker = File.join(target, ArtifactTargets::MARKER_BASENAME)
+      moved = moved_marker_path(target)
+      File.directory?(target) && !File.exist?(marker) && !File.symlink?(marker) && !File.symlink?(moved) &&
+        YamlMarker.managed?(YamlMarker.read_file(moved), tool, name)
     end
 
     # tool の catalog に載っている name (artifact_kind 単位)。registration 状態は問わない
@@ -268,11 +306,17 @@ module Sync
                         :orphan_symlink)
         end
         marker = File.directory?(target) ? read_marker(target) : nil
-        unless YamlMarker.managed?(marker, tool, name)
-          next Plan.new("skip", tool, name, target, "orphan is unmanaged; left in place", "skill", nil,
-                        :orphan_unmanaged)
+        if YamlMarker.managed?(marker, tool, name)
+          next Plan.new("delete", tool, name, target, "not in catalog", "skill", nil, :orphan)
         end
-        Plan.new("delete", tool, name, target, "not in catalog", "skill", nil, :orphan)
+
+        # 前回の撤去が marker を退避した後で止まった dir は、退避した marker で管理下と判断して続きから撤去する
+        # (apply の delete_skill_dir が退避を飛ばす, #482)。
+        if resumed_removal?(target, tool, name)
+          next Plan.new("delete", tool, name, target, "not in catalog; resumes an interrupted removal", "skill", nil,
+                        :orphan)
+        end
+        Plan.new("skip", tool, name, target, "orphan is unmanaged; left in place", "skill", nil, :orphan_unmanaged)
       end.compact
     end
 
