@@ -238,7 +238,9 @@ maintenance-sweep の BUDGET・grill の CONSULT は wrapper だけを引数な�
 `dotfiles` は `agent-tools` を自動 clone / pull / build / sync しません。
 
 `dotfiles` がこの repository の存在を知る必要がある場合でも、許可するのは expected path に
-`agent-tools` が存在するかを知らせる report-only checks までです。
+`agent-tools` が存在するかの確認と、[Status / Manifest Contract](status-manifest-contract.md) とこの文書の
+公開契約の節 (「OpenCode plugin の init の目印」「残量の読み取り口の設定」など) が定める副作用なしの
+report-only な読み取り・検査までです。
 
 `dotfiles` が report-only で読める status の形式は
 [Status / Manifest Contract](status-manifest-contract.md) で定義します。
