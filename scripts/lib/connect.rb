@@ -17,6 +17,7 @@
 require "fileutils"
 
 require_relative "artifact_targets"
+require_relative "file_replace"
 require_relative "catalog"
 require_relative "instruction_marker"
 require_relative "assets"
@@ -35,6 +36,9 @@ module Connect
   end
 
   class Runner
+    # 所有ファイルの作成は sync の apply と同じ一時 file + rename (replace_file / existing_mode, #482)。
+    include FileReplace
+
     def initialize(root, homes)
       @root = File.expand_path(root)
       @homes = homes
@@ -175,18 +179,22 @@ module Connect
       Plan.new("add-import", tool, "import", import_file, nil, nil)
     end
 
+    # 所有ファイルの作成 (空ファイルの claim を含む)。先頭行の marker だけで接続済み / up-to-date を決めるので、
+    # 一時 file に書いて rename で置く (途中で止まっても marker を持つ切れた file を置かない, #482)。claim する
+    # 空ファイルの mode は引き継ぐ (直接 cp していた頃と同じ)。
     def do_create(plan)
       FileUtils.mkdir_p(File.dirname(plan.path))
-      FileUtils.cp(plan.gen, plan.path)
+      replace_file(plan.gen, plan.path, existing_mode(plan.path))
     end
 
-    # 既存内容と改行スタイルを保持して import 1 行を追記する。
+    # 既存内容と改行スタイルを保持して import 1 行を追記する。人間のファイルは作り直さず (inode と mode を
+    # 変えない) 追記 mode で末尾に足す。全体を書き直すと、途中で止まったときに既存の内容が切り詰められる (#482)。
     def do_add_import(plan)
       if File.file?(plan.path)
         content = File.read(plan.path)
         nl = content.include?("\r\n") ? "\r\n" : "\n"
         sep = content.empty? || content.end_with?(nl) ? "" : nl
-        File.write(plan.path, "#{content}#{sep}#{CLAUDE_IMPORT}#{nl}")
+        File.open(plan.path, "a") { |f| f.write("#{sep}#{CLAUDE_IMPORT}#{nl}") }
       else
         FileUtils.mkdir_p(File.dirname(plan.path))
         File.write(plan.path, "#{CLAUDE_IMPORT}\n")
@@ -217,6 +225,10 @@ module Connect
 
     PlanReport.finish(plans, runner, apply: apply, quiet: quiet,
                       change_actions: %w[create add-import])
+  rescue FileReplace::ApplyError => e
+    # 所有ファイルを安全に置けないときは、それ以上書かずに理由を出して止める (sync の main と同じ伝え方, #482)。
+    warn "fail: #{e.message.sub(Dir.home, '~')}"
+    1
   end
 
   USAGE = "usage: connect.sh [--root DIR] [--apply] [--codex-home DIR] [--claude-home DIR] [--quiet]"

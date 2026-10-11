@@ -231,4 +231,74 @@ grep -q "conflict: \[codex\] owned.*symlink" "$tmp/c15" \
 grep -q "# real file elsewhere" "$tmp/real-agents.md" \
   || fail "must not write through a symlinked owned file"
 
+# 使い方: ino_mode <file>  (inode 番号と permission bits (8 進) を 1 行で出す)
+ino_mode() { ruby -e 's = File.stat(ARGV[0]); printf("%d %o", s.ino, s.mode & 0o777)' "$1"; }
+# --- case 16: 人間の CLAUDE.md への import は追記で足し、途中で止まっても既存の内容を切り詰めない (#482 の項目 2) ---
+# 書き込みの上限 (with_fsize、1024 byte) を既存の CLAUDE.md より小さくして connect --apply する。旧実装は全体を
+# File.write で書き直したので、上限で止まると CLAUDE.md が上限の長さに切り詰められた。追記は既存の bytes を書き直さない
+# (macOS では追記が上限に当たらず書き終わることを実測した。止まる環境でも既存の内容は残るので、終了 code は見ない)。
+# 追記は file を作り直さないので、inode と mode も変わらない。
+mkdir -p "$tmp/codex16" "$tmp/claude16"
+padding_lines 100 > "$tmp/claude16/CLAUDE.md"
+chmod 0600 "$tmp/claude16/CLAUDE.md"
+cp "$tmp/claude16/CLAUDE.md" "$tmp/c16-orig"
+orig_size=$(wc -c < "$tmp/c16-orig" | tr -d ' ')
+c16_before=$(ino_mode "$tmp/claude16/CLAUDE.md")
+status=0
+with_fsize 1024 "$connect" --root "$tmp/repo5" --codex-home "$tmp/codex16" --claude-home "$tmp/claude16" --apply \
+  > "$tmp/c16" 2>&1 || status=$?
+head -c "$orig_size" "$tmp/claude16/CLAUDE.md" | cmp -s - "$tmp/c16-orig" \
+  || fail "adding the import must not truncate the existing CLAUDE.md (exit $status): $(wc -c < "$tmp/claude16/CLAUDE.md") bytes"
+"$connect" --root "$tmp/repo5" --codex-home "$tmp/codex16" --claude-home "$tmp/claude16" --apply > "$tmp/c16b" 2>&1 \
+  || fail "connect without the limit should converge: $(cat "$tmp/c16b")"
+{ cat "$tmp/c16-orig"; printf '@agent-tools/CLAUDE.md\n'; } | cmp -s - "$tmp/claude16/CLAUDE.md" \
+  || fail "CLAUDE.md must be the original bytes plus one import line: $(tail -3 "$tmp/claude16/CLAUDE.md")"
+[ "$(ino_mode "$tmp/claude16/CLAUDE.md")" = "$c16_before" ] \
+  || fail "adding the import must keep the inode and the mode of CLAUDE.md: $c16_before -> $(ino_mode "$tmp/claude16/CLAUDE.md")"
+
+# --- case 17: 所有ファイルの作成が途中で止まっても、切れた file を接続済みと見ない (#482 の項目 2) ---
+# fixture: 上限 (2048 byte) より大きい instruction。旧実装は所有先へ直接 cp したので、先頭行の marker を持つ切れた
+# file が残り、次の connect は already connected、sync は up-to-date と見た。今は一時 file に書いて rename する。
+# 空の AGENTS.md を claim するときは、その file の mode を引き継ぐ (cp で上書きしていた頃と同じ)。
+mkdir -p "$tmp/codex17" "$tmp/claude17"
+make_demo_repo "$tmp/repo6" instructions personal-ops instruction '# operating rules' "$(padding_lines 100)"
+"$build" --root "$tmp/repo6" --quiet > /dev/null
+"$register" --root "$tmp/repo6" --quiet > /dev/null
+: > "$tmp/codex17/AGENTS.md"
+chmod 0600 "$tmp/codex17/AGENTS.md"
+status=0
+with_fsize 2048 "$connect" --root "$tmp/repo6" --codex-home "$tmp/codex17" --claude-home "$tmp/claude17" --apply \
+  > "$tmp/c17" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "an owned file write stopped by the file size limit must not exit 0: $(cat "$tmp/c17")"
+[ ! -e "$tmp/claude17/agent-tools/CLAUDE.md" ] \
+  || fail "a cut-off owned file must not be placed: $(head -c 300 "$tmp/claude17/agent-tools/CLAUDE.md")"
+"$connect" --root "$tmp/repo6" --codex-home "$tmp/codex17" --claude-home "$tmp/claude17" > "$tmp/c17b" 2>&1 \
+  || fail "connect dry-run after the stop should succeed: $(cat "$tmp/c17b")"
+grep -q "create: \[claude-code\] owned" "$tmp/c17b" \
+  || fail "the next connect must still plan the owned file, not already connected: $(cat "$tmp/c17b")"
+"$connect" --root "$tmp/repo6" --codex-home "$tmp/codex17" --claude-home "$tmp/claude17" --apply > "$tmp/c17c" 2>&1 \
+  || fail "connect without the limit should converge: $(cat "$tmp/c17c")"
+cmp -s "$tmp/repo6/generated/claude-code/instructions/CLAUDE.md" "$tmp/claude17/agent-tools/CLAUDE.md" \
+  || fail "the converged owned file must match generated"
+[ "$(ls -A "$tmp/claude17/agent-tools")" = "CLAUDE.md" ] \
+  || fail "no staging file may remain next to the owned file: $(ls -A "$tmp/claude17/agent-tools")"
+cmp -s "$tmp/repo6/generated/codex/instructions/AGENTS.md" "$tmp/codex17/AGENTS.md" \
+  || fail "the empty AGENTS.md must be claimed"
+[ "$(ino_mode "$tmp/codex17/AGENTS.md" | cut -d' ' -f2)" = "600" ] \
+  || fail "claiming the empty AGENTS.md must keep its mode: $(ino_mode "$tmp/codex17/AGENTS.md")"
+[ "$(ls -A "$tmp/codex17")" = "AGENTS.md" ] || fail "no staging file may remain in the codex home: $(ls -A "$tmp/codex17")"
+
+# --- case 18: 一時 file の path に消せないものがあれば、所有ファイルを作らずに fail で止まる (#482 の項目 2) ---
+# 一時 file の path に directory を置く。rm_f は directory を消せず、cp はその中へ入れ子に copy してしまう (sync の
+# case 44b と同じ)。
+mkdir -p "$tmp/codex18" "$tmp/claude18/agent-tools/.agent-tools-staging-CLAUDE.md"
+status=0
+"$connect" --root "$tmp/repo5" --codex-home "$tmp/codex18" --claude-home "$tmp/claude18" --apply > "$tmp/c18" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "a directory at the staging path should exit 1, got $status: $(cat "$tmp/c18")"
+grep -q "fail: could not remove the leftover staging file .*/agent-tools/\.agent-tools-staging-CLAUDE\.md" "$tmp/c18" \
+  || fail "the stop must name the staging file: $(cat "$tmp/c18")"
+[ ! -e "$tmp/claude18/agent-tools/CLAUDE.md" ] || fail "no owned file may be placed when the staging path is taken"
+[ -z "$(ls -A "$tmp/claude18/agent-tools/.agent-tools-staging-CLAUDE.md")" ] \
+  || fail "generated must not be copied into the directory at the staging path"
+
 echo "ok: connect self-test passed"

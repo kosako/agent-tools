@@ -21,6 +21,7 @@ require "fileutils"
 
 require_relative "yaml_marker"
 require_relative "artifact_targets"
+require_relative "file_replace"
 require_relative "catalog"
 require_relative "instruction_marker"
 require_relative "path_glob"
@@ -32,10 +33,9 @@ require_relative "plan_report"
 module Sync
   TOOLS = ArtifactTargets::TOOLS
 
-  # apply で配置先を安全に入れ替えられないときの error (#431 の 3): 前回の残り (一時 dir / file、退避した旧 dir)
-  # や、新版を置いた後の退避した旧 dir を消しきれない。main が `fail:` の行と exit 1 で止める (build の
-  # OutputPathError と同じ伝え方)。
-  class ApplyError < StandardError; end
+  # apply で配置先を安全に入れ替えられない・prune で撤去しきれないときの error (#431 の 3, #482)。connect と
+  # 共有するので FileReplace に置く。main が `fail:` の行と exit 1 で止める。
+  ApplyError = FileReplace::ApplyError
 
   # code は reason (人間向け表示文言) と対になる機械可読な skip 理由。status が contract
   # の target state 判定に読む (#152: 表示文言の変更で contract を壊さないための分離)。
@@ -47,6 +47,9 @@ module Sync
   end
 
   class Runner
+    # work_path / replace_file / existing_mode / removed? (connect と共有する)。
+    include FileReplace
+
     def initialize(root, homes)
       @root = File.expand_path(root)
       @homes = homes
@@ -63,7 +66,8 @@ module Sync
     # --prune: catalog に載らなくなった deployed asset の撤去 plan を作る (#154)。
     # build --prune (generated/ の orphan 削除) の sync 版。削除は 3 条件をすべて満たす
     # ものだけ (marker-gated delete): 許可 namespace 内 (skills/personal-* /
-    # agent-tools/scripts/personal-*) + agent-tools 管理 marker が tool / name と一致 +
+    # agent-tools/scripts/personal-*) + agent-tools 管理 marker が tool / name と一致 (skill は撤去の途中で退避した
+    # marker も含む。resumed_removal?) +
     # catalog に同 target + name + artifact_kind の entry が無い。kind 単位で照合するのは
     # build --prune と同じ判断 (kind 変更後の stale 配置物を保護して残さない)。
     # 条件を満たさない orphan は削除せず skip で可視化する (prune は conflict でブロック
@@ -106,9 +110,11 @@ module Sync
 
         case p.kind
         when "instruction"
-          # instruction は単一ファイル。所有先は connect が確立済み (sync は update)。
+          # instruction は単一ファイル。所有先は connect が確立済み (sync は update)。先頭行の marker だけで
+          # up-to-date を決めるので、一時 file に書いて rename で入れ替える (途中で止まっても、新しい build_id の
+          # marker を持つ切れた file を置かない, #482)。mode は所有先のものを引き継ぐ (直接 cp していた頃と同じ)。
           FileUtils.mkdir_p(File.dirname(p.target))
-          FileUtils.cp(p.gen, p.target)
+          replace_file(p.gen, p.target, existing_mode(p.target))
         when "script"
           # script は単一実行ファイル + sidecar marker。本体 (実行可能) → marker の順に、それぞれ一時 file に
           # 書いて rename で入れ替える。create の途中で止まると marker の無い本体が残り、次の sync は unmanaged の
@@ -118,10 +124,9 @@ module Sync
           replace_file(ArtifactTargets.sidecar_marker_path(p.gen), ArtifactTargets.sidecar_marker_path(p.target))
         when "plugin"
           # plugin は先頭行に marker を持つ単一ファイル。OpenCode が import して読むので
-          # 実行ビットは立てない (build と同じ 0644)。
+          # 実行ビットは立てない (build と同じ 0644)。instruction と同じく一時 file に書いて rename する (#482)。
           FileUtils.mkdir_p(File.dirname(p.target))
-          FileUtils.cp(p.gen, p.target)
-          File.chmod(0o644, p.target)
+          replace_file(p.gen, p.target, 0o644)
         else
           replace_skill_dir(p.gen, p.target)
         end
@@ -129,15 +134,6 @@ module Sync
     end
 
     private
-
-    # apply の作業用 path (一時 dir / file = staging、退避した旧 dir = old)。配置先と同じ親 dir に置く (rename が
-    # 同じ filesystem の中で済む)。`personal-` で始めないので plan / prune / status / doctor の走査 (personal-*)
-    # には拾われない。pid を含めず固定の名前にして、前回の中断 (kill 等で ensure が走らなかったとき) の残りを
-    # 次の run が同じ名前で見つけて消せるようにする (同時実行は前提にしない。docs/sync-policy.md の TOCTOU の項と
-    # 同じ立場)。
-    def work_path(target, label)
-      File.join(File.dirname(target), ".agent-tools-#{label}-#{File.basename(target)}")
-    end
 
     # skill (directory) の create / update。generated を一時 dir に copy し、旧 dir を退避先に rename で退け、
     # 一時 dir を rename で配置先に置いてから、退避した旧 dir を消す (退避 → 配置 → 削除)。配置先が無い時間は
@@ -185,33 +181,6 @@ module Sync
             "could not remove the copy of the old version #{old}; the new version is in place, remove the copy by hand"
     end
 
-    # 単一 file の create / update。一時 file に copy し、mode があれば付けてから rename で入れ替える。cp は
-    # 新規 file の mode を source に合わせる (umask で落とす) ので、mode を渡さない sidecar marker は従来の
-    # cp と同じ mode になる。一時 file の path に directory や消せない file があれば止める (rm_f は失敗を
-    # 握りつぶし、cp は directory の中へ入れ子に copy して、create なら rename が配置先に directory を置く)。
-    # 例外のときも一時 file は片付ける (#431 の 3, #469 review)。
-    def replace_file(gen, target, mode = nil)
-      staging = work_path(target, "staging")
-      FileUtils.rm_f(staging)
-      if File.exist?(staging)
-        raise ApplyError, "could not remove the leftover staging file #{staging}; the new version was not applied"
-      end
-      begin
-        FileUtils.cp(gen, staging)
-        File.chmod(mode, staging) if mode
-        File.rename(staging, target)
-      ensure
-        FileUtils.rm_f(staging)
-      end
-    end
-
-    # rm_rf は削除の失敗 (書き込み不可の dir の中の file など) を握りつぶすので、消えたことを返り値で確かめる
-    # (build.rb の旧い出力 dir の検査と同じ)。
-    def removed?(path)
-      FileUtils.rm_rf(path)
-      !File.exist?(path)
-    end
-
     # catalog を source of truth として読む (target-artifact 単位)。不在 / version 不一致 /
     # 壊れた JSON は catalog なし扱い (Catalog.read が fail-closed に判定)。
     def load_catalog
@@ -221,18 +190,139 @@ module Sync
     end
 
     # prune の削除実体。marker-gated 判定 (prune_skills / prune_scripts / prune_plugins) を
-    # 通った plan だけが来る。script は本体と sidecar marker を対で消す。単一ファイルの kind
-    # (script / plugin) は rm_f で、directory (skill) だけ rm_rf。
+    # 通った plan だけが来る。script は本体と sidecar marker を対で消す。rm_f / rm_rf は削除の失敗を
+    # 握りつぶすので、消えたことを確かめ、消し残したら ApplyError で止める (#482)。marker は本体が
+    # 消えたのを確かめてから最後に消すので、消し残しても marker が残り、次の prune がまた撤去の対象にする
+    # (marker が先に消えると、残りは unmanaged の skip になって撤去されなくなる)。単一 file の kind (script の本体と
+    # sidecar、plugin) は file_removed? で非再帰に消す (directory に置き換わっていても中身ごと消さない)。
     def delete_target(plan)
       case plan.kind
       when "script"
-        FileUtils.rm_f(plan.target)
-        FileUtils.rm_f(ArtifactTargets.sidecar_marker_path(plan.target))
+        # 本体 → sidecar marker の順。sidecar だけの残りは prune が列挙しないので、手で消してもらう。
+        raise ApplyError, kept_marker_message(plan.target) unless file_removed?(plan.target)
+
+        sidecar = ArtifactTargets.sidecar_marker_path(plan.target)
+        return if file_removed?(sidecar)
+
+        raise ApplyError, "removed #{plan.target} but could not remove its marker #{sidecar}; remove the marker by hand"
       when "plugin"
-        FileUtils.rm_f(plan.target)
+        # marker は本体の先頭行にあるので、消し残せば marker ごと残る。
+        raise ApplyError, kept_marker_message(plan.target) unless file_removed?(plan.target)
       else
-        FileUtils.rm_rf(plan.target)
+        # 撤去の経路は plan で決める (apply の時点の marker の有無で切り替えない, #482 review round 3)。
+        if plan.code == :orphan_resume
+          resume_skill_removal(plan.target, moved_marker_path(plan.target))
+        else
+          delete_skill_dir(plan.target)
+        end
       end
+    end
+
+    # 単一 file を非再帰に消し (rm_f = unlink)、消えたことを返す。directory なら消さずに false を返す (rm_rf と違い、
+    # 置き換わった directory の中身を消さない, #482 review round 2)。symlink はリンク自体の実在で見る。
+    def file_removed?(path)
+      FileUtils.rm_f(path) unless File.directory?(path)
+      !present?(path)
+    end
+
+    # path そのものが在るか (symlink ならリンク自体。File.exist? はリンク先を見るので、リンク切れを無いと見る)。
+    def present?(path)
+      File.symlink?(path) || File.exist?(path)
+    end
+
+    def kept_marker_message(path)
+      "could not remove #{path}; the marker was kept, so the next prune retries"
+    end
+
+    # skill (directory) の撤去。rm_rf は削除の順を選べず marker を先に消しうるので、marker 以外 → marker の順に
+    # 消す。marker 以外を消し残したら (列挙できないときも) marker を残して止める。marker だけになったら、marker を
+    # 同じ親 dir の作業用 path (moved_marker_path) に rename で退避してから空の dir を消し、最後に退避した marker を
+    # 消す (marker を unlink してから dir を消すと、親 dir に書けないときに marker の無い空の dir が残る。退避の
+    # rename には親 dir と dir の両方への書き込みが要るので、書けなければここで止まり marker は残る。前回の中断で
+    # 残った退避先の file は rename が上書きする)。plan の後に marker が消えていたら、撤去の続きに切り替えず、何も
+    # 消さずに止める (続きは prune_skills が :orphan_resume で plan したときだけ, #482 review round 3)。
+    def delete_skill_dir(target)
+      marker_name = ArtifactTargets::MARKER_BASENAME
+      marker = File.join(target, marker_name)
+      moved = moved_marker_path(target)
+      unless present?(marker)
+        raise ApplyError, "could not remove #{target}: its marker is gone since the plan, so nothing was removed"
+      end
+
+      left = begin
+        (Dir.children(target) - [marker_name]).each { |child| FileUtils.rm_rf(File.join(target, child)) }
+        Dir.children(target) - [marker_name]
+      rescue SystemCallError => e
+        raise ApplyError, "could not list #{target} (#{e.class}); the marker was kept, so the next prune retries"
+      end
+      raise ApplyError, kept_marker_message(File.join(target, left.min)) unless left.empty?
+
+      failure = nil
+      begin
+        File.rename(marker, moved)
+        Dir.rmdir(target)
+      rescue SystemCallError => e
+        failure = e
+      ensure
+        # 退避の後・dir の削除の前で止まったら (例外・割り込み。SIGKILL は除く)、退避した marker を dir の中へ戻す。
+        # 判断は flag ではなく実在で行う (退避の rename の直後の割り込みでも戻す。#469 review 3 と同じ考え方)。
+        put_back = put_marker_back(target, marker, moved, failure || $!)
+      end
+      if failure
+        outcome = put_back ? "the marker was put back" : "the marker was kept"
+        raise ApplyError, "could not remove #{target} (#{failure.class}); #{outcome}, so the next prune retries"
+      end
+      return if file_removed?(moved)
+
+      raise ApplyError, "removed #{target} but could not remove its marker moved to #{moved}; remove it by hand"
+    end
+
+    # 撤去の続き (prune_skills が :orphan_resume で plan した、marker が退避先にだけある dir)。plan は空の dir だけを
+    # 続きの対象にするので、中身は消さず、marker も dir の中へ戻さずに rmdir (非再帰) だけを行う。plan の後に dir へ
+    # file (marker と同じ名前の file も) が置かれていれば rmdir が失敗して止まり、中身も退避した marker もそのまま残る
+    # (次の prune は空でない dir を unmanaged の skip にする, #482 review round 2・3)。
+    def resume_skill_removal(target, moved)
+      begin
+        Dir.rmdir(target)
+      rescue SystemCallError => e
+        raise ApplyError, "could not remove #{target} (#{e.class}); its marker stays at #{moved}"
+      end
+      return if file_removed?(moved)
+
+      raise ApplyError, "removed #{target} but could not remove its marker moved to #{moved}; remove it by hand"
+    end
+
+    # 退避した marker を dir の中へ戻す。退避先に marker があり、dir がまだ在り、dir の中に marker が無いときだけ戻し、
+    # 戻したら true。実在はリンク自体で見る (present?)。戻す rename も失敗したら、dir と退避先の両方の path を出して
+    # 止める (次の prune は、空の dir なら退避した marker から続きを撤去する)。cause は dir を消せなかった理由
+    # (例外・割り込み)。
+    def put_marker_back(target, marker, moved, cause)
+      return false unless present?(moved) && File.directory?(target) && !present?(marker)
+
+      File.rename(moved, marker)
+      true
+    rescue SystemCallError => e
+      raise ApplyError, "could not remove #{target} (#{cause.class}) and could not put its marker back from #{moved} " \
+                        "(#{e.class}); the next prune resumes the removal from the moved marker"
+    end
+
+    # skill の撤去で marker を退避する先 (同じ親 dir の .agent-tools-marker-personal-<name>)。
+    def moved_marker_path(target)
+      work_path(target, "marker")
+    end
+
+    # 前回の撤去が marker を退避した後で止まり、marker が退避先にだけある skill の dir か。dir が空で (退避した時点で
+    # dir には marker しか無かったので、中断の続きなら空のはず。空でなければ同じ名前で作り直された dir かもしれない)、
+    # 退避先が symlink でない file で、その marker がこの tool と name の管理を示すとき (dir の中の marker と同じ
+    # YamlMarker の検査) に true。dir を列挙できない・退避した marker を読めないときは false。読むだけで何も書かない
+    # (#482 review round 1・2)。
+    def resumed_removal?(target, tool, name)
+      moved = moved_marker_path(target)
+      return false unless File.directory?(target) && Dir.empty?(target) && !File.symlink?(moved)
+
+      YamlMarker.managed?(YamlMarker.read_file(moved), tool, name)
+    rescue SystemCallError
+      false
     end
 
     # tool の catalog に載っている name (artifact_kind 単位)。registration 状態は問わない
@@ -257,12 +347,21 @@ module Sync
           next Plan.new("skip", tool, name, target, "orphan is a symlink; left in place", "skill", nil,
                         :orphan_symlink)
         end
-        marker = File.directory?(target) ? read_marker(target) : nil
-        unless YamlMarker.managed?(marker, tool, name)
-          next Plan.new("skip", tool, name, target, "orphan is unmanaged; left in place", "skill", nil,
-                        :orphan_unmanaged)
+        # marker が symlink なら管理外として触らない (sync が置く marker は通常の file。相対 symlink の marker は
+        # 退避するとリンク切れになる, #482 review round 2)。
+        marker_path = File.join(target, ArtifactTargets::MARKER_BASENAME)
+        marker = File.directory?(target) && !File.symlink?(marker_path) ? read_marker(target) : nil
+        if YamlMarker.managed?(marker, tool, name)
+          next Plan.new("delete", tool, name, target, "not in catalog", "skill", nil, :orphan)
         end
-        Plan.new("delete", tool, name, target, "not in catalog", "skill", nil, :orphan)
+
+        # 前回の撤去が marker を退避した後で止まった dir は、退避した marker で管理下と判断して続きから撤去する。
+        # code を :orphan_resume にして、apply が plan どおり resume_skill_removal だけを通るようにする (#482)。
+        if resumed_removal?(target, tool, name)
+          next Plan.new("delete", tool, name, target, "not in catalog; resumes an interrupted removal", "skill", nil,
+                        :orphan_resume)
+        end
+        Plan.new("skip", tool, name, target, "orphan is unmanaged; left in place", "skill", nil, :orphan_unmanaged)
       end.compact
     end
 

@@ -1221,4 +1221,438 @@ grep -q "^v9$" "$atarget/SKILL.md" || fail "the next update should deploy the ne
 [ "$(ls -A "$tmp/aclaude/skills")" = "personal-atomic" ] \
   || fail "the next update must remove the leftover old copy and leave no staging: $(ls -A "$tmp/aclaude/skills")"
 
+# --- case 49: instruction の update の途中で書き込みが止まっても、切れた file を up-to-date と見ない (#482 の項目 2) ---
+# fixture: codex の instruction を v1 で connect + sync し、上限 (2048 byte) より大きい v2 を build + register してから、
+# with_fsize で sync --apply を書き込みの途中で止める。旧実装は配置先へ直接 cp したので、先頭行の marker (v2 の
+# build_id) を持つ切れた file が残り、次の sync はそれを up-to-date と見た。今は一時 file に書いて rename するので、
+# 配置先は v1 のまま。所有先の mode は update の後も引き継ぐ (cp で上書きしていた頃と同じ)。
+mkdir -p "$tmp/irepo/shared/instructions" "$tmp/icodex" "$tmp/iclaude"
+printf '# instr v1\n' > "$tmp/irepo/shared/instructions/personal-iinstr.md"
+write_asset_manifest "$tmp/irepo/shared/instructions/personal-iinstr.asset.yml" \
+  personal-iinstr instruction public shared/instructions/personal-iinstr.md markdown codex
+run49() { "$sync" --root "$tmp/irepo" --codex-home "$tmp/icodex" --claude-home "$tmp/iclaude" --opencode-home "$tmp/iopencode" "$@"; }
+"$build" --root "$tmp/irepo" --quiet > /dev/null
+"$register" --root "$tmp/irepo" --quiet > /dev/null
+"$script_dir/../connect.sh" --root "$tmp/irepo" --codex-home "$tmp/icodex" --claude-home "$tmp/iclaude" --apply --quiet > /dev/null
+itarget="$tmp/icodex/AGENTS.md"
+grep -q "^# instr v1$" "$itarget" || fail "case 49 fixture should connect v1"
+chmod 0600 "$itarget"
+cp "$itarget" "$tmp/out49-v1"
+{ printf '# instr v2\n'; padding_lines 100; } > "$tmp/irepo/shared/instructions/personal-iinstr.md"
+"$build" --root "$tmp/irepo" --quiet > /dev/null
+"$register" --root "$tmp/irepo" --quiet > /dev/null
+status=0
+with_fsize 2048 "$sync" --root "$tmp/irepo" --codex-home "$tmp/icodex" --claude-home "$tmp/iclaude" \
+  --opencode-home "$tmp/iopencode" --apply > "$tmp/out49" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "an instruction update stopped by the file size limit must not exit 0: $(cat "$tmp/out49")"
+cmp -s "$tmp/out49-v1" "$itarget" || fail "the owned instruction must stay v1 when the write stops midway: $(head -c 300 "$itarget")"
+run49 > "$tmp/out49-next" 2>&1 || fail "sync after the stopped update should succeed: $(cat "$tmp/out49-next")"
+grep -q "update: \[codex\] .*AGENTS.md" "$tmp/out49-next" \
+  || fail "the next sync must still plan the instruction update, not up-to-date: $(cat "$tmp/out49-next")"
+run49 --apply > "$tmp/out49-apply" 2>&1 || fail "the instruction update should converge: $(cat "$tmp/out49-apply")"
+cmp -s "$tmp/irepo/generated/codex/instructions/AGENTS.md" "$itarget" || fail "the converged instruction must match generated"
+[ "$(mode_of "$itarget")" = "600" ] || fail "the instruction update must keep the mode of the owned file: $(mode_of "$itarget")"
+[ "$(ls -A "$tmp/icodex")" = "AGENTS.md" ] || fail "no staging file may remain next to the owned file: $(ls -A "$tmp/icodex")"
+
+# --- case 50: plugin の update の途中で書き込みが止まっても、切れた file を up-to-date と見ない (#482 の項目 2) ---
+# case 49 と同じ形を plugin (先頭行に marker を持つ単一 file) で見る。収束した後は mode 0644。
+mkdir -p "$tmp/jrepo/shared/plugins" "$tmp/jopen/plugins" "$tmp/jcodex" "$tmp/jclaude"
+printf 'export default { id: "personal-jplug", server: async () => ({}) };\n// v1\n' \
+  > "$tmp/jrepo/shared/plugins/personal-jplug.js"
+write_approved_plugin_manifest "$tmp/jrepo" personal-jplug personal
+run50() { "$sync" --root "$tmp/jrepo" --codex-home "$tmp/jcodex" --claude-home "$tmp/jclaude" --opencode-home "$tmp/jopen" "$@"; }
+"$build" --root "$tmp/jrepo" --quiet > /dev/null
+"$register" --root "$tmp/jrepo" --quiet > /dev/null
+run50 --apply --quiet > /dev/null
+jtarget="$tmp/jopen/plugins/personal-jplug.js"
+grep -q "^// v1$" "$jtarget" || fail "case 50 fixture should deploy v1"
+cp "$jtarget" "$tmp/out50-v1"
+{ printf 'export default { id: "personal-jplug", server: async () => ({}) };\n// v2\n'; padding_lines 100 | sed 's|^|// |'; } \
+  > "$tmp/jrepo/shared/plugins/personal-jplug.js"
+write_approved_plugin_manifest "$tmp/jrepo" personal-jplug personal
+"$build" --root "$tmp/jrepo" --quiet > /dev/null
+"$register" --root "$tmp/jrepo" --quiet > /dev/null
+status=0
+with_fsize 2048 "$sync" --root "$tmp/jrepo" --codex-home "$tmp/jcodex" --claude-home "$tmp/jclaude" \
+  --opencode-home "$tmp/jopen" --apply > "$tmp/out50" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "a plugin update stopped by the file size limit must not exit 0: $(cat "$tmp/out50")"
+cmp -s "$tmp/out50-v1" "$jtarget" || fail "the plugin must stay v1 when the write stops midway: $(head -c 300 "$jtarget")"
+run50 > "$tmp/out50-next" 2>&1 || fail "sync after the stopped plugin update should succeed: $(cat "$tmp/out50-next")"
+grep -q "update: \[opencode\] .*personal-jplug.js" "$tmp/out50-next" \
+  || fail "the next sync must still plan the plugin update, not up-to-date: $(cat "$tmp/out50-next")"
+run50 --apply > "$tmp/out50-apply" 2>&1 || fail "the plugin update should converge: $(cat "$tmp/out50-apply")"
+cmp -s "$tmp/jrepo/generated/opencode/plugins/personal-jplug.js" "$jtarget" || fail "the converged plugin must match generated"
+[ "$(mode_of "$jtarget")" = "644" ] || fail "the converged plugin mode must be 0644: $(mode_of "$jtarget")"
+[ "$(ls -A "$tmp/jopen/plugins")" = "personal-jplug.js" ] \
+  || fail "no staging file may remain next to the plugin: $(ls -A "$tmp/jopen/plugins")"
+
+# --- case 51: skill の撤去で消し残したら、marker を残して fail で止まり、次の prune がまた撤去の対象にする (#482 の項目 3) ---
+# fixture: 2 skill を配置し、片方 (personal-dgone) を shared/ から消して managed orphan にする。旧実装は rm_rf だけで、
+# 削除の失敗 (書き込みできない dir の中の file) を握りつぶして `ok: applied` と出し、marker も消えるので、残りは次の
+# prune で unmanaged の skip になった。root は mode によらず消せるので、case 39 と同じく非 root が前提。
+# 撤去の途中の失敗のうち、mode では作れないものは注入で作る。sync.sh の ruby に RUBYOPT=-r<file> で test 専用の patch を
+# 読ませ (case 46 と同じく実装に test 用の hook は入れない)、環境変数で選んだ操作だけを失敗させる:
+# - INJECT_UNLINK_FAIL と同じ名前の file の File.unlink を Errno::EPERM (変更できない file と同じ失敗) にする。
+# - INJECT_RMDIR_FAIL と同じ名前の dir の Dir.rmdir を INJECT_RMDIR_ERROR (既定 Errno::ENOTEMPTY) にする。
+# - 移動先の名前が INJECT_RENAME_FAIL と同じ File.rename を INJECT_RENAME_ERROR にする (INJECT_RENAME_AFTER=1 なら
+#   実処理を行ってから raise)。
+# - INJECT_EMPTY_LIE と同じ名前の dir の Dir.empty? を true にする (plan の後に dir へ file が置かれた状態を作る)。
+# - INJECT_DROP_MARKER_OF と同じ名前の dir の中の marker を、File.read で読んだ直後に消す (plan の後に marker が
+#   消えた状態を作る)。
+# Interrupt は SystemCallError ではないので、割り込みの代わりに使う。RUBYOPT は空白で分割されるので、path に空白が
+# あれば理由を出して fail。
+case $tmp in *[[:space:]]*) fail "case 51 needs a tmp path without whitespace for RUBYOPT: $tmp" ;; esac
+inject_prune="$tmp/inject-prune.rb"
+cat > "$inject_prune" <<'RB'
+class << File
+  alias_method :unlink_without_injection, :unlink
+  def unlink(*paths)
+    raise Errno::EPERM, paths.first if paths.any? { |p| File.basename(p) == ENV["INJECT_UNLINK_FAIL"] }
+
+    unlink_without_injection(*paths)
+  end
+
+  alias_method :rename_without_injection, :rename
+  def rename(from, to)
+    return rename_without_injection(from, to) unless File.basename(to) == ENV["INJECT_RENAME_FAIL"]
+
+    rename_without_injection(from, to) if ENV["INJECT_RENAME_AFTER"] == "1"
+    raise Object.const_get(ENV.fetch("INJECT_RENAME_ERROR")), "injected"
+  end
+
+  alias_method :read_without_injection, :read
+  def read(*args, **kw)
+    data = read_without_injection(*args, **kw)
+    path = args.first.to_s
+    if File.basename(path) == ".agent-tools-managed.yml" && File.basename(File.dirname(path)) == ENV["INJECT_DROP_MARKER_OF"]
+      unlink_without_injection(path)
+    end
+    data
+  end
+end
+class << Dir
+  alias_method :rmdir_without_injection, :rmdir
+  def rmdir(path)
+    if File.basename(path) == ENV["INJECT_RMDIR_FAIL"]
+      raise Object.const_get(ENV.fetch("INJECT_RMDIR_ERROR", "Errno::ENOTEMPTY")), path
+    end
+
+    rmdir_without_injection(path)
+  end
+
+  alias_method :empty_without_injection, :empty?
+  def empty?(path)
+    return true if File.basename(path) == ENV["INJECT_EMPTY_LIE"]
+
+    empty_without_injection(path)
+  end
+end
+RB
+# 使い方: prune_injected <注入の環境変数 (NAME=value)>...  (fixture の drepo に注入つきの sync --prune --apply を 1 回
+# 行う。env で渡すのは、`VAR=x 関数` の代入が関数の後も残る sh があるため)
+prune_injected() {
+  env RUBYOPT="-r$inject_prune" "$@" "$sync" --root "$tmp/drepo" --codex-home "$tmp/dcodex" \
+    --claude-home "$tmp/dclaude" --opencode-home "$tmp/dopencode" --prune --apply
+}
+mkdir -p "$tmp/drepo/shared/skills" "$tmp/dcodex" "$tmp/dclaude"
+# 使い方: write_dskill <name の personal- の後>
+write_dskill() {
+  mkdir -p "$tmp/drepo/shared/skills/personal-$1"
+  cat > "$tmp/drepo/shared/skills/personal-$1/SKILL.md" <<EOF
+---
+name: personal-$1
+description: demo skill $1
+---
+body $1
+EOF
+  write_asset_manifest "$tmp/drepo/shared/skills/personal-$1/asset.yml" \
+    "personal-$1" skill public "shared/skills/personal-$1" directory claude-code
+}
+run51() { "$sync" --root "$tmp/drepo" --codex-home "$tmp/dcodex" --claude-home "$tmp/dclaude" --opencode-home "$tmp/dopencode" "$@"; }
+dskills="$tmp/dclaude/skills"
+dgone="$dskills/personal-dgone"
+dmoved="$dskills/.agent-tools-marker-personal-dgone"
+# personal-dgone を配置してから shared/ から消し、managed orphan にする (撤去しきった後の case でも作り直す)。
+make_dgone_orphan() {
+  write_dskill dgone
+  "$build" --root "$tmp/drepo" --quiet > /dev/null
+  "$register" --root "$tmp/drepo" --quiet > /dev/null
+  run51 --apply --quiet > /dev/null
+  [ -f "$dgone/SKILL.md" ] || fail "case 51 fixture should deploy personal-dgone"
+  rm -rf "$tmp/drepo/shared/skills/personal-dgone"
+  "$build" --root "$tmp/drepo" --prune --quiet > /dev/null
+  "$register" --root "$tmp/drepo" --quiet > /dev/null
+}
+write_dskill dkeep
+make_dgone_orphan
+# 51a: orphan の中に書き込みできない subdir (中に file)。marker 以外を消し残すので、marker は残す
+mkdir -p "$dgone/stuck"
+echo "keep" > "$dgone/stuck/keep"
+chmod 0555 "$dgone/stuck"
+status=0
+run51 --prune --apply > "$tmp/out51a" 2>&1 || status=$?
+chmod 0755 "$dgone/stuck"
+[ "$status" -eq 1 ] || fail "an incomplete skill removal should exit 1, got $status: $(cat "$tmp/out51a")"
+grep -q "fail: could not remove .*/personal-dgone/stuck; the marker was kept, so the next prune retries" "$tmp/out51a" \
+  || fail "the stop must name what was left: $(cat "$tmp/out51a")"
+! grep -q "ok: applied" "$tmp/out51a" || fail "an incomplete removal must not report success: $(cat "$tmp/out51a")"
+[ -f "$dgone/.agent-tools-managed.yml" ] || fail "the marker must stay while the rest of the skill remains: $(ls -A "$dgone")"
+run51 --prune > "$tmp/out51a-next" 2>&1 || fail "prune dry-run after the stop should succeed: $(cat "$tmp/out51a-next")"
+grep -q "delete: \[claude-code\].*personal-dgone (not in catalog)" "$tmp/out51a-next" \
+  || fail "the next prune must plan the removal again: $(cat "$tmp/out51a-next")"
+# 51b: skills/ に書き込みできない (marker 以外は消せるが、空の dir を消せない)。marker を消してから dir の削除に
+# 失敗すると、空の dir が marker なしで残り、次の prune は unmanaged の skip にする。marker を退避する rename の時点で止める
+chmod 0555 "$dskills"
+status=0
+run51 --prune --apply > "$tmp/out51b" 2>&1 || status=$?
+chmod 0755 "$dskills"
+[ "$status" -eq 1 ] || fail "a skill dir that cannot be removed should exit 1, got $status: $(cat "$tmp/out51b")"
+grep -q "fail: could not remove .*/personal-dgone (Errno::EACCES); the marker was kept, so the next prune retries" "$tmp/out51b" \
+  || fail "the stop must name the skill dir: $(cat "$tmp/out51b")"
+[ "$(ls -A "$dgone")" = ".agent-tools-managed.yml" ] \
+  || fail "only the marker may remain in the skill dir: $(ls -A "$dgone")"
+[ "$(ls -A "$dskills" | tr '\n' ' ')" = "personal-dgone personal-dkeep " ] \
+  || fail "skills/ must hold no moved marker: $(ls -A "$dskills")"
+# 使い方: expect_marker_in_dgone <label>  (marker が dir の中にだけあり、退避先に残っていないこと)
+expect_marker_in_dgone() {
+  [ "$(ls -A "$dgone")" = ".agent-tools-managed.yml" ] || fail "$1: the marker must be back in the skill dir: $(ls -A "$dgone")"
+  [ "$(ls -A "$dskills" | tr '\n' ' ')" = "personal-dgone personal-dkeep " ] \
+    || fail "$1: skills/ must hold no moved marker: $(ls -A "$dskills")"
+}
+# 51c: marker を退避した後に空の dir を消せない (注入)。退避した marker を dir の中へ戻して止める
+status=0
+prune_injected INJECT_RMDIR_FAIL=personal-dgone > "$tmp/out51c" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "a failed rmdir after moving the marker should exit 1, got $status: $(cat "$tmp/out51c")"
+grep -q "fail: could not remove .*/personal-dgone (Errno::ENOTEMPTY); the marker was put back, so the next prune retries" "$tmp/out51c" \
+  || fail "the stop must say the marker was put back: $(cat "$tmp/out51c")"
+expect_marker_in_dgone "rmdir failure"
+# 51d: marker は読めるが dir の中を列挙できない (読み取り権が無い)。列挙の失敗も fail で止め、marker は残す (review round 1)
+chmod 0311 "$dgone"
+status=0
+run51 --prune --apply > "$tmp/out51d" 2>&1 || status=$?
+chmod 0755 "$dgone"
+[ "$status" -eq 1 ] || fail "an unlistable skill dir should exit 1, got $status: $(cat "$tmp/out51d")"
+grep -q "fail: could not list .*/personal-dgone (Errno::EACCES); the marker was kept, so the next prune retries" "$tmp/out51d" \
+  || fail "the stop must say the skill dir could not be listed: $(cat "$tmp/out51d")"
+expect_marker_in_dgone "listing failure"
+# 51e / 51f: marker を退避した直後 (退避の rename を行ってから) と、空の dir を消す直前に割り込まれても、退避先と dir の
+# 実在で判断して marker を dir の中へ戻す (#469 review 3 と同じ考え方。flag だと退避の直後の割り込みで戻らない)。
+# uncaught の Interrupt で ruby は SIGINT で終わるので、exit code は 0 でないことだけを見る (review round 1)
+status=0
+prune_injected INJECT_RENAME_FAIL=.agent-tools-marker-personal-dgone INJECT_RENAME_AFTER=1 INJECT_RENAME_ERROR=Interrupt \
+  > "$tmp/out51e" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "an interrupt right after moving the marker must not exit 0: $(cat "$tmp/out51e")"
+expect_marker_in_dgone "interrupt right after moving the marker"
+status=0
+prune_injected INJECT_RMDIR_FAIL=personal-dgone INJECT_RMDIR_ERROR=Interrupt > "$tmp/out51f" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "an interrupt right before removing the dir must not exit 0: $(cat "$tmp/out51f")"
+expect_marker_in_dgone "interrupt right before removing the dir"
+# 通常の撤去の plan の後に marker が消えたら (plan が marker を読んだ直後に消す注入)、apply は続きの撤去に切り替えず、
+# 何も消さずに止まる (撤去の経路は plan で決める。review round 3)
+cp "$dgone/.agent-tools-managed.yml" "$tmp/out51f-marker"
+status=0
+prune_injected INJECT_DROP_MARKER_OF=personal-dgone > "$tmp/out51f-drop" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "a marker gone after the plan should exit 1, got $status: $(cat "$tmp/out51f-drop")"
+grep -q "delete: \[claude-code\].*personal-dgone (not in catalog)$" "$tmp/out51f-drop" \
+  || fail "the plan must be the normal removal: $(cat "$tmp/out51f-drop")"
+grep -q "fail: could not remove .*/personal-dgone: its marker is gone since the plan, so nothing was removed" "$tmp/out51f-drop" \
+  || fail "the stop must say the marker is gone: $(cat "$tmp/out51f-drop")"
+[ -d "$dgone" ] || fail "a normal removal must not switch to the resumed removal when the marker is gone"
+cp "$tmp/out51f-marker" "$dgone/.agent-tools-managed.yml"
+expect_marker_in_dgone "marker gone after the plan"
+# 51g: 空の dir を消せず、marker を戻す rename も失敗する (注入)。dir と退避先の両方の path を出して止める。次の prune は、
+# marker の無い dir の隣にある同じ name の退避した marker で管理下と判断し、退避を飛ばして続きから撤去する。dry-run は
+# 何も書かない (review round 1)
+status=0
+prune_injected INJECT_RMDIR_FAIL=personal-dgone INJECT_RENAME_FAIL=.agent-tools-managed.yml INJECT_RENAME_ERROR=Errno::EACCES \
+  > "$tmp/out51g" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "a failed put-back of the marker should exit 1, got $status: $(cat "$tmp/out51g")"
+grep -q "fail: could not remove .*/personal-dgone (Errno::ENOTEMPTY) and could not put its marker back from .*/\.agent-tools-marker-personal-dgone (Errno::EACCES); the next prune resumes the removal from the moved marker" "$tmp/out51g" \
+  || fail "the stop must name the skill dir and the moved marker: $(cat "$tmp/out51g")"
+[ -z "$(ls -A "$dgone")" ] || fail "the skill dir must be left without its marker: $(ls -A "$dgone")"
+[ -f "$dmoved" ] || fail "the marker must be left at the moved path: $(ls -A "$dskills")"
+# 退避した marker が別の name を示すもの / symlink は、続きの撤去の根拠にしない (dir の中の marker と同じ厳しさ)
+mkdir "$dskills/personal-dfake" "$dskills/personal-dlink"
+cp "$dmoved" "$dskills/.agent-tools-marker-personal-dfake"
+sed 's/personal-dgone/personal-dlink/' "$dmoved" > "$tmp/out51g-dlink-marker"
+ln -s "$tmp/out51g-dlink-marker" "$dskills/.agent-tools-marker-personal-dlink"
+tree_snapshot "$dskills" > "$tmp/out51g-before"
+run51 --prune > "$tmp/out51g-dry" 2>&1 || fail "prune dry-run after the failed put-back should succeed: $(cat "$tmp/out51g-dry")"
+tree_snapshot "$dskills" > "$tmp/out51g-after"
+cmp -s "$tmp/out51g-before" "$tmp/out51g-after" \
+  || fail "the dry-run must not write: $(diff "$tmp/out51g-before" "$tmp/out51g-after" || true)"
+grep -q "delete: \[claude-code\].*personal-dgone (not in catalog; resumes an interrupted removal)" "$tmp/out51g-dry" \
+  || fail "the next prune must plan to resume the removal: $(cat "$tmp/out51g-dry")"
+grep -q "skip: \[claude-code\].*personal-dfake (orphan is unmanaged; left in place)" "$tmp/out51g-dry" \
+  || fail "a moved marker of another name must not make the dir managed: $(cat "$tmp/out51g-dry")"
+grep -q "skip: \[claude-code\].*personal-dlink (orphan is unmanaged; left in place)" "$tmp/out51g-dry" \
+  || fail "a symlinked moved marker must not make the dir managed: $(cat "$tmp/out51g-dry")"
+# 退避した marker を読めない (mode 000) なら、続きの根拠にせず unmanaged の skip にし、他の対象の plan は続ける (review round 2)
+chmod 0000 "$dmoved"
+status=0
+run51 --prune > "$tmp/out51g-unreadable" 2>&1 || status=$?
+chmod 0644 "$dmoved"
+[ "$status" -eq 0 ] || fail "an unreadable moved marker must not stop the prune, got $status: $(cat "$tmp/out51g-unreadable")"
+grep -q "skip: \[claude-code\].*personal-dgone (orphan is unmanaged; left in place)" "$tmp/out51g-unreadable" \
+  || fail "an unreadable moved marker must not make the dir managed: $(cat "$tmp/out51g-unreadable")"
+grep -q "skip: \[claude-code\].*personal-dkeep (up-to-date)" "$tmp/out51g-unreadable" \
+  || fail "the other targets must still be planned: $(cat "$tmp/out51g-unreadable")"
+rm -rf "$dskills/personal-dfake" "$dskills/personal-dlink" "$dskills/.agent-tools-marker-personal-dfake" \
+  "$dskills/.agent-tools-marker-personal-dlink"
+run51 --prune --apply > "$tmp/out51g-apply" 2>&1 || fail "the resumed removal should succeed: $(cat "$tmp/out51g-apply")"
+[ "$(ls -A "$dskills")" = "personal-dkeep" ] \
+  || fail "the resumed removal must remove the dir and the moved marker: $(ls -A "$dskills")"
+# 51h: dir は消えたが、退避した marker を消せない (注入)。退避先の path を出して止める (personal- で始まらないので、
+# plan / prune には出ない。手で消す)
+make_dgone_orphan
+status=0
+prune_injected INJECT_UNLINK_FAIL=.agent-tools-marker-personal-dgone > "$tmp/out51h" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "an unremovable moved marker should exit 1, got $status: $(cat "$tmp/out51h")"
+grep -q "fail: removed .*/personal-dgone but could not remove its marker moved to .*/\.agent-tools-marker-personal-dgone; remove it by hand" "$tmp/out51h" \
+  || fail "the stop must name the moved marker: $(cat "$tmp/out51h")"
+[ "$(ls -A "$dskills" | tr '\n' ' ')" = ".agent-tools-marker-personal-dgone personal-dkeep " ] \
+  || fail "only the moved marker may remain of the orphan: $(ls -A "$dskills")"
+# 51i: 撤去しきった後に残った退避した marker は、同じ名前で人が作った dir の撤去の根拠にしない。続きの撤去は空の dir
+# だけで、apply も中身を消さず rmdir (非再帰) だけを行い、marker を dir の中へ戻さない (review round 2)
+mkdir "$dgone"
+echo "hand made" > "$dgone/hand.md"
+run51 --prune --apply > "$tmp/out51i" 2>&1 || fail "prune with a reused name should succeed: $(cat "$tmp/out51i")"
+grep -q "skip: \[claude-code\].*personal-dgone (orphan is unmanaged; left in place)" "$tmp/out51i" \
+  || fail "a non-empty dir must not be resumed from a moved marker: $(cat "$tmp/out51i")"
+[ -f "$dgone/hand.md" ] || fail "the files in a dir of a reused name must be left in place"
+# plan の後に dir へ file が置かれた場合 (Dir.empty? を注入で偽る) も、apply は中身を消さずに止まる
+status=0
+prune_injected INJECT_EMPTY_LIE=personal-dgone > "$tmp/out51i-race" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "resuming into a non-empty dir should exit 1, got $status: $(cat "$tmp/out51i-race")"
+grep -q "fail: could not remove .*/personal-dgone (Errno::ENOTEMPTY); its marker stays at .*/\.agent-tools-marker-personal-dgone" "$tmp/out51i-race" \
+  || fail "the stop must name the dir and the moved marker: $(cat "$tmp/out51i-race")"
+[ -f "$dgone/hand.md" ] || fail "resuming must not remove the contents of the dir"
+[ -f "$dmoved" ] && [ ! -e "$dgone/.agent-tools-managed.yml" ] \
+  || fail "resuming must not move the marker into a non-empty dir: $(ls -A "$dgone")"
+# 続きの plan の後に、人の file に加えて marker と同じ名前の file (管理の内容ではないもの) が置かれても、apply は通常の
+# 撤去に切り替えず、rmdir だけで止まる (撤去の経路は plan で決める。review round 3)
+printf 'not a marker\n' > "$dgone/.agent-tools-managed.yml"
+status=0
+prune_injected INJECT_EMPTY_LIE=personal-dgone > "$tmp/out51i-race2" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "resuming into a dir with a marker-named file should exit 1, got $status: $(cat "$tmp/out51i-race2")"
+grep -q "delete: \[claude-code\].*personal-dgone (not in catalog; resumes an interrupted removal)" "$tmp/out51i-race2" \
+  || fail "the plan must be the resumed removal: $(cat "$tmp/out51i-race2")"
+grep -q "fail: could not remove .*/personal-dgone (Errno::ENOTEMPTY); its marker stays at .*/\.agent-tools-marker-personal-dgone" "$tmp/out51i-race2" \
+  || fail "the resumed removal must stop at rmdir: $(cat "$tmp/out51i-race2")"
+[ -f "$dgone/hand.md" ] || fail "a resumed removal must not remove the user's file even with a marker-named file"
+[ "$(cat "$dgone/.agent-tools-managed.yml")" = "not a marker" ] || fail "the marker-named file must be left as it was"
+[ -f "$dmoved" ] || fail "the moved marker must stay"
+rm -f "$dgone/.agent-tools-managed.yml"
+# 空の dir なら、続きとして撤去する
+rm -f "$dgone/hand.md"
+run51 --prune --apply > "$tmp/out51i-empty" 2>&1 || fail "resuming with an empty dir should succeed: $(cat "$tmp/out51i-empty")"
+grep -q "delete: \[claude-code\].*personal-dgone (not in catalog; resumes an interrupted removal)" "$tmp/out51i-empty" \
+  || fail "an empty dir next to the moved marker must be resumed: $(cat "$tmp/out51i-empty")"
+[ "$(ls -A "$dskills")" = "personal-dkeep" ] || fail "the resumed removal must remove the dir and the moved marker: $(ls -A "$dskills")"
+# 対照: 注入の無い run は撤去するものが無く、成功する
+run51 --prune --apply > "$tmp/out51j" 2>&1 || fail "prune without the injection should succeed: $(cat "$tmp/out51j")"
+! grep -q "personal-dgone" "$tmp/out51j" || fail "nothing of personal-dgone may be left to prune: $(cat "$tmp/out51j")"
+[ "$(ls -A "$dskills")" = "personal-dkeep" ] || fail "only the catalog-backed skill may remain: $(ls -A "$dskills")"
+# 51k: marker が symlink の skill の dir は、管理外として触らない (sync が置く marker は通常の file。相対 symlink の
+# marker は退避するとリンク切れになり、戻せなくなる。review round 2)
+mkdir "$dskills/personal-dsym"
+sed 's/personal-dkeep/personal-dsym/' "$dskills/personal-dkeep/.agent-tools-managed.yml" > "$dskills/personal-dsym/real-marker.yml"
+ln -s real-marker.yml "$dskills/personal-dsym/.agent-tools-managed.yml"
+echo "body dsym" > "$dskills/personal-dsym/SKILL.md"
+tree_snapshot "$dskills/personal-dsym" > "$tmp/out51k-before"
+run51 --prune --apply > "$tmp/out51k" 2>&1 || fail "prune with a symlinked marker should succeed: $(cat "$tmp/out51k")"
+grep -q "skip: \[claude-code\].*personal-dsym (orphan is unmanaged; left in place)" "$tmp/out51k" \
+  || fail "a skill dir with a symlinked marker must be skipped as unmanaged: $(cat "$tmp/out51k")"
+tree_snapshot "$dskills/personal-dsym" > "$tmp/out51k-after"
+cmp -s "$tmp/out51k-before" "$tmp/out51k-after" \
+  || fail "a skill dir with a symlinked marker must be left untouched: $(diff "$tmp/out51k-before" "$tmp/out51k-after" || true)"
+rm -rf "$dskills/personal-dsym"
+
+# --- case 52: script の撤去は本体 → sidecar marker の順。本体を消し残したら marker を残して fail で止まる (#482 の項目 3) ---
+# 本体と sidecar は同じ dir にあるので、dir の mode では本体だけを消せなくすることができない。case 51 の注入で本体の
+# File.unlink だけを失敗させる (変更できない file と同じ失敗)。注入の無い run が収束することで、注入が漏れていないことも見る。
+mkdir -p "$tmp/drepo/shared/scripts"
+printf '#!/bin/sh\necho dtool\n' > "$tmp/drepo/shared/scripts/personal-dtool.sh"
+write_approved_script_manifest "$tmp/drepo" shared/scripts/personal-dtool.sh personal-dtool personal claude-code
+"$build" --root "$tmp/drepo" --quiet > /dev/null
+"$register" --root "$tmp/drepo" --quiet > /dev/null
+run51 --apply --quiet > /dev/null
+dtool="$tmp/dclaude/agent-tools/scripts/personal-dtool"
+[ -f "$dtool" ] && [ -f "$dtool.agent-tools-managed.yml" ] || fail "case 52 fixture should deploy personal-dtool"
+rm -f "$tmp/drepo/shared/scripts/personal-dtool.sh" "$tmp/drepo/shared/scripts/personal-dtool.asset.yml"
+"$build" --root "$tmp/drepo" --prune --quiet > /dev/null
+"$register" --root "$tmp/drepo" --quiet > /dev/null
+# 52a: 本体を消せない。sidecar marker は消さずに止める
+status=0
+prune_injected INJECT_UNLINK_FAIL=personal-dtool > "$tmp/out52a" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "an unremovable script body should exit 1, got $status: $(cat "$tmp/out52a")"
+grep -q "fail: could not remove .*/personal-dtool; the marker was kept, so the next prune retries" "$tmp/out52a" \
+  || fail "the stop must name the script body: $(cat "$tmp/out52a")"
+[ -f "$dtool" ] || fail "the injected failure must leave the body in place"
+[ -f "$dtool.agent-tools-managed.yml" ] || fail "the sidecar marker must stay while the body remains"
+run51 --prune > "$tmp/out52a-next" 2>&1 || fail "prune dry-run after the stop should succeed: $(cat "$tmp/out52a-next")"
+grep -q "delete: \[claude-code\].*personal-dtool (not in catalog)" "$tmp/out52a-next" \
+  || fail "the next prune must plan the script removal again: $(cat "$tmp/out52a-next")"
+# 52b: sidecar marker だけを消せない。本体は消えているので、残った marker の path を出して止める (sidecar だけの残りは
+# prune が列挙しないので、手で消す)
+status=0
+prune_injected INJECT_UNLINK_FAIL=personal-dtool.agent-tools-managed.yml > "$tmp/out52b" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "an unremovable sidecar marker should exit 1, got $status: $(cat "$tmp/out52b")"
+grep -q "fail: removed .*/personal-dtool but could not remove its marker .*/personal-dtool\.agent-tools-managed\.yml; remove the marker by hand" "$tmp/out52b" \
+  || fail "the stop must name the leftover marker: $(cat "$tmp/out52b")"
+[ ! -e "$dtool" ] || fail "the body must be removed before the marker"
+[ -f "$dtool.agent-tools-managed.yml" ] || fail "the injected failure must leave the sidecar marker in place"
+rm -f "$dtool.agent-tools-managed.yml"
+# 52c: 本体が directory に置き換わっていたら、中身ごと消さずに (単一 file の kind の撤去は非再帰)、marker を残して止める
+# (review round 2)
+printf '#!/bin/sh\necho ddir\n' > "$tmp/drepo/shared/scripts/personal-ddir.sh"
+write_approved_script_manifest "$tmp/drepo" shared/scripts/personal-ddir.sh personal-ddir personal claude-code
+"$build" --root "$tmp/drepo" --quiet > /dev/null
+"$register" --root "$tmp/drepo" --quiet > /dev/null
+run51 --apply --quiet > /dev/null
+ddir="$tmp/dclaude/agent-tools/scripts/personal-ddir"
+[ -f "$ddir" ] || fail "case 52c fixture should deploy personal-ddir"
+rm -f "$tmp/drepo/shared/scripts/personal-ddir.sh" "$tmp/drepo/shared/scripts/personal-ddir.asset.yml"
+"$build" --root "$tmp/drepo" --prune --quiet > /dev/null
+"$register" --root "$tmp/drepo" --quiet > /dev/null
+rm -f "$ddir"
+mkdir "$ddir"
+echo "inner" > "$ddir/inner"
+status=0
+run51 --prune --apply > "$tmp/out52c" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "a directory at the script path should exit 1, got $status: $(cat "$tmp/out52c")"
+grep -q "fail: could not remove .*/personal-ddir; the marker was kept, so the next prune retries" "$tmp/out52c" \
+  || fail "the stop must name the script path: $(cat "$tmp/out52c")"
+[ -f "$ddir/inner" ] || fail "the contents of a directory at the script path must not be removed"
+[ -f "$ddir.agent-tools-managed.yml" ] || fail "the sidecar marker must stay while the script path remains"
+rm -rf "$ddir" "$ddir.agent-tools-managed.yml"
+# 対照: 注入の無い run は撤去するものが無く、成功する
+run51 --prune --apply > "$tmp/out52d" 2>&1 || fail "prune without the injection should succeed: $(cat "$tmp/out52d")"
+! grep -qE "personal-dtool|personal-ddir" "$tmp/out52d" || fail "nothing of the scripts may be left to prune: $(cat "$tmp/out52d")"
+
+# --- case 53: plugin の撤去で消し残したら fail で止まり、marker ごと残って次の prune がまた撤去の対象にする (#482 の項目 3) ---
+# plugin は marker が本体の先頭行にあるので、本体と一緒に残る。plugins/ を書き込みできなくして消せなくする。
+printf 'export default { id: "personal-jgone", server: async () => ({}) };\n' > "$tmp/jrepo/shared/plugins/personal-jgone.js"
+write_approved_plugin_manifest "$tmp/jrepo" personal-jgone personal
+"$build" --root "$tmp/jrepo" --quiet > /dev/null
+"$register" --root "$tmp/jrepo" --quiet > /dev/null
+run50 --apply --quiet > /dev/null
+jgone="$tmp/jopen/plugins/personal-jgone.js"
+[ -f "$jgone" ] || fail "case 53 fixture should deploy personal-jgone"
+rm -f "$tmp/jrepo/shared/plugins/personal-jgone.js" "$tmp/jrepo/shared/plugins/personal-jgone.asset.yml"
+"$build" --root "$tmp/jrepo" --prune --quiet > /dev/null
+"$register" --root "$tmp/jrepo" --quiet > /dev/null
+cp "$jgone" "$tmp/out53-jgone"
+chmod 0555 "$tmp/jopen/plugins"
+status=0
+run50 --prune --apply > "$tmp/out53" 2>&1 || status=$?
+chmod 0755 "$tmp/jopen/plugins"
+[ "$status" -eq 1 ] || fail "an unremovable plugin should exit 1, got $status: $(cat "$tmp/out53")"
+grep -q "fail: could not remove .*/personal-jgone\.js; the marker was kept, so the next prune retries" "$tmp/out53" \
+  || fail "the stop must name the plugin: $(cat "$tmp/out53")"
+cmp -s "$tmp/out53-jgone" "$jgone" || fail "the plugin must be left in place with its marker"
+run50 --prune --apply > "$tmp/out53-next" 2>&1 || fail "prune should converge once plugins/ is writable: $(cat "$tmp/out53-next")"
+[ "$(ls -A "$tmp/jopen/plugins")" = "personal-jplug.js" ] \
+  || fail "the orphan plugin must be gone and the catalog-backed one kept: $(ls -A "$tmp/jopen/plugins")"
+
 echo "ok: sync self-test passed"
