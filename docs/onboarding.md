@@ -78,7 +78,8 @@ instruction entry が無いと skip するので、register の後に回す。sy
 
 補助: 実機の probe 3 本 (`probe-credential-isolation.sh` / `probe-skill-routing.sh` / `probe-opencode-plugin.sh`。
 network と各 CLI に依存し、CI では回さない。[scripts/README](../scripts/README.md))。共有 lib は CLI 引数解析
-(`scripts/lib/cli.rb`)、sync / connect の plan 表示と集計 (`scripts/lib/plan_report.rb`)、literal な directory の下の
+(`scripts/lib/cli.rb`)、sync / connect の plan 表示と集計 (`scripts/lib/plan_report.rb`)、sync / connect が配置先を
+一時 file + rename で入れ替える書き込み (`scripts/lib/file_replace.rb`)、literal な directory の下の
 glob (`scripts/lib/path_glob.rb`)、directory skill の `evals/evals.json` 検査 (`scripts/lib/check_evals.rb`。
 CI の self-test が通す)。
 

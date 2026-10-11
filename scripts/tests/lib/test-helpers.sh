@@ -231,5 +231,23 @@ node_options_without_detect_module() {
   printf '%s\n' "$nownd_opts"
 }
 
+# file size の上限 (RLIMIT_FSIZE、byte) を付けて command を起動する。上限を超える書き込みで kernel が process を
+# 止める (SIGXFSZ。macOS の Ruby 2.6 で exit 153 を実測) ので、file を書いている途中で止まった状態を作れる。sync /
+# connect の書き込みが途中で止まっても、切れた file を配置先に置かないことを確かめるのに使う (#482)。
+# 使い方: with_fsize <byte 数> <command>...
+with_fsize() {
+  ruby -e 'Process.setrlimit(:FSIZE, Integer(ARGV.shift)); exec(*ARGV)' "$@"
+}
+
+# with_fsize の上限を超える大きさの本文を作る (1 行 70 byte 前後の行を指定の行数だけ出す)。
+# 使い方: padding_lines <行数>
+padding_lines() {
+  pl_i=0
+  while [ "$pl_i" -lt "$1" ]; do
+    printf 'padding line %03d to make the file larger than the file size limit\n' "$pl_i"
+    pl_i=$((pl_i + 1))
+  done
+}
+
 # repo root (scripts/tests/ の 2 つ上)。実 repo を対象にする case が使う。
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)

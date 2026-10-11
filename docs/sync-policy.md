@@ -31,7 +31,7 @@ default は必ず conservative にします。
   - plugin: `<opencode home>/plugins/personal-<name>.js` (単一 file、mode 0644)。marker は
     本体先頭の 1 行 JS ブロックコメントで、sidecar は無い。connect 不要で、未配置なら sync が
     `plugins/` を mkdir_p して直接 create する。詳細は下記「v1 OpenCode targets」。
-- apply の書き込み (skill / script)。skill は generated を配置先と同じ親 dir の一時 dir
+- apply の書き込み (skill / script / instruction / plugin)。skill は generated を配置先と同じ親 dir の一時 dir
   (`.agent-tools-staging-personal-<name>`) に copy し、旧 dir を `.agent-tools-old-personal-<name>` に rename で退避してから
   一時 dir を rename で配置先に置き、最後に退避した旧 dir を消す (退避 → 配置 → 削除。配置先が無い時間は
   2 つの rename の間だけで、marker は一時 dir の中にあり rename で初めて有効になる)。copy の途中で止まれば
@@ -42,9 +42,15 @@ default は必ず conservative にします。
   旧 dir を消し残したら、新版は配置済みのまま `fail:` で止め、旧の写しの path を出す (手で消す。次の sync は
   新版を up-to-date と見る)。配置の rename の直後に割り込まれたときは、退避した旧 dir はその path を出さずに残る。
   up-to-date の間は消えず、その skill の次の create / update の冒頭で消える。
-  script は本体 → sidecar marker の順に、それぞれ一時 file に書いて rename する
-  (一時 file の path に directory や消せない file があれば止める)。
+  script は本体 → sidecar marker の順に、それぞれ一時 file (同じ dir の `.agent-tools-staging-<file 名>`) に書いて
+  rename する (一時 file の path に directory や消せない file があれば止める)。
   create の途中で止まると marker の無い本体が残り、次の sync は unmanaged の conflict で止まる (fail-closed)。
+  instruction と plugin も、script と同じく一時 file に書いて rename する。どちらも先頭行の marker の build_id だけで
+  up-to-date を決めるので、配置先へ直接書いて途中で止まると、新しい marker を持つ切れた file を次の sync が
+  up-to-date と見てしまうため (#482)。instruction は所有ファイルの mode を引き継ぎ、plugin は 0644 にする。
+  connect の書き込みも同じ形にする。所有ファイルの作成 (空ファイルの claim を含む) は一時 file に書いて rename し、
+  claim する空ファイルの mode は引き継ぐ。人間の `CLAUDE.md` への import 1 行は、file を作り直さずに追記で末尾に
+  足す (inode と mode を変えない。途中で止まっても既存の内容を切り詰めない)。
   `fail:` で止めた時点で、同じ run の後続の plan は適用しない。
 - 走査する tool と kind の組は `ArtifactTargets::TOOL_KINDS` に従う (plan も prune も)。
   codex / claude-code は skill / instruction / script、opencode は plugin だけで、opencode home の
@@ -133,8 +139,9 @@ plugin の plan の判定順 (既存 kind と対称):
    共有する。doctor が数える plugin も同じ判定 (`PluginMarker.managed?`、name は file 名) を使う)。
 7. build_id が同じなら up-to-date、違えば `update`。
 
-apply は mkdir_p + cp + chmod 0644。`--prune` は `plugins/personal-*.js` だけを見て、marker が
-一致し catalog に無い orphan を rm_f し、symlink と unmanaged は skip する (`.ts` は見ない)。
+apply は mkdir_p してから、一時 file に copy して 0644 にし、rename で置く (上記「apply の書き込み」)。`--prune` は
+`plugins/personal-*.js` だけを見て、marker が一致し catalog に無い orphan を撤去し、symlink と unmanaged は skip する
+(`.ts` は見ない)。
 
 `~/.codex/plugins` を禁止しつつ OpenCode の `plugins/` を許可する理由: 前者は Codex 本体が管理する
 dir (tool-managed) で、後者は user が plugin を置く dir (OpenCode は `plugins/*.js` を読むだけで、
@@ -173,6 +180,16 @@ dir (tool-managed) で、後者は user が plugin を置く dir (OpenCode は `
 - 条件を満たさない orphan (unmanaged / symlink) は削除せず skip として可視化するだけで、
   conflict にしない (書き込みと違い「触らない」が常に安全なため、prune は停止しない)。
 - script は本体と sidecar marker を対で撤去する。plugin は本体 1 file を撤去する。
+- 削除の後に消えたことを確かめ、消し残したら `fail:` で止める (exit 1。rm_f / rm_rf は削除の失敗を握りつぶす
+  ため。同じ run の後続の plan は適用しない)。marker は本体が消えたのを確かめてから最後に消すので、消し残しても
+  marker が残り、次の prune がまた撤去の対象にする (marker が先に消えると、残りは unmanaged の skip になる, #482)。
+  - skill は marker 以外を先に消す。marker だけになったら、marker を同じ親 dir の
+    `.agent-tools-marker-personal-<name>` に rename で退避してから空の dir を消し、最後に退避した marker を消す。
+    親 dir に書けなければ退避の時点で止まり、marker は dir の中に残る。空の dir を消せなければ marker を dir の中へ
+    戻して止め、dir を消した後に退避した marker を消せなければ、その path を出して止める (手で消す)。
+  - script は本体 → sidecar marker の順に消す。sidecar marker だけを消し残したときは、その path を出して止める
+    (sidecar 単体は prune が列挙しないので、手で消す)。
+  - plugin は marker が本体の先頭行にあるので、消し残せば marker ごと残る。
 - instruction は prune 対象外。所有ファイルは人間の instruction ファイルと絡めて connect
   が管理しており、撤去 (所有解除) は人間の判断で行う。
 
