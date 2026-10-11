@@ -505,7 +505,7 @@
     {
       "id": 20,
       "name": "running-worker-in-other-tab",
-      "prompt": "packet #316 を Codex worker に委譲したい。herdr には label #316 の tab はまだ無い。同じ workspace の #315 の tab にある worker-315 の pane を process-info で見ると、foreground に codex がいる。#316 の tab を作って起動していい? 手順確認のみ。",
+      "prompt": "packet #316 を Codex worker に委譲したい。LAUNCH.md §4 で起動の記録 (run / tab) を packet に書いた後、§5 の起動の確認で次を見つけた場面。herdr には label #316 の tab はまだ無い。同じ workspace の #315 の tab にある worker-315 の pane を process-info で見ると、foreground に codex がいる。#316 の tab を作って起動していい? 手順確認のみ。",
       "expected_output": "起動しない。worker は orchestrator session (workspace) あたり 1 つで、走っている worker の確認は起動する Issue の tab に限らず workspace の中の worker の命名の pane (worker-<n>[-r<N>]) すべてを対象にする。worker-315 で codex が foreground にいるので Blocked at: launch-path とし、Next step は「pane の worker の完了を待つ。この run は起動していない。記録 (run / tab) の破棄をこの skill に指示してから起動し直す」にする (起動の記録はこの停止の前に書いてあり、launch-path では消さないので、破棄せずに起動し直すと Blocked at: launch-record で止まる)。記録は自分の判断では消さない。破棄を指示されたら、この run は未起動 (run dir に codex.log も done.txt も無い) なので、run を last_run に移して tab を消す (その run の preflight.json の snapshot が、起動し直すときの clone の照合にそのまま使える)。run script を人の terminal で実行させない (二重起動になる)。",
       "files": [],
       "assertions": [
