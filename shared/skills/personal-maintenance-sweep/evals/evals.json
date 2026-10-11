@@ -629,6 +629,23 @@
           "text": "PR を blocked (残量) にして残し、review を起動していない"
         }
       ]
+    },
+    {
+      "id": 33,
+      "name": "duplicate-not-refiled",
+      "prompt": "[前提: 反証で confirmed になった所見の fingerprint が、duplicate で close された #131 の fingerprint と一致し、読み比べても同じ問題。新しい根拠は無い] 監査して Issue にして",
+      "expected_output": "duplicate で close された Issue は not planned と同じく却下された問題として扱い、起票しない。completed の close と同じ再発としては扱わない。報告に #131 を挙げて、起票しなかった理由を書く。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "not-refiled",
+          "text": "その所見を起票していない (completed の close と同じ再発として扱っていない)"
+        },
+        {
+          "id": "reports-existing",
+          "text": "#131 と、起票しなかった理由 (duplicate で close 済みで、not planned と同じく却下として扱う) を報告している"
+        }
+      ]
     }
   ]
 }

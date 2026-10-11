@@ -36,8 +36,9 @@ skill は次の順で起動経路を 1 つ選びます。
    できたときだけ (Claude Code: user / project / managed の全 scope の settings に
    `sandbox.enabled: true` が無い。managed settings は file のほか MDM や claude.ai console からも
    配布されるので、組織管理された環境や managed settings を読めない環境では直接起動しない。
-   Codex: `CODEX_SANDBOX` 未設定)。`sandbox-exec` などの probe は打ちません。strict な環境では回避操作と
-   判定されるためです。
+   Codex: `CODEX_SANDBOX` 未設定。値が空でも設定ありとみなす。session の判定の非空の契約の例外で、
+   [git-hook-gates](git-hook-gates.md) に書く)。`sandbox-exec` などの probe は打ちません。strict な環境では
+   回避操作と判定されるためです。
 3. **BLOCKED + 人手**: どちらも使えないとき。run script と run dir の場所を提示し、人が terminal で
    実行したあと `done.txt` と `result.md` を caller が確認すれば続行できます。
 

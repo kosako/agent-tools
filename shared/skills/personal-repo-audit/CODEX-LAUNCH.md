@@ -59,7 +59,9 @@ codex features list
 1. **herdr の pane (primary)**: `herdr status` が running で、`herdr pane current` が pane を返す。
 2. **直接起動**: herdr が使えず、呼び出し側が sandbox の外にいると設定と環境変数の読み取りで確かめ
    られたときだけ (Claude Code なら有効な settings のどの scope にも `sandbox.enabled: true` が無く、
-   managed settings を持たない環境。Codex なら `CODEX_SANDBOX` が未設定)。
+   managed settings を持たない環境。Codex なら `CODEX_SANDBOX` が未設定)。`CODEX_SANDBOX` は値が空でも
+   設定ありとみなし、sandbox の中として扱う (どの agent の session かの判定は値が非空かで読むが、sandbox の
+   内外の判定はその例外で、入れ子の sandbox を避けるため直接起動しない側に倒す)。
 3. **BLOCKED + 人手**: どちらも使えない。`Blocked at: launch-path` とし、人が自分の terminal で run
    script を実行する手順と run dir を返す。
 
