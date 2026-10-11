@@ -61,8 +61,8 @@ negative だけに付けると operation identity が崩れるため使わない
 
 さらに **非 repo の scratch cwd で実行** する (git に `GIT_CONFIG_NOLOCAL` はなく、cwd の
 `.git/config` の credential.helper / http.extraHeader / core.sshCommand 等が読まれ bypass に
-なるため)。実行前に `git config --show-origin` の scan と `type -a git gh ...` で binary /
-config を pin する。
+なるため)。実行バイナリは runner が `iso_resolve_bin` で canonical `ISO_PATH` から pin し (上記)、
+config source は `iso_run` が断つ (runner は config を scan しない)。
 
 ## acceptance 契約 (判定)
 
@@ -162,7 +162,9 @@ probe target は public repo にハードコードせず local config から読�
 `--config` で上書き)。必須キー (required channels): `PROBE_GH_REPO` (owner/private-repo) /
 `PROBE_GIT_HTTPS`。任意キー (opt-in channels・ambient 認証源がアクティブなときだけ設定):
 `PROBE_GIT_SSH` / `PROBE_CURL_URL`。いずれも**認証必須の private リソース**を指す (public だと
-未認証でも通り negative が空振りになる)。必須キー不在・欠落時は明示 fail (silent skip しない)。
+未認証でも通り negative が空振りになる)。`PROBE_GIT_SSH` は scp 形式 (`git@host:path`) に限る
+(reachability control が host を取り出すため。`ssh://` 形式などそれ以外は exit 2)。必須キー不在・
+欠落時は明示 fail (silent skip しない)。
 
 > **注意 (config は shell として source される, #180 H-03)**: runner はこの config を
 > `. "$config"` で読み込む。つまり `KEY=value` の宣言だけでなく **shell コードとして評価**され、
@@ -174,6 +176,6 @@ probe target は public repo にハードコードせず local config から読�
 
 ## 検証境界
 
-CI は判定コアの self-test (fixtures) までを走らせる。実際の credential 遮断は CI では踏めない
-(credential 不在)。**CI 緑を hard 保証・配布完了の根拠にしない**。hard 保証は PR-2 の実機
-acceptance ログ。
+CI は判定コアと probe runner / recipe の self-test (実 credential・network に触れない) までを走らせる。
+実際の credential 遮断は CI では踏めない (credential 不在)。
+**CI 緑を hard 保証・配布完了の根拠にしない**。hard 保証は PR-2 の実機 acceptance ログ。
