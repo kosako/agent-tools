@@ -9,7 +9,8 @@
 # (exit code、stdout / stderr、argv、stdin)、時間の上限と KILL への escalation、footprint の上限 (node --test の
 # 子、group の合計)、leader の終了後に残った process の片付け (leader は最後まで回収しない)、中断 (TERM / TSTP、
 # 2 回目の signal、同じ巡回の 2 つの signal)、終了と期限の競合、計測不能 (monitor。proc_listpids の 0 件を含む) と
-# 一部だけの回復、別 group の pid を数えない、phys_footprint の decode と footprint CLI との一致、report の書き込みの
+# 一部だけの回復、監視の想定外の例外 (monitor。それまでの peak を残す)、別 group の pid を数えない、
+# phys_footprint の decode と footprint CLI との一致、report の書き込みの
 # 失敗、端末の stdin、SIGCHLD を無視する親、起動時に無視されていた signal (nohup の HUP)、後始末の中の観測の例外、
 # 後始末の列挙の直後の fork、self-pipe の close の境界の signal、読まれずに詰まった stderr。
 # fixture は寿命を自分で有限にする (TERM を無視するものも 30 秒前後で自分から終わる)。
@@ -356,11 +357,19 @@ module SafeRunInjection
     super
   end
 
+  # watch-raise: 完全に測れた巡回の後の計測で例外を出す。watch-raise-first: 最初の計測で例外を出す (一度も測れない)。
+  # 計測は監視 (watch) の中だけで使われ、後始末は使わない。
   def measure_group(pgid)
+    if MODE == "watch-raise-first" || (MODE == "watch-raise" && @inject_complete)
+      $stderr.write("inject: #{MODE}\n")
+      raise "injected"
+    end
     @inject_measures = (@inject_measures || 0) + 1
     @inject_pgid = pgid
     @inject_measuring = true
-    super
+    total = super
+    @inject_complete = true unless total.nil?
+    total
   ensure
     @inject_measuring = false
   end
@@ -811,6 +820,24 @@ run_case foreignctl 30 -- "$sr" --max-footprint-mb 40 --max-seconds 20 --report 
 expect_exit foreignctl 137
 expect_report foreignctl 'reason="footprint"' 'peak_footprint_mib>40'
 expect_group_gone foreignctl
+# 12c: 監視が想定外の例外で止まる → monitor。それまでに完全に測れた巡回があれば、その peak を report に出す
+run_case wraise 30 -- env RUBYOPT="-r$tmp/inject.rb" SAFE_RUN_INJECT=watch-raise \
+  "$sr" --max-footprint-mb 100 --max-seconds 20 --report "$tmp/wraise.json" \
+  -- sh "$tmp/fx-sleep.sh" "$tmp/wraise.pgid" "$tmp/wraise.ready" 30
+expect_exit wraise 137
+expect_err_has wraise "inject: watch-raise"
+expect_err_has wraise "personal-safe-run: 監視を続けられないので command の process group を止めます (RuntimeError)"
+expect_report wraise 'reason="monitor"' exit_status=137 'peak_footprint_mib>0' cleanup_complete=true
+expect_group_gone wraise
+# 対照: 最初の計測で例外 (一度も測れない) → peak は null のまま
+run_case wraise1 30 -- env RUBYOPT="-r$tmp/inject.rb" SAFE_RUN_INJECT=watch-raise-first \
+  "$sr" --max-footprint-mb 100 --max-seconds 20 --report "$tmp/wraise1.json" \
+  -- sh "$tmp/fx-sleep.sh" "$tmp/wraise1.pgid" "$tmp/wraise1.ready" 30
+expect_exit wraise1 137
+expect_err_has wraise1 "inject: watch-raise-first"
+expect_err_has wraise1 "personal-safe-run: 監視を続けられないので command の process group を止めます (RuntimeError)"
+expect_report wraise1 'reason="monitor"' exit_status=137 'peak_footprint_mib=nil' cleanup_complete=true
+expect_group_gone wraise1
 
 # ---- case 13: 一部だけ回復。2 巡回 EPERM → 1 巡回成功の繰り返し → 連続回数が戻るので止まらない --------------------
 run_case recover 30 -- env RUBYOPT="-r$tmp/inject.rb" SAFE_RUN_INJECT=eperm-recover \
