@@ -394,7 +394,13 @@ herdr pane run "$pane" <"zsh " + run script path の shell literal> || exit 1
   上の 2 つ (走っている worker がいる・tab を特定できない) で記録の破棄を挟むのは、§4 の起動の記録がこの
   停止の前に書いてあり、`launch-path` では消さない (`SKILL.md` §6) ため。破棄せずに起動し直すと、`SKILL.md` §1
   の確認がこの記録を `unfinished` (動いていると確認できない) と読んで `Blocked at: launch-record` に止まる。
-  破棄は `SKILL.md` §6 の「人の指示で消す」で行う。
+  破棄は `SKILL.md` §6 の「人の指示で消す」で行い、この 2 つの未起動の run (run dir に `codex.log` も `done.txt`
+  も無い。run script は `cd` の直後の pipeline の `tee` で `codex.log` を作るので、実行されていれば残る) では
+  `run` を `last_run` に移して `tab` を消す。worker が起動していないので、その run の `preflight.json` の
+  snapshot は §2 の再利用の照合にそのまま使え、別の session で起動し直しても前の run dir を辿れる
+  (`Blocked at: clone` にならない)。honest-label: その run dir には `tab-id` が無い (tab の手順の前に止まった) ので、
+  別の session で起動し直すと、前の round から残る `#<issue>` の tab は所有を確かめられず「tab を特定できない」に
+  なる (人が tab を確かめて閉じる)。
 - honest-label (所有): 記録した tab ID は、この skill が tab を作ったときの herdr の応答から取った値
   です。記録の置き場は run dir で、§1 / §3 で worker の書込先の外に置いたことを確かめています (#324 より
   前の run dir は `$TMPDIR` にあり、worker から書けた)。それでも ID の一致だけでは決めず、命名の確認と

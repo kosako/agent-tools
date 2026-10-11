@@ -136,7 +136,7 @@ clone の git dir だけ**で、preflight が orchestrator 自身の repository 
   `HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`, `packed-refs`。再利用 clone も git を呼ぶ前に直前 run の snapshot を照合し、
   追えない場合は clone に git を実行せず `Blocked at: clone` で人に渡す。前の run dir は packet の
   `last_run` (完了の転記の後) か `run` (停止中) から辿る (#325)。どちらも無い (`last_run` を導入する前に
-  転記した run の次の round 等) ときは、人が §9 で main に回収済みの branch を確認し、問題がないと
+  転記した run の次の round 等) ときは、人が `LAUNCH.md` §9 で main に回収済みの branch を確認し、問題がないと
   判断してから clone を作り直す。判定範囲と限界は `LAUNCH.md` §3。
   honest-label: 2026-09-24、codex 0.156.0 の preflight launch argv そのままの起動形で、worker から
   `.git/config`・`.git/hooks`・`.git/info`・`.git` 直下の新規 file への書込みと、sandbox 外への書込み拒否を実測した。
@@ -313,8 +313,11 @@ draft に留めます (起動の記録は消さずに残す)。
   `run` の値を `last_run` に移し、`run` / `tab` を消す (key ごと。#325)。止まっている (`state: blocked`) ときは消さない (`run` は退避物の
   置き場。再起動で新しい run に置き換える)。RUNNING で返すとき、`launch-path` で人に渡すとき、空振りの
   再実行の間も消さない (空振りの再実行では、消さずに新しい run dir の値へ書き換える)。人がその run の破棄を決めたときは、人の指示で消す (`last_run` にも移さない)。
-  消したら `personal-packet list --json --all` で `run` が null になり、完了の転記なら `last_run` がその
-  run dir になったことを確かめる。
+  ただし、`launch-path` の「走っている worker がいる」「tab を特定できない」で止まった未起動の run (run dir に
+  `codex.log` も `done.txt` も無い) の破棄では、`run` を `last_run` に移して `tab` を消す (worker が起動していない
+  ので、その run の `preflight.json` の snapshot は clone の再利用の照合 (§2) にそのまま使える。`LAUNCH.md` §5)。
+  消したら `personal-packet list --json --all` で `run` が null になり、完了の転記と未起動の run の破棄なら
+  `last_run` がその run dir になったことを確かめる。
 - `依頼` は書き換えない。frontmatter の `updated` を更新する。
 
 ## 7. PR (orchestrator の操作)

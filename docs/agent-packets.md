@@ -166,8 +166,10 @@ PR #124 の should 1 件を直して re-review を依頼する。
     `missing` (run dir が無い = 消失。snapshot が無く clone を照合できないので、clone から自動では回収
     しない。人が確かめる)。
 - `last_run` (#325): **最後の run dir**。完了の転記で `run` / `tab` を消すときに、orchestrator が `run` の値を
-  `last_run` に移す。次の起動で `run` を書くときに `last_run` は消す (`run` と同時には置かない。両方あれば
-  壊れた packet として報告する)。worker が止まった (転記の前の) `state: blocked` では従来どおり `run` に残す
+  `last_run` に移す。`launch-path` で止まった未起動の run を人の指示で破棄するときも、`run` を `last_run` に移す
+  (worker が起動していないので、その run の snapshot は clone の照合に使える。委譲 skill の §6)。次の起動で `run` を
+  書くときに `last_run` は消す (`run` と同時には置かない。両方あれば壊れた packet として報告する)。worker が止まった
+  (転記の前の) `state: blocked` では従来どおり `run` に残す
   (退避物の置き場)。転記の後に回収・trailer 検査で止まった `state: blocked` (#412) では、転記で `last_run` に
   移したままにする (`run` は無い)。
   `done` の後も残す。用途は、転記で起動の記録が消えた後も、前の run の成果物 (clone の `.git` の

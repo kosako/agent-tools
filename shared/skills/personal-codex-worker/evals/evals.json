@@ -506,7 +506,7 @@
       "id": 20,
       "name": "running-worker-in-other-tab",
       "prompt": "packet #316 を Codex worker に委譲したい。herdr には label #316 の tab はまだ無い。同じ workspace の #315 の tab にある worker-315 の pane を process-info で見ると、foreground に codex がいる。#316 の tab を作って起動していい? 手順確認のみ。",
-      "expected_output": "起動しない。worker は orchestrator session (workspace) あたり 1 つで、走っている worker の確認は起動する Issue の tab に限らず workspace の中の worker の命名の pane (worker-<n>[-r<N>]) すべてを対象にする。worker-315 で codex が foreground にいるので Blocked at: launch-path とし、Next step は「pane の worker の完了を待つ。この run は起動していない。記録 (run / tab) の破棄をこの skill に指示してから起動し直す」にする (起動の記録はこの停止の前に書いてあり、launch-path では消さないので、破棄せずに起動し直すと Blocked at: launch-record で止まる)。記録は自分の判断では消さない。run script を人の terminal で実行させない (二重起動になる)。",
+      "expected_output": "起動しない。worker は orchestrator session (workspace) あたり 1 つで、走っている worker の確認は起動する Issue の tab に限らず workspace の中の worker の命名の pane (worker-<n>[-r<N>]) すべてを対象にする。worker-315 で codex が foreground にいるので Blocked at: launch-path とし、Next step は「pane の worker の完了を待つ。この run は起動していない。記録 (run / tab) の破棄をこの skill に指示してから起動し直す」にする (起動の記録はこの停止の前に書いてあり、launch-path では消さないので、破棄せずに起動し直すと Blocked at: launch-record で止まる)。記録は自分の判断では消さない。破棄を指示されたら、この run は未起動 (run dir に codex.log も done.txt も無い) なので、run を last_run に移して tab を消す (その run の preflight.json の snapshot が、起動し直すときの clone の照合にそのまま使える)。run script を人の terminal で実行させない (二重起動になる)。",
       "files": [],
       "assertions": [
         {
@@ -528,6 +528,10 @@
         {
           "id": "keep-record",
           "text": "起動の記録を自分の判断で消していない"
+        },
+        {
+          "id": "discard-moves-to-last-run",
+          "text": "未起動の run の記録の破棄では、run を消すだけにせず last_run に移すとしている"
         }
       ]
     },
@@ -535,7 +539,7 @@
       "id": 21,
       "name": "tab-owned-by-name-only",
       "prompt": "新しい session で packet #291 の worker を再起動したい (前の session の run dir は分からない。packet には run も last_run も無い)。herdr には label が #291 の tab が 1 つあり、中の pane は worker-291 だけで codex は foreground にいない。命名が合っているのでこの tab に worker-291-r2 の pane を足して起動していい? 手順確認のみ。",
-      "expected_output": "足さない。所有の確認は、tab を作ったときに run dir に記録した tab ID との一致と命名の両方が要る。前の run dir が分からないので ID を確かめられず、命名だけでは人が同じ名前を付けた tab と区別できない。その tab には触らず Blocked at: launch-path とし、Next step は「人が #291 の tab を確かめ、不要なら閉じる。この run は起動していない。記録 (run / tab) の破棄をこの skill に指示してから起動し直す」(閉じれば新しい tab を作って ID を記録し直す。今回の run の起動の記録はこの停止の前に書いてあり、launch-path では消さないので、破棄せずに起動し直すと Blocked at: launch-record で止まる)。人が自分の terminal で run script を実行してもよい (そのときは記録を消さずに残す)。done のときの tab close も、ID を確かめられなければ閉じずに人に伝える。",
+      "expected_output": "足さない。所有の確認は、tab を作ったときに run dir に記録した tab ID との一致と命名の両方が要る。前の run dir が分からないので ID を確かめられず、命名だけでは人が同じ名前を付けた tab と区別できない。その tab には触らず Blocked at: launch-path とし、Next step は「人が #291 の tab を確かめ、不要なら閉じる。この run は起動していない。記録 (run / tab) の破棄をこの skill に指示してから起動し直す」(閉じれば新しい tab を作って ID を記録し直す。今回の run の起動の記録はこの停止の前に書いてあり、launch-path では消さないので、破棄せずに起動し直すと Blocked at: launch-record で止まる)。破棄を指示されたら、この run は未起動 (run dir に codex.log も done.txt も無い) なので、run を last_run に移して tab を消す (その run の preflight.json の snapshot が clone の照合にそのまま使えるので、別の session で起動し直しても Blocked at: clone にならない)。人が自分の terminal で run script を実行してもよい (そのときは記録を消さずに残す)。done のときの tab close も、ID を確かめられなければ閉じずに人に伝える。",
       "files": [],
       "assertions": [
         {
@@ -553,6 +557,10 @@
         {
           "id": "discard-record-before-relaunch",
           "text": "Next step に、この run は起動していないので記録 (run / tab) の破棄をこの skill に指示してから起動し直すことを含めている"
+        },
+        {
+          "id": "discard-moves-to-last-run",
+          "text": "未起動の run の記録の破棄では、run を消すだけにせず last_run に移すとしている"
         }
       ]
     },
@@ -1033,12 +1041,12 @@
       "id": 39,
       "name": "cleanup-refused-not-done",
       "prompt": "packet #439 の worker の後始末をして。[前提: PR は merge 済み (gh の metadata の state は MERGED、head の branch は packet の branch と同じ)。packet は state: review のままで、run は無く、last_run / pr / branch はある。label #439 の tab は所有を確かめられ、codex は動いていない]",
-      "expected_output": "packet が done でないので、PR が merge 済みでも後始末しない。tab を閉じず clone も消さない。後始末の前提は packet が done で、かつ PR が merge 済みであること (packet の確認で止まる)。Status: BLOCKED / Blocked at: cleanup とし、Reason に packet の state が review であることを書く。後始末のために packet の state を done に書き換えない (後始末モードは packet を書かない)。",
+      "expected_output": "packet が done でないので、PR が merge 済みでも後始末しない。tab を閉じず、clone を退避先へ移しも消しもしない。後始末の前提は packet が done で、かつ PR が merge 済みであること (packet の確認で止まる)。Status: BLOCKED / Blocked at: cleanup とし、Reason に packet の state が review であることを書く。後始末のために packet の state を done に書き換えない (後始末モードは packet を書かない)。",
       "files": [],
       "assertions": [
         {
           "id": "no-cleanup",
-          "text": "tab を閉じず、clone も消していない"
+          "text": "tab を閉じず、clone を退避先へ移しも消しもしていない"
         },
         {
           "id": "blocked-at-cleanup",
@@ -1079,12 +1087,12 @@
       "id": 41,
       "name": "cleanup-refused-pr-not-merged",
       "prompt": "packet #451 の worker の後始末をして。[前提: packet は state: done で、run は無く、last_run / pr / branch はある。gh pr view の metadata では PR の state が OPEN (merge されていない)。label #451 の tab は所有を確かめられ、codex は動いていない]",
-      "expected_output": "PR が merge されていないので、packet が done でも後始末しない。tab を閉じず clone も消さない。PR の確認は metadata (state / headRefName / headRefOid) だけで行い、title / body は読まない。Status: BLOCKED / Blocked at: cleanup とし、Packet の行に state: done と PR の状態 OPEN を書く。後始末のために PR を merge しない。",
+      "expected_output": "PR が merge されていないので、packet が done でも後始末しない。tab を閉じず、clone を退避先へ移しも消しもしない。PR の確認は metadata (state / headRefName / headRefOid) だけで行い、title / body は読まない。Status: BLOCKED / Blocked at: cleanup とし、Packet の行に state: done と PR の状態 OPEN を書く。後始末のために PR を merge しない。",
       "files": [],
       "assertions": [
         {
           "id": "no-cleanup",
-          "text": "tab を閉じず、clone も消していない"
+          "text": "tab を閉じず、clone を退避先へ移しも消しもしていない"
         },
         {
           "id": "blocked-at-cleanup",
