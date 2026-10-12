@@ -7,7 +7,7 @@ catalog に記録する step です。
 
 ## 目的
 
-- build / sync / connect / status が「どの asset を扱ってよいか」を catalog で判断できるようにする。
+- sync / connect / status / doctor が「どの asset を扱ってよいか」を catalog で判断できるようにする。
 - 自動 check の結果と human review の関係を機械可読にする。
 - tracked manifest を自動書き換えしない。
 
@@ -235,7 +235,8 @@ checkout の `register` で一緒に更新されるので、この混在は想�
 - 致命 gate (`scripts/lib/gate.rb`): build と register が共有。
 - `scripts/register.sh`: catalog 生成、human_review 突き合わせ。
   exit code は 0 (human_review_required なし) / 3 (human_review_required あり) /
-  1 (gate fail / どの asset にも属さない file の medium finding) / 2 (usage の誤り)。
+  1 (gate fail / どの asset にも属さない file の medium finding / 出力の経路に symlink がある、または catalog の
+  書き込み先が regular file でない。上の「Register の意味論」) / 2 (usage の誤り)。
   `unsupported` は exit code に影響しない (catalog に `unsupported` として
   記録され sync が skip する設計上の想定状態で、0 は「全 registered」を意味しない)。
 - `scripts/sync.sh`: catalog を尊重し registered のみ配置。

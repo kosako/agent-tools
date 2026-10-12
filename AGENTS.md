@@ -45,7 +45,8 @@ local development environment の control plane ではありません。
 登録する asset はすべて prompt injection review を通す。
 
 - static checks は必須。
-- LLM review は補助 gate。
+- LLM review は補助 gate として置く方針で、未実装 (今動いているのは static checks だけ。
+  [docs/prompt-injection-check.md](docs/prompt-injection-check.md))。
 - LLM review に送ってよいのは public / personal assets のみ。
 - work、client、secret、private-endpoint の疑いがある assets は LLM review に送らない。
 - high risk findings は registration fail。
