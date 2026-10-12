@@ -14,16 +14,17 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:b5176d34f838dff275fe38dc1dfdf204e11f89714dd3aa605e28d9c1c92d6bca
+  approved_build_id: sha256:76165e5fbb0e39f84d4da60bed032405689eca6aa88cf722f3c81da92814bb2a
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-public-safety-gate.rb
   format: text
 summary: >-
-  pre-commit stage の git gate。staged diff の追加行から secret (private key / 既知 token 形) /
-  実 home path / 個人用 local file (*.local / .agent-packets/) を検出して commit を block する
-  (definite) か警告する (suspicious)。commit-msg stage でも --commit-msg で commit message の file を
-  同じ pattern で検査する (#413)。--stdin で同じ pattern により text を検査する (packet の
-  public 写しの検査口)。値そのものは出力しない。私物パターンは untracked の
-  ~/.config/agent-tools/public-safety-patterns.local から読む。best-effort guardrail
+  公開する内容を公開の前に検査する gate。pre-commit stage では staged diff の追加行から secret
+  (private key / 既知 token 形) / 実 home path / 個人用 local file (*.local / .agent-packets/)
+  を検出して commit を block する (definite) か警告する (suspicious)。commit-msg stage でも
+  --commit-msg で commit message の file を同じ pattern で検査する (#413)。--stdin で同じ pattern
+  により text を検査する (Issue / PR / コメントの題名と本文を投稿する前と、push で公開される内容を
+  push する前の検査口。packet の public 写しもここを通す。#253 #413)。値そのものは出力しない。私物パターンは
+  untracked の ~/.config/agent-tools/public-safety-patterns.local から読む。best-effort guardrail
   (docs/git-hook-gates.md)。

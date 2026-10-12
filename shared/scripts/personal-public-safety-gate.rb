@@ -1,9 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# public-safety-gate: pre-commit stage の git gate。staged diff の追加行を scan し、
-# public repo に入れてはならないもの (secret / 実 home path / 個人用 local file) を
-# commit 前に block する。6 つの skill / instruction が繰り返し宣言してきた
+# public-safety-gate: 公開する内容を公開の前に検査する gate。pre-commit stage (引数ゼロ) では
+# staged diff の追加行を scan し、public repo に入れてはならないもの (secret / 実 home path /
+# 個人用 local file) を commit 前に block する。commit-msg stage (`--commit-msg`) と、投稿・push の
+# 前の `--stdin` も同じ pattern で検査する (下記)。6 つの skill / instruction が繰り返し宣言してきた
 # 「commit 前 public safety check」の機械判定可能な部分を決定的実行に出したもの (#202)。
 #
 # 正本: docs/git-hook-gates.md。#200 §4.1。
@@ -13,8 +14,9 @@
 # (pre-commit が走らないので差分の検査を通らない。自動の merge では commit-msg の message の検査は走る。#414)。検出も列挙依存の
 # regex なので網羅ではない (「秘密は書かない」判断そのものは人間 / skill の領分)。
 # 公開する内容の検査は、差分は pre-commit (引数ゼロ)、commit message は commit-msg (`--commit-msg`)、
-# Issue / PR / コメントの本文は投稿の前の `--stdin` で行う。push / CI には置かない (push した時点で public
-# なので、公開前の確認にならない。#413)。
+# Issue / PR / コメントの題名と本文は投稿の前の `--stdin`、push で公開される内容は push の前の `--stdin` で
+# 行う (push の前は hook ではなく手順の側で、pre-push の stage には gate を置かない)。CI には置かない (push
+# した時点で public なので、公開前の確認にならない。#413)。
 #
 # 検出クラス:
 # - definite (exit 1 で block): private key block / 既知 token 形 / 実 HOME path の
@@ -38,8 +40,10 @@
 # textconv の変換 command は起動しない (#414)。
 #
 # stdin mode (`--stdin`): 引数ゼロの pre-commit mode と同じ pattern で stdin の text を
-# 行単位に scan する (git には触らない。path 判定は対象外)。packet の public 写しを
-# Issue コメントへ投稿する前の検査口 (#253、docs/agent-packets.md)。exit 契約は同じ。
+# 行単位に scan する (git には触らない。path 判定は対象外)。公開する text を公開の前に通す検査口で、
+# Issue / PR / コメントの題名と本文を投稿する前と、push で公開される内容 (累積差分・各 commit の差分と
+# message・branch 名・その push で作る PR の題名と本文) を push する前に使う (#413、docs/git-hook-gates.md)。
+# packet の public 写しを Issue コメントへ投稿する前もここを通す (#253、docs/agent-packets.md)。exit 契約は同じ。
 #
 # commit-msg mode (`--commit-msg <file>`): commit-msg stage の dispatcher から呼ばれ、commit message の
 # file を同じ pattern で scan する (#413)。comment 行 (`#` 始まり) や scissors 行より後 (`git commit -v` の差分) も

@@ -87,7 +87,9 @@ usage: personal-tool-call-report [--file <path>]... [--since YYYY-MM-DD] [--unti
 ```
 
 - 入力: `--file` (複数可)。無ければ記録 hook と同じ規則で決める (`AGENT_TOOLS_TOOL_CALL_RECORD_DIR` が最優先、
-  無ければ上の既定の出力先) の `claude-code.jsonl`。読めない file は stderr に 1 行出して続け (file の名前だけ。
+  無ければ上の既定の出力先) の `claude-code.jsonl`。`--file` が無く、既定の記録先を絶対 path に決められない
+  (使う env の値が相対 path か、`AGENT_TOOLS_TOOL_CALL_RECORD_DIR`・`XDG_STATE_HOME`・`HOME` がどれも空) ときは
+  理由を stderr に出して exit 1。読めない file は stderr に 1 行出して続け (file の名前だけ。
   絶対 path は stderr にも出ない)、1 つも読めなければ exit 1。引数の誤り (値の形・`--since` > `--until`・`--days` と `--since` / `--until`
   の併用・知らない引数) は理由と usage を stderr に出して exit 2。正常は exit 0。option は入力を読む前に全部解決する。
 - 行: JSON object で `ts` が ISO 8601 の文字列のものだけ使う。それ以外 (JSON でない・object でない・`ts` が無い・

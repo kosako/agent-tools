@@ -77,8 +77,10 @@ usage: check-injection.sh [--root DIR] [--quiet]
 
 - findings は `path:line: [risk] category: message` 形式で出力される。
 - exit code: high findings は 1 (registration fail)、medium のみは 3
-  (human review 必須)、findings なしまたは low のみは 0。
-- 対象は `shared/` 配下の text files のみ。policy docs は対象外。
+  (human review 必須)、findings なしまたは low のみは 0。未知の option と option の値の欠落は
+  usage を出して 2 (scan はしない)。
+- 対象は `shared/` 配下のすべての file (manifest・dotfile・binary と、どの asset にも属さない file を
+  含む。NUL を含む file は high)。policy docs は対象外。
 - self-test: `tests/check-injection-test.sh`
 
 - `check-credential-isolation.sh`: credential 隔離 acceptance harness の判定コア。probe 結果
@@ -300,7 +302,8 @@ usage: register.sh [--root DIR] [--quiet]
   が target の resolve 済み artifact_kind と一致するときだけ効く (内容と配布形態に紐づく
   承認, #148 #184)。
 - exit code: 0 (human_review_required なし) / 3 (human_review_required あり) / 1 (gate fail /
-  catalog の経路の symlink / catalog.json が regular file でない)。
+  どの asset にも属さない file の medium finding / catalog の経路の symlink / catalog.json が regular
+  file でない) / 2 (usage の誤り)。
   unsupported は exit code に影響しない。
 - resolve 後の artifact_kind が `script` / `plugin` の asset は、risk / finding によらず常に human
   review 必須 (`Register::Runner#review_needed?`。実行コードの配布)。catalog_version は 4 のまま

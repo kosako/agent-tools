@@ -5,7 +5,8 @@
 # Spec: docs/prompt-injection-check.md
 #
 # deterministic で、外部依存ゼロ・network access なしで実行できること。
-# 対象は shared/ 配下の asset files のみ。policy docs (docs/) は対象外。
+# 対象は shared/ 配下のすべての file (manifest・dotfile・binary と、どの asset にも属さない file を含む)。
+# policy docs (docs/) は対象外。
 
 require_relative "assets"
 require_relative "artifact_targets"
@@ -188,9 +189,9 @@ module CheckInjection
 
     private
 
-    # shared/ 配下のすべての text files を scan する。manifest も text として含める。build は
+    # shared/ 配下のすべての file を scan する。manifest と、どの asset にも属さない file も含める。build は
     # directory skill の dotfile (.gitkeep を含む) もそのまま配るので、配られる byte は名前によらず
-    # すべて scan する (#427 の 5)。
+    # すべて scan する (#427 の 5)。binary も読み、NUL を含む file は run が high にする。
     # directory skill の evals/ (テスト材料。意図的に攻撃的文字列を含みうる) は
     # injection 攻撃文字列・fake path・email の scan からは外すが、inline private key leak
     # のみ引き続き scan する (run で per-file に判定する)。
