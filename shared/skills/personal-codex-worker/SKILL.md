@@ -98,7 +98,9 @@ orchestrator が行います。
     なら、その Issue の記録を人が確かめるまで起動しない (`Blocked at: launch-record`)。herdr の外で
     動いている worker (`launch-path` の hand-off) は、記録からしか見えないため。
 - **§1 で起動を見送るとき** (走っている worker が workspace にいる、または他の Issue の `unfinished` の記録の
-  worker が動いていると確かめた): `Status: BLOCKED` / `Blocked at: launch-path` で返す。Next step は「動いている
+  worker が動いていると確かめた。ただし、動いているのがこの Issue の記録の run の worker なら、この項ではなく上の
+  `unfinished` の項の `Status: RUNNING` を返す。この Issue の記録の確認を先に行う): `Status: BLOCKED` /
+  `Blocked at: launch-path` で返す。Next step は「動いている
   worker (pane <id>、分かれば Issue #<N>) の完了を待ってから、起動を指示し直す。この Issue の起動の記録はまだ
   書いていないので、記録の破棄は要らない」。起動の前の停止なので packet の `state` は変えない。起動の記録 (§5) を
   書いた後に `LAUNCH.md` §5 の手順 1 で走っている worker を見つけた場合 (Next step で記録の破棄を求める) とは別。
