@@ -410,7 +410,7 @@ echo "$out" | grep -q "\.agent-packets/1\.md:0: \[local-only-file\]" || \
   fail "packet finding should name path and class: $out"
 (cd "$repo" && git rm -rq --cached .agent-packets && rm -r .agent-packets)
 
-# ---- #253: stdin mode (packet の public 写しの検査口) ----------------------------
+# ---- #253 / #413: stdin mode (公開する text を公開の前に通す検査口) ------------------
 # git を要らない: repo 外の空 dir から走らせる。
 mkdir -p "$tmp/nogit"
 printf 'clean line\n' | (cd "$tmp/nogit" && as_human ruby "$pubsafe_src" --stdin) || \
