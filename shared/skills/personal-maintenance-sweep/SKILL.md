@@ -61,6 +61,10 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 
 - 対象の repo が git 管理で、GitHub の remote があり、`gh auth status` が通る。issues モードで GitHub に
   届かなければ、report モードに切り替えるかを確認する。
+- **env の `GH_REPO` が空** (`[ -z "${GH_REPO-}" ]`)。`GH_REPO` があると、gh は Issue・PR・label の操作 (`gh issue` /
+  `gh pr` / `gh label`、`gh api` の `{owner}/{repo}`) をその repo に向けるのに、owner / repo の確認 (`gh repo view`) は
+  current の directory の repo を返す (gh 2.102.0 で実測)。監査した repo と別の repo に書かないよう、空でなければ開始せず、`GH_REPO` を外して
+  起動し直すよう伝える。
 - **対象は default branch の commit そのもの**: 作業ツリーが default branch (main など) を checkout していて、
   未 commit の変更 (staged / unstaged / untracked) が無い (`git status --porcelain=v1 --untracked-files=all`
   が空) ことを確かめる。満たさなければ開始せず、切り替えるか clean にしてよいかを確認する (自分では
@@ -208,6 +212,7 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 | 途中で停止の条件に当たった | 今の単位で止め、残りの単位を state に残す。それまでの所見は反証と記録まで進める |
 | 検証役が使えない | 起票しない。監査だけで report にするか、後で途中から始める |
 | 設定 file が不正 | 開始しない。どの key がなぜ不正かを伝える |
+| env の `GH_REPO` が空でない | 開始しない。`GH_REPO` を外して起動し直すよう伝える (gh の command ごとに向く repo が分かれるため) |
 | Codex の session で起動した | 自分では監査も反証もしない。監査役が Codex で起動経路があれば、手順 2 を通したうえで別の Codex を起こす。それ以外は Claude Code での起動を案内して止まる |
 | GitHub に届かない (issues モード) | report モードに切り替えるかを確認する |
 | fix モードで local の HEAD が remote の default branch と違う | fix を始めない。未 push の commit や分岐を人に確認する |

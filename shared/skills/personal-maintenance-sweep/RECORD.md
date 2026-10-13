@@ -17,7 +17,9 @@ branch の push・PR・review のコメント。`FIX.md`)。Codex の session �
 ## 値の受け渡し
 
 - owner / repo は `gh repo view --json nameWithOwner --jq .nameWithOwner` から取り、`\A[\w.-]+/[\w.-]+\z`
-  に合うことを確かめてから使う。
+  に合うことを確かめてから使う。`gh repo view` は env の `GH_REPO` を見ず current の repo を返すので、`gh issue` /
+  `gh pr` / `gh label` や `gh api` の `{owner}/{repo}` (どれも `GH_REPO` を見る) と同じ repo を指すのは `GH_REPO` が空の
+  ときだけ (`SKILL.md` 手順 0)。
 - commit は 16 進の OID だけを受け付ける。fix の branch 名は `sweep/fix-<Issue 番号>` (番号は 10 進の 1 つ) だけを
   受け付ける。
 - Issue の本文は file に書いて `--body-file` で渡す (command 文字列に埋め込まない)。一時 file は repo の
@@ -39,8 +41,8 @@ gh label create maintenance-sweep --description 'personal-maintenance-sweep が�
 label の付いた Issue のうち、**自分 (gh の認証 user) が作ったものだけ**から、marker の値だけを取り
 出します。本文そのものは出力しません (他人が label を付けた Issue や本文の中の文言を、data としても
 読み込まないため)。`gh api --paginate --slurp` で全 page を取るので、件数の上限で照合が打ち切られることは
-ありません。`{owner}/{repo}` は gh が埋めます (env の `GH_REPO` で指定されていればその repo、無ければ current の
-repo の remote から)。REST の一覧には PR も混ざるので除きます。
+ありません。`{owner}/{repo}` は gh が current の repo の remote から埋めます (env の `GH_REPO` が在ると
+その repo になるので、`SKILL.md` 手順 0 で空であることを確かめてから始める)。REST の一覧には PR も混ざるので除きます。
 
 ```sh
 me=$(gh api user --jq .login) && pages=$(gh api --paginate --slurp \
