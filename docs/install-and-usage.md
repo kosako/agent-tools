@@ -10,14 +10,16 @@
 - **pipeline scripts**(build / register / connect / sync / status / doctor と各種 check)は
   ネットワーク不要・追加 gem 不要で、手元だけで完結します(status / doctor は repo 状態の
   確認に `git` 実行ファイルを使う。無い環境でも crash せず該当項目が degrade するだけ)。
-  例外は実機の probe 3 本と、`personal-safe-gh` など一部の配布 script(`gh` / `codex` CLI に依存)です。probe は
+  例外は実機の probe 3 本と、`personal-safe-gh` など一部の配布 script(`gh` / `codex` CLI や、`personal-usage-reader` の設定した実行ファイルに依存)です。probe は
   `scripts/probe-credential-isolation.sh`(credential 隔離の実機検証 harness。`gh` / `git` / `curl` と
   network に依存)、`scripts/probe-skill-routing.sh`(skill routing の実機観測。`claude` / `codex` CLI と
   network に依存)、`scripts/probe-opencode-plugin.sh`(OpenCode plugin の前提の実機観測。`opencode` CLI と
   起動時の npm install の network に依存)で、どれも CI では実行しません
   ([scripts/README.md](../scripts/README.md) の冒頭が正本)。配布 script のうち `gh` を起動するのは
   `personal-safe-gh`・`personal-packet` (publish / pull)・`personal-review-routing-preflight`、`codex` を起動するのは
-  `personal-codex-worker-preflight` です。
+  `personal-codex-worker-preflight` です。`personal-usage-reader` は、設定 file (`usage-reader.json`) に書かれた実行ファイルを
+  起動します (依存はその実行ファイル次第。設定 file を置かない machine では読み取り口なしになる。[boundary-with-dotfiles.md](boundary-with-dotfiles.md)
+  「残量の読み取り口の設定 (#385)」)。
 - `gh`(GitHub CLI)は repository へ変更を出す (Issue / PR)とき、および `probe-credential-isolation.sh` と、
   上の `gh` を起動する配布 script を使うときだけ使います。
 - [herdr](https://herdr.dev)(任意)は Codex を起動する skill の launcher です。

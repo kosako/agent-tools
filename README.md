@@ -14,7 +14,7 @@ pipeline の各 script は macOS 標準の Ruby だけで動きます(追加依�
 例外は `scripts/probe-credential-isolation.sh` (`gh` / `git` / `curl` と network に依存)、
 `scripts/probe-skill-routing.sh` (`claude` / `codex` CLI と network に依存)、
 `scripts/probe-opencode-plugin.sh` (`opencode` CLI と起動時の npm install の network に依存) と、
-`personal-safe-gh` など一部の配布 script (`gh` / `codex` CLI に依存)。clone / pull には git を使います。
+`personal-safe-gh` など一部の配布 script (`gh` / `codex` CLI や、`personal-usage-reader` の設定した実行ファイルに依存)。clone / pull には git を使います。
 
 ```sh
 # 推奨 clone 先は ~/src/agent/agent-tools(理由は下記)。任意のパスでも動きます。

@@ -65,7 +65,7 @@ orchestrator 向けの判断は `結果` の「判断」に残す。
   指すので、そうした repository の packet の一覧には使えない。
 - git 管理しない。第一防衛は global gitignore (dotfiles 側で `.agent-packets/` を配る)、
   repo 側 `.gitignore` は fail-safe。それでも staged に乗った場合は
-  [public-safety gate](git-hook-gates.md#personal-public-safety-gatepre-commit) が
+  [public-safety gate](git-hook-gates.md#personal-public-safety-gatepre-commit--commit-msg--stdin) が
   `local-only-file` として commit を止める (best-effort guardrail。`--no-verify` は素通り)。
 - **symlink / tracked の packet は誰も更新しない** (#386)。packet を書く全員 (handoff、委譲の
   orchestrator、`publish` / `pull`) が、書く前に `personal-packet check <issue>` と同じ検査を通す:

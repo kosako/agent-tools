@@ -100,7 +100,7 @@ global `core.hooksPath` は per-repo `.git/hooks` を**完全に置換**し、fa
 
 `git rev-parse --git-path hooks` は core.hooksPath を返すため使わない (自分に戻る)。
 
-## personal-public-safety-gate(pre-commit)
+## personal-public-safety-gate(pre-commit / commit-msg / stdin)
 
 staged diff の**追加行**を scan する。読むのは `git diff --cached` / staged file 一覧 /
 local pattern file のみ。diff は `--text --no-textconv` で取る (#414): binary とみなす file (`-diff` / `binary`
