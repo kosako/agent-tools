@@ -374,9 +374,11 @@ herdr pane run "$pane" <"zsh " + run script path の shell literal> || exit 1
 - `pane run` の command は pane の shell が解釈するので、script path を pane shell 用に literal 化し、
   自分の shell 経由で `herdr` に渡すならもう 1 段 literal 化する (2 段)。
 - 次のどれかなら `Blocked at: launch-path`。Next step は場合で分けます:
-  - **走っている worker がいる** (手順 1): Next step は「pane <id> の worker の完了を待つ。この run は
-    起動していない。記録 (run / tab) の破棄をこの skill に指示してから起動し直す」。run script を人に
-    実行させない (二重起動になる)。
+  - **走っている worker がいる** (手順 1。§4 で起動の記録を書いた後に見つけた): Next step は「pane <id> の
+    worker の完了を待つ。この run は起動していない。記録 (run / tab) の破棄をこの skill に指示してから起動し
+    直す」。run script を人に実行させない (二重起動になる)。記録を書く前 (`SKILL.md` §1) に見つけたときも同じ
+    `launch-path` だが、この Issue の記録がまだ無いので、Next step は破棄を求めず「完了を待ってから起動を指示し
+    直す」になる (`SKILL.md` §1 の「§1 で起動を見送るとき」)。
   - **tab を特定できない**: label が `#<issue>` の tab が 2 つ以上ある / 1 つあるが所有を確かめられ
     ない (別の session で作った tab で前の run dir が分からない場合を含む)。その tab には触らず、
     Next step は「人が `#<issue>` の tab を確かめ、不要なら閉じる。この run は起動していない。記録
@@ -495,20 +497,24 @@ ruby -e '
 
 ```sh
 "$preflight" --verify-git-snapshot "$run/preflight.json" --clone "$clone_root" || exit 1
-git -C "$clone" status --porcelain=v1 --untracked-files=all > "$run/wip-status.txt"
-git -C "$clone" diff --cached --binary > "$run/wip-staged.patch"
-git -C "$clone" diff --binary > "$run/wip-unstaged.patch"
-git -C "$clone" ls-files --others --exclude-standard -z \
-  | tar -C "$clone" --null -T - -cf "$run/wip-untracked.tar"
+git -C "$clone" status --porcelain=v1 --untracked-files=all > "$run/wip-status.txt" || exit 1
+git -C "$clone" diff --cached --binary > "$run/wip-staged.patch" || exit 1
+git -C "$clone" diff --binary > "$run/wip-unstaged.patch" || exit 1
+( set -o pipefail
+  git -C "$clone" ls-files --others --exclude-standard -z \
+    | tar -C "$clone" --null -T - -cf "$run/wip-untracked.tar" ) || exit 1
 ```
 
-照合が失敗したら `Blocked at: clone` とし、退避 command を含め clone に git を実行しない。
+照合が失敗したら `Blocked at: clone` とし、退避 command を含め clone に git を実行しない。2 行目以降の `exit 1` は
+「その段で止め、退避が済んだとして扱わない」の意 (退避できなかったことを返却に書き、clone はそのまま残す)。
 
 - `--cached` と作業ツリーの diff を分けるのは、stage 後に作業ツリーだけ戻した変更を落とさない
   ため。`--binary` で binary も復元できる形にする。
 - untracked は file 名を shell に通さず、NUL 区切りの list を `tar --null -T -` に渡す (bsdtar は
   list の名前を option として解釈しない。GNU tar なら `--verbatim-files-from` を足す)。
-  untracked が無くても tar はでき、中身が空 (entry 0 件) の tar になる (bsdtar で実測)。
+  untracked が無くても tar はでき、中身が空 (entry 0 件) の tar になる (bsdtar で実測)。同じく `git ls-files`
+  が失敗しても tar は空の tar を作って exit 0 で終わる (実測) ので、`pipefail` で `git ls-files` の失敗を拾う
+  (§9 の公開する内容の gate と同じ形)。
 - 退避した path を packet の `結果` に書く。`git stash` は使わない (clone の状態を動かさない)。
 - 起動の記録 (`run` / `tab`): 完了の転記が済んだら、`run` の値を `last_run` に移して `run` / `tab` を key ごと
   消し (#325)、`list --json --all` が exit 0 で、その Issue の行の `run` が null、`last_run` がその run dir に

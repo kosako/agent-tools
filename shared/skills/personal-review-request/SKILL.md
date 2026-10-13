@@ -124,7 +124,7 @@ identity (OID 2 つと base ref 名)、routing preflight、最後に必要な di
 
 #### 値の受け渡し (PR 番号 / repo slug / 一時ファイル path)
 
-これらは caller の free text や cwd の origin に由来します。そのまま command 行へ書くと、
+これらは caller の free text や、省略時に gh が解決する repository (上の「引数」) に由来します。そのまま command 行へ書くと、
 呼び出し元の shell が先に解釈します。次の 3 つを**別々の段として順に**行います。どれか 1 つでは
 残りを代替できません。
 

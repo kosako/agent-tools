@@ -253,7 +253,7 @@ command は **この skill の directory にある `LAUNCH.md` を読んで、�
   `service_tier`) は読まない (worker と同じ)。どちらにも無い key は渡さず Codex の既定に任せる。file は作らず、
   書き換えない。読み取った値以外の `-m` や model-specific config は足さない。別 agent / wrapper に代行させず、
   実際の Codex CLI process を起動する。
-- **escape**: path と nonce は生成時に shell literal 化 (値全体を `'` で囲み、内側の `'` を `'\''` に
+- **escape**: path・nonce・model・effort は生成時に shell literal 化 (値全体を `'` で囲み、内側の `'` を `'\''` に
   置換) して script 先頭の変数に 1 回だけ埋め込み、以降は `"$repo"` / `"$run"` で参照する。値を
   inline の引用へ展開しない。herdr の `pane run` は pane shell と呼び出し元 shell の 2 段で literal
   化する (shell を介さず argv を直接組む経路なら外側は不要)。この script は Codex の sandbox が

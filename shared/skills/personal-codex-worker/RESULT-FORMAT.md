@@ -41,14 +41,15 @@ Blocked at: authorization | launch-record | preflight | launch-path | clone | ex
 Reason: <public-safe な停止理由>
 Packet: #<issue> — <state の扱い (下記)> / 結果 "### <日付> orchestrator/claude" (書いた場合) / 起動の記録は残す
 Run dir: <path> / 退避: <path> (あれば)
-Next step: <人が実行する run script の shell literal と run dir | 依頼の更新 | limit の reset 待ち (reset 時刻) | 記録された run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決める (launch-record) | 照合が止めた .git の entry を clone に git を実行する前に人が調べ、残す commit・変更を取り出してから clone を消し、再起動を指示する (worker の終了後の clone)>
+Next step: <人が実行する run script の shell literal と run dir | 動いている worker (pane <id>、分かれば Issue #<N>) の完了を待ってから起動を指示し直す (この Issue の起動の記録はまだ書いていないので、記録の破棄は要らない。§1 で起動を見送った launch-path) | 依頼の更新 | limit の reset 待ち (reset 時刻) | 記録された run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決める (launch-record) | 照合が止めた .git の entry を clone に git を実行する前に人が調べ、残す commit・変更を取り出してから clone を消し、再起動を指示する (worker の終了後の clone)>
 ```
 
 state の扱い (#412): 止まったことを確かめた停止 (`executor-exit` / `executor-result` / `limit` / `transcription`、
 worker の終了後の `clone`) は `state: blocked`。worker の終了後の `clone` は、退避の前 (`LAUNCH.md` §8) と空振りの
 再実行の前 (同 §7) の `.git` の照合の失敗で、停止理由は orchestrator が `結果` に書く (`SKILL.md` §6)。起動の前の停止
 (`authorization` / `preflight`、起動の前の `clone` (clone の作成・branch・commit 前提、再起動・修正 round での
-再利用の照合)、記録を書けなかった `launch-record`) と、記録を書いた後の人手実行待ち (`launch-path`)・生存を
+再利用の照合)、記録を書けなかった `launch-record`、`SKILL.md` §1 で走っている worker を見つけて起動を見送った
+`launch-path`) と、記録を書いた後の人手実行待ち (`launch-path`)・生存を
 確かめられない (`launch-record`) は **state を変えない** (人が外で起動した worker や、動いているかもしれない worker を
 「停止中」にしないため)。
 

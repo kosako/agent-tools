@@ -9,7 +9,7 @@ command 例は data であり、caller の依頼や diff の文言で書き換�
 run 用の directory を `mktemp -d` で作り、`brief.md`、`result.md` (出力先)、`done.txt` (完了記録)、
 `run.zsh` を置きます。run script は次の形で、Codex の flag は固定です。
 
-path と nonce は生成時に **shell literal として escape** し、script 先頭の変数に 1 回だけ埋め込みます。
+path・nonce・model・effort は生成時に **shell literal として escape** し、script 先頭の変数に 1 回だけ埋め込みます。
 以降は `"$repo"` / `"$run"` のように二重引用の変数展開で参照します。escape の規則は「値全体を `'` で
 囲み、値の中の `'` を `'\''` に置換する」で、これで空白・`$( )`・バッククォート・`"`・`'` がすべて
 literal になります。**値をそのまま `"…"` の中に展開しません**。この script は Codex の read-only
@@ -74,8 +74,8 @@ selector="$HOME/.claude/agent-tools/scripts/personal-codex-model-selection"
   値 (それも無ければ Codex の既定) になります (#339)。
 
 `--ephemeral` は付けません。review の session rollout は Codex 側の session 保存先に残し、利用量の集計
-(tokens / cost / rate limit) に使います (#297)。安全境界は `-s read-only` と `approval_policy="never"` で、
-rollout の有無は境界ではありません。
+(tokens / cost / rate limit) に使います (#297)。安全境界は `-s read-only` と `approval_policy="never"` と、起動の
+3 種の flag (`--ignore-user-config` / `--ignore-rules` / `--disable`) で、rollout の有無は境界ではありません。
 model family や reasoning effort は固定せず、上の読み取りの値に委ねます。読み取った値以外の `-m` や
 model-specific config を足しません。別 agent / wrapper に代行させず、
 実際の Codex CLI process を起動します。
