@@ -314,6 +314,11 @@ draft に留めます (起動の記録は消さずに残す)。
   hook でないか)、残す commit や変更を取り出してから clone を消し、再起動を指示する (clone を残したままだと、
   再起動の再利用の照合 (§2) が同じ snapshot でまた止まる)。起動の前の `clone` (§3) は state を変えない
   (`RESULT-FORMAT.md` の state の扱い)。
+- **退避の command の失敗** (`Blocked at: clone`): 照合が通った後の退避の command (`LAUNCH.md` §8 の 2 行目以降) が
+  失敗したときも、worker の終了後の停止として `state: blocked` にし、orchestrator が `### <日付> orchestrator/claude` で
+  停止理由 (退避できなかったことと止まった段) を書く。退避が済んだとして扱わず、clone を残す。起動の記録は消さない。
+  返却の `Next step` は、止まった段と error を人が確かめ、退避をやり直すか残す変更を clone から取り出してから、
+  再起動を指示すること。
 - **退避**: clone の uncommitted な変更を staged / unstaged / untracked すべて run directory に
   退避し (staged と unstaged は別々の `--binary` patch、untracked は file 名を shell に通さない
   tar の写し)、その path を `結果` に記録する。orchestrator は代わりに commit しない (trailer が

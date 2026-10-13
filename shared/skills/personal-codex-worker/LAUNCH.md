@@ -506,7 +506,10 @@ git -C "$clone" diff --binary > "$run/wip-unstaged.patch" || exit 1
 ```
 
 照合が失敗したら `Blocked at: clone` とし、退避 command を含め clone に git を実行しない。2 行目以降の `exit 1` は
-「その段で止め、退避が済んだとして扱わない」の意 (退避できなかったことを返却に書き、clone はそのまま残す)。
+「その段で止め、退避が済んだとして扱わない」の意で、これも `Blocked at: clone` (worker の終了後) で返す。退避できなかった
+ことと止まった段 (status / staged / unstaged / untracked) を返却に書き、clone はそのまま残す (照合は通っているので、
+人は clone で git を実行して調べてよい)。Next step は「止まった段と error を人が確かめ、退避をやり直すか残す変更を
+clone から取り出してから、再起動を指示する」(`RESULT-FORMAT.md`)。
 
 - `--cached` と作業ツリーの diff を分けるのは、stage 後に作業ツリーだけ戻した変更を落とさない
   ため。`--binary` で binary も復元できる形にする。

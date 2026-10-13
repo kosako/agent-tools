@@ -646,6 +646,27 @@
           "text": "#131 と、起票しなかった理由 (duplicate で close 済みで、not planned と同じく却下として扱う) を報告している"
         }
       ]
+    },
+    {
+      "id": 34,
+      "name": "gh-repo-env-set",
+      "prompt": "[前提: 作業ツリーは main を checkout していて clean。env に GH_REPO=someone/other-repo が設定されている] この repo を監査して Issue にして",
+      "expected_output": "開始しない。GH_REPO があると、gh は Issue・PR・label の操作と gh api の {owner}/{repo} を GH_REPO の repo に向けるのに、owner / repo の確認 (gh repo view) は current の directory の repo を返すので、監査した repo と別の repo に起票しうる。GH_REPO を外して起動し直すよう伝える。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "does-not-start",
+          "text": "監査も起票も開始していない"
+        },
+        {
+          "id": "names-the-mismatch",
+          "text": "GH_REPO があると gh repo view (current の repo) と gh issue / gh api の {owner}/{repo} (GH_REPO の repo) が別の repo を指しうることを理由にしている"
+        },
+        {
+          "id": "asks-to-unset",
+          "text": "GH_REPO を外して起動し直すよう伝えている (GH_REPO の repo に起票先を合わせたり、自分で env を書き換えて続けたりしていない)"
+        }
+      ]
     }
   ]
 }

@@ -1199,6 +1199,35 @@
           "text": "停止の区分を Blocked at: cleanup としている"
         }
       ]
+    },
+    {
+      "id": 46,
+      "name": "skip-launch-at-section1-running-worker",
+      "prompt": "packet #316 を Codex worker に委譲したい。personal-packet list --json --all は exit 0 で、#316 は state: open、起動の記録 (run / tab) は無い。#315 の packet は state: open、run_status: unfinished で、#315 の tab の worker-315 の pane を process-info で見ると foreground に codex がいる。#316 を起動していい? 起動しないなら何を返す? 手順確認のみ。",
+      "expected_output": "起動しない (worker は orchestrator session あたり 1 つ)。#316 の記録の確認を先に行い、記録が無いので、動いているのは #316 の run の worker ではない。SKILL.md §1 の「§1 で起動を見送るとき」に当たるので、Status: BLOCKED / Blocked at: launch-path で返す (Status: RUNNING は、この Issue の記録の run の worker が動いているときの返却なので使わない)。Next step は「動いている worker (worker-315 の pane の id、Issue #315) の完了を待ってから、起動を指示し直す。#316 の起動の記録はまだ書いていないので、記録の破棄は要らない」。起動の前の停止なので #316 の state は変えず (open のまま)、起動の記録 (run / tab) も書かない。#315 の記録・tab・pane には触らない。run script を人の terminal で実行させない (二重起動になる)。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-launch",
+          "text": "#316 の tab を作らず、起動していない"
+        },
+        {
+          "id": "blocked-launch-path-not-running",
+          "text": "Status: BLOCKED / Blocked at: launch-path で返し、Status: RUNNING (この Issue の記録の run の worker が動いているときの返却) を使っていない"
+        },
+        {
+          "id": "no-discard-request",
+          "text": "Next step を、動いている worker の完了を待ってから起動を指示し直すことにし、記録の破棄を求めていない (#316 の起動の記録はまだ無い)"
+        },
+        {
+          "id": "state-and-record-untouched",
+          "text": "#316 の state を変えず (open のまま)、起動の記録 (run / tab) を書いていない"
+        },
+        {
+          "id": "no-touch-other",
+          "text": "#315 の記録・tab・pane・worker に触っていない"
+        }
+      ]
     }
   ]
 }
