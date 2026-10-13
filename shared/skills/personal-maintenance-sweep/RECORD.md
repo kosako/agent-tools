@@ -17,9 +17,9 @@ branch の push・PR・review のコメント。`FIX.md`)。Codex の session �
 ## 値の受け渡し
 
 - owner / repo は `gh repo view --json nameWithOwner --jq .nameWithOwner` から取り、`\A[\w.-]+/[\w.-]+\z`
-  に合うことを確かめてから使う。`gh repo view` は env の `GH_REPO` を見ず current の repo を返すので、`gh issue` /
-  `gh pr` / `gh label` や `gh api` の `{owner}/{repo}` (どれも `GH_REPO` を見る) と同じ repo を指すのは `GH_REPO` が空の
-  ときだけ (`SKILL.md` 手順 0)。
+  に合うことを確かめてから使う。`gh repo view` は env の `GH_REPO` を見ず current の repo を返すが、`gh issue` /
+  `gh pr` / `gh label` や `gh api` の `{owner}/{repo}` は `GH_REPO` を見るので、`GH_REPO` があると別の repo を指しうる。
+  そのため `GH_REPO` が空であることを開始の前提にする (`SKILL.md` 手順 0)。
 - commit は 16 進の OID だけを受け付ける。fix の branch 名は `sweep/fix-<Issue 番号>` (番号は 10 進の 1 つ) だけを
   受け付ける。
 - Issue の本文は file に書いて `--body-file` で渡す (command 文字列に埋め込まない)。一時 file は repo の
