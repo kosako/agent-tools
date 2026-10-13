@@ -18,7 +18,10 @@ harness です。#216 の cross-skill routing suite の最小 slice で、
 ## 何が hard で何が hard でないか (honest-label)
 
 - **hard**: judge の判定は deterministic で、fixture で検証されている。coverage 欠落・error run・
-  比較条件の不一致は緑に数えず exit 2 に倒す (偽の安心を作らない)。
+  比較条件の不一致は緑に数えず exit 2 に倒す (偽の安心を作らない)。probe runner の Codex の起動の境界
+  (起動の argv と、起動の前の flag と feature の確認。欠けていれば起動せずに exit 2) と event の解析も、
+  偽の CLI と固定の JSONL を使う offline の self-test (`scripts/tests/probe-skill-routing-test.sh`) で
+  固定している (実際の CLI の event 形式との一致は対象外で、下の「hard でない」側)。
 - **hard でない**: probe の観測は CLI の headless 実行と event stream に依存する。単発 turn の
   headless 実行は対話 session の代理であって同一ではなく、同じ prompt でも model の揺れで結果が
   変わる。field 名が変わると observed が空になり、judge には primary MISS として現れる (緑には

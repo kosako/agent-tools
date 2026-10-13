@@ -111,7 +111,8 @@ OpenCode 1.18.30 (Homebrew)、macOS (arm64)。2026-09-26 に `--stage all` を 2
 `/bin/sh` と `$SHELL` の zsh) 実行し、`--stage real` を 1 回実行した。2 回の verdict は同じだったので 1 行に
 まとめ、数値が違うものは両方を書く。PR #336 の review (4 round) で判定を「予測する値ごとに前提の証跡を確かめる」形に直し、
 `!` と PTY の記録を操作の時間帯で選ぶようにした後、2026-09-27 に `--stage all` を同じ 2 通りで測り直し、同じ
-verdict になった (最後の round は判定だけの修正で記録を変えないので、同じ記録にかけ直して確かめた)。予測は source からのもので、根拠は #295 の packet の「既知の事実」。
+verdict になった (最後の round は判定だけの修正で記録を変えないので、同じ記録にかけ直して確かめた)。予測は OpenCode 1.18.30 の source を読んで立てたもので、項目ごとの予測は下の表の「source からの予測」の列と
+判定 (`scripts/lib/probe_opencode/judge.rb`) にある。
 
 | M | stage | source からの予測 | observed | verdict |
 | --- | --- | --- | --- | --- |
