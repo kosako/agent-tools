@@ -18,7 +18,9 @@
 # - option を先に全部解決してから集計する。不正な option は理由と usage を stderr に出して exit 2。
 # - 入力は --file (複数可)。無ければ記録 hook と同じ規則で決める (AGENT_TOOLS_TOOL_CALL_RECORD_DIR が最優先、
 #   無ければ ${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/personal-tool-call-record-hook) の
-#   claude-code.jsonl。読めない file は stderr に 1 行 (名前だけ) 出して続け、1 つも読めなければ exit 1。
+#   claude-code.jsonl。--file が無く、既定の記録先を絶対 path に決められない (使う env の値が相対 path か、
+#   上の env と HOME がどれも空) ときは理由を stderr に出して exit 1。読めない file は stderr に 1 行 (名前だけ)
+#   出して続け、1 つも読めなければ exit 1。
 # - 使う行は JSON object で ts が ISO 8601 のもの。それ以外は「壊れた行」として数えて skip する (落ちない)。
 # - 期間は行ごとに ts の local 日付 (offset を尊重して local time に直した日付) で判定する。until は含む。
 #   既定は --days 7 (今日を含む直近 7 日)。--since / --until は片方だけでもよい (--days とは併用しない)。
@@ -83,7 +85,8 @@ module ToolCallReport
       --days N           今日を含む直近 N 日 (既定 #{DEFAULT_DAYS})。--since / --until とは併用できない
       --top N            tool ごとの call 数に出す上位の数 (既定 #{DEFAULT_TOP})
       --format md|json   出力の形 (既定 md)
-      exit 0 = 正常 / 1 = 入力 file が 1 つも読めない / 2 = 引数の誤り (理由と usage を stderr に出す)
+      exit 0 = 正常 / 1 = 入力 file が 1 つも読めない、または既定の記録先を絶対 path に決められない /
+           2 = 引数の誤り (理由と usage を stderr に出す)
     TEXT
   end
 

@@ -15,7 +15,7 @@ risk:
 # approved_build_id を入れる。それまで register は human_review_required とし sync は配備しない。
 review:
   human_review: approved
-  approved_build_id: sha256:3f88784d44b9c78fc75d7bf6849cffbc9b55c39629a96bcfb9caa99e19c5674f
+  approved_build_id: sha256:4200710a0d846d8db42ae7231e6b562c1a8424f237421fd26b03329e72e428a1
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-tool-call-report.rb

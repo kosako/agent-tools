@@ -48,8 +48,9 @@
 # 4. leader を回収する (最大 2 秒)。
 # 各段階は前の段階の例外にかかわらず走り、後始末の中で例外が起きたら cleanup incomplete。group への kill の ESRCH
 # と EPERM (macOS は zombie だけの group に EPERM を返す) は、止まったかを観測で確かめる。無期限には待たない。
-# leader が自分で終わったときは、残っている member が見えれば 1. から、見えなければ 2. から行う (leftover_killed は
-# TERM の前に数えた数と、3. で新たに見つけた数の合計)。
+# leader が自分で終わったときは、列挙できて残っている member が 0 のときだけ 2. から行い、残っている member が
+# 見えるか、列挙できない (失敗か例外) ときは 1. から行う (leftover_killed は TERM の前に数えた数と、3. で新たに
+# 見つけた数の合計)。
 # signal は handler で最初の 1 つだけを記録して self-pipe に 1 byte 書き (書けなくても flag は立つ)、後始末は
 # handler の外で走る (2 回目の signal で猶予を延ばさず、理由も上書きしない)。起動時に無視されていた signal (nohup の
 # HUP など) は trap せず無視のまま残す (command にも無視が継承される。shell と同じ)。SIGCHLD は既定の扱いに戻す
@@ -543,8 +544,9 @@ module SafeRun
   end
 
   # 後始末 (1 回だけ)。各段階は前の段階の例外にかかわらず走り、最後の group への KILL、leader への KILL、2 回の確認、
-  # 回収は必ず試行する。reason が nil (leader が自分で終わった) なら、残っている member が見えたときだけ TERM から
-  # 始め、leftover は TERM の前に数えた pid と確認で新たに見つけた pid の合計。
+  # 回収は必ず試行する。reason が nil (leader が自分で終わった) なら、残っている member が見えたときと列挙できない
+  # (失敗か例外) ときは TERM から始め、列挙できて 0 のときだけ TERM を飛ばす。leftover は TERM の前に数えた pid と
+  # 確認で新たに見つけた pid の合計。
   def finish(leader, reason)
     @cleanup_errors = []
     counted = []

@@ -180,7 +180,8 @@ module ReviewRoutingPreflight
   end
 
   # PR の全 commit を REST + pagination で取得する。repo 省略時は gh の placeholder
-  # (`{owner}/{repo}` = cwd の origin) に解決を委ねる。
+  # (`{owner}/{repo}`) に解決を委ねる。gh は現在の directory の repository に解決し、env の
+  # `GH_REPO` などが効くので origin とは限らない。
   def fetch_commits(pr_number, repo)
     path = "repos/#{repo || '{owner}/{repo}'}/pulls/#{pr_number}/commits"
     argv = ["gh", "api", "--paginate", "--slurp", path]

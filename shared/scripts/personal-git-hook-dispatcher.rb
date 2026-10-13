@@ -60,9 +60,10 @@ module GitHookDispatcher
 
   # 再入 sentinel (stage 単位)。repo hook が shim (→ dispatcher) を指す誤設定でも、
   # realpath 比較では検出できない間接参照で無限再帰になる (H206-04)。chain 実行時に
-  # この env を立て、再入を検出したら gate 済みとして即 exit 0 する。副作用として、
-  # chain 先 hook が別 repo へ「同 stage の commit」を行う場合その commit は gate を
-  # 通らない (docs に明記の既知限界)。
+  # この env を立て、再入を検出したら gate 済みとして即 exit 0 する。sentinel は gate の
+  # 無い stage (pre-push など) の chain でも立つ (#430 の 3)。副作用として、chain 先 hook が
+  # 別 repo で同じ stage の hook を呼ぶ git 操作 (commit・push など) を行うと、その内側の
+  # 操作のその stage では gate も、その repo 自身の hook も走らない (docs に明記の既知限界)。
   GUARD_PREFIX = "AGENT_TOOLS_GIT_HOOK_ACTIVE_"
 
   module_function
