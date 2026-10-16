@@ -351,6 +351,68 @@ grep -q "kept (unmanaged, no agent-tools marker): generated/codex/scripts/person
 [ -f "$tmp/scriptasset/generated/codex/scripts/personal-stray-script" ] \
   || fail "unmanaged script must not be pruned"
 
+# --- case 4h-4: script の再 build が本体の書き込みの途中で止まっても、旧い marker を切れた本体の隣に残さない (#514) ---
+# file size の上限で本体の書き込みを切る。register は build の後なので、catalog は前回の build_id のままで旧い sidecar と
+# 一致する。旧い sidecar が残ると、build をやり直さない sync が切れた本体を新しい配置先に create する。
+register="$script_dir/../register.sh"
+sync="$script_dir/../sync.sh"
+cut="$tmp/cutscript"
+mkdir -p "$cut/shared/scripts"
+printf '#!/bin/sh\necho "first version"\n' > "$cut/shared/scripts/personal-cut.sh"
+write_approved_script_manifest "$cut" shared/scripts/personal-cut.sh personal-cut personal claude-code
+"$build" --root "$cut" --quiet > /dev/null || fail "the first script build should pass"
+"$register" --root "$cut" --quiet > /dev/null || fail "the first register should pass"
+gen_cut="$cut/generated/claude-code/scripts/personal-cut"
+cp "$gen_cut" "$tmp/cut-v1"
+cut_sync() {
+  rm -rf "$tmp/cut-codex" "$tmp/cut-claude" "$tmp/cut-opencode"
+  status=0
+  "$sync" --root "$cut" --codex-home "$tmp/cut-codex" --claude-home "$tmp/cut-claude" --opencode-home "$tmp/cut-opencode" \
+    --apply > "$tmp/out-cut-sync" 2>&1 || status=$?
+}
+# (a) 本体の書き込みが切れる: 配置先に置かれるのは、旧い marker が示す旧い本体そのものか、何も置かれないかのどちらか。
+{ printf '#!/bin/sh\n'; padding_lines 100 | sed 's/^/# /'; } > "$cut/shared/scripts/personal-cut.sh"
+status=0
+with_fsize 2048 "$build" --root "$cut" --quiet > "$tmp/out-cut" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "a script build stopped while writing the body must not exit 0: $(cat "$tmp/out-cut")"
+cut_sync
+[ ! -e "$tmp/cut-claude/agent-tools/scripts/personal-cut" ] \
+  || cmp -s "$tmp/cut-claude/agent-tools/scripts/personal-cut" "$tmp/cut-v1" \
+  || fail "sync must not place a cut-off script body: $(head -c 200 "$tmp/cut-claude/agent-tools/scripts/personal-cut")"
+# (b) 本体は書き終わり、sidecar の書き込みが切れる (上限は本体より大きく sidecar より小さい): 旧い marker が残ると、
+# 登録前の新しい本体が旧い build_id のまま配られる。marker の無い generated として sync が止まる。
+printf '#!/bin/sh\necho second\n' > "$cut/shared/scripts/personal-cut.sh"
+status=0
+with_fsize 100 "$build" --root "$cut" --quiet > "$tmp/out-cut" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "a script build stopped while writing the marker must not exit 0: $(cat "$tmp/out-cut")"
+cut_sync
+[ "$status" -eq 1 ] || fail "sync after the stopped build should stop on the generated script, got $status: $(cat "$tmp/out-cut-sync")"
+grep -q "conflict: \[claude-code\].*generated artifact is missing a valid marker" "$tmp/out-cut-sync" \
+  || fail "sync should name the generated script without a marker: $(cat "$tmp/out-cut-sync")"
+[ ! -e "$tmp/cut-claude/agent-tools/scripts/personal-cut" ] \
+  || fail "sync must not place a script body under the old marker: $(cat "$tmp/cut-claude/agent-tools/scripts/personal-cut")"
+"$build" --root "$cut" --quiet > /dev/null || fail "the build without the limit should converge"
+cmp -s "$gen_cut" "$cut/shared/scripts/personal-cut.sh" || fail "the converged script body must match the source"
+[ -f "$gen_cut.agent-tools-managed.yml" ] || fail "the converged build must write the marker"
+[ "$(ls -A "$cut/generated/claude-code/scripts")" = "personal-cut
+personal-cut.agent-tools-managed.yml" ] \
+  || fail "no staging file may remain next to the generated script: $(ls -A "$cut/generated/claude-code/scripts")"
+
+# instruction (と plugin) は marker が先頭行にあるので、途中で止まっても旧い file のまま残る (切れた新しい file を置かない)。
+cutinst="$tmp/cutinst"
+make_demo_repo "$cutinst" instructions personal-ops instruction '# operating rules'
+"$build" --root "$cutinst" --quiet > /dev/null || fail "the first instruction build should pass"
+cp "$cutinst/generated/claude-code/instructions/CLAUDE.md" "$tmp/cutinst-claude.md"
+cp "$cutinst/generated/codex/instructions/AGENTS.md" "$tmp/cutinst-codex.md"
+padding_lines 100 >> "$cutinst/shared/instructions/personal-ops.md"
+status=0
+with_fsize 2048 "$build" --root "$cutinst" --quiet > "$tmp/out-cutinst" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "an instruction build stopped by the file size limit must not exit 0: $(cat "$tmp/out-cutinst")"
+cmp -s "$cutinst/generated/claude-code/instructions/CLAUDE.md" "$tmp/cutinst-claude.md" \
+  || fail "a stopped instruction build must leave the old claude-code file in place"
+cmp -s "$cutinst/generated/codex/instructions/AGENTS.md" "$tmp/cutinst-codex.md" \
+  || fail "a stopped instruction build must leave the old codex file in place"
+
 # --- case 5: repository 本体が build できる (実 repo を変異させないよう tmp コピーで検証) ---
 # 実 repo の generated/ を直接上書きすると、branch でのテスト実行が実 sync の参照先を
 # 差し替える副作用がある (#150)。検証目的 (実 asset 一式で build が通る) はコピーでも同一。

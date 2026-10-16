@@ -14,6 +14,7 @@ require "fileutils"
 require_relative "assets"
 require_relative "gate"
 require_relative "artifact_targets"
+require_relative "file_replace"
 require_relative "instruction_marker"
 require_relative "path_glob"
 require_relative "plugin_marker"
@@ -163,7 +164,9 @@ module Build
       FileUtils.mkdir_p(File.dirname(out))
       content = File.read(File.join(@root, source))
       build_id = Build.build_id_for(@root, source, format)
-      File.write(out, instruction_with_marker(content, asset[:name], tool, source, build_id))
+      # 先頭行の marker で sync / connect が配ってよいかを決めるので、一時 file に書いて rename で入れ替える
+      # (書き込みが途中で止まっても、新しい build_id の marker を持つ切れた file を残さない。#514)。
+      FileReplace.write_file(out, instruction_with_marker(content, asset[:name], tool, source, build_id))
       @built << rel(out)
     end
 
@@ -184,10 +187,16 @@ module Build
       sidecar = ArtifactTargets.sidecar_marker_path(out)
       guard_file(out, sidecar)
       FileUtils.mkdir_p(File.dirname(out))
-      FileUtils.cp(File.join(@root, source), out)
-      File.chmod(0o755, out) # script は配置先で実行されるため実行可能にする
+      # sync は sidecar の build_id だけで本体を配ってよいかを決める。本体を変える前に旧い sidecar を消し、本体と
+      # sidecar をそれぞれ一時 file + rename で置く。途中で止まると marker の無い generated が残り、sync は
+      # conflict で止まる (旧い marker のまま、切れた本体や登録前の本体を配らない。#514)。
+      unless FileReplace.removed?(sidecar)
+        raise OutputPathError, "could not remove the old marker #{rel(sidecar)}; refusing to rebuild #{rel(out)}"
+      end
+      # script は配置先で実行されるため実行可能にする
+      FileReplace.replace_file(File.join(@root, source), out, 0o755)
       build_id = Build.build_id_for(@root, source, format)
-      File.write(sidecar, YamlMarker.render(name: name, target: tool, source: source, build_id: build_id))
+      FileReplace.write_file(sidecar, YamlMarker.render(name: name, target: tool, source: source, build_id: build_id))
       @built << rel(out)
     end
 
@@ -209,8 +218,8 @@ module Build
       FileUtils.mkdir_p(File.dirname(out))
       build_id = Build.build_id_for(@root, source, format)
       marker = PluginMarker.render(name: name, target: tool, source: source, build_id: build_id)
-      File.binwrite(out, "#{marker}\n".b + File.binread(File.join(@root, source)))
-      File.chmod(0o644, out)
+      # instruction と同じく先頭行の marker で配布を決めるので、一時 file + rename で入れ替える (#514)。
+      FileReplace.write_file(out, "#{marker}\n".b + File.binread(File.join(@root, source)), 0o644)
       @built << rel(out)
     end
 
@@ -476,8 +485,9 @@ module Build
     end
     puts "ok: #{built.size} artifact(s) built" unless quiet
     0
-  rescue OutputPathError => e
-    # 書き込み先を安全に書き換えられないときは、それ以上書かずに理由を出して止める (#386)。
+  rescue OutputPathError, FileReplace::ApplyError => e
+    # 書き込み先を安全に書き換えられないとき (一時 file の path に消せないものがあるときを含む。#514) は、
+    # それ以上書かずに理由を出して止める (#386)。
     warn "fail: #{e.message}"
     1
   end
