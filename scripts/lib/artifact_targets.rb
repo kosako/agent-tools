@@ -16,6 +16,10 @@ module ArtifactTargets
   # catalog の repo root 相対 path。register が書き、Catalog.read が読む (#152)。
   CATALOG_PATH = "generated/catalog.json"
 
+  # asset の name の形 (lower kebab-case)。check-manifests が manifest で、Catalog.read が catalog の entry で確かめる
+  # (name は generated と配置先の path に入るので、NUL や区切りを含む値を path の組み立てに渡さない。#515)。
+  NAME_PATTERN = /\A[a-z0-9]+(?:-[a-z0-9]+)*\z/.freeze
+
   # 対応 tool の語彙 (走査順も配布順として意味を持つ)。tool を追加するときはここと
   # TOOL_KINDS を変える (build の生成走査・sync の prune 走査・check-manifests の targets 検証・
   # status の generated 列挙が全てここを参照する, #152)。

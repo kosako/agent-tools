@@ -39,7 +39,7 @@ module CheckManifests
   # 変われば配布の意味が変わる (skill 承認の source を script = 実行ファイルとして配る等)
   # ため、承認 identity は (build_id, artifact_kind) の対。human_review: approved と対で使う。
   APPROVED_ARTIFACT_KIND_KEY = "approved_artifact_kind"
-  NAME_PATTERN = /\A[a-z0-9]+(?:-[a-z0-9]+)*\z/.freeze
+  NAME_PATTERN = ArtifactTargets::NAME_PATTERN
   ASSET_CATEGORIES = %w[skills prompts workflows agents instructions scripts plugins].freeze
   # compatibility.<tool>.artifact_kind で上書きできない kind。実行コードの配布形態 (script /
   # plugin) は manifest の kind でのみ宣言でき、その場合は既定導出されるので override に正当用途は

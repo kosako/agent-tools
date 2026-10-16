@@ -632,14 +632,20 @@ grep -q "no catalog" "$tmp/out30c" \
   || fail "old catalog version should be treated as no-catalog: $(cat "$tmp/out30c")"
 # entry の必須項目が欠けている・不正な catalog も no-catalog (sync / status が例外で止まらない。#515)。基準の entry は
 # 読める (manifest が無いので manifest changed の skip になる) ことを先に確かめ、変異ごとに 1 項目だけを壊す。
+# name と manifest_path は path の組み立てに入るので、NUL や区切りを含む値も no-catalog にする (#521 review)。
 badcat_entry() {
   ruby -rjson -e '
     entry = { "name" => "personal-x", "target" => "claude-code", "artifact_kind" => "skill",
-              "registration" => "registered", "build_id" => "sha256:00" }
+              "registration" => "registered", "build_id" => "sha256:00",
+              "manifest_path" => "shared/skills/personal-x.asset.yml" }
     case ARGV[1]
     when "base" then nil
     when "no-name" then entry.delete("name")
     when "empty-name" then entry["name"] = ""
+    when "name-nul" then entry["name"] = "personal-x\u0000"
+    when "name-separator" then entry["name"] = "personal-x/../y"
+    when "no-manifest-path" then entry.delete("manifest_path")
+    when "manifest-path-nul" then entry["manifest_path"] = "shared/skills/personal-x.asset.yml\u0000"
     when "unknown-target" then entry["target"] = "nope"
     when "no-target" then entry.delete("target")
     when "kind-not-string" then entry["artifact_kind"] = 1
@@ -655,19 +661,22 @@ badcat_entry base
   > "$tmp/out30d" 2>&1 || fail "the base entry must be readable: $(cat "$tmp/out30d")"
 grep -q "skip: \[claude-code\].*manifest changed" "$tmp/out30d" \
   || fail "the base entry should reach the plan: $(cat "$tmp/out30d")"
-for variant in no-name empty-name unknown-target no-target kind-not-string unknown-registration registered-no-build-id; do
+for variant in no-name empty-name name-nul name-separator no-manifest-path manifest-path-nul unknown-target no-target \
+  kind-not-string unknown-registration registered-no-build-id; do
   badcat_entry "$variant"
   "$sync" --root "$tmp/badcat" --codex-home "$tmp/bc-codex" --claude-home "$tmp/bc-claude" --opencode-home "$tmp/bc-opencode" \
     > "$tmp/out30e" 2>&1 || fail "a catalog entry ($variant) must not crash sync: $(cat "$tmp/out30e")"
   grep -q "no catalog" "$tmp/out30e" \
     || fail "a catalog entry ($variant) should be treated as no-catalog: $(cat "$tmp/out30e")"
 done
-badcat_entry no-target
-"$script_dir/../status.sh" --root "$tmp/badcat" --json --codex-home "$tmp/bc-codex" --claude-home "$tmp/bc-claude" \
-  --opencode-home "$tmp/bc-opencode" > "$tmp/out30f" 2> "$tmp/err30f" \
-  || fail "a broken catalog entry must not crash status: $(cat "$tmp/err30f")"
-ruby -rjson -e 'exit(JSON.parse(File.read(ARGV[0])).dig("register", "catalog_present") == false)' "$tmp/out30f" \
-  || fail "status should report the broken catalog as not present: $(cat "$tmp/out30f")"
+for variant in no-target name-nul; do
+  badcat_entry "$variant"
+  "$script_dir/../status.sh" --root "$tmp/badcat" --json --codex-home "$tmp/bc-codex" --claude-home "$tmp/bc-claude" \
+    --opencode-home "$tmp/bc-opencode" > "$tmp/out30f" 2> "$tmp/err30f" \
+    || fail "a broken catalog entry ($variant) must not crash status: $(cat "$tmp/err30f")"
+  ruby -rjson -e 'exit(JSON.parse(File.read(ARGV[0])).dig("register", "catalog_present") == false)' "$tmp/out30f" \
+    || fail "status should report the broken catalog ($variant) as not present: $(cat "$tmp/out30f")"
+done
 
 # --- case 31: 本体不在 + managed sidecar は conflict にせず create する (#179 H-06 の許可側) ---
 # (case 29 の unmanaged と対。本体だけ消えて自分の managed marker が残った状態からの再配置。)
