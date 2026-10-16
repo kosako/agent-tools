@@ -39,11 +39,13 @@ module FileReplace
     stage_and_rename(target, mode) { |staging| File.binwrite(staging, content) }
   end
 
-  # replace_file / write_file の共通部分。block が一時 file に中身を書く。
+  # replace_file / write_file の共通部分。block が一時 file に中身を書く。消し残しは symlink も見る (File.exist? は
+  # symlink を辿るので、指す先の無い symlink を消せないと false になり、書き込みが symlink の先に file を作る。
+  # #518 review)。
   def stage_and_rename(target, mode)
     staging = work_path(target, "staging")
     FileUtils.rm_f(staging)
-    if File.exist?(staging)
+    if File.exist?(staging) || File.symlink?(staging)
       raise ApplyError, "could not remove the leftover staging file #{staging}; the new version was not applied"
     end
     begin

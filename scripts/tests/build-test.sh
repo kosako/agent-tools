@@ -412,6 +412,21 @@ cmp -s "$cutinst/generated/claude-code/instructions/CLAUDE.md" "$tmp/cutinst-cla
   || fail "a stopped instruction build must leave the old claude-code file in place"
 cmp -s "$cutinst/generated/codex/instructions/AGENTS.md" "$tmp/cutinst-codex.md" \
   || fail "a stopped instruction build must leave the old codex file in place"
+# 一時 file の path に消せない symlink (指す先が無い) があれば、symlink の先に file を作らずに fail で止まる (#518 review)。
+# 親 dir を書き込み不可にして rm_f を失敗させる (root では書き込み不可が効かないので走らせない)。
+if [ "$(id -u)" -ne 0 ]; then
+  inst_dir="$cutinst/generated/claude-code/instructions"
+  "$build" --root "$cutinst" --quiet > /dev/null || fail "the instruction build without the limit should converge"
+  ln -s "$tmp/staging-outside" "$inst_dir/.agent-tools-staging-CLAUDE.md"
+  chmod 555 "$inst_dir"
+  status=0
+  "$build" --root "$cutinst" > "$tmp/out-stlink" 2>&1 || status=$?
+  chmod 755 "$inst_dir"
+  [ "$status" -eq 1 ] || fail "a staging symlink that cannot be removed should exit 1, got $status: $(cat "$tmp/out-stlink")"
+  grep -q "fail: could not remove the leftover staging file .*/\.agent-tools-staging-CLAUDE\.md" "$tmp/out-stlink" \
+    || fail "the stop must name the staging symlink: $(cat "$tmp/out-stlink")"
+  [ ! -e "$tmp/staging-outside" ] || fail "no file may be created through the staging symlink"
+fi
 
 # --- case 5: repository 本体が build できる (実 repo を変異させないよう tmp コピーで検証) ---
 # 実 repo の generated/ を直接上書きすると、branch でのテスト実行が実 sync の参照先を
