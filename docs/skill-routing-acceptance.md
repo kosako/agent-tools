@@ -107,9 +107,11 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
 - `listing_chars`: 候補 skill の description の合計文字数 (毎 turn 載る静的な context 量の指標)。
   Claude Code は description を 1,536 文字で切り、Codex は listing 全体を context の 2% または
   8,000 文字に収める (2026-09-19 時点の公式 docs)。
-- `status`: 上の `--max-turns` の打ち切りを除き、CLI が非ゼロで終わった run、`--timeout` で kill した run、CLI が
+- `status`: CLI が非ゼロで終わった run (上の `--max-turns` の打ち切りを除く)、`--timeout` で kill した run、CLI が
   exit 0 で終わっても出力を最後まで読み切れなかった run (CLI が残した子 process が pipe を握ったまま、待つ上限の
-  5 秒を過ぎた) は `error`。usage が取れなかった run も `error`。judge は緑に数えない。
+  5 秒を過ぎた) は `error`。kill した run と読み切れなかった run は、打ち切りの result を出していても `error`。usage が
+  取れなかった run (Claude Code は result の、Codex は turn.completed の usage が無い、または `input_tokens` /
+  `output_tokens` が整数でない) も `error`。judge は緑に数えない。
 - raw log は `<out>.raw/<case>-<n>.jsonl` に残す。observed が正しいかはこの log で人が確認する
   (judge は runner の観測を信頼する。信頼境界は judge の冒頭コメント参照)。raw log は private な内容を
   含みうるので、Issue / PR / comment には貼らない (下の「raw log の扱い」)。
