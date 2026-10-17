@@ -26,8 +26,8 @@ home="$tmp/home"
 gate_bin="$home/.claude/agent-tools/scripts/personal-public-safety-gate"
 
 # ---- gate の command の切り出し ----------------------------------------------------
-ruby - "$worker_dir/LAUNCH.md" "$gate_bin" "$tmp/gate-block.sh" <<'RUBY'
-launch, gate_bin, out = ARGV.fetch(0), ARGV.fetch(1), ARGV.fetch(2)
+ruby - "$worker_dir/LAUNCH.md" "$tmp/gate-block.sh" <<'RUBY'
+launch, out = ARGV.fetch(0), ARGV.fetch(1)
 lines = File.read(launch).lines
 start = lines.index { |l| l.start_with?("## 9. ") }
 abort "FAIL: codex-worker-publish-gate: LAUNCH.md に「## 9.」の節が無い" unless start
@@ -56,7 +56,8 @@ block = gated.first
 deploy = "gate=<tool home>/agent-tools/scripts/personal-public-safety-gate\n"
 abort "FAIL: codex-worker-publish-gate: gate の block の先頭が deploy 先の行でない" unless block.start_with?(deploy)
 abort "FAIL: codex-worker-publish-gate: gate の block に push / gh がある (test で走らせられない)" if block =~ /\bgit\b[^\n]*\bpush\b|\bgh\s/
-File.write(out, block.sub(deploy, "gate=#{gate_bin}\n"))
+# deploy 先は、走らせるときに渡す偽の HOME の下の gate を指す固定の行にする (tmp の path を code に埋め込まない。#523 review)。
+File.write(out, block.sub(deploy, %q{gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"} + "\n"))
 RUBY
 
 # ---- 切り出した command を temp repo で走らせる ----------------------------------------
@@ -166,10 +167,12 @@ for shell in sh zsh; do
   run_block "$base"
   [ "$rc" -eq 1 ] || fail "[$shell] merge の解決にだけある値の場面で止まらない (rc=$rc)"
 
-  # (e) commit の一覧を取れない (base が無い) ときも exit 0 にならない (fail-closed)。
+  # (e) commit の一覧を取れない (base が無い) ときも exit 0 にならず、git の error を gate-publish.err に残す
+  # (fail-closed。#523 review)。
   make_linear 'clean line'
   run_block 0000000000000000000000000000000000000001
   [ "$rc" -ne 0 ] || fail "[$shell] base が無くても gate の command が exit 0 になる (fail-open)"
+  [ -s "$tmp/run/gate-publish.err" ] || fail "[$shell] commit の一覧を取れなかった理由が gate-publish.err に無い"
 done
 [ "$ran" -gt 0 ] || fail "gate の command を走らせる shell (sh / zsh) が無い"
 

@@ -576,7 +576,7 @@ repository の外):
 
 ```sh
 gate=<tool home>/agent-tools/scripts/personal-public-safety-gate
-merges=$(git -C "$main" rev-list --merges "$base_oid".."refs/heads/$branch") || exit 1
+merges=$(git -C "$main" rev-list --merges "$base_oid".."refs/heads/$branch" 2> "$run/gate-publish.err") || exit 1
 [ -z "$merges" ] || { printf '公開する範囲に merge commit がある\n%s\n' "$merges" > "$run/gate-publish.err"; exit 1; }
 ( set -o pipefail
   { git -C "$main" diff "$base_oid" "refs/heads/$branch" --text --no-textconv --no-ext-diff &&
@@ -588,8 +588,8 @@ grep -q '^public-safety-gate: warning:' "$run/gate-publish.err"; [ $? -eq 1 ] ||
 
 (`exit 1` は「その段で止めて push しない」の意。2 行目と 3 行目は、各 commit の差分を漏れなく検査の入力にするため、
 公開する範囲 (`base_oid` から branch まで) が直線の履歴であることを gate の前に確かめる。merge commit があるか commit の
-一覧を取れなければ gate に通さずに止め、`Blocked at: public-safety` で返す (merge commit の OID は `gate-publish.err` に
-残る。worker の branch は base から直線に積む。`SKILL.md` §4 の commit 規則。#522)。gate が無い・exit 0 でないときも
+一覧を取れなければ gate に通さずに止め、`Blocked at: public-safety` で返す (merge commit の OID か、一覧を取れなかった
+git の error が `gate-publish.err` に残る。worker の branch は base から直線に積む。`SKILL.md` §4 の commit 規則。#522)。gate が無い・exit 0 でないときも
 `Blocked at: public-safety`。警告の行が
 あるときは `gate-publish.err` を人に見せて判断を仰ぎ、人が意図した内容だと確かめたら push へ進む。`pipefail` は、材料の
 `git` が失敗したときに gate が残りだけを読んで exit 0 になるのを防ぐ。`--text --no-textconv --no-ext-diff` は、binary
