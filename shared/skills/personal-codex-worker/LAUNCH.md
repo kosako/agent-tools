@@ -58,6 +58,9 @@ if [ -d "$clone/.git" ]; then
 else
   git clone --quiet --no-hardlinks -- "$main" "$clone" || exit 1
 fi
+# clone の自動 maintenance を止める (#493)。最初の fetch と §3 の snapshot より前に書く
+git -C "$clone" config maintenance.auto false || exit 1
+git -C "$clone" config gc.auto 0 || exit 1
 
 # branch: main 側に既にあれば その tip から、無ければ新規に切る
 if git -C "$clone" rev-parse --verify --quiet --end-of-options "refs/heads/$branch" >/dev/null; then
@@ -77,6 +80,13 @@ fi
   clone 側の object / pack が main と同じ実体になり「main の Git 管理領域を worker に開けない」が
   成立しない (実測: 既定 clone は object の link 数 2、`--no-hardlinks` は 1)。再利用してよいのは
   **この手順で作った clone だけ**で、素性が不明なら作り直す。
+- **clone の自動 maintenance を止める** (#493)。git は `commit` と `fetch` の後に `git maintenance run --auto` を
+  background で起動し、repack などで `.git` に `info/refs`・`objects/info/packs`・`packed-refs` を書きうる。
+  これは §3 の snapshot の照合の allowlist の外で、worker の終了の後も動いて照合や fetch と競合しうる。
+  `maintenance.auto=false` と `gc.auto=0` を、最初の fetch と §3 の snapshot より前に clone の config に書く
+  (git 2.54.0 で実測: 書かないと commit と fetch のたびに起動し、書くと起動しない)。再利用の clone でも、照合の
+  後に同じく書く (同じ値なら中身は変わらない)。clone の `config` は照合の対象なので、worker が値を戻せば照合で止まる。
+  書けなければ `Blocked at: clone`。
 - **branch は取り違えない**。main 側に同名 branch があると clone にも `origin/<branch>` として入って
   いるので、`switch -c` だけで作ると clone の HEAD から切ってしまい、既存の commit を含まない履歴で
   worker が始まる。上のように「local branch → `origin/<branch>` → 新規」の順で分岐する。
@@ -182,9 +192,13 @@ done
   書込みは拒否された。`codex sandbox` 単体は `--permission-profile` が必須で、単体起動の結果は未測定。
   記録は #324 の Issue comment。snapshot は preflight 時と照合時の directory walk の結果を比較する。
   worker が一時的に allowlist 外を書いて元に戻す競合や walk の最中の変更、別 process による同時変更までは証明しない。
-  比較対象は `.git` entry の種類・regular file の SHA-256・symlink target。allowlist は `objects/`, `refs/`,
-  `logs/`, `HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`, `packed-refs` だけで、その領域内の symlink / special file と固定 entry の
-  型変更も止める。
+  比較対象は `.git` entry の種類・regular file の SHA-256・symlink target。allowlist は、worker が自分の branch に
+  commit するときに git が書く entry だけ (#493): 固定の file の `HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`, `AUTO_MERGE` (rebase の後に残る)、
+  loose object (`objects/<2 桁>/` とその下の object)、`objects/pack/` の pack・index・reverse index、`refs/heads/` の
+  下、`logs/HEAD` と `logs/refs/heads/` の下、と途中の directory。それ以外 (`packed-refs`、`objects/info/` の下、
+  branch 以外の ref、`info/refs`、`config`、hooks など) は不変を求める。allowlist の中の symlink / special file と
+  固定 entry の型変更も止める。正本は preflight の `GIT_MUTABLE_FILES` / `GIT_MUTABLE_DIRS` /
+  `GIT_MUTABLE_PATTERNS`。
 - `launch_argv` には `--add-dir <clone>/.git` が 1 つ入る (sandbox は workdir の内側でも `.git` を
   保護するため)。`launch_argv` (配列) の `<run dir>/result.md` を実際の `"$run/result.md"` に
   置き換え、要素を run script に写す (§4)。
