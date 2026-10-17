@@ -1,14 +1,14 @@
 # frozen_string_literal: true
 
-# 配置先の file を一時 file + rename で入れ替える helper。sync の apply / prune と connect の所有ファイルの作成が
-# 共有する (#431 の 3, #482)。書き込みが途中で止まっても、切れた file を配置先に置かない (先頭行の marker だけで
-# up-to-date / 接続済みを決める kind を守る)。require 時の副作用はない。
+# 配置先の file を一時 file + rename で入れ替える helper。sync の apply / prune と connect の所有ファイルの作成、
+# build の generated の単一 file の生成が共有する (#431 の 3, #482, #514)。書き込みが途中で止まっても、切れた file を
+# 配置先に置かない (先頭行の marker だけで up-to-date / 接続済みを決める kind を守る)。require 時の副作用はない。
 
 require "fileutils"
 
 module FileReplace
   # 配置先を安全に入れ替えられない・撤去しきれないときの error: 前回の残り (一時 dir / file、退避した旧 dir) や、
-  # 新版を置いた後の退避した旧 dir、prune の消し残しを消しきれない。sync / connect の main が `fail:` の行と
+  # 新版を置いた後の退避した旧 dir、prune の消し残しを消しきれない。sync / connect / build の main が `fail:` の行と
   # exit 1 で止める (build の OutputPathError と同じ伝え方)。
   class ApplyError < StandardError; end
 
@@ -29,13 +29,27 @@ module FileReplace
   # 握りつぶし、cp は directory の中へ入れ子に copy して、create なら rename が配置先に directory を置く)。
   # 例外のときも一時 file は片付ける (#431 の 3, #469 review)。
   def replace_file(gen, target, mode = nil)
+    stage_and_rename(target, mode) { |staging| FileUtils.cp(gen, staging) }
+  end
+
+  # 生成した内容 (bytes) を一時 file に書き、mode があれば付けてから rename で入れ替える。build が generated の
+  # 単一 file (script の sidecar marker、instruction、plugin) を書くのに使う (#514)。mode を渡さなければ、新規
+  # file の mode は umask に従う (直接 File.write していた頃の新規作成と同じ)。
+  def write_file(target, content, mode = nil)
+    stage_and_rename(target, mode) { |staging| File.binwrite(staging, content) }
+  end
+
+  # replace_file / write_file の共通部分。block が一時 file に中身を書く。消し残しは symlink も見る (File.exist? は
+  # symlink を辿るので、指す先の無い symlink を消せないと false になり、書き込みが symlink の先に file を作る。
+  # #518 review)。
+  def stage_and_rename(target, mode)
     staging = work_path(target, "staging")
     FileUtils.rm_f(staging)
-    if File.exist?(staging)
+    if File.exist?(staging) || File.symlink?(staging)
       raise ApplyError, "could not remove the leftover staging file #{staging}; the new version was not applied"
     end
     begin
-      FileUtils.cp(gen, staging)
+      yield staging
       File.chmod(mode, staging) if mode
       File.rename(staging, target)
     ensure
