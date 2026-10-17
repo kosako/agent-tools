@@ -69,9 +69,23 @@ require "json"
 require "digest"
 
 module CodexWorkerPreflight
-  VERSION = "8"
-  GIT_MUTABLE_FILES = %w[HEAD index COMMIT_EDITMSG ORIG_HEAD packed-refs].freeze
-  GIT_MUTABLE_DIRS = %w[objects refs logs].freeze
+  VERSION = "9"
+  # snapshot の照合で変化を許す entry (#493)。worker が自分の branch に commit するときに Git が書くものだけで、
+  # それ以外 (packed-refs、objects/info/ の下、branch 以外の ref、config、hooks など) は不変を求める。
+  # 固定の file: 中身の変化を許す。型は regular file のまま。
+  GIT_MUTABLE_FILES = %w[HEAD index COMMIT_EDITMSG ORIG_HEAD].freeze
+  # 途中の directory: 作られてよいが、型は directory のまま。
+  GIT_MUTABLE_DIRS = %w[objects objects/pack refs refs/heads logs logs/refs logs/refs/heads].freeze
+  # path の形で許す entry: loose object (dir と file。SHA-1 と SHA-256)、objects/pack の pack・index・reverse
+  # index、branch の ref と reflog。
+  GIT_MUTABLE_PATTERNS = [
+    %r{\Aobjects/[0-9a-f]{2}\z},
+    %r{\Aobjects/[0-9a-f]{2}/(?:[0-9a-f]{38}|[0-9a-f]{62})\z},
+    %r{\Aobjects/pack/pack-(?:[0-9a-f]{40}|[0-9a-f]{64})\.(?:pack|idx|rev)\z},
+    %r{\Arefs/heads/.+\z},
+    %r{\Alogs/HEAD\z},
+    %r{\Alogs/refs/heads/.+\z},
+  ].freeze
   MAX_CHANGED_PATHS = 20
 
   # Codex の session の目印。非空なら立っていると読む (空の値は無い扱い。repo 全体の契約は
@@ -138,10 +152,11 @@ module CodexWorkerPreflight
       "[--effort LEVEL] [--json] | --verify-git-snapshot FILE --clone DIR"
   end
 
-  # `.git` snapshot の allowlist は Git が commit / ref 更新に書く領域だけ。
+  # `.git` snapshot の allowlist は Git が自分の branch への commit に書く entry だけ (#493)。
   # file type も記録し、許可領域内でも既存の固定 file / directory の型変更は許可しない。
   def mutable_git_path?(path)
-    GIT_MUTABLE_FILES.include?(path) || GIT_MUTABLE_DIRS.any? { |dir| path == dir || path.start_with?(dir + "/") }
+    GIT_MUTABLE_FILES.include?(path) || GIT_MUTABLE_DIRS.include?(path) ||
+      GIT_MUTABLE_PATTERNS.any? { |pattern| pattern.match?(path) }
   end
 
   def valid_mutable_entry?(path, entry)

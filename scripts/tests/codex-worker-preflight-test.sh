@@ -34,9 +34,21 @@ check("必須 marker の文字列",
                                                 "`-`", "workspace-write"])
 check("disable する feature の一覧", P::DISABLE_FEATURES == %w[apps computer_use browser_use])
 check("再指定する key の一覧", P::MODEL_KEYS == { "--model" => "model", "--effort" => "model_reasoning_effort" })
-check("git snapshot の変更 allowlist は commit 用の領域に固定",
-      P::GIT_MUTABLE_DIRS == %w[objects refs logs] &&
-      P::GIT_MUTABLE_FILES == %w[HEAD index COMMIT_EDITMSG ORIG_HEAD packed-refs])
+check("git snapshot の変更 allowlist は branch への commit の領域に固定 (#493)",
+      P::GIT_MUTABLE_DIRS == %w[objects objects/pack refs refs/heads logs logs/refs logs/refs/heads] &&
+      P::GIT_MUTABLE_FILES == %w[HEAD index COMMIT_EDITMSG ORIG_HEAD])
+hex40 = "0123456789abcdef0123456789abcdef01234567"
+hex64 = "#{hex40}0123456789abcdef01234567"
+allowed = ["HEAD", "index", "objects", "objects/ab", "objects/ab/#{hex40[2..]}", "objects/ab/#{hex64[2..]}",
+           "objects/pack", "objects/pack/pack-#{hex40}.pack", "objects/pack/pack-#{hex40}.idx",
+           "objects/pack/pack-#{hex64}.rev", "refs/heads", "refs/heads/main", "refs/heads/codex/issue-1",
+           "logs/HEAD", "logs/refs/heads/main", "logs/refs/heads/codex/issue-1"]
+denied = ["packed-refs", "config", "info/refs", "objects/info", "objects/info/alternates",
+          "objects/info/http-alternates", "objects/info/packs", "objects/info/commit-graph",
+          "objects/ab/not-an-object", "objects/pack/pack-#{hex40}.keep", "refs/replace/#{hex40}", "refs/tags/v1",
+          "refs/stash", "refs/remotes/origin/main", "logs/refs/stash", "logs/refs/remotes/origin/main", "hooks/pre-commit"]
+check("allowlist の path の形 (許すもの)", allowed.all? { |p| P.mutable_git_path?(p) })
+check("allowlist の path の形 (許さないもの)", denied.none? { |p| P.mutable_git_path?(p) })
 
 HELP_OK = <<~H
   Options:
@@ -306,8 +318,9 @@ printf '%s' "$out" > "$tmp/preflight.json"
 verify_snapshot() { ruby "$src" --verify-git-snapshot "$tmp/preflight.json" --clone "$clone"; }
 verify_snapshot >/dev/null || fail "unchanged git dir snapshot should pass"
 printf 'ref: refs/heads/test\n' > "$clone/.git/HEAD"
+# loose object は実際の名前の形 (2 桁の dir と残りの 38 桁) でだけ許す (#493)。
 mkdir -p "$clone/.git/objects/aa"
-printf 'object\n' > "$clone/.git/objects/aa/object"
+printf 'object\n' > "$clone/.git/objects/aa/0123456789abcdef0123456789abcdef012345"
 verify_snapshot >/dev/null || fail "HEAD and object writes should be allowed"
 printf '\n[worker-test]\n\tmarker = tampered\n' >> "$clone/.git/config"
 set +e
@@ -388,13 +401,14 @@ done
 # allowlist の内部でも symlink entry は許可しない。
 out=$(run_pf --json)
 printf '%s' "$out" > "$tmp/preflight.json"
-ln -s config "$clone/.git/refs/unexpected-link"
+mkdir -p "$clone/.git/refs/heads"
+ln -s ../../config "$clone/.git/refs/heads/unexpected-link"
 set +e
 out=$(verify_snapshot 2>&1)
 rc=$?
 set -e
-[ "$rc" -eq 2 ] || fail "symlink under mutable refs must fail closed (rc=$rc): $out"
-rm "$clone/.git/refs/unexpected-link"
+[ "$rc" -eq 2 ] || fail "symlink under mutable refs/heads must fail closed (rc=$rc): $out"
+rm "$clone/.git/refs/heads/unexpected-link"
 # clone の `.git` 自体も real directory でなければ拒否する。
 mv "$clone/.git" "$clone/.git-real"
 ln -s .git-real "$clone/.git"
@@ -433,6 +447,70 @@ for dir in objects refs logs; do
   rm "$clone/.git/$dir"
   mv "$tmp/$dir.saved" "$clone/.git/$dir"
 done
+# 実際の流れ (#493): LAUNCH.md §2 と同じく clone の直後に自動 maintenance を止め、worker の branch を切ってから
+# snapshot を取る。worker の branch への commit は照合を通り、allowlist の外 (git の読み方を変える file や branch 以外の
+# ref、packed-refs、maintenance が書く info/refs) を書けば止まる。
+flow_main="$tmp/flow-main"
+git init -q "$flow_main"
+printf 'a\n' > "$flow_main/f"
+git -C "$flow_main" add f
+git -C "$flow_main" commit -q -m a
+flow_clone="$tmp/flow-clone"
+git clone -q --no-hardlinks -- "$flow_main" "$flow_clone"
+git -C "$flow_clone" config maintenance.auto false
+git -C "$flow_clone" config gc.auto 0
+git -C "$flow_clone" switch -q -c codex/issue-1
+flow_snapshot() {
+  env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$home" \
+    --clone "$flow_clone" --json > "$tmp/flow-preflight.json" || fail "preflight of the flow clone failed"
+}
+flow_verify() {
+  set +e
+  out=$(ruby "$src" --verify-git-snapshot "$tmp/flow-preflight.json" --clone "$flow_clone" 2>&1)
+  rc=$?
+  set -e
+}
+flow_snapshot
+for i in 1 2 3; do
+  printf 'w%s\n' "$i" >> "$flow_clone/f"
+  git -C "$flow_clone" commit -q -a -m "w$i"
+done
+flow_verify
+[ "$rc" -eq 0 ] || fail "commits on the worker branch must pass the snapshot check (rc=$rc): $out"
+flow_oid=$(git -C "$flow_clone" rev-parse HEAD)
+# 1 つ書くごとに snapshot を取り直し、止まることと、診断が書いた entry を名指すことを確かめてから戻す。
+flow_expect_stop() {
+  flow_verify
+  [ "$rc" -eq 2 ] || fail "$1 must fail closed (rc=$rc): $out"
+  case "$out" in *"\"$2\""*) : ;; *) fail "diagnostic must name $2 for $1: $out" ;; esac
+}
+mkdir -p "$flow_clone/.git/objects/info"
+flow_snapshot
+printf '%s\n' "$tmp/flow-main/.git/objects" > "$flow_clone/.git/objects/info/alternates"
+flow_expect_stop "an alternates file" objects/info/alternates
+rm "$flow_clone/.git/objects/info/alternates"
+flow_snapshot
+mkdir -p "$flow_clone/.git/refs/replace"
+printf '%s\n' "$flow_oid" > "$flow_clone/.git/refs/replace/$flow_oid"
+flow_expect_stop "a replace ref" "refs/replace"
+rm -r "$flow_clone/.git/refs/replace"
+flow_snapshot
+cp "$flow_clone/.git/packed-refs" "$tmp/flow-packed-refs.saved"
+printf '%s refs/heads/packed-branch\n' "$flow_oid" >> "$flow_clone/.git/packed-refs"
+flow_expect_stop "a packed-refs change" packed-refs
+cp "$tmp/flow-packed-refs.saved" "$flow_clone/.git/packed-refs"
+flow_snapshot
+printf '%s\trefs/heads/codex/issue-1\n' "$flow_oid" > "$flow_clone/.git/info/refs"
+flow_expect_stop "info/refs written by maintenance" info/refs
+rm "$flow_clone/.git/info/refs"
+flow_snapshot
+git -C "$flow_clone" tag v1
+flow_expect_stop "a tag" "refs/tags/v1"
+git -C "$flow_clone" tag -d v1 > /dev/null
+flow_snapshot
+printf 'stash me\n' >> "$flow_clone/f"
+git -C "$flow_clone" stash -q
+flow_expect_stop "a stash" "refs/stash"
 # 別の clone の snapshot を渡したら、entry の比較に入る前に git_dir の不一致で拒否する (#431)。
 other_clone="$tmp/clone-other"
 git init -q "$other_clone"

@@ -141,8 +141,10 @@ clone の git dir だけ**で、preflight が orchestrator 自身の repository 
 
 - **clone の `.git` snapshot 照合** (#324): preflight JSON に `.git` 内の entry 種類と regular file の digest を
   保存する。worker 終了後、clone に git を実行する前に preflight の `--verify-git-snapshot` mode で照合する。
-  allowlist 外の変更・entry 追加 / 削除は停止し、許可する書込み先は `objects/`, `refs/`, `logs/`,
-  `HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`, `packed-refs`。再利用 clone も git を呼ぶ前に直前 run の snapshot を照合し、
+  allowlist 外の変更・entry 追加 / 削除は停止し、許可するのは worker が自分の branch に commit するときに git が
+  書く entry だけ (`HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`、loose object と `objects/pack/` の pack、`refs/heads/`
+  の下と branch の reflog。#493。一覧は `LAUNCH.md` §3)。clone の自動 maintenance は clone を作った直後に止める
+  (`LAUNCH.md` §2)。再利用 clone も git を呼ぶ前に直前 run の snapshot を照合し、
   追えない場合は clone に git を実行せず `Blocked at: clone` で人に渡す。前の run dir は packet の
   `last_run` (完了の転記の後) か `run` (停止中) から辿る (#325)。どちらも無い (`last_run` を導入する前に
   転記した run の次の round 等) ときは、人が `LAUNCH.md` §9 で main に回収済みの branch を確認し、問題がないと
@@ -207,7 +209,9 @@ brief は file に書き、stdin (`-`) で渡します。shell 引数に埋め�
   指示ではない (scope は `依頼` だけ)。command の値 (path・ref など) は argv・stdin・literal 化した
   変数で渡し、command 文字列へ埋め込まない。
 - commit 規則: 作業単位ごとに commit する。merge commit は作らず、branch は基点から直線に積む (merge commit を
-  含む branch は §7 の公開する内容の gate の前で止まる。#522)。commit message に自分を示す trailer
+  含む branch は §7 の公開する内容の gate の前で止まる。#522)。`git stash`・tag・`git gc` / `repack` / `maintenance`
+  は使わず、clone の `.git` の config も変えない (どれも §2 の `.git` の snapshot の照合の allowlist の外を書き、回収の前に止まる。
+  #493)。commit message に自分を示す trailer
   `Co-Authored-By: Codex <no-reply 形の email>` を付ける (commit-msg の gate が要求する)。
   test は sandbox の中で実行してよい (network は無い)。script asset (`shared/scripts/`) を変えたら、
   最終版から asset の `approved_build_id` を計算し直し、`scripts/tests/register-test.sh` まで回して
