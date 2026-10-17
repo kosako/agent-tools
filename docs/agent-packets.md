@@ -319,7 +319,7 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
 - **作業場所**: Issue ごとの **local clone** (orchestrator が main から `git clone --no-hardlinks` して
   branch を切る。`--no-hardlinks` は必須で、既定の local clone は object を main と hardlink で共有するので
   分離が成り立たない)。packet dir は main worktree の root のまま (置き場の規則どおり) で、gitignore されているので
-  clone には含まれない。worker の書込先は **その clone の中だけ**で、main の Git 管理領域も packet dir
+  clone には含まれない。worker の書込先は **その clone の中だけ** (一時 file を置く `$TMPDIR` の下を除く) で、main の Git 管理領域も packet dir
   も含めない。worker の commit は orchestrator が main へ `git fetch <clone> <branch>:<branch>` で
   回収する (network 不要)。起動側は **その clone の git dir (`<clone>/.git`) だけ**を sandbox の
   writable roots に足す (`workspace-write` は workdir の内側でも `.git` を保護するため。実測)。

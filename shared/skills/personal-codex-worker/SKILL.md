@@ -14,7 +14,7 @@ orchestrator が行います。
 ## 副作用と組み合わせ
 
 - 副作用: worker 用 clone の作成、herdr の Issue ごとの tab (`#<issue>`) を作ってその pane から
-  `codex exec` を起動 (workspace-write。書込はその clone の中に閉じる)、clone から main への fetch、
+  `codex exec` を起動 (workspace-write。書込はその clone の中と、一時 file を置く `$TMPDIR` の下 (§4) に限る)、clone から main への fetch、
   packet の local 更新 (`結果` / `次の入口` / `state` / 起動の記録 `run` / `tab`)、worker が commit した
   branch の push と PR 作成 (orchestrator の操作。trailer 検査を通ったときだけ)。後始末モード (§9) では、
   人が明示したときだけ、`done` の packet の worker の tab を閉じ、clone を退避先へ移す (消さない)。
@@ -217,9 +217,10 @@ brief は file に書き、stdin (`-`) で渡します。shell 引数に埋め�
   最終版から asset の `approved_build_id` を計算し直し、`scripts/tests/register-test.sh` まで回して
   通ることを確かめる (build_id は script の中身に紐づくので、編集のたびに計算し直す。#324 の round 2)。
 - 一時 file の置き場: test や集計の一時 file (`personal-safe-run` の `--report` を含む) は、`mktemp -d` で
-  `$TMPDIR` の下に作った directory に置く (worker の sandbox は `$TMPDIR` に書ける。§5)。clone の作業ツリー
-  (commit に混ざる) にも `.git` の中 (§2 の `.git` の snapshot の照合の allowlist の外を書き、回収の前に止まる) にも
-  置かず、`TMPDIR` を clone の中へ向け直さない (xcrun などの tool が `$TMPDIR` に cache を書く。#510)。
+  `$TMPDIR` の下に作った directory に置く (worker の sandbox は `$TMPDIR` に書ける。§5)。clone の作業ツリーと
+  `.git` の中には置かず、`TMPDIR` を clone の中へ向け直さない。作業ツリーに置くと commit に混ざり、`.git` の中に
+  書くと §2 の `.git` の snapshot の照合の allowlist の外になって回収の前に止まる (xcrun などの tool も `$TMPDIR`
+  に cache を書く。#510)。
 - 最終 message の書式 (転記元): `到達点` / `判断` (理由) / `未完` / `停止理由 または 質問`
   (あれば) / `commits` (oid と subject の一覧) / `次の 1 アクション` (`次の入口` の転記元)。
   `次の 1 アクション` は worker 自身の次の手だけを書き、完了して review 待ちなら「なし (review 待ち)」と

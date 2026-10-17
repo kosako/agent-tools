@@ -3,9 +3,11 @@
 # 置き場を clone の外の $TMPDIR に示していることを検査する (#510)。
 # 禁止事項が「clone の外への書込」だけだと、作業ツリーに置けば commit に混ざるので、worker は一時 file (safe-run の
 # --report や TMPDIR) を clone の .git の下に置き、回収の前の .git の snapshot の照合で止まる。
-# - 一時 file の置き場の bullet があり、mktemp -d・$TMPDIR・--report・.git・TMPDIR を向け直さないことを挙げている
+# - 一時 file の置き場の bullet が、置き場 ($TMPDIR の下、--report を含む)・作業ツリーと .git に置かないこと・
+#   TMPDIR を向け直さないことを、それぞれ句として書いている (語の有無だけでは、規則を反転した文も通るため)
 # - 禁止事項の bullet の「clone の外への書込」に一時 file の置き場の例外がある (無いと 2 つの bullet が食い違う)
-# brief の節の外にだけ語があっても worker には届かないので、child-brief-boundary-test と同じく節の一覧に絞って見る。
+# 句は空白を除いて比べる (行の折り返しの位置に依らない)。brief の節の外にだけ句があっても worker には届かないので、
+# child-brief-boundary-test と同じく節の一覧に絞って見る。
 # 引数で worker の skill の directory を差し替えられる (変異での確認用)。
 set -eu
 
@@ -32,24 +34,35 @@ list = list[0, list.index { |l| l =~ /\A\s*\z/ } || list.length]
 
 # 一覧を行頭の「- 」で bullet に分け、続きの行は前の bullet に足す。
 bullets = []
-list.each { |l| l.start_with?("- ") ? bullets << l.dup : bullets[-1] << " " << l.strip }
+list.each { |l| l.start_with?("- ") ? bullets << l.dup : bullets[-1] << l }
+
+def squash(text)
+  text.gsub(/\s+/, "")
+end
 
 def find(bullets, label)
   bullets.find { |b| b.start_with?("- #{label}:") }
 end
+
+CLAUSES = {
+  "置き場" => "一時 file (`personal-safe-run` の `--report` を含む) は、`mktemp -d` で `$TMPDIR` の下に作った directory に置く",
+  "作業ツリーと .git に置かない" => "clone の作業ツリーと `.git` の中には置かず",
+  "TMPDIR を向け直さない" => "`TMPDIR` を clone の中へ向け直さない",
+}.freeze
+EXCEPTION = "clone の外への書込 (下の一時 file の置き場を除く)"
 
 errors = []
 tmp = find(bullets, "一時 file の置き場")
 if tmp.nil?
   errors << "brief の一覧に「一時 file の置き場:」の bullet が無い"
 else
-  missing = ["mktemp -d", "`$TMPDIR`", "`--report`", "`.git`", "向け直さない"].reject { |w| tmp.include?(w) }
-  errors << "一時 file の置き場の bullet に #{missing.inspect} が無い" unless missing.empty?
+  missing = CLAUSES.reject { |_, clause| squash(tmp).include?(squash(clause)) }.keys
+  errors << "一時 file の置き場の bullet に句 #{missing.inspect} が無い" unless missing.empty?
 end
 ban = find(bullets, "禁止事項")
 if ban.nil?
   errors << "brief の一覧に「禁止事項:」の bullet が無い"
-elsif !ban.include?("clone の外への書込 (下の一時 file の置き場を除く)")
+elsif !squash(ban).include?(squash(EXCEPTION))
   errors << "禁止事項の「clone の外への書込」に一時 file の置き場の例外が無い"
 end
 
