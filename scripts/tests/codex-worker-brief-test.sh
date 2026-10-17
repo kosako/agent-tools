@@ -6,7 +6,8 @@
 # - 一時 file の置き場の bullet が、置き場 ($TMPDIR の下、--report を含む)・作業ツリーと .git に置かないこと・
 #   TMPDIR を向け直さないことを、それぞれ句として書いている (語の有無だけでは、規則を反転した文も通るため)
 # - 禁止事項の bullet の「clone の外への書込」に一時 file の置き場の例外がある (無いと 2 つの bullet が食い違う)
-# 句は空白を除いて比べる (行の折り返しの位置に依らない)。brief の節の外にだけ句があっても worker には届かないので、
+# 句は空白を除いて比べ (行の折り返しの位置に依らない)、句の直後が区切り (。、( か末尾) であることも求める (否定は
+# 句の後ろに付くので、「置くな」のような反転を部分一致で通さない)。brief の節の外にだけ句があっても worker には届かないので、
 # child-brief-boundary-test と同じく節の一覧に絞って見る。
 # 引数で worker の skill の directory を差し替えられる (変異での確認用)。
 set -eu
@@ -40,6 +41,11 @@ def squash(text)
   text.gsub(/\s+/, "")
 end
 
+# 句が空白を除いた本文にあり、直後が区切りか末尾であること。
+def clause?(text, clause)
+  squash(text).match?(/#{Regexp.escape(squash(clause))}(?=[。、(]|\z)/)
+end
+
 def find(bullets, label)
   bullets.find { |b| b.start_with?("- #{label}:") }
 end
@@ -56,13 +62,13 @@ tmp = find(bullets, "一時 file の置き場")
 if tmp.nil?
   errors << "brief の一覧に「一時 file の置き場:」の bullet が無い"
 else
-  missing = CLAUSES.reject { |_, clause| squash(tmp).include?(squash(clause)) }.keys
+  missing = CLAUSES.reject { |_, clause| clause?(tmp, clause) }.keys
   errors << "一時 file の置き場の bullet に句 #{missing.inspect} が無い" unless missing.empty?
 end
 ban = find(bullets, "禁止事項")
 if ban.nil?
   errors << "brief の一覧に「禁止事項:」の bullet が無い"
-elsif !squash(ban).include?(squash(EXCEPTION))
+elsif !clause?(ban, EXCEPTION)
   errors << "禁止事項の「clone の外への書込」に一時 file の置き場の例外が無い"
 end
 
