@@ -72,8 +72,9 @@ module CodexWorkerPreflight
   VERSION = "9"
   # snapshot の照合で変化を許す entry (#493)。worker が自分の branch に commit するときに Git が書くものだけで、
   # それ以外 (packed-refs、objects/info/ の下、branch 以外の ref、config、hooks など) は不変を求める。
-  # 固定の file: 中身の変化を許す。型は regular file のまま。
-  GIT_MUTABLE_FILES = %w[HEAD index COMMIT_EDITMSG ORIG_HEAD].freeze
+  # 固定の file: 中身の変化を許す。型は regular file のまま。AUTO_MERGE は rebase の後に git (2.42 以降) が残す (#525 の
+  # 実測)。
+  GIT_MUTABLE_FILES = %w[HEAD index COMMIT_EDITMSG ORIG_HEAD AUTO_MERGE].freeze
   # 途中の directory: 作られてよいが、型は directory のまま。
   GIT_MUTABLE_DIRS = %w[objects objects/pack refs refs/heads logs logs/refs logs/refs/heads].freeze
   # path の形で許す entry: loose object (dir と file。SHA-1 と SHA-256)、objects/pack の pack・index・reverse

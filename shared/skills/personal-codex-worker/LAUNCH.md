@@ -193,7 +193,7 @@ done
   記録は #324 の Issue comment。snapshot は preflight 時と照合時の directory walk の結果を比較する。
   worker が一時的に allowlist 外を書いて元に戻す競合や walk の最中の変更、別 process による同時変更までは証明しない。
   比較対象は `.git` entry の種類・regular file の SHA-256・symlink target。allowlist は、worker が自分の branch に
-  commit するときに git が書く entry だけ (#493): 固定の file の `HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`、
+  commit するときに git が書く entry だけ (#493): 固定の file の `HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`, `AUTO_MERGE` (rebase の後に残る)、
   loose object (`objects/<2 桁>/` とその下の object)、`objects/pack/` の pack・index・reverse index、`refs/heads/` の
   下、`logs/HEAD` と `logs/refs/heads/` の下、と途中の directory。それ以外 (`packed-refs`、`objects/info/` の下、
   branch 以外の ref、`info/refs`、`config`、hooks など) は不変を求める。allowlist の中の symlink / special file と

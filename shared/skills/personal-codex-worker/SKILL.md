@@ -142,7 +142,7 @@ clone の git dir だけ**で、preflight が orchestrator 自身の repository 
 - **clone の `.git` snapshot 照合** (#324): preflight JSON に `.git` 内の entry 種類と regular file の digest を
   保存する。worker 終了後、clone に git を実行する前に preflight の `--verify-git-snapshot` mode で照合する。
   allowlist 外の変更・entry 追加 / 削除は停止し、許可するのは worker が自分の branch に commit するときに git が
-  書く entry だけ (`HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`、loose object と `objects/pack/` の pack、`refs/heads/`
+  書く entry だけ (`HEAD`, `index`, `COMMIT_EDITMSG`, `ORIG_HEAD`, `AUTO_MERGE`、loose object と `objects/pack/` の pack、`refs/heads/`
   の下と branch の reflog。#493。一覧は `LAUNCH.md` §3)。clone の自動 maintenance は clone を作った直後に止める
   (`LAUNCH.md` §2)。再利用 clone も git を呼ぶ前に直前 run の snapshot を照合し、
   追えない場合は clone に git を実行せず `Blocked at: clone` で人に渡す。前の run dir は packet の
