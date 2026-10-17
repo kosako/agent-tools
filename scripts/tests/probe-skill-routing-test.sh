@@ -332,23 +332,36 @@ find "$tmp/escape" -type f > "$tmp/escape-files"
 cat > "$fakebin/claude" <<'EOF'
 #!/bin/sh
 # 偽の claude。stream-json の event を出して FAKE_CLAUDE_RC で終わる。FAKE_CLAUDE_SUBTYPE が空でなければ
-# result に subtype を付ける。
+# result に subtype を付ける。FAKE_CLAUDE_USAGE は result の usage (JSON。none なら usage を付けない。空なら既定)、
+# FAKE_CLAUDE_SLEEP は result を出した後に待つ秒数 (--timeout で kill させる)。
 printf '%s\n' '{"type":"system","subtype":"init","model":"m-fake-claude"}'
 printf '%s\n' '{"type":"assistant","message":{"usage":{"input_tokens":5},"content":[{"type":"text","text":"personal-a"}]}}'
+case ${FAKE_CLAUDE_USAGE:-} in
+  none) usage= ;;
+  '') usage=',"usage":{"input_tokens":10,"output_tokens":2}' ;;
+  *) usage=",\"usage\":$FAKE_CLAUDE_USAGE" ;;
+esac
 if [ -n "${FAKE_CLAUDE_SUBTYPE:-}" ]; then
-  printf '{"type":"result","subtype":"%s","usage":{"input_tokens":10,"output_tokens":2}}\n' "$FAKE_CLAUDE_SUBTYPE"
+  printf '{"type":"result","subtype":"%s"%s}\n' "$FAKE_CLAUDE_SUBTYPE" "$usage"
 else
-  printf '%s\n' '{"type":"result","usage":{"input_tokens":10,"output_tokens":2}}'
+  printf '{"type":"result"%s}\n' "$usage"
 fi
+[ -z "${FAKE_CLAUDE_SLEEP:-}" ] || sleep "$FAKE_CLAUDE_SLEEP"
 exit "${FAKE_CLAUDE_RC:-0}"
 EOF
 chmod +x "$fakebin/claude"
 
-# run_claude_smoke <subtype> <exit>: 偽の claude を PATH に置いて --tool claude-code --smoke を回す
+# run_claude_smoke <subtype> <exit> [usage] [sleep]: 偽の claude を PATH に置いて --tool claude-code --smoke を回す。
+# sleep を渡したときは --timeout 1 を付ける。
 run_claude_smoke() {
   set +e
-  out=$(env FAKE_CLAUDE_SUBTYPE="$1" FAKE_CLAUDE_RC="$2" PATH="$fakebin:$PATH" \
-    ruby "$src" --tool claude-code --source "$source_dir" --smoke 2>&1)
+  if [ -n "${4:-}" ]; then
+    out=$(env FAKE_CLAUDE_SUBTYPE="$1" FAKE_CLAUDE_RC="$2" FAKE_CLAUDE_USAGE="${3:-}" FAKE_CLAUDE_SLEEP="$4" \
+      PATH="$fakebin:$PATH" ruby "$src" --tool claude-code --source "$source_dir" --smoke --timeout 1 2>&1)
+  else
+    out=$(env FAKE_CLAUDE_SUBTYPE="$1" FAKE_CLAUDE_RC="$2" FAKE_CLAUDE_USAGE="${3:-}" PATH="$fakebin:$PATH" \
+      ruby "$src" --tool claude-code --source "$source_dir" --smoke 2>&1)
+  fi
   rc=$?
   set -e
 }
@@ -367,5 +380,18 @@ run_claude_smoke '' 1
 case "$out" in *'status=error exit=1'*) : ;; *) fail "a non-zero exit without a subtype should be reported as error: $out" ;; esac
 run_claude_smoke error_during_execution 1
 [ "$rc" -eq 2 ] || fail "a non-zero exit with another subtype must be an error run (rc=$rc): $out"
+# usage が取れない result は、正常終了でも観測不能 (error run)。正当な 0 token は観測完了 (#516)
+for usage in none '{}' '{"input_tokens":10}' '{"output_tokens":2}' '{"input_tokens":10,"output_tokens":"2"}'; do
+  run_claude_smoke success 0 "$usage"
+  [ "$rc" -eq 2 ] || fail "a result without usable usage ($usage) must be an error run (rc=$rc): $out"
+  case "$out" in *'status=error exit=0'*) : ;; *) fail "a result without usable usage ($usage) should be reported as error: $out" ;; esac
+done
+run_claude_smoke success 0 '{"input_tokens":0,"output_tokens":0}'
+[ "$rc" -eq 0 ] || fail "a result with zero tokens must count as a completed observation (rc=$rc): $out"
+case "$out" in *'status=ok exit=0'*'prompt_tokens=0 output_tokens=0'*) : ;; *) fail "zero tokens should be reported as ok: $out" ;; esac
+# 打ち切りの result を出した後に --timeout で kill した run は、終了の状態が取れないので error run (#516)
+run_claude_smoke error_max_turns 1 '' 5
+[ "$rc" -eq 2 ] || fail "a run killed by --timeout must be an error run even with error_max_turns (rc=$rc): $out"
+case "$out" in *'status=error exit=nil subtype="error_max_turns"'*) : ;; *) fail "the killed run should be reported as error: $out" ;; esac
 
 echo "probe-skill-routing-test: ok"

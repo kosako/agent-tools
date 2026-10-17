@@ -174,7 +174,8 @@ module ProbeSkillRouting
   #   input.skill (無ければ input.name)。
   # - first_prompt_tokens: 最初の assistant message の usage の prompt 合計 = 最初の API call の
   #   context 量。listing (description) の大きさが最も素直に出る指標。
-  # - prompt_tokens / output_tokens: type=result の usage (run 全体の合計。turn 数に依存する)。
+  # - prompt_tokens / output_tokens: type=result の usage (run 全体の合計。turn 数に依存する)。usage が取れなければ
+  #   nil (観測不能)。
   # - subtype: result の subtype。error_max_turns は打ち切りであって観測失敗ではない。
   def self.parse_claude(jsonl)
     observed = []
@@ -211,9 +212,15 @@ module ProbeSkillRouting
           end
         end
       when "result"
-        u = e["usage"].is_a?(Hash) ? e["usage"] : {}
-        prompt_tokens = sum_usage(u, PROMPT_USAGE_KEYS)
-        output_tokens = u["output_tokens"].is_a?(Integer) ? u["output_tokens"] : 0
+        # usage が無い・input_tokens / output_tokens が整数でない result は観測不能として nil にする (run_one が
+        # error にする。key が在って 0 の正当な 0 token とは区別する。#516)。cache の token は在るときだけ足す。
+        u = e["usage"]
+        if u.is_a?(Hash) && u["input_tokens"].is_a?(Integer) && u["output_tokens"].is_a?(Integer)
+          prompt_tokens = sum_usage(u, PROMPT_USAGE_KEYS)
+          output_tokens = u["output_tokens"]
+        else
+          prompt_tokens = output_tokens = nil
+        end
         subtype = e["subtype"] if e["subtype"].is_a?(String)
         text = e["result"] if text.empty? && e["result"].is_a?(String)
       end
@@ -442,11 +449,13 @@ module ProbeSkillRouting
       out, err, status = run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout])
       parsed = parse_codex(out, names).merge(model: codex_model(opts))
     end
-    # 観測完了の条件: usage が取れていて、CLI が正常終了したか、または --max-turns の打ち切り
+    # 観測完了の条件: 終了の状態が取れていて (timeout で kill した run と stream を読み切れなかった run は
+    # status が nil)、usage が取れていて、CLI が正常終了したか、または --max-turns の打ち切り
     # (claude-code の result.subtype == "error_max_turns")。打ち切りは routing の判断 (最初の
     # turn の Skill 起動) を観測した後に起きるので観測失敗ではない。認証 / API エラー等の
-    # 非ゼロ終了は観測不能として error (judge は緑に数えない)。
-    complete = status&.success? || parsed[:subtype] == "error_max_turns"
+    # 非ゼロ終了は観測不能として error (judge は緑に数えない)。打ち切りの result があっても、
+    # 終了の状態が取れない run は error のまま (#516)。
+    complete = !status.nil? && (status.success? || parsed[:subtype] == "error_max_turns")
     ok = complete && parsed[:prompt_tokens] && parsed[:output_tokens]
     parsed.merge(argv: argv, stdout: out, stderr: err, exit: status&.exitstatus, status: ok ? "ok" : "error")
   end
