@@ -172,12 +172,17 @@ worktree であること・`HEAD` が `base` で detached であること・clea
   (`git log --format=%B "$base".."$branch"`。push で一緒に公開されるが、累積差分には入らない)、branch 名 (push で
   公開される。#413)、PR の題名と本文を
   まとめて public-safety の gate に通し、exit 0 で警告 (`public-safety-gate: warning:` の行) が無いときだけ push と PR へ進みます。
-  警告があれば push も PR もせず、gate の出力を人に見せて判断を仰ぎます (#413)。下の command は、gate が止めたら
-  その exit code (1 / 2)、警告があれば 3、どちらも無ければ 0 で終わり、gate の出力を stderr に出します。
+  警告があれば push も PR もせず、gate の出力を人に見せて判断を仰ぎます (#413)。各 commit の差分を漏れなく検査の
+  入力にするため、`base` から branch までは直線の履歴であることを先に確かめ、merge commit があれば gate に通さずに
+  止めます (fix の branch は `base` から直線に積む。#522)。下の command は、merge commit があるか commit の一覧を
+  取れなければ 2、gate が止めたらその exit code (1 / 2)、警告があれば 3、どちらも無ければ 0 で終わり、止めた理由と
+  gate の出力を stderr に出します。
 
   ```sh
   gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"
-  ( gate_out=$( set -o pipefail
+  ( merges=$(git rev-list --merges "$base".."$branch") || { printf '検査できない: commit の一覧を取れない\n' >&2; exit 2; }
+    [ -z "$merges" ] || { printf '検査できない: 公開する範囲に merge commit がある\n%s\n' "$merges" >&2; exit 2; }
+    gate_out=$( set -o pipefail
       { git diff "$base" "$branch" --text --no-textconv --no-ext-diff && git log --format=%B "$base".."$branch" &&
         git log -p --format= "$base".."$branch" --text --no-textconv --no-ext-diff &&
         printf '%s\n%s\n\n' "$branch" "$title" && cat "$body_file"; } | "$gate" --stdin 2>&1 )
@@ -191,7 +196,8 @@ worktree であること・`HEAD` が `base` で detached であること・clea
   `body_file` は literal の変数で渡します。`--text --no-textconv --no-ext-diff` は、binary とみなす file の中身も差分に
   出し、textconv や外部 diff の command を起動しないためです (#414)。`pipefail` は、材料の `git` が失敗したときに gate が残りだけを読んで
   exit 0 になるのを防ぎます。gate が無い・exit 0 でない・警告 (exit 3) のときは push も PR もせず、gate の出力 (どの
-  規則に当たったか) を報告します。直したら、この節の検証からやり直します。
+  規則に当たったか) を報告します。merge commit で止まったときは、branch を `base` から直線に積み直して (merge commit を
+  含まない形にして) から、この節の検証からやり直します。それ以外も、直したら、この節の検証からやり直します。
 - commit の message は Claude の trailer 付きで、file に書いて `-F` で渡します。commit の前にその file を同じ gate
   (上の `gate` の path) の `--stdin` に通しておくと、push の前の gate で止まってから書き直す手間が減ります。
 

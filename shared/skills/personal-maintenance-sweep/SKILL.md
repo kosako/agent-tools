@@ -172,9 +172,9 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   `base` の tree で問題の存続・正本・範囲を確かめ直す。確かめられなければ直さない (再反証か報告)。
 - 着手前に `fixes.json`、既存の open PR / branch、同じ file を触る open PR を照合し、二重修正と conflict を作らない。
 - 1 所見 = 1 PR。run dir の下の linked worktree で、修正の仕様 (正本 / 変えてよい箇所 / 受け入れ条件) の範囲だけを
-  直す。累積差分に `diff --check`、repo の gate、壊れた参照の検査を当て、累積差分と `base` 以降の全 commit の message と
-  PR の題名・本文を public-safety の gate に通してから push と PR (review の修正で commit を足したら、追加の push の前に
-  やり直す)。git の command は cwd の `HEAD` ではなく branch の ref を基準にし、作業ツリーを読む検査は worktree で
+  直す。累積差分に `diff --check`、repo の gate、壊れた参照の検査を当て、累積差分と `base` 以降の各 commit の差分と全
+  commit の message と PR の題名・本文を public-safety の gate に通してから push と PR (`base` から直線の履歴であることを
+  先に確かめ、merge commit があれば止める。review の修正で commit を足したら、追加の push の前にやり直す)。git の command は cwd の `HEAD` ではなく branch の ref を基準にし、作業ツリーを読む検査は worktree で
   走らせる。check-injection の exit 3 は、`base` の結果と比べて branch にだけある finding の行 (行番号を含む) が
   無ければ続行する。
 - review は `personal-review-request` に委ね (fix の明示が write authorization)、must は範囲内だけ直し、範囲外は
