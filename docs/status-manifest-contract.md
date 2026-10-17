@@ -78,8 +78,9 @@ dotfiles 側の実装は含めません。
 - `generated.total`: 生成済み artifact の数。
 - `generated.stale`: source より古い artifact の数。
 - `register.*`: [catalog](register-catalog.md) の summary。target-artifact 単位の
-  `registered` / `human_review_required` / `unsupported` のカウント。catalog 不在時や
-  `catalog_version` 不一致時は `catalog_present: false` と zero counts。
+  `registered` / `human_review_required` / `unsupported` のカウント。catalog 不在時、
+  `catalog_version` 不一致時、読めない時 (壊れた JSON、形の不正、entry の必須項目の欠けや不正) は
+  `catalog_present: false` と zero counts。
 - `sync_targets[].tool`: `codex` / `claude-code` / `opencode` (`ArtifactTargets::TOOLS`)。opencode の
   行は plugin (`plugins/personal-<name>.js`) を指す。
 - `sync_targets[].state`: 後述の target state。
