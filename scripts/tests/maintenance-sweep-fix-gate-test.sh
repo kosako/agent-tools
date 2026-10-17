@@ -99,6 +99,11 @@ else
       errors << "公開前の gate の入力が「#{what}」(#{needle}) を含まない" unless input.include?(needle)
     end
     errors << "gate の block が cwd の HEAD を基準にしている (main の checkout から走らせると累積差分が空になる。#419)" if block =~ /\bHEAD\b/
+    # 範囲が直線の履歴であることを gate の前に確かめる (#522)。
+    merge_check = 'git rev-list --merges "$base".."$branch"'
+    unless input.include?(merge_check) && input.index(merge_check) < input.index("git diff")
+      errors << "公開前の gate の前に、範囲の merge commit を確かめていない (#{merge_check})"
+    end
     # PR の作成は cwd の今の branch に頼らない (main の checkout から続けても fix の branch の PR にする。#419 F4)。
     errors << "FIX.md の PR の作成が --head \"$branch\" を明示していない" unless fix.include?(%q{gh pr create --head "$branch"})
     # review の preflight は cwd の local HEAD を PR の head と照合するので、worktree で走らせる (#419 F5)。
@@ -184,6 +189,31 @@ make_fix() {
   for mf_msg in "$@"; do
     git -C "$repo" commit -q --allow-empty -m 'docs: review (sweep #1)' -m "$mf_msg"
   done
+}
+
+# base の上に、merge commit を含む fix の branch を作る (#522)。$1 が空でなければ、1 つ目の merge の解決でだけ
+# doc.md にその行を足し、2 つ目の merge の解決で消す (累積差分にも merge でない commit の差分にも残らない)。
+make_merge_fix() {
+  git -C "$repo" checkout -q -B side-1 "$base"
+  printf 'side one\n' > "$repo/side1.md"
+  git -C "$repo" add side1.md
+  git -C "$repo" commit -q -m 'docs: side one'
+  git -C "$repo" checkout -q -B side-2 "$base"
+  printf 'side two\n' > "$repo/side2.md"
+  git -C "$repo" add side2.md
+  git -C "$repo" commit -q -m 'docs: side two'
+  git -C "$repo" checkout -q -B sweep/fix-1 "$base"
+  printf 'clean line\n' >> "$repo/doc.md"
+  git -C "$repo" commit -q -a -m 'docs: fix (sweep #1)' -m 'clean message'
+  git -C "$repo" merge -q --no-ff --no-commit side-1 > /dev/null 2>&1
+  [ -z "$1" ] || printf '%s\n' "$1" >> "$repo/doc.md"
+  git -C "$repo" commit -q -a -m 'docs: merge side one (sweep #1)'
+  if [ -n "$1" ]; then
+    git -C "$repo" merge -q --no-ff --no-commit side-2 > /dev/null 2>&1
+    grep -v -F -x -- "$1" "$repo/doc.md" > "$tmp/doc.md.new"
+    mv "$tmp/doc.md.new" "$repo/doc.md"
+    git -C "$repo" commit -q -a -m 'docs: merge side two (sweep #1)'
+  fi
 }
 
 # 切り出した command を $shell_argv で走らせ、exit code を rc に、出力を $tmp/out に入れる。
@@ -273,6 +303,20 @@ for shell in sh zsh; do
   run_block "$base" "$title_clean" "$tmp/body-warn.md"
   [ "$rc" -eq 3 ] || fail "[$shell] gate の警告で exit 3 にならない (rc=$rc): $(cat "$tmp/out")"
   grep -q '^public-safety-gate: warning:' "$tmp/out" || fail "[$shell] 警告で止まったのに gate の出力を出していない: $(cat "$tmp/out")"
+
+  # (l) 範囲に merge commit があれば、値が無くても gate に通さずに exit 2 で止まり、理由を出す (#522)。
+  make_merge_fix ''
+  run_block "$base" "$title_clean" "$tmp/body-clean.md"
+  [ "$rc" -eq 2 ] || fail "[$shell] merge commit を含む範囲で exit 2 にならない (rc=$rc): $(cat "$tmp/out")"
+  grep -q '公開する範囲に merge commit がある' "$tmp/out" || fail "[$shell] merge commit で止めた理由を出していない: $(cat "$tmp/out")"
+
+  # (m) merge の解決でだけ足して後の merge の解決で消した値の場面も、merge commit として止まる (#522)。
+  make_merge_fix "line $marker"
+  if git -C "$repo" diff "$base" sweep/fix-1 | grep -q -F -- "$marker"; then
+    fail "[$shell] (m) の前提が崩れた: 累積差分に値がある"
+  fi
+  run_block "$base" "$title_clean" "$tmp/body-clean.md"
+  [ "$rc" -eq 2 ] || fail "[$shell] merge の解決にだけある値の場面で止まらない (rc=$rc): $(cat "$tmp/out")"
 done
 [ "$ran" -gt 0 ] || fail "gate の command を走らせる shell (sh / zsh) が無い"
 
