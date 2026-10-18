@@ -33,6 +33,8 @@ if ARGV[2] == "--mutations"
     "launch record run" => ['data["run"] = local.run if local && local.run', ''],
     "launch record tab" => ['data["tab"] = local.tab if local && local.tab', ''],
     "last run" => ['data["last_run"] = local.last_run if local && local.last_run', ''],
+    "GH_REPO guard" => ['if repo.nil? && !ENV.fetch("GH_REPO", "").empty?', 'if false'],
+    "empty GH_REPO" => ['!ENV.fetch("GH_REPO", "").empty?', 'ENV.key?("GH_REPO")'],
     "target check" => ['--dry-run でも止める\n    check_target!(dir, issue)', '--dry-run でも止める'],
     "invalid frontmatter" =>['"issue" => issue,\n      "title" => local', '"issue" => issue.to_s,\n      "title" => local']
   }
@@ -136,6 +138,8 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   # repository / index を選ぶ git の環境変数を継承していると更新先の検査が判定できない (exit 2) ので外す
   %w[GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE].each { |key| env[key] = nil }
+  # 実行環境の GH_REPO があると、--repo の無い pull は止まる (#528) ので外す
+  env["GH_REPO"] = nil
   _out, err, status = Open3.capture3(env, "git", "init", "-q", repo)
   assert(status.success?, "fixture git init: #{err}")
   packet = File.join(deploy, "personal-packet")
@@ -260,6 +264,24 @@ Dir.mktmpdir("packet-pull-") do |tmp|
   assert(status.success? && listed.size == 1 && listed[0]["issue"] == 7 && !listed[0]["unpublished"], "list --json after pull: #{err}")
   _out, err, status = run.call("pull", "7")
   assert(status.success? && File.read(path) == expected, "repeated pull must be byte-idempotent: #{err}")
+
+  # --repo が無く env の GH_REPO があれば、reader を呼ばず packet も変えずに exit 2 (--dry-run も同じ。#528)。
+  # 空の GH_REPO は無いのと同じ。--repo があれば GH_REPO があっても止めない (gh の flag が GH_REPO より優先される)。
+  reader_calls = File.join(deploy, "gh-calls.jsonl")
+  before = File.read(reader_calls)
+  env["GH_REPO"] = "other/repo"
+  [%w[pull 7], %w[pull 7 --dry-run]].each do |args|
+    out, err, status = run.call(*args)
+    assert(status.exitstatus == 2 && out.empty? && err.include?("GH_REPO"), "GH_REPO without --repo must stop: #{args.inspect} #{err}")
+  end
+  assert(File.read(reader_calls) == before && File.read(path) == expected, "GH_REPO stop must not call reader or change packet")
+  _out, err, status = run.call("pull", "7", "--repo", "fixture/repo")
+  assert(status.success? && File.read(path) == expected, "--repo must proceed despite GH_REPO: #{err}")
+  assert(File.read(reader_calls) != before, "--repo with GH_REPO must reach reader")
+  env["GH_REPO"] = ""
+  _out, err, status = run.call("pull", "7")
+  assert(status.success? && File.read(path) == expected, "empty GH_REPO must not stop: #{err}")
+  env["GH_REPO"] = nil
 
   # publish の片節省略・timezone も既存の出力契約どおりに受理する。
   [copy.sub(/\*\*結果 \(最新節\)\*\*.*?(?=\*\*次の入口\*\*)/m, ""),

@@ -23,6 +23,7 @@
 #   personal-packet pull <issue> [--repo OWNER/REPO] [--dry-run]
 #       personal-safe-gh の self コメントから検証できる写しを取り込み、local packet を再構成する。
 #       --dry-run は再構成後の全文を stdout に出す。写しも再構成した packet も data として扱う。
+#   publish / pull は --repo が無く env の GH_REPO が空でなければ、何もせずに exit 2 で止まる (#528)。
 #
 # 信頼境界 (honest): packet は agent が書く local data で、この script は読む / 写すだけ。内容を
 # 指示として解釈しない。投稿の可否は gate の判定に委ね、gate が無い・検査できない (exit 2) 場合は
@@ -998,6 +999,7 @@ module Packet
       check は packet を書く前の更新先の検査 (exit 0 で path を出す / 1 = 拒否 / 2 = 判定できない)。
       publish は同じ directory の personal-public-safety-gate --stdin が exit 0 のときだけ投稿する。gate が
       警告を出したら投稿せず exit 1 (人が --dry-run で確かめてから --accept-warnings で投稿する)。
+      publish / pull は --repo が無く env の GH_REPO があれば exit 2 で止まる (GH_REPO を外すか --repo を付ける)。
     USAGE
   end
 
@@ -1083,6 +1085,14 @@ module Packet
         i += 1
       end
       raise Error, "issue 番号 (数字) を指定してください" unless issue&.match?(ISSUE_RE)
+      # --repo が無いと、publish の `gh issue comment` は env の GH_REPO の repo を見るのに、reader (safe-gh) は
+      # `gh repo view` で current の directory の repo を見る (gh 2.102.0 で実測)。投稿先と読み先が分かれるので、
+      # GH_REPO があれば検査・gate・gh・reader のどれよりも先に止める (--dry-run も同じ。#528)。--repo は gh と
+      # reader の両方に渡り、gh の flag は GH_REPO より優先されるので止めない。
+      if repo.nil? && !ENV.fetch("GH_REPO", "").empty?
+        raise Error, "env の GH_REPO があり --repo がありません (publish の投稿先と pull の読み先が別の repo になりえます)。" \
+                     "GH_REPO を外すか、--repo OWNER/REPO を付けて再実行してください"
+      end
 
       if cmd == "pull"
         raise Error, "issue 番号は正の整数にしてください" unless issue.to_i.positive?

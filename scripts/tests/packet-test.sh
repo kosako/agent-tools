@@ -34,6 +34,8 @@ git config --file "$GIT_CONFIG_GLOBAL" core.excludesFile /dev/null
 git config --file "$GIT_CONFIG_GLOBAL" protocol.file.allow always
 # repository / index を選ぶ git の環境変数を継承していると check は判定できない (exit 2) ので外す
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
+# 実行環境の GH_REPO があると、--repo の無い publish は止まる (#528) ので外す
+unset GH_REPO
 
 gh_token=$(printf 'ghp'; printf '_'; printf 'aaaaaaaaaabbbbbbbbbbccccccccccdddddd')
 
@@ -635,6 +637,27 @@ grep -q "NEXT-ENTRY-LINE" "$repo/.agent-packets/7.md" || fail "body must be unto
 # 2 回目は published 行を置き換える (重複しない)
 (cd "$repo" && with_gh "$pkt" publish 7 >/dev/null)
 [ "$(grep -c '^published:' "$repo/.agent-packets/7.md")" -eq 1 ] || fail "published line should be replaced, not duplicated"
+
+# ---- publish: --repo が無く env の GH_REPO があれば、gh を呼ばず packet も変えずに exit 2 (#528) --------
+# --dry-run も同じ (本文も出さない)。空の GH_REPO は無いのと同じ。--repo があれば GH_REPO があっても投稿する。
+cp "$repo/.agent-packets/7.md" "$tmp/7.ghrepo"
+calls=$(gh_calls)
+for dry in "" --dry-run; do
+  set +e
+  out=$(cd "$repo" && GH_REPO=other/repo with_gh "$pkt" publish 7 ${dry:+"$dry"} 2>"$tmp/ghrepo.err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "GH_REPO without --repo should be exit 2 (dry='$dry' rc=$rc)"
+  [ -z "$out" ] || fail "GH_REPO stop must not print the body (dry='$dry')"
+  grep -q "GH_REPO" "$tmp/ghrepo.err" || fail "GH_REPO stop should say why: $(cat "$tmp/ghrepo.err")"
+done
+[ "$(gh_calls)" -eq "$calls" ] || fail "GH_REPO stop must not call gh"
+cmp -s "$tmp/7.ghrepo" "$repo/.agent-packets/7.md" || fail "GH_REPO stop must not change the packet"
+out=$(cd "$repo" && GH_REPO= with_gh "$pkt" publish 7 --dry-run) || fail "empty GH_REPO must not stop"
+echo "$out" | grep -q "^<!-- agent-packet issue=7 published=" || fail "empty GH_REPO dry-run should print the body"
+(cd "$repo" && GH_REPO=other/repo with_gh "$pkt" publish 7 --repo owner/repo >/dev/null) || fail "--repo should proceed despite GH_REPO"
+[ "$(gh_calls)" -eq $((calls + 1)) ] || fail "--repo with GH_REPO should call gh once"
+tail -n 1 "$gh_log" | grep -q "^issue comment 7 --repo owner/repo --body-file " || fail "--repo should reach gh despite GH_REPO: $(tail -n 1 "$gh_log")"
 
 # ---- publish: published を更新できない表現 (引用 key / 重複) は投稿前に exit 2 (R293-02) --------
 calls=$(gh_calls)

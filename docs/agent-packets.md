@@ -256,7 +256,7 @@ worker 委譲時の `pull` は orchestrator が main repository 側で行い、�
   に落ちる packet dir / file は更新しない (exit 2。`--dry-run` でも止める)。
 
 self-test は `scripts/tests/packet-pull-test.sh`。`--mutations` を付けると author / marker /
-envelope (number / source / repo) / reader への `--repo` 伝達 / merge / 分岐の検出 (#412) / 起動の記録 (`run` / `tab`) と `last_run` の保持 / H2 / frontmatter / 更新先の検査を壊した source に同じ assertions を当て、退行を検出できるか確かめる。
+envelope (number / source / repo) / reader への `--repo` 伝達 / `--repo` が無いときの `GH_REPO` の検査 (#528) / merge / 分岐の検出 (#412) / 起動の記録 (`run` / `tab`) と `last_run` の保持 / H2 / frontmatter / 更新先の検査を壊した source に同じ assertions を当て、退行を検出できるか確かめる。
 
 ## tooling(`personal-packet`)
 
@@ -269,11 +269,16 @@ file で行い、command 文字列へ inline 展開しない。
 | `dir` | packet dir を出す (main worktree root に固定。linked worktree からでも同じ) | 0 / 2 (git 外) |
 | `list [--json] [--all]` | frontmatter を読んで一覧。既定は open / blocked / review だけ、`--all` で done も。`updated > published` (または未 publish) を `unpublished` で示す。起動の記録があれば `run` / `tab` と `run_status` を出す (text は `[run: <status>]`)。`--json` には `last_run` も出す。`check` が拒む packet (symlink / regular file でない / git で tracked) は中身を読まずに飛ばし、path と理由だけを warning に出す (#412。packet dir が symlink、または tracked かを判定できないときは 1 件も出さない) | 0 / 1 (壊れた packet か、読まなかった packet がある。warning を出し、健全な行は出す) / 2 |
 | `check <issue>` | packet を書く前の更新先の検査 (置き場の「symlink / tracked の packet は誰も更新しない」)。通れば packet の path (main worktree の root の実体から組んだもの) を 1 行出す。packet が無い (これから作る) ときも、dir と index を見て通れば出す (file も dir も作らない) | 0 / 1 (拒否。理由を stderr に出す) / 2 (判定できない: git の外・git の失敗・repository / index を選ぶ環境変数の継承・usage) |
-| `publish <issue> [--repo OWNER/REPO] [--dry-run] [--accept-warnings]` | `結果` の最新節 + `次の入口` を marker 付きで合成 → 同じ directory の `personal-public-safety-gate --stdin` に通す → **exit 0 で警告が無いとき** (警告があれば、人が確かめて `--accept-warnings` を付けたときだけ) `gh issue comment` で投稿 → frontmatter の `published` を更新 | 0 / 1 (gate が止めた、または警告を出した。#413) / 2 (検査できない・gate 不在・gh 不在 / 失敗・入力エラー・更新先の検査に落ちた) |
-| `pull <issue> [--repo OWNER/REPO] [--dry-run]` | self コメントの有効な写しを取り込んで packet を再構成。`--dry-run` は全文を stdout に出す | 0 / 1 (採用できる写しなし) / 2 (reader / 入力 / 保存エラー・更新先の検査に落ちた) |
+| `publish <issue> [--repo OWNER/REPO] [--dry-run] [--accept-warnings]` | `結果` の最新節 + `次の入口` を marker 付きで合成 → 同じ directory の `personal-public-safety-gate --stdin` に通す → **exit 0 で警告が無いとき** (警告があれば、人が確かめて `--accept-warnings` を付けたときだけ) `gh issue comment` で投稿 → frontmatter の `published` を更新 | 0 / 1 (gate が止めた、または警告を出した。#413) / 2 (検査できない・gate 不在・gh 不在 / 失敗・入力エラー・更新先の検査に落ちた・`--repo` が無く `GH_REPO` がある) |
+| `pull <issue> [--repo OWNER/REPO] [--dry-run]` | self コメントの有効な写しを取り込んで packet を再構成。`--dry-run` は全文を stdout に出す | 0 / 1 (採用できる写しなし) / 2 (reader / 入力 / 保存エラー・更新先の検査に落ちた・`--repo` が無く `GH_REPO` がある) |
 
 - publish / pull は読む前に `check` と同じ検査を通し、落ちたら読みも投稿も書き込みもせず exit 2 で止まる
   (`--dry-run` でも同じ)。
+- publish / pull は `--repo` が無く env の `GH_REPO` が空でなければ、更新先の検査・gate・gh・reader のどれよりも先に
+  exit 2 で止まる (`--dry-run` でも同じ。#528)。`--repo` が無いと、publish の `gh issue comment` は `GH_REPO` の
+  repo に投稿し、reader (`personal-safe-gh`) は `gh repo view` で current の directory の repo を読む (gh 2.102.0 で
+  実測) ので、投稿先と読み先が分かれるため。`GH_REPO` を外すか、`--repo OWNER/REPO` を付けて再実行する
+  (`--repo` は gh と reader の両方に渡り、gh の flag は `GH_REPO` より優先される)。
 - publish の `--dry-run` は検査までして本文を stdout に出す (投稿も `published` 更新もしない)。
 - publish は投稿の前に、合成した写しを pull と同じ読み方で読み直し、読めない形なら投稿せずに exit 2 で
   止まる (`--dry-run` でも同じ。#428)。
