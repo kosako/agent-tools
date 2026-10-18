@@ -257,6 +257,8 @@ exit "$rc"
   移動は `cd -P` で行う。
 - `2>&1 | tee` で stdout / stderr を `codex.log` に残す (limit の文言はここで拾う)。exit code は
   `pipestatus[1]` (zsh) で codex のものを取る。
+- `codex exec` を `personal-safe-run` で包まない (運用 instruction の「test と長時間の command」の例外。待つ側の
+  上限と止め方は `SKILL.md` §5 の「待ち方」。#512)。worker が clone の中で走らせる test の上限は brief が持つ。
 
 ### 起動の記録 (§5 の前)
 

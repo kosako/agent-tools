@@ -262,6 +262,11 @@ command は **この skill の directory にある `LAUNCH.md` を読んで、�
   file で行う。どの経路でも続行条件は「`done.txt` の nonce 一致と `exit=0`」かつ「`result.md` が
   存在し空でない」の両方。`exit=` が 0 以外、または待っても `done.txt` が現れない (wait は合計
   3 回まで) なら `Blocked at: executor-exit`。
+- **上限**: `codex exec` は `personal-safe-run` で包まない (運用 instruction の「test と長時間の command」の例外。
+  review は read-only で test を走らせない。#512)。止める責任は caller が持つ: herdr 経由で wait が尽きたとき、
+  直接起動で caller の command が `done.txt` を残さずに戻ったとき (tool の時間の上限で打ち切られた・background に
+  移された等) は、process を自分で探して止めず (pane があれば閉じず)、run dir を添えて `Blocked at: executor-exit` で
+  返す。止めるかは人が決める (手順は `LAUNCH.md`)。
 - **空振り**: `result.md` が欠落または空なら、新しい nonce で同じ brief を **1 回だけ** 再実行し、
   2 回目も空なら `Blocked at: executor-result`。pane 出力や token count の表示から結果を捏造しない。
 - **pane の後始末**: 続行条件を満たしたときだけ、pane の生出力を `<run dir>/pane.log` に保存し、

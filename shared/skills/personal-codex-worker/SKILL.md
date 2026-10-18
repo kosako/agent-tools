@@ -213,7 +213,12 @@ brief は file に書き、stdin (`-`) で渡します。shell 引数に埋め�
   は使わず、clone の `.git` の config も変えない (どれも §2 の `.git` の snapshot の照合の allowlist の外を書き、回収の前に止まる。
   #493)。commit message に自分を示す trailer
   `Co-Authored-By: Codex <no-reply 形の email>` を付ける (commit-msg の gate が要求する)。
-  test は sandbox の中で実行してよい (network は無い)。script asset (`shared/scripts/`) を変えたら、
+  test は sandbox の中で実行してよい (network は無い)。test runner・build など長く動く command は、配備済みの
+  `personal-safe-run` (`~/.codex/agent-tools/scripts/personal-safe-run`) 経由で memory と時間の上限を付けて走らせる
+  (例: `--max-footprint-mb 4096 --max-seconds 600 -- <command>`。上限は作業に合わせる。運用 instruction の「test と
+  長時間の command」。safe-run は worker の sandbox の中でも動く。#510、#512)。safe-run が command を起動できない
+  (exit 2 で report を書かない) ときは上限なしで走らせない。そのときと、上限で止まった (exit 137、report の
+  `reason` が `time` / `footprint`) ときは、最終 message の `未完` にそう書く。script asset (`shared/scripts/`) を変えたら、
   最終版から asset の `approved_build_id` を計算し直し、`scripts/tests/register-test.sh` まで回して
   通ることを確かめる (build_id は script の中身に紐づくので、編集のたびに計算し直す。#324 の round 2)。
 - 一時 file の置き場: test や集計の一時 file (`personal-safe-run` の `--report` を含む) は、`mktemp -d` で
@@ -269,6 +274,9 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   「消滅」に倒さず待ち続ける)。process が消えたと確認できて `done.txt` が無ければ
   `Blocked at: executor-exit`。hard cap は 120 分 (暫定) で、達したら kill せず pane を残し
   `Status: RUNNING` で人に返す (run script を再実行させない。人は pane を見て続行か中断かを決める)。
+  この hard cap は待つ側の上限で、`codex exec` 自体は safe-run で包まない (運用 instruction の「test と長時間の
+  command」の例外。上限で止めると途中の成果と clone の状態の回収が食い違う。#512)。worker の中の test は §4 の
+  brief のとおり safe-run 経由。
 - **limit**: `codex.log` に `You've hit your usage limit` (前方一致) があれば `Blocked at: limit`。
   自動で再起動しない (limit の reset を待つ。残量の扱いは `personal-project-operating-loop` の「割当」)。
 - **空振り**: `done.txt` が `exit=0` なのに `result.md` が欠落 / 空なら、新しい nonce で同じ brief を
