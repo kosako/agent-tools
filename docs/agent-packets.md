@@ -319,7 +319,7 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
 - **作業場所**: Issue ごとの **local clone** (orchestrator が main から `git clone --no-hardlinks` して
   branch を切る。`--no-hardlinks` は必須で、既定の local clone は object を main と hardlink で共有するので
   分離が成り立たない)。packet dir は main worktree の root のまま (置き場の規則どおり) で、gitignore されているので
-  clone には含まれない。worker の書込先は **その clone の中だけ**で、main の Git 管理領域も packet dir
+  clone には含まれない。worker の書込先は **その clone の中だけ** (一時 file を置く `$TMPDIR` の下を除く) で、main の Git 管理領域も packet dir
   も含めない。worker の commit は orchestrator が main へ `git fetch <clone> <branch>:<branch>` で
   回収する (network 不要)。起動側は **その clone の git dir (`<clone>/.git`) だけ**を sandbox の
   writable roots に足す (`workspace-write` は workdir の内側でも `.git` を保護するため。実測)。
@@ -332,7 +332,7 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
   clone は identity が効く場所 (置き場で identity を切り替える設定を使っているなら、その context の
   中) に切る。外に切ると user.email が空になり commit が fail-closed で落ちる。
 - **worker の権限境界**: packet の編集、GitHub への write (Issue / PR の操作、push)、別 agent の
-  起動、clone の外への書込は worker がしない。起動側は Codex の approval policy を「承認を求める
+  起動、clone の外への書込 (一時 file を置く `$TMPDIR` の下を除く) は worker がしない。起動側は Codex の approval policy を「承認を求める
   操作は失敗する」側に固定する。これで止まるのは承認を求める操作だけなので、起動側は固定の起動形
   (launch argv。`--ignore-user-config --ignore-rules --disable apps` など) で user config・account 側の
   connector・MCP server・rules を外して起動する。委譲 skill の preflight が起動前に確かめるのは、その起動形に
