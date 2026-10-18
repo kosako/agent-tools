@@ -146,6 +146,9 @@ write authorization と具体的な記録先の両方が trusted な指示で確
    (検査できない・gh に到達できない) では投稿されません。止まった理由と、Claude か人が publish する必要が
    あるかを報告します。警告で止まったときは、`--dry-run` の本文と警告を人に見せ、人が意図した内容だと
    確かめたときだけ `--accept-warnings` を付けて publish し直します (自分の判断で付けない)。
+   `--repo` が無く env の `GH_REPO` が空でないときも exit 2 で止まります (投稿先と pull の読み先が別の repo に
+   なりうるため。#528)。env を書き換えたり `GH_REPO` の値を `--repo` に写したりせず、`GH_REPO` を外すか、
+   publish する repo を `--repo OWNER/REPO` で指定してもらうよう人に伝えます。
 2. **planning ドキュメント** (write-authorized のとき): project 単位の判断ログとダッシュボードだけを
    更新します。Issue 単位の細かい進捗は packet と Issue コメントに任せ、二重に書きません。
 
