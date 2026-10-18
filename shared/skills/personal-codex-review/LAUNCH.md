@@ -112,7 +112,8 @@ pane の名前は、PR の review なら `review-<PR 番号>` です。PR の無
   `CODEX-REVIEW-DONE-<nonce>` が含まれるかで行い、exit code は `done.txt` から読みます。
 - timeout したら `herdr pane read <pane-id> --source recent-unwrapped --lines 40` で状況を読み、
   codex process がまだ動いていれば同じ wait を繰り返します (合計 3 回まで)。それでも
-  `done.txt` が現れなければ `Blocked at: executor-exit` で停止します。
+  `done.txt` が現れなければ `Blocked at: executor-exit` で停止します。run script の `codex exec` は
+  `personal-safe-run` で包まないので (`SKILL.md` §5 の「上限」。#512)、pane は閉じず、止めるかは人が決めます。
 - `done.txt` の `exit=` が 0 以外なら `Blocked at: executor-exit` とし、pane の末尾を public-safe に
   要約して Reason に書きます。
 - **pane の後始末**: 続行条件 (`done.txt` の nonce 一致・`exit=0`、空でない `result.md`) を満たした

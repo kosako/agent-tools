@@ -6,6 +6,8 @@
 # - 一時 file の置き場の bullet が、置き場 ($TMPDIR の下、--report を含む)・作業ツリーと .git に置かないこと・
 #   TMPDIR を向け直さないことを、それぞれ句として書いている (語の有無だけでは、規則を反転した文も通るため)
 # - 禁止事項の bullet の「clone の外への書込」に一時 file の置き場の例外がある (無いと 2 つの bullet が食い違う)
+# - commit 規則の bullet が、test・build を safe-run 経由で上限を付けて走らせ、safe-run が起動できないときは上限なしで
+#   走らせないことを、それぞれ句として書いている (#512。運用 instruction の「test と長時間の command」を worker に届ける)
 # 句は空白を除いて比べ (行の折り返しの位置に依らない)、句の直後が区切り (。、( か末尾) であることも求める (否定は
 # 句の後ろに付くので、「置くな」のような反転を部分一致で通さない)。brief の節の外にだけ句があっても worker には届かないので、
 # child-brief-boundary-test と同じく節の一覧に絞って見る。
@@ -56,6 +58,11 @@ CLAUSES = {
   "TMPDIR を向け直さない" => "`TMPDIR` を clone の中へ向け直さない",
 }.freeze
 EXCEPTION = "clone の外への書込 (下の一時 file の置き場を除く)"
+LIMITS = {
+  "safe-run 経由" => "test runner・build など長く動く command は、配備済みの `personal-safe-run` " \
+                    "(`~/.codex/agent-tools/scripts/personal-safe-run`) 経由で memory と時間の上限を付けて走らせる",
+  "起動できないときは走らせない" => "safe-run が command を起動できない (exit 2 で report を書かない) ときは上限なしで走らせない",
+}.freeze
 
 errors = []
 tmp = find(bullets, "一時 file の置き場")
@@ -70,6 +77,13 @@ if ban.nil?
   errors << "brief の一覧に「禁止事項:」の bullet が無い"
 elsif !clause?(ban, EXCEPTION)
   errors << "禁止事項の「clone の外への書込」に一時 file の置き場の例外が無い"
+end
+commit = find(bullets, "commit 規則")
+if commit.nil?
+  errors << "brief の一覧に「commit 規則:」の bullet が無い"
+else
+  missing = LIMITS.reject { |_, clause| clause?(commit, clause) }.keys
+  errors << "commit 規則の bullet に test の上限の句 #{missing.inspect} が無い" unless missing.empty?
 end
 
 abort "FAIL: codex-worker-brief\n  " + errors.join("\n  ") unless errors.empty?
