@@ -42,8 +42,12 @@ draft から write-authorized へ移るには、投稿対象とコメント内�
 - PR 番号: 必須。省略されたら聞き返す。
 - レビュアー: **相互レビュー契約に従って routing preflight が決める** (下記)。人が reviewer を上書きする
   引数や PR の label は無い (#415。上書きを求められても使わず、preflight の結果で進める)。
-- リポジトリ: 省略時は gh が解決する現在の directory の repository (env の `GH_REPO` で指定されていれば
-  それ。`gh repo set-default` の設定も効くので、origin とは限らない)。確実にするなら `--repo` を付ける。
+- リポジトリ: 省略時は gh が解決する現在の directory の repository (`gh repo set-default` の設定も効くので、
+  origin とは限らない)。確実にするなら `--repo` を付ける。**`--repo` が無く env の `GH_REPO` が空でなければ
+  開始しない** (手順 1 の「開始の前提」)。`GH_REPO` があると、手順 1 の command ごとに向く repo が分かれるため:
+  safe-gh は `gh repo view` で current の directory の repo を解決して `GH_REPO` を見ず、routing preflight
+  (`gh api` の `{owner}/{repo}`) と `gh pr` の command は `GH_REPO` の repo を見る (gh 2.102.0 で実測。#511)。
+  `--repo` を付ければ全 command に同じ値を渡し、gh の flag は `GH_REPO` より優先されるので、`GH_REPO` に依らない。
 
 ## レビュアーの決定（相互レビュー）
 
@@ -116,11 +120,18 @@ write-authorized へ移るまで diff を取得せず、GitHub write や手順 3
 read-only は手順 1 の read と手順 3 の review を write-authorized と同じく行い、手順 2・4・5 の投稿だけを
 省きます (#416)。
 
+**開始の前提 (`GH_REPO`)**: `--repo` が無いときは、どの command よりも先に env の `GH_REPO` が空であることを
+確かめます (`[ -z "${GH_REPO-}" ]`)。空でなければ command を組み立てずに停止し、`GH_REPO` を外して起動し直すか、
+`--repo owner/repo` を付けて依頼し直すよう伝えます (理由は上の「引数」。maintenance-sweep の手順 0 と同じ扱い)。
+自分で `GH_REPO` を外したり、`GH_REPO` の値を `--repo` に写したりして続けません (どの repo の PR を review するかは
+依頼者が決める)。draft と read-only でも同じです。
+
 情報収集では、最初に safe-gh で author trust と安全な metadata を確認し、そのあとで review target の
 identity (OID 2 つと base ref 名)、routing preflight、最後に必要な diff の順で読みます。OID は形が
 閉じていますが、**base ref 名は作者が決める自由値**なので untrusted として扱います (下記「値の受け渡し」
-と、Claude route の preflight 参照)。省略時に gh が解決する repository (上の「引数」) 以外を見る
-ときは、safe-gh には `-R`、preflight / `gh` にはそれぞれの `--repo` を付けます。
+と、Claude route の preflight 参照)。`--repo` を受けたとき (省略時に gh が解決する repository 以外を見る
+とき) は、safe-gh には `-R`、preflight / `gh` にはそれぞれの `--repo` で、すべての command に同じ値を付けます
+(1 つでも省くと、その command だけが `GH_REPO` か current の directory の repo を見うる)。
 
 #### 値の受け渡し (PR 番号 / repo slug / 一時ファイル path)
 
@@ -151,7 +162,8 @@ metacharacter を含みえます)。
 ```sh
 # 0. 検証を通した値だけを shell literal として変数へ入れる (上記「値の受け渡し」)。
 #    角括弧は省略可を示す記法で、実行時には角括弧ごと除く。repo を省く (gh が解決する
-#    repository を使う。上の「引数」) ときは -R / --repo ごと付けない。
+#    repository を使う。上の「引数」) ときは -R / --repo ごと付けない。省けるのは「開始の前提」で
+#    GH_REPO が空であることを確かめた後だけ。
 pr=<PR 番号の shell literal>        # \A\d+\z を確認済み
 repo=<owner/repo の shell literal>  # \A[\w.-]+/[\w.-]+\z を確認済み
 

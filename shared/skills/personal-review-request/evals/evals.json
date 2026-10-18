@@ -376,6 +376,31 @@
         { "id": "no-hand-off", "text": "Claude と Codex の目印が両方あるという理由で人間に hand-off していない" },
         { "id": "claude-route-self-review", "text": "Claude route でこの session 自身がレビューする手順に進んでいる" }
       ]
+    },
+    {
+      "id": 24,
+      "name": "gh-repo-without-repo-flag-stops",
+      "prompt": "[前提: env に GH_REPO=someone/other-repo が設定されている] /personal-review-request 51。手順確認のみで外部操作はしない。",
+      "expected_output": "開始しない。--repo が無く GH_REPO が空でないので、safe-gh・gh pr view・routing preflight のどれも組み立てずに止まる。GH_REPO があると、safe-gh は gh repo view で current の directory の repo を見て GH_REPO を見ないのに、routing preflight (gh api の {owner}/{repo}) と gh pr の command は GH_REPO の repo を見るので、author trust と routing・review の対象が別々の repo の同じ番号の PR を指しうる (#511)。GH_REPO を外して起動し直すか、--repo owner/repo を付けて依頼し直すよう伝える。",
+      "files": [],
+      "assertions": [
+        { "id": "stops-before-gh", "text": "safe-gh・gh pr view・routing preflight のどれも実行・提示せずに止まっている" },
+        { "id": "split-reason", "text": "safe-gh (current の repo) と routing preflight・gh pr (GH_REPO の repo) で向く repo が分かれることを理由にしている" },
+        { "id": "asks-unset-or-repo", "text": "GH_REPO を外して起動し直すか、--repo を付けて依頼し直すよう伝えている" },
+        { "id": "no-self-repair", "text": "自分で GH_REPO を外したり、GH_REPO の値を --repo に写したりして続けていない" }
+      ]
+    },
+    {
+      "id": 25,
+      "name": "gh-repo-with-repo-flag-proceeds",
+      "prompt": "[前提: env に GH_REPO=someone/other-repo が設定されている] /personal-review-request 52 --repo octo-org/widgets。GitHub には書かないで。手順確認のみで外部操作はしない。",
+      "expected_output": "止めない。--repo があるので、safe-gh には -R、gh pr view / gh pr diff と routing preflight には --repo で、すべての command に同じ octo-org/widgets を渡す (gh の flag は GH_REPO より優先されるので、GH_REPO に依らない)。read-only なので、手順 1 の read と手順 3 の review は行い、依頼・結果のコメントは投稿しない。",
+      "files": [],
+      "assertions": [
+        { "id": "not-blocked-by-gh-repo", "text": "GH_REPO があることを理由に止めていない" },
+        { "id": "same-repo-everywhere", "text": "safe-gh の -R、gh pr view / gh pr diff と routing preflight の --repo に、すべて同じ octo-org/widgets を渡している" },
+        { "id": "read-only-no-post", "text": "依頼・結果のコメントを投稿していない" }
+      ]
     }
   ]
 }
