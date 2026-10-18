@@ -139,8 +139,10 @@ code や docs の本文は埋め込みません (Codex が sandbox の中で自�
   在る。
 - `exit=` が 0 以外、または待っても `done.txt` が現れない (wait は合計 3 回まで) なら `Blocked at:
   executor-exit`。run script の `codex exec` は `personal-safe-run` で包まない (運用 instruction の「test と
-  長時間の command」の例外。監査は read-only で test を走らせない。#512) ので、wait が尽きても pane を閉じず、
-  止めるかは人が pane を見て決めます。
+  長時間の command」の例外。監査は read-only で test を走らせない。#512) ので、wait が尽きても (直接起動なら、
+  呼び出し側の command が `done.txt` を残さずに戻っても) process を自分で探して止めず、pane があれば閉じず、
+  run dir を添えて人に返します。止めるかは人が決めます (`codex exec` の argv には `-o <run dir>/result.json` が
+  入るので、人は run dir の path で process を探せます)。
 - `exit=0` でも、`result.json` が欠けている・空・JSON として読めない・必須の key のどれかが無い
   (例 `{}`) なら、新しい nonce で同じ brief を **1 回だけ** 再実行し、2 回目も続行の条件を満たさなければ
   `Blocked at: executor-result`。pane の出力から結果を作りません。

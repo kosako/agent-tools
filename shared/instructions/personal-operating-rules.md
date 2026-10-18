@@ -61,9 +61,9 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
   Codex は `~/.codex/` の下の同じ path)。子 process の暴走で machine 全体を止めないため。safe-run が使えない
   環境 (macOS 以外など。exit 2 で起動しない) では、上限を付けられる同等の手段を使う。
 - 例外: Codex の executor (委譲した worker・review・監査) を起動する `codex exec` 自体は safe-run で包まない
-  (上限で止めると途中の成果を失い、各 skill の回収の手順と食い違うため)。止める責任は起動した側が持つ: pane で
-  見て、各 skill の待つ上限に達したら人に返し、止めるかは人が決める。executor の中で走らせる test は上のとおり
-  safe-run 経由にする (worker の brief が指示する)。
+  (上限で止めると途中の成果を失い、各 skill の回収の手順と食い違うため)。止める責任は起動した側が持つ: 各 skill の
+  待つ上限に達したら、process を止めずに人に返し (pane があれば残す)、止めるかは人が決める。executor の中で走らせる
+  test は上のとおり safe-run 経由にする (worker の brief が指示する)。
 - 終わったら、自分が起動した process が残っていないことを確かめ、残っていれば止める (safe-run の外で起動した
   ものも同じ)。
 

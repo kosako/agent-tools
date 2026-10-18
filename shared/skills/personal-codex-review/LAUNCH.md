@@ -130,6 +130,13 @@ pane の名前は、PR の review なら `review-<PR 番号>` です。PR の無
 detach / background にせず、複合コマンドの末尾にも埋め込みません。判定は `done.txt` と
 `result.md` で行い、herdr 経路と同じです。
 
+pane が無いので、caller の command の実行そのものが待ちになります。その command が `done.txt` を残さずに
+戻ったとき (caller の tool の時間の上限で打ち切られた・background に移された等) は、herdr 経路の wait が
+尽きたときと同じく `Blocked at: executor-exit` で返します (`SKILL.md` §5 の「上限」。#512)。codex の process は
+残っているかもしれませんが、自分で探して止めず、Next step に run dir と、process が残りうることを書きます
+(run script の `codex exec` の argv には `-o <run dir>/result.md` が入るので、人は run dir の path で process を
+探せます)。止めるかは人が決めます。後から `done.txt` が現れたら、同じ続行条件で判定します。
+
 ### 人手 hand-off (BLOCKED からの続行)
 
 `launch-path` で停止したときは、Next step に `zsh <run script path の shell literal>` と run dir の
