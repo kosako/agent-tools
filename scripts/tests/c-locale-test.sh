@@ -90,7 +90,7 @@ for sh_entry in "$scripts"/*.sh; do
   grep -q -x 'require_relative "cli"' "$scripts/lib/$lib" && continue
   assert_pinned "$(basename "$sh_entry") (lib/$lib)" "$scripts/lib/$lib"
 done
-# exec の行の形が変わって 1 本も拾えなくなったら、この検査は何も見ていない。
+# exec の行の形が変わって拾える entrypoint が減ると、この検査は一部しか見なくなる (今は 12 本を拾う)。
 [ "$entries" -ge 10 ] || fail "found only $entries ruby entrypoint(s) under scripts/; the exec line pattern no longer matches"
 
 # 以降は配布する script を C locale で日本語を含む入力に当てる。git の hook や agent の hook は、LANG の無い
