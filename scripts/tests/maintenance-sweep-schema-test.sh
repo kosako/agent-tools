@@ -35,16 +35,32 @@ errors << "REFUTE.md の判定の規則に #{missing.inspect} の定義が無い
 
 # 単位をまたぐと所見の ID (報告の中だけの通し番号) が重なるので、反証に渡す前に単位の番号を付けて
 # 振り直し、取り込みでは ID と fingerprint の組で当てる (#425)。どちらかの規則が落ちると、別の単位の
-# 判定が所見に当たりうる。
-{
-  "ID の振り直し" => "所見の ID を単位の番号を前に付けた `U<n>-<元の ID>` に振り直します",
-  "ID と fingerprint の組" => "判定は ID と fingerprint の組で入力の所見に当てる",
-  "fingerprint の不一致" => "fingerprint が入力の所見と違う判定は\n  当てず、その所見は uncertain として扱う",
-}.each do |label, phrase|
-  errors << "REFUTE.md に#{label}の規則 (#{phrase.inspect}) が無い" unless refute.include?(phrase)
+# 判定が所見に当たりうる。句は文末の「。」まで含めて、所定の節の中にあることを見る (後ろに否定を足す・
+# 節の外へ移すと落ちる)。改行と空白は除いて比べる。
+squash = ->(s) { s.gsub(/\s+/, "") }
+section = lambda do |title|
+  body = refute[/^## #{Regexp.escape(title)}\n(.*?)(?=^## |\z)/m, 1]
+  body && squash.call(body)
 end
-unless verdict.dig("id", "description").to_s.include?("U<n>-<元の ID>")
-  errors << "verdicts の id の description が振り直した ID の形 (U<n>-<元の ID>) を書いていない"
+[
+  ["反証に渡す所見の ID", "ID の振り直し",
+   "反証に渡す前に、所見の ID を単位の番号を前に付けた `U<n>-<元の ID>` に振り直します (例: 単位 3 の `F01` は `U3-F01`)。"],
+  ["結果の取り込み", "ID と fingerprint の組", "判定は ID と fingerprint の組で入力の所見に当てる。"],
+  ["結果の取り込み", "fingerprint の不一致",
+   "ID が入力にあっても fingerprint が入力の所見と違う判定は当てず、その所見は uncertain として扱う。"],
+  ["結果の取り込み", "同じ ID の重複",
+   "同じ ID に判定が 2 つ以上返ったときも、どれも当てずに uncertain にする (どちらも報告に書く)。"],
+].each do |title, label, phrase|
+  body = section.call(title)
+  if body.nil?
+    errors << "REFUTE.md に「#{title}」の節が無い"
+  elsif !body.include?(squash.call(phrase))
+    errors << "REFUTE.md の「#{title}」の節に#{label}の規則 (#{phrase.inspect}) が無い"
+  end
+end
+expected_id = "入力の所見の ID (単位の番号を付けた U<n>-<元の ID>。例: U3-F01)"
+unless verdict.dig("id", "description") == expected_id
+  errors << "verdicts の id の description が #{expected_id.inspect} でない (振り直した ID の形)"
 end
 
 confidence = SchemaShape.table_values(format, "確度")
