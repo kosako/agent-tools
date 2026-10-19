@@ -32,6 +32,11 @@
 # 返る。run 内で起きた例外は捕捉して 2 に正規化し、backtrace は出さず原因を 1 行 warn する
 # (#274。Ruby 既定の例外終了は exit 1 で、gate の finding による block と区別がつかない)。
 
+# C locale (LC_ALL=C や LANG の未設定) でも、読む text (stdin・file・git や gh の出力) を UTF-8 として扱う (#432)。
+# 既定の external encoding が US-ASCII のままだと、日本語を含む値への正規表現や連結が例外で落ちる。
+# scripts/lib/cli.rb (#418) と同じ固定。ENV と ARGV の encoding は変わらない。
+Encoding.default_external = Encoding::UTF_8 unless Encoding.default_external == Encoding::UTF_8
+
 module GitHookDispatcher
   # stage ごとの gate を配列順に実行し、最初に fail した gate の exit code で止まる。各 entry は
   # [gate 名, git の引数より前に渡す固定の引数]。

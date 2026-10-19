@@ -19,8 +19,10 @@ module Cli
   # 外部 encoding を UTF-8 に固定する (#418)。LANG / LC_ALL が未設定か C の環境では
   # Encoding.default_external が US-ASCII になり、encoding を指定しない File.read の結果
   # (日本語を含む source・generated・marker) への正規表現や scrub が例外で落ちる。source と
-  # generated は UTF-8 の text なので、locale ではなくこの前提に合わせる。全 entrypoint が
-  # この file を require し、file を読むのはその後なので、ここで 1 回だけ設定する。
+  # generated は UTF-8 の text なので、locale ではなくこの前提に合わせる。この共通 CLI を使う
+  # entrypoint はこの file を require し、file を読むのはその後なので、ここで 1 回だけ設定する。
+  # この file を require しない entrypoint (probe・judge) と配布する script は、同じ行を各自で持つ
+  # (#432。c-locale-test が検査する)。
   Encoding.default_external = Encoding::UTF_8 unless Encoding.default_external == Encoding::UTF_8
 
   # --root 省略時の repo root。この file (scripts/lib/cli.rb) の 2 つ上。__dir__ は realpath
