@@ -34,6 +34,10 @@ require "tmpdir"
 require "time"
 require_relative "check_skill_routing"
 
+# C locale (LC_ALL=C や LANG の未設定) でも、読む text (file・command の出力) を UTF-8 として扱う (#432)。
+# この entrypoint は cli.rb (#418 の固定) を require しないので、同じ固定を各自で持つ。
+Encoding.default_external = Encoding::UTF_8 unless Encoding.default_external == Encoding::UTF_8
+
 module ProbeSkillRouting
   class Error < StandardError; end
 

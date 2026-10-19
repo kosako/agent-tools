@@ -51,6 +51,11 @@
 # などでは `#` 行も残る) で変わり、CLI の `--cleanup` は hook から確かめられないため (過検出の側に倒す)。
 # exit 契約は同じ。
 
+# C locale (LC_ALL=C や LANG の未設定) でも、読む text (stdin・file・git や gh の出力) を UTF-8 として扱う (#432)。
+# 既定の external encoding が US-ASCII のままだと、日本語を含む値への正規表現や連結が例外で落ちる。
+# scripts/lib/cli.rb (#418) と同じ固定。ENV と ARGV の encoding は変わらない。
+Encoding.default_external = Encoding::UTF_8 unless Encoding.default_external == Encoding::UTF_8
+
 module PublicSafetyGate
   VERSION = "1"
 

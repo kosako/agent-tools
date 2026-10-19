@@ -15,7 +15,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:981717bb820b93ad9260dca390ffaaf7f7f98e1da07a77d69b3cfb8c8bc073a7
+  approved_build_id: sha256:1fb383104fe2a08044f5e80bb5637b379fcb3c0b5f4549a528038694df355590
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-ai-trailer-gate.rb
