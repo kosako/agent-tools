@@ -238,7 +238,7 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/maintenance-sweep/<owner>/<rep
     state.json                run の状態 (下)
     units/<n>/result.json     単位ごとの監査結果 (repo-audit の findings.schema.json の形)
     units/<n>/codex-run       Codex に起動させたときの run dir の path (1 行)
-    refutation.json           反証の結果 (refutation.schema.json の形)
+    refutation.json           反証の結果 (refutation.schema.json の形。所見の ID は U<n>-<元の ID>。REFUTE.md)
 ```
 
 directory は作った時点で mode 700 にします (残量の数字と、public にしない所見を含むため)。

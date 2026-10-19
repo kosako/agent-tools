@@ -667,6 +667,27 @@
           "text": "GH_REPO を外して起動し直すよう伝えている (GH_REPO の repo に起票先を合わせたり、自分で env を書き換えて続けたりしていない)"
         }
       ]
+    },
+    {
+      "id": 35,
+      "name": "refute-ids-across-units",
+      "prompt": "[前提: 監査役は Claude、検証役は Codex。単位 1 と単位 3 の監査結果が、どちらも所見 F01 と F02 を持つ (fingerprint は 4 件とも違う)。Codex の判定は単位 3 の F01 の分が返らなかった] 反証から起票まで進めて",
+      "expected_output": "findings.json を作るときに、所見の ID を U1-F01・U1-F02・U3-F01・U3-F02 に振り直してから Codex に渡す (単位の result.json は書き換えない)。取り込みでは ID と fingerprint の組で判定を当て、返らなかった U3-F01 は uncertain として起票せず報告に残す。当てた判定は U<n> で単位に戻す。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "renames-with-unit",
+          "text": "反証に渡す所見の ID を、単位の番号を付けた U<n>-<元の ID> に振り直している (F01 のまま 2 件を渡していない)"
+        },
+        {
+          "id": "matches-id-and-fingerprint",
+          "text": "判定を ID と fingerprint の組で当て、fingerprint の合わない判定を当てていない"
+        },
+        {
+          "id": "missing-verdict-uncertain",
+          "text": "判定の返らなかった U3-F01 を uncertain として扱い、単位 1 の F01 の判定を流用していない"
+        }
+      ]
     }
   ]
 }

@@ -3,6 +3,7 @@
 # - 形と strict な structured output の前提 (lib/schema_shape.rb)。
 # - 判定の値が REFUTE.md の 3 つ (confirmed / refuted / uncertain) で、確度の値が repo-audit の
 #   REPORT-FORMAT.md の表と一致する (確度の正本は REPORT-FORMAT.md)。
+# - REFUTE.md が、反証に渡す所見の ID を単位の番号で振り直し、判定を ID と fingerprint の組で当てる (#425)。
 # 引数で sweep と repo-audit の skill の directory を差し替えられる (変異での確認用)。
 set -eu
 
@@ -31,6 +32,20 @@ unless verdict.dig("verdict", "enum") == expected_verdicts
 end
 missing = expected_verdicts.reject { |v| refute.include?("**#{v}**") }
 errors << "REFUTE.md の判定の規則に #{missing.inspect} の定義が無い" unless missing.empty?
+
+# 単位をまたぐと所見の ID (報告の中だけの通し番号) が重なるので、反証に渡す前に単位の番号を付けて
+# 振り直し、取り込みでは ID と fingerprint の組で当てる (#425)。どちらかの規則が落ちると、別の単位の
+# 判定が所見に当たりうる。
+{
+  "ID の振り直し" => "所見の ID を単位の番号を前に付けた `U<n>-<元の ID>` に振り直します",
+  "ID と fingerprint の組" => "判定は ID と fingerprint の組で入力の所見に当てる",
+  "fingerprint の不一致" => "fingerprint が入力の所見と違う判定は\n  当てず、その所見は uncertain として扱う",
+}.each do |label, phrase|
+  errors << "REFUTE.md に#{label}の規則 (#{phrase.inspect}) が無い" unless refute.include?(phrase)
+end
+unless verdict.dig("id", "description").to_s.include?("U<n>-<元の ID>")
+  errors << "verdicts の id の description が振り直した ID の形 (U<n>-<元の ID>) を書いていない"
+end
 
 confidence = SchemaShape.table_values(format, "確度")
 if confidence.nil?

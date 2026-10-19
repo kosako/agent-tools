@@ -13,7 +13,7 @@
         "additionalProperties": false,
         "required": ["id", "fingerprint", "verdict", "confidence", "evidence", "note"],
         "properties": {
-          "id": { "type": "string", "description": "入力の所見の ID" },
+          "id": { "type": "string", "description": "入力の所見の ID (単位の番号を付けた U<n>-<元の ID>。例: U3-F01)" },
           "fingerprint": { "type": "string", "description": "入力の所見の fingerprint (そのまま写す)" },
           "verdict": {
             "type": "string",
