@@ -37,6 +37,7 @@ require "json"
 # 既定の external encoding が US-ASCII のままだと、日本語を含む値への正規表現や連結が例外で落ちる。
 # scripts/lib/cli.rb (#418) と同じ固定。ENV と ARGV の encoding は変わらない。
 Encoding.default_external = Encoding::UTF_8 unless Encoding.default_external == Encoding::UTF_8
+Encoding.default_external = Encoding::US_ASCII # TEMP: #432 の CI での変異の確認。次の commit で戻す
 
 module SafeGhHook
   # 出力契約が変わったら上げる safe reader 系の version。
