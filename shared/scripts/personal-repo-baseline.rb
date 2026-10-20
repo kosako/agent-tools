@@ -1,9 +1,9 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# repo-baseline: GitHub の repo の設定を、あるべき姿 (baseline) と比べてずれを出す (#539)。読むだけで、GitHub
-# に書かない (直す `--apply` は #539 の続きの PR)。運用 (最初に `--all` で全 repo を 1 回見て、その後は sweep が
-# 今の repo だけを見る) は docs/repo-baseline.md。
+# repo-baseline: GitHub の repo の設定を、あるべき姿 (baseline) と比べてずれを出し、`--apply` のときだけ直す (#539)。
+# 既定 (`--check`) は読むだけで、GitHub に書かない。運用 (最初に `--all` で全 repo を 1 回見て、その後は sweep が
+# 今の repo だけを見る。直すのは人が承認したときだけ) は docs/repo-baseline.md。
 #
 # 対象:
 # - 引数なし: 今の directory の repo (`gh repo view` が返すもの。env の GH_REPO は外して解決する)。
@@ -24,14 +24,25 @@
 # ときだけ使い、HOME も絶対 path でなければ場所を決めずに止める (personal-usage-reader と同じ)。理由文に設定の
 # 中身と path は出さない。
 #
-# GitHub は REST API の GET だけで読む (`gh api`。shell を通さない)。env の GH_REPO は gh に渡さない。
+# GitHub は REST API で読み書きする (`gh api`。shell を通さない)。env の GH_REPO は gh に渡さない。`--check` は GET
+# だけ。
+#
+# `--apply`: 確かめてずれていた項目のうち、API で直せるものだけを直し、直した後に読み直してずれが消えたことを
+# 確かめる。ずれの無い repo には書かない (何度実行しても同じ結果)。直すもの:
+# - Dependabot alerts (dependency graph も有効になる) → security updates の順に PUT。
+# - merge の方式と merge の後に branch を消す設定 → repo を PATCH (4 つの field をまとめて)。
+# - public の secret scanning と push protection → repo の security_and_analysis を PATCH。
+# - public の default branch の ruleset → この script が持つ名前 (RULESET_NAME) の ruleset だけを作るか更新する
+#   (PR の必須 (approve 0)・force push と削除の禁止・設定 file の必須の check。bypass は無し)。他の ruleset は
+#   触らない (他の ruleset が厳しくしているずれは、直した後も残るので「確かめられないか直せない」になる)。
+# `.github/dependabot.yml` は書かない (repo ごとの PR で足す)。API で変えられない項目は「画面で確かめる」のまま。
 #
 # exit:
-# - 0: 確かめた repo にずれが無い (対象外だけのときを含む)。
-# - 1: ずれが有る。
+# - 0: 確かめた repo にずれが無い (対象外だけのときを含む。`--apply` では、直してずれが無くなったときを含む)。
+# - 1: ずれが有る (`--apply` では、script が直さない項目 (dependabot.yml) のずれが残る)。
 # - 2: usage / 設定 file が不正 / 今の repo や repo の一覧を解決できない / 確かめられない repo が有る (gh の失敗・
-#   想定外の status・応答の field の欠落や null や型違い。ずれ無しや off に倒さない)。`--all` で一部の repo を確かめ
-#   られないときも、残りの repo は確かめて出す。
+#   想定外の status・応答の field の欠落や null や型違い。ずれ無しや off に倒さない) / `--apply` で直せない (書き込みの
+#   失敗、直した後もずれが残る)。`--all` で一部の repo を確かめられないときも、残りの repo は確かめて出す。
 # 結果は stdout、usage と設定 file の不正は stderr に 1 行。
 
 require "erb"
@@ -98,7 +109,18 @@ module RepoBaseline
   MANUAL_NOTE = "画面で確かめる (API で読めない): Malware alerts、Grouped security updates"
   UNAVAILABLE_NOTE = "private では確かめない (今のプランで使えない): default branch の ruleset、Secret scanning"
   # --all の集計の行で数える結果の status。
-  SUMMARY_STATUSES = { ok: "ずれ無し", drift: "ずれ有り", error: "確かめられない" }.freeze
+  SUMMARY_STATUSES = { ok: "ずれ無し", fixed: "直した", drift: "ずれ有り", error: "確かめられない" }.freeze
+  # --apply が作って更新する ruleset の名前。この名前の ruleset だけを持ち主として扱い、他の ruleset は触らない。
+  RULESET_NAME = "personal-repo-baseline"
+  # merge の設定の field のあるべき値 (--apply が PATCH する)。
+  MERGE_SETTINGS = {
+    "allow_squash_merge" => true,
+    "allow_merge_commit" => false,
+    "allow_rebase_merge" => false,
+    "delete_branch_on_merge" => true,
+  }.freeze
+  SECRET_SCANNING_ITEMS = %w[secret_scanning secret_scanning_push_protection].freeze
+  RULESET_ITEMS = %w[ruleset_pull_request ruleset_non_fast_forward ruleset_deletion ruleset_required_checks].freeze
   CONFIG_KEYS = %w[exclude required_checks].freeze
   REPO_RE = %r{\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z}.freeze
   LIST_PATH = "user/repos?affiliation=owner&per_page=100"
@@ -108,8 +130,15 @@ module RepoBaseline
   # repo を確かめられないことを表す (その repo の結果は「確かめられない」、全体の exit は 2)。
   class Error < StandardError; end
 
-  # 1 repo の結果。status は :ok / :drift / :skipped / :error。findings は [項目, 今, あるべき] の配列。
-  Result = Struct.new(:name, :visibility, :status, :findings, :reason)
+  # 1 repo の結果。status は :ok / :fixed / :drift / :skipped / :error。findings は [項目, 今, あるべき] の配列
+  # (--apply では直した後に残ったずれ)。fixed は --apply が直した項目。
+  Result = Struct.new(:name, :visibility, :status, :findings, :reason, :fixed)
+
+  # 引数の解釈の結果。mode は :check / :apply、target は :current / :all / OWNER/REPO。
+  Options = Struct.new(:mode, :target)
+
+  # --apply の 1 回の書き込み。items はこの書き込みで直す baseline の項目。
+  Action = Struct.new(:items, :method, :path, :body, :label)
 
   # 設定 file の JSON の object。同じ key が重なったら、後の値で前の値を消さずに不正にする (JSON.parse は既定で後の
   # 値を残すので、object_class で受ける)。
@@ -140,16 +169,18 @@ module RepoBaseline
   module_function
 
   def usage
-    "usage: personal-repo-baseline [--help] [--check] [--repo OWNER/REPO | --all]"
+    "usage: personal-repo-baseline [--help] [--check | --apply] [--repo OWNER/REPO | --all]"
   end
 
   def help
     <<~TEXT
       #{usage}
-      GitHub の repo の設定を baseline と比べてずれを出す (読むだけ。GitHub に書かない)。
+      GitHub の repo の設定を baseline と比べてずれを出す。--check (既定) は読むだけで GitHub に書かない。
+      --apply はずれのうち API で直せるものだけを直し、直した後に読み直して確かめる (dependabot.yml は書かない)。
       対象: 引数なし = 今の directory の repo / --repo = その repo / --all = 自分が owner の repo
       (fork・archive 済み・設定 file で除外した repo を除く)。
-      exit 0 = ずれ無し / 1 = ずれ有り / 2 = usage・設定 file が不正・確かめられない repo が有る。
+      exit 0 = ずれ無し (--apply で直し終えたときを含む) / 1 = ずれ有り / 2 = usage・設定 file が不正・
+      確かめられないか直せない repo が有る。
       設定 file (任意): ${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/repo-baseline.json
       (key は exclude と required_checks。docs/repo-baseline.md)。
     TEXT
@@ -163,13 +194,16 @@ module RepoBaseline
   end
 
   def parse_args(args)
+    mode = nil
     target = nil
     rest = args.dup
     until rest.empty?
       arg = rest.shift
       case arg
-      when "--check"
-        next
+      when "--check", "--apply"
+        raise ArgumentError, usage unless mode.nil?
+
+        mode = arg == "--apply" ? :apply : :check
       when "--all"
         raise ArgumentError, usage unless target.nil?
 
@@ -185,7 +219,7 @@ module RepoBaseline
         raise ArgumentError, usage
       end
     end
-    target || :current
+    Options.new(mode || :check, target || :current)
   end
 
   # ---- 設定 file ----
@@ -257,11 +291,19 @@ module RepoBaseline
 
   # ---- gh ----
 
-  def gh(args)
-    out, _err, status = Open3.capture3(GH_ENV, "gh", *args)
+  def gh(args, stdin: "")
+    out, _err, status = Open3.capture3(GH_ENV, "gh", *args, stdin_data: stdin)
     [out, status]
   rescue SystemCallError
     raise Error, "gh を起動できません"
+  end
+
+  # --apply の書き込み。body は JSON にして stdin から渡す (`--input -`。command 行に値を埋め込まない)。
+  def gh_write(action)
+    args = ["api", "-X", action.method, action.path]
+    args += ["--input", "-"] if action.body
+    _out, status = gh(args, stdin: action.body ? JSON.generate(action.body) : "")
+    raise Error, "直せません: #{action.label} (gh api が失敗)" unless status.success?
   end
 
   def gh_json(path, label)
@@ -461,18 +503,130 @@ module RepoBaseline
     end
   end
 
+  # ---- 直す (--apply) ----
+
+  # --apply が作る / 更新する ruleset (default branch に、PR の必須 (approve 0)・force push と削除の禁止・設定 file の
+  # 必須の check)。bypass は持たない。
+  def desired_ruleset(required_checks)
+    rules = [
+      {
+        "type" => "pull_request",
+        "parameters" => {
+          "dismiss_stale_reviews_on_push" => false,
+          "require_code_owner_review" => false,
+          "require_last_push_approval" => false,
+          "required_approving_review_count" => 0,
+          "required_review_thread_resolution" => false,
+        },
+      },
+      { "type" => "non_fast_forward" },
+      { "type" => "deletion" },
+    ]
+    unless required_checks.empty?
+      rules << {
+        "type" => "required_status_checks",
+        "parameters" => {
+          "strict_required_status_checks_policy" => false,
+          "required_status_checks" => required_checks.map { |c| { "context" => c } },
+        },
+      }
+    end
+    {
+      "name" => RULESET_NAME,
+      "target" => "branch",
+      "enforcement" => "active",
+      "bypass_actors" => [],
+      "conditions" => { "ref_name" => { "include" => ["~DEFAULT_BRANCH"], "exclude" => [] } },
+      "rules" => rules,
+    }
+  end
+
+  # この script が持つ ruleset (RULESET_NAME) の id。無ければ nil。同じ名前が複数あれば持ち主を決められないので止める。
+  def managed_ruleset_id(name)
+    rulesets = gh_list("repos/#{name}/rulesets?includes_parents=false&per_page=100", "ruleset の一覧 (rulesets)")
+    unless rulesets.all? { |r| r.is_a?(Hash) && r["name"].is_a?(String) }
+      raise Error, "ruleset の一覧 (rulesets) を読めません (応答の形が想定外)"
+    end
+
+    owned = rulesets.select { |r| r["name"] == RULESET_NAME }
+    raise Error, "#{RULESET_NAME} という名前の ruleset が複数あります" if owned.size > 1
+    return nil if owned.empty?
+
+    id = owned.first["id"]
+    raise Error, "ruleset の id を読めません (応答の形が想定外)" unless id.is_a?(Integer) && id.positive?
+
+    id
+  end
+
+  # ずれの項目から、直す書き込みを依存の順 (alerts → security updates) に組む (純粋)。直せない項目
+  # (dependabot_yml) には書き込みを作らない。
+  def fix_actions(name, items, required_checks, ruleset_id)
+    actions = []
+    if items.include?("dependabot_alerts")
+      actions << Action.new(%w[dependabot_alerts], "PUT", "repos/#{name}/vulnerability-alerts", nil, "Dependabot alerts")
+    end
+    if items.include?("dependabot_security_updates")
+      actions << Action.new(%w[dependabot_security_updates], "PUT", "repos/#{name}/automated-security-fixes", nil,
+                            "Dependabot security updates")
+    end
+    merge = items & %w[merge_methods delete_branch_on_merge]
+    actions << Action.new(merge, "PATCH", "repos/#{name}", MERGE_SETTINGS, "merge の設定") unless merge.empty?
+    secret = items & SECRET_SCANNING_ITEMS
+    unless secret.empty?
+      body = { "security_and_analysis" => SECRET_SCANNING_ITEMS.map { |key| [key, { "status" => "enabled" }] }.to_h }
+      actions << Action.new(secret, "PATCH", "repos/#{name}", body, "Secret scanning")
+    end
+    rules = items & RULESET_ITEMS
+    unless rules.empty?
+      method, path = ruleset_id ? ["PUT", "repos/#{name}/rulesets/#{ruleset_id}"] : ["POST", "repos/#{name}/rulesets"]
+      actions << Action.new(rules, method, path, desired_ruleset(required_checks), "default branch の ruleset")
+    end
+    actions
+  end
+
+  # ずれのうち API で直せるものを直し、読み直して確かめる。書き込みが失敗したら、それまでに直したものを添えて止める。
+  # 直したはずの項目のずれが残れば (他の ruleset が厳しくしているなど) 止める。
+  def apply_fixes(name, visibility, findings, required_checks)
+    items = findings.map(&:first)
+    ruleset_id = (items & RULESET_ITEMS).empty? ? nil : managed_ruleset_id(name)
+    actions = fix_actions(name, items, required_checks, ruleset_id)
+    return Result.new(name, visibility, :drift, findings, nil, []) if actions.empty?
+
+    done = []
+    actions.each do |action|
+      begin
+        gh_write(action)
+      rescue Error => e
+        raise Error, done.empty? ? e.message : "#{e.message}。直したもの: #{done.map(&:label).join('、')}"
+      end
+      done << action
+    end
+    fixed = actions.flat_map(&:items)
+    remaining = evaluate(visibility, collect_facts(name, read_repo(name), visibility), required_checks)
+    left = remaining.map(&:first) & fixed
+    raise Error, "直した後もずれが残っています: #{left.map { |item| LABELS.fetch(item) }.join('、')}" unless left.empty?
+
+    Result.new(name, visibility, remaining.empty? ? :fixed : :drift, remaining, nil, fixed)
+  end
+
   # ---- 1 repo を確かめる ----
 
   def skipped(name, reason)
-    Result.new(name, nil, :skipped, [], reason)
+    Result.new(name, nil, :skipped, [], reason, [])
   end
 
-  def check_repo(name, config)
-    return skipped(name, "設定 file で除外") if config.excluded?(name)
-
+  def read_repo(name)
     repo = hash!(gh_json("repos/#{name}", "repo"), "repo")
     raise Error, "repo を読めません (応答の形が想定外)" unless valid_repo?(repo["full_name"])
 
+    repo
+  end
+
+  # 1 repo を確かめる。mode が :apply なら、ずれのうち直せるものを直して確かめ直す。
+  def check_repo(name, config, mode = :check)
+    return skipped(name, "設定 file で除外") if config.excluded?(name)
+
+    repo = read_repo(name)
     name = repo["full_name"]
     return skipped(name, "設定 file で除外") if config.excluded?(name)
     return skipped(name, "fork") if boolean!(repo["fork"], "fork の field")
@@ -483,18 +637,22 @@ module RepoBaseline
     visibility = repo["visibility"]
     raise Error, "baseline の無い visibility です" unless BASELINE.key?(visibility)
 
-    findings = evaluate(visibility, collect_facts(name, repo, visibility), config.required_checks_for(name))
-    Result.new(name, visibility, findings.empty? ? :ok : :drift, findings, nil)
+    required_checks = config.required_checks_for(name)
+    findings = evaluate(visibility, collect_facts(name, repo, visibility), required_checks)
+    return Result.new(name, visibility, :ok, [], nil, []) if findings.empty?
+    return apply_fixes(name, visibility, findings, required_checks) if mode == :apply
+
+    Result.new(name, visibility, :drift, findings, nil, [])
   rescue Error => e
-    Result.new(name, nil, :error, [], e.message)
+    Result.new(name, nil, :error, [], e.message, [])
   rescue TypeError, NoMethodError => e
     # 上の検査が見落とした応答の型違い。その repo だけ「確かめられない」にして、--all の残りを続ける。
-    Result.new(name, nil, :error, [], "応答の形が想定外です (#{e.class})")
+    Result.new(name, nil, :error, [], "応答の形が想定外です (#{e.class})", [])
   end
 
   # 全 repo。fork・archive 済み・設定 file で除外した repo は一覧の段で外す (一覧の field が欠けていれば
   # check_repo が改めて読んで確かめる)。対象外は、一覧の段と check_repo の段の両方を理由ごとに数える。
-  def check_all(config)
+  def check_all(config, mode = :check)
     counts = { "fork" => 0, "archive 済み" => 0, "設定 file で除外" => 0 }
     targets = []
     owned_repos.each do |repo|
@@ -509,39 +667,58 @@ module RepoBaseline
         targets << name
       end
     end
-    results = targets.sort_by(&:downcase).map { |name| check_repo(name, config) }
+    results = targets.sort_by(&:downcase).map { |name| check_repo(name, config, mode) }
     results.select { |r| r.status == :skipped }.each { |r| counts[r.reason] = counts.fetch(r.reason, 0) + 1 }
     [results, counts]
   end
 
-  def summary_line(results, counts)
+  # 失敗の呼び方。--apply では、読めなかったのか直せなかったのかを 1 つの語でまとめる。
+  def error_label(mode)
+    mode == :apply ? "確かめられないか直せない" : "確かめられない"
+  end
+
+  def summary_line(results, counts, mode)
     targets = results.reject { |r| r.status == :skipped }
-    detail = SUMMARY_STATUSES.map { |status, label| "#{label} #{targets.count { |r| r.status == status }}" }.join("・")
+    statuses = SUMMARY_STATUSES.reject { |status, _| status == :fixed && mode != :apply }
+    detail = statuses.map do |status, label|
+      label = error_label(mode) if status == :error
+      "#{label} #{targets.count { |r| r.status == status }}"
+    end.join("・")
     skipped = counts.map { |reason, n| "#{reason} #{n} 件" }.join("・")
     "対象の repo: #{targets.size} 件 (#{detail}) / 対象外: #{skipped}"
   end
 
   # ---- 出す ----
 
-  def render(results, counts)
+  def finding_line(item, actual, expected)
+    "  - #{LABELS.fetch(item)}: 今 #{describe(item, actual)} / あるべき #{describe_expected(item, expected)}"
+  end
+
+  def render(results, counts, mode = :check)
     lines = []
     results.each do |r|
       case r.status
       when :ok
         lines << "#{r.name} (#{r.visibility}): ずれ無し"
+      when :fixed
+        lines << "#{r.name} (#{r.visibility}): 直した #{r.fixed.size} 件 (ずれ無し)"
+        r.fixed.each { |item| lines << "  - 直した: #{LABELS.fetch(item)}" }
       when :drift
-        lines << "#{r.name} (#{r.visibility}): ずれ #{r.findings.size} 件"
-        r.findings.each do |item, actual, expected|
-          lines << "  - #{LABELS.fetch(item)}: 今 #{describe(item, actual)} / あるべき #{describe_expected(item, expected)}"
+        if r.fixed.empty?
+          lines << "#{r.name} (#{r.visibility}): ずれ #{r.findings.size} 件"
+        else
+          lines << "#{r.name} (#{r.visibility}): 直した #{r.fixed.size} 件 / 残りのずれ #{r.findings.size} 件"
+          r.fixed.each { |item| lines << "  - 直した: #{LABELS.fetch(item)}" }
         end
+        r.findings.each { |item, actual, expected| lines << finding_line(item, actual, expected) }
       when :skipped
         lines << "#{r.name}: 対象外 (#{r.reason})"
       else
-        lines << "#{r.name}: 確かめられない (#{r.reason})"
+        lines << "#{r.name}: #{error_label(mode)} (#{r.reason})"
       end
     end
-    lines << summary_line(results, counts) if counts
-    checked = results.select { |r| %i[ok drift].include?(r.status) }
+    lines << summary_line(results, counts, mode) if counts
+    checked = results.select { |r| %i[ok fixed drift].include?(r.status) }
     lines << UNAVAILABLE_NOTE if checked.any? { |r| r.visibility == "private" }
     lines << MANUAL_NOTE unless checked.empty?
     lines.map { |line| "#{line}\n" }.join
@@ -559,15 +736,15 @@ module RepoBaseline
       $stdout.write(help)
       return EXIT_OK
     end
-    target = parse_args(args)
+    options = parse_args(args)
     config = load_config
     results, counts =
-      case target
-      when :all then check_all(config)
-      when :current then [[check_repo(current_repo, config)], nil]
-      else [[check_repo(target, config)], nil]
+      case options.target
+      when :all then check_all(config, options.mode)
+      when :current then [[check_repo(current_repo, config, options.mode)], nil]
+      else [[check_repo(options.target, config, options.mode)], nil]
       end
-    $stdout.write(render(results, counts))
+    $stdout.write(render(results, counts, options.mode))
     exit_code(results)
   rescue ArgumentError, Error => e
     warn "personal-repo-baseline: #{e.message}"

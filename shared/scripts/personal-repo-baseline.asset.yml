@@ -9,19 +9,23 @@ risk:
   prompt_injection: low
   privacy: low
 # script kind は実行コード配布のため常に human review 必須 (#147)。
-# 本 script は #539 の 1 番目の PR (baseline と --check) で author≠reviewer レビューのうえ承認する。
+# 本 script は #539 の 1 番目の PR (baseline と --check、#540) で author≠reviewer レビューのうえ承認し、2 番目の PR
+# (--apply) で再レビューする。
 # 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:69035435cffca970a4a1dede9663096ef346b3cd136c92b75dbecc31b46b519d
+  approved_build_id: sha256:03a5d51d1f1ab3b24996b80150ff95d37a200621ed1831d759654b4fb040d458
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-repo-baseline.rb
   format: text
 summary: >-
-  GitHub の repo の設定を、visibility ごとのあるべき姿 (baseline) と比べてずれを出す (#539)。読むだけ (gh api の
-  GET だけ。env の GH_REPO は gh に渡さない) で、GitHub に書かない。対象は今の directory の repo、--repo OWNER/REPO、
+  GitHub の repo の設定を、visibility ごとのあるべき姿 (baseline) と比べてずれを出す (#539)。既定 (--check) は読むだけ
+  (gh api の GET だけ。env の GH_REPO は gh に渡さない)。--apply はずれのうち API で直せるもの (Dependabot alerts と
+  security updates、merge の設定、public の secret scanning、public の default branch の ruleset。ruleset は
+  personal-repo-baseline という名前のものだけを作るか更新し、bypass は無し) を直し、読み直して確かめる
+  (dependabot.yml は書かない。ずれの無い repo には書かない)。対象は今の directory の repo、--repo OWNER/REPO、
   または --all (自分が owner の repo。fork・archive 済み・設定 file で除外した repo を除く)。fork・archive 済み・
   admin 権限の無い repo は対象外。baseline は Dependabot alerts と security updates、merge は squash だけ・merge の
   後に branch を消す、.github/dependabot.yml の有無、public だけ secret scanning と push protection と default
@@ -29,4 +33,5 @@ summary: >-
   Malware alerts と grouped security updates は「画面で確かめる」と出す。手元の設定 file
   (${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/repo-baseline.json、任意) は exclude と required_checks だけ。
   応答の field の欠落・null・型違いはその repo を確かめられないにし、--all は残りの repo を続ける。
-  exit 0 = ずれ無し / 1 = ずれ有り / 2 = usage・設定 file が不正・確かめられない repo が有る (docs/repo-baseline.md)。
+  exit 0 = ずれ無し (直し終えたときを含む) / 1 = ずれ有り / 2 = usage・設定 file が不正・確かめられないか直せない repo
+  が有る (docs/repo-baseline.md)。

@@ -1,20 +1,20 @@
 # repo の設定の baseline (personal-repo-baseline)
 
 個人の GitHub repo の設定 (Dependabot、merge の方式、default branch の保護など) を、あるべき姿 (baseline) と
-比べてずれを出す script です (#539)。実体は `shared/scripts/personal-repo-baseline.rb` で、配備先は
+比べてずれを出し、`--apply` のときだけ直す script です (#539)。実体は `shared/scripts/personal-repo-baseline.rb` で、配備先は
 `<tool home>/agent-tools/scripts/personal-repo-baseline`。
 
-今あるのは確かめるだけ (`--check`) です。直す `--apply` と、sweep (`personal-maintenance-sweep`) への組み込みは
-#539 の続きの PR で足します。
+既定は確かめるだけ (`--check`) です。直す `--apply` は、人が承認したときだけ使います。sweep
+(`personal-maintenance-sweep`) への組み込みは #539 の続きの PR で足します。
 
 ## 運用
 
 - **最初に 1 回、全 repo を見る**: `personal-repo-baseline --all` で、自分が owner の repo を全部確かめる。ずれは
-  人が承認してから直す (`--apply` ができるまでは画面で直す)。
+  人が承認してから `--apply` で直す (`--all --apply` で全部、`--repo` で 1 つずつ)。
 - **その後は今の repo だけ**: sweep が、その repo に `--check` をかける (sweep の責務はその repo の中に留める)。
   週 1 回の定期実行や、session の冒頭の確認はしない。設定は勝手には変わらず、ずれるのは repo を作ったとき・画面で
   設定を変えたとき・baseline を変えたときに限られるため。
-- **repo を作ったら**: その repo で確かめて直す (`--apply` ができたら `--apply` を 1 回かける)。
+- **repo を作ったら**: その repo で `personal-repo-baseline --apply` を 1 回かける (`dependabot.yml` は PR で足す)。
 - **baseline を変えたら**: その PR の merge の後に、人が `--all` を 1 回かける。
 
 結果には private な repo の名前が出ます。Issue や PR、commit message には貼りません (public-safety の gate は
@@ -24,18 +24,20 @@ private な repo の名前を知らないので、gate では止まりません)
 ## 使い方
 
 ```text
-usage: personal-repo-baseline [--help] [--check] [--repo OWNER/REPO | --all]
+usage: personal-repo-baseline [--help] [--check | --apply] [--repo OWNER/REPO | --all]
 ```
 
 - 引数なし: 今の directory の repo (`gh repo view` が返す repo。env の `GH_REPO` は外して解決する)。
 - `--repo OWNER/REPO`: その repo。
 - `--all`: 認証した user が owner の repo を API で列挙し、fork・archive 済み・設定 file で除外した repo を外す
   (fork を先に数えるので、archive 済みの fork は fork の件数に入る)。
-- `--check`: 確かめるだけ (既定。付けても付けなくても同じ)。
+- `--check`: 確かめるだけ (既定。付けても付けなくても同じ)。GitHub には GET だけ。
+- `--apply`: ずれのうち API で直せるものを直す (下の「直す (`--apply`)」)。
 
-fork・archive 済み・設定 file で除外した repo・admin 権限の無い repo は「対象外」として確かめません。
+fork・archive 済み・設定 file で除外した repo・admin 権限の無い repo は「対象外」として確かめず、直しもしません。
 
-GitHub は REST API の GET だけで読みます (`gh api`。shell を通さない)。env の `GH_REPO` は gh に渡しません。
+GitHub は REST API で読み書きします (`gh api`。shell を通さず、書き込みの body は stdin から渡す)。env の `GH_REPO`
+は gh に渡しません。
 
 ### 出力と exit
 
@@ -48,14 +50,49 @@ owner/example (public): ずれ 2 件
 
 | exit | 意味 |
 |---|---|
-| 0 | 確かめた repo にずれが無い (対象外だけのときを含む) |
-| 1 | ずれが有る |
-| 2 | usage、設定 file が不正、今の repo や repo の一覧を解決できない、確かめられない repo が有る (gh の失敗・想定外の応答) |
+| 0 | 確かめた repo にずれが無い (対象外だけのとき、`--apply` で直し終えたときを含む) |
+| 1 | ずれが有る (`--apply` では、script が直さない `dependabot.yml` のずれが残る) |
+| 2 | usage、設定 file が不正、今の repo や repo の一覧を解決できない、確かめられない repo が有る (gh の失敗・想定外の応答)、`--apply` で直せない repo が有る |
 
 GitHub の応答の field が欠けている・null・型が違うときは、その repo を「確かめられない」にします (ずれ無しや off
 に倒さない)。`--all` で一部の repo を確かめられないときも、残りの repo は確かめて出し、exit 2 にします。`--all` は
 最後に集計の行 (対象の repo の件数と、ずれ無し・ずれ有り・確かめられないの内訳、対象外の理由ごとの件数) を出します。
 usage と設定 file の不正は stderr に 1 行出し、理由に設定の中身と path は出しません。
+
+## 直す (`--apply`)
+
+確かめてずれていた項目のうち、API で直せるものだけを、次の順に直します。ずれの無い repo には書きません (何度実行
+しても同じ結果)。
+
+| 項目 | 直し方 |
+|---|---|
+| Dependabot alerts | `PUT repos/{repo}/vulnerability-alerts` (dependency graph も有効になる) |
+| Dependabot security updates | `PUT repos/{repo}/automated-security-fixes` (alerts の後) |
+| merge の方式・merge の後に branch を消す | `PATCH repos/{repo}` (squash だけを許し、branch を消す。4 つの field をまとめて) |
+| Secret scanning と push protection (public) | `PATCH repos/{repo}` の `security_and_analysis` (両方 enabled) |
+| default branch の ruleset (public) | `personal-repo-baseline` という名前の ruleset を作る (`POST`) か更新する (`PUT`) |
+
+- **ruleset**: 対象は `~DEFAULT_BRANCH`、enforcement は active、bypass は無し。rule は PR の必須 (必要な approve 0、
+  ほかの条件は off)、force push の禁止、削除の禁止、設定 file に書いた必須の check (strict は off)。この名前の
+  ruleset だけをこの script の持ち物として扱い、他の ruleset には触りません。同じ名前の ruleset が 2 つ以上あれば、
+  どちらを直すか決められないので書きません。bypass が無いので、default branch へは admin も PR を通さずに push
+  できません (要るときは画面で ruleset を変える)。
+- **確かめ直す**: 直した後に読み直し、直した項目のずれが消えたことを確かめます。消えていなければ (他の ruleset が
+  厳しくしているなど) 「確かめられないか直せない」にします。書き込みが途中で失敗したら、それまでに直したものを
+  理由に添えて止め、その repo の後の書き込みはしません (`--all` は残りの repo を続ける)。
+- **直さないもの**: `.github/dependabot.yml` (repo ごとの PR で足す)、API で変えられない項目 (Malware alerts、
+  grouped security updates)。設定 file の `required_checks` から check を外しても、ruleset からは外しません
+  (確かめるのは「書いた check を含む」ことだけなので)。外すときは画面で ruleset を変えます。
+- **戻すとき**: どの設定も画面で戻せます (ruleset は削除できる)。
+
+```text
+owner/example (public): 直した 3 件 / 残りのずれ 1 件
+  - 直した: Dependabot alerts (dependency graph を含む)
+  - 直した: merge の方式
+  - 直した: merge の後に branch を消す
+  - .github/dependabot.yml (repo ごとの PR で足す。script では書かない): 今 無い / あるべき 有る
+画面で確かめる (API で読めない): Malware alerts、Grouped security updates
+```
 
 ## baseline
 
@@ -116,5 +153,8 @@ repo の名前は tracked な file に書かず、ここに置きます。
 - 読むには repo の admin 権限が要ります (merge の方式などの field は admin にだけ返る)。自分が owner の repo が
   対象で、admin 権限の無い repo は対象外です。
 - gh の呼び出しに時間の上限は付けていません。network が止まると、gh が戻るまで待ちます。
+- `--apply` の確かめ直しは書いた直後に読みます。GitHub の反映が遅れて「直した後もずれが残っています」になったら、
+  もう一度 `--apply` をかけます (直っている項目には書かない)。
+- 直すには token に repo の admin の操作の権限が要ります (classic な token なら `repo` の scope)。
 - test (`scripts/tests/repo-baseline-test.sh`) は gh を fixture の応答を返す偽物に差し替えるので、GitHub の
   API の実際の応答の形は確かめません。応答の形は実機で確かめた (2026-10、gh 2.102.0) ものに合わせています。
