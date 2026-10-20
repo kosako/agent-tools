@@ -17,7 +17,8 @@
   ずれるのは repo を作ったとき・画面で設定を変えたとき・baseline を変えたときに限られるため。
 - **repo を作ったら**: その repo で `personal-repo-baseline --apply` を 1 回かける (`dependabot.yml` は PR で足す)。
   API で変えられない Malware alerts と Grouped security updates は、repo の Settings の Advanced Security の画面で
-  オンにする (Malware alerts は Dependabot alerts がオンの後に切り替えられる)。
+  オンにする (Malware alerts は Dependabot alerts がオンの後に切り替えられる)。CI の check を必須にする repo や、
+  `dependabot.yml` の要らない repo は、`.github/repo-baseline.json` を PR で足す (下の「repo の設定 file」)。
 - **baseline を変えたら**: その PR の merge の後に、人が `--all` を 1 回かける。
 
 結果には private な repo の名前が出ます。Issue や PR、commit message には貼りません (public-safety の gate は
@@ -32,12 +33,12 @@ usage: personal-repo-baseline [--help] [--check | --apply] [--repo OWNER/REPO | 
 
 - 引数なし: 今の directory の repo (`gh repo view` が返す repo。env の `GH_REPO` は外して解決する)。
 - `--repo OWNER/REPO`: その repo。
-- `--all`: 認証した user が owner の repo を API で列挙し、fork・archive 済み・設定 file で除外した repo を外す
+- `--all`: 認証した user が owner の repo を API で列挙し、fork・archive 済み・手元の設定 file で除外した repo を外す
   (fork を先に数えるので、archive 済みの fork は fork の件数に入る)。
 - `--check`: 確かめるだけ (既定。付けても付けなくても同じ)。GitHub には GET だけ。
 - `--apply`: ずれのうち API で直せるものを直す (下の「直す (`--apply`)」)。
 
-fork・archive 済み・設定 file で除外した repo・admin 権限の無い repo は「対象外」として確かめず、直しもしません。
+fork・archive 済み・手元の設定 file で除外した repo・admin 権限の無い repo は「対象外」として確かめず、直しもしません。
 
 GitHub は REST API で読み書きします (`gh api`。shell を通さず、書き込みの body は stdin から渡す)。env の `GH_REPO`
 は gh に渡しません。
@@ -55,13 +56,21 @@ owner/example (public): ずれ 2 件
 |---|---|
 | 0 | 確かめた repo にずれが無い (対象外だけのとき、`--apply` で直し終えたときを含む) |
 | 1 | ずれが有る (`--apply` では、script が直さない `dependabot.yml` のずれが残る) |
-| 2 | usage、設定 file が不正、今の repo や repo の一覧を解決できない、確かめられない repo が有る (gh の失敗・想定外の応答)、`--apply` で直せない repo が有る |
+| 2 | usage、手元の設定 file が不正、今の repo や repo の一覧を解決できない、確かめられない repo が有る (gh の失敗・想定外の応答・repo の設定 file の不正)、`--apply` で直せない repo が有る |
 
 GitHub の応答の field が欠けている・null・型が違うときは、その repo を「確かめられない」にします (ずれ無しや off
 に倒さない)。`--all` で一部の repo を確かめられないときも、残りの repo は確かめて出し、exit 2 にします。`--all` は
 最後に集計の行 (対象の repo の件数と、ずれ無し・ずれ有り・確かめられないの内訳、対象外の理由ごとの件数) を出します。
-repo ごとの「確かめられない」の理由は、stdout のその repo の行に出ます。run 全体の失敗 (usage、設定 file の不正、今の
-repo や repo の一覧を解決できない) は stdout に何も出さず、stderr に 1 行出します。理由に設定の中身と path は出しません。
+repo ごとの「確かめられない」の理由は、stdout のその repo の行に出ます。run 全体の失敗 (usage、手元の設定 file の
+不正、今の repo や repo の一覧を解決できない) は stdout に何も出さず、stderr に 1 行出します。理由に設定の中身と path
+は出しません。
+
+repo の設定 file の `skip` で外した項目は、その repo の行の下に 1 行出します (黙ってずれ無しにしない)。
+
+```text
+owner/example (public): ずれ無し
+  - repo の設定 file (.github/repo-baseline.json) で外した: .github/dependabot.yml
+```
 
 ## 直す (`--apply`)
 
@@ -77,21 +86,22 @@ repo や repo の一覧を解決できない) は stdout に何も出さず、st
 | default branch の ruleset (public) | `personal-repo-baseline` という名前の ruleset を作る (`POST`) か更新する (`PUT`) |
 
 - **ruleset**: 対象は `~DEFAULT_BRANCH`、enforcement は active、bypass は無し。rule は PR の必須 (必要な approve 0、
-  ほかの条件は off)、force push の禁止、削除の禁止、設定 file に書いた必須の check (strict は off)。この名前の
+  ほかの条件は off)、force push の禁止、削除の禁止、repo の設定 file に書いた必須の check (strict は off)。この名前の
   ruleset だけをこの script の持ち物として扱い、他の ruleset には触りません。同じ名前の ruleset が 2 つ以上あれば、
   どちらを直すか決められないので書きません。bypass が無いので、default branch へは admin も PR を通さずに push
   できません (要るときは画面で ruleset を変える)。
-- **ruleset の更新は置き換え**: この名前の ruleset を更新するときは、上の rule と設定 file の `required_checks` の
-  一覧で丸ごと置き換えます。画面でこの ruleset に足した rule や check も外れ、設定 file に書いていない repo では
-  必須の check の rule が無くなります。必須の check は設定 file に書きます。
+- **ruleset の更新は置き換え**: この名前の ruleset を更新するときは、上の rule と repo の設定 file の
+  `required_checks` の一覧で丸ごと置き換えます。画面でこの ruleset に足した rule や check も外れ、repo の設定 file に
+  書いていない repo では必須の check の rule が無くなります。必須の check は repo の設定 file に書きます。
 - **確かめ直す**: 直した後に読み直し、直した項目のずれが消えたことを確かめます。消えていなければ (他の ruleset が
   厳しくしているなど) 「確かめられないか直せない」にします。書き込みが途中で失敗したら、その repo の後の書き込みは
   しません (`--all` は残りの repo を続ける)。どの止まり方でも、書き込みが成功した項目を「書いた」の行に出します
   (戻すときに変えた範囲を追えるように)。
 - **直さないもの**: `.github/dependabot.yml` (repo ごとの PR で足す)、API で変えられない項目 (Malware alerts、
-  grouped security updates)。設定 file の `required_checks` から check を外しただけでは、ruleset を更新しません
-  (確かめるのは「書いた check を含む」ことだけなので、ずれにならない)。すぐ外すときは画面で ruleset を変えます
-  (ruleset の別の項目のずれで更新するときは、上のとおり設定 file の一覧で置き換わる)。
+  grouped security updates)、repo の設定 file の `skip` で外した項目。repo の設定 file の `required_checks` から
+  check を外しただけでは、ruleset を更新しません (確かめるのは「書いた check を含む」ことだけなので、ずれにならない)。
+  すぐ外すときは画面で ruleset を変えます (ruleset の別の項目のずれで更新するときは、上のとおり repo の設定 file の
+  一覧で置き換わる)。
 - **戻すとき**: どの設定も画面で戻せます (ruleset は削除できる)。
 
 ```text
@@ -117,16 +127,17 @@ owner/example (public): 直した 3 件 / 残りのずれ 1 件
 | Secret scanning と push protection | on | (使えない) | repo の `security_and_analysis` |
 | default branch の ruleset: PR を必須にする | 有る (必要な approve 0) | (使えない) | `GET repos/{repo}/rules/branches/{default branch}` (全ページ) |
 | default branch の ruleset: force push と削除の禁止 | 有る | (使えない) | 同上 |
-| default branch の ruleset: 必須の check | 設定 file に書いた check を含む | (使えない) | 同上 |
+| default branch の ruleset: 必須の check | repo の設定 file に書いた check を含む | (使えない) | 同上 |
 
 - private の「使えない」は、今のプラン (GitHub Free) の private では ruleset と secret scanning が使えないため
   (ruleset の API は 403 を返す)。private では確かめず、出力の末尾に 1 行で添えます。
 - PR を必須にする rule の必要な approve は 0 にします。自分の PR は自分で approve できないので、1 以上にすると
   merge できなくなります。複数の ruleset が PR の rule を持つときは、いちばん厳しいものが効く扱いで比べます。
-- 必須の check の名前は repo ごとに違うので、設定 file の `required_checks` に書いた repo だけ確かめます。CI の
-  無い repo は書きません (ruleset は PR の必須と force push・削除の禁止だけになる)。
+- 必須の check の名前は repo ごとに違うので、repo の設定 file の `required_checks` に書いた repo だけ確かめます。
+  CI の無い repo は書きません (ruleset は PR の必須と force push・削除の禁止だけになる)。
 - `.github/dependabot.yml` は repo ごとに中身 (ecosystem) が違うので、script では書きません。無い repo は、repo
-  ごとの PR で足します。
+  ごとの PR で足します。依存の manifest も CI の workflow も無く、Dependabot が見るものの無い repo は、repo の設定
+  file の `skip` で外します。
 
 ### API で読めない項目
 
@@ -138,21 +149,46 @@ owner/example (public): 直した 3 件 / 残りのずれ 1 件
 
 ## 設定 file
 
-`${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/repo-baseline.json` (任意。無ければ除外も必須の check も無し)。
-repo の名前は tracked な file に書かず、ここに置きます。
+設定は 2 か所に分けます (#545)。repo ごとの事実 (確かめない項目、必須の check) はその repo に置き、repo と一緒に
+PR で変えます (CI の job の名前を変える PR で、必須の check も一緒に直せる)。「この repo には触らない」は人の判断
+なので、手元に置きます。どちらも任意で、無ければ baseline のまま確かめます。
+
+### repo の設定 file (`.github/repo-baseline.json`)
+
+baseline と違う設定がある repo だけが置きます。default branch のものを contents API で読むので、変更は merge で
+default branch に入った時点で効きます。
 
 ```json
 {
-  "exclude": ["owner/example-sandbox"],
-  "required_checks": {
-    "owner/example": ["test (3.4)", "test (system)"]
-  }
+  "skip": ["dependabot_yml"],
+  "required_checks": ["test (3.4)", "test (system)"]
 }
 ```
 
-- key は `exclude` (対象から外す repo の配列) と `required_checks` (repo から、必須にする check の名前の配列への
-  object) だけ。知らない key、型の外れ、OWNER/REPO の形でない名前、空の配列、制御文字、key の重なり (同じ綴りも、
-  `required_checks` の大文字小文字だけ違う key も) は不正 (exit 2)。
+- `skip`: 確かめない項目の名前の配列。外せるのは `dependabot_yml` だけです。security に関わる項目 (alerts、secret
+  scanning、ruleset など) を外せると、repo の PR 1 本で守りを外せることになるため、外せません。外した項目は確かめず、
+  直さず、出力に外したことを出します。
+- `required_checks`: default branch の ruleset で必須にする check の名前の配列 (public の repo だけ。private では
+  ruleset を確かめないので使いません)。
+- 書く key は、空でない配列にします。知らない key、型の外れ、外せない項目の名前、空白だけの名前、制御文字、値や key の
+  重なり、64 KiB を超える file、file でないもの (directory・symlink・submodule) は不正で、その repo を「確かめられない」
+  にします (設定なしやずれ無しに倒さない)。理由に中身は出しません。
+
+### 手元の設定 file
+
+`${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/repo-baseline.json`。repo の名前は tracked な file に書かず、ここに
+置きます。
+
+```json
+{
+  "exclude": ["owner/example-sandbox"]
+}
+```
+
+- key は `exclude` (対象から外す repo の配列) だけ。知らない key、型の外れ、OWNER/REPO の形でない名前、key の重なりは
+  不正 (exit 2)。
+- 前の形の `required_checks` が残っていたら、不正 (exit 2) にします。移行の間だけ両方を読むと、置き場が 2 か所に
+  なって、どちらが効くのかが曖昧になるためです。各 repo の `.github/repo-baseline.json` に移してから消します。
 - repo の名前は大文字小文字を区別しません。rename した repo は、API が返す新しい名前でも除外を照合します。
 - `XDG_CONFIG_HOME` は絶対 path のときだけ使い、`HOME` も絶対 path でなければ場所を決めずに止めます
   (`personal-usage-reader` の設定 file と同じ扱い)。symlink は辿った先で判定し、regular file でなければ不正です。

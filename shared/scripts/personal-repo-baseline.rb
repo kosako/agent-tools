@@ -15,14 +15,17 @@
 # 確かめない。API で読めない項目 (Malware alerts、grouped security updates) は確かめず、「画面で確かめる」と
 # 出す。Dependency graph は直接は読めないが、Dependabot alerts の前提なので alerts が on なら on。
 #
-# 手元の設定 file `${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/repo-baseline.json` は任意 (無ければ除外も必須の
-# check も無し)。repo の名前は tracked な file に書かず、ここに置く。中身は JSON object で、key は次の 2 つだけ:
-# - `exclude`: 対象から外す repo (OWNER/REPO) の配列。
-# - `required_checks`: repo (OWNER/REPO) から、default branch の ruleset で必須にする check の名前 (空でない
-#   文字列の配列) への object。書いた repo だけ必須の check を確かめる (CI の無い repo は書かない)。
-# repo の名前は大文字小文字を区別しない。知らない key、型の外れ、制御文字は不正。XDG_CONFIG_HOME は絶対 path の
-# ときだけ使い、HOME も絶対 path でなければ場所を決めずに止める (personal-usage-reader と同じ)。理由文に設定の
-# 中身と path は出さない。
+# 設定は 2 か所 (#545):
+# - 手元の設定 file `${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/repo-baseline.json` (任意)。key は `exclude`
+#   (対象から外す repo (OWNER/REPO) の配列) だけ。「この repo には触らない」は人の判断なので repo には書かず、repo の
+#   名前は tracked な file に書かないのでここに置く。repo の名前は大文字小文字を区別しない。知らない key と型の外れは
+#   不正。`required_checks` は repo の設定 file に移したので不正 (移行は切り替え)。XDG_CONFIG_HOME は絶対 path の
+#   ときだけ使い、HOME も絶対 path でなければ場所を決めずに止める (personal-usage-reader と同じ)。理由文に設定の
+#   中身と path は出さない。
+# - repo の設定 file `.github/repo-baseline.json` (任意。default branch のものを contents API で読む)。repo ごとの
+#   事実を、その repo の PR で変える。key は `skip` (確かめない項目。外せるのは SKIPPABLE だけ) と `required_checks`
+#   (default branch の ruleset で必須にする check の名前)。書くなら空でない配列。知らない key、型の外れ、知らない
+#   項目の名前、制御文字、値や key の重なり、大きすぎる file は、その repo を確かめられないにする。
 #
 # GitHub は REST API で読み書きする (`gh api`。shell を通さない)。env の GH_REPO は gh に渡さない。`--check` は GET
 # だけ。
@@ -33,17 +36,19 @@
 # - merge の方式と merge の後に branch を消す設定 → repo を PATCH (4 つの field をまとめて)。
 # - public の secret scanning と push protection → repo の security_and_analysis を PATCH。
 # - public の default branch の ruleset → この script が持つ名前 (RULESET_NAME) の ruleset だけを作るか更新する
-#   (PR の必須 (approve 0)・force push と削除の禁止・設定 file の必須の check。bypass は無し)。他の ruleset は
+#   (PR の必須 (approve 0)・force push と削除の禁止・repo の設定 file の必須の check。bypass は無し)。他の ruleset は
 #   触らない (他の ruleset が厳しくしているずれは、直した後も残るので「確かめられないか直せない」になる)。
 # `.github/dependabot.yml` は書かない (repo ごとの PR で足す)。API で変えられない項目は「画面で確かめる」のまま。
 #
 # exit:
 # - 0: 確かめた repo にずれが無い (対象外だけのときを含む。`--apply` では、直してずれが無くなったときを含む)。
 # - 1: ずれが有る (`--apply` では、script が直さない項目 (dependabot.yml) のずれが残る)。
-# - 2: usage / 設定 file が不正 / 今の repo や repo の一覧を解決できない / 確かめられない repo が有る (gh の失敗・
-#   想定外の status・応答の field の欠落や null や型違い。ずれ無しや off に倒さない) / `--apply` で直せない (書き込みの
-#   失敗、直した後もずれが残る)。`--all` で一部の repo を確かめられないときも、残りの repo は確かめて出す。
-# 結果は stdout、usage と設定 file の不正は stderr に 1 行。
+# - 2: usage / 手元の設定 file が不正 / 今の repo や repo の一覧を解決できない / 確かめられない repo が有る (gh の
+#   失敗・想定外の status・応答の field の欠落や null や型違い・repo の設定 file の不正。ずれ無しや off に倒さない) /
+#   `--apply` で直せない (書き込みの失敗、直した後もずれが残る)。`--all` で一部の repo を確かめられないときも、残りの
+#   repo は確かめて出す。
+# 結果は stdout (repo ごとの「確かめられない」の理由もその repo の行)。run 全体の失敗 (usage・手元の設定 file の不正・
+# 今の repo や repo の一覧を解決できない) は stderr に 1 行。
 
 require "erb"
 require "json"
@@ -61,7 +66,7 @@ module RepoBaseline
   # - merge_methods: 許す merge の方式 (squash だけ)。
   # - ruleset_pull_request: default branch の ruleset で PR を必須にし、必要な approve の数は 0 (自分の PR は
   #   自分で approve できないので、1 以上にすると merge できなくなる)。
-  # - ruleset_required_checks: 設定 file の required_checks に書いた check を必須にする (書いた repo だけ)。
+  # - ruleset_required_checks: repo の設定 file の required_checks に書いた check を必須にする (書いた repo だけ)。
   BASELINE = {
     "public" => {
       "dependabot_alerts" => true,
@@ -121,7 +126,16 @@ module RepoBaseline
   }.freeze
   SECRET_SCANNING_ITEMS = %w[secret_scanning secret_scanning_push_protection].freeze
   RULESET_ITEMS = %w[ruleset_pull_request ruleset_non_fast_forward ruleset_deletion ruleset_required_checks].freeze
-  CONFIG_KEYS = %w[exclude required_checks].freeze
+  CONFIG_KEYS = %w[exclude].freeze
+  # repo ごとの設定 file (任意)。default branch のものを contents API で読む。
+  REPO_FILE = ".github/repo-baseline.json"
+  REPO_FILE_LABEL = "repo の設定 file (#{REPO_FILE})"
+  REPO_FILE_MAX = 64 * 1024
+  REPO_KEYS = %w[skip required_checks].freeze
+  # repo の設定 file の skip で外せる項目。security に関わる項目は、repo の PR 1 本で守りを外せることになるので
+  # 外せない (#545)。
+  SKIPPABLE = %w[dependabot_yml].freeze
+  OMIT_LABELS = { "dependabot_yml" => ".github/dependabot.yml" }.freeze
   REPO_RE = %r{\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z}.freeze
   LIST_PATH = "user/repos?affiliation=owner&per_page=100"
   # gh へ渡す env。GH_REPO は今の repo の解決を別の repo に向けるので外す。
@@ -142,8 +156,13 @@ module RepoBaseline
   end
 
   # 1 repo の結果。status は :ok / :fixed / :drift / :skipped / :error。findings は [項目, 今, あるべき] の配列
-  # (--apply では直した後に残ったずれ)。fixed は --apply が直した項目。
-  Result = Struct.new(:name, :visibility, :status, :findings, :reason, :fixed)
+  # (--apply では直した後に残ったずれ)。fixed は --apply が直した項目。omitted は repo の設定 file の skip で外した
+  # 項目 (確かめた repo だけ。出力に外したことを出す)。
+  Result = Struct.new(:name, :visibility, :status, :findings, :reason, :fixed, :omitted)
+
+  # repo の設定 file の中身。skip は確かめない項目、required_checks は default branch の ruleset で必須にする check。
+  RepoSettings = Struct.new(:skip, :required_checks)
+  NO_SETTINGS = RepoSettings.new([].freeze, [].freeze).freeze
 
   # 引数の解釈の結果。mode は :check / :apply、target は :current / :all / OWNER/REPO。
   Options = Struct.new(:mode, :target)
@@ -151,11 +170,14 @@ module RepoBaseline
   # --apply の 1 回の書き込み。items はこの書き込みで直す baseline の項目。
   Action = Struct.new(:items, :method, :path, :body, :label)
 
+  # JSON の object の key の重なり (StrictHash が出す。読んだ file ごとに理由を付け直す)。
+  class DuplicateKeyError < StandardError; end
+
   # 設定 file の JSON の object。同じ key が重なったら、後の値で前の値を消さずに不正にする (JSON.parse は既定で後の
   # 値を残すので、object_class で受ける)。
   class StrictHash < Hash
     def []=(key, value)
-      raise ArgumentError, "設定 file に重なった key があります" if key?(key)
+      raise DuplicateKeyError if key?(key)
 
       super
     end
@@ -163,17 +185,12 @@ module RepoBaseline
 
   # 手元の設定。repo の名前は小文字にそろえて持つ。
   class Config
-    def initialize(exclude, required_checks)
+    def initialize(exclude)
       @exclude = exclude
-      @required_checks = required_checks
     end
 
     def excluded?(name)
       @exclude.include?(name.downcase)
-    end
-
-    def required_checks_for(name)
-      @required_checks.fetch(name.downcase, [])
     end
   end
 
@@ -192,8 +209,9 @@ module RepoBaseline
       (fork・archive 済み・設定 file で除外した repo を除く)。
       exit 0 = ずれ無し (--apply で直し終えたときを含む) / 1 = ずれ有り / 2 = usage・設定 file が不正・
       確かめられないか直せない repo が有る。
-      設定 file (任意): ${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/repo-baseline.json
-      (key は exclude と required_checks。docs/repo-baseline.md)。
+      手元の設定 file (任意): ${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/repo-baseline.json (key は exclude)。
+      repo の設定 file (任意): 各 repo の .github/repo-baseline.json (key は skip と required_checks)。
+      docs/repo-baseline.md。
     TEXT
   end
 
@@ -259,15 +277,21 @@ module RepoBaseline
   end
 
   def parse_config(text)
-    return Config.new([], {}) if text.nil?
+    return Config.new([]) if text.nil?
     raise ArgumentError, "設定 file が UTF-8 として読めません" unless text.valid_encoding?
 
     data = begin
       JSON.parse(text, object_class: StrictHash)
     rescue JSON::ParserError
       raise ArgumentError, "設定 file が JSON として読めません"
+    rescue DuplicateKeyError
+      raise ArgumentError, "設定 file に重なった key があります"
     end
     raise ArgumentError, "設定 file の top-level が object ではありません" unless data.is_a?(Hash)
+    # 移行は切り替え (#545): 手元に残った required_checks は、どちらが効くのかが曖昧になるので読まずに止める。
+    if data.key?("required_checks")
+      raise ArgumentError, "設定 file の required_checks は、各 repo の #{REPO_FILE} に移しました"
+    end
     raise ArgumentError, "設定 file に知らない key があります" unless (data.keys - CONFIG_KEYS).empty?
 
     exclude = data.fetch("exclude", [])
@@ -275,21 +299,37 @@ module RepoBaseline
       raise ArgumentError, "設定 file の exclude が OWNER/REPO の配列ではありません"
     end
 
-    required = data.fetch("required_checks", {})
-    raise ArgumentError, "設定 file の required_checks が object ではありません" unless required.is_a?(Hash)
+    Config.new(exclude.map(&:downcase))
+  end
 
-    checks = {}
-    required.each do |name, list|
-      raise ArgumentError, "設定 file の required_checks の key が OWNER/REPO の形ではありません" unless valid_repo?(name)
-      unless list.is_a?(Array) && !list.empty? && list.all? { |c| valid_check_name?(c) }
-        raise ArgumentError, "設定 file の required_checks の値が空でない check の名前の配列ではありません"
-      end
-      # 大文字小文字だけ違う key は同じ repo なので、後の値で前の値を消さずに不正にする。
-      raise ArgumentError, "設定 file の required_checks に大文字小文字だけ違う key が重なっています" if checks.key?(name.downcase)
+  # repo の設定 file の中身 (JSON の text) を読む。不正なら、その repo を確かめられないにする (Error)。理由に中身は
+  # 出さない。key は skip と required_checks だけで、書くなら空でない配列。
+  def parse_repo_settings(text)
+    text = text.dup.force_encoding(Encoding::UTF_8)
+    raise Error, "#{REPO_FILE_LABEL} が UTF-8 として読めません" unless text.valid_encoding?
 
-      checks[name.downcase] = list
+    data = begin
+      JSON.parse(text, object_class: StrictHash)
+    rescue JSON::ParserError
+      raise Error, "#{REPO_FILE_LABEL} が JSON として読めません"
+    rescue DuplicateKeyError
+      raise Error, "#{REPO_FILE_LABEL} に重なった key があります"
     end
-    Config.new(exclude.map(&:downcase), checks)
+    raise Error, "#{REPO_FILE_LABEL} の top-level が object ではありません" unless data.is_a?(Hash)
+    raise Error, "#{REPO_FILE_LABEL} に知らない key があります" unless (data.keys - REPO_KEYS).empty?
+
+    skip = data.fetch("skip", nil)
+    unless skip.nil? || (skip.is_a?(Array) && !skip.empty? && skip.all? { |item| SKIPPABLE.include?(item) })
+      raise Error, "#{REPO_FILE_LABEL} の skip が外せる項目 (#{SKIPPABLE.join('、')}) の空でない配列ではありません"
+    end
+    checks = data.fetch("required_checks", nil)
+    unless checks.nil? || (checks.is_a?(Array) && !checks.empty? && checks.all? { |c| valid_check_name?(c) })
+      raise Error, "#{REPO_FILE_LABEL} の required_checks が空でない check の名前の配列ではありません"
+    end
+    [["skip", skip], ["required_checks", checks]].each do |key, list|
+      raise Error, "#{REPO_FILE_LABEL} の #{key} に重なった値があります" if list && list.uniq.size != list.size
+    end
+    RepoSettings.new((skip || []).freeze, (checks || []).freeze)
   end
 
   def valid_check_name?(name)
@@ -403,6 +443,26 @@ module RepoBaseline
     MERGE_FIELDS.select { |field, _| boolean!(repo[field], "merge の方式") }.values
   end
 
+  # repo の設定 file (任意) を default branch から読む。無ければ (404) 設定なし。file でない (directory・symlink・
+  # submodule)、base64 でない、大きすぎる応答は確かめられないにする (設定なしに倒さない)。
+  def repo_settings(name)
+    path = "repos/#{name}/contents/#{REPO_FILE}"
+    code = gh_status(path, REPO_FILE_LABEL)
+    return NO_SETTINGS if code == 404
+    raise Error, "#{REPO_FILE_LABEL} の応答が想定外です (HTTP #{code})" unless code == 200
+
+    entry = hash!(gh_json(path, REPO_FILE_LABEL), REPO_FILE_LABEL)
+    unless entry["type"] == "file" && entry["encoding"] == "base64" && entry["content"].is_a?(String) &&
+           entry["size"].is_a?(Integer)
+      raise Error, "#{REPO_FILE_LABEL} を読めません (応答の形が想定外)"
+    end
+
+    text = entry["content"].unpack1("m")
+    raise Error, "#{REPO_FILE_LABEL} が大きすぎます" if entry["size"] > REPO_FILE_MAX || text.bytesize > REPO_FILE_MAX
+
+    parse_repo_settings(text)
+  end
+
   def dependabot_yml?(name)
     %w[dependabot.yml dependabot.yaml].any? do |file|
       enabled_by_status(gh_status("repos/#{name}/contents/.github/#{file}", ".github/#{file}"), ".github/#{file}", 200, 404)
@@ -454,17 +514,18 @@ module RepoBaseline
     }
   end
 
-  # baseline の項目のうち、その visibility で確かめるものだけを GitHub から読む。
-  def collect_facts(name, repo, visibility)
-    items = BASELINE.fetch(visibility).keys
+  # baseline の項目のうち、その visibility で確かめるものだけを GitHub から読む。skip (repo の設定 file で外した
+  # 項目) は読まない。
+  def collect_facts(name, repo, visibility, skip = [])
+    items = BASELINE.fetch(visibility).keys - skip
     facts = {
       "dependabot_alerts" => enabled_by_status(
         gh_status("repos/#{name}/vulnerability-alerts", "Dependabot alerts"), "Dependabot alerts", 204, 404
       ),
       "merge_methods" => merge_methods(repo),
       "delete_branch_on_merge" => boolean!(repo["delete_branch_on_merge"], "merge の後に branch を消す設定"),
-      "dependabot_yml" => dependabot_yml?(name),
     }
+    facts["dependabot_yml"] = dependabot_yml?(name) if items.include?("dependabot_yml")
     fixes = hash!(gh_json("repos/#{name}/automated-security-fixes", "Dependabot security updates"), "Dependabot security updates")
     facts["dependabot_security_updates"] = boolean!(fixes["enabled"], "Dependabot security updates")
     if items.include?("secret_scanning")
@@ -477,9 +538,11 @@ module RepoBaseline
 
   # ---- 比べる (純粋) ----
 
-  # facts を baseline と比べて、ずれ ([項目, 今, あるべき]) を返す。
-  def evaluate(visibility, facts, required_checks)
+  # facts を baseline と比べて、ずれ ([項目, 今, あるべき]) を返す。skip (repo の設定 file で外した項目) は比べない。
+  def evaluate(visibility, facts, required_checks, skip = [])
     BASELINE.fetch(visibility).each_with_object([]) do |(item, expected), findings|
+      next if skip.include?(item)
+
       actual = facts.fetch(item)
       if expected == :config
         next if required_checks.empty?
@@ -516,8 +579,8 @@ module RepoBaseline
 
   # ---- 直す (--apply) ----
 
-  # --apply が作る / 更新する ruleset (default branch に、PR の必須 (approve 0)・force push と削除の禁止・設定 file の
-  # 必須の check)。bypass は持たない。
+  # --apply が作る / 更新する ruleset (default branch に、PR の必須 (approve 0)・force push と削除の禁止・repo の設定
+  # file の必須の check)。bypass は持たない。
   def desired_ruleset(required_checks)
     rules = [
       {
@@ -597,10 +660,10 @@ module RepoBaseline
 
   # ずれのうち API で直せるものを直し、読み直して確かめる。書き込みの失敗、読み直しの失敗、直したはずの項目のずれの
   # 残り (他の ruleset が厳しくしているなど) のどれで止まっても、書き込みが成功した項目を ApplyError に添える。
-  def apply_fixes(name, visibility, findings, required_checks)
+  def apply_fixes(name, visibility, findings, settings)
     items = findings.map(&:first)
     ruleset_id = (items & RULESET_ITEMS).empty? ? nil : managed_ruleset_id(name)
-    actions = fix_actions(name, items, required_checks, ruleset_id)
+    actions = fix_actions(name, items, settings.required_checks, ruleset_id)
     return Result.new(name, visibility, :drift, findings, nil, []) if actions.empty?
 
     written = []
@@ -613,7 +676,8 @@ module RepoBaseline
       written.concat(action.items)
     end
     remaining = begin
-      evaluate(visibility, collect_facts(name, read_repo(name), visibility), required_checks)
+      facts = collect_facts(name, read_repo(name), visibility, settings.skip)
+      evaluate(visibility, facts, settings.required_checks, settings.skip)
     rescue Error, TypeError, NoMethodError => e
       reason = e.is_a?(Error) ? e.message : "応答の形が想定外です (#{e.class})"
       raise ApplyError.new("確かめ直せません: #{reason}", written)
@@ -654,12 +718,16 @@ module RepoBaseline
     visibility = repo["visibility"]
     raise Error, "baseline の無い visibility です" unless BASELINE.key?(visibility)
 
-    required_checks = config.required_checks_for(name)
-    findings = evaluate(visibility, collect_facts(name, repo, visibility), required_checks)
-    return Result.new(name, visibility, :ok, [], nil, []) if findings.empty?
-    return apply_fixes(name, visibility, findings, required_checks) if mode == :apply
-
-    Result.new(name, visibility, :drift, findings, nil, [])
+    settings = repo_settings(name)
+    facts = collect_facts(name, repo, visibility, settings.skip)
+    findings = evaluate(visibility, facts, settings.required_checks, settings.skip)
+    result =
+      if findings.empty? then Result.new(name, visibility, :ok, [], nil, [])
+      elsif mode == :apply then apply_fixes(name, visibility, findings, settings)
+      else Result.new(name, visibility, :drift, findings, nil, [])
+      end
+    result.omitted = settings.skip
+    result
   rescue ApplyError => e
     Result.new(name, nil, :error, [], e.message, e.written)
   rescue Error => e
@@ -737,6 +805,8 @@ module RepoBaseline
         # --apply が止まる前に書き込みが成功した項目 (戻すときに変えた範囲を追えるように)。
         r.fixed.each { |item| lines << "  - 書いた: #{LABELS.fetch(item)}" }
       end
+      # repo の設定 file で外した項目 (黙ってずれ無しにしない)。
+      Array(r.omitted).each { |item| lines << "  - #{REPO_FILE_LABEL} で外した: #{OMIT_LABELS.fetch(item)}" }
     end
     lines << summary_line(results, counts, mode) if counts
     checked = results.select { |r| %i[ok fixed drift].include?(r.status) }
