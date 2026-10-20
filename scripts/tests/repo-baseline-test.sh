@@ -65,7 +65,8 @@ File.write(File.join(bin, "gh"), <<~'FAKE')
   when :slurp then print JSON.generate(route.key?("pages") ? route["pages"] : [route["body"]])
   else print body
   end
-  exit(status < 300 ? 0 : 1)
+  # exit を持つ route は gh の終了状態を status と別に決める (2xx の status 行を出した後の失敗など)。
+  exit(route.key?("exit") ? route["exit"] : (status < 300 ? 0 : 1))
 FAKE
 File.chmod(0o755, File.join(bin, "gh"))
 
@@ -102,7 +103,7 @@ def routes_for(repo, rules: GOOD_RULES, alerts: 204, fixes: true, yml: 200, yaml
     "repos/#{name}/contents/.github/dependabot.yml" => { "status" => yml },
     "repos/#{name}/contents/.github/dependabot.yaml" => { "status" => yaml },
   }
-  r["repos/#{name}/rules/branches/main"] = { "status" => 200, "body" => rules } if repo["visibility"] == "public"
+  r["repos/#{name}/rules/branches/main?per_page=100"] = { "status" => 200, "body" => rules } if repo["visibility"] == "public"
   r
 end
 
@@ -231,6 +232,20 @@ check("config: absent file is empty", !RB.parse_config(nil).excluded?("o/r"))
   end
   check("config: #{label} is invalid", raised)
 end
+# 同じ綴りの key の重なりは、Hash から作れないので生の JSON で確かめる (JSON.parse は既定で後の値を残す)。
+[
+  ["duplicate repo in required_checks", '{"required_checks":{"o/r":["security"],"o/r":["test"]}}'],
+  ["duplicate top-level key", '{"exclude":["o/a"],"exclude":[]}'],
+].each do |label, text|
+  message = begin
+    RB.parse_config(text)
+    nil
+  rescue ArgumentError => e
+    e.message
+  end
+  check("config: #{label} is invalid", message == "設定 file に重なった key があります")
+end
+check("config: objects are still hashes", RB.parse_config('{"required_checks":{"o/r":["a"]}}').required_checks_for("o/r") == ["a"])
 
 def lines(res)
   res[:out].lines.map(&:chomp)
@@ -389,6 +404,42 @@ fake.define_singleton_method(:collect_facts) { |*_args| raise TypeError, "boom" 
 r = fake.check_repo("o/boom", RB.parse_config(nil))
 check("check_repo turns TypeError into a repo error", r.status == :error && r.reason == "応答の形が想定外です (TypeError)")
 
+# ---- CLI: branch の rule は全ページを読む ----
+# 2 ページ目に approve 2 の PR の rule がある (最初のページだけ読むと見落とす)。
+routes = routes_for(public_repo("o/rulepages"))
+routes["repos/o/rulepages/rules/branches/main?per_page=100"] = {
+  "status" => 200,
+  "pages" => [GOOD_RULES, [{ "type" => "pull_request", "parameters" => { "required_approving_review_count" => 2 } }]],
+}
+res = run_cli(routes, ["--repo", "o/rulepages"])
+check("cli rules from all pages", res[:rc] == 1 && lines(res)[1] ==
+  "  - default branch の ruleset: PR を必須にする: 今 有る (必要な approve 2) / あるべき 有る (必要な approve 0)")
+
+# branch の名前は 1 つの path の成分に encode する。`.` / `..` は受けない。
+routes = routes_for(public_repo("o/rel", "default_branch" => "release/1.0"))
+routes["repos/o/rel/rules/branches/release%2F1.0?per_page=100"] = { "status" => 200, "body" => GOOD_RULES }
+res = run_cli(routes, ["--repo", "o/rel"])
+check("cli branch with slash is encoded", res[:rc] == 0 &&
+  res[:calls].any? { |c| c["args"].last == "repos/o/rel/rules/branches/release%2F1.0?per_page=100" })
+%w[. ..].each do |branch|
+  res = run_cli(routes_for(public_repo("o/dot", "default_branch" => branch)), ["--repo", "o/dot"])
+  check("cli default branch #{branch} is refused", res[:rc] == 2 &&
+    lines(res) == ["o/dot: 確かめられない (default branch を読めません (応答の形が想定外))"] &&
+    res[:calls].none? { |c| c["args"].last.include?("/rules/") })
+end
+
+# ---- CLI: status 行が 2xx でも gh が失敗したら確かめられない ----
+routes = routes_for(public_repo("o/halfyml"))
+routes["repos/o/halfyml/contents/.github/dependabot.yml"] = { "status" => 200, "exit" => 1 }
+res = run_cli(routes, ["--repo", "o/halfyml"])
+check("cli 2xx with gh failure is error", res[:rc] == 2 &&
+  lines(res) == ["o/halfyml: 確かめられない (.github/dependabot.yml を読めません (gh api が失敗))"])
+routes = routes_for(public_repo("o/halfalerts"))
+routes["repos/o/halfalerts/vulnerability-alerts"] = { "status" => 204, "exit" => 1 }
+res = run_cli(routes, ["--repo", "o/halfalerts"])
+check("cli 204 with gh failure is error", res[:rc] == 2 &&
+  lines(res) == ["o/halfalerts: 確かめられない (Dependabot alerts を読めません (gh api が失敗))"])
+
 # ---- CLI: --all ----
 # 一覧は 2 ページ (--paginate --slurp を外すと 2 ページ目の repo を落とす)。
 list_page1 = [
@@ -422,10 +473,10 @@ check("cli all: excluded, fork, archived repos are not read",
       res[:calls].none? { |c| c["args"].last =~ %r{repos/o/(fork|arch|Secret)} })
 check("cli all: clean calls", clean_calls?(res))
 res = run_cli(routes.reject { |k, _| k == RB::LIST_PATH }, ["--all"])
-check("cli all: list failure", res[:rc] == 2 && res[:out].empty? && res[:err].include?("repo の一覧を読めません"))
+check("cli all: list failure", res[:rc] == 2 && res[:out].empty? && res[:err] == "personal-repo-baseline: repo の一覧 (user/repos) を読めません (gh api が失敗)\n")
 routes[RB::LIST_PATH] = { "status" => 200, "pages" => list_page1 }
 res = run_cli(routes, ["--all"])
-check("cli all: list pages must be arrays", res[:rc] == 2 && res[:err].include?("repo の一覧の応答が想定の形ではありません"))
+check("cli all: list pages must be arrays", res[:rc] == 2 && res[:err] == "personal-repo-baseline: repo の一覧 (user/repos) を読めません (応答の形が想定外)\n")
 
 # ---- CLI: 設定 file ----
 res = run_cli(routes_for(public_repo("o/good")), ["--repo", "o/good"], config: { "exclude" => ["hidden-owner/hidden-name"], "x" => 1 })
@@ -434,6 +485,10 @@ check("cli bad config: no gh calls", res[:calls].empty?)
 check("cli bad config: reason without content", res[:err].include?("知らない key") && !res[:err].include?("hidden"))
 res = run_cli(routes_for(public_repo("o/good")), ["--repo", "o/good"], config: "{")
 check("cli config not json", res[:rc] == 2 && res[:err].include?("JSON として読めません"))
+res = run_cli(routes_for(public_repo("o/good")), ["--repo", "o/good"],
+              config: '{"required_checks":{"o/good":["security"],"o/good":["test"]}}')
+check("cli config duplicate key", res[:rc] == 2 && res[:out].empty? && res[:calls].empty? &&
+  res[:err] == "personal-repo-baseline: 設定 file に重なった key があります\n")
 home = File.join(TMP, "home")
 FileUtils.mkdir_p(File.join(home, ".config", "agent-tools"))
 File.write(File.join(home, ".config", "agent-tools", "repo-baseline.json"), JSON.generate("exclude" => ["o/viahome"]))

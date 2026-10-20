@@ -111,6 +111,16 @@ module RepoBaseline
   # 1 repo の結果。status は :ok / :drift / :skipped / :error。findings は [項目, 今, あるべき] の配列。
   Result = Struct.new(:name, :visibility, :status, :findings, :reason)
 
+  # 設定 file の JSON の object。同じ key が重なったら、後の値で前の値を消さずに不正にする (JSON.parse は既定で後の
+  # 値を残すので、object_class で受ける)。
+  class StrictHash < Hash
+    def []=(key, value)
+      raise ArgumentError, "設定 file に重なった key があります" if key?(key)
+
+      super
+    end
+  end
+
   # 手元の設定。repo の名前は小文字にそろえて持つ。
   class Config
     def initialize(exclude, required_checks)
@@ -208,7 +218,7 @@ module RepoBaseline
     raise ArgumentError, "設定 file が UTF-8 として読めません" unless text.valid_encoding?
 
     data = begin
-      JSON.parse(text)
+      JSON.parse(text, object_class: StrictHash)
     rescue JSON::ParserError
       raise ArgumentError, "設定 file が JSON として読めません"
     end
@@ -263,13 +273,31 @@ module RepoBaseline
     raise Error, "#{label} の応答が JSON ではありません"
   end
 
-  # 応答の status code だけを読む (`gh api -i` の 1 行目)。gh は 4xx でも status 行を stdout に出す。
+  # 応答の status code だけを読む (`gh api -i` の 1 行目)。gh は 4xx・5xx でも status 行を stdout に出して非 0 で
+  # 終わるので、終了状態だけでは失敗と分けられない。2xx なのに gh が失敗したとき (受信の途中の失敗など) は、
+  # 応答を受け取れていないので確かめられないにする。
   def gh_status(path, label)
-    out, _status = gh(["api", "-i", path])
+    out, status = gh(["api", "-i", path])
     code = out[%r{\AHTTP/\S+ (\d{3})}, 1]
     raise Error, "#{label} を読めません (応答に status が無い)" if code.nil?
+    raise Error, "#{label} を読めません (gh api が失敗)" if code.to_i < 300 && !status.success?
 
     code.to_i
+  end
+
+  # ページングされる list の API を全ページ読む (`--slurp` で各ページを 1 要素にまとめ、平坦にする)。
+  def gh_list(path, label)
+    out, status = gh(["api", "--paginate", "--slurp", path])
+    raise Error, "#{label} を読めません (gh api が失敗)" unless status.success?
+
+    pages = JSON.parse(out)
+    unless pages.is_a?(Array) && pages.all? { |page| page.is_a?(Array) }
+      raise Error, "#{label} を読めません (応答の形が想定外)"
+    end
+
+    pages.flatten(1)
+  rescue JSON::ParserError
+    raise Error, "#{label} の応答が JSON ではありません"
   end
 
   def current_repo
@@ -282,22 +310,12 @@ module RepoBaseline
     name
   end
 
-  # 自分が owner の repo を全ページ読む (`--slurp` で各ページを 1 要素にまとめ、平坦にする)。
+  # 自分が owner の repo を全ページ読む。
   def owned_repos
-    out, status = gh(["api", "--paginate", "--slurp", LIST_PATH])
-    raise Error, "repo の一覧を読めません (gh api が失敗)" unless status.success?
-
-    pages = JSON.parse(out)
-    unless pages.is_a?(Array) && pages.all? { |page| page.is_a?(Array) }
-      raise Error, "repo の一覧の応答が想定の形ではありません"
-    end
-
-    repos = pages.flatten(1)
-    raise Error, "repo の一覧の応答が想定の形ではありません" unless repos.all? { |r| r.is_a?(Hash) && valid_repo?(r["full_name"]) }
+    repos = gh_list(LIST_PATH, "repo の一覧 (user/repos)")
+    raise Error, "repo の一覧 (user/repos) を読めません (応答の形が想定外)" unless repos.all? { |r| r.is_a?(Hash) && valid_repo?(r["full_name"]) }
 
     repos
-  rescue JSON::ParserError
-    raise Error, "repo の一覧の応答が JSON ではありません"
   end
 
   # ---- 設定を読む ----
@@ -346,10 +364,14 @@ module RepoBaseline
     status == "enabled"
   end
 
-  # default branch に効く rule (全 ruleset の和) を読む。
+  # default branch に効く rule (全 ruleset の和) を全ページ読む。branch の名前は 1 つの path の成分に encode する
+  # (`/` も %2F に)。`.` / `..` は API の path を別の場所へ向けうるので受けない。
   def branch_rules(name, branch)
     string!(branch, "default branch")
-    rules = gh_json("repos/#{name}/rules/branches/#{ERB::Util.url_encode(branch)}", "default branch の rule")
+    raise Error, "default branch を読めません (応答の形が想定外)" if %w[. ..].include?(branch)
+
+    path = "repos/#{name}/rules/branches/#{ERB::Util.url_encode(branch)}?per_page=100"
+    rules = gh_list(path, "default branch の rule")
     unless rules.is_a?(Array) && rules.all? { |r| r.is_a?(Hash) && r["type"].is_a?(String) }
       raise Error, "default branch の rule を読めません (応答の形が想定外)"
     end

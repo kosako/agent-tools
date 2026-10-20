@@ -69,7 +69,7 @@ usage と設定 file の不正は stderr に 1 行出し、理由に設定の中
 | merge の後に branch を消す | on | on | repo の `delete_branch_on_merge` |
 | `.github/dependabot.yml` | 有る | 有る | `GET repos/{repo}/contents/.github/dependabot.yml` (無ければ `.yaml`) |
 | Secret scanning と push protection | on | (使えない) | repo の `security_and_analysis` |
-| default branch の ruleset: PR を必須にする | 有る (必要な approve 0) | (使えない) | `GET repos/{repo}/rules/branches/{default branch}` |
+| default branch の ruleset: PR を必須にする | 有る (必要な approve 0) | (使えない) | `GET repos/{repo}/rules/branches/{default branch}` (全ページ) |
 | default branch の ruleset: force push と削除の禁止 | 有る | (使えない) | 同上 |
 | default branch の ruleset: 必須の check | 設定 file に書いた check を含む | (使えない) | 同上 |
 
@@ -105,8 +105,8 @@ repo の名前は tracked な file に書かず、ここに置きます。
 ```
 
 - key は `exclude` (対象から外す repo の配列) と `required_checks` (repo から、必須にする check の名前の配列への
-  object) だけ。知らない key、型の外れ、OWNER/REPO の形でない名前、空の配列、制御文字、`required_checks` の大文字
-  小文字だけ違う key の重なりは不正 (exit 2)。
+  object) だけ。知らない key、型の外れ、OWNER/REPO の形でない名前、空の配列、制御文字、key の重なり (同じ綴りも、
+  `required_checks` の大文字小文字だけ違う key も) は不正 (exit 2)。
 - repo の名前は大文字小文字を区別しません。rename した repo は、API が返す新しい名前でも除外を照合します。
 - `XDG_CONFIG_HOME` は絶対 path のときだけ使い、`HOME` も絶対 path でなければ場所を決めずに止めます
   (`personal-usage-reader` の設定 file と同じ扱い)。symlink は辿った先で判定し、regular file でなければ不正です。
