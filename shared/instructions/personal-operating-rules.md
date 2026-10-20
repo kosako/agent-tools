@@ -33,6 +33,10 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
   fail-closed の後の進め方 (元の author を確かめられるときの trailer の付け直し・分割・人の review。人による
   reviewer の上書きはしない)) は
   `personal-review-request` の「レビュアーの決定」。
+- PR の review のコメントの投稿は standing rule で許可する: 現在のユーザーの review の依頼に伴う、PR の review の
+  依頼・結果・follow-up (指摘への対応) のコメントは、毎回の投稿の明示なしに投稿してよい (`personal-review-request` の
+  write gate の standing rule。#537)。merge / approve / 修正 / commit / push は含まない。投稿の前の public-safety の
+  gate (下の「public safety」) はそのまま当てる。
 
 ## production レール (品質ポリシー)
 
