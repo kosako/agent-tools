@@ -16,15 +16,20 @@ enforcement boundary ではない:
 - repo local の `core.hooksPath` (husky 等) は global 設定を上書きし、gate は黙って
   外れる (実測 #201)。
 - 別 client / 他マシンからの commit・GitHub 上の操作 (squash merge 等) は対象外。
-- `git commit` 以外で作る commit (競合の無い自動の merge (pull を含む)・rebase・cherry-pick・revert) では pre-commit が走らない (#414)。
-  git-identity の検査は、pre-merge-commit (競合の無い自動の merge) と prepare-commit-msg (merge・cherry-pick・
-  revert・rebase。競合を解いた後の `--continue` を含む) にもつないで、これらの経路でも走らせる (#449)。差分の
-  public-safety の検査は広げないので、これらの経路では走らない (公開される内容は push の前の `--stdin` が見る。下の
-  段落)。commit-msg は、競合の無い自動の merge と、競合を解いた後の merge・cherry-pick・revert の `--continue` では
-  走るので、そこでは message の public-safety の検査 (`--commit-msg`) と ai-trailer の検査は残る (競合の無い
-  cherry-pick・revert・rebase と rebase の `--continue` では走らない)。`git am` では prepare-commit-msg も
-  pre-merge-commit も走らず (走るのは applypatch-msg・pre-applypatch・post-applypatch)、どの gate も走らない。
-  経路ごとに走る hook と、非 0 で止まるかの実測は #449 (git 2.54.0)。
+- `git commit` 以外で作る commit のうち、競合の無い自動の merge (pull を含む)・cherry-pick・revert と、merge backend
+  (既定) の rebase (競合を解いた後の `--continue` を含む) では pre-commit が走らない (#414)。git-identity の検査は、
+  pre-merge-commit (競合の無い自動の merge) と prepare-commit-msg (merge・cherry-pick・revert・merge backend の
+  rebase。競合を解いた後の `--continue` を含む) にもつないで、これらの経路でも走らせる (#449)。差分の public-safety
+  の検査はこの 2 stage には足さない (公開される内容は push の前の `--stdin` が見る。下の段落) ので、pre-commit の
+  走らない上の経路では走らない。
+- 競合を解いた後の merge・cherry-pick・revert の `--continue` は、内部で `git commit` と同じ hook を呼ぶので、既存の
+  pre-commit (差分の public-safety と git-identity) と commit-msg が走る。commit-msg は競合の無い自動の merge でも
+  走るので、そこでも message の public-safety の検査 (`--commit-msg`) と ai-trailer の検査は残る (競合の無い
+  cherry-pick・revert・rebase と rebase の `--continue` では commit-msg は走らない)。
+- `git am` と、apply backend の rebase (`git rebase --apply` や `rebase.backend=apply`。内部で `git am` を使う) では、
+  pre-commit・prepare-commit-msg・pre-merge-commit・commit-msg のどれも走らず (走るのは applypatch-msg・
+  pre-applypatch・post-applypatch)、どの gate も走らない。経路ごとに走る hook と、非 0 で止まるかの実測は #449
+  (git 2.54.0。apply backend の rebase は #449 の review で確かめた)。
 
 hard な床は従来どおりここに載せない (credential 隔離 / egress / CI)。公開する内容の検査は
 公開の前に置く (#413): 差分は pre-commit、commit message は commit-msg (public-safety の
@@ -179,10 +184,11 @@ prepare-commit-msg では git の引数 (message の file・source・sha) が渡
   この gate。
 - **走る stage (#449)**: `git commit` では pre-commit と prepare-commit-msg (同じ検査が 2 回走る)。
   pre-commit の走らない経路では、競合の無い自動の merge (pull を含む) が pre-merge-commit と prepare-commit-msg、
-  cherry-pick・revert・rebase が prepare-commit-msg (競合を解いた後の `--continue` を含む)。止まったときは
+  cherry-pick・revert・merge backend の rebase が prepare-commit-msg (競合を解いた後の `--continue` を含む。merge・
+  cherry-pick・revert の `--continue` では pre-commit も走る)。止まったときは
   途中の状態と staged の変更が残る (merge は `MERGE_HEAD`、cherry-pick は `CHERRY_PICK_HEAD`、rebase は
   `rebase-merge`。競合の無い revert は `REVERT_HEAD` を残さず、変更だけが staged で残った。#449 の実測)。identity を
-  直してから続けるか、各経路の `--abort` などで戻す。`git am` では走らない (上の強度ラベル)。
+  直してから続けるか、各経路の `--abort` などで戻す。`git am` と apply backend の rebase では走らない (上の強度ラベル)。
   - cherry-pick・revert・rebase の hook から `git var` が返す author は、元の commit の author ではなく config の
     identity (git 2.54.0 で観察。`git commit --amend` と `--author` では、hook の env に渡る値になる)。他人の
     commit を取り込むときも、検査されるのは自分の identity。

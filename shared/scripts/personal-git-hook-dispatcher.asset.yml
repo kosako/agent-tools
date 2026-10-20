@@ -20,14 +20,15 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:6b439f34647f55200765934a985f787e937b26d7f0d07c23678c3f4237ff38b4
+  approved_build_id: sha256:92a5243e240e85fcd74f9cf72f45f1de954fbe9e4c3c1f20625f1babbf22132c
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-git-hook-dispatcher.rb
   format: text
 summary: >-
-  global core.hooksPath から呼ばれる git hook の入口。stage (pre-commit / commit-msg) ごとの
-  personal gate を実行し、全 pass なら repo 自身の hooks/<stage> に chain して「置換」を
-  「合成」に変える (#201 裁定)。gate の無い stage (git の既知の hook 名) は chain だけを行う素通し
-  (#430 の 3。素通しに使えない stage と未知の名前は exit 2)。best-effort guardrail で --no-verify 等で迂回可能
-  (docs/git-hook-gates.md)。登録・配線 (shim + git config) は dotfiles 所有。
+  global core.hooksPath から呼ばれる git hook の入口。stage (pre-commit / commit-msg / pre-merge-commit /
+  prepare-commit-msg。後の 2 つは git-identity だけ。#449) ごとの personal gate を実行し、全 pass なら repo 自身の
+  hooks/<stage> に chain して「置換」を「合成」に変える (#201 裁定)。gate の無い stage (git の既知の hook 名) は
+  chain だけを行う素通し (#430 の 3。素通しに使えない stage と未知の名前は exit 2)。best-effort guardrail で
+  --no-verify (pre-commit / commit-msg / pre-merge-commit を skip する。prepare-commit-msg は skip しない) や repo
+  local の core.hooksPath で迂回可能 (docs/git-hook-gates.md)。登録・配線 (shim + git config) は dotfiles 所有。

@@ -14,13 +14,15 @@
 # 挟む設計) と、context の identity file が name だけの partial な状態が重なると、この穴を
 # 踏む。可視化 (prompt / doctor) は既にあり、commit を作る経路で機械的に止めるのがこの gate。`git commit` では
 # pre-commit と prepare-commit-msg、pre-commit の走らない経路では、競合の無い自動の merge (pull を含む) が
-# pre-merge-commit と prepare-commit-msg、cherry-pick・revert・rebase が prepare-commit-msg で走る (#449)。
+# pre-merge-commit と prepare-commit-msg、cherry-pick・revert・merge backend (既定) の rebase が prepare-commit-msg
+# で走る (#449)。
 # cherry-pick・revert・rebase の hook から `git var` が返す author は、元の commit の author ではなく
 # config の identity (git 2.54.0 で観察)。
 #
 # 強度ラベル (偽らない): commit を作る経路に対する best-effort guardrail。
-# repo local の core.hooksPath / hook gates を無効化した環境、`git am` (prepare-commit-msg も
-# pre-merge-commit も走らない) では守れない。`git commit --no-verify` と `git merge --no-verify` は
+# repo local の core.hooksPath / hook gates を無効化した環境、`git am` と apply backend の rebase (`git rebase --apply`
+# や rebase.backend=apply。内部で git am を使い、prepare-commit-msg も pre-merge-commit も走らない) では守れない。
+# `git commit --no-verify` と `git merge --no-verify` は
 # pre-commit と pre-merge-commit を skip するが、prepare-commit-msg は skip しないので、この gate は走る (#449)。
 # enforcement boundary ではない。
 #

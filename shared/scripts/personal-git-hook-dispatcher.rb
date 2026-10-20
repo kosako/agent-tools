@@ -43,7 +43,8 @@ module GitHookDispatcher
   # pre-commit は public-safety (staged diff) → git-identity (#281。partial な identity) の順。
   # commit-msg は public-safety (commit message の本文。#413) → ai-trailer の順。
   # pre-merge-commit と prepare-commit-msg は git-identity だけ (#449)。pre-commit の走らない経路 (競合の無い
-  # 自動の merge と、cherry-pick・revert・rebase) でも partial な identity を止める。prepare-commit-msg では
+  # 自動の merge と、cherry-pick・revert・merge backend の rebase) でも partial な identity を止める (git am と apply
+  # backend の rebase はどちらの stage も走らないので対象外)。prepare-commit-msg では
   # git の引数 (message の file・source・sha) が gate に渡るが、git-identity は引数を読まない。差分の
   # public-safety は広げない (公開される内容は push の前の `--stdin` が見る)。
   STAGE_GATES = {

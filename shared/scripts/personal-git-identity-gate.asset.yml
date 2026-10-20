@@ -14,14 +14,16 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:b7cb671ac4d74a4a1d8c65d3762e27355f366e588d00192b09dc9517bf486d86
+  approved_build_id: sha256:cd8912d9d6e7e89c5ba56ac16c11025c678193197b8adeb78a6c5b4b4a27d95e
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-git-identity-gate.rb
   format: text
 summary: >-
-  pre-commit stage の git gate。git var で解決した author / committer の identity が name /
-  email とも非空であることを検証し、partial な identity (Git が受理してしまう空 email) の
-  commit を block する。identity の値は出力せず key 名だけを出す。context 一致は検査しない
-  (dotfiles 側の layout 規約に依存するため)。best-effort guardrail で --no-verify 等で迂回可能
-  (docs/git-hook-gates.md)。dispatcher の pre-commit 2 本目 (public-safety の後)。
+  pre-commit / pre-merge-commit / prepare-commit-msg stage の git gate (#449)。git var で解決した author /
+  committer の identity が name / email とも非空であることを検証し、partial な identity (Git が受理してしまう
+  空 email) の commit を block する。identity の値は出力せず key 名だけを出す。context 一致は検査しない
+  (dotfiles 側の layout 規約に依存するため)。best-effort guardrail で、repo local の core.hooksPath、git am と
+  rebase の apply backend (どちらも 3 stage が走らない) では迂回される。--no-verify は prepare-commit-msg を
+  skip しないので迂回できない (docs/git-hook-gates.md)。dispatcher の pre-commit 2 本目 (public-safety の後) と、
+  pre-merge-commit・prepare-commit-msg の唯一の gate。
