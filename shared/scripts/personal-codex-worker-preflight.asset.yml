@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:76e604203810f1332103795c3103137917241864e4428aeb49be1cc0c36ab6b2
+  approved_build_id: sha256:0ccde89129304fbcac8898a48514c15bc1cda537399561fcafb5bd354fe2924a
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-codex-worker-preflight.rb
@@ -23,6 +23,8 @@ summary: >-
   Claude が Codex を worker として委譲起動する前の決定的 preflight (#254)。Codex の session 内から
   の起動 (非対称) / codex CLI の flag / features list の disable 対象を検査し、connector・MCP
   (bootstrap 含む)・execpolicy の allow rule を外した起動 argv (--ignore-user-config
-  --ignore-rules + --disable apps 等、model / effort は再指定) を出す (exit 0)。capability
+  --ignore-rules + --disable apps 等、model / effort と、選ばれたプロバイダの model_provider と aws の
+  profile / region は -c で再指定。#543) を出す (exit 0)。capability
   不足と非対称は exit 1 (BLOCKED)、user config の top-level を安全に解釈できなければ exit 2
-  (fail-closed。--model / --effort の明示で回避)。規範の正本は personal-codex-worker skill。
+  (fail-closed。--model / --effort の明示で回避)、選ばれたプロバイダに引き継げない設定があっても exit 2。
+  規範の正本は personal-codex-worker skill。

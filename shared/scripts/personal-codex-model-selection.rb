@@ -14,8 +14,11 @@
 #
 # 出力 (exit 0):
 # - json: {"selection": {key: value}, "sources": {key: "user config" | "<profile> profile"}}。無い key は
-#   含めない (Codex の既定に委ねる)。
-# - model: model の値を 1 行 (無ければ空行)。
+#   含めない (Codex の既定に委ねる)。config に選ばれたプロバイダ (model_provider) があれば、さらに
+#   "provider": {`-c` の key: value} と "provider_sources": {key: 出所} を足す (#543。`--ignore-user-config` で外れる
+#   プロバイダの設定のうち、引き継ぐ key だけ。読み方は preflight の layered_provider_selection)。caller は provider
+#   の key をすべて `-c key="value"` で渡す。
+# - model: model の値を 1 行 (無ければ空行)。provider があれば引き継げないので exit 2。
 # effort をどう使うかは caller が決める (review は選択のまま、sweep はプリセット、consult は独自の値)。
 #
 # exit 2: usage / preflight を load できない / top-level に解釈できない行 / 値が形に合わない / file は在るが
@@ -63,19 +66,33 @@ module CodexModelSelection
     raise ArgumentError, "#{PREFLIGHT_NAME} を load できません (同じ directory に配備されているか確かめてください)"
   end
 
-  def render(opts, selection, sources)
-    return selection.fetch("model", "") if opts[:format] == "model"
+  # provider は [{key => value}, {key => 出所}] (選ばれたプロバイダを引き継ぐ `-c`。無ければ空。#543)。
+  def render(opts, selection, sources, provider)
+    overrides, provider_sources = provider
+    if opts[:format] == "model"
+      # model だけを渡す caller はプロバイダを引き継げないので、黙って OpenAI の既定に倒さず止める。
+      raise ArgumentError, "provider の設定があるので、--format json で provider も読んでください" unless overrides.empty?
+
+      return selection.fetch("model", "")
+    end
 
     labels = { "config" => "user config", "profile" => "#{opts[:profile]} profile" }
-    JSON.generate("selection" => selection, "sources" => sources.transform_values { |s| labels.fetch(s) })
+    out = { "selection" => selection, "sources" => sources.transform_values { |s| labels.fetch(s) } }
+    unless overrides.empty?
+      out["provider"] = overrides
+      out["provider_sources"] = provider_sources.transform_values { |s| labels.fetch(s) }
+    end
+    JSON.generate(out)
   end
 
   def run(argv)
     opts = parse_args(argv)
     load_preflight
-    selection, sources = CodexWorkerPreflight.layered_model_selection(CodexWorkerPreflight.codex_home(nil),
-                                                                      PROFILES.fetch(opts[:profile]))
-    puts render(opts, selection, sources)
+    home = CodexWorkerPreflight.codex_home(nil)
+    profile = PROFILES.fetch(opts[:profile])
+    selection, sources = CodexWorkerPreflight.layered_model_selection(home, profile)
+    provider = CodexWorkerPreflight.layered_provider_selection(home, profile)
+    puts render(opts, selection, sources, provider)
     0
   rescue ArgumentError => e
     warn "personal-codex-model-selection: #{e.message}"

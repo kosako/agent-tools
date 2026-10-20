@@ -185,6 +185,157 @@ check("launch argv は result file と stdin prompt で終わる", argv.last(3) 
 check("launch argv に --ephemeral や mcp_servers を付けない",
       !argv.include?("--ephemeral") && argv.none? { |a| a.include?("mcp_servers") })
 
+# ---- provider の引き継ぎ (#543) ----
+# 想定外の例外も test を止めずに、比べる値 (error の Hash) にして assertion で落とす。
+def prov(text)
+  P.read_provider_settings(text, "cfg")
+rescue StandardError => e
+  { error: "#{e.class}: #{e.message}" }
+end
+
+def prov_error(text)
+  P.read_provider_settings(text, "cfg")
+  nil
+rescue ArgumentError => e
+  e.message
+rescue StandardError => e
+  "unexpected #{e.class}"
+end
+
+BEDROCK = <<~TOML
+  model = "gpt-x"
+  model_provider = "amazon-bedrock"
+  [model_providers.amazon-bedrock.aws]
+  profile = "work"
+  region = "us-west-2" # note
+TOML
+check("model_provider の文字列が無い file は読まない (解釈できない行があっても今と同じ)",
+      prov("weird line\n[x\nmodel = \"gpt-x\"\n") == { provider: nil, aws: {}, unsupported: [], all_unsupported: false })
+check("組み込みの amazon-bedrock の provider と aws の profile / region を読む",
+      prov(BEDROCK) == { provider: "amazon-bedrock", aws: { "amazon-bedrock" => { "profile" => "work", "region" => "us-west-2" } },
+                         unsupported: [], all_unsupported: false })
+fake_header = "[model_providers.amazon-bedrock.aws]\nregion = \"CANARY\"\n[model_providers.amazon-bedrock]\nbase_url = \"CANARY\"\n"
+check("複数行の basic string の中の偽の header と key を読まない",
+      prov("model_provider = \"amazon-bedrock\"\nnote = \"\"\"\n#{fake_header}\"\"\"\n") ==
+      { provider: "amazon-bedrock", aws: {}, unsupported: [], all_unsupported: false })
+check("複数行の literal string の中も読まない",
+      prov("model_provider = \"amazon-bedrock\"\nnote = '''\n#{fake_header}'''\n") ==
+      { provider: "amazon-bedrock", aws: {}, unsupported: [], all_unsupported: false })
+check("行を跨ぐ配列の中の [ ] を header と誤認しない",
+      prov("model_provider = \"amazon-bedrock\"\n[mcp_servers.x]\nargs = [\n  \"a\",\n  \"[model_providers.amazon-bedrock]\",\n]\n" \
+           "[model_providers.amazon-bedrock.aws]\nregion = \"r1\"\n")[:aws] == { "amazon-bedrock" => { "region" => "r1" } })
+check("escape した引用符と、閉じの前に続く引用符を越えて次の header を読む",
+      prov("model_provider = \"amazon-bedrock\"\nnote = \"\"\"a\\\"\"\"b\"\"\"\"\n[model_providers.amazon-bedrock.aws]\nregion = \"r2\"\n")[:aws] ==
+      { "amazon-bedrock" => { "region" => "r2" } })
+check("1 行の文字列の中の括弧と # は値の外として数えない",
+      prov("model_provider = \"amazon-bedrock\"\nx = { a = \"[{#\" }\ny = '[#'\n[model_providers.amazon-bedrock.aws]\nregion = \"r3\"\n")[:aws] ==
+      { "amazon-bedrock" => { "region" => "r3" } })
+check("comment の中の括弧は値の外として数えない",
+      prov("model_provider = \"amazon-bedrock\"\nx = [1] # ]]\ny = 2 # [\n[model_providers.amazon-bedrock.aws]\nregion = \"r6\"\n")[:aws] ==
+      { "amazon-bedrock" => { "region" => "r6" } })
+check("1 行の basic string の escape した引用符を越えて読む",
+      prov("model_provider = \"amazon-bedrock\"\nx = \"a\\\"[b\"\n[model_providers.amazon-bedrock.aws]\nregion = \"r7\"\n")[:aws] ==
+      { "amazon-bedrock" => { "region" => "r7" } })
+check("quoted key の header と dotted key でも読む",
+      prov("model_provider = \"amazon-bedrock\"\n[model_providers.\"amazon-bedrock\".aws]\nprofile = \"p\"\n")[:aws] ==
+        { "amazon-bedrock" => { "profile" => "p" } } &&
+      prov("model_provider = \"amazon-bedrock\"\n[model_providers.amazon-bedrock]\naws.region = \"r4\"\n")[:aws] ==
+        { "amazon-bedrock" => { "region" => "r4" } })
+check("header の後ろの comment は通る",
+      prov("model_provider = \"amazon-bedrock\"\n[model_providers.amazon-bedrock.aws] # c\nregion = \"r5\"\n")[:aws] ==
+      { "amazon-bedrock" => { "region" => "r5" } })
+check("profiles の下の model_provider は読まない (--ignore-user-config で効かない)",
+      prov("[profiles.x]\nmodel_provider = \"amazon-bedrock\"\n")[:provider].nil?)
+{
+  "base_url" => "[model_providers.amazon-bedrock]\nbase_url = \"https://x\"\n",
+  "env_key" => "[model_providers.amazon-bedrock]\nenv_key = \"K\"\n",
+  "http_headers" => "[model_providers.amazon-bedrock.http_headers]\nX = \"CANARY\"\n",
+  "aws の他の key" => "[model_providers.amazon-bedrock.aws]\nrole = \"r\"\n",
+  "literal string の region" => "[model_providers.amazon-bedrock.aws]\nregion = 'r'\n",
+  "形の違う profile" => "[model_providers.amazon-bedrock.aws]\nprofile = \"a b\"\n",
+  "重なった region" => "[model_providers.amazon-bedrock.aws]\nregion = \"a\"\nregion = \"b\"\n",
+  "inline table の aws" => "[model_providers.amazon-bedrock]\naws = { region = \"r\" }\n",
+  "array of tables の aws (header だけで記録する)" => "[[model_providers.amazon-bedrock.aws]]\nregion = \"r\"\n",
+  "aws 以外の table の profile" => "[model_providers.amazon-bedrock.other]\nprofile = \"p\"\n",
+}.each do |name, body|
+  check("選ばれたプロバイダの #{name} は「引き継げない」に記録する",
+        prov("model_provider = \"amazon-bedrock\"\n#{body}")[:unsupported] == ["amazon-bedrock"])
+end
+check("model_providers の inline table は全部を「引き継げない」にする",
+      prov("model_provider = \"amazon-bedrock\"\nmodel_providers = { x = 1 }\n")[:all_unsupported])
+check("使われないプロバイダの base_url も記録だけする (止めるのは選ばれたときだけ)",
+      prov("model_provider = \"amazon-bedrock\"\n[model_providers.other]\nbase_url = \"https://x\"\n")[:unsupported] == ["other"])
+{
+  "重なった model_provider" => ["model_provider = \"a\"\nmodel_provider = \"b\"\n", "複数あり"],
+  "literal string の model_provider" => ["model_provider = 'a'\n", "basic string 1 行"],
+  "dot を含む model_provider" => ["model_provider = \"a.b\"\n", "basic string 1 行"],
+  "閉じない 1 行の文字列" => ["model_provider = \"a\"\nx = \"open\n", "行内で閉じていません"],
+  "閉じない複数行の文字列" => ["model_provider = \"a\"\nx = \"\"\"\nopen\n", "値が閉じていません"],
+  "合わない括弧" => ["model_provider = \"a\"\nx = ]\n", "括弧が合いません"],
+  "解釈できない key" => ["model_provider = \"a\"\n\"es\\\"c\" = 1\n", "key を解釈できません"],
+  "= の無い行" => ["model_provider = \"a\"\nweird line\n", "key = value の行を解釈できません"],
+  "閉じない header" => ["model_provider = \"a\"\n[x\n", "table header を解釈できません"],
+  "header の後ろの余分な文字" => ["model_provider = \"a\"\n[x] junk\n", "table header を解釈できません"],
+}.each do |name, (text, reason)|
+  check("#{name} は fail-closed で理由を出す", prov_error(text).to_s.include?(reason))
+end
+check("理由文に値を出さない", !prov_error("model_provider = \"CANARY bad\"\n").to_s.include?("CANARY"))
+
+def layered(config, profile = nil)
+  dir = Dir.mktmpdir
+  File.write(File.join(dir, "config.toml"), config) if config
+  File.write(File.join(dir, "agent-tools-worker.config.toml"), profile) if profile
+  P.layered_provider_selection(dir, "agent-tools-worker")
+ensure
+  FileUtils.rm_rf(dir)
+end
+
+def layered_error(config, profile = nil)
+  layered(config, profile)
+  nil
+rescue ArgumentError => e
+  e.message
+end
+
+require "tmpdir"
+require "fileutils"
+check("provider が無ければ空 (今と同じ起動)", layered("model = \"gpt-x\"\n") == [{}, {}] && layered(nil) == [{}, {}])
+check("選ばれたプロバイダの -c を model_provider、aws.profile、aws.region の順で返す",
+      layered(BEDROCK) == [{ "model_provider" => "amazon-bedrock", "model_providers.amazon-bedrock.aws.profile" => "work",
+                             "model_providers.amazon-bedrock.aws.region" => "us-west-2" },
+                           { "model_provider" => "config", "model_providers.amazon-bedrock.aws.profile" => "config",
+                             "model_providers.amazon-bedrock.aws.region" => "config" }])
+check("profile の file が key ごとに重なる",
+      layered(BEDROCK, "[model_providers.amazon-bedrock.aws]\nregion = \"eu-west-1\"\n# model_provider\n") ==
+      [{ "model_provider" => "amazon-bedrock", "model_providers.amazon-bedrock.aws.profile" => "work",
+         "model_providers.amazon-bedrock.aws.region" => "eu-west-1" },
+       { "model_provider" => "config", "model_providers.amazon-bedrock.aws.profile" => "config",
+         "model_providers.amazon-bedrock.aws.region" => "profile" }])
+check("profile の model_provider が勝ち、選ばれなかったプロバイダの aws は渡さない",
+      layered(BEDROCK, "model_provider = \"openai\"\n") == [{ "model_provider" => "openai" }, { "model_provider" => "profile" }])
+check("選ばれたプロバイダに引き継げない設定があれば止める",
+      layered_error("model_provider = \"amazon-bedrock\"\n[model_providers.amazon-bedrock]\nbase_url = \"https://CANARY\"\n").to_s
+        .include?("user config の選ばれた provider に、引き継げない設定があります"))
+check("profile の file にあっても止める",
+      layered_error(BEDROCK, "[model_providers.amazon-bedrock]\nenv_key = \"K\"\n").to_s
+        .include?("agent-tools-worker.config.toml の選ばれた provider に、引き継げない設定があります"))
+check("model_providers の inline table があれば、どのプロバイダでも止める",
+      layered_error("model_provider = \"amazon-bedrock\"\nmodel_providers = { x = 1 }\n").to_s.include?("引き継げない設定"))
+check("使われないプロバイダの設定では止めない",
+      layered("model_provider = \"amazon-bedrock\"\n[model_providers.other]\nbase_url = \"https://x\"\n")[0] ==
+      { "model_provider" => "amazon-bedrock" })
+check("止める理由に値を出さない",
+      !layered_error("model_provider = \"amazon-bedrock\"\n[model_providers.amazon-bedrock]\nbase_url = \"https://CANARY\"\n").to_s.include?("CANARY"))
+
+pargv = P.launch_argv(%w[apps], { "model" => "gpt-x" }, "/tmp/clone/.git",
+                      { "model_provider" => "amazon-bedrock", "model_providers.amazon-bedrock.aws.region" => "us-west-2" })
+check("launch argv に provider の -c が並び、result file と stdin prompt で終わる",
+      pargv.each_cons(2).include?(["-c", 'model_provider="amazon-bedrock"']) &&
+      pargv.each_cons(2).include?(["-c", 'model_providers.amazon-bedrock.aws.region="us-west-2"']) &&
+      pargv.last(3) == ["-o", "<run dir>/result.md", "-"])
+check("provider が無ければ provider の -c を付けない",
+      P.launch_argv(%w[apps], {}, "/tmp/clone/.git").none? { |a| a.include?("model_provider") })
+
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -1116,6 +1267,54 @@ i = argv.index("--add-dir")
 abort "add-dir の値" unless argv[i + 1] == clone_git
 abort "main の path が argv に現れてはいけない" if argv.any? { |a| a.include?(main_root) }
 ' "$clone_git_dir" "$repo_root" || fail "--clone の launch argv が契約どおりでない: $out"
+
+# (q) provider の引き継ぎ (#543): config.toml の組み込みの amazon-bedrock を -c で launch argv に渡す。
+#     provider は認証と接続先なので、--model / --effort の明示があっても config から読む。
+phome="$tmp/provider-home"
+mkdir -p "$phome"
+cat > "$phome/config.toml" <<'EOF'
+model = "gpt-x"
+model_provider = "amazon-bedrock"
+approval_policy = "CANARY-POLICY"
+[mcp_servers.CANARY]
+command = "/opt/CANARY/bin"
+[model_providers.amazon-bedrock.aws]
+profile = "work"
+region = "us-west-2"
+EOF
+set +e
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$phome" --clone "$clone" \
+  --model gpt-explicit 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "provider の config で exit 0 (rc=$rc): $out"
+echo "$out" | grep -q "^provider: model_provider=amazon-bedrock (config), model_providers.amazon-bedrock.aws.profile=work (config), model_providers.amazon-bedrock.aws.region=us-west-2 (config)$" ||
+  fail "provider の行が出ていない: $out"
+echo "$out" | grep -q -- ' -c model="gpt-explicit" -c model_provider="amazon-bedrock" -c model_providers.amazon-bedrock.aws.profile="work" -c model_providers.amazon-bedrock.aws.region="us-west-2" -o ' ||
+  fail "明示の model と provider の -c が launch に並んでいない: $out"
+case "$out" in *CANARY*) fail "provider の出力に他の config の値を出してはいけない: $out" ;; esac
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$phome" --clone "$clone" --json)
+printf '%s' "$out" | ruby -rjson -e '
+j = JSON.parse(STDIN.read)
+abort "provider" unless j["provider"] == { "model_provider" => "amazon-bedrock",
+  "model_providers.amazon-bedrock.aws.profile" => "work", "model_providers.amazon-bedrock.aws.region" => "us-west-2" }
+abort "provider_sources" unless j["provider_sources"].values.uniq == ["config"]
+abort "argv" unless j["launch_argv"].each_cons(2).include?(["-c", %q{model_provider="amazon-bedrock"}])
+' || fail "--json の provider が契約どおりでない: $out"
+# provider の無い config は今と同じ (provider は空、表示は codex default)
+out=$(run_pf 2>&1)
+echo "$out" | grep -q "^provider: (codex default)$" || fail "provider の無い config では codex default と出すべき: $out"
+case "$out" in *model_provider*) fail "provider の無い config で provider の -c を付けてはいけない: $out" ;; esac
+# 選ばれたプロバイダに引き継げない設定 (base_url) があれば、--model の明示があっても launch argv を出さずに exit 2
+printf '[model_providers.amazon-bedrock]\nbase_url = "https://CANARY"\n' >> "$phome/config.toml"
+set +e
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$phome" --clone "$clone" \
+  --model gpt-explicit 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "引き継げない provider の設定は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "user config の選ばれた provider に、引き継げない設定があります" || fail "引き継げない理由を出すべき: $out"
+case "$out" in *"--add-dir"*|*CANARY*) fail "引き継げない provider で launch argv や値を出してはいけない: $out" ;; esac
 
 
 echo "ok: codex-worker-preflight self-test"

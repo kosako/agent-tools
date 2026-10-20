@@ -82,9 +82,10 @@ codex features list
   渡すと CLI が止まるので、行が無ければ起動しない。`--disable` を外して起動することもしない)。
 - model / effort の読み取り (`LAUNCH.md` の command) が exit 0 で終わる。user の `config.toml` と Codex home
   (`$CODEX_HOME`、空なら `~/.codex`) の review 用 profile file `agent-tools-review.config.toml` の top-level を、
-  配備済みの `personal-codex-model-selection` で worker の preflight と同じ規則で読む。exit 0 以外 (top-level に
-  解釈できない行、値が形に合わない、script か preflight が配備されていない、file を読めない・regular file でない)
-  は BLOCKED とし、推測した model で走らせず、`--ignore-user-config` を外して user config を
+  配備済みの `personal-codex-model-selection` で worker の preflight と同じ規則で読む (選ばれたプロバイダがあれば、
+  引き継ぐ provider の key も同じ出力で読む。#543)。exit 0 以外 (top-level に解釈できない行、値が形に合わない、
+  選ばれたプロバイダに引き継げない設定がある、script か preflight が配備されていない、file を読めない・regular
+  file でない) は BLOCKED とし、推測した model で走らせず、`--ignore-user-config` を外して user config を
   読ませることもしない。
 - current working directory が review 対象の git repository である。
 
@@ -237,7 +238,7 @@ command は **この skill の directory にある `LAUNCH.md` を読んで、�
 
 - **Codex の flag は固定**: `codex exec --ignore-user-config --ignore-rules -s read-only -c approval_policy="never"`
   `--disable apps --disable computer_use --disable browser_use [-c model="<model>"] [-c model_reasoning_effort="<effort>"]`
-  `-o <run dir>/result.md -` で、brief は stdin から渡す。review は PR の diff という untrusted な内容を読むので、
+  `[-c <provider の key>="<値>" …] -o <run dir>/result.md -` で、brief は stdin から渡す。review は PR の diff という untrusted な内容を読むので、
   `personal-repo-audit` の `CODEX-LAUNCH.md` (監査の起動) と同じ境界にする: `--ignore-user-config` で `config.toml` と
   そこに足される bootstrap の MCP server を読まず、`--ignore-rules` で execpolicy の `.rules` を読まず、`--disable` で
   account 側の connector と sandbox の外へ届く tool を外す (read-only の sandbox は MCP の tool の呼び出しを止めない)。
@@ -253,6 +254,12 @@ command は **この skill の directory にある `LAUNCH.md` を読んで、�
   `service_tier`) は読まない (worker と同じ)。どちらにも無い key は渡さず Codex の既定に任せる。file は作らず、
   書き換えない。読み取った値以外の `-m` や model-specific config は足さない。別 agent / wrapper に代行させず、
   実際の Codex CLI process を起動する。
+- **provider も user の設定から引き継ぐ (#543)**: `--ignore-user-config` は `config.toml` の provider の設定 (と、
+  それに付く認証。例: 組み込みの amazon-bedrock の AWS の profile / region) も外し、Codex は OpenAI の標準の API に
+  認証なしで接続して 401 になる。同じ script が、選ばれたプロバイダ (`model_provider`) と、そのプロバイダの
+  `[model_providers.<id>.aws]` の `profile` / `region` だけを読み、出力の `provider` に `-c` の key と値として出すので、
+  すべて `-c` で渡す。それ以外の provider の設定 (`base_url`・`env_key`・秘密を書きうる `http_headers` など) は読まず、
+  選ばれたプロバイダにあれば script が exit 2 で止める (BLOCKED)。
 - **escape**: path・nonce・model・effort は生成時に shell literal 化 (値全体を `'` で囲み、内側の `'` を `'\''` に
   置換) して script 先頭の変数に 1 回だけ埋め込み、以降は `"$repo"` / `"$run"` で参照する。値を
   inline の引用へ展開しない。herdr の `pane run` は pane shell と呼び出し元 shell の 2 段で literal

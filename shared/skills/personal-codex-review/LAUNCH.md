@@ -29,6 +29,7 @@ cd "$repo" || exit 90
 codex exec --ignore-user-config --ignore-rules -s read-only -c approval_policy="never" \
   --disable apps --disable computer_use --disable browser_use \
   -c "model=\"$model\"" -c "model_reasoning_effort=\"$effort\"" \
+  -c <provider の key="value" の shell literal> \
   -o "$run/result.md" - < "$run/brief.md"
 rc=$?
 printf 'CODEX-REVIEW-DONE-%s exit=%s\n' "$nonce" "$rc" | tee "$run/done.txt"
@@ -39,6 +40,11 @@ exit "$rc"
 key は、その変数の行と対応する `-c` を script から除きます (空の値を渡さない)。`-c` の値は TOML として読まれる
 ので、引用符ごと渡します (`model="<値>"`。引用符が無いと、値によっては数値などに読まれる)。値は preflight が
 `\A[A-Za-z0-9._-]+\z` に限っているので、引用符の中に入れても壊れません。
+
+provider の `-c` は、読み取りの出力に `provider` があるときだけ、その key ごとに 1 行ずつ並べます (#543。順は出力の
+とおり。例: `model_provider="amazon-bedrock"`、`model_providers.amazon-bedrock.aws.region="us-west-2"`)。`key="value"`
+を丸ごと 1 つの shell literal にして `-c` の次に置きます (`-c 'model_provider="amazon-bedrock"'`)。`provider` が
+無ければその行ごと除きます。key と値は script が bare key の文字と `\A[A-Za-z0-9._@+-]+\z` に限っています。
 
 完了の正本は `done.txt` です (nonce が一致し `exit=0`)。端末に出る同じ行 (sentinel) は
 `herdr pane wait-output` の起床信号として使い、判定は file で行います。どの経路でも、続行条件は
@@ -61,11 +67,16 @@ selector="$HOME/.claude/agent-tools/scripts/personal-codex-model-selection"
 ```
 
 出力は `{"selection": {key: value}, "sources": {key: "user config" | "review profile"}}` です (無い key は含めない)。
+`config.toml` (か profile) に選ばれたプロバイダ (`model_provider`) があれば、さらに `"provider": {key: value}` と
+`"provider_sources": {key: 出所}` が付きます (#543)。`provider` は `--ignore-user-config` で外れるプロバイダの設定の
+うち引き継ぐもの (`model_provider` と、そのプロバイダの `[model_providers.<id>.aws]` の `profile` / `region`) です。
 
 - **exit 0 の JSON だけを使います**。`selection` にある key だけを run script に `-c` で書き、無い key は行ごと
-  除きます (Codex の既定に任せる)。`sources` (`user config` / `review profile`。無い key は `codex default`) を返却の
-  `Model selection` に写します (値は写さない)。
-- exit 0 以外 (top-level に解釈できない行、値が形に合わない、script か、script が load する
+  除きます (Codex の既定に任せる)。`provider` があれば、その key をすべて `-c` で書きます (上の run script)。
+  `sources` (`user config` / `review profile`。無い key は `codex default`) を返却の `Model selection` に写します
+  (値は写さない)。
+- exit 0 以外 (top-level に解釈できない行、値が形に合わない、選ばれたプロバイダに引き継げない設定 (`base_url`・
+  `env_key`・`http_headers` など) がある、script か、script が load する
   `personal-codex-worker-preflight` が配備されていない、file を読めない、file は在るが regular file でない、
   在るかどうかを確かめられない) は
   `Status: BLOCKED` (`capability-preflight`) です。推測した値で走らせず、`--ignore-user-config` を外して user config を

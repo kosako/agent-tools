@@ -23,6 +23,12 @@ review (`personal-codex-review`) や worker (`personal-codex-worker`) の起動�
   literal の変数にします。sweep は effort を予算のプリセットごとに選び、model は sweep の `BUDGET.md` の
   読み方で決めます。`-p` は使いません
   (profile の他の key、例えば MCP server を、`--ignore-user-config` の起動へ持ち込まないため)。
+- **provider も引き継ぐ (#543)**: `--ignore-user-config` は `config.toml` の provider の設定 (と、それに付く
+  認証。例: 組み込みの amazon-bedrock の AWS の profile / region) も外すので、そのままでは OpenAI の標準の API に
+  認証なしで接続して 401 になります。配備済みの `personal-codex-model-selection --profile review --format json` の
+  出力に `provider` があれば、その key をすべて `-c` で渡します (読むのは `model_provider` と、そのプロバイダの
+  `[model_providers.<id>.aws]` の `profile` / `region` だけ)。script が exit 0 以外 (選ばれたプロバイダに引き継げ
+  ない設定 (`base_url`・`env_key`・`http_headers` など) がある、など) なら起動しません。
 - **最終出力は schema つきの JSON**: `--output-schema <findings.schema.json>` と
   `-o <result.json>`。
 - **heredoc を使わない**: Codex が read-only の sandbox で実行する command は、heredoc の一時 file を
@@ -97,6 +103,7 @@ cd "$repo" || exit 90
 codex exec --ignore-user-config --ignore-rules -s read-only -c approval_policy="never" \
   --disable apps --disable computer_use --disable browser_use \
   -c "model=\"$model\"" -c "model_reasoning_effort=\"$effort\"" \
+  -c <provider の key="value" の shell literal> \
   --output-schema "$run/findings.schema.json" -o "$run/result.json" - < "$run/brief.md"
 rc=$?
 printf 'CODEX-AUDIT-DONE-%s exit=%s\n' "$nonce" "$rc" | tee "$run/done.txt"
@@ -106,7 +113,9 @@ exit "$rc"
 `-c` の値は TOML として読まれるので、model と effort は TOML の文字列の引用符ごと渡します
 (`model="<値>"`。引用符が無いと、値によっては数値などに読まれる)。値は上の文字の集合に限っている
 ので、引用符の中に入れても壊れません。model / effort を Codex の既定に任せるときは、その変数と
-`-c` の 2 つを script から除きます (空の値を渡さない)。
+`-c` の 2 つを script から除きます (空の値を渡さない)。provider の `-c` は `provider` の key ごとに 1 行ずつ
+並べ (順は出力のとおり)、`key="value"` を丸ごと 1 つの shell literal にします
+(`-c 'model_provider="amazon-bedrock"'`)。`provider` が無ければその行ごと除きます。
 
 herdr の pane から起動するときは、`herdr pane split --current --direction down --cwd <repo root>
 --no-focus` で pane を作り、`herdr pane rename` で `audit-<短い名前>` を付け、`herdr pane run <pane>
