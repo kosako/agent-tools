@@ -75,6 +75,9 @@ end' "$me"
 - 一覧の取得 (`gh api`) は変数に受けてから解析するので、取得が途中で失敗すれば全体が 0 以外で終わる (pipe の
   後ろの ruby の成功で失敗が隠れない)。command が失敗したら (gh の認証、network、rate limit)、照合が
   終わっていないものとして起票しない (report モードに切り替えるかを確認する)。
+- この一覧の取得は、PreToolUse の safe-gh-hook (raw な `gh` の読み取りを safe-gh へ寄せる steering) に検出される
+  (`\` で継続した command もつないで判定するため。#438)。本文は context に出さず、自分の Issue の marker だけを
+  取り出す形なので、safe-gh に置き換えず、この command のまま使う。
 
 ## 役割の数え方
 

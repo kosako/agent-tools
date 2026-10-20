@@ -13,7 +13,7 @@ src="$repo_root/shared/scripts/personal-safe-gh-hook.rb"
 [ -f "$src" ] || { echo "FAIL: missing $src" >&2; exit 1; }
 
 # check / @failed は lib/check_helper.rb を -r で読み込んで共有する。
-ruby -r"$script_dir/lib/check_helper" - "$src" <<'RUBY'
+ruby -r"$script_dir/lib/check_helper" - "$src" "$repo_root/shared/skills/personal-review-request/SKILL.md" <<'RUBY'
 require "json"
 require "stringio"
 require ARGV[0]
@@ -64,6 +64,36 @@ check("gh repo view は対象外", reason("gh repo view o/r").nil?)
 check("gh as argument (echo)", reason("echo gh issue view 1").nil?)
 check("non-gh command", reason("git status").nil?)
 check("empty", reason("").nil?)
+
+# ---- `\` で継続した複数行の command (#438) ----
+# つないだ形で、継続行に折った読み取りを検出する
+check("継続行の --json body -> list (#438)", reason("gh issue list \\\n  --json number,body") == SafeGhHook::REASON_LIST)
+check("継続行の api comments path -> api (#438)",
+      reason("gh api --paginate \\\n  repos/o/r/issues/1/comments") == SafeGhHook::REASON_API)
+check("継続行の noun と --comments -> comments (#438)",
+      reason("gh -R o/r \\\n  pr view 2 \\\n  --comments") == SafeGhHook::REASON_COMMENTS)
+check("CRLF の継続 -> list (#438)", reason("gh issue list \\\r\n  --json body") == SafeGhHook::REASON_LIST)
+# 和: 元の形 (改行で割る) で検出していた入力を、つないだ形の判定で取りこぼさない (#437 の review で見つかった形)
+check("comment の行末の \\ の次の行の gh (#438)", reason("ls # note \\\ngh issue view 1") == SafeGhHook::REASON_VIEW)
+check("制御演算子の後の comment の次の行の gh (#438)",
+      reason("ls && # note \\\ngh pr view 2 --comments") == SafeGhHook::REASON_COMMENTS)
+check("escape した backslash の次の行の gh (#438)", reason("echo a\\\\\ngh issue view 1") == SafeGhHook::REASON_VIEW)
+check("つないだ comment の中の -X POST で消さない (#438)",
+      reason("gh api repos/o/r/issues/1 \\\n# -X POST") == SafeGhHook::REASON_API)
+check("つないだ comment の中の --json state で消さない (#438)",
+      reason("gh pr view 2 \\\n# --json state") == SafeGhHook::REASON_VIEW)
+# 1 行目だけで本文を含む view に見える複数行の metadata 読み取りは steer される (docs の honest-label)
+check("1 行目が gh pr view N の複数行の metadata 読み取り -> view (#438)",
+      reason("gh pr view 2 \\\n  --json state") == SafeGhHook::REASON_VIEW)
+# 元の形を先に見るので、元の形で検出していた入力の理由 key は変わらない
+check("元の形の理由 key を返す (#438)", reason("gh pr view 2 \\\n  --comments") == SafeGhHook::REASON_VIEW)
+# `\` の無い改行はつながない
+check("継続でない改行はつながない (#438)", reason("gh issue list\n--json body").nil?)
+# review-request の手順の metadata だけの読み取りは 1 行で書き、steer されない
+review_cmd = File.read(ARGV[1], encoding: "UTF-8").lines.map(&:chomp).find { |l| l.start_with?('gh pr view "$pr"') }
+check("review-request の metadata の読み取りがある (#438)", !review_cmd.nil?)
+check("review-request の metadata の読み取りは 1 行 (#438)", review_cmd && !review_cmd.end_with?("\\"))
+check("review-request の metadata の読み取りに steer しない (#438)", review_cmd && reason(review_cmd).nil?)
 
 # ---- extract_command: hook payload から command を取り出す ----
 def extract(json)
