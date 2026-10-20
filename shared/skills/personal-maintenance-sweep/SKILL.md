@@ -15,7 +15,7 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 - 副作用: 監査と反証は read-only で、repo の file を書き換えない。issues モードでは GitHub に書く (所見の
   Issue の作成、追跡 Issue の作成と本文の更新とコメント、label の作成)。fix モードではさらに、run dir の下の
   linked worktree で docs を直し、branch を push し、PR を作り、review の依頼 / 結果 / follow-up をコメントする
-  (`FIX.md`。merge と配備は人)。書く本文と公開する差分は先に public-safety の gate に通す。local の state と
+  (`FIX.md`。コメントは personal-review-request の write gate の範囲だけ。merge と配備は人)。書く本文と公開する差分は先に public-safety の gate に通す。local の state と
   run dir (repo の外) に書く。
 - 組み合わせ: 監査は personal-repo-audit (Codex に監査させるときは同 skill の `CODEX-LAUNCH.md`)。
   残量の読み取り口は personal-project-operating-loop の「割当」と同じ配備済みの `personal-usage-reader` を使い、
@@ -177,7 +177,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   先に確かめ、merge commit があれば止める。review の修正で commit を足したら、追加の push の前にやり直す)。git の command は cwd の `HEAD` ではなく branch の ref を基準にし、作業ツリーを読む検査は worktree で
   走らせる。check-injection の exit 3 は、`base` の結果と比べて branch にだけある finding の行 (行番号を含む) が
   無ければ続行する。
-- review は `personal-review-request` に委ね (fix の明示が write authorization)、must は範囲内だけ直し、範囲外は
+- review は `personal-review-request` に委ね (コメントの投稿の許可は review-request の write gate に従い、fix の明示
+  だけを許可にしない。`FIX.md` の「位置づけ」。#420)、must は範囲内だけ直し、範囲外は
   `blocked`。完了した review は最大 3 回。未レビューの PR を完了扱いにしない。
 - `fix_cap` (再開をまたいだ累計) まで。PR の前と review の round の前後で残量を読み直す ([BUDGET.md](BUDGET.md))。
 
