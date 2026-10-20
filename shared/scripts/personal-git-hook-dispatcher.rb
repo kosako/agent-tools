@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 # git-hook-dispatcher: global `core.hooksPath` から呼ばれる git hook の入口。
-# stage (pre-commit / commit-msg) ごとの personal gate を順に実行し、全部通れば
+# stage (pre-commit / commit-msg / pre-merge-commit / prepare-commit-msg) ごとの personal gate を順に実行し、全部通れば
 # その repo 自身の hook (`$(git rev-parse --git-common-dir)/hooks/<stage>`) に chain する。
 # global hooksPath が per-repo hook を「置換」してしまう git の仕様 (#201 実測) を、
 # dispatcher 側の chain で「合成」に変えるのが存在理由。
@@ -10,8 +10,8 @@
 # 正本: docs/git-hook-gates.md。#200 §4.1-4.2 / #202。
 #
 # 強度ラベル (偽らない): これは通常経路 (git commit) に対する best-effort guardrail。
-# `--no-verify` / core.hooksPath の差し替え (husky 等の local 設定を含む) / 別 client で
-# 迂回できる。enforcement boundary ではない。
+# `--no-verify` (prepare-commit-msg は skip されない) / core.hooksPath の差し替え (husky 等の local 設定を含む) /
+# 別 client で迂回できる。enforcement boundary ではない。
 #
 # 呼び出し契約 (dotfiles 側 shim):
 #   pre-commit:  exec <deploy path>/personal-git-hook-dispatcher pre-commit "$@"
@@ -42,9 +42,15 @@ module GitHookDispatcher
   # [gate 名, git の引数より前に渡す固定の引数]。
   # pre-commit は public-safety (staged diff) → git-identity (#281。partial な identity) の順。
   # commit-msg は public-safety (commit message の本文。#413) → ai-trailer の順。
+  # pre-merge-commit と prepare-commit-msg は git-identity だけ (#449)。pre-commit の走らない経路 (競合の無い
+  # 自動の merge と、cherry-pick・revert・rebase) でも partial な identity を止める。prepare-commit-msg では
+  # git の引数 (message の file・source・sha) が gate に渡るが、git-identity は引数を読まない。差分の
+  # public-safety は広げない (公開される内容は push の前の `--stdin` が見る)。
   STAGE_GATES = {
     "pre-commit" => [["personal-public-safety-gate", []], ["personal-git-identity-gate", []]],
     "commit-msg" => [["personal-public-safety-gate", ["--commit-msg"]], ["personal-ai-trailer-gate", []]],
+    "pre-merge-commit" => [["personal-git-identity-gate", []]],
+    "prepare-commit-msg" => [["personal-git-identity-gate", []]],
   }.freeze
 
   # git が呼ぶ hook の名前 (githooks(5)) のうち、「hook が在って何もせず exit 0 で終わる」ことが「hook が無い」と
