@@ -7,6 +7,8 @@
 # - personal-maintenance-sweep: fix の明示は push と PR の作成の許可で、review のコメントの投稿は review-request の
 #   write gate に従う (fix の明示だけを投稿の許可にしない)。以前の「fix の明示が write authorization」の記述が
 #   review の委譲の箇所に残っていない。
+# - 運用ルール (instruction) の相互レビューの節に、上の条件を満たす standing rule (許可範囲を明示し、merge /
+#   approve / 修正 / commit / push を含めず、public-safety の gate を当てる) がある (#537)。
 # - evals.json に各 case がある。
 # 規則の文は文の頭から文末の「。」まで含め、所定の節の中にあることを、改行と空白を除いて比べる (後ろに否定を
 # 足す・続きを消す・節の外へ移すと落ちる)。
@@ -67,6 +69,15 @@ check.call("#{sweep}/FIX.md", "## review", "review の委譲の許可",
            "review の lifecycle (routing の確定、依頼、結果、follow-up のコメント) は `personal-review-request` に委ねます (コメントの投稿の許可は review-request の write gate に従う。上の「位置づけ」。#420)。")
 check.call("#{sweep}/SKILL.md", "### 7b. 修正する (fix モードだけ)", "review の委譲の許可",
            "review は `personal-review-request` に委ね (コメントの投稿の許可は review-request の write gate に従い、fix の明示だけを許可にしない。`FIX.md` の「位置づけ」。#420)、must は範囲内だけ直し、範囲外は `blocked`。")
+
+rules = "shared/instructions/personal-operating-rules.md"
+review_rules = "## AI エージェント間のコードレビュー (相互レビュー)"
+check.call(rules, review_rules, "standing rule の許可範囲",
+           "現在のユーザーの review の依頼に伴う、PR の review の依頼・結果・follow-up (指摘への対応) のコメントは、毎回の投稿の明示なしに投稿してよい (`personal-review-request` の write gate の standing rule。#537)。")
+check.call(rules, review_rules, "standing rule が含まないもの",
+           "merge / approve / 修正 / commit / push は含まない。")
+check.call(rules, review_rules, "standing rule と gate",
+           "投稿の前の public-safety の gate (下の「public safety」) はそのまま当てる。")
 %w[FIX.md SKILL.md].each do |f|
   if read.call("#{sweep}/#{f}").include?("(fix の明示が write authorization)")
     errors << "#{sweep}/#{f} に「(fix の明示が write authorization)」が残っている (review のコメントの許可と食い違う)"
