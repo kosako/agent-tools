@@ -30,7 +30,8 @@
 # - 0: 確かめた repo にずれが無い (対象外だけのときを含む)。
 # - 1: ずれが有る。
 # - 2: usage / 設定 file が不正 / 今の repo や repo の一覧を解決できない / 確かめられない repo が有る (gh の失敗・
-#   想定外の応答)。`--all` で一部の repo を確かめられないときも、残りの repo は確かめて出す。
+#   想定外の status・応答の field の欠落や null や型違い。ずれ無しや off に倒さない)。`--all` で一部の repo を確かめ
+#   られないときも、残りの repo は確かめて出す。
 # 結果は stdout、usage と設定 file の不正は stderr に 1 行。
 
 require "erb"
@@ -96,6 +97,8 @@ module RepoBaseline
 
   MANUAL_NOTE = "画面で確かめる (API で読めない): Malware alerts、Grouped security updates"
   UNAVAILABLE_NOTE = "private では確かめない (今のプランで使えない): default branch の ruleset、Secret scanning"
+  # --all の集計の行で数える結果の status。
+  SUMMARY_STATUSES = { ok: "ずれ無し", drift: "ずれ有り", error: "確かめられない" }.freeze
   CONFIG_KEYS = %w[exclude required_checks].freeze
   REPO_RE = %r{\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z}.freeze
   LIST_PATH = "user/repos?affiliation=owner&per_page=100"
@@ -226,6 +229,8 @@ module RepoBaseline
       unless list.is_a?(Array) && !list.empty? && list.all? { |c| valid_check_name?(c) }
         raise ArgumentError, "設定 file の required_checks の値が空でない check の名前の配列ではありません"
       end
+      # 大文字小文字だけ違う key は同じ repo なので、後の値で前の値を消さずに不正にする。
+      raise ArgumentError, "設定 file の required_checks に大文字小文字だけ違う key が重なっています" if checks.key?(name.downcase)
 
       checks[name.downcase] = list
     end
@@ -283,8 +288,12 @@ module RepoBaseline
     raise Error, "repo の一覧を読めません (gh api が失敗)" unless status.success?
 
     pages = JSON.parse(out)
-    repos = pages.is_a?(Array) ? pages.flatten(1) : nil
-    raise Error, "repo の一覧の応答が想定の形ではありません" unless repos && repos.all? { |r| r.is_a?(Hash) && valid_repo?(r["full_name"]) }
+    unless pages.is_a?(Array) && pages.all? { |page| page.is_a?(Array) }
+      raise Error, "repo の一覧の応答が想定の形ではありません"
+    end
+
+    repos = pages.flatten(1)
+    raise Error, "repo の一覧の応答が想定の形ではありません" unless repos.all? { |r| r.is_a?(Hash) && valid_repo?(r["full_name"]) }
 
     repos
   rescue JSON::ParserError
@@ -300,8 +309,21 @@ module RepoBaseline
     raise Error, "#{label} の応答が想定外です (HTTP #{code})"
   end
 
+  # GitHub の応答の field は、欠落・null・型違いを「確かめられない」(Error) にする。ずれ無しや off に倒さない。
   def boolean!(value, label)
     raise Error, "#{label} を読めません (値が無い)" unless value == true || value == false
+
+    value
+  end
+
+  def hash!(value, label)
+    raise Error, "#{label} を読めません (応答の形が想定外)" unless value.is_a?(Hash)
+
+    value
+  end
+
+  def string!(value, label)
+    raise Error, "#{label} を読めません (応答の形が想定外)" unless value.is_a?(String) && !value.empty?
 
     value
   end
@@ -317,32 +339,37 @@ module RepoBaseline
   end
 
   def secret_scanning(repo, key)
-    sa = repo["security_and_analysis"]
-    raise Error, "security_and_analysis を読めません" unless sa.is_a?(Hash)
-
-    status = sa.dig(key, "status")
-    raise Error, "#{key} を読めません" unless %w[enabled disabled].include?(status)
+    sa = hash!(repo["security_and_analysis"], "security_and_analysis")
+    status = hash!(sa[key], key)["status"]
+    raise Error, "#{key} を読めません (応答の形が想定外)" unless %w[enabled disabled].include?(status)
 
     status == "enabled"
   end
 
   # default branch に効く rule (全 ruleset の和) を読む。
   def branch_rules(name, branch)
-    raise Error, "default branch を読めません" unless branch.is_a?(String) && !branch.empty?
-
+    string!(branch, "default branch")
     rules = gh_json("repos/#{name}/rules/branches/#{ERB::Util.url_encode(branch)}", "default branch の rule")
-    raise Error, "default branch の rule の応答が配列ではありません" unless rules.is_a?(Array) && rules.all? { |r| r.is_a?(Hash) }
+    unless rules.is_a?(Array) && rules.all? { |r| r.is_a?(Hash) && r["type"].is_a?(String) }
+      raise Error, "default branch の rule を読めません (応答の形が想定外)"
+    end
 
     rules
   end
 
   def ruleset_facts(rules)
     # 複数の ruleset が PR の rule を持つときは、いちばん厳しい (approve の数が多い) ものが効く。
-    approvals = rules.select { |r| r["type"] == "pull_request" }.map { |r| r.dig("parameters", "required_approving_review_count") }
-    raise Error, "PR の rule の必要な approve の数を読めません" unless approvals.all? { |n| n.is_a?(Integer) }
+    approvals = rules.select { |r| r["type"] == "pull_request" }.map do |r|
+      count = hash!(r["parameters"], "PR の rule")["required_approving_review_count"]
+      raise Error, "PR の rule の必要な approve の数を読めません" unless count.is_a?(Integer)
 
+      count
+    end
     contexts = rules.select { |r| r["type"] == "required_status_checks" }.flat_map do |r|
-      Array(r.dig("parameters", "required_status_checks")).map { |c| c.is_a?(Hash) ? c["context"] : nil }.compact
+      checks = hash!(r["parameters"], "必須の check の rule")["required_status_checks"]
+      raise Error, "必須の check の rule を読めません (応答の形が想定外)" unless checks.is_a?(Array)
+
+      checks.map { |c| string!(hash!(c, "必須の check")["context"], "必須の check の名前") }
     end
     {
       "ruleset_pull_request" => approvals.max,
@@ -363,8 +390,8 @@ module RepoBaseline
       "delete_branch_on_merge" => boolean!(repo["delete_branch_on_merge"], "merge の後に branch を消す設定"),
       "dependabot_yml" => dependabot_yml?(name),
     }
-    fixes = gh_json("repos/#{name}/automated-security-fixes", "Dependabot security updates")
-    facts["dependabot_security_updates"] = boolean!(fixes.is_a?(Hash) ? fixes["enabled"] : nil, "Dependabot security updates")
+    fixes = hash!(gh_json("repos/#{name}/automated-security-fixes", "Dependabot security updates"), "Dependabot security updates")
+    facts["dependabot_security_updates"] = boolean!(fixes["enabled"], "Dependabot security updates")
     if items.include?("secret_scanning")
       facts["secret_scanning"] = secret_scanning(repo, "secret_scanning")
       facts["secret_scanning_push_protection"] = secret_scanning(repo, "secret_scanning_push_protection")
@@ -421,14 +448,15 @@ module RepoBaseline
   def check_repo(name, config)
     return skipped(name, "設定 file で除外") if config.excluded?(name)
 
-    repo = gh_json("repos/#{name}", "repo")
-    raise Error, "repo の設定の応答が想定の形ではありません" unless repo.is_a?(Hash) && valid_repo?(repo["full_name"])
+    repo = hash!(gh_json("repos/#{name}", "repo"), "repo")
+    raise Error, "repo を読めません (応答の形が想定外)" unless valid_repo?(repo["full_name"])
 
     name = repo["full_name"]
     return skipped(name, "設定 file で除外") if config.excluded?(name)
-    return skipped(name, "fork") if repo["fork"] == true
-    return skipped(name, "archive 済み") if repo["archived"] == true
-    return skipped(name, "admin 権限が無い") unless repo.dig("permissions", "admin") == true
+    return skipped(name, "fork") if boolean!(repo["fork"], "fork の field")
+    return skipped(name, "archive 済み") if boolean!(repo["archived"], "archived の field")
+    permissions = hash!(repo["permissions"], "permissions の field")
+    return skipped(name, "admin 権限が無い") unless boolean!(permissions["admin"], "permissions.admin の field")
 
     visibility = repo["visibility"]
     raise Error, "baseline の無い visibility です" unless BASELINE.key?(visibility)
@@ -437,9 +465,13 @@ module RepoBaseline
     Result.new(name, visibility, findings.empty? ? :ok : :drift, findings, nil)
   rescue Error => e
     Result.new(name, nil, :error, [], e.message)
+  rescue TypeError, NoMethodError => e
+    # 上の検査が見落とした応答の型違い。その repo だけ「確かめられない」にして、--all の残りを続ける。
+    Result.new(name, nil, :error, [], "応答の形が想定外です (#{e.class})")
   end
 
-  # 全 repo。fork・archive 済み・設定 file で除外した repo は一覧の段で外し、件数だけを出す。
+  # 全 repo。fork・archive 済み・設定 file で除外した repo は一覧の段で外す (一覧の field が欠けていれば
+  # check_repo が改めて読んで確かめる)。対象外は、一覧の段と check_repo の段の両方を理由ごとに数える。
   def check_all(config)
     counts = { "fork" => 0, "archive 済み" => 0, "設定 file で除外" => 0 }
     targets = []
@@ -455,7 +487,16 @@ module RepoBaseline
         targets << name
       end
     end
-    [targets.sort_by(&:downcase).map { |name| check_repo(name, config) }, counts]
+    results = targets.sort_by(&:downcase).map { |name| check_repo(name, config) }
+    results.select { |r| r.status == :skipped }.each { |r| counts[r.reason] = counts.fetch(r.reason, 0) + 1 }
+    [results, counts]
+  end
+
+  def summary_line(results, counts)
+    targets = results.reject { |r| r.status == :skipped }
+    detail = SUMMARY_STATUSES.map { |status, label| "#{label} #{targets.count { |r| r.status == status }}" }.join("・")
+    skipped = counts.map { |reason, n| "#{reason} #{n} 件" }.join("・")
+    "対象の repo: #{targets.size} 件 (#{detail}) / 対象外: #{skipped}"
   end
 
   # ---- 出す ----
@@ -477,9 +518,7 @@ module RepoBaseline
         lines << "#{r.name}: 確かめられない (#{r.reason})"
       end
     end
-    if counts
-      lines << "確かめた repo: #{results.size} 件 / 対象外: " + counts.map { |k, v| "#{k} #{v} 件" }.join("・")
-    end
+    lines << summary_line(results, counts) if counts
     checked = results.select { |r| %i[ok drift].include?(r.status) }
     lines << UNAVAILABLE_NOTE if checked.any? { |r| r.visibility == "private" }
     lines << MANUAL_NOTE unless checked.empty?

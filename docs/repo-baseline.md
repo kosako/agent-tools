@@ -52,8 +52,10 @@ owner/example (public): ずれ 2 件
 | 1 | ずれが有る |
 | 2 | usage、設定 file が不正、今の repo や repo の一覧を解決できない、確かめられない repo が有る (gh の失敗・想定外の応答) |
 
-`--all` で一部の repo を確かめられないときも、残りの repo は確かめて出し、exit 2 にします。usage と設定 file の
-不正は stderr に 1 行出し、理由に設定の中身と path は出しません。
+GitHub の応答の field が欠けている・null・型が違うときは、その repo を「確かめられない」にします (ずれ無しや off
+に倒さない)。`--all` で一部の repo を確かめられないときも、残りの repo は確かめて出し、exit 2 にします。`--all` は
+最後に集計の行 (対象の repo の件数と、ずれ無し・ずれ有り・確かめられないの内訳、対象外の理由ごとの件数) を出します。
+usage と設定 file の不正は stderr に 1 行出し、理由に設定の中身と path は出しません。
 
 ## baseline
 
@@ -103,7 +105,8 @@ repo の名前は tracked な file に書かず、ここに置きます。
 ```
 
 - key は `exclude` (対象から外す repo の配列) と `required_checks` (repo から、必須にする check の名前の配列への
-  object) だけ。知らない key、型の外れ、OWNER/REPO の形でない名前、空の配列、制御文字は不正 (exit 2)。
+  object) だけ。知らない key、型の外れ、OWNER/REPO の形でない名前、空の配列、制御文字、`required_checks` の大文字
+  小文字だけ違う key の重なりは不正 (exit 2)。
 - repo の名前は大文字小文字を区別しません。rename した repo は、API が返す新しい名前でも除外を照合します。
 - `XDG_CONFIG_HOME` は絶対 path のときだけ使い、`HOME` も絶対 path でなければ場所を決めずに止めます
   (`personal-usage-reader` の設定 file と同じ扱い)。symlink は辿った先で判定し、regular file でなければ不正です。

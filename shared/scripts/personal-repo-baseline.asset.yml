@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:d1d46f54172ba73dffaf36b6ab77856b1b8caa84df54b9330d3de74db75d6e95
+  approved_build_id: sha256:adbcf1437d6761f54c206bcf6ced3edaa3792f9c60e2f7e9d7497ac6055ec7cd
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-repo-baseline.rb
@@ -28,4 +28,5 @@ summary: >-
   branch の ruleset (PR の必須 (approve 0)・force push と削除の禁止・設定 file に書いた必須の check)。API で読めない
   Malware alerts と grouped security updates は「画面で確かめる」と出す。手元の設定 file
   (${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/repo-baseline.json、任意) は exclude と required_checks だけ。
+  応答の field の欠落・null・型違いはその repo を確かめられないにし、--all は残りの repo を続ける。
   exit 0 = ずれ無し / 1 = ずれ有り / 2 = usage・設定 file が不正・確かめられない repo が有る (docs/repo-baseline.md)。

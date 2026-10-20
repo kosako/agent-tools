@@ -55,10 +55,14 @@ File.write(File.join(bin, "gh"), <<~'FAKE')
   route = JSON.parse(File.read(File.join(dir, "routes.json")))[path]
   exit 1 if route.nil?
   status = route.fetch("status")
-  body = route.key?("body") ? JSON.generate(route["body"]) : ""
+  # pages を持つ route は複数ページの list。--paginate --slurp なら全ページを 1 つの配列に、それ以外は最初のページだけ。
+  body = if route.key?("pages") then JSON.generate(route["pages"].first)
+         elsif route.key?("body") then JSON.generate(route["body"])
+         else ""
+         end
   case mode
   when :include then print "HTTP/2.0 #{status} X\r\nContent-Type: application/json\r\n\r\n#{body}"
-  when :slurp then print JSON.generate([route["body"]])
+  when :slurp then print JSON.generate(route.key?("pages") ? route["pages"] : [route["body"]])
   else print body
   end
   exit(status < 300 ? 0 : 1)
@@ -217,6 +221,7 @@ check("config: absent file is empty", !RB.parse_config(nil).excluded?("o/r"))
   ["required blank name", { "required_checks" => { "o/r" => [" "] } }],
   ["required control char", { "required_checks" => { "o/r" => ["a\tb"] } }],
   ["top-level array", []],
+  ["required keys differing only in case", { "required_checks" => { "O/CI" => ["security"], "o/ci" => ["test"] } }],
 ].each do |label, data|
   raised = begin
     RB.parse_config(JSON.generate(data))
@@ -274,7 +279,8 @@ res = run_cli(routes_for(public_repo("o/yaml"), yml: 404, yaml: 200), ["--repo",
 check("cli dependabot.yaml counts", res[:rc] == 0)
 repo = public_repo("o/nosa", "security_and_analysis" => nil)
 res = run_cli(routes_for(repo), ["--repo", "o/nosa"])
-check("cli public without security_and_analysis is error", res[:rc] == 2 && lines(res) == ["o/nosa: 確かめられない (security_and_analysis を読めません)"])
+check("cli public without security_and_analysis is error", res[:rc] == 2 &&
+  lines(res) == ["o/nosa: 確かめられない (security_and_analysis を読めません (応答の形が想定外))"])
 
 # ---- CLI: 必須の check と approve の数 ----
 rules = GOOD_RULES + [{ "type" => "required_status_checks", "parameters" => { "required_status_checks" => [{ "context" => "test (a)" }] } }]
@@ -338,23 +344,77 @@ unless %w[/usr/bin/gh /bin/gh].any? { |p| File.exist?(p) }
   check("cli gh missing", res[:rc] == 2 && lines(res) == ["o/nogh: 確かめられない (gh を起動できません)"])
 end
 
+# ---- CLI: 応答の field の欠落・null・型違いは「確かめられない」 ----
+def broken(label, repo, expected_reason, **opts)
+  res = run_cli(routes_for(repo, **opts), ["--repo", repo["full_name"]])
+  check("cli broken #{label}", res[:rc] == 2 && lines(res) == ["#{repo['full_name']}: 確かめられない (#{expected_reason})"])
+end
+no_perm = public_repo("o/noperm")
+no_perm.delete("permissions")
+broken("permissions missing", no_perm, "permissions の field を読めません (応答の形が想定外)")
+broken("admin null", public_repo("o/adminnull", "permissions" => { "admin" => nil }), "permissions.admin の field を読めません (値が無い)")
+no_fork = public_repo("o/nofork")
+no_fork.delete("fork")
+broken("fork missing", no_fork, "fork の field を読めません (値が無い)")
+broken("archived not boolean", public_repo("o/archstr", "archived" => "no"), "archived の field を読めません (値が無い)")
+broken("merge field null", public_repo("o/mergenull", "allow_rebase_merge" => nil), "merge の方式 を読めません (値が無い)")
+broken("secret scanning entry string", public_repo("o/secstr", "security_and_analysis" => { "secret_scanning" => "enabled" }),
+       "secret_scanning を読めません (応答の形が想定外)")
+broken("secret scanning status unknown",
+       public_repo("o/secodd", "security_and_analysis" => {
+         "secret_scanning" => { "status" => "enabled" }, "secret_scanning_push_protection" => { "status" => "maybe" },
+       }),
+       "secret_scanning_push_protection を読めません (応答の形が想定外)")
+broken("default branch missing", public_repo("o/nobranch", "default_branch" => nil), "default branch を読めません (応答の形が想定外)")
+broken("rule without type", public_repo("o/notype"), "default branch の rule を読めません (応答の形が想定外)",
+       rules: [{ "parameters" => {} }])
+broken("PR rule without parameters", public_repo("o/prnoparam"), "PR の rule を読めません (応答の形が想定外)",
+       rules: [{ "type" => "pull_request" }])
+broken("status checks rule without parameters", public_repo("o/scnoparam"), "必須の check の rule を読めません (応答の形が想定外)",
+       rules: GOOD_RULES + [{ "type" => "required_status_checks" }])
+broken("status checks not array", public_repo("o/scnotarray"), "必須の check の rule を読めません (応答の形が想定外)",
+       rules: GOOD_RULES + [{ "type" => "required_status_checks", "parameters" => { "required_status_checks" => "a" } }])
+broken("status check without context", public_repo("o/scnoctx"), "必須の check の名前 を読めません (応答の形が想定外)",
+       rules: GOOD_RULES + [{ "type" => "required_status_checks", "parameters" => { "required_status_checks" => [{ "integration_id" => 1 }] } }])
+routes = routes_for(public_repo("o/fixarr"))
+routes["repos/o/fixarr/automated-security-fixes"] = { "status" => 200, "body" => [] }
+res = run_cli(routes, ["--repo", "o/fixarr"])
+check("cli broken security updates not object", res[:rc] == 2 &&
+  lines(res) == ["o/fixarr: 確かめられない (Dependabot security updates を読めません (応答の形が想定外))"])
+
+# 検査が見落とした型違いの例外も、その repo だけ「確かめられない」にする。
+fake = RB.clone
+fake.define_singleton_method(:gh_json) { |_path, _label| public_repo("o/boom") }
+fake.define_singleton_method(:collect_facts) { |*_args| raise TypeError, "boom" }
+r = fake.check_repo("o/boom", RB.parse_config(nil))
+check("check_repo turns TypeError into a repo error", r.status == :error && r.reason == "応答の形が想定外です (TypeError)")
+
 # ---- CLI: --all ----
-list = [
+# 一覧は 2 ページ (--paginate --slurp を外すと 2 ページ目の repo を落とす)。
+list_page1 = [
   public_repo("o/b-good"), private_repo("o/a-priv", "delete_branch_on_merge" => false),
   public_repo("o/fork", "fork" => true), public_repo("o/arch", "archived" => true),
-  private_repo("o/Secret"), public_repo("o/c-err"),
 ]
-routes = routes_for(list[0]).merge(routes_for(list[1])).merge(
-  RB::LIST_PATH => { "status" => 200, "body" => list },
-)
+list_page2 = [
+  private_repo("o/Secret"), public_repo("o/c-err"), public_repo("o/d-noadmin"),
+  public_repo("o/b-broken"), public_repo("o/e-page2"),
+]
+routes = {}
+[list_page1[0], list_page1[1], list_page2[4]].each { |repo| routes.merge!(routes_for(repo)) }
+routes.merge!(routes_for(public_repo("o/d-noadmin", "permissions" => { "admin" => false })))
+routes.merge!(routes_for(public_repo("o/b-broken", "security_and_analysis" => { "secret_scanning" => "x" })))
+routes[RB::LIST_PATH] = { "status" => 200, "pages" => [list_page1, list_page2] }
 res = run_cli(routes, ["--all"], config: { "exclude" => ["o/secret"] })
-check("cli all: rc 2 with one unreadable repo", res[:rc] == 2)
+check("cli all: rc 2 with unreadable repos", res[:rc] == 2)
 check("cli all: lines", lines(res) == [
   "o/a-priv (private): ずれ 1 件",
   "  - merge の後に branch を消す: 今 off / あるべき on",
+  "o/b-broken: 確かめられない (secret_scanning を読めません (応答の形が想定外))",
   "o/b-good (public): ずれ無し",
   "o/c-err: 確かめられない (repo を読めません (gh api が失敗))",
-  "確かめた repo: 3 件 / 対象外: fork 1 件・archive 済み 1 件・設定 file で除外 1 件",
+  "o/d-noadmin: 対象外 (admin 権限が無い)",
+  "o/e-page2 (public): ずれ無し",
+  "対象の repo: 5 件 (ずれ無し 2・ずれ有り 1・確かめられない 2) / 対象外: fork 1 件・archive 済み 1 件・設定 file で除外 1 件・admin 権限が無い 1 件",
   RB::UNAVAILABLE_NOTE,
   RB::MANUAL_NOTE,
 ])
@@ -363,6 +423,9 @@ check("cli all: excluded, fork, archived repos are not read",
 check("cli all: clean calls", clean_calls?(res))
 res = run_cli(routes.reject { |k, _| k == RB::LIST_PATH }, ["--all"])
 check("cli all: list failure", res[:rc] == 2 && res[:out].empty? && res[:err].include?("repo の一覧を読めません"))
+routes[RB::LIST_PATH] = { "status" => 200, "pages" => list_page1 }
+res = run_cli(routes, ["--all"])
+check("cli all: list pages must be arrays", res[:rc] == 2 && res[:err].include?("repo の一覧の応答が想定の形ではありません"))
 
 # ---- CLI: 設定 file ----
 res = run_cli(routes_for(public_repo("o/good")), ["--repo", "o/good"], config: { "exclude" => ["hidden-owner/hidden-name"], "x" => 1 })
