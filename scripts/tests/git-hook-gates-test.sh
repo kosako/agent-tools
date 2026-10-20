@@ -1135,4 +1135,84 @@ done
   || fail "#430: loop guard must short-circuit gate-less stages"
 [ ! -e "$repo430b/marker.post-commit" ] || fail "#430: loop guard must not chain again"
 
+# ---- #449: git-identity を pre-merge-commit と prepare-commit-msg にもつなぎ、git commit 以外で作る commit でも止める ----
+# stage ごとに shim を 1 つだけ置いた hooks dir で、その stage の配線だけで止まることを見る (pmc = pre-merge-commit、
+# pcm = prepare-commit-msg、both = 両方)。
+dispatcher_lit=$(shq "$deploy/personal-git-hook-dispatcher")
+for d in pmc pcm both; do mkdir -p "$tmp/hooks449-$d"; done
+printf '#!/bin/sh\nexec %s pre-merge-commit "$@"\n' "$dispatcher_lit" > "$tmp/hooks449-pmc/pre-merge-commit"
+printf '#!/bin/sh\nexec %s prepare-commit-msg "$@"\n' "$dispatcher_lit" > "$tmp/hooks449-pcm/prepare-commit-msg"
+cp "$tmp/hooks449-pmc/pre-merge-commit" "$tmp/hooks449-pcm/prepare-commit-msg" "$tmp/hooks449-both/"
+chmod +x "$tmp"/hooks449-*/*
+name449="CANARY-NAME-449"
+email449="canary449@example.com"
+# repo を作る: main に base と c.txt、topic に b.txt (競合なし)。準備の commit は hook を通さない
+# (hooksPath はその後に設定する)。identity は repo local に置き、useConfigOnly は dotfiles の identity reset と同じ形。
+new449() {
+  r="$tmp/repo449-$1"
+  git init -q "$r"
+  (cd "$r" && git config user.useConfigOnly true && git config user.name "$name449" && git config user.email "$email449" \
+    && echo one > a.txt && git add a.txt && git commit -qm base \
+    && git switch -q -c topic && echo b > b.txt && git add b.txt && git commit -qm topic-b \
+    && git switch -q main && echo c > c.txt && git add c.txt && git commit -qm main-c \
+    && git config core.hooksPath "$tmp/hooks449-$2") || fail "#449: fixture repo $1"
+  printf '%s' "$r"
+}
+# partial な identity (空 email) で、経路の command が止まり、commit が増えず、identity の値を出さないことを見る。
+# 引数: label repo 期待する途中の状態の path (.git からの相対。無ければ -) command...
+blocked449() {
+  label=$1 repo=$2 state=$3
+  shift 3
+  before=$(cd "$repo" && git rev-list --count HEAD)
+  set +e
+  out=$(cd "$repo" && as_human "$@" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "#449: $label は partial な identity で止まるべき: $out"
+  echo "$out" | grep -q "git-identity-gate: blocked" || fail "#449: $label で identity gate の診断が出ていない: $out"
+  echo "$out" | grep -q "$name449" && fail "#449: $label の診断に name の値が漏れている: $out"
+  after=$(cd "$repo" && git rev-list --count HEAD)
+  [ "$before" = "$after" ] || fail "#449: $label で止まったはずの commit が作られている ($before -> $after)"
+  if [ "$state" != "-" ]; then
+    [ -e "$repo/.git/$state" ] || fail "#449: $label の途中の状態 ($state) が残っていない"
+  fi
+}
+# pre-merge-commit だけの配線で、競合の無い自動の merge が止まる
+r=$(new449 pmc-merge pmc); (cd "$r" && git config user.email "")
+blocked449 "pre-merge-commit: merge --no-ff" "$r" MERGE_HEAD git merge --no-ff -q -m merge topic
+# prepare-commit-msg だけの配線で、merge・cherry-pick・revert・rebase と git commit --no-verify が止まる
+r=$(new449 pcm-merge pcm); (cd "$r" && git config user.email "")
+blocked449 "prepare-commit-msg: merge --no-ff" "$r" MERGE_HEAD git merge --no-ff -q -m merge topic
+r=$(new449 pcm-merge-noverify pcm); (cd "$r" && git config user.email "")
+blocked449 "prepare-commit-msg: merge --no-ff --no-verify" "$r" MERGE_HEAD git merge --no-ff --no-verify -q -m merge topic
+r=$(new449 pcm-cherry-pick pcm); (cd "$r" && git config user.email "")
+blocked449 "prepare-commit-msg: cherry-pick" "$r" CHERRY_PICK_HEAD git cherry-pick topic
+r=$(new449 pcm-revert pcm); (cd "$r" && git config user.email "")
+blocked449 "prepare-commit-msg: revert" "$r" - git revert --no-edit HEAD
+r=$(new449 pcm-rebase pcm); (cd "$r" && git switch -q topic && git config user.email "")
+blocked449 "prepare-commit-msg: rebase" "$r" rebase-merge git rebase main
+(cd "$r" && git rebase --abort)
+r=$(new449 pcm-commit-noverify pcm); (cd "$r" && git config user.email "" && echo d > d.txt && git add d.txt)
+blocked449 "prepare-commit-msg: commit --no-verify" "$r" - git commit --no-verify -qm no-verify
+# 完全な identity では、両方を配線しても merge・cherry-pick・revert・rebase が通る。gate の後の repo hook への chain に
+# git の引数が届く (prepare-commit-msg の gate は git の引数を受けても止めない)。
+r=$(new449 ok-merge both)
+printf '#!/bin/sh\nprintf %%s "$*" > %s\n' "$(shq "$r/marker.pcm")" > "$r/.git/hooks/prepare-commit-msg"
+chmod +x "$r/.git/hooks/prepare-commit-msg"
+(cd "$r" && as_human git merge --no-ff -q -m merge topic) || fail "#449: 完全な identity の merge は通るべき"
+case $(cat "$r/marker.pcm") in .git/MERGE_MSG\ merge) ;; *) fail "#449: repo の prepare-commit-msg に git の引数が届いていない: $(cat "$r/marker.pcm")" ;; esac
+r=$(new449 ok-cherry-pick both)
+(cd "$r" && as_human git cherry-pick topic >/dev/null) || fail "#449: 完全な identity の cherry-pick は通るべき"
+(cd "$r" && as_human git revert --no-edit HEAD >/dev/null) || fail "#449: 完全な identity の revert は通るべき"
+r=$(new449 ok-rebase both)
+(cd "$r" && git switch -q topic && as_human git rebase -q main) || fail "#449: 完全な identity の rebase は通るべき"
+# 差分の public-safety は pre-merge-commit と prepare-commit-msg に広げない: secret を含む commit の merge と
+# cherry-pick は止めない
+r=$(new449 no-pubsafe both)
+(cd "$r" && git switch -q topic && printf 'x = "%s"\n' "$gh_token" > leak.txt && git add leak.txt \
+  && git -c core.hooksPath=/dev/null commit -qm leak && git switch -q main) || fail "#449: secret の fixture"
+(cd "$r" && as_human git merge --no-ff -q -m merge topic >/dev/null 2>&1) || fail "#449: pre-merge-commit で差分の public-safety を走らせない"
+(cd "$r" && git reset -q --hard HEAD~1 && as_human git cherry-pick topic >/dev/null 2>&1) \
+  || fail "#449: prepare-commit-msg で差分の public-safety を走らせない"
+
 echo "ok: git-hook-gates self-test"

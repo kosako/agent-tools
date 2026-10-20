@@ -10,17 +10,26 @@ skill (probabilistic な steering) が繰り返し宣言してきた規律のう
 これらはすべて**通常経路 (git commit) に対する best-effort guardrail** であって、
 enforcement boundary ではない:
 
-- `git commit --no-verify` は pre-commit / commit-msg をどちらも skip する (実測 #201)。
+- `git commit --no-verify` は pre-commit / commit-msg をどちらも skip する (実測 #201)。`git merge --no-verify` は
+  pre-merge-commit / commit-msg を skip する。prepare-commit-msg はどちらでも skip されないので、そこにつないだ
+  git-identity の検査は走る (#449)。
 - repo local の `core.hooksPath` (husky 等) は global 設定を上書きし、gate は黙って
   外れる (実測 #201)。
 - 別 client / 他マシンからの commit・GitHub 上の操作 (squash merge 等) は対象外。
-- `git commit` 以外で作る commit (競合の無い自動の merge (pull を含む)・rebase・cherry-pick・revert) では pre-commit が走らない (#414)。競合の無い自動の merge は pre-merge-commit を呼び
-  (pre-merge-commit には gate が無い。shim があっても repo hook への素通しだけ)、gate は commit-msg のものだけが走る。
-  rebase・cherry-pick・revert では pre-commit も commit-msg も
-  走らない (git 2.54.0 で観察。競合を解いてから続ける場合は確かめていない)。そのため、これらの経路では
-  差分の public-safety の検査と git-identity の検査は走らない (自動の merge では commit-msg が走るので、message の
-  public-safety の検査 (`--commit-msg`) は残る)。prepare-commit-msg / pre-merge-commit は dispatcher が gate の
-  無い素通しの stage として受ける (下の「dispatcher の chain 契約」)。これらに gate を置くかは #449 で実測してから決める。
+- `git commit` 以外で作る commit のうち、競合の無い自動の merge (pull を含む)・cherry-pick・revert と、merge backend
+  (既定) の rebase (競合を解いた後の `--continue` を含む) では pre-commit が走らない (#414)。git-identity の検査は、
+  pre-merge-commit (競合の無い自動の merge) と prepare-commit-msg (merge・cherry-pick・revert・merge backend の
+  rebase。競合を解いた後の `--continue` を含む) にもつないで、これらの経路でも走らせる (#449)。差分の public-safety
+  の検査はこの 2 stage には足さない (公開される内容は push の前の `--stdin` が見る。下の段落) ので、pre-commit の
+  走らない上の経路では走らない。
+- 競合を解いた後の merge・cherry-pick・revert の `--continue` は、内部で `git commit` と同じ hook を呼ぶので、既存の
+  pre-commit (差分の public-safety と git-identity) と commit-msg が走る。commit-msg は競合の無い自動の merge でも
+  走るので、そこでも message の public-safety の検査 (`--commit-msg`) と ai-trailer の検査は残る (競合の無い
+  cherry-pick・revert・rebase と rebase の `--continue` では commit-msg は走らない)。
+- `git am` と、apply backend の rebase (`git rebase --apply` や `rebase.backend=apply`。内部で `git am` を使う) では、
+  pre-commit・prepare-commit-msg・pre-merge-commit・commit-msg のどれも走らず (走るのは applypatch-msg・
+  pre-applypatch・post-applypatch)、どの gate も走らない。経路ごとに走る hook と、非 0 で止まるかの実測は #449
+  (git 2.54.0。apply backend の rebase は #449 の review で確かめた)。
 
 hard な床は従来どおりここに載せない (credential 隔離 / egress / CI)。公開する内容の検査は
 公開の前に置く (#413): 差分は pre-commit、commit message は commit-msg (public-safety の
@@ -40,13 +49,16 @@ routing-preflight) の領分。
 global git config: core.hooksPath = <dotfiles 所有の hooks dir>
   <hooks dir>/pre-commit   →  exec <deploy>/personal-git-hook-dispatcher pre-commit "$@"
   <hooks dir>/commit-msg   →  exec <deploy>/personal-git-hook-dispatcher commit-msg "$@"
+  <hooks dir>/pre-merge-commit   →  exec <deploy>/personal-git-hook-dispatcher pre-merge-commit "$@"     (#449)
+  <hooks dir>/prepare-commit-msg →  exec <deploy>/personal-git-hook-dispatcher prepare-commit-msg "$@"   (#449)
   <hooks dir>/<他の stage> →  exec <deploy>/personal-git-hook-dispatcher <stage> "$@"   (gate なし。repo hook に chain するだけ。
                               push-to-checkout / proc-receive / fsmonitor-watchman には置かない)
 
 <deploy> = <tool home>/agent-tools/scripts (sync の script 配備先。公開契約)
   personal-git-hook-dispatcher   … stage ごとの gate 実行 + repo hook への chain
   personal-public-safety-gate    … pre-commit stage の gate (1 本目) / commit-msg stage の gate (1 本目。#413)
-  personal-git-identity-gate     … pre-commit stage の gate (2 本目。#281)
+  personal-git-identity-gate     … pre-commit stage の gate (2 本目。#281) / pre-merge-commit・prepare-commit-msg stage の
+                                   gate (#449)
   personal-ai-trailer-gate       … commit-msg stage の gate (2 本目)
 ```
 
@@ -56,9 +68,10 @@ global git config: core.hooksPath = <dotfiles 所有の hooks dir>
   byte が配備される)。
 - 同じ stage の gate は配列順に実行し、最初に fail した gate の exit code で止まる (後続の
   gate は走らない)。pre-commit は public-safety → git-identity の順、commit-msg は public-safety
-(`--commit-msg`) → ai-trailer の順 (#413)。
+(`--commit-msg`) → ai-trailer の順 (#413)。pre-merge-commit と prepare-commit-msg は git-identity だけ (#449)。
 - dotfiles 側の readiness probe / doctor は配備本数を数える。gate を増やしたら dotfiles 側も
-  追随が要る (#281 で 3 本 → 4 本。follow-up は dotfiles 側の Issue)。
+  追随が要る (#281 で 3 本 → 4 本。follow-up は dotfiles 側の Issue)。#449 は既存の gate を stage に足しただけで
+  本数は変わらない (pre-merge-commit と prepare-commit-msg の shim は dotfiles 側が置き済み)。
 - **再入 sentinel の既知の副作用**: dispatcher は chain 実行時に stage 単位の env
   (`AGENT_TOOLS_GIT_HOOK_ACTIVE_<STAGE>`) を立て、再入を検出したら gate 済みとして
   warning を 1 行出して即 pass する (shim 経由の間接自己参照 loop 対策)。sentinel は gate の無い stage
@@ -151,11 +164,12 @@ scissors 行より後 (`git commit -v` の差分) も除かない。commit に�
 editor で scissors 行より下を消してから保存する。finding は `commit-msg:<line>` で報告し、
 exit 契約も同じ。有効な trailer があっても、message に definite があれば commit-msg stage で止まる。
 
-## personal-git-identity-gate(pre-commit)
+## personal-git-identity-gate(pre-commit / pre-merge-commit / prepare-commit-msg)
 
 commit に使われる author / committer の identity が name / email とも非空であることを
 検証し、partial な identity の commit を止める (#281)。読むのは `git var GIT_AUTHOR_IDENT` /
-`GIT_COMMITTER_IDENT` の解決結果だけ。network なし・引数なし (pre-commit は引数ゼロ)。
+`GIT_COMMITTER_IDENT` の解決結果だけ。network なし・引数は読まない (pre-commit と pre-merge-commit は引数ゼロ。
+prepare-commit-msg では git の引数 (message の file・source・sha) が渡るが使わない)。
 
 | 状態 | Git 単体の挙動 | gate |
 |---|---|---|
@@ -166,8 +180,20 @@ commit に使われる author / committer の identity が name / email とも�
 - 背景: `user.useConfigOnly` は「未設定」を止めるだけで「明示的に空」は止められず、
   gitconfig の include 順や値でも表現できない。dotfiles の identity reset (非 personal
   context で空値を挟む設計) と、context の identity file が name だけの partial な状態が
-  重なるとこの穴を踏む。可視化 (prompt / doctor) は既にあり、`git commit` の経路で機械的に止めるのが
-  この gate。`git commit` 以外で作る commit (競合の無い自動の merge (pull を含む)・rebase・cherry-pick・revert) では pre-commit が走らないので止まらない (#414。上の強度ラベル)。
+  重なるとこの穴を踏む。可視化 (prompt / doctor) は既にあり、commit を作る経路で機械的に止めるのが
+  この gate。
+- **走る stage (#449)**: `git commit` では pre-commit と prepare-commit-msg (同じ検査が 2 回走る)。
+  pre-commit の走らない経路では、競合の無い自動の merge (pull を含む) が pre-merge-commit と prepare-commit-msg、
+  cherry-pick・revert・merge backend の rebase が prepare-commit-msg (競合を解いた後の `--continue` を含む。merge・
+  cherry-pick・revert の `--continue` では pre-commit も走る)。止まったときは
+  途中の状態と staged の変更が残る (merge は `MERGE_HEAD`、cherry-pick は `CHERRY_PICK_HEAD`、rebase は
+  `rebase-merge`。競合の無い revert は `REVERT_HEAD` を残さず、変更だけが staged で残った。#449 の実測)。identity を
+  直してから続けるか、各経路の `--abort` などで戻す。`git am` と apply backend の rebase では走らない (上の強度ラベル)。
+  - cherry-pick・revert・rebase の hook から `git var` が返す author は、元の commit の author ではなく config の
+    identity (git 2.54.0 で観察。`git commit --amend` と `--author` では、hook の env に渡る値になる)。他人の
+    commit を取り込むときも、検査されるのは自分の identity。
+  - `--no-verify` は prepare-commit-msg を skip しないので、`git commit --no-verify` でも partial な identity は
+    止まる。identity を直してから commit する。
 - **出力の規律**: identity の**値**は stdout / stderr に出さない。出すのは key 名 (author
   name / author email / committer name / committer email) と「空」であることだけ。git の
   stderr (`for <email>` を含みうる) も捨てる。

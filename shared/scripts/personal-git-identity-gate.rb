@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# git-identity-gate: pre-commit stage の git gate。commit に使われる author / committer の
+# git-identity-gate: pre-commit / pre-merge-commit / prepare-commit-msg stage の git gate。commit に使われる author / committer の
 # identity が name / email とも非空であることを検証し、partial な identity (空 email) の
 # commit を止める (#281)。
 #
@@ -12,12 +12,18 @@
 # を止めるだけで「明示的に空」は止められず、gitconfig の include 順や値でも表現できない。
 # dotfiles 側の identity reset (非 personal context で `[user] name = / email =` の空値を
 # 挟む設計) と、context の identity file が name だけの partial な状態が重なると、この穴を
-# 踏む。可視化 (prompt / doctor) は既にあり、`git commit` の経路で機械的に止めるのがこの gate (`git commit` 以外で作る commit (競合の無い自動の merge (pull を含む)・rebase・cherry-pick・revert)
-# では pre-commit が走らないので止まらない。#414)。
+# 踏む。可視化 (prompt / doctor) は既にあり、commit を作る経路で機械的に止めるのがこの gate。`git commit` では
+# pre-commit と prepare-commit-msg、pre-commit の走らない経路では、競合の無い自動の merge (pull を含む) が
+# pre-merge-commit と prepare-commit-msg、cherry-pick・revert・merge backend (既定) の rebase が prepare-commit-msg
+# で走る (#449)。
+# cherry-pick・revert・rebase の hook から `git var` が返す author は、元の commit の author ではなく
+# config の identity (git 2.54.0 で観察)。
 #
-# 強度ラベル (偽らない): 通常経路 (git commit) に対する best-effort guardrail。
-# `--no-verify` / repo local の core.hooksPath / hook gates を無効化した環境、`git commit` 以外で作る commit (競合の無い自動の merge (pull を含む)・rebase・cherry-pick・revert) では
-# 守れない (#414)。
+# 強度ラベル (偽らない): commit を作る経路に対する best-effort guardrail。
+# repo local の core.hooksPath / hook gates を無効化した環境、`git am` と apply backend の rebase (`git rebase --apply`
+# や rebase.backend=apply。内部で git am を使い、prepare-commit-msg も pre-merge-commit も走らない) では守れない。
+# `git commit --no-verify` と `git merge --no-verify` は
+# pre-commit と pre-merge-commit を skip するが、prepare-commit-msg は skip しないので、この gate は走る (#449)。
 # enforcement boundary ではない。
 #
 # 検査内容:
@@ -33,7 +39,8 @@
 # git の stderr も値 (`for <email>`) を含みうるので捨てる。
 #
 # exit code: 0 = pass / 1 = identity が不完全 (partial / 解決不能) / 2 = usage・構成エラー
-# (git 不在等の想定外)。引数は取らない (pre-commit は引数ゼロ)。
+# (git 不在等の想定外)。引数は読まない (pre-commit と pre-merge-commit は引数ゼロ、prepare-commit-msg では
+# git の引数 (message の file・source・sha) が渡るが使わない)。
 
 # C locale (LC_ALL=C や LANG の未設定) でも、読む text (stdin・file・git や gh の出力) を UTF-8 として扱う (#432)。
 # 既定の external encoding が US-ASCII のままだと、日本語を含む値への正規表現や連結が例外で落ちる。
