@@ -266,12 +266,14 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
   "filed": [ { "number": 401, "fingerprint": "docs/onboarding.md#stale-script-count" } ],
   "not_filed": [ { "fingerprint": "…", "reason": "duplicate #377" } ],
   "deferred": [ { "dimension": "test", "area": "." } ],
-  "settings": { "checked_at": "2026-10-02T09:15:30+09:00", "exit": 1, "output": "<personal-repo-baseline --check の stdout>" }
+  "settings": { "checked_at": "2026-10-02T09:15:30+09:00", "exit": 1, "stdout": "<personal-repo-baseline --check の stdout>", "stderr": "" }
 }
 ```
 
-- `settings` は手順 0b の結果 (`checked_at` はかけた時刻、`exit` は exit code、`output` は stdout の全文)。起動できなかった
-  ときは `exit` を null にし、`output` に理由を書く。再開でかけ直したら上書きする。追跡 Issue と run のコメントには写さない。
+- `settings` は手順 0b の結果 (`checked_at` はかけた時刻、`exit` は exit code、`stdout` と `stderr` はそれぞれの全文)。
+  exit 2 の理由 (設定 file の不正、今の repo を解決できない、など) は stderr にだけ出て stdout は空になることがあるので、
+  stderr も残す。起動できなかったときは `exit` を null にし、`stderr` に理由を書く。再開でかけ直したら上書きする。
+  追跡 Issue と run のコメントには写さない。
 - 単位の `status` は `pending` → `audited` → `refuted` → `done` (`done` は起票と記録まで終えたもの)。
 - 単位が終わるたびに書き直す。中断しても、`status` が `done` でない単位から再開できる。
 - 新しい run を始める前に `latest-run` の run を見て、`done` でない単位があれば再開するかを確認する。

@@ -5,9 +5,11 @@
 #   始める run でもかけ直すことを、それぞれ句として書いている
 # - 再開と既存の監査結果から始める run の bullet が 0b を通す順に入れている (入れないと再開で 0b を飛ばす)
 # - 手順 8 の追跡 Issue の bullet と「やってはいけないこと」が、結果を public にしないことと `--apply` の禁止を書いている
-# - RECORD.md の state.json の例が JSON として読め、`settings` に checked_at / exit / output がある
+# - RECORD.md の state.json の例が JSON として読め、`settings` に checked_at / exit / stdout / stderr がある (exit 2 の
+#   理由は stderr にだけ出るので、stdout だけでは確かめられなかった理由が残らない)
 # 句は空白を除いて比べ (行の折り返しの位置に依らない)、句の直後が区切り (。、( か末尾) であることも求める (否定は
-# 句の後ろに付くので、「かけない」を「かけないことはない」のように反転した文を部分一致で通さない)。
+# 句の後ろに付くので、「かけない」を「かけないことはない」のように反転した文を部分一致で通さない)。句は述語まで書く
+# (述語の前で切ると「済ませてから」を「省いて」に反転しても通る)。手順の列挙は括弧の注釈を除いてから比べる。
 # 引数で sweep の skill の directory を差し替えられる (変異での確認用)。
 set -eu
 
@@ -32,6 +34,13 @@ end
 # 句が空白を除いた本文にあり、直後が区切りか末尾であること。
 def clause?(text, clause)
   squash(text).match?(/#{Regexp.escape(squash(clause))}(?=[。、(]|\z)/)
+end
+
+# 括弧の注釈 (入れ子を含む) を除いてから clause? で比べる。注釈を挟む列挙でも、述語まで続けて照合するため。
+def bare_clause?(text, clause)
+  bare = text.dup
+  nil while bare.gsub!(/\([^()]*\)/, "")
+  clause?(bare, clause)
 end
 
 # 見出しの行から、同じ深さか浅い次の見出しの前まで。
@@ -101,12 +110,12 @@ else
   list = bullets(modes)
   {
     "中断した run を再開する" => "手順 0 と 0b と 2 をやり直し",
-    "既存の監査結果から始める" => "手順 0 (前提) と 0b (repo の設定) と 1",
+    "既存の監査結果から始める" => "手順 0 と 0b と 1 と 2 を済ませてから",
   }.each do |label, c|
     b = find(list, label)
     if b.nil?
       errors << "発火とモードに「#{label}」の bullet が無い"
-    elsif !clause?(b, c)
+    elsif !bare_clause?(b, c)
       errors << "「#{label}」の bullet に 0b を通す句 #{c.inspect} が無い"
     end
   end
@@ -140,8 +149,8 @@ else
     settings = JSON.parse(block)["settings"]
     if !settings.is_a?(Hash)
       errors << "RECORD.md の state.json の例に settings の object が無い"
-    elsif settings.keys.sort != %w[checked_at exit output]
-      errors << "RECORD.md の state.json の settings の key が checked_at / exit / output でない: #{settings.keys.inspect}"
+    elsif settings.keys.sort != %w[checked_at exit stderr stdout]
+      errors << "RECORD.md の state.json の settings の key が checked_at / exit / stdout / stderr でない: #{settings.keys.inspect}"
     end
   rescue JSON::ParserError => e
     errors << "RECORD.md の state.json の例が JSON として読めない: #{e.message[0, 80]}"
