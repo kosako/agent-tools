@@ -260,18 +260,23 @@ command は **この skill の directory にある `LAUNCH.md` を読んで、�
   適用される前に走るので、引用の破綻はそのまま呼び出し元の権限での command 置換になる。
 - **完了の正本は `done.txt`** (nonce が一致し `exit=0`)。端末に出る sentinel は起床信号で、判定は
   file で行う。どの経路でも続行条件は「`done.txt` の nonce 一致と `exit=0`」かつ「`result.md` が
-  存在し空でない」の両方。`exit=` が 0 以外、または待っても `done.txt` が現れない (wait は合計
-  3 回まで) なら `Blocked at: executor-exit`。
+  存在し空でない」の両方。`exit=` が 0 以外、または codex の process が居ないと確認できて `done.txt` が
+  無ければ `Blocked at: executor-exit`。
+- **待ち方 (#421)**: herdr 経由では、wait の timeout ごとに pane の foreground process で codex の生存を見る
+  (`personal-codex-worker` と同じ判定。判定できないときは「消滅」に倒さない)。生きていれば wait を繰り返し
+  (合計 3 回まで)、尽きても `done.txt` が無ければ、process を止めずに `Status: RUNNING` で pane id・run dir・nonce を
+  返す。RUNNING の run は、後から `done.txt` を同じ続行条件で確かめて回収する。その前に同じ対象の review を
+  起動し直さない (2 本目が並んで走る)。
 - **上限**: `codex exec` は `personal-safe-run` で包まない (運用 instruction の「test と長時間の command」の例外。
-  review は read-only で test を走らせない。#512)。止める責任は caller が持つ: herdr 経由で wait が尽きたとき、
-  直接起動で caller の command が `done.txt` を残さずに戻ったとき (tool の時間の上限で打ち切られた・background に
-  移された等) は、process を自分で探して止めず (pane があれば閉じず)、run dir を添えて `Blocked at: executor-exit` で
-  返す。止めるかは人が決める (手順は `LAUNCH.md`)。
+  review は read-only で test を走らせない。#512)。止める責任は caller が持つ: herdr 経由で wait が尽きたとき
+  (`Status: RUNNING`)、直接起動で caller の command が `done.txt` を残さずに戻ったとき (tool の時間の上限で打ち切られた・
+  background に移された等。生存を見る pane が無いので `Blocked at: executor-exit`) は、process を自分で探して止めず
+  (pane があれば閉じず)、run dir を添えて返す。止めるかは人が決める (手順は `LAUNCH.md`)。
 - **空振り**: `result.md` が欠落または空なら、新しい nonce で同じ brief を **1 回だけ** 再実行し、
   2 回目も空なら `Blocked at: executor-result`。pane 出力や token count の表示から結果を捏造しない。
 - **pane の後始末**: 続行条件を満たしたときだけ、pane の生出力を `<run dir>/pane.log` に保存し、
   空でないことを確認してから閉じる。満たさないとき (exit≠0、空振りの再実行が尽きた、途中で
-  BLOCKED) は閉じず、調べる必要がある pane だけを残す。固定名の pane を使い回さない。
+  BLOCKED、RUNNING) は閉じず、調べる必要がある pane だけを残す。固定名の pane を使い回さない。
 - **人手 hand-off**: `launch-path` で停止したら、Next step に人が実行する run script の path と
   run dir を書き (人が shell に貼る文字列なので同じ規則で literal 化)、人が実行したあと同じ続行
   条件で判定する。端末に出た sentinel や口頭報告だけで完了とみなさない。
@@ -292,6 +297,9 @@ review 本文と停止結果の雛形は **`RESULT-FORMAT.md` を読んで、そ
   OID、Next step (verified route へ戻す / human へ渡す / clean worktree の準備 / 人手で実行する run
   script と結果 file の場所)、`Independence: not-established` を返す。OID 以外の untrusted metadata
   や secret を停止結果へ転記しない。
+- wait が尽きても review が動いているときは verdict を作らず、`Status: RUNNING`、pane id・run dir・nonce、
+  Next step (pane を見て続行か中断かを人が決める。続行なら `done.txt` を待って同じ続行条件で回収する。run script を
+  再実行しない)、`Independence: not-established` を返す (#421)。
 - 結果は caller にそのまま返す。明らかな誤検知も黙って削らず、caller 側の評価を別記する。この
   verdict は code review process の判定であり、CI / required checks / branch protection / public
   safety を含む PR 全体の merge readiness ではない。
@@ -312,7 +320,9 @@ review 本文と停止結果の雛形は **`RESULT-FORMAT.md` を読んで、そ
 - commit mode で worktree の file (または現在の HEAD の tree) を周辺コードの根拠にする。
 - 空の結果 file を完了扱いにする。`done.txt` の nonce と exit code を確認せずに続行する。再実行を
   2 回以上繰り返す。
-- 失敗した review の pane を閉じる。成功した pane を `pane.log` を保存せずに閉じる。
+- 失敗した review や RUNNING の review の pane を閉じる。成功した pane を `pane.log` を保存せずに閉じる。
+- wait が尽きたときに codex の process を止める。RUNNING で返した run (と、直接起動で `done.txt` を残さずに戻った
+  run) の `done.txt` を確かめる前に、人の判断なしに同じ対象の review を起動し直す。
 - model family / fixed effort / 観測時間を selection metadata や必須 contract に焼き込む。
 - `-p` で profile を重ねる。`--ignore-user-config` / `--ignore-rules` / `--disable` を外す。`codex features list` に
   無い feature を `--disable` に渡す。model / effort を読めないときに推測した値や user config の読み込みで補う。

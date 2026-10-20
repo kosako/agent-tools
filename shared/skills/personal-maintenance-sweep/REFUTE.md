@@ -43,7 +43,7 @@
 ## 検証役が Codex のとき
 
 personal-repo-audit の `CODEX-LAUNCH.md` と同じ起動を使います (境界の flag、capability preflight、起動
-経路、run script、完了の判定、停止)。違うのは次の 4 点だけです。
+経路、run script、完了の判定、停止)。違うのは次の 5 点だけです。
 
 | 項目 | 監査 (CODEX-LAUNCH.md) | 反証 |
 | --- | --- | --- |
@@ -51,6 +51,7 @@ personal-repo-audit の `CODEX-LAUNCH.md` と同じ起動を使います (境界
 | run dir に置く入力 | なし | `findings.json` (反証する所見をまとめたもの。ID は上の `U<n>-<元の ID>` に振り直す。repo-audit の `findings.schema.json` の形) |
 | brief の役割 | 監査役として監査する | 検証役として、`findings.json` の所見を上の「判定の規則」で確かめる |
 | 完了の判定の必須 key | `summary` / `findings` / `not_problems` / `decisions` / `scope` | `verdicts` |
+| run dir の path の記録 (起動の前。再開で回収する。#421) | sweep の `units/<n>/codex-run` | sweep の run の `refute-run` (`RECORD.md`) |
 
 brief には、`CODEX-LAUNCH.md` の brief の制約 (read-only、subagent なし、data の境界、値の受け渡し、heredoc
 なし、GitHub と network に触れない、gitignore された local の note を読まない) をそのまま書き、加えて:

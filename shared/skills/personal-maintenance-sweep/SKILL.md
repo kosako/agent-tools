@@ -54,6 +54,18 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   飛ばす。**state の `target_commit` が今の `HEAD` と違えば、保存した監査と反証の結果は使わない** (その間に
   直った問題を起票しないため)。`done` でない単位は新しい run として監査からやり直し、古い run は state に
   残す (起票済みの Issue は手順 6 の重複の照合で拾われる)。
+  - **Codex の run を先に回収する (#421)**: どちらの場合も、Codex を起動し直す前に、次の段で Codex を起動する単位の
+    run の記録を見る: `pending` の単位は監査の `units/<n>/codex-run`、`audited` の単位は反証の run の `refute-run`
+    (`RECORD.md`)。`refuted` と `done` の単位は、回収済みなので見ない (状態を戻さない)。
+    - 記録した run dir に、その run の nonce (run script の先頭に埋めた値) の `done.txt` が無ければ、Codex がまだ
+      動いている (止まったとは限らない) として、`target_commit` に関わらず起動し直さず、run dir を添えて人に返す
+      (`CODEX-LAUNCH.md` の「完了の判定」の実行中。止めるかは人が決める)。
+    - `done.txt` があり、`target_commit` が今の `HEAD` と違えば、古い run の結果は使わず、再実行もしない (上の
+      とおり新しい run として監査からやり直す)。
+    - `done.txt` があり、`target_commit` が今の `HEAD` と同じなら、同じ続行の条件で判定する。満たせば結果を保存
+      して、その単位を次の状態に進める (監査の結果は `pending` → `audited`、反証の結果は、反証に含めた単位を
+      `audited` → `refuted`)。満たさなければ `CODEX-LAUNCH.md` の規則 (`exit=` が 0 以外は停止、結果の欠けは新しい
+      nonce で 1 回だけ再実行) に従う。
 
 ## 手順
 
@@ -123,7 +135,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   repo-audit の `findings.schema.json` の形の JSON にして run dir に保存する。
 - **監査役が Codex**: personal-repo-audit の `CODEX-LAUNCH.md` の起動で Codex に監査させる。effort は
   プリセットの値を渡す。model は [BUDGET.md](BUDGET.md) の `personal-codex-model-selection` の出力を渡す (採用は
-  exit 0 のときだけで、それ以外は開始しない。空なら model を渡さない)。
+  exit 0 のときだけで、それ以外は開始しない。空なら model を渡さない)。起動の前に、run dir の path を
+  `units/<n>/codex-run` に書く (再開で回収するため。`RECORD.md`。#421)。
 - 単位が終わるたびに local の state を保存し、残量を読み直す。停止の条件 ([BUDGET.md](BUDGET.md)) に
   当たったら、残りの単位は state に残して次の run に回す。
 

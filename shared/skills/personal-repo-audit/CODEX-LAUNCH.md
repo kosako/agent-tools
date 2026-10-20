@@ -137,12 +137,17 @@ code や docs の本文は埋め込みません (Codex が sandbox の中で自�
 - **続行の条件**: `done.txt` が今回の nonce で `exit=0`、かつ `result.json` が在って空でなく、JSON と
   して読めて、schema の必須の key (`summary` / `findings` / `not_problems` / `decisions` / `scope`) が
   在る。
-- `exit=` が 0 以外、または待っても `done.txt` が現れない (wait は合計 3 回まで) なら `Blocked at:
-  executor-exit`。run script の `codex exec` は `personal-safe-run` で包まない (運用 instruction の「test と
-  長時間の command」の例外。監査は read-only で test を走らせない。#512) ので、wait が尽きても (直接起動なら、
-  呼び出し側の command が `done.txt` を残さずに戻っても) process を自分で探して止めず、pane があれば閉じず、
-  run dir を添えて人に返します。止めるかは人が決めます (`codex exec` の argv には `-o <run dir>/result.json` が
-  入るので、人は run dir の path で process を探せます)。
+- `exit=` が 0 以外なら `Blocked at: executor-exit`。
+- 待っても (wait は合計 3 回まで) 今回の nonce の `done.txt` が現れないときは、process が止まったとは限らないので
+  **実行中** として扱います。判定は今回の nonce の `done.txt` の有無だけで行い、pane や process の有無では判定
+  しません (`personal-grill-me` の `CONSULT.md` の相談と同じ。#421)。直接起動で、呼び出し側の command が
+  `done.txt` を残さずに戻ったときも同じです。`Status: RUNNING` で pane (あれば)・run dir・nonce を返して人に渡し、
+  その run の `done.txt` が現れるまで、同じ対象の監査 (反証) を新しく起動しません (2 本目が並んで走り、使用量を
+  二重に使う)。後から `done.txt` が現れたら、同じ続行の条件で判定します。run script の `codex exec` は
+  `personal-safe-run` で包まない (運用 instruction の「test と長時間の command」の例外。監査は read-only で test を
+  走らせない。#512) ので、process を自分で探して止めず、pane があれば閉じません。止めるか (止めてから起動し直すか)
+  は人が決めます (`codex exec` の argv には `-o <run dir>/result.json` が入るので、人は run dir の path で process を
+  探せます)。
 - `exit=0` でも、`result.json` が欠けている・空・JSON として読めない・必須の key のどれかが無い
   (例 `{}`) なら、新しい nonce で同じ brief を **1 回だけ** 再実行し、2 回目も続行の条件を満たさなければ
   `Blocked at: executor-result`。pane の出力から結果を作りません。
@@ -151,7 +156,9 @@ code や docs の本文は埋め込みません (Codex が sandbox の中で自�
   残します。
 
 停止したときは、`Status: BLOCKED`、`Blocked at:` (capability-preflight / launch-path / executor-exit /
-executor-result)、public-safe な理由、次の手を返します。
+executor-result)、public-safe な理由、次の手を返します。実行中のときは、`Status: RUNNING`、pane (あれば)・run dir・
+nonce、次の手 (`done.txt` を待って同じ続行の条件で判定する。止めるかは人が決める。run script を再実行しない) を
+返します。
 
 ## 実測 (2026-10-01、Codex CLI 0.159.3)
 

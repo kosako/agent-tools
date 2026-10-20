@@ -252,7 +252,9 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
 - **完了した review は最大 3 回**です。3 回目のあとに修正した head は未レビューとして扱い、APPROVE を引き継ぎ
   ません。収束しなければ PR を残して `blocked` にし、未解決の項目と次の入口を記録して報告します。
 - reviewer が起動できない (BLOCKED、usage limit) ときも、PR を残して `blocked` にします。未レビューの PR を
-  完了扱いにしません。
+  完了扱いにしません。executor が `Status: RUNNING` (wait が尽きても review が動いている。#421) を返したときも、
+  その round を結果なしの記録のまま `blocked` にして人に渡し、新しい round を起動しません (再開で上の回収の手順に
+  入る)。
 - 人が途中で commit を足したら、routing の preflight と対象の差分を取り直します (Claude 単独とみなさない)。
 
 ## 予算

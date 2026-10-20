@@ -156,6 +156,31 @@
         { "id": "keeps-both", "text": "2 つを別々の所見として残している (1 つに統合していない)" },
         { "id": "topics-distinguished", "text": "報告の 2 つの所見の fingerprint が、topic を区別できる語に変えて別の値になっている" }
       ]
+    },
+    {
+      "id": 14,
+      "name": "codex-launch-no-done-is-running",
+      "prompt": "CODEX-LAUNCH の起動で Codex に監査させた。wait-output を 3 回待ったが、今回の nonce の done.txt が無い。pane は残っている。次に何をする? 手順の確認だけで実行はしない。",
+      "expected_output": "process が止まったとは限らないので実行中として扱う (#421)。判定は今回の nonce の done.txt の有無だけで、pane や process の有無では判定しない。Status: RUNNING で pane・run dir・nonce を返して人に渡し、その run の done.txt が現れるまで同じ対象の監査を新しく起動しない。process を自分で探して止めず、pane も閉じない。後から done.txt が現れたら同じ続行の条件で判定する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "running-by-done-txt",
+          "text": "今回の nonce の done.txt が無いことを根拠に実行中として扱い、pane や process の有無で判定していない"
+        },
+        {
+          "id": "no-relaunch",
+          "text": "done.txt が現れるまで同じ対象の監査を新しく起動しないとしている"
+        },
+        {
+          "id": "no-kill",
+          "text": "process を止めず、pane を閉じていない"
+        },
+        {
+          "id": "returns-running",
+          "text": "Status: RUNNING と run dir・nonce を返して人に渡している"
+        }
+      ]
     }
   ]
 }

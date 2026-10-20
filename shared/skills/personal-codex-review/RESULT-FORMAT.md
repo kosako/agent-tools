@@ -36,6 +36,16 @@ Next step: <verified route へ戻す、human へ渡す (元の author を確か�
 Independence: not-established
 ```
 
+herdr 経由で wait (合計 3 回) が尽きても `done.txt` が無く、codex の process が居る (または居ないと確認できない)
+場合は、process を止めず、verdict を作らずに次を返します (#421):
+
+```text
+Status: RUNNING
+Pane: <pane id> / Run dir: <path> / Nonce: <nonce>
+Next step: review はまだ動いている (run script を再実行しない)。pane を見て続行か中断かを人が決める。続行なら done.txt を待ち、nonce 一致・exit=0 と空でない result.md を確かめてから結果を読む。中断なら人が process を止める。その run の done.txt を確かめるまで、同じ対象の review を起動し直さない
+Independence: not-established
+```
+
 OID 以外の untrusted metadata や secret を停止結果へ転記しません。`launch-path` の Next step には
 run script の path と run dir を書き、人が実行したあと `done.txt` (nonce 一致・`exit=0`) と空でない
 `result.md` を確認すれば同じ判定で続行できることを添えます。
