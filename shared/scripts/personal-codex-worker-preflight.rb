@@ -380,22 +380,46 @@ module CodexWorkerPreflight
     [:header, path, aot]
   end
 
-  # bare key・escape の無い basic string の key・literal string の key を `.` でつないだ key の path。
+  # bare key・basic string の key (escape は戻す)・literal string の key を `.` でつないだ key の path。escape を
+  # 戻すのは、`model_providers` などを unicode escape で綴っても同じ key として読み、許可外の設定の検査を
+  # すり抜けさせないため。
   def toml_key_path(text, label)
     path = []
     rest = text
     loop do
       rest = rest.lstrip
-      m = BARE_KEY_RE.match(rest) || /\A"([^"\\]*)"/.match(rest) || /\A'([^']*)'/.match(rest)
-      raise ArgumentError, "#{label} の key を解釈できません (provider の読み取り)" unless m
-
-      path << (m[1] || m[0])
+      if (m = BARE_KEY_RE.match(rest)) then path << m[0]
+      elsif (m = /\A"((?:[^"\\]|\\.)*)"/.match(rest)) then path << toml_unescape(m[1], label)
+      elsif (m = /\A'([^']*)'/.match(rest)) then path << m[1]
+      else raise ArgumentError, "#{label} の key を解釈できません (provider の読み取り)"
+      end
       rest = m.post_match.lstrip
       break unless rest.start_with?(".")
 
       rest = rest[1..-1]
     end
     [path, rest]
+  end
+
+  TOML_SIMPLE_ESCAPES = { "b" => "\b", "t" => "\t", "n" => "\n", "f" => "\f", "r" => "\r", '"' => '"',
+                          "\\" => "\\" }.freeze
+
+  # basic string の escape (TOML の \b \t \n \f \r \" \\ と 4 桁 / 8 桁の unicode) を戻す。知らない escape や
+  # 文字にならない code point (surrogate、範囲外) は不正。
+  def toml_unescape(raw, label)
+    raw.gsub(/\\(?:u(\h{4})|U(\h{8})|(.))/) do
+      hex = Regexp.last_match(1) || Regexp.last_match(2)
+      if hex
+        code = hex.hex
+        raise ArgumentError, "#{label} の key の escape を解釈できません (provider の読み取り)" if code > 0x10FFFF || (0xD800..0xDFFF).cover?(code)
+
+        [code].pack("U")
+      else
+        TOML_SIMPLE_ESCAPES.fetch(Regexp.last_match(3)) do
+          raise ArgumentError, "#{label} の key の escape を解釈できません (provider の読み取り)"
+        end
+      end
+    end
   end
 
   # 値が終わるまでに、次の行から何行を使うか。文字列 (1 行と複数行) と括弧 ([ / {) の状態を追う。
@@ -470,10 +494,12 @@ module CodexWorkerPreflight
   # [model_providers.<id>.aws] の profile / region (1 行の basic string で、値が許可した形のものだけ)。
   # model_providers の下のそれ以外 (base_url・env_key・http_headers・inline table・array of tables・形の違う
   # profile / region) は、その id を「引き継げない」にする (使われない id なら無視し、選ばれたら起動しない)。
-  # `model_provider` の文字列を含まない file は読まない (provider の無い config の振る舞いを変えない)。
+  # `model_provider` の文字列も unicode escape (`\u` / `\U`) も含まない file は読まない (provider の無い config の
+  # 振る舞いを変えない)。key の名前を生の文字列なしで綴れるのは quoted key の unicode escape だけなので、escape が
+  # あれば読む。
   def read_provider_settings(text, label)
     found = { provider: nil, aws: {}, unsupported: [], all_unsupported: false }
-    return found unless text.to_s.include?(PROVIDER_KEY)
+    return found unless text.to_s.include?(PROVIDER_KEY) || text.to_s.match?(/\\[uU]/)
 
     table = []
     toml_statements(text, label).each do |kind, path, extra|

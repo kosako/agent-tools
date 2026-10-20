@@ -233,6 +233,9 @@ check("1 行の文字列の中の括弧と # は値の外として数えない",
 check("comment の中の括弧は値の外として数えない",
       prov("model_provider = \"amazon-bedrock\"\nx = [1] # ]]\ny = 2 # [\n[model_providers.amazon-bedrock.aws]\nregion = \"r6\"\n")[:aws] ==
       { "amazon-bedrock" => { "region" => "r6" } })
+check("quoted key の escape した引用符は key の一部として読む",
+      prov("model_provider = \"amazon-bedrock\"\n\"es\\\"c\" = 1\n[model_providers.amazon-bedrock.aws]\nregion = \"r8\"\n")[:aws] ==
+      { "amazon-bedrock" => { "region" => "r8" } })
 check("1 行の basic string の escape した引用符を越えて読む",
       prov("model_provider = \"amazon-bedrock\"\nx = \"a\\\"[b\"\n[model_providers.amazon-bedrock.aws]\nregion = \"r7\"\n")[:aws] ==
       { "amazon-bedrock" => { "region" => "r7" } })
@@ -244,6 +247,24 @@ check("quoted key の header と dotted key でも読む",
 check("header の後ろの comment は通る",
       prov("model_provider = \"amazon-bedrock\"\n[model_providers.amazon-bedrock.aws] # c\nregion = \"r5\"\n")[:aws] ==
       { "amazon-bedrock" => { "region" => "r5" } })
+# quoted key の escape は戻して読む (unicode escape で綴った model_providers などで検査をすり抜けさせない)。
+# fixture の escape は実行時に組む (\ と u005f を連結する)。
+ESC_US = "\\" + "u005f"
+check("escape で綴った table の header も読む",
+      prov("model_provider = \"amazon-bedrock\"\n[\"model#{ESC_US}providers\".amazon-bedrock.aws]\nprofile = \"work\"\n")[:aws] ==
+      { "amazon-bedrock" => { "profile" => "work" } })
+check("escape で綴った model_provider だけの file も読む (model_provider の生の文字列が無くても)",
+      prov("\"model#{ESC_US}provider\" = \"amazon-bedrock\"\n")[:provider] == "amazon-bedrock")
+check("escape で綴った許可外の設定も「引き継げない」に記録する",
+      prov("[\"model#{ESC_US}providers\".amazon-bedrock.http_headers]\nX = \"s\"\n")[:unsupported] == ["amazon-bedrock"])
+check("値の中だけに unicode escape がある provider の無い file は、読んでも provider 無し",
+      prov("note = \"caf#{"\\" + "u00e9"}\"\n[x]\ny = [\n  1,\n]\n") == { provider: nil, aws: {}, unsupported: [], all_unsupported: false })
+check("model_provider の文字列も unicode escape も無い file は読まない (知らない escape の key があっても)",
+      prov("[\"a#{"\\"}q\"]\nx = 1\n") == { provider: nil, aws: {}, unsupported: [], all_unsupported: false })
+check("知らない escape の key は fail-closed",
+      prov_error("model_provider = \"a\"\n[\"a#{"\\"}q\"]\nx = 1\n").to_s.include?("key の escape を解釈できません"))
+check("surrogate の escape の key は fail-closed",
+      prov_error("[\"a#{"\\" + "uD800"}\"]\nx = 1\n").to_s.include?("key の escape を解釈できません"))
 check("profiles の下の model_provider は読まない (--ignore-user-config で効かない)",
       prov("[profiles.x]\nmodel_provider = \"amazon-bedrock\"\n")[:provider].nil?)
 {
@@ -272,7 +293,7 @@ check("使われないプロバイダの base_url も記録だけする (止め�
   "閉じない 1 行の文字列" => ["model_provider = \"a\"\nx = \"open\n", "行内で閉じていません"],
   "閉じない複数行の文字列" => ["model_provider = \"a\"\nx = \"\"\"\nopen\n", "値が閉じていません"],
   "合わない括弧" => ["model_provider = \"a\"\nx = ]\n", "括弧が合いません"],
-  "解釈できない key" => ["model_provider = \"a\"\n\"es\\\"c\" = 1\n", "key を解釈できません"],
+  "解釈できない key" => ["model_provider = \"a\"\n= 1\n", "key を解釈できません"],
   "= の無い行" => ["model_provider = \"a\"\nweird line\n", "key = value の行を解釈できません"],
   "閉じない header" => ["model_provider = \"a\"\n[x\n", "table header を解釈できません"],
   "header の後ろの余分な文字" => ["model_provider = \"a\"\n[x] junk\n", "table header を解釈できません"],
@@ -324,6 +345,11 @@ check("model_providers の inline table があれば、どのプロバイダで�
 check("使われないプロバイダの設定では止めない",
       layered("model_provider = \"amazon-bedrock\"\n[model_providers.other]\nbase_url = \"https://x\"\n")[0] ==
       { "model_provider" => "amazon-bedrock" })
+check("profile の file の escape で綴った table も重なる",
+      layered(BEDROCK, "[\"model#{ESC_US}providers\".amazon-bedrock.aws]\nprofile = \"other\"\n")[0]["model_providers.amazon-bedrock.aws.profile"] == "other")
+check("profile の file の escape で綴った許可外の設定でも止める",
+      layered_error(BEDROCK, "[\"model#{ESC_US}providers\".amazon-bedrock.http_headers]\nAuthorization = \"CANARY\"\n").to_s
+        .include?("agent-tools-worker.config.toml の選ばれた provider に、引き継げない設定があります"))
 check("止める理由に値を出さない",
       !layered_error("model_provider = \"amazon-bedrock\"\n[model_providers.amazon-bedrock]\nbase_url = \"https://CANARY\"\n").to_s.include?("CANARY"))
 
@@ -1305,6 +1331,19 @@ abort "argv" unless j["launch_argv"].each_cons(2).include?(["-c", %q{model_provi
 out=$(run_pf 2>&1)
 echo "$out" | grep -q "^provider: (codex default)$" || fail "provider の無い config では codex default と出すべき: $out"
 case "$out" in *model_provider*) fail "provider の無い config で provider の -c を付けてはいけない: $out" ;; esac
+# escape で綴った model_provider だけの config でも、--model の明示のときに provider を引き継ぐ
+ehome="$tmp/escaped-provider-home"
+mkdir -p "$ehome"
+ruby -e 'File.write(ARGV[0], "\"model" + "\\" + "u005fprovider\" = \"amazon-bedrock\"\n")' "$ehome/config.toml"
+grep -q 'model_provider' "$ehome/config.toml" && fail "fixture: escape で綴った config に model_provider の生の文字列があってはいけない"
+set +e
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$ehome" --clone "$clone" \
+  --model gpt-explicit 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "escape で綴った provider の config で exit 0 (rc=$rc): $out"
+echo "$out" | grep -q -- ' -c model="gpt-explicit" -c model_provider="amazon-bedrock" -o ' ||
+  fail "escape で綴った model_provider を明示の --model のときも引き継ぐべき: $out"
 # 選ばれたプロバイダに引き継げない設定 (base_url) があれば、--model の明示があっても launch argv を出さずに exit 2
 printf '[model_providers.amazon-bedrock]\nbase_url = "https://CANARY"\n' >> "$phome/config.toml"
 set +e
