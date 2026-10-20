@@ -1,7 +1,7 @@
 # personal-maintenance-sweep — 記録と照合 (RECORD)
 
-`SKILL.md` の手順 0 (追跡 Issue と state を探す)、1 (役割の数え方)、6 (重複の照合)、7 (起票)、
-8 (記録) で使う形と command です。手順の正本は `SKILL.md`、形と command の正本はこの file。
+`SKILL.md` の手順 0 (追跡 Issue と state を探す)、0b (repo の設定の確認の記録)、1 (役割の数え方)、6 (重複の照合)、
+7 (起票)、8 (記録) で使う形と command です。手順の正本は `SKILL.md`、形と command の正本はこの file。
 
 記録は 3 層です。
 
@@ -9,7 +9,7 @@
 | --- | --- | --- | --- |
 | 追跡 Issue | GitHub (repo ごとに 1 つ、close しない) | 観点ごとの試行日・反証まで完了した日・対象の commit・監査役・範囲 | public (残量の数字は書かない) |
 | fingerprint の marker | 所見の Issue の本文 | 重複の照合の鍵 | public |
-| local の state | `${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/maintenance-sweep/<owner>/<repo>/` | run の進み具合、単位ごとの結果、起票した番号、消費の実績 | local だけ |
+| local の state | `${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/maintenance-sweep/<owner>/<repo>/` | run の進み具合、単位ごとの結果、起票した番号、消費の実績、repo の設定の確認の結果 | local だけ |
 
 GitHub に書くのは Claude の session の issues モードと fix モードだけです (fix モードは所見の Issue と追跡 Issue に加え、
 branch の push・PR・review のコメント。`FIX.md`)。Codex の session は GitHub に書きません。
@@ -265,10 +265,15 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
   "consumption": [ { "unit": 1, "tool": "codex", "window": "weekly", "before_used_pct": 9, "after_used_pct": 11 } ],
   "filed": [ { "number": 401, "fingerprint": "docs/onboarding.md#stale-script-count" } ],
   "not_filed": [ { "fingerprint": "…", "reason": "duplicate #377" } ],
-  "deferred": [ { "dimension": "test", "area": "." } ]
+  "deferred": [ { "dimension": "test", "area": "." } ],
+  "settings": { "checked_at": "2026-10-02T09:15:30+09:00", "exit": 1, "stdout": "<personal-repo-baseline --check の stdout>", "stderr": "" }
 }
 ```
 
+- `settings` は手順 0b の結果 (`checked_at` はかけた時刻、`exit` は exit code、`stdout` と `stderr` はそれぞれの全文)。
+  exit 2 の理由は、repo を確かめる途中の失敗なら stdout に出るが、run 全体の失敗 (usage・設定 file の不正・今の repo を
+  解決できない、など) では stderr にだけ出て stdout は空になるので、両方を残す。起動できなかったときは `exit` を null
+  にし、`stderr` に理由を書く。再開でかけ直したら上書きする。追跡 Issue と run のコメントには写さない。
 - 単位の `status` は `pending` → `audited` → `refuted` → `done` (`done` は起票と記録まで終えたもの)。
 - 単位が終わるたびに書き直す。中断しても、`status` が `done` でない単位から再開できる。
 - 新しい run を始める前に `latest-run` の run を見て、`done` でない単位があれば再開するかを確認する。
