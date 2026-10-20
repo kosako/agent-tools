@@ -15,7 +15,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:7299282585b862ee581bf7daf9e0539efcc42006cbe6775d81a7494b29450cbd
+  approved_build_id: sha256:643ec19247255998c9f88b27255b8619da234fa6b3b613df039c1c571b639a52
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-repo-baseline.rb
@@ -26,12 +26,14 @@ summary: >-
   security updates、merge の設定、public の secret scanning、public の default branch の ruleset。ruleset は
   personal-repo-baseline という名前のものだけを作るか更新し、bypass は無し) を直し、読み直して確かめる
   (dependabot.yml は書かない。ずれの無い repo には書かない)。対象は今の directory の repo、--repo OWNER/REPO、
-  または --all (自分が owner の repo。fork・archive 済み・設定 file で除外した repo を除く)。fork・archive 済み・
+  または --all (自分が owner の repo。fork・archive 済み・手元の設定 file で除外した repo を除く)。fork・archive 済み・
   admin 権限の無い repo は対象外。baseline は Dependabot alerts と security updates、merge は squash だけ・merge の
   後に branch を消す、.github/dependabot.yml の有無、public だけ secret scanning と push protection と default
-  branch の ruleset (PR の必須 (approve 0)・force push と削除の禁止・設定 file に書いた必須の check)。API で読めない
+  branch の ruleset (PR の必須 (approve 0)・force push と削除の禁止・repo の設定 file に書いた必須の check)。API で読めない
   Malware alerts と grouped security updates は「画面で確かめる」と出す。手元の設定 file
-  (${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/repo-baseline.json、任意) は exclude と required_checks だけ。
+  (${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/repo-baseline.json、任意) は exclude だけ (required_checks は不正)。
+  repo ごとの skip (dependabot_yml だけ) と required_checks は、各 repo の .github/repo-baseline.json (任意。default
+  branch のもの) に置き、不正ならその repo を確かめられないにする。skip した項目は確かめず、外したことを出す。
   応答の field の欠落・null・型違いはその repo を確かめられないにし、--all は残りの repo を続ける。
-  exit 0 = ずれ無し (直し終えたときを含む) / 1 = ずれ有り / 2 = usage・設定 file が不正・確かめられないか直せない repo
+  exit 0 = ずれ無し (直し終えたときを含む) / 1 = ずれ有り / 2 = usage・手元の設定 file が不正・確かめられないか直せない repo
   が有る (docs/repo-baseline.md)。

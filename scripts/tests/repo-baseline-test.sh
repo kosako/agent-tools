@@ -107,8 +107,15 @@ GOOD_RULES = [
   { "type" => "deletion" },
 ].freeze
 
-# baseline どおりの repo の応答。private は ruleset の path を持たない (呼ぶと失敗する)。
-def routes_for(repo, rules: GOOD_RULES, alerts: 204, fixes: true, yml: 200, yaml: 404)
+# repo の設定 file (.github/repo-baseline.json) の contents API の応答。overrides で field を壊す。
+def repo_file_route(text, overrides = {})
+  body = { "type" => "file", "encoding" => "base64", "content" => [text].pack("m"), "size" => text.bytesize }
+  { "status" => 200, "body" => body.merge(overrides) }
+end
+
+# baseline どおりの repo の応答。private は ruleset の path を持たない (呼ぶと失敗する)。settings は repo の設定
+# file の中身 (Hash は JSON にする、String はそのまま。nil は file が無い = 404)。
+def routes_for(repo, rules: GOOD_RULES, alerts: 204, fixes: true, yml: 200, yaml: 404, settings: nil)
   name = repo["full_name"]
   r = {
     "repos/#{name}" => { "status" => 200, "body" => repo },
@@ -116,6 +123,8 @@ def routes_for(repo, rules: GOOD_RULES, alerts: 204, fixes: true, yml: 200, yaml
     "repos/#{name}/automated-security-fixes" => { "status" => 200, "body" => { "enabled" => fixes, "paused" => false } },
     "repos/#{name}/contents/.github/dependabot.yml" => { "status" => yml },
     "repos/#{name}/contents/.github/dependabot.yaml" => { "status" => yaml },
+    "repos/#{name}/contents/.github/repo-baseline.json" =>
+      settings.nil? ? { "status" => 404 } : repo_file_route(settings.is_a?(String) ? settings : JSON.generate(settings)),
   }
   r["repos/#{name}/rules/branches/main?per_page=100"] = { "status" => 200, "body" => rules } if repo["visibility"] == "public"
   r
@@ -201,6 +210,13 @@ check("evaluate: required checks missing one",
 check("evaluate: required checks extra actual is fine",
       RB.evaluate("public", good_public.merge("ruleset_required_checks" => %w[a b c]), %w[a b]) == [])
 check("evaluate: private ignores required checks", RB.evaluate("private", good_private, %w[a]) == [])
+check("evaluate: skipped item is not compared",
+      RB.evaluate("public", good_public.merge("dependabot_yml" => false), [], %w[dependabot_yml]) == [])
+check("evaluate: skipped item needs no fact",
+      RB.evaluate("public", good_public.reject { |k, _| k == "dependabot_yml" }, [], %w[dependabot_yml]) == [])
+check("evaluate: skip leaves other drift",
+      RB.evaluate("private", good_private.merge("dependabot_yml" => false, "delete_branch_on_merge" => false), [], %w[dependabot_yml]) ==
+        [["delete_branch_on_merge", false, true]])
 
 # ---- ruleset_facts ----
 facts = RB.ruleset_facts([
@@ -223,23 +239,16 @@ rescue RB::Error
 end
 check("ruleset_facts: PR rule without approve count is error", bad_pr)
 
-# ---- parse_config ----
-cfg = RB.parse_config(JSON.generate("exclude" => ["Owner/Hidden"], "required_checks" => { "Owner/CI" => ["test (a)"] }))
+# ---- parse_config (手元の設定 file。key は exclude だけ) ----
+cfg = RB.parse_config(JSON.generate("exclude" => ["Owner/Hidden"]))
 check("config: exclude is case-insensitive", cfg.excluded?("owner/hidden") && cfg.excluded?("OWNER/HIDDEN"))
-check("config: required checks are case-insensitive", cfg.required_checks_for("owner/ci") == ["test (a)"])
-check("config: no required checks", cfg.required_checks_for("owner/other") == [])
 check("config: absent file is empty", !RB.parse_config(nil).excluded?("o/r"))
+check("config: empty object is fine", !RB.parse_config("{}").excluded?("o/r"))
 [
   ["unknown key", { "exclude" => [], "repos" => [] }],
   ["exclude not array", { "exclude" => "o/r" }],
   ["exclude bad name", { "exclude" => ["../r"] }],
-  ["required not object", { "required_checks" => [] }],
-  ["required bad key", { "required_checks" => { "o" => ["a"] } }],
-  ["required empty list", { "required_checks" => { "o/r" => [] } }],
-  ["required blank name", { "required_checks" => { "o/r" => [" "] } }],
-  ["required control char", { "required_checks" => { "o/r" => ["a\tb"] } }],
   ["top-level array", []],
-  ["required keys differing only in case", { "required_checks" => { "O/CI" => ["security"], "o/ci" => ["test"] } }],
 ].each do |label, data|
   raised = begin
     RB.parse_config(JSON.generate(data))
@@ -249,20 +258,72 @@ check("config: absent file is empty", !RB.parse_config(nil).excluded?("o/r"))
   end
   check("config: #{label} is invalid", raised)
 end
-# 同じ綴りの key の重なりは、Hash から作れないので生の JSON で確かめる (JSON.parse は既定で後の値を残す)。
-[
-  ["duplicate repo in required_checks", '{"required_checks":{"o/r":["security"],"o/r":["test"]}}'],
-  ["duplicate top-level key", '{"exclude":["o/a"],"exclude":[]}'],
-].each do |label, text|
-  message = begin
-    RB.parse_config(text)
-    nil
-  rescue ArgumentError => e
-    e.message
-  end
-  check("config: #{label} is invalid", message == "設定 file に重なった key があります")
+# 移行は切り替え (#545): 手元に残った required_checks は、移った先を添えて不正にする。
+moved = begin
+  RB.parse_config(JSON.generate("exclude" => [], "required_checks" => { "o/r" => ["a"] }))
+  nil
+rescue ArgumentError => e
+  e.message
 end
-check("config: objects are still hashes", RB.parse_config('{"required_checks":{"o/r":["a"]}}').required_checks_for("o/r") == ["a"])
+check("config: required_checks moved to the repo file", moved == "設定 file の required_checks は、各 repo の .github/repo-baseline.json に移しました")
+# 同じ綴りの key の重なりは、Hash から作れないので生の JSON で確かめる (JSON.parse は既定で後の値を残す)。
+message = begin
+  RB.parse_config('{"exclude":["o/a"],"exclude":[]}')
+  nil
+rescue ArgumentError => e
+  e.message
+end
+check("config: duplicate top-level key is invalid", message == "設定 file に重なった key があります")
+check("config: objects are still hashes", RB.parse_config('{"exclude":["o/r"]}').excluded?("o/r"))
+
+# ---- parse_repo_settings (repo の設定 file。key は skip と required_checks) ----
+s = RB.parse_repo_settings('{"skip":["dependabot_yml"],"required_checks":["test (a)","test (b)"]}')
+check("repo file: skip and required checks", s.skip == %w[dependabot_yml] && s.required_checks == ["test (a)", "test (b)"])
+s = RB.parse_repo_settings("{}")
+check("repo file: empty object has no settings", s.skip == [] && s.required_checks == [])
+check("repo file: binary text is read as UTF-8", RB.parse_repo_settings('{"required_checks":["テスト"]}'.b).required_checks == ["テスト"])
+# 不正なら理由の文言。想定外の例外 (検査の漏れで nil を触るなど) も、test を止めずに assertion で落とす。
+def repo_file_error(text)
+  RB.parse_repo_settings(text)
+  nil
+rescue RB::Error => e
+  e.message
+rescue StandardError => e
+  "unexpected #{e.class}"
+end
+label = "repo の設定 file (.github/repo-baseline.json)"
+[
+  ["unknown key", '{"exclude":["o/r"]}', "#{label} に知らない key があります"],
+  ["skip not array", '{"skip":"dependabot_yml"}', "#{label} の skip が外せる項目 (dependabot_yml) の空でない配列ではありません"],
+  ["skip null", '{"skip":null}', "#{label} の skip が外せる項目 (dependabot_yml) の空でない配列ではありません"],
+  ["required null", '{"required_checks":null}', "#{label} の required_checks が空でない check の名前の配列ではありません"],
+  ["skip empty", '{"skip":[]}', "#{label} の skip が外せる項目 (dependabot_yml) の空でない配列ではありません"],
+  ["skip security item", '{"skip":["ruleset_pull_request"]}', "#{label} の skip が外せる項目 (dependabot_yml) の空でない配列ではありません"],
+  ["skip alerts", '{"skip":["dependabot_alerts"]}', "#{label} の skip が外せる項目 (dependabot_yml) の空でない配列ではありません"],
+  ["skip unknown item", '{"skip":["dependabot_yml","nope"]}', "#{label} の skip が外せる項目 (dependabot_yml) の空でない配列ではありません"],
+  ["skip duplicate value", '{"skip":["dependabot_yml","dependabot_yml"]}', "#{label} の skip に重なった値があります"],
+  ["required not array", '{"required_checks":"a"}', "#{label} の required_checks が空でない check の名前の配列ではありません"],
+  ["required empty", '{"required_checks":[]}', "#{label} の required_checks が空でない check の名前の配列ではありません"],
+  ["required blank", '{"required_checks":[" "]}', "#{label} の required_checks が空でない check の名前の配列ではありません"],
+  ["required control char", "{\"required_checks\":[\"a\\tb\"]}", "#{label} の required_checks が空でない check の名前の配列ではありません"],
+  ["required not string", '{"required_checks":[1]}', "#{label} の required_checks が空でない check の名前の配列ではありません"],
+  ["required duplicate value", '{"required_checks":["a","a"]}', "#{label} の required_checks に重なった値があります"],
+  ["duplicate key", '{"skip":["dependabot_yml"],"skip":["dependabot_yml"]}', "#{label} に重なった key があります"],
+  ["top-level array", "[]", "#{label} の top-level が object ではありません"],
+  ["not json", "{", "#{label} が JSON として読めません"],
+  ["not utf-8", "{\"required_checks\":[\"\xff\"]}".b, "#{label} が UTF-8 として読めません"],
+].each do |name, text, expected|
+  check("repo file: #{name} is invalid", repo_file_error(text) == expected)
+end
+# JSON の孤立した surrogate (\uDC00) は、parse の後で不正な UTF-8 の文字列になりうる (Ruby 2.6 の json)。strip や
+# 正規表現で例外にせず、repo の設定 file の不正にする (json の版で parse の失敗になっても、不正であることは同じ)。
+SURROGATE = "\\" + "uDC00"
+[["required_checks", "{\"required_checks\":[\"#{SURROGATE}\"]}"], ["skip", "{\"skip\":[\"#{SURROGATE}\"]}"]].each do |key, text|
+  message = repo_file_error(text).to_s
+  check("repo file: lone surrogate in #{key} is invalid",
+        message.start_with?(label) && !message.start_with?("unexpected"))
+end
+check("repo file: reason without content",!repo_file_error('{"required_checks":["secret-check\u0001"]}').include?("secret-check"))
 
 def lines(res)
   res[:out].lines.map(&:chomp)
@@ -323,14 +384,87 @@ check("cli public without security_and_analysis is error", res[:rc] == 2 &&
 
 # ---- CLI: 必須の check と approve の数 ----
 rules = GOOD_RULES + [{ "type" => "required_status_checks", "parameters" => { "required_status_checks" => [{ "context" => "test (a)" }] } }]
-res = run_cli(routes_for(public_repo("o/ci"), rules: rules), ["--repo", "o/ci"],
-              config: { "required_checks" => { "O/CI" => ["test (a)", "test (b)"] } })
+res = run_cli(routes_for(public_repo("o/ci"), rules: rules, settings: { "required_checks" => ["test (a)", "test (b)"] }),
+              ["--repo", "o/ci"])
 check("cli required checks: rc 1", res[:rc] == 1)
 check("cli required checks: line", lines(res)[1] ==
   "  - default branch の ruleset: 必須の check: 今 test (a) / あるべき test (a)、test (b) を含む")
-res = run_cli(routes_for(public_repo("o/ci"), rules: rules), ["--repo", "o/ci"],
-              config: { "required_checks" => { "o/ci" => ["test (a)"] } })
+res = run_cli(routes_for(public_repo("o/ci"), rules: rules, settings: { "required_checks" => ["test (a)"] }), ["--repo", "o/ci"])
 check("cli required checks satisfied", res[:rc] == 0)
+# 手元の設定 file の required_checks は読まない (移行は切り替え)。残っていれば gh を呼ばずに止める。
+res = run_cli(routes_for(public_repo("o/ci"), rules: rules), ["--repo", "o/ci"],
+              config: { "required_checks" => { "o/ci" => ["test (a)", "test (b)"] } })
+check("cli local required_checks is refused", res[:rc] == 2 && res[:out].empty? && res[:calls].empty? &&
+  res[:err] == "personal-repo-baseline: 設定 file の required_checks は、各 repo の .github/repo-baseline.json に移しました\n")
+
+# ---- CLI: repo の設定 file ----
+OMIT_LINE = "  - repo の設定 file (.github/repo-baseline.json) で外した: .github/dependabot.yml"
+# skip した dependabot.yml は読まず (route を外しても確かめられないにならない)、外したことを出す。
+routes = routes_for(public_repo("o/skip"), settings: { "skip" => ["dependabot_yml"] })
+routes.delete("repos/o/skip/contents/.github/dependabot.yml")
+routes.delete("repos/o/skip/contents/.github/dependabot.yaml")
+res = run_cli(routes, ["--repo", "o/skip"])
+check("cli skip: rc 0 with the item omitted", res[:rc] == 0 && lines(res) == ["o/skip (public): ずれ無し", OMIT_LINE, RB::MANUAL_NOTE])
+check("cli skip: dependabot.yml is not read", res[:calls].none? { |c| c["args"].last.include?("dependabot.y") } && clean_calls?(res))
+check("cli skip: repo file is read from contents API",
+      res[:calls].any? { |c| c["args"] == %w[api repos/o/skip/contents/.github/repo-baseline.json] })
+# skip しても他の項目のずれは残る。
+res = run_cli(routes_for(private_repo("o/skipdrift", "delete_branch_on_merge" => false), yml: 404, settings: { "skip" => ["dependabot_yml"] }),
+              ["--repo", "o/skipdrift"])
+check("cli skip keeps other drift", res[:rc] == 1 && lines(res)[0, 3] == [
+  "o/skipdrift (private): ずれ 1 件", "  - merge の後に branch を消す: 今 off / あるべき on", OMIT_LINE,
+])
+# file が無い repo は今と同じ (dependabot.yml を確かめる)。
+res = run_cli(routes_for(public_repo("o/nofile"), yml: 404), ["--repo", "o/nofile"])
+check("cli no repo file: dependabot.yml is checked", res[:rc] == 1 && lines(res)[1] ==
+  "  - .github/dependabot.yml (repo ごとの PR で足す。script では書かない): 今 無い / あるべき 有る")
+# 不正な repo の file はその repo を確かめられないにする (設定なしやずれ無しに倒さない)。
+def repo_file_broken(label, route, expected)
+  routes = routes_for(public_repo("o/rf"))
+  routes["repos/o/rf/contents/.github/repo-baseline.json"] = route
+  res = run_cli(routes, ["--repo", "o/rf"])
+  check("cli repo file #{label}", res[:rc] == 2 &&
+    lines(res) == ["o/rf: 確かめられない (repo の設定 file (.github/repo-baseline.json) #{expected})"])
+end
+repo_file_broken("bad skip", repo_file_route('{"skip":["secret_scanning"]}'), "の skip が外せる項目 (dependabot_yml) の空でない配列ではありません")
+repo_file_broken("unexpected status", { "status" => 500 }, "の応答が想定外です (HTTP 500)")
+repo_file_broken("2xx with gh failure", { "status" => 200, "exit" => 1 }, "を読めません (gh api が失敗)")
+repo_file_broken("directory", { "status" => 200, "body" => [] }, "を読めません (応答の形が想定外)")
+repo_file_broken("symlink", repo_file_route("{}", "type" => "symlink"), "を読めません (応答の形が想定外)")
+repo_file_broken("not base64", repo_file_route("{}", "encoding" => "none", "content" => ""), "を読めません (応答の形が想定外)")
+repo_file_broken("size missing", repo_file_route("{}", "size" => nil), "を読めません (応答の形が想定外)")
+repo_file_broken("size negative", repo_file_route("{}", "size" => -1), "を読めません (応答の形が想定外)")
+repo_file_broken("too large by size", repo_file_route("{}", "size" => 64 * 1024 + 1), "が大きすぎます")
+# size は本文の byte 数と合うことを求める (大きい本文に小さい size を付けても、上限の検査をすり抜けない)。
+repo_file_broken("size larger than content", repo_file_route("{}", "size" => 100), "を読めません (size が本文と合わない)")
+repo_file_broken("size smaller than content", repo_file_route("{}", "size" => 1), "を読めません (size が本文と合わない)")
+repo_file_broken("large content with small size", repo_file_route("{\"skip\":[\"dependabot_yml\"]#{' ' * (64 * 1024)}}", "size" => 2),
+                 "を読めません (size が本文と合わない)")
+# base64 は厳密に decode する (alphabet の外の文字や padding の誤りを読み飛ばして {} にしない)。
+repo_file_broken("corrupt base64", repo_file_route("{}", "content" => "e!30=", "size" => 2), "を読めません (base64 が壊れている)")
+repo_file_broken("base64 without padding", repo_file_route("{}", "content" => "e30", "size" => 2), "を読めません (base64 が壊れている)")
+# API の base64 は 60 文字ごとに改行が入る。改行は除いて読む。
+long = { "required_checks" => ["a-long-check-name (matrix row 1)", "another-long-check-name (matrix row 2)"] }
+check("fixture: long repo file is multi-line base64", [JSON.generate(long)].pack("m").count("\n") > 1)
+long_rules = GOOD_RULES + [{ "type" => "required_status_checks", "parameters" => {
+  "required_status_checks" => long["required_checks"].map { |c| { "context" => c } },
+} }]
+res = run_cli(routes_for(public_repo("o/long"), rules: long_rules, settings: long), ["--repo", "o/long"])
+check("cli repo file with multi-line base64", res[:rc] == 0 && lines(res).first == "o/long (public): ずれ無し")
+# 不正な UTF-8 になる repo の設定 file でも、--all はその repo を確かめられないにして次の repo を続ける。
+list = [public_repo("o/a-sur"), public_repo("o/b-ok")]
+routes = routes_for(list[0], settings: "{\"required_checks\":[\"#{SURROGATE}\"]}").merge(routes_for(list[1]))
+routes[RB::LIST_PATH] = { "status" => 200, "body" => list }
+res = run_cli(routes, ["--all"])
+check("cli all: broken repo file does not stop the run", res[:rc] == 2 && res[:err].empty? &&
+  lines(res)[0].start_with?("o/a-sur: 確かめられない (repo の設定 file (.github/repo-baseline.json) ") &&
+  lines(res)[1] == "o/b-ok (public): ずれ無し" &&
+  lines(res)[2] == "対象の repo: 2 件 (ずれ無し 1・ずれ有り 0・確かめられない 1) / 対象外: fork 0 件・archive 済み 0 件・設定 file で除外 0 件")
+# 確かめる途中で止まっても、repo の設定 file を読めていれば外した項目を出す。
+res = run_cli(routes_for(public_repo("o/skiperr"), alerts: 403, settings: { "skip" => ["dependabot_yml"] }), ["--repo", "o/skiperr"])
+check("cli skip with a repo error keeps the omitted line", res[:rc] == 2 && lines(res) == [
+  "o/skiperr: 確かめられない (Dependabot alerts の応答が想定外です (HTTP 403))", OMIT_LINE,
+])
 rules = [{ "type" => "pull_request", "parameters" => { "required_approving_review_count" => 1 } }] + GOOD_RULES[1..-1]
 res = run_cli(routes_for(public_repo("o/approve"), rules: rules), ["--repo", "o/approve"])
 check("cli approve 1", res[:rc] == 1 && lines(res)[1] ==
@@ -424,9 +558,43 @@ check("cli broken security updates not object", res[:rc] == 2 &&
 # 検査が見落とした型違いの例外も、その repo だけ「確かめられない」にする。
 fake = RB.clone
 fake.define_singleton_method(:gh_json) { |_path, _label| public_repo("o/boom") }
+fake.define_singleton_method(:repo_settings) { |_name| RB::NO_SETTINGS }
 fake.define_singleton_method(:collect_facts) { |*_args| raise TypeError, "boom" }
-r = fake.check_repo("o/boom", RB.parse_config(nil))
-check("check_repo turns TypeError into a repo error", r.status == :error && r.reason == "応答の形が想定外です (TypeError)")
+r = begin
+  fake.check_repo("o/boom", RB.parse_config(nil))
+rescue StandardError => e
+  e
+end
+check("check_repo turns TypeError into a repo error",
+      r.is_a?(RB::Result) && r.status == :error && r.reason == "応答の形が想定外です (TypeError)")
+# --apply の確かめ直しで ArgumentError が出ても、書いた項目を添えて止める (書いた範囲を失わない)。
+fake2 = RB.clone
+fake2.define_singleton_method(:gh_write) { |_action| nil }
+fake2.define_singleton_method(:read_repo) { |name| public_repo(name) }
+fake2.define_singleton_method(:collect_facts) { |*_args| raise ArgumentError, "invalid byte sequence" }
+# 想定外の例外は test を止めずに assertion で落とす (捕まえ損ねた例外も、どの check かが出るように)。
+apply_err = begin
+  fake2.apply_fixes("o/reverify", "public", [["delete_branch_on_merge", false, true]], RB::NO_SETTINGS)
+  nil
+rescue RB::ApplyError => e
+  e
+rescue StandardError => e
+  e
+end
+check("apply re-read ArgumentError keeps written",
+      apply_err.is_a?(RB::ApplyError) && apply_err.message == "確かめ直せません: 応答の形が想定外です (ArgumentError)" &&
+      apply_err.written == %w[delete_branch_on_merge])
+# 不正な UTF-8 の文字列への strip・正規表現 (ArgumentError) や encoding の不一致 (EncodingError) も同じ。
+[ArgumentError, Encoding::CompatibilityError].each do |klass|
+  fake.define_singleton_method(:collect_facts) { |*_args| raise klass, "boom" }
+  r = begin
+    fake.check_repo("o/boom", RB.parse_config(nil))
+  rescue StandardError => e
+    e
+  end
+  check("check_repo turns #{klass} into a repo error",
+        r.is_a?(RB::Result) && r.status == :error && r.reason == "応答の形が想定外です (#{klass})")
+end
 
 # ---- CLI: branch の rule は全ページを読む ----
 # 2 ページ目に approve 2 の PR の rule がある (最初のページだけ読むと見落とす)。
@@ -595,15 +763,16 @@ res = run_cli(routes_for(public_repo("o/same")), ["--apply", "--repo", "o/same"]
 check("apply: no drift no write", res[:rc] == 0 && lines(res) == ["o/same (public): ずれ無し", RB::MANUAL_NOTE] &&
   clean_calls?(res) && res[:calls].none? { |c| c["args"].last.include?("/rulesets") })
 
-# 持ち主の ruleset が有れば更新し、設定 file の必須の check を入れる。
+# 持ち主の ruleset が有れば更新し、repo の設定 file の必須の check を入れる。
 checks_rules = GOOD_RULES + [{ "type" => "required_status_checks", "parameters" => { "required_status_checks" => [{ "context" => "test (a)" }] } }]
-routes = routes_for(public_repo("o/rs")).merge(rulesets_route("o/rs", [{ "id" => 3, "name" => "other" }, { "id" => 12, "name" => "personal-repo-baseline" }]))
+routes = routes_for(public_repo("o/rs"), settings: { "required_checks" => ["test (a)"] })
+         .merge(rulesets_route("o/rs", [{ "id" => 3, "name" => "other" }, { "id" => 12, "name" => "personal-repo-baseline" }]))
 routes["__writes__"] = {
   "PUT repos/o/rs/rulesets/12" => {
     "status" => 200, "set" => { "repos/o/rs/rules/branches/main?per_page=100" => { "status" => 200, "body" => checks_rules } },
   },
 }
-res = run_cli(routes, ["--apply", "--repo", "o/rs"], config: { "required_checks" => { "o/rs" => ["test (a)"] } })
+res = run_cli(routes, ["--apply", "--repo", "o/rs"])
 check("apply ruleset update: rc 0", res[:rc] == 0 && lines(res)[0, 2] == [
   "o/rs (public): 直した 1 件 (ずれ無し)", "  - 直した: default branch の ruleset: 必須の check",
 ])
@@ -623,6 +792,27 @@ check("apply private: lines", lines(res) == [
 ])
 check("apply private: only merge settings written", writes(res) == [["PATCH", "repos/o/pv", MERGE_BODY]] &&
   res[:calls].none? { |c| c["args"].last.include?("/rules") })
+
+# skip した dependabot.yml は、確かめ直しでも読まない。外した項目しか残らなければ直し終えた (exit 0)。
+routes = routes_for(private_repo("o/pskip", "delete_branch_on_merge" => false), settings: { "skip" => ["dependabot_yml"] })
+routes.delete("repos/o/pskip/contents/.github/dependabot.yml")
+routes.delete("repos/o/pskip/contents/.github/dependabot.yaml")
+routes["__writes__"] = { "PATCH repos/o/pskip" => { "status" => 200, "set" => { "repos/o/pskip" => { "status" => 200, "body" => private_repo("o/pskip") } } } }
+res = run_cli(routes, ["--apply", "--repo", "o/pskip"])
+check("apply skip: fixed with the item omitted", res[:rc] == 0 && lines(res)[0, 3] == [
+  "o/pskip (private): 直した 1 件 (ずれ無し)", "  - 直した: merge の後に branch を消す", OMIT_LINE,
+])
+# repo の設定 file は 1 回だけ読む (status と中身で gh を 2 回)。確かめ直しでは読み直さない。
+check("apply skip: repo file is read once and dependabot.yml never",
+      res[:calls].count { |c| c["args"].last.include?("repo-baseline.json") } == 2 &&
+      res[:calls].none? { |c| c["args"].last.include?("dependabot.y") })
+
+# --apply の書き込みが失敗しても、外した項目を出す。
+routes = routes_for(public_repo("o/askip", "delete_branch_on_merge" => false), settings: { "skip" => ["dependabot_yml"] })
+res = run_cli(routes, ["--apply", "--repo", "o/askip"])
+check("apply skip with a write failure keeps the omitted line", res[:rc] == 2 && lines(res) == [
+  "o/askip: 確かめられないか直せない (直せません: merge の設定 (gh api が失敗))", OMIT_LINE,
+])
 
 # public の secret scanning は security_and_analysis を PATCH する。
 sec_off = { "secret_scanning" => { "status" => "disabled" }, "secret_scanning_push_protection" => { "status" => "disabled" } }
@@ -674,15 +864,16 @@ check("apply re-read failure keeps written", res[:rc] == 2 && lines(res) == [
   "  - 書いた: merge の後に branch を消す",
 ])
 
-# 持ち主の ruleset の更新は置き換え: 設定 file の一覧に無い check (画面で足した lint) は外れる。
+# 持ち主の ruleset の更新は置き換え: repo の設定 file の一覧に無い check (画面で足した lint) は外れる。
 old_rules = [EXPECTED_PR_RULE, { "type" => "non_fast_forward" },
              { "type" => "required_status_checks", "parameters" => { "required_status_checks" => [{ "context" => "ci" }, { "context" => "lint" }] } }]
 new_rules = GOOD_RULES + [{ "type" => "required_status_checks", "parameters" => { "required_status_checks" => [{ "context" => "ci" }] } }]
-routes = routes_for(public_repo("o/repl"), rules: old_rules).merge(rulesets_route("o/repl", [{ "id" => 5, "name" => "personal-repo-baseline" }]))
+routes = routes_for(public_repo("o/repl"), rules: old_rules, settings: { "required_checks" => ["ci"] })
+         .merge(rulesets_route("o/repl", [{ "id" => 5, "name" => "personal-repo-baseline" }]))
 routes["__writes__"] = {
   "PUT repos/o/repl/rulesets/5" => { "status" => 200, "set" => { "repos/o/repl/rules/branches/main?per_page=100" => { "status" => 200, "body" => new_rules } } },
 }
-res = run_cli(routes, ["--apply", "--repo", "o/repl"], config: { "required_checks" => { "o/repl" => ["ci"] } })
+res = run_cli(routes, ["--apply", "--repo", "o/repl"])
 check("apply ruleset update replaces checks with config", res[:rc] == 0 &&
   writes(res) == [["PUT", "repos/o/repl/rulesets/5", expected_ruleset(["ci"])]] &&
   lines(res)[0, 2] == ["o/repl (public): 直した 1 件 (ずれ無し)", "  - 直した: default branch の ruleset: 削除の禁止"])

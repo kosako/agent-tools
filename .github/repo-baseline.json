@@ -1,0 +1,3 @@
+{
+  "required_checks": ["self-tests (3.4)", "self-tests (system)"]
+}
