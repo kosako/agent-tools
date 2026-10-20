@@ -318,18 +318,19 @@ module RepoBaseline
     raise Error, "#{REPO_FILE_LABEL} の top-level が object ではありません" unless data.is_a?(Hash)
     raise Error, "#{REPO_FILE_LABEL} に知らない key があります" unless (data.keys - REPO_KEYS).empty?
 
-    skip = data.fetch("skip", nil)
-    unless skip.nil? || (skip.is_a?(Array) && !skip.empty? && skip.all? { |item| SKIPPABLE.include?(item) })
+    # key を書いたら値は空でない配列 (null も不正。省略と区別し、設定なしに倒さない)。
+    skip = data.key?("skip") ? data["skip"] : []
+    unless !data.key?("skip") || (skip.is_a?(Array) && !skip.empty? && skip.all? { |item| SKIPPABLE.include?(item) })
       raise Error, "#{REPO_FILE_LABEL} の skip が外せる項目 (#{SKIPPABLE.join('、')}) の空でない配列ではありません"
     end
-    checks = data.fetch("required_checks", nil)
-    unless checks.nil? || (checks.is_a?(Array) && !checks.empty? && checks.all? { |c| valid_check_name?(c) })
+    checks = data.key?("required_checks") ? data["required_checks"] : []
+    unless !data.key?("required_checks") || (checks.is_a?(Array) && !checks.empty? && checks.all? { |c| valid_check_name?(c) })
       raise Error, "#{REPO_FILE_LABEL} の required_checks が空でない check の名前の配列ではありません"
     end
     [["skip", skip], ["required_checks", checks]].each do |key, list|
-      raise Error, "#{REPO_FILE_LABEL} の #{key} に重なった値があります" if list && list.uniq.size != list.size
+      raise Error, "#{REPO_FILE_LABEL} の #{key} に重なった値があります" if list.uniq.size != list.size
     end
-    RepoSettings.new((skip || []).freeze, (checks || []).freeze)
+    RepoSettings.new(skip.freeze, checks.freeze)
   end
 
   def valid_check_name?(name)
@@ -444,7 +445,8 @@ module RepoBaseline
   end
 
   # repo の設定 file (任意) を default branch から読む。無ければ (404) 設定なし。file でない (directory・symlink・
-  # submodule)、base64 でない、大きすぎる応答は確かめられないにする (設定なしに倒さない)。
+  # submodule)、base64 でない・壊れた base64、size が負・本文と合わない、大きすぎる応答は確かめられないにする (設定
+  # なしに倒さない)。
   def repo_settings(name)
     path = "repos/#{name}/contents/#{REPO_FILE}"
     code = gh_status(path, REPO_FILE_LABEL)
@@ -452,15 +454,28 @@ module RepoBaseline
     raise Error, "#{REPO_FILE_LABEL} の応答が想定外です (HTTP #{code})" unless code == 200
 
     entry = hash!(gh_json(path, REPO_FILE_LABEL), REPO_FILE_LABEL)
+    size = entry["size"]
     unless entry["type"] == "file" && entry["encoding"] == "base64" && entry["content"].is_a?(String) &&
-           entry["size"].is_a?(Integer)
+           size.is_a?(Integer) && size >= 0
       raise Error, "#{REPO_FILE_LABEL} を読めません (応答の形が想定外)"
     end
+    raise Error, "#{REPO_FILE_LABEL} が大きすぎます" if size > REPO_FILE_MAX
 
-    text = entry["content"].unpack1("m")
-    raise Error, "#{REPO_FILE_LABEL} が大きすぎます" if entry["size"] > REPO_FILE_MAX || text.bytesize > REPO_FILE_MAX
+    parse_repo_settings(decode_content(entry["content"], size))
+  end
 
-    parse_repo_settings(text)
+  # contents API の base64 (60 文字ごとに改行が入る) を厳密に decode する。改行のほかの alphabet の外の文字や
+  # padding の誤りは、読み飛ばさずに確かめられないにする (`unpack1("m")` は読み飛ばす)。本文の byte 数は size と
+  # 合うことを求める。
+  def decode_content(content, size)
+    text = begin
+      content.delete("\n").unpack1("m0")
+    rescue ArgumentError
+      raise Error, "#{REPO_FILE_LABEL} を読めません (base64 が壊れている)"
+    end
+    raise Error, "#{REPO_FILE_LABEL} を読めません (size が本文と合わない)" unless text.bytesize == size
+
+    text
   end
 
   def dependabot_yml?(name)
@@ -728,13 +743,14 @@ module RepoBaseline
       end
     result.omitted = settings.skip
     result
+  # repo の設定 file を読めた後に止まったときも、外した項目を出す (settings は読めていなければ nil)。
   rescue ApplyError => e
-    Result.new(name, nil, :error, [], e.message, e.written)
+    Result.new(name, nil, :error, [], e.message, e.written, settings&.skip)
   rescue Error => e
-    Result.new(name, nil, :error, [], e.message, [])
+    Result.new(name, nil, :error, [], e.message, [], settings&.skip)
   rescue TypeError, NoMethodError => e
     # 上の検査が見落とした応答の型違い。その repo だけ「確かめられない」にして、--all の残りを続ける。
-    Result.new(name, nil, :error, [], "応答の形が想定外です (#{e.class})", [])
+    Result.new(name, nil, :error, [], "応答の形が想定外です (#{e.class})", [], settings&.skip)
   end
 
   # 全 repo。fork・archive 済み・設定 file で除外した repo は一覧の段で外す (一覧の field が欠けていれば

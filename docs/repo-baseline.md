@@ -170,9 +170,11 @@ default branch に入った時点で効きます。
   直さず、出力に外したことを出します。
 - `required_checks`: default branch の ruleset で必須にする check の名前の配列 (public の repo だけ。private では
   ruleset を確かめないので使いません)。
-- 書く key は、空でない配列にします。知らない key、型の外れ、外せない項目の名前、空白だけの名前、制御文字、値や key の
-  重なり、64 KiB を超える file、file でないもの (directory・symlink・submodule) は不正で、その repo を「確かめられない」
-  にします (設定なしやずれ無しに倒さない)。理由に中身は出しません。
+- 書く key は、空でない配列にします (`null` も不正。key を省くのとは区別する)。知らない key、型の外れ、外せない項目の
+  名前、空白だけの名前、制御文字、値や key の重なり、64 KiB を超える file、file でないもの (directory・symlink・
+  submodule)、壊れた base64、本文の byte 数と合わない `size` は不正で、その repo を「確かめられない」にします (設定
+  なしやずれ無しに倒さない)。理由に中身は出しません。
+- 確かめる途中や `--apply` で止まった repo でも、repo の設定 file を読めていれば、外した項目の行を出します。
 
 ### 手元の設定 file
 

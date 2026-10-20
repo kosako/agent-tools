@@ -282,16 +282,21 @@ check("repo file: skip and required checks", s.skip == %w[dependabot_yml] && s.r
 s = RB.parse_repo_settings("{}")
 check("repo file: empty object has no settings", s.skip == [] && s.required_checks == [])
 check("repo file: binary text is read as UTF-8", RB.parse_repo_settings('{"required_checks":["テスト"]}'.b).required_checks == ["テスト"])
+# 不正なら理由の文言。想定外の例外 (検査の漏れで nil を触るなど) も、test を止めずに assertion で落とす。
 def repo_file_error(text)
   RB.parse_repo_settings(text)
   nil
 rescue RB::Error => e
   e.message
+rescue StandardError => e
+  "unexpected #{e.class}"
 end
 label = "repo の設定 file (.github/repo-baseline.json)"
 [
   ["unknown key", '{"exclude":["o/r"]}', "#{label} に知らない key があります"],
   ["skip not array", '{"skip":"dependabot_yml"}', "#{label} の skip が外せる項目 (dependabot_yml) の空でない配列ではありません"],
+  ["skip null", '{"skip":null}', "#{label} の skip が外せる項目 (dependabot_yml) の空でない配列ではありません"],
+  ["required null", '{"required_checks":null}', "#{label} の required_checks が空でない check の名前の配列ではありません"],
   ["skip empty", '{"skip":[]}', "#{label} の skip が外せる項目 (dependabot_yml) の空でない配列ではありません"],
   ["skip security item", '{"skip":["ruleset_pull_request"]}', "#{label} の skip が外せる項目 (dependabot_yml) の空でない配列ではありません"],
   ["skip alerts", '{"skip":["dependabot_alerts"]}', "#{label} の skip が外せる項目 (dependabot_yml) の空でない配列ではありません"],
@@ -420,8 +425,29 @@ repo_file_broken("directory", { "status" => 200, "body" => [] }, "を読めま�
 repo_file_broken("symlink", repo_file_route("{}", "type" => "symlink"), "を読めません (応答の形が想定外)")
 repo_file_broken("not base64", repo_file_route("{}", "encoding" => "none", "content" => ""), "を読めません (応答の形が想定外)")
 repo_file_broken("size missing", repo_file_route("{}", "size" => nil), "を読めません (応答の形が想定外)")
+repo_file_broken("size negative", repo_file_route("{}", "size" => -1), "を読めません (応答の形が想定外)")
 repo_file_broken("too large by size", repo_file_route("{}", "size" => 64 * 1024 + 1), "が大きすぎます")
-repo_file_broken("too large by content", repo_file_route("{\"skip\":[\"dependabot_yml\"]#{' ' * (64 * 1024)}}", "size" => 2), "が大きすぎます")
+# size は本文の byte 数と合うことを求める (大きい本文に小さい size を付けても、上限の検査をすり抜けない)。
+repo_file_broken("size larger than content", repo_file_route("{}", "size" => 100), "を読めません (size が本文と合わない)")
+repo_file_broken("size smaller than content", repo_file_route("{}", "size" => 1), "を読めません (size が本文と合わない)")
+repo_file_broken("large content with small size", repo_file_route("{\"skip\":[\"dependabot_yml\"]#{' ' * (64 * 1024)}}", "size" => 2),
+                 "を読めません (size が本文と合わない)")
+# base64 は厳密に decode する (alphabet の外の文字や padding の誤りを読み飛ばして {} にしない)。
+repo_file_broken("corrupt base64", repo_file_route("{}", "content" => "e!30=", "size" => 2), "を読めません (base64 が壊れている)")
+repo_file_broken("base64 without padding", repo_file_route("{}", "content" => "e30", "size" => 2), "を読めません (base64 が壊れている)")
+# API の base64 は 60 文字ごとに改行が入る。改行は除いて読む。
+long = { "required_checks" => ["a-long-check-name (matrix row 1)", "another-long-check-name (matrix row 2)"] }
+check("fixture: long repo file is multi-line base64", [JSON.generate(long)].pack("m").count("\n") > 1)
+long_rules = GOOD_RULES + [{ "type" => "required_status_checks", "parameters" => {
+  "required_status_checks" => long["required_checks"].map { |c| { "context" => c } },
+} }]
+res = run_cli(routes_for(public_repo("o/long"), rules: long_rules, settings: long), ["--repo", "o/long"])
+check("cli repo file with multi-line base64", res[:rc] == 0 && lines(res).first == "o/long (public): ずれ無し")
+# 確かめる途中で止まっても、repo の設定 file を読めていれば外した項目を出す。
+res = run_cli(routes_for(public_repo("o/skiperr"), alerts: 403, settings: { "skip" => ["dependabot_yml"] }), ["--repo", "o/skiperr"])
+check("cli skip with a repo error keeps the omitted line", res[:rc] == 2 && lines(res) == [
+  "o/skiperr: 確かめられない (Dependabot alerts の応答が想定外です (HTTP 403))", OMIT_LINE,
+])
 rules = [{ "type" => "pull_request", "parameters" => { "required_approving_review_count" => 1 } }] + GOOD_RULES[1..-1]
 res = run_cli(routes_for(public_repo("o/approve"), rules: rules), ["--repo", "o/approve"])
 check("cli approve 1", res[:rc] == 1 && lines(res)[1] ==
@@ -730,6 +756,13 @@ check("apply skip: fixed with the item omitted", res[:rc] == 0 && lines(res)[0, 
 check("apply skip: repo file is read once and dependabot.yml never",
       res[:calls].count { |c| c["args"].last.include?("repo-baseline.json") } == 2 &&
       res[:calls].none? { |c| c["args"].last.include?("dependabot.y") })
+
+# --apply の書き込みが失敗しても、外した項目を出す。
+routes = routes_for(public_repo("o/askip", "delete_branch_on_merge" => false), settings: { "skip" => ["dependabot_yml"] })
+res = run_cli(routes, ["--apply", "--repo", "o/askip"])
+check("apply skip with a write failure keeps the omitted line", res[:rc] == 2 && lines(res) == [
+  "o/askip: 確かめられないか直せない (直せません: merge の設定 (gh api が失敗))", OMIT_LINE,
+])
 
 # public の secret scanning は security_and_analysis を PATCH する。
 sec_off = { "secret_scanning" => { "status" => "disabled" }, "secret_scanning_push_protection" => { "status" => "disabled" } }
