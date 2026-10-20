@@ -130,6 +130,17 @@ module RepoBaseline
   # repo を確かめられないことを表す (その repo の結果は「確かめられない」、全体の exit は 2)。
   class Error < StandardError; end
 
+  # --apply が書いた後に止まったことを表す。written は書き込みが成功した項目 (結果に「書いた」として残し、戻すときに
+  # 変えた範囲を追えるようにする)。
+  class ApplyError < Error
+    attr_reader :written
+
+    def initialize(message, written)
+      super(message)
+      @written = written
+    end
+  end
+
   # 1 repo の結果。status は :ok / :fixed / :drift / :skipped / :error。findings は [項目, 今, あるべき] の配列
   # (--apply では直した後に残ったずれ)。fixed は --apply が直した項目。
   Result = Struct.new(:name, :visibility, :status, :findings, :reason, :fixed)
@@ -584,29 +595,35 @@ module RepoBaseline
     actions
   end
 
-  # ずれのうち API で直せるものを直し、読み直して確かめる。書き込みが失敗したら、それまでに直したものを添えて止める。
-  # 直したはずの項目のずれが残れば (他の ruleset が厳しくしているなど) 止める。
+  # ずれのうち API で直せるものを直し、読み直して確かめる。書き込みの失敗、読み直しの失敗、直したはずの項目のずれの
+  # 残り (他の ruleset が厳しくしているなど) のどれで止まっても、書き込みが成功した項目を ApplyError に添える。
   def apply_fixes(name, visibility, findings, required_checks)
     items = findings.map(&:first)
     ruleset_id = (items & RULESET_ITEMS).empty? ? nil : managed_ruleset_id(name)
     actions = fix_actions(name, items, required_checks, ruleset_id)
     return Result.new(name, visibility, :drift, findings, nil, []) if actions.empty?
 
-    done = []
+    written = []
     actions.each do |action|
       begin
         gh_write(action)
       rescue Error => e
-        raise Error, done.empty? ? e.message : "#{e.message}。直したもの: #{done.map(&:label).join('、')}"
+        raise ApplyError.new(e.message, written)
       end
-      done << action
+      written.concat(action.items)
     end
-    fixed = actions.flat_map(&:items)
-    remaining = evaluate(visibility, collect_facts(name, read_repo(name), visibility), required_checks)
-    left = remaining.map(&:first) & fixed
-    raise Error, "直した後もずれが残っています: #{left.map { |item| LABELS.fetch(item) }.join('、')}" unless left.empty?
+    remaining = begin
+      evaluate(visibility, collect_facts(name, read_repo(name), visibility), required_checks)
+    rescue Error, TypeError, NoMethodError => e
+      reason = e.is_a?(Error) ? e.message : "応答の形が想定外です (#{e.class})"
+      raise ApplyError.new("確かめ直せません: #{reason}", written)
+    end
+    left = remaining.map(&:first) & written
+    unless left.empty?
+      raise ApplyError.new("直した後もずれが残っています: #{left.map { |item| LABELS.fetch(item) }.join('、')}", written)
+    end
 
-    Result.new(name, visibility, remaining.empty? ? :fixed : :drift, remaining, nil, fixed)
+    Result.new(name, visibility, remaining.empty? ? :fixed : :drift, remaining, nil, written)
   end
 
   # ---- 1 repo を確かめる ----
@@ -643,6 +660,8 @@ module RepoBaseline
     return apply_fixes(name, visibility, findings, required_checks) if mode == :apply
 
     Result.new(name, visibility, :drift, findings, nil, [])
+  rescue ApplyError => e
+    Result.new(name, nil, :error, [], e.message, e.written)
   rescue Error => e
     Result.new(name, nil, :error, [], e.message, [])
   rescue TypeError, NoMethodError => e
@@ -715,6 +734,8 @@ module RepoBaseline
         lines << "#{r.name}: 対象外 (#{r.reason})"
       else
         lines << "#{r.name}: #{error_label(mode)} (#{r.reason})"
+        # --apply が止まる前に書き込みが成功した項目 (戻すときに変えた範囲を追えるように)。
+        r.fixed.each { |item| lines << "  - 書いた: #{LABELS.fetch(item)}" }
       end
     end
     lines << summary_line(results, counts, mode) if counts

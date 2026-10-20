@@ -645,7 +645,8 @@ routes = routes_for(before, alerts: 404, fixes: false)
 routes["__writes__"] = { "PUT repos/o/half/vulnerability-alerts" => { "status" => 204, "set" => { "repos/o/half/vulnerability-alerts" => { "status" => 204 } } } }
 res = run_cli(routes, ["--apply", "--repo", "o/half"])
 check("apply write failure: rc 2", res[:rc] == 2 && lines(res) == [
-  "o/half: 確かめられないか直せない (直せません: Dependabot security updates (gh api が失敗)。直したもの: Dependabot alerts)",
+  "o/half: 確かめられないか直せない (直せません: Dependabot security updates (gh api が失敗))",
+  "  - 書いた: Dependabot alerts (dependency graph を含む)",
 ])
 check("apply write failure: stops", writes(res).map { |w| w[0, 2] } == [
   ["PUT", "repos/o/half/vulnerability-alerts"], ["PUT", "repos/o/half/automated-security-fixes"],
@@ -655,8 +656,36 @@ check("apply write failure: stops", writes(res).map { |w| w[0, 2] } == [
 routes = routes_for(public_repo("o/stuck", "delete_branch_on_merge" => false))
 routes["__writes__"] = { "PATCH repos/o/stuck" => { "status" => 200 } }
 res = run_cli(routes, ["--apply", "--repo", "o/stuck"])
-check("apply verify failure", res[:rc] == 2 &&
-  lines(res) == ["o/stuck: 確かめられないか直せない (直した後もずれが残っています: merge の後に branch を消す)"])
+check("apply verify failure", res[:rc] == 2 && lines(res) == [
+  "o/stuck: 確かめられないか直せない (直した後もずれが残っています: merge の後に branch を消す)",
+  "  - 書いた: merge の後に branch を消す",
+])
+
+# 書いた後の読み直しが失敗しても、書いた項目は出す。
+routes = routes_for(public_repo("o/reread", "delete_branch_on_merge" => false), alerts: 404)
+routes["__writes__"] = {
+  "PUT repos/o/reread/vulnerability-alerts" => { "status" => 204, "set" => { "repos/o/reread/vulnerability-alerts" => { "status" => 204 } } },
+  "PATCH repos/o/reread" => { "status" => 200, "set" => { "repos/o/reread" => { "status" => 500 } } },
+}
+res = run_cli(routes, ["--apply", "--repo", "o/reread"])
+check("apply re-read failure keeps written", res[:rc] == 2 && lines(res) == [
+  "o/reread: 確かめられないか直せない (確かめ直せません: repo を読めません (gh api が失敗))",
+  "  - 書いた: Dependabot alerts (dependency graph を含む)",
+  "  - 書いた: merge の後に branch を消す",
+])
+
+# 持ち主の ruleset の更新は置き換え: 設定 file の一覧に無い check (画面で足した lint) は外れる。
+old_rules = [EXPECTED_PR_RULE, { "type" => "non_fast_forward" },
+             { "type" => "required_status_checks", "parameters" => { "required_status_checks" => [{ "context" => "ci" }, { "context" => "lint" }] } }]
+new_rules = GOOD_RULES + [{ "type" => "required_status_checks", "parameters" => { "required_status_checks" => [{ "context" => "ci" }] } }]
+routes = routes_for(public_repo("o/repl"), rules: old_rules).merge(rulesets_route("o/repl", [{ "id" => 5, "name" => "personal-repo-baseline" }]))
+routes["__writes__"] = {
+  "PUT repos/o/repl/rulesets/5" => { "status" => 200, "set" => { "repos/o/repl/rules/branches/main?per_page=100" => { "status" => 200, "body" => new_rules } } },
+}
+res = run_cli(routes, ["--apply", "--repo", "o/repl"], config: { "required_checks" => { "o/repl" => ["ci"] } })
+check("apply ruleset update replaces checks with config", res[:rc] == 0 &&
+  writes(res) == [["PUT", "repos/o/repl/rulesets/5", expected_ruleset(["ci"])]] &&
+  lines(res)[0, 2] == ["o/repl (public): 直した 1 件 (ずれ無し)", "  - 直した: default branch の ruleset: 削除の禁止"])
 
 # 持ち主の ruleset が 2 つあれば、どちらを直すか決められないので書かない。
 routes = routes_for(public_repo("o/dup"), rules: []).merge(rulesets_route("o/dup", [

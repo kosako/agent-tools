@@ -77,12 +77,17 @@ usage と設定 file の不正は stderr に 1 行出し、理由に設定の中
   ruleset だけをこの script の持ち物として扱い、他の ruleset には触りません。同じ名前の ruleset が 2 つ以上あれば、
   どちらを直すか決められないので書きません。bypass が無いので、default branch へは admin も PR を通さずに push
   できません (要るときは画面で ruleset を変える)。
+- **ruleset の更新は置き換え**: この名前の ruleset を更新するときは、上の rule と設定 file の `required_checks` の
+  一覧で丸ごと置き換えます。画面でこの ruleset に足した rule や check も外れ、設定 file に書いていない repo では
+  必須の check の rule が無くなります。必須の check は設定 file に書きます。
 - **確かめ直す**: 直した後に読み直し、直した項目のずれが消えたことを確かめます。消えていなければ (他の ruleset が
-  厳しくしているなど) 「確かめられないか直せない」にします。書き込みが途中で失敗したら、それまでに直したものを
-  理由に添えて止め、その repo の後の書き込みはしません (`--all` は残りの repo を続ける)。
+  厳しくしているなど) 「確かめられないか直せない」にします。書き込みが途中で失敗したら、その repo の後の書き込みは
+  しません (`--all` は残りの repo を続ける)。どの止まり方でも、書き込みが成功した項目を「書いた」の行に出します
+  (戻すときに変えた範囲を追えるように)。
 - **直さないもの**: `.github/dependabot.yml` (repo ごとの PR で足す)、API で変えられない項目 (Malware alerts、
-  grouped security updates)。設定 file の `required_checks` から check を外しても、ruleset からは外しません
-  (確かめるのは「書いた check を含む」ことだけなので)。外すときは画面で ruleset を変えます。
+  grouped security updates)。設定 file の `required_checks` から check を外しただけでは、ruleset を更新しません
+  (確かめるのは「書いた check を含む」ことだけなので、ずれにならない)。すぐ外すときは画面で ruleset を変えます
+  (ruleset の別の項目のずれで更新するときは、上のとおり設定 file の一覧で置き換わる)。
 - **戻すとき**: どの設定も画面で戻せます (ruleset は削除できる)。
 
 ```text
