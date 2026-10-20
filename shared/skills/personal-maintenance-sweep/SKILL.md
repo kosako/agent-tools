@@ -103,7 +103,9 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 - **読むだけ**: 引数は `--check` だけにする (`--repo` も `--all` も付けず、今の directory の repo だけを確かめる。
   sweep の責務はその repo の中に留める)。`--apply` は sweep の中ではかけない。
 - **exit で分ける**: 0 = ずれ無し (fork・archive 済み・admin 権限が無いなどの「対象外」を含む)、1 = ずれ有り、
-  それ以外 (2、未配備で起動できない) = 確かめられない (exit 2 の理由は stderr に出る)。
+  それ以外 (2、未配備で起動できない) = 確かめられない。exit 2 の理由は、repo を確かめる途中の失敗 (gh の失敗・
+  想定外の応答) なら stdout の「確かめられない」の行に、run 全体の失敗 (usage・設定 file の不正・今の repo を
+  解決できない、など) なら stderr に出るので、両方から読む。
 - **書く先**: 報告 (手順 9。手順 2 で run を始めないときは、止まる報告に添える) と local の state (`state.json` の
   `settings`。[RECORD.md](RECORD.md)) だけ。追跡 Issue の
   本文、run のコメント、所見の Issue には書かず、起票もしない (守りの抜けている箇所を public にしないため)。

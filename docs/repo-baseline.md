@@ -60,7 +60,8 @@ owner/example (public): ずれ 2 件
 GitHub の応答の field が欠けている・null・型が違うときは、その repo を「確かめられない」にします (ずれ無しや off
 に倒さない)。`--all` で一部の repo を確かめられないときも、残りの repo は確かめて出し、exit 2 にします。`--all` は
 最後に集計の行 (対象の repo の件数と、ずれ無し・ずれ有り・確かめられないの内訳、対象外の理由ごとの件数) を出します。
-usage と設定 file の不正は stderr に 1 行出し、理由に設定の中身と path は出しません。
+repo ごとの「確かめられない」の理由は、stdout のその repo の行に出ます。run 全体の失敗 (usage、設定 file の不正、今の
+repo や repo の一覧を解決できない) は stdout に何も出さず、stderr に 1 行出します。理由に設定の中身と path は出しません。
 
 ## 直す (`--apply`)
 
