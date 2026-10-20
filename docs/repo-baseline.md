@@ -5,16 +5,19 @@
 `<tool home>/agent-tools/scripts/personal-repo-baseline`。
 
 既定は確かめるだけ (`--check`) です。直す `--apply` は、人が承認したときだけ使います。sweep
-(`personal-maintenance-sweep`) への組み込みは #539 の続きの PR で足します。
+(`personal-maintenance-sweep`) は run ごとに、今の repo に `--check` をかけます (sweep の `SKILL.md` の手順 0b)。
 
 ## 運用
 
 - **最初に 1 回、全 repo を見る**: `personal-repo-baseline --all` で、自分が owner の repo を全部確かめる。ずれは
   人が承認してから `--apply` で直す (`--all --apply` で全部、`--repo` で 1 つずつ)。
 - **その後は今の repo だけ**: sweep が、その repo に `--check` をかける (sweep の責務はその repo の中に留める)。
-  週 1 回の定期実行や、session の冒頭の確認はしない。設定は勝手には変わらず、ずれるのは repo を作ったとき・画面で
-  設定を変えたとき・baseline を変えたときに限られるため。
+  結果は sweep の報告と手元の state にだけ書き、Issue にはしない。sweep は `--apply` をかけず、ずれは報告で直し方を
+  示して、人が承認したら別にかける。週 1 回の定期実行や、session の冒頭の確認はしない。設定は勝手には変わらず、
+  ずれるのは repo を作ったとき・画面で設定を変えたとき・baseline を変えたときに限られるため。
 - **repo を作ったら**: その repo で `personal-repo-baseline --apply` を 1 回かける (`dependabot.yml` は PR で足す)。
+  API で変えられない Malware alerts と Grouped security updates は、repo の Settings の Advanced Security の画面で
+  オンにする (Malware alerts は Dependabot alerts がオンの後に切り替えられる)。
 - **baseline を変えたら**: その PR の merge の後に、人が `--all` を 1 回かける。
 
 結果には private な repo の名前が出ます。Issue や PR、commit message には貼りません (public-safety の gate は
