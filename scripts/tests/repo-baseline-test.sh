@@ -1,9 +1,11 @@
 #!/bin/sh
 # personal-repo-baseline.rb の self-test (#539)。
-# 比べる部分 (evaluate / ruleset_facts / 設定 file / 引数) は require して直接、CLI は gh を fixture の応答を返す
-# 偽物に差し替えて確かめる。偽の gh は読む形 (`gh api <path>`・`gh api -i <path>`・`gh api --paginate --slurp
-# <path>`・`gh repo view --json nameWithOwner --jq .nameWithOwner`) 以外を受けず、fixture に無い path は失敗を
-# 返す (想定外の API を呼ぶと「確かめられない」で落ちる)。network access なし。
+# 比べる部分 (evaluate / ruleset_facts / fix_actions / 設定 file / 引数) は require して直接、CLI は gh を fixture
+# の応答を返す偽物に差し替えて確かめる。偽の gh は読む形 (`gh api <path>`・`gh api -i <path>`・`gh api --paginate
+# --slurp <path>`・`gh repo view --json nameWithOwner --jq .nameWithOwner`) と書く形 (`gh api -X <method> <path>
+# [--input -]`) 以外を受けず、fixture に無い path は失敗を返す (想定外の API を呼ぶと「確かめられない」で落ちる)。
+# 書く形は fixture の __writes__ に有るものだけ成功し、その set で以後の応答を変える (直した後の読み直しを確かめる)。
+# --check は書く形を 1 度も呼ばないことも確かめる。network access なし。
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -34,10 +36,22 @@ File.write(File.join(bin, "gh"), <<~'FAKE')
   #!/usr/bin/env ruby
   require "json"
   dir = ENV.fetch("FAKE_GH_DIR")
-  File.open(File.join(dir, "calls.log"), "a") do |f|
-    f.puts(JSON.generate("args" => ARGV, "has_gh_repo" => ENV.key?("GH_REPO")))
-  end
   args = ARGV
+  # 書く形は body を stdin から読む (`--input -`)。
+  write = args.size >= 4 && args[0, 2] == ["api", "-X"] && (args.size == 4 || args[4, 2] == ["--input", "-"])
+  input = write && args.size == 6 ? JSON.parse(STDIN.read) : nil
+  File.open(File.join(dir, "calls.log"), "a") do |f|
+    f.puts(JSON.generate("args" => args, "has_gh_repo" => ENV.key?("GH_REPO"), "body" => input))
+  end
+  if write
+    exit 9 unless [4, 6].include?(args.size)
+    routes = JSON.parse(File.read(File.join(dir, "routes.json")))
+    hit = routes.fetch("__writes__", {})["#{args[2]} #{args[3]}"]
+    exit 1 if hit.nil?
+    routes.merge!(hit.fetch("set", {}))
+    File.write(File.join(dir, "routes.json"), JSON.generate(routes))
+    exit(hit.fetch("status") < 300 ? 0 : 1)
+  end
   if args == ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]
     current = ENV["FAKE_GH_CURRENT"]
     exit 1 if current.nil?
@@ -146,11 +160,14 @@ check("repo: nil", !RB.valid_repo?(nil))
 check("repo: newline", !RB.valid_repo?("o/r\n"))
 
 # ---- parse_args ----
-check("args: none is current", RB.parse_args([]) == :current)
-check("args: --check is current", RB.parse_args(["--check"]) == :current)
-check("args: --all", RB.parse_args(["--check", "--all"]) == :all)
-check("args: --repo", RB.parse_args(["--repo", "o/r"]) == "o/r")
-[["--apply"], ["--repo"], ["--repo", "../x"], ["--all", "--repo", "o/r"], ["--repo", "o/r", "--all"],
+check("args: none is current check", RB.parse_args([]).to_a == [:check, :current])
+check("args: --check is current check", RB.parse_args(["--check"]).to_a == [:check, :current])
+check("args: --all", RB.parse_args(["--check", "--all"]).to_a == [:check, :all])
+check("args: --repo", RB.parse_args(["--repo", "o/r"]).to_a == [:check, "o/r"])
+check("args: --apply", RB.parse_args(["--apply"]).to_a == [:apply, :current])
+check("args: --apply --all", RB.parse_args(["--all", "--apply"]).to_a == [:apply, :all])
+check("args: --apply --repo", RB.parse_args(["--apply", "--repo", "o/r"]).to_a == [:apply, "o/r"])
+[["--check", "--apply"], ["--apply", "--check"], ["--apply", "--apply"], ["--check", "--check"], ["--repo"], ["--repo", "../x"], ["--all", "--repo", "o/r"], ["--repo", "o/r", "--all"],
  ["--all", "--all"], ["--repo=o/r"], ["o/r"]].each do |args|
   raised = begin
     RB.parse_args(args)
@@ -251,8 +268,15 @@ def lines(res)
   res[:out].lines.map(&:chomp)
 end
 
-def clean_calls?(res)
-  !res[:unexpected] && res[:calls].none? { |c| c["has_gh_repo"] }
+# 想定外の形の呼び出しが無く、GH_REPO を gh に渡していない。writes が false なら書く形も呼んでいない (--check)。
+def clean_calls?(res, writes: false)
+  !res[:unexpected] && res[:calls].none? { |c| c["has_gh_repo"] } &&
+    (writes || res[:calls].none? { |c| c["args"].include?("-X") })
+end
+
+# --apply の書き込み ([method, path, body]) を呼んだ順に。
+def writes(res)
+  res[:calls].select { |c| c["args"].include?("-X") }.map { |c| [c["args"][2], c["args"][3], c["body"]] }
 end
 
 # ---- CLI: baseline どおりの public ----
@@ -499,9 +523,197 @@ FileUtils.mkdir_p(File.join(dirconf, "agent-tools", "repo-baseline.json"))
 res = run_cli({}, ["--repo", "o/x"], env: { "XDG_CONFIG_HOME" => dirconf })
 check("cli config not regular file", res[:rc] == 2 && res[:err].include?("regular file ではありません"))
 
+# ---- fix_actions (純粋) ----
+check("fix_actions: dependabot.yml only has no write", RB.fix_actions("o/r", %w[dependabot_yml], [], nil) == [])
+acts = RB.fix_actions("o/r", %w[dependabot_security_updates merge_methods dependabot_alerts], [], nil)
+check("fix_actions: alerts before security updates", acts.map(&:label) == ["Dependabot alerts", "Dependabot security updates", "merge の設定"])
+acts = RB.fix_actions("o/r", %w[ruleset_deletion], [], 12)
+check("fix_actions: existing ruleset is updated", acts.map { |a| [a.method, a.path] } == [["PUT", "repos/o/r/rulesets/12"]])
+
+# ---- CLI: --apply ----
+EXPECTED_PR_RULE = {
+  "type" => "pull_request",
+  "parameters" => {
+    "dismiss_stale_reviews_on_push" => false, "require_code_owner_review" => false, "require_last_push_approval" => false,
+    "required_approving_review_count" => 0, "required_review_thread_resolution" => false,
+  },
+}.freeze
+def expected_ruleset(checks = [])
+  rules = [EXPECTED_PR_RULE, { "type" => "non_fast_forward" }, { "type" => "deletion" }]
+  unless checks.empty?
+    rules << { "type" => "required_status_checks", "parameters" => {
+      "strict_required_status_checks_policy" => false, "required_status_checks" => checks.map { |c| { "context" => c } },
+    } }
+  end
+  {
+    "name" => "personal-repo-baseline", "target" => "branch", "enforcement" => "active", "bypass_actors" => [],
+    "conditions" => { "ref_name" => { "include" => ["~DEFAULT_BRANCH"], "exclude" => [] } }, "rules" => rules,
+  }
+end
+GOOD_FIXES = { "status" => 200, "body" => { "enabled" => true, "paused" => false } }.freeze
+MERGE_BODY = {
+  "allow_squash_merge" => true, "allow_merge_commit" => false, "allow_rebase_merge" => false, "delete_branch_on_merge" => true,
+}.freeze
+def rulesets_route(name, list)
+  { "repos/#{name}/rulesets?includes_parents=false&per_page=100" => { "status" => 200, "body" => list } }
+end
+
+# 今の agent-tools と同じずれ。他の名前の ruleset は持ち主でないので触らず、新しく作る。
+before = public_repo("o/ap", "allow_merge_commit" => true, "allow_rebase_merge" => true, "delete_branch_on_merge" => false)
+routes = routes_for(before, rules: [], alerts: 404, fixes: false).merge(rulesets_route("o/ap", [{ "id" => 7, "name" => "someone-else" }]))
+routes["__writes__"] = {
+  "PUT repos/o/ap/vulnerability-alerts" => { "status" => 204, "set" => { "repos/o/ap/vulnerability-alerts" => { "status" => 204 } } },
+  "PUT repos/o/ap/automated-security-fixes" => { "status" => 204, "set" => { "repos/o/ap/automated-security-fixes" => GOOD_FIXES } },
+  "PATCH repos/o/ap" => { "status" => 200, "set" => { "repos/o/ap" => { "status" => 200, "body" => public_repo("o/ap") } } },
+  "POST repos/o/ap/rulesets" => {
+    "status" => 201, "set" => { "repos/o/ap/rules/branches/main?per_page=100" => { "status" => 200, "body" => GOOD_RULES } },
+  },
+}
+res = run_cli(routes, ["--apply", "--repo", "o/ap"])
+check("apply: rc 0", res[:rc] == 0)
+check("apply: lines", lines(res) == [
+  "o/ap (public): 直した 7 件 (ずれ無し)",
+  "  - 直した: Dependabot alerts (dependency graph を含む)",
+  "  - 直した: Dependabot security updates",
+  "  - 直した: merge の方式",
+  "  - 直した: merge の後に branch を消す",
+  "  - 直した: default branch の ruleset: PR を必須にする",
+  "  - 直した: default branch の ruleset: force push の禁止",
+  "  - 直した: default branch の ruleset: 削除の禁止",
+  RB::MANUAL_NOTE,
+])
+check("apply: writes in order", writes(res) == [
+  ["PUT", "repos/o/ap/vulnerability-alerts", nil],
+  ["PUT", "repos/o/ap/automated-security-fixes", nil],
+  ["PATCH", "repos/o/ap", MERGE_BODY],
+  ["POST", "repos/o/ap/rulesets", expected_ruleset],
+])
+check("apply: clean calls", clean_calls?(res, writes: true))
+
+# ずれの無い repo には書かない (何度実行しても同じ結果)。ruleset の一覧も読まない。
+res = run_cli(routes_for(public_repo("o/same")), ["--apply", "--repo", "o/same"])
+check("apply: no drift no write", res[:rc] == 0 && lines(res) == ["o/same (public): ずれ無し", RB::MANUAL_NOTE] &&
+  clean_calls?(res) && res[:calls].none? { |c| c["args"].last.include?("/rulesets") })
+
+# 持ち主の ruleset が有れば更新し、設定 file の必須の check を入れる。
+checks_rules = GOOD_RULES + [{ "type" => "required_status_checks", "parameters" => { "required_status_checks" => [{ "context" => "test (a)" }] } }]
+routes = routes_for(public_repo("o/rs")).merge(rulesets_route("o/rs", [{ "id" => 3, "name" => "other" }, { "id" => 12, "name" => "personal-repo-baseline" }]))
+routes["__writes__"] = {
+  "PUT repos/o/rs/rulesets/12" => {
+    "status" => 200, "set" => { "repos/o/rs/rules/branches/main?per_page=100" => { "status" => 200, "body" => checks_rules } },
+  },
+}
+res = run_cli(routes, ["--apply", "--repo", "o/rs"], config: { "required_checks" => { "o/rs" => ["test (a)"] } })
+check("apply ruleset update: rc 0", res[:rc] == 0 && lines(res)[0, 2] == [
+  "o/rs (public): 直した 1 件 (ずれ無し)", "  - 直した: default branch の ruleset: 必須の check",
+])
+check("apply ruleset update: body", writes(res) == [["PUT", "repos/o/rs/rulesets/12", expected_ruleset(["test (a)"])]])
+
+# private: ruleset と secret scanning は書かない。dependabot.yml は直さずに残る。
+routes = routes_for(private_repo("o/pv", "delete_branch_on_merge" => false), yml: 404)
+routes["__writes__"] = { "PATCH repos/o/pv" => { "status" => 200, "set" => { "repos/o/pv" => { "status" => 200, "body" => private_repo("o/pv") } } } }
+res = run_cli(routes, ["--apply", "--repo", "o/pv"])
+check("apply private: rc 1 with remaining drift", res[:rc] == 1)
+check("apply private: lines", lines(res) == [
+  "o/pv (private): 直した 1 件 / 残りのずれ 1 件",
+  "  - 直した: merge の後に branch を消す",
+  "  - .github/dependabot.yml (repo ごとの PR で足す。script では書かない): 今 無い / あるべき 有る",
+  RB::UNAVAILABLE_NOTE,
+  RB::MANUAL_NOTE,
+])
+check("apply private: only merge settings written", writes(res) == [["PATCH", "repos/o/pv", MERGE_BODY]] &&
+  res[:calls].none? { |c| c["args"].last.include?("/rules") })
+
+# public の secret scanning は security_and_analysis を PATCH する。
+sec_off = { "secret_scanning" => { "status" => "disabled" }, "secret_scanning_push_protection" => { "status" => "disabled" } }
+routes = routes_for(public_repo("o/sec", "security_and_analysis" => sec_off))
+routes["__writes__"] = { "PATCH repos/o/sec" => { "status" => 200, "set" => { "repos/o/sec" => { "status" => 200, "body" => public_repo("o/sec") } } } }
+res = run_cli(routes, ["--apply", "--repo", "o/sec"])
+check("apply secret scanning", res[:rc] == 0 && writes(res) == [["PATCH", "repos/o/sec", {
+  "security_and_analysis" => { "secret_scanning" => { "status" => "enabled" }, "secret_scanning_push_protection" => { "status" => "enabled" } },
+}]])
+
+# script が直さないずれ (dependabot.yml) だけなら書かない。
+res = run_cli(routes_for(public_repo("o/yml"), yml: 404), ["--apply", "--repo", "o/yml"])
+check("apply unfixable only: no write", res[:rc] == 1 && writes(res).empty? && lines(res)[0] == "o/yml (public): ずれ 1 件")
+# 書かないので読み直しもしない (repo を読むのは確かめるときの 1 回だけ)。
+check("apply unfixable only: no re-read", res[:calls].count { |c| c["args"] == %w[api repos/o/yml] } == 1)
+
+# 書き込みが途中で失敗したら、それまでに直したものを添えて止め、後の書き込みはしない。
+before = public_repo("o/half", "delete_branch_on_merge" => false)
+routes = routes_for(before, alerts: 404, fixes: false)
+routes["__writes__"] = { "PUT repos/o/half/vulnerability-alerts" => { "status" => 204, "set" => { "repos/o/half/vulnerability-alerts" => { "status" => 204 } } } }
+res = run_cli(routes, ["--apply", "--repo", "o/half"])
+check("apply write failure: rc 2", res[:rc] == 2 && lines(res) == [
+  "o/half: 確かめられないか直せない (直せません: Dependabot security updates (gh api が失敗))",
+  "  - 書いた: Dependabot alerts (dependency graph を含む)",
+])
+check("apply write failure: stops", writes(res).map { |w| w[0, 2] } == [
+  ["PUT", "repos/o/half/vulnerability-alerts"], ["PUT", "repos/o/half/automated-security-fixes"],
+])
+
+# 書き込みが成功しても読み直してずれが残れば止める (他の ruleset が厳しくしているなど)。
+routes = routes_for(public_repo("o/stuck", "delete_branch_on_merge" => false))
+routes["__writes__"] = { "PATCH repos/o/stuck" => { "status" => 200 } }
+res = run_cli(routes, ["--apply", "--repo", "o/stuck"])
+check("apply verify failure", res[:rc] == 2 && lines(res) == [
+  "o/stuck: 確かめられないか直せない (直した後もずれが残っています: merge の後に branch を消す)",
+  "  - 書いた: merge の後に branch を消す",
+])
+
+# 書いた後の読み直しが失敗しても、書いた項目は出す。
+routes = routes_for(public_repo("o/reread", "delete_branch_on_merge" => false), alerts: 404)
+routes["__writes__"] = {
+  "PUT repos/o/reread/vulnerability-alerts" => { "status" => 204, "set" => { "repos/o/reread/vulnerability-alerts" => { "status" => 204 } } },
+  "PATCH repos/o/reread" => { "status" => 200, "set" => { "repos/o/reread" => { "status" => 500 } } },
+}
+res = run_cli(routes, ["--apply", "--repo", "o/reread"])
+check("apply re-read failure keeps written", res[:rc] == 2 && lines(res) == [
+  "o/reread: 確かめられないか直せない (確かめ直せません: repo を読めません (gh api が失敗))",
+  "  - 書いた: Dependabot alerts (dependency graph を含む)",
+  "  - 書いた: merge の後に branch を消す",
+])
+
+# 持ち主の ruleset の更新は置き換え: 設定 file の一覧に無い check (画面で足した lint) は外れる。
+old_rules = [EXPECTED_PR_RULE, { "type" => "non_fast_forward" },
+             { "type" => "required_status_checks", "parameters" => { "required_status_checks" => [{ "context" => "ci" }, { "context" => "lint" }] } }]
+new_rules = GOOD_RULES + [{ "type" => "required_status_checks", "parameters" => { "required_status_checks" => [{ "context" => "ci" }] } }]
+routes = routes_for(public_repo("o/repl"), rules: old_rules).merge(rulesets_route("o/repl", [{ "id" => 5, "name" => "personal-repo-baseline" }]))
+routes["__writes__"] = {
+  "PUT repos/o/repl/rulesets/5" => { "status" => 200, "set" => { "repos/o/repl/rules/branches/main?per_page=100" => { "status" => 200, "body" => new_rules } } },
+}
+res = run_cli(routes, ["--apply", "--repo", "o/repl"], config: { "required_checks" => { "o/repl" => ["ci"] } })
+check("apply ruleset update replaces checks with config", res[:rc] == 0 &&
+  writes(res) == [["PUT", "repos/o/repl/rulesets/5", expected_ruleset(["ci"])]] &&
+  lines(res)[0, 2] == ["o/repl (public): 直した 1 件 (ずれ無し)", "  - 直した: default branch の ruleset: 削除の禁止"])
+
+# 持ち主の ruleset が 2 つあれば、どちらを直すか決められないので書かない。
+routes = routes_for(public_repo("o/dup"), rules: []).merge(rulesets_route("o/dup", [
+  { "id" => 1, "name" => "personal-repo-baseline" }, { "id" => 2, "name" => "personal-repo-baseline" },
+]))
+res = run_cli(routes, ["--apply", "--repo", "o/dup"])
+check("apply duplicate managed ruleset", res[:rc] == 2 && writes(res).empty? &&
+  lines(res) == ["o/dup: 確かめられないか直せない (personal-repo-baseline という名前の ruleset が複数あります)"])
+
+# --all --apply: 直せない repo があっても残りを続ける。
+list = [public_repo("o/a-fix", "delete_branch_on_merge" => false), public_repo("o/b-stuck", "delete_branch_on_merge" => false)]
+routes = routes_for(list[0]).merge(routes_for(list[1]))
+routes[RB::LIST_PATH] = { "status" => 200, "body" => list }
+routes["__writes__"] = {
+  "PATCH repos/o/a-fix" => { "status" => 200, "set" => { "repos/o/a-fix" => { "status" => 200, "body" => public_repo("o/a-fix") } } },
+}
+res = run_cli(routes, ["--all", "--apply"])
+check("apply all: lines", res[:rc] == 2 && lines(res) == [
+  "o/a-fix (public): 直した 1 件 (ずれ無し)",
+  "  - 直した: merge の後に branch を消す",
+  "o/b-stuck: 確かめられないか直せない (直せません: merge の設定 (gh api が失敗))",
+  "対象の repo: 2 件 (ずれ無し 0・直した 1・ずれ有り 0・確かめられないか直せない 1) / 対象外: fork 0 件・archive 済み 0 件・設定 file で除外 0 件",
+  RB::MANUAL_NOTE,
+])
+
 # ---- CLI: usage ----
-res = run_cli({}, ["--apply"])
-check("cli --apply is usage error", res[:rc] == 2 && res[:err].include?("usage:") && res[:calls].empty?)
+res = run_cli({}, ["--check", "--apply"])
+check("cli --check --apply is usage error", res[:rc] == 2 && res[:err].include?("usage:") && res[:calls].empty?)
 res = run_cli({}, ["--help"])
 check("cli help", res[:rc] == 0 && res[:out].start_with?(RB.usage + "\n"))
 
