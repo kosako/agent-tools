@@ -315,7 +315,15 @@ label = "repo の設定 file (.github/repo-baseline.json)"
 ].each do |name, text, expected|
   check("repo file: #{name} is invalid", repo_file_error(text) == expected)
 end
-check("repo file: reason without content", !repo_file_error('{"required_checks":["secret-check\u0001"]}').include?("secret-check"))
+# JSON の孤立した surrogate (\uDC00) は、parse の後で不正な UTF-8 の文字列になりうる (Ruby 2.6 の json)。strip や
+# 正規表現で例外にせず、repo の設定 file の不正にする (json の版で parse の失敗になっても、不正であることは同じ)。
+SURROGATE = "\\" + "uDC00"
+[["required_checks", "{\"required_checks\":[\"#{SURROGATE}\"]}"], ["skip", "{\"skip\":[\"#{SURROGATE}\"]}"]].each do |key, text|
+  message = repo_file_error(text).to_s
+  check("repo file: lone surrogate in #{key} is invalid",
+        message.start_with?(label) && !message.start_with?("unexpected"))
+end
+check("repo file: reason without content",!repo_file_error('{"required_checks":["secret-check\u0001"]}').include?("secret-check"))
 
 def lines(res)
   res[:out].lines.map(&:chomp)
@@ -443,6 +451,15 @@ long_rules = GOOD_RULES + [{ "type" => "required_status_checks", "parameters" =>
 } }]
 res = run_cli(routes_for(public_repo("o/long"), rules: long_rules, settings: long), ["--repo", "o/long"])
 check("cli repo file with multi-line base64", res[:rc] == 0 && lines(res).first == "o/long (public): ずれ無し")
+# 不正な UTF-8 になる repo の設定 file でも、--all はその repo を確かめられないにして次の repo を続ける。
+list = [public_repo("o/a-sur"), public_repo("o/b-ok")]
+routes = routes_for(list[0], settings: "{\"required_checks\":[\"#{SURROGATE}\"]}").merge(routes_for(list[1]))
+routes[RB::LIST_PATH] = { "status" => 200, "body" => list }
+res = run_cli(routes, ["--all"])
+check("cli all: broken repo file does not stop the run", res[:rc] == 2 && res[:err].empty? &&
+  lines(res)[0].start_with?("o/a-sur: 確かめられない (repo の設定 file (.github/repo-baseline.json) ") &&
+  lines(res)[1] == "o/b-ok (public): ずれ無し" &&
+  lines(res)[2] == "対象の repo: 2 件 (ずれ無し 1・ずれ有り 0・確かめられない 1) / 対象外: fork 0 件・archive 済み 0 件・設定 file で除外 0 件")
 # 確かめる途中で止まっても、repo の設定 file を読めていれば外した項目を出す。
 res = run_cli(routes_for(public_repo("o/skiperr"), alerts: 403, settings: { "skip" => ["dependabot_yml"] }), ["--repo", "o/skiperr"])
 check("cli skip with a repo error keeps the omitted line", res[:rc] == 2 && lines(res) == [
@@ -543,8 +560,41 @@ fake = RB.clone
 fake.define_singleton_method(:gh_json) { |_path, _label| public_repo("o/boom") }
 fake.define_singleton_method(:repo_settings) { |_name| RB::NO_SETTINGS }
 fake.define_singleton_method(:collect_facts) { |*_args| raise TypeError, "boom" }
-r = fake.check_repo("o/boom", RB.parse_config(nil))
-check("check_repo turns TypeError into a repo error", r.status == :error && r.reason == "応答の形が想定外です (TypeError)")
+r = begin
+  fake.check_repo("o/boom", RB.parse_config(nil))
+rescue StandardError => e
+  e
+end
+check("check_repo turns TypeError into a repo error",
+      r.is_a?(RB::Result) && r.status == :error && r.reason == "応答の形が想定外です (TypeError)")
+# --apply の確かめ直しで ArgumentError が出ても、書いた項目を添えて止める (書いた範囲を失わない)。
+fake2 = RB.clone
+fake2.define_singleton_method(:gh_write) { |_action| nil }
+fake2.define_singleton_method(:read_repo) { |name| public_repo(name) }
+fake2.define_singleton_method(:collect_facts) { |*_args| raise ArgumentError, "invalid byte sequence" }
+# 想定外の例外は test を止めずに assertion で落とす (捕まえ損ねた例外も、どの check かが出るように)。
+apply_err = begin
+  fake2.apply_fixes("o/reverify", "public", [["delete_branch_on_merge", false, true]], RB::NO_SETTINGS)
+  nil
+rescue RB::ApplyError => e
+  e
+rescue StandardError => e
+  e
+end
+check("apply re-read ArgumentError keeps written",
+      apply_err.is_a?(RB::ApplyError) && apply_err.message == "確かめ直せません: 応答の形が想定外です (ArgumentError)" &&
+      apply_err.written == %w[delete_branch_on_merge])
+# 不正な UTF-8 の文字列への strip・正規表現 (ArgumentError) や encoding の不一致 (EncodingError) も同じ。
+[ArgumentError, Encoding::CompatibilityError].each do |klass|
+  fake.define_singleton_method(:collect_facts) { |*_args| raise klass, "boom" }
+  r = begin
+    fake.check_repo("o/boom", RB.parse_config(nil))
+  rescue StandardError => e
+    e
+  end
+  check("check_repo turns #{klass} into a repo error",
+        r.is_a?(RB::Result) && r.status == :error && r.reason == "応答の形が想定外です (#{klass})")
+end
 
 # ---- CLI: branch の rule は全ページを読む ----
 # 2 ページ目に approve 2 の PR の rule がある (最初のページだけ読むと見落とす)。

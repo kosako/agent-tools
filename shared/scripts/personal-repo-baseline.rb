@@ -333,8 +333,10 @@ module RepoBaseline
     RepoSettings.new(skip.freeze, checks.freeze)
   end
 
+  # valid_encoding? を先に見る (JSON の \uDC00 のような孤立した surrogate は不正な UTF-8 の文字列になり、strip や
+  # 正規表現が ArgumentError を出す)。
   def valid_check_name?(name)
-    name.is_a?(String) && !name.strip.empty? && name.valid_encoding? && name !~ /[[:cntrl:]]/
+    name.is_a?(String) && name.valid_encoding? && !name.strip.empty? && name !~ /[[:cntrl:]]/
   end
 
   def load_config
@@ -693,7 +695,7 @@ module RepoBaseline
     remaining = begin
       facts = collect_facts(name, read_repo(name), visibility, settings.skip)
       evaluate(visibility, facts, settings.required_checks, settings.skip)
-    rescue Error, TypeError, NoMethodError => e
+    rescue Error, TypeError, NoMethodError, ArgumentError, EncodingError => e
       reason = e.is_a?(Error) ? e.message : "応答の形が想定外です (#{e.class})"
       raise ApplyError.new("確かめ直せません: #{reason}", written)
     end
@@ -748,8 +750,9 @@ module RepoBaseline
     Result.new(name, nil, :error, [], e.message, e.written, settings&.skip)
   rescue Error => e
     Result.new(name, nil, :error, [], e.message, [], settings&.skip)
-  rescue TypeError, NoMethodError => e
-    # 上の検査が見落とした応答の型違い。その repo だけ「確かめられない」にして、--all の残りを続ける。
+  rescue TypeError, NoMethodError, ArgumentError, EncodingError => e
+    # 上の検査が見落とした応答の型違いや不正な文字列 (不正な UTF-8 への strip・正規表現など)。その repo だけ
+    # 「確かめられない」にして、--all の残りを続ける。
     Result.new(name, nil, :error, [], "応答の形が想定外です (#{e.class})", [], settings&.skip)
   end
 
