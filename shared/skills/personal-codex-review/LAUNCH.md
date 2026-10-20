@@ -110,10 +110,16 @@ pane の名前は、PR の review なら `review-<PR 番号>` です。PR の無
   `"code":"timeout"` の error JSON を返します (0.9.0 で実測)。一致時の JSON には pane の生テキストが入り、
   制御文字で JSON parser が失敗することがあるため、起床の判定は raw 出力に
   `CODEX-REVIEW-DONE-<nonce>` が含まれるかで行い、exit code は `done.txt` から読みます。
-- timeout したら `herdr pane read <pane-id> --source recent-unwrapped --lines 40` で状況を読み、
-  codex process がまだ動いていれば同じ wait を繰り返します (合計 3 回まで)。それでも
-  `done.txt` が現れなければ `Blocked at: executor-exit` で停止します。run script の `codex exec` は
-  `personal-safe-run` で包まないので (`SKILL.md` §5 の「上限」。#512)、pane は閉じず、止めるかは人が決めます。
+- timeout したら `herdr pane process-info --pane <pane-id>` で pane の foreground process
+  (`result.process_info.foreground_processes[].name`) に `codex` が居るかを見ます (`personal-codex-worker` の
+  `LAUNCH.md` §6 と同じ判定。#421)。居れば同じ wait を繰り返します (合計 3 回まで)。**居ないと確認できて**
+  `done.txt` が無ければ `Blocked at: executor-exit` で停止します。process-info が失敗する・解釈できないときは
+  「消滅」に倒さず、居るときと同じく wait を続けます。
+- 3 回の wait が尽きても `done.txt` が無く、codex が居る (または居ないと確認できない) ときは、review は
+  まだ動いています。process を止めずに `Status: RUNNING` で pane id・run dir・nonce を返します (雛形は
+  `RESULT-FORMAT.md`)。run script の `codex exec` は `personal-safe-run` で包まないので (`SKILL.md` §5 の「上限」。
+  #512)、pane は閉じず、止めるかは人が決めます。後から `done.txt` が現れたら、同じ続行条件で判定して結果を
+  読みます。その run の `done.txt` を確かめる前に、同じ対象の review を起動し直しません (2 本目が並んで走る)。
 - `done.txt` の `exit=` が 0 以外なら `Blocked at: executor-exit` とし、pane の末尾を public-safe に
   要約して Reason に書きます。
 - **pane の後始末**: 続行条件 (`done.txt` の nonce 一致・`exit=0`、空でない `result.md`) を満たした
@@ -121,7 +127,7 @@ pane の名前は、PR の review なら `review-<PR 番号>` です。PR の無
   そのまま `<run dir>/pane.log` に保存し、file が空でないことを確認してから
   `herdr pane close <pane-id>` で閉じます。text field だけを JSON parser で抜くと制御文字で
   失敗して空 file になることがあるため、生の出力を保存します。満たさないとき
-  (exit≠0、空振りの再実行が尽きた、途中で BLOCKED) は閉じず、調べる必要がある pane だけを
+  (exit≠0、空振りの再実行が尽きた、途中で BLOCKED、RUNNING) は閉じず、調べる必要がある pane だけを
   残します。固定名の pane を使い回しません。
 
 ### 直接起動 (fallback)
@@ -131,11 +137,12 @@ detach / background にせず、複合コマンドの末尾にも埋め込みま
 `result.md` で行い、herdr 経路と同じです。
 
 pane が無いので、caller の command の実行そのものが待ちになります。その command が `done.txt` を残さずに
-戻ったとき (caller の tool の時間の上限で打ち切られた・background に移された等) は、herdr 経路の wait が
-尽きたときと同じく `Blocked at: executor-exit` で返します (`SKILL.md` §5 の「上限」。#512)。codex の process は
+戻ったとき (caller の tool の時間の上限で打ち切られた・background に移された等) は、生存を見る pane が無いので
+`Blocked at: executor-exit` で返します (`SKILL.md` §5 の「上限」。#512)。codex の process は
 残っているかもしれませんが、自分で探して止めず、Next step に run dir と、process が残りうることを書きます
 (run script の `codex exec` の argv には `-o <run dir>/result.md` が入るので、人は run dir の path で process を
-探せます)。止めるかは人が決めます。後から `done.txt` が現れたら、同じ続行条件で判定します。
+探せます)。止めるかは人が決めます。後から `done.txt` が現れたら、同じ続行条件で判定します。その run の `done.txt` を
+確かめる前に、同じ対象の review を起動し直しません (#421)。
 
 ### 人手 hand-off (BLOCKED からの続行)
 

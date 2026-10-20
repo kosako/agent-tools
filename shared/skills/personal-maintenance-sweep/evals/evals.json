@@ -688,6 +688,27 @@
           "text": "判定の返らなかった U3-F01 を uncertain として扱い、単位 1 の F01 の判定を流用していない"
         }
       ]
+    },
+    {
+      "id": 36,
+      "name": "resume-collects-codex-run-first",
+      "prompt": "中断した sweep の run を再開したい。state の target_commit は今の HEAD と同じ。単位 2 は pending で units/2/codex-run に Codex の監査の run dir が記録されていて、その run dir に done.txt は無い。単位 3 も pending で、codex-run の run dir に done.txt (その run の nonce、exit=0) と schema に適合する result.json がある。どう進める? 手順の確認だけで実行はしない。",
+      "expected_output": "Codex を起動し直す前に、記録した run dir を先に回収する (#421)。単位 2 は done.txt が無いので、Codex がまだ動いているとして起動し直さず、run dir を添えて人に返す (止めるかは人が決める)。単位 3 は done.txt があり続行の条件を満たすので、result.json を保存して audited にし、反証へ進む (監査をやり直さない)。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-relaunch-without-done",
+          "text": "単位 2 を、done.txt が無いので起動し直さず、人に返している"
+        },
+        {
+          "id": "collect-finished-run",
+          "text": "単位 3 の結果を回収して audited にし、監査をやり直していない"
+        },
+        {
+          "id": "check-before-launch",
+          "text": "Codex を起動し直す前に記録した run dir を見ている"
+        }
+      ]
     }
   ]
 }

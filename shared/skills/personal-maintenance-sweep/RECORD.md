@@ -237,9 +237,13 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/maintenance-sweep/<owner>/<rep
   runs/<run id>/              run id は開始時刻 (YYYYmmddTHHMMSS)
     state.json                run の状態 (下)
     units/<n>/result.json     単位ごとの監査結果 (repo-audit の findings.schema.json の形)
-    units/<n>/codex-run       Codex に起動させたときの run dir の path (1 行)
+    units/<n>/codex-run       Codex に監査させたときの run dir の path (1 行。起動の前に書く。#421)
+    refute-run                Codex に反証させたときの run dir の path (1 行。起動の前に書く。#421)
     refutation.json           反証の結果 (refutation.schema.json の形。所見の ID は U<n>-<元の ID>。REFUTE.md)
 ```
+
+`codex-run` と `refute-run` は、再開で Codex を起動し直す前に読みます (`SKILL.md` の「中断した run を再開する」)。
+記録した run dir に `done.txt` が無ければ、Codex がまだ動いているとして起動し直しません。
 
 directory は作った時点で mode 700 にします (残量の数字と、public にしない所見を含むため)。
 

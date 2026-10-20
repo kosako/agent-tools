@@ -57,6 +57,9 @@ run script の組み方、完了判定 (`done.txt` と `result.md`)、空振り�
 SKILL.md §5)。完了の正本は端末に出る行ではなく run dir の file です。人手 hand-off で人が terminal から
 実行した場合も同じ file で確認するので、経路によらず判定は同じです。LAUNCH.md の続行条件を満たした pane は
 閉じ、満たさなかった pane だけを一次情報として残します。review のたびに pane が溜まらないようにするためです。
+wait が尽きても codex の process が生きている (または生存を確かめられない) ときは、止めずに `Status: RUNNING` で
+返し、pane を残します (#421。`personal-codex-worker` と同じ形)。その run の `done.txt` を確かめる前に、同じ対象の
+review を起動し直しません。
 
 ## brief と target
 
@@ -91,7 +94,8 @@ BLOCKED です。置き方と Fast mode の消費は [Install & Usage](install-a
 ## 使う herdr subcommand
 
 `status` / `pane current` / `pane split` / `pane rename` / `pane run` / `pane wait-output` / `pane read` /
-`pane close` に限定し、socket path や version 固有の flag に依存しません (0.9.0 で確認)。
+`pane process-info` (wait の timeout の後の生存の確認。#421) / `pane close` に限定し、socket path や version 固有の
+flag に依存しません (0.9.0 で確認。`pane process-info` の応答の形は 0.9.3 で確認)。
 
 渡す値の escape は 2 段あります。`pane run` の command は **pane の shell** が解釈するので script path を
 shell literal 化し、その command 文字列を自分の shell 経由で `herdr` へ渡すならもう一段 literal 化

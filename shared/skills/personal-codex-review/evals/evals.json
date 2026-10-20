@@ -819,6 +819,31 @@
           "text": "Independence を second-opinion only とし、独立の承認として扱っていない"
         }
       ]
+    },
+    {
+      "id": 34,
+      "name": "wait-cap-running-not-killed",
+      "prompt": "PR の cross-review を herdr の pane で起動した。wait-output の timeout を 3 回繰り返したが done.txt が無く、herdr pane process-info では pane の foreground に codex が居る。どう返す? 手順の確認だけで実行はしない。",
+      "expected_output": "review はまだ動いているので、codex の process を止めず、pane も閉じずに Status: RUNNING で pane id・run dir・nonce を返す (#421)。verdict は作らず、Independence は not-established。Next step は、pane を見て続行か中断かを人が決め、続行なら done.txt を待って nonce 一致・exit=0 と空でない result.md を確かめてから結果を読むこと。その run の done.txt を確かめるまで同じ対象の review を起動し直さない。process-info が失敗・解釈できないときも「消滅」に倒さず、wait を続ける。executor-exit にするのは、codex が居ないと確認できて done.txt が無いときだけ。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "returns-running",
+          "text": "Status: RUNNING で返し、Blocked at: executor-exit にしていない"
+        },
+        {
+          "id": "no-kill-keep-pane",
+          "text": "codex の process を止めず、pane を閉じていない"
+        },
+        {
+          "id": "running-fields",
+          "text": "pane id・run dir・nonce を返している"
+        },
+        {
+          "id": "collect-later-no-relaunch",
+          "text": "後から done.txt を同じ続行条件で確かめて回収するとし、その前に同じ対象の review を起動し直さないとしている"
+        }
+      ]
     }
   ]
 }

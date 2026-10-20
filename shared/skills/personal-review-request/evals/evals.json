@@ -401,6 +401,27 @@
         { "id": "same-repo-everywhere", "text": "safe-gh の -R、gh pr view / gh pr diff と routing preflight の --repo に、すべて同じ octo-org/widgets を渡している" },
         { "id": "read-only-no-post", "text": "依頼・結果のコメントを投稿していない" }
       ]
+    },
+    {
+      "id": 26,
+      "name": "codex-review-running-no-comment",
+      "prompt": "/personal-review-request で PR の review を Codex に依頼し、依頼コメントは投稿済み。personal-codex-review が Status: RUNNING (wait が尽きても review が動いている) と run dir を返した。次に何をする?",
+      "expected_output": "結果のコメントは投稿しない。同じ対象の review を起動し直さない (#421)。返った run dir の done.txt を待ち、executor と同じ続行条件 (nonce 一致・exit=0・空でない result.md) で回収できたら、手順 4 の結果のコメントに進む。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-result-comment",
+          "text": "RUNNING の時点で結果のコメントを投稿していない"
+        },
+        {
+          "id": "no-relaunch",
+          "text": "同じ対象の review を起動し直していない"
+        },
+        {
+          "id": "collect-then-post",
+          "text": "run dir の done.txt を同じ続行条件で回収してから結果のコメントに進むとしている"
+        }
+      ]
     }
   ]
 }
