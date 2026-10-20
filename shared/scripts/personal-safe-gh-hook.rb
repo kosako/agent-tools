@@ -54,6 +54,9 @@ module SafeGhHook
   # (`&&` は `&` 2 回として割れる。間の空 segment は捨てる)。
   SEGMENT_BOUNDARY = /[\n;&|()`]/.freeze
 
+  # 行末の `\` と改行 (shell の行の継続)。継続をつないだ形の判定に使う (#438)。
+  LINE_CONTINUATION = /\\\r?\n/.freeze
+
   # `VAR=value gh ...` の環境変数前置を読み飛ばすため。
   ENV_ASSIGN = /\A[A-Za-z_][A-Za-z0-9_]*=/.freeze
 
@@ -130,11 +133,23 @@ module SafeGhHook
   # best-effort: shell の厳密な構文解析はしない (steering なので over/under-match を許容し
   # docs で honest-label する)。
   def untrusted_gh_read_reason(command)
-    gh_arg_lists(command).each do |args|
-      reason = classify_gh_args(args)
-      return reason if reason
+    command_forms(command).each do |form|
+      gh_arg_lists(form).each do |args|
+        reason = classify_gh_args(args)
+        return reason if reason
+      end
     end
     nil
+  end
+
+  # 判定にかける command の形。改行で割る元の形と、`\` の継続をつないだ形の両方で判定し、どちらかで
+  # 検出したら検出にする (#438)。継続を正しくつなぐには shell の字句 (comment・quote・escape・heredoc)
+  # をまねる必要があり、つないだ形の判定で置き換えると元の形で検出できていた入力を取りこぼす。和を
+  # とれば、つなぎ方を誤っても増えるのは検出 (over-match) だけになる。元の形を先に見るので、元の形で
+  # 検出していた入力の理由 key も変わらない。
+  def command_forms(command)
+    joined = command.gsub(LINE_CONTINUATION, " ")
+    joined == command ? [command] : [command, joined]
   end
 
   # 各 segment の先頭コマンドが `gh` のものについて、その引数列を集める。

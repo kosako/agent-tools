@@ -235,6 +235,14 @@ boundary でない)。
   として持つ各 segment を見る純粋な文字列照合で、**network I/O も `gh` 呼び出しもしない**(PreToolUse は
   毎コマンド前に同期実行されるため)。author が self かは safe-gh 側が判定する。shell の厳密な構文解析は
   せず over/under-match を許容する(steering ゆえ honest-label)。
+  - **`\` で継続した複数行の command (#438)**: command を改行で割る元の形と、行末の `\` の継続をつないだ形の
+    両方で判定し、どちらかで検出したら検出にする (和)。継続行に折った `gh api` の comments path や
+    `gh issue list --json number,body` も検出する。つないだ形の判定で置き換えないのは、継続を正しくつなぐには
+    shell の字句 (comment・quote・escape・heredoc) をまねる必要があり、置き換えると元の形で検出できていた入力を
+    取りこぼすため (#437 の review で 4 round 続けて見つかった)。和なら、つなぎ方を誤っても増えるのは
+    over-match だけになる。その代わり、1 行目だけで本文を読む形に見える複数行の command (1 行目が
+    `gh pr view N \` で `--json` が継続行にある metadata だけの読み取りなど) は、元の形の判定で steer される。
+    skill の手順に書く metadata だけの `gh` の読み取りは 1 行で書く。
 - **出力機構 (検証済み hook semantics)**: match 時に stdout へ PreToolUse の JSON
   `{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"…(safe-gh を使え)"}}` を書く。
   `additionalContext` がモデル可視で非ブロッキングな steer 経路(exit 0 の **stderr はモデルに届かない**)。
