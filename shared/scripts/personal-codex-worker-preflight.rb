@@ -505,7 +505,11 @@ module CodexWorkerPreflight
     toml_statements(text, label).each do |kind, path, extra|
       if kind == :header
         table = path
-        mark_provider_unsupported(found, path) if extra && path.first == "model_providers"
+        # 見出しだけでも、array of tables と許可した形 ([model_providers]・[model_providers.<id>]・
+        # [model_providers.<id>.aws]) の外の table は記録する (中身の無い [….http_headers] を書き方で通さない)。
+        if path.first == "model_providers" && (extra || !allowed_provider_header?(path))
+          mark_provider_unsupported(found, path)
+        end
         next
       end
       full = table + path
@@ -526,6 +530,10 @@ module CodexWorkerPreflight
   def provider_basic_value(text)
     m = text && BASIC_VALUE_RE.match(text)
     m && m[:value]
+  end
+
+  def allowed_provider_header?(path)
+    path.size <= 2 || (path.size == 3 && path[2] == "aws")
   end
 
   def mark_provider_unsupported(found, path)

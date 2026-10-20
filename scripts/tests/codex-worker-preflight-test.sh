@@ -278,10 +278,16 @@ check("profiles の下の model_provider は読まない (--ignore-user-config �
   "inline table の aws" => "[model_providers.amazon-bedrock]\naws = { region = \"r\" }\n",
   "array of tables の aws (header だけで記録する)" => "[[model_providers.amazon-bedrock.aws]]\nregion = \"r\"\n",
   "aws 以外の table の profile" => "[model_providers.amazon-bedrock.other]\nprofile = \"p\"\n",
+  "dotted key で aws 以外に書いた profile" => "[model_providers.amazon-bedrock]\nother.profile = \"p\"\n",
+  "中身の無い http_headers の table (見出しだけで記録する)" => "[model_providers.amazon-bedrock.http_headers]\n",
+  "中身の無い aws の下の table" => "[model_providers.amazon-bedrock.aws.extra]\n",
 }.each do |name, body|
   check("選ばれたプロバイダの #{name} は「引き継げない」に記録する",
         prov("model_provider = \"amazon-bedrock\"\n#{body}")[:unsupported] == ["amazon-bedrock"])
 end
+check("許可した形の見出しだけ (中身なし) では記録しない",
+      prov("model_provider = \"amazon-bedrock\"\n[model_providers]\n[model_providers.amazon-bedrock]\n[model_providers.amazon-bedrock.aws]\n") ==
+      { provider: "amazon-bedrock", aws: {}, unsupported: [], all_unsupported: false })
 check("model_providers の inline table は全部を「引き継げない」にする",
       prov("model_provider = \"amazon-bedrock\"\nmodel_providers = { x = 1 }\n")[:all_unsupported])
 check("使われないプロバイダの base_url も記録だけする (止めるのは選ばれたときだけ)",
@@ -345,6 +351,12 @@ check("model_providers の inline table があれば、どのプロバイダで�
 check("使われないプロバイダの設定では止めない",
       layered("model_provider = \"amazon-bedrock\"\n[model_providers.other]\nbase_url = \"https://x\"\n")[0] ==
       { "model_provider" => "amazon-bedrock" })
+check("config の中身の無い許可外の table でも止める",
+      layered_error("model_provider = \"amazon-bedrock\"\n[model_providers.amazon-bedrock.http_headers]\n").to_s
+        .include?("user config の選ばれた provider に、引き継げない設定があります"))
+check("profile の file の中身の無い許可外の table でも止める",
+      layered_error(BEDROCK, "[model_providers.amazon-bedrock.http_headers]\n").to_s
+        .include?("agent-tools-worker.config.toml の選ばれた provider に、引き継げない設定があります"))
 check("profile の file の escape で綴った table も重なる",
       layered(BEDROCK, "[\"model#{ESC_US}providers\".amazon-bedrock.aws]\nprofile = \"other\"\n")[0]["model_providers.amazon-bedrock.aws.profile"] == "other")
 check("profile の file の escape で綴った許可外の設定でも止める",
