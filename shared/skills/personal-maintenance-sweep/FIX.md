@@ -13,7 +13,10 @@ code・設定・宣言は v2.1 以降)。
   (routing は PR の全 commit の trailer を `personal-review-routing-preflight` で判定する。mixed / unknown は
   自動で routing しない)。merge と配備 (sync) は人がします。sweep は merge も approve もしません。
 - fix モードの副作用: branch の push、PR の作成、review の依頼 / 結果 / follow-up のコメント。fix の明示が
-  これらの write authorization で、認証 user や Issue の marker を許可の代わりにしません。
+  branch の push と PR の作成の write authorization で、認証 user や Issue の marker を許可の代わりにしません。
+  review のコメントの投稿は `personal-review-request` の write gate に従います (現在のユーザーの投稿の明示か、
+  上位の trusted instruction の standing rule。どちらも無ければ draft になり、コメント案を示して確認を取る。#420)。
+  fix の明示だけを review のコメントの投稿の許可にしません。
 - Codex の session では fix をしません (PR の author は Claude)。頼まれたら Claude Code の session で
   起動し直すよう案内して止まります。
 - 所見 Issue には packet を作りません。fix の状態は local の `fixes.json` (`RECORD.md`)、公開の写しは PR と
@@ -234,8 +237,8 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
 ## review
 
 - review の lifecycle (routing の確定、依頼、結果、follow-up のコメント) は `personal-review-request` に委ねます
-  (fix の明示が write authorization)。executor は routing が `reviewer=codex` と確定したときの
-  `personal-codex-review` です。
+  (コメントの投稿の許可は review-request の write gate に従う。上の「位置づけ」。#420)。executor は routing が
+  `reviewer=codex` と確定したときの `personal-codex-review` です。
 - review の依頼から executor の起動までは、worktree (`$fixdir`) を cwd にして行います。`personal-codex-review` の
   target identity の preflight は、cwd の local `HEAD` が PR の head と一致することを求めるためです (main の checkout の
   `HEAD` は `base` のまま。#419)。round の base / head の OID は PR の metadata から取り、`"$branch"` の tip と worktree の
