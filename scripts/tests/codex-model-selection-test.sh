@@ -233,6 +233,37 @@ run_sel "$phome" --profile review --format json
 expect_error "unsupported provider setting" "agent-tools-review.config.toml の選ばれた provider に、引き継げない設定があります"
 rm "$phome/agent-tools-review.config.toml"
 
+# command で資格情報を取る table (#548): profile file の aws.profile があれば無視して通し、名前だけを出す
+chome="$tmp/command-home"
+mkdir -p "$chome"
+cat > "$chome/config.toml" <<'EOF'
+model = "gpt-x"
+model_provider = "amazon-bedrock-runtime"
+[model_providers.amazon-bedrock-runtime.aws]
+region = "r1"
+[model_providers.amazon-bedrock-runtime.aws.credential_export]
+command = "CANARY-CMD"
+args = ["configure", "export-credentials", "--profile", "CANARY-SSO"]
+[model_providers.amazon-bedrock-runtime.aws.auth_refresh]
+command = "CANARY-CMD2"
+args = ["sso", "login", "--profile", "CANARY-SSO"]
+EOF
+# aws.profile が無ければ exit 2 (command の値は出さない)
+run_sel "$chome" --profile review --format json
+expect_error "command tables without aws.profile" "代わりに使う aws.profile がありません"
+printf '[model_providers.amazon-bedrock-runtime.aws]\nprofile = "sso-dev"\n' > "$chome/agent-tools-review.config.toml"
+run_sel "$chome" --profile review --format json
+expect_json "command tables with review profile" '{"selection":{"model":"gpt-x"},"sources":{"model":"user config"},"provider":{"model_provider":"amazon-bedrock-runtime","model_providers.amazon-bedrock-runtime.aws.profile":"sso-dev","model_providers.amazon-bedrock-runtime.aws.region":"r1"},"provider_sources":{"model_provider":"user config","model_providers.amazon-bedrock-runtime.aws.profile":"review profile","model_providers.amazon-bedrock-runtime.aws.region":"user config"},"provider_ignored":["aws.credential_export","aws.auth_refresh"]}'
+case "$out$err" in *CANARY*) fail "command tables: output must not echo command values: $out $err" ;; esac
+# worker の profile file には aws.profile が無いので、--profile worker は exit 2 のまま
+run_sel "$chome" --profile worker --format json
+expect_error "command tables, worker profile without aws.profile" "代わりに使う aws.profile がありません"
+rm "$chome/agent-tools-review.config.toml"
+# root の dotted key (model_providers.<id>.aws.profile = …) は model の読み取りが拒否する (対応範囲は table の下)
+printf 'model_provider = "amazon-bedrock-runtime"\nmodel_providers.amazon-bedrock-runtime.aws.profile = "p"\n' > "$chome/config.toml"
+run_sel "$chome" --profile review --format json
+expect_error "root dotted provider key" "user config の top-level に解釈できない行があります"
+
 # preflight が同じ directory に配備されていない → exit 2 (path は出さない)
 lone="$tmp/lone"
 mkdir -p "$lone"

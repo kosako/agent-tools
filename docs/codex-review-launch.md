@@ -97,6 +97,35 @@ provider も同じ script が読みます (#543)。`--ignore-user-config` は pr
 `http_headers` など) があれば、引き継がずに BLOCKED です (argv に秘密を出さない。対応の範囲を広げるときは許可する
 key を足す)。
 
+例外は、command で資格情報を取る `[model_providers.<id>.aws.credential_export]` と `[….aws.auth_refresh]` です
+(#548。例: 組み込みの `amazon-bedrock-runtime` を SSO の `aws configure export-credentials` で認証する構成)。
+
+- **扱い**: この 2 つは引き継がず、`config.toml` か profile file (`agent-tools-review.config.toml` /
+  `agent-tools-worker.config.toml`) を重ねた後の `aws.profile` があれば無視して起動します。`aws.profile` が無ければ
+  BLOCKED です。
+- **書き方**: 見出しの table・inline table (`credential_export = { … }`)・table の下の dotted key で書いた形を扱います。
+  top-level の dotted key (`model_providers.<id>.aws.… = …`) は model の読み取りが拒否します。
+- **ほかの設定**: `aws.profile` があっても、ほかの許可外の設定が混ざっていれば今どおり BLOCKED です。
+- **command で認証する構成で review を起動するには**: profile file に、command が使っている SSO の profile を
+  `aws.profile` として書きます。
+
+  ```toml
+  [model_providers.amazon-bedrock-runtime.aws]
+  profile = "<SSO の profile>"
+  ```
+
+- **この起動の認証の正本**: 重ねた後の `aws.profile` です。command の args から profile を読み取って突き合わせることは
+  しないので、違う profile を書けばその profile で起動します。`AWS_PROFILE` の env は、通す条件にしません
+  (preflight と起動の環境がずれうるため)。
+- **出力**: 無視した table の名前を `provider_ignored` に出します (値は出さない)。caller は結果に
+  「`aws.profile` を使い、認証の command は引き継がない」と添えます。`provider_ignored` は「引き継がなかった」の
+  記録で、command が要らない、または同じ資格情報になる、という証明ではありません。
+- **SSO の期限切れ**: `auth_refresh` を引き継がないので、起動のときに `aws sso login` は自動で走りません。期限が
+  切れていたら、その SSO の profile で先に `aws sso login` を自分で実行します。preflight が通っても、認証が通る保証
+  ではありません。
+- **保証する範囲**: Codex の config のこの 2 つの table を起動に持ち込まないことです。AWS の SDK が資格情報を解決
+  するときの外部の command の実行まで禁じる変更ではありません。
+
 置き方と Fast mode の消費は [Install & Usage](install-and-usage.md) の「Codex の review / worker
 だけを軽くする」。
 

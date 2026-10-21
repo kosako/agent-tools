@@ -210,17 +210,17 @@ BEDROCK = <<~TOML
   region = "us-west-2" # note
 TOML
 check("model_provider の文字列が無い file は読まない (解釈できない行があっても今と同じ)",
-      prov("weird line\n[x\nmodel = \"gpt-x\"\n") == { provider: nil, aws: {}, unsupported: [], all_unsupported: false })
+      prov("weird line\n[x\nmodel = \"gpt-x\"\n") == { provider: nil, aws: {}, unsupported: [], all_unsupported: false, ignorable: {} })
 check("組み込みの amazon-bedrock の provider と aws の profile / region を読む",
       prov(BEDROCK) == { provider: "amazon-bedrock", aws: { "amazon-bedrock" => { "profile" => "work", "region" => "us-west-2" } },
-                         unsupported: [], all_unsupported: false })
+                         unsupported: [], all_unsupported: false, ignorable: {} })
 fake_header = "[model_providers.amazon-bedrock.aws]\nregion = \"CANARY\"\n[model_providers.amazon-bedrock]\nbase_url = \"CANARY\"\n"
 check("複数行の basic string の中の偽の header と key を読まない",
       prov("model_provider = \"amazon-bedrock\"\nnote = \"\"\"\n#{fake_header}\"\"\"\n") ==
-      { provider: "amazon-bedrock", aws: {}, unsupported: [], all_unsupported: false })
+      { provider: "amazon-bedrock", aws: {}, unsupported: [], all_unsupported: false, ignorable: {} })
 check("複数行の literal string の中も読まない",
       prov("model_provider = \"amazon-bedrock\"\nnote = '''\n#{fake_header}'''\n") ==
-      { provider: "amazon-bedrock", aws: {}, unsupported: [], all_unsupported: false })
+      { provider: "amazon-bedrock", aws: {}, unsupported: [], all_unsupported: false, ignorable: {} })
 check("行を跨ぐ配列の中の [ ] を header と誤認しない",
       prov("model_provider = \"amazon-bedrock\"\n[mcp_servers.x]\nargs = [\n  \"a\",\n  \"[model_providers.amazon-bedrock]\",\n]\n" \
            "[model_providers.amazon-bedrock.aws]\nregion = \"r1\"\n")[:aws] == { "amazon-bedrock" => { "region" => "r1" } })
@@ -258,9 +258,9 @@ check("escape で綴った model_provider だけの file も読む (model_provid
 check("escape で綴った許可外の設定も「引き継げない」に記録する",
       prov("[\"model#{ESC_US}providers\".amazon-bedrock.http_headers]\nX = \"s\"\n")[:unsupported] == ["amazon-bedrock"])
 check("値の中だけに unicode escape がある provider の無い file は、読んでも provider 無し",
-      prov("note = \"caf#{"\\" + "u00e9"}\"\n[x]\ny = [\n  1,\n]\n") == { provider: nil, aws: {}, unsupported: [], all_unsupported: false })
+      prov("note = \"caf#{"\\" + "u00e9"}\"\n[x]\ny = [\n  1,\n]\n") == { provider: nil, aws: {}, unsupported: [], all_unsupported: false, ignorable: {} })
 check("model_provider の文字列も unicode escape も無い file は読まない (知らない escape の key があっても)",
-      prov("[\"a#{"\\"}q\"]\nx = 1\n") == { provider: nil, aws: {}, unsupported: [], all_unsupported: false })
+      prov("[\"a#{"\\"}q\"]\nx = 1\n") == { provider: nil, aws: {}, unsupported: [], all_unsupported: false, ignorable: {} })
 check("知らない escape の key は fail-closed",
       prov_error("model_provider = \"a\"\n[\"a#{"\\"}q\"]\nx = 1\n").to_s.include?("key の escape を解釈できません"))
 check("surrogate の escape の key は fail-closed",
@@ -287,7 +287,7 @@ check("profiles の下の model_provider は読まない (--ignore-user-config �
 end
 check("許可した形の見出しだけ (中身なし) では記録しない",
       prov("model_provider = \"amazon-bedrock\"\n[model_providers]\n[model_providers.amazon-bedrock]\n[model_providers.amazon-bedrock.aws]\n") ==
-      { provider: "amazon-bedrock", aws: {}, unsupported: [], all_unsupported: false })
+      { provider: "amazon-bedrock", aws: {}, unsupported: [], all_unsupported: false, ignorable: {} })
 check("model_providers の inline table は全部を「引き継げない」にする",
       prov("model_provider = \"amazon-bedrock\"\nmodel_providers = { x = 1 }\n")[:all_unsupported])
 check("使われないプロバイダの base_url も記録だけする (止めるのは選ばれたときだけ)",
@@ -317,6 +317,13 @@ ensure
   FileUtils.rm_rf(dir)
 end
 
+# 値を比べる check で使う。想定外の例外 (検査の漏れで止まるなど) も比べる値にして assertion で落とす。
+def layered_ok(config, profile = nil)
+  layered(config, profile)
+rescue StandardError => e
+  [:error, "#{e.class}: #{e.message}"]
+end
+
 def layered_error(config, profile = nil)
   layered(config, profile)
   nil
@@ -326,20 +333,20 @@ end
 
 require "tmpdir"
 require "fileutils"
-check("provider が無ければ空 (今と同じ起動)", layered("model = \"gpt-x\"\n") == [{}, {}] && layered(nil) == [{}, {}])
+check("provider が無ければ空 (今と同じ起動)", layered_ok("model = \"gpt-x\"\n") == [{}, {}, []] && layered_ok(nil) == [{}, {}, []])
 check("選ばれたプロバイダの -c を model_provider、aws.profile、aws.region の順で返す",
-      layered(BEDROCK) == [{ "model_provider" => "amazon-bedrock", "model_providers.amazon-bedrock.aws.profile" => "work",
+      layered_ok(BEDROCK) == [{ "model_provider" => "amazon-bedrock", "model_providers.amazon-bedrock.aws.profile" => "work",
                              "model_providers.amazon-bedrock.aws.region" => "us-west-2" },
                            { "model_provider" => "config", "model_providers.amazon-bedrock.aws.profile" => "config",
-                             "model_providers.amazon-bedrock.aws.region" => "config" }])
+                             "model_providers.amazon-bedrock.aws.region" => "config" }, []])
 check("profile の file が key ごとに重なる",
-      layered(BEDROCK, "[model_providers.amazon-bedrock.aws]\nregion = \"eu-west-1\"\n# model_provider\n") ==
+      layered_ok(BEDROCK, "[model_providers.amazon-bedrock.aws]\nregion = \"eu-west-1\"\n# model_provider\n") ==
       [{ "model_provider" => "amazon-bedrock", "model_providers.amazon-bedrock.aws.profile" => "work",
          "model_providers.amazon-bedrock.aws.region" => "eu-west-1" },
        { "model_provider" => "config", "model_providers.amazon-bedrock.aws.profile" => "config",
-         "model_providers.amazon-bedrock.aws.region" => "profile" }])
+         "model_providers.amazon-bedrock.aws.region" => "profile" }, []])
 check("profile の model_provider が勝ち、選ばれなかったプロバイダの aws は渡さない",
-      layered(BEDROCK, "model_provider = \"openai\"\n") == [{ "model_provider" => "openai" }, { "model_provider" => "profile" }])
+      layered_ok(BEDROCK, "model_provider = \"openai\"\n") == [{ "model_provider" => "openai" }, { "model_provider" => "profile" }, []])
 check("選ばれたプロバイダに引き継げない設定があれば止める",
       layered_error("model_provider = \"amazon-bedrock\"\n[model_providers.amazon-bedrock]\nbase_url = \"https://CANARY\"\n").to_s
         .include?("user config の選ばれた provider に、引き継げない設定があります"))
@@ -349,7 +356,7 @@ check("profile の file にあっても止める",
 check("model_providers の inline table があれば、どのプロバイダでも止める",
       layered_error("model_provider = \"amazon-bedrock\"\nmodel_providers = { x = 1 }\n").to_s.include?("引き継げない設定"))
 check("使われないプロバイダの設定では止めない",
-      layered("model_provider = \"amazon-bedrock\"\n[model_providers.other]\nbase_url = \"https://x\"\n")[0] ==
+      layered_ok("model_provider = \"amazon-bedrock\"\n[model_providers.other]\nbase_url = \"https://x\"\n")[0] ==
       { "model_provider" => "amazon-bedrock" })
 check("config の中身の無い許可外の table でも止める",
       layered_error("model_provider = \"amazon-bedrock\"\n[model_providers.amazon-bedrock.http_headers]\n").to_s
@@ -357,8 +364,97 @@ check("config の中身の無い許可外の table でも止める",
 check("profile の file の中身の無い許可外の table でも止める",
       layered_error(BEDROCK, "[model_providers.amazon-bedrock.http_headers]\n").to_s
         .include?("agent-tools-worker.config.toml の選ばれた provider に、引き継げない設定があります"))
+# ---- command で資格情報を取る table (#548) ----
+# 値には CANARY を置き、成功でも失敗でも出力に出ないことを見る。args の中の偽の header と key も読まない。
+RUNTIME = "amazon-bedrock-runtime"
+CMD_TABLES = <<~TOML
+  model_provider = "#{RUNTIME}"
+  [model_providers.#{RUNTIME}.aws]
+  region = "r1"
+  [model_providers.#{RUNTIME}.aws.credential_export]
+  command = "CANARY-CMD"
+  args = [
+    "CANARY-ARG", "[model_providers.#{RUNTIME}]",
+    "base_url = CANARY-URL",
+  ]
+  [model_providers.#{RUNTIME}.aws.auth_refresh]
+  command = "CANARY-CMD2"
+  args = ["CANARY-ARG2"]
+  CANARY_CHILD = "x"
+TOML
+BOTH = %w[credential_export auth_refresh].freeze
+check("command の table を「無視してよい」に分け、「引き継げない」にしない (args の中の偽の header も読まない)",
+      prov(CMD_TABLES) == { provider: RUNTIME, aws: { RUNTIME => { "region" => "r1" } }, unsupported: [],
+                            all_unsupported: false, ignorable: { RUNTIME => BOTH } })
+{
+  "credential_export だけ" => ["[model_providers.#{RUNTIME}.aws.credential_export]\ncommand = \"c\"\n", %w[credential_export]],
+  "auth_refresh だけ" => ["[model_providers.#{RUNTIME}.aws.auth_refresh]\ncommand = \"c\"\n", %w[auth_refresh]],
+  "中身の無い table" => ["[model_providers.#{RUNTIME}.aws.credential_export]\n", %w[credential_export]],
+  "inline table" => ["[model_providers.#{RUNTIME}.aws]\ncredential_export = { command = \"c\", args = [\"a\"] }\n", %w[credential_export]],
+  "dotted key" => ["[model_providers.#{RUNTIME}.aws]\nauth_refresh.command = \"c\"\n", %w[auth_refresh]],
+  "aws の table からの dotted key" => ["[model_providers.#{RUNTIME}]\naws.credential_export.args = [\"a\"]\n", %w[credential_export]],
+  "quoted key の header" => ["[model_providers.\"#{RUNTIME}\".aws.\"credential_export\"]\ncommand = \"c\"\n", %w[credential_export]],
+  "escape で綴った header" => ["[model_providers.#{RUNTIME}.aws.\"credential#{ESC_US}export\"]\ncommand = \"c\"\n", %w[credential_export]],
+}.each do |name, (body, names)|
+  check("#{name}の command の table を「無視してよい」に分ける",
+        prov("model_provider = \"#{RUNTIME}\"\n#{body}") ==
+        { provider: RUNTIME, aws: {}, unsupported: [], all_unsupported: false, ignorable: { RUNTIME => names } })
+end
+{
+  "似た名前の table" => "[model_providers.#{RUNTIME}.aws.credential_export_extra]\ncommand = \"c\"\n",
+  "dot を含む quoted key" => "[model_providers.#{RUNTIME}.aws]\n\"credential_export.command\" = \"c\"\n",
+  "aws と結んだ quoted key" => "[model_providers.#{RUNTIME}]\n\"aws.credential_export\" = { command = \"c\" }\n",
+  "文字列の直接の代入" => "[model_providers.#{RUNTIME}.aws]\ncredential_export = \"aws\"\n",
+  "配列の直接の代入" => "[model_providers.#{RUNTIME}.aws]\nauth_refresh = [\"aws\"]\n",
+  "array of tables" => "[[model_providers.#{RUNTIME}.aws.credential_export]]\ncommand = \"c\"\n",
+  "無視してよい table の下の array of tables" => "[[model_providers.#{RUNTIME}.aws.credential_export.extra]]\nx = \"y\"\n",
+  "aws 以外の table の下の credential_export" => "[model_providers.#{RUNTIME}.other.credential_export]\ncommand = \"c\"\n",
+  "aws 全体の inline table" => "[model_providers.#{RUNTIME}]\naws = { credential_export = { command = \"c\" } }\n",
+}.each do |name, body|
+  check("#{name}は「引き継げない」にする",
+        prov("model_provider = \"#{RUNTIME}\"\n#{body}")[:unsupported] == [RUNTIME])
+end
+check("無視してよい table の後の sibling の許可外の table も読む",
+      prov("#{CMD_TABLES}[model_providers.#{RUNTIME}.http_headers]\n")[:unsupported] == [RUNTIME])
+
+def with_aws_profile_env(value)
+  saved = ENV["AWS_PROFILE"]
+  ENV["AWS_PROFILE"] = value
+  yield
+ensure
+  saved.nil? ? ENV.delete("AWS_PROFILE") : ENV["AWS_PROFILE"] = saved
+end
+ok = layered_ok(CMD_TABLES, "[model_providers.#{RUNTIME}.aws]\nprofile = \"sso-dev\"\n")
+check("command の table があっても、profile file の aws.profile で通り、無視した名前を返す",
+      ok == [{ "model_provider" => RUNTIME, "model_providers.#{RUNTIME}.aws.profile" => "sso-dev",
+               "model_providers.#{RUNTIME}.aws.region" => "r1" },
+             { "model_provider" => "config", "model_providers.#{RUNTIME}.aws.profile" => "profile",
+               "model_providers.#{RUNTIME}.aws.region" => "config" },
+             %w[aws.credential_export aws.auth_refresh]])
+check("通るときも command の値を返さない", !ok.inspect.include?("CANARY"))
+check("config.toml の aws.profile でも通る",
+      layered_ok(CMD_TABLES.sub("region = \"r1\"\n", "region = \"r1\"\nprofile = \"sso-cfg\"\n"))[0]["model_providers.#{RUNTIME}.aws.profile"] == "sso-cfg")
+no_profile = layered_error(CMD_TABLES)
+check("aws.profile がどこにも無ければ止める", no_profile.to_s.include?("代わりに使う aws.profile がありません"))
+check("止める理由に command の値を出さない", !no_profile.to_s.include?("CANARY"))
+check("AWS_PROFILE の env だけでは通さない",
+      with_aws_profile_env("sso-env") { layered_error(CMD_TABLES) }.to_s.include?("代わりに使う aws.profile がありません"))
+check("aws.profile があっても、他の許可外の設定 (base_url) があれば止める",
+      layered_error("#{CMD_TABLES}[model_providers.#{RUNTIME}]\nbase_url = \"https://CANARY\"\n",
+                    "[model_providers.#{RUNTIME}.aws]\nprofile = \"sso-dev\"\n").to_s.include?("引き継げない設定があります"))
+check("aws.profile があっても、中身の無い許可外の table があれば止める",
+      layered_error(CMD_TABLES, "[model_providers.#{RUNTIME}.aws]\nprofile = \"sso-dev\"\n[model_providers.#{RUNTIME}.http_headers]\n").to_s
+        .include?("引き継げない設定があります"))
+check("使われないプロバイダの command の table は無視した名前に出さない",
+      layered_ok("model_provider = \"amazon-bedrock\"\n[model_providers.#{RUNTIME}.aws.credential_export]\ncommand = \"c\"\n") ==
+      [{ "model_provider" => "amazon-bedrock" }, { "model_provider" => "config" }, []])
+check("profile file でプロバイダを切り替えれば、元のプロバイダの command の table は関係しない",
+      layered_ok(CMD_TABLES, "model_provider = \"amazon-bedrock\"\n")[2] == [])
+check("profile file の command の table と config.toml の aws.profile でも通る",
+      layered_ok("model_provider = \"#{RUNTIME}\"\n[model_providers.#{RUNTIME}.aws]\nprofile = \"p\"\n",
+              "[model_providers.#{RUNTIME}.aws.auth_refresh]\ncommand = \"c\"\n")[2] == %w[aws.auth_refresh])
 check("profile の file の escape で綴った table も重なる",
-      layered(BEDROCK, "[\"model#{ESC_US}providers\".amazon-bedrock.aws]\nprofile = \"other\"\n")[0]["model_providers.amazon-bedrock.aws.profile"] == "other")
+      layered_ok(BEDROCK, "[\"model#{ESC_US}providers\".amazon-bedrock.aws]\nprofile = \"other\"\n")[0]["model_providers.amazon-bedrock.aws.profile"] == "other")
 check("profile の file の escape で綴った許可外の設定でも止める",
       layered_error(BEDROCK, "[\"model#{ESC_US}providers\".amazon-bedrock.http_headers]\nAuthorization = \"CANARY\"\n").to_s
         .include?("agent-tools-worker.config.toml の選ばれた provider に、引き継げない設定があります"))
@@ -1356,6 +1452,48 @@ set -e
 [ "$rc" -eq 0 ] || fail "escape で綴った provider の config で exit 0 (rc=$rc): $out"
 echo "$out" | grep -q -- ' -c model="gpt-explicit" -c model_provider="amazon-bedrock" -o ' ||
   fail "escape で綴った model_provider を明示の --model のときも引き継ぐべき: $out"
+# command で資格情報を取る table (#548): worker の profile file の aws.profile で通り、command を argv に持ち込まない
+chome="$tmp/command-provider-home"
+mkdir -p "$chome"
+cat > "$chome/config.toml" <<'EOF'
+model = "gpt-x"
+model_provider = "amazon-bedrock-runtime"
+[model_providers.amazon-bedrock-runtime.aws]
+region = "r1"
+[model_providers.amazon-bedrock-runtime.aws.credential_export]
+command = "CANARY-CMD"
+args = ["CANARY-ARG"]
+[model_providers.amazon-bedrock-runtime.aws.auth_refresh]
+command = "CANARY-CMD2"
+EOF
+set +e
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$chome" --clone "$clone" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "command の table だけで aws.profile が無ければ exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "代わりに使う aws.profile がありません" || fail "aws.profile が無い理由を出すべき: $out"
+case "$out" in *CANARY*|*"--add-dir"*) fail "aws.profile が無いとき、command の値や launch argv を出してはいけない: $out" ;; esac
+printf '[model_providers.amazon-bedrock-runtime.aws]\nprofile = "sso-dev"\n' > "$chome/agent-tools-worker.config.toml"
+for explicit in "" "--model gpt-explicit"; do
+  set +e
+  # shellcheck disable=SC2086
+  out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$chome" --clone "$clone" $explicit 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "worker profile の aws.profile で通るべき ($explicit) (rc=$rc): $out"
+  echo "$out" | grep -q "^provider ignored: aws.credential_export, aws.auth_refresh (aws.profile を使い、認証の command は引き継がない)$" ||
+    fail "無視した table の名前を出すべき ($explicit): $out"
+  echo "$out" | grep -q -- ' -c model_provider="amazon-bedrock-runtime" -c model_providers.amazon-bedrock-runtime.aws.profile="sso-dev" -c model_providers.amazon-bedrock-runtime.aws.region="r1" -o ' ||
+    fail "provider の -c が launch に並ぶべき ($explicit): $out"
+  case "$out" in *CANARY*|*credential_export=*|*auth_refresh=*) fail "command の table を argv や出力に持ち込んではいけない ($explicit): $out" ;; esac
+done
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$chome" --clone "$clone" --json)
+printf '%s' "$out" | ruby -rjson -e '
+j = JSON.parse(STDIN.read)
+abort "provider_ignored" unless j["provider_ignored"] == %w[aws.credential_export aws.auth_refresh]
+abort "argv" if j["launch_argv"].any? { |a| a.include?("credential_export") || a.include?("auth_refresh") || a.include?("CANARY") }
+abort "fixed flags" unless j["launch_argv"].first(8) == ["codex", "exec", "--ignore-user-config", "--ignore-rules", "-s", "workspace-write", "-c", %q{approval_policy="never"}]
+' || fail "--json の provider_ignored と launch argv が契約どおりでない: $out"
 # 選ばれたプロバイダに引き継げない設定 (base_url) があれば、--model の明示があっても launch argv を出さずに exit 2
 printf '[model_providers.amazon-bedrock]\nbase_url = "https://CANARY"\n' >> "$phome/config.toml"
 set +e
