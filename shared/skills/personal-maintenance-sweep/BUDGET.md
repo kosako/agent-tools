@@ -174,6 +174,8 @@ reset までの日数 = (週の reset の時刻 − 今) / 24 時間   (小数�
   出力に `provider` があれば (config に選ばれたプロバイダがあるとき。#543)、その key をすべて `CODEX-LAUNCH.md` の
   run script に `-c` で渡します (`--ignore-user-config` で外れるプロバイダの設定のうち、引き継ぐもの)。
   `--format model` は provider を引き継げないので、provider がある config では exit 2 になります。
+  `provider_ignored` があれば (command で資格情報を取る table を、`aws.profile` があるので無視したとき。#548)、
+  `-c` には渡さず、報告に「aws.profile を使い、認証の command は引き継がない」と添えます。
 
 - Claude の側は今の session の model のまま動きます (skill は model を切り替えない)。
 

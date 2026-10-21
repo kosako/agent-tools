@@ -259,7 +259,10 @@ command は **この skill の directory にある `LAUNCH.md` を読んで、�
   認証なしで接続して 401 になる。同じ script が、選ばれたプロバイダ (`model_provider`) と、そのプロバイダの
   `[model_providers.<id>.aws]` の `profile` / `region` だけを読み、出力の `provider` に `-c` の key と値として出すので、
   すべて `-c` で渡す。それ以外の provider の設定 (`base_url`・`env_key`・秘密を書きうる `http_headers` など) は読まず、
-  選ばれたプロバイダにあれば script が exit 2 で止める (BLOCKED)。
+  選ばれたプロバイダにあれば script が exit 2 で止める (BLOCKED)。例外は command で資格情報を取る
+  `aws.credential_export` / `aws.auth_refresh` で (#548)、重ねた後の `aws.profile` があれば引き継がずに無視し、出力の
+  `provider_ignored` に名前だけを出す。返却の `Model selection` に「aws.profile を使い、認証の command は引き継がない」
+  と添える (`LAUNCH.md`)。
 - **escape**: path・nonce・model・effort は生成時に shell literal 化 (値全体を `'` で囲み、内側の `'` を `'\''` に
   置換) して script 先頭の変数に 1 回だけ埋め込み、以降は `"$repo"` / `"$run"` で参照する。値を
   inline の引用へ展開しない。herdr の `pane run` は pane shell と呼び出し元 shell の 2 段で literal

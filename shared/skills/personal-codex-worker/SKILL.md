@@ -128,7 +128,9 @@ orchestrator が行います。
   プロバイダの `[model_providers.<id>.aws]` の `profile` / `region` だけを `config.toml` と worker 用 profile から読み、
   `launch_argv` に `-c` で入れる (出力の `provider` / `provider_sources`)。認証と接続先なので、`--model` / `--effort`
   の明示があっても読む。選ばれたプロバイダにそれ以外の設定 (`base_url`・`env_key`・`http_headers` など) があれば
-  exit 2。
+  exit 2。command で資格情報を取る `aws.credential_export` / `aws.auth_refresh` は、重ねた後の `aws.profile` があれば
+  引き継がずに無視し、出力の `provider_ignored` に名前だけを出す (#548。無ければ exit 2)。orchestrator は報告に
+  「aws.profile を使い、認証の command は引き継がない」と添える。
 - preflight が無い・実行できない (配備欠損) ときも `Blocked at: preflight`。generic な `codex exec`
   に fallback しない。
 

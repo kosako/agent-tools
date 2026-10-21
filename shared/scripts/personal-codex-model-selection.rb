@@ -17,7 +17,8 @@
 #   含めない (Codex の既定に委ねる)。config に選ばれたプロバイダ (model_provider) があれば、さらに
 #   "provider": {`-c` の key: value} と "provider_sources": {key: 出所} を足す (#543。`--ignore-user-config` で外れる
 #   プロバイダの設定のうち、引き継ぐ key だけ。読み方は preflight の layered_provider_selection)。caller は provider
-#   の key をすべて `-c key="value"` で渡す。
+#   の key をすべて `-c key="value"` で渡す。command で資格情報を取る table (aws.credential_export /
+#   aws.auth_refresh) を aws.profile があるので無視したときは、"provider_ignored": [名前] も足す (#548。値は出さない)。
 # - model: model の値を 1 行 (無ければ空行)。provider があれば引き継げないので exit 2。
 # effort をどう使うかは caller が決める (review は選択のまま、sweep はプリセット、consult は独自の値)。
 #
@@ -66,9 +67,10 @@ module CodexModelSelection
     raise ArgumentError, "#{PREFLIGHT_NAME} を load できません (同じ directory に配備されているか確かめてください)"
   end
 
-  # provider は [{key => value}, {key => 出所}] (選ばれたプロバイダを引き継ぐ `-c`。無ければ空。#543)。
+  # provider は [{key => value}, {key => 出所}, 無視した table の名前] (選ばれたプロバイダを引き継ぐ `-c`。無ければ
+  # 空。#543 / #548)。
   def render(opts, selection, sources, provider)
-    overrides, provider_sources = provider
+    overrides, provider_sources, ignored = provider
     if opts[:format] == "model"
       # model だけを渡す caller はプロバイダを引き継げないので、黙って OpenAI の既定に倒さず止める。
       raise ArgumentError, "provider の設定があるので、--format json で provider も読んでください" unless overrides.empty?
@@ -82,6 +84,9 @@ module CodexModelSelection
       out["provider"] = overrides
       out["provider_sources"] = provider_sources.transform_values { |s| labels.fetch(s) }
     end
+    # 引き継がずに無視した table の名前 (値は出さない)。caller は「aws.profile を使い、認証の command は引き継がない」と
+    # 結果に添える (#548)。
+    out["provider_ignored"] = ignored unless ignored.nil? || ignored.empty?
     JSON.generate(out)
   end
 

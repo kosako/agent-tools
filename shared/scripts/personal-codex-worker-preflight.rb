@@ -130,6 +130,10 @@ module CodexWorkerPreflight
   # http_headers (秘密を書きうる) などは読まず、選ばれたプロバイダにあれば起動しない (fail-closed)。
   PROVIDER_KEY = "model_provider"
   PROVIDER_AWS_KEYS = %w[profile region].freeze
+  # 選ばれたプロバイダの aws の下の、command で資格情報を取る table (#548)。引き継がず、重ねた後の aws.profile が
+  # あれば無視して通す (aws.profile をこの起動の認証の正本にする。command の args から profile を推測しない)。
+  # aws.profile が無ければ exit 2。
+  IGNORABLE_AWS_TABLES = %w[credential_export auth_refresh].freeze
   # id は `-c model_providers.<id>.aws.<key>` の dotted path に入るので、TOML の bare key の文字だけ。
   PROVIDER_ID_RE = /\A[A-Za-z0-9_-]+\z/
   PROVIDER_VALUE_RE = /\A[A-Za-z0-9._@+-]+\z/
@@ -345,7 +349,7 @@ module CodexWorkerPreflight
   # TOML の text を文 (table header と key = value) に分ける。複数行の文字列と、行を跨ぐ配列・inline table の
   # 中身は文として扱わない (中の `[...]` や `key = ...` を header や key と誤認しない)。解釈できない行は
   # ArgumentError (fail-closed)。戻り値は [:header, path, array of tables か] と [:keyval, path, 1 行で閉じた値の
-  # text (行を跨ぐ値は nil)] の配列。
+  # text (行を跨ぐ値は nil), 値の最初の文字 (値の形。`{` なら inline table)] の配列。
   def toml_statements(text, label)
     lines = text.to_s.each_line.map { |l| l.chomp.sub(/\r\z/, "") }
     stmts = []
@@ -364,7 +368,7 @@ module CodexWorkerPreflight
 
       first = rest[1..-1].strip
       used = toml_value_lines(lines, i, first, label)
-      stmts << [:keyval, path, used.zero? ? first : nil]
+      stmts << [:keyval, path, used.zero? ? first : nil, first[0]]
       i += used
     end
     stmts
@@ -498,18 +502,14 @@ module CodexWorkerPreflight
   # 振る舞いを変えない)。key の名前を生の文字列なしで綴れるのは quoted key の unicode escape だけなので、escape が
   # あれば読む。
   def read_provider_settings(text, label)
-    found = { provider: nil, aws: {}, unsupported: [], all_unsupported: false }
+    found = { provider: nil, aws: {}, unsupported: [], all_unsupported: false, ignorable: {} }
     return found unless text.to_s.include?(PROVIDER_KEY) || text.to_s.match?(/\\[uU]/)
 
     table = []
-    toml_statements(text, label).each do |kind, path, extra|
+    toml_statements(text, label).each do |kind, path, extra, value_start|
       if kind == :header
         table = path
-        # 見出しだけでも、array of tables と許可した形 ([model_providers]・[model_providers.<id>]・
-        # [model_providers.<id>.aws]) の外の table は記録する (中身の無い [….http_headers] を書き方で通さない)。
-        if path.first == "model_providers" && (extra || !allowed_provider_header?(path))
-          mark_provider_unsupported(found, path)
-        end
+        record_provider_header(found, path, extra) if path.first == "model_providers"
         next
       end
       full = table + path
@@ -520,11 +520,36 @@ module CodexWorkerPreflight
         unless found[:provider]&.match?(PROVIDER_ID_RE)
           raise ArgumentError, "#{label} の model_provider は、bare key の文字だけの basic string 1 行の形だけ対応しています"
         end
+      elsif ignorable_provider_path?(full)
+        # 表の直下への代入 (`credential_export = …`) は inline table だけを表として認める (文字列や配列は表ではない)。
+        # 表の中の key (command・args など) の値は読まない。
+        full.size == 4 && value_start != "{" ? mark_provider_unsupported(found, full) : mark_provider_ignorable(found, full)
       elsif full.first == "model_providers"
         record_provider_key(found, full, provider_basic_value(extra))
       end
     end
     found
+  end
+
+  # 見出しだけでも記録する: array of tables は (無視してよい table の下でも) 引き継げない。無視してよい table とその
+  # 下は無視してよい。許可した形 ([model_providers]・[model_providers.<id>]・[model_providers.<id>.aws]) の外の
+  # table は引き継げない (中身の無い [….http_headers] を書き方で通さない)。
+  def record_provider_header(found, path, array_of_tables)
+    if array_of_tables then mark_provider_unsupported(found, path)
+    elsif ignorable_provider_path?(path) then mark_provider_ignorable(found, path)
+    elsif !allowed_provider_header?(path) then mark_provider_unsupported(found, path)
+    end
+  end
+
+  # [model_providers.<id>.aws.credential_export] / [….auth_refresh] とその下 (escape を戻した path の完全一致)。
+  def ignorable_provider_path?(path)
+    path.size >= 4 && path[0] == "model_providers" && path[2] == "aws" && IGNORABLE_AWS_TABLES.include?(path[3])
+  end
+
+  # id ごとに、無視した table の名前だけを記録する (値と子の key は持たない)。
+  def mark_provider_ignorable(found, path)
+    names = (found[:ignorable][path[1]] ||= [])
+    names << path[3] unless names.include?(path[3])
   end
 
   def provider_basic_value(text)
@@ -553,7 +578,8 @@ module CodexWorkerPreflight
 
   # config.toml を base に `<profile>.config.toml` を重ね (model と同じ。key ごとに後が勝つ)、選ばれたプロバイダを
   # 引き継ぐ `-c` の key と値を返す。戻り値は [{key => value} (model_provider、aws.profile、aws.region の順),
-  # {key => 出所 ("config" / "profile")}]。選ばれたプロバイダが無ければ空 (今と同じ起動)。
+  # {key => 出所 ("config" / "profile")}, 無視した table の名前 (例: "aws.credential_export"。#548)]。選ばれた
+  # プロバイダが無ければ空 (今と同じ起動)。無視した名前は `-c` に入れない (provider の Hash に混ぜない)。
   def layered_provider_selection(home, profile)
     reads = [["config.toml", "user config", "config"],
              ["#{profile}.config.toml", "#{profile}.config.toml", "profile"]].map do |name, label, source|
@@ -561,13 +587,14 @@ module CodexWorkerPreflight
       [text.nil? ? read_provider_settings("", label) : read_provider_settings(text, label), label, source]
     end
     chosen = reads.select { |found, _, _| found[:provider] }.last
-    return [{}, {}] unless chosen
+    return [{}, {}, []] unless chosen
 
     id = chosen[0][:provider]
     reads.each do |found, label, _|
       next unless found[:all_unsupported] || found[:unsupported].include?(id)
 
-      raise ArgumentError, "#{label} の選ばれた provider に、引き継げない設定があります (引き継ぐのは aws の profile と region だけ)"
+      raise ArgumentError, "#{label} の選ばれた provider に、引き継げない設定があります (引き継ぐのは aws の profile と " \
+                           "region だけ。aws.credential_export と aws.auth_refresh は aws.profile があれば無視する)"
     end
     overrides = { PROVIDER_KEY => id }
     sources = { PROVIDER_KEY => chosen[2] }
@@ -580,7 +607,13 @@ module CodexWorkerPreflight
         sources["model_providers.#{id}.aws.#{k}"] = source
       end
     end
-    [overrides, sources]
+    ignored = IGNORABLE_AWS_TABLES.select { |n| reads.any? { |found, _, _| found[:ignorable].fetch(id, []).include?(n) } }
+    if !ignored.empty? && !overrides.key?("model_providers.#{id}.aws.profile")
+      raise ArgumentError, "選ばれた provider は認証の command (aws.credential_export / aws.auth_refresh) を使っていて、" \
+                           "代わりに使う aws.profile がありません (command は引き継がないので、agent-tools の profile file か " \
+                           "config.toml に aws.profile を書いてください)"
+    end
+    [overrides, sources, ignored.map { |n| "aws.#{n}" }]
   end
 
   def herdr_state
@@ -835,7 +868,8 @@ module CodexWorkerPreflight
 
     selection, sources = model_selection(opts)
     # provider は認証と接続先なので、--model / --effort の明示があっても config から読む (#543)。
-    provider, provider_sources = layered_provider_selection(codex_home(opts[:codex_home]), WORKER_PROFILE)
+    provider, provider_sources, provider_ignored =
+      layered_provider_selection(codex_home(opts[:codex_home]), WORKER_PROFILE)
 
     {
       status: "ok",
@@ -847,6 +881,7 @@ module CodexWorkerPreflight
       model_reasoning_effort_source: sources["model_reasoning_effort"],
       provider: provider,
       provider_sources: provider_sources,
+      provider_ignored: provider_ignored,
       herdr: herdr_state,
       clone_root: clone_root,
       clone_git_dir: clone_git_dir,
@@ -863,6 +898,9 @@ module CodexWorkerPreflight
     puts "model_reasoning_effort: #{r[:model_reasoning_effort] ? "#{r[:model_reasoning_effort]} (#{source_label(r[:model_reasoning_effort_source])})" : '(codex default)'}"
     provider = r[:provider].map { |k, v| "#{k}=#{v} (#{source_label(r[:provider_sources][k])})" }
     puts "provider: #{provider.empty? ? '(codex default)' : provider.join(', ')}"
+    unless r[:provider_ignored].empty?
+      puts "provider ignored: #{r[:provider_ignored].join(', ')} (aws.profile を使い、認証の command は引き継がない)"
+    end
     puts "herdr: #{r[:herdr]}"
     puts "clone root: #{r[:clone_root]}"
     puts "clone git dir: #{r[:clone_git_dir]}"

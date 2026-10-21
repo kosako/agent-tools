@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:c7415811e62a6974dc2aa492821ee3b9fafdd69f3159b55e8d2335278de84317
+  approved_build_id: sha256:a7d567d49febefa999a49351fd879957e1ced1dfad6d21d605d8dd0efbc5d315
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-codex-worker-preflight.rb
@@ -26,5 +26,6 @@ summary: >-
   --ignore-rules + --disable apps 等、model / effort と、選ばれたプロバイダの model_provider と aws の
   profile / region は -c で再指定。#543) を出す (exit 0)。capability
   不足と非対称は exit 1 (BLOCKED)、user config の top-level を安全に解釈できなければ exit 2
-  (fail-closed。--model / --effort の明示で回避)、選ばれたプロバイダに引き継げない設定があっても exit 2。
+  (fail-closed。--model / --effort の明示で回避)、選ばれたプロバイダに引き継げない設定があっても exit 2 (command で資格情報を取る
+  aws.credential_export / aws.auth_refresh は aws.profile があれば引き継がずに無視する。#548)。
   規範の正本は personal-codex-worker skill。

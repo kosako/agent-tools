@@ -170,6 +170,8 @@ doctor が既にある log を読んで判定する。以下は **公開契約**
   値 (それも無ければ Codex の既定) なので、置かない machine (例: 会社機) があってよい。例外は provider で (#543)、
   `config.toml` と profile file の `model_provider` と、そのプロバイダの `[model_providers.<id>.aws]` の `profile` /
   `region` も読んで引き継ぐ (`--ignore-user-config` で外れると、カスタムプロバイダの Codex は 401 になるため)。
+  `config.toml` が command の table (`aws.credential_export` / `aws.auth_refresh`) で認証する machine では、profile
+  file に `aws.profile` を書けば、command を引き継がずに起動できる (#548。`codex-review-launch.md`)。
 - **review 用 profile の `model` は review の外にも効く**: `agent-tools-review.config.toml` の `model` は、
   `personal-codex-review` のほか、`personal-maintenance-sweep` で Codex が担う監査役・検証役と、grill の事前相談
   (`personal-grill-me` の CONSULT) にも使われる (読み方は同じ `personal-codex-model-selection --profile review`)。

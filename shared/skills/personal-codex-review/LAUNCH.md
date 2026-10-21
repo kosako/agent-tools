@@ -70,11 +70,15 @@ selector="$HOME/.claude/agent-tools/scripts/personal-codex-model-selection"
 `config.toml` (か profile) に選ばれたプロバイダ (`model_provider`) があれば、さらに `"provider": {key: value}` と
 `"provider_sources": {key: 出所}` が付きます (#543)。`provider` は `--ignore-user-config` で外れるプロバイダの設定の
 うち引き継ぐもの (`model_provider` と、そのプロバイダの `[model_providers.<id>.aws]` の `profile` / `region`) です。
+command で資格情報を取る `aws.credential_export` / `aws.auth_refresh` を、`aws.profile` があるので引き継がずに
+無視したときは、`"provider_ignored": [名前]` も付きます (#548。値は出ない)。
 
 - **exit 0 の JSON だけを使います**。`selection` にある key だけを run script に `-c` で書き、無い key は行ごと
   除きます (Codex の既定に任せる)。`provider` があれば、その key をすべて `-c` で書きます (上の run script)。
+  `provider_ignored` は `-c` に書きません。
   `sources` (`user config` / `review profile`。無い key は `codex default`) を返却の `Model selection` に写します
-  (値は写さない)。
+  (値は写さない)。`provider_ignored` があれば、同じ行に「aws.profile を使い、認証の command (<名前>) は引き継がない」
+  と添えます (SSO の期限切れで落ちたときに、原因を追えるように。`docs/codex-review-launch.md`)。
 - exit 0 以外 (top-level に解釈できない行、値が形に合わない、選ばれたプロバイダに引き継げない設定 (`base_url`・
   `env_key`・`http_headers` など) がある、script か、script が load する
   `personal-codex-worker-preflight` が配備されていない、file を読めない、file は在るが regular file でない、

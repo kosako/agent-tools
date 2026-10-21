@@ -28,7 +28,10 @@ review (`personal-codex-review`) や worker (`personal-codex-worker`) の起動�
   認証なしで接続して 401 になります。配備済みの `personal-codex-model-selection --profile review --format json` の
   出力に `provider` があれば、その key をすべて `-c` で渡します (読むのは `model_provider` と、そのプロバイダの
   `[model_providers.<id>.aws]` の `profile` / `region` だけ)。script が exit 0 以外 (選ばれたプロバイダに引き継げ
-  ない設定 (`base_url`・`env_key`・`http_headers` など) がある、など) なら起動しません。
+  ない設定 (`base_url`・`env_key`・`http_headers` など) がある、など) なら起動しません。command で資格情報を取る
+  `aws.credential_export` / `aws.auth_refresh` は、`aws.profile` があれば引き継がずに無視され、出力の
+  `provider_ignored` に名前が出ます (#548)。`-c` には書かず、報告に「aws.profile を使い、認証の command は
+  引き継がない」と添えます。
 - **最終出力は schema つきの JSON**: `--output-schema <findings.schema.json>` と
   `-o <result.json>`。
 - **heredoc を使わない**: Codex が read-only の sandbox で実行する command は、heredoc の一時 file を

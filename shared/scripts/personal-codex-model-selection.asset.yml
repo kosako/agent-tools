@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:4055bdb104f041cdbf9734c70a5f8ccf18712bd2960d26b5f870e36a5f9ee155
+  approved_build_id: sha256:8db3f283607d053ceb096ea466e3c52445fa95e2e40ce5fe99115d963becd123
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-codex-model-selection.rb
@@ -27,5 +27,7 @@ summary: >-
   (model の値 1 行) で出す (exit 0)。重ね方と TOML の読み方は同じ directory の personal-codex-worker-preflight を
   load して共有する。config に選ばれたプロバイダがあれば、--ignore-user-config で外れる provider の設定のうち
   model_provider と [model_providers.<id>.aws] の profile / region を json の provider に出す (#543。それ以外の
-  provider の設定があれば exit 2、--format model は provider があれば exit 2)。解釈できない行・不正な値・在るのに
+  provider の設定があれば exit 2。ただし command で資格情報を取る aws.credential_export / aws.auth_refresh は
+  aws.profile があれば引き継がずに無視し、名前だけを provider_ignored に出す (#548)。--format model は provider が
+  あれば exit 2)。解釈できない行・不正な値・在るのに
   regular file でない / 確かめられない file は理由つき exit 2。
