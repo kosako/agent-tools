@@ -1,0 +1,369 @@
+#!/bin/sh
+# personal-ci-check.rb の self-test (#541)。
+# 規則の判定 (check_workflow) は require して直接、CLI は tmp の git repo に commit した workflow で確かめる。CLI の
+# 出力は personal-repo-audit の findings.schema.json に当て (型・required・additionalProperties・enum)、HEAD の
+# commit だけを読む (作業ツリーの未 commit の変更を読まない) ことも確かめる。git の global / system の設定と hook は
+# tmp の設定に差し替える。network access なし。
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib/test-helpers.sh
+. "$script_dir/lib/test-helpers.sh"
+src="$repo_root/shared/scripts/personal-ci-check.rb"
+schema="$repo_root/shared/skills/personal-repo-audit/findings.schema.json"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+[ -f "$src" ] || fail "missing $src"
+[ -f "$schema" ] || fail "missing $schema"
+
+GIT_CONFIG_SYSTEM=/dev/null
+export GIT_CONFIG_SYSTEM
+GIT_CONFIG_GLOBAL="$tmp/gitconfig"
+export GIT_CONFIG_GLOBAL
+git config --file "$GIT_CONFIG_GLOBAL" user.name test
+git config --file "$GIT_CONFIG_GLOBAL" user.email test@example.com
+git config --file "$GIT_CONFIG_GLOBAL" init.defaultBranch main
+git config --file "$GIT_CONFIG_GLOBAL" core.hooksPath /dev/null
+git config --file "$GIT_CONFIG_GLOBAL" core.excludesFile /dev/null
+
+ruby -r"$script_dir/lib/check_helper" - "$src" "$schema" "$tmp" <<'RUBY'
+require "fileutils"
+require "json"
+require "open3"
+require "rbconfig"
+src, schema_path, tmp = ARGV
+require src
+
+CC = CiCheck
+SCHEMA = JSON.parse(File.read(schema_path))
+
+# ---- 規則の判定 (check_workflow) ----
+
+def check_wf(content, path = ".github/workflows/ci.yml")
+  CC.check_workflow(path, content)
+end
+
+def file_error(content)
+  check_wf(content)
+  nil
+rescue CC::FileError => e
+  e.message
+end
+
+def fps(result)
+  result[:findings].map { |f| f["fingerprint"] }
+end
+
+# timeout の無い job は所見。場所は jobs の key の行、fingerprint は path@job#topic。
+r = check_wf(<<~YAML)
+  name: ci
+  on: push
+  jobs:
+    build:
+      runs-on: ubuntu-latest
+      timeout-minutes: 10
+      steps: [{ run: "true" }]
+    test:
+      runs-on: ubuntu-latest
+      steps: [{ run: "true" }]
+YAML
+check("timeout-missing: only the job without timeout-minutes", fps(r) == [".github/workflows/ci.yml@test#timeout-missing"])
+f = r[:findings].first
+check("timeout-missing: location is the job key line", f["locations"] == [".github/workflows/ci.yml:8"])
+check("timeout-missing: kind/severity/confidence/dimension",
+      [f["kind"], f["severity"], f["confidence"], f["dimension"]] == ["debt", "medium", "確証", "ci"])
+check("timeout-missing: no decision needed", f["needs_decision"] == false && f["decision_reason"] == "")
+check("push-only workflow: no concurrency proposal", r[:not_problems].empty?)
+
+# 値が空 (null) の timeout-minutes は無いとみなす。式の値は在るとみなす。
+r = check_wf(<<~YAML)
+  on: push
+  jobs:
+    a:
+      runs-on: ubuntu-latest
+      timeout-minutes:
+    b:
+      runs-on: ubuntu-latest
+      timeout-minutes: ${{ inputs.minutes }}
+YAML
+check("null timeout-minutes is missing, expression is present", fps(r) == [".github/workflows/ci.yml@a#timeout-missing"])
+
+# reusable workflow を呼ぶ job は timeout を書けないので所見にせず、not_problems に出す。
+r = check_wf(<<~YAML)
+  on: push
+  jobs:
+    call:
+      uses: ./.github/workflows/reusable.yml
+    remote:
+      uses: example/other/.github/workflows/x.yml@v1
+YAML
+check("reusable caller jobs: no finding", r[:findings].empty?)
+check("reusable caller jobs: not_problems with the job line",
+      r[:not_problems].map { |n| n["location"] } == [".github/workflows/ci.yml:3", ".github/workflows/ci.yml:5"])
+check("reusable caller jobs: the uses value is not echoed",
+      !JSON.generate(r).include?("example/other"))
+
+# pull_request の workflow に concurrency が無ければ proposal (判断が要る)。
+pr_jobs = <<~YAML
+  jobs:
+    a:
+      runs-on: ubuntu-latest
+      timeout-minutes: 5
+    b:
+      runs-on: ubuntu-latest
+      timeout-minutes: 5
+YAML
+r = check_wf("on: [push, pull_request]\n" + pr_jobs)
+check("pull_request without concurrency: proposal", fps(r) == [".github/workflows/ci.yml#concurrency-missing"])
+f = r[:findings].first
+check("concurrency-missing: kind/severity", [f["kind"], f["severity"]] == ["proposal", "low"])
+check("concurrency-missing: needs a decision", f["needs_decision"] == true && !f["decision_reason"].empty?)
+check("concurrency-missing: location is the file", f["locations"] == [".github/workflows/ci.yml"])
+
+# on の書き方 (文字列・配列・mapping) のどれでも pull_request を読む。
+check("on as a string", fps(check_wf("on: pull_request\n" + pr_jobs)) == [".github/workflows/ci.yml#concurrency-missing"])
+check("on as a mapping", fps(check_wf("on:\n  pull_request:\n    branches: [main]\n  push:\n" + pr_jobs)) ==
+      [".github/workflows/ci.yml#concurrency-missing"])
+check("on as a quoted key", fps(check_wf("\"on\": pull_request\n" + pr_jobs)) == [".github/workflows/ci.yml#concurrency-missing"])
+check("pull_request_target alone is not pull_request", check_wf("on: pull_request_target\n" + pr_jobs)[:findings].empty?)
+
+# concurrency は top level か、すべての job にあれば足りる。一部の job だけなら proposal。
+check("top-level concurrency", check_wf("on: pull_request\nconcurrency: ci-${{ github.ref }}\n" + pr_jobs)[:findings].empty?)
+all_jobs = <<~YAML
+  on: pull_request
+  jobs:
+    a:
+      runs-on: ubuntu-latest
+      timeout-minutes: 5
+      concurrency: a-${{ github.ref }}
+    b:
+      runs-on: ubuntu-latest
+      timeout-minutes: 5
+      concurrency:
+        group: b-${{ github.ref }}
+        cancel-in-progress: true
+YAML
+check("concurrency on every job", check_wf(all_jobs)[:findings].empty?)
+some_jobs = all_jobs.sub("    concurrency: a-${{ github.ref }}\n", "")
+check("fixture: the job-level concurrency was removed", some_jobs != all_jobs)
+check("concurrency on only some jobs: proposal", fps(check_wf(some_jobs)) == [".github/workflows/ci.yml#concurrency-missing"])
+
+# anchor と alias を受け付ける (GitHub が workflow で受け付ける)。日付の literal も読める。
+r = check_wf(<<~YAML)
+  on: push
+  env:
+    since: 2026-01-01
+  jobs:
+    a:
+      runs-on: ubuntu-latest
+      timeout-minutes: &t 5
+    b:
+      runs-on: ubuntu-latest
+      timeout-minutes: *t
+YAML
+check("aliases and date literals are accepted", r[:findings].empty?)
+
+# 確かめられない形は FileError (ずれ無しに倒さない)。
+check("invalid YAML", file_error("on: [push\njobs: {}\n") == "YAML として読めない (Psych::SyntaxError)")
+check("disallowed tag", file_error("on: push\njobs: !ruby/object:Object {}\n").to_s.start_with?("YAML として読めない"))
+check("empty file", file_error("") == "top level が mapping でない")
+check("top level is a list", file_error("- a\n") == "top level が mapping でない")
+check("jobs missing", file_error("on: push\n") == "jobs が mapping でない")
+check("jobs empty", file_error("on: push\njobs: {}\n") == "jobs が mapping でない")
+check("job id outside the rule", file_error("on: push\njobs:\n  \"bad id\":\n    runs-on: x\n") == "job の名前が規則の外")
+check("job id not a string", file_error("on: push\njobs:\n  1:\n    runs-on: x\n") == "job の名前が規則の外")
+check("job not a mapping", file_error("on: push\njobs:\n  a: x\n") == "job `a` が mapping でない")
+check("on missing", file_error("jobs:\n  a:\n    runs-on: x\n    timeout-minutes: 5\n") == "on が無い")
+# plain の on は true に読まれ、引用した "on" は文字列のまま (どちらも GitHub には on)。
+check("on twice (plain and quoted)", file_error("on: push\n\"on\": pull_request\njobs:\n  a:\n    runs-on: x\n") == "on が 2 つある")
+check("on event not a string", file_error("on: [1]\njobs:\n  a:\n    runs-on: x\n") == "on の event が文字列でない")
+
+# ---- CLI ----
+
+RUBY_BIN = RbConfig.ruby
+SRC = src
+# repo を選ぶ git の環境変数は、この test の外から継承しても CLI の結果が変わらないように外す。
+CLEAN_ENV = CC::GIT_REPO_ENV.map { |k| [k, nil] }.to_h
+
+def git!(dir, *args)
+  out, err, status = Open3.capture3("git", *args, chdir: dir)
+  raise "git #{args.join(' ')} failed: #{err}" unless status.success?
+
+  out
+end
+
+def make_repo(dir, files)
+  FileUtils.mkdir_p(dir)
+  git!(dir, "init", "-q")
+  files.each do |rel, body|
+    path = File.join(dir, rel)
+    FileUtils.mkdir_p(File.dirname(path))
+    if body.is_a?(Hash) && body[:symlink]
+      File.symlink(body[:symlink], path)
+    else
+      File.write(path, body)
+    end
+  end
+  git!(dir, "add", "-A")
+  git!(dir, "commit", "-q", "-m", "init")
+  dir
+end
+
+def run_cli(dir, *args, env: {})
+  Open3.capture3(CLEAN_ENV.merge(env), RUBY_BIN, SRC, *args, chdir: dir)
+end
+
+# schema の instance の検証 (型・required・additionalProperties: false・enum)。違反を配列で返す。
+def schema_errors(node, value, path = "$", errors = [])
+  case node["type"]
+  when "object"
+    return errors << "#{path}: not an object" unless value.is_a?(Hash)
+
+    (node["required"] || []).each { |k| errors << "#{path}.#{k}: missing" unless value.key?(k) }
+    (value.keys - node["properties"].keys).each { |k| errors << "#{path}.#{k}: extra" } if node["additionalProperties"] == false
+    node["properties"].each { |k, sub| schema_errors(sub, value[k], "#{path}.#{k}", errors) if value.key?(k) }
+  when "array"
+    return errors << "#{path}: not an array" unless value.is_a?(Array)
+
+    value.each_with_index { |v, i| schema_errors(node["items"], v, "#{path}[#{i}]", errors) }
+  when "string"
+    errors << "#{path}: not a string" unless value.is_a?(String)
+    errors << "#{path}: not in enum" if node["enum"] && !node["enum"].include?(value)
+  when "boolean"
+    errors << "#{path}: not a boolean" unless [true, false].include?(value)
+  end
+  errors
+end
+
+ci_yml = <<~YAML
+  name: test
+  on:
+    push:
+      branches: [main]
+    pull_request:
+  jobs:
+    self-tests:
+      runs-on: macos-latest
+      steps: [{ run: "true" }]
+YAML
+reuse_yaml = <<~YAML
+  on: workflow_call
+  jobs:
+    smoke:
+      runs-on: ubuntu-latest
+      timeout-minutes: 5
+YAML
+
+# 所見のある repo: exit 1、schema に適合、id は深刻度順、.yaml も読み、workflow でない file と subdirectory は見ない。
+repo = make_repo(File.join(tmp, "repo"), {
+  ".github/workflows/test.yml" => ci_yml,
+  ".github/workflows/reuse.yaml" => reuse_yaml,
+  ".github/workflows/README.md" => "not a workflow\n",
+  ".github/workflows/sub/nested.yml" => "on: push\njobs:\n  x:\n    runs-on: x\n",
+  "README.md" => "x\n",
+})
+out, err, st = run_cli(repo)
+check("cli findings: exit 1", st.exitstatus == 1)
+check("cli findings: no stderr", err.empty?)
+report = JSON.parse(out)
+check("cli findings: matches findings.schema.json (#{schema_errors(SCHEMA, report).join(', ')})", schema_errors(SCHEMA, report).empty?)
+check("cli findings: ids in severity order",
+      report["findings"].map { |x| [x["id"], x["fingerprint"]] } ==
+        [["F01", ".github/workflows/test.yml@self-tests#timeout-missing"], ["F02", ".github/workflows/test.yml#concurrency-missing"]])
+check("cli findings: decision for the proposal", report["decisions"] == [{ "finding_id" => "F02", "question" => report["findings"][1]["decision_reason"] }])
+check("cli findings: seen lists the workflow files only",
+      report["scope"]["seen"] == [".github/workflows/reuse.yaml", ".github/workflows/test.yml"])
+check("cli findings: nothing unverifiable", report["scope"]["not_seen"].empty?)
+check("cli findings: summary counts", report["summary"].include?("2 本") && report["summary"].include?("medium 1 / low 1 (判断が要る 1)"))
+
+# id は file の順ではなく深刻度順に振る (先の file の low が、後の file の medium より後になる)。
+order = make_repo(File.join(tmp, "order"), {
+  ".github/workflows/a.yml" => "on: pull_request\njobs:\n  x:\n    runs-on: x\n    timeout-minutes: 5\n",
+  ".github/workflows/b.yml" => "on: push\njobs:\n  y:\n    runs-on: x\n",
+})
+out, _err, st = run_cli(order)
+check("cli ids: severity first, then fingerprint",
+      st.exitstatus == 1 && JSON.parse(out)["findings"].map { |x| [x["id"], x["fingerprint"]] } ==
+        [["F01", ".github/workflows/b.yml@y#timeout-missing"], ["F02", ".github/workflows/a.yml#concurrency-missing"]])
+
+# 作業ツリーの未 commit の変更は読まない (HEAD の commit だけ)。
+File.write(File.join(repo, ".github/workflows/test.yml"), ci_yml.sub("runs-on: macos-latest\n", "runs-on: macos-latest\n    timeout-minutes: 15\n"))
+out2, _err2, st2 = run_cli(repo)
+check("cli reads HEAD only: same result with a dirty work tree", st2.exitstatus == 1 && JSON.parse(out2) == report)
+git!(repo, "checkout", "--", ".")
+
+# subdirectory から起動しても、repo の root の workflow を読む。
+out3, _err3, st3 = run_cli(File.join(repo, ".github"))
+check("cli from a subdirectory: same result", st3.exitstatus == 1 && JSON.parse(out3) == report)
+
+# 所見の無い repo は exit 0。workflow の file が無い repo も exit 0。
+clean = make_repo(File.join(tmp, "clean"), { ".github/workflows/reuse.yaml" => reuse_yaml })
+out, err, st = run_cli(clean)
+check("cli clean: exit 0", st.exitstatus == 0 && err.empty? && JSON.parse(out)["findings"].empty?)
+none = make_repo(File.join(tmp, "none"), { "README.md" => "x\n" })
+out, _err, st = run_cli(none)
+report = JSON.parse(out)
+check("cli no workflows: exit 0", st.exitstatus == 0 && report["findings"].empty? && report["scope"]["seen"].empty?)
+check("cli no workflows: summary says so", report["summary"].include?("workflow の file") && report["summary"].include?("無い"))
+check("cli no workflows: matches the schema", schema_errors(SCHEMA, report).empty?)
+
+# 確かめられない file があれば exit 2。残りの file は確かめて出し、名前が規則の外の file は名前を出さない。
+mixed = make_repo(File.join(tmp, "mixed"), {
+  ".github/workflows/test.yml" => ci_yml,
+  ".github/workflows/broken.yml" => "on: [push\n",
+  ".github/workflows/link.yml" => { symlink: "test.yml" },
+  ".github/workflows/big.yml" => "on: push\n" + ("# x\n" * 300_000),
+  ".github/workflows/sp ace.yml" => "on: push\n",
+  ".github/workflows/日本語.yml" => "on: push\n",
+})
+out, err, st = run_cli(mixed)
+check("cli unverifiable: exit 2", st.exitstatus == 2)
+check("cli unverifiable: no stderr", err.empty?)
+report = JSON.parse(out)
+check("cli unverifiable: matches the schema", schema_errors(SCHEMA, report).empty?)
+check("cli unverifiable: other files are still checked", report["findings"].map { |x| x["fingerprint"] }.include?(".github/workflows/test.yml@self-tests#timeout-missing"))
+ns = report["scope"]["not_seen"]
+check("cli unverifiable: broken YAML", ns.include?(".github/workflows/broken.yml (YAML として読めない (Psych::SyntaxError))"))
+check("cli unverifiable: symlink", ns.include?(".github/workflows/link.yml (通常の file でない)"))
+check("cli unverifiable: too large", ns.include?(".github/workflows/big.yml (1048576 byte を超える)"))
+check("cli unverifiable: unsafe names are counted without the name",
+      ns.count { |x| x.include?("名前に規則の外の文字を含む") } == 2 && !out.include?("sp ace") && !out.include?("日本語.yml"))
+check("cli unverifiable: summary mentions it", report["summary"].include?("確かめられない file が 5 件"))
+
+# .github や .github/workflows が directory でなければ確かめられない。
+link_dir = make_repo(File.join(tmp, "linkdir"), { "ci" => "x\n", ".github" => { symlink: "ci" } })
+out, _err, st = run_cli(link_dir)
+check("cli .github not a directory: exit 2", st.exitstatus == 2 && JSON.parse(out)["scope"]["not_seen"] == [".github (directory でない)"])
+wf_file = make_repo(File.join(tmp, "wffile"), { ".github/workflows" => "x\n" })
+out, _err, st = run_cli(wf_file)
+check("cli workflows not a directory: exit 2", st.exitstatus == 2 && JSON.parse(out)["scope"]["not_seen"] == [".github/workflows (directory でない)"])
+
+# run 全体の失敗は stdout を空にして stderr に 1 行、exit 2。
+CC::GIT_REPO_ENV.each do |k|
+  out, err, st = run_cli(repo, env: { k => "" })
+  check("cli #{k} inherited (even empty): exit 2 with stderr only", st.exitstatus == 2 && out.empty? && err.include?(k))
+end
+plain = File.join(tmp, "plain")
+FileUtils.mkdir_p(plain)
+out, err, st = run_cli(plain, env: { "GIT_CEILING_DIRECTORIES" => tmp })
+check("cli outside a git repo: exit 2 with stderr only", st.exitstatus == 2 && out.empty? && err.lines.size == 1)
+empty_repo = File.join(tmp, "empty")
+FileUtils.mkdir_p(empty_repo)
+git!(empty_repo, "init", "-q")
+out, err, st = run_cli(empty_repo)
+check("cli without a commit: exit 2 with stderr only", st.exitstatus == 2 && out.empty? && err.lines.size == 1)
+out, err, st = run_cli(repo, "--check")
+check("cli unknown argument: exit 2 with usage", st.exitstatus == 2 && out.empty? && err.include?("usage:"))
+out, _err, st = run_cli(repo, "--help")
+check("cli --help: exit 0", st.exitstatus == 0 && out.start_with?("usage:"))
+
+# C locale でも日本語の出力が壊れない。
+out, err, st = run_cli(repo, env: { "LC_ALL" => "C", "LANG" => "C", "LC_CTYPE" => "C" })
+check("cli under LC_ALL=C: exit 1 with valid JSON (#{err})", st.exitstatus == 1 && JSON.parse(out)["summary"].include?("確かめた"))
+
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
+echo "ok: ci-check-test"
