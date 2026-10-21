@@ -168,7 +168,23 @@ check("aliases and date literals are accepted", r[:findings].empty?)
 # 確かめられない形は FileError (ずれ無しに倒さない)。
 check("invalid YAML", file_error("on: [push\njobs: {}\n") == "YAML として読めない (Psych::SyntaxError)")
 check("disallowed tag", file_error("on: push\njobs: !ruby/object:Object {}\n").to_s.start_with?("YAML として読めない"))
-check("empty file", file_error("") == "top level が mapping でない")
+check("empty file", file_error("") == "YAML の文書が 1 つでない")
+# safe_load は先頭の文書しか読まないので、後ろの文書の構文の誤りも、2 つ目の文書も確かめられないにする。
+ok_doc = "on: push\njobs:\n  a:\n    runs-on: x\n    timeout-minutes: 5\n"
+check("a broken second document", file_error(ok_doc + "---\n[\n") == "YAML として読めない (Psych::SyntaxError)")
+check("two documents", file_error(ok_doc + "---\n" + ok_doc) == "YAML の文書が 1 つでない")
+# 書かれた key と load 後の key が 1 対 1 でない形 (後の値で上書き・解決で衝突・merge key)。
+check("duplicate plain on", file_error("on: pull_request\non: push\n" + pr_jobs) == "key が重なる")
+check("plain on and quoted on", file_error("on: push\n\"on\": pull_request\n" + pr_jobs) == "key が重なる")
+check("on and true collide", file_error("on: push\ntrue: pull_request\n" + pr_jobs) == "key が YAML の解決で重なる")
+# 衝突が mapping の最後にあると、並びがずれても後ろに mapping が無い (件数の比較だけが止める)。
+check("on and true collide at the end", file_error(pr_jobs + "on: push\ntrue: pull_request\n") == "key が YAML の解決で重なる")
+check("duplicate job ids", file_error("on: push\njobs:\n  a:\n    runs-on: x\n  a:\n    runs-on: y\n") == "key が重なる")
+check("duplicate nested key", file_error("on: push\njobs:\n  a:\n    timeout-minutes: 5\n    timeout-minutes:\n") == "key が重なる")
+check("merge key", file_error("base: &b {runs-on: x}\non: push\njobs:\n  a:\n    <<: *b\n    timeout-minutes: 5\n") ==
+      "merge key (<<) は読まない")
+check("alias key", file_error("k: &k name\non: push\njobs:\n  a:\n    *k : x\n    timeout-minutes: 5\n") ==
+      "mapping の key が scalar でない")
 check("top level is a list", file_error("- a\n") == "top level が mapping でない")
 check("jobs missing", file_error("on: push\n") == "jobs が mapping でない")
 check("jobs empty", file_error("on: push\njobs: {}\n") == "jobs が mapping でない")
@@ -176,8 +192,8 @@ check("job id outside the rule", file_error("on: push\njobs:\n  \"bad id\":\n   
 check("job id not a string", file_error("on: push\njobs:\n  1:\n    runs-on: x\n") == "job の名前が規則の外")
 check("job not a mapping", file_error("on: push\njobs:\n  a: x\n") == "job `a` が mapping でない")
 check("on missing", file_error("jobs:\n  a:\n    runs-on: x\n    timeout-minutes: 5\n") == "on が無い")
-# plain の on は true に読まれ、引用した "on" は文字列のまま (どちらも GitHub には on)。
-check("on twice (plain and quoted)", file_error("on: push\n\"on\": pull_request\njobs:\n  a:\n    runs-on: x\n") == "on が 2 つある")
+# 引用した "on" は文字列のまま、plain の yes は true に読まれる (key は 1 対 1 だが、on として読める key が 2 つ)。
+check("on twice (quoted on and yes)", file_error("\"on\": push\nyes: pull_request\njobs:\n  a:\n    runs-on: x\n") == "on が 2 つある")
 check("on event not a string", file_error("on: [1]\njobs:\n  a:\n    runs-on: x\n") == "on の event が文字列でない")
 
 # ---- CLI ----
@@ -332,6 +348,37 @@ check("cli unverifiable: unsafe names are counted without the name",
       ns.count { |x| x.include?("名前に規則の外の文字を含む") } == 2 && !out.include?("sp ace") && !out.include?("日本語.yml"))
 check("cli unverifiable: summary mentions it", report["summary"].include?("確かめられない file が 5 件"))
 
+# 後ろの文書の構文の誤りで落ちず (exit 1 = 所見あり と取り違えない)、確かめられない file として残りを出す。
+multidoc = make_repo(File.join(tmp, "multidoc"), {
+  ".github/workflows/test.yml" => ci_yml,
+  ".github/workflows/two.yml" => "on: push\njobs:\n  a:\n    runs-on: x\n    timeout-minutes: 5\n---\n[\n",
+})
+out, err, st = run_cli(multidoc)
+report = JSON.parse(out) rescue nil
+check("cli broken second document: exit 2 with JSON (#{err})", st.exitstatus == 2 && report.is_a?(Hash))
+check("cli broken second document: listed and others checked",
+      report && report["scope"]["not_seen"] == [".github/workflows/two.yml (YAML として読めない (Psych::SyntaxError))"] &&
+        report["scope"]["seen"] == [".github/workflows/test.yml"])
+
+# 今の directory の repo を読む。path の末尾の空白を削って隣の repo を読まない。
+make_repo(File.join(tmp, "adjacent"), { ".github/workflows/reuse.yaml" => reuse_yaml })
+spaced = make_repo(File.join(tmp, "adjacent "), { ".github/workflows/test.yml" => ci_yml })
+out, _err, st = run_cli(spaced)
+check("cli path with a trailing space: reads that repo",
+      st.exitstatus == 1 && JSON.parse(out)["scope"]["seen"] == [".github/workflows/test.yml"])
+
+# partial clone で取得していない object は取りに行かず (network に触れず、object database に書かない)、exit 2。
+promisor = make_repo(File.join(tmp, "promisor"), { ".github/workflows/test.yml" => ci_yml })
+git!(promisor, "config", "uploadpack.allowFilter", "true")
+partial = File.join(tmp, "partial")
+git!(tmp, "clone", "-q", "--filter=blob:none", "--no-checkout", "file://#{promisor}", partial)
+blob = git!(partial, "--no-lazy-fetch", "ls-tree", "HEAD:.github/workflows").split.at(2)
+missing = ->(oid) { !Open3.capture3("git", "--no-lazy-fetch", "cat-file", "-e", oid, chdir: partial)[2].success? }
+check("fixture: the partial clone lacks the workflow blob", missing.call(blob))
+out, err, st = run_cli(partial)
+check("cli partial clone: exit 2 with stderr only", st.exitstatus == 2 && out.empty? && err.lines.size == 1)
+check("cli partial clone: the blob was not fetched", missing.call(blob))
+
 # .github や .github/workflows が directory でなければ確かめられない。
 link_dir = make_repo(File.join(tmp, "linkdir"), { "ci" => "x\n", ".github" => { symlink: "ci" } })
 out, _err, st = run_cli(link_dir)
@@ -358,6 +405,22 @@ out, err, st = run_cli(repo, "--check")
 check("cli unknown argument: exit 2 with usage", st.exitstatus == 2 && out.empty? && err.include?("usage:"))
 out, _err, st = run_cli(repo, "--help")
 check("cli --help: exit 0", st.exitstatus == 0 && out.start_with?("usage:"))
+
+# 想定外の例外は、Ruby の既定の exit 1 (所見あり と同じ値) でなく exit 2 で、stdout を空にする。
+require "stringio"
+orig_check_repo = CC.method(:check_repo)
+CC.define_singleton_method(:check_repo) { |_dir| raise NoMethodError, "boom" }
+saved_out, saved_err = $stdout, $stderr
+$stdout, $stderr = StringIO.new, StringIO.new
+begin
+  code = CC.main([])
+  captured = [$stdout.string, $stderr.string]
+ensure
+  $stdout, $stderr = saved_out, saved_err
+  CC.define_singleton_method(:check_repo, orig_check_repo)
+end
+check("main unexpected exception: exit 2, stdout empty, class on stderr",
+      code == 2 && captured[0].empty? && captured[1].include?("NoMethodError") && !captured[1].include?("boom"))
 
 # C locale でも日本語の出力が壊れない。
 out, err, st = run_cli(repo, env: { "LC_ALL" => "C", "LANG" => "C", "LC_CTYPE" => "C" })

@@ -3,7 +3,8 @@
 
 # ci-check: GitHub Actions の workflow の file を決まった規則で検査し、所見を personal-repo-audit と同じ形
 # (`findings.schema.json`) の JSON で出す (#541)。AI を使わない。GitHub にも network にも触れず (git で手元の
-# commit を読むだけ)、何も書かない。運用と規則の正本は docs/ci-check.md。
+# commit を読むだけ。partial clone の未取得の object も取りに行かない)、何も書かない。運用と規則の正本は
+# docs/ci-check.md。
 #
 # 対象: 今の directory の git repo の HEAD の commit にある `.github/workflows/` 直下の `*.yml` / `*.yaml` (GitHub が
 # workflow として読む場所)。作業ツリーの未 commit の変更は読まない (sweep が監査する commit と揃える)。
@@ -22,10 +23,11 @@
 # - 0: 所見なし (workflow の file が無いときを含む)。
 # - 1: 所見あり (proposal を含む)。
 # - 2: usage / repo を選ぶ git の環境変数を継承している / 今の directory の repo や HEAD を解決できない / 確かめ
-#   られない file がある (YAML として読めない、workflow の形でない、symlink などの通常の file でないもの、大きすぎる、
-#   名前が規則の外)。確かめられない file があっても、残りの file は確かめて出す (理由は scope.not_seen)。
-# 結果は stdout に JSON。run 全体の失敗 (usage・環境変数・repo や HEAD を解決できない・git の失敗) は stdout に何も
-# 出さず、stderr に 1 行。
+#   られない file がある (YAML として読めない、文書が 1 つでない、key が重なる・merge key を使う、workflow の形で
+#   ない、symlink などの通常の file でないもの、大きすぎる、名前が規則の外)。確かめられない file があっても、残りの
+#   file は確かめて出す (理由は scope.not_seen)。
+# 結果は stdout に JSON。run 全体の失敗 (usage・環境変数・repo や HEAD を解決できない・git の失敗・想定外の例外) は
+# stdout に何も出さず、stderr に 1 行。
 
 require "date"
 require "json"
@@ -103,15 +105,19 @@ module CiCheck
   rescue RunError => e
     $stderr.puts "#{NAME}: #{e.message}"
     EXIT_ERROR
+  rescue StandardError => e
+    # 想定外の例外を Ruby の既定 (exit 1 = 所見あり と同じ値) で終わらせない。
+    $stderr.puts "#{NAME}: 想定外の失敗です (#{e.class})"
+    EXIT_ERROR
   end
 
   # ---- repo ------------------------------------------------------------------------------------
 
-  # 今の directory の repo の HEAD を読み、[report, exit code] を返す。
+  # 今の directory の repo の HEAD を読み、[report, exit code] を返す。git は今の directory で動かす (pathspec を
+  # 使わず object を名前で辿り、ls-tree は --full-tree なので、repo の root の path を経由しない)。
   def check_repo(dir)
-    top = git_line(dir, "rev-parse", "--show-toplevel")
-    commit = git_line(top, "rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}")
-    files, unreadable = workflow_entries(top, commit)
+    commit = git(dir, "rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}").delete_suffix("\n")
+    files, unreadable = workflow_entries(dir, commit)
 
     findings = []
     not_problems = []
@@ -120,7 +126,7 @@ module CiCheck
     files.each do |entry|
       path = "#{WORKFLOW_DIR}/#{entry[:name]}"
       begin
-        content = read_blob(top, entry)
+        content = read_blob(dir, entry)
         result = check_workflow(path, content)
       rescue FileError => e
         not_seen << "#{path} (#{e.message})"
@@ -141,18 +147,18 @@ module CiCheck
 
   # `.github/workflows/` の直下の workflow の file の entry と、確かめられない entry の理由を返す。path の階層は
   # pathspec を使わずに 1 段ずつ名前の完全一致で辿る (環境変数で pathspec の解釈が変わらないように)。
-  def workflow_entries(top, commit)
-    github = tree_entries(top, commit).find { |e| e[:name] == ".github" }
+  def workflow_entries(dir, commit)
+    github = tree_entries(dir, commit).find { |e| e[:name] == ".github" }
     return [[], []] if github.nil?
     return [[], [".github (directory でない)"]] unless github[:type] == "tree"
 
-    workflows = tree_entries(top, github[:oid]).find { |e| e[:name] == "workflows" }
+    workflows = tree_entries(dir, github[:oid]).find { |e| e[:name] == "workflows" }
     return [[], []] if workflows.nil?
     return [[], ["#{WORKFLOW_DIR} (directory でない)"]] unless workflows[:type] == "tree"
 
     files = []
     unreadable = []
-    tree_entries(top, workflows[:oid]).each do |e|
+    tree_entries(dir, workflows[:oid]).each do |e|
       next unless e[:name].match?(WORKFLOW_EXT_RE)
 
       unless e[:name].match?(SAFE_FILE_RE)
@@ -171,8 +177,9 @@ module CiCheck
     [files.sort_by { |e| e[:name] }, unreadable]
   end
 
-  def tree_entries(top, treeish)
-    out = git(top, "ls-tree", "-z", "-l", "--end-of-options", treeish)
+  # `--full-tree`: subdirectory で起動しても、その directory に絞らずに tree の直下を出させる。
+  def tree_entries(dir, treeish)
+    out = git(dir, "ls-tree", "--full-tree", "-z", "-l", "--end-of-options", treeish)
     out.split("\0").map do |raw|
       m = TREE_ENTRY_RE.match(raw)
       raise RunError, "git ls-tree の出力を解釈できません" if m.nil?
@@ -181,23 +188,21 @@ module CiCheck
     end
   end
 
-  def read_blob(top, entry)
-    content = git(top, "cat-file", "blob", entry[:oid]).dup.force_encoding(Encoding::UTF_8)
+  def read_blob(dir, entry)
+    content = git(dir, "cat-file", "blob", entry[:oid]).dup.force_encoding(Encoding::UTF_8)
     raise FileError, "UTF-8 として読めない" unless content.valid_encoding?
 
     content
   end
 
-  def git_line(dir, *args)
-    out = git(dir, *args).strip
-    raise RunError, "git #{args.first} の出力が空です" if out.empty?
-
-    out
-  end
-
+  # `--no-lazy-fetch`: partial clone で object が手元に無くても、promisor の remote から取りに行かない (network に
+  # 触れず、object database に書かない)。無い object は git の失敗 (exit 2) になる。
   def git(dir, *args)
-    out, _err, status = Open3.capture3("git", *args, chdir: dir, binmode: true)
-    raise RunError, "git #{args.first} が失敗しました (今の directory が git repo で、HEAD に commit があるか確かめてください)" unless status.success?
+    out, _err, status = Open3.capture3("git", "--no-lazy-fetch", *args, chdir: dir, binmode: true)
+    unless status.success?
+      raise RunError, "git #{args.first} が失敗しました (今の directory が git repo で、HEAD に commit があり、" \
+                      "その object が手元にある (partial clone で取得していないものでない) か確かめてください)"
+    end
 
     out
   rescue SystemCallError => e
@@ -209,7 +214,7 @@ module CiCheck
   # 1 つの workflow の file を確かめ、{findings:, not_problems:} を返す (所見の id は build_report が振る)。
   # 確かめられないときは FileError。
   def check_workflow(path, content)
-    doc = load_yaml(content, path)
+    root, doc = load_yaml(content, path)
     raise FileError, "top level が mapping でない" unless doc.is_a?(Hash)
 
     jobs = doc["jobs"]
@@ -220,7 +225,7 @@ module CiCheck
       raise FileError, "job `#{id}` が mapping でない" unless job.is_a?(Hash)
     end
     events = trigger_events(doc)
-    lines = job_lines(content, path)
+    lines = job_lines(root)
 
     findings = []
     not_problems = []
@@ -238,15 +243,50 @@ module CiCheck
     { findings: findings, not_problems: not_problems }
   end
 
-  # anchor と alias は GitHub が workflow で受け付けるので許す。値の型は Date / Time まで (日付の literal)。
+  # 1 つの文書だけを読み、[AST の root, load した値] を返す。safe_load は stream の先頭の文書しか読まないので、
+  # stream 全体の構文を先に parse で確かめ、文書が 1 つであることを求める。書かれた key と load 後の key が
+  # 食い違う形 (check_keys!) も拒む。anchor と alias は GitHub が workflow で受け付けるので許す。値の型は
+  # Date / Time まで (日付の literal)。
   def load_yaml(content, path)
-    if Psych::VERSION.split(".").first.to_i >= 4
-      YAML.safe_load(content, permitted_classes: [Date, Time], aliases: true, filename: path)
-    else
-      YAML.safe_load(content, [Date, Time], [], true, path)
-    end
+    documents = Psych.parse_stream(content, filename: path).children
+    raise FileError, "YAML の文書が 1 つでない" unless documents.size == 1
+
+    root = documents.first.root
+    doc = if Psych::VERSION.split(".").first.to_i >= 4
+            YAML.safe_load(content, permitted_classes: [Date, Time], aliases: true, filename: path)
+          else
+            YAML.safe_load(content, [Date, Time], [], true, path)
+          end
+    check_keys!(root, doc)
+    [root, doc]
   rescue Psych::Exception, ArgumentError => e
     raise FileError, "YAML として読めない (#{e.class})"
+  end
+
+  # AST と load した値を並べて辿り、どの mapping でも、書かれた key と load 後の key が 1 対 1 であることを
+  # 確かめる (scripts/lib/yaml_util.rb の check_tree! と同じ考え方。配布する script は単体の file なので写す)。
+  # 同じ key を 2 度書くと safe_load は後の値で黙って上書きし、plain の key は YAML の解決で衝突する (`on` と
+  # `true` はどちらも true) ので、そのまま読むと GitHub と違う値を見うる。merge key (`<<`) は load 後の key の
+  # 並びが書かれた順と揃わないので読まない。alias は定義の側で辿る。
+  def check_keys!(node, value)
+    case node
+    when Psych::Nodes::Mapping
+      pairs = node.children.each_slice(2).to_a
+      seen = {}
+      pairs.each do |key, _child|
+        raise FileError, "mapping の key が scalar でない" unless key.is_a?(Psych::Nodes::Scalar)
+        raise FileError, "merge key (<<) は読まない" if key.value == "<<"
+        raise FileError, "key が重なる" if seen.key?(key.value)
+
+        seen[key.value] = true
+      end
+      raise FileError, "key が YAML の解決で重なる" unless value.is_a?(Hash) && value.size == pairs.size
+
+      # 重なりが無いので、load 後の値は書かれた順に並ぶ (Hash は挿入順)。
+      pairs.each_with_index { |(_key, child), i| check_keys!(child, value.values[i]) }
+    when Psych::Nodes::Sequence
+      node.children.each_with_index { |child, i| check_keys!(child, value[i]) } if value.is_a?(Array)
+    end
   end
 
   # `on` の event の名前の配列。YAML 1.1 の規則で key の `on` は true に読まれるので、両方を見る。
@@ -274,8 +314,7 @@ module CiCheck
   end
 
   # job の名前 => 行 (1 始まり)。`jobs` の mapping の key の行を AST から読む。見つからない job は含めない。
-  def job_lines(content, path)
-    root = Psych.parse_stream(content, filename: path).children.first&.root
+  def job_lines(root)
     jobs_node = mapping_value(root, "jobs")
     return {} unless jobs_node.is_a?(Psych::Nodes::Mapping)
 
