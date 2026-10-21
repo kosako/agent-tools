@@ -163,11 +163,13 @@ doctor が既にある log を読んで判定する。以下は **公開契約**
   `agent-tools-worker.config.toml` で軽くできる。どの値にするかは machine ごとの設定なので dotfiles が
   持ち (`~/.codex/hooks.json` と同じく、Codex が書き換えない別 file として chezmoi で配る)、agent-tools は
   作らず、書き換えず、sync の対象にもしない。手で置いてもよい。
-- **agent-tools は top-level の model / effort だけを読む**: review も worker も、`--ignore-user-config` の起動
+- **agent-tools は top-level の model / effort と、引き継ぐ provider だけを読む**: review も worker も、`--ignore-user-config` の起動
   (user config の MCP / connector を外す) に合わせて、`config.toml` の top-level を base に profile file の top-level の
   `model` / `model_reasoning_effort` を優先して読み、`-c` で再指定する (#358。review は worker の preflight と同じ
   library で読む)。profile の他の key (例: `service_tier`) は読まれない。file が無ければ `config.toml` の top-level の
-  値 (それも無ければ Codex の既定) なので、置かない machine (例: 会社機) があってよい。
+  値 (それも無ければ Codex の既定) なので、置かない machine (例: 会社機) があってよい。例外は provider で (#543)、
+  `config.toml` と profile file の `model_provider` と、そのプロバイダの `[model_providers.<id>.aws]` の `profile` /
+  `region` も読んで引き継ぐ (`--ignore-user-config` で外れると、カスタムプロバイダの Codex は 401 になるため)。
 - **review 用 profile の `model` は review の外にも効く**: `agent-tools-review.config.toml` の `model` は、
   `personal-codex-review` のほか、`personal-maintenance-sweep` で Codex が担う監査役・検証役と、grill の事前相談
   (`personal-grill-me` の CONSULT) にも使われる (読み方は同じ `personal-codex-model-selection --profile review`)。

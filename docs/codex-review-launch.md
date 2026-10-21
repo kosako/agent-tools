@@ -88,7 +88,16 @@ top-level に同じ key があればそれを優先し (key ごとに重ねる)�
 渡します。読むのは `model` と `model_reasoning_effort` だけで (worker の preflight と同じ規則で、配備済みの
 `personal-codex-model-selection` が読む。#364)、
 profile の他の key (例: `service_tier`) は読みません。読めなければ (top-level に解釈できない行など) 推測せず
-BLOCKED です。置き方と Fast mode の消費は [Install & Usage](install-and-usage.md) の「Codex の review / worker
+BLOCKED です。
+
+provider も同じ script が読みます (#543)。`--ignore-user-config` は provider の設定 (と、それに付く認証) も外し、
+カスタムプロバイダ (例: 組み込みの amazon-bedrock) の Codex は OpenAI の標準の API に認証なしで接続して 401 になる
+ためです。読むのは `model_provider` と、そのプロバイダの `[model_providers.<id>.aws]` の `profile` / `region` だけで、
+出力の `provider` を `-c` で渡します。選ばれたプロバイダにそれ以外の設定 (`base_url`・`env_key`・秘密を書きうる
+`http_headers` など) があれば、引き継がずに BLOCKED です (argv に秘密を出さない。対応の範囲を広げるときは許可する
+key を足す)。
+
+置き方と Fast mode の消費は [Install & Usage](install-and-usage.md) の「Codex の review / worker
 だけを軽くする」。
 
 ## 使う herdr subcommand

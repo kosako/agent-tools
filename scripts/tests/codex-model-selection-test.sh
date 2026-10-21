@@ -204,6 +204,35 @@ for args in "" "--profile review" "--format json" "--profile other --format json
   [ ! -s "$tmp/out" ] || fail "usage error must not print anything on stdout for '$args': $(od -c "$tmp/out")"
 done
 
+# provider の引き継ぎ (#543): 選ばれたプロバイダがあれば json に provider と provider_sources を足す
+phome="$tmp/provider-home"
+mkdir -p "$phome"
+cat > "$phome/config.toml" <<'EOF'
+model = "gpt-x"
+model_provider = "amazon-bedrock"
+[mcp_servers.CANARY]
+args = [
+  "[model_providers.amazon-bedrock]",
+]
+[model_providers.amazon-bedrock.aws]
+profile = "work"
+region = "us-west-2"
+EOF
+run_sel "$phome" --profile review --format json
+expect_json "provider (json)" '{"selection":{"model":"gpt-x"},"sources":{"model":"user config"},"provider":{"model_provider":"amazon-bedrock","model_providers.amazon-bedrock.aws.profile":"work","model_providers.amazon-bedrock.aws.region":"us-west-2"},"provider_sources":{"model_provider":"user config","model_providers.amazon-bedrock.aws.profile":"user config","model_providers.amazon-bedrock.aws.region":"user config"}}'
+# review profile は key ごとに重なる
+printf '[model_providers.amazon-bedrock.aws]\nregion = "eu-west-1"\n' > "$phome/agent-tools-review.config.toml"
+run_sel "$phome" --profile review --format json
+expect_json "provider with review profile" '{"selection":{"model":"gpt-x"},"sources":{"model":"user config"},"provider":{"model_provider":"amazon-bedrock","model_providers.amazon-bedrock.aws.profile":"work","model_providers.amazon-bedrock.aws.region":"eu-west-1"},"provider_sources":{"model_provider":"user config","model_providers.amazon-bedrock.aws.profile":"user config","model_providers.amazon-bedrock.aws.region":"review profile"}}'
+# --format model は provider を引き継げないので、黙って OpenAI の既定に倒さず exit 2
+run_sel "$phome" --profile review --format model
+expect_error "provider with --format model" "provider の設定があるので、--format json で provider も読んでください"
+# 選ばれたプロバイダに引き継げない設定 (http_headers) → exit 2、値は出さない
+printf '[model_providers.amazon-bedrock.http_headers]\nAuthorization = "CANARY-SECRET"\n' > "$phome/agent-tools-review.config.toml"
+run_sel "$phome" --profile review --format json
+expect_error "unsupported provider setting" "agent-tools-review.config.toml の選ばれた provider に、引き継げない設定があります"
+rm "$phome/agent-tools-review.config.toml"
+
 # preflight が同じ directory に配備されていない → exit 2 (path は出さない)
 lone="$tmp/lone"
 mkdir -p "$lone"

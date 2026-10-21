@@ -124,6 +124,19 @@ module CodexWorkerPreflight
   # 含まない文字だけを通す。
   MODEL_VALUE_RE = /\A[A-Za-z0-9._-]+\z/
 
+  # provider の引き継ぎ (#543)。`--ignore-user-config` は config.toml の provider の設定 (と、それに付く認証) も
+  # 外すので、許可した key だけを読んで `-c` で渡す。扱うのは組み込みの amazon-bedrock の形 (top-level の
+  # model_provider と、そのプロバイダの [model_providers.<id>.aws] の profile / region) だけ。base_url・env_key・
+  # http_headers (秘密を書きうる) などは読まず、選ばれたプロバイダにあれば起動しない (fail-closed)。
+  PROVIDER_KEY = "model_provider"
+  PROVIDER_AWS_KEYS = %w[profile region].freeze
+  # id は `-c model_providers.<id>.aws.<key>` の dotted path に入るので、TOML の bare key の文字だけ。
+  PROVIDER_ID_RE = /\A[A-Za-z0-9_-]+\z/
+  PROVIDER_VALUE_RE = /\A[A-Za-z0-9._@+-]+\z/
+  # 1 行で閉じる basic string (escape なし) の値と、行末の comment。
+  BASIC_VALUE_RE = /\A"(?<value>[^"\\]*)"\s*(?:#.*)?\z/
+  BARE_KEY_RE = /\A[A-Za-z0-9_-]+/
+
   # 配列の要素として受け入れる形: `#` / `[` / `]` / escape を含まない basic string、literal
   # string、bare scalar。入れ子や、comment 文字・括弧を含む文字列は受け入れない (その行で配列が
   # 閉じたかを文脈なしに判定できないため。fail-closed)。
@@ -327,6 +340,249 @@ module CodexWorkerPreflight
     value
   end
 
+  # ---- provider の引き継ぎ (#543) ----
+
+  # TOML の text を文 (table header と key = value) に分ける。複数行の文字列と、行を跨ぐ配列・inline table の
+  # 中身は文として扱わない (中の `[...]` や `key = ...` を header や key と誤認しない)。解釈できない行は
+  # ArgumentError (fail-closed)。戻り値は [:header, path, array of tables か] と [:keyval, path, 1 行で閉じた値の
+  # text (行を跨ぐ値は nil)] の配列。
+  def toml_statements(text, label)
+    lines = text.to_s.each_line.map { |l| l.chomp.sub(/\r\z/, "") }
+    stmts = []
+    i = 0
+    while i < lines.size
+      s = lines[i].strip
+      i += 1
+      next if s.empty? || s.start_with?("#")
+
+      if s.start_with?("[")
+        stmts << toml_header(s, label)
+        next
+      end
+      path, rest = toml_key_path(s, label)
+      raise ArgumentError, "#{label} の key = value の行を解釈できません (provider の読み取り)" unless rest.start_with?("=")
+
+      first = rest[1..-1].strip
+      used = toml_value_lines(lines, i, first, label)
+      stmts << [:keyval, path, used.zero? ? first : nil]
+      i += used
+    end
+    stmts
+  end
+
+  def toml_header(line, label)
+    aot = line.start_with?("[[")
+    path, rest = toml_key_path(line[(aot ? 2 : 1)..-1], label)
+    close = aot ? "]]" : "]"
+    after = rest.start_with?(close) ? rest[close.size..-1].strip : nil
+    raise ArgumentError, "#{label} の table header を解釈できません (provider の読み取り)" unless after && (after.empty? || after.start_with?("#"))
+
+    [:header, path, aot]
+  end
+
+  # bare key・basic string の key (escape は戻す)・literal string の key を `.` でつないだ key の path。escape を
+  # 戻すのは、`model_providers` などを unicode escape で綴っても同じ key として読み、許可外の設定の検査を
+  # すり抜けさせないため。
+  def toml_key_path(text, label)
+    path = []
+    rest = text
+    loop do
+      rest = rest.lstrip
+      if (m = BARE_KEY_RE.match(rest)) then path << m[0]
+      elsif (m = /\A"((?:[^"\\]|\\.)*)"/.match(rest)) then path << toml_unescape(m[1], label)
+      elsif (m = /\A'([^']*)'/.match(rest)) then path << m[1]
+      else raise ArgumentError, "#{label} の key を解釈できません (provider の読み取り)"
+      end
+      rest = m.post_match.lstrip
+      break unless rest.start_with?(".")
+
+      rest = rest[1..-1]
+    end
+    [path, rest]
+  end
+
+  TOML_SIMPLE_ESCAPES = { "b" => "\b", "t" => "\t", "n" => "\n", "f" => "\f", "r" => "\r", '"' => '"',
+                          "\\" => "\\" }.freeze
+
+  # basic string の escape (TOML の \b \t \n \f \r \" \\ と 4 桁 / 8 桁の unicode) を戻す。知らない escape や
+  # 文字にならない code point (surrogate、範囲外) は不正。
+  def toml_unescape(raw, label)
+    raw.gsub(/\\(?:u(\h{4})|U(\h{8})|(.))/) do
+      hex = Regexp.last_match(1) || Regexp.last_match(2)
+      if hex
+        code = hex.hex
+        raise ArgumentError, "#{label} の key の escape を解釈できません (provider の読み取り)" if code > 0x10FFFF || (0xD800..0xDFFF).cover?(code)
+
+        [code].pack("U")
+      else
+        TOML_SIMPLE_ESCAPES.fetch(Regexp.last_match(3)) do
+          raise ArgumentError, "#{label} の key の escape を解釈できません (provider の読み取り)"
+        end
+      end
+    end
+  end
+
+  # 値が終わるまでに、次の行から何行を使うか。文字列 (1 行と複数行) と括弧 ([ / {) の状態を追う。
+  def toml_value_lines(lines, next_index, first, label)
+    state = { mode: nil, depth: 0 }
+    toml_scan(first, state, label)
+    used = 0
+    until state[:mode].nil? && state[:depth].zero?
+      raise ArgumentError, "#{label} の値が閉じていません (provider の読み取り)" if next_index + used >= lines.size
+
+      toml_scan(lines[next_index + used], state, label)
+      used += 1
+    end
+    used
+  end
+
+  # 1 行を読んで state (mode: nil / :ml_basic / :ml_literal、depth: 括弧の深さ) を進める。
+  def toml_scan(line, state, label)
+    i = 0
+    while i < line.size
+      case state[:mode]
+      when :ml_basic, :ml_literal
+        quote = state[:mode] == :ml_basic ? '"' : "'"
+        if state[:mode] == :ml_basic && line[i] == "\\"
+          i += 2
+        elsif line[i, 3] == quote * 3
+          i += 3
+          i += 1 while line[i] == quote # 閉じの前に引用符が 1〜2 個続いてよい (TOML)
+          state[:mode] = nil
+        else
+          i += 1
+        end
+      else
+        c = line[i]
+        case c
+        when "#" then break
+        when '"', "'"
+          if line[i, 3] == c * 3
+            state[:mode] = c == '"' ? :ml_basic : :ml_literal
+            i += 3
+          else
+            i = toml_string_end(line, i, label)
+          end
+        when "[", "{"
+          state[:depth] += 1
+          i += 1
+        when "]", "}"
+          state[:depth] -= 1
+          raise ArgumentError, "#{label} の括弧が合いません (provider の読み取り)" if state[:depth].negative?
+
+          i += 1
+        else
+          i += 1
+        end
+      end
+    end
+  end
+
+  # 1 行の文字列 (line[start] が開きの引用符) の閉じの次の位置。行内で閉じなければ不正。
+  def toml_string_end(line, start, label)
+    quote = line[start]
+    i = start + 1
+    while i < line.size
+      return i + 1 if line[i] == quote
+
+      i += quote == '"' && line[i] == "\\" ? 2 : 1
+    end
+    raise ArgumentError, "#{label} の文字列が行内で閉じていません (provider の読み取り)"
+  end
+
+  # 1 つの file から provider の設定を読む。model_provider (root の table の key) と、
+  # [model_providers.<id>.aws] の profile / region (1 行の basic string で、値が許可した形のものだけ)。
+  # model_providers の下のそれ以外 (base_url・env_key・http_headers・inline table・array of tables・形の違う
+  # profile / region) は、その id を「引き継げない」にする (使われない id なら無視し、選ばれたら起動しない)。
+  # `model_provider` の文字列も unicode escape (`\u` / `\U`) も含まない file は読まない (provider の無い config の
+  # 振る舞いを変えない)。key の名前を生の文字列なしで綴れるのは quoted key の unicode escape だけなので、escape が
+  # あれば読む。
+  def read_provider_settings(text, label)
+    found = { provider: nil, aws: {}, unsupported: [], all_unsupported: false }
+    return found unless text.to_s.include?(PROVIDER_KEY) || text.to_s.match?(/\\[uU]/)
+
+    table = []
+    toml_statements(text, label).each do |kind, path, extra|
+      if kind == :header
+        table = path
+        # 見出しだけでも、array of tables と許可した形 ([model_providers]・[model_providers.<id>]・
+        # [model_providers.<id>.aws]) の外の table は記録する (中身の無い [….http_headers] を書き方で通さない)。
+        if path.first == "model_providers" && (extra || !allowed_provider_header?(path))
+          mark_provider_unsupported(found, path)
+        end
+        next
+      end
+      full = table + path
+      if full == [PROVIDER_KEY]
+        raise ArgumentError, "#{label} の model_provider が複数あり一意に読めません" if found[:provider]
+
+        found[:provider] = provider_basic_value(extra)
+        unless found[:provider]&.match?(PROVIDER_ID_RE)
+          raise ArgumentError, "#{label} の model_provider は、bare key の文字だけの basic string 1 行の形だけ対応しています"
+        end
+      elsif full.first == "model_providers"
+        record_provider_key(found, full, provider_basic_value(extra))
+      end
+    end
+    found
+  end
+
+  def provider_basic_value(text)
+    m = text && BASIC_VALUE_RE.match(text)
+    m && m[:value]
+  end
+
+  def allowed_provider_header?(path)
+    path.size <= 2 || (path.size == 3 && path[2] == "aws")
+  end
+
+  def mark_provider_unsupported(found, path)
+    return found[:all_unsupported] = true if path.size < 2
+
+    found[:unsupported] << path[1] unless found[:unsupported].include?(path[1])
+  end
+
+  def record_provider_key(found, full, value)
+    id = full[1]
+    supported = full.size == 4 && full[2] == "aws" && PROVIDER_AWS_KEYS.include?(full[3]) &&
+                value&.match?(PROVIDER_VALUE_RE) && !found[:aws].fetch(id, {}).key?(full[3])
+    return mark_provider_unsupported(found, full) unless supported
+
+    (found[:aws][id] ||= {})[full[3]] = value
+  end
+
+  # config.toml を base に `<profile>.config.toml` を重ね (model と同じ。key ごとに後が勝つ)、選ばれたプロバイダを
+  # 引き継ぐ `-c` の key と値を返す。戻り値は [{key => value} (model_provider、aws.profile、aws.region の順),
+  # {key => 出所 ("config" / "profile")}]。選ばれたプロバイダが無ければ空 (今と同じ起動)。
+  def layered_provider_selection(home, profile)
+    reads = [["config.toml", "user config", "config"],
+             ["#{profile}.config.toml", "#{profile}.config.toml", "profile"]].map do |name, label, source|
+      text = read_config_text(File.join(home, name), label)
+      [text.nil? ? read_provider_settings("", label) : read_provider_settings(text, label), label, source]
+    end
+    chosen = reads.select { |found, _, _| found[:provider] }.last
+    return [{}, {}] unless chosen
+
+    id = chosen[0][:provider]
+    reads.each do |found, label, _|
+      next unless found[:all_unsupported] || found[:unsupported].include?(id)
+
+      raise ArgumentError, "#{label} の選ばれた provider に、引き継げない設定があります (引き継ぐのは aws の profile と region だけ)"
+    end
+    overrides = { PROVIDER_KEY => id }
+    sources = { PROVIDER_KEY => chosen[2] }
+    PROVIDER_AWS_KEYS.each do |k|
+      reads.each do |found, _, source|
+        value = found[:aws].fetch(id, {})[k]
+        next unless value
+
+        overrides["model_providers.#{id}.aws.#{k}"] = value
+        sources["model_providers.#{id}.aws.#{k}"] = source
+      end
+    end
+    [overrides, sources]
+  end
+
   def herdr_state
     out = run_capture(%w[herdr status])
     out && out.include?("status: running") ? "running" : "unavailable"
@@ -336,12 +592,14 @@ module CodexWorkerPreflight
   # `--add-dir` は **worker 自身の clone の git dir 1 つだけ**。workspace-write の sandbox は workdir の
   # 内側でも `.git` を保護するため、これが無いと worker は commit できない (codex 0.154.0 で実測)。
   # main の Git 管理領域は渡さない (validate_clone が orchestrator の repository を拒否する)。
-  def launch_argv(features, selection, clone_git_dir)
+  # provider は layered_provider_selection の戻り値 (選ばれたプロバイダを引き継ぐ `-c` の key と値。#543)。
+  def launch_argv(features, selection, clone_git_dir, provider = {})
     argv = ["codex", "exec", "--ignore-user-config", "--ignore-rules", "-s", "workspace-write",
             "-c", 'approval_policy="never"']
     features.each { |f| argv.push("--disable", f) }
     argv.push("--add-dir", clone_git_dir)
     MODEL_KEYS.each_value { |key| argv.push("-c", "#{key}=\"#{selection[key]}\"") if selection[key] }
+    provider.each { |key, value| argv.push("-c", "#{key}=\"#{value}\"") }
     argv.push("-o", "<run dir>/result.md", "-")
   end
 
@@ -524,14 +782,21 @@ module CodexWorkerPreflight
   # 無い file は空 (読まない)。在るのに regular file でない・在るかを確かめられない・読めない file は、
   # 無いことにせず止める。理由文には file の label と errno の種類だけを出し、path は出さない。
   def read_model_file(path, label)
+    text = read_config_text(path, label)
+    text.nil? ? {} : read_model_selection(text, label)
+  end
+
+  # 無い file は nil。在るのに regular file でない・在るかを確かめられない・読めない file は止める (model と
+  # provider の読み取りが共有する)。
+  def read_config_text(path, label)
     begin
       stat = File.stat(path)
     rescue Errno::ENOENT
-      return {}
+      return nil
     end
     raise ArgumentError, "#{label} が regular file ではありません" unless stat.file?
 
-    read_model_selection(File.read(path, encoding: "UTF-8"), label)
+    File.read(path, encoding: "UTF-8")
   rescue SystemCallError => e
     raise ArgumentError, "#{label} を確かめられないか読めません (#{e.class})"
   end
@@ -569,6 +834,8 @@ module CodexWorkerPreflight
     raise Blocked, "capability: features list に無い feature (disable できない): #{absent.join(', ')}" unless absent.empty?
 
     selection, sources = model_selection(opts)
+    # provider は認証と接続先なので、--model / --effort の明示があっても config から読む (#543)。
+    provider, provider_sources = layered_provider_selection(codex_home(opts[:codex_home]), WORKER_PROFILE)
 
     {
       status: "ok",
@@ -578,11 +845,13 @@ module CodexWorkerPreflight
       model_reasoning_effort: selection["model_reasoning_effort"],
       model_source: sources["model"],
       model_reasoning_effort_source: sources["model_reasoning_effort"],
+      provider: provider,
+      provider_sources: provider_sources,
       herdr: herdr_state,
       clone_root: clone_root,
       clone_git_dir: clone_git_dir,
       git_snapshot: snapshot_git_dir(clone_git_dir),
-      launch_argv: launch_argv(DISABLE_FEATURES, selection, clone_git_dir),
+      launch_argv: launch_argv(DISABLE_FEATURES, selection, clone_git_dir, provider),
     }
   end
 
@@ -592,6 +861,8 @@ module CodexWorkerPreflight
     puts "disable features: #{r[:disable_features].join(' ')}"
     puts "model: #{r[:model] ? "#{r[:model]} (#{source_label(r[:model_source])})" : '(codex default)'}"
     puts "model_reasoning_effort: #{r[:model_reasoning_effort] ? "#{r[:model_reasoning_effort]} (#{source_label(r[:model_reasoning_effort_source])})" : '(codex default)'}"
+    provider = r[:provider].map { |k, v| "#{k}=#{v} (#{source_label(r[:provider_sources][k])})" }
+    puts "provider: #{provider.empty? ? '(codex default)' : provider.join(', ')}"
     puts "herdr: #{r[:herdr]}"
     puts "clone root: #{r[:clone_root]}"
     puts "clone git dir: #{r[:clone_git_dir]}"

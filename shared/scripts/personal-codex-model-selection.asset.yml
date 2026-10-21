@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:f5be0981035bc9e9f060d419c1ae2d7f4ea6fcd1153ba2097e053ebbe0c54de6
+  approved_build_id: sha256:4055bdb104f041cdbf9734c70a5f8ccf18712bd2960d26b5f870e36a5f9ee155
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-codex-model-selection.rb
@@ -25,4 +25,7 @@ summary: >-
   top-level を base に、Codex home の profile file (--profile review|worker → agent-tools-review.config.toml /
   agent-tools-worker.config.toml) の top-level を key ごとに重ね、--format json (選択と key ごとの出所) か model
   (model の値 1 行) で出す (exit 0)。重ね方と TOML の読み方は同じ directory の personal-codex-worker-preflight を
-  load して共有する。解釈できない行・不正な値・在るのに regular file でない / 確かめられない file は理由つき exit 2。
+  load して共有する。config に選ばれたプロバイダがあれば、--ignore-user-config で外れる provider の設定のうち
+  model_provider と [model_providers.<id>.aws] の profile / region を json の provider に出す (#543。それ以外の
+  provider の設定があれば exit 2、--format model は provider があれば exit 2)。解釈できない行・不正な値・在るのに
+  regular file でない / 確かめられない file は理由つき exit 2。

@@ -123,12 +123,19 @@ orchestrator が行います。
   `config.toml` の top-level。`--model` / `--effort` のどちらか 1 つでも明示すると profile と `config.toml` を
   読まない (明示しなかった方は `launch_argv` に `-c` が出ず、Codex の既定になる)。出所は出力の
   `model_source` / `model_reasoning_effort_source` に出る (#339)。この skill は profile を作らず、書き換えない。
+- provider (#543): `--ignore-user-config` は `config.toml` の provider の設定 (と、それに付く認証。例: 組み込みの
+  amazon-bedrock の AWS の profile / region) も外すので、preflight が選ばれたプロバイダ (`model_provider`) と、その
+  プロバイダの `[model_providers.<id>.aws]` の `profile` / `region` だけを `config.toml` と worker 用 profile から読み、
+  `launch_argv` に `-c` で入れる (出力の `provider` / `provider_sources`)。認証と接続先なので、`--model` / `--effort`
+  の明示があっても読む。選ばれたプロバイダにそれ以外の設定 (`base_url`・`env_key`・`http_headers` など) があれば
+  exit 2。
 - preflight が無い・実行できない (配備欠損) ときも `Blocked at: preflight`。generic な `codex exec`
   に fallback しない。
 
 `launch_argv` は `codex exec --ignore-user-config --ignore-rules -s workspace-write
 -c approval_policy="never" --disable apps --disable computer_use --disable browser_use
---add-dir <clone>/.git [-c model="…"] [-c model_reasoning_effort="…"] -o <run dir>/result.md -` の形で、
+--add-dir <clone>/.git [-c model="…"] [-c model_reasoning_effort="…"] [-c <provider の key>="…" …]
+-o <run dir>/result.md -` の形で、
 `<run dir>` を run directory に置き換えて使う。**flag を足さない・外さない** (`--ephemeral` は付けない。
 `-s danger-full-access` や `--dangerously-…` は使わない。`--add-dir` を自分で足さない)。
 
