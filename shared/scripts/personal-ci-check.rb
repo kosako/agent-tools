@@ -3,8 +3,8 @@
 
 # ci-check: GitHub Actions の workflow の file を決まった規則で検査し、所見を personal-repo-audit と同じ形
 # (`findings.schema.json`) の JSON で出す (#541)。AI を使わない。GitHub にも network にも触れず (git で手元の
-# commit を読むだけ。partial clone の未取得の object も取りに行かない)、何も書かない。運用と規則の正本は
-# docs/ci-check.md。
+# commit を読むだけ。partial clone の未取得の object も取りに行かず、replacement ref も当てない)、何も書かない。
+# 運用と規則の正本は docs/ci-check.md。
 #
 # 対象: 今の directory の git repo の HEAD の commit にある `.github/workflows/` 直下の `*.yml` / `*.yaml` (GitHub が
 # workflow として読む場所)。作業ツリーの未 commit の変更は読まない (sweep が監査する commit と揃える)。
@@ -23,9 +23,9 @@
 # - 0: 所見なし (workflow の file が無いときを含む)。
 # - 1: 所見あり (proposal を含む)。
 # - 2: usage / repo を選ぶ git の環境変数を継承している / 今の directory の repo や HEAD を解決できない / 確かめ
-#   られない file がある (YAML として読めない、文書が 1 つでない、key が重なる・merge key を使う、workflow の形で
-#   ない、symlink などの通常の file でないもの、大きすぎる、名前が規則の外)。確かめられない file があっても、残りの
-#   file は確かめて出す (理由は scope.not_seen)。
+#   られない file がある (YAML として読めない、文書が 1 つでない、入れ子が深すぎる、明示の tag がある、key が重なる・
+#   merge key を使う、workflow の形でない、symlink などの通常の file でないもの、大きすぎる、名前が規則の外、その file
+#   の検査の中の想定外の失敗)。確かめられない file があっても、残りの file は確かめて出す (理由は scope.not_seen)。
 # 結果は stdout に JSON。run 全体の失敗 (usage・環境変数・repo や HEAD を解決できない・git の失敗・想定外の例外) は
 # stdout に何も出さず、stderr に 1 行。
 
@@ -55,6 +55,9 @@ module CiCheck
   # GitHub の job の名前の規則 (文字か _ で始まり、英数字と - と _ だけ)。外れる workflow は GitHub も受け付けない。
   JOB_ID_RE = /\A[A-Za-z_][A-Za-z0-9_-]*\z/.freeze
   MAX_FILE_BYTES = 1024 * 1024
+  # YAML の入れ子の深さの上限。safe_load と check_keys! は再帰するので、深い入れ子は SystemStackError になる。
+  # workflow は 10 段ほどなので余裕を持たせる。
+  MAX_DEPTH = 64
   # `git ls-tree -z -l` の 1 entry: <mode> SP <type> SP <oid> SP <size (blob 以外は -)> TAB <name>。
   TREE_ENTRY_RE = /\A(\d{6}) (blob|tree|commit) ([0-9a-f]{40}|[0-9a-f]{64}) +(\d+|-)\t(.+)\z/m.freeze
   REGULAR_MODES = %w[100644 100755].freeze
@@ -105,8 +108,9 @@ module CiCheck
   rescue RunError => e
     $stderr.puts "#{NAME}: #{e.message}"
     EXIT_ERROR
-  rescue StandardError => e
-    # 想定外の例外を Ruby の既定 (exit 1 = 所見あり と同じ値) で終わらせない。
+  rescue StandardError, SystemStackError => e
+    # 想定外の例外を Ruby の既定 (exit 1 = 所見あり と同じ値) で終わらせない。SystemStackError は StandardError の
+    # 外なので並べる。
     $stderr.puts "#{NAME}: 想定外の失敗です (#{e.class})"
     EXIT_ERROR
   end
@@ -130,6 +134,13 @@ module CiCheck
         result = check_workflow(path, content)
       rescue FileError => e
         not_seen << "#{path} (#{e.message})"
+        next
+      rescue StandardError, SystemStackError => e
+        # 1 つの file の想定外の失敗で、残りの file の結果を失わない (確かめられない file にする)。git の失敗
+        # (RunError) は repo 全体の問題なので、ここで受けずに run を止める。
+        raise if e.is_a?(RunError)
+
+        not_seen << "#{path} (想定外の失敗 (#{e.class}))"
         next
       end
       seen << path
@@ -197,8 +208,10 @@ module CiCheck
 
   # `--no-lazy-fetch`: partial clone で object が手元に無くても、promisor の remote から取りに行かない (network に
   # 触れず、object database に書かない)。無い object は git の失敗 (exit 2) になる。
+  # `--no-replace-objects`: `refs/replace/` の replacement ref を当てない (HEAD や blob を別の object に置き換えた
+  # ref があっても、HEAD の実体を読む)。
   def git(dir, *args)
-    out, _err, status = Open3.capture3("git", "--no-lazy-fetch", *args, chdir: dir, binmode: true)
+    out, _err, status = Open3.capture3("git", "--no-lazy-fetch", "--no-replace-objects", *args, chdir: dir, binmode: true)
     unless status.success?
       raise RunError, "git #{args.first} が失敗しました (今の directory が git repo で、HEAD に commit があり、" \
                       "その object が手元にある (partial clone で取得していないものでない) か確かめてください)"
@@ -244,14 +257,15 @@ module CiCheck
   end
 
   # 1 つの文書だけを読み、[AST の root, load した値] を返す。safe_load は stream の先頭の文書しか読まないので、
-  # stream 全体の構文を先に parse で確かめ、文書が 1 つであることを求める。書かれた key と load 後の key が
-  # 食い違う形 (check_keys!) も拒む。anchor と alias は GitHub が workflow で受け付けるので許す。値の型は
-  # Date / Time まで (日付の literal)。
+  # stream 全体の構文を先に parse で確かめ、文書が 1 つであることを求める。safe_load の前に AST の形
+  # (check_ast!) を、後に書かれた key と load 後の key の対応 (check_keys!) を確かめる。anchor と alias は GitHub
+  # が workflow で受け付けるので許す。値の型は Date / Time まで (日付の literal)。
   def load_yaml(content, path)
     documents = Psych.parse_stream(content, filename: path).children
     raise FileError, "YAML の文書が 1 つでない" unless documents.size == 1
 
     root = documents.first.root
+    check_ast!(root)
     doc = if Psych::VERSION.split(".").first.to_i >= 4
             YAML.safe_load(content, permitted_classes: [Date, Time], aliases: true, filename: path)
           else
@@ -261,6 +275,21 @@ module CiCheck
     [root, doc]
   rescue Psych::Exception, ArgumentError => e
     raise FileError, "YAML として読めない (#{e.class})"
+  end
+
+  # safe_load の前に AST を反復で辿り (再帰しない)、入れ子の深さが MAX_DEPTH 以下で、明示の tag が無いことを
+  # 確かめる。tag は値の型や構造を変える (`!!omap` の sequence は mapping に読まれ、重なった key が後の値で上書き
+  # される) ので、どこにあっても読まない。psych の版で safe_load の失敗の仕方が違っても、同じ理由で止まるように
+  # load の前に見る。
+  def check_ast!(root)
+    stack = [[root, 1]]
+    until stack.empty?
+      node, depth = stack.pop
+      raise FileError, "入れ子が深すぎる (#{MAX_DEPTH} 段まで)" if depth > MAX_DEPTH
+      raise FileError, "明示の tag は読まない" if node.respond_to?(:tag) && node.tag
+
+      node.children&.each { |child| stack.push([child, depth + 1]) }
+    end
   end
 
   # AST と load した値を並べて辿り、どの mapping でも、書かれた key と load 後の key が 1 対 1 であることを
@@ -285,7 +314,10 @@ module CiCheck
       # 重なりが無いので、load 後の値は書かれた順に並ぶ (Hash は挿入順)。
       pairs.each_with_index { |(_key, child), i| check_keys!(child, value.values[i]) }
     when Psych::Nodes::Sequence
-      node.children.each_with_index { |child, i| check_keys!(child, value[i]) } if value.is_a?(Array)
+      # tag を拒んでいるので、sequence は同じ件数の Array に読まれる (yaml_util と同じく、崩れたら止める)。
+      raise FileError, "sequence が書かれたとおりに読めない" unless value.is_a?(Array) && value.size == node.children.size
+
+      node.children.each_with_index { |child, i| check_keys!(child, value[i]) }
     end
   end
 

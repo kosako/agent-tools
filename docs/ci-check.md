@@ -5,8 +5,9 @@ GitHub Actions の workflow の file を決まった規則で検査し、所見�
 `<tool home>/agent-tools/scripts/personal-ci-check`。
 
 AI を使いません。GitHub にも network にも触れず (git で手元の commit を読むだけ)、何も書きません。git は
-`--no-lazy-fetch` で起動するので、partial clone で取得していない object があっても promisor の remote から取りに
-行かず (object database にも書かず)、git の失敗として止まります。
+`--no-lazy-fetch` と `--no-replace-objects` で起動します。partial clone で取得していない object があっても promisor の
+remote から取りに行かず (object database にも書かず)、git の失敗として止まります。`refs/replace/` の replacement ref
+(HEAD や blob を別の object に見せる ref) も当てず、HEAD の実体を読みます。
 
 ## 運用
 
@@ -79,20 +80,25 @@ stdout に `findings.schema.json` に適合する JSON を 1 つ出します。
 | 1 | 所見あり (proposal を含む) |
 | 2 | usage、repo を選ぶ git の環境変数を継承している、今の directory の repo や HEAD を解決できない、git の失敗 (取得していない object を含む)、確かめられない file がある、想定外の例外 |
 
-- **確かめられない file**: YAML として読めない (stream のどこかの構文の誤りを含む)、文書が 1 つでない、key が
-  書かれたとおりに読めない (同じ key を 2 度書く、YAML の解決で衝突する (`on` と `true` など)、merge key `<<`、
-  scalar でない key)、workflow の形でない (top level・`jobs`・各 job が mapping でない、job の名前が規則の外、`on` が
+- **確かめられない file**: YAML として読めない (stream のどこかの構文の誤りを含む)、文書が 1 つでない、入れ子が
+  64 段より深い、明示の tag (`!!omap`・`!!str`・`!ruby/...` など) がある、key が書かれたとおりに読めない (同じ key を
+  2 度書く、YAML の解決で衝突する (`on` と `true` など)、merge key `<<`、scalar でない key)、workflow の形でない (top level・`jobs`・各 job が mapping でない、job の名前が規則の外、`on` が
   無い、`on` として読める key が 2 つある (引用した `"on"` と plain の `yes` など)、`on` の event が文字列でない)、通常の
-  file でない (symlink・submodule)、1 MiB を超える、名前が規則の外 (名前は出さず件数だけ)。`.github` や
-  `.github/workflows` が directory でないときも同じです。確かめられない file があっても、残りの file は確かめて出し
+  file でない (symlink・submodule)、1 MiB を超える、名前が規則の外 (名前は出さず件数だけ)、その file の検査の中の
+  想定外の失敗 (理由は例外の class 名だけ)。`.github` や `.github/workflows` が directory でないときも同じです。確かめられない file があっても、残りの file は確かめて出し
   (`scope.not_seen` に理由)、exit 2 にします (ずれ無しに倒さない)。
 - **run 全体の失敗** (usage、環境変数、repo や HEAD を解決できない、git の失敗、想定外の例外): stdout に何も出さず、
-  stderr に 1 行出します。想定外の例外も exit 2 にし、Ruby の既定の exit 1 (所見あり と同じ値) にしません。
+  stderr に 1 行出します。想定外の例外 (StandardError の外の `SystemStackError` を含む) も exit 2 にし、Ruby の
+  既定の exit 1 (所見あり と同じ値) にしません。
 
 ## YAML の読み方
 
 - 先に `Psych.parse_stream` で stream 全体を parse し (`YAML.safe_load` は先頭の文書しか読まないので、後ろの文書の
   構文の誤りや 2 つ目の文書を見落とす)、文書が 1 つであることを求めます。
+- `safe_load` の前に AST を反復で (再帰せずに) 辿り、入れ子が 64 段以下で、明示の tag が無いことを確かめます。
+  `safe_load` と下の key の検査は再帰するので、深い入れ子は `SystemStackError` になるためです (workflow は 10 段ほど)。
+  tag は値の型や構造を変える (`!!omap` の sequence は mapping に読まれ、重なった key が後の値で上書きされる) ので、
+  どこにあっても読みません。psych の版で `safe_load` の失敗の仕方が違っても同じ理由で止まるよう、load の前に見ます。
 - 値は `YAML.safe_load` で読みます (psych 3 / 4 の両方)。anchor と alias は GitHub が workflow で受け付けるので許し、
   値の型は日付の literal (Date / Time) まで許します。
 - AST と load した値を並べて辿り、どの mapping でも書かれた key と load 後の key が 1 対 1 であることを確かめます

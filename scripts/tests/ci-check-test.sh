@@ -167,7 +167,7 @@ check("aliases and date literals are accepted", r[:findings].empty?)
 
 # 確かめられない形は FileError (ずれ無しに倒さない)。
 check("invalid YAML", file_error("on: [push\njobs: {}\n") == "YAML として読めない (Psych::SyntaxError)")
-check("disallowed tag", file_error("on: push\njobs: !ruby/object:Object {}\n").to_s.start_with?("YAML として読めない"))
+check("ruby object tag", file_error("on: push\njobs: !ruby/object:Object {}\n") == "明示の tag は読まない")
 check("empty file", file_error("") == "YAML の文書が 1 つでない")
 # safe_load は先頭の文書しか読まないので、後ろの文書の構文の誤りも、2 つ目の文書も確かめられないにする。
 ok_doc = "on: push\njobs:\n  a:\n    runs-on: x\n    timeout-minutes: 5\n"
@@ -185,6 +185,16 @@ check("merge key", file_error("base: &b {runs-on: x}\non: push\njobs:\n  a:\n   
       "merge key (<<) は読まない")
 check("alias key", file_error("k: &k name\non: push\njobs:\n  a:\n    *k : x\n    timeout-minutes: 5\n") ==
       "mapping の key が scalar でない")
+# 明示の tag は型や構造を変えるので、どこにあっても読まない (!!omap の sequence は mapping に読まれ、重なった key が
+# 後の値で上書きされる)。
+omap = "!!omap\n- on: pull_request\n- on: push\n- jobs:\n    build:\n      runs-on: x\n      timeout-minutes: 5\n"
+check("!!omap", file_error(omap) == "明示の tag は読まない")
+check("tag on a value", file_error("on: push\njobs:\n  a:\n    runs-on: x\n    timeout-minutes: !!str 5\n") == "明示の tag は読まない")
+check("tag on a key", file_error("!!str on: push\njobs:\n  a:\n    runs-on: x\n    timeout-minutes: 5\n") == "明示の tag は読まない")
+# 深い入れ子は、再帰する読み込みの前に止める (SystemStackError にしない)。workflow の普通の深さは読める。
+nested = ->(n) { "on: push\njobs:\n  a:\n    runs-on: x\n    timeout-minutes: 5\n    env:\n      X: " + ("[" * n) + ("]" * n) + "\n" }
+check("deep nesting", file_error(nested.call(100_000)) == "入れ子が深すぎる (64 段まで)")
+check("moderate nesting is read", file_error(nested.call(40)).nil?)
 check("top level is a list", file_error("- a\n") == "top level が mapping でない")
 check("jobs missing", file_error("on: push\n") == "jobs が mapping でない")
 check("jobs empty", file_error("on: push\njobs: {}\n") == "jobs が mapping でない")
@@ -360,6 +370,37 @@ check("cli broken second document: listed and others checked",
       report && report["scope"]["not_seen"] == [".github/workflows/two.yml (YAML として読めない (Psych::SyntaxError))"] &&
         report["scope"]["seen"] == [".github/workflows/test.yml"])
 
+# 深い入れ子の file も、落ちずに (exit 1 と取り違えずに) 確かめられない file として残りを出す。
+deep = make_repo(File.join(tmp, "deep"), {
+  ".github/workflows/test.yml" => ci_yml,
+  ".github/workflows/deep.yml" => nested.call(100_000),
+})
+out, err, st = run_cli(deep)
+report = JSON.parse(out) rescue nil
+check("cli deep nesting: exit 2 with JSON (#{err})", st.exitstatus == 2 && report.is_a?(Hash))
+check("cli deep nesting: listed and others checked",
+      report && report["scope"]["not_seen"] == [".github/workflows/deep.yml (入れ子が深すぎる (64 段まで))"] &&
+        report["scope"]["seen"] == [".github/workflows/test.yml"])
+
+# replacement ref (refs/replace/) を当てず、HEAD の実体を読む (commit の置き換えも blob の置き換えも)。
+replaced = make_repo(File.join(tmp, "replaced"), { ".github/workflows/test.yml" => ci_yml })
+out_before, _err, st_before = run_cli(replaced)
+empty_tree = git!(replaced, "hash-object", "-w", "-t", "tree", "/dev/null").strip
+bare_commit = git!(replaced, "commit-tree", empty_tree, "-m", "no workflows").strip
+git!(replaced, "replace", git!(replaced, "rev-parse", "HEAD").strip, bare_commit)
+check("fixture: the replacement ref hides the workflows", git!(replaced, "ls-tree", "-r", "HEAD").strip.empty?)
+out, _err, st = run_cli(replaced)
+check("cli replaced commit: reads the real HEAD", st.exitstatus == st_before.exitstatus && JSON.parse(out) == JSON.parse(out_before))
+git!(replaced, "replace", "-d", git!(replaced, "--no-replace-objects", "rev-parse", "HEAD").strip)
+clean_blob_file = File.join(tmp, "clean-blob.yml")
+File.write(clean_blob_file, reuse_yaml)
+clean_blob = git!(replaced, "hash-object", "-w", clean_blob_file).strip
+orig_blob = git!(replaced, "rev-parse", "HEAD:.github/workflows/test.yml").strip
+git!(replaced, "replace", orig_blob, clean_blob)
+check("fixture: the replacement ref swaps the blob", git!(replaced, "cat-file", "blob", orig_blob) == reuse_yaml)
+out, _err, st = run_cli(replaced)
+check("cli replaced blob: reads the real blob", st.exitstatus == st_before.exitstatus && JSON.parse(out) == JSON.parse(out_before))
+
 # 今の directory の repo を読む。path の末尾の空白を削って隣の repo を読まない。
 make_repo(File.join(tmp, "adjacent"), { ".github/workflows/reuse.yaml" => reuse_yaml })
 spaced = make_repo(File.join(tmp, "adjacent "), { ".github/workflows/test.yml" => ci_yml })
@@ -406,21 +447,47 @@ check("cli unknown argument: exit 2 with usage", st.exitstatus == 2 && out.empty
 out, _err, st = run_cli(repo, "--help")
 check("cli --help: exit 0", st.exitstatus == 0 && out.start_with?("usage:"))
 
-# 想定外の例外は、Ruby の既定の exit 1 (所見あり と同じ値) でなく exit 2 で、stdout を空にする。
+# 1 つの file の想定外の失敗は、その file を確かめられないにして、残りの file の結果を出す。
 require "stringio"
-orig_check_repo = CC.method(:check_repo)
-CC.define_singleton_method(:check_repo) { |_dir| raise NoMethodError, "boom" }
+orig_check_workflow = CC.method(:check_workflow)
+CC.define_singleton_method(:check_workflow) do |path, content|
+  raise NoMethodError, "boom" if path.end_with?("/reuse.yaml")
+
+  orig_check_workflow.call(path, content)
+end
 saved_out, saved_err = $stdout, $stderr
 $stdout, $stderr = StringIO.new, StringIO.new
+saved_dir = Dir.pwd
 begin
+  Dir.chdir(repo)
   code = CC.main([])
   captured = [$stdout.string, $stderr.string]
 ensure
+  Dir.chdir(saved_dir)
   $stdout, $stderr = saved_out, saved_err
-  CC.define_singleton_method(:check_repo, orig_check_repo)
+  CC.define_singleton_method(:check_workflow, orig_check_workflow)
 end
-check("main unexpected exception: exit 2, stdout empty, class on stderr",
-      code == 2 && captured[0].empty? && captured[1].include?("NoMethodError") && !captured[1].include?("boom"))
+report = JSON.parse(captured[0]) rescue nil
+check("per-file unexpected exception: exit 2 with the other files",
+      code == 2 && report && report["scope"]["not_seen"] == [".github/workflows/reuse.yaml (想定外の失敗 (NoMethodError))"] &&
+        report["scope"]["seen"] == [".github/workflows/test.yml"] && !captured[0].include?("boom"))
+
+# 想定外の例外は、Ruby の既定の exit 1 (所見あり と同じ値) でなく exit 2 で、stdout を空にする。
+orig_check_repo = CC.method(:check_repo)
+[NoMethodError, SystemStackError].each do |klass|
+  CC.define_singleton_method(:check_repo) { |_dir| raise klass, "boom" }
+  saved_out, saved_err = $stdout, $stderr
+  $stdout, $stderr = StringIO.new, StringIO.new
+  begin
+    code = CC.main([])
+    captured = [$stdout.string, $stderr.string]
+  ensure
+    $stdout, $stderr = saved_out, saved_err
+    CC.define_singleton_method(:check_repo, orig_check_repo)
+  end
+  check("main #{klass}: exit 2, stdout empty, class on stderr",
+        code == 2 && captured[0].empty? && captured[1].include?(klass.name) && !captured[1].include?("boom"))
+end
 
 # C locale でも日本語の出力が壊れない。
 out, err, st = run_cli(repo, env: { "LC_ALL" => "C", "LANG" => "C", "LC_CTYPE" => "C" })

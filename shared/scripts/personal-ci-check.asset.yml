@@ -14,19 +14,21 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:487b92931b9e4e7d99c0202ec94af41d208e4db57257c0065291211acb589bb7
+  approved_build_id: sha256:36e1ebd7205eafdcde633a3a3a0303d4660fd83f1f1ea787bd3894c40a09fa71
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-ci-check.rb
   format: text
 summary: >-
   GitHub Actions の workflow の file を決まった規則で検査し、所見を personal-repo-audit の findings.schema.json の形の
-  JSON で stdout に出す (#541)。AI を使わず、GitHub にも network にも触れず (git を --no-lazy-fetch で起動し、今の
-  directory の repo の HEAD の commit を読むだけ。作業ツリーの未 commit の変更は読まない)、何も書かない。対象は
+  JSON で stdout に出す (#541)。AI を使わず、GitHub にも network にも触れず (git を --no-lazy-fetch と
+  --no-replace-objects で起動し、今の directory の repo の HEAD の commit の実体を読むだけ。作業ツリーの未 commit の
+  変更は読まない)、何も書かない。対象は
   .github/workflows/ の直下の *.yml / *.yaml。規則は timeout-missing (job に timeout-minutes が無い。reusable workflow
   を呼ぶ job は書けないので見ない) と concurrency-missing (pull_request で起動する workflow に、top level にもすべての
   job にも concurrency が無い。proposal で判断が要る)。YAML は stream 全体を parse して文書が 1 つであることを求め、
-  書かれた key と load 後の key が 1 対 1 でない形 (重なる key、解決で衝突する key、merge key) を拒む。出力に載せるのは
+  load の前に入れ子の深さ (64 段まで) と明示の tag を、後に書かれた key と load 後の key が 1 対 1 でない形 (重なる key、
+  解決で衝突する key、merge key) を拒む。出力に載せるのは
   規則の形に合う file と job の名前と決まった文言だけ。repo を選ぶ git の環境変数を継承していれば止める。exit 0 = 所見
   なし / 1 = 所見あり / 2 = usage・repo や HEAD を解決できない・git の失敗・想定外の例外・確かめられない file が有る
   (YAML として読めない、文書が 1 つでない、key が書かれたとおりに読めない、workflow の形でない、通常の file でない、
