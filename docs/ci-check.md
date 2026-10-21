@@ -32,7 +32,8 @@ usage: personal-ci-check [--help|-h]
 - 作業ツリーの未 commit の変更は読みません (sweep が監査する commit と揃えるため)。repo の中の subdirectory から
   起動しても、repo の root の `.github/workflows/` を読みます (git は今の directory で動かし、tree は pathspec を
   使わずに名前の完全一致で辿り、`ls-tree` は `--full-tree` で cwd に絞らせない。repo の root の path は経由しない)。
-- `.github/workflows/` の subdirectory と、`*.yml` / `*.yaml` でない file は見ません (GitHub も workflow として読まない)。
+- `.github/workflows/` の subdirectory (名前によらない。`archive.yml/` も) と、`*.yml` / `*.yaml` でない file は見ません
+  (GitHub も workflow として読まない)。
 - repo を選ぶ git の環境変数 (`GIT_DIR`・`GIT_WORK_TREE`・`GIT_INDEX_FILE`・`GIT_COMMON_DIR`・`GIT_OBJECT_DIRECTORY`・
   `GIT_ALTERNATE_OBJECT_DIRECTORIES`・`GIT_NAMESPACE`) を 1 つでも継承していれば (値が空でも)、別の repo を読みうるので
   止めます (`personal-packet` と同じ集合)。
@@ -93,19 +94,31 @@ stdout に `findings.schema.json` に適合する JSON を 1 つ出します。
 
 ## YAML の読み方
 
-- 先に `Psych.parse_stream` で stream 全体を parse し (`YAML.safe_load` は先頭の文書しか読まないので、後ろの文書の
-  構文の誤りや 2 つ目の文書を見落とす)、文書が 1 つであることを求めます。
-- `safe_load` の前に AST を反復で (再帰せずに) 辿り、入れ子が 64 段以下で、明示の tag が無いことを確かめます。
-  `safe_load` と下の key の検査は再帰するので、深い入れ子は `SystemStackError` になるためです (workflow は 10 段ほど)。
-  tag は値の型や構造を変える (`!!omap` の sequence は mapping に読まれ、重なった key が後の値で上書きされる) ので、
-  どこにあっても読みません。psych の版で `safe_load` の失敗の仕方が違っても同じ理由で止まるよう、load の前に見ます。
-- 値は `YAML.safe_load` で読みます (psych 3 / 4 の両方)。anchor と alias は GitHub が workflow で受け付けるので許し、
-  値の型は日付の literal (Date / Time) まで許します。
-- AST と load した値を並べて辿り、どの mapping でも書かれた key と load 後の key が 1 対 1 であることを確かめます
-  (`scripts/lib/yaml_util.rb` と同じ考え方。配布する script は単体の file なので写している)。同じ key を 2 度書くと
-  `safe_load` は後の値で黙って上書きし (`on: pull_request` の後の `on: push` で pull_request が消える)、plain の key は
-  YAML の解決で衝突するので、そのままでは GitHub と違う値を見うるためです。merge key (`<<`) は、GitHub が受け付けるか
-  を docs で確かめられず、load 後の key の並びも書かれた順と揃わないので読みません。
+読む順は次のとおりです。処理量の大きい段 (AST を作る・値に変換する) の前に、その段を重くする形を止めます。
+
+1. **入れ子の深さ** (AST を作る前): parse の event を数える parser (`Psych::Parser` と handler) で collection の
+   入れ子の深さを数え、64 段を超えた時点で打ち切ります。libyaml の parse は入れ子の深さに対して二乗の時間がかかり
+   (10 万段で約 18 秒、1 MiB の上限いっぱいなら数分)、`safe_load` と下の key の検査は再帰する (深い入れ子は
+   `SystemStackError`) ためです。workflow は 10 段ほどです。
+2. **stream 全体** (`Psych.parse_stream`): `YAML.safe_load` は先頭の文書しか読まないので、後ろの文書の構文の誤りや
+   2 つ目の文書を見落とします。stream 全体を AST にして、文書が 1 つであることを求めます。
+3. **AST の形** (`safe_load` の前。反復で辿る):
+   - 明示の tag が無いこと。tag は値の型や構造を変える (`!!omap` の sequence は mapping に読まれ、重なった key が後の
+     値で上書きされる) ので、どこにあっても読みません。psych の版で `safe_load` の失敗の仕方が違っても、同じ理由で
+     止まります。
+   - mapping の key が scalar で、merge key (`<<`) でないこと。alias や collection の key は、値に変換して Hash に入れる
+     ときに hash を計算します。alias で共有した配列を重ねると、浅く小さい file のままその計算が指数的に増えます。merge
+     key は、GitHub が受け付けるかを docs で確かめられず、load 後の key の並びも書かれた順と揃いません。
+4. **値** (`YAML.safe_load`。psych 3 / 4 の両方): anchor と alias は GitHub が workflow で受け付けるので許し、値の型は
+   日付の literal (Date / Time) まで許します。
+5. **key の対応** (load の後): AST と load した値を並べて辿り、どの mapping でも書かれた key と load 後の key が 1 対 1
+   であることを確かめます (`scripts/lib/yaml_util.rb` と同じ考え方。配布する script は単体の file なので写している)。
+   同じ key を 2 度書くと `safe_load` は後の値で黙って上書きし (`on: pull_request` の後の `on: push` で pull_request が
+   消える)、plain の key は YAML の解決で衝突するので、そのままでは GitHub と違う値を見うるためです。load 後の値の
+   並びは mapping ごとに 1 度だけ作ります (key の数の二乗にしない)。
+
+ほかに:
+
 - YAML 1.1 の規則で、引用しない key の `on` は `true` に読まれます。`on` と `true` の両方を `on` として見ます。
 - 行番号は、同じ AST の `jobs` の key の行です。
 

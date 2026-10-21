@@ -55,8 +55,7 @@ module CiCheck
   # GitHub の job の名前の規則 (文字か _ で始まり、英数字と - と _ だけ)。外れる workflow は GitHub も受け付けない。
   JOB_ID_RE = /\A[A-Za-z_][A-Za-z0-9_-]*\z/.freeze
   MAX_FILE_BYTES = 1024 * 1024
-  # YAML の入れ子の深さの上限。safe_load と check_keys! は再帰するので、深い入れ子は SystemStackError になる。
-  # workflow は 10 段ほどなので余裕を持たせる。
+  # YAML の collection の入れ子の深さの上限 (DepthGuard)。workflow は 10 段ほどなので余裕を持たせる。
   MAX_DEPTH = 64
   # `git ls-tree -z -l` の 1 entry: <mode> SP <type> SP <oid> SP <size (blob 以外は -)> TAB <name>。
   TREE_ENTRY_RE = /\A(\d{6}) (blob|tree|commit) ([0-9a-f]{40}|[0-9a-f]{64}) +(\d+|-)\t(.+)\z/m.freeze
@@ -68,6 +67,39 @@ module CiCheck
   class RunError < StandardError; end
   # 1 つの workflow の file を確かめられない (exit 2、scope.not_seen に理由)。
   class FileError < StandardError; end
+
+  # AST を作る前に、parse の event で collection の入れ子の深さを数え、MAX_DEPTH を超えた時点で打ち切る。libyaml の
+  # parse は入れ子の深さに対して二乗の時間がかかり (10 万段で約 18 秒)、safe_load と check_keys! は再帰する
+  # (深い入れ子は SystemStackError) ため。
+  class DepthGuard < Psych::Handler
+    def initialize
+      super
+      @depth = 0
+    end
+
+    def start_sequence(*)
+      enter
+    end
+
+    def start_mapping(*)
+      enter
+    end
+
+    def end_sequence
+      @depth -= 1
+    end
+
+    def end_mapping
+      @depth -= 1
+    end
+
+    private
+
+    def enter
+      @depth += 1
+      raise FileError, "入れ子が深すぎる (#{MAX_DEPTH} 段まで)" if @depth > MAX_DEPTH
+    end
+  end
 
   module_function
 
@@ -170,6 +202,8 @@ module CiCheck
     files = []
     unreadable = []
     tree_entries(dir, workflows[:oid]).each do |e|
+      # subdirectory は GitHub も workflow として読まないので、名前によらず見ない (`archive.yml/` も)。
+      next if e[:type] == "tree"
       next unless e[:name].match?(WORKFLOW_EXT_RE)
 
       unless e[:name].match?(SAFE_FILE_RE)
@@ -256,11 +290,13 @@ module CiCheck
     { findings: findings, not_problems: not_problems }
   end
 
-  # 1 つの文書だけを読み、[AST の root, load した値] を返す。safe_load は stream の先頭の文書しか読まないので、
-  # stream 全体の構文を先に parse で確かめ、文書が 1 つであることを求める。safe_load の前に AST の形
-  # (check_ast!) を、後に書かれた key と load 後の key の対応 (check_keys!) を確かめる。anchor と alias は GitHub
-  # が workflow で受け付けるので許す。値の型は Date / Time まで (日付の literal)。
+  # 1 つの文書だけを読み、[AST の root, load した値] を返す。最初に event の parser で入れ子の深さを確かめ
+  # (DepthGuard)、次に stream 全体を AST に parse して文書が 1 つであることを求める (safe_load は stream の先頭の
+  # 文書しか読まない)。safe_load の前に AST の形 (check_ast!) を、後に書かれた key と load 後の key の対応
+  # (check_keys!) を確かめる。anchor と alias は GitHub が workflow で受け付けるので許す。値の型は Date / Time まで
+  # (日付の literal)。
   def load_yaml(content, path)
+    Psych::Parser.new(DepthGuard.new).parse(content, path)
     documents = Psych.parse_stream(content, filename: path).children
     raise FileError, "YAML の文書が 1 つでない" unless documents.size == 1
 
@@ -277,42 +313,49 @@ module CiCheck
     raise FileError, "YAML として読めない (#{e.class})"
   end
 
-  # safe_load の前に AST を反復で辿り (再帰しない)、入れ子の深さが MAX_DEPTH 以下で、明示の tag が無いことを
-  # 確かめる。tag は値の型や構造を変える (`!!omap` の sequence は mapping に読まれ、重なった key が後の値で上書き
-  # される) ので、どこにあっても読まない。psych の版で safe_load の失敗の仕方が違っても、同じ理由で止まるように
-  # load の前に見る。
+  # safe_load の前に AST を反復で辿り (入れ子の深さは DepthGuard が済ませている)、次を確かめる。load の前に見るのは、
+  # psych の版で safe_load の失敗の仕方が違っても同じ理由で止まるように、また load そのものの処理量を抑えるため。
+  # - 明示の tag が無い。tag は値の型や構造を変える (`!!omap` の sequence は mapping に読まれ、重なった key が後の
+  #   値で上書きされる) ので、どこにあっても読まない。
+  # - mapping の key が scalar で、merge key (`<<`) でない。alias や collection の key は、load で Hash に入れるときに
+  #   hash を計算する。alias で共有した配列を重ねると、浅く小さい file のままその計算が指数的に増える。merge key は
+  #   load 後の key の並びが書かれた順と揃わない。
   def check_ast!(root)
-    stack = [[root, 1]]
+    stack = [root]
     until stack.empty?
-      node, depth = stack.pop
-      raise FileError, "入れ子が深すぎる (#{MAX_DEPTH} 段まで)" if depth > MAX_DEPTH
+      node = stack.pop
       raise FileError, "明示の tag は読まない" if node.respond_to?(:tag) && node.tag
 
-      node.children&.each { |child| stack.push([child, depth + 1]) }
+      if node.is_a?(Psych::Nodes::Mapping)
+        node.children.each_slice(2) do |key, _child|
+          raise FileError, "mapping の key が scalar でない" unless key.is_a?(Psych::Nodes::Scalar)
+          raise FileError, "merge key (<<) は読まない" if key.value == "<<"
+        end
+      end
+      node.children&.each { |child| stack.push(child) }
     end
   end
 
   # AST と load した値を並べて辿り、どの mapping でも、書かれた key と load 後の key が 1 対 1 であることを
   # 確かめる (scripts/lib/yaml_util.rb の check_tree! と同じ考え方。配布する script は単体の file なので写す)。
   # 同じ key を 2 度書くと safe_load は後の値で黙って上書きし、plain の key は YAML の解決で衝突する (`on` と
-  # `true` はどちらも true) ので、そのまま読むと GitHub と違う値を見うる。merge key (`<<`) は load 後の key の
-  # 並びが書かれた順と揃わないので読まない。alias は定義の側で辿る。
+  # `true` はどちらも true) ので、そのまま読むと GitHub と違う値を見うる。key が scalar で merge key でないことは
+  # check_ast! が load の前に確かめている。alias は定義の側で辿る。
   def check_keys!(node, value)
     case node
     when Psych::Nodes::Mapping
       pairs = node.children.each_slice(2).to_a
       seen = {}
       pairs.each do |key, _child|
-        raise FileError, "mapping の key が scalar でない" unless key.is_a?(Psych::Nodes::Scalar)
-        raise FileError, "merge key (<<) は読まない" if key.value == "<<"
         raise FileError, "key が重なる" if seen.key?(key.value)
 
         seen[key.value] = true
       end
       raise FileError, "key が YAML の解決で重なる" unless value.is_a?(Hash) && value.size == pairs.size
 
-      # 重なりが無いので、load 後の値は書かれた順に並ぶ (Hash は挿入順)。
-      pairs.each_with_index { |(_key, child), i| check_keys!(child, value.values[i]) }
+      # 重なりが無いので、load 後の値は書かれた順に並ぶ (Hash は挿入順)。values は 1 度だけ作る。
+      values = value.values
+      pairs.each_with_index { |(_key, child), i| check_keys!(child, values[i]) }
     when Psych::Nodes::Sequence
       # tag を拒んでいるので、sequence は同じ件数の Array に読まれる (yaml_util と同じく、崩れたら止める)。
       raise FileError, "sequence が書かれたとおりに読めない" unless value.is_a?(Array) && value.size == node.children.size

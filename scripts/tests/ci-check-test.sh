@@ -241,6 +241,29 @@ def run_cli(dir, *args, env: {})
   Open3.capture3(CLEAN_ENV.merge(env), RUBY_BIN, SRC, *args, chdir: dir)
 end
 
+# 時間の上限つきで CLI を起動する。上限までに終わらなければ止めて nil を返す (load の処理量を抑える検査が外れると
+# 終わらない入力に使う)。
+def run_cli_timed(dir, seconds)
+  out_r, out_w = IO.pipe
+  err_r, err_w = IO.pipe
+  pid = Process.spawn(CLEAN_ENV, RUBY_BIN, SRC, chdir: dir, out: out_w, err: err_w)
+  out_w.close
+  err_w.close
+  readers = [Thread.new { out_r.read }, Thread.new { err_r.read }]
+  deadline = Time.now + seconds
+  status = nil
+  until (status = Process.wait2(pid, Process::WNOHANG)&.last)
+    if Time.now > deadline
+      Process.kill("KILL", pid)
+      Process.wait(pid)
+      readers.each(&:join)
+      return nil
+    end
+    sleep 0.1
+  end
+  [readers[0].value, readers[1].value, status]
+end
+
 # schema の instance の検証 (型・required・additionalProperties: false・enum)。違反を配列で返す。
 def schema_errors(node, value, path = "$", errors = [])
   case node["type"]
@@ -288,6 +311,7 @@ repo = make_repo(File.join(tmp, "repo"), {
   ".github/workflows/reuse.yaml" => reuse_yaml,
   ".github/workflows/README.md" => "not a workflow\n",
   ".github/workflows/sub/nested.yml" => "on: push\njobs:\n  x:\n    runs-on: x\n",
+  ".github/workflows/archive.yml/nested.yml" => "on: push\njobs:\n  x:\n    runs-on: x\n",
   "README.md" => "x\n",
 })
 out, err, st = run_cli(repo)
@@ -370,17 +394,41 @@ check("cli broken second document: listed and others checked",
       report && report["scope"]["not_seen"] == [".github/workflows/two.yml (YAML として読めない (Psych::SyntaxError))"] &&
         report["scope"]["seen"] == [".github/workflows/test.yml"])
 
-# 深い入れ子の file も、落ちずに (exit 1 と取り違えずに) 確かめられない file として残りを出す。
+# 深い入れ子の file も、落ちずに (exit 1 と取り違えずに) 確かめられない file として残りを出す。libyaml の parse は
+# 深さに対して二乗の時間がかかる (50 万段なら数分) ので、上限の時間内に終わることも確かめる。
+deep_body = nested.call(500_000)
+check("fixture: the deep file is within the size limit", deep_body.bytesize <= CC::MAX_FILE_BYTES)
 deep = make_repo(File.join(tmp, "deep"), {
   ".github/workflows/test.yml" => ci_yml,
-  ".github/workflows/deep.yml" => nested.call(100_000),
+  ".github/workflows/deep.yml" => deep_body,
 })
-out, err, st = run_cli(deep)
-report = JSON.parse(out) rescue nil
-check("cli deep nesting: exit 2 with JSON (#{err})", st.exitstatus == 2 && report.is_a?(Hash))
-check("cli deep nesting: listed and others checked",
-      report && report["scope"]["not_seen"] == [".github/workflows/deep.yml (入れ子が深すぎる (64 段まで))"] &&
-        report["scope"]["seen"] == [".github/workflows/test.yml"])
+res = run_cli_timed(deep, 30)
+check("cli deep nesting: finishes in time", !res.nil?)
+if res
+  report = JSON.parse(res[0]) rescue nil
+  check("cli deep nesting: exit 2 with JSON (#{res[1]})", res[2].exitstatus == 2 && report.is_a?(Hash))
+  check("cli deep nesting: listed and others checked",
+        report && report["scope"]["not_seen"] == [".github/workflows/deep.yml (入れ子が深すぎる (64 段まで))"] &&
+          report["scope"]["seen"] == [".github/workflows/test.yml"])
+end
+
+# alias で共有した配列を重ねて mapping の key にすると、load で Hash に入れるときの hash の計算が指数的に増える。
+# load の前に止め、上限の時間内に exit 2 で残りの file を出す (検査が load の後なら終わらない)。
+chain = (1..40).map { |i| "a#{i}: &a#{i} [*a#{i - 1}, *a#{i - 1}]\n" }.join
+alias_bomb = "a0: &a0 [x]\n" + chain + "on: push\njobs:\n  j:\n    runs-on: x\n    timeout-minutes: 5\nk:\n  ? *a40\n  : v\n"
+bomb = make_repo(File.join(tmp, "bomb"), {
+  ".github/workflows/test.yml" => ci_yml,
+  ".github/workflows/bomb.yml" => alias_bomb,
+})
+res = run_cli_timed(bomb, 30)
+check("cli alias key bomb: finishes in time", !res.nil?)
+if res
+  report = JSON.parse(res[0]) rescue nil
+  check("cli alias key bomb: exit 2, listed, others checked",
+        res[2].exitstatus == 2 && report &&
+          report["scope"]["not_seen"] == [".github/workflows/bomb.yml (mapping の key が scalar でない)"] &&
+          report["scope"]["seen"] == [".github/workflows/test.yml"])
+end
 
 # replacement ref (refs/replace/) を当てず、HEAD の実体を読む (commit の置き換えも blob の置き換えも)。
 replaced = make_repo(File.join(tmp, "replaced"), { ".github/workflows/test.yml" => ci_yml })
@@ -488,6 +536,27 @@ orig_check_repo = CC.method(:check_repo)
   check("main #{klass}: exit 2, stdout empty, class on stderr",
         code == 2 && captured[0].empty? && captured[1].include?(klass.name) && !captured[1].include?("boom"))
 end
+
+# key の多い mapping でも、key の対応の検査は load 後の値の並びを 1 度だけ作る (key の数の二乗にしない)。時間では
+# なく Hash#values の呼び出し回数で確かめる (in-process の検査の最後に置く。prepend はこの process の以後の Hash に
+# 残るため。後ろの CLI の検査は別 process)。
+module ValuesCounter
+  class << self
+    attr_accessor :count
+  end
+  self.count = 0
+
+  def values
+    ValuesCounter.count += 1
+    super
+  end
+end
+Hash.prepend(ValuesCounter)
+many = "on: push\njobs:\n  j:\n    runs-on: x\n    timeout-minutes: 5\n    env:\n" +
+       (1..2000).map { |i| "      K#{i}: v\n" }.join
+ValuesCounter.count = 0
+check("many keys: read", file_error(many).nil?)
+check("many keys: values built once per mapping (#{ValuesCounter.count})", ValuesCounter.count < 20)
 
 # C locale でも日本語の出力が壊れない。
 out, err, st = run_cli(repo, env: { "LC_ALL" => "C", "LANG" => "C", "LC_CTYPE" => "C" })
