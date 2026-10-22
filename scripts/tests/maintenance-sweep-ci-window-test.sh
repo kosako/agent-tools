@@ -143,7 +143,8 @@ dir	$tmp/fx/dir.json	unreadable	-	$floor
 EOF
 }
 
-(cd "$tmp/fx" && ls -lAR .) > "$tmp/before"
+# 中身 (sha256)・mode・path で比べる (同じ大きさの書き換えも捕まえる。#554 review R3)。
+tree_snapshot "$tmp/fx" > "$tmp/before"
 tab=$(printf '\t')
 ran=0
 for shell in sh zsh; do
@@ -174,7 +175,7 @@ for shell in sh zsh; do
 done
 [ "$ran" -gt 0 ] || fail "sh も zsh も無い"
 
-(cd "$tmp/fx" && ls -lAR .) > "$tmp/after"
+tree_snapshot "$tmp/fx" > "$tmp/after"
 cmp -s "$tmp/before" "$tmp/after" \
   || fail "block が ci.json の置き場の file を書き換えた・作った: $(diff "$tmp/before" "$tmp/after" || true)"
 
