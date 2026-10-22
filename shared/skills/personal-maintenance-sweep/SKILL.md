@@ -13,8 +13,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 ## 副作用と組み合わせ
 
 - 副作用: 監査と反証は read-only で、repo の file を書き換えない。repo の設定は `personal-repo-baseline --check` で
-  読むだけで、直さない (手順 0b)。CI の workflow は `personal-ci-check` で読むだけ (手順 3 の `ci` の単位)。issues
-  モードでは GitHub に書く (所見の
+  読むだけで、直さない (手順 0b)。CI の workflow と run の記録は `personal-ci-check` で読むだけ (手順 3 の `ci` の
+  単位)。issues モードでは GitHub に書く (所見の
   Issue の作成、追跡 Issue の作成と本文の更新とコメント、label の作成)。fix モードではさらに、run dir の下の
   linked worktree で docs を直し、branch を push し、PR を作り、review の依頼 / 結果 / follow-up をコメントする
   (`FIX.md`。コメントは personal-review-request の write gate の範囲だけ。merge と配備は人)。書く本文と公開する差分は先に public-safety の gate に通す。local の state と
@@ -160,15 +160,23 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 単位ごとに次を行います。
 
 - **`ci` の単位**: 配備済みの `personal-ci-check` (`<tool home>/agent-tools/scripts/`。規則と出力の正本は agent-tools
-  の `docs/ci-check.md`) を、引数なしで今の repo にかける。script は HEAD の commit だけを決まった規則で読み、AI も
-  network も使わないので、監査役によらず同じ手順。Codex の session は自分では監査しないので、`ci` の単位は `pending`
-  のまま残し、Claude Code の session の再開でかける。
+  の `docs/ci-check.md`) を、`--since` と `--until` で run の記録の窓を付けて今の repo にかける。script は HEAD の
+  commit を決まった規則で読み、窓の run の記録を GitHub の API で読む (GET だけ)。AI は使わないので、監査役によらず
+  同じ手順。Codex の session は自分では監査しないので、`ci` の単位は `pending` のまま残し、Claude Code の session の
+  再開でかける。
+  - 窓: かける前に、`RECORD.md` の `ci.json` の block で決める (前の run が点検し終えた時刻から今まで。
+    初回は直近 30 日で、窓は 30 日まで)。block の出力の値を literal の変数に入れて渡す。
+  - かけ直し: 出力が下の形で、`scope.not_seen` に「run の記録」で始まる行がある (run の記録を確かめられない) ときは、
+    block の `since` の次の始まり (前の始まりを until との中間まで遅らせたもの) でかけ直す。2 回まで。理由では分けない
+    (上限に当たったときは窓を縮めると通りうる。それ以外の失敗はすぐ終わるので、かけ直しの手間は小さい)。かけ直しの
+    出力が下の形でなければ、かけ直しをやめて前の結果を使う。下の分岐は使う結果に当てる。
   - exit 0 か 1、または exit 2 で stdout が空でない (確かめられない file がある) とき: stdout が repo-audit の
     `findings.schema.json` の形 (JSON として読めて必須の key がある) なら `units/<n>/result.json` に保存して
     `audited` にし、他の単位と同じく反証へ進む。`scope.not_seen` の file は報告に書く (手順 9)。
   - exit 2 で stdout が空 (run 全体の失敗)、stdout が上の形でない、または script が無い (未配備で起動できない)
     とき: 所見なしで `done` にし、報告に「CI を確かめられない」と理由 (stderr) を書く。sweep は止めない。
-  - exit と stderr は state の単位に残す (`RECORD.md`)。
+  - exit と stderr、窓 (使った結果の since と until、block の basis と unseen_from、かけた回数) は state の単位に残す
+    (`RECORD.md`)。窓の時刻 (`ci.json`) を進めるかは手順 8 で決める。
 - **監査役が Claude**: personal-repo-audit の手順で監査し (観点の fan-out は repo-audit のとおり)、結果を
   repo-audit の `findings.schema.json` の形の JSON にして run dir に保存する。
 - **監査役が Codex**: personal-repo-audit の `CODEX-LAUNCH.md` の起動で Codex に監査させる。effort は
@@ -241,6 +249,12 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   確認の結果 (手順 0b)。単位ごとに保存してあるので、中断しても続きから再開できる。
 - **fix モード**: repo 単位の `fixes.json` に所見ごとの段階・branch・OID・PR・review の round を残し、追跡 Issue の
   run のコメントに修正 PR と直さなかった所見を足す ([FIX.md](FIX.md) / [RECORD.md](RECORD.md))。
+- **CI の窓** (repo 単位の `ci.json`。[RECORD.md](RECORD.md)): 起票まで進む run (issues モード。fix の入口 (a) を含む) で、
+  `ci` の単位が `done`、`units/<n>/result.json` があってその `scope.not_seen` に「run の記録」で始まる行が無く、`ci` の
+  単位の所見に起票の上限 (手順 7) で次の run に回したものが無いときだけ、`checked_until` をその単位の `until` に進める。
+  それ以外 (report モード、run の記録を確かめられない、上限で回した所見がある) は進めない。次の run が同じ始まりから
+  見直し、起票済みの所見は手順 6 の重複の照合で拾われる (report モードの所見は起票していないので、次の起票する run で
+  拾い直す)。
 
 ### 9. 報告する
 
@@ -252,8 +266,9 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 - fix モードでは、直した PR (所見、review の round と verdict)、直さなかった所見 (印なし / 範囲外 / 既存の PR /
   上限 / review 未収束 / 確かめ直しで不成立) と理由
 - repo の設定 (手順 0b): ずれ無し、ずれの項目と直し方 (`--apply` は人が承認したら)、または確かめられない (理由)
-- CI の検査 (手順 3 の `ci` の単位): 確かめられない file (`scope.not_seen`)、または確かめられない (理由)。所見は
-  他の単位と同じく、上の起票・重複・反証の内訳に数える
+- CI の検査 (手順 3 の `ci` の単位): 確かめられない file (`scope.not_seen`)、または確かめられない (理由)。点検した
+  run の記録の窓と、窓の時刻を進めたか (進めないときは理由)。見なかった期間 (`basis` が `capped`、かけ直しで縮めた) と、
+  `ci.json` を読めない (`unreadable`) ことも書く。所見は他の単位と同じく、上の起票・重複・反証の内訳に数える
 - 次の run への申し送り
 
 ## 停止と縮小
@@ -272,6 +287,7 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 | GitHub に届かない (issues モード) | report モードに切り替えるかを確認する |
 | repo の設定を確かめられない (`personal-repo-baseline` が無い、exit 2) | sweep は止めない。報告に「確かめられない」と理由を書く |
 | CI を確かめられない (`personal-ci-check` が無い、exit 2 で stdout が空、stdout が所見の JSON の形でない) | sweep は止めない。`ci` の単位を所見なしで `done` にし、報告に理由を書く |
+| run の記録を確かめられない (`personal-ci-check` の `scope.not_seen` に「run の記録」の行) | 窓の始まりを until との中間まで遅らせて 2 回までかけ直す。それでも確かめられなければ静的な検査の結果で進め、窓の時刻は進めない |
 | fix モードで local の HEAD が remote の default branch と違う | fix を始めない。未 push の commit や分岐を人に確認する |
 | fix モードで所見に既存の open PR / branch がある、または同じ file を他の open PR が触る | 新しく作らず、再開か延期にする (close 済み未 merge の PR は人に確認) |
 | fix モードで reviewer が起動できない、または review が 3 回で収束しない | PR を残して `blocked` にし、未解決の項目と次の入口を記録する。未レビューを完了扱いにしない |

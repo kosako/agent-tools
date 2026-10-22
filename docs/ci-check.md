@@ -16,8 +16,10 @@ remote から取りに行かず (object database にも書かず)、git の失�
   AI を使わない `ci` の単位を足し、この script の出力をその単位の監査の結果として、通常の流れ (反証 → triage → 重複の
   照合 → 起票。proposal は追跡 Issue のコメント) に乗せます (sweep の `SKILL.md` 手順 3)。script が無い・run 全体が
   失敗したときは、sweep を止めずに「CI を確かめられない」と報告します。人が repo で直接かけて出力を読んでもかまいません。
-  sweep が窓の時刻 (`--since` / `--until`) を渡して run の記録も点検するのは、#541 の次の PR からです (それまでは静的な
-  検査だけ)。
+- sweep は、前の run が run の記録を点検し終えた時刻から今までを窓にして `--since` / `--until` を渡します (初回は直近
+  30 日で、窓は 30 日まで)。run の記録を確かめられなければ、窓の始まりを中間まで遅らせて 2 回までかけ直します。点検し
+  終えた時刻は sweep の手元の記録 (repo ごとの `ci.json`) が持ち、起票まで進んで run の記録の所見を扱い終えたときだけ
+  進めます (sweep の `SKILL.md` 手順 3 と 8、形と窓の決め方は `RECORD.md`)。
 - 所見は Issue にしてよいものとして扱います。`personal-repo-baseline` (#539) が Issue にしないのは守り (alerts・secret
   scanning・branch の保護) の抜けで、timeout や concurrency は資源の使い方の問題だからです。攻撃の手順が分かる所見は、
   sweep の security の扱い (公開しない) に従います。
