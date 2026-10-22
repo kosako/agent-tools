@@ -2,14 +2,17 @@
 # personal-maintenance-sweep の手順 3 の `ci` の単位 (personal-ci-check で CI の workflow を決まった規則に当てる。#541) の
 # 契約を検査する。
 # - 手順 3 が、どのプリセットでも単位の先頭に AI を使わない `ci` の単位を足すこと、script を引数なしでかけること、
-#   結果を audited にして他の単位と同じく反証へ進めること、確かめられないときは所見なしの done にして sweep を止めない
-#   こと、exit と stderr を state に残すこと、その単位の後は残量を読み直さないことを、それぞれ句として書いている
+#   exit 0 / 1 か exit 2 で stdout が空でなく所見の JSON の形なら audited にして他の単位と同じく反証へ進めること、exit 2 で
+#   stdout が空・形でない・script が無いなら所見なしの done にすること (条件と遷移先を組で見る)、sweep を止めないこと、
+#   exit と stderr を state に残すこと、Codex の session では pending に残すこと、その単位の後は残量を読み直さないことを、
+#   それぞれ句として書いている
 # - 既存の監査結果から始める run と、中断した run の再開が、`ci` の単位を飛ばさない句を書いている
 # - 手順 9 の報告と「停止と縮小」の表に、CI を確かめられないときの扱いがある
 # - RECORD.md の state.json の例が JSON として読め、先頭の単位が `ci` で ci_check に exit / stderr があり、consumption が
 #   `ci` の単位を指さない。`ci` の単位の bullet が、起動できなかったときの書き方と消費を残さないことを書いている
 # - BUDGET.md が、`ci` の単位を単位の数に数えないこと・その後は読み直さないことを書いている
-# - evals に ci の単位の 2 件 (毎回足す / script が無い) がある
+# - evals に ci の単位の 5 件 (毎回足す / script が無い / Codex の session では pending / exit 2 で JSON あり / 壊れた出力)
+#   があり、prompt の前提にどの session かを書いている
 # 句は空白を除いて比べ (行の折り返しの位置に依らない)、句の直後が区切り (。、( か末尾) であることも求める (否定は
 # 句の後ろに付くので、反転した文を部分一致で通さない)。括弧の注釈を挟む句は、注釈を除いてから比べる。
 # 引数で sweep の skill の directory を差し替えられる (変異での確認用)。
@@ -90,16 +93,19 @@ else
   if ci.nil?
     errors << "手順 3 に「`ci` の単位」の bullet が無い"
   else
+    # 分岐は、条件 (exit・stdout・JSON の形) と遷移先を 1 つの句の組で見る (条件だけを消しても落ちるように)。
     {
       plain: [
         "`ci` の単位は `pending` のまま残し、Claude Code の session の再開でかける",
-        "`audited` にし、他の単位と同じく反証へ進む",
         "sweep は止めない",
         "exit と stderr は state の単位に残す",
       ],
       bare: [
         "を、引数なしで今の repo にかける",
-        "所見なしで `done` にし、報告に「CI を確かめられない」と理由を書く",
+        "exit 0 か 1、または exit 2 で stdout が空でないとき: stdout が repo-audit の `findings.schema.json` の形なら " \
+        "`units/<n>/result.json` に保存して `audited` にし、他の単位と同じく反証へ進む",
+        "exit 2 で stdout が空、stdout が上の形でない、または script が無いとき: 所見なしで `done` にし、" \
+        "報告に「CI を確かめられない」と理由を書く",
       ],
     }.each do |kind, clauses|
       missing = clauses.reject { |c| kind == :bare ? bare_clause?(ci, c) : clause?(ci, c) }
@@ -181,9 +187,23 @@ end
   errors << "BUDGET.md に#{what}の句が無い" unless squash(budget).include?(squash(c))
 end
 
-names = evals.fetch("evals").map { |e| e["name"] }
-%w[ci-unit-every-run ci-check-unavailable].each do |n|
-  errors << "evals に #{n} が無い" unless names.include?(n)
+# evals: 毎回足す / script が無い / Codex の session では pending / exit 2 で JSON あり / 壊れた出力。どの session の
+# 前提かを prompt に書く (Codex の session では script をかけないので、期待が変わる)。
+want = {
+  "ci-unit-every-run" => "Claude Code の session",
+  "ci-check-unavailable" => "Claude Code の session",
+  "ci-unit-codex-session-pending" => "Codex の session",
+  "ci-check-exit2-with-json" => "Claude Code の session",
+  "ci-check-broken-output" => "Claude Code の session",
+}
+cases = evals.fetch("evals").map { |e| [e["name"], e] }.to_h
+want.each do |name, session|
+  e = cases[name]
+  if e.nil?
+    errors << "evals に #{name} が無い"
+  elsif !e["prompt"].to_s.include?("[前提: #{session}")
+    errors << "evals の #{name} の prompt に「[前提: #{session}」が無い"
+  end
 end
 
 abort "FAIL: maintenance-sweep-ci\n  " + errors.join("\n  ") unless errors.empty?

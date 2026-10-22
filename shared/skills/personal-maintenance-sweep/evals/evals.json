@@ -742,7 +742,7 @@
     {
       "id": 38,
       "name": "ci-unit-every-run",
-      "prompt": "[前提: 残量から small のプリセット (docs と設計・一貫性の 2 観点) が選ばれる。監査役は Codex、検証役は Claude。repo には .github/workflows/ci.yml があり、personal-ci-check は exit 1 で、所見 F01 (timeout-missing、debt) と F02 (concurrency-missing、proposal) を返す] この repo のメンテを回して Issue にして",
+      "prompt": "[前提: Claude Code の session で起動。残量から small のプリセット (docs と設計・一貫性の 2 観点) が選ばれる。監査役は Codex、検証役は Claude。repo には .github/workflows/ci.yml があり、personal-ci-check は exit 1 で、所見 F01 (timeout-missing、debt) と F02 (concurrency-missing、proposal) を返す] この repo のメンテを回して Issue にして",
       "expected_output": "small の 2 単位の前に、AI を使わない ci の単位を 1 つ足し (単位 1)、配備済みの personal-ci-check を引数なしでかけて stdout を units/1/result.json に保存し、exit と stderr を state の単位に残して audited にする (Codex や Claude に CI を監査させない。この単位の後は残量を読み直さない)。所見は他の単位と同じく U1-F01・U1-F02 として反証に渡す。confirmed の timeout-missing は重複の照合を経て起票し、proposal の concurrency-missing は個別の Issue にせず追跡 Issue の run のコメントにまとめる。",
       "files": [],
       "assertions": [
@@ -767,7 +767,7 @@
     {
       "id": 39,
       "name": "ci-check-unavailable",
-      "prompt": "[前提: この machine には personal-ci-check が配備されていない。残量から medium のプリセットが選ばれる] この repo のメンテを回して Issue にして。CI の扱いだけ先に教えて。手順の確認だけで実行はしない。",
+      "prompt": "[前提: Claude Code の session で起動。この machine には personal-ci-check が配備されていない。残量から medium のプリセットが選ばれる] この repo のメンテを回して Issue にして。CI の扱いだけ先に教えて。手順の確認だけで実行はしない。",
       "expected_output": "ci の単位は足すが、script を起動できないので所見なしで done にし、state の単位の ci_check に exit を null、stderr に理由を書き、報告に「CI を確かめられない」と理由を書く。sweep は止めず、medium の 4 単位の監査を続ける。AI に CI の監査を代わりにさせない。",
       "files": [],
       "assertions": [
@@ -782,6 +782,65 @@
         {
           "id": "no-ai-substitute",
           "text": "script の代わりに AI に CI の監査をさせていない"
+        }
+      ]
+    },
+    {
+      "id": 40,
+      "name": "ci-unit-codex-session-pending",
+      "prompt": "[前提: Codex の session で起動。監査役は Codex、検証役は Claude。残量から small のプリセットが選ばれ、CODEX-LAUNCH.md の起動経路 (herdr の pane) がある。personal-ci-check は配備されている] この repo のメンテを回して Issue にして",
+      "expected_output": "この session 自身では監査も反証もしない。ci の単位は単位の先頭に足すが、script をかけずに pending のまま state に残す。別の Codex を監査役として起こして small の単位の監査の結果を保存したあと、ci の単位と反証から先は Claude Code の session の再開で進めるよう案内して止まる (再開では pending の ci の単位に script をかける)。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "ci-left-pending",
+          "text": "Codex の session で ci の単位に script をかけず、pending のまま残している"
+        },
+        {
+          "id": "no-self-audit",
+          "text": "Codex の session 自身で監査も反証もしていない"
+        },
+        {
+          "id": "resume-in-claude",
+          "text": "ci の単位と反証から先を、Claude Code の session の再開で進めるよう案内している"
+        }
+      ]
+    },
+    {
+      "id": 41,
+      "name": "ci-check-exit2-with-json",
+      "prompt": "[前提: Claude Code の session で起動。残量から small のプリセットが選ばれる。personal-ci-check は exit 2 で、stdout に findings.schema.json の形の JSON を返す。所見は F01 (timeout-missing、debt) で、scope.not_seen に .github/workflows/broken.yml (YAML として読めない) がある] この repo のメンテを回して Issue にして",
+      "expected_output": "exit 2 でも stdout が空でなく所見の JSON の形なので、units/1/result.json に保存して audited にし、F01 を U1-F01 として他の単位と同じく反証に渡す。確かめられない file (.github/workflows/broken.yml) は報告に書く。exit 2 を理由に、所見を捨てて「CI を確かめられない」にしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "keep-findings-on-exit2",
+          "text": "exit 2 でも JSON の所見を保存して audited にし、反証に渡している (所見なしの done にしていない)"
+        },
+        {
+          "id": "report-not-seen",
+          "text": "scope.not_seen の broken.yml を報告に書いている"
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "name": "ci-check-broken-output",
+      "prompt": "[前提: Claude Code の session で起動。残量から small のプリセットが選ばれる。personal-ci-check は exit 1 で終わったが、stdout が JSON として読めない] この repo のメンテを回して Issue にして",
+      "expected_output": "stdout が所見の JSON の形でないので、ci の単位は所見なしで done にし、state の ci_check に exit と stderr を残し、報告に「CI を確かめられない」と理由を書く。sweep は止めず、他の単位を続ける。読めない出力から所見を推測して起票しない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "done-without-findings",
+          "text": "壊れた出力の ci の単位を、所見なしで done にしている"
+        },
+        {
+          "id": "no-guessed-findings",
+          "text": "読めない出力から所見を推測して反証や起票に回していない"
+        },
+        {
+          "id": "continue-sweep",
+          "text": "sweep を止めず、他の単位を続けている"
         }
       ]
     }
