@@ -7,8 +7,8 @@
 #   JSON の形なら audited にして他の単位と同じく反証へ進めること、exit 2 で stdout が空・形でない・script が無いなら所見
 #   なしの done にすること (条件と遷移先を組で見る)、sweep を止めないこと、exit と stderr と窓を state に残すこと、Codex の
 #   session では pending に残すこと、その単位の後は残量を読み直さないことを、それぞれ句として書いている
-# - 手順 8 の「CI の窓」が、窓の時刻を進める条件 (起票まで進む run・done・run の記録の行が無い・上限で回した所見が無い)
-#   と進める先を 1 つの句で書き、それ以外は進めないと書いている
+# - 手順 8 の「CI の窓」が、窓の時刻を進める条件 (起票まで進む run・done・scope.seen に確かめた窓の行がある・上限で
+#   回した所見が無い) と進める先を 1 つの句で書き、それ以外は進めないこと、失敗の行が無いことでは進めない理由を書いている
 # - 既存の監査結果から始める run と、中断した run の再開が、`ci` の単位を飛ばさない句を書いている
 # - 手順 9 の報告に、CI を確かめられないときと、点検した窓・時刻を進めたか・見なかった期間がある。「停止と縮小」の表に、
 #   CI を確かめられないときと run の記録を確かめられないときの扱いがある
@@ -17,9 +17,9 @@
 #   書いている。tree に ci.json があり、ci.json の例が checked_until / run_id の JSON で、basis の表が 4 つの値を持ち、
 #   書き直しが時刻を戻さない句がある (block の振る舞いは maintenance-sweep-ci-window-test.sh)
 # - BUDGET.md が、`ci` の単位を単位の数に数えないこと・その後は読み直さないことを書いている
-# - evals に ci の単位の 9 件 (毎回足す / script が無い / Codex の session では pending / exit 2 で JSON あり / 壊れた出力 /
-#   初回の窓と進める / 縮めてかけ直す / report モードでは進めない / 30 日で切る) があり、prompt の前提にどの session かを
-#   書いている
+# - evals に ci の単位の 10 件 (毎回足す / script が無い / Codex の session では pending / exit 2 で JSON あり / 壊れた出力 /
+#   初回の窓と進める / 縮めてかけ直す / report モードでは進めない / 30 日で切る / 窓の無い保存結果の再開) があり、prompt の
+#   前提にどの session かを書いている
 # 句は空白を除いて比べ (行の折り返しの位置に依らない)、句の直後が区切り (。、( か末尾) であることも求める (否定は
 # 句の後ろに付くので、反転した文を部分一致で通さない)。括弧の注釈を挟む句は、注釈を除いてから比べる。
 # 引数で sweep の skill の directory を差し替えられる (変異での確認用)。
@@ -154,15 +154,20 @@ window = record_step && find(bullets(record_step), "CI の窓")
 if window.nil?
   errors << "手順 8 に「CI の窓」の bullet が無い"
 else
-  # 進める条件と進める先は 1 つの句の組で見る (条件を 1 つ消しても、進める先を変えても落ちるように)。
+  # 進める条件と進める先は 1 つの句の組で見る (条件を 1 つ消しても、進める先を変えても落ちるように)。条件は
+  # 失敗の行が無いことではなく、確かめた窓の行があること (窓を付けずにかけた結果で進めない。#554 review R1)。
   [
-    "起票まで進む run で、`ci` の単位が `done`、`units/<n>/result.json` があってその `scope.not_seen` に「run の記録」で" \
-    "始まる行が無く、`ci` の単位の所見に起票の上限で次の run に回したものが無いときだけ、`checked_until` をその単位の" \
-    "`until` に進める",
+    "起票まで進む run で、`ci` の単位が `done`、`units/<n>/result.json` の `scope.seen` に state の `ci_check` の窓の" \
+    "行があり、`ci` の単位の所見に起票の上限で次の run に回したものが無いときだけ、`checked_until` をその `until` に" \
+    "進める",
     "それ以外は進めない",
+    "失敗の行が無いことではなく確かめた行で見るのは、窓を付けずにかけた結果で進めないため",
   ].each do |c|
     errors << "「CI の窓」の bullet に句 #{c.inspect} が無い" unless bare_clause?(window, c)
   end
+  seen_line = "`scope.seen` に state の `ci_check` の窓の行 (`run の記録 (<since>〜<until>)`。script が run の記録を" \
+              "確かめたときだけ書く) があり"
+  errors << "「CI の窓」の bullet に窓の行の形 #{seen_line.inspect} が無い" unless clause?(window, seen_line)
 end
 
 report = section(skill, "### 9. 報告する")
@@ -254,8 +259,8 @@ end
 end
 
 # evals: 毎回足す / script が無い / Codex の session では pending / exit 2 で JSON あり / 壊れた出力 / 初回の窓と進める /
-# 縮めてかけ直す / report モードでは進めない / 30 日で切る。どの session の前提かを prompt に書く (Codex の session では
-# script をかけないので、期待が変わる)。
+# 縮めてかけ直す / report モードでは進めない / 30 日で切る / 窓の無い保存結果の再開。どの session の前提かを prompt に書く
+# (Codex の session では script をかけないので、期待が変わる)。
 want = {
   "ci-unit-every-run" => "Claude Code の session",
   "ci-check-unavailable" => "Claude Code の session",
@@ -266,6 +271,7 @@ want = {
   "ci-window-retry-halved" => "Claude Code の session",
   "ci-window-report-mode-keeps" => "Claude Code の session",
   "ci-window-capped" => "Claude Code の session",
+  "ci-window-legacy-resume" => "Claude Code の session",
 }
 cases = evals.fetch("evals").map { |e| [e["name"], e] }.to_h
 want.each do |name, session|

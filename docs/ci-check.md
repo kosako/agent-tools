@@ -102,7 +102,8 @@ attempt の記録を読み、次を所見にします (#541)。窓は「終わ�
   と合わない・読む間に `total_count` が変わった・id が重なる、今の repo の GitHub の repo や default branch を解決できない):
   点検の所見はすべて捨て、`scope.not_seen` に
   `run の記録 (<since>〜<until>。<理由>)` の行を書いて exit 2 にします。静的な検査の結果はそのまま出します。sweep は
-  この行の有無で、窓の時刻を進めるかを決めます (接頭辞「run の記録」は契約)。
+  この行の有無で窓を縮めてかけ直すかを決め、確かめたときの `scope.seen` の行 (下) で窓の時刻を進めるかを決めます
+  (接頭辞「run の記録」と、seen の行の形は契約)。
 - **出力に載せないもの**: annotation の文面は自由文 (workflow が出す文を含む) なので載せません。決まった型だけを
   決まった文言にします (`Node.js <版> の deprecation の予告` → topic `deprecation-node-<版>`、`runner の label <label> の
   移行の予告` → `deprecation-runner-label-<label>`。捕まえる値は数字と `[a-z0-9.-]` だけ)。それ以外は「deprecation を
@@ -116,8 +117,8 @@ attempt の記録を読み、次を所見にします (#541)。窓は「終わ�
   `test (a-b)`) ので、hash を添える名前と添えない名前を混ぜると、ある名前の slug が別の名前そのものとぶつかるためです。
   規則の外の名前と、変換で空になる名前は `job-<hash 8 文字>` です。runner の label の key も同じ作り
   (`deprecation-runner-label-ubuntu-latest-<hash>`。`ubuntu-24.04` と `ubuntu-24-04` はぶつからない)。
-- summary に、窓の中に終わった run の本数、各事象の回数、API の呼び出しの回数を書きます。`scope.seen` には
-  `run の記録 (<since>〜<until>)` の行を足します。
+- summary に、窓の中に終わった run の本数、各事象の回数、API の呼び出しの回数を書きます。run の記録を確かめたときだけ、
+  `scope.seen` に `run の記録 (<since>〜<until>)` の行を足します (時刻は渡した `--since` / `--until` と同じ形)。
 
 ## 出力と exit
 

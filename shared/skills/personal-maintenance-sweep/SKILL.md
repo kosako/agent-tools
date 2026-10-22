@@ -250,11 +250,13 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 - **fix モード**: repo 単位の `fixes.json` に所見ごとの段階・branch・OID・PR・review の round を残し、追跡 Issue の
   run のコメントに修正 PR と直さなかった所見を足す ([FIX.md](FIX.md) / [RECORD.md](RECORD.md))。
 - **CI の窓** (repo 単位の `ci.json`。[RECORD.md](RECORD.md)): 起票まで進む run (issues モード。fix の入口 (a) を含む) で、
-  `ci` の単位が `done`、`units/<n>/result.json` があってその `scope.not_seen` に「run の記録」で始まる行が無く、`ci` の
-  単位の所見に起票の上限 (手順 7) で次の run に回したものが無いときだけ、`checked_until` をその単位の `until` に進める。
-  それ以外 (report モード、run の記録を確かめられない、上限で回した所見がある) は進めない。次の run が同じ始まりから
-  見直し、起票済みの所見は手順 6 の重複の照合で拾われる (report モードの所見は起票していないので、次の起票する run で
-  拾い直す)。
+  `ci` の単位が `done`、`units/<n>/result.json` の `scope.seen` に state の `ci_check` の窓の行
+  (`run の記録 (<since>〜<until>)`。script が run の記録を確かめたときだけ書く) があり、`ci` の単位の所見に起票の上限
+  (手順 7) で次の run に回したものが無いときだけ、`checked_until` をその `until` に進める。それ以外 (report モード、
+  run の記録を確かめられない、窓の行が無い・窓と合わない、上限で回した所見がある) は進めない。失敗の行が無いことでは
+  なく確かめた行で見るのは、窓を付けずにかけた結果 (`ci_check` に窓が無い、窓の規則より前に始めた run の再開など) で
+  進めないため。進めなければ次の run が同じ始まりから見直し、起票済みの所見は手順 6 の重複の照合で拾われる (report
+  モードの所見は起票していないので、次の起票する run で拾い直す)。
 
 ### 9. 報告する
 
