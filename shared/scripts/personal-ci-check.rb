@@ -186,9 +186,10 @@ module CiCheck
 
     private
 
-    # gh は自分の process group で起動し、gh の本体の終わりと、出力の pipe の読み終わりの両方を期限で見る (gh が
-    # 起動した子が pipe を握っていれば、本体が終わっても pipe は閉じない)。期限を過ぎたら abandon で、待つものを残さずに
-    # 止める。
+    # gh は自分の process group で起動し、出力の pipe の読み終わりと、gh の本体の終わりの両方を期限で見る (gh が
+    # 起動した子が pipe を握っていれば、本体が終わっても pipe は閉じない)。gh を回収 (wait) するのは pipe を読み終えた
+    # 後だけにする。回収するまで gh の PID と process group の id は再利用されないので、期限を過ぎて abandon が送る
+    # signal の先は、必ずこの gh とその group になる (回収済みの PID に signal を送らない)。
     def run_gh(args)
       out_r, out_w = IO.pipe
       err_r, err_w = IO.pipe
@@ -197,17 +198,15 @@ module CiCheck
       out_w.close
       err_w.close
       readers = [Thread.new { out_r.read }, Thread.new { err_r.read }]
-      status = nil
-      until (status = Process.wait2(pid, Process::WNOHANG)&.last)
-        abandon(pid, readers, reap: true) if Time.now >= @deadline
+      readers.each { |reader| reader.report_on_exception = false }
+      while readers.any?(&:alive?)
+        abandon(pid, readers) if Time.now >= @deadline
         sleep 0.05
       end
-      readers.each do |reader|
-        remaining = @deadline - Time.now
-        next if remaining.positive? && reader.join(remaining)
-
-        # 本体は終わったが、子が pipe を握ったまま期限を過ぎた。
-        abandon(pid, readers, reap: false)
+      status = nil
+      until (status = Process.wait2(pid, Process::WNOHANG)&.last)
+        abandon(pid, readers) if Time.now >= @deadline
+        sleep 0.05
       end
       [readers[0].value, status]
     rescue SystemCallError
@@ -216,15 +215,18 @@ module CiCheck
       [out_r, err_r].each { |io| io&.close unless io&.closed? }
     end
 
-    # 期限を過ぎた: gh の本体と group を止め、pipe の EOF (子の終わり) を待たずに reader の thread を止めて回収し、
-    # EventError にする。gh の group から別の group に移った子が pipe を握っていても、ここで待ち続けない。
-    def abandon(pid, readers, reap:)
+    # 期限を過ぎた: まだ回収していない gh の本体と group を止めてから回収し、pipe の EOF (子の終わり) を待たずに reader
+    # の thread を止めて回収して、EventError にする。gh の group から別の group に移った子が pipe を握っていても、ここで
+    # 待ち続けない (その子は止められない)。
+    def abandon(pid, readers)
       [-pid, pid].each do |target|
         Process.kill("KILL", target)
-      rescue Errno::ESRCH
-        nil # 止めるものが無い (自分で終わった)
+      rescue Errno::ESRCH, Errno::EPERM
+        # 止めるものが無い。未回収の gh が自分で終わって zombie になり、group にほかの子がいないと、macOS は group への
+        # kill に EPERM を返す (group は自分の gh のもの)。
+        nil
       end
-      Process.wait(pid) if reap
+      Process.wait(pid)
       readers.each do |reader|
         reader.kill unless reader.join(READER_GRACE_SECONDS)
         begin

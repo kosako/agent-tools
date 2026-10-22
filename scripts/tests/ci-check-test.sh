@@ -680,6 +680,12 @@ File.write(File.join(gh_bin, "gh"), <<~'FAKE')
   route = key && routes[key]
   exit 1 if route.nil?
   sleep route["sleep"] if route["sleep"]
+  if route["close_and_sleep"]
+    # 出力の pipe を閉じたまま、本体だけが走り続ける (Ruby は標準の fd を close では閉じないので、reopen で閉じる)。
+    $stdout.reopen(File::NULL)
+    $stderr.reopen(File::NULL)
+    sleep route["close_and_sleep"]
+  end
   if route["orphan"]
     # stdout を握った子を残して、本体だけが先に終わる (子は同じ process group)。子の pid を file に残す。
     # detached なら、子を別の process group に移す (gh の group を止めても pipe は閉じない)。
@@ -844,6 +850,34 @@ begin
   end
   check("time cap: the child holding the pipe is stopped", !orphan_alive)
   # 子が別の process group に移って pipe を握る: group を止めても pipe は閉じないが、reader を止めて待たない (F07)。
+  # このとき gh の本体は先に終わっているが、回収 (wait) する前に signal を送り、回収した PID には送らない (F09)。
+  # Process.kill と回収の順を記録して確かめる。
+  signal_log = Module.new do
+    class << self
+      attr_accessor :events, :on
+    end
+
+    def kill(signal, *targets)
+      SIGNAL_LOG.events << [:kill, targets.first] if SIGNAL_LOG.on
+      super
+    end
+
+    def wait(*args)
+      pid = super
+      SIGNAL_LOG.events << [:reaped, pid] if SIGNAL_LOG.on && pid
+      pid
+    end
+
+    def wait2(*args)
+      result = super
+      SIGNAL_LOG.events << [:reaped, result[0]] if SIGNAL_LOG.on && result
+      result
+    end
+  end
+  Object.const_set(:SIGNAL_LOG, signal_log)
+  SIGNAL_LOG.events = []
+  SIGNAL_LOG.on = true
+  Process.singleton_class.prepend(SIGNAL_LOG)
   set_routes(gh_dir, { "repo-view" => { "orphan" => 30, "detached" => true, "body" => {} } })
   started = Time.now
   detached_api = CC::GitHubApi.new(clean, Time.now + 2)
@@ -852,8 +886,27 @@ begin
     nil
   rescue CC::EventError => e
     e.message
+  ensure
+    SIGNAL_LOG.on = false
   end
+  events = SIGNAL_LOG.events
+  late_kill = events.each_with_index.any? do |(kind, target), i|
+    kind == :kill && events[0...i].any? { |(k, pid)| k == :reaped && pid == target.abs }
+  end
+  check("no signal to a reaped pid (#{events.inspect})", events.any? { |(k, _)| k == :kill } && !late_kill)
   check("time cap: a pipe held by a child in another group is bounded (#{err.inspect}, #{(Time.now - started).round(1)}s)",
+        err.to_s.include?("時間が上限") && Time.now - started < 10)
+  # pipe は読み終わったが、gh の本体が走り続ける: 本体の終わりの待ちも期限で止める。
+  set_routes(gh_dir, { "repo-view" => { "close_and_sleep" => 30, "body" => {} } })
+  started = Time.now
+  closed_api = CC::GitHubApi.new(clean, Time.now + 2)
+  err = begin
+    closed_api.json("repo", "view", "--json", "nameWithOwner,defaultBranchRef")
+    nil
+  rescue CC::EventError => e
+    e.message
+  end
+  check("time cap: a gh that closed its output and keeps running is bounded (#{err.inspect}, #{(Time.now - started).round(1)}s)",
         err.to_s.include?("時間が上限") && Time.now - started < 10)
   # 別の group に逃げた子は script では止められない (止めるのは test の後始末)。
   begin
