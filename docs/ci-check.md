@@ -11,8 +11,10 @@ remote から取りに行かず (object database にも書かず)、git の失�
 
 ## 運用
 
-- sweep (`personal-maintenance-sweep`) が run ごとに今の repo にかけ、所見を通常の流れ (反証 → triage → 重複の照合 →
-  起票) に乗せる予定です (#541 の 2 番目の PR でつなぐ)。それまでは人が repo で直接かけて、出力を読みます。
+- sweep (`personal-maintenance-sweep`) が run ごとに今の repo にかけます。どのプリセットでも、監査の単位の先頭に
+  AI を使わない `ci` の単位を足し、この script の出力をその単位の監査の結果として、通常の流れ (反証 → triage → 重複の
+  照合 → 起票。proposal は追跡 Issue のコメント) に乗せます (sweep の `SKILL.md` 手順 3)。script が無い・run 全体が
+  失敗したときは、sweep を止めずに「CI を確かめられない」と報告します。人が repo で直接かけて出力を読んでもかまいません。
 - 所見は Issue にしてよいものとして扱います。`personal-repo-baseline` (#539) が Issue にしないのは守り (alerts・secret
   scanning・branch の保護) の抜けで、timeout や concurrency は資源の使い方の問題だからです。攻撃の手順が分かる所見は、
   sweep の security の扱い (公開しない) に従います。
