@@ -340,6 +340,25 @@ later = { runs: [ev_run(60, conclusion: "failure", updated: "2026-10-23T00:00:00
 check("adjacent windows: not counted again in the next window",
       CC.evaluate_events("o/r", "main", next_window, later)[:findings].empty?)
 
+# 部分的なやり直しで写された job: 前の窓で failure → success になった job が、古い completed_at のまま次の attempt に
+# 写っても、次の窓では flaky に数えない (所見にも、1 回だけの数にも) (F10)。
+copied_runs = [ev_run(70, attempt: 3, updated: "2026-10-24T00:00:00Z"), ev_run(71, attempt: 3, updated: "2026-10-24T00:00:00Z")]
+copied_jobs = copied_runs.each_with_object({}) do |run, jobs|
+  base = run["id"] * 10
+  jobs[run["id"]] = [
+    ev_job(base + 1, "check", "failure", attempt: 1, completed: "2026-10-20T00:00:00Z"),
+    ev_job(base + 2, "check", "success", attempt: 2, completed: "2026-10-21T00:00:00Z"),
+    ev_job(base + 3, "check", "success", attempt: 3, completed: "2026-10-21T00:00:00Z"), # 写し (古い時刻)
+    ev_job(base + 4, "lint", "failure", attempt: 2, completed: "2026-10-21T00:00:00Z"),
+    ev_job(base + 5, "lint", "success", attempt: 3, completed: "2026-10-24T00:00:00Z"),
+  ]
+end
+copied = CC.evaluate_events("o/r", "main", next_window, { runs: copied_runs, jobs: copied_jobs, annotations: {}, skipped: 0 })
+check("copied jobs: the old pass is not counted in the next window (#{copied[:findings].map { |x| x['fingerprint'] }.inspect})",
+      copied[:findings].map { |x| x["fingerprint"] } == [".github/workflows/test.yml@lint-#{h6('lint')}#flaky-rerun"])
+check("copied jobs: the summary counts only the new reruns", copied[:summary].include?("やり直しで通った job 2 回") &&
+      copied[:summary].include?("1 回だけの job 0 件"))
+
 # 終わった job と run の要る値の欠け、key の欠けは確かめられない (正当な null とは区別する) (F02)。
 def event_error?
   yield
