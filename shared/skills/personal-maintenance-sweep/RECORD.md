@@ -239,7 +239,7 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/maintenance-sweep/<owner>/<rep
   fixes.json                  fix モードの所見ごとの記録 (repo 単位。run をまたいで照合する。下)
   runs/<run id>/              run id は開始時刻 (YYYYmmddTHHMMSS)
     state.json                run の状態 (下)
-    units/<n>/result.json     単位ごとの監査結果 (repo-audit の findings.schema.json の形)
+    units/<n>/result.json     単位ごとの監査結果 (repo-audit の findings.schema.json の形。`ci` の単位は personal-ci-check の stdout)
     units/<n>/codex-run       Codex に監査させたときの run dir の path (1 行。起動の前に書く。#421)
     refute-run                Codex に反証させたときの run dir の path (1 行。起動の前に書く。#421)
     refutation.json           反証の結果 (refutation.schema.json の形。所見の ID は U<n>-<元の ID>。REFUTE.md)
@@ -261,8 +261,11 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
   "roles": { "auditor": "codex", "verifier": "claude", "reason": "claude=12 codex=1" },
   "preset": "medium",
   "budget": { "<tool>": { "<window>": { "remaining_pct": 48, "resets_at": "…" } } },
-  "units": [ { "n": 1, "dimension": "docs", "area": ".", "status": "audited" } ],
-  "consumption": [ { "unit": 1, "tool": "codex", "window": "weekly", "before_used_pct": 9, "after_used_pct": 11 } ],
+  "units": [
+    { "n": 1, "dimension": "ci", "area": ".github/workflows", "status": "audited", "ci_check": { "exit": 1, "stderr": "" } },
+    { "n": 2, "dimension": "docs", "area": ".", "status": "audited" }
+  ],
+  "consumption": [ { "unit": 2, "tool": "codex", "window": "weekly", "before_used_pct": 9, "after_used_pct": 11 } ],
   "filed": [ { "number": 401, "fingerprint": "docs/onboarding.md#stale-script-count" } ],
   "not_filed": [ { "fingerprint": "…", "reason": "duplicate #377" } ],
   "deferred": [ { "dimension": "test", "area": "." } ],
@@ -275,6 +278,10 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
   解決できない、など) では stderr にだけ出て stdout は空になるので、両方を残す。起動できなかったときは `exit` を null
   にし、`stderr` に理由を書く。再開でかけ直したら上書きする。追跡 Issue と run のコメントには写さない。
 - 単位の `status` は `pending` → `audited` → `refuted` → `done` (`done` は起票と記録まで終えたもの)。
+- `ci` の単位 (`SKILL.md` 手順 3。先頭の単位) の `ci_check` は personal-ci-check の結果 (`exit` は exit code、`stderr` は
+  全文)。起動できなかったときは `exit` を null にし、`stderr` に理由を書く。再開でかけ直したら上書きする。`stdout` は
+  `units/<n>/result.json` に置く (確かめられずに所見なしで `done` にしたときは置かない)。消費 (`consumption`) は
+  AI の枠を使わないので残さない。
 - 単位が終わるたびに書き直す。中断しても、`status` が `done` でない単位から再開できる。
 - 新しい run を始める前に `latest-run` の run を見て、`done` でない単位があれば再開するかを確認する。
 

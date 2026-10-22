@@ -738,6 +738,52 @@
           "text": "単位 2 は done.txt が無いので、target_commit が違っても起動し直さず人に返している"
         }
       ]
+    },
+    {
+      "id": 38,
+      "name": "ci-unit-every-run",
+      "prompt": "[前提: 残量から small のプリセット (docs と設計・一貫性の 2 観点) が選ばれる。監査役は Codex、検証役は Claude。repo には .github/workflows/ci.yml があり、personal-ci-check は exit 1 で、所見 F01 (timeout-missing、debt) と F02 (concurrency-missing、proposal) を返す] この repo のメンテを回して Issue にして",
+      "expected_output": "small の 2 単位の前に、AI を使わない ci の単位を 1 つ足し (単位 1)、配備済みの personal-ci-check を引数なしでかけて stdout を units/1/result.json に保存し、exit と stderr を state の単位に残して audited にする (Codex や Claude に CI を監査させない。この単位の後は残量を読み直さない)。所見は他の単位と同じく U1-F01・U1-F02 として反証に渡す。confirmed の timeout-missing は重複の照合を経て起票し、proposal の concurrency-missing は個別の Issue にせず追跡 Issue の run のコメントにまとめる。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "ci-unit-added",
+          "text": "プリセットの単位とは別に ci の単位を先頭に足している (small だからと省いていない)"
+        },
+        {
+          "id": "script-not-ai",
+          "text": "ci の単位の監査を personal-ci-check の出力でしていて、AI に CI の監査をさせていない"
+        },
+        {
+          "id": "refuted-like-others",
+          "text": "ci の単位の所見も U1-F01 / U1-F02 として反証に渡し、反証の前に起票していない"
+        },
+        {
+          "id": "proposal-to-comment",
+          "text": "concurrency-missing (proposal) を個別の Issue にせず、追跡 Issue のコメントにまとめている"
+        }
+      ]
+    },
+    {
+      "id": 39,
+      "name": "ci-check-unavailable",
+      "prompt": "[前提: この machine には personal-ci-check が配備されていない。残量から medium のプリセットが選ばれる] この repo のメンテを回して Issue にして。CI の扱いだけ先に教えて。手順の確認だけで実行はしない。",
+      "expected_output": "ci の単位は足すが、script を起動できないので所見なしで done にし、state の単位の ci_check に exit を null、stderr に理由を書き、報告に「CI を確かめられない」と理由を書く。sweep は止めず、medium の 4 単位の監査を続ける。AI に CI の監査を代わりにさせない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "continue-sweep",
+          "text": "personal-ci-check が無いことで sweep を止めず、他の単位を続けている"
+        },
+        {
+          "id": "report-unverifiable",
+          "text": "ci の単位を所見なしで done にし、報告に「CI を確かめられない」と理由を書いている"
+        },
+        {
+          "id": "no-ai-substitute",
+          "text": "script の代わりに AI に CI の監査をさせていない"
+        }
+      ]
     }
   ]
 }
