@@ -210,9 +210,14 @@ check("on event not a string", file_error("on: [1]\njobs:\n  a:\n    runs-on: x\
 
 # ---- run の記録の判定 (evaluate_events。network なし) ----
 
-# 変換で情報が落ちる job の名前の slug には、元の名前の hash を添える。
-SLUG34 = "self-tests-3-4-#{Digest::SHA256.hexdigest('self-tests (3.4)')[0, 6]}"
+# slug には必ず元の文字列の hash (6 文字) を添える (hash を添える経路と添えない経路を混ぜない)。
+def h6(text)
+  Digest::SHA256.hexdigest(text)[0, 6]
+end
+SLUG34 = "self-tests-3-4-#{h6('self-tests (3.4)')}"
 TIMEOUT_FP = ".github/workflows/test.yml@#{SLUG34}#job-timed-out"
+FLAKY_FP = ".github/workflows/test.yml@check-#{h6('check')}#flaky-rerun"
+LABEL_FP = ".github/workflows/test.yml#deprecation-runner-label-ubuntu-latest-#{h6('ubuntu-latest')}"
 WINDOW = CC.parse_window(%w[--since 2026-10-15T00:00:00Z --until 2026-10-22T00:00:00Z])
 check("window parsed", WINDOW[:since_s] == "2026-10-15T00:00:00Z" && WINDOW[:until_s] == "2026-10-22T00:00:00Z")
 check("window is (since, until]", !CC.in_window?("2026-10-15T00:00:00Z", WINDOW) && CC.in_window?("2026-10-22T00:00:00Z", WINDOW))
@@ -273,15 +278,15 @@ hashed_job = "job-#{Digest::SHA256.hexdigest("bad\u0007name #{SENTINEL}")[0, 8]}
 check("events: fingerprints (#{by_fp.keys.sort.inspect})", by_fp.keys.sort == [
   ".github/workflows/test.yml#deprecation-annotation-#{Digest::SHA256.hexdigest("this input will be removed in the next major version #{SENTINEL}".downcase)[0, 8]}",
   ".github/workflows/test.yml#deprecation-node-20",
-  ".github/workflows/test.yml#deprecation-runner-label-ubuntu-latest",
+  LABEL_FP,
   ".github/workflows/test.yml@#{hashed_job}#job-timed-out",
-  ".github/workflows/test.yml@check#flaky-rerun",
+  FLAKY_FP,
   TIMEOUT_FP,
 ].sort)
 t = by_fp[TIMEOUT_FP]
 check("timeout: kind/severity/confidence", t && [t["kind"], t["severity"], t["confidence"]] == ["defect", "medium", "確証"])
 check("timeout: links the job", t && t["evidence"].include?("https://github.com/o/r/actions/runs/1/job/11") && t["claim"].include?("(1 回)"))
-f = by_fp[".github/workflows/test.yml@check#flaky-rerun"]
+f = by_fp[FLAKY_FP]
 check("flaky: counts runs, links the passing attempt", f && f["claim"].include?("2 回") &&
       f["evidence"].include?("runs/2/job/22") && f["evidence"].include?("runs/3/job/32"))
 check("flaky: a single rerun is only counted", !by_fp.keys.any? { |k| k.include?("@other#") } && result[:summary].include?("1 回だけの job 1 件"))
@@ -355,11 +360,17 @@ check("valid run: a finished run without conclusion", event_error? { CC.valid_ru
 check("valid run: a missing key", event_error? { CC.valid_run!(ev_run(1).reject { |k, _| k == "head_branch" }) })
 check("valid run: an unfinished run may lack a conclusion", !event_error? { CC.valid_run!(running) })
 
-# job の slug: 変換で情報が落ちる名前には hash を添え、違う名前がぶつからない (F06)。
-check("slug: a plain name stays", CC.job_label("check") == %w[check check])
-check("slug: lossy names get a hash", CC.job_label("test (a.b)")[1] != CC.job_label("test (a-b)")[1] &&
+# slug: どの名前にも hash を添え、変換で情報が落ちる名前同士も、ある名前の slug をそのまま名前にした別の job も
+# ぶつからない (F06・F08)。runner の label の key も同じ部品で作る。
+check("slug: a plain name gets its hash", CC.job_label("check") == ["check", "check-#{h6('check')}"])
+check("slug: lossy names do not collide", CC.job_label("test (a.b)")[1] != CC.job_label("test (a-b)")[1] &&
       CC.job_label("test (a.b)")[1].start_with?("test-a-b-"))
 check("slug: case is lossy too", CC.job_label("Build")[1] != CC.job_label("build")[1])
+check("slug: a name equal to another slug does not collide", CC.job_label(SLUG34)[1] != SLUG34)
+check("slug: empty kebab and unsafe names use the long hash", CC.job_label("(+)")[1] == "job-#{Digest::SHA256.hexdigest('(+)')[0, 8]}")
+dotted = CC.deprecation_kind("The ubuntu-24.04 label will migrate to X", "will migrate")[0]
+dashed = CC.deprecation_kind("The ubuntu-24-04 label will migrate to X", "will migrate")[0]
+check("label key: dotted and dashed labels do not collide (#{dotted} / #{dashed})", dotted != dashed)
 
 # ---- CLI ----
 
@@ -671,7 +682,8 @@ File.write(File.join(gh_bin, "gh"), <<~'FAKE')
   sleep route["sleep"] if route["sleep"]
   if route["orphan"]
     # stdout を握った子を残して、本体だけが先に終わる (子は同じ process group)。子の pid を file に残す。
-    child = Process.spawn("sleep", route["orphan"].to_s)
+    # detached なら、子を別の process group に移す (gh の group を止めても pipe は閉じない)。
+    child = Process.spawn("sleep", route["orphan"].to_s, pgroup: route["detached"] ? true : nil)
     File.write(File.join(dir, "orphan.pid"), child.to_s)
     Process.detach(child)
   end
@@ -831,6 +843,24 @@ begin
     false
   end
   check("time cap: the child holding the pipe is stopped", !orphan_alive)
+  # 子が別の process group に移って pipe を握る: group を止めても pipe は閉じないが、reader を止めて待たない (F07)。
+  set_routes(gh_dir, { "repo-view" => { "orphan" => 30, "detached" => true, "body" => {} } })
+  started = Time.now
+  detached_api = CC::GitHubApi.new(clean, Time.now + 2)
+  err = begin
+    detached_api.json("repo", "view", "--json", "nameWithOwner,defaultBranchRef")
+    nil
+  rescue CC::EventError => e
+    e.message
+  end
+  check("time cap: a pipe held by a child in another group is bounded (#{err.inspect}, #{(Time.now - started).round(1)}s)",
+        err.to_s.include?("時間が上限") && Time.now - started < 10)
+  # 別の group に逃げた子は script では止められない (止めるのは test の後始末)。
+  begin
+    Process.kill("KILL", File.read(File.join(gh_dir, "orphan.pid")).to_i)
+  rescue Errno::ESRCH
+    nil
+  end
   past = CC::GitHubApi.new(clean, Time.now - 1)
   check("time cap: no call after the deadline", begin
     past.json("repo", "view", "--json", "nameWithOwner,defaultBranchRef")

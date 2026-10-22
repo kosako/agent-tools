@@ -91,6 +91,8 @@ module CiCheck
   SAFE_JOB_NAME_RE = %r{\A[A-Za-z0-9_][A-Za-z0-9 _.()/,:+-]{0,99}\z}.freeze
   MAX_API_CALLS = 200
   MAX_API_SECONDS = 120
+  # 期限を過ぎて gh を止めた後、reader の thread が pipe を読み終えるのを待つ時間 (過ぎたら thread を止める)。
+  READER_GRACE_SECONDS = 1
   # 窓の始まりより前に作られ、窓の中でやり直された run を拾うために、作成をさかのぼる幅。
   SEARCH_BACK_SECONDS = 7 * 24 * 3600
   # GitHub の run の一覧は、created で絞ると 1000 本までしか返さない。
@@ -184,8 +186,9 @@ module CiCheck
 
     private
 
-    # gh は自分の process group で起動し、上限の時刻を過ぎたら group ごと止める (gh が起動した子を残さない)。gh の
-    # 本体が終わっても、子が stdout / stderr を握っていれば pipe は閉じないので、pipe を読み終えるまでも期限で見る。
+    # gh は自分の process group で起動し、gh の本体の終わりと、出力の pipe の読み終わりの両方を期限で見る (gh が
+    # 起動した子が pipe を握っていれば、本体が終わっても pipe は閉じない)。期限を過ぎたら abandon で、待つものを残さずに
+    # 止める。
     def run_gh(args)
       out_r, out_w = IO.pipe
       err_r, err_w = IO.pipe
@@ -196,22 +199,15 @@ module CiCheck
       readers = [Thread.new { out_r.read }, Thread.new { err_r.read }]
       status = nil
       until (status = Process.wait2(pid, Process::WNOHANG)&.last)
-        if Time.now >= @deadline
-          stop_group(pid)
-          Process.wait(pid)
-          readers.each(&:join)
-          raise EventError, "時間が上限の #{MAX_API_SECONDS} 秒を超える"
-        end
+        abandon(pid, readers, reap: true) if Time.now >= @deadline
         sleep 0.05
       end
       readers.each do |reader|
         remaining = @deadline - Time.now
         next if remaining.positive? && reader.join(remaining)
 
-        # 本体は終わったが、group の子が pipe を握ったまま期限を過ぎた。
-        stop_group(pid)
-        readers.each(&:join)
-        raise EventError, "時間が上限の #{MAX_API_SECONDS} 秒を超える"
+        # 本体は終わったが、子が pipe を握ったまま期限を過ぎた。
+        abandon(pid, readers, reap: false)
       end
       [readers[0].value, status]
     rescue SystemCallError
@@ -220,10 +216,24 @@ module CiCheck
       [out_r, err_r].each { |io| io&.close unless io&.closed? }
     end
 
-    def stop_group(pid)
-      Process.kill("KILL", -pid)
-    rescue Errno::ESRCH
-      nil # gh の group が自分で終わった (止めるものが無い)
+    # 期限を過ぎた: gh の本体と group を止め、pipe の EOF (子の終わり) を待たずに reader の thread を止めて回収し、
+    # EventError にする。gh の group から別の group に移った子が pipe を握っていても、ここで待ち続けない。
+    def abandon(pid, readers, reap:)
+      [-pid, pid].each do |target|
+        Process.kill("KILL", target)
+      rescue Errno::ESRCH
+        nil # 止めるものが無い (自分で終わった)
+      end
+      Process.wait(pid) if reap
+      readers.each do |reader|
+        reader.kill unless reader.join(READER_GRACE_SECONDS)
+        begin
+          reader.join
+        rescue StandardError
+          nil # 読みかけで止めた thread の例外は使わない
+        end
+      end
+      raise EventError, "時間が上限の #{MAX_API_SECONDS} 秒を超える"
     end
   end
 
@@ -852,7 +862,7 @@ module CiCheck
     if (m = NODE_DEPRECATION_RE.match(message))
       ["node-#{m[1]}", "Node.js #{m[1]} の deprecation の予告"]
     elsif (m = LABEL_MIGRATION_RE.match(message))
-      ["runner-label-#{m[1].tr('.', '-')}", "runner の label `#{m[1]}` の移行の予告"]
+      ["runner-label-#{digest_slug(m[1])}", "runner の label `#{m[1]}` の移行の予告"]
     else
       ["annotation-#{short_hash(message.downcase.gsub(/\s+/, ' ').strip)}", "deprecation を示す語 (#{word}) を含む annotation"]
     end
@@ -864,18 +874,18 @@ module CiCheck
 
   # job の表示名と fingerprint の slug。規則の外の名前は出さず、hash で表す。
   def job_label(name)
-    unless name.match?(SAFE_JOB_NAME_RE)
-      h = short_hash(name)
-      return ["(名前は規則の外。#{h})", "job-#{h}"]
-    end
+    return ["(名前は規則の外。#{short_hash(name)})", "job-#{short_hash(name)}"] unless name.match?(SAFE_JOB_NAME_RE)
 
-    slug = name.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-+|-+\z/, "")
-    return [name, "job-#{short_hash(name)}"] if slug.empty?
-    return [name, slug] if slug == name
+    [name, digest_slug(name)]
+  end
 
-    # 変換で情報が落ちる名前 (大文字・空白・記号を含む) は、元の名前の hash を添えて、違う名前の slug がぶつからない
-    # ようにする (例 `test (a.b)` と `test (a-b)`)。
-    [name, "#{slug}-#{short_hash(name)[0, 6]}"]
+  # fingerprint に使う slug。元の文字列を小文字の kebab-case にし、必ず元の文字列の hash (6 文字) を添える。変換は
+  # 情報を落とす (`test (a.b)` と `test (a-b)`、`ubuntu-24.04` と `ubuntu-24-04`) ので、hash を添える経路と添えない経路を
+  # 混ぜると、ある名前の slug が別の名前そのものとぶつかる。kebab が空なら `job-<hash 8 文字>` (最後の区切りの後が 8 文字
+  # なので、6 文字の形とはぶつからない)。
+  def digest_slug(text)
+    kebab = text.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-+|-+\z/, "")
+    kebab.empty? ? "job-#{short_hash(text)}" : "#{kebab}-#{short_hash(text)[0, 6]}"
   end
 
   def short_hash(text)

@@ -89,7 +89,8 @@ attempt の記録を読み、次を所見にします (#541)。窓は「終わ�
   attempt の job だけです。
 - **上限**: 1 回の実行で、API の呼び出し 200 回・120 秒までです。上限の時刻を過ぎた gh は、process group ごと止めます。
   gh の本体が終わっても、gh が起動した子が出力の pipe を握っていれば読み終わらないので、pipe を読み終えるまでも同じ
-  期限で見て、過ぎたら group ごと止めます。GitHub の run の一覧は、作成で絞ると 1000 本までしか返さないので、それを
+  期限で見ます。期限を過ぎたら gh の本体と group を止め、pipe の EOF (子の終わり) を待たずに、読む thread を 1 秒で
+  止めて回収します (別の process group に移った子が pipe を握っていても待ち続けない。その子は止められない)。GitHub の run の一覧は、作成で絞ると 1000 本までしか返さないので、それを
   超える窓は読みません。実測 (2026-10): いちばん忙しい repo の 30 日の窓で 127 回・77 秒、2 週間の窓で 79 回。
 - **確かめられないとき** (上限、gh の失敗・起動できない、応答の形の違い (key の欠け・型の違い・時刻を解釈できない・
   終わった run や job の conclusion / 終わった時刻の欠け。終わっていないものの null は正当)、一覧の件数が `total_count`
@@ -105,9 +106,11 @@ attempt の記録を読み、次を所見にします (#541)。窓は「終わ�
   まで) に合うときだけ載せ、外れれば hash で表します (topic の slug も hash)。link は repo と run・job の id から組み
   立てます (`https://github.com/<repo>/actions/runs/<run>/job/<job>`)。
 - **fingerprint**: `<path>@<job の slug>#job-timed-out`、`<path>@<job の slug>#flaky-rerun`、`<path>#deprecation-<種類>`。
-  job の slug は表示名を小文字にし、英数字以外の並びを `-` にしたもの。この変換で情報が落ちる名前 (大文字・空白・記号を
-  含む) は、違う名前の slug がぶつからないよう、元の名前の SHA-256 の先頭 6 文字を添えます (例 `self-tests (3.4)` →
-  `self-tests-3-4-9c6e41`。`check` はそのまま `check`)。
+  job の slug は表示名を小文字にし、英数字以外の並びを `-` にして、**必ず**元の名前の SHA-256 の先頭 6 文字を添えた
+  もの (例 `self-tests (3.4)` → `self-tests-3-4-9c6e41`、`check` → `check-<hash>`)。変換は情報を落とす (`test (a.b)` と
+  `test (a-b)`) ので、hash を添える名前と添えない名前を混ぜると、ある名前の slug が別の名前そのものとぶつかるためです。
+  規則の外の名前と、変換で空になる名前は `job-<hash 8 文字>` です。runner の label の key も同じ作り
+  (`deprecation-runner-label-ubuntu-latest-<hash>`。`ubuntu-24.04` と `ubuntu-24-04` はぶつからない)。
 - summary に、窓の中に終わった run の本数、各事象の回数、API の呼び出しの回数を書きます。`scope.seen` には
   `run の記録 (<since>〜<until>)` の行を足します。
 
