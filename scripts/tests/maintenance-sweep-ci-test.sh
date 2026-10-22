@@ -8,7 +8,9 @@
 #   なしの done にすること (条件と遷移先を組で見る)、sweep を止めないこと、exit と stderr と窓を state に残すこと、Codex の
 #   session では pending に残すこと、その単位の後は残量を読み直さないことを、それぞれ句として書いている
 # - 手順 8 の「CI の窓」が、窓の時刻を進める条件 (起票まで進む run・done・scope.seen に確かめた窓の行がある・上限で
-#   回した所見が無い) と進める先を 1 つの句で書き、それ以外は進めないこと、失敗の行が無いことでは進めない理由を書いている
+#   回した所見と uncertain の所見が無い) と進める先を 1 つの句で書き、それ以外は進めないこと、失敗の行が無いことでは
+#   進めない理由と uncertain で進めない理由を書いている。REFUTE.md の Codex の検証役の節が、根拠が GitHub にしか無い
+#   所見を推測で決めず uncertain にすると書いている
 # - 既存の監査結果から始める run と、中断した run の再開が、`ci` の単位を飛ばさない句を書いている
 # - 手順 9 の報告に、CI を確かめられないときと、点検した窓・時刻を進めたか・見なかった期間がある。「停止と縮小」の表に、
 #   CI を確かめられないときと run の記録を確かめられないときの扱いがある
@@ -17,9 +19,9 @@
 #   書いている。tree に ci.json があり、ci.json の例が checked_until / run_id の JSON で、basis の表が 4 つの値を持ち、
 #   書き直しが時刻を戻さない句がある (block の振る舞いは maintenance-sweep-ci-window-test.sh)
 # - BUDGET.md が、`ci` の単位を単位の数に数えないこと・その後は読み直さないことを書いている
-# - evals に ci の単位の 10 件 (毎回足す / script が無い / Codex の session では pending / exit 2 で JSON あり / 壊れた出力 /
-#   初回の窓と進める / 縮めてかけ直す / report モードでは進めない / 30 日で切る / 窓の無い保存結果の再開) があり、prompt の
-#   前提にどの session かを書いている
+# - evals に ci の単位の 11 件 (毎回足す / script が無い / Codex の session では pending / exit 2 で JSON あり / 壊れた出力 /
+#   初回の窓と進める / 縮めてかけ直す / report モードでは進めない / 30 日で切る / 窓の無い保存結果の再開 / Codex の検証役の
+#   uncertain) があり、prompt の前提にどの session かを書いている
 # 句は空白を除いて比べ (行の折り返しの位置に依らない)、句の直後が区切り (。、( か末尾) であることも求める (否定は
 # 句の後ろに付くので、反転した文を部分一致で通さない)。括弧の注釈を挟む句は、注釈を除いてから比べる。
 # 引数で sweep の skill の directory を差し替えられる (変異での確認用)。
@@ -30,7 +32,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$script_dir/lib/test-helpers.sh"
 
 sweep_dir=${1:-"$repo_root/shared/skills/personal-maintenance-sweep"}
-for f in SKILL.md RECORD.md BUDGET.md evals/evals.json; do
+for f in SKILL.md RECORD.md BUDGET.md REFUTE.md evals/evals.json; do
   [ -f "$sweep_dir/$f" ] || fail "missing $sweep_dir/$f"
 done
 
@@ -41,6 +43,7 @@ dir = ARGV.fetch(0)
 skill = File.read(File.join(dir, "SKILL.md"), encoding: "UTF-8").split("\n")
 record = File.read(File.join(dir, "RECORD.md"), encoding: "UTF-8")
 budget = File.read(File.join(dir, "BUDGET.md"), encoding: "UTF-8")
+refute = File.read(File.join(dir, "REFUTE.md"), encoding: "UTF-8").split("\n")
 evals = JSON.parse(File.read(File.join(dir, "evals/evals.json"), encoding: "UTF-8"))
 
 def squash(text)
@@ -156,12 +159,14 @@ if window.nil?
 else
   # 進める条件と進める先は 1 つの句の組で見る (条件を 1 つ消しても、進める先を変えても落ちるように)。条件は
   # 失敗の行が無いことではなく、確かめた窓の行があること (窓を付けずにかけた結果で進めない。#554 review R1)。
+  # uncertain の所見でも進めない (run の記録の所見は窓を進めると見直さない。#554 review R4)。
   [
     "起票まで進む run で、`ci` の単位が `done`、`units/<n>/result.json` の `scope.seen` に state の `ci_check` の窓の" \
-    "行があり、`ci` の単位の所見に起票の上限で次の run に回したものが無いときだけ、`checked_until` をその `until` に" \
-    "進める",
+    "行があり、`ci` の単位の所見に起票の上限で次の run に回したものと、反証で uncertain になったものが無いときだけ、" \
+    "`checked_until` をその `until` に進める",
     "それ以外は進めない",
     "失敗の行が無いことではなく確かめた行で見るのは、窓を付けずにかけた結果で進めないため",
+    "uncertain で進めないのは、run の記録の所見は窓を進めると次の run で見直さないため",
   ].each do |c|
     errors << "「CI の窓」の bullet に句 #{c.inspect} が無い" unless bare_clause?(window, c)
   end
@@ -247,6 +252,14 @@ if rewrite.nil? || !clause?(rewrite, "今の `checked_until` より後の時刻�
   errors << "RECORD.md の ci.json の書き直しの bullet に、時刻を戻さない句が無い"
 end
 
+# REFUTE.md の Codex の検証役の brief に、根拠が GitHub にしか無い所見を推測で決めない句がある (#554 review R4)。
+codex_refute = section(refute, "## 検証役が Codex のとき")
+gh_only = codex_refute && bullets(codex_refute).find { |b| b.start_with?("- 根拠が GitHub にしか無い所見") }
+if gh_only.nil? || !bare_clause?(gh_only, "根拠が GitHub にしか無い所見は、GitHub に触れずに確かめられなければ uncertain" \
+                                          "にし、推測で confirmed や refuted にしない")
+  errors << "REFUTE.md の Codex の検証役の節に、根拠が GitHub にしか無い所見を uncertain にする句が無い"
+end
+
 unless clause?(budget, "AI を使わない `ci` の単位が先頭に 1 つ加わります")
   errors << "BUDGET.md にプリセットに `ci` の単位が加わることの句が無い"
 end
@@ -259,8 +272,8 @@ end
 end
 
 # evals: 毎回足す / script が無い / Codex の session では pending / exit 2 で JSON あり / 壊れた出力 / 初回の窓と進める /
-# 縮めてかけ直す / report モードでは進めない / 30 日で切る / 窓の無い保存結果の再開。どの session の前提かを prompt に書く
-# (Codex の session では script をかけないので、期待が変わる)。
+# 縮めてかけ直す / report モードでは進めない / 30 日で切る / 窓の無い保存結果の再開 / Codex の検証役の uncertain。どの
+# session の前提かを prompt に書く (Codex の session では script をかけないので、期待が変わる)。
 want = {
   "ci-unit-every-run" => "Claude Code の session",
   "ci-check-unavailable" => "Claude Code の session",
@@ -272,6 +285,7 @@ want = {
   "ci-window-report-mode-keeps" => "Claude Code の session",
   "ci-window-capped" => "Claude Code の session",
   "ci-window-legacy-resume" => "Claude Code の session",
+  "ci-window-codex-verifier-uncertain" => "Claude Code の session",
 }
 cases = evals.fetch("evals").map { |e| [e["name"], e] }.to_h
 want.each do |name, session|

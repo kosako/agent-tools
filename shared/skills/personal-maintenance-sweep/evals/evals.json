@@ -944,6 +944,27 @@
           "text": "run の記録を点検していないことと、時刻を進めなかった理由を報告に書いている"
         }
       ]
+    },
+    {
+      "id": 48,
+      "name": "ci-window-codex-verifier-uncertain",
+      "prompt": "[前提: Claude Code の session で起動。監査役は Claude、検証役は Codex。残量から small のプリセットが選ばれる。ci.json の checked_until は 7 日前。personal-ci-check は exit 1 で、所見は F01 (job-timed-out、defect。evidence は GitHub の job の link) だけ、scope.seen に渡した窓の「run の記録 (<since>〜<until>)」の行がある。Codex の反証は GitHub に触れないので、U1-F01 を uncertain で返す。ほかの単位の所見は起票の上限に当たらない] この repo のメンテを回して Issue にして",
+      "expected_output": "U1-F01 は uncertain なので起票せず、報告に uncertain として残す (何を確かめれば決まるかを添える)。ci の単位は記録まで進めて done にするが、手順 8 で ci の単位の所見に uncertain があるので、ci.json の checked_until は進めない (7 日前のまま。次の run が同じ始まりから見直し、検証役が Claude の run なら GitHub で確かめられる)。報告に、時刻を進めなかった理由を書く。Codex の検証役に GitHub を読ませたり、推測で confirmed にしたりしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "uncertain-not-filed",
+          "text": "uncertain の U1-F01 を起票せず、報告に残している"
+        },
+        {
+          "id": "not-advanced-on-uncertain",
+          "text": "ci の単位の所見に uncertain があるので、checked_until を進めていない"
+        },
+        {
+          "id": "no-github-for-codex",
+          "text": "Codex の検証役に GitHub や network を使わせていない"
+        }
+      ]
     }
   ]
 }
