@@ -33,6 +33,8 @@ require "fileutils"
 require "json"
 require "open3"
 require "rbconfig"
+require "digest"
+require "time"
 src, schema_path, tmp = ARGV
 require src
 
@@ -205,6 +207,114 @@ check("on missing", file_error("jobs:\n  a:\n    runs-on: x\n    timeout-minutes
 # 引用した "on" は文字列のまま、plain の yes は true に読まれる (key は 1 対 1 だが、on として読める key が 2 つ)。
 check("on twice (quoted on and yes)", file_error("\"on\": push\nyes: pull_request\njobs:\n  a:\n    runs-on: x\n") == "on が 2 つある")
 check("on event not a string", file_error("on: [1]\njobs:\n  a:\n    runs-on: x\n") == "on の event が文字列でない")
+
+# ---- run の記録の判定 (evaluate_events。network なし) ----
+
+WINDOW = CC.parse_window(%w[--since 2026-10-15T00:00:00Z --until 2026-10-22T00:00:00Z])
+check("window parsed", WINDOW[:since_s] == "2026-10-15T00:00:00Z" && WINDOW[:until_s] == "2026-10-22T00:00:00Z")
+check("window is (since, until]", !CC.in_window?("2026-10-15T00:00:00Z", WINDOW) && CC.in_window?("2026-10-22T00:00:00Z", WINDOW))
+
+def ev_run(id, path: ".github/workflows/test.yml", event: "pull_request", branch: "feat", conclusion: "success",
+           attempt: 1, updated: "2026-10-18T00:00:00Z", status: "completed")
+  { "id" => id, "path" => path, "event" => event, "head_branch" => branch, "status" => status,
+    "conclusion" => conclusion, "run_attempt" => attempt, "updated_at" => updated }
+end
+
+def ev_job(id, name, conclusion, attempt: 1, completed: "2026-10-18T00:00:00Z")
+  { "id" => id, "name" => name, "status" => "completed", "conclusion" => conclusion, "run_attempt" => attempt,
+    "completed_at" => completed }
+end
+
+def ann(level, message)
+  { "annotation_level" => level, "message" => message }
+end
+
+TIMEOUT_ANN = ann("failure", "The job has exceeded the maximum execution time of 15m0s")
+NOT_ACQUIRED = ann("failure", "The job was not acquired by Runner of type hosted even after multiple attempts")
+SENTINEL = "SENTINEL-free-text-do-not-echo"
+runs = [
+  ev_run(1, conclusion: "cancelled", updated: "2026-10-19T00:00:00Z"),                          # timeout
+  ev_run(2, attempt: 2), ev_run(3, attempt: 2), ev_run(4, attempt: 2),                          # やり直し
+  ev_run(5, attempt: 2),                                                                         # runner を確保できない → やり直し
+  ev_run(6, path: "dynamic/dependabot/dependabot-updates", event: "dynamic", conclusion: "cancelled"),
+  ev_run(7, event: "push", branch: "main", updated: "2026-10-20T00:00:00Z"),                     # deprecation
+  ev_run(8, conclusion: "cancelled", updated: "2026-10-14T12:00:00Z"),                           # 窓の外
+  ev_run(9, conclusion: "cancelled", updated: "2026-10-19T00:00:00Z"),                           # 規則の外の job の名前
+]
+data = {
+  runs: runs.select { |r| CC.workflow_run?(r) },
+  jobs: {
+    1 => [ev_job(11, "self-tests (3.4)", "cancelled", completed: "2026-10-19T00:00:00Z"), ev_job(12, "self-tests (system)", "success")],
+    2 => [ev_job(21, "check", "failure"), ev_job(22, "check", "success", attempt: 2), ev_job(23, "lint", "success"),
+          ev_job(24, "lint", "success", attempt: 2)],
+    3 => [ev_job(31, "check", "failure"), ev_job(32, "check", "success", attempt: 2)],
+    4 => [ev_job(41, "other", "failure"), ev_job(42, "other", "success", attempt: 2)],
+    5 => [ev_job(51, "bash32 (others)", "cancelled"), ev_job(52, "bash32 (others)", "success", attempt: 2)],
+    7 => [ev_job(71, "a", "success", completed: "2026-10-20T00:00:00Z"), ev_job(72, "b", "success", completed: "2026-10-20T00:00:00Z")],
+    8 => [ev_job(81, "self-tests (3.4)", "cancelled", completed: "2026-10-14T12:00:00Z")],
+    9 => [ev_job(91, "bad\u0007name #{SENTINEL}", "cancelled", completed: "2026-10-19T00:00:00Z")],
+  },
+  annotations: {
+    11 => [TIMEOUT_ANN], 51 => [NOT_ACQUIRED], 91 => [TIMEOUT_ANN],
+    71 => [ann("warning", "Node.js 20 is deprecated. The following actions target Node.js 20 #{SENTINEL}"),
+           ann("notice", "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. #{SENTINEL}"),
+           ann("notice", "Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times."),
+           ann("warning", "This input will be removed in the next major version #{SENTINEL}")],
+    72 => [ann("warning", "Node.js 20 is deprecated. The following actions target Node.js 20 #{SENTINEL}")],
+  },
+  skipped: 0,
+}
+result = CC.evaluate_events("o/r", "main", WINDOW, data)
+by_fp = result[:findings].map { |f| [f["fingerprint"], f] }.to_h
+hashed_job = "job-#{Digest::SHA256.hexdigest("bad\u0007name #{SENTINEL}")[0, 8]}"
+check("events: fingerprints (#{by_fp.keys.sort.inspect})", by_fp.keys.sort == [
+  ".github/workflows/test.yml#deprecation-annotation-#{Digest::SHA256.hexdigest("this input will be removed in the next major version #{SENTINEL}".downcase)[0, 8]}",
+  ".github/workflows/test.yml#deprecation-node-20",
+  ".github/workflows/test.yml#deprecation-runner-label-ubuntu-latest",
+  ".github/workflows/test.yml@#{hashed_job}#job-timed-out",
+  ".github/workflows/test.yml@check#flaky-rerun",
+  ".github/workflows/test.yml@self-tests-3-4#job-timed-out",
+].sort)
+t = by_fp[".github/workflows/test.yml@self-tests-3-4#job-timed-out"]
+check("timeout: kind/severity/confidence", t && [t["kind"], t["severity"], t["confidence"]] == ["defect", "medium", "確証"])
+check("timeout: links the job", t && t["evidence"].include?("https://github.com/o/r/actions/runs/1/job/11") && t["claim"].include?("(1 回)"))
+f = by_fp[".github/workflows/test.yml@check#flaky-rerun"]
+check("flaky: counts runs, links the passing attempt", f && f["claim"].include?("2 回") &&
+      f["evidence"].include?("runs/2/job/22") && f["evidence"].include?("runs/3/job/32"))
+check("flaky: a single rerun is only counted", !by_fp.keys.any? { |k| k.include?("@other#") } && result[:summary].include?("1 回だけの job 1 件"))
+check("flaky: a cancelled first attempt is not a failure", !by_fp.keys.any? { |k| k.include?("bash32") })
+n = by_fp[".github/workflows/test.yml#deprecation-node-20"]
+check("deprecation: grouped by kind across jobs", n && n["evidence"].include?("runs/7/job/71") && n["evidence"].include?("runs/7/job/72") &&
+      n["claim"].include?("Node.js 20 の deprecation の予告") && n["claim"].include?("(warning)"))
+check("deprecation: kind/severity", n && [n["kind"], n["severity"], n["confidence"]] == ["debt", "low", "有力"])
+check("events: free text is not echoed", !JSON.generate(result).include?(SENTINEL) && !JSON.generate(result).include?("\u0007"))
+check("events: hashed job name", by_fp.key?(".github/workflows/test.yml@#{hashed_job}#job-timed-out") &&
+      by_fp[".github/workflows/test.yml@#{hashed_job}#job-timed-out"]["claim"].include?("名前は規則の外"))
+check("events: summary counts (#{result[:summary]})",
+      result[:summary].include?("timeout に当たった job 2 回") && result[:summary].include?("やり直しで通った job 3 回") &&
+        result[:summary].include?("それ以外の cancelled の job 1 回") && result[:summary].include?("deprecation の annotation 3 種類"))
+check("events: dynamic and out-of-window runs are ignored", !JSON.generate(result).include?("runs/6/") && !JSON.generate(result).include?("runs/8/"))
+missing = data.merge(annotations: data[:annotations].reject { |k, _| k == 11 })
+check("events: a cancelled job without annotations fails closed",
+      begin
+        CC.evaluate_events("o/r", "main", WINDOW, missing)
+        false
+      rescue CC::EventError
+        true
+      end)
+many = (1..7).map { |i| ev_run(100 + i, event: "push", branch: "main", updated: "2026-10-1#{6 + i % 3}T0#{i}:00:00Z") }
+check("deprecation runs: the latest 5 per workflow",
+      CC.deprecation_runs(many, "main", WINDOW).map { |r| r["id"] }.sort ==
+        many.sort_by { |r| [Time.iso8601(r["updated_at"]), r["id"]] }.last(5).map { |r| r["id"] }.sort)
+%w[--until\ 2026-10-22T00:00:00Z --since\ 2026-10-22 --since\ 2026-10-22T00:00:00Z\ --until\ 2026-10-21T00:00:00Z].each do |args|
+  check("usage: #{args}", begin
+    CC.parse_window(args.split(" "))
+    false
+  rescue CC::UsageError
+    true
+  end)
+end
+check("usage: no --since means no events", CC.parse_window([]).nil?)
 
 # ---- CLI ----
 
@@ -495,6 +605,151 @@ check("cli unknown argument: exit 2 with usage", st.exitstatus == 2 && out.empty
 out, _err, st = run_cli(repo, "--help")
 check("cli --help: exit 0", st.exitstatus == 0 && out.start_with?("usage:"))
 
+# ---- CLI: run の記録 (偽の gh) ----
+# 偽の gh は、`repo view --json nameWithOwner,defaultBranchRef` と `api <path>` だけを受け、routes.json の応答を返す
+# (無い route は失敗)。呼ばれた引数と、env に GH_REPO があったかを calls.log に残す。
+
+gh_dir = File.join(tmp, "fake-gh")
+gh_bin = File.join(gh_dir, "bin")
+FileUtils.mkdir_p(gh_bin)
+File.write(File.join(gh_bin, "gh"), <<~'FAKE')
+  #!/usr/bin/env ruby
+  require "json"
+  dir = ENV.fetch("FAKE_GH_DIR")
+  File.open(File.join(dir, "calls.log"), "a") { |f| f.puts(JSON.generate("args" => ARGV, "gh_repo" => ENV.key?("GH_REPO"))) }
+  routes = JSON.parse(File.read(File.join(dir, "routes.json")))
+  key = if ARGV == ["repo", "view", "--json", "nameWithOwner,defaultBranchRef"] then "repo-view"
+        elsif ARGV.size == 2 && ARGV[0] == "api" then ARGV[1]
+        end
+  route = key && routes[key]
+  exit 1 if route.nil?
+  sleep route["sleep"] if route["sleep"]
+  print JSON.generate(route["body"])
+FAKE
+File.chmod(0o755, File.join(gh_bin, "gh"))
+GH_ENV = { "PATH" => "#{gh_bin}:#{ENV.fetch('PATH')}", "FAKE_GH_DIR" => gh_dir, "GH_REPO" => "evil/elsewhere" }.freeze
+EVENT_ARGS = %w[--since 2026-10-15T00:00:00Z --until 2026-10-22T00:00:00Z].freeze
+RUNS_PATH = ->(page) { "repos/o/r/actions/runs?created=>=2026-10-08T00:00:00Z&per_page=100&page=#{page}" }
+JOBS_PATH = ->(id) { "repos/o/r/actions/runs/#{id}/jobs?filter=all&per_page=100&page=1" }
+ANN_PATH = ->(id) { "repos/o/r/check-runs/#{id}/annotations?per_page=100&page=1" }
+
+def set_routes(dir, routes)
+  File.write(File.join(dir, "routes.json"), JSON.generate(routes))
+  FileUtils.rm_f(File.join(dir, "calls.log"))
+end
+
+def gh_calls(dir)
+  path = File.join(dir, "calls.log")
+  File.exist?(path) ? File.readlines(path).map { |l| JSON.parse(l) } : []
+end
+
+base_routes = {
+  "repo-view" => { "body" => { "nameWithOwner" => "o/r", "defaultBranchRef" => { "name" => "main" } } },
+  RUNS_PATH.call(1) => { "body" => { "total_count" => 3, "workflow_runs" => [
+    ev_run(1, conclusion: "cancelled", updated: "2026-10-19T00:00:00Z"),
+    ev_run(6, path: "dynamic/dependabot/dependabot-updates", event: "dynamic", conclusion: "cancelled"),
+    ev_run(7, event: "push", branch: "main", updated: "2026-10-20T00:00:00Z"),
+  ] } },
+  JOBS_PATH.call(1) => { "body" => { "total_count" => 1, "jobs" => [ev_job(11, "self-tests (3.4)", "cancelled", completed: "2026-10-19T00:00:00Z")] } },
+  JOBS_PATH.call(7) => { "body" => { "total_count" => 1, "jobs" => [ev_job(71, "a", "success", completed: "2026-10-20T00:00:00Z")] } },
+  ANN_PATH.call(11) => { "body" => [TIMEOUT_ANN] },
+  ANN_PATH.call(71) => { "body" => [ann("warning", "Node.js 20 is deprecated. #{SENTINEL}")] },
+}.freeze
+
+# 正常: 点検の所見が出て、schema に適合し、GH_REPO は gh に渡らず、dynamic な run の job は読まない。
+set_routes(gh_dir, base_routes)
+out, err, st = run_cli(clean, *EVENT_ARGS, env: GH_ENV)
+report = JSON.parse(out) rescue nil
+check("cli events: exit 1 with JSON (#{err})", st.exitstatus == 1 && report.is_a?(Hash))
+check("cli events: matches the schema", report && schema_errors(SCHEMA, report).empty?)
+check("cli events: findings", report && report["findings"].map { |x| x["fingerprint"] }.sort ==
+      [".github/workflows/test.yml#deprecation-node-20", ".github/workflows/test.yml@self-tests-3-4#job-timed-out"])
+check("cli events: scope.seen has the window", report && report["scope"]["seen"].include?("run の記録 (2026-10-15T00:00:00Z〜2026-10-22T00:00:00Z)"))
+calls = gh_calls(gh_dir)
+check("cli events: GH_REPO is not passed to gh", !calls.empty? && calls.none? { |c| c["gh_repo"] })
+check("cli events: dynamic runs are not read", calls.none? { |c| c["args"].join(" ").include?("runs/6/") })
+check("cli events: free text is not echoed", !out.include?(SENTINEL))
+check("cli events: summary counts the calls", report && report["summary"].include?("API の呼び出し #{calls.size} 回"))
+
+# --since が無ければ gh を呼ばない (network に触れない)。
+set_routes(gh_dir, base_routes)
+out, _err, st = run_cli(clean, env: GH_ENV)
+check("cli without --since: gh is not called", st.exitstatus == 0 && gh_calls(gh_dir).empty?)
+
+# gh の失敗: 点検の所見は捨て、静的な検査の結果は出し、run の記録を確かめられないにする。
+set_routes(gh_dir, base_routes.reject { |k, _| k == ANN_PATH.call(71) })
+out, _err, st = run_cli(repo, *EVENT_ARGS, env: GH_ENV)
+report = JSON.parse(out) rescue nil
+check("cli events failure: exit 2", st.exitstatus == 2 && report.is_a?(Hash))
+check("cli events failure: event findings are dropped, static kept", report &&
+      report["findings"].map { |x| x["fingerprint"] }.sort ==
+        [".github/workflows/test.yml#concurrency-missing", ".github/workflows/test.yml@self-tests#timeout-missing"])
+check("cli events failure: not_seen line", report &&
+      report["scope"]["not_seen"] == ["run の記録 (2026-10-15T00:00:00Z〜2026-10-22T00:00:00Z。gh が失敗した)"] &&
+      report["summary"].include?("run の記録を確かめられない"))
+
+# 呼び出しの上限: 200 回で止め、それ以上は呼ばない。
+failing = (1..250).map { |i| ev_run(1000 + i, conclusion: "failure") }
+capped = base_routes.merge(
+  RUNS_PATH.call(1) => { "body" => { "total_count" => 250, "workflow_runs" => failing[0, 100] } },
+  RUNS_PATH.call(2) => { "body" => { "total_count" => 250, "workflow_runs" => failing[100, 100] } },
+  RUNS_PATH.call(3) => { "body" => { "total_count" => 250, "workflow_runs" => failing[200, 50] } },
+)
+failing.each { |r| capped[JOBS_PATH.call(r["id"])] = { "body" => { "total_count" => 0, "jobs" => [] } } }
+set_routes(gh_dir, capped)
+out, _err, st = run_cli(clean, *EVENT_ARGS, env: GH_ENV)
+report = JSON.parse(out) rescue nil
+check("cli call cap: exit 2 with the reason", st.exitstatus == 2 && report &&
+      report["scope"]["not_seen"] == ["run の記録 (2026-10-15T00:00:00Z〜2026-10-22T00:00:00Z。API の呼び出しが上限の 200 回を超える)"])
+check("cli call cap: stops at 200 calls (#{gh_calls(gh_dir).size})", gh_calls(gh_dir).size == 200)
+
+# 一覧の上限 (created で絞ると 1000 本まで) を超える窓は読まない。
+set_routes(gh_dir, base_routes.merge(RUNS_PATH.call(1) => { "body" => { "total_count" => 1001, "workflow_runs" => [] } }))
+out, _err, st = run_cli(clean, *EVENT_ARGS, env: GH_ENV)
+report = JSON.parse(out) rescue nil
+check("cli too many runs: exit 2", st.exitstatus == 2 && report && report["scope"]["not_seen"].first.to_s.include?("1000 本まで"))
+
+# 応答の形が違えば (field の欠け) 所見なしに倒さない。
+broken = base_routes.merge(JOBS_PATH.call(1) => { "body" => { "total_count" => 1, "jobs" => [{ "id" => 11 }] } })
+set_routes(gh_dir, broken)
+out, _err, st = run_cli(clean, *EVENT_ARGS, env: GH_ENV)
+report = JSON.parse(out) rescue nil
+check("cli malformed response: exit 2", st.exitstatus == 2 && report && report["scope"]["not_seen"].first.to_s.include?("job の応答の形が想定と違う"))
+
+# 引数の誤りは run 全体の失敗 (stdout は空、usage を stderr に)。
+[%w[--until 2026-10-22T00:00:00Z], %w[--since 2026-10-22], %w[--since 2026-10-22T00:00:00Z --since 2026-10-22T00:00:00Z]].each do |args|
+  out, err, st = run_cli(clean, *args, env: GH_ENV)
+  check("cli usage #{args.inspect}: exit 2 with usage", st.exitstatus == 2 && out.empty? && err.include?("usage:"))
+end
+
+# 時間の上限: 上限の時刻を過ぎた gh は止め、待ち続けない (GitHubApi を直接使う)。
+set_routes(gh_dir, { "repo-view" => { "sleep" => 30, "body" => {} } })
+saved_env = ENV.to_h.slice("PATH", "FAKE_GH_DIR")
+ENV["PATH"] = GH_ENV["PATH"]
+ENV["FAKE_GH_DIR"] = gh_dir
+begin
+  started = Time.now
+  api = CC::GitHubApi.new(clean, Time.now + 1)
+  err = begin
+    api.json("repo", "view", "--json", "nameWithOwner,defaultBranchRef")
+    nil
+  rescue CC::EventError => e
+    e.message
+  end
+  check("time cap: a hanging gh is stopped (#{err.inspect}, #{(Time.now - started).round(1)}s)",
+        err.to_s.include?("時間が上限") && Time.now - started < 10)
+  past = CC::GitHubApi.new(clean, Time.now - 1)
+  check("time cap: no call after the deadline", begin
+    past.json("repo", "view", "--json", "nameWithOwner,defaultBranchRef")
+    false
+  rescue CC::EventError
+    past.calls.zero?
+  end)
+ensure
+  saved_env.each { |k, v| ENV[k] = v }
+  ENV.delete("FAKE_GH_DIR") unless saved_env.key?("FAKE_GH_DIR")
+end
+
 # 1 つの file の想定外の失敗は、その file を確かめられないにして、残りの file の結果を出す。
 require "stringio"
 orig_check_workflow = CC.method(:check_workflow)
@@ -523,7 +778,7 @@ check("per-file unexpected exception: exit 2 with the other files",
 # 想定外の例外は、Ruby の既定の exit 1 (所見あり と同じ値) でなく exit 2 で、stdout を空にする。
 orig_check_repo = CC.method(:check_repo)
 [NoMethodError, SystemStackError].each do |klass|
-  CC.define_singleton_method(:check_repo) { |_dir| raise klass, "boom" }
+  CC.define_singleton_method(:check_repo) { |*_args| raise klass, "boom" }
   saved_out, saved_err = $stdout, $stderr
   $stdout, $stderr = StringIO.new, StringIO.new
   begin

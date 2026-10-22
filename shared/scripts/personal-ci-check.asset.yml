@@ -9,21 +9,27 @@ risk:
   prompt_injection: low
   privacy: low
 # script kind は実行コード配布のため常に human review 必須 (#147)。
-# 本 script は #541 の 1 番目の PR (workflow の file の静的な検査) で author≠reviewer レビューのうえ承認する。
+# 本 script は #541 の 1 番目の PR (workflow の file の静的な検査) で author≠reviewer レビューのうえ承認し、3 番目の
+# PR (--since の run の記録の点検) で再レビューする。
 # 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:d31f1dc1dad86c780e4e1deba476f191b31e19ff5b483cd7b07ba276f6c4f3d5
+  approved_build_id: sha256:67ba4628df063a4a1e5d78f338abdb518bc01c8a83507d046b6cbfb3dc2c6132
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-ci-check.rb
   format: text
 summary: >-
   GitHub Actions の workflow の file を決まった規則で検査し、所見を personal-repo-audit の findings.schema.json の形の
-  JSON で stdout に出す (#541)。AI を使わず、GitHub にも network にも触れず (git を --no-lazy-fetch と
-  --no-replace-objects で起動し、今の directory の repo の HEAD の commit の実体を読むだけ。作業ツリーの未 commit の
-  変更は読まない)、何も書かない。対象は
+  JSON で stdout に出す (#541)。AI を使わず、何も書かない。既定では GitHub にも network にも触れず (git を
+  --no-lazy-fetch と --no-replace-objects で起動し、今の directory の repo の HEAD の commit の実体を読むだけ。作業
+  ツリーの未 commit の変更は読まない)、--since を付けたときだけ gh api (GET。shell を通さず GH_REPO を外す) で窓
+  (since, until] に終わった run の記録を点検する: job-timed-out (cancelled + 決まった annotation)、flaky-rerun (同じ job
+  が failure の後の attempt で success、窓の中で 2 本以上の run)、deprecation-* (default branch への push の run の
+  annotation の決まった語。文面は載せず、決まった型だけを決まった文言に)。Dependabot などの dynamic な run は見ない。
+  API は 1 回の実行で 200 回・120 秒まで (超えた gh は process group ごと止める)。点検に失敗したら点検の所見は捨て、
+  scope.not_seen に「run の記録」の行を書いて exit 2。対象は
   .github/workflows/ の直下の *.yml / *.yaml。規則は timeout-missing (job に timeout-minutes が無い。reusable workflow
   を呼ぶ job は書けないので見ない) と concurrency-missing (pull_request で起動する workflow に、top level にもすべての
   job にも concurrency が無い。proposal で判断が要る)。YAML は stream 全体を parse して文書が 1 つであることを求め、
