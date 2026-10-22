@@ -79,16 +79,22 @@ attempt の記録を読み、次を所見にします (#541)。窓は「終わ�
   など) は、summary に回数だけを書きます。1 回目が cancelled でやり直しで通った job も、flaky には数えません
   (runner の容量のことが多く、test の揺れではないため)。待ち時間は見ません。
 - **見る run**: repo の workflow の file から走る run だけです (path が `.github/workflows/<規則の形の名前>`)。
-  Dependabot などの dynamic な run は見ません。探すのは、作成が since の 7 日前より後の run です (窓の前に作られ、窓の
-  中でやり直された run を拾う。それより前の run のやり直しは見逃す)。
-- **読む量を絞る**: job を読むのは、やり直した run (attempt が 2 以上) と、conclusion が cancelled / failure /
-  timed_out の run だけです。annotation を読むのは、窓の中に終わった cancelled の job と、deprecation を見る run の
-  最後の attempt の job だけです。
+  Dependabot などの dynamic な run は見ません。探すのは、作成が [since の 7 日前, until] の run です (API の `created` の
+  範囲の指定。窓の前に作られ、窓の中でやり直された run を拾う。それより前の run のやり直しは見逃す。窓の後に作られた
+  run は窓の中に終われないので、API の側で除く)。
+- **読む量を絞る**: job を読むのは、やり直した run (attempt が 2 以上)、conclusion が cancelled / failure / timed_out
+  の run、まだ終わっていない run だけです。まだ終わっていない run も読むのは、窓を job の終わった時刻で切るためです
+  (点検の時点で走っている run の中で、窓の中に timeout で止まった job は、今の窓で拾わないと次の窓では since より前に
+  なって見えない)。annotation を読むのは、窓の中に終わった cancelled の job と、deprecation を見る run の最後の
+  attempt の job だけです。
 - **上限**: 1 回の実行で、API の呼び出し 200 回・120 秒までです。上限の時刻を過ぎた gh は、process group ごと止めます。
-  GitHub の run の一覧は、作成で絞ると 1000 本までしか返さないので、それを超える窓は読みません。実測 (2026-10): いちばん
-  忙しい repo の 30 日の窓で 127 回・77 秒、2 週間の窓で 79 回。
-- **確かめられないとき** (上限、gh の失敗・起動できない、応答の形の違い (field の欠け・型の違い・時刻を解釈できない)、
-  今の repo の GitHub の repo や default branch を解決できない): 点検の所見はすべて捨て、`scope.not_seen` に
+  gh の本体が終わっても、gh が起動した子が出力の pipe を握っていれば読み終わらないので、pipe を読み終えるまでも同じ
+  期限で見て、過ぎたら group ごと止めます。GitHub の run の一覧は、作成で絞ると 1000 本までしか返さないので、それを
+  超える窓は読みません。実測 (2026-10): いちばん忙しい repo の 30 日の窓で 127 回・77 秒、2 週間の窓で 79 回。
+- **確かめられないとき** (上限、gh の失敗・起動できない、応答の形の違い (key の欠け・型の違い・時刻を解釈できない・
+  終わった run や job の conclusion / 終わった時刻の欠け。終わっていないものの null は正当)、一覧の件数が `total_count`
+  と合わない・読む間に `total_count` が変わった・id が重なる、今の repo の GitHub の repo や default branch を解決できない):
+  点検の所見はすべて捨て、`scope.not_seen` に
   `run の記録 (<since>〜<until>。<理由>)` の行を書いて exit 2 にします。静的な検査の結果はそのまま出します。sweep は
   この行の有無で、窓の時刻を進めるかを決めます (接頭辞「run の記録」は契約)。
 - **出力に載せないもの**: annotation の文面は自由文 (workflow が出す文を含む) なので載せません。決まった型だけを
@@ -99,7 +105,9 @@ attempt の記録を読み、次を所見にします (#541)。窓は「終わ�
   まで) に合うときだけ載せ、外れれば hash で表します (topic の slug も hash)。link は repo と run・job の id から組み
   立てます (`https://github.com/<repo>/actions/runs/<run>/job/<job>`)。
 - **fingerprint**: `<path>@<job の slug>#job-timed-out`、`<path>@<job の slug>#flaky-rerun`、`<path>#deprecation-<種類>`。
-  job の slug は表示名を小文字にし、英数字以外の並びを `-` にしたもの (例 `self-tests (3.4)` → `self-tests-3-4`)。
+  job の slug は表示名を小文字にし、英数字以外の並びを `-` にしたもの。この変換で情報が落ちる名前 (大文字・空白・記号を
+  含む) は、違う名前の slug がぶつからないよう、元の名前の SHA-256 の先頭 6 文字を添えます (例 `self-tests (3.4)` →
+  `self-tests-3-4-9c6e41`。`check` はそのまま `check`)。
 - summary に、窓の中に終わった run の本数、各事象の回数、API の呼び出しの回数を書きます。`scope.seen` には
   `run の記録 (<since>〜<until>)` の行を足します。
 

@@ -184,7 +184,8 @@ module CiCheck
 
     private
 
-    # gh は自分の process group で起動し、上限の時刻を過ぎたら group ごと止める (gh が起動した子を残さない)。
+    # gh は自分の process group で起動し、上限の時刻を過ぎたら group ごと止める (gh が起動した子を残さない)。gh の
+    # 本体が終わっても、子が stdout / stderr を握っていれば pipe は閉じないので、pipe を読み終えるまでも期限で見る。
     def run_gh(args)
       out_r, out_w = IO.pipe
       err_r, err_w = IO.pipe
@@ -196,22 +197,33 @@ module CiCheck
       status = nil
       until (status = Process.wait2(pid, Process::WNOHANG)&.last)
         if Time.now >= @deadline
-          begin
-            Process.kill("KILL", -pid)
-          rescue Errno::ESRCH
-            nil # 上限の直前に gh の group が自分で終わった (止めるものが無い)
-          end
+          stop_group(pid)
           Process.wait(pid)
           readers.each(&:join)
           raise EventError, "時間が上限の #{MAX_API_SECONDS} 秒を超える"
         end
         sleep 0.05
       end
+      readers.each do |reader|
+        remaining = @deadline - Time.now
+        next if remaining.positive? && reader.join(remaining)
+
+        # 本体は終わったが、group の子が pipe を握ったまま期限を過ぎた。
+        stop_group(pid)
+        readers.each(&:join)
+        raise EventError, "時間が上限の #{MAX_API_SECONDS} 秒を超える"
+      end
       [readers[0].value, status]
     rescue SystemCallError
       raise EventError, "gh を起動できない"
     ensure
       [out_r, err_r].each { |io| io&.close unless io&.closed? }
+    end
+
+    def stop_group(pid)
+      Process.kill("KILL", -pid)
+    rescue Errno::ESRCH
+      nil # gh の group が自分で終わった (止めるものが無い)
     end
   end
 
@@ -600,7 +612,7 @@ module CiCheck
   # 配列 (全 attempt)、annotations は job id => annotation の配列。読む対象の選び方は evaluate_events と同じ述語。
   def collect_events(api, repo, default_branch, window)
     from = format_time(window[:since] - SEARCH_BACK_SECONDS)
-    listed = list_runs(api, repo, from)
+    listed = list_runs(api, repo, from, window[:until_s])
     runs = listed.select { |r| workflow_run?(r) }
     skipped = listed.count { |r| r["path"].is_a?(String) && r["path"].start_with?("#{WORKFLOW_DIR}/") && !workflow_run?(r) }
 
@@ -626,39 +638,48 @@ module CiCheck
     { runs: runs, jobs: jobs, annotations: annotations, skipped: skipped }
   end
 
-  def list_runs(api, repo, from)
-    runs = []
-    page = 1
-    loop do
-      body = api.json("api", "repos/#{repo}/actions/runs?created=>=#{from}&per_page=#{PER_PAGE}&page=#{page}")
-      total = body.is_a?(Hash) ? body["total_count"] : nil
-      list = body.is_a?(Hash) ? body["workflow_runs"] : nil
-      raise EventError, "run の一覧の応答の形が想定と違う" unless total.is_a?(Integer) && list.is_a?(Array)
+  # 作成が [from, until] の run (窓の後に作られた run は窓の中に終われないので、API の側で除く)。
+  def list_runs(api, repo, from, until_s)
+    runs = paged(api, "repos/#{repo}/actions/runs?created=#{from}..#{until_s}", "workflow_runs", "run") do |total|
       raise EventError, "run が多すぎて一覧で読み切れない (#{MAX_LISTED_RUNS} 本まで)" if total > MAX_LISTED_RUNS
-
-      list.each { |run| runs << valid_run!(run) }
-      break if list.size < PER_PAGE || runs.size >= total
-
-      page += 1
     end
-    runs
+    runs.map { |run| valid_run!(run) }
   end
 
   def list_jobs(api, repo, run_id)
-    jobs = []
+    paged(api, "repos/#{repo}/actions/runs/#{run_id}/jobs?filter=all", "jobs", "job").map { |job| valid_job!(job) }
+  end
+
+  # total_count を持つ一覧を全 page 読む。取った件数が total_count と合わなければ (短い応答・重なり) 確かめられない
+  # (不完全な一覧から 所見なし と判断しない)。最初の page の total_count を block に渡す。
+  def paged(api, path, key, what)
+    items = []
+    total = nil
     page = 1
     loop do
-      body = api.json("api", "repos/#{repo}/actions/runs/#{run_id}/jobs?filter=all&per_page=#{PER_PAGE}&page=#{page}")
-      total = body.is_a?(Hash) ? body["total_count"] : nil
-      list = body.is_a?(Hash) ? body["jobs"] : nil
-      raise EventError, "job の一覧の応答の形が想定と違う" unless total.is_a?(Integer) && list.is_a?(Array)
+      body = api.json("api", "#{path}&per_page=#{PER_PAGE}&page=#{page}")
+      count = body.is_a?(Hash) ? body["total_count"] : nil
+      list = body.is_a?(Hash) ? body[key] : nil
+      raise EventError, "#{what} の一覧の応答の形が想定と違う" unless count.is_a?(Integer) && list.is_a?(Array)
 
-      list.each { |job| jobs << valid_job!(job) }
-      break if list.size < PER_PAGE || jobs.size >= total
+      if total.nil?
+        total = count
+        yield total if block_given?
+      end
+      raise EventError, "#{what} の一覧が読む間に変わった" unless count == total
+
+      items.concat(list)
+      # PER_PAGE 未満の page は最後の page。件数の突き合わせは loop の後で行う。
+      break if list.size < PER_PAGE || items.size >= total
 
       page += 1
     end
-    jobs
+    ids = items.map { |item| item.is_a?(Hash) ? item["id"] : nil }
+    unless items.size == total && ids.uniq.size == ids.size
+      raise EventError, "#{what} の一覧が total_count と合わない (#{items.size} / #{total})"
+    end
+
+    items
   end
 
   def list_annotations(api, repo, job_id)
@@ -682,11 +703,14 @@ module CiCheck
     annotations
   end
 
-  # 判定に使う field の型を確かめる (欠けや型の違いを 所見なし に倒さない)。
+  # 判定に使う field の型を確かめる (欠けや型の違いを 所見なし に倒さない)。key の欠けは、正当な null (終わって
+  # いない run や job の conclusion など) と区別して、確かめられないにする。終わった run と job は、conclusion (job は
+  # completed_at も) が要る。
   def valid_run!(run)
-    ok = run.is_a?(Hash) && run["id"].is_a?(Integer) && (run["path"].nil? || run["path"].is_a?(String)) &&
+    ok = run.is_a?(Hash) && %w[id path event status conclusion run_attempt head_branch updated_at].all? { |k| run.key?(k) } &&
+         run["id"].is_a?(Integer) && (run["path"].nil? || run["path"].is_a?(String)) &&
          run["event"].is_a?(String) && run["status"].is_a?(String) &&
-         (run["conclusion"].nil? || run["conclusion"].is_a?(String)) &&
+         (run["conclusion"].is_a?(String) || (run["conclusion"].nil? && run["status"] != "completed")) &&
          run["run_attempt"].is_a?(Integer) && run["run_attempt"] >= 1 &&
          (run["head_branch"].nil? || run["head_branch"].is_a?(String)) && run["updated_at"].is_a?(String)
     raise EventError, "run の応答の形が想定と違う" unless ok
@@ -696,10 +720,12 @@ module CiCheck
   end
 
   def valid_job!(job)
-    ok = job.is_a?(Hash) && job["id"].is_a?(Integer) && job["run_attempt"].is_a?(Integer) &&
+    ok = job.is_a?(Hash) && %w[id run_attempt name status conclusion completed_at].all? { |k| job.key?(k) } &&
+         job["id"].is_a?(Integer) && job["run_attempt"].is_a?(Integer) &&
          job["name"].is_a?(String) && job["status"].is_a?(String) &&
-         (job["conclusion"].nil? || job["conclusion"].is_a?(String)) &&
-         (job["completed_at"].nil? || job["completed_at"].is_a?(String))
+         (job["status"] == "completed" ? job["conclusion"].is_a?(String) && job["completed_at"].is_a?(String)
+                                       : (job["conclusion"].nil? || job["conclusion"].is_a?(String)) &&
+                                         (job["completed_at"].nil? || job["completed_at"].is_a?(String)))
     raise EventError, "job の応答の形が想定と違う" unless ok
 
     time_of(job["completed_at"]) unless job["completed_at"].nil?
@@ -725,9 +751,11 @@ module CiCheck
     run["path"].is_a?(String) && run["path"].match?(RUN_PATH_RE)
   end
 
-  # job を読む run: やり直した run か、timeout や失敗の候補を含む run。
+  # job を読む run: やり直した run、timeout や失敗の候補を含む run、まだ終わっていない run。窓は job の終わった時刻で
+  # 切るので、点検の時点で走っている run の中で窓の中に終わった job (timeout など) は今の窓で見る (次の窓では、その
+  # job は since より前に終わっているので見えない)。
   def job_run?(run)
-    run["run_attempt"] >= 2 || JOB_CONCLUSIONS.include?(run["conclusion"])
+    run["run_attempt"] >= 2 || JOB_CONCLUSIONS.include?(run["conclusion"]) || run["status"] != "completed"
   end
 
   def timeout_candidate?(job, window)
@@ -842,7 +870,12 @@ module CiCheck
     end
 
     slug = name.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-+|-+\z/, "")
-    [name, slug.empty? ? "job-#{short_hash(name)}" : slug]
+    return [name, "job-#{short_hash(name)}"] if slug.empty?
+    return [name, slug] if slug == name
+
+    # 変換で情報が落ちる名前 (大文字・空白・記号を含む) は、元の名前の hash を添えて、違う名前の slug がぶつからない
+    # ようにする (例 `test (a.b)` と `test (a-b)`)。
+    [name, "#{slug}-#{short_hash(name)[0, 6]}"]
   end
 
   def short_hash(text)

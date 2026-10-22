@@ -15,7 +15,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:67ba4628df063a4a1e5d78f338abdb518bc01c8a83507d046b6cbfb3dc2c6132
+  approved_build_id: sha256:c60094c4bac1b8c3c6de048b8168015d206ac26cd5bc15fde89425c54bc5529e
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-ci-check.rb
@@ -28,7 +28,10 @@ summary: >-
   (since, until] に終わった run の記録を点検する: job-timed-out (cancelled + 決まった annotation)、flaky-rerun (同じ job
   が failure の後の attempt で success、窓の中で 2 本以上の run)、deprecation-* (default branch への push の run の
   annotation の決まった語。文面は載せず、決まった型だけを決まった文言に)。Dependabot などの dynamic な run は見ない。
-  API は 1 回の実行で 200 回・120 秒まで (超えた gh は process group ごと止める)。点検に失敗したら点検の所見は捨て、
+  一覧は作成が [since の 7 日前, until] の run を total_count と突き合わせて読み、job はやり直した run・cancelled /
+  failure / timed_out の run・まだ終わっていない run だけを読む。応答の key の欠けや、終わった run と job の値の欠けは
+  確かめられないにする。API は 1 回の実行で 200 回・120 秒まで (超えた gh は、出力の pipe を握る子を含めて process
+  group ごと止める)。点検に失敗したら点検の所見は捨て、
   scope.not_seen に「run の記録」の行を書いて exit 2。対象は
   .github/workflows/ の直下の *.yml / *.yaml。規則は timeout-missing (job に timeout-minutes が無い。reusable workflow
   を呼ぶ job は書けないので見ない) と concurrency-missing (pull_request で起動する workflow に、top level にもすべての

@@ -210,6 +210,9 @@ check("on event not a string", file_error("on: [1]\njobs:\n  a:\n    runs-on: x\
 
 # ---- run の記録の判定 (evaluate_events。network なし) ----
 
+# 変換で情報が落ちる job の名前の slug には、元の名前の hash を添える。
+SLUG34 = "self-tests-3-4-#{Digest::SHA256.hexdigest('self-tests (3.4)')[0, 6]}"
+TIMEOUT_FP = ".github/workflows/test.yml@#{SLUG34}#job-timed-out"
 WINDOW = CC.parse_window(%w[--since 2026-10-15T00:00:00Z --until 2026-10-22T00:00:00Z])
 check("window parsed", WINDOW[:since_s] == "2026-10-15T00:00:00Z" && WINDOW[:until_s] == "2026-10-22T00:00:00Z")
 check("window is (since, until]", !CC.in_window?("2026-10-15T00:00:00Z", WINDOW) && CC.in_window?("2026-10-22T00:00:00Z", WINDOW))
@@ -273,9 +276,9 @@ check("events: fingerprints (#{by_fp.keys.sort.inspect})", by_fp.keys.sort == [
   ".github/workflows/test.yml#deprecation-runner-label-ubuntu-latest",
   ".github/workflows/test.yml@#{hashed_job}#job-timed-out",
   ".github/workflows/test.yml@check#flaky-rerun",
-  ".github/workflows/test.yml@self-tests-3-4#job-timed-out",
+  TIMEOUT_FP,
 ].sort)
-t = by_fp[".github/workflows/test.yml@self-tests-3-4#job-timed-out"]
+t = by_fp[TIMEOUT_FP]
 check("timeout: kind/severity/confidence", t && [t["kind"], t["severity"], t["confidence"]] == ["defect", "medium", "確証"])
 check("timeout: links the job", t && t["evidence"].include?("https://github.com/o/r/actions/runs/1/job/11") && t["claim"].include?("(1 回)"))
 f = by_fp[".github/workflows/test.yml@check#flaky-rerun"]
@@ -315,6 +318,48 @@ check("deprecation runs: the latest 5 per workflow",
   end)
 end
 check("usage: no --since means no events", CC.parse_window([]).nil?)
+
+# 実行中の run も job を読み、窓の中に終わった job (timeout) は今の窓で拾う。次の窓では二重に数えない (F01)。
+running = ev_run(60, status: "in_progress", conclusion: nil, updated: "2026-10-21T00:00:00Z")
+check("job runs: an unfinished run is read", CC.job_run?(running))
+check("job runs: a finished clean run is not read", !CC.job_run?(ev_run(61)))
+running_jobs = { 60 => [ev_job(601, "self-tests (3.4)", "cancelled", completed: "2026-10-20T00:00:00Z"),
+                        { "id" => 602, "name" => "lint", "status" => "in_progress", "conclusion" => nil, "run_attempt" => 1, "completed_at" => nil }] }
+now_data = { runs: [running], jobs: running_jobs, annotations: { 601 => [TIMEOUT_ANN] }, skipped: 0 }
+check("adjacent windows: the timeout in a running run is found now",
+      CC.evaluate_events("o/r", "main", WINDOW, now_data)[:findings].map { |x| x["fingerprint"] } == [TIMEOUT_FP])
+next_window = CC.parse_window(%w[--since 2026-10-22T00:00:00Z --until 2026-10-29T00:00:00Z])
+later = { runs: [ev_run(60, conclusion: "failure", updated: "2026-10-23T00:00:00Z")],
+          jobs: { 60 => [running_jobs[60][0], ev_job(602, "lint", "success", completed: "2026-10-23T00:00:00Z")] },
+          annotations: { 601 => [TIMEOUT_ANN] }, skipped: 0 }
+check("adjacent windows: not counted again in the next window",
+      CC.evaluate_events("o/r", "main", next_window, later)[:findings].empty?)
+
+# 終わった job と run の要る値の欠け、key の欠けは確かめられない (正当な null とは区別する) (F02)。
+def event_error?
+  yield
+  false
+rescue CC::EventError
+  true
+end
+done_job = ev_job(1, "a", "cancelled")
+check("valid job: a finished job without completed_at", event_error? { CC.valid_job!(done_job.merge("completed_at" => nil)) })
+check("valid job: a finished job without conclusion", event_error? { CC.valid_job!(done_job.merge("conclusion" => nil)) })
+check("valid job: a missing key", event_error? { CC.valid_job!(done_job.reject { |k, _| k == "completed_at" }) })
+# 終わっていない job の completed_at は null でよいが、key そのものの欠けは確かめられない (値の規則では捕まらない)。
+check("valid job: a missing key on an unfinished job",
+      event_error? { CC.valid_job!(done_job.merge("status" => "in_progress", "conclusion" => nil).reject { |k, _| k == "completed_at" }) })
+check("valid job: an unfinished job may have nulls",
+      !event_error? { CC.valid_job!(done_job.merge("status" => "in_progress", "conclusion" => nil, "completed_at" => nil)) })
+check("valid run: a finished run without conclusion", event_error? { CC.valid_run!(ev_run(1, conclusion: nil)) })
+check("valid run: a missing key", event_error? { CC.valid_run!(ev_run(1).reject { |k, _| k == "head_branch" }) })
+check("valid run: an unfinished run may lack a conclusion", !event_error? { CC.valid_run!(running) })
+
+# job の slug: 変換で情報が落ちる名前には hash を添え、違う名前がぶつからない (F06)。
+check("slug: a plain name stays", CC.job_label("check") == %w[check check])
+check("slug: lossy names get a hash", CC.job_label("test (a.b)")[1] != CC.job_label("test (a-b)")[1] &&
+      CC.job_label("test (a.b)")[1].start_with?("test-a-b-"))
+check("slug: case is lossy too", CC.job_label("Build")[1] != CC.job_label("build")[1])
 
 # ---- CLI ----
 
@@ -624,12 +669,19 @@ File.write(File.join(gh_bin, "gh"), <<~'FAKE')
   route = key && routes[key]
   exit 1 if route.nil?
   sleep route["sleep"] if route["sleep"]
+  if route["orphan"]
+    # stdout を握った子を残して、本体だけが先に終わる (子は同じ process group)。子の pid を file に残す。
+    child = Process.spawn("sleep", route["orphan"].to_s)
+    File.write(File.join(dir, "orphan.pid"), child.to_s)
+    Process.detach(child)
+  end
   print JSON.generate(route["body"])
 FAKE
 File.chmod(0o755, File.join(gh_bin, "gh"))
 GH_ENV = { "PATH" => "#{gh_bin}:#{ENV.fetch('PATH')}", "FAKE_GH_DIR" => gh_dir, "GH_REPO" => "evil/elsewhere" }.freeze
 EVENT_ARGS = %w[--since 2026-10-15T00:00:00Z --until 2026-10-22T00:00:00Z].freeze
-RUNS_PATH = ->(page) { "repos/o/r/actions/runs?created=>=2026-10-08T00:00:00Z&per_page=100&page=#{page}" }
+# 作成の範囲は [since の 7 日前, until] (窓の後に作られた run は API の側で除く)。
+RUNS_PATH = ->(page) { "repos/o/r/actions/runs?created=2026-10-08T00:00:00Z..2026-10-22T00:00:00Z&per_page=100&page=#{page}" }
 JOBS_PATH = ->(id) { "repos/o/r/actions/runs/#{id}/jobs?filter=all&per_page=100&page=1" }
 ANN_PATH = ->(id) { "repos/o/r/check-runs/#{id}/annotations?per_page=100&page=1" }
 
@@ -663,7 +715,7 @@ report = JSON.parse(out) rescue nil
 check("cli events: exit 1 with JSON (#{err})", st.exitstatus == 1 && report.is_a?(Hash))
 check("cli events: matches the schema", report && schema_errors(SCHEMA, report).empty?)
 check("cli events: findings", report && report["findings"].map { |x| x["fingerprint"] }.sort ==
-      [".github/workflows/test.yml#deprecation-node-20", ".github/workflows/test.yml@self-tests-3-4#job-timed-out"])
+      [".github/workflows/test.yml#deprecation-node-20", TIMEOUT_FP])
 check("cli events: scope.seen has the window", report && report["scope"]["seen"].include?("run の記録 (2026-10-15T00:00:00Z〜2026-10-22T00:00:00Z)"))
 calls = gh_calls(gh_dir)
 check("cli events: GH_REPO is not passed to gh", !calls.empty? && calls.none? { |c| c["gh_repo"] })
@@ -716,6 +768,27 @@ out, _err, st = run_cli(clean, *EVENT_ARGS, env: GH_ENV)
 report = JSON.parse(out) rescue nil
 check("cli malformed response: exit 2", st.exitstatus == 2 && report && report["scope"]["not_seen"].first.to_s.include?("job の応答の形が想定と違う"))
 
+# total_count に届かない一覧 (短い応答) や、読む間に total_count が変わる一覧は、確かめられない (F05)。
+short = base_routes.merge(RUNS_PATH.call(1) => { "body" => { "total_count" => 4, "workflow_runs" => base_routes[RUNS_PATH.call(1)]["body"]["workflow_runs"] } })
+set_routes(gh_dir, short)
+out, _err, st = run_cli(clean, *EVENT_ARGS, env: GH_ENV)
+report = JSON.parse(out) rescue nil
+check("cli short run list: exit 2", st.exitstatus == 2 && report && report["scope"]["not_seen"].first.to_s.include?("total_count と合わない"))
+short_jobs = base_routes.merge(JOBS_PATH.call(1) => { "body" => { "total_count" => 2, "jobs" => base_routes[JOBS_PATH.call(1)]["body"]["jobs"] } })
+set_routes(gh_dir, short_jobs)
+out, _err, st = run_cli(clean, *EVENT_ARGS, env: GH_ENV)
+report = JSON.parse(out) rescue nil
+check("cli short job list: exit 2", st.exitstatus == 2 && report && report["scope"]["not_seen"].first.to_s.include?("job の一覧が total_count と合わない"))
+moving = (1..150).map { |i| ev_run(2000 + i) }
+changed = base_routes.merge(
+  RUNS_PATH.call(1) => { "body" => { "total_count" => 150, "workflow_runs" => moving[0, 100] } },
+  RUNS_PATH.call(2) => { "body" => { "total_count" => 151, "workflow_runs" => moving[100, 50] } },
+)
+set_routes(gh_dir, changed)
+out, _err, st = run_cli(clean, *EVENT_ARGS, env: GH_ENV)
+report = JSON.parse(out) rescue nil
+check("cli list changed while paging: exit 2", st.exitstatus == 2 && report && report["scope"]["not_seen"].first.to_s.include?("読む間に変わった"))
+
 # 引数の誤りは run 全体の失敗 (stdout は空、usage を stderr に)。
 [%w[--until 2026-10-22T00:00:00Z], %w[--since 2026-10-22], %w[--since 2026-10-22T00:00:00Z --since 2026-10-22T00:00:00Z]].each do |args|
   out, err, st = run_cli(clean, *args, env: GH_ENV)
@@ -738,6 +811,26 @@ begin
   end
   check("time cap: a hanging gh is stopped (#{err.inspect}, #{(Time.now - started).round(1)}s)",
         err.to_s.include?("時間が上限") && Time.now - started < 10)
+  # gh の本体は終わったが、子が stdout を握ったまま: pipe の待ちも期限で止め、子 (同じ group) も止める (F03)。
+  set_routes(gh_dir, { "repo-view" => { "orphan" => 30, "body" => {} } })
+  started = Time.now
+  orphan_api = CC::GitHubApi.new(clean, Time.now + 2)
+  err = begin
+    orphan_api.json("repo", "view", "--json", "nameWithOwner,defaultBranchRef")
+    nil
+  rescue CC::EventError => e
+    e.message
+  end
+  check("time cap: a pipe held by a child is bounded (#{err.inspect}, #{(Time.now - started).round(1)}s)",
+        err.to_s.include?("時間が上限") && Time.now - started < 10)
+  orphan_pid = File.read(File.join(gh_dir, "orphan.pid")).to_i
+  orphan_alive = begin
+    Process.kill(0, orphan_pid)
+    true
+  rescue Errno::ESRCH
+    false
+  end
+  check("time cap: the child holding the pipe is stopped", !orphan_alive)
   past = CC::GitHubApi.new(clean, Time.now - 1)
   check("time cap: no call after the deadline", begin
     past.json("repo", "view", "--json", "nameWithOwner,defaultBranchRef")
