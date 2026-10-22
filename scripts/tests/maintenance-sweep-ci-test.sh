@@ -169,8 +169,9 @@ else
     "uncertain で進めないのは、run の記録の所見は窓を進めると次の run で見直さないため",
     # 持ち越さないことと、その限界 (#554 review R5。user の判断で限界として明記し、持ち越しは #425 で決める)。
     "所見そのものは次の run に持ち越さず、据え置いた窓での再検出に任せる",
-    "deprecation は workflow ごとの直近 5 本の run だけを見るので、警告がその 5 本から消えると次の run では出ず、窓が" \
-    "進みうる",
+    # 再検出されない経路は、窓を縮めた・切った期間と deprecation の直近 5 本の 2 つ (#554 review R6)。
+    "次の run がかけ直しで縮めたり 30 日で切ったりして見なかった期間の所見と、警告が直近 5 本の run から消えた" \
+    "deprecation の所見は出ず、窓が進みうる",
   ].each do |c|
     errors << "「CI の窓」の bullet に句 #{c.inspect} が無い" unless bare_clause?(window, c)
   end
