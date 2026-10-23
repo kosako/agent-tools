@@ -1,0 +1,32 @@
+schema_version: 1
+name: personal-ja-style-check
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #556 の 1 番目の PR (文章の検査の script) で author≠reviewer レビューのうえ承認。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:37590ca280d8af0f5f189dfb196b77340a167b5e1459d3a52ee642e10c2a9661
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-ja-style-check.rb
+  format: text
+summary: >-
+  AI が書いた日本語の文章に残りやすい型を見つけて指摘する (#556)。見るのは、agent-tools の実際の文章を測って
+  user が「直したい」と選んだ 4 つ: em-dash (ダッシュを文の区切りに使う)、bold-label (太字の見出しに中身を
+  続ける箇条書きと行頭の `**見出し**:`)、long-run / long-sentence (空白を除いて 60 字以上の文が同じ段落で 3 つ
+  続く / 1 文が 120 字以上)、negation-run / idiom (文末の打ち消しが同じ段落で 3 文続く / 「〜側に倒す」
+  「黙って無視する」のような慣用)。指摘を出すだけで、文章を直さず、何も書かず、network にも触れない。gate では
+  なく、走り終えれば指摘の有無にかかわらず exit 0 (止めるかは読んだ agent か人が決める。公開の前の
+  public-safety の gate とは別の口)。入力は --stdin か UTF-8 の file (1 MiB まで、複数可)、--json で入力ごとの
+  findings と stats を出す。Markdown を前提に、fenced code block の中は見ず、inline code・<code>・URL は 1 文字の
+  置き字にしてから見る。見出しと表の行は文として数えない。exit 2 = usage・入力を読めない (file が無い、通常の
+  file でない、1 MiB を超える)・想定外の例外 (docs/ja-style-check.md)。
