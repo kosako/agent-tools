@@ -158,18 +158,23 @@ module JaStyleCheck
     # にする。その後で HTML の太字は Markdown の太字に、他の tag は外す。規則はこの結果に当てる (区間の中の記号で指摘
     # しないため)。
     def mask(line)
-      out = line.gsub(SPAN) do
+      out = spans(line)
+      out = out.gsub(HTML_BOLD, "**")
+      out.gsub(HTML_TAG, "")
+    end
+
+    # link の text の中の code span・URL・コメントも同じに読む (text は `]` を含めないので、入れ子は 1 段で止まる)。
+    def spans(str)
+      str.gsub(SPAN) do
         m = Regexp.last_match
         if m[:comment]
           ""
         elsif m[:text]
-          m[:text]
+          spans(m[:text])
         else
           count_masked
         end
       end
-      out = out.gsub(HTML_BOLD, "**")
-      out.gsub(HTML_TAG, "")
     end
 
     def count_masked

@@ -120,6 +120,9 @@ check "image keeps alt text and no extra sentence", doc.call("![図](image.png)"
 check "image source is not read", rules.call("![図](img—1.png)").empty?
 check "relative link destination is not read", rules.call("[文書](docs—1.md)").empty?
 check "link with a parenthesized URL destination", rules.call("[文書](https://example.com/notes(v2)—x.md)").empty? && doc.call("[文書](https://example.com/notes(v2)—x.md)").stats["chars"] == 2
+check "code inside link text is masked", rules.call("[`—`](notes.md)").empty? && rules.call("[<code>—</code>](notes.md)").empty?
+check "code inside link text counts as one char", doc.call("[`abc`](x.md)。").stats["chars"] == 2 && doc.call("[`abc`](x.md)。").stats["masked_spans"] == 1
+check "URL inside link text is masked", rules.call("[http://x.example/a—b](x.md)").empty?
 check "parenthesized URL destination at the threshold", rules.call("[" + "あ" * (v_min - 1) + "](https://x.example/a(b).md)").empty? && rules.call("[" + "あ" * v_min + "](https://x.example/a(b).md)") == ["long-sentence"]
 check "comment markers inside code spans do not pair", rules.call("`<!--` 本文 — 続き `-->`") == ["em-dash"]
 check "code span inside a comment is part of the comment", rules.call("<!-- `x` — y -->").empty? && doc.call("<!-- `x` — y -->").stats["masked_spans"] == 0
@@ -142,6 +145,7 @@ neg = "それは正しくない。"
 check "negation-run fires", rules.call(([neg] * neg_n).join) == ["negation-run"]
 check "negation-run not at neg_n - 1", rules.call(([neg] * (neg_n - 1)).join).empty?
 check "ません counts", rules.call((["できません。"] * neg_n).join) == ["negation-run"]
+check "ぬ counts", rules.call((["知らぬ。"] * neg_n).join) == ["negation-run"] && rules.call((["知らぬ。"] * (neg_n - 1)).join).empty?
 check "closing bracket before the period is allowed", rules.call((["できない)。"] * neg_n).join) == ["negation-run"]
 check "positive sentence breaks the run", rules.call(([neg] * (neg_n - 1)).join + "できる。" + neg).empty?
 check "negation-run resets at blank line", rules.call(([neg] * (neg_n - 1)).join + "\n\n" + neg).empty?
