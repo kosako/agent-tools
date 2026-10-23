@@ -201,8 +201,10 @@ worktree であること・`HEAD` が `base` で detached であること・clea
   exit 0 になるのを防ぎます。gate が無い・exit 0 でない・警告 (exit 3) のときは push も PR もせず、gate の出力 (どの
   規則に当たったか) を報告します。merge commit で止まったときは、branch を `base` から直線に積み直して (merge commit を
   含まない形にして) から、この節の検証からやり直します。それ以外も、直したら、この節の検証からやり直します。
-- commit の message は Claude の trailer 付きで、file に書いて `-F` で渡します。commit の前にその file を同じ gate
-  (上の `gate` の path) の `--stdin` に通しておくと、push の前の gate で止まってから書き直す手間が減ります。
+- commit の message は Claude の trailer 付きで、file に書いて `-F` で渡します。commit の前にその file を
+  `personal-ja-style-check --stdin` に通し、指摘を直すか理由を持ちます (指摘だけで止めない。#556。運用 instruction の
+  「日本語の文章」)。同じ file を同じ gate (上の `gate` の path) の `--stdin` にも通しておくと、push の前の gate で
+  止まってから書き直す手間が減ります。
 
 ## PR
 
@@ -211,6 +213,13 @@ worktree であること・`HEAD` が `base` で detached であること・clea
   gh は cwd の今の branch を head にするので、main の checkout から続けたときに fix の branch の PR にならない (#419)。
   題名は `docs: <短い要約> (sweep #<Issue>)`、本文は下の形で `--body-file` で渡します。label `maintenance-sweep` を
   PR にも付けます。
+- 題名と本文は、書いたら `personal-ja-style-check --stdin` に通し、指摘を直すか理由を持ってから、「検証」の公開する内容の
+  gate に入れます (指摘だけで止めない。#556。運用 instruction の「日本語の文章」)。
+
+  ```sh
+  style="$HOME/.claude/agent-tools/scripts/personal-ja-style-check"
+  { printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin   # 指摘だけ (exit 0)
+  ```
 - PR の作成の **前に** `fixes.json` を `pushed` にし、作成の **後に** PR 番号と head の OID を書いて `pr_created` に
   します。作成の応答を失ったら、作り直さず、branch に紐づく PR を remote で照合してから続けます。
 

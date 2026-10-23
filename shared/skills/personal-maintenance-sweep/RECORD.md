@@ -204,6 +204,14 @@ personal-maintenance-sweep の run `<run id>` で起票 (観点: <観点> / 種�
 - `no-contention` の marker は、triage で「論点なし」の印が付いた所見だけに書く (付かなければ行ごと省く)。fix モードは
   この marker で候補を抽出し、着手の直前に適格性を確かめ直す (`FIX.md`)。
 - fingerprint に `-->` を含めない (含むなら、場所の key から単位の名前を除いた形にする)。
+- 題名と本文を書いたら、先に `personal-ja-style-check --stdin` に通し、指摘を直すか理由を持つ (指摘だけで投稿を止めない。
+  #556。運用 instruction の「日本語の文章」)。追跡 Issue の本文と run のコメントも同じ。
+
+```sh
+style="$HOME/.claude/agent-tools/scripts/personal-ja-style-check"
+{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin   # 指摘だけ (exit 0)。直すか理由を持ってから gate へ
+```
+
 - 投稿の前に、**題名と本文の両方**を public-safety の gate に通し、exit 0 で警告の行が無いときだけ投稿する (題名も
   所見から作るので、本文だけを通すと題名に残った値が素通りする)。
 
