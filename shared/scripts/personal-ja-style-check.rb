@@ -20,9 +20,10 @@
 # 既定の出力は `<入力>:<行>: [<規則>] <説明> | <抜き出し>` を 1 指摘 1 行で stdout に出し、最後に件数の行を出す。
 #
 # 読み方 (Markdown を前提にする): fenced code block の中は見ない。inline code・<code>・URL は 1 文字の
-# 置き字 (〓) に置き換えてから見る (中の記号や長さで判定しないため)。見出しと表の行は文として数えない
-# (ダッシュだけ見る)。箇条書きの印・引用の印・太字の印・link の書き方は文の長さに含めない。文は「。！？!?」か
-# 行末で切る。空行・見出し・表・code block で段落が切れ、「続く」の判定はそこで途切れる。
+# 置き字 (〓) に置き換えてから見る (中の記号や長さで判定しないため)。これらと HTML のコメント・link は左から順に
+# 先に始まったものを 1 つの区間として読む。見出し・表・区切り線の行は文として数えない (ダッシュだけ見る)。
+# 箇条書きの印・引用の印・太字の印・link の書き方は文の長さに含めない。文は「。！？!?」か行末で切る。空行・
+# 見出し・表・区切り線・code block で段落が切れ、「続く」の判定はそこで途切れる。
 #
 # exit: 0 = 走り終えた (指摘の有無は問わない) / 2 = usage・入力を読めない (file が無い・通常の file でない・
 # 1 MiB を超える)・想定外の例外。stderr の message に入力の text は載せない。
@@ -68,8 +69,11 @@ module JaStyleCheck
   EDGE_SPACES = /\A[[:space:]]+|[[:space:]]+\z/
   # URL は空白 (全角空白を含む)・括弧の閉じ・日本語の句読点と括弧の開きの前で終わる (句点まで飲み込むと、後ろの文が消える)。
   URL = %r{https?://[^[[:space:]]<>)）」』。、！？（「『]+}
-  # link と画像は宛先が何 (URL の置き字・相対 path・fragment、括弧を 1 段含む) でも text (画像は alt) だけを残す。
-  LINK = /!?\[([^\]\n]*)\]\((?:[^()\n]|\([^()\n]*\))*\)/
+  # link と画像は宛先が何 (URL・相対 path・fragment、括弧を 1 段含む) でも text (画像は alt) だけを残す。
+  LINK = /!?\[(?<text>[^\]\n]*)\]\((?:[^()\n]|\([^()\n]*\))*\)/
+  # 区間 (HTML のコメント・code span・link と画像・裸の URL) は左から順に、先に始まったものを 1 つの区間として読む。
+  # 先に始まった区間の中は別の構文として読まない (code span の中のコメント記号、link の宛先の中の URL や括弧)。
+  SPAN = /(?<comment>#{HTML_COMMENT})|(?<code>#{INLINE_CODE}|#{HTML_CODE})|(?<link>#{LINK})|(?<url>#{URL})/
   EMPHASIS = /\*\*|__/
   SENTENCE = /[^。！？!?]*[。！？!?]+|[^。！？!?]+\z/
   TERMINATORS = /[。！？!?]+\z/
@@ -112,7 +116,8 @@ module JaStyleCheck
       fence = nil
       fence_quoted = false
       paragraph = 0
-      text.split("\n", -1).each_with_index do |raw, i|
+      # 行末は LF でも CRLF でも同じに読む。
+      text.split(/\r?\n/, -1).each_with_index do |raw, i|
         lineno = i + 1
         @lines = lineno
         # 引用の印は構造 (code block・見出し・表) を読む前に外す。引用の中の code block や見出しも同じに扱うため。
@@ -149,14 +154,20 @@ module JaStyleCheck
       end
     end
 
-    # HTML のコメントを外し、inline code・<code>・URL を置き字にし、link と画像は text だけにし、HTML の太字は
-    # Markdown の太字に、他の tag は外す。規則はこの結果に当てる (宛先の中の記号で指摘しないため)。
+    # 区間を左から 1 回の走査で読む: HTML のコメントは外し、code span と裸の URL は置き字にし、link と画像は text だけ
+    # にする。その後で HTML の太字は Markdown の太字に、他の tag は外す。規則はこの結果に当てる (区間の中の記号で指摘
+    # しないため)。
     def mask(line)
-      out = line.gsub(HTML_COMMENT, "")
-      out = out.gsub(HTML_CODE) { count_masked }
-      out = out.gsub(INLINE_CODE) { count_masked }
-      out = out.gsub(URL) { count_masked }
-      out = out.gsub(LINK, "\\1")
+      out = line.gsub(SPAN) do
+        m = Regexp.last_match
+        if m[:comment]
+          ""
+        elsif m[:text]
+          m[:text]
+        else
+          count_masked
+        end
+      end
       out = out.gsub(HTML_BOLD, "**")
       out.gsub(HTML_TAG, "")
     end

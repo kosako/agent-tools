@@ -119,6 +119,11 @@ check "link destination with parentheses", rules.call("[" + "あ" * (v_min - 1) 
 check "image keeps alt text and no extra sentence", doc.call("![図](image.png)").stats["sentences"] == 1 && doc.call("![図](image.png)").stats["chars"] == 1
 check "image source is not read", rules.call("![図](img—1.png)").empty?
 check "relative link destination is not read", rules.call("[文書](docs—1.md)").empty?
+check "link with a parenthesized URL destination", rules.call("[文書](https://example.com/notes(v2)—x.md)").empty? && doc.call("[文書](https://example.com/notes(v2)—x.md)").stats["chars"] == 2
+check "parenthesized URL destination at the threshold", rules.call("[" + "あ" * (v_min - 1) + "](https://x.example/a(b).md)").empty? && rules.call("[" + "あ" * v_min + "](https://x.example/a(b).md)") == ["long-sentence"]
+check "comment markers inside code spans do not pair", rules.call("`<!--` 本文 — 続き `-->`") == ["em-dash"]
+check "code span inside a comment is part of the comment", rules.call("<!-- `x` — y -->").empty? && doc.call("<!-- `x` — y -->").stats["masked_spans"] == 0
+check "URL inside a code span is part of the code span", doc.call("`http://x.example/a` 。").stats["masked_spans"] == 1
 
 # --- long-sentence
 check "long-sentence fires", rules.call("あ" * v_min + "。") == ["long-sentence"]
@@ -159,6 +164,9 @@ check "idiom in inline code ignored", rules.call("`安全側に倒す` と書く
 # --- structure and encoding
 check "html tags are stripped", rules.call("<p>" + "あ" * (v_min - 2) + "。</p>").empty?
 check "CRLF line numbers", findings.call("一。\r\n二 — 三。\r\n").first.line == 2
+check "CRLF thematic break is not a sentence", doc.call("---\r\n").stats["sentences"] == 0 && doc.call("---\r\n").stats["chars"] == 0
+lf = "短い。\n長い文です。\n---\n> 引用。\n\n- **判断**: 中身\n"
+check "LF and CRLF give the same stats and findings", doc.call(lf).stats == doc.call(lf.gsub("\n", "\r\n")).stats && doc.call(lf).findings == doc.call(lf.gsub("\n", "\r\n")).findings
 check "findings sorted by line", findings.call("あ" * v_min + "。\na — b。").map(&:rule) == %w[long-sentence em-dash]
 check "empty text has no findings", findings.call("").empty? && doc.call("").stats["sentences"] == 0
 
@@ -185,6 +193,10 @@ j = JSON.parse(o)
 check "json top level", s.exitstatus == 0 && j["tool"] == "personal-ja-style-check" && j["version"] == JaStyleCheck::VERSION && j["inputs"].size == 1
 check "json input name and finding keys", j["inputs"][0]["name"] == "-" && j["inputs"][0]["findings"][0].keys.sort == %w[line message rule severity snippet]
 check "json stats", j["inputs"][0]["stats"]["sentences"] == 1
+o2, _e2, _s2 = cli.call(["--json", "--stdin"], "問題ない。\n安全側に倒す。\n- **判断**: 中身\n")
+fs = JSON.parse(o2)["inputs"][0]["findings"]
+check "json finding values", fs.map { |f| f.values_at("rule", "line", "severity", "snippet") } == [["idiom", 2, "info", "安全側に倒す。"], ["bold-label", 3, "warn", "- **判断**: 中身"]]
+check "json finding message", fs[1]["message"].include?("太字の見出し")
 check "json is one line", o.lines.size == 1
 check "json keeps non-ascii", o.include?("ダッシュ")
 

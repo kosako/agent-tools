@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:6de59948ec65c60d15ebbe24a4402d7f11024901c53c72b67bbd23f4e62bf5b5
+  approved_build_id: sha256:58badb6c06f822a16d6862cdc06fcdf7a4fdab108ee6e79b7d739a841b5b226e
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-ja-style-check.rb
