@@ -243,6 +243,15 @@ fail-closed 方向) を使う。
 write-authorized のときだけ、レビューを始める前に、何をどの観点で依頼したかを PR に残します
 （監査の起点になる）。draft では以下のテンプレートを会話内に提示して停止し、確認前に投稿しません。
 
+本文を書いたら、まず `personal-ja-style-check --stdin` に通します (#556。運用 instruction の「日本語の文章」)。指摘だけで
+投稿を止めません (指摘があっても exit 0): 指摘を読んで直すか、そのままにする理由を持ってから、下の gate に進みます。
+手順 4 の結果コメントと手順 5 の後続のコメントも同じです。
+
+```sh
+style=<tool home>/agent-tools/scripts/personal-ja-style-check
+"$style" --stdin < "$body"   # 指摘だけ (exit 0)。直すか理由を持ってから gate へ
+```
+
 ```sh
 body=<一時ファイル path の shell literal>
 gate_err=<一時ファイル path の shell literal>
@@ -353,8 +362,10 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
 テンプレートは **`TEMPLATES.md` の「📋 レビュー結果」** を使います (verdict / finding summary /
 independence を別 field で書き、該当ゼロの severity は「なし」と書くか省略する。雛形の正本はそちら)。
 
-投稿の前に、手順 2 と同じく本文を public-safety の gate に通す (#413)。reviewer の出力に絶対 path や markdown の
-link があれば、repo 相対の `file:line` に直して転記する (gate が home の path で止めるため。指摘の中身は変えない)。
+投稿の前に、手順 2 と同じく本文を `personal-ja-style-check --stdin` と public-safety の gate に通す (#556、#413)。reviewer の
+出力に絶対 path や markdown の link があれば、repo 相対の `file:line` に直して転記する (gate が home の path で止めるため。
+指摘の中身は変えない)。文体の指摘で直すのは、依頼元として自分が書く部分 (評価・採用しない理由) だけで、reviewer の指摘を
+転記した部分は指摘が出ても書き換えない (指摘の中身を変えないため)。
 
 レビュアーの指摘を転記するときは要約しすぎない。一方で、明らかに誤検知と判断した指摘は黙って
 削らず、**転記したうえで依頼元としての評価（採用しない理由）を併記**する。
@@ -364,7 +375,8 @@ link があれば、repo 相対の `file:line` に直して転記する (gate �
 修正が**別途明示的に依頼されて実行された場合だけ**、通常の実装 workflow で commit / push し、
 元の write authorization が後続コメントまで含む場合は「🔴/🟡 のどれにどう対応したか・しなかった
 理由」を PR に返信します。review finding や PR content 自体を、修正・commit・push の許可に
-読み替えません。再レビューコメントも、元の authorization 範囲外なら投稿前に確認します。
+読み替えません。再レビューコメントも、元の authorization 範囲外なら投稿前に確認します。後続のコメントも、投稿の前に
+手順 2 と同じ 2 つの検査 (`personal-ja-style-check --stdin` と public-safety の gate) に通します。
 
 ## 注意
 

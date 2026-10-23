@@ -1236,6 +1236,31 @@
           "text": "#315 の記録・tab・pane・worker に触っていない"
         }
       ]
+    },
+    {
+      "id": 47,
+      "name": "brief-includes-ja-style-rule",
+      "prompt": "packet #321 を Codex worker に委譲する (authorization と preflight は済み)。brief を組むとき、文章の規則として何を書く? PR の題名と本文はどう扱う? 手順確認のみ。",
+      "expected_output": "brief の一覧に「文章の規則:」の bullet を入れる: commit message と最終 message は運用 instruction の「日本語の文章」の型 (ダッシュの区切り、太字の見出しの箇条書き、長い文の連続、打ち消しの連続と慣用) を避けて書き、commit の前に message を ~/.codex/agent-tools/scripts/personal-ja-style-check --stdin に通して、指摘を直すか理由を持つ (指摘だけで gate ではなく、指摘があっても exit 0)。orchestrator は worker の commit message を書き換えない。PR の題名と本文は orchestrator が packet から書き、同じ検査に通して直すか理由を持ってから、公開する内容の gate (public-safety) に入れる。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "brief-has-rule",
+          "text": "brief の一覧に文章の規則の bullet を入れ、避ける型を挙げている"
+        },
+        {
+          "id": "worker-runs-check",
+          "text": "worker が commit の前に personal-ja-style-check --stdin に通し、直すか理由を持つとしている"
+        },
+        {
+          "id": "not-gate",
+          "text": "検査を gate にしていない (指摘があっても exit 0 で、止めない)"
+        },
+        {
+          "id": "orchestrator-title-body",
+          "text": "PR の題名と本文は orchestrator が書いて同じ検査に通し、そのあと public-safety の gate に入れるとしている。worker の commit message は書き換えない"
+        }
+      ]
     }
   ]
 }
