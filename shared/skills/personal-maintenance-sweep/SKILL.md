@@ -220,7 +220,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 ### 7. 起票する (issues モードだけ)
 
 - 1 run の起票は上限まで ([BUDGET.md](BUDGET.md))。超えた分は state に残して次の run に回し、報告に書く。
-- 本文の形は [RECORD.md](RECORD.md)。投稿の前に public-safety の gate に通し、通らなければ投稿しない。
+- 本文の形は [RECORD.md](RECORD.md)。投稿の前に `personal-ja-style-check` (指摘だけ。直すか理由を持つ) と public-safety の
+  gate に通し、gate を通らなければ投稿しない。
 - label を付ける。「論点なし」の印が付いた所見には、本文に no-contention の marker を書く ([RECORD.md](RECORD.md))。
 
 ### 7b. 修正する (fix モードだけ)
@@ -233,7 +234,9 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 - 1 所見 = 1 PR。run dir の下の linked worktree で、修正の仕様 (正本 / 変えてよい箇所 / 受け入れ条件) の範囲だけを
   直す。累積差分に `diff --check`、repo の gate、壊れた参照の検査を当て、累積差分と `base` 以降の各 commit の差分と全
   commit の message と PR の題名・本文を public-safety の gate に通してから push と PR (`base` から直線の履歴であることを
-  先に確かめ、merge commit があれば止める。review の修正で commit を足したら、追加の push の前にやり直す)。git の command は cwd の `HEAD` ではなく branch の ref を基準にし、作業ツリーを読む検査は worktree で
+  先に確かめ、merge commit があれば止める。review の修正で commit を足したら、追加の push の前にやり直す)。commit の
+  message と PR の題名・本文は、書いたら先に `personal-ja-style-check` に通す (指摘だけ。直すか理由を持つ。#556)。git の
+  command は cwd の `HEAD` ではなく branch の ref を基準にし、作業ツリーを読む検査は worktree で
   走らせる。check-injection の exit 3 は、`base` の結果と比べて branch にだけある finding の行 (行番号を含む) が
   無ければ続行する。
 - review は `personal-review-request` に委ね (コメントの投稿の許可は review-request の write gate に従い、fix の明示

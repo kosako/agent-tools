@@ -19,8 +19,9 @@ network にも触れません。指摘の有無にかかわらず走り終えれ
 - 組み込み先 (#556 の 2 番目の PR): 書く前の原則と「投稿・記録の前に通す」ことは、運用 instruction の「日本語の文章」が
   宣言します。流れごとの通し方は各 skill が持ちます: `personal-review-request` (手順 2・4・5 の依頼・結果・follow-up の
   コメント。雛形も太字の見出しとダッシュを使わない形)、`personal-session-handoff` (手順 3 の packet の publish と
-  作業ログ)、`personal-codex-worker` (§4 の brief の文章の規則で worker の commit message、§7 の PR の題名と本文)。
-  `personal-maintenance-sweep` の起票と fix の PR はまだ通していません (次の PR で扱う)。
+  作業ログ)、`personal-codex-worker` (§4 の brief の文章の規則で worker の commit message、§7 の PR の題名と本文)、
+  `personal-maintenance-sweep` (RECORD.md の所見の Issue の題名と本文・追跡 Issue・run のコメント、FIX.md の commit
+  message と PR の題名と本文)。
   `scripts/tests/ja-style-wiring-test.sh` が、これらの文言と雛形の形 (雛形を検査にかけて `bold-label` / `em-dash` が
   出ない) を確かめます。
 

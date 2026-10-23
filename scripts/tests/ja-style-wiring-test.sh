@@ -9,6 +9,10 @@
 # - personal-codex-worker の §4 の brief の一覧に「文章の規則:」の bullet があり、worker が commit の前に通し gate で
 #   ないことが句としてある (一覧の外にだけあっても worker には届かない)。§7 に題名と本文を通す句、LAUNCH.md の §9 に
 #   command の行がある。
+# - personal-maintenance-sweep の RECORD.md の所見の Issue の節に、題名と本文を先に通す句と command の行があり、その
+#   command が gate の command より前にある。FIX.md の検証の節に commit message を通す句、PR の節に題名と本文を通す句と
+#   command の行がある。SKILL.md の手順 7 と 7b の要約にも通す句がある。
+# 節は見出しの level で次の見出しまでを取り、code block の中の見出し (雛形の `## 主張` など) では区切らない。
 # - 雛形 (review-request の TEMPLATES.md の markdown の block と、codex-review の RESULT-FORMAT.md の text の block) を
 #   検査の script にかけて、bold-label と em-dash が出ない (雛形が型を指示していない)。
 # - 3 つの skill の evals.json に、検査に触れる case がある。
@@ -26,10 +30,21 @@ errors = []
 squash = ->(s) { s.gsub(/\s+/, "") }
 read = ->(rel) { File.read(File.join(root, rel), encoding: "UTF-8") }
 
-# 見出し (`#` の数で level を決める) から、同じか上の level の次の見出しまで。
+# 見出し (`#` の数で level を決める) から、同じか上の level の次の見出しまで (code block の中の行は見出しとみなさない)。
+# 無ければ nil。
 section = lambda do |text, heading|
+  lines = text.lines
+  start = lines.index { |l| l.chomp == heading }
+  next nil if start.nil?
   level = heading[/\A#+/].size
-  text[/^#{Regexp.escape(heading)}\n(.*?)(?=^\#{1,#{level}} |\z)/m, 1]
+  fence = false
+  body = []
+  lines[(start + 1)..-1].each do |l|
+    fence = !fence if l =~ /\A\s*```/
+    break if !fence && l =~ /\A(#+) / && $1.size <= level
+    body << l
+  end
+  body.join
 end
 
 check = lambda do |rel, heading, label, phrase|
@@ -132,7 +147,33 @@ unless templates.empty?
   end
 end
 
-%w[personal-review-request personal-session-handoff personal-codex-worker].each do |skill|
+sweep = "shared/skills/personal-maintenance-sweep"
+issue = "## 所見の Issue"
+check.call("#{sweep}/RECORD.md", issue, "先に通す句",
+           "題名と本文を書いたら、先に `personal-ja-style-check --stdin` に通し、指摘を直すか理由を持つ (指摘だけで投稿を止めない。#556。運用 instruction の「日本語の文章」)。追跡 Issue の本文と run のコメントも同じ。")
+check.call("#{sweep}/RECORD.md", issue, "command の行", %q!{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin!)
+# 文体の検査は gate の前 (直してから gate に通す)。両方の command があることを先に求め (無ければ順序を比べずに落とす)、
+# あるときだけ順序を比べる。
+issue_body = section.call(read.call("#{sweep}/RECORD.md"), issue).to_s
+style_at = issue_body.index('"$style" --stdin')
+gate_at = issue_body.index('"$gate" --stdin')
+if style_at.nil? || gate_at.nil?
+  missing = [("文体の検査" if style_at.nil?), ("gate" if gate_at.nil?)].compact.join("と")
+  errors << "#{sweep}/RECORD.md の「#{issue}」に#{missing}の command (--stdin) が無い"
+elsif style_at > gate_at
+  errors << "#{sweep}/RECORD.md の「#{issue}」で、文体の検査の command が gate の command より後にある"
+end
+check.call("#{sweep}/FIX.md", "## 検証 (累積差分に対して)", "commit message を通す句",
+           "commit の前にその file を `personal-ja-style-check --stdin` に通し、指摘を直すか理由を持ちます (指摘だけで止めない。#556。運用 instruction の「日本語の文章」)。")
+check.call("#{sweep}/FIX.md", "## PR", "題名と本文を通す句",
+           "題名と本文は、書いたら `personal-ja-style-check --stdin` に通し、指摘を直すか理由を持ってから、「検証」の公開する内容の gate に入れます (指摘だけで止めない。#556。運用 instruction の「日本語の文章」)。")
+check.call("#{sweep}/FIX.md", "## PR", "command の行", %q!{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin!)
+check.call("#{sweep}/SKILL.md", "### 7. 起票する (issues モードだけ)", "通す句",
+           "投稿の前に `personal-ja-style-check` (指摘だけ。直すか理由を持つ) と public-safety の gate に通し、gate を通らなければ投稿しない。")
+check.call("#{sweep}/SKILL.md", "### 7b. 修正する (fix モードだけ)", "通す句",
+           "commit の message と PR の題名・本文は、書いたら先に `personal-ja-style-check` に通す (指摘だけ。直すか理由を持つ。#556)。")
+
+%w[personal-review-request personal-session-handoff personal-codex-worker personal-maintenance-sweep].each do |skill|
   rel = "shared/skills/#{skill}/evals/evals.json"
   evals = JSON.parse(read.call(rel))["evals"]
   found = evals.any? do |c|

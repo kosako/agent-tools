@@ -965,6 +965,31 @@
           "text": "Codex の検証役に GitHub や network を使わせていない"
         }
       ]
+    },
+    {
+      "id": 49,
+      "name": "style-check-before-issue-and-fix-pr",
+      "prompt": "[前提: issues モードの run で、所見 1 件の起票の題名と本文を RECORD.md の形で書いた。別の run の fix モードでは、修正の commit message と PR の題名・本文を書いた] それぞれ、投稿・push の前に何をする? 手順確認のみ。",
+      "expected_output": "起票: 題名と本文を先に ~/.claude/agent-tools/scripts/personal-ja-style-check --stdin に通し、指摘を直すか、そのままにする理由を持つ (指摘だけで投稿は止めない)。そのあと題名と本文の両方を public-safety の gate に通し、exit 0 で警告が無いときだけ投稿する。追跡 Issue の本文と run のコメントも同じ。fix: commit message は commit の前に同じ検査に通し (直すか理由を持つ)、PR の題名と本文も書いたら通してから、「検証」の公開する内容の gate (累積差分・各 commit の差分・全 commit の message・branch 名・題名と本文) に入れる。文体の検査で push や投稿を止めず、gate を省きもしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "issue-style-before-gate",
+          "text": "起票の題名と本文を personal-ja-style-check に通し、そのあと public-safety の gate に通している (順序と、両方を通すこと)"
+        },
+        {
+          "id": "tracking-and-run-comment",
+          "text": "追跡 Issue の本文と run のコメントも同じ検査に通すとしている"
+        },
+        {
+          "id": "fix-commit-and-pr-style",
+          "text": "fix の commit message と PR の題名・本文も、書いたら personal-ja-style-check に通し、そのあと公開する内容の gate に入れるとしている"
+        },
+        {
+          "id": "not-a-gate",
+          "text": "文体の指摘で投稿や push を止めず、public-safety の gate を省いてもいない"
+        }
+      ]
     }
   ]
 }
