@@ -59,10 +59,17 @@ module JaStyleCheck
   HTML_CODE = %r{<code>.*?</code>}
   HTML_BOLD = %r{</?b>}
   HTML_TAG = %r{</?[A-Za-z][^<>\n]*>}
-  # URL は空白・括弧の閉じ・日本語の句読点と括弧の開きの前で終わる (句点まで飲み込むと、後ろの文が消える)。
-  URL = %r{https?://[^\s<>)）」』。、！？（「『]+}
-  # link は宛先が何 (URL の置き字・相対 path・fragment) でも text だけを残す。
-  LINK = /\[([^\]\n]*)\]\([^)\n]*\)/
+  HTML_COMMENT = /<!--.*?-->/
+  # 区切り線 (`---` `* * *` `___`)。文ではなく、段落の切れ目。
+  THEMATIC_BREAK = /\A {0,3}([-*_])(?: *\1){2,} *\z/
+  # 空白は Unicode で見る (Ruby の \s は全角空白 U+3000 を含まない)。
+  BLANK = /\A[[:space:]]*\z/
+  SPACES = /[[:space:]]+/
+  EDGE_SPACES = /\A[[:space:]]+|[[:space:]]+\z/
+  # URL は空白 (全角空白を含む)・括弧の閉じ・日本語の句読点と括弧の開きの前で終わる (句点まで飲み込むと、後ろの文が消える)。
+  URL = %r{https?://[^[[:space:]]<>)）」』。、！？（「『]+}
+  # link と画像は宛先が何 (URL の置き字・相対 path・fragment、括弧を 1 段含む) でも text (画像は alt) だけを残す。
+  LINK = /!?\[([^\]\n]*)\]\((?:[^()\n]|\([^()\n]*\))*\)/
   EMPHASIS = /\*\*|__/
   SENTENCE = /[^。！？!?]*[。！？!?]+|[^。！？!?]+\z/
   TERMINATORS = /[。！？!?]+\z/
@@ -111,6 +118,10 @@ module JaStyleCheck
         # 引用の印は構造 (code block・見出し・表) を読む前に外す。引用の中の code block や見出しも同じに扱うため。
         line = raw.sub(QUOTE_MARKER, "")
         quoted = line != raw
+        if fence && fence_quoted && !quoted
+          # 引用の中で開いた code block は、引用の印の無い行 (空行を含む) で引用が終わるときに一緒に終わる。その行は通常どおり読む。
+          fence = nil
+        end
         if fence
           # 引用の中で開いた code block は引用の印を外した行で閉じ、引用の外で開いたものは元の行で閉じる。
           fence = nil if (fence_quoted ? line : raw) =~ /\A {0,3}#{Regexp.escape(fence[0])}{#{fence.size},}\s*\z/
@@ -123,7 +134,7 @@ module JaStyleCheck
           paragraph += 1
           next
         end
-        if line.strip.empty?
+        if BLANK.match?(line) || THEMATIC_BREAK.match?(line)
           paragraph += 1
           next
         end
@@ -138,11 +149,14 @@ module JaStyleCheck
       end
     end
 
-    # inline code・<code>・URL を置き字にし、HTML の太字は Markdown の太字に、他の tag は外す。
+    # HTML のコメントを外し、inline code・<code>・URL を置き字にし、link と画像は text だけにし、HTML の太字は
+    # Markdown の太字に、他の tag は外す。規則はこの結果に当てる (宛先の中の記号で指摘しないため)。
     def mask(line)
-      out = line.gsub(HTML_CODE) { count_masked }
+      out = line.gsub(HTML_COMMENT, "")
+      out = out.gsub(HTML_CODE) { count_masked }
       out = out.gsub(INLINE_CODE) { count_masked }
       out = out.gsub(URL) { count_masked }
+      out = out.gsub(LINK, "\\1")
       out = out.gsub(HTML_BOLD, "**")
       out.gsub(HTML_TAG, "")
     end
@@ -152,9 +166,9 @@ module JaStyleCheck
       PLACEHOLDER
     end
 
-    # 文として読む部分: 箇条書きの印、太字の印、link の書き方を外す (引用の印は scan で外してある)。
+    # 文として読む部分: 箇条書きの印と太字の印を外す (引用の印は scan で、link の書き方は mask で外してある)。
     def prose(masked)
-      masked.sub(LIST_MARKER, "").gsub(LINK, "\\1").gsub(EMPHASIS, "")
+      masked.sub(LIST_MARKER, "").gsub(EMPHASIS, "")
     end
 
     def dash_rule(masked, lineno)
@@ -175,10 +189,10 @@ module JaStyleCheck
 
     def split_sentences(text, lineno, paragraph)
       text.scan(SENTENCE) do |part|
-        body = part.strip
+        body = part.gsub(EDGE_SPACES, "")
         next if body.empty?
-        length = body.gsub(/\s+/, "").size
-        negation = NEGATION_END.match?(body.sub(TERMINATORS, "").rstrip)
+        length = body.gsub(SPACES, "").size
+        negation = NEGATION_END.match?(body.sub(TERMINATORS, "").gsub(EDGE_SPACES, ""))
         @sentences << Sentence.new(lineno, body, length, negation, paragraph)
       end
     end

@@ -52,7 +52,20 @@ check "em-dash after fence fires", rules.call("```\nx\n```\na — b。").size ==
 check "em-dash in URL ignored", rules.call("http://example.com/a—b を見る。").empty?
 check "URL ends at Japanese punctuation", rules.call("参照: http://x.example/a。" + ("できない。" * 3)) == ["negation-run"] && doc.call("参照: http://x.example/a。" + ("できない。" * 3)).stats["sentences"] == 4
 check "URL ends before an opening bracket", doc.call("http://x.example/a（補足）。").stats["masked_spans"] == 1 && doc.call("http://x.example/a（補足）。").stats["chars"] == 6
+check "fullwidth space ends a URL", rules.call("http://x.example/a　前—後。") == ["em-dash"]
+check "fullwidth space is not counted", rules.call(("あ" * (l_min - 2) + "　。") * run_n).empty? && doc.call("あ　い。").stats["chars"] == 3
+check "fullwidth space around a sentence is stripped", doc.call("　短い。　").stats["chars"] == 3 && doc.call("　短い。　").stats["sentences"] == 1
+check "fullwidth space before the period keeps negation", rules.call((["できない　。"] * neg_n).join) == ["negation-run"]
+check "fullwidth-space-only line is blank", rules.call(([long] * (run_n - 1)).join("\n") + "\n　\n" + long).empty?
 check "fenced code inside a quote is ignored", rules.call("> ```\n> a — b\n> ```\n").empty?
+check "quoted fence ends with the quote", rules.call("> ```\n> code\n\n本文 — 続き。\n") == ["em-dash"]
+check "quoted fence ends at an unquoted line", rules.call("> ```\n> code\n本文 — 続き。\n") == ["em-dash"]
+check "quoted fence stays open on quoted lines", rules.call("> ```\n> code\n> a — b\n").empty?
+check "html comment is not prose", rules.call("<!-- 注 — 釈 -->").empty? && doc.call("<!-- x -->").stats["sentences"] == 0
+check "html comment inside a sentence is removed", doc.call("短い<!-- 注 -->。").stats["chars"] == 3
+check "thematic break is not a sentence", rules.call("---\n* * *\n___").empty? && doc.call("---\n* * *\n___").stats["sentences"] == 0
+check "thematic break resets the run", rules.call(([long] * (run_n - 1)).join("\n") + "\n---\n" + long).empty?
+check "list item is not a thematic break", doc.call("- item").stats["sentences"] == 1
 check "em-dash after a quoted fence fires", rules.call("> ```\n> x\n> ```\n> a — b。").size == 1
 check "unquoted fence is not closed by a quoted fence line", rules.call("```\n> ```\n— x\n```\n").empty?
 check "heading inside a quote is not a sentence", rules.call("> ## " + "あ" * (v_min + 1)).empty?
@@ -102,6 +115,10 @@ check "whitespace is not counted", rules.call((("あ " * (l_min - 2)) + "。") *
 check "link text counts and url is masked", rules.call("[" + "あ" * (v_min + 1) + "](http://x.example/—)") == ["long-sentence"]
 check "relative link keeps only the text", rules.call("[" + "あ" * (v_min - 1) + "](notes.md)").empty? && rules.call("[" + "あ" * (v_min - 1) + "](#section)").empty?
 check "relative link text at the threshold fires", rules.call("[" + "あ" * v_min + "](notes.md)") == ["long-sentence"]
+check "link destination with parentheses", rules.call("[" + "あ" * (v_min - 1) + "](notes(v2).md)").empty? && rules.call("[" + "あ" * v_min + "](notes(v2).md)") == ["long-sentence"]
+check "image keeps alt text and no extra sentence", doc.call("![図](image.png)").stats["sentences"] == 1 && doc.call("![図](image.png)").stats["chars"] == 1
+check "image source is not read", rules.call("![図](img—1.png)").empty?
+check "relative link destination is not read", rules.call("[文書](docs—1.md)").empty?
 
 # --- long-sentence
 check "long-sentence fires", rules.call("あ" * v_min + "。") == ["long-sentence"]
@@ -147,6 +164,7 @@ check "empty text has no findings", findings.call("").empty? && doc.call("").sta
 
 st = doc.call("短い。長い文です。").stats
 check "stats sentences and chars", st["sentences"] == 2 && st["chars"] == 9
+check "stats length values", st["mean_length"] == 4.5 && st["max_length"] == 6 && st["cv"] == 0.333
 check "stats keys", %w[lines sentences chars mean_length max_length cv long_sentences negation_endings masked_spans scrubbed].all? { |k| st.key?(k) }
 check "stats masked_spans", doc.call("`a` と <code>b</code> と http://x.example/ 。").stats["masked_spans"] == 3
 check "stats long_sentences and negation_endings", doc.call(long + "できない。").stats.values_at("long_sentences", "negation_endings") == [1, 1]
