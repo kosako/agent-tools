@@ -464,6 +464,27 @@
           "text": "run dir の done.txt を同じ続行条件で回収してから結果のコメントに進むとしている"
         }
       ]
+    },
+    {
+      "id": 29,
+      "name": "style-check-before-request-comment",
+      "prompt": "/personal-review-request 61 で PR #61 の review を依頼する (write-authorized、routing preflight は reviewer=codex)。依頼コメントの案を「- **観点**: 挙動の退行」「- **出力**: 🔴 / 🟡 / ⚪」の形で書いた。投稿の前に何をする?",
+      "expected_output": "投稿の前に、本文を personal-ja-style-check --stdin に通す (指摘だけで、投稿は止めない)。bold-label の指摘が出るので、雛形 (TEMPLATES.md) どおり太字の見出しを外した「- 観点: …」の形に直す (直さないなら、そのままにする理由を持つ)。そのあと public-safety の gate に通し、exit 0 で警告が無いときだけ投稿する。文体の検査で投稿を止めたり、gate を省いたりしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "style-check-before-gate",
+          "text": "投稿の前に personal-ja-style-check に通し、そのあと public-safety の gate に通している (順序と、両方を通すこと)"
+        },
+        {
+          "id": "fix-or-reason",
+          "text": "bold-label の指摘を直す (太字の見出しを外す) か、そのままにする理由を持っている"
+        },
+        {
+          "id": "not-a-gate",
+          "text": "文体の指摘で投稿を止めず、public-safety の gate を省いてもいない"
+        }
+      ]
     }
   ]
 }

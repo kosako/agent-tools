@@ -14,7 +14,7 @@ Model selection: model=<review profile | user config | codex default> / effort=<
 Target: base <base ref> @ <base OID 8 桁> / head <head OID 8 桁> (base mode) | commit <OID 8 桁> (commit mode) | uncommitted (#416。direct の依頼では必須)
 
 🔴 must
-- path/to/file:123 — finding
+- path/to/file:123: finding
 
 🟡 should
 - ...

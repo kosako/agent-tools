@@ -9,6 +9,19 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
 
 - ドキュメントと対話は日本語を既定にする。
 
+## 日本語の文章
+
+- 自分が書く日本語の文章 (session の返答、Issue / PR の本文とコメント、commit message、作業ログ) では、AI の文章に
+  残りやすい型を避ける (#556): 文の区切りにダッシュ (`—` `―` `–`) を使わず、読点・句点・括弧で区切る。太字の見出しに
+  中身を続ける箇条書き (`- **見出し**: 中身`) にせず、地の文で書くか見出しを外す。長い文を連ねない (1 文は 60 字を
+  目安にし、120 字を超えたら 2 つに分ける)。文末の打ち消しを 3 文続けない。「〜側に倒す」「黙って〜する」
+  「前提が崩れる」の慣用は平易に言う。
+- 投稿・記録の前に、本文を配備済みの `personal-ja-style-check --stdin` (`<tool home>/agent-tools/scripts/`) に通し、
+  指摘を直すか、そのままにする理由を持つ。指摘だけで gate ではなく (指摘があっても exit 0)、公開の前の public-safety
+  の gate (下の「public safety」) とは別の口。指摘をゼロにすることを目標にせず、機械的に書き換えない。流れごとの
+  通し方は各 skill が持つ (`personal-review-request` / `personal-session-handoff` / `personal-codex-worker`)。
+  repo の docs と skill の本文は対象にしない。
+
 ## セッションとドキュメント
 
 - セッション開始時は直近の状況を把握してから着手する (手順: `personal-resume-project`)。

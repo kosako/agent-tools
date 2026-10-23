@@ -242,6 +242,10 @@ brief は file に書き、stdin (`-`) で渡します。shell 引数に埋め�
   markdown の見出しは `###` 以下を使い、行頭 `## ` は使わない (packet の予約)。file は repo 相対の
   path で書き、markdown のリンクにしない。clone / run dir / home の絶対 path も書かない (転記前の
   public-safety gate が止める。§6 の置き換えは取りこぼしたときの安全網。#326)。
+- 文章の規則: commit message と最終 message は、運用 instruction の「日本語の文章」の型 (ダッシュの区切り、太字の見出しの
+  箇条書き、長い文の連続、打ち消しの連続と慣用) を避けて書く。commit の前に message を配備済みの
+  `personal-ja-style-check --stdin` (`~/.codex/agent-tools/scripts/personal-ja-style-check`) に通し、指摘を直すか理由を
+  持つ (指摘だけで gate ではなく、指摘があっても exit 0。#556)。
 - 途中で受け入れ条件が曖昧だと分かったら、推測で進めず `停止理由 または 質問` に書いて終える。
 
 model family / reasoning effort は brief に書かない (preflight の launch argv が user selection を
@@ -381,6 +385,9 @@ worker の最終 message が「完了」で、`依頼` の受け入れ条件を�
    内容だと確かめたら進む)。gate が無い・exit 0 でないときは push も PR 作成もせず `Blocked at: public-safety`。
    各 commit の差分を漏れなく検査の入力にするため、gate の前に範囲が直線の履歴であることを確かめ、merge commit が
    あれば gate に通さずに同じく `Blocked at: public-safety` で止める (#522)。手順は `LAUNCH.md` §9。
+   PR の題名と本文は先に書き、`personal-ja-style-check --stdin` に通して指摘を直すか理由を持ってから gate に入れる
+   (指摘だけで止めない。#556)。worker の commit message は §4 の brief の文章の規則で worker が通す (orchestrator は
+   書き換えない)。
 4. push して PR を作る (title / body は packet の `依頼` と `結果` から orchestrator が書く。worker の
    本文をそのまま貼らない。`依頼` の割当の行 (残量の値と取得元) は写さない)。
 5. 書く前の検査 (「副作用と組み合わせ」) を通してから、packet に `pr:` と `state: review` を入れる

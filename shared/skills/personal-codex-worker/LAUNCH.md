@@ -590,7 +590,13 @@ commit ごとに trailer の name を見て、`Codex` 始まりが 1 つ以上�
 通ったら、push の前に **公開する内容の gate** を通す (#413。`SKILL.md` §7)。累積差分・各 commit の差分 (途中で足して後で
 消した内容も、その commit ごと公開されるため)・全 commit の message・branch 名・PR の題名と本文をまとめて public-safety の gate に通し、exit 0 で、gate の stderr に警告 (`public-safety-gate: warning:`) の行が無いときだけ
 push へ進む。題名と本文は先に orchestrator が packet から書いておく (`依頼` の割当の行は写さない。本文の一時 file は
-repository の外):
+repository の外)。書いたら `personal-ja-style-check --stdin` に通し、指摘を直すか理由を持ってから gate に入れる (指摘だけで
+止めない。`SKILL.md` §7。#556):
+
+```sh
+style=<tool home>/agent-tools/scripts/personal-ja-style-check
+{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin   # 指摘だけ (exit 0)。直すか理由を持ってから gate へ
+```
 
 ```sh
 gate=<tool home>/agent-tools/scripts/personal-public-safety-gate
