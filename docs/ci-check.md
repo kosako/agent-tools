@@ -16,8 +16,11 @@ remote から取りに行かず (object database にも書かず)、git の失�
   AI を使わない `ci` の単位を足し、この script の出力をその単位の監査の結果として、通常の流れ (反証 → triage → 重複の
   照合 → 起票。proposal は追跡 Issue のコメント) に乗せます (sweep の `SKILL.md` 手順 3)。script が無い・run 全体が
   失敗したときは、sweep を止めずに「CI を確かめられない」と報告します。人が repo で直接かけて出力を読んでもかまいません。
-  sweep が窓の時刻 (`--since` / `--until`) を渡して run の記録も点検するのは、#541 の次の PR からです (それまでは静的な
-  検査だけ)。
+- sweep は、前の run が run の記録を点検し終えた時刻から今までを窓にして `--since` / `--until` を渡します (初回は直近
+  30 日で、窓は 30 日まで)。run の記録を確かめられなければ、窓の始まりを中間まで遅らせて 2 回までかけ直します。点検し
+  終えた時刻は sweep の手元の記録 (repo ごとの `ci.json`) が持ち、起票まで進んで run の記録の所見を扱い終えたときだけ
+  進めます。起票の上限で次の run に回した所見や、反証で uncertain になった所見があれば進めません (sweep の `SKILL.md`
+  手順 3 と 8、形と窓の決め方は `RECORD.md`)。
 - 所見は Issue にしてよいものとして扱います。`personal-repo-baseline` (#539) が Issue にしないのは守り (alerts・secret
   scanning・branch の保護) の抜けで、timeout や concurrency は資源の使い方の問題だからです。攻撃の手順が分かる所見は、
   sweep の security の扱い (公開しない) に従います。
@@ -100,7 +103,8 @@ attempt の記録を読み、次を所見にします (#541)。窓は「終わ�
   と合わない・読む間に `total_count` が変わった・id が重なる、今の repo の GitHub の repo や default branch を解決できない):
   点検の所見はすべて捨て、`scope.not_seen` に
   `run の記録 (<since>〜<until>。<理由>)` の行を書いて exit 2 にします。静的な検査の結果はそのまま出します。sweep は
-  この行の有無で、窓の時刻を進めるかを決めます (接頭辞「run の記録」は契約)。
+  この行の有無で窓を縮めてかけ直すかを決め、確かめたときの `scope.seen` の行 (下) で窓の時刻を進めるかを決めます
+  (接頭辞「run の記録」と、seen の行の形は契約)。
 - **出力に載せないもの**: annotation の文面は自由文 (workflow が出す文を含む) なので載せません。決まった型だけを
   決まった文言にします (`Node.js <版> の deprecation の予告` → topic `deprecation-node-<版>`、`runner の label <label> の
   移行の予告` → `deprecation-runner-label-<label>`。捕まえる値は数字と `[a-z0-9.-]` だけ)。それ以外は「deprecation を
@@ -114,8 +118,8 @@ attempt の記録を読み、次を所見にします (#541)。窓は「終わ�
   `test (a-b)`) ので、hash を添える名前と添えない名前を混ぜると、ある名前の slug が別の名前そのものとぶつかるためです。
   規則の外の名前と、変換で空になる名前は `job-<hash 8 文字>` です。runner の label の key も同じ作り
   (`deprecation-runner-label-ubuntu-latest-<hash>`。`ubuntu-24.04` と `ubuntu-24-04` はぶつからない)。
-- summary に、窓の中に終わった run の本数、各事象の回数、API の呼び出しの回数を書きます。`scope.seen` には
-  `run の記録 (<since>〜<until>)` の行を足します。
+- summary に、窓の中に終わった run の本数、各事象の回数、API の呼び出しの回数を書きます。run の記録を確かめたときだけ、
+  `scope.seen` に `run の記録 (<since>〜<until>)` の行を足します (時刻は渡した `--since` / `--until` と同じ形)。
 
 ## 出力と exit
 
@@ -193,3 +197,9 @@ stdout に `findings.schema.json` に適合する JSON を 1 つ出します。
   予告のように対応の要らないものも拾います (反証と triage で落とす)。flaky は「失敗の後のやり直しで通った」という
   観測で、原因は断定しません。
 - 窓の時刻 (前回どこまで見たか) は script が持ちません。sweep が手元の記録に持ち、`--since` / `--until` で渡します。
+- sweep は、確定しなかった所見 (反証で uncertain、起票の上限で次に回したもの) を次の run に持ち越さず、窓の時刻を
+  据え置いて再検出に任せます (持ち越すかは #425 で決める)。timeout とやり直しの所見は窓の中の事象なので、据え置いた窓で
+  再検出されます。ただし、次の run がかけ直しで窓を縮めたり 30 日の上限で切ったりして見なかった期間の所見は再検出
+  されず、見ない期間として報告したうえで追わなくなります。deprecation は workflow ごとの直近 5 本の run だけを見るので、
+  警告がその 5 本から消えると次の run では出ず、追わなくなります (予告の対象が残っていれば、その job が次に走ったときに
+  再検出される)。

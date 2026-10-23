@@ -58,6 +58,9 @@ brief には、`CODEX-LAUNCH.md` の brief の制約 (read-only、subagent な�
 
 - 入力の file の path (run dir の `findings.json`)。Codex は sandbox の中で読む。
 - 上の「判定の規則」の全文 (Codex はこの skill の file を読めるとは限らないので写す)。
+- 根拠が GitHub にしか無い所見 (`ci` の単位の run の記録の所見。evidence が GitHub の run や job の link) は、GitHub に
+  触れずに確かめられなければ uncertain にし、推測で confirmed や refuted にしない (uncertain の所見があれば、sweep は
+  CI の窓の時刻を進めず、次の run が見直す。`SKILL.md` 手順 8)。
 - 出力: 最終 message は schema に従う JSON だけ。入力の所見 1 件につき 1 つの判定。
 
 ## 結果の取り込み

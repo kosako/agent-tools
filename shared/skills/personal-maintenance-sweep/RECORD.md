@@ -237,6 +237,7 @@ fi
 ${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/maintenance-sweep/<owner>/<repo>/
   latest-run                  監査をした最後の run の id (1 行。入口 (b) の run では更新しない。下)
   fixes.json                  fix モードの所見ごとの記録 (repo 単位。run をまたいで照合する。下)
+  ci.json                     CI の run の記録を点検し終えた時刻 (repo 単位。run をまたいで窓をつなぐ。下)
   runs/<run id>/              run id は開始時刻 (YYYYmmddTHHMMSS)
     state.json                run の状態 (下)
     units/<n>/result.json     単位ごとの監査結果 (repo-audit の findings.schema.json の形。`ci` の単位は personal-ci-check の stdout)
@@ -262,7 +263,9 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
   "preset": "medium",
   "budget": { "<tool>": { "<window>": { "remaining_pct": 48, "resets_at": "…" } } },
   "units": [
-    { "n": 1, "dimension": "ci", "area": ".github/workflows", "status": "audited", "ci_check": { "exit": 1, "stderr": "" } },
+    { "n": 1, "dimension": "ci", "area": ".github/workflows", "status": "audited",
+      "ci_check": { "exit": 1, "stderr": "", "since": "2026-09-02T00:15:00Z", "until": "2026-10-02T00:15:00Z",
+                    "basis": "first", "unseen_from": null, "tries": 1 } },
     { "n": 2, "dimension": "docs", "area": ".", "status": "audited" }
   ],
   "consumption": [ { "unit": 2, "tool": "codex", "window": "weekly", "before_used_pct": 9, "after_used_pct": 11 } ],
@@ -279,7 +282,9 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
   にし、`stderr` に理由を書く。再開でかけ直したら上書きする。追跡 Issue と run のコメントには写さない。
 - 単位の `status` は `pending` → `audited` → `refuted` → `done` (`done` は起票と記録まで終えたもの)。
 - `ci` の単位 (`SKILL.md` 手順 3。先頭の単位) の `ci_check` は personal-ci-check の結果 (`exit` は exit code、`stderr` は
-  全文)。起動できなかったときは `exit` を null にし、`stderr` に理由を書く。再開でかけ直したら上書きする。`stdout` は
+  全文) と窓 (`since` と `until` は使った結果にかけた窓、`basis` と `unseen_from` は下の `ci.json` の block の出力のまま、
+  `tries` はかけた回数)。`exit` と `stderr` も使った結果のもの。起動できなかったときは `exit` を null にし、`stderr` に
+  理由を書く。再開でかけ直したら上書きする。`stdout` は
   `units/<n>/result.json` に置く (確かめられずに所見なしで `done` にしたときは置かない)。消費 (`consumption`) は
   AI の枠を使わないので残さない。
 - 単位が終わるたびに書き直す。中断しても、`status` が `done` でない単位から再開できる。
@@ -329,3 +334,62 @@ fix モードの入口 (b) (起票済みの所見から。`FIX.md`) の run は�
   (v2 は 1 所見 = 1 PR なので記録数 = PR 数)。
   `target_commit` が今の `HEAD` と違えば、その run の監査と反証の結果は再利用しない (`SKILL.md` の
   「中断した run を再開する」)。
+
+`ci.json` の中身 (`ci` の単位の窓。`SKILL.md` 手順 3 と 8。#541):
+
+```json
+{ "checked_until": "2026-10-02T00:15:00Z", "run_id": "20261002T091500" }
+```
+
+- `checked_until` は、run の記録を点検し終えた窓の終わり (personal-ci-check の `--until` に渡した時刻。UTC の秒までで
+  `Z` で終わる形)、`run_id` はその run。次の run はこの時刻を窓の始まりにする (窓は (since, until] なので、境目の
+  時刻に終わった attempt を二重に数えない)。
+- 書くのは手順 8 の条件を満たしたときだけ。今の `checked_until` より後の時刻のときだけ書き直す (戻さない。下の block が
+  `unreadable` を返す file は書き直してよい)。
+- 窓は、`ci` の単位で script をかける前に、次の block で決める。`ci_json` は上の tree の `ci.json` の path で、literal の
+  変数で渡す。出力は JSON 1 行で、`until` は今の時刻 (秒で切り捨て)、`since` はかける順の窓の始まり (1 つ目が窓の始まりで、
+  2 つ目と 3 つ目は前の始まりを until との中間まで遅らせたもの。until より前のものだけ)、`basis` と `unseen_from` は
+  窓の始まりの根拠 (下の表)。
+
+| `basis` | 当てはまるとき | 窓の始まり (`since` の 1 つ目) |
+| --- | --- | --- |
+| `checked_until` | `checked_until` が until の 30 日前から until の前まで | `checked_until` |
+| `capped` | `checked_until` が until の 30 日前より前 | until の 30 日前。`unseen_from` に `checked_until` を書き、その間は見ない |
+| `first` | `ci.json` が無い (初回) | until の 30 日前 |
+| `unreadable` | `ci.json` が regular file でない、JSON の object として読めない、`checked_until` が無い・形が違う・実在しない日時・until 以降 | until の 30 日前 |
+
+```sh
+ruby - "$ci_json" <<'RUBY'
+require "json"
+require "time"
+MAX_DAYS = 30
+FORM = /\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\z/
+fmt = ->(t) { t.utc.strftime("%Y-%m-%dT%H:%M:%SZ") }
+now = Time.at(Time.now.to_i).utc
+floor = now - MAX_DAYS * 24 * 60 * 60
+start, basis, unseen_from = floor, "first", nil
+begin
+  raise "regular file でない" unless File.lstat(ARGV.fetch(0)).file?
+  doc = JSON.parse(File.read(ARGV.fetch(0), encoding: "UTF-8"))
+  raw = doc.is_a?(Hash) ? doc["checked_until"] : nil
+  raise "形が違う" unless raw.is_a?(String) && raw.match?(FORM)
+  checked = Time.iso8601(raw).utc
+  raise "実在しない日時か until 以降" unless fmt.call(checked) == raw && checked < now
+  if checked < floor
+    basis, unseen_from = "capped", raw
+  else
+    start, basis = checked, "checked_until"
+  end
+rescue Errno::ENOENT
+  basis = "first"
+rescue StandardError
+  basis = "unreadable"
+end
+span = (now - start).to_i
+since = [1, 2, 4].map { |d| now - span / d }.select { |t| t < now }.uniq.map(&fmt)
+puts JSON.generate("until" => fmt.call(now), "since" => since, "basis" => basis, "unseen_from" => unseen_from)
+RUBY
+```
+
+- `Time.iso8601` は実在しない日時 (2 月 30 日、60 秒) を繰り上げて読むので、書き戻した文字列が元と一致するかで
+  確かめる。`ci.json` が無いことと読めないことを分けるのは、報告で `ci.json` の破損を見落とさないため。
