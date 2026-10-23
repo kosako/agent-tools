@@ -327,6 +327,35 @@
           "text": "文体の指摘で publish や記録を止めていない (直すか理由を持って進める)"
         }
       ]
+    },
+    {
+      "id": 15,
+      "name": "style-check-reviewer-fixes-own-entry-only",
+      "prompt": "[前提: この session では Issue #8 の PR #31 を reviewer として review した。packet .agent-packets/8.md があり、worker は codex、配備済みの personal-packet check 8 は exit 0 を返す] 今日はここまで。Issue に publish して",
+      "expected_output": "write-authorized と判定する。packet の `結果` に `### <日付> reviewer/claude` の見出しで verdict を追記してから、personal-packet publish --dry-run 8 が出す本文を personal-ja-style-check --stdin に通す。指摘が自分の結果の節にあれば直す。`次の入口` に指摘があっても、reviewer なので直さない (worker の再開指示。手順 1.5 の役割の規則)。過去の節も書き換えない。そのうえで personal-packet publish 8 を実行する。文体の指摘で publish を止めない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "dry-run-through-check",
+          "text": "publish の前に --dry-run の本文を personal-ja-style-check に通している"
+        },
+        {
+          "id": "fix-own-entry-only",
+          "text": "直すのは自分 (reviewer) の結果の節だけにしている"
+        },
+        {
+          "id": "no-next-entry-fix",
+          "text": "`次の入口` に指摘があっても reviewer として直していない"
+        },
+        {
+          "id": "no-past-entry-change",
+          "text": "過去の節を書き換えていない"
+        },
+        {
+          "id": "not-blocking",
+          "text": "文体の指摘で publish を止めていない"
+        }
+      ]
     }
   ]
 }

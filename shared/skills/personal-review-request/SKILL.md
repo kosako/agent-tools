@@ -248,12 +248,12 @@ write-authorized のときだけ、レビューを始める前に、何をどの
 手順 4 の結果コメントと手順 5 の後続のコメントも同じです。
 
 ```sh
+body=<一時ファイル path の shell literal>   # 文体の検査・gate・投稿は同じ本文 file を使う
 style=<tool home>/agent-tools/scripts/personal-ja-style-check
 "$style" --stdin < "$body"   # 指摘だけ (exit 0)。直すか理由を持ってから gate へ
 ```
 
 ```sh
-body=<一時ファイル path の shell literal>
 gate_err=<一時ファイル path の shell literal>
 gate=<tool home>/agent-tools/scripts/personal-public-safety-gate
 if "$gate" --stdin < "$body" 2> "$gate_err" &&

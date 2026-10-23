@@ -61,6 +61,15 @@ check.call(request, step2, "止めない句",
            "指摘だけで投稿を止めません (指摘があっても exit 0): 指摘を読んで直すか、そのままにする理由を持ってから、下の gate に進みます。")
 check.call(request, step2, "手順 4・5 も同じ句", "手順 4 の結果コメントと手順 5 の後続のコメントも同じです。")
 check.call(request, step2, "command の行", %q!"$style" --stdin < "$body"!)
+# 文体の検査の block は、投稿と同じ本文 file (`body`) を自分で定める (後の block の代入に頼ると、掲載順では未設定の
+# `body` へのリダイレクトになる)。
+step2_body = section.call(read.call(request), step2).to_s
+style_block = step2_body[/^```sh\n((?:(?!^```).*\n)*?)"\$style" --stdin < "\$body"/m, 1]
+if style_block.nil?
+  errors << "#{request} の手順 2 に文体の検査の sh の block が無い"
+elsif !style_block.match?(/^body=/)
+  errors << "#{request} の手順 2 の block で `body` の代入が文体の検査より前に無い"
+end
 check.call(request, "### 4. 結果を PR に投稿", "転記した部分を書き換えない句",
            "文体の指摘で直すのは、依頼元として自分が書く部分 (評価・採用しない理由) だけで、reviewer の指摘を転記した部分は指摘が出ても書き換えない (指摘の中身を変えないため)。")
 check.call(request, "### 5. 後続のやり取りも PR 上で", "後続も通す句",
@@ -69,7 +78,7 @@ check.call(request, "### 5. 後続のやり取りも PR 上で", "後続も通�
 handoff = "shared/skills/personal-session-handoff/SKILL.md"
 step3 = "### 3. 記録する"
 check.call(handoff, step3, "publish の前に通す句",
-           "publish の前に、`personal-packet publish --dry-run <issue>` が出す本文を `personal-ja-style-check --stdin` に通し、指摘があれば自分が書いた最新節と `次の入口` を直します (過去の節は書き換えない。指摘だけで publish を止めない。#556。運用 instruction の「日本語の文章」)。")
+           "publish の前に、`personal-packet publish --dry-run <issue>` が出す本文を `personal-ja-style-check --stdin` に通し、指摘があれば手順 1.5 の役割の規則の範囲で直します (worker は自分が書いた最新節と `次の入口`、reviewer は自分の結果の節だけ。過去の節は書き換えない。指摘だけで publish を止めない。#556。運用 instruction の「日本語の文章」)。")
 check.call(handoff, step3, "作業ログを通す句",
            "書き込む本文も、記録の前に `personal-ja-style-check --stdin` に通し、指摘を直すか、そのままにする理由を持ちます。")
 
