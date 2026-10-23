@@ -50,6 +50,13 @@ check "em-dash in tilde fence ignored", rules.call("~~~\n— x\n~~~\n").empty?
 check "fence closes only with same char", rules.call("```\n~~~\n— x\n```\n").empty?
 check "em-dash after fence fires", rules.call("```\nx\n```\na — b。").size == 1
 check "em-dash in URL ignored", rules.call("http://example.com/a—b を見る。").empty?
+check "URL ends at Japanese punctuation", rules.call("参照: http://x.example/a。" + ("できない。" * 3)) == ["negation-run"] && doc.call("参照: http://x.example/a。" + ("できない。" * 3)).stats["sentences"] == 4
+check "URL ends before an opening bracket", doc.call("http://x.example/a（補足）。").stats["masked_spans"] == 1 && doc.call("http://x.example/a（補足）。").stats["chars"] == 6
+check "fenced code inside a quote is ignored", rules.call("> ```\n> a — b\n> ```\n").empty?
+check "em-dash after a quoted fence fires", rules.call("> ```\n> x\n> ```\n> a — b。").size == 1
+check "unquoted fence is not closed by a quoted fence line", rules.call("```\n> ```\n— x\n```\n").empty?
+check "heading inside a quote is not a sentence", rules.call("> ## " + "あ" * (v_min + 1)).empty?
+check "table inside a quote is not a sentence", rules.call("> | " + "あ" * (v_min + 1) + " |").empty?
 check "em-dash in heading fires", rules.call("## 見出し — 続き") == ["em-dash"]
 check "em-dash in table fires", rules.call("| a — b |") == ["em-dash"]
 
@@ -78,6 +85,8 @@ check "long-run across lines in a paragraph", rules.call(([long] * run_n).join("
 check "long-run across bullet lines", rules.call(([long] * run_n).map { |s| "- #{s}" }.join("\n")) == ["long-run"]
 check "long-run resets at blank line", rules.call(([long] * (run_n - 1)).join("\n") + "\n\n" + long).empty?
 check "long-run resets at heading", rules.call(([long] * (run_n - 1)).join("\n") + "\n## 見出し\n" + long).empty?
+check "heading inside a quote resets the run", rules.call(([long] * (run_n - 1)).map { |s| "> #{s}" }.join("\n") + "\n> ## 見出し\n> " + long).empty?
+check "quoted sentences still form a run", rules.call(([long] * run_n).map { |s| "> #{s}" }.join("\n")) == ["long-run"]
 check "long-run resets at fenced code", rules.call(([long] * (run_n - 1)).join("\n") + "\n```\nx\n```\n" + long).empty?
 check "short sentence breaks the run", rules.call(([long] * (run_n - 1)).join + "短い。" + long).empty?
 check "long-run reports first sentence line", findings.call("短い。\n" + ([long] * run_n).join("\n")).first.line == 2
@@ -85,10 +94,14 @@ check "long-run message has the lengths", findings.call(([long] * run_n).join).f
 check "longer run is one finding", rules.call(([long] * (run_n + 2)).join) == ["long-run"]
 check "long-run severity warn", findings.call(([long] * run_n).join).first.severity == "warn"
 check "inline code counts as one char", rules.call(("`" + "x" * 300 + "`。") * run_n).empty?
+check "placeholder counts as one char", doc.call("`abc`。").stats["chars"] == 2 && doc.call("<code>abc</code> と http://x.example/ 。").stats["chars"] == 4
+check "placeholder counts toward the threshold", rules.call(("あ" * (l_min - 2) + "`xx`。") * run_n) == ["long-run"] && rules.call(("あ" * (l_min - 3) + "`xx`。") * run_n).empty?
 check "list marker and bold marks are not counted", rules.call(("- **" + "あ" * (l_min - 2) + "**。\n") * run_n).empty?
 check "quote marker is not counted", rules.call(("> " + short_edge + "\n") * run_n).empty?
 check "whitespace is not counted", rules.call((("あ " * (l_min - 2)) + "。") * run_n).empty?
 check "link text counts and url is masked", rules.call("[" + "あ" * (v_min + 1) + "](http://x.example/—)") == ["long-sentence"]
+check "relative link keeps only the text", rules.call("[" + "あ" * (v_min - 1) + "](notes.md)").empty? && rules.call("[" + "あ" * (v_min - 1) + "](#section)").empty?
+check "relative link text at the threshold fires", rules.call("[" + "あ" * v_min + "](notes.md)") == ["long-sentence"]
 
 # --- long-sentence
 check "long-sentence fires", rules.call("あ" * v_min + "。") == ["long-sentence"]
@@ -208,6 +221,10 @@ o, e, s = cli.call(["--json", ja], "", { "LC_ALL" => "C", "LANG" => "C" })
 check "C locale with a non-ascii file name (json)", s.exitstatus == 0 && JSON.parse(o)["inputs"][0]["name"] == ja
 o, e, s = cli.call([File.join(tmp, "無い.md")], "", { "LC_ALL" => "C", "LANG" => "C" })
 check "C locale error message for a non-ascii file name", s.exitstatus == 2 && e.start_with?("ja-style-check: error:")
+o, e, s = cli.call(["\xff.md".b])
+check "invalid utf-8 argv does not crash", s.exitstatus == 2 && e.start_with?("ja-style-check: error:")
+o, e, s = cli.call(["-\xff".b])
+check "invalid utf-8 option is usage (2)", s.exitstatus == 2 && e.start_with?("usage:")
 check "display_name keeps valid utf-8", JaStyleCheck.display_name("試験.md") == "試験.md"
 check "display_name replaces invalid bytes", JaStyleCheck.display_name("\xff.md".b.force_encoding(Encoding::UTF_8)) == "�.md"
 

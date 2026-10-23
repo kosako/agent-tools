@@ -59,8 +59,10 @@ module JaStyleCheck
   HTML_CODE = %r{<code>.*?</code>}
   HTML_BOLD = %r{</?b>}
   HTML_TAG = %r{</?[A-Za-z][^<>\n]*>}
-  URL = %r{https?://[^\s<>)）」』]+}
-  LINK = /\[([^\]\n]*)\]\(#{PLACEHOLDER}\)/
+  # URL は空白・括弧の閉じ・日本語の句読点と括弧の開きの前で終わる (句点まで飲み込むと、後ろの文が消える)。
+  URL = %r{https?://[^\s<>)）」』。、！？（「『]+}
+  # link は宛先が何 (URL の置き字・相対 path・fragment) でも text だけを残す。
+  LINK = /\[([^\]\n]*)\]\([^)\n]*\)/
   EMPHASIS = /\*\*|__/
   SENTENCE = /[^。！？!?]*[。！？!?]+|[^。！？!?]+\z/
   TERMINATORS = /[。！？!?]+\z/
@@ -101,17 +103,23 @@ module JaStyleCheck
     # 行ごとに Markdown の構造を見分け、ダッシュと太字の見出しの規則を当て、文を切り出す。
     def scan(text)
       fence = nil
+      fence_quoted = false
       paragraph = 0
-      text.split("\n", -1).each_with_index do |line, i|
+      text.split("\n", -1).each_with_index do |raw, i|
         lineno = i + 1
         @lines = lineno
+        # 引用の印は構造 (code block・見出し・表) を読む前に外す。引用の中の code block や見出しも同じに扱うため。
+        line = raw.sub(QUOTE_MARKER, "")
+        quoted = line != raw
         if fence
-          fence = nil if line =~ /\A {0,3}#{Regexp.escape(fence[0])}{#{fence.size},}\s*\z/
+          # 引用の中で開いた code block は引用の印を外した行で閉じ、引用の外で開いたものは元の行で閉じる。
+          fence = nil if (fence_quoted ? line : raw) =~ /\A {0,3}#{Regexp.escape(fence[0])}{#{fence.size},}\s*\z/
           paragraph += 1
           next
         end
         if (m = FENCE_OPEN.match(line))
           fence = m[1]
+          fence_quoted = quoted
           paragraph += 1
           next
         end
@@ -144,9 +152,9 @@ module JaStyleCheck
       PLACEHOLDER
     end
 
-    # 文として読む部分: 引用と箇条書きの印、太字の印、link の書き方を外す。
+    # 文として読む部分: 箇条書きの印、太字の印、link の書き方を外す (引用の印は scan で外してある)。
     def prose(masked)
-      masked.sub(QUOTE_MARKER, "").sub(LIST_MARKER, "").gsub(LINK, "\\1").gsub(EMPHASIS, "")
+      masked.sub(LIST_MARKER, "").gsub(LINK, "\\1").gsub(EMPHASIS, "")
     end
 
     def dash_rule(masked, lineno)
@@ -261,14 +269,16 @@ module JaStyleCheck
     use_stdin = false
     files = []
     argv.each do |arg|
-      case arg
-      when "--json" then json = true
-      when "--stdin" then use_stdin = true
-      when /\A-/
+      if arg == "--json"
+        json = true
+      elsif arg == "--stdin"
+        use_stdin = true
+      elsif arg.b.start_with?("-")
+        # option の判定は byte で見る (壊れた UTF-8 の引数に正規表現を当てると ArgumentError になる)。
         $stderr.puts USAGE
         return 2
       else
-        # ARGV は locale の encoding で来る (C locale なら US-ASCII)。byte は変えずに UTF-8 として扱う (#432)。
+        # ARGV は locale の encoding で来る (C locale なら ASCII-8BIT)。byte は変えずに UTF-8 として扱う (#432)。
         files << arg.dup.force_encoding(Encoding::UTF_8)
       end
     end
