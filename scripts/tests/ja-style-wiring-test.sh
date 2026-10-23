@@ -111,11 +111,17 @@ check.call(worker, "## 7. PR (orchestrator の操作)", "題名と本文を通�
 check.call("shared/skills/personal-codex-worker/LAUNCH.md", "## 9. 回収 (fetch) と trailer 検査と PR", "command の行",
            %q!{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin!)
 
-# 雛形を検査にかける。code block の中は検査が読まないので、block の中身を取り出して渡す。
-templates = +""
-read.call("shared/skills/personal-review-request/TEMPLATES.md").scan(/^```markdown\n(.*?)^```/m) { |m| templates << m[0] << "\n" }
-read.call("shared/skills/personal-codex-review/RESULT-FORMAT.md").scan(/^```text\n(.*?)^```/m) { |m| templates << m[0] << "\n" }
-if templates.include?("レビュー依頼") && templates.include?("Review process verdict")
+# 雛形を検査にかける。code block の中は検査が読まないので、block の中身を取り出して渡す。取り出せたかは file ごとに
+# 別々に見る (連結後の文字列で見ると、TEMPLATES.md だけで両方の目印が揃い、RESULT-FORMAT.md の block が無くても通る)。
+extract = lambda do |rel, fence, mark|
+  text = +""
+  read.call(rel).scan(/^```#{fence}\n(.*?)^```/m) { |m| text << m[0] << "\n" }
+  errors << "雛形の code block を取り出せない (#{rel} の #{fence} の block に #{mark.inspect} が無い)" unless text.include?(mark)
+  text
+end
+templates = extract.call("shared/skills/personal-review-request/TEMPLATES.md", "markdown", "レビュー依頼") +
+            extract.call("shared/skills/personal-codex-review/RESULT-FORMAT.md", "text", "Review process verdict")
+unless templates.empty?
   out, err, status = Open3.capture3("ruby", File.join(root, "shared/scripts/personal-ja-style-check.rb"), "--json", "--stdin",
                                     stdin_data: templates)
   if status.exitstatus != 0
@@ -124,8 +130,6 @@ if templates.include?("レビュー依頼") && templates.include?("Review proces
     hits = JSON.parse(out)["inputs"][0]["findings"].select { |f| %w[bold-label em-dash].include?(f["rule"]) }
     hits.each { |f| errors << "雛形に #{f["rule"]} の指摘がある (#{f["snippet"]})" }
   end
-else
-  errors << "雛形の code block を取り出せない (TEMPLATES.md の markdown の block か RESULT-FORMAT.md の text の block が無い)"
 end
 
 %w[personal-review-request personal-session-handoff personal-codex-worker].each do |skill|
