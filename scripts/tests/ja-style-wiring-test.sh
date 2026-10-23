@@ -152,11 +152,15 @@ issue = "## 所見の Issue"
 check.call("#{sweep}/RECORD.md", issue, "先に通す句",
            "題名と本文を書いたら、先に `personal-ja-style-check --stdin` に通し、指摘を直すか理由を持つ (指摘だけで投稿を止めない。#556。運用 instruction の「日本語の文章」)。追跡 Issue の本文と run のコメントも同じ。")
 check.call("#{sweep}/RECORD.md", issue, "command の行", %q!{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin!)
-# 文体の検査は gate の前 (直してから gate に通す)。
+# 文体の検査は gate の前 (直してから gate に通す)。両方の command があることを先に求め (無ければ順序を比べずに落とす)、
+# あるときだけ順序を比べる。
 issue_body = section.call(read.call("#{sweep}/RECORD.md"), issue).to_s
 style_at = issue_body.index('"$style" --stdin')
 gate_at = issue_body.index('"$gate" --stdin')
-if style_at && gate_at && style_at > gate_at
+if style_at.nil? || gate_at.nil?
+  missing = [("文体の検査" if style_at.nil?), ("gate" if gate_at.nil?)].compact.join("と")
+  errors << "#{sweep}/RECORD.md の「#{issue}」に#{missing}の command (--stdin) が無い"
+elsif style_at > gate_at
   errors << "#{sweep}/RECORD.md の「#{issue}」で、文体の検査の command が gate の command より後にある"
 end
 check.call("#{sweep}/FIX.md", "## 検証 (累積差分に対して)", "commit message を通す句",
