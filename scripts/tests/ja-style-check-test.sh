@@ -50,7 +50,7 @@ check "em-dash in tilde fence ignored", rules.call("~~~\n— x\n~~~\n").empty?
 check "fence closes only with same char", rules.call("```\n~~~\n— x\n```\n").empty?
 check "em-dash after fence fires", rules.call("```\nx\n```\na — b。").size == 1
 check "em-dash in URL ignored", rules.call("http://example.com/a—b を見る。").empty?
-check "URL ends at Japanese punctuation", rules.call("参照: http://x.example/a。" + ("できない。" * 3)) == ["negation-run"] && doc.call("参照: http://x.example/a。" + ("できない。" * 3)).stats["sentences"] == 4
+check "URL ends at Japanese punctuation", rules.call("参照: http://x.example/a。" + ("できない。" * neg_n)) == ["negation-run"] && doc.call("参照: http://x.example/a。" + ("できない。" * neg_n)).stats["sentences"] == neg_n + 1
 check "URL ends before an opening bracket", doc.call("http://x.example/a（補足）。").stats["masked_spans"] == 1 && doc.call("http://x.example/a（補足）。").stats["chars"] == 6
 check "fullwidth space ends a URL", rules.call("http://x.example/a　前—後。") == ["em-dash"]
 check "fullwidth space is not counted", rules.call(("あ" * (l_min - 2) + "　。") * run_n).empty? && doc.call("あ　い。").stats["chars"] == 3
