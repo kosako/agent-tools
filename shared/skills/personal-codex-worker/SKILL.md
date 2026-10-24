@@ -44,7 +44,8 @@ orchestrator が行います。
   妥当性) の決定的検査と launch argv の生成。この skill は preflight の判定を再実装しない。
 - **worker (Codex)**: clone の中で `依頼` を実装し、作業単位ごとに commit し、最終 message に
   結果を書く。packet / GitHub / main repository には触れない。
-- **人**: 委譲の起動指示、blocked からの再開判断、PR の merge、`done` の後の後始末の指示。
+- **人**: 委譲の起動指示、blocked からの再開判断、`done` の後の後始末の指示。PR の merge は運用 instruction の「個人 project の GitHub の操作と merge」に
+  従う (この skill はしない)。
 - **herdr**: launcher。skill が組んだ argv を pane の shell で実行するだけ。
 
 ## モード
@@ -407,7 +408,7 @@ worker の最終 message が「完了」で、`依頼` の受け入れ条件を�
 - どちらも、packet に書く前に書く前の検査 (「副作用と組み合わせ」) を通す (落ちたら書かず、返却の中の draft に
   留める)。
 
-merge はしない (人が行う)。
+merge はしない (運用 instruction の「個人 project の GitHub の操作と merge」に従い、この skill の外で行う)。
 
 ## 8. 返却形式
 

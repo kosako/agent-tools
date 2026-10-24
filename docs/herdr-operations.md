@@ -31,8 +31,8 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
 
 - 割当 (#344) では実装の既定が Claude で、Codex の worker は人が明示したときと Claude の枠が枯渇した
   ときだけ。同じ種類の worker を 2 本走らせると、その系統の枠だけが倍の速さで減る。
-- merge は人が行うので、PR の流量が詰まるのは人の側。同時の本数を増やしても merge 待ちが溜まる
-  だけになる。
+- 個人 project では、条件を満たした PR を agent が merge する (運用 instruction の「個人 project の GitHub の操作と merge」。#563)。
+  許可の規則そのものを変える PR の merge は人が行うので、その PR の流量は人の側で詰まる。
 - 実績は worker 1 本の委譲だけで、それを超える運用は検証できていない。
 
 数え方:
