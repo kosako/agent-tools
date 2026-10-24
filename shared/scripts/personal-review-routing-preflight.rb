@@ -233,16 +233,22 @@ module ReviewRoutingPreflight
     raise ArgumentError, "gh の応答を JSON として解釈できません"
   end
 
-  # user object が閉じた表の bot (login・numeric id・type の 3 つ) に一致するか。
+  # user object が閉じた表の bot (login・numeric id・type の 3 つ) に一致するか。id は Integer に限る (Ruby の == は 49699333.0
+  # を同じとみなす。#553 round 2)。
   def bot_user?(user, login, id)
-    user.is_a?(Hash) && user["login"] == login && user["id"] == id && user["type"] == "Bot"
+    user.is_a?(Hash) && user["login"] == login && user["id"].is_a?(Integer) && user["id"] == id && user["type"] == "Bot"
   end
 
   # PR の author の分類: [:human, nil] / [:bot, [login, entry]] / [:unregistered_bot, nil] / [:foreign_host_bot, nil]。
-  # bot の表は github.com の account のものなので、GH_HOST が別の host を指すときは当てない。
+  # user が無い・login や type が文字列でない応答は、bot でないことを確かめられないので判定できない (ArgumentError = exit 2。
+  # trailer の route へ進めない。#553 round 2)。bot の表は github.com の account のものなので、GH_HOST が別の host を指す
+  # ときは当てない。
   def classify_pull(pull, gh_host)
     user = pull["user"]
-    return [:human, nil] unless user.is_a?(Hash) && (user["type"] == "Bot" || user["login"].to_s.end_with?("[bot]"))
+    unless user.is_a?(Hash) && user["login"].is_a?(String) && user["type"].is_a?(String)
+      raise ArgumentError, "PR の author を読めません (応答に user が無いか形が外れる。bot でないことを確かめられない)"
+    end
+    return [:human, nil] unless user["type"] == "Bot" || user["login"].end_with?("[bot]")
     return [:foreign_host_bot, nil] unless gh_host.to_s.empty? || gh_host == GITHUB_COM
 
     login = user["login"]

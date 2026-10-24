@@ -97,7 +97,7 @@ trailer ではなく GitHub の API で確かめられる印で判定する (下
     確かめられるときだけ trailer を付ける。確かめられなければ人が review する。#415)。
   - AI トレーラが PR に皆無（人間のみ・不明。確かめられた bot の PR は除く）。
   - bot の PR で、PR の author が閉じた表に無い bot、head が base と別の repository (fork)、または bot の印を満たさない
-    commit が 1 つでもある (`bot(unverified)`。人が commit を足した、署名が無い、AI の trailer が付いている、など)。bot の
+    commit が 1 つでもある (`bot(unverified)`。人が commit を足した、署名が無い、message に `Co-Authored-By` がある、など)。bot の
     PR では AI の trailer があっても trailer の route へ戻さない (#553)。
 - **fail-closed の後** (#415): 人に伝え、原因に合わせて次のどれかで終える。人に reviewer を選ばせて AI の review へ
   進めることはしない。
@@ -119,7 +119,8 @@ trailer ではなく GitHub の API で確かめられる印で判定する (下
 
 Dependabot の PR の commit には AI の trailer が無い。preflight は PR (`pulls/<n>`) の author が閉じた表の bot
 (`dependabot[bot]`。login・numeric id・type の 3 つで照合) のときだけ bot の route に入り、全 commit が GitHub の API の印
-(author が同じ bot、committer が GitHub (web-flow)、GitHub の署名が verified かつ valid、親が 1 つ、AI の trailer 無し) を
+(author が同じ bot、committer が GitHub (web-flow)、GitHub の署名が verified かつ valid、親が 1 つ、message が在ってどの行にも
+`Co-Authored-By` を含まない) を
 満たし、head と base の repository が一致し、取得した commit が PR の commits の数と head に一致するときだけ
 `bot(dependabot)` を返す (印の正本は `personal-review-routing-preflight`。この skill には書き写さない)。
 

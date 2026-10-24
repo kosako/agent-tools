@@ -119,7 +119,16 @@ def classify_pull(p, host = nil)
 end
 
 check("人の PR -> :human", classify_pull(pull(user: HUMAN_USER)) == [:human, nil])
-check("user が無い PR -> :human (trailer の route)", classify_pull({}) == [:human, nil])
+def pull_error?(p)
+  ReviewRoutingPreflight.classify_pull(p, nil)
+  false
+rescue ArgumentError
+  true
+end
+check("user が無い PR は判定できない (trailer の route へ進めない)", pull_error?({}))
+check("user の login が無い PR は判定できない", pull_error?(pull(user: { "id" => 1, "type" => "User" })))
+check("user の type が無い PR は判定できない", pull_error?(pull(user: { "login" => "x", "id" => 1 })))
+check("id が浮動小数点 -> :unregistered_bot", classify_pull(pull(user: BOT_USER.merge("id" => 49_699_333.0))) == [:unregistered_bot, nil])
 r = classify_pull(pull)
 check("dependabot[bot] -> :bot と表の entry", r[0] == :bot && r[1][0] == "dependabot[bot]" && r[1][1][:kind] == :bot_dependabot)
 check("表に無い bot -> :unregistered_bot",
@@ -167,6 +176,8 @@ check("bot の印をすべて満たす commit", bot_commit?(commit("a" * 40)))
   "author が人 (login / id / type がすべて違う)" => [[%w[author], HUMAN_USER]],
   "author が無い (email が account に対応しない)" => [[%w[author], nil]],
   "author の id が違う" => [[%w[author], BOT_USER.merge("id" => 1)]],
+  "author の id が浮動小数点" => [[%w[author], BOT_USER.merge("id" => 49_699_333.0)]],
+  "author の id が文字列" => [[%w[author], BOT_USER.merge("id" => "49699333")]],
   "author の type が User" => [[%w[author], BOT_USER.merge("type" => "User")]],
   "committer が web-flow でない" => [[%w[committer], HUMAN_USER]],
   "committer が無い" => [[%w[committer], nil]],
@@ -317,12 +328,13 @@ File.write(ARGV[14], JSON.generate([[bot_c.call(0), bot_c.call(1).tap { |h| h["c
 File.write(ARGV[15], JSON.generate(pull.call({ "login" => "renovate[bot]", "id" => 1, "type" => "Bot" }, 2, sha.call(1)))) # 表に無い bot
 File.write(ARGV[16], JSON.generate(pull.call(bot_user, 1, sha.call(0), head_repo: 11)))  # fork (head の repo が別)
 File.write(ARGV[17], JSON.generate(pull.call(bot_user, 1, sha.call(5))))           # head.sha が commit と合わない
+File.write(ARGV[18], JSON.generate({ "commits" => 2, "title" => canary }))         # user が無い応答
 ' "$canary" "$tmp/fx-claude.json" "$tmp/fx-mixed.json" "$tmp/fx-none.json" \
   "$tmp/fx-2page-ok.json" "$tmp/fx-2page-tail.json" "$tmp/fx-opencode.json" \
   "$tmp/fx-merge.json" "$tmp/fx-single-parent.json" \
   "$tmp/fx-pull-human.json" "$tmp/fx-pull-bot1.json" "$tmp/fx-bot-ok.json" "$tmp/fx-pull-bot2.json" \
   "$tmp/fx-bot-human-added.json" "$tmp/fx-bot-claude-added.json" "$tmp/fx-pull-unregistered.json" \
-  "$tmp/fx-pull-bot-fork.json" "$tmp/fx-pull-bot-badhead.json"
+  "$tmp/fx-pull-bot-fork.json" "$tmp/fx-pull-bot-badhead.json" "$tmp/fx-pull-nouser.json"
 
 # 既存の case は人の PR (pulls/<n> は fx-pull-human) として走る。
 run_pf() {
@@ -476,6 +488,14 @@ set -e
 echo "$out" | grep -q "閉じた表に無い bot" || fail "the reason should say the bot is not in the table: $out"
 echo "$out" | grep -q "^commit " && fail "an unregistered bot PR must not be classified by trailers: $out"
 case "$out" in *renovate*) fail "output must not echo the bot login: $out" ;; esac
+
+# user の無い PR の応答 -> 判定できない (exit 2)。Claude の trailer があっても trailer の route へ進めない
+set +e
+out=$(run_pf_pull "$tmp/fx-pull-nouser.json" "$tmp/fx-claude.json" 555 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "a PR response without user must be exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "reviewer:" && fail "no reviewer may be chosen when the PR author is unreadable: $out"
 
 # fork の bot の PR -> fail-closed
 set +e
