@@ -70,13 +70,16 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
 - 確認なしでしてよい操作の例。公開する text は、どれも下の public-safety の gate に通す。
   - Issue の起票・コメント・label、自分の Issue の close
   - PR の作成・本文の更新・コメント、CI の再実行
-  - feature branch への push (rebase した自分の branch の `--force-with-lease` を含む)
-  - merge 済みの自分の branch の削除 (tip と PR の head の一致を確かめて)
+  - feature branch への push。rebase した branch の `--force-with-lease` は、agent が作った PR の branch だけ
+  - merge 済みの自分の branch の削除 (tip が merge した PR の head と一致し、失う commit が無いときだけ)
 - PR の merge は、次をすべて満たすとき agent がしてよい。
   - routing preflight が author を単一の AI か表の bot と判定した (`personal-review-request` の「レビュアーの決定」)。
-  - 別の AI の review の最終の verdict が `APPROVE` で、review した head が PR の head と一致する。Dependabot の pin の
-    bump は、AI の review の代わりに `personal-dependabot-pin-check` の ok でよい (`personal-review-request` の「bot の PR」)。
-  - required checks がすべて success で、merge state が `CLEAN`。
+  - 別の AI の review の最終の verdict が `APPROVE` で、review した base ref と head が、PR の今の base ref と head に一致
+    する。base を付け替えた・rebase した・commit を足したときは、review をやり直す (stacked PR の base を変えると、head が
+    同じでも差分が変わる)。Dependabot の pin の bump は、AI の review の代わりに `personal-dependabot-pin-check` の ok で
+    よい (`personal-review-request` の「bot の PR」)。
+  - 必要な check (base の `.github/repo-baseline.json` の `required_checks`) が、head ですべて success で、merge state が
+    `CLEAN`。必要な check の一覧が無い・空・読めないとき、check の状態を取れないときは、agent は merge しない。
   - squash の本文を `personal-ja-style-check` と public-safety の gate に通した。merge は `--match-head-commit` に full
     SHA を渡して head に固定し、squash で行う。
 - この節、上の PR の review のコメントの standing rule、各 skill の write gate を変える PR は、人が merge する。許可の
@@ -84,7 +87,7 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
 - merge の後の配備 (agent-tools の `setup.sh` の dry-run → `--apply` → 再 dry-run → doctor) も agent が行い、結果を報告
   する。人が merge した PR も、merge を確かめた後は同じ。
 - 人に確認する操作 (今までどおり)。
-  - default branch への直接の push と force push、履歴の書き換え
+  - default branch への直接の push と force push、default branch と他の人の branch の履歴の書き換え
   - 未 merge の作業を含む branch や、tag・release の削除
   - repo の設定・branch protection・secret・Actions の権限の変更
   - Issue・PR・コメントの削除、他人の Issue / PR の close
