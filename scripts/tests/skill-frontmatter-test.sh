@@ -150,6 +150,14 @@ comment = "a YAML comment follows the value"
   check_case(format, "block-sequence-item-comment",
              valid.sub("description: Public fixture", "description:\n  - Public #fixture"),
              %w[claude-code], comment)
+  # flow の collection は中の値もたどる (round 2 の F3)。frontmatter 全体を flow の mapping で書き、中の plain な値が
+  # コメントで切れる形を拒む。flow の sequence の中の要素も同じ。
+  check_case(format, "flow-root-inner-comment",
+             "---\n{\n  name: personal-frontmatter,\n  description: packet #N を委譲する\n}\n---\n\n# Fixture\n",
+             %w[codex claude-code], comment)
+  check_case(format, "flow-sequence-inner-comment",
+             valid.sub("description: Public fixture", "description: [Public #fixture\n  , more]"),
+             %w[claude-code], comment)
   check_case(format, "block-sequence-then-whole-line-comment",
              valid.sub("description: Public fixture", "description:\n  - Public fixture\n# a whole-line comment"),
              %w[claude-code], nil)

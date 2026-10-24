@@ -72,7 +72,7 @@ directory 形式の配置ルールと、両 source 形式に共通する frontma
   これらをどう読むかは確かめていないので、validator の側で形を 1 つに限る。
   frontmatter の値の後に、同じ行で YAML のコメント (` #` から) が続く形も拒否する (#417)。引用符の無い値は
   空白の後の `#` で黙って切れ、配布先の skill の一覧にも切れたまま載るため。`#` を含む値は引用符で囲む。
-  引用符で囲んだ値と flow の値 (`[a]` / `{a: b}`) の後のコメントも拒否する。block scalar (`>` / `|`) の中の `#` と、
+  引用符で囲んだ値と flow の値 (`[a]` / `{a: b}`) の後のコメント、flow の中の値の後のコメントも拒否する。block scalar (`>` / `|`) の中の `#` と、
   行全体のコメントは値を切らないので通す。
 - **Codex に skill として生成する場合、非空 string の `description` も必須** (#234)。
   [Codex の skill 契約](https://learn.chatgpt.com/docs/build-skills) に合わせ、frontmatter の無い

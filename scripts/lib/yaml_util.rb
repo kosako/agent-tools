@@ -37,8 +37,9 @@ module YamlUtil
   # 一覧にも切れたまま載った)。引用符で囲んだ値と flow の collection (`[a]` / `{a: b}`) の後のコメントも、同じ形
   # なので拒む。block scalar (`>` / `|`) は中の `#` も値の一部で切れず、終わりの位置が次の行の先頭になる (その行の
   # 行全体のコメントを後ろのコメントと取り違える) ので見ない。block の collection は終わりの位置が同じく次の行に
-  # なるので、中の値をたどる。行全体のコメントは値を切らないので見ない。Psych の column は文字の単位なので、行は
-  # UTF-8 として切る (C locale で読んだ US-ASCII の文字列を byte の単位で切らない)。
+  # なるので、中の値をたどる。flow の collection は終わり (`]` / `}`) の後ろを見たうえで、中の値もたどる (frontmatter
+  # 全体を flow の mapping で書くと、中の plain な値が切れうる)。行全体のコメントは値を切らないので見ない。Psych の
+  # column は文字の単位なので、行は UTF-8 として切る (C locale で読んだ US-ASCII の文字列を byte の単位で切らない)。
   def self.check_trailing_comments!(root, content, path)
     lines = content.dup.force_encoding(Encoding::UTF_8).lines
     each_inline_value(root) do |node|
@@ -54,19 +55,17 @@ module YamlUtil
 
   BLOCK_SCALAR_STYLES = [Psych::Nodes::Scalar::LITERAL, Psych::Nodes::Scalar::FOLDED].freeze
 
-  # 終わりの位置が値の直後になる node (block scalar 以外の scalar、flow の collection) を渡す。block の collection は
-  # 中の値 (mapping は値の側。key は見ない) をたどる。
+  # 終わりの位置が値の直後になる node (block scalar 以外の scalar、flow の collection) を渡す。collection は、block でも
+  # flow でも中の値 (mapping は値の側。key は見ない) をたどる。
   def self.each_inline_value(node, &block)
     case node
     when Psych::Nodes::Scalar
       yield node unless BLOCK_SCALAR_STYLES.include?(node.style)
     when Psych::Nodes::Mapping
-      return yield(node) if node.style == Psych::Nodes::Mapping::FLOW
-
+      yield node if node.style == Psych::Nodes::Mapping::FLOW
       node.children.each_slice(2) { |_key, child| each_inline_value(child, &block) }
     when Psych::Nodes::Sequence
-      return yield(node) if node.style == Psych::Nodes::Sequence::FLOW
-
+      yield node if node.style == Psych::Nodes::Sequence::FLOW
       node.children.each { |child| each_inline_value(child, &block) }
     end
   end
