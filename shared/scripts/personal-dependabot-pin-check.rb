@@ -48,6 +48,9 @@ module DependabotPinCheck
   # 出力に載せてよい file の path (workflow の直下の file。名前は規則の文字だけ)。外れる path は確かめず、名前も出さない。
   SAFE_PATH_RE = %r{\A\.github/workflows/[A-Za-z0-9][A-Za-z0-9._-]*\.(?:yml|yaml)\z}.freeze
   BASELINE_PATH = ".github/repo-baseline.json"
+  # YAML (libyaml) が改行とみなす文字のうち LF 以外 (CR・NEL・LS・PS)。含む file は読まない: 行の添字 (LF で分ける) と AST の
+  # 行番号がずれ、別の行を uses の行として検査しうる (#553 round 2)。CRLF の workflow は通常の bot の route に落ちる。
+  LINE_BREAK_RE = /[\r\u0085  ]/.freeze
   # GitHub の PR の file の status の閉じた表 (modified 以外。出力に載せるため)。表に無い値は unknown と出す。
   FILE_STATUSES = %w[added removed renamed copied changed unchanged].freeze
   # GitHub の job の名前の規則と、出力に載せてよい check の名前 (ci-check と同じ)。
@@ -116,25 +119,6 @@ module DependabotPinCheck
         raise RunError, "gh api が失敗しました (PR 番号 / 認証 / --repo を確認)"
       end
       parse(out)
-    end
-
-    # endpoint を全 page 読み、page ごとの応答の配列を返す (--paginate --slurp。preflight と同じ)。
-    def list_pages(path)
-      out, _err, status = run(["gh", "api", "--paginate", "--slurp", path])
-      raise RunError, "gh api が失敗しました (PR 番号 / 認証 / --repo を確認)" unless status.success?
-
-      pages = parse(out)
-      raise RunError, "gh の応答が page 配列ではありません" unless pages.is_a?(Array)
-
-      pages
-    end
-
-    # array の endpoint を全 page 読んで flatten して返す。
-    def list(path)
-      pages = list_pages(path)
-      raise RunError, "gh の応答が page 配列ではありません" unless pages.all? { |p| p.is_a?(Array) }
-
-      pages.flatten(1)
     end
 
     private
@@ -263,7 +247,9 @@ module DependabotPinCheck
   def read_files(api, base_path, pr_number, changed_files)
     raise RunError, "PR の file が #{MAX_FILES} を超えます (この検査の対象外)" if changed_files > MAX_FILES
 
-    files = api.list("#{base_path}/pulls/#{pr_number}/files?per_page=#{PER_PAGE}")
+    # file は MAX_FILES (< PER_PAGE) までなので 1 page で全件が読める。数は changed_files と照合する。
+    files = api.get("#{base_path}/pulls/#{pr_number}/files?per_page=#{PER_PAGE}")
+    raise RunError, "PR の file の応答が配列ではありません" unless files.is_a?(Array)
     raise RunError, "PR の file の数が changed_files と一致しません" unless files.size == changed_files
     raise RunError, "PR に file がありません" if files.empty?
 
@@ -335,6 +321,7 @@ module DependabotPinCheck
 
     text = obj["content"].unpack1("m").force_encoding(Encoding::UTF_8)
     raise FileError, "content-unreadable" unless text.valid_encoding?
+    raise FileError, "line-endings-unsupported" if text.match?(LINE_BREAK_RE)
 
     text
   end
@@ -514,17 +501,29 @@ module DependabotPinCheck
     nil
   end
 
-  # head の check-runs のうち名前が一致するもの (最新の attempt) を全 page 読む。件数が total_count と合わなければ判定しない。
-  # 無ければ missing、1 つでも終わっていなければ pending、1 つでも success でなければ failure、すべて completed + success なら
-  # success。
+  # head の check-runs のうち名前が一致するもの (最新の attempt) を page ごとに読む (1 page = gh の 1 回で、回数の上限は呼ぶ前に
+  # 数える)。page ごとの total_count が一致し、件数が total_count と合わなければ判定しない。無ければ missing、1 つでも終わって
+  # いなければ pending、1 つでも success でなければ failure、すべて completed + success なら success。
   def check_run_state(api, base_path, head_sha, name)
-    query = URI.encode_www_form("check_name" => name, "per_page" => PER_PAGE)
-    pages = api.list_pages("#{base_path}/commits/#{head_sha}/check-runs?#{query}")
-    raise RunError, "check-runs の応答の形が外れます" unless !pages.empty? && pages.all? { |p| p.is_a?(Hash) && p["check_runs"].is_a?(Array) && p["total_count"].is_a?(Integer) }
+    runs = []
+    total = nil
+    page = 1
+    loop do
+      query = URI.encode_www_form("check_name" => name, "per_page" => PER_PAGE, "page" => page)
+      obj = api.get("#{base_path}/commits/#{head_sha}/check-runs?#{query}")
+      unless obj.is_a?(Hash) && obj["check_runs"].is_a?(Array) && obj["total_count"].is_a?(Integer) && obj["check_runs"].all? { |r| r.is_a?(Hash) }
+        raise RunError, "check-runs の応答の形が外れます"
+      end
 
-    runs = pages.flat_map { |p| p["check_runs"] }
-    raise RunError, "check-runs の応答の形が外れます" unless runs.all? { |r| r.is_a?(Hash) }
-    raise RunError, "check-runs の件数が total_count と一致しません (全件を読めない)" unless runs.size == pages.first["total_count"]
+      total ||= obj["total_count"]
+      raise RunError, "check-runs の total_count が page で変わりました (やり直す)" unless obj["total_count"] == total
+
+      runs.concat(obj["check_runs"])
+      break if runs.size >= total || obj["check_runs"].empty?
+
+      page += 1
+    end
+    raise RunError, "check-runs の件数が total_count と一致しません (全件を読めない)" unless runs.size == total
 
     runs = runs.select { |r| r["name"] == name }
     return "missing" if runs.empty?

@@ -15,7 +15,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:21ef30664e038d6a00635627e0d062a439591b5133f86fc3cf510238fe71fa65
+  approved_build_id: sha256:f90a663bd1049bf37527d8be854dd8d76c7c773aa324ace35b31aa27bc14a7bf
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-dependabot-pin-check.rb
@@ -23,7 +23,7 @@ source:
 summary: >-
   Dependabot の PR のうち GitHub Actions の pin (uses: owner/repo@<sha> # <tag>) の bump だけを決まった処理で確かめる
   (#553 の C)。AI を使わず、何も書かない。gh api (GET) で pulls/<n>、pulls/<n>/files、base と head の contents、action の
-  repository の git/ref/tags (annotated は git/tags で type が commit になるまで、深さ 3 まで)、head の check-runs を読む。
+  repository の git/ref/tags (annotated は git/tags で type が commit になるまで、深さ 3 まで)、head の check-runs を page ごとに読む。
   ok の条件は 4 つ: 全 file が .github/workflows/ 直下の *.yml / *.yaml の modified で、変わった行が uses の pin の行だけ
   (旧 file の変わった uses の行を新 file の行に置き換えると新 file と byte 単位で一致。job と step の構造と各 uses の
   owner/repo/path は前後で同じ。sha か tag の変わる行が 1 つ以上) / 新しい sha が宣言した tag の commit と一致し、版

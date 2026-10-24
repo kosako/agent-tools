@@ -96,7 +96,7 @@ serve() {
 if [ "\$args" = "api repos/\$exp_repo/pulls/\$exp_pr" ]; then
   n=\$(cat "\$fix/pull-count" 2>/dev/null || echo 0); n=\$((n + 1)); echo "\$n" > "\$fix/pull-count"
   if [ "\$n" -ge 2 ] && [ -f "\$fix/pull2.json" ]; then serve "\$fix/pull2.json"; else serve "\$fix/pull.json"; fi
-elif [ "\$args" = "api --paginate --slurp repos/\$exp_repo/pulls/\$exp_pr/files?per_page=100" ]; then
+elif [ "\$args" = "api repos/\$exp_repo/pulls/\$exp_pr/files?per_page=100" ]; then
   serve "\$fix/files.json"
 else
   case "\$args" in
@@ -104,10 +104,11 @@ else
       rel=\${args#"api repos/\$exp_repo/contents/"}; path=\${rel%%\?ref=*}; sha=\${rel##*\?ref=}
       printf '%s' "\$sha" | grep -Eq '^[0-9a-f]{40}\$' || { echo "fake gh: bad ref" >&2; exit 1; }
       serve "\$fix/contents/\$sha/\$path.json" ;;
-    "api --paginate --slurp repos/\$exp_repo/commits/"*"/check-runs?check_name="*"&per_page=100")
-      rel=\${args#"api --paginate --slurp repos/\$exp_repo/commits/"}; name=\${rel#*check_name=}; name=\${name%&per_page=100}
+    "api repos/\$exp_repo/commits/"*"/check-runs?check_name="*"&per_page=100&page="*)
+      rel=\${args#"api repos/\$exp_repo/commits/"}; name=\${rel#*check_name=}; name=\${name%&per_page=100&page=*}; page=\${args##*&page=}
       printf '%s' "\${rel%%/*}" | grep -Eq '^[0-9a-f]{40}\$' || { echo "fake gh: bad sha" >&2; exit 1; }
-      serve "\$fix/checkruns/\$name.json" ;;
+      printf '%s' "\$page" | grep -Eq '^[1-9][0-9]*\$' || { echo "fake gh: bad page" >&2; exit 1; }
+      if [ "\$page" = 1 ]; then serve "\$fix/checkruns/\$name.json"; else serve "\$fix/checkruns/\$name.p\$page.json"; fi ;;
     *)
       if printf '%s' "\$args" | grep -Eq '^api repos/[^/ ]+/[^/ ]+/git/ref/tags/[^ /]+\$'; then
         rel=\$(printf '%s' "\$args" | sed -E 's#^api repos/([^/ ]+/[^/ ]+)/git/ref/tags/([^ /]+)\$#\1/\2#')
@@ -159,7 +160,8 @@ run_check ok 12 "owner/repo" >/dev/null 2>&1
 set -e
 grep -q '^api repos/owner/repo/pulls/12$' "$tmp/gh-argv.log" || fail "--repo should be embedded in the pulls path"
 grep -q "^api repos/owner/repo/contents/.github/workflows/test.yml?ref=$head_sha$" "$tmp/gh-argv.log" || fail "--repo should be embedded in the contents path"
-grep -q "^api --paginate --slurp repos/owner/repo/commits/$head_sha/check-runs?check_name=self-tests+%283.4%29&per_page=100$" "$tmp/gh-argv.log" || fail "check-runs query should carry the encoded name and paginate: $(cat "$tmp/gh-argv.log")"
+grep -q "^api repos/owner/repo/commits/$head_sha/check-runs?check_name=self-tests+%283.4%29&per_page=100&page=1$" "$tmp/gh-argv.log" || fail "check-runs query should carry the encoded name and the page: $(cat "$tmp/gh-argv.log")"
+grep -q "^api repos/owner/repo/pulls/12/files?per_page=100$" "$tmp/gh-argv.log" || fail "files should be read in one page without --paginate: $(cat "$tmp/gh-argv.log")"
 
 # not ok の scenario: exit 1 と label
 expect_not_ok() {
@@ -192,6 +194,7 @@ expect_not_ok cipending "ci self-tests (system): pending"
 expect_not_ok cimissing "ci self-tests (system): missing"
 expect_not_ok cimixed "ci self-tests (system): failure"
 expect_not_ok cipaged "ci self-tests (system): failure"
+expect_not_ok crlf "line-endings-unsupported"
 expect_not_ok annotated4 "tag-not-commit"
 expect_not_ok unknownstatus "not-modified (unknown)"
 expect_not_ok ciundef "ci-undefined"
@@ -237,6 +240,20 @@ set +e
 run_check cipagemismatch >/dev/null 2>&1; rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "check-runs count mismatch must be exit 2 (rc=$rc)"
+set +e
+run_check cipagetotal >/dev/null 2>&1; rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "check-runs total_count changing between pages must be exit 2 (rc=$rc)"
+set +e
+run_check cipageshort >/dev/null 2>&1; rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "check-runs fewer than total_count after an empty page must be exit 2 (rc=$rc)"
+# 2 page の check-runs は page ごとに 1 回ずつ gh を呼ぶ (回数の上限に数える)
+: > "$tmp/gh-argv.log"
+set +e
+run_check cipaged >/dev/null 2>&1
+set -e
+[ "$(grep -c 'check-runs?check_name=self-tests+%28system%29&per_page=100&page=' "$tmp/gh-argv.log")" -eq 2 ] || fail "two pages should be two gh calls: $(cat "$tmp/gh-argv.log")"
 set +e
 env PATH="$fakebin:$PATH" FAKE_FIX_DIR="$fix/ok" FAKE_GH_RC=1 ruby "$src" 555 >/dev/null 2>&1; rc=$?
 set -e

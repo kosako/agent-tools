@@ -103,7 +103,7 @@ class Scenario
   end
 
   def files(list)
-    write("files.json", [list])
+    write("files.json", list)
   end
 
   def content(sha, path, text)
@@ -122,9 +122,14 @@ class Scenario
     write("tagobj/#{sha}.json", { "sha" => sha, "object" => { "type" => type, "sha" => target } })
   end
 
-  # check-runs は --paginate --slurp で読むので、page の配列 (1 page) にする。
-  def checkrun(name, **kw)
-    write("checkruns/#{URI.encode_www_form_component(name)}.json", [check_runs_json(name, **kw)])
+  # check-runs は page ごとに読む。page 1 は <name>.json、page N (2 以上) は <name>.p<N>.json。
+  def checkrun(name, page: 1, **kw)
+    write(checkrun_path(name, page), check_runs_json(name, **kw))
+  end
+
+  def checkrun_path(name, page = 1)
+    base = "checkruns/#{URI.encode_www_form_component(name)}"
+    page == 1 ? "#{base}.json" : "#{base}.p#{page}.json"
   end
 
   # ok の形を一式書く (各 scenario はここから変える)。
@@ -243,23 +248,41 @@ s.standard
 s.checkrun("self-tests (system)", status: "in_progress", conclusion: nil)
 s = Scenario.new(root, "cimissing")
 s.standard
-s.write("checkruns/#{URI.encode_www_form_component('self-tests (system)')}.json", [{ "total_count" => 0, "check_runs" => [] }])
+s.write(s.checkrun_path("self-tests (system)"), { "total_count" => 0, "check_runs" => [] })
 s = Scenario.new(root, "cimixed")
 s.standard
-s.write("checkruns/#{URI.encode_www_form_component('self-tests (system)')}.json",
-        [{ "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "success" },
-                                                 { "name" => "self-tests (system)", "status" => "completed", "conclusion" => "failure" }] }])
-# check-runs の件数が total_count と合わない (全件を読めていない) -> 判定できない
+s.write(s.checkrun_path("self-tests (system)"),
+        { "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "success" },
+                                                { "name" => "self-tests (system)", "status" => "completed", "conclusion" => "failure" }] })
+# check-runs の件数が total_count と合わない (page 2 が無い = 全件を読めていない) -> 判定できない
 s = Scenario.new(root, "cipagemismatch")
 s.standard
-s.write("checkruns/#{URI.encode_www_form_component('self-tests (system)')}.json",
-        [{ "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "success" }] }])
+s.write(s.checkrun_path("self-tests (system)"),
+        { "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "success" }] })
 # 2 page に分かれた check-runs (page 2 に failure) -> failure
 s = Scenario.new(root, "cipaged")
 s.standard
-s.write("checkruns/#{URI.encode_www_form_component('self-tests (system)')}.json",
-        [{ "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "success" }] },
-         { "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "failure" }] }])
+s.write(s.checkrun_path("self-tests (system)"),
+        { "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "success" }] })
+s.write(s.checkrun_path("self-tests (system)", 2),
+        { "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "failure" }] })
+# page ごとに total_count が違う -> 判定できない
+s = Scenario.new(root, "cipagetotal")
+s.standard
+s.write(s.checkrun_path("self-tests (system)"),
+        { "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "success" }] })
+s.write(s.checkrun_path("self-tests (system)", 2),
+        { "total_count" => 3, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "success" }] })
+# page 2 が空で件数が total_count に届かない (全件を読めていない) -> 判定できない
+s = Scenario.new(root, "cipageshort")
+s.standard
+s.write(s.checkrun_path("self-tests (system)"),
+        { "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "success" }] })
+s.write(s.checkrun_path("self-tests (system)", 2), { "total_count" => 2, "check_runs" => [] })
+# CRLF の file (YAML が改行とみなす CR を含む) -> not ok
+s = Scenario.new(root, "crlf")
+old = old_workflow
+s.standard(old_text: old, new_text: bump(old, OLD_ACTION_SHA, NEW_ACTION_SHA, "v1.329.0", "v1.331.0").gsub("\n", "\r\n"))
 s = Scenario.new(root, "ciundef")
 s.standard
 FileUtils.rm(File.join(root, "ciundef", "contents/#{BASE_SHA}/.github/repo-baseline.json.json"))
