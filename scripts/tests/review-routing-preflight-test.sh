@@ -136,6 +136,8 @@ check("GH_HOST が別の host でも人の PR は :human", classify_pull(pull(us
 
 check("head と base が同じ repository", ReviewRoutingPreflight.same_repository?(pull))
 check("fork (repo の id が違う) は別の repository", !ReviewRoutingPreflight.same_repository?(pull(head_repo: 11)))
+check("id が同じで full_name だけが違うのも別の repository",
+      !ReviewRoutingPreflight.same_repository?(pull.tap { |p| p["head"]["repo"]["full_name"] = "other/repo" }))
 check("head の repo が無い (branch 削除) は別の repository扱い", !ReviewRoutingPreflight.same_repository?(pull.merge("head" => { "sha" => "a" * 40, "repo" => nil })))
 check("full_name だけ一致で id が違うのは別の repository",
       !ReviewRoutingPreflight.same_repository?(pull(head_repo: 12).tap { |p| p["base"]["repo"]["id"] = 12.0 }))
@@ -161,7 +163,8 @@ end
 
 check("bot の印をすべて満たす commit", bot_commit?(commit("a" * 40)))
 {
-  "author の login が違う" => [[%w[author], HUMAN_USER]],
+  "author の login が違う (id と type は同じ)" => [[%w[author], BOT_USER.merge("login" => "dependabot-bot")]],
+  "author が人 (login / id / type がすべて違う)" => [[%w[author], HUMAN_USER]],
   "author が無い (email が account に対応しない)" => [[%w[author], nil]],
   "author の id が違う" => [[%w[author], BOT_USER.merge("id" => 1)]],
   "author の type が User" => [[%w[author], BOT_USER.merge("type" => "User")]],
@@ -174,14 +177,18 @@ check("bot の印をすべて満たす commit", bot_commit?(commit("a" * 40)))
   "親が 2 つ (merge commit)" => [[%w[parents], [{ "sha" => "c" * 40 }, { "sha" => "d" * 40 }]]],
   "親が無い (root commit)" => [[%w[parents], []]],
   "AI の trailer が付いている" => [[%w[commit message], "x\n\n#{CLAUDE_TR}"]],
+  "折り返した trailer (parser は :none にする)" => [[%w[commit message], "x\n\nCo-Authored-By: Claude\n <ai@example.invalid>"]],
+  "本文の途中の Co-Authored-By" => [[%w[commit message], "x\n\nco-authored-by: Codex <c@example.invalid>\nmore"]],
   "message が無い" => [[%w[commit message], nil]],
 }.each do |name, overrides|
   c = commit("a" * 40, overrides.to_h { |p, v| [p, v] })
   check("#{name} -> bot の印を満たさない", !bot_commit?(c))
 end
 check("commit object が無い -> 満たさない", !bot_commit?({ "sha" => "a" * 40 }))
-check("人の co-author だけの message は trailer 無し扱いで印を満たす",
-      bot_commit?(commit("a" * 40, { %w[commit message] => "x\n\nCo-Authored-By: Alice <a@example.com>" })))
+check("人の co-author だけでも Co-Authored-By を含むので印を満たさない",
+      !bot_commit?(commit("a" * 40, { %w[commit message] => "x\n\nCo-Authored-By: Alice <a@example.com>" })))
+check("Signed-off-by だけの message は印を満たす",
+      bot_commit?(commit("a" * 40, { %w[commit message] => "chore(deps): bump x\n\nSigned-off-by: dependabot[bot] <support@github.com>" })))
 
 def consistent?(p, commits)
   ReviewRoutingPreflight.snapshot_consistent?(p, commits)
@@ -215,17 +222,21 @@ RUBY
 # ---- integration: fake gh 経由 ------------------------------------------------
 fakebin="$tmp/bin"
 mkdir -p "$fakebin"
-# endpoint ごとに応答を分ける: pulls/<n>/commits は FAKE_GH_FIXTURE、pulls/<n> は FAKE_GH_PULL_FIXTURE。
-# それ以外の呼び出しは失敗させる (script が想定外の endpoint を読んだら test が気づく)。
+# endpoint ごとに応答を分ける: pulls/<n>/commits は FAKE_GH_FIXTURE、pulls/<n> は FAKE_GH_PULL_FIXTURE。argv は
+# 全体を正規表現で照合し、それ以外の呼び出し (pulls/<n>/files、repos/<r>/commits など) は失敗させる。gh の stderr は常に
+# canary を含む (preflight が親の出力へ流さないことを固定する。GH_DEBUG=api で本文が出る穴の回帰)。
 cat > "$fakebin/gh" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> $(shq "$tmp/gh-argv.log")
 [ "\${FAKE_GH_RC:-0}" -eq 0 ] || exit "\$FAKE_GH_RC"
-case "\$*" in
-  *"/commits") cat "\$FAKE_GH_FIXTURE" ;;
-  "api repos/"*"/pulls/"[0-9]*) cat "\$FAKE_GH_PULL_FIXTURE" ;;
-  *) echo "fake gh: undefined endpoint: \$*" >&2; exit 1 ;;
-esac
+echo "STDERR-CANARY-do-not-echo \$*" >&2
+if printf '%s' "\$*" | grep -Eq '^api --paginate --slurp repos/[^/ ]+/[^/ ]+/pulls/[0-9]+/commits$'; then
+  cat "\$FAKE_GH_FIXTURE"
+elif printf '%s' "\$*" | grep -Eq '^api repos/[^/ ]+/[^/ ]+/pulls/[0-9]+$'; then
+  cat "\$FAKE_GH_PULL_FIXTURE"
+else
+  echo "fake gh: undefined endpoint" >&2; exit 1
+fi
 EOF
 chmod +x "$fakebin/gh"
 
@@ -334,6 +345,7 @@ set -e
 [ "$rc" -eq 0 ] || fail "all-claude PR should route (rc=$rc): $out"
 echo "$out" | grep -q "reviewer: codex" || fail "should print reviewer codex: $out"
 case "$out" in *"INJECTION-CANARY"*) fail "output must not echo commit message bodies: $out" ;; esac
+case "$out" in *"STDERR-CANARY"*) fail "gh の stderr を親の出力へ流してはいけない (人の PR): $out" ;; esac
 # stdout 全体が #295 PR 3a より前と完全に一致する (label の表に替えても Claude / Codex の出力は不変)
 out=$(run_pf "$tmp/fx-claude.json" 206 2>/dev/null)
 expected="commit 00000000: claude
@@ -412,6 +424,7 @@ rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "dependabot PR with verified marks should route (rc=$rc): $out"
 case "$out" in *"INJECTION-CANARY"*) fail "output must not echo the PR title / body / message: $out" ;; esac
+case "$out" in *"STDERR-CANARY"*) fail "gh の stderr を親の出力へ流してはいけない: $out" ;; esac
 out=$(run_pf_pull "$tmp/fx-pull-bot1.json" "$tmp/fx-bot-ok.json" 555 2>/dev/null)
 expected="commit 00000000: bot(dependabot)
 reviewer: claude (author=bot(dependabot), 1 commit(s))"

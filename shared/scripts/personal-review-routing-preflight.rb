@@ -18,7 +18,7 @@
 # - fail-closed 後の扱い (元の author を確かめられる trailer の付け直し・分割・human review。reviewer の上書きは無い。#415) は skill の領分。
 # - bot の PR (#553): PR の author (`pulls/<n>` の user) が閉じた表 BOTS の bot なら、trailer ではなく GitHub の API の
 #   印で判定する。全 commit が「author が同じ bot (login / id / type)、committer が GitHub (web-flow)、GitHub の署名が
-#   verified かつ valid、親が 1 つ、trailer 無し」で、head と base の repository が id と full_name で一致し (fork は拒否)、
+#   verified かつ valid、親が 1 つ、message に Co-Authored-By が無い」で、head と base の repository が id と full_name で一致し (fork は拒否)、
 #   取得した commit が PR の commits の数と head.sha に一致するときだけ `bot(<name>)` → reviewer は表のとおり (exit 0)。
 #   1 つでも外れれば fail-closed で、trailer の route へは戻さない (表に無い bot の PR も fail-closed)。表は github.com の
 #   account に対するもので、GH_HOST が別の host なら当てない。この印は「GitHub が bot として作った commit」の確認で、
@@ -42,6 +42,7 @@
 # exit: 0 = routing 確定 / 1 = fail-closed / 2 = usage・入力・gh エラー。
 
 require "json"
+require "open3"
 
 # C locale (LC_ALL=C や LANG の未設定) でも、読む text (stdin・file・git や gh の出力) を UTF-8 として扱う (#432)。
 # 既定の external encoding が US-ASCII のままだと、日本語を含む値への正規表現や連結が例外で落ちる。
@@ -67,6 +68,8 @@ module ReviewRoutingPreflight
     "dependabot[bot]" => { id: 49_699_333, kind: :bot_dependabot },
   }.freeze
   BOT_COMMITTER_LOGIN = "web-flow"
+  # bot の commit の message に在ってはならない語 (大文字小文字を問わず、どの行でも)。
+  CO_AUTHOR_RE = /co-authored-by/i.freeze
   GITHUB_COM = "github.com"
 
   # 著者の分類 → reviewer (閉じた表)。表に無い分類 (:opencode_unknown / :bot_unverified を含む) は fail-closed。
@@ -207,12 +210,21 @@ module ReviewRoutingPreflight
     { verdict: :ok, author: author, reviewer: reviewer }
   end
 
+  # gh を起動して stdout を返す。stderr は捕捉して捨てる (GH_DEBUG=api などで gh が HTTP の応答 (PR の title / body / login
+  # を含む) を stderr に出しても、親の出力に流さない。#553 round 1)。失敗は定型の文言だけにする。
+  def gh_api(argv)
+    out, _err, status = Open3.capture3(*argv, in: File::NULL)
+    raise ArgumentError, "gh api が失敗しました (PR 番号 / 認証 / --repo を確認)" unless status.success?
+
+    out
+  rescue SystemCallError
+    raise ArgumentError, "gh を起動できません"
+  end
+
   # PR (`pulls/<n>`) を 1 回読む。bot の判定に使う user / head / base / commits だけを見る。
   def fetch_pull(pr_number, repo)
     path = "repos/#{repo || '{owner}/{repo}'}/pulls/#{pr_number}"
-    out = IO.popen(["gh", "api", path], &:read)
-    raise ArgumentError, "gh api が失敗しました (PR 番号 / 認証 / --repo を確認)" unless $?.success?
-
+    out = gh_api(["gh", "api", path])
     pull = JSON.parse(out)
     raise ArgumentError, "gh の応答が PR の object ではありません" unless pull.is_a?(Hash)
 
@@ -264,11 +276,13 @@ module ReviewRoutingPreflight
   end
 
   # bot の PR の 1 commit が bot の印をすべて満たすか: author が同じ bot、committer が GitHub (web-flow)、GitHub の署名が
-  # verified かつ valid、親が 1 つ、message が在って trailer の分類が :none (AI の trailer が付いた commit は bot のものとみなさない)。
+  # verified かつ valid、親が 1 つ、message が在って `Co-Authored-By` を含まない。trailer の分類 (classify_message) が
+  # :none であることでは足りない (折り返した trailer など、parser が認識しない形を不在として許可しない。#553 round 1)
+  # ので、語の有無で見る。bot の message に co-author は無い。
   def bot_commit?(c, login, id)
     return false unless c.is_a?(Hash) && c["commit"].is_a?(Hash)
     message = c["commit"]["message"]
-    return false unless message.is_a?(String) && classify_message(message) == :none
+    return false unless message.is_a?(String) && !message.match?(CO_AUTHOR_RE)
     return false unless bot_user?(c["author"], login, id)
 
     committer = c["committer"]
@@ -286,10 +300,7 @@ module ReviewRoutingPreflight
   # `GH_REPO` などが効くので origin とは限らない。
   def fetch_commits(pr_number, repo)
     path = "repos/#{repo || '{owner}/{repo}'}/pulls/#{pr_number}/commits"
-    argv = ["gh", "api", "--paginate", "--slurp", path]
-    out = IO.popen(argv, &:read)
-    raise ArgumentError, "gh api が失敗しました (PR 番号 / 認証 / --repo を確認)" unless $?.success?
-
+    out = gh_api(["gh", "api", "--paginate", "--slurp", path])
     pages = JSON.parse(out)
     raise ArgumentError, "gh の応答が page 配列ではありません" unless pages.is_a?(Array)
 
