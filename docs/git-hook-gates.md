@@ -264,7 +264,7 @@ AI agent セッション由来の commit に相互レビュー routing の正本
   (2026-09-26、[opencode-plugin-probe](opencode-plugin-probe.md) の M5)。
   - honest-label: plugin が読まれない (`opencode --pure`・読込失敗・撤去) と marker は立たず、gate は
     人間の commit として通す。その場合の床は PR 単位の routing-preflight (trailer の無い commit は
-    fail-closed)。OpenCode を更新したら、probe で marker がまだ立つかを確かめる。
+    fail-closed。bot の PR だけは trailer ではなく GitHub の API の印で判定する。#553)。OpenCode を更新したら、probe で marker がまだ立つかを確かめる。
   - 漏れ対策: herdr の pane や Claude の session の中から起動した OpenCode では、他の agent の marker
     (`CLAUDECODE` / `CODEX_THREAD_ID` / `CODEX_SANDBOX`) が model の bash に漏れうる。漏れると gate は
     nested と判定して Claude のトレーラを通してしまうので、plugin は model の bash でこれらを空文字にする

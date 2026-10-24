@@ -16,6 +16,13 @@
 #   異なる OpenCode トレーラを含む) / 複数 AI の commit 混在 / トレーラ欠落 commit (人間・不明) /
 #   AI トレーラ皆無 / OpenCode トレーラの形が不正か系列が曖昧 / 表に無い分類。
 # - fail-closed 後の扱い (元の author を確かめられる trailer の付け直し・分割・human review。reviewer の上書きは無い。#415) は skill の領分。
+# - bot の PR (#553): PR の author (`pulls/<n>` の user) が閉じた表 BOTS の bot なら、trailer ではなく GitHub の API の
+#   印で判定する。全 commit が「author が同じ bot (login / id / type)、committer が GitHub (web-flow)、GitHub の署名が
+#   verified かつ valid、親が 1 つ、trailer 無し」で、head と base の repository が id と full_name で一致し (fork は拒否)、
+#   取得した commit が PR の commits の数と head.sha に一致するときだけ `bot(<name>)` → reviewer は表のとおり (exit 0)。
+#   1 つでも外れれば fail-closed で、trailer の route へは戻さない (表に無い bot の PR も fail-closed)。表は github.com の
+#   account に対するもので、GH_HOST が別の host なら当てない。この印は「GitHub が bot として作った commit」の確認で、
+#   変更を生成した主体の証明ではない。PR の author が bot でなければ従来どおり trailer だけで判定する (出力は不変)。
 # - 系列の判定は provider/model の文字列への regex で、alias で系列が隠れた model は「それ以外」
 #   (reviewer = Claude) に倒れる (honest-label)。
 #
@@ -28,7 +35,7 @@
 # OPENCODE_NAME_RE)。単一ファイル配布のため
 # require で共有できない。**変更するときは両方を同時に直す**。
 #
-# 依存: gh (認証済み)。読み取りは pulls/<n>/commits の REST のみ。`gh pr view --json
+# 依存: gh (認証済み)。読み取りは pulls/<n> (PR の author と head / base) と pulls/<n>/commits の REST のみ。`gh pr view --json
 # commits` は先頭 100 commit しか返さない (pagination なし) ため使わない — 全件を
 # `gh api --paginate --slurp` で取る (plain --paginate は array endpoint でページ境界に
 # `][` を挟み不正 JSON になる既知の落とし穴があるため --slurp + flatten。#160 の前例)。
@@ -54,13 +61,23 @@ module ReviewRoutingPreflight
   ANTHROPIC_RE = /claude|anthropic/i.freeze
   OPENAI_RE = %r{openai|chatgpt|gpt|codex|(?:\A|[/.:_-])o[1-9](?:\z|[-.])}i.freeze
 
-  # 著者の分類 → reviewer (閉じた表)。表に無い分類 (:opencode_unknown を含む) は fail-closed。
+  # --- bot の PR (#553) の閉じた表。key は github.com の login、id は account の numeric ID (login の変更に追従しない) ---
+  # Dependabot の PR の commit は GitHub が app として作り、committer は GitHub (web-flow) で署名は verified。
+  BOTS = {
+    "dependabot[bot]" => { id: 49_699_333, kind: :bot_dependabot },
+  }.freeze
+  BOT_COMMITTER_LOGIN = "web-flow"
+  GITHUB_COM = "github.com"
+
+  # 著者の分類 → reviewer (閉じた表)。表に無い分類 (:opencode_unknown / :bot_unverified を含む) は fail-closed。
+  # bot 著は author ≠ reviewer をどちらの AI でも満たすので、枠の大きい Claude を reviewer にする (#553)。
   REVIEWER = {
     claude: :codex,
     codex: :claude,
     opencode_anthropic: :codex,
     opencode_openai: :claude,
     opencode_other: :claude,
+    bot_dependabot: :claude,
   }.freeze
 
   # 出力に使う label (閉じた表)。trailer の生の provider/model は出さない。
@@ -71,6 +88,8 @@ module ReviewRoutingPreflight
     opencode_openai: "opencode(openai)",
     opencode_other: "opencode(other)",
     opencode_unknown: "opencode(unknown)",
+    bot_dependabot: "bot(dependabot)",
+    bot_unverified: "bot(unverified)",
     mixed: "mixed",
     none: "none",
     merge_none: "none (merge commit)",
@@ -160,6 +179,10 @@ module ReviewRoutingPreflight
       return { verdict: :fail_closed,
                reason: "1 つの commit に複数 AI (または model の異なる OpenCode) のトレーラが混在 (単一 reviewer で author ≠ reviewer を満たせない)" }
     end
+    if kinds.include?(:bot_unverified)
+      return { verdict: :fail_closed,
+               reason: "bot の PR に bot の印 (bot の author・GitHub の署名・親 1 つ・トレーラ無し) を満たさない commit がある (人が commit を足した可能性。trailer では routing せず、人が review する)" }
+    end
     if kinds.include?(:merge_none)
       return { verdict: :fail_closed,
                reason: "トレーラの無い merge commit がある (PR の branch は rebase で更新するか、merge commit を作った author を確かめられるときだけトレーラを付ける)" }
@@ -182,6 +205,80 @@ module ReviewRoutingPreflight
     end
 
     { verdict: :ok, author: author, reviewer: reviewer }
+  end
+
+  # PR (`pulls/<n>`) を 1 回読む。bot の判定に使う user / head / base / commits だけを見る。
+  def fetch_pull(pr_number, repo)
+    path = "repos/#{repo || '{owner}/{repo}'}/pulls/#{pr_number}"
+    out = IO.popen(["gh", "api", path], &:read)
+    raise ArgumentError, "gh api が失敗しました (PR 番号 / 認証 / --repo を確認)" unless $?.success?
+
+    pull = JSON.parse(out)
+    raise ArgumentError, "gh の応答が PR の object ではありません" unless pull.is_a?(Hash)
+
+    pull
+  rescue JSON::ParserError
+    raise ArgumentError, "gh の応答を JSON として解釈できません"
+  end
+
+  # user object が閉じた表の bot (login・numeric id・type の 3 つ) に一致するか。
+  def bot_user?(user, login, id)
+    user.is_a?(Hash) && user["login"] == login && user["id"] == id && user["type"] == "Bot"
+  end
+
+  # PR の author の分類: [:human, nil] / [:bot, [login, entry]] / [:unregistered_bot, nil] / [:foreign_host_bot, nil]。
+  # bot の表は github.com の account のものなので、GH_HOST が別の host を指すときは当てない。
+  def classify_pull(pull, gh_host)
+    user = pull["user"]
+    return [:human, nil] unless user.is_a?(Hash) && (user["type"] == "Bot" || user["login"].to_s.end_with?("[bot]"))
+    return [:foreign_host_bot, nil] unless gh_host.to_s.empty? || gh_host == GITHUB_COM
+
+    login = user["login"]
+    entry = BOTS[login]
+    return [:unregistered_bot, nil] unless entry && bot_user?(user, login, entry[:id])
+
+    [:bot, [login, entry]]
+  end
+
+  # head / base の repository の identity (numeric id と full_name)。形が外れれば nil。
+  def repo_identity(side)
+    repo = side.is_a?(Hash) ? side["repo"] : nil
+    return nil unless repo.is_a?(Hash) && repo["id"].is_a?(Integer) && repo["full_name"].is_a?(String)
+
+    [repo["id"], repo["full_name"]]
+  end
+
+  def same_repository?(pull)
+    head = repo_identity(pull["head"])
+    base = repo_identity(pull["base"])
+    !head.nil? && head == base
+  end
+
+  # 取得した commit の列が PR の状態 (commits の数と head.sha) と一致するか (取得の途中で head が動いていない)。
+  def snapshot_consistent?(pull, commits)
+    head_sha = pull["head"].is_a?(Hash) ? pull["head"]["sha"] : nil
+    return false unless head_sha.is_a?(String) && head_sha.match?(/\A[0-9a-f]{40}\z/)
+    return false unless pull["commits"].is_a?(Integer) && pull["commits"] == commits.size
+
+    !commits.empty? && commits.last["sha"] == head_sha
+  end
+
+  # bot の PR の 1 commit が bot の印をすべて満たすか: author が同じ bot、committer が GitHub (web-flow)、GitHub の署名が
+  # verified かつ valid、親が 1 つ、message が在って trailer の分類が :none (AI の trailer が付いた commit は bot のものとみなさない)。
+  def bot_commit?(c, login, id)
+    return false unless c.is_a?(Hash) && c["commit"].is_a?(Hash)
+    message = c["commit"]["message"]
+    return false unless message.is_a?(String) && classify_message(message) == :none
+    return false unless bot_user?(c["author"], login, id)
+
+    committer = c["committer"]
+    return false unless committer.is_a?(Hash) && committer["login"] == BOT_COMMITTER_LOGIN
+
+    verification = c["commit"]["verification"]
+    return false unless verification.is_a?(Hash) && verification["verified"] == true && verification["reason"] == "valid"
+
+    parents = c["parents"]
+    parents.is_a?(Array) && parents.size == 1
   end
 
   # PR の全 commit を REST + pagination で取得する。repo 省略時は gh の placeholder
@@ -226,14 +323,39 @@ module ReviewRoutingPreflight
       return 2
     end
 
-    commits = fetch_commits(pr_number, repo)
-    oid_kinds = commits.map do |c|
-      message = c["commit"].is_a?(Hash) ? c["commit"]["message"] : nil
-      kind = classify_message(message)
-      # トレーラの無い merge commit (親が 2 つ以上) は、理由を分けて示す (#415)。
-      kind = :merge_none if kind == :none && c["parents"].is_a?(Array) && c["parents"].size > 1
-      [short_oid(c["sha"]), kind]
+    pull = fetch_pull(pr_number, repo)
+    pull_kind, bot = classify_pull(pull, ENV["GH_HOST"])
+    case pull_kind
+    when :unregistered_bot
+      warn "review-routing-preflight: fail-closed: 閉じた表に無い bot の PR (trailer では routing しない。人が review する)"
+      return 1
+    when :foreign_host_bot
+      warn "review-routing-preflight: fail-closed: bot の PR だが GH_HOST が github.com でない (bot の表は github.com の account のもの。人が review する)"
+      return 1
     end
+
+    commits = fetch_commits(pr_number, repo)
+    oid_kinds =
+      if pull_kind == :bot
+        unless snapshot_consistent?(pull, commits)
+          warn "review-routing-preflight: error: 取得した commit が PR の状態 (commits の数と head) と一致しません (やり直す)"
+          return 2
+        end
+        unless same_repository?(pull)
+          warn "review-routing-preflight: fail-closed: bot の PR の head が base と別の repository (fork)。人が review する"
+          return 1
+        end
+        login, entry = bot
+        commits.map { |c| [short_oid(c["sha"]), bot_commit?(c, login, entry[:id]) ? entry[:kind] : :bot_unverified] }
+      else
+        commits.map do |c|
+          message = c["commit"].is_a?(Hash) ? c["commit"]["message"] : nil
+          kind = classify_message(message)
+          # トレーラの無い merge commit (親が 2 つ以上) は、理由を分けて示す (#415)。
+          kind = :merge_none if kind == :none && c["parents"].is_a?(Array) && c["parents"].size > 1
+          [short_oid(c["sha"]), kind]
+        end
+      end
 
     oid_kinds.each { |oid, kind| puts "commit #{oid}: #{label(kind)}" }
     result = judge(oid_kinds)
