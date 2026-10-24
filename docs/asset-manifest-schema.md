@@ -70,6 +70,8 @@ directory 形式の配置ルールと、両 source 形式に共通する frontma
   scalar の解決で同じ key になる) 場合も同じく拒否する (#427 の 4)。safe_load は最初の文書だけを返し重複 key を後の値で上書きするので、そのまま読むと
   2 文書目の key と重複 key の先の値が allowlist と name の照合をすり抜ける。配布先の parser が
   これらをどう読むかは確かめていないので、validator の側で形を 1 つに限る。
+  frontmatter の値の後に、同じ行で YAML のコメント (` #` から) が続く形も拒否する (#417)。引用符の無い値は
+  空白の後の `#` で黙って切れ、配布先の skill の一覧にも切れたまま載るため。`#` を含む値は引用符で囲む。
 - **Codex に skill として生成する場合、非空 string の `description` も必須** (#234)。
   [Codex の skill 契約](https://learn.chatgpt.com/docs/build-skills) に合わせ、frontmatter の無い
   skill は directory でも単一 source でも拒否する。build は manifest から frontmatter を生成しない

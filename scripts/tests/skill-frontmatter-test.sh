@@ -96,6 +96,51 @@ end
              valid.sub("description: Public fixture", "description: Public fixture\ntrue: a\nyes: b"),
              %w[codex claude-code], "collide after YAML resolution")
 end
+# 値の後の同じ行の YAML のコメントは拒む (#417)。引用符の無い値は空白の後の `#` で黙って切れ、配布先の一覧にも
+# 切れたまま載る (personal-codex-worker の description が「packet #N」の手前で切れていた)。
+comment = "a YAML comment follows the value"
+%w[directory markdown].each do |format|
+  check_case(format, "plain-trailing-comment",
+             valid.sub("description: Public fixture", "description: 「packet #N を」委譲する"),
+             %w[codex claude-code], comment)
+  check_case(format, "quoted-trailing-comment",
+             valid.sub("description: Public fixture", "description: \"Public fixture\" # note"),
+             %w[codex claude-code], comment)
+  check_case(format, "multiline-plain-comment",
+             valid.sub("description: Public fixture", "description: Public\n  fixture #N here"),
+             %w[codex claude-code], comment)
+  check_case(format, "name-trailing-comment",
+             valid.sub("name: personal-frontmatter", "name: personal-frontmatter # x"),
+             %w[codex claude-code], comment)
+  check_case(format, "crlf-trailing-comment",
+             valid.sub("description: Public fixture", "description: Public #fixture").gsub("\n", "\r\n"),
+             %w[codex claude-code], comment)
+  # `#` を含んでも値を切らない形は通す: 引用符で囲んだ値、前に空白の無い `#`、block scalar の中の `#` の行、
+  # 行全体のコメント
+  check_case(format, "quoted-hash",
+             valid.sub("description: Public fixture", "description: \"「packet #N を」委譲する\""),
+             %w[codex claude-code], nil)
+  check_case(format, "hash-without-space",
+             valid.sub("description: Public fixture", "description: issue#417 fixture"),
+             %w[codex claude-code], nil)
+  check_case(format, "folded-hash",
+             valid.sub("description: Public fixture", "description: >\n  # not a comment\n  Public fixture"),
+             %w[codex claude-code], nil)
+  check_case(format, "whole-line-comment",
+             valid.sub("name: personal-frontmatter\n", "# a whole-line comment\nname: personal-frontmatter\n"),
+             %w[codex claude-code], nil)
+end
+# Psych の column は文字の単位。C locale で読んだ (US-ASCII の) 文字列でも、行を UTF-8 として切って当てる
+# (byte の単位で切ると、日本語の後の ` #` を見落とす)。
+require File.join(scripts, "lib/yaml_util")
+ascii = lambda { |s| s.dup.force_encoding(Encoding::US_ASCII) }
+begin
+  YamlUtil.load_frontmatter(ascii.call("name: personal-frontmatter\ndescription: 日本語の「packet #N を」\n"), "fm")
+  abort "FAIL: a trailing comment after a non-ASCII plain value read as US-ASCII must be rejected"
+rescue YamlUtil::DocumentError => e
+  abort "FAIL: the comment must be located by characters: #{e.message}" unless e.message.include?("line 2 column 26;")
+end
+YamlUtil.load_frontmatter(ascii.call("name: personal-frontmatter\ndescription: \"日本語の「packet #N を」\"\n"), "fm")
 # 単一 file の skill も directory と同じ規則 (build は frontmatter を生成しない、#376)。
 %w[directory markdown].each do |format|
   check_case(format, "codex-frontmatter-required", "# Fixture\n", %w[codex], "must contain YAML frontmatter")

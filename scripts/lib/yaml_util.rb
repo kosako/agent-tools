@@ -24,11 +24,36 @@ module YamlUtil
     data
   end
 
-  # skill の frontmatter 用: 上に加えて、明示の document marker を拒む。
+  # skill の frontmatter 用: 上に加えて、明示の document marker と、値の後の同じ行の YAML のコメントを拒む。
   def self.load_frontmatter(content, path)
     data = safe_load(content, path)
-    check_document!(content, data, path, allow_markers: false)
+    document = check_document!(content, data, path, allow_markers: false)
+    check_trailing_comments!(document.root, content, path)
     data
+  end
+
+  # top-level の値 (scalar) の後に、同じ行で YAML のコメントが続く形を拒む (#417)。引用符の無い plain scalar では、
+  # 空白の後の `#` からがコメントになり、値がそこで黙って切れる (「packet #N」を含む description が `「packet` で
+  # 切れ、配布先の skill の一覧にも切れたまま載った)。引用符で囲んだ値の後のコメントも、同じ形なので拒む。行全体の
+  # コメントは値を切らないので見ない。block scalar (`>` / `|`) の中の `#` は値の一部で、block の終わりは次の行の
+  # 先頭になるので、その行がコメントのときだけ当たる。frontmatter の key は name と description だけ
+  # (check-manifests の SKILL_FRONTMATTER_KEYS) なので、入れ子は見ない。Psych の column は文字の単位なので、行は
+  # UTF-8 として切る (C locale で読んだ US-ASCII の文字列を byte の単位で切らない)。
+  def self.check_trailing_comments!(root, content, path)
+    return unless root.is_a?(Psych::Nodes::Mapping)
+
+    lines = content.dup.force_encoding(Encoding::UTF_8).lines
+    root.children.each_slice(2) do |_key, scalar|
+      next unless scalar.is_a?(Psych::Nodes::Scalar)
+
+      rest = lines[scalar.end_line].to_s.chomp[scalar.end_column..].to_s
+      next unless rest.lstrip.start_with?("#")
+
+      column = scalar.end_column + (rest.size - rest.lstrip.size) + 1
+      raise DocumentError, "(#{path}): a YAML comment follows the value at line #{scalar.end_line + 1} column " \
+                           "#{column}; the text after ` #` is dropped from a plain value (quote the value or " \
+                           "remove the comment)"
+    end
   end
 
   def self.safe_load(content, path)
@@ -40,7 +65,7 @@ module YamlUtil
   end
 
   # 構文 error と alias は safe_load が path 入りの message で先に出すので、ここは構文が通った stream だけを
-  # 見る。data は同じ content を safe_load した値で、node の木と並べて辿る。
+  # 見る。data は同じ content を safe_load した値で、node の木と並べて辿る。検査した文書 (node) を返す。
   def self.check_document!(content, data, path, allow_markers:)
     documents = Psych.parse_stream(content, filename: path).children
     unless documents.size == 1
@@ -53,6 +78,7 @@ module YamlUtil
     end
 
     check_tree!(document.root, data, path)
+    document
   end
 
   # node の木と load 後の値を並べて辿る。
