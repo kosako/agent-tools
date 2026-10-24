@@ -74,9 +74,10 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
   - merge 済みの自分の branch の削除 (tip が merge した PR の head と一致し、失う commit が無いときだけ)
 - PR の merge は、次をすべて満たすとき agent がしてよい。
   - routing preflight が author を単一の AI か表の bot と判定した (`personal-review-request` の「レビュアーの決定」)。
-  - 別の AI の review の最終の verdict が `APPROVE` で、review した base ref と head が、PR の今の base ref と head に一致
-    する。base を付け替えた・rebase した・commit を足したときは、review をやり直す (stacked PR の base を変えると、head が
-    同じでも差分が変わる)。Dependabot の pin の bump は、AI の review の代わりに `personal-dependabot-pin-check` の ok で
+  - 別の AI の review の最終の verdict が `APPROVE` で、review の結果に残した対象 (base ref・base OID・head OID) が PR の
+    今の差分と一致する。一致は、base ref と head が同じで、review の base OID と head の merge-base が、PR の今の base と
+    head の merge-base と同じこと。base を付け替えた・親の branch を rebase した・commit を足したときは、review をやり直す
+    (stacked PR では、head が同じでも差分の基点が変わる)。Dependabot の pin の bump は、AI の review の代わりに `personal-dependabot-pin-check` の ok で
     よい (`personal-review-request` の「bot の PR」)。
   - 必要な check (base の `.github/repo-baseline.json` の `required_checks`) が、head ですべて success で、merge state が
     `CLEAN`。必要な check の一覧が無い・空・読めないとき、check の状態を取れないときは、agent は merge しない。

@@ -400,6 +400,9 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
 
 テンプレートは **`TEMPLATES.md` の「📋 レビュー結果」** を使います (verdict / finding summary /
 independence を別 field で書き、該当ゼロの severity は「なし」と書くか省略する。雛形の正本はそちら)。
+結果には、review の対象を `Target` の行に full の OID で残す (base ref・base OID・head OID)。Codex の route は executor の
+`Target` を写し、Claude の route と C は手順 1 で検証した値を書く。merge の前の照合 (運用 instruction の「個人 project の
+GitHub の操作と merge」) は、この行の値で行う。
 
 投稿の前に、手順 2 と同じく本文を `personal-ja-style-check --stdin` と public-safety の gate に通す (#556、#413)。reviewer の
 出力に絶対 path や markdown の link があれば、repo 相対の `file:line` に直して転記する (gate が home の path で止めるため。
