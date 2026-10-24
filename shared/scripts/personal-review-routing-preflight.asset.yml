@@ -10,12 +10,12 @@ risk:
   privacy: low
 # script kind は実行コード配布のため常に human review 必須 (#147)。
 # 本 script は #202 (Phase 1) の実装 PR で author≠reviewer レビューのうえ承認し、
-# #295 PR 3a (OpenCode) で再レビューする。
+# #295 PR 3a (OpenCode)、#553 (bot の PR の分岐) で再レビューする。
 # 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:5ba3e19e03f925293a23404eae545f58095f091fc9f9da64648ece6795f97caf
+  approved_build_id: sha256:f821015716e37997cd6949b80af775464c943f5ca804eb238a2ee8da29e4ae7a
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-review-routing-preflight.rb
@@ -26,5 +26,7 @@ summary: >-
   分類し、単一 AI なら閉じた表で reviewer を決める (exit 0。Claude → Codex、Codex → Claude、
   OpenCode は中身の model の系列で Anthropic 系 → Codex / OpenAI 系 → Claude / それ以外 → Claude。
   系列表の正本はこの script)。混在・欠落・皆無・OpenCode の形の不正や系列の曖昧は fail-closed
-  (exit 1)。出力は oid 短縮 + 閉じた表の分類ラベルのみで、untrusted な本文・author 名・OpenCode の
-  provider/model を含めない。規範の正本は personal-review-request skill。
+  (exit 1)。PR の author が閉じた表の bot (Dependabot) なら trailer ではなく GitHub の API の印 (PR と全 commit の
+  author が bot、GitHub の署名、親 1 つ、head と base が同じ repository、commit の数と head の一致) で判定し、
+  bot(dependabot) → Claude。表に無い bot・fork・印を満たさない commit は fail-closed で trailer の route へ戻さない (#553)。
+  出力は oid 短縮 + 閉じた表の分類ラベルのみで、untrusted な本文・author 名・OpenCode の provider/model を含めない。規範の正本は personal-review-request skill。

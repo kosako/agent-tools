@@ -45,7 +45,7 @@ caller が渡した deterministic preflight の verified classification だけ�
   author が Codex でも実行できますが、結果に `Independence: second-opinion only` と明記し、
   required cross-review や独立承認として扱いません。
 
-cross-review で verified author が `codex` / `opencode(openai)` / `opencode(other)` (reviewer=claude) なら
+cross-review で verified author が `codex` / `opencode(openai)` / `opencode(other)` / `bot(dependabot)` (reviewer=claude) なら
 Codex 実行を拒否し、caller に verified
 Claude route（`personal-review-request`「レビュー実行」の Claude 節。Codex 環境からの起動 vehicle は
 `claude -p`）を使うよう返します。`opencode(other)` に Codex の見解が要るときは、現在の trusted な
