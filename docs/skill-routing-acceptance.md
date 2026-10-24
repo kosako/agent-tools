@@ -128,7 +128,10 @@ scripts/check-skill-routing.sh --cases scripts/lib/skill_routing_cases.json \
   MISS は報告するが、単独では破れにしない (headless 単発 turn の揺れがあるため)。
 - **must_not violation**: `must_not` のいずれかが `observed` に含まれる = routing の破れ (exit 1)。
 - **baseline 比較**: 同じ tool・同じ model・同じ case 集合・同じ run 数の結果だけ比較する (違えば
-  exit 2)。候補で primary hit が減る、または violation が増えたら回帰 (exit 1)。構造エラー (coverage 欠落・
+  exit 2)。primary は case ごとに比べ、baseline で半分以上の run が当たっていた case が、候補で一度も当たらなければ
+  回帰 (exit 1。#417)。それより小さい減少は case ごとに `warn:` の行で出し、exit には響かない。合計の hit は比べない
+  (ある case の回帰が別の case の改善で打ち消され、揺れだけの差が回帰になるため)。must_not は、候補で 1 回でも出れば
+  baseline によらず case ごとに破れ (上)。構造エラー (coverage 欠落・
   error run・比較条件の不一致) が baseline / candidate のどちらかにあると、比較 (delta の表示と回帰の判定) を
   しない。candidate 自身の must_not violation は、その場合も exit 1 として出る。
 - **token は gate にしない**。delta (%) を報告するだけ。「減った」ことは受け入れ条件として
@@ -158,7 +161,8 @@ scripts/check-skill-routing.sh --cases scripts/lib/skill_routing_cases.json \
 ```
 
 codex は `--tool codex` で同じ手順。両 tool で回帰なしを確認したものだけ merge する (#280 の
-受け入れ条件)。`--repeat N` で揺れを均せる (baseline と candidate で同じ N にする)。Codex で全 case を
+受け入れ条件)。`--repeat N` で揺れを均せる (baseline と candidate で同じ N にする。repeat 1 では 1 回の外れが「一度も
+当たらない」になり回帰になるので、gate にするなら 2 以上)。Codex で全 case を
 流すと、case `audit-mine-session-logs` の error run で比較が飛びやすい (下の「既知の挙動」)。
 
 ## raw log の扱い
@@ -224,6 +228,6 @@ codex は `--tool codex` で同じ手順。両 tool で回帰なしを確認し�
   振る舞う run は observed に出ない (Claude Code の `Skill` tool_use と同じ意味の「起動」で揃えている)。
   探索読みの扱い (最初の 1 本だけを採る) は heuristic で、閾値は runner の定数。
 - Codex は run ごとの揺れが Claude Code より大きい (同じ prompt でも skill を読む / 読まない、user scope
-  の旧 body を読む、探索する)。`--repeat` を使い、1 run の差を回帰と読まない。
+  の旧 body を読む、探索する)。`--repeat` を 2 以上にする (1 run の外れは警告で、回帰にはならない)。
 - CI では probe を実行しない。証跡は手元の raw log と、Issue / PR に貼る judge の summary (raw log は
   貼らない。上の「raw log の扱い」)。

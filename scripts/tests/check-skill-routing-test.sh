@@ -135,13 +135,82 @@ run_case "compare-pass" 0 "delta candidate-baseline: primary +1, violations +0, 
   -- --cases "$tmp/cases.json" --results "$tmp/ok.json" --baseline "$tmp/base.json"
 grep -q "summary\[baseline\] variant=baseline" "$tmp/out" || fail "compare-pass: baseline summary missing: $(cat "$tmp/out")"
 
-# --- case 11: 候補で primary hit が減ったら回帰 (exit 1) ---
-run_case "compare-hit-regression" 1 "regression: primary hits decreased (2/2 -> 1/2)" \
+# --- case 11: primary は case ごとに比べる (#417)。baseline で当たっていた case が候補で一度も当たらなければ回帰
+# (exit 1) ---
+run_case "compare-hit-regression" 1 "regression: case 'a-primary' primary never hit in candidate (1/1 -> 0/1)" \
   -- --cases "$tmp/cases.json" --results "$tmp/miss.json" --baseline "$tmp/ok.json"
+# 合計では打ち消される差 (a が外れ、b が当たるようになった) も、外れた case の回帰として出る
+write_results "$tmp/a-only.json" claude-code model-x baseline \
+  "$(run_line a-primary ok 100 10 '["skill-a"]')" \
+  "$(run_line b-primary ok 120 12 '[]')" \
+  "$(run_line none ok 80 8 '[]')"
+write_results "$tmp/b-only.json" claude-code model-x candidate \
+  "$(run_line a-primary ok 100 10 '[]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line none ok 80 8 '[]')"
+run_case "compare-offset-regression" 1 "regression: case 'a-primary' primary never hit in candidate (1/1 -> 0/1)" \
+  -- --cases "$tmp/cases.json" --results "$tmp/b-only.json" --baseline "$tmp/a-only.json"
+grep -q "primary +0" "$tmp/out" || fail "compare-offset-regression: the aggregate delta should be +0: $(cat "$tmp/out")"
+# 一度は当たっている case の減少 (2/2 -> 1/2) は警告だけで、回帰にしない (exit 0)
+write_results "$tmp/rep-base.json" claude-code model-x baseline \
+  "$(run_line a-primary ok 100 10 '["skill-a"]')" \
+  "$(run_line a-primary ok 100 10 '["skill-a"]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line none ok 80 8 '[]')" \
+  "$(run_line none ok 80 8 '[]')"
+write_results "$tmp/rep-half.json" claude-code model-x candidate \
+  "$(run_line a-primary ok 100 10 '["skill-a"]')" \
+  "$(run_line a-primary ok 100 10 '[]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line none ok 80 8 '[]')" \
+  "$(run_line none ok 80 8 '[]')"
+run_case "compare-partial-decrease-warns" 0 "warn: case 'a-primary' primary hit rate decreased (2/2 -> 1/2)" \
+  -- --cases "$tmp/cases.json" --results "$tmp/rep-half.json" --baseline "$tmp/rep-base.json"
+grep -q "ok: skill routing verified" "$tmp/out" || fail "compare-partial-decrease-warns: expected pass: $(cat "$tmp/out")"
+if grep -q "regression:" "$tmp/out"; then fail "compare-partial-decrease-warns: a partial decrease must not be a regression: $(cat "$tmp/out")"; fi
+# 境界: baseline でちょうど半分 (1/2) 当たっていた case が候補で 0/2 なら回帰。半分未満 (1/3 -> 0/3) は警告だけ
+write_results "$tmp/rep-half-base.json" claude-code model-x baseline \
+  "$(run_line a-primary ok 100 10 '["skill-a"]')" \
+  "$(run_line a-primary ok 100 10 '[]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line none ok 80 8 '[]')" \
+  "$(run_line none ok 80 8 '[]')"
+write_results "$tmp/rep-zero.json" claude-code model-x candidate \
+  "$(run_line a-primary ok 100 10 '[]')" \
+  "$(run_line a-primary ok 100 10 '[]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line none ok 80 8 '[]')" \
+  "$(run_line none ok 80 8 '[]')"
+run_case "compare-half-to-zero-regression" 1 "regression: case 'a-primary' primary never hit in candidate (1/2 -> 0/2)" \
+  -- --cases "$tmp/cases.json" --results "$tmp/rep-zero.json" --baseline "$tmp/rep-half-base.json"
+write_results "$tmp/rep3-base.json" claude-code model-x baseline \
+  "$(run_line a-primary ok 100 10 '["skill-a"]')" \
+  "$(run_line a-primary ok 100 10 '[]')" \
+  "$(run_line a-primary ok 100 10 '[]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line none ok 80 8 '[]')"
+write_results "$tmp/rep3-zero.json" claude-code model-x candidate \
+  "$(run_line a-primary ok 100 10 '[]')" \
+  "$(run_line a-primary ok 100 10 '[]')" \
+  "$(run_line a-primary ok 100 10 '[]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line none ok 80 8 '[]')"
+run_case "compare-below-half-warns" 0 "warn: case 'a-primary' primary hit rate decreased (1/3 -> 0/3)" \
+  -- --cases "$tmp/cases.json" --results "$tmp/rep3-zero.json" --baseline "$tmp/rep3-base.json"
+# baseline で一度も当たらない case (b-primary) は、候補で外れても回帰にも警告にもしない
+run_case "compare-never-hit-unchanged" 0 "ok: skill routing verified" \
+  -- --cases "$tmp/cases.json" --results "$tmp/a-only.json" --baseline "$tmp/a-only.json"
+if grep -q "^warn:" "$tmp/out"; then fail "compare-never-hit-unchanged: unchanged misses must not warn: $(cat "$tmp/out")"; fi
 
-# --- case 12: 候補で violation が増えたら回帰 (exit 1)。baseline 側の violation は破れにしない ---
-run_case "compare-violation-regression" 1 "regression: must_not violations increased (0 -> 1)" \
+# --- case 12: 候補の must_not 違反は、baseline によらず case ごとの破れ (exit 1)。合計の増減は比べない。
+# baseline 側の violation は破れにしない ---
+run_case "compare-violation-breach" 1 "candidate: case 'a-primary' triggered must_not skill(s) skill-b" \
   -- --cases "$tmp/cases.json" --results "$tmp/viol.json" --baseline "$tmp/ok.json"
+if grep -q "violations increased" "$tmp/out"; then fail "compare-violation-breach: the aggregate violation comparison is gone: $(cat "$tmp/out")"; fi
 run_case "compare-baseline-violation-not-breach" 0 "ok: skill routing verified" \
   -- --cases "$tmp/cases.json" --results "$tmp/ok.json" --baseline "$tmp/viol.json"
 
