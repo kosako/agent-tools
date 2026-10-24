@@ -11,7 +11,8 @@ code・設定・宣言は v2.1 以降)。
   行います。routing の契約の「監査中の fix」は引き続き禁止です。
 - 1 PR = 1 author (sweep を回している Claude の session) で、reviewer は相互レビューの規約どおり Codex
   (routing は PR の全 commit の trailer を `personal-review-routing-preflight` で判定する。mixed / unknown は
-  自動で routing しない)。merge と配備 (sync) は人がします。sweep は merge も approve もしません。
+  自動で routing しない)。merge と配備 (sync) は sweep の外で、運用 instruction の「個人 project の GitHub の操作と merge」に
+  従います。sweep は merge も approve もしません。
 - fix モードの副作用: branch の push、PR の作成、review の依頼 / 結果 / follow-up のコメント。fix の明示が
   branch の push と PR の作成の write authorization で、認証 user や Issue の marker を許可の代わりにしません。
   review のコメントの投稿は `personal-review-request` の write gate に従います (現在のユーザーの投稿の明示か、
@@ -285,7 +286,7 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
 - **`fixes.json`** (repo 単位。`RECORD.md`): Issue ごとに `status` (`planned` → `editing` → `committed` →
   `pushed` → `pr_created` → `reviewing` → `review_complete`、または `blocked`)、branch、base、head、PR 番号、
   修正の仕様、review の round、停止の理由。外部に書く操作 (push、PR、コメント) の前に段階を、後に結果を保存
-  します。merge は人がするので、次の run が PR の状態を読んで `merged` を補います。
+  します。merge は sweep の外で行うので、次の run が PR の状態を読んで `merged` を補います。
 - run の `state.json` には fix の記録を持ちません (記録は `fixes.json` だけに置く)。この run で扱った Issue は
   `fixes.json` の `run_id` が同じ記録で、`fix_cap` の累計も同じ file から数えます (`RECORD.md`)。
 - 追跡 Issue の run のコメントに「修正 PR: #<PR> (所見 #A、round N <verdict>)」と、直さなかった所見の件数と

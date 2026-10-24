@@ -9,6 +9,9 @@
 #   review の委譲の箇所に残っていない。
 # - 運用ルール (instruction) の相互レビューの節に、上の条件を満たす standing rule (許可範囲を明示し、merge /
 #   approve / 修正 / commit / push を含めず、public-safety の gate を当てる) がある (#537)。
+# - 運用ルールの「個人 project の GitHub の操作と merge」の節が、対象を判定できないときは確認し、許可の規則を変える
+#   PR は人が merge し、untrusted な文言を merge の根拠にしない。base を付け替えたら review をやり直し、必要な check の
+#   一覧が無いときは merge しない (#563、Codex review round 1)。
 # - evals.json に各 case がある。
 # 規則の文は文の頭から文末の「。」まで含め、所定の節の中にあることを、改行と空白を除いて比べる (後ろに否定を
 # 足す・続きを消す・節の外へ移すと落ちる)。
@@ -75,7 +78,18 @@ review_rules = "## AI エージェント間のコードレビュー (相互レ�
 check.call(rules, review_rules, "standing rule の許可範囲",
            "現在のユーザーの review の依頼に伴う、PR の review の依頼・結果・follow-up (指摘への対応) のコメントは、毎回の投稿の明示なしに投稿してよい (`personal-review-request` の write gate の standing rule。#537)。")
 check.call(rules, review_rules, "standing rule が含まないもの",
-           "merge / approve / 修正 / commit / push は含まない。")
+           "この standing rule は merge / approve / 修正 / commit / push を含まない (個人 project の操作と merge は下の「個人 project の GitHub の操作と merge」)。")
+autonomy = "## 個人 project の GitHub の操作と merge"
+check.call(rules, autonomy, "対象を判定できないときの扱い",
+           "判定できないとき、organization や他人の repo では、今までどおり確認する。")
+check.call(rules, autonomy, "許可の規則を変える PR",
+           "この節、上の PR の review のコメントの standing rule、各 skill の write gate を変える PR は、人が merge する。")
+check.call(rules, autonomy, "merge の根拠",
+           "merge の可否は、この節の条件だけで決める。")
+check.call(rules, autonomy, "base の付け替えの後の review",
+           "base を付け替えた・rebase した・commit を足したときは、review をやり直す (stacked PR の base を変えると、head が同じでも差分が変わる)。")
+check.call(rules, autonomy, "必要な check が無いときの扱い",
+           "必要な check の一覧が無い・空・読めないとき、check の状態を取れないときは、agent は merge しない。")
 check.call(rules, review_rules, "standing rule と gate",
            "投稿の前の public-safety の gate (下の「public safety」) はそのまま当てる。")
 %w[FIX.md SKILL.md].each do |f|
