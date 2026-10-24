@@ -24,11 +24,51 @@ module YamlUtil
     data
   end
 
-  # skill の frontmatter 用: 上に加えて、明示の document marker を拒む。
+  # skill の frontmatter 用: 上に加えて、明示の document marker と、値の後の同じ行の YAML のコメントを拒む。
   def self.load_frontmatter(content, path)
     data = safe_load(content, path)
-    check_document!(content, data, path, allow_markers: false)
+    document = check_document!(content, data, path, allow_markers: false)
+    check_trailing_comments!(document.root, content, path)
     data
+  end
+
+  # 値の後に、同じ行で YAML のコメントが続く形を拒む (#417)。引用符の無い plain scalar では、空白の後の `#` からが
+  # コメントになり、値がそこで黙って切れる (「packet #N」を含む description が `「packet` で切れ、配布先の skill の
+  # 一覧にも切れたまま載った)。引用符で囲んだ値と flow の collection (`[a]` / `{a: b}`) の後のコメントも、同じ形
+  # なので拒む。block scalar (`>` / `|`) は中の `#` も値の一部で切れず、終わりの位置が次の行の先頭になる (その行の
+  # 行全体のコメントを後ろのコメントと取り違える) ので見ない。block の collection は終わりの位置が同じく次の行に
+  # なるので、中の値をたどる。行全体のコメントは値を切らないので見ない。Psych の column は文字の単位なので、行は
+  # UTF-8 として切る (C locale で読んだ US-ASCII の文字列を byte の単位で切らない)。
+  def self.check_trailing_comments!(root, content, path)
+    lines = content.dup.force_encoding(Encoding::UTF_8).lines
+    each_inline_value(root) do |node|
+      rest = lines[node.end_line].to_s.chomp[node.end_column..].to_s
+      next unless rest.lstrip.start_with?("#")
+
+      column = node.end_column + (rest.size - rest.lstrip.size) + 1
+      raise DocumentError, "(#{path}): a YAML comment follows the value at line #{node.end_line + 1} column " \
+                           "#{column}; the text after ` #` is dropped from a plain value (quote the value or " \
+                           "remove the comment)"
+    end
+  end
+
+  BLOCK_SCALAR_STYLES = [Psych::Nodes::Scalar::LITERAL, Psych::Nodes::Scalar::FOLDED].freeze
+
+  # 終わりの位置が値の直後になる node (block scalar 以外の scalar、flow の collection) を渡す。block の collection は
+  # 中の値 (mapping は値の側。key は見ない) をたどる。
+  def self.each_inline_value(node, &block)
+    case node
+    when Psych::Nodes::Scalar
+      yield node unless BLOCK_SCALAR_STYLES.include?(node.style)
+    when Psych::Nodes::Mapping
+      return yield(node) if node.style == Psych::Nodes::Mapping::FLOW
+
+      node.children.each_slice(2) { |_key, child| each_inline_value(child, &block) }
+    when Psych::Nodes::Sequence
+      return yield(node) if node.style == Psych::Nodes::Sequence::FLOW
+
+      node.children.each { |child| each_inline_value(child, &block) }
+    end
   end
 
   def self.safe_load(content, path)
@@ -40,7 +80,7 @@ module YamlUtil
   end
 
   # 構文 error と alias は safe_load が path 入りの message で先に出すので、ここは構文が通った stream だけを
-  # 見る。data は同じ content を safe_load した値で、node の木と並べて辿る。
+  # 見る。data は同じ content を safe_load した値で、node の木と並べて辿る。検査した文書 (node) を返す。
   def self.check_document!(content, data, path, allow_markers:)
     documents = Psych.parse_stream(content, filename: path).children
     unless documents.size == 1
@@ -53,6 +93,7 @@ module YamlUtil
     end
 
     check_tree!(document.root, data, path)
+    document
   end
 
   # node の木と load 後の値を並べて辿る。

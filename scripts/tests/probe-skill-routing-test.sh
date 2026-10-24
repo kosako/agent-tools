@@ -117,6 +117,47 @@ end
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
+# ---- Ruby unit checks: description の文字数 (#417) -------------------------------------------
+fm_dir="$tmp/fm-length"
+mkdir -p "$fm_dir"
+ruby -r"$script_dir/lib/check_helper" - "$src" "$fm_dir" <<'RUBY'
+load ARGV[0]
+P = ProbeSkillRouting
+dir = ARGV[1]
+
+def skill(dir, name, content)
+  path = File.join(dir, "#{name}.md")
+  File.write(path, content)
+  path
+end
+
+# frontmatter を YAML として読んだ値を数える。行の字面を数えると、YAML のコメントで切れた description を
+# 全文の長さで数える
+plain = skill(dir, "plain", "---\nname: a\ndescription: 委譲する「packet #N を」です\n---\n\n# A\n")
+check("YAML のコメントで切れた description は、切れた後の長さ (委譲する「packet) で数える",
+      P.description_length(plain) == "委譲する「packet".length)
+quoted = skill(dir, "quoted", "---\nname: a\ndescription: \"委譲する「packet #N を」です\"\n---\n\n# A\n")
+check("引用符で囲んだ description は全文の長さで数える",
+      P.description_length(quoted) == "委譲する「packet #N を」です".length)
+folded = skill(dir, "folded", "---\nname: a\ndescription: >\n  first\n  second\n---\n\n# A\n")
+check("block scalar は YAML が読む値 (折り返しを空白にし、末尾の改行を含む) で数える",
+      P.description_length(folded) == "first second\n".length)
+crlf = skill(dir, "crlf", "---\r\nname: a\r\ndescription: crlf value\r\n---\r\n\r\n# A\r\n")
+check("CRLF の frontmatter も読む", P.description_length(crlf) == "crlf value".length)
+check("frontmatter が無い skill は 0", P.description_length(skill(dir, "none", "# A\n")) == 0)
+check("description が文字列でない skill は 0",
+      P.description_length(skill(dir, "list", "---\nname: a\ndescription: [x]\n---\n")) == 0)
+broken = skill(dir, "broken", "---\nname: [\n---\n")
+stopped = begin
+  P.description_length(broken)
+  false
+rescue P::Error => e
+  e.message.include?("YAML")
+end
+check("YAML として読めない frontmatter は数えずに止める", stopped)
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
 # ---- Ruby unit checks: event の解析 (固定の JSONL。CLI は起動しない) -------------------------
 ruby -r"$script_dir/lib/check_helper" - "$src" <<'RUBY'
 load ARGV[0]

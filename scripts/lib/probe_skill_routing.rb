@@ -33,6 +33,7 @@ require "open3"
 require "tmpdir"
 require "time"
 require_relative "check_skill_routing"
+require_relative "yaml_util"
 
 # C locale (LC_ALL=C や LANG の未設定) でも、読む text (file・command の出力) を UTF-8 として扱う (#432)。
 # この entrypoint は cli.rb (#418 の固定) を require しないので、同じ固定を各自で持つ。
@@ -127,24 +128,25 @@ module ProbeSkillRouting
   end
 
   # frontmatter の description を取り出す (listing の静的 context 量の指標用)。
-  # 単一行と YAML block (`>` / `|`) の両方を読む。frontmatter が無い / description が無い skill は
-  # 0 文字として数える (build 側の frontmatter 検証 (#234) が正本で、ここでは gate しない)。
+  # frontmatter を YAML として読み、配布先の parser が読むのと同じ値の文字数を数える (#417。行の字面を数えると、
+  # YAML のコメントで切れた description を全文の長さで数える)。frontmatter が無い / description が文字列でない
+  # skill は 0 文字として数える。形の検査 (コメントによる切り詰めを含む) は check-manifests が正本で、ここでは
+  # gate しない (切れた description の before も測れるように)。YAML として読めなければ数えられないので止める。
   def self.description_length(skill_md)
     text = File.read(skill_md)
-    m = text.match(/\A---\n(.*?)\n---\n/m)
-    return 0 unless m
+    # check-manifests (validate_skill_entrypoint) と同じ切り出し方にする (block scalar の末尾の改行も同じに読む)
+    return 0 unless text.start_with?("---\n", "---\r\n")
 
-    lines = m[1].lines
-    idx = lines.index { |l| l.start_with?("description:") }
-    return 0 unless idx
+    parts = text.sub(/\A---\r?\n/, "").split(/^---\r?\n/, 2)
+    return 0 if parts.length < 2
 
-    first = lines[idx].sub(/\Adescription:\s*/, "").rstrip
-    if %w[> | >- |-].include?(first)
-      body = lines[(idx + 1)..-1].take_while { |l| l.start_with?(" ") || l.strip.empty? }
-      body.map(&:strip).reject(&:empty?).join(" ").length
-    else
-      first.length
+    data = begin
+      YamlUtil.safe_load(parts[0], skill_md)
+    rescue Psych::Exception => e
+      raise Error, "#{skill_md}: frontmatter を YAML として読めない (#{e.message})"
     end
+    description = data.is_a?(Hash) ? data["description"] : nil
+    description.is_a?(String) ? description.length : 0
   end
 
   def self.prepare_project(base, tool, dirs)
