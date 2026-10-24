@@ -248,6 +248,15 @@ set +e
 run_check cipageshort >/dev/null 2>&1; rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "check-runs fewer than total_count after an empty page must be exit 2 (rc=$rc)"
+# API の呼び出しは 80 回まで: page が尽きない check-runs では 80 回で止まり (exit 2)、81 回目の gh を起こさない
+: > "$tmp/gh-argv.log"
+set +e
+run_check cibudget >/dev/null 2>&1; rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "exceeding the API budget must be exit 2 (rc=$rc)"
+calls=$(wc -l < "$tmp/gh-argv.log" | tr -d ' ')
+[ "$calls" -eq 80 ] || fail "gh must be called exactly 80 times when the budget is hit (got $calls)"
+
 # 2 page の check-runs は page ごとに 1 回ずつ gh を呼ぶ (回数の上限に数える)
 : > "$tmp/gh-argv.log"
 set +e

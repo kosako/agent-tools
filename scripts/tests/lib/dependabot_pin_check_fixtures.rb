@@ -279,6 +279,14 @@ s.standard
 s.write(s.checkrun_path("self-tests (system)"),
         { "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "success" }] })
 s.write(s.checkrun_path("self-tests (system)", 2), { "total_count" => 2, "check_runs" => [] })
+# check-runs の page が尽きない (total_count が大きく、1 page に 1 件) -> API の回数の上限 (80) で止まり、81 回目を起こさない
+# (pulls・files・contents 2 つ・tag・baseline の 6 回の後、page 1〜74 で 80 回に達する。page は 90 まで用意する)。
+s = Scenario.new(root, "cibudget")
+s.standard
+(1..90).each do |page|
+  s.write(s.checkrun_path("self-tests (3.4)", page),
+          { "total_count" => 10_000, "check_runs" => [{ "name" => "self-tests (3.4)", "status" => "completed", "conclusion" => "success" }] })
+end
 # CRLF の file (YAML が改行とみなす CR を含む) -> not ok
 s = Scenario.new(root, "crlf")
 old = old_workflow
