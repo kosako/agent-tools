@@ -129,6 +129,30 @@ comment = "a YAML comment follows the value"
   check_case(format, "whole-line-comment",
              valid.sub("name: personal-frontmatter\n", "# a whole-line comment\nname: personal-frontmatter\n"),
              %w[codex claude-code], nil)
+  # block scalar の終わりの位置は次の行の先頭になる。直後の行全体のコメントを、値の後ろのコメントと取り違えない
+  # (Codex review round 1 の F1)。block の indicator の後のコメントも値を切らない。
+  %w[> |].each do |indicator|
+    check_case(format, "block-#{indicator}-then-whole-line-comment",
+               "---\nname: personal-frontmatter\ndescription: #{indicator}\n  Public fixture\n# a whole-line comment\n---\n\n# Fixture\n",
+               %w[codex claude-code], nil)
+  end
+  check_case(format, "block-header-comment",
+             valid.sub("description: Public fixture", "description: > # header comment\n  Public fixture"),
+             %w[codex claude-code], nil)
+  # flow の collection の後のコメントと、block の collection の中の値の後のコメントも拒む (round 1 の F2)。
+  # description の型を見ない Claude-only の skill で、コメントの検査が単独で当たることを確かめる。
+  check_case(format, "flow-sequence-trailing-comment",
+             valid.sub("description: Public fixture", "description: [Public fixture] # note"),
+             %w[claude-code], comment)
+  check_case(format, "flow-mapping-trailing-comment",
+             valid.sub("description: Public fixture", "description: {text: Public fixture} # note"),
+             %w[claude-code], comment)
+  check_case(format, "block-sequence-item-comment",
+             valid.sub("description: Public fixture", "description:\n  - Public #fixture"),
+             %w[claude-code], comment)
+  check_case(format, "block-sequence-then-whole-line-comment",
+             valid.sub("description: Public fixture", "description:\n  - Public fixture\n# a whole-line comment"),
+             %w[claude-code], nil)
 end
 # Psych の column は文字の単位。C locale で読んだ (US-ASCII の) 文字列でも、行を UTF-8 として切って当てる
 # (byte の単位で切ると、日本語の後の ` #` を見落とす)。

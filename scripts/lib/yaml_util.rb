@@ -32,27 +32,42 @@ module YamlUtil
     data
   end
 
-  # top-level の値 (scalar) の後に、同じ行で YAML のコメントが続く形を拒む (#417)。引用符の無い plain scalar では、
-  # 空白の後の `#` からがコメントになり、値がそこで黙って切れる (「packet #N」を含む description が `「packet` で
-  # 切れ、配布先の skill の一覧にも切れたまま載った)。引用符で囲んだ値の後のコメントも、同じ形なので拒む。行全体の
-  # コメントは値を切らないので見ない。block scalar (`>` / `|`) の中の `#` は値の一部で、block の終わりは次の行の
-  # 先頭になるので、その行がコメントのときだけ当たる。frontmatter の key は name と description だけ
-  # (check-manifests の SKILL_FRONTMATTER_KEYS) なので、入れ子は見ない。Psych の column は文字の単位なので、行は
+  # 値の後に、同じ行で YAML のコメントが続く形を拒む (#417)。引用符の無い plain scalar では、空白の後の `#` からが
+  # コメントになり、値がそこで黙って切れる (「packet #N」を含む description が `「packet` で切れ、配布先の skill の
+  # 一覧にも切れたまま載った)。引用符で囲んだ値と flow の collection (`[a]` / `{a: b}`) の後のコメントも、同じ形
+  # なので拒む。block scalar (`>` / `|`) は中の `#` も値の一部で切れず、終わりの位置が次の行の先頭になる (その行の
+  # 行全体のコメントを後ろのコメントと取り違える) ので見ない。block の collection は終わりの位置が同じく次の行に
+  # なるので、中の値をたどる。行全体のコメントは値を切らないので見ない。Psych の column は文字の単位なので、行は
   # UTF-8 として切る (C locale で読んだ US-ASCII の文字列を byte の単位で切らない)。
   def self.check_trailing_comments!(root, content, path)
-    return unless root.is_a?(Psych::Nodes::Mapping)
-
     lines = content.dup.force_encoding(Encoding::UTF_8).lines
-    root.children.each_slice(2) do |_key, scalar|
-      next unless scalar.is_a?(Psych::Nodes::Scalar)
-
-      rest = lines[scalar.end_line].to_s.chomp[scalar.end_column..].to_s
+    each_inline_value(root) do |node|
+      rest = lines[node.end_line].to_s.chomp[node.end_column..].to_s
       next unless rest.lstrip.start_with?("#")
 
-      column = scalar.end_column + (rest.size - rest.lstrip.size) + 1
-      raise DocumentError, "(#{path}): a YAML comment follows the value at line #{scalar.end_line + 1} column " \
+      column = node.end_column + (rest.size - rest.lstrip.size) + 1
+      raise DocumentError, "(#{path}): a YAML comment follows the value at line #{node.end_line + 1} column " \
                            "#{column}; the text after ` #` is dropped from a plain value (quote the value or " \
                            "remove the comment)"
+    end
+  end
+
+  BLOCK_SCALAR_STYLES = [Psych::Nodes::Scalar::LITERAL, Psych::Nodes::Scalar::FOLDED].freeze
+
+  # 終わりの位置が値の直後になる node (block scalar 以外の scalar、flow の collection) を渡す。block の collection は
+  # 中の値 (mapping は値の側。key は見ない) をたどる。
+  def self.each_inline_value(node, &block)
+    case node
+    when Psych::Nodes::Scalar
+      yield node unless BLOCK_SCALAR_STYLES.include?(node.style)
+    when Psych::Nodes::Mapping
+      return yield(node) if node.style == Psych::Nodes::Mapping::FLOW
+
+      node.children.each_slice(2) { |_key, child| each_inline_value(child, &block) }
+    when Psych::Nodes::Sequence
+      return yield(node) if node.style == Psych::Nodes::Sequence::FLOW
+
+      node.children.each { |child| each_inline_value(child, &block) }
     end
   end
 
