@@ -86,36 +86,48 @@ printf '%s\n' "\$*" >> $(shq "$tmp/gh-argv.log")
 echo "STDERR-CANARY-do-not-echo \$*" >&2
 [ "\${FAKE_GH_RC:-0}" -eq 0 ] || exit "\$FAKE_GH_RC"
 fix=\$FAKE_FIX_DIR
+if [ -n "\${FAKE_EXPECT_REPO:-}" ]; then exp_repo=\$FAKE_EXPECT_REPO; else exp_repo='{owner}/{repo}'; fi
+exp_pr=\${FAKE_EXPECT_PR:-555}
 args=\$*
 serve() {
   if [ -f "\$1" ]; then cat "\$1"; else echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
 }
-if printf '%s' "\$args" | grep -Eq '^api repos/[^/ ]+/[^/ ]+/pulls/[0-9]+\$'; then
+# PR と repository は期待する値と argv 全体で照合する (別の PR や repo を読む変異を検出するため)。
+if [ "\$args" = "api repos/\$exp_repo/pulls/\$exp_pr" ]; then
   n=\$(cat "\$fix/pull-count" 2>/dev/null || echo 0); n=\$((n + 1)); echo "\$n" > "\$fix/pull-count"
   if [ "\$n" -ge 2 ] && [ -f "\$fix/pull2.json" ]; then serve "\$fix/pull2.json"; else serve "\$fix/pull.json"; fi
-elif printf '%s' "\$args" | grep -Eq '^api --paginate --slurp repos/[^/ ]+/[^/ ]+/pulls/[0-9]+/files\\?per_page=100\$'; then
+elif [ "\$args" = "api --paginate --slurp repos/\$exp_repo/pulls/\$exp_pr/files?per_page=100" ]; then
   serve "\$fix/files.json"
-elif printf '%s' "\$args" | grep -Eq '^api repos/[^/ ]+/[^/ ]+/contents/[^ ?]+\\?ref=[0-9a-f]{40}\$'; then
-  rel=\$(printf '%s' "\$args" | sed -E 's#^api repos/[^/ ]+/[^/ ]+/contents/([^ ?]+)\\?ref=([0-9a-f]{40})\$#\\2/\\1#')
-  serve "\$fix/contents/\$rel.json"
-elif printf '%s' "\$args" | grep -Eq '^api repos/[^/ ]+/[^/ ]+/git/ref/tags/[^ /]+\$'; then
-  rel=\$(printf '%s' "\$args" | sed -E 's#^api repos/([^/ ]+/[^/ ]+)/git/ref/tags/([^ /]+)\$#\\1/\\2#')
-  serve "\$fix/tags/\$rel.json"
-elif printf '%s' "\$args" | grep -Eq '^api repos/[^/ ]+/[^/ ]+/git/tags/[0-9a-f]{40}\$'; then
-  rel=\$(printf '%s' "\$args" | sed -E 's#^.*/git/tags/([0-9a-f]{40})\$#\\1#')
-  serve "\$fix/tagobj/\$rel.json"
-elif printf '%s' "\$args" | grep -Eq '^api repos/[^/ ]+/[^/ ]+/commits/[0-9a-f]{40}/check-runs\\?check_name=[^&]+&per_page=100\$'; then
-  rel=\$(printf '%s' "\$args" | sed -E 's#^.*check-runs\\?check_name=([^&]+)&per_page=100\$#\\1#')
-  serve "\$fix/checkruns/\$rel.json"
 else
-  echo "fake gh: undefined endpoint" >&2; exit 1
+  case "\$args" in
+    "api repos/\$exp_repo/contents/"*"?ref="*)
+      rel=\${args#"api repos/\$exp_repo/contents/"}; path=\${rel%%\?ref=*}; sha=\${rel##*\?ref=}
+      printf '%s' "\$sha" | grep -Eq '^[0-9a-f]{40}\$' || { echo "fake gh: bad ref" >&2; exit 1; }
+      serve "\$fix/contents/\$sha/\$path.json" ;;
+    "api --paginate --slurp repos/\$exp_repo/commits/"*"/check-runs?check_name="*"&per_page=100")
+      rel=\${args#"api --paginate --slurp repos/\$exp_repo/commits/"}; name=\${rel#*check_name=}; name=\${name%&per_page=100}
+      printf '%s' "\${rel%%/*}" | grep -Eq '^[0-9a-f]{40}\$' || { echo "fake gh: bad sha" >&2; exit 1; }
+      serve "\$fix/checkruns/\$name.json" ;;
+    *)
+      if printf '%s' "\$args" | grep -Eq '^api repos/[^/ ]+/[^/ ]+/git/ref/tags/[^ /]+\$'; then
+        rel=\$(printf '%s' "\$args" | sed -E 's#^api repos/([^/ ]+/[^/ ]+)/git/ref/tags/([^ /]+)\$#\1/\2#')
+        serve "\$fix/tags/\$rel.json"
+      elif printf '%s' "\$args" | grep -Eq '^api repos/[^/ ]+/[^/ ]+/git/tags/[0-9a-f]{40}\$'; then
+        rel=\$(printf '%s' "\$args" | sed -E 's#^.*/git/tags/([0-9a-f]{40})\$#\1#')
+        serve "\$fix/tagobj/\$rel.json"
+      else
+        echo "fake gh: undefined endpoint" >&2; exit 1
+      fi ;;
+  esac
 fi
 EOF
 chmod +x "$fakebin/gh"
 
 run_check() {
   rm -f "$fix/$1/pull-count"
-  env PATH="$fakebin:$PATH" FAKE_FIX_DIR="$fix/$1" ruby "$src" "${2:-555}" ${3:+--repo "$3"}
+  exp_repo='{owner}/{repo}'
+  [ $# -ge 3 ] && exp_repo=$3
+  env PATH="$fakebin:$PATH" FAKE_FIX_DIR="$fix/$1" FAKE_EXPECT_PR="${2:-555}" FAKE_EXPECT_REPO="$exp_repo" ruby "$src" "${2:-555}" ${3:+--repo "$3"}
 }
 
 base_sha=$(printf '%040x' 101)
@@ -147,7 +159,7 @@ run_check ok 12 "owner/repo" >/dev/null 2>&1
 set -e
 grep -q '^api repos/owner/repo/pulls/12$' "$tmp/gh-argv.log" || fail "--repo should be embedded in the pulls path"
 grep -q "^api repos/owner/repo/contents/.github/workflows/test.yml?ref=$head_sha$" "$tmp/gh-argv.log" || fail "--repo should be embedded in the contents path"
-grep -q "^api repos/owner/repo/commits/$head_sha/check-runs?check_name=self-tests+%283.4%29&per_page=100$" "$tmp/gh-argv.log" || fail "check-runs query should carry the encoded name: $(cat "$tmp/gh-argv.log")"
+grep -q "^api --paginate --slurp repos/owner/repo/commits/$head_sha/check-runs?check_name=self-tests+%283.4%29&per_page=100$" "$tmp/gh-argv.log" || fail "check-runs query should carry the encoded name and paginate: $(cat "$tmp/gh-argv.log")"
 
 # not ok の scenario: exit 1 と label
 expect_not_ok() {
@@ -179,9 +191,19 @@ expect_not_ok cifail "ci self-tests (system): failure"
 expect_not_ok cipending "ci self-tests (system): pending"
 expect_not_ok cimissing "ci self-tests (system): missing"
 expect_not_ok cimixed "ci self-tests (system): failure"
+expect_not_ok cipaged "ci self-tests (system): failure"
+expect_not_ok annotated4 "tag-not-commit"
+expect_not_ok unknownstatus "not-modified (unknown)"
 expect_not_ok ciundef "ci-undefined"
 expect_not_ok ciempty "ci-undefined"
 expect_not_ok toolarge "file-too-large"
+
+# 3 段の tag object (深さ 3) は commit に解いて ok
+set +e
+out=$(run_check annotated3 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "a 3-level annotated tag should resolve (rc=$rc): $out"
 
 # annotated tag は commit に解いて ok
 set +e
@@ -211,6 +233,10 @@ set +e
 run_check toomany >/dev/null 2>&1; rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "too many files must be exit 2 (rc=$rc)"
+set +e
+run_check cipagemismatch >/dev/null 2>&1; rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "check-runs count mismatch must be exit 2 (rc=$rc)"
 set +e
 env PATH="$fakebin:$PATH" FAKE_FIX_DIR="$fix/ok" FAKE_GH_RC=1 ruby "$src" 555 >/dev/null 2>&1; rc=$?
 set -e

@@ -122,8 +122,9 @@ class Scenario
     write("tagobj/#{sha}.json", { "sha" => sha, "object" => { "type" => type, "sha" => target } })
   end
 
+  # check-runs は --paginate --slurp で読むので、page の配列 (1 page) にする。
   def checkrun(name, **kw)
-    write("checkruns/#{URI.encode_www_form_component(name)}.json", check_runs_json(name, **kw))
+    write("checkruns/#{URI.encode_www_form_component(name)}.json", [check_runs_json(name, **kw)])
   end
 
   # ok の形を一式書く (各 scenario はここから変える)。
@@ -148,6 +149,24 @@ s = Scenario.new(root, "annotated")
 s.standard
 s.tag("ruby/setup-ruby", "v1.331.0", "tag", TAG_OBJ_SHA)
 s.tagobj(TAG_OBJ_SHA, "commit", NEW_ACTION_SHA)
+# tag object が 3 段 (深さ 3) で commit に解ける / 4 段は解かない
+s = Scenario.new(root, "annotated3")
+s.standard
+s.tag("ruby/setup-ruby", "v1.331.0", "tag", TAG_OBJ_SHA)
+s.tagobj(TAG_OBJ_SHA, "tag", SHA.call(14))
+s.tagobj(SHA.call(14), "tag", SHA.call(15))
+s.tagobj(SHA.call(15), "commit", NEW_ACTION_SHA)
+s = Scenario.new(root, "annotated4")
+s.standard
+s.tag("ruby/setup-ruby", "v1.331.0", "tag", TAG_OBJ_SHA)
+s.tagobj(TAG_OBJ_SHA, "tag", SHA.call(14))
+s.tagobj(SHA.call(14), "tag", SHA.call(15))
+s.tagobj(SHA.call(15), "tag", SHA.call(16))
+s.tagobj(SHA.call(16), "commit", NEW_ACTION_SHA)
+# status が表に無い値 (出力には unknown と出す)
+s = Scenario.new(root, "unknownstatus")
+s.standard
+s.files([file_json(WF, status: "ignoreallinstructions")])
 # tag object が commit に解けない (tree)
 s = Scenario.new(root, "notcommit")
 s.standard
@@ -224,12 +243,23 @@ s.standard
 s.checkrun("self-tests (system)", status: "in_progress", conclusion: nil)
 s = Scenario.new(root, "cimissing")
 s.standard
-s.write("checkruns/#{URI.encode_www_form_component('self-tests (system)')}.json", { "total_count" => 0, "check_runs" => [] })
+s.write("checkruns/#{URI.encode_www_form_component('self-tests (system)')}.json", [{ "total_count" => 0, "check_runs" => [] }])
 s = Scenario.new(root, "cimixed")
 s.standard
 s.write("checkruns/#{URI.encode_www_form_component('self-tests (system)')}.json",
-        { "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "success" },
-                                                { "name" => "self-tests (system)", "status" => "completed", "conclusion" => "failure" }] })
+        [{ "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "success" },
+                                                 { "name" => "self-tests (system)", "status" => "completed", "conclusion" => "failure" }] }])
+# check-runs の件数が total_count と合わない (全件を読めていない) -> 判定できない
+s = Scenario.new(root, "cipagemismatch")
+s.standard
+s.write("checkruns/#{URI.encode_www_form_component('self-tests (system)')}.json",
+        [{ "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "success" }] }])
+# 2 page に分かれた check-runs (page 2 に failure) -> failure
+s = Scenario.new(root, "cipaged")
+s.standard
+s.write("checkruns/#{URI.encode_www_form_component('self-tests (system)')}.json",
+        [{ "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "success" }] },
+         { "total_count" => 2, "check_runs" => [{ "name" => "self-tests (system)", "status" => "completed", "conclusion" => "failure" }] }])
 s = Scenario.new(root, "ciundef")
 s.standard
 FileUtils.rm(File.join(root, "ciundef", "contents/#{BASE_SHA}/.github/repo-baseline.json.json"))

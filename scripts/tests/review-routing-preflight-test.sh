@@ -439,8 +439,9 @@ case "$out" in *"INJECTION-CANARY"*) fail "output must not echo the PR title / b
 case "$out" in *"STDERR-CANARY"*) fail "gh の stderr を親の出力へ流してはいけない: $out" ;; esac
 out=$(run_pf_pull "$tmp/fx-pull-bot1.json" "$tmp/fx-bot-ok.json" 555 2>/dev/null)
 expected="commit 00000000: bot(dependabot)
+head: $(printf '%040x' 1)
 reviewer: claude (author=bot(dependabot), 1 commit(s))"
-[ "$out" = "$expected" ] || fail "dependabot stdout must be the closed labels only: $out"
+[ "$out" = "$expected" ] || fail "dependabot stdout must be the closed labels and the verified head: $out"
 # pulls/<n> を commits より先に読む (PR 単位で分岐を決める)
 first=$(sed -n 1p "$tmp/gh-argv.log")
 case "$first" in "api repos/{owner}/{repo}/pulls/555") ;; *) fail "the PR itself must be read first: $first" ;; esac

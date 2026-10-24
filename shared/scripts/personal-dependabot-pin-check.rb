@@ -48,6 +48,8 @@ module DependabotPinCheck
   # 出力に載せてよい file の path (workflow の直下の file。名前は規則の文字だけ)。外れる path は確かめず、名前も出さない。
   SAFE_PATH_RE = %r{\A\.github/workflows/[A-Za-z0-9][A-Za-z0-9._-]*\.(?:yml|yaml)\z}.freeze
   BASELINE_PATH = ".github/repo-baseline.json"
+  # GitHub の PR の file の status の閉じた表 (modified 以外。出力に載せるため)。表に無い値は unknown と出す。
+  FILE_STATUSES = %w[added removed renamed copied changed unchanged].freeze
   # GitHub の job の名前の規則と、出力に載せてよい check の名前 (ci-check と同じ)。
   JOB_ID_RE = /\A[A-Za-z_][A-Za-z0-9_-]*\z/.freeze
   SAFE_CHECK_NAME_RE = %r{\A[A-Za-z0-9_][A-Za-z0-9 _.()/,:+-]{0,99}\z}.freeze
@@ -116,13 +118,21 @@ module DependabotPinCheck
       parse(out)
     end
 
-    # array の endpoint を全 page 読んで flatten して返す (--paginate --slurp。preflight と同じ)。
-    def list(path)
+    # endpoint を全 page 読み、page ごとの応答の配列を返す (--paginate --slurp。preflight と同じ)。
+    def list_pages(path)
       out, _err, status = run(["gh", "api", "--paginate", "--slurp", path])
       raise RunError, "gh api が失敗しました (PR 番号 / 認証 / --repo を確認)" unless status.success?
 
       pages = parse(out)
-      raise RunError, "gh の応答が page 配列ではありません" unless pages.is_a?(Array) && pages.all? { |p| p.is_a?(Array) }
+      raise RunError, "gh の応答が page 配列ではありません" unless pages.is_a?(Array)
+
+      pages
+    end
+
+    # array の endpoint を全 page 読んで flatten して返す。
+    def list(path)
+      pages = list_pages(path)
+      raise RunError, "gh の応答が page 配列ではありません" unless pages.all? { |p| p.is_a?(Array) }
 
       pages.flatten(1)
     end
@@ -272,7 +282,10 @@ module DependabotPinCheck
     unless path.match?(SAFE_PATH_RE)
       return [[label(false, "#{WORKFLOW_DIR}/ の外か名前が規則の外の file 1 つ: not-workflow-file (名前は出さない)")], []]
     end
-    return [[label(false, "#{path}: not-modified (#{file['status'].match?(/\A[a-z]+\z/) ? file['status'] : 'status'})")], []] unless file["status"] == "modified"
+    unless file["status"] == "modified"
+      status = FILE_STATUSES.include?(file["status"]) ? file["status"] : "unknown"
+      return [[label(false, "#{path}: not-modified (#{status})")], []]
+    end
 
     begin
       old_text = read_content(api, base_path, path, pull[:base_sha])
@@ -454,21 +467,19 @@ module DependabotPinCheck
     return :not_found if ref.nil?
 
     object = ref.is_a?(Hash) ? ref["object"] : nil
-    MAX_TAG_DEPTH.times do
+    depth = 0
+    loop do
       raise RunError, "tag の応答の形が外れます" unless object.is_a?(Hash) && object["sha"].is_a?(String) && object["sha"].match?(SHA_RE)
+      return object["sha"] if object["type"] == "commit"
+      # tag object の解決は MAX_TAG_DEPTH 回まで。解いた先の確認は回数と分けて行う (3 段の tag の先の commit も確かめる)。
+      return :not_commit unless object["type"] == "tag" && depth < MAX_TAG_DEPTH
 
-      case object["type"]
-      when "commit" then return object["sha"]
-      when "tag"
-        tag_obj = api.get("repos/#{owner_repo}/git/tags/#{object['sha']}", allow_404: true)
-        return :not_commit if tag_obj.nil?
+      depth += 1
+      tag_obj = api.get("repos/#{owner_repo}/git/tags/#{object['sha']}", allow_404: true)
+      return :not_commit if tag_obj.nil?
 
-        object = tag_obj.is_a?(Hash) ? tag_obj["object"] : nil
-      else
-        return :not_commit
-      end
+      object = tag_obj.is_a?(Hash) ? tag_obj["object"] : nil
     end
-    :not_commit
   end
 
   # base の repo-baseline.json の required_checks を必要な集合とし、head の check-runs で各 check の結果を見る。
@@ -503,13 +514,17 @@ module DependabotPinCheck
     nil
   end
 
-  # head の check-runs のうち名前が一致するもの (最新の attempt) を見る。無ければ missing、1 つでも終わっていなければ
-  # pending、1 つでも success でなければ failure、すべて completed + success なら success。
+  # head の check-runs のうち名前が一致するもの (最新の attempt) を全 page 読む。件数が total_count と合わなければ判定しない。
+  # 無ければ missing、1 つでも終わっていなければ pending、1 つでも success でなければ failure、すべて completed + success なら
+  # success。
   def check_run_state(api, base_path, head_sha, name)
     query = URI.encode_www_form("check_name" => name, "per_page" => PER_PAGE)
-    obj = api.get("#{base_path}/commits/#{head_sha}/check-runs?#{query}")
-    runs = obj.is_a?(Hash) ? obj["check_runs"] : nil
-    raise RunError, "check-runs の応答の形が外れます" unless runs.is_a?(Array) && runs.all? { |r| r.is_a?(Hash) }
+    pages = api.list_pages("#{base_path}/commits/#{head_sha}/check-runs?#{query}")
+    raise RunError, "check-runs の応答の形が外れます" unless !pages.empty? && pages.all? { |p| p.is_a?(Hash) && p["check_runs"].is_a?(Array) && p["total_count"].is_a?(Integer) }
+
+    runs = pages.flat_map { |p| p["check_runs"] }
+    raise RunError, "check-runs の応答の形が外れます" unless runs.all? { |r| r.is_a?(Hash) }
+    raise RunError, "check-runs の件数が total_count と一致しません (全件を読めない)" unless runs.size == pages.first["total_count"]
 
     runs = runs.select { |r| r["name"] == name }
     return "missing" if runs.empty?

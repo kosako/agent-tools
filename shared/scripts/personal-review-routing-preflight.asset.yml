@@ -15,7 +15,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:f821015716e37997cd6949b80af775464c943f5ca804eb238a2ee8da29e4ae7a
+  approved_build_id: sha256:ad4500aa9863be8778d3ee2142e04687929e4c0d5fa4dc5f8119dca7d94f7553
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-review-routing-preflight.rb
@@ -28,5 +28,6 @@ summary: >-
   系列表の正本はこの script)。混在・欠落・皆無・OpenCode の形の不正や系列の曖昧は fail-closed
   (exit 1)。PR の author が閉じた表の bot (Dependabot) なら trailer ではなく GitHub の API の印 (PR と全 commit の
   author が bot、GitHub の署名、親 1 つ、head と base が同じ repository、commit の数と head の一致) で判定し、
-  bot(dependabot) → Claude。表に無い bot・fork・印を満たさない commit は fail-closed で trailer の route へ戻さない (#553)。
+  bot(dependabot) → Claude (bot の route では検証済みの head の OID の行も出す)。表に無い bot・fork・印を満たさない commit は
+  fail-closed で trailer の route へ戻さない (#553)。
   出力は oid 短縮 + 閉じた表の分類ラベルのみで、untrusted な本文・author 名・OpenCode の provider/model を含めない。規範の正本は personal-review-request skill。
