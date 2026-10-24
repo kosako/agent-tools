@@ -16,7 +16,7 @@
   network に依存)、`scripts/probe-opencode-plugin.sh`(OpenCode plugin の前提の実機観測。`opencode` CLI と
   起動時の npm install の network に依存)で、どれも CI では実行しません
   ([scripts/README.md](../scripts/README.md) の冒頭が正本)。配布 script のうち `gh` を起動するのは
-  `personal-safe-gh`・`personal-packet` (publish / pull)・`personal-review-routing-preflight`・`personal-repo-baseline`・`personal-ci-check` (`--since` のときだけ)、`codex` を起動するのは
+  `personal-safe-gh`・`personal-packet` (publish / pull)・`personal-review-routing-preflight`・`personal-dependabot-pin-check`・`personal-repo-baseline`・`personal-ci-check` (`--since` のときだけ)、`codex` を起動するのは
   `personal-codex-worker-preflight` です。`personal-usage-reader` は、設定 file (`usage-reader.json`) に書かれた実行ファイルを
   起動します (依存はその実行ファイル次第。設定 file を置かない machine では読み取り口なしになる。[boundary-with-dotfiles.md](boundary-with-dotfiles.md)
   「残量の読み取り口の設定 (#385)」)。

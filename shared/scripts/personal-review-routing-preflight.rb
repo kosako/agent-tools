@@ -19,7 +19,8 @@
 # - bot の PR (#553): PR の author (`pulls/<n>` の user) が閉じた表 BOTS の bot なら、trailer ではなく GitHub の API の
 #   印で判定する。全 commit が「author が同じ bot (login / id / type)、committer が GitHub (web-flow)、GitHub の署名が
 #   verified かつ valid、親が 1 つ、message に Co-Authored-By が無い」で、head と base の repository が id と full_name で一致し (fork は拒否)、
-#   取得した commit が PR の commits の数と head.sha に一致するときだけ `bot(<name>)` → reviewer は表のとおり (exit 0)。
+#   取得した commit が PR の commits の数と head.sha に一致するときだけ `bot(<name>)` → reviewer は表のとおり (exit 0)。bot の
+#   route では `head: <検証済みの head の OID>` の行も出す (personal-dependabot-pin-check の対象と照合するため)。
 #   1 つでも外れれば fail-closed で、trailer の route へは戻さない (表に無い bot の PR も fail-closed)。表は github.com の
 #   account に対するもので、GH_HOST が別の host なら当てない。この印は「GitHub が bot として作った commit」の確認で、
 #   変更を生成した主体の証明ではない。PR の author が bot でなければ従来どおり trailer だけで判定する (出力は不変)。
@@ -375,6 +376,8 @@ module ReviewRoutingPreflight
       end
 
     oid_kinds.each { |oid, kind| puts "commit #{oid}: #{label(kind)}" }
+    # bot の route では、snapshot で確かめた head の OID を出す (pin の検査の対象と照合する。#553 の C)。人の PR の出力は変えない。
+    puts "head: #{pull["head"]["sha"]}" if pull_kind == :bot
     result = judge(oid_kinds)
     case result[:verdict]
     when :ok

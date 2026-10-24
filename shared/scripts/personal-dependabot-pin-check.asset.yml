@@ -1,0 +1,39 @@
+schema_version: 1
+name: personal-dependabot-pin-check
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #553 の 2 番目の PR (Dependabot の PR のうち GitHub Actions の pin の bump を決まった処理で確かめる) で
+# author≠reviewer レビューのうえ承認する。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:f90a663bd1049bf37527d8be854dd8d76c7c773aa324ace35b31aa27bc14a7bf
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-dependabot-pin-check.rb
+  format: text
+summary: >-
+  Dependabot の PR のうち GitHub Actions の pin (uses: owner/repo@<sha> # <tag>) の bump だけを決まった処理で確かめる
+  (#553 の C)。AI を使わず、何も書かない。gh api (GET) で pulls/<n>、pulls/<n>/files、base と head の contents、action の
+  repository の git/ref/tags (annotated は git/tags で type が commit になるまで、深さ 3 まで)、head の check-runs を page ごとに読む。
+  ok の条件は 4 つ: 全 file が .github/workflows/ 直下の *.yml / *.yaml の modified で、変わった行が uses の pin の行だけ
+  (旧 file の変わった uses の行を新 file の行に置き換えると新 file と byte 単位で一致。job と step の構造と各 uses の
+  owner/repo/path は前後で同じ。sha か tag の変わる行が 1 つ以上) / 新しい sha が宣言した tag の commit と一致し、版
+  (数値の tuple) が前に進む / base の .github/repo-baseline.json の required_checks (無い・空は not ok) が head の
+  check-runs ですべて completed かつ success / 最初と最後の pulls/<n> で head が動いていない。YAML は ci-check と同じ読み方
+  (文書 1 つ、深さ 64 まで、明示の tag と scalar でない key と merge key を拒む、key の重なりを拒む) で、uses は AST の
+  scalar だけを見る (run の中の文字列は見ない)。出力は閉じた label (pin-ok / pin-mismatch / tag-not-found /
+  version-not-forward / ref-changed / non-pin-change / structure-changed / not-workflow-file / ci <名前>: success|pending|
+  failure|missing / ci-undefined など) と規則の形に合う path:line・tag・check の名前だけで、patch・本文・gh の stderr は
+  出さない。routing (PR の author が bot か) は personal-review-routing-preflight が決め、この script は再判定しない。
+  この検査は参照の整合性と変更の範囲の確認で、依存先の安全の証明ではない。API は 1 回の実行で 80 回まで。exit 0 = ok /
+  1 = not ok / 2 = usage・gh の失敗・判定できない (head が動いた、応答の形が外れる、file が 50 を超える)。
+  (docs/dependabot-pin-check.md)

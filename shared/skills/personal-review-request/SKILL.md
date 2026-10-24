@@ -135,6 +135,16 @@ Dependabot の PR の commit には AI の trailer が無い。preflight は PR 
   release notes に破壊的な変更が無いか。結果の Independence は `cross-review verified (author=bot(dependabot))`。
 - 印は「GitHub が bot として作った commit である」ことの確認で、変更を生成した主体や依存先の安全の証明ではない。merge は
   人が行う (この skill は merge / approve をしない)。
+- **GitHub Actions の pin の bump は、決まった検査で AI の review を省ける (#553 の C)**: 配備済みの
+  `personal-dependabot-pin-check <PR番号> [--repo owner/repo]` (gh を起動する。引数は手順 1 の「値の受け渡し」と同じ規則) を
+  走らせ、出力の `target:` の head が、preflight が bot の route で出す `head:` の行の値 (preflight が検証した head の OID) と、
+  手順 1 の `head_oid` の両方と一致することを確かめる (1 つでも違えば C を使わず、下の Claude の review に進む。手順 1 の
+  値だけと照合しない: preflight と pin-check の間に head が動くと、preflight が検証していない head に C を当てうる)。exit 0 (`pin-check: ok`) なら、変更が `uses` の pin の行だけで、新しい SHA が宣言した tag の commit と
+  一致し、必要な CI (base の `.github/repo-baseline.json` の `required_checks`) がすべて success なので、AI の review を
+  省いて人に merge を頼んでよい。結果は手順 4 の形で PR に残す (verdict は `APPROVE`、finding はなし、Independence は
+  `deterministic check (dependabot pin)`。script の出力の label の行を添える)。exit 1 (not ok) か 2 (判定できない) なら、
+  この bullet は使わず、上の Claude の review に進む (not ok の理由は review の材料にする)。pin-check の ok を別の PR や
+  別の head に当てない。この検査は参照の整合性と変更の範囲の確認で、依存先の安全の証明ではない (`docs/dependabot-pin-check.md`)。
 
 ## review output contract
 
