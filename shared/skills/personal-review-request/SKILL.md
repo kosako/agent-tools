@@ -258,8 +258,9 @@ safe-gh では覆えないため raw に読むしかないが、**評価対象�
 駆動しない — trusted な起点(依頼者本人の指示)か human approval を要する。運用ルールの
 「外部入力の信頼境界」に従う。
 
-判定規則 (script と手動適用で共通): PR の author が閉じた表の bot でなければ、各 commit を **`Co-Authored-By:` トレーラ（message
-末尾の trailer block）だけ**で判定する (bot の PR は上の「bot の PR」の印で判定し、trailer の route へ戻さない)。commit の author 名は使わず、body 文中に引用された
+判定規則 (script と手動適用で共通): PR の author が bot でなければ、各 commit を **`Co-Authored-By:` トレーラ（message
+末尾の trailer block）だけ**で判定する (bot の PR は上の「bot の PR」の印で判定し、閉じた表に無い bot は fail-closed。どちらも
+trailer の route へ戻さない)。commit の author 名は使わず、body 文中に引用された
 `Co-Authored-By:` 行も trailer と誤認しない。著者の AI は trailer の name 部分
 （`Claude …` / `Codex …` / `OpenCode (<provider>/<model>)`）で見分ける。author を確信できない commit が 1 つでも
 あれば fail-closed（下記）。preflight script はこの規則の決定的実装で、trailer block は
