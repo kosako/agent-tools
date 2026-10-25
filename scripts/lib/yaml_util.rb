@@ -24,94 +24,78 @@ module YamlUtil
     data
   end
 
-  # skill の frontmatter 用: 上に加えて、明示の document marker と、値の後の同じ行の YAML のコメントを拒む。
+  # skill の frontmatter 用: 上に加えて、明示の document marker を拒み、形を 1 つに限り、値の後の同じ行の YAML の
+  # コメントを拒む。
   def self.load_frontmatter(content, path)
     data = safe_load(content, path)
     document = check_document!(content, data, path, allow_markers: false)
+    check_frontmatter_shape!(document.root, path)
     check_trailing_comments!(document.root, content, path)
     data
   end
 
-  # 値の後に、同じ行で YAML のコメントが続く形を拒む (#417)。引用符の無い plain scalar では、空白の後の `#` からが
-  # コメントになり、値がそこで黙って切れる (「packet #N」を含む description が `「packet` で切れ、配布先の skill の
-  # 一覧にも切れたまま載った)。引用符で囲んだ値と flow の collection (`[a]` / `{a: b}`) の後のコメントも、同じ形
-  # なので拒む。block scalar (`>` / `|`) は中の `#` も値の一部で切れず、終わりの位置が次の行の先頭になる (その行の
-  # 行全体のコメントを後ろのコメントと取り違える) ので見ない。block の collection は終わりの位置が同じく次の行に
-  # なるので、中の値をたどる。flow の collection は終わり (`]` / `}`) の後ろを見たうえで、中の値もたどる (frontmatter
-  # 全体を flow の mapping で書くと、中の plain な値が切れうる)。行全体のコメントは値を切らないので見ない。Psych の
-  # column は文字の単位なので、行は UTF-8 として切る (C locale で読んだ US-ASCII の文字列を byte の単位で切らない)。
+  # skill の frontmatter の key のうち、値を scalar に限るもの (check-manifests の SKILL_FRONTMATTER_KEYS と同じ)。
+  # ほかの key は check-manifests が key の段階で拒むので (#217 / #233 の診断を先に出すため)、ここでは値の形を見ない。
+  FRONTMATTER_SCALAR_KEYS = %w[name description].freeze
+
+  # skill の frontmatter の形を 1 つに限る (#417): top-level は block の mapping、key は行頭の plain な key、値に
+  # anchor を付けない、name と description の値は scalar。flow の mapping (`{...}`)・明示の key (`? a`)・anchor・
+  # collection の値は拒む。name と description はどちらも文字列なので、これで書けなくなるものは無い。下のコメントの
+  # 検査はこの形を前提にする (flow や明示の key では空の値の位置が次の区切りや次の行に飛び、位置だけでは確かめられない
+  # 形が review の round ごとに見つかった)。mapping でない frontmatter は check-manifests が報告する。
+  def self.check_frontmatter_shape!(root, path)
+    return unless root.is_a?(Psych::Nodes::Mapping)
+
+    unless root.style == Psych::Nodes::Mapping::BLOCK
+      raise DocumentError, "(#{path}): frontmatter must be a block mapping (no flow style `{...}`) #{at(root)}"
+    end
+    root.children.each_slice(2) do |key, value|
+      unless key.anchor.nil? && key.start_column.zero?
+        raise DocumentError, "(#{path}): frontmatter keys must be plain keys at the start of a line " \
+                             "(no `?` explicit keys or anchors) #{at(key)}"
+      end
+      raise DocumentError, "(#{path}): frontmatter values must not have anchors #{at(value)}" unless value.anchor.nil?
+      if FRONTMATTER_SCALAR_KEYS.include?(key.value) && !value.is_a?(Psych::Nodes::Scalar)
+        raise DocumentError, "(#{path}): frontmatter values must be scalars for #{key.value} " \
+                             "(no flow or block collections) #{at(value)}"
+      end
+    end
+  end
+
   # YAML (libyaml) が改行とみなす LF 以外の文字。CRLF の CR は LF と組で 1 つの改行なので除く。
   OTHER_LINE_BREAK_RE = /\r(?!\n)|[\u0085  ]/.freeze
+  BLOCK_SCALAR_STYLES = [Psych::Nodes::Scalar::LITERAL, Psych::Nodes::Scalar::FOLDED].freeze
 
+  # 値の後に、同じ行で YAML のコメントが続く形を拒む (#417)。引用符の無い plain scalar では、空白の後の `#` からが
+  # コメントになり、値がそこで黙って切れる (「packet #N」を含む description が `「packet` で切れ、配布先の skill の
+  # 一覧にも切れたまま載った)。値が `#` で始まると、値ごとコメントになって空の値になる。引用符で囲んだ値の後の
+  # コメントも、同じ形なので拒む。block scalar (`>` / `|`) は中の `#` も値の一部で切れず、終わりの位置が次の行の
+  # 先頭になる (その行の行全体のコメントを取り違える) ので見ない。行全体のコメントは値を切らないので見ない。
+  # 形 (上) を前提に、top-level の scalar の値の終わりの位置だけを見る。行は LF で分けるので、YAML が数える行と食い違う
+  # 改行 (単独の CR・NEL・LS・PS) は先に拒む。Psych の column は文字の単位なので、行は UTF-8 として切る (C locale で
+  # 読んだ US-ASCII の文字列を byte の単位で切らない)。
   def self.check_trailing_comments!(root, content, path)
+    return unless root.is_a?(Psych::Nodes::Mapping)
+
     text = content.dup.force_encoding(Encoding::UTF_8)
     raise DocumentError, "(#{path}): frontmatter is not valid UTF-8" unless text.valid_encoding?
-    # 行は LF で分けるので、YAML が数える行と食い違う改行 (単独の CR・NEL・LS・PS) があると、node の行番号が別の行を
-    # 指す (round 4 の F6)。この形は拒む。
     if text.match?(OTHER_LINE_BREAK_RE)
       raise DocumentError, "(#{path}): frontmatter has a line break other than LF / CRLF (CR, NEL, LS or PS)"
     end
 
     lines = text.lines
-    each_inline_value(root) do |node, key|
-      line_no, column = comment_position(lines, node, key)
-      next unless line_no
+    root.children.each_slice(2) do |_key, value|
+      # scalar でない値は、name と description なら上で拒み、ほかの key は check-manifests が拒む
+      next unless value.is_a?(Psych::Nodes::Scalar)
+      next if BLOCK_SCALAR_STYLES.include?(value.style)
 
-      raise DocumentError, "(#{path}): a YAML comment follows the value at line #{line_no + 1} column " \
-                           "#{column + 1}; the text after ` #` is dropped from a plain value (quote the value or " \
+      rest = lines[value.end_line].to_s.chomp[value.end_column..].to_s
+      next unless rest.lstrip.start_with?("#")
+
+      column = value.end_column + (rest.size - rest.lstrip.size) + 1
+      raise DocumentError, "(#{path}): a YAML comment follows the value at line #{value.end_line + 1} column " \
+                           "#{column}; the text after ` #` is dropped from a plain value (quote the value or " \
                            "remove the comment)"
-    end
-  end
-
-  # 値の後ろでコメントが始まる位置 ([行, column]。0 始まり) か nil。値が `#` で始まると、値ごとコメントになって空の
-  # 値になる。空の plain な値は、始まりの位置が次の区切りや次の行を指すことがある (flow の mapping の `{a: #c\n}`
-  # では次の行の `}`) ので、key の後ろから値の始まりまでの間も見る。`:` が key と別の行にある明示の key
-  # (`? a` の次の行に `: #c`) や、anchor の後 (`a: &x #c`) は、値の終わりの後ろで当たる。
-  def self.comment_position(lines, node, key)
-    if key && empty_plain?(node)
-      found = gap_comment(lines, key.end_line, key.end_column, node.start_line, node.start_column)
-      return found if found
-    end
-    rest = lines[node.end_line].to_s.chomp[node.end_column..].to_s
-    return nil unless rest.lstrip.start_with?("#")
-
-    [node.end_line, node.end_column + (rest.size - rest.lstrip.size)]
-  end
-
-  # (from_line, from_col) から (to_line, to_col) の手前までの text で、コメントが始まる位置 (`#` の前が空白か行頭)。
-  # key と値の間には indicator (`:` `?`)・空白・改行・コメントしか無い。
-  def self.gap_comment(lines, from_line, from_col, to_line, to_col)
-    (from_line..to_line).each do |line_no|
-      line = lines[line_no].to_s.chomp
-      first = line_no == from_line ? from_col : 0
-      last = line_no == to_line ? to_col : line.size
-      segment = line[first...last].to_s
-      index = segment =~ /(?:\A|\s)#/
-      next unless index
-
-      return [line_no, first + index + (segment[index] == "#" ? 0 : 1)]
-    end
-    nil
-  end
-
-  def self.empty_plain?(node)
-    node.is_a?(Psych::Nodes::Scalar) && node.value.empty? && node.style == Psych::Nodes::Scalar::PLAIN
-  end
-
-  BLOCK_SCALAR_STYLES = [Psych::Nodes::Scalar::LITERAL, Psych::Nodes::Scalar::FOLDED].freeze
-
-  # 終わりの位置が値の直後になる node (block scalar 以外の scalar、flow の collection) を、mapping の値なら key と
-  # 一緒に渡す。collection は、block でも flow でも中の値 (mapping は値の側。key は見ない) をたどる。
-  def self.each_inline_value(node, key = nil, &block)
-    case node
-    when Psych::Nodes::Scalar
-      yield node, key unless BLOCK_SCALAR_STYLES.include?(node.style)
-    when Psych::Nodes::Mapping
-      yield node, key if node.style == Psych::Nodes::Mapping::FLOW
-      node.children.each_slice(2) { |child_key, child| each_inline_value(child, child_key, &block) }
-    when Psych::Nodes::Sequence
-      yield node, key if node.style == Psych::Nodes::Sequence::FLOW
-      node.children.each { |child| each_inline_value(child, &block) }
     end
   end
 
