@@ -139,7 +139,9 @@ Dependabot の PR の commit には AI の trailer が無い。preflight は PR 
   `personal-dependabot-pin-check <PR番号> [--repo owner/repo]` (gh を起動する。引数は手順 1 の「値の受け渡し」と同じ規則) を
   走らせ、出力の `target:` の head が、preflight が bot の route で出す `head:` の行の値 (preflight が検証した head の OID) と、
   手順 1 の `head_oid` の両方と一致することを確かめる (1 つでも違えば C を使わず、下の Claude の review に進む。手順 1 の
-  値だけと照合しない: preflight と pin-check の間に head が動くと、preflight が検証していない head に C を当てうる)。exit 0 (`pin-check: ok`) なら、変更が `uses` の pin の行だけで、新しい SHA が宣言した tag の commit と
+  値だけと照合しない: preflight と pin-check の間に head が動くと、preflight が検証していない head に C を当てうる)。
+  `target:` の base も手順 1 の `base_oid` と一致することを確かめる (違えば手順 1 の対象の取得からやり直す。検査した
+  base と、結果の `Target` に書く base を食い違わせない)。exit 0 (`pin-check: ok`) なら、変更が `uses` の pin の行だけで、新しい SHA が宣言した tag の commit と
   一致し、必要な CI (base の `.github/repo-baseline.json` の `required_checks`) がすべて success なので、AI の review を
   省いて merge へ進んでよい (merge の規則は運用 instruction の「個人 project の GitHub の操作と merge」)。結果は手順 4 の形で PR に残す (verdict は `APPROVE`、finding はなし、Independence は
   `deterministic check (dependabot pin)`。script の出力の label の行を添える)。exit 1 (not ok) か 2 (判定できない) なら、
@@ -400,8 +402,9 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
 
 テンプレートは **`TEMPLATES.md` の「📋 レビュー結果」** を使います (verdict / finding summary /
 independence を別 field で書き、該当ゼロの severity は「なし」と書くか省略する。雛形の正本はそちら)。
-結果には、review の対象を `Target` の行に full の OID で残す (base ref・base OID・head OID)。Codex の route は executor の
-`Target` を写し、Claude の route と C は手順 1 で検証した値を書く。merge の前の照合 (運用 instruction の「個人 project の
+結果には、review の対象を `Target` の行に full の OID で残す (base ref・base OID・head OID)。値はどの route も手順 1 で
+検証したもの (C では、pin-check の `target:` と照合した後の値) を書く。Codex の route では、executor の `Target` (短い
+OID) がその値の前方一致であることを確かめ、違えば結果を使わない。merge の前の照合 (運用 instruction の「個人 project の
 GitHub の操作と merge」) は、この行の値で行う。
 
 投稿の前に、手順 2 と同じく本文を `personal-ja-style-check --stdin` と public-safety の gate に通す (#556、#413)。reviewer の

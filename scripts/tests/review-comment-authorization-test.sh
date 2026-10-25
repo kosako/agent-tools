@@ -118,6 +118,10 @@ unless templates.include?("**Target: base <base ref> <base OID> / head <head OID
 end
 check.call(request, "### 4. 結果を PR に投稿", "結果に対象を残す規則",
            "結果には、review の対象を `Target` の行に full の OID で残す (base ref・base OID・head OID)。")
+check.call(request, "### 4. 結果を PR に投稿", "Target の値の出所",
+           "値はどの route も手順 1 で検証したもの (C では、pin-check の `target:` と照合した後の値) を書く。")
+check.call(request, "### bot の PR (Dependabot)", "C の base の照合",
+           "`target:` の base も手順 1 の `base_oid` と一致することを確かめる (違えば手順 1 の対象の取得からやり直す。検査した base と、結果の `Target` に書く base を食い違わせない)。")
 
 abort "FAIL: review-comment-authorization\n  " + errors.join("\n  ") unless errors.empty?
 puts "ok: review-comment-authorization"
