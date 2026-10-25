@@ -11,8 +11,8 @@ AI を使いません。何も書きません。GitHub の API (`gh api`、GET �
 相互レビューの routing では、Dependabot の PR は `personal-review-routing-preflight` が GitHub の API の印で `bot(dependabot)`
 と判定し、reviewer は Claude です (`personal-review-request` の「bot の PR」)。この script は、その PR の変更が GitHub Actions
 の pin の bump だけで、pin が宣言した tag の commit と一致し、必要な CI が通っていることを確かめます。preflight が
-`bot(dependabot)` を返したのと同じ head で ok なら、AI の review を省いて人が merge してよい、というのが C の規則です
-(規範の正本は `personal-review-request`)。
+`bot(dependabot)` を返したのと同じ head で ok なら、AI の review を省いて merge へ進んでよい、というのが C の規則です
+(規範の正本は `personal-review-request`。merge の規則は運用 instruction の「個人 project の GitHub の操作と merge」)。
 
 - routing (PR の author が bot か) はこの script では再判定しません。preflight の結果と、この script の出力の `target:` の
   head を人 (または caller) が照合します。pin-check の ok を別の PR や別の head に当てません。

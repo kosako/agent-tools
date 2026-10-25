@@ -336,7 +336,7 @@ fix モードの入口 (b) (起票済みの所見から。`FIX.md`) の run は�
 ```
 
 - `status` は `planned` → `editing` → `committed` → `pushed` → `pr_created` → `reviewing` → `review_complete`、または
-  `blocked`。merge は人がするので、次の run が PR の状態を読んで `merged` を補う。
+  `blocked`。merge は sweep の外で行うので、次の run が PR の状態を読んで `merged` を補う。
 - 外部に書く操作 (push、PR、コメント、review の round の起動) の前に段階 (round なら識別子) を、後に結果を保存する。
   `fix_cap` の累計は、この file の `run_id` が同じ (再開を含む) 記録のうち PR を作ったもの (`pr_created` 以降) を数える
   (v2 は 1 所見 = 1 PR なので記録数 = PR 数)。
