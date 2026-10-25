@@ -40,8 +40,19 @@ module YamlUtil
   # なるので、中の値をたどる。flow の collection は終わり (`]` / `}`) の後ろを見たうえで、中の値もたどる (frontmatter
   # 全体を flow の mapping で書くと、中の plain な値が切れうる)。行全体のコメントは値を切らないので見ない。Psych の
   # column は文字の単位なので、行は UTF-8 として切る (C locale で読んだ US-ASCII の文字列を byte の単位で切らない)。
+  # YAML (libyaml) が改行とみなす LF 以外の文字。CRLF の CR は LF と組で 1 つの改行なので除く。
+  OTHER_LINE_BREAK_RE = /\r(?!\n)|[\u0085  ]/.freeze
+
   def self.check_trailing_comments!(root, content, path)
-    lines = content.dup.force_encoding(Encoding::UTF_8).lines
+    text = content.dup.force_encoding(Encoding::UTF_8)
+    raise DocumentError, "(#{path}): frontmatter is not valid UTF-8" unless text.valid_encoding?
+    # 行は LF で分けるので、YAML が数える行と食い違う改行 (単独の CR・NEL・LS・PS) があると、node の行番号が別の行を
+    # 指す (round 4 の F6)。この形は拒む。
+    if text.match?(OTHER_LINE_BREAK_RE)
+      raise DocumentError, "(#{path}): frontmatter has a line break other than LF / CRLF (CR, NEL, LS or PS)"
+    end
+
+    lines = text.lines
     each_inline_value(root) do |node, key|
       line_no, column = comment_position(lines, node, key)
       next unless line_no
@@ -52,23 +63,35 @@ module YamlUtil
     end
   end
 
-  # 値の後ろでコメントが始まる位置 ([行, column]。0 始まり) か nil。空の plain な値 (`key:` の後に何も無い) は、
-  # 終わりの位置が次の区切りや次の行を指す (flow の mapping の `{a: #c\n}` では `}` の位置になる) ので、key の後ろ
-  # (`:` の後) を見る。値が `#` で始まると、値ごとコメントになって空になる。
+  # 値の後ろでコメントが始まる位置 ([行, column]。0 始まり) か nil。値が `#` で始まると、値ごとコメントになって空の
+  # 値になる。空の plain な値は、始まりの位置が次の区切りや次の行を指すことがある (flow の mapping の `{a: #c\n}`
+  # では次の行の `}`) ので、key の後ろから値の始まりまでの間も見る。`:` が key と別の行にある明示の key
+  # (`? a` の次の行に `: #c`) や、anchor の後 (`a: &x #c`) は、値の終わりの後ろで当たる。
   def self.comment_position(lines, node, key)
-    line_no = node.end_line
-    start = node.end_column
     if key && empty_plain?(node)
-      line_no = key.end_line
-      colon = lines[line_no].to_s.chomp[key.end_column..].to_s[/\A\s*:\s*/]
-      return nil unless colon
-
-      start = key.end_column + colon.size
+      found = gap_comment(lines, key.end_line, key.end_column, node.start_line, node.start_column)
+      return found if found
     end
-    rest = lines[line_no].to_s.chomp[start..].to_s
+    rest = lines[node.end_line].to_s.chomp[node.end_column..].to_s
     return nil unless rest.lstrip.start_with?("#")
 
-    [line_no, start + (rest.size - rest.lstrip.size)]
+    [node.end_line, node.end_column + (rest.size - rest.lstrip.size)]
+  end
+
+  # (from_line, from_col) から (to_line, to_col) の手前までの text で、コメントが始まる位置 (`#` の前が空白か行頭)。
+  # key と値の間には indicator (`:` `?`)・空白・改行・コメントしか無い。
+  def self.gap_comment(lines, from_line, from_col, to_line, to_col)
+    (from_line..to_line).each do |line_no|
+      line = lines[line_no].to_s.chomp
+      first = line_no == from_line ? from_col : 0
+      last = line_no == to_line ? to_col : line.size
+      segment = line[first...last].to_s
+      index = segment =~ /(?:\A|\s)#/
+      next unless index
+
+      return [line_no, first + index + (segment[index] == "#" ? 0 : 1)]
+    end
+    nil
   end
 
   def self.empty_plain?(node)

@@ -74,7 +74,8 @@ directory 形式の配置ルールと、両 source 形式に共通する frontma
   空白の後の `#` で黙って切れ、配布先の skill の一覧にも切れたまま載るため。`#` を含む値は引用符で囲む。
   引用符で囲んだ値と flow の値 (`[a]` / `{a: b}`) の後のコメント、flow の中の値の後のコメント、空の値の後の
   コメント (`#` で始まる値は、値ごとコメントになる) も拒否する。block scalar (`>` / `|`) の中の `#` と、
-  行全体のコメントは値を切らないので通す。
+  行全体のコメントは値を切らないので通す。行の数え方を YAML と揃えるため、LF と CRLF 以外の改行 (単独の CR・NEL・
+  LS・PS) を含む frontmatter も拒否する。
 - **Codex に skill として生成する場合、非空 string の `description` も必須** (#234)。
   [Codex の skill 契約](https://learn.chatgpt.com/docs/build-skills) に合わせ、frontmatter の無い
   skill は directory でも単一 source でも拒否する。build は manifest から frontmatter を生成しない

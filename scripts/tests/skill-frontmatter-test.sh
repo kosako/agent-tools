@@ -170,6 +170,28 @@ comment = "a YAML comment follows the value"
   check_case(format, "quoted-empty-value-comment",
              valid.sub("description: Public fixture", "description: \"\" # note"),
              %w[claude-code], comment)
+  # `:` が key と別の行にある明示の key と、anchor の後のコメント (round 4 の F5)
+  check_case(format, "explicit-key-empty-value-comment",
+             valid.sub("description: Public fixture", "? description\n: #N を委譲する"),
+             %w[claude-code], comment)
+  check_case(format, "anchor-then-comment",
+             valid.sub("description: Public fixture", "description: &d #N を委譲する"),
+             %w[claude-code], comment)
+  # 明示の key の後のコメントは、引用符で囲んだ空の値を切らないので通す (空の plain な値とは区別する)
+  check_case(format, "explicit-key-comment-quoted-empty",
+             valid.sub("description: Public fixture", "? description # note\n: \"\""),
+             %w[claude-code], nil)
+  # 空の値の後の行全体のコメントは、値を切らないので通す
+  check_case(format, "empty-value-then-whole-line-comment",
+             "---\nname: personal-frontmatter\ndescription:\n# a whole-line comment\n---\n\n# Fixture\n",
+             %w[claude-code], nil)
+  # YAML が改行とみなす LF 以外の文字 (単独の CR・NEL・LS・PS) があると、行番号が食い違うので拒む (round 4 の F6)。
+  # CRLF は通す (上の crlf の case)。
+  ["\r", "\u0085", " ", " "].each_with_index do |br, i|
+    check_case(format, "other-line-break-#{i}",
+               "---\nname: personal-frontmatter#{br}description: packet #N を委譲する\n---\n\n# Fixture\n",
+               %w[codex claude-code], "line break other than LF / CRLF")
+  end
   check_case(format, "flow-empty-value",
              "---\n{name: personal-frontmatter, description: }\n---\n\n# Fixture\n",
              %w[claude-code], nil)
