@@ -104,7 +104,8 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
 - `--max-turns` (既定 2) の打ち切り (`result.subtype == "error_max_turns"`) は **観測完了**として
   `status: ok` にする。routing の判断 (Skill 起動) は最初の turn で出るので、skill が起動した後の
   作業は走らせない (baseline 24 case のうち 20 case がこの形で終わった)。
-- `listing_chars`: 候補 skill の description の合計文字数 (毎 turn 載る静的な context 量の指標)。
+- `listing_chars`: 候補 skill の description の合計文字数 (毎 turn 載る静的な context 量の指標)。frontmatter を
+  YAML として読んだ値で数える (#417。YAML のコメントで切れた description は、切れた後の長さになる)。
   Claude Code は description を 1,536 文字で切り、Codex は listing 全体を context の 2% または
   8,000 文字に収める (2026-09-19 時点の公式 docs)。
 - `status`: CLI が非ゼロで終わった run (上の `--max-turns` の打ち切りを除く)、`--timeout` で kill した run、CLI が

@@ -1,6 +1,6 @@
 ---
 name: personal-codex-worker
-description: Claude が orchestrator として packet の Issue を Codex の worker に委譲し、herdr の pane で codex exec を無人起動して結果を packet に転記する delegation executor skill。「packet #N を Codex に委譲して」「Codex worker で実装して」のように orchestrator が明示したときだけ使う。preflight が BLOCKED (非対称・capability 不足) なら起動せず人に返す。review 実行は personal-codex-review、PR lifecycle は personal-review-request、packet 規約は docs/agent-packets.md。
+description: "Claude が orchestrator として packet の Issue を Codex の worker に委譲し、herdr の pane で codex exec を無人起動して結果を packet に転記する delegation executor skill。「packet #N を Codex に委譲して」「Codex worker で実装して」のように orchestrator が明示したときだけ使う。preflight が BLOCKED (非対称・capability 不足) なら起動せず人に返す。review 実行は personal-codex-review、PR lifecycle は personal-review-request、packet 規約は docs/agent-packets.md。"
 ---
 
 # personal-codex-worker

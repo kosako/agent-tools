@@ -24,11 +24,96 @@ module YamlUtil
     data
   end
 
-  # skill の frontmatter 用: 上に加えて、明示の document marker を拒む。
+  # skill の frontmatter 用: 上に加えて、明示の document marker を拒み、形を 1 つに限り、値の後の同じ行の YAML の
+  # コメントを拒む。
   def self.load_frontmatter(content, path)
     data = safe_load(content, path)
-    check_document!(content, data, path, allow_markers: false)
+    document = check_document!(content, data, path, allow_markers: false)
+    check_frontmatter_shape!(document.root, path)
+    check_trailing_comments!(document.root, content, path)
     data
+  end
+
+  # skill の frontmatter の key のうち、値を scalar に限るもの (check-manifests の SKILL_FRONTMATTER_KEYS と同じ)。
+  # ほかの key は check-manifests が key の段階で拒むので (#217 / #233 の診断を先に出すため)、ここでは値の形を見ない。
+  FRONTMATTER_SCALAR_KEYS = %w[name description].freeze
+
+  # skill の frontmatter の形を 1 つに限る (#417): top-level は block の mapping、key は行頭 (`?` の明示の key は不可。
+  # 引用符の key は値で照合するので許し、Claude Code の機能の key を引用符で書いても #233 の診断に届く)、値に
+  # anchor を付けない、name と description の値は scalar。flow の mapping (`{...}`)・明示の key (`? a`)・anchor・
+  # collection の値は拒む。name と description はどちらも文字列なので、これで書けなくなるものは無い。下のコメントの
+  # 検査はこの形を前提にする (flow や明示の key では空の値の位置が次の区切りや次の行に飛び、位置だけでは確かめられない
+  # 形が review の round ごとに見つかった)。mapping でない frontmatter は check-manifests が報告する。
+  def self.check_frontmatter_shape!(root, path)
+    return unless root.is_a?(Psych::Nodes::Mapping)
+
+    unless root.style == Psych::Nodes::Mapping::BLOCK
+      raise DocumentError, "(#{path}): frontmatter must be a block mapping (no flow style `{...}`) #{at(root)}"
+    end
+    root.children.each_slice(2) do |key, value|
+      unless key.anchor.nil? && key.start_column.zero?
+        raise DocumentError, "(#{path}): frontmatter keys must start at the beginning of a line " \
+                             "(no `?` explicit keys or anchors) #{at(key)}"
+      end
+      raise DocumentError, "(#{path}): frontmatter values must not have anchors #{at(value)}" unless value.anchor.nil?
+      if FRONTMATTER_SCALAR_KEYS.include?(key.value) && !value.is_a?(Psych::Nodes::Scalar)
+        raise DocumentError, "(#{path}): frontmatter values must be scalars for #{key.value} " \
+                             "(no flow or block collections) #{at(value)}"
+      end
+    end
+  end
+
+  # YAML (libyaml) が改行とみなす LF 以外の文字。CRLF の CR は LF と組で 1 つの改行なので除く。
+  OTHER_LINE_BREAK_RE = /\r(?!\n)|[\u0085  ]/.freeze
+  BLOCK_SCALAR_STYLES = [Psych::Nodes::Scalar::LITERAL, Psych::Nodes::Scalar::FOLDED].freeze
+
+  # 値の後に、同じ行で YAML のコメントが続く形を拒む (#417)。引用符の無い plain scalar では、空白の後の `#` からが
+  # コメントになり、値がそこで黙って切れる (「packet #N」を含む description が `「packet` で切れ、配布先の skill の
+  # 一覧にも切れたまま載った)。値が `#` で始まると、値ごとコメントになって空の値になる。引用符で囲んだ値の後の
+  # コメントも、同じ形なので拒む。block scalar (`>` / `|`) は中の `#` も値の一部で切れず、終わりの位置が次の行の
+  # 先頭になる (その行の行全体のコメントを取り違える) ので見ない。行全体のコメントは値を切らないので見ない。
+  # 形 (上) を前提に、name と description の値の前後だけを見る (下の comment_position)。行は LF で分けるので、YAML が数える行と食い違う
+  # 改行 (単独の CR・NEL・LS・PS) は先に拒む。Psych の column は文字の単位なので、行は UTF-8 として切る (C locale で
+  # 読んだ US-ASCII の文字列を byte の単位で切らない)。
+  def self.check_trailing_comments!(root, content, path)
+    return unless root.is_a?(Psych::Nodes::Mapping)
+
+    text = content.dup.force_encoding(Encoding::UTF_8)
+    raise DocumentError, "(#{path}): frontmatter is not valid UTF-8" unless text.valid_encoding?
+    if text.match?(OTHER_LINE_BREAK_RE)
+      raise DocumentError, "(#{path}): frontmatter has a line break other than LF / CRLF (CR, NEL, LS or PS)"
+    end
+
+    lines = text.lines
+    root.children.each_slice(2) do |key, value|
+      # name と description だけを見る。ほかの key は check-manifests が key の段階で拒み、#233 の診断を先に出す。
+      # name と description の値は、上の形の検査で scalar に限っている。
+      next unless FRONTMATTER_SCALAR_KEYS.include?(key.value)
+
+      line_no, column = comment_position(lines, key, value)
+      next unless line_no
+
+      raise DocumentError, "(#{path}): a YAML comment follows the value at line #{line_no + 1} column " \
+                           "#{column + 1}; the text after ` #` is dropped from a plain value (quote the value or " \
+                           "remove the comment)"
+    end
+  end
+
+  # 値の前後でコメントが始まる位置 ([行, column]。0 始まり) か nil。値が key より後の行から始まるときは、key の行の
+  # `:` の後ろのコメントを見る (`a: #x` の次の行に続きを書くと、YAML は `#x` を捨てて次の行だけを値にする)。key と
+  # 値の間の行全体のコメントは値を切らないので見ない。値の後ろは、block scalar 以外で、値の終わりの位置から見る。
+  def self.comment_position(lines, key, value)
+    if value.start_line > key.end_line
+      after_key = lines[key.end_line].to_s.chomp[key.end_column..].to_s
+      colon = after_key[/\A\s*:\s*(?=#)/]
+      return [key.end_line, key.end_column + colon.size] if colon
+    end
+    return nil if BLOCK_SCALAR_STYLES.include?(value.style)
+
+    rest = lines[value.end_line].to_s.chomp[value.end_column..].to_s
+    return nil unless rest.lstrip.start_with?("#")
+
+    [value.end_line, value.end_column + (rest.size - rest.lstrip.size)]
   end
 
   def self.safe_load(content, path)
@@ -40,7 +125,7 @@ module YamlUtil
   end
 
   # 構文 error と alias は safe_load が path 入りの message で先に出すので、ここは構文が通った stream だけを
-  # 見る。data は同じ content を safe_load した値で、node の木と並べて辿る。
+  # 見る。data は同じ content を safe_load した値で、node の木と並べて辿る。検査した文書 (node) を返す。
   def self.check_document!(content, data, path, allow_markers:)
     documents = Psych.parse_stream(content, filename: path).children
     unless documents.size == 1
@@ -53,6 +138,7 @@ module YamlUtil
     end
 
     check_tree!(document.root, data, path)
+    document
   end
 
   # node の木と load 後の値を並べて辿る。

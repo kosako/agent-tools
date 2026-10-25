@@ -46,12 +46,18 @@ missing_description = "---\nname: personal-frontmatter\n---\n\n# Fixture\n"
   check_case(format, "crlf", valid.gsub("\n", "\r\n"), %w[codex], nil)
   check_case(format, "missing-description", missing_description, %w[codex], "non-empty string description")
   check_case(format, "claude-description-optional", missing_description, %w[claude-code], nil)
-  ["''", "'   '", "null", "42", "[]", "{}"].each do |value|
+  ["''", "'   '", "null", "42"].each do |value|
     content = valid.sub("description: Public fixture", "description: #{value}")
     check_case(format, "description-#{value}", content, %w[codex], "non-empty string description")
   end
+  # collection の値は、frontmatter の形の検査 (#417) が先に拒む
+  ["[]", "{}"].each do |value|
+    content = valid.sub("description: Public fixture", "description: #{value}")
+    check_case(format, "description-#{value}", content, %w[codex], "frontmatter values must be scalars")
+  end
   check_case(format, "missing-name", valid.sub("name: personal-frontmatter\n", ""), %w[codex], "non-empty string name")
-  check_case(format, "name-type", valid.sub("name: personal-frontmatter", "name: []"), %w[codex], "non-empty string name")
+  check_case(format, "name-type", valid.sub("name: personal-frontmatter", "name: 42"), %w[codex], "non-empty string name")
+  check_case(format, "name-collection", valid.sub("name: personal-frontmatter", "name: []"), %w[codex], "frontmatter values must be scalars")
   check_case(format, "identity", valid.sub("name: personal-frontmatter", "name: personal-other"), %w[claude-code], "does not match manifest name")
   check_case(format, "closing-marker", "---\nname: personal-frontmatter\n", %w[codex], "closing --- marker")
   check_case(format, "yaml", "---\nname: [\n---\n", %w[codex], "YAML error")
@@ -96,6 +102,120 @@ end
              valid.sub("description: Public fixture", "description: Public fixture\ntrue: a\nyes: b"),
              %w[codex claude-code], "collide after YAML resolution")
 end
+# 値の後の同じ行の YAML のコメントは拒む (#417)。引用符の無い値は空白の後の `#` で黙って切れ、配布先の一覧にも
+# 切れたまま載る (personal-codex-worker の description が「packet #N」の手前で切れていた)。
+comment = "a YAML comment follows the value"
+%w[directory markdown].each do |format|
+  check_case(format, "plain-trailing-comment",
+             valid.sub("description: Public fixture", "description: 「packet #N を」委譲する"),
+             %w[codex claude-code], comment)
+  check_case(format, "quoted-trailing-comment",
+             valid.sub("description: Public fixture", "description: \"Public fixture\" # note"),
+             %w[codex claude-code], comment)
+  check_case(format, "multiline-plain-comment",
+             valid.sub("description: Public fixture", "description: Public\n  fixture #N here"),
+             %w[codex claude-code], comment)
+  check_case(format, "name-trailing-comment",
+             valid.sub("name: personal-frontmatter", "name: personal-frontmatter # x"),
+             %w[codex claude-code], comment)
+  check_case(format, "crlf-trailing-comment",
+             valid.sub("description: Public fixture", "description: Public #fixture").gsub("\n", "\r\n"),
+             %w[codex claude-code], comment)
+  # 値が key の次の行から始まると、key の行の `#` からは捨てられ、次の行だけが値になる (round 6 の F8)
+  check_case(format, "key-line-comment-then-next-line-value",
+             valid.sub("description: Public fixture", "description: #N を Codex に委譲する\n  実装作業の説明"),
+             %w[codex claude-code], comment)
+  # 値が `#` で始まると、値ごとコメントになって空の値になる (description の型を見ない Claude-only の skill でも拒む)
+  check_case(format, "empty-value-comment",
+             valid.sub("description: Public fixture", "description: #N を委譲する"),
+             %w[claude-code], comment)
+  check_case(format, "quoted-empty-value-comment",
+             valid.sub("description: Public fixture", "description: \"\" # note"),
+             %w[claude-code], comment)
+  # `#` を含んでも値を切らない形は通す: 引用符で囲んだ値、前に空白の無い `#`、block scalar の中の `#` の行、
+  # 行全体のコメント (block scalar の直後と空の値の後を含む)、block の indicator の後のコメント
+  check_case(format, "quoted-hash",
+             valid.sub("description: Public fixture", "description: \"「packet #N を」委譲する\""),
+             %w[codex claude-code], nil)
+  check_case(format, "hash-without-space",
+             valid.sub("description: Public fixture", "description: issue#417 fixture"),
+             %w[codex claude-code], nil)
+  check_case(format, "folded-hash",
+             valid.sub("description: Public fixture", "description: >\n  # not a comment\n  Public fixture"),
+             %w[codex claude-code], nil)
+  check_case(format, "whole-line-comment",
+             valid.sub("name: personal-frontmatter\n", "# a whole-line comment\nname: personal-frontmatter\n"),
+             %w[codex claude-code], nil)
+  %w[> |].each do |indicator|
+    check_case(format, "block-#{indicator}-then-whole-line-comment",
+               "---\nname: personal-frontmatter\ndescription: #{indicator}\n  Public fixture\n# a whole-line comment\n---\n\n# Fixture\n",
+               %w[codex claude-code], nil)
+  end
+  check_case(format, "block-header-comment",
+             valid.sub("description: Public fixture", "description: > # header comment\n  Public fixture"),
+             %w[codex claude-code], nil)
+  check_case(format, "next-line-value",
+             valid.sub("description: Public fixture", "description:\n  Public fixture"),
+             %w[codex claude-code], nil)
+  check_case(format, "whole-line-comment-before-next-line-value",
+             valid.sub("description: Public fixture", "description:\n# a whole-line comment\n  Public fixture"),
+             %w[codex claude-code], nil)
+  check_case(format, "empty-value-then-whole-line-comment",
+             "---\nname: personal-frontmatter\ndescription:\n# a whole-line comment\n---\n\n# Fixture\n",
+             %w[claude-code], nil)
+  # 形を 1 つに限る (review の round 2〜5 で、flow・明示の key・anchor・collection の値に、位置だけでは確かめられない
+  # 形が続いた)。top-level は block の mapping、key は行頭の plain な key、値は anchor の無い scalar。
+  check_case(format, "flow-root",
+             "---\n{name: personal-frontmatter, description: Public fixture}\n---\n\n# Fixture\n",
+             %w[codex claude-code], "frontmatter must be a block mapping")
+  check_case(format, "flow-root-whole-line-comment",
+             "---\n{name: personal-frontmatter,\n description:\n # a whole-line comment\n}\n---\n\n# Fixture\n",
+             %w[claude-code], "frontmatter must be a block mapping")
+  check_case(format, "explicit-key",
+             valid.sub("description: Public fixture", "? description\n: Public fixture"),
+             %w[codex claude-code], "frontmatter keys must start at the beginning of a line")
+  # 引用符の key は値で照合するので、引用符の description の後ろのコメントも拒む (round 6 の F9)
+  check_case(format, "quoted-key-trailing-comment",
+             valid.sub("description: Public fixture", "\"description\": Public #fixture"),
+             %w[codex claude-code], comment)
+  check_case(format, "anchored-key",
+             valid.sub("name: personal-frontmatter", "&k name: personal-frontmatter"),
+             %w[codex claude-code], "frontmatter keys must start at the beginning of a line")
+  check_case(format, "anchored-value",
+             valid.sub("description: Public fixture", "description: &d Public fixture"),
+             %w[codex claude-code], "frontmatter values must not have anchors")
+  { "flow-sequence-value" => "[Public fixture]", "flow-mapping-value" => "{text: Public fixture}",
+    "block-sequence-value" => "\n  - Public fixture" }.each do |label, value|
+    check_case(format, label, valid.sub("description: Public fixture", "description: #{value}"),
+               %w[claude-code], "frontmatter values must be scalars")
+  end
+  # name と description 以外の key の値の形とコメントは見ない。check-manifests が key の段階で拒み、#233 の診断を先に
+  # 出す (flow の list の後ろのコメントで、コメントの検査が先に当たらない)
+  check_case(format, "native-field-scalar-then-comment",
+             valid.sub("description: Public fixture", "description: Public fixture\nallowed-tools: Read # note"),
+             %w[claude-code], "unsupported Claude Code skill feature: allowed-tools")
+  check_case(format, "native-field-flow-list-then-comment",
+             valid.sub("description: Public fixture", "description: Public fixture\nallowed-tools: [Read, Grep] # note"),
+             %w[claude-code], "unsupported Claude Code skill feature: allowed-tools")
+  # YAML が改行とみなす LF 以外の文字 (単独の CR・NEL・LS・PS) があると、行番号が食い違うので拒む。CRLF は通す
+  # (上の crlf の case)。
+  ["\r", "\u0085", " ", " "].each_with_index do |br, i|
+    check_case(format, "other-line-break-#{i}",
+               "---\nname: personal-frontmatter#{br}description: packet #N を委譲する\n---\n\n# Fixture\n",
+               %w[codex claude-code], "line break other than LF / CRLF")
+  end
+end
+# Psych の column は文字の単位。C locale で読んだ (US-ASCII の) 文字列でも、行を UTF-8 として切って当てる
+# (byte の単位で切ると、日本語の後の ` #` を見落とす)。
+require File.join(scripts, "lib/yaml_util")
+ascii = lambda { |s| s.dup.force_encoding(Encoding::US_ASCII) }
+begin
+  YamlUtil.load_frontmatter(ascii.call("name: personal-frontmatter\ndescription: 日本語の「packet #N を」\n"), "fm")
+  abort "FAIL: a trailing comment after a non-ASCII plain value read as US-ASCII must be rejected"
+rescue YamlUtil::DocumentError => e
+  abort "FAIL: the comment must be located by characters: #{e.message}" unless e.message.include?("line 2 column 26;")
+end
+YamlUtil.load_frontmatter(ascii.call("name: personal-frontmatter\ndescription: \"日本語の「packet #N を」\"\n"), "fm")
 # 単一 file の skill も directory と同じ規則 (build は frontmatter を生成しない、#376)。
 %w[directory markdown].each do |format|
   check_case(format, "codex-frontmatter-required", "# Fixture\n", %w[codex], "must contain YAML frontmatter")
