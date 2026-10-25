@@ -42,30 +42,52 @@ module YamlUtil
   # column は文字の単位なので、行は UTF-8 として切る (C locale で読んだ US-ASCII の文字列を byte の単位で切らない)。
   def self.check_trailing_comments!(root, content, path)
     lines = content.dup.force_encoding(Encoding::UTF_8).lines
-    each_inline_value(root) do |node|
-      rest = lines[node.end_line].to_s.chomp[node.end_column..].to_s
-      next unless rest.lstrip.start_with?("#")
+    each_inline_value(root) do |node, key|
+      line_no, column = comment_position(lines, node, key)
+      next unless line_no
 
-      column = node.end_column + (rest.size - rest.lstrip.size) + 1
-      raise DocumentError, "(#{path}): a YAML comment follows the value at line #{node.end_line + 1} column " \
-                           "#{column}; the text after ` #` is dropped from a plain value (quote the value or " \
+      raise DocumentError, "(#{path}): a YAML comment follows the value at line #{line_no + 1} column " \
+                           "#{column + 1}; the text after ` #` is dropped from a plain value (quote the value or " \
                            "remove the comment)"
     end
   end
 
+  # 値の後ろでコメントが始まる位置 ([行, column]。0 始まり) か nil。空の plain な値 (`key:` の後に何も無い) は、
+  # 終わりの位置が次の区切りや次の行を指す (flow の mapping の `{a: #c\n}` では `}` の位置になる) ので、key の後ろ
+  # (`:` の後) を見る。値が `#` で始まると、値ごとコメントになって空になる。
+  def self.comment_position(lines, node, key)
+    line_no = node.end_line
+    start = node.end_column
+    if key && empty_plain?(node)
+      line_no = key.end_line
+      colon = lines[line_no].to_s.chomp[key.end_column..].to_s[/\A\s*:\s*/]
+      return nil unless colon
+
+      start = key.end_column + colon.size
+    end
+    rest = lines[line_no].to_s.chomp[start..].to_s
+    return nil unless rest.lstrip.start_with?("#")
+
+    [line_no, start + (rest.size - rest.lstrip.size)]
+  end
+
+  def self.empty_plain?(node)
+    node.is_a?(Psych::Nodes::Scalar) && node.value.empty? && node.style == Psych::Nodes::Scalar::PLAIN
+  end
+
   BLOCK_SCALAR_STYLES = [Psych::Nodes::Scalar::LITERAL, Psych::Nodes::Scalar::FOLDED].freeze
 
-  # 終わりの位置が値の直後になる node (block scalar 以外の scalar、flow の collection) を渡す。collection は、block でも
-  # flow でも中の値 (mapping は値の側。key は見ない) をたどる。
-  def self.each_inline_value(node, &block)
+  # 終わりの位置が値の直後になる node (block scalar 以外の scalar、flow の collection) を、mapping の値なら key と
+  # 一緒に渡す。collection は、block でも flow でも中の値 (mapping は値の側。key は見ない) をたどる。
+  def self.each_inline_value(node, key = nil, &block)
     case node
     when Psych::Nodes::Scalar
-      yield node unless BLOCK_SCALAR_STYLES.include?(node.style)
+      yield node, key unless BLOCK_SCALAR_STYLES.include?(node.style)
     when Psych::Nodes::Mapping
-      yield node if node.style == Psych::Nodes::Mapping::FLOW
-      node.children.each_slice(2) { |_key, child| each_inline_value(child, &block) }
+      yield node, key if node.style == Psych::Nodes::Mapping::FLOW
+      node.children.each_slice(2) { |child_key, child| each_inline_value(child, child_key, &block) }
     when Psych::Nodes::Sequence
-      yield node if node.style == Psych::Nodes::Sequence::FLOW
+      yield node, key if node.style == Psych::Nodes::Sequence::FLOW
       node.children.each { |child| each_inline_value(child, &block) }
     end
   end

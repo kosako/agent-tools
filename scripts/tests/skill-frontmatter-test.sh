@@ -158,6 +158,24 @@ comment = "a YAML comment follows the value"
   check_case(format, "flow-sequence-inner-comment",
              valid.sub("description: Public fixture", "description: [Public #fixture\n  , more]"),
              %w[claude-code], comment)
+  # 空の値の後のコメント (値が `#` で始まり、値ごとコメントになる) も拒む (round 3 の F4)。flow の mapping では、空の
+  # 値の終わりの位置が次の行の `}` を指すので、key の後ろを見る。コメントの無い空の値と、key の後のコメントに続く
+  # block の値は通す。
+  check_case(format, "flow-empty-value-comment",
+             "---\n{name: personal-frontmatter,\n description: #N を委譲する\n}\n---\n\n# Fixture\n",
+             %w[claude-code], comment)
+  check_case(format, "block-empty-value-comment",
+             valid.sub("description: Public fixture", "description: #N を委譲する"),
+             %w[claude-code], comment)
+  check_case(format, "quoted-empty-value-comment",
+             valid.sub("description: Public fixture", "description: \"\" # note"),
+             %w[claude-code], comment)
+  check_case(format, "flow-empty-value",
+             "---\n{name: personal-frontmatter, description: }\n---\n\n# Fixture\n",
+             %w[claude-code], nil)
+  check_case(format, "key-comment-then-block-value",
+             valid.sub("description: Public fixture", "description: # note\n  - Public fixture"),
+             %w[claude-code], nil)
   check_case(format, "block-sequence-then-whole-line-comment",
              valid.sub("description: Public fixture", "description:\n  - Public fixture\n# a whole-line comment"),
              %w[claude-code], nil)
