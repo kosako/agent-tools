@@ -19,8 +19,10 @@
 #     API call の prompt 量) は任意 field で、全 ok run が持つときだけ集計する。turn 数に依存
 #     しないので listing の大きさの差はこちらに素直に出る。
 #   - baseline 比較 (--baseline): 同じ tool・同じ model・同じ case 集合・同じ run 数の結果同士だけ
-#     比較する (条件が違えば構造エラー)。候補で primary hit が減る、または violation が増えたら
-#     回帰として exit 1。token の増減は報告だけで gate にしない。
+#     比較する (条件が違えば構造エラー)。primary は case ごとに比べ、baseline で半分以上の run が当たって
+#     いた case が候補で一度も当たらなければ回帰として exit 1 (#417)。それより小さい減少は warn: の行で
+#     出し、exit に響かない。合計は比べない。must_not は baseline によらず候補の run ごとの破れ (上)。
+#     token の増減は報告だけで gate にしない。
 #
 # exit code の分類 (incident class を混ぜない):
 #   - 1 = 観測された破れ (must_not violation / baseline からの回帰)。probe の結果そのものが赤。
@@ -59,8 +61,10 @@ module CheckSkillRouting
     判定: 全 case に ok な run があること (coverage)。primary skill の hit と must_not skill の
     violation を数え、token を合算して報告する (prompt_tokens = run 全体、first_prompt_tokens =
     最初の API call の prompt 量。後者は全 run が持つときだけ集計)。--baseline を与えると同条件
-    (tool / model / case 集合 / run 数) の結果と比較し、primary hit の減少または violation の増加を
-    回帰とする。token は gate にせず delta を報告するだけ。
+    (tool / model / case 集合 / run 数) の結果と case ごとに比較する。baseline で半分以上の run が primary に
+    当たっていた case が、候補で一度も当たらなければ回帰。それより小さい減少は warn: の行で出し、exit に
+    響かない (合計は比べない)。must_not は baseline によらず、候補で 1 回でも出れば破れ。token は gate に
+    せず delta を報告するだけ。
 
     exit: 0 = pass (violation 0、比較時は回帰なし),
           1 = breach observed (must_not violation / regression against baseline),
@@ -246,16 +250,36 @@ module CheckSkillRouting
     failures
   end
 
-  # 候補が baseline から回帰していれば breach として返す (hit 減少 / violation 増加)。
-  def self.regressions(cand, base)
-    out = []
-    if cand[:hit] < base[:hit]
-      out << "regression: primary hits decreased (#{base[:hit]}/#{base[:hit_total]} -> #{cand[:hit]}/#{cand[:hit_total]})"
+  # primary の hit を case ごとに比べる (#417)。baseline で半分以上の run が当たっていた case が、候補で一度も当たら
+  # なければ回帰 (breach)。それより小さい減少は警告で、exit には響かない。合計は比べない (ある case の回帰が別の case
+  # の改善で打ち消され、揺れだけの差が回帰になるため)。must_not は evaluate が候補の run ごとに破れにするので、ここ
+  # では比べない。比較条件 (case ごとの run 数が同じ) は comparison_structural が先に確かめる。
+  # 戻り値: [regressions, warnings]
+  def self.case_regressions(cand_per_case, base_per_case)
+    cand = primary_tally(cand_per_case)
+    regressions = []
+    warnings = []
+    primary_tally(base_per_case).each do |id, (b_hit, b_total)|
+      c_hit, c_total = cand.fetch(id, [0, 0])
+      next if c_total.zero?
+
+      if b_hit * 2 >= b_total && c_hit.zero?
+        regressions << "regression: case '#{id}' primary never hit in candidate (#{b_hit}/#{b_total} -> 0/#{c_total})"
+      elsif c_hit * b_total < b_hit * c_total
+        warnings << "case '#{id}' primary hit rate decreased (#{b_hit}/#{b_total} -> #{c_hit}/#{c_total})"
+      end
     end
-    if cand[:violations] > base[:violations]
-      out << "regression: must_not violations increased (#{base[:violations]} -> #{cand[:violations]})"
+    [regressions, warnings]
+  end
+
+  # case ごとの primary の [hit 数, run 数] (`primary: null` の case は数えない)。
+  def self.primary_tally(per_case)
+    per_case.each_with_object({}) do |pc, tally|
+      next if pc[:primary].nil?
+
+      hit, total = tally.fetch(pc[:id], [0, 0])
+      tally[pc[:id]] = [hit + (pc[:primary_hit] ? 1 : 0), total + 1]
     end
-    out
   end
 
   # --- 出力 -------------------------------------------------------------------------
@@ -343,10 +367,12 @@ module CheckSkillRouting
       puts format_summary(base[:summary])
       structural += base[:structural]
       structural += comparison_structural(cases, candidate, baseline)
-      # baseline 側の violation は候補の破れではない (比較の基準)。回帰判定にだけ使う。
+      # baseline 側の violation は候補の破れではなく、比較にも使わない (must_not は候補の run ごとの破れ)。
       if structural.empty?
         puts format_delta(cand[:summary], base[:summary])
-        breaches += regressions(cand[:summary], base[:summary])
+        regressed, warnings = case_regressions(cand[:per_case], base[:per_case])
+        warnings.each { |w| puts "warn: #{w}" }
+        breaches += regressed
       end
     end
 
