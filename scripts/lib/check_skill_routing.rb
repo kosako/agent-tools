@@ -19,8 +19,10 @@
 #     API call の prompt 量) は任意 field で、全 ok run が持つときだけ集計する。turn 数に依存
 #     しないので listing の大きさの差はこちらに素直に出る。
 #   - baseline 比較 (--baseline): 同じ tool・同じ model・同じ case 集合・同じ run 数の結果同士だけ
-#     比較する (条件が違えば構造エラー)。候補で primary hit が減る、または violation が増えたら
-#     回帰として exit 1。token の増減は報告だけで gate にしない。
+#     比較する (条件が違えば構造エラー)。primary は case ごとに比べ、baseline で半分以上の run が当たって
+#     いた case が候補で一度も当たらなければ回帰として exit 1 (#417)。それより小さい減少は warn: の行で
+#     出し、exit に響かない。合計は比べない。must_not は baseline によらず候補の run ごとの破れ (上)。
+#     token の増減は報告だけで gate にしない。
 #
 # exit code の分類 (incident class を混ぜない):
 #   - 1 = 観測された破れ (must_not violation / baseline からの回帰)。probe の結果そのものが赤。
