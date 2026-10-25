@@ -59,8 +59,10 @@ module CheckSkillRouting
     判定: 全 case に ok な run があること (coverage)。primary skill の hit と must_not skill の
     violation を数え、token を合算して報告する (prompt_tokens = run 全体、first_prompt_tokens =
     最初の API call の prompt 量。後者は全 run が持つときだけ集計)。--baseline を与えると同条件
-    (tool / model / case 集合 / run 数) の結果と比較し、primary hit の減少または violation の増加を
-    回帰とする。token は gate にせず delta を報告するだけ。
+    (tool / model / case 集合 / run 数) の結果と case ごとに比較する。baseline で半分以上の run が primary に
+    当たっていた case が、候補で一度も当たらなければ回帰。それより小さい減少は warn: の行で出し、exit に
+    響かない (合計は比べない)。must_not は baseline によらず、候補で 1 回でも出れば破れ。token は gate に
+    せず delta を報告するだけ。
 
     exit: 0 = pass (violation 0、比較時は回帰なし),
           1 = breach observed (must_not violation / regression against baseline),
@@ -363,7 +365,7 @@ module CheckSkillRouting
       puts format_summary(base[:summary])
       structural += base[:structural]
       structural += comparison_structural(cases, candidate, baseline)
-      # baseline 側の violation は候補の破れではない (比較の基準)。回帰判定にだけ使う。
+      # baseline 側の violation は候補の破れではなく、比較にも使わない (must_not は候補の run ごとの破れ)。
       if structural.empty?
         puts format_delta(cand[:summary], base[:summary])
         regressed, warnings = case_regressions(cand[:per_case], base[:per_case])

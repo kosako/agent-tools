@@ -322,6 +322,8 @@ run_case "missing-results-arg" 2 "cases and --results are required" -- --cases "
 run_case "unknown-arg" 2 "unknown argument: --bogus" -- --cases "$tmp/cases.json" --results "$tmp/ok.json" --bogus
 run_case "value-missing" 2 "requires a path" -- --cases "$tmp/cases.json" --results
 run_case "help" 0 "usage: check-skill-routing.sh" -- --help
+grep -q "case ごとに比較する" "$tmp/out" || fail "help: the usage must describe the per-case comparison (#417): $(cat "$tmp/out")"
+if grep -q "primary hit の減少または violation の増加" "$tmp/out"; then fail "help: the old aggregate rule must be gone: $(cat "$tmp/out")"; fi
 
 # --- case 20: first_prompt_tokens (任意 field) は全 run が持つときだけ集計し、delta にも出る ---
 # usage: run_line_first <case> <status> <prompt_tokens> <output_tokens> <first_prompt_tokens> <observed-json-array>
