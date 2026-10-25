@@ -38,7 +38,8 @@ module YamlUtil
   # ほかの key は check-manifests が key の段階で拒むので (#217 / #233 の診断を先に出すため)、ここでは値の形を見ない。
   FRONTMATTER_SCALAR_KEYS = %w[name description].freeze
 
-  # skill の frontmatter の形を 1 つに限る (#417): top-level は block の mapping、key は行頭の plain な key、値に
+  # skill の frontmatter の形を 1 つに限る (#417): top-level は block の mapping、key は行頭 (`?` の明示の key は不可。
+  # 引用符の key は値で照合するので許し、Claude Code の機能の key を引用符で書いても #233 の診断に届く)、値に
   # anchor を付けない、name と description の値は scalar。flow の mapping (`{...}`)・明示の key (`? a`)・anchor・
   # collection の値は拒む。name と description はどちらも文字列なので、これで書けなくなるものは無い。下のコメントの
   # 検査はこの形を前提にする (flow や明示の key では空の値の位置が次の区切りや次の行に飛び、位置だけでは確かめられない
@@ -51,7 +52,7 @@ module YamlUtil
     end
     root.children.each_slice(2) do |key, value|
       unless key.anchor.nil? && key.start_column.zero?
-        raise DocumentError, "(#{path}): frontmatter keys must be plain keys at the start of a line " \
+        raise DocumentError, "(#{path}): frontmatter keys must start at the beginning of a line " \
                              "(no `?` explicit keys or anchors) #{at(key)}"
       end
       raise DocumentError, "(#{path}): frontmatter values must not have anchors #{at(value)}" unless value.anchor.nil?
@@ -71,7 +72,7 @@ module YamlUtil
   # 一覧にも切れたまま載った)。値が `#` で始まると、値ごとコメントになって空の値になる。引用符で囲んだ値の後の
   # コメントも、同じ形なので拒む。block scalar (`>` / `|`) は中の `#` も値の一部で切れず、終わりの位置が次の行の
   # 先頭になる (その行の行全体のコメントを取り違える) ので見ない。行全体のコメントは値を切らないので見ない。
-  # 形 (上) を前提に、top-level の scalar の値の終わりの位置だけを見る。行は LF で分けるので、YAML が数える行と食い違う
+  # 形 (上) を前提に、name と description の値の前後だけを見る (下の comment_position)。行は LF で分けるので、YAML が数える行と食い違う
   # 改行 (単独の CR・NEL・LS・PS) は先に拒む。Psych の column は文字の単位なので、行は UTF-8 として切る (C locale で
   # 読んだ US-ASCII の文字列を byte の単位で切らない)。
   def self.check_trailing_comments!(root, content, path)
@@ -84,19 +85,35 @@ module YamlUtil
     end
 
     lines = text.lines
-    root.children.each_slice(2) do |_key, value|
-      # scalar でない値は、name と description なら上で拒み、ほかの key は check-manifests が拒む
-      next unless value.is_a?(Psych::Nodes::Scalar)
-      next if BLOCK_SCALAR_STYLES.include?(value.style)
+    root.children.each_slice(2) do |key, value|
+      # name と description だけを見る。ほかの key は check-manifests が key の段階で拒み、#233 の診断を先に出す。
+      # name と description の値は、上の形の検査で scalar に限っている。
+      next unless FRONTMATTER_SCALAR_KEYS.include?(key.value)
 
-      rest = lines[value.end_line].to_s.chomp[value.end_column..].to_s
-      next unless rest.lstrip.start_with?("#")
+      line_no, column = comment_position(lines, key, value)
+      next unless line_no
 
-      column = value.end_column + (rest.size - rest.lstrip.size) + 1
-      raise DocumentError, "(#{path}): a YAML comment follows the value at line #{value.end_line + 1} column " \
-                           "#{column}; the text after ` #` is dropped from a plain value (quote the value or " \
+      raise DocumentError, "(#{path}): a YAML comment follows the value at line #{line_no + 1} column " \
+                           "#{column + 1}; the text after ` #` is dropped from a plain value (quote the value or " \
                            "remove the comment)"
     end
+  end
+
+  # 値の前後でコメントが始まる位置 ([行, column]。0 始まり) か nil。値が key より後の行から始まるときは、key の行の
+  # `:` の後ろのコメントを見る (`a: #x` の次の行に続きを書くと、YAML は `#x` を捨てて次の行だけを値にする)。key と
+  # 値の間の行全体のコメントは値を切らないので見ない。値の後ろは、block scalar 以外で、値の終わりの位置から見る。
+  def self.comment_position(lines, key, value)
+    if value.start_line > key.end_line
+      after_key = lines[key.end_line].to_s.chomp[key.end_column..].to_s
+      colon = after_key[/\A\s*:\s*(?=#)/]
+      return [key.end_line, key.end_column + colon.size] if colon
+    end
+    return nil if BLOCK_SCALAR_STYLES.include?(value.style)
+
+    rest = lines[value.end_line].to_s.chomp[value.end_column..].to_s
+    return nil unless rest.lstrip.start_with?("#")
+
+    [value.end_line, value.end_column + (rest.size - rest.lstrip.size)]
   end
 
   def self.safe_load(content, path)

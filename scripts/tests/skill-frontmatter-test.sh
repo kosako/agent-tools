@@ -121,6 +121,10 @@ comment = "a YAML comment follows the value"
   check_case(format, "crlf-trailing-comment",
              valid.sub("description: Public fixture", "description: Public #fixture").gsub("\n", "\r\n"),
              %w[codex claude-code], comment)
+  # 値が key の次の行から始まると、key の行の `#` からは捨てられ、次の行だけが値になる (round 6 の F8)
+  check_case(format, "key-line-comment-then-next-line-value",
+             valid.sub("description: Public fixture", "description: #N を Codex に委譲する\n  実装作業の説明"),
+             %w[codex claude-code], comment)
   # 値が `#` で始まると、値ごとコメントになって空の値になる (description の型を見ない Claude-only の skill でも拒む)
   check_case(format, "empty-value-comment",
              valid.sub("description: Public fixture", "description: #N を委譲する"),
@@ -150,6 +154,12 @@ comment = "a YAML comment follows the value"
   check_case(format, "block-header-comment",
              valid.sub("description: Public fixture", "description: > # header comment\n  Public fixture"),
              %w[codex claude-code], nil)
+  check_case(format, "next-line-value",
+             valid.sub("description: Public fixture", "description:\n  Public fixture"),
+             %w[codex claude-code], nil)
+  check_case(format, "whole-line-comment-before-next-line-value",
+             valid.sub("description: Public fixture", "description:\n# a whole-line comment\n  Public fixture"),
+             %w[codex claude-code], nil)
   check_case(format, "empty-value-then-whole-line-comment",
              "---\nname: personal-frontmatter\ndescription:\n# a whole-line comment\n---\n\n# Fixture\n",
              %w[claude-code], nil)
@@ -163,10 +173,14 @@ comment = "a YAML comment follows the value"
              %w[claude-code], "frontmatter must be a block mapping")
   check_case(format, "explicit-key",
              valid.sub("description: Public fixture", "? description\n: Public fixture"),
-             %w[codex claude-code], "frontmatter keys must be plain keys")
+             %w[codex claude-code], "frontmatter keys must start at the beginning of a line")
+  # 引用符の key は値で照合するので、引用符の description の後ろのコメントも拒む (round 6 の F9)
+  check_case(format, "quoted-key-trailing-comment",
+             valid.sub("description: Public fixture", "\"description\": Public #fixture"),
+             %w[codex claude-code], comment)
   check_case(format, "anchored-key",
              valid.sub("name: personal-frontmatter", "&k name: personal-frontmatter"),
-             %w[codex claude-code], "frontmatter keys must be plain keys")
+             %w[codex claude-code], "frontmatter keys must start at the beginning of a line")
   check_case(format, "anchored-value",
              valid.sub("description: Public fixture", "description: &d Public fixture"),
              %w[codex claude-code], "frontmatter values must not have anchors")
@@ -177,6 +191,9 @@ comment = "a YAML comment follows the value"
   end
   # name と description 以外の key の値の形とコメントは見ない。check-manifests が key の段階で拒み、#233 の診断を先に
   # 出す (flow の list の後ろのコメントで、コメントの検査が先に当たらない)
+  check_case(format, "native-field-scalar-then-comment",
+             valid.sub("description: Public fixture", "description: Public fixture\nallowed-tools: Read # note"),
+             %w[claude-code], "unsupported Claude Code skill feature: allowed-tools")
   check_case(format, "native-field-flow-list-then-comment",
              valid.sub("description: Public fixture", "description: Public fixture\nallowed-tools: [Read, Grep] # note"),
              %w[claude-code], "unsupported Claude Code skill feature: allowed-tools")

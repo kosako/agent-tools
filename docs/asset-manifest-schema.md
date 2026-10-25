@@ -70,8 +70,8 @@ directory 形式の配置ルールと、両 source 形式に共通する frontma
   scalar の解決で同じ key になる) 場合も同じく拒否する (#427 の 4)。safe_load は最初の文書だけを返し重複 key を後の値で上書きするので、そのまま読むと
   2 文書目の key と重複 key の先の値が allowlist と name の照合をすり抜ける。配布先の parser が
   これらをどう読むかは確かめていないので、validator の側で形を 1 つに限る。
-  frontmatter の形も 1 つに限る (#417): top-level は block の mapping (`{...}` の flow は不可)、key は行頭の plain な
-  key (`?` の明示の key は不可)、値に anchor を付けない、name と description の値は scalar (list や mapping は不可)。
+  frontmatter の形も 1 つに限る (#417): top-level は block の mapping (`{...}` の flow は不可)、key は行頭
+  (`?` の明示の key は不可)、値に anchor を付けない、name と description の値は scalar (list や mapping は不可)。
   そのうえで、値の後に同じ行で YAML のコメント (` #` から) が続く形を拒否する。引用符の無い値は空白の後の `#` で
   黙って切れ、配布先の skill の一覧にも切れたまま載るため (`#` で始まる値は、値ごとコメントになって空になる)。
   `#` を含む値は引用符で囲む。引用符で囲んだ値の後のコメントも拒否する。block scalar (`>` / `|`) の中の `#` と、
