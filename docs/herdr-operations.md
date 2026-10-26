@@ -57,19 +57,28 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   別の作業単位を進める tab と分ける。同じ Issue の
   2 回目以降の起動 (review の修正 round、停止からの再開) は、残っている `#<Issue 番号>` の tab に
   `-r<round>` の pane を足す (作業単位ごとに tab は 1 つ)。
-- **review**: review の pane は、呼び出し元 (orchestrator) の pane を分割して置きます (1 役割 = 1 pane。
-  `personal-codex-review` の LAUNCH が `herdr pane split --current` で作る)。置き場は対象 PR の作業単位
-  ではなく呼び出し元で決まるので、orchestrator の tab になります。reviewer は PR の author で決まります
+- review の pane は、呼び出し元 (orchestrator) の tab の右の列に置きます (1 役割 = 1 pane)。
+  監査・反証・相談も同じ列に置きます。置き場は呼び出し元で決まるので、orchestrator の tab になります。
+  reviewer は PR の author で決まります
   (正本は `personal-review-request` の「レビュアーの決定」)。
   - Claude が書いた PR と、OpenCode が Anthropic 系の model で書いた PR (`opencode(anthropic)`) は、Codex
-    が review します。orchestrator の pane を分割した pane で Codex を動かします。
+    が review します。呼び出し元の tab の右の列の pane で Codex を動かします。
   - Codex が書いた PR と、OpenCode が OpenAI 系・その他の model で書いた PR (`opencode(openai)` /
     `opencode(other)`) は、orchestrator の Claude が自分の pane で review します。pane は増えません。
 
   OpenCode の PR は人が起動した OpenCode の作業単位で、orchestrator の作業単位とは限りませんが、置き場は
-  同じく orchestrator の tab です。review は短時間 (1〜5 分) で終わるので、分割した pane で動かし、成功
+  同じく orchestrator の tab です。review は短時間 (1〜5 分) で終わるので、列の pane で動かし、成功
   したら閉じます (`personal-codex-review`)。明示的な second opinion (Codex の PR を Codex が見る) も同じく
-  呼び出し元の pane を分割して置き、1 + 1 の枠の外の補助として扱います。
+  呼び出し元の tab の右の列に置き、1 + 1 の枠の外の補助として扱います。
+
+  列の候補は、呼び出し元と同じ tab の `review-` / `audit-` で始まる label の pane です。
+  候補が無ければ呼び出し元を右に分割し、元の横幅の 60% を保ちます。
+  候補があれば高さが最大のものを下に分割します。同じ高さなら pane list の順で最初を選びます。
+  command と JSON の読み方は `personal-codex-review` の `LAUNCH.md` と
+  `personal-repo-audit` の `CODEX-LAUNCH.md` に従います。`pane list` / `pane layout` の失敗や
+  応答の形が違う場合は呼び出し元を右に分割し、そのことと理由を結果に 1 行書きます。
+  同時起動や探索の失敗では列が 2 つできる場合があります。列の pane がすべて閉じると元の幅に戻ります。
+  user が自分の pane に `review-` / `audit-` で始まる名前を付けた場合も、列の候補とみなします。
 - **命名** (正本はこの表。review の pane の名前は `personal-codex-review` の LAUNCH にも同じ形で書く):
 
   | 対象 | 名前 | 例 |

@@ -131,9 +131,29 @@ key を足す)。
 
 ## 使う herdr subcommand
 
-`status` / `pane current` / `pane split` / `pane rename` / `pane run` / `pane wait-output` / `pane read` /
+`status` / `pane current` / `pane list` / `pane layout` / `pane split` / `pane rename` / `pane run` / `pane wait-output` / `pane read` /
 `pane process-info` (wait の timeout の後の生存の確認。#421) / `pane close` に限定し、socket path や version 固有の
-flag に依存しません (0.9.0 で確認。`pane process-info` の応答の形は 0.9.3 で確認)。
+flag に依存しません (0.9.0 で確認。`pane process-info` と列の探索・分割の応答の形は 0.9.3 で確認)。
+
+review・監査・相談は、呼び出し元の tab の右の列にまとめます。呼び出し元の ID は `pane current` の
+`.result.pane` の `pane_id`・`tab_id`・`workspace_id` から読みます。
+`pane list --workspace <workspace_id>` の `.result.panes[]` を `tab_id` で絞り、
+label が `review-` / `audit-` で始まる pane を列の候補にします (label key が無い pane は候補にしない)。
+値は jq の `--arg` で渡し、ID や名前を推測しません。
+
+候補が無ければ `pane split --pane <呼び出し元の pane_id> --direction right --ratio 0.6
+--cwd <repo root> --no-focus` で列を作り、呼び出し元は横幅の 60% を保ちます。
+候補があれば `pane layout --pane <呼び出し元の pane_id>` の `.result.layout.panes[].rect.height` で
+最大の候補を選びます。同じ高さなら pane list の順で最初を選びます。
+`pane split --pane <選んだ pane_id> --direction down --cwd <repo root> --no-focus` で足し、`--ratio` は付けません。
+新しい ID は split の応答の `.result.pane.pane_id` から読みます。詳しい検査と command は
+`personal-codex-review` の `LAUNCH.md` の「herdr 経由」を参照します。
+
+`pane list` / `pane layout` の失敗や JSON の形・候補との対応を確認できない場合も、呼び出し元を右に分割します。
+結果にはそのことと理由を 1 行書きます。`pane current` の成功を herdr 経由の条件とする規則は維持します。
+split 自体の失敗は既存の起動経路 (herdr → 直接 → BLOCKED) の規則で扱います。
+同時起動や探索の失敗で列が 2 つできる場合があります。列の pane がすべて閉じると、呼び出し元は元の幅に戻ります。
+user が自分の pane に `review-` / `audit-` で始まる名前を付けた場合も、列の候補とみなします。
 
 渡す値の escape は 2 段あります。`pane run` の command は **pane の shell** が解釈するので script path を
 shell literal 化し、その command 文字列を自分の shell 経由で `herdr` へ渡すならもう一段 literal 化

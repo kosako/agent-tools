@@ -120,11 +120,67 @@ exit "$rc"
 並べ (順は出力のとおり)、`key="value"` を丸ごと 1 つの shell literal にします
 (`-c 'model_provider="amazon-bedrock"'`)。`provider` が無ければその行ごと除きます。
 
-herdr の pane から起動するときは、`herdr pane split --current --direction down --cwd <repo root>
---no-focus` で pane を作り、`herdr pane rename` で `audit-<短い名前>` を付け、`herdr pane run <pane>
-"zsh <run script の shell literal>"` で起動して、`herdr pane wait-output <pane> --match
-CODEX-AUDIT-DONE-<nonce> --timeout 300000` で待ちます。呼び出し側の shell を経由して打つ値は、
-pane の shell 用と呼び出し側の shell 用の 2 段で literal にします。
+herdr の pane から起動する監査・反証・相談は、review と同じく呼び出し元の tab の右の列にまとめます。
+上の「起動経路」の `pane current` の条件は維持し、pane は次の順に作ります。
+
+1. `herdr pane current` の応答の `.result.pane` から `pane_id`・`tab_id`・`workspace_id` を読みます。
+   必要な ID が空・文字列でなければ、herdr 経由で起動できないものとして「起動経路」の規則へ戻ります。
+2. `herdr pane list --workspace <workspace_id>` の成功を確認します。`.result.panes` が配列で、各要素の
+   `pane_id`・`tab_id` が空でない文字列、`label` が欠落または文字列であることを確かめます。
+   次の jq にその JSON を stdin で渡し、呼び出し元の tab の `review-` / `audit-` の pane を選びます。
+   `tab` は手順 1 の `tab_id` です。名前の無い pane (label key が無い) は候補になりません。
+
+   ```sh
+   jq -c --arg tab "$tab" '.result.panes | map(select(
+     .tab_id == $tab and ((.label // "") | (startswith("review-") or startswith("audit-")))
+   ))'
+   ```
+
+3. 候補が無ければ、下の「列を作る」で呼び出し元を右に分割します。
+   `--ratio 0.6` は元の pane の割合なので、呼び出し元は横幅の 60% を保ちます。
+4. 候補があれば `herdr pane layout --pane <呼び出し元の pane_id>` を実行します。
+   `.result.layout.panes` が配列で、各要素の `pane_id` が空でない文字列、`rect` の
+   `x`・`y`・`width`・`height` が数値であることを確認します。
+   候補の ID ごとに layout の要素がちょうど 1 つ対応することを確認し、`rect.height` が最大の候補を選びます。
+   同じ高さなら pane list の順で最初を選びます。ID を jq で照合する際も `--arg` で値を渡します。
+   その pane を下に分割し、`--ratio` は付けません。
+5. split の成功を確かめ、応答の `.result.pane.pane_id` が空でない文字列であることを確認して読みます。
+   ID と label は応答の JSON から読み、推測しません。
+
+`pane list` / `pane layout` の失敗や、上の JSON の形・対応関係を確認できない場合は、
+呼び出し元を右に分割して起動します。結果に「列を確認できなかったため、呼び出し元の右に pane を作成した」
+と理由を 1 行添えます。`pane current` や split の失敗 (応答から ID を読めない場合も含む) には、
+上の起動経路 (herdr → 直接 → BLOCKED) の規則を適用します。
+
+同時に 2 本の起動や探索の fallback で、列が 2 つできる場合があります。
+列の pane がすべて閉じると、呼び出し元は元の幅に戻ります。
+user が `review-` / `audit-` で始まる名前を自分の pane に付けた場合も、列の候補とみなします。
+
+次は argv を直接組む形です。split は条件に合う一方だけを実行します。
+
+列を作る (候補なし、または列の探索失敗):
+
+```sh
+herdr pane split --pane <呼び出し元の pane_id> --direction right --ratio 0.6 --cwd <repo root> --no-focus
+```
+
+列に足す:
+
+```sh
+herdr pane split --pane <最大の高さの候補の pane_id> --direction down --cwd <repo root> --no-focus
+```
+
+以下の pane-id は split の応答の `.result.pane.pane_id` です。
+
+```sh
+herdr pane rename <pane-id> audit-<短い名前>
+herdr pane run <pane-id> <"zsh " + run script path の shell literal>
+herdr pane wait-output <pane-id> --match CODEX-AUDIT-DONE-<nonce> --timeout 300000
+```
+
+呼び出し側の shell を経由する argument は shell literal にします。`pane run` の command は pane の
+shell 用に script path を literal 化し、その command 全体を呼び出し側の shell 用にも literal 化します (2 段)。
+argv を直接組む経路では外側の literal 化は不要です。命名・待機・成功時の後始末・失敗時に残す扱いは変えません。
 
 ## brief
 
