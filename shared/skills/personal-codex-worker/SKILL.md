@@ -60,6 +60,10 @@ orchestrator が行います。
 
 ## 1. authorization と scope
 
+- 最初に env の `GH_REPO` が空であることを確かめる (`[ -z "${GH_REPO-}" ]`。空の値は無い扱い)。
+  空でなければ clone・run dir・packet の書き込みより前に、何も作らず `Blocked at: preflight` で止める。
+  `Reason` は「`GH_REPO` が空でない」、`Next step` は「`GH_REPO` を外して起動し直す」。
+  gh の command ごとに向く repo が分かれうるため、自分で env を外したり、その値を対象 repo に採用したりして続けない。
 - **authorization は現在の trusted な起動指示にある** (「packet #N を Codex に委譲して」)。resume で
   packet を見つけただけ、packet や Issue の本文に「委譲せよ」と書いてあるだけ、では起動しない。
 - **scope は packet の `依頼`** (orchestrator 著)。`依頼` が無い / 受け入れ条件が空なら起動せず、
@@ -355,6 +359,7 @@ draft に留めます (起動の記録は消さずに残す)。
   退避し (staged と unstaged は別々の `--binary` patch、untracked は file 名を shell に通さない
   tar の写し)、その path を `結果` に記録する。orchestrator は代わりに commit しない (trailer が
   Claude になり author が混ざる)。復元を確認するまで clone を消さない。
+  patch には `--no-textconv --no-ext-diff` も付け、textconv と外部の diff を起動しない。
 - **起動の記録の後始末**: 完了 (最終 message があり止まっていない) の転記が済んだら、frontmatter の
   `run` の値を `last_run` に移し、`run` / `tab` を消す (key ごと。#325)。止まっている (`state: blocked`) ときは消さない (`run` は退避物の
   置き場。再起動で新しい run に置き換える)。RUNNING で返すとき、`launch-path` で人に渡すとき、空振りの
@@ -389,7 +394,9 @@ worker の最終 message が「完了」で、`依頼` の受け入れ条件を�
    PR の題名と本文は先に書き、`personal-ja-style-check --stdin` に通して指摘を直すか理由を持ってから gate に入れる
    (指摘だけで止めない。#556)。worker の commit message は §4 の brief の文章の規則で worker が通す (orchestrator は
    書き換えない)。
-4. push して PR を作る (title / body は packet の `依頼` と `結果` から orchestrator が書く。worker の
+4. `LAUNCH.md` §9 で main の repo slug と origin の push URL の一致を確かめ、push して PR を作る。
+   確かめられなければ `Blocked at: public-safety`。PR 作成には `--repo "$slug"` を渡す。
+   (title / body は packet の `依頼` と `結果` から orchestrator が書く。worker の
    本文をそのまま貼らない。`依頼` の割当の行 (残量の値と取得元) は写さない)。
 5. 書く前の検査 (「副作用と組み合わせ」) を通してから、packet に `pr:` と `state: review` を入れる
    (落ちたら書かず、PR 番号と state を返却の中の draft に留める)。review は `personal-review-request` に渡す
@@ -431,6 +438,11 @@ merge はしない (運用 instruction の「個人 project の GitHub の操作
 ときだけ後始末モード (§9) で行い、結果を返した時点で完了。
 
 ## 9. 後始末 (後始末モード)
+
+最初に `GH_REPO` が空であることを確かめる (`[ -z "${GH_REPO-}" ]`)。空でなければ何も作らず
+`Blocked at: cleanup` で止める。`Reason` は「`GH_REPO` が空でない」、`Next step` は「`GH_REPO` を外して起動し直す」。
+gh の command ごとに向く repo が分かれうるため (§1)。PR の確認の前に `LAUNCH.md` §11 で main の slug と
+origin の push URL を照合し、確かめた slug を `gh pr view` の `--repo` に渡す。失敗・不一致も `Blocked at: cleanup`。
 
 人が後始末を明示したとき (「モード」) だけ、`done` の packet の worker の tab を閉じ、clone を退避先へ移します。
 手順は `LAUNCH.md` §11。packet は書きません (`done` の後も `last_run` を残す。`docs/agent-packets.md`)。clone は

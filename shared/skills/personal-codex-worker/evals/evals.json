@@ -6,7 +6,7 @@
       "id": 0,
       "name": "delegate-happy-path",
       "prompt": "packet #291 を Codex に委譲して実装させて。手順確認だけなので実行はせず、起動から PR 作成までの流れを示して。",
-      "expected_output": "起動 prompt を authorization、packet の 依頼 を scope として読む。clone を作ってから personal-codex-worker-preflight を --clone <clone> --json で実行し、exit 0 の launch_argv をそのまま使う (flag を足さない。--add-dir は preflight が clone の git dir に対して 1 つ入れる)。Issue ごとの local clone を main から git clone で切り、brief には 依頼 の verbatim / clone と branch / 禁止事項 / 境界と値の受け渡し / commit 規則 (Codex trailer。test・build は personal-safe-run 経由で memory と時間の上限を付ける) / 一時 file の置き場 (mktemp -d で $TMPDIR の下。clone の作業ツリーと .git の中には置かず、TMPDIR を clone の中へ向け直さない) / 最終 message の書式を書き、diff は埋めない。起動の前に packet の frontmatter へ起動の記録 (run = run dir / tab = \"#<issue>\"、updated は変えない) を書いて personal-packet list --json で読み直し、Issue ごとの tab (label #<issue>) を herdr tab create --no-focus で作り、応答の .result.root_pane の pane を worker-<issue> と名付けてそこで run script を起動し (orchestrator の tab は分割しない)、done.txt (nonce・exit=0) と空でない result.md で完了を判定、codex.log を tee する。result.md を public-safety gate --stdin に通してから 結果 に worker/codex として転記し、次の入口 を最終 message の次の 1 アクションから写し、転記が済んだら run の値を last_run に移して起動の記録 (run / tab) を消す。worker の commit を main へ git fetch <clone> <branch>:<branch> で回収し、base..branch の trailer が Codex のみであることを確認してから push と PR 作成を orchestrator が行い、packet に pr と state: review を入れる。merge はしない。",
+      "expected_output": "最初に GH_REPO が空であることを確認する (空の値は無い扱い)。起動 prompt を authorization、packet の 依頼 を scope として読む。clone を作ってから personal-codex-worker-preflight を --clone <clone> --json で実行し、exit 0 の launch_argv をそのまま使う (flag を足さない。--add-dir は preflight が clone の git dir に対して 1 つ入れる)。Issue ごとの local clone を main から git clone で切り、brief には 依頼 の verbatim / clone と branch / 禁止事項 / 境界と値の受け渡し / commit 規則 (Codex trailer。test・build は personal-safe-run 経由で memory と時間の上限を付ける) / 一時 file の置き場 (mktemp -d で $TMPDIR の下。clone の作業ツリーと .git の中には置かず、TMPDIR を clone の中へ向け直さない) / 最終 message の書式を書き、diff は埋めない。起動の前に packet の frontmatter へ起動の記録 (run = run dir / tab = \"#<issue>\"、updated は変えない) を書いて personal-packet list --json で読み直し、Issue ごとの tab (label #<issue>) を herdr tab create --no-focus で作り、応答の .result.root_pane の pane を worker-<issue> と名付けてそこで run script を起動し (orchestrator の tab は分割しない)、done.txt (nonce・exit=0) と空でない result.md で完了を判定、codex.log を tee する。result.md を public-safety gate --stdin に通してから 結果 に worker/codex として転記し、次の入口 を最終 message の次の 1 アクションから写し、転記が済んだら run の値を last_run に移して起動の記録 (run / tab) を消す。worker の commit を main へ git fetch <clone> <branch>:<branch> で回収し、base..branch の trailer が Codex のみであることを確認する。push の直前に main で gh repo view から slug を取得・検証し、origin の push URL がその slug の GitHub URL と完全一致することを確かめる。通ったら push と gh pr create --repo \"$slug\" を orchestrator が行い、packet に pr と state: review を入れる。merge はしない。",
       "files": [],
       "assertions": [
         {
@@ -52,6 +52,10 @@
         {
           "id": "launch-record-lifecycle",
           "text": "起動の前に packet に run / tab を書いて読み直し、完了の転記が済んだら run を last_run に移して run / tab を消している (updated は変えない)"
+        },
+        {
+          "id": "verified-publish-repo",
+          "text": "main の slug の取得・検証と origin の push URL の完全一致を確かめ、gh pr create に --repo でその slug を渡している"
         }
       ]
     },
@@ -59,7 +63,7 @@
       "id": 1,
       "name": "limit-stop-records-blocked",
       "prompt": "Codex worker を herdr で動かしていたら codex.log に「You've hit your usage limit. Visit ... or try again at ...」が出て done.txt が exit=1 になった。clone には未 commit の変更が残っている。どう扱う? 手順確認のみ。",
-      "expected_output": "Blocked at: limit として自動で再起動しない。packet を state: blocked にし、最終 message が無いので orchestrator/claude の見出しで停止理由 (limit の文言、exit code、codex.log 末尾の public-safe な要約) を書き、次の入口 に続きの入り方 (同じ branch を Codex が続ける) を書く。未 commit の変更は staged と unstaged を別々の --binary patch (git diff --cached --binary / git diff --binary) に、untracked は file 名を shell に通さない tar (ls-files -z | tar --null -T -) に退避して path を 結果 に記録し、orchestrator は代わりに commit しない。clone は復元確認まで消さない。pane は閉じない。limit の reset を待って人が再開を判断する (残量を人に聞かない)。",
+      "expected_output": "Blocked at: limit として自動で再起動しない。packet を state: blocked にし、最終 message が無いので orchestrator/claude の見出しで停止理由 (limit の文言、exit code、codex.log 末尾の public-safe な要約) を書き、次の入口 に続きの入り方 (同じ branch を Codex が続ける) を書く。未 commit の変更は staged と unstaged を別々の --binary patch (git diff --cached --binary --no-textconv --no-ext-diff / git diff --binary --no-textconv --no-ext-diff) に、untracked は file 名を shell に通さない tar (ls-files -z | tar --null -T -) に退避して path を 結果 に記録し、orchestrator は代わりに commit しない。clone は復元確認まで消さない。pane は閉じない。limit の reset を待って人が再開を判断する (残量を人に聞かない)。",
       "files": [],
       "assertions": [
         {
@@ -1000,7 +1004,7 @@
       "id": 38,
       "name": "cleanup-after-merge",
       "prompt": "packet #438 の PR が merge されたので、packet を state: done にした。worker の tab と clone の後始末をして。手順確認のみ。",
-      "expected_output": "人が後始末を明示したので後始末モードで進める (起動・転記・PR の作成はしない)。先に前提を確かめる: personal-packet list --json --all が exit 0 で、#438 の行の state が done、run が無く、last_run / pr / branch がある。PR は metadata (state / headRefName。title / body は読まない) で MERGED と、head の branch が packet の branch であることを確かめる。次に tab の確認: label #438 の tab が 1 件で、last_run の run dir の tab-id との一致と命名 (worker-438[-rN]) の両方の所有の確認を通り、どの pane の foreground にも codex がいない (まだ閉じない)。次に clone の確認: 置き場 (<main worktree>-clones/438) の path を lstat し、symlink でない directory で、その実体が last_run の preflight.json の clone_root と一致し、退避先 (<main worktree>-clones/.cleaned/438-<UTC の時刻>) がまだ無く、worker の pane に codex がいない (まだ移さない)。clone には git を実行せず、中に cd もしない。確認がすべて通ってから tab を閉じ、clone を退避先へ rename で移す (消さない。退避先を消すのは人)。どれかを確かめられなければ、tab にも clone にも触らず Blocked at: cleanup。packet は書かない (last_run は done の後も残す)。結果は Status: CLEANED と、確かめた前提、閉じた tab、clone を移した退避先を返し、Next step は人が退避先を確かめて消すこと。",
+      "expected_output": "人が後始末を明示したので後始末モードで進める (起動・転記・PR の作成はしない)。最初に GH_REPO が空であることを確かめる。main で slug を取得・検証し、origin の push URL との完全一致を確かめる。失敗・不一致なら Blocked at: cleanup で止める。その後で packet の前提を確かめる: personal-packet list --json --all が exit 0 で、#438 の行の state が done、run が無く、last_run / pr / branch がある。PR は gh pr view に --repo で確かめた slug を渡し、metadata (state / headRefName。title / body は読まない) で MERGED と、head の branch が packet の branch であることを確かめる。次に tab の確認: label #438 の tab が 1 件で、last_run の run dir の tab-id との一致と命名 (worker-438[-rN]) の両方の所有の確認を通り、どの pane の foreground にも codex がいない (まだ閉じない)。次に clone の確認: 置き場 (<main worktree>-clones/438) の path を lstat し、symlink でない directory で、その実体が last_run の preflight.json の clone_root と一致し、退避先 (<main worktree>-clones/.cleaned/438-<UTC の時刻>) がまだ無く、worker の pane に codex がいない (まだ移さない)。clone には git を実行せず、中に cd もしない。確認がすべて通ってから tab を閉じ、clone を退避先へ rename で移す (消さない。退避先を消すのは人)。どれかを確かめられなければ、tab にも clone にも触らず Blocked at: cleanup。packet は書かない (last_run は done の後も残す)。結果は Status: CLEANED と、確かめた前提、閉じた tab、clone を移した退避先を返し、Next step は人が退避先を確かめて消すこと。",
       "files": [],
       "assertions": [
         {
@@ -1042,6 +1046,10 @@
         {
           "id": "no-packet-write",
           "text": "packet を書き換えていない (last_run を残している)"
+        },
+        {
+          "id": "verified-cleanup-repo",
+          "text": "GH_REPO が空であることと main の slug と origin の push URL の一致を確認し、gh pr view に --repo でその slug を渡している。失敗時は Blocked at: cleanup としている"
         }
       ]
     },
@@ -1259,6 +1267,31 @@
         {
           "id": "orchestrator-title-body",
           "text": "PR の題名と本文は orchestrator が書いて同じ検査に通し、そのあと public-safety の gate に入れるとしている。worker の commit message は書き換えない"
+        }
+      ]
+    },
+    {
+      "id": 48,
+      "name": "gh-repo-blocks-before-creation",
+      "prompt": "packet #575 を Codex worker に委譲して。手順確認のみ。[前提: env に GH_REPO=someone/other-repo が設定されている。clone と run dir はまだ無く、packet は state: open で起動の記録も無い。依頼と受け入れ条件は記入済み]",
+      "expected_output": "最初に [ -z \"${GH_REPO-}\" ] を確かめ、空でないので何も作らず止める。Status: BLOCKED / Blocked at: preflight、Reason: GH_REPO が空でない、Next step: GH_REPO を外して起動し直す、と返す。gh repo view は current の directory の repo を返すが、gh pr は GH_REPO を見るため、command ごとに向く repo が分かれうる。clone・run dir・tab を作らず、worker を起動せず、packet の state や起動の記録も書き換えない。自分で GH_REPO を外したり、その値を対象 repo に採用したりして続けない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "blocked-at-preflight",
+          "text": "Status: BLOCKED / Blocked at: preflight とし、Reason を GH_REPO が空でないとしている"
+        },
+        {
+          "id": "no-creation-or-write",
+          "text": "clone・run dir・tab を作らず、worker を起動せず、packet の state や起動の記録を含め何も書いていない"
+        },
+        {
+          "id": "split-reason",
+          "text": "gh repo view と gh pr で向く repo が分かれうることを理由にしている"
+        },
+        {
+          "id": "restart-without-gh-repo",
+          "text": "Next step は GH_REPO を外して起動し直すこと。自分で env を外したり、GH_REPO の repo に合わせて続けたりしていない"
         }
       ]
     }
