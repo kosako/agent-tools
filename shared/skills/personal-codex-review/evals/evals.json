@@ -263,13 +263,21 @@
     {
       "id": 10,
       "name": "herdr-pane-is-primary-launch-path",
-      "prompt": "verified author=claude の base review を実行する手順を示して。herdr status は server running、herdr pane current は現在の pane を返す。実行はしないで。",
-      "expected_output": "herdr 経由を選ぶ。mktemp -d の run dir に brief.md / run.zsh を置き、run.zsh は cd <repo> して codex exec --ignore-user-config --ignore-rules -s read-only -c approval_policy=never --disable apps --disable computer_use --disable browser_use [-c model=\"…\"] [-c model_reasoning_effort=\"…\"] -o <run dir>/result.md - < brief.md を実行し (model / effort は LAUNCH.md の読み取りの値。-p は使わない) (--ephemeral は付けず、session rollout を Codex 側に残す)、その exit code を CODEX-REVIEW-DONE-<nonce> exit=<rc> として端末と done.txt に書く。LAUNCH.md の「herdr 経由」の形 (herdr pane split --current --direction down --ratio 0.3 --cwd <repo root> --no-focus) で pane を作り rename し、herdr pane run で run.zsh を実行、herdr pane wait-output --match で起床し、done.txt の nonce 一致と exit=0、空でない result.md を確認して結果を返す。続行条件を満たしたら herdr pane read の生出力を pane.log に保存し、空でないことを確認してから pane を閉じる。直接起動や dangerous flag は使わない。",
+      "prompt": "verified author=claude の base review を実行する手順を示して。herdr status は server running。pane current の .result.pane は pane_id=caller、tab_id=tab-a、workspace_id=ws-a。pane list --workspace ws-a の .result.panes は caller (tab_id=tab-a、label key なし) と other (tab_id=tab-b、label=review-12) だけ。split の .result.pane.pane_id は created。実行はしないで。",
+      "expected_output": "herdr 経由を選ぶ。mktemp -d の run dir に brief.md / run.zsh を置き、run.zsh は cd <repo> して codex exec --ignore-user-config --ignore-rules -s read-only -c approval_policy=never --disable apps --disable computer_use --disable browser_use [-c model=\"…\"] [-c model_reasoning_effort=\"…\"] -o <run dir>/result.md - < brief.md を実行し (model / effort は LAUNCH.md の読み取りの値。-p は使わない) (--ephemeral は付けず、session rollout を Codex 側に残す)、その exit code を CODEX-REVIEW-DONE-<nonce> exit=<rc> として端末と done.txt に書く。pane current の .result.pane から呼び出し元の ID を読む。pane list の JSON の形を確認し、jq --arg で tab-a に絞る。label key の無い caller と別 tab の other は列の候補にならない。候補が無いので herdr pane split --pane caller --direction right --ratio 0.6 --cwd <repo root> --no-focus で右の列を作る (呼び出し元は横幅の 60% を保つ)。split の .result.pane.pane_id から created を読み、その pane を rename し、herdr pane run で run.zsh を実行、herdr pane wait-output --match で起床し、done.txt の nonce 一致と exit=0、空でない result.md を確認して結果を返す。続行条件を満たしたら herdr pane read の生出力を pane.log に保存し、空でないことを確認してから pane を閉じる。直接起動や dangerous flag は使わない。",
       "files": [],
       "assertions": [
         {
           "id": "prefers-herdr",
           "text": "herdr が使えるとき直接起動ではなく herdr pane run を選んでいる"
+        },
+        {
+          "id": "same-tab-label-filter",
+          "text": "pane current の pane_id・tab_id・workspace_id を使い、pane list を jq --arg の tab_id と review- / audit- の label で絞る。label の無い pane や別 tab の pane を候補にしない"
+        },
+        {
+          "id": "new-right-column",
+          "text": "候補が無いので caller を right、ratio 0.6、repo の cwd、no-focus で分割し、split の .result.pane.pane_id の created を後続に渡す"
         },
         {
           "id": "sentinel-and-result-file",
@@ -842,6 +850,65 @@
         {
           "id": "collect-later-no-relaunch",
           "text": "後から done.txt を同じ続行条件で確かめて回収するとし、その前に同じ対象の review を起動し直さないとしている"
+        }
+      ]
+    },
+    {
+      "id": 35,
+      "name": "herdr-column-largest-height-list-order",
+      "prompt": "herdr 経由の verified author=claude の review の pane を作る手順だけ示して。pane current の .result.pane は pane_id=caller、tab_id=tab-a、workspace_id=ws-a。pane list の .result.panes の順序は caller (tab-a、label なし)、audit-first (tab-a、audit-sweep)、review-second (tab-a、review-10)、review-small (tab-a、review-11)、other (tab-b、review-12)。layout の .result.layout.panes は review-second、other、review-small、audit-first、caller の順。rect の x・y・width・height はすべて数値で、height は audit-first=50、review-second=50、review-small=20、other=200、caller=100。split の .result.pane.pane_id は new-review。実行はしないで。",
+      "expected_output": "pane list --workspace ws-a を tab-a と review- / audit- の label で絞る。値は jq --arg で渡す。pane layout --pane caller の rect.height を候補の ID と照合する。最大の高さは 50 で同点だが、pane list で先の audit-first を選ぶ。herdr pane split --pane audit-first --direction down --cwd <repo root> --no-focus を使い、--ratio は付けない。呼び出し元は分割しない。split の .result.pane.pane_id の new-review を後続の rename / run に渡す。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "mixed-column",
+          "text": "review- と audit- を同じ tab の候補として扱い、caller と other を除外する"
+        },
+        {
+          "id": "largest-stable-order",
+          "text": "高さが最大で同点なら layout の順でなく pane list の順に従い audit-first を選ぶ"
+        },
+        {
+          "id": "split-in-column",
+          "text": "audit-first を down、cwd、no-focus で分割し、ratio は付けない。新しい ID は split の JSON から読む"
+        }
+      ]
+    },
+    {
+      "id": 36,
+      "name": "herdr-column-discovery-fallback",
+      "prompt": "herdr status と pane current は成功し、呼び出し元の pane_id=caller、tab_id=tab-a、workspace_id=ws-a は読めた。列の探索中に次のどれかが起きた場合の手順を説明して。A: pane list が非ゼロで終了。B: list の .result.panes が配列でない。C: 同じ tab の review- の候補があるが pane layout が非ゼロで終了。D: layout の候補の rect.height が文字列。E: 候補の ID に対応する layout の pane が無い。実行はしないで。",
+      "expected_output": "どれも列を確認できなかったとして、herdr pane split --pane caller --direction right --ratio 0.6 --cwd <repo root> --no-focus で起動する。split の応答から新しい pane_id を読む。結果には列の探索が失敗した理由と、呼び出し元の右に pane を作ったことを 1 行書く。これは pane list / pane layout の失敗だけの扱い。pane current の成功条件は変えず、split 自体の失敗には既存の herdr → 直接 → BLOCKED の条件を適用する。同時起動や探索の fallback では列が 2 つできる場合がある。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "right-on-discovery-failure",
+          "text": "A〜E の全件で、推測した列や down 分割を使わず caller の right 分割 (ratio 0.6、cwd、no-focus) に進む"
+        },
+        {
+          "id": "report-fallback",
+          "text": "列を確認できなかった理由と右に作ったことを結果へ 1 行書く"
+        },
+        {
+          "id": "route-boundary",
+          "text": "探索失敗を直接起動の理由にせず、pane current と split の失敗は従来の起動経路の条件で扱う"
+        }
+      ]
+    },
+    {
+      "id": 37,
+      "name": "herdr-column-current-failure-keeps-route",
+      "prompt": "herdr status は running だが pane current は失敗した。Claude Code の有効な settings に sandbox.enabled: true がある。列の探索失敗時と同じく、右に pane を作って review を始めてよい? 手順だけ答えて。",
+      "expected_output": "pane current の成功が herdr 経由の条件なので、列の探索失敗の fallback は使わない。ID を推測して split しない。caller の sandbox が有効なので直接起動も不可。既存の起動経路に従い Status: BLOCKED、Blocked at: launch-path として人手の手順を返す。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-invented-caller",
+          "text": "pane current の失敗を pane list / pane layout の失敗と区別し、ID を推測して split しない"
+        },
+        {
+          "id": "blocked-in-sandbox",
+          "text": "sandbox 内で直接起動せず、Status: BLOCKED / Blocked at: launch-path と人手の手順を返す"
         }
       ]
     }

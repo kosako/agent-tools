@@ -97,11 +97,62 @@ model-specific config を足しません。別 agent / wrapper に代行させ�
 
 ### herdr 経由
 
+review・監査・相談の pane は、呼び出し元の tab の右の列にまとめます。`SKILL.md` §2 の
+`pane current` が成功する条件は変えません。pane の作成は次の順です。
+
+1. `herdr pane current` の応答の `.result.pane` から `pane_id`・`tab_id`・`workspace_id` を読みます。
+   以降はこの呼び出し元を使い、ID を環境変数や名前から推測しません。必要な ID が空・文字列でない場合も、
+   herdr 経由で起動できないものとして §2 の起動経路の規則へ戻ります。
+2. `herdr pane list --workspace <workspace_id>` が成功したら、`.result.panes` が配列で、各要素の
+   `pane_id`・`tab_id` が空でない文字列、`label` が欠落または文字列であることを確認します。
+   次の jq で呼び出し元の tab に絞り、`review-` / `audit-` で始まる label の pane を列の候補にします。
+   名前の無い pane は `label` key 自体が無いので、候補から外します。候補の順序は pane list のまま保ちます。
+
+   ```sh
+   jq -c --arg tab "$tab" '.result.panes | map(select(
+     .tab_id == $tab and ((.label // "") | (startswith("review-") or startswith("audit-")))
+   ))'
+   ```
+
+   stdin は検査した pane list の JSON、`tab` は手順 1 の `tab_id` です。値を jq の式へ埋め込みません。
+3. 候補が無ければ、下の「列を作る」の command で呼び出し元を右に分割します。
+   `--ratio 0.6` は元の pane の割合なので、呼び出し元は横幅の 60% を保ちます。
+4. 候補があれば、`herdr pane layout --pane <呼び出し元の pane_id>` を実行します。
+   `.result.layout.panes` が配列で、各要素の `pane_id` が空でない文字列、`rect` の
+   `x`・`y`・`width`・`height` が数値であることを確認します。
+   候補の ID ごとに layout の要素がちょうど 1 つ対応することを確かめ、`rect.height` が最大の候補を選びます。
+   同じ高さなら pane list の順で最初を選びます (layout の順では選ばない)。
+   ID の照合に jq を使うときも `--arg` で値を渡します。その pane を下に分割し、`--ratio` は付けません。
+5. split の成功を確認し、応答の `.result.pane.pane_id` から新しい pane の ID を読みます。
+   空でない文字列と確かめてから rename / run / wait-output に使い、推測した ID は使いません。
+
+列を探す `pane list` / `pane layout` が失敗するか、上の JSON の形や対応関係を確認できなければ、
+呼び出し元を右に分割して起動します。結果に「列を確認できなかったため、呼び出し元の右に pane を作成した」
+と理由を 1 行添えます。これは列の探索だけの fallback です。`pane current` や split の失敗
+(split の応答から ID を読めない場合も含む) は、既存の起動経路 (herdr → 直接 → BLOCKED) の規則に従います。
+
+同時に 2 本を起動すると、列が 2 つできる場合があります。探索の fallback でも同じ限界があります。
+列の pane がすべて閉じると、呼び出し元は元の幅に戻ります。
+user が自分の pane に `review-` / `audit-` で始まる名前を付けた場合も、列の候補とみなします。
+
 次は shell を介さず argv を直接組む経路の形です (各 `<…>` は 1 argument として渡す値そのもので、
 この経路では escape は pane shell 用の 1 段だけです)。
 
+列を作る (候補なし、または列の探索失敗):
+
 ```sh
-herdr pane split --current --direction down --ratio 0.3 --cwd <repo root> --no-focus
+herdr pane split --pane <呼び出し元の pane_id> --direction right --ratio 0.6 --cwd <repo root> --no-focus
+```
+
+列に足す (上とはどちらか一方だけ):
+
+```sh
+herdr pane split --pane <最大の高さの候補の pane_id> --direction down --cwd <repo root> --no-focus
+```
+
+以下の pane-id は、選んだ split の応答の `.result.pane.pane_id` です。
+
+```sh
 herdr pane rename <pane-id> review-<PR 番号、無ければ mode の形>
 herdr pane run <pane-id> <"zsh " + run script path の shell literal>
 herdr pane wait-output <pane-id> --match CODEX-REVIEW-DONE-<nonce> --timeout 300000
