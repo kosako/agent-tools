@@ -24,6 +24,16 @@ Issue 番号、branch 名、path、nonce は caller の free text や git / gh �
 
 ## 1. run directory
 
+最初に `SKILL.md` §1 の開始の前提を確かめる:
+
+```sh
+[ -z "${GH_REPO-}" ] || exit 1
+```
+
+空の値は無い扱い。空でなければ何も作らず、packet も書かずに `Blocked at: preflight` で止める。
+`Reason` は「`GH_REPO` が空でない」、`Next step` は「`GH_REPO` を外して起動し直す」。
+gh の command ごとに向く repo が分かれうるため (理由は §9)、自分で env を外して続けない。
+
 `mktemp -d` で run dir を作り、以降の成果物 (`preflight.json`、`brief.md`、`run.zsh`、`result.md`、
 `codex.log`、`done.txt`、`pane.log`、`tab-id`、退避物) はすべてここに置く。
 
@@ -516,8 +526,8 @@ ruby -e '
 ```sh
 "$preflight" --verify-git-snapshot "$run/preflight.json" --clone "$clone_root" || exit 1
 git -C "$clone" status --porcelain=v1 --untracked-files=all > "$run/wip-status.txt" || exit 1
-git -C "$clone" diff --cached --binary > "$run/wip-staged.patch" || exit 1
-git -C "$clone" diff --binary > "$run/wip-unstaged.patch" || exit 1
+git -C "$clone" diff --cached --binary --no-textconv --no-ext-diff > "$run/wip-staged.patch" || exit 1
+git -C "$clone" diff --binary --no-textconv --no-ext-diff > "$run/wip-unstaged.patch" || exit 1
 ( set -o pipefail
   git -C "$clone" ls-files --others --exclude-standard -z \
     | tar -C "$clone" --null -T - -cf "$run/wip-untracked.tar" ) || exit 1
@@ -531,6 +541,7 @@ clone から取り出してから、再起動を指示する」(`RESULT-FORMAT.m
 
 - `--cached` と作業ツリーの diff を分けるのは、stage 後に作業ツリーだけ戻した変更を落とさない
   ため。`--binary` で binary も復元できる形にする。
+- `--no-textconv --no-ext-diff` は、textconv と外部の diff を起動せず、元の内容を復元できる patch にするため。
 - untracked は file 名を shell に通さず、NUL 区切りの list を `tar --null -T -` に渡す (bsdtar は
   list の名前を option として解釈しない。GNU tar なら `--verbatim-files-from` を足す)。
   untracked が無くても tar はでき、中身が空 (entry 0 件) の tar になる (bsdtar で実測)。同じく `git ls-files`
@@ -620,11 +631,33 @@ git の error が `gate-publish.err` に残る。worker の branch は base か�
 とみなす file の中身も差分に出し、textconv や外部 diff の command を起動しないため (#414)。`grep` は 1 (一致なし) のときだけ進む
 (`! grep` は読み取りの失敗 (2) も成功に反転するので使わない)。`title` と `body_file` は literal の変数で渡す。)
 
-通ったら:
+通ったら、push と PR 作成の直前に対象 repo を決めて確かめる:
+
+```sh
+slug=$(cd "$main" && gh repo view --json nameWithOwner --jq .nameWithOwner) || exit 1
+ruby -e 's = ARGV.fetch(0); exit(s.match?(/\A[\w.-]+\/[\w.-]+\z/) && !s.start_with?("-") ? 0 : 1)' "$slug" || exit 1
+push_url=$(git -C "$main" remote get-url --push origin) || exit 1
+github_host=github.com
+case "$push_url" in
+  "https://$github_host/$slug"|"https://$github_host/$slug.git"|\
+  "git@$github_host:$slug"|"git@$github_host:$slug.git"|\
+  "ssh://git@$github_host/$slug"|"ssh://git@$github_host/$slug.git") ;;
+  *) exit 1 ;;
+esac
+```
+
+`gh repo view` は `GH_REPO` を見ず current の directory の repo を返すが、`gh pr` は `GH_REPO` を見る。
+command ごとに向く repo が分かれうるので、開始時に `GH_REPO` が空であることを求める (§1)。
+さらに main で得た slug と origin の push URL を上の 6 形式で完全一致させる。
+取得・検証の失敗や不一致なら、push も PR 作成もせず `Blocked at: public-safety` で止める
+(`Reason` は「公開先を確かめられない」)。slug と URL は §0 の literal の変数で渡し、command 文字列へ埋め込まない。
+後始末 (§11) でも、この code block を再実行して slug を決め直し、失敗時は `Blocked at: cleanup` とする。
+
+一致を確かめたら:
 
 ```sh
 git -C "$main" push -u origin "refs/heads/${branch}:refs/heads/${branch}"
-gh pr create --base main --head "$branch" --title <title> --body-file <body file>
+gh pr create --repo "$slug" --base main --head "$branch" --title "$title" --body-file "$body_file"
 ```
 
 title / body は orchestrator が packet から書く (一時 file は repository の外)。PR 番号を packet の
@@ -647,6 +680,11 @@ title / body は orchestrator が packet から書く (一時 file は repositor
 
 ## 11. 後始末 (packet が done になったとき。後始末モード)
 
+最初に `[ -z "${GH_REPO-}" ]` で env の `GH_REPO` が空であることを確かめる (空の値は無い扱い)。
+空でなければ何も作らず、tab にも clone にも触らず `Blocked at: cleanup` で止める。
+`Reason` は「`GH_REPO` が空でない」、`Next step` は「`GH_REPO` を外して起動し直す」。
+gh の command ごとに向く repo が分かれうるため、自分で env を外して続けない。
+
 worker の tab を閉じ、clone を退避先へ移すのは、PR が merge されて packet が `done` になった後に、人が後始末を
 明示したときだけです (`SKILL.md` の「モード」と §9。時点は `SKILL.md` §3)。`blocked` の間と RUNNING の間は、
 調べられるように残します。packet は書きません。clone は消しません (退避先を消すのは人)。
@@ -659,6 +697,11 @@ clone の置き場) が欠ける)。clone には git を実行せず、中に `c
 
 ### 前提 (done と merge)
 
+§9 の対象 repo を決めて確かめる code block を、main に対して再実行する。
+main で slug を取得・検証し、origin の push URL がその slug の GitHub URL と完全一致したときだけ以下へ進む。
+失敗・不一致なら `Blocked at: cleanup` (`Reason` は「公開先を確かめられない」) で止める。
+この確認で得た `slug` を PR の metadata の取得にも渡す (以前の run の値は使わない)。
+
 ```sh
 # list の終了コードを先に確かめてから照合する (§4 の最後と同じ形)
 packets=$("$packet_cli" list --json --all) || exit 1
@@ -670,7 +713,7 @@ prev_run=$(printf '%s' "$row" | jq -er '.last_run') || exit 1
 pr=$(printf '%s' "$row" | jq -er '.pr') || exit 1
 branch=$(printf '%s' "$row" | jq -er '.branch') || exit 1
 # PR は metadata だけを読む (title / body は取得しない)
-meta=$(gh pr view "$pr" --json state,headRefName) || exit 1
+meta=$(gh pr view "$pr" --repo "$slug" --json state,headRefName) || exit 1
 printf '%s' "$meta" | jq -e --arg branch "$branch" '.state == "MERGED" and .headRefName == $branch' >/dev/null || exit 1
 ```
 

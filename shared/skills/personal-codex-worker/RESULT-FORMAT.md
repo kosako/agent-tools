@@ -53,7 +53,10 @@ branch・commit 前提、再起動・修正 round での再利用の照合)、�
 生存を確かめられない (`launch-record`) は **state を変えない** (人が外で起動した worker や、動いているかもしれない
 worker を「停止中」にしないため)。
 
-転記の後に止まった場合 (回収・trailer 検査・公開する内容の gate。`SKILL.md` §7):
+開始時に `GH_REPO` が空でなければ、`Blocked at: preflight`、`Reason: GH_REPO が空でない`、
+`Next step: GH_REPO を外して起動し直す` と返す。packet は書かず、今回は run dir と clone を作っていないと明記する。
+
+転記の後に止まった場合 (回収・trailer 検査・公開する内容の gate・公開先の確認。`SKILL.md` §7):
 
 ```text
 Status: BLOCKED
@@ -63,6 +66,13 @@ Packet: #<issue> — 結果 "### <日付> worker/codex" を転記済み / 結果
 Run dir: <path>
 Next step: <fetch の失敗を人が調べる | author が交代するなら新 branch + 新 PR に分ける | origin/main を人が確かめる | gate が止めた行を直す、または警告を人が確かめる>
 ```
+
+公開先の slug の取得・検証や origin の push URL との照合が失敗したときは `Blocked at: public-safety`。
+`Reason` は「公開先を確かめられない」、`Next step` は main の repo と origin の push URL を人が確かめること。
+
+後始末モードでは、開始時の `GH_REPO` が空でない場合と、公開先を確かめられない場合も `Blocked at: cleanup`。
+前者の `Reason` と `Next step` は開始時の停止と同じ。後者は main の repo と origin の push URL を人が確かめる。
+packet や PR の確認より前に止まった場合、その状態は「確かめていない」と書く。
 
 後始末モード (`SKILL.md` §9。人が明示したときだけ。packet は書かない):
 
