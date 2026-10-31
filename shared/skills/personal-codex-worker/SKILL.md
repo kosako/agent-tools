@@ -295,8 +295,11 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   この hard cap は待つ側の上限で、`codex exec` 自体は safe-run で包まない (運用 instruction の「test と長時間の
   command」の例外。上限で止めると途中の成果と clone の状態の回収が食い違う。#512)。worker の中の test は §4 の
   brief のとおり safe-run 経由。
-- **limit**: `codex.log` に `You've hit your usage limit` (前方一致) があれば `Blocked at: limit`。
-  自動で再起動しない (limit の reset を待つ。残量の扱いは `personal-project-operating-loop` の「割当」)。
+- **limit**: `done.txt` の exit が 0 でなく、`codex.log` に `ERROR: You've hit your usage limit` で始まる行が
+  あれば `Blocked at: limit` (`personal-maintenance-sweep` の `BUDGET.md` と同じ判定)。行の途中の文言や exit 0 の
+  run は limit としない (`codex.log` には worker が読んだ file の中身も出るので、この skill の文書や eval を読むと
+  同じ文言が現れる。#587)。自動で再起動しない (limit の reset を待つ。残量の扱いは
+  `personal-project-operating-loop` の「割当」)。
 - **空振り**: `done.txt` が `exit=0` なのに `result.md` が欠落 / 空なら、新しい nonce で同じ brief を
   **1 回だけ** 再実行し、2 回目も空なら `Blocked at: executor-result`。worker が commit 済みなら
   再実行は同じ clone で続きから (brief は同じ)。再実行は**新しい run dir** で行い、起動の記録の `run` を
