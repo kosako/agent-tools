@@ -59,7 +59,7 @@ instruction entry が無いと skip するので、register の後に回す。sy
 | --- | --- | --- |
 | asset の発見・読み込み (共通基盤) | — | `scripts/lib/assets.rb` (`Assets.load_all` / `manifest_paths` / `sources_by_name` / `manifest_digest`) |
 | artifact_kind / 配置先 path 解決 (共通基盤) | — | `scripts/lib/artifact_targets.rb` (`ArtifactTargets.resolve` / `target_path` / `TOOL_KINDS` / `tool_supports?` / `CATALOG_VERSION`) |
-| 致命 gate (安全判定の source of truth) | — | `scripts/lib/gate.rb` (`Gate.fatal_errors`) |
+| 致命 gate (安全判定の source of truth) | — | `scripts/lib/gate.rb` (`Gate.evaluate` / `Gate.fatal_errors`) |
 | manifest schema 検証 | `check-manifests.sh` | `scripts/lib/check_manifests.rb` (`CheckManifests::Runner#run`) |
 | static prompt injection 検査 | `check-injection.sh` | `scripts/lib/check_injection.rb` (`CheckInjection::Runner#run`, `PATTERNS`) |
 | credential 隔離 acceptance 判定 | `check-credential-isolation.sh` | `scripts/lib/check_credential_isolation.rb` (`CheckCredentialIsolation.judge`) |
@@ -90,8 +90,9 @@ asset (safe-gh / safe-gh-hook など) にも純ロジックの test がある。
 
 ### 4.1 致命 gate を一箇所に集約
 
-安全判定の唯一の真実は `scripts/lib/gate.rb` の `Gate.fatal_errors`。
-**build と register が同じ gate を呼ぶ**ので、同じ asset への合否は必ず一致する。
+安全判定の唯一の真実は `scripts/lib/gate.rb` の `Gate.evaluate` (build は error だけを返す `Gate.fatal_errors` を使う)。
+**build と register が同じ gate を呼ぶ**ので、同じ asset への合否は必ず一致する。register は gate が作った injection の
+finding と manifest の一覧をそのまま medium の帰属に使い、同じ検査を走らせ直さない (#569)。
 
 致命 gate (どれか 1 つでも該当すれば fail):
 

@@ -29,15 +29,16 @@ module Register
 
     # catalog hash を返す。gate violation は Error を raise し、catalog は書かない。
     def run
-      # 致命 gate は build と共有する (docs/register-catalog.md)。
-      errors = Gate.fatal_errors(@root)
-      unless errors.empty?
-        errors.each { |line| warn line }
+      # 致命 gate は build と共有する (docs/register-catalog.md)。gate が作った injection の finding と manifest の
+      # 一覧を使い回し、同じ検査を走らせ直さない (#569)。
+      gate = Gate.evaluate(@root)
+      unless gate.pass?
+        gate.errors.each { |line| warn line }
         raise Error, "fatal gate failed; catalog not updated"
       end
 
-      findings = CheckInjection::Runner.new(@root).run.last
-      assets = Assets.load_all(@root).map { |a| a.merge(flagged: false) }
+      findings = gate.findings
+      assets = gate.assets.map { |a| a.merge(flagged: false) }
       mediums = findings.select { |f| f.risk == "medium" }
       assign_findings(assets, mediums)
 

@@ -438,4 +438,40 @@ ruby -r"$script_dir/../lib/register" -e '
   abort "expected both owners flagged, got #{flagged.inspect}" unless flagged == [true, true]
 ' "$tmp/ok" > "$tmp/r-owners" 2>&1 || fail "assign_findings must flag every owner: $(cat "$tmp/r-owners")"
 
+# --- case: register は gate の injection の検査と manifest の読み込みを使い回し、1 回の run で走らせ直さない (#569) ---
+# medium finding があり承認済みの fixture で、CheckInjection::Runner#run と Assets.load_all の呼び出しを数える。
+# gate (Gate.evaluate) の 1 回ずつだけで、medium の帰属と登録の結果は今までどおり。
+mkdir -p "$tmp/reuse/shared/workflows"
+printf '# demo with hidden\342\200\213marker\n' | write_demo_source "$tmp/reuse/shared/workflows"
+write_manifest "$tmp/reuse/shared/workflows"
+bid_reuse=$(bid "$tmp/reuse" shared/workflows/personal-demo.md markdown)
+write_manifest "$tmp/reuse/shared/workflows" "review:
+  human_review: approved
+  approved_build_id: $bid_reuse
+  approved_artifact_kind: skill"
+ruby -r"$script_dir/../lib/register" -e '
+  counts = Hash.new(0)
+  CheckInjection::Runner.prepend(Module.new do
+    define_method(:run) { |*args| counts[:injection] += 1; super(*args) }
+  end)
+  Assets.singleton_class.prepend(Module.new do
+    define_method(:load_all) { |*args| counts[:assets] += 1; super(*args) }
+  end)
+  # 基準: gate だけを評価したときの呼び出しの数 (injection の検査も中で manifest を読む)。
+  Gate.evaluate(ARGV[0])
+  gate_counts = counts.dup
+  counts.clear
+  catalog = Register::Runner.new(ARGV[0]).run
+  abort "gate ran injection #{gate_counts[:injection]} time(s), expected 1" unless gate_counts[:injection] == 1
+  abort "register ran injection #{counts[:injection]} time(s), expected 1 (the gate)" unless counts[:injection] == 1
+  unless counts[:assets] == gate_counts[:assets]
+    abort "register loaded assets #{counts[:assets]} time(s), the gate alone #{gate_counts[:assets]}"
+  end
+  regs = catalog["assets"].map { |a| a["registration"] }.uniq
+  abort "unexpected registration: #{regs.inspect}" unless regs == ["registered"]
+  checks = catalog["assets"].map { |a| a["checks"]["prompt_injection_static"] }.uniq
+  abort "the medium finding must still be attributed: #{checks.inspect}" unless checks == ["human_review"]
+' "$tmp/reuse" > "$tmp/r-reuse" 2> "$tmp/r-reuse.err" \
+  || fail "register must reuse the gate results: $(cat "$tmp/r-reuse" "$tmp/r-reuse.err")"
+
 echo "ok: register self-test passed"
