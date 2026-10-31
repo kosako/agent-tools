@@ -121,7 +121,6 @@ module CheckManifests
 
       @declared_names[data["name"]] << path if data["name"].is_a?(String)
       collect_instruction_targets(data, path)
-      check_directory_skill_contents(data, path)
       check_approved_kind_uniformity(data, path)
 
       validate_schema_version(path, data["schema_version"]) if data.key?("schema_version")
@@ -132,11 +131,14 @@ module CheckManifests
       check_target_kinds(data, path) if data.key?("targets")
       validate_risk(path, data["risk"]) if data.key?("risk")
       if data.key?("source")
-        source_error_count = @errors.size
-        validate_source(path, data["source"])
-        if @errors.size == source_error_count
-          check_skill_entrypoint(data, path)
-          check_plugin_source(data, path)
+        # 内容の検査は、source の検証の結果 (SourceCheck) を受け取り、確かめた範囲だけを読む (#569)。
+        # directory skill の中身は「自分の dir を指す directory」と確かめられれば、ほかの source の error が
+        # あっても検査する (前と同じ診断の範囲)。entrypoint と plugin は source の error が無いときだけ。
+        source = validate_source(path, data["source"])
+        check_directory_skill_contents(data, path, source) if source&.owned_dir
+        if source&.clean
+          check_skill_entrypoint(data, path, source)
+          check_plugin_source(data, path, source)
         end
       end
       validate_review(path, data["review"]) if data.key?("review")
@@ -276,11 +278,18 @@ module CheckManifests
       end
     end
 
+    # source の検証の結果。path / format は検証した値。owned_dir は directory 形式で、自分の dir (manifest の
+    # dir) を指し、それが directory であること。clean は、この検証が error を足さなかったこと (#569)。
+    SourceCheck = Struct.new(:path, :format, :owned_dir, :clean, keyword_init: true)
+
+    # source を検証し、内容の検査に渡す SourceCheck を返す。path を使えない (mapping でない・path が無い・
+    # 絶対 path・'..' を含む) ときは nil で、内容の検査は走らない。
     def validate_source(path, value)
       unless value.is_a?(Hash)
         error(path, "source must be a mapping with keys path, format")
-        return
+        return nil
       end
+      error_count = @errors.size
       (value.keys - %w[path format]).each { |key| error(path, "unknown source key: #{key}") }
 
       source_path = value["path"]
@@ -292,16 +301,17 @@ module CheckManifests
 
       unless source_path.is_a?(String) && !source_path.empty?
         error(path, "missing source key: path")
-        return
+        return nil
       end
       if source_path.start_with?("/")
         error(path, "source.path must be relative, got #{source_path.inspect}")
-        return
+        return nil
       end
       if source_path.split("/").include?("..")
         error(path, "source.path must not contain '..'")
-        return
+        return nil
       end
+      owned_dir = false
       unless source_path.start_with?("shared/")
         error(path, "source.path must be under shared/, got #{source_path.inspect}")
       end
@@ -324,6 +334,7 @@ module CheckManifests
         expected_dir = File.dirname(path)
         if source_path.chomp("/") == expected_dir
           @directory_roots << expected_dir
+          owned_dir = File.directory?(full)
         else
           error(path, "directory manifest must point at its own directory #{expected_dir.inspect}")
         end
@@ -348,6 +359,7 @@ module CheckManifests
                       "(expected #{sidecar_stem(File.basename(source_path))}.asset.yml)")
         end
       end
+      SourceCheck.new(path: source_path, format: format, owned_dir: owned_dir, clean: @errors.size == error_count)
     end
 
     # source file の名前から sidecar manifest の stem (拡張子を除いた名前) を得る。
@@ -487,31 +499,20 @@ module CheckManifests
     # scripts/ (実行コード) は配る前の安全検査能力が無い (#43 待ち) ため fail-closed
     # で止める。黙ってスキップせず、理由を出して gate を止める。
     # 型不正 manifest でもクラッシュしないよう、resolve に必要な値だけを安全に読む。
-    def check_directory_skill_contents(data, path)
-      source = data["source"]
-      return unless source.is_a?(Hash) && source["format"] == "directory"
-
+    # source は validate_source が「自分の dir を指す directory」と確かめたもの (owned_dir) だけを受け取る。
+    # 未検証の source.path で走査すると shared/../ 脱出・repo 外走査 (大量走査 DoS 含む) が起きる
+    # (CM-181-01。外部由来 manifest が起点なので脅威モデル内) ので、走査の範囲はその確認に依存する。
+    def check_directory_skill_contents(data, path, source)
       targets = data["targets"]
       return unless targets.is_a?(Array)
 
-      asset = { kind: data["kind"], compatibility: data["compatibility"], source: source }
+      asset = { kind: data["kind"], compatibility: data["compatibility"], source: data["source"] }
       is_skill = targets.any? do |tool|
         tool.is_a?(String) && ArtifactTargets.resolve(asset, tool) == "skill"
       end
       return unless is_skill
 
-      source_path = source["path"]
-      return unless source_path.is_a?(String)
-
-      # check_directory_skill_contents は validate_source より先に走るため、未検証の
-      # source.path で Dir.glob すると shared/../ 脱出・repo 外走査 (大量走査 DoS 含む) が
-      # 起きる (CM-181-01)。外部由来 manifest が起点なので脅威モデル内。directory manifest の
-      # 所有不変条件「source は自分の dir」(validate_source と同じ条件) を満たすときだけ走査し、
-      # 満たさない manifest は走査せず validate_source の reject に委ねる。
-      return unless source_path.chomp("/") == File.dirname(path)
-
-      dir = File.join(@root, source_path)
-      return unless File.directory?(dir)
+      dir = File.join(@root, source.path)
 
       # 実行コード (配る前の安全検査能力が無い; #43 external scanner 待ち) を fail-closed で
       # 止める。top-level の scripts/ 名だけを見ると bin/payload.rb やネストした evals/scripts/
@@ -544,12 +545,12 @@ module CheckManifests
       end
     end
 
-    # plugin artifact になる asset の source を検証する。validate_source が通った後だけ呼び、
+    # plugin artifact になる asset の source を検証する。validate_source が error 無しで通した source (clean) だけを受け取り、
     # 未検証 path や symlink の先を読まない。plugin は OpenCode が import する単一の .js に限る
     # (.ts と directory は扱わない)。先頭が shebang か marker の prefix なら拒否し、build が
     # 前置する marker 行と合わせて file 全体が UTF-8 として正しいことをここで確かめる
     # (PluginMarker.parse は先頭行しか見ない, #295)。
-    def check_plugin_source(data, path)
+    def check_plugin_source(data, path, source)
       targets = data["targets"]
       return unless targets.is_a?(Array)
 
@@ -559,9 +560,8 @@ module CheckManifests
       end
       return unless plugin
 
-      source = data["source"]
-      source_path = source["path"]
-      if source["format"] == "directory"
+      source_path = source.path
+      if source.format == "directory"
         error(path, "plugin asset must be a single .js file, not a directory format")
         return
       end
@@ -581,9 +581,9 @@ module CheckManifests
       end
     end
 
-    # source の検証後だけ呼び、未検証 path や symlink の先を読まない。
+    # validate_source が error 無しで通した source (clean) だけを受け取り、未検証 path や symlink の先を読まない。
     # kind ではなく生成先で判定し、Codex の instruction には skill の必須項目を課さない。
-    def check_skill_entrypoint(data, path)
+    def check_skill_entrypoint(data, path, source)
       targets = data["targets"]
       return unless targets.is_a?(Array)
 
@@ -593,9 +593,8 @@ module CheckManifests
       end
       return if skill_targets.empty?
 
-      source = data["source"]
-      directory = source["format"] == "directory"
-      skill_md = File.join(@root, source["path"])
+      directory = source.format == "directory"
+      skill_md = File.join(@root, source.path)
       check_skill_target_metadata_dirs(path, skill_md) if directory
       skill_md = File.join(skill_md, "SKILL.md") if directory
       return unless File.file?(skill_md)
