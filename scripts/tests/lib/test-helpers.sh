@@ -3,8 +3,16 @@
 #   . "$script_dir/lib/test-helpers.sh"
 # で source する契約 (bid / repo_root は source 時・呼び出し時の $script_dir に依存する)。
 # tests/lib/ 配下に置くのは、CI の `for t in scripts/tests/*.sh` (非再帰 glob) に
-# helper 自身が test として拾われないようにするため。関数定義と repo_root の導出のみで、
+# helper 自身が test として拾われないようにするため。関数定義と repo_root の導出、下の test の knob の解除だけで、
 # set オプションや trap は変更しない (POSIX sh)。
+
+# test の knob (偽の command の振る舞いを決める FAKE_* と、helper や suite が読む WAM_EXTRA・REPORT_TZ・RECORD_DIR) を
+# 親の環境から継承しない (#571)。継承すると正常系の case が親の設定で落ちたり、fixture の外を読み書きしたりする。
+# suite は source の後に、必要な case でだけ立てる (source より前に立てた値も、ここで消える)。
+for _th_knob in $(env | sed -n 's/^\(FAKE_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  unset "$_th_knob"
+done
+unset _th_knob WAM_EXTRA REPORT_TZ RECORD_DIR
 
 # テストを失敗させる。診断は stderr へ。
 fail() {

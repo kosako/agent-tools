@@ -11,10 +11,6 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 src="$repo_root/shared/scripts/personal-tool-call-record-hook.rb"
 [ -f "$src" ] || fail "missing $src"
 
-# test の knob の RECORD_DIR (run_hook の出力先) を親の環境から継承すると、hook が fixture の外へ書くので最初に外す
-# (出力先の上書きの case だけが立てる。#571)。
-unset RECORD_DIR
-
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/home" "$tmp/records" "$tmp/bin"

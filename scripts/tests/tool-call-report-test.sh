@@ -14,8 +14,8 @@ src="$repo_root/shared/scripts/personal-tool-call-report.rb"
 
 # 記録先の env は HOME / XDG_STATE_HOME より優先される (default_record_path)。親の環境から継承すると、既定の入力先の
 # case が fixture ではなく実際の記録を読むので、最初に外す。上書きを確かめる case だけが明示して渡す (#571)。
-# test の knob の REPORT_TZ (run_report の TZ) も、継承すると固定した時刻の期待が崩れるので外す (EST5 の case だけが立てる)。
-unset AGENT_TOOLS_TOOL_CALL_RECORD_DIR REPORT_TZ
+# test の knob の REPORT_TZ は、test-helpers.sh が source のときに外す。
+unset AGENT_TOOLS_TOOL_CALL_RECORD_DIR
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
