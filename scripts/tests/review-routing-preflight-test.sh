@@ -545,4 +545,64 @@ rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "malformed --repo should be exit 2 (rc=$rc)"
 
+# ---- #576: 対象の固定 (--expect-base / --expect-head) ----
+# 人の PR の既定 (fx-pull-human) は commits 2・head sha(1)・base sha(99)。fixture の sha.call(i) は format("%040x", i + 1)。
+head_ok=$(printf '%040x' 2)
+base_ok=$(printf '%040x' 100)
+other_oid=$(printf '%040x' 7)
+# run_pf_expect <pulls の fixture> <commits の fixture> <PR 番号> <引数...>: 対象の固定の option を付けて走らせる。
+run_pf_expect() {
+  rpe_pull=$1
+  rpe_commits=$2
+  shift 2
+  env PATH="$fakebin:$PATH" FAKE_GH_PULL_FIXTURE="$rpe_pull" FAKE_GH_FIXTURE="$rpe_commits" ruby "$src" "$@"
+}
+# (a) 一致すれば、option の無いときと同じ出力で routing する。
+plain=$(run_pf "$tmp/fx-claude.json" 12 2>&1) || fail "#576: the plain run should route"
+set +e
+out=$(run_pf_expect "$tmp/fx-pull-human.json" "$tmp/fx-claude.json" 12 --expect-base "$base_ok" --expect-head "$head_ok" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "#576: a matching base / head should route (rc=$rc): $out"
+[ "$out" = "$plain" ] || fail "#576: the output with matching expectations must equal the plain output: $out"
+# (b) head が期待と違えば、routing せずに exit 2 (author を判定する commit の列が、review する head のものでない)。
+for flag in --expect-head --expect-base; do
+  set +e
+  out=$(run_pf_expect "$tmp/fx-pull-human.json" "$tmp/fx-claude.json" 12 "$flag" "$other_oid" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "#576: a mismatched $flag must be exit 2 (rc=$rc): $out"
+  echo "$out" | grep -q "期待した OID と一致しません" || fail "#576: a mismatched $flag must say why: $out"
+  echo "$out" | grep -q "^reviewer:" && fail "#576: a mismatched $flag must not route: $out"
+done
+# (c) 対象を固定したときは、trailer の route でも commit の列が PR の状態 (commits の数と head) と一致することを求める。
+# fx-none は 1 commit で、PR は 2 commit。固定しなければ今までどおり trailer 欠落で fail-closed (exit 1)。
+set +e
+run_pf "$tmp/fx-none.json" 12 >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "#576: without expectations the stale list keeps the old behavior (exit 1), got $rc"
+set +e
+out=$(run_pf_expect "$tmp/fx-pull-human.json" "$tmp/fx-none.json" 12 --expect-head "$head_ok" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "#576: with expectations a commit list that does not match the PR must be exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "commits の数と head" || fail "#576: the stale commit list must say why: $out"
+# (d) bot の route でも同じに固定できる (head の行は今までどおり)。
+set +e
+out=$(run_pf_expect "$tmp/fx-pull-bot1.json" "$tmp/fx-bot-ok.json" 555 --expect-head "$(printf '%040x' 1)" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "#576: a matching bot PR should route (rc=$rc): $out"
+echo "$out" | grep -q "^head: $(printf '%040x' 1)$" || fail "#576: the bot route must still print the head line: $out"
+# (e) 形の外れる OID、値の無い option、同じ option の 2 回は usage で exit 2。
+for bad in "--expect-head ABC" "--expect-base $(printf '%039x' 1)" "--expect-head" "--expect-head $head_ok --expect-head $head_ok"; do
+  set +e
+  # shellcheck disable=SC2086 # bad は上の定数で、空白で分けて option と値にする
+  run_pf_expect "$tmp/fx-pull-human.json" "$tmp/fx-claude.json" 12 $bad >/dev/null 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "#576: '$bad' must be exit 2 (rc=$rc)"
+done
+
 echo "ok: review-routing-preflight self-test"

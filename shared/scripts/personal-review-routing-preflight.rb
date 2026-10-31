@@ -40,7 +40,11 @@
 # commits` は先頭 100 commit しか返さない (pagination なし) ため使わない — 全件を
 # `gh api --paginate --slurp` で取る (plain --paginate は array endpoint でページ境界に
 # `][` を挟み不正 JSON になる既知の落とし穴があるため --slurp + flatten。#160 の前例)。
-# exit: 0 = routing 確定 / 1 = fail-closed / 2 = usage・入力・gh エラー。
+# - 対象の固定 (#576): `--expect-base <OID>` / `--expect-head <OID>` (40 桁の hex) を渡すと、PR の base / head がその OID と
+#   一致し、取得した commit が PR の commits の数と head に一致するとき (取得の途中で head が動いていない) だけ判定する
+#   (どの route でも)。外れれば exit 2 (対象が動いた。review の対象の取得からやり直す)。author を判定した commit の列と、
+#   caller が review する base / head を同じものにするため。渡さなければ今までどおり (bot の route だけ commit の列を照合する)。
+# exit: 0 = routing 確定 / 1 = fail-closed / 2 = usage・入力・gh エラー・対象の不一致。
 
 require "json"
 require "open3"
@@ -324,24 +328,54 @@ module ReviewRoutingPreflight
     oid.match?(/\A[0-9a-f]{7,40}\z/) ? oid[0, 8] : "unknown"
   end
 
+  USAGE = "usage: personal-review-routing-preflight <PR番号> [--repo owner/repo] [--expect-base <OID>] [--expect-head <OID>]"
+  OID_RE = /\A[0-9a-f]{40}\z/.freeze
+
+  # option の値を取り出す (同じ option を 2 回渡すのは拒む)。値が無い・形が外れるときは nil と message。
+  def take_option(args, name, pattern, hint)
+    i = args.index(name)
+    return [nil, nil] if i.nil?
+    return [nil, "#{name} は 1 回だけ指定してください"] if args.count(name) > 1
+
+    value = args[i + 1]
+    return [nil, "#{name} は #{hint}で指定してください"] if value.nil? || !value.match?(pattern)
+
+    args.slice!(i, 2)
+    [value, nil]
+  end
+
+  # PR の base / head が期待した OID と一致するか (渡されたものだけを見る)。
+  def target_matches?(pull, expect)
+    expect.all? do |side, oid|
+      next true if oid.nil?
+
+      ref = pull[side.to_s]
+      ref.is_a?(Hash) && ref["sha"] == oid
+    end
+  end
+
   def run(argv)
     args = argv.dup
-    repo = nil
-    if (i = args.index("--repo"))
-      repo = args[i + 1]
-      if repo.nil? || !repo.match?(%r{\A[\w.-]+/[\w.-]+\z})
-        warn "review-routing-preflight: --repo は owner/repo 形式で指定してください"
-        return 2
-      end
-      args.slice!(i, 2)
+    repo, error = take_option(args, "--repo", %r{\A[\w.-]+/[\w.-]+\z}, "owner/repo 形式")
+    expect_base, error = take_option(args, "--expect-base", OID_RE, "40 桁の hex の OID ") if error.nil?
+    expect_head, error = take_option(args, "--expect-head", OID_RE, "40 桁の hex の OID ") if error.nil?
+    if error
+      warn "review-routing-preflight: #{error}"
+      return 2
     end
     pr_number = args[0]
     unless args.size == 1 && pr_number.to_s.match?(/\A\d+\z/)
-      warn "usage: personal-review-routing-preflight <PR番号> [--repo owner/repo]"
+      warn USAGE
       return 2
     end
+    expect = { base: expect_base, head: expect_head }
+    expecting = !(expect_base.nil? && expect_head.nil?)
 
     pull = fetch_pull(pr_number, repo)
+    if expecting && !target_matches?(pull, expect)
+      warn "review-routing-preflight: error: PR の base / head が期待した OID と一致しません (対象が動いた。review の対象の取得からやり直す)"
+      return 2
+    end
     pull_kind, bot = classify_pull(pull, ENV["GH_HOST"])
     case pull_kind
     when :unregistered_bot
@@ -353,12 +387,13 @@ module ReviewRoutingPreflight
     end
 
     commits = fetch_commits(pr_number, repo)
+    # 判定する commit の列が PR の今の状態 (と、渡されたなら期待した head) のものか。bot の route と、対象を固定したときに見る。
+    if (pull_kind == :bot || expecting) && !snapshot_consistent?(pull, commits)
+      warn "review-routing-preflight: error: 取得した commit が PR の状態 (commits の数と head) と一致しません (やり直す)"
+      return 2
+    end
     oid_kinds =
       if pull_kind == :bot
-        unless snapshot_consistent?(pull, commits)
-          warn "review-routing-preflight: error: 取得した commit が PR の状態 (commits の数と head) と一致しません (やり直す)"
-          return 2
-        end
         unless same_repository?(pull)
           warn "review-routing-preflight: fail-closed: bot の PR の head が base と別の repository (fork)。人が review する"
           return 1
