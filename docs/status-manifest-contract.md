@@ -114,6 +114,7 @@ file 先頭に 1 行の HTML コメント marker を埋め込みます。markdow
 
 生成・解析は `scripts/lib/instruction_marker.rb` に集約し、build (生成) と
 connect / sync (所有判定) が同じ format を共有します。
+marker の値の形は plugin と同じ `scripts/lib/marker_value.rb` が持ちます (下の plugin の節)。
 
 ### Single-file artifact (script): sidecar marker
 
@@ -148,6 +149,16 @@ marker を埋め込みます。OpenCode は `plugins/*.js` を import するの�
 instruction の `InstructionMarker` とは module を分け、互いの marker を拒否します
 (`InstructionMarker.parse` は plugin marker に nil、`PluginMarker.parse` は instruction marker に
 nil)。InstructionMarker の挙動 (先頭行の strip / CRLF 受容 / 非 UTF-8 の scrub) は変えません。
+
+plugin と instruction の marker の値は、`scripts/lib/marker_value.rb` (`MarkerValue`) の閉じた形に限ります (#570)。値が
+コメントの中に入るので、空白・コメントの終端 (`*/` / `-->`)・改行が入ると、承認していない文字列がコメントの外に出えます。
+
+- render (build) は厳密な形だけを出します。name は kebab、target は tool、source は英数字と `.` `_` `-` の segment を
+  `/` でつないだ相対 path (`.` と `..` の segment は不可)、build_id は `sha256:` と 64 桁の hex です。外れた値は例外です。
+  source path は check-manifests が build の前に同じ形で拒みます。
+- parse (sync / status / doctor / connect) は、コメントを壊しうる文字が無いことだけを見ます。source は同じ path の形、
+  ほかの値は英数字と `.` `_` `:` `-` の token です。外れた marker は unmanaged です。古い build の build_id のような、
+  render の形より広い安全な token は、今までどおり読みます。
 
 解析は先頭行 (最初の `\n` の手前) だけを厳密に読み、次のどれかに当たれば marker 無し
 (unmanaged = sync では conflict、prune では skip) と判定します: 先頭行が `/* agent-tools:managed ` で

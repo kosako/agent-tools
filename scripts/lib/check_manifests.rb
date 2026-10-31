@@ -13,6 +13,7 @@ require_relative "assets"
 require_relative "artifact_targets"
 require_relative "path_glob"
 require_relative "plugin_marker"
+require_relative "marker_value"
 require_relative "cli"
 
 module CheckManifests
@@ -314,6 +315,11 @@ module CheckManifests
       owned_dir = false
       unless source_path.start_with?("shared/")
         error(path, "source.path must be under shared/, got #{source_path.inspect}")
+      end
+      # source.path は生成物の管理 marker (コメントの中) にそのまま埋め込まれるので、marker の値の形 (英数字と . _ - / の
+      # 相対 path。. と .. の segment は不可) に限る (#570)。directory の asset は末尾の / を外して当てる。
+      unless MarkerValue.source?(source_path.chomp("/"))
+        error(path, "source.path may only use letters, digits, ., _, - and / between segments, got #{source_path.inspect}")
       end
       @source_owners[source_path.chomp("/")] << path
 
