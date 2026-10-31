@@ -388,4 +388,39 @@ ruby -rtimeout -r"$script_dir/../lib/check_injection" -e '
 ' "$tmp/utf8scan" > "$tmp/out-utf8scan" 2>&1 \
   || fail "comment scan must stay linear on non-ASCII input and report the right lines: $(cat "$tmp/out-utf8scan")"
 
+# --- case: 一致の多い入力でも行番号の計算と照合は線形で、行番号が合う (#569) ---
+# 旧実装は一致ごとに先頭から改行を数え直し (content[0...offset].count)、Regexp#match(content, pos) と MatchData#begin
+# も UTF-8 の文字列で一致ごとに先頭から文字を数え直していた (短い URL を 160000 行並べると約 90 秒)。改行の索引と、
+# 前の一致からの差分の文字数を足す照合では 1 秒前後。先頭の 1 行を非 ASCII にして、多バイト文字を含む入力の経路を通す。
+# 非 ASCII の行を混ぜた小さい入力で、行番号が多バイト文字と CRLF の後でも合うことも確かめる。
+mkdir -p "$tmp/manyurls/shared/prompts"
+ruby -e 'File.write(ARGV[0], "あ\n" + ("see http://example.com/x\n" * 160000))' "$tmp/manyurls/shared/prompts/personal-urls.md"
+printf '\346\227\245\346\234\254\n\346\227\245 http://example.com/a\nplain\r\nhttp://example.com/b \346\227\245 http://example.com/c\n' \
+  > "$tmp/manyurls/shared/prompts/personal-wide-urls.md"
+ruby -rtimeout -r"$script_dir/../lib/check_injection" -e '
+  _, findings = Timeout.timeout(30) { CheckInjection::Runner.new(ARGV[0]).run }
+  urls = findings.select { |f| f.category == "external-url" }
+  many = urls.select { |f| File.basename(f.path) == "personal-urls.md" }.map(&:line)
+  abort "unexpected many-url lines: count=#{many.size} first=#{many.first} last=#{many.last}" unless many == (2..160001).to_a
+  wide = urls.select { |f| File.basename(f.path) == "personal-wide-urls.md" }.map(&:line)
+  abort "unexpected wide-url lines: #{wide.inspect}" unless wide == [2, 4, 4]
+' "$tmp/manyurls" > "$tmp/out-manyurls" 2>&1 \
+  || fail "line numbers and matching must stay linear on many matches and report the right lines: $(cat "$tmp/out-manyurls")"
+# 照合だけを見る: ASCII だけの入力と、多バイト文字を含む入力の両方で、320000 件の一致が 1 秒未満 (UTF-8 の文字列での
+# Regexp#match の loop は、ASCII だけでも約 40 秒)。上の case は行番号の計算も含むので、照合の退行はここで捕まえる。
+# 空の一致をしうる pattern と数字の後方参照を持つ pattern は、前の loop で照合する (終わること、位置が前と同じこと)。
+ruby -rtimeout -r"$script_dir/../lib/check_injection" -e '
+  url = CheckInjection::PATTERNS.find { |p| p.category == "external-url" }.matcher
+  { "see" => [4, 29], "見" => [2, 25] }.each do |head, first|
+    content = "#{head} http://example.com/x\n" * 320_000
+    positions = Timeout.timeout(10) { CheckInjection.match_positions(url, content) }
+    abort "#{head}: unexpected match count: #{positions.size}" unless positions.size == 320_000
+    abort "#{head}: unexpected positions: #{positions.first(2).inspect}" unless positions.first(2) == first
+  end
+  empty = Timeout.timeout(5) { CheckInjection.match_positions(/x*/, "axb") }
+  abort "empty-match pattern: #{empty.inspect}" unless empty == [0, 1, 2, 3]
+  backref = Timeout.timeout(5) { CheckInjection.match_positions(/(a)\1/, "見aaaa") }
+  abort "numbered-backref pattern: #{backref.inspect}" unless backref == [1, 3]
+' > "$tmp/out-manymatch" 2>&1 || fail "matching must stay linear with many matches and keep the old positions: $(cat "$tmp/out-manymatch")"
+
 echo "ok: check-injection self-test passed"

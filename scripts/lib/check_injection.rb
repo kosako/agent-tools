@@ -247,27 +247,79 @@ module CheckInjection
     # leak_only=true (evals/) のときは privacy/secret leak の category だけを当てる。
     def scan(path, content, leak_only)
       patterns = leak_only ? PATTERNS.select { |p| LEAK_CATEGORIES.include?(p.category) } : PATTERNS
+      newlines = nil
       patterns.flat_map do |pattern|
         positions = CheckInjection.match_positions(pattern.matcher, content)
+        next [] if positions.empty?
+
+        # 行番号は改行の位置の索引を 1 回だけ作って引く (#569。一致ごとに先頭から改行を数え直すと、一致の多い
+        # 入力で二次時間になる)。
+        newlines ||= CheckInjection.newline_offsets(content)
         positions.map do |offset|
-          line = content[0...offset].count("\n") + 1
-          Finding.new(path, line, pattern.risk, pattern.category, pattern.message)
+          Finding.new(path, CheckInjection.line_at(newlines, offset), pattern.risk, pattern.category, pattern.message)
         end
       end
     end
   end
 
-  # matcher ごとの一致の開始位置。Regexp は重ならない一致を順に、callable はその返り値。
+  # matcher ごとの一致の開始位置 (文字の位置)。Regexp は重ならない一致を順に、callable はその返り値。
   def self.match_positions(matcher, content)
     return matcher.call(content) unless matcher.is_a?(Regexp)
 
+    gap_scan_positions(matcher, content) || loop_positions(matcher, content)
+  end
+
+  # 前の一致の終わりから次の一致の先頭までの部分 (gap) を 1 回の走査で取り、その文字数を足して一致の位置を出す (#569)。
+  # Regexp#match(content, pos) と MatchData#begin は、UTF-8 の文字列で一致ごとに先頭から文字を数え直すので、一致の
+  # 多い入力で二次時間になる (ASCII だけの入力でも)。照合は元の文字列のままなので、\b・大文字小文字・encoding の意味は
+  # 変わらず、一致は前の loop と同じ (重ならない一致を順に)。空の一致をしうる pattern と、組み合わせた正規表現を
+  # 作れない pattern (数字の後方参照を持つ) では nil を返し、前の loop で照合する。
+  def self.gap_scan_positions(matcher, content)
+    combined = begin
+      /\G(?<gap>.*?)#{matcher}/m
+    rescue RegexpError
+      return nil
+    end
+    positions = []
+    char_pos = 0
+    content.scan(combined) do
+      match = Regexp.last_match
+      gap = match[:gap].length
+      hit = match[0].length - gap
+      return nil if hit.zero?
+
+      positions << char_pos + gap
+      char_pos += gap + hit
+    end
+    positions
+  end
+
+  # Regexp の重ならない一致の開始位置を順に。空の一致の後は 1 文字進める。末尾を越えたら止める (Regexp#match は
+  # 末尾より後ろの pos でも末尾の空の一致を返すので、止めないと空の一致をしうる pattern で終わらない)。
+  def self.loop_positions(matcher, content)
     positions = []
     pos = 0
-    while (match = matcher.match(content, pos))
+    while pos <= content.length && (match = matcher.match(content, pos))
       positions << match.begin(0)
       pos = match.begin(0) + [match[0].length, 1].max
     end
     positions
+  end
+
+  # content の改行の文字の位置 (昇順)。行ごとの文字数を足すだけなので線形。
+  def self.newline_offsets(content)
+    offsets = []
+    pos = 0
+    content.each_line do |line|
+      pos += line.length
+      offsets << pos - 1 if line.end_with?("\n")
+    end
+    offsets
+  end
+
+  # 文字の位置 offset の行番号 (1 始まり)。offset より前にある改行の数 + 1 で、content[0...offset].count("\n") + 1 と同じ。
+  def self.line_at(newlines, offset)
+    (newlines.bsearch_index { |nl| nl >= offset } || newlines.size) + 1
   end
 
   def self.main(argv)
