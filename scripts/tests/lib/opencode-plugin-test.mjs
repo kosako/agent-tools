@@ -969,6 +969,29 @@ console.log(JSON.stringify({ elapsed: resolvedAt - started, resolvedAt, warns, o
   console.log("ok E5 payloads are Claude-shaped (no apply_patch tool name)")
 }
 
+// E5b: 総予算は単調時計 (performance.now) で計る (#574)。期限を決めた後に Date.now が大きく進んでも (system の時計の
+// 補正)、予算の内の file は check する。Date.now で計ると、2 つ目の file の前で残りが負になり、check せずに終わる。
+{
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, { timeoutMs: { fastEditCheck: REAL_TIMEOUT_MS } }, editRepo)
+  const payloadLog = join(homes.recorder, "edit-payloads.log")
+  const before = readLines(payloadLog).length
+  const files = ["a.rb", "b.rb", "c.rb"].map((name) => ({ filePath: join(editRepo, name), type: "update" }))
+  const realDateNow = Date.now
+  let calls = 0
+  // 最初の呼び出し (期限を決める時点) の後は、時計が CLOCK_JUMP_MS だけ進んだように見せる。
+  Date.now = () => realDateNow() + (calls++ > 0 ? CLOCK_JUMP_MS : 0)
+  try {
+    await runAfter(hooks, homes.recorder, patchInput(), toolOutput({ files }), REAL_TIMEOUT_MS, "E5b clock")
+  } finally {
+    Date.now = realDateNow
+  }
+  const checked = readLines(payloadLog).slice(before).map((line) => JSON.parse(line).tool_input.file_path)
+  assert(JSON.stringify(checked) === JSON.stringify(files.map((f) => f.filePath)), `E5b: a forward jump of Date.now must not skip files within the budget, got ${JSON.stringify(checked)}`)
+  assert(client.calls.length === 0, `E5b: no warn expected, got ${client.calls.length}`)
+  console.log("ok E5b the total budget is measured on the monotonic clock, not Date.now")
+}
+
 // E6: fail-open (P5 と同じ条件を fast-edit-check で)。
 for (const [label, home] of failOpenCases) {
   const client = makeClient("ok")

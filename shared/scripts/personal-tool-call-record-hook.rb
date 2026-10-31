@@ -207,9 +207,15 @@ module ToolCallRecordHook
     "unknown"
   end
 
+  # 記録には session_id や、引数の値・path を含みうる拒否の理由が入るので、所有者だけが読める権限で書く (#574)。
+  # 新しく作る directory は 0700、log は 0600。既にある log の group / other の bit は、追記の前に外す (広い権限の
+  # まま追記しない)。既にある directory の権限は変えない (env で指した、ほかの用途と共有の directory でありうる)。
   def append(path, record)
-    FileUtils.mkdir_p(File.dirname(path))
-    File.open(path, "a") { |f| f.write(JSON.generate(record) + "\n") }
+    FileUtils.mkdir_p(File.dirname(path), mode: 0o700)
+    File.open(path, File::WRONLY | File::APPEND | File::CREAT, 0o600) do |f|
+      f.chmod(0o600) unless (f.stat.mode & 0o077).zero?
+      f.write(JSON.generate(record) + "\n")
+    end
   end
 
   def string_or_nil(value)

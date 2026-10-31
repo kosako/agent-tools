@@ -418,10 +418,12 @@ async function server(input, options) {
     if (typeof output.output !== "string") return
 
     const files = editedFiles(input, output)
-    const deadline = Date.now() + timeoutMs.fastEditCheck
+    // 総予算は単調時計 (performance.now) で計る (#574。waitForEmptyGroup と同じ)。Date.now だと system の時計の
+    // 補正で、進めば予算の内の file を check せずに終わり、戻れば子 process の timeout が予算を超える。
+    const deadline = performance.now() + timeoutMs.fastEditCheck
     const messages = []
     for (const [index, file] of files.entries()) {
-      const remaining = deadline - Date.now()
+      const remaining = deadline - performance.now()
       if (remaining <= 0) {
         warnOnce(FAST_EDIT_CHECK_SCRIPT, `${FAST_EDIT_CHECK_SCRIPT}: the ${timeoutMs.fastEditCheck} ms budget ran out; ${files.length - index} edited file(s) were not checked (fail-open)`)
         break

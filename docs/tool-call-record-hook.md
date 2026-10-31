@@ -50,6 +50,9 @@ ${XDG_STATE_HOME:-~/.local/state}/agent-tools/personal-tool-call-record-hook/<cl
 
 - directory は無ければ作る。作れない・書けないときは stderr 1 行で exit 0。相対 path の上書きは
   cwd 依存になるので受け付けない (stderr 1 行で exit 0)。
+- 権限は所有者だけ (#574): 新しく作る directory は 0700、log は 0600。既にある log に group / other の bit が
+  あれば、追記の前に 0600 にする (広い権限のまま追記しない)。既にある directory の権限は変えない (上書きの env で
+  指した、ほかの用途と共有の directory でありうるため)。
 - cache ではなく state に置く (記録は消えてよい派生物ではない)。どの repository にも入れない
   (`session_id`・tool 名・引数の key を含む private な runtime state)。保持期間と掃除は利用者の運用。
 

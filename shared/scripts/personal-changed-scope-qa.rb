@@ -390,9 +390,10 @@ module ChangedScopeQa
     return nil unless head_status.success? || unborn
 
     # --no-ext-diff: 外部 diff の出力を指紋に使うと、内容が変わっても指紋が同じになり cache で false pass になる
-    # (test で固定。#430 の 5)。--no-color: 色の設定を変えても指紋が変わらないようにする (false pass の防止では
-    # ないので、test では固定していない)。
-    diff = unborn ? unborn_diff(root) : git_output(root, "diff", "HEAD", "--no-color", "--no-ext-diff")
+    # (test で固定。#430 の 5)。--no-textconv: textconv が変換後の内容を同じにする編集でも、同じ理由で指紋が
+    # 変わらない (test で固定。#574)。--no-color: 色の設定を変えても指紋が変わらないようにする (false pass の防止
+    # ではないので、test では固定していない)。
+    diff = unborn ? unborn_diff(root) : git_output(root, "diff", "HEAD", "--no-color", "--no-ext-diff", "--no-textconv")
     return nil if diff.nil?
 
     Digest::SHA256.hexdigest(
@@ -404,8 +405,8 @@ module ChangedScopeQa
   # 初回 commit 前 (HEAD が無い) は `git diff HEAD` が使えない。stage 済み (index と空の tree の差) と
   # 未 stage (作業ツリーと index の差) を合わせて読む (#373)。どちらかが失敗したら nil。
   def unborn_diff(root)
-    staged = git_output(root, "diff", "--cached", "--no-color", "--no-ext-diff")
-    unstaged = git_output(root, "diff", "--no-color", "--no-ext-diff")
+    staged = git_output(root, "diff", "--cached", "--no-color", "--no-ext-diff", "--no-textconv")
+    unstaged = git_output(root, "diff", "--no-color", "--no-ext-diff", "--no-textconv")
     staged && unstaged && "#{staged}\0#{unstaged}"
   end
 
