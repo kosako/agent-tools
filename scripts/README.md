@@ -207,7 +207,8 @@ usage: build.sh [--root DIR] [--prune] [--quiet]
   plugin file のみで、marker のない directory / file は警告して残す。
   削除の後に残っていたもの (権限や file の flag で消せないもの) は `pruned:` と報告せず、`fail:` の行を出して
   exit 1 にする。marker は本体を消したと確かめてから消す (skill は dir の中身を消した後、script は本体を消した後に
-  sidecar) ので、原因を直してもう一度 `--prune` すれば撤去を続けられる (#569)。
+  sidecar)。skill の dir を消せなければ marker を書き戻し、本体の無い managed な sidecar は次の run で撤去する。
+  どの途中で止まっても、原因を直してもう一度 `--prune` すれば撤去を続けられる (#569)。
 - self-test: `tests/build-test.sh`
 
 - `connect.sh`: instruction の所有ファイルを確立し、人間の instruction ファイルから

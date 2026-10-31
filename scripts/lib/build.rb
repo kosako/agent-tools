@@ -329,14 +329,23 @@ module Build
     end
 
     # script: manifest に対応しない managed script (と sidecar marker) を削除する。
-    # sidecar marker file 自体は本体と一緒に処理するため列挙対象から外す。
+    # sidecar marker file 自体は本体と一緒に処理するため列挙対象から外す。ただし本体が無い managed な sidecar
+    # (前の --prune が本体を消した後に sidecar を消せなかった残り) は、ここで撤去を続ける (#569)。
     def prune_scripts(tool, names)
       pruned = []
       kept = []
       failed = []
       PathGlob.under(ArtifactTargets.generated_dir(@root, tool, "script"), "*").sort.each do |path|
         next unless File.file?(path)
-        next if path.end_with?(ArtifactTargets::MARKER_BASENAME)
+
+        if path.end_with?(ArtifactTargets::MARKER_BASENAME)
+          body = path.delete_suffix(ArtifactTargets::MARKER_BASENAME)
+          if removed?(body) && !names.include?(File.basename(body)) && marker_present?(path)
+            guard(path)
+            (remove_file(path) ? pruned : failed) << rel(path)
+          end
+          next
+        end
         next if names.include?(File.basename(path))
 
         if script_managed_marker?(path)
@@ -408,6 +417,7 @@ module Build
 
     # managed な skill の directory を消して、消えたことを確かめる。marker は最後に消す: 中身を消しきれなければ
     # marker を残し、次の --prune で撤去を続けられるようにする (marker が無いと unmanaged と見て残すため)。
+    # marker を消した後に dir を消せなければ (親の dir に書けないなど)、marker を書き戻して同じ状態に戻す。
     def remove_managed_dir(dir)
       Dir.children(dir).each do |child|
         next if child == ArtifactTargets::MARKER_BASENAME
@@ -416,8 +426,15 @@ module Build
       end
       return false unless Dir.children(dir) == [ArtifactTargets::MARKER_BASENAME]
 
-      FileUtils.rm_f(File.join(dir, ArtifactTargets::MARKER_BASENAME))
-      Dir.rmdir(dir)
+      marker = File.join(dir, ArtifactTargets::MARKER_BASENAME)
+      saved = File.binread(marker)
+      FileUtils.rm_f(marker)
+      begin
+        Dir.rmdir(dir)
+      rescue SystemCallError
+        File.binwrite(marker, saved) unless File.exist?(marker)
+        return false
+      end
       removed?(dir)
     rescue SystemCallError
       false
