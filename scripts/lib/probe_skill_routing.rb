@@ -67,7 +67,7 @@ module ProbeSkillRouting
       --cases     case set (既定: scripts/lib/skill_routing_cases.json)
       --variant   結果に付ける label (既定: candidate。baseline を測るときは baseline 等)
       --model     CLI に渡す model (baseline と candidate で揃えること)。claude-code は省略すると CLI の既定。
-                  codex は省略すると Codex home ($CODEX_HOME、空なら ~/.codex) の config.toml の top-level の
+                  codex は省略すると Codex home ($CODEX_HOME、未設定なら ~/.codex) の config.toml の top-level の
                   model を使い、それも無ければエラー (CLI の既定には任せない)
       --repeat    各 case の実行回数 (既定: 1)
       --only      実行する case id (comma 区切り)。coverage が欠けるので判定は exit 2 になる

@@ -133,12 +133,24 @@ child = File.file?(pidfile) ? File.read(pidfile).to_i : 0
 check("中断の test の子が起動した", child.positive? && alive?(child))
 started = Time.now
 runner.raise(Interrupt)
-check("中断した run_command は 10 秒の中で戻る", !runner.join(10).nil?)
-check("中断した run_command は Interrupt を送り直す", runner.value == :interrupted)
+returned = !runner.join(10).nil?
+check("中断した run_command は 10 秒の中で戻る", returned)
 check("中断までの時間が timeout (30 秒) より短い", Time.now - started < 10)
-gone_by = Time.now + 3
-sleep 0.05 while child.positive? && alive?(child) && Time.now < gone_by
-check("中断した run_command は子の process group を残さない", child.positive? && !alive?(child))
+if returned
+  check("中断した run_command は Interrupt を送り直す", runner.value == :interrupted)
+  gone_by = Time.now + 3
+  sleep 0.05 while child.positive? && alive?(child) && Time.now < gone_by
+  check("中断した run_command は子の process group を残さない", child.positive? && !alive?(child))
+elsif child.positive?
+  # 後片付けが外れて戻らないときも test を止めない。子の group (pgid == 子の pid) を test が止めてから、
+  # runner を期限つきで回収する (runner.value は期限なしで待つので読まない)。
+  begin
+    Process.kill("KILL", -child)
+  rescue Errno::ESRCH, Errno::EPERM
+    nil
+  end
+  runner.join(10)
+end
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
