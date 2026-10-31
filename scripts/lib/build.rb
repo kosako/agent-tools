@@ -267,13 +267,16 @@ module Build
     # 現在の manifests に対応しない generated artifacts を削除する。
     # 削除するのは agent-tools marker を持つものだけ。marker のない directory / file は
     # warning として返し、残す。走査は TOOL_KINDS の組だけを回す (TOOLS × 全 kind ではない, #295)。
+    # 返り値は [削除したもの, 残した unmanaged, 消しきれなかったもの]。消しきれなかったものは、削除の後に残って
+    # いることを確かめたもの (#569。FileUtils.rm_rf / rm_f は失敗を握りつぶすので、成否は残りの有無で見る)。
     def prune
       expected = expected_names
       pruned = []
       kept = []
+      failed = []
       TOOLS.each do |tool|
         ArtifactTargets::TOOL_KINDS.fetch(tool).each do |kind|
-          removed, left =
+          removed, left, not_removed =
             case kind
             when "skill" then prune_skills(tool, expected[tool][kind])
             when "script" then prune_scripts(tool, expected[tool][kind])
@@ -283,9 +286,10 @@ module Build
             end
           pruned.concat(removed)
           kept.concat(left)
+          failed.concat(not_removed)
         end
       end
-      [pruned, kept]
+      [pruned, kept, failed]
     end
 
     private
@@ -309,19 +313,19 @@ module Build
     def prune_skills(tool, names)
       pruned = []
       kept = []
+      failed = []
       PathGlob.under(ArtifactTargets.generated_dir(@root, tool, "skill"), "*").sort.each do |dir|
         next unless File.directory?(dir)
         next if names.include?(File.basename(dir))
 
         if managed_marker?(dir)
           guard(dir)
-          FileUtils.rm_rf(dir)
-          pruned << rel(dir)
+          (remove_managed_dir(dir) ? pruned : failed) << rel(dir)
         else
           kept << rel(dir)
         end
       end
-      [pruned, kept]
+      [pruned, kept, failed]
     end
 
     # script: manifest に対応しない managed script (と sidecar marker) を削除する。
@@ -329,6 +333,7 @@ module Build
     def prune_scripts(tool, names)
       pruned = []
       kept = []
+      failed = []
       PathGlob.under(ArtifactTargets.generated_dir(@root, tool, "script"), "*").sort.each do |path|
         next unless File.file?(path)
         next if path.end_with?(ArtifactTargets::MARKER_BASENAME)
@@ -337,14 +342,15 @@ module Build
         if script_managed_marker?(path)
           sidecar = ArtifactTargets.sidecar_marker_path(path)
           guard(path, sidecar)
-          FileUtils.rm_f(path)
-          FileUtils.rm_f(sidecar)
-          pruned << rel(path)
+          # sidecar は本体が消えたと確かめてから消す (本体を残して marker だけ消すと、次の --prune が unmanaged と
+          # 見て撤去を続けられない)。
+          ok = remove_file(path) && remove_file(sidecar)
+          (ok ? pruned : failed) << rel(path)
         else
           kept << rel(path)
         end
       end
-      [pruned, kept]
+      [pruned, kept, failed]
     end
 
     # instruction: 期待する canonical ファイル (INSTRUCTION_FILENAMES) 以外の
@@ -352,6 +358,7 @@ module Build
     def prune_instructions(tool, names)
       pruned = []
       kept = []
+      failed = []
       keep = names.empty? ? nil : ArtifactTargets::INSTRUCTION_FILENAMES[tool]
       PathGlob.under(ArtifactTargets.generated_dir(@root, tool, "instruction"), "*").sort.each do |file|
         next unless File.file?(file)
@@ -359,13 +366,12 @@ module Build
 
         if InstructionMarker.parse(File.read(file))
           guard(file)
-          FileUtils.rm_f(file)
-          pruned << rel(file)
+          (remove_file(file) ? pruned : failed) << rel(file)
         else
           kept << rel(file)
         end
       end
-      [pruned, kept]
+      [pruned, kept, failed]
     end
 
     # plugin: manifest に対応しない managed plugin を削除する。管理の判定は先頭行の marker
@@ -373,6 +379,7 @@ module Build
     def prune_plugins(tool, names)
       pruned = []
       kept = []
+      failed = []
       expected_files = names.map { |name| ArtifactTargets.plugin_filename(name) }
       PathGlob.under(ArtifactTargets.generated_dir(@root, tool, "plugin"), "*").sort.each do |path|
         next unless File.file?(path)
@@ -380,13 +387,40 @@ module Build
 
         if PluginMarker.parse(File.binread(path))
           guard(path)
-          FileUtils.rm_f(path)
-          pruned << rel(path)
+          (remove_file(path) ? pruned : failed) << rel(path)
         else
           kept << rel(path)
         end
       end
-      [pruned, kept]
+      [pruned, kept, failed]
+    end
+
+    # 削除の後に、path が (symlink としても) 残っていないか。
+    def removed?(path)
+      !File.exist?(path) && !File.symlink?(path)
+    end
+
+    # 単一 file を消して、消えたことを確かめる。
+    def remove_file(path)
+      FileUtils.rm_f(path)
+      removed?(path)
+    end
+
+    # managed な skill の directory を消して、消えたことを確かめる。marker は最後に消す: 中身を消しきれなければ
+    # marker を残し、次の --prune で撤去を続けられるようにする (marker が無いと unmanaged と見て残すため)。
+    def remove_managed_dir(dir)
+      Dir.children(dir).each do |child|
+        next if child == ArtifactTargets::MARKER_BASENAME
+
+        FileUtils.rm_rf(File.join(dir, child))
+      end
+      return false unless Dir.children(dir) == [ArtifactTargets::MARKER_BASENAME]
+
+      FileUtils.rm_f(File.join(dir, ArtifactTargets::MARKER_BASENAME))
+      Dir.rmdir(dir)
+      removed?(dir)
+    rescue SystemCallError
+      false
     end
 
     # directory artifact (skill) の marker が agent-tools 管理を示すか。
@@ -479,9 +513,13 @@ module Build
     built.each { |line| puts "built: #{line}" }
     skipped.each { |line| warn "skipped: #{line}" }
     if prune
-      pruned, kept = runner.prune
+      pruned, kept, failed = runner.prune
       pruned.each { |line| puts "pruned: #{line}" }
       kept.each { |line| warn "kept (unmanaged, no agent-tools marker): #{line}" }
+      # 消しきれなかった artifact は成功と報告せず、exit 1 にする (#569。marker を残したものは、直してから
+      # もう一度 --prune すれば撤去を続けられる)。
+      failed.each { |line| warn "fail: could not prune (still present): #{line}" }
+      return 1 unless failed.empty?
     end
     puts "ok: #{built.size} artifact(s) built" unless quiet
     0

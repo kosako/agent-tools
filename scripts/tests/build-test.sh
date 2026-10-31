@@ -848,4 +848,69 @@ grep -q "pruned: generated/claude-code/skills/personal-wstray" "$tmp/out-wprune"
   || fail "prune under a glob-special root must list the orphan: $(cat "$tmp/out-wprune")"
 [ ! -e "$weird/generated/claude-code/skills/personal-wstray" ] || fail "orphan under a glob-special root should be pruned"
 
+# --- case 4p: --prune が消しきれない artifact を成功と報告せず exit 1 にし、skill の marker を残す (#569) ---
+# skill の dir の中に消せない file (書き込めない sub dir の中) を置き、instruction は dir ごと書き込めなくする。
+# どちらも削除の後に残るので、pruned と報告せず、fail の行と exit 1 にする。skill は marker を残すので、権限を
+# 戻してもう一度 --prune すれば撤去を続けられる。消せたもの (claude-code の instruction、codex の skill) は今までどおり。
+pf="$tmp/prunefail"
+make_demo_repo "$pf" skills personal-gone skill '# gone' 'gone の本文。'
+make_demo_repo "$pf" instructions personal-ops instruction '# ops' '' 'ops の本文。'
+"$build" --root "$pf" --quiet > "$tmp/out-pf0" 2>&1 || fail "prunefail fixture build failed: $(cat "$tmp/out-pf0")"
+gone="$pf/generated/claude-code/skills/personal-gone"
+[ -f "$gone/.agent-tools-managed.yml" ] || fail "prunefail fixture: the skill marker is missing"
+[ -f "$pf/generated/codex/instructions/AGENTS.md" ] || fail "prunefail fixture: the codex instruction is missing"
+mkdir -p "$gone/locked"
+echo "locked" > "$gone/locked/file"
+rm -f "$pf/shared/skills/personal-gone.md" "$pf/shared/skills/personal-gone.asset.yml" \
+  "$pf/shared/instructions/personal-ops.md" "$pf/shared/instructions/personal-ops.asset.yml"
+chmod 555 "$gone/locked" "$pf/generated/codex/instructions"
+rc=0
+"$build" --root "$pf" --prune > "$tmp/out-pf" 2>&1 || rc=$?
+chmod 755 "$gone/locked" "$pf/generated/codex/instructions"
+[ "$rc" -eq 1 ] || fail "prune with a removal failure should exit 1, got $rc: $(cat "$tmp/out-pf")"
+grep -qxF "fail: could not prune (still present): generated/claude-code/skills/personal-gone" "$tmp/out-pf" \
+  || fail "missing the skill removal failure: $(cat "$tmp/out-pf")"
+grep -qxF "fail: could not prune (still present): generated/codex/instructions/AGENTS.md" "$tmp/out-pf" \
+  || fail "missing the instruction removal failure: $(cat "$tmp/out-pf")"
+grep -qF "pruned: generated/claude-code/skills/personal-gone" "$tmp/out-pf" \
+  && fail "a skill that is still present must not be reported as pruned: $(cat "$tmp/out-pf")"
+grep -qF "pruned: generated/codex/instructions/AGENTS.md" "$tmp/out-pf" \
+  && fail "an instruction that is still present must not be reported as pruned: $(cat "$tmp/out-pf")"
+grep -qF "artifact(s) built" "$tmp/out-pf" && fail "prune with a removal failure must not print the ok line: $(cat "$tmp/out-pf")"
+[ -f "$gone/.agent-tools-managed.yml" ] || fail "the skill marker must stay until the body is removed"
+grep -qxF "pruned: generated/codex/skills/personal-gone" "$tmp/out-pf" \
+  || fail "the removable codex skill should still be pruned: $(cat "$tmp/out-pf")"
+grep -qxF "pruned: generated/claude-code/instructions/CLAUDE.md" "$tmp/out-pf" \
+  || fail "the removable claude instruction should still be pruned: $(cat "$tmp/out-pf")"
+# 権限を戻せば、残した marker で撤去を続けられる。
+"$build" --root "$pf" --prune > "$tmp/out-pf2" 2>&1 || fail "prune after fixing permissions should pass: $(cat "$tmp/out-pf2")"
+[ ! -e "$gone" ] || fail "the skill should be pruned on the next run"
+[ ! -e "$pf/generated/codex/instructions/AGENTS.md" ] || fail "the instruction should be pruned on the next run"
+
+# --- case 4p-2: script の本体を消せないときは、sidecar の marker を消さない (#569) ---
+# 本体と sidecar は同じ dir にあるので、本体だけを変更できない flag (uchg) で消せなくする。sidecar を先に消すと、次の
+# --prune が本体を unmanaged と見て撤去を続けられない。chflags の無い環境では、この case を飛ばす。
+if command -v chflags > /dev/null 2>&1; then
+  ps_root="$tmp/prunefail-script"
+  mkdir -p "$ps_root/shared/scripts"
+  printf '#!/bin/sh\necho gone\n' > "$ps_root/shared/scripts/personal-gone-script.sh"
+  write_asset_manifest "$ps_root/shared/scripts/personal-gone-script.asset.yml" \
+    personal-gone-script script personal shared/scripts/personal-gone-script.sh text claude-code
+  "$build" --root "$ps_root" --quiet > "$tmp/out-ps0" 2>&1 || fail "prunefail-script fixture build failed: $(cat "$tmp/out-ps0")"
+  ps_body="$ps_root/generated/claude-code/scripts/personal-gone-script"
+  ps_sidecar="$ps_body.agent-tools-managed.yml"
+  [ -f "$ps_body" ] && [ -f "$ps_sidecar" ] || fail "prunefail-script fixture: the script or its sidecar is missing"
+  rm -f "$ps_root/shared/scripts/personal-gone-script.sh" "$ps_root/shared/scripts/personal-gone-script.asset.yml"
+  chflags uchg "$ps_body"
+  rc=0
+  "$build" --root "$ps_root" --prune > "$tmp/out-ps" 2>&1 || rc=$?
+  chflags nouchg "$ps_body"
+  [ "$rc" -eq 1 ] || fail "prune with an unremovable script should exit 1, got $rc: $(cat "$tmp/out-ps")"
+  grep -qxF "fail: could not prune (still present): generated/claude-code/scripts/personal-gone-script" "$tmp/out-ps" \
+    || fail "missing the script removal failure: $(cat "$tmp/out-ps")"
+  [ -f "$ps_sidecar" ] || fail "the script sidecar must stay while the body is still present"
+  "$build" --root "$ps_root" --prune > "$tmp/out-ps2" 2>&1 || fail "script prune after clearing the flag should pass: $(cat "$tmp/out-ps2")"
+  [ ! -e "$ps_body" ] && [ ! -e "$ps_sidecar" ] || fail "the script and its sidecar should be pruned on the next run"
+fi
+
 echo "ok: build self-test passed"
