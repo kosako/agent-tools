@@ -992,6 +992,34 @@ console.log(JSON.stringify({ elapsed: resolvedAt - started, resolvedAt, warns, o
   console.log("ok E5b the total budget is measured on the monotonic clock, not Date.now")
 }
 
+// E5c: 時計が戻っても総予算は延びない (#574)。E4 と同じ slow check と予算で、期限を決めた後に Date.now を
+// CLOCK_JUMP_MS だけ戻す。Date.now で計ると残りが予算より大きくなり、子 process の timeout に渡って slow check を
+// 最後まで待ち (5 秒)、次の file も check する。
+{
+  const budgetMs = 3000
+  const client = makeClient("ok")
+  const hooks = await makeHooks(client, { timeoutMs: { fastEditCheck: budgetMs } }, editRepo)
+  process.env.AGENT_TOOLS_CHECKS_CONFIG = configs.slow
+  const before = readLines(slowCheckLog).length
+  const files = ["a.rb", "b.rb", "c.rb"].map((name) => ({ filePath: join(editRepo, name), type: "update" }))
+  const realDateNow = Date.now
+  let calls = 0
+  Date.now = () => realDateNow() - (calls++ > 0 ? CLOCK_JUMP_MS : 0)
+  const started = performance.now()
+  try {
+    await runAfter(hooks, homes.real, patchInput(), toolOutput({ files }), budgetMs + DEADLINE_MARGIN_MS, "E5c clock back")
+  } finally {
+    Date.now = realDateNow
+    process.env.AGENT_TOOLS_CHECKS_CONFIG = configs.fake
+  }
+  const elapsed = performance.now() - started
+  assert(elapsed < budgetMs + 500, `E5c: a backward jump of Date.now must not extend the total budget (${Math.round(elapsed)} ms)`)
+  const ran = readLines(slowCheckLog).slice(before)
+  assert(JSON.stringify(ran) === JSON.stringify([join(editRepo, "a.rb")]), `E5c: only the first file may be checked within the budget, got ${JSON.stringify(ran)}`)
+  assertWarns(client, 1, "E5c clock back")
+  console.log("ok E5c a backward clock jump does not extend the total budget")
+}
+
 // E6: fail-open (P5 と同じ条件を fast-edit-check で)。
 for (const [label, home] of failOpenCases) {
   const client = makeClient("ok")

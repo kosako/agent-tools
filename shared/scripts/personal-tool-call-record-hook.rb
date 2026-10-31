@@ -209,11 +209,18 @@ module ToolCallRecordHook
 
   # 記録には session_id や、引数の値・path を含みうる拒否の理由が入るので、所有者だけが読める権限で書く (#574)。
   # 新しく作る directory は 0700、log は 0600。既にある log の group / other の bit は、追記の前に外す (広い権限の
-  # まま追記しない)。既にある directory の権限は変えない (env で指した、ほかの用途と共有の directory でありうる)。
+  # まま追記しない。外せなければ書かない)。既にある directory の権限は変えない (env で指した、ほかの用途と共有の
+  # directory でありうる)。log が symlink なら開かず (NOFOLLOW。chmod がリンク先の権限を変えないように)、regular file
+  # でなければ書かない (NONBLOCK は、読み手の無い FIFO で open が止まらないため)。どれも SystemCallError で、main が
+  # stderr 1 行と exit 0 にする。
   def append(path, record)
     FileUtils.mkdir_p(File.dirname(path), mode: 0o700)
-    File.open(path, File::WRONLY | File::APPEND | File::CREAT, 0o600) do |f|
-      f.chmod(0o600) unless (f.stat.mode & 0o077).zero?
+    flags = File::WRONLY | File::APPEND | File::CREAT | File::NOFOLLOW | File::NONBLOCK
+    File.open(path, flags, 0o600) do |f|
+      stat = f.stat
+      raise Errno::EINVAL, "record log is not a regular file" unless stat.file?
+
+      f.chmod(0o600) unless (stat.mode & 0o077).zero?
       f.write(JSON.generate(record) + "\n")
     end
   end
