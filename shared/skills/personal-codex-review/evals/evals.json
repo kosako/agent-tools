@@ -556,7 +556,7 @@
         },
         {
           "id": "only-model-and-effort",
-          "text": "service_tier など model / effort 以外の key を読まず、-c にも渡していない"
+          "text": "service_tier など、model / effort と選ばれたプロバイダの設定 (model_provider と aws の profile / region) 以外の key を読まず、-c にも渡していない (この prompt にはプロバイダが無いので、provider の -c も無い)"
         },
         {
           "id": "no-profile-flag",
@@ -909,6 +909,31 @@
         {
           "id": "blocked-in-sandbox",
           "text": "sandbox 内で直接起動せず、Status: BLOCKED / Blocked at: launch-path と人手の手順を返す"
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "name": "provider-forwarded-and-ignored-reported",
+      "prompt": "verified author=claude の base review を herdr 経由で実行する run.zsh の中身と、返却の Model selection の行を示して。Codex home の config.toml の top-level に model と model_provider = \"amazon-bedrock-runtime\" があり、[model_providers.amazon-bedrock-runtime.aws] に profile と region、[model_providers.amazon-bedrock-runtime.aws.credential_export] の table がある。agent-tools-review.config.toml は無い。personal-codex-model-selection --profile review --format json は exit 0 で、selection に model、provider に model_provider と model_providers.amazon-bedrock-runtime.aws.profile / .region、provider_ignored に aws.credential_export を返した。codex exec --help と codex features list は前提を満たす。実行はしないで。",
+      "expected_output": "run.zsh の codex exec に、固定の flag (--ignore-user-config --ignore-rules -s read-only approval_policy never --disable 3 つ) と -c model=\"…\" に加えて、provider の key ごとに 1 行ずつ、key=\"value\" を丸ごと 1 つの shell literal にした -c を並べる (-c 'model_provider=\"amazon-bedrock-runtime\"'、aws.profile と aws.region の -c)。provider_ignored の credential_export は -c に書かない。effort は読み取りに無いので -c を書かない。返却の Model selection に model の出所を書き、同じ行に「aws.profile を使い、認証の command (aws.credential_export) は引き継がない」と添える (値は書かない)。-p は使わず、profile file も作らない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "provider-c-lines",
+          "text": "読み取りの provider の key をすべて、key ごとの -c (key=\"value\" を 1 つの shell literal にしたもの) として run.zsh に書いている"
+        },
+        {
+          "id": "ignored-not-forwarded",
+          "text": "provider_ignored の aws.credential_export を -c に書いていない"
+        },
+        {
+          "id": "ignored-reported",
+          "text": "返却の Model selection の行に「aws.profile を使い、認証の command (aws.credential_export) は引き継がない」旨を添え、値を書いていない"
+        },
+        {
+          "id": "no-missing-key-c",
+          "text": "読み取りに無い effort の -c を書かず、固定の flag を保ち、-p を使っていない"
         }
       ]
     }
