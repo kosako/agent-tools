@@ -70,7 +70,9 @@ dotfiles 側の実装は含めません。
   [Register / Catalog](register-catalog.md)「catalog_version は上げない」と同じ判断)。
 - `repo.present`: agent-tools repository が存在するか。
 - `repo.clean`: working tree が clean か。
-- `assets.total`: tracked manifest の数。
+- `assets.total`: 作業ツリーの `shared/` の下で見つけた manifest (`*.asset.yml` と `<dir>/asset.yml`) の数。git の
+  追跡状態は見ないので、`git add` の前の未追跡の manifest も数える (`check-manifests` が検査する manifest と同じ
+  集合。#581)。
 - `assets.manifest_errors`: manifest validation error の数。
 - `checks.*`: 各 check の最新結果。`manifest_validation` は `pass` / `fail`、
   `prompt_injection_static` は `pass` / `human_review` / `fail`。`not_run` は予約値で、現行の status は
