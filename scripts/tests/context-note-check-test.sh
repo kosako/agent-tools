@@ -82,6 +82,7 @@ export GIT_CONFIG_GLOBAL
 git config --file "$GIT_CONFIG_GLOBAL" init.defaultBranch main
 # repository や pathspec の解釈を変える環境変数が継承されていると、temp repo の結果にならない。
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE \
   GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS
 # git 管理外の directory の case で、$tmp より上の repo を見つけないようにする。
 GIT_CEILING_DIRECTORIES=$tmp
