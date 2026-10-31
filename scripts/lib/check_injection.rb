@@ -263,17 +263,43 @@ module CheckInjection
   end
 
   # matcher ごとの一致の開始位置 (文字の位置)。Regexp は重ならない一致を順に、callable はその返り値。
-  # ASCII だけの content は binary の写しで照合する (#569)。文字の位置と byte の位置が同じで、照合の結果も変わらない
-  # (ASCII の範囲では \s・\b・大文字小文字の扱いが encoding によらない)。UTF-8 の文字列のままだと、位置の指定と
-  # 一致の位置の取り出しのたびに先頭から文字を数え直し、一致の多い入力で二次時間になる。ASCII でない content は
-  # 今までどおり UTF-8 で照合する (Ruby 2.6 には一致の byte の位置を取る手段が無く、この変換が残る)。
   def self.match_positions(matcher, content)
     return matcher.call(content) unless matcher.is_a?(Regexp)
 
-    target = content.ascii_only? ? content.b : content
+    gap_scan_positions(matcher, content) || loop_positions(matcher, content)
+  end
+
+  # 前の一致の終わりから次の一致の先頭までの部分 (gap) を 1 回の走査で取り、その文字数を足して一致の位置を出す (#569)。
+  # Regexp#match(content, pos) と MatchData#begin は、UTF-8 の文字列で一致ごとに先頭から文字を数え直すので、一致の
+  # 多い入力で二次時間になる (ASCII だけの入力でも)。照合は元の文字列のままなので、\b・大文字小文字・encoding の意味は
+  # 変わらず、一致は前の loop と同じ (重ならない一致を順に)。空の一致をしうる pattern と、組み合わせた正規表現を
+  # 作れない pattern (数字の後方参照を持つ) では nil を返し、前の loop で照合する。
+  def self.gap_scan_positions(matcher, content)
+    combined = begin
+      /\G(?<gap>.*?)#{matcher}/m
+    rescue RegexpError
+      return nil
+    end
+    positions = []
+    char_pos = 0
+    content.scan(combined) do
+      match = Regexp.last_match
+      gap = match[:gap].length
+      hit = match[0].length - gap
+      return nil if hit.zero?
+
+      positions << char_pos + gap
+      char_pos += gap + hit
+    end
+    positions
+  end
+
+  # Regexp の重ならない一致の開始位置を順に。空の一致の後は 1 文字進める。末尾を越えたら止める (Regexp#match は
+  # 末尾より後ろの pos でも末尾の空の一致を返すので、止めないと空の一致をしうる pattern で終わらない)。
+  def self.loop_positions(matcher, content)
     positions = []
     pos = 0
-    while (match = matcher.match(target, pos))
+    while pos <= content.length && (match = matcher.match(content, pos))
       positions << match.begin(0)
       pos = match.begin(0) + [match[0].length, 1].max
     end
