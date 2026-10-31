@@ -5,7 +5,8 @@
 #   差し替えて temp repo で走らせる。
 # - 直線の範囲で値が無ければ exit 0、累積差分にある値で止まる (exit 1)、範囲に merge commit があれば値が無くても
 #   gate に通さずに止まり (exit 1)、理由を gate-publish.err に残す。commit の一覧を取れない (base が無い) ときも
-#   exit 0 にならない (fail-closed)。
+#   exit 0 にならない (fail-closed)。累積差分に残らない公開の内容 (途中の commit で足して消した値・commit message・
+#   branch 名・PR の題名・本文) も、それぞれ単独で止まる (#571)。
 # 引数で worker の skill の directory を差し替えられる (変異での確認用)。
 # 実 HOME / 実 git config には触れない (gate の command は偽の HOME で走らせ、git は GIT_CONFIG_GLOBAL /
 # GIT_CONFIG_SYSTEM を隔離する)。network access なし。
@@ -88,11 +89,22 @@ base=$(git -C "$repo" rev-parse HEAD)
 branch=codex/issue-1
 printf 'clean body\n' > "$tmp/body.md"
 
-# base の上に直線の branch を作る。$1 = doc.md に足す行。
+# base の上に直線の branch を作る。$1 = doc.md に足す行、$2 = commit message (省略時は docs: work (#1))。
 make_linear() {
   git -C "$repo" checkout -q -B "$branch" "$base"
   printf '%s\n' "$1" >> "$repo/doc.md"
+  git -C "$repo" commit -q -a -m "${2:-docs: work (#1)}"
+}
+
+# base の上に、1 つ目の commit で $1 の行を足し、2 つ目の commit で消す直線の branch を作る (累積差分には残らないが、
+# 1 つ目の commit の差分として公開される)。
+make_add_then_remove() {
+  git -C "$repo" checkout -q -B "$branch" "$base"
+  printf '%s\n' "$1" >> "$repo/doc.md"
   git -C "$repo" commit -q -a -m 'docs: work (#1)'
+  grep -v -F -x -- "$1" "$repo/doc.md" > "$tmp/doc.md.new"
+  mv "$tmp/doc.md.new" "$repo/doc.md"
+  git -C "$repo" commit -q -a -m 'docs: revert the line (#1)'
 }
 
 # base の上に merge commit を含む branch を作る。$1 が空でなければ、1 つ目の merge の解決でだけ doc.md にその行を
@@ -119,7 +131,8 @@ make_merge() {
   git -C "$repo" checkout -q main
 }
 
-# 切り出した command を $shell_argv で走らせ、exit code を rc に入れる。$1 = base の OID。
+# 切り出した command を $shell_argv で走らせ、exit code を rc に入れる。$1 = base の OID。PR の題名と本文の file は
+# run_title / run_body で差し替えられる (空なら固定の clean な値)。
 # gate の出力は run dir の gate-publish.err に残る (§9 の形のまま)。
 run_block() {
   rm -rf "$tmp/run"
@@ -127,10 +140,19 @@ run_block() {
   rc=0
   # shell_argv は下の case で決めた定数 (sh / zsh -f) なので、分割して渡す。
   # shellcheck disable=SC2086
-  env -u BASH_ENV -u ENV HOME="$home" main="$repo" base_oid="$1" branch="$branch" title='docs: work (#1)' \
-    body_file="$tmp/body.md" run="$tmp/run" $shell_argv "$tmp/gate-block.sh" > "$tmp/out" 2>&1 || rc=$?
+  env -u BASH_ENV -u ENV HOME="$home" main="$repo" base_oid="$1" branch="$branch" title="${run_title:-docs: work (#1)}" \
+    body_file="${run_body:-$tmp/body.md}" run="$tmp/run" $shell_argv "$tmp/gate-block.sh" > "$tmp/out" 2>&1 || rc=$?
 }
 
+# gate が値で止めた (exit 1 で、gate の blocked の行が gate-publish.err にある)。$1 = case の label。
+expect_blocked() {
+  [ "$rc" -eq 1 ] || fail "[$shell] $1 で止まらない (rc=$rc): $(cat "$tmp/out")"
+  grep -q '^public-safety-gate: blocked: stdin:' "$tmp/run/gate-publish.err" \
+    || fail "[$shell] $1 で、値で止めた gate の出力が gate-publish.err に無い: $(cat "$tmp/run/gate-publish.err")"
+}
+
+run_title=
+run_body=
 ran=0
 for shell in sh zsh; do
   command -v "$shell" > /dev/null 2>&1 || continue
@@ -173,6 +195,44 @@ for shell in sh zsh; do
   run_block 0000000000000000000000000000000000000001
   [ "$rc" -ne 0 ] || fail "[$shell] base が無くても gate の command が exit 0 になる (fail-open)"
   [ -s "$tmp/run/gate-publish.err" ] || fail "[$shell] commit の一覧を取れなかった理由が gate-publish.err に無い"
+
+  # (f)〜(j) 累積差分に残らない公開の内容も、それぞれ単独で gate に止められる (#571)。どれも直線の履歴で、値は
+  # 1 つの入力にだけ置く。gate の入力から各 commit の差分・message・branch 名・題名・本文のどれかを落とすと、
+  # その case だけが通ってしまう。
+  # (f) 直線の履歴で、途中の commit で足して後の commit で消した値 (各 commit の差分)。
+  make_add_then_remove "line $marker"
+  if git -C "$repo" diff "$base" "$branch" | grep -q -F -- "$marker"; then
+    fail "[$shell] (f) の前提が崩れた: 累積差分に値がある"
+  fi
+  run_block "$base"
+  expect_blocked "(f) 途中の commit の差分にだけある値"
+
+  # (g) commit message にだけある値。
+  make_linear 'clean line' "docs: work $marker (#1)"
+  run_block "$base"
+  expect_blocked "(g) commit message にだけある値"
+
+  # (h) branch 名にだけある値。
+  branch_clean=$branch
+  branch="codex/$marker"
+  make_linear 'clean line'
+  run_block "$base"
+  expect_blocked "(h) branch 名にだけある値"
+  branch=$branch_clean
+
+  # (i) PR の題名にだけある値。
+  make_linear 'clean line'
+  run_title="docs: work $marker (#1)"
+  run_block "$base"
+  run_title=
+  expect_blocked "(i) PR の題名にだけある値"
+
+  # (j) PR の本文にだけある値。
+  printf 'body %s\n' "$marker" > "$tmp/body-marker.md"
+  run_body="$tmp/body-marker.md"
+  run_block "$base"
+  run_body=
+  expect_blocked "(j) PR の本文にだけある値"
 done
 [ "$ran" -gt 0 ] || fail "gate の command を走らせる shell (sh / zsh) が無い"
 
