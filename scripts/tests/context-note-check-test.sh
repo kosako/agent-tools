@@ -5,7 +5,8 @@
 # - note が無い → absent / untracked な regular file → ok / 同じ名前で tracked → reject /
 #   大文字小文字だけ違う名前で tracked → reject / symlink → reject / git 管理外の directory → reject /
 #   index を読めない → reject / 環境に GIT_LITERAL_PATHSPECS があっても tracked なら reject /
-#   repo の subdir から走らせても root の note を見る / git 管理外で note が無い → reject (#426)。
+#   repo の subdir から走らせても root の note を見る / git 管理外で note が無い → reject (#426) /
+#   repository や index を選ぶ git の env を継承していれば、値が空でも reject (#577)。
 # - 大文字小文字だけ違う名前の case は、大文字小文字を区別しない file system (違う大文字小文字の名前で同じ
 #   file を開ける) のときだけ意味があるので、そうでなければ skip を明示する。
 # 引数で skill の directory か SKILL.md を差し替えられる (変異での確認用)。
@@ -81,6 +82,7 @@ export GIT_CONFIG_GLOBAL
 git config --file "$GIT_CONFIG_GLOBAL" init.defaultBranch main
 # repository や pathspec の解釈を変える環境変数が継承されていると、temp repo の結果にならない。
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE \
   GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS
 # git 管理外の directory の case で、$tmp より上の repo を見つけないようにする。
 GIT_CEILING_DIRECTORIES=$tmp
@@ -209,6 +211,35 @@ for shell in sh zsh; do
   mkdir -p "$tmp/nogit-empty"
   run_check "$tmp/nogit-empty"
   expect reject "git 管理外の directory で note が無い"
+
+  # (l) repository / index を選ぶ git の env を継承していれば、値が空でも、root の解決の前に reject (#577)。
+  # untracked な regular file (env が無ければ ok) で、env ごとに確かめる。値は、除外が無ければ git がそのまま
+  # 受け入れて別の repo を見る形にする (別の repo の .git・worktree・objects、無い index)。存在しない path だと
+  # rev-parse が失敗して、除外が無くても reject になり、除外の有無を確かめられない。
+  new_repo
+  other_repo="$tmp/other-repo-$shell"
+  git init -q "$other_repo"
+  printf 'note\n' > "$repo/$note"
+  for git_env in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+    GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE; do
+    case $git_env in
+      GIT_DIR | GIT_COMMON_DIR) env_value="$other_repo/.git" ;;
+      GIT_WORK_TREE) env_value=$repo ;;
+      GIT_OBJECT_DIRECTORY | GIT_ALTERNATE_OBJECT_DIRECTORIES) env_value="$other_repo/.git/objects" ;;
+      GIT_INDEX_FILE) env_value="$tmp/no-such-index" ;;
+      *) env_value=elsewhere ;;
+    esac
+    run_check "$repo" "$git_env=$env_value"
+    expect reject "環境に $git_env があるときの untracked な regular file"
+    run_check "$repo" "$git_env="
+    expect reject "環境に空の $git_env があるときの untracked な regular file"
+  done
+  # (m) Issue の再現: tracked な note でも、存在しない index を指す GIT_INDEX_FILE では ls-files が追跡なしと答える。
+  new_repo
+  printf 'note\n' > "$repo/$note"
+  git -C "$repo" add -- "$note"
+  run_check "$repo" "GIT_INDEX_FILE=$tmp/no-such-index"
+  expect reject "存在しない index を指す GIT_INDEX_FILE があるときの tracked な note"
 done
 [ "$ran" -gt 0 ] || fail "検査の command を走らせる shell (sh / zsh) が無い"
 
