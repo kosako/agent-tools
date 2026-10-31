@@ -1,8 +1,9 @@
 #!/bin/sh
 # test-helpers.sh が source のときに test の knob を外すことの self-test (#571)。
 # 親の環境に test の knob (FAKE_*・INJECT_*・SAFE_RUN_INJECT*・STATE_INTERRUPT*・PACKET_*・AGENT_TOOLS_TEST_CHECK_*・
-# WAM_EXTRA・REPORT_TZ・RECORD_DIR) があっても、source の後の suite には残らない。knob でない env (名前の似た製品の env を
-# 含む) は値ごと残す。値に改行や空白を含んでも壊れない。network access なし。
+# WAM_EXTRA・REPORT_TZ・RECORD_DIR) と、実際の記録の場所を指す AGENT_TOOLS_TOOL_CALL_RECORD_DIR は、source の後の suite には
+# 残らない。それ以外の env (名前の似た製品の env を含む) は値ごと残す。値に改行や空白を含んでも壊れない。
+# network access なし。
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -22,16 +23,17 @@ out=$(env FAKE_GH_RC=1 FAKE_CODEX_RC_VERSION=1 'FAKE_SPACED=a b' WAM_EXTRA='extr
   set -eu
   . "$1"
   for v in FAKE_GH_RC FAKE_CODEX_RC_VERSION FAKE_SPACED WAM_EXTRA REPORT_TZ RECORD_DIR INJECT_RMDIR_ERROR SAFE_RUN_INJECT \
-    SAFE_RUN_INJECT_GO STATE_INTERRUPT PACKET_ENVELOPE_NUMBER PACKET_READER_ARGS PACKET_COPY AGENT_TOOLS_TEST_CHECK_FAIL _th_knob; do
+    SAFE_RUN_INJECT_GO STATE_INTERRUPT PACKET_ENVELOPE_NUMBER PACKET_READER_ARGS PACKET_COPY AGENT_TOOLS_TEST_CHECK_FAIL \
+    AGENT_TOOLS_TOOL_CALL_RECORD_DIR _th_knob; do
     eval "[ -z \"\${$v+x}\" ]" || printf "left: %s\n" "$v"
   done
   printf "keep=%s\n" "${KNOB_TEST_KEEP-}"
-  printf "product=%s %s\n" "${AGENT_TOOLS_CHECKS_CONFIG-}" "${AGENT_TOOLS_TOOL_CALL_RECORD_DIR-}"
+  printf "product=%s\n" "${AGENT_TOOLS_CHECKS_CONFIG-}"
   printf "multi=%s\n" "${KNOB_TEST_MULTI-}"
 ' sh "$helpers")
 
 expected="keep=kept
-product=/tmp/checks /tmp/records
+product=/tmp/checks
 multi=$multi"
 if [ "$out" != "$expected" ]; then
   echo "FAIL: test-helpers.sh did not clear the test knobs (or changed other env). got:" >&2

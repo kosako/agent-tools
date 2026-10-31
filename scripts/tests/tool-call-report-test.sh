@@ -12,10 +12,8 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 src="$repo_root/shared/scripts/personal-tool-call-report.rb"
 [ -f "$src" ] || fail "missing $src"
 
-# 記録先の env は HOME / XDG_STATE_HOME より優先される (default_record_path)。親の環境から継承すると、既定の入力先の
-# case が fixture ではなく実際の記録を読むので、最初に外す。上書きを確かめる case だけが明示して渡す (#571)。
-# test の knob の REPORT_TZ は、test-helpers.sh が source のときに外す。
-unset AGENT_TOOLS_TOOL_CALL_RECORD_DIR
+# 記録先の env (AGENT_TOOLS_TOOL_CALL_RECORD_DIR) と test の knob の REPORT_TZ は、test-helpers.sh が source のときに外す
+# (#571)。記録先の env の上書きを確かめる case だけが明示して渡す。
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
