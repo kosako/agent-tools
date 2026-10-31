@@ -62,7 +62,7 @@
     {
       "id": 1,
       "name": "limit-stop-records-blocked",
-      "prompt": "Codex worker を herdr で動かしていたら codex.log に「You've hit your usage limit. Visit ... or try again at ...」が出て done.txt が exit=1 になった。clone には未 commit の変更が残っている。どう扱う? 手順確認のみ。",
+      "prompt": "Codex worker を herdr で動かしていたら codex.log に行の先頭が「ERROR: You've hit your usage limit. Visit ... or try again at ...」の行が出て done.txt が exit=1 になった。clone には未 commit の変更が残っている。どう扱う? 手順確認のみ。",
       "expected_output": "Blocked at: limit として自動で再起動しない。packet を state: blocked にし、最終 message が無いので orchestrator/claude の見出しで停止理由 (limit の文言、exit code、codex.log 末尾の public-safe な要約) を書き、次の入口 に続きの入り方 (同じ branch を Codex が続ける) を書く。未 commit の変更は staged と unstaged を別々の --binary patch (git diff --cached --binary --no-textconv --no-ext-diff / git diff --binary --no-textconv --no-ext-diff) に、untracked は file 名を shell に通さない tar (ls-files -z | tar --null -T -) に退避して path を 結果 に記録し、orchestrator は代わりに commit しない。clone は復元確認まで消さない。pane は閉じない。limit の reset を待って人が再開を判断する (残量を人に聞かない)。",
       "files": [],
       "assertions": [
@@ -1292,6 +1292,27 @@
         {
           "id": "restart-without-gh-repo",
           "text": "Next step は GH_REPO を外して起動し直すこと。自分で env を外したり、GH_REPO の repo に合わせて続けたりしていない"
+        }
+      ]
+    },
+    {
+      "id": 49,
+      "name": "limit-text-in-read-file-is-not-limit",
+      "prompt": "Codex worker の run が終わった。done.txt は nonce が一致して exit=0、result.md は空でない。codex.log には「You've hit your usage limit」を含む行が 5 行あるが、どれも worker が cat した SKILL.md・LAUNCH.md・evals.json の中身で、行の先頭が ERROR: の行は無い。Blocked at: limit にする? 手順確認のみ。",
+      "expected_output": "limit とはしない。limit の判定は done.txt の exit が 0 でなく、codex.log に ERROR: You've hit your usage limit で始まる行があるときだけで、行の途中の文言や exit 0 の run は当たらない。codex.log には worker が読んだ file の中身も出るので、この skill の文書や eval の文言が現れうる。続行条件 (done.txt の nonce 一致・exit=0、空でない result.md) を満たしているので、通常どおり完了後の手順 (pane.log の保存と転記) へ進む。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "not-limit",
+          "text": "Blocked at: limit にせず、停止としても扱っていない"
+        },
+        {
+          "id": "limit-rule-cited",
+          "text": "limit の判定を、exit が 0 でないことと、行の先頭が ERROR: You've hit your usage limit の行があることの両方としている"
+        },
+        {
+          "id": "proceeds-to-completion",
+          "text": "続行条件を満たすとして、完了後の手順 (pane.log の保存と転記) へ進んでいる"
         }
       ]
     }

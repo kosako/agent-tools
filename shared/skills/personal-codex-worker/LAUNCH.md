@@ -452,8 +452,10 @@ herdr pane wait-output <pane-id> --match CODEX-WORKER-DONE-<nonce> --timeout 300
   倒さず wait を続け、cap に達したら RUNNING として人に渡す。
 - 120 分に達したら kill せず、`Status: RUNNING` で pane id / run dir / 経過時間を返す (§10 の「起動済み
   (`RUNNING`)」。雛形は `RESULT-FORMAT.md`)。
-- 待っている間に `codex.log` に `You've hit your usage limit` が現れたら (前方一致)、process の
-  終了を待ってから `Blocked at: limit`。
+- limit の判定は process の終了の後に行う。`done.txt` の exit が 0 でなく、`codex.log` に
+  `ERROR: You've hit your usage limit` で始まる行があれば `Blocked at: limit` (`SKILL.md` の「limit」)。待っている
+  間にこの文言が見えても、それだけでは止めない。`codex.log` には worker が読んだ file の中身も出るので、行の
+  途中の文言や exit 0 の run は limit としない (#587)。
 
 ## 7. 完了後
 
