@@ -97,4 +97,32 @@ echo "$out" | grep -q "==> sync" || fail "setup should reach sync after the pend
 [ ! -e "$tmp/p-codex/skills/personal-pending-skill" ] || fail "the pending codex skill must not be placed"
 [ ! -e "$tmp/p-claude/skills/personal-pending-skill" ] || fail "the pending claude skill must not be placed"
 
+# --- case 5: instruction を持つ repo の初回の配備を setup だけで行う (#571) ---
+# connect は setup の中だけで走らせる (個別の connect --apply は呼ばない)。setup が connect に --apply を渡さないと、
+# 所有 file と Claude の import が作られない。dry-run は何も書かず、--apply は所有 file の本文と import を作り、人が
+# 書いた CLAUDE.md の本文を残す。
+iroot="$tmp/instruction-root"
+make_demo_repo "$iroot" instructions personal-ops instruction '# 運用ルール' '' 'setup-test の instruction の本文。'
+mkdir -p "$tmp/i-codex" "$tmp/i-claude" "$tmp/i-opencode"
+printf '# 手書きの指示\n\n人が書いた行。\n' > "$tmp/i-claude/CLAUDE.md"
+cp "$tmp/i-claude/CLAUDE.md" "$tmp/i-claude-before.md"
+out=$("$setup" --root "$iroot" --codex-home "$tmp/i-codex" --claude-home "$tmp/i-claude" --opencode-home "$tmp/i-opencode" 2>&1) \
+  || fail "instruction dry-run exited non-zero: $out"
+echo "$out" | grep -q "create: \[claude-code\] owned" || fail "instruction dry-run: claude owned create plan missing: $out"
+echo "$out" | grep -q "add-import: \[claude-code\] import" || fail "instruction dry-run: claude import plan missing: $out"
+echo "$out" | grep -q "create: \[codex\] owned" || fail "instruction dry-run: codex owned create plan missing: $out"
+[ ! -e "$tmp/i-claude/agent-tools/CLAUDE.md" ] || fail "instruction dry-run wrote the claude owned file"
+[ ! -e "$tmp/i-codex/AGENTS.md" ] || fail "instruction dry-run wrote the codex owned file"
+cmp -s "$tmp/i-claude/CLAUDE.md" "$tmp/i-claude-before.md" || fail "instruction dry-run changed the hand-written CLAUDE.md"
+out=$("$setup" --apply --root "$iroot" --codex-home "$tmp/i-codex" --claude-home "$tmp/i-claude" \
+  --opencode-home "$tmp/i-opencode" 2>&1) || fail "instruction apply exited non-zero: $out"
+[ -f "$tmp/i-claude/agent-tools/CLAUDE.md" ] || fail "setup --apply did not create the claude owned file: $out"
+head -1 "$tmp/i-claude/agent-tools/CLAUDE.md" | grep -q "agent-tools:managed" || fail "the claude owned file has no marker"
+grep -qF "setup-test の instruction の本文。" "$tmp/i-claude/agent-tools/CLAUDE.md" || fail "the claude owned file has no body"
+grep -qx '@agent-tools/CLAUDE.md' "$tmp/i-claude/CLAUDE.md" || fail "setup --apply did not add the claude import: $out"
+grep -qxF "人が書いた行。" "$tmp/i-claude/CLAUDE.md" || fail "setup --apply must keep the hand-written CLAUDE.md body"
+[ -f "$tmp/i-codex/AGENTS.md" ] || fail "setup --apply did not create the codex owned file: $out"
+head -1 "$tmp/i-codex/AGENTS.md" | grep -q "target=codex" || fail "the codex owned file has no marker"
+grep -qF "setup-test の instruction の本文。" "$tmp/i-codex/AGENTS.md" || fail "the codex owned file has no body"
+
 echo "ok: setup-test passed"
