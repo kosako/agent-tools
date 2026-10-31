@@ -10,12 +10,12 @@ risk:
   privacy: low
 # script kind は実行コード配布のため常に human review 必須 (#147)。
 # 本 script は #202 (Phase 1) の実装 PR で author≠reviewer レビューのうえ承認し、
-# #295 PR 3a (OpenCode)、#553 (bot の PR の分岐) で再レビューする。
+# #295 PR 3a (OpenCode)、#553 (bot の PR の分岐)、#576 (対象の固定) で再レビューする。
 # 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:ad4500aa9863be8778d3ee2142e04687929e4c0d5fa4dc5f8119dca7d94f7553
+  approved_build_id: sha256:bf90a58f87fe850ad20757e9222a1de22b5e6432c9bf4d73beb73afa458149be
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-review-routing-preflight.rb
@@ -29,5 +29,7 @@ summary: >-
   (exit 1)。PR の author が閉じた表の bot (Dependabot) なら trailer ではなく GitHub の API の印 (PR と全 commit の
   author が bot、GitHub の署名、親 1 つ、head と base が同じ repository、commit の数と head の一致) で判定し、
   bot(dependabot) → Claude (bot の route では検証済みの head の OID の行も出す)。表に無い bot・fork・印を満たさない commit は
-  fail-closed で trailer の route へ戻さない (#553)。
+  fail-closed で trailer の route へ戻さない (#553)。--expect-base / --expect-head を渡すと、PR の base / head がその OID で、
+  取得した commit の列が PR の状態と一致し、取得の後に読み直した PR の base / head も変わっていないときだけ判定し、外れれば
+  exit 2 (#576。author を判定する対象と review の対象を固定する)。
   出力は oid 短縮 + 閉じた表の分類ラベルのみで、untrusted な本文・author 名・OpenCode の provider/model を含めない。規範の正本は personal-review-request skill。
