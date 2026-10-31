@@ -42,6 +42,17 @@ check("日本語を少し含む英語の答えは逸れ (英語の文に日本�
 # 比の境界: 英字が日本語の 3 倍を超えたら逸れ (ちょうど 3 倍は逸れでない)
 check("英字がちょうど日本語の 3 倍は逸れでない", !drift.call(("a" * 30) + ("あ" * 10)))
 check("英字が日本語の 3 倍を超えたら逸れ", drift.call(("a" * 31) + ("あ" * 10)))
+# backtick の数を合わせる inline code (#606 の review の F1)
+check("二重の backtick の inline code を数えない", !drift.call("``#{english}`` を確認しました。"))
+check("二重の backtick の中の 1 つの ` も区間の中", !drift.call("``#{english} ` #{english}`` を確認しました。"))
+check("閉じの無い backtick の並びの後ろは数える", drift.call("`` #{english}"))
+# fence は開いた記号と同じ記号で閉じる (F2)
+check("~~~ の fence の中の ``` の行で、後ろの英語を消さない", drift.call("~~~\n```\n~~~\n#{english}"))
+check("``` の fence の中の ~~~ の行で、後ろの英語を消さない", drift.call("```\n~~~\n```\n#{english}"))
+check("短い記号の行では長い fence を閉じない", !drift.call("見てください。\n````\n```\n#{english}\n````\n以上です。"))
+check("行の頭の ```x``` は fence でなく inline code", drift.call("```x```\n#{english}"))
+check("字下げした fence も除く", !drift.call("1. 手順です。\n    ```sh\n    #{english}\n    ```\n"))
+check("行の途中の ``` は fence を開かない", drift.call("見て ```\n#{english}"))
 
 # ---- hook の入出力 ----
 run = lambda do |payload, env = {}|
@@ -72,8 +83,43 @@ code_, = run.call(stop.call(nil).merge("last_assistant_message" => ["x"]))
 check("last_assistant_message が文字列でないなら止めない", code_ == 0)
 code_, = run.call(stop.call(english + ("a" * (4 * 1024 * 1024))))
 check("4 MiB を超える入力では止めない", code_ == 0)
-code_, = run.call(JSON.generate(stop.call(english)).b.sub("Done.", "Done.\xff".b).force_encoding(Encoding::UTF_8))
-check("不正な UTF-8 を含んでも動く (scrub して判定する)", code_ == 2)
+code_, out, err = run.call(JSON.generate(stop.call(english)).b.sub("Done.", "Done.\xff".b).force_encoding(Encoding::UTF_8))
+check("不正な UTF-8 の入力では止めず、何も出さない (読めない入力は通す)", code_ == 0 && out.empty? && err.empty?)
+bad = "#{english}\xff".dup.force_encoding(Encoding::UTF_8)
+check("不正な UTF-8 の答えは decide でも通す", JaReplyGuard.decide(JSON.generate(stop.call("x")).sub('"x"', "\"#{bad}\""), {}) == [0, nil])
+# JSON の対の無い surrogate の扱いは json の版で違う (Ruby 2.6 は ? に置き換える)。どちらでも例外で落ちないこと。
+code_, out, = run.call(JSON.generate(stop.call(english)).sub("Done.", "Done.\\ud800"))
+check("JSON の対の無い surrogate でも落ちない (exit 0 か 2)", [0, 2].include?(code_) && out.empty?)
+
+# ---- 長い非一致の入力 (F3) ----
+# どの区間の正規表現も線形の時間で終わること。二次の時間なら 1 MiB で何分もかかる。上限は CI の遅さを見込んで広く取る。
+# 正規表現の engine は必ず要る文字列 (:// や @) が無い入力をすぐ諦めるので、入力にはそれを含める。
+big = 1024 * 1024
+{
+  "識別子の形の後ろが区切りだけ" => ("a" * big) + "-",
+  "URL の scheme の後ろに区切りの外の文字" => ("a" * big) + "_://",
+  "mail の domain が無い" => ("a" * big) + "@",
+  "link の [ だけ" => "[" * big,
+  "link の行き先が閉じない" => "[a](" * (big / 4),
+  "長さの違う backtick の並び" => (1..1400).map { |n| "`" * n }.join("a"),
+  "閉じない fence の後ろの長い行" => "```\n" + ("a" * big),
+}.each do |label, text|
+  # 子で判定し、上限を過ぎたら止めて FAIL にする (退行で test 自体が何十分も止まらないように)。
+  pid = fork do
+    JaReplyGuard.drift?(text)
+    exit!(0)
+  end
+  deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 15
+  status = nil
+  while (status = Process.wait2(pid, Process::WNOHANG)).nil? && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+    sleep 0.05
+  end
+  if status.nil?
+    Process.kill("KILL", pid)
+    Process.wait(pid)
+  end
+  check("#{label} (1 MiB 前後) が 15 秒以内に終わる", status && status[1].success?)
+end
 
 # ---- env ----
 code_, = run.call(stop.call(english), "AGENT_TOOLS_JA_GUARD_DISABLE" => "1")

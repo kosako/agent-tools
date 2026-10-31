@@ -11,8 +11,14 @@ task の通知や command の出力に続けて答えるときに逸れやすく
 Stop の入力の `last_assistant_message` (最後の答えの text) を読み、数えない区間を除いてから、英字 (`[A-Za-z]`) と
 日本語の文字 (ひらがな・カタカナ・漢字・長音) を数えます。
 
-- 数えない区間: fenced code block (閉じていなければ末尾まで)、inline code、URL、mail、Markdown の link の行き先
-  (link の本文は数える)、識別子の形 (英数字の並びを `-` `_` `.` `/` `:` でつないだもの。path・flag・test の名前など)。
+- 数えない区間: fenced code block、inline code、URL、mail、Markdown の link の行き先 (link の本文は数える)、識別子の形
+  (英数字の並びを `-` `_` `.` `/` `:` でつないだもの。path・flag・test の名前など)。
+- fenced code block は行ごとに読みます。行の頭 (空白の後) の ```` ``` ```` か `~~~` (3 つ以上) で開き、同じ記号が同じ数
+  以上並ぶ行で閉じます。閉じていなければ末尾までです。```` ``` ```` の開きの行の後ろに `` ` `` があれば、fence ではなく
+  inline code として読みます。
+- inline code は、開きの `` ` `` の並びと同じ長さの並びで閉じます (``` `` a`b `` ``` も 1 つの区間)。閉じの無い並びは
+  そのまま数えます。
+- どの区間も、入力の長さに対して線形の時間で数えます (長い非一致の入力で hook を待たせない)。
 - 逸れの条件: 英字が 25 字以上で、日本語の文字の 3 倍を超える。英字が 25 字未満の答えは対象外です。
 - 閾値は env で変えられます (下の「env」)。
 
@@ -33,6 +39,8 @@ Stop の入力の `last_assistant_message` (最後の答えの text) を読み�
   判定したものはありません。
 - 閾値を 2 倍にすると、日本語の文を含む答えも逸れと判定します (句点が 2 つ以上のものが 4 件)。4 倍にしても、逸れの
   判定は 165 件で変わりません。参考にした実装と同じ 3 倍にしました。
+- 同じ日に、fenced code と inline code の読み方を上の形に直しました (#606 の review)。直す前と後の判定を、その時点の
+  2424 件で比べると同じでした。
 
 ## 止め方と loop の防ぎ方
 
@@ -48,7 +56,7 @@ Stop の入力の `last_assistant_message` (最後の答えの text) を読み�
 
 turn を通します (exit 0)。次のどれでも、何も止めません。
 
-- 入力が JSON でない、object でない、4 MiB を超える。
+- 入力が JSON でない、object でない、4 MiB を超える、UTF-8 として不正。
 - `hook_event_name` が `Stop` でない。
 - `last_assistant_message` が無い (この field を持たない古い Claude Code) か、文字列でない。
 - 想定外の例外。
@@ -101,4 +109,5 @@ README を参考にしました。code は写さず、Ruby で書き直してい
 ## Test
 
 `scripts/tests/ja-reply-guard-test.sh`。判定は module を require して直接、hook は ruby で起動して stdin の JSON と
-exit code と stderr を確かめます。
+exit code と stderr を確かめます。1 MiB 前後の長い非一致の入力は子 process で判定し、15 秒を過ぎたら止めて失敗に
+します (二次の時間に戻る退行を捕まえる)。
