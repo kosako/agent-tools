@@ -14,7 +14,7 @@ OpenCode の記述にある。
 | --- | --- | --- | --- |
 | runner | `scripts/probe-opencode-plugin.sh` (`scripts/lib/probe_opencode_plugin.rb`) | 隔離した tmp で `opencode` を stage ごとに起動し、raw の記録と summary を `--out` に書く | 実行しない (opencode CLI と network が要る) |
 | 隔離 | `scripts/lib/probe_opencode/isolation.rb` | tmp に HOME / XDG / DB / git config / project を作り、`opencode.json` と子 process に渡す allowlist の env を決める | T2 (env) / T3 (`opencode.json`) で検証 |
-| 子 process | `scripts/lib/probe_opencode/process.rb` | 子 process と serve を argv 配列で起動し、timeout と停止では process group ごと止める。serve の HTTP client | T8 で serve の停止を検証 |
+| 子 process | `scripts/lib/probe_opencode/process.rb` | 子 process と serve を argv 配列で起動し、timeout と停止では process group ごと止める。serve の HTTP client。1 回の起動 (`Child.run`) の期限と中断の後片付けは、skill routing の probe と共有の `scripts/lib/probe_child.rb` が持つ (#568) | T8 で serve の停止と中断を検証 |
 | 計測用 plugin | `scripts/lib/probe_opencode/probe-plugin.js` | v1 形 (`export default { id, server }`)。hook ごとの allowlist で記録する | T7 で allowlist を検証 |
 | mock provider | `scripts/lib/probe_opencode/mock_openai.rb` | 127.0.0.1 の OpenAI 互換 SSE。prompt の `PROBE-SCENARIO:<name>` で tool call の列を返す | T4 で検証 |
 | 判定 | `scripts/lib/probe_opencode/judge.rb` | 記録から M1〜M20 の observed と verdict を出す | T5 で検証 |

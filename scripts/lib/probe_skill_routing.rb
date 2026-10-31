@@ -33,6 +33,7 @@ require "open3"
 require "tmpdir"
 require "time"
 require_relative "check_skill_routing"
+require_relative "probe_child"
 require_relative "yaml_util"
 
 # C locale (LC_ALL=C や LANG の未設定) でも、読む text (file・command の出力) を UTF-8 として扱う (#432)。
@@ -65,7 +66,9 @@ module ProbeSkillRouting
       --source    候補 skill dir の親 (既定: generated/<tool>/skills。build 済みであること)
       --cases     case set (既定: scripts/lib/skill_routing_cases.json)
       --variant   結果に付ける label (既定: candidate。baseline を測るときは baseline 等)
-      --model     CLI に渡す model (既定: CLI の既定。baseline と candidate で揃えること)
+      --model     CLI に渡す model (baseline と candidate で揃えること)。claude-code は省略すると CLI の既定。
+                  codex は省略すると Codex home ($CODEX_HOME、空なら ~/.codex) の config.toml の top-level の
+                  model を使い、それも無ければエラー (CLI の既定には任せない)
       --repeat    各 case の実行回数 (既定: 1)
       --only      実行する case id (comma 区切り)。coverage が欠けるので判定は exit 2 になる
       --max-turns claude-code の --max-turns (既定: #{DEFAULT_MAX_TURNS})
@@ -381,68 +384,14 @@ module ProbeSkillRouting
 
   # --- 実行 -------------------------------------------------------------------------
 
-  # timeout 後に reader thread を待つ上限秒。group kill 後も pipe が閉じない (kill が届かない
-  # 孫 process が握っている) 場合に runner 自体がハングしないための床。
-  READER_JOIN_GRACE = 5
-
-  # argv を配列のまま起動し、timeout を超えたら kill する。stdout / stderr / status を返す
-  # (timeout 時の status は nil)。
-  # CLI は子 process (codex の command 実行、claude の hook 等) を持ち、それらが stdout / stderr の
-  # pipe を継承する。CLI の PID だけを kill しても孫が pipe を握ったままだと read が返らず runner が
-  # ハングするので、pgroup: true で新しい process group を作り、timeout 時は group 全体へ TERM →
-  # KILL を送る。reader の join は bounded にし、それでも閉じない pipe は runner 側で close する。
+  # argv を配列のまま起動し、timeout を超えたら kill する。stdout / stderr / status を返す (timeout で kill した run と、
+  # stream を最後まで読み切れなかった run の status は nil。観測として信用しない)。process group の起動・期限・中断を
+  # 含む後片付けは ProbeChild が持つ (#568)。
   def self.run_command(argv, chdir:, stdin:, timeout:)
     # 入れ子起動の guard 変数を外す (Claude Code の Bash から起動された場合)。
     env = { "CLAUDECODE" => nil, "CLAUDE_CODE_ENTRYPOINT" => nil }
-    out = +""
-    err = +""
-    status = nil
-    Open3.popen3(env, *argv, chdir: chdir, pgroup: true) do |i, o, e, wait|
-      i.write(stdin) if stdin
-      i.close
-      # timeout 時に runner 側で pipe を close すると、read 中の thread は IOError で抜ける。
-      # それは意図した打ち切りなので握り (join で再送出させない)、読めた分だけを返す。
-      readers = [[o, out], [e, err]].map do |io, buf|
-        t = Thread.new do
-          buf << io.read
-        rescue IOError
-          nil
-        end
-        t.report_on_exception = false
-        t
-      end
-      completed = wait.join(timeout)
-      unless completed
-        # pgroup: true なので pgid == 子の pid。負の pid で group 全体に送る。
-        kill_group(wait.pid, "TERM")
-        sleep 1
-        kill_group(wait.pid, "KILL")
-      end
-      # 正常終了でも、CLI が残した孫 process が pipe を継承していると read が返らない。timeout
-      # 経路と同じく共通の deadline で bounded に待ち、閉じなければ group を KILL し (pipe が閉じて
-      # 読めた分を回収してから)、それでも閉じない pipe を runner 側で閉じる。
-      deadline = Time.now + READER_JOIN_GRACE
-      drained = readers.map { |t| t.join([deadline - Time.now, 0].max) }.all?
-      unless drained
-        kill_group(wait.pid, "KILL")
-        readers.each { |t| t.join(1) }
-        [o, e].each { |io| io.close unless io.closed? }
-        readers.each { |t| t.join(1) }
-      end
-      wait.join(READER_JOIN_GRACE) unless completed
-      # stream を最後まで読み切れなかった run は観測として信用しない (status nil → error run)。
-      status = wait.value if completed && drained
-      # process group は runner 専用なので、CLI が detach したまま残した process も最後に回収する
-      # (残っていなければ ESRCH で no-op)。
-      kill_group(wait.pid, "KILL")
-    end
-    [out, err, status]
-  end
-
-  def self.kill_group(pid, signal)
-    Process.kill(signal, -pid)
-  rescue Errno::ESRCH, Errno::EPERM
-    nil
+    r = ProbeChild.run(argv, env: env, chdir: chdir, stdin: stdin, timeout: timeout)
+    [r.out, r.err, r.completed && r.drained ? r.status : nil]
   end
 
   def self.run_one(opts, proj, names, prompt)

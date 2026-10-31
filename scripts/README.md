@@ -159,7 +159,9 @@ usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
 - self-test: `tests/probe-skill-routing-test.sh` は、Codex の起動の境界 (argv と、起動の前の flag と
   feature の確認)、config からの model の選択 (top-level だけを読む)、raw dir の外を指す case id での停止を
   偽の `codex` と fixture の `CODEX_HOME` で確かめ、event の解析 (`parse_claude` / `parse_codex`) を固定の
-  JSONL で、`--max-turns` の打ち切りの扱いを偽の `claude` で確かめる。CLI の実起動と、実際の event 形式との
+  JSONL で、`--max-turns` の打ち切りの扱いを偽の `claude` で確かめる。子 process の起動・期限・中断の後片付けは
+  OpenCode の probe と共有の `lib/probe_child.rb` が持ち、中断で子の process group を残さないことと、help の
+  `--model` の説明も確かめる (#568)。CLI の実起動と、実際の event 形式との
   一致は対象外 (実機で `--smoke`)。`--dry-run` / `--help` の引数契約は `tests/cli-args-test.sh` の対象外。
 
 - `probe-opencode-plugin.sh`: OpenCode plugin probe の runner (実機・#295)。HOME / XDG / DB /

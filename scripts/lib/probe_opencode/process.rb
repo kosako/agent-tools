@@ -7,61 +7,23 @@
 require "json"
 require "net/http"
 require "open3"
+require_relative "../probe_child"
 
 module ProbeOpencode
   module Child
-    READER_GRACE = 5
+    READER_GRACE = ProbeChild::READER_GRACE
 
     Result = Struct.new(:out, :err, :exitstatus, :timed_out, :duration_ms, keyword_init: true)
 
     def self.kill_group(pid, signal)
-      Process.kill(signal, -pid)
-    rescue Errno::ESRCH, Errno::EPERM
-      nil
+      ProbeChild.kill_group(pid, signal)
     end
 
-    def self.reader(io, buf)
-      t = Thread.new do
-        buf << io.read
-      rescue IOError
-        nil
-      end
-      t.report_on_exception = false
-      t
-    end
-
+    # 起動・期限・中断を含む後片付けは ProbeChild が持つ (#568)。exitstatus は期限の中で終わった run だけに付ける。
     def self.run(argv, env:, chdir:, timeout:)
       started = Time.now
-      out = +""
-      err = +""
-      exitstatus = nil
-      timed_out = false
-      Open3.popen3(env, *argv, chdir: chdir, pgroup: true, unsetenv_others: true) do |i, o, e, wait|
-        readers = []
-        begin
-          i.close
-          readers = [reader(o, out), reader(e, err)]
-          unless wait.join(timeout)
-            timed_out = true
-            kill_group(wait.pid, "TERM")
-            sleep 1
-            kill_group(wait.pid, "KILL")
-          end
-          # 孫が pipe を握っていると read が返らないので bounded に待ち、閉じなければ group を止める。
-          deadline = Time.now + READER_GRACE
-          drained = readers.map { |t| t.join([deadline - Time.now, 0].max) }.all?
-          kill_group(wait.pid, "KILL") unless drained
-          wait.join(READER_GRACE)
-          exitstatus = wait.value&.exitstatus unless timed_out || wait.alive?
-        ensure
-          # 正常終了・timeout・中断 (Ctrl-C)・例外のどれでも、子の process group を残さない。pgroup: true
-          # なので端末の SIGINT は子に届かず、ここで止めないと Open3 の終了待ちで runner も止まる。
-          kill_group(wait.pid, "KILL")
-          [o, e].each { |io| io.close unless io.closed? }
-          readers.each { |t| t.join(1) }
-        end
-      end
-      Result.new(out: out, err: err, exitstatus: exitstatus, timed_out: timed_out,
+      r = ProbeChild.run(argv, env: env, chdir: chdir, timeout: timeout, unsetenv_others: true)
+      Result.new(out: r.out, err: r.err, exitstatus: r.completed ? r.status&.exitstatus : nil, timed_out: !r.completed,
                  duration_ms: ((Time.now - started) * 1000).round)
     end
 

@@ -10,6 +10,8 @@
 #   何も作らない。
 # - event の解析 (parse_claude / parse_codex): 固定の JSONL で、発火順と重複除去・usage の合計・探索読みの
 #   閾値などを固定する。--max-turns の打ち切り (error_max_turns) の扱いは PATH 上の偽の claude で確かめる。
+# - 中断の後片付け (#568): run_command を中断すると、子の process group を止めてすぐ戻る。help の --model の
+#   説明が codex の model の選び方 (config の top-level、無ければエラー) と合う。
 # 実 claude / codex / network / 実 ~/.codex には触れない。実際の CLI の event 形式との一致は対象外
 # (実機で --smoke)。
 set -eu
@@ -91,6 +93,52 @@ check("--model があれば config より優先する", P.codex_model({ model: "
 
 ENV["CODEX_HOME"] = ARGV[3]
 check("config.toml が無ければ --model is required のエラーにする", model_required_error? { P.codex_model({}) })
+
+# help の --model の説明は、codex では CLI の既定に任せず、config の top-level か --model が要ることを書く (#568)
+model_help = P::USAGE.lines.drop_while { |l| l !~ /\A\s+--model\s/ }.take_while { |l| l !~ /\A\s+--repeat\s/ }.join
+check("help の --model は claude-code の省略を CLI の既定と書く", model_help.include?("claude-code は省略すると CLI の既定"))
+check("help の --model は codex の省略を config の top-level の model とエラーと書く",
+      model_help.include?("codex は省略すると") && model_help.include?("top-level") && model_help.include?("エラー"))
+check("help の --model は codex を CLI の既定に任せると書かない", model_help.include?("CLI の既定には任せない"))
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
+# ---- Ruby unit checks: 中断の後片付け (#568) ---------------------------------------------
+# run_command を中断 (Ctrl-C 相当) すると、専用の process group で起動した子を止めてすぐ戻る (Open3 の終了待ちで
+# 止まらず、子を残さない)。子は別の process group なので端末の SIGINT は届かない。
+ruby -r"$script_dir/lib/check_helper" - "$src" "$tmp" <<'RUBY'
+load ARGV[0]
+P = ProbeSkillRouting
+
+def alive?(pid)
+  Process.kill(0, pid)
+  true
+rescue Errno::ESRCH
+  false
+rescue Errno::EPERM
+  true
+end
+
+pidfile = File.join(ARGV[1], "interrupt-child.pid")
+runner = Thread.new do
+  P.run_command(["sh", "-c", %(echo $$ > "$0"; exec sleep 60), pidfile], chdir: ARGV[1], stdin: "prompt", timeout: 30)
+  :completed
+rescue Interrupt
+  :interrupted
+end
+runner.report_on_exception = false
+deadline = Time.now + 5
+sleep 0.05 until (File.file?(pidfile) && !File.read(pidfile).strip.empty?) || Time.now > deadline
+child = File.file?(pidfile) ? File.read(pidfile).to_i : 0
+check("中断の test の子が起動した", child.positive? && alive?(child))
+started = Time.now
+runner.raise(Interrupt)
+check("中断した run_command は 10 秒の中で戻る", !runner.join(10).nil?)
+check("中断した run_command は Interrupt を送り直す", runner.value == :interrupted)
+check("中断までの時間が timeout (30 秒) より短い", Time.now - started < 10)
+gone_by = Time.now + 3
+sleep 0.05 while child.positive? && alive?(child) && Time.now < gone_by
+check("中断した run_command は子の process group を残さない", child.positive? && !alive?(child))
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
