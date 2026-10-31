@@ -571,6 +571,50 @@ echo pins-v2 > "$repo/base.txt"   # 内容を変える → 指紋が変わり、
 out=$(cd "$repo" && export GIT_CONFIG_GLOBAL="$pins_cfg" && run_qa false 2>/dev/null) || fail "#430: content change must re-run the check and pass"
 [ -z "$out" ] || fail "#430: with the diff pinned, a content change must produce a fresh pass (no cached failure warning): $out"
 
+# ---- #574: 指紋の diff は textconv も外す (--no-textconv) ----
+# textconv が変換後の内容を同じにする編集 (ここでは 1 行目だけを見る head -n 1) では、diff も status も変わらず、
+# 指紋が同じになる。前回の pass の cache が使われ、今は fail する check が走らない。
+tc_cfg="$tmp/gitconfig-textconv"
+cp "$GIT_CONFIG_GLOBAL" "$tc_cfg"
+git config --file "$tc_cfg" diff.first.textconv "head -n 1"
+printf '*.txt diff=first\n' > "$repo/.gitattributes"
+printf 'line1\nline2\n' > "$repo/base.txt"
+(cd "$repo" && git add -A && git commit -qm "textconv base")
+rm -rf "$tmp/qa-state"
+rm -f "$tmp/check-fail"
+printf 'line1\nedit-a\n' > "$repo/base.txt"   # 2 行目だけを変える (textconv の後は HEAD と同じ)
+out=$(cd "$repo" && export GIT_CONFIG_GLOBAL="$tc_cfg" && run_qa false 2>/dev/null) || fail "#574: the first run should pass and be cached: $out"
+: > "$tmp/check-fail"
+printf 'line1\nedit-b\n' > "$repo/base.txt"   # 2 行目を別の内容に (textconv の後は、前回と同じく HEAD と同じ)
+set +e
+(cd "$repo" && export GIT_CONFIG_GLOBAL="$tc_cfg" && run_qa false >/dev/null 2>&1)
+rc=$?
+set -e
+rm -f "$tmp/check-fail"
+[ "$rc" -eq 2 ] || fail "#574: a change hidden by textconv must re-run the failing check and block (rc=$rc)"
+# 初回 commit の前 (unborn_diff の経路) も同じ。index に置いた内容と、textconv の後は同じになる作業ツリーの変更。
+tc_unborn="$tmp/textconv-unborn"
+git init -q "$tc_unborn"
+tc_unborn_real=$(ruby -e 'puts File.realpath(ARGV[0])' "$tc_unborn")
+ruby -rjson -e '
+File.write(ARGV[2], JSON.generate({ARGV[0] => {"qa_checks" => [{"name" => "fake-suite", "command" => [ARGV[1]]}]}}))
+' "$tc_unborn_real" "$tmp/fake-check" "$conf"
+printf '*.txt diff=first\n' > "$tc_unborn/.gitattributes"
+printf 'line1\nline2\n' > "$tc_unborn/f.txt"
+(cd "$tc_unborn" && git add -A)
+rm -rf "$tmp/qa-state"
+rm -f "$tmp/check-fail"
+printf 'line1\nedit-a\n' > "$tc_unborn/f.txt"
+out=$(cd "$tc_unborn" && export GIT_CONFIG_GLOBAL="$tc_cfg" && run_qa false 2>/dev/null) || fail "#574: the first unborn run should pass and be cached: $out"
+: > "$tmp/check-fail"
+printf 'line1\nedit-b\n' > "$tc_unborn/f.txt"
+set +e
+(cd "$tc_unborn" && export GIT_CONFIG_GLOBAL="$tc_cfg" && run_qa false >/dev/null 2>&1)
+rc=$?
+set -e
+rm -f "$tmp/check-fail"
+[ "$rc" -eq 2 ] || fail "#574: before the first commit, a change hidden by textconv must re-run the failing check and block (rc=$rc)"
+
 ruby "$script_dir/fast-edit-check-payload-test.rb" "$edit_hook"
 
 echo "ok: quality-loop-hooks self-test"

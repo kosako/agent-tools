@@ -202,4 +202,56 @@ check("run returns 0 when stdin and stderr both fail", ToolCallRecordHook.run(st
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
+# ---- #574: 記録は所有者だけが読める権限で書く ----
+# umask 022 の下でも、新しく作る directory は 0700、log は 0600。既にある log の広い権限 (0644) は追記の前に 0600 に
+# する。既にある directory の権限は変えない。
+mode_of() { ruby -e 'printf("%o", File.stat(ARGV[0]).mode & 0o777)' "$1"; }
+fresh="$tmp/perm-fresh/sub"
+out=$( (umask 022 && RECORD_DIR="$fresh" run_hook CLAUDECODE=1 '{"hook_event_name":"PreToolUse","session_id":"sp","tool_name":"Read","tool_use_id":"tp1","tool_input":{}}') ) \
+  || fail "permission case: PreToolUse should exit 0"
+[ "$(mode_of "$fresh")" = 700 ] || fail "a new record directory must be 0700, got $(mode_of "$fresh")"
+[ "$(mode_of "$tmp/perm-fresh")" = 700 ] || fail "a new parent directory must be 0700, got $(mode_of "$tmp/perm-fresh")"
+[ "$(mode_of "$fresh/claude-code.jsonl")" = 600 ] || fail "a new record log must be 0600, got $(mode_of "$fresh/claude-code.jsonl")"
+wide="$tmp/perm-wide"
+mkdir -p "$wide"
+chmod 755 "$wide"
+printf '{"old":true}\n' > "$wide/claude-code.jsonl"
+chmod 644 "$wide/claude-code.jsonl"
+out=$( (umask 022 && RECORD_DIR="$wide" run_hook CLAUDECODE=1 '{"hook_event_name":"PreToolUse","session_id":"sp","tool_name":"Read","tool_use_id":"tp2","tool_input":{}}') ) \
+  || fail "permission case: PreToolUse on an existing log should exit 0"
+[ "$(mode_of "$wide/claude-code.jsonl")" = 600 ] || fail "an existing 0644 log must be tightened to 0600 before appending, got $(mode_of "$wide/claude-code.jsonl")"
+[ "$(wc -l < "$wide/claude-code.jsonl" | tr -d ' ')" = 2 ] || fail "the existing log must be appended to, not replaced"
+[ "$(mode_of "$wide")" = 755 ] || fail "an existing record directory must keep its mode, got $(mode_of "$wide")"
+# log が symlink なら開かない (chmod でリンク先の権限を変えない)。リンク先の中身と権限はそのままで、stderr 1 行と exit 0。
+linkdir="$tmp/perm-link"
+mkdir -p "$linkdir"
+printf '#!/bin/sh\necho target\n' > "$tmp/perm-link-target"
+chmod 755 "$tmp/perm-link-target"
+ln -s "$tmp/perm-link-target" "$linkdir/claude-code.jsonl"
+out=$( (umask 022 && RECORD_DIR="$linkdir" run_hook CLAUDECODE=1 '{"hook_event_name":"PreToolUse","session_id":"sp","tool_name":"Read","tool_use_id":"tp3","tool_input":{}}') ) \
+  || fail "a symlinked record log must fail open (exit 0)"
+[ "$(mode_of "$tmp/perm-link-target")" = 755 ] || fail "the symlink target's mode must not change, got $(mode_of "$tmp/perm-link-target")"
+[ "$(cat "$tmp/perm-link-target")" = "$(printf '#!/bin/sh\necho target')" ] || fail "the symlink target's content must not change"
+[ "$(wc -l < "$tmp/err" | tr -d ' ')" = 1 ] || fail "a symlinked record log must be reported in one stderr line: $(cat "$tmp/err")"
+# 既にある log の権限を外せない (chmod が EPERM。所有者が違う file など) なら、広い権限のまま追記しない。
+ruby -r"$script_dir/lib/check_helper" -rstringio - "$src" "$tmp/perm-eperm" <<'RUBY'
+load ARGV[0]
+require "fileutils"
+dir = ARGV[1]
+FileUtils.mkdir_p(dir)
+log = File.join(dir, "claude-code.jsonl")
+File.write(log, %({"old":true}\n))
+File.chmod(0o644, log)
+File.prepend(Module.new do
+  define_method(:chmod) { |*_args| raise Errno::EPERM, "chmod" }
+end)
+err = StringIO.new
+payload = '{"hook_event_name":"PreToolUse","session_id":"sp","tool_name":"Read","tool_use_id":"tp4","tool_input":{}}'
+rc = ToolCallRecordHook.main(payload, env: { "CLAUDECODE" => "1", "AGENT_TOOLS_TOOL_CALL_RECORD_DIR" => dir }, err: err)
+check("a chmod failure on an existing log must still exit 0", rc == 0)
+check("a chmod failure must be reported in one stderr line", err.string.lines.length == 1)
+check("a chmod failure must not append to the widely readable log", File.readlines(log).length == 1)
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
 echo "ok: tool-call-record-hook self-test passed"
