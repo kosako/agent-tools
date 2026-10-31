@@ -861,13 +861,18 @@ begin
   check("time cap: a pipe held by a child is bounded (#{err.inspect}, #{(Time.now - started).round(1)}s)",
         err.to_s.include?("時間が上限") && Time.now - started < 10)
   orphan_pid = File.read(File.join(gh_dir, "orphan.pid")).to_i
-  orphan_alive = begin
+  # kill された子は、親 (偽の gh) が先に終わっているので init に回収されるまで zombie で残りうる。zombie にも
+  # Process.kill(0) は通るので、短い期限の中で消えるのを待つ (期限の後も残っていれば、止まっていないとして落とす)。
+  # usage-reader-test の expect_group_stopped と同じ扱い (#571)。
+  orphan_alive = lambda do
     Process.kill(0, orphan_pid)
     true
   rescue Errno::ESRCH
     false
   end
-  check("time cap: the child holding the pipe is stopped", !orphan_alive)
+  orphan_gone_by = Time.now + 3
+  sleep 0.1 while orphan_alive.call && Time.now < orphan_gone_by
+  check("time cap: the child holding the pipe is stopped", orphan_pid.positive? && !orphan_alive.call)
   # 子が別の process group に移って pipe を握る: group を止めても pipe は閉じないが、reader を止めて待たない (F07)。
   # このとき gh の本体は先に終わっているが、回収 (wait) する前に signal を送り、回収した PID には送らない (F09)。
   # Process.kill と回収の順を記録して確かめる。
