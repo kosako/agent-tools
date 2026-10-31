@@ -1,0 +1,28 @@
+schema_version: 1
+name: personal-ja-reply-guard
+kind: script
+visibility: personal
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #588 の PR で author≠reviewer レビューのうえ承認する。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:460b1adedab2953e14d41bc5d276c3e5e3e65235486d2703166c2c41a35f980c
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-ja-reply-guard.rb
+  format: text
+summary: >-
+  Claude Code の Stop hook (#588)。turn の最後の答え (Stop の入力の last_assistant_message) が英語に逸れていたら、
+  1 回だけ終了を止めて (stderr の理由と exit 2) 日本語で書き直させる。fenced code・inline code・URL・mail・
+  Markdown の link の行き先・識別子の形 (path・flag・test の名前など) を除き、英字が 25 字以上で日本語の文字の
+  3 倍を超えたら逸れとみなす (閾値は手元の transcript で測った。env で変えられる)。stop_hook_active が true なら
+  止めない (1 turn に 1 回だけで loop しない)。入力が読めない・Stop でない・last_assistant_message が無い・想定外の
+  例外では何も止めない (exit 0。fail-open)。transcript の file は読まず、何も書かず、network にも触れない。
+  登録は dotfiles が Claude Code の settings.json で行う (docs/ja-reply-guard.md)。
