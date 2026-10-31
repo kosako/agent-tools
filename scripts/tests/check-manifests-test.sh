@@ -1292,4 +1292,40 @@ fi
 grep -q 'personal-tagkey.asset.yml: YAML parse error: .*explicit tags are not allowed (tag:yaml.org,2002:binary) at line 3' "$tmp/out-tagkey" \
   || fail "missing tagged-key error: $(cat "$tmp/out-tagkey")"
 
+# --- case: 内容の検査は source の検証の結果を受け取り、診断の範囲は前と同じ (#569) ---
+# directory skill の中身 (実行コードと SKILL.md) は、source が「自分の dir を指す directory」と確かめられれば、
+# ほかの source の error (未知の key) があっても検査して両方を出す。entrypoint の検査 (frontmatter の name の一致) は
+# source の error が無いときだけで、source の error があれば走らない。
+mkdir -p "$tmp/srcstage/shared/skills/personal-stage/scripts" "$tmp/srcstage/shared/skills/personal-stage2"
+printf -- '---\nname: personal-stage\ndescription: demo\n---\n' > "$tmp/srcstage/shared/skills/personal-stage/SKILL.md"
+printf -- '---\nname: personal-other\ndescription: demo\n---\n' > "$tmp/srcstage/shared/skills/personal-stage2/SKILL.md"
+for stage in personal-stage personal-stage2; do
+  cat > "$tmp/srcstage/shared/skills/$stage/asset.yml" <<EOF
+schema_version: 1
+name: $stage
+kind: skill
+visibility: public
+targets:
+  - codex
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: shared/skills/$stage
+  format: directory
+  extra: x
+EOF
+done
+if "$check" --root "$tmp/srcstage" > "$tmp/out-srcstage" 2>&1; then
+  fail "check-manifests must reject the source-stage fixture"
+fi
+grep -q "personal-stage/asset.yml: unknown source key: extra" "$tmp/out-srcstage" \
+  || fail "missing the source error: $(cat "$tmp/out-srcstage")"
+grep -q "personal-stage/asset.yml: directory skill must not contain scripts/" "$tmp/out-srcstage" \
+  || fail "the directory contents must still be checked next to a source error: $(cat "$tmp/out-srcstage")"
+grep -q "personal-stage2/asset.yml: unknown source key: extra" "$tmp/out-srcstage" \
+  || fail "missing the second source error: $(cat "$tmp/out-srcstage")"
+grep -q "personal-stage2/asset.yml:.*personal-other" "$tmp/out-srcstage" \
+  && fail "the entrypoint check must not run when the source has an error: $(cat "$tmp/out-srcstage")"
+
 echo "ok: check-manifests self-test passed"
