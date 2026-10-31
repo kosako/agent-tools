@@ -12,6 +12,9 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 src="$repo_root/shared/scripts/personal-tool-call-report.rb"
 [ -f "$src" ] || fail "missing $src"
 
+# 記録先の env (AGENT_TOOLS_TOOL_CALL_RECORD_DIR) と test の knob の REPORT_TZ は、test-helpers.sh が source のときに外す
+# (#571)。記録先の env の上書きを確かめる case だけが明示して渡す。
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/home" "$tmp/records"
@@ -324,11 +327,15 @@ status=$(status_of env TZ=UTC0 HOME= XDG_STATE_HOME= ruby "$src" 2> "$tmp/err")
 status=$(status_of env TZ=UTC0 HOME= XDG_STATE_HOME=relative/state ruby "$src" 2> "$tmp/err")
 [ "$status" = 1 ] || fail "relative XDG_STATE_HOME should exit 1, got $status"
 # 記録 hook と同じく AGENT_TOOLS_TOOL_CALL_RECORD_DIR が最優先 (HOME / XDG より先)。相対 path は exit 1
+# override の fixture は call 数 (2) を HOME (14) とも XDG (1) とも変え、XDG や HOME を優先する誤りでも通らないようにする (#571)。
 mkdir -p "$tmp/override"
 cp "$records/codex.jsonl" "$tmp/override/claude-code.jsonl"
+so='"client":"codex","session_id":"CANARY_SESSION_O"'
+rec "$tmp/override/claude-code.jsonl" "{\"ts\":\"2026-10-08T13:00:00+00:00\",\"event\":\"PreToolUse\",$so,\"tool\":\"shell\",\"tool_use_id\":\"tu_o1\"}"
+rec "$tmp/override/claude-code.jsonl" "{\"ts\":\"2026-10-08T13:00:01+00:00\",\"event\":\"PostToolUse\",$so,\"tool\":\"shell\",\"tool_use_id\":\"tu_o1\",\"result\":\"output\",\"duration_ms\":30}"
 env TZ=UTC0 HOME="$tmp/home" XDG_STATE_HOME="$tmp/xdg" AGENT_TOOLS_TOOL_CALL_RECORD_DIR="$tmp/override" \
   ruby "$src" --since 2026-10-05 --until 2026-10-09 > "$md" 2> "$tmp/err" || fail "record dir override should exit 0: $(cat "$tmp/err")"
-row "$md" "| call 数 | 1 |" "AGENT_TOOLS_TOOL_CALL_RECORD_DIR 既定の入力先 (HOME / XDG より優先)"
+row "$md" "| call 数 | 2 |" "AGENT_TOOLS_TOOL_CALL_RECORD_DIR 既定の入力先 (HOME / XDG より優先)"
 status=$(status_of env TZ=UTC0 HOME="$tmp/home" AGENT_TOOLS_TOOL_CALL_RECORD_DIR=relative/dir ruby "$src" 2> "$tmp/err")
 [ "$status" = 1 ] || fail "relative AGENT_TOOLS_TOOL_CALL_RECORD_DIR should exit 1, got $status"
 # 決められないときの案内は env も挙げる (相対 path の env は HOME / XDG_STATE_HOME を直しても解けない。記録 hook の文と揃える)

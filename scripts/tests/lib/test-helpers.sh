@@ -3,8 +3,20 @@
 #   . "$script_dir/lib/test-helpers.sh"
 # で source する契約 (bid / repo_root は source 時・呼び出し時の $script_dir に依存する)。
 # tests/lib/ 配下に置くのは、CI の `for t in scripts/tests/*.sh` (非再帰 glob) に
-# helper 自身が test として拾われないようにするため。関数定義と repo_root の導出のみで、
+# helper 自身が test として拾われないようにするため。関数定義と repo_root の導出、下の test の knob の解除だけで、
 # set オプションや trap は変更しない (POSIX sh)。
+
+# test の knob を親の環境から継承しない (#571)。継承すると正常系の case が親の設定で落ちたり、fixture の外を
+# 読み書きしたりする。knob は製品の code が読まない、test だけの env で、偽の command の振る舞い (FAKE_*)、失敗の
+# 注入 (INJECT_*・SAFE_RUN_INJECT*・STATE_INTERRUPT*)、偽の reader や check の入力 (PACKET_*・AGENT_TOOLS_TEST_CHECK_*)、
+# helper や suite が読む値 (WAM_EXTRA・REPORT_TZ・RECORD_DIR) の 4 種。suite は source の後に、必要な case でだけ立てる
+# (source より前に立てた値も、ここで消える)。新しい knob はこの一覧の名前の形に合わせるか、ここに足す。
+# 製品の env のうち、実際の記録の場所を指す AGENT_TOOLS_TOOL_CALL_RECORD_DIR も外す (HOME / XDG_STATE_HOME より優先される
+# ので、継承すると test が fixture でなく実際の記録を読み書きする)。使う case は source の後に明示して渡す。
+for _th_knob in $(env | sed -n -E 's/^((FAKE_|INJECT_|SAFE_RUN_INJECT|STATE_INTERRUPT|PACKET_ENVELOPE_|AGENT_TOOLS_TEST_CHECK_)[A-Za-z0-9_]*)=.*/\1/p'); do
+  unset "$_th_knob"
+done
+unset _th_knob WAM_EXTRA REPORT_TZ RECORD_DIR PACKET_READER_ARGS PACKET_COPY AGENT_TOOLS_TOOL_CALL_RECORD_DIR
 
 # テストを失敗させる。診断は stderr へ。
 fail() {
