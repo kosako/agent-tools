@@ -247,27 +247,53 @@ module CheckInjection
     # leak_only=true (evals/) のときは privacy/secret leak の category だけを当てる。
     def scan(path, content, leak_only)
       patterns = leak_only ? PATTERNS.select { |p| LEAK_CATEGORIES.include?(p.category) } : PATTERNS
+      newlines = nil
       patterns.flat_map do |pattern|
         positions = CheckInjection.match_positions(pattern.matcher, content)
+        next [] if positions.empty?
+
+        # 行番号は改行の位置の索引を 1 回だけ作って引く (#569。一致ごとに先頭から改行を数え直すと、一致の多い
+        # 入力で二次時間になる)。
+        newlines ||= CheckInjection.newline_offsets(content)
         positions.map do |offset|
-          line = content[0...offset].count("\n") + 1
-          Finding.new(path, line, pattern.risk, pattern.category, pattern.message)
+          Finding.new(path, CheckInjection.line_at(newlines, offset), pattern.risk, pattern.category, pattern.message)
         end
       end
     end
   end
 
-  # matcher ごとの一致の開始位置。Regexp は重ならない一致を順に、callable はその返り値。
+  # matcher ごとの一致の開始位置 (文字の位置)。Regexp は重ならない一致を順に、callable はその返り値。
+  # ASCII だけの content は binary の写しで照合する (#569)。文字の位置と byte の位置が同じで、照合の結果も変わらない
+  # (ASCII の範囲では \s・\b・大文字小文字の扱いが encoding によらない)。UTF-8 の文字列のままだと、位置の指定と
+  # 一致の位置の取り出しのたびに先頭から文字を数え直し、一致の多い入力で二次時間になる。ASCII でない content は
+  # 今までどおり UTF-8 で照合する (Ruby 2.6 には一致の byte の位置を取る手段が無く、この変換が残る)。
   def self.match_positions(matcher, content)
     return matcher.call(content) unless matcher.is_a?(Regexp)
 
+    target = content.ascii_only? ? content.b : content
     positions = []
     pos = 0
-    while (match = matcher.match(content, pos))
+    while (match = matcher.match(target, pos))
       positions << match.begin(0)
       pos = match.begin(0) + [match[0].length, 1].max
     end
     positions
+  end
+
+  # content の改行の文字の位置 (昇順)。行ごとの文字数を足すだけなので線形。
+  def self.newline_offsets(content)
+    offsets = []
+    pos = 0
+    content.each_line do |line|
+      pos += line.length
+      offsets << pos - 1 if line.end_with?("\n")
+    end
+    offsets
+  end
+
+  # 文字の位置 offset の行番号 (1 始まり)。offset より前にある改行の数 + 1 で、content[0...offset].count("\n") + 1 と同じ。
+  def self.line_at(newlines, offset)
+    (newlines.bsearch_index { |nl| nl >= offset } || newlines.size) + 1
   end
 
   def self.main(argv)

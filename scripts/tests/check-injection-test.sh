@@ -388,4 +388,31 @@ ruby -rtimeout -r"$script_dir/../lib/check_injection" -e '
 ' "$tmp/utf8scan" > "$tmp/out-utf8scan" 2>&1 \
   || fail "comment scan must stay linear on non-ASCII input and report the right lines: $(cat "$tmp/out-utf8scan")"
 
+# --- case: 一致の多い入力でも行番号の計算と照合は線形で、行番号が合う (#569) ---
+# 旧実装は一致ごとに先頭から改行を数え直し (content[0...offset].count)、ASCII の入力でも Regexp の位置の変換で
+# 二次時間になっていた (短い URL を 160000 行並べると約 90 秒)。改行の索引と、ASCII の content の binary の写しでの
+# 照合では 1 秒前後。非 ASCII の行を混ぜた小さい入力で、行番号が多バイト文字の後でも合うことも確かめる。
+mkdir -p "$tmp/manyurls/shared/prompts"
+ruby -e 'File.write(ARGV[0], "see http://example.com/x\n" * 160000)' "$tmp/manyurls/shared/prompts/personal-urls.md"
+printf '\346\227\245\346\234\254\n\346\227\245 http://example.com/a\nplain\r\nhttp://example.com/b \346\227\245 http://example.com/c\n' \
+  > "$tmp/manyurls/shared/prompts/personal-wide-urls.md"
+ruby -rtimeout -r"$script_dir/../lib/check_injection" -e '
+  _, findings = Timeout.timeout(30) { CheckInjection::Runner.new(ARGV[0]).run }
+  urls = findings.select { |f| f.category == "external-url" }
+  many = urls.select { |f| File.basename(f.path) == "personal-urls.md" }.map(&:line)
+  abort "unexpected many-url lines: count=#{many.size} first=#{many.first} last=#{many.last}" unless many == (1..160000).to_a
+  wide = urls.select { |f| File.basename(f.path) == "personal-wide-urls.md" }.map(&:line)
+  abort "unexpected wide-url lines: #{wide.inspect}" unless wide == [2, 4, 4]
+' "$tmp/manyurls" > "$tmp/out-manyurls" 2>&1 \
+  || fail "line numbers and matching must stay linear on many matches and report the right lines: $(cat "$tmp/out-manyurls")"
+# 照合だけを見る: ASCII の content は binary の写しで照合するので、320000 件の一致でも 1 秒前後 (UTF-8 のままの照合は
+# 約 40 秒)。上の case は行番号の計算が支配的なので、照合の退行はここで捕まえる。
+ruby -rtimeout -r"$script_dir/../lib/check_injection" -e '
+  url = CheckInjection::PATTERNS.find { |p| p.category == "external-url" }.matcher
+  content = "see http://example.com/x\n" * 320_000
+  positions = Timeout.timeout(10) { CheckInjection.match_positions(url, content) }
+  abort "unexpected match count: #{positions.size}" unless positions.size == 320_000
+  abort "unexpected positions: #{positions.first(2).inspect}" unless positions.first(2) == [4, 29]
+' > "$tmp/out-manymatch" 2>&1 || fail "matching must stay linear on ASCII input with many matches: $(cat "$tmp/out-manymatch")"
+
 echo "ok: check-injection self-test passed"
