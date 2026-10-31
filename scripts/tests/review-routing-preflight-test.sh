@@ -244,6 +244,11 @@ echo "STDERR-CANARY-do-not-echo \$*" >&2
 if printf '%s' "\$*" | grep -Eq '^api --paginate --slurp repos/[^/ ]+/[^/ ]+/pulls/[0-9]+/commits$'; then
   cat "\$FAKE_GH_FIXTURE"
 elif printf '%s' "\$*" | grep -Eq '^api repos/[^/ ]+/[^/ ]+/pulls/[0-9]+$'; then
+  # FAKE_GH_PULL_SECOND があれば、2 回目からの pulls/<n> はそちらを返す (commit の取得の途中で PR が変わる場面。#576)。
+  if [ -n "\${FAKE_GH_PULL_SECOND:-}" ]; then
+    if [ -e "\$FAKE_GH_PULL_SECOND.first-done" ]; then cat "\$FAKE_GH_PULL_SECOND"; exit 0; fi
+    : > "\$FAKE_GH_PULL_SECOND.first-done"
+  fi
   cat "\$FAKE_GH_PULL_FIXTURE"
 else
   echo "fake gh: undefined endpoint" >&2; exit 1
@@ -555,7 +560,8 @@ run_pf_expect() {
   rpe_pull=$1
   rpe_commits=$2
   shift 2
-  env PATH="$fakebin:$PATH" FAKE_GH_PULL_FIXTURE="$rpe_pull" FAKE_GH_FIXTURE="$rpe_commits" ruby "$src" "$@"
+  # GH_HOST は外す (親の環境の別の host で、bot の case が foreign-host の分岐に入らないように。run_pf_pull と同じ)。
+  env -u GH_HOST PATH="$fakebin:$PATH" FAKE_GH_PULL_FIXTURE="$rpe_pull" FAKE_GH_FIXTURE="$rpe_commits" ruby "$src" "$@"
 }
 # (a) 一致すれば、option の無いときと同じ出力で routing する。
 plain=$(run_pf "$tmp/fx-claude.json" 12 2>&1) || fail "#576: the plain run should route"
@@ -604,5 +610,33 @@ for bad in "--expect-head ABC" "--expect-base $(printf '%039x' 1)" "--expect-hea
   set -e
   [ "$rc" -eq 2 ] || fail "#576: '$bad' must be exit 2 (rc=$rc)"
 done
+# (f) option の値の位置に別の option があれば、後ろに値が並んでいても exit 2 (順に読む。種類ごとに抜き出さない)。
+set +e
+out=$(run_pf_expect "$tmp/fx-pull-human.json" "$tmp/fx-claude.json" 12 --expect-head --expect-base "$base_ok" "$head_ok" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "#576: an option name in a value position must be exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "^reviewer:" && fail "#576: an option name in a value position must not route: $out"
+# (g) commit の取得の途中で base が変わる (2 回目の pulls/<n> が別の base を返す)。commit の数と末尾は同じでも exit 2。
+ruby -rjson -e 'p = JSON.parse(File.read(ARGV[0])); p["base"]["sha"] = format("%040x", 98); File.write(ARGV[1], JSON.generate(p))' \
+  "$tmp/fx-pull-human.json" "$tmp/fx-pull-human-newbase.json"
+rm -f "$tmp/fx-pull-human-newbase.json.first-done"
+set +e
+out=$(env -u GH_HOST PATH="$fakebin:$PATH" FAKE_GH_PULL_FIXTURE="$tmp/fx-pull-human.json" FAKE_GH_PULL_SECOND="$tmp/fx-pull-human-newbase.json" \
+  FAKE_GH_FIXTURE="$tmp/fx-claude.json" ruby "$src" 12 --expect-base "$base_ok" --expect-head "$head_ok" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "#576: a base change during the commit fetch must be exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "取得の途中で PR の base / head が変わりました" || fail "#576: the base change must say why: $out"
+# 2 回目も同じ PR なら、読み直しは結果を変えない。
+cp "$tmp/fx-pull-human.json" "$tmp/fx-pull-human-same.json"
+rm -f "$tmp/fx-pull-human-same.json.first-done"
+set +e
+out=$(env -u GH_HOST PATH="$fakebin:$PATH" FAKE_GH_PULL_FIXTURE="$tmp/fx-pull-human.json" FAKE_GH_PULL_SECOND="$tmp/fx-pull-human-same.json" \
+  FAKE_GH_FIXTURE="$tmp/fx-claude.json" ruby "$src" 12 --expect-base "$base_ok" --expect-head "$head_ok" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "#576: an unchanged PR on the re-read should route (rc=$rc): $out"
+[ -e "$tmp/fx-pull-human-same.json.first-done" ] || fail "#576: the PR must be read again after the commit fetch"
 
 echo "ok: review-routing-preflight self-test"

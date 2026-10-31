@@ -42,7 +42,9 @@
 # `][` を挟み不正 JSON になる既知の落とし穴があるため --slurp + flatten。#160 の前例)。
 # - 対象の固定 (#576): `--expect-base <OID>` / `--expect-head <OID>` (40 桁の hex) を渡すと、PR の base / head がその OID と
 #   一致し、取得した commit が PR の commits の数と head に一致するとき (取得の途中で head が動いていない) だけ判定する
-#   (どの route でも)。外れれば exit 2 (対象が動いた。review の対象の取得からやり直す)。author を判定した commit の列と、
+#   (どの route でも)。commit を取った後にも PR を読み直し、base / head が変わっていないことを確かめる (取る途中で base が
+#   変わると、commit の数と末尾が同じまま列だけが変わりうる)。外れれば exit 2 (対象が動いた。review の対象の取得から
+#   やり直す)。author を判定した commit の列と、
 #   caller が review する base / head を同じものにするため。渡さなければ今までどおり (bot の route だけ commit の列を照合する)。
 # exit: 0 = routing 確定 / 1 = fail-closed / 2 = usage・入力・gh エラー・対象の不一致。
 
@@ -331,17 +333,41 @@ module ReviewRoutingPreflight
   USAGE = "usage: personal-review-routing-preflight <PR番号> [--repo owner/repo] [--expect-base <OID>] [--expect-head <OID>]"
   OID_RE = /\A[0-9a-f]{40}\z/.freeze
 
-  # option の値を取り出す (同じ option を 2 回渡すのは拒む)。値が無い・形が外れるときは nil と message。
-  def take_option(args, name, pattern, hint)
-    i = args.index(name)
-    return [nil, nil] if i.nil?
-    return [nil, "#{name} は 1 回だけ指定してください"] if args.count(name) > 1
+  OPTIONS = {
+    "--repo" => [%r{\A[\w.-]+/[\w.-]+\z}, "owner/repo 形式"],
+    "--expect-base" => [OID_RE, "40 桁の hex の OID "],
+    "--expect-head" => [OID_RE, "40 桁の hex の OID "],
+  }.freeze
 
-    value = args[i + 1]
-    return [nil, "#{name} は #{hint}で指定してください"] if value.nil? || !value.match?(pattern)
+  # 引数を先頭から順に読み、option の直後の引数をその値とする。値が無い・形が外れる (別の option の名前が来たときを含む)・
+  # 同じ option の 2 回は拒む (種類ごとに抜き出すと、`--expect-head --expect-base B H` を値の欠けた option として拒めない。
+  # #576 review)。返り値は [位置引数, {option => 値}, message]。
+  def parse_args(argv)
+    positional = []
+    values = {}
+    i = 0
+    while i < argv.size
+      arg = argv[i]
+      if OPTIONS.key?(arg)
+        pattern, hint = OPTIONS[arg]
+        return [nil, nil, "#{arg} は 1 回だけ指定してください"] if values.key?(arg)
 
-    args.slice!(i, 2)
-    [value, nil]
+        value = argv[i + 1]
+        return [nil, nil, "#{arg} は #{hint}で指定してください"] if value.nil? || !value.match?(pattern)
+
+        values[arg] = value
+        i += 2
+      else
+        positional << arg
+        i += 1
+      end
+    end
+    [positional, values, nil]
+  end
+
+  # PR の今の base / head の OID の組 (形が外れれば nil を含む)。
+  def pull_target(pull)
+    %w[base head].map { |side| pull[side].is_a?(Hash) ? pull[side]["sha"] : nil }
   end
 
   # PR の base / head が期待した OID と一致するか (渡されたものだけを見る)。
@@ -355,14 +381,14 @@ module ReviewRoutingPreflight
   end
 
   def run(argv)
-    args = argv.dup
-    repo, error = take_option(args, "--repo", %r{\A[\w.-]+/[\w.-]+\z}, "owner/repo 形式")
-    expect_base, error = take_option(args, "--expect-base", OID_RE, "40 桁の hex の OID ") if error.nil?
-    expect_head, error = take_option(args, "--expect-head", OID_RE, "40 桁の hex の OID ") if error.nil?
+    args, options, error = parse_args(argv)
     if error
       warn "review-routing-preflight: #{error}"
       return 2
     end
+    repo = options["--repo"]
+    expect_base = options["--expect-base"]
+    expect_head = options["--expect-head"]
     pr_number = args[0]
     unless args.size == 1 && pr_number.to_s.match?(/\A\d+\z/)
       warn USAGE
@@ -391,6 +417,15 @@ module ReviewRoutingPreflight
     if (pull_kind == :bot || expecting) && !snapshot_consistent?(pull, commits)
       warn "review-routing-preflight: error: 取得した commit が PR の状態 (commits の数と head) と一致しません (やり直す)"
       return 2
+    end
+    # 対象を固定したときは、commit を取った後にも PR を読み直し、base / head が取る前と同じで期待した OID のままかを
+    # 確かめる。取る途中で base が変わると、commit の数と末尾が同じまま、commit の列 (と author) だけが変わりうる (#576 review)。
+    if expecting
+      after = fetch_pull(pr_number, repo)
+      unless pull_target(after) == pull_target(pull) && target_matches?(after, expect)
+        warn "review-routing-preflight: error: commit の取得の途中で PR の base / head が変わりました (対象が動いた。review の対象の取得からやり直す)"
+        return 2
+      end
     end
     oid_kinds =
       if pull_kind == :bot
