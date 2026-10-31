@@ -55,6 +55,7 @@ regular file で、symlink でなく、大文字小文字の違いを含めて g
 
 ```sh
 sh -c '
+[ -z "${GIT_DIR+x}${GIT_WORK_TREE+x}${GIT_INDEX_FILE+x}${GIT_COMMON_DIR+x}${GIT_OBJECT_DIRECTORY+x}${GIT_ALTERNATE_OBJECT_DIRECTORIES+x}${GIT_NAMESPACE+x}" ] || { echo reject; exit 0; }
 top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo reject; exit 0; }
 cd "$top" || { echo reject; exit 0; }
 note=.agent-context.local.md
@@ -67,6 +68,11 @@ else echo reject; fi
 '
 ```
 
+最初の行は、repository / index を選ぶ git の env (`GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` / `GIT_COMMON_DIR` /
+`GIT_OBJECT_DIRECTORY` / `GIT_ALTERNATE_OBJECT_DIRECTORIES` / `GIT_NAMESPACE`) を 1 つでも継承していれば (値が空でも)、
+root の解決の前に `reject` にします (#577。手順 2 の packet の直読みと同じ除外)。継承していると、別の index を指す
+`GIT_INDEX_FILE` で tracked な note を追跡なしに見たり、`GIT_DIR` / `GIT_WORK_TREE` で別の repo の note を読んだりしうるため、
+tracked かを判定できないものとして扱います。
 command は repo root を解決してから検査するので、どの directory から実行しても repo root の note を見ます
 (git 管理外の directory では root を解決できないので `reject`)。file の有無は `ls -ld` の失敗で分け、「No such file」
 だけを `absent`、それ以外の失敗 (権限や sandbox で stat できない) は `reject` にします。tracked の照合は大文字小文字を
