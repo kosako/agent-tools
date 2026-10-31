@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "marker_value"
+
 # instruction artifact の管理 marker (ファイル内 HTML コメント) の生成と解析を
 # 1 箇所に集約する。build が生成し、connect / sync が所有判定に使う。
 #
@@ -7,7 +9,8 @@
 #   <!-- agent-tools:managed v=1 repo=agent-tools name=... target=... \
 #        artifact_kind=instruction source=... build_id=... -->
 #
-# 値に空白を含まない前提 (name=kebab, source=path, build_id=sha256:..., target=tool)。
+# 値は MarkerValue の閉じた形だけ (render は name=kebab、target=tool、source=英数字と . _ - / の相対 path、build_id=sha256:<64 桁の hex>)。
+# 空白・コメントの終端・改行を含む値は render が拒み、parse は unmanaged にする (#570。parse は安全な token の形だけを見る)。
 module InstructionMarker
   PREFIX = "<!-- agent-tools:managed"
   SUFFIX = "-->"
@@ -16,6 +19,7 @@ module InstructionMarker
 
   # marker 行を生成する。
   def self.render(name:, target:, source:, build_id:)
+    MarkerValue.check!(name: name, target: target, source: source, build_id: build_id)
     "#{PREFIX} v=#{VERSION} repo=agent-tools " \
       "name=#{name} target=#{target} artifact_kind=instruction " \
       "source=#{source} build_id=#{build_id} #{SUFFIX}"
@@ -46,9 +50,9 @@ module InstructionMarker
     return nil unless pairs["v"] == VERSION
     return nil unless pairs["repo"] == "agent-tools"
     return nil unless pairs["artifact_kind"] == "instruction"
-    # 値形式の基本検証: build_id は hash、source は相対 path。
-    return nil unless pairs["build_id"].start_with?("sha256:")
-    return nil if pairs["source"].start_with?("/")
+    # 値の形 (#570): コメントを壊しうる文字を含まない値だけを通す (MarkerValue.parse_valid?)。
+    return nil unless MarkerValue.parse_valid?(name: pairs["name"], target: pairs["target"], source: pairs["source"],
+                                               build_id: pairs["build_id"])
 
     pairs
   end

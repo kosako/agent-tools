@@ -568,6 +568,64 @@ ruby -r"$script_dir/../lib/plugin_marker" -r"$script_dir/../lib/instruction_mark
   abort "InstructionMarker.parse must reject a plugin marker" if InstructionMarker.parse(ok)
 ' || fail "PluginMarker parse contract broken"
 
+# --- case: marker に埋め込む値の形 (#570)。plugin と instruction の両方 ---
+# render は厳密な形 (kebab の name・tool・英数字と . _ - / の相対 path・sha256:<64 桁の hex>) 以外を例外にし、コメントの
+# 外へ文字列を出しうる値 (コメントの終端・空白・改行・. と .. の segment) を marker にしない。parse はそうした値の marker を
+# unmanaged にする。古い build の build_id のような安全な token は今までどおり読む。
+ruby -r"$script_dir/../lib/plugin_marker" -r"$script_dir/../lib/instruction_marker" -e '
+  bid = "sha256:" + "a" * 64
+  [[PluginMarker, "opencode", "shared/plugins/personal-x.js", " */"], [InstructionMarker, "codex", "shared/instructions/personal-x.md", " -->"]].each do |mod, target, source, suffix|
+    ok = mod.render(name: "personal-x", target: target, source: source, build_id: bid)
+    abort "#{mod}: the strict form must render and parse" unless mod.parse(ok + "\nbody\n")
+    bad_render = {
+      "comment end in source" => { source: "shared/x.js#{suffix.strip}evil" },
+      "space in source" => { source: "shared/a b.js" },
+      "newline in source" => { source: "shared/a.js\nevil" },
+      "dot-dot segment" => { source: "shared/../x.js" },
+      "dot segment" => { source: "shared/./x.js" },
+      "leading slash" => { source: "/shared/x.js" },
+      "trailing slash" => { source: "shared/x/" },
+      "non-kebab name" => { name: "Personal_X" },
+      "unknown target" => { target: "vim" },
+      "short build_id" => { build_id: "sha256:abc" },
+    }
+    bad_render.each do |label, over|
+      args = { name: "personal-x", target: target, source: source, build_id: bid }.merge(over)
+      begin
+        mod.render(**args)
+        abort "#{mod}.render must reject #{label}"
+      rescue ArgumentError
+        nil
+      end
+    end
+    bad_parse = {
+      "comment end in source" => ok.sub("source=#{source}", "source=shared/x#{suffix.strip}y"),
+      "dot-dot segment" => ok.sub("source=#{source}", "source=shared/../x"),
+      "star in name" => ok.sub("name=personal-x", "name=personal*x"),
+      "gt in build_id" => ok.sub("build_id=#{bid}", "build_id=sha256:a>b"),
+      "slash in target" => ok.sub("target=#{target}", "target=a/b"),
+    }
+    bad_parse.each { |label, content| abort "#{mod}.parse must reject #{label}" if mod.parse(content) }
+    # 古い build の build_id や、render の形より広い安全な token は今までどおり読む (既存の配置を unmanaged に変えない)。
+    abort "#{mod}.parse must keep reading a short legacy build_id" unless mod.parse(ok.sub("build_id=#{bid}", "build_id=sha256:0123abcd"))
+  end
+' || fail "marker value form (#570) broken"
+
+# --- case: source.path の形は check-manifests が build の前に拒む (#570)。生成物に marker を作らない ---
+mvroot="$tmp/marker-value"
+mkdir -p "$mvroot/shared/plugins"
+printf 'export default { id: "personal-sp", server: async () => ({}) };\n' > "$mvroot/shared/plugins/personal-sp.js"
+write_approved_plugin_manifest "$mvroot" personal-sp personal
+mv "$mvroot/shared/plugins/personal-sp.js" "$mvroot/shared/plugins/personal-sp ace.js"
+sed -i.bak 's#path: shared/plugins/personal-sp.js#path: "shared/plugins/personal-sp ace.js"#' "$mvroot/shared/plugins/personal-sp.asset.yml"
+rm -f "$mvroot/shared/plugins/personal-sp.asset.yml.bak"
+grep -q 'personal-sp ace.js' "$mvroot/shared/plugins/personal-sp.asset.yml" || fail "marker-value fixture: the source path was not rewritten"
+rc=0
+"$build" --root "$mvroot" > "$tmp/out-mv" 2>&1 || rc=$?
+[ "$rc" -eq 1 ] || fail "a source path out of the marker form must stop the build (rc=$rc): $(cat "$tmp/out-mv")"
+grep -q "source.path may only use letters, digits" "$tmp/out-mv" || fail "the build must say why: $(cat "$tmp/out-mv")"
+[ ! -e "$mvroot/generated" ] || fail "nothing may be generated for a source path out of the marker form"
+
 # --- case: --prune は管理下の orphan plugin だけを消し、TOOL_KINDS 外の場所は走査しない (#295) ---
 rm -f "$tmp/pluginasset/shared/plugins/personal-demo-plugin.js" \
   "$tmp/pluginasset/shared/plugins/personal-demo-plugin.asset.yml"

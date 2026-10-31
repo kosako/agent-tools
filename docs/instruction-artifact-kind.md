@@ -37,6 +37,8 @@ instruction は単一ファイル所有なので、skill の directory sidecar m
 ```
 
 marker は HTML コメントなので tool が読んでも指示として解釈されず、表示もされない。
+marker の値は plugin の marker と同じ閉じた形に限り、コメントの終端・空白・改行を含む値は render も parse も受け付けない
+(#570。正本は [status manifest contract](status-manifest-contract.md) の plugin の節と `scripts/lib/marker_value.rb`)。
 sync はこの marker を厳密にパースして所有を判定する。injection checker は `shared/` の source
 だけを検査する。marker は build が足すので検査対象に現れない。
 

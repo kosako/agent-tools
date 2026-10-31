@@ -442,6 +442,9 @@ rules:
 - `..` の段を含めない。
 - private planning tool の URL は書かない。
 - source path は `shared/` 配下に置く。
+- source path に使えるのは、英数字と `.` `_` `-` と、segment の区切りの `/` だけ (`.` と `..` の segment は不可。directory の
+  asset は末尾の `/` を外して当てる)。source path は生成物の管理 marker (plugin の JS コメント・instruction の HTML
+  コメント) にそのまま入るので、空白・コメントの終端・改行を含む path を check-manifests が error にする (#570)。
 - `shared/<category>/` 直下に、拡張子だけが違う同名の source (例: `personal-a.md` と `personal-a.sh`) を
   置かない。1 つの sidecar を相乗りすると manifest の欠落を見逃すため、check-manifests が error にする (#149)。
 - skill に生成する source は、形式によらず上記の [skill source の制約](#skill-source-の制約) に従う。
