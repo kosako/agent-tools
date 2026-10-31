@@ -92,6 +92,8 @@ source format / output path の確認のみ)。build できない target-artifac
 
 安全判定の source of truth は **致命 gate** (`scripts/lib/gate.rb`)。build と register が
 同じ判定を共有するので、同じ asset に対して両者の合否は必ず一致する。
+register は gate の評価の途中で作った injection の finding と manifest の一覧を、medium finding の帰属に使い回す
+(同じ run の中で検査を走らせ直さない。#569)。build と register を別々に実行したときは、それぞれが gate を評価する。
 
 致命 gate (どれか 1 つでも該当すれば fail):
 
