@@ -194,6 +194,9 @@ default branch に入った時点で効きます。
 - repo の名前は大文字小文字を区別しません。rename した repo は、API が返す新しい名前でも除外を照合します。
 - `XDG_CONFIG_HOME` は絶対 path のときだけ使い、`HOME` も絶対 path でなければ場所を決めずに止めます
   (`personal-usage-reader` の設定 file と同じ扱い)。symlink は辿った先で判定し、regular file でなければ不正です。
+- 設定なしとして進むのは、file の entry が無いときだけです。entry は在るのに指す先が無い symlink と、途中の dir
+  (`agent-tools` の dir や `XDG_CONFIG_HOME` 自体) が指す先の無い symlink のときは、gh を呼ぶ前に不正 (exit 2) で止めます。
+  設定なしに倒すと、除外が外れたまま `--all --apply` に進みうるためです (#572)。
 
 ## 限界
 

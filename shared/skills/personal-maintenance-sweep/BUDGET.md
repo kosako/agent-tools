@@ -41,7 +41,9 @@
 cwd の repo から解決しない。`personal-usage-reader` と同じ規則)。
 key は省いてよく、省いた key は既定値を使います。在る key の値が範囲の外、知らない key がある、JSON と
 して読めない、file は在るが regular file でない・確かめられない・読めない、のどれかなら、**既定値に黙って倒さず、
-開始せずに**その旨を報告します。
+開始せずに**その旨を報告します。file の entry は在るのに指す先が無い symlink と、途中の dir が指す先の無い symlink
+のときも同じです (file が無いとみなすと、`fix_cap` などが既定値に戻る。#572)。既定値で進むのは、file の entry が
+無いときだけです。
 
 | key | 既定値 | 範囲 | 意味 |
 | --- | --- | --- | --- |
@@ -73,13 +75,50 @@ fail_with.call("場所を決められない (HOME が絶対 path でない)") un
 path = File.join(base, "agent-tools", "maintenance-sweep.json")
 pct = ->(v) { v.is_a?(Numeric) && v >= 0 && v <= 100 }
 eff = JSON.parse(JSON.generate(DEFAULTS))
-text = begin
-  fail_with.call("regular file でない") unless File.stat(path).file?
-  File.read(path)
-rescue Errno::ENOENT
-  nil
+# entry が無いとき、途中の dir が指す先の無い symlink かを見る (親へ上がり、最初に在る entry で判定する)。
+dangling_dir = lambda do |p|
+  d = File.dirname(p)
+  loop do
+    e = begin
+      File.lstat(d)
+    rescue Errno::ENOENT
+      up = File.dirname(d)
+      return false if up == d
+      d = up
+      next
+    end
+    return false unless e.symlink?
+    begin
+      File.stat(d)
+    rescue Errno::ENOENT
+      return true
+    end
+    return false
+  end
 rescue SystemCallError => e
   fail_with.call("確かめられないか読めない (#{e.class})")
+end
+# 「設定なし」にするのは、最初の lstat で entry が無いときだけ。在ると確かめた後の失敗 (指す先が無い・読む間に
+# 消えた、を含む) は止める。
+present = begin
+  File.lstat(path)
+  true
+rescue Errno::ENOENT
+  fail_with.call("場所の途中の symlink に指す先が無い") if dangling_dir.call(path)
+  false
+rescue SystemCallError => e
+  fail_with.call("確かめられないか読めない (#{e.class})")
+end
+text = nil
+if present
+  text = begin
+    fail_with.call("regular file でない") unless File.stat(path).file?
+    File.read(path)
+  rescue Errno::ENOENT
+    fail_with.call("symlink に指す先が無いか、読む間に消えた")
+  rescue SystemCallError => e
+    fail_with.call("確かめられないか読めない (#{e.class})")
+  end
 end
 unless text.nil?
   user = begin
