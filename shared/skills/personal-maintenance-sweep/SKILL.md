@@ -41,8 +41,9 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   - **fix** (v2): 「監査して、docs のずれは直して PR まで」「sweep の Issue #N を直して」「sweep が起票した
     論点なしの所見を直して」のように、sweep の所見の修正が明示されたとき。issues モードの手順のあと (入口 (a))、
     または起票済みの所見から (入口 (b)、監査はしない)、「論点なし」の印が付いた docs-drift のうち `docs/` と root
-    の Markdown の説明文だけを、run dir の下の linked worktree で直して PR にし、cross-review まで進める (merge は
-    人)。手順の正本は [FIX.md](FIX.md)。code・設定・宣言、skill や instruction の本文は v2.1 以降。単なる
+    の Markdown の説明文だけを、run dir の下の linked worktree で直して PR にし、cross-review まで進める (sweep は
+    merge しない。merge は sweep の外で、運用 instruction の「個人 project の GitHub の操作と merge」に従う)。手順の正本は
+    [FIX.md](FIX.md)。code・設定・宣言、skill や instruction の本文は v2.1 以降。単なる
     「直して」(単一 bug は personal-investigate、typo は skill なし) では起動しない。Codex の session では fix を
     しない (Claude Code で起動し直すよう案内する)。
 - **既存の監査結果から始める**: 会話の中の personal-repo-audit の報告や、Codex の監査の `result.json` が
@@ -160,23 +161,29 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 単位ごとに次を行います。
 
 - **`ci` の単位**: 配備済みの `personal-ci-check` (`<tool home>/agent-tools/scripts/`。規則と出力の正本は agent-tools
-  の `docs/ci-check.md`) を、`--since` と `--until` で run の記録の窓を付けて今の repo にかける。script は HEAD の
-  commit を決まった規則で読み、窓の run の記録を GitHub の API で読む (GET だけ)。AI は使わないので、監査役によらず
-  同じ手順。Codex の session は自分では監査しないので、`ci` の単位は `pending` のまま残し、Claude Code の session の
-  再開でかける。
+  の `docs/ci-check.md`) を、`--since` と `--until` で run の記録の窓を付け、`--window-out` に
+  `units/<n>/ci-window-<k>.json` (k はかける前にその dir に在る `ci-window-*.json` の数 + 1。script は在る file に書かない
+  ので、再開でかけ直すときも新しい番号にする) を渡して今の repo にかける。script は HEAD の commit を決まった規則で読み、
+  窓の run の記録を GitHub の API で読む (GET だけ)。AI は使わないので、監査役によらず同じ手順。Codex の session は
+  自分では監査しないので、`ci` の単位は `pending` のまま残し、Claude Code の session の再開でかける。
   - 窓: かける前に、`RECORD.md` の `ci.json` の block で決める (前の run が点検し終えた時刻から今まで。
     初回は直近 30 日で、窓は 30 日まで)。block の出力の値を literal の変数に入れて渡す。
-  - かけ直し: 出力が下の形で、`scope.not_seen` に「run の記録」で始まる行がある (run の記録を確かめられない) ときは、
-    block の `since` の次の始まり (前の始まりを until との中間まで遅らせたもの) でかけ直す。2 回まで。理由では分けない
-    (上限に当たったときは窓を縮めると通りうる。それ以外の失敗はすぐ終わるので、かけ直しの手間は小さい)。かけ直しの
-    出力が下の形でなければ、かけ直しをやめて前の結果を使う。下の分岐は使う結果に当てる。
+  - 窓の状態: `--window-out` の file (`{"since","until","events"}`) の `events` が、run の記録を確かめたか
+    (`checked` / `unchecked`) を表す。かけ直しと窓の時刻 (手順 8) は、この値で決める。`scope` の「run の記録」の行は
+    人向けの表示で、判定には使わない (#580)。file が無い・JSON の object として読めない・`events` が 2 つの値の
+    どちらでもないときは、確かめられないとして扱う。
+  - かけ直し: 出力が下の形で、`events` が `checked` でない (run の記録を確かめられない) ときは、block の `since` の
+    次の始まり (前の始まりを until との中間まで遅らせたもの) でかけ直す。2 回まで。理由では分けない (上限に当たった
+    ときは窓を縮めると通りうる。それ以外の失敗はすぐ終わるので、かけ直しの手間は小さい)。かけ直しの出力が下の形で
+    なければ、かけ直しをやめて前の結果を使う。下の分岐は使う結果に当てる。
   - exit 0 か 1、または exit 2 で stdout が空でない (確かめられない file がある) とき: stdout が repo-audit の
     `findings.schema.json` の形 (JSON として読めて必須の key がある) なら `units/<n>/result.json` に保存して
     `audited` にし、他の単位と同じく反証へ進む。`scope.not_seen` の file は報告に書く (手順 9)。
   - exit 2 で stdout が空 (run 全体の失敗)、stdout が上の形でない、または script が無い (未配備で起動できない)
     とき: 所見なしで `done` にし、報告に「CI を確かめられない」と理由 (stderr) を書く。sweep は止めない。
-  - exit と stderr、窓 (使った結果の since と until、block の basis と unseen_from、かけた回数) は state の単位に残す
-    (`RECORD.md`)。窓の時刻 (`ci.json`) を進めるかは手順 8 で決める。
+  - exit と stderr、窓 (使った結果の since と until、block の basis と unseen_from、かけた回数) と、使った結果の
+    `events` (確かめられないときは null) は state の単位に残す (`RECORD.md`)。窓の時刻 (`ci.json`) を進めるかは
+    手順 8 で決める。
 - **監査役が Claude**: personal-repo-audit の手順で監査し (観点の fan-out は repo-audit のとおり)、結果を
   repo-audit の `findings.schema.json` の形の JSON にして run dir に保存する。
 - **監査役が Codex**: personal-repo-audit の `CODEX-LAUNCH.md` の起動で Codex に監査させる。effort は
@@ -253,12 +260,13 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 - **fix モード**: repo 単位の `fixes.json` に所見ごとの段階・branch・OID・PR・review の round を残し、追跡 Issue の
   run のコメントに修正 PR と直さなかった所見を足す ([FIX.md](FIX.md) / [RECORD.md](RECORD.md))。
 - **CI の窓** (repo 単位の `ci.json`。[RECORD.md](RECORD.md)): 起票まで進む run (issues モード。fix の入口 (a) を含む) で、
-  `ci` の単位が `done`、`units/<n>/result.json` の `scope.seen` に state の `ci_check` の窓の行
-  (`run の記録 (<since>〜<until>)`。script が run の記録を確かめたときだけ書く) があり、`ci` の単位の所見に起票の上限
-  (手順 7) で次の run に回したものと、反証で uncertain になったものが無いときだけ、`checked_until` をその `until` に
-  進める。それ以外 (report モード、run の記録を確かめられない、窓の行が無い・窓と合わない、上限で回した所見や
-  uncertain の所見がある) は進めない。失敗の行が無いことではなく確かめた行で見るのは、窓を付けずにかけた結果
-  (`ci_check` に窓が無い、窓の規則より前に始めた run の再開など) で進めないため。uncertain で進めないのは、run の記録の
+  `ci` の単位が `done`、state の `ci_check` の `events` が `checked` (使った結果の `--window-out` の file で、その
+  `since` と `until` が `ci_check` の窓と同じ) で、`ci` の単位の所見に起票の上限 (手順 7) で次の run に回したものと、
+  反証で uncertain になったものが無いときだけ、`checked_until` をその `until` に進める。それ以外 (report モード、
+  `events` が `checked` でない・無い (この field より前に保存した state を含む)、上限で回した所見や uncertain の所見が
+  ある) は進めない。失敗が無いことではなく `checked` で見るのは、窓を付けずにかけた結果 (`ci_check` に窓が無い、窓の
+  規則より前に始めた run の再開など) で進めないため。`scope` の「run の記録」の行は表示で、判定には使わない (文言を
+  変えても判定が変わらないように。#580)。uncertain で進めないのは、run の記録の
   所見は窓を進めると次の run で見直さないため (根拠が GitHub にしか無いので、GitHub に触れない Codex の検証役では
   uncertain になりやすい。`REFUTE.md`)。進めなければ次の run が同じ始まりから見直し、起票済みの所見は手順 6 の重複の
   照合で拾われる (report モードの所見は起票していないので、次の起票する run で拾い直す)。所見そのものは次の run に
@@ -297,7 +305,7 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 | GitHub に届かない (issues モード) | report モードに切り替えるかを確認する |
 | repo の設定を確かめられない (`personal-repo-baseline` が無い、exit 2) | sweep は止めない。報告に「確かめられない」と理由を書く |
 | CI を確かめられない (`personal-ci-check` が無い、exit 2 で stdout が空、stdout が所見の JSON の形でない) | sweep は止めない。`ci` の単位を所見なしで `done` にし、報告に理由を書く |
-| run の記録を確かめられない (`personal-ci-check` の `scope.not_seen` に「run の記録」の行) | 窓の始まりを until との中間まで遅らせて 2 回までかけ直す。それでも確かめられなければ静的な検査の結果で進め、窓の時刻は進めない |
+| run の記録を確かめられない (`personal-ci-check` の `--window-out` の `events` が `checked` でない) | 窓の始まりを until との中間まで遅らせて 2 回までかけ直す。それでも確かめられなければ静的な検査の結果で進め、窓の時刻は進めない |
 | fix モードで local の HEAD が remote の default branch と違う | fix を始めない。未 push の commit や分岐を人に確認する |
 | fix モードで所見に既存の open PR / branch がある、または同じ file を他の open PR が触る | 新しく作らず、再開か延期にする (close 済み未 merge の PR は人に確認) |
 | fix モードで reviewer が起動できない、または review が 3 回で収束しない | PR を残して `blocked` にし、未解決の項目と次の入口を記録する。未レビューを完了扱いにしない |

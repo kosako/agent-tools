@@ -826,6 +826,44 @@ out, _err, st = run_cli(clean, *EVENT_ARGS, env: GH_ENV)
 report = JSON.parse(out) rescue nil
 check("cli list changed while paging: exit 2", st.exitstatus == 2 && report && report["scope"]["not_seen"].first.to_s.include?("読む間に変わった"))
 
+# --window-out: 窓と run の記録を確かめたかを、新しく作る file に JSON で書く (#580)。sweep は scope の人向けの行
+# ではなく、この値でかけ直しと窓の時刻を進めるかを決める。
+wo_dir = File.join(tmp, "window-out")
+FileUtils.mkdir_p(wo_dir)
+read_state = ->(path) { JSON.parse(File.read(path)) rescue nil }
+set_routes(gh_dir, base_routes)
+wo = File.join(wo_dir, "checked.json")
+out, err, st = run_cli(clean, *EVENT_ARGS, "--window-out", wo, env: GH_ENV)
+check("window-out checked: exit 1 with JSON (#{err})", st.exitstatus == 1 && (JSON.parse(out) rescue nil).is_a?(Hash))
+check("window-out checked: state", read_state.call(wo) == { "since" => "2026-10-15T00:00:00Z", "until" => "2026-10-22T00:00:00Z", "events" => "checked" })
+check("window-out checked: mode 600", File.exist?(wo) && (File.stat(wo).mode & 0o777) == 0o600)
+set_routes(gh_dir, base_routes.reject { |k, _| k == ANN_PATH.call(71) })
+wo = File.join(wo_dir, "unchecked.json")
+out, _err, st = run_cli(repo, *EVENT_ARGS, "--window-out", wo, env: GH_ENV)
+check("window-out unchecked: exit 2 with JSON", st.exitstatus == 2 && (JSON.parse(out) rescue nil).is_a?(Hash))
+check("window-out unchecked: state", read_state.call(wo) == { "since" => "2026-10-15T00:00:00Z", "until" => "2026-10-22T00:00:00Z", "events" => "unchecked" })
+# 在る file・指す先の無い symlink には書かない (stdout も出さず exit 2。sweep は「CI を確かめられない」にする)
+set_routes(gh_dir, base_routes)
+wo = File.join(wo_dir, "exists.json")
+File.write(wo, "keep\n")
+out, err, st = run_cli(clean, *EVENT_ARGS, "--window-out", wo, env: GH_ENV)
+check("window-out existing file: exit 2, no stdout, file kept", st.exitstatus == 2 && out.empty? && File.read(wo) == "keep\n" &&
+      err.include?("--window-out の file を書けません"))
+wo = File.join(wo_dir, "link.json")
+File.symlink(File.join(wo_dir, "link-target.json"), wo)
+out, _err, st = run_cli(clean, *EVENT_ARGS, "--window-out", wo, env: GH_ENV)
+check("window-out dangling symlink: exit 2, no stdout, target not created", st.exitstatus == 2 && out.empty? &&
+      !File.exist?(File.join(wo_dir, "link-target.json")))
+# --window-out は --since と一緒のときだけ (usage の誤り)。値の無い・- で始まる値も usage の誤り。
+[["--window-out", File.join(wo_dir, "alone.json")], ["--since", "2026-10-15T00:00:00Z", "--window-out"],
+ ["--since", "2026-10-15T00:00:00Z", "--window-out", "-x"]].each do |args|
+  out, err, st = run_cli(clean, *args, env: GH_ENV)
+  check("window-out usage #{args.first(3).inspect}: exit 2 with usage", st.exitstatus == 2 && out.empty? && err.include?("usage:"))
+end
+check("window-out usage: no file is created", !File.exist?(File.join(wo_dir, "alone.json")))
+check("parse_window: --window-out is kept", CC.parse_window(EVENT_ARGS + %w[--window-out /x/y.json])[:out] == "/x/y.json")
+check("parse_window: no --window-out is nil", CC.parse_window(EVENT_ARGS)[:out].nil?)
+
 # 引数の誤りは run 全体の失敗 (stdout は空、usage を stderr に)。
 [%w[--until 2026-10-22T00:00:00Z], %w[--since 2026-10-22], %w[--since 2026-10-22T00:00:00Z --since 2026-10-22T00:00:00Z]].each do |args|
   out, err, st = run_cli(clean, *args, env: GH_ENV)

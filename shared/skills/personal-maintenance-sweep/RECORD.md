@@ -249,6 +249,8 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/maintenance-sweep/<owner>/<rep
   runs/<run id>/              run id は開始時刻 (YYYYmmddTHHMMSS)
     state.json                run の状態 (下)
     units/<n>/result.json     単位ごとの監査結果 (repo-audit の findings.schema.json の形。`ci` の単位は personal-ci-check の stdout)
+    units/<n>/ci-window-<k>.json  `ci` の単位でかけた personal-ci-check の --window-out (窓と、run の記録を確かめたか)。
+                              k はかける前にその dir に在る ci-window-*.json の数 + 1 (再開でかけ直しても、在る file を使わない)
     units/<n>/codex-run       Codex に監査させたときの run dir の path (1 行。起動の前に書く。#421)
     refute-run                Codex に反証させたときの run dir の path (1 行。起動の前に書く。#421)
     refutation.json           反証の結果 (refutation.schema.json の形。所見の ID は U<n>-<元の ID>。REFUTE.md)
@@ -273,7 +275,7 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
   "units": [
     { "n": 1, "dimension": "ci", "area": ".github/workflows", "status": "audited",
       "ci_check": { "exit": 1, "stderr": "", "since": "2026-09-02T00:15:00Z", "until": "2026-10-02T00:15:00Z",
-                    "basis": "first", "unseen_from": null, "tries": 1 } },
+                    "basis": "first", "unseen_from": null, "tries": 1, "events": "checked" } },
     { "n": 2, "dimension": "docs", "area": ".", "status": "audited" }
   ],
   "consumption": [ { "unit": 2, "tool": "codex", "window": "weekly", "before_used_pct": 9, "after_used_pct": 11 } ],
@@ -291,9 +293,10 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
 - 単位の `status` は `pending` → `audited` → `refuted` → `done` (`done` は起票と記録まで終えたもの)。
 - `ci` の単位 (`SKILL.md` 手順 3。先頭の単位) の `ci_check` は personal-ci-check の結果 (`exit` は exit code、`stderr` は
   全文) と窓 (`since` と `until` は使った結果にかけた窓、`basis` と `unseen_from` は下の `ci.json` の block の出力のまま、
-  `tries` はかけた回数)。`exit` と `stderr` も使った結果のもの。起動できなかったときは `exit` を null にし、`stderr` に
-  理由を書く。再開でかけ直したら上書きする。`stdout` は
-  `units/<n>/result.json` に置く (確かめられずに所見なしで `done` にしたときは置かない)。消費 (`consumption`) は
+  `tries` はかけた回数、`events` は使った結果の `units/<n>/ci-window-<k>.json` の `events` (`checked` / `unchecked`。
+  file が無い・読めない・値が外れるときは null。手順 8 の窓の時刻はこの値で決め、`scope` の行では決めない。#580)。
+  `exit` と `stderr` も使った結果のもの。起動できなかったときは `exit` と `events` を null にし、`stderr` に理由を書く。
+  再開でかけ直したら上書きする。`stdout` は `units/<n>/result.json` に置く (確かめられずに所見なしで `done` にしたときは置かない)。消費 (`consumption`) は
   AI の枠を使わないので残さない。
 - 単位が終わるたびに書き直す。中断しても、`status` が `done` でない単位から再開できる。
 - 新しい run を始める前に `latest-run` の run を見て、`done` でない単位があれば再開するかを確認する。

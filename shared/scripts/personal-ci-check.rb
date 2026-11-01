@@ -3,7 +3,8 @@
 
 # ci-check: GitHub Actions の workflow の file を決まった規則で検査し、所見を personal-repo-audit と同じ形
 # (`findings.schema.json`) の JSON で出す (#541)。AI を使わない。GitHub にも network にも触れず (git で手元の
-# commit を読むだけ。partial clone の未取得の object も取りに行かず、replacement ref も当てない)、何も書かない。
+# commit を読むだけ。partial clone の未取得の object も取りに行かず、replacement ref も当てない)、--window-out の file の
+# ほかは何も書かない。
 # 運用と規則の正本は docs/ci-check.md。
 #
 # 対象: 今の directory の git repo の HEAD の commit にある `.github/workflows/` 直下の `*.yml` / `*.yaml` (GitHub が
@@ -114,7 +115,8 @@ module CiCheck
   NODE_DEPRECATION_RE = /\bNode\.js (\d{1,3}) (?:is|are) deprecated\b/.freeze
   LABEL_MIGRATION_RE = /\bThe ([a-z0-9][a-z0-9.-]{0,40}) label will migrate\b/.freeze
   ANNOTATION_LEVELS = %w[notice warning failure].freeze
-  # scope.seen / scope.not_seen の run の記録の行の接頭辞。sweep はこの行の有無で窓の時刻を進めるかを決める (契約)。
+  # scope.seen / scope.not_seen の run の記録の行の接頭辞。人向けの表示で、sweep の判定は --window-out の events で行う
+  # (この行の文言には依らない。#580)。
   EVENTS_LABEL = "run の記録"
 
   # run 全体の失敗 (exit 2、stderr に 1 行)。
@@ -242,17 +244,20 @@ module CiCheck
   module_function
 
   def usage
-    "usage: #{NAME} [--since YYYY-MM-DDTHH:MM:SSZ [--until YYYY-MM-DDTHH:MM:SSZ]] [--help|-h]"
+    "usage: #{NAME} [--since YYYY-MM-DDTHH:MM:SSZ [--until YYYY-MM-DDTHH:MM:SSZ] [--window-out FILE]] [--help|-h]"
   end
 
   def help
     <<~TEXT
       #{usage}
       今の directory の git repo の HEAD の commit にある #{WORKFLOW_DIR}/ の workflow を決まった規則で検査し、
-      所見を personal-repo-audit の findings.schema.json の形の JSON で stdout に出す。読むだけで、何も書かない。
+      所見を personal-repo-audit の findings.schema.json の形の JSON で stdout に出す。読むだけで、--window-out の
+      file のほかは何も書かない。
       規則: job に timeout-minutes が無い (所見) / pull_request で起動する workflow に concurrency が無い (proposal)。
       --since を付けたときだけ、GitHub の API で窓 (since, until] に終わった run の記録も点検する (timeout に当たった
       job / 失敗の後のやり直しで通った job / deprecation の annotation)。--until を省くと今の時刻。時刻は UTC の秒まで。
+      --window-out FILE (--since と一緒のときだけ) は、窓と run の記録を確かめたか ({"since","until","events":
+      "checked"|"unchecked"}) を、FILE を新しく作って書く (在る FILE には書かない)。
       exit 0 = 所見なし / 1 = 所見あり / 2 = usage・repo を解決できない・確かめられない file か run の記録がある
       (docs/ci-check.md)
     TEXT
@@ -271,7 +276,9 @@ module CiCheck
       raise RunError, "#{inherited.join(' / ')} を継承しているので、今の directory の repo を確かめられません (外して実行してください)"
     end
 
-    report, code = check_repo(Dir.pwd, window)
+    report, code, events = check_repo(Dir.pwd, window)
+    # 窓の状態は stdout より先に書く (書けなければ stdout を出さずに exit 2。sweep は「CI を確かめられない」にする)。
+    write_window_state(window[:out], window, events) if window && window[:out]
     $stdout.puts JSON.pretty_generate(report)
     code
   rescue UsageError => e
@@ -288,28 +295,44 @@ module CiCheck
     EXIT_ERROR
   end
 
-  # 引数から run の記録の窓 ({since:, until:} の時刻と文字列) を返す。--since が無ければ nil (点検しない)。
+  # 引数から run の記録の窓 ({since:, until:} の時刻と文字列、out: --window-out の path か nil) を返す。--since が
+  # 無ければ nil (点検しない)。
   def parse_window(argv)
     opts = {}
     args = argv.dup
     until args.empty?
       arg = args.shift
-      raise UsageError, "unknown argument" unless %w[--since --until].include?(arg)
+      raise UsageError, "unknown argument" unless %w[--since --until --window-out].include?(arg)
       raise UsageError, "#{arg} が 2 回ある" if opts.key?(arg)
 
       value = args.shift
-      raise UsageError, "#{arg} の値は YYYY-MM-DDTHH:MM:SSZ (UTC) で書く" unless value.is_a?(String) && value.match?(TIME_RE)
+      if arg == "--window-out"
+        raise UsageError, "--window-out の値は空でない path で書く" unless value.is_a?(String) && !value.empty? && !value.start_with?("-")
+      else
+        raise UsageError, "#{arg} の値は YYYY-MM-DDTHH:MM:SSZ (UTC) で書く" unless value.is_a?(String) && value.match?(TIME_RE)
+      end
 
       opts[arg] = value
     end
     return nil if opts.empty?
-    raise UsageError, "--until は --since と一緒に使う" unless opts.key?("--since")
+    raise UsageError, "--until は --since と一緒に使う" if opts.key?("--until") && !opts.key?("--since")
+    raise UsageError, "--window-out は --since と一緒に使う" unless opts.key?("--since")
 
     since_t = parse_time(opts["--since"])
     until_t = opts.key?("--until") ? parse_time(opts["--until"]) : Time.at(Time.now.to_i).utc
     raise UsageError, "--since は --until より前にする" unless since_t < until_t
 
-    { since: since_t, until: until_t, since_s: format_time(since_t), until_s: format_time(until_t) }
+    { since: since_t, until: until_t, since_s: format_time(since_t), until_s: format_time(until_t), out: opts["--window-out"] }
+  end
+
+  # --window-out の file に、窓と run の記録を確かめたか (events = "checked" | "unchecked") を JSON で書く。sweep は
+  # scope の人向けの行ではなく、この値でかけ直しと窓の時刻を進めるかを決める (#580)。file は新しく作る (在る path は
+  # symlink を含めて書かない。EEXIST も失敗)。書けなければ RunError (stdout を出さずに exit 2)。
+  def write_window_state(path, window, events)
+    body = JSON.generate("since" => window[:since_s], "until" => window[:until_s], "events" => events) + "\n"
+    File.open(path, File::WRONLY | File::CREAT | File::EXCL, 0o600) { |f| f.write(body) }
+  rescue SystemCallError => e
+    raise RunError, "--window-out の file を書けません (#{e.class})"
   end
 
   def parse_time(text)
@@ -324,7 +347,8 @@ module CiCheck
 
   # ---- repo ------------------------------------------------------------------------------------
 
-  # 今の directory の repo の HEAD を読み、[report, exit code] を返す。git は今の directory で動かす (pathspec を
+  # 今の directory の repo の HEAD を読み、[report, exit code, events] を返す (events は window があるときだけ、run の
+  # 記録を確かめたら "checked"、確かめられなければ "unchecked"。無ければ nil)。git は今の directory で動かす (pathspec を
   # 使わず object を名前で辿り、ls-tree は --full-tree なので、repo の root の path を経由しない)。window があれば
   # run の記録も点検する (失敗したら点検の所見は捨て、scope.not_seen に「run の記録」の行を書く)。
   def check_repo(dir, window = nil)
@@ -357,6 +381,7 @@ module CiCheck
     end
 
     events_summary = nil
+    events_state = nil
     unless window.nil?
       range = "#{window[:since_s]}〜#{window[:until_s]}"
       begin
@@ -364,8 +389,10 @@ module CiCheck
         findings.concat(events[:findings])
         seen << "#{EVENTS_LABEL} (#{range})"
         events_summary = events[:summary]
+        events_state = "checked"
       rescue EventError => e
         not_seen << "#{EVENTS_LABEL} (#{range}。#{e.message})"
+        events_state = "unchecked"
       end
     end
 
@@ -374,7 +401,7 @@ module CiCheck
            elsif findings.any? then EXIT_FINDINGS
            else EXIT_OK
            end
-    [report, code]
+    [report, code, events_state]
   end
 
   # `.github/workflows/` の直下の workflow の file の entry と、確かめられない entry の理由を返す。path の階層は

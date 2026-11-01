@@ -314,9 +314,10 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
 ## 後始末
 
 - worktree を外すのは、所有を確かめ (`fixes.json` の branch と一致)、clean で、review が動いておらず、必要な
-  commit が push 済みで記録も保存済みのときだけです: `git worktree remove "$fixdir"`。branch は残します (merge の
-  ときに人が消す)。base の worktree (`$basedir`) も、clean なことを確かめてから `git worktree remove "$basedir"` で
-  外します (変更を持たない検査用なので、`fixdir` と同じときに外す)。
+  commit が push 済みで記録も保存済みのときだけです: `git worktree remove "$fixdir"`。branch は残します (merge 済みの
+  branch の削除は、sweep の外で運用 instruction の「個人 project の GitHub の操作と merge」に従う)。base の worktree
+  (`$basedir`) も、clean なことを確かめてから `git worktree remove "$basedir"` で外します (変更を持たない検査用なので、
+  `fixdir` と同じときに外す)。
 - 止めたとき (`blocked`、未 push の commit がある、review 中) は worktree を残します。`--force` や run dir の一括
   削除で片付けません。
 
