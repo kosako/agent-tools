@@ -318,10 +318,13 @@ module CheckManifests
       end
       # source.path は生成物の管理 marker (コメントの中) にそのまま埋め込まれるので、marker の値の形 (英数字と . _ - / の
       # 相対 path。. と .. の segment は不可) に限る (#570)。directory の asset は末尾の / を外して当てる。
+      # 形が外れた path は file の API に渡さず、この manifest の source の検査をここで打ち切る。NUL を含む path は
+      # File.join などが ArgumentError を出し、ほかの manifest の診断を集める前に止まるため (#605)。
+      @source_owners[source_path.chomp("/")] << path
       unless MarkerValue.source?(source_path.chomp("/"))
         error(path, "source.path may only use letters, digits, ., _, - and / between segments, got #{source_path.inspect}")
+        return nil
       end
-      @source_owners[source_path.chomp("/")] << path
 
       full = File.join(@root, source_path)
       if format == "directory"
