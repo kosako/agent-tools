@@ -2,13 +2,14 @@
 # personal-maintenance-sweep の手順 3 の `ci` の単位 (personal-ci-check で CI の workflow を決まった規則に当てる。#541) の
 # 契約を検査する。
 # - 手順 3 が、どのプリセットでも単位の先頭に AI を使わない `ci` の単位を足すこと、script を `--since` / `--until` の窓を
-#   付けてかけること、窓を RECORD.md の `ci.json` の block で決めること、run の記録を確かめられなければ始まりを遅らせて
+#   付けてかけること、窓を RECORD.md の `ci.json` の block で決めること、--window-out の events で run の記録を確かめたかを
+#   読み、確かめられなければ始まりを遅らせて
 #   2 回までかけ直し、形でない出力ならかけ直しをやめて前の結果を使うこと、exit 0 / 1 か exit 2 で stdout が空でなく所見の
 #   JSON の形なら audited にして他の単位と同じく反証へ進めること、exit 2 で stdout が空・形でない・script が無いなら所見
 #   なしの done にすること (条件と遷移先を組で見る)、sweep を止めないこと、exit と stderr と窓を state に残すこと、Codex の
 #   session では pending に残すこと、その単位の後は残量を読み直さないことを、それぞれ句として書いている
-# - 手順 8 の「CI の窓」が、窓の時刻を進める条件 (起票まで進む run・done・scope.seen に確かめた窓の行がある・上限で
-#   回した所見と uncertain の所見が無い) と進める先を 1 つの句で書き、それ以外は進めないこと、失敗の行が無いことでは
+# - 手順 8 の「CI の窓」が、窓の時刻を進める条件 (起票まで進む run・done・state の ci_check の events が checked・上限で
+#   回した所見と uncertain の所見が無い。判定は --window-out の events で、scope の行では決めない。#580) と進める先を 1 つの句で書き、それ以外は進めないこと、失敗の行が無いことでは
 #   進めない理由と uncertain で進めない理由、所見を持ち越さず再検出に任せることとその限界 (deprecation の直近 5 本) を
 #   書いている。REFUTE.md の Codex の検証役の節が、根拠が GitHub にしか無い所見を推測で決めず uncertain にすると書いている
 # - 既存の監査結果から始める run と、中断した run の再開が、`ci` の単位を飛ばさない句を書いている
@@ -112,12 +113,17 @@ else
         "窓の時刻 (`ci.json`) を進めるかは手順 8 で決める",
       ],
       bare: [
-        "を、`--since` と `--until` で run の記録の窓を付けて今の repo にかける",
+        "を、`--since` と `--until` で run の記録の窓を付け、`--window-out` に `units/<n>/ci-window-<k>.json` を渡して" \
+        "今の repo にかける",
         "窓: かける前に、`RECORD.md` の `ci.json` の block で決める",
-        "かけ直し: 出力が下の形で、`scope.not_seen` に「run の記録」で始まる行があるときは、block の `since` の次の始まりで" \
-        "かけ直す。2 回まで",
+        # かけ直しと窓の時刻は、人向けの scope の行ではなく --window-out の events で決める (#580)。
+        "窓の状態: `--window-out` の file の `events` が、run の記録を確かめたかを表す",
+        "かけ直しと窓の時刻は、この値で決める",
+        "`scope` の「run の記録」の行は人向けの表示で、判定には使わない",
+        "file が無い・JSON の object として読めない・`events` が 2 つの値のどちらでもないときは、確かめられないとして扱う",
+        "かけ直し: 出力が下の形で、`events` が `checked` でないときは、block の `since` の次の始まりでかけ直す。2 回まで",
         "かけ直しの出力が下の形でなければ、かけ直しをやめて前の結果を使う",
-        "exit と stderr、窓は state の単位に残す",
+        "exit と stderr、窓と、使った結果の `events` は state の単位に残す",
         "exit 0 か 1、または exit 2 で stdout が空でないとき: stdout が repo-audit の `findings.schema.json` の形なら " \
         "`units/<n>/result.json` に保存して `audited` にし、他の単位と同じく反証へ進む",
         "exit 2 で stdout が空、stdout が上の形でない、または script が無いとき: 所見なしで `done` にし、" \
@@ -158,14 +164,15 @@ if window.nil?
   errors << "手順 8 に「CI の窓」の bullet が無い"
 else
   # 進める条件と進める先は 1 つの句の組で見る (条件を 1 つ消しても、進める先を変えても落ちるように)。条件は
-  # 失敗の行が無いことではなく、確かめた窓の行があること (窓を付けずにかけた結果で進めない。#554 review R1)。
-  # uncertain の所見でも進めない (run の記録の所見は窓を進めると見直さない。#554 review R4)。
+  # 失敗が無いことではなく、確かめたこと (`events` が `checked`。窓を付けずにかけた結果で進めない。#554 review R1)。
+  # 判定は scope の人向けの行ではなく --window-out の events で行う (#580)。uncertain の所見でも進めない (run の
+  # 記録の所見は窓を進めると見直さない。#554 review R4)。
   [
-    "起票まで進む run で、`ci` の単位が `done`、`units/<n>/result.json` の `scope.seen` に state の `ci_check` の窓の" \
-    "行があり、`ci` の単位の所見に起票の上限で次の run に回したものと、反証で uncertain になったものが無いときだけ、" \
-    "`checked_until` をその `until` に進める",
+    "起票まで進む run で、`ci` の単位が `done`、state の `ci_check` の `events` が `checked` で、`ci` の単位の所見に" \
+    "起票の上限で次の run に回したものと、反証で uncertain になったものが無いときだけ、`checked_until` をその `until` に進める",
     "それ以外は進めない",
-    "失敗の行が無いことではなく確かめた行で見るのは、窓を付けずにかけた結果で進めないため",
+    "失敗が無いことではなく `checked` で見るのは、窓を付けずにかけた結果で進めないため",
+    "`scope` の「run の記録」の行は表示で、判定には使わない",
     "uncertain で進めないのは、run の記録の所見は窓を進めると次の run で見直さないため",
     # 持ち越さないことと、その限界 (#554 review R5。user の判断で限界として明記し、持ち越しは #425 で決める)。
     "所見そのものは次の run に持ち越さず、据え置いた窓での再検出に任せる",
@@ -175,9 +182,11 @@ else
   ].each do |c|
     errors << "「CI の窓」の bullet に句 #{c.inspect} が無い" unless bare_clause?(window, c)
   end
-  seen_line = "`scope.seen` に state の `ci_check` の窓の行 (`run の記録 (<since>〜<until>)`。script が run の記録を" \
-              "確かめたときだけ書く) があり"
-  errors << "「CI の窓」の bullet に窓の行の形 #{seen_line.inspect} が無い" unless clause?(window, seen_line)
+  # `checked` の events は、使った結果の --window-out の file で、窓が ci_check と同じものに限る (別の窓の file で進めない)。
+  events_line = "`events` が `checked` (使った結果の `--window-out` の file で、その `since` と `until` が `ci_check` の" \
+                "窓と同じ) で"
+  errors << "「CI の窓」の bullet に events の条件 #{events_line.inspect} が無い" unless clause?(window, events_line)
+  errors << "「CI の窓」の bullet が、まだ scope.seen の行で窓を進めている" if window.include?("`scope.seen` に state の `ci_check` の窓の行")
 end
 
 report = section(skill, "### 9. 報告する")
@@ -211,8 +220,8 @@ else
     first = units.is_a?(Array) ? units.first : nil
     if !first.is_a?(Hash) || first["n"] != 1 || first["dimension"] != "ci" || first["area"] != ".github/workflows"
       errors << "RECORD.md の state.json の例の先頭の単位 (n = 1) が `ci` (.github/workflows) でない"
-    elsif !first["ci_check"].is_a?(Hash) || first["ci_check"].keys.sort != %w[basis exit since stderr tries unseen_from until]
-      errors << "RECORD.md の state.json の `ci` の単位の ci_check が exit / stderr と窓 (since / until / basis / unseen_from / tries) でない"
+    elsif !first["ci_check"].is_a?(Hash) || first["ci_check"].keys.sort != %w[basis events exit since stderr tries unseen_from until]
+      errors << "RECORD.md の state.json の `ci` の単位の ci_check が exit / stderr と窓 (since / until / basis / unseen_from / tries) と events でない"
     end
     consumption = JSON.parse(block)["consumption"]
     if consumption.is_a?(Array) && consumption.any? { |c| c.is_a?(Hash) && c["unit"] == 1 }
@@ -224,7 +233,7 @@ else
 end
 # 0b の settings にも同じ書き方の句があるので、`ci` の単位の bullet に絞って見る。
 ci_note = bullets(record.split("\n")).find { |b| b.start_with?("- `ci` の単位") }
-if ci_note.nil? || !clause?(ci_note, "起動できなかったときは `exit` を null にし、`stderr` に理由を書く")
+if ci_note.nil? || !clause?(ci_note, "起動できなかったときは `exit` と `events` を null にし、`stderr` に理由を書く")
   errors << "RECORD.md の `ci` の単位の bullet に、起動できなかったときの ci_check の書き方が無い"
 end
 if ci_note.nil? || !clause?(ci_note, "消費 (`consumption`) は AI の枠を使わないので残さない")

@@ -847,8 +847,8 @@
     {
       "id": 43,
       "name": "ci-window-first-run-advance",
-      "prompt": "[前提: Claude Code の session で起動。この repo の state の directory に ci.json は無い (初回)。残量から small のプリセットが選ばれる。personal-ci-check は exit 1 で、所見は F01 (timeout-missing、debt) だけ、scope.seen に渡した窓の「run の記録 (<since>〜<until>)」の行があり、scope.not_seen は空。F01 は反証で confirmed になり、起票の上限には当たらない] この repo のメンテを回して Issue にして",
-      "expected_output": "ci の単位の前に RECORD.md の ci.json の block で窓を決める。ci.json が無いので basis は first で、窓は until (今の時刻) の 30 日前から until まで。--since と --until にその値を付けて personal-ci-check をかけ、窓 (since・until・basis・unseen_from・tries) と exit・stderr を state の ci_check に残す。F01 は他の単位と同じく反証・重複の照合・起票へ進める。手順 8 で、issues モードで ci の単位が done、result.json の scope.seen に ci_check の窓の「run の記録 (<since>〜<until>)」の行があり、上限で回した ci の所見も無いので、ci.json の checked_until をその until に進める。報告に点検した窓と、時刻を進めたことを書く。",
+      "prompt": "[前提: Claude Code の session で起動。この repo の state の directory に ci.json は無い (初回)。残量から small のプリセットが選ばれる。personal-ci-check は exit 1 で、所見は F01 (timeout-missing、debt) だけ、--window-out の file の events は checked (since と until は渡した窓) で、scope.seen に窓の「run の記録」の行があり、scope.not_seen は空。F01 は反証で confirmed になり、起票の上限には当たらない] この repo のメンテを回して Issue にして",
+      "expected_output": "ci の単位の前に RECORD.md の ci.json の block で窓を決める。ci.json が無いので basis は first で、窓は until (今の時刻) の 30 日前から until まで。--since と --until にその値を付け、--window-out に units/1/ci-window-1.json を渡して personal-ci-check をかけ、窓 (since・until・basis・unseen_from・tries)、--window-out の events、exit・stderr を state の ci_check に残す。F01 は他の単位と同じく反証・重複の照合・起票へ進める。手順 8 で、issues モードで ci の単位が done、state の ci_check の events が checked (ci_check の窓の --window-out の file) で、上限で回した ci の所見も無いので、ci.json の checked_until をその until に進める。報告に点検した窓と、時刻を進めたことを書く。",
       "files": [],
       "assertions": [
         {
@@ -868,8 +868,8 @@
     {
       "id": 44,
       "name": "ci-window-retry-halved",
-      "prompt": "[前提: Claude Code の session で起動。ci.json の checked_until は 20 日前。残量から small のプリセットが選ばれる。1 回目の personal-ci-check は exit 2 で、stdout は findings.schema.json の形の JSON (所見なし)、scope.not_seen に「run の記録 (…。時間が上限の 120 秒を超える)」の行がある。窓の始まりを 10 日前にした 2 回目は exit 0 で、scope.seen にその窓の「run の記録 (<since>〜<until>)」の行があり、scope.not_seen は空] この repo のメンテを回して Issue にして。CI の扱いだけ先に教えて。手順の確認だけで実行はしない。",
-      "expected_output": "block の since の 1 つ目 (checked_until) で 1 回目をかけ、run の記録を確かめられない行があるので、since の 2 つ目 (until との中間、10 日前) でかけ直す (2 回まで。理由では分けない)。2 回目の結果を使って units/1/result.json に保存し、ci_check に使った窓 (since は 10 日前) と tries = 2 を残す。起票まで進んで ci の単位が done になれば、checked_until を until に進める。報告に、縮めて見なかった期間 (20 日前〜10 日前) を書く。",
+      "prompt": "[前提: Claude Code の session で起動。ci.json の checked_until は 20 日前。残量から small のプリセットが選ばれる。1 回目の personal-ci-check は exit 2 で、stdout は findings.schema.json の形の JSON (所見なし)、scope.not_seen に「run の記録 (…。時間が上限の 120 秒を超える)」の行があり、--window-out の file の events は unchecked。窓の始まりを 10 日前にした 2 回目は exit 0 で、--window-out の file の events は checked (その窓) で、scope.not_seen は空] この repo のメンテを回して Issue にして。CI の扱いだけ先に教えて。手順の確認だけで実行はしない。",
+      "expected_output": "block の since の 1 つ目 (checked_until) で 1 回目をかけ、--window-out の events が unchecked (run の記録を確かめられない) なので、since の 2 つ目 (until との中間、10 日前) でかけ直す (2 回まで。理由では分けない)。2 回目の結果を使って units/1/result.json に保存し、ci_check に使った窓 (since は 10 日前)、tries = 2、events = checked を残す (window の file は ci-window-1.json と ci-window-2.json)。起票まで進んで ci の単位が done になれば、checked_until を until に進める。報告に、縮めて見なかった期間 (20 日前〜10 日前) を書く。",
       "files": [],
       "assertions": [
         {
@@ -889,7 +889,7 @@
     {
       "id": 45,
       "name": "ci-window-report-mode-keeps",
-      "prompt": "[前提: Claude Code の session で起動。ci.json の checked_until は 7 日前。残量から small のプリセットが選ばれる。personal-ci-check は exit 1 で、所見は F01 (job-timed-out、defect) だけ、scope.seen に渡した窓の「run の記録 (<since>〜<until>)」の行があり、scope.not_seen は空。F01 は反証で confirmed になる] maintenance sweep を回して。ただし Issue にはしないで",
+      "prompt": "[前提: Claude Code の session で起動。ci.json の checked_until は 7 日前。残量から small のプリセットが選ばれる。personal-ci-check は exit 1 で、所見は F01 (job-timed-out、defect) だけ、--window-out の file の events は checked (since と until は渡した窓) で、scope.seen に窓の「run の記録」の行があり、scope.not_seen は空。F01 は反証で confirmed になる] maintenance sweep を回して。ただし Issue にはしないで",
       "expected_output": "report モードで進める。窓は checked_until (7 日前) から今まで (basis は checked_until) で、personal-ci-check にその窓を付けてかけ、F01 を反証と重複の照合まで進めて会話で報告する (GitHub に書かない)。所見を起票していないので、手順 8 で ci.json の checked_until は進めない (次の起票する run が同じ始まりから見直して F01 を拾い直す)。報告に、時刻を進めなかったことと理由を書く。",
       "files": [],
       "assertions": [
@@ -910,7 +910,7 @@
     {
       "id": 46,
       "name": "ci-window-capped",
-      "prompt": "[前提: Claude Code の session で起動。ci.json の checked_until は 90 日前 (しばらく sweep を回していなかった)。残量から small のプリセットが選ばれる。personal-ci-check は exit 0 で、scope.seen に渡した窓の「run の記録 (<since>〜<until>)」の行があり、scope.not_seen は空] この repo のメンテを回して Issue にして。CI の窓だけ先に教えて。手順の確認だけで実行はしない。",
+      "prompt": "[前提: Claude Code の session で起動。ci.json の checked_until は 90 日前 (しばらく sweep を回していなかった)。残量から small のプリセットが選ばれる。personal-ci-check は exit 0 で、--window-out の file の events は checked (since と until は渡した窓) で、scope.seen に窓の「run の記録」の行があり、scope.not_seen は空] この repo のメンテを回して Issue にして。CI の窓だけ先に教えて。手順の確認だけで実行はしない。",
       "expected_output": "checked_until が until の 30 日前より前なので、block の basis は capped で、窓は until の 30 日前から until まで (unseen_from は checked_until)。90 日前から 30 日前までは見ないと報告に書く。窓を広げて 90 日分を読もうとしない。起票まで進んで ci の単位が done になれば、checked_until を until に進める。",
       "files": [],
       "assertions": [
@@ -927,13 +927,13 @@
     {
       "id": 47,
       "name": "ci-window-legacy-resume",
-      "prompt": "[前提: Claude Code の session で起動。中断した sweep の run を再開する。state の target_commit は今の HEAD と同じ。ci の単位 (単位 1) は refuted で、state の ci_check は exit と stderr だけ (窓の key が無い)。units/1/result.json は静的な検査だけの結果で、scope.seen にも scope.not_seen にも「run の記録」の行が無い。ci.json の checked_until は 5 日前。ほかの単位も refuted で、起票の上限には当たらない] 前回の sweep の run の続きを進めて",
-      "expected_output": "ci の単位は refuted なので、手順 5 (triage) から他の単位と同じく続ける (保存した結果を使い、script をかけ直さない)。手順 8 で、result.json の scope.seen に ci_check の窓の「run の記録 (<since>〜<until>)」の行が無く、ci_check に窓も無いので、ci.json の checked_until は進めない (5 日前のまま。次の run がそこから run の記録を見る)。報告に、この run では run の記録を点検していないことと、時刻を進めなかった理由を書く。",
+      "prompt": "[前提: Claude Code の session で起動。中断した sweep の run を再開する。state の target_commit は今の HEAD と同じ。ci の単位 (単位 1) は refuted で、state の ci_check は exit と stderr だけ (窓の key も events も無い。--window-out より前に保存した state)。units/1/result.json は静的な検査だけの結果で、scope.seen にも scope.not_seen にも「run の記録」の行が無く、units/1/ に ci-window の file も無い。ci.json の checked_until は 5 日前。ほかの単位も refuted で、起票の上限には当たらない] 前回の sweep の run の続きを進めて",
+      "expected_output": "ci の単位は refuted なので、手順 5 (triage) から他の単位と同じく続ける (保存した結果を使い、script をかけ直さない)。手順 8 で、ci_check に events が無く (checked でない)、窓も無いので、ci.json の checked_until は進めない (5 日前のまま。次の run がそこから run の記録を見る)。報告に、この run では run の記録を点検していないことと、時刻を進めなかった理由を書く。",
       "files": [],
       "assertions": [
         {
           "id": "not-advanced-without-evidence",
-          "text": "scope.seen に窓の行が無いので、checked_until を進めていない (失敗の行が無いことを確かめた証拠として扱っていない)"
+          "text": "ci_check に events が無いので、checked_until を進めていない (失敗の行が無いことや scope の行を、確かめた証拠として扱っていない)"
         },
         {
           "id": "no-invented-until",
@@ -948,7 +948,7 @@
     {
       "id": 48,
       "name": "ci-window-codex-verifier-uncertain",
-      "prompt": "[前提: Claude Code の session で起動。監査役は Claude、検証役は Codex。残量から small のプリセットが選ばれる。ci.json の checked_until は 7 日前。personal-ci-check は exit 1 で、所見は F01 (job-timed-out、defect。evidence は GitHub の job の link) だけ、scope.seen に渡した窓の「run の記録 (<since>〜<until>)」の行がある。Codex の反証は GitHub に触れないので、U1-F01 を uncertain で返す。ほかの単位の所見は起票の上限に当たらない] この repo のメンテを回して Issue にして",
+      "prompt": "[前提: Claude Code の session で起動。監査役は Claude、検証役は Codex。残量から small のプリセットが選ばれる。ci.json の checked_until は 7 日前。personal-ci-check は exit 1 で、所見は F01 (job-timed-out、defect。evidence は GitHub の job の link) だけ、--window-out の file の events は checked (since と until は渡した窓) で、scope.seen に窓の「run の記録」の行がある。Codex の反証は GitHub に触れないので、U1-F01 を uncertain で返す。ほかの単位の所見は起票の上限に当たらない] この repo のメンテを回して Issue にして",
       "expected_output": "U1-F01 は uncertain なので起票せず、報告に uncertain として残す (何を確かめれば決まるかを添える)。ci の単位は記録まで進めて done にするが、手順 8 で ci の単位の所見に uncertain があるので、ci.json の checked_until は進めない (7 日前のまま。次の run が同じ始まりから見直し、検証役が Claude の run なら GitHub で確かめられる)。報告に、時刻を進めなかった理由を書く。Codex の検証役に GitHub を読ませたり、推測で confirmed にしたりしない。",
       "files": [],
       "assertions": [

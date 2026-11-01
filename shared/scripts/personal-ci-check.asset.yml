@@ -15,14 +15,14 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:285432d597c430e59ce70171db52a021c76050dc31d0444c290ac45e904ba6a1
+  approved_build_id: sha256:21b89df31731488e7e01488e5379adfe8a30ca1846d5bffd399d5d056e14224f
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-ci-check.rb
   format: text
 summary: >-
   GitHub Actions の workflow の file を決まった規則で検査し、所見を personal-repo-audit の findings.schema.json の形の
-  JSON で stdout に出す (#541)。AI を使わず、何も書かない。既定では GitHub にも network にも触れず (git を
+  JSON で stdout に出す (#541)。AI を使わず、--window-out の file のほかは何も書かない。既定では GitHub にも network にも触れず (git を
   --no-lazy-fetch と --no-replace-objects で起動し、今の directory の repo の HEAD の commit の実体を読むだけ。作業
   ツリーの未 commit の変更は読まない)、--since を付けたときだけ gh api (GET。shell を通さず GH_REPO を外す) で窓
   (since, until] に終わった run の記録を点検する: job-timed-out (cancelled + 決まった annotation)、flaky-rerun (同じ job
@@ -32,7 +32,9 @@ summary: >-
   failure / timed_out の run・まだ終わっていない run だけを読む。応答の key の欠けや、終わった run と job の値の欠けは
   確かめられないにする。API は 1 回の実行で 200 回・120 秒まで (超えた gh は、出力の pipe を握る子を含めて process
   group ごと止める)。点検に失敗したら点検の所見は捨て、
-  scope.not_seen に「run の記録」の行を書いて exit 2。対象は
+  scope.not_seen に「run の記録」の行を書いて exit 2。--window-out FILE (--since と一緒のときだけ) は、窓と run の記録を
+  確かめたか (events = checked / unchecked) を、FILE を新しく作って JSON で書く (在る path には書かない。sweep は scope の
+  行ではなくこの値で判定する。#580)。対象は
   .github/workflows/ の直下の *.yml / *.yaml。規則は timeout-missing (job に timeout-minutes が無い。reusable workflow
   を呼ぶ job は書けないので見ない) と concurrency-missing (pull_request で起動する workflow に、top level にもすべての
   job にも concurrency が無い。proposal で判断が要る)。YAML は stream 全体を parse して文書が 1 つであることを求め、

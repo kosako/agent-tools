@@ -31,13 +31,19 @@ remote から取りに行かず (object database にも書かず)、git の失�
 ## 使い方
 
 ```text
-usage: personal-ci-check [--since YYYY-MM-DDTHH:MM:SSZ [--until YYYY-MM-DDTHH:MM:SSZ]] [--help|-h]
+usage: personal-ci-check [--since YYYY-MM-DDTHH:MM:SSZ [--until YYYY-MM-DDTHH:MM:SSZ] [--window-out FILE]] [--help|-h]
 ```
 
 今の directory の git repo の HEAD の commit にある `.github/workflows/` の直下の `*.yml` / `*.yaml` (GitHub が workflow
 として読む場所) を読みます。`--since` を付けると、窓 (since, until] の run の記録も点検します。`--until` は省くと今の
 時刻です。時刻は UTC の秒まで (`Z` で終わる形) だけを受け付け、since は until より前にします。`--until` だけ、同じ
 option を 2 回、形の違う時刻は usage の誤り (exit 2) です。
+
+`--window-out FILE` (`--since` と一緒のときだけ) は、窓と、run の記録を確かめたかを JSON で FILE に書きます
+(`{"since": "<since>", "until": "<until>", "events": "checked" | "unchecked"}`。mode 600)。FILE は新しく作り、
+在る path (指す先の無い symlink を含む) には書きません。書けなければ stdout を出さずに exit 2 です (run 全体の失敗と
+同じ)。run 全体の失敗で終わったときは書きません。script が書くのはこの file だけで、ほかは読むだけです。sweep は
+`scope` の人向けの行ではなく、この file の `events` で、窓を縮めてかけ直すかと窓の時刻を進めるかを決めます (#580)。
 
 - 作業ツリーの未 commit の変更は読みません (sweep が監査する commit と揃えるため)。repo の中の subdirectory から
   起動しても、repo の root の `.github/workflows/` を読みます (git は今の directory で動かし、tree は pathspec を
@@ -102,9 +108,9 @@ attempt の記録を読み、次を所見にします (#541)。窓は「終わ�
   終わった run や job の conclusion / 終わった時刻の欠け。終わっていないものの null は正当)、一覧の件数が `total_count`
   と合わない・読む間に `total_count` が変わった・id が重なる、今の repo の GitHub の repo や default branch を解決できない):
   点検の所見はすべて捨て、`scope.not_seen` に
-  `run の記録 (<since>〜<until>。<理由>)` の行を書いて exit 2 にします。静的な検査の結果はそのまま出します。sweep は
-  この行の有無で窓を縮めてかけ直すかを決め、確かめたときの `scope.seen` の行 (下) で窓の時刻を進めるかを決めます
-  (接頭辞「run の記録」と、seen の行の形は契約)。
+  `run の記録 (<since>〜<until>。<理由>)` の行を書いて exit 2 にします。静的な検査の結果はそのまま出します。この行と、
+  確かめたときの `scope.seen` の行 (下) は人向けの表示です。sweep の判定は `--window-out` の `events` (`unchecked` /
+  `checked`) で行い、行の文言には依りません (#580)。
 - **出力に載せないもの**: annotation の文面は自由文 (workflow が出す文を含む) なので載せません。決まった型だけを
   決まった文言にします (`Node.js <版> の deprecation の予告` → topic `deprecation-node-<版>`、`runner の label <label> の
   移行の予告` → `deprecation-runner-label-<label>`。捕まえる値は数字と `[a-z0-9.-]` だけ)。それ以外は「deprecation を
