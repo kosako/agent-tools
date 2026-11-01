@@ -19,8 +19,9 @@
 #     feature の在否を確かめる (#372)。case の prompt は PR への書き込みなどを頼むものを含むため。
 #   - CI では実行しない (CLI 認証と network が要る)。hard な証跡は raw log (<out>.raw/) と
 #     PR / Issue に貼る summary。CI 緑を根拠にしない。
-#   - 観測は CLI の event stream に依存する。field 名が変わると observed が空になり、判定は
-#     primary MISS として現れる (緑には化けない)。--smoke で listing と event 形式を先に確認する。
+#   - 観測は CLI の event stream に依存する。field 名が変わると observed が空になる。全 run で空なら judge は観測の
+#     全損として exit 2 にするが、一部の run だけなら primary MISS として現れるだけで exit 0 のままになりうる
+#     (#582)。--smoke で listing と event 形式を先に確認する。
 #   - --max-turns の打ち切りは観測完了として扱う (routing の判断は最初の turn の Skill 起動で
 #     出る。skill が起動した後の作業は観測対象外なので、続きを走らせない)。
 #
