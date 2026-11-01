@@ -1328,4 +1328,49 @@ grep -q "personal-stage2/asset.yml: unknown source key: extra" "$tmp/out-srcstag
 grep -q "personal-stage2/asset.yml:.*personal-other" "$tmp/out-srcstage" \
   && fail "the entrypoint check must not run when the source has an error: $(cat "$tmp/out-srcstage")"
 
+# --- case: NUL を含む source.path は file の API に渡さず、ほかの manifest の診断も集める (#605) ---
+# 形の検査で error にした後も File.join などへ進むと、Ruby が ArgumentError を出して全体が止まる。directory 形式と
+# sidecar の両方の NUL の manifest と、後に並ぶ別の error の manifest を置き、3 つの診断が exit 1 で出ることを見る。
+mkdir -p "$tmp/nulpath/shared/skills/personal-anul"
+printf -- '---\nname: personal-anul\ndescription: demo\n---\n' > "$tmp/nulpath/shared/skills/personal-anul/SKILL.md"
+printf 'x\n' > "$tmp/nulpath/shared/skills/personal-bnul.md"
+printf 'x\n' > "$tmp/nulpath/shared/skills/personal-zlater.md"
+write_nul_manifest() {
+  # $1 = manifest の path、$2 = name、$3 = source.path の YAML の値、$4 = format、$5 = 追加の行
+  cat > "$1" <<EOF
+schema_version: 1
+name: $2
+kind: skill
+visibility: public
+targets:
+  - codex
+risk:
+  prompt_injection: low
+  privacy: low
+source:
+  path: $3
+  format: $4
+$5
+EOF
+}
+write_nul_manifest "$tmp/nulpath/shared/skills/personal-anul/asset.yml" personal-anul \
+  '"shared/skills/personal-anul\0x"' directory ''
+write_nul_manifest "$tmp/nulpath/shared/skills/personal-bnul.asset.yml" personal-bnul \
+  '"shared/skills/personal-bnul\0.md"' file ''
+write_nul_manifest "$tmp/nulpath/shared/skills/personal-zlater.asset.yml" personal-zlater \
+  shared/skills/personal-zlater.md file 'extra_field: x'
+set +e
+"$check" --root "$tmp/nulpath" > "$tmp/out-nulpath" 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "NUL source.path must exit 1, got $rc: $(cat "$tmp/out-nulpath")"
+grep -q "ArgumentError\|null byte" "$tmp/out-nulpath" \
+  && fail "NUL source.path must not reach the file API: $(cat "$tmp/out-nulpath")"
+grep -q "personal-anul/asset.yml: source.path may only use" "$tmp/out-nulpath" \
+  || fail "missing the directory NUL source.path error: $(cat "$tmp/out-nulpath")"
+grep -q "personal-bnul.asset.yml: source.path may only use" "$tmp/out-nulpath" \
+  || fail "missing the sidecar NUL source.path error: $(cat "$tmp/out-nulpath")"
+grep -q "personal-zlater.asset.yml: unknown field: extra_field" "$tmp/out-nulpath" \
+  || fail "the later manifest must still be checked: $(cat "$tmp/out-nulpath")"
+
 echo "ok: check-manifests self-test passed"
