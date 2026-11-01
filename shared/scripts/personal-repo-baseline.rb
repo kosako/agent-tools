@@ -261,19 +261,53 @@ module RepoBaseline
     File.join(base, "agent-tools", "repo-baseline.json")
   end
 
-  # 無い file は nil (設定なし)。在るのに regular file でない・確かめられない・読めない file は不正。symlink は辿った
-  # 先で判定する (personal-usage-reader と同じ扱い)。
+  # entry が無い file は nil (設定なし)。在るのに regular file でない・確かめられない・読めない file は不正。symlink は
+  # 辿った先で判定する。entry は在るのに指す先が無い symlink と、途中の dir が指す先の無い symlink のときも不正にする
+  # (設定なしに倒すと、除外が外れたまま --apply に進みうる。#572)。
   def read_config(path)
     begin
-      stat = File.stat(path)
+      File.lstat(path)
     rescue Errno::ENOENT
+      raise ArgumentError, "設定 file の場所の途中の symlink に、指す先がありません" if dangling_ancestor?(path)
+
       return nil
+    end
+    stat = begin
+      File.stat(path)
+    rescue Errno::ENOENT
+      raise ArgumentError, "設定 file の symlink に、指す先がありません"
     end
     raise ArgumentError, "設定 file が regular file ではありません" unless stat.file?
 
     File.read(path, encoding: "UTF-8")
   rescue SystemCallError => e
     raise ArgumentError, "設定 file を確かめられないか読めません (#{e.class})"
+  end
+
+  # path の entry が無いとき、それが途中の dir の symlink の指す先が無いためかを見る。親へ上がり、最初に在る entry が
+  # 指す先の無い symlink なら true (その下が無いのは symlink が切れているから)。在る entry が辿れれば false (下の
+  # entry が本当に無い)。
+  def dangling_ancestor?(path)
+    dir = File.dirname(path)
+    loop do
+      entry = begin
+        File.lstat(dir)
+      rescue Errno::ENOENT
+        parent = File.dirname(dir)
+        return false if parent == dir
+
+        dir = parent
+        next
+      end
+      return false unless entry.symlink?
+
+      begin
+        File.stat(dir)
+      rescue Errno::ENOENT
+        return true
+      end
+      return false
+    end
   end
 
   def parse_config(text)

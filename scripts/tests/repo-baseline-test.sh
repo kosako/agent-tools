@@ -692,6 +692,32 @@ dirconf = File.join(TMP, "dirconf")
 FileUtils.mkdir_p(File.join(dirconf, "agent-tools", "repo-baseline.json"))
 res = run_cli({}, ["--repo", "o/x"], env: { "XDG_CONFIG_HOME" => dirconf })
 check("cli config not regular file", res[:rc] == 2 && res[:err].include?("regular file ではありません"))
+# 指す先の無い symlink は「設定なし」にせず、gh を呼ぶ前に止める (除外が外れたまま --apply に進まない。#572)。file の
+# symlink も、途中の dir (agent-tools) の symlink も同じ。辿れる symlink は辿った先を読む。
+linkconf = File.join(TMP, "linkconf")
+FileUtils.mkdir_p(File.join(linkconf, "agent-tools"))
+File.symlink(File.join(TMP, "no-such-file.json"), File.join(linkconf, "agent-tools", "repo-baseline.json"))
+res = run_cli(routes_for(public_repo("o/good")), ["--all", "--apply"], env: { "XDG_CONFIG_HOME" => linkconf })
+check("cli config dangling file symlink stops before gh", res[:rc] == 2 && res[:calls].empty? && res[:out].empty? &&
+  res[:err] == "personal-repo-baseline: 設定 file の symlink に、指す先がありません\n")
+dirlink = File.join(TMP, "dirlink")
+FileUtils.mkdir_p(dirlink)
+File.symlink(File.join(TMP, "no-such-dir"), File.join(dirlink, "agent-tools"))
+res = run_cli(routes_for(public_repo("o/good")), ["--all", "--apply"], env: { "XDG_CONFIG_HOME" => dirlink })
+check("cli config dangling dir symlink stops before gh", res[:rc] == 2 && res[:calls].empty? && res[:out].empty? &&
+  res[:err] == "personal-repo-baseline: 設定 file の場所の途中の symlink に、指す先がありません\n")
+okconf = File.join(TMP, "okconf")
+FileUtils.mkdir_p(File.join(okconf, "agent-tools"))
+File.write(File.join(TMP, "real-config.json"), JSON.generate("exclude" => ["o/vialink"]))
+File.symlink(File.join(TMP, "real-config.json"), File.join(okconf, "agent-tools", "repo-baseline.json"))
+res = run_cli({}, ["--repo", "o/vialink"], env: { "XDG_CONFIG_HOME" => okconf })
+check("cli config symlink to a file is read", lines(res) == ["o/vialink: 対象外 (設定 file で除外)"])
+nodir = File.join(TMP, "nodir")
+FileUtils.mkdir_p(nodir)
+check("config: missing agent-tools dir is no config", RB.read_config(File.join(nodir, "agent-tools", "repo-baseline.json")).nil?)
+check("config: dangling dir symlink is not mistaken for a missing dir",
+      (begin; RB.read_config(File.join(dirlink, "agent-tools", "repo-baseline.json")); "no error"; rescue ArgumentError => e; e.message; end) ==
+        "設定 file の場所の途中の symlink に、指す先がありません")
 
 # ---- fix_actions (純粋) ----
 check("fix_actions: dependabot.yml only has no write", RB.fix_actions("o/r", %w[dependabot_yml], [], nil) == [])
