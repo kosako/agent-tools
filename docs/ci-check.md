@@ -4,7 +4,7 @@ GitHub Actions の workflow の file を決まった規則で検査し、所見�
 (`findings.schema.json`) の JSON で出す script です (#541)。実体は `shared/scripts/personal-ci-check.rb` で、配備先は
 `<tool home>/agent-tools/scripts/personal-ci-check`。
 
-AI を使いません。何も書きません。`--since` を付けたときだけ、GitHub の API で run の記録も点検します (下の「run の
+AI を使いません。`--window-out` の file (下の「使い方」) のほかは何も書きません。`--since` を付けたときだけ、GitHub の API で run の記録も点検します (下の「run の
 記録の点検」)。付けなければ GitHub にも network にも触れず、git で手元の commit を読むだけです。git は
 `--no-lazy-fetch` と `--no-replace-objects` で起動します。partial clone で取得していない object があっても promisor の
 remote から取りに行かず (object database にも書かず)、git の失敗として止まります。`refs/replace/` の replacement ref

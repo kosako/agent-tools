@@ -3,7 +3,8 @@
 
 # ci-check: GitHub Actions の workflow の file を決まった規則で検査し、所見を personal-repo-audit と同じ形
 # (`findings.schema.json`) の JSON で出す (#541)。AI を使わない。GitHub にも network にも触れず (git で手元の
-# commit を読むだけ。partial clone の未取得の object も取りに行かず、replacement ref も当てない)、何も書かない。
+# commit を読むだけ。partial clone の未取得の object も取りに行かず、replacement ref も当てない)、--window-out の file の
+# ほかは何も書かない。
 # 運用と規則の正本は docs/ci-check.md。
 #
 # 対象: 今の directory の git repo の HEAD の commit にある `.github/workflows/` 直下の `*.yml` / `*.yaml` (GitHub が
@@ -114,7 +115,8 @@ module CiCheck
   NODE_DEPRECATION_RE = /\bNode\.js (\d{1,3}) (?:is|are) deprecated\b/.freeze
   LABEL_MIGRATION_RE = /\bThe ([a-z0-9][a-z0-9.-]{0,40}) label will migrate\b/.freeze
   ANNOTATION_LEVELS = %w[notice warning failure].freeze
-  # scope.seen / scope.not_seen の run の記録の行の接頭辞。sweep はこの行の有無で窓の時刻を進めるかを決める (契約)。
+  # scope.seen / scope.not_seen の run の記録の行の接頭辞。人向けの表示で、sweep の判定は --window-out の events で行う
+  # (この行の文言には依らない。#580)。
   EVENTS_LABEL = "run の記録"
 
   # run 全体の失敗 (exit 2、stderr に 1 行)。

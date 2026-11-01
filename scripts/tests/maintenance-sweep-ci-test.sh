@@ -286,7 +286,8 @@ end
 end
 
 # evals: 毎回足す / script が無い / Codex の session では pending / exit 2 で JSON あり / 壊れた出力 / 初回の窓と進める /
-# 縮めてかけ直す / report モードでは進めない / 30 日で切る / 窓の無い保存結果の再開 / Codex の検証役の uncertain。どの
+# 縮めてかけ直す / report モードでは進めない / 30 日で切る / 窓の無い保存結果の再開 / Codex の検証役の uncertain /
+# events の無い保存結果は行があっても進めない / 行の文言が変わっても events で決める。どの
 # session の前提かを prompt に書く (Codex の session では script をかけないので、期待が変わる)。
 want = {
   "ci-unit-every-run" => "Claude Code の session",
@@ -299,6 +300,9 @@ want = {
   "ci-window-report-mode-keeps" => "Claude Code の session",
   "ci-window-capped" => "Claude Code の session",
   "ci-window-legacy-resume" => "Claude Code の session",
+  # 旧来の表示行と --window-out の events で判定が分かれる 2 件 (#611 の review の R1)
+  "ci-window-saved-line-without-events" => "Claude Code の session",
+  "ci-window-events-over-line-text" => "Claude Code の session",
   "ci-window-codex-verifier-uncertain" => "Claude Code の session",
 }
 cases = evals.fetch("evals").map { |e| [e["name"], e] }.to_h

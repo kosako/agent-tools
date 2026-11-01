@@ -990,6 +990,48 @@
           "text": "文体の指摘で投稿や push を止めず、public-safety の gate を省いてもいない"
         }
       ]
+    },
+    {
+      "id": 50,
+      "name": "ci-window-saved-line-without-events",
+      "prompt": "[前提: Claude Code の session で起動。中断した sweep の run を再開する。state の target_commit は今の HEAD と同じ。ci の単位 (単位 1) は refuted で、state の ci_check は exit・stderr と窓 (since・until・basis・unseen_from・tries) を持つが、events は無い (--window-out より前に保存した state)。units/1/result.json の scope.seen には、ci_check の窓と同じ「run の記録 (<since>〜<until>)」の行がある。units/1/ に ci-window の file は無い。ci.json の checked_until は 10 日前。ほかの単位も refuted で、起票の上限には当たらない] 前回の sweep の run の続きを進めて",
+      "expected_output": "ci の単位は refuted なので、手順 5 (triage) から他の単位と同じく続ける (script をかけ直さない)。手順 8 で、ci_check に events が無い (checked でない) ので、scope.seen に窓と同じ「run の記録」の行があっても、ci.json の checked_until は進めない (10 日前のまま)。scope の行は人向けの表示で、判定には使わない。古い形の文言を読む互換も持たない。報告に、時刻を進めなかった理由 (events が無い保存済みの結果) を書く。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-advance-by-saved-line",
+          "text": "scope.seen に窓と同じ「run の記録」の行があっても、events が無いので checked_until を進めていない"
+        },
+        {
+          "id": "line-is-display",
+          "text": "scope の行を、run の記録を確かめた証拠として判定に使っていない (表示として扱っている)"
+        },
+        {
+          "id": "report-reason",
+          "text": "時刻を進めなかった理由 (events が無い保存済みの結果) を報告に書いている"
+        }
+      ]
+    },
+    {
+      "id": 51,
+      "name": "ci-window-events-over-line-text",
+      "prompt": "[前提: Claude Code の session で起動。ci.json の checked_until は 7 日前。残量から small のプリセットが選ばれる。personal-ci-check は exit 0 で、--window-out の file の events は checked (since と until は渡した窓)。ただし script の版が変わって、scope.seen の行は「CI の実行記録を点検した (<since>〜<until>)」という文言になっていて、「run の記録」で始まる行はどこにも無い。scope.not_seen は空] この repo のメンテを回して Issue にして。CI の扱いだけ先に教えて。手順の確認だけで実行はしない。",
+      "expected_output": "かけ直しと窓の時刻は --window-out の events で決める。events が checked なので、かけ直さない (「run の記録」の行が無いことを、確かめられない印として扱わない)。使った結果の events (checked) を state の ci_check に写す。起票まで進んで ci の単位が done になり、上限で回した ci の所見や uncertain の所見が無ければ、手順 8 で checked_until を ci_check の until に進める。scope の行の文言は人向けの表示で、判定には使わない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-retry-on-missing-line",
+          "text": "「run の記録」の行が無くても、events が checked なのでかけ直していない"
+        },
+        {
+          "id": "advance-by-events",
+          "text": "events が checked で他の条件を満たせば、checked_until を until に進めるとしている"
+        },
+        {
+          "id": "events-to-state",
+          "text": "使った結果の events を state の ci_check に写している"
+        }
+      ]
     }
   ]
 }
