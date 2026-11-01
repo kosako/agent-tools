@@ -9,8 +9,9 @@
 #    job と step の構造は前後で同じで、各 `uses` の owner/repo/path も同じ。sha か tag の変わる行が 1 つ以上ある。
 # 2. pin の整合: 新しい sha が、その action の repository の tag (`# <tag>` のコメント) の commit と一致する (annotated tag
 #    は type が commit になるまで解く。深さ 3 まで)。版 (数値の tuple) は前に進む。
-# 3. CI: base の `.github/repo-baseline.json` の `required_checks` を必要な集合とし (無い・空は確かめられない = not ok)、
-#    head の check-runs で各 check が completed かつ success。
+# 3. CI: base の `.github/repo-baseline.json` の `required_checks` を必要な集合とし (file か key が無ければ not ok。file は
+#    personal-repo-baseline と同じ規則で読み、空の一覧を含む不正は判定できない = exit 2。#573)、head の check-runs で各 check が
+#    completed かつ success。
 # 4. snapshot: 最初と最後に `pulls/<n>` を読み、head が動いていないこと。
 #
 # この検査は参照の整合性と変更の範囲の確認で、依存先 (action の中身) の安全の証明ではない。tag は動かせるので、結果は
