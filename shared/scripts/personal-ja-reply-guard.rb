@@ -43,36 +43,54 @@ module JaReplyGuard
   REASON = "最後の答えが英語になっています。運用 instruction は対話を日本語にすると決めています。" \
            "同じ内容を日本語で書き直してください (code・command・path・識別子は元のままで構いません)。"
 
-  # fenced code の開きの行 (行の頭の空白の後に ``` か ~~~ が 3 つ以上)。
-  FENCE_OPEN = /\A[ \t]*(`{3,}|~{3,})/.freeze
-  # 行の中で数えない区間。どの正規表現も token の頭 (直前が同じ種類の文字でない位置) からだけ始め、入力の長さに
+  # fenced code の開きの行 (行の頭の空白と引用の > の後に ``` か ~~~ が 3 つ以上)。
+  FENCE_OPEN = /\A[ \t]*(?:>[ \t]*)*(`{3,}|~{3,})/.freeze
+  # 空白と引用の > だけの行。段落の区切りで、inline code はこれをまたがない。
+  BLANK = /\A[ \t>]*\r?\z/.freeze
+  # 段落の中で数えない区間。どの正規表現も token の頭 (直前が同じ種類の文字でない位置) からだけ始め、入力の長さに
   # 対して線形の時間で終わる形にする (長い非一致の入力で hook を待たせない)。
-  LINK = /\[([^\[\]]*)\]\([^()\s]*\)/.freeze                                 # Markdown の link は本文だけ残す
-  URL = %r{(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://\S+}.freeze
+  LINK = /\[([^\[\]\n]*)\]\([^()\s]*\)/.freeze                               # Markdown の link は本文だけ残す
+  # URL は ASCII の印字できる文字だけで、<>・引用符・` で閉じる (後ろの日本語の本文を消さない)。
+  URL = %r{(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://[!-~&&[^<>"'`]]+}.freeze
   MAIL = /(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+/.freeze
   IDENT = %r{(?<![A-Za-z0-9])[A-Za-z0-9]+(?:[-_./:][A-Za-z0-9]+)+}.freeze  # 識別子の形 (path・flag・test の名前など)
   JA = /[\p{Hiragana}\p{Katakana}\p{Han}ー]/.freeze
 
   # 数えない区間を空白に置き換える。fenced code は行ごとに読み、開いた記号と同じ記号が同じ数以上並ぶ行で閉じる
   # (閉じていなければ末尾まで)。``` の fence の開きの行に ` がまだあれば、fence ではなく inline code として読む。
+  # fence の外は段落 (空行か fence で区切る) ごとにまとめ、inline code は段落の中で行をまたいで対にする。
   def self.mask(text)
+    out = []
+    paragraph = []
+    flush = lambda do
+      out << mask_prose(paragraph.join("\n")) unless paragraph.empty?
+      paragraph = []
+    end
     fence = nil # 閉じの行の正規表現
-    text.split("\n", -1).map do |line|
+    text.split("\n", -1).each do |line|
       if fence
         fence = nil if fence.match?(line)
-        next ""
+        out << ""
+        next
       end
       m = FENCE_OPEN.match(line)
       if m && !(m[1].start_with?("`") && m.post_match.include?("`"))
-        fence = /\A[ \t]*#{Regexp.escape(m[1][0])}{#{m[1].length},}[ \t\r]*\z/
-        next ""
+        flush.call
+        fence = /\A[ \t]*(?:>[ \t]*)*#{Regexp.escape(m[1][0])}{#{m[1].length},}[ \t\r]*\z/
+        out << ""
+      elsif BLANK.match?(line)
+        flush.call
+        out << line
+      else
+        paragraph << line
       end
-      mask_line(line)
-    end.join("\n")
+    end
+    flush.call
+    out.join("\n")
   end
 
-  def self.mask_line(line)
-    t = mask_code_spans(line)
+  def self.mask_prose(text)
+    t = mask_code_spans(text)
     t.gsub!(LINK, '\1')
     t.gsub!(URL, " ")
     t.gsub!(MAIL, " ")
@@ -81,31 +99,33 @@ module JaReplyGuard
   end
 
   # inline code を空白にする。開きの ` の並びと同じ長さの並びで閉じる (`` a`b `` も 1 つの区間)。閉じの無い並びは
-  # そのまま残す。並びごとに、同じ長さの次の並びを後ろから引いておき、一度の走査で済ませる。
-  def self.mask_code_spans(line)
-    return line.dup unless line.include?("`")
+  # そのまま残す。text を ` の並びとそれ以外に分け、並びごとに同じ長さの次の並びを後ろから引いておき、出力を前から
+  # 順に足す (置き換えで後ろを詰め直さず、一度の走査で済ませる)。
+  def self.mask_code_spans(text)
+    return text.dup unless text.include?("`")
 
-    runs = []
-    line.scan(/`+/) { runs << [Regexp.last_match.begin(0), Regexp.last_match.end(0)] }
-    following = Array.new(runs.size)
+    parts = text.scan(/`+|[^`]+/)
+    following = {}
     last = {}
-    (runs.size - 1).downto(0) do |i|
-      length = runs[i][1] - runs[i][0]
-      following[i] = last[length]
-      last[length] = i
+    (parts.size - 1).downto(0) do |i|
+      next unless parts[i].start_with?("`")
+
+      following[i] = last[parts[i].length]
+      last[parts[i].length] = i
     end
-    t = line.dup
+    out = +""
     i = 0
-    while i < runs.size
+    while i < parts.size
       j = following[i]
       if j
-        t[runs[i][0]...runs[j][1]] = " " * (runs[j][1] - runs[i][0]) # 長さを保ち、後ろの位置をずらさない
+        out << " "
         i = j + 1
       else
+        out << parts[i]
         i += 1
       end
     end
-    t
+    out
   end
 
   # [英字の数, 日本語の文字の数]

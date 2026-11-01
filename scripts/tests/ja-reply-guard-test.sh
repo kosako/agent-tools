@@ -53,6 +53,13 @@ check("短い記号の行では長い fence を閉じない", !drift.call("見�
 check("行の頭の ```x``` は fence でなく inline code", drift.call("```x```\n#{english}"))
 check("字下げした fence も除く", !drift.call("1. 手順です。\n    ```sh\n    #{english}\n    ```\n"))
 check("行の途中の ``` は fence を開かない", drift.call("見て ```\n#{english}"))
+# 行をまたぐ inline code・引用の中の fence・URL の終わり (#606 の review の F6〜F8)
+check("段落の中で行をまたぐ inline code を数えない", !drift.call("例です。`Run the command shown below.\nCheck the result before proceeding.`以上です。"))
+check("空行をまたいで inline code を対にしない", drift.call("見て ` です。\n\n#{english}\n\n` 以上"))
+check("引用の中の fence を除く", !drift.call("確認結果です。\n> ~~~text\n> #{english}\n> ~~~\n完了しました。"))
+check("引用の中の fence の後ろの英語は数える", drift.call("> ```\n> x\n> ```\n#{english}"))
+check("autolink の URL の後ろの日本語を消さない", !drift.call("GitHub Actions workflow permissions は <https://example.com>。更新と動作確認を済ませました。"))
+check("URL の直後の日本語を消さない", !drift.call("GitHub Actions workflow permissions は https://example.com/settingsで更新と動作確認を済ませました。"))
 
 # ---- hook の入出力 ----
 run = lambda do |payload, env = {}|
@@ -102,6 +109,8 @@ big = 1024 * 1024
   "link の [ だけ" => "[" * big,
   "link の行き先が閉じない" => "[a](" * (big / 4),
   "長さの違う backtick の並び" => (1..1400).map { |n| "`" * n }.join("a"),
+  "日本語の短い inline code の連なり" => "`あ` " * 170_000,
+  "日本語の短い inline code の連なり (行ごと)" => "`あ`\n" * 200_000,
   "閉じない fence の後ろの長い行" => "```\n" + ("a" * big),
 }.each do |label, text|
   # 子で判定し、上限を過ぎたら止めて FAIL にする (退行で test 自体が何十分も止まらないように)。
