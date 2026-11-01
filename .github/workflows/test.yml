@@ -61,6 +61,15 @@ jobs:
             abort "system Ruby is no longer the psych <4 floor; revisit the CI matrix (#176)" \
               unless v.split(".").first.to_i < 4'
 
+      # node は runner image のものを使う (setup-node は足さない。#583)。版を log に残し、test が使う機能の
+      # 下限 (`node --test` = 18.1、node:test = 18.0、Object.hasOwn = 16.9) より古ければ CI を落として見直しを迫る。
+      - name: Assert runner Node meets the test floor
+        run: |
+          command -v node >/dev/null 2>&1 || { echo "::error::node is not on PATH; the plugin and safe-run tests need it (#583)"; exit 1; }
+          node -e 'const v = process.versions.node; console.log(`runner node ${v}`);
+            const [major, minor] = v.split(".").map(Number);
+            if (major < 18 || (major === 18 && minor < 1)) { console.log(`::error::runner node ${v} is below the test floor 18.1 (#583)`); process.exit(1); }'
+
       - name: Run self-tests
         run: |
           # 最初の失敗で止めず全 test を走らせ、1 回の CI で全失敗を可視化する。
