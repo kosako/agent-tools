@@ -98,5 +98,6 @@ not ok のときは最後の行が `pin-check: not ok` で、理由は各行の 
 版の後退・同じ版、owner/repo の変化、pin 以外の変更、`run` の中の文字列の変化、構造の変化、変更なし、外の file、added、
 表に無い status、規則の外の名前、明示の tag、複数行の scalar、CRLF、CI の failure / pending / missing / 同名の混在 / 2 page /
 件数の不一致 / 空の page で件数が足りない / page ごとの total_count の違い / baseline なし / key なし、baseline の不正 (空の一覧・
-JSON でない・知らない key・重なった key・size の不一致・64 KiB 超・size なし・file でない)、repo-baseline と読み方が一致すること、API の回数の上限 (80 回で
+JSON でない・知らない key・重なった key と、応答の形の外れ。応答の形は personal-repo-baseline の test と同じ組で、本文が null の
+成功の応答を含む)、repo-baseline と読み方が一致すること、API の回数の上限 (80 回で
 止まり 81 回目を起こさない)、head の移動、数の不一致、file の上限、1 MiB の上限、gh の失敗、usage を確かめます。

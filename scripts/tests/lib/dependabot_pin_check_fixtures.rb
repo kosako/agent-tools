@@ -299,37 +299,38 @@ s.standard(old_text: old, new_text: bump(old, OLD_ACTION_SHA, NEW_ACTION_SHA, "v
 s = Scenario.new(root, "ciundef")
 s.standard
 FileUtils.rm(File.join(root, "ciundef", "contents/#{BASE_SHA}/.github/repo-baseline.json.json"))
-s = Scenario.new(root, "ciempty")
-s.standard
-s.baseline(BASE_SHA, [])
 # repo-baseline.json の読み方は personal-repo-baseline と同じ (#573): required_checks の key が無い -> ci-undefined、
-# 不正な本文・形 -> 判定できない
+# 不正な本文・応答の形 -> 判定できない (exit 2)。応答の形の case は personal-repo-baseline の test の repo_file_broken と
+# 同じ組 (#608 の review)。名前と、理由に含む文言の表を書き、test が 1 行ずつ確かめる。
 s = Scenario.new(root, "ciskiponly")
 s.standard
 s.baseline_raw(BASE_SHA, content_json(JSON.generate("skip" => ["dependabot_yml"])))
-s = Scenario.new(root, "cibadjson")
-s.standard
-s.baseline_raw(BASE_SHA, content_json("{"))
-s = Scenario.new(root, "ciunknownkey")
-s.standard
-s.baseline_raw(BASE_SHA, content_json(JSON.generate("required_checks" => ["self-tests (3.4)"], "extra" => 1)))
-s = Scenario.new(root, "cidupkey")
-s.standard
-s.baseline_raw(BASE_SHA, content_json(%({"required_checks":["x"],"required_checks":["self-tests (3.4)"]})))
-s = Scenario.new(root, "cibadsize")
-s.standard
-s.baseline_raw(BASE_SHA, content_json(JSON.generate("required_checks" => ["self-tests (3.4)"])).merge("size" => 1))
-# 上限 (64 KiB) を超える本文は、JSON として正しくても読まない
-s = Scenario.new(root, "citoolarge")
-s.standard
-s.baseline_raw(BASE_SHA, content_json(JSON.generate("required_checks" => CHECKS) + (" " * (64 * 1024))))
-# size の無い応答は形の外れ
-s = Scenario.new(root, "cinosize")
-s.standard
-s.baseline_raw(BASE_SHA, content_json(JSON.generate("required_checks" => CHECKS)).reject { |k, _| k == "size" })
-s = Scenario.new(root, "cinotfile")
-s.standard
-s.baseline_raw(BASE_SHA, { "type" => "dir" })
+body = JSON.generate("required_checks" => CHECKS)
+broken = [
+  ["ciempty", content_json(JSON.generate("required_checks" => [])), "required_checks が空でない check の名前の配列ではありません"],
+  ["cibadjson", content_json("{"), "JSON として読めません"],
+  ["ciunknownkey", content_json(JSON.generate("required_checks" => CHECKS, "extra" => 1)), "知らない key があります"],
+  ["cidupkey", content_json(%({"required_checks":["x"],"required_checks":["self-tests (3.4)"]})), "重なった key があります"],
+  ["cibadsize", content_json(body).merge("size" => 1), "size が本文と合わない"],
+  ["cisizelarger", content_json("{}").merge("size" => 100), "size が本文と合わない"],
+  ["citoolarge", content_json(body + (" " * (64 * 1024))), "大きすぎます"],
+  ["citoolargebysize", content_json("{}").merge("size" => (64 * 1024) + 1), "大きすぎます"],
+  ["cinosize", content_json(body).reject { |k, _| k == "size" }, "応答の形が想定外"],
+  ["cinegsize", content_json("{}").merge("size" => -1), "応答の形が想定外"],
+  ["cinotfile", { "type" => "dir" }, "応答の形が想定外"],
+  ["cidirlist", [], "応答の形が想定外"],
+  ["cisymlink", content_json("{}").merge("type" => "symlink"), "応答の形が想定外"],
+  ["cinotbase64", content_json("{}").merge("encoding" => "none", "content" => ""), "応答の形が想定外"],
+  ["cicorruptb64", content_json("{}").merge("content" => "e!30=", "size" => 2), "base64 が壊れている"],
+  ["cinopadding", content_json("{}").merge("content" => "e30", "size" => 2), "base64 が壊れている"],
+  ["cinullresp", nil, "成功の応答の本文が null"],
+]
+broken.each do |name, response, _|
+  s = Scenario.new(root, name)
+  s.standard
+  s.baseline_raw(BASE_SHA, response)
+end
+File.write(File.join(root, "baseline-broken.tsv"), broken.map { |name, _, reason| "#{name}\t#{reason}\n" }.join)
 # snapshot: 2 回目の pulls/<n> で head が動く
 s = Scenario.new(root, "snapshot")
 s.standard

@@ -125,7 +125,8 @@ module DependabotPinCheck
       @calls = 0
     end
 
-    # 1 object を返す。404 なら nil (allow_404 のとき)。
+    # 1 object を返す。404 なら nil (allow_404 のとき)。成功の応答の本文が JSON の null なら、404 の nil と取り違えない
+    # ように応答の形の外れにする (読む endpoint はどれも null を返さない。#608 の review)。
     def get(path, allow_404: false)
       out, err, status = run(["gh", "api", path])
       unless status.success?
@@ -133,7 +134,10 @@ module DependabotPinCheck
 
         raise RunError, "gh api が失敗しました (PR 番号 / 認証 / --repo を確認)"
       end
-      parse(out)
+      obj = parse(out)
+      raise RunError, "gh の応答の形が外れます (成功の応答の本文が null)" if obj.nil?
+
+      obj
     end
 
     private

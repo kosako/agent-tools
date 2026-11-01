@@ -276,23 +276,17 @@ echo "$out" | grep -q "test.yml: pin-only-change" || fail "the workflow file sho
 case "$out" in *README*) fail "a file outside the workflows must not be named: $out" ;; esac
 
 # repo-baseline.json が不正なら判定できない (exit 2。personal-repo-baseline と同じ規則、#573)。空の required_checks も
-# 不正で、成功にも ci-undefined にもしない。理由は stderr に 1 行で、本文は出さない。
-for sc in ciempty cibadjson ciunknownkey cidupkey cibadsize citoolarge cinosize cinotfile; do
+# 不正で、成功にも ci-undefined にもしない。応答の形の外れ (本文が null を含む) も同じ。理由は stderr に 1 行で、本文は出さない。
+# case の表は fixture が書く (personal-repo-baseline の test の repo_file_broken と同じ組)。
+while IFS="$(printf "\t")" read -r sc reason; do
   set +e
-  out=$(run_check "$sc" 2>&1)
+  out=$(run_check "$sc" 2>&1 </dev/null)
   rc=$?
   set -e
   [ "$rc" -eq 2 ] || fail "$sc: an invalid repo-baseline.json must be exit 2 (rc=$rc): $out"
-  echo "$out" | grep -q "error: .github/repo-baseline.json " || fail "$sc: the reason should name the file: $out"
-done
-set +e
-out=$(run_check citoolarge 2>&1)
-set -e
-echo "$out" | grep -q "大きすぎます" || fail "citoolarge: the reason should be the size cap: $out"
-set +e
-out=$(run_check cinosize 2>&1)
-set -e
-echo "$out" | grep -q "応答の形が想定外" || fail "cinosize: the reason should be the response shape: $out"
+  echo "$out" | grep -qF "$reason" || fail "$sc: the reason should include $reason: $out"
+done < "$fix/baseline-broken.tsv"
+[ "$(wc -l < "$fix/baseline-broken.tsv")" -eq 17 ] || fail "the broken repo-baseline.json table should have the 17 cases"
 
 # 判定できない -> exit 2: head が動いた / changed_files と数が合わない / file が多すぎる / gh の失敗 / usage
 set +e
