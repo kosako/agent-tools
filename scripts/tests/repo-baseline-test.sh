@@ -430,6 +430,8 @@ repo_file_broken("bad skip", repo_file_route('{"skip":["secret_scanning"]}'), "�
 repo_file_broken("unexpected status", { "status" => 500 }, "の応答が想定外です (HTTP 500)")
 repo_file_broken("2xx with gh failure", { "status" => 200, "exit" => 1 }, "を読めません (gh api が失敗)")
 repo_file_broken("directory", { "status" => 200, "body" => [] }, "を読めません (応答の形が想定外)")
+# 成功の応答の本文が null も、file が無い (404) と取り違えない (pin-check と同じ。#608 の review)
+repo_file_broken("null body", { "status" => 200, "body" => nil }, "を読めません (応答の形が想定外)")
 repo_file_broken("symlink", repo_file_route("{}", "type" => "symlink"), "を読めません (応答の形が想定外)")
 repo_file_broken("not base64", repo_file_route("{}", "encoding" => "none", "content" => ""), "を読めません (応答の形が想定外)")
 repo_file_broken("size missing", repo_file_route("{}", "size" => nil), "を読めません (応答の形が想定外)")

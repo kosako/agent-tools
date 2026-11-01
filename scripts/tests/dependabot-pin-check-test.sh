@@ -75,6 +75,58 @@ check("文書が 2 つは読まない", file_error("jobs:\n  a: {}\n---\njobs:\n
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
+# ---- repo-baseline.json の読み方が personal-repo-baseline と一致する (#573) ----------------------
+# 2 つの script は code を共有しないので、同じ本文の組を両方に当て、受け付けるかどうかと読んだ required_checks が
+# 一致することを固定する。
+ruby -r"$script_dir/lib/check_helper" -rjson - "$src" "$repo_root/shared/scripts/personal-repo-baseline.rb" <<'RUBY'
+require ARGV[0]
+require ARGV[1]
+PC = DependabotPinCheck
+RB = RepoBaseline
+
+def outcome
+  [:ok, yield]
+rescue PC::RunError, RB::Error
+  [:invalid, nil]
+rescue StandardError => e
+  [:unexpected, e.class]
+end
+
+SURROGATE = "\\" + "uDC00"
+texts = [
+  '{"skip":["dependabot_yml"],"required_checks":["test (a)","test (b)"]}', "{}", '{"skip":["dependabot_yml"]}',
+  '{"required_checks":["テスト"]}'.b, '{"exclude":["o/r"]}', '{"skip":"dependabot_yml"}', '{"skip":null}',
+  '{"required_checks":null}', '{"skip":[]}', '{"skip":["ruleset_pull_request"]}', '{"skip":["dependabot_yml","nope"]}',
+  '{"skip":["dependabot_yml","dependabot_yml"]}', '{"required_checks":"a"}', '{"required_checks":[]}',
+  '{"required_checks":[" "]}', "{\"required_checks\":[\"a\\tb\"]}", '{"required_checks":[1]}',
+  '{"required_checks":["a","a"]}', '{"skip":["dependabot_yml"],"skip":["dependabot_yml"]}',
+  '{"required_checks":["a"],"required_checks":["b"]}', "[]", '"x"', "null", "{", "",
+  "{\"required_checks\":[\"\xff\"]}".b, "{\"required_checks\":[\"#{SURROGATE}\"]}", "{\"skip\":[\"#{SURROGATE}\"]}",
+]
+texts.each_with_index do |text, i|
+  rb = outcome { RB.parse_repo_settings(text).required_checks }
+  pc = outcome { PC.parse_baseline(text) || [] }
+  check("parse ##{i}: 受け付けるかどうかと required_checks が repo-baseline と一致 (rb=#{rb.inspect} pc=#{pc.inspect})",
+        rb == pc && rb[0] != :unexpected)
+end
+
+body = '{"required_checks":["a"]}'
+b64 = [body].pack("m")
+[
+  [b64, body.bytesize], [b64.delete("\n"), body.bytesize], [b64.sub("e", "*"), body.bytesize],
+  [b64.sub("=", ""), body.bytesize], [b64, body.bytesize + 1], [b64, body.bytesize - 1], ["", 0],
+].each_with_index do |(content, size), i|
+  rb = outcome { RB.decode_content(content, size) }
+  pc = outcome { PC.decode_baseline(content, size) }
+  check("decode ##{i}: base64 と size の読み方が repo-baseline と一致 (rb=#{rb[0]} pc=#{pc[0]})", rb == pc && rb[0] != :unexpected)
+end
+check("BASELINE_MAX は repo-baseline の REPO_FILE_MAX と同じ", PC::BASELINE_MAX == RB::REPO_FILE_MAX)
+check("BASELINE_KEYS は repo-baseline の REPO_KEYS と同じ", PC::BASELINE_KEYS == RB::REPO_KEYS)
+check("BASELINE_SKIPPABLE は repo-baseline の SKIPPABLE と同じ", PC::BASELINE_SKIPPABLE == RB::SKIPPABLE)
+check("理由に中身を出さない", (begin; PC.parse_baseline('{"required_checks":["secret-check\u0001"]}'); ""; rescue PC::RunError => e; e.message; end).then { |m| !m.empty? && !m.include?("secret-check") })
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
 # ---- integration: fake gh 経由 ------------------------------------------------
 fakebin="$tmp/bin"
 mkdir -p "$fakebin"
@@ -198,7 +250,7 @@ expect_not_ok crlf "line-endings-unsupported"
 expect_not_ok annotated4 "tag-not-commit"
 expect_not_ok unknownstatus "not-modified (unknown)"
 expect_not_ok ciundef "ci-undefined"
-expect_not_ok ciempty "ci-undefined"
+expect_not_ok ciskiponly "ci-undefined"
 expect_not_ok toolarge "file-too-large"
 
 # 3 段の tag object (深さ 3) は commit に解いて ok
@@ -222,6 +274,19 @@ out=$(run_check outside 2>&1)
 set -e
 echo "$out" | grep -q "test.yml: pin-only-change" || fail "the workflow file should still be labelled: $out"
 case "$out" in *README*) fail "a file outside the workflows must not be named: $out" ;; esac
+
+# repo-baseline.json が不正なら判定できない (exit 2。personal-repo-baseline と同じ規則、#573)。空の required_checks も
+# 不正で、成功にも ci-undefined にもしない。応答の形の外れ (本文が null を含む) も同じ。理由は stderr に 1 行で、本文は出さない。
+# case の表は fixture が書く (personal-repo-baseline の test の repo_file_broken と同じ組)。
+while IFS="$(printf "\t")" read -r sc reason; do
+  set +e
+  out=$(run_check "$sc" 2>&1 </dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "$sc: an invalid repo-baseline.json must be exit 2 (rc=$rc): $out"
+  echo "$out" | grep -qF "$reason" || fail "$sc: the reason should include $reason: $out"
+done < "$fix/baseline-broken.tsv"
+[ "$(wc -l < "$fix/baseline-broken.tsv")" -eq 18 ] || fail "the broken repo-baseline.json table should have the 18 cases"
 
 # 判定できない -> exit 2: head が動いた / changed_files と数が合わない / file が多すぎる / gh の失敗 / usage
 set +e
