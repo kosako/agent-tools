@@ -15,7 +15,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:f90a663bd1049bf37527d8be854dd8d76c7c773aa324ace35b31aa27bc14a7bf
+  approved_build_id: sha256:972d06ce2655e9f71432b1ec1bd3fb220f9e495955112607a29176413a14274d
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-dependabot-pin-check.rb

@@ -71,6 +71,21 @@ module DependabotPinCheck
   # 1 つの file を確かめられない (YAML として読めない、など。not ok の label になる)。
   class FileError < StandardError; end
 
+  # base の repo-baseline.json は personal-repo-baseline と同じ規則で読む (#573。script は 1 file ずつ配備されるので
+  # code は共有せず、同じ fixture を両方に当てる test で一致を固定する)。外れたら RunError (判定できない)。
+  BASELINE_MAX = 64 * 1024
+  BASELINE_KEYS = %w[skip required_checks].freeze
+  BASELINE_SKIPPABLE = %w[dependabot_yml].freeze
+  class BaselineDuplicateKeyError < StandardError; end
+  # 同じ key が重なったら、後の値で前の値を消さずに不正にする (JSON.parse は既定で後の値を残す)。
+  class BaselineStrictHash < Hash
+    def []=(key, value)
+      raise BaselineDuplicateKeyError if key?(key)
+
+      super
+    end
+  end
+
   # YAML の collection の入れ子の深さを parse の event で数える (ci-check と同じ)。
   class DepthGuard < Psych::Handler
     def initialize
@@ -473,7 +488,7 @@ module DependabotPinCheck
   # [確かめた check の数, label の行, ok] を返す。
   def check_ci(api, base_path, pull)
     names = required_checks(api, base_path, pull[:base_sha])
-    return [0, ["ci: ci-undefined (#{BASELINE_PATH} の required_checks が無いか空)"], false] if names.nil?
+    return [0, ["ci: ci-undefined (#{BASELINE_PATH} か、その required_checks が無い)"], false] if names.nil?
 
     lines = []
     ok = true
@@ -485,20 +500,77 @@ module DependabotPinCheck
     [names.size, lines, ok]
   end
 
-  # 無い・読めない・空なら nil。名前は規則の形に合うものだけ (外れれば RunError。出力に載せるため)。
+  # file が無い (404) か required_checks の key が無ければ nil (ci-undefined)。file が不正なら RunError (判定できない。
+  # 規則は personal-repo-baseline と同じ)。名前は出力に載せるので、さらに規則の形に合うものだけ (外れれば RunError)。
   def required_checks(api, base_path, base_sha)
     obj = api.get("#{base_path}/contents/#{BASELINE_PATH}?ref=#{base_sha}", allow_404: true)
     return nil if obj.nil?
-    return nil unless obj.is_a?(Hash) && obj["type"] == "file" && obj["encoding"] == "base64" && obj["content"].is_a?(String)
 
-    data = JSON.parse(obj["content"].unpack1("m").force_encoding(Encoding::UTF_8))
-    names = data.is_a?(Hash) ? data["required_checks"] : nil
-    return nil unless names.is_a?(Array) && !names.empty?
-    raise RunError, "required_checks の名前が規則の外です" unless names.all? { |n| n.is_a?(String) && n.match?(SAFE_CHECK_NAME_RE) }
+    size = obj.is_a?(Hash) ? obj["size"] : nil
+    unless obj.is_a?(Hash) && obj["type"] == "file" && obj["encoding"] == "base64" && obj["content"].is_a?(String) &&
+           size.is_a?(Integer) && size >= 0
+      raise RunError, "#{BASELINE_PATH} を読めません (応答の形が想定外)"
+    end
+    raise RunError, "#{BASELINE_PATH} が大きすぎます" if size > BASELINE_MAX
 
-    names.uniq
-  rescue JSON::ParserError
-    nil
+    names = parse_baseline(decode_baseline(obj["content"], size))
+    return nil if names.nil?
+    raise RunError, "required_checks の名前が規則の外です" unless names.all? { |n| n.match?(SAFE_CHECK_NAME_RE) }
+
+    names
+  end
+
+  # contents API の base64 (60 文字ごとに改行が入る) を厳密に decode し、本文の byte 数が size と合うことを求める
+  # (`unpack1("m")` は alphabet の外の文字や padding の誤りを読み飛ばす)。
+  def decode_baseline(content, size)
+    text = begin
+      content.delete("\n").unpack1("m0")
+    rescue ArgumentError
+      raise RunError, "#{BASELINE_PATH} を読めません (base64 が壊れている)"
+    end
+    raise RunError, "#{BASELINE_PATH} を読めません (size が本文と合わない)" unless text.bytesize == size
+
+    text
+  end
+
+  # 本文 (JSON の text) から required_checks を返す (key が無ければ nil)。key は skip と required_checks だけで、書くなら
+  # 空でない配列 (null も不正)。skip は外せる項目だけ、check の名前は空白だけでない文字列で制御文字を含まない。値の
+  # 重なりも不正。理由に中身は出さない。
+  def parse_baseline(text)
+    text = text.dup.force_encoding(Encoding::UTF_8)
+    raise RunError, "#{BASELINE_PATH} が UTF-8 として読めません" unless text.valid_encoding?
+
+    data = begin
+      JSON.parse(text, object_class: BaselineStrictHash)
+    rescue JSON::ParserError
+      raise RunError, "#{BASELINE_PATH} が JSON として読めません"
+    rescue BaselineDuplicateKeyError
+      raise RunError, "#{BASELINE_PATH} に重なった key があります"
+    end
+    raise RunError, "#{BASELINE_PATH} の top-level が object ではありません" unless data.is_a?(Hash)
+    raise RunError, "#{BASELINE_PATH} に知らない key があります" unless (data.keys - BASELINE_KEYS).empty?
+
+    if data.key?("skip")
+      skip = data["skip"]
+      unless skip.is_a?(Array) && !skip.empty? && skip.all? { |item| BASELINE_SKIPPABLE.include?(item) }
+        raise RunError, "#{BASELINE_PATH} の skip が外せる項目の空でない配列ではありません"
+      end
+      raise RunError, "#{BASELINE_PATH} の skip に重なった値があります" if skip.uniq.size != skip.size
+    end
+    return nil unless data.key?("required_checks")
+
+    checks = data["required_checks"]
+    unless checks.is_a?(Array) && !checks.empty? && checks.all? { |c| baseline_check_name?(c) }
+      raise RunError, "#{BASELINE_PATH} の required_checks が空でない check の名前の配列ではありません"
+    end
+    raise RunError, "#{BASELINE_PATH} の required_checks に重なった値があります" if checks.uniq.size != checks.size
+
+    checks
+  end
+
+  # valid_encoding? を先に見る (JSON の孤立した surrogate は不正な UTF-8 の文字列になり、strip や正規表現が例外を出す)。
+  def baseline_check_name?(name)
+    name.is_a?(String) && name.valid_encoding? && !name.strip.empty? && name !~ /[[:cntrl:]]/
   end
 
   # head の check-runs のうち名前が一致するもの (最新の attempt) を page ごとに読む (1 page = gh の 1 回で、回数の上限は呼ぶ前に

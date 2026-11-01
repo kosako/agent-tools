@@ -114,6 +114,11 @@ class Scenario
     write("contents/#{sha}/.github/repo-baseline.json.json", content_json(JSON.generate("required_checks" => names)))
   end
 
+  # repo-baseline.json の contents API の応答をそのまま書く (不正な本文や形の case 用)。
+  def baseline_raw(sha, obj)
+    write("contents/#{sha}/.github/repo-baseline.json.json", obj)
+  end
+
   def tag(owner_repo, tag, type, sha)
     write("tags/#{owner_repo}/#{tag}.json", ref_json(type, sha))
   end
@@ -297,6 +302,34 @@ FileUtils.rm(File.join(root, "ciundef", "contents/#{BASE_SHA}/.github/repo-basel
 s = Scenario.new(root, "ciempty")
 s.standard
 s.baseline(BASE_SHA, [])
+# repo-baseline.json の読み方は personal-repo-baseline と同じ (#573): required_checks の key が無い -> ci-undefined、
+# 不正な本文・形 -> 判定できない
+s = Scenario.new(root, "ciskiponly")
+s.standard
+s.baseline_raw(BASE_SHA, content_json(JSON.generate("skip" => ["dependabot_yml"])))
+s = Scenario.new(root, "cibadjson")
+s.standard
+s.baseline_raw(BASE_SHA, content_json("{"))
+s = Scenario.new(root, "ciunknownkey")
+s.standard
+s.baseline_raw(BASE_SHA, content_json(JSON.generate("required_checks" => ["self-tests (3.4)"], "extra" => 1)))
+s = Scenario.new(root, "cidupkey")
+s.standard
+s.baseline_raw(BASE_SHA, content_json(%({"required_checks":["x"],"required_checks":["self-tests (3.4)"]})))
+s = Scenario.new(root, "cibadsize")
+s.standard
+s.baseline_raw(BASE_SHA, content_json(JSON.generate("required_checks" => ["self-tests (3.4)"])).merge("size" => 1))
+# 上限 (64 KiB) を超える本文は、JSON として正しくても読まない
+s = Scenario.new(root, "citoolarge")
+s.standard
+s.baseline_raw(BASE_SHA, content_json(JSON.generate("required_checks" => CHECKS) + (" " * (64 * 1024))))
+# size の無い応答は形の外れ
+s = Scenario.new(root, "cinosize")
+s.standard
+s.baseline_raw(BASE_SHA, content_json(JSON.generate("required_checks" => CHECKS)).reject { |k, _| k == "size" })
+s = Scenario.new(root, "cinotfile")
+s.standard
+s.baseline_raw(BASE_SHA, { "type" => "dir" })
 # snapshot: 2 回目の pulls/<n> で head が動く
 s = Scenario.new(root, "snapshot")
 s.standard

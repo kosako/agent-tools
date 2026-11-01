@@ -31,7 +31,7 @@ usage: personal-dependabot-pin-check <PR番号> [--repo owner/repo]
 - PR 番号は数字だけ。`--repo` は `owner/repo` の形。省くと gh が現在の directory の repository に解決します (env の
   `GH_REPO` が効く点も preflight と同じ)。
 - exit 0 = ok、1 = not ok (理由は stdout の label)、2 = usage の誤り・gh の失敗・判定できない (head が動いた、応答の形が
-  外れる、file が 50 を超える)。
+  外れる、file が 50 を超える、base の `.github/repo-baseline.json` が不正)。
 
 ## 確かめること
 
@@ -44,8 +44,13 @@ usage: personal-dependabot-pin-check <PR番号> [--repo owner/repo]
    `git/ref/tags/<tag>` で解き、annotated tag (type が `tag`) は `git/tags/<sha>` で type が `commit` になるまで解きます
    (tag object の解決は 3 回まで。3 段の tag の先の commit は確かめ、4 段目の tag は `tag-not-commit`)。tag が無ければ `tag-not-found`、commit に解けなければ `tag-not-commit`、一致しなければ `pin-mismatch`。
    版は `v` を除いた数値の tuple で比べ、前に進まなければ `version-not-forward` (同じ版で sha だけが変わるものを含む)。
-3. CI: base の `.github/repo-baseline.json` の `required_checks` を必要な集合とします (file が無い・key が無い・空は
-   `ci-undefined` で not ok。空の一覧を成功にしない)。head の `check-runs` を check の名前ごとに page 単位で読み (1 page が
+3. CI: base の `.github/repo-baseline.json` の `required_checks` を必要な集合とします。file が無い・key が無いときは
+   `ci-undefined` で not ok です。file は `personal-repo-baseline` と同じ規則で読み ([repo-baseline](repo-baseline.md) の
+   「repo の設定 file」。UTF-8 の JSON の object で、key は `skip` と `required_checks` だけ、重なった key と値は不正、書いた
+   key の値は空でない配列、64 KiB まで、base64 と size を厳密に読む)、外れたら判定できない (exit 2) で止めます。空の
+   `required_checks` もこの不正に当たり、成功にも `ci-undefined` にもしません。2 つの script は code を共有しないので、同じ
+   本文の組を両方に当てる test で一致を固定しています (#573)。check の名前は出力に載せるので、さらに決まった文字だけに
+   限ります (外れたら exit 2)。head の `check-runs` を check の名前ごとに page 単位で読み (1 page が
    gh の 1 回で、回数の上限は呼ぶ前に数える。page ごとの `total_count` が一致し、件数が合わなければ判定しない = exit 2)、
    すべて `completed` かつ `success` なら `success`、1 つでも終わっていなければ `pending`、1 つでも success でなければ
    `failure`、無ければ `missing`。
@@ -92,5 +97,6 @@ not ok のときは最後の行が `pin-check: not ok` で、理由は各行の 
 を出し、出力に出ないことを固定する)。ok、annotated tag (1 段と 3 段)、4 段の tag、tag の不在・不一致・commit に解けない、
 版の後退・同じ版、owner/repo の変化、pin 以外の変更、`run` の中の文字列の変化、構造の変化、変更なし、外の file、added、
 表に無い status、規則の外の名前、明示の tag、複数行の scalar、CRLF、CI の failure / pending / missing / 同名の混在 / 2 page /
-件数の不一致 / 空の page で件数が足りない / page ごとの total_count の違い / baseline なし / 空、API の回数の上限 (80 回で
+件数の不一致 / 空の page で件数が足りない / page ごとの total_count の違い / baseline なし / key なし、baseline の不正 (空の一覧・
+JSON でない・知らない key・重なった key・size の不一致・64 KiB 超・size なし・file でない)、repo-baseline と読み方が一致すること、API の回数の上限 (80 回で
 止まり 81 回目を起こさない)、head の移動、数の不一致、file の上限、1 MiB の上限、gh の失敗、usage を確かめます。
