@@ -286,7 +286,7 @@ while IFS="$(printf "\t")" read -r sc reason; do
   [ "$rc" -eq 2 ] || fail "$sc: an invalid repo-baseline.json must be exit 2 (rc=$rc): $out"
   echo "$out" | grep -qF "$reason" || fail "$sc: the reason should include $reason: $out"
 done < "$fix/baseline-broken.tsv"
-[ "$(wc -l < "$fix/baseline-broken.tsv")" -eq 17 ] || fail "the broken repo-baseline.json table should have the 17 cases"
+[ "$(wc -l < "$fix/baseline-broken.tsv")" -eq 18 ] || fail "the broken repo-baseline.json table should have the 18 cases"
 
 # 判定できない -> exit 2: head が動いた / changed_files と数が合わない / file が多すぎる / gh の失敗 / usage
 set +e

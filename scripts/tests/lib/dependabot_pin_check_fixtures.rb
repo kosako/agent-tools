@@ -315,6 +315,7 @@ broken = [
   ["cisizelarger", content_json("{}").merge("size" => 100), "size が本文と合わない"],
   ["citoolarge", content_json(body + (" " * (64 * 1024))), "大きすぎます"],
   ["citoolargebysize", content_json("{}").merge("size" => (64 * 1024) + 1), "大きすぎます"],
+  ["cilargesmallsize", content_json(body + (" " * (64 * 1024))).merge("size" => 2), "size が本文と合わない"],
   ["cinosize", content_json(body).reject { |k, _| k == "size" }, "応答の形が想定外"],
   ["cinegsize", content_json("{}").merge("size" => -1), "応答の形が想定外"],
   ["cinotfile", { "type" => "dir" }, "応答の形が想定外"],
