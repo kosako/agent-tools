@@ -95,21 +95,30 @@ dangling_dir = lambda do |p|
     end
     return false
   end
-end
-text = begin
-  File.lstat(path)
-  st = begin
-    File.stat(path)
-  rescue Errno::ENOENT
-    fail_with.call("symlink に指す先が無い")
-  end
-  fail_with.call("regular file でない") unless st.file?
-  File.read(path)
-rescue Errno::ENOENT
-  fail_with.call("場所の途中の symlink に指す先が無い") if dangling_dir.call(path)
-  nil
 rescue SystemCallError => e
   fail_with.call("確かめられないか読めない (#{e.class})")
+end
+# 「設定なし」にするのは、最初の lstat で entry が無いときだけ。在ると確かめた後の失敗 (指す先が無い・読む間に
+# 消えた、を含む) は止める。
+present = begin
+  File.lstat(path)
+  true
+rescue Errno::ENOENT
+  fail_with.call("場所の途中の symlink に指す先が無い") if dangling_dir.call(path)
+  false
+rescue SystemCallError => e
+  fail_with.call("確かめられないか読めない (#{e.class})")
+end
+text = nil
+if present
+  text = begin
+    fail_with.call("regular file でない") unless File.stat(path).file?
+    File.read(path)
+  rescue Errno::ENOENT
+    fail_with.call("symlink に指す先が無いか、読む間に消えた")
+  rescue SystemCallError => e
+    fail_with.call("確かめられないか読めない (#{e.class})")
+  end
 end
 unless text.nil?
   user = begin

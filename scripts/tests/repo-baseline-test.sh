@@ -715,6 +715,31 @@ check("cli config symlink to a file is read", lines(res) == ["o/vialink: 対象�
 nodir = File.join(TMP, "nodir")
 FileUtils.mkdir_p(nodir)
 check("config: missing agent-tools dir is no config", RB.read_config(File.join(nodir, "agent-tools", "repo-baseline.json")).nil?)
+# 在ると確かめた後に読む間に消えた (File.read だけが ENOENT) も、設定なしにせず止める (#609 の review)。
+racy = File.join(TMP, "racy-config.json")
+File.write(racy, "{}")
+class << File
+  alias_method :__racy_orig_read, :read
+  def read(*args, **kw)
+    raise Errno::ENOENT, "fake" if args.first.to_s == RACY_PATH
+
+    kw.empty? ? __racy_orig_read(*args) : __racy_orig_read(*args, **kw)
+  end
+end
+RACY_PATH = racy
+racy_result = begin
+  RB.read_config(racy)
+  "no error"
+rescue ArgumentError => e
+  e.message
+ensure
+  class << File
+    alias_method :read, :__racy_orig_read
+  end
+end
+check("config: a file that vanishes while reading is not mistaken for no config",
+      racy_result == "設定 file を確かめられないか読めません (Errno::ENOENT)")
+check("config: File.read is restored after the race case", File.read(racy) == "{}")
 check("config: dangling dir symlink is not mistaken for a missing dir",
       (begin; RB.read_config(File.join(dirlink, "agent-tools", "repo-baseline.json")); "no error"; rescue ArgumentError => e; e.message; end) ==
         "設定 file の場所の途中の symlink に、指す先がありません")
