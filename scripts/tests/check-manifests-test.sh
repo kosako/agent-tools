@@ -1334,7 +1334,7 @@ grep -q "personal-stage2/asset.yml:.*personal-other" "$tmp/out-srcstage" \
 mkdir -p "$tmp/nulpath/shared/skills/personal-anul"
 printf -- '---\nname: personal-anul\ndescription: demo\n---\n' > "$tmp/nulpath/shared/skills/personal-anul/SKILL.md"
 printf 'x\n' > "$tmp/nulpath/shared/skills/personal-bnul.md"
-printf 'x\n' > "$tmp/nulpath/shared/skills/personal-zlater.md"
+printf -- '---\nname: personal-zlater\ndescription: demo\n---\n' > "$tmp/nulpath/shared/skills/personal-zlater.md"
 write_nul_manifest() {
   # $1 = manifest の path、$2 = name、$3 = source.path の YAML の値、$4 = format、$5 = 追加の行
   cat > "$1" <<EOF
@@ -1356,9 +1356,9 @@ EOF
 write_nul_manifest "$tmp/nulpath/shared/skills/personal-anul/asset.yml" personal-anul \
   '"shared/skills/personal-anul\0x"' directory ''
 write_nul_manifest "$tmp/nulpath/shared/skills/personal-bnul.asset.yml" personal-bnul \
-  '"shared/skills/personal-bnul\0.md"' file ''
+  '"shared/skills/personal-bnul\0.md"' markdown ''
 write_nul_manifest "$tmp/nulpath/shared/skills/personal-zlater.asset.yml" personal-zlater \
-  shared/skills/personal-zlater.md file 'extra_field: x'
+  shared/skills/personal-zlater.md markdown 'extra_field: x'
 set +e
 "$check" --root "$tmp/nulpath" > "$tmp/out-nulpath" 2>&1
 rc=$?
