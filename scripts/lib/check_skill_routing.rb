@@ -12,6 +12,9 @@
 # 判定契約:
 #   - coverage: case set の全 case に run がある (欠落 = 偽の安心 を弾く)。status が ok でない run
 #     (CLI 失敗 / 観測不能) は緑に数えず構造エラーに倒す。
+#   - 観測の全損: primary を持つ run があるのに ok の run の observed がすべて空なら構造エラー (#582)。1 件ずつの
+#     primary MISS は報告だけで exit に響かないので、全損は別に止める。一部だけ観測を失ったときは見分けられない
+#     (下の「信頼境界」)。
 #   - primary hit: case の primary skill が observed に含まれる (primary が null の case は対象外)。
 #   - must_not violation: case の must_not のいずれかが observed に含まれる (routing の破れ)。
 #   - token: run ごとの prompt_tokens / output_tokens を合算して報告する (gate ではなく観測値。
@@ -26,7 +29,7 @@
 #
 # exit code の分類 (incident class を混ぜない):
 #   - 1 = 観測された破れ (must_not violation / baseline からの回帰)。probe の結果そのものが赤。
-#   - 2 = 入力・構造エラー (JSON 不正 / スキーマ違反 / coverage 欠落 / error run / 比較条件不一致)。
+#   - 2 = 入力・構造エラー (JSON 不正 / スキーマ違反 / coverage 欠落 / error run / 観測の全損 / 比較条件不一致)。
 #     破れの証拠ではない。破れと同居するときは 1 を優先し、全 failure を報告する。
 #   - 0 は完全 coverage かつ violation 0 (比較時は回帰なし) のときだけ。
 #
@@ -69,7 +72,7 @@ module CheckSkillRouting
     exit: 0 = pass (violation 0、比較時は回帰なし),
           1 = breach observed (must_not violation / regression against baseline),
           2 = usage / input / structural error (invalid JSON, schema violation, coverage gap,
-              error run, comparison condition mismatch)
+              error run, every observed empty although primary cases exist, comparison condition mismatch)
   TEXT
 
   # --- 入力の検証 ---------------------------------------------------------------
@@ -189,6 +192,7 @@ module CheckSkillRouting
     output_tokens = 0
     first_tokens = 0
     first_count = 0
+    observed_any = false
 
     cases[:cases].each do |c|
       runs = by_case[c["id"]]
@@ -209,6 +213,7 @@ module CheckSkillRouting
           first_count += 1
         end
         observed = r["observed"]
+        observed_any ||= !observed.empty?
         primary_hit = c["primary"].nil? ? nil : observed.include?(c["primary"])
         unless c["primary"].nil?
           hit_total += 1
@@ -225,6 +230,14 @@ module CheckSkillRouting
           first_prompt_tokens: r["first_prompt_tokens"]
         }
       end
+    end
+
+    # 観測の全損 (#582): primary を持つ run があるのに、ok の run の observed がすべて空なら、routing の結果ではなく
+    # runner 側の観測の失敗 (CLI の event の形の変化など) と見分けられないので構造エラーにする。primary MISS は 1 件
+    # ずつなら報告だけで、baseline との比較でも両方が全損なら回帰にならないため、ここで止める。
+    if runs_total.positive? && hit_total.positive? && !observed_any
+      structural << "#{label}: every ok run has an empty observed although #{hit_total} run(s) expect a primary skill " \
+                    "(observation lost; check the runner / event format, not a routing result)"
     end
 
     # first_prompt_tokens は全 ok run が持つときだけ集計値として意味を持つ (一部欠けは n/a)。

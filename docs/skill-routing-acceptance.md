@@ -18,14 +18,17 @@ harness です。#216 の cross-skill routing suite の最小 slice で、
 ## 何が hard で何が hard でないか (honest-label)
 
 - **hard**: judge の判定は deterministic で、fixture で検証されている。coverage 欠落・error run・
-  比較条件の不一致は緑に数えず exit 2 に倒す (偽の安心を作らない)。probe runner の Codex の起動の境界
+  比較条件の不一致は緑に数えず exit 2 に倒す (偽の安心を作らない)。primary を持つ case があるのに ok の run の
+  observed がすべて空 (観測の全損) のときも exit 2 にする (#582)。probe runner の Codex の起動の境界
   (起動の argv と、起動の前の flag と feature の確認。欠けていれば起動せずに exit 2) と event の解析も、
   偽の CLI と固定の JSONL を使う offline の self-test (`scripts/tests/probe-skill-routing-test.sh`) で
   固定している (実際の CLI の event 形式との一致は対象外で、下の「hard でない」側)。
 - **hard でない**: probe の観測は CLI の headless 実行と event stream に依存する。単発 turn の
   headless 実行は対話 session の代理であって同一ではなく、同じ prompt でも model の揺れで結果が
-  変わる。field 名が変わると observed が空になり、judge には primary MISS として現れる (緑には
-  化けないが、原因は runner 側)。**probe の結果は「同条件の before / after を比べる」用途に限り、
+  変わる。field 名が変わると observed が空になる。全 run で空になれば judge は観測の全損として exit 2 で止めるが、
+  一部の run だけが空になったときは primary MISS として現れるだけで、1 件ずつの MISS は exit に響かない (exit 0 の
+  まま)。baseline と比べても、両方で同じ case の観測を失っていれば回帰にはならない。exit 0 を観測の健全性の証拠と
+  読まない。**probe の結果は「同条件の before / after を比べる」用途に限り、
   絶対値を品質の保証として読まない。**
 - Codex は `first_prompt_tokens` を取れない (event に turn 合計の usage しか無い) ので、token の比較は
   `prompt_tokens` (turn 全体) と静的な `listing_chars` で見る。`--max-turns` 相当も無く、run は model が
@@ -208,7 +211,9 @@ codex は `--tool codex` で同じ手順。両 tool で回帰なしを確認し�
 - 1 case = 1 依頼 prompt。`primary` は依頼の主目的を所有する skill (無ければ `null`)、`must_not` は
   発火してはいけない隣接 skill。secondary (gate / quality / placement の補助) は列挙しない。
 - 新しい skill を足したら `inventory` と、その skill が primary になる case と near-miss の負例を
-  足す。self-test が「production-rail 以外の全 inventory skill に primary case がある」ことを検査する。
+  足す。self-test が、`inventory` が配布する skill の集合 (shared/ の manifest のうち、どれかの target で
+  artifact_kind が skill に解決されるもの。workflow から skill になる asset を含む) と一致することと、
+  「production-rail 以外の全 inventory skill に primary case がある」ことを検査する (#582)。
 - prompt は `-` で始めない (CLI の option と衝突する)。制御文字は入力エラー。
 - case id は raw log の file 名 (`<out>.raw/<case>-<n>.jsonl`) に使うので、英数字と `._-` に限る (先頭は
   英数字)。外れたら入力エラー。

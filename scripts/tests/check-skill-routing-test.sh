@@ -77,6 +77,39 @@ write_results "$tmp/miss.json" claude-code model-x candidate \
 run_case "primary-miss" 0 "case a-primary: primary=MISS must_not=ok" -- --cases "$tmp/cases.json" --results "$tmp/miss.json"
 grep -q "primary=1/2" "$tmp/out" || fail "primary-miss: hit count not reported: $(cat "$tmp/out")"
 
+# --- case 2b: 観測の全損 (#582)。primary を持つ case があるのに ok の run の observed がすべて空なら構造エラー (exit 2)。
+# 1 件ずつの primary MISS (case 2) と違い、runner の観測の失敗と見分けられない。一部だけ観測できれば全損ではない ---
+write_results "$tmp/all-empty.json" claude-code model-x candidate \
+  "$(run_line a-primary ok 100 10 '[]')" \
+  "$(run_line b-primary ok 120 12 '[]')" \
+  "$(run_line none ok 80 8 '[]')"
+run_case "all-observed-empty" 2 "FAIL: candidate: every ok run has an empty observed although 2 run(s) expect a primary skill" \
+  -- --cases "$tmp/cases.json" --results "$tmp/all-empty.json"
+# baseline 側の全損も構造エラー (両方が全損だと case ごとの比較でも回帰にならない)
+run_case "baseline-all-observed-empty" 2 "FAIL: baseline: every ok run has an empty observed" \
+  -- --cases "$tmp/cases.json" --results "$tmp/ok.json" --baseline "$tmp/all-empty.json"
+run_case "both-all-observed-empty" 2 "FAIL: candidate: every ok run has an empty observed" \
+  -- --cases "$tmp/cases.json" --results "$tmp/all-empty.json" --baseline "$tmp/all-empty.json"
+# 負例 (primary が null) の case だけなら、observed が空でも全損ではない
+cat > "$tmp/cases-none-only.json" <<'EOF'
+{
+  "schema_version": 1,
+  "inventory": ["skill-a", "skill-b"],
+  "cases": [
+    { "id": "none", "cluster": "none", "prompt": "plain question", "primary": null, "must_not": ["skill-a", "skill-b"] }
+  ]
+}
+EOF
+write_results "$tmp/none-only.json" claude-code model-x candidate "$(run_line none ok 80 8 '[]')"
+run_case "none-only-empty-is-fine" 0 "ok: skill routing verified (1 runs, 1 cases)" \
+  -- --cases "$tmp/cases-none-only.json" --results "$tmp/none-only.json"
+# 観測が 1 つでもあれば全損ではない (primary に当たらない skill でも、観測は生きている)
+write_results "$tmp/one-observed.json" claude-code model-x candidate \
+  "$(run_line a-primary ok 100 10 '[]')" \
+  "$(run_line b-primary ok 120 12 '[]')" \
+  "$(run_line none ok 80 8 '["skill-c"]')"
+run_case "one-observed-is-not-loss" 0 "ok: skill routing verified" -- --cases "$tmp/cases.json" --results "$tmp/one-observed.json"
+
 # --- case 3: must_not skill が発火したら破れ (exit 1) ---
 write_results "$tmp/viol.json" claude-code model-x candidate \
   "$(run_line a-primary ok 100 10 '["skill-a", "skill-b"]')" \
@@ -356,23 +389,36 @@ write_results "$tmp/first-bad.json" claude-code model-x candidate \
   "$(run_line none ok 80 8 '[]')"
 run_case "first-tokens-bad-type" 2 "first_prompt_tokens must be a non-negative integer when present" -- --cases "$tmp/cases.json" --results "$tmp/first-bad.json"
 
-# --- case 19: 正本の case set は schema に通る (inventory 14 件・runtime skill と一致) ---
-ruby -rjson -e '
+# --- case 19: 正本の case set は schema に通り、inventory は配布する skill の集合と一致する (#582) ---
+# 配布する skill = shared/ の manifest のうち、どれかの target で artifact_kind が skill に解決されるもの (workflow から
+# skill になる asset を含む)。固定の件数では見ないので、skill の追加・改名で case set の更新を忘れると落ちる。
+ruby -I "$script_dir/../lib" -rjson -rassets -rartifact_targets -e '
   d = JSON.parse(File.read(ARGV[0]))
-  abort "inventory must have 14 skills" unless d["inventory"].length == 14
+  skills = Assets.load_all(ARGV[1]).select { |a| ArtifactTargets.resolves_any?(a, "skill") }.map { |a| a[:name] }
+  abort "no deployed skill found under the repo root" if skills.empty?
+  inv = d["inventory"]
+  abort "inventory has skills that are not deployed: #{(inv - skills).sort.join(", ")}" unless (inv - skills).empty?
+  abort "deployed skills missing from inventory: #{(skills - inv).sort.join(", ")}" unless (skills - inv).empty?
   ids = d["cases"].map { |c| c["id"] }
   abort "duplicate ids" unless ids.uniq.length == ids.length
   covered = d["cases"].map { |c| c["primary"] }.compact.uniq
-  missing = d["inventory"] - covered - ["personal-production-rail"]
+  missing = inv - covered - ["personal-production-rail"]
   abort "inventory skills without a primary case: #{missing.join(", ")}" unless missing.empty?
-' "$real_cases" || fail "real case set: inventory / coverage invariant broken"
-# 正本 case set で「全 case を cover した空 observed」を判定に通す = schema としては valid
+' "$real_cases" "$script_dir/../.." || fail "real case set: inventory / coverage invariant broken"
+# 正本 case set に「全 case を cover した空 observed」を当てると、観測の全損として構造エラー (#582)
 ruby -rjson -e '
   d = JSON.parse(File.read(ARGV[0]))
   runs = d["cases"].map { |c| { "case" => c["id"], "status" => "ok", "observed" => [], "prompt_tokens" => 0, "output_tokens" => 0 } }
   puts JSON.generate({ "schema_version" => 1, "tool" => "claude-code", "model" => "m", "variant" => "v", "runs" => runs })
 ' "$real_cases" > "$tmp/real-empty.json"
-run_case "real-cases-valid" 0 "ok: skill routing verified" -- --cases "$real_cases" --results "$tmp/real-empty.json"
+run_case "real-cases-all-empty-is-loss" 2 "every ok run has an empty observed" -- --cases "$real_cases" --results "$tmp/real-empty.json"
+# primary に当たる観測を入れれば、正本 case set は schema として valid で pass する
+ruby -rjson -e '
+  d = JSON.parse(File.read(ARGV[0]))
+  runs = d["cases"].map { |c| { "case" => c["id"], "status" => "ok", "observed" => [c["primary"]].compact, "prompt_tokens" => 0, "output_tokens" => 0 } }
+  puts JSON.generate({ "schema_version" => 1, "tool" => "claude-code", "model" => "m", "variant" => "v", "runs" => runs })
+' "$real_cases" > "$tmp/real-hit.json"
+run_case "real-cases-valid" 0 "ok: skill routing verified" -- --cases "$real_cases" --results "$tmp/real-hit.json"
 
 # --- case 20: 正本の case set の期待値 (#301 / #365) ---
 # 単発 headless の probe は毎 run が session 冒頭にあたるので、resume-project の読み取りは production-rail と
