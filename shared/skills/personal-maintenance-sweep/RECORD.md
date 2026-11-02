@@ -296,7 +296,8 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
   exit 2 の理由は、repo を確かめる途中の失敗なら stdout に出るが、run 全体の失敗 (usage・設定 file の不正・今の repo を
   解決できない、など) では stderr にだけ出て stdout は空になるので、両方を残す。起動できなかったときは `exit` を null
   にし、`stderr` に理由を書く。再開でかけ直したら上書きする。追跡 Issue と run のコメントには写さない。
-- 単位の `status` は `pending` → `audited` → `refuted` → `done` (`done` は起票と記録まで終えたもの)。
+- 単位の `status` は `pending` → `audited` → `refuted` → `done` (`done` は起票と記録まで終えたもの。起票しない report
+  モードでは、反証・重複の照合・local の記録・報告まで終えたもの)。
 - `ci` の単位 (`SKILL.md` 手順 3。先頭の単位) の `ci_check` は personal-ci-check の結果 (`exit` は exit code、`stderr` は
   全文) と窓 (`since` と `until` は使った結果にかけた窓、`basis` と `unseen_from` は下の `ci.json` の block の出力のまま、
   `tries` はかけた回数、`events` は使った結果の `units/<n>/ci-window-<k>.json` の `events` (`checked` / `unchecked`。
