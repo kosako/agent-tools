@@ -6,8 +6,10 @@ repo ローカル方針で翻案した derivative work(書式 CONTEXT-FORMAT.md 
 同 upstream 由来)。upstream は MIT License であり、下記の copyright notice と
 permission notice を保持する。
 
-- 参照 commit(`grilling` v1.2.0 round-by-round frontier 追随時): `6654f6b60cd9d5be8b54c6fafe44346dabeb3b76`(2026-08-24)
-- 追随 Issue: #226
+- 参照 commit: `4ae2317ddb22b046e26455e4f9c9b3aaaf62212d`(2026-10-31。`grilling` の問い方と fact の調査に追随)
+- 前の参照 commit(`grilling` v1.2.0 round-by-round frontier 追随時): `6654f6b60cd9d5be8b54c6fafe44346dabeb3b76`(2026-08-24)
+- 未追随: `domain-modeling` の CONTEXT.md → GLOSSARY.md (と CONTEXT-MAP.md、CONTEXT-FORMAT.md) の改名。利用者の repo に既にある CONTEXT.md と用語集が割れないよう、名前を維持する (#619)
+- 追随 Issue: #226、#619
 
 ## MIT License (mattpocock/skills)
 

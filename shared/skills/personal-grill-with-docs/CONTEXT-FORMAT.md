@@ -40,8 +40,9 @@ _避ける_: Client, buyer, account
 
 ## Contexts
 
-- [Ordering](./src/ordering/CONTEXT.md) — 顧客注文の受付と追跡
-- [Billing](./src/billing/CONTEXT.md) — 請求書生成と支払い処理
+- [Ordering](./src/ordering/CONTEXT.md): 顧客注文の受付と追跡
+- [Billing](./src/billing/CONTEXT.md): 請求書生成と支払い処理
+- [Fulfillment](./src/fulfillment/CONTEXT.md): 倉庫のピッキングと出荷
 
 ## Relationships
 
