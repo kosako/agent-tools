@@ -1,0 +1,31 @@
+schema_version: 1
+name: personal-upstream-pin-check
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #623 の PR で author≠reviewer レビューのうえ承認する。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:d512e525f11927848d7e901fdc6a05978cfd787cc271880ded659e8ab8617b45
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-upstream-pin-check.rb
+  format: text
+summary: >-
+  参照元のある asset (vendor や翻案) の参照元が pin の後に変わったかを決まった規則で見て、所見を personal-repo-audit の
+  findings.schema.json の形の JSON で stdout に出す (#623)。AI を使わず、何も書かない。一覧は今の directory の repo の
+  HEAD の commit の .github/upstream-pins.json (参照元ごとの repo・pin・NOTICE の path・見る file の path と pin のときの
+  blob の hash。key の重なりと形の外れは拒む)。参照元ごとに gh api (GET。shell を通さず GH_REPO を外す) で default
+  branch の先頭の commit の tree を 1 回読み、blob の hash を比べて、変わった・無くなった file がある参照元を 1 件の
+  所見にする。参照元の本文は読まない。API は 1 回の実行で 100 回・120 秒まで (超えた gh は process group ごと止める)。
+  repo を選ぶ git の環境変数を継承していれば止める。exit 0 = 所見なし (一覧が無いときを含む) / 1 = 所見あり / 2 =
+  usage・一覧の形・repo や HEAD を解決できない・確かめられない参照元がある (残りは確かめて出す。理由は scope.not_seen)
+  (docs/upstream-pin-check.md)。

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "upstreams": [
+    {
+      "name": "takt-policies",
+      "repo": "nrslib/takt",
+      "pin": "7247bb81296569814354e6b72cb4eb1db718f3d6",
+      "notice": "shared/skills/personal-production-rail/references/policies/NOTICE.md",
+      "files": {
+        "builtins/ja/facets/policies/ai-antipattern.md": "c7bef2b0597d2696e42205172c3c4b06e778851a",
+        "builtins/ja/facets/policies/coding.md": "59b9ff10c78cd71cd476b60c247127d48a9e9a40",
+        "builtins/ja/facets/policies/existing-system-respect.md": "638af69285d35cad319a2c5cf5cc838de2ea21db",
+        "builtins/ja/facets/policies/design-planning.md": "eed7d8a49e03739a8a8826c86fd851dbf0e6838c",
+        "builtins/ja/facets/policies/review.md": "090f29ca2a8413ade8f66407bb22a748b2e6dbf9",
+        "builtins/ja/facets/partials/policies/review-common.md": "44814257ae155431a7a3f6b8903eaa8a2c3edf82",
+        "builtins/ja/facets/partials/policies/applicable-inputs.md": "e1457d36af3c8df9ca5a60efe4360fbb78b4a56f",
+        "builtins/ja/facets/partials/policies/evidence-based-judgment.md": "2975b73d57f569fb6cf7c960684d0c3275068b9e",
+        "builtins/ja/facets/partials/policies/finding-validity.md": "0c43b606f7266f5fd27f2570dd19bc3aa2710521",
+        "builtins/ja/facets/partials/policies/reviewer-evidence.md": "9b1631c21fbcb40bd0b9623d66cb10e12f241142"
+      }
+    },
+    {
+      "name": "grill-me",
+      "repo": "mattpocock/skills",
+      "pin": "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
+      "notice": "shared/skills/personal-grill-me/NOTICE.md",
+      "files": {
+        "skills/productivity/grilling/SKILL.md": "d2f09a18e6a6c65c55f1271ba08dfeaf06f0bed3",
+        "skills/productivity/grill-me/SKILL.md": "3947ff9c4ad980d14fc07fccbf659d47c114e81d"
+      }
+    },
+    {
+      "name": "grill-with-docs",
+      "repo": "mattpocock/skills",
+      "pin": "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
+      "notice": "shared/skills/personal-grill-with-docs/NOTICE.md",
+      "files": {
+        "skills/productivity/grilling/SKILL.md": "d2f09a18e6a6c65c55f1271ba08dfeaf06f0bed3",
+        "skills/engineering/grill-with-docs/SKILL.md": "62b9efb6f991d1b229adee7506962f13ced0c499",
+        "skills/engineering/domain-modeling/SKILL.md": "a4438c6879c517d1a08e2b5fbca049b632688dfe",
+        "skills/engineering/domain-modeling/GLOSSARY-FORMAT.md": "9c0b4c7a2e8507c23cbb5e0baa66d81699321cc6",
+        "skills/engineering/domain-modeling/ADR-FORMAT.md": "d7e61f30a9fd8ca70d9ee68f019c2a9ebf2d13f7"
+      }
+    }
+  ]
+}

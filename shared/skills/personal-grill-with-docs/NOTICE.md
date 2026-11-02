@@ -10,6 +10,7 @@ permission notice を保持する。
 - 前の参照 commit(`grilling` v1.2.0 round-by-round frontier 追随時): `6654f6b60cd9d5be8b54c6fafe44346dabeb3b76`(2026-08-24)
 - 未追随: `domain-modeling` の CONTEXT.md → GLOSSARY.md (と CONTEXT-MAP.md、CONTEXT-FORMAT.md) の改名。利用者の repo に既にある CONTEXT.md と用語集が割れないよう、名前を維持する (#619)
 - 追随 Issue: #226、#619
+- 参照元の更新の検査: repo の `.github/upstream-pins.json` (`grill-with-docs`)。参照 commit を上げたら、その pin と blob の hash も更新する (#623)
 
 ## MIT License (mattpocock/skills)
 
