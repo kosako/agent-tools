@@ -77,5 +77,7 @@ blob の hash は、参照元の tree から取ります (例: `gh api repos/<ow
   根拠が GitHub の API にしか無いので、反証にかけずに triage・重複の照合・起票へ進めます。script が無い・run 全体が
   失敗したときは、sweep を止めずに「参照元を確かめられない」と報告します。人が repo で直接かけてもかまいません。
 - fingerprint は参照元ごとに固定 (`.github/upstream-pins.json#upstream-<name>`) です。取り込まないと決めたときも、
-  Issue を not planned で閉じずに、一覧の pin と blob の hash を確かめた commit に進めてから閉じます (not planned で
-  閉じると、sweep の重複の照合が同じ fingerprint を却下として扱い、次の更新も起票されなくなるため)。
+  Issue を not planned で閉じずに、一覧の pin と blob の hash を確かめた commit に進めてから閉じます。not planned で
+  閉じると、sweep の重複の照合は同じ問題を却下として扱い、新しい根拠が無い限り起票し直しません。参照元の更新は同じ
+  fingerprint のまま続くので、次の更新が新しい根拠として扱われるかを照合の判断に任せることになります。pin を進めて
+  閉じれば、次の更新は pin の後の変化として素直に所見になります。

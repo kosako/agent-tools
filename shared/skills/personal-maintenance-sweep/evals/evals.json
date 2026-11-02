@@ -1058,7 +1058,7 @@
       "id": 53,
       "name": "upstream-unit-skips-refute",
       "prompt": "[前提: Claude Code の session で起動。repo の HEAD に .github/upstream-pins.json がある。残量から medium のプリセットが選ばれ、監査役は Claude、検証役は Codex。personal-upstream-pin-check は exit 1 で、stdout は findings.schema.json の形で所見が 1 件 (参照元 takt-policies の 2 file が変わった)。ほかの単位の監査も終わった] この repo のメンテを回して Issue にして。参照元の所見の扱いだけ先に教えて。手順の確認だけで実行はしない。",
-      "expected_output": "upstream の単位は AI を使わない単位で、ci の単位の次に足す。stdout を units/<n>/result.json に保存し、所見は blob の hash の決まった比較で AI の判断を含まず、根拠が GitHub にしか無い (Codex の検証役は network なしでは uncertain にしかできない) ので、反証にかけない。所見を confirmed として単位を refuted にし、手順 5 (triage) から他の単位と同じく重複の照合と起票へ進める。exit と stderr は state の upstream_check に残す。報告に確かめた参照元を書く。",
+      "expected_output": "upstream の単位は AI を使わない単位で、ci の単位の次に足す。stdout を units/<n>/result.json に保存し、所見は blob の hash の決まった比較で AI の判断を含まず、根拠が GitHub にしか無い (Codex の検証役は network なしでは uncertain にしかできない) ので、反証にかけない。所見を confirmed として単位を refuted にし、手順 5 (triage) から他の単位と同じく重複の照合と起票へ進める。exit と stderr は state の upstream_check に残す。起票の本文の反証の節は、検証役と判定の行の代わりに「反証: 省略 (決まった規則の検査。personal-upstream-pin-check)」と検査の根拠を書き、検証役が確かめたように書かない。報告に確かめた参照元を書く。",
       "files": [],
       "assertions": [
         {
@@ -1072,6 +1072,10 @@
         {
           "id": "state-record",
           "text": "exit と stderr を state の upstream_check に残すとしている"
+        },
+        {
+          "id": "issue-says-refute-skipped",
+          "text": "起票の本文の反証の節に、検証役が確かめたと書かず、反証の省略と personal-upstream-pin-check による検査の根拠を書くとしている"
         }
       ]
     },

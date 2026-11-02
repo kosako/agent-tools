@@ -201,6 +201,10 @@ personal-maintenance-sweep の run `<run id>` で起票 (観点: <観点> / 種�
 <!-- maintenance-sweep:no-contention -->
 ```
 
+- `upstream` の単位の所見 (`SKILL.md` 手順 3) は反証にかけないので、「## 反証」の節は、検証役と判定の 2 行の代わりに
+  次の 2 行にする。検証役が確かめたように書かない (#623)。
+  - `- 反証: 省略 (AI の判断を含まない決まった規則の検査。personal-upstream-pin-check)`
+  - `- 検査の根拠: <所見の evidence (GitHub の API の tree で比べた blob の hash) と、検査した参照元の先頭の commit>`
 - `no-contention` の marker は、triage で「論点なし」の印が付いた所見だけに書く (付かなければ行ごと省く)。fix モードは
   この marker で候補を抽出し、着手の直前に適格性を確かめ直す (`FIX.md`)。
 - fingerprint に `-->` を含めない (含むなら、場所の key から単位の名前を除いた形にする)。

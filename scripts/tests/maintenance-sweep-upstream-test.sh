@@ -34,6 +34,8 @@ want = {
     "`upstream` の単位は personal-upstream-pin-check の stdout",
     "personal-upstream-pin-check の結果 (`exit` は exit code、`stderr` は全文)",
     "所見は反証にかけないので、保存したら単位は `refuted` になる",
+    "「## 反証」の節は、検証役と判定の 2 行の代わりに",
+    "`- 反証: 省略 (AI の判断を含まない決まった規則の検査。personal-upstream-pin-check)`",
   ],
   "BUDGET.md" => [
     "AI を使わない `upstream` の単位も 1 つ加わります (#623)",
