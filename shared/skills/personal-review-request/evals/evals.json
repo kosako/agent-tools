@@ -248,7 +248,7 @@
     {
       "id": 14,
       "name": "opencode-fail-closed-to-human",
-      "prompt": "/personal-review-request 514。preflight が exit 1 で `fail-closed: 1 つの commit に複数 AI (または model の異なる OpenCode) のトレーラが混在` を返した。PR の commit には OpenCode (anthropic/…) と OpenCode (openai/…) の trailer がある。どう進める?",
+      "prompt": "/personal-review-request 514。preflight が exit 1 で `fail-closed: 1 つの commit に複数 AI (または model の異なる OpenCode) のトレーラが混在` を返した。PR の commit には OpenCode (anthropic/…) と OpenCode (openai/…) の trailer がある。user によると、その commit の変更は実際に 2 つの model の OpenCode が書いたもので、trailer の誤記ではない。どう進める?",
       "expected_output": "reviewer を自動で選ばず、人に渡す。系列の違う OpenCode の commit が実際に混在しているので、trailer の付け直しではなく、PR を著者ごとに分けるか人が review する (人に reviewer を選ばせて AI の review へ進めない。#415)。OpenCode の系列の混在や形の不正・系列の曖昧は fail-closed の対象で、自分でレビューしたり片側に倒したりしない。",
       "files": [],
       "assertions": [

@@ -353,8 +353,8 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
   返す (起動は herdr の pane 経由。herdr が無く sandbox 内なら BLOCKED で人手へ渡す)。GitHub
   lifecycle はこの skill が所有し、executor に comment / approve / merge をさせない。executor が
   `Status: RUNNING` (wait が尽きても review が動いている。#421) を返したら、結果のコメントは投稿せず、同じ対象の
-  review を起動し直さない。返った run dir の `done.txt` を待って executor と同じ続行条件で回収し、回収できたら
-  手順 4 に進む。
+  review を起動し直さない。返った pane と run dir を人に示し、続行か中断かを人が決める (executor の `RESULT-FORMAT.md`)。続行なら、その run dir の
+  `done.txt` を待って executor と同じ続行条件で回収し、回収できたら手順 4 に進む。
 - **Claude がレビュアーのとき** (preflight の verified `reviewer=claude` で、author が `codex` /
   `opencode(openai)` / `opencode(other)` / `bot(dependabot)`): 対象は Codex route と同じく検証済み base / head OID で固定する。
   レビュー開始前に、local `HEAD` が `head_oid` と一致すること、base ref の commit が `base_oid` と

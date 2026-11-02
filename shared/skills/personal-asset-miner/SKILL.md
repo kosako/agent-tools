@@ -30,7 +30,10 @@ private なログを読み、最終的に public-safe な資産になりうる�
 - **Claude Code**: `~/.claude/projects/<エンコードされた作業パス>/<session-uuid>.jsonl`(1 行 1 レコード、`type` / `sessionId` 等)。
 - **Codex**: `~/.codex/sessions/YYYY/MM/DD/*.jsonl`(日付階層)。`~/.codex/history.jsonl` は `{session_id, ts, text}` の軽量履歴で、横断の当たりをつけるのに使える。
 
-両方を必ず見ます(**両 agent 横断が肝**)。片方だけで終えない。
+両方を必ず見ます(**両 agent 横断が肝**)。片方だけで終えない。片方のログが無い・読めないときは、読めた側だけで
+report を作ってよいですが、冒頭に「片側だけの report」と、読めなかった agent と理由を書き、対象の session 数と候補の
+件数も読めた側だけのものだと明記します。両 agent を横断した report として出さず、横断の繰り返しの判定 (2 session 以上)
+は読めた側の中で数えたものだと添えます。
 
 ## 範囲(引数)
 

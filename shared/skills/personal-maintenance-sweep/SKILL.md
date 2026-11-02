@@ -180,10 +180,12 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
     `findings.schema.json` の形 (JSON として読めて必須の key がある) なら `units/<n>/result.json` に保存して
     `audited` にし、他の単位と同じく反証へ進む。`scope.not_seen` の file は報告に書く (手順 9)。
   - exit 2 で stdout が空 (run 全体の失敗)、stdout が上の形でない、または script が無い (未配備で起動できない)
-    とき: 所見なしで `done` にし、報告に「CI を確かめられない」と理由 (stderr) を書く。sweep は止めない。
+    とき: 所見なしで `done` にし、報告に「CI を確かめられない」と理由 (stderr) を書く。sweep は止めない。出力を
+    所見として使わなかったので、`--window-out` の file の `events` が `checked` でも、state には null を残す (窓の時刻を
+    進めない。所見を読まないまま点検済みにしないため)。
   - exit と stderr、窓 (使った結果の since と until、block の basis と unseen_from、かけた回数) と、使った結果の
-    `events` (確かめられないときは null) は state の単位に残す (`RECORD.md`)。窓の時刻 (`ci.json`) を進めるかは
-    手順 8 で決める。
+    `events` (確かめられないとき、上の所見なしの `done` のときは null) は state の単位に残す (`RECORD.md`)。
+    窓の時刻 (`ci.json`) を進めるかは手順 8 で決める。
 - **監査役が Claude**: personal-repo-audit の手順で監査し (観点の fan-out は repo-audit のとおり)、結果を
   repo-audit の `findings.schema.json` の形の JSON にして run dir に保存する。
 - **監査役が Codex**: personal-repo-audit の `CODEX-LAUNCH.md` の起動で Codex に監査させる。effort は

@@ -294,7 +294,7 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
 - `ci` の単位 (`SKILL.md` 手順 3。先頭の単位) の `ci_check` は personal-ci-check の結果 (`exit` は exit code、`stderr` は
   全文) と窓 (`since` と `until` は使った結果にかけた窓、`basis` と `unseen_from` は下の `ci.json` の block の出力のまま、
   `tries` はかけた回数、`events` は使った結果の `units/<n>/ci-window-<k>.json` の `events` (`checked` / `unchecked`。
-  file が無い・読めない・値が外れるときは null。手順 8 の窓の時刻はこの値で決め、`scope` の行では決めない。#580)。
+  file が無い・読めない・値が外れるとき、stdout を所見として使わずに所見なしの `done` にしたときは null。手順 8 の窓の時刻はこの値で決め、`scope` の行では決めない。#580)。
   `exit` と `stderr` も使った結果のもの。起動できなかったときは `exit` と `events` を null にし、`stderr` に理由を書く。
   再開でかけ直したら上書きする。`stdout` は `units/<n>/result.json` に置く (確かめられずに所見なしで `done` にしたときは置かない)。消費 (`consumption`) は
   AI の枠を使わないので残さない。
