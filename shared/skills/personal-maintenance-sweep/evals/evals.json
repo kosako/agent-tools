@@ -507,12 +507,12 @@
       "id": 26,
       "name": "fix-review-out-of-scope-must-blocks",
       "prompt": "[前提: fix モードで PR #362 を出し、round 1 の cross-review が REJECT。must が 2 つ: 1 つは修正の仕様の範囲内の記述の誤り、もう 1 つは同じ file の別の節の契約 (gate の規則) を変える提案。should が 1 つ] どう進める?",
-      "expected_output": "範囲内の must は直して再依頼する。範囲外 (契約を変える) の must は scope を広げず、PR を blocked にして人に渡す (未解決の項目と次の入口を fixes.json と PR に記録)。should は採否と理由を残し、採用しなくても verdict を書き換えない。完了した review は最大 3 回で、3 回目のあとの修正は未レビューとして扱う。",
+      "expected_output": "同じ round に範囲内と範囲外の must があるので、範囲内の must も直さず push もせずに、先に PR を blocked にして人に渡す (範囲外の must の扱いで修正の仕様が変わりうる)。範囲外 (契約を変える) の must で scope を広げない。未解決の項目と次の入口を fixes.json と PR に記録する。should は採否と理由を残し、採用しなくても verdict を書き換えない。完了した review は最大 3 回で、3 回目のあとの修正は未レビューとして扱う。",
       "files": [],
       "assertions": [
         {
-          "id": "in-scope-only",
-          "text": "範囲内の must だけを直し、範囲外の must で scope を広げていない"
+          "id": "blocks-before-fixing",
+          "text": "範囲内の must も直さず push もせずに先に blocked にし、範囲外の must で scope を広げていない"
         },
         {
           "id": "blocked-not-silent",
