@@ -2,7 +2,8 @@
 
 このディレクトリの policy 文書は第三者リポジトリから **import(一回限りの fetch)して vendor** したもの。
 配備(sync)はオフラインで行い、実行時に外部取得はしない。更新は import を再実行し、injection gate +
-human review を通したうえで commit pin を更新する。
+human review を通したうえで commit pin を更新する。pin を上げたら、repo の `.github/upstream-pins.json` の pin と blob の
+hash も同じ commit のものにする (参照元の更新は sweep が `personal-upstream-pin-check` で見る。`docs/upstream-pin-check.md`)。
 
 出典・取得方法・license は共通 (下記)。pin はファイルごとに表の列に書く (#619 から。それまでは全ファイル共通の pin)。
 各ファイルの追加経緯は記載 Issue 参照。
