@@ -223,3 +223,7 @@ path を書きます (人が shell に貼る文字列なので、ここでも同
 `result.md` が存在し、空でないことを確認してから読みます。欠落または空のときは「完了したが中身が
 無い」空振りです。新しい nonce で同じ brief を **1 回だけ** 再実行し、2 回目も欠落または空なら
 `Blocked at: executor-result` で停止します。pane 出力や token count の表示から結果を捏造しません。
+
+空でなくても `Review process verdict:` の行が無ければ (Codex が verdict を出さずに止まった)、完了として扱わず、
+再実行もせずに `Blocked at: executor-result` で停止します。Reason には Codex が書いた停止の理由を public-safe な
+1 行に要約して添えます (`SKILL.md` §5 の「verdict の無い結果」)。
