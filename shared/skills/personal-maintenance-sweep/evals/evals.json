@@ -1099,6 +1099,48 @@
           "text": "sweep を止めず、ほかの単位を進めるとしている"
         }
       ]
+    },
+    {
+      "id": 55,
+      "name": "resume-running-codex-blocks-new-launch",
+      "prompt": "[前提: Claude Code の session。中断した sweep の run を再開する。state の target_commit は今の HEAD と違う。単位 2 (pending) の units/2/codex-run の run dir に done.txt が無い。単位 3 (audited) の refute-run の run dir には done.txt があり exit=0 で結果も空でない] 前回の sweep の続きを進めて",
+      "expected_output": "単位 2 の Codex の run は done.txt が無いので、まだ動いているとして起動し直さず、run dir を添えて人に返す。人が決めるまで、この repo で Codex を新しく起動しない (ほかの単位の監査・反証も、target_commit が違うときの新しい run も)。done.txt がある単位 3 の run は、target_commit が違うので結果を使わず再実行もしない。local の state の保存は続けてよい。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-relaunch",
+          "text": "done.txt の無い run を起動し直さず、run dir を添えて人に返している"
+        },
+        {
+          "id": "no-new-codex",
+          "text": "人が決めるまで、ほかの単位や新しい run でも Codex を起動しないとしている"
+        },
+        {
+          "id": "stale-result-unused",
+          "text": "target_commit が違う単位 3 の結果を使わず、再実行もしないとしている"
+        }
+      ]
+    },
+    {
+      "id": 56,
+      "name": "audit-only-budget-uses-auditor",
+      "prompt": "[前提: Claude Code の session。監査役は Claude、検証役は Codex。Codex の週の値が有効で使える量が small の検証役の推定にも足りない (検証役が使えない)。Claude の 5h と週の値は有効で、medium の監査役の推定に収まる] この repo を監査して。Issue にはしなくていいので、監査だけの report でいい。",
+      "expected_output": "検証役 (Codex) が使えないので、反証の無い所見は起票しない。user は監査だけの report を選んでいるので、report モードで進める。予算の判定は検証役の tool を外し、監査役 (Claude) の tool だけで当てる。Codex の不足で止めない。Claude の使える量で medium が選べる。検証役が使えないことの確認は予算の判定より先に行う。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "report-mode",
+          "text": "監査だけの report で進め、起票しないとしている"
+        },
+        {
+          "id": "budget-auditor-only",
+          "text": "予算の判定を監査役の tool だけで当て、検証役の不足で止めないとしている"
+        },
+        {
+          "id": "order",
+          "text": "検証役が使えないことの確認を、予算の判定より先に行うとしている"
+        }
+      ]
     }
   ]
 }
