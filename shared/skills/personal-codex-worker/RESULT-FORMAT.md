@@ -41,7 +41,7 @@ Blocked at: authorization | launch-record | preflight | launch-path | clone | ex
 Reason: <public-safe な停止理由>
 Packet: #<issue> — <state の扱い (下記)> / 結果 "### <日付> orchestrator/claude" (書いた場合) / 起動の記録は残す (§1 で起動を見送ったときは、この Issue の記録はまだ無い)
 Run dir: <path> / 退避: <path> (あれば)
-Next step: <人が実行する run script の shell literal と run dir | 動いている worker (pane <id>、分かれば Issue #<N>) の完了を待ってから起動を指示し直す (この Issue の起動の記録はまだ書いていないので、記録の破棄は要らない。§1 で起動を見送った launch-path) | 依頼の更新 | limit の reset 待ち (reset 時刻) | 記録された run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決める (launch-record) | 照合が止めた .git の entry を clone に git を実行する前に人が調べ、残す commit・変更を取り出してから clone を消し、再起動を指示する (worker の終了後の clone) | 退避の止まった段と error を人が確かめ、退避をやり直すか残す変更を clone から取り出してから、再起動を指示する (worker の終了後の clone、退避の command の失敗)>
+Next step: <人が実行する run script の shell literal と run dir | 動いている worker (pane <id>、分かれば Issue #<N>) の完了を待ってから起動を指示し直す (この Issue の起動の記録はまだ書いていないので、記録の破棄は要らない。§1 で起動を見送った launch-path) | 依頼の更新 | 転記しなかった run dir の result.md の path と、gate が止めた行番号と区分 (本文は写さない。人が開いて確かめる。transcription) | limit の reset 待ち (reset 時刻) | 記録された run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決める (launch-record) | 照合が止めた .git の entry を clone に git を実行する前に人が調べ、残す commit・変更を取り出してから clone を消し、再起動を指示する (worker の終了後の clone) | 退避の止まった段と error を人が確かめ、退避をやり直すか残す変更を clone から取り出してから、再起動を指示する (worker の終了後の clone、退避の command の失敗)>
 ```
 
 state の扱い (#412): 止まったことを確かめた停止 (`executor-exit` / `executor-result` / `limit` / `transcription`、
@@ -64,7 +64,7 @@ Blocked at: fetch | trailer | public-safety
 Reason: <public-safe な停止理由>
 Packet: #<issue> — 結果 "### <日付> worker/codex" を転記済み / 結果 "### <日付> orchestrator/claude" に停止を追記 / state: blocked / 次の入口は触らない / 起動の記録は転記で last_run に移した
 Run dir: <path>
-Next step: <fetch の失敗を人が調べる | author が交代するなら新 branch + 新 PR に分ける | origin/main を人が確かめる | gate が止めた行を直す、または警告を人が確かめる>
+Next step: <fetch の失敗を人が調べる | fetch の前の照合が止めた .git の entry を、clone に git を実行する前に人が調べる | author が交代するなら新 branch + 新 PR に分ける | origin/main を人が確かめる | gate が止めた行を直す、または警告を人が確かめる>
 ```
 
 公開先の slug の取得・検証や origin の push URL との照合が失敗したときは `Blocked at: public-safety`。

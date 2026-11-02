@@ -455,7 +455,8 @@ herdr pane wait-output <pane-id> --match CODEX-WORKER-DONE-<nonce> --timeout 300
 - limit の判定は process の終了の後に行う。`done.txt` の exit が 0 でなく、`codex.log` に
   `ERROR: You've hit your usage limit` で始まる行があれば `Blocked at: limit` (`SKILL.md` の「limit」)。待っている
   間にこの文言が見えても、それだけでは止めない。`codex.log` には worker が読んだ file の中身も出るので、行の
-  途中の文言や exit 0 の run は limit としない (#587)。
+  途中の文言や exit 0 の run は limit としない (#587)。exit が 0 でなく limit にも当たらなければ
+  `Blocked at: executor-exit` (pane は残す)。
 
 ## 7. 完了後
 
@@ -527,12 +528,12 @@ ruby -e '
 
 ```sh
 "$preflight" --verify-git-snapshot "$run/preflight.json" --clone "$clone_root" || exit 1
-git -C "$clone" status --porcelain=v1 --untracked-files=all > "$run/wip-status.txt" || exit 1
-git -C "$clone" diff --cached --binary --no-textconv --no-ext-diff > "$run/wip-staged.patch" || exit 1
-git -C "$clone" diff --binary --no-textconv --no-ext-diff > "$run/wip-unstaged.patch" || exit 1
+git -C "$clone_root" status --porcelain=v1 --untracked-files=all > "$run/wip-status.txt" || exit 1
+git -C "$clone_root" diff --cached --binary --no-textconv --no-ext-diff > "$run/wip-staged.patch" || exit 1
+git -C "$clone_root" diff --binary --no-textconv --no-ext-diff > "$run/wip-unstaged.patch" || exit 1
 ( set -o pipefail
-  git -C "$clone" ls-files --others --exclude-standard -z \
-    | tar -C "$clone" --null -T - -cf "$run/wip-untracked.tar" ) || exit 1
+  git -C "$clone_root" ls-files --others --exclude-standard -z \
+    | tar -C "$clone_root" --null -T - -cf "$run/wip-untracked.tar" ) || exit 1
 ```
 
 照合が失敗したら `Blocked at: clone` とし、退避 command を含め clone に git を実行しない。2 行目以降の `exit 1` は
@@ -563,7 +564,7 @@ main の local path)。fetch は **branch を明示した refspec** で行い、
 
 ```sh
 "$preflight" --verify-git-snapshot "$run/preflight.json" --clone "$clone_root" || exit 1
-git -C "$main" fetch --no-tags -- "$clone" "refs/heads/${branch}:refs/heads/${branch}" || exit 1
+git -C "$main" fetch --no-tags -- "$clone_root" "refs/heads/${branch}:refs/heads/${branch}" || exit 1
 ```
 
 照合が失敗したら `Blocked at: fetch` とし、clone を fetch source に使わない。
