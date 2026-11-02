@@ -176,7 +176,9 @@ done
 - identity が空: commit が `useConfigOnly` で落ちるので起動しない。clone の置き場を直す。
 - hook dir が main と違う / hook が無い / dispatcher・gate が配備されていない: public-safety /
   git-identity / ai-trailer が動かないまま worker が commit する状態になりうるので起動しない
-  (gate を迂回する経路を作らない)。
+  (gate を迂回する経路を作らない)。orchestrator は clone の hook の設定を自分で書き換えない。Next step には、main と
+  clone の hook の設定の出所 (repo-local か global か、`core.hooksPath` の値) と、解決した後の hook の dir を人が
+  確かめ、配線を直してから再起動を指示する、と書く。
 - この形は変異で確かめてあります: clone に repo-local な `core.hooksPath` がある / hook dir が別の
   場所を指す / 明示的な空値 / 壊れた config / hook file が無い、はいずれも `Blocked at: clone` に
   なり、main と同じ配線の clone は通ります。
