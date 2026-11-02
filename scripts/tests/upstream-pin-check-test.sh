@@ -102,6 +102,21 @@ File.write(File.join(gh_bin, "gh"), <<~'FAKE')
   routes = JSON.parse(File.read(File.join(dir, "routes.json")))
   route = ARGV.size == 2 && ARGV[0] == "api" ? routes[ARGV[1]] : nil
   exit 1 if route.nil?
+  # {"body": …} の形の route は、期限の test のための振る舞い (sleep / close_and_sleep / orphan) を持てる。
+  if route.is_a?(Hash) && route.key?("body")
+    sleep route["sleep"] if route["sleep"]
+    if route["close_and_sleep"]
+      $stdout.reopen(File::NULL)
+      $stderr.reopen(File::NULL)
+      sleep route["close_and_sleep"]
+    end
+    if route["orphan"]
+      child = Process.spawn("sleep", route["orphan"].to_s, pgroup: route["detached"] ? true : nil)
+      File.write(File.join(dir, "orphan.pid"), child.to_s)
+      Process.detach(child)
+    end
+    route = route["body"]
+  end
   print route.is_a?(String) ? route : JSON.generate(route)
 FAKE
 File.chmod(0o755, File.join(gh_bin, "gh"))
@@ -197,6 +212,87 @@ check("one upstream unverifiable: the other is still checked", rep && rep["findi
   out, _err, st = run_cli(repo, env: ENV_GH)
   rep = JSON.parse(out) rescue nil
   check("#{label}: exit 2 and not_seen", st.exitstatus == 2 && rep && rep["scope"]["not_seen"].any? { |l| l.start_with?("lib-a") })
+end
+
+# tree の entry の形が外れれば、その参照元を確かめられないにする (sha の欠けを「無くなった」、形の外れた sha を
+# 「変わった」と読まない)。見る file でない entry の外れも同じ。残りの参照元は確かめる。
+tree_path = "repos/o/lib/git/trees/#{SHA.('b')}?recursive=1"
+{
+  "short blob sha on a watched file" => { "path" => "src/a.md", "type" => "blob", "sha" => "x" },
+  "missing sha on a watched file" => { "path" => "src/a.md", "type" => "blob" },
+  "unknown type" => { "path" => "src/z", "type" => "link", "sha" => SHA.("5") },
+  "non-object entry" => "src/a.md",
+}.each do |label, entry|
+  r = routes_for("o/lib", SHA.("b"), { "src/b.md" => SHA.("2") })
+  r[tree_path]["tree"] << entry
+  set_routes(gh_dir, r.merge(routes_for("o/other", SHA.("c"), { "docs/c.md" => SHA.("4") })))
+  out, _err, st = run_cli(repo, env: ENV_GH)
+  rep = JSON.parse(out) rescue nil
+  check("#{label}: exit 2 and not_seen", st.exitstatus == 2 && rep && rep["scope"]["not_seen"].any? { |l| l.start_with?("lib-a") })
+  check("#{label}: no finding for the unverifiable upstream", rep && rep["findings"].none? { |x| x["fingerprint"].end_with?("lib-a") })
+  check("#{label}: the other upstream is still checked", rep && rep["findings"].any? { |x| x["fingerprint"].end_with?("lib-b") })
+end
+
+# ---- 時間の上限 (GitHubApi を直接使う。personal-ci-check の test と同じ形) ----
+saved_env = ENV.to_h.slice("PATH", "FAKE_GH_DIR")
+ENV["PATH"] = ENV_GH["PATH"]
+ENV["FAKE_GH_DIR"] = gh_dir
+api_call = lambda do |seconds|
+  started = Time.now
+  err = begin
+    U::GitHubApi.new(repo, Time.now + seconds).json("repos/o/lib")
+    nil
+  rescue U::UpstreamError => e
+    e.message
+  end
+  [err.to_s, Time.now - started]
+end
+alive = lambda do |pid|
+  Process.kill(0, pid)
+  true
+rescue Errno::ESRCH
+  false
+end
+begin
+  set_routes(gh_dir, { "repos/o/lib" => { "sleep" => 30, "body" => {} } })
+  err, took = api_call.call(1)
+  check("time cap: a hanging gh is stopped (#{err}, #{took.round(1)}s)", err.include?("時間が上限") && took < 10)
+
+  # gh の本体は終わったが、子 (同じ group) が stdout を握ったまま: pipe の待ちも期限で止め、子も止める。
+  set_routes(gh_dir, { "repos/o/lib" => { "orphan" => 30, "body" => {} } })
+  err, took = api_call.call(2)
+  check("time cap: a pipe held by a child is bounded (#{err}, #{took.round(1)}s)", err.include?("時間が上限") && took < 10)
+  orphan = File.read(File.join(gh_dir, "orphan.pid")).to_i
+  gone_by = Time.now + 3
+  sleep 0.1 while alive.call(orphan) && Time.now < gone_by
+  check("time cap: the child holding the pipe is stopped", orphan.positive? && !alive.call(orphan))
+
+  # 子が別の group に移って pipe を握る: group を止めても pipe は閉じないが、待ち続けない。
+  set_routes(gh_dir, { "repos/o/lib" => { "orphan" => 30, "detached" => true, "body" => {} } })
+  err, took = api_call.call(2)
+  check("time cap: a pipe held by a child in another group is bounded (#{err}, #{took.round(1)}s)",
+        err.include?("時間が上限") && took < 10)
+  begin
+    Process.kill("KILL", File.read(File.join(gh_dir, "orphan.pid")).to_i)
+  rescue Errno::ESRCH
+    nil
+  end
+
+  # pipe は閉じたが、gh の本体が走り続ける: 本体の終わりの待ちも期限で止める。
+  set_routes(gh_dir, { "repos/o/lib" => { "close_and_sleep" => 30, "body" => {} } })
+  err, took = api_call.call(2)
+  check("time cap: a gh that closed its output and keeps running is bounded (#{err}, #{took.round(1)}s)",
+        err.include?("時間が上限") && took < 10)
+
+  past = U::GitHubApi.new(repo, Time.now - 1)
+  check("time cap: no call after the deadline", begin
+    past.json("repos/o/lib")
+    false
+  rescue U::UpstreamError
+    past.calls.zero?
+  end)
+ensure
+  saved_env.each { |k, v| ENV[k] = v }
 end
 
 # 一覧が symlink・形が外れる: stdout を出さず exit 2。

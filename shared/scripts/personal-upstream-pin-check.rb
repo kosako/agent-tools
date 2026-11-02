@@ -56,6 +56,7 @@ module UpstreamPinCheck
   SEGMENT_RE = /\A[A-Za-z0-9._-]+\z/.freeze
   BRANCH_RE = /\A[A-Za-z0-9._-]{1,100}\z/.freeze
   UPSTREAM_KEYS = %w[name repo pin notice files].freeze
+  TREE_TYPES = %w[blob tree commit].freeze
   PRESCAN = "未実施 (決まった規則の検査で、下調べは要らない)"
 
   class UsageError < StandardError; end
@@ -75,6 +76,8 @@ module UpstreamPinCheck
   # GitHub の API を gh で読む (GET だけ)。呼び出しの回数と時間に上限を置き、超えたら UpstreamError。shell を通さず、
   # env の GH_REPO は渡さない。上限の時刻を過ぎた gh は process group ごと止める (personal-ci-check と同じ作り)。
   class GitHubApi
+    attr_reader :calls
+
     def initialize(dir, deadline)
       @dir = dir
       @deadline = deadline
@@ -297,11 +300,16 @@ module UpstreamPinCheck
       raise UpstreamError, "tree を読めないか、途中で切れている"
     end
 
+    # entry はどれも path・type・sha の形を確かめる。外れた entry が 1 つでもあれば、応答を信じず確かめられないにする
+    # (sha の欠けた entry を「無くなった」、形の外れた sha を「変わった」と読み違えない)。
     blobs = {}
     tree["tree"].each do |e|
-      next unless e.is_a?(Hash) && e["type"] == "blob" && e["path"].is_a?(String) && e["sha"].is_a?(String)
+      unless e.is_a?(Hash) && e["path"].is_a?(String) && !e["path"].empty? && TREE_TYPES.include?(e["type"]) &&
+             e["sha"].is_a?(String) && e["sha"].match?(SHA_RE)
+        raise UpstreamError, "tree の entry の形が外れている"
+      end
 
-      blobs[e["path"]] = e["sha"]
+      blobs[e["path"]] = e["sha"] if e["type"] == "blob"
     end
     changed = []
     removed = []

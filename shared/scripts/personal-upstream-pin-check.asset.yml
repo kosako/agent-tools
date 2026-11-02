@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:91f243742293982d459af28a8111ac1d6d39c0ffa13eed13d837a1e5302f32aa
+  approved_build_id: sha256:d512e525f11927848d7e901fdc6a05978cfd787cc271880ded659e8ab8617b45
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-upstream-pin-check.rb
