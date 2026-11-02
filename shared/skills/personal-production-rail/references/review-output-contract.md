@@ -19,6 +19,16 @@ severity に正規化します。個別 finding に process verdict を付けま
 vendored policy の「APPROVE + 提案」禁止に対し、nit-only の finding を APPROVE と併記できるのは
 意図的な local override です。nit は対応条件や Warning ではなく、任意情報として保持します。
 
+vendored policy の間で検出の条件が食い違うときは、新しい pin の policy を優先します。`review.md` は include の形への
+追随を決めるまで古い pin に据え置いていて (`policies/NOTICE.md`、#622)、`coding.md`・`ai-antipattern.md`・
+`existing-system-respect.md` の新しい条件と食い違う箇所があります。例えば次は、新しい側の条件で判定します。
+
+- 配列・オブジェクトの直接変更: 関数やテストの中で新しく作り、外へ公開しない局所的な蓄積用のコレクションは、
+  その範囲の中で変更してよい (`coding.md` の「状態管理」)。`review.md` の一律の REJECT を当てない。
+- TODO / FIXME: 外部の制約で今は実装できず、その制約と除去の条件が明記されていれば許容する (`coding.md` の
+  「未完成コード」)。Issue 番号が無いことだけでは REJECT にしない。
+- ボーイスカウトと差分の範囲: 今回の変更と因果関係のある問題に絞る (`coding.md`、`existing-system-respect.md`)。
+
 ## process verdict
 
 finding を確定したあと、件数から process verdict を1つだけ集計します。

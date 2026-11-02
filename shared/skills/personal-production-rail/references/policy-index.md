@@ -10,6 +10,9 @@ output contract は lens ではなく出力 schema の companion として別枠
 ### ai-antipattern
 
 - **file**: `policies/ai-antipattern.md`
+- **同梱していない参照**: 「契約根拠のない文言固定テスト検出」は判定の正本を takt の `testing` policy とするが、
+  この環境には vendor していない。その節の表の判定を使い、期待値の文字列が契約 (仕様・公開の出力・docs の約束)
+  に根拠を持つかで判断する。`testing` policy の細目 (自然言語・宣言的資産のテストなど) を前提にしない。
 - **要旨**: AI が生成しがちな仮定・過剰実装・見かけ上の修正を検出する基準(原則8 + 検出観点)。
 - **applies_to(作業種別)**: `generation`(実装)/ `review`(レビュー)/ `debug`(修正)。design 段階では補助。
 - **load_when**: production レール on かつ「コードを書く/直す/レビューする」とき。
