@@ -69,3 +69,15 @@ blob の hash は、参照元の tree から取ります (例: `gh api repos/<ow
 参照元の更新を取り込む (または、確かめて取り込まないと決める) ときは、写しと NOTICE と一緒に、一覧の `pin` と
 `files` の blob の hash を新しい commit のものにします。scripts/tests/upstream-pin-check-test.sh は、一覧の形と、各
 `notice` の file に `pin` が書かれていることを CI で確かめます。
+
+## 運用
+
+- sweep (`personal-maintenance-sweep`) が、HEAD に一覧がある repo の run ごとにかけます。AI を使わない `upstream` の
+  単位として、この script の出力をその単位の結果にします (sweep の `SKILL.md` 手順 3)。所見は決まった規則の比較で、
+  根拠が GitHub の API にしか無いので、反証にかけずに triage・重複の照合・起票へ進めます。script が無い・run 全体が
+  失敗したときは、sweep を止めずに「参照元を確かめられない」と報告します。人が repo で直接かけてもかまいません。
+- fingerprint は参照元ごとに固定 (`.github/upstream-pins.json#upstream-<name>`) です。取り込まないと決めたときも、
+  Issue を not planned で閉じずに、一覧の pin と blob の hash を確かめた commit に進めてから閉じます。not planned で
+  閉じると、sweep の重複の照合は同じ問題を却下として扱い、新しい根拠が無い限り起票し直しません。参照元の更新は同じ
+  fingerprint のまま続くので、次の更新が新しい根拠として扱われるかを照合の判断に任せることになります。pin を進めて
+  閉じれば、次の更新は pin の後の変化として素直に所見になります。

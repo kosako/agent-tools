@@ -136,7 +136,7 @@ else
     end
   end
   reread = list.find { |b| b.start_with?("- 単位が終わるたびに") }
-  if reread.nil? || !clause?(reread, "残量を読み直す (`ci` の単位は AI の枠を使わないので読み直さない)")
+  if reread.nil? || !clause?(reread, "残量を読み直す (`ci` と `upstream` の単位は AI の枠を使わないので読み直さない)")
     errors << "手順 3 の読み直しの bullet に、`ci` の単位の後は読み直さない句が無い"
   end
 end
@@ -147,8 +147,8 @@ if modes.nil?
 else
   list = bullets(modes)
   {
-    "既存の監査結果から始める" => "手順 3 の `ci` の単位は監査の結果に含まれないので、反証の前に足してかける",
-    "中断した run を再開する" => "`ci` の単位は監査で Codex を起動しないので記録が無く、`pending` なら手順 3 のとおり script をかけ直す",
+    "既存の監査結果から始める" => "手順 3 の `ci` と `upstream` の単位は監査の結果に含まれないので、反証の前に足してかける",
+    "中断した run を再開する" => "`ci` と `upstream` の単位は監査で Codex を起動しないので記録が無く、`pending` なら手順 3 のとおり script をかけ直す",
   }.each do |label, c|
     b = find(list, label)
     if b.nil?
@@ -280,8 +280,8 @@ unless clause?(budget, "AI を使わない `ci` の単位が先頭に 1 つ加�
 end
 # 括弧の注釈の中の句は、閉じの「)」まで含めて比べる (句の後ろに否定を足す反転は「)」の前に入れられない)。
 {
-  "(プリセットの推定 ÷ 単位の数。`ci` の単位は数えない)" => "単位の数に `ci` の単位を数えないこと",
-  "(`ci` の単位は AI の枠を使わないので、その後は読み直さない)" => "`ci` の単位の後は読み直さないこと",
+  "(プリセットの推定 ÷ 単位の数。`ci` と `upstream` の単位は数えない)" => "単位の数に `ci` の単位を数えないこと",
+  "(`ci` と `upstream` の単位は AI の枠を使わないので、その後は読み直さない)" => "`ci` の単位の後は読み直さないこと",
 }.each do |c, what|
   errors << "BUDGET.md に#{what}の句が無い" unless squash(budget).include?(squash(c))
 end
