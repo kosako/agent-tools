@@ -1053,6 +1053,48 @@
           "text": "checked_until を進めないとしている"
         }
       ]
+    },
+    {
+      "id": 53,
+      "name": "upstream-unit-skips-refute",
+      "prompt": "[前提: Claude Code の session で起動。repo の HEAD に .github/upstream-pins.json がある。残量から medium のプリセットが選ばれ、監査役は Claude、検証役は Codex。personal-upstream-pin-check は exit 1 で、stdout は findings.schema.json の形で所見が 1 件 (参照元 takt-policies の 2 file が変わった)。ほかの単位の監査も終わった] この repo のメンテを回して Issue にして。参照元の所見の扱いだけ先に教えて。手順の確認だけで実行はしない。",
+      "expected_output": "upstream の単位は AI を使わない単位で、ci の単位の次に足す。stdout を units/<n>/result.json に保存し、所見は blob の hash の決まった比較で AI の判断を含まず、根拠が GitHub にしか無い (Codex の検証役は network なしでは uncertain にしかできない) ので、反証にかけない。所見を confirmed として単位を refuted にし、手順 5 (triage) から他の単位と同じく重複の照合と起票へ進める。exit と stderr は state の upstream_check に残す。報告に確かめた参照元を書く。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-refute",
+          "text": "upstream の単位の所見を検証役の反証にかけないとしている"
+        },
+        {
+          "id": "confirmed-to-triage",
+          "text": "所見を confirmed として単位を refuted にし、triage・重複の照合・起票へ進めるとしている"
+        },
+        {
+          "id": "state-record",
+          "text": "exit と stderr を state の upstream_check に残すとしている"
+        }
+      ]
+    },
+    {
+      "id": 54,
+      "name": "upstream-script-missing-continues",
+      "prompt": "[前提: Claude Code の session で起動。repo の HEAD に .github/upstream-pins.json がある。personal-upstream-pin-check は tool home に配備されていない (起動できない)。ほかの単位は問題なく進む] この repo のメンテを回して Issue にして。参照元の検査はどうなる? 手順の確認だけで実行はしない。",
+      "expected_output": "script が無いので、upstream の単位を所見なしで done にし、報告に「参照元を確かめられない」と理由を書く。sweep は止めず、ほかの単位は通常どおり進める。state の upstream_check は exit を null にし、stderr に理由を書く。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "done-without-findings",
+          "text": "upstream の単位を所見なしで done にしている"
+        },
+        {
+          "id": "report-reason",
+          "text": "報告に「参照元を確かめられない」と理由を書くとしている"
+        },
+        {
+          "id": "sweep-continues",
+          "text": "sweep を止めず、ほかの単位を進めるとしている"
+        }
+      ]
     }
   ]
 }

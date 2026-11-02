@@ -14,7 +14,7 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 
 - 副作用: 監査と反証は read-only で、repo の file を書き換えない。repo の設定は `personal-repo-baseline --check` で
   読むだけで、直さない (手順 0b)。CI の workflow と run の記録は `personal-ci-check` で読むだけ (手順 3 の `ci` の
-  単位)。issues モードでは GitHub に書く (所見の
+  単位)。参照元の pin の後の更新は `personal-upstream-pin-check` で読むだけ (手順 3 の `upstream` の単位)。issues モードでは GitHub に書く (所見の
   Issue の作成、追跡 Issue の作成と本文の更新とコメント、label の作成)。fix モードではさらに、run dir の下の
   linked worktree で docs を直し、branch を push し、PR を作り、review の依頼 / 結果 / follow-up をコメントする
   (`FIX.md`。コメントは personal-review-request の write gate の範囲だけ。merge と配備は sweep の外で、運用 instruction の「個人 project の GitHub の操作と merge」に従う)。書く本文と公開する差分は先に public-safety の gate に通す。local の state と
@@ -48,8 +48,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
     しない (Claude Code で起動し直すよう案内する)。
 - **既存の監査結果から始める**: 会話の中の personal-repo-audit の報告や、Codex の監査の `result.json` が
   あれば、監査をやり直さない。手順 0 (前提) と 0b (repo の設定) と 1 (役割。監査をした側を監査役とみなし、検証役はその反対) と
-  2 (予算。反証から先の分だけを確かめる) を済ませてから、手順 4 の反証から始める。手順 3 の `ci` の単位は
-  監査の結果に含まれないので、反証の前に足してかける。ただし、その監査の対象の
+  2 (予算。反証から先の分だけを確かめる) を済ませてから、手順 4 の反証から始める。手順 3 の `ci` と `upstream` の
+  単位は監査の結果に含まれないので、反証の前に足してかける。ただし、その監査の対象の
   commit が分かっていて今の `HEAD` と違う、または分からないのに監査のあとで default branch が進んでいる
   とき、または 未 commit の変更を含めて読んだ結果 (repo-audit の報告の「未 commit の変更」が「なし」でない) の
 ときは、結果が対象の commit と合わないので使わず、監査からやり直すかを確認する。
@@ -61,8 +61,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   残す (起票済みの Issue は手順 6 の重複の照合で拾われる)。
   - **Codex の run を先に回収する (#421)**: どちらの場合も、Codex を起動し直す前に、次の段で Codex を起動する単位の
     run の記録を見る: `pending` の単位は監査の `units/<n>/codex-run`、`audited` の単位は反証の run の `refute-run`
-    (`RECORD.md`)。`refuted` と `done` の単位は、回収済みなので見ない (状態を戻さない)。`ci` の単位は監査で
-    Codex を起動しないので記録が無く、`pending` なら手順 3 のとおり script をかけ直す。
+    (`RECORD.md`)。`refuted` と `done` の単位は、回収済みなので見ない (状態を戻さない)。`ci` と `upstream` の単位は
+    監査で Codex を起動しないので記録が無く、`pending` なら手順 3 のとおり script をかけ直す。
     - 記録した run dir に、その run の nonce (run script の先頭に埋めた値) の `done.txt` が無ければ、Codex がまだ
       動いている (止まったとは限らない) として、`target_commit` に関わらず起動し直さず、run dir を添えて人に返す
       (`CODEX-LAUNCH.md` の「完了の判定」の実行中。止めるかは人が決める)。
@@ -157,8 +157,9 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 
 監査の単位は「観点 × 領域」です (領域は依頼の範囲、またはプリセットの分け方。[BUDGET.md](BUDGET.md))。
 どのプリセットでも依頼の範囲によらず、単位の先頭に、AI を使わない `ci` の単位 (観点 `ci` × 領域
-`.github/workflows/`) を 1 つ足します (#541。fix の入口 (b) の run は監査をしないので足さない)。
-単位ごとに次を行います。
+`.github/workflows/`) を 1 つ足します (#541)。続けて、HEAD の commit に `.github/upstream-pins.json` がある repo では、
+AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/upstream-pins.json`) を 1 つ足します (#623)。fix の
+入口 (b) の run は監査をしないので、どちらも足しません。単位ごとに次を行います。
 
 - **`ci` の単位**: 配備済みの `personal-ci-check` (`<tool home>/agent-tools/scripts/`。規則と出力の正本は agent-tools
   の `docs/ci-check.md`) を、`--since` と `--until` で run の記録の窓を付け、`--window-out` に
@@ -186,13 +187,27 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   - exit と stderr、窓 (使った結果の since と until、block の basis と unseen_from、かけた回数) と、使った結果の
     `events` (確かめられないとき、上の所見なしの `done` のときは null) は state の単位に残す (`RECORD.md`)。
     窓の時刻 (`ci.json`) を進めるかは手順 8 で決める。
+- **`upstream` の単位**: 配備済みの `personal-upstream-pin-check` (`<tool home>/agent-tools/scripts/`。規則と出力の
+  正本は agent-tools の `docs/upstream-pin-check.md`) を今の repo にかける。script は HEAD の commit の一覧を読み、参照元
+  ごとに GitHub の API (GET だけ) で default branch の先頭の tree の blob の hash を比べる。参照元の本文は読まない。AI は
+  使わないので監査役によらず同じ手順で、Codex の session では `pending` のまま残し、Claude Code の session の再開で
+  かける (`ci` の単位と同じ)。
+  - exit 0 か 1、または exit 2 で stdout が空でない (確かめられない参照元がある) とき: stdout が repo-audit の
+    `findings.schema.json` の形なら `units/<n>/result.json` に保存する。所見は決まった規則の比較 (blob の hash) で
+    AI の判断を含まず、根拠は GitHub にしか無い (検証役が network なしで確かめると uncertain にしかならない) ので、
+    反証にかけず、所見を confirmed として単位を `refuted` にし、手順 5 から他の単位と同じく進める ([REFUTE.md](REFUTE.md))。
+    `scope.not_seen` の参照元は報告に書く (手順 9)。
+  - exit 2 で stdout が空 (run 全体の失敗)、stdout が上の形でない、または script が無いとき: 所見なしで `done` にし、
+    報告に「参照元を確かめられない」と理由 (stderr) を書く。sweep は止めない。
+  - exit と stderr は state の単位の `upstream_check` に残す (`RECORD.md`)。
 - **監査役が Claude**: personal-repo-audit の手順で監査し (観点の fan-out は repo-audit のとおり)、結果を
   repo-audit の `findings.schema.json` の形の JSON にして run dir に保存する。
 - **監査役が Codex**: personal-repo-audit の `CODEX-LAUNCH.md` の起動で Codex に監査させる。effort は
   プリセットの値を渡す。model は [BUDGET.md](BUDGET.md) の `personal-codex-model-selection` の出力を渡す (採用は
   exit 0 のときだけで、それ以外は開始しない。空なら model を渡さない)。起動の前に、run dir の path を
   `units/<n>/codex-run` に書く (再開で回収するため。`RECORD.md`。#421)。
-- 単位が終わるたびに local の state を保存し、残量を読み直す (`ci` の単位は AI の枠を使わないので読み直さない)。
+- 単位が終わるたびに local の state を保存し、残量を読み直す (`ci` と `upstream` の単位は AI の枠を使わないので
+  読み直さない)。
   停止の条件 ([BUDGET.md](BUDGET.md)) に当たったら、残りの単位は state に残して次の run に回す。
 
 ### 4. 反証する (検証役)
@@ -289,6 +304,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 - CI の検査 (手順 3 の `ci` の単位): 確かめられない file (`scope.not_seen`)、または確かめられない (理由)。点検した
   run の記録の窓と、窓の時刻を進めたか (進めないときは理由)。見なかった期間 (`basis` が `capped`、かけ直しで縮めた) と、
   `ci.json` を読めない (`unreadable`) ことも書く。所見は他の単位と同じく、上の起票・重複・反証の内訳に数える
+- 参照元の検査 (手順 3 の `upstream` の単位。一覧がある repo だけ): 確かめた参照元と、確かめられない参照元
+  (`scope.not_seen`)、または確かめられない (理由)。所見は上の起票・重複の内訳に数える (反証にはかけない)
 - 次の run への申し送り
 
 ## 停止と縮小
@@ -307,6 +324,7 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 | GitHub に届かない (issues モード) | report モードに切り替えるかを確認する |
 | repo の設定を確かめられない (`personal-repo-baseline` が無い、exit 2) | sweep は止めない。報告に「確かめられない」と理由を書く |
 | CI を確かめられない (`personal-ci-check` が無い、exit 2 で stdout が空、stdout が所見の JSON の形でない) | sweep は止めない。`ci` の単位を所見なしで `done` にし、報告に理由を書く |
+| 参照元を確かめられない (`personal-upstream-pin-check` が無い、exit 2 で stdout が空、stdout が所見の JSON の形でない) | sweep は止めない。`upstream` の単位を所見なしで `done` にし、報告に理由を書く |
 | run の記録を確かめられない (`personal-ci-check` の `--window-out` の `events` が `checked` でない) | 窓の始まりを until との中間まで遅らせて 2 回までかけ直す。それでも確かめられなければ静的な検査の結果で進め、窓の時刻は進めない |
 | fix モードで local の HEAD が remote の default branch と違う | fix を始めない。未 push の commit や分岐を人に確認する |
 | fix モードで所見に既存の open PR / branch がある、または同じ file を他の open PR が触る | 新しく作らず、再開か延期にする (close 済み未 merge の PR は人に確認) |
