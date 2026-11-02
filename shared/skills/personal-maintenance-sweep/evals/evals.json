@@ -1032,6 +1032,27 @@
           "text": "使った結果の events を state の ci_check に写している"
         }
       ]
+    },
+    {
+      "id": 52,
+      "name": "ci-unusable-output-does-not-advance",
+      "prompt": "[前提: Claude Code の session。ci.json の checked_until は 5 日前。personal-ci-check は exit 1 だが、stdout は JSON として読めない (途中で切れている)。--window-out の file の events は checked で、since と until は渡した窓と同じ。ほかの単位は refuted で、起票の上限には当たらない] この repo のメンテを回して Issue にして。CI の扱いだけ先に教えて。手順の確認だけで実行はしない。",
+      "expected_output": "stdout が findings.schema.json の形でないので、ci の単位は所見なしで done にし、報告に「CI を確かめられない」と理由を書く (sweep は止めない)。出力を所見として使わなかったので、--window-out の events が checked でも state の ci_check.events は null にする。手順 8 の条件 (events が checked) を満たさないので、ci.json の checked_until は進めない (5 日前のまま)。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "done-without-findings",
+          "text": "形の外れた stdout を所見にせず、ci の単位を所見なしの done にしている"
+        },
+        {
+          "id": "events-null",
+          "text": "events が checked でも、state の ci_check.events を null にしている"
+        },
+        {
+          "id": "no-advance",
+          "text": "checked_until を進めないとしている"
+        }
+      ]
     }
   ]
 }

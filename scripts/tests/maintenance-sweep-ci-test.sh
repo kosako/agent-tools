@@ -128,6 +128,7 @@ else
         "`units/<n>/result.json` に保存して `audited` にし、他の単位と同じく反証へ進む",
         "exit 2 で stdout が空、stdout が上の形でない、または script が無いとき: 所見なしで `done` にし、" \
         "報告に「CI を確かめられない」と理由を書く",
+        "出力を所見として使わなかったので、`--window-out` の file の `events` が `checked` でも、state には null を残す",
       ],
     }.each do |kind, clauses|
       missing = clauses.reject { |c| kind == :bare ? bare_clause?(ci, c) : clause?(ci, c) }

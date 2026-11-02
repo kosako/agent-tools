@@ -31,6 +31,9 @@ review:
   # docs/skill-routing-contracts.md の Runtime inventory に直したため build_id が変わった。private log の
   # read-only 境界と非転記規律の文言は変えていない。author ≠ reviewer の再レビューはこの変更の PR の
   # cross-review で行い、approved_build_id を焼き直す。
+  # 2026-11-02 (#557): 片方の agent のログが無い・読めないときの片側だけの report の扱いを足したため build_id が
+  # 変わった。private log の read-only 境界と非転記規律の文言は変えていない。author ≠ reviewer の再レビューは
+  # この変更の PR の cross-review で行い、approved_build_id を焼き直す。
   human_review: approved
-  approved_build_id: sha256:c47aa62eb840a7e427a9a26d298eb9a44fbf4256a735c8de248e7ee0d246e2f9
+  approved_build_id: sha256:8421537f6b3ebabf24402cdb430adfdd7e9c613affe6045cb42bc913b2fc2378
   approved_artifact_kind: skill

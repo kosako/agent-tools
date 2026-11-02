@@ -66,8 +66,10 @@ errors << "#{review}/RESULT-FORMAT.md に `Status: RUNNING` の雛形が無い" 
 request = "shared/skills/personal-review-request/SKILL.md"
 check.call(request, "### 3. レビュー実行", "executor の RUNNING の扱い",
            "executor が `Status: RUNNING` (wait が尽きても review が動いている。#421) を返したら、結果のコメントは投稿せず、同じ対象の review を起動し直さない。")
+check.call(request, "### 3. レビュー実行", "RUNNING の判断の主体",
+           "返った pane と run dir を人に示し、続行か中断かを人が決める (executor の `RESULT-FORMAT.md`)。")
 check.call(request, "### 3. レビュー実行", "RUNNING の回収",
-           "返った run dir の `done.txt` を待って executor と同じ続行条件で回収し、回収できたら手順 4 に進む。")
+           "続行なら、その run dir の `done.txt` を待って executor と同じ続行条件で回収し、回収できたら手順 4 に進む。")
 
 launch = "shared/skills/personal-repo-audit/CODEX-LAUNCH.md"
 check.call(launch, "## 完了の判定", "done.txt だけで判定する規則",
