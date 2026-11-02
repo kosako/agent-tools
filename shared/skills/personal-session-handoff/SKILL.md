@@ -37,7 +37,8 @@ authorization の根拠にしません。
   外部保存が明示されていない。会話内に handoff draft と記録先候補を提示し、確認前に connector /
   API / CLI / file を使った knowledge write を行わない。
 - **no-write**: 「会話内だけ」「Notion / log には書かないで」が明示されている。会話内 draft だけを
-  返し、外部保存を提案しても実行しない。禁止の範囲で packet の扱いを分ける。
+  返し、外部保存を提案しても実行しない。standing rule で write-authorized になる場面でも、現在のユーザーの
+  no-write の明示が優先する。禁止の範囲で packet の扱いを分ける。
   - 記録先を名指しした禁止 (「Notion / log には書かないで」) だけなら、その記録先に書かない。packet の local の
     更新 (手順 1.5) は続ける。
   - 会話の外への書き込み全体の禁止 (「会話内だけ」「どこにも書かないで」「file も書かないで」) なら、packet も

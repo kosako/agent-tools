@@ -129,7 +129,7 @@
     },
     {
       "id": 6,
-      "prompt": "今日はここまで。会話内で引き継ぎをまとめるだけにして、Notion やログには書かないで。",
+      "prompt": "[前提: この session で Issue #612 の worker として作業し、.agent-packets/612.md がある (personal-packet check は exit 0)] 今日はここまで。会話内で引き継ぎをまとめるだけにして、Notion やログには書かないで。",
       "expected_output": "no-write と判定し、到達点・判断・未完・次の一手・次回入口を会話内 draft として返す。Notion、ログ、その他の external knowledge sink を更新しない。「会話内で…まとめるだけ」は会話の外への書き込み全体の禁止なので、packet の local の更新もせず、packet に写す予定だった内容を draft に含め、packet を更新しなかったことを添える。",
       "files": [],
       "assertions": [
@@ -140,6 +140,10 @@
         {
           "id": "still-provides-draft",
           "text": "外部保存しなくても、再開に必要な handoff draft と次回入口を会話内に提示している"
+        },
+        {
+          "id": "no-packet-update",
+          "text": "会話の外への書き込み全体の禁止として、packet (.agent-packets/612.md) も更新しないとしている"
         }
       ]
     },
@@ -396,6 +400,27 @@
         {
           "id": "no-publish",
           "text": "Issue コメントへの publish をしていない"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "name": "no-write-conversation-only-skips-packet",
+      "prompt": "[前提: この session で Issue #612 の worker として作業し、.agent-packets/612.md がある (personal-packet check は exit 0)。Notion への記録の standing rule がある] 今日はここまで。引き継ぎは会話内だけでいい。",
+      "expected_output": "「会話内だけ」は会話の外への書き込み全体の禁止なので、standing rule があっても Notion に書かず、Issue コメントにも publish しない。packet の local の更新 (手順 1.5) もしない。packet に写す予定だった 結果 の節と 次の入口 を会話内の draft に含め、packet を更新しなかったことを添える。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-packet-update",
+          "text": "packet を名指しされていなくても、packet (.agent-packets/612.md) を更新しないとしている"
+        },
+        {
+          "id": "no-notion-despite-rule",
+          "text": "standing rule があっても Notion に書いていない"
+        },
+        {
+          "id": "packet-content-in-draft",
+          "text": "packet に写す予定だった内容を draft に含め、更新しなかったことを添えている"
         }
       ]
     }
