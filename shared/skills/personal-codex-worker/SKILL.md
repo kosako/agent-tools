@@ -299,7 +299,8 @@ herdr 経由の起動、待ち方、限界、pane の後始末、退避の comma
   あれば `Blocked at: limit` (`personal-maintenance-sweep` の `BUDGET.md` と同じ判定)。行の途中の文言や exit 0 の
   run は limit としない (`codex.log` には worker が読んだ file の中身も出るので、この skill の文書や eval を読むと
   同じ文言が現れる。#587)。自動で再起動しない (limit の reset を待つ。残量の扱いは
-  `personal-project-operating-loop` の「割当」)。
+  `personal-project-operating-loop` の「割当」)。`done.txt` の exit が 0 でなく limit にも当たらない run は
+  `Blocked at: executor-exit` (worker の失敗。自動で再起動しない)。
 - **空振り**: `done.txt` が `exit=0` なのに `result.md` が欠落 / 空なら、新しい nonce で同じ brief を
   **1 回だけ** 再実行し、2 回目も空なら `Blocked at: executor-result`。worker が commit 済みなら
   再実行は同じ clone で続きから (brief は同じ)。再実行は**新しい run dir** で行い、起動の記録の `run` を
@@ -337,7 +338,9 @@ draft に留めます (起動の記録は消さずに残す)。
     注記する。置き換えるのは path の区切りで一致した path の文字列だけで、本文の要約や言い換えはしない。
     名前の途中で一致するなど path と判定できない出現は置き換えずに残し、通し直した gate が止める。
   - それ以外 (home-path 以外の finding を 1 つでも含む exit 1、exit 2、置き換えた版も gate を通らない) は
-    転記せず、`Blocked at: transcription` として本文を人に見せる (packet に secret / 実 path を写さない)。
+    転記せず、`Blocked at: transcription` で止める。本文は packet にも停止結果にも写さず (secret / 実 path を
+    含みうるので、session の返答にも出さない)、run dir の `result.md` の path と、gate が止めた行番号と区分を
+    示して、人が自分で開いて確かめる。
     secret・token の形や local pattern は置き換えても意味が戻らず、worker が漏らしかけている兆候でも
     あるので、自動では扱わない。
 - **止まっている (質問・失敗・limit)**: 最終 message の有無にかかわらず `state: blocked`。最終
@@ -378,9 +381,11 @@ draft に留めます (起動の記録は消さずに残す)。
 
 worker の最終 message が「完了」で、`依頼` の受け入れ条件を満たしたと orchestrator が判断したら:
 
-1. **回収 (fetch)**: worker の commit は clone の中にしかないので、main へ
-   `git -C <main> fetch <clone path> <branch>:<branch>` で取り込む (network 不要)。fetch が失敗したら
-   `Blocked at: fetch`。以降の検査と push は main 側で行う。
+1. **回収 (fetch)**: worker の commit は clone の中にしかないので、main へ取り込む (network 不要)。先に
+   clone の `.git` を起動時の snapshot と照合し (`--verify-git-snapshot`)、通ったら preflight の `clone_root`
+   (照合した物理 path) を source にして、branch を明示した refspec で fetch する (command は `LAUNCH.md` §9)。
+   照合か fetch が失敗したら `Blocked at: fetch` で、clone を fetch の source に使わない。以降の検査と push は
+   main 側で行う。
 2. **trailer 検査**: PR に含まれる追加 commit (fetch 済みの `origin/main` との merge-base から
    `refs/heads/<branch>` まで。fetch した branch は checkout しないので `HEAD` を対象にしない。
    local の main を base にしない) の trailer が **すべて Codex のみ** (Codex 以外の AI の trailer =
