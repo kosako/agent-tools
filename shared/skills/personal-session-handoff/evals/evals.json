@@ -130,7 +130,7 @@
     {
       "id": 6,
       "prompt": "今日はここまで。会話内で引き継ぎをまとめるだけにして、Notion やログには書かないで。",
-      "expected_output": "no-write と判定し、到達点・判断・未完・次の一手・次回入口を会話内 draft として返す。Notion、ログ、file、その他の external knowledge sink を更新しない。",
+      "expected_output": "no-write と判定し、到達点・判断・未完・次の一手・次回入口を会話内 draft として返す。Notion、ログ、その他の external knowledge sink を更新しない。「会話内で…まとめるだけ」は会話の外への書き込み全体の禁止なので、packet の local の更新もせず、packet に写す予定だった内容を draft に含め、packet を更新しなかったことを添える。",
       "files": [],
       "assertions": [
         {
@@ -354,6 +354,48 @@
         {
           "id": "not-blocking",
           "text": "文体の指摘で publish を止めていない"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "name": "no-write-broad-skips-packet",
+      "prompt": "[前提: この session で Issue #612 の worker として作業し、.agent-packets/612.md がある (personal-packet check は exit 0)] 今日はここまで。どこにも書かないで、引き継ぎは会話の中だけでいい。packet も触らないで。",
+      "expected_output": "会話の外への書き込み全体を禁じた no-write。Notion・ログ・Issue コメントに書かず、packet の local の更新 (手順 1.5) もしない。到達点・判断・未完・次の一手と、packet に写す予定だった 結果 の節と 次の入口 を会話内の draft に含め、packet を更新しなかったことを添える。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-packet-update",
+          "text": "packet (.agent-packets/612.md) を更新しないとしている"
+        },
+        {
+          "id": "packet-content-in-draft",
+          "text": "packet に写す予定だった内容を draft に含め、更新しなかったことを添えている"
+        },
+        {
+          "id": "no-external-write",
+          "text": "Notion・ログ・Issue コメントに書いていない"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "name": "no-write-named-sink-keeps-packet",
+      "prompt": "[前提: この session で Issue #612 の worker として作業し、.agent-packets/612.md がある (personal-packet check は exit 0)。Notion への記録の standing rule は無い] 今日はここまで。Notion には書かないで。",
+      "expected_output": "記録先を名指しした no-write なので、Notion には書かない (外部保存を提案しても実行しない)。packet の local の更新 (手順 1.5) は external write ではないので続ける (結果 に追記、worker なので 次の入口 を上書き、updated を今の日時に)。Issue コメントへの publish は write-authorized ではないのでしない。会話内に handoff の draft と次回の入口を返す。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-notion",
+          "text": "Notion に書いていない"
+        },
+        {
+          "id": "packet-updated",
+          "text": "packet の local の更新は続けるとしている"
+        },
+        {
+          "id": "no-publish",
+          "text": "Issue コメントへの publish をしていない"
         }
       ]
     }
