@@ -1320,7 +1320,7 @@
       "id": 50,
       "name": "executor-exit-nonzero-without-limit",
       "prompt": "[前提: Claude Code の session で、packet #440 の Codex worker を herdr 経由で起動した。done.txt は nonce が一致し exit=2。codex.log に「ERROR: You've hit your usage limit」で始まる行は無い。result.md は空でない] worker が終わったみたい。packet にどう記録して、私に何を返す? 手順確認のみ。",
-      "expected_output": "続行条件 (exit=0) を満たさないので転記へ進まない。exit が 0 でなく limit の行も無いので Blocked at: executor-exit (worker の失敗) とする。自動で再起動しない。state: blocked にし、最終 message があれば転記の規則で、無ければ orchestrator/claude の見出しで停止理由 (exit code、codex.log の末尾の public-safe な要約) を書く。起動の記録は消さず、pane は残す。",
+      "expected_output": "続行条件 (exit=0) を満たさないので、正常な完了として §7 の PR の手順へ進まない。exit が 0 でなく limit の行も無いので Blocked at: executor-exit (worker の失敗) とする。自動で再起動しない。state: blocked にし、最終 message があれば転記の規則で、無ければ orchestrator/claude の見出しで停止理由 (exit code、codex.log の末尾の public-safe な要約) を書く。起動の記録は消さず、pane は残す。",
       "files": [],
       "assertions": [
         {
@@ -1334,6 +1334,10 @@
         {
           "id": "blocked-keeps-record",
           "text": "state: blocked にし、起動の記録と pane を残すとしている"
+        },
+        {
+          "id": "records-final-message",
+          "text": "空でない result.md (最終 message) は gate に通してから worker/codex の見出しで packet の 結果 に記録するとしている (PR の手順へは進まない)"
         }
       ]
     }
