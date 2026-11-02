@@ -936,6 +936,27 @@
           "text": "読み取りに無い effort の -c を書かず、固定の flag を保ち、-p を使っていない"
         }
       ]
+    },
+    {
+      "id": 39,
+      "name": "no-verdict-result-blocks",
+      "prompt": "[前提: commit mode の explicit second opinion。herdr 経由で起動し、done.txt は nonce が一致して exit=0。result.md は空でないが、Review process verdict の行が無く、「対象の commit の親の tree の object を読めないので verdict を出さずに止める」とだけ書かれている] Codex の結果が返ってきた。どう返す?",
+      "expected_output": "result.md は空でないが Review process verdict の行が無いので、完了として扱わない。Blocked at: executor-result とし、Reason に Codex が書いた停止の理由 (object を読めない) を public-safe な 1 行で添える。同じ理由で止まるので再実行しない。結果の本文を verdict の代わりに使わない。Independence: not-established。pane は続行条件を満たさないので閉じない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "executor-result",
+          "text": "verdict の行が無い結果を Blocked at: executor-result としている"
+        },
+        {
+          "id": "no-rerun",
+          "text": "再実行しないとしている"
+        },
+        {
+          "id": "no-verdict-made",
+          "text": "結果の本文から verdict を作らず、Independence を not-established としている"
+        }
+      ]
     }
   ]
 }

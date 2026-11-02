@@ -257,7 +257,8 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
   executor の run dir) を結果なしで保存し、結果が返ったら verdict / finding / コメントの識別子を書き足します。結果を
   採用するときも、PR の head が review した OID と同じであることを確かめます。
 - 再開で `reviewing` の記録に結果の無い round があれば、新しい round を起動する前にその run dir の `done.txt` と
-  `result.md` を回収します (nonce 一致・exit=0・空でない result)。回収できなければ (run dir が無い、結果が無い) 完了した
+  `result.md` を回収します (`personal-codex-review` の続行条件。nonce 一致・exit=0・空でない result・`Review process verdict:` の
+  行がある)。verdict の行が無い結果は、回収できたものとして数えない。回収できなければ (run dir が無い、結果が無い) 完了した
   回数を確定できないので、その round を未完として `blocked` にし、人に渡します (4 回目を起動する余地を作らない)。
 - 指摘の扱い: 🔴 must は修正の仕様の範囲内で妥当なものだけ直す (直して commit を足したら、追加の push の前に
   「検証」をやり直す)。範囲外の must や契約の変更が要る must は、scope を広げず `blocked` にして人に渡す。同じ round に

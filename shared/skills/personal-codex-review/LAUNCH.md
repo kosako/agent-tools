@@ -48,7 +48,8 @@ provider の `-c` は、読み取りの出力に `provider` があるときだ�
 
 完了の正本は `done.txt` です (nonce が一致し `exit=0`)。端末に出る同じ行 (sentinel) は
 `herdr pane wait-output` の起床信号として使い、判定は file で行います。どの経路でも、続行条件は
-「`done.txt` の nonce 一致と `exit=0`」かつ「`result.md` が存在し空でない」の両方です。
+「`done.txt` の nonce 一致と `exit=0`」かつ「`result.md` が存在し空でない」かつ「`result.md` に
+`Review process verdict:` の行がある」の 3 つです (結果の採用、pane の後始末、後からの回収のどれも同じ)。
 
 ### model / effort の読み取り
 
@@ -188,7 +189,7 @@ pane の名前は、PR の review なら `review-<PR 番号>` です。PR の無
   読みます。その run の `done.txt` を確かめる前に、同じ対象の review を起動し直しません (2 本目が並んで走る)。
 - `done.txt` の `exit=` が 0 以外なら `Blocked at: executor-exit` とし、pane の末尾を public-safe に
   要約して Reason に書きます。
-- **pane の後始末**: 続行条件 (`done.txt` の nonce 一致・`exit=0`、空でない `result.md`) を満たした
+- **pane の後始末**: 続行条件 (`done.txt` の nonce 一致・`exit=0`、空でない `result.md`、verdict の行) を満たした
   ときは、`herdr pane read <pane-id> --source recent-unwrapped --lines 200` の出力 (JSON) を
   そのまま `<run dir>/pane.log` に保存し、file が空でないことを確認してから
   `herdr pane close <pane-id>` で閉じます。text field だけを JSON parser で抜くと制御文字で
@@ -223,3 +224,7 @@ path を書きます (人が shell に貼る文字列なので、ここでも同
 `result.md` が存在し、空でないことを確認してから読みます。欠落または空のときは「完了したが中身が
 無い」空振りです。新しい nonce で同じ brief を **1 回だけ** 再実行し、2 回目も欠落または空なら
 `Blocked at: executor-result` で停止します。pane 出力や token count の表示から結果を捏造しません。
+
+空でなくても `Review process verdict:` の行が無ければ (Codex が verdict を出さずに止まった)、完了として扱わず、
+再実行もせずに `Blocked at: executor-result` で停止します。Reason には Codex が書いた停止の理由を public-safe な
+1 行に要約して添えます (`SKILL.md` §5 の「verdict の無い結果」)。

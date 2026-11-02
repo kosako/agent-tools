@@ -270,7 +270,8 @@ command は **この skill の directory にある `LAUNCH.md` を読んで、�
   適用される前に走るので、引用の破綻はそのまま呼び出し元の権限での command 置換になる。
 - **完了の正本は `done.txt`** (nonce が一致し `exit=0`)。端末に出る sentinel は起床信号で、判定は
   file で行う。どの経路でも続行条件は「`done.txt` の nonce 一致と `exit=0`」かつ「`result.md` が
-  存在し空でない」の両方。`exit=` が 0 以外、または codex の process が居ないと確認できて `done.txt` が
+  存在し空でない」かつ「`result.md` に `Review process verdict:` の行がある」の 3 つ (結果の採用、pane の後始末、
+  再開や RUNNING の後の回収のどれも、この 3 つで判定する)。`exit=` が 0 以外、または codex の process が居ないと確認できて `done.txt` が
   無ければ `Blocked at: executor-exit`。
 - **待ち方 (#421)**: herdr 経由では、wait の timeout ごとに pane の foreground process で codex の生存を見る
   (`personal-codex-worker` と同じ判定。判定できないときは「消滅」に倒さない)。生きていれば wait を繰り返し
@@ -284,6 +285,10 @@ command は **この skill の directory にある `LAUNCH.md` を読んで、�
   (pane があれば閉じず)、run dir を添えて返す。止めるかは人が決める (手順は `LAUNCH.md`)。
 - **空振り**: `result.md` が欠落または空なら、新しい nonce で同じ brief を **1 回だけ** 再実行し、
   2 回目も空なら `Blocked at: executor-result`。pane 出力や token count の表示から結果を捏造しない。
+- **verdict の無い結果**: `result.md` が空でなくても、`Review process verdict:` の行が無いとき (Codex が brief の
+  規則で verdict を出さずに止まった。例えば commit mode で必要な object を読めない) は、完了として扱わず
+  `Blocked at: executor-result` とする。Reason には Codex が書いた停止の理由を public-safe な 1 行に要約して添え、
+  再実行はしない (同じ理由で止まるため)。結果の本文を verdict の代わりに使わない。
 - **pane の後始末**: 続行条件を満たしたときだけ、pane の生出力を `<run dir>/pane.log` に保存し、
   空でないことを確認してから閉じる。満たさないとき (exit≠0、空振りの再実行が尽きた、途中で
   BLOCKED、RUNNING) は閉じず、調べる必要がある pane だけを残す。固定名の pane を使い回さない。

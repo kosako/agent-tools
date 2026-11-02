@@ -60,6 +60,10 @@ check.call("#{review}/SKILL.md", "## 5. 実行と完了判定", "§5 の起動�
            "その前に同じ対象の review を起動し直さない (2 本目が並んで走る)。")
 check.call("#{review}/SKILL.md", "## 6. 返却形式", "§6 の RUNNING の返却",
            "wait が尽きても review が動いているときは verdict を作らず、`Status: RUNNING`、pane id・run dir・nonce、Next step (pane を見て続行か中断かを人が決める。続行なら `done.txt` を待って同じ続行条件で回収する。run script を再実行しない)、`Independence: not-established` を返す (#421)。")
+check.call("#{review}/SKILL.md", "## 5. 実行と完了判定", "続行条件の verdict の行",
+           "かつ「`result.md` に `Review process verdict:` の行がある」の 3 つ (結果の採用、pane の後始末、再開や RUNNING の後の回収のどれも、この 3 つで判定する)。")
+check.call("#{review}/LAUNCH.md", "### 結果 file の判定 (空振り)", "verdict の無い結果で止める規則",
+           "空でなくても `Review process verdict:` の行が無ければ (Codex が verdict を出さずに止まった)、完了として扱わず、再実行もせずに `Blocked at: executor-result` で停止します。")
 format = read.call("#{review}/RESULT-FORMAT.md")
 errors << "#{review}/RESULT-FORMAT.md に `Status: RUNNING` の雛形が無い" unless format.include?("```text\nStatus: RUNNING\nPane: <pane id> / Run dir: <path> / Nonce: <nonce>\n")
 
