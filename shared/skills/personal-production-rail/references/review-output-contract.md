@@ -16,18 +16,12 @@ vendored policy 内の `REJECT` / `Warning` は finding の分類基準として
 severity に正規化します。個別 finding に process verdict を付けません。
 
 出力語彙・集計・対応主体について vendored policy と競合する場合は、この自前 contract を優先します。
-vendored policy の「APPROVE + 提案」禁止に対し、nit-only の finding を APPROVE と併記できるのは
-意図的な local override です。nit は対応条件や Warning ではなく、任意情報として保持します。
+vendored の `review.md` は Warning と改善提案を issue に数えず、finding の欄にも入れません。この contract は、
+任意の改善を ⚪ nit として finding に残し、nit だけなら APPROVE と併記します (意図的な local override)。nit は
+対応条件や Warning ではなく、任意情報として保持します。
 
-vendored policy の間で検出の条件が食い違うときは、新しい pin の policy を優先します。`review.md` は include の形への
-追随を決めるまで古い pin に据え置いていて (`policies/NOTICE.md`、#622)、`coding.md`・`ai-antipattern.md`・
-`existing-system-respect.md` の新しい条件と食い違う箇所があります。例えば次は、新しい側の条件で判定します。
-
-- 配列・オブジェクトの直接変更: 関数やテストの中で新しく作り、外へ公開しない局所的な蓄積用のコレクションは、
-  その範囲の中で変更してよい (`coding.md` の「状態管理」)。`review.md` の一律の REJECT を当てない。
-- TODO / FIXME: 外部の制約で今は実装できず、その制約と除去の条件が明記されていれば許容する (`coding.md` の
-  「未完成コード」)。Issue 番号が無いことだけでは REJECT にしない。
-- ボーイスカウトと差分の範囲: 今回の変更と因果関係のある問題に絞る (`coding.md`、`existing-system-respect.md`)。
+vendored policy の間で検出の条件が食い違うときは、新しい pin の policy を優先します (pin は `policies/NOTICE.md`
+の表。#619 で file ごとの pin にした)。
 
 ## process verdict
 
@@ -40,7 +34,8 @@ finding を確定したあと、件数から process verdict を1つだけ集計
 | must 0 かつ should 0 | **APPROVE**（nit は併記可） |
 
 `APPROVE + Warning` のように複数 verdict を併記しません。should がある場合は Warning とし、
-nit は APPROVE と併記できても対応を条件にしません。
+nit は APPROVE と併記できても対応を条件にしません。vendored の `review.md` の「issue が 0 件なら Warning が
+残っていても APPROVE」は、この表の集計で置き換えます (should が 1 件以上なら Warning)。
 
 should / Warning は非ブロッキングで、対応するかは trusted な依頼元が判断します。レビュアーは
 推奨と根拠を示しますが、should を未対応という理由だけで must や REJECT に格上げしません。

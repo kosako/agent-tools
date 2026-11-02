@@ -136,6 +136,19 @@ usage: check-skill-routing.sh --cases <cases.json> --results <results.json> [--b
 - case set の正本は `lib/skill_routing_cases.json`。
 - self-test: `tests/check-skill-routing-test.sh`
 
+- `expand-vendored-policy.sh`: production-rail が vendor する takt の policy の `{{include:<kind>/<name>}}` を
+  展開する (#622)。takt の facet-includes と同じ規則で token を partial の本文に置き換え、入れ子も展開する。
+  循環・見つからない partial・形の外れた参照・symlink の partial は error。取得 (pin を指定した Contents API) は
+  呼び出し側が行い、この script は network に触れない。手順は
+  [policies の NOTICE](../shared/skills/personal-production-rail/references/policies/NOTICE.md)。
+
+```text
+usage: expand-vendored-policy.sh --root DIR --facets-root PATH --entry PATH [--check FILE]
+```
+
+- exit code: 0 は ok、`--check` の不一致は 1、引数・include の誤り・file を読めないときは 2。
+- self-test: `tests/expand-vendored-policy-test.sh`
+
 - `probe-skill-routing.sh`: skill routing acceptance harness の probe runner (実機)。候補 skill
   だけを project scope に置いた隔離 project で `claude -p` / `codex exec` を headless 実行し、
   発火した skill と token 使用量を `results.json` (judge 入力) に書く。実 tool home には

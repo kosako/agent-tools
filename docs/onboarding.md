@@ -75,6 +75,7 @@ instruction entry が無いと skip するので、register の後に回す。sy
 | status (観測) | `status.sh` | `scripts/lib/status.rb` (`Status::Runner#report`, `target_state`) |
 | doctor (環境点検) | `doctor.sh` | `scripts/lib/doctor.rb` (`Doctor::Runner#run`, `check_catalog`) |
 | psych 3/4 両対応 YAML loader | — | `scripts/lib/yaml_util.rb` (`YamlUtil.load`) |
+| vendor する takt の policy の include の展開 (#622) | `expand-vendored-policy.sh` | `scripts/lib/expand_vendored_policy.rb` (`ExpandVendoredPolicy.expand`) |
 
 補助: 実機の probe 3 本 (`probe-credential-isolation.sh` / `probe-skill-routing.sh` / `probe-opencode-plugin.sh`。
 network と各 CLI に依存し、CI では回さない。[scripts/README](../scripts/README.md))。共有 lib は CLI 引数解析
