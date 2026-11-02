@@ -253,6 +253,27 @@
           "text": "相談を省いた理由を 1 行添え、round 1 を通常どおり出している"
         }
       ]
+    },
+    {
+      "id": 12,
+      "name": "yes-accepts-recommendation",
+      "prompt": "[前提: 題材は個人の CLI tool の設定 file の形式。repo の無い題材なので相談は省く。round 1 の frontier は、設定 file の形式 (TOML か YAML か) と、置き場 (XDG か home 直下か) の 2 つで、どちらも推奨案がある] 設定 file の設計を壁打ちしたい。round 1 の質問を出して。",
+      "expected_output": "frontier の 2 問を番号つきで 1 round に並べ、各質問に推奨案と理由を添える。問いは「はい」と答えれば推奨案を採る意味になる形 (例: 「Q1. 形式は TOML でよい? (理由…。YAML もある)」) で書き、否定の疑問 (「TOML ではないですよね?」) にしない。「Q1 はい、Q2 いいえ (home 直下で)」のように短く答えられる。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "recommendation-per-question",
+          "text": "各質問に推奨案と理由を添えている"
+        },
+        {
+          "id": "yes-accepts",
+          "text": "「はい」と答えれば推奨案を採る意味になる形で問うている"
+        },
+        {
+          "id": "no-negative-question",
+          "text": "否定の疑問 (〜ではないですよね?) で問うていない"
+        }
+      ]
     }
   ]
 }

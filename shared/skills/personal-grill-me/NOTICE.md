@@ -4,8 +4,9 @@
 日本語化・運用ルール整合で翻案した derivative work。upstream は MIT License であり、
 下記の copyright notice と permission notice を保持する。
 
-- 参照 commit(v1.2.0 round-by-round frontier 追随時): `6654f6b60cd9d5be8b54c6fafe44346dabeb3b76`(2026-08-24)
-- 追随 Issue: #226
+- 参照 commit: `4ae2317ddb22b046e26455e4f9c9b3aaaf62212d`(2026-10-31。「はい」で推奨を採る問い方と、fact の調査を別の context で行う点に追随)
+- 前の参照 commit(v1.2.0 round-by-round frontier 追随時): `6654f6b60cd9d5be8b54c6fafe44346dabeb3b76`(2026-08-24)
+- 追随 Issue: #226、#619
 
 ## MIT License (mattpocock/skills)
 
