@@ -43,6 +43,11 @@ printf 'K' > "$root/$facets/partials/knowledge/k.md"
 run_expand "twice" 0 "$facets/policies/twice.md"
 [ "$(cat "$tmp/out")" = "ALEAFBLEAFC K" ] || fail "repeated include: $(cat "$tmp/out")"
 
+# --- 空白は JavaScript の \s と trim の集合。全角空白 (U+3000) と NBSP (U+00A0) を含む token も展開する ---
+printf '{{\343\200\200include\302\240:\343\200\200policies/leaf\302\240}}\n' > "$root/$facets/policies/wide.md"
+run_expand "unicode spaces" 0 "$facets/policies/wide.md"
+[ "$(cat "$tmp/out")" = "LEAF" ] || fail "unicode spaces: $(od -c "$tmp/out" | head -3)"
+
 # --- --check は一致で 0、違えば 1。どちらも stdout には出さない ---
 printf '# Review\n\ncommon head\nLEAF tail\n\nafter\n' > "$tmp/vendored"
 run_expand "check same" 0 "$facets/policies/review.md" --check "$tmp/vendored"
@@ -77,6 +82,16 @@ printf 'outside\n' > "$tmp/outside.md"
 ln -s "$tmp/outside.md" "$root/$facets/partials/policies/link.md"
 printf '{{include:policies/link}}\n' > "$root/$facets/policies/link-entry.md"
 run_expand "symlink partial" 2 "$facets/policies/link-entry.md"
+
+# --- 途中の dir が symlink でも読まない (partial の kind の dir と、entry の dir) ---
+mkdir -p "$tmp/outdir"
+printf 'outside dir\n' > "$tmp/outdir/evil.md"
+ln -s "$tmp/outdir" "$root/$facets/partials/instructions"
+printf '{{include:instructions/evil}}\n' > "$root/$facets/policies/dir-link-entry.md"
+run_expand "symlinked partial dir" 2 "$facets/policies/dir-link-entry.md"
+grep -q "outside dir" "$tmp/out" && fail "symlinked partial dir: read outside the tree"
+ln -s "$tmp/outdir" "$root/$facets/linked"
+run_expand "symlinked entry dir" 2 "$facets/linked/evil.md"
 
 # --- entry が無い、引数が足りない ---
 run_expand "missing entry" 2 "$facets/policies/none.md"

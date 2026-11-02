@@ -138,7 +138,8 @@ usage: check-skill-routing.sh --cases <cases.json> --results <results.json> [--b
 
 - `expand-vendored-policy.sh`: production-rail が vendor する takt の policy の `{{include:<kind>/<name>}}` を
   展開する (#622)。takt の facet-includes と同じ規則で token を partial の本文に置き換え、入れ子も展開する。
-  循環・見つからない partial・形の外れた参照・symlink の partial は error。取得 (pin を指定した Contents API) は
+  循環・見つからない partial・形の外れた参照・symlink を通る file (途中の dir を含む) は error。空白は JavaScript の
+  `\s` と同じ集合で読む。取得 (pin を指定した Contents API) は
   呼び出し側が行い、この script は network に触れない。手順は
   [policies の NOTICE](../shared/skills/personal-production-rail/references/policies/NOTICE.md)。
 
