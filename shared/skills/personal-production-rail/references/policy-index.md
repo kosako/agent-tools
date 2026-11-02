@@ -16,8 +16,9 @@ output contract は lens ではなく出力 schema の companion として別枠
 - **severity_default**: 観点違反は原則 🟡 should。要求逸脱・契約破壊・幻覚 API・到達不能コードなど**実害が出るもの**は 🔴 must。
 - **generation lens(書く側)**: 実装前 preflight(要求一致・実在性・最小差分・契約維持を確認)→ 実装後 self-check(過剰実装・見かけ修正・到達性を自己点検)。
 - **review lens(弾く側)**: 検出観点を 🔴/🟡/⚪ の severity に変換して指摘。`personal-codex-review` / `personal-review-request` のブリーフ観点に流す。
-- **sections(読む節)**: generation の preflight は「原則」「仮定の検証」「もっともらしいが間違っている検出」、self-check は「スコープクリープ検出」「デッドコード検出」「フォールバック・デフォルト引数の濫用検出」/
-  debug は「もっともらしいが間違っている検出」「レビュー指摘への不適切な対応検出」「フォールバック・デフォルト引数の濫用検出」/ review は「原則」と差分に当たる検出の節。
+- **sections(読む節)**: generation の preflight は「原則」「仮定の検証」「もっともらしい誤実装の検出」、self-check は「スコープクリープ検出」「デッドコード検出」「フォールバック・デフォルト引数の濫用検出」
+  「テストダブルによる見かけ上の修正検出」/ debug は「もっともらしい誤実装の検出」「レビュー指摘への不適切な対応検出」
+  「フォールバック・デフォルト引数の濫用検出」「テストダブルによる見かけ上の修正検出」/ review は「原則」と差分に当たる検出の節。
 
 ### coding
 
@@ -60,11 +61,11 @@ output contract は lens ではなく出力 schema の companion として別枠
 ### existing-system-respect
 
 - **file**: `policies/existing-system-respect.md`
-- **要旨**: 運用中の既存システムでの最小差分・既存契約保持・「ついで整理」の禁止・完了前に全差分を必須/関連/不要へ分類。
+- **要旨**: 運用中の既存システムでの因果差分 (要求と、その接続・検証・整合に要る変更だけ)・既存契約保持・「ついで整理」の禁止・完了前に全差分を `required` / `related` / `unnecessary` へ分類。
 - **applies_to(作業種別)**: `generation`(実装)/ `debug`(修正)/ `review`(レビュー)。まっさらな新規より**既存改修・bugfix** で効く。
 - **load_when**: production レール on かつ**既存コードを直す/拡張する**とき(新規ゼロからの実装では優先度低)。
 - **severity_default**: 既存契約の不用意な変更・スコープ外整理の混入は 🔴 must。軽微なついで変更は 🟡 should。
-- **generation lens(書く側)**: preflight=各差分が「要求達成に不可欠か」を判定 → self-check=完了前に全差分を必須/関連/不要へ分類し、不要を除いてから完了。
+- **generation lens(書く側)**: preflight=各差分が「要求達成に不可欠か」を判定 → self-check=完了前に全差分を `required` / `related` / `unnecessary` へ分類し、`unnecessary` を除いてから完了。
 - **review lens(弾く側)**: スコープ外整理・公開 API/型/配置の無断変更・テスト期待値の緩和(実装追随)を指摘。
 - **sections(読む節)**: 短いので全体を読む。
 
