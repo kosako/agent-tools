@@ -448,7 +448,7 @@
       "id": 26,
       "name": "codex-review-running-no-comment",
       "prompt": "/personal-review-request で PR の review を Codex に依頼し、依頼コメントは投稿済み。personal-codex-review が Status: RUNNING (wait が尽きても review が動いている) と run dir を返した。次に何をする?",
-      "expected_output": "結果のコメントは投稿しない。同じ対象の review を起動し直さない (#421)。返った run dir の done.txt を待ち、executor と同じ続行条件 (nonce 一致・exit=0・空でない result.md) で回収できたら、手順 4 の結果のコメントに進む。",
+      "expected_output": "結果のコメントは投稿しない。同じ対象の review を起動し直さない (#421)。返った pane と run dir を人に示し、続行か中断かを人に決めてもらう。続行と決まったら、その run dir の done.txt を待ち、executor と同じ続行条件 (nonce 一致・exit=0・空でない result.md) で回収できたら、手順 4 の結果のコメントに進む。",
       "files": [],
       "assertions": [
         {
@@ -462,6 +462,10 @@
         {
           "id": "collect-then-post",
           "text": "run dir の done.txt を同じ続行条件で回収してから結果のコメントに進むとしている"
+        },
+        {
+          "id": "human-decides-continue",
+          "text": "pane と run dir を人に示し、続行か中断かを人が決めてから done.txt を待つとしている (自分の判断だけで待ち続けない)"
         }
       ]
     },
