@@ -260,7 +260,9 @@ personal-maintenance-sweep の run `<run id>` の fix (観点: <観点> / 種別
   `result.md` を回収します (nonce 一致・exit=0・空でない result)。回収できなければ (run dir が無い、結果が無い) 完了した
   回数を確定できないので、その round を未完として `blocked` にし、人に渡します (4 回目を起動する余地を作らない)。
 - 指摘の扱い: 🔴 must は修正の仕様の範囲内で妥当なものだけ直す (直して commit を足したら、追加の push の前に
-  「検証」をやり直す)。範囲外の must や契約の変更が要る must は、scope を広げず `blocked` にして人に渡す。
+  「検証」をやり直す)。範囲外の must や契約の変更が要る must は、scope を広げず `blocked` にして人に渡す。同じ round に
+  範囲内の must と範囲外の must があれば、範囲内の must も直さず、push もせずに、先に `blocked` にして人に渡す
+  (範囲外の must の扱いで修正の仕様が変わりうるので、その前の push を当然の前提にしない)。
   🟡 should は採否と理由を残す (採用しなくても verdict を書き換えない)。⚪ nit は caller の判断。
 - **完了した review は最大 3 回**です。3 回目のあとに修正した head は未レビューとして扱い、APPROVE を引き継ぎ
   ません。収束しなければ PR を残して `blocked` にし、未解決の項目と次の入口を記録して報告します。

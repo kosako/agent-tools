@@ -1141,6 +1141,48 @@
           "text": "検証役が使えないことの確認を、予算の判定より先に行うとしている"
         }
       ]
+    },
+    {
+      "id": 57,
+      "name": "fix-mixed-must-blocks-first",
+      "prompt": "[前提: fix モードで、sweep が起票した論点なしの docs のずれを PR にした。Codex の review の round 1 で、🔴 must が 2 件出た。1 件は修正の仕様の範囲内 (同じ docs の別の段落の数字のずれ)、もう 1 件は範囲外 (code の挙動を変える必要がある)] この round をどう扱う? 手順の確認だけ。",
+      "expected_output": "同じ round に範囲内の must と範囲外の must があるので、範囲内の must も直さず、push もせずに、先に blocked にして人に渡す (範囲外の must の扱いで修正の仕様が変わりうる)。scope を広げない。fixes.json に round の結果と blocked の理由を残す。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "blocks-first",
+          "text": "範囲内の must を直す前に blocked にして人に渡している"
+        },
+        {
+          "id": "no-push",
+          "text": "範囲内の must の修正の push をしていない"
+        },
+        {
+          "id": "no-scope-expansion",
+          "text": "範囲外の must で scope を広げていない"
+        }
+      ]
+    },
+    {
+      "id": 58,
+      "name": "unknown-close-reason-asks",
+      "prompt": "[前提: issues モード。重複の照合の一覧で、所見と同じ問題の Issue #812 の close の理由が「superseded」と出た (completed / not_planned / duplicate のどれでもない)] この所見は起票する? 手順の確認だけ。",
+      "expected_output": "close の理由が手順 6 の 3 つのどれでもないので、再発として起票せず、報告に #812 と値 superseded を書いて人に確かめる。却下か再発かを推測で決めない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-file",
+          "text": "再発として起票していない"
+        },
+        {
+          "id": "asks-human",
+          "text": "報告に Issue の番号と値を書いて人に確かめるとしている"
+        },
+        {
+          "id": "no-guess",
+          "text": "却下か再発かを推測で決めていない"
+        }
+      ]
     }
   ]
 }

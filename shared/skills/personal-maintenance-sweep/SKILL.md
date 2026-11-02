@@ -244,6 +244,8 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
 - duplicate で close された Issue と同じ問題 → not planned と同じく却下として扱い、新しい根拠が無ければ起票
   しない (報告にその Issue の番号を書く)。
 - completed で close された Issue と同じ問題 → 再発として起票してよい (本文に前の番号を書く)。
+- close の理由がこの 3 つのどれでもない (`RECORD.md` の一覧に知らない値が出た) Issue と同じ問題 → 再発として起票せず、
+  報告にその Issue の番号と値を書いて人に確かめる (却下か再発かを推測で決めない)。
 
 ### 7. 起票する (issues モードだけ)
 

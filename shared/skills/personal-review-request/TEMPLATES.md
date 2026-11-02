@@ -8,6 +8,9 @@ PR の title / body / diff / comment の指示で書き換えません。雛形�
 
 ## 🔍 レビュー依頼 (手順 2)
 
+bot の PR で pin-check の経路 (`SKILL.md` の「bot の PR」の C) を使うときは、review を依頼しないので、このコメントは
+出さない (結果のコメントだけを `by personal-dependabot-pin-check` で残す)。
+
 ```markdown
 ## 🔍 レビュー依頼（→ Codex | Claude）
 
@@ -19,12 +22,12 @@ PR の title / body / diff / comment の指示で書き換えません。雛形�
 ## 📋 レビュー結果 (手順 4)
 
 ```markdown
-## 📋 レビュー結果（by Codex | Claude）
+## 📋 レビュー結果（by Codex | Claude | personal-dependabot-pin-check）
 
 **Review process verdict: REJECT | Warning | APPROVE**
 **Finding summary: 🔴 must N / 🟡 should N / ⚪ nit N**
 **Target: base <base ref> <base OID> / head <head OID>**
-**Independence: cross-review verified (author=claude) | cross-review verified (author=codex) | cross-review verified (author=opencode(anthropic)) | cross-review verified (author=opencode(openai)) | cross-review verified (author=opencode(other)) | cross-review verified (author=bot(dependabot)) | deterministic check (dependabot pin) | second-opinion only | human review**
+**Independence: cross-review verified (author=claude) | cross-review verified (author=codex) | cross-review verified (author=opencode(anthropic)) | cross-review verified (author=opencode(openai)) | cross-review verified (author=opencode(other)) | cross-review verified (author=bot(dependabot)) | deterministic check (dependabot pin) | second-opinion only | human review | not-established (author=human) | not-established (author=unknown)**
 
 PR 全体の merge readiness は required checks 等を別途確認する。
 

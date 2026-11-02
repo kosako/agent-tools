@@ -143,7 +143,9 @@ Dependabot の PR の commit には AI の trailer が無い。preflight は PR 
   `target:` の base も手順 1 の `base_oid` と一致することを確かめる (違えば手順 1 の対象の取得からやり直す。検査した
   base と、結果の `Target` に書く base を食い違わせない)。exit 0 (`pin-check: ok`) なら、変更が `uses` の pin の行だけで、新しい SHA が宣言した tag の commit と
   一致し、必要な CI (base の `.github/repo-baseline.json` の `required_checks`) がすべて success なので、AI の review を
-  省いて merge へ進んでよい (merge の規則は運用 instruction の「個人 project の GitHub の操作と merge」)。結果は手順 4 の形で PR に残す (verdict は `APPROVE`、finding はなし、Independence は
+  省いてよい (merge するかは運用 instruction の「個人 project の GitHub の操作と merge」で決める。この skill は merge / approve を
+  しない)。この経路は review を依頼しないので、手順 2 の依頼のコメントは出さない。結果は手順 4 の形で PR に残す (見出しは
+  `by personal-dependabot-pin-check`、verdict は `APPROVE`、finding はなし、Independence は
   `deterministic check (dependabot pin)`。script の出力の label の行を添える)。exit 1 (not ok) か 2 (判定できない) なら、
   この bullet は使わず、上の Claude の review に進む (not ok の理由は review の材料にする)。pin-check の ok を別の PR や
   別の head に当てない。この検査は参照の整合性と変更の範囲の確認で、依存先の安全の証明ではない (`docs/dependabot-pin-check.md`)。
