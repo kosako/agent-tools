@@ -53,5 +53,7 @@ AI に明示的な追加見解を求めた場合は必ず `second-opinion only` 
 として扱いません。結果を別の文脈へ転記するときも、この field を落としません。
 
 routing の preflight で author を確かめていない AI の review は `not-established` とし、独立承認として扱いません。
+現在のユーザーが明示した second opinion は、author の分類が無くても上のとおり `second-opinion only` のままで、
+この値にしません。
 user が自分で書いたと言う差分は `not-established (author=human)`、chat に貼られた差分や PR に紐づかない review で
 author が分からないものは `not-established (author=unknown)` です。値を自作しません。

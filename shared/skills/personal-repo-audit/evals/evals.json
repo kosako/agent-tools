@@ -186,7 +186,7 @@
       "id": 15,
       "name": "standalone-skips-gitignored-files",
       "prompt": "[前提: Claude Code の session で、Codex には頼まず自分で監査する。repo の root に .gitignore された .env と .agent-context.local.md があり、src/ の下に untracked で ignore されていない新しい file new_handler.rb がある] この repo の security を中心に監査して。secret の直書きも見てほしい。",
-      "expected_output": "gitignore された file (.env、.agent-context.local.md など) は単独の起動でも開かない (結果は public な Issue の材料になりうる)。untracked でも ignore されていない new_handler.rb は対象の source として読み、未 commit の変更を含めて読んだことを対象範囲に書く。secret の直書きは tracked な file と未 commit の変更で見る。",
+      "expected_output": "gitignore された file (.env、.agent-context.local.md など) は単独の起動でも開かない (結果は public な Issue の材料になりうる)。untracked でも ignore されていない new_handler.rb は対象の source として読み、未 commit の変更を含めて読んだことを対象範囲に書く。secret の直書きは tracked な file と未 commit の変更で見る。観点ごとに子 agent へ fan-out するときは、この除外 (gitignore された file を開かず、ignore されていない untracked の source は読む) を各 brief に書く。",
       "files": [],
       "assertions": [
         {
@@ -200,6 +200,10 @@
         {
           "id": "scope-noted",
           "text": "未 commit の変更を含めて読んだことを対象範囲に書くとしている"
+        },
+        {
+          "id": "brief-carries-exclusion",
+          "text": "観点ごとの子 agent の brief にも、gitignore された file を開かない除外を書くとしている"
         }
       ]
     }
