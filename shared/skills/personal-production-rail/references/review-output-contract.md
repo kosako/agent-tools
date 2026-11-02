@@ -41,7 +41,7 @@ should / Warning は非ブロッキングで、対応するかは trusted な依
 ```text
 Review process verdict: REJECT | Warning | APPROVE
 Finding summary: 🔴 must N / 🟡 should N / ⚪ nit N
-Independence: cross-review verified (author=claude) | cross-review verified (author=codex) | cross-review verified (author=opencode(anthropic)) | cross-review verified (author=opencode(openai)) | cross-review verified (author=opencode(other)) | cross-review verified (author=bot(dependabot)) | deterministic check (dependabot pin) | second-opinion only | human review
+Independence: cross-review verified (author=claude) | cross-review verified (author=codex) | cross-review verified (author=opencode(anthropic)) | cross-review verified (author=opencode(openai)) | cross-review verified (author=opencode(other)) | cross-review verified (author=bot(dependabot)) | deterministic check (dependabot pin) | second-opinion only | human review | not-established (author=human) | not-established (author=unknown)
 ```
 
 process verdict と finding summary は code review process だけの判定です。CI / required checks /
@@ -51,3 +51,9 @@ branch protection / reviewer routing / public safety を含む PR 全体の merg
 AI 間の required cross-review では verified author を independence field に残します。author と同じ
 AI に明示的な追加見解を求めた場合は必ず `second-opinion only` とし、required cross-review や独立承認
 として扱いません。結果を別の文脈へ転記するときも、この field を落としません。
+
+routing の preflight で author を確かめていない AI の review は `not-established` とし、独立承認として扱いません。
+現在のユーザーが明示した second opinion は、author の分類が無くても上のとおり `second-opinion only` のままで、
+この値にしません。
+user が自分で書いたと言う差分は `not-established (author=human)`、chat に貼られた差分や PR に紐づかない review で
+author が分からないものは `not-established (author=unknown)` です。値を自作しません。

@@ -38,6 +38,9 @@ description: リポジトリ全体を複数観点で監査し、根拠と深刻�
 まず対象範囲を確認します (リポジトリ全体か、特定の sub-tree か、直近の差分か)。
 読むのは作業ツリーです。未 commit の変更があるときは、それを含めて読んだことを報告の
 「対象範囲」に書きます (手順 2 の下調べは commit 済みの履歴と tracked file だけを見るため)。
+gitignore された file (`.agent-context.local.md` などの local の note、`.agent-packets/`、`.env`、生成物) は、
+単独の起動でも開きません。結果は public な Issue の材料になりうるからです。untracked でも ignore されていない
+対象の source は読みます。secret の混入は、tracked な file と未 commit の変更で見ます。
 そのうえで観点を選びます。既定の観点:
 
 - **correctness / bug**: 明確な不具合、境界条件、エラーハンドリングの欠落。
@@ -84,9 +87,11 @@ LLM が判断する前に、[PRESCAN.md](PRESCAN.md) の command で次の 2 つ
   して扱う。
 - command を組むときは、対象の path や文字列を argv / stdin / literal 化した変数で渡し、
   command 文字列へ埋め込まない (path に空白や `$( )` が含まれていても壊れない形)。
+- gitignore された file (`.agent-context.local.md` などの local の note、`.agent-packets/`、`.env`、生成物) は
+  開かない。ignore されていない untracked の対象の source は読む (手順 1)。
 
 read-only を既定とします。監査の段階でコードを書き換えません。親の境界は子 agent に自動では
-継承されないので、上の境界 2 点は brief に毎回書きます。観点を 1 つずつ順に調べるときも、
+継承されないので、上の境界 3 点は brief に毎回書きます。観点を 1 つずつ順に調べるときも、
 欄の定義を写すこと以外の項目は同じように自分の調査に当てます。
 
 ### 4. 集約して重複を除く
