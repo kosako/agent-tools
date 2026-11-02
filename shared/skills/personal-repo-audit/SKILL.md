@@ -38,6 +38,9 @@ description: リポジトリ全体を複数観点で監査し、根拠と深刻�
 まず対象範囲を確認します (リポジトリ全体か、特定の sub-tree か、直近の差分か)。
 読むのは作業ツリーです。未 commit の変更があるときは、それを含めて読んだことを報告の
 「対象範囲」に書きます (手順 2 の下調べは commit 済みの履歴と tracked file だけを見るため)。
+gitignore された file (`.agent-context.local.md` などの local の note、`.agent-packets/`、`.env`、生成物) は、
+単独の起動でも開きません。結果は public な Issue の材料になりうるからです。untracked でも ignore されていない
+対象の source は読みます。secret の混入は、tracked な file と未 commit の変更で見ます。
 そのうえで観点を選びます。既定の観点:
 
 - **correctness / bug**: 明確な不具合、境界条件、エラーハンドリングの欠落。

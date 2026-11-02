@@ -181,6 +181,27 @@
           "text": "Status: RUNNING と run dir・nonce を返して人に渡している"
         }
       ]
+    },
+    {
+      "id": 15,
+      "name": "standalone-skips-gitignored-files",
+      "prompt": "[前提: Claude Code の session で、Codex には頼まず自分で監査する。repo の root に .gitignore された .env と .agent-context.local.md があり、src/ の下に untracked で ignore されていない新しい file new_handler.rb がある] この repo の security を中心に監査して。secret の直書きも見てほしい。",
+      "expected_output": "gitignore された file (.env、.agent-context.local.md など) は単独の起動でも開かない (結果は public な Issue の材料になりうる)。untracked でも ignore されていない new_handler.rb は対象の source として読み、未 commit の変更を含めて読んだことを対象範囲に書く。secret の直書きは tracked な file と未 commit の変更で見る。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-open-ignored",
+          "text": ".env や .agent-context.local.md など gitignore された file を開かないとしている"
+        },
+        {
+          "id": "reads-untracked-source",
+          "text": "ignore されていない untracked の new_handler.rb は読むとしている"
+        },
+        {
+          "id": "scope-noted",
+          "text": "未 commit の変更を含めて読んだことを対象範囲に書くとしている"
+        }
+      ]
     }
   ]
 }

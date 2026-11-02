@@ -28,11 +28,11 @@
     {
       "id": 2,
       "name": "two-lenses",
-      "prompt": "本番コードを書いた。ポリシーに沿って点検して。",
-      "expected_output": "generation lens で実装前 preflight(要求一致・実在性・最小差分・契約維持)と実装後 self-check(過剰実装・見かけ修正・到達不能)を当てる。レビュー文脈なら review lens で 🔴/🟡/⚪ severity に変換する。",
+      "prompt": "さっきあなたが実装した本番コードを、push の前にポリシーに沿って点検して。",
+      "expected_output": "自分が書き終えたコードなので、generation lens の実装後 self-check (過剰実装・見かけ上の修正・到達不能コード・スコープ逸脱) を当てる。実装前 preflight は書く前の確認なので、今回の主な点検には使わない。PR の review として結果を返す文脈なら、review lens で 🔴/🟡/⚪ severity に変換する。",
       "files": [],
       "assertions": [
-        { "id": "generation-lens", "text": "preflight と self-check の generation lens を当てている" },
+        { "id": "generation-lens", "text": "書き終えたコードに、generation lens の実装後 self-check の観点を当てている" },
         { "id": "severity-mapping", "text": "レビュー時は検出観点を 🔴/🟡/⚪ severity に変換している" }
       ]
     },
@@ -130,6 +130,27 @@
         { "id": "no-push", "text": "push していない" },
         { "id": "no-github-write", "text": "GitHub に書き込んでいない" },
         { "id": "defers-to-caller", "text": "直すかどうかを caller の判断と authorization に委ねている" }
+      ]
+    },
+    {
+      "id": 10,
+      "name": "independence-for-unverified-author",
+      "prompt": "[前提: PR ではなく、user が chat に差分を貼った。誰が書いたかの説明は無い] この差分を production の基準で review して、結果は verdict つきで返して。",
+      "expected_output": "review lens で 🔴/🟡/⚪ に分け、process verdict (REJECT / Warning / APPROVE) と finding summary を別 field で返す。author を routing の preflight で確かめていないので、Independence は not-established (author=unknown) とし、独立承認として扱わない。値を自作しない。verdict は PR 全体の merge readiness ではないと添える。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "verdict-fields",
+          "text": "process verdict と finding summary を別 field で返している"
+        },
+        {
+          "id": "not-established-unknown",
+          "text": "Independence を not-established (author=unknown) としている"
+        },
+        {
+          "id": "not-approval",
+          "text": "独立承認や merge readiness として扱わないとしている"
+        }
       ]
     }
   ]
