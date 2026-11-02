@@ -38,7 +38,7 @@ output contract は lens ではなく出力 schema の companion として別枠
 ### review
 
 - **file**: `policies/review.md`
-- **要旨**: レビュー専用の検出・判定基準(REJECT/Warning/APPROVE のスコープ判定・ファクトチェック・振る舞い証跡・finding 管理・再オープン条件・基本手順)。第三者由来の本文は verbatim。**review lens の土台**。
+- **要旨**: レビュー専用の検出・判定基準(根拠に基づく判断・反例に使う入力の適用範囲・finding の判定不変条件・REJECT/Warning/APPROVE のスコープ判定・ファクトチェック・振る舞い証跡・finding 管理・再オープン条件)。第三者由来の本文で、upstream の include を展開した写し (本文の文言は無改変。`policies/NOTICE.md`)。**review lens の土台**。
 - **applies_to(作業種別)**: `review`(レビュー)が主。`debug` の検証にも補助。
 - **load_when**: production レール on かつ「レビューする」とき。
 - **severity_default**: `policies/review.md` の REJECT / ブロッキングを 🔴 must、Warning /
@@ -46,7 +46,7 @@ output contract は lens ではなく出力 schema の companion として別枠
   verdict の出力・集計規則の正本は、自前の `review-output-contract.md`。
 - **generation lens(書く側)**: 主眼外。書く側は self-check 時に「レビューで REJECT される観点」を先回りで潰す程度に使う。
 - **review lens(弾く側)**: vendored policy でスコープ判定 → 一次情報/契約入口の検証 → 振る舞い証跡を確認し、`review-output-contract.md` で finding を 🔴/🟡/⚪ に正規化して process verdict を集計する。別モデルレビューのブリーフ観点に流す。
-- **sections(読む節)**: review は「スコープ判定」「判定基準」「振る舞い証跡の判定」「ファクトチェック」「レビューの基本手順」、差分に test / 変更履歴があれば「テストファイルの扱い」「変更履歴ファイルの扱い」、再レビューは「堂々巡りの検出」/
+- **sections(読む節)**: review は「スコープ判定」「判定基準」「finding の判定不変条件」「振る舞い証跡の判定」「ファクトチェック」、差分に test / 変更履歴があれば「テスト不足の根拠」「変更履歴ファイルの扱い」、再レビューは「指摘の再評価と追跡」「堂々巡りの検出」/
   debug の検証は「振る舞い証跡の判定」「ファクトチェック」/ generation の self-check は「判定基準」の REJECT 一覧。
 
 ### review-output-contract
