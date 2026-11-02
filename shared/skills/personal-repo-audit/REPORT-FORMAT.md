@@ -13,7 +13,7 @@
 | --- | --- | --- |
 | ID | `F01`, `F02`, … | この報告の中だけの通し番号。深刻度順に振る。run をまたいだ識別には fingerprint を使う |
 | fingerprint | `<場所の key>#<topic>` | 重複を照合する鍵 (下記) |
-| 観点 | correctness / security / design / test / docs / dependency / comparison | 手順 1 の観点を順に bug / security / 設計・一貫性 / テスト / ドキュメント陳腐化 / 依存・ビルド / 要件・類似との比較 に対応させる。手順 1 で足した観点は短い英語の小文字の名前。2 つに当てはまるときは、推奨の対応で手を入れる側で決める (docs を直すなら docs、code・設定・宣言を直すなら design) |
+| 観点 | correctness / security / design / test / docs / dependency / comparison | 手順 1 の観点を順に bug / security / 設計・一貫性 / テスト / ドキュメント陳腐化 / 依存・ビルド / 要件・類似との比較 に対応させる。手順 1 で足した観点は短い英語の小文字の名前。2 つに当てはまるときは、推奨の対応で手を入れる側で決める (docs を直すなら docs、code・設定・宣言を直すなら design)。ただし、渡された比較対象との比較から出た所見は comparison のまま (種別は下記の defect / docs-drift / proposal の定義で決める。`SKILL.md` 手順 1) |
 | 種別 | defect / docs-drift / debt / proposal | 下記 |
 | 深刻度 | high / medium / low | 影響の大きさ |
 | 確度 | 確証 / 有力 / 未確証 | 下記 |
