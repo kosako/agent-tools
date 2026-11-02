@@ -270,7 +270,8 @@ command は **この skill の directory にある `LAUNCH.md` を読んで、�
   適用される前に走るので、引用の破綻はそのまま呼び出し元の権限での command 置換になる。
 - **完了の正本は `done.txt`** (nonce が一致し `exit=0`)。端末に出る sentinel は起床信号で、判定は
   file で行う。どの経路でも続行条件は「`done.txt` の nonce 一致と `exit=0`」かつ「`result.md` が
-  存在し空でない」の両方。`exit=` が 0 以外、または codex の process が居ないと確認できて `done.txt` が
+  存在し空でない」かつ「`result.md` に `Review process verdict:` の行がある」の 3 つ (結果の採用、pane の後始末、
+  再開や RUNNING の後の回収のどれも、この 3 つで判定する)。`exit=` が 0 以外、または codex の process が居ないと確認できて `done.txt` が
   無ければ `Blocked at: executor-exit`。
 - **待ち方 (#421)**: herdr 経由では、wait の timeout ごとに pane の foreground process で codex の生存を見る
   (`personal-codex-worker` と同じ判定。判定できないときは「消滅」に倒さない)。生きていれば wait を繰り返し
