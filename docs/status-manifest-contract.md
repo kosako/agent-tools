@@ -93,7 +93,7 @@ dotfiles 側の実装は含めません。
 | --- | --- |
 | `managed` | agent-tools marker を持ち、最新の generated artifact と一致する。 |
 | `stale` | agent-tools marker を持つが、generated artifact より古い。build や register が先に要る entry で、target が在るものも含む (下の注)。 |
-| `conflict` | 同名 target が存在するが marker を持たない (unmanaged)。sync が配置を止めるその他の理由 (target か親 dir が symlink、generated 側の marker が不正、`personal-` で始まらない、など) も含む。 |
+| `conflict` | 同名 target が存在するが marker を持たない (unmanaged)。sync が配置を止めるその他の理由 (target か親 dir が symlink、skill と script の generated 側の marker が不正、`personal-` で始まらない、など) も含む。instruction と plugin の generated 側の marker の不正は build が先に要る扱いなので、下の注のとおり `stale` か `missing` になる。 |
 | `missing` | target がまだ存在しない。build や register が先に要る entry で target が無いもの、instruction の所有ファイルが無いか空 (未接続。connect が先に要る) のもの、target を持たない entry (register の unsupported) も含む。 |
 | `deployed_but_inactive` | catalog entry が registered でない (human_review_required / unsupported) のに、target 実体がディスクに残っている (一度承認して配布 → 後で gate がかかった等)。sync は配置も削除もしないため、手動掃除か再承認まで居座る (#186)。 |
 
