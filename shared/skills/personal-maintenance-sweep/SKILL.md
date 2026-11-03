@@ -83,6 +83,13 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
 
 ### 0. 前提を確かめる
 
+- **session の種類**: model の自認ではなく env の目印で決める (規則は personal-review-request の Claude route の
+  「どの session で動いているか」と同じ。目印は非空なら立っている。OpenCode の目印を先に見る)。OpenCode の session
+  (`OPENCODE` か `AGENT_TOOLS_OPENCODE` が非空)、または種類を判定できない session (Claude と Codex の目印が両方
+  立つ、どれも立たない) では、監査も反証も起票も fix もせず、Claude Code の session で起動し直すよう案内して
+  止まる (#425)。OpenCode を監査役や検証役にしないのは、「OpenCode は reviewer にしない」の規約と、別の系列の
+  AI に反証させる趣旨を守るため (中身の model の系列によっては、相手の Codex と同じ系列になる)。Codex の session
+  は手順 1 の「Codex の session で起動したとき」に従う。
 - 対象の repo が git 管理で、GitHub の remote があり、`gh auth status` が通る。issues モードで GitHub に
   届かなければ、report モードに切り替えるかを確認する。
 - **env の `GH_REPO` が空** (`[ -z "${GH_REPO-}" ]`)。`GH_REPO` があると、gh は Issue・PR・label の操作 (`gh issue` /
@@ -135,7 +142,7 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   2. Claude 側と Codex 側の数が違えば、少ない側が監査役。
   3. 同数、または AI の trailer が 1 つも無ければ、前回の監査役と交代する。前回の記録も無ければ
      Codex が監査役 (実装の既定が Claude なので、Claude の書いた code が多い前提)。
-- **Codex の session で起動したとき**: この session 自身では監査も反証もしない (connector と MCP を外した
+- **Codex の session で起動したとき** (手順 0 の判定): この session 自身では監査も反証もしない (connector と MCP を外した
   起動の境界が、起動済みの session には効かないため)。Codex から Claude は起動できない。
   - 監査役が Claude になったら、Claude Code の session で起動し直すよう案内して止まる。
   - 監査役が Codex なら、personal-repo-audit の `CODEX-LAUNCH.md` の起動経路があるかだけをここで確かめる
@@ -252,7 +259,10 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
 
 ### 7. 起票する (issues モードだけ)
 
-- 1 run の起票は上限まで ([BUDGET.md](BUDGET.md))。超えた分は state に残して次の run に回し、報告に書く。
+- 1 run の起票は上限まで ([BUDGET.md](BUDGET.md))。上限は再開をまたいだ累計で数える (再開の前に起票した分も
+  state の `filed` から数える)。超えた分は起票せず、報告に書き、local の state の `not_filed` に理由 `issue_cap` で
+  残す。次の run には持ち越さず、次の監査での再発見に任せる (古い commit での所見を、今の `HEAD` で確かめ直して
+  起票する手順を持たないため。#425)。
 - 本文の形は [RECORD.md](RECORD.md)。投稿の前に `personal-ja-style-check` (指摘だけ。直すか理由を持つ) と public-safety の
   gate に通し、gate を通らなければ投稿しない。
 - label を付ける。「論点なし」の印が付いた所見には、本文に no-contention の marker を書く ([RECORD.md](RECORD.md))。
@@ -287,16 +297,16 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
   run のコメントに修正 PR と直さなかった所見を足す ([FIX.md](FIX.md) / [RECORD.md](RECORD.md))。
 - **CI の窓** (repo 単位の `ci.json`。[RECORD.md](RECORD.md)): 起票まで進む run (issues モード。fix の入口 (a) を含む) で、
   `ci` の単位が `done`、state の `ci_check` の `events` が `checked` (使った結果の `--window-out` の file で、その
-  `since` と `until` が `ci_check` の窓と同じ) で、`ci` の単位の所見に起票の上限 (手順 7) で次の run に回したものと、
+  `since` と `until` が `ci_check` の窓と同じ) で、`ci` の単位の所見に起票の上限 (手順 7) で起票しなかったものと、
   反証で uncertain になったものが無いときだけ、`checked_until` をその `until` に進める。それ以外 (report モード、
-  `events` が `checked` でない・無い (この field より前に保存した state を含む)、上限で回した所見や uncertain の所見が
+  `events` が `checked` でない・無い (この field より前に保存した state を含む)、上限で起票しなかった所見や uncertain の所見が
   ある) は進めない。失敗が無いことではなく `checked` で見るのは、窓を付けずにかけた結果 (`ci_check` に窓が無い、窓の
   規則より前に始めた run の再開など) で進めないため。`scope` の「run の記録」の行は表示で、判定には使わない (文言を
   変えても判定が変わらないように。#580)。uncertain で進めないのは、run の記録の
   所見は窓を進めると次の run で見直さないため (根拠が GitHub にしか無いので、GitHub に触れない Codex の検証役では
   uncertain になりやすい。`REFUTE.md`)。進めなければ次の run が同じ始まりから見直し、起票済みの所見は手順 6 の重複の
   照合で拾われる (report モードの所見は起票していないので、次の起票する run で拾い直す)。所見そのものは次の run に
-  持ち越さず、据え置いた窓での再検出に任せる (持ち越すかは #425 で決める)。そのため、再検出されない所見は追わない:
+  持ち越さず、据え置いた窓での再検出に任せる (手順 7 と同じく持ち越さない。#425)。そのため、再検出されない所見は追わない:
   次の run がかけ直しで縮めたり 30 日で切ったりして見なかった期間の所見と、警告が直近 5 本の run から消えた deprecation
   の所見は出ず、窓が進みうる (deprecation は workflow ごとの直近 5 本の run だけを見る。見なかった期間は手順 9 で報告する)。
 
@@ -330,6 +340,7 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
 | 設定 file が不正 | 開始しない。どの key がなぜ不正かを伝える |
 | env の `GH_REPO` が空でない | 開始しない。`GH_REPO` を外して起動し直すよう伝える (gh の command ごとに向く repo が分かれるため) |
 | Codex の session で起動した | 自分では監査も反証もしない。監査役が Codex で起動経路があれば、手順 2 を通したうえで別の Codex を起こす。それ以外は Claude Code での起動を案内して止まる |
+| OpenCode の session、または session の種類を判定できない | 開始しない。監査も反証も起票も fix もせず、Claude Code の session で起動し直すよう案内する (手順 0) |
 | GitHub に届かない (issues モード) | report モードに切り替えるかを確認する |
 | repo の設定を確かめられない (`personal-repo-baseline` が無い、exit 2) | sweep は止めない。報告に「確かめられない」と理由を書く |
 | CI を確かめられない (`personal-ci-check` が無い、exit 2 で stdout が空、stdout が所見の JSON の形でない) | sweep は止めない。`ci` の単位を所見なしで `done` にし、報告に理由を書く |
@@ -354,6 +365,7 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
 - 起票の上限を越えて起票する。not planned で閉じた問題を、新しい根拠なしに起票し直す。
 - Codex の session から Claude を起動しようとする。Codex の session 自身で監査や反証をする (起動の境界が
   効かない)。Codex の session で fix をする。
+- OpenCode の session、または種類を判定できない session で、監査・反証・起票・fix のどれかをする。
 - fix モードで、印の無い所見・docs-drift 以外・`docs/` と root の Markdown 以外を直す。marker だけを根拠に直す。
   所見の範囲外を「ついで」に直す。既存の open PR があるのに作る。merge / approve する。未レビューの PR を完了扱い
   にする。`fix_cap` を再開で数え直す。

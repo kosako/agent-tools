@@ -11,8 +11,9 @@
 | fingerprint の marker | 所見の Issue の本文 | 重複の照合の鍵 | public |
 | local の state | `${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/maintenance-sweep/<owner>/<repo>/` | run の進み具合、単位ごとの結果、起票した番号、消費の実績、repo の設定の確認の結果 | local だけ |
 
-GitHub に書くのは Claude の session の issues モードと fix モードだけです (fix モードは所見の Issue と追跡 Issue に加え、
-branch の push・PR・review のコメント。`FIX.md`)。Codex の session は GitHub に書きません。
+GitHub に書くのは Claude Code の session (`SKILL.md` 手順 0 の判定) の issues モードと fix モードだけです (fix モードは所見の Issue と追跡 Issue に加え、
+branch の push・PR・review のコメント。`FIX.md`)。Codex の session は GitHub に書きません。OpenCode の session と、
+種類を判定できない session では sweep を始めません。
 
 ## 値の受け渡し
 
@@ -288,7 +289,7 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
   ],
   "consumption": [ { "unit": 3, "tool": "codex", "window": "weekly", "before_used_pct": 9, "after_used_pct": 11 } ],
   "filed": [ { "number": 401, "fingerprint": "docs/onboarding.md#stale-script-count" } ],
-  "not_filed": [ { "fingerprint": "…", "reason": "duplicate #377" } ],
+  "not_filed": [ { "fingerprint": "…", "reason": "duplicate #377" }, { "fingerprint": "…", "reason": "issue_cap" } ],
   "deferred": [ { "dimension": "test", "area": "." } ],
   "settings": { "checked_at": "2026-10-02T09:15:30+09:00", "exit": 1, "stdout": "<personal-repo-baseline --check の stdout>", "stderr": "" }
 }

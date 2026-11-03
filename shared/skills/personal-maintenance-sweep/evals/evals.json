@@ -241,7 +241,7 @@
       "id": 12,
       "name": "issue-cap",
       "prompt": "[前提: 起票の条件を満たす所見が 8 件。issue_cap は 5] 監査して Issue にして",
-      "expected_output": "5 件まで起票し、残り 3 件は state に残して次の run に回し、報告に書く。",
+      "expected_output": "5 件まで起票し、残り 3 件は起票せず、報告に書き、local の state の not_filed に理由 issue_cap で残す。次の run には持ち越さず、次の監査での再発見に任せると伝える。",
       "files": [],
       "assertions": [
         {
@@ -250,7 +250,7 @@
         },
         {
           "id": "defers-rest",
-          "text": "残りの 3 件を次の run に回し、そのことを報告している"
+          "text": "残りの 3 件を起票せずに報告し、次の run に持ち越さない (次の監査での再発見に任せる) と伝えている"
         }
       ]
     },
@@ -1202,6 +1202,44 @@
         {
           "id": "redo-audit",
           "text": "監査からやり直す (手順 3 の監査を含む通常の run の) 計画を示している"
+        }
+      ]
+    },
+    {
+      "id": 60,
+      "name": "issue-cap-cumulative-on-resume",
+      "prompt": "[前提: Claude Code の session。中断した run を再開する。state の filed に、この run で前回までに起票した Issue が 4 件ある。issue_cap は 5。今回の再開で、起票の条件を満たす所見が新たに 3 件そろった] 続きから Issue にして。手順の確認だけで実行はしない。",
+      "expected_output": "上限は再開をまたいだ累計なので、今回起票するのは 1 件だけ。残りの 2 件は起票せず、報告に書いて state の not_filed に理由 issue_cap で残し、次の run には持ち越さない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "counts-across-resume",
+          "text": "前回までに起票した 4 件を上限に数え、今回の起票を 1 件にしている"
+        },
+        {
+          "id": "rest-not-carried",
+          "text": "残りの 2 件を起票せずに報告し、次の run に持ち越さない (次の監査での再発見に任せる) と伝えている"
+        }
+      ]
+    },
+    {
+      "id": 61,
+      "name": "opencode-session-stops",
+      "prompt": "[前提: OpenCode の session で起動 (env の OPENCODE が非空で、CLAUDECODE と CODEX_THREAD_ID も非空)。残量は十分] この repo のメンテを回して Issue にして",
+      "expected_output": "OpenCode の目印を先に見るので、OpenCode の session と判定する。監査も反証も起票もせず、Claude Code の session で起動し直すよう案内して止まる。OpenCode を監査役や検証役にしない理由 (OpenCode は reviewer にしない、別の系列に反証させる趣旨) を添える。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "detects-opencode-first",
+          "text": "Claude と Codex の目印も立っているのに、OpenCode の目印を先に見て OpenCode の session と判定している"
+        },
+        {
+          "id": "no-audit-or-filing",
+          "text": "監査・反証・起票・fix のどれも始めていない (Codex や Claude を起動していない)"
+        },
+        {
+          "id": "guides-to-claude-code",
+          "text": "Claude Code の session で起動し直すよう案内している"
         }
       ]
     }

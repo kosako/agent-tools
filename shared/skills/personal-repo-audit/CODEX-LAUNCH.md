@@ -72,7 +72,9 @@ codex features list
    られたときだけ (Claude Code なら有効な settings のどの scope にも `sandbox.enabled: true` が無く、
    managed settings を持たない環境。Codex なら `CODEX_SANDBOX` が未設定)。`CODEX_SANDBOX` は値が空でも
    設定ありとみなし、sandbox の中として扱う (どの agent の session かの判定は値が非空かで読むが、sandbox の
-   内外の判定はその例外で、入れ子の sandbox を避けるため直接起動しない側に倒す)。
+   内外の判定はその例外で、入れ子の sandbox を避けるため直接起動しない側に倒す)。OpenCode の session (`OPENCODE` か
+   `AGENT_TOOLS_OPENCODE` が非空) と、種類を判定できない session では、sandbox の外にいることを確かめる規則が
+   無いので、直接起動を選ばず 3 へ進む (#425)。
 3. **BLOCKED + 人手**: どちらも使えない。`Blocked at: launch-path` とし、人が自分の terminal で run
    script を実行する手順と run dir を返す。
 
