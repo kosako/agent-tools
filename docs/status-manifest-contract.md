@@ -92,12 +92,19 @@ dotfiles 側の実装は含めません。
 | state | 意味 |
 | --- | --- |
 | `managed` | agent-tools marker を持ち、最新の generated artifact と一致する。 |
-| `stale` | agent-tools marker を持つが、generated artifact より古い。 |
-| `conflict` | 同名 target が存在するが marker を持たない (unmanaged)。 |
-| `missing` | generated artifact はあるが、target がまだ存在しない。 |
+| `stale` | agent-tools marker を持つが、generated artifact より古い。build や register が先に要る entry で、target が在るものも含む (下の注)。 |
+| `conflict` | 同名 target が存在するが marker を持たない (unmanaged)。sync が配置を止めるその他の理由 (target か親 dir が symlink、generated 側の marker が不正、`personal-` で始まらない、など) も含む。 |
+| `missing` | target がまだ存在しない。build や register が先に要る entry で target が無いもの、instruction の所有ファイルが無いか空 (未接続。connect が先に要る) のもの、target を持たない entry (register の unsupported) も含む。 |
 | `deployed_but_inactive` | catalog entry が registered でない (human_review_required / unsupported) のに、target 実体がディスクに残っている (一度承認して配布 → 後で gate がかかった等)。sync は配置も削除もしないため、手動掃除か再承認まで居座る (#186)。 |
 
 `conflict` の target は sync が変更してはいけません。
+
+build や register が先に要る entry (generated が catalog より古い、register の後に manifest が変わった) は、
+sync が target を検査する前に配置を止めます。status はこれを target の有無だけで `stale` と `missing` に分け、
+所有 (marker) の判定は build と register の後の sync に任せます。このため、marker を持たない target が在っても、
+この間は `stale` と出ます (build と register の後に sync が `conflict` にする)。target が在るのに `missing` と
+出すと、sync を回せば直ると読まれるため、target の有無を優先しています (#424)。この写し方の修正では
+`contract_version` を上げていません。値の意味は上の表の定義のままで、写し方を定義に合わせただけだからです。
 
 ## Management marker format
 
