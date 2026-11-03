@@ -253,6 +253,11 @@ sync / connect の symlink 検査は配置先 target とその近接 parent (scr
 **tool home (`~/.claude` / `~/.codex` / `~/.config/opencode`) 自体が symlink かは検査しません**。home が symlink なら、その先へ書き込みが
 向かいます。
 
+codex の instruction の所有ファイル (`~/.codex/AGENTS.md`) は home の直下にあるので、その近接 parent は home そのもの
+です。この親だけは検査せず (`ArtifactTargets.owned_parent_symlink?`)、所有ファイル自体の symlink の検査は残します。
+以前は親の検査が home に当たり、codex home を symlink にした構成で sync と connect が conflict で止まっていました
+(conflict が 1 件でもあると何も apply しないので、claude-code の配置も止まる。#424)。
+
 これは意図した won't-fix です (#176 M-03 裁定):
 
 - home の symlink 化は dotfile manager による**正当な構成**で、conflict で弾くと正当な

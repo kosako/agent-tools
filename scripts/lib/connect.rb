@@ -140,7 +140,8 @@ module Connect
     # 所有ファイルの create / 接続済み skip / conflict を判定する。
     # symlink / dir / 特殊ファイルは触らない。空ファイルのみ claim 可。
     def owned_plan(tool, gen, owned)
-      if File.symlink?(File.dirname(owned))
+      # 親が tool home そのもの (codex の AGENTS.md) なら親は検査しない (sync と同じ判定。#424)。
+      if ArtifactTargets.owned_parent_symlink?(@homes.fetch(tool), owned)
         return Plan.new("conflict", tool, "owned", owned, "owned parent dir is a symlink", gen)
       end
       if File.symlink?(owned)

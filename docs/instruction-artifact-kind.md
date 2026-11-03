@@ -92,7 +92,9 @@ instruction (public, 配布) には具体的な参照先 (planning tool の URL 
 - **claude-code**: `<claude home>/agent-tools/CLAUDE.md` を所有ファイルとして作成し
   (generated instruction をコピー)、`<claude home>/CLAUDE.md` に `@agent-tools/CLAUDE.md`
   の import 1 行を足す。既存内容と改行スタイルは保持し、import が既にあれば no-op。
-- **codex**: `<codex home>/AGENTS.md` を直接所有する。空ファイル (空白のみ) のみ claim 可。
+- **codex**: `<codex home>/AGENTS.md` を直接所有する。空ファイル (空白のみ) のみ claim 可。親 dir は codex home
+  そのものなので、親の symlink は検査しない (home の symlink は正当な構成。[Sync Policy](sync-policy.md) の「既知の
+  限界 (tool home symlink)」。#424)。`AGENTS.md` 自体の symlink は conflict。
 - symlink / dir / 特殊ファイルは決して触らない。所有ファイルに unmanaged な中身が
   あれば conflict として停止し、何も書き込まない。
 - 所有の判定は connect と sync で同じ (`InstructionMarker.ownership`。marker の target と name が、catalog の

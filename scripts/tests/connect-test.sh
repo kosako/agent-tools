@@ -346,4 +346,23 @@ run_rn "$sync" --opencode-home "$tmp/rnopen" > "$tmp/c19d" 2>&1 || fail "sync af
 [ "$(grep -c "personal-ops-renamed (up-to-date)\|AGENTS.md (up-to-date)\|CLAUDE.md (up-to-date)" "$tmp/c19d")" = 2 ] \
   || fail "both owned files should be up-to-date after reconnecting: $(cat "$tmp/c19d")"
 
+# --- case 20: tool home そのものが symlink でも、connect と sync は止まらない (#424 の 3) ---
+# home の symlink は正当な構成として検査しない裁定 (#176 M-03)。codex の AGENTS.md は home 直下なので、以前は親 dir の
+# symlink 検査が home そのものに当たり、conflict で sync 全体が止まっていた。所有ファイル自体の symlink (case 15) と、
+# claude-code の agent-tools/ の symlink (case 10) は今どおり conflict。
+mkdir -p "$tmp/realcodex20" "$tmp/realclaude20"
+ln -s "$tmp/realcodex20" "$tmp/codex20"
+ln -s "$tmp/realclaude20" "$tmp/claude20"
+run_h20() {
+  h20_cmd=$1
+  shift
+  "$h20_cmd" --root "$tmp/rnrepo" --codex-home "$tmp/codex20" --claude-home "$tmp/claude20" "$@"
+}
+run_h20 "$connect" --apply > "$tmp/c20a" 2>&1 || fail "connect with symlinked tool homes should succeed: $(cat "$tmp/c20a")"
+grep -q "symlink" "$tmp/c20a" && fail "a symlinked tool home must not be reported as a symlink conflict: $(cat "$tmp/c20a")"
+head -1 "$tmp/realcodex20/AGENTS.md" | grep -q "target=codex" || fail "codex owned file should be written under the real home"
+run_h20 "$sync" --opencode-home "$tmp/rnopen20" > "$tmp/c20b" 2>&1 || fail "sync with symlinked tool homes should succeed: $(cat "$tmp/c20b")"
+grep -F -q "AGENTS.md (up-to-date)" "$tmp/c20b" || fail "codex owned file under a symlinked home should be up-to-date: $(cat "$tmp/c20b")"
+grep -q "conflict" "$tmp/c20b" && fail "sync must not conflict on a symlinked tool home: $(cat "$tmp/c20b")"
+
 echo "ok: connect self-test passed"
