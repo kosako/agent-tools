@@ -111,8 +111,21 @@ run をまたいで同じ問題を同じ値で指すための鍵です。行が�
 
 中身が無い節は「なし」と書いて残します。
 
-利用できる skill の一覧に personal-maintenance-sweep があるときだけ、最後に次の 1 行を足します。
+利用できる skill の一覧に personal-maintenance-sweep があるときだけ、最後に次の 1 行を足します。どちらの行に
+するかは、この監査を回している session の種類で決めます。種類は model の自認ではなく env の目印で決め、規則は
+personal-review-request の Claude route の「どの session で動いているか」と同じです (目印は非空なら立っている。
+OpenCode の目印を先に見る)。
+
+Claude Code の session では、次の 1 行です。
 
 ```text
 この結果から反証・重複の照合・起票へ進むなら、personal-maintenance-sweep で続けられます (この監査結果から始められます)。
+```
+
+それ以外 (Codex の session、OpenCode の session、種類を判定できない session) では、次の 1 行です。sweep は、
+起動の境界 (connector と MCP を外した起動) の外の session でした監査の結果を反証の入力にしないので、
+この結果からは続けられません (#425)。
+
+```text
+反証・重複の照合・起票へ進むなら、Claude Code の session で personal-maintenance-sweep を始めてください (この session の監査結果は引き継がず、監査からやり直します)。
 ```
