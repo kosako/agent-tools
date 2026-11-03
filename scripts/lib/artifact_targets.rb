@@ -115,6 +115,18 @@ module ArtifactTargets
 
   # tool home 内の target-artifact 配置先 path を返す (path 解決の単一 source)。
   # home は解決済みの tool home dir (例 ~/.claude / ~/.codex)。
+# instruction の所有ファイルの親 dir が symlink か (connect と sync の共通の検査)。親が tool home そのもの
+# (codex の <home>/AGENTS.md) なら検査しない。home の symlink は dotfile manager による正当な構成として
+# 検査しない裁定 (#176 M-03、docs/sync-policy.md「既知の限界 (tool home symlink)」) があり、home 直下の所有
+# ファイルだけがそれに反して conflict で sync 全体を止めていた (#424)。所有ファイル自体の symlink の検査は
+# 呼び出し側に残す。比較は path の文字列 (expand_path) で、symlink は解決しない。
+def self.owned_parent_symlink?(home, owned)
+  parent = File.dirname(owned)
+  return false if File.expand_path(parent) == File.expand_path(home)
+
+  File.symlink?(parent)
+end
+
   # name の要否は kind で変わる: instruction は name を使わない (nil 可)、
   # skill / script / plugin は name が path に入るため必須 (generated_path と同じ契約)。
   # - instruction: tool 固有ファイル名 (INSTRUCTION_FILENAMES)。claude-code は

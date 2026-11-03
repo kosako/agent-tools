@@ -521,8 +521,9 @@ module Sync
              InstructionMarker.matches?(File.read(gen), target: tool, name: name, build_id: expected_build_id)
         return Plan.new("skip", tool, name, target, "run build first", "instruction", gen, :build_first)
       end
-      # 所有先とその親 dir が symlink なら決して触らない (connect と同じ保証)。
-      if File.symlink?(target) || File.symlink?(File.dirname(target))
+      # 所有先とその親 dir が symlink なら決して触らない (connect と同じ保証)。親が tool home そのもの (codex) なら
+      # 親は検査しない (ArtifactTargets.owned_parent_symlink?。#424)。
+      if File.symlink?(target) || ArtifactTargets.owned_parent_symlink?(@homes.fetch(tool), target)
         return Plan.new("conflict", tool, name, target, "existing target is a symlink", "instruction", gen)
       end
       # 未接続なら connect を促す。sync は create しない。
