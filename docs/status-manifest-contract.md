@@ -56,6 +56,13 @@ dotfiles 側の実装は含めません。
       "name": "personal-example",
       "state": "managed"
     }
+  ],
+  "orphans": [
+    {
+      "tool": "codex",
+      "name": "personal-removed",
+      "kind": "skill"
+    }
   ]
 }
 ```
@@ -86,6 +93,12 @@ dotfiles 側の実装は含めません。
 - `sync_targets[].tool`: `codex` / `claude-code` / `opencode` (`ArtifactTargets::TOOLS`)。opencode の
   行は plugin (`plugins/personal-<name>.js`) を指す。
 - `sync_targets[].state`: 後述の target state。
+- `orphans[]`: catalog に載らなくなったのに tool home に残っている、agent-tools 管理の配置物 (#424)。`sync --prune` が
+  撤去の対象にするもの (管理 marker の tool と name が一致するもの) だけで、unmanaged や symlink の orphan は含めない。
+  `tool` / `name` / `kind` (`skill` / `script` / `plugin`。instruction は prune の対象外なので出ない) を持つ。catalog が
+  無い・空のときは判断せず空の配列。field を足しただけで既存の field の集合と値の意味は変わらないので、
+  `contract_version` は上げていない (dotfiles の reader は既知の key だけを読む。orphan を表示するかは dotfiles 側の
+  判断)。
 
 ### Target state
 

@@ -91,6 +91,12 @@ module Doctor
                   "deployed_but_inactive" => "warn" }.fetch(t["state"])
         report(level, "target", "[#{t['tool']}] #{t['name']} #{t['state']}")
       end
+
+      # catalog から消えたのに tool home に残る管理下の配置物 (#424)。使える状態のまま残るので warn。撤去は
+      # sync --prune の明示の操作 (doctor は report-only)。
+      status["orphans"].each do |o|
+        report("warn", "target", "[#{o['tool']}] #{o['name']} orphan (not in catalog; remove with scripts/sync.sh --prune --apply)")
+      end
     end
 
     def check_tool_homes

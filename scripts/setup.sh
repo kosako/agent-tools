@@ -43,12 +43,14 @@ done
 # set -- で positional params を組み立て "$@" で渡す (POSIX sh で配列の代替)。
 # with_opencode_home は sync だけ 1 にする: connect は instruction を配らない opencode の home を
 # 受け取らない (--opencode-home を渡すと unknown option で exit 2, #295)。
-#   run <script> <with_homes:0|1> <with_opencode_home:0|1> <with_apply:0|1>
+# 5 番目の引数は、そのまま足す固定の flag (build の --prune)。runtime の値は渡さない。
+#   run <script> <with_homes:0|1> <with_opencode_home:0|1> <with_apply:0|1> [flag]
 run() {
   _script=$1
   _with_homes=$2
   _with_opencode_home=$3
   _with_apply=$4
+  _flag=${5-}
   set --
   [ -n "$root" ] && set -- "$@" --root "$root"
   [ -n "$quiet" ] && set -- "$@" --quiet
@@ -58,11 +60,15 @@ run() {
   fi
   [ "$_with_opencode_home" = 1 ] && [ -n "$opencode_home" ] && set -- "$@" --opencode-home "$opencode_home"
   [ "$_with_apply" = 1 ] && [ -n "$apply" ] && set -- "$@" --apply
+  [ -n "$_flag" ] && set -- "$@" "$_flag"
   "$script_dir/$_script" "$@"
 }
 
 echo "==> build"
-run build.sh 0 0 0
+# --prune で、shared/ から消えた asset の generated/ の残骸 (git ignore の生成物) を消す。消さないと status と doctor
+# が stale と出し続ける (#424)。tool home の配置物は消さない (撤去は sync --prune の明示の操作。下の sync は prune
+# しない)。残った配置物は status と doctor が orphan として出す。
+run build.sh 0 0 0 --prune
 
 echo "==> register"
 # register は human_review 待ちがあると exit 3 を返す。これは致命ではない
