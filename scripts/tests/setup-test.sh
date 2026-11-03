@@ -62,6 +62,38 @@ out=$("$setup" --apply --root "$tmp" --codex-home "$tmp/codex" --claude-home "$t
 # --apply では dry-run hint を出さない (setup.sh:76 の gate 反転を検出する negative coverage)
 echo "$out" | grep -q "dry-run のみ" && fail "--apply must not print the dry-run hint: $out" || true
 
+# --- case 2b: shared/ から asset を消した後の setup --apply は、generated/ の残骸だけを消し、tool home の配置物は
+# 残して status と doctor が orphan として出す (#424 の 4) ---
+mkdir -p "$tmp/kept"
+mv "$tmp/shared/skills/personal-demo-skill.md" "$tmp/shared/skills/personal-demo-skill.asset.yml" "$tmp/kept/"
+# prune が触らない orphan (marker の無い dir と symlink) は orphans に出さない
+mkdir -p "$tmp/codex/skills/personal-handmade" "$tmp/elsewhere"
+echo "user-owned" > "$tmp/codex/skills/personal-handmade/SKILL.md"
+ln -s "$tmp/elsewhere" "$tmp/claude/skills/personal-linked"
+out=$("$setup" --apply --root "$tmp" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" 2>&1) \
+  || fail "apply after removing an asset exited non-zero: $out"
+[ ! -e "$tmp/generated/codex/skills/personal-demo-skill" ] || fail "setup should prune the removed asset from generated/ (codex): $out"
+[ ! -e "$tmp/generated/claude-code/skills/personal-demo-skill" ] || fail "setup should prune the removed asset from generated/ (claude-code): $out"
+[ -f "$tmp/codex/skills/personal-demo-skill/SKILL.md" ] || fail "setup must not remove the deployed skill from the tool home"
+[ -f "$tmp/claude/skills/personal-demo-skill/SKILL.md" ] || fail "setup must not remove the deployed skill from the tool home"
+"$script_dir/../status.sh" --root "$tmp" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" --json > "$tmp/st2b" 2>&1 \
+  || fail "status after removing an asset should succeed: $(cat "$tmp/st2b")"
+ruby -rjson -e '
+  d = JSON.parse(File.read(ARGV[0]))
+  got = d["orphans"].map { |o| [o["tool"], o["name"], o["kind"]] }.sort
+  want = [["claude-code", "personal-demo-skill", "skill"], ["codex", "personal-demo-skill", "skill"]]
+  abort "orphans should list the removed skill for both tools, got #{got.inspect}" unless got == want
+  abort "generated.stale should be 0 after the prune, got #{d["generated"]["stale"]}" unless d["generated"]["stale"].zero?
+  abort "contract_version must stay 3" unless d["contract_version"] == 3
+' "$tmp/st2b" || fail "status orphans: $(cat "$tmp/st2b")"
+"$script_dir/../doctor.sh" --root "$tmp" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" \
+  --agents-home "$tmp/agents" > "$tmp/dr2b" 2>&1 || true
+grep -F -q "warn: target: [codex] personal-demo-skill orphan (not in catalog; remove with scripts/sync.sh --prune --apply)" "$tmp/dr2b" \
+  || fail "doctor should warn about the orphan: $(cat "$tmp/dr2b")" # no-opencode-home: 期待する案内の文言にある sync.sh で、呼び出しではない
+grep -q "generated: .* 0 stale" "$tmp/dr2b" || fail "doctor should not report stale generated after the prune: $(cat "$tmp/dr2b")"
+rm -rf "$tmp/codex/skills/personal-handmade" "$tmp/claude/skills/personal-linked"
+mv "$tmp/kept/personal-demo-skill.md" "$tmp/kept/personal-demo-skill.asset.yml" "$tmp/shared/skills/"   # 後の case が fixture を写す
+
 # --- case 3: 未知オプションは usage を出して exit 2 ---
 rc=0
 "$setup" --bogus >/dev/null 2>&1 || rc=$? # no-opencode-home: usage で止まる parse-only の case

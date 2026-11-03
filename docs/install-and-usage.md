@@ -83,7 +83,7 @@ cd ~/src/agent/agent-tools
 `--apply` を付けたときだけ connect / sync が実環境 (tool home) へ書き込みます。dry-run でも
 build / register は毎回実行するため、repo 内の中間物 (`generated/` と
 `generated/catalog.json`) は**更新されます** (どちらも gitignore 済み・tool home には
-触れない)。初回 install と更新の両方に使えます(connect は冪等なので毎回通して無害)。
+触れない)。build は `--prune` で回るので、`shared/` から消えた asset の generated/ の残骸も消えます。初回 install と更新の両方に使えます(connect は冪等なので毎回通して無害)。
 
 ### 個別に実行する場合
 
@@ -128,6 +128,19 @@ git pull
   新しい build_id に焼き直してから `register` します。焼き直すまでは register が exit 3 を返し、sync が
   `human_review_required` で skip して旧版が配置されたまま残ります(下の「トラブルシュート」と
   [register-catalog.md](register-catalog.md) の「承認は内容と配布形態に紐づく」)。
+- upstream で asset が消えた・改名されたときは、`setup.sh` だけでは tool home から片付きません。`setup.sh` の build は
+  `--prune` で回るので、generated/ の残骸 (git ignore の生成物) は消えます。一方、tool home に配置済みのコピーは
+  消さず、使える状態のまま残ります (tool home から消すのは明示の操作だけ)。残ったものは `status` と `doctor` が
+  orphan として出します (`orphan: [<tool>] <name>`、doctor では warn)。出たら、次の順で撤去します (管理 marker が
+  一致するものだけを消す。詳細は [sync-policy](sync-policy.md) の「撤去」)。
+
+  ```sh
+  ./scripts/sync.sh --prune           # dry-run: 撤去の候補を確認
+  ./scripts/sync.sh --prune --apply   # 撤去
+  ```
+
+  instruction は prune の対象外です。instruction の asset の改名は、下の「トラブルシュート」の
+  `owned file belongs to another instruction asset` の行の手順で直します (#424)。
 
 ## 日常の使い方
 

@@ -57,6 +57,7 @@ module Status
         },
         "register" => register_summary,
         "sync_targets" => sync_targets,
+        "orphans" => orphan_targets,
       }
     end
 
@@ -186,8 +187,12 @@ module Status
       }
     end
 
+    def sync_runner
+      @sync_runner ||= Sync::Runner.new(@root, @homes)
+    end
+
     def sync_targets
-      Sync::Runner.new(@root, @homes).plan.map do |p|
+      sync_runner.plan.map do |p|
         {
           "tool" => p.tool,
           "name" => p.name,
@@ -195,6 +200,17 @@ module Status
         }
       end
     end
+
+# catalog に載らなくなったのに tool home に残っている、agent-tools 管理の配置物 (#424)。sync --prune が撤去の
+# 対象にするもの (marker が tool / name と一致する delete の plan) だけを出し、unmanaged や symlink の orphan
+# (prune も触らない) は出さない。catalog が無い・空のときは prune_plans と同じく何も判断しない (空の配列)。
+# instruction は prune の対象外なので出ない。setup と sync は既定で prune しないので、upstream で消えた・改名
+# された asset に気づく口になる。
+def orphan_targets
+  sync_runner.prune_plans.select { |p| p.action == "delete" }.map do |p|
+    { "tool" => p.tool, "name" => p.name, "kind" => p.kind }
+  end
+end
 
     # Sync plan を contract の target state にマップする。skip の判定は plan.code
     # (機械可読) だけを見て、表示文言 (plan.reason) に依存しない — sync の文言変更で
@@ -285,6 +301,9 @@ module Status
     puts "register:  catalog_present=#{reg['catalog_present']} registered=#{reg['registered']} human_review_required=#{reg['human_review_required']} unsupported=#{reg['unsupported']}"
     report["sync_targets"].each do |t|
       puts "target:    [#{t['tool']}] #{t['name']} #{t['state']}"
+    end
+    report["orphans"].each do |o|
+      puts "orphan:    [#{o['tool']}] #{o['name']} (#{o['kind']}; not in catalog)"
     end
   end
 
