@@ -51,7 +51,7 @@ key は省いてよく、省いた key は既定値を使います。在る key 
 | `reserve.<tool>.daily_pct` | claude-code 12 / codex 6 | 0〜100 の数 | その tool を普段 1 日に使う量 (週の枠に対する %)。reset までの日常の作業の分を予約する |
 | `start_5h_min_pct` | 30 | 0〜100 の数 | 開始の条件。動かす tool の 5h の残りがこれ未満なら開始しない |
 | `stop_5h_min_pct` | 10 | 0〜100 の数で、`start_5h_min_pct` 以下 | 停止の条件。単位の終わりに読み直して、5h の残りがこれ未満なら止める |
-| `issue_cap` | 5 | 1〜20 の整数 | 1 run で起票する Issue の上限 |
+| `issue_cap` | 5 | 1〜20 の整数 | 1 run で起票する Issue の上限 (再開をまたいだ累計。超えた分は次の run に持ち越さない。`SKILL.md` 手順 7) |
 | `fix_cap` | 2 | 0〜20 の整数 | fix モードで出す PR の上限 (再開をまたいだ累計。0 なら fix をしない) |
 
 `<tool>` は `claude-code` と `codex` だけです。次の command で、検証した実効値を出します (exit 0 で実効値の
