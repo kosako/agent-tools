@@ -289,4 +289,68 @@ make_demo_repo "$weird" workflows personal-demo workflow '# demo'
 [ "$(jget "$tmp/sw" assets total)" = "1" ] || fail "assets.total under a glob-special root should be 1: $(cat "$tmp/sw")"
 [ "$(jget "$tmp/sw" generated total)" = "2" ] || fail "generated.total under a glob-special root should be 2: $(cat "$tmp/sw")"
 
+# --- case: build や register が先に要る entry は、target の有無で stale と missing に分ける (#424 の 1) ---
+# sync は generated が catalog より古い (build first) と manifest 変更 (manifest stale) を、target の検査の前に
+# skip する。配置済みの target を missing と出すと sync で直ると読まれ、未配置を stale と出すと逆に読まれる。
+state_of() {
+  ruby -rjson -e '
+    t = JSON.parse(File.read(ARGV[0]))["sync_targets"].find { |x| x["tool"] == ARGV[1] }
+    puts t ? t["state"] : "absent"
+  ' "$1" "$2"
+}
+run_pdstatus() {
+  "$status_sh" --root "$tmp/pdrepo" --codex-home "$tmp/pdcodex" --claude-home "$tmp/pdclaude" --opencode-home "$tmp/pdopen" --json
+}
+mkdir -p "$tmp/pdcodex/skills" "$tmp/pdclaude/skills"
+WAM_EXTRA='summary: demo workflow'
+make_demo_repo "$tmp/pdrepo" workflows personal-demo workflow '# demo v1'
+"$build" --root "$tmp/pdrepo" --quiet > /dev/null
+"$script_dir/../register.sh" --root "$tmp/pdrepo" --quiet > /dev/null
+"$sync" --root "$tmp/pdrepo" --codex-home "$tmp/pdcodex" --claude-home "$tmp/pdclaude" --opencode-home "$tmp/pdopen" --apply --quiet > /dev/null
+# source を変えて register だけ流す (generated が catalog より古い = build first)
+write_skill_source "$tmp/pdrepo/shared/workflows/personal-demo.md" '# demo v2'
+"$script_dir/../register.sh" --root "$tmp/pdrepo" --quiet > /dev/null
+"$sync" --root "$tmp/pdrepo" --codex-home "$tmp/pdcodex" --claude-home "$tmp/pdclaude" --opencode-home "$tmp/pdopen" > "$tmp/pd-sync" 2>&1 || true
+grep -q '(run build first)' "$tmp/pd-sync" || fail "fixture should be build first: $(cat "$tmp/pd-sync")"
+run_pdstatus > "$tmp/pd1" 2>&1 || fail "status should succeed: $(cat "$tmp/pd1")"
+[ "$(state_of "$tmp/pd1" codex)" = stale ] || fail "deployed target waiting for build should be stale: $(cat "$tmp/pd1")"
+[ "$(state_of "$tmp/pd1" claude-code)" = stale ] || fail "deployed target waiting for build should be stale: $(cat "$tmp/pd1")"
+rm -rf "$tmp/pdclaude/skills/personal-demo"
+run_pdstatus > "$tmp/pd2" 2>&1
+[ "$(state_of "$tmp/pd2" claude-code)" = missing ] || fail "absent target waiting for build should be missing: $(cat "$tmp/pd2")"
+[ "$(state_of "$tmp/pd2" codex)" = stale ] || fail "the other deployed target should stay stale: $(cat "$tmp/pd2")"
+# target が symlink でも「在る」扱い (sync は後で conflict にする)
+ln -s "$tmp/nowhere" "$tmp/pdclaude/skills/personal-demo"
+run_pdstatus > "$tmp/pd2b" 2>&1
+[ "$(state_of "$tmp/pd2b" claude-code)" = stale ] || fail "a symlinked target waiting for build should be stale: $(cat "$tmp/pd2b")"
+rm -f "$tmp/pdclaude/skills/personal-demo"
+# build と sync で戻してから、manifest を変えて片方の target を消す (manifest stale)
+"$build" --root "$tmp/pdrepo" --quiet > /dev/null
+"$script_dir/../register.sh" --root "$tmp/pdrepo" --quiet > /dev/null
+"$sync" --root "$tmp/pdrepo" --codex-home "$tmp/pdcodex" --claude-home "$tmp/pdclaude" --opencode-home "$tmp/pdopen" --apply --quiet > /dev/null
+ruby -pi -e 'sub(/\Asummary: demo workflow$/, "summary: demo workflow (edited)")' "$tmp/pdrepo/shared/workflows/personal-demo.asset.yml"
+grep -q "^summary: demo workflow (edited)$" "$tmp/pdrepo/shared/workflows/personal-demo.asset.yml" || fail "manifest edit fixture did not apply"
+rm -rf "$tmp/pdcodex/skills/personal-demo"
+run_pdstatus > "$tmp/pd3" 2>&1
+[ "$(state_of "$tmp/pd3" codex)" = missing ] || fail "absent target with a changed manifest should be missing: $(cat "$tmp/pd3")"
+[ "$(state_of "$tmp/pd3" claude-code)" = stale ] || fail "deployed target with a changed manifest should be stale: $(cat "$tmp/pd3")"
+
+# instruction は、所有ファイルが無いか空なら未接続なので missing、中身があれば stale
+mkdir -p "$tmp/pdicodex" "$tmp/pdiclaude"
+make_demo_repo "$tmp/pdirepo" instructions personal-ops instruction '# ops v1'
+"$build" --root "$tmp/pdirepo" --quiet > /dev/null
+printf '# ops v2\n' > "$tmp/pdirepo/shared/instructions/personal-ops.md"
+"$script_dir/../register.sh" --root "$tmp/pdirepo" --quiet > /dev/null
+run_pdistatus() {
+  "$status_sh" --root "$tmp/pdirepo" --codex-home "$tmp/pdicodex" --claude-home "$tmp/pdiclaude" --opencode-home "$tmp/pdiopen" --json
+}
+run_pdistatus > "$tmp/pdi1" 2>&1 || fail "status should succeed: $(cat "$tmp/pdi1")"
+[ "$(state_of "$tmp/pdi1" codex)" = missing ] || fail "absent owned file waiting for build should be missing: $(cat "$tmp/pdi1")"
+printf '  \n' > "$tmp/pdicodex/AGENTS.md"
+run_pdistatus > "$tmp/pdi2" 2>&1
+[ "$(state_of "$tmp/pdi2" codex)" = missing ] || fail "blank owned file (not connected) should be missing: $(cat "$tmp/pdi2")"
+printf '%s\n' '<!-- agent-tools:managed v=1 repo=agent-tools name=personal-ops target=codex artifact_kind=instruction source=shared/instructions/personal-ops.md build_id=sha256:0 -->' '# ops v0' > "$tmp/pdicodex/AGENTS.md"
+run_pdistatus > "$tmp/pdi3" 2>&1
+[ "$(state_of "$tmp/pdi3" codex)" = stale ] || fail "connected owned file waiting for build should be stale: $(cat "$tmp/pdi3")"
+
 echo "ok: status self-test passed"

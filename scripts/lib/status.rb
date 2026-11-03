@@ -199,7 +199,10 @@ module Status
     # Sync plan を contract の target state にマップする。skip の判定は plan.code
     # (機械可読) だけを見て、表示文言 (plan.reason) に依存しない — sync の文言変更で
     # dotfiles 連携 contract を壊さないため (#152)。
-    # manifest-stale (登録判断が古い) は配置済みでも再 register が要るので stale。
+    # manifest-stale (登録判断が古い) と build-first (generated が catalog より古い) は、sync が
+    # target を検査する前に skip する。どちらも target が在れば stale、無ければ missing にする
+    # (contract の missing = target 不在。配置済みの target を missing と出すと、sync で直ると
+    # 読まれる。#424)。所有の判定は build / register の後の sync が行う。
     # registered でない entry は sync が配置しないが、過去に配置した実体が target に
     # 残っていることがある (一度承認して配布 → 後で gate がかかった等)。これを missing
     # (target 不在) と混同すると掃除対象に気づけないので deployed_but_inactive で
@@ -212,7 +215,7 @@ module Status
       when "skip"
         case plan.code
         when :up_to_date then "managed"
-        when :manifest_stale then "stale"
+        when :manifest_stale, :build_first then pending_state(plan)
         when :not_registered then not_registered_state(plan)
         else "missing"
         end
@@ -229,6 +232,24 @@ module Status
     # (sync 自体は symlink に触らない)。
     def not_registered_state(plan)
       File.exist?(plan.target) || File.symlink?(plan.target) ? "deployed_but_inactive" : "missing"
+    end
+
+    # build / register が先に要る entry の deployment state。target が在れば stale、無ければ missing。
+    # symlink は not_registered_state と同じく「在る」扱い。instruction の所有ファイルは、無いときに
+    # 加えて空 (空白のみ) のときも未接続なので missing (sync の connect first と同じ判定)。
+    def pending_state(plan)
+      target = plan.target
+      return "missing" unless target
+      return "stale" if File.symlink?(target)
+      return "missing" unless File.exist?(target)
+      if plan.kind == "instruction" && File.file?(target) && File.read(target).scrub("�").strip.empty?
+        return "missing"
+      end
+
+      "stale"
+    rescue SystemCallError
+      # 読めない所有ファイルは在るものとして stale (status は crash しない)。
+      "stale"
     end
 
   end
