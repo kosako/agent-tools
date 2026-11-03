@@ -66,6 +66,10 @@ echo "$out" | grep -q "dry-run のみ" && fail "--apply must not print the dry-r
 # 残して status と doctor が orphan として出す (#424 の 4) ---
 mkdir -p "$tmp/kept"
 mv "$tmp/shared/skills/personal-demo-skill.md" "$tmp/shared/skills/personal-demo-skill.asset.yml" "$tmp/kept/"
+# prune が触らない orphan (marker の無い dir と symlink) は orphans に出さない
+mkdir -p "$tmp/codex/skills/personal-handmade" "$tmp/elsewhere"
+echo "user-owned" > "$tmp/codex/skills/personal-handmade/SKILL.md"
+ln -s "$tmp/elsewhere" "$tmp/claude/skills/personal-linked"
 out=$("$setup" --apply --root "$tmp" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" 2>&1) \
   || fail "apply after removing an asset exited non-zero: $out"
 [ ! -e "$tmp/generated/codex/skills/personal-demo-skill" ] || fail "setup should prune the removed asset from generated/ (codex): $out"
@@ -87,6 +91,7 @@ ruby -rjson -e '
 grep -F -q "warn: target: [codex] personal-demo-skill orphan (not in catalog; remove with scripts/sync.sh --prune --apply)" "$tmp/dr2b" \
   || fail "doctor should warn about the orphan: $(cat "$tmp/dr2b")"
 grep -q "generated: .* 0 stale" "$tmp/dr2b" || fail "doctor should not report stale generated after the prune: $(cat "$tmp/dr2b")"
+rm -rf "$tmp/codex/skills/personal-handmade" "$tmp/claude/skills/personal-linked"
 mv "$tmp/kept/personal-demo-skill.md" "$tmp/kept/personal-demo-skill.asset.yml" "$tmp/shared/skills/"   # 後の case が fixture を写す
 
 # --- case 3: 未知オプションは usage を出して exit 2 ---
