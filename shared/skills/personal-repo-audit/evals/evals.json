@@ -103,7 +103,7 @@
     {
       "id": 9,
       "name": "sweep-line-when-available",
-      "prompt": "[前提: 利用できる skill の一覧に personal-maintenance-sweep がある] repo 全体を監査して",
+      "prompt": "[前提: Claude Code の session で起動 (env の CLAUDECODE が非空で、Codex と OpenCode の目印は空)。利用できる skill の一覧に personal-maintenance-sweep がある] repo 全体を監査して",
       "expected_output": "通常どおり read-only の報告を出し、最後に personal-maintenance-sweep で反証・重複の照合・起票へ進めることを 1 行で添える。sweep を自分で起動せず、Issue も作らない。",
       "files": [],
       "assertions": [
@@ -204,6 +204,27 @@
         {
           "id": "brief-carries-exclusion",
           "text": "観点ごとの子 agent の brief にも、gitignore された file を開かない除外を書くとしている"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "name": "codex-session-sweep-line-redo",
+      "prompt": "[前提: Codex の session で起動 (env の CODEX_THREAD_ID が非空で、CLAUDECODE と OPENCODE と AGENT_TOOLS_OPENCODE は空)。利用できる skill の一覧に personal-maintenance-sweep がある] repo 全体を監査して",
+      "expected_output": "通常どおり read-only の報告を出す。最後の 1 行は、この結果から sweep で続けられるという案内ではなく、Claude Code の session で personal-maintenance-sweep を始めれば監査からやり直す、という案内にする。sweep を自分で起動せず、Issue も作らない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "codex-session-line",
+          "text": "報告の最後の 1 行が、Claude Code の session で sweep を始めるよう案内し、この session の監査結果は引き継がない (監査からやり直す) と伝えている"
+        },
+        {
+          "id": "no-continue-claim",
+          "text": "「この監査結果から始められます」のように、この結果から sweep を続けられるとは書いていない"
+        },
+        {
+          "id": "does-not-run-sweep",
+          "text": "sweep を起動しておらず、Issue の作成や GitHub への書き込みもしていない"
         }
       ]
     }

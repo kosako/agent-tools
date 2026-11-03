@@ -1183,6 +1183,27 @@
           "text": "却下か再発かを推測で決めていない"
         }
       ]
+    },
+    {
+      "id": 59,
+      "name": "existing-audit-from-codex-session-rejected",
+      "prompt": "[前提: Claude Code の session で起動。人が、Codex の session で personal-repo-audit を回した報告を会話に貼った (対象の commit は今の HEAD と同じ)。残量は十分] この監査結果から sweep を続けて Issue にして。手順の確認だけで実行はしない。",
+      "expected_output": "貼られた報告は Codex の session でした監査なので、既存の監査結果として使わない (起動の境界の外で作られた結果は反証の入力にしない)。手順 0 からの通常の run として、監査からやり直す計画を示す。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "rejects-codex-session-report",
+          "text": "Codex の session でした監査の報告を、既存の監査結果 (反証から始める入口) として使わないと述べている"
+        },
+        {
+          "id": "gives-boundary-reason",
+          "text": "使わない理由として、起動の境界 (connector と MCP を外した起動) の外の session で作られた結果であることを挙げている"
+        },
+        {
+          "id": "redo-audit",
+          "text": "監査からやり直す (手順 3 の監査を含む通常の run の) 計画を示している"
+        }
+      ]
     }
   ]
 }

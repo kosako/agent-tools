@@ -124,7 +124,9 @@ REPORT-FORMAT.md の 3 段階 (確証 / 有力 / 未確証) で付け直しま�
 「問題なし」と誤読させないため)。
 
 利用できる skill の一覧に personal-maintenance-sweep があるときだけ、報告の最後に、反証・重複の
-照合・起票へ進む方法を 1 行で添えます (文面は REPORT-FORMAT.md)。一覧に無ければ書きません。
+照合・起票へ進む方法を 1 行で添えます (文面は REPORT-FORMAT.md)。一覧に無ければ書きません。Claude Code の
+session 以外 (Codex・OpenCode・判定できない session) では、この結果から続けられないので、Claude Code で監査から
+やり直す旨の行にします (session の判定と文面は REPORT-FORMAT.md。#425)。
 どちらの場合も sweep を自分で起動せず、Issue も作りません。
 
 ## やってはいけないこと
