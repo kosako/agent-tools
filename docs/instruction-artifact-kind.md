@@ -95,6 +95,12 @@ instruction (public, 配布) には具体的な参照先 (planning tool の URL 
 - **codex**: `<codex home>/AGENTS.md` を直接所有する。空ファイル (空白のみ) のみ claim 可。
 - symlink / dir / 特殊ファイルは決して触らない。所有ファイルに unmanaged な中身が
   あれば conflict として停止し、何も書き込まない。
+- 所有の判定は connect と sync で同じ (`InstructionMarker.ownership`。marker の target と name が、catalog の
+  instruction の entry と一致する)。instruction の asset を改名した後は、所有ファイルに旧名の marker が残るので、
+  connect と sync の両方が `owned file belongs to another instruction asset (<旧名>)` の conflict で止まる (#424)。
+  所有ファイルは agent-tools だけが書く file なので、空にして `connect.sh --apply` をやり直すと、新しい asset の
+  所有に切り替わる (その後の sync は up-to-date)。改名を sync の update として自動で通さないのは、所有の契約
+  (同じ asset の marker を持つ file だけを更新する) を緩めないため。
 
 marker の生成・解析は `scripts/lib/instruction_marker.rb` に集約し、build (生成) と
 connect / sync (所有判定) が同じ format を共有する。

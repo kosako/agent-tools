@@ -82,7 +82,7 @@ module Connect
     def unconnectable_reason(tool, gen)
       return "no catalog; run scripts/register.sh first" unless @catalog_present
 
-      entry = @entries.find { |e| e["target"] == tool && e["artifact_kind"] == "instruction" }
+      entry = instruction_entry(tool)
       return "not in catalog; run scripts/register.sh first" unless entry
       unless entry["registration"] == "registered"
         return "instruction not registered (#{entry["registration"]})"
@@ -132,6 +132,11 @@ module Connect
       [owned_plan(tool, gen, owned)]
     end
 
+    # tool の instruction の catalog entry (check-manifests が tool ごとに 1 つに限る)。
+    def instruction_entry(tool)
+      @entries.find { |e| e["target"] == tool && e["artifact_kind"] == "instruction" }
+    end
+
     # 所有ファイルの create / 接続済み skip / conflict を判定する。
     # symlink / dir / 特殊ファイルは触らない。空ファイルのみ claim 可。
     def owned_plan(tool, gen, owned)
@@ -148,13 +153,18 @@ module Connect
 
       # 非 UTF-8 バイトは scrub してから判定する (crash させない, #149)。scrub は判定用で、
       # 書き込みは do_create の byte copy なので所有先の内容を壊さない。marker が壊れて
-      # いれば managed? が false → conflict (fail-closed)。
+      # いれば ownership が :unmanaged → conflict (fail-closed)。
       content = File.read(owned).scrub("�")
       if content.strip.empty?
         return Plan.new("create", tool, "owned", owned, "claiming empty file", gen)
       end
-      if InstructionMarker.managed?(content, tool)
+      # 所有の判定は sync と同じ InstructionMarker.ownership (target + name)。改名の前の asset の marker を
+      # 接続済みと見ると、sync の unmanaged の conflict と食い違い、どちらでも解消しない (#424)。
+      case InstructionMarker.ownership(content, target: tool, name: instruction_entry(tool).fetch("name"))
+      when :owned
         return Plan.new("skip", tool, "owned", owned, "already connected", gen)
+      when :other_asset
+        return Plan.new("conflict", tool, "owned", owned, InstructionMarker.other_asset_reason(content), gen)
       end
 
       Plan.new("conflict", tool, "owned", owned, "unmanaged file at owned path", gen)
