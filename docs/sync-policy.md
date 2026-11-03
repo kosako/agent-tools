@@ -231,8 +231,9 @@ instruction artifact は connect が所有を確立し、sync が更新する。
 - codex: `<codex home>/AGENTS.md` (空ファイルのみ claim)。
 
 これらは日常 sync では create せず、connect だけが所有を開始する。symlink / 非通常
-ファイル / unmanaged な所有先は conflict として停止する。詳細は
-[Instruction Artifact Kind](instruction-artifact-kind.md)。
+ファイル / unmanaged な所有先は conflict として停止する。所有の判定 (marker の target と name) は connect と
+sync で同じ helper を使い、instruction の asset を改名した後の旧名の marker は、両方で同じ理由の conflict に
+する (#424)。詳細と復旧の手順は [Instruction Artifact Kind](instruction-artifact-kind.md)。
 
 ## 既知の限界 (TOCTOU)
 

@@ -57,10 +57,29 @@ module InstructionMarker
     pairs
   end
 
-  # content が指定 target の agent-tools instruction として管理されているか。
-  def self.managed?(content, target)
+  # 所有ファイルの content が、指定 target の同じ asset (name) の agent-tools 管理か。connect と sync の
+  # 所有の判定はこれだけを使う (#424: connect が target だけ、sync が target + name を見ていて、asset の
+  # 改名で「接続済み」と「unmanaged」が食い違った)。
+  #   :owned       … marker の target と name が一致する
+  #   :other_asset … 同じ target の marker だが name が違う (instruction の asset を改名した後など)
+  #   :unmanaged   … marker が無い・壊れている・別の target
+  def self.ownership(content, target:, name:)
     marker = parse(content)
-    !marker.nil? && marker["target"] == target
+    return :unmanaged if marker.nil? || marker["target"] != target
+
+    marker["name"] == name ? :owned : :other_asset
+  end
+
+  # :other_asset のときに、所有ファイルの marker の name (値の形は parse が MarkerValue で検査済み)。
+  def self.owner_name(content)
+    parse(content)&.fetch("name")
+  end
+
+  # :other_asset の conflict に添える理由 (connect と sync で同じ文言)。所有ファイルは agent-tools だけが
+  # 書く file なので、空にして connect をやり直せば、新しい asset の所有に切り替わる。
+  def self.other_asset_reason(content)
+    "owned file belongs to another instruction asset (#{owner_name(content)}); " \
+      "empty it and run scripts/connect.sh --apply"
   end
 
   # content (generated instruction) が catalog entry (target / name / build_id) と一致するか。

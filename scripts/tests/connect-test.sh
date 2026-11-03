@@ -301,4 +301,49 @@ grep -q "fail: could not remove the leftover staging file .*/agent-tools/\.agent
 [ -z "$(ls -A "$tmp/claude18/agent-tools/.agent-tools-staging-CLAUDE.md")" ] \
   || fail "generated must not be copied into the directory at the staging path"
 
+# --- case 19: instruction の asset を改名すると、connect と sync が同じ理由の conflict で止まり、所有ファイルを空に
+# すれば新しい asset の所有に切り替わる (#424 の 2) ---
+# 以前は connect が marker の target だけを見て「接続済み」、sync が target + name を見て「unmanaged」と、どちらでも
+# 解消しなかった。
+sync="$script_dir/../sync.sh"
+run_rn() {
+  rn_cmd=$1
+  shift
+  "$rn_cmd" --root "$tmp/rnrepo" --codex-home "$tmp/rncodex" --claude-home "$tmp/rnclaude" "$@"
+}
+mkdir -p "$tmp/rncodex" "$tmp/rnclaude"
+make_demo_repo "$tmp/rnrepo" instructions personal-ops instruction '# ops'
+"$build" --root "$tmp/rnrepo" --quiet > /dev/null
+"$register" --root "$tmp/rnrepo" --quiet > /dev/null
+run_rn "$connect" --apply --quiet > /dev/null
+run_rn "$sync" --opencode-home "$tmp/rnopen" --apply --quiet > /dev/null
+rm -f "$tmp/rnrepo/shared/instructions/personal-ops.md" "$tmp/rnrepo/shared/instructions/personal-ops.asset.yml"
+make_demo_repo "$tmp/rnrepo" instructions personal-ops-renamed instruction '# ops'
+"$build" --root "$tmp/rnrepo" --prune --quiet > /dev/null
+"$register" --root "$tmp/rnrepo" --quiet > /dev/null
+status=0
+run_rn "$connect" > "$tmp/c19a" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "connect after an instruction rename should stop with exit 1, got $status: $(cat "$tmp/c19a")"
+for t in claude-code codex; do
+  grep -F -q "conflict: [$t] owned" "$tmp/c19a" || fail "connect should report a conflict for $t: $(cat "$tmp/c19a")"
+done
+grep -F -q "(owned file belongs to another instruction asset (personal-ops); empty it and run scripts/connect.sh --apply)" "$tmp/c19a" \
+  || fail "connect should name the previous asset and the recovery: $(cat "$tmp/c19a")"
+grep -q "already connected" "$tmp/c19a" && fail "a renamed asset's owned file must not look connected: $(cat "$tmp/c19a")"
+status=0
+run_rn "$sync" --opencode-home "$tmp/rnopen" > "$tmp/c19b" 2>&1 || status=$?
+[ "$status" -eq 1 ] || fail "sync after an instruction rename should stop with exit 1, got $status: $(cat "$tmp/c19b")"
+[ "$(grep -F -c "(owned file belongs to another instruction asset (personal-ops); empty it and run scripts/connect.sh --apply)" "$tmp/c19b")" = 2 ] \
+  || fail "sync should give the same reason for both tools: $(cat "$tmp/c19b")"
+grep -q "existing target is unmanaged" "$tmp/c19b" && fail "sync must not call the renamed asset's file unmanaged: $(cat "$tmp/c19b")"
+# 案内どおり所有ファイルを空にすると、connect が claim して sync は up-to-date になる
+: > "$tmp/rnclaude/agent-tools/CLAUDE.md"
+: > "$tmp/rncodex/AGENTS.md"
+run_rn "$connect" --apply > "$tmp/c19c" 2>&1 || fail "connect after emptying the owned files should succeed: $(cat "$tmp/c19c")"
+head -1 "$tmp/rncodex/AGENTS.md" | grep -q "name=personal-ops-renamed " || fail "codex owned file should belong to the renamed asset"
+head -1 "$tmp/rnclaude/agent-tools/CLAUDE.md" | grep -q "name=personal-ops-renamed " || fail "claude owned file should belong to the renamed asset"
+run_rn "$sync" --opencode-home "$tmp/rnopen" > "$tmp/c19d" 2>&1 || fail "sync after reconnecting should succeed: $(cat "$tmp/c19d")"
+[ "$(grep -c "personal-ops-renamed (up-to-date)\|AGENTS.md (up-to-date)\|CLAUDE.md (up-to-date)" "$tmp/c19d")" = 2 ] \
+  || fail "both owned files should be up-to-date after reconnecting: $(cat "$tmp/c19d")"
+
 echo "ok: connect self-test passed"

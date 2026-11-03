@@ -533,10 +533,17 @@ module Sync
         return Plan.new("skip", tool, name, target, "run connect first", "instruction", gen, :connect_first)
       end
 
-      target_marker = File.file?(target) ? InstructionMarker.parse(File.read(target)) : nil
-      # 所有先が同じ asset の agent-tools 管理か (target + name)。別 asset の残存ファイルを
-      # managed と誤認しない。
-      unless target_marker && target_marker["target"] == tool && target_marker["name"] == name
+      # 所有先が同じ asset の agent-tools 管理か (target + name。判定は connect と同じ
+      # InstructionMarker.ownership, #424)。別 asset の残存ファイルを managed と誤認しない。改名の前の
+      # asset の marker なら、それと分かる理由と復旧の手順を出す。
+      content = File.file?(target) ? File.read(target).scrub("�") : nil
+      case content && InstructionMarker.ownership(content, target: tool, name: name)
+      when :owned
+        target_marker = InstructionMarker.parse(content)
+      when :other_asset
+        return Plan.new("conflict", tool, name, target, InstructionMarker.other_asset_reason(content), "instruction",
+                        gen)
+      else
         return Plan.new("conflict", tool, name, target, "existing target is unmanaged", "instruction", gen)
       end
 
