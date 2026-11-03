@@ -89,7 +89,7 @@ ruby -rjson -e '
 "$script_dir/../doctor.sh" --root "$tmp" --codex-home "$tmp/codex" --claude-home "$tmp/claude" --opencode-home "$tmp/opencode" \
   --agents-home "$tmp/agents" > "$tmp/dr2b" 2>&1 || true
 grep -F -q "warn: target: [codex] personal-demo-skill orphan (not in catalog; remove with scripts/sync.sh --prune --apply)" "$tmp/dr2b" \
-  || fail "doctor should warn about the orphan: $(cat "$tmp/dr2b")"
+  || fail "doctor should warn about the orphan: $(cat "$tmp/dr2b")" # no-opencode-home: 期待する案内の文言にある sync.sh で、呼び出しではない
 grep -q "generated: .* 0 stale" "$tmp/dr2b" || fail "doctor should not report stale generated after the prune: $(cat "$tmp/dr2b")"
 rm -rf "$tmp/codex/skills/personal-handmade" "$tmp/claude/skills/personal-linked"
 mv "$tmp/kept/personal-demo-skill.md" "$tmp/kept/personal-demo-skill.asset.yml" "$tmp/shared/skills/"   # 後の case が fixture を写す
