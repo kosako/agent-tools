@@ -129,6 +129,15 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
 - 終わったら、自分が起動した process が残っていないことを確かめ、残っていれば止める (safe-run の外で起動した
   ものも同じ)。
 
+## 作業を捨てる git の操作
+
+- `git checkout -- <path>`・`git restore`・`git reset --hard`・`git worktree remove --force` は、host の確認 (作業を捨てる操作用) に
+  当たる。確認が形だけにならないよう、決まった手順に組み込まない (#641)。
+- 変異で test を確かめるときは、変える file を一時 file に `cp` で控え、確かめた後に `cp` で戻す。戻るのは自分の変異だけで、ほかの
+  未 commit の変更を巻き込まない。
+- worktree は `--force` なしの `git worktree remove` で外す。止まったら `git status --short` で残りを見て、自分が作ったものだけを
+  file の単位で片付ける。判断のつかない変更が残るときは、確認を受けてから外す。
+
 ## public safety
 
 - secret / local path / 外部ナレッジツールの参照先 / client 材料を tracked file に
