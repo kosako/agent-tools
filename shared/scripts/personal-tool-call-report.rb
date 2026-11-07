@@ -35,6 +35,8 @@
 #   interrupted)。無ければ unknown。版: その session の SessionStart の version (複数なら ts が最新のもの)。
 #   無ければ unknown。reason の有無は判断が denied の call についてだけ数える (あり + なし = denied の call 数。
 #   空白だけの reason は「なし」)。
+# - 確認の要求: PermissionRequest の行は tool_use_id が無く call に結合できないので、結合不能に入れず tool ごとの回数を
+#   別に数える (#639)。確認が出る直前の記録で、人がどう答えたかは分からない。
 # - 出さないもの: 引数の値 (記録に無い)、session_id、tool_use_id、file の絶対 path (名前だけ)、PermissionDenied
 #   の reason の本文 (件数だけ)。report は public な場所に貼られうる前提。
 # - 集計の値は決定的: tool と MCP server は件数の多い順 (同数なら名前順)、client × 版は名前順、op と判断・結果は
@@ -211,7 +213,7 @@ module ToolCallReport
     scan = {
       read: [], unreadable: 0,
       lines: 0, broken: 0, out_of_period: 0, unjoinable: 0,
-      versions: {}, groups: {}, sessions: {}, days: {},
+      versions: {}, groups: {}, sessions: {}, days: {}, permission_requests: [],
     }
     files.each do |path|
       begin
@@ -244,6 +246,11 @@ module ToolCallReport
     scan[:days][row[:date]] = true
     scan[:sessions][session_id] = true if session_id
     return if data["event"] == "SessionStart"
+
+    if data["event"] == "PermissionRequest"
+      scan[:permission_requests] << (string_or_nil(data["tool"]) || "unknown")
+      return
+    end
 
     tool_use_id = string_or_nil(data["tool_use_id"])
     # session_id と tool_use_id の両方がある tool 行だけ結合する (片方でも無ければ、別 session の同じ
@@ -370,6 +377,10 @@ module ToolCallReport
         "with_reason" => denied_calls.count { |c| c[:reason] },
         "without_reason" => denied_calls.count { |c| !c[:reason] },
       },
+      "permission_requests" => {
+        "total" => scan[:permission_requests].length,
+        "rows" => ranked(counts(scan[:permission_requests])).map { |tool, n| { "tool" => tool, "requests" => n } },
+      },
     }
   end
 
@@ -455,6 +466,8 @@ module ToolCallReport
       ["reason あり", r["denied_reasons"]["with_reason"]],
       ["reason なし", r["denied_reasons"]["without_reason"]],
     ])
+    section(lines, "## 8. 確認の要求 (PermissionRequest、計 #{r['permission_requests']['total']} 回)", ["tool", "回数"],
+            r["permission_requests"]["rows"].map { |x| [x["tool"], x["requests"]] })
     lines.join("\n")
   end
 
