@@ -1,0 +1,29 @@
+schema_version: 1
+name: personal-merged-branch-cleanup
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #640 の PR で author≠reviewer レビューのうえ承認する。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:5fca7dec90f8baeb499f525a8124b7d4d2379863244efd9741a001348136e8d3
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-merged-branch-cleanup.rb
+  format: text
+summary: >-
+  merge 済みの自分の branch を、消してよい条件を機械で確かめてから消す (#640)。対象の repo は origin の URL から決め、gh は host と repo を
+  明示して照会する。条件は、origin の URL がすべて同じ GitHub の repo を指すこと (--remote なら push の URL も)、repo の owner が gh で認証して
+  いる user の個人の account であること、default branch でなく、どの worktree でも checkout されていないこと、同じ repo を head にした merged の
+  PR の head の OID が local の tip と一致し、その PR の base が default branch であること。--remote なら remote の branch の OID が同じか、branch が
+  無いこと。削除は期待する OID を指定した比較つきで行う (local は update-ref、remote は --force-with-lease)。host の ask 規則はそのまま残し、この
+  script だけを allow に置く前提。手順の守りであって境界ではない。exit 0 = すべて消した (または消す branch が無い) / 1 = 消さなかった branch が
+  ある (理由は stdout の label) / 2 = usage・gh か git の失敗・判定できない。(docs/merged-branch-cleanup.md)

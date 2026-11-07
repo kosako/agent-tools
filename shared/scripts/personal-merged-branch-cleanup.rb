@@ -1,0 +1,315 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# merged-branch-cleanup: merge 済みの自分の branch を、消してよい条件を機械で確かめてから消す (#640)。squash merge の branch は
+# `git branch -d` では消せず、`-D` は host の ask 規則で毎回確認になる。運用ルール (#563) が確認なしで許す条件をここで確かめ、
+# この script だけを host の allow に置く。ask 規則そのものは、未 merge の作業を人に確かめるために残す。
+#
+# 正本: docs/merged-branch-cleanup.md。
+#
+# 対象の repo は origin の URL から決める (GitHub の閉じた形だけを読む)。gh は host と repo を明示して照会するので、GH_HOST や GH_REPO、
+# gh の既定の repo に左右されない。これで、照会した repo と消す先の repo が揃う。
+#
+# 消すのは、次をすべて満たす branch だけ。
+# 1. origin の fetch の URL がすべて同じ GitHub の repo を指す。--remote のときは push の URL も同じ repo を指す (git push は push の URL の
+#    全部へ送る)。URL を読めないときは判定できない (exit 2)。
+# 2. repo の owner の type が User で、login が gh で認証している user と一致する (運用ルールの「個人 project」の判定)。
+# 3. default branch でなく、どの worktree でも checkout されていない。
+# 4. merged の PR のうちに、head が同じ repo の同じ名前で、head の OID が local の tip と一致し、base が default branch の
+#    ものがある (stacked の親に入っただけの branch は、default branch に届いていないので消さない)。
+# 5. --remote のときは、remote の branch の OID が同じか、branch が無い。
+#
+# 削除は期待する OID を指定した比較つきで行う (local は update-ref、remote は --force-with-lease)。確かめた後に tip が動くと
+# 失敗し、branch は残る。local を消すのは remote の削除が済んだ後。消す直前に checkout されたら、消した後の確認で気づいて同じ OID で
+# 戻す。
+#
+# 強度ラベル (偽らない): 手順の守りであって境界ではない。script は agent と同じ OS user が書き換えられ、gh の応答をそのまま
+# 信じる。PR の head が merge されたことまでを確かめ、merge commit の中身は確かめない。rebase や bisect の途中の branch は worktree の
+# 一覧に出ないので checkout 中と読まない (tip が merge 済みの head と同じなので、消しても commit は失わない)。進行中の checkout が、消した後の
+# 確認の後に HEAD を更新する窓は残る。git branch -D も確認と削除の間に排他を取らないので同じで、起きても HEAD が消えた ref を指すだけで commit は
+# 失わない。
+#
+# untrusted-input 規律: 読むのは PR の OID・branch 名・状態の field だけで、title や本文は取らない。出力に載せるのは、規則の形に
+# 合う branch 名、PR の番号、閉じた表の label だけ。gh と git の stderr は出さない。
+#
+# exit: 0 = すべて消した (または消す branch が無い) / 1 = 消さなかった branch がある (理由は stdout の label) /
+# 2 = usage・gh か git の失敗・判定できない。
+
+require "json"
+require "open3"
+
+# C locale でも、読む text を UTF-8 として扱う (#432)。
+Encoding.default_external = Encoding::UTF_8 unless Encoding.default_external == Encoding::UTF_8
+
+module MergedBranchCleanup
+  NAME = "personal-merged-branch-cleanup"
+  EXIT_OK = 0
+  EXIT_NOT_OK = 1
+  EXIT_ERROR = 2
+
+  USAGE = "usage: #{NAME} [--remote] [--dry-run] <branch>..."
+  HOST = "github.com"
+  REPO_RE = %r{\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+\z}.freeze
+  # 出力に載せ、ref の組み立てに使う branch 名の形。`@{-1}` のような省略形と、先頭の `-` を入れない。
+  BRANCH_RE = %r{\A[A-Za-z0-9][A-Za-z0-9._/-]*\z}.freeze
+  OID_RE = /\A[0-9a-f]{40}\z/.freeze
+  # 読む URL の閉じた形。userinfo・port・query・fragment を入れない (`https://example.org?@github.com/...` の host は github.com でない)。
+  ORIGIN_RE = %r{\A(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+?)(?:\.git)?/?\z}.freeze
+  PR_FIELDS = "number,headRefName,headRefOid,baseRefName,isCrossRepository,mergedAt"
+  PR_LIMIT = "100"
+
+  # 判定できないとき (gh や git の失敗、応答の形が外れる)。
+  class Undecidable < StandardError; end
+
+  module_function
+
+  def main(argv, out: $stdout, err: $stderr)
+    options = parse_args(argv)
+    repo = origin_repo(push: options[:remote])
+    return report_all(options[:branches], "origin-unverified", out) if repo.nil?
+
+    target = resolve_target(repo)
+    return report_all(options[:branches], target[:refusal], out) if target[:refusal]
+
+    results = options[:branches].uniq.map { |branch| cleanup(branch, target, options, out) }
+    results.all? ? EXIT_OK : EXIT_NOT_OK
+  rescue ArgumentError => e
+    err.puts "#{NAME}: #{e.message}"
+    err.puts USAGE
+    EXIT_ERROR
+  rescue Undecidable => e
+    err.puts "#{NAME}: #{e.message}"
+    EXIT_ERROR
+  end
+
+  def parse_args(argv)
+    options = { remote: false, dry_run: false, branches: [] }
+    argv.each do |arg|
+      case arg
+      when "--remote" then options[:remote] = true
+      when "--dry-run" then options[:dry_run] = true
+      else
+        raise ArgumentError, "bad branch name or option" unless arg.match?(BRANCH_RE) && valid_ref?(arg)
+
+        options[:branches] << arg
+      end
+    end
+    raise ArgumentError, "no branch given" if options[:branches].empty?
+
+    options
+  end
+
+  def valid_ref?(branch)
+    _out, _err, status = Open3.capture3("git", "check-ref-format", "refs/heads/#{branch}")
+    status.success?
+  end
+
+  # 対象の repo の名前と default branch。origin と違う repo が返るか、個人の repo でなければ :refusal を返す (何も消さない)。
+  def resolve_target(repo)
+    data = gh_json("api", "--hostname", HOST, "repos/#{repo}")
+    user = gh_json("api", "--hostname", HOST, "user")
+    owner = data.is_a?(Hash) ? data["owner"] : nil
+    full_name = data.is_a?(Hash) ? data["full_name"] : nil
+    default = data.is_a?(Hash) ? data["default_branch"] : nil
+    login = user.is_a?(Hash) ? user["login"] : nil
+    unless owner.is_a?(Hash) && owner["type"].is_a?(String) && owner["login"].is_a?(String) &&
+           full_name.to_s.match?(REPO_RE) && default.to_s.match?(BRANCH_RE) && login.is_a?(String) && !login.empty?
+      raise Undecidable, "unexpected response shape from gh api"
+    end
+
+    return { refusal: "origin-unverified" } unless full_name.casecmp?(repo)
+    return { refusal: "not-personal-repo" } unless owner["type"] == "User" && owner["login"] == login
+
+    { full_name: full_name, default: default }
+  end
+
+  # repo を確かめられないときは、どの branch も消さない。
+  def report_all(branches, label, out)
+    branches.uniq.each { |branch| out.puts "refused: #{branch} (#{label})" }
+    EXIT_NOT_OK
+  end
+
+  # 1 つの branch を処理する。消した・消す branch が無いときは true、消さなかったときは false。
+  def cleanup(branch, target, options, out)
+    ref = "refs/heads/#{branch}"
+    return refuse(branch, "default-branch", out) if branch == target[:default]
+
+    local = local_oid(ref)
+    remote = options[:remote] ? remote_oid(ref) : nil
+    if local.nil? && remote.nil?
+      out.puts "absent: #{branch}"
+      return true
+    end
+    return refuse(branch, "remote-differs", out) if local && remote && local != remote
+
+    oid = local || remote
+    verdict = merged_pr(branch, oid, target)
+    return refuse(branch, verdict[:refusal], out) if verdict[:refusal]
+
+    # gh の照会の間に checkout されうるので、worktree は PR を確かめた後に見る。
+    return refuse(branch, "checked-out", out) if checked_out_refs.include?(ref)
+
+    pr = verdict[:number]
+    if options[:dry_run]
+      out.puts "would-delete: #{branch} (merged in ##{pr})"
+      return true
+    end
+    return refuse(branch, "remote-delete-failed", out) if remote && !delete_remote(ref, oid)
+
+    if local
+      result = delete_local(branch, ref, oid)
+      return refuse(branch, result, out) unless result == :deleted
+    end
+    out.puts "deleted: #{branch} (merged in ##{pr}#{remote ? ', remote too' : ''})"
+    true
+  end
+
+  def refuse(branch, label, out)
+    out.puts "refused: #{branch} (#{label})"
+    false
+  end
+
+  # OID が一致する merged の PR を探す。無ければ、いちばん条件に近いものの理由を返す。
+  def merged_pr(branch, oid, target)
+    rows = gh_json("pr", "list", "--repo", "#{HOST}/#{target[:full_name]}", "--head", branch, "--state", "merged",
+                   "--json", PR_FIELDS, "--limit", PR_LIMIT)
+    raise Undecidable, "unexpected response shape from gh pr list" unless rows.is_a?(Array) && rows.all? { |r| valid_pr?(r) }
+
+    own = rows.select { |r| r["headRefName"] == branch && r["isCrossRepository"] == false && r["mergedAt"].is_a?(String) }
+    return { refusal: "no-merged-pr" } if own.empty?
+
+    same = own.select { |r| r["headRefOid"] == oid }
+    return { refusal: "tip-is-not-merged-head" } if same.empty?
+
+    hit = same.find { |r| r["baseRefName"] == target[:default] }
+    return { refusal: "base-is-not-default-branch" } if hit.nil?
+
+    { number: hit["number"] }
+  end
+
+  def valid_pr?(row)
+    row.is_a?(Hash) && row["number"].is_a?(Integer) && row["headRefName"].is_a?(String) &&
+      row["headRefOid"].to_s.match?(OID_RE) && row["baseRefName"].is_a?(String)
+  end
+
+  # origin の URL が指す repo (owner/repo)。URL がすべて閉じた形で同じ repo を指すときだけ返し、それ以外は nil。URL が複数あると git push は
+  # その全部に送るので、1 つでも外れれば nil。get-url の結果には insteadOf と pushInsteadOf の書き換えが入っている。
+  def origin_repo(push:)
+    urls = origin_urls("--all")
+    urls += origin_urls("--push", "--all") if push
+    repos = urls.map { |url| repo_of(url) }
+    return nil if repos.include?(nil) || repos.map(&:downcase).uniq.size != 1
+
+    repos.first
+  end
+
+  # 読めないときと空のときは、片方の一覧だけで検査が通らないように判定できないにする。
+  def origin_urls(*flags)
+    urls = git_out("remote", "get-url", *flags, "origin").to_s.lines.map(&:strip).reject(&:empty?)
+    raise Undecidable, "could not read the origin URLs" if urls.empty?
+
+    urls
+  end
+
+  def repo_of(url)
+    match = ORIGIN_RE.match(url)
+    return nil if match.nil? || %w[. ..].include?(match[1].split("/").last)
+
+    match[1]
+  end
+
+  # どの worktree でも checkout されている branch の ref の一覧。
+  def checked_out_refs
+    text = git_out("worktree", "list", "--porcelain")
+    raise Undecidable, "could not list worktrees" if text.nil?
+
+    text.lines.map(&:strip).select { |l| l.start_with?("branch ") }.map { |l| l.delete_prefix("branch ") }
+  end
+
+  # local の branch の OID。無ければ nil。読めないときと壊れた ref を「無い」と読まない (for-each-ref は壊れた ref を警告だけで
+  # 飛ばして exit 0 にするので、stderr も見る)。
+  def local_oid(ref)
+    out, err, status = capture_git("for-each-ref", "--format=%(objectname) %(refname)", ref)
+    raise Undecidable, "could not read local refs" unless status.success? && err.empty?
+
+    line = out.lines.map(&:strip).find { |l| l.end_with?(" #{ref}") }
+    return nil if line.nil?
+
+    oid = line.split(" ").first
+    raise Undecidable, "unexpected oid from git for-each-ref" unless oid.match?(OID_RE)
+
+    oid
+  end
+
+  # remote の branch の OID。無ければ nil。読めなければ判定できない。
+  def remote_oid(ref)
+    text = git_out("ls-remote", "--refs", "origin", ref)
+    raise Undecidable, "could not read origin" if text.nil?
+
+    line = text.lines.map(&:strip).find { |l| l.end_with?("\t#{ref}") }
+    return nil if line.nil?
+
+    oid = line.split("\t").first
+    raise Undecidable, "unexpected oid from git ls-remote" unless oid.match?(OID_RE)
+
+    oid
+  end
+
+  def delete_remote(ref, oid)
+    git_ok("push", "--quiet", "origin", "--force-with-lease=#{ref}:#{oid}", ":#{ref}")
+  end
+
+  # 比較つきで ref を消し、branch の設定を外す (`git branch -D` と同じ後始末)。設定が無いときの失敗は気にしない。消す直前の
+  # checkout は比較では止まらないので、消した後に worktree を見直し、使われていれば (確かめられなければ) 同じ OID で戻す。
+  # 消した後の checkout は ref が無いので失敗する。戻り値は :deleted か、refuse の label。
+  def delete_local(branch, ref, oid)
+    return "local-delete-failed" unless git_ok("update-ref", "--no-deref", "-d", ref, oid)
+
+    if in_use?(ref)
+      restored = git_ok("update-ref", "--no-deref", ref, oid, "0" * 40)
+      raise Undecidable, "deleted #{ref} while in use and could not restore it to #{oid}" unless restored
+
+      return "checked-out"
+    end
+    git_ok("config", "--remove-section", "branch.#{branch}")
+    :deleted
+  end
+
+  def in_use?(ref)
+    checked_out_refs.include?(ref)
+  rescue Undecidable
+    true
+  end
+
+  def git_out(*args)
+    out, _err, status = capture_git(*args)
+    status.success? ? out : nil
+  end
+
+  def capture_git(*args)
+    out, err, status = Open3.capture3("git", *args)
+    [out.scrub, err, status]
+  rescue SystemCallError
+    raise Undecidable, "could not run git"
+  end
+
+  def git_ok(*args)
+    _out, _err, status = Open3.capture3("git", *args)
+    status.success?
+  rescue SystemCallError
+    raise Undecidable, "could not run git"
+  end
+
+  def gh_json(*args)
+    out, _err, status = Open3.capture3("gh", *args)
+    raise Undecidable, "gh failed (#{args.first(2).join(' ').gsub(/[^a-z ]/, '')})" unless status.success?
+
+    JSON.parse(out.scrub)
+  rescue JSON::ParserError
+    raise Undecidable, "gh returned invalid JSON"
+  rescue SystemCallError
+    raise Undecidable, "could not run gh"
+  end
+end
+
+exit MergedBranchCleanup.main(ARGV) if $PROGRAM_NAME == __FILE__
