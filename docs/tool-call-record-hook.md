@@ -62,7 +62,8 @@ ${XDG_STATE_HOME:-~/.local/state}/agent-tools/personal-tool-call-record-hook/<cl
 
 - **「Pre があって Post が無い」call は拒否ではなく結果不明**。`PermissionDenied` が出るのは auto mode の
   自動拒否だけで、人が dialog で断った場合・`permissions.deny` の一致・別の PreToolUse hook の deny では
-  Post 系も `PermissionDenied` も出ない (下記の時点依存)。集計がこれらを「拒否」と書くことはできない。
+  Post 系も `PermissionDenied` も出ない (下記の時点依存)。集計がこれらを「拒否」と書くことはできない。人が dialog で断った
+  call には `PermissionRequest` の行も残るが (下の規則 4)、この行は人の答えを持たないので、拒否の根拠にはならない。
 - hook は event をそのまま 1 行ずつ書く。判断 (許可 / 拒否 / 不明) と結果の列を導くのは集計側
   (下記「集計 (personal-tool-call-report)」、#461) で、hook は導かない。
 - 集計の規則 (2026-10-09 の実測から。#463。集計 script はこれに従う):
@@ -73,7 +74,7 @@ ${XDG_STATE_HOME:-~/.local/state}/agent-tools/personal-tool-call-record-hook/<cl
   3. `result: error` を「未実行」と読まない。MCP tool の `isError: true` も Bash の非 0 終了も同じ `error`
      で、どちらも「実行されて失敗を返した」。`result` だけでは両者を区別できず (tool の種類は `tool` と
      `mcp_server` で分かる)、`isError` の本文や終了 code などの失敗の詳細は記録しない。
-  4. `PermissionRequest` は確認が出る直前の記録で (#639)、人がどう答えたかは分からない。`tool_use_id` が無いので call には結合せず、回数だけを数える。どの command の確認かを追うときは、`session_id` と `ts` で直前の PreToolUse と transcript に当たる。
+  4. `PermissionRequest` は確認が出る直前の記録で (#639)、人がどう答えたかは分からない。`tool_use_id` が無いので call には結合せず、回数だけを数える。どの command の確認かを追うときは、`session_id` と `ts` で直前の PreToolUse と transcript に当たる。人が dialog で断った call には、`PreToolUse` と `PermissionRequest` の行だけが残り、Post 系と `PermissionDenied` の行は無い (下の「時点依存の記述」の 2026-11-07 の実測)。集計ではこの call の判断は `unknown` で、8 節に 1 回と数える。
   5. 同一 `tool_use_id` の Pre / Post の順序は `ts` ではなく追記順で見る (`ts` は秒精度で、同じ call の
      Pre と Post が同じ `ts` になる)。
 
@@ -132,7 +133,8 @@ usage: personal-tool-call-report [--file <path>]... [--since YYYY-MM-DD] [--unti
 7. 判断が `denied` の call の reason の有無 (あり / なし。あり + なし = denied の call 数。空白だけの reason は
    「なし」。本文は出さない。Post 系が勝って `allowed` になった call の `PermissionDenied` 行は数えない)
 8. 確認の要求 (`PermissionRequest` の行) の合計と tool ごとの回数 (json は `permission_requests`。#639)。結合不能には
-   入れない。tool の無い行は `unknown` に数える。行の無い時期の 0 は「確認が無かった」ではなく「登録の前」でありうる
+   入れない。tool の無い行は `unknown` に数える。行の無い時期の 0 は「確認が無かった」ではなく「登録の前」でありうる。
+   回数は確認の要求の数で、人の答えは分からない (人が断った call も 1 回に数える)
 
 **出さないもの**: 引数の値 (記録に無い)、`session_id`、`tool_use_id`、file の絶対 path、`reason` の本文。report は
 public な場所に貼られうる前提。値の順は決定的: tool と MCP server は件数の多い順 (同数なら名前順)、client × 版は
@@ -148,7 +150,7 @@ unknown / error / interrupted / Post だけ / 同じ `tool_use_id` の別 sessio
 通さないこと、結合の規則 (Post 系が `PermissionDenied` に勝つ / 空白だけの reason) の unit を確かめる。
 
 時点依存: 判断と結果の規則は、下の「時点依存の記述」の公式 docs の確認 (2026-10-09、Claude Code 2.1.295) に
-基づく (`PermissionDenied` は auto mode の自動拒否でだけ発火し、人が dialog で断った call は Pre だけが残る)。
+基づく (`PermissionDenied` は auto mode の自動拒否でだけ発火し、人が dialog で断った call は、call に結合する行としては Pre だけが残る)。
 登録後の実測 (2026-10-09、Claude Code 2.1.295、1 日分の記録 1,300 行余り) では壊れた行と結合不能の行は 0 で、
 `SessionStart` の無い session (subagent など) の call が版 `unknown` に入る。
 
@@ -203,9 +205,15 @@ Codex への登録 (`~/.codex/hooks.json`、`features.hooks`、hook の trust) �
   - `settings.json` の hooks の変更は、動いている session にも再起動なしで反映された (観測)。
 - **公式 docs の確認 (2026-11-07、Claude Code 2.1.319。#639)**: `PermissionRequest` は確認を出す直前に動き、入力は `tool_name` と
   `tool_input` (MCP なら `mcp_server`) と任意の `permission_suggestions` で、`tool_use_id` は無い。prompt を出せない session でも動く。
-  ask 規則に当たったときと auto mode で実際に発火するかは、docs からは読み切れず、登録の後に実測する。
-- **未確認 (2026-10-09 時点)**: auto mode で deny rule に一致したとき、人が dialog で断ったとき、
-  `is_interrupt` (`interrupted`)、subagent 以外の文脈での `agent_type`、Codex の `SessionStart` の有無。
+- **実測 (2026-11-07、Claude Code 2.1.319、dotfiles の登録の後の auto mode の session。#647)**: ask 規則に当たる `git clean -n` を 1 回実行すると
+  確認が出て、人が拒否した。
+  - 記録には `PreToolUse` と `PermissionRequest` の行が同じ秒に残り、`PermissionRequest` の `permission_mode` は `auto` だった。その call の
+    `tool_use_id` には `PreToolUse` の行しかなく、Post 系と `PermissionDenied` の行は無かった。
+  - `personal-tool-call-report --days 1` の 8 節は、計 1 回で Bash が 1 回だった。
+  - 同じ session で allow の規則に当たる `personal-merged-branch-cleanup` を実行すると、確認は出ず、`PermissionRequest` の行も増えなかった。
+    auto mode では classifier も操作を通すので、allow の規則と classifier のどちらが通したかは、この記録からは区別できない。
+- **未確認 (2026-11-07 時点)**: auto mode で deny rule に一致したとき、`is_interrupt` (`interrupted`)、subagent 以外の文脈での `agent_type`、Codex の
+  `SessionStart` の有無、manual mode で `PermissionRequest` が出るか、人が確認を許可した call の行の残り方、allow の規則が単独で確認を消すか。
 
 ## Test
 
