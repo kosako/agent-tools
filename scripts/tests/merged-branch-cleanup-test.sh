@@ -27,10 +27,10 @@ mkdir -p "$tmp/bin" "$tmp/fx"
 cat > "$tmp/bin/gh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$FX/gh.log"
-case "$1 $2" in
-  "api repos/"*) [ -f "$FX/repo.fail" ] && { echo 'CANARY_GH_STDERR' >&2; exit 1; }; cat "$FX/repo.json" ;;
-  "api user") cat "$FX/user.json" ;;
-  "pr list")
+case "$*" in
+  "api --hostname github.com repos/"*) [ -f "$FX/repo.fail" ] && { echo 'CANARY_GH_STDERR' >&2; exit 1; }; cat "$FX/repo.json" ;;
+  "api --hostname github.com user") cat "$FX/user.json" ;;
+  "pr list --repo github.com/"*)
     if [ -f "$FX/during.pr" ]; then
       read -r w b < "$FX/during.pr"; rm -f "$FX/during.pr"
       git worktree add -q "$w" "$b"
@@ -58,8 +58,9 @@ real_git=$(command -v git)
 cat > "$tmp/bin/git" <<EOF
 #!/bin/sh
 if [ "\$1 \$2" = "remote get-url" ]; then
-  case "\$*" in *--push*) f="\$FX/push.url" ;; *) f="\$FX/origin.url" ;; esac
-  if [ -f "\$f" ]; then cat "\$f"; else echo https://github.com/me/proj.git; fi
+  case "\$*" in *--push*) f="\$FX/push" ;; *) f="\$FX/origin" ;; esac
+  if [ -f "\$f.fail" ]; then exit 2; fi
+  if [ -f "\$f.url" ]; then cat "\$f.url"; else echo https://github.com/me/proj.git; fi
   exit 0
 fi
 if [ "\$1" = for-each-ref ] && [ -f "\$FX/foreach.fail" ]; then exit 1; fi
@@ -191,6 +192,11 @@ run main
 expect 1 "refused: main (default-branch)" "default branch"
 has_local main || fail "default branch must stay"
 
+# 大文字小文字だけが違う名前を default branch と取り違えない (case を区別しない file system でも main を消さない)
+run Main
+expect 0 "absent: Main" "case variant of the default branch"
+has_local main || fail "case variant: main must stay"
+
 # worktree で checkout 中
 oid=$(mkbranch feat/l); prs feat/l "$oid"
 g worktree add -q "$tmp/wt-l" feat/l
@@ -213,7 +219,7 @@ has_remote feat/m || fail "remote differs: remote must stay"
 oid=$(mkbranch feat/n); pushed feat/n; prs feat/n "$oid"
 printf 'https://github.com/someone/else.git\n' > "$FX/origin.url"
 run --remote feat/n
-expect 1 "refused: feat/n (origin-is-another-repo)" "origin mismatch"
+expect 1 "refused: feat/n (origin-unverified)" "origin mismatch"
 has_local feat/n || fail "origin mismatch: local must stay"
 has_remote feat/n || fail "origin mismatch: remote must stay"
 rm -f "$FX/origin.url"
@@ -222,30 +228,74 @@ rm -f "$FX/origin.url"
 oid=$(mkbranch feat/n2); prs feat/n2 "$oid"
 printf 'https://github.com/someone/else.git\n' > "$FX/origin.url"
 run feat/n2
-expect 1 "refused: feat/n2 (origin-is-another-repo)" "origin mismatch without --remote"
+expect 1 "refused: feat/n2 (origin-unverified)" "origin mismatch without --remote"
 has_local feat/n2 || fail "origin mismatch without --remote: local must stay"
 # fetch の URL が複数あって 1 つでも外れれば止まる
 printf 'https://github.com/me/proj.git\nhttps://github.com/someone/else.git\n' > "$FX/origin.url"
 run feat/n2
-expect 1 "refused: feat/n2 (origin-is-another-repo)" "second fetch url mismatch"
+expect 1 "refused: feat/n2 (origin-unverified)" "second fetch url mismatch"
 has_local feat/n2 || fail "second fetch url mismatch: local must stay"
-# GitHub の URL の形で読めない
-printf 'https://github.com.example.org/me/proj.git\n' > "$FX/origin.url"
-run feat/n2
-expect 1 "refused: feat/n2 (origin-is-another-repo)" "lookalike host"
-has_local feat/n2 || fail "lookalike host: local must stay"
+# 閉じた形だけを読む: 別の host を指す URL、userinfo・port・query・fragment のある URL、repo の名前が `..` の URL では消さない
+for url in 'https://github.com.example.org/me/proj.git' 'https://example.org?@github.com/me/proj.git' 'https://example.org#@github.com/me/proj.git' \
+  'https://user@github.com/me/proj.git' 'https://user:token@github.com/me/proj.git' 'https://github.com:443/me/proj.git' \
+  'https://github.com/me/proj.git?x=1' 'https://github.com/me/proj.git#x' 'https://GitHub.com/me/proj.git' 'http://github.com/me/proj.git' \
+  'ssh://git@github.com:22/me/proj.git' 'git@github.com:me/proj.git:x' 'github.com:me/proj.git' 'https://github.com/me/..' 'https://github.com/me/...git' \
+  'https://github.com/-x/proj.git' 'https://github.com/me/proj/extra.git'; do
+  printf '%s\n' "$url" > "$FX/origin.url"
+  : > "$FX/gh.log"
+  run feat/n2
+  expect 1 "refused: feat/n2 (origin-unverified)" "url $url"
+  has_local feat/n2 || fail "url $url: local must stay"
+  [ ! -s "$FX/gh.log" ] || fail "url $url: must not reach gh: $(cat "$FX/gh.log")"
+done
+# 読む形: どれも me/proj として読み、消せる (dry-run で確かめる)
+for url in 'https://github.com/me/proj.git' 'https://github.com/me/proj' 'https://github.com/me/proj/' 'git@github.com:me/proj.git' 'ssh://git@github.com/me/proj.git' 'https://github.com/ME/Proj.git'; do
+  printf '%s\n' "$url" > "$FX/origin.url"
+  run --dry-run feat/n2
+  expect 0 "would-delete: feat/n2 (merged in #7)" "url $url"
+done
 rm -f "$FX/origin.url"
+# fetch と push の URL は大文字小文字だけの違いなら同じ repo と読む (GitHub の repo の名前は大文字小文字を区別しない)
+oid=$(mkbranch feat/n8); pushed feat/n8; prs feat/n8 "$oid"
+printf 'https://github.com/ME/Proj.git\n' > "$FX/origin.url"
+printf 'https://github.com/me/proj.git\n' > "$FX/push.url"
+run --remote --dry-run feat/n8
+expect 0 "would-delete: feat/n8 (merged in #7)" "case variant between fetch and push urls"
+rm -f "$FX/origin.url" "$FX/push.url"
+
+# origin の URL を読めないとき: 片方の一覧だけで通さず、exit 2 で何も消さない
+: > "$FX/origin.fail"
+run feat/n2
+rm -f "$FX/origin.fail"
+[ "$rc" = 2 ] || fail "fetch url failure should exit 2, got $rc: $(cat "$tmp/out")"
+has_local feat/n2 || fail "fetch url failure: local must stay"
+: > "$FX/origin.url"
+run feat/n2
+rm -f "$FX/origin.url"
+[ "$rc" = 2 ] || fail "empty fetch url should exit 2, got $rc: $(cat "$tmp/out")"
+oid=$(mkbranch feat/n7); pushed feat/n7; prs feat/n7 "$oid"
+: > "$FX/push.fail"
+run --remote feat/n7
+rm -f "$FX/push.fail"
+[ "$rc" = 2 ] || fail "push url failure should exit 2, got $rc: $(cat "$tmp/out")"
+has_local feat/n7 || fail "push url failure: local must stay"
+has_remote feat/n7 || fail "push url failure: remote must stay"
+: > "$FX/push.url"
+run --remote feat/n7
+rm -f "$FX/push.url"
+[ "$rc" = 2 ] || fail "empty push url should exit 2, got $rc: $(cat "$tmp/out")"
+has_remote feat/n7 || fail "empty push url: remote must stay"
 
 # push の URL が別の repo を指す: --remote では何も消さない。push の URL が複数あって 1 つでも外れれば同じ
 oid=$(mkbranch feat/n3); pushed feat/n3; prs feat/n3 "$oid"
 printf 'https://github.com/someone/else.git\n' > "$FX/push.url"
 run --remote feat/n3
-expect 1 "refused: feat/n3 (origin-is-another-repo)" "push url mismatch"
+expect 1 "refused: feat/n3 (origin-unverified)" "push url mismatch"
 has_local feat/n3 || fail "push url mismatch: local must stay"
 has_remote feat/n3 || fail "push url mismatch: remote must stay"
 printf 'https://github.com/me/proj.git\nhttps://github.com/someone/else.git\n' > "$FX/push.url"
 run --remote feat/n3
-expect 1 "refused: feat/n3 (origin-is-another-repo)" "second push url mismatch"
+expect 1 "refused: feat/n3 (origin-unverified)" "second push url mismatch"
 has_remote feat/n3 || fail "second push url mismatch: remote must stay"
 # --remote が無ければ push しないので、push の URL は見ない
 run feat/n3
@@ -374,25 +424,26 @@ for bad in '--force' '@{-1}' '-x' 'feat/../x' 'a b' 'x.lock' ''; do
 done
 run
 [ "$rc" = 2 ] || fail "no branch should exit 2, got $rc"
-run --repo
-[ "$rc" = 2 ] || fail "--repo without a value should exit 2, got $rc"
-run --repo '-bad/repo' feat/s
-[ "$rc" = 2 ] || fail "--repo with a bad value should exit 2, got $rc"
+run --repo me/proj feat/s
+[ "$rc" = 2 ] || fail "--repo is gone and should exit 2, got $rc"
 [ ! -s "$FX/gh.log" ] || fail "usage errors must not call gh: $(cat "$FX/gh.log")"
 
-# GH_REPO があるときは --repo が要る (ほかの理由で止まらないように、PR の fixture は正しい形にしておく)
+# gh の接続先は origin から決めた host と repo に固定する: GH_HOST と GH_REPO があっても照会先は変わらない
 prs feat/s "$oid"
-rc=0
-( cd "$tmp/repo" && env GH_REPO=x/y PATH="$tmp/bin:$PATH" ruby "$src" feat/s ) > "$tmp/out" 2> "$tmp/err" || rc=$?
-[ "$rc" = 2 ] || fail "GH_REPO without --repo should exit 2, got $rc"
-grep -qF GH_REPO "$tmp/err" || fail "GH_REPO: should say why: $(cat "$tmp/err")"
-has_local feat/s || fail "GH_REPO: branch must stay"
-
-# --repo は gh の呼び出しに渡る
 : > "$FX/gh.log"
-run --repo me/proj --dry-run feat/s
-expect 0 "would-delete: feat/s (merged in #7)" "--repo"
-grep -qxF "api repos/me/proj" "$FX/gh.log" || fail "--repo should reach gh api: $(cat "$FX/gh.log")"
+rc=0
+( cd "$tmp/repo" && env GH_HOST=other.example GH_REPO=x/y PATH="$tmp/bin:$PATH" ruby "$src" --dry-run feat/s ) > "$tmp/out" 2> "$tmp/err" || rc=$?
+expect 0 "would-delete: feat/s (merged in #7)" "GH_HOST and GH_REPO"
+grep -qxF "api --hostname github.com repos/me/proj" "$FX/gh.log" || fail "repo query should be pinned: $(cat "$FX/gh.log")"
+grep -qxF "api --hostname github.com user" "$FX/gh.log" || fail "user query should be pinned: $(cat "$FX/gh.log")"
+grep -qF "pr list --repo github.com/me/proj --head feat/s " "$FX/gh.log" || fail "pr query should be pinned: $(cat "$FX/gh.log")"
+
+# gh が origin と違う repo を返したら消さない (名前を変えた repo の古い URL を含む)
+printf '{"full_name":"me/renamed","default_branch":"main","owner":{"login":"me","type":"User"}}' > "$FX/repo.json"
+run feat/s
+expect 1 "refused: feat/s (origin-unverified)" "gh returned another repo"
+has_local feat/s || fail "gh returned another repo: branch must stay"
+printf '{"full_name":"me/proj","default_branch":"main","owner":{"login":"me","type":"User"}}' > "$FX/repo.json"
 
 # ---- asset: docs の正本がある -----------------------------------------------------------------------
 [ -f "$repo_root/docs/merged-branch-cleanup.md" ] || fail "missing docs/merged-branch-cleanup.md"
