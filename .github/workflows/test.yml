@@ -14,7 +14,8 @@ permissions:
 jobs:
   self-tests:
     runs-on: macos-latest
-    timeout-minutes: 15
+    # 実測 (2026-11): system は 576〜775 秒、3.4 は 455〜622 秒。15 分では system が打ち切られたので 20 分にした (#645)。
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
