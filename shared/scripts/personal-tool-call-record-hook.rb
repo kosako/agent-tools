@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 # tool-call-record-hook: Claude Code の lifecycle hook (SessionStart / PreToolUse / PostToolUse /
-# PostToolUseFailure / PermissionDenied) の入力を、event ごとに 1 行の JSON として JSONL に追記する
+# PostToolUseFailure / PermissionDenied / PermissionRequest) の入力を、event ごとに 1 行の JSON として JSONL に追記する
 # 記録 hook body (#454)。判断はしない (stdout に何も出さない。permissionDecision も
 # additionalContext も返さない)。
 #
@@ -19,6 +19,7 @@
 # mcp_server (name / source)、tool_input の key (sorted)、result (output / error / interrupted)、
 # duration_ms、PermissionDenied の reason (REASON_CAP 文字まで)、SessionStart の版。
 # 記録しないもの: tool_input の値、tool_response、error の本文、cwd、transcript_path、prompt。
+# PermissionRequest の permission_suggestions も書かない (提案の中に command の値が入る。#639)。
 # 例外が 2 つ: Notion の update-page の command (固定の enum) は append / edit / replace / other に
 # 分類した結果だけを書く (値そのものは書かない)。PermissionDenied の reason は client が作る自由文で、
 # 引数の値や path を含みうる (この hook が書く唯一の自由文。REASON_CAP は長さの上限であって匿名化ではない)。
@@ -47,7 +48,7 @@ module ToolCallRecordHook
   NAME = "personal-tool-call-record-hook"
   DIR_ENV = "AGENT_TOOLS_TOOL_CALL_RECORD_DIR"
 
-  EVENTS = %w[SessionStart PreToolUse PostToolUse PostToolUseFailure PermissionDenied].freeze
+  EVENTS = %w[SessionStart PreToolUse PostToolUse PostToolUseFailure PermissionDenied PermissionRequest].freeze
   # env の目印 → client 名 (personal-ai-trailer-gate と同じ目印)。先に一致した方。
   CLIENT_MARKERS = [
     ["claude-code", %w[CLAUDECODE]],

@@ -232,6 +232,30 @@ jv '20' duration_ms.median duration_ms median
 jv '100' duration_ms.p95 duration_ms p95
 jv '1' denied_reasons.with_reason denied_reasons with_reason
 jv '2' denied_reasons.without_reason denied_reasons without_reason
+jv '0' permission_requests.total permission_requests total
+
+# ---- PermissionRequest (#639): call にも結合不能にも入れず、tool ごとの回数を数える。期間外は数えない
+pr_log="$tmp/pr.jsonl"
+pr_sa='"client":"claude-code","session_id":"CANARY_SESSION_PR"'
+rec "$pr_log" "{\"ts\":\"2026-10-06T09:00:00+00:00\",\"event\":\"PermissionRequest\",$pr_sa,\"tool\":\"Bash\",\"arg_keys\":[\"command\"]}"
+rec "$pr_log" "{\"ts\":\"2026-10-06T09:01:00+00:00\",\"event\":\"PermissionRequest\",$pr_sa,\"tool\":\"Edit\"}"
+rec "$pr_log" "{\"ts\":\"2026-10-06T09:02:00+00:00\",\"event\":\"PermissionRequest\",$pr_sa,\"tool\":\"Bash\"}"
+rec "$pr_log" "{\"ts\":\"2026-10-06T09:03:00+00:00\",\"event\":\"PermissionRequest\",$pr_sa}"
+rec "$pr_log" "{\"ts\":\"2026-09-01T09:00:00+00:00\",\"event\":\"PermissionRequest\",$pr_sa,\"tool\":\"Bash\"}"
+pr_json="$tmp/pr.json"
+run_report --file "$pr_log" --since 2026-10-05 --until 2026-10-09 --format json > "$pr_json" || fail "PermissionRequest json should exit 0"
+[ "$(jget "$pr_json" permission_requests total)" = 4 ] || fail "permission_requests.total: $(cat "$pr_json")"
+[ "$(jget "$pr_json" permission_requests rows 0 tool)" = '"Bash"' ] || fail "permission_requests rows order"
+[ "$(jget "$pr_json" permission_requests rows 0 requests)" = 2 ] || fail "permission_requests Bash count"
+[ "$(jget "$pr_json" permission_requests rows 1 tool)" = '"Edit"' ] || fail "permission_requests same count sorts by name"
+[ "$(jget "$pr_json" permission_requests rows 2 tool)" = '"unknown"' ] || fail "permission_requests without a tool is unknown"
+[ "$(jget "$pr_json" lines unjoinable)" = 0 ] || fail "PermissionRequest must not count as unjoinable"
+[ "$(jget "$pr_json" calls)" = 0 ] || fail "PermissionRequest must not count as a call"
+[ "$(jget "$pr_json" sessions)" = 1 ] || fail "PermissionRequest counts its session"
+grep -qF CANARY_SESSION_PR "$pr_json" && fail "permission_requests leaked session_id" || :
+run_report --file "$pr_log" --since 2026-10-05 --until 2026-10-09 > "$tmp/pr.md" || fail "PermissionRequest md should exit 0"
+row "$tmp/pr.md" "## 8. 確認の要求 (PermissionRequest、計 4 回)" "md section 8 heading"
+row "$tmp/pr.md" "| Bash | 2 |" "md section 8 row"
 
 # ---- --top / --since だけ / --until だけ / 複数 file -------------------------------------------------
 run_report --file "$log" --since 2026-10-05 --until 2026-10-09 --top 2 > "$md" || fail "--top 2 should exit 0"

@@ -87,6 +87,21 @@ run_hook CLAUDECODE=1 '{"hook_event_name":"PostToolUseFailure","tool_name":"Bash
   "tool_input":{},"error":"stopped","is_interrupt":true}' > /dev/null || fail "interrupt should exit 0"
 [ "$(field "$claude_log" 3 result)" = '"interrupted"' ] || fail "interrupted result"
 
+# ---- PermissionRequest (#639): 1 行できる・command の値と permission_suggestions は入らない。別の log に書いて後の行番号を動かさない
+pr_dir="$tmp/pr-records"
+( RECORD_DIR="$pr_dir" run_hook CLAUDECODE=1 '{"hook_event_name":"PermissionRequest","session_id":"s9","permission_mode":"auto","tool_name":"Bash",
+  "tool_input":{"command":"CANARY_PR_COMMAND","description":"CANARY_PR_DESC"},
+  "permission_suggestions":[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"CANARY_PR_SUGGESTION"}],"behavior":"allow","destination":"localSettings"}]}' ) > "$tmp/pr-out" || fail "PermissionRequest should exit 0"
+pr_log="$pr_dir/claude-code.jsonl"
+[ "$(lines "$pr_log")" = 1 ] || fail "PermissionRequest should write one line"
+[ "$(field "$pr_log" 0 event)" = '"PermissionRequest"' ] || fail "PermissionRequest event"
+[ "$(field "$pr_log" 0 tool)" = '"Bash"' ] || fail "PermissionRequest tool"
+[ "$(field "$pr_log" 0 arg_keys)" = '["command","description"]' ] || fail "PermissionRequest arg_keys"
+[ "$(field "$pr_log" 0 tool_use_id)" = '__absent__' ] || fail "PermissionRequest has no tool_use_id"
+[ "$(field "$pr_log" 0 result)" = '__absent__' ] || fail "PermissionRequest has no result"
+grep -qF CANARY_PR "$pr_log" && fail "PermissionRequest leaked a value" || :
+[ ! -s "$tmp/pr-out" ] || fail "PermissionRequest must not print a decision"
+
 # ---- PermissionDenied: reason は残すが 200 字で切る --------------------------------
 long_reason=$(ruby -e 'print "r" * 300')
 run_hook CLAUDECODE=1 "{\"hook_event_name\":\"PermissionDenied\",\"tool_name\":\"Bash\",\"tool_use_id\":\"tu5\",

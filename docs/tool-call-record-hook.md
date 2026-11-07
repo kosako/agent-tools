@@ -24,11 +24,11 @@ event ごとに 1 行。無い field は省く (`null` を書かない)。
 | field | 取得元 | 備考 |
 | --- | --- | --- |
 | `ts` | hook が付ける時刻 (ISO 8601、offset つき) | — |
-| `event` | `hook_event_name` | `SessionStart` / `PreToolUse` / `PostToolUse` / `PostToolUseFailure` / `PermissionDenied` だけ。他は無言 no-op |
+| `event` | `hook_event_name` | `SessionStart` / `PreToolUse` / `PostToolUse` / `PostToolUseFailure` / `PermissionDenied` / `PermissionRequest` だけ。他は無言 no-op |
 | `client` | env の目印 | `claude-code` / `codex` / `unknown` |
 | `session_id` / `agent_type` / `permission_mode` | 入力の同名 field | 文字列のときだけ |
 | `version` | `SessionStart` でだけ `claude --version` の先頭行 | 失敗したとき、および `codex` / `unknown` client は `unknown` (Codex の版の取得は登録と一緒に足す。#454 の scope 外)。call の行には付けない (集計で `session_id` 結合) |
-| `tool` / `tool_use_id` | `tool_name` / `tool_use_id` | `tool_use_id` で Pre と Post 系を結合する |
+| `tool` / `tool_use_id` | `tool_name` / `tool_use_id` | `tool_use_id` で Pre と Post 系を結合する。`PermissionRequest` の入力には `tool_use_id` が無い |
 | `mcp_server` | `mcp_server.name` / `.source` | MCP tool のときだけ |
 | `arg_keys` | `tool_input` の key (sorted) | **値は書かない** |
 | `op` | Notion の `update-page` の `command` (固定 enum) を分類 | `append` / `edit` / `replace` / `other`。他の tool には無い |
@@ -36,7 +36,8 @@ event ごとに 1 行。無い field は省く (`null` を書かない)。
 | `duration_ms` | Post 系の任意 field | 数値のときだけ |
 | `reason` | `PermissionDenied` の `reason` | client が作る自由文。**引数の値や path を含みうる** (この hook が書く唯一の自由文)。200 文字で切るのは長さの上限であって匿名化ではない |
 
-**書かないもの**: `tool_input` の値、`tool_response`、error の本文、`cwd`、`transcript_path`、prompt。
+**書かないもの**: `tool_input` の値、`tool_response`、error の本文、`cwd`、`transcript_path`、prompt、`PermissionRequest` の
+`permission_suggestions` (提案の中に command の値が入る)。
 self-test は canary 値でこれらが file に出ないことを確かめる。例外は上の `reason` だけで、値を書かない保証は
 `reason` には及ばない (受け入れ条件として残すことを選んだ。要らなければ登録側で `PermissionDenied` を
 外せば行ごと出なくなる)。
@@ -72,7 +73,8 @@ ${XDG_STATE_HOME:-~/.local/state}/agent-tools/personal-tool-call-record-hook/<cl
   3. `result: error` を「未実行」と読まない。MCP tool の `isError: true` も Bash の非 0 終了も同じ `error`
      で、どちらも「実行されて失敗を返した」。`result` だけでは両者を区別できず (tool の種類は `tool` と
      `mcp_server` で分かる)、`isError` の本文や終了 code などの失敗の詳細は記録しない。
-  4. 同一 `tool_use_id` の Pre / Post の順序は `ts` ではなく追記順で見る (`ts` は秒精度で、同じ call の
+  4. `PermissionRequest` は確認が出る直前の記録で (#639)、人がどう答えたかは分からない。`tool_use_id` が無いので call には結合せず、回数だけを数える。どの command の確認かを追うときは、`session_id` と `ts` で直前の PreToolUse と transcript に当たる。
+  5. 同一 `tool_use_id` の Pre / Post の順序は `ts` ではなく追記順で見る (`ts` は秒精度で、同じ call の
      Pre と Post が同じ `ts` になる)。
 
 ## 集計 (personal-tool-call-report)
@@ -129,6 +131,8 @@ usage: personal-tool-call-report [--file <path>]... [--since YYYY-MM-DD] [--unti
 6. `duration_ms` のある call の数、中央値 (偶数個なら中央 2 つの平均)、p95 (nearest-rank)
 7. 判断が `denied` の call の reason の有無 (あり / なし。あり + なし = denied の call 数。空白だけの reason は
    「なし」。本文は出さない。Post 系が勝って `allowed` になった call の `PermissionDenied` 行は数えない)
+8. 確認の要求 (`PermissionRequest` の行) の合計と tool ごとの回数 (json は `permission_requests`。#639)。結合不能には
+   入れない。tool の無い行は `unknown` に数える。行の無い時期の 0 は「確認が無かった」ではなく「登録の前」でありうる
 
 **出さないもの**: 引数の値 (記録に無い)、`session_id`、`tool_use_id`、file の絶対 path、`reason` の本文。report は
 public な場所に貼られうる前提。値の順は決定的: tool と MCP server は件数の多い順 (同数なら名前順)、client × 版は
@@ -150,7 +154,7 @@ unknown / error / interrupted / Post だけ / 同じ `tool_use_id` の別 sessio
 
 ## 登録(dotfiles 側)
 
-Claude Code の `settings.json` に、tool 系の 4 event を matcher `*` で、`SessionStart` を 1 本、
+Claude Code の `settings.json` に、tool 系の 5 event を matcher `*` で、`SessionStart` を 1 本、
 いずれも `async: true` で登録する (async の hook は block できないので、記録の失敗や遅延が tool call に
 届かない)。概形:
 
@@ -161,7 +165,8 @@ Claude Code の `settings.json` に、tool 系の 4 event を matcher `*` で、
     "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "~/.claude/agent-tools/scripts/personal-tool-call-record-hook", "async": true, "timeout": 10}]}],
     "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "~/.claude/agent-tools/scripts/personal-tool-call-record-hook", "async": true, "timeout": 10}]}],
     "PostToolUseFailure": [{"matcher": "*", "hooks": [{"type": "command", "command": "~/.claude/agent-tools/scripts/personal-tool-call-record-hook", "async": true, "timeout": 10}]}],
-    "PermissionDenied": [{"matcher": "*", "hooks": [{"type": "command", "command": "~/.claude/agent-tools/scripts/personal-tool-call-record-hook", "async": true, "timeout": 10}]}]
+    "PermissionDenied": [{"matcher": "*", "hooks": [{"type": "command", "command": "~/.claude/agent-tools/scripts/personal-tool-call-record-hook", "async": true, "timeout": 10}]}],
+    "PermissionRequest": [{"matcher": "*", "hooks": [{"type": "command", "command": "~/.claude/agent-tools/scripts/personal-tool-call-record-hook", "async": true, "timeout": 10}]}]
   }
 }
 ```
@@ -196,6 +201,9 @@ Codex への登録 (`~/.codex/hooks.json`、`features.hooks`、hook の trust) �
   - 書込先に書けないとき call は止まらず (fail-open)、その session の行は `SessionStart` を含めて残らない。
     Claude Code は stderr 付きでも hook を success と扱う。
   - `settings.json` の hooks の変更は、動いている session にも再起動なしで反映された (観測)。
+- **公式 docs の確認 (2026-11-07、Claude Code 2.1.319。#639)**: `PermissionRequest` は確認を出す直前に動き、入力は `tool_name` と
+  `tool_input` (MCP なら `mcp_server`) と任意の `permission_suggestions` で、`tool_use_id` は無い。prompt を出せない session でも動く。
+  ask 規則に当たったときと auto mode で実際に発火するかは、docs からは読み切れず、登録の後に実測する。
 - **未確認 (2026-10-09 時点)**: auto mode で deny rule に一致したとき、人が dialog で断ったとき、
   `is_interrupt` (`interrupted`)、subagent 以外の文脈での `agent_type`、Codex の `SessionStart` の有無。
 
