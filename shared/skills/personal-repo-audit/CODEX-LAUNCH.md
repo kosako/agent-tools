@@ -191,7 +191,7 @@ code や docs の本文は埋め込みません (Codex が sandbox の中で自�
 
 - 役割: 監査役として `personal-repo-audit` の手順で監査し、結果を JSON で返す。
 - 手順の正本: Codex home の `skills/personal-repo-audit/` の `SKILL.md` / `REPORT-FORMAT.md` /
-  `PRESCAN.md` を最初に読む。
+  `PRESCAN.md` を最初に読む。観点に security を含むときは、同じ directory の `SECURITY-CLASSES.md` も読む。
 - 対象: repo (current working directory) と、記録のための commit OID、範囲 (sub-tree)、観点、
   下調べの scope と期間、所見の上限。
 - 制約: read-only、観点は順に調べて subagent を起動しない、nested な `codex` / `claude` を起動しない、
