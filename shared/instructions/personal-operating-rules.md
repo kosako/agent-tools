@@ -71,7 +71,9 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
   - Issue の起票・コメント・label、自分の Issue の close
   - PR の作成・本文の更新・コメント、CI の再実行
   - feature branch への push。rebase した branch の `--force-with-lease` は、agent が作った PR の branch だけ
-  - merge 済みの自分の branch の削除 (tip が merge した PR の head と一致し、失う commit が無いときだけ)
+  - merge 済みの自分の branch の削除 (tip が merge した PR の head と一致し、失う commit が無いときだけ)。配備済みの
+    `personal-merged-branch-cleanup` (`<tool home>/agent-tools/scripts/`) で消す。この条件を確かめて比較つきで消すので、
+    `git branch -D` や `git push --delete` を直接使わない (`docs/merged-branch-cleanup.md`。#640)
 - PR の merge は、次をすべて満たすとき agent がしてよい。
   - routing preflight が author を単一の AI か表の bot と判定した (`personal-review-request` の「レビュアーの決定」)。
   - 別の AI の review の最終の verdict が `APPROVE` で、review の結果に残した対象 (base ref・base OID・head OID) が PR の
