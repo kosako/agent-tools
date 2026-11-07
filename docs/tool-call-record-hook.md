@@ -154,7 +154,7 @@ unknown / error / interrupted / Post だけ / 同じ `tool_use_id` の別 sessio
 
 ## 登録(dotfiles 側)
 
-Claude Code の `settings.json` に、tool 系の 4 event を matcher `*` で、`SessionStart` を 1 本、
+Claude Code の `settings.json` に、tool 系の 5 event を matcher `*` で、`SessionStart` を 1 本、
 いずれも `async: true` で登録する (async の hook は block できないので、記録の失敗や遅延が tool call に
 届かない)。概形:
 
