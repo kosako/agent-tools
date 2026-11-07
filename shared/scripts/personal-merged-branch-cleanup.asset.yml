@@ -14,16 +14,16 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:17b083d53f13a8df1b46d096d25a1b7948e79941df8318bf0f10ac969b3787d5
+  approved_build_id: sha256:5b1d494ee0cb36beb154385d9538a0c1a311b7424e122548ba0b201ec60d25e6
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-merged-branch-cleanup.rb
   format: text
 summary: >-
   merge 済みの自分の branch を、消してよい条件を機械で確かめてから消す (#640)。条件は、repo の owner が gh で認証している
-  user の個人の account であること、default branch でなく、どの worktree でも checkout されていないこと、同じ repo を head に
+  user の個人の account で、origin の URL がすべて同じ repo を指すこと、default branch でなく、どの worktree でも checkout されていないこと、同じ repo を head に
   した merged の PR の head の OID が local の tip と一致し、その PR の base が default branch であること。--remote のときは、
-  origin が同じ repo を指し、remote の branch の OID が同じか、branch が無いこと。削除は期待する OID を指定した比較つきで
+  push の URL もすべて同じ repo を指し、remote の branch の OID が同じか、branch が無いこと。削除は期待する OID を指定した比較つきで
   行う (local は update-ref、remote は --force-with-lease)。host の ask 規則はそのまま残し、この script だけを allow に置く
   前提。手順の守りであって境界ではない。exit 0 = すべて消した (または消す branch が無い) / 1 = 消さなかった branch がある
   (理由は stdout の label) / 2 = usage・gh か git の失敗・判定できない。(docs/merged-branch-cleanup.md)

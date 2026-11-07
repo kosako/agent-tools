@@ -21,19 +21,23 @@ usage: personal-merged-branch-cleanup [--repo owner/repo] [--remote] [--dry-run]
 | repo の owner の type が `User` で、login が gh で認証している user と一致する | `not-personal-repo` |
 | default branch でない | `default-branch` |
 | どの worktree でも checkout されていない | `checked-out` |
-| `--remote` のとき、origin が同じ repo を指す | `origin-is-another-repo` |
+| origin の fetch の URL がすべて同じ repo を指す (`--remote` のときは push の URL も全部)。手元の repo と gh の対象が違うときと、GitHub の URL の形で読めないとき (ssh の host の別名など) もここで止まる | `origin-is-another-repo` |
 | `--remote` のとき、local と remote の両方にあれば OID が同じ | `remote-differs` |
 | 同じ repo を head にした同じ名前の merged の PR がある (fork の PR と `mergedAt` の無い PR は数えない) | `no-merged-pr` |
 | その PR の head の OID が tip と一致する | `tip-is-not-merged-head` |
 | その PR の base が default branch である (stacked の親に入っただけの branch は消さない) | `base-is-not-default-branch` |
 
-local に branch が無く `--remote` のときは、remote の OID を tip として同じ条件を確かめます。
+local に branch が無く `--remote` のときは、remote の OID を tip として同じ条件を確かめます。local の ref を読めないときと壊れた ref は
+「無い」と読まず、exit 2 で止まります。worktree は PR を確かめた後に見ます (gh の照会の間に checkout されうるため)。
 
 ## 消し方
 
 - 削除は期待する OID を指定した比較つきで行います。local は `git update-ref -d`、remote は `--force-with-lease` です。確かめた
   後に tip が動くと失敗し、branch は残ります (`local-delete-failed` / `remote-delete-failed`)。
-- remote を先に消し、失敗したら local は消しません。
+- 消す直前に checkout されると比較では止まらないので、消した後に worktree を見直し、使われていれば同じ OID で戻して `checked-out` に
+  します。消した後の checkout は ref が無いので失敗します。
+- remote を先に消し、失敗したら local は消しません。local の削除に失敗しても remote は戻しません (merge 済みの head なので、失う
+  commit はありません)。
 - local を消した後に branch の設定 (`branch.<name>.*`) も外します。`git branch -D` と同じ後始末です。
 - `--remote` が無いときは remote に触りません。
 - `--dry-run` は確かめるだけで、消せるものを `would-delete:` と出します。
@@ -56,7 +60,8 @@ branch 名は `\A[A-Za-z0-9][A-Za-z0-9._/-]*\z` に合い、`git check-ref-forma
 ## 強度ラベル (偽らない)
 
 手順の守りであって境界ではありません。script は agent と同じ OS user が書き換えられ、gh の応答をそのまま信じます。確かめるのは
-PR の head が merge されたことまでで、merge commit の中身は確かめません。host の allow は、この script の path で書かれた
+PR の head が merge されたことまでで、merge commit の中身は確かめません。rebase や bisect の途中の branch は worktree の一覧に出ないので
+checkout 中と読みません (tip が merge 済みの head と同じなので、消しても commit は失いません)。host の allow は、この script の path で書かれた
 command に当たるだけで、ほかの書き方の `git branch -D` は ask 規則で今までどおり確認になります。
 
 ## Test

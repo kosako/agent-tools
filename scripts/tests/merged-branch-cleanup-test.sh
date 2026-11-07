@@ -30,7 +30,12 @@ printf '%s\n' "$*" >> "$FX/gh.log"
 case "$1 $2" in
   "api repos/"*) [ -f "$FX/repo.fail" ] && { echo 'CANARY_GH_STDERR' >&2; exit 1; }; cat "$FX/repo.json" ;;
   "api user") cat "$FX/user.json" ;;
-  "pr list") cat "$FX/prs.json" ;;
+  "pr list")
+    if [ -f "$FX/during.pr" ]; then
+      read -r w b < "$FX/during.pr"; rm -f "$FX/during.pr"
+      git worktree add -q "$w" "$b"
+    fi
+    cat "$FX/prs.json" ;;
   *) echo "unexpected gh: $*" >&2; exit 9 ;;
 esac
 EOF
@@ -38,8 +43,8 @@ chmod +x "$tmp/bin/gh"
 FX="$tmp/fx"
 export FX
 
-# origin は bare の repo。script が origin の URL を GitHub の形で読めるように、`git remote get-url origin` だけを偽の git で返す。
-# 確かめた後に tip が動く場面は、rev-parse と ls-remote の答えを fixture の古い OID にして作る。
+# origin は bare の repo。script が origin の URL を GitHub の形で読めるように、`git remote get-url` だけを偽の git で返す。
+# 確かめた後に tip が動く場面は、for-each-ref と ls-remote の答えを fixture の古い OID にして作る。
 git init -q --bare "$tmp/origin.git"
 git init -q "$tmp/repo"
 git -C "$tmp/repo" remote add origin "$tmp/origin.git"
@@ -52,12 +57,18 @@ printf '{"login":"me"}' > "$FX/user.json"
 real_git=$(command -v git)
 cat > "$tmp/bin/git" <<EOF
 #!/bin/sh
-if [ "\$1 \$2 \$3" = "remote get-url origin" ]; then
-  [ -f "\$FX/origin.url" ] && cat "\$FX/origin.url" || echo https://github.com/me/proj.git
+if [ "\$1 \$2" = "remote get-url" ]; then
+  case "\$*" in *--push*) f="\$FX/push.url" ;; *) f="\$FX/origin.url" ;; esac
+  if [ -f "\$f" ]; then cat "\$f"; else echo https://github.com/me/proj.git; fi
   exit 0
 fi
-if [ "\$1" = rev-parse ] && [ -f "\$FX/stale.local" ]; then cat "\$FX/stale.local"; exit 0; fi
+if [ "\$1" = for-each-ref ] && [ -f "\$FX/foreach.fail" ]; then exit 1; fi
+if [ "\$1" = for-each-ref ] && [ -f "\$FX/stale.local" ]; then cat "\$FX/stale.local"; exit 0; fi
 if [ "\$1" = ls-remote ] && [ -f "\$FX/stale.remote" ]; then cat "\$FX/stale.remote"; exit 0; fi
+if [ "\$1 \$2 \$3" = "update-ref --no-deref -d" ] && [ -f "\$FX/during.delete" ]; then
+  read -r w b < "\$FX/during.delete"; rm -f "\$FX/during.delete"
+  "$real_git" worktree add -q "\$w" "\$b"
+fi
 exec "$real_git" "\$@"
 EOF
 chmod +x "$tmp/bin/git"
@@ -122,6 +133,12 @@ has_remote feat/d && fail "remote feat/d should be gone"
 # ---- どちらにも無い: 何度実行してもよい ----------------------------------------------------------
 run --remote feat/gone
 expect 0 "absent: feat/gone" "absent"
+
+# ほかの branch の接頭になる名前を、その branch と取り違えない (for-each-ref は接頭でも一致する)
+oid=$(mkbranch prefix/child); prs prefix "$oid"
+run prefix
+expect 0 "absent: prefix" "prefix of another branch"
+has_local prefix/child || fail "prefix of another branch: child must stay"
 
 # ---- --dry-run: 消さない -------------------------------------------------------------------------
 oid=$(mkbranch feat/e); pushed feat/e; prs feat/e "$oid"
@@ -201,10 +218,93 @@ has_local feat/n || fail "origin mismatch: local must stay"
 has_remote feat/n || fail "origin mismatch: remote must stay"
 rm -f "$FX/origin.url"
 
+# origin が別の repo を指す: --remote が無くても local を消さない (別の repo の PR を根拠にしない)
+oid=$(mkbranch feat/n2); prs feat/n2 "$oid"
+printf 'https://github.com/someone/else.git\n' > "$FX/origin.url"
+run feat/n2
+expect 1 "refused: feat/n2 (origin-is-another-repo)" "origin mismatch without --remote"
+has_local feat/n2 || fail "origin mismatch without --remote: local must stay"
+# fetch の URL が複数あって 1 つでも外れれば止まる
+printf 'https://github.com/me/proj.git\nhttps://github.com/someone/else.git\n' > "$FX/origin.url"
+run feat/n2
+expect 1 "refused: feat/n2 (origin-is-another-repo)" "second fetch url mismatch"
+has_local feat/n2 || fail "second fetch url mismatch: local must stay"
+# GitHub の URL の形で読めない
+printf 'https://github.com.example.org/me/proj.git\n' > "$FX/origin.url"
+run feat/n2
+expect 1 "refused: feat/n2 (origin-is-another-repo)" "lookalike host"
+has_local feat/n2 || fail "lookalike host: local must stay"
+rm -f "$FX/origin.url"
+
+# push の URL が別の repo を指す: --remote では何も消さない。push の URL が複数あって 1 つでも外れれば同じ
+oid=$(mkbranch feat/n3); pushed feat/n3; prs feat/n3 "$oid"
+printf 'https://github.com/someone/else.git\n' > "$FX/push.url"
+run --remote feat/n3
+expect 1 "refused: feat/n3 (origin-is-another-repo)" "push url mismatch"
+has_local feat/n3 || fail "push url mismatch: local must stay"
+has_remote feat/n3 || fail "push url mismatch: remote must stay"
+printf 'https://github.com/me/proj.git\nhttps://github.com/someone/else.git\n' > "$FX/push.url"
+run --remote feat/n3
+expect 1 "refused: feat/n3 (origin-is-another-repo)" "second push url mismatch"
+has_remote feat/n3 || fail "second push url mismatch: remote must stay"
+# --remote が無ければ push しないので、push の URL は見ない
+run feat/n3
+expect 0 "deleted: feat/n3 (merged in #7)" "push url is not read without --remote"
+has_remote feat/n3 || fail "push url without --remote: remote must stay"
+rm -f "$FX/push.url"
+
+# 壊れた ref を「無い」と読まない: remote だけの経路に進まず、exit 2 で何も消さない
+oid=$(mkbranch feat/n4); pushed feat/n4; prs feat/n4 "$oid"
+printf 'garbage\n' > "$tmp/repo/.git/refs/heads/feat/n4"
+run --remote feat/n4
+[ "$rc" = 2 ] || fail "broken ref should exit 2, got $rc: $(cat "$tmp/out")"
+has_remote feat/n4 || fail "broken ref: remote must stay"
+printf '%s\n' "$oid" > "$tmp/repo/.git/refs/heads/feat/n4"
+# 指す先の無い OID: PR の head と違うので消さない
+printf '1111111111111111111111111111111111111111\n' > "$tmp/repo/.git/refs/heads/feat/n4"
+run feat/n4
+expect 1 "refused: feat/n4 (tip-is-not-merged-head)" "ref to a missing object"
+printf '%s\n' "$oid" > "$tmp/repo/.git/refs/heads/feat/n4"
+# ref を読めない
+: > "$FX/foreach.fail"
+run --remote feat/n4
+rm -f "$FX/foreach.fail"
+[ "$rc" = 2 ] || fail "unreadable refs should exit 2, got $rc: $(cat "$tmp/out")"
+has_local feat/n4 || fail "unreadable refs: local must stay"
+has_remote feat/n4 || fail "unreadable refs: remote must stay"
+
+# gh の照会の間に checkout された: PR を確かめた後に見るので消さない
+oid=$(mkbranch feat/n5); pushed feat/n5; prs feat/n5 "$oid"
+printf '%s feat/n5\n' "$tmp/wt-n5" > "$FX/during.pr"
+run --remote feat/n5
+expect 1 "refused: feat/n5 (checked-out)" "checked out during the gh query"
+has_local feat/n5 || fail "checked out during the gh query: local must stay"
+has_remote feat/n5 || fail "checked out during the gh query: remote must stay"
+g worktree remove "$tmp/wt-n5"
+
+# 消す直前に checkout された: 比較では止まらないので、消した後に見直して同じ OID で戻す。branch の設定も残す
+oid=$(mkbranch feat/n6); prs feat/n6 "$oid"
+g config branch.feat/n6.remote origin
+printf '%s feat/n6\n' "$tmp/wt-n6" > "$FX/during.delete"
+run feat/n6
+expect 1 "refused: feat/n6 (checked-out)" "checked out just before the delete"
+[ "$(g rev-parse feat/n6)" = "$oid" ] || fail "checked out just before the delete: ref must be restored"
+[ "$("$real_git" -C "$tmp/wt-n6" symbolic-ref HEAD)" = refs/heads/feat/n6 ] || fail "worktree must stay on the branch"
+[ "$("$real_git" -C "$tmp/wt-n6" rev-parse HEAD)" = "$oid" ] || fail "worktree HEAD must resolve"
+[ "$(g config branch.feat/n6.remote)" = origin ] || fail "branch config must stay"
+g worktree remove "$tmp/wt-n6"
+
+# 記号の ref は、指す先ではなく ref だけを消す
+oid=$(mkbranch feat/target); g symbolic-ref refs/heads/feat/sym refs/heads/feat/target; prs feat/sym "$oid"
+run feat/sym
+expect 0 "deleted: feat/sym (merged in #7)" "symbolic ref"
+has_local feat/sym && fail "symbolic ref should be gone"
+[ "$(g rev-parse feat/target)" = "$oid" ] || fail "symbolic ref: target must stay"
+
 # 比較つきの削除: 確かめた後に local の tip が動いたら、消さずに残す
 oid=$(mkbranch feat/o); prs feat/o "$oid"
 g switch -q feat/o; g commit -q --allow-empty -m later; new=$(g rev-parse HEAD); g switch -q main
-printf '%s\n' "$oid" > "$FX/stale.local"
+printf '%s refs/heads/feat/o\n' "$oid" > "$FX/stale.local"
 run feat/o
 rm -f "$FX/stale.local"
 expect 1 "refused: feat/o (local-delete-failed)" "local moved after the check"

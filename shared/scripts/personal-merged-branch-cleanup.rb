@@ -12,13 +12,16 @@
 # 2. default branch でなく、どの worktree でも checkout されていない。
 # 3. merged の PR のうちに、head が同じ repo の同じ名前で、head の OID が local の tip と一致し、base が default branch の
 #    ものがある (stacked の親に入っただけの branch は、default branch に届いていないので消さない)。
-# 4. --remote のとき: origin が同じ repo を指し、remote の branch の OID が同じか、branch が無い。
+# 4. origin の fetch の URL がすべて同じ repo を指す (手元の repo と gh の対象が同じ)。--remote のときは push の URL もすべて同じ repo を
+#    指し、remote の branch の OID が同じか、branch が無い。
 #
 # 削除は期待する OID を指定した比較つきで行う (local は update-ref、remote は --force-with-lease)。確かめた後に tip が動くと
-# 失敗し、branch は残る。local を消すのは remote の削除が済んだ後。
+# 失敗し、branch は残る。local を消すのは remote の削除が済んだ後。消す直前に checkout されたら、消した後の確認で気づいて同じ OID で
+# 戻す。
 #
 # 強度ラベル (偽らない): 手順の守りであって境界ではない。script は agent と同じ OS user が書き換えられ、gh の応答をそのまま
-# 信じる。PR の head が merge されたことまでを確かめ、merge commit の中身は確かめない。
+# 信じる。PR の head が merge されたことまでを確かめ、merge commit の中身は確かめない。rebase や bisect の途中の branch は worktree の
+# 一覧に出ないので checkout 中と読まない (tip が merge 済みの head と同じなので、消しても commit は失わない)。
 #
 # untrusted-input 規律: 読むのは PR の OID・branch 名・状態の field だけで、title や本文は取らない。出力に載せるのは、規則の形に
 # 合う branch 名、PR の番号、閉じた表の label だけ。gh と git の stderr は出さない。
@@ -57,10 +60,10 @@ module MergedBranchCleanup
     target = resolve_target(options[:repo])
     return report_all(options[:branches], target[:refusal], out) if target[:refusal]
 
-    origin_ok = !options[:remote] || origin_matches?(target[:full_name])
-    worktree_refs = checked_out_refs
+    # 手元の repo が gh の対象と同じときだけ消す (別の repo の PR を根拠に消さない)。--remote は push の宛先も全部見る。
+    origin_ok = origin_matches?(target[:full_name], push: options[:remote])
     results = options[:branches].uniq.map do |branch|
-      cleanup(branch, target, options, origin_ok, worktree_refs, out)
+      cleanup(branch, target, options, origin_ok, out)
     end
     results.all? ? EXIT_OK : EXIT_NOT_OK
   rescue ArgumentError => e
@@ -127,15 +130,12 @@ module MergedBranchCleanup
   end
 
   # 1 つの branch を処理する。消した・消す branch が無いときは true、消さなかったときは false。
-  def cleanup(branch, target, options, origin_ok, worktree_refs, out)
+  def cleanup(branch, target, options, origin_ok, out)
     ref = "refs/heads/#{branch}"
-    refusal = nil
-    refusal ||= "default-branch" if branch == target[:default]
-    refusal ||= "checked-out" if worktree_refs.include?(ref)
-    refusal ||= "origin-is-another-repo" unless origin_ok
-    return refuse(branch, refusal, out) if refusal
+    return refuse(branch, "default-branch", out) if branch == target[:default]
+    return refuse(branch, "origin-is-another-repo", out) unless origin_ok
 
-    local = rev_parse(ref)
+    local = local_oid(ref)
     remote = options[:remote] ? remote_oid(ref) : nil
     if local.nil? && remote.nil?
       out.puts "absent: #{branch}"
@@ -147,14 +147,20 @@ module MergedBranchCleanup
     verdict = merged_pr(branch, oid, target)
     return refuse(branch, verdict[:refusal], out) if verdict[:refusal]
 
+    # gh の照会の間に checkout されうるので、worktree は PR を確かめた後に見る。
+    return refuse(branch, "checked-out", out) if checked_out_refs.include?(ref)
+
     pr = verdict[:number]
     if options[:dry_run]
       out.puts "would-delete: #{branch} (merged in ##{pr})"
       return true
     end
     return refuse(branch, "remote-delete-failed", out) if remote && !delete_remote(ref, oid)
-    return refuse(branch, "local-delete-failed", out) if local && !delete_local(branch, ref, oid)
 
+    if local
+      result = delete_local(branch, ref, oid)
+      return refuse(branch, result, out) unless result == :deleted
+    end
     out.puts "deleted: #{branch} (merged in ##{pr}#{remote ? ', remote too' : ''})"
     true
   end
@@ -187,13 +193,19 @@ module MergedBranchCleanup
       row["headRefOid"].to_s.match?(OID_RE) && row["baseRefName"].is_a?(String)
   end
 
-  # 消す前に、origin が対象の repo かを確かめる (gh の応答と別の repo の branch を消さない)。
-  def origin_matches?(full_name)
-    url = git_out("remote", "get-url", "origin")
-    return false if url.nil?
+  # origin の URL がすべて対象の repo を指すか。URL が複数あると git push はその全部に送るので、1 つでも外れれば false。
+  def origin_matches?(full_name, push:)
+    urls = origin_urls("--all")
+    urls += origin_urls("--push", "--all") if push
+    !urls.empty? && urls.all? do |url|
+      match = ORIGIN_RE.match(url)
+      !match.nil? && match[1].casecmp?(full_name)
+    end
+  end
 
-    match = ORIGIN_RE.match(url.strip)
-    !match.nil? && match[1].casecmp?(full_name)
+  def origin_urls(*flags)
+    text = git_out("remote", "get-url", *flags, "origin")
+    text.nil? ? [] : text.lines.map(&:strip).reject(&:empty?)
   end
 
   # どの worktree でも checkout されている branch の ref の一覧。
@@ -204,12 +216,17 @@ module MergedBranchCleanup
     text.lines.map(&:strip).select { |l| l.start_with?("branch ") }.map { |l| l.delete_prefix("branch ") }
   end
 
-  def rev_parse(ref)
-    text = git_out("rev-parse", "--verify", "--quiet", ref)
-    return nil if text.nil?
+  # local の branch の OID。無ければ nil。読めないときと壊れた ref を「無い」と読まない (for-each-ref は壊れた ref を警告だけで
+  # 飛ばして exit 0 にするので、stderr も見る)。
+  def local_oid(ref)
+    out, err, status = capture_git("for-each-ref", "--format=%(objectname) %(refname)", ref)
+    raise Undecidable, "could not read local refs" unless status.success? && err.empty?
 
-    oid = text.strip
-    raise Undecidable, "unexpected oid from git rev-parse" unless oid.match?(OID_RE)
+    line = out.lines.map(&:strip).find { |l| l.end_with?(" #{ref}") }
+    return nil if line.nil?
+
+    oid = line.split(" ").first
+    raise Undecidable, "unexpected oid from git for-each-ref" unless oid.match?(OID_RE)
 
     oid
   end
@@ -232,17 +249,36 @@ module MergedBranchCleanup
     git_ok("push", "--quiet", "origin", "--force-with-lease=#{ref}:#{oid}", ":#{ref}")
   end
 
-  # 比較つきで ref を消してから、branch の設定を外す (`git branch -D` と同じ後始末)。設定が無いときの失敗は気にしない。
+  # 比較つきで ref を消し、branch の設定を外す (`git branch -D` と同じ後始末)。設定が無いときの失敗は気にしない。消す直前の
+  # checkout は比較では止まらないので、消した後に worktree を見直し、使われていれば (確かめられなければ) 同じ OID で戻す。
+  # 消した後の checkout は ref が無いので失敗する。戻り値は :deleted か、refuse の label。
   def delete_local(branch, ref, oid)
-    return false unless git_ok("update-ref", "-d", ref, oid)
+    return "local-delete-failed" unless git_ok("update-ref", "--no-deref", "-d", ref, oid)
 
+    if in_use?(ref)
+      restored = git_ok("update-ref", "--no-deref", ref, oid, "0" * 40)
+      raise Undecidable, "deleted #{ref} while in use and could not restore it to #{oid}" unless restored
+
+      return "checked-out"
+    end
     git_ok("config", "--remove-section", "branch.#{branch}")
+    :deleted
+  end
+
+  def in_use?(ref)
+    checked_out_refs.include?(ref)
+  rescue Undecidable
     true
   end
 
   def git_out(*args)
-    out, _err, status = Open3.capture3("git", *args)
-    status.success? ? out.scrub : nil
+    out, _err, status = capture_git(*args)
+    status.success? ? out : nil
+  end
+
+  def capture_git(*args)
+    out, err, status = Open3.capture3("git", *args)
+    [out.scrub, err, status]
   rescue SystemCallError
     raise Undecidable, "could not run git"
   end
