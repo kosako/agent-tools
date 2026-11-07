@@ -317,6 +317,8 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
 - モード、役割 (とその理由)、選んだ規模 (とその理由)、見た範囲と次の run に回した単位
 - 起票した Issue、重複として起票しなかったもの (既存の番号)、反証で落とした所見 (理由)、uncertain で
   残したもの、上限・security・proposal で個別に起票しなかったもの
+- 監査の「判断が要る点」(各単位の結果の `decisions`)。security の未確定 (repo の外の事実を人が確かめる候補。
+  repo-audit の REPORT-FORMAT.md の「security の所見」) もここで返す
 - fix モードでは、直した PR (所見、review の round と verdict)、直さなかった所見 (印なし / 範囲外 / 既存の PR /
   上限 / review 未収束 / 確かめ直しで不成立) と理由
 - repo の設定 (手順 0b): ずれ無し、ずれの項目と直し方 (`--apply` は人が承認したら)、または確かめられない (理由)

@@ -67,7 +67,7 @@
     },
     "decisions": {
       "type": "array",
-      "description": "判断が要る点",
+      "description": "判断が要る点。security の未確定 (repo の外の事実に依る候補) は finding_id を空文字にしてここに入れる (REPORT-FORMAT.md の「security の所見」)",
       "items": {
         "type": "object",
         "additionalProperties": false,

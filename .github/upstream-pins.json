@@ -41,6 +41,18 @@
         "skills/engineering/domain-modeling/GLOSSARY-FORMAT.md": "9c0b4c7a2e8507c23cbb5e0baa66d81699321cc6",
         "skills/engineering/domain-modeling/ADR-FORMAT.md": "d7e61f30a9fd8ca70d9ee68f019c2a9ebf2d13f7"
       }
+    },
+    {
+      "name": "security-audit-skill",
+      "repo": "cloudflare/security-audit-skill",
+      "pin": "c1c8a8c1471069fb0e188eeaff69b8e8db6564a8",
+      "notice": "shared/skills/personal-repo-audit/NOTICE.md",
+      "files": {
+        "skills/security-audit/SKILL.md": "92178dad304d3f63e37582a297026a7874e12c62",
+        "skills/security-audit/HUNTING.md": "377d4dcfbe88a049379448cd7892717185401597",
+        "skills/security-audit/AI-AND-LLM.md": "02ba9039eca4cec811fefc77bce0d7349b379aae",
+        "skills/security-audit/SUPPLY-CHAIN-AND-RELEASE.md": "bf96aed0803bc07471483ab129dea86759c3e305"
+      }
     }
   ]
 }
