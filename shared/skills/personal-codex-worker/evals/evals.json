@@ -1345,7 +1345,7 @@
       "id": 51,
       "name": "brief-includes-production-rail",
       "prompt": "packet #321 を Codex worker に委譲する (authorization と preflight は済み)。依頼 は script の不具合の修正。brief に品質の観点として何を書く? 依頼 が spike と明示していたらどうする? 手順確認のみ。",
-      "expected_output": "brief の一覧に「品質の観点:」の bullet を入れる: コードや script を書く・直す作業では配備済みの skill personal-production-rail を使い、索引で選んだ lens を実装前の preflight と実装後の self-check に当てる。当てた lens と、直した・直さなかった理由を、最終 message の 判断 に短く書かせる。policy の本文は brief に写さず、worker が skill から読む。依頼 が prototype / spike / 使い捨てを明示したときだけ使わない (spike と明示されていれば使わない。軽そうという推測では外さない)。model / effort は brief に書かない。",
+      "expected_output": "brief の一覧に「品質の観点:」の bullet を入れる: コードや script を書く・直す作業では配備済みの skill personal-production-rail を使い、索引で選んだ lens を実装前の preflight と実装後の self-check に当てる。当てた lens と、直した・直さなかった理由を、最終 message の 判断 に短く書かせる。policy の本文は brief に写さず、worker が skill から読む。依頼 が vibe coding / prototype / spike / 使い捨てを明示したときだけ使わない (spike と明示されていれば使わない。軽そうという推測では外さない)。model / effort は brief に書かない。",
       "files": [],
       "assertions": [
         {
@@ -1362,7 +1362,7 @@
         },
         {
           "id": "explicit-exception-only",
-          "text": "依頼 が prototype / spike / 使い捨てを明示したときだけ使わないとし、推測では外さない"
+          "text": "依頼 が vibe coding / prototype / spike / 使い捨てを明示したときだけ使わないとし、推測では外さない"
         },
         {
           "id": "no-policy-body",

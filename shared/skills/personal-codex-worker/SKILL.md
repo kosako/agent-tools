@@ -249,8 +249,8 @@ brief は file に書き、stdin (`-`) で渡します。shell 引数に埋め�
   public-safety gate が止める。§6 の置き換えは取りこぼしたときの安全網。#326)。
 - 品質の観点: コードや script を書く・直す作業では、配備済みの skill `personal-production-rail` を使い、索引で選んだ
   lens を実装前の preflight と実装後の self-check に当てる (運用 instruction の「production レール」)。当てた lens と、
-  直した・直さなかった理由を、最終 message の `判断` に短く書く。`依頼` が prototype / spike / 使い捨てを明示したときだけ
-  使わない (#650)。policy の本文は brief に写さず、worker が skill から読む。
+  直した・直さなかった理由を、最終 message の `判断` に短く書く。`依頼` が vibe coding / prototype / spike / 使い捨てを
+  明示したときだけ使わない (#650)。policy の本文は brief に写さず、worker が skill から読む。
 - 文章の規則: commit message と最終 message は、運用 instruction の「日本語の文章」の型 (ダッシュの区切り、太字の見出しの
   箇条書き、長い文の連続、打ち消しの連続と慣用) を避けて書く。commit の前に message を配備済みの
   `personal-ja-style-check --stdin` (`~/.codex/agent-tools/scripts/personal-ja-style-check`) に通し、指摘を直すか理由を
