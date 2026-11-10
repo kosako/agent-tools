@@ -979,7 +979,15 @@
         },
         {
           "id": "fixed-flags-kept",
-          "text": "固定の flag と --ignore-user-config を保ち、-p を使わず、読み取りに無い effort の -c を書いていない"
+          "text": "固定の flag (--ignore-user-config --ignore-rules -s read-only approval_policy never --disable 3 つ) を保っている"
+        },
+        {
+          "id": "no-profile-flag",
+          "text": "-p を使っていない"
+        },
+        {
+          "id": "no-missing-effort-c",
+          "text": "読み取りに無い effort の -c を書いていない"
         }
       ]
     }

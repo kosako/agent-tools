@@ -182,7 +182,9 @@ key の名前だけを記録する)。
 `host.name`、span の `cwd` です。traces は外へ送らないのも手です。
 
 環境変数の `OTEL_EXPORTER_OTLP_ENDPOINT` と `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` を別の port に向けても、全部 config の
-endpoint に届きました (0.165.0。config が優先)。環境変数で loopback の検査がすり抜けることはありません。
+endpoint に届きました。確かめたのは Codex 0.165.0 で、この 2 つの変数を設定し、logs と traces の endpoint を config に
+書いた条件だけです。preflight が検査するのは config の URL なので、ほかの版や変数 (signal ごとの変数の traces・metrics
+など) で環境変数が優先されないことは保証しません。版を上げたら測り直します。
 
 ## 使う herdr subcommand
 
