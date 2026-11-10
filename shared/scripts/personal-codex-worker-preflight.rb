@@ -151,6 +151,9 @@ module CodexWorkerPreflight
   OTEL_TABLE = "otel"
   OTEL_ENVIRONMENT_KEY = "environment"
   OTEL_EXPORTER_KEYS = %w[exporter metrics_exporter trace_exporter].freeze
+  # 値を読んで渡す key。1 行の値 (environment は basic string、exporter は "none" か 1 行の inline table) だけを受け付け、
+  # table や dotted key で書いた形は exit 2 (黙って落とさない)。
+  OTEL_READ_KEYS = [OTEL_ENVIRONMENT_KEY, *OTEL_EXPORTER_KEYS].freeze
   # 中身 (prompt の本文・最終回答・自動承認の判定) を出す key。user の値は読まず、常に false を渡す。
   OTEL_CONTENT_KEYS = %w[log_user_prompt log_agent_responses log_guardian_assessments].freeze
   # exporter の種類 => inline table の中で受け付ける key。endpoint は必須で、headers などそれ以外は exit 2。
@@ -160,8 +163,10 @@ module CodexWorkerPreflight
   # `-c key="value"` の basic string に入れる endpoint の文字。引用符・escape・空白・comment 文字・`,` と、
   # userinfo を作る `@` を含まない。
   OTEL_ENDPOINT_RE = %r{\A[A-Za-z0-9._~:/\[\]%-]+\z}
-  # 1 行の inline table `{ <kind> = { <key> = "<value>", … } }` (行末の comment は可)。
-  OTEL_EXPORTER_INLINE_RE = /\A\{\s*(?<kind>[A-Za-z0-9_-]+)\s*=\s*\{(?<body>[^{}]*)\}\s*\}\s*(?:#.*)?\z/
+  # 1 行の inline table `{ <kind> = { <key> = "<value>", … } }` (行末の comment は先に除く)。
+  OTEL_EXPORTER_INLINE_RE = /\A\{\s*(?<kind>[A-Za-z0-9_-]+)\s*=\s*\{(?<body>[^{}]*)\}\s*\}\z/
+  # headers の key (bare key と、引用符で囲んだ key)。comment を除いた値の中だけを見る。
+  OTEL_HEADERS_KEY_RE = /(?:\A|[\s{,])["']?headers["']?\s*=/
   OTEL_INLINE_PAIR_RE = /\A\s*(?<key>[A-Za-z0-9_-]+)\s*=\s*"(?<value>[^"\\]*)"\s*\z/
 
   # 配列の要素として受け入れる形: `#` / `[` / `]` / escape を含まない basic string、literal
@@ -387,7 +392,7 @@ module CodexWorkerPreflight
         next
       end
       path, rest = toml_key_path(s, label)
-      raise ArgumentError, "#{label} の key = value の行を解釈できません (provider の読み取り)" unless rest.start_with?("=")
+      raise ArgumentError, "#{label} の key = value の行を解釈できません (config の読み取り)" unless rest.start_with?("=")
 
       first = rest[1..-1].strip
       used = toml_value_lines(lines, i, first, label)
@@ -402,7 +407,7 @@ module CodexWorkerPreflight
     path, rest = toml_key_path(line[(aot ? 2 : 1)..-1], label)
     close = aot ? "]]" : "]"
     after = rest.start_with?(close) ? rest[close.size..-1].strip : nil
-    raise ArgumentError, "#{label} の table header を解釈できません (provider の読み取り)" unless after && (after.empty? || after.start_with?("#"))
+    raise ArgumentError, "#{label} の table header を解釈できません (config の読み取り)" unless after && (after.empty? || after.start_with?("#"))
 
     [:header, path, aot]
   end
@@ -418,7 +423,7 @@ module CodexWorkerPreflight
       if (m = BARE_KEY_RE.match(rest)) then path << m[0]
       elsif (m = /\A"((?:[^"\\]|\\.)*)"/.match(rest)) then path << toml_unescape(m[1], label)
       elsif (m = /\A'([^']*)'/.match(rest)) then path << m[1]
-      else raise ArgumentError, "#{label} の key を解釈できません (provider の読み取り)"
+      else raise ArgumentError, "#{label} の key を解釈できません (config の読み取り)"
       end
       rest = m.post_match.lstrip
       break unless rest.start_with?(".")
@@ -438,12 +443,12 @@ module CodexWorkerPreflight
       hex = Regexp.last_match(1) || Regexp.last_match(2)
       if hex
         code = hex.hex
-        raise ArgumentError, "#{label} の key の escape を解釈できません (provider の読み取り)" if code > 0x10FFFF || (0xD800..0xDFFF).cover?(code)
+        raise ArgumentError, "#{label} の key の escape を解釈できません (config の読み取り)" if code > 0x10FFFF || (0xD800..0xDFFF).cover?(code)
 
         [code].pack("U")
       else
         TOML_SIMPLE_ESCAPES.fetch(Regexp.last_match(3)) do
-          raise ArgumentError, "#{label} の key の escape を解釈できません (provider の読み取り)"
+          raise ArgumentError, "#{label} の key の escape を解釈できません (config の読み取り)"
         end
       end
     end
@@ -455,7 +460,7 @@ module CodexWorkerPreflight
     toml_scan(first, state, label)
     used = 0
     until state[:mode].nil? && state[:depth].zero?
-      raise ArgumentError, "#{label} の値が閉じていません (provider の読み取り)" if next_index + used >= lines.size
+      raise ArgumentError, "#{label} の値が閉じていません (config の読み取り)" if next_index + used >= lines.size
 
       toml_scan(lines[next_index + used], state, label)
       used += 1
@@ -495,7 +500,7 @@ module CodexWorkerPreflight
           i += 1
         when "]", "}"
           state[:depth] -= 1
-          raise ArgumentError, "#{label} の括弧が合いません (provider の読み取り)" if state[:depth].negative?
+          raise ArgumentError, "#{label} の括弧が合いません (config の読み取り)" if state[:depth].negative?
 
           i += 1
         else
@@ -514,7 +519,7 @@ module CodexWorkerPreflight
 
       i += quote == '"' && line[i] == "\\" ? 2 : 1
     end
-    raise ArgumentError, "#{label} の文字列が行内で閉じていません (provider の読み取り)"
+    raise ArgumentError, "#{label} の文字列が行内で閉じていません (config の読み取り)"
   end
 
   # 1 つの file から provider の設定を読む。model_provider (root の table の key) と、
@@ -656,10 +661,10 @@ module CodexWorkerPreflight
         next unless path.first == OTEL_TABLE
 
         found[:present] = true
-        # array of tables と、exporter を table で書く形 ([otel.exporter.otlp-http] など) は読み分けない。
-        if extra || (path.size > 1 && OTEL_EXPORTER_KEYS.include?(path[1]))
-          raise ArgumentError, "#{label} の [otel] の下の table の形は対応していません (exporter は [otel] の下に " \
-                               "1 行の inline table で書いてください)"
+        # array of tables と、読む key を table で書く形 ([otel.exporter.otlp-http]・[otel.environment] など) は読み分けない。
+        if extra || (path.size > 1 && OTEL_READ_KEYS.include?(path[1]))
+          raise ArgumentError, "#{label} の [otel] の下の table の形は対応していません (environment と exporter は " \
+                               "[otel] の下に 1 行の値で書いてください)"
         end
         next
       end
@@ -677,12 +682,14 @@ module CodexWorkerPreflight
     raise ArgumentError, "#{label} の otel を 1 つの値で書く形は対応していません ([otel] の table に書いてください)" if full.size == 1
 
     key = full[1]
+    return unless OTEL_READ_KEYS.include?(key)
+    raise ArgumentError, "#{label} の otel.#{key} は dotted key で書く形に対応していません (1 行の値で書いてください)" if full.size > 2
+
     if OTEL_EXPORTER_KEYS.include?(key)
-      raise ArgumentError, "#{label} の otel.#{key} は dotted key で書く形に対応していません (1 行の inline table で書いてください)" if full.size > 2
       raise ArgumentError, "#{label} の otel.#{key} が複数あり一意に読めません" if found[:exporters].key?(key)
 
-      found[:exporters][key] = otel_exporter_value("#{label} の otel.#{key}", text)
-    elsif key == OTEL_ENVIRONMENT_KEY && full.size == 2
+      found[:exporters][key] = otel_exporter_value("#{label} の otel.#{key}", text, label)
+    else
       raise ArgumentError, "#{label} の otel.environment が複数あり一意に読めません" if found[:environment]
 
       found[:environment] = provider_basic_value(text)
@@ -693,16 +700,17 @@ module CodexWorkerPreflight
   end
 
   # exporter の値: "none" か、otlp-http / otlp-grpc の 1 行の inline table。text は 1 行で閉じた値 (行を跨げば nil)。
-  def otel_exporter_value(where, text)
-    return "none" if provider_basic_value(text) == "none"
+  def otel_exporter_value(where, text, label)
+    value = text && strip_toml_comment(text, label)
+    return "none" if provider_basic_value(value) == "none"
 
     # 認証の値を argv と run script に出さない (provider の http_headers と同じ扱い)。
-    if text.to_s.match?(/\bheaders\s*=/)
+    if value.to_s.match?(OTEL_HEADERS_KEY_RE)
       raise ArgumentError, "#{where} に headers があります (認証の値は引き継がないので、外への転送の認証は Collector に持たせてください)"
     end
 
     shape = "#{where} は \"none\" か、1 行の inline table (otlp-http は endpoint と protocol、otlp-grpc は endpoint) だけ対応しています"
-    m = text && OTEL_EXPORTER_INLINE_RE.match(text)
+    m = value && OTEL_EXPORTER_INLINE_RE.match(value)
     allowed = m && OTEL_EXPORTER_KINDS[m[:kind]]
     raise ArgumentError, shape unless allowed
 
@@ -722,6 +730,18 @@ module CodexWorkerPreflight
     end
 
     { kind: m[:kind], endpoint: pairs["endpoint"], protocol: pairs["protocol"] }.compact
+  end
+
+  # 1 行の値から、文字列の外の `#` 以降 (行末の comment) を除く。文字列の中の `#` は値の一部として残す。
+  def strip_toml_comment(text, label)
+    i = 0
+    while i < text.size
+      c = text[i]
+      return text[0...i].rstrip if c == "#"
+
+      i = ['"', "'"].include?(c) ? toml_string_end(text, i, label) : i + 1
+    end
+    text.rstrip
   end
 
   # endpoint が loopback の host を指す http(s) の URL か。文字の制限で userinfo (`@`) は入らない。

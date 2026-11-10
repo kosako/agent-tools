@@ -520,6 +520,13 @@ check("許可した key の外は渡さない (値の形も問わない)",
 check("localhost と https も loopback として通す",
       otel_args("[otel]\nexporter = { otlp-http = { endpoint = \"https://LOCALHOST:4318/v1/logs\" } }\n")[0] ==
       'otel.exporter.otlp-http.endpoint="https://LOCALHOST:4318/v1/logs"')
+check("行末の comment の中の headers では止めない (comment を除いてから検査する)",
+      otel_args("[otel]\nexporter = { otlp-http = { endpoint = \"http://127.0.0.1:4318\" } } # headers = {}\n")[0] ==
+      'otel.exporter.otlp-http.endpoint="http://127.0.0.1:4318"' &&
+      otel_args("[otel]\nexporter = \"none\" # headers = {}\n")[0] == 'otel.exporter="none"')
+check("comment を除くとき、文字列の中の # は値の一部として残す",
+      P.strip_toml_comment('{ a = "x#y", b = \'#\' } # c', "cfg") == '{ a = "x#y", b = \'#\' }' &&
+      P.strip_toml_comment('"none"', "cfg") == '"none"')
 check("profiles の下の otel は読まない (--ignore-user-config で効かない)",
       otel_args("[profiles.x.otel]\nexporter = { otlp-http = { endpoint = \"https://example.com\" } }\n") == [])
 check("escape で綴った otel の table も読む (otel の生の文字列が無くても)",
@@ -533,6 +540,7 @@ check("escape で綴った otel の table も読む (otel の生の文字列が�
   "endpoint の無い exporter" => ['exporter = { otlp-http = { protocol = "binary" } }', "loopback"],
   "headers のある exporter" => ['exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318", headers = { "x-token" = "CANARY" } } }', "headers"],
   "headers のある trace_exporter" => ['trace_exporter = { otlp-grpc = { endpoint = "http://127.0.0.1:4317", headers = {} } }', "headers"],
+  "引用符で囲んだ headers の key" => ['exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318", "headers" = { a = "CANARY" } } }', "headers"],
   "知らない exporter の種類" => ['exporter = { otlp-CANARY = { endpoint = "http://127.0.0.1:4318" } }', "1 行の inline table"],
   "otlp-grpc の protocol" => ['exporter = { otlp-grpc = { endpoint = "http://127.0.0.1:4317", protocol = "binary" } }', "1 行の inline table"],
   "知らない key (tls)" => ['exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318", tls = "x" } }', "1 行の inline table"],
@@ -543,6 +551,7 @@ check("escape で綴った otel の table も読む (otel の生の文字列が�
   "行を跨ぐ exporter" => ["exporter = {\n  otlp-http = { endpoint = \"http://127.0.0.1:4318\" } }", "1 行の inline table"],
   "知らない protocol" => ['exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318", protocol = "CANARY" } }', "binary か json"],
   "dotted key の exporter" => ['exporter.otlp-http.endpoint = "http://127.0.0.1:4318"', "dotted key"],
+  "dotted key の environment" => ['environment.name = "CANARY"', "dotted key"],
   "重なった exporter" => ["exporter = \"none\"\nexporter = \"none\"", "複数あり"],
   "形の違う environment" => ['environment = "CANARY bad"', "otel.environment は"],
   "literal string の environment" => ["environment = 'dev'", "otel.environment は"],
@@ -555,6 +564,8 @@ end
 {
   "exporter の table の形" => "[otel.exporter.otlp-http]\nendpoint = \"http://127.0.0.1:4318\"\n",
   "exporter の table の形 (中身なし)" => "[otel.exporter]\n",
+  "environment の table の形" => "[otel.environment]\nname = \"x\"\n",
+  "environment の table の形 (中身なし。見出しだけで止める)" => "[otel.environment]\n",
   "array of tables の otel" => "[[otel]]\nenvironment = \"x\"\n",
   "root の inline table の otel" => "otel = { environment = \"x\" }\n",
 }.each do |name, text|
