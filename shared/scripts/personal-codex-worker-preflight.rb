@@ -22,6 +22,9 @@
 # server に対して config load を落とす (invalid transport) ので使わない。`--ignore-rules` は
 # user / project の execpolicy `.rules` を読まない指定 (`--ignore-user-config` とは別)。
 # model / effort は user config が読まれなくなる分を再指定する。
+# telemetry (#652): config.toml に [otel] があれば、許可した形 (environment と、loopback の送り先の exporter 3 つ) だけを
+# `-c` で渡し、中身を出す key (log_user_prompt など) は false に固定する。headers・loopback 以外の送り先・許可外の形は
+# exit 2。外部への転送と項目の絞り込みは手前の Collector が持つ。
 #
 # model / effort の出所は 3 つで、上ほど優先する。`--model` / `--effort` で明示されればそれを使い、
 # config も profile も読まない。無ければ config.toml の top-level (最初の table header より前) から
@@ -46,7 +49,7 @@
 #   要る flag が無い / `codex features list` に disable 対象の feature 行が無い。Codex の 3 command
 #   (`--version` / `exec --help` / `features list`) は exit 0 のときだけ出力を信用する
 # - exit 2 (検査できない): usage / user config の top-level を安全に解釈できない / model・effort の
-#   値が不正
+#   値が不正 / [otel] が許可した形でない (#652)
 # - exit 0: 起動可。stdout に検査結果と launch argv (`--json` なら JSON 1 個)
 #
 # herdr の状態 (`herdr status`) は起動経路 (herdr pane か直接か) を launcher が選ぶための任意の
@@ -67,6 +70,7 @@
 
 require "json"
 require "digest"
+require "uri"
 
 # C locale (LC_ALL=C や LANG の未設定) でも、読む text (stdin・file・git や gh の出力) を UTF-8 として扱う (#432)。
 # 既定の external encoding が US-ASCII のままだと、日本語を含む値への正規表現や連結が例外で落ちる。
@@ -140,6 +144,30 @@ module CodexWorkerPreflight
   # 1 行で閉じる basic string (escape なし) の値と、行末の comment。
   BASIC_VALUE_RE = /\A"(?<value>[^"\\]*)"\s*(?:#.*)?\z/
   BARE_KEY_RE = /\A[A-Za-z0-9_-]+/
+
+  # [otel] の引き継ぎ (#652)。`--ignore-user-config` は config.toml の [otel] も外すので、user の config.toml の
+  # [otel] から許可した形だけを読み、`-c` で渡す。送り先は loopback (手前の Collector) だけにし、中身を出す key は
+  # user の値に関係なく false に固定する。外部への転送と項目の絞り込みは Collector が持つ (この repo の外)。
+  OTEL_TABLE = "otel"
+  OTEL_ENVIRONMENT_KEY = "environment"
+  OTEL_EXPORTER_KEYS = %w[exporter metrics_exporter trace_exporter].freeze
+  # 値を読んで渡す key。1 行の値 (environment は basic string、exporter は "none" か 1 行の inline table) だけを受け付け、
+  # table や dotted key で書いた形は exit 2 (黙って落とさない)。
+  OTEL_READ_KEYS = [OTEL_ENVIRONMENT_KEY, *OTEL_EXPORTER_KEYS].freeze
+  # 中身 (prompt の本文・最終回答・自動承認の判定) を出す key。user の値は読まず、常に false を渡す。
+  OTEL_CONTENT_KEYS = %w[log_user_prompt log_agent_responses log_guardian_assessments].freeze
+  # exporter の種類 => inline table の中で受け付ける key。endpoint は必須で、headers などそれ以外は exit 2。
+  OTEL_EXPORTER_KINDS = { "otlp-http" => %w[endpoint protocol], "otlp-grpc" => %w[endpoint] }.freeze
+  OTEL_HTTP_PROTOCOLS = %w[binary json].freeze
+  OTEL_LOOPBACK_HOSTS = %w[127.0.0.1 localhost ::1].freeze
+  # `-c key="value"` の basic string に入れる endpoint の文字。引用符・escape・空白・comment 文字・`,` と、
+  # userinfo を作る `@` を含まない。
+  OTEL_ENDPOINT_RE = %r{\A[A-Za-z0-9._~:/\[\]%-]+\z}
+  # 1 行の inline table `{ <kind> = { <key> = "<value>", … } }` (行末の comment は先に除く)。
+  OTEL_EXPORTER_INLINE_RE = /\A\{\s*(?<kind>[A-Za-z0-9_-]+)\s*=\s*\{(?<body>[^{}]*)\}\s*\}\z/
+  # headers の key (bare key と、引用符で囲んだ key)。comment を除いた値の中だけを見る。
+  OTEL_HEADERS_KEY_RE = /(?:\A|[\s{,])["']?headers["']?\s*=/
+  OTEL_INLINE_PAIR_RE = /\A\s*(?<key>[A-Za-z0-9_-]+)\s*=\s*"(?<value>[^"\\]*)"\s*\z/
 
   # 配列の要素として受け入れる形: `#` / `[` / `]` / escape を含まない basic string、literal
   # string、bare scalar。入れ子や、comment 文字・括弧を含む文字列は受け入れない (その行で配列が
@@ -364,7 +392,7 @@ module CodexWorkerPreflight
         next
       end
       path, rest = toml_key_path(s, label)
-      raise ArgumentError, "#{label} の key = value の行を解釈できません (provider の読み取り)" unless rest.start_with?("=")
+      raise ArgumentError, "#{label} の key = value の行を解釈できません (config の読み取り)" unless rest.start_with?("=")
 
       first = rest[1..-1].strip
       used = toml_value_lines(lines, i, first, label)
@@ -379,7 +407,7 @@ module CodexWorkerPreflight
     path, rest = toml_key_path(line[(aot ? 2 : 1)..-1], label)
     close = aot ? "]]" : "]"
     after = rest.start_with?(close) ? rest[close.size..-1].strip : nil
-    raise ArgumentError, "#{label} の table header を解釈できません (provider の読み取り)" unless after && (after.empty? || after.start_with?("#"))
+    raise ArgumentError, "#{label} の table header を解釈できません (config の読み取り)" unless after && (after.empty? || after.start_with?("#"))
 
     [:header, path, aot]
   end
@@ -395,7 +423,7 @@ module CodexWorkerPreflight
       if (m = BARE_KEY_RE.match(rest)) then path << m[0]
       elsif (m = /\A"((?:[^"\\]|\\.)*)"/.match(rest)) then path << toml_unescape(m[1], label)
       elsif (m = /\A'([^']*)'/.match(rest)) then path << m[1]
-      else raise ArgumentError, "#{label} の key を解釈できません (provider の読み取り)"
+      else raise ArgumentError, "#{label} の key を解釈できません (config の読み取り)"
       end
       rest = m.post_match.lstrip
       break unless rest.start_with?(".")
@@ -415,12 +443,12 @@ module CodexWorkerPreflight
       hex = Regexp.last_match(1) || Regexp.last_match(2)
       if hex
         code = hex.hex
-        raise ArgumentError, "#{label} の key の escape を解釈できません (provider の読み取り)" if code > 0x10FFFF || (0xD800..0xDFFF).cover?(code)
+        raise ArgumentError, "#{label} の key の escape を解釈できません (config の読み取り)" if code > 0x10FFFF || (0xD800..0xDFFF).cover?(code)
 
         [code].pack("U")
       else
         TOML_SIMPLE_ESCAPES.fetch(Regexp.last_match(3)) do
-          raise ArgumentError, "#{label} の key の escape を解釈できません (provider の読み取り)"
+          raise ArgumentError, "#{label} の key の escape を解釈できません (config の読み取り)"
         end
       end
     end
@@ -432,7 +460,7 @@ module CodexWorkerPreflight
     toml_scan(first, state, label)
     used = 0
     until state[:mode].nil? && state[:depth].zero?
-      raise ArgumentError, "#{label} の値が閉じていません (provider の読み取り)" if next_index + used >= lines.size
+      raise ArgumentError, "#{label} の値が閉じていません (config の読み取り)" if next_index + used >= lines.size
 
       toml_scan(lines[next_index + used], state, label)
       used += 1
@@ -472,7 +500,7 @@ module CodexWorkerPreflight
           i += 1
         when "]", "}"
           state[:depth] -= 1
-          raise ArgumentError, "#{label} の括弧が合いません (provider の読み取り)" if state[:depth].negative?
+          raise ArgumentError, "#{label} の括弧が合いません (config の読み取り)" if state[:depth].negative?
 
           i += 1
         else
@@ -491,7 +519,7 @@ module CodexWorkerPreflight
 
       i += quote == '"' && line[i] == "\\" ? 2 : 1
     end
-    raise ArgumentError, "#{label} の文字列が行内で閉じていません (provider の読み取り)"
+    raise ArgumentError, "#{label} の文字列が行内で閉じていません (config の読み取り)"
   end
 
   # 1 つの file から provider の設定を読む。model_provider (root の table の key) と、
@@ -616,6 +644,141 @@ module CodexWorkerPreflight
     [overrides, sources, ignored.map { |n| "aws.#{n}" }]
   end
 
+  # ---- [otel] の引き継ぎ (#652) ----
+
+  # 1 つの file から [otel] の設定を読む。`otel` の文字列も unicode escape (`\u` / `\U`) も含まない file は読まない
+  # ([otel] の無い config の振る舞いを変えない。escape の扱いは provider の読み取りと同じ)。戻り値は
+  # {present:, environment:, exporters: {key => "none" か {kind:, endpoint:, protocol:}}}。許可した形の外は
+  # ArgumentError (exit 2)。理由文に値は出さない。
+  def read_otel_settings(text, label)
+    found = { present: false, environment: nil, exporters: {} }
+    return found unless text.to_s.include?(OTEL_TABLE) || text.to_s.match?(/\\[uU]/)
+
+    table = []
+    toml_statements(text, label).each do |kind, path, extra, _value_start|
+      if kind == :header
+        table = path
+        next unless path.first == OTEL_TABLE
+
+        found[:present] = true
+        # array of tables と、読む key を table で書く形 ([otel.exporter.otlp-http]・[otel.environment] など) は読み分けない。
+        if extra || (path.size > 1 && OTEL_READ_KEYS.include?(path[1]))
+          raise ArgumentError, "#{label} の [otel] の下の table の形は対応していません (environment と exporter は " \
+                               "[otel] の下に 1 行の値で書いてください)"
+        end
+        next
+      end
+      full = table + path
+      next unless full.first == OTEL_TABLE
+
+      found[:present] = true
+      record_otel_key(found, full, extra, label)
+    end
+    found
+  end
+
+  # 中身を出す key (log_*) と、許可した key の外は値を読まない (前者は常に false を渡し、後者は渡さない)。
+  def record_otel_key(found, full, text, label)
+    raise ArgumentError, "#{label} の otel を 1 つの値で書く形は対応していません ([otel] の table に書いてください)" if full.size == 1
+
+    key = full[1]
+    return unless OTEL_READ_KEYS.include?(key)
+    raise ArgumentError, "#{label} の otel.#{key} は dotted key で書く形に対応していません (1 行の値で書いてください)" if full.size > 2
+
+    if OTEL_EXPORTER_KEYS.include?(key)
+      raise ArgumentError, "#{label} の otel.#{key} が複数あり一意に読めません" if found[:exporters].key?(key)
+
+      found[:exporters][key] = otel_exporter_value("#{label} の otel.#{key}", text, label)
+    else
+      raise ArgumentError, "#{label} の otel.environment が複数あり一意に読めません" if found[:environment]
+
+      found[:environment] = provider_basic_value(text)
+      unless found[:environment]&.match?(PROVIDER_VALUE_RE)
+        raise ArgumentError, "#{label} の otel.environment は、英数字と ._@+- だけの basic string 1 行の形だけ対応しています"
+      end
+    end
+  end
+
+  # exporter の値: "none" か、otlp-http / otlp-grpc の 1 行の inline table。text は 1 行で閉じた値 (行を跨げば nil)。
+  def otel_exporter_value(where, text, label)
+    value = text && strip_toml_comment(text, label)
+    return "none" if provider_basic_value(value) == "none"
+
+    # 認証の値を argv と run script に出さない (provider の http_headers と同じ扱い)。
+    if value.to_s.match?(OTEL_HEADERS_KEY_RE)
+      raise ArgumentError, "#{where} に headers があります (認証の値は引き継がないので、外への転送の認証は Collector に持たせてください)"
+    end
+
+    shape = "#{where} は \"none\" か、1 行の inline table (otlp-http は endpoint と protocol、otlp-grpc は endpoint) だけ対応しています"
+    m = value && OTEL_EXPORTER_INLINE_RE.match(value)
+    allowed = m && OTEL_EXPORTER_KINDS[m[:kind]]
+    raise ArgumentError, shape unless allowed
+
+    pairs = {}
+    m[:body].split(",", -1).each do |part|
+      pm = OTEL_INLINE_PAIR_RE.match(part)
+      raise ArgumentError, shape unless pm && allowed.include?(pm[:key]) && !pairs.key?(pm[:key])
+
+      pairs[pm[:key]] = pm[:value]
+    end
+    unless loopback_endpoint?(pairs["endpoint"])
+      raise ArgumentError, "#{where} の endpoint は、loopback (127.0.0.1 / localhost / ::1) の http(s) の URL だけ対応しています " \
+                           "(外への転送は Collector に持たせてください)"
+    end
+    if pairs.key?("protocol") && !OTEL_HTTP_PROTOCOLS.include?(pairs["protocol"])
+      raise ArgumentError, "#{where} の protocol は binary か json だけ対応しています"
+    end
+
+    { kind: m[:kind], endpoint: pairs["endpoint"], protocol: pairs["protocol"] }.compact
+  end
+
+  # 1 行の値から、文字列の外の `#` 以降 (行末の comment) を除く。文字列の中の `#` は値の一部として残す。
+  def strip_toml_comment(text, label)
+    i = 0
+    while i < text.size
+      c = text[i]
+      return text[0...i].rstrip if c == "#"
+
+      i = ['"', "'"].include?(c) ? toml_string_end(text, i, label) : i + 1
+    end
+    text.rstrip
+  end
+
+  # endpoint が loopback の host を指す http(s) の URL か。文字の制限で userinfo (`@`) は入らない。
+  def loopback_endpoint?(endpoint)
+    return false unless endpoint&.match?(OTEL_ENDPOINT_RE)
+
+    uri = URI.parse(endpoint)
+    uri.is_a?(URI::HTTP) && OTEL_LOOPBACK_HOSTS.include?(uri.hostname.to_s.downcase)
+  rescue URI::InvalidURIError
+    false
+  end
+
+  # user の config.toml の [otel] から、`-c` に渡す `key=value` の列を返す。[otel] が無ければ空 (今と同じ起動)。
+  # profile file の [otel] は読まない (profile は model の選択だけに使う)。順は environment、exporter の 3 つ (定義の順。
+  # inline table は dotted key に開く)、中身を出す key の false の固定。Codex 0.165.0 で、dotted key の `-c` が効くこと
+  # と、config の endpoint が OTEL_EXPORTER_OTLP_* の環境変数より優先されることを実測した。
+  def otel_overrides(home)
+    found = read_otel_settings(read_config_text(File.join(home, "config.toml"), "user config").to_s, "user config")
+    return [] unless found[:present]
+
+    args = []
+    args << %(otel.#{OTEL_ENVIRONMENT_KEY}="#{found[:environment]}") if found[:environment]
+    OTEL_EXPORTER_KEYS.each do |key|
+      value = found[:exporters][key]
+      next unless value
+
+      if value == "none"
+        args << %(otel.#{key}="none")
+      else
+        args << %(otel.#{key}.#{value[:kind]}.endpoint="#{value[:endpoint]}")
+        args << %(otel.#{key}.#{value[:kind]}.protocol="#{value[:protocol]}") if value[:protocol]
+      end
+    end
+    OTEL_CONTENT_KEYS.each { |key| args << "otel.#{key}=false" }
+    args
+  end
+
   def herdr_state
     out = run_capture(%w[herdr status])
     out && out.include?("status: running") ? "running" : "unavailable"
@@ -626,13 +789,15 @@ module CodexWorkerPreflight
   # 内側でも `.git` を保護するため、これが無いと worker は commit できない (codex 0.154.0 で実測)。
   # main の Git 管理領域は渡さない (validate_clone が orchestrator の repository を拒否する)。
   # provider は layered_provider_selection の戻り値 (選ばれたプロバイダを引き継ぐ `-c` の key と値。#543)。
-  def launch_argv(features, selection, clone_git_dir, provider = {})
+  # otel は otel_overrides の戻り値 (`-c` に渡す `key=value` の列。#652)。
+  def launch_argv(features, selection, clone_git_dir, provider = {}, otel = [])
     argv = ["codex", "exec", "--ignore-user-config", "--ignore-rules", "-s", "workspace-write",
             "-c", 'approval_policy="never"']
     features.each { |f| argv.push("--disable", f) }
     argv.push("--add-dir", clone_git_dir)
     MODEL_KEYS.each_value { |key| argv.push("-c", "#{key}=\"#{selection[key]}\"") if selection[key] }
     provider.each { |key, value| argv.push("-c", "#{key}=\"#{value}\"") }
+    otel.each { |pair| argv.push("-c", pair) }
     argv.push("-o", "<run dir>/result.md", "-")
   end
 
@@ -870,6 +1035,8 @@ module CodexWorkerPreflight
     # provider は認証と接続先なので、--model / --effort の明示があっても config から読む (#543)。
     provider, provider_sources, provider_ignored =
       layered_provider_selection(codex_home(opts[:codex_home]), WORKER_PROFILE)
+    # telemetry の送り先も、--model / --effort の明示とは別に config から読む (#652)。
+    otel = otel_overrides(codex_home(opts[:codex_home]))
 
     {
       status: "ok",
@@ -882,11 +1049,12 @@ module CodexWorkerPreflight
       provider: provider,
       provider_sources: provider_sources,
       provider_ignored: provider_ignored,
+      otel: otel,
       herdr: herdr_state,
       clone_root: clone_root,
       clone_git_dir: clone_git_dir,
       git_snapshot: snapshot_git_dir(clone_git_dir),
-      launch_argv: launch_argv(DISABLE_FEATURES, selection, clone_git_dir, provider),
+      launch_argv: launch_argv(DISABLE_FEATURES, selection, clone_git_dir, provider, otel),
     }
   end
 
@@ -901,6 +1069,7 @@ module CodexWorkerPreflight
     unless r[:provider_ignored].empty?
       puts "provider ignored: #{r[:provider_ignored].join(', ')} (aws.profile を使い、認証の command は引き継がない)"
     end
+    puts "otel: #{r[:otel].join(', ')}" unless r[:otel].empty?
     puts "herdr: #{r[:herdr]}"
     puts "clone root: #{r[:clone_root]}"
     puts "clone git dir: #{r[:clone_git_dir]}"

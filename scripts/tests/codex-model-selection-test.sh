@@ -264,6 +264,30 @@ printf 'model_provider = "amazon-bedrock-runtime"\nmodel_providers.amazon-bedroc
 run_sel "$chome" --profile review --format json
 expect_error "root dotted provider key" "user config の top-level に解釈できない行があります"
 
+# [otel] の引き継ぎ (#652): json に otel (-c に渡す key=value の列) を足す。中身の key は false に固定し、profile の
+# [otel] は読まない。--format model は otel を読まない
+ohome="$tmp/otel-home"
+mkdir -p "$ohome"
+cat > "$ohome/config.toml" <<'EOF'
+model = "gpt-x"
+[otel]
+log_agent_responses = true
+exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/logs", protocol = "json" } }
+trace_exporter = "none"
+EOF
+printf '[otel]\nexporter = { otlp-http = { endpoint = "https://CANARY.example.com" } }\n' > "$ohome/agent-tools-review.config.toml"
+run_sel "$ohome" --profile review --format json
+expect_json "otel (json)" '{"selection":{"model":"gpt-x"},"sources":{"model":"user config"},"otel":["otel.exporter.otlp-http.endpoint=\"http://127.0.0.1:4318/v1/logs\"","otel.exporter.otlp-http.protocol=\"json\"","otel.trace_exporter=\"none\"","otel.log_user_prompt=false","otel.log_agent_responses=false","otel.log_guardian_assessments=false"]}'
+run_sel "$ohome" --profile worker --format json
+expect_json "otel (json, worker)" '{"selection":{"model":"gpt-x"},"sources":{"model":"user config"},"otel":["otel.exporter.otlp-http.endpoint=\"http://127.0.0.1:4318/v1/logs\"","otel.exporter.otlp-http.protocol=\"json\"","otel.trace_exporter=\"none\"","otel.log_user_prompt=false","otel.log_agent_responses=false","otel.log_guardian_assessments=false"]}'
+# headers があれば json は exit 2 (値は出さない)。--format model は otel を読まないので止めない
+printf 'model = "gpt-x"\n[otel]\nexporter = { otlp-grpc = { endpoint = "http://127.0.0.1:4317", headers = { "authorization" = "CANARY-TOKEN" } } }\n' > "$ohome/config.toml"
+run_sel "$ohome" --profile review --format json
+expect_error "otel headers" "user config の otel.exporter に headers があります"
+run_sel "$ohome" --profile review --format model
+[ "$rc" -eq 0 ] && [ "$out" = "gpt-x" ] || fail "--format model は [otel] を読まずに model を出すべき (rc=$rc): $out $err"
+rm "$ohome/agent-tools-review.config.toml"
+
 # preflight が同じ directory に配備されていない → exit 2 (path は出さない)
 lone="$tmp/lone"
 mkdir -p "$lone"
