@@ -254,6 +254,7 @@ codex exec --ignore-user-config --ignore-rules -s workspace-write -c 'approval_p
   --add-dir '<preflight の clone_git_dir>' \
   -c 'model="<preflight の model>"' -c 'model_reasoning_effort="<同 effort>"' \
   -c '<preflight の provider の key>="<値>"' \
+  -c '<preflight の otel の key=value>' \
   -o "$run/result.md" - < "$run/brief.md" 2>&1 | tee "$run/codex.log"
 rc=${pipestatus[1]}
 printf 'CODEX-WORKER-DONE-%s exit=%s\n' "$nonce" "$rc" | tee "$run/done.txt"
@@ -261,8 +262,9 @@ exit "$rc"
 ```
 
 - `-c` の値は preflight の要素 (`approval_policy="never"` 等、引用符を含む) を丸ごと `'…'` で
-  literal 化する。model / effort の `-c` は preflight が出したときだけ。provider の `-c` (#543) も preflight が
-  出したときだけで、出した数と順のまま並べる。
+  literal 化する。model / effort の `-c` は preflight が出したときだけ。provider の `-c` (#543) と otel の `-c`
+  (#652) も preflight が出したときだけで、出した数と順のまま並べる。otel の要素 (`otel.log_user_prompt=false` 等) は
+  引用符の無い真偽値を含むので、`key="value"` の形に直さない。
 - `--add-dir` の値は preflight の `clone_git_dir` (= `launch_argv` の要素) をそのまま literal 化して
   使う。自分で組み立てない・省かない (省くと worker は `git add` すらできない)。
 - **`cd` する path も preflight の `clone_root`** (検査した物理 path) を使う。caller が渡した生の値を

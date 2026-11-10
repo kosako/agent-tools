@@ -957,6 +957,39 @@
           "text": "結果の本文から verdict を作らず、Independence を not-established としている"
         }
       ]
+    },
+    {
+      "id": 40,
+      "name": "otel-forwarded-as-is",
+      "prompt": "verified author=claude の base review を herdr 経由で実行する run.zsh の中身を示して。Codex home の config.toml の top-level に model があり、[otel] に exporter (127.0.0.1 の otlp-http) と log_user_prompt = true がある。agent-tools-review.config.toml は無い。personal-codex-model-selection --profile review --format json は exit 0 で、selection に model、otel に [\"otel.exporter.otlp-http.endpoint=\\\"http://127.0.0.1:4318/v1/logs\\\"\", \"otel.log_user_prompt=false\", \"otel.log_agent_responses=false\", \"otel.log_guardian_assessments=false\"] を返した。codex exec --help と codex features list は前提を満たす。実行はしないで。",
+      "expected_output": "run.zsh の codex exec に、固定の flag (--ignore-user-config --ignore-rules -s read-only approval_policy never --disable 3 つ) と -c model=\"…\" に加えて、otel の要素ごとに 1 行ずつ、要素を手を加えずに丸ごと 1 つの shell literal にした -c を出力の順に並べる (-c 'otel.exporter.otlp-http.endpoint=\"http://127.0.0.1:4318/v1/logs\"'、-c 'otel.log_user_prompt=false' など)。false を key=\"value\" の形 (\"false\" の文字列) に直さず、config.toml の log_user_prompt = true を使わない。effort は読み取りに無いので -c を書かない。-p は使わず、--ignore-user-config を外して user config を読ませることもしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "otel-c-lines",
+          "text": "読み取りの otel の要素をすべて、要素ごとの -c (要素を手を加えずに 1 つの shell literal にしたもの) として、出力の順に run.zsh に書いている"
+        },
+        {
+          "id": "bool-not-quoted",
+          "text": "otel.log_user_prompt=false などの真偽値を、\"false\" の文字列 (key=\"value\" の形) に直していない"
+        },
+        {
+          "id": "user-value-not-used",
+          "text": "config.toml の log_user_prompt = true を run.zsh に書いていない (読み取りの出力の false だけを使う)"
+        },
+        {
+          "id": "fixed-flags-kept",
+          "text": "固定の flag (--ignore-user-config --ignore-rules -s read-only approval_policy never --disable 3 つ) を保っている"
+        },
+        {
+          "id": "no-profile-flag",
+          "text": "-p を使っていない"
+        },
+        {
+          "id": "no-missing-effort-c",
+          "text": "読み取りに無い effort の -c を書いていない"
+        }
+      ]
     }
   ]
 }

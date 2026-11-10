@@ -32,6 +32,11 @@ review (`personal-codex-review`) や worker (`personal-codex-worker`) の起動�
   `aws.credential_export` / `aws.auth_refresh` は、`aws.profile` があれば引き継がずに無視され、出力の
   `provider_ignored` に名前が出ます (#548)。`-c` には書かず、報告に「aws.profile を使い、認証の command は
   引き継がない」と添えます。
+- **telemetry の設定 ([otel]) も引き継ぐ (#652)**: 同じ出力に `otel` があれば (user の `config.toml` に `[otel]` が
+  あるとき)、その要素をすべて `-c` で渡します。送り先は loopback (手前の Collector) だけで、中身を出す key
+  (`log_user_prompt` など) は `false` に固定されます。送り先が loopback でない・`headers` がある・許可外の形なら、
+  script が exit 2 で止めるので起動しません。外部への転送と項目の絞り込みは Collector が持ちます
+  (`docs/codex-review-launch.md`)。
 - **最終出力は schema つきの JSON**: `--output-schema <findings.schema.json>` と
   `-o <result.json>`。
 - **heredoc を使わない**: Codex が read-only の sandbox で実行する command は、heredoc の一時 file を
@@ -109,6 +114,7 @@ codex exec --ignore-user-config --ignore-rules -s read-only -c approval_policy="
   --disable apps --disable computer_use --disable browser_use \
   -c "model=\"$model\"" -c "model_reasoning_effort=\"$effort\"" \
   -c <provider の key="value" の shell literal> \
+  -c <otel の key=value の shell literal> \
   --output-schema "$run/findings.schema.json" -o "$run/result.json" - < "$run/brief.md"
 rc=$?
 printf 'CODEX-AUDIT-DONE-%s exit=%s\n' "$nonce" "$rc" | tee "$run/done.txt"
@@ -120,7 +126,10 @@ exit "$rc"
 ので、引用符の中に入れても壊れません。model / effort を Codex の既定に任せるときは、その変数と
 `-c` の 2 つを script から除きます (空の値を渡さない)。provider の `-c` は `provider` の key ごとに 1 行ずつ
 並べ (順は出力のとおり)、`key="value"` を丸ごと 1 つの shell literal にします
-(`-c 'model_provider="amazon-bedrock"'`)。`provider` が無ければその行ごと除きます。
+(`-c 'model_provider="amazon-bedrock"'`)。`provider` が無ければその行ごと除きます。otel の `-c` も同じく
+`otel` の要素ごとに 1 行ずつ並べ、要素 (`key=value` の形で完成している) を手を加えずに 1 つの shell literal にします
+(`-c 'otel.log_user_prompt=false'`。`false` は引用符の無い真偽値なので、`key="value"` の形に直さない)。`otel` が
+無ければその行ごと除きます。
 
 herdr の pane から起動する監査・反証・相談は、review と同じく呼び出し元の tab の右の列にまとめます。
 上の「起動経路」の `pane current` の条件は維持し、pane は次の順に作ります。

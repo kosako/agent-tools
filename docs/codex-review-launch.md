@@ -129,6 +129,63 @@ key を足す)。
 置き方と Fast mode の消費は [Install & Usage](install-and-usage.md) の「Codex の review / worker
 だけを軽くする」。
 
+## telemetry ([otel]) の引き継ぎ (#652)
+
+`--ignore-user-config` は `config.toml` の `[otel]` も外すので、review・worker・監査の Codex の telemetry は、その
+ままでは送られません。model と provider と同じく、配備済みの script (`personal-codex-model-selection`、worker は
+preflight) が user の `config.toml` の `[otel]` を読み、出力の `otel` (`-c` に渡す `key=value` の列) を `-c` で渡します。
+
+- **読む元**: user の `config.toml` の `[otel]` だけです。review / worker の profile file の `[otel]` は読みません。
+- **引き継ぐ key**: `environment` と、`exporter`・`metrics_exporter`・`trace_exporter` です。exporter は `"none"` か、
+  1 行の inline table (`otlp-http` は `endpoint` と `protocol`、`otlp-grpc` は `endpoint`) を受け付け、dotted key
+  (`otel.exporter.otlp-http.endpoint="…"`) に開いて渡します。
+- **送り先**: loopback (`127.0.0.1`・`localhost`・`::1`) の http(s) の URL だけです。それ以外の host、userinfo、
+  `headers`、table や dotted key で書いた形、行を跨ぐ値は BLOCKED です (理由文に値は出さない)。
+- **中身**: 中身を出す key (`log_user_prompt`・`log_agent_responses`・`log_guardian_assessments`) は、user の値に
+  関係なく `false` を渡します。
+- **[otel] が無いとき**: 何も足しません (今までと同じ起動)。
+
+受け付ける書き方の例です。
+
+```toml
+[otel]
+environment = "dev"
+exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/logs", protocol = "binary" } }
+trace_exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/traces", protocol = "binary" } }
+metrics_exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/metrics", protocol = "binary" } }
+```
+
+### 外へ送るときは Collector で絞る
+
+外部の backend へは、Codex から直接ではなく、127.0.0.1 で受ける OpenTelemetry Collector から転送します。Collector
+の設置と設定は machine の環境の話なので、この repo の外で持ちます。理由は 2 つです。
+
+- Codex の設定で止められる中身は、prompt の本文・最終回答・自動承認の判定だけです。`codex.tool_result` の event に
+  入る、実行した command と出力の抜粋は止められません。review では diff や file の断片が混ざります。
+- 外部の backend の認証の header を、argv と run script に出しません。認証は Collector に持たせます。
+
+Codex 0.165.0 で、中身の key を `false` にして送られたものを測りました (2026-11-10、この repo の review の起動の形。
+key の名前だけを記録する)。
+
+- **logs の resource**: `service.name`・`service.version`・`env`・`host.name` など。
+- **logs の event**: `codex.conversation_starts`・`codex.api_request`・`codex.sse_event` (token 数)・`codex.user_prompt`
+  (本文は伏せられ、長さだけ)・`codex.tool_decision`・`codex.tool_result`・`codex.websocket_*` など。多くの event に
+  `user.email`・`user.account_id`・`conversation.id`・`model` が付きます。
+- **codex.tool_result**: `tool_name`・`duration_ms`・`success` に加えて、`arguments` (実行した command) と `output`
+  (出力の抜粋。1 回あたり約 1.8 KB で切られ、`output_truncated` が付く) が入ります。git log の commit の件名が
+  送られていました。
+- **traces**: 内部の処理の span が多く、1 回の起動で数 MB になります。span の属性に `cwd` (local の path) や
+  `code.file.path` が入ります。
+- **metrics**: token 数・所要時間・tool の呼び出しの回数などです。`metrics_exporter = "none"` なら送られません。
+
+外へ送る前に Collector で落とす候補は、`codex.tool_result` の `arguments` と `output`、`user.email`・`user.account_id`・
+`host.name`、span の `cwd` です。traces は外へ送らないのも手です。
+
+環境変数の `OTEL_EXPORTER_OTLP_ENDPOINT` と `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` を別の port に向けても、全部 config の
+endpoint に届きました。確かめたのは Codex 0.165.0 で、この 2 つの変数を設定し、logs と traces の endpoint を config に
+書いた条件だけです。preflight が検査するのは config の URL なので、ほかの版や変数 (signal ごとの変数の traces・metrics
+など) で環境変数が優先されないことは保証しません。版を上げたら測り直します。
+
 ## 使う herdr subcommand
 
 `status` / `pane current` / `pane list` / `pane layout` / `pane split` / `pane rename` / `pane run` / `pane wait-output` / `pane read` /
