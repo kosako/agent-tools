@@ -264,7 +264,7 @@ exit "$rc"
 - `-c` の値は preflight の要素 (`approval_policy="never"` 等、引用符を含む) を丸ごと `'…'` で
   literal 化する。model / effort の `-c` は preflight が出したときだけ。provider の `-c` (#543) と otel の `-c`
   (#652) も preflight が出したときだけで、出した数と順のまま並べる。otel の要素 (`otel.log_user_prompt=false` 等) は
-  引用符の無い真偽値を含むので、`key="value"` の形に直さない。
+  引用符の無い真偽値と数値 (`otel.tool_result.max_bytes=0`) を含むので、`key="value"` の形に直さない。
 - `--add-dir` の値は preflight の `clone_git_dir` (= `launch_argv` の要素) をそのまま literal 化して
   使う。自分で組み立てない・省かない (省くと worker は `git add` すらできない)。
 - **`cd` する path も preflight の `clone_root`** (検査した物理 path) を使う。caller が渡した生の値を

@@ -138,7 +138,7 @@ orchestrator が行います。
   「aws.profile を使い、認証の command は引き継がない」と添える。
 - telemetry (#652): `--ignore-user-config` は `config.toml` の `[otel]` も外すので、preflight が `config.toml` の
   `[otel]` を読み、送り先が loopback の exporter と `environment` だけを `launch_argv` に `-c` で入れる (出力の
-  `otel`)。中身を出す key (`log_user_prompt` など) は user の値に関係なく `false` を渡す。`--model` / `--effort` の
+  `otel`)。中身を出す key (`log_user_prompt` など) は user の値に関係なく `false`、tool の出力の抜粋の上限 (`tool_result.max_bytes`) は `0` を渡す (#655)。`--model` / `--effort` の
   明示があっても読み、worker 用 profile の `[otel]` は読まない。送り先が loopback でない・`headers` がある・許可外の
   形なら exit 2。外部への転送と項目の絞り込みは手前の Collector が持つ (`docs/codex-review-launch.md`)。
 - preflight が無い・実行できない (配備欠損) ときも `Blocked at: preflight`。generic な `codex exec`

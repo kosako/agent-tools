@@ -34,7 +34,7 @@ review (`personal-codex-review`) や worker (`personal-codex-worker`) の起動�
   引き継がない」と添えます。
 - **telemetry の設定 ([otel]) も引き継ぐ (#652)**: 同じ出力に `otel` があれば (user の `config.toml` に `[otel]` が
   あるとき)、その要素をすべて `-c` で渡します。送り先は loopback (手前の Collector) だけで、中身を出す key
-  (`log_user_prompt` など) は `false` に固定されます。送り先が loopback でない・`headers` がある・許可外の形なら、
+  (`log_user_prompt` など) は `false`、tool の出力の抜粋の上限 (`tool_result.max_bytes`) は `0` に固定されます (#655)。送り先が loopback でない・`headers` がある・許可外の形なら、
   script が exit 2 で止めるので起動しません。外部への転送と項目の絞り込みは Collector が持ちます
   (`docs/codex-review-launch.md`)。
 - **最終出力は schema つきの JSON**: `--output-schema <findings.schema.json>` と
@@ -128,7 +128,7 @@ exit "$rc"
 並べ (順は出力のとおり)、`key="value"` を丸ごと 1 つの shell literal にします
 (`-c 'model_provider="amazon-bedrock"'`)。`provider` が無ければその行ごと除きます。otel の `-c` も同じく
 `otel` の要素ごとに 1 行ずつ並べ、要素 (`key=value` の形で完成している) を手を加えずに 1 つの shell literal にします
-(`-c 'otel.log_user_prompt=false'`。`false` は引用符の無い真偽値なので、`key="value"` の形に直さない)。`otel` が
+(`-c 'otel.log_user_prompt=false'`。`false` と `0` は引用符の無い真偽値と数値なので、`key="value"` の形に直さない)。`otel` が
 無ければその行ごと除きます。
 
 herdr の pane から起動する監査・反証・相談は、review と同じく呼び出し元の tab の右の列にまとめます。

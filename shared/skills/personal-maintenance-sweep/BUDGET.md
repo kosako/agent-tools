@@ -219,7 +219,7 @@ reset までの日数 = (週の reset の時刻 − 今) / 24 時間   (小数�
   `provider_ignored` があれば (command で資格情報を取る table を、`aws.profile` があるので無視したとき。#548)、
   `-c` には渡さず、報告に「aws.profile を使い、認証の command は引き継がない」と添えます。出力に `otel` があれば
   (user の `config.toml` に `[otel]` があるとき。#652)、その要素もすべて `CODEX-LAUNCH.md` の run script に `-c` で
-  渡します (送り先は loopback だけ、中身を出す key は `false` に固定。`--format model` は `[otel]` を読まない)。
+  渡します (送り先は loopback だけ、中身を出す key は `false`、tool の出力の抜粋の上限は `0` に固定。`--format model` は `[otel]` を読まない)。
 
 - Claude の側は今の session の model のまま動きます (skill は model を切り替えない)。
 

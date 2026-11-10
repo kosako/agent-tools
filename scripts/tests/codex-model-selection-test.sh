@@ -277,9 +277,9 @@ trace_exporter = "none"
 EOF
 printf '[otel]\nexporter = { otlp-http = { endpoint = "https://CANARY.example.com" } }\n' > "$ohome/agent-tools-review.config.toml"
 run_sel "$ohome" --profile review --format json
-expect_json "otel (json)" '{"selection":{"model":"gpt-x"},"sources":{"model":"user config"},"otel":["otel.exporter.otlp-http.endpoint=\"http://127.0.0.1:4318/v1/logs\"","otel.exporter.otlp-http.protocol=\"json\"","otel.trace_exporter=\"none\"","otel.log_user_prompt=false","otel.log_agent_responses=false","otel.log_guardian_assessments=false"]}'
+expect_json "otel (json)" '{"selection":{"model":"gpt-x"},"sources":{"model":"user config"},"otel":["otel.exporter.otlp-http.endpoint=\"http://127.0.0.1:4318/v1/logs\"","otel.exporter.otlp-http.protocol=\"json\"","otel.trace_exporter=\"none\"","otel.log_user_prompt=false","otel.log_agent_responses=false","otel.log_guardian_assessments=false","otel.tool_result.max_bytes=0"]}'
 run_sel "$ohome" --profile worker --format json
-expect_json "otel (json, worker)" '{"selection":{"model":"gpt-x"},"sources":{"model":"user config"},"otel":["otel.exporter.otlp-http.endpoint=\"http://127.0.0.1:4318/v1/logs\"","otel.exporter.otlp-http.protocol=\"json\"","otel.trace_exporter=\"none\"","otel.log_user_prompt=false","otel.log_agent_responses=false","otel.log_guardian_assessments=false"]}'
+expect_json "otel (json, worker)" '{"selection":{"model":"gpt-x"},"sources":{"model":"user config"},"otel":["otel.exporter.otlp-http.endpoint=\"http://127.0.0.1:4318/v1/logs\"","otel.exporter.otlp-http.protocol=\"json\"","otel.trace_exporter=\"none\"","otel.log_user_prompt=false","otel.log_agent_responses=false","otel.log_guardian_assessments=false","otel.tool_result.max_bytes=0"]}'
 # headers があれば json は exit 2 (値は出さない)。--format model は otel を読まないので止めない
 printf 'model = "gpt-x"\n[otel]\nexporter = { otlp-grpc = { endpoint = "http://127.0.0.1:4317", headers = { "authorization" = "CANARY-TOKEN" } } }\n' > "$ohome/config.toml"
 run_sel "$ohome" --profile review --format json

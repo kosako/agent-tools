@@ -50,7 +50,7 @@ provider の `-c` は、読み取りの出力に `provider` があるときだ�
 otel の `-c` は、読み取りの出力に `otel` があるときだけ、その要素ごとに 1 行ずつ並べます (#652。順は出力のとおり。
 例: `otel.exporter.otlp-http.endpoint="http://127.0.0.1:4318/v1/logs"`、`otel.log_user_prompt=false`)。要素は
 `key=value` の形で完成しているので、手を加えずに丸ごと 1 つの shell literal にして `-c` の次に置きます
-(`-c 'otel.log_user_prompt=false'`)。`false` は引用符を付けずに渡す真偽値なので、`key="value"` の形に直しません。
+(`-c 'otel.log_user_prompt=false'`)。`false` と `0` は引用符を付けずに渡す真偽値と数値なので、`key="value"` の形に直しません。
 `otel` が無ければその行ごと除きます。値は script が、引用符・escape・空白を含まない文字に限っています (environment は
 `\A[A-Za-z0-9._@+-]+\z`、endpoint は loopback の http(s) の URL)。
 
@@ -81,7 +81,7 @@ selector="$HOME/.claude/agent-tools/scripts/personal-codex-model-selection"
 うち引き継ぐもの (`model_provider` と、そのプロバイダの `[model_providers.<id>.aws]` の `profile` / `region`) です。
 command で資格情報を取る `aws.credential_export` / `aws.auth_refresh` を、`aws.profile` があるので引き継がずに
 無視したときは、`"provider_ignored": [名前]` も付きます (#548。値は出ない)。user の `config.toml` に `[otel]` が
-あれば、`"otel": [key=value の列]` も付きます (#652。送り先は loopback だけ、中身を出す key は `false` に固定。review
+あれば、`"otel": [key=value の列]` も付きます (#652。送り先は loopback だけ、中身を出す key は `false`、tool の出力の抜粋の上限は `0` に固定。review
 用の profile file の `[otel]` は読まない)。
 
 - **exit 0 の JSON だけを使います**。`selection` にある key だけを run script に `-c` で書き、無い key は行ごと

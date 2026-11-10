@@ -229,7 +229,7 @@ model_reasoning_effort = "high"
   (#548)。許可する key と認証の command の扱いの正本は [Codex review の起動経路](codex-review-launch.md) の「model の選択」です。
   profile の `service_tier` など、model / effort と provider 以外の key はどちらも読みません。
 - telemetry の設定は、user の `config.toml` の `[otel]` だけを読みます (#652)。送り先が loopback の exporter と
-  `environment` を `-c` で渡し、中身を出す key は `false` に固定します。profile file の `[otel]` は読みません。外部の
+  `environment` を `-c` で渡し、中身を出す key は `false`、tool の出力の抜粋の上限 (`tool_result.max_bytes`) は `0` に固定します。profile file の `[otel]` は読みません。外部の
   backend へは、127.0.0.1 で受ける Collector で項目を絞ってから送ります (正本は
   [Codex review の起動経路](codex-review-launch.md) の「telemetry ([otel]) の引き継ぎ」)。
 - **Fast mode (`service_tier = "fast"`)**: 公式 docs によると、GPT-6 (Astra / Sol / Luna) の Fast mode は速度が
