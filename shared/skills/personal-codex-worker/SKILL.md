@@ -136,13 +136,18 @@ orchestrator が行います。
   exit 2。command で資格情報を取る `aws.credential_export` / `aws.auth_refresh` は、重ねた後の `aws.profile` があれば
   引き継がずに無視し、出力の `provider_ignored` に名前だけを出す (#548。無ければ exit 2)。orchestrator は報告に
   「aws.profile を使い、認証の command は引き継がない」と添える。
+- telemetry (#652): `--ignore-user-config` は `config.toml` の `[otel]` も外すので、preflight が `config.toml` の
+  `[otel]` を読み、送り先が loopback の exporter と `environment` だけを `launch_argv` に `-c` で入れる (出力の
+  `otel`)。中身を出す key (`log_user_prompt` など) は user の値に関係なく `false` を渡す。`--model` / `--effort` の
+  明示があっても読み、worker 用 profile の `[otel]` は読まない。送り先が loopback でない・`headers` がある・許可外の
+  形なら exit 2。外部への転送と項目の絞り込みは手前の Collector が持つ (`docs/codex-review-launch.md`)。
 - preflight が無い・実行できない (配備欠損) ときも `Blocked at: preflight`。generic な `codex exec`
   に fallback しない。
 
 `launch_argv` は `codex exec --ignore-user-config --ignore-rules -s workspace-write
 -c approval_policy="never" --disable apps --disable computer_use --disable browser_use
 --add-dir <clone>/.git [-c model="…"] [-c model_reasoning_effort="…"] [-c <provider の key>="…" …]
--o <run dir>/result.md -` の形で、
+[-c <otel の key=value> …] -o <run dir>/result.md -` の形で、
 `<run dir>` を run directory に置き換えて使う。**flag を足さない・外さない** (`--ephemeral` は付けない。
 `-s danger-full-access` や `--dangerously-…` は使わない。`--add-dir` を自分で足さない)。
 

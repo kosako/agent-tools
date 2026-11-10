@@ -30,6 +30,7 @@ codex exec --ignore-user-config --ignore-rules -s read-only -c approval_policy="
   --disable apps --disable computer_use --disable browser_use \
   -c "model=\"$model\"" -c "model_reasoning_effort=\"$effort\"" \
   -c <provider の key="value" の shell literal> \
+  -c <otel の key=value の shell literal> \
   -o "$run/result.md" - < "$run/brief.md"
 rc=$?
 printf 'CODEX-REVIEW-DONE-%s exit=%s\n' "$nonce" "$rc" | tee "$run/done.txt"
@@ -45,6 +46,13 @@ provider の `-c` は、読み取りの出力に `provider` があるときだ�
 とおり。例: `model_provider="amazon-bedrock"`、`model_providers.amazon-bedrock.aws.region="us-west-2"`)。`key="value"`
 を丸ごと 1 つの shell literal にして `-c` の次に置きます (`-c 'model_provider="amazon-bedrock"'`)。`provider` が
 無ければその行ごと除きます。key と値は script が bare key の文字と `\A[A-Za-z0-9._@+-]+\z` に限っています。
+
+otel の `-c` は、読み取りの出力に `otel` があるときだけ、その要素ごとに 1 行ずつ並べます (#652。順は出力のとおり。
+例: `otel.exporter.otlp-http.endpoint="http://127.0.0.1:4318/v1/logs"`、`otel.log_user_prompt=false`)。要素は
+`key=value` の形で完成しているので、手を加えずに丸ごと 1 つの shell literal にして `-c` の次に置きます
+(`-c 'otel.log_user_prompt=false'`)。`false` は引用符を付けずに渡す真偽値なので、`key="value"` の形に直しません。
+`otel` が無ければその行ごと除きます。値は script が、引用符・escape・空白を含まない文字に限っています (environment は
+`\A[A-Za-z0-9._@+-]+\z`、endpoint は loopback の http(s) の URL)。
 
 完了の正本は `done.txt` です (nonce が一致し `exit=0`)。端末に出る同じ行 (sentinel) は
 `herdr pane wait-output` の起床信号として使い、判定は file で行います。どの経路でも、続行条件は
@@ -72,16 +80,19 @@ selector="$HOME/.claude/agent-tools/scripts/personal-codex-model-selection"
 `"provider_sources": {key: 出所}` が付きます (#543)。`provider` は `--ignore-user-config` で外れるプロバイダの設定の
 うち引き継ぐもの (`model_provider` と、そのプロバイダの `[model_providers.<id>.aws]` の `profile` / `region`) です。
 command で資格情報を取る `aws.credential_export` / `aws.auth_refresh` を、`aws.profile` があるので引き継がずに
-無視したときは、`"provider_ignored": [名前]` も付きます (#548。値は出ない)。
+無視したときは、`"provider_ignored": [名前]` も付きます (#548。値は出ない)。user の `config.toml` に `[otel]` が
+あれば、`"otel": [key=value の列]` も付きます (#652。送り先は loopback だけ、中身を出す key は `false` に固定。review
+用の profile file の `[otel]` は読まない)。
 
 - **exit 0 の JSON だけを使います**。`selection` にある key だけを run script に `-c` で書き、無い key は行ごと
   除きます (Codex の既定に任せる)。`provider` があれば、その key をすべて `-c` で書きます (上の run script)。
-  `provider_ignored` は `-c` に書きません。
+  `provider_ignored` は `-c` に書きません。`otel` があれば、その要素をすべて `-c` で書きます。
   `sources` (`user config` / `review profile`。無い key は `codex default`) を返却の `Model selection` に写します
   (値は写さない)。`provider_ignored` があれば、同じ行に「aws.profile を使い、認証の command (<名前>) は引き継がない」
   と添えます (SSO の期限切れで落ちたときに、原因を追えるように。`docs/codex-review-launch.md`)。
 - exit 0 以外 (top-level に解釈できない行、値が形に合わない、選ばれたプロバイダに引き継げない設定 (`base_url`・
-  `env_key`・`http_headers` など) がある、script か、script が load する
+  `env_key`・`http_headers` など) がある、`[otel]` の送り先が loopback でない・`headers` がある・許可外の形である、
+  script か、script が load する
   `personal-codex-worker-preflight` が配備されていない、file を読めない、file は在るが regular file でない、
   在るかどうかを確かめられない) は
   `Status: BLOCKED` (`capability-preflight`) です。推測した値で走らせず、`--ignore-user-config` を外して user config を

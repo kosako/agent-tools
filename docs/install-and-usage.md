@@ -228,6 +228,10 @@ model_reasoning_effort = "high"
   command で資格情報を取る table (`credential_export` / `auth_refresh`) は、`aws.profile` があれば引き継がずに無視します
   (#548)。許可する key と認証の command の扱いの正本は [Codex review の起動経路](codex-review-launch.md) の「model の選択」です。
   profile の `service_tier` など、model / effort と provider 以外の key はどちらも読みません。
+- telemetry の設定は、user の `config.toml` の `[otel]` だけを読みます (#652)。送り先が loopback の exporter と
+  `environment` を `-c` で渡し、中身を出す key は `false` に固定します。profile file の `[otel]` は読みません。外部の
+  backend へは、127.0.0.1 で受ける Collector で項目を絞ってから送ります (正本は
+  [Codex review の起動経路](codex-review-launch.md) の「telemetry ([otel]) の引き継ぎ」)。
 - **Fast mode (`service_tier = "fast"`)**: 公式 docs によると、GPT-6 (Astra / Sol / Luna) の Fast mode は速度が
   1.5 倍になる代わりに Standard の 2.5 倍の credit を使い、plan の included limits も同じ割合で早く減ります
   ([Speed](https://learn.chatgpt.com/docs/agent-configuration/speed)、[Pricing](https://learn.chatgpt.com/docs/pricing)。
