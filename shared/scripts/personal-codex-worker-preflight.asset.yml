@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:a7d567d49febefa999a49351fd879957e1ced1dfad6d21d605d8dd0efbc5d315
+  approved_build_id: sha256:05e886552210713cf4de93ca147edcb3df573514cb9bb8107c4bbb409b284e78
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-codex-worker-preflight.rb
@@ -27,5 +27,7 @@ summary: >-
   profile / region は -c で再指定。#543) を出す (exit 0)。capability
   不足と非対称は exit 1 (BLOCKED)、user config の top-level を安全に解釈できなければ exit 2
   (fail-closed。--model / --effort の明示で回避)、選ばれたプロバイダに引き継げない設定があっても exit 2 (command で資格情報を取る
-  aws.credential_export / aws.auth_refresh は aws.profile があれば引き継がずに無視する。#548)。
+  aws.credential_export / aws.auth_refresh は aws.profile があれば引き継がずに無視する。#548)。config.toml の [otel] は、
+  loopback の送り先の exporter と environment だけを -c で渡し、中身を出す key は false に固定する (#652。loopback
+  以外の送り先・headers・許可外の形は exit 2)。
   規範の正本は personal-codex-worker skill。

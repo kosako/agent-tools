@@ -470,6 +470,106 @@ check("launch argv に provider の -c が並び、result file と stdin prompt 
 check("provider が無ければ provider の -c を付けない",
       P.launch_argv(%w[apps], {}, "/tmp/clone/.git").none? { |a| a.include?("model_provider") })
 
+# ---- [otel] の引き継ぎ (#652) ----
+def otel_read(text)
+  P.read_otel_settings(text, "cfg")
+rescue StandardError => e
+  { error: "#{e.class}: #{e.message}" }
+end
+
+def otel_error(text)
+  P.read_otel_settings(text, "cfg")
+  nil
+rescue ArgumentError => e
+  e.message
+end
+
+def otel_args(config)
+  dir = Dir.mktmpdir
+  File.write(File.join(dir, "config.toml"), config) if config
+  P.otel_overrides(dir)
+rescue StandardError => e
+  [:error, "#{e.class}: #{e.message}"]
+ensure
+  FileUtils.rm_rf(dir)
+end
+
+OTEL_HTTP = '{ otlp-http = { endpoint = "http://127.0.0.1:4318/v1/logs", protocol = "binary" } }'
+OTEL_FIXED = %w[otel.log_user_prompt=false otel.log_agent_responses=false otel.log_guardian_assessments=false].freeze
+check("定義を pin する: 引き継ぐ exporter の key と、false に固定する key",
+      P::OTEL_EXPORTER_KEYS == %w[exporter metrics_exporter trace_exporter] &&
+      P::OTEL_CONTENT_KEYS == %w[log_user_prompt log_agent_responses log_guardian_assessments] &&
+      P::OTEL_LOOPBACK_HOSTS == %w[127.0.0.1 localhost ::1])
+check("otel の文字列も unicode escape も無い file は読まない (解釈できない行があっても今と同じ)",
+      otel_read("weird line\n[x\n") == { present: false, environment: nil, exporters: {} })
+check("[otel] が無ければ -c は空 (今と同じ起動)",
+      otel_args("model = \"gpt-x\"\n[mcp_servers.x]\ncommand = \"c\"\n") == [] && otel_args(nil) == [])
+check("environment と exporter 3 つを読み、inline table は dotted key に開き、中身の key は false に固定する",
+      otel_args("[otel]\nenvironment = \"dev\"\nlog_user_prompt = true\nlog_agent_responses = true\n" \
+                "exporter = #{OTEL_HTTP}\nmetrics_exporter = \"none\"\n" \
+                "trace_exporter = { otlp-grpc = { endpoint = \"http://[::1]:4317\" } } # c\n") ==
+      ['otel.environment="dev"', 'otel.exporter.otlp-http.endpoint="http://127.0.0.1:4318/v1/logs"',
+       'otel.exporter.otlp-http.protocol="binary"', 'otel.metrics_exporter="none"',
+       'otel.trace_exporter.otlp-grpc.endpoint="http://[::1]:4317"', *OTEL_FIXED])
+check("[otel] の見出しだけでも、中身の key の false の固定を渡す", otel_args("[otel]\n") == OTEL_FIXED)
+check("user の log_user_prompt = true は渡さず、false に固定する",
+      otel_args("[otel]\nlog_user_prompt = true\n").count { |a| a.start_with?("otel.log_user_prompt") } == 1 &&
+      otel_args("[otel]\nlog_user_prompt = true\n").include?("otel.log_user_prompt=false"))
+check("許可した key の外は渡さない (値の形も問わない)",
+      otel_args("[otel]\nunknown = { a = \"{\" }\n[otel.other]\nx = 1\n") == OTEL_FIXED)
+check("localhost と https も loopback として通す",
+      otel_args("[otel]\nexporter = { otlp-http = { endpoint = \"https://LOCALHOST:4318/v1/logs\" } }\n")[0] ==
+      'otel.exporter.otlp-http.endpoint="https://LOCALHOST:4318/v1/logs"')
+check("profiles の下の otel は読まない (--ignore-user-config で効かない)",
+      otel_args("[profiles.x.otel]\nexporter = { otlp-http = { endpoint = \"https://example.com\" } }\n") == [])
+check("escape で綴った otel の table も読む (otel の生の文字列が無くても)",
+      otel_args("[\"o#{ESC_US.sub('5f', '74')}el\"]\nexporter = \"none\"\n") == ['otel.exporter="none"', *OTEL_FIXED])
+{
+  "loopback 以外の host" => ['exporter = { otlp-http = { endpoint = "https://CANARY.example.com/v1/logs" } }', "loopback"],
+  "127.0.0.1 以外の 127/8" => ['exporter = { otlp-http = { endpoint = "http://127.0.0.2:4318" } }', "loopback"],
+  "userinfo つきの URL" => ['exporter = { otlp-http = { endpoint = "http://CANARY:x@127.0.0.1:4318" } }', "loopback"],
+  "scheme の無い endpoint" => ['exporter = { otlp-grpc = { endpoint = "127.0.0.1:4317" } }', "loopback"],
+  "http(s) 以外の scheme" => ['exporter = { otlp-grpc = { endpoint = "ftp://127.0.0.1:4317" } }', "loopback"],
+  "endpoint の無い exporter" => ['exporter = { otlp-http = { protocol = "binary" } }', "loopback"],
+  "headers のある exporter" => ['exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318", headers = { "x-token" = "CANARY" } } }', "headers"],
+  "headers のある trace_exporter" => ['trace_exporter = { otlp-grpc = { endpoint = "http://127.0.0.1:4317", headers = {} } }', "headers"],
+  "知らない exporter の種類" => ['exporter = { otlp-CANARY = { endpoint = "http://127.0.0.1:4318" } }', "1 行の inline table"],
+  "otlp-grpc の protocol" => ['exporter = { otlp-grpc = { endpoint = "http://127.0.0.1:4317", protocol = "binary" } }', "1 行の inline table"],
+  "知らない key (tls)" => ['exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318", tls = "x" } }', "1 行の inline table"],
+  "重なった endpoint" => ['exporter = { otlp-http = { endpoint = "http://127.0.0.1:1", endpoint = "http://127.0.0.1:2" } }', "1 行の inline table"],
+  "末尾の , のある inline table" => ['exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318", } }', "1 行の inline table"],
+  "none 以外の文字列" => ['exporter = "otlp-http"', "1 行の inline table"],
+  "literal string の none" => ["exporter = 'none'", "1 行の inline table"],
+  "行を跨ぐ exporter" => ["exporter = {\n  otlp-http = { endpoint = \"http://127.0.0.1:4318\" } }", "1 行の inline table"],
+  "知らない protocol" => ['exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318", protocol = "CANARY" } }', "binary か json"],
+  "dotted key の exporter" => ['exporter.otlp-http.endpoint = "http://127.0.0.1:4318"', "dotted key"],
+  "重なった exporter" => ["exporter = \"none\"\nexporter = \"none\"", "複数あり"],
+  "形の違う environment" => ['environment = "CANARY bad"', "otel.environment は"],
+  "literal string の environment" => ["environment = 'dev'", "otel.environment は"],
+  "重なった environment" => ["environment = \"a\"\nenvironment = \"b\"", "複数あり"],
+}.each do |name, (body, reason)|
+  message = otel_error("[otel]\n#{body}\n").to_s
+  check("[otel] の #{name} は exit 2 で理由を出す", message.include?(reason))
+  check("[otel] の #{name} の理由文に値を出さない", !message.include?("CANARY"))
+end
+{
+  "exporter の table の形" => "[otel.exporter.otlp-http]\nendpoint = \"http://127.0.0.1:4318\"\n",
+  "exporter の table の形 (中身なし)" => "[otel.exporter]\n",
+  "array of tables の otel" => "[[otel]]\nenvironment = \"x\"\n",
+  "root の inline table の otel" => "otel = { environment = \"x\" }\n",
+}.each do |name, text|
+  check("#{name} は exit 2", !otel_error(text).nil?)
+end
+
+oargv = P.launch_argv(%w[apps], { "model" => "gpt-x" }, "/tmp/clone/.git", { "model_provider" => "amazon-bedrock" },
+                      ['otel.exporter="none"', "otel.log_user_prompt=false"])
+check("launch argv に otel の -c が provider の後に並び、result file と stdin prompt で終わる",
+      oargv.each_cons(4).include?(["-c", 'model_provider="amazon-bedrock"', "-c", 'otel.exporter="none"']) &&
+      oargv.each_cons(2).include?(["-c", "otel.log_user_prompt=false"]) &&
+      oargv.last(3) == ["-o", "<run dir>/result.md", "-"])
+check("otel が無ければ otel の -c を付けない",
+      P.launch_argv(%w[apps], {}, "/tmp/clone/.git").none? { |a| a.start_with?("otel") })
+
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -1504,6 +1604,51 @@ set -e
 [ "$rc" -eq 2 ] || fail "引き継げない provider の設定は exit 2 (rc=$rc): $out"
 echo "$out" | grep -q "user config の選ばれた provider に、引き継げない設定があります" || fail "引き継げない理由を出すべき: $out"
 case "$out" in *"--add-dir"*|*CANARY*) fail "引き継げない provider で launch argv や値を出してはいけない: $out" ;; esac
+
+# (r) [otel] の引き継ぎ (#652): config.toml の [otel] を -c で launch argv に渡す。--model の明示があっても読み、
+#     中身を出す key は false に固定する。profile file の [otel] は読まない。
+ohome="$tmp/otel-home"
+mkdir -p "$ohome"
+cat > "$ohome/config.toml" <<'EOF'
+model = "gpt-x"
+[otel]
+environment = "dev"
+log_user_prompt = true
+exporter = { otlp-http = { endpoint = "http://127.0.0.1:4318/v1/logs", protocol = "binary" } }
+[mcp_servers.CANARY]
+command = "/opt/CANARY/bin"
+EOF
+printf '[otel]\nexporter = { otlp-http = { endpoint = "https://CANARY.example.com" } }\n' > "$ohome/agent-tools-worker.config.toml"
+set +e
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$ohome" --clone "$clone" \
+  --model gpt-explicit 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "[otel] の config で exit 0 (rc=$rc): $out"
+echo "$out" | grep -q '^otel: otel.environment="dev", otel.exporter.otlp-http.endpoint="http://127.0.0.1:4318/v1/logs", otel.exporter.otlp-http.protocol="binary", otel.log_user_prompt=false, otel.log_agent_responses=false, otel.log_guardian_assessments=false$' ||
+  fail "otel の行が出ていない: $out"
+echo "$out" | grep -q -- ' -c model="gpt-explicit" -c otel.environment="dev" -c otel.exporter.otlp-http.endpoint="http://127.0.0.1:4318/v1/logs" -c otel.exporter.otlp-http.protocol="binary" -c otel.log_user_prompt=false -c otel.log_agent_responses=false -c otel.log_guardian_assessments=false -o ' ||
+  fail "明示の model と otel の -c が launch に並んでいない: $out"
+case "$out" in *CANARY*|*log_user_prompt=true*) fail "otel の出力に他の config の値や user の中身の設定を出してはいけない: $out" ;; esac
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$ohome" --clone "$clone" --json)
+printf '%s' "$out" | ruby -rjson -e '
+j = JSON.parse(STDIN.read)
+abort "otel" unless j["otel"].first == %q{otel.environment="dev"} && j["otel"].last == "otel.log_guardian_assessments=false"
+abort "argv" unless j["launch_argv"].each_cons(2).include?(["-c", "otel.log_user_prompt=false"])
+' || fail "--json の otel が契約どおりでない: $out"
+# [otel] の無い config は今と同じ (otel の行も -c も無い)
+out=$(run_pf 2>&1)
+case "$out" in *"otel:"*|*"-c otel."*) fail "[otel] の無い config で otel を出してはいけない: $out" ;; esac
+# 送り先が loopback でなければ、--model の明示があっても launch argv を出さずに exit 2
+printf '[otel]\nexporter = { otlp-http = { endpoint = "https://CANARY.example.com/v1/logs" } }\n' > "$ohome/config.toml"
+set +e
+out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$ohome" --clone "$clone" \
+  --model gpt-explicit 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "loopback でない otel の送り先は exit 2 (rc=$rc): $out"
+echo "$out" | grep -q "user config の otel.exporter の endpoint は、loopback" || fail "loopback でない理由を出すべき: $out"
+case "$out" in *"--add-dir"*|*CANARY*) fail "loopback でない otel で launch argv や値を出してはいけない: $out" ;; esac
 
 
 echo "ok: codex-worker-preflight self-test"

@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:8db3f283607d053ceb096ea466e3c52445fa95e2e40ce5fe99115d963becd123
+  approved_build_id: sha256:08c272a561039bb75f075a924feb4d03a1c523fec97de1dfcbf4282ae616edf8
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-codex-model-selection.rb
@@ -29,5 +29,6 @@ summary: >-
   model_provider と [model_providers.<id>.aws] の profile / region を json の provider に出す (#543。それ以外の
   provider の設定があれば exit 2。ただし command で資格情報を取る aws.credential_export / aws.auth_refresh は
   aws.profile があれば引き継がずに無視し、名前だけを provider_ignored に出す (#548)。--format model は provider が
-  あれば exit 2)。解釈できない行・不正な値・在るのに
+  あれば exit 2)。config.toml に [otel] があれば、json の otel に -c へ渡す key=value の列を出す (#652。送り先は
+  loopback だけ、headers は exit 2、中身を出す key は false に固定。--format model は [otel] を読まない)。解釈できない行・不正な値・在るのに
   regular file でない / 確かめられない file は理由つき exit 2。

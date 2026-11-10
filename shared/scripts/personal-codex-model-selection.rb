@@ -19,10 +19,14 @@
 #   プロバイダの設定のうち、引き継ぐ key だけ。読み方は preflight の layered_provider_selection)。caller は provider
 #   の key をすべて `-c key="value"` で渡す。command で資格情報を取る table (aws.credential_export /
 #   aws.auth_refresh) を aws.profile があるので無視したときは、"provider_ignored": [名前] も足す (#548。値は出さない)。
-# - model: model の値を 1 行 (無ければ空行)。provider があれば引き継げないので exit 2。
+#   user の config.toml に [otel] があれば、"otel": [`-c` に渡す `key=value`] も足す (#652。読み方は preflight の
+#   otel_overrides。送り先は loopback だけ、中身を出す key は false に固定)。caller は各要素をそのまま `-c` の次に渡す。
+# - model: model の値を 1 行 (無ければ空行)。provider があれば引き継げないので exit 2。[otel] は読まない (渡せないが、
+#   telemetry が届かないだけで起動の可否は変わらないので止めない)。
 # effort をどう使うかは caller が決める (review は選択のまま、sweep はプリセット、consult は独自の値)。
 #
-# exit 2: usage / preflight を load できない / top-level に解釈できない行 / 値が形に合わない / file は在るが
+# exit 2: usage / preflight を load できない / top-level に解釈できない行 / 値が形に合わない / json で [otel] が許可した
+# 形でない (送り先が loopback でない、headers がある、など。#652) / file は在るが
 # regular file でない / 在るかを確かめられない・読めない。理由は stderr に出し、stdout には何も出さない。
 # 理由文に file の中身と path は出さない。
 
@@ -68,8 +72,8 @@ module CodexModelSelection
   end
 
   # provider は [{key => value}, {key => 出所}, 無視した table の名前] (選ばれたプロバイダを引き継ぐ `-c`。無ければ
-  # 空。#543 / #548)。
-  def render(opts, selection, sources, provider)
+  # 空。#543 / #548)。otel は `-c` に渡す `key=value` の列 (無ければ空。#652)。
+  def render(opts, selection, sources, provider, otel = [])
     overrides, provider_sources, ignored = provider
     if opts[:format] == "model"
       # model だけを渡す caller はプロバイダを引き継げないので、黙って OpenAI の既定に倒さず止める。
@@ -87,6 +91,7 @@ module CodexModelSelection
     # 引き継がずに無視した table の名前 (値は出さない)。caller は「aws.profile を使い、認証の command は引き継がない」と
     # 結果に添える (#548)。
     out["provider_ignored"] = ignored unless ignored.nil? || ignored.empty?
+    out["otel"] = otel unless otel.empty?
     JSON.generate(out)
   end
 
@@ -97,7 +102,9 @@ module CodexModelSelection
     profile = PROFILES.fetch(opts[:profile])
     selection, sources = CodexWorkerPreflight.layered_model_selection(home, profile)
     provider = CodexWorkerPreflight.layered_provider_selection(home, profile)
-    puts render(opts, selection, sources, provider)
+    # --format model の caller は otel を渡せないので読まない ([otel] の形で止めない)。
+    otel = opts[:format] == "json" ? CodexWorkerPreflight.otel_overrides(home) : []
+    puts render(opts, selection, sources, provider, otel)
     0
   rescue ArgumentError => e
     warn "personal-codex-model-selection: #{e.message}"
