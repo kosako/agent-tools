@@ -23,7 +23,8 @@
 # user / project の execpolicy `.rules` を読まない指定 (`--ignore-user-config` とは別)。
 # model / effort は user config が読まれなくなる分を再指定する。
 # telemetry (#652): config.toml に [otel] があれば、許可した形 (environment と、loopback の送り先の exporter 3 つ) だけを
-# `-c` で渡し、中身を出す key (log_user_prompt など) は false に固定する。headers・loopback 以外の送り先・許可外の形は
+# `-c` で渡し、中身を出す key (log_user_prompt など) は false に、tool の出力の抜粋の上限 (tool_result.max_bytes) は 0 に
+# 固定する (#655)。headers・loopback 以外の送り先・許可外の形は
 # exit 2。外部への転送と項目の絞り込みは手前の Collector が持つ。
 #
 # model / effort の出所は 3 つで、上ほど優先する。`--model` / `--effort` で明示されればそれを使い、
@@ -147,7 +148,8 @@ module CodexWorkerPreflight
 
   # [otel] の引き継ぎ (#652)。`--ignore-user-config` は config.toml の [otel] も外すので、user の config.toml の
   # [otel] から許可した形だけを読み、`-c` で渡す。送り先は loopback (手前の Collector) だけにし、中身を出す key は
-  # user の値に関係なく false に固定する。外部への転送と項目の絞り込みは Collector が持つ (この repo の外)。
+  # user の値に関係なく false に、tool の出力の抜粋の上限は 0 に固定する。外部への転送と項目の絞り込みは Collector が
+  # 持つ (この repo の外)。
   OTEL_TABLE = "otel"
   OTEL_ENVIRONMENT_KEY = "environment"
   OTEL_EXPORTER_KEYS = %w[exporter metrics_exporter trace_exporter].freeze
@@ -156,6 +158,10 @@ module CodexWorkerPreflight
   OTEL_READ_KEYS = [OTEL_ENVIRONMENT_KEY, *OTEL_EXPORTER_KEYS].freeze
   # 中身 (prompt の本文・最終回答・自動承認の判定) を出す key。user の値は読まず、常に false を渡す。
   OTEL_CONTENT_KEYS = %w[log_user_prompt log_agent_responses log_guardian_assessments].freeze
+  # codex.tool_result の output (実行結果の抜粋。既定は 2048 バイトまで) の上限。user の値は読まず、常に 0 を渡す
+  # (review では diff や file の断片が入るため。#655)。0 なら output は「[... telemetry preview truncated ...]」だけに
+  # なる (Codex 0.165.0 と 0.166.0 で実測)。実行した command (arguments) はこの設定では止まらない。
+  OTEL_TOOL_RESULT_MAX_BYTES_KEY = "tool_result.max_bytes"
   # exporter の種類 => inline table の中で受け付ける key。endpoint は必須で、headers などそれ以外は exit 2。
   OTEL_EXPORTER_KINDS = { "otlp-http" => %w[endpoint protocol], "otlp-grpc" => %w[endpoint] }.freeze
   OTEL_HTTP_PROTOCOLS = %w[binary json].freeze
@@ -677,7 +683,7 @@ module CodexWorkerPreflight
     found
   end
 
-  # 中身を出す key (log_*) と、許可した key の外は値を読まない (前者は常に false を渡し、後者は渡さない)。
+  # 中身を出す key (log_*・tool_result) と、許可した key の外は値を読まない (前者は常に false / 0 を渡し、後者は渡さない)。
   def record_otel_key(found, full, text, label)
     raise ArgumentError, "#{label} の otel を 1 つの値で書く形は対応していません ([otel] の table に書いてください)" if full.size == 1
 
@@ -756,8 +762,9 @@ module CodexWorkerPreflight
 
   # user の config.toml の [otel] から、`-c` に渡す `key=value` の列を返す。[otel] が無ければ空 (今と同じ起動)。
   # profile file の [otel] は読まない (profile は model の選択だけに使う)。順は environment、exporter の 3 つ (定義の順。
-  # inline table は dotted key に開く)、中身を出す key の false の固定。Codex 0.165.0 で、dotted key の `-c` が効くこと
-  # と、config の endpoint が OTEL_EXPORTER_OTLP_* の環境変数より優先されることを実測した。
+  # inline table は dotted key に開く)、中身を出す key の false の固定、tool の出力の抜粋の上限の 0 の固定 (#655)。
+  # Codex 0.165.0 で、dotted key の `-c` が効くことと、config の endpoint が OTEL_EXPORTER_OTLP_* の環境変数より優先
+  # されることを実測した。
   def otel_overrides(home)
     found = read_otel_settings(read_config_text(File.join(home, "config.toml"), "user config").to_s, "user config")
     return [] unless found[:present]
@@ -776,6 +783,7 @@ module CodexWorkerPreflight
       end
     end
     OTEL_CONTENT_KEYS.each { |key| args << "otel.#{key}=false" }
+    args << "otel.#{OTEL_TOOL_RESULT_MAX_BYTES_KEY}=0"
     args
   end
 

@@ -266,7 +266,7 @@ command は **この skill の directory にある `LAUNCH.md` を読んで、�
 - **telemetry の設定 ([otel]) も引き継ぐ (#652)**: `--ignore-user-config` は `config.toml` の `[otel]` も外すので、
   review の telemetry が送られない。同じ script が user の `config.toml` の `[otel]` を読み、出力の `otel` に `-c` に
   渡す `key=value` の列を出すので、各要素をそのまま `-c` で渡す。送り先は loopback (手前の Collector) だけで、中身を
-  出す key (`log_user_prompt` など) は user の値に関係なく `false` になる。送り先が loopback でない、`headers` がある、
+  出す key (`log_user_prompt` など) は user の値に関係なく `false`、tool の出力の抜粋の上限 (`tool_result.max_bytes`) は `0` になる (#655)。送り先が loopback でない、`headers` がある、
   許可外の形のときは script が exit 2 で止める (BLOCKED)。外部への転送と項目の絞り込みは Collector が持つ
   (`docs/codex-review-launch.md`)。`[otel]` が無ければ何も足さない。
 - **escape**: path・nonce・model・effort は生成時に shell literal 化 (値全体を `'` で囲み、内側の `'` を `'\''` に

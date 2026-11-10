@@ -495,7 +495,8 @@ ensure
 end
 
 OTEL_HTTP = '{ otlp-http = { endpoint = "http://127.0.0.1:4318/v1/logs", protocol = "binary" } }'
-OTEL_FIXED = %w[otel.log_user_prompt=false otel.log_agent_responses=false otel.log_guardian_assessments=false].freeze
+OTEL_FIXED = %w[otel.log_user_prompt=false otel.log_agent_responses=false otel.log_guardian_assessments=false
+                otel.tool_result.max_bytes=0].freeze
 check("定義を pin する: 引き継ぐ exporter の key と、false に固定する key",
       P::OTEL_EXPORTER_KEYS == %w[exporter metrics_exporter trace_exporter] &&
       P::OTEL_CONTENT_KEYS == %w[log_user_prompt log_agent_responses log_guardian_assessments] &&
@@ -515,6 +516,10 @@ check("[otel] の見出しだけでも、中身の key の false の固定を渡
 check("user の log_user_prompt = true は渡さず、false に固定する",
       otel_args("[otel]\nlog_user_prompt = true\n").count { |a| a.start_with?("otel.log_user_prompt") } == 1 &&
       otel_args("[otel]\nlog_user_prompt = true\n").include?("otel.log_user_prompt=false"))
+check("user の tool_result.max_bytes は渡さず、0 に固定する (dotted key でも table でも)",
+      otel_args("[otel]\ntool_result.max_bytes = 4096\n") == OTEL_FIXED &&
+      otel_args("[otel]\n[otel.tool_result]\nmax_bytes = 4096\n") == OTEL_FIXED &&
+      OTEL_FIXED.last == "otel.tool_result.max_bytes=0")
 check("許可した key の外は渡さない (値の形も問わない)",
       otel_args("[otel]\nunknown = { a = \"{\" }\n[otel.other]\nx = 1\n") == OTEL_FIXED)
 check("localhost と https も loopback として通す",
@@ -1636,15 +1641,15 @@ out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" 
 rc=$?
 set -e
 [ "$rc" -eq 0 ] || fail "[otel] の config で exit 0 (rc=$rc): $out"
-echo "$out" | grep -q '^otel: otel.environment="dev", otel.exporter.otlp-http.endpoint="http://127.0.0.1:4318/v1/logs", otel.exporter.otlp-http.protocol="binary", otel.log_user_prompt=false, otel.log_agent_responses=false, otel.log_guardian_assessments=false$' ||
+echo "$out" | grep -q '^otel: otel.environment="dev", otel.exporter.otlp-http.endpoint="http://127.0.0.1:4318/v1/logs", otel.exporter.otlp-http.protocol="binary", otel.log_user_prompt=false, otel.log_agent_responses=false, otel.log_guardian_assessments=false, otel.tool_result.max_bytes=0$' ||
   fail "otel の行が出ていない: $out"
-echo "$out" | grep -q -- ' -c model="gpt-explicit" -c otel.environment="dev" -c otel.exporter.otlp-http.endpoint="http://127.0.0.1:4318/v1/logs" -c otel.exporter.otlp-http.protocol="binary" -c otel.log_user_prompt=false -c otel.log_agent_responses=false -c otel.log_guardian_assessments=false -o ' ||
+echo "$out" | grep -q -- ' -c model="gpt-explicit" -c otel.environment="dev" -c otel.exporter.otlp-http.endpoint="http://127.0.0.1:4318/v1/logs" -c otel.exporter.otlp-http.protocol="binary" -c otel.log_user_prompt=false -c otel.log_agent_responses=false -c otel.log_guardian_assessments=false -c otel.tool_result.max_bytes=0 -o ' ||
   fail "明示の model と otel の -c が launch に並んでいない: $out"
 case "$out" in *CANARY*|*log_user_prompt=true*) fail "otel の出力に他の config の値や user の中身の設定を出してはいけない: $out" ;; esac
 out=$(env -u CODEX_SANDBOX -u CODEX_THREAD_ID PATH="$fakebin:$PATH" ruby "$src" --codex-home "$ohome" --clone "$clone" --json)
 printf '%s' "$out" | ruby -rjson -e '
 j = JSON.parse(STDIN.read)
-abort "otel" unless j["otel"].first == %q{otel.environment="dev"} && j["otel"].last == "otel.log_guardian_assessments=false"
+abort "otel" unless j["otel"].first == %q{otel.environment="dev"} && j["otel"].last == "otel.tool_result.max_bytes=0"
 abort "argv" unless j["launch_argv"].each_cons(2).include?(["-c", "otel.log_user_prompt=false"])
 ' || fail "--json の otel が契約どおりでない: $out"
 # [otel] の無い config は今と同じ (otel の行も -c も無い)

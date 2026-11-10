@@ -20,7 +20,7 @@
 #   の key をすべて `-c key="value"` で渡す。command で資格情報を取る table (aws.credential_export /
 #   aws.auth_refresh) を aws.profile があるので無視したときは、"provider_ignored": [名前] も足す (#548。値は出さない)。
 #   user の config.toml に [otel] があれば、"otel": [`-c` に渡す `key=value`] も足す (#652。読み方は preflight の
-#   otel_overrides。送り先は loopback だけ、中身を出す key は false に固定)。caller は各要素をそのまま `-c` の次に渡す。
+#   otel_overrides。送り先は loopback だけ、中身を出す key は false、tool_result.max_bytes は 0 に固定。#655)。caller は各要素をそのまま `-c` の次に渡す。
 # - model: model の値を 1 行 (無ければ空行)。provider があれば引き継げないので exit 2。[otel] は読まない (渡せないが、
 #   telemetry が届かないだけで起動の可否は変わらないので止めない)。
 # effort をどう使うかは caller が決める (review は選択のまま、sweep はプリセット、consult は独自の値)。
