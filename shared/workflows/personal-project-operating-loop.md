@@ -178,9 +178,17 @@ commit・push と、Issue・PR・コメントの投稿の前に、少なくと�
 
 - 対応する Issue がある。
 - PR body に summary と checks がある。
-- `Closes #...` などで Issue と紐づいている。
+- 題の末尾の `(#<Issue>)` と、Issue を閉じる PR では本文の `Closes #...` で、Issue と紐づいている (計測が読む目印。
+  agent-tools の `docs/work-markers.md`)。
 - public safety check が通っている。
 - repository 外に残すべき project-level な判断や作業ログが更新されている。
+
+## merge 後に見つかった誤り
+
+merge 済みの PR が入れた誤りを直す Issue には、label `escape` を付け、本文に `元の PR: #<番号>` を行の先頭から
+1 行書く。merge の前に review や CI で見つかった誤り、仕様の変更、後から tool の挙動が変わったもの、元の PR が
+分からない古い不具合には付けない。label が無い repository では、Issue を立てるときに作る。形と例の正本は
+agent-tools の `docs/work-markers.md` (#658)。
 
 ## 判断に迷ったとき
 

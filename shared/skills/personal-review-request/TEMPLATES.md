@@ -21,6 +21,9 @@ bot の PR で pin-check の経路 (`SKILL.md` の「bot の PR」の C) を使�
 
 ## 📋 レビュー結果 (手順 4)
 
+見出し・`Review process verdict:`・`Finding summary:` の 3 行は、計測が読む目印です (agent-tools の
+`docs/work-markers.md`)。形を変えるときは、その文書の版を上げてから変えます。
+
 ```markdown
 ## 📋 レビュー結果（by Codex | Claude | personal-dependabot-pin-check）
 
