@@ -15,7 +15,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:ccdc44158d4f957a809472e6c3f09ec977e480109656498116cb6bdb465c81dd
+  approved_build_id: sha256:aa58b24722529e25fba7d5e498ebe875230739d539e84aab1dd13d7dcfa3e001
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-merge-preflight.rb
@@ -30,8 +30,9 @@ summary: >-
   reviewer と合い (bot(dependabot) の PR は pin-check も可)、verdict が APPROVE、Target の base ref と head が同じで、
   review の base OID と head の merge-base が base の branch の今の先端と head の merge-base と同じ / required_checks が
   head ですべて completed かつ success (file か key が無いと not ok、不正は exit 2) / 最後の pulls/<n> の
-  mergeable_state が clean。最初と最後に pulls/<n> と base の先端を読み、動いていれば判定できない。出力は閉じた label と
-  OID・branch の名前・check の名前・コメントの id だけで、コメントの本文と gh の stderr は出さない。--repo は必須。
+  mergeable_state が clean。最初と最後に pulls/<n> と base の先端を読み、動いていれば判定できない。branch と check の名前は
+  規則のまま受け付け (check-runs の要素の名前が欠けた・違うときは exit 2)、規則の形の外の名前は出力に出さない。出力は
+  閉じた label・OID・コメントの id・規則の形に合う名前だけで、コメントの本文と gh の stderr は出さない。--repo は必須。
   API は 1 回の実行で 80 回まで。exit 0 = merge してよい (最後の 2 行が head: <OID> と merge-preflight: ok) / 1 = 条件を
   満たさない / 2 = usage・gh の失敗・判定できない (mergeable_state が unknown、隣の script が無い、を含む)。
   (docs/merge-preflight.md)

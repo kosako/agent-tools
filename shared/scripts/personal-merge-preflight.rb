@@ -32,6 +32,7 @@
 # exit: 0 = merge してよい / 1 = 条件を満たさない (理由は stdout の label。merge しない) / 2 = usage・gh の失敗・判定できない
 # (応答の形が外れる、検査の途中で PR が動いた、mergeable_state が unknown、隣の script が無いか判定できない)。
 
+require "erb"
 require "json"
 require "open3"
 require "uri"
@@ -50,8 +51,9 @@ module MergePreflight
 
   REPO_RE = %r{\A[\w.-]+/[\w.-]+\z}.freeze
   SHA_RE = /\A[0-9a-f]{40}\z/.freeze
-  # base の branch の名前。URL に埋めるので、規則の文字だけを受け付ける (外れたら判定できない)。
-  BRANCH_RE = %r{\A[A-Za-z0-9_][A-Za-z0-9_./-]*\z}.freeze
+  # 出力にそのまま載せてよい base の branch の名前 (外れる名前も受け付けるが、出力では名前を出さない。URL には
+  # percent-encode して埋める)。
+  SAFE_BRANCH_RE = %r{\A[A-Za-z0-9_][A-Za-z0-9_./-]{0,99}\z}.freeze
   MAX_API_CALLS = 80
   PER_PAGE = 100
   MAX_COMMENT_BODY = 1024 * 1024
@@ -62,6 +64,8 @@ module MergePreflight
   VERDICT_LINE = /\A\*\*Review process verdict: (?<verdict>REJECT|Warning|APPROVE)\*\*[ \t]*\z/
   TARGET_LINE = %r{\A\*\*Target: base (?<ref>\S+) (?<base>[0-9a-f]{40}) / head (?<head>[0-9a-f]{40})\*\*[ \t]*\z}
   # 結果コメントの候補を見分ける緩い形 (見出しが崩れた結果コメントを読み飛ばして、前の結果を最後の結果として使わないため)。
+  # 行は marker_lines で personal-work-marker-check と同じに分ける (先頭の BOM を除く)。RESULT_HEADING に合う行は必ずこの形にも
+  # 合う (候補を見分ける形は、検査が受け付ける形を含む)。
   RESULT_NEAR = /\A[ \t]*\#{1,6}[ \t]*(?:📋[ \t]*)?レビュー結果/
 
   # routing preflight の最後の行。reviewer と author は閉じた表の label。
@@ -79,6 +83,8 @@ module MergePreflight
   BASELINE_MAX = 64 * 1024
   BASELINE_KEYS = %w[skip required_checks].freeze
   BASELINE_SKIPPABLE = %w[dependabot_yml].freeze
+  # 出力にそのまま載せてよい check の名前 (personal-dependabot-pin-check と同じ形)。外れる名前も、baseline が受け付けるなら
+  # 確かめる (受け付ける条件は baseline の規則のまま。規則を狭めない)。出力では名前の代わりに番号を出す。
   SAFE_CHECK_NAME_RE = %r{\A[A-Za-z0-9_][A-Za-z0-9 _.()/,:+-]{0,99}\z}.freeze
 
   class UsageError < StandardError; end
@@ -208,7 +214,7 @@ module MergePreflight
 
     pull = read_pull(api, base_path, pr_number)
     tip = read_branch_tip(api, base_path, pull[:base_ref])
-    report.add(true, "target: base #{pull[:base_ref]} #{tip} / head #{pull[:head_sha]}")
+    report.add(true, "target: base #{display_branch(pull[:base_ref])} #{tip} / head #{pull[:head_sha]}")
     unless pull[:state] == "open" && !pull[:merged]
       report.add(false, "pr: not-open")
       return report
@@ -271,8 +277,10 @@ module MergePreflight
     base_ref = base["ref"]
     raise RunError, "PR の head / base の sha の形が外れます" unless head_sha.is_a?(String) && head_sha.match?(SHA_RE) &&
                                                                      base_sha.is_a?(String) && base_sha.match?(SHA_RE)
-    raise RunError, "PR の base の branch の名前が規則の外です" unless base_ref.is_a?(String) && base_ref.match?(BRANCH_RE) &&
-                                                                     !base_ref.include?("..") && !base_ref.end_with?("/", ".lock")
+    # 名前は git の規則のまま受け付ける (文字の種類で狭めない)。空・制御文字・不正な UTF-8 だけを判定できないとする。
+    unless base_ref.is_a?(String) && !base_ref.empty? && base_ref.valid_encoding? && base_ref !~ /[[:cntrl:]]/
+      raise RunError, "PR の base の branch の名前を読めません"
+    end
     raise RunError, "PR の state を読めません" unless pull["state"].is_a?(String) && [true, false].include?(pull["merged"])
     raise RunError, "PR のコメントの数を読めません" unless pull["comments"].is_a?(Integer) && pull["comments"] >= 0
 
@@ -287,9 +295,15 @@ module MergePreflight
     pull.values_at(:head_sha, :base_sha, :base_ref, :state, :merged, :comments)
   end
 
-  # base の branch の今の先端の OID。
+  # 出力に載せる base の branch の名前 (規則の形の外なら名前を出さない)。
+  def display_branch(ref)
+    ref.match?(SAFE_BRANCH_RE) ? ref : "(規則の形の外の名前)"
+  end
+
+  # base の branch の今の先端の OID。名前は "/" で分けた各部分を percent-encode して path に埋める。
   def read_branch_tip(api, base_path, ref)
-    obj = api.get("#{base_path}/git/ref/heads/#{ref}")
+    encoded = ref.split("/", -1).map { |part| ERB::Util.url_encode(part) }.join("/")
+    obj = api.get("#{base_path}/git/ref/heads/#{encoded}")
     object = obj.is_a?(Hash) ? obj["object"] : nil
     unless obj.is_a?(Hash) && obj["ref"] == "refs/heads/#{ref}" && object.is_a?(Hash) && object["type"] == "commit" &&
            object["sha"].is_a?(String) && object["sha"].match?(SHA_RE)
@@ -359,7 +373,7 @@ module MergePreflight
     ids = mine.map { |c| c[:id] }
     raise RunError, "コメントの順が id の順と合いません" unless ids == ids.sort
 
-    mine.reverse.find { |c| c[:body].split(/\r?\n/).any? { |line| RESULT_NEAR.match?(line) } }
+    mine.reverse.find { |c| marker_lines(c[:body]).any? { |line| RESULT_NEAR.match?(line) } }
   end
 
   # 最後の結果コメントを確かめ、report に足す。
@@ -382,7 +396,7 @@ module MergePreflight
       raise RunError, "#{MARKER_NAME} が判定できませんでした (exit #{status.exitstatus.inspect})"
     end
 
-    lines = body.sub(/\A\u{FEFF}/, "").split(/\r?\n/, -1)
+    lines = marker_lines(body)
     heading = lines.map { |l| RESULT_HEADING.match(l) }.compact.first
     verdict = lines.map { |l| VERDICT_LINE.match(l) }.compact.first
     target = lines.map { |l| TARGET_LINE.match(l) }.compact.first
@@ -420,6 +434,12 @@ module MergePreflight
     report.add(true, "review: ok (APPROVE by #{heading[:reviewer]}、#{where})")
   end
 
+  # 結果コメントの本文を行に分ける。personal-work-marker-check と同じ (先頭の BOM を除き、CRLF と LF で分ける)。候補の
+  # 見分けと決まった行の読み取りの両方で使い、読み方をずらさない。
+  def marker_lines(body)
+    body.sub(/\A\u{FEFF}/, "").split(/\r?\n/, -1)
+  end
+
   # base と head の merge-base の OID。base を読めない (404) なら nil。
   def merge_base(api, base_path, base, head)
     obj = api.get("#{base_path}/compare/#{base}...#{head}?per_page=1", allow_404: true)
@@ -438,13 +458,15 @@ module MergePreflight
       report.add(false, "ci: ci-undefined (#{BASELINE_PATH} か、その required_checks が無い)")
       return
     end
-    names.each do |name|
+    names.each_with_index do |name, i|
       state = check_run_state(api, base_path, head_sha, name)
-      report.add(state == "success", "ci #{name}: #{state}")
+      shown = name.match?(SAFE_CHECK_NAME_RE) ? name : "required_checks の #{i + 1} 番目 (規則の形の外の名前)"
+      report.add(state == "success", "ci #{shown}: #{state}")
     end
   end
 
   # file が無い (404) か required_checks の key が無ければ nil (ci-undefined)。file が不正なら RunError (判定できない)。
+  # 名前は baseline の規則で受け付けたものをそのまま使う (出力の形は check_ci が決める)。
   def required_checks(api, base_path, sha)
     obj = api.get("#{base_path}/contents/#{BASELINE_PATH}?ref=#{sha}", allow_404: true)
     return nil if obj.nil?
@@ -457,9 +479,6 @@ module MergePreflight
     raise RunError, "#{BASELINE_PATH} が大きすぎます" if size > BASELINE_MAX
 
     names = parse_baseline(decode_baseline(obj["content"], size))
-    return nil if names.nil?
-    raise RunError, "required_checks の名前が規則の外です" unless names.all? { |n| n.match?(SAFE_CHECK_NAME_RE) }
-
     names
   end
 
@@ -513,7 +532,9 @@ module MergePreflight
   end
 
   # head の check-runs のうち名前が一致するもの (最新の attempt) を page ごとに読む (personal-dependabot-pin-check と同じ)。
-  # 無ければ missing、1 つでも終わっていなければ pending、1 つでも success でなければ failure。
+  # check_name の絞り込みは完全一致なので、要素の name が文字列でない・名前が違うときは応答の形の外れ (判定できない)。
+  # 黙って除いて、残りだけで success にしない。無ければ missing、1 つでも終わっていなければ pending、1 つでも success で
+  # なければ failure。
   def check_run_state(api, base_path, head_sha, name)
     runs = []
     total = nil
@@ -534,8 +555,8 @@ module MergePreflight
       page += 1
     end
     raise RunError, "check-runs の件数が total_count と一致しません (全件を読めない)" unless runs.size == total
+    raise RunError, "check-runs の要素の名前が問い合わせた名前と合いません" unless runs.all? { |r| r["name"] == name }
 
-    runs = runs.select { |r| r["name"] == name }
     return "missing" if runs.empty?
     return "pending" unless runs.all? { |r| r["status"] == "completed" }
     return "failure" unless runs.all? { |r| r["conclusion"] == "success" }

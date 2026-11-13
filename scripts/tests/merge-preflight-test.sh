@@ -36,6 +36,13 @@ check "verdict form equals work-marker-check", MP::VERDICT_LINE.source == WM::VE
 check "target form equals work-marker-check", MP::TARGET_LINE.source == WM::TARGET_LINE.source
 check "near form catches a broken heading", MP::RESULT_NEAR.match?("## 📋 レビュー結果(by Codex)") && MP::RESULT_NEAR.match?("### レビュー結果") &&
                                             !MP::RESULT_NEAR.match?("## 🔍 レビュー依頼（→ Codex）") && !MP::RESULT_NEAR.match?("本文の レビュー結果 の話")
+# 候補を見分ける形は、検査が受け付ける見出しを含む (検査が通す結果を候補から落とさない)。行の分け方も検査と同じ。
+%w[Codex Claude personal-dependabot-pin-check].each do |r|
+  heading = "## 📋 レビュー結果（by #{r}）"
+  check "near form includes the #{r} heading", MP::RESULT_HEADING.match?(heading) && MP::RESULT_NEAR.match?(heading) &&
+                                               MP::RESULT_NEAR.match?("#{heading}round 2")
+end
+check "lines are split like work-marker-check (BOM and CRLF)", MP.marker_lines("\u{FEFF}## a\r\nb\n") == ["## a", "b", ""]
 
 # ---- repo-baseline.json の読み方が personal-repo-baseline と personal-dependabot-pin-check と同じ (#573) ----
 def outcome
@@ -95,10 +102,21 @@ run = ->(name, status: "completed", conclusion: "success") { { "name" => name, "
   [{ "total_count" => 3, "check_runs" => [run.call("a")] }, { "total_count" => 3, "check_runs" => [] }],
   [{ "total_count" => 2, "check_runs" => [run.call("a")] }, { "total_count" => 5, "check_runs" => [run.call("a")] }],
   [{ "check_runs" => [] }],
+  # 名前の欠けた要素・名前が文字列でない要素・違う名前の要素は、黙って除かず判定できない (#665 の review の F2)。
+  [{ "total_count" => 2, "check_runs" => [run.call("a"), {}] }],
+  [{ "total_count" => 2, "check_runs" => [run.call("a"), { "name" => 1, "status" => "completed", "conclusion" => "failure" }] }],
+  [{ "total_count" => 2, "check_runs" => [run.call("a"), run.call("b", conclusion: "failure")] }],
 ].each_with_index do |pages, i|
   mp = outcome { MP.check_run_state(PageApi.new(pages), "repos/o/r", "c" * 40, "a") }
   pc = outcome { PC.check_run_state(PageApi.new(pages), "repos/o/r", "c" * 40, "a") }
   check "check-runs ##{i}: same as pin-check (mp=#{mp.inspect})", mp == pc && mp[0] != :unexpected
+end
+malformed = [
+  [{ "total_count" => 2, "check_runs" => [run.call("a"), {}] }],
+  [{ "total_count" => 1, "check_runs" => [run.call("b")] }],
+]
+malformed.each_with_index do |pages, i|
+  check "check-runs malformed ##{i} cannot be judged", outcome { MP.check_run_state(PageApi.new(pages), "repos/o/r", "c" * 40, "a") }[0] == :invalid
 end
 
 # ---- integration: fake gh と routing の stub ----
@@ -287,6 +305,11 @@ o, _e, s, = run_case { |m| set_comments(m, [comment(1, "someone", result_body)])
 check "another author's result is not read", s == 1 && o.include?("review: no-result")
 o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body), comment(2, "me", result_body(verdict: "REJECT", must: 1))]) }
 check "the last result decides (REJECT after APPROVE)", s == 1 && o.include?("review: not-approved (comment 2")
+# 先頭に BOM の付いた最新の REJECT も候補になる (形の検査と同じ行の分け方。#665 の review の F1)。
+o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body), comment(2, "me", "\u{FEFF}" + result_body(verdict: "REJECT", must: 1))]) }
+check "a BOM-prefixed REJECT after APPROVE is the last result", s == 1 && o.include?("review: not-approved (comment 2")
+o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body(verdict: "REJECT", must: 1)), comment(2, "me", result_body.gsub("\n", "\r\n"))]) }
+check "a CRLF result is read", s == 0 && o.include?("review: ok (APPROVE by Codex、comment 2)")
 o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body(verdict: "REJECT", must: 1)), comment(2, "me", result_body)]) }
 check "APPROVE after REJECT is ok", s == 0
 o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body), comment(2, "me", "ありがとう")]) }
@@ -332,6 +355,23 @@ check "an unreadable current merge-base cannot be judged", s == 2
 # base の branch を書き換えた: PR の base.sha (古い) との merge-base は review のときと同じだが、今の先端との merge-base は違う。
 o, _e, s, = run_case { |m| m["exact"]["api repos/#{REPO}/compare/#{TIP}...#{HEAD}?per_page=1"] = ok_body("merge_base_commit" => { "sha" => OTHER }) }
 check "a rewritten base branch is not ok (compared with the current tip, not the PR's base.sha)", s == 1 && o.include?("review: target-base-mismatch")
+# base の branch の名前は git の規則のまま受け付ける (文字の種類で狭めない)。URL には部分ごとに percent-encode して埋め、
+# 出力には規則の形の外の名前を出さない (#665 の review の F3 と同じ型)。
+set_base_ref = lambda do |m, ref, path|
+  set_pull(m, "base", { "sha" => PR_BASE, "ref" => ref })
+  m["exact"].delete("api repos/#{REPO}/git/ref/heads/main")
+  m["exact"]["api repos/#{REPO}/git/ref/heads/#{path}"] = ok_body("ref" => "refs/heads/#{ref}", "object" => { "type" => "commit", "sha" => TIP })
+  set_comments(m, [comment(1, "me", result_body(ref: ref))])
+end
+o, _e, s, = run_case { |m| set_base_ref.call(m, "機能", "%E6%A9%9F%E8%83%BD") }
+check "a non-ASCII base branch is read (#{s}: #{o})", s == 0 && o.include?("target: base (規則の形の外の名前) #{TIP} / head #{HEAD}") && !o.include?("機能")
+o, _e, s, = run_case { |m| set_base_ref.call(m, "feature/x-1", "feature/x-1") }
+check "a base branch with a slash keeps the slash in the path", s == 0 && o.include?("target: base feature/x-1 #{TIP}")
+o, _e, s, = run_case { |m| set_base_ref.call(m, "a#b", "a%23b") }
+check "a # in the base branch is encoded", s == 0
+# 制御文字の名前でも応答は用意する (検査が無ければ ok まで進む形にし、検査だけが止めることを確かめる)。
+o, _e, s, = run_case { |m| set_base_ref.call(m, "x\u0001", "x%01") }
+check "a control character in the base branch cannot be judged", s == 2 && o.empty?
 o, _e, s, = run_case do |m|
   page1 = (1..100).map { |i| comment(i, "someone", "x") }
   m["exact"]["api repos/#{REPO}/issues/#{PR}/comments?per_page=100&page=1"] = ok_body(page1)
@@ -361,6 +401,16 @@ o, _e, s, = run_case { |m| m["exact"][ci_path.call("self-tests (system)")] = ok_
 check "ci missing is not ok", s == 1 && o.include?("ci self-tests (system): missing")
 o, _e, s, = run_case { |m| m["exact"]["api repos/#{REPO}/contents/.github/repo-baseline.json?ref=#{TIP}"] = { "status" => 404 } }
 check "no repo-baseline.json is not ok", s == 1 && o.include?("ci: ci-undefined")
+# baseline が受け付ける名前は、出力の形の外でも確かめる (規則を狭めない。#665 の review の F3)。出力には名前を出さない。
+o, _e, s, gh, = run_case do |m|
+  text = '{"required_checks":["テスト","self-tests (3.4)"]}'
+  m["exact"]["api repos/#{REPO}/contents/.github/repo-baseline.json?ref=#{TIP}"] =
+    ok_body("type" => "file", "encoding" => "base64", "size" => text.bytesize, "content" => [text].pack("m"))
+  m["exact"][ci_path.call("テスト")] = ok_body("total_count" => 1, "check_runs" => [{ "name" => "テスト", "status" => "completed", "conclusion" => "success" }])
+end
+check "a non-ASCII required check is checked (#{s}: #{o})", s == 0 && o.include?("ci required_checks の 1 番目 (規則の形の外の名前): success") &&
+                                                        o.include?("ci self-tests (3.4): success") && !o.include?("テスト")
+check "a non-ASCII check name is encoded in the query", gh.include?(ci_path.call("テスト"))
 o, _e, s, = run_case do |m|
   text = '{"required_checks":[]}'
   m["exact"]["api repos/#{REPO}/contents/.github/repo-baseline.json?ref=#{TIP}"] =

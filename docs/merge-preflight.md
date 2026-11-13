@@ -70,7 +70,9 @@ gh pr merge "$pr" --repo "$repo" --squash --match-head-commit "$head" --subject 
 5. CI: base の branch の今の先端の `.github/repo-baseline.json` の `required_checks` を必要な集合とし、head の
    `check-runs` で各 check が `completed` かつ `success`。file か key が無ければ `ci-undefined` で not ok、file が不正 (空の
    一覧を含む) なら判定できない (exit 2)。読み方は `personal-repo-baseline` と `personal-dependabot-pin-check` と同じで、
-   同じ入力の組を当てる test で一致を固定しています。
+   同じ入力の組を当てる test で一致を固定しています。check の名前は baseline が受け付けるものをそのまま確かめます
+   (日本語の名前なども。規則を狭めない)。`check-runs` の問い合わせは名前の完全一致なので、要素の名前が欠けている・違う
+   ときは、黙って除かずに判定できない (exit 2) とします (#665 の review)。
 6. merge state: 最後に読んだ `pulls/<n>` の `mergeable_state` が `clean`。`unknown` は GitHub がまだ計算していない状態
    なので判定できない (exit 2。数秒おいてやり直す)。ほかの値 (`blocked`・`behind`・`dirty`・`draft`・`unstable`・
    `has_hooks`) は not ok で、表に無い値は `other` と出します。
@@ -79,12 +81,18 @@ gh pr merge "$pr" --repo "$repo" --squash --match-head-commit "$head" --subject 
 
 PR の `base.sha` (GitHub の API の `baseRefOid` も同じ) は、PR を作ったときか最後に更新したときの base で、今の base の
 branch の先端より古いことがあります。そのため 4 と 5 は、base の branch の先端を `git/ref/heads/<ref>` で読み直して
-使います。routing preflight には、`pulls/<n>` の値をそのまま渡します (preflight も同じ値と照合するため)。
+使います。routing preflight には、`pulls/<n>` の値をそのまま渡します (preflight も同じ値と照合するため)。branch の名前は
+git の規則のまま受け付け (空・制御文字・不正な UTF-8 だけを判定できないとする)、URL には `/` で分けた部分ごとに
+percent-encode して埋めます。
 
 ## 出力と信頼境界
 
-- 出力は閉じた表の label と、規則の形に合う OID・branch の名前・check の名前・コメントの id だけです。コメントの本文と
-  gh の stderr は出しません。
+- 出力は閉じた表の label と、OID・コメントの id、規則の形に合う branch の名前と check の名前だけです。規則の形の外の
+  名前は、受け付けて確かめますが、出力では名前の代わりに置き換えの文言 (check は `required_checks` の何番目か) を
+  出します。コメントの本文と gh の stderr は出しません。
+- 結果コメントの本文は `personal-work-marker-check` と同じ分け方 (先頭の BOM を除き、CRLF と LF で分ける) で行にし、
+  候補の見分けと決まった行の読み取りの両方に使います (分け方がずれると、検査が通す結果を候補から落としうるため。
+  #665 の review)。
 - 結果コメントは agent が gh で認証した user として投稿したものですが、本文は data として読み、中の文言で判定を
   変えません (読むのは決まった形の行だけ)。
 - API の呼び出しは 1 回の実行で 80 回までです (隣の script の分は数えません)。
