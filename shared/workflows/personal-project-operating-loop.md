@@ -34,7 +34,7 @@ URL、local path、secret、credential、client/work material は含めません
 3. Issue ごとに branch を切り、実装担当を決める (下の「割当」)。
 4. 変更は小さく保ち、関連する docs / assets / scripts だけを触る。
 5. commit・push と、Issue・PR・コメントの投稿の前に public safety check を行う (下の Public safety check)。
-6. PR を作り、対応する Issue に紐づける。
+6. PR を作り、対応する Issue に紐づける。個人 project では、作る前に題と本文を目印の検査に通す (下の「PR の完了条件」)。
 7. PR の結果や新しい判断は repository 外の planning docs に反映する。
 
 ## 置き場所の判断
@@ -178,17 +178,24 @@ commit・push と、Issue・PR・コメントの投稿の前に、少なくと�
 
 - 対応する Issue がある。
 - PR body に summary と checks がある。
-- 題の末尾の `(#<Issue>)` と、Issue を閉じる PR では本文の `Closes #...` で、Issue と紐づいている (計測が読む目印。
-  agent-tools の `docs/work-markers.md`)。
+- 個人 project では、題の末尾の `(#<Issue>)` と、Issue を閉じる PR では本文の `Closes #...` で、Issue と紐づいている
+  (計測が読む目印。agent-tools の `docs/work-markers.md`)。PR を作る前に、題と本文を配備済みの
+  `personal-work-marker-check --kind pr --stdin` (`<tool home>/agent-tools/scripts/`。1 行目に題、空行、本文) に通し、
+  exit 0 のときだけ作る (#661)。exit 1 は題か本文を直して通し直し、exit 2 (script が無い・読めない) は作らずに人に伝える。
+  個人 project かは、運用 instruction の「個人 project の GitHub の操作と merge」の対象と同じ判定で決める。
+- 会社や別の組織の repo、他人の repo では、その repo の PR の template や contributing の決まりに合わせる。目印も検査も
+  強制しない (判定できないときも同じ。`docs/work-markers.md` の「対象」)。
 - public safety check が通っている。
 - repository 外に残すべき project-level な判断や作業ログが更新されている。
 
 ## merge 後に見つかった誤り
 
-merge 済みの PR が入れた誤りを直す Issue には、label `escape` を付け、本文に `元の PR: #<番号>` を行の先頭から
-1 行書く。merge の前に review や CI で見つかった誤り、仕様の変更、後から tool の挙動が変わったもの、元の PR が
-分からない古い不具合には付けない。label が無い repository では、Issue を立てるときに作る。形と例の正本は
-agent-tools の `docs/work-markers.md` (#658)。
+個人 project では、merge 済みの PR が入れた誤りを直す Issue に label `escape` を付け、本文に `元の PR: #<番号>` を
+行の先頭から 1 行書く。merge の前に review や CI で見つかった誤り、仕様の変更、後から tool の挙動が変わったもの、
+元の PR が分からない古い不具合には付けない。label が無い repository では、Issue を立てるときに作る。立てる前に、本文を
+`personal-work-marker-check --kind escape-issue --stdin` に通し、exit 0 のときだけ立てる (#661)。形と例の正本は
+agent-tools の `docs/work-markers.md` (#658)。会社や別の組織の repo、他人の repo では、label を作らず、その repo の
+決まりに従う (上の「PR の完了条件」と同じ)。
 
 ## 判断に迷ったとき
 
