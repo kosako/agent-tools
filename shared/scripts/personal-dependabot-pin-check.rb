@@ -601,8 +601,9 @@ module DependabotPinCheck
       page += 1
     end
     raise RunError, "check-runs の件数が total_count と一致しません (全件を読めない)" unless runs.size == total
+    # check_name の絞り込みは完全一致なので、名前の違う・欠けた要素は応答の形の外れ (黙って除かない。#662 の review)。
+    raise RunError, "check-runs の要素の名前が問い合わせた名前と合いません" unless runs.all? { |r| r["name"] == name }
 
-    runs = runs.select { |r| r["name"] == name }
     return "missing" if runs.empty?
     return "pending" unless runs.all? { |r| r["status"] == "completed" }
     return "failure" unless runs.all? { |r| r["conclusion"] == "success" }

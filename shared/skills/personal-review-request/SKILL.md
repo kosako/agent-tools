@@ -412,7 +412,7 @@ independence を別 field で書き、該当ゼロの severity は「なし」�
 結果には、review の対象を `Target` の行に full の OID で残す (base ref・base OID・head OID)。値はどの route も手順 1 で
 検証したもの (C では、pin-check の `target:` と照合した後の値) を書く。Codex の route では、executor の `Target` (短い
 OID) がその値の前方一致であることを確かめ、違えば結果を使わない。merge の前の照合 (運用 instruction の「個人 project の
-GitHub の操作と merge」) は、この行の値で行う。
+GitHub の操作と merge」。配備済みの `personal-merge-preflight` が行う。#662) は、この行の値で行う。
 
 投稿の前に、手順 2 と同じく本文を `personal-ja-style-check --stdin` と public-safety の gate に通す (#556、#413)。reviewer の
 出力に絶対 path や markdown の link があれば、repo 相対の `file:line` に直して転記する (gate が home の path で止めるため。

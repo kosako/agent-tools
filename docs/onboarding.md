@@ -228,7 +228,8 @@ script / plugin) のまま。
 
 - 作業単位は GitHub Issue に切り、変更は PR で管理する。
 - Issue ごとに branch → 実装 → self-test → public safety check → PR → CI green →
-  相互レビュー (author ≠ reviewer、`personal-review-request`) → squash merge。
+  相互レビュー (author ≠ reviewer、`personal-review-request`) → merge の前の検査 → squash merge。
+  個人 project の merge の条件は、配備済みの `personal-merge-preflight` で確かめる ([merge-preflight](merge-preflight.md))。
 - project planning / management docs は repository 外で別管理 (tracked file に
   tool 名や URL を書かない)。
 - commit / PR 前に public safety check: secrets / private path / planning tool の

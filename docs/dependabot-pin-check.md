@@ -51,7 +51,8 @@ usage: personal-dependabot-pin-check <PR番号> [--repo owner/repo]
    `required_checks` もこの不正に当たり、成功にも `ci-undefined` にもしません。2 つの script は code を共有しないので、同じ
    本文の組を両方に当てる test で一致を固定しています (#573)。check の名前は出力に載せるので、さらに決まった文字だけに
    限ります (外れたら exit 2)。head の `check-runs` を check の名前ごとに page 単位で読み (1 page が
-   gh の 1 回で、回数の上限は呼ぶ前に数える。page ごとの `total_count` が一致し、件数が合わなければ判定しない = exit 2)、
+   gh の 1 回で、回数の上限は呼ぶ前に数える。page ごとの `total_count` が一致し、件数が合わなければ判定しない = exit 2。
+   問い合わせは名前の完全一致なので、要素の名前が欠けている・違うときも判定しない = exit 2。#662)、
    すべて `completed` かつ `success` なら `success`、1 つでも終わっていなければ `pending`、1 つでも success でなければ
    `failure`、無ければ `missing`。
 4. snapshot: 最初と最後に `pulls/<n>` を読み、head と base が動いていなければ結果の `target:` に OID を載せます。動いて
