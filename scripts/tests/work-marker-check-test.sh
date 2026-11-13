@@ -1,8 +1,8 @@
 #!/bin/sh
 # personal-work-marker-check.rb の self-test (#661)。
-# 規則 (Document) は require して直接、CLI は ruby で起動して確かめる。fixture は docs/work-markers.md の v2 の形
-# (pr の本文の Closes の行は v2 で絞った形、review の結果の 3 行と escape の行は v1 から同じ) と、実際に投稿した結果
-# コメント (#659) の形から作る。#663 の review の round 1・2 の入力の例も含む。network access なし。何も書かないことは
+# 規則 (Document) は require して直接、CLI は ruby で起動して確かめる。fixture は docs/work-markers.md の v3 の形
+# (review の結果の Target の行は v3 で足した形、pr の本文の Closes の行は v2 で絞った形、review の結果の残りの 3 行と
+# escape の行は v1 から同じ) と、実際に投稿した結果コメント (#659・#638) の形から作る。#663 の review の round 1・2 の入力の例も含む。network access なし。何も書かないことは
 # tree_snapshot で確かめる。
 set -eu
 
@@ -34,7 +34,10 @@ end
 heading = "## 📋 レビュー結果（by Codex）"
 verdict = ->(v) { "**Review process verdict: #{v}**" }
 summary = ->(m, s, n) { "**Finding summary: 🔴 must #{m} / 🟡 should #{s} / ⚪ nit #{n}**" }
-result = ->(*lines) { lines.join("\n") + "\n" }
+target = "**Target: base main #{'a' * 40} / head #{'b' * 40}**"
+# 結果コメントの本文。Target の行は既定で末尾に足す (Target の行そのものを確かめる case は raw で組む)。
+result = ->(*lines) { (lines + [target]).join("\n") + "\n" }
+raw = ->(*lines) { lines.join("\n") + "\n" }
 ok_result = result.call(heading, "", verdict.call("APPROVE"), summary.call(0, 0, 0))
 
 # --- review-result: 合う形
@@ -66,9 +69,15 @@ check "REJECT with must is ok", errs.call("review-result", result.call(heading, 
 check "Warning with should only is ok", errs.call("review-result", result.call(heading, verdict.call("Warning"), summary.call(0, 2, 3))).empty?
 check "APPROVE with nit only is ok", errs.call("review-result", result.call(heading, verdict.call("APPROVE"), summary.call(0, 0, 4))).empty?
 check "CRLF line endings are ok", errs.call("review-result", ok_result.gsub("\n", "\r\n")).empty?
-check "trailing spaces after the marker lines are ok", errs.call("review-result", result.call(heading, verdict.call("APPROVE") + "  ", summary.call(0, 0, 0) + "\t")).empty?
+check "trailing spaces after the marker lines are ok", errs.call("review-result", raw.call(heading, verdict.call("APPROVE") + "  ", summary.call(0, 0, 0) + "\t", target + " ")).empty?
+check "branch-like base ref is ok", errs.call("review-result", ok_result.sub("base main ", "base issue-662/target.line ")).empty?
+# 実際に #638 に投稿した pin-check の結果コメントの 5 行 (v3 の形を満たす)。
+pin_posted = raw.call("## 📋 レビュー結果（by personal-dependabot-pin-check）", "", verdict.call("APPROVE"), summary.call(0, 0, 0),
+                      "**Target: base main 33fd951faa7758876a665bf013b0be729ec8c834 / head 812ae65eeb2d0e1609428d437fa0f30425bdd0b7**",
+                      "**Independence: deterministic check (dependabot pin)**")
+check "posted #638 pin-check result is ok", errs.call("review-result", pin_posted).empty?
 
-# 雛形 (TEMPLATES.md の結果の block) の 3 行が、検査の形と同じ文字である (雛形を変えたらここで気づく)。
+# 雛形 (TEMPLATES.md の結果の block) の 4 行が、検査の形と同じ文字である (雛形を変えたらここで気づく)。
 tpl = File.read(templates, encoding: "UTF-8")
 tpl_heading = tpl.lines.map(&:chomp).find { |l| l.start_with?("## 📋 レビュー結果（by ") }
 check "template heading exists", !tpl_heading.nil?
@@ -79,6 +88,9 @@ end
 check "template verdict line form matches", tpl.lines.map(&:chomp).any? { |l| l == "**Review process verdict: REJECT | Warning | APPROVE**" }
 tpl_summary = tpl.lines.map(&:chomp).find { |l| l.start_with?("**Finding summary:") }
 check "template summary form matches", WorkMarkerCheck::FINDING_SUMMARY.match?(tpl_summary.to_s.gsub(" N", " 0"))
+tpl_target = tpl.lines.map(&:chomp).find { |l| l.start_with?("**Target:") }
+check "template target line exists", tpl_target == "**Target: base <base ref> <base OID> / head <head OID>**"
+check "template target form matches", WorkMarkerCheck::TARGET_LINE.match?(tpl_target.to_s.sub("<base ref>", "main").sub("<base OID>", "a" * 40).sub("<head OID>", "b" * 40))
 
 # --- review-result: 崩れた形
 check "half-width parens in heading", errs.call("review-result", ok_result.sub("（by Codex）", "(by Codex)")) == ["result-heading"]
@@ -95,7 +107,7 @@ check "duplicate verdict inside a code block", errs.call("review-result", ok_res
 check "summary with an emoji variation selector", errs.call("review-result", ok_result.sub("⚪", "⚪\u{FE0F}")) == ["finding-summary"]
 check "summary with a different separator", errs.call("review-result", ok_result.sub(" / 🟡", ", 🟡")) == ["finding-summary"]
 check "summary missing", errs.call("review-result", result.call(heading, verdict.call("APPROVE"))) == ["finding-summary"]
-check "all three missing", errs.call("review-result", "本文だけ\n").sort == %w[finding-summary result-heading verdict-line]
+check "all four missing", errs.call("review-result", "本文だけ\n").sort == %w[finding-summary result-heading target-line verdict-line]
 check "APPROVE with must", errs.call("review-result", result.call(heading, verdict.call("APPROVE"), summary.call(1, 0, 0))) == ["verdict-mismatch"]
 check "Warning with must", errs.call("review-result", result.call(heading, verdict.call("Warning"), summary.call(1, 1, 0))) == ["verdict-mismatch"]
 check "APPROVE with should", errs.call("review-result", result.call(heading, verdict.call("APPROVE"), summary.call(0, 1, 0))) == ["verdict-mismatch"]
@@ -104,6 +116,21 @@ check "REJECT without must", errs.call("review-result", result.call(heading, ver
 miss = doc.call("review-result", ok_result.sub(verdict.call("APPROVE"), "- #{verdict.call('APPROVE')}")).errors.first
 check "missing marker points at the near line", miss.line == 3
 check "mismatch points at the verdict line", doc.call("review-result", result.call(heading, verdict.call("APPROVE"), summary.call(1, 0, 0))).errors.first.line == 2
+
+# --- review-result: Target の行 (v3)
+no_target = raw.call(heading, verdict.call("APPROVE"), summary.call(0, 0, 0))
+check "target missing (the v2 form)", errs.call("review-result", no_target) == ["target-line"]
+check "target missing points at line 0", doc.call("review-result", no_target).errors.first.line == 0
+check "target with short OIDs", errs.call("review-result", ok_result.sub("a" * 40, "a" * 8)) == ["target-line"]
+check "target with uppercase hex", errs.call("review-result", ok_result.sub("b" * 40, "B" * 40)) == ["target-line"]
+check "target without the base ref", errs.call("review-result", ok_result.sub("base main ", "base ")) == ["target-line"]
+check "target in the executor form (@)", errs.call("review-result", ok_result.sub("main ", "main @ ")) == ["target-line"]
+check "target without the slash between base and head", errs.call("review-result", ok_result.sub(" / head ", " head ")) == ["target-line"]
+check "target without bold", errs.call("review-result", ok_result.sub(target, target.delete("*"))) == ["target-line"]
+check "target with trailing text", errs.call("review-result", ok_result.sub(target, target + " (round 2)")) == ["target-line"]
+check "target in a list item", errs.call("review-result", ok_result.sub(target, "- " + target)) == ["target-line"]
+check "duplicate target", errs.call("review-result", ok_result + target + "\n") == ["target-line"]
+check "broken target points at the near line", doc.call("review-result", ok_result.sub(target, "- " + target)).errors.first.line == 5
 
 # --- escape-issue
 check "origin line is ok", errs.call("escape-issue", "本文。\n\n元の PR: #654\n").empty?
@@ -188,7 +215,7 @@ end
 
 # --- CLI
 o, e, s = cli.call(%w[--kind review-result --stdin], ok_result)
-check "cli ok exits 0", s.exitstatus == 0 && o.end_with?("work-marker-check: review-result: ok (markers v2)\n") && e.empty?
+check "cli ok exits 0", s.exitstatus == 0 && o.end_with?("work-marker-check: review-result: ok (markers v3)\n") && e.empty?
 canary = "CANARY-本文-#{Process.pid}"
 bad = result.call(heading.sub("（", "("), canary, verdict.call("APPROVE"), summary.call(1, 0, 0))
 o, e, s = cli.call(%w[--kind review-result --stdin], bad)
@@ -211,7 +238,7 @@ check "cli over the size limit exits 2", s.exitstatus == 2 && e.include?("byte �
 o, e, s = cli.call(%w[--kind escape-issue --stdin], "元の PR: #1\n\xff".b)
 check "cli invalid utf-8 exits 2", s.exitstatus == 2 && e.include?("UTF-8")
 o, e, s = cli.call(%w[--kind review-result --stdin], "")
-check "cli empty input reports missing lines", s.exitstatus == 1 && o.include?("3 error(s)")
+check "cli empty input reports missing lines", s.exitstatus == 1 && o.include?("4 error(s)")
 o, e, s = cli.call(%w[--kind pr --stdin], "")
 check "cli empty pr input exits 2", s.exitstatus == 2 && e.start_with?("work-marker-check: error:")
 o, e, s = cli.call(%w[--kind review-result --stdin], ok_result + ("a" * (WorkMarkerCheck::MAX_INPUT_BYTES - ok_result.bytesize)))

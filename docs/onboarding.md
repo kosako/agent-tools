@@ -237,7 +237,7 @@ script / plugin) のまま。
   受け渡す。規約は [agent-packets](agent-packets.md)。
 - herdr の上で作業単位を同時に進めるときの範囲 (1 + 1)、tab / pane の命名、dashboard、通知は
   [herdr-operations](herdr-operations.md)。
-- 開発の流れを外から数えるための目印 (trailer・Issue との紐付け・review の結果の 3 行・`escape` の label) の
+- 開発の流れを外から数えるための目印 (trailer・Issue との紐付け・review の結果の 4 行・`escape` の label) の
   約束は [work-markers](work-markers.md)。
 
 新しく入る AI agent はまず `AGENTS.md` (この repository での振る舞い) と
