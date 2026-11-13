@@ -78,13 +78,17 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
   - routing preflight が author を単一の AI か表の bot と判定した (`personal-review-request` の「レビュアーの決定」)。
   - 別の AI の review の最終の verdict が `APPROVE` で、review の結果に残した対象 (base ref・base OID・head OID) が PR の
     今の差分と一致する。一致は、base ref と head が同じで、review の base OID と head の merge-base が、PR の今の base と
-    head の merge-base と同じこと。base を付け替えた・親の branch を rebase した・commit を足したときは、review をやり直す
-    (stacked PR では、head が同じでも差分の基点が変わる)。Dependabot の pin の bump は、AI の review の代わりに `personal-dependabot-pin-check` の ok で
-    よい (`personal-review-request` の「bot の PR」)。
+    head の merge-base と同じこと。PR の今の base は base の branch の今の先端で、PR の `base.sha` ではない (古いことがある)。
+    base を付け替えた・親の branch を rebase した・commit を足したときは、review をやり直す (stacked PR では、head が
+    同じでも差分の基点が変わる)。Dependabot の pin の bump は、AI の review の代わりに `personal-dependabot-pin-check` の ok でよい (`personal-review-request` の「bot の PR」)。
   - 必要な check (base の `.github/repo-baseline.json` の `required_checks`) が、head ですべて success で、merge state が
     `CLEAN`。必要な check の一覧が無い・空・読めないとき、check の状態を取れないときは、agent は merge しない。
   - squash の本文を `personal-ja-style-check` と public-safety の gate に通した。merge は `--match-head-commit` に full
     SHA を渡して head に固定し、squash で行う。
+- 上の条件 (squash の本文の検査を除く) は、配備済みの `personal-merge-preflight <PR番号> --repo <owner/repo>`
+  (`<tool home>/agent-tools/scripts/`) で確かめ、exit 0 のときだけ merge する (`docs/merge-preflight.md`。#662)。
+  `--match-head-commit` には出力の `head:` の OID を渡し、merge の `--repo` も同じ値にする。exit 1 (条件を満たさない) と
+  exit 2 (判定できない) では merge しない。script が無い・動かないときも、手で確かめた結果で代えて merge せず、人に伝える。
 - この節、上の PR の review のコメントの standing rule、各 skill の write gate を変える PR は、人が merge する。許可の
   規則を agent が自分で広げないため。
 - merge の後の配備 (agent-tools の `setup.sh` の dry-run → `--apply` → 再 dry-run → doctor) も agent が行い、結果を報告

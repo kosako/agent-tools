@@ -69,7 +69,8 @@ name の先頭で区分する。この約束は trailer の形を増やさない
 - `personal-dependabot-pin-check` の結果は AI の review ではない。数える側は `<reviewer>` で分けて数える。
 - `Target:` の行は、review した対象 (v3、#662)。`<base ref>` は PR の base の branch の名前 (空白を含まない)、OID は
   どちらも 40 桁の小文字の hex (短くしない)。merge の前に、この行の値を PR の今の base と head と照合する
-  (運用 instruction の「個人 project の GitHub の操作と merge」)。数える側は、同じ head への review の回数を数えるのに
+  (運用 instruction の「個人 project の GitHub の操作と merge」。照合は `personal-merge-preflight` が行う。
+  [merge-preflight](merge-preflight.md))。数える側は、同じ head への review の回数を数えるのに
   使ってよい。
 - 雛形の `Independence:` の行は、この版の約束に入れない。
 

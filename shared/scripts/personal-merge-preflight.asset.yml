@@ -1,0 +1,37 @@
+schema_version: 1
+name: personal-merge-preflight
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #662 の 2 本目の PR (merge の前の条件を決まった処理で確かめる) で author≠reviewer レビューのうえ承認する。
+# merge の規則にかかわるので、この PR は人が merge する (運用 instruction の「個人 project の GitHub の操作と merge」)。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:ccdc44158d4f957a809472e6c3f09ec977e480109656498116cb6bdb465c81dd
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-merge-preflight.rb
+  format: text
+summary: >-
+  個人 project の PR を agent が merge してよいかを、運用 instruction の「個人 project の GitHub の操作と merge」(#563) の
+  条件で確かめる (#662)。判定だけで、merge も書き込みもしない。gh api (GET) で user、repos/<r>、pulls/<n>、
+  issues/<n>/comments、git/ref/heads/<base>、compare、base の先端の .github/repo-baseline.json、head の check-runs を読み、
+  同じ directory の personal-review-routing-preflight (PR の base / head に固定) と personal-work-marker-check
+  (--kind review-result) を起動する。ok の条件: owner の type が User で login が gh の user と一致する / PR が open /
+  routing が exit 0 / gh の user の最後の結果コメント (見出しの近い形で見分ける) の形が合い、見出しの reviewer が routing の
+  reviewer と合い (bot(dependabot) の PR は pin-check も可)、verdict が APPROVE、Target の base ref と head が同じで、
+  review の base OID と head の merge-base が base の branch の今の先端と head の merge-base と同じ / required_checks が
+  head ですべて completed かつ success (file か key が無いと not ok、不正は exit 2) / 最後の pulls/<n> の
+  mergeable_state が clean。最初と最後に pulls/<n> と base の先端を読み、動いていれば判定できない。出力は閉じた label と
+  OID・branch の名前・check の名前・コメントの id だけで、コメントの本文と gh の stderr は出さない。--repo は必須。
+  API は 1 回の実行で 80 回まで。exit 0 = merge してよい (最後の 2 行が head: <OID> と merge-preflight: ok) / 1 = 条件を
+  満たさない / 2 = usage・gh の失敗・判定できない (mergeable_state が unknown、隣の script が無い、を含む)。
+  (docs/merge-preflight.md)
