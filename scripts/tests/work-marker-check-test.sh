@@ -120,6 +120,7 @@ check "duplicate origin", errs.call("escape-issue", "元の PR: #1\n元の PR: #
 
 # --- pr
 pr = ->(title, body = nil) { body.nil? ? "#{title}\n" : "#{title}\n\n#{body}" }
+loose = ->(title, body) { notes.call("pr", pr.call(title, body)).include?("loose-closing") }
 check "title ref and closes agree", errs.call("pr", pr.call("x を直す (#12)", "本文。\n\nCloses #12\n")).empty?
 check "title ref only is ok with a note", errs.call("pr", pr.call("x (#12)", "本文。\n")).empty? && notes.call("pr", pr.call("x (#12)", "本文。\n")) == ["no-closes"]
 check "title only (no body) is ok", errs.call("pr", pr.call("x (#12)")).empty?
@@ -128,48 +129,48 @@ check "neither is an error", errs.call("pr", pr.call("x を直す", "本文。\n
 check "title and closes disagree", errs.call("pr", pr.call("x (#1)", "Closes #2\n")) == ["issue-mismatch"]
 check "mismatch points at the closes line", doc.call("pr", pr.call("x (#1)", "本文。\n\nCloses #2\n")).errors.first.line == 5
 check "title among several closes is ok", errs.call("pr", pr.call("x (#1)", "Closes #1\nCloses #2\n")).empty?
-%w[close closes closed fix fixes fixed resolve resolves resolved CLOSES Fixes].each do |kw|
-  check "keyword #{kw} is read", errs.call("pr", pr.call("x", "#{kw} #7\n")).empty?
-end
-check "keyword with a colon is read", errs.call("pr", pr.call("x", "Closes: #7\n")).empty?
-check "keyword inside a word is not read", errs.call("pr", pr.call("x", "enclosed #7\n")) == ["issue-link"]
 check "number followed by digits is whole", errs.call("pr", pr.call("x (#7)", "Closes #70\n")) == ["issue-mismatch"]
-check "closes in inline code is an example", errs.call("pr", pr.call("x", "`Closes #7` と書く\n")) == ["issue-link"]
-check "closes in html code is an example", errs.call("pr", pr.call("x", "<code>Closes #7</code>\n")) == ["issue-link"]
-check "closes in a code block is an example", errs.call("pr", pr.call("x", "```\nCloses #7\n```\n")) == ["issue-link"]
-check "closes after the code block is read", errs.call("pr", pr.call("x", "```\nx\n```\nCloses #7\n")).empty?
-# 字下げの code block (WM001)。段落の続きと list の中の字下げは本文として読む。
-check "indented code is an example (title ref kept)", errs.call("pr", pr.call("x (#1)", "    Closes #2\n")).empty?
-check "indented code alone is not a link", errs.call("pr", pr.call("x", "    Closes #2\n")) == ["issue-link"]
-check "indented code after a paragraph and a blank", errs.call("pr", pr.call("x (#1)", "本文。\n\n    Closes #2\n")).empty?
-check "tab-indented code is an example", errs.call("pr", pr.call("x", "\tCloses #2\n")) == ["issue-link"]
-check "indented code continues across a blank line", errs.call("pr", pr.call("x (#1)", "    例\n\n    Closes #2\n")).empty?
-check "consecutive indented lines stay code", errs.call("pr", pr.call("x (#1)", "本文。\n\n    例\n    Closes #2\n")).empty?
-check "indented code right after a fence", errs.call("pr", pr.call("x (#1)", "```\nx\n```\n    Closes #2\n")).empty?
-check "paragraph after indented code is read", errs.call("pr", pr.call("x (#1)", "    例\n\nCloses #2\n")) == ["issue-mismatch"]
-check "indented paragraph continuation is read", errs.call("pr", pr.call("x (#1)", "本文\n    Closes #2\n")) == ["issue-mismatch"]
-check "indented list content is read", errs.call("pr", pr.call("x (#1)", "- 項目\n\n    Closes #2\n")) == ["issue-mismatch"]
-check "lazy list continuation is read", errs.call("pr", pr.call("x (#1)", "- 項目\nCloses #2\n")) == ["issue-mismatch"]
-check "indented code after the list ends", errs.call("pr", pr.call("x (#1)", "- 項目\n\n本文。\n\n    Closes #2\n")).empty?
-# code span は同じ長さの backtick の列で閉じ、段落の中で行をまたぐ (WM002)。
-check "double-backtick span is an example", errs.call("pr", pr.call("x (#1)", "例: `` `Closes #2` `` と書く\n")).empty?
-check "span closes only with the same length", errs.call("pr", pr.call("x (#1)", "`` a ` Closes #2 ``\n")).empty?
-check "unclosed backtick is a literal", errs.call("pr", pr.call("x (#1)", "` Closes #2\n")) == ["issue-mismatch"]
-check "multi-line code span is an example", errs.call("pr", pr.call("x (#1)", "`例:\nCloses #2` と書く\n")).empty?
-check "code span does not cross a blank line", errs.call("pr", pr.call("x (#1)", "`例\n\nCloses #2`\n")) == ["issue-mismatch"]
-check "code span does not cross a list item", errs.call("pr", pr.call("x (#1)", "- `例\n- Closes #2`\n")) == ["issue-mismatch"]
-check "multi-line html code is an example", errs.call("pr", pr.call("x (#1)", "<code>例\nCloses #2</code>\n")).empty?
-check "line number survives span stripping", doc.call("pr", pr.call("x (#1)", "本文 `a`\nCloses #2\n")).errors.first.line == 4
-# backtick の fence の info string は backtick を含まない (含めば inline の code span で、後ろの本文を隠さない)。
-check "backtick info with a backtick is not a fence", errs.call("pr", pr.call("x (#1)", "```x```\n\nCloses #2\n")) == ["issue-mismatch"]
-check "tilde fence may have a backtick in info", errs.call("pr", pr.call("x (#1)", "~~~ `a`\nCloses #2\n~~~\n")).empty?
-check "closing fence may be indented up to three spaces", errs.call("pr", pr.call("x (#1)", "```\nx\n   ```\nCloses #2\n")) == ["issue-mismatch"]
+check "trailing spaces after closes are ok", errs.call("pr", pr.call("x (#7)", "Closes #7  \n")).empty?
 check "other repository closes is not compared", errs.call("pr", pr.call("x (#1)", "Closes owner/repo#2\n")).empty?
 check "other repository closes alone is not a link", errs.call("pr", pr.call("x", "Closes owner/repo#2\n")) == ["issue-link"]
 check "the title line is not read for closes", errs.call("pr", pr.call("Closes #3", "本文。\n")) == ["issue-link"]
 check "title ref must be at the end", errs.call("pr", pr.call("(#3) x", "本文。\n")) == ["issue-link"]
 check "title ref allows trailing spaces", errs.call("pr", pr.call("x (#3)  ", "本文。\n")).empty?
 check "bom before the title is ignored", errs.call("pr", "\u{FEFF}" + pr.call("x (#3)")).empty?
+
+# Markdown を解釈しない: 決まった形の行は code block の中でも数え、形の外の keyword は note になる (#663 の review)。
+check "closes in a code block still counts", errs.call("pr", pr.call("x (#1)", "```\nCloses #2\n```\n")) == ["issue-mismatch"]
+check "closes in a code block still links", errs.call("pr", pr.call("x", "```\nCloses #2\n```\n")).empty?
+# 決まった形の外 (行の先頭でない、別の keyword、後ろに文字がある) は紐付けにならず、note で知らせる。
+%w[close closed fix fixes fixed resolve resolves resolved].each do |kw|
+  check "keyword #{kw} alone is not a link", errs.call("pr", pr.call("x", "#{kw} #7\n")) == ["issue-link"]
+  check "keyword #{kw} is a loose note", loose.call("x", "#{kw} #7\n")
+end
+{
+  "lowercase closes" => "closes #7\n",
+  "uppercase CLOSES" => "CLOSES #7\n",
+  "closes with a colon" => "Closes: #7\n",
+  "closes in a list item" => "- Closes #7\n",
+  "indented closes" => "    Closes #7\n",
+  "tab-indented closes" => "\tCloses #7\n",
+  "closes with trailing text" => "Closes #7 と直す\n",
+  "two numbers on one line" => "Closes #7, #8\n",
+  "closes in inline code" => "`Closes #7` と書く\n",
+  "closes in html code" => "<code>Closes #7</code>\n",
+  "closes in a sentence" => "この PR は fixes #7 です。\n",
+}.each do |label, body|
+  check "#{label} is not a link", errs.call("pr", pr.call("x", body)) == ["issue-link"]
+  check "#{label} is a loose note", loose.call("x", body)
+end
+check "keyword inside a word is not a note", !loose.call("x", "enclosed #7\n")
+check "placeholder number is not a note", !loose.call("x (#1)", "本文に `Closes #<番号>` を書く。\n")
+check "loose note points at the first line", doc.call("pr", pr.call("x (#1)", "本文。\n- Closes #2\n- fixes #3\n")).findings.find { |f| f.rule == "loose-closing" }.line == 4
+check "strict line is not a loose note", !loose.call("x (#1)", "Closes #1\n")
+# round 2 の例 (WM004・WM005): どちらも誤った exit にならず、note になる。
+wm004 = pr.call("x (#1)", "- 項目\n\n  続き\n\n    Closes #2\n")
+check "WM004 example is ok with a note", errs.call("pr", wm004).empty? && loose.call("x (#1)", "- 項目\n\n  続き\n\n    Closes #2\n")
+wm005_body = "- ```text\n  Closes #2\n  ```\n\nCloses #1\n"
+check "WM005 example is ok with a note", errs.call("pr", pr.call("x (#1)", wm005_body)).empty? && loose.call("x (#1)", wm005_body)
 begin
   doc.call("pr", "x (#1)\n本文が 2 行目\n")
   check "non-empty second line raises", false
@@ -185,7 +186,7 @@ end
 
 # --- CLI
 o, e, s = cli.call(%w[--kind review-result --stdin], ok_result)
-check "cli ok exits 0", s.exitstatus == 0 && o.end_with?("work-marker-check: review-result: ok (markers v1)\n") && e.empty?
+check "cli ok exits 0", s.exitstatus == 0 && o.end_with?("work-marker-check: review-result: ok (markers v2)\n") && e.empty?
 canary = "CANARY-本文-#{Process.pid}"
 bad = result.call(heading.sub("（", "("), canary, verdict.call("APPROVE"), summary.call(1, 0, 0))
 o, e, s = cli.call(%w[--kind review-result --stdin], bad)

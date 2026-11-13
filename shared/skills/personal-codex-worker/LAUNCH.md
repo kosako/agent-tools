@@ -625,7 +625,7 @@ marker=<tool home>/agent-tools/scripts/personal-work-marker-check
 { printf '%s\n\n' "$title" && cat "$body_file"; } | "$marker" --kind pr --stdin   # 0 のときだけ gate へ
 ```
 
-(exit 1 は Issue との紐付けの崩れ (題の末尾の `(#<Issue>)` も本文の `Closes #<Issue>` も無い、番号が合わない)。stdout の行を
+(exit 1 は Issue との紐付けの崩れ (題の末尾の `(#<Issue>)` も、本文の行の先頭からの `Closes #<Issue>` の行も無い、番号が合わない)。stdout の行を
 見て題名か本文を直し、style からやり直す。exit 2 は script が無い・入力を読めない で、push も PR 作成もせず
 `Blocked at: public-safety` で返す。)
 

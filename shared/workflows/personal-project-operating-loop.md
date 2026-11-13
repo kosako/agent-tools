@@ -178,7 +178,7 @@ commit・push と、Issue・PR・コメントの投稿の前に、少なくと�
 
 - 対応する Issue がある。
 - PR body に summary と checks がある。
-- 個人 project では、題の末尾の `(#<Issue>)` と、Issue を閉じる PR では本文の `Closes #...` で、Issue と紐づいている
+- 個人 project では、題の末尾の `(#<Issue>)` と、Issue を閉じる PR では本文の行の先頭からの `Closes #<Issue>` の行で、Issue と紐づいている
   (計測が読む目印。agent-tools の `docs/work-markers.md`)。PR を作る前に、題と本文を配備済みの
   `personal-work-marker-check --kind pr --stdin` (`<tool home>/agent-tools/scripts/`。1 行目に題、空行、本文) に通し、
   exit 0 のときだけ作る (#661)。exit 1 は題か本文を直して通し直し、exit 2 (script が無い・読めない) は作らずに人に伝える。
