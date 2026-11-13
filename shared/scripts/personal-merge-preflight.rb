@@ -9,7 +9,8 @@
 # 2. PR の状態: open で、merge されていない。
 # 3. routing: 同じ directory の personal-review-routing-preflight を、PR の今の base / head に固定して起動し
 #    (`--expect-base` / `--expect-head`)、exit 0 (author を単一の AI か表の bot と判定した) と reviewer を読む。
-# 4. review の結果: gh で認証している user のコメントのうち、最後の結果コメント (見出しの近い形の行を持つもの) を読む。
+# 4. review の結果: gh で認証している user のコメントのうち、最後の結果コメントの候補 (決まった 3 行のどれかに近い行を持つ
+#    もの。RESULT_NEAR) を読む。
 #    同じ directory の personal-work-marker-check --kind review-result で形が合い (exit 0)、見出しの reviewer が routing の
 #    reviewer と合い (bot(dependabot) の PR では personal-dependabot-pin-check も可)、verdict が APPROVE で、Target の行が
 #    今の PR と合う。合うとは、base ref と head が同じで、review の base OID と head の merge-base が、base の branch の今の
@@ -63,13 +64,25 @@ module MergePreflight
   RESULT_HEADING = /\A## 📋 レビュー結果（by (?<reviewer>Codex|Claude|personal-dependabot-pin-check)）/
   VERDICT_LINE = /\A\*\*Review process verdict: (?<verdict>REJECT|Warning|APPROVE)\*\*[ \t]*\z/
   TARGET_LINE = %r{\A\*\*Target: base (?<ref>\S+) (?<base>[0-9a-f]{40}) / head (?<head>[0-9a-f]{40})\*\*[ \t]*\z}
-  # 結果コメントの候補を見分ける緩い形 (見出しが崩れた結果コメントを読み飛ばして、前の結果を最後の結果として使わないため)。
-  # 行は marker_lines で personal-work-marker-check と同じに分ける (先頭の BOM を除く)。RESULT_HEADING に合う行は必ずこの形にも
-  # 合う (候補を見分ける形は、検査が受け付ける形を含む)。
-  RESULT_NEAR = /\A[ \t]*\#{1,6}[ \t]*(?:📋[ \t]*)?レビュー結果/
+  # 結果コメントの候補を見分ける緩い形 (#665 の review の F1 と F4)。崩れた結果コメントを読み飛ばして、前の結果を最後の
+  # 結果として使わないため、候補は「決まった 3 行 (見出し・verdict・Finding summary) のどれかに近い行を持つコメント」とする。
+  # 近いかは、行を NFKC にし、書式文字 (BOM・ゼロ幅の文字など) と異体字の選択子を除いてから、行の中の語で見る (絵文字・
+  # 空白・括弧・太字・list・字下げの揺れを問わない)。検査が受け付ける形はすべて候補になる。結果コメント以外のコメントに
+  # これらの語を書くと、それが最後の候補になり、形の検査で止まる (merge しない側に倒れる)。
+  RESULT_NEAR = [
+    /\A[^\p{L}]*レビュー結果/,     # 見出し: 行の頭が記号・数字・空白だけで、レビュー結果 が続く
+    /review\s*process\s*verdict/i, # verdict の行
+    /finding\s*summary/i,          # Finding summary の行
+  ].freeze
+  IGNORABLE = /[\p{Cf}\u{FE00}-\u{FE0F}]/.freeze
 
-  # routing preflight の最後の行。reviewer と author は閉じた表の label。
-  ROUTING_LINE = /\Areviewer: (?<reviewer>codex|claude) \(author=(?<author>[a-z]+(?:\([a-z]+\))?), \d+ commit\(s\)\)\z/
+  # routing preflight の最後の行。author と reviewer は閉じた表 ROUTES の組で、commit は 1 つ以上 (外れたら判定できない)。
+  ROUTING_LINE = /\Areviewer: (?<reviewer>codex|claude) \(author=(?<author>[a-z]+(?:\([a-z]+\))?), (?<count>\d+) commit\(s\)\)\z/
+  # author の label と reviewer の閉じた表 (personal-review-request の「レビュアーの決定」の表。正本は routing preflight)。
+  ROUTES = {
+    "claude" => "codex", "codex" => "claude", "opencode(anthropic)" => "codex", "opencode(openai)" => "claude",
+    "opencode(other)" => "claude", "bot(dependabot)" => "claude",
+  }.freeze
   # routing の reviewer と、結果の見出しの reviewer の対応。bot(dependabot) の PR では pin-check の結果も使える (#553 の C)。
   HEADING_FOR = { "codex" => %w[Codex], "claude" => %w[Claude] }.freeze
   BOT_EXTRA_HEADINGS = { "bot(dependabot)" => %w[personal-dependabot-pin-check] }.freeze
@@ -336,6 +349,9 @@ module MergePreflight
       last = out.force_encoding(Encoding::UTF_8).scrub.lines.map(&:chomp).last.to_s
       m = ROUTING_LINE.match(last)
       raise RunError, "#{ROUTING_NAME} の出力の形が外れます" if m.nil?
+      unless ROUTES[m[:author]] == m[:reviewer] && m[:count].to_i.positive?
+        raise RunError, "#{ROUTING_NAME} の author と reviewer の組が表に無いか、commit が 0 です"
+      end
 
       { ok: true, text: "routing: ok (author=#{m[:author]}, reviewer=#{m[:reviewer]})", reviewer: m[:reviewer], author: m[:author] }
     when 1
@@ -361,19 +377,28 @@ module MergePreflight
     end
     raise RunError, "コメントの数が PR のコメントの数と合いません (全件を読めない)" unless comments.size == count
 
-    mine = comments.map do |c|
+    comments.each do |c|
       user = c.is_a?(Hash) ? c["user"] : nil
       unless c.is_a?(Hash) && c["id"].is_a?(Integer) && user.is_a?(Hash) && user["login"].is_a?(String) && c["body"].is_a?(String)
         raise RunError, "コメントの応答の形が外れます"
       end
-      next nil unless user["login"] == login
+    end
+    # 全コメントの id が重なりなく増える (page の境界の重なりや並びの乱れで、最後の結果を取り違えないため)。
+    ids = comments.map { |c| c["id"] }
+    raise RunError, "コメントの id が重なりなく増える順になっていません" unless ids.each_cons(2).all? { |a, b| a < b }
 
-      { id: c["id"], body: c["body"] }
-    end.compact
-    ids = mine.map { |c| c[:id] }
-    raise RunError, "コメントの順が id の順と合いません" unless ids == ids.sort
+    mine = comments.select { |c| c["user"]["login"] == login }.map { |c| { id: c["id"], body: c["body"] } }
+    mine.reverse.find { |c| result_candidate?(c[:body]) }
+  end
 
-    mine.reverse.find { |c| marker_lines(c[:body]).any? { |line| RESULT_NEAR.match?(line) } }
+  # 結果コメントの候補か (RESULT_NEAR の注を参照)。UTF-8 として読めない本文は候補にする (形の検査で止める)。
+  def result_candidate?(body)
+    return true unless body.valid_encoding?
+
+    marker_lines(body).any? do |line|
+      loose = line.unicode_normalize(:nfkc).gsub(IGNORABLE, "")
+      RESULT_NEAR.any? { |re| re.match?(loose) }
+    end
   end
 
   # 最後の結果コメントを確かめ、report に足す。

@@ -34,14 +34,34 @@ PC = DependabotPinCheck
 check "heading form equals work-marker-check", MP::RESULT_HEADING.source.sub("(?<reviewer>", "(?:") == WM::RESULT_HEADING.source
 check "verdict form equals work-marker-check", MP::VERDICT_LINE.source == WM::VERDICT_LINE.source
 check "target form equals work-marker-check", MP::TARGET_LINE.source == WM::TARGET_LINE.source
-check "near form catches a broken heading", MP::RESULT_NEAR.match?("## 📋 レビュー結果(by Codex)") && MP::RESULT_NEAR.match?("### レビュー結果") &&
-                                            !MP::RESULT_NEAR.match?("## 🔍 レビュー依頼（→ Codex）") && !MP::RESULT_NEAR.match?("本文の レビュー結果 の話")
-# 候補を見分ける形は、検査が受け付ける見出しを含む (検査が通す結果を候補から落とさない)。行の分け方も検査と同じ。
+# 候補は、決まった 3 行のどれかに近い行を持つコメント (#665 の review の F1・F4)。検査が受け付ける形はすべて候補になる。
+cand = ->(body) { MP.result_candidate?(body) }
 %w[Codex Claude personal-dependabot-pin-check].each do |r|
   heading = "## 📋 レビュー結果（by #{r}）"
-  check "near form includes the #{r} heading", MP::RESULT_HEADING.match?(heading) && MP::RESULT_NEAR.match?(heading) &&
-                                               MP::RESULT_NEAR.match?("#{heading}round 2")
+  check "candidate includes the #{r} heading", MP::RESULT_HEADING.match?(heading) && cand.call(heading) && cand.call("#{heading}round 2")
 end
+check "candidate includes the strict verdict line", cand.call("**Review process verdict: APPROVE**")
+check "candidate includes the strict summary line", cand.call("**Finding summary: 🔴 must 0 / 🟡 should 0 / ⚪ nit 0**")
+{
+  "half-width parens" => "## 📋 レビュー結果(by Codex)",
+  "deeper heading without emoji" => "### レビュー結果",
+  "emoji with a variation selector (F4)" => "## 📋\u{FE0F} レビュー結果（by Codex）",
+  "zero-width space in the word" => "## 📋 レビュー\u{200B}結果（by Codex）",
+  "heading in a list item" => "- ## 📋 レビュー結果（by Codex）",
+  "heading in a quote" => "> ## 📋 レビュー結果（by Codex）",
+  "numbered heading" => "1. ## 📋 レビュー結果（by Codex）",
+  "BOM before the heading" => "\u{FEFF}## 📋 レビュー結果（by Codex）",
+  "verdict in a list item" => "- **Review process verdict: REJECT**",
+  "verdict with a full-width colon" => "**Review process verdict：REJECT**",
+  "lowercase verdict label" => "review process verdict: reject",
+  "full-width letters in the verdict label" => "**Ｒｅｖｉｅｗ process verdict: REJECT**",
+  "summary without bold" => "Finding summary: 🔴 must 1 / 🟡 should 0 / ⚪ nit 0",
+}.each { |label, line| check "candidate catches #{label}", cand.call("前置き\n#{line}\n本文") }
+{
+  "review request" => "## 🔍 レビュー依頼（→ Codex）\n\n- 出力: finding は 🔴 must / 🟡 should / ⚪ nit、process verdict と independence は別 field",
+  "follow-up" => "## 🔧 指摘への対応 (round 1)\n\n`abc1234` で直した。",
+  "prose about results" => "前回のレビュー結果を読んで直した。#664 のレビュー結果も見た。",
+}.each { |label, body| check "candidate does not catch a #{label}", !cand.call(body) }
 check "lines are split like work-marker-check (BOM and CRLF)", MP.marker_lines("\u{FEFF}## a\r\nb\n") == ["## a", "b", ""]
 
 # ---- repo-baseline.json の読み方が personal-repo-baseline と personal-dependabot-pin-check と同じ (#573) ----
@@ -297,6 +317,19 @@ o, _e, s, = run_case(routing_out: "reviewer: codex (author=claude)\n")
 check "routing output in another form cannot be judged", s == 2
 o, _e, s, = run_case(routing_out: "commit 0000003: codex\nreviewer: claude (author=codex, 1 commit(s))\n")
 check "a Codex-authored PR needs a Claude result", s == 1 && o.include?("review: reviewer-mismatch")
+# author と reviewer は閉じた表の組で、commit は 1 つ以上 (#665 の review の F5)。
+{
+  "an unknown author" => "reviewer: codex (author=unknown, 1 commit(s))\n",
+  "a pair outside the table" => "reviewer: claude (author=claude, 1 commit(s))\n",
+  "zero commits" => "reviewer: codex (author=claude, 0 commit(s))\n",
+  "text before the line" => "x reviewer: codex (author=claude, 1 commit(s))\n",
+  "text after the line" => "reviewer: codex (author=claude, 1 commit(s)) x\n",
+}.each do |label, out|
+  o, _e, s, = run_case(routing_out: out)
+  check "routing with #{label} cannot be judged", s == 2 && o.empty?
+end
+o, _e, s, = run_case(routing_out: "reviewer: claude (author=opencode(openai), 2 commit(s))\n") { |m| set_comments(m, [comment(1, "me", result_body(reviewer: "Claude"))]) }
+check "an OpenCode (OpenAI) PR with a Claude result is ok", s == 0 && o.include?("routing: ok (author=opencode(openai), reviewer=claude)")
 
 # 4. review の結果
 o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", "依頼だけ")]) }
@@ -310,6 +343,23 @@ o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body), comme
 check "a BOM-prefixed REJECT after APPROVE is the last result", s == 1 && o.include?("review: not-approved (comment 2")
 o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body(verdict: "REJECT", must: 1)), comment(2, "me", result_body.gsub("\n", "\r\n"))]) }
 check "a CRLF result is read", s == 0 && o.include?("review: ok (APPROVE by Codex、comment 2)")
+# 見出しの絵文字に異体字の選択子が付いた最新の REJECT も、前の APPROVE に戻らない (#665 の review の F4)。
+o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body), comment(2, "me", result_body(verdict: "REJECT", must: 1, heading: "## 📋\u{FE0F} レビュー結果（by Codex）"))]) }
+check "a REJECT with a variation selector after APPROVE is not ok", s == 1 && o.include?("review: result-form-broken (comment 2")
+# 見出しの無い最新の結果 (verdict の行だけが残る) も同じ。
+o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body), comment(2, "me", "**Review process verdict: REJECT**\n")]) }
+check "a headless last result is not ok", s == 1 && o.include?("review: result-form-broken (comment 2")
+# 依頼と対応のコメントは候補にならない (APPROVE の後に投稿しても結果は変わらない)。
+o, _e, s, = run_case do |m|
+  set_comments(m, [comment(1, "me", result_body), comment(2, "me", "## 🔍 レビュー依頼（→ Codex）\n\n- 出力: process verdict と independence は別 field"),
+                   comment(3, "me", "## 🔧 指摘への対応 (round 1)\n\n直した。")])
+end
+check "request and follow-up comments after the result are not candidates", s == 0 && o.include?("review: ok (APPROVE by Codex、comment 1)")
+# 全コメントの id は重なりなく増える (他の author のコメントも含めて見る。#665 の review の F6)。
+o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body), comment(1, "someone", "x")]) }
+check "duplicate comment ids cannot be judged", s == 2
+o, _e, s, = run_case { |m| set_comments(m, [comment(2, "someone", "x"), comment(1, "me", result_body)]) }
+check "comment ids out of order (other authors too) cannot be judged", s == 2
 o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body(verdict: "REJECT", must: 1)), comment(2, "me", result_body)]) }
 check "APPROVE after REJECT is ok", s == 0
 o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body), comment(2, "me", "ありがとう")]) }

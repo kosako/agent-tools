@@ -52,11 +52,16 @@ gh pr merge "$pr" --repo "$repo" --squash --match-head-commit "$head" --subject 
    `owner: not-personal` で not ok にし、PR は読みません (agent が merge してよい repo ではない。merge は人に確認する)。
 2. PR の状態: `state` が `open` で、merge されていない (`pr: not-open`)。
 3. routing: `personal-review-routing-preflight` を、`pulls/<n>` で読んだ base と head に固定して起動します
-   (`--expect-base` / `--expect-head`)。exit 0 なら最後の行から author と reviewer を読みます。exit 1 は
+   (`--expect-base` / `--expect-head`)。exit 0 なら最後の行から author と reviewer を読みます。author と reviewer の組が
+   `personal-review-request` の表に無いとき、commit が 0 のときは判定できない (exit 2) とします。exit 1 は
    `routing: fail-closed` で not ok (人が review する)、exit 2 と出力の形の外れは判定できない (exit 2)。
-4. review の結果: gh で認証している user のコメントを全件読み (数が `pulls/<n>` の `comments` と合わなければ判定
-   できない)、最後の結果コメントを使います。結果コメントは、見出しの近い形 (`レビュー結果` を含む見出しの行) を持つ
-   コメントです。見出しが崩れた結果を読み飛ばして前の結果を使わないため、近い形で見分け、決まった形は次で確かめます。
+4. review の結果: コメントを全件読み (数が `pulls/<n>` の `comments` と合わない、id が重なりなく増える順でないときは
+   判定できない)、gh で認証している user の最後の結果コメントを使います。結果コメントの候補は、決まった 3 行 (見出し・
+   verdict・Finding summary) のどれかに近い行を持つコメントです。近いかは、行を NFKC にし、書式文字 (BOM・ゼロ幅の
+   文字など) と異体字の選択子を除いてから、行の中の語 (行の頭が記号と数字だけの `レビュー結果`、`Review process
+   verdict`、`Finding summary`。大文字小文字は問わない) で見ます。崩れた結果を読み飛ばして前の結果を使わないため、
+   候補は広く取り、決まった形は次で確かめます (#665 の review)。結果コメント以外のコメントにこれらの語を書くと、それが
+   最後の候補になって形の検査で止まります (merge しない側に倒れる)。
    - `personal-work-marker-check --kind review-result` が exit 0 (形が合う。[work-markers](work-markers.md) の v3 の 4 行)。
      exit 1 は `result-form-broken` で not ok です。
    - 見出しの reviewer が routing の reviewer と合う (`codex` → `Codex`、`claude` → `Claude`)。author が `bot(dependabot)` の
