@@ -138,6 +138,32 @@ check "closes in inline code is an example", errs.call("pr", pr.call("x", "`Clos
 check "closes in html code is an example", errs.call("pr", pr.call("x", "<code>Closes #7</code>\n")) == ["issue-link"]
 check "closes in a code block is an example", errs.call("pr", pr.call("x", "```\nCloses #7\n```\n")) == ["issue-link"]
 check "closes after the code block is read", errs.call("pr", pr.call("x", "```\nx\n```\nCloses #7\n")).empty?
+# 字下げの code block (WM001)。段落の続きと list の中の字下げは本文として読む。
+check "indented code is an example (title ref kept)", errs.call("pr", pr.call("x (#1)", "    Closes #2\n")).empty?
+check "indented code alone is not a link", errs.call("pr", pr.call("x", "    Closes #2\n")) == ["issue-link"]
+check "indented code after a paragraph and a blank", errs.call("pr", pr.call("x (#1)", "本文。\n\n    Closes #2\n")).empty?
+check "tab-indented code is an example", errs.call("pr", pr.call("x", "\tCloses #2\n")) == ["issue-link"]
+check "indented code continues across a blank line", errs.call("pr", pr.call("x (#1)", "    例\n\n    Closes #2\n")).empty?
+check "consecutive indented lines stay code", errs.call("pr", pr.call("x (#1)", "本文。\n\n    例\n    Closes #2\n")).empty?
+check "indented code right after a fence", errs.call("pr", pr.call("x (#1)", "```\nx\n```\n    Closes #2\n")).empty?
+check "paragraph after indented code is read", errs.call("pr", pr.call("x (#1)", "    例\n\nCloses #2\n")) == ["issue-mismatch"]
+check "indented paragraph continuation is read", errs.call("pr", pr.call("x (#1)", "本文\n    Closes #2\n")) == ["issue-mismatch"]
+check "indented list content is read", errs.call("pr", pr.call("x (#1)", "- 項目\n\n    Closes #2\n")) == ["issue-mismatch"]
+check "lazy list continuation is read", errs.call("pr", pr.call("x (#1)", "- 項目\nCloses #2\n")) == ["issue-mismatch"]
+check "indented code after the list ends", errs.call("pr", pr.call("x (#1)", "- 項目\n\n本文。\n\n    Closes #2\n")).empty?
+# code span は同じ長さの backtick の列で閉じ、段落の中で行をまたぐ (WM002)。
+check "double-backtick span is an example", errs.call("pr", pr.call("x (#1)", "例: `` `Closes #2` `` と書く\n")).empty?
+check "span closes only with the same length", errs.call("pr", pr.call("x (#1)", "`` a ` Closes #2 ``\n")).empty?
+check "unclosed backtick is a literal", errs.call("pr", pr.call("x (#1)", "` Closes #2\n")) == ["issue-mismatch"]
+check "multi-line code span is an example", errs.call("pr", pr.call("x (#1)", "`例:\nCloses #2` と書く\n")).empty?
+check "code span does not cross a blank line", errs.call("pr", pr.call("x (#1)", "`例\n\nCloses #2`\n")) == ["issue-mismatch"]
+check "code span does not cross a list item", errs.call("pr", pr.call("x (#1)", "- `例\n- Closes #2`\n")) == ["issue-mismatch"]
+check "multi-line html code is an example", errs.call("pr", pr.call("x (#1)", "<code>例\nCloses #2</code>\n")).empty?
+check "line number survives span stripping", doc.call("pr", pr.call("x (#1)", "本文 `a`\nCloses #2\n")).errors.first.line == 4
+# backtick の fence の info string は backtick を含まない (含めば inline の code span で、後ろの本文を隠さない)。
+check "backtick info with a backtick is not a fence", errs.call("pr", pr.call("x (#1)", "```x```\n\nCloses #2\n")) == ["issue-mismatch"]
+check "tilde fence may have a backtick in info", errs.call("pr", pr.call("x (#1)", "~~~ `a`\nCloses #2\n~~~\n")).empty?
+check "closing fence may be indented up to three spaces", errs.call("pr", pr.call("x (#1)", "```\nx\n   ```\nCloses #2\n")) == ["issue-mismatch"]
 check "other repository closes is not compared", errs.call("pr", pr.call("x (#1)", "Closes owner/repo#2\n")).empty?
 check "other repository closes alone is not a link", errs.call("pr", pr.call("x", "Closes owner/repo#2\n")) == ["issue-link"]
 check "the title line is not read for closes", errs.call("pr", pr.call("Closes #3", "本文。\n")) == ["issue-link"]
@@ -181,6 +207,12 @@ o, e, s = cli.call(%w[--kind escape-issue --stdin], "元の PR: #1\n" + ("a" * W
 check "cli over the size limit exits 2", s.exitstatus == 2 && e.include?("byte を超える")
 o, e, s = cli.call(%w[--kind escape-issue --stdin], "元の PR: #1\n\xff".b)
 check "cli invalid utf-8 exits 2", s.exitstatus == 2 && e.include?("UTF-8")
+o, e, s = cli.call(%w[--kind review-result --stdin], "")
+check "cli empty input reports missing lines", s.exitstatus == 1 && o.include?("3 error(s)")
+o, e, s = cli.call(%w[--kind pr --stdin], "")
+check "cli empty pr input exits 2", s.exitstatus == 2 && e.start_with?("work-marker-check: error:")
+o, e, s = cli.call(%w[--kind review-result --stdin], ok_result + ("a" * (WorkMarkerCheck::MAX_INPUT_BYTES - ok_result.bytesize)))
+check "cli input of exactly the limit is read", s.exitstatus == 0
 o, e, s = cli.call(%w[--kind review-result --stdin], ok_result, { "LC_ALL" => "C", "LANG" => "C" })
 check "C locale works", s.exitstatus == 0
 

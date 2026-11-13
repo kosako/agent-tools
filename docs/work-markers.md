@@ -107,9 +107,11 @@ marker=<tool home>/agent-tools/scripts/personal-work-marker-check
 ```
 
 - `pr`: 2 の最低限の条件を確かめる。本文の closing keyword は GitHub の 9 つの活用形 (close / closes / closed / fix /
-  fixes / fixed / resolve / resolves / resolved。大文字小文字は問わず、後ろの `:` を許す) で読む。code block と inline
-  code の中は例として扱い、数えない (GitHub が code の中の keyword をどう扱うかは確かめていない)。別の repository の
-  参照は、題の番号との照合に使わない。題に `(#<番号>)` が無い、本文に closing keyword が無い、は崩れではなく
+  fixes / fixed / resolve / resolves / resolved。大文字小文字は問わず、後ろの `:` を許す) で読む。code の中は例として
+  扱い、数えない (GitHub が code の中の keyword をどう扱うかは確かめていない)。code は CommonMark に近い形で見分ける
+  (完全な実装ではない): fence の code block (backtick の fence の info string に backtick があれば fence ではない)、字下げ
+  (4 つの空白か tab) の code block (段落の続きと list の中の字下げは本文として読む)、同じ長さの backtick の列で閉じる
+  code span と `<code>` (どちらも段落の中で行をまたいでよい)。別の repository の参照は、題の番号との照合に使わない。題に `(#<番号>)` が無い、本文に closing keyword が無い、は崩れではなく
   `note:` の行で知らせる (途中の PR と sweep の PR があるため)。
 - `review-result`: 3 の 3 行が、行の先頭からちょうど 1 回ずつある。code block の中も数える (数える側が code block を
   読み分けなくて済むように、重複を投稿の前に止める)。verdict が `Finding summary` の数と合う (review の output contract

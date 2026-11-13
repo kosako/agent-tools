@@ -12,9 +12,14 @@
 #   形が合う。
 #
 # 決まった行 (review-result と escape-issue) は code block の中でも数える。数える側が code block を読み分けなくて
-# 済むように、重複を投稿の前に止める。pr の本文の closing keyword は、code block と inline code の中を例として扱い、
-# 数えない (docs の中で `Closes #<番号>` を例として書けるように。GitHub が code の中の keyword をどう扱うかは
-# 確かめていない)。別の repository の参照 (`<owner>/<repo>#<番号>`) は、題の番号との照合に使わない。
+# 済むように、重複を投稿の前に止める。pr の本文の closing keyword は、code の中を例として扱い、数えない (docs の
+# 中で `Closes #<番号>` を例として書けるように。GitHub が code の中の keyword をどう扱うかは確かめていない)。code は
+# CommonMark に近い形で見分ける (完全な実装ではない):
+# - fence の code block。backtick の fence の info string は backtick を含まない (含めば inline の code span)。
+# - 字下げ (4 つの空白か tab) の code block。段落の続き (空行を挟まない字下げ) と、list の中の字下げは本文として読む。
+# - code span。同じ長さの backtick の列で閉じ、段落の中で行をまたいでよい。閉じない backtick の列は文字のまま。
+# - `<code>` と `</code>` の間 (段落の中で行をまたいでよい)。
+# 別の repository の参照 (`<owner>/<repo>#<番号>`) は、題の番号との照合に使わない。
 #
 # 何も書かず、network に触れない。出力に入力の本文は載せない (行番号・規則・説明だけ)。
 #
@@ -49,8 +54,12 @@ module WorkMarkerCheck
   PR_TITLE_REF = /\(#(?<num>\d+)\)[ \t]*\z/
   # GitHub の closing keyword (close / fix / resolve の活用形。大文字小文字は問わず、後ろの `:` を許す)。
   CLOSING = %r{(?<![A-Za-z0-9_])(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?[ \t]+(?:(?<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?<num>\d+)}i
-  FENCE_OPEN = /\A {0,3}(`{3,}|~{3,})/
-  INLINE_CODE = /`[^`\n]+`|<code>.*?<\/code>/
+  FENCE_OPEN = /\A {0,3}(?<fence>`{3,}|~{3,})(?<info>.*)\z/
+  INDENTED = /\A(?: {4}|\t)/
+  LIST_ITEM = /\A {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|\z)/
+  BLANK_LINE = /\A[ \t]*\z/
+  BACKTICKS = /`+/
+  HTML_CODE = %r{<code>.*?</code>}m
 
   class InputError < StandardError; end
 
@@ -146,27 +155,95 @@ module WorkMarkerCheck
       note(1, "no-closes", "本文に Closes が無い (Issue を閉じない途中の PR なら、このままでよい)") if local.empty?
     end
 
-    # 本文 (3 行目から) の closing keyword を [行, repo, 番号] の列で返す。code block と inline code の中は見ない。
+    # 本文 (3 行目から) の closing keyword を [行, repo, 番号] の列で返す。code の中は見ない (file の先頭の説明)。
     def body_closing_refs
       refs = []
+      text_paragraphs.each do |para|
+        stripped = strip_code(para.map(&:last).join("\n")).split("\n", -1)
+        stripped.each_with_index do |line, k|
+          line.scan(CLOSING) do
+            md = Regexp.last_match
+            refs << [para[k].first, md[:repo], md[:num]]
+          end
+        end
+      end
+      refs
+    end
+
+    # code block の外の本文を、段落 (空行・code block・list の項目の始まりで切れる) ごとに [行番号, 行] の列にまとめる。
+    def text_paragraphs
+      paragraphs = []
+      current = []
       fence = nil
+      context = :none # 直前の block: :none / :paragraph / :list / :code
+      blank_before = true
       @lines.each_with_index do |line, i|
         next if i < 2
 
         if fence
-          fence = nil if line =~ /\A {0,3}#{Regexp.escape(fence[0])}{#{fence.size},}\s*\z/
+          if line =~ /\A {0,3}#{Regexp.escape(fence[0])}{#{fence.size},}[ \t]*\z/
+            fence = nil
+            context = :none
+            blank_before = true
+          end
           next
         end
-        if (m = FENCE_OPEN.match(line))
-          fence = m[1]
+        if BLANK_LINE.match?(line)
+          paragraphs << current unless current.empty?
+          current = []
+          blank_before = true
           next
         end
-        line.gsub(INLINE_CODE, " ").scan(CLOSING) do
-          md = Regexp.last_match
-          refs << [i + 1, md[:repo], md[:num]]
+        if (m = FENCE_OPEN.match(line)) && !(m[:fence].start_with?("`") && m[:info].include?("`"))
+          paragraphs << current unless current.empty?
+          current = []
+          fence = m[:fence]
+          next
+        end
+        # 字下げの行は、code の続きか、空行の後 (list の中を除く) なら code block。段落の続きと list の中では本文。
+        if INDENTED.match?(line) && (context == :code || (blank_before && context != :list))
+          paragraphs << current unless current.empty?
+          current = []
+          context = :code
+          blank_before = false
+          next
+        end
+        if LIST_ITEM.match?(line)
+          paragraphs << current unless current.empty?
+          current = []
+          context = :list
+        elsif !(context == :list && (INDENTED.match?(line) || !blank_before))
+          # list の続き (字下げ、または空行を挟まない続き) でなければ、ふつうの段落。
+          context = :paragraph
+        end
+        current << [i + 1, line]
+        blank_before = false
+      end
+      paragraphs << current unless current.empty?
+      paragraphs
+    end
+
+    # 段落の text の code span (同じ長さの backtick の列で閉じる) と <code> の中身を空白に置き換える。改行は残すので
+    # 行の位置は変わらない。閉じない backtick の列は文字のまま残す。
+    def strip_code(text)
+      runs = []
+      text.scan(BACKTICKS) { runs << Regexp.last_match.offset(0) }
+      by_length = Hash.new { |h, k| h[k] = [] }
+      runs.each_with_index { |(b, e), idx| by_length[e - b] << idx }
+      out = text.dup
+      i = 0
+      while i < runs.size
+        b, e = runs[i]
+        j = by_length[e - b].bsearch { |x| x > i }
+        if j
+          range = b...runs[j][1]
+          out[range] = out[range].gsub(/[^\n]/, " ")
+          i = j + 1
+        else
+          i += 1
         end
       end
-      refs
+      out.gsub(HTML_CODE) { |s| s.gsub(/[^\n]/, " ") }
     end
   end
 
@@ -209,7 +286,8 @@ module WorkMarkerCheck
   end
 
   def self.read_stdin
-    bytes = $stdin.binmode.read
+    # 上限 + 1 byte までだけ読む (超えた入力を全部読まずに断る)。空の入力では read が nil を返す。
+    bytes = $stdin.binmode.read(MAX_INPUT_BYTES + 1) || +""
     raise InputError, "stdin が #{MAX_INPUT_BYTES} byte を超える" if bytes.bytesize > MAX_INPUT_BYTES
 
     text = bytes.force_encoding(Encoding::UTF_8)
