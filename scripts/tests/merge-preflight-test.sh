@@ -61,6 +61,14 @@ check "candidate includes the strict summary line", cand.call("**Finding summary
   "review request" => "## 🔍 レビュー依頼（→ Codex）\n\n- 出力: finding は 🔴 must / 🟡 should / ⚪ nit、process verdict と independence は別 field",
   "follow-up" => "## 🔧 指摘への対応 (round 1)\n\n`abc1234` で直した。",
   "prose about results" => "前回のレビュー結果を読んで直した。#664 のレビュー結果も見た。",
+  # 普通の文の中の言及は、行の頭にあっても候補にしない (merge してよい PR を止めない。#665 の review の F7)。
+  "sentence starting with the heading word" => "レビュー結果を確認しました。",
+  "sentence about the summary label" => "`Finding summary` の形式を確認しました。",
+  "sentence about the verdict label" => "Review process verdict の数え方を直した。",
+  "list item about results" => "- round 1 のレビュー結果に対応した",
+  "label in the middle of a sentence" => "前回は Review process verdict: REJECT だった。",
+  "summary label in the middle of a sentence" => "前回は Finding summary: 🔴 must 1 だった。",
+  "heading about something else" => "## 前回のレビュー結果への対応",
 }.each { |label, body| check "candidate does not catch a #{label}", !cand.call(body) }
 check "lines are split like work-marker-check (BOM and CRLF)", MP.marker_lines("\u{FEFF}## a\r\nb\n") == ["## a", "b", ""]
 
@@ -355,6 +363,12 @@ o, _e, s, = run_case do |m|
                    comment(3, "me", "## 🔧 指摘への対応 (round 1)\n\n直した。")])
 end
 check "request and follow-up comments after the result are not candidates", s == 0 && o.include?("review: ok (APPROVE by Codex、comment 1)")
+# APPROVE の後の普通のコメントは、結果への言及があっても merge を止めない (#665 の review の F7)。
+o, _e, s, = run_case do |m|
+  set_comments(m, [comment(1, "me", result_body), comment(2, "me", "レビュー結果を確認しました。"),
+                   comment(3, "me", "`Finding summary` の形式を確認しました。")])
+end
+check "plain comments mentioning results after APPROVE keep the merge ok", s == 0 && o.include?("review: ok (APPROVE by Codex、comment 1)")
 # 全コメントの id は重なりなく増える (他の author のコメントも含めて見る。#665 の review の F6)。
 o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body), comment(1, "someone", "x")]) }
 check "duplicate comment ids cannot be judged", s == 2

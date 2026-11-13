@@ -57,11 +57,14 @@ gh pr merge "$pr" --repo "$repo" --squash --match-head-commit "$head" --subject 
    `routing: fail-closed` で not ok (人が review する)、exit 2 と出力の形の外れは判定できない (exit 2)。
 4. review の結果: コメントを全件読み (数が `pulls/<n>` の `comments` と合わない、id が重なりなく増える順でないときは
    判定できない)、gh で認証している user の最後の結果コメントを使います。結果コメントの候補は、決まった 3 行 (見出し・
-   verdict・Finding summary) のどれかに近い行を持つコメントです。近いかは、行を NFKC にし、書式文字 (BOM・ゼロ幅の
-   文字など) と異体字の選択子を除いてから、行の中の語 (行の頭が記号と数字だけの `レビュー結果`、`Review process
-   verdict`、`Finding summary`。大文字小文字は問わない) で見ます。崩れた結果を読み飛ばして前の結果を使わないため、
-   候補は広く取り、決まった形は次で確かめます (#665 の review)。結果コメント以外のコメントにこれらの語を書くと、それが
-   最後の候補になって形の検査で止まります (merge しない側に倒れる)。
+   verdict・Finding summary) のどれかに近い行を持つコメントです。近い行とは、行の頭 (空白・引用・list・番号・太字や
+   code の印の後) に、見出しの印 `#` に続く `レビュー結果`、または `Review process verdict` か `Finding summary` の
+   label とコロン (大文字小文字は問わない) がある行です。行は NFKC にし、書式文字 (BOM・ゼロ幅の文字など) と異体字の
+   選択子を除いてから見ます。崩れた結果を読み飛ばして前の結果を使わないため、検査が受け付ける形はすべて候補にし、
+   決まった形は次で確かめます。一方、普通の文の中の言及 (「レビュー結果を確認した」「`Finding summary` の形を直した」
+   など) は行の形が違うので候補にせず、merge してよい PR を止めません (#665 の review の F1・F4・F7)。結果コメント以外に
+   近い行 (たとえば `## レビュー結果` で始まる見出し) を書くと、それが最後の候補になって形の検査で止まります (merge しない
+   側に倒れる)。
    - `personal-work-marker-check --kind review-result` が exit 0 (形が合う。[work-markers](work-markers.md) の v3 の 4 行)。
      exit 1 は `result-form-broken` で not ok です。
    - 見出しの reviewer が routing の reviewer と合う (`codex` → `Codex`、`claude` → `Claude`)。author が `bot(dependabot)` の

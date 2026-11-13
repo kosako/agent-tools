@@ -64,15 +64,17 @@ module MergePreflight
   RESULT_HEADING = /\A## 📋 レビュー結果（by (?<reviewer>Codex|Claude|personal-dependabot-pin-check)）/
   VERDICT_LINE = /\A\*\*Review process verdict: (?<verdict>REJECT|Warning|APPROVE)\*\*[ \t]*\z/
   TARGET_LINE = %r{\A\*\*Target: base (?<ref>\S+) (?<base>[0-9a-f]{40}) / head (?<head>[0-9a-f]{40})\*\*[ \t]*\z}
-  # 結果コメントの候補を見分ける緩い形 (#665 の review の F1 と F4)。崩れた結果コメントを読み飛ばして、前の結果を最後の
-  # 結果として使わないため、候補は「決まった 3 行 (見出し・verdict・Finding summary) のどれかに近い行を持つコメント」とする。
-  # 近いかは、行を NFKC にし、書式文字 (BOM・ゼロ幅の文字など) と異体字の選択子を除いてから、行の中の語で見る (絵文字・
-  # 空白・括弧・太字・list・字下げの揺れを問わない)。検査が受け付ける形はすべて候補になる。結果コメント以外のコメントに
-  # これらの語を書くと、それが最後の候補になり、形の検査で止まる (merge しない側に倒れる)。
+  # 結果コメントの候補を見分ける形 (#665 の review の F1・F4・F7)。候補は「決まった 3 行 (見出し・verdict・Finding summary)
+  # のどれかに近い行を持つコメント」で、近い行とは、行の頭 (空白・引用・list・番号・太字や code の印の後) に、見出しの印 `#`
+  # に続く `レビュー結果`、または `Review process verdict` か `Finding summary` の label とコロンがある行。行は NFKC にし、
+  # 書式文字 (BOM・ゼロ幅の文字など) と異体字の選択子を除いてから見る (絵文字・空白・括弧・全角・太字・list・字下げの揺れを
+  # 問わない)。崩れた結果を読み飛ばして前の結果を使わないため、検査が受け付ける形はすべて候補になる。一方、普通の文の中の
+  # 言及 (「レビュー結果を確認した」など) は行の形が違うので候補にせず、merge してよい PR を規則に無い理由で止めない。
+  LINE_HEAD = %q{[\s>*_`+\-\d.)]*}
   RESULT_NEAR = [
-    /\A[^\p{L}]*レビュー結果/,     # 見出し: 行の頭が記号・数字・空白だけで、レビュー結果 が続く
-    /review\s*process\s*verdict/i, # verdict の行
-    /finding\s*summary/i,          # Finding summary の行
+    /\A#{LINE_HEAD}#+[^\p{L}]*レビュー結果/,                       # 見出し
+    /\A#{LINE_HEAD}review\s*process\s*verdict[\s*_`]*:/i,          # verdict の行
+    /\A#{LINE_HEAD}finding\s*summary[\s*_`]*:/i,                   # Finding summary の行
   ].freeze
   IGNORABLE = /[\p{Cf}\u{FE00}-\u{FE0F}]/.freeze
 
