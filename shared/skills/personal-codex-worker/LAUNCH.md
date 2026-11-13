@@ -616,6 +616,19 @@ style=<tool home>/agent-tools/scripts/personal-ja-style-check
 { printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin   # 指摘だけ (exit 0)。直すか理由を持ってから gate へ
 ```
 
+個人 project の PR (運用 instruction の「個人 project の GitHub の操作と merge」の対象と同じ判定) では、続けて題名と本文を
+目印の検査に通す (#661。`SKILL.md` §7)。ほかの repo と、判定できないときは当てない (agent-tools の `docs/work-markers.md` の
+「対象」)。
+
+```sh
+marker=<tool home>/agent-tools/scripts/personal-work-marker-check
+{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$marker" --kind pr --stdin   # 0 のときだけ gate へ
+```
+
+(exit 1 は Issue との紐付けの崩れ (題の末尾の `(#<Issue>)` も、本文の行の先頭からの `Closes #<Issue>` の行も無い、番号が合わない)。stdout の行を
+見て題名か本文を直し、style からやり直す。exit 2 は script が無い・入力を読めない で、push も PR 作成もせず
+`Blocked at: public-safety` で返す。)
+
 ```sh
 gate=<tool home>/agent-tools/scripts/personal-public-safety-gate
 merges=$(git -C "$main" rev-list --merges "$base_oid".."refs/heads/$branch" 2> "$run/gate-publish.err") || exit 1

@@ -419,6 +419,15 @@ GitHub の操作と merge」) は、この行の値で行う。
 指摘の中身は変えない)。文体の指摘で直すのは、依頼元として自分が書く部分 (評価・採用しない理由) だけで、reviewer の指摘を
 転記した部分は指摘が出ても書き換えない (指摘の中身を変えないため)。
 
+個人 project (運用 instruction の「個人 project の GitHub の操作と merge」の対象と同じ判定) では、gate の前に本文を
+配備済みの `personal-work-marker-check --kind review-result --stdin` (`<tool home>/agent-tools/scripts/`) にも通す (#661)。
+見出し・`Review process verdict:`・`Finding summary:` の 3 行は計測が読む目印で、exit 0 のときだけ gate に進む。exit 1 は
+形の崩れなので、出力の行 (行番号と規則) を見て雛形の形に直してから通し直す。verdict が finding の数と合わない
+(`verdict-mismatch`) ときは、転記の誤りなら直す。reviewer の出力そのものが合わないときは、依頼元が verdict を書き換えず、
+投稿せずに人に伝える (reviewer の判定を依頼元が変えないため)。exit 2 (script が無い・入力を読めない) のときも投稿せず、
+人に伝える。ほかの repo では、この検査を当てない (その repo の決まりに合わせる。判定
+できないときも同じ。agent-tools の `docs/work-markers.md` の「対象」)。
+
 レビュアーの指摘を転記するときは要約しすぎない。一方で、明らかに誤検知と判断した指摘は黙って
 削らず、**転記したうえで依頼元としての評価（採用しない理由）を併記**する。
 

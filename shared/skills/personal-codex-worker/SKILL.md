@@ -409,7 +409,10 @@ worker の最終 message が「完了」で、`依頼` の受け入れ条件を�
    各 commit の差分を漏れなく検査の入力にするため、gate の前に範囲が直線の履歴であることを確かめ、merge commit が
    あれば gate に通さずに同じく `Blocked at: public-safety` で止める (#522)。手順は `LAUNCH.md` §9。
    PR の題名と本文は先に書き、`personal-ja-style-check --stdin` に通して指摘を直すか理由を持ってから gate に入れる
-   (指摘だけで止めない。#556)。worker の commit message は §4 の brief の文章の規則で worker が通す (orchestrator は
+   (指摘だけで止めない。#556)。個人 project の PR では、題名と本文を `personal-work-marker-check --kind pr --stdin` にも
+   通し、exit 0 のときだけ gate に進む (#661。計測が読む Issue との紐付けの目印。exit 1 は題名か本文を直して通し直し、
+   exit 2 は push も PR 作成もせず `Blocked at: public-safety`)。ほかの repo では当てない (その repo の PR の template に
+   合わせる。agent-tools の `docs/work-markers.md` の「対象」)。worker の commit message は §4 の brief の文章の規則で worker が通す (orchestrator は
    書き換えない)。
 4. `LAUNCH.md` §9 で main の repo slug と origin の push URL の一致を確かめ、push して PR を作る。
    確かめられなければ `Blocked at: public-safety`。PR 作成には `--repo "$slug"` を渡す。

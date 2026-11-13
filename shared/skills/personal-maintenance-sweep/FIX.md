@@ -221,6 +221,16 @@ worktree であること・`HEAD` が `base` で detached であること・clea
   style="$HOME/.claude/agent-tools/scripts/personal-ja-style-check"
   { printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin   # 指摘だけ (exit 0)
   ```
+- 個人 project の repo (運用 instruction の「個人 project の GitHub の操作と merge」の対象と同じ判定) では、題名と本文を
+  目印の検査にも通し、exit 0 のときだけ gate に入れます (#661)。題名の `(sweep #<Issue>)` は題の目印に当たらないので、
+  本文の `Closes #<所見 Issue>` で紐付きます (`note:` の行が出るだけで、exit 0)。exit 1 は本文の `Closes` の崩れなので
+  直してから通し直し、exit 2 (script が無い・読めない) は push も PR もせずに報告します。ほかの repo と、判定できない
+  ときは当てません (agent-tools の `docs/work-markers.md` の「対象」)。
+
+  ```sh
+  marker="$HOME/.claude/agent-tools/scripts/personal-work-marker-check"
+  { printf '%s\n\n' "$title" && cat "$body_file"; } | "$marker" --kind pr --stdin   # 0 のときだけ gate へ
+  ```
 - PR の作成の **前に** `fixes.json` を `pushed` にし、作成の **後に** PR 番号と head の OID を書いて `pr_created` に
   します。作成の応答を失ったら、作り直さず、branch に紐づく PR を remote で照合してから続けます。
 

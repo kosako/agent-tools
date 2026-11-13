@@ -3,16 +3,26 @@
 開発の流れを外から数えるために、PR と作業の中に残す目印の約束 (#658)。数える側はこの repository の外にあり、
 この約束に沿って GitHub の記録を読む。この repository は数える側に依存しない (数える側の名前や置き場は書かない)。
 
-- 版: **v1** (2026-11-13)
+- 版: **v2** (2026-11-13)
 - 約束に入るのは、下の表と各節に書いた目印の形だけ。目印の行より外の文言 (説明の文、見出しの後ろの補足) は
   約束に入らず、自由に変えてよい。
+
+## 対象
+
+目印と下の「検査」は、**個人 project** だけに当てる。判定は、運用 instruction の「個人 project の GitHub の操作と
+merge」の対象と同じ (GitHub の API で、repo の owner の type が `User` で、gh で認証している user の login と一致する)。
+
+- 会社や別の組織の repo、他人の repo では、目印を強制しない。その repo の PR / Issue の template や contributing の
+  決まりがあれば、そちらに合わせる。`escape` の label も作らない。
+- 判定できないときも強制しない。目印と検査は数えるための約束で、安全の境界ではない (検査を飛ばしても害は無い)。
+- 数える側も、個人 project の repo だけを数える。
 
 ## 目印の一覧
 
 | 目印 | 形 | 残る場所 | 書く者 | 数えるもの |
 | --- | --- | --- | --- | --- |
 | AI の trailer | `Co-Authored-By: <name> <email>` | commit message の末尾の trailer block | commit する AI | どの AI が書いたか |
-| Issue との紐付け | PR の題の末尾の `(#<Issue>)` と、本文の `Closes #<Issue>` | PR の題と本文 (squash の commit の題にも残る) | PR を作る agent | Issue と PR の対応、起票から merge までの時間 |
+| Issue との紐付け | PR の題の末尾の `(#<Issue>)` と、本文の行の先頭からの `Closes #<Issue>` の行 | PR の題と本文 (squash の commit の題にも残る) | PR を作る agent | Issue と PR の対応、起票から merge までの時間 |
 | review の結果 | 結果コメントの決まった 3 行 | PR のコメント | `personal-review-request` (gh で認証した user として投稿) | review の往復の回数、verdict、finding の数 |
 | merge 後に見つかった誤り | label `escape` と、本文の `元の PR: #<PR>` | Issue | Issue を立てる agent か人 | merge の後に誤りが見つかった PR |
 
@@ -28,10 +38,16 @@ name の先頭で区分する。この約束は trailer の形を増やさない
 
 - PR の題の末尾に、対応する Issue を `(#<番号>)` で書く。squash merge では GitHub が PR の番号を後ろに足すので、
   commit の題は `… (#<Issue>) (#<PR>)` になる。
-- Issue を閉じる PR は、本文に `Closes #<番号>` を書く
+- Issue を閉じる PR は、本文に、行の先頭から `Closes #<番号>` の行を書く (1 行に 1 つ。後ろに文字を続けない。別の
+  repository の Issue は `Closes <owner>/<repo>#<番号>`)
   ([personal-project-operating-loop](../shared/workflows/personal-project-operating-loop.md) の「PR の完了条件」)。
   1 つの Issue を複数の PR で進めるとき、途中の PR は `Closes` を書かず、題の `(#<番号>)` だけで紐付く。
 - 数える側は、`Closes` による対応 (GitHub の closing references) を先に使い、無ければ題の末尾の `(#<番号>)` を使う。
+- そのため最低限の条件は、題の末尾の `(#<番号>)` か本文の `Closes #<番号>` の行の少なくとも一方があること。両方ある
+  ときは、題の番号が `Closes` の行の番号に含まれる。`personal-maintenance-sweep` の fix の PR の題
+  (`… (sweep #<番号>)`) は題の目印に当たらず、本文の `Closes` の行で紐付く。
+- GitHub は、決まった形の外の closing keyword (文の中の `fixes #<番号>` など) も閉じる Issue として読むことがある。
+  閉じるつもりの Issue は決まった形の行に書き、例として書くときは番号を `<番号>` のように書く。
 
 ## 3. review の結果
 
@@ -80,13 +96,53 @@ merge 済みの PR が入れた誤りを、後から直す Issue に付ける。
 - 外部の tool の版が上がって、後から挙動が変わったもの。元の PR は当時の挙動どおりだった。
 - 元の PR が分からない古い不具合。直すのはよいが、数える側が PR に結び付けられないので `escape` は付けない。
 
+## 検査 (personal-work-marker-check)
+
+目印の形は、投稿の前に配備済みの `personal-work-marker-check` (`<tool home>/agent-tools/scripts/`) で確かめる (#661)。
+skill の指示だけでは形の崩れを止められないため。実体は `shared/scripts/personal-work-marker-check.rb`、test は
+`scripts/tests/work-marker-check-test.sh`。
+
+どの kind も Markdown の構文を解釈しない。決まった形の行を行の先頭から読み、code block の中でも数える。近似の
+Markdown の解釈は、list・字下げ・fence の組み合わせの境界で取りこぼすため (#663 の review)。例を書くときは、決まった
+形にならないように書く (番号を `<番号>` にする、行の先頭に空白を入れる)。
+
+```sh
+marker=<tool home>/agent-tools/scripts/personal-work-marker-check
+{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$marker" --kind pr --stdin   # 1 行目に題、空行、本文
+"$marker" --kind review-result --stdin < "$body_file"                           # 結果コメント
+"$marker" --kind escape-issue --stdin < "$body_file"                            # escape の Issue の本文
+```
+
+- `pr`: 2 の最低限の条件を確かめる。本文で読むのは、行の先頭からの `Closes #<番号>` の行 (2 の形) だけ。別の
+  repository の参照は、題の番号との照合に使わない。決まった形の外にある GitHub の closing keyword (9 つの活用形:
+  close / closes / closed / fix / fixes / fixed / resolve / resolves / resolved。大文字小文字は問わず、後ろの `:` を
+  許す) は、紐付けとしては数えず、`note:` の行で知らせる (GitHub が閉じる Issue として読むことがあるため)。題に
+  `(#<番号>)` が無い、本文に `Closes` の行が無い、も崩れではなく `note:` で知らせる (途中の PR と sweep の PR があるため)。
+- `review-result`: 3 の 3 行が、行の先頭からちょうど 1 回ずつある (code block の中も数えるので、数える側が code block を
+  読み分けなくて済むように、重複を投稿の前に止める)。verdict が `Finding summary` の数と合う (review の output contract
+  の表: must があれば REJECT、must 0 で should があれば Warning、どちらも 0 なら APPROVE)。
+- `escape-issue`: 4 の `元の PR:` の行が、行の先頭からちょうど 1 回ある。
+- exit: 0 = 形が合う / 1 = 形が崩れている (投稿しない。stdout の行に行番号と規則が出る) / 2 = usage・入力を読めない
+  (1 MiB を超える、UTF-8 として読めない、`pr` の 2 行目が空でない、題が空)・想定外の例外。何も書かず、network に
+  触れず、出力に入力の本文を載せない。
+- 呼ぶ場所: review の結果コメントの投稿 (`personal-review-request` の手順 4)、PR の作成
+  ([personal-project-operating-loop](../shared/workflows/personal-project-operating-loop.md) の「PR の完了条件」、
+  `personal-codex-worker` の §7 と `LAUNCH.md` §9、`personal-maintenance-sweep` の `FIX.md` の「PR」)、`escape` の
+  Issue の起票 (operating-loop の「merge 後に見つかった誤り」)。どこでも文体の検査と public-safety の gate と並べ、
+  個人 project のときだけ呼ぶ (上の「対象」)。
+- 配線は `scripts/tests/work-marker-wiring-test.sh` が文言で確かめる (振る舞いの保証ではない)。
+
 ## 版と変更の決まり
 
 - 目印の形 (上の表と各節の形) を変えるときは、この文書の版を上げ、下の変更履歴に 1 行足し、変更を Issue に
   残す。数える側は版ごとに読み分ける。
-- 形を変える PR では、この文書と、目印を書く側 (`TEMPLATES.md`・運用の docs) を同じ PR で直す。
+- 形を変える PR では、この文書と、目印を書く側 (`TEMPLATES.md`・運用の docs) と、検査の script と test を同じ PR で
+  直す。
 - 古い版の形で残った過去の記録は書き換えない。数える側が古い版の形で読む。
 
 ## 変更履歴
 
 - v1 (2026-11-13、#658): trailer・Issue との紐付け・review の結果の 3 行を約束にし、`escape` を新しく足した。
+- v2 (2026-11-13、#661): 本文の `Closes` を、行の先頭からの `Closes #<番号>` の 1 行に絞った (Markdown を解釈せずに
+  読めるように)。「対象」(個人 project だけ) と「検査」の節を足し、2 の最低限の条件を明記した。review の結果の 3 行と
+  `escape` の行は v1 と同じ。
