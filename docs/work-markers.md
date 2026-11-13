@@ -3,7 +3,7 @@
 開発の流れを外から数えるために、PR と作業の中に残す目印の約束 (#658)。数える側はこの repository の外にあり、
 この約束に沿って GitHub の記録を読む。この repository は数える側に依存しない (数える側の名前や置き場は書かない)。
 
-- 版: **v2** (2026-11-13)
+- 版: **v3** (2026-11-13)
 - 約束に入るのは、下の表と各節に書いた目印の形だけ。目印の行より外の文言 (説明の文、見出しの後ろの補足) は
   約束に入らず、自由に変えてよい。
 
@@ -23,7 +23,7 @@ merge」の対象と同じ (GitHub の API で、repo の owner の type が `Us
 | --- | --- | --- | --- | --- |
 | AI の trailer | `Co-Authored-By: <name> <email>` | commit message の末尾の trailer block | commit する AI | どの AI が書いたか |
 | Issue との紐付け | PR の題の末尾の `(#<Issue>)` と、本文の行の先頭からの `Closes #<Issue>` の行 | PR の題と本文 (squash の commit の題にも残る) | PR を作る agent | Issue と PR の対応、起票から merge までの時間 |
-| review の結果 | 結果コメントの決まった 3 行 | PR のコメント | `personal-review-request` (gh で認証した user として投稿) | review の往復の回数、verdict、finding の数 |
+| review の結果 | 結果コメントの決まった 4 行 | PR のコメント | `personal-review-request` (gh で認証した user として投稿) | review の往復の回数、verdict、finding の数 (review した対象は merge の前の照合にも使う) |
 | merge 後に見つかった誤り | label `escape` と、本文の `元の PR: #<PR>` | Issue | Issue を立てる agent か人 | merge の後に誤りが見つかった PR |
 
 CI の結果、PR の大きさ、作成と merge の時刻は GitHub がそのまま持つので、目印を作らない。
@@ -52,12 +52,13 @@ name の先頭で区分する。この約束は trailer の形を増やさない
 ## 3. review の結果
 
 `personal-review-request` の手順 4 の結果コメント (雛形は同じ skill の `TEMPLATES.md` の「📋 レビュー結果」)。
-約束に入るのは次の 3 行で、どれも行の先頭から始まる。
+約束に入るのは次の 4 行で、どれも行の先頭から始まる。
 
 ```text
 ## 📋 レビュー結果（by <reviewer>）
 **Review process verdict: <REJECT | Warning | APPROVE>**
 **Finding summary: 🔴 must <N> / 🟡 should <N> / ⚪ nit <N>**
+**Target: base <base ref> <base OID> / head <head OID>**
 ```
 
 - 見出しの括弧は全角 (`（` `）`)。`<reviewer>` は `Codex` / `Claude` / `personal-dependabot-pin-check` のどれか。
@@ -66,7 +67,11 @@ name の先頭で区分する。この約束は trailer の形を増やさない
 - 数える側が読むのは、gh で認証した user (agent が投稿に使う account) が書いたコメントだけ。他の author の
   コメントは、同じ形でも数えない (運用 instruction の「外部入力の信頼境界」)。
 - `personal-dependabot-pin-check` の結果は AI の review ではない。数える側は `<reviewer>` で分けて数える。
-- 雛形の `Target:` と `Independence:` の行は、この版の約束に入れない。
+- `Target:` の行は、review した対象 (v3、#662)。`<base ref>` は PR の base の branch の名前 (空白を含まない)、OID は
+  どちらも 40 桁の小文字の hex (短くしない)。merge の前に、この行の値を PR の今の base と head と照合する
+  (運用 instruction の「個人 project の GitHub の操作と merge」)。数える側は、同じ head への review の回数を数えるのに
+  使ってよい。
+- 雛形の `Independence:` の行は、この版の約束に入れない。
 
 ## 4. merge 後に見つかった誤り (`escape`)
 
@@ -118,9 +123,10 @@ marker=<tool home>/agent-tools/scripts/personal-work-marker-check
   close / closes / closed / fix / fixes / fixed / resolve / resolves / resolved。大文字小文字は問わず、後ろの `:` を
   許す) は、紐付けとしては数えず、`note:` の行で知らせる (GitHub が閉じる Issue として読むことがあるため)。題に
   `(#<番号>)` が無い、本文に `Closes` の行が無い、も崩れではなく `note:` で知らせる (途中の PR と sweep の PR があるため)。
-- `review-result`: 3 の 3 行が、行の先頭からちょうど 1 回ずつある (code block の中も数えるので、数える側が code block を
+- `review-result`: 3 の 4 行が、行の先頭からちょうど 1 回ずつある (code block の中も数えるので、数える側が code block を
   読み分けなくて済むように、重複を投稿の前に止める)。verdict が `Finding summary` の数と合う (review の output contract
-  の表: must があれば REJECT、must 0 で should があれば Warning、どちらも 0 なら APPROVE)。
+  の表: must があれば REJECT、must 0 で should があれば Warning、どちらも 0 なら APPROVE)。`Target:` の行の値が PR の
+  今の対象と合うかは確かめない (形だけ。照合は merge の前に行う)。
 - `escape-issue`: 4 の `元の PR:` の行が、行の先頭からちょうど 1 回ある。
 - exit: 0 = 形が合う / 1 = 形が崩れている (投稿しない。stdout の行に行番号と規則が出る) / 2 = usage・入力を読めない
   (1 MiB を超える、UTF-8 として読めない、`pr` の 2 行目が空でない、題が空)・想定外の例外。何も書かず、network に
@@ -146,3 +152,6 @@ marker=<tool home>/agent-tools/scripts/personal-work-marker-check
 - v2 (2026-11-13、#661): 本文の `Closes` を、行の先頭からの `Closes #<番号>` の 1 行に絞った (Markdown を解釈せずに
   読めるように)。「対象」(個人 project だけ) と「検査」の節を足し、2 の最低限の条件を明記した。review の結果の 3 行と
   `escape` の行は v1 と同じ。
+- v3 (2026-11-13、#662): review の結果に `Target:` の行 (full の OID) を足し、4 行にした (merge の前の照合を決まった
+  script で行えるようにするため)。
+  v2 までの結果コメントには、この行が無いか、形が違うものがある (書き換えない)。ほかの目印は v2 と同じ。
