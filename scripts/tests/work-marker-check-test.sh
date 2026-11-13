@@ -1,7 +1,9 @@
 #!/bin/sh
 # personal-work-marker-check.rb の self-test (#661)。
-# 規則 (Document) は require して直接、CLI は ruby で起動して確かめる。fixture は docs/work-markers.md の v1 の形と、
-# 実際に投稿した結果コメント (#659) の形から作る。network access なし。何も書かないことは tree_snapshot で確かめる。
+# 規則 (Document) は require して直接、CLI は ruby で起動して確かめる。fixture は docs/work-markers.md の v2 の形
+# (pr の本文の Closes の行は v2 で絞った形、review の結果の 3 行と escape の行は v1 から同じ) と、実際に投稿した結果
+# コメント (#659) の形から作る。#663 の review の round 1・2 の入力の例も含む。network access なし。何も書かないことは
+# tree_snapshot で確かめる。
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

@@ -22,7 +22,8 @@
 #
 # 使い方: personal-work-marker-check --kind (pr|review-result|escape-issue) --stdin
 # 出力: 形の崩れごとに `-:<行>: [<規則>] <説明>` を stdout に出す (行が決まらないときは 0)。崩れではない注意は
-# `-:<行>: note: [<規則>] <説明>`。最後に `work-marker-check: <kind>: ok|<N> error(s) (markers v1)` の行を出す。
+# `-:<行>: note: [<規則>] <説明>`。最後に `work-marker-check: <kind>: ok|<N> error(s) (markers v<版>)` の行を出す
+# (<版> は MARKERS_VERSION。今は 2)。
 #
 # exit: 0 = 形が合う / 1 = 形が崩れている (投稿しない) / 2 = usage・入力を読めない (1 MiB を超える、UTF-8 として
 # 読めない、pr の 2 行目が空でない、pr の題が空)・想定外の例外。stderr の message に入力の text は載せない。

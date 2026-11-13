@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:3db0390b8383f5fb3b2531bb49d19c14a53315a9a412f55558d2d02d034f51c3
+  approved_build_id: sha256:a457da749e31338654a2489debf794cbca4cf19cee199215dda27caab09dfa4c
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-work-marker-check.rb
