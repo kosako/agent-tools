@@ -4,7 +4,7 @@
 # - 運用 instruction に「## 日本語の文章」の節があり、4 つの型を避ける原則と、投稿・記録の前に
 #   `personal-ja-style-check --stdin` に通して指摘を直すか理由を持つこと、gate ではないことが句としてある。
 # - personal-review-request の手順 2 に、personal-post-check でまとめてかける句 (文体の検査がその中でかかること)、
-#   指摘だけで投稿を止めない句と command の行、手順 4 に reviewer の指摘を転記した部分は書き換えない句、手順 5 に
+#   指摘だけで投稿を止めない句と command の行 (同じ sh の block で body を定める)、手順 4 に reviewer の指摘を転記した部分は書き換えない句、手順 5 に
 #   後続のコメントも通す句がある (#676 から、この 3 つの手順は personal-post-check 経由。exit code の扱いは
 #   post-check-wiring-test が見る)。
 # - personal-session-handoff の手順 3 に、publish の前に --dry-run の本文を通す句と、作業ログの本文を通す句がある。
@@ -23,7 +23,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=${1:-"$script_dir/../.."}
-ruby - "$root" <<'RUBY'
+ruby -r"$script_dir/lib/markdown_units" - "$root" <<'RUBY'
 require "json"
 require "open3"
 
@@ -33,21 +33,8 @@ squash = ->(s) { s.gsub(/\s+/, "") }
 read = ->(rel) { File.read(File.join(root, rel), encoding: "UTF-8") }
 
 # 見出し (`#` の数で level を決める) から、同じか上の level の次の見出しまで (code block の中の行は見出しとみなさない)。
-# 無ければ nil。
-section = lambda do |text, heading|
-  lines = text.lines
-  start = lines.index { |l| l.chomp == heading }
-  next nil if start.nil?
-  level = heading[/\A#+/].size
-  fence = false
-  body = []
-  lines[(start + 1)..-1].each do |l|
-    fence = !fence if l =~ /\A\s*```/
-    break if !fence && l =~ /\A(#+) / && $1.size <= level
-    body << l
-  end
-  body.join
-end
+# 無ければ nil。見出しは空白を除いて比べる (読み方と、受ける整形の範囲は lib/markdown_units.rb)。
+section = ->(text, heading) { MarkdownUnits.section(text, heading) }
 
 check = lambda do |rel, heading, label, phrase|
   body = section.call(read.call(rel), heading)
@@ -79,15 +66,17 @@ check.call(request, step2, "文体の検査がかかる句",
 check.call(request, step2, "止めない句",
            "文体の検査は指摘だけで、投稿を止める gate ではありません。")
 check.call(request, step2, "手順 4・5 も同じ句", "手順 4 の結果コメントと手順 5 の後続のコメントも同じです")
-check.call(request, step2, "command の行", %q!"$check" --body-file "$body"!)
-# 検査の block は、投稿と同じ本文 file (`body`) を自分で定める (後の block の代入に頼ると、掲載順では未設定の
-# `body` を渡すことになる)。
+# 検査の command の行がある sh の block を、fence ごとに切り出して探す (行継続はつなげてから見る)。その block は、投稿と
+# 同じ本文 file (`body`) を自分で定める (別の block や地の文の代入に頼ると、掲載順では未設定の `body` を渡すことになる)。
 step2_body = section.call(read.call(request), step2).to_s
-check_block = step2_body[/^[ \t]*```sh[ \t]*\n((?:(?![ \t]*```).*\n)*?)[ \t]*"\$check"[ \t]+--body-file[ \t]+"\$body"/m, 1]
+check_command = /"\$check"\s+--body-file\s+"\$body"/
+check_block = MarkdownUnits.blocks(step2_body).select { |info, _| info == "sh" }.map(&:last).find { |b| b.match?(check_command) }
 if check_block.nil?
-  errors << "#{request} の手順 2 に検査 (personal-post-check) の sh の block が無い"
-elsif !check_block.match?(/^[ \t]*body=/)
-  errors << "#{request} の手順 2 の block で `body` の代入が検査より前に無い"
+  errors << "#{request} の手順 2 に検査 (personal-post-check) の command の行がある sh の block が無い"
+else
+  assign_at = check_block =~ /^[ \t]*body=/
+  errors << "#{request} の手順 2 の検査の block で、`body` の代入が検査の command より前に無い" \
+    if assign_at.nil? || assign_at > (check_block =~ check_command)
 end
 check.call(request, "### 4. 結果を PR に投稿", "転記した部分を書き換えない句",
            "文体の指摘で直すのは、依頼元として自分が書く部分 (評価・採用しない理由) だけで、reviewer の指摘を転記した部分は指摘が出ても書き換えない (指摘の中身を変えないため)。")
