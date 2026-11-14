@@ -90,6 +90,19 @@ check=<tool home>/agent-tools/scripts/personal-post-check
 
 exit 0 を確かめてから、別の呼び出しで投稿します。検査と投稿を 1 つの command に連ねません。
 
+## 組み込み先
+
+- 運用 instruction の「public safety」が、Issue / PR の題名・本文・コメントの投稿の前の検査を、この script でまとめてかけると
+  宣言します (#676 の 2 本目)。
+- `personal-review-request` の手順 2 (依頼)・4 (結果)・5 (後続) のコメントは、この script を通してから投稿します。結果の
+  コメントは、個人 project のとき `--marker-kind review-result` を付けます。
+- operating-loop の「Public safety check」「PR の完了条件」「merge 後に見つかった誤り」が、PR と Issue の作成の前の使い方
+  (`--marker-kind pr`、`--marker-kind escape-issue`) を指します。
+- `personal-codex-worker` の PR の作成と `personal-maintenance-sweep` の起票・fix の PR は、今の手順 (検査を 1 つずつ) のままです。
+  PR の作成では、gate に渡す入力が題名と本文より広く (各 commit の差分、全 commit の message、branch 名を合わせて渡す)、
+  この script の入力に収まりません。
+- `scripts/tests/post-check-wiring-test.sh` が、これらの文言と、手順の形 (検査と投稿が別の block) を確かめます。
+
 ## 持たないもの
 
 - 投稿、file の書き込み、network への接続。

@@ -3,8 +3,10 @@
 # 文言の検知で、振る舞いの保証ではない (期待挙動は各 skill の evals.json の case。model eval は自動で走らない)。
 # - 運用 instruction に「## 日本語の文章」の節があり、4 つの型を避ける原則と、投稿・記録の前に
 #   `personal-ja-style-check --stdin` に通して指摘を直すか理由を持つこと、gate ではないことが句としてある。
-# - personal-review-request の手順 2 に、gate の前に通す句と指摘だけで投稿を止めない句と command の行、手順 4 に
-#   reviewer の指摘を転記した部分は書き換えない句、手順 5 に後続のコメントも通す句がある。
+# - personal-review-request の手順 2 に、personal-post-check でまとめてかける句 (文体の検査がその中でかかること)、
+#   指摘だけで投稿を止めない句と command の行、手順 4 に reviewer の指摘を転記した部分は書き換えない句、手順 5 に
+#   後続のコメントも通す句がある (#676 から、この 3 つの手順は personal-post-check 経由。exit code の扱いは
+#   post-check-wiring-test が見る)。
 # - personal-session-handoff の手順 3 に、publish の前に --dry-run の本文を通す句と、作業ログの本文を通す句がある。
 # - personal-codex-worker の §4 の brief の一覧に「文章の規則:」の bullet があり、worker が commit の前に通し gate で
 #   ないことが句としてある (一覧の外にだけあっても worker には届かない)。§7 に題名と本文を通す句、LAUNCH.md の §9 に
@@ -70,25 +72,27 @@ check.call(rules, ja, "gate ではない宣言",
 
 request = "shared/skills/personal-review-request/SKILL.md"
 step2 = "### 2. 依頼コメントを準備・投稿 (投稿は write-authorized のみ)"
-check.call(request, step2, "gate の前に通す句",
-           "本文を書いたら、まず `personal-ja-style-check --stdin` に通します (#556。運用 instruction の「日本語の文章」)。")
+check.call(request, step2, "まとめてかける句",
+           "本文を書いたら、配備済みの `personal-post-check` (`<tool home>/agent-tools/scripts/`。#676。agent-tools の `docs/post-check.md`) で、投稿の前の検査を 1 回でかけます。")
+check.call(request, step2, "文体の検査がかかる句",
+           "かかるのは、文体の検査 (`personal-ja-style-check`。#556。運用 instruction の「日本語の文章」) と public-safety の gate (#413。運用 instruction の public safety) です。")
 check.call(request, step2, "止めない句",
-           "指摘だけで投稿を止めません (指摘があっても exit 0): 指摘を読んで直すか、そのままにする理由を持ってから、下の gate に進みます。")
-check.call(request, step2, "手順 4・5 も同じ句", "手順 4 の結果コメントと手順 5 の後続のコメントも同じです。")
-check.call(request, step2, "command の行", %q!"$style" --stdin < "$body"!)
-# 文体の検査の block は、投稿と同じ本文 file (`body`) を自分で定める (後の block の代入に頼ると、掲載順では未設定の
-# `body` へのリダイレクトになる)。
+           "文体の検査は指摘だけで、投稿を止める gate ではありません。指摘を読んで本文を直してかけ直すか、そのままにする理由を持って `--style-reviewed` を付けてかけ直します。")
+check.call(request, step2, "手順 4・5 も同じ句", "手順 4 の結果コメントと手順 5 の後続のコメントも同じです")
+check.call(request, step2, "command の行", %q!"$check" --body-file "$body"!)
+# 検査の block は、投稿と同じ本文 file (`body`) を自分で定める (後の block の代入に頼ると、掲載順では未設定の
+# `body` を渡すことになる)。
 step2_body = section.call(read.call(request), step2).to_s
-style_block = step2_body[/^```sh\n((?:(?!^```).*\n)*?)"\$style" --stdin < "\$body"/m, 1]
-if style_block.nil?
-  errors << "#{request} の手順 2 に文体の検査の sh の block が無い"
-elsif !style_block.match?(/^body=/)
-  errors << "#{request} の手順 2 の block で `body` の代入が文体の検査より前に無い"
+check_block = step2_body[/^```sh\n((?:(?!^```).*\n)*?)"\$check" --body-file "\$body"/m, 1]
+if check_block.nil?
+  errors << "#{request} の手順 2 に検査 (personal-post-check) の sh の block が無い"
+elsif !check_block.match?(/^body=/)
+  errors << "#{request} の手順 2 の block で `body` の代入が検査より前に無い"
 end
 check.call(request, "### 4. 結果を PR に投稿", "転記した部分を書き換えない句",
            "文体の指摘で直すのは、依頼元として自分が書く部分 (評価・採用しない理由) だけで、reviewer の指摘を転記した部分は指摘が出ても書き換えない (指摘の中身を変えないため)。")
 check.call(request, "### 5. 後続のやり取りも PR 上で", "後続も通す句",
-           "後続のコメントも、投稿の前に手順 2 と同じ 2 つの検査 (`personal-ja-style-check --stdin` と public-safety の gate) に通します。")
+           "後続のコメントも、投稿の前に手順 2 と同じく `personal-post-check` に通します (文体の検査と public-safety の gate)。")
 
 handoff = "shared/skills/personal-session-handoff/SKILL.md"
 step3 = "### 3. 記録する"
