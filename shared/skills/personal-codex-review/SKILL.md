@@ -229,7 +229,18 @@ production review の process verdict mapping は
 `personal-production-rail/references/review-output-contract.md` を単一の正本として参照し、ここへ
 複製しません。vendored `policies/review.md` は検出・判定観点として使います。
 
+起動を配備済みの `personal-codex-launch` で行うとき (`LAUNCH.md`。#672) は、上の一覧のうち、制約・境界と値の受け渡し・
+読まないもの・出力契約の基本 (verdict と Finding summary の行、`file:line` と severity、絶対 path と link を書かない)・
+base mode の対象の取得の command を、script が brief の先頭に足します。brief の file には、review purpose と
+independence、task / acceptance criteria、重点観点 (と、commit mode / uncommitted の対象の読み方、2 回目以降の
+追加の情報) を書きます。雛形は `BRIEF-TEMPLATE.md`。script が無い環境で手で組むときは、一覧のすべてを brief に書きます。
+
 ## 5. 実行と完了判定
+
+起動と回収は、配備済みの `personal-codex-launch` (`launch` と `collect`) で行います (`LAUNCH.md` の先頭の節。#672)。
+script は下の契約 (flag の固定、model / effort / provider / otel の引き継ぎ、escape、完了の判定、待ち方、pane の後始末) を
+実装していて、`STARTED` / `BLOCKED` / `RUNNING` / `DONE` を JSON で返します。script が配備されていない環境だけ、下の
+とおり手で組みます (契約は同じ)。
 
 run 用の directory を `mktemp -d` で作り、`brief.md`、`result.md` (出力先)、`done.txt` (完了記録)、
 `run.zsh` を置きます。script の雛形、herdr 経由 / 直接起動 / 人手 hand-off の各手順、pane の後始末の

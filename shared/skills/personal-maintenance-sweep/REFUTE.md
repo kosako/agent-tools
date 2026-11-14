@@ -45,6 +45,21 @@
 personal-repo-audit の `CODEX-LAUNCH.md` と同じ起動を使います (境界の flag、capability preflight、起動
 経路、run script、完了の判定、停止)。違うのは次の 5 点だけです。
 
+起動と回収は、`CODEX-LAUNCH.md` の先頭の節のとおり、配備済みの `personal-codex-launch` で行います (#672)。
+`launch --kind json --schema <この skill の refutation.schema.json> --effort <プリセットの値> --label refute-<run id>`
+`--run-root <起動の前に記録した directory>` で起動します (記録は `RECORD.md` の `refute-run`)。
+
+script で起動するときは、下の表と brief の規則のうち、次の 3 つを読み替えます。
+
+- 入力の `findings.json` の置き場: script の run dir は `launch` が作るので、起動の前には在りません。呼び出し側が、
+  起動の前に記録した directory (`--run-root` に渡すもの) の直下に `findings.json` を置き、brief には
+  `<起動の前に記録した directory>/findings.json` の場所を書きます。表と brief の規則の「run dir の `findings.json`」は、
+  手で組むとき (run dir を自分で作るとき) の置き場です。
+- schema: `--schema` に渡した file を、script が run dir に `schema.json` として写します (自分で copy しません)。
+- brief の制約: read-only、subagent なし、data の境界、値の受け渡し、heredoc なし、network に触れない、local の note を
+  読まない、は script が brief の先頭に足します。brief には、入力の file の場所、「判定の規則」の全文、下の `upstream` と
+  GitHub にしか根拠の無い所見の扱い、出力 (入力の所見 1 件につき 1 つの判定) を書きます。
+
 | 項目 | 監査 (CODEX-LAUNCH.md) | 反証 |
 | --- | --- | --- |
 | run dir に置く schema | repo-audit の `findings.schema.json` | この skill の `refutation.schema.json` (copy して置く) |

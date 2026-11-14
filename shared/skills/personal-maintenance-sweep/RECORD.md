@@ -266,6 +266,20 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/maintenance-sweep/<owner>/<rep
 `codex-run` と `refute-run` は、再開で Codex を起動し直す前に読みます (`SKILL.md` の「中断した run を再開する」)。
 記録した run dir に `done.txt` が無ければ、Codex がまだ動いているとして起動し直しません。
 
+配備済みの `personal-codex-launch` で起動するとき (#672) は、run dir の名前を script が決めます。起動の前に記録する
+のは、その起動だけに使う新しい directory (例: `units/<n>/codex-<連番>/`。反証は run dir の下の `refute-<連番>/`) の
+場所で、これを `launch` の `--run-root` に渡します。run dir は、その下にできるただ 1 つの directory です。再開では、
+記録した directory の下で `launch.json` を持つ directory を探します。
+
+- 見つかれば、それが run dir です。`personal-codex-launch collect --run-dir <run dir>` にかけ、`DONE` なら結果を
+  保存して単位を進め、`RUNNING` (今回の nonce の `done.txt` が無い) なら起動し直さずに人に返します。`BLOCKED` は
+  `CODEX-LAUNCH.md` の規則 (`executor-exit` は停止、`executor-result` は新しい起動で 1 回だけ再実行) に従います。
+- 見つからなければ、`launch` が run dir を作る前に止まっています (Codex は起動していません)。新しい directory を
+  記録して、起動し直してよい場合です。
+- `launch.json` の `pane_id` が null の run dir は、pane を作る前に止まった run です (`launch-path` で止まった、または
+  中断した)。人が run script を走らせていなければ Codex は動いていませんが、`done.txt` の有無は同じく `collect` で
+  確かめます。
+
 directory は作った時点で mode 700 にします (残量の数字と、public にしない所見を含むため)。
 
 `state.json` の中身:

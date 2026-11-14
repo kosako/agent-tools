@@ -218,7 +218,10 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
 - **監査役が Codex**: personal-repo-audit の `CODEX-LAUNCH.md` の起動で Codex に監査させる。effort は
   プリセットの値を渡す。model は [BUDGET.md](BUDGET.md) の `personal-codex-model-selection` の出力を渡す (採用は
   exit 0 のときだけで、それ以外は開始しない。空なら model を渡さない)。起動の前に、run dir の path を
-  `units/<n>/codex-run` に書く (再開で回収するため。`RECORD.md`。#421)。
+  `units/<n>/codex-run` に書く (再開で回収するため。`RECORD.md`。#421)。起動と回収を配備済みの
+  `personal-codex-launch` で行うとき (`CODEX-LAUNCH.md` の先頭の節。#672) は、model の読み取りは script が行う。
+  起動の前に、その起動だけに使う新しい directory を作って場所を `codex-run` に書き、`--run-root` に渡す
+  (run dir は、その下にできるただ 1 つの directory。`RECORD.md`)。
 - 単位が終わるたびに local の state を保存し、残量を読み直す (`ci` と `upstream` の単位は AI の枠を使わないので
   読み直さない)。
   停止の条件 ([BUDGET.md](BUDGET.md)) に当たったら、残りの単位は state に残して次の run に回す。
