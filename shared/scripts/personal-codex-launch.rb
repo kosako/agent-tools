@@ -178,6 +178,17 @@ module CodexLaunch
     nil
   end
 
+  # JSON の階層を、各段が Hash のときだけたどる。応答の型が外れたとき (配列や文字列が返ったとき) は nil を返し、
+  # 例外にしない (herdr の応答を読めないときの fallback を止めないため。#679 の review の F2)。
+  def dig_hash(value, *keys)
+    keys.each do |key|
+      return nil unless value.is_a?(Hash)
+
+      value = value[key]
+    end
+    value
+  end
+
   def nonempty_string?(value)
     value.is_a?(String) && !value.empty?
   end
@@ -313,13 +324,15 @@ module CodexLaunch
     effort = sel["model_reasoning_effort"]
     provider = doc.fetch("provider", {})
     otel = doc.fetch("otel", [])
+    ignored = doc.fetch("provider_ignored", [])
     ok = [model, effort].all? { |v| v.nil? || (v.is_a?(String) && MODEL_RE.match?(v)) } &&
          provider.is_a?(Hash) && provider.all? { |k, v| PROVIDER_KEY_RE.match?(k.to_s) && v.is_a?(String) && PROVIDER_VALUE_RE.match?(v) } &&
-         otel.is_a?(Array) && otel.all? { |v| v.is_a?(String) && v.match?(/\Aotel\.[A-Za-z0-9._-]+=[^\x00-\x1f\x7f]+\z/) }
+         otel.is_a?(Array) && otel.all? { |v| v.is_a?(String) && v.match?(/\Aotel\.[A-Za-z0-9._-]+=[^\x00-\x1f\x7f]+\z/) } &&
+         ignored.is_a?(Array) && ignored.all? { |v| v.is_a?(String) && PROVIDER_KEY_RE.match?(v) }
     raise Blocked.new("capability-preflight", "#{SELECTOR_NAME} の出力の値が形に合わない") unless ok
 
     sources = doc["sources"].is_a?(Hash) ? doc["sources"].select { |_k, v| v.is_a?(String) } : {}
-    { model: model, effort: effort, provider: provider, otel: otel, sources: sources }
+    { model: model, effort: effort, provider: provider, otel: otel, sources: sources, ignored: ignored }
   end
 
   # review で OID を渡したとき、local の HEAD・base・作業ツリーを確かめる。状態は変えない (checkout・fetch・stash をしない)。
@@ -372,8 +385,14 @@ module CodexLaunch
 
     sources = selection[:sources].dup
     sources["model_reasoning_effort"] = "caller" if req[:effort]
+    # 認証の command を引き継がなかったことを、名前だけで呼び出し側に返す (LAUNCH.md の「Model selection」に添える説明。
+    # SSO の期限切れで落ちたときに原因を追えるように。#679 の review の F3)。
+    notes = []
+    unless selection[:ignored].empty?
+      notes << "aws.profile を使い、認証の command (#{selection[:ignored].join(', ')}) は引き継がない"
+    end
     { run_dir: run_dir, nonce: nonce, script: script, result: File.join(run_dir, spec[:result]),
-      sentinel: "#{spec[:sentinel]}-#{nonce}", pane_label: "#{spec[:label]}#{req[:label]}", sources: sources }
+      sentinel: "#{spec[:sentinel]}-#{nonce}", pane_label: "#{spec[:label]}#{req[:label]}", sources: sources, notes: notes }
   end
 
   def compose_brief(req)
@@ -432,13 +451,13 @@ module CodexLaunch
                "pane_label" => plan[:pane_label] }
     launch_file = File.join(plan[:run_dir], "launch.json")
     File.write(launch_file, JSON.generate(record) + "\n")
-    handoff = { "run_dir" => plan[:run_dir], "script" => plan[:script] }
+    handoff = { "run_dir" => plan[:run_dir], "script" => plan[:script], "notes" => plan[:notes] }
 
     caller_pane = herdr_caller or raise Blocked.new("launch-path", "herdr が使えない (server が running でない、または今の pane を読めない)", handoff)
-    notes = []
+    notes = plan[:notes].dup
     split = column_split(caller_pane, req[:repo], notes)
     out, _err, status = capture(split)
-    pane_id = status&.zero? ? parse_json(out)&.dig("result", "pane", "pane_id") : nil
+    pane_id = status&.zero? ? dig_hash(parse_json(out), "result", "pane", "pane_id") : nil
     raise Blocked.new("launch-path", "pane を分割できない (応答から pane の ID を読めない)", handoff) unless nonempty_string?(pane_id)
 
     record["pane_id"] = pane_id
@@ -462,7 +481,7 @@ module CodexLaunch
     return nil unless status&.zero? && server_running?(out)
 
     out, _err, status = capture(%w[herdr pane current])
-    pane = status&.zero? ? parse_json(out)&.dig("result", "pane") : nil
+    pane = status&.zero? ? dig_hash(parse_json(out), "result", "pane") : nil
     return nil unless pane.is_a?(Hash) && %w[pane_id tab_id workspace_id].all? { |k| nonempty_string?(pane[k]) }
 
     pane
@@ -504,7 +523,7 @@ module CodexLaunch
   # 呼び出し元の tab の、列の候補の pane の ID (一覧の順)。一覧を読めない・形が外れるときは nil。
   def column_candidates(caller_pane)
     out, _err, status = capture(["herdr", "pane", "list", "--workspace", caller_pane["workspace_id"]])
-    panes = status&.zero? ? parse_json(out)&.dig("result", "panes") : nil
+    panes = status&.zero? ? dig_hash(parse_json(out), "result", "panes") : nil
     listed = lambda do |pane|
       pane.is_a?(Hash) && nonempty_string?(pane["pane_id"]) && nonempty_string?(pane["tab_id"]) &&
         (!pane.key?("label") || pane["label"].is_a?(String))
@@ -518,7 +537,7 @@ module CodexLaunch
   # 候補のうち高さが最大の pane の ID (同じ高さなら一覧の順で最初)。配置を読めない・対応が取れないときは nil。
   def tallest(caller_pane, candidates)
     out, _err, status = capture(["herdr", "pane", "layout", "--pane", caller_pane["pane_id"]])
-    panes = status&.zero? ? parse_json(out)&.dig("result", "layout", "panes") : nil
+    panes = status&.zero? ? dig_hash(parse_json(out), "result", "layout", "panes") : nil
     placed = lambda do |pane|
       pane.is_a?(Hash) && nonempty_string?(pane["pane_id"]) && pane["rect"].is_a?(Hash) &&
         %w[x y width height].all? { |k| pane["rect"][k].is_a?(Numeric) }
@@ -552,7 +571,7 @@ module CodexLaunch
     done_file = File.join(run_dir, "done.txt")
     base = { "kind" => record["kind"], "run_dir" => run_dir, "nonce" => record["nonce"], "pane_id" => pane_id }
 
-    wait_for_done(done_file, pane_id, sentinel, waits, timeout_ms, base)
+    wait_for_done(record["kind"], done_file, pane_id, sentinel, waits, timeout_ms, base)
     unless File.file?(done_file)
       puts JSON.generate({ "status" => "RUNNING" }.merge(base))
       return EXIT_RUNNING
@@ -585,13 +604,16 @@ module CodexLaunch
     record
   end
 
-  # 完了の印を待つ。timeout のたびに pane の foreground を見て、codex が居ないと確かめられたら止まる。
-  def wait_for_done(done_file, pane_id, sentinel, waits, timeout_ms, base)
+  # 完了の印を待つ。review では、待ちのたびに pane の foreground を見て、codex が居ないと確かめられたら止まる
+  # (personal-codex-review の LAUNCH.md)。監査・反証・相談 (json・text) は、process の有無では判定しない
+  # (personal-repo-audit の CODEX-LAUNCH.md の「完了の判定」。done.txt が無ければ、止まったとは限らないので RUNNING)。
+  def wait_for_done(kind, done_file, pane_id, sentinel, waits, timeout_ms, base)
     return if File.file?(done_file) || pane_id.nil?
 
     waits.times do
       capture(["herdr", "pane", "wait-output", pane_id, "--match", sentinel, "--timeout", timeout_ms.to_s])
       return if File.file?(done_file)
+      next unless kind == "review"
 
       gone = codex_gone?(pane_id)
       return if File.file?(done_file)
@@ -602,7 +624,7 @@ module CodexLaunch
   # pane の foreground に codex が居ないと確かめられたときだけ true (読めない・解釈できないときは false = 居る扱い)。
   def codex_gone?(pane_id)
     out, _err, status = capture(["herdr", "pane", "process-info", "--pane", pane_id])
-    processes = status&.zero? ? parse_json(out)&.dig("result", "process_info", "foreground_processes") : nil
+    processes = status&.zero? ? dig_hash(parse_json(out), "result", "process_info", "foreground_processes") : nil
     return false unless processes.is_a?(Array) && processes.all? { |p| p.is_a?(Hash) && p["name"].is_a?(String) }
 
     processes.none? { |p| p["name"] == "codex" }

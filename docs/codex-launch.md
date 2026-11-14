@@ -67,7 +67,8 @@ personal-codex-launch launch --kind <review|text|json> --repo <repo root> --brie
 5. **pane を作って走らせる**。`herdr status` が running で、`herdr pane current` が pane を返すときだけ起動します。
    - 呼び出し元の tab に `review-` / `audit-` で始まる label の pane があれば、高さが最大のものを下に分割します (同じ高さなら
      一覧の順で最初)。無ければ、呼び出し元を右に分割します (`--ratio 0.6`)。
-   - 一覧や配置を読めない・形が外れる・候補と配置の対応が取れないときは、右への分割に倒し、`notes` に理由を書きます。
+   - 一覧や配置を読めない・形が外れる (JSON の型が違うときを含む)・候補と配置の対応が取れないときは、右への分割に倒し、
+     `notes` に理由を書きます。
    - 分割した pane に label を付け、`zsh <run.zsh>` を走らせます。
    - herdr が使えない、分割の応答から pane の ID を読めない、pane で起動できないときは `BLOCKED` (`launch-path`) で、run dir と
      `run.zsh` の場所を返します。script は直接の起動をしません (呼び出し側が、今の手順で sandbox の外と確かめてから行う)。
@@ -77,11 +78,13 @@ personal-codex-launch launch --kind <review|text|json> --repo <repo root> --brie
 | 状態 | stdout | exit |
 | --- | --- | --- |
 | 起動できた | `{"status":"STARTED","kind":…,"run_dir":…,"nonce":…,"sentinel":…,"pane_id":…,"pane_label":…,"script":…,"result":…,"model_sources":{…},"notes":[…]}` | 0 |
-| 止まった | `{"status":"BLOCKED","blocked_at":"capability-preflight\|target-identity\|launch-path","reason":…}` (あれば `run_dir`・`script`・`pane_id`・`expected`・`actual`) | 1 |
+| 止まった | `{"status":"BLOCKED","blocked_at":"capability-preflight\|target-identity\|launch-path","reason":…}` (あれば `run_dir`・`script`・`pane_id`・`notes`・`expected`・`actual`) | 1 |
 | usage・入力の誤り・想定外の例外 | 無し (stderr に 1 行) | 2 |
 
 `model_sources` は、model と effort の出所 (`user config` / `review profile` / `--effort` を渡したときの `caller`) で、値は
-載せません。
+載せません。`notes` には、右への分割に倒した理由のほか、model の選択が認証の command を引き継がなかったとき (`provider_ignored`) の
+説明が、command の名前だけで入ります (`aws.profile を使い、認証の command (<名前>) は引き継がない`)。呼び出し側は、これを
+結果の `Model selection` の行に添えます (`LAUNCH.md`)。`launch-path` で止まったときの出力にも、同じ `notes` が付きます。
 
 ### 起動の制約 (brief の先頭に必ず入る節)
 
@@ -122,9 +125,10 @@ personal-codex-launch collect --run-dir <dir> [--waits <1〜3>] [--timeout-ms <1
 - `launch.json` を読み、`herdr pane wait-output <pane> --match <完了の印> --timeout <ms>` を最大 `--waits` 回繰り返します
   (既定は 3 回、timeout は 300000)。各回の後に、今回の nonce の `done.txt` があれば抜けます。待ちの command の出力と exit は
   判定に使いません (完了の正本は `done.txt`。端末に完了の印が出ただけでは完了にしない)。
-- `done.txt` がまだ無いときは、`herdr pane process-info` の foreground に `codex` が居るかを見ます。居ないと確かめられて
-  `done.txt` も無ければ `BLOCKED` (`executor-exit`) で、残りの待ちを使いません。居るか、確かめられなければ (command の失敗・
-  読めない応答)、待ちを続けます。process の名前は、実行した command の名前と同じとは限りません (版の番号で見える binary が
+- `review` では、`done.txt` がまだ無いとき、`herdr pane process-info` の foreground に `codex` が居るかを見ます。居ないと
+  確かめられて `done.txt` も無ければ `BLOCKED` (`executor-exit`) で、残りの待ちを使いません。居るか、確かめられなければ
+  (command の失敗・読めない応答・型の外れた応答)、待ちを続けます。`text` と `json` (監査・反証・相談) では process を見ません。
+  `CODEX-LAUNCH.md` の「完了の判定」のとおり、`done.txt` の有無だけで判定し、無ければ `RUNNING` です。process の名前は、実行した command の名前と同じとは限りません (版の番号で見える binary が
   ある)。`codex` が別の名前で見える環境では、動いているのに「居ない」と判定しうるので、そのときは `done.txt` を待ってから
   `collect` をかけ直します (`done.txt` があれば、process の確認は行いません)。
 - 待ちが尽きても `done.txt` が無ければ `RUNNING` (exit 3)。pane は閉じず、process も止めません。後から `done.txt` が現れたら、

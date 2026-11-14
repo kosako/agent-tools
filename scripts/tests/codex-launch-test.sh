@@ -591,6 +591,54 @@ File.write(File.join(nokind, "launch.json"), JSON.generate("kind" => "worker", "
   check "collect usage error (#{label})", s == 2 && o.empty? && e.lines.size == 1 && herdr.empty?
 end
 
+# ---- review の round 1 の指摘 (#679) の回帰
+# F1: 監査・反証・相談 (json・text) は、codex の process が見えなくても止めない (done.txt の有無だけで判定する)。
+[["json", ["--schema", SCHEMA]], ["text", []]].each do |kind, extra|
+  j = started(kind: kind, extra: extra)
+  o, _e, s, herdr, = run_cli(["collect", "--run-dir", j["run_dir"], "--waits", "2", "--timeout-ms", "1000"], map: collect_map.call(fg: ["zsh"]))
+  check "#{kind}: a missing codex process is RUNNING, not a stop", s == 3 && one_json(o)["status"] == "RUNNING" && herdr.count { |a| a[0, 2] == %w[pane wait-output] } == 2
+  check "#{kind}: the process list is not consulted", herdr.none? { |a| a[0, 2] == %w[pane process-info] }
+  check "#{kind}: the pane is kept while RUNNING", herdr.none? { |a| %w[read close].include?(a[1]) }
+end
+
+# F2: herdr の応答の型が外れても (配列・文字列・null)、例外にせず、決まった fallback に進む。
+{ "an array" => "[]", "result is an array" => JSON.generate("result" => []), "result is a string" => JSON.generate("result" => "x"),
+  "null" => "null", "a number" => "7" }.each do |label, out|
+  odd = { "status" => 0, "out" => out }
+  o, e, s, herdr, = run_cli(launch_args, map: herdr_map(panes: column).merge("pane list" => odd))
+  check "pane list of an odd type (#{label}) falls back to the right split",
+        s == 0 && e.empty? && herdr.find { |a| a[0, 2] == %w[pane split] } == right && one_json(o)["notes"].any? { |n| n.include?("列を確認できなかった") }
+  o, e, s, herdr, = run_cli(launch_args, map: herdr_map(panes: column).merge("pane layout" => odd))
+  check "pane layout of an odd type (#{label}) falls back to the right split",
+        s == 0 && e.empty? && herdr.find { |a| a[0, 2] == %w[pane split] } == right && one_json(o)["notes"].any? { |n| n.include?("列を確認できなかった") }
+  o, e, s, herdr, = run_cli(launch_args, map: herdr_map.merge("pane current" => odd))
+  check "pane current of an odd type (#{label}) is a launch-path block",
+        s == 1 && e.empty? && one_json(o)["blocked_at"] == "launch-path" && File.file?(one_json(o)["script"].to_s) && herdr.none? { |a| a[0, 2] == %w[pane split] }
+  o, e, s, herdr, = run_cli(launch_args, map: herdr_map.merge("pane split" => odd))
+  check "pane split of an odd type (#{label}) is a launch-path block",
+        s == 1 && e.empty? && one_json(o)["blocked_at"] == "launch-path" && File.file?(one_json(o)["script"].to_s) && herdr.none? { |a| a[0, 2] == %w[pane run] }
+  j = started
+  o, e, s, herdr, = run_cli(["collect", "--run-dir", j["run_dir"], "--waits", "2", "--timeout-ms", "1000"], map: collect_map.call(extra: { "pane process-info" => odd }))
+  check "process-info of an odd type (#{label}) keeps waiting", s == 3 && e.empty? && herdr.count { |a| a[0, 2] == %w[pane wait-output] } == 2
+end
+
+# F3: selector が引き継がなかった認証の command は、名前だけを notes に返す (値は無い。run.zsh にも渡さない)。
+ignoring = SELECTION_OK.merge("provider" => { "model_provider" => "amazon-bedrock" }, "provider_ignored" => %w[aws.credential_export aws.auth_refresh])
+o, _e, s, = run_cli(launch_args, selection: ignoring)
+check "ignored auth commands are reported by name in the notes",
+      s == 0 && one_json(o)["notes"].any? { |n| n.include?("aws.credential_export") && n.include?("aws.auth_refresh") && n.include?("引き継がない") }
+check "ignored auth commands are not passed to codex", !File.read(File.join(one_json(o)["run_dir"], "run.zsh")).match?(/credential_export|auth_refresh/)
+o, _e, s, = run_cli(launch_args, selection: ignoring, map: herdr_map(panes: column).merge("pane list" => { "status" => 1, "out" => "" }))
+check "the note is kept next to a fallback note", s == 0 && one_json(o)["notes"].size == 2
+o, _e, s, = run_cli(launch_args, selection: ignoring, map: herdr_map.merge("status" => { "status" => 1, "out" => "" }))
+check "a launch-path block also carries the note", s == 1 && one_json(o)["blocked_at"] == "launch-path" && one_json(o)["notes"].any? { |n| n.include?("aws.credential_export") }
+[["x y"], [5], "aws.auth_refresh", [""]].each do |bad|
+  o, _e, s, = run_cli(launch_args, selection: SELECTION_OK.merge("provider_ignored" => bad))
+  check "an ignored list outside the allowed form (#{bad.inspect}) is a capability block", s == 1 && one_json(o)["blocked_at"] == "capability-preflight"
+end
+o, _e, s, = run_cli(launch_args)
+check "no note without ignored commands", s == 0 && one_json(o)["notes"].empty?
+
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
