@@ -15,7 +15,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:86de103dd71db6f095223461e2cf499828d1a24f8d5be85b02f2c2dab9e920e7
+  approved_build_id: sha256:28e6376bb87f211473d4d35b4c7d39743581be7ed708bbf37066db863e2d07a8
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-merge-preflight.rb
@@ -27,7 +27,8 @@ summary: >-
   同じ directory の personal-review-routing-preflight (PR の base / head に固定) と personal-work-marker-check
   (--kind review-result) を起動する。ok の条件: owner の type が User で login が gh の user と一致する / PR が open /
   routing が exit 0 (author と reviewer が表の組) / gh の user の最後の結果コメント (決まった 3 行に近い行、つまり行の頭の見出しの印か label とコロンで見分ける) の形が合い、見出しの reviewer が routing の
-  reviewer と合い (bot(dependabot) の PR は pin-check も可)、verdict が APPROVE、Target の base ref と head が同じで、
+  reviewer と合い (bot(dependabot) の PR は pin-check も可)、Independence の行が routing の author への独立した review
+  (pin-check の結果は deterministic check) を示し、verdict が APPROVE、Target の base ref と head が同じで、
   review の base OID と head の merge-base が base の branch の今の先端と head の merge-base と同じ / required_checks が
   head ですべて completed かつ success (file か key が無いと not ok、不正は exit 2) / 最後の pulls/<n> の
   mergeable_state が clean。最初と最後に pulls/<n> と base の先端を読み、動いていれば判定できない。branch と check の名前は

@@ -201,10 +201,11 @@ File.write(File.join(fakebin, "gh"), <<~'RB')
 RB
 [script, routing, File.join(deploy, "personal-work-marker-check"), File.join(fakebin, "gh")].each { |f| File.chmod(0o755, f) }
 
-def result_body(reviewer: "Codex", verdict: "APPROVE", must: 0, should: 0, ref: "main", base: PR_BASE, head: HEAD, heading: nil)
+def result_body(reviewer: "Codex", verdict: "APPROVE", must: 0, should: 0, ref: "main", base: PR_BASE, head: HEAD, heading: nil,
+                independence: "cross-review verified (author=claude)")
   [heading || "## 📋 レビュー結果（by #{reviewer}）", "", "**Review process verdict: #{verdict}**",
    "**Finding summary: 🔴 must #{must} / 🟡 should #{should} / ⚪ nit 0**", "**Target: base #{ref} #{base} / head #{head}**",
-   "**Independence: cross-review verified (author=claude)**", "", CANARY].join("\n")
+   "**Independence: #{independence}**", "", CANARY].join("\n")
 end
 
 def comment(id, login, body)
@@ -336,7 +337,7 @@ check "a Codex-authored PR needs a Claude result", s == 1 && o.include?("review:
   o, _e, s, = run_case(routing_out: out)
   check "routing with #{label} cannot be judged", s == 2 && o.empty?
 end
-o, _e, s, = run_case(routing_out: "reviewer: claude (author=opencode(openai), 2 commit(s))\n") { |m| set_comments(m, [comment(1, "me", result_body(reviewer: "Claude"))]) }
+o, _e, s, = run_case(routing_out: "reviewer: claude (author=opencode(openai), 2 commit(s))\n") { |m| set_comments(m, [comment(1, "me", result_body(reviewer: "Claude", independence: "cross-review verified (author=opencode(openai))"))]) }
 check "an OpenCode (OpenAI) PR with a Claude result is ok", s == 0 && o.include?("routing: ok (author=opencode(openai), reviewer=claude)")
 
 # 4. review の結果
@@ -386,11 +387,55 @@ o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body(verdict
 check "Warning is not ok", s == 1 && o.include?("review: not-approved (comment 1。最後の verdict が Warning)")
 o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body(reviewer: "Claude"))]) }
 check "a Claude result for a Claude-authored PR is not ok", s == 1 && o.include?("review: reviewer-mismatch")
+PIN_INDEP = "deterministic check (dependabot pin)"
+BOT_INDEP = "cross-review verified (author=bot(dependabot))"
 bot_routing = "commit 0000003: bot(dependabot)\nhead: #{HEAD}\nreviewer: claude (author=bot(dependabot), 1 commit(s))\n"
-o, _e, s, = run_case(routing_out: bot_routing) { |m| set_comments(m, [comment(1, "me", result_body(reviewer: "personal-dependabot-pin-check"))]) }
+o, _e, s, = run_case(routing_out: bot_routing) { |m| set_comments(m, [comment(1, "me", result_body(reviewer: "personal-dependabot-pin-check", independence: PIN_INDEP))]) }
 check "pin-check result is ok for a Dependabot PR", s == 0 && o.include?("review: ok (APPROVE by personal-dependabot-pin-check")
-o, _e, s, = run_case(routing_out: bot_routing) { |m| set_comments(m, [comment(1, "me", result_body(reviewer: "Claude"))]) }
+o, _e, s, = run_case(routing_out: bot_routing) { |m| set_comments(m, [comment(1, "me", result_body(reviewer: "Claude", independence: BOT_INDEP))]) }
 check "Claude result is ok for a Dependabot PR", s == 0
+# 4b. Independence の行 (#668)。routing と合う独立した review の結果だけを受け付ける。
+{
+  "second-opinion only" => "second-opinion only",
+  "human review" => "human review",
+  "not-established (human)" => "not-established (author=human)",
+  "not-established (unknown)" => "not-established (author=unknown)",
+  "another author (codex)" => "cross-review verified (author=codex)",
+  "another author (opencode(anthropic))" => "cross-review verified (author=opencode(anthropic))",
+  "the pin-check value on an AI review" => PIN_INDEP,
+}.each do |label, value|
+  o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body(independence: value))]) }
+  check "independence #{label} is not ok", s == 1 && o.include?("review: independence-mismatch (comment 1") && o.end_with?("merge-preflight: not ok\n") && !o.include?("\nhead: ")
+  check "independence #{label} does not print the value", !o.include?(value)
+end
+o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body(independence: "cross-review verified (author=claude)"))]) }
+check "independence matching the routing author is ok", s == 0 && o.include?("review: ok (APPROVE by Codex")
+# 表の外の値と行の欠落は、形の検査 (personal-work-marker-check) が止める。
+["not-established", "cross-review verified (author=unknown)", "independent"].each do |value|
+  o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body(independence: value))]) }
+  check "independence outside the table (#{value}) is not ok", s == 1 && o.include?("review: result-form-broken (comment 1")
+end
+o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body.sub(/^\*\*Independence:.*$/, ""))]) }
+check "a result without the Independence line is not ok", s == 1 && o.include?("review: result-form-broken")
+o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body + "\n**Independence: second-opinion only**\n")]) }
+check "conflicting Independence lines are not ok", s == 1 && o.include?("review: result-form-broken")
+# 正しい古い結果の後ろの、独立でない結果が決める (前の承認に戻らない)。
+o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body), comment(2, "me", result_body(independence: "second-opinion only"))]) }
+check "a later second-opinion result decides", s == 1 && o.include?("review: independence-mismatch (comment 2")
+o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body(independence: "second-opinion only")), comment(2, "me", result_body)]) }
+check "a later independent result decides", s == 0 && o.include?("comment 2")
+o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body), comment(2, "someone", result_body(independence: "second-opinion only"))]) }
+check "another author's second-opinion result is not read", s == 0 && o.include?("comment 1")
+# author の違う組は、routing の reviewer が同じでも合わない。
+o, _e, s, = run_case(routing_out: "reviewer: claude (author=opencode(openai), 2 commit(s))\n") { |m| set_comments(m, [comment(1, "me", result_body(reviewer: "Claude", independence: "cross-review verified (author=opencode(other))"))]) }
+check "an OpenCode (OpenAI) PR with an OpenCode (other) independence is not ok", s == 1 && o.include?("review: independence-mismatch")
+# Dependabot の PR: pin-check の結果は deterministic check、Claude の review は cross-review verified (author=bot(dependabot))。
+o, _e, s, = run_case(routing_out: bot_routing) { |m| set_comments(m, [comment(1, "me", result_body(reviewer: "Claude", independence: PIN_INDEP))]) }
+check "the pin-check value on a Claude review of a Dependabot PR is not ok", s == 1 && o.include?("review: independence-mismatch")
+o, _e, s, = run_case(routing_out: bot_routing) { |m| set_comments(m, [comment(1, "me", result_body(reviewer: "personal-dependabot-pin-check", independence: BOT_INDEP))]) }
+check "the cross-review value on a pin-check result is not ok", s == 1 && o.include?("review: independence-mismatch")
+o, _e, s, = run_case(routing_out: bot_routing) { |m| set_comments(m, [comment(1, "me", result_body(reviewer: "personal-dependabot-pin-check", independence: "second-opinion only"))]) }
+check "second-opinion on a pin-check result is not ok", s == 1 && o.include?("review: independence-mismatch")
 o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body(reviewer: "personal-dependabot-pin-check"))]) }
 check "pin-check result is not ok for an AI-authored PR", s == 1 && o.include?("review: reviewer-mismatch")
 o, _e, s, = run_case(routing_out: bot_routing) { |m| set_comments(m, [comment(1, "me", result_body(reviewer: "Codex"))]) }
