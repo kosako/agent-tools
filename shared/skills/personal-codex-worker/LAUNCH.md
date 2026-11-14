@@ -469,6 +469,19 @@ herdr pane wait-output <pane-id> --match CODEX-WORKER-DONE-<nonce> --timeout 300
   --lines 200` の生出力を `<run dir>/pane.log` に保存し、空でないことを確認する。pane と tab は
   **閉じない** (tab は packet が `done` になるまで残し、§11 で閉じる)。人手実行 (§10 の未起動
   hand-off) には pane が無いので、pane.log の保存は行わず、同じ続行条件を確認して §8 へ進む。
+- **残った process を確かめる (#674)**: 続行条件を満たしたら、§8 の前に、worker が残した process が無いかを orchestrator が
+  確かめる。worker は sandbox の中で process の一覧を読めないので、確かめられなかったと報告してくる (運用 instruction の
+  「test と長時間の command」)。見るのは次の 2 つ。
+  - worker の pane の foreground: `herdr pane process-info --pane <pane-id>` の
+    `result.process_info.foreground_processes[].name` に、shell 以外の process が残っていないか (人手実行で pane が
+    無いときは省く)。
+  - clone を引数に持つ process: `pgrep -f` に clone の絶対 path を渡して探す。pattern は正規表現として読まれるので、path を
+    `ruby -e 'print Regexp.escape(ARGV.fetch(0))'` で escape してから、literal の変数で渡す (§0 の値の受け渡し)。
+  どちらにも残っていなければ、そのまま §8 へ進む (記録は要らない)。残っていたら、pid と command の名前を人への報告に書く。
+  worker が起動したものと確かめられないので、自分では止めず、止めるかは人が決める。確かめる command が失敗したときは、
+  確かめられなかったことを報告に書く。この確認は報告のためのもので、§8 に進む条件ではない (残っていても転記は行う)。
+  honest-label: 見つかるのは、pane の foreground と、引数に clone の path を持つ process だけ。cwd だけが clone の中の
+  background の process は見つからない。worker が走らせる test は `personal-safe-run` が process group ごと止める。
 - `exit=0` なのに `result.md` が欠落 / 空なら、新しい nonce で 1 回だけ再実行する。再実行は**新しい run dir**
   で行う (#412。同じ run dir では 1 回目の `done.txt` が残り、`run_status` が `finished` のままなので §4 の
   読み直しを通らず、session を失うと次の session が完了済みの run として回収に入る)。§1 で run dir を作り直し、
