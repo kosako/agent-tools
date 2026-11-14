@@ -1,0 +1,39 @@
+schema_version: 1
+name: personal-codex-launch
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #672 の 1 本目の PR (read-only の Codex の起動と回収を決まった処理にする) で author≠reviewer レビューのうえ承認する。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:b0e12d9deb858cfdf972fbe8972069cc57786e5e58f5fab22a3bd61dafd1021e
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-codex-launch.rb
+  format: text
+summary: >-
+  read-only の Codex (review・監査・反証・相談など) を herdr の pane で起動し、完了を待って回収する (#672)。手順の正本は
+  personal-codex-review の LAUNCH.md と personal-repo-audit の CODEX-LAUNCH.md で、この script はその実装 (worker の起動は
+  対象外)。launch は、入力を検査し (外れたら exit 2 で何も起動しない)、codex の flag と feature・同じ directory の
+  personal-codex-model-selection の出力を確かめ、review で OID を渡したときは local の HEAD・base・作業ツリーを確かめてから、
+  run dir (mode 700) に brief.md・run.zsh・launch.json (json では schema.json) を置き、herdr の pane を作って run.zsh を
+  走らせる。brief.md の先頭には「起動の制約」の節 (read-only、nested な起動と session の開始の手順の禁止、local の note を
+  読まない、data の境界、値の受け渡し、heredoc と変数名 path の注意、kind ごとの最終 message の形) を必ず置く。run.zsh は
+  値を shell の literal にして先頭の変数に入れ、codex exec の flag (--ignore-user-config --ignore-rules -s read-only
+  -c approval_policy="never" --disable apps / computer_use / browser_use) を固定し、model・effort・provider・otel を -c で
+  渡す。pane は、呼び出し元の tab の review- / audit- の列の、高さが最大の pane を下に分割し、列が無い・読めないときは
+  呼び出し元を右に分割する。herdr が使えないときは BLOCKED (launch-path) で run script の場所を返し、直接は起動しない。
+  collect は、完了の印を最大 3 回待ち、done.txt (今回の nonce と exit 0) と結果の file を kind の条件 (review は verdict の行、
+  json は schema の必須の key) で判定し、満たしたときだけ pane の出力を pane.log に保存して pane を閉じる。待ちが尽きても
+  done.txt が無ければ RUNNING で、pane も process も止めない (codex の process が居ないことで止めるのは review だけ)。出力は JSON 1 行で、brief と結果の本文は載せない。起動する
+  外部の command は codex (version・help・features)・herdr・git と隣の selector だけで、network に触れない。exit は launch が
+  0 = STARTED / 1 = BLOCKED / 2 = usage、collect が 0 = DONE / 1 = BLOCKED / 3 = RUNNING / 2 = usage。
+  (docs/codex-launch.md)
