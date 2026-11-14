@@ -6,6 +6,7 @@
 #   壁打ちの round は例外とする句がある。
 # - 「test と長時間の command」に、sandbox の中で process の一覧を読めないときは繰り返さずに報告し、起動した側が確かめる句がある。
 # - 「参照先」に、無人で起動された session は note を読まない句がある。
+# - 起動した側が確かめる手順が、personal-codex-worker の LAUNCH.md の「7. 完了後」に在る (確かめる対象・時点・記録)。
 # 節は見出しの level で次の見出しまでを取る。句は空白を除いて比べる。引数で repo root を差し替えられる (変異での確認用)。
 set -eu
 
@@ -55,15 +56,32 @@ check.call(waiting, "壁打ちの round は例外の句", "壁打ち (`personal-
 runs = "## test と長時間の command (実行環境の守り)"
 check.call(runs, "sandbox の中で process を読めないときの句", "sandbox の中で process の一覧を読めないとき (委譲された Codex の worker など) は、同じ command を繰り返さず")
 check.call(runs, "確かめられなかったと報告する句", "確かめられ\nなかったことを報告に書く")
-check.call(runs, "起動した側が確かめる句", "残った process の確認は、起動した側 (orchestrator) が行う")
+check.call(runs, "起動した側が確かめる句", "残った process の確認は、起動した側 (orchestrator) が行う (手順は `personal-codex-worker`")
 check.call(runs, "今までの後始末の句", "終わったら、自分が起動した process が残っていないことを確かめ、残っていれば止める")
 
 check.call("## 参照先", "無人で起動された session は note を読まない句", "無人で起動された session は読まない")
 
-# 節の順: 「待ちと判断の伝え方」は「セッションとドキュメント」の次に在る (session の進め方の決まりとして読める場所)。
-order = text.lines.select { |l| l.start_with?("## ") }.map(&:chomp)
-i = order.index(sessions)
-errors << "「#{waiting}」が「#{sessions}」の次に無い" unless i && order[i + 1] == waiting
+# 起動した側の手順 (#681 の review の指摘): worker の完了の後、転記の前に、orchestrator が残った process を確かめる。
+worker_rel = "shared/skills/personal-codex-worker/LAUNCH.md"
+worker_text = File.read(File.join(root, worker_rel), encoding: "UTF-8")
+start = worker_text.index("\n## 7. 完了後\n")
+stop = start && worker_text.index("\n## 8. ", start + 1)
+after = start && stop ? worker_text[start...stop] : nil
+errors << "#{worker_rel} に「## 7. 完了後」の節が無い" if after.nil?
+{
+  "確かめる時点 (転記の前)" => "続行条件を満たしたら、§8 の前に、worker が残した process が無いかを orchestrator が\n確かめる",
+  "対象 (pane の foreground)" => "`herdr pane process-info --pane <pane-id>`",
+  "対象 (clone を引数に持つ process)" => "`pgrep -f` に clone の絶対 path を渡して探す",
+  "pattern を escape する句" => "Regexp.escape(ARGV.fetch(0))",
+  "記録 (残っていたら報告に書く)" => "残っていたら、pid と command の名前を人への報告に書く",
+  "自分では止めない句" => "自分では止めず、止めるかは人が決める",
+  "確かめられなかったときの句" => "確かめられなかったことを報告に書く",
+  "転記は止めない句" => "§8 に進む条件ではない",
+  "見つからない範囲の句" => "cwd だけが clone の中の\nbackground の process は見つからない",
+}.each do |label, phrase|
+  next if after.nil?
+  errors << "#{worker_rel} の「## 7. 完了後」に#{label} (#{phrase.inspect}) が無い" unless squash.call(after).include?(squash.call(phrase))
+end
 
 unless errors.empty?
   warn errors.map { |e| "FAIL: #{e}" }.join("\n")

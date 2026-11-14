@@ -147,7 +147,7 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
 - 終わったら、自分が起動した process が残っていないことを確かめ、残っていれば止める (safe-run の外で起動した
   ものも同じ)。
 - sandbox の中で process の一覧を読めないとき (委譲された Codex の worker など) は、同じ command を繰り返さず、確かめられ
-  なかったことを報告に書く。残った process の確認は、起動した側 (orchestrator) が行う (#674)。
+  なかったことを報告に書く。残った process の確認は、起動した側 (orchestrator) が行う (手順は `personal-codex-worker`。#674)。
 
 ## 作業を捨てる git の操作
 
