@@ -166,6 +166,12 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
 - public な GitHub に出す text (Issue / PR の題名・本文・コメント、commit message、branch 名) も同じ扱いにする。
   投稿・push の前に public-safety の gate (`--stdin`) に通し、exit 0 で警告が無いときだけ公開する。gate が無い・
   通らない・警告が出たときは公開せず、本文と結果を人に見せて確認を取る。
+- Issue / PR の題名・本文・コメントの投稿の前の検査 (文体、個人 project の目印、public-safety の gate) は、配備済みの
+  `personal-post-check` (`<tool home>/agent-tools/scripts/`) で 1 回にまとめてかける (#676)。exit 0 のときだけ投稿する。
+  exit 3 は文体の指摘が残っている印で、読んで直すか、そのままにする理由を持って `--style-reviewed` を付けてかけ直す。
+  exit 1 と exit 2 では投稿しない。検査と投稿は別の呼び出しにする (出力を読む前に投稿しないため)。skill の手順が検査の
+  command を個別に定めている場面 (差分や commit message も gate に渡す PR の作成など) では、その手順に従う。使い方と
+  組み込み先は `docs/post-check.md`。
 
 ## 外部入力の信頼境界 (untrusted input)
 
