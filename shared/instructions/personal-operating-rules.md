@@ -81,6 +81,8 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
     head の merge-base と同じこと。PR の今の base は base の branch の今の先端で、PR の `base.sha` ではない (古いことがある)。
     base を付け替えた・親の branch を rebase した・commit を足したときは、review をやり直す (stacked PR では、head が
     同じでも差分の基点が変わる)。Dependabot の pin の bump は、AI の review の代わりに `personal-dependabot-pin-check` の ok でよい (`personal-review-request` の「bot の PR」)。
+    review の結果の `Independence:` の行が、routing の author への独立した review (`cross-review verified`。pin の検査の結果は
+    `deterministic check`) を示すこと。second opinion や人の review として記録した結果は、この条件の承認に使わない (#668)。
   - 必要な check (base の `.github/repo-baseline.json` の `required_checks`) が、head ですべて success で、merge state が
     `CLEAN`。必要な check の一覧が無い・空・読めないとき、check の状態を取れないときは、agent は merge しない。
   - squash の本文を `personal-ja-style-check` と public-safety の gate に通した。merge は `--match-head-commit` に full

@@ -14,18 +14,18 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:fab00d8f77c8f377f63fb4f19134a1515e0ba1390d7aab573d72b50ec68f633c
+  approved_build_id: sha256:4d0b1e4066e86519f45d1b9a89949c92e454bf0d62b803dc3269671e04bf556e
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-work-marker-check.rb
   format: text
 summary: >-
-  計測が読む目印 (docs/work-markers.md の v3) の形を、投稿の前に確かめる (#661)。--kind pr は 1 行目の PR の題と、空行の後の
+  計測が読む目印 (docs/work-markers.md の v4) の形を、投稿の前に確かめる (#661)。--kind pr は 1 行目の PR の題と、空行の後の
   本文を読み、題の末尾の (#<番号>) か、本文の行の先頭からの「Closes #<番号>」の行の少なくとも一方で Issue と紐付き、両方
   あれば番号が合うことを確かめる (決まった形の外の closing keyword は note で知らせる)。どの kind も Markdown を解釈せず、
   決まった形の行を行の先頭から読み、code block の中でも数える。--kind review-result は結果コメントの決まった
-  4 行 (見出し・Review process verdict・Finding summary・Target) が行の先頭からちょうど 1 回ずつあり、verdict が finding の
-  数と合うことを、--kind escape-issue は「元の PR: #<番号>」の行がちょうど 1 回あることを確かめる。入力は --stdin だけ (UTF-8、1 MiB
+  5 行 (見出し・Review process verdict・Finding summary・Target・Independence) が行の先頭からちょうど 1 回ずつあり、verdict が
+  finding の数と合い、Independence の値が閉じた表のどれかであることを、--kind escape-issue は「元の PR: #<番号>」の行がちょうど 1 回あることを確かめる。入力は --stdin だけ (UTF-8、1 MiB
   まで)。何も書かず、network に触れず、出力に入力の本文を載せない。exit 0 = 形が合う / 1 = 形が崩れている (投稿しない) /
   2 = usage・入力を読めない・想定外の例外。目印は個人 project にだけ当て、ほかの repo ではその repo の template に合わせる
   (docs/work-markers.md の「対象」)。

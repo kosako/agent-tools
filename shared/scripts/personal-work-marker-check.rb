@@ -1,14 +1,15 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 #
-# personal-work-marker-check: 計測が読む目印 (docs/work-markers.md の v3) の形を、投稿の前に確かめる (#661)。
+# personal-work-marker-check: 計測が読む目印 (docs/work-markers.md の v4) の形を、投稿の前に確かめる (#661)。
 #
 # kind:
 # - pr: 1 行目に PR の題、空行、続いて本文。題の末尾の `(#<番号>)` か、本文の `Closes #<番号>` の行の少なくとも一方で
 #   Issue と紐付く。両方あれば、題の番号が `Closes` の行の番号に含まれる。
-# - review-result: review の結果コメント。決まった 4 行 (見出し・verdict・Finding summary・Target) が行の先頭から
-#   ちょうど 1 回ずつあり、verdict が finding の数と合う (review-output-contract の表)。Target の行は merge の前の照合に
-#   使う (#662)。値が PR の今の対象と合うかは確かめない (形だけ)。
+# - review-result: review の結果コメント。決まった 5 行 (見出し・verdict・Finding summary・Target・Independence) が行の
+#   先頭からちょうど 1 回ずつあり、verdict が finding の数と合う (review-output-contract の表)。Target と Independence の行は
+#   merge の前の照合に使う (#662、#668)。値が PR の今の対象や routing と合うかは確かめない (形と、Independence の値が
+#   閉じた表のどれかであることだけ)。
 # - escape-issue: `escape` の label を付ける Issue の本文。`元の PR: #<番号>` の行が行の先頭からちょうど 1 回あり、
 #   形が合う。
 #
@@ -24,7 +25,7 @@
 # 使い方: personal-work-marker-check --kind (pr|review-result|escape-issue) --stdin
 # 出力: 形の崩れごとに `-:<行>: [<規則>] <説明>` を stdout に出す (行が決まらないときは 0)。崩れではない注意は
 # `-:<行>: note: [<規則>] <説明>`。最後に `work-marker-check: <kind>: ok|<N> error(s) (markers v<版>)` の行を出す
-# (<版> は MARKERS_VERSION。今は 3)。
+# (<版> は MARKERS_VERSION。今は 4)。
 #
 # exit: 0 = 形が合う / 1 = 形が崩れている (投稿しない) / 2 = usage・入力を読めない (1 MiB を超える、UTF-8 として
 # 読めない、pr の 2 行目が空でない、pr の題が空)・想定外の例外。stderr の message に入力の text は載せない。
@@ -33,16 +34,26 @@
 Encoding.default_external = Encoding::UTF_8 unless Encoding.default_external == Encoding::UTF_8
 
 module WorkMarkerCheck
-  MARKERS_VERSION = "3"
+  MARKERS_VERSION = "4"
   MAX_INPUT_BYTES = 1024 * 1024
   KINDS = %w[pr review-result escape-issue].freeze
 
-  # 決まった行の形 (docs/work-markers.md の v3)。括弧は全角、絵文字は雛形と同じ codepoint (異体字の選択子なし)。
+  # 決まった行の形 (docs/work-markers.md の v4)。括弧は全角、絵文字は雛形と同じ codepoint (異体字の選択子なし)。
   RESULT_HEADING = /\A## 📋 レビュー結果（by (?:Codex|Claude|personal-dependabot-pin-check)）/
   VERDICT_LINE = /\A\*\*Review process verdict: (?<verdict>REJECT|Warning|APPROVE)\*\*[ \t]*\z/
   FINDING_SUMMARY = %r{\A\*\*Finding summary: 🔴 must (?<must>\d+) / 🟡 should (?<should>\d+) / ⚪ nit (?<nit>\d+)\*\*[ \t]*\z}
   # review した対象 (v3、#662)。base ref は空白を含まない 1 語、OID は 40 桁の小文字の hex。
   TARGET_LINE = %r{\A\*\*Target: base (?<ref>\S+) (?<base>[0-9a-f]{40}) / head (?<head>[0-9a-f]{40})\*\*[ \t]*\z}
+  # review の独立性 (v4、#668)。値は review-output-contract の閉じた表のどれか。merge の前の照合 (personal-merge-preflight) が
+  # routing と比べる。ここでは、表の値であることだけを見る。
+  INDEPENDENCE_VALUES = [
+    "cross-review verified (author=claude)", "cross-review verified (author=codex)",
+    "cross-review verified (author=opencode(anthropic))", "cross-review verified (author=opencode(openai))",
+    "cross-review verified (author=opencode(other))", "cross-review verified (author=bot(dependabot))",
+    "deterministic check (dependabot pin)", "second-opinion only", "human review",
+    "not-established (author=human)", "not-established (author=unknown)",
+  ].freeze
+  INDEPENDENCE_LINE = /\A\*\*Independence: (?<value>#{Regexp.union(INDEPENDENCE_VALUES).source})\*\*[ \t]*\z/
   REF = %r{(?:#\d+|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#\d+)}
   ORIGIN_PR = /\A元の PR: #{REF}(?:, #{REF})*[ \t]*\z/
 
@@ -51,6 +62,10 @@ module WorkMarkerCheck
   VERDICT_NEAR = /review process verdict/i
   FINDING_NEAR = /finding summary/i
   TARGET_NEAR = /target:/i
+  # 行の先頭からの `**Independence:` で始まる行は、値が表の外でも Independence の行として数える (正しい行と表の外の値の行が
+  # 並んだ結果を通さないため。#678 の review の F1)。personal-merge-preflight も同じ形で行を選ぶ。
+  INDEPENDENCE_SHAPE = /\A\*\*Independence:/
+  INDEPENDENCE_NEAR = /independence:/i
   ORIGIN_NEAR = /元の\s*PR/
 
   PR_TITLE_REF = /\(#(?<num>\d+)\)[ \t]*\z/
@@ -118,6 +133,10 @@ module WorkMarkerCheck
       verdict_at = exactly_one(VERDICT_LINE, VERDICT_NEAR, "verdict-line", "`**Review process verdict: <verdict>**` の行")
       summary_at = exactly_one(FINDING_SUMMARY, FINDING_NEAR, "finding-summary", "`**Finding summary: 🔴 must N / 🟡 should N / ⚪ nit N**` の行")
       exactly_one(TARGET_LINE, TARGET_NEAR, "target-line", "`**Target: base <base ref> <base OID> / head <head OID>**` の行 (OID は 40 桁)")
+      independence_at = exactly_one(INDEPENDENCE_SHAPE, INDEPENDENCE_NEAR, "independence-line", "`**Independence: <値>**` の行")
+      if independence_at && !INDEPENDENCE_LINE.match?(@lines[independence_at - 1])
+        error(independence_at, "independence-line", "`**Independence: <値>**` の行の値が、review-output-contract の表のどれでもない (値の後ろに補足を足さない)")
+      end
       return unless verdict_at && summary_at
 
       verdict = VERDICT_LINE.match(@lines[verdict_at - 1])[:verdict]

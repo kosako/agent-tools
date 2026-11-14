@@ -65,10 +65,15 @@ gh pr merge "$pr" --repo "$repo" --squash --match-head-commit "$head" --subject 
    など) は行の形が違うので候補にせず、merge してよい PR を止めません (#665 の review の F1・F4・F7)。結果コメント以外に
    近い行 (たとえば `## レビュー結果` で始まる見出し) を書くと、それが最後の候補になって形の検査で止まります (merge しない
    側に倒れる)。
-   - `personal-work-marker-check --kind review-result` が exit 0 (形が合う。[work-markers](work-markers.md) の v3 の 4 行)。
+   - `personal-work-marker-check --kind review-result` が exit 0 (形が合う。[work-markers](work-markers.md) の v4 の 5 行)。
      exit 1 は `result-form-broken` で not ok です。
    - 見出しの reviewer が routing の reviewer と合う (`codex` → `Codex`、`claude` → `Claude`)。author が `bot(dependabot)` の
      PR では、`personal-dependabot-pin-check` の結果も使えます (`personal-review-request` の「bot の PR」の C)。
+   - `Independence:` の行が routing と合う (#668)。見出しが `personal-dependabot-pin-check` の結果は
+     `deterministic check (dependabot pin)`、それ以外は `cross-review verified (author=<routing の author>)` のときだけ
+     合います。`second-opinion only`・`human review`・`not-established`・別の author の `cross-review verified` は
+     `independence-mismatch` で not ok です (独立した承認として扱わない。review の output contract)。行が無い・重複する・
+     値が表の外のときは、上の形の検査が `result-form-broken` で止めます (正しい行と表の外の値の行が並んだときも、順によらず止めます)。出力に行の値は載せません。
    - verdict が `APPROVE` (`Warning` と `REJECT` は `not-approved`)。
    - `Target:` の行の base ref が PR の base の branch の名前と、head が PR の今の head と同じ。
    - review の base OID と head の merge-base が、base の branch の今の先端と head の merge-base と同じ (`compare` の

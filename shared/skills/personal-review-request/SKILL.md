@@ -421,7 +421,7 @@ GitHub の操作と merge」。配備済みの `personal-merge-preflight` が行
 
 個人 project (運用 instruction の「個人 project の GitHub の操作と merge」の対象と同じ判定) では、gate の前に本文を
 配備済みの `personal-work-marker-check --kind review-result --stdin` (`<tool home>/agent-tools/scripts/`) にも通す (#661)。
-見出し・`Review process verdict:`・`Finding summary:`・`Target:` の 4 行は計測と merge の前の照合が読む目印で (v3)、exit 0 の
+見出し・`Review process verdict:`・`Finding summary:`・`Target:`・`Independence:` の 5 行は計測と merge の前の照合が読む目印で (v4)、exit 0 の
 ときだけ gate に進む。exit 1 は形の崩れなので、出力の行 (行番号と規則) を見て雛形の形に直してから通し直す。verdict が finding の数と合わない
 (`verdict-mismatch`) ときは、転記の誤りなら直す。reviewer の出力そのものが合わないときは、依頼元が verdict を書き換えず、
 投稿せずに人に伝える (reviewer の判定を依頼元が変えないため)。exit 2 (script が無い・入力を読めない) のときも投稿せず、

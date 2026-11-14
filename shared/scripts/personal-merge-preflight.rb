@@ -15,6 +15,10 @@
 #    reviewer と合い (bot(dependabot) の PR では personal-dependabot-pin-check も可)、verdict が APPROVE で、Target の行が
 #    今の PR と合う。合うとは、base ref と head が同じで、review の base OID と head の merge-base が、base の branch の今の
 #    先端と head の merge-base と同じこと (base を付け替えた・親の branch を rebase した・commit を足したときは合わない)。
+#    さらに、Independence の行が routing と合う (#668)。見出しが personal-dependabot-pin-check の結果は
+#    `deterministic check (dependabot pin)`、それ以外は `cross-review verified (author=<routing の author>)` のときだけ合う。
+#    second-opinion only・human review・not-established・別の author の cross-review verified は、独立した承認として
+#    扱わない (review-output-contract)。
 # 5. CI: base の branch の今の先端の `.github/repo-baseline.json` の `required_checks` を必要な集合とし、head の check-runs で
 #    各 check が completed かつ success (file か key が無ければ not ok。file が不正なら判定できない。読み方は
 #    personal-repo-baseline と personal-dependabot-pin-check と同じで、test で一致を固定する)。
@@ -59,11 +63,18 @@ module MergePreflight
   PER_PAGE = 100
   MAX_COMMENT_BODY = 1024 * 1024
 
-  # 結果コメントの決まった行 (docs/work-markers.md の v3)。personal-work-marker-check の形と同じで、ここでは値を取り出す
+  # 結果コメントの決まった行 (docs/work-markers.md の v4)。personal-work-marker-check の形と同じで、ここでは値を取り出す
   # ために名前つきの group を持つ (test で同じ形であることを固定する)。
   RESULT_HEADING = /\A## 📋 レビュー結果（by (?<reviewer>Codex|Claude|personal-dependabot-pin-check)）/
   VERDICT_LINE = /\A\*\*Review process verdict: (?<verdict>REJECT|Warning|APPROVE)\*\*[ \t]*\z/
   TARGET_LINE = %r{\A\*\*Target: base (?<ref>\S+) (?<base>[0-9a-f]{40}) / head (?<head>[0-9a-f]{40})\*\*[ \t]*\z}
+  # 独立性の行 (v4、#668)。行の先頭からの `**Independence:` で始まる行がちょうど 1 つあり、値が表のどれかであることは
+  # personal-work-marker-check が確かめる。ここでも同じ形 (INDEPENDENCE_SHAPE) で行を選び、ちょうど 1 つのときだけ値を取り出す
+  # (2 つの script が別の行を読まないため。#678 の review の F1)。
+  INDEPENDENCE_SHAPE = /\A\*\*Independence:/
+  INDEPENDENCE_LINE = /\A\*\*Independence: (?<value>.+?)\*\*[ \t]*\z/
+  PIN_CHECK_HEADING = "personal-dependabot-pin-check"
+  PIN_CHECK_INDEPENDENCE = "deterministic check (dependabot pin)"
   # 結果コメントの候補を見分ける形 (#665 の review の F1・F4・F7)。候補は「決まった 3 行 (見出し・verdict・Finding summary)
   # のどれかに近い行を持つコメント」で、近い行とは、行の頭 (空白・引用・list・番号・太字や code の印の後) に、見出しの印 `#`
   # に続く `レビュー結果`、または `Review process verdict` か `Finding summary` の label とコロンがある行。行は NFKC にし、
@@ -427,11 +438,19 @@ module MergePreflight
     heading = lines.map { |l| RESULT_HEADING.match(l) }.compact.first
     verdict = lines.map { |l| VERDICT_LINE.match(l) }.compact.first
     target = lines.map { |l| TARGET_LINE.match(l) }.compact.first
-    raise RunError, "結果コメントの決まった行を読めません" if heading.nil? || verdict.nil? || target.nil?
+    shaped = lines.select { |l| INDEPENDENCE_SHAPE.match?(l) }
+    independence = shaped.size == 1 ? INDEPENDENCE_LINE.match(shaped.first) : nil
+    raise RunError, "結果コメントの決まった行を読めません" if heading.nil? || verdict.nil? || target.nil? || independence.nil?
 
     allowed = HEADING_FOR.fetch(routing[:reviewer]) + BOT_EXTRA_HEADINGS.fetch(routing[:author], [])
     unless allowed.include?(heading[:reviewer])
       report.add(false, "review: reviewer-mismatch (#{where}。結果の reviewer が #{heading[:reviewer]}、routing は #{routing[:reviewer]})")
+      return
+    end
+    # 独立した承認として使える結果だけを受け付ける (#668)。値そのものは出力に載せない (閉じた表の外の文字を出さないため)。
+    expected = heading[:reviewer] == PIN_CHECK_HEADING ? PIN_CHECK_INDEPENDENCE : "cross-review verified (author=#{routing[:author]})"
+    unless independence[:value] == expected
+      report.add(false, "review: independence-mismatch (#{where}。Independence の行が routing の author=#{routing[:author]} の独立した review を示していない)")
       return
     end
     unless verdict[:verdict] == "APPROVE"

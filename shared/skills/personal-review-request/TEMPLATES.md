@@ -21,9 +21,11 @@ bot の PR で pin-check の経路 (`SKILL.md` の「bot の PR」の C) を使�
 
 ## 📋 レビュー結果 (手順 4)
 
-見出し・`Review process verdict:`・`Finding summary:`・`Target:` の 4 行は、計測と merge の前の照合が読む目印です
+見出し・`Review process verdict:`・`Finding summary:`・`Target:`・`Independence:` の 5 行は、計測と merge の前の照合が読む目印です
 (agent-tools の `docs/work-markers.md`)。`Target:` の OID は 40 桁のまま書きます。形を変えるときは、その文書の版を上げてから変えます。
 見出しの括弧の中には `by <reviewer>` だけを書きます。回数などの補足は `）` の後ろに書きます (例: `## 📋 レビュー結果（by Codex）round 2`)。
+`Independence:` の行は、下の選択肢のどれか 1 つをそのまま書きます (補足を足さない)。merge の前の照合が承認として受け付けるのは、
+routing の author と合う `cross-review verified` と、pin の検査の `deterministic check (dependabot pin)` だけです。
 
 ```markdown
 ## 📋 レビュー結果（by Codex | Claude | personal-dependabot-pin-check）
