@@ -38,7 +38,11 @@ run script の生成、pane の作成と命名、起動、待機、完了の判�
      fetch・stash で合わせません。
    - `BLOCKED` で `launch-path`: herdr が使えません。`SKILL.md` §2 の起動経路の 2 (sandbox の外と確かめられたときだけ直接起動) か
      3 (人手 hand-off) に進みます。返った `script` が run script で、`run_dir` に `brief.md` と `launch.json` があります。
-   - exit 2: 入力の誤りです (stderr の 1 行)。値を直して起動し直します。
+   - exit 2 で、stderr が入力の誤りの理由 (どの引数がなぜ外れたか) のとき: 何も起動しておらず、run dir も作っていません。
+     値を直して起動し直します。
+   - exit 2 で、stderr が `unexpected error` (想定外の例外) のとき: 起動に至っていないとは限りません。同じ値で起動し直す前に、
+     呼び出し元の tab に `review-<label>` の pane が出来ていないかを `herdr pane list` で確かめます。出来ていれば起動し直さず、
+     pane を残して人に返します (2 本目が並んで走らないように)。出来ていなければ、起動し直してかまいません。
 4. **回収する**。最大 15 分 (300 秒 × 3 回) 待つので、background で流します。
 
    ```sh
@@ -52,7 +56,15 @@ run script の生成、pane の作成と命名、起動、待機、完了の判�
    - `BLOCKED` で `executor-exit`: `Blocked at: executor-exit`。pane は残っています。
    - `BLOCKED` で `executor-result`: `retryable` が true なら空振りなので、新しい `launch` で同じ brief を 1 回だけ起動し直します。
      false なら verdict の無い結果で、再実行せずに `Blocked at: executor-result` で停止します (`SKILL.md` §5)。
-   - 直接起動や人手 hand-off で run script を走らせた run も、同じ `collect` で判定できます (pane の command は呼びません)。
+   - `launch-path` で止まった run を、直接起動や人手 hand-off で走らせたときも、`done.txt` と結果の file の判定には同じ `collect` を
+     使えます。ただし、状態の読み方は run によって違います。
+     - `launch.json` の `pane_id` が null の run (herdr が使えない、pane を分割できなかった): `collect` は pane の command を
+       呼びません。`done.txt` があれば、`DONE` か `BLOCKED` を返します。`done.txt` が無いと `RUNNING` を返しますが、直接起動で
+       command が `done.txt` を残さずに戻っていたら、下の「直接起動 (fallback)」のとおり `Blocked at: executor-exit` として
+       扱います (codex の process が残りうる)。人手 hand-off で、人がまだ実行していないだけなら、実行を待ちます。
+     - `launch-path` の出力に `pane_id` がある run (pane は作れたが、pane で run script を起動できなかった): pane が残っていて、
+       `collect` はその pane を見に行きます (待ち、出力の保存、終了)。この run は `collect` にかけず、残った pane を人が
+       確かめます。起動し直すときは、新しい `launch` を使います。
 
 ### run dir と run script (script が実装している契約)
 

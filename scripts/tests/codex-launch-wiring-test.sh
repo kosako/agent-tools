@@ -68,6 +68,13 @@ check.call(launch_md, head, "RUNNING で起動し直さない句", "同じ対象
 check.call(launch_md, head, "空振りは 1 回だけ再実行する句", "新しい `launch` で同じ brief を 1 回だけ起動し直します")
 check.call(launch_md, head, "verdict の無い結果は再実行しない句", "再実行せずに `Blocked at: executor-result` で停止します")
 check.call(launch_md, head, "直接は起動しない経路の句", "`SKILL.md` §2 の起動経路の 2")
+# exit 2 は入力の誤りと想定外の例外で扱いを分け、fallback の run の回収は状態ごとに分ける (#680 の review の F2・F3)。
+check.call(launch_md, head, "入力の誤りでは何も起動していない句", "何も起動しておらず、run dir も作っていません")
+check.call(launch_md, head, "想定外の例外で起動し直す前に確かめる句", "同じ値で起動し直す前に、\n呼び出し元の tab に `review-<label>` の pane が出来ていないか")
+check.call(launch_md, head, "pane が出来ていれば起動し直さない句", "出来ていれば起動し直さず、\npane を残して人に返します")
+check.call(launch_md, head, "pane_id が null の run の句", "`launch.json` の `pane_id` が null の run")
+check.call(launch_md, head, "直接起動で done.txt が無いときの句", "`Blocked at: executor-exit` として\n扱います")
+check.call(launch_md, head, "pane_id がある launch-path の run は collect にかけない句", "この run は `collect` にかけず")
 check.call(launch_md, "### run dir と run script (script が実装している契約)", "今の run script の契約", "codex exec --ignore-user-config --ignore-rules -s read-only")
 
 skill = "#{review}/SKILL.md"
@@ -90,11 +97,18 @@ if File.file?(File.join(root, tpl))
     check.call(tpl, added, "#{label}の説明", phrase)
   end
   # 一覧の項目と、手で組むときの段落の両方に 3 つの注意がある (片方だけ消えても気づく)。
-  check.call(tpl, added, "一覧の heredoc と変数名 path の項目", "/ heredoc を使わない / zsh で変数名 `path` を使わない。")
+  check.call(tpl, added, "一覧の heredoc と変数名 path の項目", "- heredoc を使わない。\n  - zsh で変数名 `path` を使わない。")
+  check.call(tpl, added, "一覧の skill と session の開始の手順の項目", "- nested な `codex`・`claude`、skill、subagent、session の開始の手順を起動しない。")
   check.call(tpl, added, "手で組むときの 3 つの注意の段落",
              "heredoc を使わないこと、zsh で変数名 `path` を使わないこと、skill と session の開始の手順を起動しないことの 3 つ")
   check.call(tpl, "## 雛形", "前の round からの差分の command", "git diff <前の head の OID>..<今の head の OID>")
   check.call(tpl, "## 雛形", "commit mode と uncommitted の対象の句", "script に OID を渡さない")
+  # review の基準の file は、配備済みの reference を指す (Codex の cwd は review の対象の repo なので、agent-tools の source の
+  # 場所では、ほかの repo で見つからない。#680 の review の F1)。
+  check.call(tpl, "## 雛形", "配備済みの reference を指す句", "Codex home の `skills/personal-production-rail/references/policy-index.md`")
+  block = section.call(text, "## 雛形").to_s[/```markdown\n(.*?)^```/m, 1].to_s
+  errors << "#{tpl} の雛形の block を読めない" if block.empty?
+  errors << "#{tpl} の雛形の block が、file を agent-tools の source の場所 (shared/ で始まる path) で指している" if block.include?("shared/")
 else
   errors << "#{tpl} が無い"
 end
@@ -129,6 +143,11 @@ check.call("#{grill}/CONSULT.md", "### Claude Code の session → Codex", "相�
 check.call("#{grill}/CONSULT.md", "### Claude Code の session → Codex", "1 回だけ待つ句", "collect --run-dir <run dir> --waits 1")
 check.call("#{sweep}/REFUTE.md", "## 検証役が Codex のとき", "反証の launch の句", "launch --kind json --schema <この skill の refutation.schema.json>")
 check.call("#{sweep}/REFUTE.md", "## 検証役が Codex のとき", "起動の前に記録した directory を渡す句", "--run-root <起動の前に記録した directory>")
+# 入力の findings.json の置き場は、script の経路と手で組む経路で違う (#680 の review の F4)。
+check.call("#{sweep}/REFUTE.md", "## 検証役が Codex のとき", "script の経路の入力の置き場の句", "`<起動の前に記録した directory>/findings.json` の場所を書きます")
+check.call("#{sweep}/REFUTE.md", "## 検証役が Codex のとき", "手で組むときの置き場の句", "手で組むとき (run dir を自分で作るとき) の置き場")
+check.call("#{sweep}/REFUTE.md", "## 検証役が Codex のとき", "制約は script が足す句", "は script が brief の先頭に足します")
+check.call(codex_launch, ahead, "想定外の例外で起動し直す前に確かめる句", "`audit-<label>` の pane が出来ていないかを `herdr pane list` で確かめ")
 
 # 4. sweep の run dir の記録
 check.call("#{sweep}/SKILL.md", "### 3. 監査する (単位ごと)", "起動の前に directory を記録する句",
