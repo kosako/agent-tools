@@ -4,6 +4,7 @@
 どう共存するかを説明します。skill 本体の契約は
 `shared/skills/personal-codex-review/SKILL.md` が正本 (起動の機械的な手順は同 directory の
 `LAUNCH.md`、返却の雛形は `RESULT-FORMAT.md`) で、この文書は運用者向けの背景と前提です。
+起動と回収の実行は、配備済みの `personal-codex-launch` が受け持ちます ([codex-launch](codex-launch.md)。#672)。
 
 ## 問題: sandbox の入れ子
 

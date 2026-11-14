@@ -43,6 +43,13 @@ v1 の経路は次の 2 つで、OpenCode の session と、session を判定で
 pane → 直接 → BLOCKED、run script の形、`--ephemeral` を付けない、subagent を使わない、pane の後始末)。違いは
 次の点だけです。
 
+起動と回収は、`CODEX-LAUNCH.md` の先頭の節のとおり、配備済みの `personal-codex-launch` で行います (#672)。
+`launch --kind json --schema <この skill の consult.schema.json> --effort <high か medium> --label grill-<短い名前>` で
+起動し、`collect --run-dir <run dir> --waits 1` で 1 回だけ待ちます。`RUNNING` (exit 3) なら、相談なしで round 1 を
+出します (下の表の「完了を待つ時間」と同じ)。brief には下の「brief」の題材・論点の地図・候補の質問・聞きたいことを
+書き、read-only や heredoc の注意などの共通の制約は script が足します。相談に固有の制約 (役割、根拠は tracked な file と
+提供資料に限る、`input_revision` を写す) は brief に書きます。
+
 | 項目 | 監査 (CODEX-LAUNCH.md) | 相談 |
 | --- | --- | --- |
 | run dir に置く schema | `findings.schema.json` | この skill の `consult.schema.json` (copy して置く) |

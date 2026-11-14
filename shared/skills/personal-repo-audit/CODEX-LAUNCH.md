@@ -7,6 +7,51 @@
 review (`personal-codex-review`) や worker (`personal-codex-worker`) の起動を流用しません。目的
 (監査は repo 全体の untrusted な内容を長く読む) と境界が違うためです。
 
+## personal-codex-launch で起動して回収する (#672)
+
+run script の生成、pane の作成と命名、起動、待機、完了の判定、pane の後始末は、配備済みの `personal-codex-launch`
+(`<tool home>/agent-tools/scripts/`。説明は agent-tools の `docs/codex-launch.md`) が、この file の契約のとおりに行います。
+下の各節 (境界、capability preflight、起動経路、run dir と run script、完了の判定) は、script が実装している契約です。手で
+組むのは、script が配備されていない環境だけで、そのときも契約は同じです。
+
+1. **brief を file に書く** (repository の外)。下の「brief」の、役割・手順の正本・対象を書きます。制約・読まないもの・出力の
+   形 (schema に従う JSON だけ) は script が brief の先頭に足すので、書きません。
+2. **起動する**。値は、検査してから literal の変数で渡します。
+
+   ```sh
+   launch="$HOME/.claude/agent-tools/scripts/personal-codex-launch"
+   "$launch" launch --kind json --repo "$repo" --brief "$brief" --label "$label" \
+     --schema "$schema" --effort "$effort" --run-root "$run_root"
+   ```
+
+   - `--schema` は、この skill の directory の `findings.schema.json` (反証は sweep の `refutation.schema.json`、相談は grill の
+     `consult.schema.json`)。script が run dir に `schema.json` として写すので、起動中に skill が更新されても、その run の
+     schema は変わりません。
+   - `--effort` は呼び出し側が決めた値 (sweep はプリセットの値)。model と provider と otel は、script が
+     `personal-codex-model-selection --profile review --format json` から読みます。
+   - `--label` は pane の名前の後ろの部分です (script が `audit-` を前に付ける)。
+   - `--run-root` は、run dir を置く directory (repository の外)。省くと system の一時 directory。再開で回収する呼び出し側
+     (sweep) は、起動の前に記録した directory を渡します (sweep の `RECORD.md`)。
+3. **出力 (JSON 1 行) の `status` で分ける**。`STARTED` なら `run_dir` を控えて 4 へ。`BLOCKED` の `capability-preflight` は
+   下の「capability preflight」の停止、`launch-path` は下の「起動経路」の 2 か 3 (返った `script` が run script) です。
+   `notes` に「認証の command は引き継がない」があれば、報告に添えます。
+4. **回収する**。待つ回数は `--waits` で決めます (監査は 3 回、相談は 1 回)。
+
+   ```sh
+   "$launch" collect --run-dir "$run_dir" --waits 3
+   ```
+
+   - `DONE` (exit 0): `result` (`<run dir>/result.json`) を data として読みます (下の「結果の扱い」)。
+   - `RUNNING` (exit 3): 今回の nonce の `done.txt` がまだ無い、ということです (下の「完了の判定」の実行中)。script は process の
+     有無では判定しません。pane を閉じず、同じ対象を新しく起動しません。後から、同じ run dir にもう一度 `collect` をかけます。
+   - `BLOCKED` で `executor-exit`: `Blocked at: executor-exit`。
+   - `BLOCKED` で `executor-result`: 結果の file が欠けている・空・JSON として読めない・schema の必須の key が無い、のどれかです
+     (`retryable` は true)。新しい `launch` で同じ brief を 1 回だけ起動し直し、2 回目も同じなら `Blocked at: executor-result`。
+
+script で起動した run の file の名前は、手で組むときと 2 つ違います。run dir の schema は `schema.json` (手で組むときは
+`findings.schema.json`)、完了の印は `CODEX-JSON-DONE-<nonce>` (手で組むときは `CODEX-AUDIT-DONE-<nonce>`) です。完了の判定は
+`collect` が行うので、呼び出し側が印の名前を扱うことはありません。
+
 ## 境界
 
 - **sandbox と approval**: `-s read-only` と `-c approval_policy="never"`。監査は書き込みを要らず、

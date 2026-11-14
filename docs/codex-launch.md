@@ -163,6 +163,20 @@ launch="$HOME/.claude/agent-tools/scripts/personal-codex-launch"
 
 値 (repo・brief・label・ref・OID・run dir) は、検査してから literal の変数で渡します (各 skill の「値の受け渡し」)。
 
+## 各 skill からの呼び方
+
+| 呼び出し側 | kind | schema | effort | 待ち (`--waits`) | 手順の場所 |
+| --- | --- | --- | --- | --- | --- |
+| `personal-codex-review` (PR の review、second opinion) | `review` | なし | model の選択の値 | 3 | `LAUNCH.md` の先頭の節。brief の雛形は `BRIEF-TEMPLATE.md` |
+| `personal-repo-audit` (Codex に監査させる) | `json` | `findings.schema.json` | 呼び出し側の値 | 3 | `CODEX-LAUNCH.md` の先頭の節 |
+| `personal-maintenance-sweep` の反証 | `json` | `refutation.schema.json` | プリセットの値 | 3 | `REFUTE.md`。run dir の記録は `RECORD.md` |
+| `personal-grill-me` / `personal-grill-with-docs` の事前相談 | `json` | `consult.schema.json` | high (追加の相談は medium) | 1 | `CONSULT.md` |
+| 受け入れの scenario の作成 (#667 の試行) | `text` | なし | model の選択の値 | 3 | Issue #667 |
+| 受け入れの scenario の判定 (#667 の試行) | `json` | 判定の schema | medium | 3 | Issue #667 |
+
+再開で回収する呼び出し側 (sweep) は、起動の前に、その起動だけに使う directory を記録して `--run-root` に渡します。
+run dir は、その下にできるただ 1 つの directory です。
+
 ## 確かめていること (test)
 
 `scripts/tests/codex-launch-test.sh` が、PATH の上の偽の `codex`・`herdr` と、同じ directory の偽の
@@ -174,4 +188,6 @@ launch="$HOME/.claude/agent-tools/scripts/personal-codex-launch"
 - pane の置き方 (列の候補の有無、同じ高さ、読めないときの右への分割) と、`launch-path` で止まる条件。
 - collect の 3 つの状態と、pane を閉じる条件。brief と結果の本文を出力に出さない。
 
-本物の `codex exec` の完走と、本物の pane の分割は、test では確かめていません。配備の後の実際の起動で確かめます。
+本物の `codex exec` の完走と、本物の pane の分割は、test では確かめていません。PR #679 の review 2 回と判定 3 回を、
+この script で起動して回収し、本物の herdr と codex で、列への配置から pane の後始末まで動くことを確かめました
+(2026-11-14、Codex CLI 0.165.0、herdr 0.9.5)。

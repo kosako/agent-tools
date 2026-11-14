@@ -45,6 +45,11 @@
 personal-repo-audit の `CODEX-LAUNCH.md` と同じ起動を使います (境界の flag、capability preflight、起動
 経路、run script、完了の判定、停止)。違うのは次の 5 点だけです。
 
+起動と回収は、`CODEX-LAUNCH.md` の先頭の節のとおり、配備済みの `personal-codex-launch` で行います (#672)。
+`launch --kind json --schema <この skill の refutation.schema.json> --effort <プリセットの値> --label refute-<run id>`
+`--run-root <起動の前に記録した directory>` で起動します (記録は `RECORD.md` の `refute-run`)。入力の `findings.json` は、
+launch の前に呼び出し側が repository の外に置き、その場所を brief に書きます (script の run dir には置かない)。
+
 | 項目 | 監査 (CODEX-LAUNCH.md) | 反証 |
 | --- | --- | --- |
 | run dir に置く schema | repo-audit の `findings.schema.json` | この skill の `refutation.schema.json` (copy して置く) |
