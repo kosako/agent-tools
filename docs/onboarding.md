@@ -238,6 +238,8 @@ script / plugin) のまま。
   受け渡す。規約は [agent-packets](agent-packets.md)。
 - herdr の上で作業単位を同時に進めるときの範囲 (1 + 1)、tab / pane の命名、dashboard、通知は
   [herdr-operations](herdr-operations.md)。
+- read-only の Codex (review・監査・反証・相談) の起動と回収は、配備済みの `personal-codex-launch` が受け持つ
+  ([codex-launch](codex-launch.md)。起動の境界と完了の判定の正本は、各 skill の LAUNCH のまま)。
 - 開発の流れを外から数えるための目印 (trailer・Issue との紐付け・review の結果の 5 行・`escape` の label) の
   約束は [work-markers](work-markers.md)。
 

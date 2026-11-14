@@ -157,4 +157,4 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
 - #251 (umbrella: herdr 前提の運用形) / #256 (この設計) / #315 (起動の記録) / #316 (worker を tab で
   起動)
 - [agent-packets](agent-packets.md) (packet の規約、worker 委譲との関係) /
-  [codex-review-launch](codex-review-launch.md) (review の herdr 経由起動)
+  [codex-review-launch](codex-review-launch.md) (review の herdr 経由起動)、[codex-launch](codex-launch.md) (起動と回収の script)
