@@ -62,6 +62,9 @@ module WorkMarkerCheck
   VERDICT_NEAR = /review process verdict/i
   FINDING_NEAR = /finding summary/i
   TARGET_NEAR = /target:/i
+  # 行の先頭からの `**Independence:` で始まる行は、値が表の外でも Independence の行として数える (正しい行と表の外の値の行が
+  # 並んだ結果を通さないため。#678 の review の F1)。personal-merge-preflight も同じ形で行を選ぶ。
+  INDEPENDENCE_SHAPE = /\A\*\*Independence:/
   INDEPENDENCE_NEAR = /independence:/i
   ORIGIN_NEAR = /元の\s*PR/
 
@@ -130,8 +133,10 @@ module WorkMarkerCheck
       verdict_at = exactly_one(VERDICT_LINE, VERDICT_NEAR, "verdict-line", "`**Review process verdict: <verdict>**` の行")
       summary_at = exactly_one(FINDING_SUMMARY, FINDING_NEAR, "finding-summary", "`**Finding summary: 🔴 must N / 🟡 should N / ⚪ nit N**` の行")
       exactly_one(TARGET_LINE, TARGET_NEAR, "target-line", "`**Target: base <base ref> <base OID> / head <head OID>**` の行 (OID は 40 桁)")
-      exactly_one(INDEPENDENCE_LINE, INDEPENDENCE_NEAR, "independence-line",
-                  "`**Independence: <値>**` の行 (値は review-output-contract の表のどれか)")
+      independence_at = exactly_one(INDEPENDENCE_SHAPE, INDEPENDENCE_NEAR, "independence-line", "`**Independence: <値>**` の行")
+      if independence_at && !INDEPENDENCE_LINE.match?(@lines[independence_at - 1])
+        error(independence_at, "independence-line", "`**Independence: <値>**` の行の値が、review-output-contract の表のどれでもない (値の後ろに補足を足さない)")
+      end
       return unless verdict_at && summary_at
 
       verdict = VERDICT_LINE.match(@lines[verdict_at - 1])[:verdict]

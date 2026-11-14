@@ -15,7 +15,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:28e6376bb87f211473d4d35b4c7d39743581be7ed708bbf37066db863e2d07a8
+  approved_build_id: sha256:e3992c516482d3ba18a839858fea4960ddac05e1b7eed24e2354b4d3e1efd092
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-merge-preflight.rb

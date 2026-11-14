@@ -139,8 +139,8 @@ marker=<tool home>/agent-tools/scripts/personal-work-marker-check
 - `review-result`: 3 の 5 行が、行の先頭からちょうど 1 回ずつある (code block の中も数えるので、数える側が code block を
   読み分けなくて済むように、重複を投稿の前に止める)。verdict が `Finding summary` の数と合う (review の output contract
   の表: must があれば REJECT、must 0 で should があれば Warning、どちらも 0 なら APPROVE)。`Target:` の行の値が PR の
-  今の対象と合うかは確かめない (形だけ。照合は merge の前に行う)。`Independence:` の行は、値が上の表のどれかであることまでを
-  確かめ、routing と合うかは確かめない (照合は merge の前に行う)。
+  今の対象と合うかは確かめない (形だけ。照合は merge の前に行う)。`Independence:` の行は、行の先頭からの `**Independence:` で始まる行をすべて数え (値が表の外でも数える)、ちょうど 1 回で、
+  値が上の表のどれかであることまでを確かめ、routing と合うかは確かめない (照合は merge の前に行う)。
 - `escape-issue`: 4 の `元の PR:` の行が、行の先頭からちょうど 1 回ある。
 - exit: 0 = 形が合う / 1 = 形が崩れている (投稿しない。stdout の行に行番号と規則が出る) / 2 = usage・入力を読めない
   (1 MiB を超える、UTF-8 として読めない、`pr` の 2 行目が空でない、題が空)・想定外の例外。何も書かず、network に

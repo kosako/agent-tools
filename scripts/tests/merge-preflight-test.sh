@@ -34,6 +34,7 @@ PC = DependabotPinCheck
 check "heading form equals work-marker-check", MP::RESULT_HEADING.source.sub("(?<reviewer>", "(?:") == WM::RESULT_HEADING.source
 check "verdict form equals work-marker-check", MP::VERDICT_LINE.source == WM::VERDICT_LINE.source
 check "target form equals work-marker-check", MP::TARGET_LINE.source == WM::TARGET_LINE.source
+check "independence shape equals work-marker-check", MP::INDEPENDENCE_SHAPE.source == WM::INDEPENDENCE_SHAPE.source
 # 候補は、決まった 3 行のどれかに近い行を持つコメント (#665 の review の F1・F4)。検査が受け付ける形はすべて候補になる。
 cand = ->(body) { MP.result_candidate?(body) }
 %w[Codex Claude personal-dependabot-pin-check].each do |r|
@@ -419,6 +420,13 @@ o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body.sub(/^\
 check "a result without the Independence line is not ok", s == 1 && o.include?("review: result-form-broken")
 o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body + "\n**Independence: second-opinion only**\n")]) }
 check "conflicting Independence lines are not ok", s == 1 && o.include?("review: result-form-broken")
+# 正しい行と表の外の値の行が並んだ結果は、どちらの順でも止まる (2 つの script が同じ 1 行を読む。#678 の review の F1)。
+["**Independence: not-established**", "**Independence: independent**", "**Independence: second-opinion only"].each do |extra|
+  o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body + "\n#{extra}\n")]) }
+  check "a valid line followed by an off-table line (#{extra}) is not ok", s == 1 && o.include?("review: result-form-broken (comment 1")
+  o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body.sub(/^\*\*Independence:/) { "#{extra}\n**Independence:" })]) }
+  check "an off-table line followed by a valid line (#{extra}) is not ok", s == 1 && o.include?("review: result-form-broken (comment 1")
+end
 # 正しい古い結果の後ろの、独立でない結果が決める (前の承認に戻らない)。
 o, _e, s, = run_case { |m| set_comments(m, [comment(1, "me", result_body), comment(2, "me", result_body(independence: "second-opinion only"))]) }
 check "a later second-opinion result decides", s == 1 && o.include?("review: independence-mismatch (comment 2")

@@ -73,7 +73,7 @@ gh pr merge "$pr" --repo "$repo" --squash --match-head-commit "$head" --subject 
      `deterministic check (dependabot pin)`、それ以外は `cross-review verified (author=<routing の author>)` のときだけ
      合います。`second-opinion only`・`human review`・`not-established`・別の author の `cross-review verified` は
      `independence-mismatch` で not ok です (独立した承認として扱わない。review の output contract)。行が無い・重複する・
-     値が表の外のときは、上の形の検査が `result-form-broken` で止めます。出力に行の値は載せません。
+     値が表の外のときは、上の形の検査が `result-form-broken` で止めます (正しい行と表の外の値の行が並んだときも、順によらず止めます)。出力に行の値は載せません。
    - verdict が `APPROVE` (`Warning` と `REJECT` は `not-approved`)。
    - `Target:` の行の base ref が PR の base の branch の名前と、head が PR の今の head と同じ。
    - review の base OID と head の merge-base が、base の branch の今の先端と head の merge-base と同じ (`compare` の

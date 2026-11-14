@@ -153,6 +153,13 @@ check "independence in a list item", errs.call("review-result", ok_result.sub(in
 check "independence with trailing text", errs.call("review-result", ok_result.sub(indep, indep + " (round 2)")) == ["independence-line"]
 check "duplicate independence", errs.call("review-result", ok_result + indep + "\n") == ["independence-line"]
 check "conflicting independence", errs.call("review-result", ok_result + "**Independence: second-opinion only**\n") == ["independence-line"]
+# 正しい行と、表の外の値の行が並んだ結果は、どちらの順でも通さない (行の形で数える。#678 の review の F1)。
+["**Independence: not-established**", "**Independence: independent**", "**Independence: cross-review verified (author=claude)** (参考)",
+ "**Independence:**", "**Independence: second-opinion only"].each do |extra|
+  check "a valid line followed by an off-table line (#{extra})", errs.call("review-result", ok_result + extra + "\n") == ["independence-line"]
+  check "an off-table line followed by a valid line (#{extra})", errs.call("review-result", ok_result.sub(indep, extra + "\n" + indep)) == ["independence-line"]
+end
+check "an off-table value alone points at its line", doc.call("review-result", ok_result.sub(indep, "**Independence: not-established**")).errors.map(&:line) == [6]
 check "duplicate independence inside a code block", errs.call("review-result", ok_result + "```\n" + indep + "\n```\n") == ["independence-line"]
 check "broken independence points at the near line", doc.call("review-result", ok_result.sub(indep, "- " + indep)).errors.first.line == 6
 

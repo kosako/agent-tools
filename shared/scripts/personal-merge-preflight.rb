@@ -68,7 +68,10 @@ module MergePreflight
   RESULT_HEADING = /\A## 📋 レビュー結果（by (?<reviewer>Codex|Claude|personal-dependabot-pin-check)）/
   VERDICT_LINE = /\A\*\*Review process verdict: (?<verdict>REJECT|Warning|APPROVE)\*\*[ \t]*\z/
   TARGET_LINE = %r{\A\*\*Target: base (?<ref>\S+) (?<base>[0-9a-f]{40}) / head (?<head>[0-9a-f]{40})\*\*[ \t]*\z}
-  # 独立性の行 (v4、#668)。値が表のどれかであることは personal-work-marker-check が確かめるので、ここでは値を取り出すだけ。
+  # 独立性の行 (v4、#668)。行の先頭からの `**Independence:` で始まる行がちょうど 1 つあり、値が表のどれかであることは
+  # personal-work-marker-check が確かめる。ここでも同じ形 (INDEPENDENCE_SHAPE) で行を選び、ちょうど 1 つのときだけ値を取り出す
+  # (2 つの script が別の行を読まないため。#678 の review の F1)。
+  INDEPENDENCE_SHAPE = /\A\*\*Independence:/
   INDEPENDENCE_LINE = /\A\*\*Independence: (?<value>.+?)\*\*[ \t]*\z/
   PIN_CHECK_HEADING = "personal-dependabot-pin-check"
   PIN_CHECK_INDEPENDENCE = "deterministic check (dependabot pin)"
@@ -435,7 +438,8 @@ module MergePreflight
     heading = lines.map { |l| RESULT_HEADING.match(l) }.compact.first
     verdict = lines.map { |l| VERDICT_LINE.match(l) }.compact.first
     target = lines.map { |l| TARGET_LINE.match(l) }.compact.first
-    independence = lines.map { |l| INDEPENDENCE_LINE.match(l) }.compact.first
+    shaped = lines.select { |l| INDEPENDENCE_SHAPE.match?(l) }
+    independence = shaped.size == 1 ? INDEPENDENCE_LINE.match(shaped.first) : nil
     raise RunError, "結果コメントの決まった行を読めません" if heading.nil? || verdict.nil? || target.nil? || independence.nil?
 
     allowed = HEADING_FOR.fetch(routing[:reviewer]) + BOT_EXTRA_HEADINGS.fetch(routing[:author], [])
