@@ -1,0 +1,31 @@
+schema_version: 1
+name: personal-post-check
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #676 の 1 本目の PR で author≠reviewer レビューのうえ承認する。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:8e05dd867e156a71116bf792d903d3ee1a124f4c122f1abc34841f647ae9e679
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-post-check.rb
+  format: text
+summary: >-
+  投稿や記録の前の 3 つの検査を順にかけ、結果を 1 つにまとめて返す (#676)。投稿はしない。何も書かず、network に触れない。
+  同じ directory の personal-ja-style-check (--stdin)、personal-work-marker-check (--kind <kind> --stdin。--marker-kind を
+  渡したときだけ)、personal-public-safety-gate (--stdin) を argv で起動し (shell を通さない)、1 つが止まっても残りをかける。
+  入力は --body-file の本文 (regular file、UTF-8、1 MiB まで、空白だけでない) と、任意の --title (1 行)。題名があれば
+  「題名、空行、本文」を渡し、目印の review-result と escape-issue には本文だけを渡す。出力は検査ごとの見出しの行と、検査が
+  出した行 (頭に空白 2 文字)、最後に判定の行で、題名や本文を足さない。exit 0 = 投稿してよい / 1 = 止める (gate が exit 0 で
+  ない・gate の警告の行・目印が exit 0 でない・検査を使えない) / 3 = gate と目印は通ったが、文体の指摘をまだ読んでいない
+  (読んで直すか、--style-reviewed を付けてかけ直す) / 2 = usage・入力を読めない・想定外の例外 (stderr に 1 行)。
+  --style-reviewed は exit 3 だけを 0 に変える。規則は 3 つの検査が持ち、この script は変えない (docs/post-check.md)。
