@@ -100,7 +100,8 @@ exit 0 を確かめてから、別の呼び出しで投稿します。検査と�
   (`--marker-kind pr`、`--marker-kind escape-issue`) を指します。
 - `personal-codex-worker` の PR の作成と `personal-maintenance-sweep` の起票・fix の PR は、今の手順 (検査を 1 つずつ) のままです。
   PR の作成では、gate に渡す入力が題名と本文より広く (各 commit の差分、全 commit の message、branch 名を合わせて渡す)、
-  この script の入力に収まりません。
+  この script の入力に収まりません。運用 instruction と operating-loop の宣言も、skill の手順が検査の command を個別に定めて
+  いる場面を範囲の外にしています (同じ本文に、この script と個別の検査を重ねてかけません)。
 - `scripts/tests/post-check-wiring-test.sh` が、これらの文言と、手順の形 (検査と投稿が別の block) を確かめます。
 
 ## 持たないもの

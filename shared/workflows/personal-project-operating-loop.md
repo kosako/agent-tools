@@ -175,7 +175,8 @@ commit・push と、Issue・PR・コメントの投稿の前に、少なくと�
   見せて確認を取る。commit message は commit-msg の hook でも検査される。
 - Issue / PR の題名・本文・コメントは、配備済みの `personal-post-check` (`<tool home>/agent-tools/scripts/`) で、文体の検査・
   目印の検査 (下の 2 つの節。個人 project だけ)・gate を 1 回にまとめてかける (#676)。exit 0 のときだけ、別の呼び出しで投稿する。
-  exit code の読み方は agent-tools の `docs/post-check.md`。
+  skill の手順が検査の command を個別に定めている場面 (`personal-codex-worker` の PR の作成、`personal-maintenance-sweep` の
+  起票と fix の PR) では、その手順に従う。exit code の読み方と組み込み先は agent-tools の `docs/post-check.md`。
 
 ## PR の完了条件
 

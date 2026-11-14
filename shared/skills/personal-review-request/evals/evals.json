@@ -478,7 +478,7 @@
       "assertions": [
         {
           "id": "style-check-before-gate",
-          "text": "投稿の前に personal-post-check に通している (文体の検査と public-safety の gate の両方がかかる。2 つを個別にかける形でも、両方を通していればよい)"
+          "text": "投稿の前に、本文の file を personal-post-check に通している (文体の検査と public-safety の gate を、この 1 回の呼び出しでかける。2 つの検査を個別に呼ぶ手順を答えていない)"
         },
         {
           "id": "fix-or-reason",

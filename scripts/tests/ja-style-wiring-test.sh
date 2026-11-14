@@ -73,11 +73,11 @@ check.call(rules, ja, "gate ではない宣言",
 request = "shared/skills/personal-review-request/SKILL.md"
 step2 = "### 2. 依頼コメントを準備・投稿 (投稿は write-authorized のみ)"
 check.call(request, step2, "まとめてかける句",
-           "本文を書いたら、配備済みの `personal-post-check` (`<tool home>/agent-tools/scripts/`。#676。agent-tools の `docs/post-check.md`) で、投稿の前の検査を 1 回でかけます。")
+           "本文を書いたら、配備済みの `personal-post-check`")
 check.call(request, step2, "文体の検査がかかる句",
-           "かかるのは、文体の検査 (`personal-ja-style-check`。#556。運用 instruction の「日本語の文章」) と public-safety の gate (#413。運用 instruction の public safety) です。")
+           "文体の検査 (`personal-ja-style-check`。#556。運用 instruction の「日本語の文章」)")
 check.call(request, step2, "止めない句",
-           "文体の検査は指摘だけで、投稿を止める gate ではありません。指摘を読んで本文を直してかけ直すか、そのままにする理由を持って `--style-reviewed` を付けてかけ直します。")
+           "文体の検査は指摘だけで、投稿を止める gate ではありません。")
 check.call(request, step2, "手順 4・5 も同じ句", "手順 4 の結果コメントと手順 5 の後続のコメントも同じです")
 check.call(request, step2, "command の行", %q!"$check" --body-file "$body"!)
 # 検査の block は、投稿と同じ本文 file (`body`) を自分で定める (後の block の代入に頼ると、掲載順では未設定の
@@ -92,7 +92,7 @@ end
 check.call(request, "### 4. 結果を PR に投稿", "転記した部分を書き換えない句",
            "文体の指摘で直すのは、依頼元として自分が書く部分 (評価・採用しない理由) だけで、reviewer の指摘を転記した部分は指摘が出ても書き換えない (指摘の中身を変えないため)。")
 check.call(request, "### 5. 後続のやり取りも PR 上で", "後続も通す句",
-           "後続のコメントも、投稿の前に手順 2 と同じく `personal-post-check` に通します (文体の検査と public-safety の gate)。")
+           "後続のコメントも、投稿の前に手順 2 と同じく `personal-post-check` に通します")
 
 handoff = "shared/skills/personal-session-handoff/SKILL.md"
 step3 = "### 3. 記録する"
