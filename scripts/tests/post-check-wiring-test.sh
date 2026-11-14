@@ -4,6 +4,7 @@
 # 説明の文はそのまま固定しない。項目 (「- 」で始まる行とその続き)・文 (「。」まで)・段落・1 つの command (code span) ごとに、
 # 要る語 (script の名前、option、exit code と「投稿する・しない」、理由の語) がそろっているかを見る。言い回しを変えても、
 # 語が同じ単位に残っていれば通る。節の全体からは探さない (語が別の項目や文に移っただけの変更を通さないため)。
+# 照合はどれも、空白の数と行の折り返しに依らない (文書の整形だけの変更で落とさないため)。
 # - 運用 instruction の「## public safety」に、この script でまとめてかける項目があり、exit code ごとの扱い (0 のときだけ
 #   投稿、3 は --style-reviewed、1 と 2 は投稿しない)、検査と投稿を別の呼び出しにすること、skill の手順が検査を個別に
 #   定めている場面は範囲の外であることが入っている。もとの gate の宣言の項目も残っている。
@@ -107,13 +108,23 @@ paragraphs = lambda do |rel, heading, key|
   hits
 end
 
-# 節の中の code span (1 行の中の `…`) のうち、語をすべて含むものが 1 つはある (1 つの command の中で語の組を見る)。
+# 節の中の code span (`…`。行をまたいで折り返してもよい。fence の中は読まない) のうち、語をすべて含むものが 1 つはある
+# (1 つの command の中で語の組を見る)。span の境界はそのままに、中の空白と折り返しを除いて比べる。
 command_span = lambda do |rel, heading, label, words|
   body = section.call(rel, heading)
   next if body.nil?
-  spans = body.scan(/`([^`\n]+)`/).flatten
+  prose = +""
+  fence = false
+  body.each_line do |l|
+    if l =~ /\A\s*```/
+      fence = !fence
+      next
+    end
+    prose << l unless fence
+  end
+  spans = prose.scan(/`([^`]+)`/).flatten.map { |span| squash.call(span) }
   errors << "#{rel} の「#{heading}」に、#{label} (#{words.join(" と ")} を含む 1 つの command) が無い" \
-    unless spans.any? { |span| words.all? { |w| span.include?(w) } }
+    unless spans.any? { |span| words.all? { |w| span.include?(squash.call(w)) } }
 end
 
 # text の中に、語がすべてある。
@@ -151,18 +162,19 @@ terms.call("#{where2} の script が無いときの項目", item.call(request, s
 
 step2_body = section.call(request, step2).to_s
 blocks = []
-step2_body.scan(/^```sh\n(.*?)^```/m) { |m| blocks << m[0] }
-check_at = blocks.index { |b| b.include?(%q("$check" --body-file "$body")) }
-post_at = blocks.index { |b| b.match?(/^gh pr comment /) }
+# block の中の command は、空白の数と字下げに依らずに見る。
+step2_body.scan(/^[ \t]*```sh[ \t]*\n(.*?)^[ \t]*```/m) { |m| blocks << m[0] }
+check_at = blocks.index { |b| b.match?(/"\$check"\s+--body-file\s+"\$body"/) }
+post_at = blocks.index { |b| b.match?(/^\s*gh\s+pr\s+comment\s/) }
 if check_at.nil?
   errors << "#{where2} に検査 (personal-post-check) の sh の block が無い"
 elsif post_at.nil?
   errors << "#{where2} に投稿 (gh pr comment) の sh の block が無い"
 else
-  errors << "#{where2} で、検査の block に gh の command がある (検査と投稿は別の呼び出し)" if blocks[check_at].match?(/\bgh /)
+  errors << "#{where2} で、検査の block に gh の command がある (検査と投稿は別の呼び出し)" if blocks[check_at].match?(/\bgh\s/)
   errors << "#{where2} で、投稿の block が検査の block より前にある" unless check_at < post_at
   errors << "#{where2} で、検査の block が配備先の personal-post-check を指していない" \
-    unless blocks[check_at].include?("check=<tool home>/agent-tools/scripts/personal-post-check")
+    unless squash.call(blocks[check_at]).include?(squash.call("check=<tool home>/agent-tools/scripts/personal-post-check"))
 end
 %w[gate_err "$gate" "$style"].each do |old|
   errors << "#{where2} に、検査を 1 つずつ組み立てる前の形 (#{old}) が残っている" if step2_body.include?(old)

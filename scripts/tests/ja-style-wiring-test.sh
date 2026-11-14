@@ -83,10 +83,10 @@ check.call(request, step2, "command の行", %q!"$check" --body-file "$body"!)
 # 検査の block は、投稿と同じ本文 file (`body`) を自分で定める (後の block の代入に頼ると、掲載順では未設定の
 # `body` を渡すことになる)。
 step2_body = section.call(read.call(request), step2).to_s
-check_block = step2_body[/^```sh\n((?:(?!^```).*\n)*?)"\$check" --body-file "\$body"/m, 1]
+check_block = step2_body[/^[ \t]*```sh[ \t]*\n((?:(?![ \t]*```).*\n)*?)[ \t]*"\$check"[ \t]+--body-file[ \t]+"\$body"/m, 1]
 if check_block.nil?
   errors << "#{request} の手順 2 に検査 (personal-post-check) の sh の block が無い"
-elsif !check_block.match?(/^body=/)
+elsif !check_block.match?(/^[ \t]*body=/)
   errors << "#{request} の手順 2 の block で `body` の代入が検査より前に無い"
 end
 check.call(request, "### 4. 結果を PR に投稿", "転記した部分を書き換えない句",
