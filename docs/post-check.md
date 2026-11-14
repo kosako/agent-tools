@@ -59,6 +59,8 @@ post-check: style-findings (1 件。読んで直すか、--style-reviewed を付
   `public-safety-gate: warning:` の行がある)、`marker` (目印の検査が exit 0 でない)、`unavailable` (検査を使えない) で、
   当てはまるものをこの順に並べます。
 - `unavailable` は、検査の file が無い・起動できないとき、文体の検査が exit 0 で終わらないとき、件数の行を読めないときです。
+  件数の行は、検査の stdout の最後の行で、同じ形の行がほかに無いときだけ読みます (途中の行や重複した行から件数を拾いません)。
+  目印の検査の件数の行も同じ読み方で、形が外れたら見出しは `stop (exit <N>)` になります (止める判定は exit で決まり、変わりません)。
 - gate の行は、stderr、stdout の順に出します。3 つの検査が出す行のほかに、題名や本文を出力に足しません。
 - exit 0・1・3 のとき、stderr には何も出しません (検査の stderr も stdout の中に並べます)。
 

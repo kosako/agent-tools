@@ -134,6 +134,30 @@ check "a directory with spaces and shell characters works", s == 0 && e.empty? &
 check "nothing in the path was run by a shell", Dir.glob(File.join(File.dirname(BASE), "**", "PWNED")).empty? && !File.exist?(File.join(dir, "PWNED"))
 s, o, = post(BODY) { |dir| fake(dir, TOOLS[0], %q(puts "no count line")) }
 check "a style check without a count line is unavailable", s == 1 && o.include?("style: unavailable\n") && last_line(o) == "post-check: stop (unavailable)"
+# 件数の行は、stdout の最後に 1 つだけ、という形のときだけ読む (壊れた出力から「0 件」を拾って通さない)。
+count0 = %q(puts "ja-style-check: 0 finding(s) in 1 input(s)")
+count1 = %q(puts "ja-style-check: 1 finding(s) in 1 input(s)")
+{
+  "two count lines (1 then 0)" => "#{count1}; #{count0}",
+  "two count lines (0 then 1)" => "#{count0}; #{count1}",
+  "the same count line twice" => "#{count0}; #{count0}",
+  "a line after the count line" => %Q(#{count0}; puts "-:1: [bold-label] late"),
+  "a count line with a suffix" => %q(puts "ja-style-check: 0 finding(s) in 1 input(s) extra"),
+  "a count line on stderr only" => %q(warn "ja-style-check: 0 finding(s) in 1 input(s)")
+}.each do |label, source|
+  [[], ["--style-reviewed"]].each do |flag|
+    s, o, e, = post(BODY + flag) { |dir| fake(dir, TOOLS[0], source) }
+    check "style output with #{label} is unavailable#{flag.empty? ? '' : ' even when reviewed'}",
+          s == 1 && e.empty? && o.include?("style: unavailable\n") && o.include?("gate: ok\n") && last_line(o) == "post-check: stop (unavailable)"
+  end
+end
+s, o, = post(BODY) { |dir| fake(dir, TOOLS[0], %Q(puts "-:1: [bold-label] x"; #{count1})) }
+check "finding lines before a single last count line are read", s == 3 && o.include?("style: 1 finding(s)\n")
+marker_count = %q(puts "work-marker-check: review-result: 1 error(s) (markers v4)")
+s, o, = post(BODY + ["--marker-kind", "review-result"]) { |dir| fake(dir, TOOLS[1], "#{marker_count}; #{marker_count}; exit 1") }
+check "two marker count lines are shown as the exit, not as a count", s == 1 && o.include?("marker: stop (exit 1)\n") && last_line(o) == "post-check: stop (marker)"
+s, o, = post(BODY + ["--marker-kind", "review-result"]) { |dir| fake(dir, TOOLS[1], %Q(#{marker_count}; puts "late"; exit 1)) }
+check "a line after the marker count line is shown as the exit", s == 1 && o.include?("marker: stop (exit 1)\n")
 
 # ---- 検査を使えない (file が無い・起動できない・文体の検査が exit 2)。残りの検査はかける。--style-reviewed でも通さない。
 stopping = STYLE + "\nCloses #677\n" + WARNING

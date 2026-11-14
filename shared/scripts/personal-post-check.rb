@@ -184,17 +184,25 @@ module PostCheck
     Result.new("unavailable", lines, ["unavailable"], nil)
   end
 
+  # 検査の stdout から件数の行を読む。stdout の最後の行で、同じ形の行がほかに無いときだけ読む (途中の行や重複した行から
+  # 件数を拾わない。形が外れた出力は、読めないものとして扱う)。
+  def count_line(lines, pattern)
+    return nil unless lines.count { |line| pattern.match?(line) } == 1
+
+    pattern.match(lines.last)
+  end
+
   # exit 0 以外で終わった検査の見出しの語。signal で終わった検査には exit code が無い。
   def stop_label(status)
     status.nil? ? "stop (signal)" : "stop (exit #{status})"
   end
 
-  # 文体: 指摘だけの検査。exit 0 で件数の行を読めたときだけ使える。
+  # 文体: 指摘だけの検査。exit 0 で、件数の行を決まった形 (count_line) で読めたときだけ使える。
   def check_style(dir, input)
     out, err, status = capture(dir, STYLE_NAME, ["--stdin"], input)
     return unavailable if out.nil?
 
-    count = out.map { |line| STYLE_COUNT.match(line) }.compact.last
+    count = count_line(out, STYLE_COUNT)
     return unavailable(out + err) unless status == 0 && count
 
     Result.new("#{count[:count]} finding(s)", out + err, [], count[:count].to_i)
@@ -208,7 +216,7 @@ module PostCheck
     return unavailable if out.nil?
     return Result.new("ok", out + err, [], nil) if status == 0
 
-    count = out.map { |line| MARKER_ERRORS.match(line) }.compact.last
+    count = count_line(out, MARKER_ERRORS)
     label = status == 1 && count ? "#{count[:count]} error(s)" : stop_label(status)
     Result.new(label, out + err, ["marker"], nil)
   end
