@@ -4,7 +4,7 @@
     {
       "name": "takt-policies",
       "repo": "nrslib/takt",
-      "pin": "7247bb81296569814354e6b72cb4eb1db718f3d6",
+      "pin": "2726b3cc4a22bfb967caf49d5e884a902814649f",
       "notice": "shared/skills/personal-production-rail/references/policies/NOTICE.md",
       "files": {
         "builtins/ja/facets/policies/ai-antipattern.md": "c7bef2b0597d2696e42205172c3c4b06e778851a",
@@ -12,9 +12,9 @@
         "builtins/ja/facets/policies/existing-system-respect.md": "638af69285d35cad319a2c5cf5cc838de2ea21db",
         "builtins/ja/facets/policies/design-planning.md": "eed7d8a49e03739a8a8826c86fd851dbf0e6838c",
         "builtins/ja/facets/policies/review.md": "090f29ca2a8413ade8f66407bb22a748b2e6dbf9",
-        "builtins/ja/facets/partials/policies/review-common.md": "44814257ae155431a7a3f6b8903eaa8a2c3edf82",
+        "builtins/ja/facets/partials/policies/review-common.md": "0024d97c88ed6acf9f47546dec51e9aa546115e2",
         "builtins/ja/facets/partials/policies/applicable-inputs.md": "e1457d36af3c8df9ca5a60efe4360fbb78b4a56f",
-        "builtins/ja/facets/partials/policies/evidence-based-judgment.md": "2975b73d57f569fb6cf7c960684d0c3275068b9e",
+        "builtins/ja/facets/partials/policies/evidence-based-judgment.md": "449d9fd90b983c91d6c7d4e3f3c1ec293af203d0",
         "builtins/ja/facets/partials/policies/finding-validity.md": "0c43b606f7266f5fd27f2570dd19bc3aa2710521",
         "builtins/ja/facets/partials/policies/reviewer-evidence.md": "9b1631c21fbcb40bd0b9623d66cb10e12f241142"
       }
