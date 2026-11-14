@@ -30,14 +30,17 @@ run script の生成、pane の作成と命名、起動、待機、完了の判�
    - `--effort` は呼び出し側が決めた値 (sweep はプリセットの値)。model と provider と otel は、script が
      `personal-codex-model-selection --profile review --format json` から読みます。
    - `--label` は pane の名前の後ろの部分です (script が `audit-` を前に付ける)。
-   - `--run-root` は、run dir を置く directory (repository の外)。省くと system の一時 directory。再開で回収する呼び出し側
-     (sweep) は、起動の前に記録した directory を渡します (sweep の `RECORD.md`)。
+   - `--run-root` は、run dir を置く directory (repository の外)。その起動だけに使う新しい directory を渡します (run dir は、
+     その下にできるただ 1 つの directory)。省くと system の一時 directory に作られますが、想定外の例外のときに起動の状況を
+     確かめられません。再開で回収する呼び出し側 (sweep) は、起動の前に記録した directory を渡します (sweep の `RECORD.md`)。
 3. **出力 (JSON 1 行) の `status` で分ける**。`STARTED` なら `run_dir` を控えて 4 へ。`BLOCKED` の `capability-preflight` は
    下の「capability preflight」の停止、`launch-path` は下の「起動経路」の 2 か 3 (返った `script` が run script) です。
    `notes` に「認証の command は引き継がない」があれば、報告に添えます。exit 2 は、入力の誤り (何も起動していない) か、
    想定外の例外 (stderr が `unexpected error`。起動に至っていないとは限らない) です。想定外の例外では、同じ値で起動し直す
-   前に、`audit-<label>` の pane が出来ていないかを `herdr pane list` で確かめ、出来ていれば起動し直さずに人に返します
-   (`personal-codex-review` の `LAUNCH.md` の同じ節と同じ扱い)。
+   前に、`--run-root` に渡した directory の下の run dir の `launch.json` で、起動の状況を確かめます。run dir が無いか
+   `pane_id` が null なら起動していないので、起動し直してかまいません。`pane_id` があれば起動し直さずに `collect` をかけ、
+   確かめられなければ起動し直さずに人に返します (`personal-codex-review` の `LAUNCH.md` の同じ節と同じ扱い。
+   `audit-<label>` の pane が無いことを、未起動の根拠にしません)。
 4. **回収する**。待つ回数は `--waits` で決めます (監査は 3 回、相談は 1 回)。
 
    ```sh

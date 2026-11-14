@@ -19,10 +19,13 @@ run script の生成、pane の作成と命名、起動、待機、完了の判�
 
    ```sh
    launch="$HOME/.claude/agent-tools/scripts/personal-codex-launch"   # Codex の session なら $HOME/.codex の下
-   "$launch" launch --kind review --repo "$repo" --brief "$brief" --label "$label" \
+   "$launch" launch --kind review --repo "$repo" --brief "$brief" --label "$label" --run-root "$run_root" \
      --base-ref "$base_ref" --base-oid "$base_oid" --head-oid "$head_oid"
    ```
 
+   - `--run-root` には、その起動だけに使う新しい directory (repository の外) を渡します。run dir は、その下にできるただ 1 つの
+     directory です。省くと system の一時 directory に作られますが、下の想定外の例外のときに run dir を特定できず、起動の
+     状況を確かめられません。
    - `--label` は pane の名前の後ろの部分です (script が `review-` を前に付ける)。PR の review は PR の番号、2 回目以降は
      `<PR 番号>-r<回数>`、PR の無い対象は下の「herdr 経由」の命名の後ろの部分 (OID の先頭 7 文字、`uncommitted`)。
    - base mode では OID を必ず渡します。script が、local の `HEAD`・base ref・base OID・clean な作業ツリーを確かめ
@@ -41,8 +44,14 @@ run script の生成、pane の作成と命名、起動、待機、完了の判�
    - exit 2 で、stderr が入力の誤りの理由 (どの引数がなぜ外れたか) のとき: 何も起動しておらず、run dir も作っていません。
      値を直して起動し直します。
    - exit 2 で、stderr が `unexpected error` (想定外の例外) のとき: 起動に至っていないとは限りません。同じ値で起動し直す前に、
-     呼び出し元の tab に `review-<label>` の pane が出来ていないかを `herdr pane list` で確かめます。出来ていれば起動し直さず、
-     pane を残して人に返します (2 本目が並んで走らないように)。出来ていなければ、起動し直してかまいません。
+     `--run-root` に渡した directory の下に、`launch.json` を持つ run dir が出来ていないかを見ます。
+     - run dir が無い、または `launch.json` の `pane_id` が null: pane で run script を走らせる前に止まっています (Codex は
+       起動していません)。起動し直してかまいません。
+     - `launch.json` に `pane_id` がある: 起動済みかもしれません。起動し直さず、その run dir に `collect` をかけて、
+       `done.txt` の有無で判定します (`RUNNING` なら、pane を残して人に返します)。
+     - `--run-root` を渡していない、directory を読めないなど、起動の状況を確かめられない: 起動し直さず、人に返します
+       (2 本目が並んで走らないように)。pane の label は、命名に失敗すると付かないので、`review-<label>` の pane が無いことを
+       未起動の根拠にしません。
 4. **回収する**。最大 15 分 (300 秒 × 3 回) 待つので、background で流します。
 
    ```sh

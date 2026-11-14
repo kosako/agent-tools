@@ -57,7 +57,7 @@ head = "### personal-codex-launch で起動して回収する (#672)"
 check.call(launch_md, head, "script の場所の句", "配備済みの `personal-codex-launch`")
 check.call(launch_md, head, "手で組むのは script が無いときだけの句", "手で組むのは、script が配備されていない環境だけ")
 check.call(launch_md, head, "launch の command",
-           %q("$launch" launch --kind review --repo "$repo" --brief "$brief" --label "$label" \ --base-ref "$base_ref" --base-oid "$base_oid" --head-oid "$head_oid"))
+           %q("$launch" launch --kind review --repo "$repo" --brief "$brief" --label "$label" --run-root "$run_root" \ --base-ref "$base_ref" --base-oid "$base_oid" --head-oid "$head_oid"))
 check.call(launch_md, head, "collect の command", %q("$launch" collect --run-dir "$run_dir"))
 check.call(launch_md, head, "brief に制約を書かない句", "script が brief の先頭に足すので、書きません")
 check.call(launch_md, head, "値の受け渡しの句", "検査してから literal の変数で渡します")
@@ -70,8 +70,14 @@ check.call(launch_md, head, "verdict の無い結果は再実行しない句", "
 check.call(launch_md, head, "直接は起動しない経路の句", "`SKILL.md` §2 の起動経路の 2")
 # exit 2 は入力の誤りと想定外の例外で扱いを分け、fallback の run の回収は状態ごとに分ける (#680 の review の F2・F3)。
 check.call(launch_md, head, "入力の誤りでは何も起動していない句", "何も起動しておらず、run dir も作っていません")
-check.call(launch_md, head, "想定外の例外で起動し直す前に確かめる句", "同じ値で起動し直す前に、\n呼び出し元の tab に `review-<label>` の pane が出来ていないか")
-check.call(launch_md, head, "pane が出来ていれば起動し直さない句", "出来ていれば起動し直さず、\npane を残して人に返します")
+# 想定外の例外の後は、run dir の launch.json の pane の ID で起動の状況を確かめる。label の pane が無いことは根拠にしない
+# (命名に失敗しても起動は続く。#680 の review の round 2 の F2)。
+check.call(launch_md, head, "run root を渡す句", "`--run-root` には、その起動だけに使う新しい directory (repository の外) を渡します")
+check.call(launch_md, head, "想定外の例外で起動し直す前に確かめる句", "同じ値で起動し直す前に、\n`--run-root` に渡した directory の下に、`launch.json` を持つ run dir が出来ていないか")
+check.call(launch_md, head, "pane_id が null なら起動していない句", "run dir が無い、または `launch.json` の `pane_id` が null")
+check.call(launch_md, head, "pane_id があれば起動し直さない句", "`launch.json` に `pane_id` がある: 起動済みかもしれません。起動し直さず、その run dir に `collect` をかけて")
+check.call(launch_md, head, "確かめられなければ人に返す句", "起動の状況を確かめられない: 起動し直さず、人に返します")
+check.call(launch_md, head, "label の pane を根拠にしない句", "pane が無いことを\n未起動の根拠にしません")
 check.call(launch_md, head, "pane_id が null の run の句", "`launch.json` の `pane_id` が null の run")
 check.call(launch_md, head, "直接起動で done.txt が無いときの句", "`Blocked at: executor-exit` として\n扱います")
 check.call(launch_md, head, "pane_id がある launch-path の run は collect にかけない句", "この run は `collect` にかけず")
@@ -147,7 +153,9 @@ check.call("#{sweep}/REFUTE.md", "## 検証役が Codex のとき", "起動の�
 check.call("#{sweep}/REFUTE.md", "## 検証役が Codex のとき", "script の経路の入力の置き場の句", "`<起動の前に記録した directory>/findings.json` の場所を書きます")
 check.call("#{sweep}/REFUTE.md", "## 検証役が Codex のとき", "手で組むときの置き場の句", "手で組むとき (run dir を自分で作るとき) の置き場")
 check.call("#{sweep}/REFUTE.md", "## 検証役が Codex のとき", "制約は script が足す句", "は script が brief の先頭に足します")
-check.call(codex_launch, ahead, "想定外の例外で起動し直す前に確かめる句", "`audit-<label>` の pane が出来ていないかを `herdr pane list` で確かめ")
+check.call(codex_launch, ahead, "想定外の例外で起動の状況を確かめる句", "run dir の `launch.json` で、起動の状況を確かめます")
+check.call(codex_launch, ahead, "確かめられなければ人に返す句", "確かめられなければ起動し直さずに人に返します")
+check.call(codex_launch, ahead, "label の pane を根拠にしない句", "`audit-<label>` の pane が無いことを、未起動の根拠にしません")
 
 # 4. sweep の run dir の記録
 check.call("#{sweep}/SKILL.md", "### 3. 監査する (単位ごと)", "起動の前に directory を記録する句",
