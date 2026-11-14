@@ -15,6 +15,8 @@
 #   command が gate の command より前にある。FIX.md の検証の節に commit message を通す句、PR の節に題名と本文を通す句と
 #   command の行がある。SKILL.md の手順 7 と 7b の要約にも通す句がある。
 # 節は見出しの level で次の見出しまでを取り、code block の中の見出し (雛形の `## 主張` など) では区切らない。
+# 文書を単位 (節、sh の block、一覧の項目、雛形の block) に分ける読み方と、受ける整形の範囲は lib/markdown_units.rb が持つ。
+# この test は、文書を直接 正規表現で読まない。
 # - 雛形 (review-request の TEMPLATES.md の markdown の block と、codex-review の RESULT-FORMAT.md の text の block) を
 #   検査の script にかけて、bold-label と em-dash が出ない (雛形が型を指示していない)。
 # - 3 つの skill の evals.json に、検査に触れる case がある。
@@ -45,6 +47,16 @@ check = lambda do |rel, heading, label, phrase|
   end
 end
 
+# 節の中の sh の block (fence ごとに切り出し、行継続をつなげたもの) のどれかに、command がある。空白の数に依らずに比べる。
+command = lambda do |rel, heading, label, line|
+  body = section.call(read.call(rel), heading)
+  if body.nil?
+    errors << "#{rel} に「#{heading}」の節が無い"
+  elsif MarkdownUnits.sh_blocks(body).none? { |b| MarkdownUnits.missing(b, [line]).empty? }
+    errors << "#{rel} の「#{heading}」の sh の block に#{label} (#{line.inspect}) が無い"
+  end
+end
+
 rules = "shared/instructions/personal-operating-rules.md"
 ja = "## 日本語の文章"
 check.call(rules, ja, "ダッシュの原則", "文の区切りにダッシュ (`—` `―` `–`) を使わず、読点・句点・括弧で区切る。")
@@ -70,7 +82,7 @@ check.call(request, step2, "手順 4・5 も同じ句", "手順 4 の結果コ�
 # 同じ本文 file (`body`) を自分で定める (別の block や地の文の代入に頼ると、掲載順では未設定の `body` を渡すことになる)。
 step2_body = section.call(read.call(request), step2).to_s
 check_command = /"\$check"\s+--body-file\s+"\$body"/
-check_block = MarkdownUnits.blocks(step2_body).select { |info, _| info == "sh" }.map(&:last).find { |b| b.match?(check_command) }
+check_block = MarkdownUnits.sh_blocks(step2_body).find { |b| b.match?(check_command) }
 if check_block.nil?
   errors << "#{request} の手順 2 に検査 (personal-post-check) の command の行がある sh の block が無い"
 else
@@ -95,14 +107,9 @@ brief = section.call(read.call(worker), "## 4. brief")
 if brief.nil?
   errors << "#{worker} に「## 4. brief」の節が無い"
 else
-  # 節の中の最初の一覧 (最初の「- 」から空行の前まで) を bullet に分け、続きの行は前の bullet に足す。
-  lines = brief.split("\n")
-  first = lines.index { |l| l.start_with?("- ") }
-  list = first ? lines[first..-1] : []
-  list = list[0, list.index { |l| l =~ /\A\s*\z/ } || list.length]
-  bullets = []
-  list.each { |l| l.start_with?("- ") ? bullets << l.dup : bullets[-1] << l }
-  rule = bullets.find { |b| b.start_with?("- 文章の規則:") }
+  # 節の中の最初の一覧の項目 (続きの行を含む) から、名前が「文章の規則:」のものを取る。名前は空白を除いて比べる。
+  bullets = MarkdownUnits.lists(brief).first || []
+  rule = bullets.find { |b| squash.call(b).start_with?(squash.call("- 文章の規則:")) }
   if rule.nil?
     errors << "#{worker} の brief の一覧に「文章の規則:」の bullet が無い"
   else
@@ -116,15 +123,15 @@ else
 end
 check.call(worker, "## 7. PR (orchestrator の操作)", "題名と本文を通す句",
            "PR の題名と本文は先に書き、`personal-ja-style-check --stdin` に通して指摘を直すか理由を持ってから gate に入れる (指摘だけで止めない。#556)。")
-check.call("shared/skills/personal-codex-worker/LAUNCH.md", "## 9. 回収 (fetch) と trailer 検査と PR", "command の行",
-           %q!{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin!)
+command.call("shared/skills/personal-codex-worker/LAUNCH.md", "## 9. 回収 (fetch) と trailer 検査と PR", "command の行",
+             %q!{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin!)
 
 # 雛形を検査にかける。code block の中は検査が読まないので、block の中身を取り出して渡す。取り出せたかは file ごとに
 # 別々に見る (連結後の文字列で見ると、TEMPLATES.md だけで両方の目印が揃い、RESULT-FORMAT.md の block が無くても通る)。
 extract = lambda do |rel, fence, mark|
-  text = +""
-  read.call(rel).scan(/^```#{fence}\n(.*?)^```/m) { |m| text << m[0] << "\n" }
-  errors << "雛形の code block を取り出せない (#{rel} の #{fence} の block に #{mark.inspect} が無い)" unless text.include?(mark)
+  text = MarkdownUnits.blocks(read.call(rel)).select { |info, _| info == fence }.map { |_, body| body + "\n" }.join
+  errors << "雛形の code block を取り出せない (#{rel} の #{fence} の block に #{mark.inspect} が無い)" \
+    unless MarkdownUnits.missing(text, [mark]).empty?
   text
 end
 templates = extract.call("shared/skills/personal-review-request/TEMPLATES.md", "markdown", "レビュー依頼") +
@@ -144,12 +151,12 @@ sweep = "shared/skills/personal-maintenance-sweep"
 issue = "## 所見の Issue"
 check.call("#{sweep}/RECORD.md", issue, "先に通す句",
            "題名と本文を書いたら、先に `personal-ja-style-check --stdin` に通し、指摘を直すか理由を持つ (指摘だけで投稿を止めない。#556。運用 instruction の「日本語の文章」)。追跡 Issue の本文と run のコメントも同じ。")
-check.call("#{sweep}/RECORD.md", issue, "command の行", %q!{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin!)
+command.call("#{sweep}/RECORD.md", issue, "command の行", %q!{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin!)
 # 文体の検査は gate の前 (直してから gate に通す)。両方の command があることを先に求め (無ければ順序を比べずに落とす)、
-# あるときだけ順序を比べる。
-issue_body = section.call(read.call("#{sweep}/RECORD.md"), issue).to_s
-style_at = issue_body.index('"$style" --stdin')
-gate_at = issue_body.index('"$gate" --stdin')
+# あるときだけ順序を比べる。sh の block を順につなげ、空白を除いた上での位置で比べる。
+issue_commands = squash.call(MarkdownUnits.sh_blocks(section.call(read.call("#{sweep}/RECORD.md"), issue).to_s).join("\n"))
+style_at = issue_commands.index(squash.call('"$style" --stdin'))
+gate_at = issue_commands.index(squash.call('"$gate" --stdin'))
 if style_at.nil? || gate_at.nil?
   missing = [("文体の検査" if style_at.nil?), ("gate" if gate_at.nil?)].compact.join("と")
   errors << "#{sweep}/RECORD.md の「#{issue}」に#{missing}の command (--stdin) が無い"
@@ -160,7 +167,7 @@ check.call("#{sweep}/FIX.md", "## 検証 (累積差分に対して)", "commit me
            "commit の前にその file を `personal-ja-style-check --stdin` に通し、指摘を直すか理由を持ちます (指摘だけで止めない。#556。運用 instruction の「日本語の文章」)。")
 check.call("#{sweep}/FIX.md", "## PR", "題名と本文を通す句",
            "題名と本文は、書いたら `personal-ja-style-check --stdin` に通し、指摘を直すか理由を持ってから、「検証」の公開する内容の gate に入れます (指摘だけで止めない。#556。運用 instruction の「日本語の文章」)。")
-check.call("#{sweep}/FIX.md", "## PR", "command の行", %q!{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin!)
+command.call("#{sweep}/FIX.md", "## PR", "command の行", %q!{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin!)
 check.call("#{sweep}/SKILL.md", "### 7. 起票する (issues モードだけ)", "通す句",
            "投稿の前に `personal-ja-style-check` (指摘だけ。直すか理由を持つ) と public-safety の gate に通し、gate を通らなければ投稿しない。")
 check.call("#{sweep}/SKILL.md", "### 7b. 修正する (fix モードだけ)", "通す句",

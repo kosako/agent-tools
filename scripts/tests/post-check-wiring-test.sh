@@ -101,7 +101,7 @@ terms.call("#{where2} の script が無いときの項目", item.call(request, s
 
 # sh の block (fence ごとに切り出し、行継続をつなげたもの) の中の command は、空白の数と字下げに依らずに見る。
 step2_body = MU.section(read.call(request), step2).to_s
-sh_blocks = MU.blocks(step2_body).select { |info, _| info == "sh" }.map(&:last)
+sh_blocks = MU.sh_blocks(step2_body)
 check_at = sh_blocks.index { |b| b.match?(/"\$check"\s+--body-file\s+"\$body"/) }
 post_at = sh_blocks.index { |b| b.match?(/^\s*gh\s+pr\s+comment\s/) }
 if check_at.nil?

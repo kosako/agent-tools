@@ -53,7 +53,10 @@ check "a line without a space after the marks is not a heading", MU.section("#!/
 # ---- fence の block
 blocks = MU.blocks(step2)
 check "blocks are cut fence by fence with their info strings", blocks.map(&:first) == %w[sh sh]
-check "a line continuation is joined", blocks[0][1].match?(/"\$check"\s+--body-file\s+"\$body"/) && !blocks[0][1].include?("\\")
+check "blocks keep their text as written", blocks[0][1].include?("\"$check\" \\\n")
+sh = MU.sh_blocks(step2)
+check "a line continuation in an sh block is joined", sh.size == 2 && sh[0].match?(/"\$check"\s+--body-file\s+"\$body"/) && !sh[0].include?("\\")
+check "only sh blocks are returned by sh_blocks", MU.sh_blocks("```text\na \\\nb\n```\n``` sh \nc \\\n  d\n```\n") == ["c  d\n"]
 check "a block does not run past its closing fence", !blocks[0][1].include?("gh") && blocks[1][1].match?(/\A\s*gh\s+pr\s+comment\s*\z/)
 check "an indented fence is a fence", blocks[1][1].include?("gh")
 check "an unclosed fence is not a block", MU.blocks("```sh\na\n") == []
@@ -64,6 +67,10 @@ check "the spaces around an info string are dropped", MU.blocks("``` sh  \na\n``
 items = MU.items(step2)
 check "items are the dash lines with their indented continuations", items.size == 2 && items[0].include?("続きの行") && !items[1].include?("項目の外")
 check "the lines of a fence are not items", MU.items("```\n- in a fence\n```\n- real\n") == ["- real\n"]
+check "an item may have more than one space after the dash", MU.items("-  two spaces\n-\ttab\n-none\n") == ["-  two spaces\n", "-\ttab\n"]
+lists = MU.lists("- a\n  a2\n- b\n\ntext\n- c\nplain\n- d\n")
+check "lists are runs of items ended by a blank or a plain line", lists == [["- a\n  a2\n", "- b\n"], ["- c\n"], ["- d\n"]]
+check "the first list of the section is the two items", MU.lists(step2).first.size == 2
 paras = MU.paragraphs(step2)
 check "paragraphs are split at blank lines and at fences", paras.any? { |para| para.start_with?("本文の段落") && !para.include?("項目") } &&
                                                            paras.none? { |para| para.include?("body=x") }
