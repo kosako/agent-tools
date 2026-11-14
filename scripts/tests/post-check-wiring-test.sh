@@ -1,8 +1,9 @@
 #!/bin/sh
 # 投稿の前の検査をまとめる script (personal-post-check) の組み込み (#676 の 2 本目) が文書に残っていることを検査する。
 # 文言の検知で、振る舞いの保証ではない (script の挙動は post-check-test、期待挙動は各 skill の evals.json の case)。
-# 説明の文はそのまま固定しない。項目 (「- 」で始まる行とその続き) か文 (「。」まで) ごとに、要る語 (script の名前、option、
-# exit code と「投稿する・しない」、理由の語) がそろっているかを見る。言い回しを変えても、語が残っていれば通る。
+# 説明の文はそのまま固定しない。項目 (「- 」で始まる行とその続き)・文 (「。」まで)・段落・1 つの command (code span) ごとに、
+# 要る語 (script の名前、option、exit code と「投稿する・しない」、理由の語) がそろっているかを見る。言い回しを変えても、
+# 語が同じ単位に残っていれば通る。節の全体からは探さない (語が別の項目や文に移っただけの変更を通さないため)。
 # - 運用 instruction の「## public safety」に、この script でまとめてかける項目があり、exit code ごとの扱い (0 のときだけ
 #   投稿、3 は --style-reviewed、1 と 2 は投稿しない)、検査と投稿を別の呼び出しにすること、skill の手順が検査を個別に
 #   定めている場面は範囲の外であることが入っている。もとの gate の宣言の項目も残っている。
@@ -86,6 +87,35 @@ sentences = lambda do |rel, heading, key|
   hits
 end
 
+# 節の中の段落 (空行で区切る。code block は除く) のうち、key を含むものをすべて取る。
+paragraphs = lambda do |rel, heading, key|
+  body = section.call(rel, heading)
+  next [] if body.nil?
+  paras = [+""]
+  fence = false
+  body.each_line do |l|
+    if l =~ /\A\s*```/
+      fence = !fence
+      paras << +""
+      next
+    end
+    next if fence
+    l.strip.empty? ? paras << +"" : paras[-1] << l
+  end
+  hits = paras.select { |para| squash.call(para).include?(squash.call(key)) }
+  errors << "#{rel} の「#{heading}」に、#{key.inspect} を含む段落が無い" if hits.empty?
+  hits
+end
+
+# 節の中の code span (1 行の中の `…`) のうち、語をすべて含むものが 1 つはある (1 つの command の中で語の組を見る)。
+command_span = lambda do |rel, heading, label, words|
+  body = section.call(rel, heading)
+  next if body.nil?
+  spans = body.scan(/`([^`\n]+)`/).flatten
+  errors << "#{rel} の「#{heading}」に、#{label} (#{words.join(" と ")} を含む 1 つの command) が無い" \
+    unless spans.any? { |span| words.all? { |w| span.include?(w) } }
+end
+
 # text の中に、語がすべてある。
 terms = lambda do |where, text, words|
   next if text.nil?
@@ -107,7 +137,10 @@ terms.call("#{rules} の「#{ps}」の gate の項目", item.call(rules, ps, "pu
 request = "shared/skills/personal-review-request/SKILL.md"
 step2 = "### 2. 依頼コメントを準備・投稿 (投稿は write-authorized のみ)"
 where2 = "#{request} の手順 2"
-terms.call(where2, section.call(request, step2), ["`personal-post-check`", "`personal-ja-style-check`", "public-safety の gate"])
+# かかる検査を書く段落: 文体の検査の名前がある段落に、この script と gate がある (節の別の所にあるだけでは通さない)。
+paragraphs.call(request, step2, "`personal-ja-style-check`").each do |para|
+  terms.call("#{where2} の、かかる検査を書く段落", para, ["`personal-post-check`", "public-safety の gate"])
+end
 terms.call("#{where2} の exit 0 の項目", item.call(request, step2, "exit 0:"), ["投稿してよい", "別の呼び出し", "連ねません"])
 terms.call("#{where2} の exit 3 の項目", item.call(request, step2, "exit 3:"),
            ["`--style-reviewed`", "指摘を読んで", "gate ではありません", "読まずに"])
@@ -137,7 +170,9 @@ end
 
 step4 = "### 4. 結果を PR に投稿"
 where4 = "#{request} の手順 4"
-terms.call(where4, section.call(request, step4), ["`personal-post-check`", "`--marker-kind review-result`"])
+sentences.call(request, step4, "`--marker-kind review-result`").each do |s|
+  terms.call("#{where4} の目印の検査を足す文", s, ["`personal-post-check`", "個人 project"])
+end
 sentences.call(request, step4, "手順 2 と同じく").each { |s| terms.call("#{where4} の「手順 2 と同じく」の文", s, ["`personal-post-check` に通す"]) }
 sentences.call(request, step4, "理由に `marker`").each { |s| terms.call("#{where4} の目印で止まる文", s, ["exit 1", "投稿しない"]) }
 sentences.call(request, step4, "`marker: unavailable`").each { |s| terms.call("#{where4} の目印の検査を使えない文", s, ["投稿せず"]) }
@@ -148,14 +183,19 @@ sentences.call(request, step4, "ほかの repo では").each { |s| terms.call("#
 ol = "shared/workflows/personal-project-operating-loop.md"
 terms.call("#{ol} の「## Public safety check」の personal-post-check の項目", item.call(ol, "## Public safety check", "`personal-post-check`"),
            ["題名・本文・コメント", "exit 0 のときだけ", "別の呼び出し", "個別に定めている場面", "その手順に従う"])
-terms.call("#{ol} の「## PR の完了条件」", section.call(ol, "## PR の完了条件"), ["`personal-post-check", "--marker-kind pr`"])
-terms.call("#{ol} の「## merge 後に見つかった誤り」", section.call(ol, "## merge 後に見つかった誤り"),
-           ["`personal-post-check`", "`--marker-kind escape-issue`"])
+# PR は 1 つの command の中で、escape の Issue は 1 つの文の中で、script と目印の option の対応を見る (option が別の項目や
+# 文に移ると、この script の呼び出しから目印の検査が抜ける)。
+command_span.call(ol, "## PR の完了条件", "PR の前の command", ["personal-post-check", "--title", "--body-file", "--marker-kind pr"])
+sentences.call(ol, "## merge 後に見つかった誤り", "`--marker-kind escape-issue`").each do |s|
+  terms.call("#{ol} の「## merge 後に見つかった誤り」の escape の Issue の文", s, ["`personal-post-check`"])
+end
 
 # 4. docs
 doc = "docs/post-check.md"
-terms.call("#{doc} の「## 組み込み先」", section.call(doc, "## 組み込み先"),
-           ["`personal-review-request`", "`personal-codex-worker`", "`personal-maintenance-sweep`", "今の手順"])
+terms.call("#{doc} の「## 組み込み先」の review の項目", item.call(doc, "## 組み込み先", "`personal-review-request`"),
+           ["手順 2", "この script を通してから投稿", "`--marker-kind review-result`"])
+terms.call("#{doc} の「## 組み込み先」の置き換えない手順の項目", item.call(doc, "## 組み込み先", "`personal-codex-worker`"),
+           ["`personal-maintenance-sweep`", "今の手順"])
 
 # 5. 文書が使う option と目印の種類と exit code が、script にある。
 src = File.join(root, "shared/scripts/personal-post-check.rb")
