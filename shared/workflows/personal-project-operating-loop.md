@@ -173,6 +173,10 @@ commit・push と、Issue・PR・コメントの投稿の前に、少なくと�
   入っていない。投稿・push の前に、その text を `personal-public-safety-gate --stdin` に通し、exit 0 で警告の行が
   無いときだけ公開する (#413)。gate が無い・exit 0 でない・警告が出たときは公開せず、本文と gate の出力を人に
   見せて確認を取る。commit message は commit-msg の hook でも検査される。
+- Issue / PR の題名・本文・コメントは、配備済みの `personal-post-check` (`<tool home>/agent-tools/scripts/`) で、文体の検査・
+  目印の検査 (下の 2 つの節。個人 project だけ)・gate を 1 回にまとめてかける (#676)。exit 0 のときだけ、別の呼び出しで投稿する。
+  skill の手順が検査の command を個別に定めている場面 (`personal-codex-worker` の PR の作成、`personal-maintenance-sweep` の
+  起票と fix の PR) では、その手順に従う。exit code の読み方と組み込み先は agent-tools の `docs/post-check.md`。
 
 ## PR の完了条件
 
@@ -182,6 +186,7 @@ commit・push と、Issue・PR・コメントの投稿の前に、少なくと�
   (計測が読む目印。agent-tools の `docs/work-markers.md`)。PR を作る前に、題と本文を配備済みの
   `personal-work-marker-check --kind pr --stdin` (`<tool home>/agent-tools/scripts/`。1 行目に題、空行、本文) に通し、
   exit 0 のときだけ作る (#661)。exit 1 は題か本文を直して通し直し、exit 2 (script が無い・読めない) は作らずに人に伝える。
+  `personal-post-check --title <題> --body-file <本文> --marker-kind pr` なら、文体の検査と gate も同じ呼び出しでかかる (#676)。
   個人 project かは、運用 instruction の「個人 project の GitHub の操作と merge」の対象と同じ判定で決める。
 - 会社や別の組織の repo、他人の repo では、その repo の PR の template や contributing の決まりに合わせる。目印も検査も
   強制しない (判定できないときも同じ。`docs/work-markers.md` の「対象」)。
@@ -193,7 +198,8 @@ commit・push と、Issue・PR・コメントの投稿の前に、少なくと�
 個人 project では、merge 済みの PR が入れた誤りを直す Issue に label `escape` を付け、本文に `元の PR: #<番号>` を
 行の先頭から 1 行書く。merge の前に review や CI で見つかった誤り、仕様の変更、後から tool の挙動が変わったもの、
 元の PR が分からない古い不具合には付けない。label が無い repository では、Issue を立てるときに作る。立てる前に、本文を
-`personal-work-marker-check --kind escape-issue --stdin` に通し、exit 0 のときだけ立てる (#661)。形と例の正本は
+`personal-work-marker-check --kind escape-issue --stdin` に通し、exit 0 のときだけ立てる (#661。`personal-post-check` に
+`--marker-kind escape-issue` を付けると、文体の検査と gate も同じ呼び出しでかかる。#676)。形と例の正本は
 agent-tools の `docs/work-markers.md` (#658)。会社や別の組織の repo、他人の repo では、label を作らず、その repo の
 決まりに従う (上の「PR の完了条件」と同じ)。
 

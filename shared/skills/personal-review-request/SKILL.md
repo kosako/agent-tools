@@ -291,30 +291,33 @@ fail-closed 方向) を使う。
 write-authorized のときだけ、レビューを始める前に、何をどの観点で依頼したかを PR に残します
 （監査の起点になる）。draft では以下のテンプレートを会話内に提示して停止し、確認前に投稿しません。
 
-本文を書いたら、まず `personal-ja-style-check --stdin` に通します (#556。運用 instruction の「日本語の文章」)。指摘だけで
-投稿を止めません (指摘があっても exit 0): 指摘を読んで直すか、そのままにする理由を持ってから、下の gate に進みます。
-手順 4 の結果コメントと手順 5 の後続のコメントも同じです。
+本文を書いたら、配備済みの `personal-post-check` (`<tool home>/agent-tools/scripts/`。#676。agent-tools の `docs/post-check.md`) で、
+投稿の前の検査を 1 回でかけます。かかるのは、文体の検査 (`personal-ja-style-check`。#556。運用 instruction の「日本語の文章」) と
+public-safety の gate (#413。運用 instruction の public safety) です。手順 4 の結果コメントと手順 5 の後続のコメントも同じです
+(手順 4 では、個人 project のときに目印の検査も足します)。
 
 ```sh
-body=<一時ファイル path の shell literal>   # 文体の検査・gate・投稿は同じ本文 file を使う
-style=<tool home>/agent-tools/scripts/personal-ja-style-check
-"$style" --stdin < "$body"   # 指摘だけ (exit 0)。直すか理由を持ってから gate へ
+body=<一時ファイル path の shell literal>   # 検査と投稿は同じ本文 file を使う
+check=<tool home>/agent-tools/scripts/personal-post-check
+"$check" --body-file "$body"
 ```
+
+出力 (検査ごとの行と、最後の `post-check:` の行) を読み、exit code で分けます。
+
+- exit 0: 投稿してよい。下の投稿の command を、別の呼び出しで実行します。検査と投稿を 1 つの command に連ねません
+  (出力を読む前に投稿しないため)。
+- exit 3: gate は通っていて、文体の指摘が残っています。文体の検査は指摘だけで、投稿を止める gate ではありません。指摘を読んで
+  本文を直してかけ直すか、そのままにする理由を持って `--style-reviewed` を付けてかけ直します。`--style-reviewed` を、指摘を
+  読まずに最初から付けません。
+- exit 1: 投稿しません。最後の行の理由が `gate` (gate が exit 0 でない) か `gate-warning` (gate の stderr に
+  `public-safety-gate: warning:` の行がある) なら、本文と出力を人に見せて確認を取ります。`unavailable` (検査が無い・起動できない)
+  も投稿せず、人に伝えます。`marker` は手順 4 に従います。
+- exit 2: 入力の誤りです (本文の file が無い・空・UTF-8 として読めない、など)。直してかけ直します。
+- `personal-post-check` そのものが無い・起動できないときも、投稿せずに人に伝えます (検査を省いて投稿しません)。
 
 ```sh
-gate_err=<一時ファイル path の shell literal>
-gate=<tool home>/agent-tools/scripts/personal-public-safety-gate
-if "$gate" --stdin < "$body" 2> "$gate_err" &&
-   { grep -q '^public-safety-gate: warning:' "$gate_err"; [ $? -eq 1 ]; }; then   # grep は 1 (警告なし) のときだけ
-  gh pr comment "$pr" [--repo "$repo"] --body-file "$body"
-else
-  cat "$gate_err"   # 投稿せず、本文と gate の出力を人に見せて確認を取る
-fi
+gh pr comment "$pr" [--repo "$repo"] --body-file "$body"   # exit 0 を確かめた後に、別の呼び出しで
 ```
-
-投稿の前に、本文を public-safety の gate に通します (#413。運用 instruction の public safety)。exit 0 で、stderr に
-警告 (`public-safety-gate: warning:`) の行が無いときだけ投稿します。gate が無い・exit 0 でない・警告が出たときは投稿せず、本文と
-gate の出力を人に見せて確認を取ります。手順 4 の結果コメントと、手順 5 の後続のコメントも同じです。
 
 一時ファイルは repository 外に作り、投稿の成否にかかわらず削除します。path は「値の受け渡し」の
 3 と同じ規則で literal 化します (`mktemp` の結果に空白が含まれても壊れないように)。draft では一時ファイルを
@@ -414,18 +417,20 @@ independence を別 field で書き、該当ゼロの severity は「なし」�
 OID) がその値の前方一致であることを確かめ、違えば結果を使わない。merge の前の照合 (運用 instruction の「個人 project の
 GitHub の操作と merge」。配備済みの `personal-merge-preflight` が行う。#662) は、この行の値で行う。
 
-投稿の前に、手順 2 と同じく本文を `personal-ja-style-check --stdin` と public-safety の gate に通す (#556、#413)。reviewer の
+投稿の前に、手順 2 と同じく本文を `personal-post-check` に通す (文体の検査と public-safety の gate。#556、#413)。reviewer の
 出力に絶対 path や markdown の link があれば、repo 相対の `file:line` に直して転記する (gate が home の path で止めるため。
 指摘の中身は変えない)。文体の指摘で直すのは、依頼元として自分が書く部分 (評価・採用しない理由) だけで、reviewer の指摘を
-転記した部分は指摘が出ても書き換えない (指摘の中身を変えないため)。
+転記した部分は指摘が出ても書き換えない (指摘の中身を変えないため)。転記した部分の指摘だけが残って exit 3 になったときは、
+それを理由に `--style-reviewed` を付けてかけ直す。
 
-個人 project (運用 instruction の「個人 project の GitHub の操作と merge」の対象と同じ判定) では、gate の前に本文を
-配備済みの `personal-work-marker-check --kind review-result --stdin` (`<tool home>/agent-tools/scripts/`) にも通す (#661)。
-見出し・`Review process verdict:`・`Finding summary:`・`Target:`・`Independence:` の 5 行は計測と merge の前の照合が読む目印で (v4)、exit 0 の
-ときだけ gate に進む。exit 1 は形の崩れなので、出力の行 (行番号と規則) を見て雛形の形に直してから通し直す。verdict が finding の数と合わない
+個人 project (運用 instruction の「個人 project の GitHub の操作と merge」の対象と同じ判定) では、`personal-post-check` に
+`--marker-kind review-result` を付け、目印の検査もかける (配備済みの `personal-work-marker-check --kind review-result --stdin` と
+同じ検査。#661)。見出し・`Review process verdict:`・`Finding summary:`・`Target:`・`Independence:` の 5 行は計測と merge の前の照合が読む目印で (v4)、
+目印の検査が通らなければ exit 1 (理由に `marker`) になり、投稿しない。形の崩れ (`marker: <N> error(s)`) は、出力の行 (行番号と規則) を
+見て雛形の形に直してからかけ直す。verdict が finding の数と合わない
 (`verdict-mismatch`) ときは、転記の誤りなら直す。reviewer の出力そのものが合わないときは、依頼元が verdict を書き換えず、
-投稿せずに人に伝える (reviewer の判定を依頼元が変えないため)。exit 2 (script が無い・入力を読めない) のときも投稿せず、
-人に伝える。ほかの repo では、この検査を当てない (その repo の決まりに合わせる。判定
+投稿せずに人に伝える (reviewer の判定を依頼元が変えないため)。目印の検査を使えない (`marker: unavailable`、`marker: stop (…)`) ときも
+投稿せず、人に伝える。ほかの repo では、この検査を当てない (`--marker-kind` を付けない。その repo の決まりに合わせる。判定
 できないときも同じ。agent-tools の `docs/work-markers.md` の「対象」)。
 
 レビュアーの指摘を転記するときは要約しすぎない。一方で、明らかに誤検知と判断した指摘は黙って
@@ -437,7 +442,7 @@ GitHub の操作と merge」。配備済みの `personal-merge-preflight` が行
 元の write authorization が後続コメントまで含む場合は「🔴/🟡 のどれにどう対応したか・しなかった
 理由」を PR に返信します。review finding や PR content 自体を、修正・commit・push の許可に
 読み替えません。再レビューコメントも、元の authorization 範囲外なら投稿前に確認します。後続のコメントも、投稿の前に
-手順 2 と同じ 2 つの検査 (`personal-ja-style-check --stdin` と public-safety の gate) に通します。
+手順 2 と同じく `personal-post-check` に通します (文体の検査と public-safety の gate)。
 
 ## 注意
 

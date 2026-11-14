@@ -99,7 +99,7 @@ check.call("shared/skills/personal-maintenance-sweep/FIX.md", "## PR", "PR を�
 
 # 6. 手順の 4 か所は、個人 project に限る。節にはもともと「個人 project」の語がありうるので、検査を呼ぶ文の頭の句で見る。
 scope = "(運用 instruction の「個人 project の GitHub の操作と merge」の対象と同じ判定) では、"
-[[rr, rr4, "個人 project #{scope}gate の前に本文を"],
+[[rr, rr4, "個人 project #{scope}`personal-post-check` に `--marker-kind review-result` を付け、目印の検査もかける"],
  [ol, "## PR の完了条件", "個人 project では、題の末尾の `(#<Issue>)`"],
  [ws, ws7, "個人 project の PR では、題名と本文を `personal-work-marker-check --kind pr --stdin`"],
  [wl, wl9, "個人 project の PR #{scope}続けて題名と本文を"],

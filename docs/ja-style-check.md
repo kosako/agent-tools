@@ -24,6 +24,8 @@ network にも触れません。指摘の有無にかかわらず走り終えれ
   message と PR の題名と本文)。
   `scripts/tests/ja-style-wiring-test.sh` が、これらの文言と雛形の形 (雛形を検査にかけて `bold-label` / `em-dash` が
   出ない) を確かめます。
+- `personal-review-request` の 3 つのコメントは、#676 から `personal-post-check` 経由でこの検査をかけます
+  ([post-check](post-check.md)。指摘が残ると exit 3 で、読んで直すか `--style-reviewed` を付けてかけ直す)。
 
 ## 使い方
 
