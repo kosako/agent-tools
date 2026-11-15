@@ -113,8 +113,10 @@ head = "### personal-codex-launch で起動して回収する (#672)"
    ["Codex は起動していません", "起動し直してかまいません"]],
   ["pane_id があれば起動し直さない句", "`launch.json` に `pane_id` がある", 2,
    ["起動済みかもしれません", "起動し直さず、その run dir に `collect` をかけて"]],
+  # pane_id が null の run は、done.txt の有無と直接起動の 3 つの分岐があるので、つながりでは分岐の並びだけを見て、条件と
+  # 処理は分岐ごとに同じ文で見る (下の check)。
   ["pane_id が null の run の句", "`launch.json` の `pane_id` が null の run", 3,
-   ["`collect` は pane の command を呼びません", "`Blocked at: executor-exit` として扱います"]],
+   ["`collect` は pane の command を呼びません", "`done.txt` があれば", "直接起動で command が `done.txt` を残さずに戻っていたら"]],
   ["pane_id がある launch-path の run は collect にかけない句", "`launch-path` の出力に `pane_id` がある run", 2,
    ["この run は `collect` にかけず"]],
 ].each { |label, key, n, terms| run_check.call(launch_md, head, label, key, n, terms) }
@@ -122,6 +124,10 @@ check.call(launch_md, head, "executor-result の空振りは 1 回だけ再実�
            ["新しい `launch` で同じ brief を 1 回だけ起動し直します"])
 check.call(launch_md, head, "executor-result の verdict の無い結果は再実行しない句", :sentences, "false なら verdict の無い結果",
            ["再実行せずに `Blocked at: executor-result` で停止します"])
+check.call(launch_md, head, "pane_id が null の run で done.txt があるときの句", :sentences, "`done.txt` があれば、",
+           ["`DONE` か `BLOCKED` を返します"])
+check.call(launch_md, head, "pane_id が null の run で直接起動が done.txt を残さずに戻ったときの句", :sentences,
+           "直接起動で command が `done.txt` を残さずに戻っていたら", ["`Blocked at: executor-exit` として扱います"])
 check.call(launch_md, "### run dir と run script (script が実装している契約)", "今の run script の契約", :sh,
            "codex exec --ignore-user-config --ignore-rules -s read-only")
 
@@ -227,8 +233,10 @@ check.call("#{sweep}/SKILL.md", "### 3. 監査する (単位ごと)", "起動の
            "起動の前に、その起動だけに使う新しい directory を作って場所を `codex-run` に書き、`--run-root` に渡す")
 record = "#{sweep}/RECORD.md"
 check.call(record, "## local の state", "run dir は 1 つだけの句", :sentences, "run dir は、その下にできるただ 1 つの directory です")
+# 1 つの文に DONE と RUNNING の 2 つの分岐が並ぶので、条件と処理を続いた 1 つの句で見る (語だけだと、処理を入れ替えても通る)。
 check.call(record, "## local の state", "再開で collect にかけ、RUNNING は起動し直さない句", :sentences,
-           "`personal-codex-launch collect --run-dir <run dir>` にかけ", ["`RUNNING`", "起動し直さずに人に返します"])
+           "`personal-codex-launch collect --run-dir <run dir>` にかけ",
+           ["`DONE` なら結果を保存して単位を進め", "`RUNNING` (今回の nonce の `done.txt` が無い) なら起動し直さずに人に返します"])
 check.call(record, "## local の state", "run dir が無ければ起動していない句", :sentences, "Codex は起動していません", ["見つからなければ"])
 
 # 5. docs
