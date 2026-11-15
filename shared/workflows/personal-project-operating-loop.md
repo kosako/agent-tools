@@ -218,7 +218,8 @@ wait=<tool home>/agent-tools/scripts/personal-pr-merge-wait
 - Claude Code の session では、background で走らせる (既定の上限は 2 時間)。終わると通知が来るので、その時点で結果を
   読む。待ちに入る返答には、何を待つか、上限、merge されたら何をするかを書く (運用 instruction の「待ちと判断の伝え方」)。
 - Codex の session には background の通知が無いので、foreground で走らせる。script は上限の時刻に最後の確認をしてから
-  終わるので、終わるまでの最長の時間は `--timeout` に約 65 秒 (最後の確認の gh の上限 60 秒と後始末) を足した長さになる。
+  終わるので、終わるまでの最長の時間は、通常は `--timeout` に約 65 秒 (最後の確認の gh の上限 60 秒と後始末) を足した
+  長さになる (KILL の後も gh を回収できないときは、回収を待つ分だけ延びる)。
   `--timeout` は、その session の command の時間の上限から、この分に余裕を見た 90 秒を引いた値以下にする (外の上限で
   止められると、gh が残ることがある)。上限に達したら人に返す。
 
