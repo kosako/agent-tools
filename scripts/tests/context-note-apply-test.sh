@@ -11,7 +11,8 @@
 # - 差分 (---・+++・@@ と変えた行) を答えを聞く前に見せ、y / yes (大文字も) のときだけ 1 回の実行で書く。新しく作る note は
 #   0600、今の note は権限を保つ。-C の子 directory と、省いたときの今の directory の子からでも、root の note を書く。
 # - n・空の答え・EOF・Ctrl-C では書かない。一時 file を残さない。書けない directory では write-failed で、note は前のまま。
-# - 表示で隠れうる文字 (制御文字と書式の文字) を <U+XXXX> で見せ、端末へそのまま出さない。書く中身はそのまま。
+# - 表示で隠れうる文字 (制御文字と書式の文字。NUL、行末の CR、path の中の改行を含む) を <U+XXXX> で見せ、端末へそのまま出さない。
+#   書く中身はそのまま。diff が差分の形を出さないときは確認に進まない。root の名前の末尾の CR を外さない。
 # - 差分を見せた後に note が変わった・symlink に替わった・tracked になったときは、確かめ直しで止める (直接呼び出し)。
 # - locale が C でも書ける。
 set -eu
@@ -329,6 +330,52 @@ check("隠れうる文字: CR を見せる", res[:before].include?("<U+000D>"))
 check("隠れうる文字: 端末に ESC と U+202E を出さない", !res[:out].include?("\e") && !res[:out].include?("‮"))
 check("隠れうる文字: tab はそのまま", res[:before].include?("z\tt"))
 check("隠れうる文字: 中身はそのまま書く", File.binread(note) == "a\n#{hidden}".b)
+
+# NUL を含む案と note も、binary とみなさずに中身の差分を見せる。
+File.binwrite(note, "p\0q\nkeep\n")
+pr = proposal("keep\nx\0y\n")
+res = run_tty(["-C", root, pr], answer: "y\n")
+expect("NUL", res, 0, "written")
+check("NUL: 案の行を <U+0000> で見せる", res[:before].include?("+x<U+0000>y"))
+check("NUL: note の行を <U+0000> で見せる", res[:before].include?("-p<U+0000>q"))
+check("NUL: binary の扱いにしない", !res[:out].include?("Binary"))
+check("NUL: 中身はそのまま書く", File.binread(note) == "keep\nx\0y\n".b)
+
+# diff が差分の形を出さない (binary の扱いで中身を省く実装など) ときは、確認に進まない。
+fakebin = File.join(TMP_ROOT, "fakebin")
+Dir.mkdir(fakebin)
+File.write(File.join(fakebin, "diff"), "#!/bin/sh\necho 'Binary files a and b differ'\nexit 1\n")
+File.chmod(0o755, File.join(fakebin, "diff"))
+before = snap(note)
+res = run_tty(["-C", root, proposal("other\n")], env: { "PATH" => "#{fakebin}:#{ENV.fetch("PATH")}" }, answer: "y\n")
+expect("差分の形でない diff の出力", res, 2, "undetermined")
+check("差分の形でない diff の出力: 確認を聞かない", !res[:prompt])
+check("差分の形でない diff の出力: note は前のまま", snap(note) == before)
+
+# path の中の改行は <U+000A> で見せ、偽の差分の行を作れない。
+forged = File.join(TMP_ROOT, "lf\n+++ forged\n@@ -1 +1 @@")
+Dir.mkdir(forged)
+git(forged, "init", "-q")
+File.binwrite(File.join(forged, NOTE), "old\n")
+res = run_tty(["-C", forged, proposal("new\n")], answer: "n\n")
+expect("path の改行", res, 1, "declined")
+check("path の改行: <U+000A> で見せる", res[:before].include?("lf<U+000A>+++ forged<U+000A>@@ -1 +1 @@"))
+check("path の改行: 偽の行を出さない", res[:out].lines.none? { |l| l.chomp == "+++ forged" })
+
+# root の名前の末尾の CR を外さない (外すと、隣の別の repo の note を書く)。
+cr_root = File.join(TMP_ROOT, "crrepo\r")
+sibling = File.join(TMP_ROOT, "crrepo")
+[cr_root, sibling].each do |d|
+  Dir.mkdir(d)
+  git(d, "init", "-q")
+  File.binwrite(File.join(d, NOTE), "old\n")
+end
+sibling_before = snap(File.join(sibling, NOTE))
+res = run_tty(["-C", cr_root, proposal("new\n")], answer: "y\n")
+expect("root の末尾の CR", res, 0, "written")
+check("root の末尾の CR: その repo の note を書く", File.binread(File.join(cr_root, NOTE)) == "new\n")
+check("root の末尾の CR: 隣の repo の note は前のまま", snap(File.join(sibling, NOTE)) == sibling_before)
+check("root の末尾の CR: path の CR を見せる", res[:before].include?("crrepo<U+000D>/#{NOTE}"))
 
 # ---- 書けない directory ----------------------------------------------------------------
 root = new_repo

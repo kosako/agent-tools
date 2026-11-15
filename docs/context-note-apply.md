@@ -36,13 +36,17 @@ personal-context-note-apply [-C <dir>] <案の file>
 3. repository や index を選ぶ git の env (`GIT_DIR`・`GIT_WORK_TREE`・`GIT_INDEX_FILE`・`GIT_COMMON_DIR`・
    `GIT_OBJECT_DIRECTORY`・`GIT_ALTERNATE_OBJECT_DIRECTORIES`・`GIT_NAMESPACE`) を 1 つでも継承していれば (値が空でも)、
    tracked かを判定できないので止めます (`undetermined`)。resume の検査と personal-packet と同じ 7 つです。
-4. git の作業 tree の root を `git rev-parse --show-toplevel` で決め、案の file を読みます。
+4. git の作業 tree の root を `git rev-parse --show-toplevel` で決め (外すのは出力の末尾の改行だけ。名前の末尾の CR は残す)、
+   案の file を読みます。
 5. note を確かめます。無ければ新しく作ります。symlink (`symlink`)、regular file でないもの (`not-regular`)、git で tracked の
    もの (`tracked`) には書きません。tracked かは `git --no-literal-pathspecs ls-files --error-unmatch -- ':(icase).agent-context.local.md'`
    の exit 1 だけを「追跡なし」として見ます。大文字小文字だけ違う名前で tracked なときも、note が無いときも同じです。
 6. 案が今の note と同じなら、確認を聞かずに終わります (`unchanged`)。
-7. 差分を `diff -u` の形で見せます。制御文字と書式の文字 (Unicode の Cc と Cf。tab を除き、行末の CR を含む) は `<U+XXXX>` の
-   形で見せます。端末の escape sequence や向きを変える文字で、表示の中身を隠せないようにするためです。書く中身は案のままです。
+7. 差分を `diff -u` の形で見せます。`diff` には `-a` を付け、NUL を含む中身も binary とみなさずに行の差分として出させます。
+   出力が差分の形 (見出しの 2 行と hunk) でなければ、確認に進まずに止まります (`undetermined`)。制御文字と書式の文字
+   (Unicode の Cc と Cf。tab だけを除き、改行・CR・NUL を含む) は、差分の行と path のどちらでも `<U+XXXX>` の形で見せます。
+   端末の escape sequence、向きを変える文字、path の中の改行で、表示の中身を隠したり偽の差分の行を作ったりできないように
+   するためです。差分の行は、行の区切りの改行を外してから見せます。書く中身は案のままです。
 8. `[y/N]` を聞きます。`y` か `yes` (大文字も) のときだけ進みます。それ以外の答え、EOF、Ctrl-C では書きません (`declined`)。
 9. 書く直前に、5 の条件を確かめ直します。差分を見せた時から note の中身・権限・inode が変わっていれば、書きません
    (`changed`)。symlink に替わった、tracked になったときは、5 と同じ label で止まります。
@@ -62,7 +66,7 @@ personal-context-note-apply [-C <dir>] <案の file>
 | 1 | `symlink` / `not-regular` / `tracked` | note が書いてよい条件を満たさない |
 | 1 | `changed` | 差分を見せた後に note が変わった |
 | 2 | `usage` / `input` | 引数の誤り、案の file の誤り (無い、regular file でない、空、1 MiB を越える、UTF-8 でない) |
-| 2 | `undetermined` | 判定できない (git の env の継承、git の作業 tree でない、index を読めない、note を読めない) |
+| 2 | `undetermined` | 判定できない (git の env の継承、git の作業 tree でない、index を読めない、note を読めない、差分を差分の形で作れない) |
 | 2 | `write-failed` | 書けなかった (note は前のまま) |
 
 ## 強度

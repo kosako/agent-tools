@@ -15,7 +15,8 @@
 # 4. 案の file は regular file で、空でなく、1 MiB 以下で、UTF-8 として読めること。
 # 5. note は、無ければ新しく作る。symlink、regular file でないもの、git で tracked のもの (大文字小文字の違いを含む) には書かない。
 # 6. 案が今の note と同じなら、何もせずに終わる。
-# 7. 差分を diff -u の形で見せる。制御文字と書式の文字 (Unicode の Cc と Cf。tab を除く) は <U+XXXX> の形で見せる。
+# 7. 差分を diff -u の形で見せる (-a で NUL を含む中身も行の差分にし、差分の形でなければ止める)。制御文字と書式の文字
+#    (Unicode の Cc と Cf。tab を除く。改行も含めるので、path の中の改行で偽の行を作れない) は <U+XXXX> の形で見せる。
 # 8. [y/N] を聞き、y か yes のときだけ進む。
 # 9. 書く直前に 5 の条件と、差分を見せた時から note が変わっていないことを確かめ直す。
 # 10. 同じ directory の一時 file に書いてから rename で置き換える。今の note の権限を保ち、新しく作るときは 0600 にする。
@@ -53,8 +54,9 @@ module ContextNoteApply
   MAX_BYTES = 1024 * 1024
   NEW_MODE = 0o600
   YES = %w[y yes].freeze
-  # 表示で隠れうる文字。改行は行の区切り、tab は表示で中身を隠さないので除く。
-  HIDDEN_RE = /[[\p{Cc}\p{Cf}]&&[^\t\n]]/.freeze
+  # 表示で隠れうる文字。tab は表示で中身を隠さないので除く。改行も含める (path の中の改行で、偽の差分の行を作れないように。
+  # 差分の行は、行の区切りの改行を外してから通す)。
+  HIDDEN_RE = /[[\p{Cc}\p{Cf}]&&[^\t]]/.freeze
 
   # 書かずに終わる。label は最後の行、message は説明の行 (stderr)。
   class Stop < StandardError
@@ -180,11 +182,13 @@ module ContextNoteApply
     raise Stop.new("input", EXIT_ERROR, "-C の directory がありません: #{visible(dir)}") unless File.directory?(dir)
 
     out, _err, status = Open3.capture3("git", "rev-parse", "--show-toplevel", chdir: dir)
-    unless status.success? && !out.chomp.empty?
+    # 外すのは出力の区切りの改行だけ (chomp は名前の末尾の CR も外し、別の directory を指しうる)。
+    top = out.delete_suffix("\n")
+    unless status.success? && !top.empty?
       raise Stop.new("undetermined", EXIT_ERROR, "git の作業 tree の中ではありません: #{visible(dir)}")
     end
 
-    File.realpath(out.chomp)
+    File.realpath(top)
   rescue SystemCallError => e
     raise Stop.new("undetermined", EXIT_ERROR, "git の作業 tree を判定できません (#{e.class.name})")
   end
@@ -254,11 +258,18 @@ module ContextNoteApply
       new_path = File.join(tmp, "new")
       File.binwrite(old_path, old_text)
       File.binwrite(new_path, new_text)
-      out, _err, status = Open3.capture3("diff", "-u", "-L", "今の note", "-L", "案", old_path, new_path)
+      # -a: NUL を含む中身も binary とみなさず、行の差分として出させる (binary とみなすと中身を出さずに exit 1 で終わる)。
+      out, _err, status = Open3.capture3("diff", "-a", "-u", "-L", "今の note", "-L", "案", old_path, new_path)
       # diff の exit は 0 = 同じ、1 = 違う、2 = 失敗。ここに来るのは違うときだけ。
       raise Stop.new("undetermined", EXIT_ERROR, "差分を作れません (diff: exit #{status.exitstatus.inspect})") unless status.exitstatus == 1
 
-      out.force_encoding(Encoding::UTF_8).scrub
+      text = out.force_encoding(Encoding::UTF_8).scrub
+      # 差分の形 (見出しの 2 行と hunk) でなければ、中身を見せられないので確認に進まない。
+      unless text.start_with?("--- 今の note\n+++ 案\n@@ ")
+        raise Stop.new("undetermined", EXIT_ERROR, "差分を差分の形で作れません")
+      end
+
+      text
     end
   rescue SystemCallError => e
     raise Stop.new("undetermined", EXIT_ERROR, "差分を作れません (#{e.class.name})")
