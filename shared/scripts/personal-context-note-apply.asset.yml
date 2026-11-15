@@ -1,0 +1,31 @@
+schema_version: 1
+name: personal-context-note-apply
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #677 の PR で author≠reviewer レビューのうえ承認する。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:52a014313b029c6a10e70ca92f54f0678ab11f157aa2ea2cdafb3a30b3c5a591
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-context-note-apply.rb
+  format: text
+summary: >-
+  repo の参照先の note (.agent-context.local.md) を、人が自分の terminal で差分を確かめてから書き換える helper (#677)。
+  agent は note の新しい全文を案の file に書き、実行する 1 行の command を人に渡すまでで、helper を自分では実行しない。
+  使い方は personal-context-note-apply [-C <dir>] <案の file>。agent の session の目印 (CLAUDECODE・CODEX_THREAD_ID・
+  CODEX_SANDBOX・AGENT_TOOLS_OPENCODE) があるとき、標準入力と標準出力が端末でないとき、repository や index を選ぶ git の env を
+  継承しているときは書かない。note が symlink、regular file でない、git で tracked (大文字小文字の違いを含む) のときも書かない。
+  差分 (diff -a -u。差分の形でなければ止める。制御文字と書式の文字は、tab を除き <U+XXXX> で見せる) を見せて [y/N] を聞き、
+  y か yes のときだけ、書く直前に確かめ直してから一時 file と rename で書く (権限を保ち、新しい note は 0600)。最後の行は context-note-apply: <label>。exit 0 = written /
+  unchanged、1 = 書かなかった (declined・agent-session・no-tty・symlink・not-regular・tracked・changed)、2 = usage・input・
+  undetermined・write-failed (docs/context-note-apply.md)。手順の守りであって境界ではない。
