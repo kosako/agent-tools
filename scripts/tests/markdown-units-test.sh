@@ -86,6 +86,8 @@ check "bullets split nested items and keep the parent continuation after a child
 check "bullets are closed by a line that is not deeper than the dash", MU.bullets("- x\nnext\n  more\n") == ["- x\n"]
 check "a line as deep as a child dash goes to the parent, not to the child", MU.bullets("- p\n  - c\n  p2\n") == ["- p\n  p2\n", "  - c\n"]
 check "plains are the parts of a paragraph before and between items", MU.plains("a。\n- b\nc\n\nd\n") == ["a。\n", "d\n"]
+check "lead is the text of a section before its first sub-heading", MU.lead("# A\nintro\n```\n## in fence\n```\nmore\n## B\nb\n", "# A") == "intro\n```\n## in fence\n```\nmore\n"
+check "lead of a missing heading is nil", MU.lead("# A\n", "# B").nil?
 check "a code span may wrap across lines", MU.code_spans(step2) == ["onetwo"]
 check "the backticks of a fence are not code spans", MU.code_spans("```sh\na `b` c\n```\n`d  e`\n") == ["de"]
 

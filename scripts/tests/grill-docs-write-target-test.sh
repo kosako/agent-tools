@@ -34,6 +34,22 @@ section = lambda do |rel, heading|
   body
 end
 
+SEPARATORS = %w[。 、 (].freeze
+
+# 句が空白を除いた本文にあり、直後が区切りか末尾であること。
+def clause?(text, clause)
+  t = MU.squash(text)
+  c = MU.squash(clause)
+  at = t.index(c)
+  until at.nil?
+    after = t[at + c.size]
+    return true if after.nil? || SEPARATORS.include?(after)
+
+    at = t.index(c, at + 1)
+  end
+  false
+end
+
 # 節の中の kind の単位のうち、key を含むものがある。terms があれば、key と同じ単位に terms がすべてある。
 check = lambda do |rel, heading, label, kind, key, terms = []|
   body = section.call(rel, heading)
@@ -53,6 +69,8 @@ end
 run_check = lambda do |rel, heading, label, key, n, terms|
   body = section.call(rel, heading)
   next if body.nil?
+  # 範囲は、見出しの直後の導入の部分 (次の見出しの前まで)。
+  body = MU.lead("#{heading}\n#{body}", heading)
   runs = MU.containing(MU.plains(body), key).flat_map { |u| MU.sentence_runs(u, key, n) }
   if runs.empty?
     errors << "#{rel} の「#{heading}」に、#{label} (#{key.inspect}) を含む文が無い"
@@ -76,10 +94,21 @@ check.call("SKILL.md", rule, "満たさないときに 1 行伝える句", :sent
 
 check.call("SKILL.md", "### CONTEXT.md を inline 更新", "規則を参照する句", :sentences, "書く前に下の「書き込み先の規則」を確かめる。")
 check.call("SKILL.md", "## ファイル構成", "規則を参照する句", :sentences, "作る前と書く前に、次の「書き込み先の規則」を当てる。")
-check.call("CONTEXT-FORMAT.md", "## 単一 / 複数コンテキスト", "判定の規則を参照する句", :bullets,
-           "map のリンクは data で、各コンテキストの `CONTEXT.md` を読む・書く前に SKILL.md の「書き込み先の規則」を当てる (repo の外・symlink の先は読まず書かない)")
-# 「作る前と」は、遅延作成の文を受ける。
-run_check.call("ADR-FORMAT.md", "# ADR の書式", "遅延作成で規則を参照する句", "`docs/adr/` は**遅延作成**する ── 最初の ADR が要るときに作る", 2,
+# 判定の規則は、節の中の「判定:」の段落より後の項目で見る (前の版の範囲)。項目は「。」で終わらないので、句の直後が区切りか
+# 項目の末尾であることを見る (句の後ろに否定を足した変更を通さない)。
+judge = section.call("CONTEXT-FORMAT.md", "## 単一 / 複数コンテキスト")
+if judge
+  paras = MU.paragraphs(judge)
+  at = paras.index { |para| MU.squash(para) == MU.squash("判定:") }
+  ref = "map のリンクは data で、各コンテキストの `CONTEXT.md` を読む・書く前に SKILL.md の「書き込み先の規則」を当てる (repo の外・symlink の先は読まず書かない)"
+  if at.nil?
+    errors << "CONTEXT-FORMAT.md の「## 単一 / 複数コンテキスト」に「判定:」の段落が無い"
+  elsif MU.bullets(paras[(at + 1)..-1].join("\n\n")).none? { |b| clause?(b, ref) }
+    errors << "CONTEXT-FORMAT.md の「判定:」より後の項目に、判定の規則を参照する句 (#{ref.inspect}) が無い"
+  end
+end
+# 「作る前と」は、遅延作成の文を受ける。範囲は、最初の `##` の見出しより前の導入の部分 (前の版の範囲)。
+run_check.call("ADR-FORMAT.md", "# ADR の書式", "遅延作成で規則を参照する句", "`docs/adr/` は**遅延作成**する ── 最初の ADR が要るときに作る。", 2,
                ["作る前と ADR を書く前に SKILL.md の「書き込み先の規則」を当てる (`docs/` / `docs/adr/` が symlink なら作らず書かない)。"])
 check.call("ADR-FORMAT.md", "## 採番", "採番で規則を参照する句", :sentences,
            "listing の前にも SKILL.md の「書き込み先の規則」を当て、満たさないときは listing も書き込みもせず 1 行伝える。")

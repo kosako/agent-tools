@@ -67,7 +67,8 @@ TARGETS.each do |rel, heading, unit, key, clauses|
     errors << "#{rel}: brief の節 (#{heading}) が見つからない"
     next
   end
-  units = unit == :plains ? MU.plains(body) : Array(MU.lists(body).first)
+  # 最初の一覧の中を、子の項目を分けた bullets で見る (本文を子の項目へ切り出した変更を通さない)。
+  units = unit == :plains ? MU.plains(body) : MU.bullets(Array(MU.lists(body).first).join)
   hits = MU.containing(units, key)
   if hits.empty?
     errors << "#{rel}: brief の#{unit == :plains ? "段落" : "最初の一覧"}に #{key.inspect} の#{unit == :plains ? "段落" : "項目"}が無い"

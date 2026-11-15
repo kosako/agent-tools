@@ -6,7 +6,7 @@
 #
 # 受ける整形 (これが契約。ここに無い書き方は受けない。たとえば `~~~` の fence、`*` や番号の list、4 つ以上の backtick の
 # fence、全角の空白での字下げ):
-# - 見出し: 行の頭の `#` の並びと、その後ろの空白か tab が 1 つ以上。照合は空白を除いて比べる (`###  2.` も `### 2.` と同じ)。
+# - 見出し: 行の頭の `#` の並びと、その後ろの空白か tab が 1 つ以上 (節は section、次の見出しまでの導入は lead)。照合は空白を除いて比べる (`###  2.` も `### 2.` と同じ)。
 #   level は `#` の数。fence の中の行は見出しとみなさない。
 # - fence: 行の頭 (空白か tab の字下げは可) の ``` で始まり、次の ``` で始まる行で終わる。info string (`sh` など) は、
 #   始まりの行の ``` の後ろ (前後の空白は除く)。
@@ -50,6 +50,23 @@ module MarkdownUnits
       body << line unless body.nil?
     end
     body&.join
+  end
+
+  # 見出しから、次の見出し (level を問わない) の前までの本文 (見出しの直後の導入の部分)。無ければ nil。fence の中の見出しの形の
+  # 行では切らない。
+  def lead(text, heading)
+    body = section(text, heading)
+    return nil if body.nil?
+
+    out = +""
+    fence = false
+    body.each_line do |line|
+      fence = !fence if line =~ FENCE
+      break if !fence && line =~ HEADING
+
+      out << line
+    end
+    out
   end
 
   # fence の外の行だけをつなげた text (fence の所には空行を置き、段落と項目を区切る)。
