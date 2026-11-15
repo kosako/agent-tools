@@ -193,6 +193,48 @@ commit・push と、Issue・PR・コメントの投稿の前に、少なくと�
 - public safety check が通っている。
 - repository 外に残すべき project-level な判断や作業ログが更新されている。
 
+## 人が merge する PR を待つ
+
+個人 project で、PR の merge を人に頼んだとき (許可の規則を変える PR、agent が merge する条件を満たさない PR) の手順。
+人が「merge した」と伝えに来るのを待たず、agent が merge を検知して後片付けに進む (#675)。merge してよいかは、今までどおり
+運用 instruction の「個人 project の GitHub の操作と merge」で決める。この手順が持つのは、merge の検知とその後の手順だけ。
+
+### 手順
+
+1. merge を頼むときに、その時点の PR の head (review と CI を通した head) の full の OID を控える。
+2. 配備済みの `personal-pr-merge-wait` (`<tool home>/agent-tools/scripts/`。説明は agent-tools の `docs/pr-merge-wait.md`) を、
+   下の「待ち方」で起動する。PR 番号・head・repo は、検査してから literal の変数で渡す。
+3. 終わったら、下の「exit code ごとの扱い」で分ける。
+4. 人が「merge した」と伝えに来たときも、同じ script で merge と head を確かめてから進む (merge 済みなら、最初の確認で
+   終わる)。
+
+```sh
+wait=<tool home>/agent-tools/scripts/personal-pr-merge-wait
+"$wait" "$pr" --expect-head "$head" --repo "$repo"
+```
+
+### 待ち方
+
+- Claude Code の session では、background で走らせる (既定の上限は 2 時間)。終わると通知が来るので、その時点で結果を
+  読む。待ちに入る返答には、何を待つか、上限、merge されたら何をするかを書く (運用 instruction の「待ちと判断の伝え方」)。
+- Codex の session には background の通知が無いので、foreground で走らせる。script は上限の時刻に最後の確認をしてから
+  終わるので、終わるまでの最長の時間は、通常は `--timeout` に約 65 秒 (最後の確認の gh の上限 60 秒と後始末) を足した
+  長さになる (KILL の後も gh を回収できないときは、回収を待つ分だけ延びる)。
+  `--timeout` は、その session の command の時間の上限から、この分に余裕を見た 90 秒を引いた値以下にする (外の上限で
+  止められると、gh が残ることがある)。上限に達したら人に返す。
+
+### exit code ごとの扱い
+
+- exit 0 (`merged`): 頼んだ head のまま merge された。merge の後の手順に進む。default branch を更新し
+  (`git pull --ff-only`)、merge した branch を配備済みの `personal-merged-branch-cleanup` で消す。配備のある repo
+  (agent-tools など) では、配備まで行って結果を報告する (運用 instruction の「個人 project の GitHub の操作と merge」)。
+- exit 1 (`merged-other-head`・`closed`・`head-moved`): 頼んだ head のまま merge されたとは言えない。merge の後の手順に
+  進まず、出力の `state:` と `head:` の行を添えて人に伝える。`head-moved` なら、review と CI をやり直してから merge を
+  頼み直す。
+- exit 3 (`timeout`): 上限まで merge されなかった。merge の後の手順に進まず、人に伝えて止まる。待ち続けるかは人が決める
+  (待つなら、同じ head で起動し直す)。
+- exit 2: 入力の誤り、確認の失敗、止められた、のどれか。merge の後の手順に進まず、stderr の理由の 1 行を添えて人に伝える。
+
 ## merge 後に見つかった誤り
 
 個人 project では、merge 済みの PR が入れた誤りを直す Issue に label `escape` を付け、本文に `元の PR: #<番号>` を
@@ -213,7 +255,7 @@ agent-tools の `docs/work-markers.md` (#658)。会社や別の組織の repo、
 ## この workflow の出口
 
 置き場所 (repository / planning docs / GitHub Issue・PR) と public safety の判断、または割当の
-判断 (担当と理由) を返した時点で完了。packet への割当の記録は orchestrator が `依頼` に書く
+判断 (担当と理由) を返した時点で完了。人が merge する PR を待つ手順は、merge の後の手順を終えたか、人に返した時点で完了。packet への割当の記録は orchestrator が `依頼` に書く
 (この workflow 自体は書き込まない)。実装・review・session の status / handoff の実行はこの workflow では行わず、それぞれ
 personal-review-request / personal-resume-project / personal-session-handoff と task 固有の作業に
 渡す。判断に必要な情報が足りないときは、上の「判断に迷ったとき」の既定 (迷うなら repository に
