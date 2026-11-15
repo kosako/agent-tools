@@ -203,11 +203,10 @@ check "a signal while waiting between checks: no new gh call", calls.size == 1 &
 # gh は TERM で終わるが、同じ group の子が TERM を受け流す。gh を回収する前に group を KILL し、子も残さない。
 s, out, err, calls, d = run_case("family", base, signals: ["TERM"])
 child = File.read(File.join(d, "child.pid")).to_i
-# 落ちたときの後始末の対象: まだ gh の group (id は gh の PID) にいる子だけ。PID が再利用された別の process は止めない。
-left = alive?(child) && (Process.getpgid(child) rescue nil) == calls[0]["pid"]
 check "a child in the gh group that ignores TERM: exit 2 with one stderr line", s == 2 && out == [waiting] && err.size == 1
-check "a child in the gh group that ignores TERM is killed with the group", !left && !alive?(child) && !alive?(calls[0]["pid"]) && !File.exist?(File.join(d, "child-natural-end"))
-Process.kill("KILL", child) if left
+check "a child in the gh group that ignores TERM is killed with the group", !alive?(child) && !alive?(calls[0]["pid"]) && !File.exist?(File.join(d, "child-natural-end"))
+# 落ちて子が残っても、test からは止めない。この子は test の process の子ではなく、PID を保てないので、止めると再利用された
+# 別の process に当たりうる。子は 8 秒で自分から終わる。
 
 # ---- locale が C
 s, out, = run_case("merged", base, env: { "LC_ALL" => "C", "LANG" => "C" })
@@ -215,6 +214,7 @@ check "C locale: same result", s == 0 && out.last == "merge-wait: merged"
 
 # ---- gh を起動する部分を直接呼ぶ (gh の 1 回の上限の定数を 1 秒に差し替える)
 require SRC
+require "stringio"
 PrMergeWait.send(:remove_const, :GH_LIMIT)
 PrMergeWait.const_set(:GH_LIMIT, 1)
 PrMergeWait.watch_signals
@@ -243,6 +243,23 @@ end
 def reset_signal
   PrMergeWait.instance_variable_set(:@signal, nil)
   PrMergeWait.watch_signals
+end
+
+# run を通す。[exit, stdout, stderr] を返す。$stdout と $stderr は StringIO に差し替える。
+def run_direct(argv)
+  outs = StringIO.new
+  errs = StringIO.new
+  real_out = $stdout
+  real_err = $stderr
+  begin
+    $stdout = outs
+    $stderr = errs
+    code = PrMergeWait.run(argv)
+  ensure
+    $stdout = real_out
+    $stderr = real_err
+  end
+  [code, outs.string, errs.string]
 end
 
 d = direct_case("limit", "hang")
@@ -336,24 +353,58 @@ tp = TracePoint.new(:c_return) do |t|
   t.disable
   Process.kill("TERM", Process.pid)
 end
-require "stringio"
-outs = StringIO.new
-errs = StringIO.new
-real_out = $stdout
-real_err = $stderr
+DIRECT_ARGS = ["675", "--expect-head", H, "--interval", "1", "--timeout", "8"].freeze
+DIRECT_WAITING = "merge-wait: waiting (PR #675、上限 8 秒)\n"
 begin
-  $stdout = outs
-  $stderr = errs
   tp.enable
-  code = PrMergeWait.run(["675", "--expect-head", H, "--interval", "1", "--timeout", "8"])
+  code, outs, errs = run_direct(DIRECT_ARGS)
 ensure
   tp.disable
-  $stdout = real_out
-  $stderr = real_err
 end
-check "a signal right after reaping gh: run exits 2 with one stderr line and no result line", code == 2 && errs.string.lines.size == 1 && outs.string == "merge-wait: waiting (PR #675、上限 8 秒)\n"
+check "a signal right after reaping gh: run exits 2 with one stderr line and no result line", code == 2 && errs.lines.size == 1 && outs == DIRECT_WAITING
 check "a signal right after reaping gh: no signal to the reaped gh group", sent.empty?
 PrMergeWait.define_singleton_method(:signal_group, original)
+reset_signal
+
+# 結果を出す処理 (finish) に入る直前に signal が届く。結果を確定する前なので、signal を優先して exit 2 で終わる。
+direct_case("before-commit", "merged")
+tp = TracePoint.new(:call) do |t|
+  next unless t.method_id == :finish && t.defined_class == PrMergeWait.singleton_class
+
+  t.disable
+  Process.kill("TERM", Process.pid)
+end
+begin
+  tp.enable
+  code, outs, errs = run_direct(DIRECT_ARGS)
+ensure
+  tp.disable
+end
+check "a signal just before the result is committed: run exits 2 with one stderr line and no result line", code == 2 && errs.lines.size == 1 && outs == DIRECT_WAITING
+reset_signal
+
+# 結果の行を出し始めた後 (確定した後) に signal が届く。受け流して、確かめた結果のまま終わる。
+direct_case("after-commit", "merged")
+on_puts = TracePoint.new(:c_call) do |t|
+  next unless t.method_id == :puts
+
+  t.disable
+  Process.kill("TERM", Process.pid)
+end
+tp = TracePoint.new(:call) do |t|
+  next unless t.method_id == :finish && t.defined_class == PrMergeWait.singleton_class
+
+  t.disable
+  on_puts.enable
+end
+begin
+  tp.enable
+  code, outs, errs = run_direct(DIRECT_ARGS)
+ensure
+  tp.disable
+  on_puts.disable
+end
+check "a signal after the result is committed: the result stands (exit 0, all result lines, empty stderr)", code == 0 && errs.empty? && outs == "#{DIRECT_WAITING}merge-commit: #{M}\nhead: #{H}\nmerge-wait: merged\n"
 reset_signal
 
 # 確かめる間の待ちの最中に signal が届いていたら、次の確認で gh を起動せずに止まる。外からの test では、起動してすぐ

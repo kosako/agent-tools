@@ -153,9 +153,6 @@ module PrMergeWait
     loop do
       check_signal
       snap = check(opts)
-      # 確かめている間 (gh を回収した直後を含む) に届いた signal は、確かめた結果より優先する (止めた呼び出し元が、
-      # merge の後の手順に進まないため)。
-      check_signal
       if snap.nil?
         failures += 1
         raise Failed, "gh での PR の確認が #{MAX_FAILURES} 回続けて失敗しました" if failures >= MAX_FAILURES
@@ -185,7 +182,11 @@ module PrMergeWait
     end
   end
 
+  # 結果を確定して出す。結果を確定する点は、先頭の check_signal の 1 か所だけにする。そこまでに届いた signal は、結果より
+  # 優先して Interrupted になる (止めた呼び出し元が、merge の後の手順に進まないため)。その後に届いた signal は、もう
+  # 確かめないので、確定した結果のまま終わる。どの瞬間に届いた signal も、どちらか一方になる。
   def finish(result, snap)
+    check_signal
     code, word = RESULTS.fetch(result)
     if result == :merged
       puts "merge-commit: #{snap[:merge_commit]}"
