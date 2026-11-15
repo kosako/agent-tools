@@ -13,6 +13,8 @@
 # - sh の block (info string が `sh`) の行継続: 行末の `\` と改行は、空白 1 つにつなげてから見る。ほかの block はそのまま。
 # - 項目: 行の頭の `-` と空白か tab が 1 つ以上で始まる行と、字下げした続きの行 (fence の外)。
 # - 一覧: 続いた項目のまとまり。空行か、字下げの無い行 (項目でない行) で終わる。
+# - 字下げした項目 (bullets): 行の頭 (字下げは可) の `-` と空白か tab で始まる行と、その `-` より深く字下げした続きの行。
+#   子の項目は親と分け、子の後ろにある親の続きの行は親に付ける。空行と fence で閉じる (番号つきの手順の下の項目もここで取る)。
 # - 段落: 空行で区切る (fence の外。fence も段落を区切る)。
 # - 文: 「。」で区切る (fence の外。空白を除いた後で区切る)。
 # - 文のつながり: key を含む文と、その後ろに続く文 (sentence_runs)。
@@ -22,6 +24,7 @@ module MarkdownUnits
   FENCE = /\A[ \t]*```(.*)$/.freeze
   HEADING = /\A(#+)[ \t]+\S/.freeze
   ITEM = /\A-[ \t]+\S/.freeze
+  BULLET = /\A([ \t]*)-[ \t]+\S/.freeze
 
   module_function
 
@@ -109,6 +112,29 @@ module MarkdownUnits
   # 項目 (`-` で始まる行と、字下げした続きの行) の列。
   def items(text)
     lists(text).flatten
+  end
+
+  # 字下げの有無に関わらず、`-` の項目を 1 つずつ分けた列 (bullets)。子の項目は親と分ける。続きの行は、その行より浅い字下げの
+  # 項目のうち、いちばん近いものに付ける (子の項目の後ろにある親の続きの行は、親に付く)。空行と fence で、開いている項目を閉じる。
+  # 字下げの深さは、行の頭の空白と tab の数で比べる。
+  def bullets(text)
+    out = []
+    open = []
+    prose(text).each_line do |line|
+      if (m = line.match(BULLET))
+        depth = m[1].size
+        open.pop while open.any? && open.last[0] >= depth
+        out << line.dup
+        open << [depth, out.size - 1]
+      elsif line.strip.empty?
+        open.clear
+      else
+        depth = line[/\A[ \t]*/].size
+        open.pop while open.any? && open.last[0] >= depth
+        out[open.last[1]] << line if open.any?
+      end
+    end
+    out
   end
 
   # 段落 (空行で区切る) の列。

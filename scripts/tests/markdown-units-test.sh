@@ -80,6 +80,10 @@ check "the text of a fence is not in the sentences", sentences.none? { |s| s.inc
 runs = MU.sentence_runs("A の条件。A の処理。B の条件。B の処理。A の条件 2。", "A の条件", 2)
 check "sentence runs start at each sentence with the key and take the following sentences", runs == ["Aの条件。Aの処理", "Aの条件2"]
 check "sentence runs are empty when no sentence has the key", MU.sentence_runs("a。b。", "c", 2) == []
+bl = MU.bullets("1. step\n   - a one\n     a two\n     - child\n     back to a\n   - b\n\n- c\n```\n- in fence\n```\n- d\nplain\n")
+check "bullets split nested items and keep the parent continuation after a child", bl == ["   - a one\n     a two\n     back to a\n", "     - child\n", "   - b\n", "- c\n", "- d\n"]
+check "bullets are closed by a line that is not deeper than the dash", MU.bullets("- x\nnext\n  more\n") == ["- x\n"]
+check "a line as deep as a child dash goes to the parent, not to the child", MU.bullets("- p\n  - c\n  p2\n") == ["- p\n  p2\n", "  - c\n"]
 check "a code span may wrap across lines", MU.code_spans(step2) == ["onetwo"]
 check "the backticks of a fence are not code spans", MU.code_spans("```sh\na `b` c\n```\n`d  e`\n") == ["de"]
 

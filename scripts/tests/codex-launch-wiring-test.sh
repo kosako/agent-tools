@@ -56,12 +56,13 @@ check = lambda do |rel, heading, label, kind, key, terms = []|
   end
 end
 
-# 節の中で、key を含む文から始まる n 個の文のつながりのどれかに、terms がすべてある。条件の文と、それに続く処理の文を
-# 組で見る (処理の文だけを別の分岐へ移した変更を通さない)。
-run_check = lambda do |rel, heading, label, key, n, terms|
+# 節の中で、key を含む文から始まる n 個の文のつながりのどれかに、terms がすべてある。つながりは、key を含む項目 (helper の
+# bullets。字下げした子の項目は親と分ける。within が :paragraphs なら段落) の中だけで数える。受ける文を別の項目へ切り出した変更を通さないため (項目の境目をまたいで数えると、
+# 切り出しても隣の文のまま通る)。
+run_check = lambda do |rel, heading, label, key, n, terms, within = :bullets|
   body = section.call(rel, heading)
   next if body.nil?
-  runs = MU.sentence_runs(body, key, n)
+  runs = MU.containing(MU.public_send(within, body), key).flat_map { |u| MU.sentence_runs(u, key, n) }
   if runs.empty?
     errors << "#{rel} の「#{heading}」に、#{label} (#{key.inspect}) を含む文が無い"
   elsif runs.none? { |r| MU.missing(r, terms).empty? }
