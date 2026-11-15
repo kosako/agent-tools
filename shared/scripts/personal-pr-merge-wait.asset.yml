@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:e70444e7bc8421f6e1d85f55bdec42a72db3fdbd8b1a99924dccefd1a10e3aeb
+  approved_build_id: sha256:5d9b370a9c5aa10bdd63add45dd30eb68bf6103bae7fee2fee56213a61ad56e6
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-pr-merge-wait.rb
@@ -23,8 +23,9 @@ summary: >-
   人が merge する PR を agent が待つ (#675)。PR の状態を決まった間隔で読み、merge されたか、別の終わり方をしたか、上限に
   達したかを exit code で返す。merge も配備もせず、GitHub に書かない。確認には gh pr view <番号> [--repo <repo>] --json
   state,headRefOid,mergeCommit だけを使い (題名・本文・コメントは読まない)、gh は自分の process group で起動して 1 回
-  60 秒で打ち切る。起動の直後に 1 回、その後は --interval (1〜600 秒、既定 60) ごとに確かめ、次の間隔が --timeout (1〜43200
-  秒、既定 7200) を越えるときは上限の時刻に最後の確認をする。exit 0 = --expect-head の head のまま merge された /
-  1 = 別の head で merge・merge されずに close・open のまま head が動いた / 3 = 上限に達してまだ open / 2 = usage・gh の
-  確認が 3 回続けて失敗・上限の時刻の確認が失敗・止められた (SIGINT / SIGTERM)・想定外の例外 (stderr に 1 行)。止められたとき
-  は走っている gh を止めて回収してから終わり、後始末の間の signal は受け流す (docs/pr-merge-wait.md)。
+  60 秒で打ち切る (stdout を閉じた後や、group に process が残る間も期限で見る)。gh を回収するのは、group に生きている
+  process が無くなった後だけ。起動の直後に 1 回、その後は --interval (1〜600 秒、既定 60) ごとに確かめ、次の間隔が
+  --timeout (1〜43200 秒、既定 7200) を越えるときは上限の時刻に最後の確認をする。exit 0 = --expect-head の head のまま
+  merge された / 1 = 別の head で merge・merge されずに close・open のまま head が動いた / 3 = 上限に達してまだ open /
+  2 = usage・gh の確認が 3 回続けて失敗・上限の時刻の確認が失敗・止められた (SIGINT / SIGTERM)・想定外の例外 (stderr に
+  1 行)。signal は記録だけし、決まった時点で、走っている gh の group を止めて回収してから終わる (docs/pr-merge-wait.md)。

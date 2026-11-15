@@ -35,8 +35,14 @@ personal-pr-merge-wait <PR 番号> --expect-head <40 桁> [--repo <owner/repo>] 
   読みません。gh は PATH の `gh` で、gh の stderr は捨てます。
 - 起動の直後に 1 回確かめ、その後は間隔ごとに確かめます。間隔は、前の確認が終わった時点から数えます。次の間隔が上限を
   越えるときは、上限の時刻に最後の確認をします。merge の検知は、最大で間隔の長さだけ遅れます。
-- gh は自分の process group で起動し、1 回 60 秒で打ち切ります。打ち切るときは TERM を送り、2 秒で終わらなければ KILL を
-  送って、回収します。出力が 1 MiB を超えたときも同じように止めます。
+- gh は自分の process group で起動し、1 回 60 秒で打ち切ります。期限は、stdout を読み終えるまでと、gh の group に生きて
+  いる process が無くなるまでの両方に当てます。gh が stdout を閉じた後も動き続けるとき、gh の子が group に残るときも、
+  期限で止めて確認の失敗に数えます。出力が 1 MiB を超えたときも止めます。
+- 止めるときは、gh の group に TERM を送り、group に生きている process が無くなるまで最大 2 秒待ちます。残れば KILL を
+  送ります。gh は group の leader なので、group に送れば gh 自身にも届きます。
+- gh を回収 (wait) するのは、group に生きている process が無くなった後だけです。回収するまで gh の PID と group の id は
+  再利用されないので、signal を送る先を取り違えません。group の外へ移った gh の子孫 (自分で別の session や group を作った
+  もの) は追いません。
 - 応答は、`state` が `OPEN` / `CLOSED` / `MERGED` のどれかで、`headRefOid` が 40 桁の小文字の hex のときだけ使います。
   `MERGED` のときは、`mergeCommit.oid` も 40 桁の小文字の hex であることを求めます。
 - merge された PR の `headRefOid` は、GitHub が持つ merge の時の head です。これを `--expect-head` と比べます。
@@ -52,8 +58,8 @@ personal-pr-merge-wait <PR 番号> --expect-head <40 桁> [--repo <owner/repo>] 
 | 上限に達して、まだ open (head は同じ) | `merge-wait: timeout` | 3 |
 | 入力の誤り。gh の確認が 3 回続けて失敗した。上限の時刻の確認が失敗した。止められた (SIGINT / SIGTERM)。想定外の例外 | 無し (stderr に 1 行) | 2 |
 
-- gh の確認の失敗は、gh が exit 0 でない、60 秒を越えた、出力が大きすぎる、応答の形が外れる、gh を起動できない、のどれか
-  です。成功した確認で数え直し、3 回続いたら exit 2 にします。
+- gh の確認の失敗は、gh が exit 0 でない、60 秒を越えた (gh の group に process が残っている間を含む)、出力が大きすぎる、
+  応答の形が外れる、gh を起動できない、のどれかです。成功した確認で数え直し、3 回続いたら exit 2 にします。
 - 上限の時刻の確認が失敗したときは、PR の状態を確かめられないので、timeout にせず exit 2 にします。
 - exit 1 は、頼んだ head のまま merge されたとは言えない終わり方です。merge の後の手順に進まず、人に伝えます。
 
@@ -74,9 +80,12 @@ merge-wait: merged
 
 ## 止められたとき
 
-- SIGINT か SIGTERM を受けると、走っている gh を止めて回収し、exit 2 で終わります。
-- 後始末の間に届いた SIGINT と SIGTERM は受け流します。Ctrl-C を 2 回押しても、後始末を途中で止めずに終わります。
-- 60 秒の上限を越えた gh を止めている間に signal が届いたときは、gh を回収し終えてから止まります。
+- SIGINT か SIGTERM を受けると、走っている gh の group を止めて回収し、exit 2 で終わります。確認と確認の間の待ちの最中なら、
+  待ちを切り上げて、新しい gh を起動せずに終わります。
+- signal の handler は、届いた signal を記録するだけです。止めるのは、gh を起動して PID を覚えた後か、確かめる処理の区切り
+  だけです。gh を起動した直後や回収した直後に signal が届いても、gh を見失ったり、回収した後の group に signal を送ったり
+  しません。
+- gh を止めている最中に 2 回目の signal が届いても (Ctrl-C を 2 回押したときなど)、止める処理を途中で抜けません。
 - SIGKILL では後始末ができません。gh は自分の process group で動くので、そのときは gh が残ることがあります (起動した側が
   確かめる)。
 
