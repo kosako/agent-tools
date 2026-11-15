@@ -102,9 +102,9 @@ head = "### personal-codex-launch で起動して回収する (#672)"
 # 条件の文と、それに続く処理の文を組で見る。
 [
   ["RUNNING の扱い", "`RUNNING` (exit 3)", 2, ["まだ動いています", "同じ対象を起動し直しません"]],
-  ["executor-result の扱い", "で `executor-result`", 2,
-   ["`retryable` が true なら空振り", "新しい `launch` で同じ brief を 1 回だけ起動し直します",
-    "false なら verdict の無い結果", "再実行せずに `Blocked at: executor-result` で停止します"]],
+  # executor-result は true と false の 2 つの分岐があるので、つながりでは分岐の並びだけを見て、条件と処理は分岐ごとに同じ
+  # 文で見る (下の check)。2 文をまとめて見ると、2 つの処理を入れ替えても通る。
+  ["executor-result の扱い", "で `executor-result`", 2, ["`retryable` が true なら空振り", "false なら verdict の無い結果"]],
   # 想定外の例外の後は、run dir の launch.json の pane の ID で起動の状況を確かめる。label の pane が無いことは根拠にしない
   # (命名に失敗しても起動は続く。#680 の review の round 2 の F2)。
   ["想定外の例外で起動し直す前に確かめる句", "`unexpected error` (想定外の例外)", 2,
@@ -118,6 +118,10 @@ head = "### personal-codex-launch で起動して回収する (#672)"
   ["pane_id がある launch-path の run は collect にかけない句", "`launch-path` の出力に `pane_id` がある run", 2,
    ["この run は `collect` にかけず"]],
 ].each { |label, key, n, terms| run_check.call(launch_md, head, label, key, n, terms) }
+check.call(launch_md, head, "executor-result の空振りは 1 回だけ再実行する句", :sentences, "`retryable` が true なら空振り",
+           ["新しい `launch` で同じ brief を 1 回だけ起動し直します"])
+check.call(launch_md, head, "executor-result の verdict の無い結果は再実行しない句", :sentences, "false なら verdict の無い結果",
+           ["再実行せずに `Blocked at: executor-result` で停止します"])
 check.call(launch_md, "### run dir と run script (script が実装している契約)", "今の run script の契約", :sh,
            "codex exec --ignore-user-config --ignore-rules -s read-only")
 
