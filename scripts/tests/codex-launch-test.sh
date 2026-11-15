@@ -198,6 +198,7 @@ check "run dir is private (mode 700)", run_dir && (File.stat(run_dir).mode & 0o7
 check "nonce and sentinel", j && j["nonce"].match?(/\A[0-9a-f]{16}\z/) && j["sentinel"] == "CODEX-REVIEW-DONE-#{j['nonce']}"
 check "pane label and result path", j && j["pane_label"] == "review-678" && j["result"] == File.join(run_dir, "result.md") && j["pane_id"] == "w1:pNEW"
 check "model sources carry where the values came from (no values)", j && j["model_sources"] == SELECTION_OK["sources"] && !o.include?("gpt-test-1")
+check "no review scope without a previous head", j && !j.key?("review_scope") && !j.key?("scope_reason")
 check "run dir holds brief.md, run.zsh and launch.json only", run_dir && Dir.children(run_dir).sort == %w[brief.md launch.json run.zsh]
 check "launch output does not echo the brief", !o.include?(CANARY) && !e.include?(CANARY)
 check "the selector is called with the review profile", File.read(File.join(state, "case#{$case}", "FAKE_SELECTOR_LOG")) == "--profile review --format json\n"
@@ -404,6 +405,109 @@ check "the OIDs without a base ref pass", s == 0 && !File.read(File.join(one_jso
 check "target blocks leave no run dir", (run_dirs - before).size == 2
 o, _e, s, = run_cli(launch_args(extra: target.call(base_ref: "base")), env: { "GIT_DIR" => File.join(tmp, "elsewhere") })
 check "an inherited GIT_DIR does not redirect the checks", s == 0
+
+# ---- launch: 2 回目以降の review の範囲 (#673)。前の round の head を渡すと、前の round からの差分を中心に読んでよいかを
+# git で決める。満たさないときも止めず、PR 全体を読む対象の節にする。
+SR = File.join(TMP, "scope repo")
+FileUtils.mkdir_p(SR)
+sg = lambda do |*args|
+  out, err, st = Open3.capture3("git", "-C", SR, *args)
+  raise "git #{args.first}: #{err}" unless st.success?
+
+  out.strip
+end
+commit = lambda do |files, msg|
+  files.each { |name, text| File.binwrite(File.join(SR, name), text) }
+  sg.call("add", "-A")
+  sg.call("commit", "-q", "-m", msg)
+  sg.call("rev-parse", "HEAD")
+end
+sg.call("init", "-q")
+lines20 = (1..20).map { |i| "line #{i}\n" }.join
+M0 = commit.call({ "x.txt" => "base\n" }, "m0")
+F1 = commit.call({ "big.txt" => lines20 }, "f1: the PR adds 20 lines")
+F2 = commit.call({ "big.txt" => lines20.sub("line 3\n", "line three\n") }, "f2: a 1-line fix")
+F3 = commit.call({ "big.txt" => (1..20).map { |i| i <= 15 ? "new #{i}\n" : "line #{i}\n" }.join }, "f3: rewrite 15 lines")
+sg.call("checkout", "-q", "--detach", F2)
+F5 = commit.call({ "bin.dat" => "\x00\x01\x02" }, "f5: a binary file")
+sg.call("checkout", "-q", "--detach", M0)
+M1 = commit.call({ "y.txt" => "main moves on\n" }, "m1")
+sg.call("checkout", "-q", "--detach", F2)
+sg.call("merge", "-q", "--no-ff", "-m", "merge main", M1)
+F4 = sg.call("rev-parse", "HEAD")
+sg.call("checkout", "-q", "--detach", M0)
+G1 = commit.call({ "big.txt" => lines20 + "rebased\n" }, "g1: f1 rewritten on the base")
+# 前の round からの差分がちょうど半分 (10 行 / 20 行) と、半分を少し超える (12 行 / 20 行)。
+f2_text = lines20.sub("line 3\n", "line three\n")
+rewrite = ->(range) { f2_text.lines.each_with_index.map { |l, i| range.cover?(i + 1) ? "changed #{i + 1}\n" : l }.join }
+sg.call("checkout", "-q", "--detach", F2)
+F6 = commit.call({ "big.txt" => rewrite.call(10..15) }, "f6: 6 lines")
+sg.call("checkout", "-q", "--detach", F2)
+F7 = commit.call({ "big.txt" => rewrite.call(10..14) }, "f7: 5 lines")
+# 差分の無い commit だけの PR と、base と共通の祖先が無い commit。
+sg.call("checkout", "-q", "--detach", M0)
+sg.call("commit", "-q", "--allow-empty", "-m", "e1")
+E1 = sg.call("rev-parse", "HEAD")
+sg.call("commit", "-q", "--allow-empty", "-m", "e2")
+E2 = sg.call("rev-parse", "HEAD")
+sg.call("checkout", "-q", "--orphan", "unrelated")
+O1 = commit.call({ "x.txt" => "unrelated\n" }, "o1")
+
+before = run_dirs
+scope_run = lambda do |head, prev, base: M0|
+  sg.call("checkout", "-q", "--detach", head)
+  out, err, st, = run_cli(launch_args(repo: SR, label: "673-r2", extra: ["--base-oid", base, "--head-oid", head, "--prev-head-oid", prev]))
+  j = one_json(out)
+  [j, st, err, j && j["run_dir"] ? File.read(File.join(j["run_dir"], "brief.md")) : ""]
+end
+
+j, s, e, b = scope_run.call(F2, F1)
+check "incremental: launch starts and says so", s == 0 && e.empty? && j["status"] == "STARTED" && j["review_scope"] == "incremental" && !j.key?("scope_reason")
+check "incremental: commands read the change since the previous head and the PR stat",
+      b.include?("```sh\ngit diff #{F1}..#{F2}\ngit log --oneline #{F1}..#{F2}\ngit diff --stat #{M0}...#{F2}\n```\n")
+check "incremental: the whole-PR diff is not a command of its own", !b.include?("\ngit diff #{M0}...#{F2}\n") && !b.include?("git log --oneline #{M0}..#{F2}")
+check "incremental: the target keeps the current base and head", b.include?("- base OID: #{M0}\n- head OID: #{F2}\n- 前の round の head OID: #{F1}\n")
+{ "reads the whole change first" => "まず前の round からの差分を全部読みます", "looks for the same kind of gap" => "同じ型の",
+  "reads the PR diff by file" => "`git diff #{M0}...#{F2} -- <file>`", "keeps earlier conclusions" => "前の round の結論を引き継ぎ",
+  "re-reads two policy sections" => "「指摘の再評価と追跡」と「堂々巡りの検出」", "no other policy" => "ほかの policy の file は読み直しません",
+  "verdict covers the PR" => "verdict は PR 全体 (base から head) について出します",
+  "surrounding code from head" => "`git show #{F2}:<file>`" }.each { |label, text| check "incremental brief: #{label}", b.include?(text) }
+
+j, s, = scope_run.call(F2, F1, base: M1)
+check "a base that moved on without the branch stays incremental", s == 0 && j["review_scope"] == "incremental"
+j, s, = scope_run.call(F7, F2)
+check "a change of exactly half the PR stays incremental", s == 0 && j["review_scope"] == "incremental"
+
+{
+  "the same head" => [F2, F2, M0, "前の round の head が今の head と同じ"],
+  "an unknown previous head" => [F2, "e" * 40, M0, "前の round の head の commit が local に無い"],
+  "a rewritten branch" => [G1, F1, M0, "前の round の head が今の head の祖先でない (rebase か force push)"],
+  "a merge commit since the previous head" => [F4, F2, M0, "前の round からの commit に merge commit がある"],
+  "a moved merge base" => [F3, F1, F2, "差分の基点 (base との merge-base) が前の round と違う"],
+  "a binary file" => [F5, F2, M0, "差分の行数を数えられない (binary の file か、git の失敗)"],
+  "a change larger than half the PR" => [F6, F2, M0, "前の round からの差分 (12 行) が PR の差分 (20 行) の半分を超える"],
+  "an empty PR diff" => [E2, E1, M0, "PR の差分が空"],
+  "a base with no common ancestor" => [F2, F1, O1, "差分の基点 (base との merge-base) を確かめられない"],
+}.each do |label, (head, prev, base, reason)|
+  j, s, e, b = scope_run.call(head, prev, base: base)
+  check "full (#{label}): still starts, with the reason", s == 0 && e.empty? && j["status"] == "STARTED" && j["review_scope"] == "full" && j["scope_reason"] == reason
+  check "full (#{label}): the brief reads the whole PR", b.include?("```sh\ngit diff #{base}...#{head}\ngit log --oneline #{base}..#{head}\n```\n") &&
+                                                        !b.include?("前の round からの差分を\n中心に読みます") && !b.include?("git diff --stat")
+  check "full (#{label}): the brief names the previous head and why", b.include?("- 前の round の head OID: #{prev} (#{reason}。PR 全体を読み直します)\n")
+end
+check "scope runs each make one run dir", (run_dirs - before).size == 12
+
+# 前の round の head は、OID の組と一緒に、review のときだけ、40 桁の hex で渡す。
+before = run_dirs
+[["--prev-head-oid", F1], ["--base-oid", M0, "--head-oid", F2, "--prev-head-oid", F1[0, 12]],
+ ["--base-oid", M0, "--head-oid", F2, "--prev-head-oid", F1.upcase]].each do |extra|
+  sg.call("checkout", "-q", "--detach", F2)
+  o, e, s, herdr, = run_cli(launch_args(repo: SR, extra: extra))
+  check "a bad --prev-head-oid (#{extra.join(' ')[0, 50]}) is a usage error", s == 2 && o.empty? && e.lines.size == 1 && herdr.empty?
+end
+o, e, s, = run_cli(launch_args(kind: "text", repo: SR, extra: ["--prev-head-oid", F1]))
+check "--prev-head-oid is for review only", s == 2 && e.include?("--prev-head-oid は --kind review のときだけ")
+check "usage errors leave no run dir", run_dirs == before
 
 # ---- launch: 入力の誤り (exit 2)。何も起動せず、run dir も作らない。
 before = run_dirs
