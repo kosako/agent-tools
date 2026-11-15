@@ -126,8 +126,11 @@ check.call(launch_md, head, "executor-result の verdict の無い結果は再�
            ["再実行せずに `Blocked at: executor-result` で停止します"])
 check.call(launch_md, head, "pane_id が null の run で done.txt があるときの句", :sentences, "`done.txt` があれば、",
            ["`DONE` か `BLOCKED` を返します"])
+# この文には done.txt が無いときと直接起動の 2 つの分岐が並ぶので、条件から処理までを続いた 1 つの句で見る (条件の語と
+# 処理の語を別々に探すと、同じ文の中で処理を入れ替えても通る)。
 check.call(launch_md, head, "pane_id が null の run で直接起動が done.txt を残さずに戻ったときの句", :sentences,
-           "直接起動で command が `done.txt` を残さずに戻っていたら", ["`Blocked at: executor-exit` として扱います"])
+           "直接起動で command が `done.txt` を残さずに戻っていたら、下の「直接起動 (fallback)」のとおり `Blocked at: executor-exit` として扱います",
+           ["`done.txt` が無いと `RUNNING` を返します"])
 check.call(launch_md, "### run dir と run script (script が実装している契約)", "今の run script の契約", :sh,
            "codex exec --ignore-user-config --ignore-rules -s read-only")
 
