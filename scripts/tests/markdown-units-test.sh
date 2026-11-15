@@ -77,6 +77,9 @@ check "paragraphs are split at blank lines and at fences", paras.any? { |para| p
 sentences = MU.sentences(step2)
 check "sentences are split at the full stop with the spaces removed", sentences.include?("次の文") && sentences.include?("-項目B:二")
 check "the text of a fence is not in the sentences", sentences.none? { |s| s.include?("body=x") }
+runs = MU.sentence_runs("A の条件。A の処理。B の条件。B の処理。A の条件 2。", "A の条件", 2)
+check "sentence runs start at each sentence with the key and take the following sentences", runs == ["Aの条件。Aの処理", "Aの条件2"]
+check "sentence runs are empty when no sentence has the key", MU.sentence_runs("a。b。", "c", 2) == []
 check "a code span may wrap across lines", MU.code_spans(step2) == ["onetwo"]
 check "the backticks of a fence are not code spans", MU.code_spans("```sh\na `b` c\n```\n`d  e`\n") == ["de"]
 

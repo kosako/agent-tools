@@ -15,6 +15,7 @@
 # - 一覧: 続いた項目のまとまり。空行か、字下げの無い行 (項目でない行) で終わる。
 # - 段落: 空行で区切る (fence の外。fence も段落を区切る)。
 # - 文: 「。」で区切る (fence の外。空白を除いた後で区切る)。
+# - 文のつながり: key を含む文と、その後ろに続く文 (sentence_runs)。
 # - code span: fence の外の `…`。行をまたいで折り返してよい。中の空白と折り返しを除いて比べる。
 # - 語の照合: どれも空白 (折り返しを含む) を除いて比べる。
 module MarkdownUnits
@@ -118,6 +119,14 @@ module MarkdownUnits
   # 文 (「。」で区切る) の列。どれも空白を除いた形。
   def sentences(text)
     squash(prose(text)).split("。").reject(&:empty?)
+  end
+
+  # key を含む文から始まる、続いた n 個の文のつながり (「。」でつなげた形) の列。条件の文と、それに続く処理の文を組で
+  # 見るため (処理の文だけを別の分岐へ移した変更を通さない。#685)。
+  def sentence_runs(text, key, n)
+    list = sentences(text)
+    want = squash(key)
+    list.each_index.select { |i| list[i].include?(want) }.map { |i| list[i, n].join("。") }
   end
 
   # code span の中身の列。どれも空白を除いた形。

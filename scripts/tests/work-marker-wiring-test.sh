@@ -4,7 +4,8 @@
 # 説明の文はそのまま固定しない。項目・文・段落・sh の block ごとに、要る語がそろっているかを見る。言い回しを変えても、語が
 # 同じ単位に残っていれば通る。節の全体からは探さない (語が別の項目や文に移っただけの変更を通さないため)。文書を単位に
 # 分ける読み方と、受ける整形の範囲 (空白の数、折り返し、見出しの # の後ろの空白、fence の字下げ、sh の行継続) は、
-# lib/markdown_units.rb が持つ (#685)。
+# lib/markdown_units.rb が持つ (#685)。個人 project に限る条件は、判定の参照 (括弧の中) まで含めた 1 つの句で見る。条件の語は
+# 参照の中にもあるので、語だけを探すと、条件を消しても通ってしまう。
 # - docs/work-markers.md の「対象」に、目印と検査は個人 project だけに当てる文、ほかの repo と判定できないときは強制しない
 #   項目がある。「検査」の sh の block に、script の 3 つの kind の command がある。kind の一覧は script の定数と一致する。
 # - personal-review-request の手順 4 に、個人 project で目印の検査もかける段落 (post-check の --marker-kind と、同じ検査の
@@ -26,6 +27,9 @@ errors = []
 MU = MarkdownUnits
 read = ->(rel) { File.read(File.join(root, rel), encoding: "UTF-8") }
 KIND_NAMES = { items: "項目", paragraphs: "段落", sentences: "文" }.freeze
+# 個人 project に限る条件と、その判定の参照。条件の語は参照の括弧の中にもあるので、条件の語だけを探すと、条件を消しても
+# 括弧の中の語で通ってしまう。条件と参照を 1 つの句として、検査を呼ぶ句の頭で見る。
+SCOPE = "(運用 instruction の「個人 project の GitHub の操作と merge」の対象と同じ判定) "
 
 # 節の本文。無ければ記録して nil。
 section = lambda do |rel, heading|
@@ -89,7 +93,8 @@ end
 rr = "shared/skills/personal-review-request/SKILL.md"
 rr4 = "### 4. 結果を PR に投稿"
 terms.call("#{rr} の手順 4 の目印の検査の段落", unit.call(rr, rr4, :paragraphs, "`--marker-kind review-result`"),
-           ["個人 project", "`personal-post-check`", "目印の検査もかける", "`personal-work-marker-check --kind review-result --stdin`"])
+           ["個人 project #{SCOPE}では、`personal-post-check` に `--marker-kind review-result` を付け、目印の検査もかける",
+            "`personal-work-marker-check --kind review-result --stdin`"])
 terms.call("#{rr} の手順 4 のほかの repo の文", unit.call(rr, rr4, :sentences, "ほかの repo では"), ["この検査を当てない"])
 terms.call("#{rr} の手順 4 の verdict の文", unit.call(rr, rr4, :sentences, "依頼元が verdict を書き換えず"), ["投稿せずに人に伝える"])
 
@@ -97,7 +102,7 @@ terms.call("#{rr} の手順 4 の verdict の文", unit.call(rr, rr4, :sentences
 ol = "shared/workflows/personal-project-operating-loop.md"
 done_h = "## PR の完了条件"
 terms.call("#{ol} の「#{done_h}」の目印の項目", unit.call(ol, done_h, :items, "`personal-work-marker-check --kind pr --stdin`"),
-           ["個人 project では", "`(#<Issue>)`", "`Closes #<Issue>`", "PR を作る前に", "exit 0 のときだけ作る"])
+           ["個人 project では、題の末尾の `(#<Issue>)`", "`Closes #<Issue>`", "PR を作る前に", "exit 0 のときだけ作る"])
 terms.call("#{ol} の「#{done_h}」のほかの repo の項目", unit.call(ol, done_h, :items, "目印も検査も"),
            ["会社や別の組織の repo", "他人の repo", "強制しない"])
 escape_h = "## merge 後に見つかった誤り"
@@ -110,10 +115,10 @@ terms.call("#{ol} の「#{escape_h}」のほかの repo の文", unit.call(ol, e
 ws = "shared/skills/personal-codex-worker/SKILL.md"
 ws7 = "## 7. PR (orchestrator の操作)"
 terms.call("#{ws} の §7 の目印の文", unit.call(ws, ws7, :sentences, "`personal-work-marker-check --kind pr --stdin`"),
-           ["個人 project の PR では", "題名と本文", "exit 0 のときだけ gate に進む"])
+           ["個人 project の PR では、題名と本文を", "exit 0 のときだけ gate に進む"])
 wl = "shared/skills/personal-codex-worker/LAUNCH.md"
 wl9 = "## 9. 回収 (fetch) と trailer 検査と PR"
-terms.call("#{wl} の §9 の目印の文", unit.call(wl, wl9, :sentences, "目印の検査に通す"), ["個人 project の PR", "題名と本文"])
+terms.call("#{wl} の §9 の目印の文", unit.call(wl, wl9, :sentences, "目印の検査に通す"), ["個人 project の PR #{SCOPE}では、続けて題名と本文を"])
 style_at = sh_block.call(wl, wl9, '| "$style" --stdin')
 marker_at = sh_block.call(wl, wl9, '| "$marker" --kind pr --stdin')
 gate_at = sh_block.call(wl, wl9, '| "$gate" --stdin')
@@ -124,7 +129,7 @@ end
 # 5. sweep の fix の PR
 fix = "shared/skills/personal-maintenance-sweep/FIX.md"
 terms.call("#{fix} の「## PR」の目印の項目", unit.call(fix, "## PR", :items, "目印の検査にも通し"),
-           ["個人 project の repo", "題名と本文", "exit 0 のときだけ gate に入れます"])
+           ["個人 project の repo #{SCOPE}では、題名と本文を", "exit 0 のときだけ gate に入れます"])
 sh_block.call(fix, "## PR", '| "$marker" --kind pr --stdin')
 
 if errors.empty?
