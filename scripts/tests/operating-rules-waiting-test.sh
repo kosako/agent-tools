@@ -23,7 +23,7 @@ root = ARGV.fetch(0)
 errors = []
 MU = MarkdownUnits
 read = ->(rel) { File.read(File.join(root, rel), encoding: "UTF-8") }
-KIND_NAMES = { items: "項目", sentences: "文", paragraphs: "段落" }.freeze
+KIND_NAMES = { items: "項目", bullets: "項目", sentences: "文", paragraphs: "段落" }.freeze
 
 section = lambda do |rel, heading|
   body = MU.section(read.call(rel), heading)
@@ -61,11 +61,11 @@ rules = "shared/instructions/personal-operating-rules.md"
 
 sessions = "## セッションとドキュメント"
 run_check.call(rules, sessions, "無人で起動された session の句",
-               "別の agent が brief を渡して無人で起動した session (review・監査・相談・委譲された worker) は、brief の範囲だけを行う", 2,
+               "別の agent が brief を渡して無人で起動した session (review・監査・相談・委譲された worker) は、brief の範囲だけを行う。", 2,
                ["上の開始と終了の手順と、下の「参照先」の note の読み取りは行わない"])
 
 waiting = "## 待ちと判断の伝え方"
-check.call(rules, waiting, "待ちに入る返答に書く 3 つ", :items,
+check.call(rules, waiting, "待ちに入る返答に書く 3 つ", :bullets,
            "裏で動かしたもの (別の agent の review や worker、CI、長い test) を待つときは、待ちに入る返答に次の 3 つを書く。" \
            "何を待っているか、どのくらいかかる見込みか、終わったら何をするか。")
 # 壁打ちの例外の「この限り」は、判断を 1 件ずつ出す文を受ける。

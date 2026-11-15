@@ -147,12 +147,13 @@ module MarkdownUnits
     squash(prose(text)).split("。").reject(&:empty?)
   end
 
-  # key を含む文から始まる、続いた n 個の文のつながり (「。」でつなげた形) の列。条件の文と、それに続く処理の文を組で
-  # 見るため (処理の文だけを別の分岐へ移した変更を通さない。#685)。
+  # key を含む文から始まる、続いた n 個の文のつながり (各文の末尾に「。」を付けてつなげた形) の列。条件の文と、それに続く処理の
+  # 文を組で見るため (処理の文だけを別の分岐へ移した変更を通さない。#685)。各文に「。」を付けるので、「。」で終わる句は文の終わり
+  # まで比べられる (文の後ろに否定を足した変更を通さない)。key も、文の末尾の「。」を付けた形と比べる。
   def sentence_runs(text, key, n)
-    list = sentences(text)
+    list = sentences(text).map { |s| "#{s}。" }
     want = squash(key)
-    list.each_index.select { |i| list[i].include?(want) }.map { |i| list[i, n].join("。") }
+    list.each_index.select { |i| list[i].include?(want) }.map { |i| list[i, n].join }
   end
 
   # code span の中身の列。どれも空白を除いた形。
