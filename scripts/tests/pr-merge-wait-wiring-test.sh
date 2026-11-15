@@ -10,6 +10,7 @@
 #   待ち方 (Claude Code は background、Codex は短い上限で foreground)、exit code ごとの扱いがある。exit 0 だけが merge の後の
 #   手順 (default branch の更新、branch の整理、配備) に進み、1・2・3 は進まずに人に伝える。workflow の出口にも書いてある。
 # - exit code ごとの項目の結果の語と exit code が、script の結果の表 (RESULTS) と合う。文書が使う option が script にある。
+#   docs と Codex の待ち方に書いた最長の時間 (約 65 秒) と、script の gh の 1 回の上限 (60 秒) が合う。
 # - docs/pr-merge-wait.md の「## 組み込み先」が、運用 instruction と operating-loop を指す。
 # 引数で repo root を差し替えられる (変異での確認用)。
 set -eu
@@ -61,7 +62,7 @@ end
 rules = "shared/instructions/personal-operating-rules.md"
 wait_heading = "## 待ちと判断の伝え方"
 terms.call("#{rules} の「#{wait_heading}」の personal-pr-merge-wait の項目", item.call(rules, wait_heading, "`personal-pr-merge-wait`"),
-           ["merge を頼んだ PR", "merge を待ち", "merge を確かめたら後片付けに進む", "伝えに来るのを待たない",
+           ["merge を頼んだ PR", "merge を待ち", "merge を確かめ", "後片付けに進む", "伝えに来るのを待たない",
             "`personal-project-operating-loop`", "人が merge する PR を待つ"])
 
 # 2. 運用の workflow
@@ -69,10 +70,10 @@ ol = "shared/workflows/personal-project-operating-loop.md"
 section.call(ol, "## 人が merge する PR を待つ")
 steps = "### 手順"
 sentences.call(ol, steps, "merge を頼むときに").each do |s|
-  terms.call("#{ol} の「#{steps}」の head を控える文", s, ["review と CI を通した head", "full の OID", "控える"])
+  terms.call("#{ol} の「#{steps}」の head を控える文", s, ["review と CI を通した head", "OID", "控える"])
 end
 sentences.call(ol, steps, "伝えに来たときも").each do |s|
-  terms.call("#{ol} の「#{steps}」の人が伝えに来たときの文", s, ["同じ script", "確かめてから進む"])
+  terms.call("#{ol} の「#{steps}」の人が伝えに来たときの文", s, ["同じ script", "確かめ", "進む"])
 end
 # 起動の command は sh の block の中で、空白の数と字下げに依らずに見る。
 steps_body = MU.section(read.call(ol), steps).to_s
@@ -87,7 +88,7 @@ how = "### 待ち方"
 terms.call("#{ol} の「#{how}」の Claude Code の項目", item.call(ol, how, "Claude Code の session"),
            ["background", "通知", "待ちに入る返答", "待ちと判断の伝え方"])
 terms.call("#{ol} の「#{how}」の Codex の項目", item.call(ol, how, "Codex の session"),
-           ["`--timeout`", "command の時間の上限より短く", "foreground", "人に返す"])
+           ["foreground", "最後の確認", "`--timeout`", "command の時間の上限", "引いた", "人に返す"])
 by_exit = "### exit code ごとの扱い"
 exit_items = {}
 [0, 1, 2, 3].each { |code| exit_items[code] = item.call(ol, by_exit, "exit #{code}") }
@@ -96,9 +97,9 @@ terms.call("#{ol} の「#{by_exit}」の exit 0 の項目", exit_items[0],
 [1, 2, 3].each do |code|
   terms.call("#{ol} の「#{by_exit}」の exit #{code} の項目", exit_items[code], ["merge の後の手順に進まず", "人に伝え"])
 end
-terms.call("#{ol} の「#{by_exit}」の exit 1 の項目", exit_items[1], ["`state:`", "`head:`", "review と CI をやり直して"])
+terms.call("#{ol} の「#{by_exit}」の exit 1 の項目", exit_items[1], ["`state:`", "`head:`", "`head-moved`", "review と CI をやり直"])
 sentences.call(ol, "## この workflow の出口", "人が merge する PR を待つ手順").each do |s|
-  terms.call("#{ol} の「## この workflow の出口」の待つ手順の文", s, ["merge の後の手順を終えたか", "人に返した時点で完了"])
+  terms.call("#{ol} の「## この workflow の出口」の待つ手順の文", s, ["merge の後の手順を終え", "人に返した", "完了"])
 end
 
 # 3. 文書の結果の語と exit code、option が、script と合う。
@@ -113,16 +114,21 @@ if File.file?(src)
   %w[--expect-head --repo --timeout].each do |opt|
     errors << "script に option #{opt} が無い" unless PrMergeWait::OPTIONS.include?(opt)
   end
+  # 文書の最長の時間 (gh の 1 回の上限 60 秒に後始末を足した約 65 秒) は、script の gh の上限に頼っている。
+  errors << "script の gh の 1 回の上限が、文書の 60 秒と違う" unless PrMergeWait::GH_LIMIT == 60
 else
   errors << "shared/scripts/personal-pr-merge-wait.rb が無い"
 end
 
 # 4. docs
 doc = "docs/pr-merge-wait.md"
+terms.call("#{doc} の「## 確かめ方」の最長の時間の項目", item.call(doc, "## 確かめ方", "最長の時間"),
+           ["`--timeout`", "約 65 秒", "60 秒", "外から時間の上限", "gh が残る"])
+terms.call("#{ol} の「#{how}」の Codex の項目の時間", item.call(ol, how, "Codex の session"), ["約 65 秒", "60 秒", "90 秒"])
 terms.call("#{doc} の「## 組み込み先」の運用 instruction の項目", item.call(doc, "## 組み込み先", "待ちと判断の伝え方"),
-           ["この script で merge を待ち", "後片付けに進む", "#675 の 2 本目"])
+           ["この script", "merge を待ち", "後片付けに進む"])
 terms.call("#{doc} の「## 組み込み先」の operating-loop の項目", item.call(doc, "## 組み込み先", "人が merge する PR を待つ"),
-           ["operating-loop", "background", "foreground", "人に返します"])
+           ["operating-loop", "background", "foreground", "人に返し"])
 
 abort "FAIL: pr-merge-wait-wiring\n  " + errors.uniq.join("\n  ") unless errors.empty?
 puts "ok: pr-merge-wait-wiring"
