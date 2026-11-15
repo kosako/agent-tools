@@ -360,6 +360,12 @@ production-rail / 索引が単一の正本なので、**ここに書き写さず
   `Status: RUNNING` (wait が尽きても review が動いている。#421) を返したら、結果のコメントは投稿せず、同じ対象の
   review を起動し直さない。返った pane と run dir を人に示し、続行か中断かを人が決める (executor の `RESULT-FORMAT.md`)。続行なら、その run dir の
   `done.txt` を待って executor と同じ続行条件で回収し、回収できたら手順 4 に進む。
+- **2 回目以降の review** (指摘に対応した後、同じ PR の review をもう一度依頼するとき。#673): Codex がレビュアーのときは、
+  前の round の結果の `Target:` の行の base と head を、前の base と前の head として `personal-codex-review` に渡す
+  (`--prev-base-oid` と `--prev-head-oid`。`LAUNCH.md` の手順 2)。前の round からの差分を中心に読んでよいかは `personal-codex-launch` が決める (条件の正本は
+  agent-tools の `docs/codex-launch.md` の「2 回目以降の review」)。渡すのは、前の round が verdict のある結果で終わったとき
+  だけで、verdict の無い停止で終わったとき、人が PR 全体の読み直しを頼んだときは渡さない。Claude がレビュアーのときは、
+  毎 round PR 全体を読む。どちらでも、結果の `Target:` の行は今の base と head にする (前の head を書かない)。
 - **Claude がレビュアーのとき** (preflight の verified `reviewer=claude` で、author が `codex` /
   `opencode(openai)` / `opencode(other)` / `bot(dependabot)`): 対象は Codex route と同じく検証済み base / head OID で固定する。
   レビュー開始前に、local `HEAD` が `head_oid` と一致すること、base ref の commit が `base_oid` と

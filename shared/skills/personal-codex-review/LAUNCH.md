@@ -32,15 +32,23 @@ run script の生成、pane の作成と命名、起動、待機、完了の判�
      (`SKILL.md` §2 の target identity preflight)、OID から対象の節を組みます。base ref は表示と照合に使うだけです。
    - commit mode と uncommitted は OID を渡しません。対象の取得の command と周辺コードの読み方 (`SKILL.md` §3) を、brief の
      本文に書きます。
+   - 同じ PR の 2 回目以降の review では、前の round の base と head を `--prev-base-oid "$prev_base_oid"` と
+     `--prev-head-oid "$prev_head_oid"` で足します (#673)。値は、前の round の結果の `Target:` の行の base の OID と head の
+     OID です。前の round が verdict のある結果で終わったときだけ渡し、verdict の
+     無い停止で終わったとき、人が PR 全体の読み直しを頼んだときは渡しません。前の round からの差分を中心に読んでよいかは
+     script が git で決め、対象の節を組みます (条件の正本は agent-tools の `docs/codex-launch.md` の「2 回目以降の review」)。
 3. **出力 (JSON 1 行) の `status` で分ける**。
    - `STARTED`: `run_dir` を控えて 4 へ。`notes` に「認証の command は引き継がない」があれば、返却の `Model selection` に
-     添えます (下の「model / effort の読み取り」)。`model_sources` が `Model selection` の出所です。
+     添えます (下の「model / effort の読み取り」)。`model_sources` が `Model selection` の出所です。前の round の
+     OID の組を渡したときは、`review_scope` (`incremental` か `full`) と、`full` のときの `scope_reason` も控えて caller に返します
+     (結果のコメントに、読んだ範囲として 1 行書くため)。
    - `BLOCKED` で `blocked_at` が `capability-preflight`: `Status: BLOCKED` (`capability-preflight`)。存在しない flag を
      試したり、`--ignore-user-config` を外したりしません。
    - `BLOCKED` で `target-identity`: `Status: BLOCKED` (`target-identity`)。`expected` / `actual` の OID だけを返し、checkout・
      fetch・stash で合わせません。
    - `BLOCKED` で `launch-path`: herdr が使えません。`SKILL.md` §2 の起動経路の 2 (sandbox の外と確かめられたときだけ直接起動) か
-     3 (人手 hand-off) に進みます。返った `script` が run script で、`run_dir` に `brief.md` と `launch.json` があります。
+     3 (人手 hand-off) に進みます。返った `script` が run script で、`run_dir` に `brief.md` と `launch.json` があります。前の round の
+     OID の組を渡したときは、この出力の範囲の値 (`review_scope` と `scope_reason`) も、`STARTED` と同じく控えて caller に返します。
    - exit 2 で、stderr が入力の誤りの理由 (どの引数がなぜ外れたか) のとき: 何も起動しておらず、run dir も作っていません。
      値を直して起動し直します。
    - exit 2 で、stderr が `unexpected error` (想定外の例外) のとき: 起動に至っていないとは限りません。同じ値で起動し直す前に、

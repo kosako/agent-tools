@@ -235,6 +235,13 @@ base mode の対象の取得の command を、script が brief の先頭に足�
 independence、task / acceptance criteria、重点観点 (と、commit mode / uncommitted の対象の読み方、2 回目以降の
 追加の情報) を書きます。雛形は `BRIEF-TEMPLATE.md`。script が無い環境で手で組むときは、一覧のすべてを brief に書きます。
 
+同じ PR の 2 回目以降の review (#673) では、caller が前の round の base と head を渡したときだけ、`launch` に
+`--prev-base-oid` と `--prev-head-oid` を足します (`LAUNCH.md` の手順 2)。前の round からの差分を中心に読んでよいかは script が git で決めます。`incremental` なら、
+前の round からの差分の取得の command と読み方を対象の節に書きます。`full` なら、PR 全体の取得の command と理由を書きます
+(条件の正本は agent-tools の `docs/codex-launch.md` の「2 回目以降の review」)。brief の file の「round <回数> の追加の情報」
+には、前の round の指摘と依頼元の対応を書きます。script が無い環境で手で組むときは、前の round からの差分を中心に読む節を
+書かず、PR 全体を読む対象にします (条件を確かめる手段が無いため)。
+
 ## 5. 実行と完了判定
 
 起動と回収は、配備済みの `personal-codex-launch` (`launch` と `collect`) で行います (`LAUNCH.md` の先頭の節。#672)。

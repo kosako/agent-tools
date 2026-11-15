@@ -27,6 +27,10 @@ bot の PR で pin-check の経路 (`SKILL.md` の「bot の PR」の C) を使�
 `Independence:` の行は、下の選択肢のどれか 1 つをそのまま書きます (補足を足さない)。merge の前の照合が承認として受け付けるのは、
 routing の author と合う `cross-review verified` と、pin の検査の `deterministic check (dependabot pin)` だけです。
 
+2 回目以降の review で前の round の base と head を渡したとき (`SKILL.md` 手順 3) は、目印の 5 行の後に、読んだ範囲を 1 行で書きます。
+`範囲: 前の round (head <前の head の OID の先頭 8 文字>) からの差分を中心に読んだ` か、`範囲: PR 全体 (<scope_reason>)` です
+(`scope_reason` は launch の出力の値)。`Target:` の行は、今の base と head のままにします (#673)。
+
 ```markdown
 ## 📋 レビュー結果（by Codex | Claude | personal-dependabot-pin-check）
 

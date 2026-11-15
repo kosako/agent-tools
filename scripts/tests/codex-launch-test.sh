@@ -330,6 +330,7 @@ check "a failed rename is a note, not a stop", s == 0 && one_json(o)["status"] =
 end
 o, _e, _s, herdr, = run_cli(launch_args, map: {})
 check "no herdr at all: blocked without any pane call", one_json(o)["blocked_at"] == "launch-path" && herdr.none? { |a| a[0] == "pane" && a[1] != "current" }
+check "no review scope in a launch-path block without a previous round", !one_json(o).key?("review_scope") && !one_json(o).key?("scope_reason")
 
 # ---- launch: BLOCKED (capability-preflight)。pane も run dir も作らない。
 before = run_dirs
@@ -516,6 +517,14 @@ check "a change of exactly half the PR stays incremental", s == 0 && j["review_s
   check "full (#{label}): the brief names the previous head and why", b.include?("- 前の round の base OID と head OID: #{prev_base} / #{prev} (#{reason}。PR 全体を読み直します)\n")
 end
 check "scope runs each make one run dir", (run_dirs - before).size == 15
+# herdr が使えずに launch-path で止まったときも、範囲の値を返す (直接起動で続ける caller が、結果に範囲を書けるように。#687 の F1)。
+{ "incremental" => [F2, F1, "incremental", nil], "full" => [F6, F2, "full", "前の round からの差分 (12 行) が PR の差分 (20 行) の半分を超える"] }.each do |label, (head, prev, scope, reason)|
+  sg.call("checkout", "-q", "--detach", head)
+  o, e, s, = run_cli(launch_args(repo: SR, label: "673-lp", extra: ["--base-oid", M0, "--head-oid", head, "--prev-base-oid", M0, "--prev-head-oid", prev]), map: {})
+  j = one_json(o)
+  check "a launch-path block carries the review scope (#{label})", s == 1 && e.empty? && j["blocked_at"] == "launch-path" && j["review_scope"] == scope &&
+                                                                  j["scope_reason"] == reason && File.file?(j["script"].to_s)
+end
 
 # 前の round の head は、OID の組と一緒に、review のときだけ、40 桁の hex で渡す。
 before = run_dirs
