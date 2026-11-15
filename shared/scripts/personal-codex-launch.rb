@@ -9,7 +9,8 @@
 #   run dir に brief.md・run.zsh・launch.json (json では schema.json) を置き、herdr の pane を作って run.zsh を走らせる。
 #   brief.md の先頭には、この script が持つ「起動の制約」の節を必ず置く (呼び出し側の brief の書き方に依らず、read-only・
 #   nested な起動の禁止・heredoc と変数名 path の注意などが入る)。
-#   review で --prev-head-oid (前の round の head) を渡すと、前の round からの差分を中心に読んでよいかを git で決め、対象の節を
+#   review で --prev-base-oid と --prev-head-oid (前の round の結果の Target の base と head) を渡すと、前の round からの差分を
+#   中心に読んでよいかを git で決め、対象の節を
 #   変える (#673。条件の正本は docs/codex-launch.md の「2 回目以降の review」)。満たさないときも止めず、PR 全体を読む節にする。
 # collect: launch.json を読み、完了の印を待ち、done.txt と結果の file を kind の条件で判定する。条件を満たしたときだけ
 #   pane の出力を pane.log に保存して pane を閉じる。
@@ -20,7 +21,7 @@
 # 使い方:
 #   personal-codex-launch launch --kind <review|text|json> --repo <repo root> --brief <file> --label <名前>
 #       [--schema <file>] [--effort <low|medium|high|xhigh>] [--run-root <dir>]
-#       [--base-ref <名前> --base-oid <40 桁> --head-oid <40 桁> [--prev-head-oid <40 桁>]]
+#       [--base-ref <名前> --base-oid <40 桁> --head-oid <40 桁> [--prev-base-oid <40 桁> --prev-head-oid <40 桁>]]
 #   personal-codex-launch collect --run-dir <dir> [--waits <1〜3>] [--timeout-ms <1000〜600000>]
 # 出力: stdout に JSON の object を 1 行。brief と結果の本文は載せない。
 # exit: launch は 0 = STARTED / 1 = BLOCKED (capability-preflight・target-identity・launch-path) / 2 = usage・入力の誤り・
@@ -214,7 +215,7 @@ module CodexLaunch
   # ---- launch
 
   LAUNCH_OPTIONS = %w[--kind --repo --brief --label --schema --effort --run-root --base-ref --base-oid --head-oid
-                      --prev-head-oid].freeze
+                      --prev-base-oid --prev-head-oid].freeze
 
   def launch(args)
     req = validate_launch(parse_options(args, LAUNCH_OPTIONS))
@@ -275,15 +276,17 @@ module CodexLaunch
 
   # review の対象の OID。OID の 2 つは組で渡す。base ref は OID があるときだけ渡せる。
   def validate_target(kind, opts)
-    given = %w[--base-ref --base-oid --head-oid --prev-head-oid].select { |k| opts.key?(k) }
+    given = %w[--base-ref --base-oid --head-oid --prev-base-oid --prev-head-oid].select { |k| opts.key?(k) }
     return nil if given.empty?
     raise UsageError, "#{given.join(' ')} は --kind review のときだけ渡せます" unless kind == "review"
     raise UsageError, "--base-oid と --head-oid は組で渡す" unless opts.key?("--base-oid") && opts.key?("--head-oid")
-    oids = %w[--base-oid --head-oid --prev-head-oid].map { |k| opts[k] }.compact
+    raise UsageError, "--prev-base-oid と --prev-head-oid は組で渡す" unless opts.key?("--prev-base-oid") == opts.key?("--prev-head-oid")
+    oids = %w[--base-oid --head-oid --prev-base-oid --prev-head-oid].map { |k| opts[k] }.compact
     raise UsageError, "OID は 40 桁の小文字の hex で渡す" unless oids.all? { |oid| SHA_RE.match?(oid) }
 
     # base ref の形と指す先は、対象の確認 (target_preflight) で見る (形が不正な ref も、対象が合わないものとして止める)。
-    { base_ref: opts["--base-ref"], base: opts["--base-oid"], head: opts["--head-oid"], prev: opts["--prev-head-oid"] }
+    { base_ref: opts["--base-ref"], base: opts["--base-oid"], head: opts["--head-oid"], prev_base: opts["--prev-base-oid"],
+      prev: opts["--prev-head-oid"] }
   end
 
   # codex の flag と feature、model の選択を確かめ、選択 (model・effort・provider・otel と出所) を返す。
@@ -378,12 +381,15 @@ module CodexLaunch
   # 2 回目以降の review で、前の round からの差分を中心に読んでよいかを決める (#673)。条件の正本は docs/codex-launch.md の
   # 「2 回目以降の review」。1 つでも満たさない・確かめられないときは、PR 全体を読む (full)。止めはしない。
   def review_scope(repo, target)
-    base, head, prev = target.values_at(:base, :head, :prev)
+    base, head, prev_base, prev = target.values_at(:base, :head, :prev_base, :prev)
     full = ->(reason) { { "review_scope" => "full", "scope_reason" => reason } }
     return full.call("前の round の head が今の head と同じ") if prev == head
 
     _out, _err, status = git(repo, "cat-file", "-e", "#{prev}^{commit}")
     return full.call("前の round の head の commit が local に無い") unless status&.zero?
+
+    _out, _err, status = git(repo, "cat-file", "-e", "#{prev_base}^{commit}")
+    return full.call("前の round の base の commit が local に無い") unless status&.zero?
 
     _out, _err, status = git(repo, "merge-base", "--is-ancestor", prev, head)
     return full.call("前の round の head が今の head の祖先でない (rebase か force push)") if status == 1
@@ -393,10 +399,12 @@ module CodexLaunch
     return full.call("前の round からの commit を確かめられない") unless status&.zero?
     return full.call("前の round からの commit に merge commit がある") unless merges.strip.empty?
 
-    was, _err, status_was = git(repo, "merge-base", base, prev)
-    now, _err, status_now = git(repo, "merge-base", base, head)
-    return full.call("差分の基点 (base との merge-base) を確かめられない") unless status_was&.zero? && status_now&.zero?
-    return full.call("差分の基点 (base との merge-base) が前の round と違う") unless was.strip == now.strip
+    # 前の round の差分の基点 (前の base と前の head) と、今の基点 (今の base と今の head) を比べる。merge の前の照合
+    # (personal-merge-preflight) と同じ比べ方。base を付け替えた PR は、前の round が見ていない範囲を含みうる (#686 の F1)。
+    was = merge_base(repo, prev_base, prev)
+    now = merge_base(repo, base, head)
+    return full.call("差分の基点 (base との merge-base) が 1 つに決まらない") if was.nil? || now.nil?
+    return full.call("差分の基点 (base との merge-base) が前の round と違う") unless was == now
 
     delta = changed_lines(repo, prev, head)
     whole = changed_lines(repo, "#{base}...#{head}")
@@ -407,6 +415,13 @@ module CodexLaunch
     end
 
     { "review_scope" => "incremental" }
+  end
+
+  # 2 つの commit の merge-base。git が失敗したとき、共通の祖先が無いとき、1 つに決まらない (criss-cross) ときは nil。
+  def merge_base(repo, one, other)
+    out, _err, status = git(repo, "merge-base", "--all", one, other)
+    bases = status&.zero? ? out.split : []
+    bases.size == 1 && SHA_RE.match?(bases[0]) ? bases[0] : nil
   end
 
   # 差分の追加と削除の行数の和。binary の file を含むとき、git が失敗したときは nil。設定に依らないよう、rename の検出・
@@ -467,10 +482,11 @@ module CodexLaunch
     lines << "- base OID: #{base}"
     lines << "- head OID: #{head}"
     if scope && scope["review_scope"] == "incremental"
+      lines << "- 前の round の base OID: #{target[:prev_base]}"
       lines << "- 前の round の head OID: #{target[:prev]}"
       lines.concat(incremental_lines(base, head, target[:prev]))
     else
-      lines << "- 前の round の head OID: #{target[:prev]} (#{scope['scope_reason']}。PR 全体を読み直します)" if scope
+      lines << "- 前の round の base OID と head OID: #{target[:prev_base]} / #{target[:prev]} (#{scope['scope_reason']}。PR 全体を読み直します)" if scope
       lines << ""
       lines << "対象は次の command で取得します。"
       lines << ""
@@ -489,8 +505,9 @@ module CodexLaunch
   def incremental_lines(base, head, prev)
     [
       "",
-      "これは 2 回目以降の review です。前の round の head が今の head の祖先で、間に merge commit が無く、差分の基点が",
-      "変わらず、前の round からの差分が PR の差分の半分以下であることを、起動した側が確かめました。前の round からの差分を",
+      "これは 2 回目以降の review です。前の round の head が今の head の祖先で、間に merge commit が無く、差分の基点 (base",
+      "との merge-base) が前の round と同じで、前の round からの差分が PR の差分の半分以下であることを、起動した側が確かめ",
+      "ました。前の round からの差分を",
       "中心に読みます。",
       "",
       "```sh",

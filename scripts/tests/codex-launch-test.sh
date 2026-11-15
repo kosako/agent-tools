@@ -452,11 +452,26 @@ sg.call("commit", "-q", "--allow-empty", "-m", "e2")
 E2 = sg.call("rev-parse", "HEAD")
 sg.call("checkout", "-q", "--orphan", "unrelated")
 O1 = commit.call({ "x.txt" => "unrelated\n" }, "o1")
+# merge-base が 1 つに決まらない (criss-cross) 履歴。X2 と Y2 は、互いの親を merge している。
+sg.call("checkout", "-q", "--detach", M0)
+X1 = commit.call({ "xa.txt" => "x\n" }, "x1")
+sg.call("checkout", "-q", "--detach", M0)
+Y1 = commit.call({ "ya.txt" => "y\n" }, "y1")
+sg.call("checkout", "-q", "--detach", X1)
+sg.call("merge", "-q", "--no-ff", "-m", "x2", Y1)
+X2 = sg.call("rev-parse", "HEAD")
+sg.call("checkout", "-q", "--detach", Y1)
+sg.call("merge", "-q", "--no-ff", "-m", "y2", X1)
+Y2 = sg.call("rev-parse", "HEAD")
+sg.call("checkout", "-q", "--detach", X2)
+X3 = commit.call({ "xa.txt" => "x\nmore\n" }, "x3")
 
 before = run_dirs
-scope_run = lambda do |head, prev, base: M0|
+# 前の round の base (prev_base) は、省くと M0 (前の round も M0 を base に見た)。
+scope_run = lambda do |head, prev, base: M0, prev_base: M0|
   sg.call("checkout", "-q", "--detach", head)
-  out, err, st, = run_cli(launch_args(repo: SR, label: "673-r2", extra: ["--base-oid", base, "--head-oid", head, "--prev-head-oid", prev]))
+  out, err, st, = run_cli(launch_args(repo: SR, label: "673-r2",
+                                      extra: ["--base-oid", base, "--head-oid", head, "--prev-base-oid", prev_base, "--prev-head-oid", prev]))
   j = one_json(out)
   [j, st, err, j && j["run_dir"] ? File.read(File.join(j["run_dir"], "brief.md")) : ""]
 end
@@ -466,7 +481,7 @@ check "incremental: launch starts and says so", s == 0 && e.empty? && j["status"
 check "incremental: commands read the change since the previous head and the PR stat",
       b.include?("```sh\ngit diff #{F1}..#{F2}\ngit log --oneline #{F1}..#{F2}\ngit diff --stat #{M0}...#{F2}\n```\n")
 check "incremental: the whole-PR diff is not a command of its own", !b.include?("\ngit diff #{M0}...#{F2}\n") && !b.include?("git log --oneline #{M0}..#{F2}")
-check "incremental: the target keeps the current base and head", b.include?("- base OID: #{M0}\n- head OID: #{F2}\n- 前の round の head OID: #{F1}\n")
+check "incremental: the target keeps the current base and head", b.include?("- base OID: #{M0}\n- head OID: #{F2}\n- 前の round の base OID: #{M0}\n- 前の round の head OID: #{F1}\n")
 { "reads the whole change first" => "まず前の round からの差分を全部読みます", "looks for the same kind of gap" => "同じ型の",
   "reads the PR diff by file" => "`git diff #{M0}...#{F2} -- <file>`", "keeps earlier conclusions" => "前の round の結論を引き継ぎ",
   "re-reads two policy sections" => "「指摘の再評価と追跡」と「堂々巡りの検出」", "no other policy" => "ほかの policy の file は読み直しません",
@@ -484,26 +499,32 @@ check "a change of exactly half the PR stays incremental", s == 0 && j["review_s
   "a rewritten branch" => [G1, F1, M0, "前の round の head が今の head の祖先でない (rebase か force push)"],
   "a merge commit since the previous head" => [F4, F2, M0, "前の round からの commit に merge commit がある"],
   "a moved merge base" => [F3, F1, F2, "差分の基点 (base との merge-base) が前の round と違う"],
+  # 前の round は F1...F2 を見た。base を M0 に付け替えると、F1 の変更が前の round の見ていない範囲になる (#686 の F1)。
+  "a retargeted base" => [F7, F2, M0, "差分の基点 (base との merge-base) が前の round と違う", F1],
+  "an unknown previous base" => [F2, F1, M0, "前の round の base の commit が local に無い", "d" * 40],
+  "merge bases that are not unique" => [X3, X2, Y2, "差分の基点 (base との merge-base) が 1 つに決まらない", Y2],
   "a binary file" => [F5, F2, M0, "差分の行数を数えられない (binary の file か、git の失敗)"],
   "a change larger than half the PR" => [F6, F2, M0, "前の round からの差分 (12 行) が PR の差分 (20 行) の半分を超える"],
   "an empty PR diff" => [E2, E1, M0, "PR の差分が空"],
-  "a base with no common ancestor" => [F2, F1, O1, "差分の基点 (base との merge-base) を確かめられない"],
-}.each do |label, (head, prev, base, reason)|
-  j, s, e, b = scope_run.call(head, prev, base: base)
+  "a base with no common ancestor" => [F2, F1, O1, "差分の基点 (base との merge-base) が 1 つに決まらない"],
+}.each do |label, (head, prev, base, reason, prev_base)|
+  prev_base ||= M0
+  j, s, e, b = scope_run.call(head, prev, base: base, prev_base: prev_base)
   check "full (#{label}): still starts, with the reason", s == 0 && e.empty? && j["status"] == "STARTED" && j["review_scope"] == "full" && j["scope_reason"] == reason
   check "full (#{label}): the brief reads the whole PR", b.include?("```sh\ngit diff #{base}...#{head}\ngit log --oneline #{base}..#{head}\n```\n") &&
                                                         !b.include?("前の round からの差分を\n中心に読みます") && !b.include?("git diff --stat")
-  check "full (#{label}): the brief names the previous head and why", b.include?("- 前の round の head OID: #{prev} (#{reason}。PR 全体を読み直します)\n")
+  check "full (#{label}): the brief names the previous head and why", b.include?("- 前の round の base OID と head OID: #{prev_base} / #{prev} (#{reason}。PR 全体を読み直します)\n")
 end
-check "scope runs each make one run dir", (run_dirs - before).size == 12
+check "scope runs each make one run dir", (run_dirs - before).size == 15
 
 # 前の round の head は、OID の組と一緒に、review のときだけ、40 桁の hex で渡す。
 before = run_dirs
-[["--prev-head-oid", F1], ["--base-oid", M0, "--head-oid", F2, "--prev-head-oid", F1[0, 12]],
- ["--base-oid", M0, "--head-oid", F2, "--prev-head-oid", F1.upcase]].each do |extra|
+pair = ["--base-oid", M0, "--head-oid", F2]
+[["--prev-base-oid", M0, "--prev-head-oid", F1], pair + ["--prev-head-oid", F1], pair + ["--prev-base-oid", M0],
+ pair + ["--prev-base-oid", M0, "--prev-head-oid", F1[0, 12]], pair + ["--prev-base-oid", M0.upcase, "--prev-head-oid", F1]].each do |extra|
   sg.call("checkout", "-q", "--detach", F2)
   o, e, s, herdr, = run_cli(launch_args(repo: SR, extra: extra))
-  check "a bad --prev-head-oid (#{extra.join(' ')[0, 50]}) is a usage error", s == 2 && o.empty? && e.lines.size == 1 && herdr.empty?
+  check "bad previous OIDs (#{extra.join(' ')[0, 60]}) are a usage error", s == 2 && o.empty? && e.lines.size == 1 && herdr.empty?
 end
 o, e, s, = run_cli(launch_args(kind: "text", repo: SR, extra: ["--prev-head-oid", F1]))
 check "--prev-head-oid is for review only", s == 2 && e.include?("--prev-head-oid は --kind review のときだけ")

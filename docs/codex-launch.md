@@ -21,7 +21,7 @@ read-only の Codex (review・監査・反証・相談など) を herdr の pane
 ```text
 personal-codex-launch launch --kind <review|text|json> --repo <repo root> --brief <file> --label <名前>
     [--schema <file>] [--effort <low|medium|high|xhigh>] [--run-root <dir>]
-    [--base-ref <名前> --base-oid <40 桁> --head-oid <40 桁> [--prev-head-oid <40 桁>]]
+    [--base-ref <名前> --base-oid <40 桁> --head-oid <40 桁> [--prev-base-oid <40 桁> --prev-head-oid <40 桁>]]
 ```
 
 `--kind` は、出力の形と完了の条件を決めます。
@@ -43,8 +43,9 @@ personal-codex-launch launch --kind <review|text|json> --repo <repo root> --brie
    - `--schema` は `json` のとき必須で、ほかの kind では渡せない (JSON の object として読める regular file)。
    - `--effort` は 4 つの値のどれか。渡すと、model の選択の effort より優先する。
    - `--run-root` は絶対の場所の directory で、repo の中は不可。省くと system の一時 directory。
-   - `--base-ref`・`--base-oid`・`--head-oid`・`--prev-head-oid` は `review` のときだけ渡せる。`--base-oid` と `--head-oid` は組で
-     渡し、`--prev-head-oid` はその組と一緒のときだけ渡せる。OID はどれも 40 桁の小文字の hex。
+   - `--base-ref`・`--base-oid`・`--head-oid`・`--prev-base-oid`・`--prev-head-oid` は `review` のときだけ渡せる。`--base-oid` と
+     `--head-oid` は組で渡す。`--prev-base-oid` と `--prev-head-oid` も組で、`--base-oid` と `--head-oid` と一緒のときだけ渡せる。
+     OID はどれも 40 桁の小文字の hex。
 2. **capability の確認**。満たさなければ `BLOCKED` (`capability-preflight`)。
    - `codex --version`、`codex exec --help`、`codex features list` が exit 0。
    - help に `--sandbox`・`--config`・`--output-last-message`・`--ignore-user-config`・`--ignore-rules`・`--disable` がある
@@ -58,12 +59,12 @@ personal-codex-launch launch --kind <review|text|json> --repo <repo root> --brie
    - `--base-ref` を渡したら、形が正しく (空・`-` 始まり・空白や制御文字を含むものは git に渡す前に止め、通った値を
      `git check-ref-format --branch` で確かめる)、その ref の commit が `--base-oid` と同じ。
    - 作業ツリーが clean (untracked の file も無い)。
-   - `--prev-head-oid` を渡したら、前の round からの差分を中心に読んでよいかを決める (下の「2 回目以降の review」)。
+   - 前の round の OID の組を渡したら、前の round からの差分を中心に読んでよいかを決める (下の「2 回目以降の review」)。
      満たさなくても止めない。
 4. **run dir を作る**。`--run-root` の下に、mode 700 の新しい directory を作り、次を置きます。
    - `brief.md`: 下の「起動の制約」の節を先頭に置き、その後ろに `--brief` の本文をそのまま続けたもの。`review` で OID を
      渡したときは、OID から組んだ「対象」の節 (`git diff <base>...<head>` と `git log --oneline <base>..<head>`。周辺の code は
-     head の tree から読む) も入ります。`--prev-head-oid` を渡して `incremental` になったときは、前の round からの差分を
+     head の tree から読む) も入ります。前の round の OID の組を渡して `incremental` になったときは、前の round からの差分を
      中心に読む節です (下の「2 回目以降の review」)。
    - `schema.json` (`json` のとき): `--schema` の写し。起動の後に元の file が変わっても、その run の schema は変わりません。
    - `run.zsh`: 下の「run script」。
@@ -81,7 +82,7 @@ personal-codex-launch launch --kind <review|text|json> --repo <repo root> --brie
 
 | 状態 | stdout | exit |
 | --- | --- | --- |
-| 起動できた | `{"status":"STARTED","kind":…,"run_dir":…,"nonce":…,"sentinel":…,"pane_id":…,"pane_label":…,"script":…,"result":…,"model_sources":{…},"notes":[…]}` (`--prev-head-oid` を渡したときは `review_scope` と、`full` のときの `scope_reason` も) | 0 |
+| 起動できた | `{"status":"STARTED","kind":…,"run_dir":…,"nonce":…,"sentinel":…,"pane_id":…,"pane_label":…,"script":…,"result":…,"model_sources":{…},"notes":[…]}` (前の round の OID の組を渡したときは `review_scope` と、`full` のときの `scope_reason` も) | 0 |
 | 止まった | `{"status":"BLOCKED","blocked_at":"capability-preflight\|target-identity\|launch-path","reason":…}` (あれば `run_dir`・`script`・`pane_id`・`notes`・`expected`・`actual`) | 1 |
 | usage・入力の誤り・想定外の例外 | 無し (stderr に 1 行) | 2 |
 
@@ -92,10 +93,10 @@ personal-codex-launch launch --kind <review|text|json> --repo <repo root> --brie
 
 ### 2 回目以降の review (`--prev-head-oid`)
 
-同じ PR の 2 回目以降の review では、前の round の head を `--prev-head-oid` に渡します (#673)。前の round からの差分を中心に
-読み、毎 round の下調べのやり直しを減らすためです。渡すのは、前の round が verdict のある結果で終わったときだけで、値は、
-その結果の `Target:` の行の head の OID です。前の round が verdict の無い停止で終わったとき、人が PR 全体の読み直しを
-頼んだときは渡しません。
+同じ PR の 2 回目以降の review では、前の round の base と head を `--prev-base-oid` と `--prev-head-oid` に渡します (#673)。
+前の round からの差分を中心に読み、毎 round の下調べのやり直しを減らすためです。渡すのは、前の round が verdict のある結果で
+終わったときだけで、値は、その結果の `Target:` の行の base の OID と head の OID です。前の round が verdict の無い停止で
+終わったとき、人が PR 全体の読み直しを頼んだときは渡しません。
 
 script は、対象の確認 (手順 3) の後で、次の 4 つを git で確かめます。すべて満たすと、前の round からの差分を中心に読む
 round (`incremental`) にします。
@@ -104,10 +105,10 @@ round (`incremental`) にします。
 | --- | --- | --- |
 | 前の head が今の head の祖先 | `git merge-base --is-ancestor <前> <今>` | rebase か force push で、前の round が見た commit が今の列に無い |
 | 前の head から今の head までに merge commit が無い | `git rev-list --merges <前>..<今>` | base などの変更が混ざり、差分が前の round への対応だけでない |
-| 差分の基点が変わらない | `git merge-base <base> <前>` と `git merge-base <base> <今>` が同じ | PR の差分の範囲が前の round と違う |
+| 差分の基点が前の round と同じ | `git merge-base --all <前の base> <前>` と `git merge-base --all <base> <今>` が、どちらも 1 つで同じ (merge の前の照合と同じ比べ方) | base を付け替えたか取り込んで、前の round が見ていない範囲が PR の差分に入った |
 | 前の round からの差分が、PR の差分の半分以下 | `git diff --numstat` の追加と削除の行数の和 (rename の検出・外部の diff・textconv を外して数える) | 前の round の結論の多くが古くなっている |
 
-前の head が今の head と同じとき、前の head の commit が local に無いとき、git が失敗したとき、binary の file を含んで行数を
+前の head が今の head と同じとき、前の base か前の head の commit が local に無いとき、git が失敗したとき、binary の file を含んで行数を
 数えられないとき、PR の差分が空のときも `full` です。どの場合も止めずに起動し、PR 全体を読む対象の節にして、理由を出力の
 `scope_reason` と brief に書きます。
 
@@ -224,8 +225,8 @@ run dir は、その下にできるただ 1 つの directory です。
 - 入力の誤りでは何も起動せず、run dir も作らない。capability と対象の確認で止まると、pane を作らない。
 - `run.zsh` を、空白・引用符・`$( )`・バッククォートを含む場所で実際に zsh で走らせ、偽の codex に渡る argv と cwd が壊れない。
 - 制約の節が brief の先頭に入り、呼び出し側の本文がそのまま続く。
-- 2 回目以降の review の範囲。前の head と今の head の組 (祖先でない・merge commit・基点の移動・共通の祖先が無い・binary・
-  空の差分・半分の境界) ごとに、`incremental` か `full` かと理由、対象の節の command と読み方。
+- 2 回目以降の review の範囲。前の round と今の OID の組 (祖先でない・merge commit・基点の移動・base の付け替え・
+  共通の祖先が無い・merge-base が 1 つに決まらない・前の base が無い・binary・空の差分・半分の境界) ごとに、`incremental` か `full` かと理由、対象の節の command と読み方。
 - pane の置き方 (列の候補の有無、同じ高さ、読めないときの右への分割) と、`launch-path` で止まる条件。
 - collect の 3 つの状態と、pane を閉じる条件。brief と結果の本文を出力に出さない。
 
