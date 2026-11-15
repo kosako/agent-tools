@@ -38,18 +38,11 @@ section = lambda do |rel, heading|
   body
 end
 
-# 段落を項目の始まりで切った範囲のうち、項目でない部分 (:plains)。受ける文や組にした文を `- ` で別の項目に切り出しても、同じ
-# 段落のまま通らないようにする。
-plains = lambda do |body|
-  MU.paragraphs(body).flat_map { |para| para.lines.slice_before { |l| l.match?(MU::BULLET) }.map(&:join) }
-    .reject { |chunk| chunk.match?(MU::BULLET) }
-end
-
 # 節の中の kind の単位のうち、key を含むものがある。terms があれば、key と同じ単位に terms がすべてある。
 check = lambda do |rel, heading, label, kind, key, terms = []|
   body = section.call(rel, heading)
   next if body.nil?
-  hits = MU.containing(kind == :plains ? plains.call(body) : MU.public_send(kind, body), key)
+  hits = MU.containing(MU.public_send(kind, body), key)
   if hits.empty?
     errors << "#{rel} の「#{heading}」に、#{label} (#{key.inspect}) を含む#{KIND_NAMES.fetch(kind)}が無い"
   elsif terms.any? && hits.none? { |u| MU.missing(u, terms).empty? }
@@ -63,7 +56,7 @@ end
 run_check = lambda do |rel, heading, label, key, n, terms, within = :bullets|
   body = section.call(rel, heading)
   next if body.nil?
-  units = within == :plains ? plains.call(body) : MU.public_send(within, body)
+  units = MU.public_send(within, body)
   runs = MU.containing(units, key).flat_map { |u| MU.sentence_runs(u, key, n) }
   if runs.empty?
     errors << "#{rel} の「#{heading}」に、#{label} (#{key.inspect}) を含む文が無い"

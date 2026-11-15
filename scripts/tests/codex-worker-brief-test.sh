@@ -10,7 +10,7 @@
 #   走らせないことを、それぞれ句として書いている (#512。運用 instruction の「test と長時間の command」を worker に届ける)
 # 句は空白を除いて比べ (行の折り返しの位置に依らない)、句の直後が区切り (。、( か末尾) であることも求める (否定は
 # 句の後ろに付くので、「置くな」のような反転を部分一致で通さない)。brief の節の外にだけ句があっても worker には届かないので、
-# child-brief-boundary-test と同じく節の一覧に絞って見る。
+# child-brief-boundary-test と同じく節の最初の一覧の項目に絞って見る。節と一覧の取り方は lib/markdown_units.rb が持つ (#685)。
 # 引数で worker の skill の directory を差し替えられる (変異での確認用)。
 set -eu
 
@@ -21,35 +21,36 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 worker_dir=${1:-"$repo_root/shared/skills/personal-codex-worker"}
 [ -f "$worker_dir/SKILL.md" ] || fail "missing $worker_dir/SKILL.md"
 
-ruby - "$worker_dir/SKILL.md" <<'RUBY'
+ruby -r"$script_dir/lib/markdown_units" - "$worker_dir/SKILL.md" <<'RUBY'
+# encoding: UTF-8
+MU = MarkdownUnits
 path = ARGV.fetch(0)
-lines = File.read(path, encoding: "UTF-8").split("\n")
 
-# 節 (見出しから次の H2 の前まで) の中の最初の一覧 (最初の「- 」から空行の前まで)。
-start = lines.index { |l| l =~ /\A## 4\. brief\s*\z/ }
-abort "FAIL: codex-worker-brief: SKILL.md に「## 4. brief」の節が無い" if start.nil?
-section = lines[(start + 1)..-1]
-section = section[0, section.index { |l| l.start_with?("## ") } || section.length]
-first = section.index { |l| l.start_with?("- ") }
-abort "FAIL: codex-worker-brief: brief の節に一覧が無い" if first.nil?
-list = section[first..-1]
-list = list[0, list.index { |l| l =~ /\A\s*\z/ } || list.length]
+# 節の中の最初の一覧の項目 (子の項目と続きの行は、親の項目にまとまる)。
+section = MU.section(File.read(path, encoding: "UTF-8"), "## 4. brief")
+abort "FAIL: codex-worker-brief: SKILL.md に「## 4. brief」の節が無い" if section.nil?
+bullets = MU.lists(section).first
+abort "FAIL: codex-worker-brief: brief の節に一覧が無い" if bullets.nil?
 
-# 一覧を行頭の「- 」で bullet に分け、続きの行は前の bullet に足す。
-bullets = []
-list.each { |l| l.start_with?("- ") ? bullets << l.dup : bullets[-1] << l }
-
-def squash(text)
-  text.gsub(/\s+/, "")
-end
+SEPARATORS = %w[。 、 (].freeze
 
 # 句が空白を除いた本文にあり、直後が区切りか末尾であること。
 def clause?(text, clause)
-  squash(text).match?(/#{Regexp.escape(squash(clause))}(?=[。、(]|\z)/)
+  t = MU.squash(text)
+  c = MU.squash(clause)
+  at = t.index(c)
+  until at.nil?
+    after = t[at + c.size]
+    return true if after.nil? || SEPARATORS.include?(after)
+
+    at = t.index(c, at + 1)
+  end
+  false
 end
 
+# 「- <label>:」で始まる項目 (空白を除いて比べる)。
 def find(bullets, label)
-  bullets.find { |b| b.start_with?("- #{label}:") }
+  bullets.find { |b| MU.squash(b).start_with?(MU.squash("- #{label}:")) }
 end
 
 CLAUSES = {
