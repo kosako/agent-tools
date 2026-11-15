@@ -153,6 +153,9 @@ module PrMergeWait
     loop do
       check_signal
       snap = check(opts)
+      # 確かめている間 (gh を回収した直後を含む) に届いた signal は、確かめた結果より優先する (止めた呼び出し元が、
+      # merge の後の手順に進まないため)。
+      check_signal
       if snap.nil?
         failures += 1
         raise Failed, "gh での PR の確認が #{MAX_FAILURES} 回続けて失敗しました" if failures >= MAX_FAILURES

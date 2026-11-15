@@ -203,13 +203,11 @@ check "a signal while waiting between checks: no new gh call", calls.size == 1 &
 # gh は TERM で終わるが、同じ group の子が TERM を受け流す。gh を回収する前に group を KILL し、子も残さない。
 s, out, err, calls, d = run_case("family", base, signals: ["TERM"])
 child = File.read(File.join(d, "child.pid")).to_i
+# 落ちたときの後始末の対象: まだ gh の group (id は gh の PID) にいる子だけ。PID が再利用された別の process は止めない。
+left = alive?(child) && (Process.getpgid(child) rescue nil) == calls[0]["pid"]
 check "a child in the gh group that ignores TERM: exit 2 with one stderr line", s == 2 && out == [waiting] && err.size == 1
-check "a child in the gh group that ignores TERM is killed with the group", !alive?(child) && !alive?(calls[0]["pid"]) && !File.exist?(File.join(d, "child-natural-end"))
-begin
-  Process.kill("KILL", child) # 落ちたときに子を残さない
-rescue Errno::ESRCH
-  nil
-end
+check "a child in the gh group that ignores TERM is killed with the group", !left && !alive?(child) && !alive?(calls[0]["pid"]) && !File.exist?(File.join(d, "child-natural-end"))
+Process.kill("KILL", child) if left
 
 # ---- locale が C
 s, out, = run_case("merged", base, env: { "LC_ALL" => "C", "LANG" => "C" })
@@ -308,18 +306,24 @@ rescue PrMergeWait::Interrupted => e
 ensure
   tp.disable
 end
-sleep 0.2
+# この gh は test の process の子なので、まだ回収されずに動いているか (= 落ちて残ったか) を waitpid で確かめられる。
+running = spawned.is_a?(Integer) &&
+          begin
+            Process.waitpid(spawned, Process::WNOHANG).nil?
+          rescue Errno::ECHILD
+            false # script が回収済み (自分のものではなくなった PID は止めない)
+          end
 check "a signal right after spawning gh: Interrupted after the gh is stopped", raised == "TERM" && spawned.is_a?(Integer)
-check "a signal right after spawning gh: the gh is not left running", spawned.is_a?(Integer) && !alive?(spawned) && !File.exist?(File.join(d, "natural-end"))
-begin
-  Process.kill("KILL", spawned) if spawned.is_a?(Integer) # 落ちたときに gh を残さない
-rescue Errno::ESRCH
-  nil
+check "a signal right after spawning gh: the gh is not left running", spawned.is_a?(Integer) && !running && !File.exist?(File.join(d, "natural-end"))
+if running # 落ちたときだけ、回収されていない自分の子の gh を止めて回収する
+  Process.kill("KILL", spawned)
+  Process.waitpid(spawned)
 end
 reset_signal
 
-# gh を回収した直後 (PID を消す前) に signal が届く。回収した gh の group には signal を送らない。
-d = direct_case("reap-race", "merged")
+# gh を回収した直後 (PID を消す前) に signal が届く。run を通して、確かめた結果より signal を優先して exit 2 で終わること
+# (結果の行を出さない) と、回収した gh の group には signal を送らないことを確かめる。
+direct_case("reap-race", "merged")
 sent = []
 original = PrMergeWait.method(:signal_group)
 PrMergeWait.define_singleton_method(:signal_group) do |*args|
@@ -332,22 +336,23 @@ tp = TracePoint.new(:c_return) do |t|
   t.disable
   Process.kill("TERM", Process.pid)
 end
-raised = nil
+require "stringio"
+outs = StringIO.new
+errs = StringIO.new
+real_out = $stdout
+real_err = $stderr
 begin
+  $stdout = outs
+  $stderr = errs
   tp.enable
-  out, status = PrMergeWait.run_gh(VIEW)
-rescue PrMergeWait::Interrupted => e
-  raised = e.message
+  code = PrMergeWait.run(["675", "--expect-head", H, "--interval", "1", "--timeout", "8"])
 ensure
   tp.disable
+  $stdout = real_out
+  $stderr = real_err
 end
-check "a signal right after reaping gh: the finished check is kept", raised.nil? && status&.success? && out.to_s.include?("MERGED")
-begin
-  PrMergeWait.check_signal
-rescue PrMergeWait::Interrupted => e
-  raised = e.message
-end
-check "a signal right after reaping gh: raised at the next check, with no signal to the reaped group", raised == "TERM" && sent.empty?
+check "a signal right after reaping gh: run exits 2 with one stderr line and no result line", code == 2 && errs.string.lines.size == 1 && outs.string == "merge-wait: waiting (PR #675、上限 8 秒)\n"
+check "a signal right after reaping gh: no signal to the reaped gh group", sent.empty?
 PrMergeWait.define_singleton_method(:signal_group, original)
 reset_signal
 
