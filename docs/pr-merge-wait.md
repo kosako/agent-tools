@@ -104,6 +104,8 @@ merge を頼んだ時点の PR の head です。
 
 ## 組み込み先
 
-- operating-loop に、人の merge を待つ手順を足します (#675 の 2 本目)。Claude Code の session では background で走らせ、
+- 運用 instruction の「待ちと判断の伝え方」が、人に merge を頼んだ PR はこの script で merge を待ち、merge を確かめたら
+  後片付けに進む、と宣言します (#675 の 2 本目)。
+- 手順の正本は、operating-loop の「人が merge する PR を待つ」です。Claude Code の session では background で走らせ、
   終わりの通知で結果を読みます。Codex の session には background の通知が無いので、上限を短くして foreground で走らせ、
-  上限に達したら人に返します。
+  上限に達したら人に返します。exit code ごとの扱い (0 は merge の後の手順に進む、1・2・3 は人に伝える) も、そちらにあります。

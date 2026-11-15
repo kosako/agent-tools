@@ -42,6 +42,9 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
   ことになる (#674)。
 - 人に判断を頼むときは、1 件ずつ出す。何の判断か、選ぶとどうなるか、推奨を、前提を知らない人にも分かる言葉で添える。
   前提の揃った質問をまとめて出す壁打ち (`personal-grill-me` / `personal-grill-with-docs`) の round は、この限りでない。
+- 人に merge を頼んだ PR は、配備済みの `personal-pr-merge-wait` (`<tool home>/agent-tools/scripts/`) で merge を待ち、
+  merge を確かめたら後片付けに進む。人が「merge した」と伝えに来るのを待たない。手順は `personal-project-operating-loop` の
+  「人が merge する PR を待つ」(#675)。
 
 ## AI エージェント間のコードレビュー (相互レビュー)
 
