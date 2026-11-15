@@ -555,7 +555,8 @@ module CodexLaunch
                "pane_label" => plan[:pane_label] }
     launch_file = File.join(plan[:run_dir], "launch.json")
     File.write(launch_file, JSON.generate(record) + "\n")
-    handoff = { "run_dir" => plan[:run_dir], "script" => plan[:script], "notes" => plan[:notes] }
+    # launch-path で止まって直接起動で続ける caller も、結果に範囲を書けるように、範囲の値を返す (#687 の F1)。
+    handoff = { "run_dir" => plan[:run_dir], "script" => plan[:script], "notes" => plan[:notes] }.merge(plan[:scope] || {})
 
     caller_pane = herdr_caller or raise Blocked.new("launch-path", "herdr が使えない (server が running でない、または今の pane を読めない)", handoff)
     notes = plan[:notes].dup

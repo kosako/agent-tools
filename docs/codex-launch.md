@@ -83,7 +83,7 @@ personal-codex-launch launch --kind <review|text|json> --repo <repo root> --brie
 | 状態 | stdout | exit |
 | --- | --- | --- |
 | 起動できた | `{"status":"STARTED","kind":…,"run_dir":…,"nonce":…,"sentinel":…,"pane_id":…,"pane_label":…,"script":…,"result":…,"model_sources":{…},"notes":[…]}` (前の round の OID の組を渡したときは `review_scope` と、`full` のときの `scope_reason` も) | 0 |
-| 止まった | `{"status":"BLOCKED","blocked_at":"capability-preflight\|target-identity\|launch-path","reason":…}` (あれば `run_dir`・`script`・`pane_id`・`notes`・`expected`・`actual`) | 1 |
+| 止まった | `{"status":"BLOCKED","blocked_at":"capability-preflight\|target-identity\|launch-path","reason":…}` (あれば `run_dir`・`script`・`pane_id`・`notes`・`expected`・`actual`。`launch-path` では、前の round の OID の組を渡したときの `review_scope` と `scope_reason` も) | 1 |
 | usage・入力の誤り・想定外の例外 | 無し (stderr に 1 行) | 2 |
 
 `model_sources` は、model と effort の出所 (`user config` / `review profile` / `--effort` を渡したときの `caller`) で、値は

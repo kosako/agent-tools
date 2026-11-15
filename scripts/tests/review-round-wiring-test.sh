@@ -67,8 +67,11 @@ terms.call("#{w} の渡すときと渡さないときの文", one.call(w, body, 
            ["verdict の無い停止", "PR 全体の読み直し", "渡しません"])
 terms.call("#{w} の範囲を script が決める文", one.call(w, body, :sentences, "前の round からの差分を中心に読んでよいかは"),
            ["script が git で決め", "対象の節", "`docs/codex-launch.md`", "「2 回目以降の review」"])
-terms.call("#{w} の STARTED の範囲の文", one.call(w, body, :sentences, "`review_scope`"),
+terms.call("#{w} の STARTED の範囲の文", one.call(w, body, :sentences, "`full` のときの `scope_reason` も控えて"),
            ["前の round の OID の組", "`incremental`", "`full`", "`scope_reason`", "caller に返します"])
+# launch-path で止まって直接起動で続ける経路でも、範囲の値を控える (#687 の F1)。
+terms.call("#{w} の launch-path の範囲の文", one.call(w, body, :sentences, "この出力の範囲の値"),
+           ["前の round の OID の組", "`review_scope`", "`scope_reason`", "`STARTED` と同じく", "caller に返します"])
 
 # 2. SKILL.md の §4
 skill = "#{review}/SKILL.md"

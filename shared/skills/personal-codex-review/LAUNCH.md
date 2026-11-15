@@ -47,7 +47,8 @@ run script の生成、pane の作成と命名、起動、待機、完了の判�
    - `BLOCKED` で `target-identity`: `Status: BLOCKED` (`target-identity`)。`expected` / `actual` の OID だけを返し、checkout・
      fetch・stash で合わせません。
    - `BLOCKED` で `launch-path`: herdr が使えません。`SKILL.md` §2 の起動経路の 2 (sandbox の外と確かめられたときだけ直接起動) か
-     3 (人手 hand-off) に進みます。返った `script` が run script で、`run_dir` に `brief.md` と `launch.json` があります。
+     3 (人手 hand-off) に進みます。返った `script` が run script で、`run_dir` に `brief.md` と `launch.json` があります。前の round の
+     OID の組を渡したときは、この出力の範囲の値 (`review_scope` と `scope_reason`) も、`STARTED` と同じく控えて caller に返します。
    - exit 2 で、stderr が入力の誤りの理由 (どの引数がなぜ外れたか) のとき: 何も起動しておらず、run dir も作っていません。
      値を直して起動し直します。
    - exit 2 で、stderr が `unexpected error` (想定外の例外) のとき: 起動に至っていないとは限りません。同じ値で起動し直す前に、
