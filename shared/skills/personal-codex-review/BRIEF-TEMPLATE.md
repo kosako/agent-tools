@@ -44,16 +44,14 @@ script が配備されていない環境で手で組むときは、上の 3 つ�
 1. <今回の変更で、特に確かめてほしいこと>
 2. <…>
 
-production の review lens が必要なら、Codex home の `skills/personal-production-rail/references/policy-index.md` を読み、
-要る節だけを読む。出力の形は、同じ directory の `review-output-contract.md` に従う。
+production の review lens が必要なら、Codex home の `skills/personal-production-rail/references/policy-index.md` の
+`### review` の項にある「sections(読む節)」の節だけを、`policies/review.md` から読む (`rg -n '^#'` で見出しの行を見てから、
+`sed -n` で節だけを読む。file 全体を一度に読まない)。出力の形は、同じ directory の短い `review-output-contract.md` に従う。
 
 ## round <回数> の追加の情報 (2 回目以降だけ)
 
 - 前の round (head <前の head の OID>) の結果: <verdict と、finding ごとの要点>
 - 依頼元の対応: <採用して直したこと。採用しなかったものは理由>
-- 前の round からの差分は `git diff <前の head の OID>..<今の head の OID>` で読める。まずこの差分で指摘が直っているか、同じ型の
-  抜けが残っていないかを確かめ、そのうえで PR 全体 (base から head) の verdict を出す。前の round で問題なしとした箇所は、
-  差分が触れていなければ読み直さなくてよい。
 ```
 
 - review の基準と出力の形の file は、配備済みの reference (Codex home の `skills/personal-production-rail/references/` の下) を
@@ -64,3 +62,6 @@ production の review lens が必要なら、Codex home の `skills/personal-pro
   渡さないためです。
 - `.agent-context.local.md` や packet の中身、secret、絶対 path、private な参照先を brief に書きません (`SKILL.md` §4)。
 - 2 回目以降の節は、前の round の指摘と対応を自分の言葉で要約します。前の結果コメントの全文を貼りません。
+- 2 回目以降は、`launch` に `--prev-base-oid` と `--prev-head-oid` を渡します (`LAUNCH.md` の手順 2。#673)。前の round からの差分
+  (`git diff <前の head の OID>..<今の head の OID>`) の取得と読み方は、script が対象の節に書くので、この雛形の節には書きません。
+  script が `full` にしたとき (出力の `scope_reason`) も、この節はそのまま使います。
