@@ -240,6 +240,8 @@ script / plugin) のまま。
   [herdr-operations](herdr-operations.md)。
 - 投稿の前の 3 つの検査 (文体・目印・public-safety の gate) は、配備済みの `personal-post-check` で 1 回にまとめて
   かけられる ([post-check](post-check.md)。投稿は別の呼び出しのまま)。
+- 人が merge する PR の merge の検知は、配備済みの `personal-pr-merge-wait` が受け持つ ([pr-merge-wait](pr-merge-wait.md)。
+  検知だけで、merge の後の手順は operating-loop)。
 - read-only の Codex (review・監査・反証・相談) の起動と回収は、配備済みの `personal-codex-launch` が受け持つ
   ([codex-launch](codex-launch.md)。起動の境界と完了の判定の正本は、各 skill の LAUNCH のまま)。
 - 開発の流れを外から数えるための目印 (trailer・Issue との紐付け・review の結果の 5 行・`escape` の label) の
