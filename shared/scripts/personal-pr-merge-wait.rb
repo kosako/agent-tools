@@ -15,7 +15,7 @@
 # exit: 0 = merged (merge の時の head が --expect-head と同じ) / 1 = merged-other-head・closed・head-moved /
 #   3 = timeout (上限の時刻でまだ open、head も同じ) / 2 = usage・gh の確認が 3 回続けて失敗・上限の時刻の確認が失敗・
 #   止められた (SIGINT / SIGTERM)・想定外の例外 (どれも stderr に 1 行)。止められたときは、走っている gh を止めて回収してから
-#   終わる。説明は docs/pr-merge-wait.md。
+#   終わる。後始末の間に届いた signal は受け流す。説明は docs/pr-merge-wait.md。
 
 require "json"
 
@@ -60,7 +60,7 @@ module PrMergeWait
   def run(argv)
     $stdout.sync = true
     opts = parse(argv)
-    %w[TERM INT].each { |sig| trap(sig) { raise Interrupted, sig } }
+    %w[TERM INT].each { |sig| trap(sig) { on_signal(sig) } }
     puts "merge-wait: waiting (PR ##{opts[:pr]}、上限 #{opts[:timeout]} 秒)"
     wait(opts)
   rescue UsageError => e
@@ -70,14 +70,29 @@ module PrMergeWait
     warn "#{NAME}: #{e.message}"
     EXIT_ERROR
   rescue Interrupted => e
-    stop_child
+    clean_up
     warn "#{NAME}: SIG#{e.message} で止められました (gh を止めて終わります)"
     EXIT_ERROR
   rescue StandardError => e
-    stop_child
+    clean_up
     # 内容を含みうる message は出さず class 名だけ。
     warn "#{NAME}: unexpected error (#{e.class})"
     EXIT_ERROR
+  end
+
+  # trap の中で呼ぶ。gh を止めている間に届いた signal は覚えるだけにし、止めて回収し終えてから上げる (stop_child)。
+  # 止める途中で抜けると、gh を残したり、回収した後の group に signal を送ったりしうるため。
+  def on_signal(sig)
+    raise Interrupted, sig unless @stopping
+
+    @pending ||= sig
+  end
+
+  # 終わる前の後始末。この後に届く SIGINT / SIGTERM は受け流し (Ctrl-C を 2 回押しても後始末を途中で止めない)、
+  # 走っている gh を止めて回収する。
+  def clean_up
+    %w[TERM INT].each { |sig| trap(sig, "IGNORE") }
+    stop_child
   end
 
   # 引数を読む。PR 番号は位置引数で 1 つだけ。option は値を取り、重複と未知は usage の誤り。
@@ -232,28 +247,38 @@ module PrMergeWait
     [out, status]
   ensure
     reader&.close
-    writer&.close unless writer.nil? || writer.closed?
+    writer.close unless writer.nil? || writer.closed?
   end
 
   # 走っている gh の process group を止めて回収する。TERM の後 2 秒で終わらなければ KILL を送る。回収した後は signal を
   # 送らない (回収した pid の group は別の process のものになりうる)。止めたときは nil を返す (成功の status ではない)。
+  # 止めている間に届いた SIGINT / SIGTERM は、回収し終えてから Interrupted として上げる (on_signal)。
   def stop_child
     pid = @child
     return nil if pid.nil?
 
-    @child = nil
-    signal_group("TERM", pid)
-    deadline = now + 2
-    until Process.waitpid(pid, Process::WNOHANG)
-      if now > deadline
-        signal_group("KILL", pid)
-        Process.waitpid(pid)
-        break
+    @stopping = true
+    begin
+      signal_group("TERM", pid)
+      deadline = now + 2
+      until Process.waitpid(pid, Process::WNOHANG)
+        if now > deadline
+          signal_group("KILL", pid)
+          Process.waitpid(pid)
+          break
+        end
+        sleep 0.05
       end
-      sleep 0.05
+    rescue Errno::ECHILD
+      nil
+    ensure
+      @child = nil
+      @stopping = false
     end
-    nil
-  rescue Errno::ECHILD
+    sig = @pending
+    @pending = nil
+    raise Interrupted, sig if sig
+
     nil
   end
 
