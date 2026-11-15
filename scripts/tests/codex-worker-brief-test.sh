@@ -26,12 +26,13 @@ ruby -r"$script_dir/lib/markdown_units" - "$worker_dir/SKILL.md" <<'RUBY'
 MU = MarkdownUnits
 path = ARGV.fetch(0)
 
-# 節の中の最初の一覧の項目。一覧の中は、子の項目を分けた bullets で見る (本文を子の項目へ切り出した変更を通さない)。
+# 節の中の最初の一覧の最上位の項目を、子の項目を外した本文で見る (本文を子の項目へ切り出した変更と、項目を丸ごと子の項目に
+# 下げた変更を通さない)。
 section = MU.section(File.read(path, encoding: "UTF-8"), "## 4. brief")
 abort "FAIL: codex-worker-brief: SKILL.md に「## 4. brief」の節が無い" if section.nil?
 first = MU.lists(section).first
 abort "FAIL: codex-worker-brief: brief の節に一覧が無い" if first.nil?
-bullets = MU.bullets(first.join)
+bullets = first.map { |item| MU.bullets(item).first }
 
 SEPARATORS = %w[。 、 (].freeze
 
