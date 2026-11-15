@@ -103,7 +103,7 @@ unless bt.nil?
     end
     terms.call("#{tpl} の雛形の policy の段落", one.call("#{tpl} の雛形", block, :paragraphs, "policy-index.md"),
                ["`### review`", "「sections(読む節)」", "`policies/review.md`", "`rg -n '^#'`", "`sed -n`", "file 全体を一度に読まない",
-                "`review-output-contract.md`"])
+                "`review-output-contract.md`", "2 回目以降", "対象の節に policy の読み方が書いてある", "そちらに従う"])
   end
   terms.call("#{w} の 2 回目以降の注", one.call(w, bt, :items, "`--prev-head-oid`"),
              ["2 回目以降", "`--prev-base-oid`", "`LAUNCH.md` の手順 2", "`git diff <前の head の OID>..<今の head の OID>`", "script が対象の節に書く",

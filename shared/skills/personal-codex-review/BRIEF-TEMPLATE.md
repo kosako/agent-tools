@@ -47,6 +47,8 @@ script が配備されていない環境で手で組むときは、上の 3 つ�
 production の review lens が必要なら、Codex home の `skills/personal-production-rail/references/policy-index.md` の
 `### review` の項にある「sections(読む節)」の節だけを、`policies/review.md` から読む (`rg -n '^#'` で見出しの行を見てから、
 `sed -n` で節だけを読む。file 全体を一度に読まない)。出力の形は、同じ directory の短い `review-output-contract.md` に従う。
+2 回目以降で、起動の制約の後ろの対象の節に policy の読み方が書いてあるとき (前の round からの差分を中心に読む round) は、
+そちらに従う。
 
 ## round <回数> の追加の情報 (2 回目以降だけ)
 
