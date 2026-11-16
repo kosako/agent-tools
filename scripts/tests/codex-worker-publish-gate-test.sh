@@ -41,10 +41,13 @@ gated = blocks.select { |b| runs.(b, '"$gate" --stdin') }
 abort "FAIL: codex-worker-publish-gate: §9 に gate (\"$gate\" --stdin) の sh の block が 1 つでない (#{gated.size} 個)" unless gated.size == 1
 block = gated.first
 deploy = "gate=<tool home>/agent-tools/scripts/personal-public-safety-gate"
-abort "FAIL: codex-worker-publish-gate: gate の block の先頭が deploy 先の行でない" unless block.lines.first.to_s.strip == deploy
+# 先頭の行は、行継続をつないでから空白を除いて比べる。
+abort "FAIL: codex-worker-publish-gate: gate の block の先頭が deploy 先の行でない" unless MarkdownUnits.squash(MarkdownUnits.sh_join(block).lines.first.to_s) == MarkdownUnits.squash(deploy)
 abort "FAIL: codex-worker-publish-gate: gate の block に push / gh がある (test で走らせられない)" if MarkdownUnits.sh_join(block) =~ /\bgit\b[^\n]*\bpush\b|\bgh\s/
 # deploy 先は、走らせるときに渡す偽の HOME の下の gate を指す固定の行にする (tmp の path を code に埋め込まない。#523 review)。
-File.write(out, %q{gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"} + "\n" + block.lines.drop(1).join)
+# 原文の deploy 先の行は、行継続で続く行も含めて差し替える。
+last = block.lines.index { |l| !l.chomp.end_with?("\\") } || 0
+File.write(out, %q{gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"} + "\n" + block.lines.drop(last + 1).join)
 RUBY
 
 # ---- 切り出した command を temp repo で走らせる ----------------------------------------

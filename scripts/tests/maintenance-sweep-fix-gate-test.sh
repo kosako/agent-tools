@@ -69,15 +69,17 @@ else
     errors << "検証の節に gate (\"$gate\" --stdin) の sh の block が 1 つでない (#{gated.size} 個)"
   else
     block = gated.first
-    # RECORD.md の deploy 先の行は、sh の block の中の gate=… の行 (fence の字下げと、行の前後の空白に依らない)。
-    record_gate = run_blocks(record).flat_map(&:lines).map(&:strip).find { |l| l.start_with?("gate=") }
+    # 行は、行継続をつないでから空白を除いた形で比べる (fence の字下げ、行の前後の空白、行継続に依らない)。
+    joined = MU.sh_join(block).lines
+    # RECORD.md の deploy 先の行は、sh の block の中の gate=… の行。
+    record_gate = run_blocks(record).flat_map { |b| MU.sh_join(b).lines }.map { |l| MU.squash(l) }.find { |l| l.start_with?("gate=") }
     if record_gate.nil?
       errors << "RECORD.md に gate の deploy 先の行 (gate=…) が無い"
-    elsif !block.lines.map(&:strip).include?(record_gate)
+    elsif !joined.map { |l| MU.squash(l) }.include?(record_gate)
       errors << "検証の節の gate が RECORD.md の Issue の gate と同じ deploy 先でない"
     end
-    # gate に渡す入力は、block の "$gate" --stdin より前 (deploy 先の行を除く)。行継続をつなぎ、空白を除いた形で見る。
-    rest = flat(block.lines.reject { |l| l.lstrip.start_with?("gate=") }.join)
+    # gate に渡す入力は、block の "$gate" --stdin より前 (deploy 先の行を除く)。
+    rest = MU.squash(joined.reject { |l| l.lstrip.start_with?("gate=") }.join)
     at = rest.index(MU.squash('"$gate" --stdin'))
     input = at ? rest[0...at] : ""
     errors << "公開前の gate に pipe で入力を渡していない" unless input.end_with?("|")
