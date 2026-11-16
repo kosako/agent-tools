@@ -20,6 +20,9 @@
 # - 文のつながり: key を含む文と、その後ろに続く文 (sentence_runs)。
 # - code span: fence の外の `…`。行をまたいで折り返してよい。中の空白と折り返しを除いて比べる。
 # - 語の照合: どれも空白 (折り返しを含む) を除いて比べる。
+# - 句の照合 (clause?): 空白を除いた句の直後が区切り (。、( ) か末尾であること。括弧の注釈 (半角の丸括弧) は bare で除ける。
+# - そのほか: 見出しの列 (headings)、level ごとの位置の順の節 (sections)、表の行 (rows)、ある行のすぐ後ろの fence の block
+#   (block_after。間に許すのは空行だけ)。
 module MarkdownUnits
   FENCE = /\A[ \t]*```(.*)$/.freeze
   HEADING = /\A(#+)[ \t]+\S/.freeze
@@ -183,6 +186,99 @@ module MarkdownUnits
   # code span の中身の列。どれも空白を除いた形。
   def code_spans(text)
     prose(text).scan(/`([^`]+)`/).flatten.map { |span| squash(span) }
+  end
+
+  # 見出しの列 ([level, 名前])。fence の中の見出しの形の行は数えない。名前は前後の空白を除く。
+  def headings(text)
+    out = []
+    fence = false
+    text.each_line do |line|
+      if line =~ FENCE
+        fence = !fence
+        next
+      end
+      next if fence || line !~ HEADING
+
+      marks = line[/\A#+/]
+      out << [marks.size, line[marks.size..-1].strip]
+    end
+    out
+  end
+
+  # 表の行 (fence の外で、字下げを除いて `|` から始まる行) の列。
+  def rows(text)
+    prose(text).lines.select { |l| l.lstrip.start_with?("|") }
+  end
+
+  # 空白を除いて lead で始まる行 (fence の外) のすぐ後ろの fence の block ([info string, 中身])。lead の行と fence の間に許すのは
+  # 空行だけで、本文や見出しを挟んだ先の block は取らない (別の節の例を拾わないため)。無ければ nil。
+  def block_after(text, lead)
+    want = squash(lead)
+    lines = text.lines
+    fence = false
+    at = lines.index do |line|
+      fence = !fence if line =~ FENCE
+      !fence && squash(line).start_with?(want)
+    end
+    return nil if at.nil?
+
+    rest = lines[(at + 1)..-1].drop_while { |line| line.strip.empty? }
+    return nil unless rest.first =~ FENCE
+
+    blocks(rest.join).first
+  end
+
+  # 見出しの level ごとに、出てくる位置の順に分けた節の列 ([名前, 本文])。同じ名前の見出しも別の節として返す。本文は、次の同じか
+  # 上の level の見出しの前まで。fence の中の見出しの形の行では切らない。
+  def sections(text, level)
+    out = []
+    fence = false
+    text.each_line do |line|
+      fence = !fence if line =~ FENCE
+      marks = !fence && line =~ HEADING ? line[/\A#+/] : nil
+      if marks && marks.size == level
+        out << [line[marks.size..-1].strip, +""]
+      elsif marks && marks.size < level
+        out << nil
+      elsif out.last
+        out.last[1] << line
+      end
+    end
+    out.compact
+  end
+
+  SEPARATORS = %w[。 、 (].freeze
+
+  # 句 (空白を除いた形) が text にあり、直後が区切り (。、( ) か末尾であること。否定は句の後ろに付くので、「〜しないことは
+  # ない」のような反転を部分一致で通さないため。
+  def clause?(text, clause)
+    t = squash(text)
+    c = squash(clause)
+    at = t.index(c)
+    until at.nil?
+      after = t[at + c.size]
+      return true if after.nil? || SEPARATORS.include?(after)
+
+      at = t.index(c, at + 1)
+    end
+    false
+  end
+
+  # 括弧の注釈 (半角の丸括弧。入れ子を含む) を除いた text。注釈を挟む列挙でも、述語まで続けて照合するため。対の無い括弧は残す。
+  def bare(text)
+    out = +""
+    opens = []
+    text.each_char do |ch|
+      if ch == "("
+        opens << out.size
+        out << ch
+      elsif ch == ")" && opens.any?
+        out = out[0, opens.pop]
+      else
+        out << ch
+      end
+    end
+    out
   end
 
   # units のうち、key を含むもの (空白を除いて比べる)。

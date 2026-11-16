@@ -88,6 +88,14 @@ check "a line as deep as a child dash goes to the parent, not to the child", MU.
 check "plains are the parts of a paragraph before and between items", MU.plains("a。\n- b\nc\n\nd\n") == ["a。\n", "d\n"]
 check "lead is the text of a section before its first sub-heading", MU.lead("# A\nintro\n```\n## in fence\n```\nmore\n## B\nb\n", "# A") == "intro\n```\n## in fence\n```\nmore\n"
 check "lead of a missing heading is nil", MU.lead("# A\n", "# B").nil?
+check "headings skip heading-shaped lines in a fence and strip the name", MU.headings("# T\n```\n## no\n```\n##  Two  \n") == [[1, "T"], [2, "Two"]]
+check "rows are the table lines outside a fence", MU.rows("| a |\ntext\n```\n| no |\n```\n  | b |\n") == ["| a |\n", "  | b |\n"]
+check "block_after gives the first block after the lead line", MU.block_after("`s` の中身:\n\n```json\n{}\n```\n```sh\nx\n```\n", "`s` の中身:") == ["json", "{}\n"]
+check "block_after of a missing lead is nil", MU.block_after("```json\n{}\n```\n", "無い:").nil?
+check "block_after does not cross text or a heading after the lead", MU.block_after("`s` の中身:\n## 別の例\n```json\n{}\n```\n", "`s` の中身:").nil? && MU.block_after("`s` の中身:\nこれは\n```json\n{}\n```\n", "`s` の中身:").nil?
+check "sections split by position and keep duplicate names apart", MU.sections("## E\n### a\nx\n### a\ny\n## F\n### b\nz\n", 3) == [["a", "x\n"], ["a", "y\n"], ["b", "z\n"]]
+check "a clause must end at a separator or the end", MU.clause?("A しない。", "A しない") && MU.clause?("A しない (注)", "A しない") && !MU.clause?("A しないことはない", "A しない")
+check "bare drops nested annotations and keeps unmatched brackets", MU.bare("a (b (c) d) e (f") == "a  e (f" && MU.bare("x) y") == "x) y"
 check "a code span may wrap across lines", MU.code_spans(step2) == ["onetwo"]
 check "the backticks of a fence are not code spans", MU.code_spans("```sh\na `b` c\n```\n`d  e`\n") == ["de"]
 
