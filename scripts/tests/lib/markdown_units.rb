@@ -21,7 +21,8 @@
 # - code span: fence の外の `…`。行をまたいで折り返してよい。中の空白と折り返しを除いて比べる。
 # - 語の照合: どれも空白 (折り返しを含む) を除いて比べる。
 # - 句の照合 (clause?): 空白を除いた句の直後が区切り (。、( ) か末尾であること。括弧の注釈 (半角の丸括弧) は bare で除ける。
-# - そのほか: 見出しの列 (headings)、表の行 (rows)、ある行の後ろの最初の fence の block (block_after)。
+# - そのほか: 見出しの列 (headings)、level ごとの位置の順の節 (sections)、表の行 (rows)、ある行のすぐ後ろの fence の block
+#   (block_after。間に許すのは空行だけ)。
 module MarkdownUnits
   FENCE = /\A[ \t]*```(.*)$/.freeze
   HEADING = /\A(#+)[ \t]+\S/.freeze
@@ -209,7 +210,8 @@ module MarkdownUnits
     prose(text).lines.select { |l| l.lstrip.start_with?("|") }
   end
 
-  # 空白を除いて lead で始まる行 (fence の外) の後ろにある、最初の fence の block ([info string, 中身])。無ければ nil。
+  # 空白を除いて lead で始まる行 (fence の外) のすぐ後ろの fence の block ([info string, 中身])。lead の行と fence の間に許すのは
+  # 空行だけで、本文や見出しを挟んだ先の block は取らない (別の節の例を拾わないため)。無ければ nil。
   def block_after(text, lead)
     want = squash(lead)
     lines = text.lines
@@ -218,7 +220,31 @@ module MarkdownUnits
       fence = !fence if line =~ FENCE
       !fence && squash(line).start_with?(want)
     end
-    at && blocks(lines[(at + 1)..-1].join).first
+    return nil if at.nil?
+
+    rest = lines[(at + 1)..-1].drop_while { |line| line.strip.empty? }
+    return nil unless rest.first =~ FENCE
+
+    blocks(rest.join).first
+  end
+
+  # 見出しの level ごとに、出てくる位置の順に分けた節の列 ([名前, 本文])。同じ名前の見出しも別の節として返す。本文は、次の同じか
+  # 上の level の見出しの前まで。fence の中の見出しの形の行では切らない。
+  def sections(text, level)
+    out = []
+    fence = false
+    text.each_line do |line|
+      fence = !fence if line =~ FENCE
+      marks = !fence && line =~ HEADING ? line[/\A#+/] : nil
+      if marks && marks.size == level
+        out << [line[marks.size..-1].strip, +""]
+      elsif marks && marks.size < level
+        out << nil
+      elsif out.last
+        out.last[1] << line
+      end
+    end
+    out.compact
   end
 
   SEPARATORS = %w[。 、 (].freeze

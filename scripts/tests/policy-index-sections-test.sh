@@ -33,8 +33,8 @@ SECTIONS_KEY = "**sections(読む節)**".freeze
 body = MU.section(File.read(index_path, encoding: "UTF-8"), "## エントリ")
 abort "FAIL: policy-index-sections\n  「## エントリ」の節が無い" if body.nil?
 
-# ### 見出しごとにエントリへ分ける。
-entries = MU.headings(body).select { |level, _| level == 3 }.map { |_, name| [name, MU.section(body, "### #{name}").to_s] }
+# ### 見出しごとにエントリへ分ける (出てくる位置の順。同じ名前のエントリも、それぞれの本文で検査する)。
+entries = MU.sections(body, 3)
 
 # "- **key**: …" の項目 (字下げした続きの行を含む)。
 def bullet(entry, key)
