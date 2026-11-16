@@ -256,6 +256,23 @@ unwatched.call("instruction でない marker") do |dd|
 end
 unwatched.call("閉じていない marker") { |dd| File.write(dd[:instruction], base.sub(" -->", "")) }
 
+# 節がとても多い file でも、書いた記録を読み直して、次の変更を促す (#703 の review の F1)。36,000 個の節の記録は
+# 2 MiB を超える。記録を読む上限がそれより小さいと、記録が無いものとして扱われ、変更を見逃す。
+d = deploy(tmp, src, nil)
+many_sections = MARKER + "\n" + (0...36_000).map { |i| "# #{i.to_s(36)}\n" }.join
+File.write(d[:instruction], many_sections)
+call(d, start)
+state_file = File.join(d[:state], "s1.json")
+check("前提: 節の多い file は 256 KiB 以下で、記録は 2 MiB を超える",
+      many_sections.bytesize <= 256 * 1024 && File.exist?(state_file) && File.size(state_file) > 2 * 1024 * 1024)
+File.write(d[:instruction], many_sections + "\n- 最後の節の中身を足した\n")
+out, err, st = call(d, prompt)
+check("節の多い file でも、書いた記録を読み直して変更を促す",
+      st.exitstatus == 0 && err.empty? && !out.empty? &&
+      JSON.parse(out)["hookSpecificOutput"]["additionalContext"].lines[2].chomp == "変わった節: 「#{35_999.to_s(36)}」")
+out, _err, _st = call(d, prompt)
+check("節の多い file でも、同じ更新では 2 回促さない", out.empty?)
+
 # 256 KiB ちょうどは読む (上限の境界)
 d = deploy(tmp, src, nil)
 File.binwrite(d[:instruction], base.b + ("a" * (256 * 1024 - base.bytesize)))

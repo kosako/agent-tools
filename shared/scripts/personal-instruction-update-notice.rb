@@ -33,7 +33,11 @@ module InstructionUpdateNotice
   EVENTS = %w[SessionStart UserPromptSubmit].freeze
   MAX_INPUT_BYTES = 1024 * 1024
   MAX_INSTRUCTION_BYTES = 256 * 1024
-  MAX_STATE_BYTES = 1024 * 1024
+  # 記録を読む上限は、見る file の上限から作れる最大の記録より大きくする (読めない記録は「記録が無い」と同じに扱うので、
+  # 書いた記録を読めないと、以後の更新を見逃す)。節 1 つにつき、source は 4 bytes 以上 (# と空白と名前と改行) で、
+  # 記録は hash と区切りの 72 bytes と名前。名前は JSON の escape で最大 6 倍になるので、全体は source の 24 倍と
+  # 封筒の分に収まる。32 倍で余裕を持たせる。
+  MAX_STATE_BYTES = MAX_INSTRUCTION_BYTES * 32
   SESSION_ID_RE = /\A[A-Za-z0-9_-]{1,128}\z/.freeze
   STATE_FILE_RE = /\A[A-Za-z0-9_-]{1,128}\.json\z/.freeze
   STATE_VERSION = 1
