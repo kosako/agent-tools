@@ -6,7 +6,7 @@
 #
 # 受ける整形 (これが契約。ここに無い書き方は受けない。たとえば `~~~` の fence、`*` や番号の list、4 つ以上の backtick の
 # fence、全角の空白での字下げ):
-# - 見出し: 行の頭の `#` の並びと、その後ろの空白か tab が 1 つ以上。照合は空白を除いて比べる (`###  2.` も `### 2.` と同じ)。
+# - 見出し: 行の頭の `#` の並びと、その後ろの空白か tab が 1 つ以上 (節は section、次の見出しまでの導入は lead)。照合は空白を除いて比べる (`###  2.` も `### 2.` と同じ)。
 #   level は `#` の数。fence の中の行は見出しとみなさない。
 # - fence: 行の頭 (空白か tab の字下げは可) の ``` で始まり、次の ``` で始まる行で終わる。info string (`sh` など) は、
 #   始まりの行の ``` の後ろ (前後の空白は除く)。
@@ -15,7 +15,7 @@
 # - 一覧: 続いた項目のまとまり。空行か、字下げの無い行 (項目でない行) で終わる。
 # - 字下げした項目 (bullets): 行の頭 (字下げは可) の `-` と空白か tab で始まる行と、その `-` より深く字下げした続きの行。
 #   子の項目は親と分け、子の後ろにある親の続きの行は親に付ける。空行と fence で閉じる (番号つきの手順の下の項目もここで取る)。
-# - 段落: 空行で区切る (fence の外。fence も段落を区切る)。
+# - 段落: 空行で区切る (fence の外。fence も段落を区切る)。段落を項目の始まりで切った、項目でない部分 (plains) も取れる。
 # - 文: 「。」で区切る (fence の外。空白を除いた後で区切る)。
 # - 文のつながり: key を含む文と、その後ろに続く文 (sentence_runs)。
 # - code span: fence の外の `…`。行をまたいで折り返してよい。中の空白と折り返しを除いて比べる。
@@ -50,6 +50,23 @@ module MarkdownUnits
       body << line unless body.nil?
     end
     body&.join
+  end
+
+  # 見出しから、次の見出し (level を問わない) の前までの本文 (見出しの直後の導入の部分)。無ければ nil。fence の中の見出しの形の
+  # 行では切らない。
+  def lead(text, heading)
+    body = section(text, heading)
+    return nil if body.nil?
+
+    out = +""
+    fence = false
+    body.each_line do |line|
+      fence = !fence if line =~ FENCE
+      break if !fence && line =~ HEADING
+
+      out << line
+    end
+    out
   end
 
   # fence の外の行だけをつなげた text (fence の所には空行を置き、段落と項目を区切る)。
@@ -135,6 +152,13 @@ module MarkdownUnits
       end
     end
     out
+  end
+
+  # 段落を項目の始まりで切った範囲のうち、項目でない部分の列 (plains)。段落の中の文を `- ` で別の項目に切り出しても、同じ段落の
+  # まま通らないように、項目でない文の続きを見るために使う。
+  def plains(text)
+    paragraphs(text).flat_map { |para| para.lines.slice_before { |l| l.match?(BULLET) }.map(&:join) }
+                    .reject { |chunk| chunk.match?(BULLET) }
   end
 
   # 段落 (空行で区切る) の列。
