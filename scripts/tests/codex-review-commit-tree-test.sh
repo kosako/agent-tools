@@ -55,10 +55,11 @@ first_list = ->(body) { Array(MU.lists(body).first).map { |item| MU.bullets(item
 sentences = ->(body) { MU.paragraphs(body).flat_map { |para| MU.sentences(para).map { |s| "#{s}。" } } }
 
 # [file, 節の見出し, 範囲の名前, 単位の取り方, 語 (含むこと), 句 (直後が区切りか末尾)]。語と句は、どれか 1 つの単位に
-# すべてあること。
+# すべてあること。§3 は、最初の commit の項目だけを見る (前の版の範囲。後ろに同じ名前の項目を足しても、最初の項目の欠けを
+# 隠さない)。
 TARGETS = [
   ["#{skill}/SKILL.md", "## 3. 対象 mode を1つ選び、brief に固定する", "§3 の commit の項目",
-   ->(body) { top_items.(body).select { |item| MU.squash(item).start_with?(MU.squash("- **commit**")) } },
+   ->(body) { top_items.(body).select { |item| MU.squash(item).start_with?(MU.squash("- **commit**")) }.first(1) },
    TREE_RULE + ["merge commit は commit mode の対象外"], FORBID_POLITE],
   ["#{skill}/SKILL.md", "## 4. brief", "§4 の brief の一覧の項目", first_list, TREE_RULE, FORBID_PLAIN],
   ["#{skill}/SKILL.md", "## やってはいけないこと", "やってはいけないことの項目", top_items,

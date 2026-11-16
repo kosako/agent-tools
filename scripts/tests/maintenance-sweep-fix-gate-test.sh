@@ -43,8 +43,13 @@ def section(markdown, heading)
   MU.section(markdown, heading)
 end
 
-def sh_blocks(text)
+def run_blocks(text)
   MU.blocks(text, dedent: true).select { |info, _| info == "sh" }.map(&:last)
+end
+
+# block の中の command の句は、行継続をつなぎ、空白を除いて比べる (整形に依らない)。走らせるのは原文の block のまま。
+def flat(block)
+  MU.squash(MU.sh_join(block))
 end
 
 # 文書に句がある (空白を除いて比べる。折り返しの位置に依らない)。
@@ -59,32 +64,35 @@ verify = section(fix, "## 検証 (累積差分に対して)")
 if verify.nil?
   errors << "FIX.md に「## 検証 (累積差分に対して)」の節が無い"
 else
-  gated = sh_blocks(verify).select { |b| b.include?('"$gate" --stdin') }
+  gated = run_blocks(verify).select { |b| flat(b).include?(MU.squash('"$gate" --stdin')) }
   if gated.size != 1
     errors << "検証の節に gate (\"$gate\" --stdin) の sh の block が 1 つでない (#{gated.size} 個)"
   else
     block = gated.first
-    record_gate = record.lines.find { |l| l.start_with?("gate=") }
+    # RECORD.md の deploy 先の行は、sh の block の中の gate=… の行 (fence の字下げと、行の前後の空白に依らない)。
+    record_gate = run_blocks(record).flat_map(&:lines).map(&:strip).find { |l| l.start_with?("gate=") }
     if record_gate.nil?
       errors << "RECORD.md に gate の deploy 先の行 (gate=…) が無い"
-    elsif !block.lines.include?(record_gate)
+    elsif !block.lines.map(&:strip).include?(record_gate)
       errors << "検証の節の gate が RECORD.md の Issue の gate と同じ deploy 先でない"
     end
-    # gate に渡す入力は、block の "$gate" --stdin より前 (deploy 先の行を除く)。
-    input = block[0...block.index('"$gate" --stdin')].lines.reject { |l| l.start_with?("gate=") }.join
-    errors << "公開前の gate に pipe で入力を渡していない" unless input.rstrip.end_with?("|")
+    # gate に渡す入力は、block の "$gate" --stdin より前 (deploy 先の行を除く)。行継続をつなぎ、空白を除いた形で見る。
+    rest = flat(block.lines.reject { |l| l.lstrip.start_with?("gate=") }.join)
+    at = rest.index(MU.squash('"$gate" --stdin'))
+    input = at ? rest[0...at] : ""
+    errors << "公開前の gate に pipe で入力を渡していない" unless input.end_with?("|")
     {
       'git diff "$base" "$branch"' => "累積差分",
       'git log --format=%B "$base".."$branch"' => "base 以降の全 commit の message",
       '"$title"' => "PR の題名",
       '"$body_file"' => "PR の本文",
     }.each do |needle, what|
-      errors << "公開前の gate の入力が「#{what}」(#{needle}) を含まない" unless input.include?(needle)
+      errors << "公開前の gate の入力が「#{what}」(#{needle}) を含まない" unless input.include?(MU.squash(needle))
     end
-    errors << "gate の block が cwd の HEAD を基準にしている (main の checkout から走らせると累積差分が空になる。#419)" if block =~ /\bHEAD\b/
+    errors << "gate の block が cwd の HEAD を基準にしている (main の checkout から走らせると累積差分が空になる。#419)" if MU.sh_join(block) =~ /\bHEAD\b/
     # 範囲が直線の履歴であることを gate の前に確かめる (#522)。
     merge_check = 'git rev-list --merges "$base".."$branch"'
-    unless input.include?(merge_check) && input.index(merge_check) < input.index("git diff")
+    unless input.include?(MU.squash(merge_check)) && input.index(MU.squash(merge_check)) < input.index(MU.squash("git diff"))
       errors << "公開前の gate の前に、範囲の merge commit を確かめていない (#{merge_check})"
     end
     # PR の作成は cwd の今の branch に頼らない (main の checkout から続けても fix の branch の PR にする。#419 F4)。
@@ -97,7 +105,7 @@ else
     # fixdir と basedir は fixes.json に保存しないので、再開では run_id と Issue 番号から導出する (#419 F8)。
     errors << "FIX.md の再開が fixdir と basedir を run_id と Issue 番号から導出していない" unless mentions?(fix, "`fixdir` と `basedir` は保存せず、記録の `run_id` と Issue 番号から導出します")
     errors << "FIX.md の再開が保存していない fixdir を fixes.json から戻すと書いている" if mentions?(fix, "`fixdir` を `fixes.json` から戻して")
-    if block =~ /\bgit push\b|\bgh\s/
+    if MU.sh_join(block) =~ /\bgit\s+push\b|\bgh\s/
       errors << "gate の block に push / gh がある (test で走らせられない。push と PR は block の外に書く)"
       block = nil
     end

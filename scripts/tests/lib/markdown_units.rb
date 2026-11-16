@@ -11,7 +11,8 @@
 # - fence: 行の頭 (空白か tab の字下げは可) の ``` で始まり、次の ``` で始まる行で終わる。info string (`sh` など) は、
 #   始まりの行の ``` の後ろ (前後の空白は除く)。
 #   blocks の dedent: 中身の各行から、始まりの fence の字下げの分までの空白を外す (一覧の中の block を走らせる形に戻す)。
-# - sh の block (info string が `sh`) の行継続: 行末の `\` と改行は、空白 1 つにつなげてから見る。ほかの block はそのまま。
+# - sh の block (info string が `sh`) の行継続: 行末の `\` と改行は、空白 1 つにつなげてから見る (sh_blocks。原文の block を
+#   つなぐのは sh_join)。ほかの block はそのまま。
 # - 項目: 行の頭の `-` と空白か tab が 1 つ以上で始まる行と、字下げした続きの行 (fence の外)。
 # - 一覧: 続いた項目のまとまり。空行か、字下げの無い行 (項目でない行) で終わる。
 # - 字下げした項目 (bullets): 行の頭 (字下げは可) の `-` と空白か tab で始まる行と、その `-` より深く字下げした続きの行。
@@ -112,7 +113,12 @@ module MarkdownUnits
 
   # info string が `sh` の block の中身の列。行継続 (行末の `\` と改行) は、空白 1 つにつなげる。
   def sh_blocks(text)
-    blocks(text).select { |info, _| info == "sh" }.map { |_, body| body.gsub(/\\\n[ \t]*/, " ") }
+    blocks(text).select { |info, _| info == "sh" }.map { |_, body| sh_join(body) }
+  end
+
+  # sh の行継続 (行末の `\` と改行と、続く行の頭の空白) を、空白 1 つにつなぐ。走らせる block の原文を、照合のために読む形。
+  def sh_join(body)
+    body.gsub(/\\\n[ \t]*/, " ")
   end
 
   # 一覧 (続いた項目のまとまり) の列。一覧は項目の列。
