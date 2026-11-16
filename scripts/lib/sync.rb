@@ -24,6 +24,7 @@ require_relative "artifact_targets"
 require_relative "file_replace"
 require_relative "catalog"
 require_relative "instruction_marker"
+require_relative "instruction_sections"
 require_relative "local_instructions"
 require_relative "path_glob"
 require_relative "plugin_marker"
@@ -134,6 +135,17 @@ module Sync
           replace_skill_dir(p.gen, p.target)
         end
       end
+    end
+
+    # instruction を書き換える plan について、今の所有ファイルとこれから置く内容の節の違いを [[tool, 違い], ...] で
+    # 返す (#688)。違いは InstructionSections.diff の形。節に違いの無い plan (marker の行だけが違う) は含めない。
+    # 所有ファイルを書き換える前に呼ぶ (apply の後では、今の内容が新しい内容になっている)。
+    def instruction_section_changes(plans)
+      plans.select { |p| p.kind == "instruction" && p.action == "update" }.map do |p|
+        current = InstructionSections.digests(utf8_text(File.binread(p.target)))
+        incoming = InstructionSections.digests(utf8_text(instruction_content(p.gen)))
+        [p.tool, InstructionSections.diff(current, incoming)]
+      end.reject { |_tool, changes| changes.empty? }
     end
 
     private
@@ -573,6 +585,12 @@ module Sync
       LocalInstructions.deployed_content(File.binread(gen), local_instructions)
     end
 
+    # 節に分けるために bytes を UTF-8 の text として読む (不正な byte は置き換える。所有ファイルは非 UTF-8 でも
+    # plan まで進む。#149)。
+    def utf8_text(bytes)
+      bytes.dup.force_encoding(Encoding::UTF_8).scrub
+    end
+
     # script は単一実行ファイル + sidecar marker。skill (plan_skill) と同じ marker ベースの
     # 所有 / stale / symlink 防御を、単一ファイルと 2 階層の配置先
     # (<home>/agent-tools/scripts/<name>) にあわせて適用する。instruction と違い人間ファイルを
@@ -720,13 +738,28 @@ module Sync
       return 0
     end
 
+    section_notes = runner.instruction_section_changes(plans).map { |tool, changes| section_note(tool, changes) }
     PlanReport.finish(plans, runner, apply: apply, quiet: quiet,
-                      change_actions: %w[create update delete])
+                      change_actions: %w[create update delete],
+                      notes: section_notes, applied_notes: section_notes.empty? ? [] : [RUNNING_SESSIONS_NOTE])
   rescue ApplyError => e
     # 配置先を安全に入れ替えられないときは、それ以上書かずに理由を出して止める (#431 の 3)。
     # 表示は他の行と同じく tilde 表記 (PlanReport と同じ正規化)。
     warn "fail: #{e.message.sub(Dir.home, '~')}"
     1
+  end
+
+  # instruction を書き換えたときの配備の報告 (#688)。配備の前から続いている session は、読み直すまで前の版で動く。
+  RUNNING_SESSIONS_NOTE = "note: sessions that were already running keep the previous instruction until they reload it " \
+                          "(Claude Code: at the next compaction or after a restart)"
+  SECTION_NOTE_SUFFIXES = { changed: "", added: " (added)", removed: " (removed)" }.freeze
+
+  # 変わった節の 1 行 (target ごと)。並べるのは InstructionSections::MAX_LISTED 個までで、残りは数だけを出す。
+  def self.section_note(tool, changes)
+    shown, rest = InstructionSections.listed(changes)
+    names = shown.map { |section, kind| "\"#{InstructionSections.display_name(section)}\"#{SECTION_NOTE_SUFFIXES.fetch(kind)}" }
+    names << "and #{rest} more" unless rest.zero?
+    "note: [#{tool}] instruction sections changed: #{names.join(", ")}"
   end
 
   USAGE = "usage: sync.sh [--root DIR] [--apply] [--prune] [--codex-home DIR] [--claude-home DIR] " \

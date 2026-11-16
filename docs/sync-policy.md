@@ -242,6 +242,31 @@ up-to-date / update を決めるので、断片だけが変わったときも up
 UTF-8 でない、8 KiB を超える) なら、instruction の plan を conflict にして所有ファイルを変えない。詳細は
 [Instruction Artifact Kind](instruction-artifact-kind.md) の「local の断片」。
 
+### 配備の報告 (変わった節の note)
+
+所有ファイルを書き換える plan (`update`) があるとき、sync は今の所有ファイルとこれから置く内容を節ごとに比べ、違う節を
+target ごとに 1 行の note で出す (#688)。配備の前から続いている session は、読み直すまで前の版で動くので、どの節が
+変わったかを配備の報告で人が読めるようにするため。
+
+```text
+update: [codex] ~/.codex/AGENTS.md
+update: [claude-code] ~/.claude/agent-tools/CLAUDE.md
+note: [codex] instruction sections changed: "待ちと判断の伝え方", "新しい節" (added), "消えた節" (removed)
+note: [claude-code] instruction sections changed: "待ちと判断の伝え方", "新しい節" (added), "消えた節" (removed)
+note: sessions that were already running keep the previous instruction until they reload it (Claude Code: at the next compaction or after a restart)
+ok: applied 2 change(s)
+```
+
+- 節の行は plan の行の後に出す。dry-run と `--apply` の両方で出す。並べる節は 10 個までで、超える分は `and <N> more` と
+  数だけを出す。節の名前は 80 字で切る。
+- 最後の行 (続いている session の注意) は、`--apply` の書き込みが終わった後に、節の行を 1 つ以上出したときだけ、1 回出す。
+- conflict で止まるとき、`--quiet` のとき、節に違いが無いとき (marker の行や、節の前後の空行だけが違う) は出さない。
+- local の断片の節は `"local instructions"` の 1 つの節として出し、中の見出しと本文は出さない。
+- 節の分け方は、配備する hook (`personal-instruction-update-notice`) と同じ。規則は
+  [instruction-update-notice](instruction-update-notice.md) の「節の分け方」。exit code と、ほかの行は変えない。
+
+Claude Code の session が自分で更新に気づく仕組みは、hook (`personal-instruction-update-notice`) が持つ。
+
 ## 既知の限界 (TOCTOU)
 
 symlink / unmanaged の検査は plan 時に行い、apply は配置先を再検証しません。

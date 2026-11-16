@@ -69,7 +69,10 @@ file: <見る file の絶対 path>
 
 ## 節の分け方
 
-実装は、この script の `InstructionUpdateNotice::Sections` です。
+実装は、この script の `InstructionUpdateNotice::Sections` です。配備の報告 (`scripts/sync.sh` の note。
+[sync-policy](sync-policy.md) の「配備の報告」) も同じ分け方で、`scripts/lib/instruction_sections.rb` に同じ本文の module を
+持ちます。配備される script は単独の file で `scripts/lib` を require できず、`scripts/` は `shared/` の特定の asset を
+require できないためです。2 つの本文が一字一句同じであることは、`scripts/tests/instruction-sections-test.sh` が確かめます。
 
 - file の先頭の行が agent-tools の marker (`<!-- agent-tools:managed` で始まる行) なら、その行を除きます。build_id だけが違う
   版は、同じ内容として扱います。

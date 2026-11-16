@@ -271,7 +271,11 @@ usage: sync.sh [--root DIR] [--apply] [--prune] [--codex-home DIR] [--claude-hom
   走査しない ([sync-policy](../docs/sync-policy.md) の「v1 OpenCode targets」)。
 - `--codex-home` / `--claude-home` / `--opencode-home` は inspection / test 用の override
   (opencode の既定は `~/.config/opencode`。`XDG_CONFIG_HOME` は見ない)。
-- self-test: `tests/sync-test.sh`、local の断片は `tests/local-instructions-test.sh` (fake home のみを使い、実際の tool homes には触れない)
+- instruction を書き換える plan があると、変わった節を target ごとに 1 行の `note:` で出し、`--apply` の書き込みの後に、
+  配備の前から続いている session が前の版で動き続けることを 1 行で出す (#688。`--quiet`・conflict・節に違いが無いときは
+  出さない。[sync-policy](../docs/sync-policy.md) の「配備の報告」)。
+- self-test: `tests/sync-test.sh`、local の断片は `tests/local-instructions-test.sh`、配備の報告は
+  `tests/sync-instruction-note-test.sh` と `tests/instruction-sections-test.sh` (fake home のみを使い、実際の tool homes には触れない)
 
 - `status.sh`: report-only status。
   [Status / Manifest Contract](../docs/status-manifest-contract.md) の JSON を出力する。

@@ -46,10 +46,13 @@ module InstructionUpdateNotice
   MARKER_KIND = "artifact_kind=instruction"
 
   # 配備済みの instruction を節に分けて比べる。この file を require すれば、hook を起動せずに使える。
+  # module の本文は、sync の配備の報告が使う scripts/lib/instruction_sections.rb の InstructionSections と一字一句同じに
+  # する (この script は単独で配備されるので scripts/lib を require できない)。直すときは両方を直す。一致は
+  # scripts/tests/instruction-sections-test.sh が確かめる。
   module Sections
-    # local の断片の節の見出し (scripts/lib/local_instructions.rb の LocalInstructions::HEADING と同じ行。
-    # この script は単独で配備されるので写しを持ち、一致は test が確かめる)。この行から末尾までを 1 つの節として
-    # 扱い、中の見出しを区切りにも出力にも使わない (断片は private な内容で、見出しも出さない。#689)。
+    # local の断片の節の見出し (scripts/lib/local_instructions.rb の LocalInstructions::HEADING と同じ行で、一致は
+    # test が確かめる)。この行から末尾までを 1 つの節として扱い、中の見出しを区切りにも出力にも使わない
+    # (断片は private な内容で、見出しも出さない。#689)。
     LOCAL_HEADING = "# この machine の local の指示 (repo の外の local な file から、agent-tools の sync が足した節)"
     LOCAL_NAME = "local instructions"
     PREAMBLE_NAME = "(preamble)"
