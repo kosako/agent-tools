@@ -134,6 +134,9 @@ git pull
   新しい build_id に焼き直してから `register` します。焼き直すまでは register が exit 3 を返し、sync が
   `human_review_required` で skip して旧版が配置されたまま残ります(下の「トラブルシュート」と
   [register-catalog.md](register-catalog.md) の「承認は内容と配布形態に紐づく」)。
+- 運用 instruction を変えた配備は、配備の前から続いている Claude Code の session には、次の compaction か起動し直しまで
+  届きません (#688)。配備済みの hook `personal-instruction-update-notice` を Claude Code に登録しておくと、続いている session が
+  次の入力で、変わった節と読み直しの促しを受け取ります ([instruction-update-notice.md](instruction-update-notice.md))。
 - upstream で asset が消えた・改名されたときは、`setup.sh` だけでは tool home から片付きません。`setup.sh` の build は
   `--prune` で回るので、generated/ の残骸 (git ignore の生成物) は消えます。一方、tool home に配置済みのコピーは
   消さず、使える状態のまま残ります (tool home から消すのは明示の操作だけ)。残ったものは `status` と `doctor` が
