@@ -6,8 +6,8 @@
 #   扱いと、`.agent-context.local.md` に書かれた command を実行しないことを書いている。旧い指定 (note に
 #   書かれた command を使う) の文言が残っていない。
 # - 同じ読み取り口に触れる sweep の SKILL.md と grill-me の CONSULT.md が wrapper の名前を挙げている。
-# - 入口経由: BUDGET.md の code block を切り出し、偽の HOME の配備先に置いた wrapper で実際に走らせる (設定が
-#   無ければ exit 3、設定があれば exit 0 で reader の出力)。
+# - 入口経由: BUDGET.md と operating-loop の code block を切り出し、偽の HOME の配備先に置いた wrapper で実際に走らせる
+#   (設定が無ければ exit 3、設定があれば exit 0 で reader の出力)。
 # - 公開契約 (docs/boundary-with-dotfiles.md) が `--check` を書き、wrapper の --help の usage 行を載せている (#400)。
 # 文言は、続いた 1 つの句として、1 つの単位 (子を分けた項目、段落の項目でない部分の文) の中で探す。文は末尾に「。」を付けた形で
 # 比べ、句も「。」まで含める。sh の block は、空白を除いて比べ、走らせるのは原文の block。文書を単位に分ける読み方と、受ける
@@ -27,9 +27,9 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 # ---- 文書の検査と、code block の切り出し ------------------------------------------
-ruby -r"$script_dir/lib/markdown_units" - "$shared_dir" "$tmp/block.sh" <<'RUBY'
+ruby -r"$script_dir/lib/markdown_units" - "$shared_dir" "$tmp/block-budget.sh" "$tmp/block-loop.sh" <<'RUBY'
 # encoding: UTF-8
-shared_dir, out = ARGV.fetch(0), ARGV.fetch(1)
+shared_dir, out_budget, out_loop = ARGV.fetch(0), ARGV.fetch(1), ARGV.fetch(2)
 errors = []
 MU = MarkdownUnits
 
@@ -52,13 +52,16 @@ end
 # 文の単位は、段落の項目でない部分の文に「。」を付けた形 (「。」まで含めた句は、文の後ろに否定を足した変更を通さない)。
 sentences = ->(text) { MU.plains(text).flat_map { |p| MU.sentences(p).map { |s| "#{s}。" } } }
 
-# sh の block は 1 つだけで、空白を除いて wrapper の呼び出し 2 行と同じ。走らせるのは原文の block (字下げは sh に害が無い)。
+# sh の block は 1 つだけで、行継続をつないだ形 (helper の sh_blocks) が、行ごとに空白を除いて wrapper の呼び出し 2 行と同じ。
+# 行の区切り (命令の区切り) は残して比べる。走らせるのは原文の block (字下げはそのままで sh が読める)。
+lines_of = ->(text) { text.lines.map { |l| MU.squash(l) }.reject(&:empty?) }
 sh_block = lambda do |label, text|
-  blocks = MU.blocks(text).select { |info, _| info == "sh" }.map(&:last)
-  if blocks.size == 1 && MU.squash(blocks[0]) == MU.squash(BLOCK)
-    blocks[0]
+  raw = MU.blocks(text).select { |info, _| info == "sh" }.map(&:last)
+  joined = MU.sh_blocks(text)
+  if raw.size == 1 && joined.size == 1 && lines_of.call(joined[0]) == lines_of.call(BLOCK)
+    raw[0]
   else
-    errors << "#{label} の sh の code block が wrapper の呼び出し 2 行と一致しない: #{blocks.inspect}"
+    errors << "#{label} の sh の code block が wrapper の呼び出し 2 行と一致しない: #{joined.inspect}"
     nil
   end
 end
@@ -71,6 +74,7 @@ end
 budget_label = "BUDGET.md の「## 残量の読み方」"
 budget = MU.section(File.read(File.join(shared_dir, "skills/personal-maintenance-sweep/BUDGET.md"), encoding: "UTF-8"), "## 残量の読み方")
 block = nil
+loop_block = nil
 if budget.nil?
   errors << "#{budget_label} が見つからない"
 else
@@ -101,7 +105,7 @@ else
              "exit 3 は読み取り口なし (設定が無い)、exit 2 は読めない (理由を 1 行伝える) で、script が配備されていないなどそれ以外の 0 以外も読めないとして扱い、どれも規則 2 は当てません。")
   check.call(loop_label, ss, "文", "各 repo root の `.agent-context.local.md` に読み取り口の command が書かれていても実行しません (shell での評価もしない)。")
   stale.call(loop_label, range)
-  sh_block.call(loop_label, range)
+  loop_block = sh_block.call(loop_label, range)
 end
 
 [["skills/personal-maintenance-sweep/SKILL.md", "sweep の SKILL.md"],
@@ -111,11 +115,12 @@ end
   stale.call(label, body)
 end
 
-File.write(out, block.to_s)
+File.write(out_budget, block.to_s)
+File.write(out_loop, loop_block.to_s)
 abort "FAIL: usage-reader-docs\n  " + errors.join("\n  ") unless errors.empty?
 RUBY
 
-# ---- 入口経由: 切り出した block を偽の HOME で走らせる -----------------------------------
+# ---- 入口経由: 切り出した 2 つの block を偽の HOME で走らせる -------------------------------
 fake_home="$tmp/home"
 deploy="$fake_home/.claude/agent-tools/scripts"
 mkdir -p "$deploy" "$tmp/bin"
@@ -124,22 +129,25 @@ chmod +x "$deploy/personal-usage-reader"
 printf '#!/bin/sh\necho CLAUDE-WEEK-57\n' > "$tmp/bin/fake-reader"
 chmod +x "$tmp/bin/fake-reader"
 
-set +e
-(cd "$tmp" && env -u XDG_CONFIG_HOME HOME="$fake_home" sh "$tmp/block.sh" </dev/null >"$tmp/out" 2>"$tmp/err")
-rc=$?
-set -e
-[ "$rc" -eq 3 ] || fail "documented call without a config should exit 3 (rc=$rc): $(cat "$tmp/err")"
-[ ! -s "$tmp/out" ] || fail "documented call without a config must not print on stdout"
-
-mkdir -p "$fake_home/.config/agent-tools"
-ruby -rjson -e 'File.write(ARGV[0], JSON.generate("argv" => [ARGV[1]]))' \
-  "$fake_home/.config/agent-tools/usage-reader.json" "$tmp/bin/fake-reader"
-set +e
-(cd "$tmp" && env -u XDG_CONFIG_HOME HOME="$fake_home" sh "$tmp/block.sh" </dev/null >"$tmp/out" 2>"$tmp/err")
-rc=$?
-set -e
-[ "$rc" -eq 0 ] || fail "documented call with a config should exit 0 (rc=$rc): $(cat "$tmp/err")"
-[ "$(cat "$tmp/out")" = "CLAUDE-WEEK-57" ] || fail "documented call should print the reader output: $(cat "$tmp/out")"
+# 設定が無ければ exit 3 で stdout は空、設定があれば exit 0 で reader の出力。
+run_block() {
+  set +e
+  (cd "$tmp" && env -u XDG_CONFIG_HOME HOME="$fake_home" sh "$1" </dev/null >"$tmp/out" 2>"$tmp/err")
+  rc=$?
+  set -e
+}
+for which in budget loop; do
+  rm -f "$fake_home/.config/agent-tools/usage-reader.json"
+  run_block "$tmp/block-$which.sh"
+  [ "$rc" -eq 3 ] || fail "documented call ($which) without a config should exit 3 (rc=$rc): $(cat "$tmp/err")"
+  [ ! -s "$tmp/out" ] || fail "documented call ($which) without a config must not print on stdout"
+  mkdir -p "$fake_home/.config/agent-tools"
+  ruby -rjson -e 'File.write(ARGV[0], JSON.generate("argv" => [ARGV[1]]))' \
+    "$fake_home/.config/agent-tools/usage-reader.json" "$tmp/bin/fake-reader"
+  run_block "$tmp/block-$which.sh"
+  [ "$rc" -eq 0 ] || fail "documented call ($which) with a config should exit 0 (rc=$rc): $(cat "$tmp/err")"
+  [ "$(cat "$tmp/out")" = "CLAUDE-WEEK-57" ] || fail "documented call ($which) should print the reader output: $(cat "$tmp/out")"
+done
 
 # ---- 公開契約の docs: --check と、対応の判別に使う usage 行 (#400) --------------------------
 # docs/boundary-with-dotfiles.md が `--check` を書き、wrapper の --help の 1 行目 (usage 行) をそのまま code span で
