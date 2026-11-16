@@ -13,6 +13,9 @@ sync="$script_dir/../sync.sh"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# 手元の local の断片 (<XDG_CONFIG_HOME>/agent-tools/instructions.local.md。#689) を sync と doctor に読ませない。
+XDG_CONFIG_HOME="$tmp/xdg-config"
+export XDG_CONFIG_HOME
 
 
 run_sync() {
@@ -568,14 +571,19 @@ status=0
 grep -q "conflict: \[codex\].*unmanaged" "$tmp/out27a" \
   || fail "non-UTF-8 owned file should be an unmanaged conflict: $(cat "$tmp/out27a")"
 
-# 27b: marker が正常なら、末尾に非 UTF-8 バイトがあっても managed のまま (scrub は判定のみ)
+# 27b: marker が正常なら、末尾に非 UTF-8 バイトがあっても managed のまま (scrub は判定のみ)。置く内容と byte で
+# 比べるので (#689)、余計な末尾は update で generated に戻る (unmanaged の conflict にはならない)。
 mkdir -p "$tmp/codex27b" "$tmp/claude27b"
 cp "$tmp/repo/generated/codex/instructions/AGENTS.md" "$tmp/codex27b/AGENTS.md"
 printf '\377' >> "$tmp/codex27b/AGENTS.md"
 "$sync" --root "$tmp/repo" --codex-home "$tmp/codex27b" --claude-home "$tmp/claude27b" --opencode-home "$tmp/opencode27b" > "$tmp/out27b" 2>&1 \
   || fail "sync with managed non-UTF-8 tail should succeed: $(cat "$tmp/out27b")"
-grep -q "skip: \[codex\].*up-to-date" "$tmp/out27b" \
-  || fail "managed owned file with non-UTF-8 tail should stay up-to-date: $(cat "$tmp/out27b")"
+grep -q "update: \[codex\].*AGENTS.md" "$tmp/out27b" \
+  || fail "managed owned file with non-UTF-8 tail should be an update: $(cat "$tmp/out27b")"
+"$sync" --root "$tmp/repo" --codex-home "$tmp/codex27b" --claude-home "$tmp/claude27b" --opencode-home "$tmp/opencode27b" \
+  --apply > "$tmp/out27b2" 2>&1 || fail "apply over managed non-UTF-8 tail should succeed: $(cat "$tmp/out27b2")"
+cmp -s "$tmp/repo/generated/codex/instructions/AGENTS.md" "$tmp/codex27b/AGENTS.md" \
+  || fail "apply should put the generated instruction back over the non-UTF-8 tail"
 
 # --- case 28: 所有先 AGENTS.md 自体が symlink なら conflict (実体へ書き抜けない) (#150) ---
 # (case 11 は親 dir の symlink。所有ファイル自体が symlink のケースはここで押さえる)

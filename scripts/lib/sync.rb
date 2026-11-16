@@ -24,6 +24,7 @@ require_relative "artifact_targets"
 require_relative "file_replace"
 require_relative "catalog"
 require_relative "instruction_marker"
+require_relative "local_instructions"
 require_relative "path_glob"
 require_relative "plugin_marker"
 require_relative "assets"
@@ -111,11 +112,12 @@ module Sync
 
         case p.kind
         when "instruction"
-          # instruction は単一ファイル。所有先は connect が確立済み (sync は update)。先頭行の marker だけで
-          # up-to-date を決めるので、一時 file に書いて rename で入れ替える (途中で止まっても、新しい build_id の
-          # marker を持つ切れた file を置かない, #482)。mode は所有先のものを引き継ぐ (直接 cp していた頃と同じ)。
+          # instruction は単一ファイル。所有先は connect が確立済み (sync は update)。置く内容は generated に local の
+          # 断片の節を足したもの (plan と同じ読み取りの結果を使う。#689)。一時 file に書いて rename で入れ替える
+          # (途中で止まっても、新しい build_id の marker を持つ切れた file を置かない, #482)。mode は所有先のものを
+          # 引き継ぐ (直接 cp していた頃と同じ)。
           FileUtils.mkdir_p(File.dirname(p.target))
-          replace_file(p.gen, p.target, existing_mode(p.target))
+          write_file(p.target, instruction_content(p.gen), existing_mode(p.target))
         when "script"
           # script は単一実行ファイル + sidecar marker。本体 (実行可能) → marker の順に、それぞれ一時 file に
           # 書いて rename で入れ替える。create の途中で止まると marker の無い本体が残り、次の sync は unmanaged の
@@ -538,21 +540,37 @@ module Sync
       # InstructionMarker.ownership, #424)。別 asset の残存ファイルを managed と誤認しない。改名の前の
       # asset の marker なら、それと分かる理由と復旧の手順を出す。
       content = File.file?(target) ? File.read(target).scrub("�") : nil
-      case content && InstructionMarker.ownership(content, target: tool, name: name)
-      when :owned
-        target_marker = InstructionMarker.parse(content)
-      when :other_asset
-        return Plan.new("conflict", tool, name, target, InstructionMarker.other_asset_reason(content), "instruction",
-                        gen)
-      else
-        return Plan.new("conflict", tool, name, target, "existing target is unmanaged", "instruction", gen)
+      ownership = content && InstructionMarker.ownership(content, target: tool, name: name)
+      unless ownership == :owned
+        reason = ownership == :other_asset ? InstructionMarker.other_asset_reason(content) : "existing target is unmanaged"
+        return Plan.new("conflict", tool, name, target, reason, "instruction", gen)
       end
 
-      if target_marker["build_id"] == expected_build_id
+      # local の断片が不正なら所有ファイルを変えない。断片を外した内容を、知らせずに置かないため (#689)。
+      fragment = local_instructions
+      if fragment.state == :invalid
+        return Plan.new("conflict", tool, name, target, "local instructions file is invalid: #{fragment.reason}",
+                        "instruction", gen)
+      end
+
+      # 置く内容 (generated + 断片の節) と所有ファイルを byte で比べる。build_id だけで比べると、断片だけが
+      # 変わったときに拾えない (#689)。generated の marker は上で catalog と一致を確かめたので、内容が同じなら
+      # 所有ファイルの build_id も一致している。
+      if File.binread(target) == instruction_content(gen)
         Plan.new("skip", tool, name, target, "up-to-date", "instruction", gen, :up_to_date)
       else
         Plan.new("update", tool, name, target, nil, "instruction", gen)
       end
+    end
+
+    # local の断片 (#689) は 1 回の run で 1 回だけ読む。claude-code と codex の plan と apply が同じ結果を使う。
+    def local_instructions
+      @local_instructions ||= LocalInstructions.read
+    end
+
+    # instruction の所有ファイルに置く内容。
+    def instruction_content(gen)
+      LocalInstructions.deployed_content(File.binread(gen), local_instructions)
     end
 
     # script は単一実行ファイル + sidecar marker。skill (plan_skill) と同じ marker ベースの

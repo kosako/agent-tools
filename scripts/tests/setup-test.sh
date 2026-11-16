@@ -10,6 +10,9 @@ setup="$script_dir/../setup.sh"
 
 tmpbase=$(mktemp -d)
 trap 'rm -rf "$tmpbase"' EXIT
+# 手元の local の断片 (<XDG_CONFIG_HOME>/agent-tools/instructions.local.md。#689) を sync と doctor に読ませない。
+XDG_CONFIG_HOME="$tmpbase/xdg-config"
+export XDG_CONFIG_HOME
 
 
 # root / home に空白を含めて、引数 forwarding の quoting を検証する

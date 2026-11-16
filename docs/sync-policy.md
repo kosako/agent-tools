@@ -45,9 +45,10 @@ default は必ず conservative にします。
   script は本体 → sidecar marker の順に、それぞれ一時 file (同じ dir の `.agent-tools-staging-<file 名>`) に書いて
   rename する (一時 file の path に directory や消せない file があれば止める)。
   create の途中で止まると marker の無い本体が残り、次の sync は unmanaged の conflict で止まる (fail-closed)。
-  instruction と plugin も、script と同じく一時 file に書いて rename する。どちらも先頭行の marker の build_id だけで
+  instruction と plugin も、script と同じく一時 file に書いて rename する。plugin は先頭行の marker の build_id だけで
   up-to-date を決めるので、配置先へ直接書いて途中で止まると、新しい marker を持つ切れた file を次の sync が
-  up-to-date と見てしまうため (#482)。instruction は所有ファイルの mode を引き継ぎ、plugin は 0644 にする。
+  up-to-date と見てしまうため (#482)。instruction は置くべき内容と byte で比べる (下の「instruction の所有ファイル」。
+  #689) が、切れた file を置かない理由は同じ。instruction は所有ファイルの mode を引き継ぎ、plugin は 0644 にする。
   connect の書き込みも同じ形にする。所有ファイルの作成 (空ファイルの claim を含む) は一時 file に書いて rename し、
   claim する空ファイルの mode は引き継ぐ。人間の `CLAUDE.md` への import 1 行は、file を作り直さずに追記で末尾に
   足す (inode と mode を変えない。途中で止まっても既存の内容を切り詰めない)。
@@ -234,6 +235,12 @@ instruction artifact は connect が所有を確立し、sync が更新する。
 ファイル / unmanaged な所有先は conflict として停止する。所有の判定 (marker の target と name) は connect と
 sync で同じ helper を使い、instruction の asset を改名した後の旧名の marker は、両方で同じ理由の conflict に
 する (#424)。詳細と復旧の手順は [Instruction Artifact Kind](instruction-artifact-kind.md)。
+
+所有ファイルに置く内容は、generated の後ろに local の断片 (`${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/instructions.local.md`)
+の節を足したもの (#689)。断片が無ければ generated と同じ。sync は置くべき内容と所有ファイルを byte で比べて
+up-to-date / update を決めるので、断片だけが変わったときも update になる。断片が不正 (symlink、regular file でない、
+UTF-8 でない、8 KiB を超える) なら、instruction の plan を conflict にして所有ファイルを変えない。詳細は
+[Instruction Artifact Kind](instruction-artifact-kind.md) の「local の断片」。
 
 ## 既知の限界 (TOCTOU)
 

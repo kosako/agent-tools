@@ -53,6 +53,12 @@ skill は隔離 directory なので `sync` が直接置けますが、instructio
 (`CLAUDE.md` / `AGENTS.md`)に載るため、**先に `connect` で所有を確立**してから
 `sync` が更新します。
 
+公開の repo に置けない手元だけの指示は、`${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/instructions.local.md` に
+書きます (#689)。在れば `sync` が両方の tool の instruction の末尾に足し、無ければ配る instruction は変わりません。
+書くのは人だけで、直したら `./scripts/setup.sh --apply` で配り直します (効くのは新しい session から)。symlink にしない、
+UTF-8 で書く、8 KiB 以下にする、の 3 つを満たさないと、instruction の `sync` は conflict で止まります。詳細は
+[instruction-artifact-kind.md](instruction-artifact-kind.md) の「local の断片」。
+
 OpenCode には skill / instruction / script を配りません(OpenCode は `~/.claude/skills` と
 `~/.claude/CLAUDE.md` を直接読むため。[tool-compatibility.md](tool-compatibility.md))。plugin は
 Claude Code 側に配った `~/.claude/agent-tools/scripts/personal-*` を呼ぶので、OpenCode で効かせる
@@ -270,6 +276,7 @@ model_reasoning_effort = "high"
 | `conflict ... (existing target is unmanaged)` | 同名の手書き / 別管理ファイルがある | 中身を確認。agent-tools に委ねてよいなら退避してから再実行(無断上書きはしない) |
 | `conflict ... (owned file belongs to another instruction asset (<旧名>); ...)` | instruction の asset を改名した後で、所有ファイルに旧名の marker が残っている | 所有ファイル (`<claude home>/agent-tools/CLAUDE.md` / `<codex home>/AGENTS.md`) を空にして `./scripts/connect.sh --apply` をやり直す ([instruction-artifact-kind.md](instruction-artifact-kind.md)) |
 | `conflict ... (existing target is a symlink)` | 所有先 / 親が symlink | symlink を解消するか、別 home を指定 |
+| `conflict ... (local instructions file is invalid: ...)` | local の断片 (`instructions.local.md`) が symlink・regular file でない・UTF-8 でない・8 KiB を超える | 断片を regular file の UTF-8 で 8 KiB 以下に直す (所有ファイルは変わっていない。[instruction-artifact-kind.md](instruction-artifact-kind.md)) |
 | `conflict ... (existing target is not a regular file)` | plugin の配置先が directory など regular file でない | 実体を確認し、agent-tools に委ねてよいなら退避してから再実行(無断削除はしない) |
 | `no catalog; run scripts/register.sh first` | catalog 未生成 | `./scripts/register.sh` |
 
