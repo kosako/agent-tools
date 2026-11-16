@@ -7,7 +7,8 @@
 # - 300 行を超える file の sections には、名前を 1 つ以上挙げる (全体を読ませない)。行は改行の数ではなく
 #   行の数で数える (末尾に改行の無い最後の行も 1 行)。300 行 / 301 行 × 末尾の改行の有無の fixture で、
 #   この境界を毎回確かめる。
-# 文言と構造の検知で、agent が節から読むことの保証ではない。
+# 文言と構造の検知で、agent が節から読むことの保証ではない。節・見出し・項目・code span の取り方は lib/markdown_units.rb が持つ
+# (#685。fence の中の見出しの形の行は見出しに数えず、名前は空白を除いて比べる)。
 # 引数で skill の directory を差し替えられる (変異での確認用)。
 set -eu
 
@@ -19,7 +20,9 @@ skill_dir=${1:-"$script_dir/../../shared/skills/personal-production-rail"}
 
 # skill の directory の索引を検査する。問題があれば stderr に理由を出して 0 以外で終わる。
 check_index() {
-  ruby - "$1" <<'RUBY'
+  ruby -r"$script_dir/lib/markdown_units" - "$1" <<'RUBY'
+# encoding: UTF-8
+MU = MarkdownUnits
 refs = File.join(ARGV.fetch(0), "references")
 index_path = File.join(refs, "policy-index.md")
 abort "FAIL: policy-index-sections\n  policy-index.md が無い: #{index_path}" unless File.file?(index_path)
@@ -27,40 +30,33 @@ abort "FAIL: policy-index-sections\n  policy-index.md が無い: #{index_path}" 
 LONG_LINES = 300
 SECTIONS_KEY = "**sections(読む節)**".freeze
 
-lines = File.read(index_path, encoding: "UTF-8").split("\n")
-first = lines.index { |l| l =~ /\A## エントリ\s*\z/ }
-abort "FAIL: policy-index-sections\n  「## エントリ」の節が無い" if first.nil?
-rest = lines[(first + 1)..-1]
-stop = rest.index { |l| l =~ /\A## / }
-body = rest[0, stop || rest.length]
+body = MU.section(File.read(index_path, encoding: "UTF-8"), "## エントリ")
+abort "FAIL: policy-index-sections\n  「## エントリ」の節が無い" if body.nil?
 
 # ### 見出しごとにエントリへ分ける。
-entries = []
-body.each do |l|
-  if l =~ /\A### (\S+)\s*\z/
-    entries << [$1, []]
-  elsif !entries.empty?
-    entries.last[1] << l
-  end
+entries = MU.headings(body).select { |level, _| level == 3 }.map { |_, name| [name, MU.section(body, "### #{name}").to_s] }
+
+# "- **key**: …" の項目 (字下げした続きの行を含む)。
+def bullet(entry, key)
+  MU.items(entry).find { |item| MU.squash(item).start_with?(MU.squash("- #{key}")) }
 end
 
-# "- **key**: …" の bullet を、字下げした継続行ごと 1 つの文字列にする。
-def bullet(entry_lines, key)
-  start = entry_lines.index { |l| l.start_with?("- #{key}") }
-  return nil if start.nil?
-  text = [entry_lines[start]]
-  entry_lines[(start + 1)..-1].each do |l|
-    break unless l =~ /\A {2,}\S/
-    text << l.strip
+# 「」で囲んだ名前の列 (入れ子は無い前提で、開きと閉じの対を順に取る)。
+def bracketed(text)
+  out = []
+  at = 0
+  while (open = text.index("「", at)) && (close = text.index("」", open + 1))
+    out << text[(open + 1)...close]
+    at = close + 1
   end
-  text.join(" ")
+  out
 end
 
 errors = []
 errors << "エントリが 1 つも無い" if entries.empty?
-entries.each do |name, entry_lines|
-  file_line = bullet(entry_lines, "**file**")
-  rel = file_line && file_line[/`([^`]+)`/, 1]
+entries.each do |name, entry|
+  file_line = bullet(entry, "**file**")
+  rel = file_line && MU.code_spans(file_line).first
   if rel.nil?
     errors << "#{name}: **file** の行が無い"
     next
@@ -70,20 +66,21 @@ entries.each do |name, entry_lines|
     errors << "#{name}: file が無い: #{rel}"
     next
   end
-  sections = bullet(entry_lines, SECTIONS_KEY)
+  sections = bullet(entry, SECTIONS_KEY)
   if sections.nil?
     errors << "#{name}: #{SECTIONS_KEY} の行が無い"
     next
   end
   text = File.read(path, encoding: "UTF-8")
-  headings = text.split("\n").map { |l| l[/\A\#{2,6} (.+?)\s*\z/, 1] }.compact
-  names = sections.scan(/「([^」]+)」/).flatten
+  # 見出し (## から ######) の名前。fence の中の見出しの形の行は数えない。名前は空白を除いて比べる。
+  headings = MU.headings(text).select { |level, _| (2..6).cover?(level) }.map { |_, title| MU.squash(title) }
+  names = bracketed(sections.gsub("\n", " "))
   # 改行の数ではなく行の数 (末尾に改行の無い最後の行も 1 行と数える)。
   if names.empty? && text.each_line.count > LONG_LINES
     errors << "#{name}: #{rel} は #{LONG_LINES} 行を超えるのに sections に節の名前が無い"
   end
   names.uniq.each do |n|
-    hits = headings.count(n)
+    hits = headings.count(MU.squash(n))
     errors << "#{name}: 「#{n}」は #{rel} の見出しに無い" if hits.zero?
     errors << "#{name}: 「#{n}」は #{rel} の見出しに #{hits} 個ある (どの節か決まらない)" if hits > 1
   end

@@ -24,7 +24,8 @@
 #   初回の窓と進める / 縮めてかけ直す / report モードでは進めない / 30 日で切る / 窓の無い保存結果の再開 / Codex の検証役の
 #   uncertain) があり、prompt の前提にどの session かを書いている
 # 句は空白を除いて比べ (行の折り返しの位置に依らない)、句の直後が区切り (。、( か末尾) であることも求める (否定は
-# 句の後ろに付くので、反転した文を部分一致で通さない)。括弧の注釈を挟む句は、注釈を除いてから比べる。
+# 句の後ろに付くので、反転した文を部分一致で通さない)。括弧の注釈を挟む句は、注釈を除いてから比べる。項目は、最上位の項目を
+# 子の項目を外した本文で見る。節・項目・表の行・例の block の取り方と、区切りの判定・注釈の除き方は lib/markdown_units.rb が持つ (#685)。
 # 引数で sweep の skill の directory を差し替えられる (変異での確認用)。
 set -eu
 
@@ -37,65 +38,60 @@ for f in SKILL.md RECORD.md BUDGET.md REFUTE.md evals/evals.json; do
   [ -f "$sweep_dir/$f" ] || fail "missing $sweep_dir/$f"
 done
 
-ruby - "$sweep_dir" <<'RUBY'
+ruby -r"$script_dir/lib/markdown_units" - "$sweep_dir" <<'RUBY'
+# encoding: UTF-8
 require "json"
 
+MU = MarkdownUnits
 dir = ARGV.fetch(0)
-skill = File.read(File.join(dir, "SKILL.md"), encoding: "UTF-8").split("\n")
+skill = File.read(File.join(dir, "SKILL.md"), encoding: "UTF-8")
 record = File.read(File.join(dir, "RECORD.md"), encoding: "UTF-8")
 budget = File.read(File.join(dir, "BUDGET.md"), encoding: "UTF-8")
-refute = File.read(File.join(dir, "REFUTE.md"), encoding: "UTF-8").split("\n")
+refute = File.read(File.join(dir, "REFUTE.md"), encoding: "UTF-8")
 evals = JSON.parse(File.read(File.join(dir, "evals/evals.json"), encoding: "UTF-8"))
 
 def squash(text)
-  text.gsub(/\s+/, "")
+  MU.squash(text)
 end
 
 # 句が空白を除いた本文にあり、直後が区切りか末尾であること。
 def clause?(text, clause)
-  squash(text).match?(/#{Regexp.escape(squash(clause))}(?=[。、(]|\z)/)
+  MU.clause?(text, clause)
 end
 
 # 括弧の注釈 (入れ子を含む) を除いてから clause? で比べる。
 def bare_clause?(text, clause)
-  bare = text.dup
-  nil while bare.gsub!(/\([^()]*\)/, "")
-  clause?(bare, clause)
+  MU.clause?(MU.bare(text), clause)
 end
 
-# 見出しの行から、同じ深さか浅い次の見出しの前まで。
-def section(lines, heading)
-  start = lines.index { |l| l == heading }
-  return nil if start.nil?
-  level = heading[/\A#+/].length
-  rest = lines[(start + 1)..-1]
-  rest[0, rest.index { |l| l =~ /\A\#{1,#{level}} / } || rest.length]
+# 節の最上位の項目 (子の項目は、その項目の中身としてまとめる)。名前はこの単位の頭で探す (項目を丸ごと子の項目に下げた変更を
+# 通さない)。
+def bullets(text)
+  MU.items(text)
 end
 
-# 節の中の bullet (行頭の「- 」から次の「- 」の前まで。字下げした続きの行と入れ子の bullet は前の bullet に足す)。
-def bullets(lines)
-  out = []
-  lines.each do |l|
-    if l.start_with?("- ")
-      out << l.dup
-    elsif !out.empty? && l.start_with?("  ")
-      out[-1] << l
-    end
-  end
-  out
+# 項目の中の 1 つの項目 (親の本文か、子の 1 つ) に、句が区切りまで収まっている。子の項目は親の項目の中身 (枝分かれの説明) なので
+# 範囲に含めるが、親と子をまたぐ句は通さない。
+def in_item?(item, clause, bare: false)
+  MU.bullets(item).any? { |b| bare ? bare_clause?(b, clause) : clause?(b, clause) }
+end
+
+# 空白を除いて start で始まる項目。
+def starting(list, start)
+  list.find { |b| MU.squash(b).start_with?(MU.squash(start)) }
 end
 
 def find(list, label)
-  list.find { |b| b.start_with?("- **#{label}**") }
+  starting(list, "- **#{label}**")
 end
 
 errors = []
 
-step = section(skill, "### 3. 監査する (単位ごと)")
+step = MU.section(skill, "### 3. 監査する (単位ごと)")
 if step.nil?
   errors << "SKILL.md に「### 3. 監査する (単位ごと)」の節が無い"
 else
-  intro = step.take_while { |l| !l.start_with?("- ") }.join("\n")
+  intro = step.lines.take_while { |l| !l.start_with?("- ") }.join
   unless bare_clause?(intro, "どのプリセットでも依頼の範囲によらず、単位の先頭に、AI を使わない `ci` の単位を 1 つ足します")
     errors << "手順 3 の前置きに、どのプリセットでも単位の先頭に `ci` の単位を足す句が無い"
   end
@@ -131,17 +127,17 @@ else
         "出力を所見として使わなかったので、`--window-out` の file の `events` が `checked` でも、state には null を残す",
       ],
     }.each do |kind, clauses|
-      missing = clauses.reject { |c| kind == :bare ? bare_clause?(ci, c) : clause?(ci, c) }
+      missing = clauses.reject { |c| in_item?(ci, c, bare: kind == :bare) }
       errors << "「`ci` の単位」の bullet に句 #{missing.inspect} が無い" unless missing.empty?
     end
   end
-  reread = list.find { |b| b.start_with?("- 単位が終わるたびに") }
-  if reread.nil? || !clause?(reread, "残量を読み直す (`ci` と `upstream` の単位は AI の枠を使わないので読み直さない)")
+  reread = starting(list, "- 単位が終わるたびに")
+  if reread.nil? || !in_item?(reread, "残量を読み直す (`ci` と `upstream` の単位は AI の枠を使わないので読み直さない)")
     errors << "手順 3 の読み直しの bullet に、`ci` の単位の後は読み直さない句が無い"
   end
 end
 
-modes = section(skill, "## 発火とモード")
+modes = MU.section(skill, "## 発火とモード")
 if modes.nil?
   errors << "SKILL.md に「## 発火とモード」の節が無い"
 else
@@ -153,13 +149,13 @@ else
     b = find(list, label)
     if b.nil?
       errors << "発火とモードに「#{label}」の bullet が無い"
-    elsif !clause?(b, c)
+    elsif !in_item?(b, c)
       errors << "「#{label}」の bullet に `ci` の単位を飛ばさない句 #{c.inspect} が無い"
     end
   end
 end
 
-record_step = section(skill, "### 8. 記録する")
+record_step = MU.section(skill, "### 8. 記録する")
 window = record_step && find(bullets(record_step), "CI の窓")
 if window.nil?
   errors << "手順 8 に「CI の窓」の bullet が無い"
@@ -181,39 +177,39 @@ else
     "次の run がかけ直しで縮めたり 30 日で切ったりして見なかった期間の所見と、警告が直近 5 本の run から消えた" \
     "deprecation の所見は出ず、窓が進みうる",
   ].each do |c|
-    errors << "「CI の窓」の bullet に句 #{c.inspect} が無い" unless bare_clause?(window, c)
+    errors << "「CI の窓」の bullet に句 #{c.inspect} が無い" unless in_item?(window, c, bare: true)
   end
   # `checked` の events は、使った結果の --window-out の file で、窓が ci_check と同じものに限る (別の窓の file で進めない)。
   events_line = "`events` が `checked` (使った結果の `--window-out` の file で、その `since` と `until` が `ci_check` の" \
                 "窓と同じ) で"
-  errors << "「CI の窓」の bullet に events の条件 #{events_line.inspect} が無い" unless clause?(window, events_line)
+  errors << "「CI の窓」の bullet に events の条件 #{events_line.inspect} が無い" unless in_item?(window, events_line)
   errors << "「CI の窓」の bullet が、まだ scope.seen の行で窓を進めている" if window.include?("`scope.seen` に state の `ci_check` の窓の行")
 end
 
-report = section(skill, "### 9. 報告する")
-ci_report = report && bullets(report).find { |b| b.start_with?("- CI の検査 (手順 3 の `ci` の単位)") }
-if ci_report.nil? || !bare_clause?(ci_report, "確かめられない file、または確かめられない")
+report = MU.section(skill, "### 9. 報告する")
+ci_report = report && starting(bullets(report), "- CI の検査 (手順 3 の `ci` の単位)")
+if ci_report.nil? || !in_item?(ci_report, "確かめられない file、または確かめられない", bare: true)
   errors << "手順 9 に CI の検査の報告の bullet が無い"
 else
   ["点検した run の記録の窓と、窓の時刻を進めたか", "見なかった期間と、`ci.json` を読めないことも書く"].each do |c|
-    errors << "手順 9 の CI の検査の bullet に句 #{c.inspect} が無い" unless bare_clause?(ci_report, c)
+    errors << "手順 9 の CI の検査の bullet に句 #{c.inspect} が無い" unless in_item?(ci_report, c, bare: true)
   end
 end
 
-stop = section(skill, "## 停止と縮小")
-row = stop && stop.find { |l| l.start_with?("| CI を確かめられない") }
+stop = MU.section(skill, "## 停止と縮小")
+row = stop && starting(MU.rows(stop), "| CI を確かめられない")
 if row.nil? || !squash(row).include?(squash("sweep は止めない。`ci` の単位を所見なしで `done` にし、報告に理由を書く"))
   errors << "停止と縮小の表に、CI を確かめられないときに sweep を止めない行が無い"
 end
 # 表の行は、セルの区切りまで含めて比べる (句の後ろに否定を足す反転は「|」の前に入れられない)。
-row = stop && stop.find { |l| l.start_with?("| run の記録を確かめられない") }
+row = stop && starting(MU.rows(stop), "| run の記録を確かめられない")
 if row.nil? || !squash(row).include?(squash("| 窓の始まりを until との中間まで遅らせて 2 回までかけ直す。それでも確かめられなければ" \
                                            "静的な検査の結果で進め、窓の時刻は進めない |"))
   errors << "停止と縮小の表に、run の記録を確かめられないときにかけ直して時刻を進めない行が無い"
 end
 
-block = record[/`state\.json` の中身:\s*```json\n(.*?)\n```/m, 1]
-if block.nil?
+info, block = MU.block_after(record, "`state.json` の中身:")
+if block.nil? || info != "json"
   errors << "RECORD.md に state.json の例が無い"
 else
   begin
@@ -233,19 +229,21 @@ else
   end
 end
 # 0b の settings にも同じ書き方の句があるので、`ci` の単位の bullet に絞って見る。
-ci_note = bullets(record.split("\n")).find { |b| b.start_with?("- `ci` の単位") }
-if ci_note.nil? || !clause?(ci_note, "起動できなかったときは `exit` と `events` を null にし、`stderr` に理由を書く")
+ci_note = starting(bullets(record), "- `ci` の単位")
+if ci_note.nil? || !in_item?(ci_note, "起動できなかったときは `exit` と `events` を null にし、`stderr` に理由を書く")
   errors << "RECORD.md の `ci` の単位の bullet に、起動できなかったときの ci_check の書き方が無い"
 end
-if ci_note.nil? || !clause?(ci_note, "消費 (`consumption`) は AI の枠を使わないので残さない")
+if ci_note.nil? || !in_item?(ci_note, "消費 (`consumption`) は AI の枠を使わないので残さない")
   errors << "RECORD.md の `ci` の単位の bullet に、消費を残さない句が無い"
 end
 
-tree = record[/^```text\n(\$\{XDG_STATE_HOME.*?)^```/m, 1]
-unless tree && tree.match?(/^  ci\.json +\S/)
+# local の state の tree (text の block のうち `${XDG_STATE_HOME` で始まるもの) に、説明つきの `ci.json` の行がある。
+tree = MU.blocks(record).find { |i, body| i == "text" && body.start_with?("${XDG_STATE_HOME") }&.last
+unless tree && tree.lines.any? { |l| l.start_with?("  ci.json ") && !l.sub("  ci.json", "").strip.empty? }
   errors << "RECORD.md の local の state の tree に ci.json が無い"
 end
-ci_json = record[/^`ci\.json` の中身[^\n]*:\s*```json\n(.*?)\n```/m, 1]
+ci_info, ci_json = MU.block_after(record, "`ci.json` の中身")
+ci_json = nil unless ci_info == "json"
 begin
   doc = ci_json && JSON.parse(ci_json)
   unless doc.is_a?(Hash) && doc.keys.sort == %w[checked_until run_id]
@@ -255,23 +253,24 @@ rescue JSON::ParserError => e
   errors << "RECORD.md の ci.json の例が JSON として読めない: #{e.message[0, 80]}"
 end
 # basis の表の本体 (見出しと区切りの行の後、表が続く間) の 1 列目。
-lines = record.split("\n")
-head = lines.index { |l| l.start_with?("| `basis` |") }
+lines = record.lines
+head = lines.index { |l| MU.squash(l).start_with?(MU.squash("| `basis` |")) }
 rows = head ? lines[(head + 2)..-1].take_while { |l| l.start_with?("|") } : []
-basis = rows.map { |l| l[/\A\| `(\w+)` \|/, 1] }
+# 1 列目の code span の中身。
+basis = rows.map { |l| l.split("|")[1].to_s.strip.delete_prefix("`").delete_suffix("`") }
 unless basis == %w[checked_until capped first unreadable]
   errors << "RECORD.md の basis の表が checked_until / capped / first / unreadable の 4 行でない: #{basis.inspect}"
 end
-rewrite = bullets(record.split("\n")).find { |b| b.start_with?("- 書くのは手順 8 の条件を満たしたときだけ") }
-if rewrite.nil? || !clause?(rewrite, "今の `checked_until` より後の時刻のときだけ書き直す")
+rewrite = starting(bullets(record), "- 書くのは手順 8 の条件を満たしたときだけ")
+if rewrite.nil? || !in_item?(rewrite, "今の `checked_until` より後の時刻のときだけ書き直す")
   errors << "RECORD.md の ci.json の書き直しの bullet に、時刻を戻さない句が無い"
 end
 
 # REFUTE.md の Codex の検証役の brief に、根拠が GitHub にしか無い所見を推測で決めない句がある (#554 review R4)。
-codex_refute = section(refute, "## 検証役が Codex のとき")
-gh_only = codex_refute && bullets(codex_refute).find { |b| b.start_with?("- 根拠が GitHub にしか無い所見") }
-if gh_only.nil? || !bare_clause?(gh_only, "根拠が GitHub にしか無い所見は、GitHub に触れずに確かめられなければ uncertain" \
-                                          "にし、推測で confirmed や refuted にしない")
+codex_refute = MU.section(refute, "## 検証役が Codex のとき")
+gh_only = codex_refute && starting(bullets(codex_refute), "- 根拠が GitHub にしか無い所見")
+if gh_only.nil? || !in_item?(gh_only, "根拠が GitHub にしか無い所見は、GitHub に触れずに確かめられなければ uncertain" \
+                                          "にし、推測で confirmed や refuted にしない", bare: true)
   errors << "REFUTE.md の Codex の検証役の節に、根拠が GitHub にしか無い所見を uncertain にする句が無い"
 end
 

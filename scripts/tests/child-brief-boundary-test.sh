@@ -17,20 +17,9 @@ ruby -r"$script_dir/lib/markdown_units" - "$skills_dir" <<'RUBY'
 # encoding: UTF-8
 skills_dir = ARGV.fetch(0)
 MU = MarkdownUnits
-SEPARATORS = %w[。 、 (].freeze
-
-# 句が空白を除いた本文にあり、直後が区切りか末尾であること。
+# 句が空白を除いた本文にあり、直後が区切りか末尾であること (helper の clause?)。
 def clause?(text, clause)
-  t = MU.squash(text)
-  c = MU.squash(clause)
-  at = t.index(c)
-  until at.nil?
-    after = t[at + c.size]
-    return true if after.nil? || SEPARATORS.include?(after)
-
-    at = t.index(c, at + 1)
-  end
-  false
+  MU.clause?(text, clause)
 end
 
 # [file, 節の見出し, 単位 (:first_list = 節の最初の一覧の項目、:plains = 段落の項目でない部分), 単位を選ぶ key, 句]。

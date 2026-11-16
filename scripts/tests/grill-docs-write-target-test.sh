@@ -34,20 +34,9 @@ section = lambda do |rel, heading|
   body
 end
 
-SEPARATORS = %w[。 、 (].freeze
-
-# 句が空白を除いた本文にあり、直後が区切りか末尾であること。
+# 句が空白を除いた本文にあり、直後が区切りか末尾であること (helper の clause?)。
 def clause?(text, clause)
-  t = MU.squash(text)
-  c = MU.squash(clause)
-  at = t.index(c)
-  until at.nil?
-    after = t[at + c.size]
-    return true if after.nil? || SEPARATORS.include?(after)
-
-    at = t.index(c, at + 1)
-  end
-  false
+  MU.clause?(text, clause)
 end
 
 # 節の中の kind の単位のうち、key を含むものがある。terms があれば、key と同じ単位に terms がすべてある。

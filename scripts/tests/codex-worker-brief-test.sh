@@ -34,20 +34,9 @@ first = MU.lists(section).first
 abort "FAIL: codex-worker-brief: brief の節に一覧が無い" if first.nil?
 bullets = first.map { |item| MU.bullets(item).first }
 
-SEPARATORS = %w[。 、 (].freeze
-
-# 句が空白を除いた本文にあり、直後が区切りか末尾であること。
+# 句が空白を除いた本文にあり、直後が区切りか末尾であること (helper の clause?)。
 def clause?(text, clause)
-  t = MU.squash(text)
-  c = MU.squash(clause)
-  at = t.index(c)
-  until at.nil?
-    after = t[at + c.size]
-    return true if after.nil? || SEPARATORS.include?(after)
-
-    at = t.index(c, at + 1)
-  end
-  false
+  MU.clause?(text, clause)
 end
 
 # 「- <label>:」で始まる項目 (空白を除いて比べる)。

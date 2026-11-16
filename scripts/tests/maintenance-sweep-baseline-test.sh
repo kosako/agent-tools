@@ -10,7 +10,8 @@
 #   確かめられなかった理由が残らない)
 # 句は空白を除いて比べ (行の折り返しの位置に依らない)、句の直後が区切り (。、( か末尾) であることも求める (否定は
 # 句の後ろに付くので、「かけない」を「かけないことはない」のように反転した文を部分一致で通さない)。句は述語まで書く
-# (述語の前で切ると「済ませてから」を「省いて」に反転しても通る)。手順の列挙は括弧の注釈を除いてから比べる。
+# (述語の前で切ると「済ませてから」を「省いて」に反転しても通る)。手順の列挙は括弧の注釈を除いてから比べる。項目は、最上位の
+# 項目を子の項目を外した本文で見る。節・項目・例の block の取り方と、区切りの判定・注釈の除き方は lib/markdown_units.rb が持つ (#685)。
 # 引数で sweep の skill の directory を差し替えられる (変異での確認用)。
 set -eu
 
@@ -22,52 +23,27 @@ sweep_dir=${1:-"$repo_root/shared/skills/personal-maintenance-sweep"}
 [ -f "$sweep_dir/SKILL.md" ] || fail "missing $sweep_dir/SKILL.md"
 [ -f "$sweep_dir/RECORD.md" ] || fail "missing $sweep_dir/RECORD.md"
 
-ruby - "$sweep_dir/SKILL.md" "$sweep_dir/RECORD.md" <<'RUBY'
+ruby -r"$script_dir/lib/markdown_units" - "$sweep_dir/SKILL.md" "$sweep_dir/RECORD.md" <<'RUBY'
+# encoding: UTF-8
 require "json"
 
-skill = File.read(ARGV.fetch(0), encoding: "UTF-8").split("\n")
+MU = MarkdownUnits
+skill = File.read(ARGV.fetch(0), encoding: "UTF-8")
 record = File.read(ARGV.fetch(1), encoding: "UTF-8")
 
-def squash(text)
-  text.gsub(/\s+/, "")
-end
-
-# 句が空白を除いた本文にあり、直後が区切りか末尾であること。
-def clause?(text, clause)
-  squash(text).match?(/#{Regexp.escape(squash(clause))}(?=[。、(]|\z)/)
-end
-
-# 括弧の注釈 (入れ子を含む) を除いてから clause? で比べる。注釈を挟む列挙でも、述語まで続けて照合するため。
+# 括弧の注釈 (入れ子を含む) を除いてから、句の直後が区切りか末尾であることを見る。注釈を挟む列挙でも、述語まで続けて照合するため。
 def bare_clause?(text, clause)
-  bare = text.dup
-  nil while bare.gsub!(/\([^()]*\)/, "")
-  clause?(bare, clause)
+  MU.clause?(MU.bare(text), clause)
 end
 
-# 見出しの行から、同じ深さか浅い次の見出しの前まで。
-def section(lines, heading)
-  start = lines.index { |l| l == heading }
-  return nil if start.nil?
-  level = heading[/\A#+/].length
-  rest = lines[(start + 1)..-1]
-  rest[0, rest.index { |l| l =~ /\A\#{1,#{level}} / } || rest.length]
+# 節の最上位の項目を、子の項目を外した本文で見る (本文を子の項目へ切り出した変更と、項目を丸ごと子の項目に下げた変更を通さない)。
+def items(body)
+  MU.items(body).map { |item| MU.bullets(item).first }
 end
 
-# 節の中の bullet (行頭の「- 」から次の「- 」の前まで。続きの行は前の bullet に足す)。
-def bullets(lines)
-  out = []
-  lines.each do |l|
-    if l.start_with?("- ")
-      out << l.dup
-    elsif !out.empty? && l.start_with?("  ")
-      out[-1] << l
-    end
-  end
-  out
-end
-
+# 「- **<label>**」で始まる項目 (空白を除いて比べる)。
 def find(list, label)
-  list.find { |b| b.start_with?("- **#{label}**") }
+  list.find { |b| MU.squash(b).start_with?(MU.squash("- **#{label}**")) }
 end
 
 errors = []
@@ -88,27 +64,27 @@ STEP = {
   ],
 }.freeze
 
-step = section(skill, "### 0b. repo の設定を確かめる (baseline)")
+step = MU.section(skill, "### 0b. repo の設定を確かめる (baseline)")
 if step.nil?
   errors << "SKILL.md に「### 0b. repo の設定を確かめる (baseline)」の節が無い"
 else
-  list = bullets(step)
+  list = items(step)
   STEP.each do |label, clauses|
     b = find(list, label)
     if b.nil?
       errors << "0b の節に「#{label}」の bullet が無い"
       next
     end
-    missing = clauses.reject { |c| clause?(b, c) }
+    missing = clauses.reject { |c| MU.clause?(b, c) }
     errors << "0b の「#{label}」の bullet に句 #{missing.inspect} が無い" unless missing.empty?
   end
 end
 
-modes = section(skill, "## 発火とモード")
+modes = MU.section(skill, "## 発火とモード")
 if modes.nil?
   errors << "SKILL.md に「## 発火とモード」の節が無い"
 else
-  list = bullets(modes)
+  list = items(modes)
   {
     "中断した run を再開する" => "手順 0 と 0b と 2 をやり直し",
     "既存の監査結果から始める" => "手順 0 と 0b と 1 と 2 を済ませてから",
@@ -122,28 +98,28 @@ else
   end
 end
 
-record_step = section(skill, "### 8. 記録する")
-tracking = record_step && find(bullets(record_step), "追跡 Issue")
+record_step = MU.section(skill, "### 8. 記録する")
+tracking = record_step && find(items(record_step), "追跡 Issue")
 if tracking.nil?
   errors << "手順 8 に「追跡 Issue」の bullet が無い"
-elsif !clause?(tracking, "残量の数字と repo の設定の確認の結果は書かない")
+elsif !MU.clause?(tracking, "残量の数字と repo の設定の確認の結果は書かない")
   errors << "手順 8 の追跡 Issue の bullet に、repo の設定の確認の結果を書かない句が無い"
 end
 
-bans = section(skill, "## やってはいけないこと")
+bans = MU.section(skill, "## やってはいけないこと")
 if bans.nil?
   errors << "SKILL.md に「## やってはいけないこと」の節が無い"
 else
-  ban = bullets(bans).find { |b| clause?(b, "sweep の中で `personal-repo-baseline --apply` をかける") }
+  ban = items(bans).find { |b| MU.clause?(b, "sweep の中で `personal-repo-baseline --apply` をかける") }
   if ban.nil?
     errors << "やってはいけないことに `--apply` をかけることの禁止が無い"
-  elsif !clause?(ban, "repo の設定の確認の結果を、追跡 Issue・run のコメント・所見の Issue に書く")
+  elsif !MU.clause?(ban, "repo の設定の確認の結果を、追跡 Issue・run のコメント・所見の Issue に書く")
     errors << "やってはいけないことに、確認の結果を Issue に書くことの禁止が無い"
   end
 end
 
-block = record[/`state\.json` の中身:\s*```json\n(.*?)\n```/m, 1]
-if block.nil?
+info, block = MU.block_after(record, "`state.json` の中身:")
+if block.nil? || info != "json"
   errors << "RECORD.md に state.json の例が無い"
 else
   begin

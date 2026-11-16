@@ -20,6 +20,8 @@
 # - 文のつながり: key を含む文と、その後ろに続く文 (sentence_runs)。
 # - code span: fence の外の `…`。行をまたいで折り返してよい。中の空白と折り返しを除いて比べる。
 # - 語の照合: どれも空白 (折り返しを含む) を除いて比べる。
+# - 句の照合 (clause?): 空白を除いた句の直後が区切り (。、( ) か末尾であること。括弧の注釈 (半角の丸括弧) は bare で除ける。
+# - そのほか: 見出しの列 (headings)、表の行 (rows)、ある行の後ろの最初の fence の block (block_after)。
 module MarkdownUnits
   FENCE = /\A[ \t]*```(.*)$/.freeze
   HEADING = /\A(#+)[ \t]+\S/.freeze
@@ -183,6 +185,74 @@ module MarkdownUnits
   # code span の中身の列。どれも空白を除いた形。
   def code_spans(text)
     prose(text).scan(/`([^`]+)`/).flatten.map { |span| squash(span) }
+  end
+
+  # 見出しの列 ([level, 名前])。fence の中の見出しの形の行は数えない。名前は前後の空白を除く。
+  def headings(text)
+    out = []
+    fence = false
+    text.each_line do |line|
+      if line =~ FENCE
+        fence = !fence
+        next
+      end
+      next if fence || line !~ HEADING
+
+      marks = line[/\A#+/]
+      out << [marks.size, line[marks.size..-1].strip]
+    end
+    out
+  end
+
+  # 表の行 (fence の外で、字下げを除いて `|` から始まる行) の列。
+  def rows(text)
+    prose(text).lines.select { |l| l.lstrip.start_with?("|") }
+  end
+
+  # 空白を除いて lead で始まる行 (fence の外) の後ろにある、最初の fence の block ([info string, 中身])。無ければ nil。
+  def block_after(text, lead)
+    want = squash(lead)
+    lines = text.lines
+    fence = false
+    at = lines.index do |line|
+      fence = !fence if line =~ FENCE
+      !fence && squash(line).start_with?(want)
+    end
+    at && blocks(lines[(at + 1)..-1].join).first
+  end
+
+  SEPARATORS = %w[。 、 (].freeze
+
+  # 句 (空白を除いた形) が text にあり、直後が区切り (。、( ) か末尾であること。否定は句の後ろに付くので、「〜しないことは
+  # ない」のような反転を部分一致で通さないため。
+  def clause?(text, clause)
+    t = squash(text)
+    c = squash(clause)
+    at = t.index(c)
+    until at.nil?
+      after = t[at + c.size]
+      return true if after.nil? || SEPARATORS.include?(after)
+
+      at = t.index(c, at + 1)
+    end
+    false
+  end
+
+  # 括弧の注釈 (半角の丸括弧。入れ子を含む) を除いた text。注釈を挟む列挙でも、述語まで続けて照合するため。対の無い括弧は残す。
+  def bare(text)
+    out = +""
+    opens = []
+    text.each_char do |ch|
+      if ch == "("
+        opens << out.size
+        out << ch
+      elsif ch == ")" && opens.any?
+        out = out[0, opens.pop]
+      else
+        out << ch
+      end
+    end
+    out
   end
 
   # units のうち、key を含むもの (空白を除いて比べる)。
