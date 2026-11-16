@@ -79,6 +79,15 @@ jobs:
         run: |
           # 最初の失敗で止めず全 test を走らせ、1 回の CI で全失敗を可視化する。
           # test ごとの秒を記録し、最後に遅い順の 10 本と合計を出す (上限の見直しに使う。#699)。
+          # 手元に local の断片がある環境を模す (#689)。sync と doctor が読む場所に、不正な断片 (指す先の無い symlink) を
+          # この step の間だけ置く。XDG_CONFIG_HOME を一時 dir に向けずに断片を読む test は、sync の conflict か doctor の
+          # fail で落ちる。後の step (doctor を空の home で走らせる) には残さない。
+          case "${XDG_CONFIG_HOME:-}" in /*) xdg="$XDG_CONFIG_HOME" ;; *) xdg="$HOME/.config" ;; esac
+          fragment="$xdg/agent-tools/instructions.local.md"
+          if [ -e "$fragment" ] || [ -L "$fragment" ]; then echo "::error::$fragment already exists on the runner (#689)"; exit 1; fi
+          mkdir -p "$xdg/agent-tools"
+          ln -s "$RUNNER_TEMP/no-such-local-instructions" "$fragment"
+          trap 'rm -f "$fragment"' EXIT
           failed=0
           times="$RUNNER_TEMP/test-seconds.tsv"
           : > "$times"

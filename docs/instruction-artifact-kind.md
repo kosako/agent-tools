@@ -139,7 +139,9 @@ local な file に置く。sync が、両方の tool の所有ファイルの末
 - 反映: 断片を直したら `scripts/setup.sh --apply` (または `sync.sh --apply`) で配り直す。効くのは新しい session から
   (続いている session への反映は #688)。OpenCode には instruction を配っていないので、断片も届かない。
 - 実装は `scripts/lib/local_instructions.rb` (読み取りと置く内容)、sync の instruction の plan と apply、doctor。test は
-  `scripts/tests/local-instructions-test.sh`。pipeline の test は `XDG_CONFIG_HOME` を一時 dir に向け、手元の断片を読まない。
+  `scripts/tests/local-instructions-test.sh`。pipeline の test (sync / status / doctor / setup を走らせるもの) は `XDG_CONFIG_HOME` を一時 dir に向け、手元の断片を
+  読まない。CI の「Run self-tests」の step は、その間だけ既定の場所に不正な断片 (指す先の無い symlink) を置く。分離を忘れた
+  test は、sync の conflict か doctor の fail で落ちる。
 
 ## 実装状況
 
