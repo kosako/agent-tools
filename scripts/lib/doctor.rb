@@ -18,6 +18,7 @@ require_relative "artifact_targets"
 require_relative "catalog"
 require_relative "path_glob"
 require_relative "plugin_marker"
+require_relative "local_instructions"
 require_relative "cli"
 
 module Doctor
@@ -42,6 +43,7 @@ module Doctor
       check_runtime
       check_repo_and_assets
       check_tool_homes
+      check_local_instructions
       check_forbidden_targets
       check_catalog
       @lines
@@ -137,6 +139,18 @@ module Doctor
       PathGlob.under(File.join(home, "plugins"), ArtifactTargets.plugin_filename("personal-*")).count do |path|
         # 数える条件は sync の所有判定と同じ (marker の target と、file 名と同じ name)。
         File.file?(path) && PluginMarker.managed?(File.binread(path), tool, File.basename(path, ".js"))
+      end
+    end
+
+    # local の断片 (#689) の状態を 1 行で出す。中身・大きさ・path は出さない (path は XDG_CONFIG_HOME の値を
+    # 含み、tilde に畳めない生の path になりうる)。invalid は sync が instruction を conflict にするので fail。
+    def check_local_instructions
+      result = LocalInstructions.read
+      case result.state
+      when :absent then report("info", "local-instructions", "absent")
+      when :empty then report("info", "local-instructions", "present but empty (nothing is added)")
+      when :present then report("ok", "local-instructions", "present")
+      else report("fail", "local-instructions", "invalid: #{result.reason}")
       end
     end
 

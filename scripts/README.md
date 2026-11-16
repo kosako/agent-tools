@@ -262,7 +262,8 @@ usage: sync.sh [--root DIR] [--apply] [--prune] [--codex-home DIR] [--claude-hom
 - 更新するのは agent-tools management marker を持つ target のみ。
   unmanaged な同名 target / symlink は conflict として exit 1 で停止し、何も書き込まない。
 - 書き込み先は skill が `<tool home>/skills/personal-*`、instruction が connect 確立済みの
-  所有ファイル (`~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md`)、script が
+  所有ファイル (`~/.codex/AGENTS.md` / `~/.claude/agent-tools/CLAUDE.md`。generated に local の断片の節を足した
+  内容を置き、置くべき内容と byte で比べて up-to-date を決める。#689)、script が
   `<tool home>/agent-tools/scripts/personal-*` (単一実行ファイル + sidecar marker)、plugin が
   `<opencode home>/plugins/personal-*.js` (単一 file、mode 0644、先頭 1 行 marker)。
   それ以外の path は構成しない。plan と prune が走査する tool と kind の組は
@@ -270,7 +271,7 @@ usage: sync.sh [--root DIR] [--apply] [--prune] [--codex-home DIR] [--claude-hom
   走査しない ([sync-policy](../docs/sync-policy.md) の「v1 OpenCode targets」)。
 - `--codex-home` / `--claude-home` / `--opencode-home` は inspection / test 用の override
   (opencode の既定は `~/.config/opencode`。`XDG_CONFIG_HOME` は見ない)。
-- self-test: `tests/sync-test.sh` (fake home のみを使い、実際の tool homes には触れない)
+- self-test: `tests/sync-test.sh`、local の断片は `tests/local-instructions-test.sh` (fake home のみを使い、実際の tool homes には触れない)
 
 - `status.sh`: report-only status。
   [Status / Manifest Contract](../docs/status-manifest-contract.md) の JSON を出力する。
@@ -294,8 +295,10 @@ usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR] [-
 usage: doctor.sh [--root DIR] [--codex-home DIR] [--claude-home DIR] [--opencode-home DIR] [--agents-home DIR]
 ```
 
-- ruby / git、status report の統合、tool homes、禁止 targets への marker
-  誤存在、catalog の存在と鮮度を check する。
+- ruby / git、status report の統合、tool homes、local の断片 (#689) の状態、禁止 targets への marker
+  誤存在、catalog の存在と鮮度を check する。local の断片は `absent` / `present` / `present but empty` /
+  `invalid: <理由>` (fail) の 1 行だけで、中身・大きさ・path は出さない
+  ([instruction-artifact-kind](../docs/instruction-artifact-kind.md) の「local の断片」)。
 - tool home の表示は `ArtifactTargets::TOOL_KINDS` に従う。opencode は
   `[opencode] <label> present, N personal plugin(s)` で、数えるのは `plugins/personal-*.js` のうち
   先頭行 marker が `target=opencode` で name が file 名と同じもの (`PluginMarker.managed?`。sync の

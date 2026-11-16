@@ -10,6 +10,9 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# 手元の local の断片 (<XDG_CONFIG_HOME>/agent-tools/instructions.local.md。#689) を sync と doctor に読ませない。
+XDG_CONFIG_HOME="$tmp/xdg-config"
+export XDG_CONFIG_HOME
 
 # --- fixture: scripts/ を写した repo (path に空白を含める) と、repo 外の cwd ---
 repo="$tmp/repo space"

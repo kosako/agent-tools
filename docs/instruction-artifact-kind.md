@@ -107,6 +107,42 @@ instruction (public, 配布) には具体的な参照先 (planning tool の URL 
 marker の生成・解析は `scripts/lib/instruction_marker.rb` に集約し、build (生成) と
 connect / sync (所有判定) が同じ format を共有する。
 
+## local の断片 (#689)
+
+公開の repo には置けないが、手元の agent には守らせたい指示 (人に勧めるほどではない使い方の決まりなど) は、repo の外の
+local な file に置く。sync が、両方の tool の所有ファイルの末尾にその節を足す。
+
+- 置き場所は `${XDG_CONFIG_HOME:-$HOME/.config}/agent-tools/instructions.local.md` に固定する。`XDG_CONFIG_HOME` は
+  絶対 path のときだけ使う (`personal-usage-reader` と同じ)。HOME も絶対 path でなければ、場所を決められないものとして
+  不正の扱いにする。agent-tools の他の local な設定 (`checks.local.json`、`public-safety-patterns.local`) と同じ dir で、
+  dotfiles の local overrides の規約 (名前に `.local`、commit しない) に合わせる。
+- 書くのは人だけ。agent は書かない (agent が自分への指示を自分で足せないようにするため)。中身は tracked な file にも
+  Issue / PR にも出さない。
+- 置く内容: 所有ファイル (`<claude home>/agent-tools/CLAUDE.md` と `<codex home>/AGENTS.md`) には、generated の後ろに
+  空行、固定の見出し 1 行 (repo の外の local な file から sync が足した節だと分かる文言)、空行、断片の本文を続けたものを置く。断片が無いとき、または空白だけの
+  ときは、generated と同じ内容になる (今までと同じ)。Claude Code も import でなく、この連結で読む。1 つの仕組みで済み、
+  人の `CLAUDE.md` に行を足さずに済むため。
+- 連結は sync の段で行う。build・generated・catalog は断片を読まない (public な内容だけを持たせ、tracked な catalog に
+  machine ごとの差を出さない)。connect も今までどおり generated を置き、断片を足すのは sync だけ。setup は connect の
+  後に sync を通すので、続けて足される。
+- 鮮度: sync は所有を確かめた後、置くべき内容と所有ファイルを byte で比べ、同じなら up-to-date、違えば update にする。
+  断片だけが変わったときも update になる。所有ファイルに手で足した行も update で消える (所有ファイルは agent-tools
+  だけが書く file)。status の deployment は sync の plan から出るので、断片を直して配っていないときは `stale` になる。
+- 検査: static な injection の検査はかけない。人が自分で書く file で (手書きの `CLAUDE.md` も検査しない)、instruction の
+  strict な検査は URL を high にするので、URL の読み方の好みのような用途が通らないため。LLM review にも送らない。
+  かけるのは形の検査だけで、regular file で symlink でない (開いた fd で確かめる)、UTF-8 として読める、8 KiB 以下、の
+  3 つ。満たさないときは両方の tool の instruction の plan を conflict にし、所有ファイルを変えない (断片を外した内容を、
+  知らせずに置かない)。8 KiB は、Codex が instruction の file を合計で読む上限 (`project_doc_max_bytes`、既定 32 KiB)
+  の中に、今の global な `AGENTS.md` (約 20 KB) と合わせて収まる大きさ。
+- doctor は状態だけを 1 行で出す: `absent` / `present` / `present but empty` / `invalid: <理由>` (invalid は fail)。
+  中身・大きさ・path は出さない。
+- 反映: 断片を直したら `scripts/setup.sh --apply` (または `sync.sh --apply`) で配り直す。効くのは新しい session から
+  (続いている session への反映は #688)。OpenCode には instruction を配っていないので、断片も届かない。
+- 実装は `scripts/lib/local_instructions.rb` (読み取りと置く内容)、sync の instruction の plan と apply、doctor。test は
+  `scripts/tests/local-instructions-test.sh`。pipeline の test (sync / status / doctor / setup を走らせるもの) は `XDG_CONFIG_HOME` を一時 dir に向け、手元の断片を
+  読まない。CI の「Run self-tests」の step は、その間だけ既定の場所に不正な断片 (指す先の無い symlink) を置く。分離を忘れた
+  test は、sync の conflict か doctor の fail で落ちる。
+
 ## 実装状況
 
 - 実装済み: artifact_kind resolver (`scripts/lib/artifact_targets.rb`)、build の

@@ -13,6 +13,9 @@ connect="$script_dir/../connect.sh"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# 手元の local の断片 (<XDG_CONFIG_HOME>/agent-tools/instructions.local.md。#689) を sync と doctor に読ませない。
+XDG_CONFIG_HOME="$tmp/xdg-config"
+export XDG_CONFIG_HOME
 
 
 run_connect() {
