@@ -1,0 +1,34 @@
+schema_version: 1
+name: personal-instruction-update-notice
+kind: script
+visibility: personal
+targets:
+  - claude-code
+risk:
+  prompt_injection: low
+  # 実行時に、配備済みの instruction の節の名前と hash を、session ごとの file としてユーザーの state dir に書く。
+  # 本文は書かず、local の断片は中の見出しも書かない (1 つの節の hash だけ)。
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #688 の 1 本目の PR で author≠reviewer レビューのうえ承認する。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:dc81dee97af6fcff1db01a40f168e22d1ed6961b0843d8fb53491c815dacc67a
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-instruction-update-notice.rb
+  format: text
+summary: >-
+  Claude Code の SessionStart / UserPromptSubmit hook (#688)。配備済みの運用 instruction (script の実体の directory から
+  見た ../CLAUDE.md。env や入力では変えない) が、session が読み込んだ後に更新されたことを、その session に伝える。
+  SessionStart で file の節ごとの hash を session ごとの記録に書き、UserPromptSubmit で今の file と比べる。違えば、
+  変わった節の名前と file の場所を additionalContext (model 向け) と systemMessage (人向け) の JSON で出し、記録を
+  今の内容に更新する (1 回の更新につき 1 回だけ促す)。記録が無い最初の入力では、記録して何も出さない。節は # と ## の
+  見出しで分け、local の断片の節は中の見出しを出さない。exit は常に 0 で prompt を止めず、入力が読めない・見る file が
+  条件を満たさない (無い・symlink・256 KiB 超・UTF-8 でない・先頭が instruction の marker でない)・記録を書けない・
+  想定外の例外では stdout に何も出さない (fail-open。読み直しを促すだけの steering)。記録は
+  ${XDG_STATE_HOME:-~/.local/state}/agent-tools/personal-instruction-update-notice/ の下 (0700 / 0600) で、30 日より古い
+  ものを SessionStart のときに消す。network に触れず、外部 command も起動しない。登録は dotfiles が Claude Code の
+  settings.json で行う (docs/instruction-update-notice.md)。
