@@ -10,7 +10,9 @@
 #   level は `#` の数。fence の中の行は見出しとみなさない。
 # - fence: 行の頭 (空白か tab の字下げは可) の ``` で始まり、次の ``` で始まる行で終わる。info string (`sh` など) は、
 #   始まりの行の ``` の後ろ (前後の空白は除く)。
-# - sh の block (info string が `sh`) の行継続: 行末の `\` と改行は、空白 1 つにつなげてから見る。ほかの block はそのまま。
+#   blocks の dedent: 中身の各行から、始まりの fence の字下げの分までの空白を外す (一覧の中の block を走らせる形に戻す)。
+# - sh の block (info string が `sh`) の行継続: 行末の `\` と改行は、空白 1 つにつなげてから見る (sh_blocks。原文の block を
+#   つなぐのは sh_join)。ほかの block はそのまま。
 # - 項目: 行の頭の `-` と空白か tab が 1 つ以上で始まる行と、字下げした続きの行 (fence の外)。
 # - 一覧: 続いた項目のまとまり。空行か、字下げの無い行 (項目でない行) で終わる。
 # - 字下げした項目 (bullets): 行の頭 (字下げは可) の `-` と空白か tab で始まる行と、その `-` より深く字下げした続きの行。
@@ -87,10 +89,12 @@ module MarkdownUnits
     out
   end
 
-  # fence で囲んだ block を [info string, 中身] の列で返す。中身はそのまま。閉じていない fence は数えない。
-  def blocks(text)
+  # fence で囲んだ block を [info string, 中身] の列で返す。中身はそのまま。閉じていない fence は数えない。dedent が true なら、
+  # 中身の各行から、始まりの fence の字下げの分までの空白を外す (一覧の中の block を、走らせる形に戻すため)。
+  def blocks(text, dedent: false)
     out = []
     current = nil
+    indent = 0
     text.each_line do |line|
       if line =~ FENCE
         if current
@@ -98,9 +102,10 @@ module MarkdownUnits
           current = nil
         else
           current = [Regexp.last_match(1).strip, +""]
+          indent = line[/\A[ \t]*/].size
         end
       elsif current
-        current[1] << line
+        current[1] << (dedent ? line.sub(/\A[ \t]{0,#{indent}}/, "") : line)
       end
     end
     out
@@ -108,7 +113,12 @@ module MarkdownUnits
 
   # info string が `sh` の block の中身の列。行継続 (行末の `\` と改行) は、空白 1 つにつなげる。
   def sh_blocks(text)
-    blocks(text).select { |info, _| info == "sh" }.map { |_, body| body.gsub(/\\\n[ \t]*/, " ") }
+    blocks(text).select { |info, _| info == "sh" }.map { |_, body| sh_join(body) }
+  end
+
+  # sh の行継続 (行末の `\` と改行と、続く行の頭の空白) を、空白 1 つにつなぐ。走らせる block の原文を、照合のために読む形。
+  def sh_join(body)
+    body.gsub(/\\\n[ \t]*/, " ")
   end
 
   # 一覧 (続いた項目のまとまり) の列。一覧は項目の列。

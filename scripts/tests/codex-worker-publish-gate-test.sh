@@ -27,38 +27,27 @@ home="$tmp/home"
 gate_bin="$home/.claude/agent-tools/scripts/personal-public-safety-gate"
 
 # ---- gate の command の切り出し ----------------------------------------------------
-ruby - "$worker_dir/LAUNCH.md" "$tmp/gate-block.sh" <<'RUBY'
+ruby -r"$script_dir/lib/markdown_units" - "$worker_dir/LAUNCH.md" "$tmp/gate-block.sh" <<'RUBY'
+# encoding: UTF-8
 launch, out = ARGV.fetch(0), ARGV.fetch(1)
-lines = File.read(launch).lines
-start = lines.index { |l| l.start_with?("## 9. ") }
-abort "FAIL: codex-worker-publish-gate: LAUNCH.md に「## 9.」の節が無い" unless start
-body = []
-fence = false
-lines[(start + 1)..-1].each do |l|
-  fence = !fence if l =~ /\A\s*```/
-  break if !fence && l =~ /\A## /
-  body << l
-end
-blocks = []
-cur = nil
-body.each do |l|
-  if cur.nil? && l =~ /\A```sh\s*\z/
-    cur = []
-  elsif cur && l =~ /\A```\s*\z/
-    blocks << cur.join
-    cur = nil
-  elsif cur
-    cur << l
-  end
-end
-gated = blocks.select { |b| b.include?('"$gate" --stdin') }
+# 節と sh の block は lib/markdown_units.rb で取る (#685。見出しの空白と fence の字下げに依らない)。走らせるのは、fence の字下げを
+# 外した原文の block。
+body = MarkdownUnits.section(File.read(launch, encoding: "UTF-8"), "## 9. 回収 (fetch) と trailer 検査と PR")
+abort "FAIL: codex-worker-publish-gate: LAUNCH.md に「## 9. 回収 (fetch) と trailer 検査と PR」の節が無い" unless body
+blocks = MarkdownUnits.blocks(body, dedent: true).select { |info, _| info == "sh" }.map(&:last)
+# block の中の command の句は、行継続をつなぎ、空白を除いて比べる (整形に依らない)。走らせるのは原文の block のまま。
+runs = ->(block, cmd) { MarkdownUnits.squash(MarkdownUnits.sh_join(block)).include?(MarkdownUnits.squash(cmd)) }
+gated = blocks.select { |b| runs.(b, '"$gate" --stdin') }
 abort "FAIL: codex-worker-publish-gate: §9 に gate (\"$gate\" --stdin) の sh の block が 1 つでない (#{gated.size} 個)" unless gated.size == 1
 block = gated.first
-deploy = "gate=<tool home>/agent-tools/scripts/personal-public-safety-gate\n"
-abort "FAIL: codex-worker-publish-gate: gate の block の先頭が deploy 先の行でない" unless block.start_with?(deploy)
-abort "FAIL: codex-worker-publish-gate: gate の block に push / gh がある (test で走らせられない)" if block =~ /\bgit\b[^\n]*\bpush\b|\bgh\s/
+deploy = "gate=<tool home>/agent-tools/scripts/personal-public-safety-gate"
+# 先頭の行は、行継続をつないでから空白を除いて比べる。
+abort "FAIL: codex-worker-publish-gate: gate の block の先頭が deploy 先の行でない" unless MarkdownUnits.squash(MarkdownUnits.sh_join(block).lines.first.to_s) == MarkdownUnits.squash(deploy)
+abort "FAIL: codex-worker-publish-gate: gate の block に push / gh がある (test で走らせられない)" if MarkdownUnits.sh_join(block) =~ /\bgit\b[^\n]*\bpush\b|\bgh\s/
 # deploy 先は、走らせるときに渡す偽の HOME の下の gate を指す固定の行にする (tmp の path を code に埋め込まない。#523 review)。
-File.write(out, block.sub(deploy, %q{gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"} + "\n"))
+# 原文の deploy 先の行は、行継続で続く行も含めて差し替える。
+last = block.lines.index { |l| !l.chomp.end_with?("\\") } || 0
+File.write(out, %q{gate="$HOME/.claude/agent-tools/scripts/personal-public-safety-gate"} + "\n" + block.lines.drop(last + 1).join)
 RUBY
 
 # ---- 切り出した command を temp repo で走らせる ----------------------------------------

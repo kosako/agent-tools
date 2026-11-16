@@ -2,27 +2,30 @@
 # personal-codex-review の commit mode で、周辺コードも検証済み OID の tree から読む規則が文書に
 # 残っていることを検査する (#356)。文言の検知で、振る舞いの保証ではない (期待挙動は evals.json の
 # case 30〜32。model eval は自動で走らない)。
-# - SKILL.md §3 の commit の bullet と、§4 の brief の一覧 (最初の bullet の一覧。Codex に届くのは
-#   ここだけ) に、tree から読む command の例・HEAD / worktree を根拠にしないこと・tree に無い file の
-#   扱い・object を読めないときに止めること・root commit も同じことがある。§3 では merge commit を
-#   対象外にする規則も残っている。節の外にだけ語があっても規則として読まれないので、節に範囲を絞る。
-#   禁止の文は否定形 (§3 は「しません」、§4 は「しない」) まで比べる。語幹だけだと「しません」を
-#   「します」に変えて禁止を許可へ反転しても語が残り、検知できない。
-# - 「やってはいけないこと」と docs/codex-review-launch.md の「brief と target」が同じ規則に触れている。
+# - SKILL.md §3 の commit の項目と、§4 の brief の一覧 (最初の一覧。Codex に届くのはここだけ) の 1 つの項目に、tree から
+#   読む command の例・HEAD / worktree を根拠にしないこと・tree に無い file の扱い・object を読めないときに止めること・
+#   root commit も同じことがある。§3 では merge commit を対象外にする規則も残っている。節の外や別の項目にだけ語があっても
+#   規則として読まれないので、1 つの項目 (子の項目を外した本文) に範囲を絞る。
+#   禁止の文は否定形 (§3 は「しません」、§4 は「しない」) まで、句として比べる (句の直後が区切りか末尾)。語幹だけだと
+#   「しません」を「します」に変えて禁止を許可へ反転しても語が残り、句の後ろに否定を足した変更も通る。
+# - 「やってはいけないこと」の 1 つの項目と、docs/codex-review-launch.md の「brief と target」の 1 つの文が、同じ規則に
+#   触れている。
 # - evals.json に 3 case があり、id が重複していない。
+# 文書を単位に分ける読み方と、受ける整形の範囲は lib/markdown_units.rb が持つ (#685)。
 # 引数で repo root を差し替えられる (変異での確認用)。
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=${1:-"$script_dir/../.."}
-ruby - "$root" <<'RUBY'
+ruby -r"$script_dir/lib/markdown_units" - "$root" <<'RUBY'
+# encoding: UTF-8
 require "json"
 
 root = ARGV.fetch(0)
 skill = "shared/skills/personal-codex-review"
+MU = MarkdownUnits
 
-H2 = /\A## /.freeze
-# 2 つの節 (§3 の commit の bullet と §4 の brief の一覧) が共に持つべき語。
+# 2 つの項目 (§3 の commit の項目と §4 の brief の一覧の項目) が共に持つべき語。
 TREE_RULE = [
   "検証済み OID の tree から読",
   "`git show <oid>:<path>`",
@@ -34,7 +37,7 @@ TREE_RULE = [
   "verdict を出さない",
   "root commit も同じ",
 ].freeze
-# 禁止の文。§3 は です・ます調、§4 は である調で書いてあるので、否定形を節ごとに持つ。
+# 禁止の句。§3 は です・ます調、§4 は である調で書いてあるので、否定形を節ごとに持つ。
 FORBID_POLITE = [
   "現在の HEAD の tree と worktree の file (dirty な変更を含む) は根拠にしません",
   "worktree から補いません",
@@ -46,22 +49,23 @@ FORBID_PLAIN = [
   "現在の checkout へ fallback しない",
 ].freeze
 
-# [file, 節の名前, [[始まりの行, 終わりの行], ...], 節にあるべき語]。組を順に当てて絞る (前の組で
-# 絞った範囲の中で次の組を探す)。始まりの行は範囲に含め、終わりの行 (始まりの次の行から探す) は
-# 含めない。終わりが無ければ範囲の末尾まで。
+# 節の最上位の項目を、子の項目を外した本文で返す (本文を子の項目へ切り出した変更と、項目を丸ごと子に下げた変更を通さない)。
+top_items = ->(body) { MU.items(body).map { |item| MU.bullets(item).first } }
+first_list = ->(body) { Array(MU.lists(body).first).map { |item| MU.bullets(item).first } }
+sentences = ->(body) { MU.paragraphs(body).flat_map { |para| MU.sentences(para).map { |s| "#{s}。" } } }
+
+# [file, 節の見出し, 範囲の名前, 単位の取り方, 語 (含むこと), 句 (直後が区切りか末尾)]。語と句は、どれか 1 つの単位に
+# すべてあること。§3 は、最初の commit の項目だけを見る (前の版の範囲。後ろに同じ名前の項目を足しても、最初の項目の欠けを
+# 隠さない)。
 TARGETS = [
-  ["#{skill}/SKILL.md", "§3 の commit の bullet",
-   [[/\A## 3\. /, H2], [/\A- \*\*commit\*\*/, /\A(?:\S|\s*\z)/]],
-   TREE_RULE + FORBID_POLITE + ["merge commit は commit mode の対象外"]],
-  ["#{skill}/SKILL.md", "§4 の brief の一覧",
-   [[/\A## 4\. brief\s*\z/, H2], [/\A- /, /\A\s*\z/]],
-   TREE_RULE + FORBID_PLAIN],
-  ["#{skill}/SKILL.md", "やってはいけないこと",
-   [[/\A## やってはいけないこと\s*\z/, H2]],
-   ["commit mode で worktree の file", "周辺コードの根拠にする"]],
-  ["docs/codex-review-launch.md", "brief と target",
-   [[/\A## brief と target\s*\z/, H2]],
-   ["検証済み commit OID の tree", "worktree の file は根拠にしません"]],
+  ["#{skill}/SKILL.md", "## 3. 対象 mode を1つ選び、brief に固定する", "§3 の commit の項目",
+   ->(body) { top_items.(body).select { |item| MU.squash(item).start_with?(MU.squash("- **commit**")) }.first(1) },
+   TREE_RULE + ["merge commit は commit mode の対象外"], FORBID_POLITE],
+  ["#{skill}/SKILL.md", "## 4. brief", "§4 の brief の一覧の項目", first_list, TREE_RULE, FORBID_PLAIN],
+  ["#{skill}/SKILL.md", "## やってはいけないこと", "やってはいけないことの項目", top_items,
+   ["commit mode で worktree の file"], ["周辺コードの根拠にする"]],
+  ["docs/codex-review-launch.md", "## brief と target", "brief と target の文", sentences,
+   ["検証済み commit OID の tree"], ["worktree の file は根拠にしません"]],
 ].freeze
 
 EVAL_NAMES = %w[
@@ -70,35 +74,28 @@ EVAL_NAMES = %w[
   root-commit-context-from-own-tree
 ].freeze
 
-def narrow(lines, start_re, stop_re)
-  first = lines.index { |l| l =~ start_re }
-  return nil if first.nil?
-  rest = lines[(first + 1)..-1]
-  stop = rest.index { |l| l =~ stop_re }
-  lines[first, 1 + (stop || rest.length)]
-end
-
 errors = []
-TARGETS.each do |rel, label, ranges, words|
+TARGETS.each do |rel, heading, label, pick, words, clauses|
   path = File.join(root, rel)
   unless File.file?(path)
     errors << "#{rel}: file が無い"
     next
   end
-  lines = File.read(path, encoding: "UTF-8").split("\n")
-  ranges.each do |start_re, stop_re|
-    lines = narrow(lines, start_re, stop_re)
-    break if lines.nil?
-  end
-  if lines.nil?
-    errors << "#{rel}: #{label}の節が見つからない"
+  body = MU.section(File.read(path, encoding: "UTF-8"), heading)
+  if body.nil?
+    errors << "#{rel}: 「#{heading}」の節が見つからない"
     next
   end
-  # 折り返しの位置で落ちないよう、空白と改行を除いて比べる。
-  body = lines.join("\n").gsub(/\s+/, "")
-  missing = words.reject { |w| body.include?(w.gsub(/\s+/, "")) }
-  next if missing.empty?
-  errors << "#{rel}: #{label}に commit mode の tree の規則の語 #{missing.inspect} が無い"
+  units = pick.call(body)
+  if units.empty?
+    errors << "#{rel}: #{label}が見つからない"
+    next
+  end
+  lacks = ->(unit) { MU.missing(unit, words) + clauses.reject { |c| MU.clause?(unit, c) } }
+  gap = lacks.(units.min_by { |unit| lacks.(unit).size })
+  next if gap.empty?
+
+  errors << "#{rel}: #{label}に commit mode の tree の規則の語 #{gap.inspect} が無い"
 end
 
 evals_rel = "#{skill}/evals/evals.json"
