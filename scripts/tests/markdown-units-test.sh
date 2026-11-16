@@ -62,6 +62,7 @@ check "an indented fence is a fence", blocks[1][1].include?("gh")
 check "an unclosed fence is not a block", MU.blocks("```sh\na\n") == []
 check "a fence without an info string has an empty one", MU.blocks("```\na\n```\n") == [["", "a\n"]]
 check "the spaces around an info string are dropped", MU.blocks("``` sh  \na\n```\n") == [["sh", "a\n"]]
+check "dedent strips the fence indentation from the lines of a block", MU.blocks("  ```sh\n  a\n    b\n  ```\n", dedent: true) == [["sh", "a\n  b\n"]] && MU.blocks("  ```sh\n  a\n  ```\n") == [["sh", "  a\n"]]
 
 # ---- fence の外の単位
 items = MU.items(step2)

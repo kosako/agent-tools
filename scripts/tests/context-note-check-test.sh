@@ -32,35 +32,16 @@ trap 'rm -rf "$tmp"' EXIT
 tmp=$(CDPATH= cd -- "$tmp" && pwd -P)
 
 # ---- 検査の command の切り出し ---------------------------------------------------
-ruby - "$skill_md" "$tmp/check-block.sh" <<'RUBY'
+ruby -r"$script_dir/lib/markdown_units" - "$skill_md" "$tmp/check-block.sh" <<'RUBY'
+# encoding: UTF-8
 skill_md, out = ARGV.fetch(0), ARGV.fetch(1)
 heading = "### 1. 参照先を確認する"
 
-# 見出しの行から、同じか上の level の次の見出しまで (code block の中の行は見出しとみなさない)。
-lines = File.read(skill_md, encoding: "UTF-8").lines
-start = lines.index { |l| l.chomp == heading }
-abort "FAIL: context-note-check: #{skill_md} に「#{heading}」の節が無い" unless start
-level = heading[/\A#+/].size
-fence = false
-body = []
-lines[(start + 1)..-1].each do |l|
-  fence = !fence if l =~ /\A\s*```/
-  break if !fence && l =~ /\A(#+) / && $1.size <= level
-  body << l
-end
-
-blocks = []
-cur = nil
-body.each do |l|
-  if cur.nil? && l =~ /\A```sh\s*\z/
-    cur = []
-  elsif cur && l =~ /\A```\s*\z/
-    blocks << cur.join
-    cur = nil
-  elsif cur
-    cur << l
-  end
-end
+# 節と sh の block は lib/markdown_units.rb で取る (#685。見出しの空白と fence の字下げに依らない)。走らせるのは、fence の字下げを
+# 外した原文の block。
+body = MarkdownUnits.section(File.read(skill_md, encoding: "UTF-8"), heading)
+abort "FAIL: context-note-check: #{skill_md} に「#{heading}」の節が無い" unless body
+blocks = MarkdownUnits.blocks(body, dedent: true).select { |info, _| info == "sh" }.map(&:last)
 unless blocks.size == 1
   abort "FAIL: context-note-check: 「#{heading}」の節に sh の code block が 1 つでない (#{blocks.size} 個)"
 end

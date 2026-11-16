@@ -27,30 +27,14 @@ home="$tmp/home"
 gate_bin="$home/.claude/agent-tools/scripts/personal-public-safety-gate"
 
 # ---- gate の command の切り出し ----------------------------------------------------
-ruby - "$worker_dir/LAUNCH.md" "$tmp/gate-block.sh" <<'RUBY'
+ruby -r"$script_dir/lib/markdown_units" - "$worker_dir/LAUNCH.md" "$tmp/gate-block.sh" <<'RUBY'
+# encoding: UTF-8
 launch, out = ARGV.fetch(0), ARGV.fetch(1)
-lines = File.read(launch).lines
-start = lines.index { |l| l.start_with?("## 9. ") }
-abort "FAIL: codex-worker-publish-gate: LAUNCH.md に「## 9.」の節が無い" unless start
-body = []
-fence = false
-lines[(start + 1)..-1].each do |l|
-  fence = !fence if l =~ /\A\s*```/
-  break if !fence && l =~ /\A## /
-  body << l
-end
-blocks = []
-cur = nil
-body.each do |l|
-  if cur.nil? && l =~ /\A```sh\s*\z/
-    cur = []
-  elsif cur && l =~ /\A```\s*\z/
-    blocks << cur.join
-    cur = nil
-  elsif cur
-    cur << l
-  end
-end
+# 節と sh の block は lib/markdown_units.rb で取る (#685。見出しの空白と fence の字下げに依らない)。走らせるのは、fence の字下げを
+# 外した原文の block。
+body = MarkdownUnits.section(File.read(launch, encoding: "UTF-8"), "## 9. 回収 (fetch) と trailer 検査と PR")
+abort "FAIL: codex-worker-publish-gate: LAUNCH.md に「## 9. 回収 (fetch) と trailer 検査と PR」の節が無い" unless body
+blocks = MarkdownUnits.blocks(body, dedent: true).select { |info, _| info == "sh" }.map(&:last)
 gated = blocks.select { |b| b.include?('"$gate" --stdin') }
 abort "FAIL: codex-worker-publish-gate: §9 に gate (\"$gate\" --stdin) の sh の block が 1 つでない (#{gated.size} 個)" unless gated.size == 1
 block = gated.first
