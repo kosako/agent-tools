@@ -11,7 +11,7 @@ risk:
 # #682 の実装。内容に紐づく承認は相互 review の対象。
 review:
   human_review: approved
-  approved_build_id: sha256:6a9c65115b864bde726d259045a18b26fe4bd77b1aadfc6258f3de5162e69e67
+  approved_build_id: sha256:2285cdf359d3f7af0f534611e59a5550e02130ca6b9562ae413bd895c5df72d1
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-session-progress.rb

@@ -268,6 +268,7 @@ module SessionProgress
     record["decisions"] = patch["decisions"] if patch.key?("decisions")
     patch.fetch("steps", []).each do |change|
       index = record["steps"].index { |entry| entry["id"] == change["id"] }
+      raise Refused, "required: steps.title" if index.nil? && !change.key?("title")
       before = index.nil? ? nil : record["steps"][index]
       after = (before || { "state" => "pending", "result" => "" }).merge(change)
       if index.nil?
@@ -401,8 +402,8 @@ module SessionProgress
     lines = ["自己申告 / #{record['client']} / #{record['session_id']} / revision #{record['revision']}",
              "更新: #{record['updated_at']} (#{age(record)})", "目的: #{record['purpose']}", "進み具合: #{counts(record)}"]
     record["steps"].each do |entry|
-      lines << "#{"[#{entry['state']}]".ljust(9)}#{entry['title']}"
-      lines << "         #{entry['result']}" unless entry["result"].empty?
+      lines << "#{"[#{entry['state']}]".ljust(10)}#{entry['title']}"
+      lines << "          #{entry['result']}" unless entry["result"].empty?
     end
     lines << "決めること: #{record['decisions'].size} 件"
     record["decisions"].each do |entry|

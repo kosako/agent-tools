@@ -79,6 +79,8 @@ check("step keys follow schema order", record["steps"][0].keys == %w[id title st
 check("initial defaults and history", record["steps"][0]["state"] == "pending" && record["steps"][0]["result"] == "" &&
                                      record["history"].size == 1 && record["history"][0]["step"] == "inspect" && record["history_dropped"] == 0)
 check("private directory and record", File.stat(dir).mode & 0o777 == 0o700 && File.stat(File.join(dir, "codex-session.json")).mode & 0o777 == 0o600)
+s, o, = call(["show", "--dir", dir, "--client", "codex", "--session-id", "session"])
+check("pending state has space before title", s == 0 && o.include?("[pending] 規約を確かめる\n"))
 check("timestamp milliseconds", record["updated_at"].match?(/\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z\z/))
 s, = update(dir, { "purpose" => "実装する", "steps" => [{ "id" => "inspect", "state" => "done", "result" => "規約を確認した" },
   { "id" => "implement", "title" => "実装する", "state" => "active" }, { "id" => "verify", "title" => "検査する", "state" => "active" }], "decisions" => [DECISION] })
@@ -91,7 +93,8 @@ s, = update(dir, { "steps" => [{ "id" => "verify", "state" => "skipped", "result
 s, o, = call(["show", "--dir", dir, "--client", "codex", "--session-id", "session"])
 check("plain show counts skip and recommendation", s == 0 && o.include?("自己申告 / codex / session") && o.include?("1 / 2 段") &&
   o.include?("[done]") && o.include?("規約を確認した") && o.include?("推奨: 作業ツリー"))
-check("state and result columns align", o.include?("[done]   規約を確かめる\n         規約を確認した\n") && o.include?("[active] 実装する\n"))
+check("state and result columns align", o.include?("[done]    規約を確かめる\n          規約を確認した\n") &&
+  o.include?("[active]  実装する\n") && o.include?("[skipped] 検査する\n          別途確かめる\n"))
 s, o, = call(["show", "--dir", dir, "--client", "codex", "--session-id", "session", "--json"])
 check("show JSON stored shape", s == 0 && JSON.parse(o) == read(dir))
 
@@ -138,6 +141,10 @@ bad_patches = ["",
 ]
 before = File.binread(File.join(dir, "codex-session.json"))
 files_before = Dir.children(dir).sort
+result = update(dir, { "steps" => [{ "id" => "unknown", "state" => "done", "result" => "確認した" }] })
+rejected("new step requires title", result)
+check("missing step title diagnostic", result[2].include?("required: steps.title"))
+check("missing step title preserves record and files", File.binread(File.join(dir, "codex-session.json")) == before && Dir.children(dir).sort == files_before)
 bad_patches.each_with_index do |patch, index|
   input = patch.is_a?(String) ? patch : JSON.generate(patch)
   result = update(dir, input, env: { "HOME" => File.join("/Users", "session-progress-test") })
@@ -276,6 +283,8 @@ state_dir = File.join(repo_dir, ".agent-session-progress")
 FileUtils.mkdir_p(File.join(repo_dir, "sub"))
 s, = call(["update", "--client", "codex", "--session-id", "s", "--stdin"], input: JSON.generate(INITIAL), cwd: File.join(repo_dir, "sub"))
 check("default root from subdirectory", s == 0 && File.file?(File.join(state_dir, "codex-s.json")))
+s, o, = call(["update", "--client", "codex", "--session-id", "s", "--stdin"], input: "{}", cwd: repo_dir)
+check("existing default directory accepts second update", s == 0 && JSON.parse(o)["revision"] == 2 && read(state_dir, "codex", "s")["revision"] == 2)
 noignore = repo("noignore", ignored: false)
 rejected("missing ignore", update(File.join(noignore, ".agent-session-progress"), cwd: noignore))
 check("missing ignore creates nothing", !File.exist?(File.join(noignore, ".agent-session-progress")))

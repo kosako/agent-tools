@@ -198,12 +198,15 @@ gate は root / nested の `.agent-session-progress/` 配下の staged 追加を
 更新: 2026-11-17T03:15:00.000Z (5 分前)
 目的: session の途中の状態を読める形に残す
 進み具合: 1 / 2 段
-[done]   既存の規約を確かめる
-         packet と handoff の分担を確かめた
-[active] 記録の形を決める
+[done]    既存の規約を確かめる
+          packet と handoff の分担を確かめた
+[active]  記録の形を決める
 決めること: 1 件
   記録の置き場をどこにするか (推奨: 作業ツリーの中)
 ```
+
+state の印は 10 桁に左寄せし、結果も題名と同じ位置から表示します。
+`[pending]` と `[skipped]` の後ろにも空白が 1 つ入ります。
 
 `show --json` は、検査した保存形を JSON で出します。空白の整形は保存 file と同一とは限りません。
 `list` は更新の新しい順に client、ID の先頭 12 字、古さ、段の数、目的を 1 行ずつ出します。
