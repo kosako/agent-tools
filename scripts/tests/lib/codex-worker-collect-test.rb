@@ -138,21 +138,46 @@ assert(trace.none? { |a| a.include?("fetch") }, "correction collection never fet
 end
 File.write(record_path, JSON.generate(record))
 
-# A launch-path failure leaves a runnable script without a pane.
+# A launch-path failure leaves a manual script even after creating a pane.
 state = JSON.parse(File.read(ENV.fetch("FAKE_HERDR_FILE")))
-reset_herdr
-manual = blocked("launch-path", "herdr-response", { "FAKE_HERDR_FAIL" => "tab create" })
-manual_run = manual.fetch("run_dir")
-before = File.binread(PACKET)
-pending = invoke("collect", 3)
-assert(pending["reason_code"] == "manual-completion-pending" && !pending.key?("blocked_at"), "manual completion wait is RUNNING without blocked_at")
-assert(!pending["packet"]["written"] && File.binread(PACKET) == before, "manual wait keeps packet")
-run_cmd("zsh", File.join(manual_run, "run.zsh"), chdir: ROOT)
-File.write(File.join(manual_run, "result.md"), RESULT)
-File.write(ENV.fetch("FAKE_HERDR_LOG"), "")
-result = invoke("collect")
-assert(result["status"] == "DONE" && result["leftover"]["foreground"] == { "checked" => false }, "manual run collected without foreground")
-assert(!File.exist?(File.join(manual_run, "pane.log")) && events.empty?, "manual collection never reads herdr or saves pane log")
+[["launch", "tab create"], ["launch", "pane rename"], ["launch", "pane run"],
+  ["retry-empty", "pane rename"], ["retry-empty", "pane run"]].each do |subcommand, failed_command|
+  reset_herdr
+  if subcommand == "retry-empty"
+    initial = launch
+    finish(initial.fetch("run_dir"), initial.fetch("nonce"), "")
+  end
+  manual = invoke(subcommand, 1, { "FAKE_HERDR_FAIL" => failed_command })
+  assert(manual["blocked_at"] == "launch-path" && manual["reason_code"] == "herdr-response", "manual launch failure classification")
+  assert(manual["packet"]["written"], "manual launch keeps run record")
+  manual_run = manual.fetch("run_dir")
+  manual_record = JSON.parse(File.read(File.join(manual_run, "launch.json")))
+  assert(manual_record["pane_id"].nil?, "#{subcommand} #{failed_command} clears collection pane")
+  assert(!File.exist?(File.join(manual_run, "launch.json.tmp")), "manual record replaced atomically")
+  unless failed_command == "tab create"
+    assert(!File.read(File.join(manual_run, "pane-id")).strip.empty?, "created pane evidence retained")
+    assert(File.read(File.join(manual_run, "tab-id")).strip == manual_record["tab_id"], "created tab evidence retained")
+  end
+  assert(events.none? { |e| %w[close kill].include?(e[1]) }, "launch failure retains pane and tab")
+  before = File.binread(PACKET)
+  File.write(ENV.fetch("FAKE_HERDR_LOG"), "")
+  pending = invoke("collect", 3, { "FAKE_HERDR_FAIL_ALL" => "1" })
+  assert(pending["reason_code"] == "manual-completion-pending" && !pending.key?("blocked_at"), "manual completion wait is RUNNING without blocked_at")
+  assert(!pending["packet"]["written"] && File.binread(PACKET) == before, "manual wait keeps packet")
+  assert(events.empty? && Dir.glob(File.join(manual_run, "wip-*")).empty?, "manual wait does not inspect pane or back up active work")
+  run_cmd("zsh", File.join(manual_run, "run.zsh"), chdir: ROOT)
+  File.write(File.join(manual_run, "result.md"), "")
+  if subcommand == "launch"
+    failure("retry-empty", "launch-path", "tab-ownership")
+  else
+    failure("retry-empty", "launch-record", "not-retryable")
+  end
+  File.write(File.join(manual_run, "result.md"), RESULT)
+  File.write(ENV.fetch("FAKE_HERDR_LOG"), "")
+  result = invoke("collect", 0, { "FAKE_HERDR_FAIL_ALL" => "1" })
+  assert(result["status"] == "DONE" && result["leftover"]["foreground"] == { "checked" => false }, "manual run collected without foreground")
+  assert(!File.exist?(File.join(manual_run, "pane.log")) && events.empty?, "manual collection never reads herdr or saves pane log")
+end
 reset_herdr(state)
 
 finish(run, nonce)

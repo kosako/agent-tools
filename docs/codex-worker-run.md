@@ -215,6 +215,8 @@ collect は clone にも main にも fetch しません。
 process は止めず、packet を保持します。pane と tab は、成功と失敗のどちらでも閉じません。
 
 pane_id が null の run は、人手で run script を実行する経路です。
+pane の rename または run が失敗した場合も、launch.json の pane_id を null に戻します。
+作成済みの pane と tab は閉じず、pane-id と tab-id の file に記録を残します。
 完了記録が無ければ即座に exit 3、`RUNNING`、`manual-completion-pending` を返します。
 この場合も `blocked_at` は無く、packet は保持します。
 完了記録があれば、pane.log と foreground の観測を省いて照合と転記へ進みます。
@@ -256,12 +258,16 @@ gate の stderr は `gate.err` に控えます。本文や診断の内容は std
 | executor-result | empty-result (retryable: false) | 2回目の空の結果。照合・退避・stop を行う |
 | executor-result | worker-question (retryable: false) | 最終 message を worker/codex の stop として転記する |
 | transcription | pane-log / result-format / gate | 書かない。生出力、書式、公開検査のいずれかで停止 |
+| transcription | packet-update | worker-update が失敗したら書かない。exit 0 の応答が不正なら packet.written は true |
+| transcription | run-record | result の書き込み後の読み直しが一致しない。packet.written は true |
 | clone | snapshot-mismatch | clone で git を呼ばず、退避も packet の更新もしない |
 | clone | backup | 退避が未完。backup_step に status / staged / unstaged / untracked を返し、packet は保持 |
 
 `RESULT-FORMAT.md` の停止時の state 規則とは、次の点が異なります。
-transcription、終了後の snapshot 照合の失敗、退避の失敗では、packet を blocked にしません。
-回収の再試行に備えて元の state と起動記録を保持します。
+transcription で停止しても、それを理由に packet を blocked にする更新は行いません。
+packet の更新前の停止なら、回収の再試行に備えて元の state と起動記録を保持します。
+書き込み後に停止した場合は、packet.written を確認し、packet を読み直します。
+終了後の snapshot 照合の失敗と退避の失敗でも、元の state と起動記録を保持します。
 
 停止の退避は `wip-status.txt`、`wip-staged.patch`、`wip-unstaged.patch`、`wip-untracked.tar` に分けます。
 各 command の成功を確認し、失敗した段で止めます。
@@ -287,6 +293,13 @@ tab の存在と元の `tab-id` との一致、pane の名前は、起動記録�
 起動の段でも所有を再確認し、同じ tab に pane を足します。
 成功時は launch と同じ `STARTED` の JSON で exit 0 です。
 起動の共通段で止まった場合も、launch と同じ区分と packet.written を返します。
+
+人手実行 (pane_id が null) の1回目が空の結果で終わった場合、retry-empty は packet を変えずに止まります。
+workspace を確認できなければ workspace、確認できても tab-ownership で停止します。
+どちらも blocked_at は launch-path です。
+この場合は LAUNCH.md §10 の人手の手順を続けます。
+新しい run directory と nonce の run script を用意し、人に1回だけ渡して起動し直します。
+元の script の再実行では代えません。この手順用の subcommand は追加しません。
 
 結合検査は `scripts/tests/codex-worker-collect-test.sh` です。
 launch の検査と fixture を共有し、herdr と codex は偽物を使います。

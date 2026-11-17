@@ -450,6 +450,7 @@ module CodexWorkerRun
     end
 
     def check_retry_tab
+      stop("tab-ownership") unless @pane
       matching = matching_tabs
       stop("tab-ownership") if matching.empty?
       owned_tab_panes(matching.first["tab_id"])
@@ -483,8 +484,15 @@ module CodexWorkerRun
       write_launch_record
       File.write(File.join(@run, "tab-id"), @tab + "\n")
       File.write(File.join(@run, "pane-id"), @pane + "\n")
-      command(["herdr", "pane", "rename", @pane, @pane_label], "herdr-response")
-      command(["herdr", "pane", "run", @pane, "zsh #{literal(File.join(@run, 'run.zsh'))}"], "herdr-response")
+      begin
+        command(["herdr", "pane", "rename", @pane, @pane_label], "herdr-response")
+        command(["herdr", "pane", "run", @pane, "zsh #{literal(File.join(@run, 'run.zsh'))}"], "herdr-response")
+      rescue Stop
+        # 起動を確認できない run は、人手の実行として回収する。
+        @launch_record["pane_id"] = nil
+        write_launch_record
+        raise
+      end
     end
 
     def write_launch_record
