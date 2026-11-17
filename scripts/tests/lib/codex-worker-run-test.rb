@@ -1,195 +1,5 @@
 # frozen_string_literal: true
-require "json"
-require "fileutils"
-require "open3"
-require "rbconfig"
-require "digest"
-
-SOURCE, ROOT = ARGV.map { |v| File.realpath(v) }
-# macOS の TMPDIR は /tmp と別の実体。子の TMPDIR は fixture 内の専用 directory にする。
-# Linux の /tmp の下でも境界の単体検査は実行できるが、成功の結合検査には /tmp 外の TMPDIR が必要。
-$count = 0
-def assert(value, message)
-  abort "FAIL: #{message}" unless value
-  $count += 1
-end
-
-def write_exec(path, text)
-  File.write(path, text)
-  File.chmod(0755, path)
-end
-
-REAL_GIT = Open3.capture3("which", "git").first.strip
-ENV.keys.grep(/\A(?:GIT_|CODEX_|GH_|HERDR_|FAKE_)/).each { |k| ENV.delete(k) }
-ENV["HOME"] = File.join(ROOT, "home")
-ENV["XDG_CONFIG_HOME"] = File.join(ROOT, "config")
-CONFIG_FILE = File.join(ENV.fetch("HOME"), ".gitconfig")
-ENV["CODEX_HOME"] = File.join(ROOT, "codex-home")
-ENV["TMPDIR"] = File.join(ROOT, "tmp")
-ENV["XDG_STATE_HOME"] = File.join(ROOT, "state ' $(touch INJECTED) `touch BACKTICK`")
-ENV["HERDR_WORKSPACE_ID"] = "ws-test"
-[ENV["HOME"], ENV["CODEX_HOME"], ENV["TMPDIR"]].each { |p| FileUtils.mkdir_p(p) }
-BIN = File.join(ROOT, "bin")
-DEPLOY = File.join(ROOT, "deployed ' scripts")
-HOOKS = File.join(ROOT, "hooks")
-[BIN, DEPLOY, HOOKS].each { |p| FileUtils.mkdir_p(p) }
-%w[pre-commit commit-msg].each { |name| write_exec(File.join(HOOKS, name), "#!/bin/sh\nexit 0\n") }
-File.write(CONFIG_FILE, <<~CONFIG)
-  [user]
-    name = Test Worker
-    email = worker@example.invalid
-  [core]
-    hooksPath = #{HOOKS}
-    excludesFile = /dev/null
-  [init]
-    defaultBranch = main
-  [protocol "file"]
-    allow = always
-CONFIG
-File.write(File.join(ENV["CODEX_HOME"], "config.toml"), "model = \"fixture-model\"\nmodel_reasoning_effort = \"high\"\n")
-%w[personal-codex-worker-run personal-codex-worker-preflight personal-packet].each do |name|
-  FileUtils.cp(File.join(SOURCE, "shared", "scripts", name + ".rb"), File.join(DEPLOY, name))
-  File.chmod(0755, File.join(DEPLOY, name))
-end
-%w[personal-git-hook-dispatcher personal-public-safety-gate personal-git-identity-gate personal-ai-trailer-gate].each do |name|
-  write_exec(File.join(DEPLOY, name), "#!/bin/sh\nexit 0\n")
-end
-ENV["FAKE_GIT_REAL"] = REAL_GIT
-ENV["FAKE_GIT_LOG"] = File.join(ROOT, "git.jsonl")
-write_exec(File.join(BIN, "git"), <<~'FAKE')
-  #!/usr/bin/env ruby
-  require "json"
-  File.open(ENV.fetch("FAKE_GIT_LOG"), "a") { |f| f.puts JSON.generate(ARGV) }
-  exec(ENV.fetch("FAKE_GIT_REAL"), *ARGV)
-FAKE
-ENV["FAKE_HERDR_FILE"] = File.join(ROOT, "herdr.json")
-ENV["FAKE_HERDR_LOG"] = File.join(ROOT, "herdr.jsonl")
-write_exec(File.join(BIN, "herdr"), <<~'FAKE')
-  #!/usr/bin/env ruby
-  require "json"
-  file = ENV.fetch("FAKE_HERDR_FILE")
-  state = JSON.parse(File.read(file))
-  File.open(ENV.fetch("FAKE_HERDR_LOG"), "a") { |f| f.puts JSON.generate(ARGV) }
-  verb = ARGV.first(2).join(" ")
-  if ENV["FAKE_HERDR_FAIL"] == verb
-    warn "PRIVATE-REQUEST"
-    exit 1
-  end
-  if ENV["FAKE_HERDR_BAD"] == verb
-    puts "PRIVATE-REQUEST"
-    exit
-  end
-  case verb
-  when "status"
-    puts(ENV["FAKE_HERDR_OFF"] ? "status: stopped" : "status: running")
-    exit
-  when "tab list" then result = { "tabs" => state["tabs"] }
-  when "pane list" then result = { "panes" => state["panes"] }
-  when "pane process-info"
-    names = state.fetch("running", []).include?(ARGV.last) ? ["codex"] : ["zsh"]
-    result = { "process_info" => { "foreground_processes" => names.map { |n| { "name" => n } } } }
-  when "tab create"
-    tab = { "tab_id" => "t1", "label" => ARGV[ARGV.index("--label") + 1] }
-    pane = { "pane_id" => "p1", "tab_id" => "t1" }
-    state["tabs"] << tab
-    state["panes"] << pane
-    result = { "tab" => tab, "root_pane" => pane }
-  when "pane split"
-    base = state["panes"].find { |p| p["pane_id"] == ARGV[ARGV.index("--pane") + 1] }
-    pane = { "pane_id" => "p#{state['panes'].size + 1}", "tab_id" => base.fetch("tab_id") }
-    state["panes"] << pane
-    result = { "pane" => pane }
-  when "pane rename"
-    state["panes"].find { |p| p["pane_id"] == ARGV[2] }["label"] = ARGV[3]
-    result = {}
-  when "pane run"
-    # 起動の依頼だけを記録する。実行は test 本体が zsh で行う。
-    result = {}
-  else abort "unexpected fake herdr command"
-  end
-  File.write(file, JSON.generate(state))
-  puts JSON.generate("result" => result)
-FAKE
-ENV["FAKE_CODEX_FILE"] = File.join(ROOT, "codex.json")
-write_exec(File.join(BIN, "codex"), <<~'FAKE')
-  #!/usr/bin/env ruby
-  require "json"
-  case ARGV
-  when ["--version"] then puts "codex-cli 0.156.0"
-  when ["exec", "--help"]
-    exit 1 if ENV["FAKE_CODEX_NO_HELP"]
-    puts '--sandbox workspace-write --config --disable --ignore-user-config --ignore-rules --output-last-message --add-dir `-`'
-  when ["features", "list"]
-    %w[apps computer_use browser_use].each { |n| puts "#{n}  stable  true" }
-  else
-    File.write(ENV.fetch("FAKE_CODEX_FILE"), JSON.generate("argv" => ARGV, "cwd" => Dir.pwd, "stdin" => STDIN.read))
-    File.write(ARGV[ARGV.index("-o") + 1], "fixture result\n")
-    puts "fixture stdout"
-    warn "fixture stderr"
-    exit ENV.fetch("FAKE_CODEX_EXIT", "0").to_i
-  end
-FAKE
-ENV["PATH"] = BIN + File::PATH_SEPARATOR + ENV.fetch("PATH")
-ENTRY = File.join(DEPLOY, "personal-codex-worker-run")
-
-def run_cmd(*argv, **opts)
-  out, err, status = Open3.capture3(*argv, **opts)
-  assert(status.success?, "command failed: #{argv.first(3).inspect}: #{err}")
-  out
-end
-
-def git(repo, *args)
-  run_cmd(REAL_GIT, "-C", repo, *args).strip
-end
-
-ORIGIN = File.join(ROOT, "origin")
-MAIN = File.join(ROOT, %q(main ' "quote" $(touch INJECTED) `touch BACKTICK`))
-run_cmd(REAL_GIT, "init", "-q", ORIGIN)
-File.write(File.join(ORIGIN, "base.txt"), "base\n")
-git(ORIGIN, "add", ".")
-git(ORIGIN, "commit", "-qm", "base")
-BASE = git(ORIGIN, "rev-parse", "HEAD")
-run_cmd(REAL_GIT, "clone", "-q", "--no-hardlinks", ORIGIN, MAIN)
-git(MAIN, "switch", "-qc", "orchestrator")
-File.write(File.join(MAIN, "local.txt"), "not origin main\n")
-git(MAIN, "add", ".")
-git(MAIN, "commit", "-qm", "local only")
-FileUtils.mkdir_p(File.join(MAIN, ".agent-packets"))
-REQUEST = "\n  PRIVATE-REQUEST\t\n\n### 内容\n文字列を保つ\n\n"
-PACKET = File.join(MAIN, ".agent-packets", "7.md")
-CLONE = MAIN + "-clones/7"
-
-def reset_packet(fields = "", request = REQUEST)
-  File.write(PACKET, "---\nissue: 7\ntitle: packet\nstate: open\nworker: codex\nupdated: 2026-01-01T00:00:00+09:00\n#{fields}---\n## 依頼\n#{request}## 結果\n\n## 次の入口\n\nnext\n")
-end
-
-def reset_herdr(state = { "tabs" => [], "panes" => [] })
-  File.write(ENV.fetch("FAKE_HERDR_FILE"), JSON.generate(state))
-  File.write(ENV.fetch("FAKE_HERDR_LOG"), "")
-  File.write(ENV.fetch("FAKE_GIT_LOG"), "")
-end
-
-def events
-  File.readlines(ENV.fetch("FAKE_HERDR_LOG")).map { |l| JSON.parse(l) }
-end
-
-def launch(expected = 0, env = {}, args = [], explicit: nil)
-  argv = explicit || ["launch", "--repo", MAIN, "--issue", "7", *args]
-  out, err, status = Open3.capture3(env, [ENTRY, ENTRY], *argv, chdir: MAIN)
-  assert(status.exitstatus == expected, "launch exit #{status.exitstatus}, wanted #{expected}: #{out} #{err}")
-  assert(out.lines.size == 1, "one JSON line")
-  assert(!out.include?("PRIVATE-REQUEST") && !err.include?("PRIVATE-REQUEST"), "request must not leak")
-  yield(out, err) if block_given?
-  JSON.parse(out)
-end
-
-def blocked(at, code, env = {}, args = [], &block)
-  before = events.count { |e| e.first(2) == %w[pane run] }
-  result = launch(1, env, args, &block)
-  assert(result["status"] == "BLOCKED" && result["blocked_at"] == at && result["reason_code"] == code, "block category: #{result}")
-  assert(events.count { |e| e.first(2) == %w[pane run] } == before, "blocked must not run pane")
-  result
-end
+require_relative "codex-worker-run-fixture"
 
 reset_packet
 reset_herdr
@@ -241,6 +51,14 @@ assert(git(CLONE, "rev-parse", "HEAD") == BASE, "new branch starts at origin mai
 assert(git(CLONE, "branch", "--show-current") == "feat/7-test", "selected branch")
 assert(git(CLONE, "config", "maintenance.auto") == "false" && git(CLONE, "config", "gc.auto") == "0", "maintenance config")
 assert(File.binread(File.join(run, "brief.md")).include?(REQUEST.b), "request bytes preserved")
+brief = File.read(File.join(run, "brief.md"))
+[
+  "process 一覧を読めないときは再試行せず、最終 message の「未完」に書きます。",
+  "「停止理由 または 質問」には、作業を止めて orchestrator の判断を待つ理由だけを書きます。",
+  "受け入れ条件の曖昧さや、続けられない障害が対象です。",
+  "走らせられなかった test や読めなかった process 一覧など、確かめられなかったことは「未完」に書きます。",
+  "止まらずに終えたときは、「停止理由 または 質問」に「なし」とだけ書きます。"
+].each { |sentence| assert(brief.include?(sentence), "brief distinguishes stops from unverified work: #{sentence}") }
 assert(File.read(PACKET).include?("run: #{run.to_json}") && File.read(PACKET).include?("tab: \"#7\""), "packet record")
 assert(events.include?(["tab", "create", "--workspace", "ws-test", "--cwd", CLONE, "--label", "#7", "--no-focus"]), "tab create argv")
 assert(events.include?(["pane", "rename", "p1", "worker-7"]), "pane rename argv")
@@ -248,7 +66,7 @@ assert(File.read(File.join(run, "tab-id")).strip == "t1" && File.read(File.join(
 
 # pane shell と run script の両方を通し、二段の literal 化を検証する。
 command = events.find { |e| e.first(2) == %w[pane run] }.last
-run_cmd("zsh", "-c", command)
+run_cmd("zsh", "-c", command, chdir: ROOT)
 observed = JSON.parse(File.read(ENV.fetch("FAKE_CODEX_FILE")))
 pf = JSON.parse(File.read(File.join(run, "preflight.json")))
 expected = pf.fetch("launch_argv").drop(1).map { |a| a == "<run dir>/result.md" ? File.join(run, "result.md") : a }
@@ -258,7 +76,7 @@ assert(observed["stdin"].b == File.binread(File.join(run, "brief.md")), "stdin b
 assert(File.read(File.join(run, "done.txt")) == "CODEX-WORKER-DONE-#{first['nonce']} exit=0\n", "nonce sentinel")
 assert(File.read(File.join(run, "codex.log")).include?("fixture stderr"), "stderr tee")
 assert(!File.exist?(File.join(CLONE, "INJECTED")) && !File.exist?(File.join(CLONE, "BACKTICK")), "paths not evaluated")
-_out, _err, status = Open3.capture3({ "FAKE_CODEX_EXIT" => "17" }, "zsh", File.join(run, "run.zsh"))
+_out, _err, status = Open3.capture3({ "FAKE_CODEX_EXIT" => "17" }, "zsh", File.join(run, "run.zsh"), chdir: ROOT)
 assert(status.exitstatus == 17 && File.read(File.join(run, "done.txt")).end_with?("exit=17\n"), "codex pipeline exit preserved")
 assert(blocked("launch-record", "collect-required")["run_dir"] == run, "same issue returns its recorded run")
 File.unlink(File.join(run, "done.txt"))
@@ -353,7 +171,7 @@ File.write(write_fault, <<~'RUBY')
   end
   File.singleton_class.prepend(ArtifactWriteFault)
 RUBY
-%w[brief.md run.zsh].each do |artifact|
+%w[brief.md run.zsh launch.json.tmp].each do |artifact|
   before_packet = File.binread(PACKET)
   result = blocked("launch-path", "io", { "RUBYOPT" => "-r#{write_fault}", "FAIL_ARTIFACT" => artifact })
   assert(result["phase"] == "artifacts" && !result["packet"]["written"], "artifact failure before record #{artifact}")
@@ -386,6 +204,8 @@ write_exec(packet_cli, <<~'WRAPPER')
 WRAPPER
 result = blocked("launch-record", "packet-update", { "FAKE_PACKET_FAIL" => "1" })
 assert(!result["packet"]["written"], "update failure has no record")
+initial_record = JSON.parse(File.read(File.join(result.fetch("run_dir"), "launch.json")))
+assert(initial_record["schema"] == 1 && initial_record["pane_id"].nil? && initial_record["tab_id"].nil?, "launch JSON precedes packet update")
 result = blocked("launch-record", "run-record", { "FAKE_PACKET_BAD_READ" => "1", "FAKE_PACKET_MARK" => File.join(ROOT, "packet-mark") })
 assert(result["packet"]["written"] && File.read(PACKET).include?(result["run_dir"]), "readback failure retains record")
 FileUtils.cp(packet_cli + "-real", packet_cli)
@@ -412,6 +232,10 @@ FileUtils.cp(packet_cli + "-real", packet_cli)
   assert(result["blocked_at"] == "launch-path" && result["packet"]["written"], "post-record herdr failure #{failure}")
   assert(File.read(PACKET).include?(result["run_dir"]), "record retained #{failure}")
   assert(events.none? { |e| e.include?("close") }, "never close panes")
+  if failure == "split"
+    launch_record = JSON.parse(File.read(File.join(result.fetch("run_dir"), "launch.json")))
+    assert(launch_record["tab_id"] == "t1" && launch_record["pane_id"].nil?, "known tab saved even when split fails")
+  end
   if %w[duplicate foreign no-panes wrong-label].include?(failure)
     assert(result["reason_code"] == "tab-ownership", "ownership category #{failure}")
     assert(events.none? { |e| [%w[tab create], %w[pane split], %w[pane rename], %w[pane run]].include?(e.first(2)) }, "unowned tab never changed #{failure}")
@@ -515,5 +339,5 @@ assert(git(CLONE, "branch", "--show-current") == "feat/7-test", "origin branch s
 git(MAIN, "add", "-f", ".agent-packets/7.md")
 blocked("launch-record", "packet-check")
 help = run_cmd(ENTRY, "--help")
-assert(help.include?("collect・retry-empty・check") && help.include?("--round"), "help scope")
+assert(help.include?("retry-empty --repo") && help.include?("--round"), "help scope")
 puts "ok: codex-worker-run self-test (#{$count} checks)"

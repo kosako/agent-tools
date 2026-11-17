@@ -320,11 +320,18 @@ stdin は UTF-8 の JSON object 1 つで、上限は 64 KiB (65,536 byte)。
 | operation | 追加の key | 前提 | 更新内容 |
 | --- | --- | --- | --- |
 | `branch` | `branch` | frontmatter に `branch` が無い | `branch` を追加。`updated` は保持 |
-| `run-start` | `run`、`tab` | state が open か blocked。run が無いか state が blocked | run と tab を保存し、last_run を削除。blocked なら open にして updated を更新。それ以外の updated は保持 |
+| `run-start` | `run`、`tab`。省略可: `expected_run` | state が open か blocked。run が無いか state が blocked。expected_run があれば現在の run との一致が必須で、open の run も差し替え可 | run と tab を保存し、last_run を削除。blocked なら open にして updated を更新。それ以外の updated は保持 |
 | `result` | `run`、`entry`、`next` | state が open で run が一致 | 結果に今日の worker/codex entry を追記。次の入口を next に置換。run を last_run に移して tab を削除し、updated を更新 |
 | `stop` | `run`、`role`、`entry`、`next` | state が open で run または last_run が一致 | 結果に今日の role の entry を追記。次の入口を next に置換。state を blocked にして updated を更新。run、tab、last_run は保持 |
-| `round` | `request`、`next` | state が open、review、blocked のいずれか | 依頼に request を追記し、次の入口を next に置換。review なら open にし、open と blocked は保持。updated を更新 |
+| `round` | `request`、`next`。省略可: `review_entry` | state が open、review、blocked のいずれか | 依頼に request を追記し、次の入口を next に置換。review なら open にし、open と blocked は保持。updated を更新 |
 | `review` | `pr` | state が open で run が無い | pr を保存し、state を review にして updated を更新 |
+
+`run-start` の `expected_run` は、空の結果の再実行で使う前提です。
+不一致なら `precondition` (exit 1) で保存しません。省略時の条件は変わりません。
+空の結果かどうかは caller が検査します。
+
+`round` の `review_entry` があれば、結果の末尾に当日の日付と `reviewer/claude` の entry を足します。
+本文の検査は `entry` と同じです。省略時は結果の節を保持します。
 
 `pr` は正の整数。それ以外の追加の値は文字列とし、次の検査を通す。
 

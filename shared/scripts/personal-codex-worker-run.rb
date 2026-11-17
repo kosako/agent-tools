@@ -6,6 +6,7 @@ require "open3"
 require "digest"
 require "fileutils"
 require "securerandom"
+require "time"
 
 Encoding.default_external = Encoding::UTF_8 unless Encoding.default_external == Encoding::UTF_8
 
@@ -15,10 +16,27 @@ module CodexWorkerRun
   USAGE = <<~TEXT
     personal-codex-worker-run launch --repo <main worktree の root> --issue <N> [--branch <名前>] [--round <K>]
     launch: packet を検査し、clone と起動の記録を用意して herdr で起動する。
-    collect・retry-empty・check は後の PR で追加する。
-    stdout: JSON 1 行。exit: 0 STARTED / 1 BLOCKED / 2 入力の誤り / 3 RUNNING。
+    personal-codex-worker-run collect --repo <root> --issue <N> [--wait-minutes <M>]
+    personal-codex-worker-run retry-empty --repo <root> --issue <N>
+    collect: 結果を回収する。retry-empty: 1 回目の空の結果を再実行する。
+    stdout: JSON 1 行。exit: 0 STARTED または DONE / 1 BLOCKED / 2 入力の誤り / 3 RUNNING。
   TEXT
   REASONS = {
+    "no-launch-record" => "run または launch.json がありません",
+    "invalid-launch-record" => "launch.json の内容を確かめられません",
+    "not-retryable" => "1 回目の空の結果ではありません",
+    "nonce-mismatch" => "完了記録の nonce が一致しません",
+    "done-invalid" => "完了記録を読み取れません",
+    "executor-exit" => "worker が正常に完了していません",
+    "limit" => "worker が利用上限で停止しました",
+    "empty-result" => "最終 message が空です",
+    "worker-question" => "worker の停止理由または質問があります",
+    "wait-limit" => "待つ時間の上限に達しました",
+    "manual-completion-pending" => "人手で実行する run script の完了を待っています",
+    "pane-log" => "pane の生出力を保存できません",
+    "result-format" => "最終 message の形が契約と一致しません",
+    "gate" => "最終 message が公開の検査を通りません",
+    "backup" => "変更の退避を完了できません",
     "input" => "引数または main worktree の指定が不正です",
     "gh-repo" => "GH_REPO が空でありません",
     "packet-check" => "packet の check が通りません",
@@ -97,11 +115,15 @@ module CodexWorkerRun
 
     def parse(argv)
       args = argv.map { |a| a.dup.force_encoding(Encoding::UTF_8) }
-      raise Stop.new("input", "BLOCKED", 2) unless args.shift == "launch"
+      @subcommand = args.shift
+      raise Stop.new("input", "BLOCKED", 2) unless %w[launch collect retry-empty].include?(@subcommand)
+      allowed = %w[--repo --issue]
+      allowed += %w[--branch --round] if @subcommand == "launch"
+      allowed << "--wait-minutes" if @subcommand == "collect"
       opts = {}
       until args.empty?
         key = args.shift
-        unless %w[--repo --issue --branch --round].include?(key) && !opts.key?(key) && !args.empty?
+        unless allowed.include?(key) && !opts.key?(key) && !args.empty?
           raise Stop.new("input", "BLOCKED", 2)
         end
         opts[key] = args.shift
@@ -119,6 +141,9 @@ module CodexWorkerRun
               File.directory?(File.join(@repo, ".git"))
       valid &&= valid_branch?(opts["--branch"]) if opts["--branch"]
       raise Stop.new("input", "BLOCKED", 2) unless valid
+      wait = opts.fetch("--wait-minutes", "120")
+      raise Stop.new("input", "BLOCKED", 2) unless wait.match?(/\A[0-9]+\z/) && (1..120).cover?(wait.to_i)
+      @wait_minutes = wait.to_i
       @option_branch, @round = opts["--branch"], opts["--round"]&.to_i
     rescue SystemCallError, ArgumentError
       raise Stop.new("input", "BLOCKED", 2)
@@ -199,12 +224,7 @@ module CodexWorkerRun
     end
 
     def codex_running?(pane)
-      info = herdr("pane", "process-info", "--pane", pane["pane_id"])["process_info"]
-      processes = info.is_a?(Hash) && info["foreground_processes"]
-      unless processes.is_a?(Array) && processes.all? { |p| p.is_a?(Hash) && p["name"].is_a?(String) }
-        stop("herdr-response")
-      end
-      processes.any? { |p| p["name"] == "codex" }
+      foreground(pane["pane_id"]).any? { |p| p["name"] == "codex" }
     end
 
     def recorded_worker_running?(row)
@@ -233,6 +253,10 @@ module CodexWorkerRun
         else stop("run-unconfirmed")
         end
       end
+      check_other_records
+    end
+
+    def check_other_records
       @rows.each do |row|
         next if row["issue"] == @issue || row["state"] == "blocked" || row["run_status"] != "unfinished"
         @other_record = row
@@ -257,7 +281,7 @@ module CodexWorkerRun
       input = { "schema" => 1, "operation" => operation, "expected_sha256" => @digest }.merge(values)
       out, rc = capture(packet("worker-update", @issue.to_s, "--stdin"), JSON.generate(input))
       # 成功の応答後の読み直しが失敗しても、起動の記録は残す。
-      @written = true if operation == "run-start" && rc == 0
+      @written = true if %w[run-start result stop].include?(operation) && rc == 0
       stop("packet-update") unless rc == 0
       result = json(out, "packet-update")
       unless result.is_a?(Hash) && result["ok"] == true && result["issue"] == @issue &&
@@ -295,11 +319,7 @@ module CodexWorkerRun
         stop("snapshot-untraceable") unless stat.directory? && @previous_run.is_a?(String)
         snapshot = File.join(@previous_run, "preflight.json")
         stop("snapshot-untraceable") unless File.file?(snapshot)
-        _out, rc, err = capture([sibling("personal-codex-worker-preflight"), "--verify-git-snapshot", snapshot, "--clone", @clone])
-        unless rc == 0
-          File.binwrite(File.join(@run, "snapshot-verify.txt"), err)
-          stop("snapshot-mismatch")
-        end
+        verify_snapshot(@previous_run)
         dirty = command(git(@clone, "status", "--porcelain"), "clone-command")
         File.binwrite(File.join(@run, "clone-status.txt"), dirty)
       else
@@ -382,7 +402,7 @@ module CodexWorkerRun
     end
 
     def write_artifacts
-      File.binwrite(File.join(@run, "brief.md"), brief)
+      File.binwrite(File.join(@run, "brief.md"), @retry_brief || brief)
       argv = @launch_argv.map { |a| a == "<run dir>/result.md" ? File.join(@run, "result.md") : a }
       script = <<~ZSH
         #!/bin/zsh
@@ -393,61 +413,421 @@ module CodexWorkerRun
         exit "$rc"
       ZSH
       File.write(File.join(@run, "run.zsh"), script, mode: "w", perm: 0700)
+      @launch_record = { "schema" => 1, "issue" => @issue, "branch" => @branch,
+        "clone_root" => @preflight.fetch("clone_root"), "nonce" => @nonce,
+        "tab_id" => nil, "pane_id" => nil, "pane_label" => nil, "round" => @round,
+        "previous_run" => @previous_run, "created_at" => Time.now.utc.iso8601,
+        "start_head" => @start_head }
+      @launch_record["retry_of"] = @retry_of if @retry_of
+      write_launch_record
     end
 
     def record_run
-      update_packet("run-start", "run" => @run, "tab" => "##{@issue}")
+      values = { "run" => @run, "tab" => "##{@issue}" }
+      values["expected_run"] = @retry_of if @retry_of
+      update_packet("run-start", values)
       row = target(packet_rows)
       stop("run-record") unless row && row["run"] == @run && row["tab"] == "##{@issue}" &&
         row["last_run"].nil? && row["state"] == "open" && row["run_status"] == "unfinished"
     end
 
-    def launch_pane
-      stop("herdr-response") unless @preflight["herdr"] == "running"
-      check_workspace
+    def matching_tabs
       tabs = herdr("tab", "list", "--workspace", @workspace)["tabs"]
       stop("herdr-response") unless tabs.is_a?(Array) && tabs.all? { |t| t.is_a?(Hash) }
       tabs.each { |t| identifier(t["tab_id"]) }
       matching = tabs.select { |t| t["label"] == "##{@issue}" }
       stop("tab-ownership") if matching.size > 1
+      matching
+    end
+
+    def owned_tab_panes(tab)
+      stop("tab-ownership") unless @previous_run && File.file?(File.join(@previous_run, "tab-id")) &&
+        File.read(File.join(@previous_run, "tab-id")).chomp == tab
+      owned = panes.select { |p| p["tab_id"] == tab }
+      pattern = /\Aworker-#{@issue}(?:-r([0-9]+))?\z/
+      stop("tab-ownership") if owned.empty? || !owned.all? { |p| pattern.match?(p["label"].to_s) }
+      owned
+    end
+
+    def check_retry_tab
+      stop("tab-ownership") unless @pane
+      matching = matching_tabs
+      stop("tab-ownership") if matching.empty?
+      owned_tab_panes(matching.first["tab_id"])
+    end
+
+    def launch_pane
+      stop("herdr-response") unless @preflight["herdr"] == "running"
+      check_workspace
+      matching = matching_tabs
       @round_pane = !matching.empty?
+      stop("tab-ownership") if @retry_of && matching.empty?
       if matching.empty?
         created = herdr("tab", "create", "--workspace", @workspace, "--cwd", @clone, "--label", "##{@issue}", "--no-focus")
         @tab = identifier(created.dig("tab", "tab_id"))
+        @launch_record["tab_id"] = @tab
+        write_launch_record
         @pane = identifier(created.dig("root_pane", "pane_id"))
         @pane_label = "worker-#{@issue}"
       else
         @tab = matching.first["tab_id"]
-        stop("tab-ownership") unless @previous_run && File.file?(File.join(@previous_run, "tab-id")) &&
-          File.read(File.join(@previous_run, "tab-id")).chomp == @tab
-        owned = panes.select { |p| p["tab_id"] == @tab }
+        owned = owned_tab_panes(@tab)
         pattern = /\Aworker-#{@issue}(?:-r([0-9]+))?\z/
-        stop("tab-ownership") if owned.empty? || !owned.all? { |p| pattern.match?(p["label"].to_s) }
         number = owned.map { |p| pattern.match(p["label"])[1]&.to_i || 1 }.max + 1
         @pane_label = "worker-#{@issue}-r#{number}"
+        @launch_record.merge!("tab_id" => @tab, "pane_label" => @pane_label)
+        write_launch_record
         split = herdr("pane", "split", "--pane", owned.first["pane_id"], "--direction", "down", "--cwd", @clone, "--no-focus")
         @pane = identifier(split.dig("pane", "pane_id"))
       end
+      @launch_record.merge!("tab_id" => @tab, "pane_id" => @pane, "pane_label" => @pane_label)
+      write_launch_record
       File.write(File.join(@run, "tab-id"), @tab + "\n")
       File.write(File.join(@run, "pane-id"), @pane + "\n")
-      command(["herdr", "pane", "rename", @pane, @pane_label], "herdr-response")
-      command(["herdr", "pane", "run", @pane, "zsh #{literal(File.join(@run, 'run.zsh'))}"], "herdr-response")
+      begin
+        command(["herdr", "pane", "rename", @pane, @pane_label], "herdr-response")
+        command(["herdr", "pane", "run", @pane, "zsh #{literal(File.join(@run, 'run.zsh'))}"], "herdr-response")
+      rescue Stop
+        # 起動を確認できない run は、人手の実行として回収する。
+        @launch_record["pane_id"] = nil
+        write_launch_record
+        raise
+      end
+    end
+
+    def write_launch_record
+      path = File.join(@run, "launch.json")
+      temporary = path + ".tmp"
+      File.write(temporary, JSON.generate(@launch_record) + "\n", mode: "w", perm: 0600)
+      File.rename(temporary, path)
+    ensure
+      File.unlink(temporary) if temporary && File.exist?(temporary)
+    end
+
+    def read_launch_record
+      @run = @row["run"]
+      stop("no-launch-record") unless @run && File.file?(File.join(@run, "launch.json"))
+      record = json(File.read(File.join(@run, "launch.json")), "invalid-launch-record")
+      required = %w[schema issue branch clone_root nonce tab_id pane_id pane_label round previous_run created_at]
+      valid = record.is_a?(Hash) && (required - record.keys).empty? &&
+        record["schema"].is_a?(Integer) && record["schema"] == 1 && record["issue"] == @issue &&
+        record["branch"] == @row["branch"] && record["branch"].is_a?(String) &&
+        record["clone_root"] == File.realpath("#{@repo}-clones/#{@issue}") &&
+        record["nonce"].is_a?(String) && record["nonce"].match?(/\A[0-9a-f]{16}\z/) &&
+        (record["round"].nil? || (record["round"].is_a?(Integer) && record["round"].positive?)) &&
+        %w[previous_run retry_of].all? { |key| record[key].nil? || (record[key].is_a?(String) && record[key].start_with?("/")) } &&
+        %w[tab_id pane_id pane_label].all? { |key| record[key].nil? || (record[key].is_a?(String) && !record[key].empty? && !record[key].match?(/[[:cntrl:]]/)) } &&
+        record["created_at"].is_a?(String)
+      stop("invalid-launch-record") unless valid
+      @launch_record = record
+      @clone, @nonce, @pane, @tab = record.values_at("clone_root", "nonce", "pane_id", "tab_id")
+    rescue SystemCallError
+      stop("invalid-launch-record")
+    end
+
+    # done.txt is the authority; a terminal match only wakes the collector.
+    def completion
+      path = File.join(@run, "done.txt")
+      return nil unless File.exist?(path)
+      text = File.read(path)
+      return nil unless text.end_with?("\n")
+      match = /\ACODEX-WORKER-DONE-([^\s]+) exit=([0-9]+)\n\z/.match(text)
+      return { "error" => "done-invalid", "exit" => nil } unless match
+      { "error" => (match[1] == @nonce ? nil : "nonce-mismatch"), "exit" => match[2].to_i }
+    end
+
+    def empty_result?
+      path = File.join(@run, "result.md")
+      !File.file?(path) || File.zero?(path)
+    end
+
+    def prepare_retry
+      begin
+        read_launch_record
+      rescue Stop => error
+        raise unless %w[no-launch-record invalid-launch-record].include?(error.code)
+        stop("not-retryable")
+      end
+      done = completion
+      stop("not-retryable") unless @row["state"] == "open" && done && !done["error"] &&
+        done["exit"] == 0 && empty_result? && !@launch_record["retry_of"]
+      @retry_of = @previous_run = @run
+      @round = @launch_record["round"]
+      @retry_brief = File.binread(File.join(@run, "brief.md"))
+      # Same-issue finished run is intentionally replaced; other issues still gate launch.
+      check_other_records
+    end
+
+    def verify_snapshot(previous)
+      _out, rc, err = capture([sibling("personal-codex-worker-preflight"), "--verify-git-snapshot",
+                              File.join(previous, "preflight.json"), "--clone", @clone])
+      File.binwrite(File.join(@run, "snapshot-verify.txt"), err)
+      stop("snapshot-mismatch") unless rc == 0
+    end
+
+    def foreground(pane = @pane)
+      info = herdr("pane", "process-info", "--pane", pane)["process_info"]
+      processes = info.is_a?(Hash) && info["foreground_processes"]
+      stop("herdr-response") unless processes.is_a?(Array) &&
+        processes.all? { |p| p.is_a?(Hash) && p["name"].is_a?(String) }
+      processes
+    end
+
+    def wait_completion
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      loop do
+        done = completion
+        return done if done
+        raise Stop.new("manual-completion-pending", "RUNNING", 3) unless @pane
+        elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+        if elapsed >= @wait_minutes * 60
+          @elapsed_minutes = (elapsed / 60).round(2)
+          raise Stop.new("wait-limit", "RUNNING", 3)
+        end
+        timeout = [300_000, ((@wait_minutes * 60 - elapsed) * 1000).ceil].min
+        slice_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        capture(["herdr", "pane", "wait-output", @pane, "--match", "CODEX-WORKER-DONE-#{@nonce}",
+                 "--timeout", timeout.to_s])
+        done = completion
+        return done if done
+        # Unreadable process-info is not evidence of an exited executor.
+        begin
+          alive = foreground.any? { |p| p["name"] == "codex" }
+          unless alive
+            # tee may still be publishing done.txt after codex has exited.
+            sleep 1
+            return completion || { "error" => "executor-exit", "exit" => nil }
+          end
+        rescue Stop
+          nil
+        end
+        # A stale sentinel or a failed wait may return immediately.
+        now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        delay = [15 - (now - slice_started), @wait_minutes * 60 - (now - started)].min
+        sleep delay if delay.positive?
+      end
+    end
+
+    def leftovers
+      result = {}
+      begin
+        stop("invalid-launch-record") unless @pane
+        processes = foreground.reject { |p| %w[sh bash zsh fish dash ksh].include?(p["name"]) }
+        result["foreground"] = { "checked" => true, "processes" => processes.map { |p| p.slice("pid", "name") } }
+      rescue Stop
+        result["foreground"] = { "checked" => false }
+      end
+      out, rc = capture(["pgrep", "-f", Regexp.escape(@clone)])
+      if [0, 1].include?(rc) && out.to_s.lines.all? { |line| line.strip.match?(/\A[0-9]+\z/) }
+        ids = out.lines.map { |line| line.to_i }.reject { |pid| pid == Process.pid }
+        processes = ids.map do |pid|
+          name, name_rc = capture(["ps", "-p", pid.to_s, "-o", "comm="])
+          name = name_rc == 0 && !name.to_s.strip.empty? ? File.basename(name.strip) : nil
+          { "pid" => pid, "name" => name }
+        end
+        result["clone_arguments"] = { "checked" => true, "processes" => processes }
+      else
+        result["clone_arguments"] = { "checked" => false }
+      end
+      result
+    end
+
+    RESULT_HEADINGS = ["到達点", "判断", "未完", "停止理由 または 質問", "commits", "次の 1 アクション"].freeze
+    ENTRY_HEADING = %r{\A### \d{4}-\d{2}-\d{2} (?:worker|reviewer|orchestrator)/(?:claude|codex|human)\s*\z}.freeze
+
+    def result_sections(text)
+      stop("result-format") unless text.valid_encoding? && !text.strip.empty? &&
+        !text.delete("\n\t").match?(/[[:cntrl:]]/) && !text.include?("<!--") && !text.include?("-->")
+      lines = text.lines
+      checked = lines + [text.strip.lines.last.to_s.strip]
+      stop("result-format") if checked.any? do |line|
+        line.start_with?("## ") || line.match?(ENTRY_HEADING) ||
+          ["**結果 (最新節)**", "**次の入口**"].include?(line.chomp)
+      end
+      headings = lines.select { |line| RESULT_HEADINGS.any? { |h| line.chomp == "### #{h}" } }
+      stop("result-format") unless headings.map(&:chomp) == RESULT_HEADINGS.map { |h| "### #{h}" }
+      sections = {}
+      current = nil
+      lines.each do |line|
+        name = RESULT_HEADINGS.find { |h| line.chomp == "### #{h}" }
+        if name
+          current = name
+          sections[current] = +""
+        elsif current
+          sections[current] << line
+        end
+      end
+      following = sections.fetch("次の 1 アクション").strip
+      stop("result-format") if following.empty? ||
+        [following.lines.first.to_s.strip, following.lines.last.to_s.strip].any? do |line|
+          line.start_with?("## ") || line.match?(ENTRY_HEADING) ||
+            ["**結果 (最新節)**", "**次の入口**"].include?(line)
+        end
+      sections
+    end
+
+    def gated_result
+      text = File.read(File.join(@run, "result.md"))
+      result_sections(text)
+      _out, rc, err = capture([sibling("personal-public-safety-gate"), "--stdin"], text)
+      File.binwrite(File.join(@run, "gate.err"), err)
+      redacted = false
+      unless rc == 0
+        findings = err.lines.select { |line| line.start_with?("public-safety-gate: blocked: ") }
+        stop("gate") unless rc == 1 && !findings.empty? && findings.all? { |line| line.match?(/: \[home-path\]\s*\z/) }
+        pre = "(?<![A-Za-z0-9._~/-])"
+        post = "(?![A-Za-z0-9._~-])"
+        text = text.gsub(Regexp.new(pre + Regexp.escape(@clone) + "/"), "")
+        [[@clone, "<clone>"], [@run, "<run dir>"], [ENV.fetch("HOME"), "<home>"]].each do |path, replacement|
+          text = text.gsub(Regexp.new(pre + Regexp.escape(path) + post), replacement)
+        end
+        File.write(File.join(@run, "result.redacted.md"), text)
+        _out, rc, err = capture([sibling("personal-public-safety-gate"), "--stdin"], text)
+        File.open(File.join(@run, "gate.err"), "ab") { |f| f.write(err) }
+        stop("gate") unless rc == 0
+        redacted = true
+      end
+      sections = result_sections(text)
+      if redacted
+        text = "(orchestrator 注: 最終 message の local の path を置き換えて転記した。gate が home-path で止めたため。原文は run dir に残した)\n\n" + text
+      end
+      [text, sections, redacted]
+    end
+
+    def backup_changes
+      { "status" => ["wip-status.txt", %w[status --porcelain=v1 --untracked-files=all]],
+        "staged" => ["wip-staged.patch", %w[diff --cached --binary --no-textconv --no-ext-diff]],
+        "unstaged" => ["wip-unstaged.patch", %w[diff --binary --no-textconv --no-ext-diff]] }.each do |step, (file, args)|
+        @backup_step = step
+        File.binwrite(File.join(@run, file), command(git(@clone, *args), "backup"))
+      end
+      @backup_step = "untracked"
+      names = command(git(@clone, "ls-files", "--others", "--exclude-standard", "-z"), "backup")
+      command(["tar", "-C", @clone, "--null", "-T", "-", "-cf", File.join(@run, "wip-untracked.tar")], "backup", names)
+      @backup_step = nil
+    end
+
+    def stop_executor(code, exit_code)
+      category = case code
+                 when "limit" then "limit"
+                 when "empty-result" then "executor-result"
+                 else "executor-exit"
+                 end
+      stage("snapshot", "clone") { verify_snapshot(@run) }
+      stage("backup", "clone") { backup_changes }
+      stage("transcription", "transcription") do
+        begin
+          entry, sections, _redacted = gated_result
+          role, following = "worker/codex", sections.fetch("次の 1 アクション").strip
+        rescue Stop => e
+          raise unless %w[result-format gate].include?(e.code)
+          role = "orchestrator/claude"
+        rescue Errno::ENOENT
+          role = "orchestrator/claude"
+        end
+        if role == "orchestrator/claude"
+          entry = "停止の区分: #{category}。done.txt の exit: #{exit_code.nil? ? '不明' : exit_code}。\n" \
+                  "退避: wip-status.txt、wip-staged.patch、wip-unstaged.patch、wip-untracked.tar。"
+          following = "停止理由と退避した変更を確かめてから、再開を判断する。"
+        end
+        update_packet("stop", "run" => @run, "role" => role, "entry" => entry, "next" => following)
+        @stopped_packet = true
+      end
+      @retryable = false
+      @phase, @blocked_at = "completion", category
+      stop(code)
+    end
+
+    def collect
+      stage("records", "launch-record") { read_launch_record }
+      done = stage("wait", "executor-exit") { wait_completion }
+      return stop_executor(done["error"], done["exit"]) if done["error"]
+      unless done["exit"] == 0
+        path = File.join(@run, "codex.log")
+        limited = File.file?(path) && File.binread(path).lines.any? { |line| line.start_with?("ERROR: You've hit your usage limit") }
+        return stop_executor(limited ? "limit" : "executor-exit", done["exit"])
+      end
+      if empty_result?
+        return stop_executor("empty-result", 0) if @launch_record["retry_of"]
+        @retryable = true
+        @phase, @blocked_at = "completion", "executor-result"
+        stop("empty-result")
+      end
+      stage("pane-log", "transcription") do
+        next unless @pane
+        raw = command(["herdr", "pane", "read", @pane, "--source", "recent-unwrapped", "--lines", "200"], "pane-log")
+        File.binwrite(File.join(@run, "pane.log"), raw)
+        stop("pane-log") if raw.empty?
+      end
+      @leftover = leftovers
+      stage("snapshot", "clone") { verify_snapshot(@run) }
+      # Count only this run; main may have advanced beyond the clone's objects.
+      head, count = stage("commits", "clone") do
+        head = command(git(@clone, "rev-parse", "--verify", "HEAD"), "clone-command").strip
+        stop("clone-command") unless head.match?(/\A[0-9a-f]{40,64}\z/)
+        [head, commits_this_run(head)]
+      end
+      redacted = stage("transcription", "transcription") do
+        entry, sections, changed = gated_result
+        following = sections.fetch("次の 1 アクション").strip
+        if sections.fetch("停止理由 または 質問").gsub(/\A[[:space:]。]+|[[:space:]。]+\z/, "") != "なし"
+          update_packet("stop", "run" => @run, "role" => "worker/codex", "entry" => entry, "next" => following)
+          @stopped_packet, @retryable, @blocked_at = true, false, "executor-result"
+          stop("worker-question")
+        end
+        update_packet("result", "run" => @run, "entry" => entry, "next" => following)
+        row = target(packet_rows)
+        stop("run-record") unless row && row["run"].nil? && row["last_run"] == @run && row["state"] == "open"
+        changed
+      end
+      puts JSON.generate("status" => "DONE", "issue" => @issue, "run_dir" => @run, "head_oid" => head,
+        "commits_this_run" => count, "redacted" => redacted, "leftover" => @leftover,
+        "packet" => { "written" => true, "state" => "open", "record" => "last_run" })
+      0
+    end
+
+    def commits_this_run(head)
+      start = @launch_record["start_head"]
+      return nil unless start.is_a?(String) && start.match?(/\A[0-9a-f]{40,64}\z/)
+      _out, rc = capture(git(@clone, "cat-file", "-e", "#{start}^{commit}"))
+      return nil unless rc == 0
+      count = command(git(@clone, "rev-list", "--count", "#{start}..#{head}"), "clone-command").strip
+      stop("clone-command") unless count.match?(/\A[0-9]+\z/)
+      count.to_i
     end
 
     def run(argv)
-      if [["--help"], ["-h"], ["launch", "--help"]].include?(argv)
+      if [["--help"], ["-h"], *%w[launch collect retry-empty].map { |c| [c, "--help"] }].include?(argv)
         puts USAGE
         return 0
       end
       parse(argv)
       stage("environment", "preflight") { stop("gh-repo") unless ENV["GH_REPO"].to_s.empty? }
       stage("packet", "launch-record") { read_packet }
-      stage("records", "launch-record") { check_records }
-      stage("workspace", "launch-path") { check_workspace }
+      return collect if @subcommand == "collect"
+      if @subcommand == "retry-empty"
+        stage("records", "launch-record") { prepare_retry }
+      else
+        stage("records", "launch-record") { check_records }
+      end
+      stage("workspace", "launch-path") do
+        check_workspace
+        check_retry_tab if @retry_of
+      end
       stage("branch", "authorization") { resolve_branch }
       stage("run-directory", "launch-path") { make_run }
-      stage("clone", "clone") { prepare_clone }
-      stage("commit-prerequisites", "clone") { commit_prerequisites }
+      stage("clone", "clone") do
+        if @retry_of
+          verify_snapshot(@retry_of)
+        else
+          prepare_clone
+        end
+      end
+      stage("commit-prerequisites", "clone") do
+        commit_prerequisites
+        @start_head = command(git(@clone, "rev-parse", "--verify", "HEAD^{commit}"), "clone-command").strip
+        stop("clone-command") unless @start_head.match?(/\A[0-9a-f]{40,64}\z/)
+      end
       stage("preflight", "preflight") { preflight }
       stage("run-location", "launch-path") { check_run_location }
       stage("artifacts", "launch-path") { write_artifacts }
@@ -467,9 +847,11 @@ module CodexWorkerRun
       result = { "status" => error.status, "blocked_at" => @blocked_at, "reason_code" => error.code,
                  "reason" => REASONS.fetch(error.code), "issue" => @issue, "phase" => @phase,
                  "packet" => { "written" => @written } }
+      result.delete("blocked_at") if error.status == "RUNNING"
       result["run_dir"] = @run if @run
       if @phase == "records"
         if @other_record
+          result.delete("run_dir")
           result["other_issue"] = @other_record["issue"]
           result["other_run_dir"] = @other_record["run"]
         elsif @row["run"]
@@ -477,6 +859,12 @@ module CodexWorkerRun
         end
       end
       result["dependency_exit"] = @dependency_exit if @phase == "preflight"
+      result["retryable"] = @retryable unless @retryable.nil?
+      result["pane_id"] = @pane if @subcommand == "collect"
+      result["elapsed_minutes"] = @elapsed_minutes if @elapsed_minutes
+      result["leftover"] = @leftover if @leftover
+      result["backup_step"] = @backup_step if @backup_step
+      result["packet"].merge!("state" => "blocked", "record" => "run") if @stopped_packet
       puts JSON.generate(result)
       error.exit_code
     end
@@ -528,7 +916,7 @@ module CodexWorkerRun
         その場合と、exit 137 で report の reason が time か footprint の場合は、最終 message の「未完」に書きます。
         script asset を変えたら最終版から approved_build_id を計算し直し、scripts/tests/register-test.sh まで通します。
         終わったら自分の起動した process が残っていないか確認します。残っていれば止めます。
-        process 一覧を読めないときは再試行せず、最終 message に書きます。
+        process 一覧を読めないときは再試行せず、最終 message の「未完」に書きます。
 
         ## 一時 file の置き場
 
@@ -561,7 +949,11 @@ module CodexWorkerRun
 
         ## 最終 message の書式
 
-        以下の見出しをこの順に使います。行頭の ## は使いません。停止理由が無いときは「なし」と書きます。
+        以下の見出しをこの順に使います。行頭の ## は使いません。
+        「停止理由 または 質問」には、作業を止めて orchestrator の判断を待つ理由だけを書きます。
+        受け入れ条件の曖昧さや、続けられない障害が対象です。
+        走らせられなかった test や読めなかった process 一覧など、確かめられなかったことは「未完」に書きます。
+        止まらずに終えたときは、「停止理由 または 質問」に「なし」とだけ書きます。
         file は repo 相対の path で書き、link にしません。clone、run、home の絶対 path は書きません。
 
         ### 到達点
