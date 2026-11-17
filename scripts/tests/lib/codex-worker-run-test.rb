@@ -51,6 +51,14 @@ assert(git(CLONE, "rev-parse", "HEAD") == BASE, "new branch starts at origin mai
 assert(git(CLONE, "branch", "--show-current") == "feat/7-test", "selected branch")
 assert(git(CLONE, "config", "maintenance.auto") == "false" && git(CLONE, "config", "gc.auto") == "0", "maintenance config")
 assert(File.binread(File.join(run, "brief.md")).include?(REQUEST.b), "request bytes preserved")
+brief = File.read(File.join(run, "brief.md"))
+[
+  "process 一覧を読めないときは再試行せず、最終 message の「未完」に書きます。",
+  "「停止理由 または 質問」には、作業を止めて orchestrator の判断を待つ理由だけを書きます。",
+  "受け入れ条件の曖昧さや、続けられない障害が対象です。",
+  "走らせられなかった test や読めなかった process 一覧など、確かめられなかったことは「未完」に書きます。",
+  "止まらずに終えたときは、「停止理由 または 質問」に「なし」とだけ書きます。"
+].each { |sentence| assert(brief.include?(sentence), "brief distinguishes stops from unverified work: #{sentence}") }
 assert(File.read(PACKET).include?("run: #{run.to_json}") && File.read(PACKET).include?("tab: \"#7\""), "packet record")
 assert(events.include?(["tab", "create", "--workspace", "ws-test", "--cwd", CLONE, "--label", "#7", "--no-focus"]), "tab create argv")
 assert(events.include?(["pane", "rename", "p1", "worker-7"]), "pane rename argv")

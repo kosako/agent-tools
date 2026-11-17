@@ -32,6 +32,7 @@ module CodexWorkerRun
     "empty-result" => "最終 message が空です",
     "worker-question" => "worker の停止理由または質問があります",
     "wait-limit" => "待つ時間の上限に達しました",
+    "manual-completion-pending" => "人手で実行する run script の完了を待っています",
     "pane-log" => "pane の生出力を保存できません",
     "result-format" => "最終 message の形が契約と一致しません",
     "gate" => "最終 message が公開の検査を通りません",
@@ -252,6 +253,10 @@ module CodexWorkerRun
         else stop("run-unconfirmed")
         end
       end
+      check_other_records
+    end
+
+    def check_other_records
       @rows.each do |row|
         next if row["issue"] == @issue || row["state"] == "blocked" || row["run_status"] != "unfinished"
         @other_record = row
@@ -411,7 +416,8 @@ module CodexWorkerRun
       @launch_record = { "schema" => 1, "issue" => @issue, "branch" => @branch,
         "clone_root" => @preflight.fetch("clone_root"), "nonce" => @nonce,
         "tab_id" => nil, "pane_id" => nil, "pane_label" => nil, "round" => @round,
-        "previous_run" => @previous_run, "created_at" => Time.now.utc.iso8601 }
+        "previous_run" => @previous_run, "created_at" => Time.now.utc.iso8601,
+        "start_head" => @start_head }
       @launch_record["retry_of"] = @retry_of if @retry_of
       write_launch_record
     end
@@ -425,14 +431,34 @@ module CodexWorkerRun
         row["last_run"].nil? && row["state"] == "open" && row["run_status"] == "unfinished"
     end
 
-    def launch_pane
-      stop("herdr-response") unless @preflight["herdr"] == "running"
-      check_workspace
+    def matching_tabs
       tabs = herdr("tab", "list", "--workspace", @workspace)["tabs"]
       stop("herdr-response") unless tabs.is_a?(Array) && tabs.all? { |t| t.is_a?(Hash) }
       tabs.each { |t| identifier(t["tab_id"]) }
       matching = tabs.select { |t| t["label"] == "##{@issue}" }
       stop("tab-ownership") if matching.size > 1
+      matching
+    end
+
+    def owned_tab_panes(tab)
+      stop("tab-ownership") unless @previous_run && File.file?(File.join(@previous_run, "tab-id")) &&
+        File.read(File.join(@previous_run, "tab-id")).chomp == tab
+      owned = panes.select { |p| p["tab_id"] == tab }
+      pattern = /\Aworker-#{@issue}(?:-r([0-9]+))?\z/
+      stop("tab-ownership") if owned.empty? || !owned.all? { |p| pattern.match?(p["label"].to_s) }
+      owned
+    end
+
+    def check_retry_tab
+      matching = matching_tabs
+      stop("tab-ownership") if matching.empty?
+      owned_tab_panes(matching.first["tab_id"])
+    end
+
+    def launch_pane
+      stop("herdr-response") unless @preflight["herdr"] == "running"
+      check_workspace
+      matching = matching_tabs
       @round_pane = !matching.empty?
       stop("tab-ownership") if @retry_of && matching.empty?
       if matching.empty?
@@ -444,11 +470,8 @@ module CodexWorkerRun
         @pane_label = "worker-#{@issue}"
       else
         @tab = matching.first["tab_id"]
-        stop("tab-ownership") unless @previous_run && File.file?(File.join(@previous_run, "tab-id")) &&
-          File.read(File.join(@previous_run, "tab-id")).chomp == @tab
-        owned = panes.select { |p| p["tab_id"] == @tab }
+        owned = owned_tab_panes(@tab)
         pattern = /\Aworker-#{@issue}(?:-r([0-9]+))?\z/
-        stop("tab-ownership") if owned.empty? || !owned.all? { |p| pattern.match?(p["label"].to_s) }
         number = owned.map { |p| pattern.match(p["label"])[1]&.to_i || 1 }.max + 1
         @pane_label = "worker-#{@issue}-r#{number}"
         @launch_record.merge!("tab_id" => @tab, "pane_label" => @pane_label)
@@ -498,7 +521,9 @@ module CodexWorkerRun
     def completion
       path = File.join(@run, "done.txt")
       return nil unless File.exist?(path)
-      match = /\ACODEX-WORKER-DONE-([^\s]+) exit=([0-9]+)\n?\z/.match(File.read(path))
+      text = File.read(path)
+      return nil unless text.end_with?("\n")
+      match = /\ACODEX-WORKER-DONE-([^\s]+) exit=([0-9]+)\n\z/.match(text)
       return { "error" => "done-invalid", "exit" => nil } unless match
       { "error" => (match[1] == @nonce ? nil : "nonce-mismatch"), "exit" => match[2].to_i }
     end
@@ -522,11 +547,7 @@ module CodexWorkerRun
       @round = @launch_record["round"]
       @retry_brief = File.binread(File.join(@run, "brief.md"))
       # Same-issue finished run is intentionally replaced; other issues still gate launch.
-      @rows.reject { |row| row["issue"] == @issue }.each do |row|
-        next if row["state"] == "blocked" || row["run_status"] != "unfinished"
-        @other_record = row
-        stop("run-unconfirmed")
-      end
+      check_other_records
     end
 
     def verify_snapshot(previous)
@@ -549,13 +570,14 @@ module CodexWorkerRun
       loop do
         done = completion
         return done if done
+        raise Stop.new("manual-completion-pending", "RUNNING", 3) unless @pane
         elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
         if elapsed >= @wait_minutes * 60
           @elapsed_minutes = (elapsed / 60).round(2)
           raise Stop.new("wait-limit", "RUNNING", 3)
         end
-        stop("invalid-launch-record") unless @pane
         timeout = [300_000, ((@wait_minutes * 60 - elapsed) * 1000).ceil].min
+        slice_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         capture(["herdr", "pane", "wait-output", @pane, "--match", "CODEX-WORKER-DONE-#{@nonce}",
                  "--timeout", timeout.to_s])
         done = completion
@@ -563,18 +585,25 @@ module CodexWorkerRun
         # Unreadable process-info is not evidence of an exited executor.
         begin
           alive = foreground.any? { |p| p["name"] == "codex" }
-          return completion || { "error" => "executor-exit", "exit" => nil } unless alive
+          unless alive
+            # tee may still be publishing done.txt after codex has exited.
+            sleep 1
+            return completion || { "error" => "executor-exit", "exit" => nil }
+          end
         rescue Stop
           nil
         end
         # A stale sentinel or a failed wait may return immediately.
-        sleep 0.1
+        now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        delay = [15 - (now - slice_started), @wait_minutes * 60 - (now - started)].min
+        sleep delay if delay.positive?
       end
     end
 
     def leftovers
       result = {}
       begin
+        stop("invalid-launch-record") unless @pane
         processes = foreground.reject { |p| %w[sh bash zsh fish dash ksh].include?(p["name"]) }
         result["foreground"] = { "checked" => true, "processes" => processes.map { |p| p.slice("pid", "name") } }
       rescue Stop
@@ -717,21 +746,18 @@ module CodexWorkerRun
         stop("empty-result")
       end
       stage("pane-log", "transcription") do
-        stop("pane-log") unless @pane
+        next unless @pane
         raw = command(["herdr", "pane", "read", @pane, "--source", "recent-unwrapped", "--lines", "200"], "pane-log")
         File.binwrite(File.join(@run, "pane.log"), raw)
         stop("pane-log") if raw.empty?
       end
       @leftover = leftovers
       stage("snapshot", "clone") { verify_snapshot(@run) }
-      # Use the already fetched main ref; collection does not access the network.
+      # Count only this run; main may have advanced beyond the clone's objects.
       head, count = stage("commits", "clone") do
         head = command(git(@clone, "rev-parse", "--verify", "HEAD"), "clone-command").strip
-        tip = command(git(@repo, "rev-parse", "--verify", "refs/remotes/origin/main^{commit}"), "clone-command").strip
-        base = command(git(@clone, "merge-base", tip, head), "clone-command").strip
-        count = command(git(@clone, "rev-list", "--count", "#{base}..#{head}"), "clone-command").strip
-        stop("clone-command") unless head.match?(/\A[0-9a-f]{40,64}\z/) && count.match?(/\A[0-9]+\z/)
-        [head, count.to_i]
+        stop("clone-command") unless head.match?(/\A[0-9a-f]{40,64}\z/)
+        [head, commits_this_run(head)]
       end
       redacted = stage("transcription", "transcription") do
         entry, sections, changed = gated_result
@@ -747,9 +773,19 @@ module CodexWorkerRun
         changed
       end
       puts JSON.generate("status" => "DONE", "issue" => @issue, "run_dir" => @run, "head_oid" => head,
-        "commits" => count, "redacted" => redacted, "leftover" => @leftover,
+        "commits_this_run" => count, "redacted" => redacted, "leftover" => @leftover,
         "packet" => { "written" => true, "state" => "open", "record" => "last_run" })
       0
+    end
+
+    def commits_this_run(head)
+      start = @launch_record["start_head"]
+      return nil unless start.is_a?(String) && start.match?(/\A[0-9a-f]{40,64}\z/)
+      _out, rc = capture(git(@clone, "cat-file", "-e", "#{start}^{commit}"))
+      return nil unless rc == 0
+      count = command(git(@clone, "rev-list", "--count", "#{start}..#{head}"), "clone-command").strip
+      stop("clone-command") unless count.match?(/\A[0-9]+\z/)
+      count.to_i
     end
 
     def run(argv)
@@ -766,7 +802,10 @@ module CodexWorkerRun
       else
         stage("records", "launch-record") { check_records }
       end
-      stage("workspace", "launch-path") { check_workspace }
+      stage("workspace", "launch-path") do
+        check_workspace
+        check_retry_tab if @retry_of
+      end
       stage("branch", "authorization") { resolve_branch }
       stage("run-directory", "launch-path") { make_run }
       stage("clone", "clone") do
@@ -776,7 +815,11 @@ module CodexWorkerRun
           prepare_clone
         end
       end
-      stage("commit-prerequisites", "clone") { commit_prerequisites }
+      stage("commit-prerequisites", "clone") do
+        commit_prerequisites
+        @start_head = command(git(@clone, "rev-parse", "--verify", "HEAD^{commit}"), "clone-command").strip
+        stop("clone-command") unless @start_head.match?(/\A[0-9a-f]{40,64}\z/)
+      end
       stage("preflight", "preflight") { preflight }
       stage("run-location", "launch-path") { check_run_location }
       stage("artifacts", "launch-path") { write_artifacts }
@@ -796,9 +839,11 @@ module CodexWorkerRun
       result = { "status" => error.status, "blocked_at" => @blocked_at, "reason_code" => error.code,
                  "reason" => REASONS.fetch(error.code), "issue" => @issue, "phase" => @phase,
                  "packet" => { "written" => @written } }
+      result.delete("blocked_at") if error.status == "RUNNING"
       result["run_dir"] = @run if @run
       if @phase == "records"
         if @other_record
+          result.delete("run_dir")
           result["other_issue"] = @other_record["issue"]
           result["other_run_dir"] = @other_record["run"]
         elsif @row["run"]
@@ -863,7 +908,7 @@ module CodexWorkerRun
         その場合と、exit 137 で report の reason が time か footprint の場合は、最終 message の「未完」に書きます。
         script asset を変えたら最終版から approved_build_id を計算し直し、scripts/tests/register-test.sh まで通します。
         終わったら自分の起動した process が残っていないか確認します。残っていれば止めます。
-        process 一覧を読めないときは再試行せず、最終 message に書きます。
+        process 一覧を読めないときは再試行せず、最終 message の「未完」に書きます。
 
         ## 一時 file の置き場
 
@@ -896,7 +941,11 @@ module CodexWorkerRun
 
         ## 最終 message の書式
 
-        以下の見出しをこの順に使います。行頭の ## は使いません。停止理由が無いときは「なし」と書きます。
+        以下の見出しをこの順に使います。行頭の ## は使いません。
+        「停止理由 または 質問」には、作業を止めて orchestrator の判断を待つ理由だけを書きます。
+        受け入れ条件の曖昧さや、続けられない障害が対象です。
+        走らせられなかった test や読めなかった process 一覧など、確かめられなかったことは「未完」に書きます。
+        止まらずに終えたときは、「停止理由 または 質問」に「なし」とだけ書きます。
         file は repo 相対の path で書き、link にしません。clone、run、home の絶対 path は書きません。
 
         ### 到達点

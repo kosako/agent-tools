@@ -333,7 +333,6 @@ stdin は UTF-8 の JSON object 1 つで、上限は 64 KiB (65,536 byte)。
 `round` の `review_entry` があれば、結果の末尾に当日の日付と `reviewer/claude` の entry を足します。
 本文の検査は `entry` と同じです。省略時は結果の節を保持します。
 
-
 `pr` は正の整数。それ以外の追加の値は文字列とし、次の検査を通す。
 
 - `run` は絶対 path で、制御文字、`"`、`\` を含めない。

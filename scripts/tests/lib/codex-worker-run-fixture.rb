@@ -75,7 +75,7 @@ write_exec(File.join(BIN, "herdr"), <<~'FAKE')
   state = JSON.parse(File.read(file))
   File.open(ENV.fetch("FAKE_HERDR_LOG"), "a") { |f| f.puts JSON.generate(ARGV) }
   verb = ARGV.first(2).join(" ")
-  if ENV["FAKE_HERDR_FAIL"] == verb
+  if ENV["FAKE_HERDR_FAIL"] == verb || ENV["FAKE_HERDR_FAIL_ALL"]
     warn "PRIVATE-REQUEST"
     exit 1
   end
@@ -188,7 +188,7 @@ end
 def launch(expected = 0, env = {}, args = [], explicit: nil)
   argv = explicit || ["launch", "--repo", MAIN, "--issue", "7", *args]
   out, err, status = Open3.capture3(env, [ENTRY, ENTRY], *argv, chdir: MAIN)
-  assert(status.exitstatus == expected, "launch exit #{status.exitstatus}, wanted #{expected}: #{out} #{err}")
+  assert(status.exitstatus == expected, "launch exit #{status.exitstatus}, wanted #{expected}: #{out} #{err} at #{caller.first(2).join(', ')}")
   assert(out.lines.size == 1, "one JSON line")
   assert(!out.include?("PRIVATE-REQUEST") && !err.include?("PRIVATE-REQUEST"), "request must not leak")
   yield(out, err) if block_given?

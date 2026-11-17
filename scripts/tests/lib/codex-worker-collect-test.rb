@@ -86,7 +86,7 @@ record_path = File.join(run, "launch.json")
 record = JSON.parse(File.read(record_path))
 assert(record == { "schema" => 1, "issue" => 7, "branch" => "feat/7-test", "clone_root" => File.realpath(CLONE),
   "nonce" => nonce, "tab_id" => "t1", "pane_id" => "p1", "pane_label" => "worker-7", "round" => 2,
-  "previous_run" => nil, "created_at" => record["created_at"] }, "launch record fields")
+  "previous_run" => nil, "created_at" => record["created_at"], "start_head" => BASE }, "launch record fields")
 assert(Time.iso8601(record["created_at"]).utc?, "UTC creation time")
 assert(!File.exist?(record_path + ".tmp"), "atomic launch record leaves no temp")
 # Neither collector nor retry may parse this file.
@@ -98,15 +98,18 @@ File.write(record_path, JSON.generate(record.merge("schema" => 2)))
 failure("collect", "launch-record", "invalid-launch-record")
 File.write(record_path, JSON.generate(record))
 
-# A real commit ensures the reported count uses merge-base, not the main checkout.
+# Count from the launch HEAD even when main learns objects absent from the clone.
 File.write(File.join(CLONE, "result.txt"), "implemented\n")
 git(CLONE, "add", "result.txt")
 git(CLONE, "commit", "-qm", "implementation")
 head = git(CLONE, "rev-parse", "HEAD")
+git(ORIGIN, "commit", "--allow-empty", "-qm", "advance origin")
+git(MAIN, "fetch", "origin", "+refs/heads/main:refs/remotes/origin/main")
 finish(run, nonce)
 File.write(ENV.fetch("FAKE_GIT_LOG"), "")
 result = invoke("collect")
-assert(result["status"] == "DONE" && result["head_oid"] == head && result["commits"] == 1, "completed head and count")
+assert(result["status"] == "DONE" && result["head_oid"] == head && result["commits_this_run"] == 1, "completed head and count")
+assert(!result.key?("commits"), "old total count key is absent")
 assert(result["packet"] == { "written" => true, "state" => "open", "record" => "last_run" }, "done packet shape")
 assert(result["redacted"] == false && result["leftover"]["foreground"]["checked"], "result flags")
 assert(File.read(PACKET).include?(RESULT) && File.read(PACKET).include?("last_run: #{run.to_json}"), "verbatim transcription and last_run")
@@ -115,6 +118,42 @@ assert(File.read(File.join(run, "pane.log")) == "PRIVATE-PANE\n", "raw pane log 
 assert(events.none? { |e| e.first(2) == %w[pane wait-output] }, "completed run does not wait")
 trace = File.readlines(ENV.fetch("FAKE_GIT_LOG")).map { |line| JSON.parse(line) }
 assert(trace.none? { |a| a.include?("fetch") }, "collection never fetches")
+
+# The reused branch does not fetch main's newly advanced tip on a correction round.
+round = launch(0, {}, ["--round", "3"])
+round_run = round.fetch("run_dir")
+assert(JSON.parse(File.read(File.join(round_run, "launch.json")))["start_head"] == head, "round starts at existing clone HEAD")
+git(CLONE, "commit", "--allow-empty", "-qm", "correction")
+finish(round_run, round.fetch("nonce"))
+File.write(ENV.fetch("FAKE_GIT_LOG"), "")
+result = invoke("collect")
+assert(result["status"] == "DONE" && result["commits_this_run"] == 1, "correction round collected after main advanced")
+trace = File.readlines(ENV.fetch("FAKE_GIT_LOG")).map { |line| JSON.parse(line) }
+assert(trace.none? { |a| a.include?("fetch") }, "correction collection never fetches")
+[record.reject { |k, _v| k == "start_head" }, record.merge("start_head" => "f" * 40)].each do |old_record|
+  finish(run, nonce)
+  File.write(record_path, JSON.generate(old_record))
+  result = invoke("collect")
+  assert(result["status"] == "DONE" && result.key?("commits_this_run") && result["commits_this_run"].nil?, "unknown start HEAD does not block transcription")
+end
+File.write(record_path, JSON.generate(record))
+
+# A launch-path failure leaves a runnable script without a pane.
+state = JSON.parse(File.read(ENV.fetch("FAKE_HERDR_FILE")))
+reset_herdr
+manual = blocked("launch-path", "herdr-response", { "FAKE_HERDR_FAIL" => "tab create" })
+manual_run = manual.fetch("run_dir")
+before = File.binread(PACKET)
+pending = invoke("collect", 3)
+assert(pending["reason_code"] == "manual-completion-pending" && !pending.key?("blocked_at"), "manual completion wait is RUNNING without blocked_at")
+assert(!pending["packet"]["written"] && File.binread(PACKET) == before, "manual wait keeps packet")
+run_cmd("zsh", File.join(manual_run, "run.zsh"), chdir: ROOT)
+File.write(File.join(manual_run, "result.md"), RESULT)
+File.write(ENV.fetch("FAKE_HERDR_LOG"), "")
+result = invoke("collect")
+assert(result["status"] == "DONE" && result["leftover"]["foreground"] == { "checked" => false }, "manual run collected without foreground")
+assert(!File.exist?(File.join(manual_run, "pane.log")) && events.empty?, "manual collection never reads herdr or saves pane log")
+reset_herdr(state)
 
 finish(run, nonce)
 result = invoke("collect", 0, { "FAKE_PGREP_FAIL" => "1", "FAKE_HERDR_FAIL" => "pane process-info" })
@@ -144,6 +183,16 @@ secret = ['-----BEGIN ', 'PRIVATE KEY-----'].join
 finish(run, nonce, RESULT.sub("PRIVATE-RESULT", "#{secret}\n#{ROOT}/elsewhere"))
 failure("collect", "transcription", "gate", { "HOME" => ROOT, "FAKE_GATE_HOME" => "1" })
 assert(File.read(File.join(run, "gate.err")).include?("private-key-block"), "gate evidence retained")
+# Both findings disappear on replacement. No redaction attempt is permitted.
+local_patterns = File.join(ROOT, ".config", "agent-tools", "public-safety-patterns.local")
+FileUtils.mkdir_p(File.dirname(local_patterns))
+File.write(local_patterns, Regexp.escape(ROOT) + "\n")
+File.unlink(File.join(run, "result.redacted.md"))
+finish(run, nonce, RESULT.sub("PRIVATE-RESULT", "#{ROOT}/elsewhere"))
+failure("collect", "transcription", "gate", { "HOME" => ROOT, "FAKE_GATE_HOME" => "1" })
+assert(!File.exist?(File.join(run, "result.redacted.md")), "mixed findings must not create redacted result")
+assert(File.read(File.join(run, "gate.err")).include?("local-pattern:1"), "mixed local finding exercised")
+File.unlink(local_patterns)
 
 invalid = [RESULT.sub("### 判断", "### 未完"), RESULT.sub("### 判断", "## 判断"),
   RESULT + "<!-- hidden -->", RESULT + "-->", RESULT + "### 2026-01-01 worker/codex\n",
@@ -239,6 +288,26 @@ assert(result["retryable"] && File.binread(record_path) == first_record, "first 
 File.unlink(File.join(run, "result.md"))
 assert(failure("collect", "executor-result", "empty-result")["retryable"], "missing result is empty")
 # retry rejects changed snapshot, then restarts only the eligible first run.
+state = JSON.parse(File.read(ENV.fetch("FAKE_HERDR_FILE")))
+[[], [{ "tab_id" => "different", "label" => "#7" }]].each do |tabs|
+  reset_herdr(state.merge("tabs" => tabs))
+  failure("retry-empty", "launch-path", "tab-ownership")
+  assert(events.none? { |e| %w[create split run].include?(e[1]) }, "bad retry tab makes no pane")
+end
+reset_herdr(state)
+other_run = File.join(ROOT, "other-run")
+FileUtils.mkdir_p(other_run)
+File.write(File.join(other_run, "tab-id"), "t1\n")
+other = File.join(MAIN, ".agent-packets", "8.md")
+File.write(other, File.read(PACKET).sub("issue: 7", "issue: 8").sub(run.to_json, other_run.to_json).sub('#7', '#8'))
+[true, false].each do |running|
+  reset_herdr(state.merge("running" => running ? ["p1"] : []))
+  result = failure("retry-empty", running ? "launch-path" : "launch-record", running ? "worker-running" : "run-unconfirmed")
+  assert(result["phase"] == "records" && result["other_issue"] == 8 && result["other_run_dir"] == other_run, "retry shares other issue classification")
+  assert(!result.key?("run_dir"), "other issue does not report retry run as the blocking run")
+end
+File.unlink(other)
+reset_herdr(state)
 File.binwrite(config_path, config + "\n# changed\n")
 File.write(ENV.fetch("FAKE_GIT_LOG"), "")
 failure("retry-empty", "clone", "snapshot-mismatch")
@@ -251,6 +320,7 @@ retry_run = retry_result.fetch("run_dir")
 retry_record = JSON.parse(File.read(File.join(retry_run, "launch.json")))
 assert(retry_run != run && retry_result["nonce"] != nonce && retry_result["tab_id"] == first["tab_id"], "fresh run in same tab")
 assert(retry_record["retry_of"] == run && retry_record["previous_run"] == run && retry_record["round"] == 2, "retry lineage")
+assert(retry_record["start_head"] == git(CLONE, "rev-parse", "HEAD"), "retry starts at current clone HEAD")
 assert(File.binread(File.join(retry_run, "brief.md")) == File.binread(File.join(run, "brief.md")), "retry brief identical")
 assert(File.read(PACKET).include?("run: #{retry_run.to_json}") && !File.read(PACKET).include?("last_run:"), "retry updates existing run")
 assert(events.any? { |e| e.first(2) == %w[pane split] }, "retry adds pane")
@@ -259,6 +329,7 @@ observed = JSON.parse(File.read(ENV.fetch("FAKE_CODEX_FILE")))
 assert(observed["stdin"].b == File.binread(File.join(run, "brief.md")), "retry executor receives identical brief")
 assert(File.read(File.join(retry_run, "done.txt")).include?(retry_result["nonce"]), "retry script uses new nonce")
 finish(retry_run, retry_result["nonce"], "")
+failure("retry-empty", "launch-record", "not-retryable")
 result = failure("collect", "executor-result", "empty-result", {}, [], changed: true)
 assert(!result["retryable"] && File.read(PACKET).include?("state: blocked"), "second empty blocks")
 failure("retry-empty", "launch-record", "not-retryable")
@@ -275,32 +346,66 @@ File.unlink(File.join(run, "done.txt"))
 assert(invoke("collect", 0, { "FAKE_WAIT_DONE" => run })["status"] == "DONE", "wait wake-up reads done")
 wait_event = events.reverse.find { |e| e.first(2) == %w[pane wait-output] }
 assert(wait_event == ["pane", "wait-output", "p1", "--match", "CODEX-WORKER-DONE-#{nonce}", "--timeout", "300000"], "wait argv")
+["", "CODEX-WORKER-DONE-#{nonce} exit=0"].each do |partial|
+  finish(run, nonce)
+  File.write(File.join(run, "done.txt"), partial)
+  assert(invoke("collect", 0, { "FAKE_WAIT_DONE" => run })["status"] == "DONE", "partial done waits for newline")
+end
 finish(run, nonce)
 File.unlink(File.join(run, "done.txt"))
 failure("collect", "executor-exit", "executor-exit", {}, [], changed: true)
 
-# Accelerate the monotonic clock only in this test process tree; production has no test clock option.
+# Advance fake time by actual requested sleeps, so a missing backoff cannot pass.
 clock = File.join(ROOT, "clock.rb")
 File.write(clock, <<~'CODE')
   module FastClock
     def clock_gettime(clock, *args)
       return super unless clock == Process::CLOCK_MONOTONIC
-      @ticks ||= -20
-      @ticks += 20
+      @ticks ||= 0.0
+      @ticks += 0.01
+    end
+    def advance(seconds)
+      @ticks = (@ticks || 0.0) + seconds
     end
   end
   Process.singleton_class.prepend(FastClock)
+  module FastSleep
+    def sleep(seconds)
+      Process.advance(seconds)
+      if ENV["FAKE_SLEEP_DONE"]
+        record = JSON.parse(File.read(File.join(ENV.fetch("FAKE_SLEEP_DONE"), "launch.json")))
+        File.write(File.join(ENV.fetch("FAKE_SLEEP_DONE"), "done.txt"), "CODEX-WORKER-DONE-#{record.fetch('nonce')} exit=0\n")
+      end
+      File.open(ENV.fetch("FAKE_SLEEP_LOG"), "a") { |f| f.puts seconds } if ENV["FAKE_SLEEP_LOG"]
+      0
+    end
+  end
+  Object.prepend(FastSleep)
 CODE
+finish(run, nonce)
+File.unlink(File.join(run, "done.txt"))
+result = invoke("collect", 0, { "RUBYOPT" => "-r#{clock}", "FAKE_SLEEP_DONE" => run })
+assert(result["status"] == "DONE", "exit observation allows done publication before stopping")
 state = JSON.parse(File.read(ENV.fetch("FAKE_HERDR_FILE")))
 state["running"] = ["p1"]
 reset_herdr(state)
-[{}, { "FAKE_HERDR_FAIL" => "pane process-info" }, { "FAKE_HERDR_BAD" => "pane process-info" }].each do |env|
+[{}, { "FAKE_HERDR_FAIL" => "pane process-info" }, { "FAKE_HERDR_BAD" => "pane process-info" },
+ { "FAKE_HERDR_FAIL_ALL" => "1" }].each do |env|
   finish(run, nonce)
   File.unlink(File.join(run, "done.txt"))
   before = File.binread(PACKET)
-  result = invoke("collect", 3, { "RUBYOPT" => "-r#{clock}" }.merge(env), ["--wait-minutes", "1"])
+  reset_herdr(state)
+  sleep_log = File.join(ROOT, "sleep.log")
+  File.write(sleep_log, "")
+  result = invoke("collect", 3, { "RUBYOPT" => "-r#{clock}", "FAKE_SLEEP_LOG" => sleep_log }.merge(env), ["--wait-minutes", "1"])
   assert(result["status"] == "RUNNING" && result["elapsed_minutes"] >= 1 && result["pane_id"] == "p1", "running cap")
   assert(!result["packet"]["written"] && File.binread(PACKET) == before, "running retains packet")
+  assert(!result.key?("blocked_at"), "RUNNING has no blocked_at")
+  %w[wait-output process-info].each do |verb|
+    calls = events.count { |e| e.first(2) == ["pane", verb] }
+    assert((1..4).cover?(calls), "at most four #{verb} calls per minute even on immediate failure: #{calls}")
+  end
+  assert(File.readlines(sleep_log).map(&:to_f).sum > 59, "waiting uses sleep rather than spinning")
 end
 assert(events.none? { |e| %w[close kill].include?(e[1]) }, "never closes or kills")
 puts "ok: codex-worker collect/retry self-test (#{$count} checks)"

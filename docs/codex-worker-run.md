@@ -35,12 +35,12 @@ hook dispatcher と public-safety、git-identity、ai-trailer の各 gate も同
 
 | exit | status | 意味 |
 | --- | --- | --- |
-| 0 | `STARTED` | herdr の pane run が成功した |
+| 0 | `STARTED` / `DONE` | 起動を受け付けた / collect が完了を転記した |
 | 1 | `BLOCKED` | 指定した段で停止した |
 | 2 | `BLOCKED` | 入力が不正。成果物を作る前に停止した |
-| 3 | `RUNNING` | 同じ Issue に未完了の起動記録があり、worker の生存を確認した |
+| 3 | `RUNNING` | 同じ Issue の worker が動いている / collect の待つ上限 / 人手実行の完了待ち |
 
-成功時の key は `status`、`issue`、`run_dir`、`nonce`、`tab_id`、`pane_id`、
+起動に成功したときの key は `status`、`issue`、`run_dir`、`nonce`、`tab_id`、`pane_id`、
 `pane_label`、`round_pane`、`packet` です。
 `packet` は `{"written":true,"record":"run"}` です。
 `STARTED` は起動の受付を示し、worker の完了や結果の正しさは示しません。
@@ -52,7 +52,7 @@ run directory を作った後なら `run_dir` も返します。
 この場合は `run_dir` を返しません。
 preflight の停止では `dependency_exit` に依存 command の exit を添えます。
 起動できなかった場合や signal の場合は null です。
-`packet.written` は起動記録の書き込みを示します。先に保存した branch はこの値に含みません。
+`packet.written` は起動記録や回収結果の書き込みを示します。先に保存した branch はこの値に含みません。
 herdr の失敗を含め、書いた起動記録と作成済みの file は削除しません。
 
 ## 段と停止の区分
@@ -70,7 +70,7 @@ herdr の失敗を含め、書いた起動記録と作成済みの file は削�
 | `branch` | `authorization` / `launch-record` | `branch` / `packet-update` |
 | `run-directory` | `launch-path` | `run-directory`: run の置き場を作れない |
 | `clone` | `clone` | `snapshot-untraceable`、`snapshot-mismatch`、`clone-command` |
-| `commit-prerequisites` | `clone` | `commit-prerequisite`: identity または hook 配線を確認できない |
+| `commit-prerequisites` | `clone` | `commit-prerequisite`: identity または hook 配線を確認できない。`clone-command`: 起動時の HEAD を読めない |
 | `preflight` | `preflight` | `preflight`、`launch-argv` |
 | `run-location` | `launch-path` | `writable-run`: run が worker の書込先の外と確認できない |
 | `artifacts` | `launch-path` | `io`: brief または run script の保存に失敗 |
@@ -78,7 +78,9 @@ herdr の失敗を含め、書いた起動記録と作成済みの file は削�
 | `herdr` | `launch-path` | `herdr-response`、`tab-ownership`、`worker-running` |
 
 file 操作などの予期しない失敗は、その段の区分で `io` を返します。
-`RUNNING` の場合は `records` の `worker-running` です。
+`RUNNING` には `blocked_at` を含めません。
+起動時は `records` の `worker-running`、collect は `wait` の `wait-limit` または
+`manual-completion-pending` です。
 同じ Issue の記録を先に検査するため、別の Issue の worker と区別できます。
 
 ## 現行手順との対応
@@ -97,6 +99,9 @@ file 操作などの予期しない失敗は、その段の区分で `io` を返
 | SKILL §4、LAUNCH §4 | 依頼を byte のまま brief に写し、固定の指示と最終 message の見出しを足す |
 | LAUNCH §4 の起動記録 | digest を前提に run-start を実行し、list の成功と記録の一致を確認 |
 | LAUNCH §5 | Issue tab を作成、または所有確認した既存 tab の最初の pane を下に分割して起動 |
+| SKILL §5、LAUNCH §6 | collect が完了記録を確認し、最大300秒ずつ待つ |
+| LAUNCH §7 | collect が終了を判定し、生出力と残った process を確認。retry-empty が空の結果を1回だけ再実行 |
+| SKILL §6、LAUNCH §8 | snapshot を照合し、結果を検査して転記。停止時は変更を退避して stop を記録 |
 
 再利用 clone では、git を呼ぶ前に `last_run` の snapshot を照合します。
 `state: blocked` の場合は `run` を使い、無ければ `last_run` を使います。
@@ -162,11 +167,12 @@ herdr から ID が返ったら、一時 file と rename で更新します。
 `collect` と `retry-empty` はこの JSON を読みます。run script は解析しません。
 
 ```json
-{"schema":1,"issue":7,"branch":"feat/7-example","clone_root":"<clone>","nonce":"0123456789abcdef","tab_id":null,"pane_id":null,"pane_label":null,"round":null,"previous_run":null,"created_at":"2026-11-18T00:00:00Z"}
+{"schema":1,"issue":7,"branch":"feat/7-example","clone_root":"<clone>","nonce":"0123456789abcdef","tab_id":null,"pane_id":null,"pane_label":null,"round":null,"previous_run":null,"start_head":"<起動時の HEAD OID>","created_at":"2026-11-18T00:00:00Z"}
 ```
 
 `schema` は整数の 1 です。`round` は指定した整数か null です。
 `previous_run` は前の run directory か null です。
+`start_head` は branch 解決後の clone の HEAD です。retry-empty でも今回の起動前に読み直します。
 `clone_root` と run directory の値には、実際には絶対 path を保存します。
 `tab_id`、`pane_id`、`pane_label` は未確定の間だけ null です。
 再実行では、`retry_of` に1回目の run directory を追加します。
@@ -182,29 +188,46 @@ personal-codex-worker-run collect --repo <main worktree の root> --issue <N> [-
 待つ上限は1〜120分の整数で、既定は120分です。
 完了記録があれば待たずに照合します。無ければ `wait-output` を最大300秒ずつ呼びます。
 残り時間が300秒未満なら、その時間に timeout を縮めます。
+wait-output が早く戻った場合は、呼び出しから15秒になるまで待ちます。
+待機は上限までの残り時間で短縮します。herdr の即時失敗でも短周期の再試行を避けます。
+改行で終わらない done.txt は書き込み中として待ちます。
+process の消滅を確認した場合も、1秒待って完了記録を読み直してから停止を判定します。
 端末の一致は起床の合図で、終了の判定には `done.txt` を使います。
 process-info が失敗した場合や読めない場合は、worker の消滅と判断せずに待ちます。
 
 完了時は exit 0 で、次の形を返します。
 
 ```json
-{"status":"DONE","issue":7,"run_dir":"<run dir>","head_oid":"<HEAD OID>","commits":1,"redacted":false,"leftover":{"foreground":{"checked":true,"processes":[]},"clone_arguments":{"checked":true,"processes":[]}},"packet":{"written":true,"state":"open","record":"last_run"}}
+{"status":"DONE","issue":7,"run_dir":"<run dir>","head_oid":"<HEAD OID>","commits_this_run":1,"redacted":false,"leftover":{"foreground":{"checked":true,"processes":[]},"clone_arguments":{"checked":true,"processes":[]}},"packet":{"written":true,"state":"open","record":"last_run"}}
 ```
 
 `head_oid` は snapshot 照合後の clone の HEAD です。
-`commits` は、main の取得済み `origin/main` と HEAD の merge-base から数えます。
-collect 自体は fetch しません。
+`commits_this_run` は、clone 内の `start_head..HEAD` の commit 数です。
+start_head が無い場合や clone 内に該当 commit が無い場合は null とし、転記を続けます。
+collect は clone にも main にも fetch しません。
 `leftover` は pane の shell 以外の process と、clone の path を引数に持つ process の観測です。
 確認できない項目は `checked: false` だけを返します。観測結果は転記を妨げません。
 残った process は pid と名前を返します。名前を確認できなければ name は null です。
 
 待つ上限では exit 3、`status: RUNNING`、`reason_code: wait-limit` を返します。
 `run_dir`、`pane_id`、`elapsed_minutes` と `packet.written: false` を含みます。
+`RUNNING` に `blocked_at` は含めません。
 process は止めず、packet を保持します。pane と tab は、成功と失敗のどちらでも閉じません。
+
+pane_id が null の run は、人手で run script を実行する経路です。
+完了記録が無ければ即座に exit 3、`RUNNING`、`manual-completion-pending` を返します。
+この場合も `blocked_at` は無く、packet は保持します。
+完了記録があれば、pane.log と foreground の観測を省いて照合と転記へ進みます。
+`leftover.foreground` は `{"checked":false}` です。
+
+| status | reason_code | blocked_at | packet |
+| --- | --- | --- | --- |
+| RUNNING | wait-limit | key 無し | 書かない。待つ上限に達した |
+| RUNNING | manual-completion-pending | key 無し | 書かない。pane が無く、人手実行の完了を待っている |
 
 完了の転記は次の順です。
 
-1. pane の生出力を `pane.log` に保存し、空でないことを確かめる。
+1. pane があれば生出力を `pane.log` に保存し、空でないことを確かめる。
 2. 残った process を観測し、snapshot を照合する。
 3. 最終 message の6つの見出しと順序、packet の予約構文が無いことを検査する。
 4. public-safety gate に通し、必要なら home-path だけを置き換えて再検査する。
@@ -213,6 +236,9 @@ process は止めず、packet を保持します。pane と tab は、成功と�
 見出しは `到達点`、`判断`、`未完`、`停止理由 または 質問`、`commits`、`次の 1 アクション` です。
 それぞれ `### ` を付け、この順に1回ずつ必要です。
 停止理由の「なし」の前後では、空白と句点を除いて比較します。
+brief は、この節を orchestrator の判断待ちで作業を止める理由に限ります。
+実行できなかった test や読めなかった process 一覧は「未完」に書きます。
+止まらずに終えた場合は、停止理由に「なし」とだけ書きます。
 置き換えの順序と path 境界は LAUNCH §8 と同じです。
 原文を残して `result.redacted.md` を作り、転記 entry の先頭に注記を足します。
 gate の stderr は `gate.err` に控えます。本文や診断の内容は stdout と stderr に出しません。
@@ -233,6 +259,10 @@ gate の stderr は `gate.err` に控えます。本文や診断の内容は std
 | clone | snapshot-mismatch | clone で git を呼ばず、退避も packet の更新もしない |
 | clone | backup | 退避が未完。backup_step に status / staged / unstaged / untracked を返し、packet は保持 |
 
+`RESULT-FORMAT.md` の停止時の state 規則とは、次の点が異なります。
+transcription、終了後の snapshot 照合の失敗、退避の失敗では、packet を blocked にしません。
+回収の再試行に備えて元の state と起動記録を保持します。
+
 停止の退避は `wip-status.txt`、`wip-staged.patch`、`wip-unstaged.patch`、`wip-untracked.tar` に分けます。
 各 command の成功を確認し、失敗した段で止めます。
 snapshot の stderr は `snapshot-verify.txt` に保存します。
@@ -252,7 +282,9 @@ packet の run が1回目で、nonce が一致し、exit 0 で結果が欠落ま
 brief は byte のまま写します。元の run directory は保持します。
 
 `run-start` の `expected_run` に元の run を渡し、起動記録を新しい run に差し替えます。
-同じ tab の所有を元の `tab-id` で確認し、pane を足して起動します。
+tab の存在と元の `tab-id` との一致、pane の名前は、起動記録の書き換え前に確認します。
+確認できなければ `launch-path` で止まり、元の run を保持します。
+起動の段でも所有を再確認し、同じ tab に pane を足します。
 成功時は launch と同じ `STARTED` の JSON で exit 0 です。
 起動の共通段で止まった場合も、launch と同じ区分と packet.written を返します。
 
