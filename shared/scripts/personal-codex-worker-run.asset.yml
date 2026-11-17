@@ -11,7 +11,7 @@ risk:
 # script の配布承認は内容に紐づく。変更時は review と build_id の更新が必要。
 review:
   human_review: approved
-  approved_build_id: sha256:a01cc738f8c9634b291d1a682cfabc10865c6af300110f79e51a3d57a1dacddf
+  approved_build_id: sha256:0e3123ab25fae616dac727529145c312937ae279a30d1abe5fb2964c3dc72186
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-codex-worker-run.rb
@@ -20,4 +20,5 @@ summary: >-
   Codex worker の起動を 1 command にまとめる (#706)。launch は packet の起動記録と workspace を検査し、
   snapshot を照合して clone を再利用する。preflight の launch_argv から brief と run script を作り、
   packet に記録してから herdr の Issue tab で起動する。停止の区分は JSON で返す。
-  collect、retry-empty、check は後の PR で追加する。GitHub の読み書きと結果の回収は行わない。
+  collect は結果の転記と停止時の退避、retry-empty は空の結果の再実行を行う。
+  check は後の PR で追加する。GitHub の読み書きは行わない。

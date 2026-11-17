@@ -1,13 +1,13 @@
-# Codex worker の起動
+# Codex worker の起動と回収
 
 `personal-codex-worker-run launch` は、packet の依頼から worker を起動します (#706)。
 Ruby 2.6 の標準 library、git、herdr、codex と配備済み script を使います。
-現在実装している subcommand は `launch` だけです。
-`collect`、`retry-empty`、`check` は #706 の3本目と4本目の PR で追加する予定です。
+`launch`、`collect`、`retry-empty` を実装しています。
+公開前の検査を行う `check` は #706 の4本目の PR で追加する予定です。
 
 起動の許可は caller が持つ現在の依頼で判断します。
 packet の存在や本文だけで、委譲を始める許可があるとは扱いません。
-GitHub の読み書き、結果の回収、公開前の検査はこの command の範囲外です。
+GitHub の読み書きと公開前の検査は、この command の範囲外です。
 現行 skill と `LAUNCH.md` の手順は、#706 の最後の PR まで使います。
 
 ## 入力
@@ -154,3 +154,109 @@ tab や pane を閉じる操作は持ちません。
 packet と preflight は実装を配備と同じ名前で配置し、herdr と codex は偽物に置き換えます。
 run script の実行、特殊文字を含む path、snapshot、起動記録、停止後の非実行を検証します。
 本物の herdr、codex、GitHub には接続しません。
+
+## 起動の記録 (`launch.json`)
+
+brief と run script を生成する段で、起動記録を書く前に `launch.json` を保存します。
+herdr から ID が返ったら、一時 file と rename で更新します。
+`collect` と `retry-empty` はこの JSON を読みます。run script は解析しません。
+
+```json
+{"schema":1,"issue":7,"branch":"feat/7-example","clone_root":"<clone>","nonce":"0123456789abcdef","tab_id":null,"pane_id":null,"pane_label":null,"round":null,"previous_run":null,"created_at":"2026-11-18T00:00:00Z"}
+```
+
+`schema` は整数の 1 です。`round` は指定した整数か null です。
+`previous_run` は前の run directory か null です。
+`clone_root` と run directory の値には、実際には絶対 path を保存します。
+`tab_id`、`pane_id`、`pane_label` は未確定の間だけ null です。
+再実行では、`retry_of` に1回目の run directory を追加します。
+古い run に JSON が無ければ、回収は `no-launch-record` で止まります。
+
+## collect の入力と出力
+
+```text
+personal-codex-worker-run collect --repo <main worktree の root> --issue <N> [--wait-minutes <M>]
+```
+
+対象は packet の `run` だけです。`--run-dir` は受け付けません。
+待つ上限は1〜120分の整数で、既定は120分です。
+完了記録があれば待たずに照合します。無ければ `wait-output` を最大300秒ずつ呼びます。
+残り時間が300秒未満なら、その時間に timeout を縮めます。
+端末の一致は起床の合図で、終了の判定には `done.txt` を使います。
+process-info が失敗した場合や読めない場合は、worker の消滅と判断せずに待ちます。
+
+完了時は exit 0 で、次の形を返します。
+
+```json
+{"status":"DONE","issue":7,"run_dir":"<run dir>","head_oid":"<HEAD OID>","commits":1,"redacted":false,"leftover":{"foreground":{"checked":true,"processes":[]},"clone_arguments":{"checked":true,"processes":[]}},"packet":{"written":true,"state":"open","record":"last_run"}}
+```
+
+`head_oid` は snapshot 照合後の clone の HEAD です。
+`commits` は、main の取得済み `origin/main` と HEAD の merge-base から数えます。
+collect 自体は fetch しません。
+`leftover` は pane の shell 以外の process と、clone の path を引数に持つ process の観測です。
+確認できない項目は `checked: false` だけを返します。観測結果は転記を妨げません。
+残った process は pid と名前を返します。名前を確認できなければ name は null です。
+
+待つ上限では exit 3、`status: RUNNING`、`reason_code: wait-limit` を返します。
+`run_dir`、`pane_id`、`elapsed_minutes` と `packet.written: false` を含みます。
+process は止めず、packet を保持します。pane と tab は、成功と失敗のどちらでも閉じません。
+
+完了の転記は次の順です。
+
+1. pane の生出力を `pane.log` に保存し、空でないことを確かめる。
+2. 残った process を観測し、snapshot を照合する。
+3. 最終 message の6つの見出しと順序、packet の予約構文が無いことを検査する。
+4. public-safety gate に通し、必要なら home-path だけを置き換えて再検査する。
+5. 停止理由の節が「なし」なら result として転記し、run から last_run への移動を読み直す。
+
+見出しは `到達点`、`判断`、`未完`、`停止理由 または 質問`、`commits`、`次の 1 アクション` です。
+それぞれ `### ` を付け、この順に1回ずつ必要です。
+停止理由の「なし」の前後では、空白と句点を除いて比較します。
+置き換えの順序と path 境界は LAUNCH §8 と同じです。
+原文を残して `result.redacted.md` を作り、転記 entry の先頭に注記を足します。
+gate の stderr は `gate.err` に控えます。本文や診断の内容は stdout と stderr に出しません。
+
+## collect の停止と packet
+
+停止時は exit 1、`status: BLOCKED` です。理由は固定文です。
+
+| blocked_at | reason_code | packet と退避 |
+| --- | --- | --- |
+| launch-record | no-launch-record / invalid-launch-record | 書かない。run や JSON が無い、または読めない |
+| executor-exit | nonce-mismatch / done-invalid / executor-exit | snapshot 照合後に退避し、stop で blocked にする |
+| limit | limit | 非0の exit と行頭の利用上限メッセージを確認後、照合・退避・stop を行う |
+| executor-result | empty-result (retryable: true) | 1回目の空の結果。state と起動記録を保持する |
+| executor-result | empty-result (retryable: false) | 2回目の空の結果。照合・退避・stop を行う |
+| executor-result | worker-question (retryable: false) | 最終 message を worker/codex の stop として転記する |
+| transcription | pane-log / result-format / gate | 書かない。生出力、書式、公開検査のいずれかで停止 |
+| clone | snapshot-mismatch | clone で git を呼ばず、退避も packet の更新もしない |
+| clone | backup | 退避が未完。backup_step に status / staged / unstaged / untracked を返し、packet は保持 |
+
+停止の退避は `wip-status.txt`、`wip-staged.patch`、`wip-unstaged.patch`、`wip-untracked.tar` に分けます。
+各 command の成功を確認し、失敗した段で止めます。
+snapshot の stderr は `snapshot-verify.txt` に保存します。
+最終 message が書式と gate を通れば worker/codex の entry を使います。
+通らなければ orchestrator/claude の固定文で、区分、exit、退避 file 名だけを記録します。
+stop は run と tab を残します。
+
+## retry-empty の入力と出力
+
+```text
+personal-codex-worker-run retry-empty --repo <main worktree の root> --issue <N>
+```
+
+packet の run が1回目で、nonce が一致し、exit 0 で結果が欠落または0 byte の場合だけ起動します。
+対象外なら `launch-record` の `not-retryable` で止まり、packet を書きません。
+新しい run directory と nonce を作り、元の snapshot で clone を照合してから preflight をやり直します。
+brief は byte のまま写します。元の run directory は保持します。
+
+`run-start` の `expected_run` に元の run を渡し、起動記録を新しい run に差し替えます。
+同じ tab の所有を元の `tab-id` で確認し、pane を足して起動します。
+成功時は launch と同じ `STARTED` の JSON で exit 0 です。
+起動の共通段で止まった場合も、launch と同じ区分と packet.written を返します。
+
+結合検査は `scripts/tests/codex-worker-collect-test.sh` です。
+launch の検査と fixture を共有し、herdr と codex は偽物を使います。
+packet、snapshot の照合、public-safety gate の検出処理は実物で検査します。
+一時 HOME の検査では、gate に渡す HOME の判定だけを fixture 用に差し替えます。
