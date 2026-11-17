@@ -105,7 +105,7 @@ def call_update(data, expected = 0, args: ["7", "--stdin"], source: SOURCE, env:
     untouched_sections = case data["operation"]
                          when "branch", "run-start", "review" then %w[依頼 結果 次の入口]
                          when "result", "stop" then %w[依頼]
-                         when "round" then %w[結果]
+                         when "round" then data.key?("review_entry") ? [] : %w[結果]
                          end
     assert(untouched_sections.all? { |key| old_secs[key] == new_secs[key] }, "untouched sections byte-for-byte")
     assert(result["updated_changed"] == (old_front.updated != new_front.updated), "updated_changed matches actual timestamps")
@@ -443,5 +443,22 @@ File.unlink(sibling)
 %w[--help -h].each do |flag|
   out, _err, status = Open3.capture3(RbConfig.ruby, SOURCE, "worker-update", flag)
   assert(status.success? && out.include?("worker-update <issue> --stdin"), "worker help")
+end
+# optional keys retain the old preconditions unless explicitly supplied.
+reset
+update("run-start", "run" => RUN, "tab" => "#7")
+assert(update("run-start", { "run" => RUN + "-new", "tab" => "#7" }, 1)["reason_code"] == "precondition", "existing run needs expected_run")
+assert(update("run-start", { "run" => RUN + "-new", "tab" => "#7", "expected_run" => RUN + "-wrong" }, 1)["reason_code"] == "precondition", "expected_run mismatch")
+result = update("run-start", "run" => RUN + "-new", "tab" => "#7", "expected_run" => RUN)
+assert(current.run == RUN + "-new" && !result["updated_changed"], "retry replaces run without timestamp change")
+reset
+update("run-start", { "run" => RUN, "tab" => "#7", "expected_run" => RUN }, 1)
+reset(ORIGINAL.sub("state: open", "state: blocked"))
+update("run-start", { "run" => RUN, "tab" => "#7", "expected_run" => RUN }, 1)
+reset
+update("round", "request" => "PRIVATE-REQUEST", "next" => "PRIVATE-NEXT", "review_entry" => "PRIVATE-ENTRY")
+assert(current.body.include?("### #{Time.now.strftime('%Y-%m-%d')} reviewer/claude\n\nPRIVATE-ENTRY"), "reviewer entry appended")
+["", "## injected", "<!-- comment -->", "### 2026-01-01 worker/codex", "ok\n  **次の入口**  "].each do |entry|
+  update("round", { "request" => "PRIVATE-REQUEST", "next" => "PRIVATE-NEXT", "review_entry" => entry }, 2)
 end
 puts "ok: packet worker-update (#{$count} assertions)"

@@ -771,6 +771,7 @@ module Packet
     "round" => %w[request next], "review" => %w[pr]
   }.freeze
   WORKER_COMMON_KEYS = %w[schema operation expected_sha256].freeze
+  WORKER_OPTIONAL_KEYS = { "run-start" => %w[expected_run], "round" => %w[review_entry] }.freeze
   WORKER_INPUT_LIMIT = 64 * 1024
 
   class WorkerUpdateError < StandardError
@@ -803,6 +804,7 @@ module Packet
       raise WorkerUpdateError.new("invalid_input", "schema または operation が不正です", 2)
     end
     keys = WORKER_INPUT_KEYS.fetch(data["operation"])
+    keys += WORKER_OPTIONAL_KEYS.fetch(data["operation"], []).select { |key| data.key?(key) }
     unless data.keys.sort == (WORKER_COMMON_KEYS + keys).sort &&
            data["expected_sha256"].is_a?(String) && data["expected_sha256"].match?(/\A[0-9a-f]{64}\z/)
       raise WorkerUpdateError.new("invalid_input", "key または expected_sha256 が不正です", 2)
@@ -815,7 +817,7 @@ module Packet
                 false
               else
                 case key
-                when "run"
+                when "run", "expected_run"
                   value.start_with?("/") && !value.match?(/[[:cntrl:]"\\]/)
                 when "tab" then value == "##{issue}"
                 when "branch"
@@ -847,7 +849,7 @@ module Packet
     lines = value.lines
     edges = value.strip.lines
     lines += [edges.first.to_s.strip, edges.last.to_s.strip] if key == "next"
-    lines += [edges.last.to_s.strip] if key == "entry"
+    lines += [edges.last.to_s.strip] if %w[entry review_entry].include?(key)
     lines
   end
 
@@ -902,7 +904,10 @@ module Packet
     allowed = case operation
               when "branch" then !keys.key?("branch")
               when "run-start"
-                %w[open blocked].include?(front.state) && (!keys.key?("run") || front.state == "blocked")
+                expected = data.key?("expected_run")
+                %w[open blocked].include?(front.state) &&
+                  (!expected || front.run == data["expected_run"]) &&
+                  (!keys.key?("run") || front.state == "blocked" || expected)
               when "result" then front.state == "open" && front.run == data["run"]
               when "stop"
                 front.state == "open" && [front.run, front.last_run].include?(data["run"])
@@ -929,6 +934,10 @@ module Packet
       end
     when "round"
       bodies["依頼"] = worker_append(secs.fetch("依頼"), data.fetch("request"))
+      if data.key?("review_entry")
+        entry = "### #{at.strftime('%Y-%m-%d')} reviewer/claude\n\n#{data.fetch('review_entry')}"
+        bodies["結果"] = worker_append(secs.fetch("結果"), entry)
+      end
       bodies["次の入口"] = "\n#{data.fetch('next')}\n\n"
       changes["state"] = "open" if front.state == "review"
     when "review"
