@@ -65,11 +65,11 @@ module CodexWorkerRun
 
     # 外部の出力や例外本文は返却に混ぜない。command は常に argv で起動する。
     def capture(argv, input = "")
-      out, _err, status = Open3.capture3([argv.first, argv.first], *argv.drop(1),
+      out, err, status = Open3.capture3([argv.first, argv.first], *argv.drop(1),
                                        stdin_data: input, chdir: @repo || Dir.pwd)
-      [out, status.exitstatus]
+      [out, status.exitstatus, err]
     rescue SystemCallError
-      [nil, nil]
+      [nil, nil, ""]
     end
 
     def command(argv, code, input = "")
@@ -295,7 +295,11 @@ module CodexWorkerRun
         stop("snapshot-untraceable") unless stat.directory? && @previous_run.is_a?(String)
         snapshot = File.join(@previous_run, "preflight.json")
         stop("snapshot-untraceable") unless File.file?(snapshot)
-        command([sibling("personal-codex-worker-preflight"), "--verify-git-snapshot", snapshot, "--clone", @clone], "snapshot-mismatch")
+        _out, rc, err = capture([sibling("personal-codex-worker-preflight"), "--verify-git-snapshot", snapshot, "--clone", @clone])
+        unless rc == 0
+          File.binwrite(File.join(@run, "snapshot-verify.txt"), err)
+          stop("snapshot-mismatch")
+        end
         dirty = command(git(@clone, "status", "--porcelain"), "clone-command")
         File.binwrite(File.join(@run, "clone-status.txt"), dirty)
       else

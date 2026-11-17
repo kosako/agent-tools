@@ -179,12 +179,13 @@ def launch(expected = 0, env = {}, args = [], explicit: nil)
   assert(status.exitstatus == expected, "launch exit #{status.exitstatus}, wanted #{expected}: #{out} #{err}")
   assert(out.lines.size == 1, "one JSON line")
   assert(!out.include?("PRIVATE-REQUEST") && !err.include?("PRIVATE-REQUEST"), "request must not leak")
+  yield(out, err) if block_given?
   JSON.parse(out)
 end
 
-def blocked(at, code, env = {}, args = [])
+def blocked(at, code, env = {}, args = [], &block)
   before = events.count { |e| e.first(2) == %w[pane run] }
-  result = launch(1, env, args)
+  result = launch(1, env, args, &block)
   assert(result["status"] == "BLOCKED" && result["blocked_at"] == at && result["reason_code"] == code, "block category: #{result}")
   assert(events.count { |e| e.first(2) == %w[pane run] } == before, "blocked must not run pane")
   result
@@ -284,7 +285,16 @@ reset_packet("branch: feat/7-test\nlast_run: #{round['run_dir'].to_json}\n")
 config = File.binread(File.join(CLONE, ".git", "config"))
 File.open(File.join(CLONE, ".git", "config"), "a") { |f| f.puts "# changed" }
 File.write(ENV.fetch("FAKE_GIT_LOG"), "")
-blocked("clone", "snapshot-mismatch")
+_out, verify_err, verify_status = Open3.capture3(File.join(DEPLOY, "personal-codex-worker-preflight"),
+  "--verify-git-snapshot", File.join(round["run_dir"], "preflight.json"), "--clone", CLONE)
+assert(!verify_status.success? && verify_err.include?("config"), "snapshot fixture produces diagnostic stderr")
+result = blocked("clone", "snapshot-mismatch") do |out, err|
+  assert(!out.include?(verify_err.strip) && !out.include?("config"), "snapshot diagnostic must not leak to stdout")
+  assert(err.empty?, "snapshot diagnostic must not leak to stderr")
+end
+verify_log = File.join(result.fetch("run_dir"), "snapshot-verify.txt")
+assert(File.file?(verify_log), "snapshot failure retains diagnostic file in current run")
+assert(File.binread(verify_log) == verify_err.b, "snapshot diagnostic stderr preserved verbatim")
 trace = File.readlines(ENV.fetch("FAKE_GIT_LOG")).map { |l| JSON.parse(l) }
 assert(trace.none? { |a| a.include?(CLONE) }, "snapshot failure never calls git in clone")
 File.binwrite(File.join(CLONE, ".git", "config"), config)

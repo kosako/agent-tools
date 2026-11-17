@@ -105,11 +105,23 @@ file 操作などの予期しない失敗は、その段の区分で `io` を返
 `snapshot-untraceable` は、前の run または `preflight.json` を辿れない場合です。
 `snapshot-mismatch` は、snapshot の照合 command が成功しなかった場合です。
 後者では `.git` の変更も疑い、照合結果と前の run を人が調べます。
+ただし、clone を作った後、起動の記録の前に止まった場合にも起こります。
+この場合は、下の回復手順で clone の由来を確認します。
 どちらも clone で git を実行する前に止まります。
 
-新規 clone の作成後、起動記録の前に止まると、packet に run が残らない場合があります。
-identity、hook、preflight、run の置き場、成果物の保存で停止した場合が該当します。
-原因を直して再実行しても、残った clone は `snapshot-untraceable` で止まります。
+照合 command が失敗すると、stderr を今回の `run_dir` の `snapshot-verify.txt` に保存します。
+stdout の JSON には、その内容を載せません。人が照合をやり直す command は次のとおりです。
+
+```text
+personal-codex-worker-preflight --verify-git-snapshot <前の run>/preflight.json --clone <clone>
+```
+
+clone を作った後、起動の記録の前に止まると、その run が packet に残らない場合があります。
+原因を直して再実行しても、残った clone の照合で止まります。
+packet が前の run を指していなければ、`snapshot-untraceable` になります。
+前の run を指していれば、その snapshot と新しい clone が異なるため `snapshot-mismatch` になります。
+参照する記録は `last_run`、または `state: blocked` の `run` です。
+参照先の `preflight.json` を辿れない場合は、`snapshot-untraceable` になります。
 人は次の順に確認して回復します。
 
 1. 停止時の `phase`、`reason_code`、`run_dir` を確認し、元の停止原因を直します。
