@@ -269,6 +269,7 @@ file で行い、command 文字列へ inline 展開しない。
 | `dir` | packet dir を出す (main worktree root に固定。linked worktree からでも同じ) | 0 / 2 (git 外) |
 | `list [--json] [--all]` | frontmatter を読んで一覧。既定は open / blocked / review だけ、`--all` で done も。`updated > published` (または未 publish) を `unpublished` で示す。起動の記録があれば `run` / `tab` と `run_status` を出す (text は `[run: <status>]`)。`--json` には `last_run` も出す。`check` が拒む packet (symlink / regular file でない / git で tracked) は中身を読まずに飛ばし、path と理由だけを warning に出す (#412。packet dir が symlink、または tracked かを判定できないときは 1 件も出さない) | 0 / 1 (壊れた packet か、読まなかった packet がある。warning を出し、健全な行は出す) / 2 |
 | `check <issue>` | packet を書く前の更新先の検査 (置き場の「symlink / tracked の packet は誰も更新しない」)。通れば packet の path (main worktree の root の実体から組んだもの) を 1 行出す。packet が無い (これから作る) ときも、dir と index を見て通れば出す (file も dir も作らない) | 0 / 1 (拒否。理由を stderr に出す) / 2 (判定できない: git の外・git の失敗・repository / index を選ぶ環境変数の継承・usage) |
+| `worker-update <issue> --stdin` | JSON で指定した操作を既存 packet に適用する。digest と前提を検査し、結果を JSON 1 行で返す | 0 / 1 (packet・前提・保存の拒否) / 2 (入力・usage の誤り) |
 | `publish <issue> [--repo OWNER/REPO] [--dry-run] [--accept-warnings]` | `結果` の最新節 + `次の入口` を marker 付きで合成 → 同じ directory の `personal-public-safety-gate --stdin` に通す → **exit 0 で警告が無いとき** (警告があれば、人が確かめて `--accept-warnings` を付けたときだけ) `gh issue comment` で投稿 → frontmatter の `published` を更新 | 0 / 1 (gate が止めた、または警告を出した。#413) / 2 (検査できない・gate 不在・gh 不在 / 失敗・入力エラー・更新先の検査に落ちた・`--repo` が無く `GH_REPO` がある) |
 | `pull <issue> [--repo OWNER/REPO] [--dry-run]` | self コメントの有効な写しを取り込んで packet を再構成。`--dry-run` は全文を stdout に出す | 0 / 1 (採用できる写しなし) / 2 (reader / 入力 / 保存エラー・更新先の検査に落ちた・`--repo` が無く `GH_REPO` がある) |
 
@@ -296,6 +297,73 @@ file で行い、command 文字列へ inline 展開しない。
 
 self-test は `scripts/tests/packet-test.sh` (dir / list / check / publish) と `scripts/tests/packet-pull-test.sh`
 (pull。上の「写しの取り込み」)。
+
+### worker-update の入力と保存 (#706)
+
+`worker-update <issue> --stdin` は既存 packet の更新だけを行う。
+委譲の skill がこの口を使うのは後の PR で行い、今の委譲手順は変えない。
+呼び出しの許可範囲は従来どおりで、この command の追加で worker の権限は広がらない。
+
+stdin は UTF-8 の JSON object 1 つで、上限は 64 KiB (65,536 byte)。
+共通 key は `schema` (整数の `1`)、`operation`、`expected_sha256` の 3 つ。
+`expected_sha256` には、更新前の packet の byte 列を SHA-256 で計算した値を渡す。
+表記は 64 桁の小文字の hex とする。
+未知・重複・不足の key、未知の操作、型の違いは exit 2 で拒否する。
+
+```json
+{"schema":1,"operation":"review","expected_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","pr":123}
+```
+
+上の digest は入力の形を示す例。実際の呼び出しでは現在の byte 列から計算する。
+各操作では、共通 key に加えて次の key をすべて渡す。
+
+| operation | 追加の key | 前提 | 更新内容 |
+| --- | --- | --- | --- |
+| `branch` | `branch` | frontmatter に `branch` が無い | `branch` を追加。`updated` は保持 |
+| `run-start` | `run`、`tab` | state が open か blocked。run が無いか state が blocked | run と tab を保存し、last_run を削除。blocked なら open にして updated を更新。それ以外の updated は保持 |
+| `result` | `run`、`entry`、`next` | state が open で run が一致 | 結果に今日の worker/codex entry を追記。次の入口を next に置換。run を last_run に移して tab を削除し、updated を更新 |
+| `stop` | `run`、`role`、`entry`、`next` | state が open で run または last_run が一致 | 結果に今日の role の entry を追記。次の入口を next に置換。state を blocked にして updated を更新。run、tab、last_run は保持 |
+| `round` | `request`、`next` | state が open、review、blocked のいずれか | 依頼に request を追記し、次の入口を next に置換。review なら open にし、open と blocked は保持。updated を更新 |
+| `review` | `pr` | state が open で run が無い | pr を保存し、state を review にして updated を更新 |
+
+`pr` は正の整数。それ以外の追加の値は文字列とし、次の検査を通す。
+
+- `run` は絶対 path で、制御文字、`"`、`\` を含めない。
+- `tab` は `#<issue>` と一致させる。
+- `branch` は空白と制御文字を含めず、`git check-ref-format --branch` を通る branch 名にする。
+  履歴を展開する `@{-1}` などの表記は使わない。
+- `role` は `worker/codex` か `orchestrator/claude`。
+- `entry`、`request`、`next` は空でない本文とする。
+  改行と tab 以外の制御文字、行頭の `## `、`<!--`、`-->` を含めない。
+  `### YYYY-MM-DD 役割/agent` の entry 見出し行も含めない。
+
+保存前に `check` と同じ検査を行う。packet が存在し、digest が一致することも確かめる。
+frontmatter は `list` の parser、本文は既存の節の切り方で読み、固定の 3 節を要求する。
+frontmatter は行頭の plain な `key: value` の 1 行単位で更新する。
+重複 key、引用された key、tag、escape、anchor、入れ子、複数行の値は拒否する。
+本文の comment が閉じていない場合も拒否する。
+対象外の key、comment、節は保持する。`run`、`last_run`、`tab` は double-quoted で保存する。
+`updated` は local の ISO 8601 (秒まで、offset 付き)、entry の日付は local の日付を使う。
+
+更新後の内容を同じ parser で読み直し、対象外の key と節が変わっていないことを検査する。
+`write_sibling` で同じ directory の一時 file に書き切る。
+rename の直前に更新先と digest を再検査してから差し替える。
+失敗したときは今回作った一時 file を片付け、既存 packet を上書きしない。
+先に一時 file があった場合は、それも変更せずに止まる。
+直前の検査から rename までの間の変更を排他する仕組みではない。
+
+stdout は JSON 1 行。成功時は exit 0 で次の形を返す。
+`updated_changed` は読み取った更新前後の `updated` が異なるかを示す。
+同じ秒に更新した場合は `false` になることがある。
+
+```json
+{"ok":true,"issue":7,"operation":"review","state":"review","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","updated_changed":true}
+```
+
+失敗時は `{"ok":false,"reason_code":"…","reason":"…"}` を stdout に出す。
+stderr にも人向けの診断を 1 行出す。本文の `entry`、`request`、`next` はどちらにも出さない。
+packet や前提の検査、保存の失敗は exit 1、入力の誤りは exit 2。
+新規 packet は作らない。self-test は `scripts/tests/packet-worker-update-test.sh`。
 
 ## resume / handoff との関係
 
