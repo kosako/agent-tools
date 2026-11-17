@@ -336,13 +336,20 @@ stdin は UTF-8 の JSON object 1 つで、上限は 64 KiB (65,536 byte)。
 - `entry`、`request`、`next` は空でない本文とする。
   改行と tab 以外の制御文字、行頭の `## `、`<!--`、`-->` を含めない。
   `### YYYY-MM-DD 役割/agent` の entry 見出し行も含めない。
+  publish と pull が区切りに使う `**次の入口**`、`**結果 (最新節)**` だけの行も拒否する。
+  判定は改行を除いた行の完全一致とする。
 
 保存前に `check` と同じ検査を行う。packet が存在し、digest が一致することも確かめる。
 frontmatter は `list` の parser、本文は既存の節の切り方で読み、固定の 3 節を要求する。
 frontmatter は行頭の plain な `key: value` の 1 行単位で更新する。
-重複 key、引用された key、tag、escape、anchor、入れ子、複数行の値は拒否する。
-本文の comment が閉じていない場合も拒否する。
-対象外の key、comment、節は保持する。`run`、`last_run`、`tab` は double-quoted で保存する。
+key の重複は全 key で拒否する。既存 parser が拒む tag などの形も引き続き拒否する。
+更新・削除する key では、引用された key、escape、anchor、入れ子、複数行の値を拒否する。
+更新しない値の複数行や plain な値の `\` は保持する。
+そのため、`pull` の `YAML.dump` が長い title を折り返した packet も更新できる。
+本文の comment の対応は最初の見出しより前も含め、全体と各節で検査する。
+対象外の key、comment、節は byte 単位で保持する。
+更新する値の後ろの空白と行末 comment も byte 単位で保持する。key を削除するときは行ごと消す。
+`run`、`last_run`、`tab` は double-quoted で保存する。
 `updated` は local の ISO 8601 (秒まで、offset 付き)、entry の日付は local の日付を使う。
 
 更新後の内容を同じ parser で読み直し、対象外の key と節が変わっていないことを検査する。
@@ -362,7 +369,23 @@ stdout は JSON 1 行。成功時は exit 0 で次の形を返す。
 
 失敗時は `{"ok":false,"reason_code":"…","reason":"…"}` を stdout に出す。
 stderr にも人向けの診断を 1 行出す。本文の `entry`、`request`、`next` はどちらにも出さない。
-packet や前提の検査、保存の失敗は exit 1、入力の誤りは exit 2。
+`reason` は失敗の種別ごとの固定文とし、入力の key 名を含むことがある。
+`reason_code` と exit は次のとおり。
+
+| reason_code | exit | 意味 |
+| --- | --- | --- |
+| `usage` | 2 | command の引数が不正 |
+| `invalid_input` | 2 | JSON の形、key、型、値が不正 |
+| `input_error` | 2 | 入力処理などで想定外の例外が発生 |
+| `check_rejected` | 1 | 更新先を `check` が拒否 (symlink、tracked など) |
+| `check_error` | 2 | 更新先を `check` で判定できない |
+| `missing_packet` | 1 | 既存 packet が無い |
+| `digest_mismatch` | 1 | 保存前か差し替え直前の digest が不一致 |
+| `precondition` | 1 | 操作の state や起動記録の前提が不成立 |
+| `invalid_packet` | 1 | 既存 parser、節、comment、更新対象の行、更新後の保持の検査で拒否 |
+| `stale_temp` | 1 | 前回の一時 file が残っている |
+| `write_failed` | 1 | 一時 file の保存や rename などに失敗 |
+
 新規 packet は作らない。self-test は `scripts/tests/packet-worker-update-test.sh`。
 
 ## resume / handoff との関係

@@ -132,6 +132,69 @@ def list_row
   JSON.parse(out).first
 end
 
+# YAML.dump folds a long title just as pull_text does. Every operation must keep it,
+# along with plain backslashes and unrelated YAML values, byte-for-byte.
+long_title = "委譲した Codex の worker の起動と回収を script にする (personal-codex-worker-run と packet の更新口)"
+dumped = YAML.dump({ "title" => long_title }).sub(/\A---\n/, "")
+assert(dumped.lines.size > 1, "YAML.dump fixture really folds the title")
+title_line = "title: \"packet #7\"\n"
+[dumped, "title: regex \\d の扱い\n", "title: 'quoted # title'\ncustom: |\n  extra line\n"].each do |title|
+  fixture = ORIGINAL.sub(title_line, title).sub("custom: keep\n", "")
+  {
+    "branch" => { "branch" => "feat/7-test" },
+    "run-start" => { "run" => RUN, "tab" => "#7" },
+    "result" => { "run" => RUN, "entry" => "PRIVATE-ENTRY", "next" => "PRIVATE-NEXT" },
+    "stop" => { "run" => RUN, "role" => "worker/codex", "entry" => "PRIVATE-ENTRY", "next" => "PRIVATE-NEXT" },
+    "round" => { "request" => "PRIVATE-REQUEST", "next" => "PRIVATE-NEXT" },
+    "review" => { "pr" => 9 }
+  }.each do |operation, values|
+    text = fixture
+    text = text.sub("state: open", "state: open\nrun: #{RUN.to_json}\ntab: \"#7\"") if %w[result stop].include?(operation)
+    reset(text)
+    update(operation, values)
+    assert(File.read(PATH_PACKET).include?(title), "#{operation} preserves untouched title bytes")
+  end
+end
+
+# Changed lines preserve the exact suffix after the YAML value, including tabs,
+# comments, Unicode and # inside quotes. Deleted lines lose their comments too.
+suffix = " \t  # 保持する comment # hash\n"
+reset(ORIGINAL.sub("state: open\n", "state: review#{suffix}")
+              .sub("updated: 2026-01-01T00:00:00+09:00\n", "updated: 2026-01-01T00:00:00+09:00#{suffix}"))
+update("round", "request" => "PRIVATE-REQUEST", "next" => "PRIVATE-NEXT")
+assert(File.read(PATH_PACKET).include?("state: open#{suffix}"), "round preserves state comment")
+assert(File.read(PATH_PACKET).lines.grep(/^updated:/).first.end_with?(suffix), "updated preserves suffix")
+reset(ORIGINAL.sub("state: open\n", "state: open#{suffix}pr: 1#{suffix}"))
+update("review", "pr" => 9)
+assert(File.read(PATH_PACKET).include?("state: review#{suffix}pr: 9#{suffix}"), "review preserves state and pr suffixes")
+quoted_run = RUN + "/日本語 #old"
+reset(ORIGINAL.sub("state: open", "state: blocked\nrun: #{quoted_run.to_json}#{suffix}tab: \"#7\"#{suffix}".chomp))
+update("run-start", "run" => RUN, "tab" => "#7")
+assert(File.read(PATH_PACKET).include?("run: #{RUN.to_json}#{suffix}tab: \"#7\"#{suffix}"), "run-start preserves quoted suffixes")
+update("result", "run" => RUN, "entry" => "PRIVATE-ENTRY", "next" => "PRIVATE-NEXT")
+assert(!File.read(PATH_PACKET).include?(suffix), "result deletes run and tab comments with lines")
+reset(ORIGINAL.sub("state: open", "state: blocked\nlast_run: #{RUN.to_json}#{suffix}".chomp))
+update("run-start", "run" => RUN, "tab" => "#7")
+assert(!File.read(PATH_PACKET).include?(suffix), "run-start deletes last_run comment")
+
+# Shapes of changed/deleted keys still fail, even when list can read their value.
+[
+  ["review", { "pr" => 9 }, ORIGINAL.sub("state: open", '"state": open')],
+  ["review", { "pr" => 9 }, ORIGINAL.sub("state: open", '"st\\u0061te": open')],
+  ["round", { "request" => "PRIVATE-REQUEST", "next" => "PRIVATE-NEXT" },
+   ORIGINAL.sub("updated: 2026-01-01T00:00:00+09:00", "updated: >-\n  2026-01-01T00:00:00+09:00")],
+  ["round", { "request" => "PRIVATE-REQUEST", "next" => "PRIVATE-NEXT" },
+   ORIGINAL.sub("updated: 2026-01-01T00:00:00+09:00", 'updated: "2026-01-01T00:00:00\\u002b09:00"')],
+  ["result", { "run" => RUN, "entry" => "PRIVATE-ENTRY", "next" => "PRIVATE-NEXT" },
+   ORIGINAL.sub("state: open", "state: open\nrun: >-\n  #{RUN}")],
+  ["run-start", { "run" => RUN, "tab" => "#7" },
+   ORIGINAL.sub("state: open", "state: blocked\nlast_run: >-\n  #{RUN}")]
+].each do |operation, values, text|
+  reset(text)
+  assert(%w[open blocked].include?(list_row["state"]), "changed shape fixture readable by list")
+  assert(update(operation, values, 1)["reason_code"] == "invalid_packet", "changed shape rejected")
+end
+
 reset
 result = update("branch", "branch" => "feat/7-test")
 assert(current.branch == "feat/7-test" && !result["updated_changed"], "branch added without time change")
@@ -248,10 +311,15 @@ update("run-start", { "run" => RUN, "tab" => "#8" }, 2)
 [0, -1, 1.0, "123", true].each { |pr| update("review", { "pr" => pr }, 2) }
 update("stop", { "run" => RUN, "role" => "reviewer/codex", "entry" => "PRIVATE-ENTRY", "next" => "PRIVATE-NEXT" }, 2)
 ["", " \n\t", "PRIVATE-ENTRY\r", "PRIVATE-ENTRY\u0085", "PRIVATE-ENTRY\n## extra", "x<!--x", "x-->x",
- "### 2026-01-01 worker/codex", "### 2026-01-01 reviewer/human\t"].each do |value|
+ "### 2026-01-01 worker/codex", "### 2026-01-01 reviewer/human\t",
+ "**次の入口**", "PRIVATE-ENTRY\n**結果 (最新節)**\ntext"].each do |value|
   update("result", { "run" => RUN, "entry" => value, "next" => "PRIVATE-NEXT" }, 2)
   update("round", { "request" => value, "next" => "PRIVATE-NEXT" }, 2)
   update("round", { "request" => "PRIVATE-REQUEST", "next" => value }, 2)
+end
+# Only standalone exact labels are reserved, matching published_copy.
+[" **次の入口**", "**次の入口** ", "text **結果 (最新節)**"].each do |value|
+  update("round", "request" => value, "next" => "PRIVATE-NEXT")
 end
 [[], ["0", "--stdin"], ["7"], ["7", "--stdin", "extra"], ["7", "--wrong"]].each do |args|
   call_update(base, 2, args: args)
@@ -266,44 +334,42 @@ large["expected_sha256"] = Digest::SHA256.file(PATH_PACKET).hexdigest
 large["request"] += "x"
 call_update(large, 2)
 
-# Existing malformed data is rejected without rewriting, including fields unrelated to the operation.
+# Existing malformed data is rejected without rewriting; duplicate keys are global.
 [
   ORIGINAL.sub("state: open", "state: invalid"),
   ORIGINAL.sub("issue: 7", "issue: 8"),
   ORIGINAL.sub("state: open", "state: open\nstate: open"),
-  ORIGINAL.sub("state: open", '"state": open'),
-  ORIGINAL.sub("state: open", '"st\\u0061te": open'),
+  ORIGINAL.sub("custom: keep", "custom: keep\ncustom: other"),
+  ORIGINAL.sub("custom: keep", "custom: keep\n\"custom\": other"),
   ORIGINAL.sub("custom: keep", "custom: !!str keep"),
-  ORIGINAL.sub("custom: keep", "custom: {nested: value}"),
-  ORIGINAL.sub("custom: keep", "custom: &alias keep"),
-  ORIGINAL.sub("custom: keep", "custom: |\n  multiline"),
-  ORIGINAL.sub("custom: keep", 'custom: "escaped\\nvalue"'),
   ORIGINAL.sub("## 結果", "## 未知"),
   ORIGINAL.sub("## 結果", "## 依頼"),
   ORIGINAL.sub("## 結果", "### 結果"),
   ORIGINAL.sub("original result", "<!--unclosed"),
+  ORIGINAL.sub("preamble", "<!--unclosed"),
+  ORIGINAL.sub("preamble", "unopened-->"),
   ORIGINAL.sub("original result", "\xff".b.force_encoding("UTF-8"))
 ].each do |broken|
   reset(broken)
-  update("branch", { "branch" => "feat/7-test" }, 1)
+  assert(update("branch", { "branch" => "feat/7-test" }, 1)["reason_code"] == "invalid_packet", "parse/shape failure code")
 end
 
 reset
 File.write(OUTSIDE, ORIGINAL)
 File.unlink(PATH_PACKET)
 File.symlink(OUTSIDE, PATH_PACKET)
-update("branch", { "branch" => "feat/7-test" }, 1)
+assert(update("branch", { "branch" => "feat/7-test" }, 1)["reason_code"] == "check_rejected", "symlink check rejection")
 assert(File.read(OUTSIDE) == ORIGINAL, "symlink target untouched")
 reset
 _out, _err, status = Open3.capture3("git", "add", "-f", ".agent-packets/7.md")
 assert(status.success?, "stage fixture")
-update("branch", { "branch" => "feat/7-test" }, 1)
+assert(update("branch", { "branch" => "feat/7-test" }, 1)["reason_code"] == "check_rejected", "tracked check rejection")
 Open3.capture3("git", "rm", "--cached", "-q", ".agent-packets/7.md")
 File.unlink(PATH_PACKET)
 call_update(base, 1)
 assert(!File.exist?(PATH_PACKET), "missing packet not created")
 reset
-call_update(base, 1, env: { "GIT_INDEX_FILE" => File.join(ROOT, "alternate-index") })
+assert(call_update(base, 2, env: { "GIT_INDEX_FILE" => File.join(ROOT, "alternate-index") })["reason_code"] == "check_error", "check indeterminate")
 
 # C locale still accepts UTF-8 and never emits the supplied text.
 call_update(payload("round", "request" => "日本語の追記", "next" => "PRIVATE-NEXT"), env: { "LC_ALL" => "C" })
@@ -311,7 +377,7 @@ call_update(payload("round", "request" => "日本語の追記", "next" => "PRIVA
 # Simulate a concurrent edit after the sibling is complete, and a rename failure.
 # Only the child process overrides the filesystem seam; actual CLI and git checks still run.
 variant = File.join(ROOT, "variant.rb")
-["race", "rename"].each do |kind|
+["race", "rename", "write"].each do |kind|
   reset
   hook = if kind == "race"
            <<~CODE
@@ -326,7 +392,7 @@ variant = File.join(ROOT, "variant.rb")
                end
              end
            CODE
-         else
+         elsif kind == "rename"
            <<~CODE
              class << File
                def rename(*args)
@@ -334,12 +400,24 @@ variant = File.join(ROOT, "variant.rb")
                end
              end
            CODE
+         else
+           <<~CODE
+             class << File
+               alias original_open open
+               def open(path, *args, &block)
+                 raise Errno::EACCES if path.end_with?(".md.tmp")
+                 original_open(path, *args, &block)
+               end
+             end
+           CODE
          end
   File.write(variant, "require #{SOURCE.inspect}\n#{hook}\nexit Packet.main(ARGV)\n")
   before = File.read(PATH_PACKET)
   out, err, status = Open3.capture3(RbConfig.ruby, variant, "worker-update", "7", "--stdin",
-                                  stdin_data: JSON.generate(payload("branch", "branch" => "feat/7-test")))
+                                  stdin_data: JSON.generate(payload("round", "request" => "PRIVATE-REQUEST", "next" => "PRIVATE-NEXT")))
   assert(status.exitstatus == 1 && JSON.parse(out)["ok"] == false && err.lines.size == 1, "#{kind} refused")
+  assert(JSON.parse(out)["reason_code"] == (kind == "race" ? "digest_mismatch" : "write_failed"), "#{kind} reason code")
+  assert(!out.include?("PRIVATE-") && !err.include?("PRIVATE-"), "#{kind} failure does not leak body")
   expected = kind == "race" ? before + "concurrent edit\n" : before
   assert(File.read(PATH_PACKET) == expected, "#{kind} preserved current bytes")
   assert(!File.exist?(Packet.sibling_path(PATH_PACKET)), "#{kind} sibling cleaned")
@@ -348,9 +426,11 @@ end
 reset
 sibling = Packet.sibling_path(PATH_PACKET)
 File.write(sibling, "previous temporary file")
-out, _err, status = Open3.capture3(RbConfig.ruby, SOURCE, "worker-update", "7", "--stdin",
-                                 stdin_data: JSON.generate(payload("branch", "branch" => "feat/7-test")))
+out, err, status = Open3.capture3(RbConfig.ruby, SOURCE, "worker-update", "7", "--stdin",
+                                stdin_data: JSON.generate(payload("round", "request" => "PRIVATE-REQUEST", "next" => "PRIVATE-NEXT")))
 assert(status.exitstatus == 1 && !JSON.parse(out)["ok"], "existing sibling refused")
+assert(JSON.parse(out)["reason_code"] == "stale_temp", "stale sibling code")
+assert(!out.include?("PRIVATE-") && !err.include?("PRIVATE-"), "stale sibling does not leak body")
 assert(File.read(sibling) == "previous temporary file" && File.read(PATH_PACKET) == ORIGINAL, "existing sibling preserved")
 File.unlink(sibling)
 %w[--help -h].each do |flag|

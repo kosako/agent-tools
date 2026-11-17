@@ -830,7 +830,9 @@ module Packet
                 else
                   !value.strip.empty? && !value.delete("\n\t").match?(/[[:cntrl:]]/) &&
                     !value.include?("<!--") && !value.include?("-->") &&
-                    value.lines.none? { |line| line.start_with?("## ") || line.match?(ENTRY_RE) }
+                    value.lines.none? do |line|
+                      line.start_with?("## ") || line.match?(ENTRY_RE) || COPY_LABELS.key?(line.chomp)
+                    end
                 end
               end
       raise WorkerUpdateError.new("invalid_input", "#{key} の値が不正です", 2) unless valid
@@ -840,7 +842,7 @@ module Packet
     raise WorkerUpdateError.new("invalid_input", "JSON の object を 1 つ指定してください", 2)
   end
 
-  # 行単位で更新できる形だけを受理する。未知の scalar key と comment は原文のまま残す。
+  # 全 key の重複を検査する。値の行の形は、更新対象だけを後で検査する。
   # YAML の再 dump は、対象外の引用符・comment・日時まで変えるため使わない。
   def worker_front_lines(text, path)
     yaml = FRONT_RE.match(text)[1]
@@ -848,19 +850,40 @@ module Packet
     root = Psych.parse(yaml).root
     lines = yaml.lines
     seen = {}
+    nodes = {}
     root.children.each_slice(2) do |key, value|
-      valid = key.plain && key.value.match?(/\A[a-z_][a-z0-9_]*\z/) &&
-              key.start_column.zero? && key.start_line == key.end_line &&
-              value.is_a?(Psych::Nodes::Scalar) && value.start_line == key.start_line &&
-              value.end_line == key.start_line && key.anchor.nil? && value.anchor.nil? &&
-              lines[key.start_line].start_with?("#{key.value}:") &&
-              !lines[key.start_line].include?("\\") && !seen.key?(key.value)
-      unless valid
-        raise WorkerUpdateError.new("invalid_packet", "frontmatter は重複や escape のない行頭の key: value にしてください")
+      if seen.key?(key.value)
+        raise WorkerUpdateError.new("invalid_packet", "frontmatter の key が重複しています")
       end
       seen[key.value] = key.start_line
+      nodes[key.value] = [key, value]
     end
-    [lines, seen]
+    [lines, seen, nodes]
+  end
+
+  def worker_rewrite_front(lines, keys, nodes, changes)
+    suffixes = {}
+    changes.each_key do |name|
+      next unless keys.key?(name)
+
+      key, value = nodes.fetch(name)
+      line = lines.fetch(key.start_line)
+      valid = key.plain && key.start_column.zero? && key.start_line == key.end_line &&
+              value.is_a?(Psych::Nodes::Scalar) && value.start_line == key.start_line &&
+              value.end_line == key.start_line && key.anchor.nil? && value.anchor.nil? &&
+              line.start_with?("#{name}:") && !line.include?("\\")
+      unless valid
+        raise WorkerUpdateError.new("invalid_packet", "更新対象の key は escape のない行頭の key: value にしてください")
+      end
+      # AST の値の終端から取るので、引用符の中の # を comment と取り違えない。
+      suffixes[name] = line[value.end_column..-1]
+    end
+    rewritten = lines.each_with_index.map do |line, index|
+      key = keys.key(index)
+      changes.key?(key) ? (changes[key] && "#{key}: #{changes[key]}#{suffixes.fetch(key)}") : line
+    end.compact.join
+    changes.each { |key, value| rewritten << "#{key}: #{value}\n" if value && !keys.key?(key) }
+    rewritten
   end
 
   def worker_changes(front, keys, data, secs, at)
@@ -932,14 +955,11 @@ module Packet
       raise WorkerUpdateError.new("invalid_packet", "packet には固定の 3 節が必要です")
     end
     # comment が節の境界を隠す形は更新しない。
+    check_comments!(front.body, "本文")
     secs.each_value { |body| check_comments!(body, "packet") }
-    lines, keys = worker_front_lines(original, path)
+    lines, keys, nodes = worker_front_lines(original, path)
     changes, bodies = worker_changes(front, keys, data, secs, at)
-    rewritten = lines.each_with_index.map do |line, index|
-      key = keys.key(index)
-      changes.key?(key) ? (changes[key] && "#{key}: #{changes[key]}\n") : line
-    end.compact.join
-    changes.each { |key, value| rewritten << "#{key}: #{value}\n" if value && !keys.key?(key) }
+    rewritten = worker_rewrite_front(lines, keys, nodes, changes)
     body = worker_replace_body(front.body, bodies)
     text = "---\n#{rewritten}---\n#{body}"
     check = parse_text(text, path)
@@ -962,29 +982,47 @@ module Packet
     [text, check]
   end
 
+  def worker_check_target(issue)
+    check_target!(packet_dir, issue)
+  rescue Unsafe
+    raise WorkerUpdateError.new("check_rejected", "packet の更新先が check の検査で拒否されました")
+  rescue Error, SystemCallError
+    raise WorkerUpdateError.new("check_error", "packet の更新先を check で判定できません", 2)
+  end
+
   def worker_update(issue, data)
-    path = check_target!(packet_dir, issue)
+    path = worker_check_target(issue)
     raise WorkerUpdateError.new("missing_packet", "既存の packet が必要です") unless File.file?(path)
 
-    original = read_text(path)
-    expected = data.fetch("expected_sha256")
-    unless Digest::SHA256.hexdigest(original) == expected
-      raise WorkerUpdateError.new("digest_mismatch", "packet の digest が一致しません")
+    begin
+      original = read_text(path)
+      expected = data.fetch("expected_sha256")
+      unless Digest::SHA256.hexdigest(original) == expected
+        raise WorkerUpdateError.new("digest_mismatch", "packet の digest が一致しません")
+      end
+      front = parse_text(original, path)
+      text, check = worker_updated_text(original, path, front, data, Time.now)
+    rescue Error, SystemCallError, ArgumentError
+      raise WorkerUpdateError.new("invalid_packet", "packet を既存の規約で読み取り・更新できません")
     end
-    front = parse_text(original, path)
-    text, check = worker_updated_text(original, path, front, data, Time.now)
     raise WorkerUpdateError.new("write_failed", "packet に書き込みできません") unless File.writable?(path)
 
-    tmp = write_sibling(path, text)
+    tmp = nil
     begin
+      if lstat_or_nil(sibling_path(path))
+        raise WorkerUpdateError.new("stale_temp", "前回の一時 file が残っています。内容を確認して片付けてください")
+      end
+      tmp = write_sibling(path, text)
       # 一時 file を書いた間の変更も検出する。check の拒否対象への差し替えも再検査する。
-      check_target!(packet_dir, issue)
+      worker_check_target(issue)
       unless Digest::SHA256.file(path).hexdigest == expected
         raise WorkerUpdateError.new("digest_mismatch", "差し替え直前の packet の digest が一致しません")
       end
       File.rename(tmp, path)
+    rescue Error, SystemCallError
+      raise WorkerUpdateError.new("write_failed", "packet の更新内容を保存できません")
     ensure
-      File.unlink(tmp) if File.exist?(tmp)
+      File.unlink(tmp) if tmp && File.exist?(tmp)
     end
     { "ok" => true, "issue" => issue, "operation" => data.fetch("operation"), "state" => check.state,
       "sha256" => Digest::SHA256.hexdigest(text), "updated_changed" => front.updated != check.updated }
@@ -1000,12 +1038,7 @@ module Packet
     end
     issue = argv[0].to_i
     data = worker_input(issue)
-    begin
-      result = worker_update(issue, data)
-    rescue Error, SystemCallError, ArgumentError
-      # 既存 helper の診断や parser の例外に入力の本文を混ぜない。
-      raise WorkerUpdateError.new("invalid_packet", "packet の検査または保存に失敗しました")
-    end
+    result = worker_update(issue, data)
     puts JSON.generate(result)
     0
   rescue WorkerUpdateError => e
