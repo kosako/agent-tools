@@ -18,6 +18,11 @@ pipeline scripts の `--root` を省略したときの root は、その script 
 `generated/` と catalog を書きません (setup もそこで止まる)。self-test: `tests/root-default-test.sh`
 (#305)。
 
+## 配布する補助 script
+
+- `personal-session-progress`: session の自己申告を local に保存・表示する。
+  CLI と保存の規則は [session-progress](../docs/session-progress.md)。self-test は `tests/session-progress-test.sh`。
+
 ## 実装済み
 
 - `setup.sh`: `build → register → connect → sync` を一括実行する一発 setup。

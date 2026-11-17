@@ -118,6 +118,9 @@ check-credential-isolation / build / register / connect / sync / status / doctor
 安全判定 (致命 gate) は build と register で一本化され、sync は catalog を
 尊重して `registered` の asset だけ配置します。self-tests は CI で PR ごとに実行されます。
 
+session の途中の自己申告を保存・表示する配布 script は
+[personal-session-progress](docs/session-progress.md) を参照してください。
+
 pipeline 全体と各 script の役割は [docs/onboarding.md](docs/onboarding.md) を参照してください。
 
 残作業は GitHub Issues で管理します。script の実装は、対応する issue で

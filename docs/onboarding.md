@@ -246,6 +246,8 @@ script / plugin) のまま。
   実行して行う ([context-note-apply](context-note-apply.md)。agent は案の file と 1 行の command を渡すまで)。
 - read-only の Codex (review・監査・反証・相談) の起動と回収は、配備済みの `personal-codex-launch` が受け持つ
   ([codex-launch](codex-launch.md)。起動の境界と完了の判定の正本は、各 skill の LAUNCH のまま)。
+- session の途中の目的・段・結果・未解決の判断は、`personal-session-progress` で local に保存・表示できます
+  ([session-progress](session-progress.md)。packet と handoff の分担も同 doc)。
 - 開発の流れを外から数えるための目印 (trailer・Issue との紐付け・review の結果の 5 行・`escape` の label) の
   約束は [work-markers](work-markers.md)。
 
