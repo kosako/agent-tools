@@ -138,10 +138,13 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
   一度だけ escalation を提案する (過少寄り・自動で上げない・沈黙が既定)。
 - 2 方向ある: **深掘り型** (再修正が直らない / 根本原因不明 / 「徹底的に」の明示 /
   複数案拮抗) と **分解型** (横断・大規模 / 複数案の競争 / 独立検証)。Claude Code では
-  深掘り型 = Fable 5.1 への切り替え (人が `/model` で切り替える。足りなければ max effort)、分解型 = ultracode。
+  深掘り型 = Fable 5.2 への切り替え (人が `/model` で切り替える。足りなければ max effort)、分解型 = ultracode。
   同等の knob が無い tool では原則だけに従う。
 - 断られたら同じ作業/話題では再提案しない。escalation を内蔵する skill が発火している
   ときは二重提案しない (skill に委ねる)。
+- Claude Code で subagent に作業を切り出すときは、`personal-project-operating-loop` の「Claude の subagent の
+  model と effort」の表で決める。model を指定するときは effort も渡す。判断の要る作業と、どの行か迷う作業では
+  定義で model を決めていない agent (general-purpose・Plan・fork) で起動し、指定せずに親の model を継ぐ (#671)。
 
 ## test と長時間の command (実行環境の守り)
 
