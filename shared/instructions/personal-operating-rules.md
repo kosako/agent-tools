@@ -28,12 +28,13 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
   終了時は判断と作業ログを残し、次回の入口を更新する (手順: `personal-session-handoff`)。
 - 別の agent が brief を渡して無人で起動した session (review・監査・相談・委譲された worker) は、brief の範囲だけを行う。
   上の開始と終了の手順と、下の「参照先」の note の読み取りは行わない (依頼に無い下調べで、時間と利用枠を使わないため。#674)。
-- 書き込みのある作業の session は、目的、段、結果、決めることを、配備済みの `personal-session-progress` で local に記録する。
+- 書き込みのある作業の session は、目的、段、結果、決めることを、配備済みの `personal-session-progress`
+  (`<tool home>/agent-tools/scripts/`) で local に記録する。
   作業の始め、段の切り替わり、人に判断を求める前、判断を受けて作業を変えるとき、session を終える前に更新する。
-  使い方は `--help` と `docs/session-progress.md` を参照する。
+  使い方は `--help` と agent-tools の `docs/session-progress.md` を参照する。
 - read-only、status-only、書き込みを禁じられた session は記録しない。無人で起動された session は、brief に指定があるときだけ記録する。
 - 記録は表示のための自己申告で、承認や実行の根拠にしない。
-  更新に失敗しても作業は止めず、1 行で伝える。
+  更新に失敗しても作業は止めず、原因を自分で直さずに、1 行で伝える。
 - 外部のナレッジツールへの記録 (作業ログとダッシュボードの次の入口) は、user の private な instruction が記録先と
   許可範囲を明示した standing rule を持つとき、session の区切りで確認なしに書く (`personal-session-handoff` の
   write-authorized。#563)。記録先 (URL) はこの instruction に書かない (下の「参照先」)。

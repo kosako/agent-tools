@@ -73,13 +73,13 @@ CLI / file write を行いません。
 ### 1.4. session の記録を最後に更新する
 
 書き込みのある作業で始めた local の session 記録を、終了前に最後に更新します。
-配備済みの `personal-session-progress` を、session を始めた作業ツリーの root で呼びます。
-入力は `--help` と `docs/session-progress.md` に従い、`update --client CLIENT --stdin` に渡します。
+配備済みの `personal-session-progress` (`<tool home>/agent-tools/scripts/`) を、session を始めた作業ツリーの root で呼びます。
+入力は `--help` と agent-tools の `docs/session-progress.md` に従い、`update --client CLIENT --stdin` に渡します。
 各段に実際の状態と短い結果を入れ、解決した判断は一覧から外します。未完の段を終了のためだけに done にしません。
 read-only、status-only、会話の外への書き込み全体を禁じられた session では更新しません。
 無人で起動された session は、brief に指定があるときだけ記録します。
 外部の記録先だけへの書き込みを禁じられた場合も、許可された local の session 記録は更新します。
-記録は表示のための自己申告で、承認や実行の根拠にはしません。更新に失敗しても整理を続け、1 行で伝えます。
+記録は表示のための自己申告で、承認や実行の根拠にはしません。更新に失敗しても整理を続け、原因を自分で直さずに、1 行で伝えます。
 
 ### 1.5. packet を更新する (local、常に)
 

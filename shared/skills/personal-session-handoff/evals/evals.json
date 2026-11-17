@@ -449,7 +449,7 @@
       "id": 20,
       "name": "finish-progress-with-external-write-denied",
       "prompt": "今日はここまで。Notion には書かないで。手順確認のみ。[前提: 対話 session で許可された実装を進め、local の session 記録がある。検証は途中で、判断が 1 件解決した。local の書き込みは許可されている] 最後の更新をどうする?",
-      "expected_output": "外部の記録先への禁止を守り、許可された local の session 記録を終了前に最後に更新する。session を始めた作業ツリーの root で配備済みの personal-session-progress update --client CLIENT --stdin を使う。各段の実際の状態と短い結果を記録し、解決した判断を一覧から外す。途中の検証を done にしない。",
+      "expected_output": "外部の記録先への禁止を守り、許可された local の session 記録を終了前に最後に更新する。session を始めた作業ツリーの root で配備済みの personal-session-progress (<tool home>/agent-tools/scripts/) update --client CLIENT --stdin を使う。各段の実際の状態と短い結果を記録し、解決した判断を一覧から外す。途中の検証を done にしない。",
       "files": [],
       "assertions": [
         {
@@ -487,7 +487,7 @@
       "id": 22,
       "name": "finish-progress-failure-continues",
       "prompt": "今日はここまで。手順確認のみ。[前提: 書き込みを伴う作業の session で、local の session 記録の更新は許可されている。最後の update が exit 3 で失敗した] 終了時の整理は止める?",
-      "expected_output": "記録の更新が失敗したことを 1 行で伝え、終了時の整理を続ける。成功したと扱わず、記録を承認や実行の根拠にしない。",
+      "expected_output": "記録の更新が失敗したことを 1 行で伝え、原因を自分で直さず、終了時の整理を続ける。成功したと扱わず、記録を承認や実行の根拠にしない。",
       "files": [],
       "assertions": [
         {
@@ -496,7 +496,7 @@
         },
         {
           "id": "continues-handoff",
-          "text": "記録の失敗だけで終了時の整理を止めないとしている"
+          "text": "記録の失敗だけで終了時の整理を止めず、原因を自分で直さないとしている"
         }
       ]
     },
