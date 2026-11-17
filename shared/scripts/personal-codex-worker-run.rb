@@ -886,8 +886,8 @@ module CodexWorkerRun
       material << @branch.b << "\n" << @publish_text.b
       _out, rc, err = capture([sibling("personal-public-safety-gate"), "--stdin"], material)
       File.open(File.join(@run, "gate-publish.err"), "ab") { |file| file.write(err) }
-      stop("gate-warning") if err.b.match?(/^public-safety-gate: warning:/)
       stop("publish-gate") unless rc == 0
+      stop("gate-warning") if err.b.match?(/^public-safety-gate: warning:/)
     end
 
     def check_destination

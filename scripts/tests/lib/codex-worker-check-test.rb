@@ -49,7 +49,7 @@ FAKE
     if name == "personal-public-safety-gate"
       if ENV["FAKE_GATE_WARNING"]
         warn "public-safety-gate: warning: PRIVATE-BODY"
-        exit 0
+        exit(ENV["FAKE_GATE_FAIL"] ? 1 : 0)
       end
       if ENV["FAKE_GATE_FAIL"]
         warn "PRIVATE-BODY"
@@ -254,6 +254,9 @@ failure("public-safety", "publish-gate", { "FAKE_GATE_FAIL" => "1" })
 assert(File.read(File.join(RUN, "gate-publish.err")).include?("PRIVATE-BODY"), "gate stderr saved only in run")
 failure("public-safety", "gate-warning", { "FAKE_GATE_WARNING" => "1" })
 assert(check_events.none? { |a| a.first == "gh" }, "gate warning prevents gh")
+failure("public-safety", "publish-gate", { "FAKE_GATE_WARNING" => "1", "FAKE_GATE_FAIL" => "1" })
+assert(File.read(File.join(RUN, "gate-publish.err")).include?("public-safety-gate: warning:"), "failed gate warning retained")
+assert(check_events.none? { |a| a.first == "gh" }, "failed gate with warning prevents gh")
 result = invoke_check(0, {}, title: "実装する—検査する (#7)")
 assert(result["style_findings"] > 0, "style findings counted without blocking")
 

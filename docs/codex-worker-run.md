@@ -373,6 +373,16 @@ public-safety gate には累積差分、各 commit の差分、全 message、bra
 材料の git が1つでも失敗すれば、部分的な内容だけで gate を通しません。
 git と gate の stderr は `gate-publish.err` に保存します。
 gate の exit 0 だけでは足りず、`public-safety-gate: warning:` の行が無いことも必要です。
+exit が 0 でなければ、warning の有無によらず `publish-gate` で止まります。
+exit 0 で warning がある場合だけ `gate-warning` で止まります。
+
+`gate-warning` で止まったら、指揮役は `gate-publish.err` を人に見せます。
+現行の `LAUNCH.md` §9 は、人が意図した内容だと確かめた後の push を認めています。
+`check` には warning を受け入れる option がなく、停止時は `head_oid` も返しません。
+そのため、`check` を使う経路では、人の確認後も警告の原因となる公開内容を直して再検査します。
+各 commit の差分も検査するので、後続の commit で削除するだけでは警告は消えません。
+`READY` を得た後、返された `head_oid` で下記の push の手順へ進みます。
+内容を直せない場合は停止を保ち、warning の受け入れだけで `check` の後段へ進めません。
 
 公開先は main で `gh repo view --json nameWithOwner` を読み、slug の形を確認します。
 origin の push URL は `LAUNCH.md` §9 の6形式のいずれかとの完全一致が必要です。
@@ -385,6 +395,7 @@ owner を判定できない場合は `marker: skipped` とします。
 `check` は成功時も停止時も packet を変更しません。
 停止したら指揮役が packet を読み直し、digest を得ます。
 `personal-packet worker-update <N> --stdin` の `stop` で、停止区分と固定の理由を記録します。
+`next` には今の `次の入口` の本文をそのまま渡し、worker の次の 1 アクションを保持します。
 `expected_sha256` は読み直した値を使い、外部 command の生出力は転記しません。
 `stop` の既存の前提は `state: open` です。
 `review` で止まった場合は、許可された修正依頼を `round` で記録して open に戻してから行います。
