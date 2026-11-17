@@ -8,6 +8,8 @@
 # - 禁止事項の bullet の「clone の外への書込」に一時 file の置き場の例外がある (無いと 2 つの bullet が食い違う)
 # - commit 規則の bullet が、test・build を safe-run 経由で上限を付けて走らせ、safe-run が起動できないときは上限なしで
 #   走らせないことを、それぞれ句として書いている (#512。運用 instruction の「test と長時間の command」を worker に届ける)
+# - session の記録の bullet に、配備先と呼び方、失敗時の継続と報告、commit の禁止の句が届くことを確かめる (#682)。
+#   instruction と skill の組み込みの句は session-progress-wiring-test で確かめる。
 # 句は空白を除いて比べ (行の折り返しの位置に依らない)、句の直後が区切り (。、( か末尾) であることも求める (否定は
 # 句の後ろに付くので、「置くな」のような反転を部分一致で通さない)。brief の節の外にだけ句があっても worker には届かないので、
 # child-brief-boundary-test と同じく節の最初の一覧の項目に絞って見る。節と一覧の取り方は lib/markdown_units.rb が持つ (#685)。
@@ -55,8 +57,20 @@ LIMITS = {
                     "(`~/.codex/agent-tools/scripts/personal-safe-run`) 経由で memory と時間の上限を付けて走らせる",
   "起動できないときは走らせない" => "safe-run が command を起動できない (exit 2 で report を書かない) ときは上限なしで走らせない",
 }.freeze
+PROGRESS = {
+  "配備先と呼び方" => "配備済みの `~/.codex/agent-tools/scripts/personal-session-progress` を clone の root で `update --client codex --stdin` の形で呼ぶ",
+  "失敗時の継続と報告" => "更新に失敗しても作業を続け、原因を自分で直さずに、exit code と stderr の 1 行を最終 message の `未完` に書く",
+  "commit の禁止" => "記録の file は commit しない",
+}.freeze
 
 errors = []
+progress = find(bullets, "session の記録")
+if progress.nil?
+  errors << "brief の一覧に「session の記録:」の bullet が無い"
+else
+  missing = PROGRESS.reject { |_, clause| clause?(progress, clause) }.keys
+  errors << "session の記録の bullet に句 #{missing.inspect} が無い" unless missing.empty?
+end
 tmp = find(bullets, "一時 file の置き場")
 if tmp.nil?
   errors << "brief の一覧に「一時 file の置き場:」の bullet が無い"

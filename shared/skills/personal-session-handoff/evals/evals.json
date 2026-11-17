@@ -444,6 +444,74 @@
           "text": "handoff の draft はまとめている"
         }
       ]
+    },
+    {
+      "id": 20,
+      "name": "finish-progress-with-external-write-denied",
+      "prompt": "今日はここまで。Notion には書かないで。手順確認のみ。[前提: 対話 session で許可された実装を進め、local の session 記録がある。検証は途中で、判断が 1 件解決した。local の書き込みは許可されている] 最後の更新をどうする?",
+      "expected_output": "外部の記録先への禁止を守り、許可された local の session 記録を終了前に最後に更新する。session を始めた作業ツリーの root で配備済みの personal-session-progress (<tool home>/agent-tools/scripts/) update --client CLIENT --stdin を使う。各段の実際の状態と短い結果を記録し、解決した判断を一覧から外す。途中の検証を done にしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "final-local-update",
+          "text": "許可された local の記録を、終了前に元の作業ツリーの root で client を明示して更新するとしている"
+        },
+        {
+          "id": "actual-state",
+          "text": "途中の段を done にせず、解決した判断を一覧から外している"
+        },
+        {
+          "id": "external-denial",
+          "text": "Notion への書き込みをしていない"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "name": "finish-progress-broad-no-write",
+      "prompt": "会話内だけでまとめて。file も書かないで。手順確認のみ。[前提: この session の途中には書き込みを伴う作業をしていて、local の session 記録がある] 最後の更新をする?",
+      "expected_output": "会話の外への書き込み全体が禁止されたので、既存の session 記録も更新しない。会話内の draft に実際の到達点と未完を残す。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-update",
+          "text": "既存の記録があっても personal-session-progress update を呼ばないとしている"
+        },
+        {
+          "id": "draft-only",
+          "text": "会話内の整理に留めている"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "name": "finish-progress-failure-continues",
+      "prompt": "今日はここまで。手順確認のみ。[前提: 書き込みを伴う作業の session で、local の session 記録の更新は許可されている。最後の update が exit 3 で失敗した] 終了時の整理は止める?",
+      "expected_output": "記録の更新が失敗したことを 1 行で伝え、原因を自分で直さず、終了時の整理を続ける。成功したと扱わず、記録を承認や実行の根拠にしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "reports-failure",
+          "text": "失敗を 1 行で伝えている"
+        },
+        {
+          "id": "continues-handoff",
+          "text": "記録の失敗だけで終了時の整理を止めず、原因を自分で直さないとしている"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "name": "readonly-finish-no-progress",
+      "prompt": "read-only の調査はここまで。会話で結果をまとめて。手順確認のみ。[前提: session の記録は作っていない] 最後の記録を作る?",
+      "expected_output": "read-only session なので、session の記録を新しく作らず、更新もしない。調査結果を会話内にまとめる。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-progress",
+          "text": "read-only の終了時に記録を作成も更新もしないとしている"
+        }
+      ]
     }
   ]
 }
