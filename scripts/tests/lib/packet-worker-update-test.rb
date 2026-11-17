@@ -275,7 +275,7 @@ assert(File.read(PATH_PACKET).include?("custom: keep\n# preserved comment\n"), "
 }.each do |operation, (values, states)|
   states.each do |state|
     reset(ORIGINAL.sub("state: open", "state: #{state}\nrun: #{RUN.to_json}\ntab: \"#7\""))
-    update(operation, values, 1)
+    assert(update(operation, values, 1)["reason_code"] == "precondition", "state precondition code")
   end
 end
 reset
@@ -316,6 +316,13 @@ update("stop", { "run" => RUN, "role" => "reviewer/codex", "entry" => "PRIVATE-E
   update("result", { "run" => RUN, "entry" => value, "next" => "PRIVATE-NEXT" }, 2)
   update("round", { "request" => value, "next" => "PRIVATE-NEXT" }, 2)
   update("round", { "request" => "PRIVATE-REQUEST", "next" => value }, 2)
+end
+# publish の strip で予約行になる端も拒否する。
+[" **次の入口** ", "\t**結果 (最新節)**\t", "  ## extra "].each do |edge|
+  [edge, "text\n#{edge}", "#{edge}\ntext"].each do |value|
+    update("round", { "request" => "PRIVATE-REQUEST", "next" => value }, 2)
+  end
+  update("result", { "run" => RUN, "entry" => "text\n#{edge}", "next" => "PRIVATE-NEXT" }, 2)
 end
 # Only standalone exact labels are reserved, matching published_copy.
 [" **次の入口**", "**次の入口** ", "text **結果 (最新節)**"].each do |value|
@@ -366,7 +373,7 @@ assert(status.success?, "stage fixture")
 assert(update("branch", { "branch" => "feat/7-test" }, 1)["reason_code"] == "check_rejected", "tracked check rejection")
 Open3.capture3("git", "rm", "--cached", "-q", ".agent-packets/7.md")
 File.unlink(PATH_PACKET)
-call_update(base, 1)
+assert(call_update(base, 1)["reason_code"] == "missing_packet", "missing packet code")
 assert(!File.exist?(PATH_PACKET), "missing packet not created")
 reset
 assert(call_update(base, 2, env: { "GIT_INDEX_FILE" => File.join(ROOT, "alternate-index") })["reason_code"] == "check_error", "check indeterminate")

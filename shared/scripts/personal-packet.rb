@@ -830,7 +830,7 @@ module Packet
                 else
                   !value.strip.empty? && !value.delete("\n\t").match?(/[[:cntrl:]]/) &&
                     !value.include?("<!--") && !value.include?("-->") &&
-                    value.lines.none? do |line|
+                    worker_body_lines(value, key).none? do |line|
                       line.start_with?("## ") || line.match?(ENTRY_RE) || COPY_LABELS.key?(line.chomp)
                     end
                 end
@@ -840,6 +840,15 @@ module Packet
     data
   rescue JSON::ParserError
     raise WorkerUpdateError.new("invalid_input", "JSON の object を 1 つ指定してください", 2)
+  end
+
+  # publish が節の端を strip してからラベルを読むため、端の行はその形でも検査する。
+  def worker_body_lines(value, key)
+    lines = value.lines
+    edges = value.strip.lines
+    lines += [edges.first.to_s.strip, edges.last.to_s.strip] if key == "next"
+    lines += [edges.last.to_s.strip] if key == "entry"
+    lines
   end
 
   # 全 key の重複を検査する。値の行の形は、更新対象だけを後で検査する。

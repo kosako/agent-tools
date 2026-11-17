@@ -1,0 +1,23 @@
+schema_version: 1
+name: personal-codex-worker-run
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script の配布承認は内容に紐づく。変更時は review と build_id の更新が必要。
+review:
+  human_review: approved
+  approved_build_id: sha256:a01cc738f8c9634b291d1a682cfabc10865c6af300110f79e51a3d57a1dacddf
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-codex-worker-run.rb
+  format: text
+summary: >-
+  Codex worker の起動を 1 command にまとめる (#706)。launch は packet の起動記録と workspace を検査し、
+  snapshot を照合して clone を再利用する。preflight の launch_argv から brief と run script を作り、
+  packet に記録してから herdr の Issue tab で起動する。停止の区分は JSON で返す。
+  collect、retry-empty、check は後の PR で追加する。GitHub の読み書きと結果の回収は行わない。
