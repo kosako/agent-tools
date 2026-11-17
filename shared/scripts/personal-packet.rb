@@ -14,6 +14,8 @@
 #   personal-packet check <issue>
 #       packet を書く前の更新先の検査 (#386)。通れば packet の path を 1 行出して exit 0、拒めば理由を
 #       出して exit 1、判定できなければ exit 2。publish / pull も書く前に同じ検査を通す。
+#   personal-packet worker-update <issue> --stdin
+#       JSON の指定に従って既存 packet を更新する。digest と操作の前提を検査し、結果だけを JSON で返す。
 #   personal-packet publish <issue> [--repo OWNER/REPO] [--dry-run] [--accept-warnings]
 #       `## 結果` の最新節 + `## 次の入口` を marker 付きで 1 コメントにまとめ、同じ directory の
 #       personal-public-safety-gate (--stdin) に通し、exit 0 のときだけ `gh issue comment` で
@@ -37,6 +39,7 @@
 # 文字列を組まない。
 
 require "date"
+require "digest"
 require "json"
 require "open3"
 require "tempfile"
@@ -760,6 +763,294 @@ module Packet
     raise Error, "#{path}: 更新内容を保存できません (#{e.class})。投稿しません"
   end
 
+  # ---- worker-update ---------------------------------------------------------
+
+  WORKER_INPUT_KEYS = {
+    "branch" => %w[branch], "run-start" => %w[run tab],
+    "result" => %w[run entry next], "stop" => %w[run role entry next],
+    "round" => %w[request next], "review" => %w[pr]
+  }.freeze
+  WORKER_COMMON_KEYS = %w[schema operation expected_sha256].freeze
+  WORKER_INPUT_LIMIT = 64 * 1024
+
+  class WorkerUpdateError < StandardError
+    attr_reader :code, :status
+
+    def initialize(code, reason, status = 1)
+      super(reason)
+      @code = code
+      @status = status
+    end
+  end
+
+  # JSON の重複 key を後勝ちで解釈しない。
+  class WorkerInput < Hash
+    def []=(key, value)
+      raise WorkerUpdateError.new("invalid_input", "JSON の key が重複しています", 2) if key?(key)
+
+      super
+    end
+  end
+
+  def worker_input(issue)
+    raw = $stdin.read(WORKER_INPUT_LIMIT + 1).to_s.force_encoding(Encoding::UTF_8)
+    unless raw.bytesize <= WORKER_INPUT_LIMIT && raw.valid_encoding?
+      raise WorkerUpdateError.new("invalid_input", "入力は UTF-8 の 64 KiB 以下にしてください", 2)
+    end
+    data = JSON.parse(raw, object_class: WorkerInput)
+    unless data.is_a?(Hash) && data["schema"].is_a?(Integer) && data["schema"] == 1 &&
+           WORKER_INPUT_KEYS.key?(data["operation"])
+      raise WorkerUpdateError.new("invalid_input", "schema または operation が不正です", 2)
+    end
+    keys = WORKER_INPUT_KEYS.fetch(data["operation"])
+    unless data.keys.sort == (WORKER_COMMON_KEYS + keys).sort &&
+           data["expected_sha256"].is_a?(String) && data["expected_sha256"].match?(/\A[0-9a-f]{64}\z/)
+      raise WorkerUpdateError.new("invalid_input", "key または expected_sha256 が不正です", 2)
+    end
+    keys.each do |key|
+      value = data[key]
+      valid = if key == "pr"
+                value.is_a?(Integer) && value.positive?
+              elsif !value.is_a?(String)
+                false
+              else
+                case key
+                when "run"
+                  value.start_with?("/") && !value.match?(/[[:cntrl:]"\\]/)
+                when "tab" then value == "##{issue}"
+                when "branch"
+                  if !value.empty? && !value.match?(/[[:space:][:cntrl:]]/)
+                    out, _err, status = Open3.capture3("git", "check-ref-format", "--branch", value)
+                    # @{-1} のような履歴参照を branch 名として保存しない。
+                    status.success? && out.chomp == value
+                  else
+                    false
+                  end
+                when "role" then %w[worker/codex orchestrator/claude].include?(value)
+                else
+                  !value.strip.empty? && !value.delete("\n\t").match?(/[[:cntrl:]]/) &&
+                    !value.include?("<!--") && !value.include?("-->") &&
+                    value.lines.none? do |line|
+                      line.start_with?("## ") || line.match?(ENTRY_RE) || COPY_LABELS.key?(line.chomp)
+                    end
+                end
+              end
+      raise WorkerUpdateError.new("invalid_input", "#{key} の値が不正です", 2) unless valid
+    end
+    data
+  rescue JSON::ParserError
+    raise WorkerUpdateError.new("invalid_input", "JSON の object を 1 つ指定してください", 2)
+  end
+
+  # 全 key の重複を検査する。値の行の形は、更新対象だけを後で検査する。
+  # YAML の再 dump は、対象外の引用符・comment・日時まで変えるため使わない。
+  def worker_front_lines(text, path)
+    yaml = FRONT_RE.match(text)[1]
+    key_nodes(yaml, path)
+    root = Psych.parse(yaml).root
+    lines = yaml.lines
+    seen = {}
+    nodes = {}
+    root.children.each_slice(2) do |key, value|
+      if seen.key?(key.value)
+        raise WorkerUpdateError.new("invalid_packet", "frontmatter の key が重複しています")
+      end
+      seen[key.value] = key.start_line
+      nodes[key.value] = [key, value]
+    end
+    [lines, seen, nodes]
+  end
+
+  def worker_rewrite_front(lines, keys, nodes, changes)
+    suffixes = {}
+    changes.each_key do |name|
+      next unless keys.key?(name)
+
+      key, value = nodes.fetch(name)
+      line = lines.fetch(key.start_line)
+      valid = key.plain && key.start_column.zero? && key.start_line == key.end_line &&
+              value.is_a?(Psych::Nodes::Scalar) && value.start_line == key.start_line &&
+              value.end_line == key.start_line && key.anchor.nil? && value.anchor.nil? &&
+              line.start_with?("#{name}:") && !line.include?("\\")
+      unless valid
+        raise WorkerUpdateError.new("invalid_packet", "更新対象の key は escape のない行頭の key: value にしてください")
+      end
+      # AST の値の終端から取るので、引用符の中の # を comment と取り違えない。
+      suffixes[name] = line[value.end_column..-1]
+    end
+    rewritten = lines.each_with_index.map do |line, index|
+      key = keys.key(index)
+      changes.key?(key) ? (changes[key] && "#{key}: #{changes[key]}#{suffixes.fetch(key)}") : line
+    end.compact.join
+    changes.each { |key, value| rewritten << "#{key}: #{value}\n" if value && !keys.key?(key) }
+    rewritten
+  end
+
+  def worker_changes(front, keys, data, secs, at)
+    changes = {}
+    bodies = {}
+    operation = data.fetch("operation")
+    allowed = case operation
+              when "branch" then !keys.key?("branch")
+              when "run-start"
+                %w[open blocked].include?(front.state) && (!keys.key?("run") || front.state == "blocked")
+              when "result" then front.state == "open" && front.run == data["run"]
+              when "stop"
+                front.state == "open" && [front.run, front.last_run].include?(data["run"])
+              when "round" then ACTIVE_STATES.include?(front.state)
+              when "review" then front.state == "open" && !keys.key?("run")
+              end
+    raise WorkerUpdateError.new("precondition", "操作の state または起動の記録が前提を満たしません") unless allowed
+
+    case operation
+    when "branch"
+      changes["branch"] = "'#{data.fetch('branch').gsub("'", "''")}'"
+    when "run-start"
+      changes.merge!("run" => data.fetch("run").to_json, "tab" => data.fetch("tab").to_json, "last_run" => nil)
+      changes["state"] = "open" if front.state == "blocked"
+    when "result", "stop"
+      role = operation == "result" ? "worker/codex" : data.fetch("role")
+      entry = "### #{at.strftime('%Y-%m-%d')} #{role}\n\n#{data.fetch('entry')}"
+      bodies["結果"] = worker_append(secs.fetch("結果"), entry)
+      bodies["次の入口"] = "\n#{data.fetch('next')}\n\n"
+      if operation == "result"
+        changes.merge!("last_run" => data.fetch("run").to_json, "run" => nil, "tab" => nil)
+      else
+        changes["state"] = "blocked"
+      end
+    when "round"
+      bodies["依頼"] = worker_append(secs.fetch("依頼"), data.fetch("request"))
+      bodies["次の入口"] = "\n#{data.fetch('next')}\n\n"
+      changes["state"] = "open" if front.state == "review"
+    when "review"
+      changes.merge!("pr" => data.fetch("pr").to_s, "state" => "review")
+    end
+    if !%w[branch run-start].include?(operation) || (operation == "run-start" && front.state == "blocked")
+      changes["updated"] = at.iso8601
+    end
+    [changes, bodies]
+  end
+
+  def worker_append(original, addition)
+    separator = original.end_with?("\n\n") ? "" : (original.end_with?("\n") ? "\n" : "\n\n")
+    original + separator + addition + "\n\n"
+  end
+
+  def worker_replace_body(body, replacements)
+    current = nil
+    body.lines.each_with_object(+"") do |line, result|
+      if line.start_with?("## ")
+        current = line.chomp.sub(/\A## /, "").rstrip
+        result << line
+        result << replacements[current] if replacements.key?(current)
+      elsif !replacements.key?(current)
+        result << line
+      end
+    end
+  end
+
+  def worker_updated_text(original, path, front, data, at)
+    secs = sections(front.body)
+    unless HEADINGS.all? { |heading| secs.key?(heading) }
+      raise WorkerUpdateError.new("invalid_packet", "packet には固定の 3 節が必要です")
+    end
+    # comment が節の境界を隠す形は更新しない。
+    check_comments!(front.body, "本文")
+    secs.each_value { |body| check_comments!(body, "packet") }
+    lines, keys, nodes = worker_front_lines(original, path)
+    changes, bodies = worker_changes(front, keys, data, secs, at)
+    rewritten = worker_rewrite_front(lines, keys, nodes, changes)
+    body = worker_replace_body(front.body, bodies)
+    text = "---\n#{rewritten}---\n#{body}"
+    check = parse_text(text, path)
+    after_secs = sections(check.body)
+    same = Front.members.all? { |key| key == :body || changes.key?(key.to_s) || front[key] == check[key] }
+    # parser の strip や YAML の改行処理で、指定した値が別の値になった場合も保存しない。
+    same &&= changes.all? do |key, value|
+      expected = value && YAML.safe_load(value, permitted_classes: [Time, Date])
+      expected = to_time(expected, key, path) if key == "updated"
+      check[key.to_sym] == expected
+    end
+    same &&= secs.all? { |key, value| after_secs[key] == (bodies.key?(key) ? bodies[key] : value) }
+    after_lines, after_keys = worker_front_lines(text, path)
+    # Front に無い拡張 key と comment も byte 単位で保持する。
+    before_rest = lines.each_with_index.reject { |_line, i| changes.key?(keys.key(i)) }.map(&:first)
+    after_rest = after_lines.each_with_index.reject { |_line, i| changes.key?(after_keys.key(i)) }.map(&:first)
+    same &&= before_rest == after_rest
+    raise WorkerUpdateError.new("invalid_packet", "更新対象以外の内容が変わるため保存しません") unless same
+
+    [text, check]
+  end
+
+  def worker_check_target(issue)
+    check_target!(packet_dir, issue)
+  rescue Unsafe
+    raise WorkerUpdateError.new("check_rejected", "packet の更新先が check の検査で拒否されました")
+  rescue Error, SystemCallError
+    raise WorkerUpdateError.new("check_error", "packet の更新先を check で判定できません", 2)
+  end
+
+  def worker_update(issue, data)
+    path = worker_check_target(issue)
+    raise WorkerUpdateError.new("missing_packet", "既存の packet が必要です") unless File.file?(path)
+
+    begin
+      original = read_text(path)
+      expected = data.fetch("expected_sha256")
+      unless Digest::SHA256.hexdigest(original) == expected
+        raise WorkerUpdateError.new("digest_mismatch", "packet の digest が一致しません")
+      end
+      front = parse_text(original, path)
+      text, check = worker_updated_text(original, path, front, data, Time.now)
+    rescue Error, SystemCallError, ArgumentError
+      raise WorkerUpdateError.new("invalid_packet", "packet を既存の規約で読み取り・更新できません")
+    end
+    raise WorkerUpdateError.new("write_failed", "packet に書き込みできません") unless File.writable?(path)
+
+    tmp = nil
+    begin
+      if lstat_or_nil(sibling_path(path))
+        raise WorkerUpdateError.new("stale_temp", "前回の一時 file が残っています。内容を確認して片付けてください")
+      end
+      tmp = write_sibling(path, text)
+      # 一時 file を書いた間の変更も検出する。check の拒否対象への差し替えも再検査する。
+      worker_check_target(issue)
+      unless Digest::SHA256.file(path).hexdigest == expected
+        raise WorkerUpdateError.new("digest_mismatch", "差し替え直前の packet の digest が一致しません")
+      end
+      File.rename(tmp, path)
+    rescue Error, SystemCallError
+      raise WorkerUpdateError.new("write_failed", "packet の更新内容を保存できません")
+    ensure
+      File.unlink(tmp) if tmp && File.exist?(tmp)
+    end
+    { "ok" => true, "issue" => issue, "operation" => data.fetch("operation"), "state" => check.state,
+      "sha256" => Digest::SHA256.hexdigest(text), "updated_changed" => front.updated != check.updated }
+  end
+
+  def worker_update_main(argv)
+    if argv == ["--help"] || argv == ["-h"]
+      puts usage
+      return 0
+    end
+    unless argv.size == 2 && argv[0].match?(ISSUE_RE) && argv[0].to_i.positive? && argv[1] == "--stdin"
+      raise WorkerUpdateError.new("usage", "worker-update <issue> --stdin を指定してください", 2)
+    end
+    issue = argv[0].to_i
+    data = worker_input(issue)
+    result = worker_update(issue, data)
+    puts JSON.generate(result)
+    0
+  rescue WorkerUpdateError => e
+    puts JSON.generate("ok" => false, "reason_code" => e.code, "reason" => e.message)
+    warn "personal-packet: #{e.message}"
+    e.status
+  rescue StandardError
+    puts JSON.generate("ok" => false, "reason_code" => "input_error", "reason" => "入力を処理できません")
+    warn "personal-packet: 入力を処理できません"
+    2
+  end
+
   # ---- pull ------------------------------------------------------------------
 
   COPY_MARKER_RE = /\A<!-- agent-packet issue=([1-9]\d*) published=(\S+) -->\n\z/.freeze
@@ -997,10 +1288,13 @@ module Packet
       usage: personal-packet dir
              personal-packet list [--json] [--all]
              personal-packet check <issue>
+             personal-packet worker-update <issue> --stdin
              personal-packet publish <issue> [--repo OWNER/REPO] [--dry-run] [--accept-warnings]
              personal-packet pull <issue> [--repo OWNER/REPO] [--dry-run]
 
       作業単位 (Issue) ごとの packet .agent-packets/<issue>.md を扱う (docs/agent-packets.md)。
+      worker-update は JSON (schema: 1、operation、expected_sha256、操作の値) を stdin から読む。
+      operation: branch / run-start / result / stop / round / review。詳細は docs/agent-packets.md。
       check は packet を書く前の更新先の検査 (exit 0 で path を出す / 1 = 拒否 / 2 = 判定できない)。
       publish は同じ directory の personal-public-safety-gate --stdin が exit 0 のときだけ投稿する。gate が
       警告を出したら投稿せず exit 1 (人が --dry-run で確かめてから --accept-warnings で投稿する)。
@@ -1044,6 +1338,8 @@ module Packet
       end
       broken.each { |msg| warn "personal-packet: warning: #{msg}" }
       broken.empty? ? 0 : 1
+    when "worker-update"
+      worker_update_main(rest)
     when "check"
       issue = nil
       rest.each do |a|
