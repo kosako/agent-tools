@@ -87,7 +87,7 @@ round、停止からの再開)、status の確認、継続の作業では割当�
 | --- | --- | --- |
 | 設計・docs 系、判断の要る実装、調査 | Claude | Opus 5.5 (既定) |
 | 単純な作業 (下の 3 条件をすべて満たすもの) | Claude | Sonnet 5.5 |
-| 困ったときの深掘り (再修正しても直らない / 根本原因が分からない / 複数案が拮抗) | Claude | Fable 5.1 |
+| 困ったときの深掘り (再修正しても直らない / 根本原因が分からない / 複数案が拮抗) | Claude | Fable 5.2 |
 | cross-review | author でない方 | Codex は review 用の profile の effort (重め)。Claude は Opus 5.5 |
 | Codex の worker (規則 2・3 で Codex になったとき) | Codex | worker 用の profile の effort (中程度) |
 | 実機検証 (acceptance probe、配備後の smoke) | 人 + Claude | Opus 5.5 |
@@ -97,16 +97,34 @@ round、停止からの再開)、status の確認、継続の作業では割当�
   typo・文言の直し、既存の pattern に沿った case の追加、依存の bump、決まった手順の実行。行数の少なさだけ
   では判断しない (数行の security の修正は単純な作業ではない)。迷ったら Opus 5.5 のまま。
 - **切り替えるのは人**: Claude Code の model は人が `/model` で切り替え、skill は model を固定しない。例外は
-  Claude が subagent に作業を切り出すときで、3 条件を満たす作業には Claude が Sonnet 5.5 を指定する (それ以外は
-  親の model を継ぐ)。Fable 5.1 へは、運用 instruction の reasoning escalation (深掘り型) の提案を受けて人が
-  切り替える。
+  Claude が subagent に作業を切り出すときで、下の subagent の表に従って Claude が model と effort を指定する。
+  Fable 5.2 へは、運用 instruction の reasoning escalation (深掘り型) の提案を受けて人が切り替える。
+- **起動の基準と advisor**: 起動の基準 (main の model、effort、advisor) は、dotfiles の起動の関数が flag で固定する。
+  値の正本は dotfiles で、この workflow には値を書かない (#671 の判断 1 と 4)。advisor は Fable を既定にする。
+  advisor は呼ぶたびに会話の全文を読み直すので、長い session ほど費用が増える。subagent も advisor を引き継ぐ。
 - **Codex の model と effort の値の正本は dotfiles**: model / effort は user の Codex の設定を使い、役割別の
   profile file (Codex home の `agent-tools-review.config.toml` / `agent-tools-worker.config.toml`) があれば
   その値が優先する (review も worker も、profile の top-level の model / effort を base の設定より優先する)。これとは別に、
   選ばれたプロバイダの設定 (`model_provider` と aws の `profile` / `region`) も同じ重ね方で引き継ぎ、それ以外の key は
   読まない (provider の手順の正本は `personal-codex-review` の `LAUNCH.md` と worker の preflight。#543)。profile の
   中身は dotfiles が持ち、この workflow には値を書かない (machine ごとに変えられるため)。
-- model の名前は 2026-10 時点のもの。新しい model が出たら、#313 の材料をもとにこの表を見直す。
+- model の名前は 2026-11 時点のもの。新しい model が出たら、#313 と #671 の材料をもとにこの表を見直す。
+
+**Claude の subagent の model と effort** (#671 の判断 2):
+
+| subagent に切り出す作業 | model | effort |
+| --- | --- | --- |
+| 調べもの・検索 (docs の確認、file を横断する検索) | Sonnet | medium |
+| 単純な作業 (上の 3 条件をすべて満たすもの) | Sonnet | medium |
+| 決まった手順の実行 (渡した block をそのまま走らせる、決まった形の集計) | Sonnet | low |
+| 判断の要る作業 (review、反証、受け入れの scenario の作成と判定、設計の相談、実装) | 指定しない (親を継ぐ) | 指定しない (親を継ぐ) |
+
+- **model を指定するときは effort も渡す**: subagent が main と別の model で動くと、session の effort が効かない。
+- **迷ったら指定しない**: どの行か迷う作業は、判断の要る作業として扱う。指定しなければ親の model で動くので、
+  費用は増えても品質は下がらない。
+- **設定では固定しない**: subagent の model を env (`CLAUDE_CODE_SUBAGENT_MODEL` と `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`) で固定しない
+  (#671 の判断 4)。既定を Sonnet にすると、判断の要る作業で親の model を渡し忘れたときに品質が下がる。FORCE は
+  作業ごとに model を変えられず、この表と両立しない。
 
 **残量を読む (枯渇の確認だけ。人には聞かない)**: 割当のときに、残量の読み取り口があれば読み、規則 2 に
 使います。読み取り口は配備済みの script `personal-usage-reader` だけです。どの実行ファイルで読むかは環境ごとに
