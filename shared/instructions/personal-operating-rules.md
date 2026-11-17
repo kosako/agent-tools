@@ -144,7 +144,7 @@ AI agent と個人 project を進めるときの共通運用ルールです。�
   ときは二重提案しない (skill に委ねる)。
 - Claude Code で subagent に作業を切り出すときは、`personal-project-operating-loop` の「Claude の subagent の
   model と effort」の表で決める。model を指定するときは effort も渡す。判断の要る作業と、どの行か迷う作業では
-  指定せず、親の model を継ぐ (#671)。
+  定義で model を決めていない agent (general-purpose・Plan・fork) で起動し、指定せずに親の model を継ぐ (#671)。
 
 ## test と長時間の command (実行環境の守り)
 

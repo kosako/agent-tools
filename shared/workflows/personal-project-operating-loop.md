@@ -115,12 +115,16 @@ round、停止からの再開)、status の確認、継続の作業では割当�
 | subagent に切り出す作業 | model | effort |
 | --- | --- | --- |
 | 調べもの・検索 (docs の確認、file を横断する検索) | Sonnet | medium |
-| 単純な作業 (上の 3 条件をすべて満たすもの) | Sonnet | medium |
+| 単純な作業 (上の 3 条件をすべて満たすもの。決まった手順の実行は次の行) | Sonnet | medium |
 | 決まった手順の実行 (渡した block をそのまま走らせる、決まった形の集計) | Sonnet | low |
 | 判断の要る作業 (review、反証、受け入れの scenario の作成と判定、設計の相談、実装) | 指定しない (親を継ぐ) | 指定しない (親を継ぐ) |
 
 - **model を指定するときは effort も渡す**: subagent が main と別の model で動くと、session の effort が効かない。
-- **迷ったら指定しない**: どの行か迷う作業は、判断の要る作業として扱う。指定しなければ親の model で動くので、
+- **親を継ぐ条件**: 指定を省いて親の model を継ぐのは、定義で model を決めていない agent だけ。判断の要る作業は、
+  built-in の general-purpose か Plan、または fork で起動する。定義で model を決めた agent は、指定を省いても
+  その model で動く (例: built-in の claude-code-guide は Haiku)。Explore は、親が Fable のときに Opus で動くことがある。
+  下の「設定では固定しない」で env を置かないことも、親を継ぐ前提になる。
+- **迷ったら指定しない**: どの行か迷う作業は、判断の要る作業として扱う。上の条件で起動すれば親の model で動くので、
   費用は増えても品質は下がらない。
 - **設定では固定しない**: subagent の model を env (`CLAUDE_CODE_SUBAGENT_MODEL` と `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`) で固定しない
   (#671 の判断 4)。既定を Sonnet にすると、判断の要る作業で親の model を渡し忘れたときに品質が下がる。FORCE は
