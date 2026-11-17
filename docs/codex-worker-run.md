@@ -3,12 +3,12 @@
 `personal-codex-worker-run launch` は、packet の依頼から worker を起動します (#706)。
 Ruby 2.6 の標準 library、git、herdr、codex と配備済み script を使います。
 現在実装している subcommand は `launch` だけです。
-`collect`、`retry-empty`、`check` は後の PR で追加します。
+`collect`、`retry-empty`、`check` は #706 の3本目と4本目の PR で追加する予定です。
 
 起動の許可は caller が持つ現在の依頼で判断します。
 packet の存在や本文だけで、委譲を始める許可があるとは扱いません。
 GitHub の読み書き、結果の回収、公開前の検査はこの command の範囲外です。
-現行 skill と `LAUNCH.md` の手順は、この PR では切り替えません。
+現行 skill と `LAUNCH.md` の手順は、#706 の最後の PR まで使います。
 
 ## 入力
 
@@ -47,6 +47,9 @@ hook dispatcher と public-safety、git-identity、ai-trailer の各 gate も同
 
 停止時は `status`、`blocked_at`、`reason_code`、`reason`、`issue`、`phase`、`packet` を返します。
 run directory を作った後なら `run_dir` も返します。
+`records` で同じ Issue の記録が原因なら、既存の run を `run_dir` に返します。
+別の Issue の記録が原因なら、`other_issue` と `other_run_dir` にその番号と run を返します。
+この場合は `run_dir` を返しません。
 preflight の停止では `dependency_exit` に依存 command の exit を添えます。
 起動できなかった場合や signal の場合は null です。
 `packet.written` は起動記録の書き込みを示します。先に保存した branch はこの値に含みません。
@@ -66,7 +69,7 @@ herdr の失敗を含め、書いた起動記録と作成済みの file は削�
 | `workspace` | `launch-path` | `workspace`、`herdr-response`、`worker-running` |
 | `branch` | `authorization` / `launch-record` | `branch` / `packet-update` |
 | `run-directory` | `launch-path` | `run-directory`: run の置き場を作れない |
-| `clone` | `clone` | `snapshot`、`clone-command` |
+| `clone` | `clone` | `snapshot-untraceable`、`snapshot-mismatch`、`clone-command` |
 | `commit-prerequisites` | `clone` | `commit-prerequisite`: identity または hook 配線を確認できない |
 | `preflight` | `preflight` | `preflight`、`launch-argv` |
 | `run-location` | `launch-path` | `writable-run`: run が worker の書込先の外と確認できない |
@@ -98,6 +101,27 @@ file 操作などの予期しない失敗は、その段の区分で `io` を返
 再利用 clone では、git を呼ぶ前に `last_run` の snapshot を照合します。
 `state: blocked` の場合は `run` を使い、無ければ `last_run` を使います。
 照合後の status は run directory の `clone-status.txt` に保存します。
+
+`snapshot-untraceable` は、前の run または `preflight.json` を辿れない場合です。
+`snapshot-mismatch` は、snapshot の照合 command が成功しなかった場合です。
+後者では `.git` の変更も疑い、照合結果と前の run を人が調べます。
+どちらも clone で git を実行する前に止まります。
+
+新規 clone の作成後、起動記録の前に止まると、packet に run が残らない場合があります。
+identity、hook、preflight、run の置き場、成果物の保存で停止した場合が該当します。
+原因を直して再実行しても、残った clone は `snapshot-untraceable` で止まります。
+人は次の順に確認して回復します。
+
+1. 停止時の `phase`、`reason_code`、`run_dir` を確認し、元の停止原因を直します。
+2. packet の起動記録と herdr を調べ、該当 clone の worker が動いていないことを確かめます。
+3. 残った clone の由来と、未回収の変更や commit の有無を確認します。
+   snapshot が無い clone では、確認のために無条件で git を実行しません。
+   判断できない内容は保持し、人が調査します。
+4. 必要な内容を失わないよう、clone 全体を元の path の外へ退避します。
+   不要と確認できた clone は、人の判断で削除することもできます。
+5. 元の clone path が空いたら `launch` を再実行し、新規 clone を作ります。
+
+script は clone の削除や作り直しを行いません。
 
 `preflight.json`、`brief.md`、`run.zsh`、`tab-id`、`pane-id` を run directory に保存します。
 `run.zsh` は preflight の argv を要素ごとに shell literal 化します。

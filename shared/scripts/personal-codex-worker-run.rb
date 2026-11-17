@@ -35,7 +35,8 @@ module CodexWorkerRun
     "branch" => "branch の指定が無いか、packet と一致しません",
     "packet-update" => "packet の更新を確かめられません",
     "run-directory" => "run directory を用意できません",
-    "snapshot" => "前の run の snapshot を照合できません",
+    "snapshot-untraceable" => "前の run の snapshot を辿れません",
+    "snapshot-mismatch" => "前の run の snapshot の照合が通りません",
     "clone-command" => "clone または branch を用意できません",
     "commit-prerequisite" => "clone の identity または hook の配線を確かめられません",
     "preflight" => "preflight が通りません",
@@ -164,6 +165,7 @@ module CodexWorkerRun
       (body || "").each_line do |line|
         if line.start_with?("## ")
           current = line.chomp.delete_prefix("## ").rstrip
+          stop("request-empty") unless %w[依頼 結果 次の入口].include?(current)
           stop("request-empty") if current == "依頼" && request
           request = +"" if current == "依頼"
         elsif current == "依頼"
@@ -233,6 +235,7 @@ module CodexWorkerRun
       end
       @rows.each do |row|
         next if row["issue"] == @issue || row["state"] == "blocked" || row["run_status"] != "unfinished"
+        @other_record = row
         if recorded_worker_running?(row)
           @blocked_at = "launch-path"
           stop("worker-running")
@@ -289,10 +292,10 @@ module CodexWorkerRun
       @clone = "#{@repo}-clones/#{@issue}"
       stat = begin File.lstat(@clone); rescue Errno::ENOENT; nil; end
       if stat
-        stop("snapshot") unless stat.directory? && @previous_run.is_a?(String)
+        stop("snapshot-untraceable") unless stat.directory? && @previous_run.is_a?(String)
         snapshot = File.join(@previous_run, "preflight.json")
-        stop("snapshot") unless File.file?(snapshot)
-        command([sibling("personal-codex-worker-preflight"), "--verify-git-snapshot", snapshot, "--clone", @clone], "snapshot")
+        stop("snapshot-untraceable") unless File.file?(snapshot)
+        command([sibling("personal-codex-worker-preflight"), "--verify-git-snapshot", snapshot, "--clone", @clone], "snapshot-mismatch")
         dirty = command(git(@clone, "status", "--porcelain"), "clone-command")
         File.binwrite(File.join(@run, "clone-status.txt"), dirty)
       else
@@ -461,7 +464,14 @@ module CodexWorkerRun
                  "reason" => REASONS.fetch(error.code), "issue" => @issue, "phase" => @phase,
                  "packet" => { "written" => @written } }
       result["run_dir"] = @run if @run
-      result["run_dir"] = @row["run"] if @phase == "records" && @row["run"]
+      if @phase == "records"
+        if @other_record
+          result["other_issue"] = @other_record["issue"]
+          result["other_run_dir"] = @other_record["run"]
+        elsif @row["run"]
+          result["run_dir"] = @row["run"]
+        end
+      end
       result["dependency_exit"] = @dependency_exit if @phase == "preflight"
       puts JSON.generate(result)
       error.exit_code

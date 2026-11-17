@@ -211,6 +211,11 @@ File.unlink(PACKET)
 blocked("authorization", "packet-missing")
 reset_packet("", " \n")
 blocked("authorization", "request-empty")
+reset_packet("branch: feat/7-test\n", REQUEST + "## sample heading\nPRIVATE-REQUEST trailing\n")
+before_packet = File.binread(PACKET)
+result = blocked("authorization", "request-empty")
+assert(result["phase"] == "packet" && !result["packet"]["written"], "unknown heading rejected while reading")
+assert(File.binread(PACKET) == before_packet && !File.exist?(CLONE), "unknown heading creates no clone or record")
 reset_packet
 File.write(PACKET, File.read(PACKET).sub("state: open", "state: done"))
 blocked("authorization", "packet-state")
@@ -254,7 +259,7 @@ assert(File.read(File.join(run, "codex.log")).include?("fixture stderr"), "stder
 assert(!File.exist?(File.join(CLONE, "INJECTED")) && !File.exist?(File.join(CLONE, "BACKTICK")), "paths not evaluated")
 _out, _err, status = Open3.capture3({ "FAKE_CODEX_EXIT" => "17" }, "zsh", File.join(run, "run.zsh"))
 assert(status.exitstatus == 17 && File.read(File.join(run, "done.txt")).end_with?("exit=17\n"), "codex pipeline exit preserved")
-blocked("launch-record", "collect-required")
+assert(blocked("launch-record", "collect-required")["run_dir"] == run, "same issue returns its recorded run")
 File.unlink(File.join(run, "done.txt"))
 state = JSON.parse(File.read(ENV.fetch("FAKE_HERDR_FILE")))
 state["running"] = ["p1"]
@@ -279,26 +284,37 @@ reset_packet("branch: feat/7-test\nlast_run: #{round['run_dir'].to_json}\n")
 config = File.binread(File.join(CLONE, ".git", "config"))
 File.open(File.join(CLONE, ".git", "config"), "a") { |f| f.puts "# changed" }
 File.write(ENV.fetch("FAKE_GIT_LOG"), "")
-blocked("clone", "snapshot")
+blocked("clone", "snapshot-mismatch")
 trace = File.readlines(ENV.fetch("FAKE_GIT_LOG")).map { |l| JSON.parse(l) }
 assert(trace.none? { |a| a.include?(CLONE) }, "snapshot failure never calls git in clone")
 File.binwrite(File.join(CLONE, ".git", "config"), config)
 reset_packet("branch: feat/7-test\n")
-blocked("clone", "snapshot")
+blocked("clone", "snapshot-untraceable")
+reset_packet("branch: feat/7-test\nlast_run: #{(ROOT + '/missing-run').to_json}\n")
+blocked("clone", "snapshot-untraceable")
 reset_packet("branch: feat/7-test\nrun: #{(ROOT + '/missing').to_json}\ntab: \"#7\"\n")
 blocked("launch-record", "run-missing")
 
 # 他の Issue の未回収と workspace の foreground は別に検査する。
-reset_packet("branch: feat/7-test\nlast_run: #{round['run_dir'].to_json}\n")
+reset_packet("branch: feat/7-test\nrun: #{round['run_dir'].to_json}\ntab: \"#7\"\n")
+File.write(PACKET, File.read(PACKET).sub("state: open", "state: blocked"))
 other = File.join(MAIN, ".agent-packets", "8.md")
-File.write(other, File.read(PACKET).sub("issue: 7", "issue: 8").sub(/^last_run:.*$/, "run: #{run.to_json}\ntab: \"#8\""))
-state["running"] = ["p1"]
-reset_herdr(state)
-blocked("launch-path", "worker-running")
-state["running"] = []
-reset_herdr(state)
-blocked("launch-record", "run-unconfirmed")
+File.write(other, File.read(PACKET).sub("issue: 7", "issue: 8").sub("state: blocked", "state: open")
+                              .sub(round['run_dir'].to_json, run.to_json).sub('#7', '#8'))
+[true, false].each do |running|
+  state["running"] = running ? ["p1"] : []
+  reset_herdr(state)
+  result = running ? blocked("launch-path", "worker-running") : blocked("launch-record", "run-unconfirmed")
+  assert(result["phase"] == "records" && result["issue"] == 7, "other issue stops in records")
+  assert(result["other_issue"] == 8 && result["other_run_dir"] == run, "identify blocking issue and run")
+  assert(!result.key?("run_dir") && !result["packet"]["written"], "other issue never reports own run")
+end
+# blocked の他 Issue に unfinished の記録があっても起動を妨げない。
+File.write(other, File.read(other).sub("state: open", "state: blocked"))
+assert(!File.exist?(File.join(run, "done.txt")), "other blocked run remains unfinished")
+assert(launch["status"] == "STARTED", "other blocked issue permits launch")
 File.unlink(other)
+reset_packet("branch: feat/7-test\nlast_run: #{round['run_dir'].to_json}\n")
 state["running"] = ["p1"]
 reset_herdr(state)
 blocked("launch-path", "worker-running")
@@ -311,6 +327,29 @@ result = blocked("preflight", "preflight", { "FAKE_CODEX_NO_HELP" => "1" })
 assert(result["dependency_exit"] == 1, "dependency exit preserved")
 result = blocked("launch-path", "writable-run", { "XDG_STATE_HOME" => ENV.fetch("TMPDIR") })
 assert(!result["packet"]["written"], "writable run not recorded")
+
+# 成果物の保存失敗は、起動記録を残す前に止まる。
+write_fault = File.join(ROOT, "artifact-write-fault.rb")
+File.write(write_fault, <<~'RUBY')
+  module ArtifactWriteFault
+    def binwrite(path, *args)
+      raise Errno::EACCES if File.basename(path) == ENV["FAIL_ARTIFACT"]
+      super
+    end
+    def write(path, *args)
+      raise Errno::EACCES if File.basename(path) == ENV["FAIL_ARTIFACT"]
+      super
+    end
+  end
+  File.singleton_class.prepend(ArtifactWriteFault)
+RUBY
+%w[brief.md run.zsh].each do |artifact|
+  before_packet = File.binread(PACKET)
+  result = blocked("launch-path", "io", { "RUBYOPT" => "-r#{write_fault}", "FAIL_ARTIFACT" => artifact })
+  assert(result["phase"] == "artifacts" && !result["packet"]["written"], "artifact failure before record #{artifact}")
+  assert(File.binread(PACKET) == before_packet, "artifact failure leaves packet unchanged #{artifact}")
+  assert(!File.exist?(File.join(result.fetch("run_dir"), artifact)), "failed artifact absent #{artifact}")
+end
 
 # packet 更新失敗、更新成功後の読み直し失敗を CLI 境界で注入する。
 packet_cli = File.join(DEPLOY, "personal-packet")
@@ -349,7 +388,9 @@ FileUtils.cp(packet_cli + "-real", packet_cli)
   env = {}
   case failure
   when "duplicate" then s["tabs"] << { "tab_id" => "t2", "label" => "#7" }
-  when "foreign" then s["tabs"][0]["tab_id"] = "foreign"
+  when "foreign"
+    s["tabs"][0]["tab_id"] = "foreign"
+    s["panes"][0]["tab_id"] = "foreign"
   when "no-panes" then s["panes"] = []
   when "wrong-label" then s["panes"][0]["label"] = "user"
   when "create" then s = { "tabs" => [], "panes" => [] }; env["FAKE_HERDR_FAIL"] = "tab create"
@@ -361,6 +402,10 @@ FileUtils.cp(packet_cli + "-real", packet_cli)
   assert(result["blocked_at"] == "launch-path" && result["packet"]["written"], "post-record herdr failure #{failure}")
   assert(File.read(PACKET).include?(result["run_dir"]), "record retained #{failure}")
   assert(events.none? { |e| e.include?("close") }, "never close panes")
+  if %w[duplicate foreign no-panes wrong-label].include?(failure)
+    assert(result["reason_code"] == "tab-ownership", "ownership category #{failure}")
+    assert(events.none? { |e| [%w[tab create], %w[pane split], %w[pane rename], %w[pane run]].include?(e.first(2)) }, "unowned tab never changed #{failure}")
+  end
 end
 
 # blocked の run は再起動できる。pane の最大番号から次を選ぶ。
