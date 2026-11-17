@@ -19,7 +19,9 @@ module CodexWorkerRun
     personal-codex-worker-run collect --repo <root> --issue <N> [--wait-minutes <M>]
     personal-codex-worker-run retry-empty --repo <root> --issue <N>
     collect: 結果を回収する。retry-empty: 1 回目の空の結果を再実行する。
-    stdout: JSON 1 行。exit: 0 STARTED または DONE / 1 BLOCKED / 2 入力の誤り / 3 RUNNING。
+    personal-codex-worker-run check --repo <root> --issue <N> --title <題名> --body-file <file>
+    check: 回収済みの commit と公開先を検査する。push と PR 作成は行わない。
+    stdout: JSON 1 行。exit: 0 STARTED / DONE / READY、1 BLOCKED、2 入力の誤り、3 RUNNING。
   TEXT
   REASONS = {
     "no-launch-record" => "run または launch.json がありません",
@@ -62,6 +64,16 @@ module CodexWorkerRun
     "writable-run" => "run directory が worker の書込先の外と確かめられません",
     "run-record" => "起動の記録を読み直して確認できません",
     "tab-ownership" => "既存の tab の所有を確かめられません",
+    "check-record" => "公開前の検査に使う回収済みの記録を確かめられません",
+    "fetch" => "clone の branch を main に取り込めません",
+    "trailer" => "公開する commit の Codex trailer を確かめられません",
+    "merge-commit" => "公開する範囲に merge commit があります",
+    "style" => "日本語の文体検査の結果を確かめられません",
+    "marker" => "PR の目印の検査が通りません",
+    "publish-material" => "公開する内容を取得できません",
+    "publish-gate" => "公開する内容が検査を通りません",
+    "gate-warning" => "公開する内容の検査に警告があります",
+    "destination" => "公開先を確かめられません",
     "io" => "この段の処理を完了できません"
   }.freeze
   class Stop < StandardError
@@ -116,10 +128,11 @@ module CodexWorkerRun
     def parse(argv)
       args = argv.map { |a| a.dup.force_encoding(Encoding::UTF_8) }
       @subcommand = args.shift
-      raise Stop.new("input", "BLOCKED", 2) unless %w[launch collect retry-empty].include?(@subcommand)
+      raise Stop.new("input", "BLOCKED", 2) unless %w[launch collect retry-empty check].include?(@subcommand)
       allowed = %w[--repo --issue]
       allowed += %w[--branch --round] if @subcommand == "launch"
       allowed << "--wait-minutes" if @subcommand == "collect"
+      allowed += %w[--title --body-file] if @subcommand == "check"
       opts = {}
       until args.empty?
         key = args.shift
@@ -145,8 +158,22 @@ module CodexWorkerRun
       raise Stop.new("input", "BLOCKED", 2) unless wait.match?(/\A[0-9]+\z/) && (1..120).cover?(wait.to_i)
       @wait_minutes = wait.to_i
       @option_branch, @round = opts["--branch"], opts["--round"]&.to_i
+      read_publish_input(opts) if @subcommand == "check"
     rescue SystemCallError, ArgumentError
       raise Stop.new("input", "BLOCKED", 2)
+    end
+
+    def read_publish_input(opts)
+      path = opts["--body-file"]
+      valid = opts["--title"] && !opts["--title"].strip.empty? && path && File.lstat(path).file?
+      raise Stop.new("input", "BLOCKED", 2) unless valid
+      real = File.realpath(path)
+      roots = [@repo, "#{@repo}-clones/#{@issue}"]
+      roots.map! { |root| File.exist?(root) ? File.realpath(root) : root }
+      raise Stop.new("input", "BLOCKED", 2) if roots.any? { |root| real.start_with?(root + "/") }
+      body = File.binread(real).force_encoding(Encoding::UTF_8)
+      raise Stop.new("input", "BLOCKED", 2) unless body.valid_encoding? && !body.strip.empty?
+      @publish_text = opts.fetch("--title") + "\n\n" + body
     end
 
     def valid_branch?(branch)
@@ -796,13 +823,128 @@ module CodexWorkerRun
       count.to_i
     end
 
+    def read_check_record
+      command(packet("check", @issue.to_s), "packet-check")
+      @row = target(packet_rows)
+      stop("check-record") unless @row && %w[open review].include?(@row["state"]) &&
+        !@row["run"] && @row["last_run"].is_a?(String) && File.directory?(@row["last_run"])
+      @branch = @row["branch"]
+      stop("check-record") unless valid_branch?(@branch)
+      @run = @row["last_run"]
+      @clone = "#{@repo}-clones/#{@issue}"
+    end
+
+    def check_trailers
+      command(git(@repo, "fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"), "trailer")
+      @head = command(git(@repo, "rev-parse", "--verify", "refs/heads/#{@branch}^{commit}"), "trailer").strip
+      @base = command(git(@repo, "merge-base", "refs/remotes/origin/main", @head), "trailer").strip
+      stop("trailer") unless [@base, @head].all? { |oid| oid.match?(/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/) }
+      command(git(@repo, "rev-parse", "--verify", "--end-of-options", "#{@base}^{commit}"), "trailer")
+      @range = "#{@base}..#{@head}"
+      # -z と %x00 の区切りは Ruby の byte string で読む。shell の変数には渡さない。
+      raw = command(git(@repo, "log", "-z", "--format=%H%x00%(trailers:key=Co-Authored-By,valueonly)", @range), "trailer").b
+      fields = raw.split("\0", -1)
+      stop("trailer") unless fields.pop == "" && !fields.empty? && fields.size.even?
+      fields.each_slice(2) do |oid, trailers|
+        names = trailers.lines.map { |line| line.strip.split("<", 2).first.to_s.rstrip }
+        stop("trailer") unless oid.match?(/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/) &&
+          names.any? { |name| name.start_with?("Codex") } &&
+          names.none? { |name| name.start_with?("Claude", "OpenCode") }
+      end
+      @commit_count = fields.size / 2
+    end
+
+    def publish_git(*args)
+      out, rc, err = capture(git(@repo, *args))
+      File.open(File.join(@run, "gate-publish.err"), "ab") { |file| file.write(err) }
+      stop("publish-material") unless rc == 0
+      out.b
+    end
+
+    def check_merges
+      File.binwrite(File.join(@run, "gate-publish.err"), "")
+      merges = publish_git("rev-list", "--merges", @range)
+      unless merges.strip.empty?
+        File.binwrite(File.join(@run, "gate-publish.err"), "公開する範囲に merge commit があります\n".b + merges)
+        stop("merge-commit")
+      end
+    end
+
+    def check_style
+      out = command([sibling("personal-ja-style-check"), "--stdin", "--json"], "style", @publish_text)
+      result = json(out, "style")
+      inputs = result.is_a?(Hash) && result["inputs"]
+      stop("style") unless inputs.is_a?(Array) && inputs.size == 1 &&
+        inputs.first.is_a?(Hash) && inputs.first["findings"].is_a?(Array)
+      @style_findings = inputs.first["findings"].size
+    end
+
+    def check_publish_gate
+      material = publish_git("diff", @base, @head, "--text", "--no-textconv", "--no-ext-diff")
+      material << publish_git("log", "--format=%B", @range)
+      material << publish_git("log", "-p", "--format=", @range, "--text", "--no-textconv", "--no-ext-diff")
+      material << @branch.b << "\n" << @publish_text.b
+      _out, rc, err = capture([sibling("personal-public-safety-gate"), "--stdin"], material)
+      File.open(File.join(@run, "gate-publish.err"), "ab") { |file| file.write(err) }
+      stop("gate-warning") if err.b.match?(/^public-safety-gate: warning:/)
+      stop("publish-gate") unless rc == 0
+    end
+
+    def check_destination
+      result = json(command(["gh", "repo", "view", "--json", "nameWithOwner"], "destination"), "destination")
+      @slug = result.is_a?(Hash) && result["nameWithOwner"]
+      stop("destination") unless @slug.is_a?(String) && @slug.match?(%r{\A[\w.-]+/[\w.-]+\z}) && !@slug.start_with?("-")
+      url = command(git(@repo, "remote", "get-url", "--push", "origin"), "destination").chomp
+      host = "github.com"
+      urls = ["https://" + host + "/#{@slug}", "git@" + host + ":#{@slug}", "ssh://git@" + host + "/#{@slug}"]
+      stop("destination") unless urls.flat_map { |u| [u, u + ".git"] }.include?(url)
+    end
+
+    def personal_project?
+      user_out, user_rc = capture(["gh", "api", "user"])
+      repo_out, repo_rc = capture(["gh", "api", "repos/#{@slug}"])
+      return false unless user_rc == 0 && repo_rc == 0
+      user, repo = JSON.parse(user_out), JSON.parse(repo_out)
+      login = user.is_a?(Hash) && user["login"]
+      owner = repo.is_a?(Hash) && repo["owner"]
+      login.is_a?(String) && !login.empty? && owner.is_a?(Hash) &&
+        owner["type"] == "User" && owner["login"] == login
+    rescue JSON::ParserError, TypeError
+      false
+    end
+
+    def check_marker
+      return "skipped" unless personal_project?
+      command([sibling("personal-work-marker-check"), "--kind", "pr", "--stdin"], "marker", @publish_text)
+      "ok"
+    end
+
+    def check
+      stage("packet", "launch-record") { read_check_record }
+      stage("snapshot", "fetch") { verify_snapshot(@run) }
+      stage("fetch", "fetch") do
+        command(git(@repo, "fetch", "--no-tags", "--", @clone, "refs/heads/#{@branch}:refs/heads/#{@branch}"), "fetch")
+      end
+      stage("trailer", "trailer") { check_trailers }
+      stage("merge-commits", "public-safety") { check_merges }
+      stage("style", "public-safety") { check_style }
+      stage("publish-gate", "public-safety") { check_publish_gate }
+      stage("destination", "public-safety") { check_destination }
+      marker = stage("marker", "public-safety") { check_marker }
+      puts JSON.generate("status" => "READY", "issue" => @issue, "branch" => @branch,
+                         "base_oid" => @base, "head_oid" => @head, "commits" => @commit_count,
+                         "slug" => @slug, "style_findings" => @style_findings, "marker" => marker, "run_dir" => @run)
+      0
+    end
+
     def run(argv)
-      if [["--help"], ["-h"], *%w[launch collect retry-empty].map { |c| [c, "--help"] }].include?(argv)
+      if [["--help"], ["-h"], *%w[launch collect retry-empty check].map { |c| [c, "--help"] }].include?(argv)
         puts USAGE
         return 0
       end
       parse(argv)
       stage("environment", "preflight") { stop("gh-repo") unless ENV["GH_REPO"].to_s.empty? }
+      return check if @subcommand == "check"
       stage("packet", "launch-record") { read_packet }
       return collect if @subcommand == "collect"
       if @subcommand == "retry-empty"
