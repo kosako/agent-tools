@@ -324,6 +324,61 @@
           "text": "symlink の先を直接読んで補っていない"
         }
       ]
+    },
+    {
+      "id": 15,
+      "name": "continue-work-starts-progress-after-scope",
+      "prompt": "前回の続きを進めて。手順確認のみ。[前提: 現在地の確認が済み、継続する実装の範囲と次の一手が一意。対話 session で local の書き込みは許可されている] 途中の状態の記録はいつ、どう始める?",
+      "expected_output": "continue-work の範囲が決まった後、作業の始めに目的と粗い段を記録する。配備済みの personal-session-progress の --help と docs/session-progress.md で入力を確認する。session を始めた作業ツリーの root で、実際の client を明示した update --client CLIENT --stdin を呼ぶ。記録は承認や実行の根拠にしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "after-scope",
+          "text": "continue-work の範囲が決まった後に記録を始めるとしている"
+        },
+        {
+          "id": "cli-root-client",
+          "text": "配備済みの CLI の入力を確認し、session の作業ツリーの root と明示の client を使うとしている"
+        },
+        {
+          "id": "initial-content",
+          "text": "目的と粗い段を記録するが、承認や実行の根拠にはしないとしている"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "name": "new-work-progress-failure-continues",
+      "prompt": "この機能を実装して。手順確認のみ。[前提: new-work の範囲が一意に決まり、書き込みが許可されている。最初の personal-session-progress update が exit 1 になった] この後はどうする?",
+      "expected_output": "範囲が決まった new-work の最初に目的と粗い段の記録を試みる。記録の失敗は 1 行で伝え、許可済みの実装を続ける。成功したと偽らず、許可を追加で求めたり別の保存先を作ったりしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "starts-new-work-record",
+          "text": "new-work の範囲が決まった後に目的と粗い段を記録しようとしている"
+        },
+        {
+          "id": "continues-on-failure",
+          "text": "失敗を 1 行で伝え、許可済みの作業を続けるとしている"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "name": "status-only-does-not-start-progress",
+      "prompt": "現在地だけを教えて。手順確認のみ。[前提: 次の実装の範囲は明確だが、この session は status-only。session の記録はまだ無い] personal-session-progress で記録する?",
+      "expected_output": "status-only なので記録を作らない。現在地と次の一手の候補を提示して停止し、範囲が明確なことを実作業や記録の許可に使わない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-progress-write",
+          "text": "personal-session-progress update を呼ばず、記録を作らないとしている"
+        },
+        {
+          "id": "status-only-preserved",
+          "text": "現在地と候補の提示で停止している"
+        }
+      ]
     }
   ]
 }

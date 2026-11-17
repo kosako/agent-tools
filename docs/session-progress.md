@@ -6,6 +6,31 @@
 Ruby 2.6 と標準 library、git、同じ directory の `personal-public-safety-gate` を使います。
 常駐の service、hook、MCP、herdr の呼び出し、session の対応表は持ちません。
 
+## いつ書くか
+
+書き込みのある作業の session では、次の時機に更新します。
+
+1. 作業の始め。範囲が決まった後に、目的と粗い段を記録する。
+2. 段の切り替わり。前の段の結果も書く。
+3. 人に判断を求める前。未解決の判断と選択肢を記録する。
+4. 判断を受けて作業を変えるとき。段を更新し、解決した判断を一覧から外す。
+5. session を終える前。実際の状態と結果を最後に更新する。未完の段を終了のためだけに done にしない。
+
+tool の呼び出しごとや、一定の時間ごとには書きません。
+read-only の review・監査・相談、status-only、書き込みを禁じられた session は記録しません。
+無人で起動された session は、brief に指定があるときだけ記録します。
+外部の記録先だけへの書き込み禁止は、その記録先に適用します。許可された local の記録は続けます。
+更新に失敗しても作業は続け、1 行で伝えます。worker は exit code と stderr の 1 行を最終 message の `未完` に書きます。
+
+組み込み先は次の 4 つです。各 skill の書き込みの許可を決める規則はそのまま適用します。
+
+| 組み込み先 | 役割 |
+| --- | --- |
+| [運用 instruction](../shared/instructions/personal-operating-rules.md) の「セッションとドキュメント」 | 更新の時機、除外する session、自己申告の扱い、失敗時の継続 |
+| [personal-resume-project](../shared/skills/personal-resume-project/SKILL.md) の手順 4 | continue-work / new-work の範囲が決まった後に記録を始める |
+| [personal-session-handoff](../shared/skills/personal-session-handoff/SKILL.md) の手順 1.4 | 終了前に最後の更新をする |
+| [personal-codex-worker](../shared/skills/personal-codex-worker/SKILL.md) の §4 (brief) | clone の root で worker 自身が記録するよう brief に指定する |
+
 ## CLI
 
 ```text
@@ -144,7 +169,8 @@ agent は session を始めた作業ツリーで呼びます。
 
 home の下には固定しません。作業ツリーの中なら、対話と委譲された Codex の書ける範囲に収まります。
 worker は自分の clone と `CODEX_THREAD_ID` で記録します。
-読む側は packet の `run` または `last_run` から clone をたどり、その directory の新しい file を読みます。
+読む側は packet の `run` または `last_run` が指す run directory の `preflight.json` にある `clone_root` から clone の場所をたどります。
+その clone の `.agent-session-progress/` にある新しい file を読みます。
 対応表の file は作りません。古い記録の自動削除も行いません。
 古い更新時刻だけでは終了を判断できないためです。人が片付け、worker の記録は clone と一緒に退避します。
 
@@ -239,9 +265,6 @@ packet の依頼全文、受け入れ条件、commit 一覧、`次の入口` は
 食い違った場合、Issue の再開は packet の `次の入口` を起点にします。
 更新時刻の新しさを理由に、session の自己申告でほかの正本を置き換えません。
 worker の結果の転記元は最終 message です。全段が done でも回収完了とは扱いません。
-
-運用 instruction と既存 skill への組み込みは別の PR です。
-read-only の review・監査・相談は書きません。無人 worker は brief で指定された場合に使います。
 
 ## 限界と検証
 

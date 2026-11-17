@@ -1369,6 +1369,60 @@
           "text": "policy の本文を brief に写していない (worker が skill から読む)"
         }
       ]
+    },
+    {
+      "id": 52,
+      "name": "brief-includes-session-progress",
+      "prompt": "packet #682 を Codex worker に委譲する。authorization と preflight は済んでいる。手順確認のみ。途中の状態の記録について brief に何を書く? 更新が失敗したらどうさせる?",
+      "expected_output": "brief の一覧に session の記録の bullet を入れる。配備済みの personal-session-progress の --help と docs/session-progress.md で入力を確かめ、clone の root で update --client codex --stdin を呼ばせる。ID は worker 自身の CODEX_THREAD_ID を使う。作業の始めに目的と粗い段、段の切り替わりに前の段の結果を記録する。人に判断を求める前、判断を受けて作業を変えるとき、終了前にも更新する。短い自分の要約だけを書き、prompt、tool の入出力、URL、local path を写さない。失敗しても作業を続け、exit code と stderr の 1 行を最終 message の 未完 に書かせる。file は commit しない。記録の有無や内容を完了の判定と転記に使わない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "brief-cli",
+          "text": "brief の一覧に、配備済み CLI を clone の root で update --client codex --stdin として呼ぶ指定がある"
+        },
+        {
+          "id": "worker-id",
+          "text": "worker 自身の CODEX_THREAD_ID を使うとしている"
+        },
+        {
+          "id": "five-events",
+          "text": "作業の始め、段の切り替わり、判断を求める前、判断を受けて作業を変えるとき、終了前を挙げている"
+        },
+        {
+          "id": "failure-nonblocking",
+          "text": "失敗しても作業を続け、exit code と stderr の 1 行を最終 message の 未完 に書かせている"
+        },
+        {
+          "id": "local-summary",
+          "text": "短い自己要約に限り、生の入出力や path を写さず、file を commit しないとしている"
+        },
+        {
+          "id": "not-completion-evidence",
+          "text": "記録の有無や内容を完了の判定と転記に使わないとしている"
+        }
+      ]
+    },
+    {
+      "id": 53,
+      "name": "progress-not-completion-or-transcription",
+      "prompt": "worker の session 記録が全段 done なら完了として転記していい? 逆に記録が無くても done.txt の nonce 一致・exit=0 と空でない result.md があればどうする? 手順確認のみ。",
+      "expected_output": "session 記録の有無や内容は、完了の判定と転記に使わない。全段 done だけでは完了としない。記録が無くても既存の完了条件を満たせば通常の回収手順へ進み、転記元は最終 message とする。記録を作り直させるために worker を再起動しない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "not-done-evidence",
+          "text": "全段 done だけで完了や転記を決めないとしている"
+        },
+        {
+          "id": "missing-not-blocker",
+          "text": "記録が無くても既存の完了条件を満たせば通常の回収へ進むとしている"
+        },
+        {
+          "id": "final-message-source",
+          "text": "転記元を最終 message としている"
+        }
+      ]
     }
   ]
 }

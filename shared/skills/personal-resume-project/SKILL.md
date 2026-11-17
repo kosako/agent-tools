@@ -187,6 +187,13 @@ Codex の worker は人の明示か Claude の枠の枯渇のとき。残量は�
 読めないときも人には聞かず、その規則で割当先を決めます。人に割当先を聞くのは、割当の規則 (`personal-project-operating-loop`) 自体を読めない
 ときだけです。
 
+continue-work / new-work で作業の範囲が決まった後、書き込みのある作業なら、目的と粗い段を local に記録し始めます。
+配備済みの `personal-session-progress` の `--help` と `docs/session-progress.md` を確認します。
+session を始めた作業ツリーの root で、client を明示して `update --client CLIENT --stdin` を呼びます。
+status-only、read-only、書き込みを禁じられた session では記録を作りません。
+無人で起動された session は、brief に指定があるときだけ記録します。
+記録は表示のための自己申告です。承認や実行の根拠にはせず、更新に失敗しても作業を続け、1 行で伝えます。
+
 ## やってはいけないこと
 
 - 参照先や状況を **でっち上げない**。確認できないことは「確認できなかった」と言う。

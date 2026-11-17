@@ -8,6 +8,8 @@
 # - 禁止事項の bullet の「clone の外への書込」に一時 file の置き場の例外がある (無いと 2 つの bullet が食い違う)
 # - commit 規則の bullet が、test・build を safe-run 経由で上限を付けて走らせ、safe-run が起動できないときは上限なしで
 #   走らせないことを、それぞれ句として書いている (#512。運用 instruction の「test と長時間の command」を worker に届ける)
+# - session の記録の bullet に CLI と client の指定が届くことを確かめる (#682)。更新の時機、失敗時の継続、
+#   完了の判定と転記への不使用は evals の scenario で確かめる。
 # 句は空白を除いて比べ (行の折り返しの位置に依らない)、句の直後が区切り (。、( か末尾) であることも求める (否定は
 # 句の後ろに付くので、「置くな」のような反転を部分一致で通さない)。brief の節の外にだけ句があっても worker には届かないので、
 # child-brief-boundary-test と同じく節の最初の一覧の項目に絞って見る。節と一覧の取り方は lib/markdown_units.rb が持つ (#685)。
@@ -57,6 +59,14 @@ LIMITS = {
 }.freeze
 
 errors = []
+progress = find(bullets, "session の記録")
+if progress.nil?
+  errors << "brief の一覧に「session の記録:」の bullet が無い"
+else
+  ["personal-session-progress", "update --client codex --stdin", "--help", "CODEX_THREAD_ID"].each do |token|
+    errors << "session の記録の bullet に #{token} が無い" unless progress.include?("`#{token}`")
+  end
+end
 tmp = find(bullets, "一時 file の置き場")
 if tmp.nil?
   errors << "brief の一覧に「一時 file の置き場:」の bullet が無い"
