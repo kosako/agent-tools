@@ -166,6 +166,13 @@ check(".agent-packets/ 配下を検出 (root / nested)",
         [".agent-packets/253.md", "sub/.agent-packets/1.md", "docs/agent-packets.md", "agent-packets/x.md"]
       ) == [".agent-packets/253.md", "sub/.agent-packets/1.md"])
 
+# #682: session の記録も root / nested の両方を拒否し、似た名前は除く。
+check(".agent-session-progress/ 配下を検出 (root / nested)",
+      PublicSafetyGate.staged_local_only_files(
+        [".agent-session-progress/codex-s.json", "sub/.agent-session-progress/claude-code-s.json",
+         "docs/session-progress.md", "agent-session-progress/x.json", ".agent-session-progress-other/x.json"]
+      ) == [".agent-session-progress/codex-s.json", "sub/.agent-session-progress/claude-code-s.json"])
+
 # #253: stdin mode の scan_text (行番号の帰属 / allow pragma / home / local pattern)
 st = PublicSafetyGate.scan_text("clean\nx = '#{gh_token}'\nsee /Users/ghost-user/x\n",
                                 [], "/Users/ghost-user")
@@ -409,6 +416,20 @@ set -e
 echo "$out" | grep -q "\.agent-packets/1\.md:0: \[local-only-file\]" || \
   fail "packet finding should name path and class: $out"
 (cd "$repo" && git rm -rq --cached .agent-packets && rm -r .agent-packets)
+
+# #682: 記録の本文が安全でも staged path の規則で拒否する。
+mkdir -p "$repo/.agent-session-progress" "$repo/sub/.agent-session-progress"
+printf '{}\n' > "$repo/.agent-session-progress/codex-s.json"
+printf '{}\n' > "$repo/sub/.agent-session-progress/claude-code-s.json"
+(cd "$repo" && git add -f .agent-session-progress sub/.agent-session-progress)
+set +e
+out=$(cd "$repo" && as_human ruby "$pubsafe_src" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "session progress staged add should block (rc=$rc)"
+echo "$out" | grep -q '\.agent-session-progress/codex-s.json:0: \[local-only-file\]' || fail "root progress finding missing"
+echo "$out" | grep -q 'sub/\.agent-session-progress/claude-code-s.json:0: \[local-only-file\]' || fail "nested progress finding missing"
+(cd "$repo" && git rm -rq --cached .agent-session-progress sub/.agent-session-progress && rm -r .agent-session-progress sub/.agent-session-progress)
 
 # ---- #253 / #413: stdin mode (公開する text を公開の前に通す検査口) ------------------
 # git を要らない: repo 外の空 dir から走らせる。

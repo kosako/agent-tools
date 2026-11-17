@@ -14,6 +14,8 @@ agent-tools-handoff.md
 # .agent-packets/: 作業単位の packet (agent が書く local 状態。docs/agent-packets.md)。
 # 第一防衛は global gitignore、ここは fail-safe。
 .agent-packets/
+# session ごとの自己申告 (docs/session-progress.md)。
+.agent-session-progress/
 
 generated/**
 !generated/

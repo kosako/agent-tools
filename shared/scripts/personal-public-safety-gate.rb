@@ -20,7 +20,7 @@
 #
 # 検出クラス:
 # - definite (exit 1 で block): private key block / 既知 token 形 / 実 HOME path の
-#   literal 混入 / 個人用 local file (*.local / *.local.md / .agent-packets/ 配下) の
+#   literal 混入 / 個人用 local file (*.local / *.local.md / .agent-packets/ と .agent-session-progress/ 配下) の
 #   staged 追加 / local pattern file の追加パターン一致
 # - suspicious (警告のみ・block しない): 汎用 credential 代入ヒューリスティック。
 #   「疑わしいだけの finding は block でなく明示確認に落とす」(#200 §4.1) の実装。
@@ -87,7 +87,8 @@ module PublicSafetyGate
   # .gitignore が第一防衛だが、`git add -f` の事故をここで止める。
   # `.agent-packets/` (作業単位の packet、docs/agent-packets.md) は global gitignore が
   # 第一防衛で、未設定の repo での `git add -A` をここで止める。
-  LOCAL_ONLY_FILE = %r{(?:\.local|\.local\.md)\z|(?:\A|/)\.agent-packets/}
+  # session の自己申告も local-only として同じ検査で止める (#682)。
+  LOCAL_ONLY_FILE = %r{(?:\.local|\.local\.md)\z|(?:\A|/)\.agent-(?:packets|session-progress)/}
 
   Finding = Struct.new(:file, :line, :name, :severity)
 
