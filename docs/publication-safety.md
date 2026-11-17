@@ -30,7 +30,7 @@ commit 前に確認すること:
 - secret-like strings と private paths を text scan する。
 - 差分と commit message は、hook の public-safety gate (pre-commit と commit-msg) が検査する。hook を通らない
   経路 (`--no-verify`、rebase など) があるので、[git-hook-gates](git-hook-gates.md) の強度ラベルを確認する。
-- local-only file (`.agent-context.local.md` と `.agent-packets/`) が ignore されていることを確認する。
+- local-only file (`.agent-context.local.md`、`.agent-packets/`、`.agent-session-progress/`) が ignore されていることを確認する。
 - generated artifacts が ignore されていることを確認する。ただし `.gitkeep` や `README.md`
   のような意図的な documentation は例外。
 - LLM review 対象の asset が public / personal で、local machine の外へ送って安全であることを確認する。

@@ -14,14 +14,14 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:f6a7830aaf52eb0760105de1bc0af88fd1fcfcdb2565c7a313a5a624c2ab7801
+  approved_build_id: sha256:4ed0980106690e42ac83d9a4242c08d361720de8656963a7310eae76b8f8eb47
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-public-safety-gate.rb
   format: text
 summary: >-
   公開する内容を公開の前に検査する gate。pre-commit stage では staged diff の追加行から secret
-  (private key / 既知 token 形) / 実 home path / 個人用 local file (*.local / .agent-packets/)
+  (private key / 既知 token 形) / 実 home path / 個人用 local file (*.local / .agent-packets/ / .agent-session-progress/)
   を検出して commit を block する (definite) か警告する (suspicious)。commit-msg stage でも
   --commit-msg で commit message の file を同じ pattern で検査する (#413)。--stdin で同じ pattern
   により text を検査する (Issue / PR / コメントの題名と本文を投稿する前と、push で公開される内容を

@@ -121,7 +121,7 @@ local pattern file のみ。diff は `--text --no-textconv` で取る (#414): bi
 
 | クラス | 対象 | 挙動 |
 |---|---|---|
-| definite | private key block (`-----BEGIN ... PRIVATE KEY-----` と PGP の `PRIVATE KEY BLOCK`) / 既知 token 形 (GitHub `ghp_` `gho_` `ghu_` `ghs_` `ghr_` `github_pat_`、AWS `AKIA`、Slack `xox[baprs]-`、Anthropic `sk-ant-`、OpenAI `sk-proj-` `sk-svcacct-` `sk-admin-` と旧形式の `sk-` + 英数字 48 文字、Stripe `sk_live_` `sk_test_`) / 実 `$HOME` path の literal / `*.local` `*.local.md` `.agent-packets/` 配下の staged 追加 / local pattern 一致 | exit 1 で block |
+| definite | private key block (`-----BEGIN ... PRIVATE KEY-----` と PGP の `PRIVATE KEY BLOCK`) / 既知 token 形 (GitHub `ghp_` `gho_` `ghu_` `ghs_` `ghr_` `github_pat_`、AWS `AKIA`、Slack `xox[baprs]-`、Anthropic `sk-ant-`、OpenAI `sk-proj-` `sk-svcacct-` `sk-admin-` と旧形式の `sk-` + 英数字 48 文字、Stripe `sk_live_` `sk_test_`) / 実 `$HOME` path の literal / `*.local` `*.local.md` `.agent-packets/` `.agent-session-progress/` 配下の staged 追加 / local pattern 一致 | exit 1 で block |
 | suspicious | 汎用 credential 代入ヒューリスティック | 警告のみ (block しない) |
 
 - **escape (明示確認)**: レビュー済みの誤検知は該当行に `public-safety: allow` を書く。
@@ -139,6 +139,8 @@ local pattern file のみ。diff は `--text --no-textconv` で取る (#414): bi
 - `.agent-packets/` (作業単位の packet、[agent-packets](agent-packets.md)) は global
   gitignore が第一防衛。未設定の repo で `git add -A` に拾われた場合をここで止める
   (root でも nested でも対象。`*.local` と同じ `local-only-file` class)。
+- `.agent-session-progress/` 配下の session の自己申告も、同じ `local-only-file` として拒否する
+  ([session-progress](session-progress.md)。root / nested の両方が対象)。
 - exit: 0 = pass / 1 = definite finding / 2 = 入力・構成エラー (git 失敗・regex 壊れ・
   未知の引数)。引数ゼロが pre-commit mode。未知の引数では黙って pre-commit mode に倒さず
   usage + exit 2 (dispatcher は pre-commit に引数を渡さない)。

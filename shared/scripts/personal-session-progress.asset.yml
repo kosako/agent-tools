@@ -1,0 +1,25 @@
+schema_version: 1
+name: personal-session-progress
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# #682 の実装。内容に紐づく承認は相互 review の対象。
+review:
+  human_review: approved
+  approved_build_id: sha256:2285cdf359d3f7af0f534611e59a5550e02130ca6b9562ae413bd895c5df72d1
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-session-progress.rb
+  format: text
+summary: >-
+  session の目的・段・短い結果・未解決の判断を local の JSON に保存し表示する (#682)。
+  update は stdin の部分更新を排他中に重ね、同じ directory の public-safety gate を通し、
+  一時 file の fsync と rename で保存する。show・list・locate は読み取りだけ。
+  既定の場所は作業ツリー root の .agent-session-progress/。git の tracked entry と ignore、
+  git の env、symlink、所有者、型・字数・件数・byte 上限を検査し、拒否した値は診断に出さない。
+  記録は自己申告であり承認や実行の根拠ではない。network、hook、古い記録の自動削除は使わない。
