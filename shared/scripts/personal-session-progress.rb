@@ -141,7 +141,7 @@ module SessionProgress
       keys = %w[at step title state result]
       object(entry, keys, keys, "history")
       timestamp(entry["at"], "history.at")
-      step("id" => entry["step"], "title" => entry["title"], "state" => entry["state"], "result" => entry["result"])
+      step({ "id" => entry["step"], "title" => entry["title"], "state" => entry["state"], "result" => entry["result"] })
       raise Refused, "reference: history.step" unless record["steps"].any? { |s| s["id"] == entry["step"] }
     end
     integer(record["history_dropped"], 0, "history_dropped")
@@ -153,7 +153,8 @@ module SessionProgress
     bytes = bytes.dup.force_encoding(Encoding::UTF_8)
     raise Refused, "encoding: #{field}" unless bytes.valid_encoding?
 
-    JSON.parse(bytes, object_class: UniqueHash, create_additions: false)
+    # 古い json は UniqueHash、新しい json は parser の option で重複を拒否する。
+    JSON.parse(bytes, object_class: UniqueHash, create_additions: false, allow_duplicate_key: false)
   rescue JSON::ParserError, JSON::NestingError
     raise Refused, "json: #{field}"
   end
@@ -164,16 +165,16 @@ module SessionProgress
     nil
   end
 
-  def regular(path)
+  def regular(path, field = "record")
     stat = lstat(path)
-    raise Refused, "file-type: record" if stat && !stat.file?
+    raise Refused, "file-type: #{field}" if stat && !stat.file?
     stat
   end
 
   def read_record(path)
     return nil unless regular(path)
 
-    bytes = File.open(path, File::RDONLY | File::NOFOLLOW) { |file| file.read(MAX_FILE + 1) }
+    bytes = File.open(path, File::RDONLY | File::NOFOLLOW) { |file| file.read(MAX_FILE + 1).to_s }
     record = validate_record(parse(bytes, MAX_FILE, "record"))
     unless File.basename(path) == "#{record['client']}-#{record['session_id']}.json"
       raise Refused, "identity: record"
@@ -222,7 +223,7 @@ module SessionProgress
   def check_git_location(dir)
     ancestor = dir
     ancestor = File.dirname(ancestor) until File.exist?(ancestor)
-    actual = File.join(File.realpath(ancestor), dir.delete_prefix(ancestor).sub(/\A\//, ""))
+    actual = File.expand_path(File.join(File.realpath(ancestor), dir.delete_prefix(ancestor).sub(/\A\//, "")))
     root = repository_root(File.realpath(ancestor))
     return unless root
     raise Refused, "git-root: dir" if actual == root
@@ -246,7 +247,7 @@ module SessionProgress
 
   def with_lock(dir)
     path = File.join(dir, ".lock")
-    regular(path)
+    regular(path, "lock")
     File.open(path, File::RDWR | File::CREAT | File::NOFOLLOW, 0o600) do |file|
       raise Refused, "file-type: lock" unless file.stat.file?
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + LOCK_SECONDS
@@ -259,6 +260,7 @@ module SessionProgress
   end
 
   def merge_record(old, patch, client, session_id, now)
+    raise Refused, "required: purpose" if old.nil? && !patch.key?("purpose")
     # parser の重複 key 検出用 Hash から、更新できる通常の Hash に移す。
     record = old ? old.to_h : { "schema_version" => 1, "client" => client, "session_id" => session_id, "revision" => 0,
                       "created_at" => now, "steps" => [], "decisions" => [], "history" => [], "history_dropped" => 0 }
@@ -284,6 +286,11 @@ module SessionProgress
     record["revision"] += 1
     record["updated_at"] = now
     validate_record(record)
+    # 既存の記録や入力の key 順にかかわらず、保存形は docs の順にそろえる。
+    record["steps"] = record["steps"].map { |entry| %w[id title state result].map { |key| [key, entry[key]] }.to_h }
+    record["decisions"] = record["decisions"].map { |entry| %w[id question options recommended].map { |key| [key, entry[key]] }.to_h }
+    record["history"] = record["history"].map { |entry| %w[at step title state result].map { |key| [key, entry[key]] }.to_h }
+    RECORD_KEYS.map { |key| [key, record[key]] }.to_h
   end
 
   def strings(value)
@@ -298,6 +305,7 @@ module SessionProgress
   def check_content(record)
     gate = File.join(File.dirname(File.realpath(__FILE__)), "personal-public-safety-gate")
     _out, err, status = Open3.capture3([gate, gate], "--stdin", stdin_data: strings(record).join("\n") + "\n", binmode: true)
+    raise Refused, "unavailable: gate" unless [0, 1].include?(status.exitstatus)
     raise Refused, "safety: content" unless status.success? && err.empty?
   rescue SystemCallError, IOError
     raise Refused, "unavailable: gate"
@@ -330,7 +338,7 @@ module SessionProgress
 
   def update(opts)
     client, session_id = identity(opts)
-    patch = validate_patch(parse($stdin.read(MAX_INPUT + 1), MAX_INPUT, "input"))
+    patch = validate_patch(parse($stdin.read(MAX_INPUT + 1).to_s, MAX_INPUT, "input"))
     dir = location(opts)
     prepare_directory(dir)
     path = File.join(dir, "#{client}-#{session_id}.json")
@@ -393,7 +401,7 @@ module SessionProgress
     lines = ["自己申告 / #{record['client']} / #{record['session_id']} / revision #{record['revision']}",
              "更新: #{record['updated_at']} (#{age(record)})", "目的: #{record['purpose']}", "進み具合: #{counts(record)}"]
     record["steps"].each do |entry|
-      lines << "[#{entry['state']}] #{entry['title']}"
+      lines << "#{"[#{entry['state']}]".ljust(9)}#{entry['title']}"
       lines << "         #{entry['result']}" unless entry["result"].empty?
     end
     lines << "決めること: #{record['decisions'].size} 件"
@@ -414,6 +422,8 @@ module SessionProgress
       $stdout.flush
       sleep opts["watch"]
     end
+  rescue Interrupt
+    raise unless opts["watch"]
   end
 
   def options(argv)
@@ -475,7 +485,7 @@ module SessionProgress
       制御文字、未知・重複 key、public-safety の許可の印を拒否する。
       保存前に隣の personal-public-safety-gate --stdin が必要。警告があれば保存しない。
       履歴は最大 200 件。古い記録は自動で消さない。show --watch は 1〜60 秒、TTY だけ。
-      exit: 0 成功 / 1 検査による拒否 / 2 usage・I/O / 3 lock / 4 show の記録なし。
+      exit: 0 成功 / 1 検査による拒否 / 2 usage・I/O / 3 lock / 4 show の記録なし / 130 中断。
       記録は承認・実行の根拠にしない。詳細: docs/session-progress.md
     HELP
   end
@@ -491,7 +501,7 @@ module SessionProgress
     when "show" then show(opts)
     when "list"
       rows = records(location(opts))
-      $stdout.puts(opts["json"] ? JSON.generate(rows) : rows.map { |r| "#{r['client']} / #{r['session_id'][0, 12]} / #{age(r)} / #{counts(r)} / #{r['purpose']}" }.join("\n"))
+      $stdout.puts(opts["json"] ? JSON.generate(rows) : rows.map { |r| "#{r['client']} / #{r['session_id'][0, 12]} / #{age(r)} / #{counts(r)} / #{r['purpose']}" })
     when "locate"
       client, id = identity(opts)
       $stdout.puts File.join(location(opts), "#{client}-#{id}.json")
@@ -510,7 +520,8 @@ module SessionProgress
     warn "#{NAME}: #{e.message}"
     4
   rescue Interrupt
-    0
+    warn "#{NAME}: interrupted: operation"
+    130
   rescue SystemCallError, IOError
     warn "#{NAME}: io: operation"
     2

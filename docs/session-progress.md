@@ -69,6 +69,7 @@ client を省いて env から選ぶ場合、片方の client の env だけが�
 | 2 | usage、I/O の失敗、想定外の例外 |
 | 3 | lock を 2 秒待っても取得できない |
 | 4 | `show` の対象の記録が無い |
+| 130 | watch 以外の command が SIGINT で中断された |
 
 `update` の成功時は `{"ok":true,"revision":3,"updated_at":"…"}` を stdout に 1 行出します。
 失敗時は stdout を空にし、stderr には種別と項目名だけを出します。
@@ -180,7 +181,8 @@ gate 自体の時間制限は付けません (`personal-post-check` と同じ扱
 
 agent は自分で要約した短い文だけを書きます。
 prompt、tool の入力と出力、URL、local path を写しません。
-既知の secret の形と local path は gate が調べます。
+gate は既知の secret の形、実 HOME の path の literal、local pattern に一致する内容を調べます。
+HOME の外など、pattern に一致しない local path までは検出できません。
 未知の secret、会話の原文の転記、結果が事実かどうかは、この検査では判定できません。
 
 記録は git 管理しません。保護は global gitignore、この repo の `.gitignore`、public-safety gate の 3 段です。
@@ -196,7 +198,7 @@ gate は root / nested の `.agent-session-progress/` 配下の staged 追加を
 更新: 2026-11-17T03:15:00.000Z (5 分前)
 目的: session の途中の状態を読める形に残す
 進み具合: 1 / 2 段
-[done] 既存の規約を確かめる
+[done]   既存の規約を確かめる
          packet と handoff の分担を確かめた
 [active] 記録の形を決める
 決めること: 1 件
@@ -206,6 +208,7 @@ gate は root / nested の `.agent-session-progress/` 配下の staged 追加を
 `show --json` は、検査した保存形を JSON で出します。空白の整形は保存 file と同一とは限りません。
 `list` は更新の新しい順に client、ID の先頭 12 字、古さ、段の数、目的を 1 行ずつ出します。
 `list --json` は同じ順の保存形の配列です。記録が無ければ空配列です。
+plain の `list` は、記録が無ければ何も出力しません。
 同時刻なら client と session ID の降順で順を固定します。
 対象名の file が壊れていれば、一覧や latest も拒否します。見えないまま飛ばすことはしません。
 

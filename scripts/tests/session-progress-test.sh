@@ -5,7 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$script_dir/lib/test-helpers.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-ruby -r"$script_dir/lib/check_helper" -ropen3 -rfileutils -rjson -rtimeout -rpty - "$repo_root" "$tmp" <<'RUBY'
+ruby -r"$script_dir/lib/check_helper" -ropen3 -rfileutils -rjson -rtimeout -rpty -rrbconfig - "$repo_root" "$tmp" <<'RUBY'
 Encoding.default_external = Encoding::UTF_8
 root, tmp = ARGV
 TMP = File.realpath(tmp)
@@ -17,7 +17,7 @@ FileUtils.mkdir_p(BIN)
 end
 SCRIPT = File.join(BIN, "personal-session-progress")
 GATE = File.join(BIN, "personal-public-safety-gate")
-ENVIRONMENT = { "PATH" => "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL" => "C", "HOME" => File.join(TMP, "home"),
+ENVIRONMENT = { "PATH" => "#{File.dirname(RbConfig.ruby)}:/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL" => "C", "HOME" => File.join(TMP, "home"),
                 "GIT_CONFIG_NOSYSTEM" => "1", "GIT_CONFIG_GLOBAL" => File::NULL }.freeze
 FileUtils.mkdir_p(ENVIRONMENT["HOME"])
 INITIAL = { "purpose" => "調査と実装", "steps" => [{ "id" => "inspect", "title" => "規約を確かめる" }] }.freeze
@@ -27,7 +27,7 @@ DECISION = { "id" => "place", "question" => "置き場を決める", "options" =
 load SCRIPT
 
 def call(args, input: "", env: {}, cwd: TMP)
-  out, err, status = Open3.capture3(ENVIRONMENT.merge(env), SCRIPT, *args, stdin_data: input,
+  out, err, status = Open3.capture3(ENVIRONMENT.merge(env), RbConfig.ruby, SCRIPT, *args, stdin_data: input,
                                    chdir: cwd, unsetenv_others: true)
   [status.exitstatus, out.force_encoding(Encoding::UTF_8), err.force_encoding(Encoding::UTF_8)]
 end
@@ -74,6 +74,8 @@ dir = File.join(TMP, "state")
 s, o, e = update(dir)
 check("create and UTF-8 under C locale", s == 0 && e.empty? && JSON.parse(o)["revision"] == 1)
 record = read(dir)
+check("record keys follow schema order", record.keys == %w[schema_version client session_id revision created_at updated_at purpose steps decisions history history_dropped])
+check("step keys follow schema order", record["steps"][0].keys == %w[id title state result])
 check("initial defaults and history", record["steps"][0]["state"] == "pending" && record["steps"][0]["result"] == "" &&
                                      record["history"].size == 1 && record["history"][0]["step"] == "inspect" && record["history_dropped"] == 0)
 check("private directory and record", File.stat(dir).mode & 0o777 == 0o700 && File.stat(File.join(dir, "codex-session.json")).mode & 0o777 == 0o600)
@@ -89,14 +91,27 @@ s, = update(dir, { "steps" => [{ "id" => "verify", "state" => "skipped", "result
 s, o, = call(["show", "--dir", dir, "--client", "codex", "--session-id", "session"])
 check("plain show counts skip and recommendation", s == 0 && o.include?("自己申告 / codex / session") && o.include?("1 / 2 段") &&
   o.include?("[done]") && o.include?("規約を確認した") && o.include?("推奨: 作業ツリー"))
+check("state and result columns align", o.include?("[done]   規約を確かめる\n         規約を確認した\n") && o.include?("[active] 実装する\n"))
 s, o, = call(["show", "--dir", dir, "--client", "codex", "--session-id", "session", "--json"])
 check("show JSON stored shape", s == 0 && JSON.parse(o) == read(dir))
+
+# 直接編集された key 順も、次の保存では設計の順に戻す。
+ordered = read(dir).to_a.reverse.to_h
+%w[steps decisions history].each { |key| ordered[key].map! { |entry| entry.to_a.reverse.to_h } }
+File.write(File.join(dir, "codex-session.json"), JSON.generate(ordered))
+check("update reordered record", update(dir, "{}")[0] == 0)
+ordered = read(dir)
+check("updated record keys follow schema order", ordered.keys == %w[schema_version client session_id revision created_at updated_at purpose steps decisions history history_dropped])
+{ "steps" => %w[id title state result], "decisions" => %w[id question options recommended],
+  "history" => %w[at step title state result] }.each do |key, keys|
+  check("updated #{key} keys follow schema order", ordered[key].all? { |entry| entry.keys == keys })
+end
 
 # 入力を拒否した場合、前の file と file 一覧を保ち、本文・値を診断へ出さない。
 secret = ["ghp_", "X" * 36].join
 warning = ["token", "=", '"SESSION_TEST_ONLY"'].join(" ")
 allow = ["public-safety", ": allow"].join
-bad_patches = [
+bad_patches = ["",
   nil, [], true, 1, { "unknown" => "DO_NOT_ECHO" }, { "purpose" => nil }, { "purpose" => "" },
   { "purpose" => "あ" * 241 }, { "purpose" => "a\nb" }, { "purpose" => "a\tb" }, { "purpose" => "a\u202eb" },
   { "purpose" => "a\u0085b" }, { "purpose" => "a\u061cb" }, { "purpose" => "a\u2066b" },
@@ -160,17 +175,19 @@ corrupt = File.join(TMP, "corrupt")
 check("corrupt fixture", update(corrupt)[0] == 0)
 path = File.join(corrupt, "codex-session.json")
 valid = File.read(path)
-mutations = ["{", "\xff".b, valid.sub('"schema_version":1', '"schema_version":2'),
+mutations = ["", "{", "\xff".b, valid.sub('"schema_version":1', '"schema_version":2'),
   valid.sub('"revision":1', '"revision":0'), valid.sub('"schema_version":1', '"schema_version":1.0'),
   valid.sub('"session_id":"session"', '"session_id":"other"'),
   valid.sub('"client":"codex"', '"client":"claude-code"'), valid.sub('"history_dropped":0', '"history_dropped":-1'),
   valid.sub('"schema_version":1', '"schema_version":1,"schema_version":1'),
+  valid.sub('"step":"inspect"', '"step":"missing"'),
   valid.sub('"steps":', '"unknown":0,"steps":'), valid.sub(/\d{4}-\d\d-\d\dT/, '2026-02-31T'),
   valid + " " * (512 * 1024)]
 mutations.each_with_index do |body, i|
   File.binwrite(path, body)
   rejected("corrupt update #{i}", update(corrupt))
   rejected("corrupt show #{i}", call(["show", "--latest", "--dir", corrupt, "--json"]))
+  rejected("corrupt list #{i}", call(["list", "--dir", corrupt, "--json"]))
   check("corrupt file unchanged #{i}", File.binread(path) == body.b)
 end
 File.binwrite(path, valid + " " * (512 * 1024 - valid.bytesize))
@@ -198,6 +215,7 @@ begin
     File.write(GATE, "#!/bin/sh\n#{body}\n")
     result = update(corrupt, { "purpose" => "変える" })
     rejected("gate failure #{body.lines.last.strip}", result)
+    check("gate diagnostic distinguishes failure", result[2].include?(body == "exit 2" ? "unavailable: gate" : "safety: content"))
     check("gate output not echoed", !result[1..2].join.include?("DO_NOT_ECHO") && File.read(path) == valid)
   end
   File.chmod(0o644, GATE)
@@ -240,6 +258,11 @@ check("locate does not create", s == 0 && !File.exist?(absent) && o.strip == Fil
 rejected("show missing", call(["show", "--latest", "--dir", absent]), 4)
 s, o, e = call(["list", "--dir", absent, "--json"])
 check("empty list", s == 0 && o.strip == "[]" && e.empty? && !File.exist?(absent))
+s, o, e = call(["list", "--dir", absent])
+check("empty plain list has no output", s == 0 && o.empty? && e.empty? && !File.exist?(absent))
+result = update(absent, { "steps" => INITIAL["steps"] })
+rejected("new record requires purpose", result)
+check("missing purpose diagnostic", result[2].include?("required: purpose") && !File.exist?(File.join(absent, "codex-session.json")))
 rejected("outside git requires override", call(["locate", "--client", "codex", "--session-id", "s"]))
 rejected("absolute override required", call(["locate", "--client", "codex", "--session-id", "s", "--dir", "relative"]))
 s, o, = call(["locate", "--client", "codex", "--session-id", "s"], env: { "AGENT_TOOLS_SESSION_PROGRESS_DIR" => absent })
@@ -273,7 +296,21 @@ rejected("case insensitive tracked directory", update(File.join(case_repo, ".age
 end
 nested = File.join(state_dir, "nested")
 git(state_dir, "init", "-q", nested)
-rejected("override repository root", update(nested, cwd: repo_dir))
+result = update(nested, cwd: repo_dir)
+rejected("override repository root", result)
+check("repository root diagnostic", result[2].include?("git-root: dir"))
+# 壊れた .git、bare、.git 内は、git の外として ignore の検査を省かない。
+broken = File.join(TMP, "broken-git")
+FileUtils.mkdir_p(File.join(broken, "child"))
+File.write(File.join(broken, ".git"), "gitdir: missing\n")
+bare = File.join(TMP, "bare.git")
+git(TMP, "init", "--bare", "-q", bare)
+[File.join(broken, "child"), bare, File.join(repo_dir, ".git")].each_with_index do |base, i|
+  destination = File.join(base, "progress")
+  result = update(destination)
+  rejected("invalid git override #{i}", result)
+  check("invalid git diagnostic and no write #{i}", result[2].include?("git: directory") && !File.exist?(destination))
+end
 # override の記号を pathspec の glob にしない。
 weird = File.join(repo_dir, "state[1]")
 File.write(File.join(repo_dir, ".gitignore"), ".agent-session-progress/\nstate*/\n")
@@ -298,7 +335,9 @@ check("directory link target unchanged", Dir.empty?(external))
       _o, _e, status = Open3.capture3("mkfifo", leaf)
       raise "mkfifo failed" unless status.success?
     end
-    rejected("#{kind} #{type}", update(base))
+    result = update(base)
+    rejected("#{kind} #{type}", result)
+    check("#{kind} #{type} diagnostic", result[2].include?("file-type: #{kind}"))
     check("symlink target not created", !File.exist?(File.join(external, "untouched")))
   end
 end
@@ -335,6 +374,30 @@ File.open(lock_path, "r+") do |lock|
   rejected("lock timeout", update(parallel, "{}"), 3)
 end
 
+# directory の mode の変更を観測してから SIGINT を送る。lock は親が保持したままにする。
+before_interrupt = File.binread(File.join(parallel, "codex-session.json"))
+File.open(lock_path, "r+") do |lock|
+  lock.flock(File::LOCK_EX)
+  File.chmod(0o755, parallel)
+  Open3.popen3(ENVIRONMENT, RbConfig.ruby, SCRIPT, "update", "--client", "codex", "--session-id", "session",
+              "--dir", parallel, "--stdin", unsetenv_others: true, chdir: TMP) do |input, output, error, process|
+    begin
+      input.write('{"purpose":"中断する更新"}')
+      input.close
+      Timeout.timeout(5) { sleep 0.01 until File.stat(parallel).mode & 0o777 == 0o700 }
+      Process.kill("INT", process.pid)
+      status = Timeout.timeout(5) { process.value }
+      check("interrupted update is not success", status.exitstatus == 130 && output.read.empty? && error.read.include?("interrupted: operation"))
+    ensure
+      if process.alive?
+        Process.kill("KILL", process.pid)
+        process.join
+      end
+    end
+  end
+end
+check("interrupted update preserves record", File.binread(File.join(parallel, "codex-session.json")) == before_interrupt)
+
 # latest/list は updated_at の順。client の絞り込み、env と明示 ID、曖昧さを確かめる。
 show_dir = File.join(TMP, "show")
 check("show old", update(show_dir, id: "old")[0] == 0)
@@ -361,7 +424,7 @@ end
 # PTY で前面の watch を起動し、更新後の再読込と INT による停止を観測する。
 watch_output = +""
 watch_status = nil
-PTY.spawn(ENVIRONMENT, SCRIPT, "show", "--dir", parallel, "--latest", "--watch", "1", unsetenv_others: true, chdir: TMP) do |reader, writer, pid|
+PTY.spawn(ENVIRONMENT, RbConfig.ruby, SCRIPT, "show", "--dir", parallel, "--latest", "--watch", "1", unsetenv_others: true, chdir: TMP) do |reader, writer, pid|
   begin
     Timeout.timeout(8) do
       watch_output << reader.readpartial(4096).force_encoding(Encoding::UTF_8) until watch_output.include?("revision 3")
