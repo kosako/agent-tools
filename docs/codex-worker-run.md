@@ -2,12 +2,12 @@
 
 `personal-codex-worker-run launch` は、packet の依頼から worker を起動します (#706)。
 Ruby 2.6 の標準 library、git、herdr、codex と配備済み script を使います。
-`launch`、`collect`、`retry-empty` を実装しています。
-公開前の検査を行う `check` は #706 の4本目の PR で追加する予定です。
+`launch`、`collect`、`retry-empty`、公開前の検査を行う `check` を実装しています。
 
 起動の許可は caller が持つ現在の依頼で判断します。
 packet の存在や本文だけで、委譲を始める許可があるとは扱いません。
-GitHub の読み書きと公開前の検査は、この command の範囲外です。
+GitHub への書き込みは、この command の範囲外です。
+`check` は公開先と個人 project の判定に限り、gh で読み取ります。
 現行 skill と `LAUNCH.md` の手順は、#706 の最後の PR まで使います。
 
 ## 入力
@@ -35,7 +35,7 @@ hook dispatcher と public-safety、git-identity、ai-trailer の各 gate も同
 
 | exit | status | 意味 |
 | --- | --- | --- |
-| 0 | `STARTED` / `DONE` | 起動を受け付けた / collect が完了を転記した |
+| 0 | `STARTED` / `DONE` / `READY` | 起動の受付 / 完了の転記 / 公開前の検査の成功 |
 | 1 | `BLOCKED` | 指定した段で停止した |
 | 2 | `BLOCKED` | 入力が不正。成果物を作る前に停止した |
 | 3 | `RUNNING` | 同じ Issue の worker が動いている / collect の待つ上限 / 人手実行の完了待ち |
@@ -214,7 +214,7 @@ collect は clone にも main にも fetch しません。
 `RUNNING` に `blocked_at` は含めません。
 process は止めず、packet を保持します。pane と tab は、成功と失敗のどちらでも閉じません。
 
-pane_id が null の run は、人手で run script を実行する経路です。
+`launch.json` の `pane_id` が null の run は、人手で run script を実行する経路です。
 pane の rename または run が失敗した場合も、launch.json の pane_id を null に戻します。
 作成済みの pane と tab は閉じず、pane-id と tab-id の file に記録を残します。
 完了記録が無ければ即座に exit 3、`RUNNING`、`manual-completion-pending` を返します。
@@ -294,14 +294,141 @@ tab の存在と元の `tab-id` との一致、pane の名前は、起動記録�
 成功時は launch と同じ `STARTED` の JSON で exit 0 です。
 起動の共通段で止まった場合も、launch と同じ区分と packet.written を返します。
 
-人手実行 (pane_id が null) の1回目が空の結果で終わった場合、retry-empty は packet を変えずに止まります。
-workspace を確認できなければ workspace、確認できても tab-ownership で停止します。
-どちらも blocked_at は launch-path です。
+人手実行かどうかは、`launch.json` の `pane_id` が null であることで見分けます。
+その1回目が空の結果で終わった場合、retry-empty は packet を変えずに止まります。
+workspace の ID が無ければ `workspace`、herdr の応答を読めなければ `herdr-response` です。
+動いている worker がいれば `worker-running`、それ以外は `tab-ownership` で止まります。
+この workspace の検査と tab の検査の `blocked_at` は `launch-path` です。
+先に別の Issue の未回収 run が見つかれば、起動と同じ `records` の区分で止まります。
 この場合は LAUNCH.md §10 の人手の手順を続けます。
 新しい run directory と nonce の run script を用意し、人に1回だけ渡して起動し直します。
 元の script の再実行では代えません。この手順用の subcommand は追加しません。
+手で作った新しい run には `launch.json` がありません。
+その run を `collect` に渡すと、`launch-record` の `no-launch-record` で止まります。
+回収も現行の人手の手順で行います。
 
 結合検査は `scripts/tests/codex-worker-collect-test.sh` です。
 launch の検査と fixture を共有し、herdr と codex は偽物を使います。
 packet、snapshot の照合、public-safety gate の検出処理は実物で検査します。
 一時 HOME の検査では、gate に渡す HOME の判定だけを fixture 用に差し替えます。
+
+## check の入力と出力
+
+```text
+personal-codex-worker-run check --repo <main worktree の root> --issue <N> --title <題名> --body-file <file> [--accept-warnings]
+```
+
+対象は完了の転記後の `last_run` です。packet の state は `open` または `review` を受け付けます。
+未回収の `run` がある、`last_run` が無い、state が対象外の場合は `launch-record` で止まります。
+題名は空でない1行、本文は UTF-8 の空でない regular file にします。
+本文の file は main と clone の外に置きます。symlink は受け付けません。
+`GH_REPO` は空にします。herdr と codex は呼びません。
+
+成功時は exit 0、stdout は次の JSON 1行です。
+
+```json
+{"status":"READY","issue":7,"branch":"feat/7-example","base_oid":"<base OID>","head_oid":"<head OID>","commits":2,"slug":"owner/repo","style_findings":0,"marker":"ok","run_dir":"<last_run>"}
+```
+
+`head_oid` は main に取り込んだ branch の tip です。以後の検査もこの OID に固定します。
+`base_oid` は fetch 済みの `origin/main` と head の merge-base です。
+`commits` はその範囲の commit 数で、0件は成功しません。
+`style_findings` は題名と本文の文体の指摘数です。指摘だけでは止めません。
+`marker` は個人 project の目印が通れば `ok`、対象外または判定不能なら `skipped` です。
+`--accept-warnings` を付け、gate の警告を受け入れて成功した場合は `"accepted_warnings":true` も返します。
+警告が無い場合は、この項目を返しません。
+
+## check の段と停止
+
+次の順で実行します。前の段で止まったら、後ろの段を呼びません。
+失敗は exit 1、入力の誤りは exit 2 です。どちらも `BLOCKED` の JSON 1行を返します。
+`reason` は固定文です。題名、本文、差分、外部 command の診断を出力に載せません。
+
+| phase | blocked_at | reason_code と検査 |
+| --- | --- | --- |
+| input | authorization | `input`: 引数、main root、本文の形式と置き場 |
+| environment | preflight | `gh-repo`: GH_REPO が空でない |
+| packet | launch-record | `packet-check` / `packet-list` / `check-record`: packet と回収済み run |
+| snapshot | fetch | `snapshot-mismatch`: last_run の preflight.json との照合 |
+| fetch | fetch | `fetch`: clone から main への取り込み。non-fast-forward も拒否 |
+| trailer | trailer | `trailer`: origin/main の fetch、base と head、全 commit の trailer |
+| merge-commits | public-safety | `merge-commit` / `publish-material`: merge commit の有無 |
+| style | public-safety | `style`: 文体検査の実行または応答の失敗 |
+| publish-gate | public-safety | `publish-material` / `publish-gate` / `gate-warning`: 公開する材料と gate |
+| destination | public-safety | `destination`: slug と origin の push URL |
+| marker | public-safety | `marker`: 個人 project の PR の目印 |
+
+予期しない file 操作などの失敗は、その段で `io` を返します。
+snapshot の stderr は `last_run` の `snapshot-verify.txt` に保存します。
+照合が通るまでは clone を git に渡しません。clone の `.git` に書き込む操作もありません。
+取り込みは `git fetch --no-tags -- <clone> refs/heads/<branch>:refs/heads/<branch>` です。
+refspec に `+` を付けず、main の checkout も変えません。
+
+全 commit に `Codex` 始まりの trailer が1つ以上必要です。
+`Claude` または `OpenCode` 始まりが混在していれば止まります。
+NUL 区切りの git 出力は Ruby の string で読みます。
+merge commit は、その差分の検査を省かないため、公開前に止めます。
+
+文体検査には `personal-ja-style-check --stdin --json` を使います。
+public-safety gate には累積差分、各 commit の差分、全 message、branch 名、題名と本文を渡します。
+差分の取得には `--text --no-textconv --no-ext-diff` を指定します。
+材料の git が1つでも失敗すれば、部分的な内容だけで gate を通しません。
+git と gate の stderr は `gate-publish.err` に保存します。
+既定では、gate の exit 0 に加え、`public-safety-gate: warning:` の行が無いことも必要です。
+exit が 0 でなければ、warning や `--accept-warnings` の有無によらず `publish-gate` で止まります。
+exit 0 で warning がある場合は、`--accept-warnings` が無ければ `gate-warning` で止まります。
+
+`gate-warning` で止まったら、指揮役は `gate-publish.err` を人に見せます。
+人が意図した内容だと確かめたときだけ、`--accept-warnings` を付けて `check` をやり直します。
+指揮役は人の確認なしに、この option を付けません。
+一度目の `check` が main に branch を取り込んでいても、同じ tip なら再度の取り込みは通ります。
+warning を受け入れても、公開先と個人 project の目印の検査は行います。
+`READY` を得た後、返された `head_oid` で下記の push の手順へ進みます。
+これは現行の `LAUNCH.md` §9 と同じく、人が確認した警告で進む手順です。
+
+題名と本文に修正が必要な場合は、その内容を直して `check` をやり直します。
+commit の差分や message に修正が必要な場合は、履歴を書き換える必要があります。
+各 commit の差分も検査するので、後続の commit で削除するだけでは警告は消えません。
+書き換えた branch をそのまま取り込むと、main に取り込み済みの tip に対して non-fast-forward になります。
+その場合、`check` は `fetch` で止まります。
+人が対象と履歴を確認し、clone の branch と main の branch の ref を修正後の履歴に付け替えます。
+この履歴の書き換えと ref の付け替えは、`check` と worker の範囲外です。
+人の作業が終わってから、指揮役が `check` をやり直します。
+
+公開先は main で `gh repo view --json nameWithOwner` を読み、slug の形を確認します。
+origin の push URL は `LAUNCH.md` §9 の6形式のいずれかとの完全一致が必要です。
+その後、`gh api user` と `gh api repos/<slug>` を GET で読みます。
+owner.type が `User` で、owner.login が認証 user の login と一致した場合だけ目印を検査します。
+目印には `personal-work-marker-check --kind pr --stdin` を使います。
+owner を判定できない場合は `marker: skipped` とします。
+公開先の判定が必要なので、この目印の検査は公開先の照合後に行います。
+
+`check` は成功時も停止時も packet を変更しません。
+停止したら指揮役が packet を読み直し、digest を得ます。
+`personal-packet worker-update <N> --stdin` の `stop` で、停止区分と固定の理由を記録します。
+`next` には今の `次の入口` の本文をそのまま渡し、worker の次の 1 アクションを保持します。
+`expected_sha256` は読み直した値を使い、外部 command の生出力は転記しません。
+`stop` の既存の前提は `state: open` です。
+`review` で止まった場合は、許可された修正依頼を `round` で記録して open に戻してから行います。
+依頼がまだ無ければ指揮役が判断し、前提を満たすためだけの依頼は作りません。
+
+## check 後の指揮役の手順
+
+1. `READY` の結果を読み、文体の指摘を直すか、そのままにする理由を持ちます。
+   題名、本文、commit を直した場合は `check` をやり直します。
+2. 別の呼び出しで、main から `git push origin <head_oid>:refs/heads/<branch>` を実行します。
+   `head_oid` は `check` が返した full OID を使います。push が失敗したら PR を作りません。
+3. 題名と本文を `personal-post-check` に通し、結果を読んでから PR を作ります。
+   `gh pr create --repo <slug> --base main --head <branch> --title <題名> --body-file <file>` を使います。
+   修正 round では既存 PR を使います。値は argv か shell literal で渡します。
+4. packet を読み直して digest を得ます。
+   `personal-packet worker-update <N> --stdin` の `review` で PR 番号を記録し、state を `review` にします。
+   すでに `review` で PR 番号も一致する場合は、そのまま保持します。
+
+これらの push、PR 作成、packet の更新は `check` の処理に含めません。
+現行 skill の手順の切り替えは #706 の最後の PR で行います。
+
+結合検査は `scripts/tests/codex-worker-check-test.sh` です。
+launch と collect の fixture を共有し、一時 directory を cwd にして実行します。
+packet、snapshot、文体、目印、public-safety の検出は実物を使います。
+gh は許可した3つの読み取りだけを受け付ける偽物です。

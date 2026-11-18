@@ -11,7 +11,7 @@ risk:
 # script の配布承認は内容に紐づく。変更時は review と build_id の更新が必要。
 review:
   human_review: approved
-  approved_build_id: sha256:62766093317464c1938f076921c7cc151eb5596ff61591425c0a2139cd54726b
+  approved_build_id: sha256:98dc4953655e0826c8e79516ff1e03de9250d4146aec46ae6c92ac9a45dbc566
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-codex-worker-run.rb
@@ -21,4 +21,5 @@ summary: >-
   snapshot を照合して clone を再利用する。preflight の launch_argv から brief と run script を作り、
   packet に記録してから herdr の Issue tab で起動する。停止の区分は JSON で返す。
   collect は結果の転記と停止時の退避、retry-empty は空の結果の再実行を行う。
-  check は後の PR で追加する。GitHub の読み書きは行わない。
+  check は回収済みの commit と公開先を検査し、検査した head OID を返す。
+  GitHub は公開先と owner の判定のために読み取る。push と PR 作成は指揮役が行う。
