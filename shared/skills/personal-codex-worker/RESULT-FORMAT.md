@@ -44,14 +44,13 @@ Run dir: <path> / 退避: <path> (あれば)
 Next step: <人が実行する run script の shell literal と run dir | 動いている worker (pane <id>、分かれば Issue #<N>) の完了を待ってから起動を指示し直す (この Issue の起動の記録はまだ書いていないので、記録の破棄は要らない。§1 で起動を見送った launch-path) | 依頼の更新 | 転記しなかった run dir の result.md の path と、gate が止めた行番号と区分 (本文は写さない。人が開いて確かめる。transcription) | limit の reset 待ち (reset 時刻) | 記録された run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決める (launch-record) | 照合が止めた .git の entry を clone に git を実行する前に人が調べ、残す commit・変更を取り出してから clone を消し、再起動を指示する (worker の終了後の clone) | 退避の止まった段と error を人が確かめ、退避をやり直すか残す変更を clone から取り出してから、再起動を指示する (worker の終了後の clone、退避の command の失敗)>
 ```
 
-state の扱い (#412): 止まったことを確かめた停止 (`executor-exit` / `executor-result` / `limit` / `transcription`、
-worker の終了後の `clone`) は `state: blocked`。worker の終了後の `clone` は、退避の前 (`LAUNCH.md` §8) と空振りの
-再実行の前 (同 §7) の `.git` の照合の失敗と、照合の後の退避の command (同 §8) の失敗で、停止理由は orchestrator が
-`結果` に書く (`SKILL.md` §6)。起動の前の停止 (`authorization` / `preflight`、起動の前の `clone` (clone の作成・
-branch・commit 前提、再起動・修正 round での再利用の照合)、記録を書けなかった `launch-record`、`SKILL.md` §1 で
-走っている worker を見つけて起動を見送った `launch-path`) と、記録を書いた後の人手実行待ち (`launch-path`)・
-生存を確かめられない (`launch-record`) は **state を変えない** (人が外で起動した worker や、動いているかもしれない
-worker を「停止中」にしないため)。
+state は script の `packet.written` と、読み直した packet で確かめる。
+`collect` が照合・退避・stop を終えた停止と、質問を stop で転記した場合は `state: blocked`。
+1回目の空の結果 (`retryable: true`) は state と起動記録を保持する。
+transcription、終了後の snapshot 照合、退避の失敗では、その停止を理由に state を変更しない。
+書き込み後の読み直しで止まる場合もあるので、packet を確認して済んだ範囲を返す。
+起動前の停止、人手実行待ち、生存を確かめられない停止も state を保持する。
+JSON と exit の対応は `SKILL.md` §8、細かな停止区分は `docs/codex-worker-run.md` を参照する。
 
 開始時に `GH_REPO` が空でなければ、`Blocked at: preflight`、`Reason: GH_REPO が空でない`、
 `Next step: GH_REPO を外して起動し直す` と返す。packet は書かず、今回は run dir と clone を作っていないと明記する。
@@ -62,7 +61,7 @@ worker を「停止中」にしないため)。
 Status: BLOCKED
 Blocked at: fetch | trailer | public-safety
 Reason: <public-safe な停止理由>
-Packet: #<issue> — 結果 "### <日付> worker/codex" を転記済み / 結果 "### <日付> orchestrator/claude" に停止を追記 / state: blocked / 次の入口は触らない / 起動の記録は転記で last_run に移した
+Packet: #<issue> — 結果 "### <日付> worker/codex" を転記済み / 結果の停止記録と state は実際の更新結果を記す / 次の入口は触らない / 起動の記録は転記で last_run に移した
 Run dir: <path>
 Next step: <fetch の失敗を人が調べる | fetch の前の照合が止めた .git の entry を、clone に git を実行する前に人が調べる | author が交代するなら新 branch + 新 PR に分ける | origin/main を人が確かめる | gate が止めた行を直す、または警告を人が確かめる>
 ```

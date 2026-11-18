@@ -301,7 +301,7 @@ self-test は `scripts/tests/packet-test.sh` (dir / list / check / publish) と 
 ### worker-update の入力と保存 (#706)
 
 `worker-update <issue> --stdin` は既存 packet の更新だけを行う。
-委譲の skill がこの口を使うのは後の PR で行い、今の委譲手順は変えない。
+委譲の skill と `personal-codex-worker-run` は、この口で packet を更新する。
 呼び出しの許可範囲は従来どおりで、この command の追加で worker の権限は広がらない。
 
 stdin は UTF-8 の JSON object 1 つで、上限は 64 KiB (65,536 byte)。
@@ -413,8 +413,11 @@ stderr にも人向けの診断を 1 行出す。本文の `entry`、`request`�
 ## worker 委譲との関係(#254)
 
 orchestrator (Claude) が packet を Codex の worker に委譲するときの、packet 側の規約。起動の
-機械的な手順 (herdr の tab / pane、完了判定、tab の後始末) は委譲 skill `personal-codex-worker` と
-その preflight (`personal-codex-worker-preflight`) が持ち、ここには packet に現れる約束だけを置く。
+機械的な手順は `personal-codex-worker-run` が持ち、委譲 skill `personal-codex-worker` が呼び出す。
+後始末は skill に残す。ここには packet に現れる約束だけを置く。
+以下の更新は `worker-update` の検査を通った場合に行う。
+照合・退避・転記の失敗で更新できなければ、state と起動記録を保持する。
+停止時の詳細は [codex-worker-run](codex-worker-run.md) を参照する。
 
 - **authorization と scope**: 起動 prompt が authorization、packet の `依頼` が scope (上の信頼
   モデルと同じ)。brief には `依頼` を要約せず verbatim で写す (orchestrator 著なので trusted。
@@ -465,8 +468,8 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
   `orchestrator/claude` の entry を書いて `state: blocked` にする。packet に `pr:` と `state: review` を入れるのは
   orchestrator (PR を出した側)。
 - **停止 (limit / 途中終了 / 質問)**: 最終 message が無い停止では worker の記録が残らないので、
-  orchestrator が `### <日付> orchestrator/claude` で停止理由 (limit の文言、exit code、末尾の
-  public-safe な要約) を書く (最終 message があれば上の転記)。どちらも `state: blocked` にし、
+  `collect` が `### <日付> orchestrator/claude` で固定の停止区分、exit、退避 file 名を書く。
+  最終 message が書式と gate を通る場合は、上の転記を使う。どちらも `state: blocked` にし、
   `次の入口` に続きの入り方 (下記) を書く。uncommitted な変更は
   staged / unstaged / untracked をすべて run directory に退避し (staged と unstaged は patch、
   untracked は file の写し)、その path を記録する。復元を確認するまで clone を消さない。

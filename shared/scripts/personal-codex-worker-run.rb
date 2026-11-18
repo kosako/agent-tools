@@ -21,7 +21,8 @@ module CodexWorkerRun
     collect: 結果を回収する。retry-empty: 1 回目の空の結果を再実行する。
     personal-codex-worker-run check --repo <root> --issue <N> --title <題名> --body-file <file> [--accept-warnings]
     check: 回収済みの commit と公開先を検査する。push と PR 作成は行わない。
-    --accept-warnings: 人が意図した内容だと確かめた警告だけを受け入れる。gate の拒否では止まる。
+    --accept-warnings: 呼び出し側は人が gate-publish.err を確かめたときだけ付ける。
+      script は exit 0 の warning をすべて受け入れる。gate の拒否では止まる。
     stdout: JSON 1 行。exit: 0 STARTED / DONE / READY、1 BLOCKED、2 入力の誤り、3 RUNNING。
   TEXT
   REASONS = {

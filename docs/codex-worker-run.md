@@ -8,7 +8,7 @@ Ruby 2.6 の標準 library、git、herdr、codex と配備済み script を使�
 packet の存在や本文だけで、委譲を始める許可があるとは扱いません。
 GitHub への書き込みは、この command の範囲外です。
 `check` は公開先と個人 project の判定に限り、gh で読み取ります。
-現行 skill と `LAUNCH.md` の手順は、#706 の最後の PR まで使います。
+skill と `LAUNCH.md` は、この command を呼ぶ通常の手順を定めます。
 
 ## 入力
 
@@ -83,25 +83,21 @@ file 操作などの予期しない失敗は、その段の区分で `io` を返
 `manual-completion-pending` です。
 同じ Issue の記録を先に検査するため、別の Issue の worker と区別できます。
 
-## 現行手順との対応
+## skill との責務の対応
 
-正本の手順は [SKILL.md](../shared/skills/personal-codex-worker/SKILL.md) と
-[LAUNCH.md](../shared/skills/personal-codex-worker/LAUNCH.md) です。
+指揮役の判断と通常の呼び出し例は [SKILL.md](../shared/skills/personal-codex-worker/SKILL.md) と
+[LAUNCH.md](../shared/skills/personal-codex-worker/LAUNCH.md) を参照します。
+JSON、file、処理の段の契約はこの文書に置きます。
 
-| 手順 | command の処理 |
+| skill | command の処理 |
 | --- | --- |
-| SKILL §1、LAUNCH §0 | 引数、packet の依頼と state、既存 run と workspace の生存確認 |
-| LAUNCH §1 | state directory の `agent-tools/worker-runs` を mode 700 にし、`<issue>.XXXXXX` を作る |
-| LAUNCH §2 | `<main root>-clones/<issue>` の snapshot を git 実行前に照合。無ければ `--no-hardlinks` で clone |
-| LAUNCH §2 の branch | local branch、origin の同名 branch、新規の順で解決。新規は main で fetch した origin/main の tip |
-| LAUNCH §2 の commit 前提 | identity、main と同じ実体の hook directory、実行可能な hook と隣の gate を確認 |
-| LAUNCH §3 | preflight JSON を保存。launch_argv と run directory の境界を確認 |
-| SKILL §4、LAUNCH §4 | 依頼を byte のまま brief に写し、固定の指示と最終 message の見出しを足す |
-| LAUNCH §4 の起動記録 | digest を前提に run-start を実行し、list の成功と記録の一致を確認 |
-| LAUNCH §5 | Issue tab を作成、または所有確認した既存 tab の最初の pane を下に分割して起動 |
-| SKILL §5、LAUNCH §6 | collect が完了記録を確認し、最大300秒ずつ待つ |
-| LAUNCH §7 | collect が終了を判定し、生出力と残った process を確認。retry-empty が空の結果を1回だけ再実行 |
-| SKILL §6、LAUNCH §8 | snapshot を照合し、結果を検査して転記。停止時は変更を退避して stop を記録 |
+| §1〜§3 | launch が記録・生存・clone・preflight を検査する。依頼と authorization は指揮役が持つ |
+| §4〜§5 | launch が brief と run script を生成し、run-start の後に起動する |
+| §6 | collect が完了を判定し、検査した結果を result または stop で記録する |
+| §6 の空の結果 | retry-empty が1回目だけ新しい run で同じ brief を起動する |
+| §7 | check が回収と公開前の検査を行う。push、PR 作成、review の記録は指揮役が行う |
+| §8 | JSON と exit を RESULT-FORMAT.md の人向けの返却へ対応させる |
+| §9 | 後始末は command の範囲外。LAUNCH.md §11 に従う |
 
 再利用 clone では、git を呼ぶ前に `last_run` の snapshot を照合します。
 `state: blocked` の場合は `run` を使い、無ければ `last_run` を使います。
@@ -149,6 +145,13 @@ codex の exit を zsh の `pipestatus[1]` で取り、16 桁 hex の nonce と�
 run directory が clone、`/tmp`、`$TMPDIR` の実体の内側なら起動しません。
 既存 tab の確認には、前の run の `tab-id` と pane の名前の両方を使います。
 tab や pane を閉じる操作は持ちません。
+
+snapshot が許可する変更は、worker が commit するための entry に限ります。
+`HEAD`、`index`、`COMMIT_EDITMSG`、`ORIG_HEAD`、`AUTO_MERGE`、loose object、
+`objects/pack/` の pack、`refs/heads/` と branch の reflog が対象です。
+設定、hook、info の変更や allowlist 外の追加・削除は停止します。
+clone の自動 maintenance は作成直後に無効化します。
+この照合は sandbox の代わりではなく、回収前に危険な git 設定を読ませないための検査です。
 
 この確認は現在の packet と herdr の観測に基づきます。同時に複数の caller を起動する lock ではありません。
 起動記録のない外部 terminal の worker や、snapshot の照合中の差し替えまでは証明しません。
@@ -241,7 +244,9 @@ pane の rename または run が失敗した場合も、launch.json の pane_id
 brief は、この節を orchestrator の判断待ちで作業を止める理由に限ります。
 実行できなかった test や読めなかった process 一覧は「未完」に書きます。
 止まらずに終えた場合は、停止理由に「なし」とだけ書きます。
-置き換えの順序と path 境界は LAUNCH §8 と同じです。
+置き換えは clone 内の path を repo 相対、clone 自体を `<clone>`、run dir を `<run dir>` にします。
+それ以外の home は `<home>` にします。path の区切りで一致した文字列だけを置き換えます。
+home-path 以外の finding は置き換えず停止します。
 原文を残して `result.redacted.md` を作り、転記 entry の先頭に注記を足します。
 gate の stderr は `gate.err` に控えます。本文や診断の内容は stdout と stderr に出しません。
 
@@ -263,7 +268,7 @@ gate の stderr は `gate.err` に控えます。本文や診断の内容は std
 | clone | snapshot-mismatch | clone で git を呼ばず、退避も packet の更新もしない |
 | clone | backup | 退避が未完。backup_step に status / staged / unstaged / untracked を返し、packet は保持 |
 
-`RESULT-FORMAT.md` の停止時の state 規則とは、次の点が異なります。
+`RESULT-FORMAT.md` には、次の state と実際の書き込み結果を反映します。
 transcription で停止しても、それを理由に packet を blocked にする更新は行いません。
 packet の更新前の停止なら、回収の再試行に備えて元の state と起動記録を保持します。
 書き込み後に停止した場合は、packet.written を確認し、packet を読み直します。
@@ -301,11 +306,35 @@ workspace の ID が無ければ `workspace`、herdr の応答を読めなけれ
 この workspace の検査と tab の検査の `blocked_at` は `launch-path` です。
 先に別の Issue の未回収 run が見つかれば、起動と同じ `records` の区分で止まります。
 この場合は LAUNCH.md §10 の人手の手順を続けます。
-新しい run directory と nonce の run script を用意し、人に1回だけ渡して起動し直します。
-元の script の再実行では代えません。この手順用の subcommand は追加しません。
-手で作った新しい run には `launch.json` がありません。
-その run を `collect` に渡すと、`launch-record` の `no-launch-record` で止まります。
-回収も現行の人手の手順で行います。
+通常の起動を手で組む代替経路には使いません。
+
+### 人手実行だけの空の結果の回復
+
+pane が無い手渡しの1回目が、nonce 一致・exit 0・結果なしで終わった場合に限ります。
+新しい run directory と nonce の run script を用意し、人に1回だけ渡します。
+元の script の再実行では代えません。この手順用の subcommand はありません。
+
+1. 元の起動記録と完了記録を確かめます。worker がまだ動いていれば再実行しません。
+2. worker の書込先の外に新しい run directory を作ります。
+   元の `preflight.json` で snapshot を照合してから preflight をやり直します。
+   照合の失敗では clone に git を実行せず、元の記録を残して人に返します。
+3. 元の `brief.md` を byte のまま写します。新しい preflight の `launch_argv` から run script を作ります。
+   `<run dir>/result.md` だけを置き換え、flag を足し引きしません。
+   path、nonce、argv は要素ごとに shell literal 化します。
+   clone に cd し、stdout / stderr を codex.log に tee します。
+   codex の exit は zsh の `pipestatus[1]` から取り、新しい nonce とともに done.txt に書きます。
+4. `worker-update` の `run-start` で、元の run を `expected_run` に指定します。
+   新しい run を記録して読み直した後だけ、人に run script を渡します。
+5. この手作りの run には `launch.json` がありません。`collect` は `no-launch-record` で止まります。
+   caller が nonce、exit、結果の6見出し、snapshot、public-safety gate を確認します。
+   本文の置換と転記は上の collect と同じ契約に従い、`worker-update` の `result` を使います。
+   pane が無いため pane.log の保存は省きます。
+6. 2回目も空なら `executor-result` で停止します。終了失敗や limit も再実行しません。
+   snapshot の照合後、staged と unstaged を別の binary patch、untracked を tar に退避します。
+   patch は `--no-textconv --no-ext-diff`、tar の名前は NUL 区切りの list で渡します。
+   退避が通ったら `worker-update` の `stop` を使います。失敗なら記録を保持して人に返します。
+
+原文、前の run directory、clone を残します。caller が代わりに commit しません。
 
 結合検査は `scripts/tests/codex-worker-collect-test.sh` です。
 launch の検査と fixture を共有し、herdr と codex は偽物を使います。
@@ -384,14 +413,17 @@ exit 0 で warning がある場合は、`--accept-warnings` が無ければ `gat
 一度目の `check` が main に branch を取り込んでいても、同じ tip なら再度の取り込みは通ります。
 warning を受け入れても、公開先と個人 project の目印の検査は行います。
 `READY` を得た後、返された `head_oid` で下記の push の手順へ進みます。
-これは現行の `LAUNCH.md` §9 と同じく、人が確認した警告で進む手順です。
+警告の確認を script が代行するものではありません。
 
 題名と本文に修正が必要な場合は、その内容を直して `check` をやり直します。
 commit の差分や message に修正が必要な場合は、履歴を書き換える必要があります。
 各 commit の差分も検査するので、後続の commit で削除するだけでは警告は消えません。
 書き換えた branch をそのまま取り込むと、main に取り込み済みの tip に対して non-fast-forward になります。
 その場合、`check` は `fetch` で止まります。
-人が対象と履歴を確認し、clone の branch と main の branch の ref を修正後の履歴に付け替えます。
+人が対象と履歴を確認し、clone の中で rebase、amend などの commit の操作で書き換えます。
+clone に fetch や config の変更をしません。snapshot の照合で許可されない変更を避けるためです。
+main では clone の snapshot を照合し、clone から修正後の objects を取り込んでから ref を付け替えます。
+objects を取り込む前に、clone だけにある OID へ main の ref を付け替えません。
 この履歴の書き換えと ref の付け替えは、`check` と worker の範囲外です。
 人の作業が終わってから、指揮役が `check` をやり直します。
 
@@ -426,7 +458,7 @@ owner を判定できない場合は `marker: skipped` とします。
    すでに `review` で PR 番号も一致する場合は、そのまま保持します。
 
 これらの push、PR 作成、packet の更新は `check` の処理に含めません。
-現行 skill の手順の切り替えは #706 の最後の PR で行います。
+通常の手順の配線は `scripts/tests/codex-worker-wiring-test.sh` でも検査します。
 
 結合検査は `scripts/tests/codex-worker-check-test.sh` です。
 launch と collect の fixture を共有し、一時 directory を cwd にして実行します。
