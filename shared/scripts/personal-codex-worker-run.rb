@@ -19,8 +19,9 @@ module CodexWorkerRun
     personal-codex-worker-run collect --repo <root> --issue <N> [--wait-minutes <M>]
     personal-codex-worker-run retry-empty --repo <root> --issue <N>
     collect: 結果を回収する。retry-empty: 1 回目の空の結果を再実行する。
-    personal-codex-worker-run check --repo <root> --issue <N> --title <題名> --body-file <file>
+    personal-codex-worker-run check --repo <root> --issue <N> --title <題名> --body-file <file> [--accept-warnings]
     check: 回収済みの commit と公開先を検査する。push と PR 作成は行わない。
+    --accept-warnings: 人が意図した内容だと確かめた警告だけを受け入れる。gate の拒否では止まる。
     stdout: JSON 1 行。exit: 0 STARTED / DONE / READY、1 BLOCKED、2 入力の誤り、3 RUNNING。
   TEXT
   REASONS = {
@@ -132,15 +133,21 @@ module CodexWorkerRun
       allowed = %w[--repo --issue]
       allowed += %w[--branch --round] if @subcommand == "launch"
       allowed << "--wait-minutes" if @subcommand == "collect"
-      allowed += %w[--title --body-file] if @subcommand == "check"
+      allowed += %w[--title --body-file --accept-warnings] if @subcommand == "check"
       opts = {}
       until args.empty?
         key = args.shift
-        unless allowed.include?(key) && !opts.key?(key) && !args.empty?
+        unless allowed.include?(key) && !opts.key?(key)
           raise Stop.new("input", "BLOCKED", 2)
         end
+        if key == "--accept-warnings"
+          opts[key] = "true"
+          next
+        end
+        raise Stop.new("input", "BLOCKED", 2) if args.empty?
         opts[key] = args.shift
       end
+      @accept_warnings = opts.key?("--accept-warnings")
       @issue = opts["--issue"].to_i if opts["--issue"].to_s.match?(/\A[0-9]+\z/)
       valid = opts.values.all? { |v| v.valid_encoding? && !v.match?(/[[:cntrl:]]/) } &&
               @issue && @issue.positive? && opts["--repo"].to_s.start_with?("/") &&
@@ -887,7 +894,8 @@ module CodexWorkerRun
       _out, rc, err = capture([sibling("personal-public-safety-gate"), "--stdin"], material)
       File.open(File.join(@run, "gate-publish.err"), "ab") { |file| file.write(err) }
       stop("publish-gate") unless rc == 0
-      stop("gate-warning") if err.b.match?(/^public-safety-gate: warning:/)
+      @accepted_warnings = err.b.match?(/^public-safety-gate: warning:/)
+      stop("gate-warning") if @accepted_warnings && !@accept_warnings
     end
 
     def check_destination
@@ -931,9 +939,11 @@ module CodexWorkerRun
       stage("publish-gate", "public-safety") { check_publish_gate }
       stage("destination", "public-safety") { check_destination }
       marker = stage("marker", "public-safety") { check_marker }
-      puts JSON.generate("status" => "READY", "issue" => @issue, "branch" => @branch,
-                         "base_oid" => @base, "head_oid" => @head, "commits" => @commit_count,
-                         "slug" => @slug, "style_findings" => @style_findings, "marker" => marker, "run_dir" => @run)
+      result = { "status" => "READY", "issue" => @issue, "branch" => @branch,
+                 "base_oid" => @base, "head_oid" => @head, "commits" => @commit_count,
+                 "slug" => @slug, "style_findings" => @style_findings, "marker" => marker, "run_dir" => @run }
+      result["accepted_warnings"] = true if @accepted_warnings
+      puts JSON.generate(result)
       0
     end
 

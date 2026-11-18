@@ -98,7 +98,7 @@ def git_events
   File.readlines(ENV.fetch("FAKE_GIT_LOG")).map { |line| JSON.parse(line) }
 end
 
-def invoke_check(expected = 0, env = {}, title: "検査を追加する (#7)", body: BODY)
+def invoke_check(expected = 0, env = {}, title: "検査を追加する (#7)", body: BODY, args: [])
   before = File.binread(PACKET)
   main_head = git(MAIN, "rev-parse", "HEAD")
   # Check must never write into the clone's .git, including refs and FETCH_HEAD.
@@ -110,7 +110,7 @@ def invoke_check(expected = 0, env = {}, title: "検査を追加する (#7)", bo
   clone_before = snapshot.call
   File.write(ENV.fetch("FAKE_GIT_LOG"), "")
   File.write(ENV.fetch("FAKE_CHECK_LOG"), "")
-  result = launch(expected, env, [], explicit: ["check", "--repo", MAIN, "--issue", "7", "--title", title, "--body-file", body]) do |out, err|
+  result = launch(expected, env, [], explicit: ["check", "--repo", MAIN, "--issue", "7", "--title", title, "--body-file", body, *args]) do |out, err|
     assert(err.empty?, "check stderr stays empty")
     %w[PRIVATE-BODY publish-denied-value].each do |value|
       assert(!out.include?(value) && !err.include?(value), "private material does not leak")
@@ -248,15 +248,32 @@ failure("public-safety", "merge-commit")
 assert(check_events.empty?, "merge stops style and gate")
 assert(File.read(File.join(RUN, "gate-publish.err")).include?(git(CLONE, "rev-parse", "HEAD")), "merge oid diagnostic retained")
 
-branch
-commit
+name = branch
+head = commit
 failure("public-safety", "publish-gate", { "FAKE_GATE_FAIL" => "1" })
 assert(File.read(File.join(RUN, "gate-publish.err")).include?("PRIVATE-BODY"), "gate stderr saved only in run")
 failure("public-safety", "gate-warning", { "FAKE_GATE_WARNING" => "1" })
 assert(check_events.none? { |a| a.first == "gh" }, "gate warning prevents gh")
+assert(git(MAIN, "rev-parse", "refs/heads/#{name}") == head, "warning stop already imported branch")
+result = invoke_check(0, { "FAKE_GATE_WARNING" => "1" }, args: ["--accept-warnings"])
+assert(result["status"] == "READY" && result["accepted_warnings"] == true && result["head_oid"] == head,
+       "accepted warning retries the same imported head")
+assert(check_events.map(&:first) == %w[personal-ja-style-check personal-public-safety-gate gh gh gh personal-work-marker-check],
+       "accepted warning still checks destination and marker")
+assert(File.read(File.join(RUN, "gate-publish.err")).include?("public-safety-gate: warning:"), "accepted warning retained")
+failure("public-safety", "gate-warning", { "FAKE_GATE_WARNING" => "1" })
+result = invoke_check(0, {}, args: ["--accept-warnings"])
+assert(!result.key?("accepted_warnings"), "no warning was accepted when gate is clean")
+failure("public-safety", "publish-gate", { "FAKE_GATE_FAIL" => "1" }, args: ["--accept-warnings"])
 failure("public-safety", "publish-gate", { "FAKE_GATE_WARNING" => "1", "FAKE_GATE_FAIL" => "1" })
 assert(File.read(File.join(RUN, "gate-publish.err")).include?("public-safety-gate: warning:"), "failed gate warning retained")
 assert(check_events.none? { |a| a.first == "gh" }, "failed gate with warning prevents gh")
+failure("public-safety", "publish-gate", { "FAKE_GATE_WARNING" => "1", "FAKE_GATE_FAIL" => "1" }, args: ["--accept-warnings"])
+assert(check_events.none? { |a| a.first == "gh" }, "accepting warnings cannot bypass a failed gate")
+failure("public-safety", "destination", { "FAKE_GATE_WARNING" => "1", "FAKE_GH_VIEW_FAIL" => "1" }, args: ["--accept-warnings"])
+failure("public-safety", "marker", { "FAKE_GATE_WARNING" => "1" }, title: "wrong issue (#8)", args: ["--accept-warnings"])
+result = invoke_check(2, {}, args: ["--accept-warnings", "--accept-warnings"])
+assert(result["reason_code"] == "input", "duplicate accept-warnings rejected")
 result = invoke_check(0, {}, title: "実装する—検査する (#7)")
 assert(result["style_findings"] > 0, "style findings counted without blocking")
 

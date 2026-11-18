@@ -315,7 +315,7 @@ packet、snapshot の照合、public-safety gate の検出処理は実物で検�
 ## check の入力と出力
 
 ```text
-personal-codex-worker-run check --repo <main worktree の root> --issue <N> --title <題名> --body-file <file>
+personal-codex-worker-run check --repo <main worktree の root> --issue <N> --title <題名> --body-file <file> [--accept-warnings]
 ```
 
 対象は完了の転記後の `last_run` です。packet の state は `open` または `review` を受け付けます。
@@ -335,6 +335,8 @@ personal-codex-worker-run check --repo <main worktree の root> --issue <N> --ti
 `commits` はその範囲の commit 数で、0件は成功しません。
 `style_findings` は題名と本文の文体の指摘数です。指摘だけでは止めません。
 `marker` は個人 project の目印が通れば `ok`、対象外または判定不能なら `skipped` です。
+`--accept-warnings` を付け、gate の警告を受け入れて成功した場合は `"accepted_warnings":true` も返します。
+警告が無い場合は、この項目を返しません。
 
 ## check の段と停止
 
@@ -372,17 +374,26 @@ public-safety gate には累積差分、各 commit の差分、全 message、bra
 差分の取得には `--text --no-textconv --no-ext-diff` を指定します。
 材料の git が1つでも失敗すれば、部分的な内容だけで gate を通しません。
 git と gate の stderr は `gate-publish.err` に保存します。
-gate の exit 0 だけでは足りず、`public-safety-gate: warning:` の行が無いことも必要です。
-exit が 0 でなければ、warning の有無によらず `publish-gate` で止まります。
-exit 0 で warning がある場合だけ `gate-warning` で止まります。
+既定では、gate の exit 0 に加え、`public-safety-gate: warning:` の行が無いことも必要です。
+exit が 0 でなければ、warning や `--accept-warnings` の有無によらず `publish-gate` で止まります。
+exit 0 で warning がある場合は、`--accept-warnings` が無ければ `gate-warning` で止まります。
 
 `gate-warning` で止まったら、指揮役は `gate-publish.err` を人に見せます。
-現行の `LAUNCH.md` §9 は、人が意図した内容だと確かめた後の push を認めています。
-`check` には warning を受け入れる option がなく、停止時は `head_oid` も返しません。
-そのため、`check` を使う経路では、人の確認後も警告の原因となる公開内容を直して再検査します。
-各 commit の差分も検査するので、後続の commit で削除するだけでは警告は消えません。
+人が意図した内容だと確かめたときだけ、`--accept-warnings` を付けて `check` をやり直します。
+指揮役は人の確認なしに、この option を付けません。
+一度目の `check` が main に branch を取り込んでいても、同じ tip なら再度の取り込みは通ります。
+warning を受け入れても、公開先と個人 project の目印の検査は行います。
 `READY` を得た後、返された `head_oid` で下記の push の手順へ進みます。
-内容を直せない場合は停止を保ち、warning の受け入れだけで `check` の後段へ進めません。
+これは現行の `LAUNCH.md` §9 と同じく、人が確認した警告で進む手順です。
+
+題名と本文に修正が必要な場合は、その内容を直して `check` をやり直します。
+commit の差分や message に修正が必要な場合は、履歴を書き換える必要があります。
+各 commit の差分も検査するので、後続の commit で削除するだけでは警告は消えません。
+書き換えた branch をそのまま取り込むと、main に取り込み済みの tip に対して non-fast-forward になります。
+その場合、`check` は `fetch` で止まります。
+人が対象と履歴を確認し、clone の branch と main の branch の ref を修正後の履歴に付け替えます。
+この履歴の書き換えと ref の付け替えは、`check` と worker の範囲外です。
+人の作業が終わってから、指揮役が `check` をやり直します。
 
 公開先は main で `gh repo view --json nameWithOwner` を読み、slug の形を確認します。
 origin の push URL は `LAUNCH.md` §9 の6形式のいずれかとの完全一致が必要です。
