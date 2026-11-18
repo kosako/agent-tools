@@ -126,7 +126,7 @@ check.call(worker, "## 7. PR (orchestrator の操作)", "check 経由で題名�
 check.call(worker, "## 7. PR (orchestrator の操作)", "指摘を読む句",
            "文体の指摘は直すか、そのままにする理由を持つ。")
 check.call("shared/skills/personal-codex-worker/LAUNCH.md", "## 9. 回収 (fetch) と trailer 検査と PR", "投稿前の検査",
-           "push の結果を確認し、成功したときだけ題名と本文を `personal-post-check` に通す。")
+           "受け入れ後に題名と本文を書き、push の前に `personal-post-check` に通す。")
 
 # 雛形を検査にかける。code block の中は検査が読まないので、block の中身を取り出して渡す。取り出せたかは file ごとに
 # 別々に見る (連結後の文字列で見ると、TEMPLATES.md だけで両方の目印が揃い、RESULT-FORMAT.md の block が無くても通る)。

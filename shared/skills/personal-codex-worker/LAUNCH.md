@@ -30,6 +30,8 @@ script が無ければ配備を直す。通常の起動を手で組む経路は�
 ```
 
 回収。待つ上限は既定120分、例では60分。上限で worker を止めない。
+Claude Code では Bash tool の background (`run_in_background`) で走らせ、完了の通知を待つ。
+foreground の command には時間の上限があり、`collect` は最大120分待つため。
 
 ```sh
 "$runner" collect --repo "$main" --issue "$issue" --wait-minutes 60
@@ -41,13 +43,14 @@ script が無ければ配備を直す。通常の起動を手で組む経路は�
 "$runner" retry-empty --repo "$main" --issue "$issue"
 ```
 
-受け入れ後の公開前検査。stdout を file に保存し、exit と JSON を両方読む。
+受け入れ後の公開前検査。先に §9 の題名と本文の `personal-post-check` を済ませる。
+stdout を file に保存し、exit と JSON を両方読む。
 
 ```sh
 "$runner" check --repo "$main" --issue "$issue" --title "$title" --body-file "$body_file" > "$check_file"
 ```
 
-人が `gate-publish.err` を確かめたときだけ `--accept-warnings` を付ける。
+人が `gate-publish.err` を確かめて公開を認めたときだけ `--accept-warnings` を付けて `check` をやり直す。
 人の確認なしに `--accept-warnings` を付けない。exit 0 の warning をすべて受け入れる option であり、gate の拒否では止まる。
 
 ## 2. status ごとの次の手
@@ -78,11 +81,33 @@ script が無ければ配備を直す。通常の起動を手で組む経路は�
 - `limit` / `executor-exit`: 停止と退避の結果を返す。limit は reset を待ち、自動で再起動しない。
 - `transcription` / `backup`: 診断の file と止まった段を人が調べる。本文を停止結果に写さない。
   packet を更新できていなければ、その state と起動記録を保持する。
-- `gate-warning`: `gate-publish.err` を人に見せ、確認後だけ `check` に `--accept-warnings` を付ける。
+- `gate-warning`: 人が `gate-publish.err` を確かめて公開を認めたときだけ `--accept-warnings` を付けて `check` をやり直す。
 - `fetch` / `trailer` / `public-safety`: push しない。原因を直して `check` をやり直す。
   commit の履歴の修正は clone の中の rebase、amend などで行う。clone に fetch や config の変更をしない。
   main の ref は clone から objects を取り込んでから付け替える。人が対象と履歴を確認して行う。
   詳細と non-fast-forward の扱いは `docs/codex-worker-run.md`。
+
+一覧に無い `reason_code` は `Status: BLOCKED` で人に返し、自分で回避しない。
+clone の hook の設定を自分で書き換えない。`Next step` には hook の設定の出所を人が確かめると書く。
+
+`check` が BLOCKED を返したときは `worker-update` の `stop` を記録しない。
+packet は `open` のまま置き、既に `review` ならその状態を保つ。
+`check` は open か review だけを受け付け、blocked にすると再検査できず、原因を直さない限り同じ段で止まるため。
+停止の区分と理由と人の次の手は返却の `Next step` に書き、直した後に `check` をやり直す。
+worker に直させるときは §4 の `round` で修正 round の項を依頼に足してから `launch` で起動する。
+
+### 人が起動の記録の破棄を決めたとき
+
+対象は、`collect` が RUNNING を返したが worker が動いていないと人が確かめた run や、
+人手の hand-off で渡したまま起動しなかった run。
+
+1. 人が pane と process を確かめ、記録の破棄を決める。生存を確かめられなければ記録を残す。
+2. 指揮役は packet を読み直し、破棄を決めた理由を entry に書く。
+   `worker-update` の `stop` で `blocked` にし、`next` に再開の入口を記す。`run` は保持する。
+3. `launch` で起動し直す。`run-start` が blocked を open に戻し、記録を新しい run に置き換える。
+
+frontmatter を手で書き換えず、clone の commit と未 commit の変更を消さない。
+`stop` の前提は open。別の state なら破棄用の架空の依頼を作らず、人に返す。
 
 `launch-path` は、生成済みの run script を渡せる場合と、生存や所有を確認できない場合を区別する。
 `launch.json`、run script、起動記録が揃い、未起動と確認できた場合だけ §10 の未起動 hand-off を使う。
@@ -90,7 +115,7 @@ script が無ければ配備を直す。通常の起動を手で組む経路は�
 ## 4. packet の更新
 
 packet は `personal-packet worker-update <issue> --stdin` の操作で書く。
-指揮役が使う `round`、`review`、`check` 停止後の `stop` も、手で frontmatter を書き換えない。
+指揮役が使う `round`、`review`、起動記録を破棄するときの `stop` も、手で frontmatter を書き換えない。
 入力は `docs/agent-packets.md` の6操作の schema に従う。
 毎回 packet を読み直し、その byte 列の SHA-256 を `expected_sha256` に指定する。
 digest 不一致では書かない。読み直した状態と依頼を確認してからやり直す。
@@ -102,7 +127,7 @@ digest 不一致では書かない。読み直した状態と依頼を確認し�
 `round` は許可された修正内容を依頼に追記し、review なら state を `open` に戻す。
 blocked は保持し、次の `launch` の `run-start` で `open` に戻す。
 `review` は PR 番号を記録して state を `review` にする。
-`stop` は `open` が前提。`check` の停止理由は固定文で書き、`next` は現在の本文をそのまま渡す。
+`stop` は `open` が前提。人が起動記録の破棄を決めた場合は §3 に従う。
 `review` で停止し、修正依頼がまだ無いときは、前提を満たすためだけの `round` を作らず判断を待つ。
 
 ## 5. 起動の境界
@@ -140,10 +165,15 @@ worker に packet と GitHub を開けない。run dir は worker の書込先�
 
 ## 9. 回収 (fetch) と trailer 検査と PR
 
-通常の回収と公開前検査は §1 の `check` を使う。手で fetch や gate の pipeline を組まない。
+受け入れ後に題名と本文を書き、push の前に `personal-post-check` に通す。
+exit 1 なら `check` も push もせず、本文と出力を人に見せる。人が公開を認めたときだけ先へ進む。
+exit 2 は検査不能として止め、原因を直してかけ直す。
+exit 3 は指摘を読んで直すか、理由を持って `--style-reviewed` を付けてかけ直す。
+検査が exit 0、または exit 1 の後に人が公開を認めた場合だけ、§1 の `check` を呼ぶ。
+手で fetch や gate の pipeline を組まない。検査と公開は別の呼び出しにする。
 以下は `check` が exit 0 で `READY` を返した後だけ行う。
 JSON の `head_oid`、`branch`、`slug` をそれぞれ変数に読み、検査した OID を指定する。
-題名や本文を直したら `check` をやり直す。
+題名や本文を直したら `personal-post-check` からやり直す。
 
 ```sh
 head_oid=$(jq -er 'select(.status == "READY") | .head_oid' "$check_file") || exit 1
@@ -152,9 +182,8 @@ slug=$(jq -er '.slug' "$check_file") || exit 1
 git -C "$main" push origin "${head_oid}:refs/heads/${branch}"
 ```
 
-push の結果を確認し、成功したときだけ題名と本文を `personal-post-check` に通す。
-`docs/post-check.md` のとおり、文体の指摘は直すか理由を持つ。
-exit 0 のときだけ、別の呼び出しで次を実行する。個人 project 以外の公開は対象 repo の許可も確かめる。
+push の結果を確認し、成功したときだけ別の呼び出しで PR を作る。
+個人 project 以外の公開は対象 repo の許可も確かめる。検査の詳細は `docs/post-check.md`。
 
 ```sh
 gh pr create --repo "$slug" --base main --head "$branch" --title "$title" --body-file "$body_file"
@@ -193,6 +222,7 @@ esac
   `Next step` は tab と pane を見て続行か中断かを決めること。
   続行なら pane を監視して `done.txt` を待ち、`collect` で回収する。
   中断なら人が process を止めてから `collect` で停止を記録する。待つ側は process を止めない。
+  完了記録が無く RUNNING のままなら、人が §3 の起動記録の破棄を判断する。
 
 ## 11. 後始末 (packet が done になったとき。後始末モード)
 
@@ -219,7 +249,7 @@ main で slug を取得・検証し、origin の push URL がその slug の Git
 この確認で得た `slug` を PR の metadata の取得にも渡す (以前の run の値は使わない)。
 
 ```sh
-# list の終了コードを先に確かめてから照合する (§4 と同じく終了コードを保持する形)
+# list の出力を変数に受け、失敗したら止める。pipe で終了コードを失わない
 packets=$("$packet_cli" list --json --all) || exit 1
 row=$(printf '%s' "$packets" | jq -ce --argjson issue "$issue" '
   [.[] | select(.issue == $issue)] | select(length == 1) | .[0]
@@ -243,14 +273,14 @@ printf '%s' "$meta" | jq -e --arg branch "$branch" '.state == "MERGED" and .head
 ws=$HERDR_WORKSPACE_ID
 [ -n "$ws" ] || exit 1
 label=<'#<issue>' の shell literal>
-# §5 と同じく、終了コードと JSON の形を確かめてから読む
+# 終了コードと JSON の形を確かめてから読む
 tabs=$(herdr tab list --workspace "$ws") || exit 1
 panes=$(herdr pane list --workspace "$ws") || exit 1
 printf '%s' "$tabs"  | jq -e '.result.tabs  | type == "array"' >/dev/null || exit 1
 printf '%s' "$panes" | jq -e '.result.panes | type == "array"' >/dev/null || exit 1
 printf '%s' "$tabs" \
   | jq -r --arg label "$label" '.result.tabs[] | select(.label == $label) | .tab_id'
-# 0 件なら tab= (閉じる tab は無い)。1 件なら、§5 の所有の確認 (最後の run dir = packet の last_run の tab-id との
+# 0 件なら tab= (閉じる tab は無い)。1 件なら、下の所有の確認 (最後の run dir = packet の last_run の tab-id との
 # 一致 + 命名) を通り、その tab のどの pane の foreground にも codex がいないことを確かめてから、その ID を tab= に
 # 控える (閉じるのは「片付ける」の段)
 ```
@@ -262,6 +292,24 @@ printf '%s' "$tabs" \
   できない、のどれかなら、tab にも clone にも触らず `Blocked at: cleanup` とし、人に「tab `#<issue>` を
   確かめてください」と伝える (人の tab と、走っている worker を閉じない。一覧が読めないことを「0 件」と
   取り違えない)。
+
+所有は、記録した ID と命名の両方で確かめる。上で1件と確認した tab の ID を `tab` に入れてから実行する。
+その tab の pane が1つ以上あり、label がすべて `worker-<issue>` か `worker-<issue>-r<N>` のときだけ通す。
+
+```sh
+prev_tab=$(cat "$prev_run/tab-id") || exit 1
+[ "$prev_tab" = "$tab" ] || exit 1
+printf '%s' "$panes" | jq -e --arg tab "$tab" --arg issue "$issue" '
+  [.result.panes[] | select(.tab_id == $tab)] as $p
+  | ($p | length) > 0
+    and all($p[]; (.label // "") | test("^worker-" + $issue + "(-r[0-9]+)?$"))' >/dev/null || exit 1
+```
+
+jq が exit 0 のときだけ所有を確かめたとみなす。file の欠けや label の欠けでも止める。
+各 pane について `herdr pane process-info --pane <pane-id>` を呼び、終了コードと JSON の形を確かめる。
+`result.process_info.foreground_processes[].name` に `codex` があるかを見る。
+居る、または判定できない場合は `Blocked at: cleanup` で止める。
+
 - orchestrator 自身がいる tab (`personal-codex-review` の review pane もここに置かれる) は、記録した
   tab ID と一致せず、pane の名前も `worker-<issue>` の形でないので、閉じる対象にならない。
 
@@ -278,7 +326,7 @@ lstat_kind() {
       puts "absent"
     end' "$1"
 }
-clone=<§2 の置き場 (<main worktree>-clones/<issue>) の path の shell literal>
+clone=<SKILL.md §3 の置き場 (<main worktree>-clones/<issue>) の path の shell literal>
 clone_root=
 kind=$(lstat_kind "$clone") || exit 1
 case "$kind" in
@@ -287,14 +335,14 @@ case "$kind" in
     want=$(jq -er '.clone_root' "$prev_run/preflight.json") || exit 1
     clone_root=$(ruby -e 'puts File.realpath(ARGV[0])' "$clone") || exit 1   # 中に cd しない
     [ "$clone_root" = "$want" ] || exit 1      # 最後の run が検査した clone が、置き場の path の実体
-    cleaned=${clone_root%/*}/.cleaned          # 退避先は同じ置き場の下 (§2 の <issue> と名前が衝突しない)
+    cleaned=${clone_root%/*}/.cleaned          # 退避先は同じ置き場の下 (SKILL.md §3 の <issue> と名前が衝突しない)
     dest=${cleaned}/${issue}-$(date -u +%Y%m%dT%H%M%SZ)
     ck=$(lstat_kind "$cleaned") || exit 1
     case "$ck" in absent|dir) ;; *) exit 1 ;; esac   # .cleaned が symlink や file なら移さない
     dk=$(lstat_kind "$dest") || exit 1
     [ "$dk" = absent ] || exit 1               # 退避先が既に在れば何もしない
     # worker の pane (worker-<issue>[-r<N>]) のどの foreground にも codex がいない (上の tab の確認で読んだ
-    # $panes を、§5 の命名で絞って見る)
+    # $panes を、この節の命名で絞って見る)
     ;;
   *) exit 1 ;;                                 # symlink / file などは置き場の clone と確かめられない
 esac

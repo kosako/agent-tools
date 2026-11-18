@@ -226,6 +226,10 @@ home-path だけの finding は script が path の区切りで置き換え、�
 
 受け入れたら、PR の題名と本文を依頼と結果から書く。worker の本文をそのまま貼らない。
 割当の残量と取得元も写さない。本文の file は main と clone の外に置く。
+題名と本文を `personal-post-check` に通す。exit 1 なら `check` も push もせず、本文と出力を人に見せる。
+人が公開を認めたときだけ先へ進む。exit 2 は検査不能として止め、原因を直してかけ直す。
+exit 3 は指摘を読んで直すか、理由を持って `--style-reviewed` を付けてかけ直す。
+検査が exit 0、または exit 1 の後に人が公開を認めた場合だけ、次の検査へ進む。
 `personal-codex-worker-run check` を題名と本文を渡して呼ぶ。
 `check` が snapshot、fetch、全 commit の Codex trailer、merge commit の不在を検査する。
 累積差分・各 commit の差分・全 message・branch 名・題名と本文を public-safety gate に通す。
@@ -233,14 +237,14 @@ home-path だけの finding は script が path の区切りで置き換え、�
 
 `check` は題名と本文を `personal-ja-style-check --stdin --json` に通す。
 文体の指摘は直すか、そのままにする理由を持つ。個人 project では目印の検査も `check` が行う。
-題名と本文は PR 作成前に `personal-post-check` に通す。結果を読んでから別の呼び出しで投稿する。
+結果を読んでから別の呼び出しで投稿する。
 文体・目印・gate の検査は `docs/post-check.md` に従う。
 
 `gate-warning` で止まったら `gate-publish.err` を人に見せる。
-人が `gate-publish.err` を確かめたときだけ `--accept-warnings` を付ける。
+人が `gate-publish.err` を確かめて公開を認めたときだけ `--accept-warnings` を付けて `check` をやり直す。
 人の確認なしに `--accept-warnings` を付けない。
 この option は exit 0 の warning をすべて受け入れる。gate の拒否では止まる。
-本文や commit を直したら `check` をやり直す。履歴の修正は `LAUNCH.md` §3 を参照する。
+本文を直したら `personal-post-check` から、commit を直したら `check` からやり直す。履歴の修正は `LAUNCH.md` §3 を参照する。
 
 `READY` のときだけ、`check` が返した `head_oid` を指定して push する。
 branch の現在の tip で代えない。具体的な push と PR 作成は `LAUNCH.md` §9 に従う。
@@ -250,10 +254,11 @@ PR 作成後は `personal-packet worker-update <issue> --stdin` の `review` 操
 修正 round の push 後も同じ操作を行う。既に PR 番号と state が一致する場合は保持する。
 review は `personal-review-request` の Claude route に渡す。
 
-`check` の停止では push と PR 作成を行わない。script は packet を書かない。
-`open` なら `worker-update` の `stop` 操作で区分と固定の理由を記録する。
-`next` には現在の次の入口をそのまま渡す。`review` なら許可された修正依頼を `round` で記録してから行う。
-依頼が無い場合は判断を待ち、state を変えるためだけの依頼は作らない。
+`check` が BLOCKED を返したときは `worker-update` の `stop` を記録しない。
+packet は `open` のまま置き、既に `review` ならその状態を保つ。
+`check` は open か review だけを受け付け、blocked にすると再検査できず、原因を直さない限り同じ段で止まるため。
+停止の区分と理由と人の次の手は、返却の `Next step` に書く。直した後に `check` をやり直す。
+worker に直させるときは `worker-update` の `round` で修正 round の項を依頼に足してから `launch` で起動する。
 merge はこの skill の範囲外。運用 instruction の「個人 project の GitHub の操作と merge」に従う。
 
 ## 8. 返却形式

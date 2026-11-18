@@ -848,7 +848,7 @@ for dir in objects refs logs; do
   rm "$clone/.git/$dir"
   mv "$tmp/$dir.saved" "$clone/.git/$dir"
 done
-# 実際の流れ (#493): LAUNCH.md §2 と同じく clone の直後に自動 maintenance を止め、worker の branch を切ってから
+# 実際の流れ (#493): docs/codex-worker-run.md の launch の契約と同じく clone の直後に自動 maintenance を止め、worker の branch を切ってから
 # snapshot を取る。worker の branch への commit は照合を通り、allowlist の外 (git の読み方を変える file や branch 以外の
 # ref、packed-refs、maintenance が書く info/refs) を書けば止まる。
 flow_main="$tmp/flow-main"

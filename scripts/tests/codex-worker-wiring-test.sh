@@ -30,21 +30,42 @@ clause.call(s5, "`personal-codex-worker-run launch` を呼ぶ")
 clause.call(s6, "`personal-codex-worker-run collect` を呼ぶ")
 clause.call(s6, "`empty-result` で `retryable: true` のときだけ、`personal-codex-worker-run retry-empty` を呼ぶ")
 clause.call(s7, "`personal-codex-worker-run check` を題名と本文を渡して呼ぶ")
-clause.call(s7, "人が `gate-publish.err` を確かめたときだけ `--accept-warnings` を付ける")
+clause.call(s7, "人が `gate-publish.err` を確かめて公開を認めたときだけ `--accept-warnings` を付けて `check` をやり直す")
 clause.call(s7, "人の確認なしに `--accept-warnings` を付けない")
 clause.call(s7, "`READY` のときだけ、`check` が返した `head_oid` を指定して push する")
 clause.call(s7, "PR 作成後は `personal-packet worker-update <issue> --stdin` の `review` 操作で packet を書く")
 clause.call(s7, "その前に packet を読み直し、`expected_sha256` と PR 番号を渡す")
 clause.call(s7, "`worker-update` の `round` 操作で修正内容と次の入口を記録する")
-clause.call(s7, "`open` なら `worker-update` の `stop` 操作で区分と固定の理由を記録する")
+clause.call(s7, "`check` が BLOCKED を返したときは `worker-update` の `stop` を記録しない")
+clause.call(s7, "packet は `open` のまま置き、既に `review` ならその状態を保つ")
+clause.call(s7, "停止の区分と理由と人の次の手は、返却の `Next step` に書く")
+clause.call(s7, "直した後に `check` をやり直す")
+clause.call(s7, "worker に直させるときは `worker-update` の `round` で修正 round の項を依頼に足してから `launch` で起動する")
 clause.call(s5, "起動の前に `worker-update` の `run-start` 操作で記録し、読み直してから起動する")
 clause.call(s6, "結果は要約せず `worker-update` の `result` 操作で転記し、`run` を `last_run` に移す")
 s3 = section.call(skill, "## 3. clone と branch")
 clause.call(s3, "script が `worker-update` の `branch` 操作で保存する")
 
 examples = section.call(launch, "## 1. 通常の呼び出しの例")
-clause.call(examples, "人が `gate-publish.err` を確かめたときだけ `--accept-warnings` を付ける")
+clause.call(examples, "人が `gate-publish.err` を確かめて公開を認めたときだけ `--accept-warnings` を付けて `check` をやり直す")
 clause.call(examples, "人の確認なしに `--accept-warnings` を付けない")
+# 許可の条件は出現する全単位に求める。正しい記述を残したまま例外を足す変更も拒否する。
+[skill, launch].each do |text|
+  units = MU.plains(text) + MU.bullets(text) + MU.blocks(text).map(&:last)
+  units.select { |unit| unit.include?("--accept-warnings") }.each do |unit|
+    allowed = [
+      "人が `gate-publish.err` を確かめて公開を認めたときだけ `--accept-warnings` を付けて `check` をやり直す",
+      "人の確認なしに `--accept-warnings` を付けない"
+    ].any? { |phrase| MU.clause?(unit, phrase) }
+    errors << "warning の許可に人の確認の句が無い" unless allowed
+  end
+  # 自然言語すべての意味判定ではなく、明示的な直接編集の指示だけを拒否する。
+  MU.sentences(text).each do |sentence|
+    if ["packet の frontmatter を直接書き換える", "frontmatter を手で書き換える"].any? { |p| MU.clause?(sentence, p) }
+      errors << "packet の frontmatter を直接編集する指示"
+    end
+  end
+end
 # --help は副作用なし。例を shell では実行せず argv に分け、実物の usage と突き合わせる。
 help, err, status = Open3.capture3("ruby", File.join(root, "shared/scripts/personal-codex-worker-run.rb"), "--help")
 abort "FAIL: worker-run --help: #{err}" unless status.success?
@@ -77,7 +98,29 @@ commands.each do |argv|
 end
 publish = section.call(launch, "## 9. 回収 (fetch) と trailer 検査と PR")
 lines = MU.sh_blocks(publish).flat_map(&:lines).map(&:strip)
-errors << "push は check の head_oid を使う" unless lines.include?('git -C "$main" push origin "${head_oid}:refs/heads/${branch}"')
+push_command = 'git -C "$main" push origin "${head_oid}:refs/heads/${branch}"'
+errors << "push の例が無い" unless lines.include?(push_command)
+[publish, s7].each do |body|
+  MU.sh_blocks(body).flat_map(&:lines).map(&:strip).each do |line|
+    next if line.start_with?("#") || !Shellwords.split(line).include?("push")
+    errors << "push はすべて check の head_oid を refspec の元にする" unless line == push_command
+  end
+end
+[s7, publish].each do |body|
+  clause.call(body, "exit 1 なら `check` も push もせず、本文と出力を人に見せる")
+  clause.call(body, "人が公開を認めたときだけ先へ進む")
+  clause.call(body, "exit 3 は指摘を読んで直すか、理由を持って `--style-reviewed` を付けてかけ直す")
+  post_at = body.index("`personal-post-check`")
+  check_at = body.index(/(?:`personal-codex-worker-run check` を題名と本文を渡して呼ぶ|§1 の `check` を呼ぶ)/)
+  push_at = body.index(/(?:`READY` のときだけ、`check` が返した `head_oid` を指定して push する|git -C "\$main" push)/)
+  errors << "公開の順は post-check、check、OID push" unless post_at && check_at && push_at && post_at < check_at && check_at < push_at
+end
+recovery = section.call(launch, "## 3. 停止後の回復")
+clause.call(recovery, "`check` が BLOCKED を返したときは `worker-update` の `stop` を記録しない")
+clause.call(recovery, "一覧に無い `reason_code` は `Status: BLOCKED` で人に返し、自分で回避しない")
+clause.call(recovery, "clone の hook の設定を自分で書き換えない")
+clause.call(recovery, "`run-start` が blocked を open に戻し、記録を新しい run に置き換える")
+clause.call(examples, "Claude Code では Bash tool の background (`run_in_background`) で走らせ、完了の通知を待つ")
 errors << "head_oid は READY の JSON から読む" unless lines.include?(%q{head_oid=$(jq -er 'select(.status == "READY") | .head_oid' "$check_file") || exit 1})
 packet = section.call(launch, "## 4. packet の更新")
 errors << "packet を worker-update で書く command が無い" unless MU.sh_blocks(packet).any? { |b| b.strip == '"$packet_cli" worker-update "$issue" --stdin < "$update_file"' }

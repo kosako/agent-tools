@@ -147,7 +147,7 @@ marker=<tool home>/agent-tools/scripts/personal-work-marker-check
   触れず、出力に入力の本文を載せない。
 - 呼ぶ場所: review の結果コメントの投稿 (`personal-review-request` の手順 4)、PR の作成
   ([personal-project-operating-loop](../shared/workflows/personal-project-operating-loop.md) の「PR の完了条件」、
-  `personal-codex-worker` の §7 と `LAUNCH.md` §9、`personal-maintenance-sweep` の `FIX.md` の「PR」)、`escape` の
+  `personal-codex-worker` の §7 と `personal-codex-worker-run check` (`docs/codex-worker-run.md`)、`personal-maintenance-sweep` の `FIX.md` の「PR」)、`escape` の
   Issue の起票 (operating-loop の「merge 後に見つかった誤り」)。どこでも文体の検査と public-safety の gate と並べ、
   個人 project のときだけ呼ぶ (上の「対象」)。
 - 配線は `scripts/tests/work-marker-wiring-test.sh` が文言で確かめる (振る舞いの保証ではない)。

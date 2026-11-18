@@ -53,7 +53,7 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
 
 - **worker**: orchestrator が起動時に `#<Issue 番号>` の tab を作り、応答の `.result.root_pane` の pane を
   `worker-<Issue 番号>[-r<round>]` と名付けて、そこで worker を動かす (ID は応答の JSON から読み、推測しない。
-  command と flag の正本は `personal-codex-worker` の LAUNCH §5)。worker は 10 分以上動くので、orchestrator が
+  command の契約は `docs/codex-worker-run.md`、flag の境界は `personal-codex-worker` の SKILL.md §2)。worker は 10 分以上動くので、orchestrator が
   別の作業単位を進める tab と分ける。同じ Issue の
   2 回目以降の起動 (review の修正 round、停止からの再開) は、残っている `#<Issue 番号>` の tab に
   `-r<round>` の pane を足す (作業単位ごとに tab は 1 つ)。
@@ -119,9 +119,12 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   そろった時点で)、packet の frontmatter に `run` (run dir) と `tab` (tab の名前 `#<Issue 番号>`) を
   書きます。
   - 起動に失敗して人に渡す (`launch-path`) ときも消しません。人がその run script を実行するためです。
-  - 消すのは、転記が済んだときか、人がその run を破棄すると決めたときだけです。転記が済んだら `run` の値を
-    `last_run` に移し、`run` と `tab` を消します (#325)。worker が止まって `state: blocked` にした間は、`run`
-    をその退避物の置き場として残し、再起動で新しい run に置き換えます (置き換えるのと同じ書き込みで `state` を `open` に戻す。#412)。
+  - 転記が済んだら `run` の値を `last_run` に移し、`run` と `tab` を消します (#325)。
+    worker が止まって blocked にした間は run を退避物の置き場として残します。
+  - 人が pane と process を確かめ、起動記録の破棄を決めたら、指揮役は理由を entry に書きます。
+    `worker-update stop` で blocked にし、run を残します。`launch` の `run-start` が open に戻し、新しい run に置き換えます。
+    対象は未起動の hand-off や、生存していないと人が確かめた RUNNING の run です。
+    詳細は `personal-codex-worker` の `LAUNCH.md` §3。frontmatter や clone の変更を手で消しません。
   - `last_run` は起動の記録ではなく、前の run の成果物 (clone の `.git` の snapshot、tab の `tab-id`) を別の
     session からも辿るための口です。次の起動で `run` を書くときに消し、`done` の後も残します (tab を閉じる
     ときに使う)。`run` と同時には置きません。

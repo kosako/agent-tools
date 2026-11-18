@@ -99,6 +99,33 @@ JSON、file、処理の段の契約はこの文書に置きます。
 | §8 | JSON と exit を RESULT-FORMAT.md の人向けの返却へ対応させる |
 | §9 | 後始末は command の範囲外。LAUNCH.md §11 に従う |
 
+## launch の置き場と commit の前提
+
+run dir は `${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/worker-runs/<issue>.<random>` に作ります。
+親の `worker-runs` と run dir の mode は 0700 です。通常の一時 directory には置きません。
+2026-09-24、codex 0.156.0 の workspace-write で、workdir、`/tmp`、`$TMPDIR` への書き込みを実測しました。
+preflight 後に物理 path を解決し、run dir がこの書込先の外にあることを確かめます。
+codex の版で書込先が増えたら列挙も合わせます。解決できない path があれば起動しません。
+
+clone は `<main worktree>-clones/<issue>` に `--no-hardlinks` で作ります。
+branch は clone の local、`origin` の同名 branch、新規の順で解決します。
+新規の基点は、main で fetch した `origin/main` の tip です。
+script はその objects を clone に取り込み、OID を明示して branch を切ります。
+基点を省くと、main worktree が checkout している別 branch から切られるためです。
+clone の自動 maintenance は snapshot を採る前に無効化します。
+
+起動前に clone の `user.email` と `user.name` が空でないことを確かめます。
+clone には main の repo-local な設定が引き継がれません。
+identity を `includeIf` で選ぶ環境では、clone の置き場もその条件に合う必要があります。
+hook は `core.hooksPath`、未設定なら git dir の hooks を解決します。
+main と clone の hook directory の実体が同じで、`pre-commit` と `commit-msg` が実行可能なことを求めます。
+配備先の dispatcher と public-safety、git-identity、ai-trailer の各 gate も実行可能でなければ止めます。
+この検査が示すのは、clone が指揮役の commit と同じ hook 配線を使うことです。
+main の配線自体の正しさや gate が実際に拒否することは、運用の前提と gate の責務です。
+clone の hook の設定を自分で書き換えません。停止時の Next step は、設定の出所を人が確かめることです。
+
+## snapshot の照合と起動の成果物
+
 再利用 clone では、git を呼ぶ前に `last_run` の snapshot を照合します。
 `state: blocked` の場合は `run` を使い、無ければ `last_run` を使います。
 照合後の status は run directory の `clone-status.txt` に保存します。
@@ -152,6 +179,10 @@ snapshot が許可する変更は、worker が commit するための entry に�
 設定、hook、info の変更や allowlist 外の追加・削除は停止します。
 clone の自動 maintenance は作成直後に無効化します。
 この照合は sandbox の代わりではなく、回収前に危険な git 設定を読ませないための検査です。
+preflight 時と照合時の directory walk を比較し、entry の種類、file の SHA-256、symlink target を見ます。
+一時的に allowlist 外を書いて元に戻す変更や、walk の最中の変更、別 process の同時変更は証明しません。
+codex 0.156.0 の固定の launch argv では `.git/config`、hooks、info、新規 file への書き込みを実測しました。
+sandbox 外への書き込みは拒否されました。`codex sandbox` 単体は未測定です (#324)。
 
 この確認は現在の packet と herdr の観測に基づきます。同時に複数の caller を起動する lock ではありません。
 起動記録のない外部 terminal の worker や、snapshot の照合中の差し替えまでは証明しません。
@@ -436,24 +467,27 @@ owner を判定できない場合は `marker: skipped` とします。
 公開先の判定が必要なので、この目印の検査は公開先の照合後に行います。
 
 `check` は成功時も停止時も packet を変更しません。
-停止したら指揮役が packet を読み直し、digest を得ます。
-`personal-packet worker-update <N> --stdin` の `stop` で、停止区分と固定の理由を記録します。
-`next` には今の `次の入口` の本文をそのまま渡し、worker の次の 1 アクションを保持します。
-`expected_sha256` は読み直した値を使い、外部 command の生出力は転記しません。
-`stop` の既存の前提は `state: open` です。
-`review` で止まった場合は、許可された修正依頼を `round` で記録して open に戻してから行います。
-依頼がまだ無ければ指揮役が判断し、前提を満たすためだけの依頼は作りません。
+`check` が BLOCKED を返しても `worker-update` の `stop` を記録しません。
+packet は open のまま置き、既に review ならその状態を保ちます。
+`check` は open か review だけを受け付け、blocked にすると再検査できず、原因を直さない限り同じ段で止まるためです。
+停止区分、理由、人の次の手を返却の Next step に書き、直した後に `check` をやり直します。
+gate-warning では、人が `gate-publish.err` を確かめて公開を認めたときだけ `--accept-warnings` を付けます。
+worker に直させる場合は、`worker-update round` で修正 round の項を依頼に足してから `launch` で起動します。
 
-## check 後の指揮役の手順
+## 公開前後の指揮役の手順
 
-1. `READY` の結果を読み、文体の指摘を直すか、そのままにする理由を持ちます。
-   題名、本文、commit を直した場合は `check` をやり直します。
-2. 別の呼び出しで、main から `git push origin <head_oid>:refs/heads/<branch>` を実行します。
+1. 受け入れを判断し、題名と本文を書いて `personal-post-check` に通します。
+   exit 1 なら `check` も push もせず、本文と出力を人に見せます。人が公開を認めたときだけ進みます。
+   exit 2 は検査不能として止め、原因を直してかけ直します。
+   exit 3 は指摘を読んで直すか、理由を持って `--style-reviewed` を付けてかけ直します。
+2. exit 0、または exit 1 の後に人が公開を認めた場合だけ、題名と本文を渡して `check` を呼びます。
+   `READY` の結果を読み、文体の指摘を直すか、そのままにする理由を持ちます。
+   題名や本文を直したら post-check から、commit を直したら `check` からやり直します。
+3. 別の呼び出しで、main から `git push origin <head_oid>:refs/heads/<branch>` を実行します。
    `head_oid` は `check` が返した full OID を使います。push が失敗したら PR を作りません。
-3. 題名と本文を `personal-post-check` に通し、結果を読んでから PR を作ります。
-   `gh pr create --repo <slug> --base main --head <branch> --title <題名> --body-file <file>` を使います。
+4. `gh pr create --repo <slug> --base main --head <branch> --title <題名> --body-file <file>` で PR を作ります。
    修正 round では既存 PR を使います。値は argv か shell literal で渡します。
-4. packet を読み直して digest を得ます。
+5. packet を読み直して digest を得ます。
    `personal-packet worker-update <N> --stdin` の `review` で PR 番号を記録し、state を `review` にします。
    すでに `review` で PR 番号も一致する場合は、そのまま保持します。
 

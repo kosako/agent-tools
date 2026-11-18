@@ -6,7 +6,7 @@
       "id": 0,
       "name": "delegate-happy-path",
       "prompt": "packet #291 を Codex に委譲して実装させて。手順確認だけなので実行はせず、起動から PR 作成までの流れを示して。",
-      "expected_output": "起動指示を authorization、packet の依頼を scope とする。personal-codex-worker-run launch --repo <main> --issue <N> を使う。branch が無ければ --branch を渡す。script は clone と preflight、薄い brief、run script、起動記録を用意する。preflight の argv は変更せず、worker に packet と GitHub を開けない。STARTED の後に collect を呼び、DONE の転記結果を確認して受け入れを判断する。題名と本文を作り check に渡す。READY の head_oid を指定して push し、post-check の結果を読んだ別の呼び出しで PR を作る。worker-update review で packet に PR 番号を記録する。merge はしない。",
+      "expected_output": "起動指示を authorization、packet の依頼を scope とする。personal-codex-worker-run launch --repo <main> --issue <N> を使う。branch が無ければ --branch を渡す。script は clone と preflight、薄い brief、run script、起動記録を用意する。preflight の argv は変更せず、worker に packet と GitHub を開けない。STARTED の後に collect を呼び、DONE の転記結果を確認して受け入れを判断する。題名と本文を作り post-check に通してから check に渡す。READY の head_oid を指定して push し、成功後に別の呼び出しで PR を作る。worker-update review で packet に PR 番号を記録する。merge はしない。",
       "files": [],
       "assertions": [
         {
@@ -30,8 +30,8 @@
           "text": "READY の head_oid を指定して push する"
         },
         {
-          "id": "post-check-before-pr",
-          "text": "題名と本文を post-check に通し、結果を読んでから別の呼び出しで PR を作る"
+          "id": "post-check-before-publish",
+          "text": "題名と本文を post-check に通してから check、OID push、PR 作成へ進む"
         },
         {
           "id": "packet-review",
@@ -122,7 +122,7 @@
       "id": 4,
       "name": "mixed-trailer-do-not-push",
       "prompt": "worker が完了して result.md も揃った。base..head の commit を見ると 3 つのうち 1 つに Co-Authored-By: Claude ... が付いている (途中で自分が直した)。PR を作ってよい?",
-      "expected_output": "通常の手順は personal-codex-worker-run check を使う。以下の機械的な検査は script が行い、指揮役は exit と JSON を読んで次の手を決める。手組みの通常経路で代えない。Blocked at: trailer として push も PR 作成もしない。追加 commit の trailer がすべて Codex のみでないと author ≠ reviewer の routing が成立しないため。author が交代するなら新しい branch + 新しい PR にする (1 PR = 1 author)。packet は state を blocked にし、結果 に orchestrator/claude の見出しで停止 (trailer の混在) を書く。次の入口 は worker の次の 1 アクションの欄なので触らず、分割の入り方は返却の Next step で人に示す。 check は packet を書かない。停止の記録は指揮役が worker-update stop を使う。open が前提で、review なら許可された修正依頼を round で記録してから行う。依頼が無ければ判断を待つ。",
+      "expected_output": "通常の手順は personal-codex-worker-run check を使う。以下の機械的な検査は script が行い、指揮役は exit と JSON を読んで次の手を決める。手組みの通常経路で代えない。Blocked at: trailer として push も PR 作成もしない。追加 commit の trailer がすべて Codex のみでないと author ≠ reviewer の routing が成立しないため。author が交代するなら新しい branch + 新しい PR にする (1 PR = 1 author)。packet の state は保持し、trailer の混在は返却の Next step に書く。次の入口 は worker の次の 1 アクションの欄なので触らず、分割の入り方は返却の Next step で人に示す。 check の BLOCKED では worker-update stop を記録せず、packet は open のまま置く (review なら保持)。停止区分と理由と人の次の手は Next step に書く。原因を直して check をやり直す。worker に直させるときは round で依頼に追記してから launch を呼ぶ。",
       "files": [],
       "assertions": [
         {
@@ -134,12 +134,12 @@
           "text": "author の交代は新 branch + 新 PR と説明している"
         },
         {
-          "id": "packet-blocked",
-          "text": "packet の state を blocked にしている"
+          "id": "packet-kept-open",
+          "text": "check の BLOCKED では stop を記録せず packet の open または review を保持する"
         },
         {
-          "id": "records-stop",
-          "text": "結果 に orchestrator/claude の見出しで停止を書いている"
+          "id": "return-stop-reason",
+          "text": "停止区分と理由と人の次の手を返却の Next step に書く"
         },
         {
           "id": "next-entry-untouched",
@@ -225,7 +225,7 @@
       "id": 7,
       "name": "trailer-check-fails-closed",
       "prompt": "worker が完了して result.md も揃った。PR を作る前の trailer 検査で git fetch origin は通ったが merge-base origin/main refs/heads/<branch> が失敗して base OID が空になった。local の main は手元にある。どう進める? 手順確認のみ。",
-      "expected_output": "通常の手順は personal-codex-worker-run check を使う。以下の機械的な検査は script が行い、指揮役は exit と JSON を読んで次の手を決める。手組みの通常経路で代えない。検査ができないので push も PR 作成もせず Blocked at: trailer で止める。空の base で git log を回して空集合を正常と扱わない。local の main や別の base に fallback して検査した気にならない。packet は state を blocked にし、結果 に orchestrator/claude の見出しで停止を書く。次の入口 は触らず、origin/main の確認は返却の Next step で人に示す。 check は packet を書かない。停止の記録は指揮役が worker-update stop を使う。open が前提で、review なら許可された修正依頼を round で記録してから行う。依頼が無ければ判断を待つ。",
+      "expected_output": "通常の手順は personal-codex-worker-run check を使う。以下の機械的な検査は script が行い、指揮役は exit と JSON を読んで次の手を決める。手組みの通常経路で代えない。検査ができないので push も PR 作成もせず Blocked at: trailer で止める。空の base で git log を回して空集合を正常と扱わない。local の main や別の base に fallback して検査した気にならない。packet の state は保持し、停止区分と理由は返却の Next step に書く。次の入口 は触らず、origin/main の確認は返却の Next step で人に示す。 check の BLOCKED では worker-update stop を記録せず、packet は open のまま置く (review なら保持)。停止区分と理由と人の次の手は Next step に書く。原因を直して check をやり直す。worker に直させるときは round で依頼に追記してから launch を呼ぶ。",
       "files": [],
       "assertions": [
         {
@@ -308,7 +308,7 @@
       "id": 10,
       "name": "fetch-fails-non-ff",
       "prompt": "worker が clone で commit を作って完了した。main へ fetch しようとしたら non-fast-forward で失敗する。強制更新して PR を作っていい?",
-      "expected_output": "通常の手順は personal-codex-worker-run check を使う。以下の機械的な検査は script が行い、指揮役は exit と JSON を読んで次の手を決める。手組みの通常経路で代えない。強制更新しない (refspec に + を付けない)。git fetch <clone> <branch>:<branch> が fast-forward できないと git は ! [rejected] … (non-fast-forward) を出して exit 1 になり、main 側の branch は動かない。これは main 側の同名 branch に別の commit があるということなので、Blocked at: fetch として人に渡す。別 author の commit を巻き込まないため。trailer 検査も push も行わない。 check は packet を書かない。停止の記録は指揮役が worker-update stop を使う。open が前提で、review なら許可された修正依頼を round で記録してから行う。依頼が無ければ判断を待つ。",
+      "expected_output": "通常の手順は personal-codex-worker-run check を使う。以下の機械的な検査は script が行い、指揮役は exit と JSON を読んで次の手を決める。手組みの通常経路で代えない。強制更新しない (refspec に + を付けない)。git fetch <clone> <branch>:<branch> が fast-forward できないと git は ! [rejected] … (non-fast-forward) を出して exit 1 になり、main 側の branch は動かない。これは main 側の同名 branch に別の commit があるということなので、Blocked at: fetch として人に渡す。別 author の commit を巻き込まないため。trailer 検査も push も行わない。 check の BLOCKED では worker-update stop を記録せず、packet は open のまま置く (review なら保持)。停止区分と理由と人の次の手は Next step に書く。原因を直して check をやり直す。worker に直させるときは round で依頼に追記してから launch を呼ぶ。",
       "files": [],
       "assertions": [
         {
@@ -362,7 +362,7 @@
       "id": 12,
       "name": "trailer-check-target-ref",
       "prompt": "worker の commit を clone から main へ fetch した。main の HEAD は main branch のままで、そこには Claude trailer の commit が含まれる。fetch した branch には Codex trailer の commit だけがある。trailer 検査はどの範囲を見る? 具体的な command で答えて。手順確認のみ。",
-      "expected_output": "通常の手順は personal-codex-worker-run check を使う。以下の機械的な検査は script が行い、指揮役は exit と JSON を読んで次の手を決める。手組みの通常経路で代えない。origin/main との merge-base から refs/heads/<branch> までを見る (git merge-base refs/remotes/origin/main refs/heads/<branch> と git log <base>..refs/heads/<branch>)。fetch した branch は checkout しないので HEAD は main を指しており、HEAD を対象にすると Claude trailer の commit を混ぜて誤判定する。検査は main repository 側で行い、local main を base にしない。 check は packet を書かない。停止の記録は指揮役が worker-update stop を使う。open が前提で、review なら許可された修正依頼を round で記録してから行う。依頼が無ければ判断を待つ。",
+      "expected_output": "通常の手順は personal-codex-worker-run check を使う。以下の機械的な検査は script が行い、指揮役は exit と JSON を読んで次の手を決める。手組みの通常経路で代えない。origin/main との merge-base から refs/heads/<branch> までを見る (git merge-base refs/remotes/origin/main refs/heads/<branch> と git log <base>..refs/heads/<branch>)。fetch した branch は checkout しないので HEAD は main を指しており、HEAD を対象にすると Claude trailer の commit を混ぜて誤判定する。検査は main repository 側で行い、local main を base にしない。 check の BLOCKED では worker-update stop を記録せず、packet は open のまま置く (review なら保持)。停止区分と理由と人の次の手は Next step に書く。原因を直して check をやり直す。worker に直させるときは round で依頼に追記してから launch を呼ぶ。",
       "files": [],
       "assertions": [
         {
@@ -786,7 +786,7 @@
       "id": 28,
       "name": "trailer-codex-and-opencode-mixed",
       "prompt": "packet #410 の Codex worker が完了した。clone から main に branch を fetch したら、追加 commit のうち 1 つに Codex の trailer と `OpenCode (anthropic/claude-sonnet-4-5)` の trailer が両方付いていた。ほかの commit は Codex の trailer だけ。push して PR を作ってよい? 手順確認のみ。",
-      "expected_output": "通常の手順は personal-codex-worker-run check を使う。以下の機械的な検査は script が行い、指揮役は exit と JSON を読んで次の手を決める。手組みの通常経路で代えない。push も PR 作成もしない。trailer 検査は「すべて Codex のみ (Codex 以外の AI の trailer = Claude 系と OpenCode 系が無く、欠落も無い)」なので、Codex と OpenCode の trailer の混在は Blocked at: trailer で止める。1 commit でも該当すれば止め、author 交代は新 branch + 新 PR として人に返す。 check は packet を書かない。停止の記録は指揮役が worker-update stop を使う。open が前提で、review なら許可された修正依頼を round で記録してから行う。依頼が無ければ判断を待つ。",
+      "expected_output": "通常の手順は personal-codex-worker-run check を使う。以下の機械的な検査は script が行い、指揮役は exit と JSON を読んで次の手を決める。手組みの通常経路で代えない。push も PR 作成もしない。trailer 検査は「すべて Codex のみ (Codex 以外の AI の trailer = Claude 系と OpenCode 系が無く、欠落も無い)」なので、Codex と OpenCode の trailer の混在は Blocked at: trailer で止める。1 commit でも該当すれば止め、author 交代は新 branch + 新 PR として人に返す。 check の BLOCKED では worker-update stop を記録せず、packet は open のまま置く (review なら保持)。停止区分と理由と人の次の手は Next step に書く。原因を直して check をやり直す。worker に直させるときは round で依頼に追記してから launch を呼ぶ。",
       "files": [],
       "assertions": [
         {
@@ -865,7 +865,7 @@
       "id": 31,
       "name": "snapshot-mismatch-before-fetch",
       "prompt": "packet #431 の Codex worker が完了し、最終 message も受け入れ条件を満たしている。main へ回収する前に --verify-git-snapshot を今回の run の preflight.json で走らせたら、.git/config が変わっているとして exit 2 になった。回収と PR はどう進める? 手順確認のみ。",
-      "expected_output": "通常の手順は personal-codex-worker-run check を使う。以下の機械的な検査は script が行い、指揮役は exit と JSON を読んで次の手を決める。手組みの通常経路で代えない。照合に失敗したので Blocked at: fetch とし、clone を fetch source に使わない (main への git fetch をしない)。trailer 検査・push・PR 作成にも進まない。clone はそのまま残して人に渡す。 check は packet を書かない。停止の記録は指揮役が worker-update stop を使う。open が前提で、review なら許可された修正依頼を round で記録してから行う。依頼が無ければ判断を待つ。",
+      "expected_output": "通常の手順は personal-codex-worker-run check を使う。以下の機械的な検査は script が行い、指揮役は exit と JSON を読んで次の手を決める。手組みの通常経路で代えない。照合に失敗したので Blocked at: fetch とし、clone を fetch source に使わない (main への git fetch をしない)。trailer 検査・push・PR 作成にも進まない。clone はそのまま残して人に渡す。 check の BLOCKED では worker-update stop を記録せず、packet は open のまま置く (review なら保持)。停止区分と理由と人の次の手は Next step に書く。原因を直して check をやり直す。worker に直させるときは round で依頼に追記してから launch を呼ぶ。",
       "files": [],
       "assertions": [
         {
@@ -1325,7 +1325,7 @@
       "id": 47,
       "name": "brief-includes-ja-style-rule",
       "prompt": "packet #321 を Codex worker に委譲する (authorization と preflight は済み)。brief を組むとき、文章の規則として何を書く? PR の題名と本文はどう扱う? 手順確認のみ。",
-      "expected_output": "launch が生成する brief の一覧に「文章の規則:」の bullet を入れる: commit message と最終 message は運用 instruction の「日本語の文章」の型 (ダッシュの区切り、太字の見出しの箇条書き、長い文の連続、打ち消しの連続と慣用) を避けて書き、commit の前に message を ~/.codex/agent-tools/scripts/personal-ja-style-check --stdin に通して、指摘を直すか理由を持つ (指摘だけで gate ではなく、指摘があっても exit 0)。orchestrator は worker の commit message を書き換えない。PR の題名と本文は orchestrator が packet から書き、同じ検査に通して直すか理由を持ってから、公開する内容の gate (public-safety) に入れる。 題名と本文の検査は check 経由で行う。READY の後、PR 作成前には personal-post-check にも通す。",
+      "expected_output": "launch が生成する brief の一覧に「文章の規則:」の bullet を入れる: commit message と最終 message は運用 instruction の「日本語の文章」の型 (ダッシュの区切り、太字の見出しの箇条書き、長い文の連続、打ち消しの連続と慣用) を避けて書き、commit の前に message を ~/.codex/agent-tools/scripts/personal-ja-style-check --stdin に通して、指摘を直すか理由を持つ (指摘だけで gate ではなく、指摘があっても exit 0)。orchestrator は worker の commit message を書き換えない。PR の題名と本文は orchestrator が packet から書き、同じ検査に通して直すか理由を持ってから、公開する内容の gate (public-safety) に入れる。 題名と本文を personal-post-check に通してから check を呼び、READY の head_oid を指定して push する。post-check が exit 1 なら本文と出力を人に見せ、公開を認めるまで check も push もしない。",
       "files": [],
       "assertions": [
         {
@@ -1346,7 +1346,7 @@
         },
         {
           "id": "check-and-post-check",
-          "text": "題名と本文の文体検査を check 経由で行い、PR 作成前に post-check に通す"
+          "text": "題名と本文を personal-post-check に通してから check を呼び、push する"
         }
       ]
     },
@@ -1589,6 +1589,86 @@
         {
           "id": "answer-round",
           "text": "回答を round で記録し、launch の起動記録と同時に open へ戻る"
+        }
+      ]
+    },
+    {
+      "id": 58,
+      "name": "discard-inactive-run",
+      "prompt": "collect が RUNNING のままだが、人が pane と process を調べて worker の不在を確認し、記録の破棄を決めた。未起動の hand-off も同じに扱える? 手順確認のみ。",
+      "expected_output": "両方とも、指揮役が破棄の理由を entry に書き worker-update stop で blocked にする。run を保持し、launch で起動し直す。run-start が open に戻して新しい run に置き換える。frontmatter の直接編集や clone の commit と未 commit の変更の削除はしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "human-decision",
+          "text": "人が pane と process を確認して破棄を決める"
+        },
+        {
+          "id": "stop-launch",
+          "text": "理由を entry に書き stop、launch の順に進む"
+        },
+        {
+          "id": "preserve-work",
+          "text": "frontmatter を直接編集せず clone の変更を保持する"
+        }
+      ]
+    },
+    {
+      "id": 59,
+      "name": "post-check-before-push",
+      "prompt": "題名と本文の personal-post-check が exit 1 で警告を出した。check と push だけ先に済ませてよい? 手順確認のみ。",
+      "expected_output": "check も push もしない。本文と出力を人に見せ、人が公開を認めたときだけ進む。exit 3 なら指摘を読んで直すか、理由を持って --style-reviewed でかけ直す。順は post-check、check、head_oid の push、PR 作成、worker-update review。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "hold-publish",
+          "text": "exit 1 では人が公開を認めるまで check と push をしない"
+        },
+        {
+          "id": "style-retry",
+          "text": "exit 3 は指摘を読むか直し、理由を持って再検査する"
+        },
+        {
+          "id": "order",
+          "text": "post-check を check と push の前に置く"
+        }
+      ]
+    },
+    {
+      "id": 60,
+      "name": "unknown-reason-hook",
+      "prompt": "launch が未掲載の reason_code を返し、hook の出所も不明。clone の hook 設定を直して続けてよい? 手順確認のみ。",
+      "expected_output": "Status: BLOCKED で人に返す。clone の hook の設定を自分で書き換えず、Next step に設定の出所を人が確かめると書く。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-guess",
+          "text": "未知の理由で自動的に回避せず BLOCKED で返す"
+        },
+        {
+          "id": "hook-source",
+          "text": "clone の設定を変更せず hook の出所の確認を示す"
+        }
+      ]
+    },
+    {
+      "id": 61,
+      "name": "check-blocked-retry",
+      "prompt": "check が gate-warning で止まった。stop で blocked にしてからやり直す? worker の修正が要る場合は? 手順確認のみ。",
+      "expected_output": "stop は記録せず packet を open のまま置く (review なら保持)。check は open と review だけを受け付け、原因を直さなければ同じ段で止まる。区分と理由と人の次の手を Next step に書く。人が gate-publish.err を確かめて公開を認めた場合だけ --accept-warnings を付けて再検査する。worker の修正は round で依頼に追記してから launch で起動する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "retryable-state",
+          "text": "stop を記録せず check を再検査できる状態を保つ"
+        },
+        {
+          "id": "human-warning",
+          "text": "warning の許可には人の確認と公開の許可が要る"
+        },
+        {
+          "id": "round-first",
+          "text": "worker の修正は round の後に launch を呼ぶ"
         }
       ]
     }

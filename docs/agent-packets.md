@@ -169,14 +169,13 @@ PR #124 の should 1 件を直して re-review を依頼する。
     `missing` (run dir が無い = 消失。snapshot が無く clone を照合できないので、clone から自動では回収
     しない。人が確かめる)。
 - `last_run` (#325): **最後の run dir**。完了の転記で `run` / `tab` を消すときに、orchestrator が `run` の値を
-  `last_run` に移す。`launch-path` のうち「走っている worker がいる」「tab を特定できない」で止まった未起動の run
-  (run dir に `codex.log` も `done.txt` も無い) を人の指示で破棄するときも、`run` を `last_run` に移す (worker が
-  起動していないので、その run の snapshot は clone の照合に使える。委譲 skill の §6)。ほかの理由の破棄は
-  `last_run` に移さない。次の起動で `run` を
-  書くときに `last_run` は消す (`run` と同時には置かない。両方あれば壊れた packet として報告する)。worker が止まった
-  (転記の前の) `state: blocked` では従来どおり `run` に残す
-  (退避物の置き場)。転記の後に回収・trailer 検査・公開する内容の gate で止まった `state: blocked` (#412 / #413)
-  では、転記で `last_run` に移したままにする (`run` は無い)。
+  `last_run` に移す。人が起動記録の破棄を決めた場合は、理由を entry に書き、`worker-update stop` で blocked にする。
+  `run` は保持し、次の `launch` の `run-start` で新しい run に置き換え、open に戻す。
+  対象と確認の手順は委譲 skill の `LAUNCH.md` §3。frontmatter を手で書き換えず、clone の変更も消さない。
+  次の起動で `run` を書くときに `last_run` は消す (`run` と同時には置かない。両方あれば壊れた packet)。
+  worker が止まった転記前の `state: blocked` では `run` を退避物の置き場として残す。
+  転記後の `check` が回収・trailer 検査・公開する内容の gate で止まっても、packet は open のまま置く。
+  既に review ならその状態を保つ。`last_run` は転記で移したままにする (`run` は無い)。
   `done` の後も残す。用途は、転記で起動の記録が消えた後も、前の run の成果物 (clone の `.git` の
   snapshot、tab の所有の確認に使う `tab-id`) を別の session から辿れるようにすること。
   - 書くのは orchestrator だけ。検証は `run` と同じ (空でない文字列・制御文字 (改行等) なし・絶対 path。引用符の有無は見ない)。
@@ -464,9 +463,9 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
   確認し、続けて公開する内容 (累積差分・各 commit の差分・全 commit の message・branch 名・PR の題名と本文) を
   public-safety の gate に通して、exit 0 で警告が無いときだけ push し、PR を作る (#413。警告が出たら人に見せて
   判断を仰ぐ。手順は委譲 skill の §7 と `LAUNCH.md` §9)。gate が無い・exit 0 でないとき
-  (`Blocked at: public-safety`) は push も PR 作成もせず、回収・trailer 検査の停止と同じく orchestrator が
-  `orchestrator/claude` の entry を書いて `state: blocked` にする。packet に `pr:` と `state: review` を入れるのは
-  orchestrator (PR を出した側)。
+  (`Blocked at: public-safety`) は push も PR 作成もせず、packet は open のまま置く (既に review なら保持)。
+  `stop` は記録せず、区分と理由と人の次の手を返却の Next step に書く。直した後に `check` をやり直す。
+  packet に `pr:` と `state: review` を入れるのは orchestrator (PR を出した側)。
 - **停止 (limit / 途中終了 / 質問)**: 最終 message が無い停止では worker の記録が残らないので、
   `collect` が `### <日付> orchestrator/claude` で固定の停止区分、exit、退避 file 名を書く。
   最終 message が書式と gate を通る場合は、上の転記を使う。どちらも `state: blocked` にし、
