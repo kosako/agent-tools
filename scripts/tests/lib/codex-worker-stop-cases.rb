@@ -21,20 +21,25 @@ module CodexWorkerStopCases
     content[1][1]
   end
 
+  def call(node)
+    return unless node[0] == :method_add_arg && node[2][0] == :arg_paren
+    callee = node[1]
+    name = if callee[0] == :fcall
+             callee[1][1]
+           elsif callee[0] == :call && callee[1][0] == :var_ref && callee[1].dig(1, 0) == :@const && callee[1].dig(1, 1) == "Stop" && callee[3][1] == "new"
+             "Stop.new"
+           end
+    return unless %w[stop command json Stop.new stage stop_executor update_packet].include?(name)
+    args = node[2][1]
+    raise "未対応の引数: #{name}" unless args && args[0] == :args_add_block
+    [name, args[1]]
+  end
+
   def calls(body)
     out = []
     walk(body) do |node|
-      next unless node[0] == :method_add_arg && node[2][0] == :arg_paren
-      callee = node[1]
-      name = if callee[0] == :fcall
-               callee[1][1]
-             elsif callee[0] == :call && callee[1][0] == :var_ref && callee[1].dig(1, 0) == :@const && callee[1].dig(1, 1) == "Stop" && callee[3][1] == "new"
-               "Stop.new"
-             end
-      next unless %w[stop command json Stop.new stage stop_executor].include?(name)
-      args = node[2][1]
-      raise "未対応の引数: #{name}" unless args && args[0] == :args_add_block
-      out << [name, args[1]]
+      entry = call(node)
+      out << entry if entry && entry.first != "update_packet"
     end
     out
   end
@@ -63,6 +68,39 @@ module CodexWorkerStopCases
       "collect" => [%w[completion executor-result], ["executor-result"]]
     }
     raise "blocked_at の代入と context を見直す" unless assignments == expected_assignments
+    # context を上書きする method は停止点・段・packet 更新との構文上の順序も固定する。
+    # 分岐条件や別 subcommand からの呼出し経路まで証明する検査ではない。
+    expected_order = {
+      "read_packet" => %w[command:packet-check assign:authorization stop:packet-missing stop:packet-state
+                          stop:request-empty stop:request-empty stop:request-empty assign:launch-record stop:packet-list],
+      "check_other_records" => %w[assign:launch-path stop:worker-running stop:run-unconfirmed],
+      "resolve_branch" => %w[stop:branch assign:launch-record update_packet:branch],
+      "stop_executor" => %w[stage:snapshot stage:backup stage:transcription update_packet:stop assign:completion stop:*],
+      "collect" => %w[stage:records stage:wait stop_executor:* stop_executor:* stop_executor:empty-result
+                      assign:completion,executor-result stop:empty-result stage:pane-log command:pane-log stop:pane-log
+                      stage:snapshot stage:commits command:clone-command stop:clone-command stage:transcription
+                      update_packet:stop assign:executor-result stop:worker-question update_packet:result stop:run-record]
+    }
+    expected_order.each do |name, expected|
+      order = []
+      walk(methods.fetch(name)) do |node|
+        if %i[assign massign].include?(node[0])
+          variables = []
+          walk(node[1]) { |part| variables << part[1] if part[0] == :@ivar }
+          if variables.include?("@blocked_at")
+            values = []
+            walk(node[2]) { |part| value = literal(part); values << value if value }
+            order << "assign:#{values.join(',')}"
+          end
+        end
+        entry = call(node)
+        next unless entry
+        callee, args = entry
+        index = %w[command json].include?(callee) ? 1 : 0
+        order << "#{callee}:#{literal(args[index]) || '*'}"
+      end
+      raise "blocked_at と停止点の順序を見直す: #{name}" unless order == expected
+    end
     # 段の変更を検出する。追加時には呼出し元の context と回復表も見直す。
     stages = methods.values.flat_map { |body| calls(body).select { |n, _| n == "stage" }.map { |_, a| a.map { |v| literal(v) } } }.uniq.sort
     expected_stages = {

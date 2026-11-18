@@ -116,7 +116,8 @@ read-only、status-only、会話の外への書き込み全体を禁じられた
   - 完了の転記: worker の最終 message から `結果` (見出しは `worker/codex`) と `次の入口` (最終 message の
     「次の 1 アクション」) を写し、`run` を `last_run` に移して `tab` を消す (#325)。PR を出したら `pr:` と
     `state: review` を入れる。
-  - 停止: `collect` の stop が成功したときだけ blocked になる。照合・退避・転記の更新前の失敗は元の state と run を保持する。
+  - 停止: `collect` 内の stop、または人が決めた破棄の `worker-update stop` が成功すると blocked になる。
+    照合・退避・転記の更新前の失敗は元の state と run を保持する。
     更新後の再読込で失敗することもあるため、packet を読み直して済んだ範囲を返す。
     終了後の snapshot 照合失敗は、人が変更を保存して clone を退避し、起動記録の破棄を判断する。
     open の記録は `worker-update stop`、続いて `launch` で再開する。既に blocked なら再開の許可を確認する。

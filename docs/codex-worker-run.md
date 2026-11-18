@@ -55,6 +55,20 @@ preflight の停止では `dependency_exit` に依存 command の exit を添え
 `packet.written` は起動記録や回収結果の書き込みを示します。先に保存した branch はこの値に含みません。
 herdr の失敗を含め、書いた起動記録と作成済みの file は削除しません。
 
+## launch と collect の段の順序
+
+`launch` の段は `environment`、`packet`、`records`、`workspace`、`branch` の順に始まります。
+続いて `run-directory`、`clone`、`commit-prerequisites`、`preflight` に進みます。
+最後は `run-location`、`artifacts`、`run-record`、`herdr` の順です。
+`run-start` の書き込みは `run-record` の段で行い、`herdr` の段はその後です。
+
+`collect` は `records`、`wait` の順に進み、完了記録と結果から経路を選びます。
+初回の空の結果では `completion` で止まります。
+異常終了などの停止経路は `snapshot`、`backup`、`transcription` の順に進みます。
+その後、`completion` で停止理由を返します。
+通常の回収経路は `pane-log`、`snapshot`、`commits`、`transcription` の順です。
+質問があれば最後の `transcription` で停止を記録します。
+
 ## 停止後の state と回復 (正本)
 
 この表は `BLOCKED` と `RUNNING` の全区分を扱います。
@@ -97,10 +111,10 @@ packet の検査前に止まる場合は、state や記録の有無自体を確�
 | `collect` | `BLOCKED` | `authorization` | `packet-missing` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
 | `collect` | `BLOCKED` | `authorization` | `packet-state` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
 | `collect` | `BLOCKED` | `authorization` | `request-empty` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
-| `collect` | `BLOCKED` | `clone` | `backup` | 状態・run / last_run を保持。書込なし | 人が backup_step と保存できた変更を確認 | 原因を直して collect。回収を断念するなら必要な変更を保存・退避し、記録の破棄を判断して stop、launch |
+| `collect` | `BLOCKED` | `clone` | `backup` | 状態・run / last_run を保持。書込なし | 人が backup_step と保存できた変更を確認 | 原因を直して collect。回収を断念するなら必要な変更を保存・退避し、人が破棄を決めた後に stop、launch |
 | `collect` | `BLOCKED` | `clone` | `clone-command` | 状態・run / last_run を保持。書込なし | 人が git の失敗と clone の保存状態を確認 | 照合済みの clone の原因を直し、同じ subcommand を再実行。clone を作り直す場合は snapshot の回復手順 |
 | `collect` | `BLOCKED` | `clone` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
-| `collect` | `BLOCKED` | `clone` | `snapshot-mismatch` | 状態・run / last_run を保持。書込なし | 人が snapshot の由来と保存すべき変更を確認。clone に git を実行しない | 「snapshot 不一致からの回復」に従う。未回収の open / run は退避後に stop、launch。blocked や run 無しは前提を確認して launch |
+| `collect` | `BLOCKED` | `clone` | `snapshot-mismatch` | 状態・run / last_run を保持。書込なし | 人が snapshot の由来と保存すべき変更を確認。clone に git を実行しない | 「snapshot 不一致からの回復」に従う。未回収の open / run は退避し、人が破棄を決めた後に stop、launch。blocked や run 無しは前提を確認して launch |
 | `collect` | `BLOCKED` | `executor-exit` | `done-invalid` | blocked / run を保持。stop を書込済み | 人が停止理由と変更を確認して再開を判断 | 人が原因と保存した変更を確認し、許可後に launch。修正依頼を足す場合は先に worker-update round |
 | `collect` | `BLOCKED` | `executor-exit` | `executor-exit` | blocked / run を保持。stop を書込済み | 人が停止理由と変更を確認して再開を判断 | 人が原因と保存した変更を確認し、許可後に launch。修正依頼を足す場合は先に worker-update round |
 | `collect` | `BLOCKED` | `executor-exit` | `io` | wait 中は元の状態 / run。completion では stop 後の blocked / run の場合あり。再読込必須 | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
@@ -108,24 +122,24 @@ packet の検査前に止まる場合は、state や記録の有無自体を確�
 | `collect` | `BLOCKED` | `executor-result` | `empty-result` | 初回: 元の状態 / run、書込なし。2回目: blocked / run、stop 書込済み | 指揮役が retryable を確認 | true のときだけ retry-empty。false は人に返し、自動再試行しない |
 | `collect` | `BLOCKED` | `executor-result` | `io` | 初回の空の結果では元の状態 / run。stop 後なら blocked / run。書込は再読込で確認 | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
 | `collect` | `BLOCKED` | `executor-result` | `worker-question` | blocked / run を保持。stop を書込済み | 人が停止理由と変更を確認して再開を判断 | 人が回答を決め、許可された worker-update round で依頼に追記。launch の run-start が open に戻す |
-| `collect` | `BLOCKED` | `launch-record` | `invalid-launch-record` | 状態・run / last_run を保持。書込なし | 人が対象 run の由来と生存を確認 | 回収可能なら collect。復旧できない記録は「記録の破棄」の順で stop、launch。other_issue があれば先にその Issue を解決 |
+| `collect` | `BLOCKED` | `launch-record` | `invalid-launch-record` | 状態・run / last_run を保持。書込なし | 人が対象 run の由来と生存を確認 | 回収可能なら collect。復旧できない記録は人が破棄を決めた後に「記録の破棄」の順で stop、launch。other_issue があれば先にその Issue を解決 |
 | `collect` | `BLOCKED` | `launch-record` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
-| `collect` | `BLOCKED` | `launch-record` | `no-launch-record` | 状態・run / last_run を保持。書込なし | 人が対象 run の由来と生存を確認 | last_run へ転記済みなら受け入れ後 check。記録無しなら許可後 launch。run があるが破損している場合は人の破棄判断後に stop、launch |
+| `collect` | `BLOCKED` | `launch-record` | `no-launch-record` | 状態・run / last_run を保持。書込なし | 人が対象 run の由来と生存を確認 | last_run へ転記済みなら受け入れ後 check。記録無しなら許可後 launch。run があるが破損している場合は人が破棄を決めた後に stop、launch |
 | `collect` | `BLOCKED` | `launch-record` | `packet-check` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
 | `collect` | `BLOCKED` | `launch-record` | `packet-list` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
 | `collect` | `BLOCKED` | `limit` | `io` | stop 後の blocked / run。書込済みの内容を再読込 | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
 | `collect` | `BLOCKED` | `limit` | `limit` | blocked / run を保持。stop を書込済み | 人が停止理由と変更を確認して再開を判断 | reset を待ち、人が再開を許可してから launch。依頼を変えるなら先に worker-update round |
 | `collect` | `BLOCKED` | `preflight` | `gh-repo` | 状態・run / last_run を保持。書込なし | 人が GH_REPO を確認 | 人が env を直し、同じ subcommand |
 | `collect` | `BLOCKED` | `preflight` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
-| `collect` | `BLOCKED` | `transcription` | `gate` | 状態・run / last_run を保持。書込なし | 人が pane.log / result.md / gate.err の失敗を確認 | 原因を直して collect。原文を保存し、直す内容は人が判断。断念するときは記録の破棄。本文を停止の返却に写さない |
+| `collect` | `BLOCKED` | `transcription` | `gate` | 状態・run / last_run を保持。書込なし | 人が pane.log / result.md / gate.err の失敗を確認 | 原因を直して collect。原文を保存し、直す内容は人が判断。断念するときは人が破棄を決めた後に記録の破棄。本文を停止の返却に写さない |
 | `collect` | `BLOCKED` | `transcription` | `io` | 更新前は元の状態 / run。result 後は open / last_run、stop 後は blocked / run。応答失敗でも再読込必須 | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
 | `collect` | `BLOCKED` | `transcription` | `packet-list` | open / last_run に result 書込済み (並行更新は再読込で確認) | 指揮役が入力と依存先を確認 | packet を再読込。result の転記済みを確認し、受け入れ後 check。collect を重ねない |
-| `collect` | `BLOCKED` | `transcription` | `packet-update` | 更新前は元の状態 / run。result 後は open / last_run、stop 後は blocked / run。応答失敗でも再読込必須 | 指揮役が packet と digest を読み直す | 未適用なら前提を再確認して再試行。run-start 済みなら collect か破棄、result 済みなら受け入れ後 check、stop 済みなら許可後 launch。二重転記しない |
-| `collect` | `BLOCKED` | `transcription` | `pane-log` | 状態・run / last_run を保持。書込なし | 人が pane.log / result.md / gate.err の失敗を確認 | 原因を直して collect。原文を保存し、直す内容は人が判断。断念するときは記録の破棄。本文を停止の返却に写さない |
-| `collect` | `BLOCKED` | `transcription` | `result-format` | 状態・run / last_run を保持。書込なし | 人が pane.log / result.md / gate.err の失敗を確認 | 原因を直して collect。原文を保存し、直す内容は人が判断。断念するときは記録の破棄。本文を停止の返却に写さない |
+| `collect` | `BLOCKED` | `transcription` | `packet-update` | 更新前は元の状態 / run。result 後は open / last_run、stop 後は blocked / run。応答失敗でも再読込必須 | 指揮役が packet と digest を読み直す | 未適用なら前提を再確認して再試行。run-start 済みなら collect、または人が破棄を決めた後に stop、launch。result 済みなら受け入れ後 check、stop 済みなら許可後 launch。二重転記しない |
+| `collect` | `BLOCKED` | `transcription` | `pane-log` | 状態・run / last_run を保持。書込なし | 人が pane.log / result.md / gate.err の失敗を確認 | 原因を直して collect。原文を保存し、直す内容は人が判断。断念するときは人が破棄を決めた後に記録の破棄。本文を停止の返却に写さない |
+| `collect` | `BLOCKED` | `transcription` | `result-format` | 状態・run / last_run を保持。書込なし | 人が pane.log / result.md / gate.err の失敗を確認 | 原因を直して collect。原文を保存し、直す内容は人が判断。断念するときは人が破棄を決めた後に記録の破棄。本文を停止の返却に写さない |
 | `collect` | `BLOCKED` | `transcription` | `run-record` | result 書込済み。期待値は open / last_run、run 無し。並行更新も含め再読込 | 指揮役が packet と digest を読み直す | packet を再読込し転記済みの内容を確認。受け入れ後に check。collect を重ねない |
-| `collect` | `RUNNING` | `-` | `manual-completion-pending` | 状態・run / last_run を保持。書込なし | 人が pane と process、手渡しした実行を確認 | 実行済みなら collect を続ける。未実行なら LAUNCH §10。消滅を確認して破棄を決めたら stop、launch |
-| `collect` | `RUNNING` | `-` | `wait-limit` | 状態・run / last_run を保持。書込なし | 人が pane と process、手渡しした実行を確認 | 実行済みなら collect を続ける。未実行なら LAUNCH §10。消滅を確認して破棄を決めたら stop、launch |
+| `collect` | `RUNNING` | `-` | `manual-completion-pending` | 状態・run / last_run を保持。書込なし | 人が pane と process、手渡しした実行を確認 | 実行済みなら collect を続ける。未実行なら LAUNCH §10。消滅を確認し、人が破棄を決めた後に stop、launch |
+| `collect` | `RUNNING` | `-` | `wait-limit` | 状態・run / last_run を保持。書込なし | 人が pane と process、手渡しした実行を確認 | 実行済みなら collect を続ける。未実行なら LAUNCH §10。消滅を確認し、人が破棄を決めた後に stop、launch |
 | `launch` / `retry-empty` | `BLOCKED` | `authorization` | `branch` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet の branch と引数を確認して再実行。未指定なら許可された branch を launch に渡す |
 | `launch` / `retry-empty` | `BLOCKED` | `authorization` | `input` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | 引数を直して同じ subcommand。exit 2、packet の書込なし |
 | `launch` / `retry-empty` | `BLOCKED` | `authorization` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
@@ -135,23 +149,23 @@ packet の検査前に止まる場合は、state や記録の有無自体を確�
 | `launch` / `retry-empty` | `BLOCKED` | `clone` | `clone-command` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 人が git の失敗と clone の保存状態を確認 | 照合済みの clone の原因を直し、同じ subcommand を再実行。clone を作り直す場合は snapshot の回復手順 |
 | `launch` / `retry-empty` | `BLOCKED` | `clone` | `commit-prerequisite` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 人が identity と hook 設定の出所を確認 | clone の hook を指揮役が書き換えない。配線の原因を直し、残る clone は snapshot の回復手順を経て launch |
 | `launch` / `retry-empty` | `BLOCKED` | `clone` | `io` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
-| `launch` / `retry-empty` | `BLOCKED` | `clone` | `snapshot-mismatch` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 人が snapshot の由来と保存すべき変更を確認。clone に git を実行しない | 「snapshot 不一致からの回復」に従う。未回収の open / run は退避後に stop、launch。blocked や run 無しは前提を確認して launch |
-| `launch` | `BLOCKED` | `clone` | `snapshot-untraceable` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 人が snapshot の由来と保存すべき変更を確認。clone に git を実行しない | 「snapshot 不一致からの回復」に従う。未回収の open / run は退避後に stop、launch。blocked や run 無しは前提を確認して launch |
-| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `herdr-response` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 人が workspace・tab の所有・起動済みかを確認 | 記録前なら原因を直して再実行。記録後は collect、未起動 hand-off、または stop → launch。残る tab は「記録の破棄」に従う |
+| `launch` / `retry-empty` | `BLOCKED` | `clone` | `snapshot-mismatch` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 人が snapshot の由来と保存すべき変更を確認。clone に git を実行しない | 「snapshot 不一致からの回復」に従う。未回収の open / run は退避し、人が破棄を決めた後に stop、launch。blocked や run 無しは前提を確認して launch |
+| `launch` | `BLOCKED` | `clone` | `snapshot-untraceable` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 人が snapshot の由来と保存すべき変更を確認。clone に git を実行しない | 「snapshot 不一致からの回復」に従う。未回収の open / run は退避し、人が破棄を決めた後に stop、launch。blocked や run 無しは前提を確認して launch |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `herdr-response` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 人が workspace・tab の所有・起動済みかを確認 | 記録前なら原因を直して再実行。記録後は collect、未起動 hand-off、または人が破棄を決めた後に stop → launch。残る tab は「記録の破棄」に従う |
 | `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `io` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
 | `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `run-directory` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 指揮役が入力と依存先を確認 | 人が配備・起動境界・置き場を直し、記録前なら同じ subcommand。clone の照合が通らなければ snapshot の回復手順 |
-| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `tab-ownership` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 人が workspace・tab の所有・起動済みかを確認 | 記録前なら原因を直して再実行。記録後は collect、未起動 hand-off、または stop → launch。残る tab は「記録の破棄」に従う。retry-empty の手渡しは「人手実行だけの空の結果の回復」へ |
-| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `worker-running` | records / packet / workspace では元の状態と記録。run-start 後なら open / 新 run。phase と再読込で確認 | 人が該当 worker の続行か中断を判断 | 他の worker の完了後にその Issue を collect。自分の未起動 run が残れば、未起動 hand-off または人の破棄判断後に stop、launch |
-| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `workspace` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 人が workspace・tab の所有・起動済みかを確認 | 記録前なら原因を直して再実行。記録後は collect、未起動 hand-off、または stop → launch。残る tab は「記録の破棄」に従う |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `tab-ownership` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 人が workspace・tab の所有・起動済みかを確認 | 記録前なら原因を直して再実行。記録後は collect、未起動 hand-off、または人が破棄を決めた後に stop → launch。残る tab は「記録の破棄」に従う。retry-empty の手渡しは「人手実行だけの空の結果の回復」へ |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `worker-running` | records / packet / workspace では元の状態と記録。run-start 後なら open / 新 run。phase と再読込で確認 | 人が該当 worker の続行か中断を判断 | 他の worker の完了後にその Issue を collect。自分の未起動 run が残れば、未起動 hand-off または人が破棄を決めた後に stop、launch |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `workspace` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 人が workspace・tab の所有・起動済みかを確認 | 記録前なら原因を直して再実行。記録後は collect、未起動 hand-off、または人が破棄を決めた後に stop → launch。残る tab は「記録の破棄」に従う |
 | `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `writable-run` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 指揮役が入力と依存先を確認 | 人が配備・起動境界・置き場を直し、記録前なら同じ subcommand。clone の照合が通らなければ snapshot の回復手順 |
 | `launch` | `BLOCKED` | `launch-record` | `collect-required` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | 既存 run を collect。DONE 後に必要なら round、launch |
 | `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `io` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
 | `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `packet-check` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
 | `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `packet-list` | records / packet / workspace では元の状態と記録。run-start 後なら open / 新 run。phase と再読込で確認 | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
-| `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `packet-update` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 指揮役が packet と digest を読み直す | 未適用なら前提を再確認して再試行。run-start 済みなら collect か破棄、result 済みなら受け入れ後 check、stop 済みなら許可後 launch。二重転記しない |
-| `launch` | `BLOCKED` | `launch-record` | `run-missing` | 状態・run / last_run を保持。書込なし | 人が対象 run の由来と生存を確認 | 回収可能なら collect。復旧できない記録は「記録の破棄」の順で stop、launch。other_issue があれば先にその Issue を解決 |
-| `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `run-record` | run-start 書込済み。期待値は open / 新 run、last_run 無し。並行更新も含め再読込 | 指揮役が packet と digest を読み直す | 未適用なら前提を再確認して再試行。run-start 済みなら collect か破棄、result 済みなら受け入れ後 check、stop 済みなら許可後 launch。二重転記しない |
-| `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `run-unconfirmed` | 状態・run / last_run を保持。書込なし | 人が対象 run の由来と生存を確認 | 回収可能なら collect。復旧できない記録は「記録の破棄」の順で stop、launch。other_issue があれば先にその Issue を解決 |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `packet-update` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 指揮役が packet と digest を読み直す | 未適用なら前提を再確認して再試行。run-start 済みなら collect、または人が破棄を決めた後に stop、launch。result 済みなら受け入れ後 check、stop 済みなら許可後 launch。二重転記しない |
+| `launch` | `BLOCKED` | `launch-record` | `run-missing` | 状態・run / last_run を保持。書込なし | 人が対象 run の由来と生存を確認 | 回収可能なら collect。復旧できない記録は人が破棄を決めた後に「記録の破棄」の順で stop、launch。other_issue があれば先にその Issue を解決 |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `run-record` | run-start 書込済み。期待値は open / 新 run、last_run 無し。並行更新も含め再読込 | 指揮役が packet と digest を読み直す | 未適用なら前提を再確認して再試行。run-start 済みなら collect、または人が破棄を決めた後に stop、launch。result 済みなら受け入れ後 check、stop 済みなら許可後 launch。二重転記しない |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `run-unconfirmed` | 状態・run / last_run を保持。書込なし | 人が対象 run の由来と生存を確認 | 回収可能なら collect。復旧できない記録は人が破棄を決めた後に「記録の破棄」の順で stop、launch。other_issue があれば先にその Issue を解決 |
 | `launch` / `retry-empty` | `BLOCKED` | `preflight` | `gh-repo` | 状態・run / last_run を保持。書込なし | 人が GH_REPO を確認 | 人が env を直し、同じ subcommand |
 | `launch` / `retry-empty` | `BLOCKED` | `preflight` | `io` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
 | `launch` / `retry-empty` | `BLOCKED` | `preflight` | `launch-argv` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 指揮役が入力と依存先を確認 | 人が配備・起動境界・置き場を直し、記録前なら同じ subcommand。clone の照合が通らなければ snapshot の回復手順 |
