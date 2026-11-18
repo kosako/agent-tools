@@ -757,7 +757,7 @@
       "id": 27,
       "name": "fix-round-via-last-run",
       "prompt": "新しい session で packet #291 の review の修正 round を Codex worker に委譲したい。PR は review で Warning だった。packet は state: review、run と tab は無く、last_run: /state/worker-runs/291.abc がある。clone <main>-clones/291 と label #291 の tab も残っている。どう進める? 手順確認のみ。",
-      "expected_output": "許可された修正内容を personal-packet worker-update の round 操作で記録する。packet を読み直した digest と request、next を渡す。review から open に戻った後、worker-run launch --round N を呼ぶ。launch が last_run の snapshot と tab の所有を確認し、新しい pane を足す。collect が DONE を返した後に受け入れを判断し、check の READY の head_oid で push する。既存 PR を使い、worker-update review で review に戻す。",
+      "expected_output": "許可された修正内容を personal-packet worker-update の round 操作で記録する。packet を読み直した digest と request、next を渡す。review から open に戻った後、worker-run launch --round N を呼ぶ。launch が last_run の snapshot と tab の所有を確認し、新しい pane を足す。collect が DONE を返した後に受け入れを判断する。題名と本文を personal-post-check に通してから check を呼び、READY の head_oid を指定して push する。既存 PR を使い、worker-update review で review に戻す。",
       "files": [],
       "assertions": [
         {
@@ -774,7 +774,7 @@
         },
         {
           "id": "collect-check",
-          "text": "collect の DONE の後に受け入れ、check の head_oid を指定して push する"
+          "text": "collect の DONE の後に受け入れ、題名と本文を personal-post-check に通してから check の head_oid を指定して push する"
         },
         {
           "id": "review-operation",

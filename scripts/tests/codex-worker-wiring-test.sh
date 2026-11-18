@@ -51,7 +51,7 @@ clause.call(examples, "人が `gate-publish.err` を確かめて公開を認め�
 clause.call(examples, "人の確認なしに `--accept-warnings` を付けない")
 # 許可の条件は出現する全単位に求める。正しい記述を残したまま例外を足す変更も拒否する。
 [skill, launch].each do |text|
-  units = MU.plains(text) + MU.bullets(text) + MU.blocks(text).map(&:last)
+  units = MU.sentences(text) + MU.blocks(text).map(&:last)
   units.select { |unit| unit.include?("--accept-warnings") }.each do |unit|
     allowed = [
       "人が `gate-publish.err` を確かめて公開を認めたときだけ `--accept-warnings` を付けて `check` をやり直す",
@@ -61,6 +61,10 @@ clause.call(examples, "人の確認なしに `--accept-warnings` を付けない
   end
   # 自然言語すべての意味判定ではなく、明示的な直接編集の指示だけを拒否する。
   MU.sentences(text).each do |sentence|
+    # 自然言語の一般的な判定には広げず、停止時の stop 記録を命じる句を拒否する。
+    if MU.clause?(sentence, "`check` が BLOCKED を返したときは `worker-update` の `stop` を記録する")
+      errors << "check の停止で stop を記録する指示"
+    end
     if ["packet の frontmatter を直接書き換える", "frontmatter を手で書き換える"].any? { |p| MU.clause?(sentence, p) }
       errors << "packet の frontmatter を直接編集する指示"
     end
@@ -120,6 +124,10 @@ clause.call(recovery, "`check` が BLOCKED を返したときは `worker-update`
 clause.call(recovery, "一覧に無い `reason_code` は `Status: BLOCKED` で人に返し、自分で回避しない")
 clause.call(recovery, "clone の hook の設定を自分で書き換えない")
 clause.call(recovery, "`run-start` が blocked を open に戻し、記録を新しい run に置き換える")
+clause.call(recovery, "この場合は `launch-path` / `tab-ownership` で止まる")
+clause.call(recovery, "人が `#<issue>` の tab を確かめ、不要なら閉じる")
+clause.call(recovery, "未起動の run の記録も上の手順で破棄してから `launch` し直す")
+clause.call(recovery, "tab を閉じないなら §10 の未起動 hand-off で渡す")
 clause.call(examples, "Claude Code では Bash tool の background (`run_in_background`) で走らせ、完了の通知を待つ")
 errors << "head_oid は READY の JSON から読む" unless lines.include?(%q{head_oid=$(jq -er 'select(.status == "READY") | .head_oid' "$check_file") || exit 1})
 packet = section.call(launch, "## 4. packet の更新")

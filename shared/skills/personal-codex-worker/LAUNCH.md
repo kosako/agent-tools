@@ -106,6 +106,13 @@ worker に直させるときは §4 の `round` で修正 round の項を依頼�
    `worker-update` の `stop` で `blocked` にし、`next` に再開の入口を記す。`run` は保持する。
 3. `launch` で起動し直す。`run-start` が blocked を open に戻し、記録を新しい run に置き換える。
 
+tab の作成前に手渡しになった run の run dir には `tab-id` が無い。
+前の round の `#<issue>` の tab が残っていると、`stop` 後の `launch` はその所有を確かめられない。
+この場合は `launch-path` / `tab-ownership` で止まる。
+人が `#<issue>` の tab を確かめ、不要なら閉じる。
+その後、未起動の run の記録も上の手順で破棄してから `launch` し直す。
+tab を閉じないなら §10 の未起動 hand-off で渡す。
+
 frontmatter を手で書き換えず、clone の commit と未 commit の変更を消さない。
 `stop` の前提は open。別の state なら破棄用の架空の依頼を作らず、人に返す。
 
@@ -263,8 +270,8 @@ meta=$(gh pr view "$pr" --repo "$slug" --json state,headRefName) || exit 1
 printf '%s' "$meta" | jq -e --arg branch "$branch" '.state == "MERGED" and .headRefName == $branch' >/dev/null || exit 1
 ```
 
-(`exit 1` は「その段で止めて、tab にも clone にも触らず `Blocked at: cleanup`」の意。`$issue` は §0 で `\A\d+\z`
-を通した値。`prev_run` / `branch` は packet 由来の値なので、以降も変数で渡す。jq は行が無い・2 件以上・条件に
+(`exit 1` は「その段で止めて、tab にも clone にも触らず `Blocked at: cleanup`」の意。`$issue` は §0 の正の整数。
+`prev_run` / `branch` は packet 由来の値なので、以降も変数で渡す。jq は行が無い・2 件以上・条件に
 合わないときに出力が無く、`-e` で非 0 になる。gh の `state` は merge 済みの PR で `MERGED`。)
 
 ### tab の確認 (まだ閉じない)

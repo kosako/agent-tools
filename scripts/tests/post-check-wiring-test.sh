@@ -144,8 +144,17 @@ end
 doc = "docs/post-check.md"
 terms.call("#{doc} の「## 組み込み先」の review の項目", item.call(doc, "## 組み込み先", "`personal-review-request`"),
            ["手順 2", "この script を通してから投稿", "`--marker-kind review-result`"])
-terms.call("#{doc} の「## 組み込み先」の置き換えない手順の項目", item.call(doc, "## 組み込み先", "`personal-codex-worker`"),
-           ["`personal-maintenance-sweep`", "今の手順"])
+worker = item.call(doc, "## 組み込み先", "`personal-codex-worker`")
+[
+  "題名と本文を `personal-post-check` に通してから `check` にかけます",
+  "`check` は題名と本文に加えて、差分と commit message、branch 名も gate に通します",
+  "題名か本文に gate の警告があると、post-check と `check` の両方で人の確認を求めます",
+  "同じ本文への重複検査は、この委譲の手順では例外として行います"
+].each do |phrase|
+  errors << "#{doc} の委譲の項目に句が無い: #{phrase}" if worker && !MU.clause?(worker, phrase)
+end
+terms.call("#{doc} の「## 組み込み先」の置き換えない手順の項目", item.call(doc, "## 組み込み先", "`personal-maintenance-sweep`"),
+           ["今の手順"])
 
 # 5. 文書が使う option と目印の種類と exit code が、script にある。
 src = File.join(root, "shared/scripts/personal-post-check.rb")
