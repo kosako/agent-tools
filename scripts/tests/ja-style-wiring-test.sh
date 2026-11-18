@@ -10,7 +10,7 @@
 # - personal-session-handoff の手順 3 に、publish の前に --dry-run の本文を通す句と、作業ログの本文を通す句がある。
 # - personal-codex-worker の §4 の brief の一覧に「文章の規則:」の bullet があり、worker が commit の前に通し gate で
 #   ないことが句としてある (一覧の外にだけあっても worker には届かない)。§7 に題名と本文を通す句、LAUNCH.md の §9 に
-#   command の行がある。
+#   post-check の句がある。実行は codex-worker-check-test が検査する。
 # - personal-maintenance-sweep の RECORD.md の所見の Issue の節に、題名と本文を先に通す句と command の行があり、その
 #   command が gate の command より前にある。FIX.md の検証の節に commit message を通す句、PR の節に題名と本文を通す句と
 #   command の行がある。SKILL.md の手順 7 と 7b の要約にも通す句がある。
@@ -121,10 +121,12 @@ else
     end
   end
 end
-check.call(worker, "## 7. PR (orchestrator の操作)", "題名と本文を通す句",
-           "PR の題名と本文は先に書き、`personal-ja-style-check --stdin` に通して指摘を直すか理由を持ってから gate に入れる (指摘だけで止めない。#556)。")
-command.call("shared/skills/personal-codex-worker/LAUNCH.md", "## 9. 回収 (fetch) と trailer 検査と PR", "command の行",
-             %q!{ printf '%s\n\n' "$title" && cat "$body_file"; } | "$style" --stdin!)
+check.call(worker, "## 7. PR (orchestrator の操作)", "check 経由で題名と本文を通す句",
+           "`check` は題名と本文を `personal-ja-style-check --stdin --json` に通す。")
+check.call(worker, "## 7. PR (orchestrator の操作)", "指摘を読む句",
+           "文体の指摘は直すか、そのままにする理由を持つ。")
+check.call("shared/skills/personal-codex-worker/LAUNCH.md", "## 9. 回収 (fetch) と trailer 検査と PR", "投稿前の検査",
+           "受け入れ後に題名と本文を書き、push の前に `personal-post-check` に通す。")
 
 # 雛形を検査にかける。code block の中は検査が読まないので、block の中身を取り出して渡す。取り出せたかは file ごとに
 # 別々に見る (連結後の文字列で見ると、TEMPLATES.md だけで両方の目印が揃い、RESULT-FORMAT.md の block が無くても通る)。

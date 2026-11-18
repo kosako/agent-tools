@@ -92,6 +92,21 @@ else
   errors << "commit 規則の bullet に test の上限の句 #{missing.inspect} が無い" unless missing.empty?
 end
 
+# collect が意味を推測せず読む6つの見出しと、質問と未検証の区別を worker に届ける (#706)。
+result = find(bullets, "最終 message の書式 (転記元)")
+if result.nil?
+  errors << "最終 message の書式の bullet が無い"
+else
+  headings = MU.code_spans(result).select { |span| span.start_with?("###") }
+  expected = ["到達点", "判断", "未完", "停止理由 または 質問", "commits", "次の 1 アクション"].map { |h| MU.squash("### #{h}") }
+  errors << "最終 message の6見出しの名前か順序が異なる" unless headings == expected
+  ["停止理由は orchestrator の判断待ちで作業を止める理由に限る",
+   "無ければ「なし」と書く",
+   "実行できなかった test や読めなかった process 一覧は `未完` に書く"].each do |phrase|
+    errors << "最終 message の bullet に句が無い: #{phrase}" unless clause?(result, phrase)
+  end
+end
+
 abort "FAIL: codex-worker-brief\n  " + errors.join("\n  ") unless errors.empty?
 puts "ok: codex-worker-brief"
 RUBY

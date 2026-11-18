@@ -8,7 +8,7 @@ Ruby 2.6 の標準 library、git、herdr、codex と配備済み script を使�
 packet の存在や本文だけで、委譲を始める許可があるとは扱いません。
 GitHub への書き込みは、この command の範囲外です。
 `check` は公開先と個人 project の判定に限り、gh で読み取ります。
-現行 skill と `LAUNCH.md` の手順は、#706 の最後の PR まで使います。
+skill と `LAUNCH.md` は、この command を呼ぶ通常の手順を定めます。
 
 ## 入力
 
@@ -55,53 +55,216 @@ preflight の停止では `dependency_exit` に依存 command の exit を添え
 `packet.written` は起動記録や回収結果の書き込みを示します。先に保存した branch はこの値に含みません。
 herdr の失敗を含め、書いた起動記録と作成済みの file は削除しません。
 
-## 段と停止の区分
+## launch と collect の段の順序
 
-前の段で止まったときは、後ろの段を実行しません。
-`phase` は止まった処理、`blocked_at` は skill の停止区分です。
+`launch` の段は `environment`、`packet`、`records`、`workspace`、`branch` の順に始まります。
+続いて `run-directory`、`clone`、`commit-prerequisites`、`preflight` に進みます。
+最後は `run-location`、`artifacts`、`run-record`、`herdr` の順です。
+`run-start` の書き込みは `run-record` の段で行い、`herdr` の段はその後です。
 
-| phase | blocked_at | 主な reason_code と意味 |
-| --- | --- | --- |
-| `input` | `authorization` | `input`: 引数や main worktree の指定が不正 |
-| `environment` | `preflight` | `gh-repo`: GH_REPO が空でない |
-| `packet` | `authorization` / `launch-record` | `packet-missing`、`request-empty`、`packet-state` / `packet-check`、`packet-list` |
-| `records` | `launch-record` / `launch-path` | `collect-required`、`run-unconfirmed`、`run-missing` / `worker-running` |
-| `workspace` | `launch-path` | `workspace`、`herdr-response`、`worker-running` |
-| `branch` | `authorization` / `launch-record` | `branch` / `packet-update` |
-| `run-directory` | `launch-path` | `run-directory`: run の置き場を作れない |
-| `clone` | `clone` | `snapshot-untraceable`、`snapshot-mismatch`、`clone-command` |
-| `commit-prerequisites` | `clone` | `commit-prerequisite`: identity または hook 配線を確認できない。`clone-command`: 起動時の HEAD を読めない |
-| `preflight` | `preflight` | `preflight`、`launch-argv` |
-| `run-location` | `launch-path` | `writable-run`: run が worker の書込先の外と確認できない |
-| `artifacts` | `launch-path` | `io`: brief または run script の保存に失敗 |
-| `run-record` | `launch-record` | `packet-update`、`run-record`、`packet-list` |
-| `herdr` | `launch-path` | `herdr-response`、`tab-ownership`、`worker-running` |
+`collect` は `records`、`wait` の順に進み、完了記録と結果から経路を選びます。
+初回の空の結果では `completion` で止まります。
+異常終了などの停止経路は `snapshot`、`backup`、`transcription` の順に進みます。
+その後、`completion` で停止理由を返します。
+通常の回収経路は `pane-log`、`snapshot`、`commits`、`transcription` の順です。
+質問があれば最後の `transcription` で停止を記録します。
 
-file 操作などの予期しない失敗は、その段の区分で `io` を返します。
-`RUNNING` には `blocked_at` を含めません。
-起動時は `records` の `worker-running`、collect は `wait` の `wait-limit` または
-`manual-completion-pending` です。
-同じ Issue の記録を先に検査するため、別の Issue の worker と区別できます。
+## 停止後の state と回復 (正本)
 
-## 現行手順との対応
+この表は `BLOCKED` と `RUNNING` の全区分を扱います。
+`phase` は止まった処理、`blocked_at` は停止区分です。`-` は JSON に key が無いことを示します。
+通常は exit 1、`input` は exit 2、`RUNNING` は exit 3 です。
+`io` は予期しない例外を、処理中の区分で返す共通の経路です。
+同じ行に並べた subcommand は、それぞれ独立した区分として数えます。
 
-正本の手順は [SKILL.md](../shared/skills/personal-codex-worker/SKILL.md) と
-[LAUNCH.md](../shared/skills/personal-codex-worker/LAUNCH.md) です。
+「保持」は呼出し前の state と記録を変えない意味です。open とは限りません。
+表の「同じ subcommand」は原因を直した後だけ使います。RUNNING では process を止めません。
+packet の検査前に止まる場合は、state や記録の有無自体を確かめられていません。
+`packet.written` には branch の保存を含みません。書込の成否が不明なら必ず再読込します。
+表の回復は現在の依頼で許可された範囲だけで行います。許可や前提が足りなければ人に返します。
 
-| 手順 | command の処理 |
+| subcommand | status | blocked_at | reason_code | 停止後の state・記録・書込 | 次に誰が何をするか | 回復の手順 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `check` | `BLOCKED` | `authorization` | `input` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | 引数を直して同じ subcommand。exit 2、packet の書込なし |
+| `check` | `BLOCKED` | `authorization` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `check` | `BLOCKED` | `fetch` | `fetch` | open または review / last_run を保持。書込なし | 人が診断と公開内容を確認。指揮役は push を止める | 「check の回復」の順で原因を直して check。題名と本文を変えたら personal-post-check から再実行 |
+| `check` | `BLOCKED` | `fetch` | `io` | open または review / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `check` | `BLOCKED` | `fetch` | `snapshot-mismatch` | open または review / last_run を保持。書込なし | 人が snapshot の由来と保存すべき変更を確認。clone に git を実行しない | state と last_run を保つ。由来を確認して照合可能なら check。clone を退避して作り直すなら、許可された round、launch、collect、check |
+| `check` | `BLOCKED` | `launch-record` | `check-record` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `check` | `BLOCKED` | `launch-record` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `check` | `BLOCKED` | `launch-record` | `packet-check` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `check` | `BLOCKED` | `launch-record` | `packet-list` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `check` | `BLOCKED` | `preflight` | `gh-repo` | 状態・run / last_run を保持。書込なし | 人が GH_REPO を確認 | 人が env を直し、同じ subcommand |
+| `check` | `BLOCKED` | `preflight` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `check` | `BLOCKED` | `public-safety` | `destination` | open または review / last_run を保持。書込なし | 人が診断と公開内容を確認。指揮役は push を止める | 「check の回復」の順で原因を直して check。題名と本文を変えたら personal-post-check から再実行 |
+| `check` | `BLOCKED` | `public-safety` | `gate-warning` | open または review / last_run を保持。書込なし | 人が診断と公開内容を確認。指揮役は push を止める | 人が gate-publish.err を確かめて公開を認めたときだけ --accept-warnings を付けて check。stop は記録しない |
+| `check` | `BLOCKED` | `public-safety` | `io` | open または review / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `check` | `BLOCKED` | `public-safety` | `marker` | open または review / last_run を保持。書込なし | 人が診断と公開内容を確認。指揮役は push を止める | 「check の回復」の順で原因を直して check。題名と本文を変えたら personal-post-check から再実行 |
+| `check` | `BLOCKED` | `public-safety` | `merge-commit` | open または review / last_run を保持。書込なし | 人が診断と公開内容を確認。指揮役は push を止める | 「check の回復」の順で原因を直して check。題名と本文を変えたら personal-post-check から再実行 |
+| `check` | `BLOCKED` | `public-safety` | `publish-gate` | open または review / last_run を保持。書込なし | 人が診断と公開内容を確認。指揮役は push を止める | 「check の回復」の順で原因を直して check。題名と本文を変えたら personal-post-check から再実行 |
+| `check` | `BLOCKED` | `public-safety` | `publish-material` | open または review / last_run を保持。書込なし | 人が診断と公開内容を確認。指揮役は push を止める | 「check の回復」の順で原因を直して check。題名と本文を変えたら personal-post-check から再実行 |
+| `check` | `BLOCKED` | `public-safety` | `style` | open または review / last_run を保持。書込なし | 人が診断と公開内容を確認。指揮役は push を止める | 「check の回復」の順で原因を直して check。題名と本文を変えたら personal-post-check から再実行 |
+| `check` | `BLOCKED` | `trailer` | `io` | open または review / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `check` | `BLOCKED` | `trailer` | `trailer` | open または review / last_run を保持。書込なし | 人が診断と公開内容を確認。指揮役は push を止める | 「check の回復」の順で原因を直して check。題名と本文を変えたら personal-post-check から再実行 |
+| `collect` | `BLOCKED` | `authorization` | `input` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | 引数を直して同じ subcommand。exit 2、packet の書込なし |
+| `collect` | `BLOCKED` | `authorization` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `collect` | `BLOCKED` | `authorization` | `packet-missing` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `collect` | `BLOCKED` | `authorization` | `packet-state` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `collect` | `BLOCKED` | `authorization` | `request-empty` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `collect` | `BLOCKED` | `clone` | `backup` | 状態・run / last_run を保持。書込なし | 人が backup_step と保存できた変更を確認 | 原因を直して collect。回収を断念するなら必要な変更を保存・退避し、人が破棄を決めた後に stop、launch |
+| `collect` | `BLOCKED` | `clone` | `clone-command` | 状態・run / last_run を保持。書込なし | 人が git の失敗と clone の保存状態を確認 | 照合済みの clone の原因を直し、同じ subcommand を再実行。clone を作り直す場合は snapshot の回復手順 |
+| `collect` | `BLOCKED` | `clone` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `collect` | `BLOCKED` | `clone` | `snapshot-mismatch` | 状態・run / last_run を保持。書込なし | 人が snapshot の由来と保存すべき変更を確認。clone に git を実行しない | 「snapshot 不一致からの回復」に従う。未回収の open / run は退避し、人が破棄を決めた後に stop、launch。blocked や run 無しは前提を確認して launch |
+| `collect` | `BLOCKED` | `executor-exit` | `done-invalid` | blocked / run を保持。stop を書込済み | 人が停止理由と変更を確認して再開を判断 | 人が原因と保存した変更を確認し、許可後に launch。修正依頼を足す場合は先に worker-update round |
+| `collect` | `BLOCKED` | `executor-exit` | `executor-exit` | blocked / run を保持。stop を書込済み | 人が停止理由と変更を確認して再開を判断 | 人が原因と保存した変更を確認し、許可後に launch。修正依頼を足す場合は先に worker-update round |
+| `collect` | `BLOCKED` | `executor-exit` | `io` | wait 中は元の状態 / run。completion では stop 後の blocked / run の場合あり。再読込必須 | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `collect` | `BLOCKED` | `executor-exit` | `nonce-mismatch` | blocked / run を保持。stop を書込済み | 人が停止理由と変更を確認して再開を判断 | 人が原因と保存した変更を確認し、許可後に launch。修正依頼を足す場合は先に worker-update round |
+| `collect` | `BLOCKED` | `executor-result` | `empty-result` | 初回: 元の状態 / run、書込なし。2回目: blocked / run、stop 書込済み | 指揮役が retryable を確認 | true のときだけ retry-empty。false は人に返し、自動再試行しない |
+| `collect` | `BLOCKED` | `executor-result` | `io` | 初回の空の結果では元の状態 / run。stop 後なら blocked / run。書込は再読込で確認 | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `collect` | `BLOCKED` | `executor-result` | `worker-question` | blocked / run を保持。stop を書込済み | 人が停止理由と変更を確認して再開を判断 | 人が回答を決め、許可された worker-update round で依頼に追記。launch の run-start が open に戻す |
+| `collect` | `BLOCKED` | `launch-record` | `invalid-launch-record` | 状態・run / last_run を保持。書込なし | 人が対象 run の由来と生存を確認 | 回収可能なら collect。復旧できない記録は人が破棄を決めた後に「記録の破棄」の順で stop、launch。other_issue があれば先にその Issue を解決 |
+| `collect` | `BLOCKED` | `launch-record` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `collect` | `BLOCKED` | `launch-record` | `no-launch-record` | 状態・run / last_run を保持。書込なし | 人が対象 run の由来と生存を確認 | last_run へ転記済みなら受け入れ後 check。記録無しなら許可後 launch。run があるが破損している場合は人が破棄を決めた後に stop、launch |
+| `collect` | `BLOCKED` | `launch-record` | `packet-check` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `collect` | `BLOCKED` | `launch-record` | `packet-list` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `collect` | `BLOCKED` | `limit` | `io` | stop 後の blocked / run。書込済みの内容を再読込 | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `collect` | `BLOCKED` | `limit` | `limit` | blocked / run を保持。stop を書込済み | 人が停止理由と変更を確認して再開を判断 | reset を待ち、人が再開を許可してから launch。依頼を変えるなら先に worker-update round |
+| `collect` | `BLOCKED` | `preflight` | `gh-repo` | 状態・run / last_run を保持。書込なし | 人が GH_REPO を確認 | 人が env を直し、同じ subcommand |
+| `collect` | `BLOCKED` | `preflight` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `collect` | `BLOCKED` | `transcription` | `gate` | 状態・run / last_run を保持。書込なし | 人が pane.log / result.md / gate.err の失敗を確認 | 原因を直して collect。原文を保存し、直す内容は人が判断。断念するときは人が破棄を決めた後に記録の破棄。本文を停止の返却に写さない |
+| `collect` | `BLOCKED` | `transcription` | `io` | 更新前は元の状態 / run。result 後は open / last_run、stop 後は blocked / run。応答失敗でも再読込必須 | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `collect` | `BLOCKED` | `transcription` | `packet-list` | open / last_run に result 書込済み (並行更新は再読込で確認) | 指揮役が入力と依存先を確認 | packet を再読込。result の転記済みを確認し、受け入れ後 check。collect を重ねない |
+| `collect` | `BLOCKED` | `transcription` | `packet-update` | 更新前は元の状態 / run。result 後は open / last_run、stop 後は blocked / run。応答失敗でも再読込必須 | 指揮役が packet と digest を読み直す | 未適用なら前提を再確認して再試行。run-start 済みなら collect、または人が破棄を決めた後に stop、launch。result 済みなら受け入れ後 check、stop 済みなら許可後 launch。二重転記しない |
+| `collect` | `BLOCKED` | `transcription` | `pane-log` | 状態・run / last_run を保持。書込なし | 人が pane.log / result.md / gate.err の失敗を確認 | 原因を直して collect。原文を保存し、直す内容は人が判断。断念するときは人が破棄を決めた後に記録の破棄。本文を停止の返却に写さない |
+| `collect` | `BLOCKED` | `transcription` | `result-format` | 状態・run / last_run を保持。書込なし | 人が pane.log / result.md / gate.err の失敗を確認 | 原因を直して collect。原文を保存し、直す内容は人が判断。断念するときは人が破棄を決めた後に記録の破棄。本文を停止の返却に写さない |
+| `collect` | `BLOCKED` | `transcription` | `run-record` | result 書込済み。期待値は open / last_run、run 無し。並行更新も含め再読込 | 指揮役が packet と digest を読み直す | packet を再読込し転記済みの内容を確認。受け入れ後に check。collect を重ねない |
+| `collect` | `RUNNING` | `-` | `manual-completion-pending` | 状態・run / last_run を保持。書込なし | 人が pane と process、手渡しした実行を確認 | 実行済みなら collect を続ける。未実行なら LAUNCH §10。消滅を確認し、人が破棄を決めた後に stop、launch |
+| `collect` | `RUNNING` | `-` | `wait-limit` | 状態・run / last_run を保持。書込なし | 人が pane と process、手渡しした実行を確認 | 実行済みなら collect を続ける。未実行なら LAUNCH §10。消滅を確認し、人が破棄を決めた後に stop、launch |
+| `launch` / `retry-empty` | `BLOCKED` | `authorization` | `branch` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet の branch と引数を確認して再実行。未指定なら許可された branch を launch に渡す |
+| `launch` / `retry-empty` | `BLOCKED` | `authorization` | `input` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | 引数を直して同じ subcommand。exit 2、packet の書込なし |
+| `launch` / `retry-empty` | `BLOCKED` | `authorization` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `launch` / `retry-empty` | `BLOCKED` | `authorization` | `packet-missing` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `launch` / `retry-empty` | `BLOCKED` | `authorization` | `packet-state` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `launch` / `retry-empty` | `BLOCKED` | `authorization` | `request-empty` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `launch` / `retry-empty` | `BLOCKED` | `clone` | `clone-command` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 人が git の失敗と clone の保存状態を確認 | 照合済みの clone の原因を直し、同じ subcommand を再実行。clone を作り直す場合は snapshot の回復手順 |
+| `launch` / `retry-empty` | `BLOCKED` | `clone` | `commit-prerequisite` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 人が identity と hook 設定の出所を確認 | clone の hook を指揮役が書き換えない。配線の原因を直し、残る clone は snapshot の回復手順を経て launch |
+| `launch` / `retry-empty` | `BLOCKED` | `clone` | `io` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `launch` / `retry-empty` | `BLOCKED` | `clone` | `snapshot-mismatch` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 人が snapshot の由来と保存すべき変更を確認。clone に git を実行しない | 「snapshot 不一致からの回復」に従う。未回収の open / run は退避し、人が破棄を決めた後に stop、launch。blocked や run 無しは前提を確認して launch |
+| `launch` | `BLOCKED` | `clone` | `snapshot-untraceable` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 人が snapshot の由来と保存すべき変更を確認。clone に git を実行しない | 「snapshot 不一致からの回復」に従う。未回収の open / run は退避し、人が破棄を決めた後に stop、launch。blocked や run 無しは前提を確認して launch |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `herdr-response` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 人が workspace・tab の所有・起動済みかを確認 | 記録前なら原因を直して再実行。記録後は collect、未起動 hand-off、または人が破棄を決めた後に stop → launch。残る tab は「記録の破棄」に従う |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `io` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `run-directory` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 指揮役が入力と依存先を確認 | 人が配備・起動境界・置き場を直し、記録前なら同じ subcommand。clone の照合が通らなければ snapshot の回復手順 |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `tab-ownership` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 人が workspace・tab の所有・起動済みかを確認 | 記録前なら原因を直して再実行。記録後は collect、未起動 hand-off、または人が破棄を決めた後に stop → launch。残る tab は「記録の破棄」に従う。retry-empty の手渡しは「人手実行だけの空の結果の回復」へ |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `worker-running` | records / packet / workspace では元の状態と記録。run-start 後なら open / 新 run。phase と再読込で確認 | 人が該当 worker の続行か中断を判断 | 他の worker の完了後にその Issue を collect。自分の未起動 run が残れば、未起動 hand-off または人が破棄を決めた後に stop、launch |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `workspace` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 人が workspace・tab の所有・起動済みかを確認 | 記録前なら原因を直して再実行。記録後は collect、未起動 hand-off、または人が破棄を決めた後に stop → launch。残る tab は「記録の破棄」に従う |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-path` | `writable-run` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 指揮役が入力と依存先を確認 | 人が配備・起動境界・置き場を直し、記録前なら同じ subcommand。clone の照合が通らなければ snapshot の回復手順 |
+| `launch` | `BLOCKED` | `launch-record` | `collect-required` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | 既存 run を collect。DONE 後に必要なら round、launch |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `io` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `packet-check` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `packet-list` | records / packet / workspace では元の状態と記録。run-start 後なら open / 新 run。phase と再読込で確認 | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `packet-update` | 記録前は元の状態。run-start 後は open / 新 run (last_run 削除)。書込は phase と再読込で確認 | 指揮役が packet と digest を読み直す | 未適用なら前提を再確認して再試行。run-start 済みなら collect、または人が破棄を決めた後に stop、launch。result 済みなら受け入れ後 check、stop 済みなら許可後 launch。二重転記しない |
+| `launch` | `BLOCKED` | `launch-record` | `run-missing` | 状態・run / last_run を保持。書込なし | 人が対象 run の由来と生存を確認 | 回収可能なら collect。復旧できない記録は人が破棄を決めた後に「記録の破棄」の順で stop、launch。other_issue があれば先にその Issue を解決 |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `run-record` | run-start 書込済み。期待値は open / 新 run、last_run 無し。並行更新も含め再読込 | 指揮役が packet と digest を読み直す | 未適用なら前提を再確認して再試行。run-start 済みなら collect、または人が破棄を決めた後に stop、launch。result 済みなら受け入れ後 check、stop 済みなら許可後 launch。二重転記しない |
+| `launch` / `retry-empty` | `BLOCKED` | `launch-record` | `run-unconfirmed` | 状態・run / last_run を保持。書込なし | 人が対象 run の由来と生存を確認 | 回収可能なら collect。復旧できない記録は人が破棄を決めた後に「記録の破棄」の順で stop、launch。other_issue があれば先にその Issue を解決 |
+| `launch` / `retry-empty` | `BLOCKED` | `preflight` | `gh-repo` | 状態・run / last_run を保持。書込なし | 人が GH_REPO を確認 | 人が env を直し、同じ subcommand |
+| `launch` / `retry-empty` | `BLOCKED` | `preflight` | `io` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `launch` / `retry-empty` | `BLOCKED` | `preflight` | `launch-argv` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 指揮役が入力と依存先を確認 | 人が配備・起動境界・置き場を直し、記録前なら同じ subcommand。clone の照合が通らなければ snapshot の回復手順 |
+| `launch` / `retry-empty` | `BLOCKED` | `preflight` | `preflight` | 状態・run / last_run を保持。branch だけ保存済みの場合あり | 指揮役が入力と依存先を確認 | 人が配備・起動境界・置き場を直し、記録前なら同じ subcommand。clone の照合が通らなければ snapshot の回復手順 |
+| `launch` | `RUNNING` | `-` | `worker-running` | 状態・run / last_run を保持。書込なし | 人が該当 worker の続行か中断を判断 | 再起動しない。完了後に対象 Issue を collect、必要なら launch。生存不明のまま記録を破棄しない |
+| `retry-empty` | `BLOCKED` | `launch-record` | `not-retryable` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | 空の結果の初回という前提を確認。結果があれば collect。対象外を retry-empty で再試行しない |
+
+### 更新後の失敗
+
+`run-start` は blocked を open に戻し、新しい run を保存して last_run を消します。
+`result` は open の run を last_run に移します。`stop` は open を blocked にし、記録を保持します。
+`packet-update` では、更新の拒否と、成功応答を解釈できない失敗の両方があります。
+`packet.written: true` でも、返すまでに別の更新が入る可能性があります。
+packet を再読込し、適用済みの操作を繰り返さず、上の表から次の手を選びます。
+
+### 記録の破棄
+
+対象は、実行が消滅した RUNNING、未起動の hand-off、終了後の snapshot 照合失敗などです。
+人が pane と process を確かめ、必要な変更を保存して、記録を破棄すると決めたときだけ進めます。
+open で run が一致する packet を読み直し、その digest で `worker-update stop` を呼びます。
+entry には判断の理由、next には再開の入口を書きます。blocked になり、run は残ります。
+既に blocked なら重ねて stop を書かず、再開の許可を確認します。
+次の `launch` の `run-start` が open に戻し、run を置き換えます。
+frontmatter を手で書き換えず、clone の commit と未 commit の変更を消しません。
+
+手渡しの run に tab-id が無く、前の round の tab が残ると、所有を確かめられません。
+`launch` は run-start 後に `launch-path` / `tab-ownership` で止まります。
+人が tab を確認して不要なら閉じ、その未起動 run も stop で記録してから launch し直します。
+tab を閉じないなら、生成済みの記録と未起動を確認して LAUNCH §10 の hand-off を使います。
+
+### snapshot 不一致からの回復
+
+照合の失敗では packet を変更しません。終了後でも open / run が残り得ます。
+人が由来と診断を調べ、必要な変更を保存して clone 全体を退避し、元の path を空けます。
+未照合の clone に git を実行しません。保存内容をどう新しい作業へ戻すかも人が判断します。
+未回収の open / run なら、人が破棄を決めた後に上の stop、launch の順を使います。
+`launch` だけでは collect-required などで止まるためです。
+blocked / run なら、再開の許可を確認して launch します。
+run の無い open / last_run (記録前の失敗では記録無しも含む) なら、launch で新規 clone を用意します。
+retry-empty の途中で照合が止まった場合も、clone 退避後は retry-empty を繰り返さず、この順を使います。
+前の tab の所有は記録の tab-id と pane 名で確かめます。確かめられなければ上の破棄の手順に従います。
+
+check の照合失敗も packet を変えません。由来を調べ、照合可能になれば check をやり直します。
+退避して新規 clone で再開する必要があるなら、許可された `worker-update round` で依頼を記録します。
+review は round で open に戻し、launch、collect、受け入れ後の check へ進みます。
+退避前の変更は消さず、復元が済むまで新規 clone の結果を受け入れません。
+
+### check の回復
+
+`check` が BLOCKED を返したときは `worker-update` の `stop` を記録しない。
+open または review と last_run を保持し、停止区分・理由・人の次の手を Next step に書きます。
+入力や記録が不正だった場合も、その状態を自動で open に変えません。
+原因を直して check をやり直します。worker が直すなら許可された round、launch、collect を先に行います。
+履歴を書き換える場合は後述の「check の段と停止」の順を守ります。
+人が `gate-publish.err` を確かめて公開を認めたときだけ `--accept-warnings` を付けて `check` をやり直します。
+題名と本文を変えた場合は `personal-post-check` からやり直します。
+
+## skill との責務の対応
+
+指揮役の判断と通常の呼び出し例は [SKILL.md](../shared/skills/personal-codex-worker/SKILL.md) と
+[LAUNCH.md](../shared/skills/personal-codex-worker/LAUNCH.md) を参照します。
+JSON、file、処理の段の契約はこの文書に置きます。
+
+| skill | command の処理 |
 | --- | --- |
-| SKILL §1、LAUNCH §0 | 引数、packet の依頼と state、既存 run と workspace の生存確認 |
-| LAUNCH §1 | state directory の `agent-tools/worker-runs` を mode 700 にし、`<issue>.XXXXXX` を作る |
-| LAUNCH §2 | `<main root>-clones/<issue>` の snapshot を git 実行前に照合。無ければ `--no-hardlinks` で clone |
-| LAUNCH §2 の branch | local branch、origin の同名 branch、新規の順で解決。新規は main で fetch した origin/main の tip |
-| LAUNCH §2 の commit 前提 | identity、main と同じ実体の hook directory、実行可能な hook と隣の gate を確認 |
-| LAUNCH §3 | preflight JSON を保存。launch_argv と run directory の境界を確認 |
-| SKILL §4、LAUNCH §4 | 依頼を byte のまま brief に写し、固定の指示と最終 message の見出しを足す |
-| LAUNCH §4 の起動記録 | digest を前提に run-start を実行し、list の成功と記録の一致を確認 |
-| LAUNCH §5 | Issue tab を作成、または所有確認した既存 tab の最初の pane を下に分割して起動 |
-| SKILL §5、LAUNCH §6 | collect が完了記録を確認し、最大300秒ずつ待つ |
-| LAUNCH §7 | collect が終了を判定し、生出力と残った process を確認。retry-empty が空の結果を1回だけ再実行 |
-| SKILL §6、LAUNCH §8 | snapshot を照合し、結果を検査して転記。停止時は変更を退避して stop を記録 |
+| §1〜§3 | launch が記録・生存・clone・preflight を検査する。依頼と authorization は指揮役が持つ |
+| §4〜§5 | launch が brief と run script を生成し、run-start の後に起動する |
+| §6 | collect が完了を判定し、検査した結果を result または stop で記録する |
+| §6 の空の結果 | retry-empty が1回目だけ新しい run で同じ brief を起動する |
+| §7 | check が回収と公開前の検査を行う。push、PR 作成、review の記録は指揮役が行う |
+| §8 | JSON と exit を RESULT-FORMAT.md の人向けの返却へ対応させる |
+| §9 | 後始末は command の範囲外。LAUNCH.md §11 に従う |
+
+## launch の置き場と commit の前提
+
+run dir は `${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/worker-runs/<issue>.<random>` に作ります。
+親の `worker-runs` と run dir の mode は 0700 です。通常の一時 directory には置きません。
+2026-09-24、codex 0.156.0 の workspace-write で、workdir、`/tmp`、`$TMPDIR` への書き込みを実測しました。
+preflight 後に物理 path を解決し、run dir がこの書込先の外にあることを確かめます。
+codex の版で書込先が増えたら列挙も合わせます。解決できない path があれば起動しません。
+
+clone は `<main worktree>-clones/<issue>` に `--no-hardlinks` で作ります。
+branch は clone の local、`origin` の同名 branch、新規の順で解決します。
+新規の基点は、main で fetch した `origin/main` の tip です。
+script はその objects を clone に取り込み、OID を明示して branch を切ります。
+基点を省くと、main worktree が checkout している別 branch から切られるためです。
+clone の自動 maintenance は snapshot を採る前に無効化します。
+
+起動前に clone の `user.email` と `user.name` が空でないことを確かめます。
+clone には main の repo-local な設定が引き継がれません。
+identity を `includeIf` で選ぶ環境では、clone の置き場もその条件に合う必要があります。
+hook は `core.hooksPath`、未設定なら git dir の hooks を解決します。
+main と clone の hook directory の実体が同じで、`pre-commit` と `commit-msg` が実行可能なことを求めます。
+配備先の dispatcher と public-safety、git-identity、ai-trailer の各 gate も実行可能でなければ止めます。
+この検査が示すのは、clone が指揮役の commit と同じ hook 配線を使うことです。
+main の配線自体の正しさや gate が実際に拒否することは、運用の前提と gate の責務です。
+clone の hook の設定を自分で書き換えません。停止時の Next step は、設定の出所を人が確かめることです。
+
+## snapshot の照合と起動の成果物
 
 再利用 clone では、git を呼ぶ前に `last_run` の snapshot を照合します。
 `state: blocked` の場合は `run` を使い、無ければ `last_run` を使います。
@@ -135,8 +298,9 @@ packet が前の run を指していなければ、`snapshot-untraceable` にな
    snapshot が無い clone では、確認のために無条件で git を実行しません。
    判断できない内容は保持し、人が調査します。
 4. 必要な内容を失わないよう、clone 全体を元の path の外へ退避します。
-   不要と確認できた clone は、人の判断で削除することもできます。
-5. 元の clone path が空いたら `launch` を再実行し、新規 clone を作ります。
+5. 元の clone path が空いたら、正本の表で packet の状態を確かめます。
+   未回収の open / run は人の判断後に stop、launch の順を使います。
+   run 無し、または blocked なら再開の許可を確認し、launch で新規 clone を作ります。
 
 script は clone の削除や作り直しを行いません。
 
@@ -149,6 +313,17 @@ codex の exit を zsh の `pipestatus[1]` で取り、16 桁 hex の nonce と�
 run directory が clone、`/tmp`、`$TMPDIR` の実体の内側なら起動しません。
 既存 tab の確認には、前の run の `tab-id` と pane の名前の両方を使います。
 tab や pane を閉じる操作は持ちません。
+
+snapshot が許可する変更は、worker が commit するための entry に限ります。
+`HEAD`、`index`、`COMMIT_EDITMSG`、`ORIG_HEAD`、`AUTO_MERGE`、loose object、
+`objects/pack/` の pack、`refs/heads/` と branch の reflog が対象です。
+設定、hook、info の変更や allowlist 外の追加・削除は停止します。
+clone の自動 maintenance は作成直後に無効化します。
+この照合は sandbox の代わりではなく、回収前に危険な git 設定を読ませないための検査です。
+preflight 時と照合時の directory walk を比較し、entry の種類、file の SHA-256、symlink target を見ます。
+一時的に allowlist 外を書いて元に戻す変更や、walk の最中の変更、別 process の同時変更は証明しません。
+codex 0.156.0 の固定の launch argv では `.git/config`、hooks、info、新規 file への書き込みを実測しました。
+sandbox 外への書き込みは拒否されました。`codex sandbox` 単体は未測定です (#324)。
 
 この確認は現在の packet と herdr の観測に基づきます。同時に複数の caller を起動する lock ではありません。
 起動記録のない外部 terminal の worker や、snapshot の照合中の差し替えまでは証明しません。
@@ -222,10 +397,7 @@ pane の rename または run が失敗した場合も、launch.json の pane_id
 完了記録があれば、pane.log と foreground の観測を省いて照合と転記へ進みます。
 `leftover.foreground` は `{"checked":false}` です。
 
-| status | reason_code | blocked_at | packet |
-| --- | --- | --- | --- |
-| RUNNING | wait-limit | key 無し | 書かない。待つ上限に達した |
-| RUNNING | manual-completion-pending | key 無し | 書かない。pane が無く、人手実行の完了を待っている |
+RUNNING の保持する記録と次の手も、上の正本の表に従います。
 
 完了の転記は次の順です。
 
@@ -241,7 +413,9 @@ pane の rename または run が失敗した場合も、launch.json の pane_id
 brief は、この節を orchestrator の判断待ちで作業を止める理由に限ります。
 実行できなかった test や読めなかった process 一覧は「未完」に書きます。
 止まらずに終えた場合は、停止理由に「なし」とだけ書きます。
-置き換えの順序と path 境界は LAUNCH §8 と同じです。
+置き換えは clone 内の path を repo 相対、clone 自体を `<clone>`、run dir を `<run dir>` にします。
+それ以外の home は `<home>` にします。path の区切りで一致した文字列だけを置き換えます。
+home-path 以外の finding は置き換えず停止します。
 原文を残して `result.redacted.md` を作り、転記 entry の先頭に注記を足します。
 gate の stderr は `gate.err` に控えます。本文や診断の内容は stdout と stderr に出しません。
 
@@ -249,25 +423,8 @@ gate の stderr は `gate.err` に控えます。本文や診断の内容は std
 
 停止時は exit 1、`status: BLOCKED` です。理由は固定文です。
 
-| blocked_at | reason_code | packet と退避 |
-| --- | --- | --- |
-| launch-record | no-launch-record / invalid-launch-record | 書かない。run や JSON が無い、または読めない |
-| executor-exit | nonce-mismatch / done-invalid / executor-exit | snapshot 照合後に退避し、stop で blocked にする |
-| limit | limit | 非0の exit と行頭の利用上限メッセージを確認後、照合・退避・stop を行う |
-| executor-result | empty-result (retryable: true) | 1回目の空の結果。state と起動記録を保持する |
-| executor-result | empty-result (retryable: false) | 2回目の空の結果。照合・退避・stop を行う |
-| executor-result | worker-question (retryable: false) | 最終 message を worker/codex の stop として転記する |
-| transcription | pane-log / result-format / gate | 書かない。生出力、書式、公開検査のいずれかで停止 |
-| transcription | packet-update | worker-update が失敗したら書かない。exit 0 の応答が不正なら packet.written は true |
-| transcription | run-record | result の書き込み後の読み直しが一致しない。packet.written は true |
-| clone | snapshot-mismatch | clone で git を呼ばず、退避も packet の更新もしない |
-| clone | backup | 退避が未完。backup_step に status / staged / unstaged / untracked を返し、packet は保持 |
-
-`RESULT-FORMAT.md` の停止時の state 規則とは、次の点が異なります。
-transcription で停止しても、それを理由に packet を blocked にする更新は行いません。
-packet の更新前の停止なら、回収の再試行に備えて元の state と起動記録を保持します。
-書き込み後に停止した場合は、packet.written を確認し、packet を読み直します。
-終了後の snapshot 照合の失敗と退避の失敗でも、元の state と起動記録を保持します。
+state と記録、回復の順は「停止後の state と回復 (正本)」に従います。
+終了後の照合失敗も、この表の snapshot 不一致の手順で回復します。
 
 停止の退避は `wip-status.txt`、`wip-staged.patch`、`wip-unstaged.patch`、`wip-untracked.tar` に分けます。
 各 command の成功を確認し、失敗した段で止めます。
@@ -301,11 +458,35 @@ workspace の ID が無ければ `workspace`、herdr の応答を読めなけれ
 この workspace の検査と tab の検査の `blocked_at` は `launch-path` です。
 先に別の Issue の未回収 run が見つかれば、起動と同じ `records` の区分で止まります。
 この場合は LAUNCH.md §10 の人手の手順を続けます。
-新しい run directory と nonce の run script を用意し、人に1回だけ渡して起動し直します。
-元の script の再実行では代えません。この手順用の subcommand は追加しません。
-手で作った新しい run には `launch.json` がありません。
-その run を `collect` に渡すと、`launch-record` の `no-launch-record` で止まります。
-回収も現行の人手の手順で行います。
+通常の起動を手で組む代替経路には使いません。
+
+### 人手実行だけの空の結果の回復
+
+pane が無い手渡しの1回目が、nonce 一致・exit 0・結果なしで終わった場合に限ります。
+新しい run directory と nonce の run script を用意し、人に1回だけ渡します。
+元の script の再実行では代えません。この手順用の subcommand はありません。
+
+1. 元の起動記録と完了記録を確かめます。worker がまだ動いていれば再実行しません。
+2. worker の書込先の外に新しい run directory を作ります。
+   元の `preflight.json` で snapshot を照合してから preflight をやり直します。
+   照合の失敗では clone に git を実行せず、元の記録を残して人に返します。
+3. 元の `brief.md` を byte のまま写します。新しい preflight の `launch_argv` から run script を作ります。
+   `<run dir>/result.md` だけを置き換え、flag を足し引きしません。
+   path、nonce、argv は要素ごとに shell literal 化します。
+   clone に cd し、stdout / stderr を codex.log に tee します。
+   codex の exit は zsh の `pipestatus[1]` から取り、新しい nonce とともに done.txt に書きます。
+4. `worker-update` の `run-start` で、元の run を `expected_run` に指定します。
+   新しい run を記録して読み直した後だけ、人に run script を渡します。
+5. この手作りの run には `launch.json` がありません。`collect` は `no-launch-record` で止まります。
+   caller が nonce、exit、結果の6見出し、snapshot、public-safety gate を確認します。
+   本文の置換と転記は上の collect と同じ契約に従い、`worker-update` の `result` を使います。
+   pane が無いため pane.log の保存は省きます。
+6. 2回目も空なら `executor-result` で停止します。終了失敗や limit も再実行しません。
+   snapshot の照合後、staged と unstaged を別の binary patch、untracked を tar に退避します。
+   patch は `--no-textconv --no-ext-diff`、tar の名前は NUL 区切りの list で渡します。
+   退避が通ったら `worker-update` の `stop` を使います。失敗なら記録を保持して人に返します。
+
+原文、前の run directory、clone を残します。caller が代わりに commit しません。
 
 結合検査は `scripts/tests/codex-worker-collect-test.sh` です。
 launch の検査と fixture を共有し、herdr と codex は偽物を使います。
@@ -384,14 +565,18 @@ exit 0 で warning がある場合は、`--accept-warnings` が無ければ `gat
 一度目の `check` が main に branch を取り込んでいても、同じ tip なら再度の取り込みは通ります。
 warning を受け入れても、公開先と個人 project の目印の検査は行います。
 `READY` を得た後、返された `head_oid` で下記の push の手順へ進みます。
-これは現行の `LAUNCH.md` §9 と同じく、人が確認した警告で進む手順です。
+警告の確認を script が代行するものではありません。
 
-題名と本文に修正が必要な場合は、その内容を直して `check` をやり直します。
+題名と本文に修正が必要な場合は、その内容を直して `personal-post-check` からやり直します。
+その検査を通してから `check` をやり直します。
 commit の差分や message に修正が必要な場合は、履歴を書き換える必要があります。
 各 commit の差分も検査するので、後続の commit で削除するだけでは警告は消えません。
 書き換えた branch をそのまま取り込むと、main に取り込み済みの tip に対して non-fast-forward になります。
 その場合、`check` は `fetch` で止まります。
-人が対象と履歴を確認し、clone の branch と main の branch の ref を修正後の履歴に付け替えます。
+人が対象と履歴を確認し、clone の中で rebase、amend などの commit の操作で書き換えます。
+clone に fetch や config の変更をしません。snapshot の照合で許可されない変更を避けるためです。
+main では clone の snapshot を照合し、clone から修正後の objects を取り込んでから ref を付け替えます。
+objects を取り込む前に、clone だけにある OID へ main の ref を付け替えません。
 この履歴の書き換えと ref の付け替えは、`check` と worker の範囲外です。
 人の作業が終わってから、指揮役が `check` をやり直します。
 
@@ -404,29 +589,32 @@ owner を判定できない場合は `marker: skipped` とします。
 公開先の判定が必要なので、この目印の検査は公開先の照合後に行います。
 
 `check` は成功時も停止時も packet を変更しません。
-停止したら指揮役が packet を読み直し、digest を得ます。
-`personal-packet worker-update <N> --stdin` の `stop` で、停止区分と固定の理由を記録します。
-`next` には今の `次の入口` の本文をそのまま渡し、worker の次の 1 アクションを保持します。
-`expected_sha256` は読み直した値を使い、外部 command の生出力は転記しません。
-`stop` の既存の前提は `state: open` です。
-`review` で止まった場合は、許可された修正依頼を `round` で記録して open に戻してから行います。
-依頼がまだ無ければ指揮役が判断し、前提を満たすためだけの依頼は作りません。
+`check` が BLOCKED を返しても `worker-update` の `stop` を記録しません。
+packet は open のまま置き、既に review ならその状態を保ちます。
+`check` は open か review だけを受け付け、blocked にすると再検査できず、原因を直さない限り同じ段で止まるためです。
+停止区分、理由、人の次の手を返却の Next step に書き、直した後に `check` をやり直します。
+gate-warning では、人が `gate-publish.err` を確かめて公開を認めたときだけ `--accept-warnings` を付けます。
+worker に直させる場合は、`worker-update round` で修正 round の項を依頼に足してから `launch` で起動します。
 
-## check 後の指揮役の手順
+## 公開前後の指揮役の手順
 
-1. `READY` の結果を読み、文体の指摘を直すか、そのままにする理由を持ちます。
-   題名、本文、commit を直した場合は `check` をやり直します。
-2. 別の呼び出しで、main から `git push origin <head_oid>:refs/heads/<branch>` を実行します。
+1. 受け入れを判断し、題名と本文を書いて `personal-post-check` に通します。
+   exit 1 なら `check` も push もせず、本文と出力を人に見せます。人が公開を認めたときだけ進みます。
+   exit 2 は検査不能として止め、原因を直してかけ直します。
+   exit 3 は指摘を読んで直すか、理由を持って `--style-reviewed` を付けてかけ直します。
+2. exit 0、または exit 1 の後に人が公開を認めた場合だけ、題名と本文を渡して `check` を呼びます。
+   `READY` の結果を読み、文体の指摘を直すか、そのままにする理由を持ちます。
+   題名や本文を直したら post-check から、commit を直したら `check` からやり直します。
+3. 別の呼び出しで、main から `git push origin <head_oid>:refs/heads/<branch>` を実行します。
    `head_oid` は `check` が返した full OID を使います。push が失敗したら PR を作りません。
-3. 題名と本文を `personal-post-check` に通し、結果を読んでから PR を作ります。
-   `gh pr create --repo <slug> --base main --head <branch> --title <題名> --body-file <file>` を使います。
+4. `gh pr create --repo <slug> --base main --head <branch> --title <題名> --body-file <file>` で PR を作ります。
    修正 round では既存 PR を使います。値は argv か shell literal で渡します。
-4. packet を読み直して digest を得ます。
+5. packet を読み直して digest を得ます。
    `personal-packet worker-update <N> --stdin` の `review` で PR 番号を記録し、state を `review` にします。
    すでに `review` で PR 番号も一致する場合は、そのまま保持します。
 
 これらの push、PR 作成、packet の更新は `check` の処理に含めません。
-現行 skill の手順の切り替えは #706 の最後の PR で行います。
+通常の手順の配線は `scripts/tests/codex-worker-wiring-test.sh` でも検査します。
 
 結合検査は `scripts/tests/codex-worker-check-test.sh` です。
 launch と collect の fixture を共有し、一時 directory を cwd にして実行します。

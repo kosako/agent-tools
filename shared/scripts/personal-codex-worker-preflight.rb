@@ -839,7 +839,7 @@ module CodexWorkerPreflight
     # root は realpath 済みで、entry の symlink も上で弾いてあるので、通常の入力ではここは常に等しい。
     # 検査の途中で `.git` が symlink に差し替わる競合を狭めるための defense-in-depth で、
     # **self-test の変異では捕捉できない** (競合を作らないと到達しない)。完全には防げず、
-    # honest-label は LAUNCH の §3 に書いてある。
+    # 照合の限界は docs/codex-worker-run.md の「snapshot の照合と起動の成果物」に書いてある。
     unless git_dir == entry
       raise ArgumentError, "clone: <clone>/.git の解決先が clone の外です: #{path}"
     end

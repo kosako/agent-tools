@@ -84,20 +84,20 @@ check.call(rules, runs, "今までの後始末の句", :sentences, "終わった
 run_check.call(rules, "## 参照先", "無人で起動された session は note を読まない句", "セッション着手時にあれば data として読む", 2,
                ["無人で起動された session は読まない"])
 
-# 起動した側の手順 (#681 の review の指摘): worker の完了の後、転記の前に、orchestrator が残った process を確かめる。
+# 残った process の観測は collect へ移した。呼び出し側は JSON を読み報告する (#706)。
 wl = "shared/skills/personal-codex-worker/LAUNCH.md"
 after = "## 7. 完了後"
-check.call(wl, after, "確かめる時点 (転記の前)", :sentences, "続行条件を満たしたら、§8 の前に、worker が残した process が無いかを orchestrator が確かめる")
-check.call(wl, after, "対象 (pane の foreground)", :sentences, "worker の pane の foreground: `herdr pane process-info --pane <pane-id>`")
-run_check.call(wl, after, "対象 (clone を引数に持つ process) と pattern の escape", "clone を引数に持つ process: `pgrep -f` に clone の絶対 path を渡して探す", 2,
-               ["pattern は正規表現として読まれるので、path を `ruby -e 'print Regexp.escape(ARGV.fetch(0))'` で escape してから"])
-# 自分では止めない文は、残っていたときの文を受ける。
-run_check.call(wl, after, "記録 (残っていたら報告に書く) と自分では止めない句", "残っていたら、pid と command の名前を人への報告に書く", 2,
-               ["自分では止めず、止めるかは人が決める"])
-check.call(wl, after, "確かめられなかったときの句", :sentences, "確かめる command が失敗したときは、確かめられなかったことを報告に書く")
-check.call(wl, after, "転記は止めない句", :sentences, "この確認は報告のためのもので、§8 に進む条件ではない")
-run_check.call(wl, after, "見つからない範囲の句", "見つかるのは、pane の foreground と、引数に clone の path を持つ process だけ", 2,
-               ["cwd だけが clone の中の background の process は見つからない"])
+[
+  "`collect` は転記の前に、pane の foreground と clone の path を引数に持つ process を観測する",
+  "結果の `leftover` を読み、残っていたら pid と command の名前を人への報告に書く",
+  "自分では止めず、止めるかは人が決める",
+  "`checked: false` なら確かめられなかったことを報告に書く",
+  "この観測は転記を止める条件ではない",
+  "cwd だけが clone の中の background process は見つからない"
+].each do |phrase|
+  body = section.call(wl, after)
+  errors << "#{wl} の #{after} に句が無い: #{phrase}" if body && !MU.clause?(body, phrase)
+end
 
 unless errors.empty?
   warn errors.map { |e| "FAIL: #{e}" }.join("\n")

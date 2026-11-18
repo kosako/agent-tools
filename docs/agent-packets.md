@@ -134,11 +134,11 @@ PR #124 の should 1 件を直して re-review を依頼する。
 - `state`: `open` (作業中) / `blocked` (質問待ち・limit 到達・CI 赤などで止まっている) /
   `review` (PR を出して review 待ち) / `done` (merge / close 済み)。`review` は PR を出した側が
   入れる (自分で push できる worker なら本人、委譲した Codex worker の分は push と PR 作成を行う
-  orchestrator)。`blocked` は止まった worker が入れる。委譲した worker の分は、止まっていれば
-  最終 message の有無にかかわらず orchestrator が入れる (停止理由は最終 message の転記か、無ければ
-  orchestrator の記録)。worker の終了後に clone の `.git` の照合が失敗した停止 (退避の前と空振りの再実行の前。
-  委譲 skill の `Blocked at: clone`) も、worker が止まった後の停止なので orchestrator が `blocked` を入れ、停止理由を
-  `結果` に書く (起動の前の clone の停止は state を変えない)。`done` は orchestrator が入れる。
+  orchestrator)。`blocked` は止まった worker が入れる。委譲した worker では、collect の stop が成功したときに入る。
+  終了後の snapshot 照合失敗では、元の state と run を保持する。
+  人が変更を保存して clone を退避し、記録の破棄を決めた場合は stop、launch の順で再開する。
+  停止後の state と回復の正本は [codex-worker-run](codex-worker-run.md) の表。
+  `done` は orchestrator が入れる。
   - **review の修正 round** (#325): `review` → `open` → `review` と遷移させる。`open` に戻すのは、`依頼` に
     「修正 round N」の項を書く orchestrator (委譲せず自分で直す worker なら本人) で、書くのと同じ時点で
     戻す。修正を push した者 (委譲した Codex worker の分は push を行う orchestrator) が `review` に戻す。
@@ -169,14 +169,13 @@ PR #124 の should 1 件を直して re-review を依頼する。
     `missing` (run dir が無い = 消失。snapshot が無く clone を照合できないので、clone から自動では回収
     しない。人が確かめる)。
 - `last_run` (#325): **最後の run dir**。完了の転記で `run` / `tab` を消すときに、orchestrator が `run` の値を
-  `last_run` に移す。`launch-path` のうち「走っている worker がいる」「tab を特定できない」で止まった未起動の run
-  (run dir に `codex.log` も `done.txt` も無い) を人の指示で破棄するときも、`run` を `last_run` に移す (worker が
-  起動していないので、その run の snapshot は clone の照合に使える。委譲 skill の §6)。ほかの理由の破棄は
-  `last_run` に移さない。次の起動で `run` を
-  書くときに `last_run` は消す (`run` と同時には置かない。両方あれば壊れた packet として報告する)。worker が止まった
-  (転記の前の) `state: blocked` では従来どおり `run` に残す
-  (退避物の置き場)。転記の後に回収・trailer 検査・公開する内容の gate で止まった `state: blocked` (#412 / #413)
-  では、転記で `last_run` に移したままにする (`run` は無い)。
+  `last_run` に移す。人が起動記録の破棄を決めた場合は、理由を entry に書き、`worker-update stop` で blocked にする。
+  `run` は保持し、次の `launch` の `run-start` で新しい run に置き換え、open に戻す。
+  対象と確認の手順は委譲 skill の `LAUNCH.md` §3。frontmatter を手で書き換えず、clone の変更も消さない。
+  次の起動で `run` を書くときに `last_run` は消す (`run` と同時には置かない。両方あれば壊れた packet)。
+  worker が止まった転記前の `state: blocked` では `run` を停止した記録の置き場として残す。退避物の有無は実際の file で確かめる。
+  転記後の `check` が回収・trailer 検査・公開する内容の gate で止まっても、packet は open のまま置く。
+  既に review ならその状態を保つ。`last_run` は転記で移したままにする (`run` は無い)。
   `done` の後も残す。用途は、転記で起動の記録が消えた後も、前の run の成果物 (clone の `.git` の
   snapshot、tab の所有の確認に使う `tab-id`) を別の session から辿れるようにすること。
   - 書くのは orchestrator だけ。検証は `run` と同じ (空でない文字列・制御文字 (改行等) なし・絶対 path。引用符の有無は見ない)。
@@ -301,7 +300,7 @@ self-test は `scripts/tests/packet-test.sh` (dir / list / check / publish) と 
 ### worker-update の入力と保存 (#706)
 
 `worker-update <issue> --stdin` は既存 packet の更新だけを行う。
-委譲の skill がこの口を使うのは後の PR で行い、今の委譲手順は変えない。
+委譲の skill と `personal-codex-worker-run` は、この口で packet を更新する。
 呼び出しの許可範囲は従来どおりで、この command の追加で worker の権限は広がらない。
 
 stdin は UTF-8 の JSON object 1 つで、上限は 64 KiB (65,536 byte)。
@@ -413,8 +412,12 @@ stderr にも人向けの診断を 1 行出す。本文の `entry`、`request`�
 ## worker 委譲との関係(#254)
 
 orchestrator (Claude) が packet を Codex の worker に委譲するときの、packet 側の規約。起動の
-機械的な手順 (herdr の tab / pane、完了判定、tab の後始末) は委譲 skill `personal-codex-worker` と
-その preflight (`personal-codex-worker-preflight`) が持ち、ここには packet に現れる約束だけを置く。
+機械的な手順は `personal-codex-worker-run` が持ち、委譲 skill `personal-codex-worker` が呼び出す。
+後始末は skill に残す。ここには packet に現れる約束だけを置く。
+以下の更新は `worker-update` の検査を通った場合に行う。
+照合・退避・転記の更新前の失敗なら、state と起動記録を保持する。
+更新後の再読込で失敗する場合もあるため、packet を読み直して適用済みの操作を確かめる。
+停止後の state と回復は [codex-worker-run](codex-worker-run.md) の正本の表に従う。
 
 - **authorization と scope**: 起動 prompt が authorization、packet の `依頼` が scope (上の信頼
   モデルと同じ)。brief には `依頼` を要約せず verbatim で写す (orchestrator 著なので trusted。
@@ -448,26 +451,28 @@ orchestrator (Claude) が packet を Codex の worker に委譲するときの�
   写す (転記前に `personal-public-safety-gate --stdin` を通す。止めた finding が `home-path` だけなら、
   orchestrator が local の path を repo 相対や `<home>` などに置き換えた版を通し直して転記し、その旨を
   注記する。それ以外は転記せず人に見せる。手順は委譲 skill の §6、#326)。worker が止まっている (質問・失敗・
-  limit) なら、最終 message の有無にかかわらず orchestrator が `state: blocked` にする。有無で変わる
+  limit) なら、必要な検査を通した collect の stop が `state: blocked` にする。
+  質問は検査した本文を転記し、失敗と limit は snapshot 照合後に変更を退避する。有無で変わる
   のは記録の出所だけで、最終 message があればこの転記 (`worker/codex`)、無ければ下の「停止」の手順で
   orchestrator が書く (`orchestrator/claude`)。
 - **起動の記録** (`run` / `tab`、#315): orchestrator は worker を起動する前に packet の frontmatter へ
   書き、起動する前に確かめる (同じ Issue に記録があれば、その run を回収するか人に確かめる。別の Issue の
   未回収の記録も「worker 1 つ」のために見る)。完了の転記が済んだら `run` を `last_run` に移して `tab` を消し
-  (#325)、`state: blocked` の間は退避物の置き場として残す。書く時点・消す時点の正本は [herdr-operations](herdr-operations.md) の「起動の
+  (#325)、`state: blocked` の間は停止した記録として残す。書く時点・消す時点の正本は [herdr-operations](herdr-operations.md) の「起動の
   記録」、手順は委譲 skill。
 - **PR**: orchestrator が PR に含まれる追加 commit (base OID から head までの
   `git log <base-oid>..<head-oid>`。共有祖先は含めない) の trailer がすべて Codex のみであることを
   確認し、続けて公開する内容 (累積差分・各 commit の差分・全 commit の message・branch 名・PR の題名と本文) を
   public-safety の gate に通して、exit 0 で警告が無いときだけ push し、PR を作る (#413。警告が出たら人に見せて
   判断を仰ぐ。手順は委譲 skill の §7 と `LAUNCH.md` §9)。gate が無い・exit 0 でないとき
-  (`Blocked at: public-safety`) は push も PR 作成もせず、回収・trailer 検査の停止と同じく orchestrator が
-  `orchestrator/claude` の entry を書いて `state: blocked` にする。packet に `pr:` と `state: review` を入れるのは
-  orchestrator (PR を出した側)。
+  (`Blocked at: public-safety`) は push も PR 作成もせず、packet は open のまま置く (既に review なら保持)。
+  `stop` は記録せず、区分と理由と人の次の手を返却の Next step に書く。直した後に `check` をやり直す。
+  packet に `pr:` と `state: review` を入れるのは orchestrator (PR を出した側)。
 - **停止 (limit / 途中終了 / 質問)**: 最終 message が無い停止では worker の記録が残らないので、
-  orchestrator が `### <日付> orchestrator/claude` で停止理由 (limit の文言、exit code、末尾の
-  public-safe な要約) を書く (最終 message があれば上の転記)。どちらも `state: blocked` にし、
-  `次の入口` に続きの入り方 (下記) を書く。uncommitted な変更は
+  `collect` が `### <日付> orchestrator/claude` で固定の停止区分、exit、退避 file 名を書く。
+  最終 message が書式と gate を通る場合は、上の転記を使う。
+  質問は検査した本文の stop、終了失敗と limit は照合・退避後の stop が成功したときに `state: blocked` にし、
+  `次の入口` に続きの入り方 (下記) を書く。終了失敗と limit の uncommitted な変更は
   staged / unstaged / untracked をすべて run directory に退避し (staged と unstaged は patch、
   untracked は file の写し)、その path を記録する。復元を確認するまで clone を消さない。
   orchestrator が代わりに commit しない (trailer が Claude になり author が混ざる)。自動で再起動

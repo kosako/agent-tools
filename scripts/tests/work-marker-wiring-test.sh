@@ -12,8 +12,8 @@
 #   command)、ほかの repo では当てない文、verdict を依頼元が書き換えない文がある。
 # - operating-loop の「PR の完了条件」に、個人 project の PR を作る前に検査を通す項目と、ほかの repo では強制しない項目が
 #   ある。「merge 後に見つかった誤り」に、escape の Issue を立てる前に通す文と、ほかの repo では label を作らない文がある。
-# - personal-codex-worker の §7 に、個人 project の PR を通す文がある。LAUNCH.md の §9 に、個人 project の PR を通す文と、
-#   command の sh の block があり、その block が文体の検査の block より後、public-safety の gate の block より前にある。
+# - personal-codex-worker の §7 に、check 経由で個人 project の目印を検査する句がある。
+#   実行順序と拒否条件は codex-worker-check-test が検査する。
 # - personal-maintenance-sweep の FIX.md の「PR」に、個人 project の repo で通す項目と、command の sh の block がある。
 # 引数で repo root を差し替えられる (変異での確認用)。
 set -eu
@@ -114,16 +114,10 @@ terms.call("#{ol} の「#{escape_h}」のほかの repo の文", unit.call(ol, e
 # 4. Codex worker の PR
 ws = "shared/skills/personal-codex-worker/SKILL.md"
 ws7 = "## 7. PR (orchestrator の操作)"
-terms.call("#{ws} の §7 の目印の文", unit.call(ws, ws7, :sentences, "`personal-work-marker-check --kind pr --stdin`"),
-           ["個人 project の PR では、題名と本文を", "exit 0 のときだけ gate に進む"])
-wl = "shared/skills/personal-codex-worker/LAUNCH.md"
-wl9 = "## 9. 回収 (fetch) と trailer 検査と PR"
-terms.call("#{wl} の §9 の目印の文", unit.call(wl, wl9, :sentences, "目印の検査に通す"), ["個人 project の PR #{SCOPE}では、続けて題名と本文を"])
-style_at = sh_block.call(wl, wl9, '| "$style" --stdin')
-marker_at = sh_block.call(wl, wl9, '| "$marker" --kind pr --stdin')
-gate_at = sh_block.call(wl, wl9, '| "$gate" --stdin')
-if style_at && marker_at && gate_at && !(style_at < marker_at && marker_at < gate_at)
-  errors << "#{wl} の §9 で、目印の検査の block が文体の検査の block の後・gate の block の前にない"
+# 手組みの style / marker / gate の順序は廃止。実行順序は codex-worker-check-test が検査する。
+body = section.call(ws, ws7)
+if body && !MU.clause?(body, "個人 project では目印の検査も `check` が行う")
+  errors << "worker の §7 に check 経由の個人 project の目印検査が無い"
 end
 
 # 5. sweep の fix の PR
