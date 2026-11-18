@@ -7,6 +7,7 @@ root=${1:-"$script_dir/../.."}
 ruby -r"$script_dir/lib/markdown_units" - "$root" <<'RUBY'
 require "open3"
 require "shellwords"
+require File.expand_path("scripts/tests/lib/codex-worker-stop-cases", ARGV.fetch(0))
 MU = MarkdownUnits
 root = ARGV.fetch(0)
 dir = File.join(root, "shared/skills/personal-codex-worker")
@@ -61,9 +62,9 @@ clause.call(examples, "人の確認なしに `--accept-warnings` を付けない
   end
   # 自然言語すべての意味判定ではなく、明示的な直接編集の指示だけを拒否する。
   MU.sentences(text).each do |sentence|
-    # 自然言語の一般的な判定には広げず、停止時の stop 記録を命じる句を拒否する。
-    if MU.clause?(sentence, "`check` が BLOCKED を返したときは `worker-update` の `stop` を記録する")
-      errors << "check の停止で stop を記録する指示"
+    spans = MU.code_spans(sentence)
+    if spans.include?("check") && spans.include?("stop") && !MU.clause?(sentence, "`stop` を記録しない")
+      errors << "check と stop の文に記録しない句が無い"
     end
     if ["packet の frontmatter を直接書き換える", "frontmatter を手で書き換える"].any? { |p| MU.clause?(sentence, p) }
       errors << "packet の frontmatter を直接編集する指示"
@@ -133,6 +134,21 @@ errors << "head_oid は READY の JSON から読む" unless lines.include?(%q{he
 packet = section.call(launch, "## 4. packet の更新")
 errors << "packet を worker-update で書く command が無い" unless MU.sh_blocks(packet).any? { |b| b.strip == '"$packet_cli" worker-update "$issue" --stdin < "$update_file"' }
 clause.call(packet, "毎回 packet を読み直し、その byte 列の SHA-256 を `expected_sha256` に指定する")
+doc = File.read(File.join(root, "docs/codex-worker-run.md"), encoding: "UTF-8")
+table = section.call(doc, "## 停止後の state と回復 (正本)")
+rows = MU.rows(table).drop(2).map { |line| line.split("|", -1)[1...-1].map(&:strip) }
+documented = rows.flat_map do |cells|
+  raise "回復表の列が不正" unless cells.size == 7 && cells.all? { |v| !v.empty? }
+  commands = MU.code_spans(cells[0])
+  fields = cells[1..3].map { |cell| MU.code_spans(cell).fetch(0) }
+  commands.map { |cmd| [cmd, *fields] }
+end
+source = File.read(File.join(root, "shared/scripts/personal-codex-worker-run.rb"), encoding: "UTF-8")
+extracted = CodexWorkerStopCases.extract(source)
+errors << "回復表の停止区分が重複" unless documented.uniq == documented
+errors << "回復表の停止区分が source と不一致: missing=#{extracted - documented}, extra=#{documented - extracted}" unless documented.sort == extracted
+clause.call(table, "未回収の open / run なら、人が破棄を決めた後に上の stop、launch の順を使います")
+clause.call(recovery, "人手の hand-off で渡したまま起動しなかった run、終了後の snapshot 照合で止まった run")
 abort "FAIL: codex-worker-wiring\n  #{errors.join("\n  ")}" unless errors.empty?
 puts "ok: codex-worker-wiring"
 RUBY

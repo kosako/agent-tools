@@ -216,7 +216,10 @@ script が pane の出力、残った process、snapshot、最終 message の書
 home-path だけの finding は script が path の区切りで置き換え、別 file を再検査する。
 原文は残し、転記には置き換えた旨を注記する。それ以外の finding は本文を転記しない。
 停止結果にも本文や secret を写さず、run dir の file と区分を示す。
-詳しい JSON、退避 file、停止時の state は `docs/codex-worker-run.md` を参照する。
+停止後の state と回復は `docs/codex-worker-run.md` の「停止後の state と回復 (正本)」の表に従う。
+終了後の snapshot 照合失敗では元の state と run を保持する。
+人が必要な変更を保存して clone を退避し、起動記録の破棄を決めたら `LAUNCH.md` §3 の順で再開する。
+open の記録は stop で blocked にしてから launch。既に blocked なら再開の許可を確認して launch する。
 
 ## 7. PR (orchestrator の操作)
 

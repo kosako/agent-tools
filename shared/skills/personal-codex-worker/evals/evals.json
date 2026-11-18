@@ -840,7 +840,7 @@
       "id": 30,
       "name": "snapshot-mismatch-before-stash",
       "prompt": "packet #430 の Codex worker が limit で止まり、clone に未 commit の変更が残っている。退避の前に preflight の --verify-git-snapshot を今回の run の preflight.json で走らせたら、allowlist 外の .git/hooks に新しい file があるとして exit 2 になった。退避はどう進める? 手順確認のみ。",
-      "expected_output": "personal-codex-worker-run collect が snapshot-mismatch / clone で止まった。clone に git を実行せず、再実行や退避に進まない。packet.written は false で、state と元の起動記録を保持する。blocked に更新したと報告しない。clone は自動で消したり作り直したりせず、snapshot-verify.txt と元の run を人が調べる。必要な内容を保存して clone 全体を退避した後に再起動を判断する。",
+      "expected_output": "personal-codex-worker-run collect が snapshot-mismatch / clone で止まった。clone に git を実行せず、再実行や退避に進まない。packet.written は false で、state と元の起動記録を保持する。blocked に更新したと報告しない。clone は自動で消したり作り直したりせず、snapshot-verify.txt と元の run を人が調べる。必要な内容を保存して clone 全体を退避した後、人が起動記録の破棄を決める。open / run を worker-update stop で blocked にし、launch で起動し直す。run-start が open に戻して記録を置き換える。停止後の state と回復は docs/codex-worker-run.md の正本の表に従う。",
       "files": [],
       "assertions": [
         {
@@ -1047,7 +1047,7 @@
       "id": 37,
       "name": "snapshot-mismatch-before-empty-retry",
       "prompt": "packet #437 の Codex worker が done.txt は exit=0 だったが result.md が空だった (空振り)。再実行の前に 1 回目の run dir の preflight.json で --verify-git-snapshot を走らせたら、allowlist 外の .git/info に新しい file があるとして exit 2 になった。packet の state と起動の記録はどう扱う? 手順確認のみ。",
-      "expected_output": "personal-codex-worker-run retry-empty が snapshot-mismatch / clone で止まった。clone に git を実行せず、再実行や退避に進まない。packet.written は false で、state と元の起動記録を保持する。blocked に更新したと報告しない。clone は自動で消したり作り直したりせず、snapshot-verify.txt と元の run を人が調べる。必要な内容を保存して clone 全体を退避した後に再起動を判断する。",
+      "expected_output": "personal-codex-worker-run retry-empty が snapshot-mismatch / clone で止まった。clone に git を実行せず、再実行や退避に進まない。packet.written は false で、state と元の起動記録を保持する。blocked に更新したと報告しない。clone は自動で消したり作り直したりせず、snapshot-verify.txt と元の run を人が調べる。必要な内容を保存して clone 全体を退避した後、人が起動記録の破棄を決める。open / run を worker-update stop で blocked にし、launch で起動し直す。run-start が open に戻して記録を置き換える。停止後の state と回復は docs/codex-worker-run.md の正本の表に従う。",
       "files": [],
       "assertions": [
         {

@@ -116,13 +116,14 @@ read-only、status-only、会話の外への書き込み全体を禁じられた
   - 完了の転記: worker の最終 message から `結果` (見出しは `worker/codex`) と `次の入口` (最終 message の
     「次の 1 アクション」) を写し、`run` を `last_run` に移して `tab` を消す (#325)。PR を出したら `pr:` と
     `state: review` を入れる。
-  - 停止: worker が止まっている (質問・失敗・limit) なら最終 message の有無にかかわらず
-    `state: blocked` にし、最終 message があれば転記、無ければ `orchestrator/claude` の見出しで停止理由を
-    書き、`次の入口` に続きの入り方を入れる。worker の終了後の clone の照合の失敗も `state: blocked` にし、
-    `orchestrator/claude` の見出しで停止理由を書く。どちらも `run` / `tab` は消さない。
-  - 転記の後の停止: 回収・trailer 検査 (#412)・公開する内容の gate (#413) で止まったら、push も PR 作成も
-    せずに `state: blocked` にし、`orchestrator/claude` の見出しで停止の区分と理由を書く (`次の入口` は
-    触らない)。
+  - 停止: `collect` の stop が成功したときだけ blocked になる。照合・退避・転記の更新前の失敗は元の state と run を保持する。
+    更新後の再読込で失敗することもあるため、packet を読み直して済んだ範囲を返す。
+    終了後の snapshot 照合失敗は、人が変更を保存して clone を退避し、起動記録の破棄を判断する。
+    open の記録は `worker-update stop`、続いて `launch` で再開する。既に blocked なら再開の許可を確認する。
+  - 転記の後の停止: `check` が BLOCKED を返したときは `worker-update` の `stop` を記録しない。
+    push と PR 作成を止め、open または review と last_run を保持する。
+    停止区分と理由、人の次の手を返却の Next step に書く。
+    停止後の state と回復の正本は `docs/codex-worker-run.md` の表。前提に応じた順を使う。
   - 修正 round: review の指摘を直すとき、または転記の後に受け入れ条件を満たさないと判断したとき (#412) は、
     `依頼` に「修正 round N」の項を足し、`次の入口` を「修正 round N (`依頼` の該当項) を実装する」に上書き
     する。review の修正 round では同じ時点で `state` を `open` に戻し、修正を push したら `review` に戻す

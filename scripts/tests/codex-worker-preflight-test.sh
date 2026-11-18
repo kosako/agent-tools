@@ -666,6 +666,11 @@ git config --global init.defaultBranch main
 git config --global core.hooksPath /dev/null
 git config --global protocol.file.allow always
 
+# 呼出し元の cwd に依存せず、一時 directory の repository を指揮役にする。
+orchestrator_root="$tmp/orchestrator"
+git init -q "$orchestrator_root"
+cd "$orchestrator_root"
+
 # worker 用 clone の代わり (git dir が directory の普通の repository)。orchestrator 自身の
 # repository ではないので検査を通る。
 clone="$tmp/clone"
@@ -1516,7 +1521,7 @@ abort "add-dir は 1 つ" unless argv.count("--add-dir") == 1
 i = argv.index("--add-dir")
 abort "add-dir の値" unless argv[i + 1] == clone_git
 abort "main の path が argv に現れてはいけない" if argv.any? { |a| a.include?(main_root) }
-' "$clone_git_dir" "$repo_root" || fail "--clone の launch argv が契約どおりでない: $out"
+' "$clone_git_dir" "$orchestrator_root" || fail "--clone の launch argv が契約どおりでない: $out"
 
 # (q) provider の引き継ぎ (#543): config.toml の組み込みの amazon-bedrock を -c で launch argv に渡す。
 #     provider は認証と接続先なので、--model / --effort の明示があっても config から読む。

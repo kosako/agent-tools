@@ -120,7 +120,8 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   書きます。
   - 起動に失敗して人に渡す (`launch-path`) ときも消しません。人がその run script を実行するためです。
   - 転記が済んだら `run` の値を `last_run` に移し、`run` と `tab` を消します (#325)。
-    worker が止まって blocked にした間は run を退避物の置き場として残します。
+    worker の停止を記録して blocked にした間は run を残します。退避物の有無は file で確かめます。
+    照合失敗などの state と回復の順は `docs/codex-worker-run.md` の正本の表に従います。
   - 人が pane と process を確かめ、起動記録の破棄を決めたら、指揮役は理由を entry に書きます。
     `worker-update stop` で blocked にし、run を残します。`launch` の `run-start` が open に戻し、新しい run に置き換えます。
     対象は未起動の hand-off や、生存していないと人が確かめた RUNNING の run です。

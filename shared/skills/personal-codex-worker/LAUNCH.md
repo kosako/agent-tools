@@ -70,22 +70,12 @@ stdout を file に保存し、exit と JSON を両方読む。
 
 ## 3. 停止後の回復
 
-- `collect-required`: 新しい worker を起動せず `collect` で既存 run を回収する。
-- `run-unconfirmed` / `run-missing`: run dir と worker の生存を人が確かめる。記録を自動で破棄しない。
-- `worker-running`: 別の worker の完了を待つ。この Issue の記録の有無は JSON と packet で確かめる。
-- `snapshot-untraceable` / `snapshot-mismatch`: clone に git を実行しない。
-  人が run と snapshot の由来を調べる。必要な変更を保存してから clone 全体を退避し、元の path を空ける。
-  起動記録の前に止まった clone の回復も `docs/codex-worker-run.md` の順に行う。
-- `empty-result`: `retryable: true` の場合だけ §1 の `retry-empty`。false なら再試行しない。
-- `worker-question`: 自動で再試行しない。質問に答え、許可された依頼を §4 の `round` で記録する。
-- `limit` / `executor-exit`: 停止と退避の結果を返す。limit は reset を待ち、自動で再起動しない。
-- `transcription` / `backup`: 診断の file と止まった段を人が調べる。本文を停止結果に写さない。
-  packet を更新できていなければ、その state と起動記録を保持する。
-- `gate-warning`: 人が `gate-publish.err` を確かめて公開を認めたときだけ `--accept-warnings` を付けて `check` をやり直す。
-- `fetch` / `trailer` / `public-safety`: push しない。原因を直して `check` をやり直す。
-  commit の履歴の修正は clone の中の rebase、amend などで行う。clone に fetch や config の変更をしない。
-  main の ref は clone から objects を取り込んでから付け替える。人が対象と履歴を確認して行う。
-  詳細と non-fast-forward の扱いは `docs/codex-worker-run.md`。
+停止後の state と回復の正本は、`docs/codex-worker-run.md` の「停止後の state と回復 (正本)」の表。
+subcommand、status、blocked_at、reason_code と packet の再読込結果を照合して次の手を選ぶ。
+`collect-required` は collect、1回目の空の結果だけ retry-empty を使う。
+記録前の停止と、run-start や result の適用後の失敗を区別する。更新済みの操作は繰り返さない。
+照合・退避・転記で止まっただけなら state を変えず、下の破棄の判断も自動では行わない。
+公開前の停止では push を止める。履歴の修正と snapshot の前提は正本の表と回復手順に従う。
 
 一覧に無い `reason_code` は `Status: BLOCKED` で人に返し、自分で回避しない。
 clone の hook の設定を自分で書き換えない。`Next step` には hook の設定の出所を人が確かめると書く。
@@ -99,7 +89,9 @@ worker に直させるときは §4 の `round` で修正 round の項を依頼�
 ### 人が起動の記録の破棄を決めたとき
 
 対象は、`collect` が RUNNING を返したが worker が動いていないと人が確かめた run や、
-人手の hand-off で渡したまま起動しなかった run。
+人手の hand-off で渡したまま起動しなかった run、終了後の snapshot 照合で止まった run。
+照合の失敗では、人が必要な変更を保存して clone 全体を退避し、元の path を空けてから以下へ進む。
+未照合の clone に git を実行しない。保存した変更の復元も人が判断する。
 
 1. 人が pane と process を確かめ、記録の破棄を決める。生存を確かめられなければ記録を残す。
 2. 指揮役は packet を読み直し、破棄を決めた理由を entry に書く。
@@ -114,7 +106,8 @@ tab の作成前に手渡しになった run の run dir には `tab-id` が無�
 tab を閉じないなら §10 の未起動 hand-off で渡す。
 
 frontmatter を手で書き換えず、clone の commit と未 commit の変更を消さない。
-`stop` の前提は open。別の state なら破棄用の架空の依頼を作らず、人に返す。
+`stop` の前提は open。既に blocked なら重ねて記録せず、再開の許可を確認して launch する。
+それ以外の state なら破棄用の架空の依頼を作らず、人に返す。
 
 `launch-path` は、生成済みの run script を渡せる場合と、生存や所有を確認できない場合を区別する。
 `launch.json`、run script、起動記録が揃い、未起動と確認できた場合だけ §10 の未起動 hand-off を使う。

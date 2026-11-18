@@ -129,8 +129,10 @@ public に出せない情報だからです。固定名 `.agent-context.local.md
     下の herdr の pane で見る。動いていると確かめられなければ、起動し直さず人に確かめる。
   - `missing` (run dir が無い) → 「起動済み・未回収 (run dir 消失)」。run dir の snapshot が無く clone を
     照合できないので、clone からは自動で回収しない。人が確かめる (委譲 skill の `Blocked at: launch-record`)。
-  - `state: blocked` の packet の `run` は停止した run の退避物の置き場 (記録済みの停止) なので、「未回収」
-    ではなく「停止中 (退避物: run dir)」と出します。
+  - `state: blocked` の packet の `run` は記録済みの停止です。「停止中 (記録: run dir)」と出します。
+    質問や人の判断で破棄した記録には退避物が無いこともあるため、有無を推測しません。
+  終了後の snapshot 照合失敗でも、open / run のまま残ることがあります。
+  state だけで原因を決めず、停止後の state と回復は `docs/codex-worker-run.md` の正本の表を参照します。
   いずれも表示だけで、回収・起動・記録の削除はしません (status-only の read-only を保つ)。
   herdr が使えれば (`herdr status` が running) `herdr agent list` から cwd が
   この repo と一致する agent (種別 / 状態) を並べます。委譲した worker は repo の外の clone

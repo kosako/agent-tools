@@ -21,13 +21,12 @@ Run dir: <path>
 Next step: 修正 round N で再起動するか (§1 の authorization) を決める
 ```
 
-worker がまだ走っている (hard cap に達した、または `SKILL.md` §1 で未回収の run の worker が動いているのを
-見つけた) 場合:
+RUNNING の場合 (実行中、待つ上限、または人手実行の完了待ち):
 
 ```text
 Status: RUNNING
 Tab: #<issue> / Pane: <pane id> / Run dir: <path> / Elapsed: <分> (分かるときだけ)
-Next step: worker はまだ生きている (run script を再実行しない)。tab #<issue> の pane を見て続行か中断かを決める。
+Next step: 生存は status だけでは確定しない。run script を再実行せず、人が tab、pane、process を確かめて続行か中断かを決める。
 続行なら pane を監視して done.txt を待つ。中断なら worker の process を止めてから collect で停止を記録する (LAUNCH §10)。完了記録が無ければ LAUNCH §3 で記録の破棄を判断する
 ```
 
@@ -41,7 +40,12 @@ Blocked at: authorization | launch-record | preflight | launch-path | clone | ex
 Reason: <public-safe な停止理由>
 Packet: #<issue> — <state の扱い (下記)> / 結果 "### <日付> orchestrator/claude" (書いた場合) / 起動の記録は残す (§1 で起動を見送ったときは、この Issue の記録はまだ無い)
 Run dir: <path> / 退避: <path> (あれば)
-Next step: <人が実行する run script の shell literal と run dir | 動いている worker (pane <id>、分かれば Issue #<N>) の完了を待ってから起動を指示し直す (この Issue の起動の記録はまだ書いていないので、記録の破棄は要らない。§1 で起動を見送った launch-path) | 依頼の更新 | 転記しなかった run dir の result.md の path と、gate が止めた行番号と区分 (本文は写さない。人が開いて確かめる。transcription) | limit の reset 待ち (reset 時刻) | 記録された run の worker が動いているか・run dir を人が確かめ、回収するか記録を破棄するかを決める。破棄は理由を entry に書いて worker-update stop、続いて launch を使う (LAUNCH §3、launch-record) | 照合が止めた .git の entry を clone に git を実行する前に人が調べ、残す commit・変更を取り出してから clone を消し、再起動を指示する (worker の終了後の clone) | 退避の止まった段と error を人が確かめ、退避をやり直すか残す変更を clone から取り出してから、再起動を指示する (worker の終了後の clone、退避の command の失敗)>
+Next step: docs/codex-worker-run.md の「停止後の state と回復 (正本)」の該当行から、人の次の手を書く。
+launch-record: 人が生存と記録を確かめ、回収か破棄を判断する。open の破棄は理由を entry に書き worker-update stop、続いて launch。
+clone: 人が停止の原因を確かめる。照合失敗なら変更を保存して clone 全体を退避する。終了後の open / run は破棄の判断後に stop、launch。既に blocked なら許可を確認して launch。退避の失敗だけなら原因を直して collect。
+transcription: 人が診断 file を確かめる。更新済みなら再転記しない。本文を返却に写さない。
+launch-path: 記録の有無と未起動を確認して hand-off、または人が tab と process を確かめる。
+limit: reset を待ち、人が再開を判断する。
 ```
 
 state は script の `packet.written` と、読み直した packet で確かめる。
@@ -49,8 +53,9 @@ state は script の `packet.written` と、読み直した packet で確かめ�
 1回目の空の結果 (`retryable: true`) は state と起動記録を保持する。
 transcription、終了後の snapshot 照合、退避の失敗では、その停止を理由に state を変更しない。
 書き込み後の読み直しで止まる場合もあるので、packet を確認して済んだ範囲を返す。
-起動前の停止、人手実行待ち、生存を確かめられない停止も state を保持する。
-JSON と exit の対応は `SKILL.md` §8、細かな停止区分は `docs/codex-worker-run.md` を参照する。
+記録前の停止、人手実行待ち、生存を確かめられない停止も state を保持する。
+run-start 後の停止なら open と新しい run が残る。branch の保存は packet.written に含まれない。
+JSON と exit の対応は `SKILL.md` §8、停止後の state と回復は `docs/codex-worker-run.md` の正本の表を参照する。
 
 開始時に `GH_REPO` が空でなければ、`Blocked at: preflight`、`Reason: GH_REPO が空でない`、
 `Next step: GH_REPO を外して起動し直す` と返す。packet は書かず、今回は run dir と clone を作っていないと明記する。
