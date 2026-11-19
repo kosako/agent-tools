@@ -319,6 +319,8 @@ check("codex: 読み取りの前の作業の item は数えない", done.call(wo
 check("codex: 間の読み取りで数を 0 に戻す", done.call(read_a, work, read_a, work) == false)
 check("codex: 候補でない SKILL.md の読み取りでも数を 0 に戻す",
       done.call(read_a, work, command_item("cat ~/.codex/skills/.system/other/SKILL.md"), work) == false)
+check("codex: 前に / の無い SKILL.md の読み取り (cd の後の cat) でも数を 0 に戻す",
+      done.call(read_a, work, command_item("cd .agents/skills/skill-b && cat SKILL.md"), work) == false)
 check("codex: agent_message は数にも数え直しにも入れない", done.call(read_a, work, message, work) == true)
 check("codex: file_change / mcp_tool_call / web_search も作業の item に数える",
       done.call(read_a, tool_item.call("file_change"), tool_item.call("mcp_tool_call")) == true &&

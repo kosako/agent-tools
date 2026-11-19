@@ -378,6 +378,11 @@ v2_bad "$(run_line2 a-primary ok timeout 100 10 '["skill-a"]')" "v2-ok-with-time
 v2_bad "$(run_line2 a-primary error observed-stop null null '["skill-a"]')" "v2-error-with-observed-stop" "completion 'observed-stop' does not match status 'error'"
 v2_bad "$(run_line2 a-primary ok exited null null '["skill-a"]')" "v2-null-tokens-not-stopped" "runs\[0\]\.prompt_tokens must be a non-negative integer$"
 v2_bad "$(run_line2 a-primary ok observed-stop null 5 '["skill-a"]')" "v2-half-null-tokens" "prompt_tokens and output_tokens must both be null or both be integers"
+# observed-stop でも、token の key の欠落は null と別 (v1 と同じく入力エラー)
+for key in prompt_tokens output_tokens; do
+  v2_bad "$(run_line2 a-primary ok observed-stop null null '["skill-a"]' | sed "s/\"$key\": null, //")" \
+    "v2-observed-stop-missing-$key" "runs\[0\]\.$key must be a non-negative integer or null"
+done
 # v1 の run は completion を持たず、token の null は許さない
 write_results "$tmp/v1-null.json" codex model-x candidate "$(run_line a-primary ok null null '["skill-a"]')"
 run_case "v1-null-tokens" 2 "runs\[0\]\.prompt_tokens must be a non-negative integer" -- --cases "$tmp/cases.json" --results "$tmp/v1-null.json"

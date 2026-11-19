@@ -125,13 +125,16 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
   - `observed-stop` (`ok`): Codex の run を `--timeout` で kill し、出力を読み切れていて、kill の前に「skill を読んで
     から作業に入った印」が立っていた。印は、候補 skill の `SKILL.md` を読んだ後に、`SKILL.md` を読まない tool の item
     (`item.completed` の type が `command_execution`・`file_change`・`mcp_tool_call`・`web_search`) が 2 つ続いたこと。
-    `agent_message` などは数えず、`SKILL.md` の読み取り (候補か否かを問わない) は数を 0 に戻し、知らない type は
-    数えない。2026-09-21 の Codex の raw log (48 run) に当てると、observed が変わるのは作業の途中で skill を読み回した
+    `agent_message` などは数えず、`SKILL.md` を含む command (候補か否か、前に `/` があるかを問わない。
+    `cd <dir> && cat SKILL.md` の形を含む) は数を 0 に戻し、知らない type は数えない。2026-09-21 の Codex の raw log (48 run) に当てると、observed が変わるのは作業の途中で skill を読み回した
     1 run だけだった。kill を待たずに印の時点で止める形は採らない (ほぼ全 run が印の後も作業を続け、Codex の token は
     `turn.completed` にしか出ないので、token の before / after を比べられなくなる)。
-  - `timeout` (`error`): kill した run で、上の印が無い (Claude Code の kill した run を含む)。
-  - `failed` (`error`): それ以外 (非ゼロ終了・usage が無い・出力を読み切れない)。CLI の失敗は、skill の読み取りが
-    見えていても `ok` にしない。
+  - `timeout` (`error`): kill した run で、`observed-stop` の条件 (出力を読み切れた、印が立った) を満たさない。
+    Claude Code の kill した run は、打ち切りの result があってもここに入る。
+  - `failed` (`error`): 期限の中で終わった run で、`exited`・`max-turns` に当たらない (非ゼロ終了・usage が無い・
+    出力を読み切れない)。CLI の失敗は、skill の読み取りが見えていても `ok` にしない。
+  - 終わり方は、期限の中で終わった run (`exited`・`max-turns`・`failed`) と、kill した run (`observed-stop`・`timeout`)
+    に分かれる。
   - judge は schema_version 1 の結果も読む (`completion` は無く、token は整数)。
 - raw log は `<out>.raw/<case>-<n>.jsonl` に残す。observed が正しいかはこの log で人が確認する
   (judge は runner の観測を信頼する。信頼境界は judge の冒頭コメント参照)。raw log は private な内容を

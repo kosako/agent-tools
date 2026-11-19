@@ -343,7 +343,8 @@ module ProbeSkillRouting
   # codex の「routing の判断が終わった」印 (#302): 候補 skill の SKILL.md を読んだ後に、SKILL.md を読まない tool の
   # item がこの数だけ続いた (skill を読んでから作業に入った)。--timeout で打ち切った run だけに使い、満たせば観測完了
   # (completion: observed-stop) に数える。tool の item は下の type の item.completed で、agent_message などは数にも
-  # 数え直しにも入れない。SKILL.md の読み取り (候補か否かを問わない) は数を 0 に戻す。知らない type は数えない
+  # 数え直しにも入れない。SKILL.md を含む command (候補か否か、前に / があるかを問わない。`cd <dir> && cat SKILL.md`
+  # の形を含む) は数を 0 に戻す。知らない type は数えない
   # (条件を満たしにくくする向き)。2026-09-21 の raw log (48 run) で当てて、observed が変わるのは 1 run だけだった。
   CODEX_ROUTING_GAP = 2
   CODEX_TOOL_ITEM_TYPES = %w[command_execution file_change mcp_tool_call web_search].freeze
@@ -382,7 +383,7 @@ module ProbeSkillRouting
         elsif CODEX_TOOL_ITEM_TYPES.include?(item["type"])
           command = item["type"] == "command_execution" && item["command"].is_a?(String) ? item["command"] : ""
           command.scan(pattern) { |(name)| reads << name unless reads.include?(name) }
-          if command.include?("/SKILL.md")
+          if command.include?("SKILL.md")
             gap = 0
           elsif !reads.empty?
             gap += 1
@@ -422,7 +423,10 @@ module ProbeSkillRouting
   #   ない。打ち切りの result があっても、終了の状態が取れない run はここに入らない (#516)。
   # - observed-stop (#302): codex の run が --timeout で打ち切られ、stdout を読み切れていて、打ち切りの前に
   #   routing_done (CODEX_ROUTING_GAP) が立った。打ち切りの run の usage は信用しないので token は取らない。
-  # - timeout: 上に当たらない打ち切り。failed: それ以外 (非ゼロ終了・usage なし・読み切れない)。認証 / API エラー等の
+  # - timeout: 打ち切った run で、observed-stop の条件 (読み切れた・印が立った) を満たさないもの。
+  # - failed: 期限の中で終わった run で、exited / max-turns に当たらないもの (非ゼロ終了・usage なし・読み切れない)。
+  #   終わり方は、期限の中で終わった run (exited / max-turns / failed) と打ち切った run (observed-stop / timeout) に
+  #   分かれる。認証 / API エラー等の
   #   非ゼロ終了を、skill の読み取りが見えたことだけで ok にしない。
   OK_COMPLETIONS = %w[exited max-turns observed-stop].freeze
 

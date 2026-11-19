@@ -166,7 +166,8 @@ module CheckSkillRouting
       stopped = r["completion"] == "observed-stop"
     end
     %w[prompt_tokens output_tokens].each do |key|
-      next if stopped && r[key].nil?
+      # null を許すのは key が在って値が null のときだけ (key の欠落は v1 と同じく誤り)。
+      next if stopped && r.key?(key) && r[key].nil?
 
       unless r[key].is_a?(Integer) && r[key] >= 0
         detail = stopped ? "a non-negative integer or null" : "a non-negative integer"
