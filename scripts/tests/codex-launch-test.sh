@@ -37,7 +37,8 @@ CL = CodexLaunch
 CANARY = "BRIEF-CANARY-do-not-echo"
 RESULT_CANARY = "RESULT-CANARY-do-not-echo"
 # 空白・引用符・command 置換の形を含む場所 (literal 化が壊れると PWNED の file ができる)。
-NASTY = %q(re po's "q" $(touch PWNED) `touch PWNED2`)
+# 固定の 9-p1 で、path の一部を profile flag と誤認しないことも確かめる (#711)。
+NASTY = %q(re po's "q" $(touch PWNED) `touch PWNED2` 9-p1)
 
 TMP = tmp
 deploy = File.join(tmp, "deploy")
@@ -230,7 +231,7 @@ zsh = File.read(File.join(run_dir, "run.zsh"))
 check "run.zsh fixes the boundary flags",
       zsh.include?(%q(codex exec --ignore-user-config --ignore-rules -s read-only -c approval_policy="never" \\) + "\n" \
                    "  --disable apps --disable computer_use --disable browser_use \\\n")
-check "run.zsh never widens the sandbox", !zsh.match?(/danger-full-access|workspace-write|dangerously|--ephemeral|(?<![A-Za-z-])-p(?![A-Za-z])/)
+check "run.zsh never widens the sandbox", !zsh.match?(/danger-full-access|workspace-write|dangerously|--ephemeral/)
 check "run.zsh assigns literals once", zsh.include?("repo=#{CL.shell_literal(File.realpath(REPO))}\n") && zsh.include?("run=#{CL.shell_literal(run_dir)}\n") &&
                                       zsh.include?("model='gpt-test-1'\n") && zsh.include?("effort='xhigh'\n")
 check "run.zsh writes the last message to result.md and reads the brief from stdin", zsh.include?(%q(-o "$run/result.md" - < "$run/brief.md"))
@@ -248,6 +249,8 @@ FileUtils.mkdir_p(File.join(state, "zdot"))
 o2, _e2, s2 = Open3.capture3(exec_env, "zsh", "-f", File.join(run_dir, "run.zsh"), chdir: tmp)
 call = JSON.parse(File.readlines(File.join(state, "exec.log")).last)
 check "run.zsh exits 0 and prints the sentinel", s2.success? && o2 == "#{j['sentinel']} exit=0\n"
+# path 中の -p は除外し、独立した -p と値を続けた -pfoo を実際の argv で検査する。
+check "codex exec never selects a profile", call["argv"].none? { |arg| arg.start_with?("-p") }
 check "codex exec gets exactly the fixed argv",
       call["argv"] == ["exec", "--ignore-user-config", "--ignore-rules", "-s", "read-only", "-c", "approval_policy=never",
                        "--disable", "apps", "--disable", "computer_use", "--disable", "browser_use",
