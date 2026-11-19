@@ -173,12 +173,15 @@ usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
 - raw log は model が実行した command の出力や読んだ file の中身を含みうる (採掘の case では実 session log の
   中身)。Issue / PR / comment には貼らず、貼るのは judge の summary だけにする (docs の「raw log の扱い」)。
 - 既知の挙動 (#302): Codex では case `audit-mine-session-logs` が asset-miner を読んだあと実際の採掘を始め、
-  `--timeout` (既定 300 秒) で error run になりやすい。error run があると judge は構造エラーになり baseline との
-  比較を飛ばすので、この case を含む Codex の run は subset から外すか per-case で読む (docs の「既知の挙動」)。
+  `--timeout` (既定 300 秒) まで走る。打ち切った run は、skill を読んでから作業に入った印があれば
+  `completion: observed-stop` (`ok`、token は `null`) に数え、無ければ `timeout` (error run)。results.json は
+  schema_version 2 で、judge は 1 も読む (docs の「観測契約」と「既知の挙動」)。
 - self-test: `tests/probe-skill-routing-test.sh` は、Codex の起動の境界 (argv と、起動の前の flag と
   feature の確認)、config からの model の選択 (top-level だけを読む)、raw dir の外を指す case id での停止を
   偽の `codex` と fixture の `CODEX_HOME` で確かめ、event の解析 (`parse_claude` / `parse_codex`) を固定の
-  JSONL で、`--max-turns` の打ち切りの扱いを偽の `claude` で確かめる。子 process の起動・期限・中断の後片付けは
+  JSONL で、`--max-turns` の打ち切りの扱いを偽の `claude` で、`--timeout` の打ち切りの `completion` (印の有無、
+  非ゼロ終了、孫の process を残さないこと、results.json と judge の受け入れ) を偽の `codex` で確かめる。子 process の
+  起動・期限・中断の後片付けは
   OpenCode の probe と共有の `lib/probe_child.rb` が持ち、中断で子の process group を残さないことと、help の
   `--model` の説明も確かめる (#568)。CLI の実起動と、実際の event 形式との
   一致は対象外 (実機で `--smoke`)。`--dry-run` / `--help` の引数契約は `tests/cli-args-test.sh` の対象外。

@@ -32,7 +32,8 @@ harness です。#216 の cross-skill routing suite の最小 slice で、
   絶対値を品質の保証として読まない。**
 - Codex は `first_prompt_tokens` を取れない (event に turn 合計の usage しか無い) ので、token の比較は
   `prompt_tokens` (turn 全体) と静的な `listing_chars` で見る。`--max-turns` 相当も無く、run は model が
-  終えるか `--timeout` (既定 300 秒) で kill されるまで走る。
+  終えるか `--timeout` (既定 300 秒) で kill されるまで走る。kill した run は、skill を読んでから作業に入った印が
+  あれば観測完了 (`completion: observed-stop`) に数え、token は取らない (下の「観測契約」。#302)。
 
 ## 隔離 (実 home に触らない)
 
@@ -87,11 +88,11 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
 ## 観測契約 (probe → results.json)
 
 ```json
-{ "schema_version": 1, "tool": "claude-code", "model": "<model id>", "variant": "baseline",
+{ "schema_version": 2, "tool": "claude-code", "model": "<model id>", "variant": "baseline",
   "listing_chars": 4952,
   "runs": [ { "case": "<case id>", "observed": ["<skill name>", ...],
               "prompt_tokens": 1234, "output_tokens": 56, "first_prompt_tokens": 1000,
-              "status": "ok" } ] }
+              "status": "ok", "completion": "exited" } ] }
 ```
 
 - `observed`: その run で **起動された** skill 名。claude-code は stream-json の `Skill` tool_use、
@@ -101,6 +102,7 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
 - `prompt_tokens`: claude-code は `result.usage` の input + cache_creation + cache_read の合計
   (skill listing は system prompt 側なので cache に現れる)。codex は usage の `input_tokens`。
   `output_tokens` は各 CLI の値。どちらも run 全体の合計で、turn 数 (model の振る舞い) に依存する。
+  `completion: observed-stop` の run だけ、どちらも `null` (kill した run の usage は信用しない)。
 - `first_prompt_tokens` (任意): 最初の API call の prompt 量 (claude-code は最初の `assistant`
   event の `message.usage` の合計)。turn 数に依存しないので、listing の大きさの差はこちらに
   素直に出る。judge は全 ok run が持つときだけ集計する。
@@ -115,7 +117,22 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
   exit 0 で終わっても出力を最後まで読み切れなかった run (CLI が残した子 process が pipe を握ったまま、待つ上限の
   5 秒を過ぎた) は `error`。kill した run と読み切れなかった run は、打ち切りの result を出していても `error`。usage が
   取れなかった run (Claude Code は result の、Codex は turn.completed の usage が無い、または `input_tokens` /
-  `output_tokens` が整数でない) も `error`。judge は緑に数えない。
+  `output_tokens` が整数でない) も `error`。judge は緑に数えない。ただし下の `observed-stop` は、kill した run でも `ok`。
+- `completion` (schema_version 2、#302): run の終わり方。`status` と次のように対応する (judge は食い違いを入力
+  エラーにする)。
+  - `exited` (`ok`): CLI が exit 0 で終わり、usage が取れた。
+  - `max-turns` (`ok`): Claude Code の `--max-turns` の打ち切り (上)。
+  - `observed-stop` (`ok`): Codex の run を `--timeout` で kill し、出力を読み切れていて、kill の前に「skill を読んで
+    から作業に入った印」が立っていた。印は、候補 skill の `SKILL.md` を読んだ後に、`SKILL.md` を読まない tool の item
+    (`item.completed` の type が `command_execution`・`file_change`・`mcp_tool_call`・`web_search`) が 2 つ続いたこと。
+    `agent_message` などは数えず、`SKILL.md` の読み取り (候補か否かを問わない) は数を 0 に戻し、知らない type は
+    数えない。2026-09-21 の Codex の raw log (48 run) に当てると、observed が変わるのは作業の途中で skill を読み回した
+    1 run だけだった。kill を待たずに印の時点で止める形は採らない (ほぼ全 run が印の後も作業を続け、Codex の token は
+    `turn.completed` にしか出ないので、token の before / after を比べられなくなる)。
+  - `timeout` (`error`): kill した run で、上の印が無い (Claude Code の kill した run を含む)。
+  - `failed` (`error`): それ以外 (非ゼロ終了・usage が無い・出力を読み切れない)。CLI の失敗は、skill の読み取りが
+    見えていても `ok` にしない。
+  - judge は schema_version 1 の結果も読む (`completion` は無く、token は整数)。
 - raw log は `<out>.raw/<case>-<n>.jsonl` に残す。observed が正しいかはこの log で人が確認する
   (judge は runner の観測を信頼する。信頼境界は judge の冒頭コメント参照)。raw log は private な内容を
   含みうるので、Issue / PR / comment には貼らない (下の「raw log の扱い」)。
@@ -139,7 +156,9 @@ scripts/check-skill-routing.sh --cases scripts/lib/skill_routing_cases.json \
   error run・比較条件の不一致) が baseline / candidate のどちらかにあると、比較 (delta の表示と回帰の判定) を
   しない。candidate 自身の must_not violation は、その場合も exit 1 として出る。
 - **token は gate にしない**。delta (%) を報告するだけ。「減った」ことは受け入れ条件として
-  Issue / PR に記録する。
+  Issue / PR に記録する。token が `null` の run (`observed-stop`) は合算から外し、summary の末尾に
+  `runs_without_tokens=<数>` を出す (平均の分母は token を持つ run の数)。delta は、両方の結果で全 run が token を
+  持つ case だけで合計を取り直し、外した case があればその数を末尾に出す (#302)。
 - exit: `0` = pass、`1` = 破れ / 回帰、`2` = 入力・構造エラー。破れと構造不備が同居したら 1 を
   優先し、全件報告する。
 
@@ -166,8 +185,8 @@ scripts/check-skill-routing.sh --cases scripts/lib/skill_routing_cases.json \
 
 codex は `--tool codex` で同じ手順。両 tool で回帰なしを確認したものだけ merge する (#280 の
 受け入れ条件)。`--repeat N` で揺れを均せる (baseline と candidate で同じ N にする。repeat 1 では 1 回の外れが「一度も
-当たらない」になり回帰になるので、gate にするなら 2 以上)。Codex で全 case を
-流すと、case `audit-mine-session-logs` の error run で比較が飛びやすい (下の「既知の挙動」)。
+当たらない」になり回帰になるので、gate にするなら 2 以上)。Codex の case `audit-mine-session-logs` は、
+`--timeout` まで走ってから `observed-stop` になりやすい (下の「既知の挙動」)。
 
 ## raw log の扱い
 
@@ -185,27 +204,21 @@ codex は `--tool codex` で同じ手順。両 tool で回帰なしを確認し�
 
 - Codex では、case `audit-mine-session-logs` の run が `personal-asset-miner` の SKILL.md を読んだあと実際の
   採掘を始め、`--timeout` (既定 300 秒) で打ち切られやすい。Codex には `--max-turns` 相当が無いので、skill を
-  読んだ後の作業も打ち切りまで走る。打ち切られた run は CLI が正常に終わらないので error run になる
-  (SKILL.md の読み取りが raw log に出ていても ok に数えない)。Claude Code は `--max-turns` の打ち切りで
-  止まり、PR #300 の Claude Code 側ではこの case も ok だった。
+  読んだ後の作業も打ち切りまで走る。Claude Code は `--max-turns` の打ち切りで止まり、PR #300 の Claude Code 側では
+  この case も ok だった。
 - 観測: #302 の起票時 (PR #300 の before / after) は baseline / candidate の両方が error run だった。raw log
   では、asset-miner を読んだあと実際の採掘を始め (command 24 本)、1 run の上限 300 秒で打ち切られていた。
   その後の before / after でも、PR #304 では candidate、PR #363 では baseline が error run だった (この 3 PR の
   記録で 6 run 中 4 run)。
-- error run は構造エラーなので、judge は exit 2 (must_not violation が同居すれば exit 1) になり、どちらでも
-  baseline との比較 (delta の表示と回帰の判定) を飛ばす (上の「判定契約」。judge の self-test で固定して
-  いる)。そのため、この case を含む Codex の run は judge の exit code で機械的に gate できない。次のどちらかで
-  扱う。
-  - **subset から外す**: case set の copy からこの case を除いた file を作り、before / after の両方で probe と
-    judge の `--cases` に同じ file を渡す (judge はその範囲で gate できる)。Codex 側の asset-miner の routing は
-    測っていないことを PR に書き、case を外して全体の coverage を満たしたことにしない。
-  - **per-case で読む**: この case を含めて測り、before / after の結果をそれぞれ judge に通して (`--baseline`
-    を付けると case ごとの行は candidate 側しか出ない)、case ごとの行を突き合わせる。他の case で primary hit の
-    減少や must_not violation の増加が無いことを人が確かめ、この case の結果 (error run かどうか、読んだ skill)
-    は件数で書く。`--only` で一部の case だけを流した結果も、正本の case set では coverage 欠落 (exit 2) に
-    なるので、こちらで読む。
-- 観測の完了で run を止める runner 側の対処は #302 で扱う (未実装)。
-
+- #302 から、打ち切られた run は、skill を読んでから作業に入った印があれば `observed-stop` (`ok`) に数える (上の
+  「観測契約」の `completion`)。採掘を始めた run は印が立つので、coverage を満たし、baseline との比較も飛ばない。
+  token は取れないので、この case は token の delta から外れる (judge が外した case の数を出す)。
+- 期限まで走る間の時間と Codex の枠は、今までどおり使う。model が実 home の session log を読みうることも変わらない
+  (上の「raw log の扱い」)。
+- 印が立たないまま打ち切られた run (`timeout`) は、今までどおり error run で、judge は exit 2 になり比較を飛ばす。
+  そのときは、この case を除いた case set の copy を before / after の両方の `--cases` に渡すか、case ごとの行を
+  突き合わせて読む。どちらでも、Codex 側の asset-miner の routing を測っていないことを PR に書き、case を外して
+  全体の coverage を満たしたことにしない。
 ## case set の育て方
 
 - 1 case = 1 依頼 prompt。`primary` は依頼の主目的を所有する skill (無ければ `null`)、`must_not` は

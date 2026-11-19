@@ -24,6 +24,8 @@
 #     (#582)。--smoke で listing と event 形式を先に確認する。
 #   - --max-turns の打ち切りは観測完了として扱う (routing の判断は最初の turn の Skill 起動で
 #     出る。skill が起動した後の作業は観測対象外なので、続きを走らせない)。
+#   - codex には --max-turns 相当が無い。--timeout で打ち切った run だけに、skill を読んでから作業に入った印
+#     (CODEX_ROUTING_GAP) を当て、立っていれば観測完了 (observed-stop) にする (#302)。
 #
 # prompt / path は shell 文字列に埋め込まず argv 配列と stdin で渡す (#266 の欠陥クラスを
 # 持ち込まない)。
@@ -74,6 +76,8 @@ module ProbeSkillRouting
       --only      実行する case id (comma 区切り)。coverage が欠けるので判定は exit 2 になる
       --max-turns claude-code の --max-turns (既定: #{DEFAULT_MAX_TURNS})
       --timeout   1 run の上限秒 (既定: #{DEFAULT_TIMEOUT})
+                  codex で上限に達した run は、skill を読んでから作業に入った印があれば観測完了
+                  (completion: observed-stop、token は取らない)。無ければ error
       --dry-run   隔離 project の配置と実行 argv を表示して終了 (CLI を起動しない)
       --smoke     case set の代わりに「見えている skill を列挙する」prompt を 1 回流し、
                   隔離と event 形式を確認する (results.json は書かない)
@@ -336,6 +340,14 @@ module ProbeSkillRouting
   # 安価に全部読める run がある (baseline 24 run 中 1 run が 12 本すべてを順に読んだ)。
   CODEX_SURVEY_THRESHOLD = 6
 
+  # codex の「routing の判断が終わった」印 (#302): 候補 skill の SKILL.md を読んだ後に、SKILL.md を読まない tool の
+  # item がこの数だけ続いた (skill を読んでから作業に入った)。--timeout で打ち切った run だけに使い、満たせば観測完了
+  # (completion: observed-stop) に数える。tool の item は下の type の item.completed で、agent_message などは数にも
+  # 数え直しにも入れない。SKILL.md の読み取り (候補か否かを問わない) は数を 0 に戻す。知らない type は数えない
+  # (条件を満たしにくくする向き)。2026-09-21 の raw log (48 run) で当てて、observed が変わるのは 1 run だけだった。
+  CODEX_ROUTING_GAP = 2
+  CODEX_TOOL_ITEM_TYPES = %w[command_execution file_change mcp_tool_call web_search].freeze
+
   # codex exec --json の event (0.153.4 で実測): thread.started / turn.started / item.started /
   # item.completed (item.type = agent_message | command_execution | error ...) / turn.completed
   # (usage: input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens, ...)。
@@ -346,10 +358,13 @@ module ProbeSkillRouting
   # - prompt_tokens / output_tokens: turn.completed の usage。turn 内の全 API call の合計で、最初の
   #   call だけの値は event に無いので first_prompt_tokens は取らない (judge では n/a)。
   # - text: 最後の agent_message。model は event に出ない (caller が argv の値を使う)。
+  # - routing_done: 上の CODEX_ROUTING_GAP の印が立ったか (一度立てば、後の読み取りで戻さない)。
   def self.parse_codex(jsonl, names)
     reads = []
     usage = nil
     text = +""
+    gap = 0
+    routing_done = false
     pattern = %r{/(#{names.map { |n| Regexp.escape(n) }.join('|')})/SKILL\.md}
     jsonl.each_line do |line|
       e = begin
@@ -364,8 +379,15 @@ module ProbeSkillRouting
         item = e["item"].is_a?(Hash) ? e["item"] : {}
         if item["type"] == "agent_message"
           text = item["text"] if item["text"].is_a?(String)
-        elsif item["type"] == "command_execution" && item["command"].is_a?(String)
-          item["command"].scan(pattern) { |(name)| reads << name unless reads.include?(name) }
+        elsif CODEX_TOOL_ITEM_TYPES.include?(item["type"])
+          command = item["type"] == "command_execution" && item["command"].is_a?(String) ? item["command"] : ""
+          command.scan(pattern) { |(name)| reads << name unless reads.include?(name) }
+          if command.include?("/SKILL.md")
+            gap = 0
+          elsif !reads.empty?
+            gap += 1
+            routing_done ||= gap >= CODEX_ROUTING_GAP
+          end
         end
       when "turn.completed"
         usage = e["usage"] if e["usage"].is_a?(Hash)
@@ -380,40 +402,61 @@ module ProbeSkillRouting
     prompt_tokens = usage && usage["input_tokens"].is_a?(Integer) ? usage["input_tokens"] : nil
     output_tokens = usage && usage["output_tokens"].is_a?(Integer) ? usage["output_tokens"] : nil
     { observed: observed, model: nil, prompt_tokens: prompt_tokens, output_tokens: output_tokens,
-      first_prompt_tokens: nil, subtype: nil, text: text, note: note }
+      first_prompt_tokens: nil, subtype: nil, text: text, note: note, routing_done: routing_done }
   end
 
   # --- 実行 -------------------------------------------------------------------------
 
-  # argv を配列のまま起動し、timeout を超えたら kill する。stdout / stderr / status を返す (timeout で kill した run と、
-  # stream を最後まで読み切れなかった run の status は nil。観測として信用しない)。process group の起動・期限・中断を
-  # 含む後片付けは ProbeChild が持つ (#568)。
+  # argv を配列のまま起動し、timeout を超えたら kill する。ProbeChild の Result (out / err / status / completed /
+  # drained) をそのまま返す。process group の起動・期限・中断を含む後片付けは ProbeChild が持つ (#568)。
   def self.run_command(argv, chdir:, stdin:, timeout:)
     # 入れ子起動の guard 変数を外す (Claude Code の Bash から起動された場合)。
     env = { "CLAUDECODE" => nil, "CLAUDE_CODE_ENTRYPOINT" => nil }
-    r = ProbeChild.run(argv, env: env, chdir: chdir, stdin: stdin, timeout: timeout)
-    [r.out, r.err, r.completed && r.drained ? r.status : nil]
+    ProbeChild.run(argv, env: env, chdir: chdir, stdin: stdin, timeout: timeout)
+  end
+
+  # run の終わり方 (results.json の completion)。ok に数えるのは OK_COMPLETIONS の 3 つだけ。
+  # - exited / max-turns: 終了の状態が取れていて (timeout で kill した run と stream を読み切れなかった run は取れない)、
+  #   usage が取れていて、CLI が正常終了したか、--max-turns の打ち切り (claude-code の result.subtype ==
+  #   "error_max_turns")。打ち切りは routing の判断 (最初の turn の Skill 起動) を観測した後に起きるので観測失敗では
+  #   ない。打ち切りの result があっても、終了の状態が取れない run はここに入らない (#516)。
+  # - observed-stop (#302): codex の run が --timeout で打ち切られ、stdout を読み切れていて、打ち切りの前に
+  #   routing_done (CODEX_ROUTING_GAP) が立った。打ち切りの run の usage は信用しないので token は取らない。
+  # - timeout: 上に当たらない打ち切り。failed: それ以外 (非ゼロ終了・usage なし・読み切れない)。認証 / API エラー等の
+  #   非ゼロ終了を、skill の読み取りが見えたことだけで ok にしない。
+  OK_COMPLETIONS = %w[exited max-turns observed-stop].freeze
+
+  def self.completion(tool, result, parsed)
+    status = result.completed && result.drained ? result.status : nil
+    usage = parsed[:prompt_tokens] && parsed[:output_tokens]
+    if status && usage && status.success?
+      "exited"
+    elsif status && usage && parsed[:subtype] == "error_max_turns"
+      "max-turns"
+    elsif !result.completed && result.drained && tool == "codex" && parsed[:routing_done]
+      "observed-stop"
+    elsif !result.completed
+      "timeout"
+    else
+      "failed"
+    end
   end
 
   def self.run_one(opts, proj, names, prompt)
     if opts[:tool] == "claude-code"
       argv = claude_argv(opts, prompt)
-      out, err, status = run_command(argv, chdir: proj, stdin: nil, timeout: opts[:timeout])
-      parsed = parse_claude(out)
+      r = run_command(argv, chdir: proj, stdin: nil, timeout: opts[:timeout])
+      parsed = parse_claude(r.out)
     else
       argv = codex_argv(opts, proj, names)
-      out, err, status = run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout])
-      parsed = parse_codex(out, names).merge(model: codex_model(opts))
+      r = run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout])
+      parsed = parse_codex(r.out, names).merge(model: codex_model(opts))
     end
-    # 観測完了の条件: 終了の状態が取れていて (timeout で kill した run と stream を読み切れなかった run は
-    # status が nil)、usage が取れていて、CLI が正常終了したか、または --max-turns の打ち切り
-    # (claude-code の result.subtype == "error_max_turns")。打ち切りは routing の判断 (最初の
-    # turn の Skill 起動) を観測した後に起きるので観測失敗ではない。認証 / API エラー等の
-    # 非ゼロ終了は観測不能として error (judge は緑に数えない)。打ち切りの result があっても、
-    # 終了の状態が取れない run は error のまま (#516)。
-    complete = !status.nil? && (status.success? || parsed[:subtype] == "error_max_turns")
-    ok = complete && parsed[:prompt_tokens] && parsed[:output_tokens]
-    parsed.merge(argv: argv, stdout: out, stderr: err, exit: status&.exitstatus, status: ok ? "ok" : "error")
+    done = completion(opts[:tool], r, parsed)
+    parsed = parsed.merge(prompt_tokens: nil, output_tokens: nil) if done == "observed-stop"
+    status = r.completed && r.drained ? r.status : nil
+    parsed.merge(argv: argv, stdout: r.out, stderr: r.err, exit: status&.exitstatus, completion: done,
+                 status: OK_COMPLETIONS.include?(done) ? "ok" : "error")
   end
 
   # raw log の保存先 (<raw_dir>/<case id>-<n>.<ext>)。case id の文字集合は parse_cases が限っているが、
@@ -471,7 +514,7 @@ module ProbeSkillRouting
         r = run_one(opts, proj, names, SMOKE_PROMPT)
         puts "status=#{r[:status]} exit=#{r[:exit].inspect} subtype=#{r[:subtype].inspect} model=#{r[:model].inspect} " \
              "first_prompt_tokens=#{r[:first_prompt_tokens].inspect} prompt_tokens=#{r[:prompt_tokens].inspect} " \
-             "output_tokens=#{r[:output_tokens].inspect}"
+             "output_tokens=#{r[:output_tokens].inspect} completion=#{r[:completion]}"
         puts "observed=#{r[:observed].inspect}"
         puts "text: #{r[:text].to_s.strip[0, 800]}"
         unless r[:stderr].to_s.empty?
@@ -493,13 +536,17 @@ module ProbeSkillRouting
           model ||= r[:model]
           File.write(jsonl_path, r[:stdout])
           File.write(stderr_path, r[:stderr]) unless r[:stderr].to_s.empty?
-          run = { "case" => c["id"], "observed" => r[:observed], "prompt_tokens" => r[:prompt_tokens] || 0,
-                  "output_tokens" => r[:output_tokens] || 0, "status" => r[:status] }
+          # observed-stop の run は token を取らないので null。ほかは今までどおり、取れなければ 0 (error run)。
+          stopped = r[:completion] == "observed-stop"
+          run = { "case" => c["id"], "observed" => r[:observed],
+                  "prompt_tokens" => stopped ? nil : r[:prompt_tokens] || 0,
+                  "output_tokens" => stopped ? nil : r[:output_tokens] || 0,
+                  "status" => r[:status], "completion" => r[:completion] }
           # first_prompt_tokens は取れた tool (claude-code) だけ書く。judge では任意 field。
           run["first_prompt_tokens"] = r[:first_prompt_tokens] if r[:first_prompt_tokens]
           run["note"] = r[:note] if r[:note]
           runs << run
-          puts "#{c['id']} [#{n + 1}/#{opts[:repeat]}]: #{r[:status]} observed=#{r[:observed].inspect} " \
+          puts "#{c['id']} [#{n + 1}/#{opts[:repeat]}]: #{r[:status]} (#{r[:completion]}) observed=#{r[:observed].inspect} " \
                "tokens=first:#{r[:first_prompt_tokens].inspect} total:#{r[:prompt_tokens].inspect} " \
                "out:#{r[:output_tokens].inspect}#{r[:note] ? " (#{r[:note]})" : ''}"
         end
