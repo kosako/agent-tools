@@ -20,7 +20,8 @@
 #   - token: run ごとの prompt_tokens / output_tokens を合算して報告する (gate ではなく観測値。
 #     description の圧縮が context 量に効いたかを見るための指標)。first_prompt_tokens (最初の
 #     API call の prompt 量) は任意 field で、全 ok run が持つときだけ集計する。turn 数に依存
-#     しないので listing の大きさの差はこちらに素直に出る。
+#     しないので listing の大きさの差はこちらに素直に出る。token が null の run (completion: observed-stop。
+#     #302) は合算から外して数を出し、baseline との delta は両方で全 run が token を持つ case だけで取る。
 #   - baseline 比較 (--baseline): 同じ tool・同じ model・同じ case 集合・同じ run 数の結果同士だけ
 #     比較する (条件が違えば構造エラー)。primary は case ごとに比べ、baseline で半分以上の run が当たって
 #     いた case が候補で一度も当たらなければ回帰として exit 1 (#417)。それより小さい減少は warn: の行で
@@ -47,19 +48,28 @@ module CheckSkillRouting
   class Error < StandardError; end
 
   CASES_SCHEMA_VERSION = 1
-  RESULTS_SCHEMA_VERSION = 1
+  # probe が書く版は 2 (#302 で run の completion と、observed-stop の run の null の token を足した)。1 も読む。
+  RESULTS_SCHEMA_VERSION = 2
+  READABLE_RESULTS_SCHEMA_VERSIONS = [1, 2].freeze
   KNOWN_TOOLS = %w[claude-code codex].freeze
   RUN_STATUSES = %w[ok error].freeze
+  # schema 2 の run の終わり方と、対応する status。token の null は observed-stop だけに許す。
+  RUN_COMPLETIONS = {
+    "exited" => "ok", "max-turns" => "ok", "observed-stop" => "ok", "timeout" => "error", "failed" => "error",
+  }.freeze
 
   USAGE = <<~TEXT
     usage: check-skill-routing.sh --cases <cases.json> --results <results.json> [--baseline <results.json>]
 
     <cases.json>   case set (正本: scripts/lib/skill_routing_cases.json)
     <results.json> probe-skill-routing.sh の出力。shape:
-      { "schema_version": 1, "tool": "claude-code", "model": "<model id>", "variant": "<label>",
+      { "schema_version": 2, "tool": "claude-code", "model": "<model id>", "variant": "<label>",
         "runs": [ { "case": "<case id>", "observed": ["<skill name>", ...],
-                    "prompt_tokens": 1234, "output_tokens": 56, "status": "ok",
+                    "prompt_tokens": 1234, "output_tokens": 56, "status": "ok", "completion": "exited",
                     "first_prompt_tokens": 1000 } ] }   (first_prompt_tokens は任意)
+      completion: exited / max-turns / observed-stop (status ok) か timeout / failed (status error)。
+      observed-stop の run だけ token を null にできる (集計から外し、外した数を出す)。schema_version 1 も読む
+      (completion なし、token は整数)。
 
     判定: 全 case に ok な run があること (coverage)。primary skill の hit と must_not skill の
     violation を数え、token を合算して報告する (prompt_tokens = run 全体、first_prompt_tokens =
@@ -122,8 +132,9 @@ module CheckSkillRouting
   def self.parse_results(raw, label)
     data = JSON.parse(raw)
     raise Error, "#{label}: input must be a JSON object" unless data.is_a?(Hash)
-    unless data["schema_version"] == RESULTS_SCHEMA_VERSION
-      raise Error, "#{label}: schema_version must be #{RESULTS_SCHEMA_VERSION}"
+    version = data["schema_version"]
+    unless READABLE_RESULTS_SCHEMA_VERSIONS.include?(version)
+      raise Error, "#{label}: schema_version must be one of #{READABLE_RESULTS_SCHEMA_VERSIONS.join(', ')}"
     end
     raise Error, "#{label}: tool must be one of #{KNOWN_TOOLS.join(', ')}" unless KNOWN_TOOLS.include?(data["tool"])
     raise Error, "#{label}: model must be a non-empty string" unless label?(data["model"])
@@ -131,11 +142,11 @@ module CheckSkillRouting
 
     runs = data["runs"]
     raise Error, "#{label}: runs must be an array" unless runs.is_a?(Array)
-    runs.each_with_index { |r, i| validate_run!(r, i, label) }
+    runs.each_with_index { |r, i| validate_run!(r, i, label, version) }
     data
   end
 
-  def self.validate_run!(r, index, label)
+  def self.validate_run!(r, index, label, version)
     raise Error, "#{label}: runs[#{index}] must be an object" unless r.is_a?(Hash)
     raise Error, "#{label}: runs[#{index}].case must be a non-empty string" unless label?(r["case"])
     unless RUN_STATUSES.include?(r["status"])
@@ -144,10 +155,27 @@ module CheckSkillRouting
     unless r["observed"].is_a?(Array) && r["observed"].all? { |s| skill_name?(s) }
       raise Error, "#{label}: runs[#{index}].observed must be an array of skill names"
     end
-    %w[prompt_tokens output_tokens].each do |key|
-      unless r[key].is_a?(Integer) && r[key] >= 0
-        raise Error, "#{label}: runs[#{index}].#{key} must be a non-negative integer"
+    stopped = false
+    if version >= 2
+      unless RUN_COMPLETIONS.key?(r["completion"])
+        raise Error, "#{label}: runs[#{index}].completion must be one of #{RUN_COMPLETIONS.keys.join(', ')}"
       end
+      unless RUN_COMPLETIONS[r["completion"]] == r["status"]
+        raise Error, "#{label}: runs[#{index}].completion '#{r['completion']}' does not match status '#{r['status']}'"
+      end
+      stopped = r["completion"] == "observed-stop"
+    end
+    %w[prompt_tokens output_tokens].each do |key|
+      # null を許すのは key が在って値が null のときだけ (key の欠落は v1 と同じく誤り)。
+      next if stopped && r.key?(key) && r[key].nil?
+
+      unless r[key].is_a?(Integer) && r[key] >= 0
+        detail = stopped ? "a non-negative integer or null" : "a non-negative integer"
+        raise Error, "#{label}: runs[#{index}].#{key} must be #{detail}"
+      end
+    end
+    if r["prompt_tokens"].nil? != r["output_tokens"].nil?
+      raise Error, "#{label}: runs[#{index}]: prompt_tokens and output_tokens must both be null or both be integers"
     end
     # first_prompt_tokens (最初の API call の prompt 量) は取れる tool だけが書く任意 field。
     if r.key?("first_prompt_tokens") && !(r["first_prompt_tokens"].is_a?(Integer) && r["first_prompt_tokens"] >= 0)
@@ -190,6 +218,8 @@ module CheckSkillRouting
     runs_total = 0
     prompt_tokens = 0
     output_tokens = 0
+    token_runs = 0
+    without_tokens = 0
     first_tokens = 0
     first_count = 0
     observed_any = false
@@ -206,8 +236,14 @@ module CheckSkillRouting
           next
         end
         runs_total += 1
-        prompt_tokens += r["prompt_tokens"]
-        output_tokens += r["output_tokens"]
+        # token の無い run (observed-stop。#302) は合算から外し、数だけを出す。
+        if r["prompt_tokens"].nil?
+          without_tokens += 1
+        else
+          token_runs += 1
+          prompt_tokens += r["prompt_tokens"]
+          output_tokens += r["output_tokens"]
+        end
         if r.key?("first_prompt_tokens")
           first_tokens += r["first_prompt_tokens"]
           first_count += 1
@@ -244,7 +280,7 @@ module CheckSkillRouting
     summary = {
       label: label, variant: results["variant"], tool: results["tool"], model: results["model"],
       runs: runs_total, hit: hit, hit_total: hit_total, violations: violations,
-      prompt_tokens: prompt_tokens, output_tokens: output_tokens,
+      prompt_tokens: prompt_tokens, output_tokens: output_tokens, token_runs: token_runs, without_tokens: without_tokens,
       first_prompt_tokens: (first_count == runs_total && runs_total.positive? ? first_tokens : nil)
     }
     { summary: summary, per_case: per_case, breaches: breaches, structural: structural }
@@ -301,27 +337,39 @@ module CheckSkillRouting
     primary = pc[:primary].nil? ? "primary=n/a" : "primary=#{pc[:primary_hit] ? 'hit' : 'MISS'}"
     must_not = pc[:violated].empty? ? "must_not=ok" : "must_not=VIOLATED(#{pc[:violated].join(',')})"
     "case #{pc[:id]}: #{primary} #{must_not} observed=[#{pc[:observed].join(',')}] " \
-      "tokens=first:#{pc[:first_prompt_tokens] || 'n/a'} total:#{pc[:prompt_tokens]} out:#{pc[:output_tokens]}"
+      "tokens=first:#{pc[:first_prompt_tokens] || 'n/a'} total:#{pc[:prompt_tokens] || 'n/a'} out:#{pc[:output_tokens] || 'n/a'}"
   end
 
+  # prompt_tokens の平均の分母は token を持つ run の数 (first_prompt_tokens は全 ok run が持つときだけ在るので runs)。
+  # token の無い run があるときだけ、その数を末尾に足す。
   def self.format_summary(s)
-    mean = ->(total) { s[:runs].zero? ? 0 : (total.to_f / s[:runs]).round }
-    first = s[:first_prompt_tokens] ? "#{s[:first_prompt_tokens]} (mean #{mean.call(s[:first_prompt_tokens])})" : "n/a"
+    mean = ->(total, n) { n.zero? ? 0 : (total.to_f / n).round }
+    first = s[:first_prompt_tokens] ? "#{s[:first_prompt_tokens]} (mean #{mean.call(s[:first_prompt_tokens], s[:runs])})" : "n/a"
+    without = s[:without_tokens].positive? ? " runs_without_tokens=#{s[:without_tokens]}" : ""
     "summary[#{s[:label]}] variant=#{s[:variant]} tool=#{s[:tool]} model=#{s[:model]} runs=#{s[:runs]} " \
       "primary=#{s[:hit]}/#{s[:hit_total]} violations=#{s[:violations]} " \
-      "prompt_tokens=#{s[:prompt_tokens]} (mean #{mean.call(s[:prompt_tokens])}) output_tokens=#{s[:output_tokens]} " \
-      "first_prompt_tokens=#{first}"
+      "prompt_tokens=#{s[:prompt_tokens]} (mean #{mean.call(s[:prompt_tokens], s[:token_runs])}) " \
+      "output_tokens=#{s[:output_tokens]} first_prompt_tokens=#{first}#{without}"
   end
 
-  def self.format_delta(cand, base)
+  # token の delta は、両方の結果で全 run が token を持つ case だけで合計を取り直して比べる (#302)。token の無い run
+  # (observed-stop) が片方にだけある case を混ぜると、run の数の違いが token の増減に見えるため。外した case があれば
+  # その数を末尾に足す。delta は構造エラーが無いとき (error run が無く、case ごとの run 数が同じ) だけ出す。
+  def self.format_delta(cand, base, cand_per_case, base_per_case)
     pct = lambda do |c, b|
       c.nil? || b.nil? || b.zero? ? "n/a" : format("%+.1f%%", (c - b) * 100.0 / b)
     end
+    rows = cand_per_case + base_per_case
+    ids = rows.map { |pc| pc[:id] }.uniq
+    excluded = ids.select { |id| rows.any? { |pc| pc[:id] == id && pc[:prompt_tokens].nil? } }
+    sum = ->(per_case, key) { per_case.reject { |pc| excluded.include?(pc[:id]) }.sum { |pc| pc[key] } }
+    note = excluded.empty? ? "" : " (tokens over #{ids.length - excluded.length}/#{ids.length} case(s); " \
+                                  "#{excluded.length} case(s) with runs without tokens excluded)"
     "delta candidate-baseline: primary #{format('%+d', cand[:hit] - base[:hit])}, " \
       "violations #{format('%+d', cand[:violations] - base[:violations])}, " \
-      "prompt_tokens #{pct.call(cand[:prompt_tokens], base[:prompt_tokens])}, " \
-      "output_tokens #{pct.call(cand[:output_tokens], base[:output_tokens])}, " \
-      "first_prompt_tokens #{pct.call(cand[:first_prompt_tokens], base[:first_prompt_tokens])}"
+      "prompt_tokens #{pct.call(sum.call(cand_per_case, :prompt_tokens), sum.call(base_per_case, :prompt_tokens))}, " \
+      "output_tokens #{pct.call(sum.call(cand_per_case, :output_tokens), sum.call(base_per_case, :output_tokens))}, " \
+      "first_prompt_tokens #{pct.call(cand[:first_prompt_tokens], base[:first_prompt_tokens])}#{note}"
   end
 
   # --- CLI --------------------------------------------------------------------------
@@ -382,7 +430,7 @@ module CheckSkillRouting
       structural += comparison_structural(cases, candidate, baseline)
       # baseline 側の violation は候補の破れではなく、比較にも使わない (must_not は候補の run ごとの破れ)。
       if structural.empty?
-        puts format_delta(cand[:summary], base[:summary])
+        puts format_delta(cand[:summary], base[:summary], cand[:per_case], base[:per_case])
         regressed, warnings = case_regressions(cand[:per_case], base[:per_case])
         warnings.each { |w| puts "warn: #{w}" }
         breaches += regressed

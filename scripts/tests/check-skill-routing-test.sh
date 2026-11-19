@@ -329,8 +329,85 @@ printf '{"schema_version": 1, "tool": "codex", "model": "m", "variant": "v", "ru
 run_case "observed-not-skill-name" 2 "observed must be an array of skill names" -- --cases "$tmp/cases.json" --results "$tmp/bad-observed.json"
 printf '{"schema_version": 1, "tool": "codex", "model": "m", "variant": "v", "runs": [{"case": "a-primary", "status": "ok", "observed": [], "prompt_tokens": -1, "output_tokens": 1}]}\n' > "$tmp/bad-tokens.json"
 run_case "negative-tokens" 2 "prompt_tokens must be a non-negative integer" -- --cases "$tmp/cases.json" --results "$tmp/bad-tokens.json"
-printf '{"schema_version": 2, "tool": "codex", "model": "m", "variant": "v", "runs": []}\n' > "$tmp/bad-version.json"
-run_case "results-schema-version" 2 "schema_version must be 1" -- --cases "$tmp/cases.json" --results "$tmp/bad-version.json"
+printf '{"schema_version": 3, "tool": "codex", "model": "m", "variant": "v", "runs": []}\n' > "$tmp/bad-version.json"
+run_case "results-schema-version" 2 "schema_version must be one of 1, 2" -- --cases "$tmp/cases.json" --results "$tmp/bad-version.json"
+
+# --- case 16b: schema_version 2 (#302)。run の completion と、observed-stop の run の null の token ---
+# usage: run_line2 <case> <status> <completion> <prompt_tokens> <output_tokens> <observed-json-array>
+run_line2() {
+  printf '{"case": "%s", "status": "%s", "completion": "%s", "prompt_tokens": %s, "output_tokens": %s, "observed": %s}' \
+    "$1" "$2" "$3" "$4" "$5" "$6"
+}
+# usage: write_results2 <file> <tool> <model> <variant> [run-line...]
+write_results2() {
+  write_results "$@"
+  sed 's/"schema_version": 1,/"schema_version": 2,/' "$1" > "$1.v2" && mv "$1.v2" "$1"
+}
+# observed-stop の run は token が null でも ok。token は持つ run だけで合算し、平均の分母も持つ run の数
+write_results2 "$tmp/v2-ok.json" codex model-x candidate \
+  "$(run_line2 a-primary ok observed-stop null null '["skill-a"]')" \
+  "$(run_line2 b-primary ok exited 120 12 '["skill-b"]')" \
+  "$(run_line2 none ok exited 80 8 '[]')"
+run_case "v2-observed-stop-pass" 0 "ok: skill routing verified (3 runs, 3 cases)" -- --cases "$tmp/cases.json" --results "$tmp/v2-ok.json"
+grep -q "runs=3 primary=2/2 violations=0 prompt_tokens=200 (mean 100) output_tokens=20 first_prompt_tokens=n/a runs_without_tokens=1$" "$tmp/out" \
+  || fail "v2-observed-stop-pass: unexpected summary: $(cat "$tmp/out")"
+grep -q "case a-primary: primary=hit must_not=ok observed=\[skill-a\] tokens=first:n/a total:n/a out:n/a" "$tmp/out" \
+  || fail "v2-observed-stop-pass: unexpected case line: $(cat "$tmp/out")"
+# token の無い run が無ければ、summary に数を足さない (v1 と同じ形)
+write_results2 "$tmp/v2-full.json" codex model-x candidate \
+  "$(run_line2 a-primary ok exited 100 10 '["skill-a"]')" \
+  "$(run_line2 b-primary ok max-turns 120 12 '["skill-b"]')" \
+  "$(run_line2 none ok exited 80 8 '[]')"
+run_case "v2-full-tokens" 0 "prompt_tokens=300 (mean 100) output_tokens=30 first_prompt_tokens=n/a$" \
+  -- --cases "$tmp/cases.json" --results "$tmp/v2-full.json"
+# timeout / failed は error run (構造エラー)。observed があっても緑に数えない
+write_results2 "$tmp/v2-timeout.json" codex model-x candidate \
+  "$(run_line2 a-primary error timeout 0 0 '["skill-a"]')" \
+  "$(run_line2 b-primary ok exited 120 12 '["skill-b"]')" \
+  "$(run_line2 none ok exited 80 8 '[]')"
+run_case "v2-timeout-is-error-run" 2 "case 'a-primary' has a run with status 'error'" \
+  -- --cases "$tmp/cases.json" --results "$tmp/v2-timeout.json"
+# 形の違反は入力エラー: completion が無い・知らない値・status と食い違う・observed-stop 以外の null・片方だけの null
+v2_bad() {
+  write_results2 "$tmp/v2-bad.json" codex model-x candidate "$1"
+  run_case "$2" 2 "$3" -- --cases "$tmp/cases.json" --results "$tmp/v2-bad.json"
+}
+v2_bad "$(run_line a-primary ok 100 10 '["skill-a"]')" "v2-completion-missing" "runs\[0\]\.completion must be one of exited, max-turns, observed-stop, timeout, failed"
+v2_bad "$(run_line2 a-primary ok stopped 100 10 '["skill-a"]')" "v2-completion-unknown" "runs\[0\]\.completion must be one of"
+v2_bad "$(run_line2 a-primary ok timeout 100 10 '["skill-a"]')" "v2-ok-with-timeout" "completion 'timeout' does not match status 'ok'"
+v2_bad "$(run_line2 a-primary error observed-stop null null '["skill-a"]')" "v2-error-with-observed-stop" "completion 'observed-stop' does not match status 'error'"
+v2_bad "$(run_line2 a-primary ok exited null null '["skill-a"]')" "v2-null-tokens-not-stopped" "runs\[0\]\.prompt_tokens must be a non-negative integer$"
+v2_bad "$(run_line2 a-primary ok observed-stop null 5 '["skill-a"]')" "v2-half-null-tokens" "prompt_tokens and output_tokens must both be null or both be integers"
+# observed-stop でも、token の key の欠落は null と別 (v1 と同じく入力エラー)
+for key in prompt_tokens output_tokens; do
+  v2_bad "$(run_line2 a-primary ok observed-stop null null '["skill-a"]' | sed "s/\"$key\": null, //")" \
+    "v2-observed-stop-missing-$key" "runs\[0\]\.$key must be a non-negative integer or null"
+done
+# v1 の run は completion を持たず、token の null は許さない
+write_results "$tmp/v1-null.json" codex model-x candidate "$(run_line a-primary ok null null '["skill-a"]')"
+run_case "v1-null-tokens" 2 "runs\[0\]\.prompt_tokens must be a non-negative integer" -- --cases "$tmp/cases.json" --results "$tmp/v1-null.json"
+
+# baseline との比較: token の delta は、両方で全 run が token を持つ case だけで取り直す。外した case の数を出す。
+# v1 の baseline と v2 の candidate も比べられる (版は比較の条件に入れない)
+write_results "$tmp/v1-base.json" codex model-x baseline \
+  "$(run_line a-primary ok 100 10 '["skill-a"]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line none ok 80 8 '[]')"
+write_results2 "$tmp/v2-cand.json" codex model-x candidate \
+  "$(run_line2 a-primary ok observed-stop null null '["skill-a"]')" \
+  "$(run_line2 b-primary ok exited 60 6 '["skill-b"]')" \
+  "$(run_line2 none ok exited 40 4 '[]')"
+run_case "v2-delta-excludes-tokenless-case" 0 \
+  "delta candidate-baseline: primary +0, violations +0, prompt_tokens -50.0%, output_tokens -50.0%, first_prompt_tokens n/a (tokens over 2/3 case(s); 1 case(s) with runs without tokens excluded)$" \
+  -- --cases "$tmp/cases.json" --results "$tmp/v2-cand.json" --baseline "$tmp/v1-base.json"
+# token の無い run が baseline の側にだけあっても、その case を両方から外す
+run_case "v2-delta-excludes-baseline-tokenless-case" 0 \
+  "delta candidate-baseline: primary +0, violations +0, prompt_tokens +100.0%, output_tokens +100.0%, first_prompt_tokens n/a (tokens over 2/3 case(s); 1 case(s) with runs without tokens excluded)$" \
+  -- --cases "$tmp/cases.json" --results "$tmp/v1-base.json" --baseline "$tmp/v2-cand.json"
+# 外す case が無ければ、delta は今までどおりの形 (末尾の注記なし)
+run_case "v2-delta-no-exclusion" 0 \
+  "delta candidate-baseline: primary +0, violations +0, prompt_tokens +0.0%, output_tokens +0.0%, first_prompt_tokens n/a$" \
+  -- --cases "$tmp/cases.json" --results "$tmp/v2-full.json" --baseline "$tmp/v1-base.json"
 
 # --- case 17: case set 自体の不備も exit 2 (primary が inventory 外 / id 重複 / id の文字集合 / prompt の制御文字 / primary が must_not に含まれる) ---
 sed 's/"primary": "skill-a"/"primary": "skill-z"/' "$tmp/cases.json" > "$tmp/cases-bad-primary.json"

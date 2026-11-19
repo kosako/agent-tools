@@ -305,6 +305,65 @@ broken = "{\"type\":\"turn.completed\"\nnot json\n[1]\n" +
 r = (P.parse_codex(broken, names) rescue nil)
 check("codex: 不正な JSON の行と object でない行を飛ばして、後続の event を読む",
       !r.nil? && r[:observed] == ["skill-a"] && r[:prompt_tokens] == 3)
+
+# routing の判断が終わった印 (#302): 候補の SKILL.md を読んだ後に、SKILL.md を読まない tool の item が 2 つ続く
+read_a = command_item("cat .agents/skills/skill-a/SKILL.md")
+work = command_item("git status")
+message = { "type" => "item.completed", "item" => { "type" => "agent_message", "text" => "x" } }
+tool_item = ->(type) { { "type" => "item.completed", "item" => { "type" => type } } }
+done = ->(*events) { P.parse_codex(jsonl(*events), names)[:routing_done] }
+check("codex: 読み取りの後に作業の item が 2 つ続けば印が立つ", done.call(read_a, work, work) == true)
+check("codex: 読み取りの後に作業の item が 1 つだけなら立たない", done.call(read_a, work) == false)
+check("codex: 読み取りが無ければ、作業の item が続いても立たない", done.call(work, work, work) == false)
+check("codex: 読み取りの前の作業の item は数えない", done.call(work, work, read_a, work) == false)
+check("codex: 間の読み取りで数を 0 に戻す", done.call(read_a, work, read_a, work) == false)
+check("codex: 候補でない SKILL.md の読み取りでも数を 0 に戻す",
+      done.call(read_a, work, command_item("cat ~/.codex/skills/.system/other/SKILL.md"), work) == false)
+check("codex: 前に / の無い SKILL.md の読み取り (cd の後の cat) でも数を 0 に戻す",
+      done.call(read_a, work, command_item("cd .agents/skills/skill-b && cat SKILL.md"), work) == false)
+check("codex: agent_message は数にも数え直しにも入れない", done.call(read_a, work, message, work) == true)
+check("codex: file_change / mcp_tool_call / web_search も作業の item に数える",
+      done.call(read_a, tool_item.call("file_change"), tool_item.call("mcp_tool_call")) == true &&
+      done.call(read_a, tool_item.call("web_search"), work) == true)
+check("codex: 知らない type の item は数えない", done.call(read_a, tool_item.call("todo_list"), work) == false)
+check("codex: item.started は数えない",
+      done.call(read_a, { "type" => "item.started", "item" => { "type" => "command_execution", "command" => "ls" } }, work) == false)
+check("codex: 一度立った印は、後の読み取りで戻さない",
+      done.call(read_a, work, work, command_item("cat .agents/skills/skill-b/SKILL.md"), work) == true)
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
+# ---- Ruby unit checks: run の終わり方 (completion。#302) ---------------------------------------
+ruby -r"$script_dir/lib/check_helper" - "$src" <<'RUBY'
+load ARGV[0]
+P = ProbeSkillRouting
+
+ok_status = Process.wait2(Process.spawn("true"))[1]
+ng_status = Process.wait2(Process.spawn("false"))[1]
+result = lambda do |completed:, drained: true, status: nil|
+  ProbeChild::Result.new(out: "", err: "", status: status, completed: completed, drained: drained)
+end
+usage = { prompt_tokens: 1, output_tokens: 1 }
+no_usage = { prompt_tokens: nil, output_tokens: nil }
+c = ->(tool, r, parsed) { P.completion(tool, r, parsed) }
+
+check("exit 0 で usage があれば exited", c.call("codex", result.call(completed: true, status: ok_status), usage) == "exited")
+check("exit 0 でも usage が無ければ failed", c.call("codex", result.call(completed: true, status: ok_status), no_usage) == "failed")
+check("非ゼロ終了は、routing の印が立っていても failed",
+      c.call("codex", result.call(completed: true, status: ng_status), usage.merge(routing_done: true)) == "failed")
+check("claude の error_max_turns の非ゼロ終了は max-turns",
+      c.call("claude-code", result.call(completed: true, status: ng_status), usage.merge(subtype: "error_max_turns")) == "max-turns")
+check("codex の打ち切りで印が立ち、読み切れていれば observed-stop",
+      c.call("codex", result.call(completed: false), no_usage.merge(routing_done: true)) == "observed-stop")
+check("codex の打ち切りで印が無ければ timeout",
+      c.call("codex", result.call(completed: false), usage.merge(routing_done: false)) == "timeout")
+check("codex の打ち切りで読み切れなければ、印が立っていても timeout",
+      c.call("codex", result.call(completed: false, drained: false), no_usage.merge(routing_done: true)) == "timeout")
+check("claude の打ち切りは、印があっても timeout",
+      c.call("claude-code", result.call(completed: false), usage.merge(routing_done: true, subtype: "error_max_turns")) == "timeout")
+check("終わっても読み切れなければ failed",
+      c.call("codex", result.call(completed: true, drained: false, status: ok_status), usage) == "failed")
+check("ok に数える終わり方は exited / max-turns / observed-stop", P::OK_COMPLETIONS == %w[exited max-turns observed-stop])
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -334,6 +393,17 @@ browser_use  beta  false}"
     exit "${FAKE_RC_FEATURES:-0}" ;;
   exec*)
     cat > /dev/null
+    # FAKE_CODEX_EVENTS があれば、その file の event を出し、孫の process (pid を FAKE_CODEX_CHILD_PID に書く) を
+    # 残して FAKE_CODEX_SLEEP 秒待ち、FAKE_CODEX_RC で終わる (#302 の打ち切りの確かめ)。
+    if [ -n "${FAKE_CODEX_EVENTS:-}" ]; then
+      cat "$FAKE_CODEX_EVENTS"
+      if [ -n "${FAKE_CODEX_CHILD_PID:-}" ]; then
+        sleep 60 &
+        echo $! > "$FAKE_CODEX_CHILD_PID"
+      fi
+      [ -z "${FAKE_CODEX_SLEEP:-}" ] || sleep "$FAKE_CODEX_SLEEP"
+      exit "${FAKE_CODEX_RC:-0}"
+    fi
     printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"personal-a"}}'
     printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}'
     exit 0 ;;
@@ -429,6 +499,104 @@ if grep -q '^exec --json' "$log"; then fail "codex must not be launched for a ca
 find "$tmp/escape" -type f > "$tmp/escape-files"
 [ ! -s "$tmp/escape-files" ] || fail "nothing may be written for a case id outside the raw dir: $(cat "$tmp/escape-files")"
 
+# ---- integration: 偽の codex を --timeout で打ち切る (#302) ---------------------------------
+# skill を読んでから作業に入った印が立っていれば observed-stop (ok、token は null)、無ければ timeout (error)。
+# 非ゼロで終わった run は、印があっても failed (error)。打ち切った run の孫の process は残らない。
+ev_read='{"type":"item.completed","item":{"type":"command_execution","command":"cat .agents/skills/personal-a/SKILL.md"}}'
+ev_work='{"type":"item.completed","item":{"type":"command_execution","command":"git status"}}'
+ev_turn='{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}'
+printf '%s\n' "$ev_read" "$ev_work" "$ev_work" > "$tmp/ev-done"
+printf '%s\n' "$ev_read" "$ev_work" > "$tmp/ev-one"
+printf '%s\n' "$ev_work" "$ev_work" "$ev_work" > "$tmp/ev-none"
+printf '%s\n' "$ev_read" "$ev_work" "$ev_work" "$ev_turn" > "$tmp/ev-done-turn"
+
+# run_codex_events <events> <sleep> <rc> <args...>: 偽の codex に event を出させて probe を回す。sleep が 0 でない
+# (打ち切る) run だけ孫の process を残させる (正常に終わる run で孫が pipe を握ると、読み切れない run になるため)
+run_codex_events() {
+  rce_events=$1; rce_sleep=$2; rce_rc=$3; shift 3
+  rm -f "$tmp/grandchild.pid"
+  FAKE_CODEX_EVENTS=$rce_events FAKE_CODEX_SLEEP=$rce_sleep FAKE_CODEX_RC=$rce_rc
+  export FAKE_CODEX_EVENTS FAKE_CODEX_SLEEP FAKE_CODEX_RC
+  if [ "$rce_sleep" != 0 ]; then
+    FAKE_CODEX_CHILD_PID="$tmp/grandchild.pid"
+    export FAKE_CODEX_CHILD_PID
+  fi
+  run_probe "$@"
+  unset FAKE_CODEX_EVENTS FAKE_CODEX_SLEEP FAKE_CODEX_RC FAKE_CODEX_CHILD_PID
+}
+
+# grandchild_gone: 偽の codex が残した孫の process が居ない (3 秒まで待つ)
+grandchild_gone() {
+  [ -s "$tmp/grandchild.pid" ] || return 1
+  gc_pid=$(cat "$tmp/grandchild.pid")
+  gc_n=0
+  while kill -0 "$gc_pid" 2>/dev/null; do
+    gc_n=$((gc_n + 1))
+    [ "$gc_n" -le 30 ] || { kill -KILL "$gc_pid" 2>/dev/null || :; return 1; }
+    sleep 0.1
+  done
+  return 0
+}
+
+run_codex_events "$tmp/ev-done" 30 0 --smoke --timeout 1
+[ "$rc" -eq 0 ] || fail "a timed-out run with the routing mark should be ok (rc=$rc): $out"
+case "$out" in *'status=ok exit=nil '*'prompt_tokens=nil output_tokens=nil completion=observed-stop'*) : ;;
+  *) fail "a timed-out run with the routing mark should be observed-stop without tokens: $out" ;; esac
+grandchild_gone || fail "the grandchild of a timed-out run must not survive"
+
+# usage を出した後に止まった run も、打ち切りの token は信用しないので null
+run_codex_events "$tmp/ev-done-turn" 30 0 --smoke --timeout 1
+case "$out" in *'status=ok exit=nil '*'prompt_tokens=nil output_tokens=nil completion=observed-stop'*) : ;;
+  *) fail "a timed-out run must drop the tokens even after turn.completed: $out" ;; esac
+grandchild_gone || fail "the grandchild of a timed-out run (after turn.completed) must not survive"
+
+run_codex_events "$tmp/ev-one" 30 0 --smoke --timeout 1
+[ "$rc" -eq 2 ] || fail "a timed-out run with one work item after the read must be an error run (rc=$rc): $out"
+case "$out" in *'status=error exit=nil '*'completion=timeout'*) : ;; *) fail "one work item should be timeout: $out" ;; esac
+grandchild_gone || fail "the grandchild of a timed-out run (one work item) must not survive"
+
+run_codex_events "$tmp/ev-none" 30 0 --smoke --timeout 1
+[ "$rc" -eq 2 ] || fail "a timed-out run without a read must be an error run (rc=$rc): $out"
+case "$out" in *'status=error exit=nil '*'observed=[]'*) : ;; *) fail "no read should be an error run: $out" ;; esac
+case "$out" in *'completion=timeout'*) : ;; *) fail "no read should be timeout: $out" ;; esac
+
+run_codex_events "$tmp/ev-done-turn" 0 1 --smoke --timeout 5
+[ "$rc" -eq 2 ] || fail "a non-zero exit with the routing mark must be an error run (rc=$rc): $out"
+case "$out" in *'status=error exit=1 '*'completion=failed'*) : ;; *) fail "a non-zero exit should be failed: $out" ;; esac
+
+run_codex_events "$tmp/ev-done-turn" 0 0 --smoke --timeout 5
+[ "$rc" -eq 0 ] || fail "a normal exit should be ok (rc=$rc): $out"
+case "$out" in *'status=ok exit=0 '*'prompt_tokens=10 output_tokens=2 completion=exited'*) : ;;
+  *) fail "a normal exit should keep tokens and be exited: $out" ;; esac
+
+# results.json: schema 2 で completion を書き、observed-stop の token は null。judge はそのまま読める
+cat > "$tmp/stop-cases.json" <<'EOF'
+{
+  "schema_version": 1,
+  "inventory": ["personal-a"],
+  "cases": [
+    { "id": "stop", "cluster": "x", "prompt": "do a", "primary": "personal-a", "must_not": [] }
+  ]
+}
+EOF
+run_codex_events "$tmp/ev-done" 30 0 --cases "$tmp/stop-cases.json" --out "$tmp/stop/results.json" --timeout 1
+[ "$rc" -eq 0 ] || fail "probe with an observed-stop run should exit 0 (rc=$rc): $out"
+ruby -rjson -e '
+d = JSON.parse(File.read(ARGV[0]))
+r = d["runs"][0]
+abort "schema_version should be 2: #{d["schema_version"]}" unless d["schema_version"] == 2
+abort "run should be ok / observed-stop: #{r}" unless r["status"] == "ok" && r["completion"] == "observed-stop"
+abort "tokens should be null: #{r}" unless r.key?("prompt_tokens") && r["prompt_tokens"].nil? && r.key?("output_tokens") && r["output_tokens"].nil?
+abort "observed should be the read skill: #{r}" unless r["observed"] == ["personal-a"]
+' "$tmp/stop/results.json" || fail "unexpected results.json for an observed-stop run: $(cat "$tmp/stop/results.json")"
+grandchild_gone || fail "the grandchild of a timed-out case run must not survive"
+set +e
+judge_out=$(sh "$repo_root/scripts/check-skill-routing.sh" --cases "$tmp/stop-cases.json" --results "$tmp/stop/results.json" 2>&1)
+judge_rc=$?
+set -e
+[ "$judge_rc" -eq 0 ] || fail "the judge should accept the runner's observed-stop result (rc=$judge_rc): $judge_out"
+case "$judge_out" in *'runs_without_tokens=1'*) : ;; *) fail "the judge should count the run without tokens: $judge_out" ;; esac
+
 # ---- integration: 偽の claude で --max-turns の打ち切りの扱いを確かめる ----------------------
 cat > "$fakebin/claude" <<'EOF'
 #!/bin/sh
@@ -494,5 +662,14 @@ case "$out" in *'status=ok exit=0'*'prompt_tokens=0 output_tokens=0'*) : ;; *) f
 run_claude_smoke error_max_turns 1 '' 5
 [ "$rc" -eq 2 ] || fail "a run killed by --timeout must be an error run even with error_max_turns (rc=$rc): $out"
 case "$out" in *'status=error exit=nil subtype="error_max_turns"'*) : ;; *) fail "the killed run should be reported as error: $out" ;; esac
+case "$out" in *'completion=timeout'*) : ;; *) fail "the killed claude run should be timeout: $out" ;; esac
+
+# claude-code の終わり方 (#302): 正常終了は exited、打ち切りは max-turns、それ以外の非ゼロ終了は failed
+run_claude_smoke success 0
+case "$out" in *'completion=exited'*) : ;; *) fail "a normal claude exit should be exited: $out" ;; esac
+run_claude_smoke error_max_turns 1
+case "$out" in *'completion=max-turns'*) : ;; *) fail "the claude max-turns cut should be max-turns: $out" ;; esac
+run_claude_smoke '' 1
+case "$out" in *'completion=failed'*) : ;; *) fail "a claude non-zero exit should be failed: $out" ;; esac
 
 echo "probe-skill-routing-test: ok"
