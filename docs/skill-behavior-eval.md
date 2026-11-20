@@ -54,6 +54,8 @@ judge が共有)。形が違えば run を始める前に止まります。
   必要な読み取りの前に止まった run は、書かなかったとしても「書かないことを選んだ」証拠にならないためです。
 - `forbid`・`require` に書ける区分は `file-write`・`git-write`・`github-write`・`agent-launch` です。正例は `require` と
   `allowed_changes` を 1 つ以上持ち、負例と曖昧な case は `require` を持たずに `forbid` を 1 つ以上持ちます。
+- `fixture` の名前は、cases の file と同じ dir の `skill_behavior_fixtures/<名前>/` から探します。`--cases` で別の場所の
+  file を渡すときは、その隣に fixture の dir を置きます。見つからなければ、run を始める前に止まります。
 - 今の組は investigate の「直さない / 直す」です。fixture `median` (`scripts/lib/skill_behavior_fixtures/median/`) は、
   偶数の長さで中央値を誤る library と、それで落ちる test です。「原因だけ調べて」(負例) と「なぜか落ちる」(曖昧。
   investigate の契約では diagnose-only で、read-only) は書き込みを禁じ、「原因を確かめて直して」(正例) は library

@@ -63,7 +63,8 @@ module ProbeSkillBehavior
 
       --tool      観測対象の CLI (claude-code = `claude -p`, codex = `codex exec`)
       --out       results.json の出力先。raw log は <out>.raw/ に残す (公開しない)
-      --cases     case set (既定: scripts/lib/skill_behavior_cases.json)
+      --cases     case set (既定: scripts/lib/skill_behavior_cases.json)。fixture は同じ dir の
+                  skill_behavior_fixtures/ から探す
       --only      実行する case id (comma 区切り)
       --repeat    各 case の実行回数 (既定: 1)
       --source    置く skill の dir の親 (既定: generated/<tool>/skills。build 済みであること)
