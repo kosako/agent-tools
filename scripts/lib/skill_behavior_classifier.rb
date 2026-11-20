@@ -42,20 +42,18 @@ module SkillBehaviorClassifier
                                --ignore-leading-blanks --check --merge --zero-terminated --random-sort],
                 long_values: %w[--key --field-separator --output --buffer-size --temporary-directory --parallel
                                 --sort --batch-size --compress-program --files0-from --random-source] }.freeze
+  # rg: program を起動する option (--pre・--hostname-bin・-z の展開) は spec に入れない (unknown になる)。
+  RG_SPEC = { flags: "nilcwFSsvuHhqoxLN", values: "egtTABCmM",
+              long_flags: %w[--files --hidden --no-ignore --line-number --no-line-number --no-heading --heading
+                             --fixed-strings --ignore-case --smart-case --case-sensitive --count --files-with-matches
+                             --files-without-match --word-regexp --line-regexp --invert-match --json --vimgrep
+                             --no-messages --follow --multiline --only-matching --type-list --with-filename
+                             --no-filename --null --trim --stats --sort-files],
+              long_values: %w[--glob --iglob --type --type-not --regexp --max-count --context --after-context
+                              --before-context --color --max-depth --sort --sortr --max-columns --threads] }.freeze
   UNIQ_SPEC = { flags: "cdiuDz", values: "fsw",
                 long_flags: %w[--count --repeated --ignore-case --unique --zero-terminated],
                 long_values: %w[--skip-fields --skip-chars --check-chars] }.freeze
-  # interpreter の短い option の字。in_place は in-place の編集、module は module の実行、required は値をとる字 (束の
-  # 残りか次の語)、rest は束の残りだけを値にとる字、octal は 8 進 (perl の -0 は x と 16 進も) の数字だけをとる字、flags は
-  # 値をとらない字。ここに無い字は unknown にする。inline の code の字 (ruby・perl の -e、python の -c、node の -e・-p) は
-  # どこにも入れないので、この規則で unknown になる。
-  INTERPRETERS = {
-    "ruby" => { flags: "acdhlnpsSvwy", in_place: "i", required: "IrCEF", rest: "xWKT", octal: "0" },
-    "perl" => { flags: "acnpsStTuUvwW", in_place: "i", required: "IMm", rest: "dDxFC", octal: "0l" },
-    "python" => { flags: "bBdEhiIOPqRsSuvx", module: "m", required: "WX" },
-    "python3" => { flags: "bBdEhiIOPqRsSuvx", module: "m", required: "WX" },
-    "node" => { flags: "vhic", required: "r", long_inline: %w[--eval --print] },
-  }.freeze
   # test や build を走らせる command (後ろの語が決まっているものは、その語のときだけ)。
   TASK_COMMANDS = {
     "make" => nil, "rake" => nil, "rspec" => nil, "pytest" => nil, "npm" => %w[test run], "yarn" => %w[test run],
@@ -86,7 +84,7 @@ module SkillBehaviorClassifier
   GIT_WRITE = %w[commit push reset rebase merge cherry-pick revert checkout switch restore clean rm mv add apply
                  am pull fetch init clone update-ref notes gc prune submodule].freeze
   GIT_READ = %w[status ls-files rev-parse blame describe shortlog ls-tree cat-file show-ref for-each-ref rev-list
-                name-rev merge-base version help diff log show grep].freeze
+                name-rev merge-base version diff log show grep].freeze
   # git の global option のうち、program の差し替えに関わらないもの。ほかの global option (-c・--config-env・
   # -p・--paginate・--exec-path など) があれば、少なくとも unknown にする。
   GIT_GLOBAL_VALUES = %w[-C --git-dir --work-tree --namespace].freeze
@@ -117,9 +115,55 @@ module SkillBehaviorClassifier
     segments, substitutions = scanned
     classes = segments.map { |raw, masked| classify_segment(raw, masked, depth) }
     classes += substitutions.map { |s| classify_shell(s, depth + 1) }
-    classes.empty? ? "read" : max_class(classes)
+    cls = classes.empty? ? "read" : max_class(classes)
+    # 重い区分はそのまま。read と exec は、単純な形の command のときだけ (下の「門」)
+    return cls if SEVERITY.fetch(cls) > SEVERITY.fetch("unknown") || simple_command?(command)
+
+    "unknown"
   rescue StandardError
     "unknown"
+  end
+
+  # --- read と exec の門 (fail-closed) ------------------------------------------------------
+  # read と exec は、command が「単純な形」のときだけ付ける。単純な形は、引用の外の字が SIMPLE_CHAR と、区切り
+  # (&&・||・|・;・改行) と、/dev/null への redirect と fd の複製 (SAFE_REDIRECTS) だけで、二重引用の中に $・`・\ が
+  # 無い形。展開 ($)・escape (\)・comment (#)・here document と入力の redirect (<)・subshell と関数 (( ) { })・
+  # background (&) を含む command は、それだけで unknown 以上にする (scanner で読み切れない形を read にしないため)。
+  # 書き込みなどの重い区分は、この門の外でも scanner の結果をそのまま使う。
+  SIMPLE_CHAR = %r{[A-Za-z0-9 \t\n_./:,=+@%^*?~\[\];-]}.freeze
+  SAFE_REDIRECTS = ["2>/dev/null", "1>/dev/null", ">/dev/null", "&>/dev/null", "2>&1", "1>&2", ">&2"].freeze
+
+  def self.simple_command?(cmd)
+    i = 0
+    while i < cmd.length
+      ch = cmd[i]
+      if ch == "'"
+        j = cmd.index("'", i + 1)
+        return false unless j
+
+        i = j + 1
+      elsif ch == '"'
+        j = cmd.index('"', i + 1)
+        return false if j.nil? || cmd[(i + 1)...j].match?(/[$`\\]/)
+
+        i = j + 1
+      elsif (r = SAFE_REDIRECTS.find { |s| cmd[i, s.length] == s })
+        # 後ろに字が続く形 (>/dev/nullx) は、scanner の redirect の検出が /dev/null 以外への書き込みにする
+        i += r.length
+      elsif ch == "&" && cmd[i + 1] == "&"
+        i += 2
+      elsif cmd[i, 2] == "{}" && (cmd[i + 2].nil? || cmd[i + 2].match?(/[\s;|&']/))
+        # find -exec の置き場所の印 ({} の語)。brace group ({ … }) は区切りの空白が要るので、ここに当たらない
+        i += 2
+      elsif ch == "|"
+        i += 1
+      elsif ch.match?(SIMPLE_CHAR)
+        i += 1
+      else
+        return false
+      end
+    end
+    true
   end
 
   # --- scanner ---------------------------------------------------------------------------
@@ -365,7 +409,7 @@ module SkillBehaviorClassifier
     return classify_gh(args) if name == "gh"
     return classify_git(args) if name == "git"
     return "file-write" if FILE_WRITE_COMMANDS.include?(name)
-    return interpreter_call(name, args) if INTERPRETERS.key?(name)
+    return interpreter_call(name, args) if INTERPRETER_EXEC_OPTIONS.key?(name)
     return max_class(["exec", classify_words(args[1..] || [], depth)]) if name == "bundle" && args[0] == "exec"
     if TASK_COMMANDS.key?(name)
       subs = TASK_COMMANDS[name]
@@ -389,7 +433,9 @@ module SkillBehaviorClassifier
       return "unknown" if opts.nil?
 
       pos.length >= 2 ? "file-write" : "read"
-    when "rg" then args.any? { |a| a.start_with?("--pre") } ? "unknown" : "read"
+    when "rg"
+      opts, = parse_options(args, RG_SPEC)
+      opts.nil? ? "unknown" : "read"
     when "sed" then sed_call(args)
     when "awk" then awk_call(args)
     when "find" then find_call(args, depth)
@@ -494,7 +540,7 @@ module SkillBehaviorClassifier
       elsif a.start_with?("-")
         return "unknown"
       end
-      return a.match?(/[>|]|system|getline|close/) ? "unknown" : "read"
+      return a.match?(/[>|@]|system|getline|close/) ? "unknown" : "read"
     end
     "unknown"
   end
@@ -518,28 +564,6 @@ module SkillBehaviorClassifier
     max_class(classes)
   end
 
-  # sh / bash / zsh: -c (束の中の c を含む) なら続く command を区分し、file を渡せば exec、どちらも無ければ unknown。
-  def self.shell_call(args, depth)
-    inline = false
-    i = 0
-    while i < args.length && args[i].match?(/\A[-+]/)
-      a = args[i]
-      break if a == "--"
-
-      if %w[-o +o -O +O --rcfile --init-file].include?(a)
-        i += 2
-        next
-      end
-      inline ||= a.match?(/\A-[A-Za-z]*c[A-Za-z]*\z/)
-      i += 1
-    end
-    i += 1 if args[i] == "--"
-    target = args[i]
-    return target ? classify_shell(target, depth + 1) : "unknown" if inline
-
-    target && target != "-" ? "exec" : "unknown"
-  end
-
   # xargs: option (値をとるものは値ごと) を外した残りが command。command が無ければ既定の echo (read)。
   def self.xargs_call(args, depth)
     i = 0
@@ -550,57 +574,81 @@ module SkillBehaviorClassifier
     rest.empty? ? "read" : classify_words(rest, depth)
   end
 
-  # interpreter: 最初の位置引数 (script) までの option を 1 字ずつ読む (INTERPRETERS の spec)。in-place は file-write、
-  # python の -m は exec。知らない字 (inline の code の字を含む) があれば unknown。option の後に script があれば exec、無ければ
-  # (標準入力から読む) unknown。
-  def self.interpreter_call(name, args)
-    spec = INTERPRETERS.fetch(name)
+  # sh / bash / zsh: option は allowlist で読む。-c は続く command を区分し、file を渡せば exec。標準入力から読む形
+  # (-s・-i・file なし) と、allowlist に無い option は unknown。
+  SHELL_SET_OPTIONS = %w[pipefail errexit nounset xtrace].freeze
+  SHELL_LONG_FLAGS = %w[--norc --noprofile --login].freeze
+
+  def self.shell_call(args, depth)
+    inline = false
     i = 0
-    while i < args.length && args[i].start_with?("-") && args[i] != "-"
+    while i < args.length && args[i].match?(/\A[-+]/)
       a = args[i]
       if a == "--"
         i += 1
         break
       end
-      if a.start_with?("--")
-        return "unknown" if Array(spec[:long_inline]).any? { |f| a == f || a.start_with?("#{f}=") }
+      if %w[-o +o].include?(a)
+        return "unknown" unless SHELL_SET_OPTIONS.include?(args[i + 1])
 
+        i += 2
+        next
+      end
+      if SHELL_LONG_FLAGS.include?(a)
         i += 1
         next
       end
-      cls, consumed_next = interpreter_cluster(a, spec)
-      return cls if cls
+      return "unknown" unless a.match?(/\A-[elxuc]+\z/)
 
-      i += consumed_next ? 2 : 1
+      inline ||= a.include?("c")
+      i += 1
+    end
+    target = args[i]
+    return target ? classify_shell(target, depth + 1) : "unknown" if inline
+
+    target && target != "-" ? "exec" : "unknown"
+  end
+
+  # interpreter: exec は、allowlist の option (INTERPRETER_EXEC_OPTIONS) の後に script を渡す形だけ。python の -m は
+  # module の実行で exec。ほかの形は、ruby・perl の in-place の編集 (-i・-pi など) なら file-write、それ以外 (inline の
+  # code・標準入力・知らない option) は unknown。
+  INTERPRETER_EXEC_OPTIONS = {
+    "ruby" => { flags: %w[-w -W0 -W1 -W2], values: %w[-I -r] },
+    "perl" => { flags: %w[-w], values: %w[-I] },
+    "python" => { flags: %w[-B -E -I -O -q -s -S -u -v], values: %w[-W -X] },
+    "python3" => { flags: %w[-B -E -I -O -q -s -S -u -v], values: %w[-W -X] },
+    "node" => { flags: [], values: [] },
+  }.freeze
+  # in-place の編集の印。値をとる option (-I・-r・-C・-E・-F・-x・-M・-m) の後ろの i は値の一部なので数えない。
+  IN_PLACE = /\A-(?![IrCEFxMm])[A-Za-z0-9]*?i/.freeze
+
+  def self.interpreter_call(name, args)
+    spec = INTERPRETER_EXEC_OPTIONS.fetch(name)
+    i = 0
+    while i < args.length
+      a = args[i]
+      break unless a.start_with?("-") && a != "-"
+
+      if %w[python python3].include?(name) && a == "-m"
+        return args[i + 1] ? "exec" : "unknown"
+      end
+      if spec[:flags].include?(a)
+        i += 1
+      elsif spec[:values].include?(a)
+        i += 2
+      elsif spec[:values].any? { |v| a.start_with?(v) && a.length > v.length }
+        i += 1
+      else
+        return in_place?(name, args) ? "file-write" : "unknown"
+      end
     end
     args[i] && args[i] != "-" ? "exec" : "unknown"
   end
 
-  # 短い option の束 1 つを読む。戻り値は [区分 (決まったときだけ), 次の語を値として読んだか]。
-  def self.interpreter_cluster(a, spec)
-    j = 1
-    while j < a.length
-      c = a[j]
-      return ["file-write", false] if spec[:in_place]&.include?(c)
-      return ["exec", false] if spec[:module] == c
-      return [nil, j == a.length - 1] if spec[:required].include?(c)
-      return [nil, false] if spec[:rest].to_s.include?(c)
+  def self.in_place?(name, args)
+    return false unless %w[ruby perl].include?(name)
 
-      if spec[:octal].to_s.include?(c)
-        j += 1
-        if c == "0" && a[j]&.match?(/[xX]/)
-          j += 1
-          j += 1 while a[j]&.match?(/\h/)
-        else
-          j += 1 while a[j]&.match?(/[0-7]/)
-        end
-        next
-      end
-      return ["unknown", false] unless spec[:flags].include?(c)
-
-      j += 1
-    end
-    [nil, false]
+    args.take_while { |a| a.start_with?("-") && a != "-" }.any? { |a| a.match?(IN_PLACE) }
   end
 
   def self.agent_launch?(name, args)
@@ -704,9 +752,14 @@ module SkillBehaviorClassifier
     cls = git_subcommand(sub, rest)
     if cls == "read"
       cls = "file-write" if rest.any? { |a| a.start_with?("--output") }
-      cls = max_class([cls, "unknown"]) if rest.any? { |a| GIT_PROGRAM_OPTIONS.include?(a.split("=", 2).first) }
+      cls = max_class([cls, "unknown"]) if rest.any? { |a| git_program_option?(a) }
     end
     floor ? max_class([cls, "unknown"]) : cls
+  end
+
+  # -O は値を束に付けて渡せる (-O<program>)。長い option は = の前で比べる。
+  def self.git_program_option?(arg)
+    arg.start_with?("-O") || GIT_PROGRAM_OPTIONS.include?(arg.split("=", 2).first)
   end
 
   def self.git_subcommand(sub, rest)

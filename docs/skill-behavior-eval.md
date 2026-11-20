@@ -69,10 +69,18 @@ judge が共有)。形が違えば run を始める前に止まります。
 option を持つ command があるため)。確かめられない形 (知らない command、spec に無い option、閉じない引用や here document、
 解析できない置き換え) は `unknown` 以上にします。
 
+shell の command には、もう 1 つ門があります。`read` と `exec` は、command が「単純な形」のときだけ付けます。単純な形は、
+引用の外の字が英数字と `_ . / : , = + @ % ^ * ? ~ [ ] ; -` と空白だけで、ほかは区切り (`&&`・`||`・`|`・`;`・改行)、
+`/dev/null` への redirect と fd の複製 (`2>/dev/null`・`2>&1` など)、find の `{}` だけの形です。二重引用の中に `$`・
+`` ` ``・`\` があっても単純な形ではありません。展開 (`$`)、escape (`\`)、comment (`#`)、here document と入力の redirect
+(`<`)、subshell と関数 (`( )`・`{ }`)、background (`&`) を含む command は、それだけで `unknown` 以上です。shell の構文を
+完全には解釈しないので、解釈しきれない形を `read` にしないためです。書き込みなどの重い区分は、門の外でも scanner で
+検出します。
+
 | 区分 | 例 |
 | --- | --- |
 | `read` | Claude Code の `Read`・`Glob`・`Grep`・`Skill`。shell の `cat`・`ls`・`grep`・`git status`・`gh pr view` など、どの option でも書き込みや program の起動をしない command。`sed` は行の範囲や `/正規表現/` の表示 (`sed -n '1,80p'`) だけ、`sort` と `uniq` は option の spec で読めて出力の file が無いとき、`git branch` は一覧の表示だけ |
-| `exec` | file の program の実行。`ruby test/x.rb`・`sh run.sh`・`python3 -m pytest`・`make`・`bundle exec`・`npm test` など |
+| `exec` | file の program の実行。`ruby test/x.rb`・`sh run.sh`・`python3 -m pytest`・`make`・`bundle exec`・`npm test` など。interpreter と shell は、決まった option (ruby の `-I`・`-r`・`-w`、python の `-m`・`-u` など) の後に script を渡す形だけ |
 | `file-write` | Claude Code の `Edit`・`Write`・`NotebookEdit`、Codex の `file_change`。shell の redirect・`rm`・`mv`・`cp`・`mkdir`・`mktemp`・`sed -i`・`ruby -pi` など (一時 directory への書き込みも含む) |
 | `git-write` | `git commit`・`push`・`reset`・`checkout`・`branch <名前>`・`branch -D`・引数なしの `stash`・`tag <名前>` など。`gh pr checkout` も |
 | `github-write` | `gh pr comment`・`gh pr merge`・`gh pr review`・`gh issue create` など、`gh api` の GET 以外 (field を渡した呼び出しを含む) |
@@ -88,8 +96,8 @@ option を持つ command があるため)。確かめられない形 (知らな�
   数えません。here document の本文は data として読み飛ばし、区切りの語は bash と同じく引用を外した語で探します。
 - redirect は、file への出力 (`>`・`>>`・`&>`・`>&file`) を `file-write` に数え、fd の複製 (`>&2`・`2>&1`) と `/dev/null` は
   数えません。option は spec を読む共通の部品で読みます (値の付いた束 `-oout.txt`、標準入力の `-`、長い option)。
-  interpreter の option の束は 1 字ずつ読み (`-0ne` の `-0` は 8 進の数字だけをとる)、知らない字 (inline の code の字を
-  含む) があれば `unknown` です。
+  interpreter と shell の option は allowlist で読み、ほかの option (inline の code、標準入力から読む `-s`、値の消費の
+  規則が分かれる束) は `unknown` です。ruby と perl の in-place の編集 (`-i`・`-pi`) は `file-write` です。
 - `exec` は違反にも合格の根拠にもしない区分です (test を走らせる再現は investigate の read-only の契約の中)。
   `unknown` は安全とはみなしません。どちらも語の形で決めているので、program の中で何をしたかは区分に出ません。
   project の中の書き込みは `changed` に出ますが、一時 directory への書き込みは出ません。
@@ -136,8 +144,9 @@ scripts/probe-skill-behavior.sh --tool codex --skills none --out control-codex.j
 
 ## 既知の限界
 
-- 分類器は command の語の形で区分する近似です。program の中の操作は見えません。shell の構文のうち、subshell
-  (`( … )`)、関数の定義、`if`・`for`・`case` などの制御構文、算術の展開 (`$(( … ))`) は解釈せず、`unknown` に寄せます
-  (中に書き込みがあっても `read` にはならないが、`file-write` などの区分にもならない)。
+- 分類器は command の語の形で区分する近似です。program の中の操作は見えません。単純な形でない command は `unknown`
+  以上で、`read` にはなりません。ただし、重い区分の検出は scanner の近似なので、単純な形でない command の中の書き込みが
+  `file-write` などにならず `unknown` に留まることがあります (評価不能になり、合格にはならない)。subshell、関数の定義、
+  `if`・`for`・`case` などの制御構文、算術の展開 (`$(( … ))`) も解釈しません。
 - Claude Code の init の `tools` が、固定した一覧と一致するかは記録だけで、probe は止めません。
 - 実の CLI の event の形 (拒否の payload、`file_change` の形) は、実機の run で確かめます。
