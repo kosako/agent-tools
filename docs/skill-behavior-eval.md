@@ -112,7 +112,10 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
   `test` の算術)。`diff` は短い option の allowlist だけを read にし、長い option (`--paginate` の省略の `--p` など) と
   `-l` (出力を `pr` に通す) は `unknown` です。標準の bin の directory の外の path が付いた command の名前 (`./cat`・`lib/grep`) は、名前と違う
   program を実行しうるので `unknown` 以上です。`sudo` は前置きとして読み飛ばしません。`python3 -m` の exec は test の
-  module (`pytest`・`unittest`・`doctest`) だけです。
+  module (`pytest`・`unittest`・`doctest`) だけです。test や build の command (`make`・`rake`・`npm run` など) の exec は
+  option の無い形だけで、option のある形 (`rake -e` の inline の code、`make --eval`・`make -f`) は `unknown` です。
+- 代入だけの部分 (`X=1`) も `read` にしません。zsh は整数の変数 (`RANDOM`・`COLUMNS`・`OPTIND` など) への代入で添字を
+  評価し、中の置き換えを実行するためです。
 - `exec` は違反にも合格の根拠にもしない区分です (test を走らせる再現は investigate の read-only の契約の中)。
   `unknown` は安全とはみなしません。どちらも語の形で決めているので、program の中で何をしたかは区分に出ません。
   project の中の書き込みは `changed` に出ますが、一時 directory への書き込みは出ません。

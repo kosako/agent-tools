@@ -389,13 +389,15 @@ module SkillBehaviorClassifier
     end
     prefix = words.take_while { |w| w.match?(ASSIGNMENT) || PREFIX_WORDS.include?(w) }
     words = words.drop(prefix.length)
-    return max_class(classes + ["read"]) if words.empty? || %w[} fi done].include?(words.first)
+    # 代入だけの部分も read にしない (zsh は整数の変数 (RANDOM・COLUMNS・OPTIND など) への代入で添字を評価する)
+    assigned = prefix.any? { |w| w.match?(ASSIGNMENT) }
+    return max_class(classes + [assigned ? "unknown" : "read"]) if words.empty? || %w[} fi done].include?(words.first)
 
     cls = classify_words(words, depth)
     # 引用の外の glob (* ? [) は、展開で引数の数と意味が変わる (uniq a* が出力の file を持つ、など)
     cls = max_class([cls, "unknown"]) if masked.match?(/[*?\[]/) && !PLAIN_READ.include?(File.basename(words.first))
     # 環境変数 (PAGER・GIT_EXTERNAL_DIFF・RUBYOPT など) は program を差し替えうる
-    cls = max_class([cls, "unknown"]) if prefix.any? { |w| w.match?(ASSIGNMENT) }
+    cls = max_class([cls, "unknown"]) if assigned
     max_class(classes + [cls])
   end
 
@@ -424,6 +426,10 @@ module SkillBehaviorClassifier
     return max_class(["exec", classify_words(args[1..] || [], depth)]) if name == "bundle" && args[0] == "exec"
     if TASK_COMMANDS.key?(name)
       subs = TASK_COMMANDS[name]
+      # option の無い形 (make test・rake test・npm run x) だけ exec。option は inline の code (rake -e・make --eval) や
+      # 別の file (make -f) を走らせうるので unknown
+      return "unknown" if args.any? { |a| a.start_with?("-") }
+
       return subs.nil? || subs.include?(args[0]) ? "exec" : "unknown"
     end
     return "read" if PLAIN_READ.include?(name)

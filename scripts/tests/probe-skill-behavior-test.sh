@@ -213,7 +213,16 @@ shell = {
   "GIT_EXTERNAL_DIFF=prog git diff" => "unknown",
   "LC_ALL=C grep x lib/median.rb" => "unknown",
   "env PAGER=cat git log" => "unknown",
-  "X=1" => "read",
+  "X=1" => "unknown",
+  # review の round 7 の指摘 (#717)
+  "a=1; RANDOM='a[$(touch out)1]'" => "unknown",
+  "COLUMNS='a[1]'" => "unknown",
+  "cat lib/median.rb; OPTIND=1" => "unknown",
+  "rake -e 'File.write(\"out\",\"x\")'" => "unknown",
+  "make --eval='x:' x" => "unknown",
+  "make -f other.mk" => "unknown",
+  "rake test" => "exec",
+  "npm run build" => "exec",
   "X=$(rm y)" => "file-write",
   # review の round 3 の指摘 (#717): 単純な形でない command は read / exec にしない (門)
   "cat <<EOF\n$(rm out)\nEOF" => "unknown",
