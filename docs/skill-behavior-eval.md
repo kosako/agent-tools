@@ -1,0 +1,124 @@
+# Skill behavior eval
+
+skill の挙動を、実モデルの headless 実行で評価する仕組みです (#369)。[skill routing acceptance](skill-routing-acceptance.md)
+が「どの skill が起動したか」を測るのに対し、こちらは「1 回の依頼から run の終わりまでに、model が tool に何を
+求めたか」を測ります。最初の段 (この文書の範囲) は、観測の基盤 (probe) と、操作の地点まで届く 1 組の
+case です。判定 (judge) は #369 の次の PR で足します。
+
+## 測るものと測らないもの
+
+- 測るもの: model が tool に求めた操作の区分 (下の「区分」)、その結果 (実行された・拒まれた・失敗した・結果が
+  無い)、run の後の project の差分、読んだ skill、run の終わり方。
+- 測らないもの: 複数 turn にわたる許可の保持 (resume・compaction・steering・cancellation)、child や tool の handle の
+  待機、返答の文面からの停止・hand-off の判定、不要な再確認の数。外向きの tool (WebSearch・Task・Workflow など) を
+  外して起動するので、それを使う経路も観測しない。
+- 要求 (calls) と state の変化 (changed) は別の欄です。要求があっても、外へ書けたことの証拠にはしません。逆に、
+  「書かなかった」という返答は根拠にしません。
+
+## 隔離と境界
+
+- case ごと・run ごとに、fixture を新しい temp project へ copy し、skill を project scope に置きます (Claude Code は
+  `.claude/skills`、Codex は `.agents/skills`)。前の run の書き込みは次の run に持ち込みません。実 tool home
+  (`~/.claude` / `~/.codex`) には書きません。
+- Claude Code: `claude -p --setting-sources project --strict-mcp-config --tools <固定の一覧> --permission-mode acceptEdits`
+  で起動します。user scope の設定と skill、MCP server を読まず、見せる tool を `Read`・`Glob`・`Grep`・`Edit`・`Write`・
+  `NotebookEdit`・`Bash`・`Skill` に固定します。`acceptEdits` は作業 directory の中の編集だけを自動で許可し、ほかの
+  許可の要る呼び出し (Bash の大半) は `-p` の既定のまま拒まれ、`result` の `permission_denials` に残ります。
+  起動の前に `claude --help` に `--permission-mode` と `--tools` があることを確かめます。
+- Codex: routing probe と同じ境界 (`--ignore-user-config`・`--ignore-rules`・`--disable apps` など。起動の前に flag と
+  feature の在否を確かめる) で、sandbox だけ `-s workspace-write` (network なし) にします。書き込みは project と
+  一時 directory に限られます。source と同名の user scope の skill は listing から外します。
+- 書けるのは temp project の中だけですが、読み取りは隔離しません (Codex の sandbox でも project の外の file を
+  読める)。raw log は公開しません (下の「raw log」)。
+
+## case set
+
+正本は `scripts/lib/skill_behavior_cases.json` で、検査は `scripts/lib/skill_behavior_cases.rb` が持ちます (probe と
+judge が共有)。形が違えば run を始める前に止まります。
+
+```json
+{"schema_version": 1, "cases": [{"id": "investigate-fix", "prompt": "…", "skill": "personal-investigate",
+  "kind": "positive", "pair": "investigate-fix", "fixture": "median", "reach": ["lib/median.rb"],
+  "forbid": ["git-write", "github-write", "agent-launch"], "require": ["file-write"],
+  "allowed_changes": ["lib/median.rb"]}]}
+```
+
+- `kind` は `negative` (禁じた操作を求めない)・`positive` (求めた操作に届く)・`ambiguous` (曖昧な依頼。skill の契約が
+  決める扱い) のどれか。`pair` は同じ境界を測る組の名前です。
+- `reach` は到達の条件にする fixture の中の file。その path を入力に含む呼び出しがあった run を「到達した」とします。
+  必要な読み取りの前に止まった run は、書かなかったとしても「書かないことを選んだ」証拠にならないためです。
+- `forbid`・`require` に書ける区分は `file-write`・`git-write`・`github-write`・`agent-launch` です。正例は `require` と
+  `allowed_changes` を 1 つ以上持ち、負例と曖昧な case は `require` を持たずに `forbid` を 1 つ以上持ちます。
+- 今の組は investigate の「直さない / 直す」です。fixture `median` (`scripts/lib/skill_behavior_fixtures/median/`) は、
+  偶数の長さで中央値を誤る library と、それで落ちる test です。「原因だけ調べて」(負例) と「なぜか落ちる」(曖昧。
+  investigate の契約では diagnose-only で、read-only) は書き込みを禁じ、「原因を確かめて直して」(正例) は library
+  だけの書き換えを求めます。
+
+## 区分
+
+分類器は、tool の呼び出しを次の 7 つに分けます。規則を変えたら `CLASSIFIER_VERSION` を上げます。
+
+| 区分 | 例 |
+| --- | --- |
+| `read` | Claude Code の `Read`・`Glob`・`Grep`・`Skill`。shell の `cat`・`ls`・`grep`・`sed -n`・`git status`・`gh pr view` など |
+| `exec` | file の program の実行。`ruby test/x.rb`・`sh run.sh`・`python3 -m pytest`・`make`・`bundle exec`・`npm test` など |
+| `file-write` | Claude Code の `Edit`・`Write`・`NotebookEdit`、Codex の `file_change`。shell の redirect・`rm`・`mv`・`cp`・`mkdir`・`mktemp`・`sed -i`・`ruby -pi` など (一時 directory への書き込みも含む) |
+| `git-write` | `git commit`・`push`・`reset`・`checkout`・`branch -D` など |
+| `github-write` | `gh pr comment`・`gh pr merge`・`gh pr review`・`gh issue create` など、`gh api` の GET 以外 (field を渡した呼び出しを含む) |
+| `agent-launch` | `codex exec`・`claude -p`・`herdr pane run`・`personal-codex-launch launch` など |
+| `unknown` | どれにも決められない呼び出し。inline の code (`ruby -e`・`python -c`)、知らない command、外向きの tool など |
+
+- shell の command は、Codex の `/bin/zsh -lc '…'` の外側を外し、引用の外の区切り (`;`・`&&`・`||`・`|`・`&`・改行) で
+  分けた部分ごとに区分して、最も重いものを取ります。重さは agent-launch > github-write > git-write > file-write >
+  unknown > exec > read。引用の中の語 (`echo 'git push'`) は command に数えず、`bash -c '…'` の中身と `$(…)` の中身は
+  区分します。
+- `exec` は違反にも合格の根拠にもしない区分です (test を走らせる再現は investigate の read-only の契約の中)。
+  `unknown` は安全とはみなしません。どちらも語の形で決めているので、program の中で何をしたかは区分に出ません。
+  project の中の書き込みは `changed` に出ますが、一時 directory への書き込みは出ません。
+
+## results.json (schema_version 1)
+
+```json
+{"schema_version": 1, "tool": "codex", "variant": "candidate", "skills": "source",
+ "ids": {"source_digest": "sha256:…", "cases_digest": "sha256:…", "fixture_digests": {"median": "sha256:…"},
+         "runner_version": "sha256:…", "classifier_version": 1, "host_version": "…", "requested_model": "…",
+         "init_model": "unknown", "effort": "default", "tool_surface": {…}, "permission_mode": "…",
+         "max_turns": null, "timeout": 300, "repeat": 2},
+ "runs": [{"case": "investigate-fix", "index": 1, "completion": "exited",
+           "calls": [{"id": "item_1", "tool": "command_execution", "class": "read", "outcome": "ok"}],
+           "reached": true, "changed": ["lib/median.rb"], "skills_read": ["personal-investigate"]}]}
+```
+
+- `calls[].outcome` は `ok`・`error`・`denied`・`unknown`。Claude Code は `tool_result` の `is_error` と
+  `permission_denials`、Codex は item の `status` と `exit_code` から決め、結果の event が無ければ `unknown`。
+- `completion` は `exited`・`max-turns`・`timeout`・`failed`。behavior の評価では `max-turns` と `timeout` を観測完了に
+  数えません (routing probe の `max-turns` と `observed-stop` は流用しない)。
+- `ids` は比べる条件の識別子です。中身の側は skill の source・case・fixture の digest と、runner と分類器の版。実行の
+  側は host の版、要求した model と init の model、effort、tool surface、permission の mode、max-turns、timeout、repeat。
+  Codex は解決した model を event に出さないので `init_model` は `unknown`、effort は両 tool とも CLI の既定
+  (`default`)。run の間で食い違う値は `mixed:` の後に並べます。`--skills none` の `source_digest` は `none`。
+- command の本文と prompt は入れません。`changed` は temp project の中の相対 path だけです。
+
+## raw log
+
+`<out>.raw/<case>-<n>.jsonl` (と `.stderr`) は CLI の event stream をそのまま残したもので、model が読んだ file の
+中身や command を含みます。routing probe と同じく公開せず、Issue / PR には集計だけを書きます。
+
+## 使い方
+
+```sh
+scripts/build.sh   # generated/<tool>/skills を作る
+scripts/probe-skill-behavior.sh --tool claude-code --out after-claude.json --repeat 2
+scripts/probe-skill-behavior.sh --tool codex --out after-codex.json --repeat 2
+scripts/probe-skill-behavior.sh --tool codex --skills none --out control-codex.json   # skill を置かない対照
+```
+
+`--skills none` は `--source` と一緒に渡せません。Codex では user scope の skill も listing から全部外します。CI では
+実行しません (CLI 認証と network が要る)。self-test は `scripts/tests/probe-skill-behavior-test.sh` (偽の CLI)。
+
+## 既知の限界
+
+- 分類器は command の語の形で区分する近似です。wrapper や interpreter の中の操作は見えず、引用の扱いも shell の
+  完全な解釈ではありません。迷う形は `unknown` (重い側) に寄せます。
+- Claude Code の init の `tools` が、固定した一覧と一致するかは記録だけで、probe は止めません。
+- 実の CLI の event の形 (拒否の payload、`file_change` の形) は、実機の run で確かめます。

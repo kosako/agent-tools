@@ -3,11 +3,11 @@
 pipeline scripts (build / register / connect / sync / status / doctor と各種 check) は
 network access なしで実行できます。実装は macOS 標準の Ruby (YAML stdlib) で、追加 gem は
 不要です (status / doctor は repo 状態の確認に `git` 実行ファイルを使う。無い環境でも
-crash せず該当項目が degrade するだけ)。**例外は `probe-credential-isolation.sh` と
-`probe-skill-routing.sh` と `probe-opencode-plugin.sh`**: 1 つ目は credential 隔離の実機検証
-harness で `gh` / `git` / `curl` と network に、2 つ目は skill routing の実機観測で `claude` /
-`codex` CLI と network に、3 つ目は OpenCode plugin の前提の実機観測で `opencode` CLI と network
-(起動時の npm install) に依存します (いずれも CI では実行しない。下記該当節)。
+crash せず該当項目が degrade するだけ)。**例外は `probe-credential-isolation.sh`、
+`probe-skill-routing.sh`、`probe-skill-behavior.sh`、`probe-opencode-plugin.sh`**: 1 つ目は credential 隔離の
+実機検証 harness で `gh` / `git` / `curl` と network に、2 つ目は skill routing の実機観測で、3 つ目は skill の
+挙動の実機観測で、どちらも `claude` / `codex` CLI と network に、4 つ目は OpenCode plugin の前提の実機観測で
+`opencode` CLI と network (起動時の npm install) に依存します (いずれも CI では実行しない。下記該当節)。
 
 `tests/` の self-tests と repository checks は CI (`.github/workflows/test.yml`) で
 PR / push ごとに実行されます。
@@ -185,6 +185,25 @@ usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
   OpenCode の probe と共有の `lib/probe_child.rb` が持ち、中断で子の process group を残さないことと、help の
   `--model` の説明も確かめる (#568)。CLI の実起動と、実際の event 形式との
   一致は対象外 (実機で `--smoke`)。`--dry-run` / `--help` の引数契約は `tests/cli-args-test.sh` の対象外。
+
+- `probe-skill-behavior.sh`: skill の挙動の評価の probe runner (実機・#369)。case ごと・run ごとに fixture を新しい
+  temp project に置き、1 回の依頼を `claude -p` / `codex exec` で headless 実行して、model が tool に求めた操作の
+  区分 (read・exec・file-write・git-write・github-write・agent-launch・unknown)、その結果、run の後の差分、読んだ skill を
+  `results.json` に書く。command の本文と prompt は raw log (`<out>.raw/`) にだけ置く。Claude Code は tool を固定して
+  `acceptEdits`、Codex は routing probe と同じ境界で `workspace-write` で起動し、書き込みを temp project の中に閉じる。
+  Spec: [docs/skill-behavior-eval.md](../docs/skill-behavior-eval.md)。
+
+```text
+usage: probe-skill-behavior.sh --tool <claude-code|codex> --out <results.json>
+         [--cases FILE] [--only ID[,ID...]] [--repeat N] [--source DIR | --skills none]
+         [--variant LABEL] [--model MODEL] [--max-turns N] [--timeout SEC] [--dry-run]
+```
+
+- **CI では実行しない** (CLI 認証と network が要る)。判定 (judge) は #369 の次の PR で足す。
+- self-test: `tests/probe-skill-behavior-test.sh` は、分類器 (引用・redirect・入れ子の shell・command の置き換え・
+  exec と inline の code の境目)、event の解析 (呼び出しを ID で束ね、結果を別に残す)、case set の検査、state の差分、
+  終わり方、起動の argv を固定の入力で、run ごとの新しい fixture、results.json の欄、prompt と command の本文を
+  results.json に出さないこと、`--skills none`、起動の前の確認を偽の `claude` / `codex` で確かめる。
 
 - `probe-opencode-plugin.sh`: OpenCode plugin probe の runner (実機・#295)。HOME / XDG / DB /
   git config を tmp に向けた隔離環境で `opencode` を起動し、計測用 plugin と 127.0.0.1 の mock

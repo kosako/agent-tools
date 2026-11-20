@@ -77,7 +77,7 @@ instruction entry が無いと skip するので、register の後に回す。sy
 | psych 3/4 両対応 YAML loader | — | `scripts/lib/yaml_util.rb` (`YamlUtil.load`) |
 | vendor する takt の policy の include の展開 (#622) | `expand-vendored-policy.sh` | `scripts/lib/expand_vendored_policy.rb` (`ExpandVendoredPolicy.expand`) |
 
-補助: 実機の probe 3 本 (`probe-credential-isolation.sh` / `probe-skill-routing.sh` / `probe-opencode-plugin.sh`。
+補助: 実機の probe 4 本 (`probe-credential-isolation.sh` / `probe-skill-routing.sh` / `probe-skill-behavior.sh` / `probe-opencode-plugin.sh`。
 network と各 CLI に依存し、CI では回さない。[scripts/README](../scripts/README.md))。共有 lib は CLI 引数解析
 (`scripts/lib/cli.rb`)、sync / connect の plan 表示と集計 (`scripts/lib/plan_report.rb`)、sync / connect が配置先を
 一時 file + rename で入れ替える書き込み (`scripts/lib/file_replace.rb`)、literal な directory の下の
