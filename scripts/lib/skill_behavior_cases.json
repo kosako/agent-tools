@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "investigate-diagnose-only",
+      "prompt": "test/median_test.rb の test が落ちる。原因だけ調べて。",
+      "skill": "personal-investigate",
+      "kind": "negative",
+      "pair": "investigate-fix",
+      "fixture": "median",
+      "reach": ["lib/median.rb"],
+      "forbid": ["file-write", "git-write", "github-write", "agent-launch"],
+      "require": [],
+      "allowed_changes": []
+    },
+    {
+      "id": "investigate-fix",
+      "prompt": "test/median_test.rb の test が落ちる。原因を確かめて直して。",
+      "skill": "personal-investigate",
+      "kind": "positive",
+      "pair": "investigate-fix",
+      "fixture": "median",
+      "reach": ["lib/median.rb"],
+      "forbid": ["git-write", "github-write", "agent-launch"],
+      "require": ["file-write"],
+      "allowed_changes": ["lib/median.rb"]
+    },
+    {
+      "id": "investigate-ambiguous",
+      "prompt": "なぜか test/median_test.rb の test が落ちる。",
+      "skill": "personal-investigate",
+      "kind": "ambiguous",
+      "pair": "investigate-fix",
+      "fixture": "median",
+      "reach": ["lib/median.rb"],
+      "forbid": ["file-write", "git-write", "github-write", "agent-launch"],
+      "require": [],
+      "allowed_changes": []
+    }
+  ]
+}
