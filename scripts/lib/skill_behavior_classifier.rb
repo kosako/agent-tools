@@ -29,8 +29,12 @@ module SkillBehaviorClassifier
   PREFIX_WORDS = %w[env command exec nohup time nice builtin then do else ! {].freeze
   # command の名前に path が付くとき、名前で区分してよい directory (ほかの path は project の file などを実行する)。
   STANDARD_BIN_DIRS = %w[/bin /usr/bin /usr/local/bin /opt/homebrew/bin /usr/sbin /sbin].freeze
-  # python -m で exec にする module (test を走らせるもの)。ほかの module (pip など) は unknown。
-  PYTHON_EXEC_MODULES = %w[pytest unittest doctest].freeze
+  # exec にする script の拡張子 (interpreter と shell ごと)。拡張子の無い path (/dev/stdin・/dev/fd/0、cd の後の
+  # dev/stdin など) は、書き方によらず file の program と確かめられないので exec にしない。
+  SCRIPT_EXTENSIONS = {
+    "ruby" => %w[.rb], "perl" => %w[.pl], "python" => %w[.py], "python3" => %w[.py], "node" => %w[.js .mjs .cjs],
+    "sh" => %w[.sh], "bash" => %w[.sh .bash], "zsh" => %w[.sh .zsh], "dash" => %w[.sh],
+  }.freeze
   FILE_WRITE_COMMANDS = %w[rm rmdir mv cp mkdir mkfifo touch tee ln chmod chown chgrp truncate dd install patch
                            apply_patch unlink rsync mktemp].freeze
   # どの option でも書き込み・program の起動をしない command (option を確かめずに read)。
@@ -411,7 +415,7 @@ module SkillBehaviorClassifier
   def self.classify_by_name(words, depth)
     name = File.basename(words[0].to_s)
     args = words[1..] || []
-    return shell_call(args, depth) if SHELLS.include?(name)
+    return shell_call(args, depth, name) if SHELLS.include?(name)
     return xargs_call(args, depth) if name == "xargs"
     return "agent-launch" if agent_launch?(name, args)
     return classify_gh(args) if name == "gh"
@@ -598,7 +602,7 @@ module SkillBehaviorClassifier
   SHELL_SET_OPTIONS = %w[pipefail errexit nounset xtrace].freeze
   SHELL_LONG_FLAGS = %w[--norc --noprofile --login].freeze
 
-  def self.shell_call(args, depth)
+  def self.shell_call(args, depth, shell_name = "sh")
     inline = false
     i = 0
     while i < args.length && args[i].match?(/\A[-+]/)
@@ -625,7 +629,7 @@ module SkillBehaviorClassifier
     target = args[i]
     return target ? classify_shell(target, depth + 1) : "unknown" if inline
 
-    script_file?(target) ? "exec" : "unknown"
+    script_file?(shell_name, target) ? "exec" : "unknown"
   end
 
   # interpreter: exec は、allowlist の option (INTERPRETER_EXEC_OPTIONS) の後に script を渡す形だけ。python の -m は
@@ -648,9 +652,6 @@ module SkillBehaviorClassifier
       a = args[i]
       break unless a.start_with?("-") && a != "-"
 
-      if %w[python python3].include?(name) && a == "-m"
-        return PYTHON_EXEC_MODULES.include?(args[i + 1]) ? "exec" : "unknown"
-      end
       if spec[:flags].include?(a)
         i += 1
       elsif spec[:values].include?(a)
@@ -661,7 +662,7 @@ module SkillBehaviorClassifier
         return in_place?(name, args) ? "file-write" : "unknown"
       end
     end
-    script_file?(args[i]) ? "exec" : "unknown"
+    script_file?(name, args[i]) ? "exec" : "unknown"
   end
 
   def self.in_place?(name, args)
@@ -670,10 +671,12 @@ module SkillBehaviorClassifier
     args.take_while { |a| a.start_with?("-") && a != "-" }.any? { |a| a.match?(IN_PLACE) }
   end
 
-  # exec にする script の path。標準入力 (-) と、/dev・/proc の下の path (/dev/stdin・/dev/fd/0・/proc/self/fd/0 など) は
-  # file の program ではないので外す。
-  def self.script_file?(path)
-    !path.nil? && path != "-" && !path.match?(%r{\A/(dev|proc)/})
+  # exec にする script の path。その interpreter / shell の script の拡張子 (SCRIPT_EXTENSIONS) を持つもの。標準入力を
+  # 指す書き方 (-・/dev/stdin・/./dev/stdin・/dev/fd/0、cd の後の dev/stdin) は拡張子を持たないので exec にならない。
+  def self.script_file?(name, path)
+    return false if path.nil?
+
+    SCRIPT_EXTENSIONS.fetch(name, []).any? { |ext| path.end_with?(ext) && path.length > ext.length }
   end
 
   def self.agent_launch?(name, args)
