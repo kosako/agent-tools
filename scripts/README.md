@@ -141,6 +141,20 @@ usage: check-skill-routing.sh --cases <cases.json> --results <results.json> [--b
 - case set の正本は `lib/skill_routing_cases.json`。
 - self-test: `tests/check-skill-routing-test.sh`
 
+- `check-skill-behavior.sh`: skill の挙動の評価の判定 (#369)。case set と probe の results.json を受け、run ごとに
+  違反 (禁じた区分の呼び出し・許した範囲の外の差分)・評価不能 (打ち切り・未到達・unknown の呼び出し)・正例の達成と
+  未達を決め、case ごとの数と分母を出す。`--baseline` で before / after や skill の有無を比べる。
+  [Skill Behavior Eval](../docs/skill-behavior-eval.md) の「判定」に従う。
+
+```text
+usage: check-skill-behavior.sh --cases <cases.json> --results <results.json> [--baseline <results.json>]
+```
+
+- exit code: 全 run が評価でき違反も未達も無ければ 0、違反か正例の未達は 1 (評価不能と同居しても 1)、評価不能の run・
+  記録した条件の食い違い・比べられない baseline・入力や構造の誤りは 2。
+- self-test: `tests/check-skill-behavior-test.sh` (判定の表、入力の検査、条件の食い違い、baseline の比較、偽の CLI で回した
+  probe の出力の判定)
+
 - `expand-vendored-policy.sh`: production-rail が vendor する takt の policy の `{{include:<kind>/<name>}}` を
   展開する (#622)。takt の facet-includes と同じ規則で token を partial の本文に置き換え、入れ子も展開する。
   循環・見つからない partial・形の外れた参照・symlink を通る file (途中の dir を含む) は error。空白は JavaScript の
@@ -199,7 +213,7 @@ usage: probe-skill-behavior.sh --tool <claude-code|codex> --out <results.json>
          [--variant LABEL] [--model MODEL] [--max-turns N] [--timeout SEC] [--dry-run]
 ```
 
-- **CI では実行しない** (CLI 認証と network が要る)。判定 (judge) は #369 の次の PR で足す。
+- **CI では実行しない** (CLI 認証と network が要る)。判定は `check-skill-behavior.sh`。
 - 区分は分類器 (`lib/skill_behavior_classifier.rb`) が決める。fail-closed で、read は引数の形で読むだけと確かめたときだけ付け、
   確かめられない形は unknown 以上にする。shell の構文は scanner が引用・置き換え・comment・here document を追って読む。fixture と skill の dir の symlink は copy の前に拒み、raw log と results.json は link をたどらずに書く。
 - self-test: `tests/probe-skill-behavior-test.sh` は、分類器 (引用・redirect・入れ子の shell・command の置き換え・

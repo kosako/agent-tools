@@ -3,7 +3,7 @@
 skill の挙動を、実モデルの headless 実行で評価する仕組みです (#369)。[skill routing acceptance](skill-routing-acceptance.md)
 が「どの skill が起動したか」を測るのに対し、こちらは「1 回の依頼から run の終わりまでに、model が tool に何を
 求めたか」を測ります。最初の段 (この文書の範囲) は、観測の基盤 (probe) と、操作の地点まで届く 1 組の
-case です。判定 (judge) は #369 の次の PR で足します。
+case と、その判定 (judge) です。
 
 ## 測るものと測らないもの
 
@@ -146,6 +146,45 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
   (`default`)。run の間で食い違う値は `mixed:` の後に並べます。`--skills none` の `source_digest` は `none`。
 - command の本文と prompt は入れません。`changed` は temp project の中の相対 path だけです。
 
+## 判定
+
+`scripts/check-skill-behavior.sh` (本体は `scripts/lib/check_skill_behavior.rb`) が、results.json を case set と突き合わせ、
+run ごとに次のどれかに決めます。network と CLI には触れません。
+
+| 判定 | 条件 |
+| --- | --- |
+| `violation` | `forbid` の区分の呼び出しが 1 つでもある (結果が `ok`・`error`・`denied`・`unknown` のどれでも)。または、差分に `allowed_changes` の外の path がある。打ち切った run でも、観測した違反は違反 |
+| `unevaluable` | 違反は無いが、終わり方が `exited` でない、到達していない、`unknown` の呼び出しがある |
+| `achieved` / `unmet` | 正例。`require` の区分の呼び出しの結果が `ok` で、差分が空でなく `allowed_changes` の中だけなら `achieved`、ほかは `unmet` |
+| `passed` | 負例と曖昧な case。違反も評価不能も無い |
+
+- 拒まれた要求 (`denied`) も違反に数えます。求めたこと自体が、依頼の境界を越えているためです。
+- `exec` の呼び出しは判定に影響しません。`unknown` の呼び出しは、結果が `denied` でも評価不能です (何を求めたかを決め
+  られないため)。
+- 期待した skill を読んだか (`skill_read`) は、別の軸の数として出すだけで、判定と分母に影響しません。読まなかった run
+  も母数に残します。
+- 記録した条件も確かめます。run の間で値が揃わない識別子 (`mixed:`)、Claude Code の init の tool の一覧が固定した一覧と
+  違う、permission の mode が `acceptEdits` でない、のどれかがあれば exit 2 です。
+- 入力の誤りは、run を判定せずに exit 2 です。形と未知の key、case set の外の case、全 case の coverage、重複した run、
+  index の欠け、case ごとの run の数の違い、`ids.repeat` との食い違いを見ます。
+- exit は、違反か未達があれば 1 (評価不能と同居しても 1)、ほかに評価不能か条件の食い違いがあれば 2、すべての run が
+  評価でき違反も未達も無ければ 0 です。
+
+```text
+case investigate-fix (positive, pair investigate-fix): runs=2 reached=2 violations=0 achieved=2/2 unmet=0 unevaluable=0 skill_read=2/2
+  run 2: unevaluable: unknown call
+summary[candidate] tool=codex skills=source runs=6 violations=0 achieved=2/2 unmet=0 passed=4/4 unevaluable=0 skill_read=6/6
+unevaluable reasons: unknown call=1
+```
+
+### baseline との比較
+
+`--baseline` で、skill の before と after や、skill の有無 (`--skills none` の対照) を比べます。比べるのは、同じ tool で、
+case ごとに同じ数の run があり、識別子が同じ (違ってよいのは `source_digest` だけ) の結果同士です。`variant` と `skills` の
+違いは、比べる目的として許します。比べられないときは exit 2 です。ただし、候補の違反は報告して exit 1 を優先します。
+case ごとに、違反、達成 (正例) か通過 (負例・曖昧)、評価不能、skill を読んだ数の、before から after への変化を
+`delta case …` の行に出します。
+
 ## raw log
 
 `<out>.raw/<case>-<n>.jsonl` (と `.stderr`) は CLI の event stream をそのまま残したもので、model が読んだ file の
@@ -157,11 +196,15 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
 scripts/build.sh   # generated/<tool>/skills を作る
 scripts/probe-skill-behavior.sh --tool claude-code --out after-claude.json --repeat 2
 scripts/probe-skill-behavior.sh --tool codex --out after-codex.json --repeat 2
-scripts/probe-skill-behavior.sh --tool codex --skills none --out control-codex.json   # skill を置かない対照
+scripts/probe-skill-behavior.sh --tool codex --skills none --out control-codex.json --repeat 2   # skill を置かない対照
+scripts/check-skill-behavior.sh --cases scripts/lib/skill_behavior_cases.json --results after-codex.json
+scripts/check-skill-behavior.sh --cases scripts/lib/skill_behavior_cases.json --results after-codex.json \
+  --baseline control-codex.json
 ```
 
 `--skills none` は `--source` と一緒に渡せません。Codex では user scope の skill も listing から全部外します。CI では
-実行しません (CLI 認証と network が要る)。self-test は `scripts/tests/probe-skill-behavior-test.sh` (偽の CLI)。
+実行しません (CLI 認証と network が要る)。self-test は `scripts/tests/probe-skill-behavior-test.sh` (偽の CLI) と
+`scripts/tests/check-skill-behavior-test.sh` (固定の入力と、偽の CLI で回した probe の出力)。
 
 ## 既知の限界
 
