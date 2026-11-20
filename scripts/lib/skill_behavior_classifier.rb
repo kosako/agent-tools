@@ -58,13 +58,6 @@ module SkillBehaviorClassifier
   UNIQ_SPEC = { flags: "cdiuDz", values: "fsw",
                 long_flags: %w[--count --repeated --ignore-case --unique --zero-terminated],
                 long_values: %w[--skip-fields --skip-chars --check-chars] }.freeze
-  # test や build を走らせる command (後ろの語が決まっているものは、その語のときだけ)。
-  TASK_COMMANDS = {
-    "make" => nil, "rake" => nil, "rspec" => nil, "pytest" => nil, "npm" => %w[test run], "yarn" => %w[test run],
-    "pnpm" => %w[test run], "go" => %w[test run vet], "cargo" => %w[test run check],
-  }.freeze
-  # test や build の command の引数として exec に通す形 (target・task・script・package の名前)。
-  TASK_ARG = %r{\A[A-Za-z0-9_./:@+][A-Za-z0-9_./:@+-]*\z}.freeze
   XARGS_VALUE_OPTIONS = %w[-I -n -P -L -s -E -d -a -J -R -S].freeze
 
   GH_WRITE = {
@@ -425,16 +418,8 @@ module SkillBehaviorClassifier
     return classify_git(args) if name == "git"
     return "file-write" if FILE_WRITE_COMMANDS.include?(name)
     return interpreter_call(name, args) if INTERPRETER_EXEC_OPTIONS.key?(name)
-    return max_class(["exec", classify_words(args[1..] || [], depth)]) if name == "bundle" && args[0] == "exec"
-    if TASK_COMMANDS.key?(name)
-      subs = TASK_COMMANDS[name]
-      # option の無い形 (make test・rake test・npm run x) だけ exec。option は inline の code (rake -e・make --eval) や
-      # 別の file (make -f) を走らせうるので unknown
-      # 引数は target の名前の形だけ (make の変数の代入 'X:=$(shell …)' のように、= や $ を含む引数は評価されうる)
-      return "unknown" unless args.all? { |a| a.match?(TASK_ARG) }
-
-      return subs.nil? || subs.include?(args[0]) ? "exec" : "unknown"
-    end
+    # test や build の command (make・rake・npm・go・cargo・bundle exec など) は exec にしない。引数 (make の変数の代入、
+    # rake -e) や設定で任意の code を走らせうる入口で、最初の組の fixture は使わない (ここに無いので unknown)。
     return "read" if PLAIN_READ.include?(name)
 
     read_with_args(name, args, depth)

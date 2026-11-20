@@ -80,7 +80,7 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
 | 区分 | 例 |
 | --- | --- |
 | `read` | Claude Code の `Read`・`Glob`・`Grep`・`Skill`。shell の `cat`・`ls`・`grep`・`git status`・`gh pr view` など、どの option でも書き込みや program の起動をしない command。`sed` は行の範囲や `/正規表現/` の表示 (`sed -n '1,80p'`) だけ、`sort` と `uniq` は option の spec で読めて出力の file が無いとき、`git branch` は一覧の表示だけ |
-| `exec` | file の program の実行。`ruby test/x.rb`・`sh run.sh`・`python3 -m pytest`・`make`・`bundle exec`・`npm test` など。interpreter と shell は、決まった option (ruby の `-I`・`-r`・`-w`、python の `-m`・`-u` など) の後に script を渡す形だけ |
+| `exec` | file の program の実行。`ruby test/x.rb`・`sh run.sh`・`python3 -m pytest` など。interpreter と shell は、決まった option (ruby の `-I`・`-r`・`-w`、python の `-m`・`-u` など) の後に script を渡す形だけ |
 | `file-write` | Claude Code の `Edit`・`Write`・`NotebookEdit`、Codex の `file_change`。shell の redirect・`rm`・`mv`・`cp`・`mkdir`・`mktemp`・`sed -i`・`ruby -pi` など (一時 directory への書き込みも含む) |
 | `git-write` | `git commit`・`push`・`reset`・`checkout`・`branch <名前>`・`branch -D`・引数なしの `stash`・`tag <名前>` など。`gh pr checkout` も |
 | `github-write` | `gh pr comment`・`gh pr merge`・`gh pr review`・`gh issue create` など、`gh api` の GET 以外 (field を渡した呼び出しを含む) |
@@ -112,9 +112,9 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
   `test` の算術)。`diff` は短い option の allowlist だけを read にし、長い option (`--paginate` の省略の `--p` など) と
   `-l` (出力を `pr` に通す) は `unknown` です。標準の bin の directory の外の path が付いた command の名前 (`./cat`・`lib/grep`) は、名前と違う
   program を実行しうるので `unknown` 以上です。`sudo` は前置きとして読み飛ばしません。`python3 -m` の exec は test の
-  module (`pytest`・`unittest`・`doctest`) だけです。test や build の command (`make`・`rake`・`npm run` など) の exec は
-  引数が target の名前の形 (英数字と `_ . / : @ + -`) だけのときで、option のある形 (`rake -e` の inline の code、
-  `make --eval`・`make -f`) と、`=` や `$` を含む引数 (`make 'X:=$(shell …)'` の変数の代入) は `unknown` です。shell と
+  module (`pytest`・`unittest`・`doctest`) だけです。test や build の command (`make`・`rake`・`npm`・`go`・`cargo`・`bundle exec`
+  など) は exec にせず `unknown` です。引数 (`make 'X:=$(shell …)'` の変数の代入、`rake -e` の inline の code) や設定で任意の
+  code を走らせうる入口で、最初の組の fixture は使わないためです。shell と
   interpreter に渡す script の path が標準入力 (`-`) か `/dev`・`/proc` の下 (`/dev/stdin`・`/dev/fd/0` など) なら、file の
   program ではないので `unknown` です。
 - 代入だけの部分 (`X=1`) も `read` にしません。zsh は整数の変数 (`RANDOM`・`COLUMNS`・`OPTIND` など) への代入で添字を
