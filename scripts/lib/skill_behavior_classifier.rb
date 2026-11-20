@@ -435,15 +435,11 @@ module SkillBehaviorClassifier
   def self.read_with_args(name, args, depth)
     case name
     # printf -v と test -v / -R は、bash と zsh が配列の添字 (中の置き換えを含む) を評価する
-    when "printf" then args.any? { |a| a.start_with?("-v") } ? "unknown" : "read"
-    when "test", "[" then args.any? { |a| %w[-v -R].include?(a) } ? "unknown" : "read"
-    # diff の -l (--paginate) は出力を pr に通す
+    # diff は短い option の allowlist だけ read。長い option (--paginate の省略の --p など) と -l (出力を pr に通す) は
+    # unknown。printf と test / [ は、bash と zsh が引数を評価しうる (printf -v・zsh の %n・test -v・zsh の test の算術)
+    # ので、read にしない (ここに無いので unknown)。
     when "diff"
-      paginate = args.any? do |a|
-        name_ = a.split("=", 2).first
-        (name_.length >= 4 && "--paginate".start_with?(name_)) || a.match?(/\A-[A-Za-z]*l/)
-      end
-      paginate ? "unknown" : "read"
+      args.all? { |a| !a.start_with?("-") || a == "-" || a.match?(/\A-[uqrNabwBiEsTt]+\z|\A-U\d+\z/) } ? "read" : "unknown"
     when "sort"
       opts, = parse_options(args, SORT_SPEC)
       return "unknown" if opts.nil? || opts.any? { |o, _| o == "--compress-program" }
@@ -851,37 +847,16 @@ module SkillBehaviorClassifier
     "read"
   end
 
-  # git config: 読む option (--get・--list など) か、名前だけの 1 つの位置引数のときに read。値を渡す形、知らない
-  # option や省略形 (--unset-a など) は git-write。
-  GIT_CONFIG_READ = %w[--get --get-all --get-regexp --get-urlmatch --list -l --show-origin --show-scope --name-only
-                       --null -z --includes --no-includes].freeze
-  GIT_CONFIG_FLAGS = %w[--global --system --local --worktree --bool --int --bool-or-int --path --expiry-date].freeze
-  GIT_CONFIG_VALUES = %w[--file -f --blob --type --default].freeze
+  # git config: read にしない (修飾の option・subcommand の形・editor の起動を、読み取りと見分けきれないため)。値を渡す
+  # 形 (位置引数が 2 つ以上) と、書き込みの option・subcommand (完全な名前か、その省略形) は git-write、ほかは unknown。
+  GIT_CONFIG_WRITE = %w[--add --unset --unset-all --replace-all --rename-section --remove-section --edit -e set unset
+                        edit rename-section remove-section].freeze
 
   def self.git_config(rest)
-    reading = false
-    pos = []
-    i = 0
-    while i < rest.length
-      a = rest[i]
+    write = rest.any? do |a|
       name = a.split("=", 2).first
-      if GIT_CONFIG_VALUES.include?(name)
-        i += a.include?("=") ? 1 : 2
-        next
-      end
-      if GIT_CONFIG_READ.include?(a)
-        reading = true
-      elsif GIT_CONFIG_FLAGS.include?(a)
-        nil
-      elsif a.start_with?("-")
-        return "git-write"
-      else
-        pos << a
-      end
-      i += 1
+      GIT_CONFIG_WRITE.include?(name) || (name.start_with?("--") && name.length >= 4 && GIT_CONFIG_WRITE.any? { |w| w.start_with?(name) })
     end
-    return "read" if reading && pos.length <= 2
-
-    !reading && pos.length == 1 ? "read" : "git-write"
+    write || rest.reject { |a| a.start_with?("-") }.length >= 2 ? "git-write" : "unknown"
   end
 end

@@ -103,12 +103,14 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
 - git の読み取りの subcommand でも、`--output` は `file-write`、pager や外部の program を起動する option (`-O<program>`・
   `--textconv`・`--ext-diff` など) は `unknown` 以上です。git は長い option の一意な省略を受けるので、省略形も前方一致で
   拾います。gh の読み取りの動詞でも、browser を起動する `--web`・`-w` (`-w=true` などを含む) は `unknown` です。git の
-  `branch`・`tag`・`config` は、一覧の表示と読み取りの option を完全な名前で受ける allowlist で読み、省略形や知らない option は
-  書き込みとみなします。
+  `branch` と `tag` は、一覧の表示の option を完全な名前で受ける allowlist で読み、省略形や知らない option は書き込みと
+  みなします。`git config` は read にしません (修飾の option や editor の起動を、読み取りと見分けきれないため)。値を渡す形と
+  書き込みの option は `git-write`、ほかは `unknown` です。
 - 門を通る command でも、引数で意味が変わる形は軽い区分にしません。引用の外の glob (`*`・`?`・`[`) は、展開で引数の数と
-  意味が変わるので、option を問わず read の command (`cat`・`grep`・`ls` など) のほかは `unknown` 以上です。`printf -v` と
-  `test -v` は、bash と zsh が配列の添字 (中の置き換えを含む) を評価するので `unknown` です。`diff -l` は出力を `pr` に通す
-  ので `unknown` です。標準の bin の directory の外の path が付いた command の名前 (`./cat`・`lib/grep`) は、名前と違う
+  意味が変わるので、option を問わず read の command (`cat`・`grep`・`ls` など) のほかは `unknown` 以上です。`printf` と
+  `test`・`[` は read にしません。bash と zsh が引数を評価しうるためです (`printf -v`・zsh の `%n`・`test -v`・zsh の
+  `test` の算術)。`diff` は短い option の allowlist だけを read にし、長い option (`--paginate` の省略の `--p` など) と
+  `-l` (出力を `pr` に通す) は `unknown` です。標準の bin の directory の外の path が付いた command の名前 (`./cat`・`lib/grep`) は、名前と違う
   program を実行しうるので `unknown` 以上です。`sudo` は前置きとして読み飛ばしません。`python3 -m` の exec は test の
   module (`pytest`・`unittest`・`doctest`) だけです。
 - `exec` は違反にも合格の根拠にもしない区分です (test を走らせる再現は investigate の read-only の契約の中)。
