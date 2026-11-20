@@ -200,8 +200,8 @@ usage: probe-skill-behavior.sh --tool <claude-code|codex> --out <results.json>
 ```
 
 - **CI では実行しない** (CLI 認証と network が要る)。判定 (judge) は #369 の次の PR で足す。
-- 区分は分類器 (`lib/skill_behavior_classifier.rb`) が決める。read は引数の形で読むだけと確かめたときだけ付け、確かめられない
-  形は unknown 以上にする。fixture と skill の dir の symlink は copy の前に拒み、raw log と results.json は link をたどらずに書く。
+- 区分は分類器 (`lib/skill_behavior_classifier.rb`) が決める。fail-closed で、read は引数の形で読むだけと確かめたときだけ付け、
+  確かめられない形は unknown 以上にする。shell の構文は scanner が引用・置き換え・comment・here document を追って読む。fixture と skill の dir の symlink は copy の前に拒み、raw log と results.json は link をたどらずに書く。
 - self-test: `tests/probe-skill-behavior-test.sh` は、分類器 (引用・redirect・入れ子の shell・command の置き換え・
   exec と inline の code の境目・書き込みの option)、symlink を経て外へ書かないこと、event の解析 (呼び出しを ID で束ね、結果を別に残す)、case set の検査、state の差分、
   終わり方、起動の argv を固定の入力で、run ごとの新しい fixture、results.json の欄、prompt と command の本文を

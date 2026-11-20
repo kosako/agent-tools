@@ -3,13 +3,14 @@
 # skill の挙動の評価 (#369) の分類器。tool の呼び出しを区分 (SkillBehaviorCases::CLASSES) に分ける。
 # Spec: docs/skill-behavior-eval.md の「区分」。
 #
-# 原則: read と exec は、その引数の形で「読むだけ」「file の program を走らせるだけ」と確かめられたときだけ付ける。
-# 確かめられない形 (知らない command・知らない option・閉じない引用・解析できない置き換え) は unknown 以上にし、
-# 迷う形を軽い区分にしない。command の名前だけで read にしない (書き込みの option を持つ command がある)。
+# 原則 (fail-closed): read と exec は、その引数の形で「読むだけ」「file の program を走らせるだけ」と確かめられた
+# ときだけ付ける。確かめられない形 (知らない command・spec に無い option・閉じない引用や here document・解析できない
+# 置き換え) は unknown 以上にし、迷う形を軽い区分にしない。
 #
-# shell の command は、引用・command の置き換え ($(…)・`…`) を入れ子のまま追う scanner (scan) で読む。区切り
-# (; && || | & 改行) は一番外の文脈でだけ分け、置き換えの中身は取り出して別に区分する。部分ごとの区分と置き換えの
-# 中身の区分のうち、最も重いものを取る。
+# shell の command は scanner (scan) が読む。引用・command の置き換え ($(…)・`…`)・process の置き換え (<(…)・>(…))・
+# comment・here document・ANSI-C の引用 ($'…') を文脈の stack で追い、区切り (; && || | & 改行) は一番外の文脈でだけ分ける。置き換えの中身は
+# 取り出して別に区分し、部分ごとの区分と合わせて最も重いものを取る。外側の shell (`/bin/zsh -lc '…'`) は外さず、
+# shell の呼び出しとして読む (外の文脈の置き換えも区分するため)。option は spec を読む共通の部品 (parse_options) で読む。
 
 require "shellwords"
 
@@ -17,7 +18,7 @@ module SkillBehaviorClassifier
   # 重さ。agent-launch > github-write > git-write > file-write > unknown > exec > read。
   SEVERITY = { "read" => 0, "exec" => 1, "unknown" => 2, "file-write" => 3, "git-write" => 4, "github-write" => 5,
                "agent-launch" => 6 }.freeze
-  MAX_DEPTH = 4
+  MAX_DEPTH = 6
   # 規則を変えたら上げる (結果を比べるときの識別子 ids.classifier_version)。
   VERSION = 1
 
@@ -28,19 +29,32 @@ module SkillBehaviorClassifier
   PREFIX_WORDS = %w[env command exec nohup time nice sudo builtin then do else ! {].freeze
   FILE_WRITE_COMMANDS = %w[rm rmdir mv cp mkdir mkfifo touch tee ln chmod chown chgrp truncate dd install patch
                            apply_patch unlink rsync mktemp].freeze
-  # 引数の形によらず読むだけの command (書き込み・実行の option を持たないものだけ)。
+  # どの option でも書き込み・program の起動をしない command (option を確かめずに read)。
   PLAIN_READ = (%w[cat head tail grep egrep fgrep ls wc nl stat pwd cd echo printf diff cmp cut tr jq which type
                    basename dirname realpath readlink true false test du id whoami uname column fold od hexdump
                    strings shasum sha256sum md5 md5sum] + ["["]).freeze
 
-  # interpreter ごとの inline の code の option の文字と、値をとる option の文字 (短い option の束で使う)。
+  # option の spec。flags は値をとらない短い option、values は値をとる短い option (束の残りか次の語)、long_flags /
+  # long_values は長い option。spec に無い option があれば parse_options は nil を返す。
+  SORT_SPEC = { flags: "bcdfghiMmnRrsuVz", values: "kotST",
+                long_flags: %w[--numeric-sort --reverse --unique --ignore-case --human-numeric-sort --version-sort
+                               --stable --general-numeric-sort --month-sort --dictionary-order
+                               --ignore-leading-blanks --check --merge --zero-terminated --random-sort],
+                long_values: %w[--key --field-separator --output --buffer-size --temporary-directory --parallel
+                                --sort --batch-size --compress-program --files0-from --random-source] }.freeze
+  UNIQ_SPEC = { flags: "cdiuDz", values: "fsw",
+                long_flags: %w[--count --repeated --ignore-case --unique --zero-terminated],
+                long_values: %w[--skip-fields --skip-chars --check-chars] }.freeze
+  # interpreter の短い option の字。in_place は in-place の編集、module は module の実行、required は値をとる字 (束の
+  # 残りか次の語)、rest は束の残りだけを値にとる字、octal は 8 進 (perl の -0 は x と 16 進も) の数字だけをとる字、flags は
+  # 値をとらない字。ここに無い字は unknown にする。inline の code の字 (ruby・perl の -e、python の -c、node の -e・-p) は
+  # どこにも入れないので、この規則で unknown になる。
   INTERPRETERS = {
-    "ruby" => { inline: "e", value: "IrCxF0EKTW", in_place: true },
-    "perl" => { inline: "eE", value: "IMmdDxF0C", in_place: true },
-    "python" => { inline: "c", value: "WXQ", module: "m" },
-    "python3" => { inline: "c", value: "WXQ", module: "m" },
-    "node" => { inline: "ep", value: "r", long_inline: %w[--eval --print] },
-    "php" => { inline: "r", value: "cdfz" },
+    "ruby" => { flags: "acdhlnpsSvwy", in_place: "i", required: "IrCEF", rest: "xWKT", octal: "0" },
+    "perl" => { flags: "acnpsStTuUvwW", in_place: "i", required: "IMm", rest: "dDxFC", octal: "0l" },
+    "python" => { flags: "bBdEhiIOPqRsSuvx", module: "m", required: "WX" },
+    "python3" => { flags: "bBdEhiIOPqRsSuvx", module: "m", required: "WX" },
+    "node" => { flags: "vhic", required: "r", long_inline: %w[--eval --print] },
   }.freeze
   # test や build を走らせる command (後ろの語が決まっているものは、その語のときだけ)。
   TASK_COMMANDS = {
@@ -66,12 +80,21 @@ module SkillBehaviorClassifier
     "release" => %w[view list], "run" => %w[view list watch], "workflow" => %w[view list], "label" => %w[list],
     "search" => nil, "status" => nil, "auth" => %w[status],
   }.freeze
+  GH_API_LONG_VALUES = %w[--jq --template --hostname --header --cache --preview].freeze
+  GH_API_LONG_FLAGS = %w[--paginate --include --silent --verbose --slurp].freeze
+
   GIT_WRITE = %w[commit push reset rebase merge cherry-pick revert checkout switch restore clean rm mv add apply
                  am pull fetch init clone update-ref notes gc prune submodule].freeze
   GIT_READ = %w[status ls-files rev-parse blame describe shortlog ls-tree cat-file show-ref for-each-ref rev-list
-                name-rev merge-base version help].freeze
-  # 出力を file に書く option (--output) や、外の program を起動する option を持つ読み取りの subcommand。
-  GIT_READ_WITH_OUTPUT = %w[diff log show grep].freeze
+                name-rev merge-base version help diff log show grep].freeze
+  # git の global option のうち、program の差し替えに関わらないもの。ほかの global option (-c・--config-env・
+  # -p・--paginate・--exec-path など) があれば、少なくとも unknown にする。
+  GIT_GLOBAL_VALUES = %w[-C --git-dir --work-tree --namespace].freeze
+  GIT_GLOBAL_FLAGS = %w[--no-pager -P --no-replace-objects --literal-pathspecs --no-optional-locks --bare].freeze
+  # 読み取りの subcommand でも、外の program を起動しうる option (pager・textconv・外部の diff)。
+  GIT_PROGRAM_OPTIONS = %w[-O --open-files-in-pager --textconv --filters --ext-diff].freeze
+  BRANCH_WRITE_FLAGS = /\A-([dDmMcCfut]|-delete|-move|-copy|-force|-set-upstream|-unset-upstream|-edit-description|-track|-no-track)/.freeze
+  BRANCH_VALUE_FLAGS = %w[--contains --no-contains --merged --no-merged --points-at --sort --format].freeze
 
   def self.max_class(classes)
     classes.compact.max_by { |c| SEVERITY.fetch(c) } || "unknown"
@@ -85,11 +108,10 @@ module SkillBehaviorClassifier
     "unknown"
   end
 
-  # codex の command は `/bin/zsh -lc '<command>'` の形で届く。外側が 1 つの shell の呼び出しだけのときに外す。
   def self.classify_shell(command, depth = 0)
     return "unknown" if depth > MAX_DEPTH || !command.is_a?(String)
 
-    scanned = scan(unwrap(command))
+    scanned = scan(command)
     return "unknown" unless scanned
 
     segments, substitutions = scanned
@@ -100,109 +122,111 @@ module SkillBehaviorClassifier
     "unknown"
   end
 
-  # 外すのは、語がちょうど shell・-c (-lc)・script の 3 つのときだけ (後ろに別の command や redirect が続く形は外さず、
-  # 部分ごとに区分する)。
-  def self.unwrap(command)
-    words = Shellwords.split(command)
-    words.length == 3 && SHELLS.include?(File.basename(words[0])) && words[1].match?(/\A-l?c\z/) ? words[2] : command
-  rescue ArgumentError
-    command
-  end
-
-  # 引用 (' と ")・command の置き換え ($(…) と `…`)・括弧を文脈の stack で追って読む。
+  # --- scanner ---------------------------------------------------------------------------
   # 戻り値は [部分の配列, 一番外の置き換えの中身の配列] で、部分は [原文, 伏せた写し]。伏せた写しは、一番外の文脈の
   # 字だけを残し (引用の記号と $( ) は残す)、引用と置き換えの中身を空白にする (redirect を外の文脈でだけ探すため)。
-  # 引用や置き換えが閉じなければ nil。
+  # comment は捨て、here document の本文は data として読み飛ばす。引用・置き換え・here document が閉じなければ nil。
+
   def self.scan(cmd)
-    segs = []
-    subs = []
-    raw = +""
-    masked = +""
-    stack = [:top]
-    sub_start = nil
+    st = { segs: [], subs: [], raw: +"", masked: +"", stack: [:top], sub_start: nil, heredocs: [] }
     i = 0
     while i < cmd.length
-      ch = cmd[i]
-      nxt = cmd[i + 1]
-      ctx = stack.last
-      top = stack.length == 1
-      if ctx == :sq
-        stack.pop if ch == "'"
-        raw << ch
-        masked << (stack.length == 1 ? ch : " ")
-      elsif ctx == :tick
-        if ch == "\\" && nxt
-          raw << ch << nxt
-          masked << "  "
-          i += 2
-          next
-        end
-        if ch == "`"
-          stack.pop
-          if outermost_sub?(stack)
-            subs << cmd[(sub_start + 1)...i]
-            sub_start = nil
-          end
-        end
-        raw << ch
-        masked << (stack.length == 1 ? ch : " ")
-      elsif ch == "\\" && nxt
-        raw << ch << nxt
-        masked << "  "
-        i += 2
-        next
-      elsif ch == "$" && nxt == "("
-        sub_start = i + 1 if outermost_sub?(stack)
-        stack.push(:sub)
-        raw << ch << nxt
-        masked << (top ? "$(" : "  ")
-        i += 2
-        next
-      elsif ch == "`"
-        sub_start = i if outermost_sub?(stack)
-        stack.push(:tick)
-        raw << ch
-        masked << (top ? ch : " ")
-      elsif ctx == :dq
-        stack.pop if ch == '"'
-        raw << ch
-        masked << (stack.length == 1 ? ch : " ")
-      elsif ch == "'" || ch == '"'
-        stack.push(ch == "'" ? :sq : :dq)
-        raw << ch
-        masked << (top ? ch : " ")
-      elsif ch == "(" && ctx != :top
-        stack.push(:paren)
-        raw << ch
-        masked << " "
-      elsif ch == ")" && (ctx == :sub || ctx == :paren)
-        stack.pop
-        if ctx == :sub && outermost_sub?(stack)
-          subs << cmd[(sub_start + 1)...i]
-          sub_start = nil
-        end
-        raw << ch
-        masked << (stack.length == 1 ? ch : " ")
-      elsif top && separator_at?(cmd, masked, i)
-        segs << [raw, masked]
-        raw = +""
-        masked = +""
-        i += 1 if (ch == "&" || ch == "|") && nxt == ch
-      else
-        raw << ch
-        masked << (top ? ch : " ")
-      end
-      i += 1
+      i = scan_step(cmd, i, st)
+      return nil if i.nil?
     end
-    return nil unless stack == [:top]
+    return nil unless st[:stack] == [:top] && st[:heredocs].empty?
 
-    segs << [raw, masked]
-    [segs.reject { |r, _| r.strip.empty? }, subs]
+    st[:segs] << [st[:raw], st[:masked]]
+    [st[:segs].reject { |r, _| r.strip.empty? }, st[:subs]]
+  end
+
+  # 1 字 (か 1 つの記号) を読み、次の位置を返す。読めない形なら nil。
+  def self.scan_step(cmd, i, st)
+    ch = cmd[i]
+    nxt = cmd[i + 1]
+    stack = st[:stack]
+    ctx = stack.last
+    top = stack.length == 1
+    if ctx == :sq
+      stack.pop if ch == "'"
+      return emit(st, ch, stack.length == 1, i + 1)
+    end
+    if ctx == :ansi
+      return emit(st, ch + nxt, false, i + 2) if ch == "\\" && nxt
+
+      stack.pop if ch == "'"
+      return emit(st, ch, stack.length == 1, i + 1)
+    end
+    if ctx == :tick
+      return emit(st, ch + nxt, false, i + 2) if ch == "\\" && nxt
+
+      close_sub(cmd, i, st) if ch == "`" && stack.pop
+      return emit(st, ch, stack.length == 1, i + 1)
+    end
+    return emit(st, ch + nxt, false, i + 2, masked: "  ") if ch == "\\" && nxt
+    return open_sub(cmd, i, st, 2, top ? "$(" : "  ") if ch == "$" && nxt == "("
+    return open_sub(cmd, i, st, 1, top ? "`" : " ", :tick) if ch == "`"
+    if ctx == :dq
+      stack.pop if ch == '"'
+      return emit(st, ch, stack.length == 1, i + 1)
+    end
+    # ここから先は、一番外か、置き換え・括弧の中 (引用の外)
+    if ch == "$" && nxt == "'"
+      stack.push(:ansi)
+      return emit(st, ch + nxt, top, i + 2)
+    end
+    return open_sub(cmd, i, st, 2, "  ") if (ch == "<" || ch == ">") && nxt == "("
+    if ch == "'" || ch == '"'
+      stack.push(ch == "'" ? :sq : :dq)
+      return emit(st, ch, top, i + 1)
+    end
+    return skip_comment(cmd, i) if ch == "#" && (i.zero? || cmd[i - 1].match?(/[\s;&|(]/))
+    if ch == "<" && nxt == "<" && cmd[i + 2] != "<" && (i.zero? || cmd[i - 1] != "<")
+      return nil unless top
+
+      return read_heredoc_operator(cmd, i, st)
+    end
+    if ch == "(" && !top
+      stack.push(:paren)
+      return emit(st, ch, false, i + 1)
+    end
+    if ch == ")" && (ctx == :sub || ctx == :paren)
+      stack.pop
+      close_sub(cmd, i, st) if ctx == :sub
+      return emit(st, ch, stack.length == 1, i + 1)
+    end
+    return split_at(cmd, i, st) if top && separator_at?(cmd, st[:masked], i)
+
+    emit(st, ch, top, i + 1)
+  end
+
+  def self.emit(st, text, visible, next_i, masked: nil)
+    st[:raw] << text
+    st[:masked] << (masked || (visible ? text : " " * text.length))
+    next_i
+  end
+
+  def self.open_sub(cmd, i, st, width, masked, kind = :sub)
+    st[:sub_start] = i + width if outermost_sub?(st[:stack])
+    st[:stack].push(kind)
+    emit(st, cmd[i, width], false, i + width, masked: masked)
+  end
+
+  def self.close_sub(cmd, i, st)
+    return unless outermost_sub?(st[:stack])
+
+    st[:subs] << cmd[st[:sub_start]...i]
+    st[:sub_start] = nil
   end
 
   # 一番外の置き換えか (stack の中に、まだ置き換えが開いていない)。
   def self.outermost_sub?(stack)
     stack.none? { |c| c == :sub || c == :tick }
+  end
+
+  def self.skip_comment(cmd, i)
+    j = cmd.index("\n", i)
+    j || cmd.length
   end
 
   # 一番外の文脈の区切り。>& と &> と >| の & と | は redirect の一部として区切りにしない。
@@ -215,8 +239,65 @@ module SkillBehaviorClassifier
     false
   end
 
+  def self.split_at(cmd, i, st)
+    st[:segs] << [st[:raw], st[:masked]]
+    st[:raw] = +""
+    st[:masked] = +""
+    ch = cmd[i]
+    j = (ch == "&" || ch == "|") && cmd[i + 1] == ch ? i + 2 : i + 1
+    return j unless ch == "\n" && !st[:heredocs].empty?
+
+    skip_heredoc_bodies(cmd, j, st)
+  end
+
+  # `<<` (と `<<-`) の後の区切りの語を読み、改行の後の本文を読み飛ばすために覚える。区切りの語は、bash と同じく
+  # 引用と \ を外した語にする (外さないと、本文を bash より長く読み飛ばして、後ろの command を隠しうる)。
+  def self.read_heredoc_operator(cmd, i, st)
+    j = i + 2
+    dash = cmd[j] == "-"
+    j += 1 if dash
+    j += 1 while cmd[j] == " " || cmd[j] == "\t"
+    word = +""
+    while j < cmd.length && !" \t\n;&|<>()".include?(cmd[j])
+      if cmd[j] == "'" || cmd[j] == '"'
+        close = cmd.index(cmd[j], j + 1)
+        return nil unless close
+
+        word << cmd[(j + 1)...close]
+        j = close + 1
+      elsif cmd[j] == "\\" && j + 1 < cmd.length
+        word << cmd[j + 1]
+        j += 2
+      else
+        word << cmd[j]
+        j += 1
+      end
+    end
+    return nil if word.empty?
+
+    st[:heredocs] << [word, dash]
+    emit(st, cmd[i...j], true, j)
+  end
+
+  def self.skip_heredoc_bodies(cmd, j, st)
+    st[:heredocs].each do |word, dash|
+      loop do
+        return nil if j >= cmd.length
+
+        e = cmd.index("\n", j) || cmd.length
+        line = cmd[j...e]
+        j = e + 1
+        break if (dash ? line.sub(/\A\t+/, "") : line) == word
+      end
+    end
+    st[:heredocs].clear
+    [j, cmd.length].min
+  end
+
+  # --- 部分ごとの区分 ----------------------------------------------------------------------
+
   # 伏せた写しの中の、出力の redirect の区分の列。fd の複製 (>&2・2>&1・>&-) と /dev/null は書き込みに数えない。
-  # 先が読めない形 (process の置き換え >(…) など) は unknown。
+  # 先が読めない形は unknown。
   def self.redirect_classes(masked)
     out = []
     i = 0
@@ -244,11 +325,33 @@ module SkillBehaviorClassifier
     rescue ArgumentError
       return max_class(classes + ["unknown"])
     end
-    # redirect の語 (>file・2>&1 など) は command の引数ではないので外す
-    words = words.reject { |w| w.match?(/\A\d*[<>]|\A&>/) }
-    words = words.drop_while { |w| w.match?(/\A[A-Za-z_][A-Za-z0-9_]*=/) || PREFIX_WORDS.include?(w) }
-    classes << (words.empty? || %w[} fi done].include?(words.first) ? "read" : classify_words(words, depth))
-    max_class(classes)
+    # redirect の語 (>file・2>&1・<<EOF など) と here document の区切りの語は command の引数ではないので外す
+    words = drop_redirect_words(words)
+    prefix = words.take_while { |w| w.match?(ASSIGNMENT) || PREFIX_WORDS.include?(w) }
+    words = words.drop(prefix.length)
+    return max_class(classes + ["read"]) if words.empty? || %w[} fi done].include?(words.first)
+
+    cls = classify_words(words, depth)
+    # 環境変数 (PAGER・GIT_EXTERNAL_DIFF・RUBYOPT など) は program を差し替えうる
+    cls = max_class([cls, "unknown"]) if prefix.any? { |w| w.match?(ASSIGNMENT) }
+    max_class(classes + [cls])
+  end
+
+  ASSIGNMENT = /\A[A-Za-z_][A-Za-z0-9_]*=/.freeze
+
+  def self.drop_redirect_words(words)
+    out = []
+    skip = false
+    words.each do |w|
+      if skip
+        skip = false
+      elsif w.match?(/\A\d*(>>?|<<-?|<|>&|<&|>\|)\z|\A&>>?\z/)
+        skip = true
+      elsif !w.match?(/\A(\d*[<>]|&>)/)
+        out << w
+      end
+    end
+    out
   end
 
   def self.classify_words(words, depth)
@@ -273,20 +376,20 @@ module SkillBehaviorClassifier
     read_with_args(name, args, depth)
   end
 
-  # 引数の形を確かめてから read にする command。当てはまらなければ unknown。
+  # 引数の形を確かめてから read にする command。spec で読めない形や、ここに無い command は unknown。
   def self.read_with_args(name, args, depth)
     case name
     when "sort"
-      return "unknown" if args.any? { |a| a.start_with?("--compress-program") }
-      return "file-write" if args.any? { |a| a.start_with?("--output") || short_cluster_has?(a, "o") }
+      opts, = parse_options(args, SORT_SPEC)
+      return "unknown" if opts.nil? || opts.any? { |o, _| o == "--compress-program" }
 
-      "read"
-    when "uniq" then positional(args).length >= 2 ? "file-write" : "read"
-    when "xxd" then positional(args).length >= 2 ? "file-write" : "read"
-    when "tree" then args.include?("-o") ? "file-write" : "read"
+      opts.any? { |o, _| %w[-o --output].include?(o) } ? "file-write" : "read"
+    when "uniq"
+      opts, pos = parse_options(args, UNIQ_SPEC)
+      return "unknown" if opts.nil?
+
+      pos.length >= 2 ? "file-write" : "read"
     when "rg" then args.any? { |a| a.start_with?("--pre") } ? "unknown" : "read"
-    when "file" then args.any? { |a| short_cluster_has?(a, "C") } ? "unknown" : "read"
-    when "date" then args.all? { |a| a.start_with?("+") || a == "-u" } ? "read" : "unknown"
     when "sed" then sed_call(args)
     when "awk" then awk_call(args)
     when "find" then find_call(args, depth)
@@ -294,19 +397,62 @@ module SkillBehaviorClassifier
     end
   end
 
-  def self.short_cluster_has?(arg, letter)
-    arg.match?(/\A-[A-Za-z0-9]+\z/) && arg[1..].include?(letter)
-  end
-
-  def self.positional(args)
-    args.reject { |a| a.start_with?("-") }
+  # option を spec で読む。戻り値は [option の配列 ([名前, 値])、位置引数の配列]。`-` は位置引数 (標準入力・出力)。
+  # spec に無い option があれば nil。GNU の慣習どおり、位置引数の後の option も読む (`--` の後は位置引数だけ)。
+  def self.parse_options(args, spec)
+    opts = []
+    pos = []
+    i = 0
+    while i < args.length
+      a = args[i]
+      if a == "--"
+        pos.concat(args[(i + 1)..])
+        break
+      elsif a == "-" || !a.start_with?("-")
+        pos << a
+      elsif a.start_with?("--")
+        name, val = a.split("=", 2)
+        if spec[:long_flags].include?(name) && val.nil?
+          opts << [name, nil]
+        elsif spec[:long_values].include?(name)
+          if val.nil?
+            i += 1
+            val = args[i]
+          end
+          opts << [name, val]
+        else
+          return [nil, nil]
+        end
+      else
+        j = 1
+        while j < a.length
+          c = a[j]
+          if spec[:flags].include?(c)
+            opts << ["-#{c}", nil]
+            j += 1
+          elsif spec[:values].include?(c)
+            val = a[(j + 1)..]
+            if val.empty?
+              i += 1
+              val = args[i]
+            end
+            opts << ["-#{c}", val]
+            j = a.length
+          else
+            return [nil, nil]
+          end
+        end
+      end
+      i += 1
+    end
+    [opts, pos]
   end
 
   # sed: in-place (-i) は file-write。script は、行の範囲や /正規表現/ の p (表示) だけのときに read。w・W・e の
-  # command や置換などは中身を読み切れないので unknown。-f (script の file) も unknown。
+  # command や置換などは中身を読み切れないので unknown。-f (script の file) と知らない option も unknown。
   SED_ADDRESS = %r{(?:\d+|\$|/[^/]*/)}.freeze
   SED_PRINT = /\A\s*(?:#{SED_ADDRESS}(?:\s*,\s*#{SED_ADDRESS})?)?\s*p\s*\z/.freeze
-  SED_FLAGS = %w[-n -E -r -u -z -s --quiet --silent --posix --debug].freeze
+  SED_LONG_FLAGS = %w[--quiet --silent --posix --debug].freeze
 
   def self.sed_call(args)
     scripts = []
@@ -321,10 +467,8 @@ module SkillBehaviorClassifier
         next
       elsif a.start_with?("--expression=")
         scripts << a.delete_prefix("--expression=")
-      elsif a == "-f" || a.start_with?("--file")
-        return "unknown"
-      elsif a.start_with?("-")
-        return "unknown" unless SED_FLAGS.include?(a) || a.match?(/\A-[nEruzs]+\z/)
+      elsif a.start_with?("-") && a != "-"
+        return "unknown" unless SED_LONG_FLAGS.include?(a) || a.match?(/\A-[nEruzs]+\z/)
       elsif scripts.empty?
         scripts << a
       end
@@ -335,26 +479,24 @@ module SkillBehaviorClassifier
     scripts.all? { |s| s.split(";").all? { |part| part.match?(SED_PRINT) } } ? "read" : "unknown"
   end
 
-  # awk: 表示だけの program は read。出力の redirect・pipe・system・getline・close を含むもの、-f の program は unknown。
+  # awk: -F と -v のほかの option (-f・-e・長い option) は unknown。表示だけの program は read。出力の redirect・pipe・
+  # system・getline・close を含む program は unknown。
   def self.awk_call(args)
     i = 0
-    program = nil
     while i < args.length
       a = args[i]
-      return "unknown" if a == "-f" || a.start_with?("-f")
       if %w[-F -v].include?(a)
         i += 2
         next
-      elsif a.start_with?("-")
+      elsif a.start_with?("-F") || a.start_with?("-v")
         i += 1
         next
+      elsif a.start_with?("-")
+        return "unknown"
       end
-      program = a
-      break
+      return a.match?(/[>|]|system|getline|close/) ? "unknown" : "read"
     end
-    return "unknown" if program.nil? || program.match?(/[>|]|system|getline|close/)
-
-    "read"
+    "unknown"
   end
 
   # find: -delete と -fprint 系は file-write。-exec 系は、続く command (; か + まで) を区分する。
@@ -408,8 +550,9 @@ module SkillBehaviorClassifier
     rest.empty? ? "read" : classify_words(rest, depth)
   end
 
-  # interpreter: 短い option の束を 1 字ずつ読み、inline の code の字があれば unknown、in-place (-i) は file-write、
-  # python の -m は exec。値をとる字の後ろは値として読み飛ばす。option の後に file があれば exec、無ければ unknown。
+  # interpreter: 最初の位置引数 (script) までの option を 1 字ずつ読む (INTERPRETERS の spec)。in-place は file-write、
+  # python の -m は exec。知らない字 (inline の code の字を含む) があれば unknown。option の後に script があれば exec、無ければ
+  # (標準入力から読む) unknown。
   def self.interpreter_call(name, args)
     spec = INTERPRETERS.fetch(name)
     i = 0
@@ -425,19 +568,39 @@ module SkillBehaviorClassifier
         i += 1
         next
       end
-      skip_next = false
-      a[1..].each_char.with_index do |c, k|
-        return "unknown" if spec[:inline].include?(c)
-        return "file-write" if spec[:in_place] && c == "i"
-        return "exec" if spec[:module] == c
-        next unless spec[:value].include?(c)
+      cls, consumed_next = interpreter_cluster(a, spec)
+      return cls if cls
 
-        skip_next = k == a.length - 2
-        break
-      end
-      i += skip_next ? 2 : 1
+      i += consumed_next ? 2 : 1
     end
     args[i] && args[i] != "-" ? "exec" : "unknown"
+  end
+
+  # 短い option の束 1 つを読む。戻り値は [区分 (決まったときだけ), 次の語を値として読んだか]。
+  def self.interpreter_cluster(a, spec)
+    j = 1
+    while j < a.length
+      c = a[j]
+      return ["file-write", false] if spec[:in_place]&.include?(c)
+      return ["exec", false] if spec[:module] == c
+      return [nil, j == a.length - 1] if spec[:required].include?(c)
+      return [nil, false] if spec[:rest].to_s.include?(c)
+
+      if spec[:octal].to_s.include?(c)
+        j += 1
+        if c == "0" && a[j]&.match?(/[xX]/)
+          j += 1
+          j += 1 while a[j]&.match?(/\h/)
+        else
+          j += 1 while a[j]&.match?(/[0-7]/)
+        end
+        next
+      end
+      return ["unknown", false] unless spec[:flags].include?(c)
+
+      j += 1
+    end
+    [nil, false]
   end
 
   def self.agent_launch?(name, args)
@@ -464,43 +627,86 @@ module SkillBehaviorClassifier
     "unknown"
   end
 
-  # gh api: method を明示すればそれに従い、無ければ field の指定がある呼び出しを POST とみなす (gh の既定)。
+  # gh api: option を 1 つずつ読み (短い option の束を含む)、method を明示すればそれに従う。無ければ field の指定が
+  # ある呼び出しを POST とみなす (gh の既定)。graphql は mutation を含めば github-write、ほかは query か読めないので
+  # unknown。知らない option は unknown。
   def self.classify_gh_api(args)
     method = nil
     fields = false
-    args.each_with_index do |a, i|
-      if %w[-X --method].include?(a)
-        method = args[i + 1]
-      elsif a.start_with?("--method=")
-        method = a.delete_prefix("--method=")
-      elsif a.match?(/\A-X./)
-        method = a[2..]
-      elsif %w[-f -F --field --raw-field --input].include?(a) || a.match?(/\A(--field=|--raw-field=|--input=|-[fF].)/)
-        fields = true
+    pos = []
+    i = 0
+    while i < args.length
+      a = args[i]
+      if a.start_with?("--")
+        name, val = a.split("=", 2)
+        if name == "--method"
+          method = val || args[i += 1]
+        elsif %w[--field --raw-field --input].include?(name)
+          fields = true
+          i += 1 if val.nil?
+        elsif GH_API_LONG_VALUES.include?(name)
+          i += 1 if val.nil?
+        elsif !GH_API_LONG_FLAGS.include?(name)
+          return "unknown"
+        end
+      elsif a.start_with?("-") && a.length > 1
+        j = 1
+        while j < a.length
+          c = a[j]
+          last = j == a.length - 1
+          case c
+          when "i"
+            j += 1
+            next
+          when "f", "F"
+            fields = true
+          when "X"
+            method = last ? args[i += 1] : a[(j + 1)..]
+            break
+          when "q", "t", "H", "p"
+            nil
+          else
+            return "unknown"
+          end
+          i += 1 if last
+          break
+        end
+      else
+        pos << a
       end
+      i += 1
     end
+    return args.any? { |a| a.include?("mutation") } ? "github-write" : "unknown" if pos.first == "graphql"
     return method.to_s.upcase == "GET" ? "read" : "github-write" if method
 
     fields ? "github-write" : "read"
   end
 
-  BRANCH_WRITE_FLAGS = /\A-([dDmMcCfut]|-delete|-move|-copy|-force|-set-upstream|-unset-upstream|-edit-description|-track|-no-track)/.freeze
-  BRANCH_VALUE_FLAGS = %w[--contains --no-contains --merged --no-merged --points-at --sort --format].freeze
-
   def self.classify_git(args)
     i = 0
-    config_override = false
+    floor = false
     while i < args.length && args[i].start_with?("-")
-      config_override ||= args[i] == "-c"
-      i += %w[-C -c --git-dir --work-tree --namespace].include?(args[i]) ? 2 : 1
+      a = args[i]
+      if GIT_GLOBAL_VALUES.include?(a)
+        i += 2
+      elsif a.start_with?("--git-dir=", "--work-tree=", "--namespace=") || GIT_GLOBAL_FLAGS.include?(a)
+        i += 1
+      else
+        # program を差し替えうる (か、知らない) global option
+        floor = true
+        i += %w[-c --config-env --exec-path].include?(a) ? 2 : 1
+      end
     end
     sub = args[i]
     rest = args[(i + 1)..] || []
     return "unknown" if sub.nil?
 
     cls = git_subcommand(sub, rest)
-    # -c は pager や外部の diff などの program を差し替えうるので、少なくとも unknown にする
-    config_override ? max_class([cls, "unknown"]) : cls
+    if cls == "read"
+      cls = "file-write" if rest.any? { |a| a.start_with?("--output") }
+      cls = max_class([cls, "unknown"]) if rest.any? { |a| GIT_PROGRAM_OPTIONS.include?(a.split("=", 2).first) }
+    end
+    floor ? max_class([cls, "unknown"]) : cls
   end
 
   def self.git_subcommand(sub, rest)
@@ -508,11 +714,6 @@ module SkillBehaviorClassifier
     return "read" if GIT_READ.include?(sub)
 
     case sub
-    when *GIT_READ_WITH_OUTPUT
-      return "file-write" if rest.any? { |a| a.start_with?("--output") }
-      return "unknown" if rest.any? { |a| %w[-O --open-files-in-pager --ext-diff].include?(a) || a.start_with?("-O", "--open-files-in-pager=") }
-
-      "read"
     when "branch" then git_branch(rest)
     when "tag"
       return "git-write" if rest.any? { |a| a.match?(/\A-([dafsmFu]|-delete|-annotate|-force|-sign|-message|-file)/) }
@@ -520,13 +721,15 @@ module SkillBehaviorClassifier
       rest.empty? || rest.any? { |a| %w[-l --list].include?(a) } ? "read" : "git-write"
     when "stash" then %w[list show].include?(rest[0]) ? "read" : "git-write"
     when "worktree" then rest[0] == "list" ? "read" : "git-write"
-    when "remote" then rest.empty? || %w[-v --verbose show get-url].include?(rest[0]) ? "read" : "git-write"
+    when "remote"
+      verb = rest.drop_while { |a| %w[-v --verbose].include?(a) }.first
+      verb.nil? || %w[show get-url].include?(verb) ? "read" : "git-write"
     when "reflog" then rest.empty? || %w[show exists].include?(rest[0]) || rest[0].start_with?("-") ? "read" : "git-write"
     when "config"
       return "git-write" if rest.any? { |a| a.match?(/\A--(add|unset|unset-all|replace-all|rename-section|remove-section|edit)\z|\A-e\z/) }
       return "read" if rest.any? { |a| a.match?(/\A--(get|get-all|get-regexp|get-urlmatch|list|show-origin|show-scope)\z|\A-l\z/) }
 
-      positional(rest).length == 1 ? "read" : "git-write"
+      rest.reject { |a| a.start_with?("-") }.length == 1 ? "read" : "git-write"
     else "unknown"
     end
   end

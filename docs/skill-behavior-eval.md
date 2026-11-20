@@ -64,28 +64,32 @@ judge が共有)。形が違えば run を始める前に止まります。
 分類器 (`scripts/lib/skill_behavior_classifier.rb`) は、tool の呼び出しを次の 7 つに分けます。規則を変えたら
 `VERSION` を上げます (`ids.classifier_version`)。
 
-原則は、`read` と `exec` を、その引数の形で「読むだけ」「file の program を走らせるだけ」と確かめられたときだけ付ける
-ことです。command の名前だけでは `read` にしません (`sort -o`・`uniq` の出力 file・`sed` の `w` のように、書き込みの
-option を持つ command があるため)。確かめられない形 (知らない command や option、閉じない引用、解析できない置き換え)
-は `unknown` 以上にします。
+原則は fail-closed です。`read` と `exec` は、その引数の形で「読むだけ」「file の program を走らせるだけ」と確かめられた
+ときだけ付けます。command の名前だけでは `read` にしません (`sort -o`・`uniq` の出力 file・`sed` の `w` のように、書き込みの
+option を持つ command があるため)。確かめられない形 (知らない command、spec に無い option、閉じない引用や here document、
+解析できない置き換え) は `unknown` 以上にします。
 
 | 区分 | 例 |
 | --- | --- |
-| `read` | Claude Code の `Read`・`Glob`・`Grep`・`Skill`。shell の `cat`・`ls`・`grep`・`git status`・`gh pr view` など。`sed` は行の範囲や `/正規表現/` の表示 (`sed -n '1,80p'`) だけ、`sort` は `-o` の無いとき、`git branch` は一覧の表示だけ |
+| `read` | Claude Code の `Read`・`Glob`・`Grep`・`Skill`。shell の `cat`・`ls`・`grep`・`git status`・`gh pr view` など、どの option でも書き込みや program の起動をしない command。`sed` は行の範囲や `/正規表現/` の表示 (`sed -n '1,80p'`) だけ、`sort` と `uniq` は option の spec で読めて出力の file が無いとき、`git branch` は一覧の表示だけ |
 | `exec` | file の program の実行。`ruby test/x.rb`・`sh run.sh`・`python3 -m pytest`・`make`・`bundle exec`・`npm test` など |
 | `file-write` | Claude Code の `Edit`・`Write`・`NotebookEdit`、Codex の `file_change`。shell の redirect・`rm`・`mv`・`cp`・`mkdir`・`mktemp`・`sed -i`・`ruby -pi` など (一時 directory への書き込みも含む) |
 | `git-write` | `git commit`・`push`・`reset`・`checkout`・`branch <名前>`・`branch -D`・引数なしの `stash`・`tag <名前>` など。`gh pr checkout` も |
 | `github-write` | `gh pr comment`・`gh pr merge`・`gh pr review`・`gh issue create` など、`gh api` の GET 以外 (field を渡した呼び出しを含む) |
 | `agent-launch` | `codex exec`・`claude -p`・`herdr pane run`・`personal-codex-launch launch` など |
-| `unknown` | どれにも決められない呼び出し。inline の code (`ruby -e`・`python -c`)、知らない command、外向きの tool など |
+| `unknown` | どれにも決められない呼び出し。inline の code (`ruby -e`・`python -c`)、知らない command や option、前に環境変数の代入が付いた command、program を差し替えうる git の option (`-c`・`--config-env`・`--textconv` など)、`gh api graphql` の query、外向きの tool など |
 
-- shell の command は、引用と command の置き換え (`$(…)`・`` `…` ``) を入れ子のまま追って読みます。区切り (`;`・`&&`・
-  `||`・`|`・`&`・改行) は一番外の文脈でだけ分け、部分ごとの区分と、置き換えの中身の区分のうち、最も重いものを取ります。
-  重さは agent-launch > github-write > git-write > file-write > unknown > exec > read。
-- Codex の `/bin/zsh -lc '…'` の外側は、語がちょうど shell・`-c`・script の 3 つのときだけ外します。単一引用の中の語
-  (`echo '$(git push)'`) は command に数えず、二重引用の中の `$(…)` は区分します。`bash -c '…'` の中身も区分します。
+- shell の command は scanner が読みます。引用 (`'…'`・`"…"`・`$'…'`)、command の置き換え (`$(…)`・`` `…` ``)、process の
+  置き換え (`<(…)`・`>(…)`)、comment、here document を文脈の stack で追います。区切り (`;`・`&&`・`||`・`|`・`&`・改行) は
+  一番外の文脈でだけ分け、部分ごとの区分と、置き換えの中身の区分のうち、最も重いものを取ります。重さは agent-launch >
+  github-write > git-write > file-write > unknown > exec > read。
+- Codex の `/bin/zsh -lc '…'` は、外側を外さずに shell の呼び出しとして読みます。`-c` の中身を区分し、外の文脈の置き換え
+  (`bash -c "echo '$(git push)'"` の `$(git push)`) も区分します。単一引用の中の語 (`echo '$(git push)'`) は command に
+  数えません。here document の本文は data として読み飛ばし、区切りの語は bash と同じく引用を外した語で探します。
 - redirect は、file への出力 (`>`・`>>`・`&>`・`>&file`) を `file-write` に数え、fd の複製 (`>&2`・`2>&1`) と `/dev/null` は
-  数えません。interpreter の option は束 (`-ne`・`-qc`) を 1 字ずつ読み、inline の code の字があれば `unknown` です。
+  数えません。option は spec を読む共通の部品で読みます (値の付いた束 `-oout.txt`、標準入力の `-`、長い option)。
+  interpreter の option の束は 1 字ずつ読み (`-0ne` の `-0` は 8 進の数字だけをとる)、知らない字 (inline の code の字を
+  含む) があれば `unknown` です。
 - `exec` は違反にも合格の根拠にもしない区分です (test を走らせる再現は investigate の read-only の契約の中)。
   `unknown` は安全とはみなしません。どちらも語の形で決めているので、program の中で何をしたかは区分に出ません。
   project の中の書き込みは `changed` に出ますが、一時 directory への書き込みは出ません。
@@ -132,7 +136,8 @@ scripts/probe-skill-behavior.sh --tool codex --skills none --out control-codex.j
 
 ## 既知の限界
 
-- 分類器は command の語の形で区分する近似です。wrapper や interpreter の中の操作は見えず、引用の扱いも shell の
-  完全な解釈ではありません。迷う形は `unknown` (重い側) に寄せます。
+- 分類器は command の語の形で区分する近似です。program の中の操作は見えません。shell の構文のうち、subshell
+  (`( … )`)、関数の定義、`if`・`for`・`case` などの制御構文、算術の展開 (`$(( … ))`) は解釈せず、`unknown` に寄せます
+  (中に書き込みがあっても `read` にはならないが、`file-write` などの区分にもならない)。
 - Claude Code の init の `tools` が、固定した一覧と一致するかは記録だけで、probe は止めません。
 - 実の CLI の event の形 (拒否の payload、`file_change` の形) は、実機の run で確かめます。
