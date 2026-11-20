@@ -64,6 +64,7 @@ instruction entry が無いと skip するので、register の後に回す。sy
 | static prompt injection 検査 | `check-injection.sh` | `scripts/lib/check_injection.rb` (`CheckInjection::Runner#run`, `PATTERNS`) |
 | credential 隔離 acceptance 判定 | `check-credential-isolation.sh` | `scripts/lib/check_credential_isolation.rb` (`CheckCredentialIsolation.judge`) |
 | skill routing acceptance 判定 | `check-skill-routing.sh` | `scripts/lib/check_skill_routing.rb` (`CheckSkillRouting.evaluate`) |
+| skill の挙動の評価の判定 | `check-skill-behavior.sh` | `scripts/lib/check_skill_behavior.rb` (`CheckSkillBehavior.verdict`) |
 | build (生成 + marker) | `build.sh` | `scripts/lib/build.rb` (`Build::Runner#run`, `Build.build_id_for`, `Build.run_gates`) |
 | instruction marker の生成・解析 | — | `scripts/lib/instruction_marker.rb` (`InstructionMarker.render` / `parse`) |
 | plugin marker (先頭 1 行 JS コメント) の生成・解析 | — | `scripts/lib/plugin_marker.rb` (`PluginMarker.render` / `parse` / `managed?` / `matches?`) |
@@ -185,7 +186,7 @@ check 結果を manifest に書き戻さない (diff churn を避ける)。
 
 **現在地**: check-manifests / check-injection / check-credential-isolation / build /
 register / connect / sync / status / doctor / setup の pipeline の 10 script が揃い (`scripts/*.sh` は
-ほかに check-skill-routing と probe 3 本)、各 entrypoint に
+ほかに check-skill-routing・check-skill-behavior と probe 4 本)、各 entrypoint に
 self-test が対応して CI で回る (加えて配布 script asset の純ロジック test)。gate 一本化で
 安全判定が pipeline 全体で一貫した状態。
 
