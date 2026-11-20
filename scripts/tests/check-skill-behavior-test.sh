@@ -2,7 +2,8 @@
 # scripts/lib/check_skill_behavior.rb の self-test (#369)。
 # - 判定: 違反 (forbid の区分の呼び出しは結果を問わない、allowed_changes の外の差分、打ち切った run の違反)、評価不能
 #   (終わり方・未到達・unknown の呼び出し)、正例の達成と未達、exec は中立、exit の優先 (違反と未達 > 評価不能)。
-# - 入力の検査: 形・未知の key・case set の外の case・coverage・重複・index の欠け・case ごとの数・ids.repeat。
+# - 入力の検査: 形・未知の key・case set の外の case・coverage・重複・index の欠け・case ごとの数・ids.repeat・
+#   ids の key と型。入力の file の誤り (場所と中身を出さない)。
 # - 記録した条件の食い違い (run の間の mixed、固定した tool surface、permission の mode)。
 # - baseline との比較の条件 (tool・数・識別子) と、違ってよい差 (source_digest・variant・skills)。
 # - probe の実際の出力 (偽の claude で回した results.json) をそのまま判定できること。
@@ -48,6 +49,8 @@ ids = {
   "source_digest" => "sha256:a", "cases_digest" => "sha256:c", "classifier_version" => 1, "host_version" => "9.9.9",
   "requested_model" => "m", "init_model" => "m", "permission_mode" => "acceptEdits", "repeat" => 1,
   "tool_surface" => { "requested" => %w[Read Edit], "init" => "Edit,Read" },
+  "fixture_digests" => { "f" => "sha256:f" }, "runner_version" => "sha256:r", "effort" => "default",
+  "max_turns" => 12, "timeout" => 600,
 }
 base = { "schema_version" => 1, "tool" => "claude-code", "variant" => "candidate", "skills" => "source",
          "ids" => ids, "runs" => %w[neg pos amb].map { |id| run.call(id) } }
@@ -150,6 +153,21 @@ structural = {
   "index-gap" => [mutate.call { |d| d["ids"].delete("repeat"); d["runs"] = %w[neg pos amb].flat_map { |id| [run.call(id, 1), run.call(id, 3)] } }, nil],
   "uneven" => [mutate.call { |d| d["ids"].delete("repeat"); d["runs"] << run.call("neg", 2) }, nil],
   "repeat-mismatch" => [mutate.call { |d| d["ids"]["repeat"] = 2 }, nil],
+  "ids-unknown-key" => [mutate.call { |d| d["ids"]["note"] = "x" }, nil],
+  "ids-string-not-string" => [mutate.call { |d| d["ids"]["host_version"] = 1 }, nil],
+  "ids-string-empty" => [mutate.call { |d| d["ids"]["init_model"] = "" }, nil],
+  "ids-integer-string" => [mutate.call { |d| d["ids"]["timeout"] = "600" }, nil],
+  "ids-max-turns-zero" => [mutate.call { |d| d["ids"]["max_turns"] = 0 }, nil],
+  "ids-fixture-digests-array" => [mutate.call { |d| d["ids"]["fixture_digests"] = ["sha256:f"] }, nil],
+  "ids-fixture-digests-null" => [mutate.call { |d| d["ids"]["fixture_digests"] = { "f" => nil } }, nil],
+  "ids-surface-string" => [mutate.call { |d| d["ids"]["tool_surface"] = "Read" }, nil],
+  "ids-requested-null" => [mutate.call { |d| d["ids"]["tool_surface"]["requested"] = ["Read", nil] }, nil],
+  "ids-requested-string" => [mutate.call { |d| d["ids"]["tool_surface"] = { "requested" => "Read", "init" => "Task" } }, nil],
+  "ids-requested-empty" => [mutate.call { |d| d["ids"]["tool_surface"] = { "requested" => [], "init" => "" } }, nil],
+  "ids-surface-no-init" => [mutate.call { |d| d["ids"]["tool_surface"].delete("init") }, nil],
+  "ids-surface-extra" => [mutate.call { |d| d["ids"]["tool_surface"]["sandbox"] = "x" }, nil],
+  "ids-init-array" => [mutate.call { |d| d["ids"]["tool_surface"]["init"] = %w[Edit Read] }, nil],
+  "ids-codex-surface-number" => [mutate.call { |d| d["tool"] = "codex"; d["ids"]["tool_surface"] = { "sandbox" => 1 } }, nil],
 }
 structural.each do |label, (data, raw)|
   rc, out, err = judge_run.call(data, raw: raw)
@@ -157,6 +175,42 @@ structural.each do |label, (data, raw)|
 end
 rc, _, err = judge_run.call(structural["duplicate"][0])
 check("重複した run は重複と名指しする: #{err.lines.first}", rc == 2 && err.include?("duplicate run (case neg, index 1)"))
+rc, _, err = judge_run.call(structural["ids-requested-null"][0])
+check("tool の一覧の型の誤りは ids の欄を名指しする: #{err.lines.first}", rc == 2 && err.include?("ids.tool_surface.requested"))
+
+# 入力の file の誤り。どれも exit 2 で、Ruby の例外を外に出さず、渡された場所と file の中身を出力に写さない
+bad_cases = File.join(tmp, "bad-cases.json")
+File.write(bad_cases, "{")
+out, err, st = Open3.capture3("sh", judge, "--cases", bad_cases, "--results", File.join(tmp, "r1.json"))
+check("case set の JSON の誤りは exit 2 (#{st.exitstatus}): #{err.lines.first}",
+      st.exitstatus == 2 && err.start_with?("error: cases: not valid JSON") && !err.include?("ParserError") && out.empty?)
+missing = File.join(tmp, "no-such-dir", "missing.json")
+out, err, st = Open3.capture3("sh", judge, "--cases", missing, "--results", File.join(tmp, "r1.json"))
+check("無い case set は場所を出さずに exit 2 (#{st.exitstatus}): #{err.lines.first}",
+      st.exitstatus == 2 && err.start_with?("error: cases: file not found") && !(out + err).include?(tmp))
+out, err, st = Open3.capture3("sh", judge, "--cases", cases_path, "--results", missing)
+check("無い results は場所を出さずに exit 2 (#{st.exitstatus}): #{err.lines.first}",
+      st.exitstatus == 2 && err.start_with?("error: results: file not found") && !(out + err).include?(tmp))
+good = File.join(tmp, "good.json")
+File.write(good, JSON.generate(base))
+out, err, st = Open3.capture3("sh", judge, "--cases", cases_path, "--results", good, "--baseline", missing)
+check("無い baseline は場所を出さずに exit 2 (#{st.exitstatus}): #{out.lines.grep(/baseline/).first}",
+      st.exitstatus == 2 && out.include?("error: baseline is not comparable: baseline: file not found") && !(out + err).include?(tmp))
+File.write(File.join(tmp, "bad-results.json"), '{"secret-ish": "content-canary"')
+out, err, st = Open3.capture3("sh", judge, "--cases", cases_path, "--results", File.join(tmp, "bad-results.json"))
+check("results の JSON の誤りは中身を出さずに exit 2 (#{st.exitstatus}): #{err.lines.first}",
+      st.exitstatus == 2 && err.start_with?("error: results: not valid JSON") && !(out + err).include?("content-canary"))
+locked = File.join(tmp, "locked.json")
+File.write(locked, JSON.generate(base))
+File.chmod(0o000, locked)
+if File.readable?(locked)
+  puts "skip: 権限で読めない file を作れない (root など)"
+else
+  out, err, st = Open3.capture3("sh", judge, "--cases", cases_path, "--results", locked)
+  check("読めない results は場所を出さずに exit 2 (#{st.exitstatus}): #{err.lines.first}",
+        st.exitstatus == 2 && err.start_with?("error: results: file not readable") && !(out + err).include?(tmp))
+end
+File.chmod(0o600, locked)
 rc, out, = judge_run.call(mutate.call { |d| d["ids"] = {} })
 check("空の ids は検査を通る (形だけの入力)", rc == 0)
 rc, out, = judge_run.call(mutate.call { |d| d["ids"]["repeat"] = 2; d["runs"] = %w[neg pos amb].flat_map { |id| [run.call(id, 1), run.call(id, 2)] } })

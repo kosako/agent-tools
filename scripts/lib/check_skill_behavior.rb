@@ -44,6 +44,12 @@ module CheckSkillBehavior
   # baseline と比べるときに違ってよい識別子 (比べる目的の差。skill の before と after、skill の有無)。
   COMPARE_ALLOWED_IDS = %w[source_digest].freeze
   CLAUDE_PERMISSION_MODE = "acceptEdits"
+  # probe が ids に書く key と、値の形 (probe_skill_behavior.rb の ids)。値が無い key は確かめない (形だけの
+  # results.json を判定する test のため)。在る key は、条件の検査と baseline の比較の前に形を確かめる。
+  ID_STRING_KEYS = %w[source_digest cases_digest runner_version host_version requested_model init_model effort
+                      permission_mode].freeze
+  ID_POSITIVE_INTEGER_KEYS = %w[classifier_version timeout repeat].freeze
+  ID_KEYS = (ID_STRING_KEYS + ID_POSITIVE_INTEGER_KEYS + %w[fixture_digests tool_surface max_turns]).freeze
 
   USAGE = <<~TEXT
     usage: check-skill-behavior.sh --cases <cases.json> --results <results.json> [--baseline <results.json>]
@@ -78,12 +84,19 @@ module CheckSkillBehavior
 
   # --- 入力の検査 ------------------------------------------------------------------------
 
-  def self.read_json(path, label)
-    raise Error, "#{label}: file not found: #{path}" unless File.file?(path)
+  # 誤りの文には、入力の種類と誤りの種類だけを書く (渡された場所と file の中身は、判定の出力に写さない)。
+  def self.read_text(path, label)
+    raise Error, "#{label}: file not found" unless File.file?(path)
 
-    JSON.parse(File.read(path))
-  rescue JSON::ParserError => e
-    raise Error, "#{label}: not valid JSON (#{e.message.lines.first.to_s.strip})"
+    File.read(path)
+  rescue SystemCallError
+    raise Error, "#{label}: file not readable"
+  end
+
+  def self.read_json(path, label)
+    JSON.parse(read_text(path, label))
+  rescue JSON::ParserError
+    raise Error, "#{label}: not valid JSON"
   end
 
   def self.parse_results(data, cases, label)
@@ -98,6 +111,8 @@ module CheckSkillBehavior
     raise Error, "#{label}: variant must be a non-empty string" unless data["variant"].is_a?(String) && !data["variant"].empty?
     raise Error, "#{label}: skills must be source or none" unless %w[source none].include?(data["skills"])
     raise Error, "#{label}: ids must be an object" unless data["ids"].is_a?(Hash)
+
+    validate_ids!(data["ids"], data["tool"], "#{label}: ids")
     raise Error, "#{label}: runs must be an array" unless data["runs"].is_a?(Array)
 
     ids = cases.map { |c| c["id"] }
@@ -111,6 +126,58 @@ module CheckSkillBehavior
     end
     check_coverage!(data, ids, label)
     data
+  end
+
+  def self.validate_ids!(ids, tool, label)
+    extra = ids.keys - ID_KEYS
+    raise Error, "#{label}: unknown key(s): #{extra.join(', ')}" unless extra.empty?
+
+    ID_STRING_KEYS.each do |k|
+      raise Error, "#{label}.#{k} must be a non-empty string" if ids.key?(k) && !name?(ids[k])
+    end
+    ID_POSITIVE_INTEGER_KEYS.each do |k|
+      raise Error, "#{label}.#{k} must be a positive integer" if ids.key?(k) && !positive_integer?(ids[k])
+    end
+    if ids.key?("max_turns") && !(ids["max_turns"].nil? || positive_integer?(ids["max_turns"]))
+      raise Error, "#{label}.max_turns must be a positive integer or null"
+    end
+    if ids.key?("fixture_digests")
+      d = ids["fixture_digests"]
+      unless d.is_a?(Hash) && d.all? { |k, v| name?(k) && name?(v) }
+        raise Error, "#{label}.fixture_digests must be an object of names to digests"
+      end
+    end
+    validate_tool_surface!(ids["tool_surface"], tool, "#{label}.tool_surface") if ids.key?("tool_surface")
+  end
+
+  # claude-code は固定した tool の一覧 (requested) と、init が返した一覧 (init) の 2 つだけを持つ。codex は sandbox
+  # などの名前と値 (文字列か、文字列の配列) を持つ。
+  def self.validate_tool_surface!(s, tool, label)
+    raise Error, "#{label} must be an object" unless s.is_a?(Hash)
+
+    if tool == "claude-code"
+      raise Error, "#{label} must have exactly requested and init" unless s.keys.sort == %w[init requested]
+      unless names?(s["requested"]) && !s["requested"].empty?
+        raise Error, "#{label}.requested must be a non-empty array of tool names"
+      end
+      raise Error, "#{label}.init must be a non-empty string" unless name?(s["init"])
+    else
+      s.each do |k, v|
+        raise Error, "#{label}.#{k} must be a string or an array of strings" unless name?(v) || names?(v)
+      end
+    end
+  end
+
+  def self.name?(v)
+    v.is_a?(String) && !v.empty?
+  end
+
+  def self.names?(v)
+    v.is_a?(Array) && v.all? { |x| name?(x) }
+  end
+
+  def self.positive_integer?(v)
+    v.is_a?(Integer) && v.positive?
   end
 
   def self.validate_run!(r, label, ids)
@@ -272,9 +339,7 @@ module CheckSkillBehavior
       return 0
     end
     opts = parse_argv(argv)
-    raise Error, "cases file not found: #{opts[:cases]}" unless File.file?(opts[:cases])
-
-    cases = C.parse(File.read(opts[:cases]))
+    cases = C.parse(read_text(opts[:cases], "cases"))
     cand = parse_results(read_json(opts[:results], "results"), cases, "results")
     evals = evaluate(cand, cases)
     evals.each { |e| puts format_case(e) }

@@ -168,7 +168,11 @@ run ごとに次のどれかに決めます。network と CLI には触れませ
 - 記録した条件も確かめます。run の間で値が揃わない識別子 (`mixed:`)、Claude Code の init の tool の一覧が固定した一覧と
   違う、permission の mode が `acceptEdits` でない、のどれかがあれば exit 2 です。
 - 入力の誤りは、run を判定せずに exit 2 です。形と未知の key、case set の外の case、全 case の coverage、重複した run、
-  index の欠け、case ごとの run の数の違い、`ids.repeat` との食い違いを見ます。
+  index の欠け、case ごとの run の数の違い、`ids.repeat` との食い違いを見ます。`ids` は、在る key だけを probe が書く型と
+  照らします (未知の key も誤り)。Claude Code の `tool_surface` は、tool の名前の配列の `requested` と、文字列の `init` の
+  2 つだけを持ちます。
+- 誤りの文には、入力の種類 (`cases`・`results`・`baseline`) と誤りの種類だけを書きます。渡された場所と file の中身は
+  出しません。判定の出力は PR などに写すことがあるためです。
 - exit は、違反か未達があれば 1 (評価不能と同居しても 1)、ほかに評価不能か条件の食い違いがあれば 2、すべての run が
   評価でき違反も未達も無ければ 0 です。
 

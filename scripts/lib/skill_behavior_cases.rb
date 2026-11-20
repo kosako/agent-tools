@@ -22,7 +22,11 @@ module SkillBehaviorCases
 
   # text を読み、検査した case の配列を返す。fixtures_root があれば、fixture の dir と reach の path の在否も確かめる。
   def self.parse(text, fixtures_root: nil)
-    data = JSON.parse(text)
+    data = begin
+      JSON.parse(text)
+    rescue JSON::ParserError
+      raise Error, "cases: not valid JSON"
+    end
     raise Error, "cases: top-level must be an object" unless data.is_a?(Hash)
 
     unknown = data.keys - %w[schema_version cases]
