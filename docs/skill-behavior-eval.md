@@ -113,7 +113,10 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
   `-l` (出力を `pr` に通す) は `unknown` です。標準の bin の directory の外の path が付いた command の名前 (`./cat`・`lib/grep`) は、名前と違う
   program を実行しうるので `unknown` 以上です。`sudo` は前置きとして読み飛ばしません。`python3 -m` の exec は test の
   module (`pytest`・`unittest`・`doctest`) だけです。test や build の command (`make`・`rake`・`npm run` など) の exec は
-  option の無い形だけで、option のある形 (`rake -e` の inline の code、`make --eval`・`make -f`) は `unknown` です。
+  引数が target の名前の形 (英数字と `_ . / : @ + -`) だけのときで、option のある形 (`rake -e` の inline の code、
+  `make --eval`・`make -f`) と、`=` や `$` を含む引数 (`make 'X:=$(shell …)'` の変数の代入) は `unknown` です。shell と
+  interpreter に渡す script の path が標準入力 (`-`) か `/dev`・`/proc` の下 (`/dev/stdin`・`/dev/fd/0` など) なら、file の
+  program ではないので `unknown` です。
 - 代入だけの部分 (`X=1`) も `read` にしません。zsh は整数の変数 (`RANDOM`・`COLUMNS`・`OPTIND` など) への代入で添字を
   評価し、中の置き換えを実行するためです。
 - `exec` は違反にも合格の根拠にもしない区分です (test を走らせる再現は investigate の read-only の契約の中)。

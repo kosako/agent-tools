@@ -223,6 +223,15 @@ shell = {
   "make -f other.mk" => "unknown",
   "rake test" => "exec",
   "npm run build" => "exec",
+  # review の round 8 の指摘 (#717)
+  "make 'PROBE:=$(shell touch out)'" => "unknown",
+  "make X=1 test" => "unknown",
+  "rake db:migrate" => "exec",
+  "go test ./..." => "exec",
+  "echo 'touch out' | sh /dev/stdin" => "unknown",
+  "bash /dev/fd/0" => "unknown",
+  "ruby /dev/stdin" => "unknown",
+  "python3 /proc/self/fd/0" => "unknown",
   "X=$(rm y)" => "file-write",
   # review の round 3 の指摘 (#717): 単純な形でない command は read / exec にしない (門)
   "cat <<EOF\n$(rm out)\nEOF" => "unknown",

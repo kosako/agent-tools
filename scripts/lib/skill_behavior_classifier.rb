@@ -63,6 +63,8 @@ module SkillBehaviorClassifier
     "make" => nil, "rake" => nil, "rspec" => nil, "pytest" => nil, "npm" => %w[test run], "yarn" => %w[test run],
     "pnpm" => %w[test run], "go" => %w[test run vet], "cargo" => %w[test run check],
   }.freeze
+  # test や build の command の引数として exec に通す形 (target・task・script・package の名前)。
+  TASK_ARG = %r{\A[A-Za-z0-9_./:@+][A-Za-z0-9_./:@+-]*\z}.freeze
   XARGS_VALUE_OPTIONS = %w[-I -n -P -L -s -E -d -a -J -R -S].freeze
 
   GH_WRITE = {
@@ -428,7 +430,8 @@ module SkillBehaviorClassifier
       subs = TASK_COMMANDS[name]
       # option の無い形 (make test・rake test・npm run x) だけ exec。option は inline の code (rake -e・make --eval) や
       # 別の file (make -f) を走らせうるので unknown
-      return "unknown" if args.any? { |a| a.start_with?("-") }
+      # 引数は target の名前の形だけ (make の変数の代入 'X:=$(shell …)' のように、= や $ を含む引数は評価されうる)
+      return "unknown" unless args.all? { |a| a.match?(TASK_ARG) }
 
       return subs.nil? || subs.include?(args[0]) ? "exec" : "unknown"
     end
@@ -637,7 +640,7 @@ module SkillBehaviorClassifier
     target = args[i]
     return target ? classify_shell(target, depth + 1) : "unknown" if inline
 
-    target && target != "-" ? "exec" : "unknown"
+    script_file?(target) ? "exec" : "unknown"
   end
 
   # interpreter: exec は、allowlist の option (INTERPRETER_EXEC_OPTIONS) の後に script を渡す形だけ。python の -m は
@@ -673,13 +676,19 @@ module SkillBehaviorClassifier
         return in_place?(name, args) ? "file-write" : "unknown"
       end
     end
-    args[i] && args[i] != "-" ? "exec" : "unknown"
+    script_file?(args[i]) ? "exec" : "unknown"
   end
 
   def self.in_place?(name, args)
     return false unless %w[ruby perl].include?(name)
 
     args.take_while { |a| a.start_with?("-") && a != "-" }.any? { |a| a.match?(IN_PLACE) }
+  end
+
+  # exec にする script の path。標準入力 (-) と、/dev・/proc の下の path (/dev/stdin・/dev/fd/0・/proc/self/fd/0 など) は
+  # file の program ではないので外す。
+  def self.script_file?(path)
+    !path.nil? && path != "-" && !path.match?(%r{\A/(dev|proc)/})
   end
 
   def self.agent_launch?(name, args)
