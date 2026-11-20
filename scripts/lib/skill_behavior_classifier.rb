@@ -89,8 +89,9 @@ module SkillBehaviorClassifier
   # -p・--paginate・--exec-path など) があれば、少なくとも unknown にする。
   GIT_GLOBAL_VALUES = %w[-C --git-dir --work-tree --namespace].freeze
   GIT_GLOBAL_FLAGS = %w[--no-pager -P --no-replace-objects --literal-pathspecs --no-optional-locks --bare].freeze
-  # 読み取りの subcommand でも、外の program を起動しうる option (pager・textconv・外部の diff)。
-  GIT_PROGRAM_OPTIONS = %w[-O --open-files-in-pager --textconv --filters --ext-diff].freeze
+  # 読み取りの subcommand でも、外の program を起動しうる長い option (pager・textconv・外部の diff)。git は長い option の
+  # 一意な省略 (--open-files-in-page・--outp) を受けるので、前方一致で比べる。
+  GIT_PROGRAM_OPTIONS = %w[--open-files-in-pager --textconv --filters --ext-diff].freeze
   BRANCH_WRITE_FLAGS = /\A-([dDmMcCfut]|-delete|-move|-copy|-force|-set-upstream|-unset-upstream|-edit-description|-track|-no-track)/.freeze
   BRANCH_VALUE_FLAGS = %w[--contains --no-contains --merged --no-merged --points-at --sort --format].freeze
 
@@ -340,37 +341,50 @@ module SkillBehaviorClassifier
 
   # --- 部分ごとの区分 ----------------------------------------------------------------------
 
-  # 伏せた写しの中の、出力の redirect の区分の列。fd の複製 (>&2・2>&1・>&-) と /dev/null は書き込みに数えない。
-  # 先が読めない形は unknown。
-  def self.redirect_classes(masked)
-    out = []
+  # 伏せた写しの中の redirect の範囲の列 ([始まり, 終わり, 区分])。伏せた写しは原文と字の位置がそろっているので、
+  # 同じ範囲を原文から外せる (引用の中の `>out` は伏せてあるので redirect に数えない)。区分は、file への出力が
+  # file-write、先が読めない出力が unknown、入力・here document・fd の複製・/dev/null は nil。
+  def self.redirect_spans(masked)
+    spans = []
     i = 0
-    while (j = masked.index(">", i))
+    while (j = masked.index(/[<>]/, i))
+      start = j
+      start -= 1 if masked[j] == ">" && j.positive? && masked[j - 1] == "&"
+      d = start
+      d -= 1 while d.positive? && masked[d - 1].match?(/\d/)
+      start = d if d < start && (d.zero? || masked[d - 1].match?(/\s/))
       k = j + 1
-      k += 1 if masked[k] == ">" || masked[k] == "|"
+      k += 1 if masked[k] == masked[j]
+      k += 1 if masked[j] == "<" && k == j + 2 && %w[- <].include?(masked[k])
+      k += 1 if masked[j] == "<" && masked[k] == ">"
       dup = masked[k] == "&"
-      k += 1 if dup
+      k += 1 if dup || masked[k] == "|"
+      op = masked[j...k]
       k += 1 while masked[k] == " " || masked[k] == "\t"
       t = k
       k += 1 while k < masked.length && !" \t<>&|;()".include?(masked[k])
       target = masked[t...k]
+      cls = if op.start_with?("<") && !op.include?(">") then nil
+            elsif target == "/dev/null" || (dup && target.match?(/\A(\d+|-)\z/)) then nil
+            elsif target.empty? then "unknown"
+            else "file-write"
+            end
+      spans << [start, k, cls]
       i = [k, j + 1].max
-      next if target == "/dev/null" || (dup && target.match?(/\A(\d+|-)\z/))
-
-      out << (target.empty? ? "unknown" : "file-write")
     end
-    out
+    spans
   end
 
   def self.classify_segment(raw, masked, depth)
-    classes = redirect_classes(masked)
+    spans = redirect_spans(masked)
+    classes = spans.map { |_, _, c| c }.compact
+    stripped = raw.dup
+    spans.each { |s, e, _| stripped[s...e] = " " * (e - s) }
     words = begin
-      Shellwords.split(raw)
+      Shellwords.split(stripped)
     rescue ArgumentError
       return max_class(classes + ["unknown"])
     end
-    # redirect の語 (>file・2>&1・<<EOF など) と here document の区切りの語は command の引数ではないので外す
-    words = drop_redirect_words(words)
     prefix = words.take_while { |w| w.match?(ASSIGNMENT) || PREFIX_WORDS.include?(w) }
     words = words.drop(prefix.length)
     return max_class(classes + ["read"]) if words.empty? || %w[} fi done].include?(words.first)
@@ -382,21 +396,6 @@ module SkillBehaviorClassifier
   end
 
   ASSIGNMENT = /\A[A-Za-z_][A-Za-z0-9_]*=/.freeze
-
-  def self.drop_redirect_words(words)
-    out = []
-    skip = false
-    words.each do |w|
-      if skip
-        skip = false
-      elsif w.match?(/\A\d*(>>?|<<-?|<|>&|<&|>\|)\z|\A&>>?\z/)
-        skip = true
-      elsif !w.match?(/\A(\d*[<>]|&>)/)
-        out << w
-      end
-    end
-    out
-  end
 
   def self.classify_words(words, depth)
     return "read" if words.empty?
@@ -556,7 +555,7 @@ module SkillBehaviorClassifier
         j = (i + 1...args.length).find { |k| [";", "+"].include?(args[k]) }
         return "unknown" unless j
 
-        classes << classify_words(args[(i + 1)...j], depth)
+        classes << injected_call(args[(i + 1)...j], depth)
         i = j
       end
       i += 1
@@ -564,14 +563,22 @@ module SkillBehaviorClassifier
     max_class(classes)
   end
 
-  # xargs: option (値をとるものは値ごと) を外した残りが command。command が無ければ既定の echo (read)。
+  # xargs: option (値をとるものは値ごと) を外した残りが command。command が無ければ既定の echo (read)。区分は
+  # injected_call で決める。
   def self.xargs_call(args, depth)
     i = 0
     while i < args.length && args[i].start_with?("-")
       i += XARGS_VALUE_OPTIONS.include?(args[i]) ? 2 : 1
     end
     rest = args[i..] || []
-    rest.empty? ? "read" : classify_words(rest, depth)
+    rest.empty? ? "read" : injected_call(rest, depth)
+  end
+
+  # 外から来る値 (xargs の標準入力・find の file 名) が引数や command の文字列に入る呼び出し。値で option や command が
+  # 変わりうるので、option を問わず read の command (PLAIN_READ) のときだけ中の区分を使い、ほかは少なくとも unknown。
+  def self.injected_call(words, depth)
+    cls = classify_words(words, depth)
+    PLAIN_READ.include?(File.basename(words[0].to_s)) ? cls : max_class([cls, "unknown"])
   end
 
   # sh / bash / zsh: option は allowlist で読む。-c は続く command を区分し、file を渡せば exec。標準入力から読む形
@@ -670,9 +677,11 @@ module SkillBehaviorClassifier
     verb = args[1]
     return GH_LOCAL[[sub, verb]] if GH_LOCAL.key?([sub, verb])
     return "github-write" if GH_WRITE[sub]&.include?(verb)
-    return "read" if GH_READ.key?(sub) && (GH_READ[sub].nil? || GH_READ[sub].include?(verb))
+    return "unknown" unless GH_READ.key?(sub) && (GH_READ[sub].nil? || GH_READ[sub].include?(verb))
+    # --web / -w (と w を含む束) は browser を起動する
+    return "unknown" if args.any? { |a| a.start_with?("--web") || a.match?(/\A-[A-Za-z]*w[A-Za-z]*\z/) }
 
-    "unknown"
+    "read"
   end
 
   # gh api: option を 1 つずつ読み (短い option の束を含む)、method を明示すればそれに従う。無ければ field の指定が
@@ -750,16 +759,22 @@ module SkillBehaviorClassifier
     return "unknown" if sub.nil?
 
     cls = git_subcommand(sub, rest)
-    if cls == "read"
-      cls = "file-write" if rest.any? { |a| a.start_with?("--output") }
-      cls = max_class([cls, "unknown"]) if rest.any? { |a| git_program_option?(a) }
-    end
+    cls = max_class([cls] + rest.map { |a| git_read_option_class(a) }) if cls == "read"
     floor ? max_class([cls, "unknown"]) : cls
   end
 
-  # -O は値を束に付けて渡せる (-O<program>)。長い option は = の前で比べる。
-  def self.git_program_option?(arg)
-    arg.start_with?("-O") || GIT_PROGRAM_OPTIONS.include?(arg.split("=", 2).first)
+  # 読み取りの subcommand の option の区分。--output (とその省略形・後ろに続く形) は file-write、program を起動する長い
+  # option (と省略形) と、O を含む短い option の束 (git grep の -O<program>・-nOcat) は unknown。ほかは nil。
+  def self.git_read_option_class(arg)
+    if arg.start_with?("--")
+      name = arg.split("=", 2).first
+      abbrev = ->(full) { name.length >= 3 && full.start_with?(name) }
+      return "file-write" if name.start_with?("--output") || abbrev.call("--output")
+      return "unknown" if GIT_PROGRAM_OPTIONS.any? { |o| name == o || abbrev.call(o) }
+    elsif arg.match?(/\A-[A-Za-z0-9]*O/)
+      return "unknown"
+    end
+    nil
   end
 
   def self.git_subcommand(sub, rest)

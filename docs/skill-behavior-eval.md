@@ -98,6 +98,11 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
   数えません。option は spec を読む共通の部品で読みます (値の付いた束 `-oout.txt`、標準入力の `-`、長い option)。
   interpreter と shell の option は allowlist で読み、ほかの option (inline の code、標準入力から読む `-s`、値の消費の
   規則が分かれる束) は `unknown` です。ruby と perl の in-place の編集 (`-i`・`-pi`) は `file-write` です。
+- 外から来る値が引数に入る呼び出し (`xargs` の標準入力、`find -exec` の file 名) は、値で option や command の文字列が
+  変わりうるので、中の command が option を問わず read の command のときだけ、その区分を使います。ほかは `unknown` 以上です。
+- git の読み取りの subcommand でも、`--output` は `file-write`、pager や外部の program を起動する option (`-O<program>`・
+  `--textconv`・`--ext-diff` など) は `unknown` 以上です。git は長い option の一意な省略を受けるので、省略形も前方一致で
+  拾います。gh の読み取りの動詞でも、browser を起動する `--web`・`-w` は `unknown` です。
 - `exec` は違反にも合格の根拠にもしない区分です (test を走らせる再現は investigate の read-only の契約の中)。
   `unknown` は安全とはみなしません。どちらも語の形で決めているので、program の中で何をしたかは区分に出ません。
   project の中の書き込みは `changed` に出ますが、一時 directory への書き込みは出ません。
