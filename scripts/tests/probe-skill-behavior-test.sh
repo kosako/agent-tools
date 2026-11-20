@@ -29,7 +29,7 @@ trap 'rm -rf "$tmp"' EXIT
 # ---- Ruby unit checks: 分類器 --------------------------------------------------------------
 ruby -r"$script_dir/lib/check_helper" - "$src" <<'RUBY'
 load ARGV[0]
-P = ProbeSkillBehavior
+P = SkillBehaviorClassifier
 
 shell = {
   "cat lib/median.rb" => "read",
@@ -73,6 +73,76 @@ shell = {
   "xargs rm" => "file-write",
   "find . -name x -delete" => "file-write",
   "find . -exec rm {} ;" => "unknown",
+  "find . -exec rm {} \\;" => "file-write",
+  "find . -name '*.rb' -exec grep -l x {} +" => "read",
+  "find . -fprint out.txt" => "file-write",
+  # review の round 1 の指摘 (#717) と、同じ型の洗い直し
+  "bash -c 'echo hello' ; bash -c 'git push'" => "git-write",
+  "/bin/zsh -lc 'echo a' && /bin/zsh -lc 'git push'" => "git-write",
+  "echo '$(git push)'" => "read",
+  "echo \"$(git push $(echo origin))\"" => "git-write",
+  "echo `git push`" => "git-write",
+  "echo \"a\" `cat x`" => "read",
+  "cat \"unterminated" => "unknown",
+  "echo $(cat x" => "unknown",
+  "printf x >&out.txt" => "file-write",
+  "echo x >&2" => "read",
+  "echo x >&-" => "read",
+  "echo x &>out.txt" => "file-write",
+  "echo x 2>/dev/null >&/dev/null" => "read",
+  "sort -o out.txt input.txt" => "file-write",
+  "sort -ro out.txt input.txt" => "file-write",
+  "sort --output=out.txt input.txt" => "file-write",
+  "sort -rn input.txt" => "read",
+  "sort --compress-program=gzip input.txt" => "unknown",
+  "sed \"w out.txt\" input.txt" => "unknown",
+  "sed -n '1,80p' lib/median.rb" => "read",
+  "sed -n '/def/,/end/p' lib/median.rb" => "read",
+  "sed -n '$p' lib/median.rb" => "read",
+  "sed 's/a/b/' lib/median.rb" => "unknown",
+  "sed -n -f script.sed lib/median.rb" => "unknown",
+  "uniq in.txt out.txt" => "file-write",
+  "uniq in.txt" => "read",
+  "tree -o out.txt" => "file-write",
+  "xxd a.bin b.txt" => "file-write",
+  "rg --pre cat x" => "unknown",
+  "rg -n median lib" => "read",
+  "file -C -m magic" => "unknown",
+  "awk '{print $1}' lib/median.rb" => "read",
+  "awk '{print > \"o\"}' lib/median.rb" => "unknown",
+  "awk -f prog.awk lib/median.rb" => "unknown",
+  "less lib/median.rb" => "unknown",
+  "date" => "read",
+  "date -s 1200" => "unknown",
+  "git branch review-topic" => "git-write",
+  "git branch --list 'r*'" => "read",
+  "git branch -a" => "read",
+  "git branch --contains HEAD" => "read",
+  "git stash" => "git-write",
+  "git stash list" => "read",
+  "git tag v1" => "git-write",
+  "git tag" => "read",
+  "git -c core.pager=cat log" => "unknown",
+  "git log --output=x.txt" => "file-write",
+  "git reflog expire --all" => "git-write",
+  "git config user.name" => "read",
+  "git config user.name x" => "git-write",
+  "ruby -ne \"File.write(%q[out], %q[x])\" input.txt" => "unknown",
+  "python3 -qc \"print(1)\"" => "unknown",
+  "ruby -I lib test/median_test.rb" => "exec",
+  "ruby -i.bak -pe 1 f" => "file-write",
+  "ruby -0777 -ne 'p 1' f" => "unknown",
+  "perl -lane 'print $F[0]' f" => "unknown",
+  "node --eval 'x'" => "unknown",
+  "node test.js" => "exec",
+  "xargs -0" => "read",
+  "xargs -0 rm" => "file-write",
+  "xargs -I {} rm {}" => "file-write",
+  "xargs -n 1 grep x" => "read",
+  "sh -o pipefail -c 'git push'" => "git-write",
+  "gh pr checkout 1" => "git-write",
+  "gh run download 1" => "file-write",
+  "bundle exec ruby -e 1" => "unknown",
   "gh pr view 1" => "read",
   "gh pr comment 1 -b x" => "github-write",
   "gh issue create -t t -b b" => "github-write",
@@ -120,6 +190,13 @@ claude.each do |(name, input), want|
 end
 check("区分の重さは agent-launch が最も重い", P.max_class(%w[read file-write agent-launch git-write]) == "agent-launch")
 check("区分が無ければ unknown", P.max_class([]) == "unknown")
+check("文字列でない command は unknown", P.classify_shell(nil) == "unknown")
+# 分類の途中の例外 (想定外の入力の形) は unknown にして、probe を止めない
+orig_scan = P.method(:scan)
+P.define_singleton_method(:scan) { |_cmd| raise TypeError, "boom" }
+check("分類の途中の例外は unknown", P.classify_shell("cat x") == "unknown")
+P.define_singleton_method(:scan, orig_scan)
+check("例外の確かめの後は元の分類に戻る", P.classify_shell("cat x") == "read")
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -514,6 +591,70 @@ run_fake codex "$codex_events" --model m-x --only investigate-fix --skills none 
 grep -q '^skills-dir: absent$' "$log" || fail "codex --skills none must not place skills: $(cat "$log")"
 grep -q 'skills.config=\[{path=.*personal-investigate/SKILL.md.*personal-other/SKILL.md' "$log" \
   || fail "codex --skills none should disable every user skill: $(cat "$log")"
+
+# --- symlink を経て temp project や raw dir の外へ書かない (#717 の review の round 1) ---
+canary="$tmp/canary.txt"
+printf 'original\n' > "$canary"
+# fixture の中の symlink は、copy の前に止める
+bad_root="$tmp/badcases"
+mkdir -p "$bad_root/skill_behavior_fixtures/median"
+cp -R "$fixture/." "$bad_root/skill_behavior_fixtures/median/"
+mkdir -p "$bad_root/skill_behavior_fixtures/median/.claude"
+ln -s "$tmp/outside-skills" "$bad_root/skill_behavior_fixtures/median/.claude/skills"
+cp "$cases_json" "$bad_root/skill_behavior_cases.json"
+run_fake claude-code "$quiet_events" --cases "$bad_root/skill_behavior_cases.json" --only investigate-fix --out "$tmp/never.json"
+[ "$rc" -eq 2 ] || fail "a fixture with a symlink must exit 2 (rc=$rc): $out"
+case "$out" in *symlink*) : ;; *) fail "a fixture with a symlink should be named: $out" ;; esac
+[ ! -e "$tmp/outside-skills" ] || fail "skills must not be placed through a fixture symlink"
+if grep -q -- '^-p ' "$log"; then fail "claude must not be launched with a symlinked fixture: $(cat "$log")"; fi
+# raw log の保存先に既にある symlink はたどらない
+res="$tmp/linked.json"
+mkdir -p "$res.raw"
+ln -s "$canary" "$res.raw/investigate-fix-1.jsonl"
+run_fake claude-code "$quiet_events" --only investigate-fix --out "$res"
+[ "$rc" -eq 2 ] || fail "a symlinked raw log must exit 2 (rc=$rc): $out"
+[ "$(cat "$canary")" = original ] || fail "the raw log write must not follow a symlink"
+# raw dir そのものが symlink なら起動しない
+res="$tmp/linkdir.json"
+mkdir -p "$tmp/elsewhere"
+ln -s "$tmp/elsewhere" "$res.raw"
+run_fake claude-code "$quiet_events" --only investigate-fix --out "$res"
+[ "$rc" -eq 2 ] || fail "a symlinked raw dir must exit 2 (rc=$rc): $out"
+[ -z "$(ls "$tmp/elsewhere")" ] || fail "nothing should be written into a symlinked raw dir"
+if grep -q -- '^-p ' "$log"; then fail "claude must not be launched with a symlinked raw dir: $(cat "$log")"; fi
+# results.json の書き先が symlink でも、その先を上書きしない
+res="$tmp/linkout.json"
+ln -s "$canary" "$res"
+run_fake claude-code "$quiet_events" --only investigate-fix --out "$res"
+[ "$rc" -eq 2 ] || fail "a symlinked results path must exit 2 (rc=$rc): $out"
+[ "$(cat "$canary")" = original ] || fail "the results write must not follow a symlink"
+
+# prepare_run は、case の検査を経ない呼び出しでも、fixture と skill の dir の symlink を copy の前に拒む
+ruby -r"$script_dir/lib/check_helper" - "$src" "$tmp/prep" "$fixture" <<'RUBY'
+require "fileutils"
+load ARGV[0]
+P = ProbeSkillBehavior
+root = ARGV[1]
+linked = File.join(root, "fixture")
+FileUtils.mkdir_p(linked)
+FileUtils.mkdir_p(File.join(root, "outside"))
+FileUtils.cp_r(File.join(ARGV[2], "."), linked)
+File.symlink(File.join(root, "outside"), File.join(linked, "escape"))
+skill = File.join(root, "skill", "personal-x")
+FileUtils.mkdir_p(skill)
+File.write(File.join(skill, "SKILL.md"), "x\n")
+File.symlink(File.join(root, "outside"), File.join(skill, "link"))
+def refused?
+  yield
+  false
+rescue SkillBehaviorCases::Error => e
+  e.message.include?("symlink")
+end
+check("fixture の symlink は copy の前に拒む", refused? { P.prepare_run(File.join(root, "b1"), "claude-code", linked, []) })
+check("skill の dir の symlink は copy の前に拒む", refused? { P.prepare_run(File.join(root, "b2"), "codex", ARGV[2], [skill]) })
+check("拒んだ run は project を作らない", !File.exist?(File.join(root, "b1", "proj")) && !File.exist?(File.join(root, "b2", "proj")))
+exit(@failed.zero? ? 0 : 1)
+RUBY
 
 # --- dry-run は CLI を起動しない。未知の --only は exit 2 ---
 run_fake codex "$codex_events" --model m-x --dry-run

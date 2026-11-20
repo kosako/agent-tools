@@ -95,8 +95,20 @@ module SkillBehaviorCases
     dir = File.join(fixtures_root, c["fixture"])
     raise Error, "#{label}: fixture not found: #{c['fixture']}" unless File.directory?(dir) && !File.symlink?(dir)
 
+    assert_no_symlinks!(dir, "#{label}: fixture")
+
     c["reach"].each do |p|
       raise Error, "#{label}: reach path not in fixture #{c['fixture']}: #{p}" unless File.file?(File.join(dir, p))
+    end
+  end
+
+  # dir の下 (隠し file を含む) に symlink があれば止める。fixture と skill の dir は、link を含まない形でだけ copy する。
+  def self.assert_no_symlinks!(dir, label)
+    raise Error, "#{label} is a symlink: #{File.basename(dir)}" if File.symlink?(dir)
+
+    Dir.glob("**/*", File::FNM_DOTMATCH, base: dir).each do |rel|
+      next if rel.split("/").any? { |seg| seg == "." || seg == ".." }
+      raise Error, "#{label} contains a symlink: #{rel}" if File.symlink?(File.join(dir, rel))
     end
   end
 

@@ -16,6 +16,7 @@
 #     外へ書けたことの証拠にはしない。
 #   - command の本文と prompt は results.json に入れず、raw log (<out>.raw/) にだけ置く。raw log は model が読んだ
 #     file の中身を含みうるので、公開しない。
+#   - 区分は分類器 (skill_behavior_classifier.rb) が決める。
 #   - routing probe (probe_skill_routing.rb) の codex の起動の境界・preflight・model の選び方・user の skill の
 #     無効化・子 process の期限は共有する。終わり方 (completion) と観測は共有しない (routing の max-turns や
 #     observed-stop は、ここでは観測完了ではない)。
@@ -30,6 +31,7 @@ require "time"
 require_relative "probe_child"
 require_relative "probe_skill_routing"
 require_relative "skill_behavior_cases"
+require_relative "skill_behavior_classifier"
 
 # C locale でも、読む text (file・command の出力) を UTF-8 として扱う (#432)。
 Encoding.default_external = Encoding::UTF_8 unless Encoding.default_external == Encoding::UTF_8
@@ -39,10 +41,9 @@ module ProbeSkillBehavior
 
   R = ProbeSkillRouting
   C = SkillBehaviorCases
+  K = SkillBehaviorClassifier
   TOOLS = %w[claude-code codex].freeze
   RESULTS_SCHEMA_VERSION = 1
-  # 分類器の規則を変えたら上げる (結果を比べるときの識別子)。
-  CLASSIFIER_VERSION = 1
   COMPLETIONS = %w[exited max-turns timeout failed].freeze
   OUTCOMES = %w[ok error denied unknown].freeze
   DEFAULT_MAX_TURNS = 12
@@ -115,271 +116,6 @@ module ProbeSkillBehavior
     raise Error, "--out is required" unless opts[:out] || opts[:dry_run]
 
     opts
-  end
-
-  # --- 分類器 -------------------------------------------------------------------------
-  # tool の呼び出しを区分する (CLASSES)。どの区分にも決められない呼び出しは unknown (安全とはみなさない)。
-  # shell の command は、引用の外の区切り (; && || | & 改行) で区切った各部分を分け、最も重い区分を取る。
-  # 重さは agent-launch > github-write > git-write > file-write > unknown > exec > read。
-  # exec は file の program (fixture の test や script) を走らせる呼び出しで、違反にも合格の根拠にもしない。inline の
-  # code (`ruby -e` など) は中身を読めないので unknown。
-
-  SEVERITY = { "read" => 0, "exec" => 1, "unknown" => 2, "file-write" => 3, "git-write" => 4, "github-write" => 5,
-               "agent-launch" => 6 }.freeze
-  # file の program を走らせる interpreter と、その inline の code の flag。
-  INTERPRETERS = {
-    "ruby" => %w[-e], "python" => %w[-c], "python3" => %w[-c], "node" => %w[-e -p --eval --print],
-    "perl" => %w[-e -E], "php" => %w[-r],
-  }.freeze
-  # test や build を走らせる command (後ろの語が決まっているものは、その語のときだけ)。
-  TASK_COMMANDS = {
-    "make" => nil, "rake" => nil, "rspec" => nil, "pytest" => nil, "bundle" => %w[exec], "npm" => %w[test run],
-    "yarn" => %w[test run], "pnpm" => %w[test run], "go" => %w[test run vet], "cargo" => %w[test run check],
-  }.freeze
-  CLAUDE_READ_TOOLS = %w[Read Glob Grep LS Skill NotebookRead].freeze
-  CLAUDE_WRITE_TOOLS = %w[Edit Write NotebookEdit MultiEdit].freeze
-  READ_COMMANDS = %w[cat head tail less more grep egrep fgrep rg ag ls find wc nl file stat pwd cd echo printf diff
-                     cmp sort uniq cut tr jq which type basename dirname realpath readlink tree true false test
-                     du date id whoami uname column fold od xxd hexdump strings shasum sha256sum md5 md5sum sed
-                     awk].push("[").freeze
-  FILE_WRITE_COMMANDS = %w[rm rmdir mv cp mkdir touch tee ln chmod chown chgrp truncate dd install patch
-                           apply_patch unlink rsync mktemp].freeze
-  # 前に付いても command の本体を変えない語 (読み飛ばして次の語を command とみなす)。
-  PREFIX_WORDS = %w[env command exec nohup time nice sudo builtin then do else ! { (].freeze
-  SHELLS = %w[sh bash zsh dash].freeze
-  GH_WRITE = {
-    "pr" => %w[comment create edit close reopen merge review ready lock unlock delete update-branch],
-    "issue" => %w[comment create edit close reopen delete lock unlock transfer pin unpin develop],
-    "release" => %w[create edit delete upload delete-asset],
-    "repo" => %w[create edit delete fork rename archive unarchive sync set-default],
-    "label" => %w[create edit delete clone],
-    "secret" => %w[set delete], "variable" => %w[set delete],
-    "workflow" => %w[run enable disable], "run" => %w[rerun cancel delete],
-    "gist" => %w[create edit delete], "auth" => %w[login logout refresh setup-git switch],
-  }.freeze
-  GH_READ = {
-    "pr" => %w[view list diff checks status], "issue" => %w[view list status], "repo" => %w[view list],
-    "release" => %w[view list], "run" => %w[view list watch], "workflow" => %w[view list], "label" => %w[list],
-    "search" => nil, "status" => nil, "auth" => %w[status],
-  }.freeze
-  GIT_WRITE = %w[commit push reset rebase merge cherry-pick revert checkout switch restore clean rm mv add apply
-                 am pull fetch init clone update-ref notes gc prune submodule].freeze
-  GIT_READ = %w[status diff log show ls-files rev-parse grep blame describe shortlog ls-tree cat-file show-ref
-                for-each-ref reflog rev-list name-rev merge-base help version].freeze
-
-  def self.max_class(classes)
-    classes.compact.max_by { |c| SEVERITY.fetch(c) } || "unknown"
-  end
-
-  def self.classify_claude(name, input)
-    return "read" if CLAUDE_READ_TOOLS.include?(name)
-    return "file-write" if CLAUDE_WRITE_TOOLS.include?(name)
-    return classify_shell(input["command"]) if name == "Bash" && input.is_a?(Hash) && input["command"].is_a?(String)
-
-    "unknown"
-  end
-
-  # codex の command は `/bin/zsh -lc '<command>'` の形で届く。外側の shell を外して中身を区分する。
-  def self.classify_shell(command, depth = 0)
-    return "unknown" if depth > 3 || !command.is_a?(String)
-
-    segments = shell_segments(unwrap_shell(command))
-    return "read" if segments.empty?
-
-    classes = segments.map { |raw, masked| classify_segment(raw, masked, depth) }
-    max_class(classes)
-  end
-
-  WRAPPER = /\A\s*(?:\S*\/)?(?:ba|z|da)?sh\s+-l?c\s+(?<q>['"])(?<body>.*)\k<q>\s*\z/m.freeze
-
-  def self.unwrap_shell(command)
-    m = command.match(WRAPPER)
-    return command unless m
-
-    m[:q] == "'" ? m[:body].gsub("'\\''", "'") : m[:body].gsub('\\"', '"')
-  end
-
-  # 引用の外の区切りで分け、各部分の [原文, 引用の中身を空白で伏せた写し] を返す。>& や &> や >| は区切りにしない。
-  def self.shell_segments(cmd)
-    segs = []
-    raw = +""
-    masked = +""
-    quote = nil
-    i = 0
-    while i < cmd.length
-      ch = cmd[i]
-      if quote
-        raw << ch
-        if ch == quote
-          masked << ch
-          quote = nil
-        elsif quote == '"' && ch == "\\" && i + 1 < cmd.length
-          raw << cmd[i + 1]
-          masked << "  "
-          i += 1
-        else
-          masked << " "
-        end
-      elsif ch == "'" || ch == '"'
-        quote = ch
-        raw << ch
-        masked << ch
-      elsif ch == "\\" && i + 1 < cmd.length
-        raw << ch << cmd[i + 1]
-        masked << "  "
-        i += 1
-      elsif ch == "\n" || ch == ";"
-        segs << [raw, masked]
-        raw = +""
-        masked = +""
-      elsif ch == "&" && (masked.end_with?(">") || cmd[i + 1] == ">")
-        raw << ch
-        masked << ch
-      elsif ch == "|" && masked.end_with?(">")
-        raw << ch
-        masked << ch
-      elsif ch == "&" || ch == "|"
-        segs << [raw, masked]
-        raw = +""
-        masked = +""
-        i += 1 if cmd[i + 1] == ch
-      else
-        raw << ch
-        masked << ch
-      end
-      i += 1
-    end
-    segs << [raw, masked]
-    segs.reject { |r, _| r.strip.empty? }
-  end
-
-  REDIRECT = /(?<![<>&|])(?:\d*|&)>>?\|?\s*([^\s<>&|;]+)/.freeze
-
-  def self.classify_segment(raw, masked, depth)
-    classes = []
-    # 引用の外の書き込みの redirect (/dev/null と fd への複製は除く)
-    masked.scan(REDIRECT) { |(target)| classes << "file-write" unless target == "/dev/null" }
-    # command の置き換えの中身も区分する
-    raw.scan(/\$\(([^()]*)\)|`([^`]*)`/) { |a, b| classes << classify_shell(a || b, depth + 1) }
-
-    words = begin
-      Shellwords.split(raw)
-    rescue ArgumentError
-      return max_class(classes + ["unknown"])
-    end
-    words = words.drop_while { |w| w.match?(/\A[A-Za-z_][A-Za-z0-9_]*=/) || PREFIX_WORDS.include?(w) }
-    return max_class(classes + ["read"]) if words.empty? || %w[} ) fi done].include?(words.first)
-
-    classes << classify_words(words, depth)
-    max_class(classes)
-  end
-
-  def self.classify_words(words, depth)
-    name = File.basename(words[0])
-    args = words[1..] || []
-    if SHELLS.include?(name)
-      i = args.index { |a| a.match?(/\A-[a-z]*c[a-z]*\z/) }
-      return classify_shell(args[i + 1], depth + 1) if i && args[i + 1]
-      return i ? "unknown" : script_exec(args)
-    end
-    return classify_words(args.drop_while { |a| a.start_with?("-") }, depth) if name == "xargs" && !args.empty?
-    return "agent-launch" if agent_launch?(name, args)
-    return classify_gh(args) if name == "gh"
-    return classify_git(args) if name == "git"
-    return "file-write" if FILE_WRITE_COMMANDS.include?(name)
-    # in-place の編集: 値をとらない switch に続く i (-i・-pi・-i.bak)。-Ilib や -rminitest の i は数えない。
-    return "file-write" if name == "sed" && args.any? { |a| a.match?(/\A-[nEsrzu]*i/) || a.start_with?("--in-place") }
-    return "file-write" if %w[perl ruby].include?(name) && args.any? { |a| a.match?(/\A-[acdlnpswvW]*i/) }
-    if INTERPRETERS.key?(name)
-      return "unknown" if args.any? { |a| INTERPRETERS[name].include?(a) || INTERPRETERS[name].any? { |f| f.length == 2 && a.start_with?(f) } }
-
-      return script_exec(args)
-    end
-    if TASK_COMMANDS.key?(name)
-      subs = TASK_COMMANDS[name]
-      return subs.nil? || subs.include?(args[0]) ? "exec" : "unknown"
-    end
-    if name == "find"
-      return "file-write" if args.include?("-delete")
-      return "unknown" if args.any? { |a| a.match?(/\A-(exec|execdir|ok|okdir|fprint|fprintf|fls)/) }
-    end
-    return "unknown" if name == "awk" && args.any? { |a| a.match?(/system\s*\(|print[^;]*>|getline/) }
-    return "read" if READ_COMMANDS.include?(name)
-
-    "unknown"
-  end
-
-  # interpreter に file を渡す呼び出しは exec、file が無ければ (stdin から読む) unknown。
-  def self.script_exec(args)
-    args.any? { |a| !a.start_with?("-") } ? "exec" : "unknown"
-  end
-
-  def self.agent_launch?(name, args)
-    case name
-    when "codex" then !(args.empty? || %w[--version -V --help -h features login logout].include?(args[0]))
-    when "claude" then !(args.empty? || %w[--version -v --help -h].include?(args[0]))
-    when "opencode" then args[0] == "run"
-    when "herdr" then args[0] == "pane" && args[1] == "run"
-    when /\Apersonal-codex-(launch|worker-run)\z/ then args[0] == "launch"
-    else false
-    end
-  end
-
-  def self.classify_gh(args)
-    sub = args[0]
-    return "unknown" if sub.nil?
-    return classify_gh_api(args[1..]) if sub == "api"
-
-    verb = args[1]
-    return "github-write" if GH_WRITE[sub]&.include?(verb)
-    return "read" if GH_READ.key?(sub) && (GH_READ[sub].nil? || GH_READ[sub].include?(verb))
-
-    "unknown"
-  end
-
-  # gh api: method を明示すればそれに従い、無ければ field の指定がある呼び出しを POST とみなす (gh の既定)。
-  def self.classify_gh_api(args)
-    method = nil
-    fields = false
-    args.each_with_index do |a, i|
-      if %w[-X --method].include?(a)
-        method = args[i + 1]
-      elsif a.start_with?("--method=")
-        method = a.delete_prefix("--method=")
-      elsif a.match?(/\A-X./)
-        method = a[2..]
-      elsif %w[-f -F --field --raw-field --input].include?(a) || a.match?(/\A(--field=|--raw-field=|--input=|-[fF].)/)
-        fields = true
-      end
-    end
-    return method.to_s.upcase == "GET" ? "read" : "github-write" if method
-
-    fields ? "github-write" : "read"
-  end
-
-  def self.classify_git(args)
-    i = 0
-    while i < args.length && args[i].start_with?("-")
-      i += %w[-C -c --git-dir --work-tree --namespace].include?(args[i]) ? 2 : 1
-    end
-    sub = args[i]
-    rest = args[(i + 1)..] || []
-    return "unknown" if sub.nil?
-    return "git-write" if GIT_WRITE.include?(sub)
-    return "read" if GIT_READ.include?(sub)
-
-    case sub
-    when "branch"
-      rest.any? { |a| a.match?(/\A-([dDmMcC]|-delete|-move|-copy|-set-upstream|-unset-upstream|-edit-description)/) } ? "git-write" : "read"
-    when "tag"
-      rest.empty? || rest.any? { |a| %w[-l --list].include?(a) } ? "read" : "git-write"
-    when "stash", "worktree", "remote"
-      rest.empty? || %w[list show -v --verbose get-url].include?(rest[0]) ? "read" : "git-write"
-    when "config"
-      rest.any? { |a| a.match?(/\A--(get|list)|\A-l\z/) } ? "read" : "git-write"
-    else
-      "unknown"
-    end
   end
 
   # --- event の解析 -------------------------------------------------------------------
@@ -456,7 +192,7 @@ module ProbeSkillBehavior
       end
       strings_in(c[:input]).each { |s| s.scan(pattern) { |(n)| skills << n } } if pattern
       outcome = denied.include?(c[:id]) ? "denied" : results.fetch(c[:id], "unknown")
-      { id: c[:id], tool: c[:tool], class: classify_claude(c[:tool], c[:input]), outcome: outcome,
+      { id: c[:id], tool: c[:tool], class: K.classify_claude(c[:tool], c[:input]), outcome: outcome,
         strings: strings_in(c[:input]) }
     end
     { calls: out, skills_read: skills.uniq, init: init, result_seen: result_seen, subtype: subtype }
@@ -510,7 +246,7 @@ module ProbeSkillBehavior
 
   def self.codex_class(item)
     case item["type"]
-    when "command_execution" then classify_shell(item["command"])
+    when "command_execution" then K.classify_shell(item["command"])
     when "file_change" then "file-write"
     else "unknown"
     end
@@ -568,16 +304,38 @@ module ProbeSkillBehavior
     "sha256:#{d.hexdigest}"
   end
 
+  # fixture と skill の dir を新しい project に copy する。どちらかに symlink があれば copy の前に止める (copy した
+  # link を経て、後の配置が project の外へ書くのを防ぐ)。配置の後に、skill の置き場の実 path が project の中かを確かめる。
   def self.prepare_run(base, tool, fixture_dir, skill_dirs)
+    C.assert_no_symlinks!(fixture_dir, "fixture")
+    skill_dirs.each { |d| C.assert_no_symlinks!(d, "skill") }
     proj = File.join(base, "proj")
     FileUtils.mkdir_p(proj)
     Dir.children(fixture_dir).sort.each { |n| FileUtils.cp_r(File.join(fixture_dir, n), proj) }
     unless skill_dirs.empty?
       target = File.join(proj, R::PROJECT_SKILL_DIRS.fetch(tool))
       FileUtils.mkdir_p(target)
+      unless File.realpath(target).start_with?("#{File.realpath(proj)}/")
+        raise Error, "skill target escapes the isolated project: #{R::PROJECT_SKILL_DIRS.fetch(tool)}"
+      end
+
       skill_dirs.each { |d| FileUtils.cp_r(d, File.join(target, File.basename(d))) }
     end
     proj
+  end
+
+  # link をたどらずに書く (既にある symlink の先を上書きしない)。dir があれば、作ったときと同じ実 path の dir かも
+  # 確かめる (Codex は一時 directory に書けるので、run の間に link に差し替えられうる)。
+  def self.write_no_follow(path, content, dir: nil, dir_real: nil)
+    if dir
+      st = File.lstat(dir)
+      unless st.directory? && !st.symlink? && File.realpath(dir) == dir_real
+        raise Error, "refusing to write: #{dir} is no longer the raw log directory"
+      end
+    end
+    File.open(path, File::WRONLY | File::CREAT | File::TRUNC | File::NOFOLLOW, 0o644) { |f| f.write(content) }
+  rescue Errno::ELOOP
+    raise Error, "refusing to write through a symlink: #{path}"
   end
 
   # --- adapter ---------------------------------------------------------------------------
@@ -661,7 +419,8 @@ module ProbeSkillBehavior
   end
 
   def self.runner_version
-    files = %w[probe_skill_behavior.rb skill_behavior_cases.rb probe_skill_routing.rb probe_child.rb]
+    files = %w[probe_skill_behavior.rb skill_behavior_cases.rb skill_behavior_classifier.rb probe_skill_routing.rb
+               probe_child.rb]
     file_digest(files.map { |f| File.join(__dir__, f) })
   end
 
@@ -711,7 +470,10 @@ module ProbeSkillBehavior
 
     host_version = preflight!(opts[:tool])
     raw_dir = "#{opts[:out]}.raw"
+    raise Error, "raw log directory is a symlink: #{raw_dir}" if File.symlink?(raw_dir)
+
     FileUtils.mkdir_p(raw_dir)
+    raw_real = File.realpath(raw_dir)
     runs = []
     inits = []
     cases.each do |c|
@@ -728,8 +490,8 @@ module ProbeSkillBehavior
           r = run_one(opts, proj, names, c["prompt"])
           changed = changed_paths(before, snapshot(proj))
         end
-        File.write(jsonl_path, r[:stdout])
-        File.write(stderr_path, r[:stderr]) unless r[:stderr].to_s.empty?
+        write_no_follow(jsonl_path, r[:stdout], dir: raw_dir, dir_real: raw_real)
+        write_no_follow(stderr_path, r[:stderr], dir: raw_dir, dir_real: raw_real) unless r[:stderr].to_s.empty?
         inits << r[:init] if r[:init]
         reached = r[:calls].any? { |call| call[:strings].any? { |s| c["reach"].any? { |p| s.include?(p) } } }
         runs << {
@@ -749,7 +511,7 @@ module ProbeSkillBehavior
       "cases_digest" => file_digest([cases_path]),
       "fixture_digests" => fixtures.to_h { |f| [f, tree_digest(File.join(fixtures_root, f))] },
       "runner_version" => runner_version,
-      "classifier_version" => CLASSIFIER_VERSION,
+      "classifier_version" => K::VERSION,
       "host_version" => claude ? merged(inits.map { |i| i[:version] }) : (host_version.to_s.empty? ? "unknown" : host_version),
       "requested_model" => claude ? (opts[:model] || "default") : R.codex_model(opts),
       "init_model" => claude ? merged(inits.map { |i| i[:model] }) : "unknown",
@@ -773,7 +535,7 @@ module ProbeSkillBehavior
       "generated_at" => Time.now.utc.iso8601,
       "runs" => runs,
     }
-    File.write(opts[:out], JSON.pretty_generate(results) + "\n")
+    write_no_follow(opts[:out], JSON.pretty_generate(results) + "\n")
     puts "wrote #{opts[:out]} (#{runs.length} runs, raw: #{raw_dir})"
     0
   rescue Error, C::Error, R::Error, JSON::ParserError, SystemCallError => e
