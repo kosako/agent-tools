@@ -25,15 +25,28 @@ module SkillBehaviorCases
   # 誤りの文には、決まった形の値 (欄の名前・case の id・閉じた区分) と数だけを写し、入力の値を写さない (#369)。
   # 判定の出力は PR などに写すことがあるため。未知の key は名前を出さず、数だけを出す。
 
-  # JSON の text を UTF-8 として確かめてから読む。Ruby 2.6 の JSON は文字列の中の不正な byte をそのまま通し、後段の
-  # 正規表現が ArgumentError を投げるので、parse の前に止める。
+  # JSON の text を UTF-8 として確かめて読み、読んだ後の文字列 (key を含む) も確かめる。Ruby 2.6 の JSON 2.1.0 は、
+  # 文字列の中の不正な byte をそのまま通し、孤立した下位の surrogate の escape (\udc00〜\udfff) も不正な UTF-8 の
+  # 文字列に展開する (上位の \ud800 だけなら構文の誤り)。どちらも後段の正規表現が ArgumentError を投げるので、ここで止める。
   def self.parse_json(text, label)
     text = text.dup.force_encoding(Encoding::UTF_8)
     raise Error, "#{label}: not valid UTF-8" unless text.valid_encoding?
 
-    JSON.parse(text)
+    data = JSON.parse(text)
+    raise Error, "#{label}: not valid UTF-8" unless valid_strings?(data)
+
+    data
   rescue JSON::ParserError
     raise Error, "#{label}: not valid JSON"
+  end
+
+  def self.valid_strings?(value)
+    case value
+    when String then value.valid_encoding?
+    when Array then value.all? { |v| valid_strings?(v) }
+    when Hash then value.all? { |k, v| valid_strings?(k) && valid_strings?(v) }
+    else true
+    end
   end
 
   def self.unknown_keys_message(label, keys, what = "key")

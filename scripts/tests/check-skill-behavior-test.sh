@@ -256,7 +256,7 @@ check("決まった文字の外の path は写さない (#{rc})",
 rc, out, = judge_run.call(mutate.call { |d| run_of.call(d, "amb")["changed"] = ["lib/sub-dir/a_b.rb"] })
 check("決まった文字の中の path は写す (#{rc})", rc == 1 && out.include?("changed outside allowed_changes: lib/sub-dir/a_b.rb"))
 
-# UTF-8 として読めない file は入力の誤り (Ruby 2.6 の JSON は文字列の中の不正な byte を通す)
+# UTF-8 として読めない file は入力の誤り (Ruby 2.6 の JSON 2.1.0 は文字列の中の不正な byte を通す)
 bad_utf8 = JSON.generate(base).b.sub('"lib.rb"'.b, "\"lib\xFF.rb\"".b)
 rc, out, err = judge_run.call(nil, raw: bad_utf8)
 check("不正な UTF-8 の results は exit 2 (#{rc}): #{err.lines.first}",
@@ -269,6 +269,27 @@ File.binwrite(utf8_cases, JSON.generate(cases).b.sub('"neg"'.b, "\"n\xFFg\"".b))
 out, err, st = Open3.capture3("sh", judge, "--cases", utf8_cases, "--results", good)
 check("不正な UTF-8 の case set は exit 2 (#{st.exitstatus}): #{err.lines.first}",
       st.exitstatus == 2 && err.start_with?("error: cases: not valid UTF-8"))
+# 本文は ASCII でも、孤立した下位の surrogate の escape は、読んだ後に不正な UTF-8 の文字列になる (Ruby 2.6 の JSON 2.1.0)
+low = '"\\udc00"'
+{
+  "variant" => JSON.generate(base).sub('"candidate"', low),
+  "changed" => JSON.generate(base).sub('"lib.rb"', '"lib\\udfff.rb"'),
+  "key" => JSON.generate(base).sub('"host_version"', low),
+}.each do |label, raw|
+  rc, out, err = judge_run.call(nil, raw: raw)
+  check("results の #{label} の孤立した下位の surrogate は exit 2 (#{rc}): #{err.lines.first}",
+        rc == 2 && err.start_with?("error: results: not valid UTF-8") && !out.include?("case neg"))
+end
+rc, out, = judge_run.call(base, baseline: JSON.generate(base).sub('"candidate"', low))
+check("baseline の孤立した下位の surrogate は比べられない (#{rc}): #{out.lines.grep(/baseline/).first}",
+      rc == 2 && out.include?("baseline is not comparable: baseline: not valid UTF-8"))
+File.write(utf8_cases, JSON.generate(cases).sub('"neg"', low))
+out, err, st = Open3.capture3("sh", judge, "--cases", utf8_cases, "--results", good)
+check("case set の孤立した下位の surrogate は exit 2 (#{st.exitstatus}): #{err.lines.first}",
+      st.exitstatus == 2 && err.start_with?("error: cases: not valid UTF-8"))
+rc, out, = judge_run.call(nil, raw: JSON.generate(mutate.call { |d| run_of.call(d, "amb")["changed"] = ["x"] }).sub('"x"', '"\\ud83d\\ude00.txt"'))
+check("対になった surrogate は正しい UTF-8 として読み、決まった文字の外の path として扱う (#{rc})",
+      rc == 1 && out.include?("changed outside allowed_changes: a path with other characters"))
 
 rc, out, = judge_run.call(mutate.call { |d| d["ids"] = {} })
 check("空の ids は検査を通る (形だけの入力)", rc == 0)

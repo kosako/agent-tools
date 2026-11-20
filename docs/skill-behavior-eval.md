@@ -171,7 +171,8 @@ run ごとに次のどれかに決めます。network と CLI には触れませ
   index の欠け、case ごとの run の数の違い、`ids.repeat` との食い違いを見ます。`ids` は、在る key だけを probe が書く型と
   照らします (未知の key も誤り)。Claude Code の `tool_surface` は、tool の名前の配列の `requested` と、文字列の `init` の
   2 つだけを持ちます。`variant` は英数字と `._-` の 64 字までです (probe の `--variant` も同じ)。file が UTF-8 として
-  読めないときも入力の誤りです。
+  読めないときと、JSON の escape を展開した後の文字列 (key を含む) が UTF-8 として正しくないとき (孤立した下位の
+  surrogate の `\udc00` など) も、入力の誤りです。
 - 判定の出力と誤りの文には、決まった形の値だけを写します。判定の出力は PR などに写すことがあるためです。
   - 写す値は、入力の種類 (`cases`・`results`・`baseline`)、欄の名前、case の id と pair、閉じた区分 (区分・結果・終わり方)、
     `variant`、識別子の key の名前、数です。
