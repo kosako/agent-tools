@@ -632,9 +632,9 @@ module SkillBehaviorClassifier
     script_file?(shell_name, target) ? "exec" : "unknown"
   end
 
-  # interpreter: exec は、allowlist の option (INTERPRETER_EXEC_OPTIONS) の後に script を渡す形だけ。python の -m は
-  # module の実行で exec。ほかの形は、ruby・perl の in-place の編集 (-i・-pi など) なら file-write、それ以外 (inline の
-  # code・標準入力・知らない option) は unknown。
+  # interpreter: exec は、allowlist の option (INTERPRETER_EXEC_OPTIONS) の後に、その言語の拡張子を持つ script を渡す
+  # 形だけ。python の -m は、module に渡す引数で標準入力の code などを走らせうるので unknown。ほかの形は、ruby・perl の
+  # in-place の編集 (-i・-pi など) なら file-write、それ以外 (inline の code・標準入力・知らない option) は unknown。
   INTERPRETER_EXEC_OPTIONS = {
     "ruby" => { flags: %w[-w -W0 -W1 -W2], values: %w[-I -r] },
     "perl" => { flags: %w[-w], values: %w[-I] },
