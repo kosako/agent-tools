@@ -26,13 +26,17 @@ module SkillBehaviorClassifier
   CLAUDE_WRITE_TOOLS = %w[Edit Write NotebookEdit MultiEdit].freeze
   SHELLS = %w[sh bash zsh dash].freeze
   # 前に付いても command の本体を変えない語 (読み飛ばして次の語を command とみなす)。
-  PREFIX_WORDS = %w[env command exec nohup time nice sudo builtin then do else ! {].freeze
+  PREFIX_WORDS = %w[env command exec nohup time nice builtin then do else ! {].freeze
+  # command の名前に path が付くとき、名前で区分してよい directory (ほかの path は project の file などを実行する)。
+  STANDARD_BIN_DIRS = %w[/bin /usr/bin /usr/local/bin /opt/homebrew/bin /usr/sbin /sbin].freeze
+  # python -m で exec にする module (test を走らせるもの)。ほかの module (pip など) は unknown。
+  PYTHON_EXEC_MODULES = %w[pytest unittest doctest].freeze
   FILE_WRITE_COMMANDS = %w[rm rmdir mv cp mkdir mkfifo touch tee ln chmod chown chgrp truncate dd install patch
                            apply_patch unlink rsync mktemp].freeze
   # どの option でも書き込み・program の起動をしない command (option を確かめずに read)。
-  PLAIN_READ = (%w[cat head tail grep egrep fgrep ls wc nl stat pwd cd echo printf diff cmp cut tr jq which type
-                   basename dirname realpath readlink true false test du id whoami uname column fold od hexdump
-                   strings shasum sha256sum md5 md5sum] + ["["]).freeze
+  PLAIN_READ = %w[cat head tail grep egrep fgrep ls wc nl stat pwd cd echo cmp cut tr jq which type basename dirname
+                  realpath readlink true false du id whoami uname column fold od hexdump strings shasum sha256sum md5
+                  md5sum].freeze
 
   # option の spec。flags は値をとらない短い option、values は値をとる短い option (束の残りか次の語)、long_flags /
   # long_values は長い option。spec に無い option があれば parse_options は nil を返す。
@@ -92,8 +96,6 @@ module SkillBehaviorClassifier
   # 読み取りの subcommand でも、外の program を起動しうる長い option (pager・textconv・外部の diff)。git は長い option の
   # 一意な省略 (--open-files-in-page・--outp) を受けるので、前方一致で比べる。
   GIT_PROGRAM_OPTIONS = %w[--open-files-in-pager --textconv --filters --ext-diff].freeze
-  BRANCH_WRITE_FLAGS = /\A-([dDmMcCfut]|-delete|-move|-copy|-force|-set-upstream|-unset-upstream|-edit-description|-track|-no-track)/.freeze
-  BRANCH_VALUE_FLAGS = %w[--contains --no-contains --merged --no-merged --points-at --sort --format].freeze
 
   def self.max_class(classes)
     classes.compact.max_by { |c| SEVERITY.fetch(c) } || "unknown"
@@ -390,6 +392,8 @@ module SkillBehaviorClassifier
     return max_class(classes + ["read"]) if words.empty? || %w[} fi done].include?(words.first)
 
     cls = classify_words(words, depth)
+    # 引用の外の glob (* ? [) は、展開で引数の数と意味が変わる (uniq a* が出力の file を持つ、など)
+    cls = max_class([cls, "unknown"]) if masked.match?(/[*?\[]/) && !PLAIN_READ.include?(File.basename(words.first))
     # 環境変数 (PAGER・GIT_EXTERNAL_DIFF・RUBYOPT など) は program を差し替えうる
     cls = max_class([cls, "unknown"]) if prefix.any? { |w| w.match?(ASSIGNMENT) }
     max_class(classes + [cls])
@@ -400,6 +404,14 @@ module SkillBehaviorClassifier
   def self.classify_words(words, depth)
     return "read" if words.empty?
 
+    cls = classify_by_name(words, depth)
+    word0 = words[0].to_s
+    # 標準の bin の外の path (./cat・lib/grep など) は、名前と違う program を実行しうる
+    custom = word0.include?("/") && !STANDARD_BIN_DIRS.include?(File.dirname(word0))
+    custom ? max_class([cls, "unknown"]) : cls
+  end
+
+  def self.classify_by_name(words, depth)
     name = File.basename(words[0].to_s)
     args = words[1..] || []
     return shell_call(args, depth) if SHELLS.include?(name)
@@ -422,6 +434,16 @@ module SkillBehaviorClassifier
   # 引数の形を確かめてから read にする command。spec で読めない形や、ここに無い command は unknown。
   def self.read_with_args(name, args, depth)
     case name
+    # printf -v と test -v / -R は、bash と zsh が配列の添字 (中の置き換えを含む) を評価する
+    when "printf" then args.any? { |a| a.start_with?("-v") } ? "unknown" : "read"
+    when "test", "[" then args.any? { |a| %w[-v -R].include?(a) } ? "unknown" : "read"
+    # diff の -l (--paginate) は出力を pr に通す
+    when "diff"
+      paginate = args.any? do |a|
+        name_ = a.split("=", 2).first
+        (name_.length >= 4 && "--paginate".start_with?(name_)) || a.match?(/\A-[A-Za-z]*l/)
+      end
+      paginate ? "unknown" : "read"
     when "sort"
       opts, = parse_options(args, SORT_SPEC)
       return "unknown" if opts.nil? || opts.any? { |o, _| o == "--compress-program" }
@@ -637,7 +659,7 @@ module SkillBehaviorClassifier
       break unless a.start_with?("-") && a != "-"
 
       if %w[python python3].include?(name) && a == "-m"
-        return args[i + 1] ? "exec" : "unknown"
+        return PYTHON_EXEC_MODULES.include?(args[i + 1]) ? "exec" : "unknown"
       end
       if spec[:flags].include?(a)
         i += 1
@@ -679,7 +701,7 @@ module SkillBehaviorClassifier
     return "github-write" if GH_WRITE[sub]&.include?(verb)
     return "unknown" unless GH_READ.key?(sub) && (GH_READ[sub].nil? || GH_READ[sub].include?(verb))
     # --web / -w (と w を含む束) は browser を起動する
-    return "unknown" if args.any? { |a| a.start_with?("--web") || a.match?(/\A-[A-Za-z]*w[A-Za-z]*\z/) }
+    return "unknown" if args.any? { |a| a.start_with?("--web") || a.match?(/\A-[A-Za-z]*w/) }
 
     "read"
   end
@@ -782,43 +804,84 @@ module SkillBehaviorClassifier
     return "read" if GIT_READ.include?(sub)
 
     case sub
-    when "branch" then git_branch(rest)
-    when "tag"
-      return "git-write" if rest.any? { |a| a.match?(/\A-([dafsmFu]|-delete|-annotate|-force|-sign|-message|-file)/) }
-
-      rest.empty? || rest.any? { |a| %w[-l --list].include?(a) } ? "read" : "git-write"
+    when "branch", "tag" then git_listing(sub, rest)
     when "stash" then %w[list show].include?(rest[0]) ? "read" : "git-write"
     when "worktree" then rest[0] == "list" ? "read" : "git-write"
     when "remote"
       verb = rest.drop_while { |a| %w[-v --verbose].include?(a) }.first
       verb.nil? || %w[show get-url].include?(verb) ? "read" : "git-write"
     when "reflog" then rest.empty? || %w[show exists].include?(rest[0]) || rest[0].start_with?("-") ? "read" : "git-write"
-    when "config"
-      return "git-write" if rest.any? { |a| a.match?(/\A--(add|unset|unset-all|replace-all|rename-section|remove-section|edit)\z|\A-e\z/) }
-      return "read" if rest.any? { |a| a.match?(/\A--(get|get-all|get-regexp|get-urlmatch|list|show-origin|show-scope)\z|\A-l\z/) }
-
-      rest.reject { |a| a.start_with?("-") }.length == 1 ? "read" : "git-write"
+    when "config" then git_config(rest)
     else "unknown"
     end
   end
 
-  # git branch: 一覧の表示 (引数なし・--list の pattern・一覧の flag) だけ read。名前を渡す作成や、削除・移動などは
-  # git-write。
-  def self.git_branch(rest)
+  # git branch と tag の一覧の表示の option。名前が完全に一致するものだけを受ける (git は長い option の一意な省略を
+  # 受けるが、省略形 (--unset-upst・--edit-desc など) は一覧かどうかを決めずに書き込みとみなす)。values は = か次の語の
+  # 値をとる。
+  GIT_LISTING = {
+    "branch" => { flags: %w[-a -r -v -vv -l -i --all --remotes --verbose --list --show-current --ignore-case --column
+                            --no-column --color --no-color --abbrev --no-abbrev --omit-empty],
+                  values: %w[--contains --no-contains --merged --no-merged --points-at --sort --format] },
+    "tag" => { flags: %w[-l -i --list --ignore-case --column --no-column --color --no-color --omit-empty],
+               values: %w[--contains --no-contains --merged --no-merged --points-at --sort --format] },
+  }.freeze
+
+  # git branch / tag: 一覧の表示だけ read。位置引数は、-l / --list (pattern) があるときか、値をとる option の値のとき
+  # だけ。ほかの形 (名前を渡す作成、削除・移動、知らない option や省略形) は git-write。
+  def self.git_listing(sub, rest)
+    spec = GIT_LISTING.fetch(sub)
     listing = rest.any? { |a| %w[-l --list].include?(a) }
     i = 0
     while i < rest.length
       a = rest[i]
-      return "git-write" if a.match?(BRANCH_WRITE_FLAGS)
-
-      if BRANCH_VALUE_FLAGS.include?(a)
-        i += 2
+      name = a.split("=", 2).first
+      if spec[:values].include?(name)
+        i += a.include?("=") ? 1 : 2
         next
       end
-      return "git-write" if !a.start_with?("-") && !listing
-
+      if a.start_with?("-")
+        ok = spec[:flags].include?(name) || (sub == "tag" && a.match?(/\A-n\d*\z/))
+        return "git-write" unless ok
+      elsif !listing
+        return "git-write"
+      end
       i += 1
     end
     "read"
+  end
+
+  # git config: 読む option (--get・--list など) か、名前だけの 1 つの位置引数のときに read。値を渡す形、知らない
+  # option や省略形 (--unset-a など) は git-write。
+  GIT_CONFIG_READ = %w[--get --get-all --get-regexp --get-urlmatch --list -l --show-origin --show-scope --name-only
+                       --null -z --includes --no-includes].freeze
+  GIT_CONFIG_FLAGS = %w[--global --system --local --worktree --bool --int --bool-or-int --path --expiry-date].freeze
+  GIT_CONFIG_VALUES = %w[--file -f --blob --type --default].freeze
+
+  def self.git_config(rest)
+    reading = false
+    pos = []
+    i = 0
+    while i < rest.length
+      a = rest[i]
+      name = a.split("=", 2).first
+      if GIT_CONFIG_VALUES.include?(name)
+        i += a.include?("=") ? 1 : 2
+        next
+      end
+      if GIT_CONFIG_READ.include?(a)
+        reading = true
+      elsif GIT_CONFIG_FLAGS.include?(a)
+        nil
+      elsif a.start_with?("-")
+        return "git-write"
+      else
+        pos << a
+      end
+      i += 1
+    end
+    return "read" if reading && pos.length <= 2
+
+    !reading && pos.length == 1 ? "read" : "git-write"
   end
 end

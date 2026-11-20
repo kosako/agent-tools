@@ -102,7 +102,15 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
   変わりうるので、中の command が option を問わず read の command のときだけ、その区分を使います。ほかは `unknown` 以上です。
 - git の読み取りの subcommand でも、`--output` は `file-write`、pager や外部の program を起動する option (`-O<program>`・
   `--textconv`・`--ext-diff` など) は `unknown` 以上です。git は長い option の一意な省略を受けるので、省略形も前方一致で
-  拾います。gh の読み取りの動詞でも、browser を起動する `--web`・`-w` は `unknown` です。
+  拾います。gh の読み取りの動詞でも、browser を起動する `--web`・`-w` (`-w=true` などを含む) は `unknown` です。git の
+  `branch`・`tag`・`config` は、一覧の表示と読み取りの option を完全な名前で受ける allowlist で読み、省略形や知らない option は
+  書き込みとみなします。
+- 門を通る command でも、引数で意味が変わる形は軽い区分にしません。引用の外の glob (`*`・`?`・`[`) は、展開で引数の数と
+  意味が変わるので、option を問わず read の command (`cat`・`grep`・`ls` など) のほかは `unknown` 以上です。`printf -v` と
+  `test -v` は、bash と zsh が配列の添字 (中の置き換えを含む) を評価するので `unknown` です。`diff -l` は出力を `pr` に通す
+  ので `unknown` です。標準の bin の directory の外の path が付いた command の名前 (`./cat`・`lib/grep`) は、名前と違う
+  program を実行しうるので `unknown` 以上です。`sudo` は前置きとして読み飛ばしません。`python3 -m` の exec は test の
+  module (`pytest`・`unittest`・`doctest`) だけです。
 - `exec` は違反にも合格の根拠にもしない区分です (test を走らせる再現は investigate の read-only の契約の中)。
   `unknown` は安全とはみなしません。どちらも語の形で決めているので、program の中で何をしたかは区分に出ません。
   project の中の書き込みは `changed` に出ますが、一時 directory への書き込みは出ません。
