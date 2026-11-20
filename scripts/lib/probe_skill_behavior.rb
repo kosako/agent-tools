@@ -69,7 +69,7 @@ module ProbeSkillBehavior
       --repeat    各 case の実行回数 (既定: 1)
       --source    置く skill の dir の親 (既定: generated/<tool>/skills。build 済みであること)
       --skills    none で skill を置かない対照にする (codex は source と同名の user の skill も外す)
-      --variant   結果に付ける label (既定: candidate)。挙動は変えない
+      --variant   結果に付ける label (既定: candidate)。英数字と . _ - の 64 字まで。挙動は変えない
       --model     CLI に渡す model。claude-code は省略すると CLI の既定。codex は省略すると Codex home の
                   config.toml の top-level の model を使い、無ければエラー
       --max-turns claude-code の --max-turns (既定: #{DEFAULT_MAX_TURNS})
@@ -115,6 +115,8 @@ module ProbeSkillBehavior
     raise Error, "--tool is required" unless opts[:tool]
     raise Error, "--tool must be one of #{TOOLS.join(', ')}" unless TOOLS.include?(opts[:tool])
     raise Error, "--out is required" unless opts[:out] || opts[:dry_run]
+    # variant は results.json に入り、judge の出力に写る。決まった文字だけにする (judge も同じ形を求める)。
+    raise Error, "--variant must match #{C::LABEL_PATTERN.source}" unless opts[:variant].match?(C::LABEL_PATTERN)
 
     opts
   end

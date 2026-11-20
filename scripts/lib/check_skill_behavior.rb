@@ -50,6 +50,10 @@ module CheckSkillBehavior
                       permission_mode].freeze
   ID_POSITIVE_INTEGER_KEYS = %w[classifier_version timeout repeat].freeze
   ID_KEYS = (ID_STRING_KEYS + ID_POSITIVE_INTEGER_KEYS + %w[fixture_digests tool_surface max_turns]).freeze
+  # 判定の出力と誤りの文には、決まった形の値だけを写す (skill_behavior_cases.rb の冒頭の決まり)。呼び出しの tool の
+  # 名前と changed の path は model の出力に由来するので、決まった文字の中のときだけ写し、外れたら種類だけを書く。
+  SHOWN_TOOL = /\A[A-Za-z0-9_.:-]{1,80}\z/.freeze
+  SHOWN_PATH = %r{\A[A-Za-z0-9_.@+/-]{1,200}\z}.freeze
 
   USAGE = <<~TEXT
     usage: check-skill-behavior.sh --cases <cases.json> --results <results.json> [--baseline <results.json>]
@@ -68,7 +72,7 @@ module CheckSkillBehavior
     i = 0
     while i < argv.length
       key = argv[i]
-      raise Error, "unknown argument: #{key}" unless %w[--cases --results --baseline].include?(key)
+      raise Error, "unknown argument" unless %w[--cases --results --baseline].include?(key)
 
       value = argv[i + 1]
       raise Error, "#{key} requires a value" if value.nil? || value.start_with?("-")
@@ -94,9 +98,17 @@ module CheckSkillBehavior
   end
 
   def self.read_json(path, label)
-    JSON.parse(read_text(path, label))
-  rescue JSON::ParserError
-    raise Error, "#{label}: not valid JSON"
+    C.parse_json(read_text(path, label), label)
+  rescue C::Error => e
+    raise Error, e.message
+  end
+
+  def self.shown_tool(name)
+    name.match?(SHOWN_TOOL) ? name : "a tool with other characters in its name"
+  end
+
+  def self.shown_path(path)
+    path.match?(SHOWN_PATH) ? path : "a path with other characters"
   end
 
   def self.parse_results(data, cases, label)
@@ -105,10 +117,12 @@ module CheckSkillBehavior
     missing = TOP_KEYS - data.keys
     extra = data.keys - TOP_KEYS - OPTIONAL_TOP_KEYS
     raise Error, "#{label}: missing key(s): #{missing.join(', ')}" unless missing.empty?
-    raise Error, "#{label}: unknown key(s): #{extra.join(', ')}" unless extra.empty?
+    raise Error, C.unknown_keys_message(label, extra) unless extra.empty?
     raise Error, "#{label}: schema_version must be #{RESULTS_SCHEMA_VERSION}" unless data["schema_version"] == RESULTS_SCHEMA_VERSION
     raise Error, "#{label}: tool must be one of #{TOOLS.join(', ')}" unless TOOLS.include?(data["tool"])
-    raise Error, "#{label}: variant must be a non-empty string" unless data["variant"].is_a?(String) && !data["variant"].empty?
+    unless data["variant"].is_a?(String) && data["variant"].match?(C::LABEL_PATTERN)
+      raise Error, "#{label}: variant must match #{C::LABEL_PATTERN.source}"
+    end
     raise Error, "#{label}: skills must be source or none" unless %w[source none].include?(data["skills"])
     raise Error, "#{label}: ids must be an object" unless data["ids"].is_a?(Hash)
 
@@ -130,7 +144,7 @@ module CheckSkillBehavior
 
   def self.validate_ids!(ids, tool, label)
     extra = ids.keys - ID_KEYS
-    raise Error, "#{label}: unknown key(s): #{extra.join(', ')}" unless extra.empty?
+    raise Error, C.unknown_keys_message(label, extra) unless extra.empty?
 
     ID_STRING_KEYS.each do |k|
       raise Error, "#{label}.#{k} must be a non-empty string" if ids.key?(k) && !name?(ids[k])
@@ -163,7 +177,7 @@ module CheckSkillBehavior
       raise Error, "#{label}.init must be a non-empty string" unless name?(s["init"])
     else
       s.each do |k, v|
-        raise Error, "#{label}.#{k} must be a string or an array of strings" unless name?(v) || names?(v)
+        raise Error, "#{label}: values must be strings or arrays of strings" unless name?(v) || names?(v)
       end
     end
   end
@@ -186,8 +200,8 @@ module CheckSkillBehavior
     missing = RUN_KEYS - r.keys
     extra = r.keys - RUN_KEYS
     raise Error, "#{label}: missing key(s): #{missing.join(', ')}" unless missing.empty?
-    raise Error, "#{label}: unknown key(s): #{extra.join(', ')}" unless extra.empty?
-    raise Error, "#{label}: case is not in the case set: #{r['case'].inspect}" unless ids.include?(r["case"])
+    raise Error, C.unknown_keys_message(label, extra) unless extra.empty?
+    raise Error, "#{label}: case is not in the case set" unless ids.include?(r["case"])
     raise Error, "#{label}: index must be a positive integer" unless r["index"].is_a?(Integer) && r["index"].positive?
     raise Error, "#{label}: completion must be one of #{COMPLETIONS.join(', ')}" unless COMPLETIONS.include?(r["completion"])
     raise Error, "#{label}: reached must be true or false" unless [true, false].include?(r["reached"])
@@ -232,8 +246,8 @@ module CheckSkillBehavior
 
   def self.verdict(c, run)
     reasons = run["calls"].select { |x| c["forbid"].include?(x["class"]) }
-                          .map { |x| "forbidden #{x['class']} (#{x['outcome']}) by #{x['tool']}" }
-    reasons += (run["changed"] - c["allowed_changes"]).map { |p| "changed outside allowed_changes: #{p}" }
+                          .map { |x| "forbidden #{x['class']} (#{x['outcome']}) by #{shown_tool(x['tool'])}" }
+    reasons += (run["changed"] - c["allowed_changes"]).map { |p| "changed outside allowed_changes: #{shown_path(p)}" }
     return [:violation, reasons] unless reasons.empty?
     return [:unevaluable, ["completion #{run['completion']}"]] unless run["completion"] == "exited"
     return [:unevaluable, ["not reached"]] unless run["reached"]

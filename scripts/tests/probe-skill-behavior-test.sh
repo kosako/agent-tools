@@ -749,6 +749,13 @@ rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "--skills none with --source must exit 2 (rc=$rc): $out"
 case "$out" in *exclusive*) : ;; *) fail "--skills none with --source should say they are exclusive: $out" ;; esac
+set +e
+out=$(env FAKE_LOG="$log" PATH="$fakebin:$PATH" ruby "$src" --tool claude-code --variant 'with space' --out "$tmp/never.json" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "a --variant outside the label pattern must exit 2 (rc=$rc): $out"
+case "$out" in *'--variant must match'*) : ;; *) fail "--variant should name the label pattern: $out" ;; esac
+[ ! -e "$tmp/never.json" ] || fail "a rejected --variant must not write results"
 
 # --- claude: 起動の前の確認で欠けた flag があれば起動しない ---
 for flag in --permission-mode --tools; do

@@ -19,18 +19,34 @@ module SkillBehaviorCases
   KINDS = %w[negative positive ambiguous].freeze
   CASE_KEYS = %w[id prompt skill kind pair fixture reach forbid require allowed_changes].freeze
   ID_PATTERN = /\A[a-z0-9][a-z0-9-]*\z/.freeze
+  # results.json の variant (probe の --variant)。出力に写すので、決まった文字だけにする。
+  LABEL_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/.freeze
+
+  # 誤りの文には、決まった形の値 (欄の名前・case の id・閉じた区分) と数だけを写し、入力の値を写さない (#369)。
+  # 判定の出力は PR などに写すことがあるため。未知の key は名前を出さず、数だけを出す。
+
+  # JSON の text を UTF-8 として確かめてから読む。Ruby 2.6 の JSON は文字列の中の不正な byte をそのまま通し、後段の
+  # 正規表現が ArgumentError を投げるので、parse の前に止める。
+  def self.parse_json(text, label)
+    text = text.dup.force_encoding(Encoding::UTF_8)
+    raise Error, "#{label}: not valid UTF-8" unless text.valid_encoding?
+
+    JSON.parse(text)
+  rescue JSON::ParserError
+    raise Error, "#{label}: not valid JSON"
+  end
+
+  def self.unknown_keys_message(label, keys, what = "key")
+    "#{label}: #{keys.length} unknown #{what}(s)"
+  end
 
   # text を読み、検査した case の配列を返す。fixtures_root があれば、fixture の dir と reach の path の在否も確かめる。
   def self.parse(text, fixtures_root: nil)
-    data = begin
-      JSON.parse(text)
-    rescue JSON::ParserError
-      raise Error, "cases: not valid JSON"
-    end
+    data = parse_json(text, "cases")
     raise Error, "cases: top-level must be an object" unless data.is_a?(Hash)
 
     unknown = data.keys - %w[schema_version cases]
-    raise Error, "cases: unknown top-level key(s): #{unknown.join(', ')}" unless unknown.empty?
+    raise Error, unknown_keys_message("cases", unknown, "top-level key") unless unknown.empty?
     unless data["schema_version"] == CASES_SCHEMA_VERSION
       raise Error, "cases: schema_version must be #{CASES_SCHEMA_VERSION}"
     end
@@ -55,7 +71,7 @@ module SkillBehaviorCases
     missing = CASE_KEYS - c.keys
     extra = c.keys - CASE_KEYS
     raise Error, "#{label}: missing key(s): #{missing.join(', ')}" unless missing.empty?
-    raise Error, "#{label}: unknown key(s): #{extra.join(', ')}" unless extra.empty?
+    raise Error, unknown_keys_message(label, extra) unless extra.empty?
 
     %w[id pair fixture].each do |k|
       raise Error, "#{label}: #{k} must match #{ID_PATTERN.source}" unless c[k].is_a?(String) && c[k].match?(ID_PATTERN)

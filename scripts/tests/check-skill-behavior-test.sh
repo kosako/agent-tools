@@ -211,6 +211,65 @@ else
         st.exitstatus == 2 && err.start_with?("error: results: file not readable") && !(out + err).include?(tmp))
 end
 File.chmod(0o600, locked)
+
+# 判定の出力と誤りの文に、決まった形の外の値を写さない (canary の文字列が出ないこと)
+canary = "zq-canary-7"
+leaks = {
+  "results の未知の key" => mutate.call { |d| d[canary] = 1 },
+  "run の未知の key" => mutate.call { |d| run_of.call(d, "neg")[canary] = 1 },
+  "call の未知の key" => mutate.call { |d| run_of.call(d, "neg")["calls"][0][canary] = 1 },
+  "ids の未知の key" => mutate.call { |d| d["ids"][canary] = "x" },
+  "case の object の値" => mutate.call { |d| run_of.call(d, "neg")["case"] = { "prompt" => canary } },
+  "case の set の外の文字列" => mutate.call { |d| run_of.call(d, "neg")["case"] = canary },
+  "codex の tool_surface の key" => mutate.call { |d| d["tool"] = "codex"; d["ids"]["tool_surface"] = { canary => 1 } },
+  "形の外の variant" => mutate.call { |d| d["variant"] = "#{canary} x" },
+}
+leaks.each do |label, data|
+  rc, out, err = judge_run.call(data)
+  check("#{label} は exit 2 で、値を出さない (#{rc}): #{err.lines.first}",
+        rc == 2 && err.start_with?("error: ") && !(out + err).include?(canary))
+end
+rc, out, err = judge_run.call(base, baseline: mutate.call { |d| d["runs"][0][canary] = 1 })
+check("baseline の未知の key も値を出さない (#{rc}): #{out.lines.grep(/baseline/).first}",
+      rc == 2 && out.include?("baseline is not comparable") && !(out + err).include?(canary))
+[["top-level", ->(c) { c[canary] = 1 }], ["case", ->(c) { c["cases"][0][canary] = 1 }]].each do |label, blk|
+  c = copy.call(cases)
+  blk.call(c)
+  path = File.join(tmp, "cases-#{label}.json")
+  File.write(path, JSON.generate(c))
+  out, err, st = Open3.capture3("sh", judge, "--cases", path, "--results", good)
+  check("case set の #{label} の未知の key は数だけを出す (#{st.exitstatus}): #{err.lines.first}",
+        st.exitstatus == 2 && err.include?("1 unknown") && !(out + err).include?(canary))
+end
+out, err, st = Open3.capture3("sh", judge, "--cases", cases_path, "--results", good, "--#{canary}", "x")
+check("知らない引数は名前を出さない (#{st.exitstatus}): #{err.lines.first}",
+      st.exitstatus == 2 && err.start_with?("error: unknown argument") && !(out + err).include?(canary))
+# tool の名前と changed の path は、決まった文字の中のときだけ写す
+rc, out, = judge_run.call(mutate.call { |d| run_of.call(d, "neg")["calls"] << write.merge("tool" => "zq canary 7") })
+check("決まった文字の外の tool の名前は写さない (#{rc})",
+      rc == 1 && out.include?("by a tool with other characters in its name") && !out.include?("zq canary"))
+rc, out, = judge_run.call(mutate.call { |d| run_of.call(d, "neg")["calls"] << write.merge("tool" => "mcp__srv__write") })
+check("決まった文字の中の tool の名前は写す (#{rc})", rc == 1 && out.include?("by mcp__srv__write"))
+rc, out, = judge_run.call(mutate.call { |d| run_of.call(d, "amb")["changed"] = ["zq canary 7.txt"] })
+check("決まった文字の外の path は写さない (#{rc})",
+      rc == 1 && out.include?("changed outside allowed_changes: a path with other characters") && !out.include?("zq canary"))
+rc, out, = judge_run.call(mutate.call { |d| run_of.call(d, "amb")["changed"] = ["lib/sub-dir/a_b.rb"] })
+check("決まった文字の中の path は写す (#{rc})", rc == 1 && out.include?("changed outside allowed_changes: lib/sub-dir/a_b.rb"))
+
+# UTF-8 として読めない file は入力の誤り (Ruby 2.6 の JSON は文字列の中の不正な byte を通す)
+bad_utf8 = JSON.generate(base).b.sub('"lib.rb"'.b, "\"lib\xFF.rb\"".b)
+rc, out, err = judge_run.call(nil, raw: bad_utf8)
+check("不正な UTF-8 の results は exit 2 (#{rc}): #{err.lines.first}",
+      rc == 2 && err.start_with?("error: results: not valid UTF-8") && !out.include?("case neg"))
+rc, out, = judge_run.call(base, baseline: bad_utf8)
+check("不正な UTF-8 の baseline は比べられない (#{rc}): #{out.lines.grep(/baseline/).first}",
+      rc == 2 && out.include?("baseline is not comparable: baseline: not valid UTF-8"))
+utf8_cases = File.join(tmp, "cases-utf8.json")
+File.binwrite(utf8_cases, JSON.generate(cases).b.sub('"neg"'.b, "\"n\xFFg\"".b))
+out, err, st = Open3.capture3("sh", judge, "--cases", utf8_cases, "--results", good)
+check("不正な UTF-8 の case set は exit 2 (#{st.exitstatus}): #{err.lines.first}",
+      st.exitstatus == 2 && err.start_with?("error: cases: not valid UTF-8"))
+
 rc, out, = judge_run.call(mutate.call { |d| d["ids"] = {} })
 check("空の ids は検査を通る (形だけの入力)", rc == 0)
 rc, out, = judge_run.call(mutate.call { |d| d["ids"]["repeat"] = 2; d["runs"] = %w[neg pos amb].flat_map { |id| [run.call(id, 1), run.call(id, 2)] } })
