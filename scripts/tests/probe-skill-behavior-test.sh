@@ -7,6 +7,8 @@
 # - case set の検査、state の差分、終わり方、起動の argv。
 # - integration: PATH 上の偽の claude / codex で probe を回し、run ごとの新しい fixture、results.json の欄、
 #   prompt と command の本文を results.json に出さないこと、--skills none、起動の前の確認を確かめる。
+# - 評価用の Codex の home (#731): codex の子 process にだけ CODEX_HOME を渡すこと、検査の各条件で起動しないこと、
+#   ids.conditions、対照の run で期待した skill の読み取りを検出すること。
 # 実 claude / codex / network / 実 ~/.claude・~/.codex には触れない。実際の CLI の event 形式との一致は対象外
 # (実機の run で確かめる)。
 set -eu
@@ -462,6 +464,84 @@ check("codex の skill の読み取りは command の SKILL.md の path", x[:ski
 check("codex の file_change の path を到達の照合に残す", x[:calls][3][:strings] == ["/p/lib/median.rb"])
 check("codex の turn.completed を見た", x[:turn_completed])
 check("turn.completed が無ければ見ていない", !P.parse_codex("", names)[:turn_completed])
+
+# skill の file の読み取りの形 (#731。review の round 1〜3)。名前に結び付けるのは `<名前>/SKILL.md` の形だけで、
+# ほかの形は区分と分けて skills_unresolved に残す
+cmd = lambda do |id, command|
+  { "type" => "item.completed", "item" => { "id" => id, "type" => "command_execution", "command" => command,
+                                           "exit_code" => 0, "status" => "completed" } }
+end
+one = ->(command) { P.parse_codex(JSON.generate(cmd.call("r1", command)) + "\n", names) }
+read_forms = {
+  "続いた path" => "/bin/zsh -lc 'cat /h/skills/personal-investigate/SKILL.md'",
+  "途中の /./" => "/bin/zsh -lc 'cat /h/skills/./personal-investigate/SKILL.md'",
+  "SKILL.md の直前の /./" => "/bin/zsh -lc 'cat /h/skills/personal-investigate/././SKILL.md'",
+  "重ねた / と小文字の skill.md" => "/bin/zsh -lc 'cat /h/skills//personal-investigate/skill.md'",
+  "前の要素に ~" => "/bin/zsh -lc 'cat ~/.codex/skills/personal-investigate/SKILL.md'",
+  "後ろに区切りの字" => "/bin/zsh -lc 'sed -n 1,80p \"/h/skills/personal-investigate/SKILL.md\"; cat lib/median.rb'",
+}
+read_forms.each do |label, command|
+  y = one.call(command)
+  check("codex の #{label} は、その skill の読み取りで、印は立てない (#{y[:skills_read].inspect} #{y[:skills_unresolved]})",
+        y[:skills_read] == %w[personal-investigate] && y[:skills_unresolved] == false)
+end
+unresolved_forms = {
+  "glob の SKILL.md" => "/bin/zsh -lc 'cat /h/skills/*/SKILL.md'",
+  "名前を変数に入れた形" => "/bin/zsh -lc 'n=personal-investigate; cat /h/skills/$n/SKILL.md'",
+  "cd の無い単独の SKILL.md" => "/bin/zsh -lc 'find /h/skills -name SKILL.md -exec cat {} +'",
+  "最後の要素が .." => "/bin/zsh -lc 'cat /h/skills/personal-investigate/../SKILL.md'",
+  "cd の先が変数" => "/bin/zsh -lc 'cd /h/skills/$n && cat SKILL.md'",
+  "cd した dir の SKILL.md" => "/bin/zsh -lc 'cd /h/skills/personal-investigate && cat SKILL.md'",
+  "cd と ./SKILL.md" => "/bin/zsh -lc 'cd /h/skills/personal-investigate; cat ./SKILL.md'",
+  "読んだ後の cd (round 3)" => "/bin/zsh -lc 'cd ../skills/personal-investigate && cat SKILL.md; cd - && cat lib/median.rb'",
+  "file の名前の後ろの glob (round 3)" => "/bin/zsh -lc 'cat ../skills/*/SKILL.md* && cat lib/median.rb'",
+  "file の名前の前の glob (round 3)" => "/bin/zsh -lc 'cat ../skills/personal-investigate/*SKILL.md'",
+  "SKILL.md で終わる別の名前" => "/bin/zsh -lc 'cat notes-SKILL.md'",
+  "SKILL.md で始まる別の名前" => "/bin/zsh -lc 'cat /h/skills/personal-investigate/SKILL.md.bak'",
+  "二重引用でつないだ名前 (round 4)" => "cat \"../skills/personal-\"investigate/SKILL.md && cat lib/median.rb",
+  "単引用でつないだ名前" => "cat ../skills/'personal-'investigate/SKILL.md",
+  "名前の途中の引用" => "cat ../skills/pe\"rs\"onal-investigate/SKILL.md",
+  "前の要素に変数 (門で止める)" => "/bin/zsh -lc 'cat $HOME/.codex/skills/personal-investigate/SKILL.md'",
+  "command の置き換えでつないだ名前 (round 5)" => "cat ../skills/$(printf personal-)investigate/SKILL.md && printf x >> lib/median.rb",
+  "backslash と改行でつないだ名前 (round 5)" => "cat ../skills/personal-\\\ninvestigate/SKILL.md && printf x >> lib/median.rb",
+  "brace の展開" => "cat ../skills/personal-{investigate,x}/SKILL.md",
+  "backtick の置き換え" => "cat ../skills/`printf personal-investigate`/SKILL.md",
+  "zsh の file の名前の修飾 (round 6)" => "cat ../skills/personal-investigate-old/SKILL.md(:s/personal-investigate-old/personal-investigate/) && printf x >> lib/median.rb",
+  "zsh の glob の組み分け" => "cat ../skills/(personal-investigate|x)/SKILL.md",
+}
+unresolved_forms.each do |label, command|
+  y = one.call(command)
+  check("codex の #{label} は名前を決められないので印を立てる (#{y[:skills_read].inspect} #{y[:skills_unresolved]})",
+        y[:skills_read].empty? && y[:skills_unresolved] == true)
+end
+y = one.call("/bin/zsh -lc 'cat /h/skills/personal-grill-me/SKILL.md ./SKILL.md'")
+check("既知の名前と同じ文字列でも、残りの決められない読み取りの印は消えない (round 2)",
+      y[:skills_read] == %w[personal-grill-me] && y[:skills_unresolved] == true)
+y = one.call("/bin/zsh -lc 'cat /h/skills/personal-grill-me/SKILL.md /h/skills/*/SKILL.md'")
+check("門で止めた文字列からは名前を記録せず、印を立てる (round 5)", y[:skills_read].empty? && y[:skills_unresolved] == true)
+y = one.call("/bin/zsh -lc 'cat /h/skills/*/SKILL.md && sed -i s/a/b/ lib/median.rb'")
+check("書き込みと同居しても、区分は分類器のまま、印は残る (round 2。#{y[:calls][0][:class]})",
+      y[:calls][0][:class] == "file-write" && y[:skills_unresolved] == true)
+y = one.call("/bin/zsh -lc 'cat /h/skills/personal-investigate-old/SKILL.md'")
+check("名前の続く別の dir は、別の skill の読み取り (印も立てない)", y[:skills_read].empty? && y[:skills_unresolved] == false)
+y = one.call("/bin/zsh -lc 'cat README.md'")
+check("SKILL.md に触れない呼び出しは今のまま", y[:calls][0][:class] == "read" && y[:skills_read].empty? && y[:skills_unresolved] == false)
+two = [cmd.call("a", "/bin/zsh -lc 'cat /h/skills/*/SKILL.md'"), cmd.call("b", "/bin/zsh -lc 'cat README.md'")]
+y = P.parse_codex(two.map { |e| JSON.generate(e) }.join("\n") + "\n", names)
+check("run の印は、どれかの呼び出しで立てば立つ", y[:skills_unresolved] == true)
+claude_amb = [
+  { "type" => "assistant", "message" => { "content" => [
+    { "type" => "tool_use", "id" => "u1", "name" => "Read", "input" => { "file_path" => "/p/other-skill/SKILL.md" } },
+    { "type" => "tool_use", "id" => "u2", "name" => "Write", "input" => { "file_path" => "/p/x/*/SKILL.md", "content" => "x" } },
+    { "type" => "tool_use", "id" => "u3", "name" => "Read", "input" => { "file_path" => "/p/skills/./personal-grill-me/SKILL.md" } },
+  ] } },
+].map { |e| JSON.generate(e) }.join("\n") + "\n"
+y = P.parse_claude(claude_amb, names)
+check("claude も同じ規則で、区分は変えずに印を立てる (#{y[:calls].map { |c| c[:class] }.inspect} #{y[:skills_unresolved]})",
+      y[:calls].map { |c| c[:class] } == %w[read file-write read] && y[:skills_read] == %w[personal-grill-me] &&
+      y[:skills_unresolved] == true)
+y = P.parse_claude(JSON.generate(claude_amb.lines.first.then { |l| JSON.parse(l) }.tap { |e| e["message"]["content"].delete_at(1) }) + "\n", names)
+check("claude の決められる Read だけなら印は立てない", y[:skills_unresolved] == false)
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -559,10 +639,13 @@ check("claude の prompt は最後", argv.last == "PROMPT" && argv.each_cons(2).
 check("claude の --model は指定したときだけ", !argv.include?("--model") && P.claude_argv({ max_turns: 1, model: "m" }, "p").include?("m"))
 check("claude の tool surface は外向きの tool を含まない", (P::CLAUDE_TOOLS & %w[Task WebSearch WebFetch Workflow RemoteTrigger]).empty?)
 ENV["CODEX_HOME"] = dir
-argv = P.codex_argv({ model: "m-x" }, "/proj", [])
+argv = P.codex_argv({ model: "m-x" }, "/proj")
 check("codex は workspace-write の sandbox と境界の flag で起動する",
       argv.first(12) == ["codex", "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config",
                          "--ignore-rules", "-s", "workspace-write", "-c", 'approval_policy="never"', "--disable"] && argv.last == "-")
+check("codex の argv は user の skill を外す skills.config を持たない", argv.none? { |a| a.include?("skills.config") })
+check("codex の子 process の環境は --codex-home のときだけ CODEX_HOME を持つ",
+      P.codex_env({ codex_home: "/e" }) == { "CODEX_HOME" => "/e" } && P.codex_env({}) == {})
 check("merged は 1 つの値ならその値", P.merged(["a", "a", nil]) == "a")
 check("merged は食い違いを mixed で残す", P.merged(%w[a b]) == "mixed:a,b")
 check("merged は値が無ければ unknown", P.merged([nil]) == "unknown")
@@ -602,6 +685,7 @@ EOF
 cat > "$fakebin/codex" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_LOG"
+printf 'codex-home: %s\n' "${CODEX_HOME:-unset}" >> "$FAKE_LOG"
 case "$1 ${2:-}" in
   "--version ") echo "codex-cli 9.9.9"; exit 0 ;;
   "exec --help") printf '%s\n' '  --ignore-user-config' '  --ignore-rules' '  --disable <FEATURE>' '  -s, --sandbox <MODE>'; exit 0 ;;
@@ -615,6 +699,7 @@ for a in "$@"; do
   prev=$a
 done
 cat > /dev/null
+[ -z "${FAKE_HOOK:-}" ] || sh -c "$FAKE_HOOK"
 cd "$proj" || exit 65
 . "$(dirname "$0")/fake-body" .agents/skills
 EOF
@@ -628,6 +713,11 @@ for s in personal-investigate personal-other; do
   mkdir -p "$empty_home/skills/$s"
   printf -- '---\nname: %s\ndescription: d\n---\n' "$s" > "$empty_home/skills/$s/SKILL.md"
 done
+# 評価用の home (#731): auth.json (中身は読まれない) と、Codex の組み込みの隠し dir だけを持つ。
+eval_home="$tmp/codex-eval-home"
+mkdir -p "$eval_home/skills/.system/builtin"
+: > "$eval_home/auth.json"
+eval_real=$(CDPATH= cd -- "$eval_home" && pwd -P)
 
 claude_events="$tmp/claude-events.jsonl"
 cat > "$claude_events" <<'EOF'
@@ -664,7 +754,8 @@ run_fake() {
   [ "$with_source" -eq 0 ] || set -- --source "$source_dir" "$@"
   : > "$log"
   set +e
-  out=$(env FAKE_LOG="$log" FAKE_EVENTS="$events" FAKE_PRISTINE="$pristine" CODEX_HOME="$empty_home" \
+  # ふだんの Codex の home は RUN_CODEX_HOME で差し替えられる (既定は user の skill を持つ empty_home)
+  out=$(env FAKE_LOG="$log" FAKE_EVENTS="$events" FAKE_PRISTINE="$pristine" CODEX_HOME="${RUN_CODEX_HOME:-$empty_home}" \
     PATH="$fakebin:$PATH" ruby "$src" --tool "$tool" "$@" 2>&1)
   rc=$?
   set -e
@@ -692,12 +783,12 @@ unset FAKE_WRITE
   || fail "a call should carry only id, tool, class and outcome"
 [ "$(json_get "$res" 'd["runs"][0].values_at("reached", "changed", "skills_read")')" = '[true,["lib/median.rb"],["personal-investigate"]]' ] \
   || fail "claude run should be reached, changed and read the skill: $(json_get "$res" 'd["runs"][0]')"
-[ "$(json_get "$res" 'd["runs"][0].keys.sort')" = '["calls","case","changed","completion","index","reached","skills_read"]' ] \
+[ "$(json_get "$res" 'd["runs"][0].keys.sort')" = '["calls","case","changed","completion","index","reached","skills_read","skills_unresolved"]' ] \
   || fail "run keys should follow the interface: $(json_get "$res" 'd["runs"][0].keys')"
 [ "$(json_get "$res" 'd.values_at("schema_version", "tool", "variant", "skills")')" = '[1,"claude-code","candidate","source"]' ] \
   || fail "claude top-level fields: $(json_get "$res" 'd.keys')"
 [ "$(json_get "$res" 'd["ids"].keys.sort')" = \
-  '["cases_digest","classifier_version","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
+  '["cases_digest","classifier_version","conditions","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
   || fail "claude ids keys: $(json_get "$res" 'd["ids"].keys.sort')"
 [ "$(json_get "$res" 'd["ids"].values_at("host_version", "init_model", "requested_model", "permission_mode", "max_turns", "repeat", "classifier_version")')" = \
   '["9.9.9","m-fake","default","acceptEdits",12,2,1]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
@@ -743,6 +834,8 @@ run_fake claude-code "$quiet_events" --only investigate-fix --skills none --out 
 grep -q '^skills-dir: absent$' "$log" || fail "--skills none must not place skills: $(cat "$log")"
 [ "$(json_get "$res" 'd["skills"]')" = '"none"' ] || fail "results should record skills none"
 [ "$(json_get "$res" 'd["ids"]["source_digest"]')" = '"none"' ] || fail "--skills none should record no source digest"
+[ "$(json_get "$res" 'd["ids"]["conditions"]')" = '{"setting_sources":"project"}' ] \
+  || fail "claude should record its conditions: $(json_get "$res" 'd["ids"]')"
 set +e
 out=$(env FAKE_LOG="$log" PATH="$fakebin:$PATH" ruby "$src" --tool claude-code --skills none --source "$source_dir" --out "$tmp/never.json" 2>&1)
 rc=$?
@@ -773,7 +866,7 @@ done
 res="$tmp/codex.json"
 FAKE_WRITE=lib/median.rb
 export FAKE_WRITE
-run_fake codex "$codex_events" --model m-x --only investigate-fix --out "$res"
+run_fake codex "$codex_events" --model m-x --only investigate-fix --codex-home "$eval_home" --out "$res"
 unset FAKE_WRITE
 [ "$rc" -eq 0 ] || fail "codex probe should exit 0 (rc=$rc): $out"
 [ "$(json_get "$res" 'd["runs"][0]["calls"].map { |c| [c["id"], c["class"], c["outcome"]] }')" = \
@@ -786,15 +879,161 @@ unset FAKE_WRITE
 [ "$(json_get "$res" 'd["ids"]["tool_surface"]["sandbox"]')" = '"workspace-write"' ] || fail "codex tool surface should record the sandbox"
 grep -q -- '^exec --json .*--ignore-user-config --ignore-rules -s workspace-write ' "$log" \
   || fail "codex should be launched with workspace-write and the boundary flags: $(cat "$log")"
-grep -q 'skills.config=\[{path=.*personal-investigate/SKILL.md' "$log" || fail "codex should disable the same-name user skill: $(cat "$log")"
-if grep -q 'personal-other/SKILL.md' "$log"; then fail "codex should keep other user skills when skills are placed: $(cat "$log")"; fi
+if grep -q 'skills.config' "$log"; then fail "codex should not pass skills.config with the eval home: $(cat "$log")"; fi
+# 起動の前の検査 (exec --help・features list・--version) と exec の 4 回とも、CODEX_HOME は評価用の home の実 path
+[ "$(grep -c '^codex-home: ' "$log")" -eq 4 ] || fail "codex should be called 4 times: $(cat "$log")"
+if grep '^codex-home: ' "$log" | grep -v -x -F "codex-home: $eval_real" | grep -q .; then
+  fail "every codex call should get CODEX_HOME=$eval_real: $(cat "$log")"
+fi
+[ "$(json_get "$res" 'd["ids"]["conditions"]')" = '{"home":"eval","user_instructions":"absent","user_skills":"absent"}' ] \
+  || fail "codex should record its conditions: $(json_get "$res" 'd["ids"]')"
 
-# --- codex: --skills none でも同名の user の skill は外し、project には置かない ---
-run_fake codex "$codex_events" --model m-x --only investigate-fix --skills none --out "$res"
+# --- codex: --skills none は project に置かず、skills.config も渡さない ---
+run_fake codex "$codex_events" --model m-x --only investigate-fix --skills none --codex-home "$eval_home" --out "$res"
 [ "$rc" -eq 0 ] || fail "codex --skills none should run (rc=$rc): $out"
 grep -q '^skills-dir: absent$' "$log" || fail "codex --skills none must not place skills: $(cat "$log")"
-grep -q 'skills.config=\[{path=.*personal-investigate/SKILL.md.*personal-other/SKILL.md' "$log" \
-  || fail "codex --skills none should disable every user skill: $(cat "$log")"
+if grep -q 'skills.config' "$log"; then fail "codex --skills none should not pass skills.config: $(cat "$log")"; fi
+
+# --- codex: 対照の run が期待した skill を読んだら、ふだんの home に skill が無くても skills_read に残す ---
+nohome="$tmp/codex-home-noskills"
+mkdir -p "$nohome"
+RUN_CODEX_HOME=$nohome
+run_fake codex "$codex_events" --model m-x --only investigate-fix --skills none --codex-home "$eval_home" --out "$res"
+RUN_CODEX_HOME=
+[ "$rc" -eq 0 ] || fail "codex --skills none with a skill-less usual home should run (rc=$rc): $out"
+[ "$(json_get "$res" 'd["runs"][0]["skills_read"]')" = '["personal-investigate"]' ] \
+  || fail "a control run that reads the expected skill should record it: $(json_get "$res" 'd["runs"][0]')"
+
+# --- codex: 名前を決められない読み取りをした対照は、probe が印を残し、judge が results でも baseline でも止める ---
+# 書き込みのある正例 (investigate-fix) で、許された変更と同居させる (review の round 2・5)。比べる候補は skill を置いた run。
+judge="$repo_root/scripts/check-skill-behavior.sh"
+cases_file="$tmp/cases-fix.json"
+ruby -rjson -e 'd = JSON.parse(File.read(ARGV[0])); d["cases"].select! { |c| c["id"] == "investigate-fix" }
+  File.write(ARGV[1], JSON.generate(d))' "$repo_root/scripts/lib/skill_behavior_cases.json" "$cases_file"
+FAKE_WRITE=lib/median.rb
+export FAKE_WRITE
+candidate="$tmp/candidate-fix.json"
+run_fake codex "$codex_events" --model m-x --only investigate-fix --codex-home "$eval_home" --out "$candidate"
+[ "$rc" -eq 0 ] || fail "the codex candidate should run (rc=$rc): $out"
+# judge_on <args...>: judge を回して jrc と jout に残す
+judge_on() {
+  set +e
+  jout=$(sh "$judge" --cases "$cases_file" "$@" 2>&1)
+  jrc=$?
+  set -e
+}
+judge_on --results "$candidate"
+[ "$jrc" -eq 0 ] || fail "the candidate alone should pass the judge (rc=$jrc): $jout"
+for form in glob subst backslash qualifier; do
+  events="$tmp/codex-$form-events.jsonl"
+  ruby -rjson -e '
+    cmd = { "glob" => "cat /h/skills/*/SKILL.md && printf x >> lib/median.rb",
+            "subst" => "cat ../skills/$(printf personal-)investigate/SKILL.md && printf x >> lib/median.rb",
+            "backslash" => "cat ../skills/personal-\\\ninvestigate/SKILL.md && printf x >> lib/median.rb",
+            "qualifier" => "cat ../skills/personal-investigate-old/SKILL.md(:s/personal-investigate-old/personal-investigate/) && printf x >> lib/median.rb" }.fetch(ARGV[0])
+    item = { "id" => "item_1", "type" => "command_execution", "command" => cmd, "exit_code" => 0, "status" => "completed" }
+    File.write(ARGV[1], [{ "type" => "item.completed", "item" => item },
+                         { "type" => "turn.completed", "usage" => { "input_tokens" => 1, "output_tokens" => 1 } }]
+                        .map { |e| JSON.generate(e) }.join("\n") + "\n")' "$form" "$events"
+  control="$tmp/control-$form.json"
+  run_fake codex "$events" --model m-x --only investigate-fix --skills none --codex-home "$eval_home" --out "$control"
+  [ "$rc" -eq 0 ] || fail "codex control ($form) should run (rc=$rc): $out"
+  [ "$(json_get "$control" 'd["runs"][0].values_at("skills_read", "skills_unresolved")')" = '[[],true]' ] \
+    || fail "the control run ($form) should record an unresolved skill read: $(json_get "$control" 'd["runs"][0]')"
+  [ "$(json_get "$control" 'd["runs"][0]["calls"].map { |c| c["class"] }')" = '["file-write"]' ] \
+    || fail "the control run ($form) should keep the classifier's class: $(json_get "$control" 'd["runs"][0]["calls"]')"
+  judge_on --results "$control"
+  [ "$jrc" -eq 2 ] || fail "judge should stop on the control ($form) with an unresolved read (rc=$jrc): $jout"
+  case "$jout" in *"condition: control run read a skill file whose name could not be decided"*) : ;;
+    *) fail "judge should name the unresolved read ($form): $jout" ;; esac
+  judge_on --results "$candidate" --baseline "$control"
+  [ "$jrc" -eq 2 ] || fail "judge should not compare with the control ($form) as baseline (rc=$jrc): $jout"
+  case "$jout" in *"baseline is not comparable: control run read a skill file whose name could not be decided"*) : ;;
+    *) fail "judge should say the baseline control ($form) is not comparable: $jout" ;; esac
+done
+unset FAKE_WRITE
+
+# --- codex: 評価用の home が無い・条件を満たさないときは起動しない (#731) ---
+run_fake codex "$codex_events" --model m-x --only investigate-fix --out "$tmp/never.json"
+[ "$rc" -eq 2 ] || fail "codex without --codex-home must exit 2 (rc=$rc): $out"
+case "$out" in *"--codex-home is required"*) : ;; *) fail "codex without --codex-home should say it is required: $out" ;; esac
+[ ! -s "$log" ] || fail "codex without --codex-home must not call codex: $(cat "$log")"
+run_fake claude-code "$quiet_events" --only investigate-fix --codex-home "$eval_home" --out "$tmp/never.json"
+[ "$rc" -eq 2 ] || fail "--codex-home with claude-code must exit 2 (rc=$rc): $out"
+# bad_home <name>: auth.json だけを持つ新しい dir を作り、path を出す
+bad_home() {
+  d="$tmp/bad-home-$1"
+  mkdir -p "$d"
+  : > "$d/auth.json"
+  printf '%s\n' "$d"
+}
+# expect_bad <想定する文言> <--codex-home の値>: exit 2 で、文言を出し、codex を呼ばない
+expect_bad() {
+  want=$1
+  run_fake codex "$codex_events" --model m-x --only investigate-fix --codex-home "$2" --out "$tmp/never.json"
+  [ "$rc" -eq 2 ] || fail "--codex-home ($want) must exit 2 (rc=$rc): $out"
+  case "$out" in *"$want"*) : ;; *) fail "--codex-home should say '$want': $out" ;; esac
+  [ ! -s "$log" ] || fail "--codex-home ($want) must not call codex: $(cat "$log")"
+}
+expect_bad "absolute path" "relative/home"
+expect_bad "does not exist" "$tmp/no-such-home"
+ln -s "$eval_home" "$tmp/link-home"
+expect_bad "symlink" "$tmp/link-home"
+expect_bad "usual Codex home" "$empty_home"
+h=$(bad_home noauth)
+rm "$h/auth.json"
+expect_bad "no auth.json" "$h"
+h=$(bad_home authlink)
+rm "$h/auth.json"
+ln -s "$eval_home/auth.json" "$h/auth.json"
+expect_bad "auth.json must be a regular file" "$h"
+h=$(bad_home agents)
+: > "$h/AGENTS.md"
+expect_bad "AGENTS.md" "$h"
+h=$(bad_home agents-lower)
+: > "$h/agents.md"
+expect_bad "agents.md" "$h"
+h=$(bad_home override)
+: > "$h/AGENTS.override.md"
+expect_bad "AGENTS.override.md" "$h"
+h=$(bad_home userskill)
+mkdir -p "$h/skills/personal-investigate"
+: > "$h/skills/personal-investigate/SKILL.md"
+expect_bad "user skills" "$h"
+h=$(bad_home skillslink)
+ln -s "$empty_home/skills" "$h/skills"
+expect_bad "skills must not be a symlink" "$h"
+# 大文字小文字を区別しない file system では、大文字小文字だけ違う path も、ふだんの home と同じ実体 (review の round 1)
+usual_ok="$tmp/usual-ok"
+mkdir -p "$usual_ok"
+: > "$usual_ok/auth.json"
+if [ -d "$tmp/USUAL-OK" ]; then
+  RUN_CODEX_HOME=$usual_ok
+  expect_bad "usual Codex home" "$tmp/USUAL-OK"
+  RUN_CODEX_HOME=
+else
+  echo "note: case-sensitive file system; skip the case-alias check of the usual home"
+fi
+
+# --- codex: run の間に評価用の home が変わったら、次の run を起動しない (review の round 1) ---
+# changing_home <名前> <hook>: 評価用の home の写しを作り、1 回目の exec の中で hook を走らせて、--repeat 2 で回す
+changing_home() {
+  ch="$tmp/changing-$1"
+  mkdir -p "$ch"
+  : > "$ch/auth.json"
+  FAKE_HOOK=$(printf %s "$2" | sed "s|@H@|$ch|g")
+  export FAKE_HOOK
+  run_fake codex "$codex_events" --model m-x --only investigate-fix --repeat 2 --codex-home "$ch" --out "$tmp/never.json"
+  unset FAKE_HOOK
+  [ "$rc" -eq 2 ] || fail "a changed eval home ($1) must stop the probe (rc=$rc): $out"
+  [ "$(grep -c '^exec --json' "$log")" -eq 1 ] || fail "a changed eval home ($1) must not launch the next run: $(cat "$log")"
+}
+changing_home agents ': > "@H@/AGENTS.md"'
+case "$out" in *AGENTS.md*) : ;; *) fail "the stop should name AGENTS.md: $out" ;; esac
+changing_home skill 'mkdir -p "@H@/skills/personal-investigate"'
+case "$out" in *"user skills"*) : ;; *) fail "the stop should say user skills: $out" ;; esac
+changing_home replaced 'mv "@H@" "@H@.old" && mkdir "@H@" && : > "@H@/auth.json"'
+case "$out" in *"changed during the probe"*) : ;; *) fail "a replaced eval home should be detected: $out" ;; esac
 
 # --- symlink を経て temp project や raw dir の外へ書かない (#717 の review の round 1) ---
 canary="$tmp/canary.txt"
@@ -864,6 +1103,9 @@ RUBY
 run_fake codex "$codex_events" --model m-x --dry-run
 [ "$rc" -eq 0 ] || fail "dry-run should exit 0 (rc=$rc): $out"
 if grep -q '^exec' "$log"; then fail "dry-run must not launch codex: $(cat "$log")"; fi
+case "$out" in *"codex home: not set"*) : ;; *) fail "dry-run without --codex-home should say it is not set: $out" ;; esac
+run_fake codex "$codex_events" --model m-x --dry-run --codex-home "$tmp/no-such-home"
+[ "$rc" -eq 2 ] || fail "dry-run should still check a given --codex-home (rc=$rc): $out"
 run_fake claude-code "$quiet_events" --only nope --out "$tmp/never.json"
 [ "$rc" -eq 2 ] || fail "unknown --only id must exit 2 (rc=$rc): $out"
 run_fake claude-code "$quiet_events" --skills some --out "$tmp/never.json"

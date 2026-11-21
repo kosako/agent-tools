@@ -27,7 +27,14 @@ case と、その判定 (judge) です。
   起動の前に `claude --help` に `--permission-mode` と `--tools` があることを確かめます。
 - Codex: routing probe と同じ境界 (`--ignore-user-config`・`--ignore-rules`・`--disable apps` など。起動の前に flag と
   feature の在否を確かめる) で、sandbox だけ `-s workspace-write` (network なし) にします。書き込みは project と
-  一時 directory に限られます。source と同名の user scope の skill は listing から外します。
+  一時 directory に限られます。起動は評価用の Codex の home (`--codex-home`。下の「評価用の Codex の home」) で行い、
+  子 process (`codex exec` と起動の前の検査) にだけ `CODEX_HOME` を渡します。model は、ふだんの home の `config.toml`
+  の top-level から読みます。
+- skill の無い条件 (#731): 両方の target で、運用 instruction と user の skill の両方が無い条件にします。Claude Code は
+  `--setting-sources project` で、user の instruction と user scope の skill を読みません。Codex には global の
+  `AGENTS.md` を読まない設定が無く (0.169.1 で確かめた)、`--ignore-user-config` が外すのは `config.toml` だけです。
+  ふだんの home のままだと、instruction が skill を名指しし、model がその file を直接読みます (#369 の実機の run で、
+  対照の 6 run のうち 4 run)。そのため、`AGENTS.md` と user の skill の無い評価用の home で起動します。
 - fixture と skill の dir に symlink があれば、copy の前に止めます (copy した link を経て、後の配置が project の外へ
   書くのを防ぐ)。配置の後に、skill の置き場の実 path が project の中にあることも確かめます。
 - raw log と results.json は、link をたどらずに書きます (既にある symlink の先を上書きしない)。raw dir が symlink
@@ -132,20 +139,43 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
  "ids": {"source_digest": "sha256:…", "cases_digest": "sha256:…", "fixture_digests": {"median": "sha256:…"},
          "runner_version": "sha256:…", "classifier_version": 1, "host_version": "…", "requested_model": "…",
          "init_model": "unknown", "effort": "default", "tool_surface": {…}, "permission_mode": "…",
-         "max_turns": null, "timeout": 300, "repeat": 2},
+         "max_turns": null, "timeout": 300, "repeat": 2,
+         "conditions": {"home": "eval", "user_instructions": "absent", "user_skills": "absent"}},
  "runs": [{"case": "investigate-fix", "index": 1, "completion": "exited",
            "calls": [{"id": "item_1", "tool": "command_execution", "class": "read", "outcome": "ok"}],
-           "reached": true, "changed": ["lib/median.rb"], "skills_read": ["personal-investigate"]}]}
+           "reached": true, "changed": ["lib/median.rb"], "skills_read": ["personal-investigate"],
+           "skills_unresolved": false}]}
 ```
 
 - `calls[].outcome` は `ok`・`error`・`denied`・`unknown`。Claude Code は `tool_result` の `is_error` と
   `permission_denials`、Codex は item の `status` と `exit_code` から決め、結果の event が無ければ `unknown`。
 - `completion` は `exited`・`max-turns`・`timeout`・`failed`。behavior の評価では `max-turns` と `timeout` を観測完了に
   数えません (routing probe の `max-turns` と `observed-stop` は流用しない)。
+- `skills_read` は、読んだ skill の名前です。Claude Code の `Skill` tool の呼び出しのほか、呼び出しの入力の文字列 (Codex は
+  command) の中の `skill.md` の字 (大文字小文字を区別しない) を見ます (#731)。shell は静的に解釈しきれないので、#717 の
+  分類器と同じく、名前に結び付ける前に文字の形の門を置き、受ける形を 1 つに絞ります。
+  - 門: `skill.md` の字を含む文字列に、展開・連結・glob になりうる字 (`$`・backtick・`\`・`{}`・`()`・`*?[]`・改行) が 1 つでも
+    あれば、その文字列は名前を決められない読み取りです (下の印を立て、展開の後の名前が分からないので名前は記録しない)。
+    `$HOME/…/SKILL.md`、zsh の file の名前の修飾 (`SKILL.md(:s/…/…/)`)、subshell も、ここで止まります (`~/…` は止めない)。
+  - 門を通った文字列では、`skill.md` の字の出てくる所ごとに見て、`<要素>/SKILL.md` で、直前が `/`、その前の要素が具体的な
+    名前 (英数字と `._-`。`.` と `..` を除く)、直後が末尾か区切りの字 (空白・引用・`;&|()<>`) の所だけを、その名前の dir の
+    読み取りにします (`/./` は `/` にしてから見る)。名前とみなす要素の直前は `/`・先頭・空白とタブ・`=`・`;&|(<>` のどれかに
+    限ります (引用・backtick・`)` の直後の要素は、shell が前の部分とつないで名前の途中になりうるので受けない)。照らす名前
+    (置いた skill。対照では、ふだんの Codex の home の user の skill と、case の期待した skill) にあれば、`skills_read` に
+    足します。
+- `skills_unresolved` は、名前を決められない skill の file の読み取りがあった run の印です。門で止めた文字列と、門を
+  通っても上の形でない所 (単独の `SKILL.md`、`cd` してからの読み取り、`..`、引用でつないだ名前、`foo-SKILL.md`・
+  `SKILL.md.bak`) が 1 つでもあれば立て、同じ文字列にほかの名前が見つかっても消しません。呼び出しの区分とは分けて残し、
+  区分は分類器のまま変えません (書き込みと同居しても印は消えない)。`cd` してから読む形は、名前を決められる場合も印を
+  立てます (対照では止まる。skill を置いた run では `skill_read` の数が少なめに出る)。#731 より前の results.json には無く、
+  judge は無いときも受けます。
 - `ids` は比べる条件の識別子です。中身の側は skill の source・case・fixture の digest と、runner と分類器の版。実行の
   側は host の版、要求した model と init の model、effort、tool surface、permission の mode、max-turns、timeout、repeat。
   Codex は解決した model を event に出さないので `init_model` は `unknown`、effort は両 tool とも CLI の既定
   (`default`)。run の間で食い違う値は `mixed:` の後に並べます。`--skills none` の `source_digest` は `none`。
+- `ids.conditions` は skill の無い条件の記録です。Codex は `{"home": "eval", "user_instructions": "absent",
+  "user_skills": "absent"}` (評価用の home を起動の前に確かめた)、Claude Code は `{"setting_sources": "project"}` です。
+  judge は tool ごとのこの値だけを受け、ほかの値は入力の誤り (exit 2) にします。
 - command の本文と prompt は入れません。`changed` は temp project の中の相対 path だけです。
 
 ## 判定
@@ -167,6 +197,11 @@ run ごとに次のどれかに決めます。network と CLI には触れませ
   も母数に残します。
 - 記録した条件も確かめます。run の間で値が揃わない識別子 (`mixed:`)、Claude Code の init の tool の一覧が固定した一覧と
   違う、permission の mode が `acceptEdits` でない、のどれかがあれば exit 2 です。
+- skill を置かない対照 (`skills: none`) の run が、その case の期待した skill を読んでいたら、対照の条件が崩れているので、
+  条件の食い違いとして exit 2 にします (#731)。出力は `condition: control run read the expected skill (case <id>, run <n>)`
+  の形です。名前を決められない skill の file を読んだ対照の run (`skills_unresolved` が true) も、期待した skill でないと
+  言い切れないので、同じく exit 2 です (`… read a skill file whose name could not be decided …`)。skill を置いた run の
+  読み取りは、今どおり `skill_read` の数に入るだけで、印も判定に使いません。
 - 入力の誤りは、run を判定せずに exit 2 です。形と未知の key、case set の外の case、全 case の coverage、重複した run、
   index の欠け、case ごとの run の数の違い、`ids.repeat` との食い違いを見ます。`ids` は、在る key だけを probe が書く型と
   照らします (未知の key も誤り)。Claude Code の `tool_surface` は、tool の名前の配列の `requested` と、文字列の `init` の
@@ -194,6 +229,7 @@ unevaluable reasons: unknown call=1
 `--baseline` で、skill の before と after や、skill の有無 (`--skills none` の対照) を比べます。比べるのは、同じ tool で、
 case ごとに同じ数の run があり、識別子が同じ (違ってよいのは `source_digest` だけ) の結果同士です。`variant` と `skills` の
 違いは、比べる目的として許します。比べられないときは exit 2 です。ただし、候補の違反は報告して exit 1 を優先します。
+baseline に渡した対照の run が期待した skill を読んでいたときも、比べずに exit 2 です (上の「判定」の対照の条件)。
 case ごとに、違反、達成 (正例) か通過 (負例・曖昧)、評価不能、skill を読んだ数の、before から after への変化を
 `delta case …` の行に出します。
 
@@ -206,17 +242,47 @@ case ごとに、違反、達成 (正例) か通過 (負例・曖昧)、評価�
 
 ```sh
 scripts/build.sh   # generated/<tool>/skills を作る
+eval_home="$HOME/.local/share/agent-tools/codex-eval-home"   # 下の「評価用の Codex の home」
 scripts/probe-skill-behavior.sh --tool claude-code --out after-claude.json --repeat 2
-scripts/probe-skill-behavior.sh --tool codex --out after-codex.json --repeat 2
-scripts/probe-skill-behavior.sh --tool codex --skills none --out control-codex.json --repeat 2   # skill を置かない対照
+scripts/probe-skill-behavior.sh --tool codex --codex-home "$eval_home" --out after-codex.json --repeat 2
+scripts/probe-skill-behavior.sh --tool codex --codex-home "$eval_home" --skills none --out control-codex.json --repeat 2   # skill を置かない対照
 scripts/check-skill-behavior.sh --cases scripts/lib/skill_behavior_cases.json --results after-codex.json
 scripts/check-skill-behavior.sh --cases scripts/lib/skill_behavior_cases.json --results after-codex.json \
   --baseline control-codex.json
 ```
 
-`--skills none` は `--source` と一緒に渡せません。Codex では user scope の skill も listing から全部外します。CI では
+`--skills none` は `--source` と一緒に渡せません。Codex の run は `--codex-home` が無ければ起動しません (`--dry-run` は
+省ける)。CI では
 実行しません (CLI 認証と network が要る)。self-test は `scripts/tests/probe-skill-behavior-test.sh` (偽の CLI) と
 `scripts/tests/check-skill-behavior-test.sh` (固定の入力と、偽の CLI で回した probe の出力)。
+
+### 評価用の Codex の home
+
+Codex の run だけが使う、ふだんの home とは別の Codex の home です (#731)。人が自分の terminal で 1 回だけログインします。
+ふだんの home の `auth.json` は写しません。写した token を run の中で Codex が更新すると、ふだんの login が切れうるためです。
+
+```sh
+eval_home="$HOME/.local/share/agent-tools/codex-eval-home"
+mkdir -p -m 700 "$eval_home"
+CODEX_HOME="$eval_home" codex login          # 評価用の home にだけ auth.json ができる
+CODEX_HOME="$eval_home" codex login status   # 評価用の home でログインできている
+codex login status                           # ふだんの home の login が切れていない
+```
+
+probe は起動の前に、`--codex-home` の dir が次を満たすことを確かめ、満たさなければ codex を呼ばずに exit 2 です。
+
+- 絶対 path の directory で、symlink でない。ふだんの home (`CODEX_HOME`、無ければ `~/.codex`) と同じ実体でない
+  (path の文字列ではなく実体で比べる。大文字小文字を区別しない file system で、大文字小文字だけ違う path も拒む)。
+- `auth.json` が regular file としてある (中身は読まない)。
+- `AGENTS.md` と `AGENTS.override.md` が無い (大文字小文字を区別しない)。`skills/` の下に、`.` で始まらない entry が
+  無い (`.system` のような Codex の組み込みの隠し dir は許す)。`skills/` は symlink でない。
+
+同じ検査を、毎回の `codex exec` の前にもかけ直し、最初に確かめた dir と同じ実体 (device と inode) かも確かめます。run の
+間に `AGENTS.md` や skill が足された、dir が差し替えられた、のどれでも、次の run を起動せずに exit 2 で止めます。検査と
+起動の間の短い隙は残ります。
+
+`config.toml` と execpolicy の rules は、`--ignore-user-config` と `--ignore-rules` で読まないので、在ってもかまいません。
+評価用の home に `AGENTS.md` や skill を置かないでください (置くと probe が止まります)。
 
 ## 既知の限界
 
@@ -226,3 +292,6 @@ scripts/check-skill-behavior.sh --cases scripts/lib/skill_behavior_cases.json --
   `if`・`for`・`case` などの制御構文、算術の展開 (`$(( … ))`) も解釈しません。
 - Claude Code の init の `tools` が、固定した一覧と一致するかは記録だけで、probe は止めません。
 - 実の CLI の event の形 (拒否の payload、`file_change` の形) は、実機の run で確かめます。
+- 評価用の home でも、Codex の sandbox は読み取りを隔離しません。model がふだんの home の skill の file の場所を知って
+  いれば読めます (instruction が名指ししないので、知る手がかりは無い)。読んだら `skills_read` に残り、対照なら judge が
+  条件の食い違いにします。

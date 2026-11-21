@@ -272,14 +272,15 @@ module ProbeSkillRouting
   # 起動の前に、境界の flag が `codex exec --help` に在り、disable する feature の行が
   # `codex features list` に在ることを確かめる。どちらも exit 0 のときだけ出力を信じ、欠けていれば
   # 存在しない flag を試さずに止める (無い feature を --disable に渡すと CLI が止まる)。
-  def self.codex_preflight!
-    help = capture_ok(%w[codex exec --help])
+  # env は子 process にだけ足す環境 (behavior の probe が評価用の Codex の home を渡す。#731)。
+  def self.codex_preflight!(env: nil)
+    help = capture_ok(%w[codex exec --help], env: env)
     raise Error, "codex: `codex exec --help` failed" unless help
 
     missing = CODEX_HELP_MARKERS.reject { |m| help.include?(m) }
     raise Error, "codex: exec lacks boundary flag(s): #{missing.join(', ')}" unless missing.empty?
 
-    features = capture_ok(%w[codex features list])
+    features = capture_ok(%w[codex features list], env: env)
     raise Error, "codex: `codex features list` failed" unless features
 
     listed = features.each_line.map { |l| l.split.first }
@@ -287,8 +288,8 @@ module ProbeSkillRouting
     raise Error, "codex: features list lacks feature(s) to disable: #{absent.join(', ')}" unless absent.empty?
   end
 
-  def self.capture_ok(argv)
-    out, status = Open3.capture2e(*argv)
+  def self.capture_ok(argv, env: nil)
+    out, status = env ? Open3.capture2e(env, *argv) : Open3.capture2e(*argv)
     status.success? ? out : nil
   rescue SystemCallError
     nil
@@ -410,9 +411,9 @@ module ProbeSkillRouting
 
   # argv を配列のまま起動し、timeout を超えたら kill する。ProbeChild の Result (out / err / status / completed /
   # drained) をそのまま返す。process group の起動・期限・中断を含む後片付けは ProbeChild が持つ (#568)。
-  def self.run_command(argv, chdir:, stdin:, timeout:)
-    # 入れ子起動の guard 変数を外す (Claude Code の Bash から起動された場合)。
-    env = { "CLAUDECODE" => nil, "CLAUDE_CODE_ENTRYPOINT" => nil }
+  def self.run_command(argv, chdir:, stdin:, timeout:, env: {})
+    # 入れ子起動の guard 変数を外す (Claude Code の Bash から起動された場合)。env は子 process に足す環境。
+    env = { "CLAUDECODE" => nil, "CLAUDE_CODE_ENTRYPOINT" => nil }.merge(env)
     ProbeChild.run(argv, env: env, chdir: chdir, stdin: stdin, timeout: timeout)
   end
 
