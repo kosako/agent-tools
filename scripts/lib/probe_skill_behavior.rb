@@ -374,12 +374,27 @@ module ProbeSkillBehavior
   # この形でない所 (単独の `SKILL.md`、`cd` してからの読み取り、`..`、引用でつないだ名前、`foo-SKILL.md`・`SKILL.md.bak`)
   # が 1 つでもあれば、印を立てる (同じ文字列にほかの名前が見つかっても消さない)。名前が names にあれば skills_read に足す
   # (門で止めた文字列からは、展開の後の名前が分からないので記録しない)。
+  # 名前だけは、独立した単引用の語を外した写しからも探して足す (#740)。Codex の command は 1 つの文字列なので、同じ script の
+  # 別の語 (`rg -g '*median*'`) の glob で門が閉じるため。外すのは、前が先頭・空白・tab、後ろが末尾・空白・tab・`;&|)` の
+  # `'…'` で、中に `skill.md` の字を含まないものだけ。印は元の文字列だけで決める。外した語を `sh -c` などが実行すると、写しでは
+  # 読み取りが消えうるので (相談の反例)、写しは名前を増やす向きにしか使わない (対照で増えれば judge が止める)。
   SKILL_MD_GATE = /[$`\\{}()*?\[\]\n]/.freeze
   SKILL_MD_AFTER = /\A(?:\z|[\s"'`;&|()<>])/.freeze
   SEGMENT_BEFORE_SLASH = %r{(?:\A|[/ \t=;&|(<>])([^/\s"'`;&|()<>=]*)/\z}.freeze
   CONCRETE_SEGMENT = /\A[A-Za-z0-9._-]+\z/.freeze
+  LITERAL_WORD = /(?<=\A|[ \t])'[^']*'(?=\z|[ \t;&|)])/.freeze
 
   def self.skill_reads(strings, names)
+    found, unresolved = strict_skill_reads(strings, names)
+    loose, = strict_skill_reads(strings.map { |s| without_literal_words(s) }, names)
+    [(found + loose).uniq, unresolved]
+  end
+
+  def self.without_literal_words(s)
+    s.gsub(LITERAL_WORD) { |w| w.match?(/skill\.md/i) ? w : " " }
+  end
+
+  def self.strict_skill_reads(strings, names)
     by_name = names.to_h { |n| [n.downcase, n] }
     found = []
     unresolved = false

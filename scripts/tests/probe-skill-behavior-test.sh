@@ -673,6 +673,57 @@ check("claude も同じ規則で、区分は変えずに印を立てる (#{y[:ca
       y[:skills_unresolved] == true)
 y = P.parse_claude(JSON.generate(claude_amb.lines.first.then { |l| JSON.parse(l) }.tap { |e| e["message"]["content"].delete_at(1) }) + "\n", names)
 check("claude の決められる Read だけなら印は立てない", y[:skills_unresolved] == false)
+
+# 独立した単引用の語を外した写しからも名前を探して足す (#740)。印は元の文字列だけで決める
+observed = "/bin/zsh -lc \"pwd; rg --files -g 'AGENTS.md' -g '*median*' -g 'Gemfile*' -g 'Rakefile'; " \
+           "cat .agents/skills/personal-investigate/SKILL.md .agents/skills/personal-production-rail/SKILL.md\""
+y = P.parse_codex(JSON.generate(cmd.call("r1", observed)) + "\n", names + %w[personal-production-rail])
+check("観測した形は 2 つの名前が決まり、印は立ったまま (#{y[:skills_read].inspect} #{y[:skills_unresolved]})",
+      y[:skills_read].sort == %w[personal-investigate personal-production-rail] && y[:skills_unresolved] == true)
+literal_forms = {
+  "空白の後の単引用の語" => "/bin/zsh -lc \"rg -g '*x*' -g 'y?'; cat ../skills/personal-investigate/SKILL.md\"",
+  "tab の前後の単引用の語" => "rg -g\t'[ab]'\t.; cat ../skills/personal-investigate/SKILL.md",
+  "先頭の単引用の語" => "'*x*' && cat ../skills/personal-investigate/SKILL.md",
+  "後ろが ; & | の単引用の語" => "rg -g '*a*'; rg -g '*b*'& rg -g '*c*'| cat ../skills/personal-investigate/SKILL.md",
+  "末尾の単引用の語" => "cat ../skills/personal-investigate/SKILL.md; rg -g '*x*'",
+  "改行を含む単引用の語" => "printf 'a\nb' && cat ../skills/personal-investigate/SKILL.md",
+}
+literal_forms.each do |label, command|
+  y = one.call(command)
+  check("codex の #{label} は外して名前を足し、印は立ったまま (#{y[:skills_read].inspect} #{y[:skills_unresolved]})",
+        y[:skills_read] == %w[personal-investigate] && y[:skills_unresolved] == true)
+end
+kept_forms = {
+  "前につないだ単引用" => "cat x'*'; cat ../skills/personal-investigate/SKILL.md",
+  "後ろにつないだ単引用" => "rg -g '*x*'y; cat ../skills/personal-investigate/SKILL.md",
+  "= の直後の単引用" => "x='*'; cat ../skills/personal-investigate/SKILL.md",
+  "$ の直後の単引用" => "printf $'*'; cat ../skills/personal-investigate/SKILL.md",
+  "/ の前の単引用" => "cat '*'/x; cat ../skills/personal-investigate/SKILL.md",
+  "skill.md を含む単引用" => "cat '../skills/*/SKILL.md' ../skills/personal-investigate/SKILL.md",
+  "二重引用の語" => "rg -g \"*x*\"; cat ../skills/personal-investigate/SKILL.md",
+}
+kept_forms.each do |label, command|
+  y = one.call(command)
+  check("codex の #{label} は外さず、名前は増えずに印を立てる (#{y[:skills_read].inspect} #{y[:skills_unresolved]})",
+        y[:skills_read].empty? && y[:skills_unresolved] == true)
+end
+y = one.call("/bin/zsh -lc \"sh -c 'cat .agents/skills/personal-investigate/SKILL.m[d]'; : unlisted/SKILL.md\"")
+check("外した語を sh -c が実行する形 (相談の反例) も、元の文字列の印が残る (#{y[:skills_read].inspect} #{y[:skills_unresolved]})",
+      y[:skills_read].empty? && y[:skills_unresolved] == true)
+y = one.call("/bin/zsh -lc \"rg -g '*x*'; cat ../skills/personal-other/SKILL.md\"")
+check("外した写しでも、照らす名前に無い名前は足さない", y[:skills_read].empty? && y[:skills_unresolved] == true)
+y = one.call("/bin/zsh -lc \"rg -g 'x'; cat ../skills/personal-investigate/SKILL.md\"")
+check("門を通る文字列は、外しても今と同じ (#{y[:skills_read].inspect} #{y[:skills_unresolved]})",
+      y[:skills_read] == %w[personal-investigate] && y[:skills_unresolved] == false)
+claude_bash = [
+  { "type" => "assistant", "message" => { "content" => [
+    { "type" => "tool_use", "id" => "b1", "name" => "Bash",
+      "input" => { "command" => "rg --files -g '*median*'; cat .claude/skills/personal-grill-me/SKILL.md" } },
+  ] } },
+].map { |e| JSON.generate(e) }.join("\n") + "\n"
+y = P.parse_claude(claude_bash, names)
+check("claude の Bash の入力も同じ写しで名前を足す (#{y[:skills_read].inspect} #{y[:skills_unresolved]})",
+      y[:skills_read] == %w[personal-grill-me] && y[:skills_unresolved] == true)
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -1085,13 +1136,15 @@ judge_on() {
 }
 judge_on --results "$candidate"
 [ "$jrc" -eq 0 ] || fail "the candidate alone should pass the judge (rc=$jrc): $jout"
-for form in glob subst backslash qualifier; do
+for form in glob subst backslash qualifier inner-sh; do
   events="$tmp/codex-$form-events.jsonl"
   ruby -rjson -e '
     cmd = { "glob" => "cat /h/skills/*/SKILL.md && printf x >> lib/median.rb",
             "subst" => "cat ../skills/$(printf personal-)investigate/SKILL.md && printf x >> lib/median.rb",
             "backslash" => "cat ../skills/personal-\\\ninvestigate/SKILL.md && printf x >> lib/median.rb",
-            "qualifier" => "cat ../skills/personal-investigate-old/SKILL.md(:s/personal-investigate-old/personal-investigate/) && printf x >> lib/median.rb" }.fetch(ARGV[0])
+            "qualifier" => "cat ../skills/personal-investigate-old/SKILL.md(:s/personal-investigate-old/personal-investigate/) && printf x >> lib/median.rb",
+            # 外した単引用の語を sh -c が実行する形 (#740 の相談の反例)。写しでは名前も印も残らない
+            "inner-sh" => "/bin/zsh -lc \"sh -c \x27cat .agents/skills/personal-investigate/SKILL.m[d]\x27; : unlisted/SKILL.md; printf x >> lib/median.rb\"" }.fetch(ARGV[0])
     item = { "id" => "item_1", "type" => "command_execution", "command" => cmd, "exit_code" => 0, "status" => "completed" }
     File.write(ARGV[1], [{ "type" => "item.completed", "item" => item },
                          { "type" => "turn.completed", "usage" => { "input_tokens" => 1, "output_tokens" => 1 } }]
@@ -1112,6 +1165,26 @@ for form in glob subst backslash qualifier; do
   case "$jout" in *"baseline is not comparable: control run read a skill file whose name could not be decided"*) : ;;
     *) fail "judge should say the baseline control ($form) is not comparable: $jout" ;; esac
 done
+# skill を置いた run の観測した形 (#740): 2 つの名前が results に残り、judge の skill_read に数える
+observed_events="$tmp/codex-observed-events.jsonl"
+ruby -rjson -e '
+  cmd = "/bin/zsh -lc \"pwd; rg --files -g \x27AGENTS.md\x27 -g \x27*median*\x27 -g \x27Gemfile*\x27 -g \x27Rakefile\x27; " \
+        "cat .agents/skills/personal-investigate/SKILL.md .agents/skills/personal-production-rail/SKILL.md\""
+  item = { "id" => "item_1", "type" => "command_execution", "command" => cmd, "exit_code" => 0, "status" => "completed" }
+  write = { "id" => "item_2", "type" => "file_change", "changes" => [{ "path" => "/x/proj/lib/median.rb", "kind" => "update" }],
+            "status" => "completed" }
+  File.write(ARGV[0], [{ "type" => "item.completed", "item" => item }, { "type" => "item.completed", "item" => write },
+                       { "type" => "turn.completed", "usage" => { "input_tokens" => 1, "output_tokens" => 1 } }]
+                      .map { |e| JSON.generate(e) }.join("\n") + "\n")' "$observed_events"
+observed="$tmp/candidate-observed.json"
+run_fake codex "$observed_events" --model m-x --only investigate-fix --codex-home "$eval_home" --out "$observed"
+[ "$rc" -eq 0 ] || fail "the codex candidate with the observed form should run (rc=$rc): $out"
+[ "$(json_get "$observed" 'd["runs"][0].values_at("skills_read", "skills_unresolved").then { |a, b| [a.sort, b] }')" = \
+  '[["personal-investigate","personal-production-rail"],true]' ] \
+  || fail "the observed form should decide both names and keep the mark: $(json_get "$observed" 'd["runs"][0]')"
+judge_on --results "$observed"
+[ "$jrc" -eq 0 ] || fail "the candidate with the observed form should pass the judge (rc=$jrc): $jout"
+case "$jout" in *"skill_read=1/1"*) : ;; *) fail "judge should count the observed read as skill_read: $jout" ;; esac
 unset FAKE_WRITE
 
 # --- codex: 評価用の home が無い・条件を満たさないときは起動しない (#731) ---
