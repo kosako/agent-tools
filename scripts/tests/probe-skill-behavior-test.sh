@@ -554,10 +554,11 @@ fixtures = ARGV[2]
 repo_cases = C.parse(File.read(ARGV[1]), fixtures_root: fixtures)
 check("repo の case set は fixture つきで検査を通る", repo_cases.length >= 3)
 check("repo の case set は正例・負例・曖昧を持つ", repo_cases.map { |c| c["kind"] }.uniq.sort == %w[ambiguous negative positive])
+check("repo の case set は case の skill を置く (#737)", repo_cases.all? { |c| c["place_skills"].include?(c["skill"]) })
 
 base = {
   "id" => "a", "prompt" => "p", "skill" => "s", "kind" => "negative", "pair" => "g", "fixture" => "median",
-  "reach" => ["lib/median.rb"], "forbid" => ["file-write"], "require" => [], "allowed_changes" => [],
+  "reach" => ["lib/median.rb"], "forbid" => ["file-write"], "require" => [], "allowed_changes" => [], "place_skills" => ["s"],
 }
 pos = base.merge("id" => "b", "kind" => "positive", "forbid" => [], "require" => ["file-write"], "allowed_changes" => ["lib/median.rb"])
 
@@ -592,6 +593,15 @@ check("allowed_changes の空の要素は拒む", rejected([pos.merge("allowed_c
 check("空の reach", rejected([base.merge("reach" => [])], "reach must not be empty"))
 check("fixture の dir が無い", rejected([base.merge("fixture" => "nope")], "fixture not found", fixtures: fixtures))
 check("reach の file が fixture に無い", rejected([base.merge("reach" => ["lib/nope.rb"])], "reach path not in fixture", fixtures: fixtures))
+# 置く skill の一覧 (#737)。名前は skill の dir の名前になるので、決まった形だけを受ける
+check("place_skills の欠け", rejected([base.reject { |k, _| k == "place_skills" }], "missing key"))
+check("空の place_skills", rejected([base.merge("place_skills" => [])], "place_skills must be"))
+check("place_skills の重複", rejected([base.merge("place_skills" => %w[s s])], "place_skills must be"))
+check("place_skills の名前に path の区切り", rejected([base.merge("place_skills" => ["s", "../x"])], "place_skills must be"))
+check("place_skills の名前が文字列でない", rejected([base.merge("place_skills" => ["s", 1])], "place_skills must be"))
+check("place_skills が配列でない", rejected([base.merge("place_skills" => "s")], "place_skills must be"))
+check("case の skill を含まない place_skills", rejected([base.merge("place_skills" => ["t"])], "must include the skill"))
+check("case の skill を含む place_skills は通る", C.parse(JSON.generate({ "schema_version" => 1, "cases" => [base.merge("place_skills" => %w[t s])] })).length == 1)
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -669,6 +679,7 @@ cp "$fixture/lib/median.rb" "$pristine"
 cat > "$fakebin/fake-body" <<'EOF'
 if [ -n "${FAKE_PRISTINE:-}" ] && ! cmp -s lib/median.rb "$FAKE_PRISTINE"; then exit 3; fi
 if [ -d "$1" ]; then echo "skills-dir: present" >> "$FAKE_LOG"; else echo "skills-dir: absent" >> "$FAKE_LOG"; fi
+[ ! -d "$1" ] || echo "skills-placed: $(ls "$1" | paste -sd, -)" >> "$FAKE_LOG"
 [ -z "${FAKE_EVENTS:-}" ] || cat "$FAKE_EVENTS"
 [ -z "${FAKE_WRITE:-}" ] || printf 'changed\n' >> "$FAKE_WRITE"
 [ -z "${FAKE_SLEEP:-}" ] || sleep "$FAKE_SLEEP"
@@ -712,6 +723,11 @@ chmod +x "$fakebin/claude" "$fakebin/codex"
 source_dir="$tmp/source"
 mkdir -p "$source_dir/personal-investigate"
 printf -- '---\nname: personal-investigate\ndescription: d\n---\n' > "$source_dir/personal-investigate/SKILL.md"
+# case の place_skills (#737) にある skill と、どの case も置かない skill
+for s in personal-production-rail personal-other; do
+  mkdir -p "$source_dir/$s"
+  printf -- '---\nname: %s\ndescription: d\n---\n' "$s" > "$source_dir/$s/SKILL.md"
+done
 empty_home="$tmp/codex-home"
 for s in personal-investigate personal-other; do
   mkdir -p "$empty_home/skills/$s"
@@ -806,6 +822,9 @@ grep -q -F 'CANARY-CMD' "$res.raw/investigate-fix-1.jsonl" || fail "the raw log 
 grep -q -- '-p --setting-sources project --strict-mcp-config --tools Read,Glob,Grep,Edit,Write,NotebookEdit,Bash,Skill --permission-mode acceptEdits ' "$log" \
   || fail "claude should be launched with the fixed tools and permission mode: $(cat "$log")"
 [ "$(grep -c '^skills-dir: present$' "$log")" -eq 2 ] || fail "the skills should be placed in each run: $(cat "$log")"
+# 置くのは case の place_skills の skill だけ (#737)。source にある personal-other は置かない
+[ "$(grep '^skills-placed: ' "$log" | sort | uniq -c | sed 's/^ *//')" = '2 skills-placed: personal-investigate,personal-production-rail' ] \
+  || fail "only the place_skills of the case should be placed in each run: $(cat "$log")"
 
 # --- claude: 書き込みをしない run は changed が空、reach の path に触れなければ reached=false ---
 quiet_events="$tmp/claude-quiet.jsonl"
@@ -889,6 +908,8 @@ grep -q -- '^exec --json .*--ignore-user-config --ignore-rules -s workspace-writ
 grep -q -- '^exec --json .* -c sandbox_workspace_write.exclude_slash_tmp=true -c sandbox_workspace_write.exclude_tmpdir_env_var=true ' "$log" \
   || fail "codex should be launched with the /tmp and TMPDIR exclusions (#733): $(cat "$log")"
 if grep -q 'skills.config' "$log"; then fail "codex should not pass skills.config with the eval home: $(cat "$log")"; fi
+[ "$(grep '^skills-placed: ' "$log")" = 'skills-placed: personal-investigate,personal-production-rail' ] \
+  || fail "codex should place only the place_skills of the case: $(cat "$log")"
 # 起動の前の検査 (exec --help・features list・--version) と exec の 4 回とも、CODEX_HOME は評価用の home の実 path
 [ "$(grep -c '^codex-home: ' "$log")" -eq 4 ] || fail "codex should be called 4 times: $(cat "$log")"
 if grep '^codex-home: ' "$log" | grep -v -x -F "codex-home: $eval_real" | grep -q .; then
@@ -1080,6 +1101,29 @@ ln -s "$canary" "$res"
 run_fake claude-code "$quiet_events" --only investigate-fix --out "$res"
 [ "$rc" -eq 2 ] || fail "a symlinked results path must exit 2 (rc=$rc): $out"
 [ "$(cat "$canary")" = original ] || fail "the results write must not follow a symlink"
+
+# --- place_skills (#737): source に無い名前は起動の前に止める。source_digest は置いた skill だけから作る ---
+partial="$tmp/source-partial"
+mkdir -p "$partial/personal-investigate"
+cp "$source_dir/personal-investigate/SKILL.md" "$partial/personal-investigate/SKILL.md"
+run_fake claude-code "$quiet_events" --only investigate-fix --source "$partial" --out "$tmp/never.json"
+[ "$rc" -eq 2 ] || fail "a place_skills name missing from the source must exit 2 (rc=$rc): $out"
+case "$out" in *place_skills*personal-production-rail*) : ;; *) fail "the missing place_skills name should be named: $out" ;; esac
+if grep -q -- '^-p ' "$log"; then fail "claude must not be launched when a place_skills name is missing: $(cat "$log")"; fi
+digest_src="$tmp/source-digest"
+cp -R "$source_dir" "$digest_src"
+digest_of() {
+  run_fake claude-code "$quiet_events" --only investigate-fix --source "$digest_src" --out "$tmp/digest.json"
+  [ "$rc" -eq 0 ] || fail "the digest run should exit 0 (rc=$rc): $out"
+  json_get "$tmp/digest.json" 'd["ids"]["source_digest"]'
+}
+d0=$(digest_of)
+printf 'x\n' >> "$digest_src/personal-other/SKILL.md"
+d1=$(digest_of)
+[ "$d0" = "$d1" ] || fail "a skill that no case places should not change source_digest ($d0 vs $d1)"
+printf 'x\n' >> "$digest_src/personal-production-rail/SKILL.md"
+d2=$(digest_of)
+[ "$d1" != "$d2" ] || fail "a placed skill should change source_digest ($d1)"
 
 # prepare_run は、case の検査を経ない呼び出しでも、fixture と skill の dir の symlink を copy の前に拒む
 ruby -r"$script_dir/lib/check_helper" - "$src" "$tmp/prep" "$fixture" <<'RUBY'

@@ -3,7 +3,8 @@
 
 # skill の挙動の評価 (#369) の probe runner (実機)。Spec: docs/skill-behavior-eval.md。
 #
-# case ごとに fixture を新しい temp project に置き、1 回の user の依頼を claude / codex の headless 実行に流す。
+# case ごとに fixture と、case の place_skills の skill (#737) を新しい temp project に置き、1 回の user の依頼を
+# claude / codex の headless 実行に流す。
 # model が tool に求めた操作を、event stream の呼び出しの記録から区分し (分類器)、run の後の project の差分と
 # 合わせて results.json に残す。判定は judge (#369 の PR 2) が行う。
 #
@@ -84,7 +85,8 @@ module ProbeSkillBehavior
                   skill_behavior_fixtures/ から探す
       --only      実行する case id (comma 区切り)
       --repeat    各 case の実行回数 (既定: 1)
-      --source    置く skill の dir の親 (既定: generated/<tool>/skills。build 済みであること)
+      --source    skill の dir の親 (既定: generated/<tool>/skills。build 済みであること)。case の
+                  place_skills の skill だけを置き、source に無い名前があれば止める
       --skills    none で skill を置かない対照にする
       --variant   結果に付ける label (既定: candidate)。英数字と . _ - の 64 字まで。挙動は変えない
       --model     CLI に渡す model。claude-code は省略すると CLI の既定。codex は省略すると Codex home の
@@ -580,7 +582,6 @@ module ProbeSkillBehavior
       all_dirs = R.skill_dirs(R.source_dir(opts, root))
       names = all_dirs.map { |d| File.basename(d) }
     end
-    placed = all_dirs
 
     cases_path = opts[:cases] || File.join(root, "scripts", "lib", "skill_behavior_cases.json")
     raise Error, "cases file not found: #{cases_path}" unless File.file?(cases_path)
@@ -597,11 +598,25 @@ module ProbeSkillBehavior
     fixtures = cases.map { |c| c["fixture"] }.uniq.sort
     # 対照の run が期待した skill の file を読んだら、judge が条件の食い違いにする (#731)。その検出のために足す。
     names |= cases.map { |c| c["skill"] } if opts[:skills] == "none"
+    # case ごとに置く skill (#737)。source の skill のうち、case の place_skills の名前の skill だけを置く。source に無い
+    # 名前があれば、run の前に止める (名前は case の検査で決まった形にしてある)。読み取りの検出 (names) は、置かない skill の
+    # 名前も持ったままにする (置いていない skill の file を読みに行った呼び出しも skills_read に残す)。
+    source_by_name = all_dirs.to_h { |d| [File.basename(d), d] }
+    placed = cases.to_h do |c|
+      next [c["id"], []] if opts[:skills] == "none"
+
+      missing = c["place_skills"] - source_by_name.keys
+      raise Error, "case #{c['id']}: place_skills not in the source: #{missing.join(', ')}" unless missing.empty?
+
+      [c["id"], c["place_skills"].map { |n| source_by_name.fetch(n) }]
+    end
+    placed_dirs = placed.values.flatten.uniq.sort_by { |d| File.basename(d) }
 
     if opts[:dry_run]
       Dir.mktmpdir("skill-behavior-") do |base|
-        proj = prepare_run(base, opts[:tool], File.join(fixtures_root, cases.first["fixture"]), placed)
-        puts "isolated project (per run): #{proj} (#{placed.length} skills, fixture #{cases.first['fixture']})"
+        first = placed.fetch(cases.first["id"])
+        proj = prepare_run(base, opts[:tool], File.join(fixtures_root, cases.first["fixture"]), first)
+        puts "isolated project (per run): #{proj} (#{first.length} skills, fixture #{cases.first['fixture']})"
         sample = opts[:tool] == "claude-code" ? claude_argv(opts, "<prompt>") : codex_argv(opts, proj)
         puts "argv: #{sample.map(&:inspect).join(' ')}#{opts[:tool] == 'codex' ? ' (prompt on stdin)' : ''}"
         if opts[:tool] == "codex"
@@ -630,7 +645,7 @@ module ProbeSkillBehavior
         changed = nil
         # run ごとに新しい temp project (前の run の書き込みを次の run に持ち込まない)
         Dir.mktmpdir("skill-behavior-") do |base|
-          proj = prepare_run(base, opts[:tool], fixture_dir, placed)
+          proj = prepare_run(base, opts[:tool], fixture_dir, placed.fetch(c["id"]))
           before = snapshot(proj)
           recheck_codex_home!(opts) if opts[:tool] == "codex"
           r = run_one(opts, proj, names, c["prompt"])
@@ -654,7 +669,7 @@ module ProbeSkillBehavior
 
     claude = opts[:tool] == "claude-code"
     ids = {
-      "source_digest" => all_dirs.empty? ? "none" : file_digest_of_dirs(all_dirs),
+      "source_digest" => placed_dirs.empty? ? "none" : file_digest_of_dirs(placed_dirs),
       "cases_digest" => file_digest([cases_path]),
       "fixture_digests" => fixtures.to_h { |f| [f, tree_digest(File.join(fixtures_root, f))] },
       "runner_version" => runner_version,
