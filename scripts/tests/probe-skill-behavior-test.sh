@@ -498,6 +498,9 @@ unresolved_forms = {
   "file の名前の前の glob (round 3)" => "/bin/zsh -lc 'cat ../skills/personal-investigate/*SKILL.md'",
   "SKILL.md で終わる別の名前" => "/bin/zsh -lc 'cat notes-SKILL.md'",
   "SKILL.md で始まる別の名前" => "/bin/zsh -lc 'cat /h/skills/personal-investigate/SKILL.md.bak'",
+  "二重引用でつないだ名前 (round 4)" => "cat \"../skills/personal-\"investigate/SKILL.md && cat lib/median.rb",
+  "単引用でつないだ名前" => "cat ../skills/'personal-'investigate/SKILL.md",
+  "名前の途中の引用" => "cat ../skills/pe\"rs\"onal-investigate/SKILL.md",
 }
 unresolved_forms.each do |label, command|
   y = one.call(command)

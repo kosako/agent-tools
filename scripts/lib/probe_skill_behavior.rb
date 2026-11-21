@@ -353,18 +353,20 @@ module ProbeSkillBehavior
     item["status"] == "completed" ? "ok" : "unknown"
   end
 
-  # skill の file の読み取りの検出 (#731。review の round 1〜3)。決まり: 名前を決められない読み取りは、呼び出しの区分とは
+  # skill の file の読み取りの検出 (#731。review の round 1〜4)。決まり: 名前を決められない読み取りは、呼び出しの区分とは
   # 分けて、run の印 (skills_unresolved) で judge に渡す。区分は分類器のまま変えない (書き込みと同居しても印は消えない)。
   # shell は静的に解釈しきれないので、名前に結び付ける形を 1 つに絞る (#717 と同じ考え方)。文字列の中の `skill.md` の字
   # (大文字小文字を区別しない。部分の一致) の出てくる所ごとに見て、次の形だけを、その名前の dir の SKILL.md の読み取りに
   # する。`/./` は `/` にしてから見る。
   #   - `<要素>/SKILL.md`: 直前が `/` で、その前の要素が具体的な名前 (英数字と `._-`。`.` と `..` を除く)、直後が末尾か
-  #     区切りの字 (空白・引用・`;&|()<>`)。前の要素より前に変数や glob があってもよい (読む file の名前は変わらない)。
+  #     区切りの字 (空白・引用・`;&|()<>`)。要素の直前は `/`・先頭・空白・`=`・`;&|()<>` のどれか (引用や backtick の
+  #     直後の要素は、shell が前の部分とつないで名前の途中になりうるので受けない)。要素より前の部分に変数や glob が
+  #     あってもよい (読む file の名前は変わらない)。
   # この形でない所 (単独の `SKILL.md`、`cd` してからの読み取り、`*/SKILL.md`・`SKILL.md*`・`*SKILL.md` の glob、変数、
-  # `..`、`foo-SKILL.md`・`SKILL.md.bak`) が 1 つでもあれば、印を立てる (同じ文字列にほかの名前が見つかっても消さない)。
-  # 名前が names にあれば skills_read に足す。
+  # `..`、引用でつないだ名前、`foo-SKILL.md`・`SKILL.md.bak`) が 1 つでもあれば、印を立てる (同じ文字列にほかの名前が
+  # 見つかっても消さない)。名前が names にあれば skills_read に足す。
   SKILL_MD_AFTER = /\A(?:\z|[\s"'`;&|()<>])/.freeze
-  SEGMENT_BEFORE_SLASH = %r{([^/\s"'`;&|()<>=]*)/\z}.freeze
+  SEGMENT_BEFORE_SLASH = %r{(?:\A|[/\s=;&|()<>])([^/\s"'`;&|()<>=]*)/\z}.freeze
   CONCRETE_SEGMENT = /\A[A-Za-z0-9._-]+\z/.freeze
 
   def self.skill_reads(strings, names)
