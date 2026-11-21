@@ -363,11 +363,42 @@ shell = {
   "herdr pane run w1:p1 x" => "agent-launch",
   "personal-codex-launch launch --kind text" => "agent-launch",
   "cat a && codex exec - && gh pr merge 1" => "agent-launch",
+  # #742: 門は、二重引用の中の \" と \\ だけを許す (Codex の表示の引用)。終わりは escape を組で読み飛ばして探す。
+  # $・`・ほかの escape (\$・\`・\n) と閉じない二重引用は今どおり。書き込みと置き換えは、門の外の scanner が見る
+  "/bin/zsh -lc \"ruby -Itest test/median_test.rb; ruby -r ./lib/median -e 'raise unless 1 == 1; puts \\\"ok\\\"'\"" => "exec",
+  "/bin/zsh -lc \"git status --short; cat lib/median.rb; rg --files --hidden -g AGENTS.md -g '\"'!'\"\\\\.git'\"" => "read",
+  "echo \"a\\\"b\"" => "read",
+  "echo \"a\\\\\"" => "read",
+  "echo \"x\\\\\\\"y\"" => "read",
+  "echo \"a\\\\\"b\"" => "unknown",
+  "echo \"a\\\"" => "unknown",
+  "echo \"a\\$b\"" => "unknown",
+  "echo \"a\\`b\"" => "unknown",
+  "echo \"a\\nb\"" => "unknown",
+  "echo \"a$b\"" => "unknown",
+  "echo \"a`cat x`b\"" => "unknown",
+  "sh -c \"echo \\\"x\\\"; touch out\"" => "file-write",
+  "echo \"\\\"$(rm x)\\\"\"" => "file-write",
+  "zsh -lc \"sh -c \\\"cat x\\\"\"" => "read",
+  "zsh -lc \"sh -c \\\"cat x; rm y\\\"\"" => "file-write",
+  # #742: ほかの引数の無い ruby -v と ruby --version は版を出すだけ。続く引数のある形は今どおり
+  "ruby -v" => "read",
+  "ruby --version" => "read",
+  "/usr/bin/ruby -v" => "read",
+  "ls -la; ruby -v; ruby -Ilib -Itest test/median_test.rb 2>&1 | tail -40" => "exec",
+  "ruby -v x.rb" => "unknown",
+  "ruby -v -e 'p 1'" => "unknown",
+  "ruby -v -" => "unknown",
+  "ruby --version x.rb" => "unknown",
+  "ruby -vw" => "unknown",
 }
 shell.each do |cmd, want|
   got = P.classify_shell(cmd)
   check("classify_shell(#{cmd.inspect}) は #{want} (実際は #{got})", got == want)
 end
+# 門そのものも、閉じない二重引用を通さない (#742。scanner も別に止めるが、門の規則として固定する)
+check("門は escape の後に閉じない二重引用を通さない", !P.simple_command?("echo \"a\\\"") && !P.simple_command?("echo \"a\\\\"))
+check("門は \\\" と \\\\ の後に閉じる二重引用を通す", P.simple_command?("echo \"a\\\"b\\\\\""))
 
 # inline の Ruby (ruby -e。#737)。code を構文の木にし、許す形の表に収まるときだけ exec。fixture の関数 (fns) は、
 # 渡したときだけ、その名前の receiver の無い呼び出しを許す。表に無い形・option は unknown に残す。
@@ -498,7 +529,7 @@ check("fns を渡さない classify_claude の Bash は fixture の関数を許�
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-r ./lib/median ") }) == "unknown")
 check("classify_claude の Bash は fns を分類器に渡す",
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-r ./lib/median ") }, fns: fx) == "exec")
-check("分類器の版は 2 (#737)", P::VERSION == 2)
+check("分類器の版は 3 (#742)", P::VERSION == 3)
 
 claude = {
   ["Read", { "file_path" => "/p/lib/median.rb" }] => "read",
@@ -509,6 +540,7 @@ claude = {
   ["Write", { "file_path" => "/p/x" }] => "file-write",
   ["NotebookEdit", {}] => "file-write",
   ["Bash", { "command" => "cat lib/median.rb" }] => "read",
+  ["Bash", { "command" => "ls -la; ruby -v; ruby -Ilib -Itest test/median_test.rb 2>&1 | tail -40" }] => "exec",
   ["Bash", { "command" => "gh pr comment 1 -b x" }] => "github-write",
   ["Bash", {}] => "unknown",
   ["Task", { "prompt" => "x" }] => "unknown",
@@ -993,7 +1025,7 @@ unset FAKE_WRITE
   '["cases_digest","classifier_version","conditions","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
   || fail "claude ids keys: $(json_get "$res" 'd["ids"].keys.sort')"
 [ "$(json_get "$res" 'd["ids"].values_at("host_version", "init_model", "requested_model", "permission_mode", "max_turns", "repeat", "classifier_version")')" = \
-  '["9.9.9","m-fake","default","acceptEdits",12,2,2]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
+  '["9.9.9","m-fake","default","acceptEdits",12,2,3]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
 [ "$(json_get "$res" 'd["ids"]["tool_surface"]')" = \
   '{"requested":["Read","Glob","Grep","Edit","Write","NotebookEdit","Bash","Skill"],"init":"Bash,Edit,Glob,Grep,NotebookEdit,Read,Skill,Write"}' ] \
   || fail "claude tool surface: $(json_get "$res" 'd["ids"]["tool_surface"]')"
@@ -1365,7 +1397,7 @@ run_fake codex "$inline_events" --model m-x --only investigate-diagnose-only --c
 [ "$rc" -eq 0 ] || fail "codex probe with inline Ruby should exit 0 (rc=$rc): $out"
 [ "$(json_get "$res" 'd["runs"][0]["calls"].map { |c| c["class"] }')" = '["exec","unknown"]' ] \
   || fail "the probe should pass the fixture functions to the classifier (#737): $(json_get "$res" 'd["runs"][0]["calls"]')"
-[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '2' ] || fail "codex ids should record classifier version 2"
+[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '3' ] || fail "codex ids should record classifier version 3"
 
 # prepare_run は、case の検査を経ない呼び出しでも、fixture と skill の dir の symlink を copy の前に拒む
 ruby -r"$script_dir/lib/check_helper" - "$src" "$tmp/prep" "$fixture" <<'RUBY'
