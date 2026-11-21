@@ -654,12 +654,13 @@ module SkillBehaviorClassifier
   #   rest: 束の残りが値で、次の語は取らない
   #   one: 次の 1 字が値 (ruby の -Ku)
   #   digits: 続く数字が値で、その後ろも option として読む (-0777・ruby の -W0・perl の -l)
+  #   colon: 直後が : のときだけ束の残りが値で、ほかは値をとらない字 (perl の -V:osname と -Vpi。review の round 4)
   # どの組にも無い字 (perl の -d[t][:MOD] など) と長い option (--…) は、値の範囲を決められない。そのときは、束の残りを読み
   # 続け、option でない語に来ても読むのをやめず、残りの語の束も読む (表の漏れは、i を数えすぎる側、つまり file-write の側に
   # 倒れる)。
   IN_PLACE_GRAMMAR = {
-    "ruby" => { flags: "acdhlnpsSvwyU", next: "eIrCEX", rest: "Fx", one: "K", digits: "0WT" },
-    "perl" => { flags: "acfnpsStTuUvwWXh", next: "eEI", rest: "MmFxCDV", one: "", digits: "0l" },
+    "ruby" => { flags: "acdhlnpsSvwyU", next: "eIrCEX", rest: "Fx", one: "K", digits: "0WT", colon: "" },
+    "perl" => { flags: "acfnpsStTuUvwWXh", next: "eEI", rest: "MmFxCD", one: "", digits: "0l", colon: "V" },
   }.freeze
 
   def self.interpreter_call(name, args, fns: [])
@@ -923,6 +924,8 @@ module SkillBehaviorClassifier
         k += 1
       elsif g[:digits].include?(ch)
         k += 1 while k < a.length && a[k].match?(/[0-9]/)
+      elsif g[:colon].include?(ch)
+        return [false, false, odd] if a[k] == ":"
       elsif !g[:flags].include?(ch)
         odd = true
       end

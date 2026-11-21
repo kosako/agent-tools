@@ -482,6 +482,13 @@ ruby_inline = [
   # 立てないので、script の後ろの -pi (script の引数) は数えない
   ["ruby -X -pi -e 1 f", [], "unknown"], ["ruby -w test/a.rb -pi f", [], "exec"], ["perl -w x.pl -pi f", [], "exec"],
   ["ruby -n test/a.rb -pi f", [], "unknown"], ["perl -n x.pl -pi f", [], "unknown"],
+  # review の round 4。perl の -V は、直後が : のときだけ束の残りが値 (-Vpi の p・i は option)。束の残りを値に取る字の後ろに
+  # pi をくっつけた形も測った (file が書き換わったのは -Vpi と -Kupi だけ)
+  ["perl -Vpi -e 1 f", [], "file-write"], ["perl -V:osnamei -pe 1 f", [], "unknown"], ["perl -V:i -pe 1 f", [], "unknown"],
+  ["perl -Mpi -e 1 f", [], "unknown"], ["perl -mpi -e 1 f", [], "unknown"], ["perl -Fpi -e 1 f", [], "unknown"],
+  ["perl -xpi -e 1 f", [], "unknown"], ["perl -Cpi -e 1 f", [], "unknown"], ["perl -Dpi -e 1 f", [], "unknown"],
+  ["perl -Ipi -e 1 f", [], "unknown"], ["ruby -Fpi -e 1 f", [], "unknown"], ["ruby -xpi -e 1 f", [], "unknown"],
+  ["ruby -Cpi -e 1 f", [], "unknown"], ["ruby -Xpi -e 1 f", [], "unknown"], ["ruby -Kupi -e 1 f", [], "file-write"],
 ]
 ruby_inline.each do |cmd, fns, want|
   got = P.classify_shell(cmd, fns: fns)
