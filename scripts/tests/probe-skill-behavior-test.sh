@@ -644,6 +644,10 @@ check("codex は workspace-write の sandbox と境界の flag で起動する",
       argv.first(12) == ["codex", "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config",
                          "--ignore-rules", "-s", "workspace-write", "-c", 'approval_policy="never"', "--disable"] && argv.last == "-")
 check("codex の argv は user の skill を外す skills.config を持たない", argv.none? { |a| a.include?("skills.config") })
+pairs = argv.each_cons(2).to_a
+check("codex は sandbox が temp project の外の /tmp と $TMPDIR に書けない設定で起動する (#733)",
+      pairs.include?(["-c", "sandbox_workspace_write.exclude_slash_tmp=true"]) &&
+      pairs.include?(["-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true"]))
 check("codex の子 process の環境は --codex-home のときだけ CODEX_HOME を持つ",
       P.codex_env({ codex_home: "/e" }) == { "CODEX_HOME" => "/e" } && P.codex_env({}) == {})
 check("merged は 1 つの値ならその値", P.merged(["a", "a", nil]) == "a")
@@ -877,8 +881,13 @@ unset FAKE_WRITE
 [ "$(json_get "$res" 'd["ids"].values_at("host_version", "requested_model", "init_model", "max_turns", "permission_mode")')" = \
   '["codex-cli 9.9.9","m-x","unknown",null,"approval_policy=never"]' ] || fail "codex ids: $(json_get "$res" 'd["ids"]')"
 [ "$(json_get "$res" 'd["ids"]["tool_surface"]["sandbox"]')" = '"workspace-write"' ] || fail "codex tool surface should record the sandbox"
+[ "$(json_get "$res" 'd["ids"]["tool_surface"]["sandbox_config"]')" = \
+  '["sandbox_workspace_write.exclude_slash_tmp=true","sandbox_workspace_write.exclude_tmpdir_env_var=true"]' ] \
+  || fail "codex tool surface should record the sandbox config (#733): $(json_get "$res" 'd["ids"]["tool_surface"]')"
 grep -q -- '^exec --json .*--ignore-user-config --ignore-rules -s workspace-write ' "$log" \
   || fail "codex should be launched with workspace-write and the boundary flags: $(cat "$log")"
+grep -q -- '^exec --json .* -c sandbox_workspace_write.exclude_slash_tmp=true -c sandbox_workspace_write.exclude_tmpdir_env_var=true ' "$log" \
+  || fail "codex should be launched with the /tmp and TMPDIR exclusions (#733): $(cat "$log")"
 if grep -q 'skills.config' "$log"; then fail "codex should not pass skills.config with the eval home: $(cat "$log")"; fi
 # 起動の前の検査 (exec --help・features list・--version) と exec の 4 回とも、CODEX_HOME は評価用の home の実 path
 [ "$(grep -c '^codex-home: ' "$log")" -eq 4 ] || fail "codex should be called 4 times: $(cat "$log")"

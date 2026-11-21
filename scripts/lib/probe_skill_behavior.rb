@@ -59,6 +59,12 @@ module ProbeSkillBehavior
   # 起動の前に `claude --help` で在否を確かめる flag (無ければ起動しない)。
   CLAUDE_HELP_MARKERS = %w[--permission-mode --tools].freeze
   CODEX_SANDBOX = "workspace-write"
+  # workspace-write の sandbox が書ける所を temp project (-C の dir) の中だけにする (#733)。既定では /tmp と $TMPDIR にも
+  # 書け、その書き込みは temp project の差分に現れない。起動の argv と ids.tool_surface の両方をここから作る。
+  CODEX_SANDBOX_CONFIG = {
+    "sandbox_workspace_write.exclude_slash_tmp" => "true",
+    "sandbox_workspace_write.exclude_tmpdir_env_var" => "true",
+  }.freeze
   # 評価用の Codex の home に在ってはいけない file (大文字小文字を区別しない。#731)。
   EVAL_HOME_FORBIDDEN = %w[agents.md agents.override.md].freeze
   # results.json の ids.conditions (skill の無い条件。値は決まったものだけ)。
@@ -483,6 +489,7 @@ module ProbeSkillBehavior
     argv = ["codex", "exec", "--json", "--ephemeral", "--skip-git-repo-check",
             "--ignore-user-config", "--ignore-rules", "-s", CODEX_SANDBOX, "-c", 'approval_policy="never"']
     R::CODEX_DISABLE_FEATURES.each { |f| argv.push("--disable", f) }
+    CODEX_SANDBOX_CONFIG.each { |k, v| argv.push("-c", "#{k}=#{v}") }
     argv.push("-C", proj, "-m", R.codex_model(opts))
     argv + ["-"]
   end
@@ -659,7 +666,8 @@ module ProbeSkillBehavior
       "tool_surface" => if claude
                           { "requested" => CLAUDE_TOOLS, "init" => merged(inits.map { |i| i[:tools].is_a?(Array) ? i[:tools].sort.join(",") : nil }) }
                         else
-                          { "sandbox" => CODEX_SANDBOX, "approval_policy" => "never", "disabled_features" => R::CODEX_DISABLE_FEATURES }
+                          { "sandbox" => CODEX_SANDBOX, "approval_policy" => "never", "disabled_features" => R::CODEX_DISABLE_FEATURES,
+                            "sandbox_config" => CODEX_SANDBOX_CONFIG.map { |k, v| "#{k}=#{v}" } }
                         end,
       "permission_mode" => claude ? merged(inits.map { |i| i[:mode] }) : "approval_policy=never",
       "conditions" => CONDITIONS.fetch(opts[:tool]),

@@ -26,8 +26,10 @@ case と、その判定 (judge) です。
   許可の要る呼び出し (Bash の大半) は `-p` の既定のまま拒まれ、`result` の `permission_denials` に残ります。
   起動の前に `claude --help` に `--permission-mode` と `--tools` があることを確かめます。
 - Codex: routing probe と同じ境界 (`--ignore-user-config`・`--ignore-rules`・`--disable apps` など。起動の前に flag と
-  feature の在否を確かめる) で、sandbox だけ `-s workspace-write` (network なし) にします。書き込みは project と
-  一時 directory に限られます。起動は評価用の Codex の home (`--codex-home`。下の「評価用の Codex の home」) で行い、
+  feature の在否を確かめる) で、sandbox だけ `-s workspace-write` (network なし) にします。workspace-write は既定で `/tmp` と
+  `$TMPDIR` にも書け、その書き込みは temp project の差分に現れないので、`-c sandbox_workspace_write.exclude_slash_tmp=true` と
+  `-c sandbox_workspace_write.exclude_tmpdir_env_var=true` で外し、書けるのを temp project の中だけにします (#733)。この 2 つは
+  `ids.tool_surface.sandbox_config` に記録します。起動は評価用の Codex の home (`--codex-home`。下の「評価用の Codex の home」) で行い、
   子 process (`codex exec` と起動の前の検査) にだけ `CODEX_HOME` を渡します。model は、ふだんの home の `config.toml`
   の top-level から読みます。
 - skill の無い条件 (#731): 両方の target で、運用 instruction と user の skill の両方が無い条件にします。Claude Code は
@@ -38,8 +40,9 @@ case と、その判定 (judge) です。
 - fixture と skill の dir に symlink があれば、copy の前に止めます (copy した link を経て、後の配置が project の外へ
   書くのを防ぐ)。配置の後に、skill の置き場の実 path が project の中にあることも確かめます。
 - raw log と results.json は、link をたどらずに書きます (既にある symlink の先を上書きしない)。raw dir が symlink
-  なら起動せず、書く直前にも、作ったときと同じ実 path の directory かを確かめます。Codex は一時 directory に書けるので、
-  run の間に link を置かれうるためです。
+  なら起動せず、書く直前にも、作ったときと同じ実 path の directory かを確かめます。Codex の既定の sandbox は一時 directory に
+  書けるので、run の間に link を置かれうるためです (#733 で一時 directory への書き込みは外したが、設定の効かない版の
+  Codex に備えて、この守りは残す)。
 - 書けるのは temp project の中だけですが、読み取りは隔離しません (Codex の sandbox でも project の外の file を
   読める)。raw log は公開しません (下の「raw log」)。
 
