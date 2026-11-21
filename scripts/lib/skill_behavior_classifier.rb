@@ -12,6 +12,7 @@
 # 取り出して別に区分し、部分ごとの区分と合わせて最も重いものを取る。外側の shell (`/bin/zsh -lc '…'`) は外さず、
 # shell の呼び出しとして読む (外の文脈の置き換えも区分するため)。option は spec を読む共通の部品 (parse_options) で読む。
 
+require "ripper"
 require "shellwords"
 
 module SkillBehaviorClassifier
@@ -19,8 +20,8 @@ module SkillBehaviorClassifier
   SEVERITY = { "read" => 0, "exec" => 1, "unknown" => 2, "file-write" => 3, "git-write" => 4, "github-write" => 5,
                "agent-launch" => 6 }.freeze
   MAX_DEPTH = 6
-  # 規則を変えたら上げる (結果を比べるときの識別子 ids.classifier_version)。
-  VERSION = 1
+  # 規則を変えたら上げる (結果を比べるときの識別子 ids.classifier_version)。2 で inline の Ruby (ruby -e) を足した (#737)。
+  VERSION = 2
 
   CLAUDE_READ_TOOLS = %w[Read Glob Grep LS Skill NotebookRead].freeze
   CLAUDE_WRITE_TOOLS = %w[Edit Write NotebookEdit MultiEdit].freeze
@@ -100,23 +101,27 @@ module SkillBehaviorClassifier
     classes.compact.max_by { |c| SEVERITY.fetch(c) } || "unknown"
   end
 
-  def self.classify_claude(name, input)
+  # fns は fixture の関数の名前 (inline の Ruby の中で、receiver の無い呼び出しとして許す。#737)。probe が case の fixture
+  # から作って渡す。渡さない呼び出しでは空で、fixture の関数を許さない。
+  def self.classify_claude(name, input, fns: [])
     return "read" if CLAUDE_READ_TOOLS.include?(name)
     return "file-write" if CLAUDE_WRITE_TOOLS.include?(name)
-    return classify_shell(input["command"]) if name == "Bash" && input.is_a?(Hash) && input["command"].is_a?(String)
+    if name == "Bash" && input.is_a?(Hash) && input["command"].is_a?(String)
+      return classify_shell(input["command"], fns: fns)
+    end
 
     "unknown"
   end
 
-  def self.classify_shell(command, depth = 0)
+  def self.classify_shell(command, depth = 0, fns: [])
     return "unknown" if depth > MAX_DEPTH || !command.is_a?(String)
 
     scanned = scan(command)
     return "unknown" unless scanned
 
     segments, substitutions = scanned
-    classes = segments.map { |raw, masked| classify_segment(raw, masked, depth) }
-    classes += substitutions.map { |s| classify_shell(s, depth + 1) }
+    classes = segments.map { |raw, masked| classify_segment(raw, masked, depth, fns: fns) }
+    classes += substitutions.map { |s| classify_shell(s, depth + 1, fns: fns) }
     cls = classes.empty? ? "read" : max_class(classes)
     # 重い区分はそのまま。read と exec は、単純な形の command のときだけ (下の「門」)
     return cls if SEVERITY.fetch(cls) > SEVERITY.fetch("unknown") || simple_command?(command)
@@ -376,7 +381,7 @@ module SkillBehaviorClassifier
     spans
   end
 
-  def self.classify_segment(raw, masked, depth)
+  def self.classify_segment(raw, masked, depth, fns: [])
     spans = redirect_spans(masked)
     classes = spans.map { |_, _, c| c }.compact
     stripped = raw.dup
@@ -392,7 +397,7 @@ module SkillBehaviorClassifier
     assigned = prefix.any? { |w| w.match?(ASSIGNMENT) }
     return max_class(classes + [assigned ? "unknown" : "read"]) if words.empty? || %w[} fi done].include?(words.first)
 
-    cls = classify_words(words, depth)
+    cls = classify_words(words, depth, fns: fns)
     # 引用の外の glob (* ? [) は、展開で引数の数と意味が変わる (uniq a* が出力の file を持つ、など)
     cls = max_class([cls, "unknown"]) if masked.match?(/[*?\[]/) && !PLAIN_READ.include?(File.basename(words.first))
     # 環境変数 (PAGER・GIT_EXTERNAL_DIFF・RUBYOPT など) は program を差し替えうる
@@ -402,35 +407,35 @@ module SkillBehaviorClassifier
 
   ASSIGNMENT = /\A[A-Za-z_][A-Za-z0-9_]*=/.freeze
 
-  def self.classify_words(words, depth)
+  def self.classify_words(words, depth, fns: [])
     return "read" if words.empty?
 
-    cls = classify_by_name(words, depth)
+    cls = classify_by_name(words, depth, fns: fns)
     word0 = words[0].to_s
     # 標準の bin の外の path (./cat・lib/grep など) は、名前と違う program を実行しうる
     custom = word0.include?("/") && !STANDARD_BIN_DIRS.include?(File.dirname(word0))
     custom ? max_class([cls, "unknown"]) : cls
   end
 
-  def self.classify_by_name(words, depth)
+  def self.classify_by_name(words, depth, fns: [])
     name = File.basename(words[0].to_s)
     args = words[1..] || []
-    return shell_call(args, depth, name) if SHELLS.include?(name)
-    return xargs_call(args, depth) if name == "xargs"
+    return shell_call(args, depth, name, fns: fns) if SHELLS.include?(name)
+    return xargs_call(args, depth, fns: fns) if name == "xargs"
     return "agent-launch" if agent_launch?(name, args)
     return classify_gh(args) if name == "gh"
     return classify_git(args) if name == "git"
     return "file-write" if FILE_WRITE_COMMANDS.include?(name)
-    return interpreter_call(name, args) if INTERPRETER_EXEC_OPTIONS.key?(name)
+    return interpreter_call(name, args, fns: fns) if INTERPRETER_EXEC_OPTIONS.key?(name)
     # test や build の command (make・rake・npm・go・cargo・bundle exec など) は exec にしない。引数 (make の変数の代入、
     # rake -e) や設定で任意の code を走らせうる入口で、最初の組の fixture は使わない (ここに無いので unknown)。
     return "read" if PLAIN_READ.include?(name)
 
-    read_with_args(name, args, depth)
+    read_with_args(name, args, depth, fns: fns)
   end
 
   # 引数の形を確かめてから read にする command。spec で読めない形や、ここに無い command は unknown。
-  def self.read_with_args(name, args, depth)
+  def self.read_with_args(name, args, depth, fns: [])
     case name
     # printf -v と test -v / -R は、bash と zsh が配列の添字 (中の置き換えを含む) を評価する
     # diff は短い option の allowlist だけ read。長い option (--paginate の省略の --p など) と -l (出力を pr に通す) は
@@ -453,7 +458,7 @@ module SkillBehaviorClassifier
       opts.nil? ? "unknown" : "read"
     when "sed" then sed_call(args)
     when "awk" then awk_call(args)
-    when "find" then find_call(args, depth)
+    when "find" then find_call(args, depth, fns: fns)
     else "unknown"
     end
   end
@@ -561,7 +566,7 @@ module SkillBehaviorClassifier
   end
 
   # find: -delete と -fprint 系は file-write。-exec 系は、続く command (; か + まで) を区分する。
-  def self.find_call(args, depth)
+  def self.find_call(args, depth, fns: [])
     return "file-write" if args.any? { |a| a == "-delete" || a.match?(/\A-(fprint|fprint0|fprintf|fls)\z/) }
 
     classes = ["read"]
@@ -571,7 +576,7 @@ module SkillBehaviorClassifier
         j = (i + 1...args.length).find { |k| [";", "+"].include?(args[k]) }
         return "unknown" unless j
 
-        classes << injected_call(args[(i + 1)...j], depth)
+        classes << injected_call(args[(i + 1)...j], depth, fns: fns)
         i = j
       end
       i += 1
@@ -581,19 +586,19 @@ module SkillBehaviorClassifier
 
   # xargs: option (値をとるものは値ごと) を外した残りが command。command が無ければ既定の echo (read)。区分は
   # injected_call で決める。
-  def self.xargs_call(args, depth)
+  def self.xargs_call(args, depth, fns: [])
     i = 0
     while i < args.length && args[i].start_with?("-")
       i += XARGS_VALUE_OPTIONS.include?(args[i]) ? 2 : 1
     end
     rest = args[i..] || []
-    rest.empty? ? "read" : injected_call(rest, depth)
+    rest.empty? ? "read" : injected_call(rest, depth, fns: fns)
   end
 
   # 外から来る値 (xargs の標準入力・find の file 名) が引数や command の文字列に入る呼び出し。値で option や command が
   # 変わりうるので、option を問わず read の command (PLAIN_READ) のときだけ中の区分を使い、ほかは少なくとも unknown。
-  def self.injected_call(words, depth)
-    cls = classify_words(words, depth)
+  def self.injected_call(words, depth, fns: [])
+    cls = classify_words(words, depth, fns: fns)
     PLAIN_READ.include?(File.basename(words[0].to_s)) ? cls : max_class([cls, "unknown"])
   end
 
@@ -602,7 +607,7 @@ module SkillBehaviorClassifier
   SHELL_SET_OPTIONS = %w[pipefail errexit nounset xtrace].freeze
   SHELL_LONG_FLAGS = %w[--norc --noprofile --login].freeze
 
-  def self.shell_call(args, depth, shell_name = "sh")
+  def self.shell_call(args, depth, shell_name = "sh", fns: [])
     inline = false
     i = 0
     while i < args.length && args[i].match?(/\A[-+]/)
@@ -627,7 +632,7 @@ module SkillBehaviorClassifier
       i += 1
     end
     target = args[i]
-    return target ? classify_shell(target, depth + 1) : "unknown" if inline
+    return target ? classify_shell(target, depth + 1, fns: fns) : "unknown" if inline
 
     script_file?(shell_name, target) ? "exec" : "unknown"
   end
@@ -645,7 +650,12 @@ module SkillBehaviorClassifier
   # in-place の編集の印。値をとる option (-I・-r・-C・-E・-F・-x・-M・-m) の後ろの i は値の一部なので数えない。
   IN_PLACE = /\A-(?![IrCEFxMm])[A-Za-z0-9]*?i/.freeze
 
-  def self.interpreter_call(name, args)
+  def self.interpreter_call(name, args, fns: [])
+    # ruby -e (#737)。in-place の編集の印があれば、下の今の規則で file-write にする
+    if name == "ruby" && !in_place?(name, args)
+      inline = ruby_inline_call(args, fns)
+      return inline if inline
+    end
     spec = INTERPRETER_EXEC_OPTIONS.fetch(name)
     i = 0
     while i < args.length
@@ -663,6 +673,197 @@ module SkillBehaviorClassifier
       end
     end
     script_file?(name, args[i]) ? "exec" : "unknown"
+  end
+
+  # --- inline の Ruby (ruby -e。#737) ---------------------------------------------------------
+  # code を Ripper (Ruby の標準の構文解析。code を実行しない) で構文の木にし、木のすべてが下の表に収まるときだけ exec にする。
+  # 許す形を並べ、表に無い node・token・method・名前は unknown に残す (禁じる形を並べると、漏れたものが軽い区分になるため)。
+  # receiver の無い呼び出しは RUBY_INLINE_FUNCTIONS と、呼ぶ側が渡す fixture の関数 (fns) だけ。option は -e・-I・-r・-w
+  # だけで、-r の値は temp project の中の相対 path (./ で始まり、.. を含まない) だけ (ruby -run のように、標準の library が
+  # top-level の関数を足す形を防ぐ)。-e の後ろの引数 (code の ARGV) も受けない。
+  RUBY_INLINE_VALUE_OPTIONS = %w[-e -I -r].freeze
+  RUBY_INLINE_FLAGS = %w[-w].freeze
+  RUBY_INLINE_FUNCTIONS = %w[p pp puts print raise].freeze
+  # receiver のある呼び出しで許す method。名前で別の method を呼ぶ形 (send・public_send・__send__・method・inject・reduce)、
+  # code を評価する形 (instance_eval など)、IO・process・file に触れる形は入れない。
+  RUBY_INLINE_METHODS = %w[
+    sort sort_by min max min_by max_by minmax sum count length size first last take drop
+    each each_with_index each_with_object each_slice each_cons map flat_map select filter reject find detect find_index
+    index include? any? all? none? uniq reverse zip flatten compact join split chars strip upcase downcase
+    to_s to_i to_f to_a to_h inspect nil? empty? zero? positive? negative? even? odd? abs round floor ceil divmod fdiv
+    between? keys values fetch dig key? group_by partition times upto downto push pop shift unshift concat dup
+    freeze frozen?
+  ].freeze
+  RUBY_INLINE_OPERATORS = %i[+ - * / % ** == != < > <= >= <=> && || & | ^ << >> =~ !~ and or].freeze
+  RUBY_INLINE_UNARY = %i[-@ +@ ! ~ not].freeze
+  RUBY_INLINE_KEYWORDS = %w[nil true false].freeze
+  RUBY_INLINE_TOKENS = %i[@int @float @rational @imaginary @tstring_content @CHAR @label].freeze
+
+  # option の並びを読む。-e が無ければ nil (今の interpreter の規則に任せる)。-e があれば exec か unknown。
+  def self.ruby_inline_call(args, fns)
+    codes = []
+    bad = false
+    i = 0
+    while i < args.length
+      a = args[i]
+      break unless a.start_with?("-") && a != "-"
+
+      if RUBY_INLINE_FLAGS.include?(a)
+        i += 1
+        next
+      end
+      opt = a[0, 2]
+      unless RUBY_INLINE_VALUE_OPTIONS.include?(opt)
+        bad = true
+        i += 1
+        next
+      end
+      val = a.length > 2 ? a[2..] : args[i + 1]
+      i += a.length > 2 ? 1 : 2
+      if val.nil?
+        bad = true
+        break
+      end
+      codes << val if opt == "-e"
+      bad = true if opt == "-r" && !ruby_project_require?(val)
+    end
+    return nil if codes.empty?
+    return "unknown" if bad || i < args.length
+
+    ruby_inline_code?(codes.join("\n"), fns) ? "exec" : "unknown"
+  end
+
+  def self.ruby_project_require?(path)
+    path.start_with?("./") && path.length > 2 && !path.split("/").include?("..")
+  end
+
+  def self.ruby_inline_code?(code, fns)
+    tree = Ripper.sexp(code)
+    !tree.nil? && tree[0] == :program && rb_stmts?(tree[1], fns)
+  rescue StandardError
+    false
+  end
+
+  def self.rb_stmts?(list, fns)
+    list.is_a?(Array) && list.all? { |n| rb_node?(n, fns) }
+  end
+
+  # 空でもよい位置 (nil・false)
+  def self.rb_opt?(node, fns)
+    node.nil? || node == false || rb_node?(node, fns)
+  end
+
+  def self.rb_node?(n, fns)
+    return false unless n.is_a?(Array) && n[0].is_a?(Symbol)
+
+    case n[0]
+    when *RUBY_INLINE_TOKENS, :void_stmt then true
+    when :string_literal then rb_node?(n[1], fns)
+    when :string_content then n[1..].all? { |part| rb_node?(part, fns) }
+    when :string_embexpr then rb_stmts?(n[1], fns)
+    when :string_concat then rb_node?(n[1], fns) && rb_node?(n[2], fns)
+    when :symbol_literal then n[1].is_a?(Array) && n[1][0] == :symbol
+    when :array then n[1].nil? || rb_stmts?(n[1], fns)
+    when :hash then n[1].nil? || (n[1].is_a?(Array) && n[1][0] == :assoclist_from_args && rb_assocs?(n[1][1], fns))
+    when :bare_assoc_hash then rb_assocs?(n[1], fns)
+    when :dot2, :dot3 then rb_opt?(n[1], fns) && rb_opt?(n[2], fns)
+    when :paren then n[1].is_a?(Array) && (n[1][0].is_a?(Symbol) ? rb_node?(n[1], fns) : rb_stmts?(n[1], fns))
+    when :var_ref then rb_var_ref?(n[1])
+    when :vcall, :fcall then rb_function?(n[1], fns)
+    when :command then rb_function?(n[1], fns) && rb_args?(n[2], fns)
+    when :method_add_arg then rb_callee?(n[1], fns) && rb_arg_paren?(n[2], fns)
+    when :method_add_block then rb_callee?(n[1], fns) && rb_block?(n[2], fns)
+    when :call then rb_node?(n[1], fns) && rb_period?(n[2]) && rb_method?(n[3])
+    when :command_call then rb_node?(n[1], fns) && rb_period?(n[2]) && rb_method?(n[3]) && rb_args?(n[4], fns)
+    when :aref, :aref_field then rb_node?(n[1], fns) && (n[2].nil? || rb_args?(n[2], fns))
+    when :assign then rb_target?(n[1], fns) && rb_node?(n[2], fns)
+    when :opassign then rb_target?(n[1], fns) && rb_token?(n[2], :@op) && rb_node?(n[3], fns)
+    when :binary then RUBY_INLINE_OPERATORS.include?(n[2]) && rb_node?(n[1], fns) && rb_node?(n[3], fns)
+    when :unary then RUBY_INLINE_UNARY.include?(n[1]) && rb_node?(n[2], fns)
+    when :ifop then rb_node?(n[1], fns) && rb_node?(n[2], fns) && rb_node?(n[3], fns)
+    when :if, :unless, :elsif then rb_node?(n[1], fns) && rb_stmts?(n[2], fns) && rb_opt?(n[3], fns)
+    when :else then rb_stmts?(n[1], fns)
+    when :if_mod, :unless_mod, :rescue_mod then rb_node?(n[1], fns) && rb_node?(n[2], fns)
+    else false
+    end
+  end
+
+  def self.rb_token?(tok, type)
+    tok.is_a?(Array) && tok[0] == type && tok[1].is_a?(String)
+  end
+
+  def self.rb_assocs?(list, fns)
+    list.is_a?(Array) && list.all? { |a| a.is_a?(Array) && a[0] == :assoc_new && rb_node?(a[1], fns) && rb_node?(a[2], fns) }
+  end
+
+  # local の変数と nil・true・false だけ (定数・global・instance の変数・self は許さない)
+  def self.rb_var_ref?(tok)
+    rb_token?(tok, :@ident) || (rb_token?(tok, :@kw) && RUBY_INLINE_KEYWORDS.include?(tok[1]))
+  end
+
+  def self.rb_target?(n, fns)
+    return false unless n.is_a?(Array)
+
+    (n[0] == :var_field && rb_token?(n[1], :@ident)) || (n[0] == :aref_field && rb_node?(n, fns))
+  end
+
+  def self.rb_function?(tok, fns)
+    rb_token?(tok, :@ident) && (RUBY_INLINE_FUNCTIONS.include?(tok[1]) || fns.include?(tok[1]))
+  end
+
+  def self.rb_method?(tok)
+    (rb_token?(tok, :@ident) && RUBY_INLINE_METHODS.include?(tok[1])) ||
+      (rb_token?(tok, :@op) && RUBY_INLINE_OPERATORS.include?(tok[1].to_sym))
+  end
+
+  def self.rb_period?(tok)
+    (rb_token?(tok, :@period) && tok[1] == ".") || (rb_token?(tok, :@op) && tok[1] == "&.")
+  end
+
+  def self.rb_callee?(n, fns)
+    n.is_a?(Array) && %i[fcall call command command_call method_add_arg].include?(n[0]) && rb_node?(n, fns)
+  end
+
+  def self.rb_arg_paren?(n, fns)
+    n.is_a?(Array) && n[0] == :arg_paren && (n[1].nil? || rb_args?(n[1], fns))
+  end
+
+  def self.rb_args?(n, fns)
+    return false unless n.is_a?(Array)
+    return rb_stmts?(n, fns) unless n[0] == :args_add_block
+
+    rb_stmts?(n[1], fns) && (n[2] == false || rb_block_pass?(n[2]))
+  end
+
+  # &:名前 の形だけ。名前が表の method のときに限る
+  def self.rb_block_pass?(n)
+    n.is_a?(Array) && n[0] == :symbol_literal && n[1].is_a?(Array) && n[1][0] == :symbol &&
+      rb_token?(n[1][1], :@ident) && RUBY_INLINE_METHODS.include?(n[1][1][1])
+  end
+
+  def self.rb_block?(n, fns)
+    return false unless n.is_a?(Array) && rb_block_var?(n[1])
+
+    case n[0]
+    when :brace_block then rb_stmts?(n[2], fns)
+    # do … end の本体は rescue・else・ensure を持たない形だけ
+    when :do_block then n[2].is_a?(Array) && n[2][0] == :bodystmt && rb_stmts?(n[2][1], fns) && n[2][2..].all?(&:nil?)
+    else false
+    end
+  end
+
+  # block の引数は名前と (a, b) の組だけ (既定の値・splat・keyword・block の引数を持たない)
+  def self.rb_block_var?(n)
+    return true if n.nil?
+    return false unless n.is_a?(Array) && n[0] == :block_var && n[2] == false
+
+    params = n[1]
+    params.is_a?(Array) && params[0] == :params && params[2..].all?(&:nil?) &&
+      (params[1].nil? || (params[1].is_a?(Array) && params[1].all? { |x| rb_param?(x) }))
+  end
+
+  def self.rb_param?(x)
+    rb_token?(x, :@ident) || (x.is_a?(Array) && %i[mlhs mlhs_paren].include?(x[0]) && x[1..].all? { |y| rb_param?(y) })
   end
 
   def self.in_place?(name, args)
