@@ -152,15 +152,17 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
 - `completion` は `exited`・`max-turns`・`timeout`・`failed`。behavior の評価では `max-turns` と `timeout` を観測完了に
   数えません (routing probe の `max-turns` と `observed-stop` は流用しない)。
 - `skills_read` は、読んだ skill の名前です。Claude Code の `Skill` tool の呼び出しのほか、呼び出しの入力の文字列 (Codex は
-  command) の中の `SKILL.md` (大文字小文字を区別しない) の出てくる所ごとに、読んだ dir を決めます (#731)。
-  - `<dir>/SKILL.md` は dir の最後の要素です (`/./` は `/` にしてから見る)。単独の `SKILL.md` と
-    `./SKILL.md` は、同じ文字列の最後の `cd <dir>` の dir です (`cd …/<name> && cat SKILL.md` など)。
-  - 最後の要素が具体的な名前 (英数字と `._-`。`.` と `..` を除く) なら、その dir の読み取りで、照らす名前にあれば
-    `skills_read` に足します。照らすのは、置いた skill (対照では、ふだんの Codex の home の user の skill と、case の期待した
-    skill) です。
-- `skills_unresolved` は、名前を決められない skill の file の読み取りがあった run の印です (glob、変数、`..`、`cd` の無い
-  単独の `SKILL.md` など)。1 つの文字列にほかの名前が見つかっても、決められない所が 1 つでもあれば立てます。呼び出しの区分
-  とは分けて残し、区分は分類器のまま変えません (書き込みと同居しても印は消えない)。#731 より前の results.json には無く、
+  command) の中の `skill.md` の字 (大文字小文字を区別しない) の出てくる所ごとに見ます (#731)。shell は静的に解釈しきれない
+  ので、名前に結び付ける形は 1 つに絞ります。
+  - `<要素>/SKILL.md` で、直前が `/`、その前の要素が具体的な名前 (英数字と `._-`。`.` と `..` を除く)、直後が末尾か区切りの
+    字 (空白・引用・`;&|()<>`) の所だけを、その名前の dir の読み取りにします (`/./` は `/` にしてから見る)。前の要素より前に
+    変数や glob があってもかまいません。照らす名前 (置いた skill。対照では、ふだんの Codex の home の user の skill と、case
+    の期待した skill) にあれば、`skills_read` に足します。
+- `skills_unresolved` は、名前を決められない skill の file の読み取りがあった run の印です。上の形でない所 (単独の
+  `SKILL.md`、`cd` してからの読み取り、`*/SKILL.md`・`SKILL.md*`・`*SKILL.md` の glob、変数、`..`、`foo-SKILL.md`・
+  `SKILL.md.bak`) が 1 つでもあれば立て、同じ文字列にほかの名前が見つかっても消しません。呼び出しの区分とは分けて残し、
+  区分は分類器のまま変えません (書き込みと同居しても印は消えない)。`cd` してから読む形は、名前を決められる場合も印を
+  立てます (対照では止まる。skill を置いた run では `skill_read` の数が少なめに出る)。#731 より前の results.json には無く、
   judge は無いときも受けます。
 - `ids` は比べる条件の識別子です。中身の側は skill の source・case・fixture の digest と、runner と分類器の版。実行の
   側は host の版、要求した model と init の model、effort、tool surface、permission の mode、max-turns、timeout、repeat。

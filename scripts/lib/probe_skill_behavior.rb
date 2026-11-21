@@ -353,15 +353,18 @@ module ProbeSkillBehavior
     item["status"] == "completed" ? "ok" : "unknown"
   end
 
-  # skill の file の読み取りの検出 (#731。review の round 1・2)。決まり: 名前を決められない読み取りは、呼び出しの区分とは
+  # skill の file の読み取りの検出 (#731。review の round 1〜3)。決まり: 名前を決められない読み取りは、呼び出しの区分とは
   # 分けて、run の印 (skills_unresolved) で judge に渡す。区分は分類器のまま変えない (書き込みと同居しても印は消えない)。
-  # 文字列の中の `SKILL.md` (大文字小文字を区別しない。前後は区切りの字) の出てくる所ごとに、読んだ dir を決める。
-  #   - `<dir>/SKILL.md`: dir の最後の要素 (`/./` は `/` にしてから見る)。
-  #   - 単独の `SKILL.md`・`./SKILL.md`: 同じ文字列の最後の `cd <dir>` の dir (cd が無ければ決められない)。
-  # 最後の要素が具体的な名前 (英数字と `._-`。`.` と `..` を除く) なら、その dir の読み取りで、名前が names にあれば
-  # skills_read に足す。glob・変数・`..` など、具体的な名前にならない所が 1 つでもあれば、印を立てる (同じ文字列にほかの
-  # 名前が見つかっても消さない)。
-  SKILL_MD_OCCURRENCE = %r{([^\s"'`=;&|()<>]*)skill\.md(?=\z|[\s"'`;&|()<>])}i.freeze
+  # shell は静的に解釈しきれないので、名前に結び付ける形を 1 つに絞る (#717 と同じ考え方)。文字列の中の `skill.md` の字
+  # (大文字小文字を区別しない。部分の一致) の出てくる所ごとに見て、次の形だけを、その名前の dir の SKILL.md の読み取りに
+  # する。`/./` は `/` にしてから見る。
+  #   - `<要素>/SKILL.md`: 直前が `/` で、その前の要素が具体的な名前 (英数字と `._-`。`.` と `..` を除く)、直後が末尾か
+  #     区切りの字 (空白・引用・`;&|()<>`)。前の要素より前に変数や glob があってもよい (読む file の名前は変わらない)。
+  # この形でない所 (単独の `SKILL.md`、`cd` してからの読み取り、`*/SKILL.md`・`SKILL.md*`・`*SKILL.md` の glob、変数、
+  # `..`、`foo-SKILL.md`・`SKILL.md.bak`) が 1 つでもあれば、印を立てる (同じ文字列にほかの名前が見つかっても消さない)。
+  # 名前が names にあれば skills_read に足す。
+  SKILL_MD_AFTER = /\A(?:\z|[\s"'`;&|()<>])/.freeze
+  SEGMENT_BEFORE_SLASH = %r{([^/\s"'`;&|()<>=]*)/\z}.freeze
   CONCRETE_SEGMENT = /\A[A-Za-z0-9._-]+\z/.freeze
 
   def self.skill_reads(strings, names)
@@ -372,18 +375,10 @@ module ProbeSkillBehavior
       next unless s.match?(/skill\.md/i)
 
       norm = s.gsub(%r{/(?:\./)+}, "/")
-      norm.scan(SKILL_MD_OCCURRENCE) do |(prefix)|
-        dir = if prefix.empty? || prefix == "./"
-                cd_dir(norm)
-              elsif prefix.end_with?("/")
-                prefix.chomp("/")
-              else
-                :not_a_path
-              end
-        next if dir == :not_a_path # `foo-SKILL.md` のような別の名前の file
-
-        seg = dir ? File.basename(dir) : nil
-        if seg&.match?(CONCRETE_SEGMENT) && !%w[. ..].include?(seg)
+      norm.to_enum(:scan, /skill\.md/i).each do
+        m = Regexp.last_match
+        seg = norm[0...m.begin(0)][SEGMENT_BEFORE_SLASH, 1]
+        if seg&.match?(CONCRETE_SEGMENT) && !%w[. ..].include?(seg) && norm[m.end(0)..].match?(SKILL_MD_AFTER)
           n = by_name[seg.downcase]
           found << n if n
         else
@@ -392,15 +387,6 @@ module ProbeSkillBehavior
       end
     end
     [found.uniq, unresolved]
-  end
-
-  # 文字列の最後の `cd <dir>` の dir。dir が引用を外して path の字だけでないとき・cd が無いときは nil (決められない)。
-  def self.cd_dir(s)
-    target = s.scan(/(?:\A|[\s;&|("'`])cd\s+([^\s;&|()]+)/).flatten.last
-    return nil unless target
-
-    t = target.delete("\"'")
-    t.match?(%r{\A[A-Za-z0-9._/~-]+\z}) ? t.chomp("/") : nil
   end
 
   # --- fixture と state -----------------------------------------------------------------

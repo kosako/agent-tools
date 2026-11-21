@@ -465,19 +465,20 @@ check("codex の file_change の path を到達の照合に残す", x[:calls][3]
 check("codex の turn.completed を見た", x[:turn_completed])
 check("turn.completed が無ければ見ていない", !P.parse_codex("", names)[:turn_completed])
 
-# skill の file の読み取りの形 (#731。review の round 1・2)。名前を決められない読み取りは区分と分けて skills_unresolved に残す
+# skill の file の読み取りの形 (#731。review の round 1〜3)。名前に結び付けるのは `<名前>/SKILL.md` の形だけで、
+# ほかの形は区分と分けて skills_unresolved に残す
 cmd = lambda do |id, command|
   { "type" => "item.completed", "item" => { "id" => id, "type" => "command_execution", "command" => command,
                                            "exit_code" => 0, "status" => "completed" } }
 end
 one = ->(command) { P.parse_codex(JSON.generate(cmd.call("r1", command)) + "\n", names) }
 read_forms = {
-  "cd した dir の SKILL.md" => "/bin/zsh -lc 'cd /h/skills/personal-investigate && cat SKILL.md'",
+  "続いた path" => "/bin/zsh -lc 'cat /h/skills/personal-investigate/SKILL.md'",
   "途中の /./" => "/bin/zsh -lc 'cat /h/skills/./personal-investigate/SKILL.md'",
   "SKILL.md の直前の /./" => "/bin/zsh -lc 'cat /h/skills/personal-investigate/././SKILL.md'",
   "重ねた / と小文字の skill.md" => "/bin/zsh -lc 'cat /h/skills//personal-investigate/skill.md'",
-  "cd と ./SKILL.md" => "/bin/zsh -lc 'cd /h/skills/personal-investigate; cat ./SKILL.md'",
   "前の要素に変数" => "/bin/zsh -lc 'cat $HOME/.codex/skills/personal-investigate/SKILL.md'",
+  "後ろに区切りの字" => "/bin/zsh -lc 'sed -n 1,80p \"/h/skills/personal-investigate/SKILL.md\"; cat lib/median.rb'",
 }
 read_forms.each do |label, command|
   y = one.call(command)
@@ -490,6 +491,13 @@ unresolved_forms = {
   "cd の無い単独の SKILL.md" => "/bin/zsh -lc 'find /h/skills -name SKILL.md -exec cat {} +'",
   "最後の要素が .." => "/bin/zsh -lc 'cat /h/skills/personal-investigate/../SKILL.md'",
   "cd の先が変数" => "/bin/zsh -lc 'cd /h/skills/$n && cat SKILL.md'",
+  "cd した dir の SKILL.md" => "/bin/zsh -lc 'cd /h/skills/personal-investigate && cat SKILL.md'",
+  "cd と ./SKILL.md" => "/bin/zsh -lc 'cd /h/skills/personal-investigate; cat ./SKILL.md'",
+  "読んだ後の cd (round 3)" => "/bin/zsh -lc 'cd ../skills/personal-investigate && cat SKILL.md; cd - && cat lib/median.rb'",
+  "file の名前の後ろの glob (round 3)" => "/bin/zsh -lc 'cat ../skills/*/SKILL.md* && cat lib/median.rb'",
+  "file の名前の前の glob (round 3)" => "/bin/zsh -lc 'cat ../skills/personal-investigate/*SKILL.md'",
+  "SKILL.md で終わる別の名前" => "/bin/zsh -lc 'cat notes-SKILL.md'",
+  "SKILL.md で始まる別の名前" => "/bin/zsh -lc 'cat /h/skills/personal-investigate/SKILL.md.bak'",
 }
 unresolved_forms.each do |label, command|
   y = one.call(command)
@@ -504,8 +512,6 @@ check("書き込みと同居しても、区分は分類器のまま、印は残�
       y[:calls][0][:class] == "file-write" && y[:skills_unresolved] == true)
 y = one.call("/bin/zsh -lc 'cat /h/skills/personal-investigate-old/SKILL.md'")
 check("名前の続く別の dir は、別の skill の読み取り (印も立てない)", y[:skills_read].empty? && y[:skills_unresolved] == false)
-y = one.call("/bin/zsh -lc 'cat notes-SKILL.md'")
-check("SKILL.md で終わる別の名前の file は skill の読み取りでない", y[:skills_read].empty? && y[:skills_unresolved] == false)
 y = one.call("/bin/zsh -lc 'cat README.md'")
 check("SKILL.md に触れない呼び出しは今のまま", y[:calls][0][:class] == "read" && y[:skills_read].empty? && y[:skills_unresolved] == false)
 two = [cmd.call("a", "/bin/zsh -lc 'cat /h/skills/*/SKILL.md'"), cmd.call("b", "/bin/zsh -lc 'cat README.md'")]
