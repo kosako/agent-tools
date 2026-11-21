@@ -143,7 +143,8 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
          "conditions": {"home": "eval", "user_instructions": "absent", "user_skills": "absent"}},
  "runs": [{"case": "investigate-fix", "index": 1, "completion": "exited",
            "calls": [{"id": "item_1", "tool": "command_execution", "class": "read", "outcome": "ok"}],
-           "reached": true, "changed": ["lib/median.rb"], "skills_read": ["personal-investigate"]}]}
+           "reached": true, "changed": ["lib/median.rb"], "skills_read": ["personal-investigate"],
+           "skills_unresolved": false}]}
 ```
 
 - `calls[].outcome` は `ok`・`error`・`denied`・`unknown`。Claude Code は `tool_result` の `is_error` と
@@ -151,11 +152,16 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
 - `completion` は `exited`・`max-turns`・`timeout`・`failed`。behavior の評価では `max-turns` と `timeout` を観測完了に
   数えません (routing probe の `max-turns` と `observed-stop` は流用しない)。
 - `skills_read` は、読んだ skill の名前です。Claude Code の `Skill` tool の呼び出しのほか、呼び出しの入力の文字列 (Codex は
-  command) に、path の要素としての skill の名前と `SKILL.md` の語 (大文字小文字を区別しない) の両方があれば、その skill を
-  読んだとします (`…/<name>/SKILL.md`、`…/./<name>/SKILL.md`、`cd …/<name> && cat SKILL.md` など)。名前を照らすのは、置いた
-  skill (対照では、ふだんの Codex の home の user の skill と、case の期待した skill)。`SKILL.md` の語があるのに名前を決め
-  られない呼び出し (`cat */SKILL.md` など) は、区分が `read` か `exec` なら `unknown` にします (評価不能になる。対照の崩れを
-  見落として green にしないため)。`file-write` などの重い区分は、違反の検出を弱めないよう、そのまま残します。
+  command) の中の `SKILL.md` (大文字小文字を区別しない) の出てくる所ごとに、読んだ dir を決めます (#731)。
+  - `<dir>/SKILL.md` は dir の最後の要素です (`/./` は `/` にしてから見る)。単独の `SKILL.md` と
+    `./SKILL.md` は、同じ文字列の最後の `cd <dir>` の dir です (`cd …/<name> && cat SKILL.md` など)。
+  - 最後の要素が具体的な名前 (英数字と `._-`。`.` と `..` を除く) なら、その dir の読み取りで、照らす名前にあれば
+    `skills_read` に足します。照らすのは、置いた skill (対照では、ふだんの Codex の home の user の skill と、case の期待した
+    skill) です。
+- `skills_unresolved` は、名前を決められない skill の file の読み取りがあった run の印です (glob、変数、`..`、`cd` の無い
+  単独の `SKILL.md` など)。1 つの文字列にほかの名前が見つかっても、決められない所が 1 つでもあれば立てます。呼び出しの区分
+  とは分けて残し、区分は分類器のまま変えません (書き込みと同居しても印は消えない)。#731 より前の results.json には無く、
+  judge は無いときも受けます。
 - `ids` は比べる条件の識別子です。中身の側は skill の source・case・fixture の digest と、runner と分類器の版。実行の
   側は host の版、要求した model と init の model、effort、tool surface、permission の mode、max-turns、timeout、repeat。
   Codex は解決した model を event に出さないので `init_model` は `unknown`、effort は両 tool とも CLI の既定
@@ -186,7 +192,9 @@ run ごとに次のどれかに決めます。network と CLI には触れませ
   違う、permission の mode が `acceptEdits` でない、のどれかがあれば exit 2 です。
 - skill を置かない対照 (`skills: none`) の run が、その case の期待した skill を読んでいたら、対照の条件が崩れているので、
   条件の食い違いとして exit 2 にします (#731)。出力は `condition: control run read the expected skill (case <id>, run <n>)`
-  の形です。skill を置いた run が読んだのは、今どおり `skill_read` の数に入るだけです。
+  の形です。名前を決められない skill の file を読んだ対照の run (`skills_unresolved` が true) も、期待した skill でないと
+  言い切れないので、同じく exit 2 です (`… read a skill file whose name could not be decided …`)。skill を置いた run の
+  読み取りは、今どおり `skill_read` の数に入るだけで、印も判定に使いません。
 - 入力の誤りは、run を判定せずに exit 2 です。形と未知の key、case set の外の case、全 case の coverage、重複した run、
   index の欠け、case ごとの run の数の違い、`ids.repeat` との食い違いを見ます。`ids` は、在る key だけを probe が書く型と
   照らします (未知の key も誤り)。Claude Code の `tool_surface` は、tool の名前の配列の `requested` と、文字列の `init` の

@@ -265,19 +265,21 @@ module ProbeSkillBehavior
       end
     end
     skills = []
+    unresolved = false
     out = calls.map do |c|
       if c[:tool] == "Skill"
         n = c[:input]["skill"] || c[:input]["name"]
         skills << n if n.is_a?(String)
       end
-      found, ambiguous = skill_reads(strings_in(c[:input]), names)
+      found, u = skill_reads(strings_in(c[:input]), names)
       skills.concat(found)
-      klass = K.classify_claude(c[:tool], c[:input])
-      klass = "unknown" if ambiguous && LIGHT_CLASSES.include?(klass)
+      unresolved ||= u
       outcome = denied.include?(c[:id]) ? "denied" : results.fetch(c[:id], "unknown")
-      { id: c[:id], tool: c[:tool], class: klass, outcome: outcome, strings: strings_in(c[:input]) }
+      { id: c[:id], tool: c[:tool], class: K.classify_claude(c[:tool], c[:input]), outcome: outcome,
+        strings: strings_in(c[:input]) }
     end
-    { calls: out, skills_read: skills.uniq, init: init, result_seen: result_seen, subtype: subtype }
+    { calls: out, skills_read: skills.uniq, skills_unresolved: unresolved, init: init, result_seen: result_seen,
+      subtype: subtype }
   end
 
   # codex exec --json の event (0.153.4 で実測した形)。呼び出しは item.started / item.completed の item で、id で束ねる。
@@ -306,18 +308,18 @@ module ProbeSkillBehavior
       end
     end
     skills = []
+    unresolved = false
     calls = order.map do |id|
       item = items[id]
       strings = codex_strings(item)
-      klass = codex_class(item)
       if item["type"] == "command_execution"
-        found, ambiguous = skill_reads(strings, names)
+        found, u = skill_reads(strings, names)
         skills.concat(found)
-        klass = "unknown" if ambiguous && LIGHT_CLASSES.include?(klass)
+        unresolved ||= u
       end
-      { id: id, tool: item["type"], class: klass, outcome: codex_outcome(item), strings: strings }
+      { id: id, tool: item["type"], class: codex_class(item), outcome: codex_outcome(item), strings: strings }
     end
-    { calls: calls, skills_read: skills.uniq, turn_completed: turn_completed }
+    { calls: calls, skills_read: skills.uniq, skills_unresolved: unresolved, turn_completed: turn_completed }
   end
 
   def self.codex_strings(item)
@@ -351,29 +353,54 @@ module ProbeSkillBehavior
     item["status"] == "completed" ? "ok" : "unknown"
   end
 
-  # skill の file の読み取りの検出 (#731。review の round 1)。`SKILL.md` の語 (大文字小文字を区別しない) を含む文字列
-  # から、読んだ skill の名前を決める。path の要素としての名前 (前が先頭・`/`・空白・引用・`=`、後ろが末尾・`/`・空白・
-  # 引用・`;&|)`) と、`SKILL.md` の語 (前が先頭・空白・引用・`=`・`/`) の両方がある文字列を、その名前の読み取りにする
-  # (`…/<name>/SKILL.md`、`…/./<name>/SKILL.md`、`cd …/<name> && cat SKILL.md` など)。`SKILL.md` の語があるのに名前を
-  # 決められない文字列 (`cat */SKILL.md`、名前を変数に入れた形など) は ambiguous で、呼び出しの区分が軽い (read・exec)
-  # なら unknown にする。対照の崩れを見落として green にしないため (judge は unknown の呼び出しを評価不能に
-  # する)。重い区分 (file-write など) は、違反の検出を弱めないよう、そのまま残す。
-  LIGHT_CLASSES = %w[read exec].freeze
-  SKILL_MD_TOKEN = %r{(?:\A|[\s"'=/])skill\.md}i.freeze
+  # skill の file の読み取りの検出 (#731。review の round 1・2)。決まり: 名前を決められない読み取りは、呼び出しの区分とは
+  # 分けて、run の印 (skills_unresolved) で judge に渡す。区分は分類器のまま変えない (書き込みと同居しても印は消えない)。
+  # 文字列の中の `SKILL.md` (大文字小文字を区別しない。前後は区切りの字) の出てくる所ごとに、読んだ dir を決める。
+  #   - `<dir>/SKILL.md`: dir の最後の要素 (`/./` は `/` にしてから見る)。
+  #   - 単独の `SKILL.md`・`./SKILL.md`: 同じ文字列の最後の `cd <dir>` の dir (cd が無ければ決められない)。
+  # 最後の要素が具体的な名前 (英数字と `._-`。`.` と `..` を除く) なら、その dir の読み取りで、名前が names にあれば
+  # skills_read に足す。glob・変数・`..` など、具体的な名前にならない所が 1 つでもあれば、印を立てる (同じ文字列にほかの
+  # 名前が見つかっても消さない)。
+  SKILL_MD_OCCURRENCE = %r{([^\s"'`=;&|()<>]*)skill\.md(?=\z|[\s"'`;&|()<>])}i.freeze
+  CONCRETE_SEGMENT = /\A[A-Za-z0-9._-]+\z/.freeze
 
   def self.skill_reads(strings, names)
+    by_name = names.to_h { |n| [n.downcase, n] }
     found = []
-    ambiguous = false
+    unresolved = false
     strings.each do |s|
       next unless s.match?(/skill\.md/i)
 
-      hit = names.select do |n|
-        s.match?(%r{(?:\A|[/\s"'=])#{Regexp.escape(n)}(?:\z|[/\s"';&|)])}i) && s.match?(SKILL_MD_TOKEN)
+      norm = s.gsub(%r{/(?:\./)+}, "/")
+      norm.scan(SKILL_MD_OCCURRENCE) do |(prefix)|
+        dir = if prefix.empty? || prefix == "./"
+                cd_dir(norm)
+              elsif prefix.end_with?("/")
+                prefix.chomp("/")
+              else
+                :not_a_path
+              end
+        next if dir == :not_a_path # `foo-SKILL.md` のような別の名前の file
+
+        seg = dir ? File.basename(dir) : nil
+        if seg&.match?(CONCRETE_SEGMENT) && !%w[. ..].include?(seg)
+          n = by_name[seg.downcase]
+          found << n if n
+        else
+          unresolved = true
+        end
       end
-      ambiguous = true if hit.empty?
-      found.concat(hit)
     end
-    [found.uniq, ambiguous]
+    [found.uniq, unresolved]
+  end
+
+  # 文字列の最後の `cd <dir>` の dir。dir が引用を外して path の字だけでないとき・cd が無いときは nil (決められない)。
+  def self.cd_dir(s)
+    target = s.scan(/(?:\A|[\s;&|("'`])cd\s+([^\s;&|()]+)/).flatten.last
+    return nil unless target
+
+    t = target.delete("\"'")
+    t.match?(%r{\A[A-Za-z0-9._/~-]+\z}) ? t.chomp("/") : nil
   end
 
   # --- fixture と state -----------------------------------------------------------------
@@ -617,6 +644,7 @@ module ProbeSkillBehavior
           "calls" => r[:calls].map { |call| { "id" => call[:id], "tool" => call[:tool], "class" => call[:class],
                                               "outcome" => call[:outcome] } },
           "reached" => reached, "changed" => changed, "skills_read" => r[:skills_read],
+          "skills_unresolved" => r[:skills_unresolved],
         }
         puts "#{c['id']} [#{n + 1}/#{opts[:repeat]}]: #{r[:completion]} reached=#{reached} " \
              "calls=[#{class_counts(r[:calls])}] changed=#{changed.length} skills=#{r[:skills_read].inspect}"

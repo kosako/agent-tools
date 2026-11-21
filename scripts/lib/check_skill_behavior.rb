@@ -41,6 +41,8 @@ module CheckSkillBehavior
   TOP_KEYS = %w[schema_version tool variant skills ids runs].freeze
   OPTIONAL_TOP_KEYS = %w[generated_at].freeze
   RUN_KEYS = %w[case index completion calls reached changed skills_read].freeze
+  # 無くてもよい run の key (#731 より前の results.json には無い)。在れば形を確かめる。
+  OPTIONAL_RUN_KEYS = %w[skills_unresolved].freeze
   CALL_KEYS = %w[id tool class outcome].freeze
   # baseline と比べるときに違ってよい識別子 (比べる目的の差。skill の before と after、skill の有無)。
   COMPARE_ALLOWED_IDS = %w[source_digest].freeze
@@ -207,7 +209,7 @@ module CheckSkillBehavior
     raise Error, "#{label}: must be an object" unless r.is_a?(Hash)
 
     missing = RUN_KEYS - r.keys
-    extra = r.keys - RUN_KEYS
+    extra = r.keys - RUN_KEYS - OPTIONAL_RUN_KEYS
     raise Error, "#{label}: missing key(s): #{missing.join(', ')}" unless missing.empty?
     raise Error, C.unknown_keys_message(label, extra) unless extra.empty?
     raise Error, "#{label}: case is not in the case set" unless ids.include?(r["case"])
@@ -219,6 +221,9 @@ module CheckSkillBehavior
     end
     unless r["skills_read"].is_a?(Array) && r["skills_read"].all? { |s| s.is_a?(String) && !s.empty? }
       raise Error, "#{label}: skills_read must be an array of names"
+    end
+    if r.key?("skills_unresolved") && ![true, false].include?(r["skills_unresolved"])
+      raise Error, "#{label}: skills_unresolved must be true or false"
     end
     raise Error, "#{label}: calls must be an array" unless r["calls"].is_a?(Array)
 
@@ -289,15 +294,21 @@ module CheckSkillBehavior
     issues
   end
 
-  # skill を置かない対照 (skills: none) の run が、その case の期待した skill を読んだ (#731)。対照の条件が崩れて
-  # いるので、比較にも判定の green にも使わない。case の id と run の番号は決まった形の値なので、そのまま写す。
+  # skill を置かない対照 (skills: none) の run が、その case の期待した skill を読んだか、名前を決められない skill の
+  # file を読んだ (skills_unresolved。#731)。どちらも対照の条件が崩れている (読んだのが期待した skill でないと言い切れない)
+  # ので、比較にも判定の green にも使わない。case の id と run の番号は決まった形の値なので、そのまま写す。
   def self.control_issues(data, cases)
     return [] unless data["skills"] == "none"
 
     skill = cases.to_h { |c| [c["id"], c["skill"]] }
-    data["runs"].select { |r| r["skills_read"].include?(skill.fetch(r["case"])) }
-                .sort_by { |r| [r["case"], r["index"]] }
-                .map { |r| "control run read the expected skill (case #{r['case']}, run #{r['index']})" }
+    data["runs"].sort_by { |r| [r["case"], r["index"]] }.map do |r|
+      where = "(case #{r['case']}, run #{r['index']})"
+      if r["skills_read"].include?(skill.fetch(r["case"]))
+        "control run read the expected skill #{where}"
+      elsif r["skills_unresolved"] == true
+        "control run read a skill file whose name could not be decided #{where}"
+      end
+    end.compact
   end
 
   def self.evaluate(data, cases)

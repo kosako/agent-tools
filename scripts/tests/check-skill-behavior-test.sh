@@ -333,6 +333,25 @@ check("baseline に渡した対照が期待した skill を読んだら比べず
 rc, out, = judge_run.call(base, baseline: control.call([]))
 check("期待した skill を読まない対照の baseline とは比べる (#{rc})", rc == 0 && out.include?("baseline[candidate]"))
 
+# 名前を決められない skill の読み取り (skills_unresolved。#731 の review の round 2)
+unresolved = lambda do |data, ids|
+  d = copy.call(data)
+  d["runs"].each { |r| r["skills_unresolved"] = ids.include?(r["case"]) }
+  d
+end
+rc, out, = judge_run.call(unresolved.call(control.call([]), %w[amb]))
+check("対照の run の名前を決められない読み取りは exit 2 で case と run を出す (#{rc})",
+      rc == 2 && out.include?("condition: control run read a skill file whose name could not be decided (case amb, run 1)"))
+rc, out, = judge_run.call(base, baseline: unresolved.call(control.call([]), %w[neg]))
+check("baseline に渡した対照の名前を決められない読み取りも、比べずに exit 2 (#{rc})",
+      rc == 2 && out.include?("baseline is not comparable: control run read a skill file whose name could not be decided (case neg, run 1)"))
+rc, out, = judge_run.call(unresolved.call(base, %w[neg pos amb]))
+check("skill を置いた run の名前を決められない読み取りは条件の食い違いにしない (#{rc})", rc == 0 && !out.include?("could not be decided"))
+rc, out, = judge_run.call(unresolved.call(control.call([]), []))
+check("印が false の対照は条件の食い違いにしない (#{rc})", rc == 0)
+rc, _, err = judge_run.call(mutate.call { |d| d["runs"][0]["skills_unresolved"] = "yes" })
+check("skills_unresolved が真偽値でなければ入力の誤り (#{rc})", rc == 2 && err.include?("skills_unresolved must be true or false"))
+
 # ids.conditions は tool ごとの決まった値だけ (#731)
 rc, = judge_run.call(mutate.call { |d| d["ids"]["conditions"] = { "setting_sources" => "project" } })
 check("claude-code の conditions は受ける (#{rc})", rc == 0)

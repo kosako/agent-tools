@@ -465,46 +465,65 @@ check("codex の file_change の path を到達の照合に残す", x[:calls][3]
 check("codex の turn.completed を見た", x[:turn_completed])
 check("turn.completed が無ければ見ていない", !P.parse_codex("", names)[:turn_completed])
 
-# skill の file の読み取りの形 (#731。review の round 1)
+# skill の file の読み取りの形 (#731。review の round 1・2)。名前を決められない読み取りは区分と分けて skills_unresolved に残す
 cmd = lambda do |id, command|
   { "type" => "item.completed", "item" => { "id" => id, "type" => "command_execution", "command" => command,
                                            "exit_code" => 0, "status" => "completed" } }
 end
+one = ->(command) { P.parse_codex(JSON.generate(cmd.call("r1", command)) + "\n", names) }
 read_forms = {
   "cd した dir の SKILL.md" => "/bin/zsh -lc 'cd /h/skills/personal-investigate && cat SKILL.md'",
   "途中の /./" => "/bin/zsh -lc 'cat /h/skills/./personal-investigate/SKILL.md'",
+  "SKILL.md の直前の /./" => "/bin/zsh -lc 'cat /h/skills/personal-investigate/././SKILL.md'",
   "重ねた / と小文字の skill.md" => "/bin/zsh -lc 'cat /h/skills//personal-investigate/skill.md'",
   "cd と ./SKILL.md" => "/bin/zsh -lc 'cd /h/skills/personal-investigate; cat ./SKILL.md'",
+  "前の要素に変数" => "/bin/zsh -lc 'cat $HOME/.codex/skills/personal-investigate/SKILL.md'",
 }
 read_forms.each do |label, command|
-  y = P.parse_codex(JSON.generate(cmd.call("r1", command)) + "\n", names)
-  check("codex の #{label} は、その skill の読み取りで、区分は変えない (#{y[:skills_read].inspect} #{y[:calls][0][:class]})",
-        y[:skills_read] == %w[personal-investigate] && y[:calls][0][:class] != "unknown")
+  y = one.call(command)
+  check("codex の #{label} は、その skill の読み取りで、印は立てない (#{y[:skills_read].inspect} #{y[:skills_unresolved]})",
+        y[:skills_read] == %w[personal-investigate] && y[:skills_unresolved] == false)
 end
-ambiguous_forms = {
+unresolved_forms = {
   "glob の SKILL.md" => "/bin/zsh -lc 'cat /h/skills/*/SKILL.md'",
-  "名前の続く別の dir" => "/bin/zsh -lc 'cat /h/skills/personal-investigate-old/SKILL.md'",
-  "名前を変数に入れた形" => "/bin/zsh -lc 'n=personal-investigate-x; cat /h/skills/$n/SKILL.md'",
+  "名前を変数に入れた形" => "/bin/zsh -lc 'n=personal-investigate; cat /h/skills/$n/SKILL.md'",
+  "cd の無い単独の SKILL.md" => "/bin/zsh -lc 'find /h/skills -name SKILL.md -exec cat {} +'",
+  "最後の要素が .." => "/bin/zsh -lc 'cat /h/skills/personal-investigate/../SKILL.md'",
+  "cd の先が変数" => "/bin/zsh -lc 'cd /h/skills/$n && cat SKILL.md'",
 }
-ambiguous_forms.each do |label, command|
-  y = P.parse_codex(JSON.generate(cmd.call("r1", command)) + "\n", names)
-  check("codex の #{label} は名前を決められないので unknown (#{y[:skills_read].inspect} #{y[:calls][0][:class]})",
-        y[:skills_read].empty? && y[:calls][0][:class] == "unknown")
+unresolved_forms.each do |label, command|
+  y = one.call(command)
+  check("codex の #{label} は名前を決められないので印を立てる (#{y[:skills_read].inspect} #{y[:skills_unresolved]})",
+        y[:skills_read].empty? && y[:skills_unresolved] == true)
 end
-y = P.parse_codex(JSON.generate(cmd.call("r1", "/bin/zsh -lc 'rm /h/skills/*/SKILL.md'")) + "\n", names)
-check("名前を決められなくても、重い区分は残す (#{y[:calls][0][:class]})", y[:calls][0][:class] == "file-write")
-y = P.parse_codex(JSON.generate(cmd.call("r1", "/bin/zsh -lc 'cat README.md'")) + "\n", names)
-check("SKILL.md に触れない呼び出しは今のまま", y[:calls][0][:class] == "read" && y[:skills_read].empty?)
+y = one.call("/bin/zsh -lc 'cat /h/skills/personal-grill-me/SKILL.md /h/skills/*/SKILL.md'")
+check("既知の名前と同じ文字列でも、残りの決められない読み取りの印は消えない (round 2)",
+      y[:skills_read] == %w[personal-grill-me] && y[:skills_unresolved] == true)
+y = one.call("/bin/zsh -lc 'cat /h/skills/*/SKILL.md && sed -i s/a/b/ lib/median.rb'")
+check("書き込みと同居しても、区分は分類器のまま、印は残る (round 2。#{y[:calls][0][:class]})",
+      y[:calls][0][:class] == "file-write" && y[:skills_unresolved] == true)
+y = one.call("/bin/zsh -lc 'cat /h/skills/personal-investigate-old/SKILL.md'")
+check("名前の続く別の dir は、別の skill の読み取り (印も立てない)", y[:skills_read].empty? && y[:skills_unresolved] == false)
+y = one.call("/bin/zsh -lc 'cat notes-SKILL.md'")
+check("SKILL.md で終わる別の名前の file は skill の読み取りでない", y[:skills_read].empty? && y[:skills_unresolved] == false)
+y = one.call("/bin/zsh -lc 'cat README.md'")
+check("SKILL.md に触れない呼び出しは今のまま", y[:calls][0][:class] == "read" && y[:skills_read].empty? && y[:skills_unresolved] == false)
+two = [cmd.call("a", "/bin/zsh -lc 'cat /h/skills/*/SKILL.md'"), cmd.call("b", "/bin/zsh -lc 'cat README.md'")]
+y = P.parse_codex(two.map { |e| JSON.generate(e) }.join("\n") + "\n", names)
+check("run の印は、どれかの呼び出しで立てば立つ", y[:skills_unresolved] == true)
 claude_amb = [
   { "type" => "assistant", "message" => { "content" => [
     { "type" => "tool_use", "id" => "u1", "name" => "Read", "input" => { "file_path" => "/p/other-skill/SKILL.md" } },
-    { "type" => "tool_use", "id" => "u2", "name" => "Write", "input" => { "file_path" => "/p/other-skill/SKILL.md", "content" => "x" } },
+    { "type" => "tool_use", "id" => "u2", "name" => "Write", "input" => { "file_path" => "/p/x/*/SKILL.md", "content" => "x" } },
     { "type" => "tool_use", "id" => "u3", "name" => "Read", "input" => { "file_path" => "/p/skills/./personal-grill-me/SKILL.md" } },
   ] } },
 ].map { |e| JSON.generate(e) }.join("\n") + "\n"
 y = P.parse_claude(claude_amb, names)
-check("claude も名前を決められない SKILL.md の Read は unknown、Write は file-write のまま (#{y[:calls].map { |c| c[:class] }.inspect})",
-      y[:calls].map { |c| c[:class] } == %w[unknown file-write read] && y[:skills_read] == %w[personal-grill-me])
+check("claude も同じ規則で、区分は変えずに印を立てる (#{y[:calls].map { |c| c[:class] }.inspect} #{y[:skills_unresolved]})",
+      y[:calls].map { |c| c[:class] } == %w[read file-write read] && y[:skills_read] == %w[personal-grill-me] &&
+      y[:skills_unresolved] == true)
+y = P.parse_claude(JSON.generate(claude_amb.lines.first.then { |l| JSON.parse(l) }.tap { |e| e["message"]["content"].delete_at(1) }) + "\n", names)
+check("claude の決められる Read だけなら印は立てない", y[:skills_unresolved] == false)
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -746,7 +765,7 @@ unset FAKE_WRITE
   || fail "a call should carry only id, tool, class and outcome"
 [ "$(json_get "$res" 'd["runs"][0].values_at("reached", "changed", "skills_read")')" = '[true,["lib/median.rb"],["personal-investigate"]]' ] \
   || fail "claude run should be reached, changed and read the skill: $(json_get "$res" 'd["runs"][0]')"
-[ "$(json_get "$res" 'd["runs"][0].keys.sort')" = '["calls","case","changed","completion","index","reached","skills_read"]' ] \
+[ "$(json_get "$res" 'd["runs"][0].keys.sort')" = '["calls","case","changed","completion","index","reached","skills_read","skills_unresolved"]' ] \
   || fail "run keys should follow the interface: $(json_get "$res" 'd["runs"][0].keys')"
 [ "$(json_get "$res" 'd.values_at("schema_version", "tool", "variant", "skills")')" = '[1,"claude-code","candidate","source"]' ] \
   || fail "claude top-level fields: $(json_get "$res" 'd.keys')"
@@ -866,6 +885,28 @@ RUN_CODEX_HOME=
 [ "$rc" -eq 0 ] || fail "codex --skills none with a skill-less usual home should run (rc=$rc): $out"
 [ "$(json_get "$res" 'd["runs"][0]["skills_read"]')" = '["personal-investigate"]' ] \
   || fail "a control run that reads the expected skill should record it: $(json_get "$res" 'd["runs"][0]')"
+
+# --- codex: 名前を決められない読み取りをした対照は、probe が印を残し、judge が results でも baseline でも止める ---
+glob_events="$tmp/codex-glob-events.jsonl"
+cat > "$glob_events" <<'EOF'
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'cat /h/skills/*/SKILL.md && cat lib/median.rb'","exit_code":0,"status":"completed"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}
+EOF
+control="$tmp/control-glob.json"
+run_fake codex "$glob_events" --model m-x --only investigate-diagnose-only --skills none --codex-home "$eval_home" --out "$control"
+[ "$rc" -eq 0 ] || fail "codex control with a glob read should run (rc=$rc): $out"
+[ "$(json_get "$control" 'd["runs"][0].values_at("skills_read", "skills_unresolved")')" = '[[],true]' ] \
+  || fail "the control run should record an unresolved skill read: $(json_get "$control" 'd["runs"][0]')"
+judge="$repo_root/scripts/check-skill-behavior.sh"
+cases_file="$tmp/cases-diagnose-only.json"
+ruby -rjson -e 'd = JSON.parse(File.read(ARGV[0])); d["cases"].select! { |c| c["id"] == "investigate-diagnose-only" }
+  File.write(ARGV[1], JSON.generate(d))' "$repo_root/scripts/lib/skill_behavior_cases.json" "$cases_file"
+set +e
+jout=$(sh "$judge" --cases "$cases_file" --results "$control" 2>&1)
+jrc=$?
+set -e
+[ "$jrc" -eq 2 ] || fail "judge should stop on the control with an unresolved read (rc=$jrc): $jout"
+case "$jout" in *"skill file whose name could not be decided"*) : ;; *) fail "judge should name the unresolved read: $jout" ;; esac
 
 # --- codex: 評価用の home が無い・条件を満たさないときは起動しない (#731) ---
 run_fake codex "$codex_events" --model m-x --only investigate-fix --out "$tmp/never.json"
