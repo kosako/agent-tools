@@ -119,8 +119,9 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
   interpreter と shell の option は allowlist で読み、ほかの option (inline の code、標準入力から読む `-s`、値の消費の
   規則が分かれる束) は `unknown` です。ruby と perl の in-place の編集 (`-i`・`-pi`) は `file-write` です。印の `i` は、
   option の束を左から読んで探し、値になる字 (くっついた code や dir、`-Ku` の `u` など) は数えません (`ruby -e'print 1'` の
-  `i` は印ではない)。字ごとの値の取り方は、Ruby 2.6.10 と perl 5.34 で測って決めました (分類器の `IN_PLACE_GRAMMAR`)。
-  表に無い字は値をとらない字として読むので、読み違えても `file-write` の側に倒れます。
+  `i` は印ではない)。字ごとの値の取り方は、Ruby 2.6.10 と perl 5.34 の help の一覧と、file が書き換わるかを測った結果で
+  決めました (分類器の `IN_PLACE_GRAMMAR`)。表に無い字と長い option (`--encoding utf-8` など) の後は、どこまでが値か決められ
+  ないので、option でない語に来ても読むのをやめず、残りの語の束も読みます。表に漏れがあっても `file-write` の側に倒れます。
 - inline の Ruby (`ruby -e`。#737): code を Ripper (Ruby の標準の構文解析。code を実行しない) で構文の木にし、木のすべてが
   許す形の表に収まるときだけ `exec` にします。表は分類器の `RUBY_INLINE_*` の定数です。許すものを並べ、表に無い形は
   `unknown` に残します (禁じるものを並べると、漏れた形が軽い区分になるため)。

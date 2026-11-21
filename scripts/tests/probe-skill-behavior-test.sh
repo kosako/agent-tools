@@ -471,6 +471,17 @@ ruby_inline = [
   ["perl -D -pi -e 1 f", [], "file-write"], ["perl -F -pi -e 1 f", [], "file-write"], ["perl -Fi -pe 1 f", [], "unknown"],
   ["perl -I -pi -e 1 f", [], "unknown"], ["perl -Ii -pe 1 f", [], "unknown"], ["perl -Mi -pe 1 f", [], "unknown"],
   ["perl -li -pe 1 f", [], "file-write"], ["perl -0i -pe 1 f", [], "file-write"],
+  # review の round 3。値の範囲を決められない option (表に無い字・長い option) の後は、残りの語の束も読む。perl の -dpi は
+  # review が測り、ほかの file-write の形は Ruby 2.6.10 と perl 5.34 で file が書き換わることを測った
+  ["perl -dpi -e 1 f", [], "file-write"], ["ruby -X . -pi -e 1 f", [], "file-write"],
+  ["ruby --encoding utf-8 -pi -e 1 f", [], "file-write"], ["ruby --verbose -pi -e 1 f", [], "file-write"],
+  ["ruby -U -pi -e 1 f", [], "file-write"], ["perl -V:osname -pi -e 1 f", [], "file-write"],
+  ["ruby -Q -pi -e 1 f", [], "file-write"], ["ruby -Q . -pi -e 1 f", [], "file-write"],
+  ["ruby -Qi -e 1 f", [], "file-write"], ["ruby --verbose -e 1 -- -pi f", [], "file-write"],
+  # ruby の -X は -C と同じく次の語を取る (ruby -X -pi は -pi に chdir しようとして止まる)。値をとらない字は範囲を決められない印を
+  # 立てないので、script の後ろの -pi (script の引数) は数えない
+  ["ruby -X -pi -e 1 f", [], "unknown"], ["ruby -w test/a.rb -pi f", [], "exec"], ["perl -w x.pl -pi f", [], "exec"],
+  ["ruby -n test/a.rb -pi f", [], "unknown"], ["perl -n x.pl -pi f", [], "unknown"],
 ]
 ruby_inline.each do |cmd, fns, want|
   got = P.classify_shell(cmd, fns: fns)

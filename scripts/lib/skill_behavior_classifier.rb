@@ -647,16 +647,19 @@ module SkillBehaviorClassifier
     "python3" => { flags: %w[-B -E -I -O -q -s -S -u -v], values: %w[-W -X] },
     "node" => { flags: [], values: [] },
   }.freeze
-  # in-place の編集の印 (i) を探すときの、option の束の字の値の取り方。Ruby 2.6.10 と perl 5.34 で、各字の後ろに -pi を置いて
-  # file が書き換わるかを測って決めた (#737 の review の round 2)。表に無い字は値をとらない字として読む (読み違えても、i を
-  # 数えすぎる側、つまり重い区分の側に倒れる)。
-  #   next: 束の残りが値で、残りが無ければ次の語が値 (-e のくっついた code、-Ilib の dir など)
+  # in-place の編集の印 (i) を探すときの、option の束の字の値の取り方。Ruby 2.6.10 と perl 5.34 の help の一覧と、各字の
+  # 後ろに -pi を置いて file が書き換わるかを測った結果で決めた (#737 の review の round 2・3)。
+  #   flags: 値をとらない字
+  #   next: 束の残りが値で、残りが無ければ次の語が値 (-e のくっついた code、-Ilib の dir など。ruby の -X は -C と同じ)
   #   rest: 束の残りが値で、次の語は取らない
   #   one: 次の 1 字が値 (ruby の -Ku)
   #   digits: 続く数字が値で、その後ろも option として読む (-0777・ruby の -W0・perl の -l)
+  # どの組にも無い字 (perl の -d[t][:MOD] など) と長い option (--…) は、値の範囲を決められない。そのときは、束の残りを読み
+  # 続け、option でない語に来ても読むのをやめず、残りの語の束も読む (表の漏れは、i を数えすぎる側、つまり file-write の側に
+  # 倒れる)。
   IN_PLACE_GRAMMAR = {
-    "ruby" => { next: "eIrCE", rest: "Fx", one: "K", digits: "0WT" },
-    "perl" => { next: "eEI", rest: "MmFxCdD", one: "", digits: "0l" },
+    "ruby" => { flags: "acdhlnpsSvwyU", next: "eIrCEX", rest: "Fx", one: "K", digits: "0WT" },
+    "perl" => { flags: "acfnpsStTuUvwWXh", next: "eEI", rest: "MmFxCDV", one: "", digits: "0l" },
   }.freeze
 
   def self.interpreter_call(name, args, fns: [])
@@ -876,40 +879,55 @@ module SkillBehaviorClassifier
   end
 
   # option の束を左から読み、値になる字より前に i があれば in-place の編集 (#737。前は束の先頭の字だけを見ていて、
-  # -e のくっついた code の中の i を印に数えていた)。字の値の取り方は IN_PLACE_GRAMMAR。長い option (--…) は読み飛ばし、
-  # -- と option でない語で終える。
+  # -e のくっついた code の中の i を印に数えていた)。字の値の取り方は IN_PLACE_GRAMMAR。-- と option でない語で終えるが、
+  # 値の範囲を決められない option を見た後は、残りの語も読む。
   def self.in_place?(name, args)
     g = IN_PLACE_GRAMMAR[name]
     return false unless g
 
+    unsure = false
     i = 0
     while i < args.length
       a = args[i]
-      break if !a.start_with?("-") || a == "-" || a == "--"
-
       i += 1
-      next if a.start_with?("--")
+      if a == "--" || !a.start_with?("-") || a == "-"
+        next if unsure
 
-      k = 1
-      while k < a.length
-        ch = a[k]
-        k += 1
-        return true if ch == "i"
-
-        if g[:next].include?(ch)
-          i += 1 if k == a.length
-          break
-        end
-        break if g[:rest].include?(ch)
-
-        if g[:one].include?(ch)
-          k += 1
-        elsif g[:digits].include?(ch)
-          k += 1 while k < a.length && a[k].match?(/[0-9]/)
-        end
+        break
       end
+      if a.start_with?("--")
+        unsure = true
+        next
+      end
+      found, value_next, odd = in_place_bundle(a, g)
+      return true if found
+
+      i += 1 if value_next
+      unsure ||= odd
     end
     false
+  end
+
+  # 束 1 つ (-pi・-e'code' など) を読み、[i があるか, 次の語が値か, 値の範囲を決められない字を見たか] を返す。
+  def self.in_place_bundle(a, g)
+    odd = false
+    k = 1
+    while k < a.length
+      ch = a[k]
+      k += 1
+      return [true, false, odd] if ch == "i"
+      return [false, k == a.length, odd] if g[:next].include?(ch)
+      return [false, false, odd] if g[:rest].include?(ch)
+
+      if g[:one].include?(ch)
+        k += 1
+      elsif g[:digits].include?(ch)
+        k += 1 while k < a.length && a[k].match?(/[0-9]/)
+      elsif !g[:flags].include?(ch)
+        odd = true
+      end
+    end
+    [false, false, odd]
   end
 
   # exec にする script の path。その interpreter / shell の script の拡張子 (SCRIPT_EXTENSIONS) を持つもの。標準入力を
