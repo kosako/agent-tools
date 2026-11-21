@@ -46,6 +46,22 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
     [FIX.md](FIX.md)。code・設定・宣言、skill や instruction の本文は v2.1 以降。単なる
     「直して」(単一 bug は personal-investigate、typo は skill なし) では起動しない。Codex の session では fix を
     しない (Claude Code で起動し直すよう案内する)。
+- **使い切り (#411)**: 発火の依頼に、「使い切り」か「limit まで」と、対象の tool (`claude-code` / `codex`) の両方が
+  添えられたときだけ、予算の方式を使い切りに切り替える (例:「personal-maintenance-sweep、claude-code の週の枠を
+  使い切りで」)。対象の tool の予約を外し、止める線まで wave 単位で監査を広げる。式と規則の正本は
+  [BUDGET.md](BUDGET.md) の「使い切りのモード」。
+  - 切り替えないもの: 一言の無い発動 (「週の残りの枠で repo のメンテを回して」を含む)、否定 (「使い切りのモードは
+    使わないで」)、予算と関係のない「使い切り」。どれも今の通常の予算で回す。使い切りのモードの設計や相談は、sweep
+    そのものを始めない。
+  - tool が無ければ 1 回だけ聞き返す。今の session の tool から推測しない。
+  - 止める線は対象の tool の週の使用率。「limit まで」は 100%、「90% まで」と「使用率 90% まで」は 90%、「残り 10% まで」
+    も 90%。起票の上限は「起票 15 件まで」の形で、その run だけ指定できる (1〜20 の整数)。
+  - 次のときは始めずに 1 回聞き返し、値を丸めない。起票の上限が 1〜20 の外。止める線が今の使用率以下 (手順 2 で読んだ
+    値)。使い切る tool と監査役の指定が食い違う (「codex の週の枠を使い切りで。監査は Claude」。使い切りで枠を使うのは
+    監査役なので)。fix のモードとの併用 (初版は issues と report のモードだけ。どちらで進めるかを聞く)。
+  - 下の「既存の監査結果から始める」とは組み合わせない (監査を広げるためのモードなので、監査から始める)。
+  - 始める前に、対象の tool、週の window (reset の時刻)、止める線、対象の tool の予約を外すこと、起票の上限と指定元を
+    会話で示し、確認を待たずに始める (発動の一言が明示の許可。示すのは、後で記録と照らすため)。
 - **既存の監査結果から始める**: 会話の中の personal-repo-audit の報告や、Codex の監査の `result.json` が
   あれば、監査をやり直さない。使えるのは、この Claude Code の session でした監査と、手順 3 の起動の境界で起こした
   Codex の監査の結果だけ。Codex や OpenCode の session でした監査の報告 (人が貼ったものを含む) は、その境界の
@@ -78,6 +94,19 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
       して、その単位を次の状態に進める (監査の結果は `pending` → `audited`、反証の結果は、反証に含めた単位を
       `audited` → `refuted`)。満たさなければ `CODEX-LAUNCH.md` の規則 (`exit=` が 0 以外は停止、結果の欠けは新しい
       nonce で 1 回だけ再実行) に従う。
+    - 使い切りの run では、反証の記録は `refute-run` ではなく `batches/<k>/<j>/refute-run` で、単位の状態ではなく batch の
+      状態で見る。state の `exhaust.batches` で `status` が `collected` でない batch は、すべての起動 (`j`) の記録を上の
+      規則で見る (`RECORD.md`)。wave の単位を `refuted` に進めるのは、その wave の batch のすべての起動を回収した後
+      (起動が 1 つ回収できただけでは進めない)。
+  - **使い切りの run** (state に `exhaust` がある): 上に加えて次のとおり。
+    - 段 (`exhaust.phase`) が `auditing` で、週の window が同じ (読み直した対象の tool の週の reset の時刻が、state の
+      `exhaust.weekly_resets_at` と同じ) なら、state の対象の tool・止める線・起票の上限と、起票の累計を保って続ける。
+      `target_commit` が違うときの新しい run も、同じ設定を引き継ぎ、台帳を今の `HEAD` で作り直す。
+    - 週の window が変わった (reset の時刻を過ぎた、または違う) ときは、続けない。新しい週の枠を使うかを聞き、使う
+      なら新しい一言 (対象の tool と止める線) を求める。使わないなら、wave を足さずに終わりの処理だけを行う (終わりの
+      処理の消費は、両方の tool とも通常の run と同じ予約を取った式で確かめる)。state を、新しい週の枠を使う許可にしない。
+    - 段が `finishing` なら、wave を足さずに終わりの処理から続ける。週の window が変わっていても監査は広げず、
+      終わりの処理の消費は、通常の run と同じ予約を取った式で確かめる。
 
 ## 手順
 
@@ -142,6 +171,9 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   2. Claude 側と Codex 側の数が違えば、少ない側が監査役。
   3. 同数、または AI の trailer が 1 つも無ければ、前回の監査役と交代する。前回の記録も無ければ
      Codex が監査役 (実装の既定が Claude なので、Claude の書いた code が多い前提)。
+- **使い切りの run**: 対象の tool を監査役にする (決め方の 1 の、人の明示と同じ扱い)。検証役はもう一方。Codex の
+  session で使い切りを頼まれたら、監査役によらず、Claude Code の session で起動し直すよう案内して止まる (wave ごとに
+  Claude の session が照合と反証の batch を挟むため)。
 - **Codex の session で起動したとき** (手順 0 の判定): この session 自身では監査も反証もしない (connector と MCP を外した
   起動の境界が、起動済みの session には効かないため)。Codex から Claude は起動できない。
   - 監査役が Claude になったら、Claude Code の session で起動し直すよう案内して止まる。
@@ -165,6 +197,8 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
   最小のプリセット) → 使える量 (週の残り − 床 − reset までの日数 × 1 日分の通常使用量) が監査役と検証役の
   両方に収まる、いちばん大きいプリセットを選ぶ。
 - 選んだ規模と理由を local の state に残す。残量の数字は local にだけ書き、public な場所に書かない。
+- **使い切りの run**: プリセットと上の判定の代わりに、[BUDGET.md](BUDGET.md) の「使い切りのモード」の判定の順番と
+  wave の単位の数で決める。台帳 (観点 × 領域の組と、割り当ての順番) もここで決めて state に残す。
 
 ### 3. 監査する (単位ごと)
 
@@ -216,7 +250,7 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
 - **監査役が Claude**: personal-repo-audit の手順で監査し (観点の fan-out は repo-audit のとおり)、結果を
   repo-audit の `findings.schema.json` の形の JSON にして run dir に保存する。
 - **監査役が Codex**: personal-repo-audit の `CODEX-LAUNCH.md` の起動で Codex に監査させる。effort は
-  プリセットの値を渡す。model は [BUDGET.md](BUDGET.md) の `personal-codex-model-selection` の出力を渡す (採用は
+  プリセットの値を渡す (使い切りの run は [BUDGET.md](BUDGET.md) の「使い切りのモード」の値)。model は [BUDGET.md](BUDGET.md) の `personal-codex-model-selection` の出力を渡す (採用は
   exit 0 のときだけで、それ以外は開始しない。空なら model を渡さない)。起動の前に、run dir の path を
   `units/<n>/codex-run` に書く (再開で回収するため。`RECORD.md`。#421)。起動と回収を配備済みの
   `personal-codex-launch` で行うとき (`CODEX-LAUNCH.md` の先頭の節。#672) は、model の読み取りは script が行う。
@@ -225,6 +259,11 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
 - 単位が終わるたびに local の state を保存し、残量を読み直す (`ci` と `upstream` の単位は AI の枠を使わないので
   読み直さない)。
   停止の条件 ([BUDGET.md](BUDGET.md)) に当たったら、残りの単位は state に残して次の run に回す。
+- **使い切りの run**: 単位は台帳の組で、wave ごとにまとめて起動する (順番と単位の数は [BUDGET.md](BUDGET.md))。
+  `ci` と `upstream` の単位は今どおり run の先頭に足し、wave に数えない (`ci` の単位の所見は wave 1 の反証の batch に
+  入れ、`upstream` の所見は今どおり反証にかけない)。単位の番号は wave をまたいで通しにする
+  (反証の ID の `U<n>` をそのまま使う)。wave の途中では止めず、上の単位ごとの読み直しの代わりに、wave の終わりに
+  読み直す。
 
 ### 4. 反証する (検証役)
 
@@ -233,6 +272,11 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
 - 所見を否定するには根拠を必須にする。否定して落とした所見は、理由と根拠つきですべて残す (報告と
   local の記録)。
 - 判定は confirmed (問題と確かめた) / refuted (根拠つきで否定) / uncertain (確かめきれない) の 3 つ。
+- **使い切りの run**: 反証は wave ごとに 1 つの batch でかける ([REFUTE.md](REFUTE.md) の「使い切りの run の
+  batch」)。wave の所見を、それより前の所見 (前の wave と、同じ wave のほかの単位) と照合し、同じ問題 (同じ原因で、
+  同じ直し方になる) をまとめてから、新しく残った所見だけを batch にする。読み比べ方は手順 6 と同じ (fingerprint の
+  一致と、同じ path を含む fingerprint)。low を含む全件にかける。batch は次の wave の監査と並べて走らせてよい。
+  同じ系列の懐疑役による反証の段は置かない (2026-10-05 の run では 232 件中 2 件しか落とさず、消費だけが増えた)。
 
 ### 5. triage する
 
@@ -259,6 +303,8 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
 - close した Issue で、close の理由がこの 3 つのどれでもない (`RECORD.md` の一覧に知らない値が出た) Issue と同じ問題 →
   再発として起票せず、報告にその Issue の番号と値を書いて人に確かめる (却下か再発かを推測で決めない)。open の Issue
   (理由が `reopened` か `-`) は、上の open の規則で扱う。
+- 使い切りの run で手順 4 にまとめた所見は、代表とまとめた所見の fingerprint のどれかが一致すれば、重複の候補として
+  読み比べる。
 
 ### 7. 起票する (issues モードだけ)
 
@@ -269,6 +315,12 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
 - 本文の形は [RECORD.md](RECORD.md)。投稿の前に `personal-ja-style-check` (指摘だけ。直すか理由を持つ) と public-safety の
   gate に通し、gate を通らなければ投稿しない。
 - label を付ける。「論点なし」の印が付いた所見には、本文に no-contention の marker を書く ([RECORD.md](RECORD.md))。
+- **使い切りの run**: 起票は終わりの処理で、すべての batch を回収してから行う。上限は一言の指定、無ければ `issue_cap`
+  ([BUDGET.md](BUDGET.md) の「使い切りのモード」)。起票の条件を満たす候補の全体を、深刻度 (high、medium、low)、
+  確度 (確証、有力、未確証)、単位の番号の順に並べて、上から選ぶ (早い wave の所見で上限が埋まり、後の wave の high が
+  漏れないように)。手順 4 でまとめた所見は 1 件の Issue にし、まとめた所見の場所と fingerprint をすべて書く
+  ([RECORD.md](RECORD.md))。ほかの理由 (同じ file、同じ分類) では束ねない。上限を超えた分の扱いは上のとおり
+  (持ち越さない)。
 
 ### 7b. 修正する (fix モードだけ)
 
@@ -296,6 +348,10 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
   除外した範囲、監査役) を更新し、run の要約をコメントで足す。残量の数字と repo の設定の確認の結果は書かない。
 - **local の state**: run の進み具合、終わった単位、起票した Issue の番号、消費の実績 (前後の残量)、repo の設定の
   確認の結果 (手順 0b)。単位ごとに保存してあるので、中断しても続きから再開できる。
+- **使い切りの run**: 追跡 Issue の run のコメントに、使い切りであることと対象の tool、wave の数、止めた理由 (止める
+  線・5h・検証役・台帳が尽きた・週の window) を書き、残した組は数と観点ごとの内訳で書く (組を並べない)。止める線と
+  残量の数字は書かない。local の state には、台帳・wave・batch・まとめた所見・役の印つきの消費を残す
+  ([RECORD.md](RECORD.md))。
 - **fix モード**: repo 単位の `fixes.json` に所見ごとの段階・branch・OID・PR・review の round を残し、追跡 Issue の
   run のコメントに修正 PR と直さなかった所見を足す ([FIX.md](FIX.md) / [RECORD.md](RECORD.md))。
 - **CI の窓** (repo 単位の `ci.json`。[RECORD.md](RECORD.md)): 起票まで進む run (issues モード。fix の入口 (a) を含む) で、
@@ -330,6 +386,8 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
   `ci.json` を読めない (`unreadable`) ことも書く。所見は他の単位と同じく、上の起票・重複・反証の内訳に数える
 - 参照元の検査 (手順 3 の `upstream` の単位。一覧がある repo だけ): 確かめた参照元と、確かめられない参照元
   (`scope.not_seen`)、または確かめられない (理由)。所見は上の起票・重複の内訳に数える (反証にはかけない)
+- 使い切りの run では、対象の tool、止める線、wave ごとの単位の数、止めた理由、残した組、反証できずに残した所見、
+  tool と役ごとの消費
 - 次の run への申し送り
 
 ## 停止と縮小
@@ -355,6 +413,11 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
 | fix モードで所見に既存の open PR / branch がある、または同じ file を他の open PR が触る | 新しく作らず、再開か延期にする (close 済み未 merge の PR は人に確認) |
 | fix モードで reviewer が起動できない、または review が 3 回で収束しない | PR を残して `blocked` にし、未解決の項目と次の入口を記録する。未レビューを完了扱いにしない |
 | fix モードで範囲外の 🔴 must が出た | scope を広げず `blocked` にして人に渡す |
+| 使い切りで、tool が無い・起票の上限が範囲の外・止める線が今の使用率以下・監査役の指定と食い違う・fix との併用 | 始めずに 1 回聞き返す。値を丸めない |
+| 使い切りで、どちらかの tool の値が読めない | 使い切りを始めず、通常の run に切り替えるかを聞く (黙って縮めない) |
+| 使い切りの途中で、次の wave が 1 単位も収まらない (止める線・5h・検証役)、台帳が尽きた、対象の tool の週の window が変わった | 新しい wave を始めず、終わりの処理に移る。走っている wave と batch は止めない。5h の reset は待たない |
+| 使い切りの run の再開で、週の window が変わった | 続けずに、新しい週の枠を使うかを聞く。使わないなら終わりの処理だけを行う |
+| 使い切りを Codex の session で頼まれた | 監査役によらず、自分では監査も反証もせず、Claude Code の session での起動を案内して止まる (手順 1) |
 
 ## やってはいけないこと
 
@@ -374,6 +437,10 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
 - fix モードで、印の無い所見・docs-drift 以外・`docs/` と root の Markdown 以外を直す。marker だけを根拠に直す。
   所見の範囲外を「ついで」に直す。既存の open PR があるのに作る。merge / approve する。未レビューの PR を完了扱い
   にする。`fix_cap` を再開で数え直す。
+- 一言と tool の名指しが揃わないのに、使い切りに切り替える。使い切りで、検証役の予約を外す。止める線や起票の上限を
+  丸めて始める。
+- 使い切りで、枠を使うために同じ組を監査し直す。終わりの処理に入った後に wave を足す。週の window が変わったのに、
+  新しい週の明示なしに続ける。
 
 ## 例
 
