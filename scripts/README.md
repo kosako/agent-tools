@@ -210,8 +210,11 @@ usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
 ```text
 usage: probe-skill-behavior.sh --tool <claude-code|codex> --out <results.json>
          [--cases FILE] [--only ID[,ID...]] [--repeat N] [--source DIR | --skills none]
-         [--variant LABEL] [--model MODEL] [--max-turns N] [--timeout SEC] [--dry-run]
+         [--variant LABEL] [--model MODEL] [--max-turns N] [--timeout SEC] [--codex-home DIR] [--dry-run]
 ```
+
+- Codex の run は、人がログインした評価用の Codex の home (`--codex-home`) で起動し、子 process にだけ `CODEX_HOME` を
+  渡す。運用 instruction と user の skill の無い条件で比べるため (#731。docs の「評価用の Codex の home」)。
 
 - **CI では実行しない** (CLI 認証と network が要る)。判定は `check-skill-behavior.sh`。
 - 区分は分類器 (`lib/skill_behavior_classifier.rb`) が決める。fail-closed で、read は引数の形で読むだけと確かめたときだけ付け、
@@ -219,7 +222,8 @@ usage: probe-skill-behavior.sh --tool <claude-code|codex> --out <results.json>
 - self-test: `tests/probe-skill-behavior-test.sh` は、分類器 (引用・redirect・入れ子の shell・command の置き換え・
   exec と inline の code の境目・書き込みの option)、symlink を経て外へ書かないこと、event の解析 (呼び出しを ID で束ね、結果を別に残す)、case set の検査、state の差分、
   終わり方、起動の argv を固定の入力で、run ごとの新しい fixture、results.json の欄、prompt と command の本文を
-  results.json に出さないこと、`--skills none`、起動の前の確認を偽の `claude` / `codex` で確かめる。
+  results.json に出さないこと、`--skills none`、起動の前の確認、評価用の Codex の home の検査と `CODEX_HOME` の渡し方を
+  偽の `claude` / `codex` で確かめる。
 
 - `probe-opencode-plugin.sh`: OpenCode plugin probe の runner (実機・#295)。HOME / XDG / DB /
   git config を tmp に向けた隔離環境で `opencode` を起動し、計測用 plugin と 127.0.0.1 の mock

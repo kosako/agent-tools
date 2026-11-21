@@ -16,7 +16,8 @@
 # exit code:
 #   - 2 = 入力・構造の誤り (JSON・形・coverage・重複・比較の条件の不一致)。このときは run を判定しない。
 #   - 1 = violation か unmet がある (評価不能と同居しても 1)。
-#   - 2 = 上が無く、評価不能の run か、記録した条件の食い違い (run の間の mixed、固定した tool surface との違い) がある。
+#   - 2 = 上が無く、評価不能の run か、記録した条件の食い違い (run の間の mixed、固定した tool surface との違い、
+#     skill を置かない対照の run が期待した skill を読んだ) がある。
 #   - 0 = すべての run が評価でき、違反も未達も無い。
 # 期待した skill を読んだかは、別の軸として数を出すだけで、判定と分母に影響しない (読まなかった run も母数に残す)。
 #
@@ -49,7 +50,12 @@ module CheckSkillBehavior
   ID_STRING_KEYS = %w[source_digest cases_digest runner_version host_version requested_model init_model effort
                       permission_mode].freeze
   ID_POSITIVE_INTEGER_KEYS = %w[classifier_version timeout repeat].freeze
-  ID_KEYS = (ID_STRING_KEYS + ID_POSITIVE_INTEGER_KEYS + %w[fixture_digests tool_surface max_turns]).freeze
+  ID_KEYS = (ID_STRING_KEYS + ID_POSITIVE_INTEGER_KEYS + %w[fixture_digests tool_surface max_turns conditions]).freeze
+  # ids.conditions の値 (skill の無い条件。probe_skill_behavior.rb の CONDITIONS と同じ。#731)。決まった値だけを受ける。
+  CONDITIONS = {
+    "claude-code" => { "setting_sources" => "project" },
+    "codex" => { "home" => "eval", "user_instructions" => "absent", "user_skills" => "absent" },
+  }.freeze
   # 判定の出力と誤りの文には、決まった形の値だけを写す (skill_behavior_cases.rb の冒頭の決まり)。呼び出しの tool の
   # 名前と changed の path は model の出力に由来するので、決まった文字の中のときだけ写し、外れたら種類だけを書く。
   SHOWN_TOOL = /\A[A-Za-z0-9_.:-]{1,80}\z/.freeze
@@ -162,6 +168,9 @@ module CheckSkillBehavior
       end
     end
     validate_tool_surface!(ids["tool_surface"], tool, "#{label}.tool_surface") if ids.key?("tool_surface")
+    if ids.key?("conditions") && ids["conditions"] != CONDITIONS.fetch(tool)
+      raise Error, "#{label}.conditions must be #{JSON.generate(CONDITIONS.fetch(tool))} for #{tool}"
+    end
   end
 
   # claude-code は固定した tool の一覧 (requested) と、init が返した一覧 (init) の 2 つだけを持つ。codex は sandbox
@@ -280,6 +289,17 @@ module CheckSkillBehavior
     issues
   end
 
+  # skill を置かない対照 (skills: none) の run が、その case の期待した skill を読んだ (#731)。対照の条件が崩れて
+  # いるので、比較にも判定の green にも使わない。case の id と run の番号は決まった形の値なので、そのまま写す。
+  def self.control_issues(data, cases)
+    return [] unless data["skills"] == "none"
+
+    skill = cases.to_h { |c| [c["id"], c["skill"]] }
+    data["runs"].select { |r| r["skills_read"].include?(skill.fetch(r["case"])) }
+                .sort_by { |r| [r["case"], r["index"]] }
+                .map { |r| "control run read the expected skill (case #{r['case']}, run #{r['index']})" }
+  end
+
   def self.evaluate(data, cases)
     by_case = data["runs"].group_by { |r| r["case"] }
     cases.map do |c|
@@ -365,6 +385,8 @@ module CheckSkillBehavior
       begin
         base = parse_results(read_json(opts[:baseline], "baseline"), cases, "baseline")
         compare = compare_issues(cand, base)
+        # 対照を baseline に渡したときも、対照の条件が崩れていれば比べない (#731)。
+        compare += control_issues(base, cases) if compare.empty?
       rescue Error => e
         compare = [e.message]
       end
@@ -376,7 +398,7 @@ module CheckSkillBehavior
         compare.each { |x| puts "error: baseline is not comparable: #{x}" }
       end
     end
-    conditions = condition_issues(cand)
+    conditions = condition_issues(cand) + control_issues(cand, cases)
     conditions.each { |x| puts "condition: #{x}" }
 
     total = Hash.new(0)

@@ -7,6 +7,8 @@
 # - case set の検査、state の差分、終わり方、起動の argv。
 # - integration: PATH 上の偽の claude / codex で probe を回し、run ごとの新しい fixture、results.json の欄、
 #   prompt と command の本文を results.json に出さないこと、--skills none、起動の前の確認を確かめる。
+# - 評価用の Codex の home (#731): codex の子 process にだけ CODEX_HOME を渡すこと、検査の各条件で起動しないこと、
+#   ids.conditions、対照の run で期待した skill の読み取りを検出すること。
 # 実 claude / codex / network / 実 ~/.claude・~/.codex には触れない。実際の CLI の event 形式との一致は対象外
 # (実機の run で確かめる)。
 set -eu
@@ -559,10 +561,13 @@ check("claude の prompt は最後", argv.last == "PROMPT" && argv.each_cons(2).
 check("claude の --model は指定したときだけ", !argv.include?("--model") && P.claude_argv({ max_turns: 1, model: "m" }, "p").include?("m"))
 check("claude の tool surface は外向きの tool を含まない", (P::CLAUDE_TOOLS & %w[Task WebSearch WebFetch Workflow RemoteTrigger]).empty?)
 ENV["CODEX_HOME"] = dir
-argv = P.codex_argv({ model: "m-x" }, "/proj", [])
+argv = P.codex_argv({ model: "m-x" }, "/proj")
 check("codex は workspace-write の sandbox と境界の flag で起動する",
       argv.first(12) == ["codex", "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config",
                          "--ignore-rules", "-s", "workspace-write", "-c", 'approval_policy="never"', "--disable"] && argv.last == "-")
+check("codex の argv は user の skill を外す skills.config を持たない", argv.none? { |a| a.include?("skills.config") })
+check("codex の子 process の環境は --codex-home のときだけ CODEX_HOME を持つ",
+      P.codex_env({ codex_home: "/e" }) == { "CODEX_HOME" => "/e" } && P.codex_env({}) == {})
 check("merged は 1 つの値ならその値", P.merged(["a", "a", nil]) == "a")
 check("merged は食い違いを mixed で残す", P.merged(%w[a b]) == "mixed:a,b")
 check("merged は値が無ければ unknown", P.merged([nil]) == "unknown")
@@ -602,6 +607,7 @@ EOF
 cat > "$fakebin/codex" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_LOG"
+printf 'codex-home: %s\n' "${CODEX_HOME:-unset}" >> "$FAKE_LOG"
 case "$1 ${2:-}" in
   "--version ") echo "codex-cli 9.9.9"; exit 0 ;;
   "exec --help") printf '%s\n' '  --ignore-user-config' '  --ignore-rules' '  --disable <FEATURE>' '  -s, --sandbox <MODE>'; exit 0 ;;
@@ -628,6 +634,11 @@ for s in personal-investigate personal-other; do
   mkdir -p "$empty_home/skills/$s"
   printf -- '---\nname: %s\ndescription: d\n---\n' "$s" > "$empty_home/skills/$s/SKILL.md"
 done
+# 評価用の home (#731): auth.json (中身は読まれない) と、Codex の組み込みの隠し dir だけを持つ。
+eval_home="$tmp/codex-eval-home"
+mkdir -p "$eval_home/skills/.system/builtin"
+: > "$eval_home/auth.json"
+eval_real=$(CDPATH= cd -- "$eval_home" && pwd -P)
 
 claude_events="$tmp/claude-events.jsonl"
 cat > "$claude_events" <<'EOF'
@@ -664,7 +675,8 @@ run_fake() {
   [ "$with_source" -eq 0 ] || set -- --source "$source_dir" "$@"
   : > "$log"
   set +e
-  out=$(env FAKE_LOG="$log" FAKE_EVENTS="$events" FAKE_PRISTINE="$pristine" CODEX_HOME="$empty_home" \
+  # ふだんの Codex の home は RUN_CODEX_HOME で差し替えられる (既定は user の skill を持つ empty_home)
+  out=$(env FAKE_LOG="$log" FAKE_EVENTS="$events" FAKE_PRISTINE="$pristine" CODEX_HOME="${RUN_CODEX_HOME:-$empty_home}" \
     PATH="$fakebin:$PATH" ruby "$src" --tool "$tool" "$@" 2>&1)
   rc=$?
   set -e
@@ -697,7 +709,7 @@ unset FAKE_WRITE
 [ "$(json_get "$res" 'd.values_at("schema_version", "tool", "variant", "skills")')" = '[1,"claude-code","candidate","source"]' ] \
   || fail "claude top-level fields: $(json_get "$res" 'd.keys')"
 [ "$(json_get "$res" 'd["ids"].keys.sort')" = \
-  '["cases_digest","classifier_version","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
+  '["cases_digest","classifier_version","conditions","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
   || fail "claude ids keys: $(json_get "$res" 'd["ids"].keys.sort')"
 [ "$(json_get "$res" 'd["ids"].values_at("host_version", "init_model", "requested_model", "permission_mode", "max_turns", "repeat", "classifier_version")')" = \
   '["9.9.9","m-fake","default","acceptEdits",12,2,1]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
@@ -743,6 +755,8 @@ run_fake claude-code "$quiet_events" --only investigate-fix --skills none --out 
 grep -q '^skills-dir: absent$' "$log" || fail "--skills none must not place skills: $(cat "$log")"
 [ "$(json_get "$res" 'd["skills"]')" = '"none"' ] || fail "results should record skills none"
 [ "$(json_get "$res" 'd["ids"]["source_digest"]')" = '"none"' ] || fail "--skills none should record no source digest"
+[ "$(json_get "$res" 'd["ids"]["conditions"]')" = '{"setting_sources":"project"}' ] \
+  || fail "claude should record its conditions: $(json_get "$res" 'd["ids"]')"
 set +e
 out=$(env FAKE_LOG="$log" PATH="$fakebin:$PATH" ruby "$src" --tool claude-code --skills none --source "$source_dir" --out "$tmp/never.json" 2>&1)
 rc=$?
@@ -773,7 +787,7 @@ done
 res="$tmp/codex.json"
 FAKE_WRITE=lib/median.rb
 export FAKE_WRITE
-run_fake codex "$codex_events" --model m-x --only investigate-fix --out "$res"
+run_fake codex "$codex_events" --model m-x --only investigate-fix --codex-home "$eval_home" --out "$res"
 unset FAKE_WRITE
 [ "$rc" -eq 0 ] || fail "codex probe should exit 0 (rc=$rc): $out"
 [ "$(json_get "$res" 'd["runs"][0]["calls"].map { |c| [c["id"], c["class"], c["outcome"]] }')" = \
@@ -786,15 +800,81 @@ unset FAKE_WRITE
 [ "$(json_get "$res" 'd["ids"]["tool_surface"]["sandbox"]')" = '"workspace-write"' ] || fail "codex tool surface should record the sandbox"
 grep -q -- '^exec --json .*--ignore-user-config --ignore-rules -s workspace-write ' "$log" \
   || fail "codex should be launched with workspace-write and the boundary flags: $(cat "$log")"
-grep -q 'skills.config=\[{path=.*personal-investigate/SKILL.md' "$log" || fail "codex should disable the same-name user skill: $(cat "$log")"
-if grep -q 'personal-other/SKILL.md' "$log"; then fail "codex should keep other user skills when skills are placed: $(cat "$log")"; fi
+if grep -q 'skills.config' "$log"; then fail "codex should not pass skills.config with the eval home: $(cat "$log")"; fi
+# 起動の前の検査 (exec --help・features list・--version) と exec の 4 回とも、CODEX_HOME は評価用の home の実 path
+[ "$(grep -c '^codex-home: ' "$log")" -eq 4 ] || fail "codex should be called 4 times: $(cat "$log")"
+if grep '^codex-home: ' "$log" | grep -v -x -F "codex-home: $eval_real" | grep -q .; then
+  fail "every codex call should get CODEX_HOME=$eval_real: $(cat "$log")"
+fi
+[ "$(json_get "$res" 'd["ids"]["conditions"]')" = '{"home":"eval","user_instructions":"absent","user_skills":"absent"}' ] \
+  || fail "codex should record its conditions: $(json_get "$res" 'd["ids"]')"
 
-# --- codex: --skills none でも同名の user の skill は外し、project には置かない ---
-run_fake codex "$codex_events" --model m-x --only investigate-fix --skills none --out "$res"
+# --- codex: --skills none は project に置かず、skills.config も渡さない ---
+run_fake codex "$codex_events" --model m-x --only investigate-fix --skills none --codex-home "$eval_home" --out "$res"
 [ "$rc" -eq 0 ] || fail "codex --skills none should run (rc=$rc): $out"
 grep -q '^skills-dir: absent$' "$log" || fail "codex --skills none must not place skills: $(cat "$log")"
-grep -q 'skills.config=\[{path=.*personal-investigate/SKILL.md.*personal-other/SKILL.md' "$log" \
-  || fail "codex --skills none should disable every user skill: $(cat "$log")"
+if grep -q 'skills.config' "$log"; then fail "codex --skills none should not pass skills.config: $(cat "$log")"; fi
+
+# --- codex: 対照の run が期待した skill を読んだら、ふだんの home に skill が無くても skills_read に残す ---
+nohome="$tmp/codex-home-noskills"
+mkdir -p "$nohome"
+RUN_CODEX_HOME=$nohome
+run_fake codex "$codex_events" --model m-x --only investigate-fix --skills none --codex-home "$eval_home" --out "$res"
+RUN_CODEX_HOME=
+[ "$rc" -eq 0 ] || fail "codex --skills none with a skill-less usual home should run (rc=$rc): $out"
+[ "$(json_get "$res" 'd["runs"][0]["skills_read"]')" = '["personal-investigate"]' ] \
+  || fail "a control run that reads the expected skill should record it: $(json_get "$res" 'd["runs"][0]')"
+
+# --- codex: 評価用の home が無い・条件を満たさないときは起動しない (#731) ---
+run_fake codex "$codex_events" --model m-x --only investigate-fix --out "$tmp/never.json"
+[ "$rc" -eq 2 ] || fail "codex without --codex-home must exit 2 (rc=$rc): $out"
+case "$out" in *"--codex-home is required"*) : ;; *) fail "codex without --codex-home should say it is required: $out" ;; esac
+[ ! -s "$log" ] || fail "codex without --codex-home must not call codex: $(cat "$log")"
+run_fake claude-code "$quiet_events" --only investigate-fix --codex-home "$eval_home" --out "$tmp/never.json"
+[ "$rc" -eq 2 ] || fail "--codex-home with claude-code must exit 2 (rc=$rc): $out"
+# bad_home <name>: auth.json だけを持つ新しい dir を作り、path を出す
+bad_home() {
+  d="$tmp/bad-home-$1"
+  mkdir -p "$d"
+  : > "$d/auth.json"
+  printf '%s\n' "$d"
+}
+# expect_bad <想定する文言> <--codex-home の値>: exit 2 で、文言を出し、codex を呼ばない
+expect_bad() {
+  want=$1
+  run_fake codex "$codex_events" --model m-x --only investigate-fix --codex-home "$2" --out "$tmp/never.json"
+  [ "$rc" -eq 2 ] || fail "--codex-home ($want) must exit 2 (rc=$rc): $out"
+  case "$out" in *"$want"*) : ;; *) fail "--codex-home should say '$want': $out" ;; esac
+  [ ! -s "$log" ] || fail "--codex-home ($want) must not call codex: $(cat "$log")"
+}
+expect_bad "absolute path" "relative/home"
+expect_bad "does not exist" "$tmp/no-such-home"
+ln -s "$eval_home" "$tmp/link-home"
+expect_bad "symlink" "$tmp/link-home"
+expect_bad "usual Codex home" "$empty_home"
+h=$(bad_home noauth)
+rm "$h/auth.json"
+expect_bad "no auth.json" "$h"
+h=$(bad_home authlink)
+rm "$h/auth.json"
+ln -s "$eval_home/auth.json" "$h/auth.json"
+expect_bad "auth.json must be a regular file" "$h"
+h=$(bad_home agents)
+: > "$h/AGENTS.md"
+expect_bad "AGENTS.md" "$h"
+h=$(bad_home agents-lower)
+: > "$h/agents.md"
+expect_bad "agents.md" "$h"
+h=$(bad_home override)
+: > "$h/AGENTS.override.md"
+expect_bad "AGENTS.override.md" "$h"
+h=$(bad_home userskill)
+mkdir -p "$h/skills/personal-investigate"
+: > "$h/skills/personal-investigate/SKILL.md"
+expect_bad "user skills" "$h"
+h=$(bad_home skillslink)
+ln -s "$empty_home/skills" "$h/skills"
+expect_bad "skills must not be a symlink" "$h"
 
 # --- symlink を経て temp project や raw dir の外へ書かない (#717 の review の round 1) ---
 canary="$tmp/canary.txt"
@@ -864,6 +944,9 @@ RUBY
 run_fake codex "$codex_events" --model m-x --dry-run
 [ "$rc" -eq 0 ] || fail "dry-run should exit 0 (rc=$rc): $out"
 if grep -q '^exec' "$log"; then fail "dry-run must not launch codex: $(cat "$log")"; fi
+case "$out" in *"codex home: not set"*) : ;; *) fail "dry-run without --codex-home should say it is not set: $out" ;; esac
+run_fake codex "$codex_events" --model m-x --dry-run --codex-home "$tmp/no-such-home"
+[ "$rc" -eq 2 ] || fail "dry-run should still check a given --codex-home (rc=$rc): $out"
 run_fake claude-code "$quiet_events" --only nope --out "$tmp/never.json"
 [ "$rc" -eq 2 ] || fail "unknown --only id must exit 2 (rc=$rc): $out"
 run_fake claude-code "$quiet_events" --skills some --out "$tmp/never.json"

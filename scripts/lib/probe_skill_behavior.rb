@@ -12,13 +12,17 @@
 #   - 書き込みは run ごとの temp project の中に閉じる。claude-code は --permission-mode acceptEdits (作業 directory の
 #     中の編集だけを自動で許可し、Bash などは -p の既定のまま拒否される)、codex は -s workspace-write (network なし)。
 #     どちらも実 tool home (~/.claude / ~/.codex) には書かない。
+#   - skill の無い条件は、両方の target で、運用 instruction と user の skill の両方が無い条件 (#731)。claude-code は
+#     --setting-sources project で user の instruction と skill を読まない。codex は global の AGENTS.md を止める設定が
+#     無いので、人がログインした評価用の home (--codex-home) で起動し、子 process にだけ CODEX_HOME を渡す。
 #   - 呼び出しの要求 (calls) と、その結果 (outcome) と、state の変化 (changed) を別の欄に残す。要求があっても、
 #     外へ書けたことの証拠にはしない。
 #   - command の本文と prompt は results.json に入れず、raw log (<out>.raw/) にだけ置く。raw log は model が読んだ
 #     file の中身を含みうるので、公開しない。
 #   - 区分は分類器 (skill_behavior_classifier.rb) が決める。
-#   - routing probe (probe_skill_routing.rb) の codex の起動の境界・preflight・model の選び方・user の skill の
-#     無効化・子 process の期限は共有する。終わり方 (completion) と観測は共有しない (routing の max-turns や
+#   - routing probe (probe_skill_routing.rb) の codex の起動の境界・preflight・model の選び方・子 process の期限は
+#     共有する。user の skill の無効化 (skills.config) は使わない (評価用の home に user の skill が無いため)。
+#     終わり方 (completion) と観測は共有しない (routing の max-turns や
 #     observed-stop は、ここでは観測完了ではない)。
 #   - CI では実行しない (CLI 認証と network が要る)。self-test は偽の CLI で行う。
 
@@ -55,11 +59,18 @@ module ProbeSkillBehavior
   # 起動の前に `claude --help` で在否を確かめる flag (無ければ起動しない)。
   CLAUDE_HELP_MARKERS = %w[--permission-mode --tools].freeze
   CODEX_SANDBOX = "workspace-write"
+  # 評価用の Codex の home に在ってはいけない file (大文字小文字を区別しない。#731)。
+  EVAL_HOME_FORBIDDEN = %w[agents.md agents.override.md].freeze
+  # results.json の ids.conditions (skill の無い条件。値は決まったものだけ)。
+  CONDITIONS = {
+    "claude-code" => { "setting_sources" => "project" },
+    "codex" => { "home" => "eval", "user_instructions" => "absent", "user_skills" => "absent" },
+  }.freeze
 
   USAGE = <<~TEXT
     usage: probe-skill-behavior.sh --tool <claude-code|codex> --out <results.json>
              [--cases FILE] [--only ID[,ID...]] [--repeat N] [--source DIR | --skills none]
-             [--variant LABEL] [--model MODEL] [--max-turns N] [--timeout SEC] [--dry-run]
+             [--variant LABEL] [--model MODEL] [--max-turns N] [--timeout SEC] [--codex-home DIR] [--dry-run]
 
       --tool      観測対象の CLI (claude-code = `claude -p`, codex = `codex exec`)
       --out       results.json の出力先。raw log は <out>.raw/ に残す (公開しない)
@@ -68,12 +79,15 @@ module ProbeSkillBehavior
       --only      実行する case id (comma 区切り)
       --repeat    各 case の実行回数 (既定: 1)
       --source    置く skill の dir の親 (既定: generated/<tool>/skills。build 済みであること)
-      --skills    none で skill を置かない対照にする (codex は source と同名の user の skill も外す)
+      --skills    none で skill を置かない対照にする
       --variant   結果に付ける label (既定: candidate)。英数字と . _ - の 64 字まで。挙動は変えない
       --model     CLI に渡す model。claude-code は省略すると CLI の既定。codex は省略すると Codex home の
                   config.toml の top-level の model を使い、無ければエラー
       --max-turns claude-code の --max-turns (既定: #{DEFAULT_MAX_TURNS})
       --timeout   1 run の上限秒 (既定: #{DEFAULT_TIMEOUT})
+      --codex-home 評価用の Codex の home (codex の run では必須。--dry-run では省ける)。人がその dir で
+                  `codex login` した絶対 path の dir で、auth.json だけを持ち、AGENTS.md・AGENTS.override.md と
+                  skills/ の下の skill を持たないこと。ふだんの home とは別の dir にする (docs/skill-behavior-eval.md)
       --dry-run   fixture の配置と実行 argv を表示して終了 (CLI を起動しない)
 
     exit: 0 = 観測完了 (判定は judge), 2 = usage / 入力 / 環境エラー
@@ -87,11 +101,11 @@ module ProbeSkillBehavior
     while i < argv.length
       key = argv[i]
       case key
-      when "--tool", "--out", "--source", "--cases", "--variant", "--model", "--only"
+      when "--tool", "--out", "--source", "--cases", "--variant", "--model", "--only", "--codex-home"
         value = argv[i + 1]
         raise Error, "#{key} requires a value" if value.nil? || value.start_with?("-")
 
-        opts[key.delete_prefix("--").to_sym] = value
+        opts[key.delete_prefix("--").tr("-", "_").to_sym] = value
         i += 2
       when "--skills"
         # skill を置くのが既定で、指定できる値は none (置かない対照) だけ。
@@ -117,8 +131,59 @@ module ProbeSkillBehavior
     raise Error, "--out is required" unless opts[:out] || opts[:dry_run]
     # variant は results.json に入り、judge の出力に写る。決まった文字だけにする (judge も同じ形を求める)。
     raise Error, "--variant must match #{C::LABEL_PATTERN.source}" unless opts[:variant].match?(C::LABEL_PATTERN)
+    raise Error, "--codex-home is only for --tool codex" if opts[:codex_home] && opts[:tool] != "codex"
+    if opts[:tool] == "codex" && !opts[:codex_home] && !opts[:dry_run]
+      raise Error, "--codex-home is required for --tool codex (an eval-only Codex home; docs/skill-behavior-eval.md)"
+    end
 
     opts
+  end
+
+  # 評価用の Codex の home を確かめ、実 path を返す (#731)。auth.json の中身は読まない。
+  def self.eval_codex_home!(dir)
+    raise Error, "--codex-home must be an absolute path" unless dir.start_with?("/")
+
+    st = begin
+      File.lstat(dir)
+    rescue Errno::ENOENT
+      raise Error, "--codex-home does not exist"
+    end
+    raise Error, "--codex-home must not be a symlink" if st.symlink?
+    raise Error, "--codex-home must be a directory" unless st.directory?
+
+    real = File.realpath(dir)
+    usual = R.codex_home
+    if File.exist?(usual) && File.realpath(usual) == real
+      raise Error, "--codex-home must not be the usual Codex home"
+    end
+
+    auth = begin
+      File.lstat(File.join(real, "auth.json"))
+    rescue Errno::ENOENT
+      raise Error, "--codex-home has no auth.json (log in once with CODEX_HOME set to the dir)"
+    end
+    raise Error, "--codex-home: auth.json must be a regular file" unless auth.file?
+
+    found = Dir.children(real).select { |n| EVAL_HOME_FORBIDDEN.include?(n.downcase) }
+    raise Error, "--codex-home must not have #{found.sort.join(', ')}" unless found.empty?
+
+    skills = File.join(real, "skills")
+    if File.symlink?(skills)
+      raise Error, "--codex-home: skills must not be a symlink"
+    elsif File.directory?(skills)
+      user = Dir.children(skills).reject { |n| n.start_with?(".") }
+      raise Error, "--codex-home must not have user skills (#{user.length} under skills/)" unless user.empty?
+    elsif File.exist?(skills)
+      raise Error, "--codex-home: skills must be a directory"
+    end
+    real
+  rescue SystemCallError => e
+    raise Error, "--codex-home could not be checked (#{e.class})"
+  end
+
+  # codex の子 process にだけ足す環境 (probe の process の環境は変えない)。
+  def self.codex_env(opts)
+    opts[:codex_home] ? { "CODEX_HOME" => opts[:codex_home] } : {}
   end
 
   # --- event の解析 -------------------------------------------------------------------
@@ -353,13 +418,12 @@ module ProbeSkillBehavior
     argv + [prompt]
   end
 
-  def self.codex_argv(opts, proj, names)
+  # 評価用の home には user の skill が無いので、user の skill を外す skills.config は渡さない (#731)。
+  def self.codex_argv(opts, proj)
     argv = ["codex", "exec", "--json", "--ephemeral", "--skip-git-repo-check",
             "--ignore-user-config", "--ignore-rules", "-s", CODEX_SANDBOX, "-c", 'approval_policy="never"']
     R::CODEX_DISABLE_FEATURES.each { |f| argv.push("--disable", f) }
     argv.push("-C", proj, "-m", R.codex_model(opts))
-    disable = R.codex_disable_override(names)
-    argv += ["-c", disable] if disable
     argv + ["-"]
   end
 
@@ -372,13 +436,13 @@ module ProbeSkillBehavior
   end
 
   # 戻り値は host の版 (codex --version の 1 行目)。
-  def self.preflight!(tool)
+  def self.preflight!(tool, env)
     if tool == "claude-code"
       claude_preflight!
       nil
     else
-      R.codex_preflight!
-      (R.capture_ok(%w[codex --version]) || "").lines.first.to_s.strip
+      R.codex_preflight!(env: env)
+      (R.capture_ok(%w[codex --version], env: env) || "").lines.first.to_s.strip
     end
   end
 
@@ -402,8 +466,8 @@ module ProbeSkillBehavior
       r = R.run_command(argv, chdir: proj, stdin: nil, timeout: opts[:timeout])
       parsed = parse_claude(r.out, names)
     else
-      argv = codex_argv(opts, proj, names)
-      r = R.run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout])
+      argv = codex_argv(opts, proj)
+      r = R.run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout], env: codex_env(opts))
       parsed = parse_codex(r.out, names)
     end
     parsed.merge(stdout: r.out, stderr: r.err, completion: completion(opts[:tool], r, parsed))
@@ -433,8 +497,10 @@ module ProbeSkillBehavior
       return 0
     end
     opts = parse_argv(argv)
+    opts[:codex_home] = eval_codex_home!(opts[:codex_home]) if opts[:codex_home]
     if opts[:skills] == "none"
-      # skill を置かない対照。codex は user scope の skill を listing から全部外す (同名かを比べる source が無い)。
+      # skill を置かない対照。names は読み取りの検出だけに使う (ふだんの home の user の skill の file を読んだら、
+      # skills_read に残す。下で case の期待した skill も足す)。
       raise Error, "--source and --skills none are exclusive" if opts[:source]
 
       all_dirs = []
@@ -458,20 +524,25 @@ module ProbeSkillBehavior
       cases = cases.select { |c| wanted.include?(c["id"]) }
     end
     fixtures = cases.map { |c| c["fixture"] }.uniq.sort
+    # 対照の run が期待した skill の file を読んだら、judge が条件の食い違いにする (#731)。その検出のために足す。
+    names |= cases.map { |c| c["skill"] } if opts[:skills] == "none"
 
     if opts[:dry_run]
       Dir.mktmpdir("skill-behavior-") do |base|
         proj = prepare_run(base, opts[:tool], File.join(fixtures_root, cases.first["fixture"]), placed)
         puts "isolated project (per run): #{proj} (#{placed.length} skills, fixture #{cases.first['fixture']})"
-        sample = opts[:tool] == "claude-code" ? claude_argv(opts, "<prompt>") : codex_argv(opts, proj, names)
+        sample = opts[:tool] == "claude-code" ? claude_argv(opts, "<prompt>") : codex_argv(opts, proj)
         puts "argv: #{sample.map(&:inspect).join(' ')}#{opts[:tool] == 'codex' ? ' (prompt on stdin)' : ''}"
+        if opts[:tool] == "codex"
+          puts "codex home: #{opts[:codex_home] ? "#{opts[:codex_home]} (CODEX_HOME for the child)" : 'not set (required for runs)'}"
+        end
       end
       puts "cases: #{cases.length} x repeat #{opts[:repeat]}"
       cases.each { |c| puts "  #{c['id']} (#{c['kind']}, fixture #{c['fixture']}): #{c['prompt']}" }
       return 0
     end
 
-    host_version = preflight!(opts[:tool])
+    host_version = preflight!(opts[:tool], codex_env(opts))
     raw_dir = "#{opts[:out]}.raw"
     raise Error, "raw log directory is a symlink: #{raw_dir}" if File.symlink?(raw_dir)
 
@@ -525,6 +596,7 @@ module ProbeSkillBehavior
                           { "sandbox" => CODEX_SANDBOX, "approval_policy" => "never", "disabled_features" => R::CODEX_DISABLE_FEATURES }
                         end,
       "permission_mode" => claude ? merged(inits.map { |i| i[:mode] }) : "approval_policy=never",
+      "conditions" => CONDITIONS.fetch(opts[:tool]),
       "max_turns" => claude ? opts[:max_turns] : nil,
       "timeout" => opts[:timeout],
       "repeat" => opts[:repeat],

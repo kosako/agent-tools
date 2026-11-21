@@ -4,7 +4,8 @@
 #   (終わり方・未到達・unknown の呼び出し)、正例の達成と未達、exec は中立、exit の優先 (違反と未達 > 評価不能)。
 # - 入力の検査: 形・未知の key・case set の外の case・coverage・重複・index の欠け・case ごとの数・ids.repeat・
 #   ids の key と型。入力の file の誤り (場所と中身を出さない)。
-# - 記録した条件の食い違い (run の間の mixed、固定した tool surface、permission の mode)。
+# - 記録した条件の食い違い (run の間の mixed、固定した tool surface、permission の mode、skill を置かない対照の run が
+#   期待した skill を読んだ。対照を baseline に渡したときも同じ)。ids.conditions の決まった値 (#731)。
 # - baseline との比較の条件 (tool・数・識別子) と、違ってよい差 (source_digest・variant・skills)。
 # - probe の実際の出力 (偽の claude で回した results.json) をそのまま判定できること。
 # network / 実 CLI には触れない。
@@ -310,6 +311,51 @@ check("codex の permission と sandbox の記録は条件の食い違いにし�
 rc, out, = judge_run.call(mutate.call { |d| d["ids"]["host_version"] = "mixed:a,b"; run_of.call(d, "neg")["calls"] << write })
 check("条件の食い違いより違反を優先する (#{rc})", rc == 1)
 
+# 対照の run が期待した skill を読んだ (#731)
+control = lambda do |reads|
+  mutate.call do |d|
+    d["skills"] = "none"
+    d["ids"]["source_digest"] = "none"
+    d["runs"].each { |r| r["skills_read"] = reads.include?(r["case"]) ? ["personal-investigate"] : ["other-skill"] }
+  end
+end
+rc, out, = judge_run.call(control.call(%w[neg amb]))
+check("対照の run が期待した skill を読んだら exit 2 で case と run を出す (#{rc})",
+      rc == 2 && out.include?("condition: control run read the expected skill (case amb, run 1)") &&
+      out.include?("condition: control run read the expected skill (case neg, run 1)") && !out.include?("case pos, run 1)"))
+rc, out, = judge_run.call(control.call([]))
+check("対照の run がほかの skill だけを読んだのは条件の食い違いにしない (#{rc})", rc == 0 && !out.include?("control run"))
+rc, out, = judge_run.call(base)
+check("skill を置いた run が期待した skill を読んだのは条件の食い違いにしない (#{rc})", rc == 0 && !out.include?("control run"))
+rc, out, = judge_run.call(base, baseline: control.call(%w[pos]))
+check("baseline に渡した対照が期待した skill を読んだら比べずに exit 2 (#{rc})",
+      rc == 2 && out.include?("baseline is not comparable: control run read the expected skill (case pos, run 1)"))
+rc, out, = judge_run.call(base, baseline: control.call([]))
+check("期待した skill を読まない対照の baseline とは比べる (#{rc})", rc == 0 && out.include?("baseline[candidate]"))
+
+# ids.conditions は tool ごとの決まった値だけ (#731)
+rc, = judge_run.call(mutate.call { |d| d["ids"]["conditions"] = { "setting_sources" => "project" } })
+check("claude-code の conditions は受ける (#{rc})", rc == 0)
+codex = lambda do |conditions|
+  mutate.call do |d|
+    d["tool"] = "codex"
+    d["ids"]["permission_mode"] = "approval_policy=never"
+    d["ids"]["tool_surface"] = { "sandbox" => "workspace-write" }
+    d["ids"]["conditions"] = conditions
+  end
+end
+rc, = judge_run.call(codex.call({ "home" => "eval", "user_instructions" => "absent", "user_skills" => "absent" }))
+check("codex の評価用の home の conditions は受ける (#{rc})", rc == 0)
+{
+  "codex の home が user" => codex.call({ "home" => "user", "user_instructions" => "absent", "user_skills" => "absent" }),
+  "codex に claude-code の conditions" => codex.call({ "setting_sources" => "project" }),
+  "claude-code に codex の conditions" => mutate.call { |d| d["ids"]["conditions"] = { "home" => "eval", "user_instructions" => "absent", "user_skills" => "absent" } },
+  "conditions が object でない" => mutate.call { |d| d["ids"]["conditions"] = "project" },
+}.each do |label, data|
+  rc, _, err = judge_run.call(data)
+  check("#{label} は入力の誤りで exit 2 (#{rc})", rc == 2 && err.include?("ids.conditions must be"))
+end
+
 # baseline との比較
 rc, out, = judge_run.call(base, baseline: base)
 check("同じ結果の比較は exit 0 と delta の行 (#{rc})", rc == 0 && out.include?("baseline[candidate]") &&
@@ -317,7 +363,7 @@ check("同じ結果の比較は exit 0 と delta の行 (#{rc})", rc == 0 && out
 allowed = {
   "source" => mutate.call { |d| d["ids"]["source_digest"] = "sha256:b" },
   "variant" => mutate.call { |d| d["variant"] = "baseline" },
-  "skills" => mutate.call { |d| d["skills"] = "none"; d["ids"]["source_digest"] = "none" },
+  "skills" => mutate.call { |d| d["skills"] = "none"; d["ids"]["source_digest"] = "none"; d["runs"].each { |r| r["skills_read"] = [] } },
 }
 allowed.each do |label, b|
   rc, = judge_run.call(base, baseline: b)
