@@ -153,7 +153,8 @@ module ProbeSkillBehavior
 
     real = File.realpath(dir)
     usual = R.codex_home
-    if File.exist?(usual) && File.realpath(usual) == real
+    # 文字列ではなく実体で比べる (大文字小文字を区別しない file system では、同じ dir の実 path の表記が変わりうる)
+    if File.exist?(usual) && File.identical?(usual, real)
       raise Error, "--codex-home must not be the usual Codex home"
     end
 
@@ -177,6 +178,18 @@ module ProbeSkillBehavior
       raise Error, "--codex-home: skills must be a directory"
     end
     real
+  rescue SystemCallError => e
+    raise Error, "--codex-home could not be checked (#{e.class})"
+  end
+
+  # 各 codex exec の前に、評価用の home を検査し直し、最初に確かめた dir と同じ実体かも確かめる (#731。review の
+  # round 1)。run の間に AGENTS.md や skill が足された、dir を差し替えられた、のどれでも起動せずに止める。
+  def self.recheck_codex_home!(opts)
+    real = eval_codex_home!(opts[:codex_home])
+    st = File.stat(real)
+    return if real == opts[:codex_home] && [st.dev, st.ino] == opts[:codex_home_id]
+
+    raise Error, "--codex-home changed during the probe"
   rescue SystemCallError => e
     raise Error, "--codex-home could not be checked (#{e.class})"
   end
@@ -251,17 +264,18 @@ module ProbeSkillBehavior
         denied = list.map { |d| d.is_a?(Hash) ? d["tool_use_id"].to_s : nil }.compact if list.is_a?(Array)
       end
     end
-    pattern = skill_md_pattern(names)
     skills = []
     out = calls.map do |c|
       if c[:tool] == "Skill"
         n = c[:input]["skill"] || c[:input]["name"]
         skills << n if n.is_a?(String)
       end
-      strings_in(c[:input]).each { |s| s.scan(pattern) { |(n)| skills << n } } if pattern
+      found, ambiguous = skill_reads(strings_in(c[:input]), names)
+      skills.concat(found)
+      klass = K.classify_claude(c[:tool], c[:input])
+      klass = "unknown" if ambiguous && LIGHT_CLASSES.include?(klass)
       outcome = denied.include?(c[:id]) ? "denied" : results.fetch(c[:id], "unknown")
-      { id: c[:id], tool: c[:tool], class: K.classify_claude(c[:tool], c[:input]), outcome: outcome,
-        strings: strings_in(c[:input]) }
+      { id: c[:id], tool: c[:tool], class: klass, outcome: outcome, strings: strings_in(c[:input]) }
     end
     { calls: out, skills_read: skills.uniq, init: init, result_seen: result_seen, subtype: subtype }
   end
@@ -291,13 +305,17 @@ module ProbeSkillBehavior
         turn_completed = true
       end
     end
-    pattern = skill_md_pattern(names)
     skills = []
     calls = order.map do |id|
       item = items[id]
       strings = codex_strings(item)
-      strings.each { |s| s.scan(pattern) { |(n)| skills << n } } if pattern && item["type"] == "command_execution"
-      { id: id, tool: item["type"], class: codex_class(item), outcome: codex_outcome(item), strings: strings }
+      klass = codex_class(item)
+      if item["type"] == "command_execution"
+        found, ambiguous = skill_reads(strings, names)
+        skills.concat(found)
+        klass = "unknown" if ambiguous && LIGHT_CLASSES.include?(klass)
+      end
+      { id: id, tool: item["type"], class: klass, outcome: codex_outcome(item), strings: strings }
     end
     { calls: calls, skills_read: skills.uniq, turn_completed: turn_completed }
   end
@@ -333,8 +351,29 @@ module ProbeSkillBehavior
     item["status"] == "completed" ? "ok" : "unknown"
   end
 
-  def self.skill_md_pattern(names)
-    names.empty? ? nil : %r{/(#{names.map { |n| Regexp.escape(n) }.join('|')})/SKILL\.md}
+  # skill の file の読み取りの検出 (#731。review の round 1)。`SKILL.md` の語 (大文字小文字を区別しない) を含む文字列
+  # から、読んだ skill の名前を決める。path の要素としての名前 (前が先頭・`/`・空白・引用・`=`、後ろが末尾・`/`・空白・
+  # 引用・`;&|)`) と、`SKILL.md` の語 (前が先頭・空白・引用・`=`・`/`) の両方がある文字列を、その名前の読み取りにする
+  # (`…/<name>/SKILL.md`、`…/./<name>/SKILL.md`、`cd …/<name> && cat SKILL.md` など)。`SKILL.md` の語があるのに名前を
+  # 決められない文字列 (`cat */SKILL.md`、名前を変数に入れた形など) は ambiguous で、呼び出しの区分が軽い (read・exec)
+  # なら unknown にする。対照の崩れを見落として green にしないため (judge は unknown の呼び出しを評価不能に
+  # する)。重い区分 (file-write など) は、違反の検出を弱めないよう、そのまま残す。
+  LIGHT_CLASSES = %w[read exec].freeze
+  SKILL_MD_TOKEN = %r{(?:\A|[\s"'=/])skill\.md}i.freeze
+
+  def self.skill_reads(strings, names)
+    found = []
+    ambiguous = false
+    strings.each do |s|
+      next unless s.match?(/skill\.md/i)
+
+      hit = names.select do |n|
+        s.match?(%r{(?:\A|[/\s"'=])#{Regexp.escape(n)}(?:\z|[/\s"';&|)])}i) && s.match?(SKILL_MD_TOKEN)
+      end
+      ambiguous = true if hit.empty?
+      found.concat(hit)
+    end
+    [found.uniq, ambiguous]
   end
 
   # --- fixture と state -----------------------------------------------------------------
@@ -497,7 +536,11 @@ module ProbeSkillBehavior
       return 0
     end
     opts = parse_argv(argv)
-    opts[:codex_home] = eval_codex_home!(opts[:codex_home]) if opts[:codex_home]
+    if opts[:codex_home]
+      opts[:codex_home] = eval_codex_home!(opts[:codex_home])
+      st = File.stat(opts[:codex_home])
+      opts[:codex_home_id] = [st.dev, st.ino]
+    end
     if opts[:skills] == "none"
       # skill を置かない対照。names は読み取りの検出だけに使う (ふだんの home の user の skill の file を読んだら、
       # skills_read に残す。下で case の期待した skill も足す)。
@@ -561,6 +604,7 @@ module ProbeSkillBehavior
         Dir.mktmpdir("skill-behavior-") do |base|
           proj = prepare_run(base, opts[:tool], fixture_dir, placed)
           before = snapshot(proj)
+          recheck_codex_home!(opts) if opts[:tool] == "codex"
           r = run_one(opts, proj, names, c["prompt"])
           changed = changed_paths(before, snapshot(proj))
         end

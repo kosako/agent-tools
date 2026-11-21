@@ -464,6 +464,47 @@ check("codex の skill の読み取りは command の SKILL.md の path", x[:ski
 check("codex の file_change の path を到達の照合に残す", x[:calls][3][:strings] == ["/p/lib/median.rb"])
 check("codex の turn.completed を見た", x[:turn_completed])
 check("turn.completed が無ければ見ていない", !P.parse_codex("", names)[:turn_completed])
+
+# skill の file の読み取りの形 (#731。review の round 1)
+cmd = lambda do |id, command|
+  { "type" => "item.completed", "item" => { "id" => id, "type" => "command_execution", "command" => command,
+                                           "exit_code" => 0, "status" => "completed" } }
+end
+read_forms = {
+  "cd した dir の SKILL.md" => "/bin/zsh -lc 'cd /h/skills/personal-investigate && cat SKILL.md'",
+  "途中の /./" => "/bin/zsh -lc 'cat /h/skills/./personal-investigate/SKILL.md'",
+  "重ねた / と小文字の skill.md" => "/bin/zsh -lc 'cat /h/skills//personal-investigate/skill.md'",
+  "cd と ./SKILL.md" => "/bin/zsh -lc 'cd /h/skills/personal-investigate; cat ./SKILL.md'",
+}
+read_forms.each do |label, command|
+  y = P.parse_codex(JSON.generate(cmd.call("r1", command)) + "\n", names)
+  check("codex の #{label} は、その skill の読み取りで、区分は変えない (#{y[:skills_read].inspect} #{y[:calls][0][:class]})",
+        y[:skills_read] == %w[personal-investigate] && y[:calls][0][:class] != "unknown")
+end
+ambiguous_forms = {
+  "glob の SKILL.md" => "/bin/zsh -lc 'cat /h/skills/*/SKILL.md'",
+  "名前の続く別の dir" => "/bin/zsh -lc 'cat /h/skills/personal-investigate-old/SKILL.md'",
+  "名前を変数に入れた形" => "/bin/zsh -lc 'n=personal-investigate-x; cat /h/skills/$n/SKILL.md'",
+}
+ambiguous_forms.each do |label, command|
+  y = P.parse_codex(JSON.generate(cmd.call("r1", command)) + "\n", names)
+  check("codex の #{label} は名前を決められないので unknown (#{y[:skills_read].inspect} #{y[:calls][0][:class]})",
+        y[:skills_read].empty? && y[:calls][0][:class] == "unknown")
+end
+y = P.parse_codex(JSON.generate(cmd.call("r1", "/bin/zsh -lc 'rm /h/skills/*/SKILL.md'")) + "\n", names)
+check("名前を決められなくても、重い区分は残す (#{y[:calls][0][:class]})", y[:calls][0][:class] == "file-write")
+y = P.parse_codex(JSON.generate(cmd.call("r1", "/bin/zsh -lc 'cat README.md'")) + "\n", names)
+check("SKILL.md に触れない呼び出しは今のまま", y[:calls][0][:class] == "read" && y[:skills_read].empty?)
+claude_amb = [
+  { "type" => "assistant", "message" => { "content" => [
+    { "type" => "tool_use", "id" => "u1", "name" => "Read", "input" => { "file_path" => "/p/other-skill/SKILL.md" } },
+    { "type" => "tool_use", "id" => "u2", "name" => "Write", "input" => { "file_path" => "/p/other-skill/SKILL.md", "content" => "x" } },
+    { "type" => "tool_use", "id" => "u3", "name" => "Read", "input" => { "file_path" => "/p/skills/./personal-grill-me/SKILL.md" } },
+  ] } },
+].map { |e| JSON.generate(e) }.join("\n") + "\n"
+y = P.parse_claude(claude_amb, names)
+check("claude も名前を決められない SKILL.md の Read は unknown、Write は file-write のまま (#{y[:calls].map { |c| c[:class] }.inspect})",
+      y[:calls].map { |c| c[:class] } == %w[unknown file-write read] && y[:skills_read] == %w[personal-grill-me])
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -621,6 +662,7 @@ for a in "$@"; do
   prev=$a
 done
 cat > /dev/null
+[ -z "${FAKE_HOOK:-}" ] || sh -c "$FAKE_HOOK"
 cd "$proj" || exit 65
 . "$(dirname "$0")/fake-body" .agents/skills
 EOF
@@ -875,6 +917,37 @@ expect_bad "user skills" "$h"
 h=$(bad_home skillslink)
 ln -s "$empty_home/skills" "$h/skills"
 expect_bad "skills must not be a symlink" "$h"
+# 大文字小文字を区別しない file system では、大文字小文字だけ違う path も、ふだんの home と同じ実体 (review の round 1)
+usual_ok="$tmp/usual-ok"
+mkdir -p "$usual_ok"
+: > "$usual_ok/auth.json"
+if [ -d "$tmp/USUAL-OK" ]; then
+  RUN_CODEX_HOME=$usual_ok
+  expect_bad "usual Codex home" "$tmp/USUAL-OK"
+  RUN_CODEX_HOME=
+else
+  echo "note: case-sensitive file system; skip the case-alias check of the usual home"
+fi
+
+# --- codex: run の間に評価用の home が変わったら、次の run を起動しない (review の round 1) ---
+# changing_home <名前> <hook>: 評価用の home の写しを作り、1 回目の exec の中で hook を走らせて、--repeat 2 で回す
+changing_home() {
+  ch="$tmp/changing-$1"
+  mkdir -p "$ch"
+  : > "$ch/auth.json"
+  FAKE_HOOK=$(printf %s "$2" | sed "s|@H@|$ch|g")
+  export FAKE_HOOK
+  run_fake codex "$codex_events" --model m-x --only investigate-fix --repeat 2 --codex-home "$ch" --out "$tmp/never.json"
+  unset FAKE_HOOK
+  [ "$rc" -eq 2 ] || fail "a changed eval home ($1) must stop the probe (rc=$rc): $out"
+  [ "$(grep -c '^exec --json' "$log")" -eq 1 ] || fail "a changed eval home ($1) must not launch the next run: $(cat "$log")"
+}
+changing_home agents ': > "@H@/AGENTS.md"'
+case "$out" in *AGENTS.md*) : ;; *) fail "the stop should name AGENTS.md: $out" ;; esac
+changing_home skill 'mkdir -p "@H@/skills/personal-investigate"'
+case "$out" in *"user skills"*) : ;; *) fail "the stop should say user skills: $out" ;; esac
+changing_home replaced 'mv "@H@" "@H@.old" && mkdir "@H@" && : > "@H@/auth.json"'
+case "$out" in *"changed during the probe"*) : ;; *) fail "a replaced eval home should be detected: $out" ;; esac
 
 # --- symlink を経て temp project や raw dir の外へ書かない (#717 の review の round 1) ---
 canary="$tmp/canary.txt"

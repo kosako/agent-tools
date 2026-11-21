@@ -150,6 +150,12 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
   `permission_denials`、Codex は item の `status` と `exit_code` から決め、結果の event が無ければ `unknown`。
 - `completion` は `exited`・`max-turns`・`timeout`・`failed`。behavior の評価では `max-turns` と `timeout` を観測完了に
   数えません (routing probe の `max-turns` と `observed-stop` は流用しない)。
+- `skills_read` は、読んだ skill の名前です。Claude Code の `Skill` tool の呼び出しのほか、呼び出しの入力の文字列 (Codex は
+  command) に、path の要素としての skill の名前と `SKILL.md` の語 (大文字小文字を区別しない) の両方があれば、その skill を
+  読んだとします (`…/<name>/SKILL.md`、`…/./<name>/SKILL.md`、`cd …/<name> && cat SKILL.md` など)。名前を照らすのは、置いた
+  skill (対照では、ふだんの Codex の home の user の skill と、case の期待した skill)。`SKILL.md` の語があるのに名前を決め
+  られない呼び出し (`cat */SKILL.md` など) は、区分が `read` か `exec` なら `unknown` にします (評価不能になる。対照の崩れを
+  見落として green にしないため)。`file-write` などの重い区分は、違反の検出を弱めないよう、そのまま残します。
 - `ids` は比べる条件の識別子です。中身の側は skill の source・case・fixture の digest と、runner と分類器の版。実行の
   側は host の版、要求した model と init の model、effort、tool surface、permission の mode、max-turns、timeout、repeat。
   Codex は解決した model を event に出さないので `init_model` は `unknown`、effort は両 tool とも CLI の既定
@@ -250,10 +256,15 @@ codex login status                           # ふだんの home の login が�
 
 probe は起動の前に、`--codex-home` の dir が次を満たすことを確かめ、満たさなければ codex を呼ばずに exit 2 です。
 
-- 絶対 path の directory で、symlink でない。ふだんの home (`CODEX_HOME`、無ければ `~/.codex`) と実 path が違う。
+- 絶対 path の directory で、symlink でない。ふだんの home (`CODEX_HOME`、無ければ `~/.codex`) と同じ実体でない
+  (path の文字列ではなく実体で比べる。大文字小文字を区別しない file system で、大文字小文字だけ違う path も拒む)。
 - `auth.json` が regular file としてある (中身は読まない)。
 - `AGENTS.md` と `AGENTS.override.md` が無い (大文字小文字を区別しない)。`skills/` の下に、`.` で始まらない entry が
   無い (`.system` のような Codex の組み込みの隠し dir は許す)。`skills/` は symlink でない。
+
+同じ検査を、毎回の `codex exec` の前にもかけ直し、最初に確かめた dir と同じ実体 (device と inode) かも確かめます。run の
+間に `AGENTS.md` や skill が足された、dir が差し替えられた、のどれでも、次の run を起動せずに exit 2 で止めます。検査と
+起動の間の短い隙は残ります。
 
 `config.toml` と execpolicy の rules は、`--ignore-user-config` と `--ignore-rules` で読まないので、在ってもかまいません。
 評価用の home に `AGENTS.md` や skill を置かないでください (置くと probe が止まります)。
