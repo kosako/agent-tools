@@ -477,7 +477,7 @@ read_forms = {
   "途中の /./" => "/bin/zsh -lc 'cat /h/skills/./personal-investigate/SKILL.md'",
   "SKILL.md の直前の /./" => "/bin/zsh -lc 'cat /h/skills/personal-investigate/././SKILL.md'",
   "重ねた / と小文字の skill.md" => "/bin/zsh -lc 'cat /h/skills//personal-investigate/skill.md'",
-  "前の要素に変数" => "/bin/zsh -lc 'cat $HOME/.codex/skills/personal-investigate/SKILL.md'",
+  "前の要素に ~" => "/bin/zsh -lc 'cat ~/.codex/skills/personal-investigate/SKILL.md'",
   "後ろに区切りの字" => "/bin/zsh -lc 'sed -n 1,80p \"/h/skills/personal-investigate/SKILL.md\"; cat lib/median.rb'",
 }
 read_forms.each do |label, command|
@@ -501,15 +501,22 @@ unresolved_forms = {
   "二重引用でつないだ名前 (round 4)" => "cat \"../skills/personal-\"investigate/SKILL.md && cat lib/median.rb",
   "単引用でつないだ名前" => "cat ../skills/'personal-'investigate/SKILL.md",
   "名前の途中の引用" => "cat ../skills/pe\"rs\"onal-investigate/SKILL.md",
+  "前の要素に変数 (門で止める)" => "/bin/zsh -lc 'cat $HOME/.codex/skills/personal-investigate/SKILL.md'",
+  "command の置き換えでつないだ名前 (round 5)" => "cat ../skills/$(printf personal-)investigate/SKILL.md && printf x >> lib/median.rb",
+  "backslash と改行でつないだ名前 (round 5)" => "cat ../skills/personal-\\\ninvestigate/SKILL.md && printf x >> lib/median.rb",
+  "brace の展開" => "cat ../skills/personal-{investigate,x}/SKILL.md",
+  "backtick の置き換え" => "cat ../skills/`printf personal-investigate`/SKILL.md",
 }
 unresolved_forms.each do |label, command|
   y = one.call(command)
   check("codex の #{label} は名前を決められないので印を立てる (#{y[:skills_read].inspect} #{y[:skills_unresolved]})",
         y[:skills_read].empty? && y[:skills_unresolved] == true)
 end
-y = one.call("/bin/zsh -lc 'cat /h/skills/personal-grill-me/SKILL.md /h/skills/*/SKILL.md'")
+y = one.call("/bin/zsh -lc 'cat /h/skills/personal-grill-me/SKILL.md ./SKILL.md'")
 check("既知の名前と同じ文字列でも、残りの決められない読み取りの印は消えない (round 2)",
       y[:skills_read] == %w[personal-grill-me] && y[:skills_unresolved] == true)
+y = one.call("/bin/zsh -lc 'cat /h/skills/personal-grill-me/SKILL.md /h/skills/*/SKILL.md'")
+check("門で止めた文字列からは名前を記録せず、印を立てる (round 5)", y[:skills_read].empty? && y[:skills_unresolved] == true)
 y = one.call("/bin/zsh -lc 'cat /h/skills/*/SKILL.md && sed -i s/a/b/ lib/median.rb'")
 check("書き込みと同居しても、区分は分類器のまま、印は残る (round 2。#{y[:calls][0][:class]})",
       y[:calls][0][:class] == "file-write" && y[:skills_unresolved] == true)
@@ -896,26 +903,52 @@ RUN_CODEX_HOME=
   || fail "a control run that reads the expected skill should record it: $(json_get "$res" 'd["runs"][0]')"
 
 # --- codex: 名前を決められない読み取りをした対照は、probe が印を残し、judge が results でも baseline でも止める ---
-glob_events="$tmp/codex-glob-events.jsonl"
-cat > "$glob_events" <<'EOF'
-{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'cat /h/skills/*/SKILL.md && cat lib/median.rb'","exit_code":0,"status":"completed"}}
-{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}
-EOF
-control="$tmp/control-glob.json"
-run_fake codex "$glob_events" --model m-x --only investigate-diagnose-only --skills none --codex-home "$eval_home" --out "$control"
-[ "$rc" -eq 0 ] || fail "codex control with a glob read should run (rc=$rc): $out"
-[ "$(json_get "$control" 'd["runs"][0].values_at("skills_read", "skills_unresolved")')" = '[[],true]' ] \
-  || fail "the control run should record an unresolved skill read: $(json_get "$control" 'd["runs"][0]')"
+# 書き込みのある正例 (investigate-fix) で、許された変更と同居させる (review の round 2・5)。比べる候補は skill を置いた run。
 judge="$repo_root/scripts/check-skill-behavior.sh"
-cases_file="$tmp/cases-diagnose-only.json"
-ruby -rjson -e 'd = JSON.parse(File.read(ARGV[0])); d["cases"].select! { |c| c["id"] == "investigate-diagnose-only" }
+cases_file="$tmp/cases-fix.json"
+ruby -rjson -e 'd = JSON.parse(File.read(ARGV[0])); d["cases"].select! { |c| c["id"] == "investigate-fix" }
   File.write(ARGV[1], JSON.generate(d))' "$repo_root/scripts/lib/skill_behavior_cases.json" "$cases_file"
-set +e
-jout=$(sh "$judge" --cases "$cases_file" --results "$control" 2>&1)
-jrc=$?
-set -e
-[ "$jrc" -eq 2 ] || fail "judge should stop on the control with an unresolved read (rc=$jrc): $jout"
-case "$jout" in *"skill file whose name could not be decided"*) : ;; *) fail "judge should name the unresolved read: $jout" ;; esac
+FAKE_WRITE=lib/median.rb
+export FAKE_WRITE
+candidate="$tmp/candidate-fix.json"
+run_fake codex "$codex_events" --model m-x --only investigate-fix --codex-home "$eval_home" --out "$candidate"
+[ "$rc" -eq 0 ] || fail "the codex candidate should run (rc=$rc): $out"
+# judge_on <args...>: judge を回して jrc と jout に残す
+judge_on() {
+  set +e
+  jout=$(sh "$judge" --cases "$cases_file" "$@" 2>&1)
+  jrc=$?
+  set -e
+}
+judge_on --results "$candidate"
+[ "$jrc" -eq 0 ] || fail "the candidate alone should pass the judge (rc=$jrc): $jout"
+for form in glob subst backslash; do
+  events="$tmp/codex-$form-events.jsonl"
+  ruby -rjson -e '
+    cmd = { "glob" => "cat /h/skills/*/SKILL.md && printf x >> lib/median.rb",
+            "subst" => "cat ../skills/$(printf personal-)investigate/SKILL.md && printf x >> lib/median.rb",
+            "backslash" => "cat ../skills/personal-\\\ninvestigate/SKILL.md && printf x >> lib/median.rb" }.fetch(ARGV[0])
+    item = { "id" => "item_1", "type" => "command_execution", "command" => cmd, "exit_code" => 0, "status" => "completed" }
+    File.write(ARGV[1], [{ "type" => "item.completed", "item" => item },
+                         { "type" => "turn.completed", "usage" => { "input_tokens" => 1, "output_tokens" => 1 } }]
+                        .map { |e| JSON.generate(e) }.join("\n") + "\n")' "$form" "$events"
+  control="$tmp/control-$form.json"
+  run_fake codex "$events" --model m-x --only investigate-fix --skills none --codex-home "$eval_home" --out "$control"
+  [ "$rc" -eq 0 ] || fail "codex control ($form) should run (rc=$rc): $out"
+  [ "$(json_get "$control" 'd["runs"][0].values_at("skills_read", "skills_unresolved")')" = '[[],true]' ] \
+    || fail "the control run ($form) should record an unresolved skill read: $(json_get "$control" 'd["runs"][0]')"
+  [ "$(json_get "$control" 'd["runs"][0]["calls"].map { |c| c["class"] }')" = '["file-write"]' ] \
+    || fail "the control run ($form) should keep the classifier's class: $(json_get "$control" 'd["runs"][0]["calls"]')"
+  judge_on --results "$control"
+  [ "$jrc" -eq 2 ] || fail "judge should stop on the control ($form) with an unresolved read (rc=$jrc): $jout"
+  case "$jout" in *"condition: control run read a skill file whose name could not be decided"*) : ;;
+    *) fail "judge should name the unresolved read ($form): $jout" ;; esac
+  judge_on --results "$candidate" --baseline "$control"
+  [ "$jrc" -eq 2 ] || fail "judge should not compare with the control ($form) as baseline (rc=$jrc): $jout"
+  case "$jout" in *"baseline is not comparable: control run read a skill file whose name could not be decided"*) : ;;
+    *) fail "judge should say the baseline control ($form) is not comparable: $jout" ;; esac
+done
+unset FAKE_WRITE
 
 # --- codex: 評価用の home が無い・条件を満たさないときは起動しない (#731) ---
 run_fake codex "$codex_events" --model m-x --only investigate-fix --out "$tmp/never.json"
