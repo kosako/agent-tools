@@ -1242,6 +1242,438 @@
           "text": "Claude Code の session で起動し直すよう案内している"
         }
       ]
+    },
+    {
+      "id": 62,
+      "name": "exhaust-claude-starts",
+      "prompt": "[前提: Claude Code の session。追跡 Issue あり。両方の tool の残量は読めて、Claude の週の使用率は 40%、両方の 5h は十分。Codex の週の使える量 (今の式) は large の検証役の推定以上] personal-maintenance-sweep、claude-code の週の枠を使い切りで",
+      "expected_output": "使い切りのモードで始める。監査役は Claude (対象の tool)、検証役は Codex。予約を外すのは Claude だけで、Codex の予約は今の式のまま残す。対象の tool・週の window・止める線 100%・予約を外すこと・起票の上限 (指定元は設定か既定) を示し、確認を待たずに、台帳から wave 1 (6 単位) を始める。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "exhaust-mode",
+          "text": "使い切りのモードに切り替え、監査役を Claude、検証役を Codex にしている"
+        },
+        {
+          "id": "reserve-target-only",
+          "text": "予約を外すのは Claude だけで、Codex の予約は今の式のまま残している"
+        },
+        {
+          "id": "shows-then-starts",
+          "text": "対象の tool・週の window・止める線 (100%)・予約を外すこと・起票の上限を示し、確認を待たずに始めている"
+        },
+        {
+          "id": "wave1-six",
+          "text": "wave 1 を 6 単位で始めている"
+        }
+      ]
+    },
+    {
+      "id": 63,
+      "name": "exhaust-codex-line-cap",
+      "prompt": "[前提: Claude Code の session。両方の tool の残量は読めて、Codex の週の使用率は 30%、両方の 5h は十分] personal-maintenance-sweep、codex の週の使用率 90% まで、起票 15 件まで",
+      "expected_output": "使い切りで、対象の tool は Codex で監査役。止める線は Codex の週の使用率 90%、起票の上限は 15 (指定元は run)。検証役の Claude の予約は残す。Codex の監査の起動・回収・照合・起票は Claude の session が行い、その Claude の消費を orchestration として別に記録すると伝える。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "line-90",
+          "text": "止める線を Codex の週の使用率 90% にしている"
+        },
+        {
+          "id": "cap-15-run",
+          "text": "起票の上限を 15 (その run の指定) にしている"
+        },
+        {
+          "id": "claude-orchestration-recorded",
+          "text": "Claude の進行の分の消費を、役の印を付けて別に記録するとしている"
+        }
+      ]
+    },
+    {
+      "id": 64,
+      "name": "exhaust-asks-tool",
+      "prompt": "sweep を limit まで深掘りで",
+      "expected_output": "使い切りの一言はあるが、対象の tool が無い。今の session の tool から推測せず、claude-code と codex のどちらの枠を使い切るかを 1 回だけ聞き返す。答えを得るまで監査を始めない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "asks-once",
+          "text": "対象の tool を 1 回だけ聞き返している"
+        },
+        {
+          "id": "no-infer",
+          "text": "今の session の tool を対象と推測していない"
+        },
+        {
+          "id": "no-start",
+          "text": "答えを得る前に監査を始めていない"
+        }
+      ]
+    },
+    {
+      "id": 65,
+      "name": "normal-remaining-quota",
+      "prompt": "[前提: Claude Code の session。残量は読めて、medium が収まる] 週の残りの枠で repo のメンテを回して Issue にして",
+      "expected_output": "使い切りの一言が無いので、通常の run で回す。予約 (床と 1 日分) を取り、使える量に収まるプリセットを選ぶ。wave と台帳は使わない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "normal-budget",
+          "text": "予約を取った通常の式で規模を決め、使い切りに切り替えていない"
+        },
+        {
+          "id": "preset-not-waves",
+          "text": "プリセットで規模を決め、wave や台帳を使っていない"
+        }
+      ]
+    },
+    {
+      "id": 66,
+      "name": "exhaust-negated",
+      "prompt": "maintenance sweep を回して Issue にして。使い切りのモードは使わないで",
+      "expected_output": "否定なので使い切りに切り替えない。通常の run で回す。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "not-exhaust",
+          "text": "使い切りのモードに切り替えず、通常の予算で回している"
+        }
+      ]
+    },
+    {
+      "id": 67,
+      "name": "exhaust-design-talk",
+      "prompt": "#411 の使い切りのモードの設計を相談したい",
+      "expected_output": "モードの設計の相談で、sweep の依頼ではない。sweep を始めず (残量を読まず、監査しない)、設計の相談として応じる。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-sweep",
+          "text": "sweep を始めていない (残量の読み取り、監査、起票のどれもしていない)"
+        }
+      ]
+    },
+    {
+      "id": 68,
+      "name": "exhaust-report-mode",
+      "prompt": "[前提: Claude Code の session。残量は読めて足りる] personal-maintenance-sweep を claude-code の週の枠を使い切りで回して。Issue にはしないで",
+      "expected_output": "使い切りの report のモード。GitHub に書かない (起票も追跡 Issue の更新もしない)。wave ごとの反証はかけ、会話で報告し、local の記録は残す。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "report-no-github",
+          "text": "GitHub に書いていない"
+        },
+        {
+          "id": "still-refutes-per-wave",
+          "text": "wave ごとに反証をかけている"
+        }
+      ]
+    },
+    {
+      "id": 69,
+      "name": "exhaust-fix-unsupported",
+      "prompt": "personal-maintenance-sweep、claude-code を使い切りで監査して、docs のずれは直して PR まで",
+      "expected_output": "使い切りと fix のモードの併用は初版では未対応。始めずに未対応と伝え、使い切りの issues のモードで進めるか、通常の run で fix まで進めるかを聞く。頼まれた fix を黙って省かない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "tells-unsupported",
+          "text": "使い切りと fix の併用が未対応だと伝えている"
+        },
+        {
+          "id": "asks-which",
+          "text": "どちらで進めるかを聞き、答える前に始めていない"
+        },
+        {
+          "id": "no-silent-drop",
+          "text": "頼まれた fix を、説明なく省いていない"
+        }
+      ]
+    },
+    {
+      "id": 70,
+      "name": "exhaust-codex-session",
+      "prompt": "[前提: Codex の session で起動された。herdr の起動経路はある] personal-maintenance-sweep、codex の週の枠を使い切りで",
+      "expected_output": "Codex の session なので、監査役が Codex でも、自分で監査や反証をせず、別の Codex も起こさない。wave ごとに Claude の session が照合と反証の batch を挟むため、Claude Code の session で起動し直すよう案内して止まる。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-audit-in-codex",
+          "text": "自分で監査も反証もせず、別の Codex も起動していない"
+        },
+        {
+          "id": "guides-claude-code",
+          "text": "Claude Code の session で起動し直すよう案内している"
+        }
+      ]
+    },
+    {
+      "id": 71,
+      "name": "exhaust-unreadable-asks",
+      "prompt": "[前提: Claude Code の session。Claude の週の値に古いことの印が立っている。Codex の値は読める。両方の 5h は十分] personal-maintenance-sweep、claude-code の週の枠を使い切りで",
+      "expected_output": "対象の tool の週の値が読めないので、止める線を判定できない。使い切りを始めず、通常の run (読めない値の規則で、規模を広げない) に切り替えるかを聞く。黙って縮めない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "does-not-start",
+          "text": "使い切りを始めていない"
+        },
+        {
+          "id": "asks-normal",
+          "text": "通常の run に切り替えるかを聞いている (黙って通常の run に縮めていない)"
+        }
+      ]
+    },
+    {
+      "id": 72,
+      "name": "exhaust-5h-short-finishes",
+      "prompt": "[前提: 使い切りの run (監査役 Claude) の wave 2 が終わった。Claude の 5h の余りに、次の wave の 1 単位も収まらない。週の枠は止める線まで 30 残る] 続けて",
+      "expected_output": "新しい wave を始めず、終わりの処理に移る。5h の reset を待たない。走っている batch を回収してから triage・照合・起票・記録をし、残した組 (数と観点の内訳) を報告する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-new-wave",
+          "text": "新しい wave を始めていない"
+        },
+        {
+          "id": "no-wait-reset",
+          "text": "5h の reset を待たずに終わりの処理に移っている"
+        },
+        {
+          "id": "reports-left",
+          "text": "残した組を報告している"
+        }
+      ]
+    },
+    {
+      "id": 73,
+      "name": "exhaust-verifier-short",
+      "prompt": "[前提: 使い切りの run (監査役 Claude、検証役 Codex) の wave 2 が終わり、batch 2 を起動した。Codex の週の余り (予約分を引いた値) が、次の wave の反証の見込みの 1 単位分にも届かない] 続けて",
+      "expected_output": "検証役の余りが足りないので、新しい wave を始めない。batch 2 を回収してから終わりの処理に移る。反証を終えた所見だけを起票の候補にし、反証できなかった所見は起票せず state に残す。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-new-wave",
+          "text": "新しい wave を始めていない"
+        },
+        {
+          "id": "files-only-refuted",
+          "text": "反証を終えた所見だけを起票の候補にし、反証の無い所見を起票していない"
+        }
+      ]
+    },
+    {
+      "id": 74,
+      "name": "exhaust-ledger-exhausted",
+      "prompt": "[前提: 使い切りの run で、台帳の 48 組をすべて監査し終えた。Claude の週の使用率は 70% で、止める線は 100%] 続けて",
+      "expected_output": "台帳が尽きたので、止める線の手前でも終わりの処理に移る。枠を使うために同じ組を監査し直さない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "finishes",
+          "text": "終わりの処理に移っている"
+        },
+        {
+          "id": "no-reaudit",
+          "text": "同じ組を監査し直していない"
+        }
+      ]
+    },
+    {
+      "id": 75,
+      "name": "exhaust-per-wave-refute",
+      "prompt": "[前提: 使い切りの run (監査役 Claude、検証役 Codex) の wave 1 (6 単位) の監査が終わった。所見は 14 件で、そのうち 3 件は、ほかの単位の所見と同じ原因で同じ直し方になる] 続けて",
+      "expected_output": "wave 1 の所見を照合し、同じ問題の 3 件を代表にまとめてから、残った 11 件を batch 1 として Codex に反証させる (low を含む全件)。同じ系列の懐疑役の段は置かない。batch 1 の回収を待たず、走っている batch の見込みを検証役の消費に入れて wave 2 の単位の数を出し、wave 2 を起動する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "merge-before-batch",
+          "text": "同じ問題の所見を代表にまとめてから、残った所見だけを batch にしている"
+        },
+        {
+          "id": "all-to-other-ai",
+          "text": "batch を Codex に、low を含めて全件かけ、同じ系列の懐疑役の段を置いていない"
+        },
+        {
+          "id": "inflight-counted",
+          "text": "走っている batch の見込みを検証役の消費に入れて、wave 2 の単位の数を出している"
+        }
+      ]
+    },
+    {
+      "id": 76,
+      "name": "exhaust-wave-size",
+      "prompt": "[前提: 使い切りの run (監査役 Claude、検証役 Codex)。wave 1 (6 単位) で Claude の週を 12 使った。Claude の週の残り − 線は 50。Claude の 5h と Codex の余りは十分大きく、台帳には 30 組残る] wave 2 の単位の数を決めて",
+      "expected_output": "1 単位の監査は 12 ÷ 6 = 2。終わりは 2 単位分の 4、Claude で走っている分は 0 なので、余りは 46。46 ÷ 2 ÷ 2 = 11.5 を切り捨てて 11 単位 (上限 20 と台帳の残りより小さい)。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "per-unit-2",
+          "text": "1 単位の監査を 2 としている"
+        },
+        {
+          "id": "finish-4",
+          "text": "終わりの見込みを 2 単位分の 4 として引いている"
+        },
+        {
+          "id": "eleven-units",
+          "text": "wave 2 を 11 単位にしている (余りの半分で計算している)"
+        }
+      ]
+    },
+    {
+      "id": 77,
+      "name": "exhaust-global-ranking",
+      "prompt": "[前提: 使い切りの run の終わりの処理。起票の上限は 15 (run の指定)。起票の条件を満たす候補は、wave 1・2 の 20 件 (medium と low) と wave 3 の high 2 件。同じ原因で同じ直し方になる組は無い] 起票まで進めて",
+      "expected_output": "全 wave の後に、候補の全体を深刻度・確度・単位の番号の順に並べ、上から 15 件を起票する。wave 3 の high 2 件を含める。残りの 7 件は not_filed に理由 issue_cap で残し、次の run に持ち越さない。原因の違う所見を 1 件に束ねない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "highs-included",
+          "text": "wave 3 の high 2 件を起票している"
+        },
+        {
+          "id": "cap-15",
+          "text": "起票を 15 件にし、残りの 7 件を issue_cap で残して持ち越さない"
+        },
+        {
+          "id": "no-bundling",
+          "text": "原因の違う所見を 1 件に束ねていない"
+        }
+      ]
+    },
+    {
+      "id": 78,
+      "name": "exhaust-resume-same-week",
+      "prompt": "[前提: 使い切りの run (監査役 Codex) が wave 3 の途中で中断した。段は auditing。読み直した Codex の週の reset の時刻は state と同じ。wave 3 の単位のうち 2 つに codex-run の記録がある] 中断した sweep を再開して",
+      "expected_output": "記録した Codex の run を先に回収し、done.txt の無い run は起動し直さずに人に返す。同じ週の window なので、state の対象の tool・止める線・起票の上限と起票の累計を保って続ける。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "collect-first",
+          "text": "記録した Codex の run を、起動し直す前に回収している"
+        },
+        {
+          "id": "keeps-settings",
+          "text": "state の対象の tool・止める線・起票の上限を保って続けている"
+        }
+      ]
+    },
+    {
+      "id": 79,
+      "name": "exhaust-resume-week-reset",
+      "prompt": "[前提: 前の週に始めた使い切りの run が、段 auditing のまま残っている。対象の tool の週の reset の時刻を過ぎた] 中断した sweep を再開して",
+      "expected_output": "週の window が変わったので、続けない。state を新しい週の枠を使う許可にしない。新しい週の枠を使うかを聞き、使うなら新しい一言 (対象の tool と止める線) を求める。使わないなら wave を足さずに終わりの処理だけを行う。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-auto-continue",
+          "text": "そのまま続けていない"
+        },
+        {
+          "id": "asks-new-week",
+          "text": "新しい週の枠を使うかを聞き、使うなら新しい一言を求めている"
+        }
+      ]
+    },
+    {
+      "id": 80,
+      "name": "exhaust-resume-finishing",
+      "prompt": "[前提: 使い切りの run が、段 finishing (終わりの処理中) で中断した。同じ週の window で、週の枠は止める線まで 20 残る] 中断した sweep を再開して",
+      "expected_output": "終わりの処理から続け、wave を足さない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-wave-added",
+          "text": "wave を足していない"
+        },
+        {
+          "id": "continues-finishing",
+          "text": "終わりの処理から続けている"
+        }
+      ]
+    },
+    {
+      "id": 81,
+      "name": "exhaust-ledger-order",
+      "prompt": "[前提: 前の使い切りの run (対象の commit A) で、台帳の 48 組のうち 30 組を監査し、18 組は wave に割り当てずに残った。A の後の変更は scripts/lib の file だけ] personal-maintenance-sweep、claude-code の週の枠を使い切りで",
+      "expected_output": "台帳の順番は、前の run で残った 18 組、次に A の後に変更のある scripts/lib の監査済みの組、最後に前の run で監査して変更の無い組。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "untouched-first",
+          "text": "前の run で残った 18 組を先に割り当てている"
+        },
+        {
+          "id": "changed-next",
+          "text": "次に、A の後に変更のある scripts/lib の組を置いている"
+        },
+        {
+          "id": "unchanged-last",
+          "text": "前の run で監査して変更の無い組を最後にしている"
+        }
+      ]
+    },
+    {
+      "id": 82,
+      "name": "exhaust-remaining-phrase",
+      "prompt": "[前提: Claude Code の session。両方の残量は読めて、Codex の週の使用率は 50%] personal-maintenance-sweep、codex の週の枠を残り 10% まで使い切りで",
+      "expected_output": "「残り 10% まで」は、止める線を Codex の週の使用率 90% とする。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "line-90",
+          "text": "止める線を使用率 90% にしている"
+        }
+      ]
+    },
+    {
+      "id": 83,
+      "name": "exhaust-cap-out-of-range",
+      "prompt": "personal-maintenance-sweep、claude-code の週の枠を使い切りで、起票 30 件まで",
+      "expected_output": "起票の上限が 1〜20 の外なので、20 件に丸めずに、始める前に 1 回聞き返す。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "asks-cap",
+          "text": "上限を 1 回聞き返し、20 件に丸めて始めていない"
+        }
+      ]
+    },
+    {
+      "id": 84,
+      "name": "exhaust-line-below-usage",
+      "prompt": "[前提: Claude Code の session。両方の残量は読めて、Claude の週の使用率は 45%] personal-maintenance-sweep、claude-code の週の使用率 30% まで使い切りで",
+      "expected_output": "止める線 (30%) が今の使用率 (45%) 以下なので、始めずに止める線を聞き返す。今の使用率などに置き換えて始めない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "asks-line",
+          "text": "始めずに止める線を聞き返している"
+        },
+        {
+          "id": "no-round",
+          "text": "止める線を今の使用率などに置き換えて始めていない"
+        }
+      ]
+    },
+    {
+      "id": 85,
+      "name": "exhaust-role-conflict",
+      "prompt": "personal-maintenance-sweep、codex の週の枠を使い切りで。監査は Claude がやって",
+      "expected_output": "使い切る tool (Codex) と監査役の指定 (Claude) が食い違う。使い切りで枠を使うのは監査役なので、どちらを優先するかを始める前に 1 回聞く。推測で選ばない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "asks-priority",
+          "text": "どちらを優先するかを 1 回聞き、答える前に始めていない"
+        },
+        {
+          "id": "no-guess",
+          "text": "どちらかを推測で選んでいない"
+        }
+      ]
     }
   ]
 }

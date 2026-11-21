@@ -160,6 +160,9 @@ personal-maintenance-sweep の追跡 Issue です。close しません。本文�
   (所見 #A、round N <verdict>)」と、直さなかった所見の件数と理由 (印なし / 範囲外 / 既存の PR / 上限 / review
   未収束 / 確かめ直しで不成立)。**残量の数字と、security の
   所見の中身は書かない**。proposal と比較から出た所見は、このコメントに 1 行ずつまとめる。
+- 使い切りの run (`SKILL.md` 手順 8) では、本文の「次の run に回した単位」の行を「残した組: <数> (<観点>: <数>、…)」に
+  する (組を並べない)。表の「見た範囲」には、その観点で監査した領域の数と台帳の領域の数を書く (例: `5 / 8 領域`)。run のコメントには、プリセットの名前の代わりに、使い切りであることと対象の tool、wave の数、止めた
+  理由 (止める線 / 5h / 検証役 / 台帳が尽きた / 週の window) を書く。止める線の値は書かない。
 
 ## 所見の Issue
 
@@ -208,6 +211,9 @@ personal-maintenance-sweep の run `<run id>` で起票 (観点: <観点> / 種�
   次の 2 行にする。検証役が確かめたように書かない (#623)。
   - `- 反証: 省略 (AI の判断を含まない決まった規則の検査。personal-upstream-pin-check)`
   - `- 検査の根拠: <所見の evidence (GitHub の API の tree で比べた blob の hash) と、検査した参照元の先頭の commit>`
+- 使い切りの run でまとめた所見 (`SKILL.md` 手順 4 と 7) は 1 件の Issue にする。「## 場所」に、代表とまとめた所見の
+  場所をすべて書き、fingerprint の marker を、代表とまとめた所見の fingerprint ごとに 1 行ずつ書く (上の「既存の記録を
+  読む」は、本文の marker をすべて拾う)。主張と影響は代表のもので書き、根拠には、まとめた所見の根拠を足す。
 - `no-contention` の marker は、triage で「論点なし」の印が付いた所見だけに書く (付かなければ行ごと省く)。fix モードは
   この marker で候補を抽出し、着手の直前に適格性を確かめ直す (`FIX.md`)。
 - fingerprint に `-->` を含めない (含むなら、場所の key から単位の名前を除いた形にする)。
@@ -261,9 +267,12 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/agent-tools/maintenance-sweep/<owner>/<rep
     units/<n>/codex-run       Codex に監査させたときの run dir の path (1 行。起動の前に書く。#421)
     refute-run                Codex に反証させたときの run dir の path (1 行。起動の前に書く。#421)
     refutation.json           反証の結果 (refutation.schema.json の形。所見の ID は U<n>-<元の ID>。REFUTE.md)
+    batches/<k>/<j>/refute-run       使い切りの run で、wave k の反証の batch の j 本目の起動の記録 (refute-run と同じ形。
+                                     j は 1 からの通しで、分けなければ 1 だけ。REFUTE.md の「使い切りの run の batch」)
+    batches/<k>/<j>/refutation.json  その起動の反証の結果 (使い切りの run は、上の refute-run と refutation.json を使わない)
 ```
 
-`codex-run` と `refute-run` は、再開で Codex を起動し直す前に読みます (`SKILL.md` の「中断した run を再開する」)。
+`codex-run` と `refute-run` (使い切りの run では `batches/<k>/<j>/refute-run`) は、再開で Codex を起動し直す前に読みます (`SKILL.md` の「中断した run を再開する」)。
 記録した run dir に `done.txt` が無ければ、Codex がまだ動いているとして起動し直しません。
 
 配備済みの `personal-codex-launch` で起動するとき (#672) は、run dir の名前を script が決めます。起動の前に記録する
@@ -328,6 +337,50 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
   `done` にしたときは置かない)。所見は反証にかけないので、保存したら単位は `refuted` になる。消費は残さない。
 - 単位が終わるたびに書き直す。中断しても、`status` が `done` でない単位から再開できる。
 - 新しい run を始める前に `latest-run` の run を見て、`done` でない単位があれば再開するかを確認する。
+
+使い切りの run (`SKILL.md` の「発火とモード」。#411) の `state.json` は、上の項目に加えて `exhaust` を持ち、`preset` は
+`null` にします。消費 (`consumption`) は、単位ごとではなく wave と batch ごとに残します。
+
+```json
+{
+  "exhaust": {
+    "target_tool": "claude-code",
+    "stop_line_pct": 100,
+    "weekly_resets_at": "2026-10-08T00:00:00+09:00",
+    "issue_cap": { "value": 15, "source": "run" },
+    "phase": "auditing",
+    "ledger": [
+      { "dimension": "correctness", "area": "scripts/tests", "status": "audited", "unit": 3 },
+      { "dimension": "security", "area": "scripts/tests", "status": "pending", "unit": null }
+    ],
+    "waves": [ { "k": 1, "units": [3, 4, 5, 6, 7, 8], "status": "refuting" } ],
+    "batches": [ { "k": 1, "parts": 2, "findings": ["U3-F01", "U5-F02"], "status": "running" } ],
+    "merged": [ { "id": "U7-F01", "into": "U3-F01" } ]
+  },
+  "consumption": [
+    { "wave": 1, "tool": "claude-code", "window": "weekly", "role": "audit", "before_used_pct": 40, "after_used_pct": 52 },
+    { "batch": 1, "tool": "codex", "window": "weekly", "role": "refute", "before_used_pct": 20, "after_used_pct": 23 }
+  ]
+}
+```
+
+- `target_tool` は対象の tool、`stop_line_pct` は止める線 (週の使用率)、`weekly_resets_at` は始めたときに読んだ対象の
+  tool の週の reset の時刻 (途中と再開での、週の window の変化の判定に使う)。
+- `issue_cap` の `source` は `run` (一言の指定) / `config` (設定の `issue_cap`) / `default` (既定の 5)。
+- `phase` は `auditing` (監査中) → `finishing` (終わりの処理中) → `done` (完了)。`finishing` に移ったら、`auditing` に
+  戻さない。
+- `ledger` は台帳 (`BUDGET.md` の「使い切りのモード」) を割り当ての順に並べたもの。`status` は `pending` (wave に割り当てて
+  いない) / `assigned` (wave に割り当てて監査中) / `audited` (監査を終えた)。`unit` は割り当てた単位の番号。
+- `waves` の `status` は `running` (監査中) → `audited` (監査を終えた) → `refuting` (batch が走っている) → `refuted`
+  (batch を回収した)。
+- `batches` の `findings` は、その batch にかけた代表の所見の ID。`parts` は起動を分けた数 (`batches/<k>/<j>/` の j の数)。
+  `status` は `running` → `collected`。
+- `merged` は、まとめた所見 (`id`) と、まとめた先の代表 (`into`)。代表の判定を、まとめた所見にも当てる (`REFUTE.md`)。
+- `consumption` の `role` は、wave の監査が `audit`、batch の反証が `refute`、Codex を使い切る run の Claude の進行
+  (batch の外の区間の前と後) が `orchestration`、終わりの処理の Claude の分が `finish`。
+- 単位の `units` と `status` は、通常の run と同じく持つ (番号は wave をまたいで通し)。
+- `latest-run` は通常の run と同じく更新する (監査をした run なので)。前の使い切りの run は、`runs/` の下の state の
+  うち `exhaust` を持つ最新のものとして探す (`BUDGET.md` の台帳の順番)。
 
 fix モードの入口 (b) (起票済みの所見から。`FIX.md`) の run は監査をしないので、run dir (`runs/<run id>/`) は
 修正の worktree の置き場として作り、`state.json` には次の最小の形だけを書きます。`roles`・`preset`・`budget`・
