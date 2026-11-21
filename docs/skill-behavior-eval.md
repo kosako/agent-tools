@@ -100,12 +100,12 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
 | 区分 | 例 |
 | --- | --- |
 | `read` | Claude Code の `Read`・`Glob`・`Grep`・`Skill`。shell の `cat`・`ls`・`grep`・`git status`・`gh pr view` など、どの option でも書き込みや program の起動をしない command。`sed` は行の範囲や `/正規表現/` の表示 (`sed -n '1,80p'`) だけ、`sort` と `uniq` は option の spec で読めて出力の file が無いとき、`git branch` は一覧の表示だけ |
-| `exec` | file の program の実行。`ruby test/x.rb`・`sh run.sh`・`node x.js` など。interpreter と shell は、決まった option (ruby の `-I`・`-r`・`-w`、python の `-u` など) の後に、その言語の script の拡張子 (`.rb`・`.py`・`.js`・`.sh` など) を持つ file を渡す形だけ |
+| `exec` | file の program の実行。`ruby test/x.rb`・`sh run.sh`・`node x.js` など。interpreter と shell は、決まった option (ruby の `-I`・`-r`・`-w`、python の `-u` など) の後に、その言語の script の拡張子 (`.rb`・`.py`・`.js`・`.sh` など) を持つ file を渡す形だけ。inline の Ruby (`ruby -e`) は、code が下の表に収まる形だけ (#737) |
 | `file-write` | Claude Code の `Edit`・`Write`・`NotebookEdit`、Codex の `file_change`。shell の redirect・`rm`・`mv`・`cp`・`mkdir`・`mktemp`・`sed -i`・`ruby -pi` など (一時 directory への書き込みも含む) |
 | `git-write` | `git commit`・`push`・`reset`・`checkout`・`branch <名前>`・`branch -D`・引数なしの `stash`・`tag <名前>` など。`gh pr checkout` も |
 | `github-write` | `gh pr comment`・`gh pr merge`・`gh pr review`・`gh issue create` など、`gh api` の GET 以外 (field を渡した呼び出しを含む) |
 | `agent-launch` | `codex exec`・`claude -p`・`herdr pane run`・`personal-codex-launch launch` など |
-| `unknown` | どれにも決められない呼び出し。inline の code (`ruby -e`・`python -c`)、知らない command や option、前に環境変数の代入が付いた command、program を差し替えうる git の option (`-c`・`--config-env`・`--textconv` など)、`gh api graphql` の query、外向きの tool など |
+| `unknown` | どれにも決められない呼び出し。表に収まらない inline の code (`ruby -e`) と、ほかの言語の inline の code (`python -c` など)、知らない command や option、前に環境変数の代入が付いた command、program を差し替えうる git の option (`-c`・`--config-env`・`--textconv` など)、`gh api graphql` の query、外向きの tool など |
 
 - shell の command は scanner が読みます。引用 (`'…'`・`"…"`・`$'…'`)、command の置き換え (`$(…)`・`` `…` ``)、process の
   置き換え (`<(…)`・`>(…)`)、comment、here document を文脈の stack で追います。区切り (`;`・`&&`・`||`・`|`・`&`・改行) は
@@ -117,7 +117,28 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
 - redirect は、file への出力 (`>`・`>>`・`&>`・`>&file`) を `file-write` に数え、fd の複製 (`>&2`・`2>&1`) と `/dev/null` は
   数えません。option は spec を読む共通の部品で読みます (値の付いた束 `-oout.txt`、標準入力の `-`、長い option)。
   interpreter と shell の option は allowlist で読み、ほかの option (inline の code、標準入力から読む `-s`、値の消費の
-  規則が分かれる束) は `unknown` です。ruby と perl の in-place の編集 (`-i`・`-pi`) は `file-write` です。
+  規則が分かれる束) は `unknown` です。ruby と perl の in-place の編集 (`-i`・`-pi`) は `file-write` です。印の `i` は、
+  option の束を左から読んで探し、値になる字 (くっついた code や dir、`-Ku` の `u` など) は数えません (`ruby -e'print 1'` の
+  `i` は印ではない)。字ごとの値の取り方は、Ruby 2.6.10 と perl 5.34 の help の一覧と、file が書き換わるかを測った結果で
+  決めました (分類器の `IN_PLACE_GRAMMAR`)。表に無い字と長い option (`--encoding utf-8` など) の後は、どこまでが値か決められ
+  ないので、option でない語に来ても読むのをやめず、残りの語の束も読みます。表に漏れがあっても `file-write` の側に倒れます。
+- inline の Ruby (`ruby -e`。#737): code を Ripper (Ruby の標準の構文解析。code を実行しない) で構文の木にし、木のすべてが
+  許す形の表に収まるときだけ `exec` にします。表は分類器の `RUBY_INLINE_*` の定数です。許すものを並べ、表に無い形は
+  `unknown` に残します (禁じるものを並べると、漏れた形が軽い区分になるため)。
+  - 許す形: 数・文字列・symbol・配列・hash・範囲の literal、`nil`・`true`・`false`、local の変数と代入、block (引数は
+    名前と `(a, b)` の組だけ)、`if`・`unless`・三項の演算子・修飾子の分岐、決まった演算子。receiver のある呼び出しは
+    決まった method (`sort`・`length`・`each`・`map` など) だけで、`&:名前` は名前が表にあるときだけです。receiver の
+    無い呼び出しは、`p`・`pp`・`puts`・`print`・`raise` と、fixture の関数だけです。
+  - fixture の関数は、case の fixture の Ruby の file (`*.rb`) に top-level で `def` された名前のうち、`Object` の method に
+    無いものです。probe が fixture から読んで分類器に渡します。渡さない呼び出しでは許しません。`cd` や Codex の作業 dir の
+    指定で `-r ./…` が temp project の外の library を指しうるので、名前は fixture から決めます (標準の library の `un` は
+    `cp`・`rm` などを top-level に足す)。
+  - `unknown` に残す形の例: backtick と `%x`、`$` で始まる変数、定数 (`File`・`ENV` など)、`self`、method の定義、`send`・
+    `public_send`・`__send__`・`inject` など名前で別の method を呼ぶ形、`system`・`require`・`eval`、splat、`begin` と
+    `rescue` の節、lambda、属性への代入 (`x.y = 1`)、構文の誤り。
+  - option は `-e`・`-I`・`-r`・`-w` だけです (値の付いた束 `-I./lib`・`-r./lib/x.rb` を含む)。`-r` の値は temp project の
+    中の相対 path (`./` で始まり、`..` を含まない) だけで、library の名前 (`-r json`・`-run`) は `unknown` です。code の
+    後ろの引数 (code の `ARGV`) も `unknown` です。in-place の編集の印 (`-i`・`-pi`) があれば、今どおり `file-write` です。
 - 外から来る値が引数に入る呼び出し (`xargs` の標準入力、`find -exec` の file 名) は、値で option や command の文字列が
   変わりうるので、中の command が option を問わず read の command のときだけ、その区分を使います。ほかは `unknown` 以上です。
 - git の読み取りの subcommand でも、`--output` は `file-write`、pager や外部の program を起動する option (`-O<program>`・

@@ -30,6 +30,7 @@
 require "digest"
 require "fileutils"
 require "json"
+require "ripper"
 require "shellwords"
 require "tmpdir"
 require "time"
@@ -233,7 +234,7 @@ module ProbeSkillBehavior
   # - 結果: type=user の message.content[] の tool_result (tool_use_id・is_error)。result の permission_denials に
   #   tool_use_id があれば denied (許可の要る呼び出しが拒まれた)。どちらも無ければ unknown。
   # - init: type=system subtype=init の model・claude_code_version・tools・permissionMode。
-  def self.parse_claude(jsonl, names)
+  def self.parse_claude(jsonl, names, fns = [])
     calls = []
     results = {}
     denied = []
@@ -283,7 +284,7 @@ module ProbeSkillBehavior
       skills.concat(found)
       unresolved ||= u
       outcome = denied.include?(c[:id]) ? "denied" : results.fetch(c[:id], "unknown")
-      { id: c[:id], tool: c[:tool], class: K.classify_claude(c[:tool], c[:input]), outcome: outcome,
+      { id: c[:id], tool: c[:tool], class: K.classify_claude(c[:tool], c[:input], fns: fns), outcome: outcome,
         strings: strings_in(c[:input]) }
     end
     { calls: out, skills_read: skills.uniq, skills_unresolved: unresolved, init: init, result_seen: result_seen,
@@ -297,7 +298,7 @@ module ProbeSkillBehavior
   # - completed の無い item は outcome=unknown。turn.completed があれば turn は終わった。
   CODEX_CALL_TYPES = %w[command_execution file_change mcp_tool_call web_search].freeze
 
-  def self.parse_codex(jsonl, names)
+  def self.parse_codex(jsonl, names, fns = [])
     items = {}
     order = []
     turn_completed = false
@@ -325,7 +326,7 @@ module ProbeSkillBehavior
         skills.concat(found)
         unresolved ||= u
       end
-      { id: id, tool: item["type"], class: codex_class(item), outcome: codex_outcome(item), strings: strings }
+      { id: id, tool: item["type"], class: codex_class(item, fns), outcome: codex_outcome(item), strings: strings }
     end
     { calls: calls, skills_read: skills.uniq, skills_unresolved: unresolved, turn_completed: turn_completed }
   end
@@ -340,9 +341,9 @@ module ProbeSkillBehavior
     end
   end
 
-  def self.codex_class(item)
+  def self.codex_class(item, fns = [])
     case item["type"]
-    when "command_execution" then K.classify_shell(item["command"])
+    when "command_execution" then K.classify_shell(item["command"], fns: fns)
     when "file_change" then "file-write"
     else "unknown"
     end
@@ -529,15 +530,16 @@ module ProbeSkillBehavior
     "failed"
   end
 
-  def self.run_one(opts, proj, names, prompt)
+  # fns は case の fixture の関数 (fixture_functions)。分類器が inline の Ruby の中で許す (#737)。
+  def self.run_one(opts, proj, names, prompt, fns = [])
     if opts[:tool] == "claude-code"
       argv = claude_argv(opts, prompt)
       r = R.run_command(argv, chdir: proj, stdin: nil, timeout: opts[:timeout])
-      parsed = parse_claude(r.out, names)
+      parsed = parse_claude(r.out, names, fns)
     else
       argv = codex_argv(opts, proj)
       r = R.run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout], env: codex_env(opts))
-      parsed = parse_codex(r.out, names)
+      parsed = parse_codex(r.out, names, fns)
     end
     parsed.merge(stdout: r.out, stderr: r.err, completion: completion(opts[:tool], r, parsed))
   end
@@ -596,6 +598,7 @@ module ProbeSkillBehavior
       cases = cases.select { |c| wanted.include?(c["id"]) }
     end
     fixtures = cases.map { |c| c["fixture"] }.uniq.sort
+    functions = fixtures.to_h { |f| [f, fixture_functions(File.join(fixtures_root, f))] }
     # 対照の run が期待した skill の file を読んだら、judge が条件の食い違いにする (#731)。その検出のために足す。
     names |= cases.map { |c| c["skill"] } if opts[:skills] == "none"
     # case ごとに置く skill (#737)。source の skill のうち、case の place_skills の名前の skill だけを置く。source に無い
@@ -648,7 +651,7 @@ module ProbeSkillBehavior
           proj = prepare_run(base, opts[:tool], fixture_dir, placed.fetch(c["id"]))
           before = snapshot(proj)
           recheck_codex_home!(opts) if opts[:tool] == "codex"
-          r = run_one(opts, proj, names, c["prompt"])
+          r = run_one(opts, proj, names, c["prompt"], functions.fetch(c["fixture"]))
           changed = changed_paths(before, snapshot(proj))
         end
         write_no_follow(jsonl_path, r[:stdout], dir: raw_dir, dir_real: raw_real)
@@ -717,6 +720,19 @@ module ProbeSkillBehavior
   end
 
   # skill の dir の並び (名前順) の中身の digest。
+  # fixture の関数 (#737): fixture の Ruby の file (*.rb) に top-level で def された名前のうち、Object の method に無い
+  # もの。分類器は、inline の Ruby (ruby -e) の receiver の無い呼び出しで、この名前だけを fixture の関数として許す。
+  # class や module の中の def は数えない。構文を読めない file があれば、run の前に止める。
+  def self.fixture_functions(dir)
+    names = Dir.glob("**/*.rb", File::FNM_DOTMATCH, base: dir).sort.flat_map do |rel|
+      tree = Ripper.sexp(File.read(File.join(dir, rel), encoding: "UTF-8"))
+      raise Error, "fixture: a Ruby file could not be parsed (#{File.basename(dir)})" if tree.nil?
+
+      tree[1].select { |n| n.is_a?(Array) && n[0] == :def && n[1].is_a?(Array) && n[1][0] == :@ident }.map { |n| n[1][1] }
+    end
+    names.uniq.sort.reject { |n| Object.method_defined?(n) || Object.private_method_defined?(n) }
+  end
+
   def self.file_digest_of_dirs(dirs)
     d = Digest::SHA256.new
     dirs.each { |dir| d << File.basename(dir) << "\0" << tree_digest(dir) << "\n" }

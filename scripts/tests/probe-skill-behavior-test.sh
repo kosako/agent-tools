@@ -50,7 +50,7 @@ shell = {
   "ruby -Ilib test/median_test.rb" => "exec",
   "ruby -rminitest/autorun test/median_test.rb" => "exec",
   "ruby -Ilib -e 'p median([1, 2])'" => "unknown",
-  "ruby -e'p 1'" => "unknown",
+  "ruby -e'p 1'" => "exec",   # inline の Ruby は、許す形の表に収まれば exec (#737。下の ruby_inline の表)
   "ruby -pi -e s/a/b/ lib/median.rb" => "file-write",
   "ruby" => "unknown",
   "python3 -c 'print(1)'" => "unknown",
@@ -368,6 +368,137 @@ shell.each do |cmd, want|
   got = P.classify_shell(cmd)
   check("classify_shell(#{cmd.inspect}) は #{want} (実際は #{got})", got == want)
 end
+
+# inline の Ruby (ruby -e。#737)。code を構文の木にし、許す形の表に収まるときだけ exec。fixture の関数 (fns) は、
+# 渡したときだけ、その名前の receiver の無い呼び出しを許す。表に無い形・option は unknown に残す。
+sq = 39.chr
+inline = ->(code, opts = "") { "ruby #{opts}-e #{sq}#{code}#{sq}" }
+fx = ["median"]
+ruby_inline = [
+  # 受け付ける形
+  [inline.("p 1"), [], "exec"],
+  [inline.('p [1, 1.5, "ok", :ok, nil, true, false, {a: 2}, (1..3), (1...3)]'), [], "exec"],
+  [inline.("xs = [2, 1]; ys = xs.sort; p ys.length; p ys[0]; p(ys == [1, 2])"), [], "exec"],
+  [inline.('if true; puts "yes"; elsif false; p 2; else; raise "no"; end; unless false; p 1; end; p(true ? 1 : 2)'), [], "exec"],
+  [inline.('raise "no" unless true; puts "yes" if true'), [], "exec"],
+  [inline.("[2, 1].each { |x| p x }; [[1, 2]].each { |(a, b)| p a + b }"), [], "exec"],
+  [inline.("[3].each do |v| puts v end"), [], "exec"],
+  [inline.("p [[1], [2]].map(&:length)"), [], "exec"],
+  [inline.("x = 1; x += 2; h = {}; h[:a] = x; p h, a: 1"), [], "exec"],
+  [inline.('p "a#{1 + 2}b"'), [], "exec"],
+  [inline.("p(-1.abs, !true, 1 <=> 2, [1]&.first)"), [], "exec"],
+  ["ruby -e #{sq}x = 1#{sq} -e #{sq}p x#{sq}", [], "exec"],
+  [inline.("p median([1, 2])", "-r ./lib/median "), fx, "exec"],
+  [inline.("p median([1])", "-w -I ./lib -r ./lib/median.rb "), fx, "exec"],
+  [inline.("p median([1])", "-I./lib -r./lib/median.rb -w "), fx, "exec"],
+  ["/bin/zsh -lc \"ruby -r ./lib/median -e #{sq}p median([1])#{sq}\"", fx, "exec"],
+  # fixture の関数は、渡した名前だけ
+  [inline.("p median([1, 2])", "-r ./lib/median "), [], "unknown"],
+  [inline.('cp "a", "b"', "-r ./lib/median "), fx, "unknown"],
+  # 表に無い構文・呼び出し
+  [inline.("`printf x`"), [], "unknown"],
+  [inline.("%x(printf x)"), [], "unknown"],
+  [inline.("p $stdout"), [], "unknown"],
+  [inline.("$x = 1"), [], "unknown"],
+  [inline.("p File"), [], "unknown"],
+  [inline.("p ENV"), [], "unknown"],
+  [inline.('File.write("x", "y")'), [], "unknown"],
+  [inline.("def f; 1; end"), [], "unknown"],
+  [inline.("p [].send(:sort)"), [], "unknown"],
+  [inline.("p [].public_send(:sort)"), [], "unknown"],
+  [inline.("p [].__send__(:sort)"), [], "unknown"],
+  [inline.("p [1].inject(:+)"), [], "unknown"],
+  [inline.("p [].method_not_in_the_table"), [], "unknown"],
+  [inline.("p [1].map(&:system)"), [], "unknown"],
+  [inline.("b = 1; p [1].map(&b)"), [], "unknown"],
+  [inline.('system("x")'), [], "unknown"],
+  [inline.('require "json"'), [], "unknown"],
+  [inline.('eval("1")'), [], "unknown"],
+  [inline.("exit"), [], "unknown"],
+  [inline.('[1].map { |x| system("x") }'), [], "unknown"],
+  [inline.("if false; p File; end"), [], "unknown"],
+  [inline.('p "#{system("x")}"'), [], "unknown"],
+  [inline.("x = ("), [], "unknown"],
+  [inline.("p self"), [], "unknown"],
+  [inline.("p __FILE__"), [], "unknown"],
+  [inline.("x = [1]; x.first = 1"), [], "unknown"],
+  [inline.("p [*[1]]"), [], "unknown"],
+  [inline.("[1].each { |a, *b| p a }"), [], "unknown"],
+  [inline.("[1].each { |a = 1| p a }"), [], "unknown"],
+  [inline.("begin; p 1; rescue; p 2; end"), [], "unknown"],
+  [inline.(%q{[1].each do |v| p v; rescue; system("x"); end}), [], "unknown"],
+  [inline.(%q{[1].each do |v| p v; ensure; system("x"); end}), [], "unknown"],
+  [inline.("f = -> { 1 }"), [], "unknown"],
+  [inline.("p 1", "-r json "), [], "unknown"],
+  [inline.("p 1", "-rjson "), [], "unknown"],
+  [inline.("p 1", "-r ../x.rb "), [], "unknown"],
+  [inline.("p 1", "-r ./lib/../x.rb "), [], "unknown"],
+  [inline.("p 1", "-r /tmp/x.rb "), [], "unknown"],
+  ["ruby -run -e cp", fx, "unknown"],
+  ["ruby -r un -e cp", fx, "unknown"],
+  [inline.("p 1", "-C ./lib "), [], "unknown"],
+  [inline.("p 1", "-n "), [], "unknown"],
+  [inline.("p 1", "-W0 "), [], "unknown"],
+  ["ruby -we #{sq}p 1#{sq}", [], "unknown"],
+  ["ruby -e", [], "unknown"],
+  ["#{inline.('p 1')} arg", [], "unknown"],
+  ["#{inline.('p 1')} -- x", [], "unknown"],
+  # in-place の編集と redirect は今の規則のまま
+  ["ruby -i -e #{sq}p 1#{sq} lib/median.rb", [], "file-write"],
+  ["ruby -pi -e #{sq}p 1#{sq} lib/median.rb", [], "file-write"],
+  ["#{inline.('p 1')} > out.txt", [], "file-write"],
+  # code をくっつけた -e の中の i を、in-place の編集の印に数えない (review の round 1)。束の i と、値をとる字の後ろは今どおり
+  ["ruby -e#{sq}print 1#{sq}", [], "exec"],
+  ["ruby -e#{sq}raise \"x\" if 1 == 2#{sq}", [], "exec"],
+  [inline.("-1.abs.times { |i| p i }"), [], "exec"],
+  ["ruby -pie s/a/b/ lib/median.rb", [], "file-write"],
+  ["ruby -i.bak -e #{sq}p 1#{sq} lib/median.rb", [], "file-write"],
+  ["ruby -0i -e #{sq}p 1#{sq} lib/median.rb", [], "file-write"],
+  [inline.("p 1", "-W:no-deprecated "), [], "unknown"],
+  [inline.("p 1", "--disable-gems "), [], "unknown"],
+  ["perl -lpi -e #{sq}s/a/b/#{sq} f", [], "file-write"],
+  ["perl -0777 -pi -e s/a/b/ f", [], "file-write"],
+  ["perl -le #{sq}print 1#{sq}", [], "unknown"],
+  ["perl -Mstrict -e 1", [], "unknown"],
+  # option の束の字の値の取り方 (review の round 2)。Ruby 2.6.10 と perl 5.34 で、各字の後ろに -pi を置いて file が書き換わる
+  # かを測った。書き換わった形は file-write、書き換わらなかった形 (i が値の一部) は file-write にしない
+  ["ruby -W0i -pe 1 f", [], "file-write"], ["ruby -W -pi -e 1 f", [], "file-write"],
+  ["ruby -Kui -pe 1 f", [], "file-write"], ["ruby -K -pi -e 1 f", [], "file-write"], ["ruby -Ki -pe 1 f", [], "unknown"],
+  ["ruby -F -pi -e 1 f", [], "file-write"], ["ruby -Fi -pe 1 f", [], "unknown"],
+  ["ruby -x -pi -e 1 f", [], "file-write"], ["ruby -xi -pe 1 f", [], "unknown"],
+  ["ruby -077i -pe 1 f", [], "file-write"], ["ruby -Ii -pe 1 f", [], "unknown"], ["ruby -C -pi -e 1 f", [], "unknown"],
+  ["perl -C -pi -e 1 f", [], "file-write"], ["perl -Ci -pe 1 f", [], "unknown"],
+  ["perl -D -pi -e 1 f", [], "file-write"], ["perl -F -pi -e 1 f", [], "file-write"], ["perl -Fi -pe 1 f", [], "unknown"],
+  ["perl -I -pi -e 1 f", [], "unknown"], ["perl -Ii -pe 1 f", [], "unknown"], ["perl -Mi -pe 1 f", [], "unknown"],
+  ["perl -li -pe 1 f", [], "file-write"], ["perl -0i -pe 1 f", [], "file-write"],
+  # review の round 3。値の範囲を決められない option (表に無い字・長い option) の後は、残りの語の束も読む。perl の -dpi は
+  # review が測り、ほかの file-write の形は Ruby 2.6.10 と perl 5.34 で file が書き換わることを測った
+  ["perl -dpi -e 1 f", [], "file-write"], ["ruby -X . -pi -e 1 f", [], "file-write"],
+  ["ruby --encoding utf-8 -pi -e 1 f", [], "file-write"], ["ruby --verbose -pi -e 1 f", [], "file-write"],
+  ["ruby -U -pi -e 1 f", [], "file-write"], ["perl -V:osname -pi -e 1 f", [], "file-write"],
+  ["ruby -Q -pi -e 1 f", [], "file-write"], ["ruby -Q . -pi -e 1 f", [], "file-write"],
+  ["ruby -Qi -e 1 f", [], "file-write"], ["ruby --verbose -e 1 -- -pi f", [], "file-write"],
+  # ruby の -X は -C と同じく次の語を取る (ruby -X -pi は -pi に chdir しようとして止まる)。値をとらない字は範囲を決められない印を
+  # 立てないので、script の後ろの -pi (script の引数) は数えない
+  ["ruby -X -pi -e 1 f", [], "unknown"], ["ruby -w test/a.rb -pi f", [], "exec"], ["perl -w x.pl -pi f", [], "exec"],
+  ["ruby -n test/a.rb -pi f", [], "unknown"], ["perl -n x.pl -pi f", [], "unknown"],
+  # review の round 4。perl の -V は、直後が : のときだけ束の残りが値 (-Vpi の p・i は option)。束の残りを値に取る字の後ろに
+  # pi をくっつけた形も測った (file が書き換わったのは -Vpi と -Kupi だけ)
+  ["perl -Vpi -e 1 f", [], "file-write"], ["perl -V:osnamei -pe 1 f", [], "unknown"], ["perl -V:i -pe 1 f", [], "unknown"],
+  ["perl -Mpi -e 1 f", [], "unknown"], ["perl -mpi -e 1 f", [], "unknown"], ["perl -Fpi -e 1 f", [], "unknown"],
+  ["perl -xpi -e 1 f", [], "unknown"], ["perl -Cpi -e 1 f", [], "unknown"], ["perl -Dpi -e 1 f", [], "unknown"],
+  ["perl -Ipi -e 1 f", [], "unknown"], ["ruby -Fpi -e 1 f", [], "unknown"], ["ruby -xpi -e 1 f", [], "unknown"],
+  ["ruby -Cpi -e 1 f", [], "unknown"], ["ruby -Xpi -e 1 f", [], "unknown"], ["ruby -Kupi -e 1 f", [], "file-write"],
+]
+ruby_inline.each do |cmd, fns, want|
+  got = P.classify_shell(cmd, fns: fns)
+  check("classify_shell(#{cmd.inspect}, fns: #{fns.inspect}) は #{want} (実際は #{got})", got == want)
+end
+check("fns を渡さない classify_claude の Bash は fixture の関数を許さない",
+      P.classify_claude("Bash", { "command" => inline.("p median([1])", "-r ./lib/median ") }) == "unknown")
+check("classify_claude の Bash は fns を分類器に渡す",
+      P.classify_claude("Bash", { "command" => inline.("p median([1])", "-r ./lib/median ") }, fns: fx) == "exec")
+check("分類器の版は 2 (#737)", P::VERSION == 2)
 
 claude = {
   ["Read", { "file_path" => "/p/lib/median.rb" }] => "read",
@@ -811,7 +942,7 @@ unset FAKE_WRITE
   '["cases_digest","classifier_version","conditions","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
   || fail "claude ids keys: $(json_get "$res" 'd["ids"].keys.sort')"
 [ "$(json_get "$res" 'd["ids"].values_at("host_version", "init_model", "requested_model", "permission_mode", "max_turns", "repeat", "classifier_version")')" = \
-  '["9.9.9","m-fake","default","acceptEdits",12,2,1]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
+  '["9.9.9","m-fake","default","acceptEdits",12,2,2]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
 [ "$(json_get "$res" 'd["ids"]["tool_surface"]')" = \
   '{"requested":["Read","Glob","Grep","Edit","Write","NotebookEdit","Bash","Skill"],"init":"Bash,Edit,Glob,Grep,NotebookEdit,Read,Skill,Write"}' ] \
   || fail "claude tool surface: $(json_get "$res" 'd["ids"]["tool_surface"]')"
@@ -1124,6 +1255,44 @@ d1=$(digest_of)
 printf 'x\n' >> "$digest_src/personal-production-rail/SKILL.md"
 d2=$(digest_of)
 [ "$d1" != "$d2" ] || fail "a placed skill should change source_digest ($d1)"
+
+# --- fixture の関数 (#737): top-level の def の名前だけで、Object の method の名前は除く ---
+ruby -r"$script_dir/lib/check_helper" - "$src" "$tmp/fxfn" "$fixture" <<'RUBY'
+require "fileutils"
+load ARGV[0]
+P = ProbeSkillBehavior
+root = ARGV[1]
+FileUtils.mkdir_p(File.join(root, "ok", "lib"))
+File.write(File.join(root, "ok", "lib", "a.rb"),
+           "def helper(x)\n  x\nend\ndef system(*)\nend\nclass K\n  def inner; end\nend\nmodule M\n  def mod_fn; end\nend\n")
+File.write(File.join(root, "ok", "lib", "b.rb"), "def other; end\n")
+File.write(File.join(root, "ok", "notes.txt"), "def not_ruby; end\n")
+check("fixture の関数は top-level の def の名前 (class・module の中と、Object の method の名前を除く)",
+      P.fixture_functions(File.join(root, "ok")) == %w[helper other])
+check("repo の fixture median の関数は median", P.fixture_functions(ARGV[2]) == %w[median])
+FileUtils.mkdir_p(File.join(root, "bad"))
+File.write(File.join(root, "bad", "x.rb"), "def (\n")
+refused = begin
+  P.fixture_functions(File.join(root, "bad"))
+  false
+rescue ProbeSkillBehavior::Error => e
+  e.message.include?("could not be parsed")
+end
+check("構文を読めない fixture の Ruby の file は止める", refused)
+exit(@failed.zero? ? 0 : 1)
+RUBY
+inline_events="$tmp/codex-inline.jsonl"
+cat > "$inline_events" <<'EOF'
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"ruby -r ./lib/median -e 'p median([1, 2])'\"","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc \"ruby -r ./lib/median -e 'cp 1'\"","exit_code":0,"status":"completed"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}
+EOF
+res="$tmp/codex-inline.json"
+run_fake codex "$inline_events" --model m-x --only investigate-diagnose-only --codex-home "$eval_home" --out "$res"
+[ "$rc" -eq 0 ] || fail "codex probe with inline Ruby should exit 0 (rc=$rc): $out"
+[ "$(json_get "$res" 'd["runs"][0]["calls"].map { |c| c["class"] }')" = '["exec","unknown"]' ] \
+  || fail "the probe should pass the fixture functions to the classifier (#737): $(json_get "$res" 'd["runs"][0]["calls"]')"
+[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '2' ] || fail "codex ids should record classifier version 2"
 
 # prepare_run は、case の検査を経ない呼び出しでも、fixture と skill の dir の symlink を copy の前に拒む
 ruby -r"$script_dir/lib/check_helper" - "$src" "$tmp/prep" "$fixture" <<'RUBY'
