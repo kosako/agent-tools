@@ -647,10 +647,17 @@ module SkillBehaviorClassifier
     "python3" => { flags: %w[-B -E -I -O -q -s -S -u -v], values: %w[-W -X] },
     "node" => { flags: [], values: [] },
   }.freeze
-  # in-place の編集の印 (i) を探すときの、値をとる option の字。束の残り (無ければ次の語) が値になる (-e のくっついた
-  # code、-Ilib の dir など。中の i は数えない)。数字だけを値にとる字 (-0777・perl の -l) は、数字が i にも値をとる字にも
-  # ならないので、ここに入れず、値をとらない字と同じに読む (perl の -lpi の i を数える)。
-  IN_PLACE_VALUE_CHARS = { "ruby" => "eIrCEFKxW", "perl" => "eEIMmFxdDC" }.freeze
+  # in-place の編集の印 (i) を探すときの、option の束の字の値の取り方。Ruby 2.6.10 と perl 5.34 で、各字の後ろに -pi を置いて
+  # file が書き換わるかを測って決めた (#737 の review の round 2)。表に無い字は値をとらない字として読む (読み違えても、i を
+  # 数えすぎる側、つまり重い区分の側に倒れる)。
+  #   next: 束の残りが値で、残りが無ければ次の語が値 (-e のくっついた code、-Ilib の dir など)
+  #   rest: 束の残りが値で、次の語は取らない
+  #   one: 次の 1 字が値 (ruby の -Ku)
+  #   digits: 続く数字が値で、その後ろも option として読む (-0777・ruby の -W0・perl の -l)
+  IN_PLACE_GRAMMAR = {
+    "ruby" => { next: "eIrCE", rest: "Fx", one: "K", digits: "0WT" },
+    "perl" => { next: "eEI", rest: "MmFxCdD", one: "", digits: "0l" },
+  }.freeze
 
   def self.interpreter_call(name, args, fns: [])
     # ruby -e (#737)。in-place の編集の印があれば、下の今の規則で file-write にする
@@ -868,11 +875,12 @@ module SkillBehaviorClassifier
     rb_token?(x, :@ident) || (x.is_a?(Array) && %i[mlhs mlhs_paren].include?(x[0]) && x[1..].all? { |y| rb_param?(y) })
   end
 
-  # option の束を左から読み、値をとる字より前に i があれば in-place の編集 (#737。前は束の先頭の字だけを見ていて、
-  # -e のくっついた code の中の i を印に数えていた)。長い option (--…) は読み飛ばし、-- と option でない語で終える。
+  # option の束を左から読み、値になる字より前に i があれば in-place の編集 (#737。前は束の先頭の字だけを見ていて、
+  # -e のくっついた code の中の i を印に数えていた)。字の値の取り方は IN_PLACE_GRAMMAR。長い option (--…) は読み飛ばし、
+  # -- と option でない語で終える。
   def self.in_place?(name, args)
-    value_chars = IN_PLACE_VALUE_CHARS[name]
-    return false unless value_chars
+    g = IN_PLACE_GRAMMAR[name]
+    return false unless g
 
     i = 0
     while i < args.length
@@ -882,12 +890,23 @@ module SkillBehaviorClassifier
       i += 1
       next if a.start_with?("--")
 
-      a[1..].each_char.with_index(1) do |ch, k|
+      k = 1
+      while k < a.length
+        ch = a[k]
+        k += 1
         return true if ch == "i"
-        next unless value_chars.include?(ch)
 
-        i += 1 if k == a.length - 1
-        break
+        if g[:next].include?(ch)
+          i += 1 if k == a.length
+          break
+        end
+        break if g[:rest].include?(ch)
+
+        if g[:one].include?(ch)
+          k += 1
+        elsif g[:digits].include?(ch)
+          k += 1 while k < a.length && a[k].match?(/[0-9]/)
+        end
       end
     end
     false

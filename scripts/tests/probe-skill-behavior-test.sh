@@ -460,6 +460,17 @@ ruby_inline = [
   ["perl -0777 -pi -e s/a/b/ f", [], "file-write"],
   ["perl -le #{sq}print 1#{sq}", [], "unknown"],
   ["perl -Mstrict -e 1", [], "unknown"],
+  # option の束の字の値の取り方 (review の round 2)。Ruby 2.6.10 と perl 5.34 で、各字の後ろに -pi を置いて file が書き換わる
+  # かを測った。書き換わった形は file-write、書き換わらなかった形 (i が値の一部) は file-write にしない
+  ["ruby -W0i -pe 1 f", [], "file-write"], ["ruby -W -pi -e 1 f", [], "file-write"],
+  ["ruby -Kui -pe 1 f", [], "file-write"], ["ruby -K -pi -e 1 f", [], "file-write"], ["ruby -Ki -pe 1 f", [], "unknown"],
+  ["ruby -F -pi -e 1 f", [], "file-write"], ["ruby -Fi -pe 1 f", [], "unknown"],
+  ["ruby -x -pi -e 1 f", [], "file-write"], ["ruby -xi -pe 1 f", [], "unknown"],
+  ["ruby -077i -pe 1 f", [], "file-write"], ["ruby -Ii -pe 1 f", [], "unknown"], ["ruby -C -pi -e 1 f", [], "unknown"],
+  ["perl -C -pi -e 1 f", [], "file-write"], ["perl -Ci -pe 1 f", [], "unknown"],
+  ["perl -D -pi -e 1 f", [], "file-write"], ["perl -F -pi -e 1 f", [], "file-write"], ["perl -Fi -pe 1 f", [], "unknown"],
+  ["perl -I -pi -e 1 f", [], "unknown"], ["perl -Ii -pe 1 f", [], "unknown"], ["perl -Mi -pe 1 f", [], "unknown"],
+  ["perl -li -pe 1 f", [], "file-write"], ["perl -0i -pe 1 f", [], "file-write"],
 ]
 ruby_inline.each do |cmd, fns, want|
   got = P.classify_shell(cmd, fns: fns)
