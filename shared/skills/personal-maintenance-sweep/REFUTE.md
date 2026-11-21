@@ -107,6 +107,10 @@ brief には、`CODEX-LAUNCH.md` の brief の制約 (read-only、subagent な�
   並べた)。同時に走る batch は 1 つまでで、batch の中の起動は並べてよい。
 - **記録**: 起動ごとに、起動の前に `batches/<k>/<j>/refute-run` に directory を書き、結果を `batches/<k>/<j>/refutation.json`
   に置く (k は wave の番号、j は起動の通し番号。`refute-run` と `refutation.json` は使わない)。Codex のときは
-  `--label` を `refute-<run id>-<k>-<j>` にする。検証役が Claude のときも、結果を同じ場所に置く。
+  `--label` を `refute-<run id>-<k>-<j>` にし、`--effort` には `BUDGET.md` の「使い切りのモード」の値を渡す。検証役が
+  Claude のときも、結果を同じ場所に置く。
+- **単位の状態**: wave の単位を `refuted` に進めるのは、その batch のすべての起動を回収した後 (上の「結果の取り込み」の
+  単位に戻す処理は、起動ごとではなく batch ごとに行う)。照合の後に新しく残った所見が 0 件の wave は、batch を起動せずに
+  `refuted` に進める。
 - **消費**: batch の起動の前と、すべての起動を回収した後に、検証役の各 window の使った割合を読んで残す
   (`BUDGET.md` の「使い切りのモード」の 1 件あたりの反証の消費に使う)。

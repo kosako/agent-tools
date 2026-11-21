@@ -94,8 +94,10 @@ repo の定期メンテナンスを 1 run 回す手順です。全体を監査�
       して、その単位を次の状態に進める (監査の結果は `pending` → `audited`、反証の結果は、反証に含めた単位を
       `audited` → `refuted`)。満たさなければ `CODEX-LAUNCH.md` の規則 (`exit=` が 0 以外は停止、結果の欠けは新しい
       nonce で 1 回だけ再実行) に従う。
-    - 使い切りの run では、反証の run の記録は `refute-run` ではなく batch ごとの `batches/<k>/<j>/refute-run` で、
-      `audited` の単位を含む batch の記録を同じ規則で見る (`RECORD.md`)。
+    - 使い切りの run では、反証の記録は `refute-run` ではなく `batches/<k>/<j>/refute-run` で、単位の状態ではなく batch の
+      状態で見る。state の `exhaust.batches` で `status` が `collected` でない batch は、すべての起動 (`j`) の記録を上の
+      規則で見る (`RECORD.md`)。wave の単位を `refuted` に進めるのは、その wave の batch のすべての起動を回収した後
+      (起動が 1 つ回収できただけでは進めない)。
   - **使い切りの run** (state に `exhaust` がある): 上に加えて次のとおり。
     - 段 (`exhaust.phase`) が `auditing` で、週の window が同じ (読み直した対象の tool の週の reset の時刻が、state の
       `exhaust.weekly_resets_at` と同じ) なら、state の対象の tool・止める線・起票の上限と、起票の累計を保って続ける。
@@ -248,7 +250,7 @@ AI を使わない `upstream` の単位 (観点 `upstream` × 領域 `.github/up
 - **監査役が Claude**: personal-repo-audit の手順で監査し (観点の fan-out は repo-audit のとおり)、結果を
   repo-audit の `findings.schema.json` の形の JSON にして run dir に保存する。
 - **監査役が Codex**: personal-repo-audit の `CODEX-LAUNCH.md` の起動で Codex に監査させる。effort は
-  プリセットの値を渡す。model は [BUDGET.md](BUDGET.md) の `personal-codex-model-selection` の出力を渡す (採用は
+  プリセットの値を渡す (使い切りの run は [BUDGET.md](BUDGET.md) の「使い切りのモード」の値)。model は [BUDGET.md](BUDGET.md) の `personal-codex-model-selection` の出力を渡す (採用は
   exit 0 のときだけで、それ以外は開始しない。空なら model を渡さない)。起動の前に、run dir の path を
   `units/<n>/codex-run` に書く (再開で回収するため。`RECORD.md`。#421)。起動と回収を配備済みの
   `personal-codex-launch` で行うとき (`CODEX-LAUNCH.md` の先頭の節。#672) は、model の読み取りは script が行う。

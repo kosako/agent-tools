@@ -374,7 +374,8 @@ directory は作った時点で mode 700 にします (残量の数字と、publ
 - `waves` の `status` は `running` (監査中) → `audited` (監査を終えた) → `refuting` (batch が走っている) → `refuted`
   (batch を回収した)。
 - `batches` の `findings` は、その batch にかけた代表の所見の ID。`parts` は起動を分けた数 (`batches/<k>/<j>/` の j の数)。
-  `status` は `running` → `collected`。
+  `status` は `running` → `collected` (すべての起動を回収した)。再開では、`collected` でない batch のすべての起動を回収の
+  対象にする (単位の状態では選ばない。`SKILL.md` の「中断した run を再開する」)。
 - `merged` は、まとめた所見 (`id`) と、まとめた先の代表 (`into`)。代表の判定を、まとめた所見にも当てる (`REFUTE.md`)。
 - `consumption` の `role` は、wave の監査が `audit`、batch の反証が `refute`、Codex を使い切る run の Claude の進行
   (batch の外の区間の前と後) が `orchestration`、終わりの処理の Claude の分が `finish`。

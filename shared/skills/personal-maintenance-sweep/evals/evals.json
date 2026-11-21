@@ -1271,7 +1271,7 @@
     {
       "id": 63,
       "name": "exhaust-codex-line-cap",
-      "prompt": "[前提: Claude Code の session。両方の tool の残量は読めて、Codex の週の使用率は 30%、両方の 5h は十分] personal-maintenance-sweep、codex の週の使用率 90% まで、起票 15 件まで",
+      "prompt": "[前提: Claude Code の session。両方の tool の残量は読めて、Codex の週の使用率は 30%、両方の 5h は十分] personal-maintenance-sweep、codex の週の枠を使用率 90% まで使い切りで、起票 15 件まで",
       "expected_output": "使い切りで、対象の tool は Codex で監査役。止める線は Codex の週の使用率 90%、起票の上限は 15 (指定元は run)。検証役の Claude の予約は残す。Codex の監査の起動・回収・照合・起票は Claude の session が行い、その Claude の消費を orchestration として別に記録すると伝える。",
       "files": [],
       "assertions": [
@@ -1672,6 +1672,40 @@
         {
           "id": "no-guess",
           "text": "どちらかを推測で選んでいない"
+        }
+      ]
+    },
+    {
+      "id": 86,
+      "name": "exhaust-verifier-5h-before-measure",
+      "prompt": "[前提: 使い切りの run (監査役 Claude、検証役 Codex) の wave 1 が終わり、batch 1 を起動した (まだ回収していない)。Codex の 5h の値は有効で、残りが stop_5h_min_pct 未満。週の枠は両方とも十分] 続けて",
+      "expected_output": "検証役の 5h の消費はまだ測っていないので式に 5h の項は無いが、既知の 5h の不足を最初に見て、新しい wave を始めない。batch 1 を回収してから終わりの処理に移る。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "checks-known-5h",
+          "text": "測った値が無くても、検証役の 5h の残りが停止の条件に満たないことを見ている"
+        },
+        {
+          "id": "no-new-wave",
+          "text": "wave 2 を始めていない"
+        }
+      ]
+    },
+    {
+      "id": 87,
+      "name": "exhaust-zero-measurement",
+      "prompt": "[前提: 使い切りの run (監査役 Claude、検証役 Codex)。wave 1 (6 単位) の前と後で、Claude の週の使った割合が同じ値だった (表示の更新の遅れ)。Claude の週の残り − 線は 50] wave 2 の単位の数を決めて",
+      "expected_output": "測った 1 単位の監査が 0 なので使わず、測る前の値 (large の監査役の推定 ÷ 6 = 2) を使う。0 で割らない。終わりは 4、余りは 46 で、ほかの条件が小さくなければ 11 単位。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "falls-back",
+          "text": "0 の測定値を使わず、測る前の値 (2) を使っている"
+        },
+        {
+          "id": "no-divide-by-zero",
+          "text": "0 で割る計算をしていない"
         }
       ]
     }
