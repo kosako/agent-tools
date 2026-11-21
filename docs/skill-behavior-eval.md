@@ -117,7 +117,9 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
 - redirect は、file への出力 (`>`・`>>`・`&>`・`>&file`) を `file-write` に数え、fd の複製 (`>&2`・`2>&1`) と `/dev/null` は
   数えません。option は spec を読む共通の部品で読みます (値の付いた束 `-oout.txt`、標準入力の `-`、長い option)。
   interpreter と shell の option は allowlist で読み、ほかの option (inline の code、標準入力から読む `-s`、値の消費の
-  規則が分かれる束) は `unknown` です。ruby と perl の in-place の編集 (`-i`・`-pi`) は `file-write` です。
+  規則が分かれる束) は `unknown` です。ruby と perl の in-place の編集 (`-i`・`-pi`) は `file-write` です。印の `i` は、
+  option の束を左から読んで探し、値をとる字 (`-e`・`-I`・`-r` など) の後ろ (くっついた code や dir) の字は数えません
+  (`ruby -e'print 1'` の `i` は印ではない)。
 - inline の Ruby (`ruby -e`。#737): code を Ripper (Ruby の標準の構文解析。code を実行しない) で構文の木にし、木のすべてが
   許す形の表に収まるときだけ `exec` にします。表は分類器の `RUBY_INLINE_*` の定数です。許すものを並べ、表に無い形は
   `unknown` に残します (禁じるものを並べると、漏れた形が軽い区分になるため)。

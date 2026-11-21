@@ -647,8 +647,10 @@ module SkillBehaviorClassifier
     "python3" => { flags: %w[-B -E -I -O -q -s -S -u -v], values: %w[-W -X] },
     "node" => { flags: [], values: [] },
   }.freeze
-  # in-place の編集の印。値をとる option (-I・-r・-C・-E・-F・-x・-M・-m) の後ろの i は値の一部なので数えない。
-  IN_PLACE = /\A-(?![IrCEFxMm])[A-Za-z0-9]*?i/.freeze
+  # in-place の編集の印 (i) を探すときの、値をとる option の字。束の残り (無ければ次の語) が値になる (-e のくっついた
+  # code、-Ilib の dir など。中の i は数えない)。数字だけを値にとる字 (-0777・perl の -l) は、数字が i にも値をとる字にも
+  # ならないので、ここに入れず、値をとらない字と同じに読む (perl の -lpi の i を数える)。
+  IN_PLACE_VALUE_CHARS = { "ruby" => "eIrCEFKxW", "perl" => "eEIMmFxdDC" }.freeze
 
   def self.interpreter_call(name, args, fns: [])
     # ruby -e (#737)。in-place の編集の印があれば、下の今の規則で file-write にする
@@ -866,10 +868,29 @@ module SkillBehaviorClassifier
     rb_token?(x, :@ident) || (x.is_a?(Array) && %i[mlhs mlhs_paren].include?(x[0]) && x[1..].all? { |y| rb_param?(y) })
   end
 
+  # option の束を左から読み、値をとる字より前に i があれば in-place の編集 (#737。前は束の先頭の字だけを見ていて、
+  # -e のくっついた code の中の i を印に数えていた)。長い option (--…) は読み飛ばし、-- と option でない語で終える。
   def self.in_place?(name, args)
-    return false unless %w[ruby perl].include?(name)
+    value_chars = IN_PLACE_VALUE_CHARS[name]
+    return false unless value_chars
 
-    args.take_while { |a| a.start_with?("-") && a != "-" }.any? { |a| a.match?(IN_PLACE) }
+    i = 0
+    while i < args.length
+      a = args[i]
+      break if !a.start_with?("-") || a == "-" || a == "--"
+
+      i += 1
+      next if a.start_with?("--")
+
+      a[1..].each_char.with_index(1) do |ch, k|
+        return true if ch == "i"
+        next unless value_chars.include?(ch)
+
+        i += 1 if k == a.length - 1
+        break
+      end
+    end
+    false
   end
 
   # exec にする script の path。その interpreter / shell の script の拡張子 (SCRIPT_EXTENSIONS) を持つもの。標準入力を

@@ -447,6 +447,19 @@ ruby_inline = [
   ["ruby -i -e #{sq}p 1#{sq} lib/median.rb", [], "file-write"],
   ["ruby -pi -e #{sq}p 1#{sq} lib/median.rb", [], "file-write"],
   ["#{inline.('p 1')} > out.txt", [], "file-write"],
+  # code をくっつけた -e の中の i を、in-place の編集の印に数えない (review の round 1)。束の i と、値をとる字の後ろは今どおり
+  ["ruby -e#{sq}print 1#{sq}", [], "exec"],
+  ["ruby -e#{sq}raise \"x\" if 1 == 2#{sq}", [], "exec"],
+  [inline.("-1.abs.times { |i| p i }"), [], "exec"],
+  ["ruby -pie s/a/b/ lib/median.rb", [], "file-write"],
+  ["ruby -i.bak -e #{sq}p 1#{sq} lib/median.rb", [], "file-write"],
+  ["ruby -0i -e #{sq}p 1#{sq} lib/median.rb", [], "file-write"],
+  [inline.("p 1", "-W:no-deprecated "), [], "unknown"],
+  [inline.("p 1", "--disable-gems "), [], "unknown"],
+  ["perl -lpi -e #{sq}s/a/b/#{sq} f", [], "file-write"],
+  ["perl -0777 -pi -e s/a/b/ f", [], "file-write"],
+  ["perl -le #{sq}print 1#{sq}", [], "unknown"],
+  ["perl -Mstrict -e 1", [], "unknown"],
 ]
 ruby_inline.each do |cmd, fns, want|
   got = P.classify_shell(cmd, fns: fns)
