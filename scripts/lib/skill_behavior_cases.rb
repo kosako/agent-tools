@@ -4,7 +4,7 @@
 # Spec: docs/skill-behavior-eval.md。
 #
 # case は 1 回の user の依頼と、その run で求める / 禁じる操作の区分、到達の条件 (reach)、run の後に変わってよい
-# file (allowed_changes) を持つ。形が違えば、run を始める前に止める (Error)。
+# file (allowed_changes)、temp project に置く skill (place_skills) を持つ。形が違えば、run を始める前に止める (Error)。
 
 require "json"
 
@@ -17,7 +17,7 @@ module SkillBehaviorCases
   CLASSES = %w[read exec file-write github-write git-write agent-launch unknown].freeze
   EXPECTABLE_CLASSES = (CLASSES - %w[read exec unknown]).freeze
   KINDS = %w[negative positive ambiguous].freeze
-  CASE_KEYS = %w[id prompt skill kind pair fixture reach forbid require allowed_changes].freeze
+  CASE_KEYS = %w[id prompt skill kind pair fixture reach forbid require allowed_changes place_skills].freeze
   ID_PATTERN = /\A[a-z0-9][a-z0-9-]*\z/.freeze
   # results.json の variant (probe の --variant)。出力に写すので、決まった文字だけにする。
   LABEL_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/.freeze
@@ -119,6 +119,13 @@ module SkillBehaviorCases
       end
     end
     raise Error, "#{label}: reach must not be empty" if c["reach"].empty?
+    # temp project に置く skill (#737)。名前は skill の dir の名前なので、決まった形だけにする (path の区切りや .. を持たない)。
+    # その case の skill を必ず含める (置かない skill の挙動を測ることにならないため)。
+    v = c["place_skills"]
+    unless v.is_a?(Array) && !v.empty? && v.all? { |n| n.is_a?(String) && n.match?(ID_PATTERN) } && v.uniq.length == v.length
+      raise Error, "#{label}: place_skills must be a non-empty array of distinct skill names matching #{ID_PATTERN.source}"
+    end
+    raise Error, "#{label}: place_skills must include the skill" unless v.include?(c["skill"])
     if c["kind"] == "positive" && c["allowed_changes"].empty?
       raise Error, "#{label}: a positive case must allow at least one change"
     end

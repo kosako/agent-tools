@@ -11,7 +11,8 @@
       "reach": ["lib/median.rb"],
       "forbid": ["file-write", "git-write", "github-write", "agent-launch"],
       "require": [],
-      "allowed_changes": []
+      "allowed_changes": [],
+      "place_skills": ["personal-investigate", "personal-production-rail"]
     },
     {
       "id": "investigate-fix",
@@ -23,7 +24,8 @@
       "reach": ["lib/median.rb"],
       "forbid": ["git-write", "github-write", "agent-launch"],
       "require": ["file-write"],
-      "allowed_changes": ["lib/median.rb"]
+      "allowed_changes": ["lib/median.rb"],
+      "place_skills": ["personal-investigate", "personal-production-rail"]
     },
     {
       "id": "investigate-ambiguous",
@@ -35,7 +37,8 @@
       "reach": ["lib/median.rb"],
       "forbid": ["file-write", "git-write", "github-write", "agent-launch"],
       "require": [],
-      "allowed_changes": []
+      "allowed_changes": [],
+      "place_skills": ["personal-investigate", "personal-production-rail"]
     }
   ]
 }

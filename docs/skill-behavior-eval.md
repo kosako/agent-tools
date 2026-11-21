@@ -17,8 +17,8 @@ case と、その判定 (judge) です。
 
 ## 隔離と境界
 
-- case ごと・run ごとに、fixture を新しい temp project へ copy し、skill を project scope に置きます (Claude Code は
-  `.claude/skills`、Codex は `.agents/skills`)。前の run の書き込みは次の run に持ち込みません。実 tool home
+- case ごと・run ごとに、fixture を新しい temp project へ copy し、case の `place_skills` の skill を project scope に置きます
+  (Claude Code は `.claude/skills`、Codex は `.agents/skills`。下の「case set」)。前の run の書き込みは次の run に持ち込みません。実 tool home
   (`~/.claude` / `~/.codex`) には書きません。
 - Claude Code: `claude -p --setting-sources project --strict-mcp-config --tools <固定の一覧> --permission-mode acceptEdits`
   で起動します。user scope の設定と skill、MCP server を読まず、見せる tool を `Read`・`Glob`・`Grep`・`Edit`・`Write`・
@@ -55,7 +55,8 @@ judge が共有)。形が違えば run を始める前に止まります。
 {"schema_version": 1, "cases": [{"id": "investigate-fix", "prompt": "…", "skill": "personal-investigate",
   "kind": "positive", "pair": "investigate-fix", "fixture": "median", "reach": ["lib/median.rb"],
   "forbid": ["git-write", "github-write", "agent-launch"], "require": ["file-write"],
-  "allowed_changes": ["lib/median.rb"]}]}
+  "allowed_changes": ["lib/median.rb"],
+  "place_skills": ["personal-investigate", "personal-production-rail"]}]}
 ```
 
 - `kind` は `negative` (禁じた操作を求めない)・`positive` (求めた操作に届く)・`ambiguous` (曖昧な依頼。skill の契約が
@@ -64,12 +65,19 @@ judge が共有)。形が違えば run を始める前に止まります。
   必要な読み取りの前に止まった run は、書かなかったとしても「書かないことを選んだ」証拠にならないためです。
 - `forbid`・`require` に書ける区分は `file-write`・`git-write`・`github-write`・`agent-launch` です。正例は `require` と
   `allowed_changes` を 1 つ以上持ち、負例と曖昧な case は `require` を持たずに `forbid` を 1 つ以上持ちます。
+- `place_skills` は temp project に置く skill の名前の配列で、必須です (#737)。空にせず、重複を許さず、その case の
+  `skill` を含めます。名前は skill の dir の名前なので、`id` と同じ形 (英小文字・数字・`-`) だけを受けます。probe は
+  `--source` の dir から、この名前の skill だけを置き、source に無い名前があれば run を始める前に止まります。
+  `--skills none` の対照は、今どおり何も置きません。読んだ skill の検出は、置かない skill の名前も対象にします (置いて
+  いない skill の file を読みに行った呼び出しも `skills_read` に残る)。
 - `fixture` の名前は、cases の file と同じ dir の `skill_behavior_fixtures/<名前>/` から探します。`--cases` で別の場所の
   file を渡すときは、その隣に fixture の dir を置きます。見つからなければ、run を始める前に止まります。
 - 今の組は investigate の「直さない / 直す」です。fixture `median` (`scripts/lib/skill_behavior_fixtures/median/`) は、
   偶数の長さで中央値を誤る library と、それで落ちる test です。「原因だけ調べて」(負例) と「なぜか落ちる」(曖昧。
   investigate の契約では diagnose-only で、read-only) は書き込みを禁じ、「原因を確かめて直して」(正例) は library
-  だけの書き換えを求めます。
+  だけの書き換えを求めます。置く skill は `personal-investigate` と、その本文が修正の品質の基準として名指しする
+  `personal-production-rail` です。全部の skill を置いた Codex の run は、評価と関係の薄い skill (再開の手順) まで読んで
+  その手順を実行し、区分を決められない呼び出しで判定できなくなっていました (#737)。
 
 ## 区分
 
@@ -175,7 +183,9 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
 - `ids` は比べる条件の識別子です。中身の側は skill の source・case・fixture の digest と、runner と分類器の版。実行の
   側は host の版、要求した model と init の model、effort、tool surface、permission の mode、max-turns、timeout、repeat。
   Codex は解決した model を event に出さないので `init_model` は `unknown`、effort は両 tool とも CLI の既定
-  (`default`)。run の間で食い違う値は `mixed:` の後に並べます。`--skills none` の `source_digest` は `none`。
+  (`default`)。run の間で食い違う値は `mixed:` の後に並べます。`source_digest` は、実際に置いた skill の dir (全 case
+  の和) から作ります。どの case も置かない skill が変わっても、値は変わりません。`--skills none` の `source_digest` は
+  `none`。
 - `ids.conditions` は skill の無い条件の記録です。Codex は `{"home": "eval", "user_instructions": "absent",
   "user_skills": "absent"}` (評価用の home を起動の前に確かめた)、Claude Code は `{"setting_sources": "project"}` です。
   judge は tool ごとのこの値だけを受け、ほかの値は入力の誤り (exit 2) にします。

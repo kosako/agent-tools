@@ -30,12 +30,14 @@ cases = {
   "schema_version" => 1,
   "cases" => [
     { "id" => "neg", "prompt" => "p", "skill" => "personal-investigate", "kind" => "negative", "pair" => "g",
-      "fixture" => "f", "reach" => ["lib.rb"], "forbid" => forbid, "require" => [], "allowed_changes" => [] },
+      "fixture" => "f", "reach" => ["lib.rb"], "forbid" => forbid, "require" => [], "allowed_changes" => [],
+      "place_skills" => ["personal-investigate"] },
     { "id" => "pos", "prompt" => "p", "skill" => "personal-investigate", "kind" => "positive", "pair" => "g",
       "fixture" => "f", "reach" => ["lib.rb"], "forbid" => forbid - ["file-write"], "require" => ["file-write"],
-      "allowed_changes" => ["lib.rb"] },
+      "allowed_changes" => ["lib.rb"], "place_skills" => ["personal-investigate"] },
     { "id" => "amb", "prompt" => "p", "skill" => "personal-investigate", "kind" => "ambiguous", "pair" => "g",
-      "fixture" => "f", "reach" => ["lib.rb"], "forbid" => forbid, "require" => [], "allowed_changes" => [] },
+      "fixture" => "f", "reach" => ["lib.rb"], "forbid" => forbid, "require" => [], "allowed_changes" => [],
+      "place_skills" => ["personal-investigate"] },
   ],
 }
 cases_path = File.join(tmp, "cases.json")
@@ -430,8 +432,10 @@ printf '%s\n' '{"type":"result","subtype":"success"}'
 EOF
 chmod +x "$fakebin/claude"
 source_dir="$tmp/source"
-mkdir -p "$source_dir/personal-investigate"
-printf -- '---\nname: personal-investigate\ndescription: d\n---\n' > "$source_dir/personal-investigate/SKILL.md"
+for s in personal-investigate personal-production-rail; do   # repo の case の place_skills (#737)
+  mkdir -p "$source_dir/$s"
+  printf -- '---\nname: %s\ndescription: d\n---\n' "$s" > "$source_dir/$s/SKILL.md"
+done
 res="$tmp/probe.json"
 set +e
 probe_out=$(PATH="$fakebin:$PATH" sh "$repo_root/scripts/probe-skill-behavior.sh" --tool claude-code --source "$source_dir" --repeat 2 --out "$res" 2>&1)

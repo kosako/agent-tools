@@ -213,6 +213,7 @@ usage: probe-skill-behavior.sh --tool <claude-code|codex> --out <results.json>
          [--variant LABEL] [--model MODEL] [--max-turns N] [--timeout SEC] [--codex-home DIR] [--dry-run]
 ```
 
+- temp project に置く skill は、case の `place_skills` の skill だけ (#737)。`source_digest` も置いた skill から作る。
 - Codex の run は、人がログインした評価用の Codex の home (`--codex-home`) で起動し、子 process にだけ `CODEX_HOME` を
   渡す。運用 instruction と user の skill の無い条件で比べるため (#731。docs の「評価用の Codex の home」)。
 
