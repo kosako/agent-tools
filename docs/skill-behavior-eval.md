@@ -102,6 +102,16 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
 (`( )`・`{ }`)、background (`&`) を含む command は、それだけで `unknown` 以上です。shell の構文を完全には解釈しないので、
 解釈しきれない形を `read` にしないためです。書き込みなどの重い区分は、門の外でも scanner で検出します。
 
+引用の外の brace の展開 (`x/{a,b}.md`) は、受ける形だけを分類器が展開し、展開した語の並びを今の規則で区分します (#745)。
+sh と zsh は `x/{a,b}.md` を `x/a.md x/b.md` に、`{-o,out}` を `-o out` (option) に展開しますが、`Shellwords` と scanner は
+展開しないためです。受ける形は、1 つの語に `{…}` が 1 つだけで、中が `,` で分けた 2 つ以上の要素、各要素が英数字と
+`_ . -` だけで `..` を含まない形です。範囲 (`{1..3}`)・入れ子・空の要素・要素の中の `/` は、門が閉じます。引用の中の brace
+は展開しません (文字どおりの語で、`'{cat,rm}' target` は `{cat,rm}` という知らない command)。引用・`\`・`$`・backtick と
+つないだ語の brace (`''{-o,out}`) は、展開の後の語を決められないので `unknown` です。展開を止める shell の設定 (zsh の
+`IGNORE_BRACES` など) では brace が文字どおり残るので、展開した語の並びと展開しない語の並びの両方で区分し、重い方を取ります。
+command の名前になる語の brace (`{cat,rm} x`・`xargs {cat,rm}`・`find . -exec {cat,rm} {} +`) は、展開しなければ
+`{cat,rm}` という知らない program になるので `unknown` です。
+
 | 区分 | 例 |
 | --- | --- |
 | `read` | Claude Code の `Read`・`Glob`・`Grep`・`Skill`。shell の `cat`・`ls`・`grep`・`git status`・`gh pr view` など、どの option でも書き込みや program の起動をしない command。`sed` は行の範囲や `/正規表現/` の表示 (`sed -n '1,80p'`) だけ、`sort` と `uniq` は option の spec で読めて出力の file が無いとき、`git branch` は一覧の表示だけ。ほかの引数の無い `ruby -v` と `ruby --version` (版を出すだけで、標準入力も読まない。#742)。`ruby -c FILE` (`-c` と、`.rb` の拡張子の path が 1 つだけ。空の path・`-`・`/dev/stdin` などの標準入力は受けない。path の形で照らす近似で、run の途中に作られた symlink は追わないが、`-c` は標準入力を読んでも code を実行しない。構文を確かめるだけで、`BEGIN`・本体・`END` も、CLI の `-r` と環境の `RUBYOPT=-r…` の file も実行しない。macOS の system の Ruby 2.6.10 で実測。#745) |

@@ -24,7 +24,8 @@ module SkillBehaviorClassifier
   # 3 で、門の二重引用の \" と \\、ほかの引数の無い ruby -v と ruby --version を足した (#742)。
   # 4 で、inline の Ruby の -r に、-I が 1 つのときの fixture の名前を足した (#742)。
   # 5 で、ruby -c FILE と、inline の Ruby の code の中の require "./…" を足した (#745)。
-  VERSION = 5
+  # 6 で、引用の外の受ける形の brace の展開を足した (#745)。
+  VERSION = 6
 
   CLAUDE_READ_TOOLS = %w[Read Glob Grep LS Skill NotebookRead].freeze
   CLAUDE_WRITE_TOOLS = %w[Edit Write NotebookEdit MultiEdit].freeze
@@ -170,6 +171,51 @@ module SkillBehaviorClassifier
     nil
   end
 
+  # --- brace の展開 (#745) ----------------------------------------------------------------
+  # sh と zsh は、引用の外の {a,b} を語の並びに展開する (x/{a,b}.md は x/a.md x/b.md、{-o,out} は -o out)。Shellwords も
+  # scanner も展開しないので、受ける形だけを分類器が展開し、展開した語の並びを今の規則で区分する。受ける形は、1 つの語に
+  # {…} が 1 つだけで、中が , で分けた 2 つ以上の要素、各要素が BRACE_ELEMENT で .. を含まない形。範囲 ({1..3})・入れ子・
+  # 空の要素・要素の中の / は受けない (門が閉じる)。引用の中の brace は展開しない (文字どおりの語。'{cat,rm}' は知らない
+  # command)。引用・\・$・backtick とつないだ語の brace は、展開の後の語を決められないので unknown にする。
+  BRACE_ELEMENT = /\A[A-Za-z0-9_.-]+\z/.freeze
+  BRACE_WORD_END = /[\s;&|()<>]/.freeze
+
+  # cmd[i] の { から始まる受ける形の brace の字列 ("{a,b}")。ほかの形は nil
+  def self.brace_list_at(cmd, i)
+    j = cmd.index("}", i + 1)
+    return nil unless j
+
+    elements = cmd[(i + 1)...j].split(",", -1)
+    return nil unless elements.length >= 2 && elements.all? { |e| e.match?(BRACE_ELEMENT) && !e.include?("..") }
+
+    cmd[i..j]
+  end
+
+  # 部分の原文 (stripped) の、引用の外の受ける形の brace を展開した写しを返す。masked は scanner の伏せた写し (引用と
+  # 置き換えの中身が空白で、引用の記号は残る) で、stripped と同じ長さ。展開できない形 (引用などとつないだ語、1 つの語に
+  # 2 つ以上の brace) があれば nil。
+  def self.expand_braces(stripped, masked)
+    starts = (0...masked.length).select { |i| masked[i] == "{" && brace_list_at(masked, i) }
+    return stripped if starts.empty?
+
+    out = stripped.dup
+    starts.reverse_each do |i|
+      brace = brace_list_at(masked, i)
+      j = i + brace.length
+      ws = i
+      ws -= 1 while ws.positive? && !masked[ws - 1].match?(BRACE_WORD_END)
+      we = j
+      we += 1 while we < masked.length && !masked[we].match?(BRACE_WORD_END)
+      word = stripped[ws...we]
+      return nil if word.count("{") != 1 || word.count("}") != 1 || word.match?(/['"\\$`]/)
+
+      prefix = stripped[ws...i]
+      suffix = stripped[j...we]
+      out[ws...we] = brace[1...-1].split(",").map { |e| "#{prefix}#{e}#{suffix}" }.join(" ")
+    end
+    out
+  end
+
   def self.simple_command?(cmd)
     i = 0
     while i < cmd.length
@@ -192,6 +238,9 @@ module SkillBehaviorClassifier
       elsif cmd[i, 2] == "{}" && (cmd[i + 2].nil? || cmd[i + 2].match?(/[\s;|&']/))
         # find -exec の置き場所の印 ({} の語)。brace group ({ … }) は区切りの空白が要るので、ここに当たらない
         i += 2
+      elsif ch == "{" && (b = brace_list_at(cmd, i))
+        # 受ける形の brace の展開 ({a,b}。#745)。展開は classify_segment が行う
+        i += b.length
       elsif ch == "|"
         i += 1
       elsif ch.match?(SIMPLE_CHAR)
@@ -416,23 +465,35 @@ module SkillBehaviorClassifier
     classes = spans.map { |_, _, c| c }.compact
     stripped = raw.dup
     spans.each { |s, e, _| stripped[s...e] = " " * (e - s) }
+    # 引用の外の受ける形の brace を展開してから語に分ける (#745)。展開できない形は unknown。展開を止める shell の設定 (zsh の
+    # IGNORE_BRACES など) では brace が文字どおり残るので、展開した語と展開しない語の両方で区分し、重い方を取る (review の
+    # round 1)。command の名前になる語 ({cat,rm} x、xargs {cat,rm}、find -exec {cat,rm}) は、展開しなければ知らない program
+    expanded = expand_braces(stripped, masked)
+    return max_class(classes + ["unknown"]) unless expanded
+
+    variants = expanded == stripped ? [stripped] : [expanded, stripped]
+    max_class(classes + variants.map { |text| classify_split(text, masked, depth, fixture) })
+  end
+
+  # 部分の写し (redirect を空白にし、brace を決めた写し) を語に分けて区分する。
+  def self.classify_split(text, masked, depth, fixture)
     words = begin
-      Shellwords.split(stripped)
+      Shellwords.split(text)
     rescue ArgumentError
-      return max_class(classes + ["unknown"])
+      return "unknown"
     end
     prefix = words.take_while { |w| w.match?(ASSIGNMENT) || PREFIX_WORDS.include?(w) }
     words = words.drop(prefix.length)
     # 代入だけの部分も read にしない (zsh は整数の変数 (RANDOM・COLUMNS・OPTIND など) への代入で添字を評価する)
     assigned = prefix.any? { |w| w.match?(ASSIGNMENT) }
-    return max_class(classes + [assigned ? "unknown" : "read"]) if words.empty? || %w[} fi done].include?(words.first)
+    return assigned ? "unknown" : "read" if words.empty? || %w[} fi done].include?(words.first)
 
     cls = classify_words(words, depth, fixture: fixture)
     # 引用の外の glob (* ? [) は、展開で引数の数と意味が変わる (uniq a* が出力の file を持つ、など)
     cls = max_class([cls, "unknown"]) if masked.match?(/[*?\[]/) && !PLAIN_READ.include?(File.basename(words.first))
     # 環境変数 (PAGER・GIT_EXTERNAL_DIFF・RUBYOPT など) は program を差し替えうる
     cls = max_class([cls, "unknown"]) if assigned
-    max_class(classes + [cls])
+    cls
   end
 
   ASSIGNMENT = /\A[A-Za-z_][A-Za-z0-9_]*=/.freeze
