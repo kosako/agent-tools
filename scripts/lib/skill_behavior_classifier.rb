@@ -702,7 +702,9 @@ module SkillBehaviorClassifier
   # 読み込まない (macOS の system の Ruby 2.6.10 で実測。ほかの Ruby では測っていない)。受けるのは、-c と、option でない
   # path が 1 つだけの形。-e・標準入力・-r・ほかの option・2 つ以上の file との組み合わせは、観測していないので下の規則のまま。
   # path は script の file の検査 (script_file?。.rb の拡張子) を共有する。空の path・-・/dev/stdin・/dev/fd/0 は標準入力を
-  # 読むが (review の round 1。Ruby 2.6.10 で実測)、どれも拡張子を持たないので外れる。
+  # 読むが (review の round 1。Ruby 2.6.10 で実測)、どれも拡張子を持たないので外れる。path の形で照らす近似で、run の途中に
+  # 作られた symlink (/dev/stdin を指す input.rb など) は追わない (review の round 2。script_file? を使う exec の規則と同じ)。
+  # -c は、標準入力を読んでも code を実行しないので、read の区分で見逃す操作は無い。
   def self.ruby_syntax_check?(args)
     args.length == 2 && args[0] == "-c" && !args[1].start_with?("-") && script_file?("ruby", args[1])
   end
