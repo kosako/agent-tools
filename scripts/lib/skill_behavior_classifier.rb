@@ -22,7 +22,8 @@ module SkillBehaviorClassifier
   MAX_DEPTH = 6
   # 規則を変えたら上げる (結果を比べるときの識別子 ids.classifier_version)。2 で inline の Ruby (ruby -e) を足した (#737)。
   # 3 で、門の二重引用の \" と \\、ほかの引数の無い ruby -v と ruby --version を足した (#742)。
-  VERSION = 3
+  # 4 で、inline の Ruby の -r に、-I が 1 つのときの fixture の名前を足した (#742)。
+  VERSION = 4
 
   CLAUDE_READ_TOOLS = %w[Read Glob Grep LS Skill NotebookRead].freeze
   CLAUDE_WRITE_TOOLS = %w[Edit Write NotebookEdit MultiEdit].freeze
@@ -102,27 +103,32 @@ module SkillBehaviorClassifier
     classes.compact.max_by { |c| SEVERITY.fetch(c) } || "unknown"
   end
 
-  # fns は fixture の関数の名前 (inline の Ruby の中で、receiver の無い呼び出しとして許す。#737)。probe が case の fixture
-  # から作って渡す。渡さない呼び出しでは空で、fixture の関数を許さない。
-  def self.classify_claude(name, input, fns: [])
+  # fixture は case の fixture の情報で、probe が fixture から作って渡す。渡さない呼び出しでは NO_FIXTURE (どちらも空) で、
+  # fixture の関数も -r の名前も許さない。
+  #   functions: fixture の関数の名前。inline の Ruby の中で、receiver の無い呼び出しとして許す (#737)
+  #   ruby_files: 初期の fixture の Ruby の file の相対 path。inline の Ruby の -r の名前を許すときに照らす (#742)
+  Fixture = Struct.new(:functions, :ruby_files)
+  NO_FIXTURE = Fixture.new([].freeze, [].freeze).freeze
+
+  def self.classify_claude(name, input, fixture: NO_FIXTURE)
     return "read" if CLAUDE_READ_TOOLS.include?(name)
     return "file-write" if CLAUDE_WRITE_TOOLS.include?(name)
     if name == "Bash" && input.is_a?(Hash) && input["command"].is_a?(String)
-      return classify_shell(input["command"], fns: fns)
+      return classify_shell(input["command"], fixture: fixture)
     end
 
     "unknown"
   end
 
-  def self.classify_shell(command, depth = 0, fns: [])
+  def self.classify_shell(command, depth = 0, fixture: NO_FIXTURE)
     return "unknown" if depth > MAX_DEPTH || !command.is_a?(String)
 
     scanned = scan(command)
     return "unknown" unless scanned
 
     segments, substitutions = scanned
-    classes = segments.map { |raw, masked| classify_segment(raw, masked, depth, fns: fns) }
-    classes += substitutions.map { |s| classify_shell(s, depth + 1, fns: fns) }
+    classes = segments.map { |raw, masked| classify_segment(raw, masked, depth, fixture: fixture) }
+    classes += substitutions.map { |s| classify_shell(s, depth + 1, fixture: fixture) }
     cls = classes.empty? ? "read" : max_class(classes)
     # 重い区分はそのまま。read と exec は、単純な形の command のときだけ (下の「門」)
     return cls if SEVERITY.fetch(cls) > SEVERITY.fetch("unknown") || simple_command?(command)
@@ -404,7 +410,7 @@ module SkillBehaviorClassifier
     spans
   end
 
-  def self.classify_segment(raw, masked, depth, fns: [])
+  def self.classify_segment(raw, masked, depth, fixture: NO_FIXTURE)
     spans = redirect_spans(masked)
     classes = spans.map { |_, _, c| c }.compact
     stripped = raw.dup
@@ -420,7 +426,7 @@ module SkillBehaviorClassifier
     assigned = prefix.any? { |w| w.match?(ASSIGNMENT) }
     return max_class(classes + [assigned ? "unknown" : "read"]) if words.empty? || %w[} fi done].include?(words.first)
 
-    cls = classify_words(words, depth, fns: fns)
+    cls = classify_words(words, depth, fixture: fixture)
     # 引用の外の glob (* ? [) は、展開で引数の数と意味が変わる (uniq a* が出力の file を持つ、など)
     cls = max_class([cls, "unknown"]) if masked.match?(/[*?\[]/) && !PLAIN_READ.include?(File.basename(words.first))
     # 環境変数 (PAGER・GIT_EXTERNAL_DIFF・RUBYOPT など) は program を差し替えうる
@@ -430,35 +436,35 @@ module SkillBehaviorClassifier
 
   ASSIGNMENT = /\A[A-Za-z_][A-Za-z0-9_]*=/.freeze
 
-  def self.classify_words(words, depth, fns: [])
+  def self.classify_words(words, depth, fixture: NO_FIXTURE)
     return "read" if words.empty?
 
-    cls = classify_by_name(words, depth, fns: fns)
+    cls = classify_by_name(words, depth, fixture: fixture)
     word0 = words[0].to_s
     # 標準の bin の外の path (./cat・lib/grep など) は、名前と違う program を実行しうる
     custom = word0.include?("/") && !STANDARD_BIN_DIRS.include?(File.dirname(word0))
     custom ? max_class([cls, "unknown"]) : cls
   end
 
-  def self.classify_by_name(words, depth, fns: [])
+  def self.classify_by_name(words, depth, fixture: NO_FIXTURE)
     name = File.basename(words[0].to_s)
     args = words[1..] || []
-    return shell_call(args, depth, name, fns: fns) if SHELLS.include?(name)
-    return xargs_call(args, depth, fns: fns) if name == "xargs"
+    return shell_call(args, depth, name, fixture: fixture) if SHELLS.include?(name)
+    return xargs_call(args, depth, fixture: fixture) if name == "xargs"
     return "agent-launch" if agent_launch?(name, args)
     return classify_gh(args) if name == "gh"
     return classify_git(args) if name == "git"
     return "file-write" if FILE_WRITE_COMMANDS.include?(name)
-    return interpreter_call(name, args, fns: fns) if INTERPRETER_EXEC_OPTIONS.key?(name)
+    return interpreter_call(name, args, fixture: fixture) if INTERPRETER_EXEC_OPTIONS.key?(name)
     # test や build の command (make・rake・npm・go・cargo・bundle exec など) は exec にしない。引数 (make の変数の代入、
     # rake -e) や設定で任意の code を走らせうる入口で、最初の組の fixture は使わない (ここに無いので unknown)。
     return "read" if PLAIN_READ.include?(name)
 
-    read_with_args(name, args, depth, fns: fns)
+    read_with_args(name, args, depth, fixture: fixture)
   end
 
   # 引数の形を確かめてから read にする command。spec で読めない形や、ここに無い command は unknown。
-  def self.read_with_args(name, args, depth, fns: [])
+  def self.read_with_args(name, args, depth, fixture: NO_FIXTURE)
     case name
     # printf -v と test -v / -R は、bash と zsh が配列の添字 (中の置き換えを含む) を評価する
     # diff は短い option の allowlist だけ read。長い option (--paginate の省略の --p など) と -l (出力を pr に通す) は
@@ -481,7 +487,7 @@ module SkillBehaviorClassifier
       opts.nil? ? "unknown" : "read"
     when "sed" then sed_call(args)
     when "awk" then awk_call(args)
-    when "find" then find_call(args, depth, fns: fns)
+    when "find" then find_call(args, depth, fixture: fixture)
     else "unknown"
     end
   end
@@ -589,7 +595,7 @@ module SkillBehaviorClassifier
   end
 
   # find: -delete と -fprint 系は file-write。-exec 系は、続く command (; か + まで) を区分する。
-  def self.find_call(args, depth, fns: [])
+  def self.find_call(args, depth, fixture: NO_FIXTURE)
     return "file-write" if args.any? { |a| a == "-delete" || a.match?(/\A-(fprint|fprint0|fprintf|fls)\z/) }
 
     classes = ["read"]
@@ -599,7 +605,7 @@ module SkillBehaviorClassifier
         j = (i + 1...args.length).find { |k| [";", "+"].include?(args[k]) }
         return "unknown" unless j
 
-        classes << injected_call(args[(i + 1)...j], depth, fns: fns)
+        classes << injected_call(args[(i + 1)...j], depth, fixture: fixture)
         i = j
       end
       i += 1
@@ -609,19 +615,19 @@ module SkillBehaviorClassifier
 
   # xargs: option (値をとるものは値ごと) を外した残りが command。command が無ければ既定の echo (read)。区分は
   # injected_call で決める。
-  def self.xargs_call(args, depth, fns: [])
+  def self.xargs_call(args, depth, fixture: NO_FIXTURE)
     i = 0
     while i < args.length && args[i].start_with?("-")
       i += XARGS_VALUE_OPTIONS.include?(args[i]) ? 2 : 1
     end
     rest = args[i..] || []
-    rest.empty? ? "read" : injected_call(rest, depth, fns: fns)
+    rest.empty? ? "read" : injected_call(rest, depth, fixture: fixture)
   end
 
   # 外から来る値 (xargs の標準入力・find の file 名) が引数や command の文字列に入る呼び出し。値で option や command が
   # 変わりうるので、option を問わず read の command (PLAIN_READ) のときだけ中の区分を使い、ほかは少なくとも unknown。
-  def self.injected_call(words, depth, fns: [])
-    cls = classify_words(words, depth, fns: fns)
+  def self.injected_call(words, depth, fixture: NO_FIXTURE)
+    cls = classify_words(words, depth, fixture: fixture)
     PLAIN_READ.include?(File.basename(words[0].to_s)) ? cls : max_class([cls, "unknown"])
   end
 
@@ -630,7 +636,7 @@ module SkillBehaviorClassifier
   SHELL_SET_OPTIONS = %w[pipefail errexit nounset xtrace].freeze
   SHELL_LONG_FLAGS = %w[--norc --noprofile --login].freeze
 
-  def self.shell_call(args, depth, shell_name = "sh", fns: [])
+  def self.shell_call(args, depth, shell_name = "sh", fixture: NO_FIXTURE)
     inline = false
     i = 0
     while i < args.length && args[i].match?(/\A[-+]/)
@@ -655,7 +661,7 @@ module SkillBehaviorClassifier
       i += 1
     end
     target = args[i]
-    return target ? classify_shell(target, depth + 1, fns: fns) : "unknown" if inline
+    return target ? classify_shell(target, depth + 1, fixture: fixture) : "unknown" if inline
 
     script_file?(shell_name, target) ? "exec" : "unknown"
   end
@@ -690,12 +696,12 @@ module SkillBehaviorClassifier
   # Ruby で実測)。-v の後に script や -e が続く形は、verbose の mode で program を走らせるので、下の規則のまま。
   RUBY_VERSION_ARGS = [["-v"], ["--version"]].freeze
 
-  def self.interpreter_call(name, args, fns: [])
+  def self.interpreter_call(name, args, fixture: NO_FIXTURE)
     return "read" if name == "ruby" && RUBY_VERSION_ARGS.include?(args)
 
     # ruby -e (#737)。in-place の編集の印があれば、下の今の規則で file-write にする
     if name == "ruby" && !in_place?(name, args)
-      inline = ruby_inline_call(args, fns)
+      inline = ruby_inline_call(args, fixture)
       return inline if inline
     end
     spec = INTERPRETER_EXEC_OPTIONS.fetch(name)
@@ -720,9 +726,14 @@ module SkillBehaviorClassifier
   # --- inline の Ruby (ruby -e。#737) ---------------------------------------------------------
   # code を Ripper (Ruby の標準の構文解析。code を実行しない) で構文の木にし、木のすべてが下の表に収まるときだけ exec にする。
   # 許す形を並べ、表に無い node・token・method・名前は unknown に残す (禁じる形を並べると、漏れたものが軽い区分になるため)。
-  # receiver の無い呼び出しは RUBY_INLINE_FUNCTIONS と、呼ぶ側が渡す fixture の関数 (fns) だけ。option は -e・-I・-r・-w
-  # だけで、-r の値は temp project の中の相対 path (./ で始まり、.. を含まない) だけ (ruby -run のように、標準の library が
-  # top-level の関数を足す形を防ぐ)。-e の後ろの引数 (code の ARGV) も受けない。
+  # receiver の無い呼び出しは RUBY_INLINE_FUNCTIONS と、呼ぶ側が渡す fixture の関数 (fixture.functions) だけ。option は
+  # -e・-I・-r・-w だけで、-e の後ろの引数 (code の ARGV) も受けない。-r の値は次の 2 つだけ (ruby -run のように、標準の
+  # library が top-level の関数を足す形を防ぐ)。
+  #   - temp project の中の相対 path (./ で始まり、.. を含まない)
+  #   - 名前。-I が 1 つだけで、その値が project の中の相対 path のとき、DIR/NAME.rb が初期の fixture の Ruby の file
+  #     (fixture.ruby_files) にあれば許す (#742。path の要素の形は RUBY_PATH_SEGMENT)。-I の dir は標準の library より先に
+  #     探される。-I が 2 つ以上だと前の dir が勝ち、-Ia:b は : で分かれるので受けない
+  # どちらも名前と path の形で照らす近似で、cd の後の読み込み先や、run の途中の file の変更は追わない。
   RUBY_INLINE_VALUE_OPTIONS = %w[-e -I -r].freeze
   RUBY_INLINE_FLAGS = %w[-w].freeze
   RUBY_INLINE_FUNCTIONS = %w[p pp puts print raise].freeze
@@ -742,8 +753,10 @@ module SkillBehaviorClassifier
   RUBY_INLINE_TOKENS = %i[@int @float @rational @imaginary @tstring_content @CHAR @label].freeze
 
   # option の並びを読む。-e が無ければ nil (今の interpreter の規則に任せる)。-e があれば exec か unknown。
-  def self.ruby_inline_call(args, fns)
+  def self.ruby_inline_call(args, fixture)
     codes = []
+    includes = []
+    requires = []
     bad = false
     i = 0
     while i < args.length
@@ -767,16 +780,35 @@ module SkillBehaviorClassifier
         break
       end
       codes << val if opt == "-e"
-      bad = true if opt == "-r" && !ruby_project_require?(val)
+      includes << val if opt == "-I"
+      requires << val if opt == "-r"
     end
     return nil if codes.empty?
     return "unknown" if bad || i < args.length
+    return "unknown" unless requires.all? { |r| ruby_project_require?(r) || ruby_fixture_require?(r, includes, fixture) }
 
-    ruby_inline_code?(codes.join("\n"), fns) ? "exec" : "unknown"
+    ruby_inline_code?(codes.join("\n"), fixture.functions) ? "exec" : "unknown"
   end
 
   def self.ruby_project_require?(path)
     path.start_with?("./") && path.length > 2 && !path.split("/").include?("..")
+  end
+
+  # -I の dir と -r の名前を合わせた path の要素の形。Ruby が -I で特別に読む字 (: で dir を分け、~ を展開する) と、$・空白、
+  # . と .. の要素は受けない (fixture の一覧は . と .. を含まない形なので、照らす path も同じ形に限る)。
+  RUBY_PATH_SEGMENT = /\A(?!\.\.?\z)[A-Za-z0-9_.-]+\z/.freeze
+
+  # -r の名前を、-I の 1 つの dir と初期の fixture の Ruby の file で照らす (#742)。-I の値の . と空の要素 (./lib・lib/) は
+  # 外し、絶対 path は受けない。次の 2 つも受けない (review の round 1。Ruby 2.6.10 で実測)。
+  #   - 空の -I。Ruby は探す dir に足さないので、名前は標準の library から読まれる (-I '' -run は標準の un.rb)
+  #   - 名前の最後の要素の . 。Ruby は拡張子 (.rb・.so など) をそのまま使い、.rb を足さない (-run.rb は標準の un.rb)
+  def self.ruby_fixture_require?(name, includes, fixture)
+    return false if name.empty? || includes.length != 1 || includes.first.empty? || includes.first.start_with?("/")
+
+    path = includes.first.split("/").reject { |p| p.empty? || p == "." } + name.split("/", -1)
+    return false unless path.all? { |p| p.match?(RUBY_PATH_SEGMENT) } && !path.last.include?(".")
+
+    fixture.ruby_files.include?((path[0...-1] + ["#{path.last}.rb"]).join("/"))
   end
 
   def self.ruby_inline_code?(code, fns)

@@ -400,11 +400,14 @@ end
 check("門は escape の後に閉じない二重引用を通さない", !P.simple_command?("echo \"a\\\"") && !P.simple_command?("echo \"a\\\\"))
 check("門は \\\" と \\\\ の後に閉じる二重引用を通す", P.simple_command?("echo \"a\\\"b\\\\\""))
 
-# inline の Ruby (ruby -e。#737)。code を構文の木にし、許す形の表に収まるときだけ exec。fixture の関数 (fns) は、
-# 渡したときだけ、その名前の receiver の無い呼び出しを許す。表に無い形・option は unknown に残す。
+# inline の Ruby (ruby -e。#737)。code を構文の木にし、許す形の表に収まるときだけ exec。fixture の関数は、fixture を
+# 渡したときだけ、その名前の receiver の無い呼び出しを許す。表に無い形・option は unknown に残す。表の [] は fixture を
+# 渡さない呼び出し、fx は repo の median の fixture (関数 median と、初期の Ruby の file の一覧。#742)。
 sq = 39.chr
 inline = ->(code, opts = "") { "ruby #{opts}-e #{sq}#{code}#{sq}" }
-fx = ["median"]
+fx = P::Fixture.new(%w[median], %w[lib/median.rb test/median_test.rb])
+# path の要素の形を確かめるための一覧 (実際の fixture には無い path も入れる)
+cf = P::Fixture.new([], %w[a:b/x.rb ~/x.rb ../x.rb lib/x.rb .hidden/x.rb lib.rb x.rb lib/x.rb.rb lib/x.so.rb])
 ruby_inline = [
   # 受け付ける形
   [inline.("p 1"), [], "exec"],
@@ -467,6 +470,48 @@ ruby_inline = [
   [inline.("p 1", "-r /tmp/x.rb "), [], "unknown"],
   ["ruby -run -e cp", fx, "unknown"],
   ["ruby -r un -e cp", fx, "unknown"],
+  # -r の名前 (#742)。-I が 1 つで、その dir の NAME.rb が初期の fixture の file にあるときだけ。-I と -r の順は問わない
+  [inline.("p median([1, 2])", "-Ilib -rmedian "), fx, "exec"],
+  [inline.("p median([1, 2])", "-I lib -r median "), fx, "exec"],
+  [inline.("p median([1, 2])", "-rmedian -Ilib "), fx, "exec"],
+  [inline.("p median([1, 2])", "-I./lib -rmedian "), fx, "exec"],
+  [inline.("p median([1, 2])", "-I lib/ -rmedian "), fx, "exec"],
+  [inline.("p median([1, 2])", "-I. -rlib/median "), fx, "exec"],
+  [inline.("p 1", "-Itest -rmedian_test "), fx, "exec"],
+  [inline.("p median([1])", "-Ilib -rmedian -r ./lib/median "), fx, "exec"],
+  ["/bin/zsh -lc \"ruby -Ilib -rmedian -e #{sq}p median([1]); puts \\\"ok\\\"#{sq}\"", fx, "exec"],
+  [inline.("p 1", "-Ilib -rmedian "), [], "unknown"],
+  [inline.("p 1", "-rmedian "), fx, "unknown"],
+  [inline.("p 1", "-Ilib -rjson "), fx, "unknown"],
+  ["ruby -Ilib -run -e cp", fx, "unknown"],
+  [inline.("p 1", "-Ilib -Itest -rmedian "), fx, "unknown"],
+  [inline.("p 1", "-Ilib -Ilib -rmedian "), fx, "unknown"],
+  [inline.("p 1", "-Ilib:test -rmedian "), fx, "unknown"],
+  [inline.("p 1", "-I/lib -rmedian "), fx, "unknown"],
+  [inline.("p 1", "-I../lib -rmedian "), fx, "unknown"],
+  [inline.("p 1", "-Ilib/../lib -rmedian "), fx, "unknown"],
+  [inline.("p 1", "-I~/lib -rmedian "), fx, "unknown"],
+  [inline.("p 1", "-I #{sq}$LIB#{sq} -rmedian "), fx, "unknown"],
+  [inline.("p 1", "-Itest -rmedian "), fx, "unknown"],
+  [inline.("p 1", "-Ilib -rmedian.rb "), fx, "unknown"],
+  [inline.("p 1", "-Ilib -rlib/median "), fx, "unknown"],
+  [inline.("p 1", "-Ilib -rmedian -rjson "), fx, "unknown"],
+  [inline.('system("x")', "-Ilib -rmedian "), fx, "unknown"],
+  ["#{inline.("p 1", "-Ilib -rmedian ")}; touch out", fx, "file-write"],
+  # path の要素の形 (#742)。Ruby が -I で特別に読む字 (: と ~)、.. の要素、絶対 path は、一覧に同じ path があっても受けない
+  [inline.("p 1", "-Ia:b -rx "), cf, "unknown"],
+  [inline.("p 1", "-I~ -rx "), cf, "unknown"],
+  [inline.("p 1", "-I.. -rx "), cf, "unknown"],
+  [inline.("p 1", "-I. -r../x "), cf, "unknown"],
+  [inline.("p 1", "-I/lib -rx "), cf, "unknown"],
+  [inline.("p 1", "-Ilib -r #{sq}#{sq} "), cf, "unknown"],
+  # review の round 1 (#742)。空の -I は Ruby が探す dir に足さず、名前の最後の要素の拡張子は .rb を足さずに使う
+  [inline.("p 1", "-I #{sq}#{sq} -rx "), cf, "unknown"],
+  [inline.("p 1", "-I. -rx "), cf, "exec"],
+  [inline.("p 1", "-Ilib -rx.rb "), cf, "unknown"],
+  [inline.("p 1", "-Ilib -rx.so "), cf, "unknown"],
+  [inline.("p 1", "-Ilib -rx "), cf, "exec"],
+  [inline.("p 1", "-I.hidden -rx "), cf, "exec"],
   [inline.("p 1", "-C ./lib "), [], "unknown"],
   [inline.("p 1", "-n "), [], "unknown"],
   [inline.("p 1", "-W0 "), [], "unknown"],
@@ -521,15 +566,17 @@ ruby_inline = [
   ["perl -Ipi -e 1 f", [], "unknown"], ["ruby -Fpi -e 1 f", [], "unknown"], ["ruby -xpi -e 1 f", [], "unknown"],
   ["ruby -Cpi -e 1 f", [], "unknown"], ["ruby -Xpi -e 1 f", [], "unknown"], ["ruby -Kupi -e 1 f", [], "file-write"],
 ]
-ruby_inline.each do |cmd, fns, want|
-  got = P.classify_shell(cmd, fns: fns)
-  check("classify_shell(#{cmd.inspect}, fns: #{fns.inspect}) は #{want} (実際は #{got})", got == want)
+ruby_inline.each do |cmd, fixture, want|
+  fixture = P::NO_FIXTURE if fixture == []
+  got = P.classify_shell(cmd, fixture: fixture)
+  label = { fx => "fx", cf => "cf" }.fetch(fixture, "none")
+  check("classify_shell(#{cmd.inspect}, #{label}) は #{want} (実際は #{got})", got == want)
 end
-check("fns を渡さない classify_claude の Bash は fixture の関数を許さない",
+check("fixture を渡さない classify_claude の Bash は fixture の関数を許さない",
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-r ./lib/median ") }) == "unknown")
-check("classify_claude の Bash は fns を分類器に渡す",
-      P.classify_claude("Bash", { "command" => inline.("p median([1])", "-r ./lib/median ") }, fns: fx) == "exec")
-check("分類器の版は 3 (#742)", P::VERSION == 3)
+check("classify_claude の Bash は fixture を分類器に渡す",
+      P.classify_claude("Bash", { "command" => inline.("p median([1])", "-Ilib -rmedian ") }, fixture: fx) == "exec")
+check("分類器の版は 4 (#742)", P::VERSION == 4)
 
 claude = {
   ["Read", { "file_path" => "/p/lib/median.rb" }] => "read",
@@ -1025,7 +1072,7 @@ unset FAKE_WRITE
   '["cases_digest","classifier_version","conditions","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
   || fail "claude ids keys: $(json_get "$res" 'd["ids"].keys.sort')"
 [ "$(json_get "$res" 'd["ids"].values_at("host_version", "init_model", "requested_model", "permission_mode", "max_turns", "repeat", "classifier_version")')" = \
-  '["9.9.9","m-fake","default","acceptEdits",12,2,3]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
+  '["9.9.9","m-fake","default","acceptEdits",12,2,4]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
 [ "$(json_get "$res" 'd["ids"]["tool_surface"]')" = \
   '{"requested":["Read","Glob","Grep","Edit","Write","NotebookEdit","Bash","Skill"],"init":"Bash,Edit,Glob,Grep,NotebookEdit,Read,Skill,Write"}' ] \
   || fail "claude tool surface: $(json_get "$res" 'd["ids"]["tool_surface"]')"
@@ -1384,20 +1431,30 @@ rescue ProbeSkillBehavior::Error => e
   e.message.include?("could not be parsed")
 end
 check("構文を読めない fixture の Ruby の file は止める", refused)
+# fixture の情報 (#742): 関数と、初期の Ruby の file の相対 path (名前順。.rb の regular file だけ)
+FileUtils.mkdir_p(File.join(root, "ok", ".hidden"))
+File.write(File.join(root, "ok", ".hidden", "c.rb"), "x = 1\n")
+FileUtils.mkdir_p(File.join(root, "ok", "dir.rb"))
+info = P.fixture_info(File.join(root, "ok"))
+check("fixture の情報は関数と初期の Ruby の file (#{info.ruby_files.inspect})",
+      info.functions == %w[helper other] && info.ruby_files == %w[.hidden/c.rb lib/a.rb lib/b.rb])
+check("repo の fixture median の Ruby の file", P.fixture_info(ARGV[2]).ruby_files == %w[lib/median.rb test/median_test.rb])
 exit(@failed.zero? ? 0 : 1)
 RUBY
 inline_events="$tmp/codex-inline.jsonl"
 cat > "$inline_events" <<'EOF'
 {"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"ruby -r ./lib/median -e 'p median([1, 2])'\"","exit_code":0,"status":"completed"}}
 {"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc \"ruby -r ./lib/median -e 'cp 1'\"","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"command_execution","command":"/bin/zsh -lc \"ruby -Ilib -rmedian -e 'p median([1, 2])'\"","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_4","type":"command_execution","command":"/bin/zsh -lc \"ruby -Ilib -rjson -e 'p 1'\"","exit_code":0,"status":"completed"}}
 {"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}
 EOF
 res="$tmp/codex-inline.json"
 run_fake codex "$inline_events" --model m-x --only investigate-diagnose-only --codex-home "$eval_home" --out "$res"
 [ "$rc" -eq 0 ] || fail "codex probe with inline Ruby should exit 0 (rc=$rc): $out"
-[ "$(json_get "$res" 'd["runs"][0]["calls"].map { |c| c["class"] }')" = '["exec","unknown"]' ] \
-  || fail "the probe should pass the fixture functions to the classifier (#737): $(json_get "$res" 'd["runs"][0]["calls"]')"
-[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '3' ] || fail "codex ids should record classifier version 3"
+[ "$(json_get "$res" 'd["runs"][0]["calls"].map { |c| c["class"] }')" = '["exec","unknown","exec","unknown"]' ] \
+  || fail "the probe should pass the fixture functions and files to the classifier (#737・#742): $(json_get "$res" 'd["runs"][0]["calls"]')"
+[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '4' ] || fail "codex ids should record classifier version 4"
 
 # prepare_run は、case の検査を経ない呼び出しでも、fixture と skill の dir の symlink を copy の前に拒む
 ruby -r"$script_dir/lib/check_helper" - "$src" "$tmp/prep" "$fixture" <<'RUBY'
