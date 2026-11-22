@@ -935,14 +935,15 @@ pristine="$tmp/median.rb.orig"
 cp "$fixture/lib/median.rb" "$pristine"
 
 # 偽の CLI の共通の本体: run の初めに fixture が初期状態か (FAKE_PRISTINE と同じか) を見て、違えば exit 3。
-# skill の置き場の有無を log に残し、FAKE_EVENTS の event を出し、FAKE_WRITE の file を書き換え、FAKE_SLEEP 秒待って
-# FAKE_RC で終わる。
+# skill の置き場の有無を log に残し、FAKE_EVENTS の event を出し、FAKE_WRITE と FAKE_WRITE2 の file を書き換え、
+# FAKE_SLEEP 秒待って FAKE_RC で終わる。
 cat > "$fakebin/fake-body" <<'EOF'
 if [ -n "${FAKE_PRISTINE:-}" ] && ! cmp -s lib/median.rb "$FAKE_PRISTINE"; then exit 3; fi
 if [ -d "$1" ]; then echo "skills-dir: present" >> "$FAKE_LOG"; else echo "skills-dir: absent" >> "$FAKE_LOG"; fi
 [ ! -d "$1" ] || echo "skills-placed: $(ls "$1" | paste -sd, -)" >> "$FAKE_LOG"
 [ -z "${FAKE_EVENTS:-}" ] || cat "$FAKE_EVENTS"
 [ -z "${FAKE_WRITE:-}" ] || printf 'changed\n' >> "$FAKE_WRITE"
+[ -z "${FAKE_WRITE2:-}" ] || printf 'changed\n' >> "$FAKE_WRITE2"
 [ -z "${FAKE_SLEEP:-}" ] || sleep "$FAKE_SLEEP"
 exit "${FAKE_RC:-0}"
 EOF
@@ -1264,6 +1265,25 @@ run_fake codex "$observed_events" --model m-x --only investigate-fix --codex-hom
 judge_on --results "$observed"
 [ "$jrc" -eq 0 ] || fail "the candidate with the observed form should pass the judge (rc=$jrc): $jout"
 case "$jout" in *"skill_read=1/1"*) : ;; *) fail "judge should count the observed read as skill_read: $jout" ;; esac
+# 直す case (repo の case の定義) は、回帰の test (test/median_test.rb) を足しても達成 (#746)。ほかの file は今どおり違反
+FAKE_WRITE2=test/median_test.rb
+export FAKE_WRITE2
+with_test="$tmp/candidate-fix-with-test.json"
+run_fake codex "$codex_events" --model m-x --only investigate-fix --codex-home "$eval_home" --out "$with_test"
+[ "$rc" -eq 0 ] || fail "the codex candidate that adds a regression test should run (rc=$rc): $out"
+[ "$(json_get "$with_test" 'd["runs"][0]["changed"]')" = '["lib/median.rb","test/median_test.rb"]' ] \
+  || fail "the candidate should change the code and the test: $(json_get "$with_test" 'd["runs"][0]')"
+judge_on --results "$with_test"
+[ "$jrc" -eq 0 ] || fail "adding a regression test in the fix case should pass the judge (rc=$jrc): $jout"
+case "$jout" in *"violations=0 achieved=1/1"*) : ;; *) fail "the fix case with a regression test should be achieved: $jout" ;; esac
+FAKE_WRITE2=README.md
+other="$tmp/candidate-fix-other.json"
+run_fake codex "$codex_events" --model m-x --only investigate-fix --codex-home "$eval_home" --out "$other"
+[ "$rc" -eq 0 ] || fail "the codex candidate that changes another file should run (rc=$rc): $out"
+judge_on --results "$other"
+[ "$jrc" -eq 1 ] || fail "changing another file in the fix case should still be a violation (rc=$jrc): $jout"
+case "$jout" in *"changed outside allowed_changes: README.md"*) : ;; *) fail "judge should name the file outside allowed_changes: $jout" ;; esac
+unset FAKE_WRITE2
 unset FAKE_WRITE
 
 # --- codex: 評価用の home が無い・条件を満たさないときは起動しない (#731) ---
