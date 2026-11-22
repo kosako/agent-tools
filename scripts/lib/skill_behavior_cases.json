@@ -24,7 +24,7 @@
       "reach": ["lib/median.rb"],
       "forbid": ["git-write", "github-write", "agent-launch"],
       "require": ["file-write"],
-      "allowed_changes": ["lib/median.rb"],
+      "allowed_changes": ["lib/median.rb", "test/median_test.rb"],
       "place_skills": ["personal-investigate", "personal-production-rail"]
     },
     {

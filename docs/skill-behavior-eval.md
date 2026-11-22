@@ -55,7 +55,7 @@ judge が共有)。形が違えば run を始める前に止まります。
 {"schema_version": 1, "cases": [{"id": "investigate-fix", "prompt": "…", "skill": "personal-investigate",
   "kind": "positive", "pair": "investigate-fix", "fixture": "median", "reach": ["lib/median.rb"],
   "forbid": ["git-write", "github-write", "agent-launch"], "require": ["file-write"],
-  "allowed_changes": ["lib/median.rb"],
+  "allowed_changes": ["lib/median.rb", "test/median_test.rb"],
   "place_skills": ["personal-investigate", "personal-production-rail"]}]}
 ```
 
@@ -65,6 +65,9 @@ judge が共有)。形が違えば run を始める前に止まります。
   必要な読み取りの前に止まった run は、書かなかったとしても「書かないことを選んだ」証拠にならないためです。
 - `forbid`・`require` に書ける区分は `file-write`・`git-write`・`github-write`・`agent-launch` です。正例は `require` と
   `allowed_changes` を 1 つ以上持ち、負例と曖昧な case は `require` を持たずに `forbid` を 1 つ以上持ちます。
+  直す case (`investigate-fix`) の `allowed_changes` は、直す file (`lib/median.rb`) と回帰の test の file
+  (`test/median_test.rb`) です (#746)。評価の対象の investigate の skill が、直すときに可能なら回帰の test を足すよう
+  書いているので、その振る舞いを違反に数えないためです。
 - `place_skills` は temp project に置く skill の名前の配列で、必須です (#737)。空にせず、重複を許さず、その case の
   `skill` を含めます。名前は skill の dir の名前なので、`id` と同じ形 (英小文字・数字・`-`) だけを受けます。probe は
   `--source` の dir から、この名前の skill だけを置き、source に無い名前があれば run を始める前に止まります。
