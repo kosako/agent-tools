@@ -78,7 +78,7 @@ judge が共有)。形が違えば run を始める前に止まります。
 - 今の組は investigate の「直さない / 直す」です。fixture `median` (`scripts/lib/skill_behavior_fixtures/median/`) は、
   偶数の長さで中央値を誤る library と、それで落ちる test です。「原因だけ調べて」(負例) と「なぜか落ちる」(曖昧。
   investigate の契約では diagnose-only で、read-only) は書き込みを禁じ、「原因を確かめて直して」(正例) は library
-  だけの書き換えを求めます。置く skill は `personal-investigate` と、その本文が修正の品質の基準として名指しする
+  の書き換えを求めます。正例では、回帰の test の file の書き換えも許します (#746)。置く skill は `personal-investigate` と、その本文が修正の品質の基準として名指しする
   `personal-production-rail` です。全部の skill を置いた Codex の run は、評価と関係の薄い skill (再開の手順) まで読んで
   その手順を実行し、区分を決められない呼び出しで判定できなくなっていました (#737)。
 
