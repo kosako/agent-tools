@@ -26,7 +26,8 @@ module SkillBehaviorClassifier
   # 5 で、ruby -c FILE と、inline の Ruby の code の中の require "./…" を足した (#745)。
   # 6 で、引用の外の受ける形の brace の展開を足した (#745)。
   # 7 で、rg の位置引数にある、決めた形の引用の外の glob の語を足した (#750)。
-  VERSION = 7
+  # 8 で、引用の外の ^ を glob の字に足した (#751)。
+  VERSION = 8
 
   CLAUDE_READ_TOOLS = %w[Read Glob Grep LS Skill NotebookRead].freeze
   CLAUDE_WRITE_TOOLS = %w[Edit Write NotebookEdit MultiEdit].freeze
@@ -491,7 +492,7 @@ module SkillBehaviorClassifier
     return assigned ? "unknown" : "read" if words.empty? || %w[} fi done].include?(words.first)
 
     cls = classify_words(words, depth, fixture: fixture)
-    # 引用の外の glob (* ? [) は、展開で引数の数と意味が変わる (uniq a* が出力の file を持つ、など)。rg の位置引数の、決めた
+    # 引用の外の glob (* ? [ ^) は、展開で引数の数と意味が変わる (uniq a* が出力の file を持つ、など)。rg の位置引数の、決めた
     # 形の語だけは許す (#750。rg_positional_globs?)。brace の展開がある部分は、展開で語の役割がずれうるので許さない
     if masked.match?(GLOB_CHAR) && !PLAIN_READ.include?(File.basename(words.first)) &&
        (braced || !rg_positional_globs?(text, masked, prefix + words, prefix.length))
@@ -503,7 +504,9 @@ module SkillBehaviorClassifier
   end
 
   ASSIGNMENT = /\A[A-Za-z_][A-Za-z0-9_]*=/.freeze
-  GLOB_CHAR = /[*?\[]/.freeze
+  # glob の字。^ は zsh の EXTENDED_GLOB で、語の先頭でも途中でも glob になる (^x は x 以外の名前、HEAD^ は HEAD で始まる名前に
+  # 展開。#751)。分類器は shell の設定を見られないので、設定によらず glob として扱う。ほかの既定でない設定の網羅ではない
+  GLOB_CHAR = /[*?\[^]/.freeze
   # rg の位置引数で許す glob の語の形 (#750)。先頭の字を英数字・_・.・/ に限る (glob の字の前に literal が 1 字以上ある)。
   # 展開した名前はこの字で始まり、option にならない。glob の字・option の - と、zsh で語の先頭に来ると展開や glob になる字
   # (^ = ~) で始まる語は、展開した名前の先頭を決められないので許さない。

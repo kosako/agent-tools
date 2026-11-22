@@ -496,6 +496,20 @@ shell = {
   "rg x < in*" => "unknown",
   "rg x README* > out" => "file-write",
   "rg x README*; rm y" => "file-write",
+  # #751: 引用の外の ^ は、zsh の EXTENDED_GLOB で語の先頭でも途中でも glob になるので、glob の字として扱う。読むだけの
+  # command と引用の中は今どおり。rg の位置引数の例外 (#750) は、先頭が ^ の語を許さず、途中の ^ は許す
+  "rg foo ^README.md" => "unknown",
+  "sort ^x" => "unknown",
+  "git show HEAD^" => "unknown",
+  "git diff HEAD^ HEAD" => "unknown",
+  %q{/bin/zsh -lc "rg foo ^README.md"} => "unknown",
+  "uniq ^a out" => "file-write",
+  "cat ^README.md" => "read",
+  %q{rg foo '^x' lib} => "read",
+  %q{git show 'HEAD^'} => "read",
+  %q{sed -n '/^## /p' lib/median.rb} => "read",
+  "rg foo READ^ME.md" => "read",
+  "rg foo lib/^x.rb" => "read",
 }
 shell.each do |cmd, want|
   got = P.classify_shell(cmd)
@@ -708,7 +722,7 @@ check("fixture を渡さない classify_claude の Bash は fixture の関数を
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-r ./lib/median ") }) == "unknown")
 check("classify_claude の Bash は fixture を分類器に渡す",
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-Ilib -rmedian ") }, fixture: fx) == "exec")
-check("分類器の版は 7 (#750)", P::VERSION == 7)
+check("分類器の版は 8 (#751)", P::VERSION == 8)
 observed745 = "ruby -e 'require \"./lib/median\"; p median([3,1,2]), median([4,1,3,2])'"
 check("claude の Bash の、code の中の require の観測した形は fixture を渡せば exec (#745)",
       P.classify_claude("Bash", { "command" => observed745 }, fixture: fx) == "exec" &&
@@ -825,6 +839,8 @@ read_forms = {
   "重ねた / と小文字の skill.md" => "/bin/zsh -lc 'cat /h/skills//personal-investigate/skill.md'",
   "前の要素に ~" => "/bin/zsh -lc 'cat ~/.codex/skills/personal-investigate/SKILL.md'",
   "後ろに区切りの字" => "/bin/zsh -lc 'sed -n 1,80p \"/h/skills/personal-investigate/SKILL.md\"; cat lib/median.rb'",
+  # #751: 門には ^ を入れない (引用の中の正規表現の ^ で止めないため)
+  "引用の中の正規表現の ^" => %q{/bin/zsh -lc "sed -n '/^## /p' /h/skills/personal-investigate/SKILL.md"},
 }
 read_forms.each do |label, command|
   y = one.call(command)
@@ -833,6 +849,7 @@ read_forms.each do |label, command|
 end
 unresolved_forms = {
   "glob の SKILL.md" => "/bin/zsh -lc 'cat /h/skills/*/SKILL.md'",
+  "SKILL.md の直前の要素の ^ (#751)" => "/bin/zsh -lc 'cat /h/skills/^x/SKILL.md'",
   "名前を変数に入れた形" => "/bin/zsh -lc 'n=personal-investigate; cat /h/skills/$n/SKILL.md'",
   "cd の無い単独の SKILL.md" => "/bin/zsh -lc 'find /h/skills -name SKILL.md -exec cat {} +'",
   "最後の要素が .." => "/bin/zsh -lc 'cat /h/skills/personal-investigate/../SKILL.md'",
@@ -1209,7 +1226,7 @@ unset FAKE_WRITE
   '["cases_digest","classifier_version","conditions","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
   || fail "claude ids keys: $(json_get "$res" 'd["ids"].keys.sort')"
 [ "$(json_get "$res" 'd["ids"].values_at("host_version", "init_model", "requested_model", "permission_mode", "max_turns", "repeat", "classifier_version")')" = \
-  '["9.9.9","m-fake","default","acceptEdits",12,2,7]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
+  '["9.9.9","m-fake","default","acceptEdits",12,2,8]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
 [ "$(json_get "$res" 'd["ids"]["tool_surface"]')" = \
   '{"requested":["Read","Glob","Grep","Edit","Write","NotebookEdit","Bash","Skill"],"init":"Bash,Edit,Glob,Grep,NotebookEdit,Read,Skill,Write"}' ] \
   || fail "claude tool surface: $(json_get "$res" 'd["ids"]["tool_surface"]')"
@@ -1610,7 +1627,7 @@ run_fake codex "$inline_events" --model m-x --only investigate-diagnose-only --c
 [ "$rc" -eq 0 ] || fail "codex probe with inline Ruby should exit 0 (rc=$rc): $out"
 [ "$(json_get "$res" 'd["runs"][0]["calls"].map { |c| c["class"] }')" = '["exec","unknown","exec","unknown"]' ] \
   || fail "the probe should pass the fixture functions and files to the classifier (#737・#742): $(json_get "$res" 'd["runs"][0]["calls"]')"
-[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '7' ] || fail "codex ids should record classifier version 7"
+[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '8' ] || fail "codex ids should record classifier version 8"
 
 # prepare_run は、case の検査を経ない呼び出しでも、fixture と skill の dir の symlink を copy の前に拒む
 ruby -r"$script_dir/lib/check_helper" - "$src" "$tmp/prep" "$fixture" <<'RUBY'
