@@ -448,6 +448,54 @@ shell = {
   "cat $X/{a,b}" => "unknown",
   "cat x/{a,b}.md | sh" => "unknown",
   "{ cat x; }" => "unknown",
+  # #750: rg の位置引数の、引用の外の glob の語は、語の全体に引用が無く、先頭の字が [A-Za-z0-9_./] のときだけ許す。値の
+  # 位置・option の語・引用を含む語・command の名前と prefix の語・語の外 (redirect の先) の glob、brace の展開のある部分、
+  # rg のほかの command は今どおり unknown。観測した形 (Codex) は raw log の文字列のまま
+  %q{/bin/zsh -lc "rg -n \"median|ruby|test\" README* .  -g '"'!*.lock'"' -g '"'!test/median_test.rb'"' -g '"'!lib/median.rb'"'"} => "read",
+  %q{rg -n "median|ruby|test" README* . -g '!*.lock'} => "read",
+  "rg x lib/*.rb" => "read",
+  "rg x ./*" => "read",
+  "rg x README? lib/[ab].rb" => "read",
+  "rg x -- README*" => "read",
+  "rg x README* -- --pre=sh" => "read",
+  "env rg x README*" => "read",
+  "/opt/homebrew/bin/rg x README*" => "read",
+  "rg x README* 2>/dev/null" => "read",
+  # 引用の中に空白のある語 (語は引用の外の空白でだけ分ける)
+  %q{rg "foo bar" README*} => "read",
+  %q{rg 'a b' -g README* x} => "unknown",
+  "rg x *.md" => "unknown",
+  "rg x *" => "unknown",
+  "rg x [ab].md" => "unknown",
+  "rg -g lib/* x" => "unknown",
+  "rg --glob=*.rb x" => "unknown",
+  "rg -g* x" => "unknown",
+  %q{rg '-g' README* x} => "unknown",
+  %q{rg "-g" README* x} => "unknown",
+  "rg -g README* x README*" => "unknown",
+  "rg -e README* README*" => "unknown",
+  %q{rg x 'README'*} => "unknown",
+  %q{rg x README*'.md'} => "unknown",
+  %q{rg x "README"*} => "unknown",
+  "rg x ^README*" => "unknown",
+  "rg x =README*" => "unknown",
+  "rg x ~/README*" => "unknown",
+  "rg x +README*" => "unknown",
+  "rg {x,-g} README*" => "unknown",
+  "rg x README* lib/{a,b}.rb" => "unknown",
+  # 展開の前と後で長さが同じ brace (ab{c,d} と abc abd)。brace の展開のある部分は、語の対応によらず許さない
+  "rg x README* ab{c,d}" => "unknown",
+  "xargs rg x README*" => "unknown",
+  "find . -exec rg x README* {} +" => "unknown",
+  "./rg x README*" => "unknown",
+  "lib/rg x README*" => "unknown",
+  "rg* x README" => "unknown",
+  "X=1 rg x README*" => "unknown",
+  "sort README*" => "unknown",
+  "rg --pre sh x README*" => "unknown",
+  "rg x < in*" => "unknown",
+  "rg x README* > out" => "file-write",
+  "rg x README*; rm y" => "file-write",
 }
 shell.each do |cmd, want|
   got = P.classify_shell(cmd)
@@ -456,6 +504,11 @@ end
 # 門そのものも、閉じない二重引用を通さない (#742。scanner も別に止めるが、門の規則として固定する)
 check("門は escape の後に閉じない二重引用を通さない", !P.simple_command?("echo \"a\\\"") && !P.simple_command?("echo \"a\\\\"))
 check("門は \\\" と \\\\ の後に閉じる二重引用を通す", P.simple_command?("echo \"a\\\"b\\\\\""))
+# rg の glob の helper は、伏せた写しの語と引用を外した語の数が合わない形 (引用の外の \ の後の空白) を許さない (#750)。
+# この形は門も閉じるが、語の位置の対応はこの照合に依る
+raw, masked = P.scan("rg a\\ b -g README* x")[0][0]
+check("rg の glob の helper は語の数が合わない形を許さない (#750)",
+      !P.rg_positional_globs?(raw, masked, Shellwords.split(raw), 0))
 check("門は受ける形の brace を通し、範囲の brace は通さない (#745)",
       P.simple_command?("cat x/{a,b}.md") && !P.simple_command?("cat x{1..3}") && !P.simple_command?("cat {a,}"))
 
@@ -655,7 +708,7 @@ check("fixture を渡さない classify_claude の Bash は fixture の関数を
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-r ./lib/median ") }) == "unknown")
 check("classify_claude の Bash は fixture を分類器に渡す",
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-Ilib -rmedian ") }, fixture: fx) == "exec")
-check("分類器の版は 6 (#745)", P::VERSION == 6)
+check("分類器の版は 7 (#750)", P::VERSION == 7)
 observed745 = "ruby -e 'require \"./lib/median\"; p median([3,1,2]), median([4,1,3,2])'"
 check("claude の Bash の、code の中の require の観測した形は fixture を渡せば exec (#745)",
       P.classify_claude("Bash", { "command" => observed745 }, fixture: fx) == "exec" &&
@@ -1156,7 +1209,7 @@ unset FAKE_WRITE
   '["cases_digest","classifier_version","conditions","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
   || fail "claude ids keys: $(json_get "$res" 'd["ids"].keys.sort')"
 [ "$(json_get "$res" 'd["ids"].values_at("host_version", "init_model", "requested_model", "permission_mode", "max_turns", "repeat", "classifier_version")')" = \
-  '["9.9.9","m-fake","default","acceptEdits",12,2,6]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
+  '["9.9.9","m-fake","default","acceptEdits",12,2,7]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
 [ "$(json_get "$res" 'd["ids"]["tool_surface"]')" = \
   '{"requested":["Read","Glob","Grep","Edit","Write","NotebookEdit","Bash","Skill"],"init":"Bash,Edit,Glob,Grep,NotebookEdit,Read,Skill,Write"}' ] \
   || fail "claude tool surface: $(json_get "$res" 'd["ids"]["tool_surface"]')"
@@ -1557,7 +1610,7 @@ run_fake codex "$inline_events" --model m-x --only investigate-diagnose-only --c
 [ "$rc" -eq 0 ] || fail "codex probe with inline Ruby should exit 0 (rc=$rc): $out"
 [ "$(json_get "$res" 'd["runs"][0]["calls"].map { |c| c["class"] }')" = '["exec","unknown","exec","unknown"]' ] \
   || fail "the probe should pass the fixture functions and files to the classifier (#737・#742): $(json_get "$res" 'd["runs"][0]["calls"]')"
-[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '6' ] || fail "codex ids should record classifier version 6"
+[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '7' ] || fail "codex ids should record classifier version 7"
 
 # prepare_run は、case の検査を経ない呼び出しでも、fixture と skill の dir の symlink を copy の前に拒む
 ruby -r"$script_dir/lib/check_helper" - "$src" "$tmp/prep" "$fixture" <<'RUBY'
