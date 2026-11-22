@@ -21,7 +21,8 @@ module SkillBehaviorClassifier
                "agent-launch" => 6 }.freeze
   MAX_DEPTH = 6
   # 規則を変えたら上げる (結果を比べるときの識別子 ids.classifier_version)。2 で inline の Ruby (ruby -e) を足した (#737)。
-  VERSION = 2
+  # 3 で、門の二重引用の \" と \\、ほかの引数の無い ruby -v と ruby --version を足した (#742)。
+  VERSION = 3
 
   CLAUDE_READ_TOOLS = %w[Read Glob Grep LS Skill NotebookRead].freeze
   CLAUDE_WRITE_TOOLS = %w[Edit Write NotebookEdit MultiEdit].freeze
@@ -134,11 +135,33 @@ module SkillBehaviorClassifier
   # --- read と exec の門 (fail-closed) ------------------------------------------------------
   # read と exec は、command が「単純な形」のときだけ付ける。単純な形は、引用の外の字が SIMPLE_CHAR と、区切り
   # (&&・||・|・;・改行) と、/dev/null への redirect と fd の複製 (SAFE_REDIRECTS) だけで、二重引用の中に $・`・\ が
-  # 無い形。展開 ($)・escape (\)・comment (#)・here document と入力の redirect (<)・subshell と関数 (( ) { })・
+  # 無い形。ただし二重引用の中の \" と \\ (DQ_ESCAPES) だけは許す (#742。Codex は中に ' を含む script を二重引用で表示し、
+  # この 2 つで escape する。scanner も Shellwords も 2 字の組で読む)。二重引用の終わりは、escape を組で読み飛ばして探す。
+  # 展開 ($)・ほかの escape (\$・\`・\x)・comment (#)・here document と入力の redirect (<)・subshell と関数 (( ) { })・
   # background (&) を含む command は、それだけで unknown 以上にする (scanner で読み切れない形を read にしないため)。
   # 書き込みなどの重い区分は、この門の外でも scanner の結果をそのまま使う。
   SIMPLE_CHAR = %r{[A-Za-z0-9 \t\n_./:,=+@%^*?~\[\];-]}.freeze
   SAFE_REDIRECTS = ["2>/dev/null", "1>/dev/null", ">/dev/null", "&>/dev/null", "2>&1", "1>&2", ">&2"].freeze
+  DQ_ESCAPES = ['\\"', "\\\\"].freeze
+
+  # 二重引用の中身の始まり (start) から読み、閉じる " の位置を返す。$・`・許さない escape があるか、閉じなければ nil。
+  def self.dq_end(cmd, start)
+    j = start
+    while j < cmd.length
+      c = cmd[j]
+      return j if c == '"'
+      return nil if c == "$" || c == "`"
+
+      if c == "\\"
+        return nil unless DQ_ESCAPES.include?(cmd[j, 2])
+
+        j += 2
+      else
+        j += 1
+      end
+    end
+    nil
+  end
 
   def self.simple_command?(cmd)
     i = 0
@@ -150,8 +173,8 @@ module SkillBehaviorClassifier
 
         i = j + 1
       elsif ch == '"'
-        j = cmd.index('"', i + 1)
-        return false if j.nil? || cmd[(i + 1)...j].match?(/[$`\\]/)
+        j = dq_end(cmd, i + 1)
+        return false unless j
 
         i = j + 1
       elsif (r = SAFE_REDIRECTS.find { |s| cmd[i, s.length] == s })
@@ -663,7 +686,13 @@ module SkillBehaviorClassifier
     "perl" => { flags: "acfnpsStTuUvwWXh", next: "eEI", rest: "MmFxCD", one: "", digits: "0l", colon: "V" },
   }.freeze
 
+  # ほかの引数の無い ruby -v と ruby --version は、版を出して終わる (標準入力も読まない。#742 で Ruby 2.6.10 と mise の
+  # Ruby で実測)。-v の後に script や -e が続く形は、verbose の mode で program を走らせるので、下の規則のまま。
+  RUBY_VERSION_ARGS = [["-v"], ["--version"]].freeze
+
   def self.interpreter_call(name, args, fns: [])
+    return "read" if name == "ruby" && RUBY_VERSION_ARGS.include?(args)
+
     # ruby -e (#737)。in-place の編集の印があれば、下の今の規則で file-write にする
     if name == "ruby" && !in_place?(name, args)
       inline = ruby_inline_call(args, fns)

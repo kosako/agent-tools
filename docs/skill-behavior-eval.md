@@ -92,14 +92,16 @@ option を持つ command があるため)。確かめられない形 (知らな�
 shell の command には、もう 1 つ門があります。`read` と `exec` は、command が「単純な形」のときだけ付けます。単純な形は、
 引用の外の字が英数字と `_ . / : , = + @ % ^ * ? ~ [ ] ; -` と空白だけで、ほかは区切り (`&&`・`||`・`|`・`;`・改行)、
 `/dev/null` への redirect と fd の複製 (`2>/dev/null`・`2>&1` など)、find の `{}` だけの形です。二重引用の中に `$`・
-`` ` ``・`\` があっても単純な形ではありません。展開 (`$`)、escape (`\`)、comment (`#`)、here document と入力の redirect
-(`<`)、subshell と関数 (`( )`・`{ }`)、background (`&`) を含む command は、それだけで `unknown` 以上です。shell の構文を
-完全には解釈しないので、解釈しきれない形を `read` にしないためです。書き込みなどの重い区分は、門の外でも scanner で
-検出します。
+`` ` ``・`\` があっても単純な形ではありません。ただし、二重引用の中の `\"` と `\\` だけは許します (#742)。Codex は、中に
+`'` を含む script を `/bin/zsh -lc "…"` と二重引用で表示し、この 2 つで escape するためです (`!` と `$` は単引用の切れ端
+`"'!'"` で書く)。二重引用の終わりは、escape を 2 字ずつ読み飛ばして探します。`\$`・`` \` ``・そのほかの `\x` は今どおり
+単純な形ではありません。展開 (`$`)、escape (`\`)、comment (`#`)、here document と入力の redirect (`<`)、subshell と関数
+(`( )`・`{ }`)、background (`&`) を含む command は、それだけで `unknown` 以上です。shell の構文を完全には解釈しないので、
+解釈しきれない形を `read` にしないためです。書き込みなどの重い区分は、門の外でも scanner で検出します。
 
 | 区分 | 例 |
 | --- | --- |
-| `read` | Claude Code の `Read`・`Glob`・`Grep`・`Skill`。shell の `cat`・`ls`・`grep`・`git status`・`gh pr view` など、どの option でも書き込みや program の起動をしない command。`sed` は行の範囲や `/正規表現/` の表示 (`sed -n '1,80p'`) だけ、`sort` と `uniq` は option の spec で読めて出力の file が無いとき、`git branch` は一覧の表示だけ |
+| `read` | Claude Code の `Read`・`Glob`・`Grep`・`Skill`。shell の `cat`・`ls`・`grep`・`git status`・`gh pr view` など、どの option でも書き込みや program の起動をしない command。`sed` は行の範囲や `/正規表現/` の表示 (`sed -n '1,80p'`) だけ、`sort` と `uniq` は option の spec で読めて出力の file が無いとき、`git branch` は一覧の表示だけ。ほかの引数の無い `ruby -v` と `ruby --version` (版を出すだけで、標準入力も読まない。#742) |
 | `exec` | file の program の実行。`ruby test/x.rb`・`sh run.sh`・`node x.js` など。interpreter と shell は、決まった option (ruby の `-I`・`-r`・`-w`、python の `-u` など) の後に、その言語の script の拡張子 (`.rb`・`.py`・`.js`・`.sh` など) を持つ file を渡す形だけ。inline の Ruby (`ruby -e`) は、code が下の表に収まる形だけ (#737) |
 | `file-write` | Claude Code の `Edit`・`Write`・`NotebookEdit`、Codex の `file_change`。shell の redirect・`rm`・`mv`・`cp`・`mkdir`・`mktemp`・`sed -i`・`ruby -pi` など (一時 directory への書き込みも含む) |
 | `git-write` | `git commit`・`push`・`reset`・`checkout`・`branch <名前>`・`branch -D`・引数なしの `stash`・`tag <名前>` など。`gh pr checkout` も |
