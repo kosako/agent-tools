@@ -799,12 +799,14 @@ module SkillBehaviorClassifier
   RUBY_PATH_SEGMENT = /\A(?!\.\.?\z)[A-Za-z0-9_.-]+\z/.freeze
 
   # -r の名前を、-I の 1 つの dir と初期の fixture の Ruby の file で照らす (#742)。-I の値の . と空の要素 (./lib・lib/) は
-  # 外し、絶対 path は受けない。
+  # 外し、絶対 path は受けない。次の 2 つも受けない (review の round 1。Ruby 2.6.10 で実測)。
+  #   - 空の -I。Ruby は探す dir に足さないので、名前は標準の library から読まれる (-I '' -run は標準の un.rb)
+  #   - 名前の最後の要素の . 。Ruby は拡張子 (.rb・.so など) をそのまま使い、.rb を足さない (-run.rb は標準の un.rb)
   def self.ruby_fixture_require?(name, includes, fixture)
-    return false if name.empty? || includes.length != 1 || includes.first.start_with?("/")
+    return false if name.empty? || includes.length != 1 || includes.first.empty? || includes.first.start_with?("/")
 
     path = includes.first.split("/").reject { |p| p.empty? || p == "." } + name.split("/", -1)
-    return false unless path.all? { |p| p.match?(RUBY_PATH_SEGMENT) }
+    return false unless path.all? { |p| p.match?(RUBY_PATH_SEGMENT) } && !path.last.include?(".")
 
     fixture.ruby_files.include?((path[0...-1] + ["#{path.last}.rb"]).join("/"))
   end

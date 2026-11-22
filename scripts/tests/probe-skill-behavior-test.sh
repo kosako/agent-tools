@@ -407,7 +407,7 @@ sq = 39.chr
 inline = ->(code, opts = "") { "ruby #{opts}-e #{sq}#{code}#{sq}" }
 fx = P::Fixture.new(%w[median], %w[lib/median.rb test/median_test.rb])
 # path の要素の形を確かめるための一覧 (実際の fixture には無い path も入れる)
-cf = P::Fixture.new([], %w[a:b/x.rb ~/x.rb ../x.rb lib/x.rb .hidden/x.rb lib.rb])
+cf = P::Fixture.new([], %w[a:b/x.rb ~/x.rb ../x.rb lib/x.rb .hidden/x.rb lib.rb x.rb lib/x.rb.rb lib/x.so.rb])
 ruby_inline = [
   # 受け付ける形
   [inline.("p 1"), [], "exec"],
@@ -505,6 +505,11 @@ ruby_inline = [
   [inline.("p 1", "-I. -r../x "), cf, "unknown"],
   [inline.("p 1", "-I/lib -rx "), cf, "unknown"],
   [inline.("p 1", "-Ilib -r #{sq}#{sq} "), cf, "unknown"],
+  # review の round 1 (#742)。空の -I は Ruby が探す dir に足さず、名前の最後の要素の拡張子は .rb を足さずに使う
+  [inline.("p 1", "-I #{sq}#{sq} -rx "), cf, "unknown"],
+  [inline.("p 1", "-I. -rx "), cf, "exec"],
+  [inline.("p 1", "-Ilib -rx.rb "), cf, "unknown"],
+  [inline.("p 1", "-Ilib -rx.so "), cf, "unknown"],
   [inline.("p 1", "-Ilib -rx "), cf, "exec"],
   [inline.("p 1", "-I.hidden -rx "), cf, "exec"],
   [inline.("p 1", "-C ./lib "), [], "unknown"],

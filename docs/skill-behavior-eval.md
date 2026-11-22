@@ -145,7 +145,9 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
     - 名前 (`-Ilib -rmedian`。#742)。`-I` が 1 つだけで、その値が project の中の相対 path (絶対 path・`..`・`~`・`$`・`:` を
       含まない) のとき、`DIR/NAME.rb` が初期の fixture の Ruby の file にあれば許します。`-I` の dir は標準の library より先に
       探され、`-I` と `-r` の順は問いません。`-I` が 2 つ以上だと前の dir が勝ち、`-Ia:b` は `:` で 2 つの dir に分かれるので
-      受けません。初期の file の一覧は、probe が写す前の fixture から読みます (run の途中で増えた file は入らない)。
+      受けません。空の `-I` (`-I ''`) と、最後の要素に `.` のある名前 (`-run.rb`) も受けません。Ruby は空の `-I` を探す dir に
+      足さず、拡張子 (`.rb`・`.so` など) はそのまま使って `.rb` を足さないので、どちらも標準の library から読まれうるためです。
+      初期の file の一覧は、probe が写す前の fixture から読みます (run の途中で増えた file は入らない)。
     - どちらも名前と path の形で照らす近似です。`cd` の後の読み込み先と、run の途中の file の変更は追いません。
 - 外から来る値が引数に入る呼び出し (`xargs` の標準入力、`find -exec` の file 名) は、値で option や command の文字列が
   変わりうるので、中の command が option を問わず read の command のときだけ、その区分を使います。ほかは `unknown` 以上です。
