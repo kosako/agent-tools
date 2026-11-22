@@ -396,6 +396,13 @@ shell = {
   "/bin/zsh -lc 'ruby -c lib/median.rb && ruby -c test/median_test.rb'" => "read",
   "ruby -c" => "unknown",
   "ruby -c -" => "unknown",
+  # review の round 1 (#745)。空の path・/dev/stdin・/dev/fd/0 も標準入力を読むので、.rb の拡張子の path だけを受ける
+  "ruby -c \x27\x27" => "unknown",
+  "ruby -c /dev/stdin" => "unknown",
+  "ruby -c /dev/fd/0" => "unknown",
+  "ruby -c /./dev/stdin" => "unknown",
+  "ruby -c lib/median" => "unknown",
+  "ruby -c -x.rb" => "unknown",
   "ruby -c -e 'p 1'" => "unknown",
   "ruby -ce 'p 1'" => "unknown",
   "ruby -c -r ./lib/median lib/median.rb" => "unknown",

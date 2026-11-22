@@ -104,7 +104,7 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
 
 | 区分 | 例 |
 | --- | --- |
-| `read` | Claude Code の `Read`・`Glob`・`Grep`・`Skill`。shell の `cat`・`ls`・`grep`・`git status`・`gh pr view` など、どの option でも書き込みや program の起動をしない command。`sed` は行の範囲や `/正規表現/` の表示 (`sed -n '1,80p'`) だけ、`sort` と `uniq` は option の spec で読めて出力の file が無いとき、`git branch` は一覧の表示だけ。ほかの引数の無い `ruby -v` と `ruby --version` (版を出すだけで、標準入力も読まない。#742)。`ruby -c FILE` (`-c` と path が 1 つだけ。構文を確かめるだけで、`BEGIN`・本体・`END` も、CLI の `-r` と環境の `RUBYOPT=-r…` の file も実行しない。macOS の system の Ruby 2.6.10 で実測。#745) |
+| `read` | Claude Code の `Read`・`Glob`・`Grep`・`Skill`。shell の `cat`・`ls`・`grep`・`git status`・`gh pr view` など、どの option でも書き込みや program の起動をしない command。`sed` は行の範囲や `/正規表現/` の表示 (`sed -n '1,80p'`) だけ、`sort` と `uniq` は option の spec で読めて出力の file が無いとき、`git branch` は一覧の表示だけ。ほかの引数の無い `ruby -v` と `ruby --version` (版を出すだけで、標準入力も読まない。#742)。`ruby -c FILE` (`-c` と、`.rb` の拡張子の path が 1 つだけ。空の path・`-`・`/dev/stdin` などの標準入力は受けない。構文を確かめるだけで、`BEGIN`・本体・`END` も、CLI の `-r` と環境の `RUBYOPT=-r…` の file も実行しない。macOS の system の Ruby 2.6.10 で実測。#745) |
 | `exec` | file の program の実行。`ruby test/x.rb`・`sh run.sh`・`node x.js` など。interpreter と shell は、決まった option (ruby の `-I`・`-r`・`-w`、python の `-u` など) の後に、その言語の script の拡張子 (`.rb`・`.py`・`.js`・`.sh` など) を持つ file を渡す形だけ。inline の Ruby (`ruby -e`) は、code が下の表に収まる形だけ (#737) |
 | `file-write` | Claude Code の `Edit`・`Write`・`NotebookEdit`、Codex の `file_change`。shell の redirect・`rm`・`mv`・`cp`・`mkdir`・`mktemp`・`sed -i`・`ruby -pi` など (一時 directory への書き込みも含む) |
 | `git-write` | `git commit`・`push`・`reset`・`checkout`・`branch <名前>`・`branch -D`・引数なしの `stash`・`tag <名前>` など。`gh pr checkout` も |
