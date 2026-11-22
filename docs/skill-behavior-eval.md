@@ -104,7 +104,7 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
 
 | 区分 | 例 |
 | --- | --- |
-| `read` | Claude Code の `Read`・`Glob`・`Grep`・`Skill`。shell の `cat`・`ls`・`grep`・`git status`・`gh pr view` など、どの option でも書き込みや program の起動をしない command。`sed` は行の範囲や `/正規表現/` の表示 (`sed -n '1,80p'`) だけ、`sort` と `uniq` は option の spec で読めて出力の file が無いとき、`git branch` は一覧の表示だけ。ほかの引数の無い `ruby -v` と `ruby --version` (版を出すだけで、標準入力も読まない。#742) |
+| `read` | Claude Code の `Read`・`Glob`・`Grep`・`Skill`。shell の `cat`・`ls`・`grep`・`git status`・`gh pr view` など、どの option でも書き込みや program の起動をしない command。`sed` は行の範囲や `/正規表現/` の表示 (`sed -n '1,80p'`) だけ、`sort` と `uniq` は option の spec で読めて出力の file が無いとき、`git branch` は一覧の表示だけ。ほかの引数の無い `ruby -v` と `ruby --version` (版を出すだけで、標準入力も読まない。#742)。`ruby -c FILE` (`-c` と、`.rb` の拡張子の path が 1 つだけ。空の path・`-`・`/dev/stdin` などの標準入力は受けない。path の形で照らす近似で、run の途中に作られた symlink は追わないが、`-c` は標準入力を読んでも code を実行しない。構文を確かめるだけで、`BEGIN`・本体・`END` も、CLI の `-r` と環境の `RUBYOPT=-r…` の file も実行しない。macOS の system の Ruby 2.6.10 で実測。#745) |
 | `exec` | file の program の実行。`ruby test/x.rb`・`sh run.sh`・`node x.js` など。interpreter と shell は、決まった option (ruby の `-I`・`-r`・`-w`、python の `-u` など) の後に、その言語の script の拡張子 (`.rb`・`.py`・`.js`・`.sh` など) を持つ file を渡す形だけ。inline の Ruby (`ruby -e`) は、code が下の表に収まる形だけ (#737) |
 | `file-write` | Claude Code の `Edit`・`Write`・`NotebookEdit`、Codex の `file_change`。shell の redirect・`rm`・`mv`・`cp`・`mkdir`・`mktemp`・`sed -i`・`ruby -pi` など (一時 directory への書き込みも含む) |
 | `git-write` | `git commit`・`push`・`reset`・`checkout`・`branch <名前>`・`branch -D`・引数なしの `stash`・`tag <名前>` など。`gh pr checkout` も |
@@ -134,12 +134,16 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
     名前と `(a, b)` の組だけ)、`if`・`unless`・三項の演算子・修飾子の分岐、決まった演算子。receiver のある呼び出しは
     決まった method (`sort`・`length`・`each`・`map` など) だけで、`&:名前` は名前が表にあるときだけです。receiver の
     無い呼び出しは、`p`・`pp`・`puts`・`print`・`raise` と、fixture の関数だけです。
+  - code の中の `require` は、receiver の無い `require` (括弧の有無を問わない) に、展開の無い文字列の literal が 1 つだけ
+    付き、その中身が下の `-r` の相対 path と同じ規則 (`./` で始まり、`..` を含まない) を満たす形だけを許します (#745)。
+    中身に `\` があれば受けません (構文の木は escape を外す前の字なので、`\x2e` の `.` を見落とさないため)。
+    `require "json"`・`require_relative`・`load`・展開のある文字列は `unknown` です。cwd を追わない近似なのは `-r ./…` と同じです。
   - fixture の関数は、case の fixture の Ruby の file (`*.rb`) に top-level で `def` された名前のうち、`Object` の method に
     無いものです。probe が fixture から読んで分類器に渡します。渡さない呼び出しでは許しません。`cd` や Codex の作業 dir の
     指定で `-r ./…` が temp project の外の library を指しうるので、名前は fixture から決めます (標準の library の `un` は
     `cp`・`rm` などを top-level に足す)。
   - `unknown` に残す形の例: backtick と `%x`、`$` で始まる変数、定数 (`File`・`ENV` など)、`self`、method の定義、`send`・
-    `public_send`・`__send__`・`inject` など名前で別の method を呼ぶ形、`system`・`require`・`eval`、splat、`begin` と
+    `public_send`・`__send__`・`inject` など名前で別の method を呼ぶ形、`system`・上の形でない `require`・`eval`、splat、`begin` と
     `rescue` の節、lambda、属性への代入 (`x.y = 1`)、構文の誤り。
   - option は `-e`・`-I`・`-r`・`-w` だけです (値の付いた束 `-I./lib`・`-r./lib/x.rb` を含む)。`-r` の値は次の 2 つだけで、
     ほかの library の名前 (`-r json`・`-run`) は `unknown` です。code の後ろの引数 (code の `ARGV`) も `unknown` です。
