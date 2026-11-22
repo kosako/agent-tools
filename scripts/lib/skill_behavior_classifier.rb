@@ -23,7 +23,8 @@ module SkillBehaviorClassifier
   # 規則を変えたら上げる (結果を比べるときの識別子 ids.classifier_version)。2 で inline の Ruby (ruby -e) を足した (#737)。
   # 3 で、門の二重引用の \" と \\、ほかの引数の無い ruby -v と ruby --version を足した (#742)。
   # 4 で、inline の Ruby の -r に、-I が 1 つのときの fixture の名前を足した (#742)。
-  VERSION = 4
+  # 5 で、ruby -c FILE と、inline の Ruby の code の中の require "./…" を足した (#745)。
+  VERSION = 5
 
   CLAUDE_READ_TOOLS = %w[Read Glob Grep LS Skill NotebookRead].freeze
   CLAUDE_WRITE_TOOLS = %w[Edit Write NotebookEdit MultiEdit].freeze
@@ -692,12 +693,20 @@ module SkillBehaviorClassifier
     "perl" => { flags: "acfnpsStTuUvwWXh", next: "eEI", rest: "MmFxCD", one: "", digits: "0l", colon: "V" },
   }.freeze
 
-  # ほかの引数の無い ruby -v と ruby --version は、版を出して終わる (標準入力も読まない。#742 で Ruby 2.6.10 と mise の
-  # Ruby で実測)。-v の後に script や -e が続く形は、verbose の mode で program を走らせるので、下の規則のまま。
+  # ほかの引数の無い ruby -v と ruby --version は、版を出して終わる (標準入力も読まない。#742 で macOS の system の
+  # Ruby 2.6.10 で実測。環境の RUBYOPT=-r… の file も読み込まない。#745)。-v の後に script や -e が続く形は、verbose の
+  # mode で program を走らせるので、下の規則のまま。
   RUBY_VERSION_ARGS = [["-v"], ["--version"]].freeze
 
+  # ruby -c FILE は構文を確かめるだけ (#745)。BEGIN・本体・END のどれも実行せず、CLI の -r と環境の RUBYOPT=-r… の file も
+  # 読み込まない (macOS の system の Ruby 2.6.10 で実測。ほかの Ruby では測っていない)。受けるのは、-c と、option でない
+  # path が 1 つだけの形。-e・標準入力・-r・ほかの option・2 つ以上の file との組み合わせは、観測していないので下の規則のまま。
+  def self.ruby_syntax_check?(args)
+    args.length == 2 && args[0] == "-c" && !args[1].start_with?("-")
+  end
+
   def self.interpreter_call(name, args, fixture: NO_FIXTURE)
-    return "read" if name == "ruby" && RUBY_VERSION_ARGS.include?(args)
+    return "read" if name == "ruby" && (RUBY_VERSION_ARGS.include?(args) || ruby_syntax_check?(args))
 
     # ruby -e (#737)。in-place の編集の印があれば、下の今の規則で file-write にする
     if name == "ruby" && !in_place?(name, args)
@@ -844,8 +853,9 @@ module SkillBehaviorClassifier
     when :paren then n[1].is_a?(Array) && (n[1][0].is_a?(Symbol) ? rb_node?(n[1], fns) : rb_stmts?(n[1], fns))
     when :var_ref then rb_var_ref?(n[1])
     when :vcall, :fcall then rb_function?(n[1], fns)
-    when :command then rb_function?(n[1], fns) && rb_args?(n[2], fns)
-    when :method_add_arg then rb_callee?(n[1], fns) && rb_arg_paren?(n[2], fns)
+    when :command then rb_require_call?(n[1], n[2]) || (rb_function?(n[1], fns) && rb_args?(n[2], fns))
+    when :method_add_arg
+      rb_require_paren?(n) || (rb_callee?(n[1], fns) && rb_arg_paren?(n[2], fns))
     when :method_add_block then rb_callee?(n[1], fns) && rb_block?(n[2], fns)
     when :call then rb_node?(n[1], fns) && rb_period?(n[2]) && rb_method?(n[3])
     when :command_call then rb_node?(n[1], fns) && rb_period?(n[2]) && rb_method?(n[3]) && rb_args?(n[4], fns)
@@ -883,6 +893,31 @@ module SkillBehaviorClassifier
 
   def self.rb_function?(tok, fns)
     rb_token?(tok, :@ident) && (RUBY_INLINE_FUNCTIONS.include?(tok[1]) || fns.include?(tok[1]))
+  end
+
+  # code の中の require (#745)。receiver の無い require に、展開の無い文字列の literal が 1 つだけ付き、その中身が
+  # -r ./… と同じ規則 (ruby_project_require?) を満たす形だけ。中身に \ があれば受けない (Ripper の @tstring_content は
+  # escape を外す前の source の字なので、"./lib/\x2e\x2e/x" の .. を見落とさないため)。cwd は追わない近似 (-r ./… と同じ)。
+  def self.rb_require_call?(callee, args)
+    return false unless rb_token?(callee, :@ident) && callee[1] == "require"
+    return false unless args.is_a?(Array) && args[0] == :args_add_block && args[2] == false
+    return false unless args[1].is_a?(Array) && args[1].length == 1
+
+    path = rb_plain_string(args[1][0])
+    !path.nil? && !path.include?("\\") && ruby_project_require?(path)
+  end
+
+  def self.rb_require_paren?(n)
+    n[1].is_a?(Array) && n[1][0] == :fcall && n[2].is_a?(Array) && n[2][0] == :arg_paren &&
+      rb_require_call?(n[1][1], n[2][1])
+  end
+
+  # 展開の無い文字列の literal の中身 (source の字のまま)。ほかの形は nil
+  def self.rb_plain_string(n)
+    return nil unless n.is_a?(Array) && n[0] == :string_literal
+    return nil unless n[1].is_a?(Array) && n[1][0] == :string_content && n[1].length == 2
+
+    rb_token?(n[1][1], :@tstring_content) ? n[1][1][1] : nil
   end
 
   def self.rb_method?(tok)
