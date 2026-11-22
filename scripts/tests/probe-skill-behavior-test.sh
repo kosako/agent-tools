@@ -426,6 +426,14 @@ shell = {
   "{cat,rm} x" => "unknown",
   "env {cat,rm} x" => "unknown",
   "X=1 {cat,rm} x" => "unknown",
+  # review の round 1 (#745)。展開した語と展開しない語の両方で区分し、重い方を取る。xargs と find -exec が走らせる command の
+  # 名前も、展開しなければ知らない program
+  "xargs {cat,rm}" => "unknown",
+  "find . -exec {cat,rm} {} +" => "unknown",
+  "find . -execdir {cat,rm} {} ';'" => "unknown",
+  "if true; then {cat,rm} x; fi" => "unknown",
+  "nohup {cat,rm} x" => "unknown",
+  "find . -name x -exec cat {a,b} {} +" => "read",
   "''{-o,out}" => "unknown",
   "sort ''{-o,out} in" => "unknown",
   "cat 'x'{a,b}" => "unknown",

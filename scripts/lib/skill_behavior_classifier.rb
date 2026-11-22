@@ -208,14 +208,6 @@ module SkillBehaviorClassifier
       we += 1 while we < masked.length && !masked[we].match?(BRACE_WORD_END)
       word = stripped[ws...we]
       return nil if word.count("{") != 1 || word.count("}") != 1 || word.match?(/['"\\$`]/)
-      # command の名前の位置の brace は、展開を止める shell の設定 (zsh の IGNORE_BRACES など) で走る program が変わるので
-      # unknown ({cat,rm} x は、展開しなければ {cat,rm} という名前の program)。引数の位置は、展開すると区分は同じか重くなる
-      before = begin
-        Shellwords.split(stripped[0...ws])
-      rescue ArgumentError
-        return nil
-      end
-      return nil if before.all? { |w| w.match?(ASSIGNMENT) || PREFIX_WORDS.include?(w) }
 
       prefix = stripped[ws...i]
       suffix = stripped[j...we]
@@ -473,27 +465,35 @@ module SkillBehaviorClassifier
     classes = spans.map { |_, _, c| c }.compact
     stripped = raw.dup
     spans.each { |s, e, _| stripped[s...e] = " " * (e - s) }
-    # 引用の外の受ける形の brace を展開してから語に分ける (#745)。展開できない形は unknown
-    stripped = expand_braces(stripped, masked)
-    return max_class(classes + ["unknown"]) unless stripped
+    # 引用の外の受ける形の brace を展開してから語に分ける (#745)。展開できない形は unknown。展開を止める shell の設定 (zsh の
+    # IGNORE_BRACES など) では brace が文字どおり残るので、展開した語と展開しない語の両方で区分し、重い方を取る (review の
+    # round 1)。command の名前になる語 ({cat,rm} x、xargs {cat,rm}、find -exec {cat,rm}) は、展開しなければ知らない program
+    expanded = expand_braces(stripped, masked)
+    return max_class(classes + ["unknown"]) unless expanded
 
+    variants = expanded == stripped ? [stripped] : [expanded, stripped]
+    max_class(classes + variants.map { |text| classify_split(text, masked, depth, fixture) })
+  end
+
+  # 部分の写し (redirect を空白にし、brace を決めた写し) を語に分けて区分する。
+  def self.classify_split(text, masked, depth, fixture)
     words = begin
-      Shellwords.split(stripped)
+      Shellwords.split(text)
     rescue ArgumentError
-      return max_class(classes + ["unknown"])
+      return "unknown"
     end
     prefix = words.take_while { |w| w.match?(ASSIGNMENT) || PREFIX_WORDS.include?(w) }
     words = words.drop(prefix.length)
     # 代入だけの部分も read にしない (zsh は整数の変数 (RANDOM・COLUMNS・OPTIND など) への代入で添字を評価する)
     assigned = prefix.any? { |w| w.match?(ASSIGNMENT) }
-    return max_class(classes + [assigned ? "unknown" : "read"]) if words.empty? || %w[} fi done].include?(words.first)
+    return assigned ? "unknown" : "read" if words.empty? || %w[} fi done].include?(words.first)
 
     cls = classify_words(words, depth, fixture: fixture)
     # 引用の外の glob (* ? [) は、展開で引数の数と意味が変わる (uniq a* が出力の file を持つ、など)
     cls = max_class([cls, "unknown"]) if masked.match?(/[*?\[]/) && !PLAIN_READ.include?(File.basename(words.first))
     # 環境変数 (PAGER・GIT_EXTERNAL_DIFF・RUBYOPT など) は program を差し替えうる
     cls = max_class([cls, "unknown"]) if assigned
-    max_class(classes + [cls])
+    cls
   end
 
   ASSIGNMENT = /\A[A-Za-z_][A-Za-z0-9_]*=/.freeze

@@ -107,9 +107,10 @@ sh と zsh は `x/{a,b}.md` を `x/a.md x/b.md` に、`{-o,out}` を `-o out` (o
 展開しないためです。受ける形は、1 つの語に `{…}` が 1 つだけで、中が `,` で分けた 2 つ以上の要素、各要素が英数字と
 `_ . -` だけで `..` を含まない形です。範囲 (`{1..3}`)・入れ子・空の要素・要素の中の `/` は、門が閉じます。引用の中の brace
 は展開しません (文字どおりの語で、`'{cat,rm}' target` は `{cat,rm}` という知らない command)。引用・`\`・`$`・backtick と
-つないだ語の brace (`''{-o,out}`) は、展開の後の語を決められないので `unknown` です。command の名前の位置の brace
-(`{cat,rm} x`) も `unknown` です。展開を止める shell の設定 (zsh の `IGNORE_BRACES` など) があると、走る program が変わる
-ためです。引数の位置では、展開すると区分は同じか重くなります。
+つないだ語の brace (`''{-o,out}`) は、展開の後の語を決められないので `unknown` です。展開を止める shell の設定 (zsh の
+`IGNORE_BRACES` など) では brace が文字どおり残るので、展開した語の並びと展開しない語の並びの両方で区分し、重い方を取ります。
+command の名前になる語の brace (`{cat,rm} x`・`xargs {cat,rm}`・`find . -exec {cat,rm} {} +`) は、展開しなければ
+`{cat,rm}` という知らない program になるので `unknown` です。
 
 | 区分 | 例 |
 | --- | --- |
