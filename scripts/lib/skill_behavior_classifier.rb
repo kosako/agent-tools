@@ -25,7 +25,8 @@ module SkillBehaviorClassifier
   # 4 で、inline の Ruby の -r に、-I が 1 つのときの fixture の名前を足した (#742)。
   # 5 で、ruby -c FILE と、inline の Ruby の code の中の require "./…" を足した (#745)。
   # 6 で、引用の外の受ける形の brace の展開を足した (#745)。
-  VERSION = 6
+  # 7 で、rg の位置引数にある、決めた形の引用の外の glob の語を足した (#750)。
+  VERSION = 7
 
   CLAUDE_READ_TOOLS = %w[Read Glob Grep LS Skill NotebookRead].freeze
   CLAUDE_WRITE_TOOLS = %w[Edit Write NotebookEdit MultiEdit].freeze
@@ -471,12 +472,13 @@ module SkillBehaviorClassifier
     expanded = expand_braces(stripped, masked)
     return max_class(classes + ["unknown"]) unless expanded
 
-    variants = expanded == stripped ? [stripped] : [expanded, stripped]
-    max_class(classes + variants.map { |text| classify_split(text, masked, depth, fixture) })
+    braced = expanded != stripped
+    variants = braced ? [expanded, stripped] : [stripped]
+    max_class(classes + variants.map { |text| classify_split(text, masked, depth, fixture, braced) })
   end
 
-  # 部分の写し (redirect を空白にし、brace を決めた写し) を語に分けて区分する。
-  def self.classify_split(text, masked, depth, fixture)
+  # 部分の写し (redirect を空白にし、brace を決めた写し) を語に分けて区分する。braced は、部分に展開した brace があること。
+  def self.classify_split(text, masked, depth, fixture, braced)
     words = begin
       Shellwords.split(text)
     rescue ArgumentError
@@ -489,14 +491,66 @@ module SkillBehaviorClassifier
     return assigned ? "unknown" : "read" if words.empty? || %w[} fi done].include?(words.first)
 
     cls = classify_words(words, depth, fixture: fixture)
-    # 引用の外の glob (* ? [) は、展開で引数の数と意味が変わる (uniq a* が出力の file を持つ、など)
-    cls = max_class([cls, "unknown"]) if masked.match?(/[*?\[]/) && !PLAIN_READ.include?(File.basename(words.first))
+    # 引用の外の glob (* ? [) は、展開で引数の数と意味が変わる (uniq a* が出力の file を持つ、など)。rg の位置引数の、決めた
+    # 形の語だけは許す (#750。rg_positional_globs?)。brace の展開がある部分は、展開で語の役割がずれうるので許さない
+    if masked.match?(GLOB_CHAR) && !PLAIN_READ.include?(File.basename(words.first)) &&
+       (braced || !rg_positional_globs?(text, masked, prefix + words, prefix.length))
+      cls = max_class([cls, "unknown"])
+    end
     # 環境変数 (PAGER・GIT_EXTERNAL_DIFF・RUBYOPT など) は program を差し替えうる
     cls = max_class([cls, "unknown"]) if assigned
     cls
   end
 
   ASSIGNMENT = /\A[A-Za-z_][A-Za-z0-9_]*=/.freeze
+  GLOB_CHAR = /[*?\[]/.freeze
+  # rg の位置引数で許す glob の語の形 (#750)。先頭の字を英数字・_・.・/ に限る (glob の字の前に literal が 1 字以上ある)。
+  # 展開した名前はこの字で始まり、option にならない。glob の字・option の - と、zsh で語の先頭に来ると展開や glob になる字
+  # (^ = ~) で始まる語は、展開した名前の先頭を決められないので許さない。
+  RG_GLOB_WORD = %r{\A[A-Za-z0-9_./]}.freeze
+
+  # 部分の写し (text。brace を展開していないので masked と同じ長さ) の引用の外の glob の語が、すべて rg の位置引数で、決めた形の
+  # ときだけ true (#750)。位置引数の語なら、空に展開されても前の option が後ろの語を値に取らず、複数に展開されても増えるのは
+  # 位置引数 (pattern か path) だけになる。語は伏せた写しの引用の外の空白で分け、その数が引用を外した語 (words。Shellwords で
+  # 分けた並び) の数と同じときだけ使う。役割は words を RG_SPEC で読み、語の位置で決める (同じ文字列の語が値の位置にもあるとき、
+  # 取り違えないため)。command の名前と prefix の語は位置引数にならない。引用を含む語は許さない。redirect の先の glob は語でなく、
+  # 門 (入力の <) と redirect の区分 (出力) が決める。
+  def self.rg_positional_globs?(text, masked, words, skip)
+    units = masked_words(text, masked)
+    return false unless units.length == words.length && File.basename(words[skip].to_s) == "rg"
+
+    _, _, positions = parse_options(words[(skip + 1)..], RG_SPEC)
+    return false unless positions
+
+    glob_units = units.each_index.select { |k| masked[units[k][0]...units[k][1]].match?(GLOB_CHAR) }
+
+    glob_units.all? do |k|
+      s, e = units[k]
+      positions.include?(k - skip - 1) && !masked[s...e].match?(/['"]/) && text[s...e].match?(RG_GLOB_WORD)
+    end
+  end
+
+  # 部分の写しを、伏せた写しの引用の外の空白で語に分け、語の [始まり, 終わり] の並びを返す。伏せた写しの引用の中身は空白
+  # なので、引用の記号で引用の中かを追う。
+  def self.masked_words(text, masked)
+    units = []
+    quote = nil
+    start = nil
+    masked.each_char.with_index do |c, i|
+      if quote
+        quote = nil if c == quote
+      elsif c == "'" || c == '"'
+        quote = c
+      elsif text[i].match?(/\s/)
+        units << [start, i] if start
+        start = nil
+        next
+      end
+      start ||= i
+    end
+    units << [start, masked.length] if start
+    units
+  end
 
   def self.classify_words(words, depth, fixture: NO_FIXTURE)
     return "read" if words.empty?
@@ -554,19 +608,23 @@ module SkillBehaviorClassifier
     end
   end
 
-  # option を spec で読む。戻り値は [option の配列 ([名前, 値])、位置引数の配列]。`-` は位置引数 (標準入力・出力)。
+  # option を spec で読む。戻り値は [option の配列 ([名前, 値])、位置引数の配列、位置引数の args の中の位置の配列]。`-` は
+  # 位置引数 (標準入力・出力)。
   # spec に無い option があれば nil。GNU の慣習どおり、位置引数の後の option も読む (`--` の後は位置引数だけ)。
   def self.parse_options(args, spec)
     opts = []
     pos = []
+    positions = []
     i = 0
     while i < args.length
       a = args[i]
       if a == "--"
         pos.concat(args[(i + 1)..])
+        positions.concat(((i + 1)...args.length).to_a)
         break
       elsif a == "-" || !a.start_with?("-")
         pos << a
+        positions << i
       elsif a.start_with?("--")
         name, val = a.split("=", 2)
         if spec[:long_flags].include?(name) && val.nil?
@@ -602,7 +660,7 @@ module SkillBehaviorClassifier
       end
       i += 1
     end
-    [opts, pos]
+    [opts, pos, positions]
   end
 
   # sed: in-place (-i) は file-write。script は、行の範囲や /正規表現/ の p (表示) だけのときに read。w・W・e の

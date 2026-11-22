@@ -175,7 +175,12 @@ command の名前になる語の brace (`{cat,rm} x`・`xargs {cat,rm}`・`find 
   みなします。`git config` は read にしません (修飾の option や editor の起動を、読み取りと見分けきれないため)。値を渡す形と
   書き込みの option は `git-write`、ほかは `unknown` です。
 - 門を通る command でも、引数で意味が変わる形は軽い区分にしません。引用の外の glob (`*`・`?`・`[`) は、展開で引数の数と
-  意味が変わるので、option を問わず read の command (`cat`・`grep`・`ls` など) のほかは `unknown` 以上です。`printf` と
+  意味が変わるので、option を問わず read の command (`cat`・`grep`・`ls` など) のほかは `unknown` 以上です。例外は `rg` の
+  位置引数の語で (#750)、語の全体に引用が無く、先頭の字が英数字・`_`・`.`・`/` (`README*`・`lib/*.rb`・`./*`) のときだけ
+  許します。展開した名前は option にならず、空に展開されても前の option が後ろの語を値に取らないためです。位置引数かは、
+  引用を外した語の並びを `rg` の option の表で読み、語の位置で決めます。値の位置 (`-g lib/*`)・option の語 (`--glob=*.rb`)・
+  引用を含む語 (`'README'*`)・`*` や `^` などで始まる語 (`*.md`) と、brace の展開のある部分 (展開で語の
+  役割がずれうる) は `unknown` のままです。`printf` と
   `test`・`[` は read にしません。bash と zsh が引数を評価しうるためです (`printf -v`・zsh の `%n`・`test -v`・zsh の
   `test` の算術)。`diff` は短い option の allowlist だけを read にし、長い option (`--paginate` の省略の `--p` など) と
   `-l` (出力を `pr` に通す) は `unknown` です。標準の bin の directory の外の path が付いた command の名前 (`./cat`・`lib/grep`) は、名前と違う
