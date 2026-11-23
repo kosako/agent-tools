@@ -846,13 +846,14 @@ RUBY
 fi
 
 # --- T5: 入口 (sandbox の要らない部分) ---------------------------------------------------------
-# 分類器の代役。何でも read と答え、touch で始まる command だけ file-write と答える。
+# 分類器の代役。何でも read と答え、「: 」で始まる command だけ file-write と答える
+# (: は何もしない語。走らないことを見る command を、走っても何も起きない形にしておく)。
 stub="$tmp/stub-classifier.rb"
 cat > "$stub" <<'RUBY'
 module SkillBehaviorClassifier
   VERSION = 754
   def self.classify_shell(command, _depth = 0, **_opts)
-    command.start_with?("touch ") ? "file-write" : "read"
+    command.start_with?(": ") ? "file-write" : "read"
   end
 end
 RUBY
@@ -923,9 +924,9 @@ grep -q 'guard rejected the command (dotdot); it was not run' "$tmp/cli.err" || 
 [ ! -e "$tmp/o-g1" ] && [ ! -e "$tmp/o-g2" ] || fail "guard: a rejected command must not write results"
 
 # read でない command は、走らせずに exit 0。HOME の path は置き換えて書く。
-run_cli 0 "not read" --out "$tmp/o-w" --command "touch $HOME/probe-classifier-never-created" --classifier "$stub"
+run_cli 0 "not read" --out "$tmp/o-w" --command ": $HOME/probe-classifier-no-such-entry" --classifier "$stub"
 no_abs_paths "not read" "$tmp/o-w/results.json" "$tmp/cli.out" "$tmp/cli.err"
-[ ! -e "$HOME/probe-classifier-never-created" ] || fail "not read: the command must not run"
+grep -q '^command: class=file-write (not read; not run)$' "$tmp/cli.out" || fail "not read: missing the line: $(cat "$tmp/cli.out")"
 # 分類器を省くと、repo の分類器を使う。
 run_cli 0 "default classifier" --out "$tmp/o-d" --command 'rm -rf x'
 ruby -r"$script_dir/lib/check_helper" -rjson -rdigest - "$tmp/o-w/results.json" "$tmp/o-d/results.json" "$stub" \
@@ -937,7 +938,7 @@ check "not read: mode, variant and the classifier's version and hash",
 check "not read: counted by class and not executed: #{w['counts'].inspect}",
       w["counts"] == { "generated" => 1, "by_class" => { "file-write" => 1 }, "executed" => 0, "unmeasured" => 0 }
 check "not read: no violations, no human findings", w["violations"] == [] && w["human"] == [] && w["runs"] == []
-check "not read: the HOME path in the command is replaced", w["command"] == "touch <HOME>/probe-classifier-never-created"
+check "not read: the HOME path in the command is replaced", w["command"] == ": <HOME>/probe-classifier-no-such-entry"
 check "default classifier: the repo's file, by hash: #{d['classifier'].inspect}",
       d["classifier"]["sha256"] == Digest::SHA256.file(ARGV[3]).hexdigest && d["classifier"]["version"].is_a?(Integer) &&
       d["counts"]["executed"] == 0 && d["counts"]["by_class"].keys != ["read"]
@@ -968,6 +969,46 @@ TMPDIR="$tmp/has space" "$probe" --out "$tmp/o-nopre" --command 'cat README.md' 
 [ "$status" -eq 2 ] || fail "command without a passing preflight: expected exit 2, got $status: $(cat "$tmp/cli.out" "$tmp/cli.err")"
 grep -q '^error: the isolation preflight failed: ' "$tmp/cli.err" || fail "command without a passing preflight: missing the reason: $(cat "$tmp/cli.err")"
 [ ! -e "$tmp/o-nopre" ] && [ -z "$(ls -A "$tmp/has space")" ] || fail "command without a passing preflight: it must write nothing"
+
+# 未測定の回は、結果の file の件数と、人に出す行の両方に出る (隔離の中では起こしにくいので、組み立てる所を直接呼ぶ)。
+ruby -r"$script_dir/lib/check_helper" - "$repo_root/scripts/lib/probe_classifier_invariants.rb" <<'RUBY'
+require ARGV[0]
+P = ProbeClassifierInvariants
+outcome = P::Judge::Outcome.new(
+  violations: [], human: [{ "reason" => "unmeasured", "why" => ["group-not-empty"] }], unmeasured: true,
+  runs: [{ "variant" => "sh", "ending" => "timeout", "exit_code" => nil, "timed_out" => true, "unmeasured" => "group-not-empty" }]
+)
+data = P.outcome_data({ command: "cat x", variant: "sh" }, { "version" => 7, "class" => "read", "sha256" => "abc" }, outcome)
+check "results: an unmeasured run is counted: #{data['counts'].inspect}",
+      data["counts"] == { "generated" => 1, "by_class" => { "read" => 1 }, "executed" => 1, "unmeasured" => 1 }
+check "results: and listed for a human, with the command and the variant: #{data['human'].inspect}",
+      data["human"] == [{ "reason" => "unmeasured", "command" => "cat x", "variant" => "sh", "why" => ["group-not-empty"] }] &&
+      data["violations"] == [] && data["runs"] == outcome.runs && P::Judge.exit_code(outcome) == 3
+check "results: the classifier is recorded by version and hash only", data["classifier"] == { "version" => 7, "sha256" => "abc" }
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
+# sandbox を適用できないときは、何も走らせずに exit 2 で、理由を 1 行出す (素の実行には戻らない)。
+# 適用できる環境では、何でも許す sandbox の中から入口を呼び、入れ子で適用できない状態を作る。
+# 使い方: run_unavailable <label> <引数>...
+run_unavailable() {
+  ru_label=$1
+  shift
+  ru_status=0
+  if [ "$sandbox" = yes ]; then
+    TMPDIR="$cli_tmp" /usr/bin/sandbox-exec -p '(version 1)(allow default)' "$probe" "$@" > "$tmp/cli.out" 2> "$tmp/cli.err" || ru_status=$?
+  else
+    TMPDIR="$cli_tmp" "$probe" "$@" > "$tmp/cli.out" 2> "$tmp/cli.err" || ru_status=$?
+  fi
+  [ "$ru_status" -eq 2 ] || fail "$ru_label: expected exit 2, got $ru_status: $(cat "$tmp/cli.out" "$tmp/cli.err")"
+  [ "$(wc -l < "$tmp/cli.err" | tr -d ' ')" -eq 1 ] || fail "$ru_label: the reason must be one line: $(cat "$tmp/cli.err")"
+  grep -q '^error: sandbox-exec cannot be applied here: ' "$tmp/cli.err" || fail "$ru_label: missing the reason: $(cat "$tmp/cli.err")"
+  [ ! -s "$tmp/cli.out" ] || fail "$ru_label: nothing must be reported as run: $(cat "$tmp/cli.out")"
+  [ -z "$(ls -A "$cli_tmp")" ] || fail "$ru_label: the entry left a temp dir behind"
+}
+run_unavailable "preflight without a usable sandbox" --preflight
+run_unavailable "command without a usable sandbox" --out "$tmp/o-nosb" --command 'cat README.md' --classifier "$stub"
+[ ! -e "$tmp/o-nosb" ] || fail "command without a usable sandbox: it must write no results"
 echo "ok T5 (entry: arguments, --out, guard, classification)"
 
 # --- T6: 入口 (sandbox の要る部分) -----------------------------------------------------------
@@ -981,10 +1022,25 @@ if [ "$sandbox" = yes ]; then
   run_cli 0 "command without a write" --out "$tmp/o-cat" --command 'cat README.md' --classifier "$stub" --variant sh
   no_abs_paths "command without a write" "$tmp/o-cat/results.json" "$tmp/cli.out" "$tmp/cli.err"
   [ ! -e "$tmp/o-pre/corpus.jsonl" ] && [ ! -e "$tmp/o-k1/corpus.jsonl" ] || fail "--preflight and --command must not write corpus.jsonl"
-  ruby -r"$script_dir/lib/check_helper" -rjson - "$tmp/o-pre/results.json" "$tmp/o-k1/results.json" "$tmp/o-cat/results.json" <<'RUBY'
+  # 既定でない変種でだけ書き込む形 (nullglob では合わない glob が消え、-o が in.txt を取る)。既定の zsh では合わない glob で
+  # 止まるので、反例に数えず、人に出すものだけになる (exit 3)。
+  run_cli 3 "command that writes only under a non-default variant" --out "$tmp/o-ng" --command 'sort -o nomatch* in.txt' \
+    --classifier "$stub" --variant zsh-nullglob
+  grep -q '^  human non-default-variant fx/in.txt$' "$tmp/cli.out" || fail "non-default variant: missing the line: $(cat "$tmp/cli.out")"
+  no_abs_paths "non-default variant" "$tmp/o-ng/results.json" "$tmp/cli.out" "$tmp/cli.err"
+  ruby -r"$script_dir/lib/check_helper" -rjson - "$tmp/o-pre/results.json" "$tmp/o-k1/results.json" "$tmp/o-cat/results.json" \
+    "$tmp/o-ng/results.json" <<'RUBY'
 pre = JSON.parse(File.read(ARGV[0]))
 k1 = JSON.parse(File.read(ARGV[1]))
 cat = JSON.parse(File.read(ARGV[2]))
+ng = JSON.parse(File.read(ARGV[3]))
+found = ng["human"][0] || {}
+check "non-default variant: no counterexample, one finding for a human with the command and the variant: #{ng['human'].inspect}",
+      ng["violations"] == [] && ng["human"].length == 1 && found["reason"] == "non-default-variant" &&
+      found["command"] == "sort -o nomatch* in.txt" && found["variant"] == "zsh-nullglob" && found["invariant"] == "I1" &&
+      found["paths"] == ["fx/in.txt"] && ng["variant"] == "zsh-nullglob"
+check "non-default variant: three runs in the variant, then the default variant of the same shell",
+      ng["runs"].map { |r| r["variant"] } == %w[zsh-nullglob zsh-nullglob zsh-nullglob zsh] && ng["counts"]["executed"] == 1
 check "preflight results: mode and every check passed: #{pre.inspect}",
       pre["mode"] == "preflight" && pre["preflight"]["ok"] == true && pre["preflight"]["unavailable"] == false &&
       pre["preflight"]["checks"].length == 11 && pre["preflight"]["checks"].all? { |c| c["ok"] == true } && pre["preflight"]["reasons"] == []

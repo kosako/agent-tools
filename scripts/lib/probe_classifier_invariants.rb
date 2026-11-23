@@ -243,6 +243,16 @@ module ProbeClassifierInvariants
     end
   end
 
+  # 走らせた command の結果の file の中身。
+  def self.outcome_data(opts, info, outcome)
+    data = command_data(opts, info, executed: 1)
+    data["counts"]["unmeasured"] = outcome.unmeasured ? 1 : 0
+    data["violations"] = with_command(outcome.violations, opts)
+    data["human"] = with_command(outcome.human, opts)
+    data["runs"] = outcome.runs
+    data
+  end
+
   def self.run_command(opts, out)
     info = classify(opts[:classifier] || DEFAULT_CLASSIFIER, opts[:command])
     unless info["class"] == "read"
@@ -259,11 +269,7 @@ module ProbeClassifierInvariants
 
       variant = Isolation.variant(opts[:variant])
       outcome = Judge.examine(variant, ->(name) { Judge.observe(session, opts[:command], variant: name) })
-      data = command_data(opts, info, executed: 1)
-      data["counts"]["unmeasured"] = outcome.unmeasured ? 1 : 0
-      data["violations"] = with_command(outcome.violations, opts)
-      data["human"] = with_command(outcome.human, opts)
-      data["runs"] = outcome.runs
+      data = outcome_data(opts, info, outcome)
       write_results(out, data, session)
       report(data, session)
       Judge.exit_code(outcome)

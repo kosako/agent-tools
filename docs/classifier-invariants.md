@@ -66,9 +66,10 @@ fixture は小さな git の repo である。
 template は、run の初めに隔離の中で 1 回だけ作る (user の global の git の設定と hook を通さないため)。
 `git init` が置く hook の見本は実行できる file なので、消してある。
 
-写した file は inode と ctime が変わり、index の stat が全部古くなる。
-`git diff` は、古い stat を見ると `GIT_OPTIONAL_LOCKS=0` でも index を書き直す (この machine の git 2.54.0 で実測)。
-fixture の用意の跡を command の書き込みと読み違えないように、走らせる前に `git update-index -q --refresh` で揃える。
+template を写した直後の fixture では、`git diff` が `GIT_OPTIONAL_LOCKS=0` でも index を書き直した
+(この machine の git 2.54.0 で実測)。写した file の stat が index と食い違うためと見ている。
+`git update-index -q --refresh` で index を揃えた後は、`git diff` も `git status` も書き直さなかった。
+fixture の用意の跡を command の書き込みと読み違えないように、走らせる前に index を揃える。
 
 ### canary
 
@@ -91,7 +92,8 @@ canary は、走ると `marks` に `<id>.<pid>` という空の file を書く�
 `HOME`、`PATH` (`shim` と `tools`)、`TMPDIR`、`LC_ALL=C`、`GIT_CONFIG_NOSYSTEM=1`、`GIT_CONFIG_GLOBAL=/dev/null`、
 `GIT_OPTIONAL_LOCKS=0`。
 
-`GIT_OPTIONAL_LOCKS=0` は、`git status` の index の書き直しを止める。子の stdin は `/dev/null` にする。
+`GIT_OPTIONAL_LOCKS=0` は、`git status` の index の書き直しを止める (`git diff` は上の「一時 dir と fixture」)。
+子の stdin は `/dev/null` にする。
 
 ### profile
 

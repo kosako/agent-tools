@@ -296,7 +296,8 @@ module ProbeClassifier
 
     # --- 閉じた環境 ---------------------------------------------------------------------------
     # 子に渡す環境はこの表だけ。親の環境は引き継がない (RIPGREP_CONFIG_PATH や GIT_DIR が効くと、
-    # 同じ command が別の動きになる)。GIT_OPTIONAL_LOCKS=0 は、git status と git diff の index の書き直しを止める。
+    # 同じ command が別の動きになる)。GIT_OPTIONAL_LOCKS=0 は、git status の index の書き直しを止める
+    # (git diff の書き直しは止まらなかった。prepare で index を揃えて避ける)。
     ENV_KEYS = %w[HOME PATH TMPDIR LC_ALL GIT_CONFIG_NOSYSTEM GIT_CONFIG_GLOBAL GIT_OPTIONAL_LOCKS].freeze
     # shell が自分で足す変数 (LOGNAME は zsh が足す。実測)。子の環境を確かめるときに、表の外として数えない。
     SHELL_KEYS = %w[PWD OLDPWD SHLVL LOGNAME _].freeze
@@ -478,9 +479,9 @@ module ProbeClassifier
         layout = new_layout("pci-")
         FileUtils.cp_r(File.join(@template.fx, "."), layout.fx, preserve: true)
         Isolation.link_tools(layout, @toolset)
-        # 写した file は inode と ctime が変わり、index の stat が全部古くなる。git diff は、古い stat を見ると
-        # GIT_OPTIONAL_LOCKS=0 でも index を書き直す (実測)。fixture の用意の跡を command の書き込みと
-        # 読み違えないように、走らせる前に揃える。
+        # template を写した直後の fixture では、git diff が GIT_OPTIONAL_LOCKS=0 でも index を書き直した (実測。
+        # 写した file の stat が index と食い違うためと見ている)。index を揃えた後は書き直さなかったので、
+        # fixture の用意の跡を command の書き込みと読み違えないように、走らせる前に揃える。
         fixture_step(layout, GIT_REFRESH, "refresh")
         Isolation.install_canaries(layout)
         layout
