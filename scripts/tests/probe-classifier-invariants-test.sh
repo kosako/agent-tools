@@ -153,6 +153,10 @@ check "tools: required", %w[sh bash zsh git ruby uname].all? { |n| I::REQUIRED_T
 check "tools: no write tools and no other interpreters",
       (names & %w[rm rmdir mv cp mkdir touch tee ln chmod chown dd install truncate mktemp patch perl python python3 node]).empty?
 check "tools: resolved to real paths", session.toolset.tools.all? { |t| t.real == File.realpath(t.path) } && session.toolset.missing_required.empty?
+# git は developer dir の中の実体を直接指す。/usr/bin/git の入口は、道具にも exec の allowlist にも入れない。
+check "tools: git is the binary inside the developer dir, not the /usr/bin/git entry",
+      session.toolset["git"].path == File.join(session.toolset.developer_dir, "usr", "bin", "git") &&
+      !session.toolset.exec_literals.include?("/usr/bin/git") && I::REQUIRED_TOOLS.fetch("git").empty?
 I.link_tools(layout, session.toolset)
 check "tools: symlinks by name", Dir.children(layout.tools).sort == session.toolset.names.sort &&
                                  session.toolset.tools.all? { |t| File.readlink(File.join(layout.tools, t.name)) == t.path }
@@ -423,6 +427,27 @@ check "the listed tools run in isolation", c.negative.keys == ["cat in.txt", "gi
 home = session.deny_read.first
 check "preflight results carry no temp dir or HOME path", [pre.checks.inspect, pre.reasons.inspect].none? { |s| s.include?(session.root) || s.include?(home) }
 check "preflight cleans up its temp dirs", Dir.children(session.root).all? { |n| n.start_with?("pci-template-") }
+
+# 道具が拒否の字面を stderr に出す回は、0 で終わっていても通さない (その道具を使う read の command が、毎回
+# 「拒まれた起動」として人に出るため)。git の起動にだけ、拒否の字面を 1 行足して見る。対照は、足さない同じ検査。
+quiet_layout = session.prepare
+quiet = I.check_tools_work(session, quiet_layout)
+session.cleanup(quiet_layout)
+noisy_layout = session.prepare
+session.define_singleton_method(:launch) do |l, command, **opts|
+  run = super(l, command, **opts)
+  run.err = "#{run.err}git: error: could not write a cache file (errno=Operation not permitted)\n" if command.start_with?("git ")
+  run
+end
+begin
+  noisy = I.check_tools_work(session, noisy_layout)
+ensure
+  session.singleton_class.send(:remove_method, :launch)
+  session.cleanup(noisy_layout)
+end
+check "a listed tool that prints a denial fails the tools-work check: #{quiet.ok.inspect} #{noisy.ok.inspect}",
+      quiet.ok == true && noisy.name == "tools-work" && noisy.ok == false &&
+      noisy.negative["git status --short"][:exit] == 0 && noisy.negative["git status --short"][:out] == quiet.negative["git status --short"][:out]
 
 # 検査は、拒否が効いていない profile を見逃さない。session の profile を 1 か所ずつ緩め、その検査が通らないことを見る
 # (検査が ok を自己申告だけで true にしていないことの確かめ)。緩めるのは、この test の一時 dir の中の代役に対してだけ。

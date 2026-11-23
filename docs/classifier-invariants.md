@@ -17,7 +17,7 @@ command の生成と試行の本体は、次の PR で足す。
 | 判定 | `scripts/lib/probe_classifier/judge.rb` | snapshot、差分、終わり方、違反と人に出すものの分け方、確かめ直し |
 | self-test | `scripts/tests/probe-classifier-invariants-test.sh` | T1 から T6。CI で走る |
 
-依存は macOS 標準の Ruby、`sandbox-exec`、git (`/usr/bin/git` と developer dir)。network は使わない。
+依存は macOS 標準の Ruby、`sandbox-exec`、git (developer dir の中の `usr/bin/git`)。network は使わない。
 
 ## 不変条件
 
@@ -117,6 +117,11 @@ login の shell (`zsh -lc`) が `PATH` を組み直しても、表に無い prog
 道具は、名前と実 path の組で持つ。必須は `sh`、`bash`、`zsh`、`env`、`cat`、`git`、`ruby`、`uname`、`sort`、`tail`。
 欠けると preflight が失敗にする。
 
+git は、developer dir (`xcode-select -p` の答え) の中の実体を直接置く。`/usr/bin/git` の入口は通さない。
+developer dir が Xcode.app の下にある環境 (CI の runner) では、入口を通した `git status` と `git diff` が、
+0 で終わったまま、拒否の字面を stderr に出した。入口が、git を探した結果を一時 dir の外に書き残そうとするためと見ている。
+Command Line Tools だけの machine では、入口を通しても出なかった。
+
 ほかの読み取りの道具 (`grep`、`uniq`、`sed`、`awk`、`find`、`xargs` など) は任意で、無ければ足さない。
 `rg` は、決めた場所で解決できた実体だけを足す。
 
@@ -186,6 +191,8 @@ preflight は、隔離が効いていることを走らせる前に確かめる�
 
 ほかに 2 つを見る。`guard-only-write` は、sandbox を外した profile で、語彙の中の書き込み (`sort -o`) の変化が
 一時 dir に閉じること。`tools-work` は、表の道具が動き、canary が走ると印が書かれること。
+`tools-work` は、道具が拒否の字面を stderr に出さないことも見る。出す道具があると、その道具を使う command が
+毎回 `denied-exec` として人に出て、本物の拒否と見分けられなくなる。
 
 guard だけの層が外に出ないと言えるのは、文字列で見える形に限る。
 実行のときに組まれる文字列 (`printf` の出力を `xargs` や `sh` に渡す形など) は、guard からは見えない。

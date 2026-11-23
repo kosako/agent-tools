@@ -62,9 +62,10 @@ module ProbeClassifier
     # 名前から候補の path (先が優先)。実行のときに、在って実行できる実体だけを tools に symlink で置く。
     # 必須は、fixture を作る git と、preflight が使う道具。欠けると preflight が失敗にする。
     # 書き込みの道具 (rm、touch、tee など) は入れない。fixture を作るのに要るのは git だけ。
+    # git の候補は空。developer dir の実体を resolve_tools が足す (GIT_IN_DEVELOPER_DIR)。
     REQUIRED_TOOLS = {
       "sh" => %w[/bin/sh], "bash" => %w[/bin/bash], "zsh" => %w[/bin/zsh], "env" => %w[/usr/bin/env],
-      "cat" => %w[/bin/cat], "git" => %w[/usr/bin/git], "ruby" => %w[/usr/bin/ruby],
+      "cat" => %w[/bin/cat], "git" => [], "ruby" => %w[/usr/bin/ruby],
       # system の ruby は、起動のときに uname を呼ぶ (実測)。
       "uname" => %w[/usr/bin/uname], "sort" => %w[/usr/bin/sort], "tail" => %w[/usr/bin/tail],
     }.freeze
@@ -89,6 +90,10 @@ module ProbeClassifier
     }.freeze
     # script の道具に許す interpreter。ほかの interpreter (perl など) を要る道具は足さない。
     SCRIPT_INTERPRETERS = %w[/bin/sh].freeze
+    # git は、developer dir の中の実体を直接置く。/usr/bin/git は、developer dir の git を探して起動する入口で、
+    # developer dir が Xcode.app の下の環境 (CI の runner) では、git status と git diff が 0 で終わったまま、
+    # 拒否の字面を stderr に出した (探した結果を一時 dir の外に書き残そうとするためと見ている)。
+    GIT_IN_DEVELOPER_DIR = %w[usr bin git].freeze
 
     Tool = Struct.new(:name, :path, :real, keyword_init: true)
 
@@ -140,8 +145,8 @@ module ProbeClassifier
       [nil, "unreadable"]
     end
 
-    # /usr/bin/git は developer dir の git を起動する。その dir を、子と同じ閉じた環境で聞く
-    # (親の DEVELOPER_DIR に引かれると、子が実際に使う dir と食い違う)。
+    # git の実体は developer dir の中にある。その dir を、子と同じ閉じた環境で聞く
+    # (親の DEVELOPER_DIR に引かれると、/usr/bin/git が実機で起動する git と食い違う)。
     def self.developer_dir
       return nil unless File.executable?(XCODE_SELECT)
 
@@ -172,9 +177,17 @@ module ProbeClassifier
         found ? tools << found : missing[name] = reason
       end
       dev = developer_dir
-      if dev.nil? || deny_read.any? { |d| inside?(dev, d) }
-        dev = nil
-        tools.reject! { |t| t.name == "git" }
+      dev = nil if dev && deny_read.any? { |d| inside?(dev, d) }
+      if dev
+        git = File.join(dev, *GIT_IN_DEVELOPER_DIR)
+        real, why = resolve_candidate(git, deny_read)
+        if real
+          tools << Tool.new(name: "git", path: git, real: real)
+          missing.delete("git")
+        else
+          missing["git"] = why
+        end
+      else
         missing["git"] = "no-developer-dir"
       end
       Toolset.new(tools: tools, missing: missing, developer_dir: dev)
@@ -1054,6 +1067,8 @@ module ProbeClassifier
     end
 
     # 表の道具が隔離の中で動き、canary が走ると印が書かれる (全部が拒まれて「違反なし」に見える回を防ぐ)。
+    # 道具が拒否の字面を stderr に出さないことも見る。出す道具があると、その道具を使う read の command が
+    # 毎回「拒まれた起動」として人に出て、本物の拒否と見分けられなくなる。
     def self.check_tools_work(session, layout)
       expect = {
         "cat in.txt" => FIXTURE_SECOND.fetch("in.txt"),
@@ -1067,7 +1082,7 @@ module ProbeClassifier
       expect.each do |command, out|
         run = session.launch(layout, command)
         negative[command] = facts(run, out: run.out[0, 80])
-        ok &&= run.exit_code == 0 && run.out == out
+        ok &&= run.exit_code == 0 && run.out == out && !run.err.match?(DENIED_EXEC)
       end
       canary_run = session.launch(layout, "canary")
       hits = read_marks(layout).hits
