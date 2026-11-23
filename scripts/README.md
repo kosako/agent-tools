@@ -247,24 +247,32 @@ usage: probe-opencode-plugin.sh --stage <isolation|serve|mock|real|tui-plan|all>
 
 - `probe-classifier-invariants.sh`: 分類器の不変条件の試行の入口 (#754)。挙動の評価の分類器が `read` と区分した command を、
   隔離した一時 dir の中で実際に走らせ、fixture の tree が変わらないこと (I1) と、canary が走らないこと (I2) を、前後の
-  snapshot と印で確かめる。隔離は、文字列の guard と、`sandbox-exec` の profile と閉じた環境の 2 層。今ある入口は、隔離の
-  検査だけをかける `--preflight` と、1 件の command を分類して調べる `--command`。command の生成は次の PR で足す。
-  Spec: [docs/classifier-invariants.md](../docs/classifier-invariants.md)。
+  snapshot と印で確かめる。隔離は、文字列の guard と、`sandbox-exec` の profile と閉じた環境の 2 層。入口は 3 つ。
+  `--preflight` は隔離の検査だけをかける。`--command` は 1 件の command を分類して調べる。どちらも無ければ生成の入口で、
+  seed と件数から command の列を作って分類し、`--run` を付けたときだけ、`read` と区分された command を走らせる
+  (付けなければ dry-run で、何も走らせない)。`--baseline` と `--mutation` は陽性の対照で、壊した版だけが `read` と言う
+  command (差分の組) を走らせる。Spec: [docs/classifier-invariants.md](../docs/classifier-invariants.md)。
 
 ```text
 usage: probe-classifier-invariants.sh --preflight [--out DIR]
-       probe-classifier-invariants.sh --out DIR --command STRING [--variant NAME] [--classifier FILE]
+       probe-classifier-invariants.sh --out DIR --command STRING [--variant NAME] [--classifier FILE] [--mutation NAME]
+       probe-classifier-invariants.sh --out DIR [--seed N] [--count N] [--variant NAME] [--classifier FILE]
+                                      [--baseline FILE | --mutation NAME] [--run]
 ```
 
 - network は使わない。macOS の `sandbox-exec` と `git` が要る。sandbox の中の session では `sandbox-exec` を入れ子に
   適用できないので、exit 2 で command を走らせない (素の実行には戻らない)。memory と時間の上限は、呼ぶ側が
-  `personal-safe-run` で付ける。`--out` は git の worktree の外に限る。
-- exit code は 0 (確かめた反例なし)、1 (既定の変種で確かめた反例あり)、2 (使い方の誤り・guard の拒否・preflight の失敗)、
-  3 (人に出すものだけがある)。
+  `personal-safe-run` で付ける。`--out` は git の worktree の外の、書ける所に限る。
+- exit code は 0 (確かめた反例なし)、1 (既定の変種で確かめた反例あり)、2 (使い方の誤りと、走らせる前の失敗)、
+  3 (人に出すものだけがある)。2 には、1 件の command の guard の拒否、分類の失敗、当たらない変異、preflight の失敗が入る。
+  生成の入口は、`--out` に `results.json` と `corpus.jsonl` を書く。生成した command を多数走らせる試行は、手元で走らせる
+  (CI では走らせない)。
 - self-test: `tests/probe-classifier-invariants-test.sh` は、profile と環境の表、guard が通す形と拒む形、否定の検査と
   対照の組、差分の種類、witness (書き込む形が I1、canary を走らせる形が I2、書かない形が差分なし)、入口の exit code と
-  `results.json` を確かめる。入口には分類器の代役の file を渡す (repo の分類器の今の穴に結び付けないため)。sandbox を
-  適用できない環境では、sandbox の要る部分を skip して 1 行出す。CI では skip せず失敗にする。
+  `results.json`、生成器の列 (同じ seed と件数で同じ digest、全件が guard を通る)、変異の当て方、dry-run の 2 つの file、
+  走らせる対象の選び方を確かめる。入口には分類器の代役の file を渡し、変異も代役の source に当てる (repo の分類器の今の穴と、
+  変異の表が今の分類器に当たるかどうかに、結び付けないため)。sandbox を適用できない環境では、sandbox の要る部分を skip して
+  1 行出す。CI では skip せず失敗にする。
 
 - `build.sh`: shared source assets から tool 別 artifacts を `generated/` に生成する。
   adapter spec は [adapters/](../adapters/README.md) を参照。

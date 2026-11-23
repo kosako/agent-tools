@@ -126,6 +126,21 @@ module ProbeClassifier
       path == dir || path.start_with?("#{dir}/")
     end
 
+    # 置き換える path の終わり。直後が / か、文字列の終わりか、名前の字でない字のとき。
+    # . が続くときは、その後ろが / でも名前の字でもなければ、文の終わりとみなす (/t/out. は終わり、/t/out./x は別の dir)。
+    # 名前の字は、英数字と _ + @ % ~ - と、. 。ASCII でない字は名前の字に数えない (置き換える側に寄せる)。
+    PATH_ENDS = '(?=/|\.*(?:\z|[^A-Za-z0-9_+@%~./-]))'
+
+    # text の中の絶対 path を、名前に置き換える。pairs は [path, 名前] の並びで、同じ path は先の組が勝つ。
+    # 長い path から替える (短い path は、長い path の前の部分に当たる)。
+    # 見るのは終わりの側だけ。前に別の dir が付いた形 (/System/Volumes/Data の後ろの HOME など) も置き換える。
+    def self.replace_paths(text, pairs)
+      table = pairs.map { |from, to| [from.b, to] }.uniq(&:first).sort_by { |from, _| -from.length }
+      out = text.to_s.b
+      table.each { |from, to| out = out.gsub(Regexp.new(Regexp.escape(from) + PATH_ENDS, Regexp::NOENCODING)) { to } }
+      out.force_encoding(Encoding::UTF_8).scrub("?")
+    end
+
     # 候補の 1 つを確かめる。使えれば [Tool の材料, nil]、使えなければ [nil, 理由]。
     def self.resolve_candidate(path, deny_read)
       return [nil, "not-found"] unless File.file?(path) && File.executable?(path)
@@ -289,6 +304,19 @@ module ProbeClassifier
     }.freeze
     FIXTURE_SECOND = { "in.txt" => "apple\napple\nbanana\ncherry\ncherry\napple\n" }.freeze
     FIXTURE_DIRTY = { "README.md" => "#{FIXTURE_FIRST.fetch('README.md')}\nuncommitted line\n" }.freeze
+    # 狙いごとの dir (scene)。最初の commit に入れる (git からは tracked な file に見える)。
+    # 生成器の operand の表 (generator.rb の FIXTURE_PATHS) が、ここの名前を当てにする。
+    # - で始まる名前は、glob の展開で option になる。repo には置かず、fixture を作るときに、ここから書く。
+    FIXTURE_SCENES = {
+      # ちょうど 2 つの file。uniq に渡ると、2 つ目が出力の file になる。
+      "pair/a.txt" => "apple\napple\nbanana\n", "pair/b.txt" => "zzz\n",
+      # sort の -o と値が、1 語になった名前。
+      "sortopt/-oplanted.txt" => "pear\n", "sortopt/in.txt" => "banana\napple\n",
+      # rg の --pre と値が、1 語になった名前。値は PATH の canary を指す。
+      "pre/--pre=canary" => "median\n", "pre/a.txt" => "median\n",
+      # 読むだけの command の option になる名前。
+      "plain/-n" => "apple\n", "plain/a.txt" => "apple\nbanana\n",
+    }.freeze
     # commit の hash を回ごとに変えないための日時。
     TEMPLATE_ENV = { "GIT_AUTHOR_DATE" => "2026-01-01T00:00:00Z", "GIT_COMMITTER_DATE" => "2026-01-01T00:00:00Z" }.freeze
     GIT_INIT = "git -c init.defaultBranch=main init -q ."
@@ -473,6 +501,7 @@ module ProbeClassifier
         layout = new_layout("pci-template-")
         Isolation.link_tools(layout, @toolset)
         Isolation.write_files(layout.fx, FIXTURE_FIRST)
+        Isolation.write_files(layout.fx, FIXTURE_SCENES)
         fixture_step(layout, "#{GIT_INIT} && #{GIT_COMMIT}", "first")
         Isolation.write_files(layout.fx, FIXTURE_SECOND)
         fixture_step(layout, GIT_COMMIT, "second")
@@ -552,15 +581,18 @@ module ProbeClassifier
         end
       end
 
-      # 出力に、一時 dir と HOME の絶対 path を残さない。長い path から置き換える。
+      # 出力に、一時 dir と HOME の絶対 path を残さない。
       def redact(text, layout = nil)
+        Isolation.replace_paths(text, path_pairs(layout))
+      end
+
+      # 置き換える絶対 path と、名前の組。
+      def path_pairs(layout = nil)
         pairs = []
         pairs.push([layout.base, "<T>"], [layout.alias_base, "<T>"]) if layout
         pairs.push([@root, "<R>"], [@root_alias, "<R>"])
         (@deny_read + [ENV["HOME"].to_s]).each { |home| pairs << [home, "<HOME>"] unless home.empty? }
-        out = text.to_s.b
-        pairs.uniq.sort_by { |from, _| -from.length }.each { |from, to| out = out.gsub(from.b) { to } }
-        out.force_encoding(Encoding::UTF_8).scrub("?")
+        pairs
       end
 
       # 自分が作った一時 dir だけを消す。
@@ -607,11 +639,17 @@ module ProbeClassifier
     # (消すと、xargs "${zz:--o}" cat の -o のように、展開で出来る option を見逃す)。
     # 変数を読む形は、その変数が設定されていない前提の語を持つ。変数の名前が command のほかの所に出る形は受けない
     # (zz=-f を先に置くと、"${zz:--o}" は -f になる)。
-    DOLLAR_FORMS = { "$'-o'" => "-o", '"${zz:--o}"' => "-o" }.freeze
+    # 3 つ目は、置き換えの中の書き込み。語には展開されないので、中で走る command を値に持つ (guard は、その
+    # command にほかの規則を当てる)。zsh は、整数の変数 (RANDOM) への代入で、設定済みの変数 a の添字の中の
+    # 置き換えを走らせる (a=1 を先に置いた形で実測。a が無ければ走らない。bash と sh では走らない)。
+    # 形は、代入の語の全体で持つ (中の $(…) だけを受けると、ほかの位置の置き換えまで通る)。
+    DOLLAR_FORMS = { "$'-o'" => "-o", '"${zz:--o}"' => "-o",
+                     "RANDOM='a[$(sort -o out.txt in.txt)1]'" => "sort -o out.txt in.txt" }.freeze
     # sed と awk の script の表。番地の / で始まる script は絶対 path の規則に当たるので、人が中身を
-    # 確かめた script だけを、単一引用の語の完全一致で外す。今は K2 (#756) の形だけ。
-    # 表の語は、sed と awk のほかの command の引数でも外れる。実在しうる path になる script は足さない。
-    SCRIPT_TABLE = ['/a\/,/w lib/p'].freeze
+    # 確かめた script だけを、単一引用の語の完全一致で外す。K2 (#756) の形と、番地の範囲を表示するだけの形。
+    # 表の語は、sed と awk のほかの command の引数でも外れる。番地で始まる script は、字面の上では絶対 path になる。
+    # 足すのは、人が中身を確かめた literal だけ。どの machine にも在りそうな場所 (/etc/…、/tmp/…) を指す script は足さない。
+    SCRIPT_TABLE = ['/a\/,/w lib/p', "/apple/,/banana/p"].freeze
     # xargs の、値をとる option。値の語を option と読み違えないために使う。
     XARGS_VALUE_OPTIONS = %w[-E -I -J -L -n -P -R -S -s -d -a].freeze
     SIGNAL_NAMES = %w[kill pkill killall].freeze

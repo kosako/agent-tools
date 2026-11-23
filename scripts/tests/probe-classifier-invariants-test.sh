@@ -1,6 +1,7 @@
 #!/bin/sh
-# 分類器の不変条件の試行 (#754) の self-test。隔離、判定、入口の 3 つを見る。
-# 対象は scripts/lib/probe_classifier/ の isolation.rb と judge.rb、scripts/probe-classifier-invariants.sh。
+# 分類器の不変条件の試行 (#754) の self-test。隔離、判定、入口、生成器と変異の表を見る。
+# 対象は scripts/lib/probe_classifier/ の isolation.rb、judge.rb、generator.rb、mutations.rb と、
+# scripts/probe-classifier-invariants.sh。
 # - T1: 隔離の、sandbox の要らない部分。profile の文字列の形、閉じた環境の表、変種・canary・道具の表、guard が
 #   通す形と拒む形、出力の path の置き換え、group の空の確かめ、隔離を組めないときの理由、preflight の結論の組み方。
 # - T2: 隔離の、sandbox の要る部分。否定の検査は、どれも対照 (相手を許した profile で同じ probe が通る) と組にする。
@@ -13,17 +14,31 @@
 #   違反と人に出すものの分け方、確かめ直し (走らせる部分を差し替えて見る)。
 # - T4: 判定の、sandbox の要る部分 (witness)。書き込む形が I1、canary を走らせる形が I2、書かない形が差分なしに
 #   なること、表に無い program の起動が人に出ること、書き込みの後に終わらない形でも I1 が出ること。
+#   scene の glob が展開して出来る書き込みと、guard の表の置き換えの形 (zsh だけで走る) も見る。
 # - T5: 入口の、sandbox の要らない部分。引数の誤り、出力先の検査、guard の拒否、read でない command、
 #   preflight が通らないときと想定外の失敗のときの exit 2。
+#   生成の入口は、dry-run の 2 つの file (同じ引数なら corpus.jsonl が byte まで同じ)、走らせる対象の選び方
+#   (調べる版で read、比べる相手で read でない)、変異の当て方、対照の結果の決め方、exit code を見る。
+#   seed が列と結果の file に届くこと、cell の表の終わり方の数え方、書けない出力先を走らせる前に止めることも見る。
+#   走らせる所 (Judge.observe) と preflight を差し替え、同じ process の中から入口を呼ぶ (何も走らせない)。
 # - T6: 入口の、sandbox の要る部分。--preflight と、read の command を走らせた結果の file。
-#   入口を process として呼ぶのは 2 回 (--preflight と、書き込む command)。preflight は 1 回に 3 秒ほどかかる。
-#   残りの終わり方は、preflight を「通った」結果に差し替え、同じ process の中から入口を呼んで見る。
+#   入口を process として呼ぶのは 3 回 (--preflight、書き込む command、変異つきの生成の run)。preflight は 1 回に
+#   3 秒ほどかかる。残りの終わり方は、preflight を「通った」結果に差し替え、同じ process の中から入口を呼んで見る。
+# - T7: 生成器と変異の表 (sandbox の要らない部分)。同じ seed と件数で同じ列になること (digest の固定値は、
+#   CI の 2 つの Ruby で同じ値になることを見る)、cell の回り方、生成した全件が guard を通ること、
+#   包みの cd で下の dir に移る行の operand が、その dir に在る名前であること、
+#   門の外の形が閉じた表から出ること、変異の当て方 (小さな代役の source で見る) と表の形。
+#   生成した command は走らせない。分類器も読まない (read が何件出るかは、手元の試行で測る)。
+#   変異の表が repo の今の分類器に当たるかは見ない (分類器を直す PR が、表の保守を負わないようにする)。
+# T1 の前に、この file の Ruby の program が encoding を名乗っていることを見る (C locale の手元で止まらないため)。
 # sandbox を適用できない環境 (入れ子の sandbox の中など) では T2・T4・T6 を skip して 1 行出す。CI
 # (GITHUB_ACTIONS=true) では skip せず失敗にする。skip の判断は T2 の中の 1 か所で行う。
 # 走らせる command は、この test の一時 dir の中で、相対 path だけを使う。否定の検査の probe だけは、同じ一時 dir に
 # 作った代役 (外の dir、HOME の代役、偽の CLI) と /bin/date を絶対 path で指す。network は test が自分で開いた
 # 127.0.0.1 の port だけ。本物の codex・claude・gh・opencode・herdr は起動しない (PATH の canary に当たる)。rg は使わない。
-# 入口の test は、分類器の代役 (何でも read と答える小さな file) を渡す。repo の分類器の今の穴に結び付けないため。
+# 入口の test は、分類器の代役 (何でも read と答える小さな file と、先頭の語で決める小さな file) を渡す。
+# repo の分類器の今の穴に結び付けないため。変異も、置き換える文字列を 1 回だけ持つ代役に当てる。
+# 生成した command を本物の隔離の中で走らせるのは、T6 の 1 回の 2 件だけ (多数を走らせる検査は、手元の試行に回す)。
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -32,13 +47,44 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 isolation="$repo_root/scripts/lib/probe_classifier/isolation.rb"
 judge="$repo_root/scripts/lib/probe_classifier/judge.rb"
+generator="$repo_root/scripts/lib/probe_classifier/generator.rb"
+mutations="$repo_root/scripts/lib/probe_classifier/mutations.rb"
 probe="$repo_root/scripts/probe-classifier-invariants.sh"
+entry="$repo_root/scripts/lib/probe_classifier_invariants.rb"
+docs="$repo_root/docs/classifier-invariants.md"
 [ -f "$isolation" ] || fail "missing $isolation"
 [ -f "$judge" ] || fail "missing $judge"
+[ -f "$generator" ] || fail "missing $generator"
+[ -f "$mutations" ] || fail "missing $mutations"
 [ -x "$probe" ] || fail "missing or not executable: $probe"
+[ -f "$entry" ] || fail "missing $entry"
+[ -f "$docs" ] || fail "missing $docs"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+
+# --- この file の Ruby の program の encoding ---------------------------------------------------
+# stdin に渡す Ruby の program は、C locale では US-ASCII の source として読まれる。comment の外に ASCII でない字を持つ
+# program は、先頭の行で encoding を名乗る。docs と README は、encoding を付けて読む。
+# どちらかが欠けると、C locale の手元で、その program が止まる (CI は UTF-8 の locale なので、そこでは気付けない)。
+ruby -r"$script_dir/lib/check_helper" - "$script_dir/probe-classifier-invariants-test.sh" <<'RUBY'
+lines = File.readlines(ARGV[0], encoding: "UTF-8").map(&:chomp)
+opener = "<<" + "'RUBY'"
+starts = lines.each_index.select { |i| lines[i].end_with?(opener) }
+check "encoding: this file has Ruby programs to look at: #{starts.length}", starts.length >= 10
+starts.each do |start|
+  body = lines.drop(start + 1).take_while { |line| line != "RUBY" }
+  bare = body.reject { |line| line.strip.start_with?("#") }
+  next if bare.all?(&:ascii_only?)
+
+  check "encoding: the program at line #{start + 1} has non-ASCII outside its comments, so it names its encoding first",
+        body.first == "# encoding: utf-8"
+end
+reads = lines.each_with_index.select { |line, _| line.match?(/\A(docs|readme) = File\.read\(/) }
+check "encoding: docs and README are read: #{reads.length}", reads.length >= 5
+reads.each { |line, i| check "encoding: line #{i + 1} reads the file as UTF-8", line.include?('encoding: "UTF-8"') }
+exit(@failed.zero? ? 0 : 1)
+RUBY
 
 # --- T1: 隔離 (sandbox の要らない部分) ---------------------------------------------------------
 ruby -r"$script_dir/lib/check_helper" - "$isolation" "$tmp" <<'RUBY'
@@ -178,6 +224,11 @@ Dir.mkdir(File.join(tmp, "t1-files"))
 I.write_files(File.join(tmp, "t1-files"), "a.txt" => "a\n", "sub/b.txt" => "b\n")
 check "fixture: files are written with the fixed mtime in the past",
       I::FIXTURE_MTIME == Time.utc(2026, 1, 1) && %w[a.txt sub/b.txt].all? { |f| File.mtime(File.join(tmp, "t1-files", f)) == I::FIXTURE_MTIME }
+# 狙いごとの dir (scene)。基本の file とは名前が重ならない。- で始まる名前は、この表から一時 dir に書く。
+check "fixture: the scene files", I::FIXTURE_SCENES.keys == %w[pair/a.txt pair/b.txt sortopt/-oplanted.txt sortopt/in.txt pre/--pre=canary
+                                                               pre/a.txt plain/-n plain/a.txt]
+check "fixture: the scenes do not touch the base files", (I::FIXTURE_SCENES.keys & (I::FIXTURE_FIRST.keys + I::FIXTURE_SECOND.keys)).empty? &&
+                                                        I::FIXTURE_FIRST.keys == %w[README.md in.txt x lib/median.rb]
 
 # guard が通す形。手書きの受け入れの command (K1 から K4 を含む) と、生成器が出す門の外の形。
 accept = [
@@ -197,6 +248,11 @@ accept = [
   "sh -c 'cat -n in.txt'", "bash -c 'uniq -c in.txt' && cat x", "zsh -lc 'tail -n 1 in.txt' 2>&1", "find . -name x -exec cat {} \\;",
   "cd lib", "pushd lib && cat median.rb", "cat x 2>/dev/null && cat x >&2",
   "sh -c cat -n in.txt", "sh -c 'cat x 2>&1 | wc -l'", "sh -c 'cat x' 2>&1",
+  # 置き換えの中の書き込み (表の 3 つ目の形)。代入の語の全体が表の形と一致するときだけ受ける。
+  %q(RANDOM='a[$(sort -o out.txt in.txt)1]'), %q(a=1; RANDOM='a[$(sort -o out.txt in.txt)1]'),
+  %q(cat x; RANDOM='a[$(sort -o out.txt in.txt)1]' && cat x),
+  # 番地の範囲を表示するだけの sed の script (表の 2 つ目)。
+  "sed -n '/apple/,/banana/p' in.txt", %q(sh -c "sed -n '/apple/,/banana/p' in.txt"),
 ]
 accept.each { |c| check "guard accepts #{c.inspect}: #{I.guard(c).inspect}", I.guard(c).nil? }
 
@@ -278,6 +334,13 @@ reject = {
   %q(env awk '{ print | "cat" }' in.txt) => "awk-pipe", %q(X=awk 'BEGIN { "x" | getline }') => "awk-pipe",
   # 例外の $ の形は、展開した後の語として、ほかの規則に掛かる。
   %q(xargs "${zz:--o}" cat) => "xargs-tty", "xargs $'-o' cat" => "xargs-tty", %q(sh -c 'xargs "${zz:--o}" cat') => "xargs-tty",
+  # 置き換えの中の書き込みの形と 1 字でも違う形は、表に無い $ として拒む (中の command、変数の名前、引用の種類、位置)。
+  %q(RANDOM='a[$(sort -o lib/p in.txt)1]') => "dollar", %q(RANDOM='a[$(uniq in.txt out.txt)1]') => "dollar",
+  %q(COLUMNS='a[$(sort -o out.txt in.txt)1]') => "dollar", %q(RANDOM="a[$(sort -o out.txt in.txt)1]") => "dollar",
+  %q(RANDOM='b[$(sort -o out.txt in.txt)1]') => "dollar", %q(RANDOM='a[$(sort -o out.txt in.txt)]') => "dollar",
+  %q(cat "$(sort -o out.txt in.txt)") => "dollar", %q(echo 'a[$(sort -o out.txt in.txt)1]') => "dollar",
+  # 受けた形の外は、ほかの規則がそのまま見る。
+  %q(cat ../x; RANDOM='a[$(sort -o out.txt in.txt)1]') => "dotdot", %q(RANDOM='a[$(sort -o out.txt in.txt)1]' cat /etc/hosts) => "abs-path",
   # 表に無い $ と、読めない形。
   "echo $(touch x)" => "dollar", "sort $'-O' out.txt in.txt" => "dollar", "sort \"${zz:-/x}\" in.txt" => "dollar",
   "" => "empty", "  " => "empty", "cat 'x" => "unbalanced-quote", "cat \u3042" => "non-ascii-or-control", "cat a\u0001b" => "non-ascii-or-control",
@@ -294,7 +357,17 @@ check "guard: the table matches the whole quoted word", I.guard("sed -n '/x/p;w 
 check "guard: the table does not match outside the quotes", I.guard("sed -n /x/p in.txt", scripts: ["/x/p"]) == "abs-path"
 check "guard: the rest of the command is still checked", I.guard("sed -n '/x/p' ../in.txt", scripts: ["/x/p"]) == "dotdot"
 check "guard: the dollar table is closed", I.guard("sort $'-o' out.txt in.txt", dollar_forms: {}) == "dollar"
-check "guard: the dollar table maps each form to the word it expands to", I::DOLLAR_FORMS == { "$'-o'" => "-o", '"${zz:--o}"' => "-o" }
+# 表は、形から「展開した後の語」。3 つ目だけは語に展開されないので、中で走る command を値に持つ。
+substitution = %q(RANDOM='a[$(sort -o out.txt in.txt)1]')
+check "guard: the dollar table maps each form to the word it expands to, or to the command it runs",
+      I::DOLLAR_FORMS == { "$'-o'" => "-o", '"${zz:--o}"' => "-o", substitution => "sort -o out.txt in.txt" }
+check "guard: the substitution form is accepted through the table only", I.guard(substitution, dollar_forms: {}) == "dollar"
+# 値の command に、ほかの規則が当たる (値が外を指す形なら、受けた形ごと拒む)。
+check "guard: the command a form runs is checked by the other rules",
+      I.guard(substitution, dollar_forms: { substitution => "sort -o ../out.txt in.txt" }) == "dotdot" &&
+      I.guard(substitution, dollar_forms: { substitution => "tail -f in.txt" }) == "tail-follow"
+check "guard: the script table is the two checked scripts", I::SCRIPT_TABLE == ['/a\/,/w lib/p', "/apple/,/banana/p"]
+check "guard: a script of the table with more after it is rejected", I.guard("sed -n '/apple/,/banana/p;w out' in.txt") == "abs-path"
 
 # run_command は、guard が拒んだ command を走らせず、一時 dir も作らない。
 before = Dir.children(session.root).sort
@@ -522,6 +595,7 @@ second = session.run_command("ls; pwd; env; git log --oneline | wc -l; uniq -c i
 check "each command gets a new temp dir", second.layout.base != first.layout.base && !second.out.lines.include?("out.txt\n")
 out = second.out.lines.map(&:chomp)
 check "the fixture: files and canaries", (%w[README.md in.txt x lib cat bin canary_begin.rb] - out).empty?
+check "the fixture: the scene dirs", (%w[pair plain pre sortopt] - out).empty?
 check "the fixture: two commits, repeated lines in in.txt, the sed subject in x",
       out.any? { |l| l.strip == "2" } && out.any? { |l| l.match?(/\A\s*2 apple\z/) } && out.include?("a/,")
 check "the child env points into the temp dir, with paths replaced in the output",
@@ -541,6 +615,9 @@ keys = leaked.out.lines.map { |l| l.split("=", 2).first }
 check "variables set in the parent do not reach the child", (keys & %w[RIPGREP_CONFIG_PATH GIT_DIR PAGER]).empty? &&
                                                            leaked.out.include?("GIT_CONFIG_GLOBAL=/dev/null\n")
 check "git works under a hostile parent env (template and command)", leaked.exit_code == 0 && leaked.out.include?(" M README.md\n")
+# scene の file は最初の commit に入っている (追跡していない file として出るのは、canary だけ)。
+check "the scene files are tracked: #{leaked.out.lines.grep(/\A\?\? /).inspect}",
+      leaked.out.lines.grep(/\A\?\? /).map(&:chomp) == ["?? bin/", "?? canary_begin.rb", "?? cat"]
 scopes = leaked.out.lines.select { |l| l.match?(/\A[a-z]+\t/) }.map { |l| l.split("\t").first }.uniq
 check "git reads only the repository's own config: #{scopes.inspect}", scopes == ["local"]
 
@@ -554,6 +631,9 @@ variants = {
   "zsh-extendedglob" => ["echo ^in.txt", ->(r) { r.exit_code == 0 && r.out.include?("README.md") && !r.out.include?("in.txt") }],
 }
 layout = session.prepare
+# scene の file は、表の中身のまま、command ごとの一時 dir にある (- で始まる名前を含む)。
+check "the scene files are in each command's temp dir, with the fixed mtime",
+      I::FIXTURE_SCENES.all? { |rel, body| File.read(File.join(layout.fx, rel)) == body && File.mtime(File.join(layout.fx, rel)) == I::FIXTURE_MTIME }
 # fixture の中の実行できる file は canary だけ (git init が置く hook の見本を残さない)。
 executables = Dir.glob(File.join(layout.fx, "**", "*"), File::FNM_DOTMATCH).select { |p| File.file?(p) && File.executable?(p) }
 check "the fixture has no executable file other than the canaries: #{executables.length}",
@@ -988,6 +1068,26 @@ word = J.observe(session, "env done rm x")
 check "witness: a reserved-word canary goes to a human, and nothing after it runs: #{word.violations.inspect} #{word.human.inspect}",
       word.violations.empty? && word.human == [{ "reason" => "reserved-canary", "paths" => ["shim/done"], "canaries" => ["word.done"] }]
 
+# scene と、guard の表の 3 つ目の形。glob が展開して出来る書き込みと、zsh が代入の中の置き換えを走らせる形。
+# 値は [変種, 差分の種類, 変わる path]。path が nil の行は、その変種では何も変わらないことを見る (対照)。
+substitution = %q(RANDOM='a[$(sort -o out.txt in.txt)1]')
+scenes = [
+  ["uniq pair/*", "zsh", "content", "fx/pair/b.txt"],
+  ["cd sortopt && sort *", "zsh", "created", "fx/sortopt/planted.txt"],
+  ["cd pair && uniq ^x", "zsh-extendedglob", "content", "fx/pair/b.txt"],
+  ["cd pair && uniq ^x", "zsh", nil, nil],
+  ["a=1; #{substitution}", "zsh", "created", "fx/out.txt"],
+  # a が無ければ、zsh でも走らない。bash は、同じ代入で置き換えを走らせない。
+  [substitution, "zsh", nil, nil],
+  ["a=1; #{substitution}", "bash", nil, nil],
+]
+scenes.each do |command, variant, kind, path|
+  v = J.observe(session, command, variant: variant)
+  want = kind ? [{ "invariant" => "I1", "kinds" => [kind], "paths" => [path] }] : []
+  check "witness (#{variant}): #{command.inspect} gives #{want.inspect}: #{v.violations.inspect} #{v.human.inspect}",
+        v.violations == want && v.human.empty? && v.unmeasured.nil?
+end
+
 # 書かない形は、差分も人に出すものも無い。git diff は、fixture の index を揃えてあるので書き直さない。
 ["git status", "git diff", "cat README.md", "ruby -c lib/median.rb"].each do |command|
   defaults.each do |variant|
@@ -1133,14 +1233,9 @@ no_abs_paths() {
   done
 }
 
-# 引数の誤りは exit 2。生成の入口の引数は、まだ受けない。
-for later in "--seed 754" "--count 3" "--run" "--baseline $stub" "--mutation plain-read-sort"; do
-  # shellcheck disable=SC2086
-  run_cli 2 "later option ($later)" --out "$tmp/o-later" --command 'cat README.md' --classifier "$stub" $later
-  grep -q 'is not available yet' "$tmp/cli.err" || fail "later option ($later): missing the reason: $(cat "$tmp/cli.err")"
-  [ ! -e "$tmp/o-later" ] || fail "later option ($later): --out must not be created"
-done
+# 引数の誤りは exit 2。
 run_cli 2 "no arguments"
+grep -q '^error: --out is required (or --preflight)$' "$tmp/cli.err" || fail "no arguments: missing the reason: $(cat "$tmp/cli.err")"
 run_cli 2 "unknown argument" --out "$tmp/o-x" --command 'cat README.md' --nope
 run_cli 2 "preflight with a command" --preflight --command 'cat README.md'
 run_cli 2 "command without --out" --command 'cat README.md' --classifier "$stub"
@@ -1160,6 +1255,22 @@ for out in "$tmp/wt/out" "$tmp/wt/sub/deep/out" "$tmp/wt/.git/out" "$tmp/wt-link
 done
 run_cli 2 "--preflight with --out in a worktree" --preflight --out "$tmp/wt/out"
 [ ! -e "$tmp/wt/out" ] && [ ! -e "$tmp/wt/sub/deep" ] && [ ! -e "$tmp/wt/.git/out" ] || fail "--out inside a worktree must not be created"
+
+# 書けない出力先は、何かを走らせる前に exit 2 (結果を書くのは走らせた後で、そこで初めて失敗すると、走らせた分が残らない)。
+# 見るのは、今ある最も近い dir の権限。dir は作らない。root は権限に依らず書けるので、見ない。
+if [ "$(id -u)" -ne 0 ]; then
+  mkdir "$tmp/locked" "$tmp/locked-empty"
+  chmod 555 "$tmp/locked" "$tmp/locked-empty"
+  for out in "$tmp/locked/out" "$tmp/locked/deep/out" "$tmp/locked-empty"; do
+    run_cli 2 "--out that cannot be written ($out)" --out "$out" --seed 754 --count 3 --classifier "$stub"
+    grep -q '^error: --out is not writable$' "$tmp/cli.err" || fail "--out that cannot be written ($out): missing the reason: $(cat "$tmp/cli.err")"
+    no_abs_paths "--out that cannot be written" "$tmp/cli.err"
+  done
+  run_cli 2 "--preflight with --out that cannot be written" --preflight --out "$tmp/locked/out"
+  grep -q '^error: --out is not writable$' "$tmp/cli.err" || fail "--preflight with --out that cannot be written: missing the reason: $(cat "$tmp/cli.err")"
+  [ -z "$(ls -A "$tmp/locked")" ] && [ -z "$(ls -A "$tmp/locked-empty")" ] || fail "--out that cannot be written: nothing must be created"
+  chmod 755 "$tmp/locked" "$tmp/locked-empty"
+fi
 
 # 居ない user の ~name は、使い方の誤り (exit 2)。Ruby の既定の終了 (exit 1 と backtrace) にはしない。
 # exit 1 は「反例あり」の意味で、backtrace は repo の絶対 path を含む。
@@ -1198,6 +1309,22 @@ check "not read: the HOME path in the command is replaced", w["command"] == ": <
 check "default classifier: the repo's file, by hash: #{d['classifier'].inspect}",
       d["classifier"]["sha256"] == Digest::SHA256.file(ARGV[3]).hexdigest && d["classifier"]["version"].is_a?(Integer) &&
       d["counts"]["executed"] == 0 && d["counts"]["by_class"].keys != ["read"]
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
+# 引数で渡した場所 (--out、分類器の file と、その dir) も、command の文字列に入っていれば置き換えて書く。
+# 走らせない command は、guard を通らないまま結果の file に写る (絶対 path を持ちうる)。
+# symlink を通した形と、解決した形のどちらで書かれていても置き換える。
+mkdir -p "$tmp/cls-dir" "$tmp/place-real"
+ln -s "$tmp/place-real" "$tmp/place-link"
+cp "$stub" "$tmp/cls-dir/stub.rb"
+run_cli 0 "not read: the given places" --out "$tmp/place-link/o" --classifier "$tmp/cls-dir/stub.rb" \
+  --command ": -o$tmp/place-link/o/x $tmp_real/place-real/o/y $tmp/cls-dir/stub.rb $tmp_real/cls-dir/stub.rb.bak"
+no_abs_paths "not read: the given places" "$tmp/place-real/o/results.json" "$tmp/cli.out" "$tmp/cli.err"
+ruby -r"$script_dir/lib/check_helper" -rjson - "$tmp/place-real/o/results.json" <<'RUBY'
+got = JSON.parse(File.read(ARGV[0]))["command"]
+check "not read: the given places are replaced by name: #{got.inspect}",
+      got == ": -o<OUT>/x <OUT>/y <classifier> <classifier-dir>/stub.rb.bak"
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -1254,6 +1381,7 @@ RUBY
 # 1 行だけ出す (exit 1 は「反例あり」の意味)。preflight と、走らせる所を差し替えて、同じ process の中から入口を呼ぶ
 # (何も走らせない)。
 TMPDIR="$cli_tmp" ruby -r"$script_dir/lib/check_helper" - "$repo_root/scripts/lib/probe_classifier_invariants.rb" "$stub" "$tmp" <<'RUBY'
+# encoding: utf-8
 require "stringio"
 require ARGV[0]
 stub = ARGV[1]
@@ -1302,6 +1430,9 @@ check "unexpected failure in a session: exit 2, one line, paths replaced: #{code
       code == 2 && out.empty? && err == "error: RuntimeError: boom at <R>/x and <HOME>/y second line\n"
 code, = call.call("--out", out_dir, "--command", "cat README.md", "--classifier", stub)
 check "unexpected failure before a command: exit 2, nothing run, no results", code == 2 && observed.zero? && !File.exist?(out_dir)
+# 引数で渡された場所の表は、入口が終わったら (失敗で終わっても) 空に戻る。次の入口の出力を、前の引数の名前で置き換えない。
+check "places: the table is empty after an entry has ended: #{P.redact("#{out_dir} #{stub}").inspect}",
+      !P.redact("#{out_dir} #{stub}").match?(/<(OUT|classifier)/)
 # session の外の失敗 (引数を読む所に注入する)。
 P.define_singleton_method(:parse_argv) { |_argv| raise TypeError, "boom in #{ENV.fetch('HOME')}/z" }
 code, out, err = call.call("--preflight")
@@ -1310,9 +1441,11 @@ check "unexpected failure outside a session: exit 2, one line: #{code.inspect} #
 check "the entry left no temp dir behind", Dir.children(ENV.fetch("TMPDIR")).empty?
 
 # 報告の行。path は command が作った名前を含むので、制御の字を置き換えて 1 行に保つ。
+# 絶対 path を含む名前 (拒まれた起動の名前など) は、報告の行でも置き換える。
 data = { "variant" => "zsh", "runs" => [{}],
          "violations" => [{ "invariant" => "I1", "kinds" => ["created"], "paths" => ["fx/a\n  I2 fixture shim/canary\ncommand: class=read"] }],
-         "human" => [{ "reason" => "zone", "paths" => ["tmp/b\rc", "tmp/d\e[2K"] }] }
+         "human" => [{ "reason" => "zone", "paths" => ["tmp/b\rc", "tmp/d\e[2K"] },
+                     { "reason" => "denied-exec", "names" => ["#{ENV.fetch('HOME')}/bin/tool"] }] }
 saved = $stdout
 $stdout = StringIO.new
 begin
@@ -1322,10 +1455,617 @@ ensure
   $stdout = saved
 end
 check "report: a path with control characters stays on its own line: #{lines.inspect}",
-      lines == ["command: class=read variant=zsh runs=1 violations=1 human=1\n",
-                "  I1 created fx/a?  I2 fixture shim/canary?command: class=read\n", "  human zone tmp/b?c tmp/d?[2K\n"]
+      lines.first(3) == ["command: class=read variant=zsh runs=1 violations=1 human=2\n",
+                         "  I1 created fx/a?  I2 fixture shim/canary?command: class=read\n", "  human zone tmp/b?c tmp/d?[2K\n"]
+check "report: an absolute path under HOME is replaced in the line: #{lines.last.inspect}",
+      lines.length == 4 && lines.last == "  human denied-exec <HOME>/bin/tool\n"
+
+# 引数で渡された場所の表。--baseline も、分類器を省いたときの repo の file も入る。main の終わりには空に戻る。
+pairs = P.places_of(out: "/tmp/pci-o/", baseline: "/private/tmp/pci-b/b.rb")
+check "places: every form of the out dir has one name: #{pairs.select { |_, n| n == '<OUT>' }.inspect}",
+      pairs.select { |_, n| n == "<OUT>" }.map(&:first).include?("/tmp/pci-o") && pairs.none? { |p, _| p.end_with?("/") }
+check "places: the baseline, its dir, and their alias without /private",
+      [["/private/tmp/pci-b/b.rb", "<baseline>"], ["/tmp/pci-b/b.rb", "<baseline>"], ["/private/tmp/pci-b", "<baseline-dir>"],
+       ["/tmp/pci-b", "<baseline-dir>"]].all? { |pair| pairs.include?(pair) }
+check "places: a path is replaced in the form it was given, and in its absolute form",
+      (%w[/tmp/pci-a/../pci-o /tmp/pci-o] - P.places_of(out: "/tmp/pci-a/../pci-o").map(&:first)).empty?
+check "places: the default classifier is a place too", pairs.include?([P::DEFAULT_CLASSIFIER, "<classifier>"])
+check "places: --preflight has no classifier, and the root dir is never a place",
+      P.places_of(preflight: true) == [] && P.places_of(preflight: true, out: "/") == [] &&
+      P.places_of(out: "/pci-o", classifier: "/pci-c.rb").none? { |p, _| p == "/" }
+# 名前の字が続く path は、別の名前とみなして残す (--out が /t/out のときの /t/out-other と /t/out./x)。
+# 終わりは、/、文字列の終わり、名前の字でない字。前に別の dir が付いた形は、置き換える側に寄せる。
+kept = %w[/t/out-other /t/out2 /t/out.txt /t/out_x /t/out..x /t/out+ /t/out~ /t/out%1 /t/out@x /t/out./x /t/out../x /t/out.-]
+check "places: another path that only starts with the same characters is kept",
+      kept.all? { |p| P::Isolation.replace_paths("cat #{p} x", [["/t/out", "<OUT>"]]) == "cat #{p} x" }
+check "places: the path itself, and what is under it, is replaced",
+      P::Isolation.replace_paths("/t/out /t/out/x '/t/out' -o/t/out; /t/out. x /t/out... --a=/t/out,/t/out", [["/t/out", "<OUT>"]]) ==
+      "<OUT> <OUT>/x '<OUT>' -o<OUT>; <OUT>. x <OUT>... --a=<OUT>,<OUT>"
+check "places: a path followed by a non-ASCII character is replaced, and a path may hold one",
+      P::Isolation.replace_paths("/t/outに /t/表/x /t/表-2", [["/t/out", "<OUT>"], ["/t/表", "<HYOU>"]]) ==
+      "<OUT>に <HYOU>/x /t/表-2"
+# 終わりの規則を、直後の 1 字の全部 (ASCII の 127 字) で見る。例だけでは、端の形 (. の後ろの / など) を漏らす。
+name_char = ->(c) { c.match?(/[A-Za-z0-9_+@%~.-]/) }
+swap = ->(text) { P::Isolation.replace_paths(text, [["/t/out", "<OUT>"]]) }
+wrong = (1..127).map(&:chr).reject do |c|
+  direct = c == "/" || !name_char.call(c)
+  after_dot = !name_char.call(c) && c != "/"
+  swap.call("/t/out#{c}x") == (direct ? "<OUT>#{c}x" : "/t/out#{c}x") &&
+    swap.call("/t/out.#{c}") == (after_dot || c == "." ? "<OUT>.#{c}" : "/t/out.#{c}")
+end
+check "places: the end of a path, for every ASCII character that can follow it: #{wrong.inspect}", wrong.empty?
+# 引用と \ は読まない近似。空白を含む別の名前は、前の部分が置き換わる (docs に書いてある形)。
+check "places: quotes and backslashes are not read, so a name with a space is replaced in its first part",
+      P::Isolation.replace_paths("'/t/out x' /t/out\\ x", [["/t/out", "<OUT>"]]) == "'<OUT> x' <OUT>\\ x"
+check "places: a path under the registered one is replaced whatever follows the slash",
+      P::Isolation.replace_paths("/t/out/./x /t/out//x /t/out/../y /t/out/.", [["/t/out", "<OUT>"]]) == "<OUT>/./x <OUT>//x <OUT>/../y <OUT>/."
+check "places: a registered path inside another path is replaced as well",
+      P::Isolation.replace_paths("/System/Volumes/Data/t/out/x", [["/t/out", "<OUT>"]]) == "/System/Volumes/Data<OUT>/x"
+# 長い path から替える。同じ path は、先の組の名前になる。
+check "places: the longest path wins, and the first name for the same path",
+      P::Isolation.replace_paths("/a/b/c /a/b /a", [["/a", "<1>"], ["/a/b", "<2>"], ["/a/b", "<3>"]]) == "<2>/c <2> <1>"
 exit(@failed.zero? ? 0 : 1)
 RUBY
+
+# --- T5 の続き: 生成の入口 (sandbox の要らない部分) ------------------------------------------------
+# 分類器の代役。先頭の語が表にあれば read、無ければ unknown と答える。
+# standin は、変異 plain-read-sort が置き換える文字列 (md5sum].freeze) を 1 回だけ持つ。当てると、sort が read になる。
+# side-a と side-b は、read の組が 4 通り (a だけ、b だけ、両方、どちらでもない) に分かれる 2 つの版。
+# read でない command だけが通る行を 1 つ持つ (行の coverage の「read だけ」を見るため)。
+# 使い方: write_standin <file> <版> <read にする語の並び>
+write_standin() {
+  cat > "$1" <<RUBY
+module SkillBehaviorClassifier
+  VERSION = $2
+  READS = %w[$3].freeze
+  def self.classify_shell(command, _depth = 0, **_opts)
+    return "read" if READS.include?(command.split.first)
+
+    String.new("unknown")
+  end
+end
+RUBY
+}
+write_standin "$tmp/standin.rb" 3 "diff git md5sum"
+write_standin "$tmp/side-a.rb" 11 "sort diff git"
+write_standin "$tmp/side-b.rb" 12 "diff git uniq"
+
+# 使い方の誤りは exit 2。出力先を作らず、一時 dir も残さない (残っていれば run_cli が落とす)。
+run_cli 2 "generate: --out inside a worktree" --out "$tmp/wt/out" --count 5 --classifier "$stub"
+grep -q '^error: --out must be outside a git worktree$' "$tmp/cli.err" \
+  || fail "generate: --out inside a worktree: missing the reason: $(cat "$tmp/cli.err")"
+[ ! -e "$tmp/wt/out" ] || fail "generate: --out inside a worktree must not be created"
+run_cli 2 "generate: --baseline with --mutation" --out "$tmp/o-u" --classifier "$tmp/standin.rb" --baseline "$stub" --mutation plain-read-sort
+grep -q '^error: --baseline and --mutation cannot be combined$' "$tmp/cli.err" \
+  || fail "generate: --baseline with --mutation: missing the reason: $(cat "$tmp/cli.err")"
+run_cli 2 "generate: unknown mutation" --out "$tmp/o-u" --classifier "$tmp/standin.rb" --mutation no-such-mutation-zz
+grep -q '^error: unknown mutation (known: plain-read-sort, ' "$tmp/cli.err" || fail "generate: unknown mutation: missing the reason: $(cat "$tmp/cli.err")"
+if grep -q 'no-such-mutation-zz' "$tmp/cli.err"; then fail "generate: unknown mutation: the given name must not be echoed"; fi
+# 当たらない変異 (置き換える文字列が、渡した分類器の source に無い)。分類器は省かずに代役を渡す
+# (この test を、変異の表が repo の分類器に当たるかどうかに結び付けない)。
+run_cli 2 "generate: a mutation that does not apply" --out "$tmp/o-u" --classifier "$stub" --mutation find-delete
+grep -q '^error: mutation find-delete does not apply: the text to replace occurs 0 times (expected 1)$' "$tmp/cli.err" \
+  || fail "generate: a mutation that does not apply: missing the reason: $(cat "$tmp/cli.err")"
+run_cli 2 "generate: --count that is not a number" --out "$tmp/o-u" --classifier "$stub" --count many
+grep -q '^error: --count must be an integer from 1 to 5000$' "$tmp/cli.err" \
+  || fail "generate: --count that is not a number: missing the reason: $(cat "$tmp/cli.err")"
+run_cli 2 "command with --count" --out "$tmp/o-u" --command 'cat README.md' --classifier "$stub" --count 3
+grep -q '^error: --command cannot be combined with --count$' "$tmp/cli.err" || fail "command with --count: missing the reason: $(cat "$tmp/cli.err")"
+[ ! -e "$tmp/o-u" ] || fail "a usage error must not create --out"
+
+# dry-run。生成して分類し、2 つの file を書く。何も走らせない (sandbox も要らない)。
+# 同じ引数で 2 回走らせると、corpus.jsonl も報告も、byte まで同じになる。
+run_cli 0 "dry-run" --out "$tmp/o-dry1" --seed 754 --count 12 --classifier "$stub"
+[ ! -s "$tmp/cli.err" ] || fail "dry-run: nothing is expected on stderr: $(cat "$tmp/cli.err")"
+grep -q '^generated: mode=dry-run seed=754 count=12 variant=zsh$' "$tmp/cli.out" || fail "dry-run: missing the first line: $(cat "$tmp/cli.out")"
+grep -q '^selected=12 guard-rejected=0 executed=0 unmeasured=0 violations=0 human=0$' "$tmp/cli.out" \
+  || fail "dry-run: missing the counts: $(cat "$tmp/cli.out")"
+[ "$(ls "$tmp/o-dry1" | tr '\n' ' ')" = "corpus.jsonl results.json " ] || fail "dry-run: expected the two files: $(ls "$tmp/o-dry1")"
+no_abs_paths "dry-run" "$tmp/o-dry1/results.json" "$tmp/o-dry1/corpus.jsonl" "$tmp/cli.out" "$tmp/cli.err"
+cp "$tmp/cli.out" "$tmp/dry1.out"
+run_cli 0 "dry-run again" --out "$tmp/o-dry2" --seed 754 --count 12 --classifier "$stub"
+cmp -s "$tmp/o-dry1/corpus.jsonl" "$tmp/o-dry2/corpus.jsonl" || fail "dry-run: the same arguments must give the same corpus.jsonl, byte for byte"
+cmp -s "$tmp/dry1.out" "$tmp/cli.out" || fail "dry-run: the same arguments must give the same report"
+# 比べる相手つきと、変異つき。対照の結果は、走らせていないので出さない (差分の組の件数だけ)。
+run_cli 0 "dry-run with a baseline" --out "$tmp/o-base" --seed 754 --count 30 --classifier "$tmp/side-a.rb" --baseline "$tmp/side-b.rb"
+grep -q '^control: pairs=2 result=not-run confirmed=0 variant-only=0$' "$tmp/cli.out" || fail "dry-run with a baseline: missing the control line: $(cat "$tmp/cli.out")"
+no_abs_paths "dry-run with a baseline" "$tmp/o-base/results.json" "$tmp/o-base/corpus.jsonl" "$tmp/cli.out" "$tmp/cli.err"
+run_cli 0 "dry-run with a mutation" --out "$tmp/o-mut" --seed 754 --count 22 --classifier "$tmp/standin.rb" --mutation plain-read-sort
+grep -q '^control: pairs=2 result=not-run confirmed=0 variant-only=0$' "$tmp/cli.out" || fail "dry-run with a mutation: missing the control line: $(cat "$tmp/cli.out")"
+no_abs_paths "dry-run with a mutation" "$tmp/o-mut/results.json" "$tmp/o-mut/corpus.jsonl" "$tmp/cli.out" "$tmp/cli.err"
+# 変異した版を書く一時 dir が git の worktree の中なら、exit 2 で、何も残さない (変異した分類器を、tracked に
+# なりうる所に置かない)。.git を置いた代役の dir を TMPDIR にして見る。
+status=0
+TMPDIR="$tmp/wt/sub" "$probe" --out "$tmp/o-mwt" --seed 754 --count 22 --classifier "$tmp/standin.rb" --mutation plain-read-sort \
+  > "$tmp/cli.out" 2> "$tmp/cli.err" || status=$?
+[ "$status" -eq 2 ] || fail "mutation with a temp dir inside a worktree: expected exit 2, got $status: $(cat "$tmp/cli.out" "$tmp/cli.err")"
+grep -q '^error: the temp dir for the mutated classifier is inside a git worktree$' "$tmp/cli.err" \
+  || fail "mutation with a temp dir inside a worktree: missing the reason: $(cat "$tmp/cli.err")"
+[ -z "$(ls -A "$tmp/wt/sub")" ] && [ ! -e "$tmp/o-mwt" ] || fail "mutation with a temp dir inside a worktree: it must leave nothing behind"
+
+ruby -r"$script_dir/lib/check_helper" -rjson -rdigest - "$generator" "$mutations" "$tmp" "$stub" "$docs" <<'RUBY'
+require ARGV[0]
+require ARGV[1]
+G = ProbeClassifier::Generator
+M = ProbeClassifier::Mutations
+tmp = ARGV[2]
+stub = ARGV[3]
+docs = File.read(ARGV[4], encoding: "UTF-8")
+# [results.json の中身, corpus.jsonl の行の並び]。results.json は、読み直した中身で比べる (書式は Ruby の版で違う)。
+load_out = lambda do |name|
+  [JSON.parse(File.read(File.join(tmp, name, "results.json"))),
+   File.readlines(File.join(tmp, name, "corpus.jsonl")).map { |line| JSON.parse(line) }]
+end
+sha = ->(name) { Digest::SHA256.file(File.join(tmp, name)).hexdigest }
+first = ->(row) { row.command.split.first }
+classes = ->(rows, reads) { rows.map { |row| reads.include?(first.call(row)) ? "read" : "unknown" } }
+corpus_keys = %w[index command cell class]
+
+dry, corpus = load_out.call("o-dry1")
+rows = G.generate(754, 12)
+check "dry-run: mode, variant, seed, count, digest of the rows, timeout",
+      dry.values_at("mode", "variant", "seed", "count", "digest", "timeout") == ["dry-run", "zsh", 754, 12, G.digest(rows), 5]
+check "dry-run: the classifier by version and hash: #{dry['classifier'].inspect}",
+      dry["classifier"] == { "version" => 754, "sha256" => Digest::SHA256.file(stub).hexdigest }
+check "dry-run: counts: #{dry['counts'].inspect}",
+      dry["counts"] == { "generated" => 12, "by_class" => { "read" => 12 }, "selected" => 12, "guard_rejected" => 0, "executed" => 0, "unmeasured" => 0 }
+check "dry-run: nothing was run", %w[violations human violation_groups human_groups runs].all? { |key| dry[key] == [] }
+check "dry-run: the keys of results.json: #{dry.keys.inspect}",
+      dry.keys.sort == %w[cells classifier count counts coverage digest human human_groups mode runs seed timeout variant violation_groups violations]
+cells = dry["cells"]
+reached = ->(name) { { "cell" => name, "generated" => 1, "read" => 1, "selected" => 1, "executed" => 0, "effective" => 0, "endings" => {}, "violations" => 0, "human" => 0 } }
+check "dry-run: the table has a row for every cell, and the rows reached so far",
+      cells.map { |c| c["cell"] } == G.cell_names && cells.first(12) == G.cell_names.first(12).map(&reached) &&
+      cells.drop(12).all? { |c| c.values_at("generated", "read", "selected", "executed") == [0, 0, 0, 0] }
+# 行の数は Ruby の版で違いうるので、形と大小だけを見る。
+cov = dry["coverage"]
+check "dry-run: line coverage of the classifier (all rows, and the rows classified read): #{cov.inspect}",
+      cov.is_a?(Hash) && cov.keys.sort == %w[all lines load read] && cov.values.all? { |n| n.is_a?(Integer) } &&
+      cov["read"] >= 1 && cov["all"] >= cov["read"] && cov["lines"] >= cov["all"] && cov["load"] >= 1 && cov["lines"] >= cov["load"]
+check "dry-run: corpus.jsonl is one row per line, with the four keys in order",
+      corpus == rows.map { |row| row.record.merge("class" => "read") } && corpus.all? { |row| row.keys == corpus_keys }
+
+# 走らせる対象は、調べる版で read、比べる相手で read でない件。小さい列に、4 通りの組が全部あることを先に見る
+# (片方だけだと、向きを逆にした選び方でも通る)。
+a = %w[sort diff git]
+b = %w[diff git uniq]
+rows = G.generate(754, 30)
+split = rows.group_by { |row| [a.include?(first.call(row)), b.include?(first.call(row))] }
+indexes = ->(key) { split.fetch(key, []).map(&:index) }
+check "pairs: the 30 rows have all four combinations: #{split.map { |k, v| [k, v.length] }.inspect}",
+      indexes.call([true, false]) == [11, 21] && indexes.call([false, true]) == [12, 22] &&
+      indexes.call([true, true]) == [3, 9, 13, 19, 23] && indexes.call([false, false]).length == 21
+base, corpus = load_out.call("o-base")
+check "baseline dry-run: the classifier and the baseline, each by version and hash",
+      base["classifier"] == { "version" => 11, "sha256" => sha.call("side-a.rb") } &&
+      base["baseline"] == { "version" => 12, "sha256" => sha.call("side-b.rb") } && !base.key?("mutation") && !base.key?("mutated_sha256")
+check "baseline dry-run: only the rows that are read here and not read there are selected: #{base['counts'].inspect} #{base['control'].inspect}",
+      base["counts"] == { "generated" => 30, "by_class" => { "read" => 7, "unknown" => 23 }, "selected" => 2, "guard_rejected" => 0, "executed" => 0, "unmeasured" => 0 } &&
+      base["control"] == { "pairs" => 2, "result" => nil, "confirmed" => 0, "variant_only" => 0, "indexes" => [11, 21] }
+check "baseline dry-run: corpus.jsonl carries the class of the examined classifier, with the same four keys",
+      corpus.map { |row| row["class"] } == classes.call(rows, a) && corpus.all? { |row| row.keys == corpus_keys }
+# 代役は、read でない command だけが通る行を 1 つ持つ。その 1 行の分だけ、「read だけ」の数が少ない
+# (行の数そのものは Ruby の版で違いうるので、差で見る)。何でも read と答える代役では、2 つの数が同じになる。
+check "baseline dry-run: the lines reached by the read rows are counted apart from the lines reached by all rows: #{base['coverage'].inspect}",
+      base["coverage"]["all"] == base["coverage"]["read"] + 1 && dry["coverage"]["all"] == dry["coverage"]["read"]
+cell = ->(data, name) { data["cells"].find { |c| c["cell"] == name }.values_at("generated", "read", "selected") }
+check "baseline dry-run: the table counts read and selected apart",
+      cell.call(base, "sort/dashdash") == [1, 1, 1] && cell.call(base, "uniq/dashdash") == [1, 0, 0] && cell.call(base, "diff/opt-after") == [1, 1, 0]
+
+# 変異。調べるのは変異を当てた版で、比べる相手は当てる前の版。classifier の hash は、当てる前の file を指す。
+mut, corpus = load_out.call("o-mut")
+rows = G.generate(754, 22)
+mutated = M.apply(File.read(File.join(tmp, "standin.rb")), "plain-read-sort")
+check "mutation dry-run: the given file by hash, the mutation by name, and the hash of the mutated source",
+      mut["classifier"] == { "version" => 3, "sha256" => sha.call("standin.rb") } && mut["mutation"] == "plain-read-sort" &&
+      mut["mutated_sha256"] == Digest::SHA256.hexdigest(mutated) && mut["mutated_sha256"] != mut["classifier"]["sha256"] && !mut.key?("baseline")
+check "mutation dry-run: the pairs are the rows the mutation turned into read: #{mut['counts'].inspect} #{mut['control'].inspect}",
+      mut["counts"] == { "generated" => 22, "by_class" => { "read" => 6, "unknown" => 16 }, "selected" => 2, "guard_rejected" => 0, "executed" => 0, "unmeasured" => 0 } &&
+      mut["control"] == { "pairs" => 2, "result" => nil, "confirmed" => 0, "variant_only" => 0, "indexes" => [11, 21],
+                          "expected" => { "invariant" => "I1", "variant" => "zsh", "expect" => "violation", "needs" => [] } }
+check "mutation dry-run: corpus.jsonl carries the class of the mutated version",
+      corpus.map { |row| row["class"] } == classes.call(rows, %w[diff git md5sum sort]) && corpus.all? { |row| row.keys == corpus_keys }
+
+# 結果の file の key は、docs の表に名前がある (key を足したら、docs にも足す)。
+keys = (dry.keys + base.keys + mut.keys + dry["counts"].keys + base["control"].keys + mut["control"].keys +
+        mut["control"]["expected"].keys + dry["cells"][0].keys + dry["coverage"].keys + corpus_keys).uniq
+check "docs: every key of the two files is named: #{keys.reject { |key| docs.include?("`#{key}`") }.inspect}",
+      keys.all? { |key| docs.include?("`#{key}`") }
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
+# 生成の入口の、走らせる所。preflight と Judge.observe を差し替え、同じ process の中から入口を呼ぶ (何も走らせない)。
+# 見るのは、observe に渡る command (走らせる対象の選び方と順番)、preflight の回数、結果の file、exit code。
+TMPDIR="$cli_tmp" ruby -r"$script_dir/lib/check_helper" -rjson -rdigest - "$entry" "$stub" "$tmp" "$docs" "$repo_root/scripts/README.md" <<'RUBY'
+# encoding: utf-8
+require "stringio"
+require ARGV[0]
+stub = ARGV[1]
+tmp = File.realpath(ARGV[2])
+P = ProbeClassifierInvariants
+I = P::Isolation
+J = P::Judge
+G = P::Generator
+M = P::Mutations
+standin, side_a, side_b = %w[standin.rb side-a.rb side-b.rb].map { |name| File.join(tmp, name) }
+
+# 入口を呼び、[exit code, stdout, stderr] を返す。
+call = lambda do |*argv|
+  saved = [$stdout, $stderr]
+  $stdout = StringIO.new
+  $stderr = StringIO.new
+  begin
+    code = P.main(argv)
+    [code, $stdout.string, $stderr.string]
+  ensure
+    $stdout, $stderr = saved
+  end
+end
+# preflight と observe の呼ばれ方を、順番ごと残す。observe は、plan が返す Verdict を返すだけ。
+events = []
+passed = I::Preflight.new(ok: true, unavailable: false, checks: [], reasons: [])
+pre = passed
+I.define_singleton_method(:preflight) do |_session, **_opts|
+  events << [:preflight]
+  pre
+end
+verdict = lambda do |variant, violations: [], human: [], unmeasured: nil, ending: "ok"|
+  J::Verdict.new(variant: variant, ending: ending, exit_code: ending == "ok" ? 0 : 1, timed_out: false, unmeasured: unmeasured,
+                 violations: violations, human: human, changes: [])
+end
+clean = ->(_command, variant) { verdict.call(variant) }
+plan = clean
+J.define_singleton_method(:observe) do |_session, command, variant: "zsh", **_opts|
+  events << [:observe, command, variant]
+  plan.call(command, variant)
+end
+
+# 引数の誤り。どれも、何かを読む前に exit 2 で止まる。
+out_dir = File.join(tmp, "o-arg")
+bad = {
+  "--count 0" => %w[--count 0], "--count above the limit" => %w[--count 5001], "a negative --count" => %w[--count -1],
+  "--count with a sign" => %w[--count +5], "--count with a fraction" => %w[--count 1.5], "--count with a space" => ["--count", "5 "],
+  "an empty --count" => ["--count", ""], "--count in hex" => %w[--count 0x10], "--count without a value" => %w[--count],
+  "--seed that is not a number" => %w[--seed abc], "a negative --seed" => %w[--seed -1], "--seed above the limit" => %w[--seed 1000000000],
+  "--seed with a line break" => ["--seed", "7\n8"], "--mutation followed by an option" => %w[--mutation --run],
+  "--baseline without a value" => %w[--baseline],
+}
+bad.each do |label, argv|
+  code, out, err = call.call("--out", out_dir, "--classifier", stub, *argv)
+  check "arguments: #{label} is exit 2: #{code.inspect} #{err.lines.first.inspect}", code == 2 && out.empty? && err.start_with?("error: --")
+end
+[%w[--seed 1], %w[--count 3], %w[--run], ["--baseline", stub]].each do |extra|
+  code, out, err = call.call("--out", out_dir, "--command", "cat README.md", "--classifier", stub, *extra)
+  check "arguments: --command with #{extra[0]} is exit 2: #{code.inspect} #{err.lines.first.inspect}",
+        code == 2 && out.empty? && err.lines.first == "error: --command cannot be combined with #{extra[0]}\n"
+end
+[%w[--seed 1], %w[--count 3], %w[--run], ["--baseline", stub], %w[--mutation plain-read-sort], %w[--variant sh], ["--classifier", stub]].each do |extra|
+  code, out, err = call.call("--preflight", *extra)
+  check "arguments: --preflight with #{extra[0]} is exit 2: #{code.inspect} #{err.lines.first.inspect}",
+        code == 2 && out.empty? && err.lines.first == "error: --preflight takes only --out (got #{extra[0]})\n"
+end
+code, _out, err = call.call("--out", out_dir, "--classifier", stub, "--baseline", File.join(tmp, "absent.rb"))
+check "arguments: a baseline file that is missing is exit 2: #{err.lines.first.inspect}",
+      code == 2 && err.lines.first == "error: --baseline is not a readable file\n"
+code, _out, err = call.call("--count", "3", "--classifier", stub)
+check "arguments: generating without --out is exit 2: #{err.lines.first.inspect}", code == 2 && err.lines.first == "error: --out is required (or --preflight)\n"
+check "arguments: nothing was asked or run, and --out was not created", events.empty? && !File.exist?(out_dir)
+
+# 既定の seed と件数。dry-run は、隔離の session を開かない。
+opened = I::Session.method(:open)
+I::Session.define_singleton_method(:open) { |*_args, **_opts| raise "a dry-run must not open a session" }
+begin
+  code, _out, err = call.call("--out", File.join(tmp, "o-idef"), "--classifier", stub)
+ensure
+  I::Session.define_singleton_method(:open, opened)
+end
+defaults = code == 0 ? JSON.parse(File.read(File.join(tmp, "o-idef", "results.json"))) : {}
+check "dry-run: the defaults are seed 754, 200 rows and zsh, and no session is opened: #{code.inspect} #{err.inspect}",
+      code == 0 && err.empty? && defaults.values_at("mode", "seed", "count", "variant") == ["dry-run", 754, 200, "zsh"] &&
+      File.readlines(File.join(tmp, "o-idef", "corpus.jsonl")).length == 200 && events.empty?
+check "dry-run: 200 rows reach every cell", defaults["cells"].all? { |c| c["generated"] >= 1 } && defaults["counts"]["guard_rejected"] == 0
+# 既定でない seed は、生成器と結果の file の両方に届く。0 も受ける (範囲の下の端)。
+code, _out, err = call.call("--out", File.join(tmp, "o-iseed"), "--classifier", stub, "--seed", "0", "--count", "24")
+seeded = code == 0 ? JSON.parse(File.read(File.join(tmp, "o-iseed", "results.json"))) : {}
+seeded_rows = G.generate(0, 24)
+check "dry-run: --seed 0 is accepted and recorded: #{code.inspect} #{err.inspect}", code == 0 && err.empty? && seeded["seed"] == 0 && seeded["count"] == 24
+check "dry-run: the rows are the ones of the given seed, not of the default seed",
+      seeded["digest"] == G.digest(seeded_rows) && seeded["digest"] != G.digest(G.generate(P::DEFAULT_SEED, 24)) &&
+      File.readlines(File.join(tmp, "o-iseed", "corpus.jsonl")).map { |line| JSON.parse(line)["command"] } == seeded_rows.map(&:command)
+
+# 生成の run。30 行のうち、先頭の語が sort の 2 行と、uniq の 2 行を使う。
+rows = G.generate(754, 30)
+first = ->(row) { row.command.split.first }
+sorts = rows.select { |row| first.call(row) == "sort" }
+uniqs = rows.select { |row| first.call(row) == "uniq" }
+check "run: the rows this part relies on: #{sorts.map(&:command).inspect}",
+      sorts.map(&:index) == [11, 21] && uniqs.map(&:index) == [12, 22] && sorts.map(&:cell) == %w[sort/dashdash sort/bundle] &&
+      sorts.map(&:command) == ["sort --reverse -- README.md", "sort --output=out.txt in.txt"]
+write = { "invariant" => "I1", "kinds" => ["created"], "paths" => ["fx/out.txt"] }
+# 入口を、seed 754 の 30 行で呼ぶ。戻り値は [exit code, stdout, stderr, results.json の中身 (無ければ nil), 呼ばれ方]。
+gen = lambda do |name, *extra|
+  events.clear
+  code, out, err = call.call("--out", File.join(tmp, name), "--seed", "754", "--count", "30", *extra)
+  file = File.join(tmp, name, "results.json")
+  [code, out, err, File.exist?(file) ? JSON.parse(File.read(file)) : nil, events.dup]
+end
+watch = ->(list, variant = "zsh") { list.map { |row| [:observe, row.command, variant] } }
+
+# 比べる相手つき。差分の組 (a で read、b で read でない) だけが、番号の順に走る。preflight は初めに 1 回。
+plan = ->(command, variant) { verdict.call(variant, violations: command == sorts[1].command ? [write] : []) }
+code, out, err, r, seen = gen.call("o-ia", "--classifier", side_a, "--baseline", side_b, "--run")
+check "run with a baseline: one preflight, then only the pairs, and the candidate two more times: #{seen.inspect}",
+      seen == [[:preflight]] + watch.call([sorts[0]]) + watch.call([sorts[1]]) * 3
+check "run with a baseline: exit 1 and the report: #{code.inspect} #{out.inspect}",
+      code == 1 && out.lines.length == 6 &&
+      out.lines.first(4) == ["generated: mode=run seed=754 count=30 variant=zsh\n", "classes: read=7 unknown=23\n",
+                             "selected=2 guard-rejected=0 executed=2 unmeasured=0 violations=1 human=0\n",
+                             "control: pairs=2 result=found confirmed=1 variant-only=0\n"] &&
+      out.lines[4].match?(/\Acoverage: lines=\d+ load=\d+ all=\d+ read=\d+\n\z/) &&
+      out.lines[5] == "  I1 created fx/out.txt x1 #21 [sort/bundle] sort --output=out.txt in.txt\n"
+check "run with a baseline: the progress goes to stderr: #{err.inspect}", err == "run: 2 commands to run (variant zsh)\nrun: 1/2\n"
+found = { "invariant" => "I1", "index" => 21, "cell" => "sort/bundle", "command" => sorts[1].command, "variant" => "zsh",
+          "kinds" => ["created"], "paths" => ["fx/out.txt"] }
+check "run with a baseline: counts and control: #{r['counts'].inspect} #{r['control'].inspect}",
+      r["mode"] == "run" && r["baseline"]["version"] == 12 &&
+      r["counts"] == { "generated" => 30, "by_class" => { "read" => 7, "unknown" => 23 }, "selected" => 2, "guard_rejected" => 0, "executed" => 2, "unmeasured" => 0 } &&
+      r["control"] == { "pairs" => 2, "result" => "found", "confirmed" => 1, "variant_only" => 0, "indexes" => [11, 21] }
+check "run with a baseline: the counterexample carries its index and cell, and is grouped: #{r['violations'].inspect}",
+      r["violations"] == [found] && r["human"] == [] && r["violation_groups"] == [found.merge("count" => 1)] && r["human_groups"] == []
+check "run with a baseline: one row per launch, with the index of its command",
+      r["runs"].map { |run| run["index"] } == [11, 21, 21, 21] &&
+      r["runs"].all? { |run| run.keys == %w[index variant ending exit_code timed_out unmeasured] && run["ending"] == "ok" }
+cell = ->(data, name) { data["cells"].find { |c| c["cell"] == name } }
+check "run with a baseline: the table of cells: #{cell.call(r, 'sort/bundle').inspect}",
+      cell.call(r, "sort/bundle") == { "cell" => "sort/bundle", "generated" => 1, "read" => 1, "selected" => 1, "executed" => 1, "effective" => 1,
+                                        "endings" => { "ok" => 1 }, "violations" => 1, "human" => 0 } &&
+      cell.call(r, "sort/dashdash").values_at("executed", "violations") == [1, 0] &&
+      cell.call(r, "uniq/dashdash").values_at("read", "selected", "executed") == [0, 0, 0] &&
+      cell.call(r, "diff/opt-after").values_at("read", "selected", "executed") == [1, 0, 0]
+check "run with a baseline: the tools this machine lacks are listed by name", r["tools_missing"].is_a?(Hash) && r["tools_missing"].keys.all? { |k| k.match?(/\A[a-z0-9]+\z/) }
+check "run with a baseline: corpus.jsonl is written too", File.readlines(File.join(tmp, "o-ia", "corpus.jsonl")).length == 30
+
+# 向きを逆にすると、差分の組は uniq の 2 行になる。違反が無ければ、対照の結果は missed で exit 0。
+plan = clean
+code, _out, _err, r, seen = gen.call("o-ib", "--classifier", side_b, "--baseline", side_a, "--run")
+check "run with the sides swapped: the pairs are the other rows, and the control is missed: #{seen.inspect} #{r['control'].inspect}",
+      seen == [[:preflight]] + watch.call(uniqs) && code == 0 && r["classifier"]["version"] == 12 && r["baseline"]["version"] == 11 &&
+      r["control"] == { "pairs" => 2, "result" => "missed", "confirmed" => 0, "variant_only" => 0, "indexes" => [12, 22] }
+
+# 相手が無ければ、read の全件が走る。変種は observe まで届く。
+reads = rows.select { |row| %w[sort diff git].include?(first.call(row)) }
+code, _out, _err, r, seen = gen.call("o-ic", "--classifier", side_a, "--run", "--variant", "sh")
+check "run without a baseline: every read row is run once, in the given variant: #{seen.length}",
+      seen == [[:preflight]] + watch.call(reads, "sh") && reads.length == 7 && code == 0 && !r.key?("control") && !r.key?("baseline") &&
+      r["variant"] == "sh" && r["counts"].values_at("selected", "executed") == [7, 7] && r["runs"].map { |run| run["index"] } == reads.map(&:index)
+
+# 未測定の回は、件数と人に出す行の両方に出て、exit 3 になる。
+plan = ->(command, variant) { verdict.call(variant, unmeasured: command == sorts[0].command ? "group-not-empty" : nil) }
+code, out, _err, r, = gen.call("o-id", "--classifier", side_a, "--baseline", side_b, "--run")
+check "run with an unmeasured row: exit 3, counted, and listed for a human: #{code.inspect} #{r['human'].inspect}",
+      code == 3 && r["counts"]["unmeasured"] == 1 && r["violations"] == [] && r["control"]["result"] == "missed" &&
+      r["human"] == [{ "reason" => "unmeasured", "index" => 11, "cell" => "sort/dashdash", "command" => sorts[0].command, "variant" => "zsh",
+                       "why" => ["group-not-empty"] }] &&
+      out.lines.last == "  human unmeasured group-not-empty x1 #11 [sort/dashdash] sort --reverse -- README.md\n"
+check "run with an unmeasured row: the table of cells counts the command with something for a human",
+      cell.call(r, "sort/dashdash").values_at("executed", "violations", "human") == [1, 0, 1] &&
+      cell.call(r, "sort/bundle").values_at("executed", "violations", "human") == [1, 0, 0]
+
+# cell の表の終わり方は、command ごとの最初の起動のもの (確かめ直しの起動は数えない)。
+# 「効いた read」に数えるのは、ok と nonzero で終わった回だけ。
+launches = Hash.new(0)
+plan = lambda do |command, variant|
+  launches[command] += 1
+  next verdict.call(variant, ending: "usage") if command == sorts[0].command
+
+  verdict.call(variant, violations: [write], ending: launches[command] == 1 ? "nonzero" : "syntax")
+end
+code, _out, _err, r, = gen.call("o-il", "--classifier", side_a, "--baseline", side_b, "--run")
+check "run with other endings: one row per launch: #{r['runs'].map { |run| run['ending'] }.inspect}",
+      code == 1 && r["runs"].map { |run| run.values_at("index", "ending") } == [[11, "usage"], [21, "nonzero"], [21, "syntax"], [21, "syntax"]]
+check "run with other endings: a usage error is executed but not effective: #{cell.call(r, 'sort/dashdash').inspect}",
+      cell.call(r, "sort/dashdash").values_at("executed", "effective", "endings") == [1, 0, { "usage" => 1 }]
+check "run with other endings: the ending of a cell is the one of the first launch: #{cell.call(r, 'sort/bundle').inspect}",
+      cell.call(r, "sort/bundle").values_at("executed", "effective", "endings", "violations") == [1, 1, { "nonzero" => 1 }, 1]
+
+# 既定でない変種だけで出る違反は、反例に数えず人に出す (exit 3)。対照の結果は found になる。
+plan = ->(command, variant) { verdict.call(variant, violations: command == sorts[1].command && variant == "zsh-extendedglob" ? [write] : []) }
+code, _out, _err, r, seen = gen.call("o-ie", "--classifier", side_a, "--baseline", side_b, "--run", "--variant", "zsh-extendedglob")
+check "run in a non-default variant: a violation only there is found, and goes to a human: #{code.inspect} #{r['control'].inspect}",
+      code == 3 && r["violations"] == [] && r["control"].values_at("result", "confirmed", "variant_only") == ["found", 0, 1] &&
+      r["human"].map { |h| h.values_at("reason", "index", "cell", "variant", "invariant", "paths") } ==
+      [["non-default-variant", 21, "sort/bundle", "zsh-extendedglob", "I1", ["fx/out.txt"]]] &&
+      seen == [[:preflight]] + watch.call([sorts[0]], "zsh-extendedglob") + watch.call([sorts[1]], "zsh-extendedglob") * 3 + watch.call([sorts[1]], "zsh")
+
+# guard が拒んだ件は走らせない。件数と人に出す行に出て、exit 3 になる (dry-run でも同じ)。
+guard = I.method(:guard)
+I.define_singleton_method(:guard) { |command, **opts| command == sorts[0].command ? "stubbed-reason" : guard.call(command, **opts) }
+begin
+  plan = clean
+  code, _out, err, r, seen = gen.call("o-if", "--classifier", side_a, "--baseline", side_b, "--run")
+  dry_code, _dry_out, dry_err, dry, dry_seen = gen.call("o-if2", "--classifier", side_a, "--baseline", side_b)
+ensure
+  I.define_singleton_method(:guard, guard)
+end
+rejected = { "reason" => "guard-rejected", "index" => 11, "cell" => "sort/dashdash", "command" => sorts[0].command, "variant" => "zsh",
+             "why" => ["stubbed-reason"] }
+warning = "warning: the guard rejected 1 generated command(s); they are not run (see results.json)\n"
+check "run with a rejected row: it is not run, and it is counted and listed: #{seen.inspect} #{r['counts'].inspect}",
+      seen == [[:preflight]] + watch.call([sorts[1]]) && code == 3 && r["human"] == [rejected] && r["violations"] == [] &&
+      r["counts"].values_at("selected", "guard_rejected", "executed") == [2, 1, 1] && r["control"]["result"] == "missed" &&
+      err.lines.first == warning
+check "dry-run with a rejected row: the same row, and exit 3: #{dry_code.inspect}",
+      dry_code == 3 && dry_seen.empty? && dry["human"] == [rejected] && dry["counts"].values_at("guard_rejected", "executed") == [1, 0] && dry_err == warning
+check "the guard is restored", I.guard(sorts[0].command).nil?
+
+# preflight が通らなければ、何も走らせず、file も書かない。
+pre = I::Preflight.new(ok: false, unavailable: false, reasons: ["network: stubbed"],
+                       checks: [I::Check.new(name: "network", ok: false, negative: {}, control: {})])
+code, out, err, r, seen = gen.call("o-ig", "--classifier", side_a, "--run")
+check "run with a failed preflight: exit 2, nothing run, nothing written: #{code.inspect} #{err.inspect}",
+      code == 2 && out.empty? && err == "error: the isolation preflight failed: network: stubbed\n" && seen == [[:preflight]] && r.nil? &&
+      !File.exist?(File.join(tmp, "o-ig"))
+pre = passed
+
+# 書けない出力先は、preflight も command も走らせる前に止まる。root は権限に依らず書けるので、見ない。
+unless Process.uid.zero?
+  Dir.mkdir(File.join(tmp, "o-locked"), 0o555)
+  plan = clean
+  code, out, err, r, seen = gen.call("o-locked/out", "--classifier", side_a, "--baseline", side_b, "--run")
+  check "run with an --out that cannot be written: exit 2 before anything is asked or run: #{code.inspect} #{err.lines.first.inspect} #{seen.inspect}",
+        code == 2 && out.empty? && err.lines.first == "error: --out is not writable\n" && seen.empty? && r.nil? &&
+        Dir.children(File.join(tmp, "o-locked")).empty?
+  File.chmod(0o755, File.join(tmp, "o-locked"))
+end
+
+# 分類の失敗は exit 2 (分類できなかった行を「read でない」と数えない)。例外の文言は写さず、番号と class の名前だけを出す。
+File.write(File.join(tmp, "raising.rb"), <<~'SOURCE')
+  module SkillBehaviorClassifier
+    VERSION = 1
+    def self.classify_shell(command, _depth = 0, **_opts)
+      raise ArgumentError, "boom in /some/private/place" if command.start_with?("sort ")
+
+      "read"
+    end
+  end
+SOURCE
+code, out, err, r, seen = gen.call("o-ii", "--classifier", File.join(tmp, "raising.rb"), "--run")
+check "a classifier that raises on a row: exit 2 with the row's index: #{code.inspect} #{err.inspect}",
+      code == 2 && out.empty? && err == "error: the classifier raised ArgumentError on row 11\n" && seen.empty? && r.nil?
+code, _out, err, r, = gen.call("o-ii", "--classifier", File.join(tmp, "odd-classifier.rb"))
+check "a classifier that returns an unknown class: exit 2: #{err.inspect}",
+      code == 2 && err == "error: the classifier returned an unexpected result\n" && r.nil? && !File.exist?(File.join(tmp, "o-ii"))
+
+# 1 件の --command に --mutation を足すと、変異した版で分類する (witness を直接確かめる入口)。
+plan = ->(_command, variant) { verdict.call(variant, violations: [write]) }
+events.clear
+witness = "sort -o out.txt in.txt"
+code, _out, _err = call.call("--out", File.join(tmp, "o-ih"), "--command", witness, "--classifier", standin, "--mutation", "plain-read-sort")
+h = JSON.parse(File.read(File.join(tmp, "o-ih", "results.json")))
+check "command with a mutation: read under the mutated version, so it is run: #{code.inspect} #{events.inspect}",
+      code == 1 && events == [[:preflight]] + [[:observe, witness, "zsh"]] * 3 && h["mode"] == "command" &&
+      h["counts"]["by_class"] == { "read" => 1 } && !h.key?("control")
+check "command with a mutation: the given file by hash, the mutation by name, and the hash of the mutated source",
+      h["classifier"] == { "version" => 3, "sha256" => Digest::SHA256.file(standin).hexdigest } && h["mutation"] == "plain-read-sort" &&
+      h["mutated_sha256"] == Digest::SHA256.hexdigest(M.apply(File.read(standin), "plain-read-sort"))
+events.clear
+code, out, = call.call("--out", File.join(tmp, "o-ih2"), "--command", witness, "--classifier", standin)
+check "command without the mutation: not read, so not run: #{out.inspect}",
+      code == 0 && out == "command: class=unknown (not read; not run)\n" && events.empty? &&
+      !JSON.parse(File.read(File.join(tmp, "o-ih2", "results.json"))).key?("mutation")
+check "the entry left no temp dir behind (sessions and the mutated classifier)", Dir.children(ENV.fetch("TMPDIR")).empty?
+
+# 走らせる対象の選び方 (区分の並びから)。
+check "select_rows: without a partner, every read row", P.select_rows(%w[read unknown read exec], nil) == [0, 2]
+check "select_rows: with a partner, read here and not read there",
+      P.select_rows(%w[read read unknown unknown read], %w[read unknown read unknown file-write]) == [1, 4]
+
+# 対照の結果の決め方。値は [Setup, 差分の組, 走らせた結論, 道具の表, 期待する結果]。
+tools = Struct.new(:names)
+with_rg = tools.new(%w[cat rg])
+without_rg = tools.new(%w[cat])
+outcome = lambda do |violations: [], human: [], unmeasured: false|
+  J::Outcome.new(violations: violations, human: human, unmeasured: unmeasured, runs: [])
+end
+ok = outcome.call
+plain = P::Setup.new(mutation: nil)
+needs_rg = P::Setup.new(mutation: "rg-glob-word-any")
+table = {
+  "no pairs" => [plain, [], {}, with_rg, "missed"],
+  "pairs that are all clean" => [plain, [11, 21], { 11 => ok, 21 => ok }, with_rg, "missed"],
+  "a confirmed violation" => [plain, [11, 21], { 11 => ok, 21 => outcome.call(violations: [write]) }, with_rg, "found"],
+  "a violation only under a non-default variant" =>
+    [plain, [11, 21], { 11 => ok, 21 => outcome.call(human: [{ "reason" => "non-default-variant" }.merge(write)]) }, with_rg, "found"],
+  "a flaky violation only" => [plain, [11, 21], { 11 => ok, 21 => outcome.call(human: [{ "reason" => "flaky" }.merge(write)]) }, with_rg, "missed"],
+  "pairs that are all unmeasured" => [plain, [11, 21], { 11 => outcome.call(unmeasured: true), 21 => outcome.call(unmeasured: true) }, with_rg, "unmeasurable"],
+  "one measured pair" => [plain, [11, 21], { 11 => outcome.call(unmeasured: true), 21 => ok }, with_rg, "missed"],
+  "pairs that were not run" => [plain, [11, 21], {}, with_rg, "unmeasurable"],
+  "a needed tool is missing" => [needs_rg, [11], { 11 => ok }, without_rg, "unmeasurable"],
+  "a needed tool is missing, without pairs" => [needs_rg, [], {}, without_rg, "unmeasurable"],
+  "the needed tool is there" => [needs_rg, [11], { 11 => ok }, with_rg, "missed"],
+  "a violation, although a needed tool is missing" => [needs_rg, [11], { 11 => outcome.call(violations: [write]) }, without_rg, "found"],
+  "a dry-run" => [plain, [11, 21], {}, nil, nil],
+}
+table.each do |label, (setup, selected, outcomes, toolset, want)|
+  batch = P::Batch.new(rows: rows, classes: [], partner_classes: [], selected: selected, rejected: {}, outcomes: outcomes)
+  got = P.control_data(setup, batch, toolset)
+  check "control (#{label}): #{want.inspect}: #{got.inspect}", got["result"] == want && got["pairs"] == selected.length && got["indexes"] == selected
+end
+batch = P::Batch.new(rows: rows, classes: [], partner_classes: [], selected: [11], rejected: {}, outcomes: { 11 => ok })
+check "control: a mutation's expectation and the tools it lacks are recorded",
+      P.control_data(needs_rg, batch, without_rg).values_at("expected", "needs_missing") ==
+      [{ "invariant" => "I2", "variant" => "zsh", "expect" => "violation", "needs" => ["rg"] }, ["rg"]] &&
+      P.control_data(needs_rg, batch, with_rg)["needs_missing"] == [] &&
+      (P.control_data(plain, batch, with_rg).keys & %w[expected needs_missing]).empty?
+
+# 束ね方。同じ cell、不変条件、差分の種類、path の行を 1 つにし、最も短い command (同じ長さなら番号の小さい方) を代表にする。
+item = lambda do |index, command, paths|
+  { "invariant" => "I1", "index" => index, "cell" => "sort/bundle", "command" => command, "variant" => "zsh", "kinds" => ["created"], "paths" => paths }
+end
+items = [item.call(5, "sort -o out.txt in.txt", ["fx/out.txt"]), item.call(9, "sort -oout.txt x", ["fx/out.txt"]),
+         item.call(7, "sort -o lib/p x", ["fx/lib/p"]), item.call(3, "sort -o out.txt x", ["fx/out.txt"]),
+         item.call(2, "sort -o out.txt in.txt", ["fx/out.txt"]).merge("cell" => "sort/write-form")]
+check "grouped: rows of the same shape become one, with the shortest command and a count: #{P.grouped(items).inspect}",
+      P.grouped(items) == [items[1].merge("count" => 3), items[2].merge("count" => 1), items[4].merge("count" => 1)]
+check "grouped: among commands of the same length, the smaller index",
+      P.grouped([item.call(8, "sort -o a x", ["fx/a"]), item.call(4, "sort -o a y", ["fx/a"])]) == [item.call(4, "sort -o a y", ["fx/a"]).merge("count" => 2)]
+# 報告に出す束は、上限まで。残りは件数だけを出す。
+many = Array.new(P::REPORT_GROUPS + 2) { |n| item.call(n, "sort -o f#{n} x", ["fx/f#{n}"]).merge("count" => 1) }
+# 束の行も、絶対 path を置き換えてから出す。
+many[1] = many[1].merge("paths" => ["#{ENV.fetch('HOME')}/f1"])
+saved = $stdout
+$stdout = StringIO.new
+begin
+  P.report_generated({ "mode" => "run", "seed" => 1, "count" => 40, "variant" => "zsh", "coverage" => nil,
+                       "counts" => { "by_class" => { "read" => 40 }, "selected" => 40, "guard_rejected" => 0, "executed" => 40, "unmeasured" => 0 },
+                       "violations" => many, "human" => [], "violation_groups" => many, "human_groups" => [] }, nil)
+  lines = $stdout.string.lines
+ensure
+  $stdout = saved
+end
+check "report: at most #{P::REPORT_GROUPS} groups, then how many more: #{lines.length} #{lines.last.inspect}",
+      lines.length == 3 + P::REPORT_GROUPS + 1 && lines[3] == "  I1 created fx/f0 x1 #0 [sort/bundle] sort -o f0 x\n" &&
+      lines.last == "  (+2 more groups in results.json)\n"
+check "report: an absolute path under HOME is replaced in a group line: #{lines[4].inspect}",
+      lines[4] == "  I1 created <HOME>/f1 x1 #1 [sort/bundle] sort -o f1 x\n"
+
+# file の操作の失敗は、path を出さずに、理由の所だけを出す (--out の dir や分類器の file の場所を、stderr に写さない)。
+# 結果の file を書く所に、失敗を注入して見る (session の外と、session の中)。
+missing = begin
+  File.read(File.join(tmp, "no-such-dir-zz", "x"))
+rescue SystemCallError => e
+  e
+end
+check "errors: the reason of a file error, without the path: #{P.errno_reason(missing).inspect}",
+      P.errno_reason(missing) == "No such file or directory" && P.errno_reason(Errno::EACCES.new("/secret/place")) == "Permission denied"
+write_results = P.method(:write_results)
+P.define_singleton_method(:write_results) { |out, *_rest| raise Errno::EACCES, File.join(out, "results.json") }
+begin
+  plan = clean
+  dry_code, dry_out, dry_err, = gen.call("o-ij", "--classifier", side_a)
+  run_code, _run_out, run_err, = gen.call("o-ik", "--classifier", side_a, "--baseline", side_b, "--run")
+ensure
+  P.define_singleton_method(:write_results, write_results)
+end
+check "errors: a failed write outside a session is exit 2, without the path: #{dry_code.inspect} #{dry_err.inspect}",
+      dry_code == 2 && dry_out.empty? && dry_err == "error: Permission denied\n"
+check "errors: a failed write inside a session is exit 2, without the path: #{run_code.inspect} #{run_err.lines.last.inspect}",
+      run_code == 2 && run_err.lines.last == "error: Errno::EACCES: Permission denied\n"
+check "errors: the entry still left no temp dir behind", Dir.children(ENV.fetch("TMPDIR")).empty?
+
+# docs と README の usage の行と、引数の範囲は、入口の定数と同じ (定数を変えたら、docs も直す)。
+docs = File.read(ARGV[3], encoding: "UTF-8")
+readme = File.read(ARGV[4], encoding: "UTF-8")
+usage = P::USAGE.lines.first(4).join
+check "docs and README: the usage lines are the ones the entry prints: #{usage.inspect}",
+      usage.lines.all? { |line| line.include?("probe-classifier-invariants.sh") || line.include?("--run") } && docs.include?(usage) && readme.include?(usage)
+check "docs: the defaults and limits of --seed and --count, and the number of groups in the report",
+      docs.include?("| `--seed N` | 生成の seed。既定は #{P::DEFAULT_SEED}。0 から #{P::MAX_SEED} の整数 |") &&
+      docs.include?("| `--count N` | 生成する件数。既定は #{P::DEFAULT_COUNT}。1 から #{P::MAX_COUNT} の整数 |") &&
+      docs.include?("それぞれ #{P::REPORT_GROUPS} 個まで") && docs.include?("生成の件数の上限は #{P::MAX_COUNT}。")
+exit(@failed.zero? ? 0 : 1)
+RUBY
+no_abs_paths "generated runs in process" "$tmp/o-ia/results.json" "$tmp/o-ia/corpus.jsonl" "$tmp/o-ih/results.json"
 
 # sandbox を適用できないときは、何も走らせずに exit 2 で、理由を 1 行出す (素の実行には戻らない)。
 # 適用できる環境では、何でも許す sandbox の中から入口を呼び、入れ子で適用できない状態を作る。
@@ -1348,7 +2088,9 @@ run_unavailable() {
 run_unavailable "preflight without a usable sandbox" --preflight
 run_unavailable "command without a usable sandbox" --out "$tmp/o-nosb" --command 'cat README.md' --classifier "$stub"
 [ ! -e "$tmp/o-nosb" ] || fail "command without a usable sandbox: it must write no results"
-echo "ok T5 (entry: arguments, --out, guard, classification)"
+run_unavailable "generated run without a usable sandbox" --out "$tmp/o-nosb" --seed 754 --count 3 --classifier "$stub" --run
+[ ! -e "$tmp/o-nosb" ] || fail "generated run without a usable sandbox: it must write no results"
+echo "ok T5 (entry: arguments, --out, guard, classification, dry-run, selection, control)"
 
 # --- T6: 入口 (sandbox の要る部分) -----------------------------------------------------------
 if [ "$sandbox" = yes ]; then
@@ -1458,7 +2200,371 @@ check "read: executed once, with no violation and nothing for a human: #{cat.ins
       cat["runs"] == [{ "variant" => "sh", "ending" => "ok", "exit_code" => 0, "timed_out" => false, "unmeasured" => nil }]
 exit(@failed.zero? ? 0 : 1)
 RUBY
-  echo "ok T6 (entry: preflight and a command in isolation)"
+
+  # 生成の run。standin に変異 plain-read-sort を当てた版が read と言う 2 件 (sort で始まる行) だけが、本物の preflight の
+  # 後に、本物の隔離の中で走る。1 件は書き込む形 (sort --output=out.txt in.txt) で、反例になる。
+  run_cli 1 "generated run with a mutation" --out "$tmp/o-gen" --seed 754 --count 22 --classifier "$tmp/standin.rb" \
+    --mutation plain-read-sort --run
+  grep -q '^control: pairs=2 result=found confirmed=1 variant-only=0$' "$tmp/cli.out" \
+    || fail "generated run with a mutation: missing the control line: $(cat "$tmp/cli.out")"
+  grep -q '^  I1 created fx/out.txt x1 #21 \[sort/bundle\] sort --output=out.txt in.txt$' "$tmp/cli.out" \
+    || fail "generated run with a mutation: missing the counterexample: $(cat "$tmp/cli.out")"
+  no_abs_paths "generated run with a mutation" "$tmp/o-gen/results.json" "$tmp/o-gen/corpus.jsonl" "$tmp/cli.out" "$tmp/cli.err"
+  # corpus.jsonl は、dry-run (T5) と byte まで同じ。
+  cmp -s "$tmp/o-gen/corpus.jsonl" "$tmp/o-mut/corpus.jsonl" || fail "generated run: corpus.jsonl must be the same as the dry-run's"
+  ruby -r"$script_dir/lib/check_helper" -rjson - "$tmp/o-gen/results.json" "$tmp/o-mut/results.json" "$docs" <<'RUBY'
+run = JSON.parse(File.read(ARGV[0]))
+dry = JSON.parse(File.read(ARGV[1]))
+docs = File.read(ARGV[2], encoding: "UTF-8")
+check "docs: the keys that only a run writes are named: #{(run.keys - dry.keys).inspect} #{(run['control'].keys - dry['control'].keys).inspect}",
+      run.keys - dry.keys == ["tools_missing"] && run["control"].keys - dry["control"].keys == ["needs_missing"] &&
+      (run.keys + run["control"].keys + run["runs"][0].keys).all? { |key| docs.include?("`#{key}`") }
+check "generated run: mode, and the same identity as the dry-run",
+      run["mode"] == "run" && dry["mode"] == "dry-run" &&
+      %w[variant seed count digest classifier mutation mutated_sha256 coverage].all? { |key| run[key] == dry[key] && !run[key].nil? }
+check "generated run: only the two pairs are run, out of six read rows: #{run['counts'].inspect}",
+      run["counts"] == { "generated" => 22, "by_class" => { "read" => 6, "unknown" => 16 }, "selected" => 2, "guard_rejected" => 0, "executed" => 2, "unmeasured" => 0 }
+check "generated run: the control is found, with the expectation of the mutation: #{run['control'].inspect}",
+      run["control"] == { "pairs" => 2, "result" => "found", "confirmed" => 1, "variant_only" => 0, "indexes" => [11, 21],
+                          "expected" => { "invariant" => "I1", "variant" => "zsh", "expect" => "violation", "needs" => [] }, "needs_missing" => [] }
+found = { "invariant" => "I1", "index" => 21, "cell" => "sort/bundle", "command" => "sort --output=out.txt in.txt", "variant" => "zsh",
+          "kinds" => ["created"], "paths" => ["fx/out.txt"] }
+check "generated run: one I1 counterexample, with its index and cell: #{run['violations'].inspect} #{run['human'].inspect}",
+      run["violations"] == [found] && run["human"] == [] && run["violation_groups"] == [found.merge("count" => 1)]
+check "generated run: one launch for the clean row, three for the counterexample: #{run['runs'].inspect}",
+      run["runs"].map { |r| r.values_at("index", "variant", "ending", "unmeasured") } == [[11, "zsh", "ok", nil]] + [[21, "zsh", "ok", nil]] * 3
+cell = ->(name) { run["cells"].find { |c| c["cell"] == name } }
+check "generated run: the table of cells has the endings and the violation",
+      cell.call("sort/bundle") == { "cell" => "sort/bundle", "generated" => 1, "read" => 1, "selected" => 1, "executed" => 1, "effective" => 1,
+                                    "endings" => { "ok" => 1 }, "violations" => 1, "human" => 0 } &&
+      cell.call("sort/dashdash").values_at("executed", "effective", "violations") == [1, 1, 0] &&
+      cell.call("diff/opt-after").values_at("read", "selected", "executed") == [1, 0, 0]
+exit(@failed.zero? ? 0 : 1)
+RUBY
+  echo "ok T6 (entry: preflight, a command and a generated run in isolation)"
 fi
+
+# --- T7: 生成器と変異の表 (sandbox の要らない部分) ----------------------------------------------------
+ruby -r"$script_dir/lib/check_helper" - "$isolation" "$generator" "$mutations" "$docs" <<'RUBY'
+# encoding: utf-8
+require "digest"
+require ARGV[0]
+require ARGV[1]
+require ARGV[2]
+I = ProbeClassifier::Isolation
+G = ProbeClassifier::Generator
+M = ProbeClassifier::Mutations
+raises = lambda do |klass, &blk|
+  begin
+    blk.call
+    false
+  rescue klass
+    true
+  end
+end
+
+# 同じ seed と件数なら、同じ列。digest の固定値は、Ruby の版に依らず同じ列になることを見る (CI の 2 つの行)。
+# 表か選び方を変えたら、この値も変わる (意図した変更なら、値を更新する)。
+rows = G.generate(754, 150)
+check "generator: the same seed and count give the same rows", G.generate(754, 150) == rows && rows.length == 150
+check "generator: the digest of seed 754 and count 150 is the fixed value: #{G.digest(rows)}",
+      G.digest(rows) == "2212d78b7f79694002bac1023784a23dd20d73e4bda4733bb896c2ea69e99c3a"
+check "generator: the digest is the SHA-256 of the command lines",
+      G.digest(rows) == Digest::SHA256.hexdigest(rows.map { |r| "#{r.command}\n" }.join)
+check "generator: a seed given as a string is the same seed", G.generate("754", 150) == rows
+# 別の seed の digest も固定する。「列が違う」だけだと、seed が一部の選択にしか効いていなくても通る
+# (cell の中の回り始めと、行ごとの乱数の両方が seed を使う)。
+other = G.generate(755, 150)
+check "generator: another seed gives other rows", other != rows && G.digest(other) != G.digest(rows)
+check "generator: the digest of seed 755 and count 150 is the fixed value: #{G.digest(other)}",
+      G.digest(other) == "d32a6e26e427170bb2d55c5db44c3d5ea1447f99387595edbfaaf873e5f686d1"
+check "generator: a row depends only on the seed and its index", G.generate(754, 300).first(150) == rows && G.row(754, 149) == rows[149]
+check "generator: count 0 is an empty list", G.generate(754, 0) == []
+check "generator: a count that is not a non-negative integer is refused",
+      [-1, "150", nil, 1.5].all? { |count| raises.call(ArgumentError) { G.generate(754, count) } }
+
+# cell。系統とずらしの組に、門の外の 4 つを足した並び。番号の順に回る。
+names = G.cell_names
+regular = G::CELLS.reject { |c| c.family == G::GATE }
+check "cells: 101 names, at most 150, without duplicates: #{names.length}", names.length == 101 && names.length <= 150 && names.uniq == names
+check "cells: 11 families and 12 shifts, each of them used",
+      G::FAMILIES == %w[plain sort uniq diff sed awk find xargs rg ruby git] &&
+      G::SHIFTS == %w[opt-after dashdash bundle value-next write-form brace glob quote prefix name script git-form] &&
+      regular.map(&:family).uniq.sort == G::FAMILIES.sort && regular.map(&:shift).uniq.sort == G::SHIFTS.sort
+check "cells: a regular cell is named family/shift", regular.all? { |c| c.name == "#{c.family}/#{c.shift}" && G::FAMILIES.include?(c.family) && G::SHIFTS.include?(c.shift) }
+check "cells: every cell has something to emit", G::CELLS.all? { |c| !(c.forms + c.bases).empty? }
+# 2000 件では、どの cell も 19 回は回る。その中で、表の形が全部出る (seed に依らない)。
+# 読むだけの command の基本形 (37 個) だけは、1 つの cell でなく、系統の cell を合わせて全部出る。
+%w[754 1 2].each do |seed|
+  seen = Hash.new { |h, k| h[k] = [] }
+  2000.times do |i|
+    cell, entry = G.slot(seed, i)
+    seen[cell.name] << entry
+  end
+  missing = G::CELLS.flat_map { |c| c.forms - seen[c.name] } + regular.reject { |c| c.family == "plain" }.flat_map { |c| c.bases - seen[c.name] }
+  tools_seen = regular.select { |c| c.family == "plain" }.flat_map { |c| seen[c.name] & c.bases }.uniq
+  check "cells: 2000 rows of seed #{seed} reach every form and every base of the tables: #{missing.length} #{tools_seen.length}",
+        missing.empty? && tools_seen.length == 37
+end
+check "cells: a count equal to the number of cells reaches every cell", G.generate(754, names.length).map(&:cell) == names
+check "cells: rows carry their index and go through the cells in order",
+      rows.each_with_index.all? { |r, i| r.index == i && r.cell == names[i % names.length] && r.command.is_a?(String) && !r.command.strip.empty? }
+check "cells: the record of a row has the three keys of corpus.jsonl",
+      rows[3].record == { "index" => 3, "command" => rows[3].command, "cell" => "diff/opt-after" } && rows[3].record.keys == %w[index command cell]
+check "cells: each family, the gate and each shift name their counterpart in the classifier",
+      (G::FAMILIES + [G::GATE]).all? { |f| !G::SOURCES.fetch(f).empty? } && (G::SHIFTS + ["wrap"]).all? { |s| !G::SHIFT_SOURCES.fetch(s).empty? }
+
+# dir を移る行 (cd DIR && で始まる行) の後ろに、移った先に無い fixture の名前が残らないこと。
+# fixture の表から、下の dir ごとの file の名前を作る。stray は、その dir に無い fixture の名前と、/ を含む語を返す。
+fixture_files = I::FIXTURE_FIRST.keys + I::FIXTURE_SCENES.keys
+subdirs = fixture_files.map { |p| File.dirname(p) }.uniq - ["."]
+in_dir = subdirs.map { |d| [d, fixture_files.select { |p| File.dirname(p) == d }.map { |p| File.basename(p) }] }.to_h
+fixture_names = (fixture_files.map { |p| File.basename(p) } + subdirs).uniq
+cd_form = /\A['"]?cd['"]? (#{subdirs.join('|')}) && (.*)\z/m
+stray = lambda do |command|
+  m = command.match(cd_form)
+  next [] unless m
+
+  rest = G::SAFE_REDIRECTS.reduce(m[2]) { |text, redirect| text.gsub(redirect) { " " } }
+  words = rest.scan(/(?<![\^A-Za-z0-9_.-])[A-Za-z0-9_.]+/)
+  (words & (fixture_names - in_dir.fetch(m[1]))) + (rest.gsub("./", "").include?("/") ? ["/"] : [])
+end
+check "moved rows: the check sees a name that the sub dir lacks, a path with a dir, and passes a name that is there",
+      stray.call("cd sortopt && sort README.md --reverse") == ["README.md"] && stray.call("cd pair && uniq a.txt b.txt 2>/dev/null") == [] &&
+      stray.call("cd lib && cat pair/a.txt") == ["pair", "a.txt", "/"] && stray.call("cd pre && rg median ./*") == [] &&
+      stray.call("cd plain && cat *; cat x") == ["x"] && stray.call("cd . && cat x") == [] && stray.call("sort README.md") == []
+
+# 生成した全件が guard を通る (4 つの seed で、cell の数の 10 倍ずつ)。
+checked = 0
+moving = 0
+%w[754 1 2 3].each do |seed|
+  G.generate(seed, names.length * 10).each do |r|
+    checked += 1
+    reason = I.guard(r.command)
+    check "guard accepts the generated row #{seed}/#{r.index} (#{r.cell}) #{r.command.inspect}: #{reason.inspect}", reason.nil?
+    moving += 1 if r.command.match?(cd_form)
+    check "moved rows: #{seed}/#{r.index} (#{r.cell}) #{r.command.inspect} names nothing its dir lacks: #{stray.call(r.command).inspect}",
+          stray.call(r.command).empty?
+  end
+end
+check "guard: every generated row was checked: #{checked}", checked == 4040
+check "moved rows: the 4040 rows have rows that change dir: #{moving}", moving >= 150
+
+# 包みの cd が下の dir を引いた行のうち、移る行と、移った先で glob を持つ行の数 (seed 754 の 2000 行)。
+# 全部を cd . にしても上の検査は通るので、移る行が残っていることを数で見る。
+moved_rows = G.generate(754, 2000).select do |r|
+  next false if G.gate?(r.cell)
+
+  draw = G::Draw.new("754", r.index)
+  draw.weighted("wrap", G::WRAPS) == :cd && draw.pick("cd", G::CD_DIRS) != "."
+end
+kept = moved_rows.select { |r| r.command.match?(cd_form) }
+check "moved rows: of the #{moved_rows.length} rows the wrap sends to a sub dir, #{kept.length} move, into every sub dir",
+      moved_rows.length == 121 && kept.length >= 95 && kept.map { |r| r.command[cd_form, 1] }.uniq.sort == subdirs.sort &&
+      (moved_rows - kept).all? { |r| r.command.start_with?("cd . && ") }
+globbing = kept.count { |r| r.command.match?(%r{ (\*|\^x|\?\*|\[a-z\]\*|\./\*)( |\z)}) }
+check "moved rows: some of them expand a glob in the sub dir: #{globbing}", globbing >= 5
+
+# 移せる形の決め方 (埋める前の表の形と、移る先で決める)。
+base = ->(operands) { G::Base.new(name: "diff", options: ["-r"], operands: operands, lead: "") }
+check "movable: a form whose operands are slots moves anywhere", subdirs.all? { |d| G.movable?("sort -rn @file", d) && G.movable?(base.call("@file @file"), d) }
+check "movable: a form that names a root file, a path with a dir, a cd, or a ruby file stays",
+      subdirs.none? { |d| G.movable?("ruby -c x", d) || G.movable?("sort sortopt/*", d) || G.movable?("cd plain && cat *", d) || G.movable?("ruby -c @rb", d) } &&
+      subdirs.none? { |d| G.movable?(base.call("lib pair"), d) || G.movable?("find @dir -name {x,in.txt}", d) || G.movable?("./cat @file", d) }
+check "movable: a glob without a dir, ^x and an option name are not names of the fixture",
+      subdirs.all? { |d| G.movable?("sort *.txt", d) && G.movable?("uniq ^x", d) && G.movable?("rg --pre canary @pat @rgpath", d) }
+check "movable: a literal name moves only where it exists", G.movable?("wc in.txt", "sortopt") && !G.movable?("wc in.txt", "pair")
+
+# 移った先の表。file は、その dir の file (- で始まる名前は、字では出さない)。path を指さない @名前 は、そのまま。
+check "moved operands: the local files are the files of each sub dir, without the names that start with -: #{G::LOCAL_FILES.inspect}",
+      G::LOCAL_FILES.keys.sort == subdirs.sort && subdirs.all? { |d| G::LOCAL_FILES.fetch(d).sort == in_dir.fetch(d).reject { |n| n.start_with?("-") }.sort }
+filled = G::LOCAL_SLOTS.map do |dir, slots|
+  files = G::LOCAL_FILES.fetch(dir)
+  slots.keys == G::SLOTS.keys && %w[file gfile fb].all? { |s| slots[s] == files } && (slots["out"] - files) == ["out.txt"] &&
+    slots["dir"] == ["."] && (slots["path"] + slots["rgpath"] - files).uniq == ["."] &&
+    %w[rb ob pat cmd sedp prog].all? { |s| slots[s].equal?(G::SLOTS[s]) }
+end
+check "moved operands: the path slots are filled from the sub dir, and the other slots are the same: #{filled.inspect}",
+      filled == [true] * subdirs.length
+check "moved operands: no name of the tables has a dir part or starts with -",
+      G::LOCAL_SLOTS.values.flat_map { |slots| %w[file gfile fb out path rgpath fname br].flat_map { |s| slots[s] } }.none? { |w| w.include?("/") || w.start_with?("-") }
+# 2 つ目のずらしの brace は、移った先に無い名前を足さない ({in.txt,x} の x は root にしか無い)。
+brace_strays = G::LOCAL_FILES.flat_map do |dir, files|
+  files.flat_map { |f| G::LOCAL_BRACE_OF.fetch(f).flat_map { |w| w.scan(/[A-Za-z0-9_.]+/) } & (fixture_names - in_dir.fetch(dir)) }
+end
+check "moved operands: every local file has its glob and brace forms, and the brace forms name nothing else: #{brace_strays.inspect}",
+      (G::LOCAL_FILES.values.flatten - G::GLOB_OF.keys).empty? && brace_strays.empty? &&
+      G::BRACE_OF.fetch("in.txt").include?("{in.txt,x}") && !G::LOCAL_BRACE_OF.fetch("in.txt").include?("{in.txt,x}")
+
+# 2 つ目の部分。fixture の名前を持つ部分は、dir を移る command の後ろに置かない (前に回す)。
+fixed = Struct.new(:values) do
+  def pick(label, list)
+    list[values.fetch(label, 0)]
+  end
+
+  def number(label, _size)
+    values.fetch(label, 0)
+  end
+end
+# 表は、{} を付けた 1 つの引数で渡す (付けないと、Ruby 3.2 からは member の名前の keyword として読まれる)。
+second = ->(command, side, form) { G.second_part(command, fixed.new({ "side" => G::SIDES.index(side), "second-form" => form })) }
+check "second part: a part that names a fixture file goes before a command that changes dir",
+      second.call("cd plain && cat *", "cat x", 0) == "cat x; cd plain && cat *" &&
+      second.call("cd plain && cat *", "echo in.txt", 1) == "echo in.txt && cd plain && cat *" &&
+      second.call("'cd' plain && cat *", "cat x", 1) == "cat x && 'cd' plain && cat *"
+check "second part: other parts and other commands keep their place",
+      second.call("cd plain && cat *", "ls", 0) == "cd plain && cat *; ls" && second.call("cat in.txt", "cat x", 0) == "cat in.txt; cat x" &&
+      second.call("cat in.txt", "cat x", 3) == "cat x && cat in.txt" && G::SIDES_ANYWHERE == ["ls", "pwd", "true", "git status --short"]
+
+# 門の外の形。閉じた表の文字列を、そのまま出す。回す順番の最後の 4 つの cell なので、割合は 101 件に 4 件。
+big = G.generate(754, 2000)
+gate_rows = big.select { |r| G.gate?(r.cell) }
+gate_forms = G::GATE_FORMS.values.flatten
+check "gate: the closed table", G::GATE_FORMS == {
+  "gate/ansi-dollar" => ["sort $'-o' out.txt in.txt", "sort in.txt $'-o' out.txt"],
+  "gate/dq-dollar" => ['sort "${zz:--o}" out.txt in.txt', 'sort in.txt "${zz:--o}" out.txt'],
+  "gate/assignment" => ["n=1", "cat in.txt; n=1", "n=1; cat in.txt", "n=1; m=2"],
+  "gate/substitution" => [%q(a=1; RANDOM='a[$(sort -o out.txt in.txt)1]'), %q(RANDOM='a[$(sort -o out.txt in.txt)1]')],
+}
+# 2000 件の digest も固定する。150 件に出ない形 (cell ごとの形、2 つ目のずらし、包み) まで、版に依らないことを見る。
+check "generator: the digest of seed 754 and count 2000 is the fixed value: #{G.digest(big)}",
+      G.digest(big) == "7cca8420b41387eb804267c73c5822bf9d14c505b9225b760bc54b192efcc9df"
+check "gate: the four cells close the rotation", names.last(4) == G::GATE_FORMS.keys && G::GATE_FORMS.keys.all? { |n| G.gate?(n) } && !G.gate?("sort/glob")
+check "gate: 76 of 2000 rows and 4 of 150 rows: #{gate_rows.length}", gate_rows.length == 76 && rows.count { |r| G.gate?(r.cell) } == 4
+check "gate: a gate row is a string of the table, with nothing added", gate_rows.all? { |r| G::GATE_FORMS.fetch(r.cell).include?(r.command) }
+check "gate: 2000 rows reach every string of the table", gate_rows.map(&:command).uniq.sort == gate_forms.sort
+check "gate: no other row has an expansion", (big - gate_rows).none? { |r| r.command.match?(/[$`()]/) }
+gate_forms.each { |c| check "guard accepts the gate form #{c.inspect}: #{I.guard(c).inspect}", I.guard(c).nil? }
+# $ を含む形は、guard の表の形だけで出来ている (表の形を除くと、$ が残らない)。環境の変数は読まない。
+without_forms = ->(c) { I::DOLLAR_FORMS.keys.reduce(c) { |text, form| text.gsub(form) { "" } } }
+check "gate: every $ in the table belongs to a form of the guard's table", gate_forms.none? { |c| without_forms.call(c).include?("$") }
+check "gate: the only variable a form reads is the unset one of the guard's table",
+      gate_forms.flat_map { |c| c.scan(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/).flatten }.uniq == ["zz"]
+
+# operand。表が当てにする名前は、fixture の表にある。
+fixture = I::FIXTURE_FIRST.keys + I::FIXTURE_SCENES.keys + I::CANARIES.select { |c| c.zone == "fx" }.map(&:rel)
+check "operands: the names the tables rely on are in the fixture: #{(G::FIXTURE_PATHS - fixture).inspect}",
+      (G::FIXTURE_PATHS - fixture).empty? && (G::FIXTURE_DIRS - fixture.map { |p| File.dirname(p) }).empty?
+check "operands: the file slots name fixture files, and the dir slots name fixture dirs",
+      %w[file gfile rb fb].all? { |slot| (G::SLOTS.fetch(slot) - G::FIXTURE_PATHS).empty? } &&
+      (G::APPEND_FILES - G::FIXTURE_PATHS).empty? && (G::SLOTS.fetch("dir") + G::CD_DIRS - G::FIXTURE_DIRS).empty?
+check "operands: relative names only", G::SLOTS.values.flatten.none? { |w| w.start_with?("/", "~") || w.include?("..") }
+# 読むだけの command の語は、2000 件で全部出る (cd は、包みと手で置いた形から出る)。
+tools = G::CELLS.find { |c| c.name == "plain/opt-after" }.bases.map(&:name)
+plain = big.select { |r| r.cell.start_with?("plain/") }.map { |r| r.command.split(/[ '"]/) }
+check "plain: 2000 rows reach every tool of the table: #{tools.length}",
+      tools.length == 37 && tools.uniq == tools && (tools + ["cd"]).all? { |tool| plain.any? { |words| words.include?(tool) } }
+
+# 変異の表の形。
+check "mutations: the twelve names, without duplicates: #{M.names.inspect}",
+      M.names == %w[plain-read-sort uniq-output-operand uniq-spec-drift find-delete git-output-option brace-expansion-off
+                    glob-floor-off dq-dollar assignment-only-read custom-path-floor-off rg-glob-word-any caret-not-glob]
+tool_names = I::REQUIRED_TOOLS.keys + I::OPTIONAL_TOOLS.keys
+M::TABLE.each do |m|
+  check "mutation #{m.name}: replaces a text with a different one", m.from.is_a?(String) && !m.from.empty? && m.to.is_a?(String) && m.from != m.to
+  variant = I.variant(m.variant)
+  check "mutation #{m.name}: has an expectation (invariant, tools, variant, how it shows)",
+        %w[I1 I2].include?(m.invariant) && (m.needs - tool_names).empty? && !variant.nil? && M::EXPECTATIONS.include?(m.expect) &&
+        !m.reopens.to_s.empty?
+  # 既定でない変種だけで出る違反は、反例でなく、人に出すものになる。
+  check "mutation #{m.name}: the expectation fits the variant", !variant.nil? && variant.default == (m.expect == "violation")
+  measurable = !m.witnesses.empty? && m.unmeasurable.nil?
+  unmeasurable = m.witnesses.empty? && m.unmeasurable.is_a?(String) && !m.unmeasurable.empty?
+  check "mutation #{m.name}: has witnesses, or a reason why it cannot be measured", measurable ^ unmeasurable
+  m.witnesses.each { |w| check "mutation #{m.name}: guard accepts the witness #{w.inspect}: #{I.guard(w).inspect}", I.guard(w).nil? }
+end
+check "mutations: fetch returns the row, and the only tool a mutation needs is rg",
+      M.fetch("find-delete").name == "find-delete" && M::TABLE.flat_map(&:needs).uniq == ["rg"] && M.fetch("rg-glob-word-any").needs == ["rg"]
+check "mutations: caret-not-glob is watched in zsh-extendedglob, as a finding for a human",
+      M.fetch("caret-not-glob").variant == "zsh-extendedglob" && M.fetch("caret-not-glob").expect == "non-default-variant"
+
+# 変異の当て方。小さな代役の source で見る (repo の分類器には当てない)。
+standin = ->(m, times) { "module Standin\n  A = 1\n#{"  x = #{m.from}\n" * times}end\n" }
+M::TABLE.each do |m|
+  source = standin.call(m, 1).freeze
+  check "apply #{m.name}: the one occurrence is replaced, and nothing else",
+        M.apply(source, m.name) == "module Standin\n  A = 1\n  x = #{m.to}\nend\n" && source == standin.call(m, 1)
+  check "apply #{m.name}: no occurrence is an error", raises.call(M::Error) { M.apply(standin.call(m, 0), m.name) }
+  check "apply #{m.name}: two occurrences are an error", raises.call(M::Error) { M.apply(standin.call(m, 2), m.name) }
+end
+mini = <<~'SOURCE'
+  module SkillBehaviorClassifier
+    PLAIN_READ = %w[cat md5sum].freeze
+    GLOB_CHAR = /[*?\[^]/.freeze
+  end
+SOURCE
+check "apply: a small stand-in classifier gets sort in its plain list",
+      M.apply(mini, "plain-read-sort") == mini.sub("md5sum].freeze") { "md5sum sort].freeze" } && mini.include?("md5sum].freeze")
+check "apply: the backslash of a replacement is kept as it is", M.apply(mini, "caret-not-glob").include?('GLOB_CHAR = /[*?\[]/.freeze')
+check "apply: a mutation whose text is not in the source is an error", raises.call(M::Error) { M.apply(mini, "find-delete") }
+check "apply: an unknown name is an error", raises.call(M::Error) { M.apply(mini, "no-such-mutation") } && raises.call(M::Error) { M.fetch(nil) }
+check "apply: a source that is not a string is an error", raises.call(M::Error) { M.apply(nil, "plain-read-sort") }
+message = begin
+  M.apply(mini, "no-such-mutation")
+rescue M::Error => e
+  e.message
+end
+check "apply: the error for an unknown name lists the known ones and does not echo the given one: #{message.inspect}",
+      message.include?("plain-read-sort") && message.include?("caret-not-glob") && !message.include?("no-such-mutation")
+count_message = begin
+  M.apply(standin.call(M.fetch("find-delete"), 2), "find-delete")
+rescue M::Error => e
+  e.message
+end
+check "apply: the error says how many times the text occurs: #{count_message.inspect}",
+      count_message == "mutation find-delete does not apply: the text to replace occurs 2 times (expected 1)"
+# 入口は ProbeClassifier::Error を exit 2 にする。
+check "apply: the error is a ProbeClassifier::Error", M::Error.ancestors.include?(ProbeClassifier::Error) && M::Error != ProbeClassifier::Error
+check "occurrences are counted without overlap", M.occurrences("aaaa", "aa") == 2 && M.occurrences("abab", "ab") == 2 && M.occurrences("x", "ab") == 0
+
+# docs の表が、source の表と食い違っていないこと。見るのは、名前、数、表の文字列だけ (説明の文は見ない)。
+# source の表を変えたら、docs の同じ表も直す。
+docs = File.read(ARGV[3], encoding: "UTF-8")
+# 「| `名前` |」で始まる表の行のうち、needles を全部含む行があるか。
+row_with = ->(name, needles) { docs.lines.any? { |line| line.start_with?("| `#{name}` |") && needles.all? { |n| line.include?(n) } } }
+# source の対応の文字列から、分類器の定数と関数の名前を拾う。
+idents = ->(source) { source.scan(/[A-Za-z_]+\??/).select { |w| w.include?("_") || w == w.upcase }.map { |w| "`#{w}`" } }
+(G::FAMILIES + [G::GATE]).each do |family|
+  check "docs: the family #{family} is listed with its counterpart in the classifier", row_with.call(family, idents.call(G::SOURCES.fetch(family)))
+end
+G::SHIFTS.each do |shift|
+  families = regular.select { |c| c.shift == shift }.map(&:family)
+  listed = if families == G::FAMILIES then "| 11 の全部 |"
+           elsif families == G::FAMILIES - ["ruby"] then "| `ruby` を除く 10 |"
+           else "| #{families.map { |f| "`#{f}`" }.join(' ')} |"
+           end
+  check "docs: the shift #{shift} is listed with its families (#{listed}) and its counterpart in the classifier",
+        row_with.call(shift, [listed] + idents.call(G::SHIFT_SOURCES.fetch(shift)))
+end
+check "docs: the wraps name their counterpart in the classifier", idents.call(G::SHIFT_SOURCES.fetch("wrap")).all? { |w| docs.include?(w) }
+weights = ->(table) { 100 - table.find { |kind, _| kind.nil? }[1] }
+check "docs: the number of cells, and how often a second shift and a wrap are added",
+      docs.include?("cell は #{G::CELLS.length} 個ある") && docs.include?("`i mod #{G::CELLS.length}` 番目") &&
+      docs.include?("2 つ目のずらしは、100 回のうち #{weights.call(G::SECOND_SHIFTS)} 回に足す") &&
+      docs.include?("包みは、100 回のうち #{weights.call(G::WRAPS)} 回に足す")
+G::GATE_FORMS.each do |name, forms|
+  check "docs: the gate cell #{name} is listed with its strings", row_with.call(name, forms.map { |f| "`#{f}`" })
+end
+I::DOLLAR_FORMS.each do |form, word|
+  check "docs: the guard's $ form #{form.inspect} is listed with what it is replaced by", row_with.call(form, ["| `#{word}` ("])
+end
+check "docs: the guard's script table is listed", I::SCRIPT_TABLE.all? { |s| docs.include?("`#{s}`") } && docs.include?("今は #{I::SCRIPT_TABLE.length} つ。")
+I::FIXTURE_SCENES.keys.group_by { |p| File.dirname(p) }.each do |dir, paths|
+  check "docs: the scene #{dir} is listed with its files", row_with.call(dir, paths.map { |p| "`#{File.basename(p)}`" })
+end
+M::TABLE.each do |m|
+  needs = m.needs.empty? ? "| なし |" : "| #{m.needs.map { |n| "`#{n}`" }.join(' ')} |"
+  shows = m.expect == "violation" ? "| 反例 (exit 1)" : "| 人に出す (`non-default-variant`、exit 3) |"
+  check "docs: the mutation #{m.name} is listed with its invariant, tools, variant, expectation and witnesses",
+        row_with.call(m.name, ["| #{m.invariant} |", needs, "| `#{m.variant}` |", shows] + m.witnesses.map { |w| "`#{w}`" })
+end
+head = docs.lines.index { |line| line.start_with?("| 変異 | 置き換えの要旨 |") }
+listed = head ? docs.lines.drop(head + 2).take_while { |line| line.start_with?("|") } : []
+check "docs: the mutation table has one row for each mutation, in the table's order: #{listed.length}",
+      listed.map { |line| line[/\A\| `([a-z-]+)` \|/, 1] } == M.names
+
+exit(@failed.zero? ? 0 : 1)
+RUBY
+echo "ok T7 (generator and mutations: determinism, cells, guard, gate forms, apply)"
 
 echo "probe-classifier-invariants-test: ok"

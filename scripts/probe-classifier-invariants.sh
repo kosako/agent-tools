@@ -1,7 +1,8 @@
 #!/bin/sh
 # 分類器の不変条件の試行の入口 (#754)。
 # 挙動の評価の分類器が read と区分した command を、隔離した一時 dir の中で走らせ、不変条件
-# (fixture の tree を変えない、canary を走らせない) を確かめる。今ある入口は --preflight と --command。
+# (fixture の tree を変えない、canary を走らせない) を確かめる。入口は --preflight、--command (1 件の command)、
+# 生成 (seed と件数から列を作る。--run を付けたときだけ走らせる) の 3 つ。
 # Spec: docs/classifier-invariants.md
 # 依存: macOS 標準 Ruby と sandbox-exec。network は使わない。memory と時間の上限は、呼ぶ側が personal-safe-run で付ける。
 set -eu
