@@ -292,7 +292,10 @@ stderr を捨てた起動 (`2>/dev/null`) は、最後の終了 code が 126 か
 | K5 | `git describe --always --dirty` | `GIT_OPTIONAL_LOCKS=0` でも index の lock を取る。index と同じ秒の mtime の file があると、index を書き直す | `fx/.git` の mtime だけが変わる (`dir-mtime` として人に出す)。file の mtime を揃える前は、I1 (`fx/.git/index`) にもなった |
 
 K1 から K3 の形は、self-test が隔離の中で走らせ、I1 になることを確かめている (分類は通さない)。
-K5 の lock と index の書き直しを I1 に数えるかは、まだ決めていない (人が決める)。
+判定は `.git/index` を特別に扱わない。用意した fixture で index の中身が変われば、I1 になる。
+fixture の側で、index の書き直しが起きる原因 (古い stat と、index と同じ秒の mtime) を除いてある。
+K5 の lock を作って消す跡は、`dir-mtime` として人に出る。
+この扱いは試行の前提の 1 つとして結果に書き、続けるかを決めるときに人が見直す。
 
 ## 使い方
 
