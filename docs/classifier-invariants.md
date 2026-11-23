@@ -154,6 +154,9 @@ guard は分類器を読まない (分類器と同じ読み違いを持ち込ま
 - 前が名前の字でない `=` (zsh の `=name` と `={a,b}`)。
 - brace が `..` を作る形、名前や option につないだ brace、入れ子の brace。`.` で始まる glob。
 - `gh`、`git remote`、`kill` の類、追従する `tail`、`find -ok`、`xargs -p` と `-o`。
+- `while` と `until` (終わりを条件に任せる loop)。`for` は、並べた語の数だけ回るので受ける。
+- `ruby` に code を渡す形。受けるのは、`-c` と file、単独の `-v` と `--version`、option の無い file の並びだけ。
+  `-e`、`-r`、語の無い `ruby` (stdin の script) は拒む。前に `=` や `!` が付いた名前 (`X=ruby`、git の alias の `!ruby`) も ruby として見る。
 - 引数が 2 つの `cd`、`chdir`、`pushd`、`popd`。
 - shell の設定を変える形。`set`、`setopt`、`unsetopt`、`shopt`、`emulate`、`SHELLOPTS` と `BASHOPTS`。
   入れ子の shell (`sh`、`bash`、`zsh`) に渡す option は、`-c` と `-lc` だけを受ける。
@@ -161,9 +164,13 @@ guard は分類器を読まない (分類器と同じ読み違いを持ち込ま
 
 shell の設定は、変種の表だけが決める。sh と bash は、job control を立てると子を別の process group に移す
 (`set -m` と `SHELLOPTS=monitor` で実測)。その子は、止める対象から外れて残った。
+ruby の code も、`Process.setsid` で同じことができる。
 
 引用か `\` を含む語は、組み立てた後の中身を、入れ子の command として同じ規則で見る。
 引用の断片ごとに見ると、`'tail '"-f x"` や `set\ -m` のように、つないで出来る command を漏らす。
+
+受ける `$` の形は、閉じた環境で展開した後の語 (`-o`) に置き換えてから、ほかの規則を当てる。
+消すと、`xargs "${zz:--o}" cat` の `-o` のように、展開で出来る option を見逃す。
 
 例外は 2 つ。分類器の門が通す安全な redirect の 7 つ (`2>/dev/null` など) は、絶対 path と `&` の規則から外す。
 外すのは、後ろが空白か区切り (`;`、`|`、`&`、`)`) か、文字列の終わりのときだけ。
@@ -239,6 +246,7 @@ dir の mtime だけの変化は、直下の entry の作成、削除、入れ�
 | `reserved-canary` | 予約語の名前の canary が走った。数える canary と同じ回でも、I2 と並べて出す |
 | `flaky` | 確かめ直しで、出た回と出ない回があった違反 |
 | `non-default-variant` | 既定でない変種でだけ出た違反 |
+| `timeout` | 期限で止めた回。見たのは期限までの変化だけ |
 | `unmeasured` | 測れなかった回がある |
 
 `denied-exec` は、`read` の command が表に無い program を起動しようとした印である。
@@ -251,8 +259,11 @@ shell の行は、path の形の名前 (`./x`、`lib/x`) のものだけを拾�
 stderr を捨てた起動 (`2>/dev/null`) は、最後の終了 code が 126 か 127 のときだけ拾う (名前は空になる)。
 表の道具がこの machine に無いだけの回 (`rg` など) は、この枠から外す。`/` を含む名前は、表の道具に数えない。
 
-止めた後に子の group が空になったと確かめられない回と、`sandbox-exec` 自体が失敗した回は「未測定」にする。
-未測定の回は、差分が無くても「違反なし」に数えない。
+次の回は「未測定」にする。未測定の回は、差分が無くても「違反なし」に数えない。
+
+- `sandbox-exec` 自体が失敗した回 (`sandbox-error`)。
+- 止めた後に、子の group が空になったと確かめられない回 (`group-not-empty`)。
+- 止めた後も、子の出力の pipe を誰かが開いたままだった回 (`output-open`)。group を抜けた子が残っているときに起きる。
 
 ### 終わり方
 
@@ -346,7 +357,7 @@ usage: probe-classifier-invariants.sh --preflight [--out DIR]
 | 2 | 使い方の誤り、guard の拒否、分類の失敗、preflight の失敗、中断 |
 | 3 | 人に出すものだけがある (未測定を含む) |
 
-期限で止めた回も、差分と印が無ければ 0 に入る (終わり方は `runs` の `ending` に `timeout` と出る)。
+期限で止めた回は、違反が無くても `timeout` として人に出し、3 になる (見たのは期限までの変化だけのため)。
 想定していない失敗も 2 で、理由を 1 行出す。1 は反例のときだけ。
 
 ### results.json
@@ -379,6 +390,8 @@ usage: probe-classifier-invariants.sh --preflight [--out DIR]
 - `sort --compress-program` が program を起動するのは、入力が大きいときだけ。fixture の入力は小さい。
 - pager と `nohup.out` の形は、端末があるときだけ起きる。ここでは端末なしで走らせる。
 - group を抜けた子 (`setsid` など) と、その子が後から書く変化は、追う手段が無い。その子も sandbox の中には留まる。
+  出力を開いたまま残った子は、その回を未測定 (`output-open`) にして拾う。出力を閉じてから残る子は拾えない。
+  ruby に code を渡す形は guard が拒むが、file に書かれた code を `ruby FILE` で走らせる形は通る。
   sh と bash の job control (`set -m` など) は、文字列で見える形だけを guard が拒む。
   実行のときに組まれた command から起きた回は、気付けない。その回は「測れた、違反なし」に数えられる。
 - shell が終わった時点で、同じ group に残っている子は止める。その子の、後の書き込みは見えない。

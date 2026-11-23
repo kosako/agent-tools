@@ -602,8 +602,10 @@ module ProbeClassifier
     # 分類器の門が通す安全な redirect (SkillBehaviorClassifier::SAFE_REDIRECTS と同じ 7 つ)。/dev/null の
     # 先頭の / を、絶対 path の規則から外す。後ろに字が続く形 (>/dev/nullx) は外さない。
     SAFE_REDIRECTS = ["2>/dev/null", "1>/dev/null", "&>/dev/null", ">/dev/null", "2>&1", "1>&2", ">&2"].freeze
-    # 受ける $ の形 (閉じた表)。生成器が門の外の形として出す文字列だけ。環境の変数の参照は受けない。
-    DOLLAR_FORMS = ["$'-o'", '"${zz:--o}"'].freeze
+    # 受ける $ の形 (閉じた表) と、閉じた環境で展開した後の語。生成器が門の外の形として出す文字列だけ。
+    # 環境の変数の参照は受けない。guard は、形を展開した後の語に置き換えてから、ほかの規則を当てる
+    # (消すと、xargs "${zz:--o}" cat の -o のように、展開で出来る option を見逃す)。
+    DOLLAR_FORMS = { "$'-o'" => "-o", '"${zz:--o}"' => "-o" }.freeze
     # sed と awk の script の表。番地の / で始まる script は絶対 path の規則に当たるので、人が中身を
     # 確かめた script だけを、単一引用の語の完全一致で外す。今は K2 (#756) の形だけ。
     # 表の語は、sed と awk のほかの command の引数でも外れる。実在しうる path になる script は足さない。
@@ -623,6 +625,13 @@ module ProbeClassifier
     SHELL_OPTIONS = %w[-c -lc].freeze
     # & を使わずに、後ろで走る子を作る語。
     BACKGROUND_NAMES = %w[coproc].freeze
+    # 終わりを条件に任せる loop の語。文字列で見える終わらない形 (while :; do :; done) を走らせない。
+    # for は、並べた語の数だけ回るので受ける。
+    LOOP_NAMES = %w[while until].freeze
+    # ruby は、渡された code をそのまま走らせる。code は、止める対象の process group から抜けられる
+    # (Process.setsid)。受ける形を、code を走らせない -c と版の表示、file を渡す形に絞る。
+    # -v は、後ろに code があると走らせるので、単独のときだけ受ける。
+    RUBY_ALONE = [["-v"], ["--version"]].freeze
     # , を含む brace の前後に名前の字か別の brace が付く形と、brace の中の brace。{} (find の置き場所) は当たらない。
     BRACE_GLUED = /[A-Za-z0-9_}-]\{[^{}]*,[^{}]*\}|\{[^{}]*,[^{}]*\}[A-Za-z0-9_{-]|\{[^}]*\{/.freeze
     MAX_NESTING = 6
@@ -648,8 +657,8 @@ module ProbeClassifier
     def self.mask_exemptions(command, scripts, dollar_forms)
       out = command.dup
       scripts.each { |s| out = out.gsub("'#{s}'") { "'#{'_' * s.length}'" } }
-      # 空白に置き換える。隣の字は語の先頭として見られるので、$'-o'/x の / は拒まれる。
-      dollar_forms.each { |form| out = out.gsub(form) { " " * form.length } }
+      # 展開した後の語に置き換える。後ろに字が続く形 ($'-o'/x) は -o/x になり、option に付いた path として拒まれる。
+      dollar_forms.each { |form, word| out = out.gsub(form) { word } }
       SAFE_REDIRECTS.sort_by { |r| -r.length }.each do |r|
         out = out.gsub(/#{Regexp.escape(r)}(?=[ \t\n;|&)]|\z)/) { " " * r.length }
       end
@@ -728,8 +737,27 @@ module ProbeClassifier
       return "shell-option" unless (names & SHELL_SETTERS).empty?
       return "shell-option" if shell_option?(names, words)
       return "background" unless (names & BACKGROUND_NAMES).empty?
+      return "loop" unless (names & LOOP_NAMES).empty?
+      return "ruby-form" unless ruby_forms_ok?(words)
 
       nil
+    end
+
+    # ruby を指す語。前に = や ! が付いた形 (X=ruby、git の alias の !ruby) も、ruby の起動として見る。
+    def self.ruby_word?(word)
+      word.split(%r{[=!/]}, -1).last == "ruby"
+    end
+
+    # ruby の後ろの語が、受ける形に収まるか。受けるのは、単独の -v と --version、-c と file の並び、
+    # option の無い file の並び。code を渡す形 (-e)、library を読む形 (-r)、stdin の script (語が無い) は受けない。
+    def self.ruby_forms_ok?(words)
+      words.each_index.all? do |i|
+        next true unless ruby_word?(words[i])
+
+        rest = words[(i + 1)..-1]
+        files = rest.first == "-c" ? rest.drop(1) : rest
+        RUBY_ALONE.include?(rest) || (!rest.empty? && files.none? { |w| w.start_with?("-") })
+      end
     end
 
     # 入れ子の shell に、表に無い option を渡す形。名前の直後に続く option の語だけを見る

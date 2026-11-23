@@ -187,7 +187,10 @@ accept = [
   "sort $'-o' out.txt in.txt", %q(sort "${zz:--o}" out.txt in.txt), "zsh -lc 'cat in.txt'", "sh -c 'cat in.txt'",
   "find . -name x -exec cat {} +", "find . -name '*.rb'", "echo in.txt | xargs -n 1 cat", "echo in.txt | xargs grep -o a",
   "tail -n 2 in.txt | cut -f1", "tail +2 in.txt", "grep -F a in.txt | tail -n 1", "cat lib/*.rb", "cat x/{a,b}.md", "sort {-o,out.txt} in.txt",
-  "git -C . status", "git log --format=%H", "cat {in,x}.txt", "echo in.txt | xargs -I{} cat {}", "uniq - -c", "cat in.txt; cat x", %q(ruby -e 'puts [1, 2].sum'), "echo ^in.txt",
+  "git -C . status", "git log --format=%H", "cat {in,x}.txt", "echo in.txt | xargs -I{} cat {}", "uniq - -c", "cat in.txt; cat x", "echo ^in.txt",
+  # ruby は、code を走らせない形と、file を渡す形だけを受ける。for は、並べた語の数だけ回る。
+  "ruby -v", "ruby --version", "ruby canary_begin.rb", "env ruby -c lib/median.rb", "ls | xargs ruby -c", "grep ruby in.txt",
+  "find . -name x -exec ruby -c {} +", "for f in in.txt x; do cat in.txt; done",
   # 入れ子の shell の、command の文字列より後ろの option は、shell の option ではない。\; は find の終わりの印。
   "sh -c 'cat -n in.txt'", "bash -c 'uniq -c in.txt' && cat x", "zsh -lc 'tail -n 1 in.txt' 2>&1", "find . -name x -exec cat {} \\;",
   "cd lib", "pushd lib && cat median.rb", "cat x 2>/dev/null && cat x >&2",
@@ -212,7 +215,7 @@ reject = {
   "cat {a,b}/x" => "abs-path", "cat \"/etc/hosts\"" => "abs-path", "cat '/etc/hosts'" => "abs-path", "cat x\t/etc/hosts" => "abs-path",
   "cat a:/b" => "abs-path", "cat \\/etc/hosts" => "abs-path", "sort --output=/abs in.txt" => "abs-path",
   "x=/abs cat" => "abs-path", "cat x > /dev/null" => "abs-path", "cat x >/dev/nullx" => "abs-path", "cat x 2>/dev/null/x" => "abs-path",
-  "sort $'-o'/abs in.txt" => "abs-path",
+  "sort $'-o'/abs in.txt" => "option-path",
   # 走るときに文字列を作る形 (backtick と括弧)。位置に依らない。括弧は、zsh の glob の修飾子 (親の dir を指せる) を含む。
   "cat `pwd`/x" => "backtick", "cd .`echo .` && cd .`echo .` && pwd && uniq - -c" => "backtick", "cat `echo x`" => "backtick",
   "cd x(:A:h:h:h) && pwd && uniq - -c" => "paren", "(cd lib; cat median.rb)" => "paren", "cat <(cat x)" => "paren",
@@ -255,6 +258,16 @@ reject = {
   # 外の process への signal。
   "kill -9 -1" => "signal", "echo 1 | xargs kill" => "signal", "sh -c 'kill -0 1'" => "signal", "killall zsh" => "signal",
   "pkill -f x" => "signal",
+  # ruby に code を渡す形 (code は、止める対象の process group から抜けられる)。前に = や ! が付いた名前も ruby として見る。
+  %q(ruby -e 'Process.setsid; sleep 999'; :) => "ruby-form", %q(ruby -e 'puts [1, 2].sum') => "ruby-form", "ruby" => "ruby-form",
+  "cat x | ruby" => "ruby-form", "ruby -v -e 1" => "ruby-form", "ruby -rsocket lib/median.rb" => "ruby-form", "ruby -c -e 1" => "ruby-form",
+  "env ruby -e 1" => "ruby-form", %q(sh -c "ruby -e 1") => "ruby-form", "find . -name x -exec ruby -e 1 {} +" => "ruby-form",
+  %q(git -c alias.x='!ruby -e 1' x) => "ruby-form", "X=ruby -e 1" => "ruby-form", "ruby -W0 lib/median.rb" => "ruby-form",
+  # 終わりを条件に任せる loop (文字列で見える、終わらない形)。
+  "while :; do :; done" => "loop", "until false; do :; done" => "loop", "cat x; while true; do cat x; done" => "loop",
+  "sh -c 'while :; do :; done'" => "loop", "wh''ile :; do :; done" => "loop",
+  # 例外の $ の形は、展開した後の語として、ほかの規則に掛かる。
+  %q(xargs "${zz:--o}" cat) => "xargs-tty", "xargs $'-o' cat" => "xargs-tty", %q(sh -c 'xargs "${zz:--o}" cat') => "xargs-tty",
   # 表に無い $ と、読めない形。
   "echo $(touch x)" => "dollar", "sort $'-O' out.txt in.txt" => "dollar", "sort \"${zz:-/x}\" in.txt" => "dollar",
   "" => "empty", "  " => "empty", "cat 'x" => "unbalanced-quote", "cat \u3042" => "non-ascii-or-control", "cat a\u0001b" => "non-ascii-or-control",
@@ -270,7 +283,8 @@ check "guard: a script in the table is accepted", I.guard("sed -n '/x/p' in.txt"
 check "guard: the table matches the whole quoted word", I.guard("sed -n '/x/p;w out' in.txt", scripts: ["/x/p"]) == "abs-path"
 check "guard: the table does not match outside the quotes", I.guard("sed -n /x/p in.txt", scripts: ["/x/p"]) == "abs-path"
 check "guard: the rest of the command is still checked", I.guard("sed -n '/x/p' ../in.txt", scripts: ["/x/p"]) == "dotdot"
-check "guard: the dollar table is closed", I.guard("sort $'-o' out.txt in.txt", dollar_forms: []) == "dollar"
+check "guard: the dollar table is closed", I.guard("sort $'-o' out.txt in.txt", dollar_forms: {}) == "dollar"
+check "guard: the dollar table maps each form to the word it expands to", I::DOLLAR_FORMS == { "$'-o'" => "-o", '"${zz:--o}"' => "-o" }
 
 # run_command は、guard が拒んだ command を走らせず、一時 dir も作らない。
 before = Dir.children(session.root).sort
@@ -807,13 +821,24 @@ v = J.judge(before: still, after: wrote, run: fake.call)
 check "judge: a write in fx is I1, with the parent dir's mtime absorbed", v.violations == [i1] && v.human.empty? && v.unmeasured.nil? && !v.clean?
 v = J.judge(before: still, after: wrote, run: fake.call(exit_code: nil, timed_out: true))
 check "judge: a timed-out run still reports the violation, with the timeout beside it",
-      v.violations == [i1] && v.ending == "timeout" && v.timed_out == true && v.unmeasured.nil?
+      v.violations == [i1] && v.ending == "timeout" && v.timed_out == true && v.unmeasured.nil? && v.human == [{ "reason" => "timeout" }]
+# 期限で止めた回は、見たのが期限までの変化だけ。違反が無くても、人に出す (exit 0 にしない)。
+v = J.judge(before: still, after: still, run: fake.call(exit_code: nil, timed_out: true))
+check "judge: a timed-out run without a diff goes to a human: #{v.human.inspect}", v.violations.empty? && v.human == [{ "reason" => "timeout" }] && !v.clean?
+timed_out = J.examine(I.variant("zsh"), ->(_name) { v })
+check "examine: a timed-out run without a violation ends as exit 3, in one run",
+      timed_out.violations.empty? && timed_out.human == [{ "reason" => "timeout" }] && timed_out.runs.length == 1 && J.exit_code(timed_out) == 3
 v = J.judge(before: still, after: wrote, run: fake.call(exit_code: 1, err: "uniq: x\n"))
 check "judge: a failed ending does not drop the violation", v.violations == [i1] && v.ending == "nonzero"
 v = J.judge(before: still, after: wrote, run: fake.call(group_empty: false))
 check "judge: a run whose group is not confirmed empty is unmeasured, and keeps what was seen", v.unmeasured == "group-not-empty" && v.violations == [i1]
 v = J.judge(before: still, after: still, run: fake.call(group_empty: false))
 check "judge: an unmeasured run without a diff is not clean", v.unmeasured == "group-not-empty" && v.violations.empty? && !v.clean?
+# 止めた後も出力の pipe が開いたままの回は、group を抜けた子が残っているかもしれないので、未測定にする。
+v = J.judge(before: still, after: still, run: fake.call(drained: false))
+check "judge: a run whose output was still held open is unmeasured: #{v.unmeasured.inspect}", v.unmeasured == "output-open" && v.violations.empty? && !v.clean?
+v = J.judge(before: still, after: wrote, run: fake.call(drained: false))
+check "judge: and it keeps what was seen", v.unmeasured == "output-open" && v.violations == [i1]
 v = J.judge(before: still, after: still, run: fake.call(sandbox_error: true, exit_code: 71, err: "sandbox-exec: sandbox_apply: Operation not permitted\n"))
 check "judge: a run that sandbox-exec could not start is unmeasured", v.unmeasured == "sandbox-error" && v.human.empty? && !v.clean?
 v = J.judge(before: still, after: still.merge("fx" => dir.call(mtime: [2, 0])), run: fake.call)
@@ -1006,6 +1031,13 @@ end
 check "witness: a run whose group is not confirmed empty is unmeasured end to end: #{v.unmeasured.inspect}",
       v.unmeasured == "group-not-empty" && v.violations.empty? && !v.clean?
 check "group_empty? is restored", I.group_empty?(nil) == false && I.live_group_control[:exited_reported_empty] == true
+
+# process group を抜けた子 (setsid) が、出力を開いたまま残る回。shell は 0 で終わるが、未測定になる。
+# guard はこの形を拒むので、通さずに走らせる。子は 8 秒で自分で終わる (読み切りの待ちより長く生きる)。
+escaped = J.observe(session, %q(ruby -e 'fork { Process.setsid; sleep 8 }'), variant: "sh", guarded: false)
+check "witness: a child that left the process group and holds the output makes the run unmeasured: #{escaped.unmeasured.inspect} #{escaped.exit_code.inspect}",
+      escaped.unmeasured == "output-open" && escaped.exit_code == 0 && escaped.timed_out == false && escaped.violations.empty? && !escaped.clean?
+check "witness: the guard rejects that form", I.guard(%q(ruby -e 'fork { Process.setsid; sleep 8 }')) == "ruby-form"
 
 # 書き込みの後に終わらない形。期限で止めても、差分から I1 が出て、timeout が併記される。
 hang = J.observe(session, "uniq in.txt -c; tail -f in.txt", variant: "sh", timeout: 1, guarded: false)

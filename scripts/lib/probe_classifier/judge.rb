@@ -257,9 +257,12 @@ module ProbeClassifier
       Isolation::REQUIRED_TOOLS.keys + Isolation::OPTIONAL_TOOLS.keys
     end
 
+    # output-open は、止めた後も、子の出力の pipe を誰かが開いたままだった回。process group を抜けた子
+    # (setsid) が残っているときに起きる。その子が後から書く変化は見えない。
     def self.unmeasured_reason(run)
       return "sandbox-error" if run.sandbox_error
       return "group-not-empty" unless run.group_empty
+      return "output-open" unless run.drained
 
       nil
     end
@@ -312,6 +315,8 @@ module ProbeClassifier
       end
       human << { "reason" => "dir-mtime", "paths" => loose.map(&:path) } unless loose.empty?
       human.concat(denied_items(run, tool_names))
+      # 期限で止めた回は、見たのが期限までの変化だけ。違反が無くても「違反なし」とは言えないので、人に出す。
+      human << { "reason" => "timeout" } if run.timed_out
 
       Verdict.new(variant: run.variant, ending: ending(run), exit_code: run.exit_code, timed_out: run.timed_out,
                   unmeasured: unmeasured_reason(run), violations: violations, human: human, changes: changes)
