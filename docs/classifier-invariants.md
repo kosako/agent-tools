@@ -712,6 +712,10 @@ dry-run は何も走らせないので、1 にはならない。guard が拒ん�
 
 `--out` の dir に `results.json` を書く。一時 dir と HOME の絶対 path は、置き換えてから書く
 (`<T>`、`<R>`、`<HOME>`)。stderr と stdout も同じ。command の出力そのものは書かない。
+引数で渡した場所も、同じように置き換える。`--out` は `<OUT>`、`--classifier` と `--baseline` の file は `<classifier>` と
+`<baseline>`、その file のある dir は `<classifier-dir>` と `<baseline-dir>` になる。
+走らせない command は guard を通らないまま `results.json` に写るので、絶対 path を持ちうる。
+表に無い場所の絶対 path (command に自分で書いたもの) は、そのまま残る。
 `--out` の dir と、分類器の file の場所も、どこにも書かない (分類器は、版と hash で残す)。
 
 | key | 入口 | 中身 |

@@ -243,23 +243,58 @@ module ProbeClassifierInvariants
     raise Error, "--out is not a directory" if File.exist?(path) && !File.directory?(path)
     raise Error, "--out must be empty or absent" if File.directory?(path) && !Dir.empty?(path)
 
-    existing = path
-    existing = File.dirname(existing) until File.exist?(existing)
-    raise Error, "--out must be outside a git worktree" if inside_worktree?(File.join(File.realpath(existing), path[existing.length..-1]))
+    existing = nearest(path)
+    raise Error, "--out must be outside a git worktree" if inside_worktree?(resolved(path))
     raise Error, "--out is not writable" unless File.directory?(existing) && File.writable?(existing) && File.executable?(existing)
 
     path
   end
 
-  # --- 出力 -------------------------------------------------------------------------------
-  # 一時 dir と HOME の絶対 path を置き換える。session が無い間 (走らせる前) は、HOME だけを置き換える。
-  def self.redact(text, session = nil)
-    return session.redact(text) if session
+  # path 自身か、その祖先のうち、今ある最も近いもの。
+  def self.nearest(path)
+    path = File.dirname(path) until File.exist?(path)
+    path
+  end
 
-    out = text.to_s.b
-    homes = (Isolation.real_homes + [ENV["HOME"].to_s]).reject(&:empty?).uniq
-    homes.sort_by { |h| -h.length }.each { |h| out = out.gsub(h.b) { "<HOME>" } }
-    out.force_encoding(Encoding::UTF_8).scrub("?")
+  # symlink を解決した形。まだ無い部分は、そのまま後ろに付ける。
+  def self.resolved(path)
+    existing = nearest(path)
+    File.join(File.realpath(existing), path[existing.length..-1])
+  end
+
+  # --- 引数で渡された場所 ----------------------------------------------------------------------
+  # --out の dir と、分類器の file (置いてある dir も) の絶対 path は、結果の file、stdout、stderr のどこにも出さない。
+  # command の文字列や例外の文言に入ってくるので、口ごとに見分けず、redact の表に足して全部の口で置き換える。
+  # main が引数を読んだ直後に決め、終わりに空へ戻す。
+  @places = []
+
+  PLACE_NAMES = { out: "<OUT>", classifier: "<classifier>", baseline: "<baseline>" }.freeze
+  # macOS では、/tmp、/var、/etc が /private の下の別名になる。どちらの形で書かれても置き換える。
+  PRIVATE_ALIAS = %r{\A/private(?=/(?:tmp|var|etc)/)}n.freeze
+
+  def self.places_of(opts)
+    given = opts[:preflight] ? opts : { classifier: DEFAULT_CLASSIFIER }.merge(opts)
+    PLACE_NAMES.select { |key, _| given[key] }.flat_map do |key, label|
+      forms = path_forms("--#{key}", given[key])
+      pairs = forms.map { |path| [path, label] }
+      next pairs if key == :out
+
+      pairs + forms.map { |path| File.dirname(path) }.uniq.map { |dir| [dir, label.sub(">", "-dir>")] }
+    end.reject { |path, _| path == "/" }
+  end
+
+  # 1 つの場所の、絶対 path の書き方。渡された形、絶対 path にした形、symlink を解決した形と、その別名。
+  def self.path_forms(option, value)
+    full = expand_path(option, value)
+    forms = [value, full, resolved(full)].map { |path| path.b.sub(%r{/+\z}n, "") }.select { |path| path.start_with?("/") }
+    (forms + forms.map { |path| path.sub(PRIVATE_ALIAS, "") }).uniq
+  end
+
+  # --- 出力 -------------------------------------------------------------------------------
+  # 一時 dir、HOME、引数で渡された場所の絶対 path を置き換える。session が無い間 (走らせる前) は、一時 dir は無い。
+  def self.redact(text, session = nil)
+    base = session ? session.path_pairs : (Isolation.real_homes + [ENV["HOME"].to_s]).reject(&:empty?).map { |h| [h, "<HOME>"] }
+    Isolation.replace_paths(text, base + @places)
   end
 
   def self.deep_redact(value, session)
@@ -702,6 +737,7 @@ module ProbeClassifierInvariants
       return 0
     end
     opts = parse_argv(argv)
+    @places = places_of(opts)
     # 出力先の検査は、何かを走らせる前に行う。
     out = opts[:out] && check_out!(opts[:out])
     case mode(opts)
@@ -724,6 +760,8 @@ module ProbeClassifierInvariants
     # 想定していない失敗。exit 1 は「反例あり」の意味なので、Ruby の既定の終了 (exit 1 と backtrace) には任せない。
     warn "error: unexpected failure: #{one_line(redact("#{e.class}: #{e.message}"))}"
     2
+  ensure
+    @places = []
   end
 end
 

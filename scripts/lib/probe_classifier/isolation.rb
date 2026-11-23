@@ -126,6 +126,15 @@ module ProbeClassifier
       path == dir || path.start_with?("#{dir}/")
     end
 
+    # text の中の絶対 path を、名前に置き換える。pairs は [path, 名前] の並びで、同じ path は先の組が勝つ。
+    # 長い path から替える (短い path は、長い path の前の部分に当たる)。
+    def self.replace_paths(text, pairs)
+      table = pairs.map { |from, to| [from.b, to] }.uniq(&:first).sort_by { |from, _| -from.length }
+      out = text.to_s.b
+      table.each { |from, to| out = out.gsub(from) { to } }
+      out.force_encoding(Encoding::UTF_8).scrub("?")
+    end
+
     # 候補の 1 つを確かめる。使えれば [Tool の材料, nil]、使えなければ [nil, 理由]。
     def self.resolve_candidate(path, deny_read)
       return [nil, "not-found"] unless File.file?(path) && File.executable?(path)
@@ -566,15 +575,18 @@ module ProbeClassifier
         end
       end
 
-      # 出力に、一時 dir と HOME の絶対 path を残さない。長い path から置き換える。
+      # 出力に、一時 dir と HOME の絶対 path を残さない。
       def redact(text, layout = nil)
+        Isolation.replace_paths(text, path_pairs(layout))
+      end
+
+      # 置き換える絶対 path と、名前の組。
+      def path_pairs(layout = nil)
         pairs = []
         pairs.push([layout.base, "<T>"], [layout.alias_base, "<T>"]) if layout
         pairs.push([@root, "<R>"], [@root_alias, "<R>"])
         (@deny_read + [ENV["HOME"].to_s]).each { |home| pairs << [home, "<HOME>"] unless home.empty? }
-        out = text.to_s.b
-        pairs.uniq.sort_by { |from, _| -from.length }.each { |from, to| out = out.gsub(from.b) { to } }
-        out.force_encoding(Encoding::UTF_8).scrub("?")
+        pairs
       end
 
       # 自分が作った一時 dir だけを消す。

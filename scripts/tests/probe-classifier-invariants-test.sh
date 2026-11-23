@@ -1312,6 +1312,22 @@ check "default classifier: the repo's file, by hash: #{d['classifier'].inspect}"
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
+# 引数で渡した場所 (--out、分類器の file と、その dir) も、command の文字列に入っていれば置き換えて書く。
+# 走らせない command は、guard を通らないまま結果の file に写る (絶対 path を持ちうる)。
+# symlink を通した形と、解決した形のどちらで書かれていても置き換える。
+mkdir -p "$tmp/cls-dir" "$tmp/place-real"
+ln -s "$tmp/place-real" "$tmp/place-link"
+cp "$stub" "$tmp/cls-dir/stub.rb"
+run_cli 0 "not read: the given places" --out "$tmp/place-link/o" --classifier "$tmp/cls-dir/stub.rb" \
+  --command ": -o$tmp/place-link/o/x $tmp_real/place-real/o/y $tmp/cls-dir/stub.rb $tmp_real/cls-dir/z"
+no_abs_paths "not read: the given places" "$tmp/place-real/o/results.json" "$tmp/cli.out" "$tmp/cli.err"
+ruby -r"$script_dir/lib/check_helper" -rjson - "$tmp/place-real/o/results.json" <<'RUBY'
+got = JSON.parse(File.read(ARGV[0]))["command"]
+check "not read: the given places are replaced by name: #{got.inspect}",
+      got == ": -o<OUT>/x <OUT>/y <classifier> <classifier-dir>/z"
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
 # 分類できなかった command を「read でない」と数えない (exit 2)。
 run_cli 2 "classifier that does not load" --out "$tmp/o-b" --command 'cat README.md' --classifier "$tmp/broken-classifier.rb"
 grep -q 'the classifier could not be run.*<classifier>.*this classifier does not load' "$tmp/cli.err" \
@@ -1413,6 +1429,9 @@ check "unexpected failure in a session: exit 2, one line, paths replaced: #{code
       code == 2 && out.empty? && err == "error: RuntimeError: boom at <R>/x and <HOME>/y second line\n"
 code, = call.call("--out", out_dir, "--command", "cat README.md", "--classifier", stub)
 check "unexpected failure before a command: exit 2, nothing run, no results", code == 2 && observed.zero? && !File.exist?(out_dir)
+# 引数で渡された場所の表は、入口が終わったら (失敗で終わっても) 空に戻る。次の入口の出力を、前の引数の名前で置き換えない。
+check "places: the table is empty after an entry has ended: #{P.redact("#{out_dir} #{stub}").inspect}",
+      !P.redact("#{out_dir} #{stub}").match?(/<(OUT|classifier)/)
 # session の外の失敗 (引数を読む所に注入する)。
 P.define_singleton_method(:parse_argv) { |_argv| raise TypeError, "boom in #{ENV.fetch('HOME')}/z" }
 code, out, err = call.call("--preflight")
@@ -1439,6 +1458,23 @@ check "report: a path with control characters stays on its own line: #{lines.ins
                          "  I1 created fx/a?  I2 fixture shim/canary?command: class=read\n", "  human zone tmp/b?c tmp/d?[2K\n"]
 check "report: an absolute path under HOME is replaced in the line: #{lines.last.inspect}",
       lines.length == 4 && lines.last == "  human denied-exec <HOME>/bin/tool\n"
+
+# 引数で渡された場所の表。--baseline も、分類器を省いたときの repo の file も入る。main の終わりには空に戻る。
+pairs = P.places_of(out: "/tmp/pci-o/", baseline: "/private/tmp/pci-b/b.rb")
+check "places: every form of the out dir has one name: #{pairs.select { |_, n| n == '<OUT>' }.inspect}",
+      pairs.select { |_, n| n == "<OUT>" }.map(&:first).include?("/tmp/pci-o") && pairs.none? { |p, _| p.end_with?("/") }
+check "places: the baseline, its dir, and their alias without /private",
+      [["/private/tmp/pci-b/b.rb", "<baseline>"], ["/tmp/pci-b/b.rb", "<baseline>"], ["/private/tmp/pci-b", "<baseline-dir>"],
+       ["/tmp/pci-b", "<baseline-dir>"]].all? { |pair| pairs.include?(pair) }
+check "places: a path is replaced in the form it was given, and in its absolute form",
+      (%w[/tmp/pci-a/../pci-o /tmp/pci-o] - P.places_of(out: "/tmp/pci-a/../pci-o").map(&:first)).empty?
+check "places: the default classifier is a place too", pairs.include?([P::DEFAULT_CLASSIFIER, "<classifier>"])
+check "places: --preflight has no classifier, and the root dir is never a place",
+      P.places_of(preflight: true) == [] && P.places_of(preflight: true, out: "/") == [] &&
+      P.places_of(out: "/pci-o", classifier: "/pci-c.rb").none? { |p, _| p == "/" }
+# 長い path から替える。同じ path は、先の組の名前になる。
+check "places: the longest path wins, and the first name for the same path",
+      P::Isolation.replace_paths("/a/b/c /a/b /a", [["/a", "<1>"], ["/a/b", "<2>"], ["/a/b", "<3>"]]) == "<2>/c <2> <1>"
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
