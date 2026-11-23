@@ -187,6 +187,7 @@ accept = [
   # 入れ子の shell の、command の文字列より後ろの option は、shell の option ではない。\; は find の終わりの印。
   "sh -c 'cat -n in.txt'", "bash -c 'uniq -c in.txt' && cat x", "zsh -lc 'tail -n 1 in.txt' 2>&1", "find . -name x -exec cat {} \\;",
   "cd lib", "pushd lib && cat median.rb", "cat x 2>/dev/null && cat x >&2",
+  "sh -c cat -n in.txt", "sh -c 'cat x 2>&1 | wc -l'", "sh -c 'cat x' 2>&1",
 ]
 accept.each { |c| check "guard accepts #{c.inspect}: #{I.guard(c).inspect}", I.guard(c).nil? }
 
@@ -215,6 +216,9 @@ reject = {
   # && のほかの & (後ろで走らせる形、|&、表に無い fd への複製)。
   "cat in.txt &" => "ampersand", "uniq in.txt -c >/dev/null 2>&1 &" => "ampersand", "cat x & cat x" => "ampersand",
   "cat x |& cat" => "ampersand", "cat x >&3" => "ampersand", "cat x &&& cat x" => "ampersand", "coproc cat in.txt" => "background",
+  # 安全な redirect は、後ろが空白か区切りのときだけ外す。引用の終わりに付いた形は外さない
+  # (>/dev/null'x' は /dev/nullx を指すので、引用の字を区切りに数えない)。
+  "sh -c 'cat x 2>&1'" => "ampersand", "sh -c 'cat x 2>/dev/null'" => "abs-path", "cat x >/dev/null'x'" => "abs-path",
   # 短い option に付いた path、zsh の =name、brace と glob が作る ..。
   "git -C/x status" => "option-path", "sort -o/abs in.txt" => "option-path", "cat =ls" => "equals-word",
   "echo ={cat,ruby}" => "equals-word", "uniq ={cat,canary}" => "equals-word", "cat ''=ls" => "equals-word", "cat x = y" => "equals-word",
@@ -237,6 +241,7 @@ reject = {
   # shell の設定を変える形。job control を立てると、子が process group を抜ける。入れ子の shell の option は -c と -lc だけ。
   "set -m; cat x" => "shell-option", "set -o monitor; cat x" => "shell-option", "setopt monitor; cat x" => "shell-option",
   "cat x; set +m" => "shell-option", "shopt -s nullglob; cat x" => "shell-option", "emulate sh; cat x" => "shell-option",
+  "unsetopt nomatch; cat x" => "shell-option", "dash -m x" => "shell-option", "ksh -i" => "shell-option",
   "sh -mc 'cat x'" => "shell-option", "bash -ic 'cat x'" => "shell-option", "sh -o monitor -c 'cat x'" => "shell-option",
   "sh -c -m 'cat x'" => "shell-option", "zsh +m -c 'cat x'" => "shell-option", "env bash -i" => "shell-option",
   "sh -c 'set -m; cat x'" => "shell-option", "sh -c set\\ -m" => "shell-option", "eval 'se''t -m'" => "shell-option",

@@ -161,6 +161,8 @@ shell の設定は、変種の表だけが決める。sh と bash は、job cont
 引用の断片ごとに見ると、`'tail '"-f x"` や `set\ -m` のように、つないで出来る command を漏らす。
 
 例外は 2 つ。分類器の門が通す安全な redirect の 7 つ (`2>/dev/null` など) は、絶対 path と `&` の規則から外す。
+外すのは、後ろが空白か区切り (`;`、`|`、`&`、`)`) か、文字列の終わりのときだけ。
+入れ子の command の引用の終わりに付いた形 (`sh -c 'cat x 2>&1'`) は外さない (`>/dev/null'x'` は `/dev/nullx` を指す)。
 sed と awk の script は、人が中身を確かめたものだけを表に持ち、単一引用の語の完全一致で外す (今は K2 の 1 つ)。
 表の語は、ほかの command の引数でも外れる。実在しうる path になる script は足さない。
 
@@ -235,8 +237,8 @@ dir の mtime だけの変化は、直下の entry の作成、削除、入れ�
 `denied-exec` は、`read` の command が表に無い program を起動しようとした印である。
 stderr と stdout の行から拾う (`2>&1` を付けた起動は、字面が stdout に回る)。最後の終了 code が 0 でも拾う。
 
-拾う字面は 4 つ。`operation not permitted`、`command not found`、git の `cannot run`。
-4 つ目は、shell と起動の道具 (`env`、`xargs` など) が出す `permission denied` と `no such file or directory`。
+拾う字面は、`operation not permitted`、`command not found`、`exec` の `not found`、git の `cannot run`。
+shell と起動の道具 (`env`、`xargs` など) が出す `permission denied` と `no such file or directory` も拾う。
 shell の行は、path の形の名前 (`./x`、`lib/x`) のものだけを拾う (`/` の無い名前の同じ字面は、redirect の失敗)。
 
 stderr を捨てた起動 (`2>/dev/null`) は、最後の終了 code が 126 か 127 のときだけ拾う (名前は空になる)。
