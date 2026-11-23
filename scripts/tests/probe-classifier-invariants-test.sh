@@ -1473,9 +1473,9 @@ check "places: the default classifier is a place too", pairs.include?([P::DEFAUL
 check "places: --preflight has no classifier, and the root dir is never a place",
       P.places_of(preflight: true) == [] && P.places_of(preflight: true, out: "/") == [] &&
       P.places_of(out: "/pci-o", classifier: "/pci-c.rb").none? { |p, _| p == "/" }
-# 名前の先頭だけが同じ別の path は、置き換えない (--out が /t/out のときの /t/out-other)。
-# 終わりは、/、空白、引用、区切り、文の終わりの .、ASCII でない字。前に別の dir が付いた形は、置き換える側に寄せる。
-kept = %w[/t/out-other /t/out2 /t/out.txt /t/out_x /t/out..x /t/out+ /t/out~ /t/out%1]
+# 名前の字が続く path は、別の名前とみなして残す (--out が /t/out のときの /t/out-other と /t/out./x)。
+# 終わりは、/、文字列の終わり、名前の字でない字。前に別の dir が付いた形は、置き換える側に寄せる。
+kept = %w[/t/out-other /t/out2 /t/out.txt /t/out_x /t/out..x /t/out+ /t/out~ /t/out%1 /t/out@x /t/out./x /t/out../x /t/out.-]
 check "places: another path that only starts with the same characters is kept",
       kept.all? { |p| P::Isolation.replace_paths("cat #{p} x", [["/t/out", "<OUT>"]]) == "cat #{p} x" }
 check "places: the path itself, and what is under it, is replaced",
@@ -1484,6 +1484,21 @@ check "places: the path itself, and what is under it, is replaced",
 check "places: a path followed by a non-ASCII character is replaced, and a path may hold one",
       P::Isolation.replace_paths("/t/outに /t/表/x /t/表-2", [["/t/out", "<OUT>"], ["/t/表", "<HYOU>"]]) ==
       "<OUT>に <HYOU>/x /t/表-2"
+# 終わりの規則を、直後の 1 字の全部 (ASCII の 127 字) で見る。例だけでは、端の形 (. の後ろの / など) を漏らす。
+name_char = ->(c) { c.match?(/[A-Za-z0-9_+@%~.-]/) }
+swap = ->(text) { P::Isolation.replace_paths(text, [["/t/out", "<OUT>"]]) }
+wrong = (1..127).map(&:chr).reject do |c|
+  direct = c == "/" || !name_char.call(c)
+  after_dot = !name_char.call(c) && c != "/"
+  swap.call("/t/out#{c}x") == (direct ? "<OUT>#{c}x" : "/t/out#{c}x") &&
+    swap.call("/t/out.#{c}") == (after_dot || c == "." ? "<OUT>.#{c}" : "/t/out.#{c}")
+end
+check "places: the end of a path, for every ASCII character that can follow it: #{wrong.inspect}", wrong.empty?
+# 引用と \ は読まない近似。空白を含む別の名前は、前の部分が置き換わる (docs に書いてある形)。
+check "places: quotes and backslashes are not read, so a name with a space is replaced in its first part",
+      P::Isolation.replace_paths("'/t/out x' /t/out\\ x", [["/t/out", "<OUT>"]]) == "'<OUT> x' <OUT>\\ x"
+check "places: a path under the registered one is replaced whatever follows the slash",
+      P::Isolation.replace_paths("/t/out/./x /t/out//x /t/out/../y /t/out/.", [["/t/out", "<OUT>"]]) == "<OUT>/./x <OUT>//x <OUT>/../y <OUT>/."
 check "places: a registered path inside another path is replaced as well",
       P::Isolation.replace_paths("/System/Volumes/Data/t/out/x", [["/t/out", "<OUT>"]]) == "/System/Volumes/Data<OUT>/x"
 # 長い path から替える。同じ path は、先の組の名前になる。

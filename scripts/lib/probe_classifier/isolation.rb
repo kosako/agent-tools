@@ -126,9 +126,10 @@ module ProbeClassifier
       path == dir || path.start_with?("#{dir}/")
     end
 
-    # path の後ろに続くと、別の名前になる字 (/t/out に対する /t/out-other、/t/out2、/t/out.txt)。
-    # 文の終わりの . と、ASCII でない字は、名前の続きとみなさない (置き換える側に寄せる)。
-    PATH_CONTINUES = '(?!\.*[A-Za-z0-9_+@%~-])'
+    # 置き換える path の終わり。直後が / か、文字列の終わりか、名前の字でない字のとき。
+    # . が続くときは、その後ろが / でも名前の字でもなければ、文の終わりとみなす (/t/out. は終わり、/t/out./x は別の dir)。
+    # 名前の字は、英数字と _ + @ % ~ - と、. 。ASCII でない字は名前の字に数えない (置き換える側に寄せる)。
+    PATH_ENDS = '(?=/|\.*(?:\z|[^A-Za-z0-9_+@%~./-]))'
 
     # text の中の絶対 path を、名前に置き換える。pairs は [path, 名前] の並びで、同じ path は先の組が勝つ。
     # 長い path から替える (短い path は、長い path の前の部分に当たる)。
@@ -136,7 +137,7 @@ module ProbeClassifier
     def self.replace_paths(text, pairs)
       table = pairs.map { |from, to| [from.b, to] }.uniq(&:first).sort_by { |from, _| -from.length }
       out = text.to_s.b
-      table.each { |from, to| out = out.gsub(Regexp.new(Regexp.escape(from) + PATH_CONTINUES, Regexp::NOENCODING)) { to } }
+      table.each { |from, to| out = out.gsub(Regexp.new(Regexp.escape(from) + PATH_ENDS, Regexp::NOENCODING)) { to } }
       out.force_encoding(Encoding::UTF_8).scrub("?")
     end
 
