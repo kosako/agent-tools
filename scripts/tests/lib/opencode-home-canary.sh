@@ -9,7 +9,7 @@
 # --prune、読み取りだけの status / doctor) はここでは捕まらないので、
 # scripts/tests/opencode-home-callsites-test.sh (静的な検査) が守る。
 #
-# CI では self-tests の loop とは別 step で実行する (tests/lib/ は loop の glob に乗らない)。
+# CI では self-tests の runner とは別 step で実行する (tests/lib/ は runner が拾わない)。
 # HOME を差し替えるのは、この canary と doctor-test の XDG case だけ (suite 本体では差し替え
 # ない: git の global config が見えなくなるため。ここでは identity の入った GIT_CONFIG_GLOBAL を
 # 与えて補う)。network access なし。

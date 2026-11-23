@@ -2,7 +2,7 @@
 # scripts/tests/*.sh が共有する test helpers。suite 側が script_dir を定義してから
 #   . "$script_dir/lib/test-helpers.sh"
 # で source する契約 (bid / repo_root は source 時・呼び出し時の $script_dir に依存する)。
-# tests/lib/ 配下に置くのは、CI の `for t in scripts/tests/*.sh` (非再帰 glob) に
+# tests/lib/ 配下に置くのは、CI の runner (tests/lib/run-all.rb。拾うのは scripts/tests/ の直下だけ) に
 # helper 自身が test として拾われないようにするため。関数定義と repo_root の導出、下の test の knob の解除だけで、
 # set オプションや trap は変更しない (POSIX sh)。
 
