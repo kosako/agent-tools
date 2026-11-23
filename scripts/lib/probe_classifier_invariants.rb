@@ -350,9 +350,9 @@ module ProbeClassifierInvariants
       # 子の stderr の先頭だけを出す (端末でないとき、Ruby は例外の文言を先頭に出す)。分類器の file と、その dir
       # (require_relative の失敗の文言に出る) の場所は、置き換えてから出す。
       head = result.err.to_s.scrub("?").lines.first(2).join
-      places = [source.real, source.path].uniq
-      places.each { |p| head = head.gsub(p) { "<classifier>" } }
-      places.map { |p| File.dirname(p) }.uniq.each { |d| head = head.gsub(d) { "<classifier-dir>" } unless d == "/" }
+      files = [source.real, source.path].uniq
+      dirs = files.map { |p| File.dirname(p) }.uniq - ["/"]
+      head = Isolation.replace_paths(head, files.map { |p| [p, "<classifier>"] } + dirs.map { |d| [d, "<classifier-dir>"] })
       raise Error, "the classifier could not be run (exit #{result.status&.exitstatus.inspect}): #{one_line(head)}"
     end
 

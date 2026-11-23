@@ -1319,12 +1319,12 @@ mkdir -p "$tmp/cls-dir" "$tmp/place-real"
 ln -s "$tmp/place-real" "$tmp/place-link"
 cp "$stub" "$tmp/cls-dir/stub.rb"
 run_cli 0 "not read: the given places" --out "$tmp/place-link/o" --classifier "$tmp/cls-dir/stub.rb" \
-  --command ": -o$tmp/place-link/o/x $tmp_real/place-real/o/y $tmp/cls-dir/stub.rb $tmp_real/cls-dir/z"
+  --command ": -o$tmp/place-link/o/x $tmp_real/place-real/o/y $tmp/cls-dir/stub.rb $tmp_real/cls-dir/stub.rb.bak"
 no_abs_paths "not read: the given places" "$tmp/place-real/o/results.json" "$tmp/cli.out" "$tmp/cli.err"
 ruby -r"$script_dir/lib/check_helper" -rjson - "$tmp/place-real/o/results.json" <<'RUBY'
 got = JSON.parse(File.read(ARGV[0]))["command"]
 check "not read: the given places are replaced by name: #{got.inspect}",
-      got == ": -o<OUT>/x <OUT>/y <classifier> <classifier-dir>/z"
+      got == ": -o<OUT>/x <OUT>/y <classifier> <classifier-dir>/stub.rb.bak"
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -1381,6 +1381,7 @@ RUBY
 # 1 行だけ出す (exit 1 は「反例あり」の意味)。preflight と、走らせる所を差し替えて、同じ process の中から入口を呼ぶ
 # (何も走らせない)。
 TMPDIR="$cli_tmp" ruby -r"$script_dir/lib/check_helper" - "$repo_root/scripts/lib/probe_classifier_invariants.rb" "$stub" "$tmp" <<'RUBY'
+# encoding: utf-8
 require "stringio"
 require ARGV[0]
 stub = ARGV[1]
@@ -1472,6 +1473,19 @@ check "places: the default classifier is a place too", pairs.include?([P::DEFAUL
 check "places: --preflight has no classifier, and the root dir is never a place",
       P.places_of(preflight: true) == [] && P.places_of(preflight: true, out: "/") == [] &&
       P.places_of(out: "/pci-o", classifier: "/pci-c.rb").none? { |p, _| p == "/" }
+# 名前の先頭だけが同じ別の path は、置き換えない (--out が /t/out のときの /t/out-other)。
+# 終わりは、/、空白、引用、区切り、文の終わりの .、ASCII でない字。前に別の dir が付いた形は、置き換える側に寄せる。
+kept = %w[/t/out-other /t/out2 /t/out.txt /t/out_x /t/out..x /t/out+ /t/out~ /t/out%1]
+check "places: another path that only starts with the same characters is kept",
+      kept.all? { |p| P::Isolation.replace_paths("cat #{p} x", [["/t/out", "<OUT>"]]) == "cat #{p} x" }
+check "places: the path itself, and what is under it, is replaced",
+      P::Isolation.replace_paths("/t/out /t/out/x '/t/out' -o/t/out; /t/out. x /t/out... --a=/t/out,/t/out", [["/t/out", "<OUT>"]]) ==
+      "<OUT> <OUT>/x '<OUT>' -o<OUT>; <OUT>. x <OUT>... --a=<OUT>,<OUT>"
+check "places: a path followed by a non-ASCII character is replaced, and a path may hold one",
+      P::Isolation.replace_paths("/t/outに /t/表/x /t/表-2", [["/t/out", "<OUT>"], ["/t/表", "<HYOU>"]]) ==
+      "<OUT>に <HYOU>/x /t/表-2"
+check "places: a registered path inside another path is replaced as well",
+      P::Isolation.replace_paths("/System/Volumes/Data/t/out/x", [["/t/out", "<OUT>"]]) == "/System/Volumes/Data<OUT>/x"
 # 長い path から替える。同じ path は、先の組の名前になる。
 check "places: the longest path wins, and the first name for the same path",
       P::Isolation.replace_paths("/a/b/c /a/b /a", [["/a", "<1>"], ["/a/b", "<2>"], ["/a/b", "<3>"]]) == "<2>/c <2> <1>"

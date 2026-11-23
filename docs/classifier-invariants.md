@@ -715,7 +715,9 @@ dry-run は何も走らせないので、1 にはならない。guard が拒ん�
 引数で渡した場所も、同じように置き換える。`--out` は `<OUT>`、`--classifier` と `--baseline` の file は `<classifier>` と
 `<baseline>`、その file のある dir は `<classifier-dir>` と `<baseline-dir>` になる。
 走らせない command は guard を通らないまま `results.json` に写るので、絶対 path を持ちうる。
-表に無い場所の絶対 path (command に自分で書いたもの) は、そのまま残る。
+表に無い場所の絶対 path (command に自分で書いたもの) は、そのまま残る。名前の先頭だけが同じ別の path
+(`--out` が `/t/out` のときの `/t/out-other`) も残る。ただし、漏らさない側に寄せた所が 2 つある。
+表の path の後ろに ASCII でない字が続く所と、別の path の途中に表の path と同じ並びが入っている所は、その部分を置き換える。
 `--out` の dir と、分類器の file の場所も、どこにも書かない (分類器は、版と hash で残す)。
 
 | key | 入口 | 中身 |
