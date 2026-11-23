@@ -155,6 +155,8 @@ guard は分類器を読まない (分類器と同じ読み違いを持ち込ま
 - brace が `..` を作る形、名前や option につないだ brace、入れ子の brace。`.` で始まる glob。
 - `gh`、`git remote`、`kill` の類、追従する `tail`、`find -ok`、`xargs -p` と `-o`。
 - `while` と `until` (終わりを条件に任せる loop)。`for` は、並べた語の数だけ回るので受ける。
+- awk の program の中の `|`。awk は pipe で command を起動でき、その文字列は program の中でつないで作れる
+  (`"ru" "by -e …" | getline` で ruby が走った。実測)。`system` は括弧の規則が拒む。
 - `ruby` に code を渡す形。受けるのは、`-c` と file、単独の `-v` と `--version`、option の無い file の並びだけ。
   `-e`、`-r`、語の無い `ruby` (stdin の script) は拒む。前に `=` や `!` が付いた名前 (`X=ruby`、git の alias の `!ruby`) も ruby として見る。
 - 引数が 2 つの `cd`、`chdir`、`pushd`、`popd`。
@@ -171,6 +173,8 @@ ruby の code も、`Process.setsid` で同じことができる。
 
 受ける `$` の形は、閉じた環境で展開した後の語 (`-o`) に置き換えてから、ほかの規則を当てる。
 消すと、`xargs "${zz:--o}" cat` の `-o` のように、展開で出来る option を見逃す。
+変数を読む形 (`"${zz:--o}"`) は、その変数の名前が command のほかの所に出ないときだけ受ける。
+`zz=-f` を先に置くと、同じ形が `-f` に展開されるため。
 
 例外は 2 つ。分類器の門が通す安全な redirect の 7 つ (`2>/dev/null` など) は、絶対 path と `&` の規則から外す。
 外すのは、後ろが空白か区切り (`;`、`|`、`&`、`)`) か、文字列の終わりのときだけ。

@@ -191,6 +191,8 @@ accept = [
   # ruby は、code を走らせない形と、file を渡す形だけを受ける。for は、並べた語の数だけ回る。
   "ruby -v", "ruby --version", "ruby canary_begin.rb", "env ruby -c lib/median.rb", "ls | xargs ruby -c", "grep ruby in.txt",
   "find . -name x -exec ruby -c {} +", "for f in in.txt x; do cat in.txt; done",
+  # awk は、pipe の無い program を受ける。zz の名前が無ければ、変数を読む形も受ける。
+  "awk 'BEGIN { print 1 }'", "awk '{ print }' in.txt", %q(sort "${zz:--o}" out.txt in.txt; cat x),
   # 入れ子の shell の、command の文字列より後ろの option は、shell の option ではない。\; は find の終わりの印。
   "sh -c 'cat -n in.txt'", "bash -c 'uniq -c in.txt' && cat x", "zsh -lc 'tail -n 1 in.txt' 2>&1", "find . -name x -exec cat {} \\;",
   "cd lib", "pushd lib && cat median.rb", "cat x 2>/dev/null && cat x >&2",
@@ -266,6 +268,14 @@ reject = {
   # 終わりを条件に任せる loop (文字列で見える、終わらない形)。
   "while :; do :; done" => "loop", "until false; do :; done" => "loop", "cat x; while true; do cat x; done" => "loop",
   "sh -c 'while :; do :; done'" => "loop", "wh''ile :; do :; done" => "loop",
+  # 受けた $ の形が読む変数の名前が、command のほかの所に出る形 (設定されると、展開の後の語が変わる)。
+  %q(zz=-f; tail "${zz:--o}" in.txt) => "dollar-variable", %q(export zz=-f; tail "${zz:--o}" in.txt) => "dollar-variable",
+  %q(read zz; sort "${zz:--o}" out.txt in.txt) => "dollar-variable", %q(z''z=-f; tail "${zz:--o}" in.txt) => "dollar-variable",
+  %q(for zz in -f; do tail "${zz:--o}" in.txt; done) => "dollar-variable",
+  %q(env zz=-f sh -c 'tail "${zz:--o}" in.txt') => "dollar-variable", %q(sort "${zz:--o}" out.txt zz) => "dollar-variable",
+  # awk の program の中の pipe (command を起動する。文字列は program の中でつないで作れる)。
+  %q(awk 'BEGIN { "ru" "by -e 1" | getline x; print x }') => "awk-pipe", %q(awk 'BEGIN { print 1 | "cat" }') => "awk-pipe",
+  %q(env awk '{ print | "cat" }' in.txt) => "awk-pipe", %q(X=awk 'BEGIN { "x" | getline }') => "awk-pipe",
   # 例外の $ の形は、展開した後の語として、ほかの規則に掛かる。
   %q(xargs "${zz:--o}" cat) => "xargs-tty", "xargs $'-o' cat" => "xargs-tty", %q(sh -c 'xargs "${zz:--o}" cat') => "xargs-tty",
   # 表に無い $ と、読めない形。

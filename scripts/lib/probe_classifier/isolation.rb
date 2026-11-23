@@ -605,6 +605,8 @@ module ProbeClassifier
     # 受ける $ の形 (閉じた表) と、閉じた環境で展開した後の語。生成器が門の外の形として出す文字列だけ。
     # 環境の変数の参照は受けない。guard は、形を展開した後の語に置き換えてから、ほかの規則を当てる
     # (消すと、xargs "${zz:--o}" cat の -o のように、展開で出来る option を見逃す)。
+    # 変数を読む形は、その変数が設定されていない前提の語を持つ。変数の名前が command のほかの所に出る形は受けない
+    # (zz=-f を先に置くと、"${zz:--o}" は -f になる)。
     DOLLAR_FORMS = { "$'-o'" => "-o", '"${zz:--o}"' => "-o" }.freeze
     # sed と awk の script の表。番地の / で始まる script は絶対 path の規則に当たるので、人が中身を
     # 確かめた script だけを、単一引用の語の完全一致で外す。今は K2 (#756) の形だけ。
@@ -645,13 +647,23 @@ module ProbeClassifier
       return "line-continuation" if command.include?("\\\n")
 
       masked = mask_exemptions(command, scripts, dollar_forms)
+      variables = dollar_variables(command, dollar_forms)
       # 引用と \ は、字をつないで別の語を作る ('.'./x は ../x、ta''il は tail)。原文と、引用の記号を
       # 除いた写しの両方に、同じ規則を当てる。
       [masked, masked.gsub(/['"\\]/, "")].each do |view|
+        # 受けた形を置き換えた後に、その形が読む変数の名前が残っていれば、どこかで設定しうる。
+        return "dollar-variable" if variables.any? { |name| view.include?(name) }
+
         reason = text_reason(view)
         return reason if reason
       end
       forbidden_reason(masked, 0)
+    end
+
+    # 表の形のうち、command に出てくるものが読む変数の名前。
+    def self.dollar_variables(command, dollar_forms)
+      used = dollar_forms.keys.select { |form| command.include?(form) }
+      used.flat_map { |form| form.scan(/\$\{([A-Za-z_][A-Za-z0-9_]*)/).flatten }.uniq
     end
 
     def self.mask_exemptions(command, scripts, dollar_forms)
@@ -739,13 +751,25 @@ module ProbeClassifier
       return "background" unless (names & BACKGROUND_NAMES).empty?
       return "loop" unless (names & LOOP_NAMES).empty?
       return "ruby-form" unless ruby_forms_ok?(words)
+      return "awk-pipe" if awk_pipe?(words)
 
       nil
     end
 
-    # ruby を指す語。前に = や ! が付いた形 (X=ruby、git の alias の !ruby) も、ruby の起動として見る。
+    # 道具を指す語。前に = や ! が付いた形 (X=ruby、git の alias の !ruby) も、その道具の起動として見る。
+    def self.tool_word?(word, tool)
+      word.split(%r{[=!/]}, -1).last == tool
+    end
+
     def self.ruby_word?(word)
-      word.split(%r{[=!/]}, -1).last == "ruby"
+      tool_word?(word, "ruby")
+    end
+
+    # awk は、program の中の pipe で command を起動する ("cmd" | getline、print | "cmd")。command の文字列は
+    # program の中でつないで作れるので ("ru" "by -e …" で ruby が走った。実測)、| のある program を受けない。
+    # system は括弧が要るので、括弧の規則が先に拒む。
+    def self.awk_pipe?(words)
+      words.each_index.any? { |i| tool_word?(words[i], "awk") && words[(i + 1)..-1].any? { |w| w.include?("|") } }
     end
 
     # ruby の後ろの語が、受ける形に収まるか。受けるのは、単独の -v と --version、-c と file の並び、
