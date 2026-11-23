@@ -1,6 +1,7 @@
 #!/bin/sh
-# 分類器の不変条件の試行 (#754) の self-test。隔離、判定、入口の 3 つを見る。
-# 対象は scripts/lib/probe_classifier/ の isolation.rb と judge.rb、scripts/probe-classifier-invariants.sh。
+# 分類器の不変条件の試行 (#754) の self-test。隔離、判定、入口、生成器と変異の表を見る。
+# 対象は scripts/lib/probe_classifier/ の isolation.rb、judge.rb、generator.rb、mutations.rb と、
+# scripts/probe-classifier-invariants.sh。
 # - T1: 隔離の、sandbox の要らない部分。profile の文字列の形、閉じた環境の表、変種・canary・道具の表、guard が
 #   通す形と拒む形、出力の path の置き換え、group の空の確かめ、隔離を組めないときの理由、preflight の結論の組み方。
 # - T2: 隔離の、sandbox の要る部分。否定の検査は、どれも対照 (相手を許した profile で同じ probe が通る) と組にする。
@@ -13,11 +14,17 @@
 #   違反と人に出すものの分け方、確かめ直し (走らせる部分を差し替えて見る)。
 # - T4: 判定の、sandbox の要る部分 (witness)。書き込む形が I1、canary を走らせる形が I2、書かない形が差分なしに
 #   なること、表に無い program の起動が人に出ること、書き込みの後に終わらない形でも I1 が出ること。
+#   scene の glob が展開して出来る書き込みと、guard の表の置き換えの形 (zsh だけで走る) も見る。
 # - T5: 入口の、sandbox の要らない部分。引数の誤り、出力先の検査、guard の拒否、read でない command、
 #   preflight が通らないときと想定外の失敗のときの exit 2。
 # - T6: 入口の、sandbox の要る部分。--preflight と、read の command を走らせた結果の file。
 #   入口を process として呼ぶのは 2 回 (--preflight と、書き込む command)。preflight は 1 回に 3 秒ほどかかる。
 #   残りの終わり方は、preflight を「通った」結果に差し替え、同じ process の中から入口を呼んで見る。
+# - T7: 生成器と変異の表 (sandbox の要らない部分)。同じ seed と件数で同じ列になること (digest の固定値は、
+#   CI の 2 つの Ruby で同じ値になることを見る)、cell の回り方、生成した全件が guard を通ること、
+#   門の外の形が閉じた表から出ること、変異の当て方 (小さな代役の source で見る) と表の形。
+#   生成した command は走らせない。分類器も読まない (read が何件出るかは、手元の試行で測る)。
+#   変異の表が repo の今の分類器に当たるかは見ない (分類器を直す PR が、表の保守を負わないようにする)。
 # sandbox を適用できない環境 (入れ子の sandbox の中など) では T2・T4・T6 を skip して 1 行出す。CI
 # (GITHUB_ACTIONS=true) では skip せず失敗にする。skip の判断は T2 の中の 1 か所で行う。
 # 走らせる command は、この test の一時 dir の中で、相対 path だけを使う。否定の検査の probe だけは、同じ一時 dir に
@@ -32,9 +39,13 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 isolation="$repo_root/scripts/lib/probe_classifier/isolation.rb"
 judge="$repo_root/scripts/lib/probe_classifier/judge.rb"
+generator="$repo_root/scripts/lib/probe_classifier/generator.rb"
+mutations="$repo_root/scripts/lib/probe_classifier/mutations.rb"
 probe="$repo_root/scripts/probe-classifier-invariants.sh"
 [ -f "$isolation" ] || fail "missing $isolation"
 [ -f "$judge" ] || fail "missing $judge"
+[ -f "$generator" ] || fail "missing $generator"
+[ -f "$mutations" ] || fail "missing $mutations"
 [ -x "$probe" ] || fail "missing or not executable: $probe"
 
 tmp=$(mktemp -d)
@@ -178,6 +189,11 @@ Dir.mkdir(File.join(tmp, "t1-files"))
 I.write_files(File.join(tmp, "t1-files"), "a.txt" => "a\n", "sub/b.txt" => "b\n")
 check "fixture: files are written with the fixed mtime in the past",
       I::FIXTURE_MTIME == Time.utc(2026, 1, 1) && %w[a.txt sub/b.txt].all? { |f| File.mtime(File.join(tmp, "t1-files", f)) == I::FIXTURE_MTIME }
+# 狙いごとの dir (scene)。基本の file とは名前が重ならない。- で始まる名前は、この表から一時 dir に書く。
+check "fixture: the scene files", I::FIXTURE_SCENES.keys == %w[pair/a.txt pair/b.txt sortopt/-oplanted.txt sortopt/in.txt pre/--pre=canary
+                                                               pre/a.txt plain/-n plain/a.txt]
+check "fixture: the scenes do not touch the base files", (I::FIXTURE_SCENES.keys & (I::FIXTURE_FIRST.keys + I::FIXTURE_SECOND.keys)).empty? &&
+                                                        I::FIXTURE_FIRST.keys == %w[README.md in.txt x lib/median.rb]
 
 # guard が通す形。手書きの受け入れの command (K1 から K4 を含む) と、生成器が出す門の外の形。
 accept = [
@@ -197,6 +213,11 @@ accept = [
   "sh -c 'cat -n in.txt'", "bash -c 'uniq -c in.txt' && cat x", "zsh -lc 'tail -n 1 in.txt' 2>&1", "find . -name x -exec cat {} \\;",
   "cd lib", "pushd lib && cat median.rb", "cat x 2>/dev/null && cat x >&2",
   "sh -c cat -n in.txt", "sh -c 'cat x 2>&1 | wc -l'", "sh -c 'cat x' 2>&1",
+  # 置き換えの中の書き込み (表の 3 つ目の形)。代入の語の全体が表の形と一致するときだけ受ける。
+  %q(RANDOM='a[$(sort -o out.txt in.txt)1]'), %q(a=1; RANDOM='a[$(sort -o out.txt in.txt)1]'),
+  %q(cat x; RANDOM='a[$(sort -o out.txt in.txt)1]' && cat x),
+  # 番地の範囲を表示するだけの sed の script (表の 2 つ目)。
+  "sed -n '/apple/,/banana/p' in.txt", %q(sh -c "sed -n '/apple/,/banana/p' in.txt"),
 ]
 accept.each { |c| check "guard accepts #{c.inspect}: #{I.guard(c).inspect}", I.guard(c).nil? }
 
@@ -278,6 +299,13 @@ reject = {
   %q(env awk '{ print | "cat" }' in.txt) => "awk-pipe", %q(X=awk 'BEGIN { "x" | getline }') => "awk-pipe",
   # 例外の $ の形は、展開した後の語として、ほかの規則に掛かる。
   %q(xargs "${zz:--o}" cat) => "xargs-tty", "xargs $'-o' cat" => "xargs-tty", %q(sh -c 'xargs "${zz:--o}" cat') => "xargs-tty",
+  # 置き換えの中の書き込みの形と 1 字でも違う形は、表に無い $ として拒む (中の command、変数の名前、引用の種類、位置)。
+  %q(RANDOM='a[$(sort -o lib/p in.txt)1]') => "dollar", %q(RANDOM='a[$(uniq in.txt out.txt)1]') => "dollar",
+  %q(COLUMNS='a[$(sort -o out.txt in.txt)1]') => "dollar", %q(RANDOM="a[$(sort -o out.txt in.txt)1]") => "dollar",
+  %q(RANDOM='b[$(sort -o out.txt in.txt)1]') => "dollar", %q(RANDOM='a[$(sort -o out.txt in.txt)]') => "dollar",
+  %q(cat "$(sort -o out.txt in.txt)") => "dollar", %q(echo 'a[$(sort -o out.txt in.txt)1]') => "dollar",
+  # 受けた形の外は、ほかの規則がそのまま見る。
+  %q(cat ../x; RANDOM='a[$(sort -o out.txt in.txt)1]') => "dotdot", %q(RANDOM='a[$(sort -o out.txt in.txt)1]' cat /etc/hosts) => "abs-path",
   # 表に無い $ と、読めない形。
   "echo $(touch x)" => "dollar", "sort $'-O' out.txt in.txt" => "dollar", "sort \"${zz:-/x}\" in.txt" => "dollar",
   "" => "empty", "  " => "empty", "cat 'x" => "unbalanced-quote", "cat \u3042" => "non-ascii-or-control", "cat a\u0001b" => "non-ascii-or-control",
@@ -294,7 +322,17 @@ check "guard: the table matches the whole quoted word", I.guard("sed -n '/x/p;w 
 check "guard: the table does not match outside the quotes", I.guard("sed -n /x/p in.txt", scripts: ["/x/p"]) == "abs-path"
 check "guard: the rest of the command is still checked", I.guard("sed -n '/x/p' ../in.txt", scripts: ["/x/p"]) == "dotdot"
 check "guard: the dollar table is closed", I.guard("sort $'-o' out.txt in.txt", dollar_forms: {}) == "dollar"
-check "guard: the dollar table maps each form to the word it expands to", I::DOLLAR_FORMS == { "$'-o'" => "-o", '"${zz:--o}"' => "-o" }
+# 表は、形から「展開した後の語」。3 つ目だけは語に展開されないので、中で走る command を値に持つ。
+substitution = %q(RANDOM='a[$(sort -o out.txt in.txt)1]')
+check "guard: the dollar table maps each form to the word it expands to, or to the command it runs",
+      I::DOLLAR_FORMS == { "$'-o'" => "-o", '"${zz:--o}"' => "-o", substitution => "sort -o out.txt in.txt" }
+check "guard: the substitution form is accepted through the table only", I.guard(substitution, dollar_forms: {}) == "dollar"
+# 値の command に、ほかの規則が当たる (値が外を指す形なら、受けた形ごと拒む)。
+check "guard: the command a form runs is checked by the other rules",
+      I.guard(substitution, dollar_forms: { substitution => "sort -o ../out.txt in.txt" }) == "dotdot" &&
+      I.guard(substitution, dollar_forms: { substitution => "tail -f in.txt" }) == "tail-follow"
+check "guard: the script table is the two checked scripts", I::SCRIPT_TABLE == ['/a\/,/w lib/p', "/apple/,/banana/p"]
+check "guard: a script of the table with more after it is rejected", I.guard("sed -n '/apple/,/banana/p;w out' in.txt") == "abs-path"
 
 # run_command は、guard が拒んだ command を走らせず、一時 dir も作らない。
 before = Dir.children(session.root).sort
@@ -522,6 +560,7 @@ second = session.run_command("ls; pwd; env; git log --oneline | wc -l; uniq -c i
 check "each command gets a new temp dir", second.layout.base != first.layout.base && !second.out.lines.include?("out.txt\n")
 out = second.out.lines.map(&:chomp)
 check "the fixture: files and canaries", (%w[README.md in.txt x lib cat bin canary_begin.rb] - out).empty?
+check "the fixture: the scene dirs", (%w[pair plain pre sortopt] - out).empty?
 check "the fixture: two commits, repeated lines in in.txt, the sed subject in x",
       out.any? { |l| l.strip == "2" } && out.any? { |l| l.match?(/\A\s*2 apple\z/) } && out.include?("a/,")
 check "the child env points into the temp dir, with paths replaced in the output",
@@ -541,6 +580,9 @@ keys = leaked.out.lines.map { |l| l.split("=", 2).first }
 check "variables set in the parent do not reach the child", (keys & %w[RIPGREP_CONFIG_PATH GIT_DIR PAGER]).empty? &&
                                                            leaked.out.include?("GIT_CONFIG_GLOBAL=/dev/null\n")
 check "git works under a hostile parent env (template and command)", leaked.exit_code == 0 && leaked.out.include?(" M README.md\n")
+# scene の file は最初の commit に入っている (追跡していない file として出るのは、canary だけ)。
+check "the scene files are tracked: #{leaked.out.lines.grep(/\A\?\? /).inspect}",
+      leaked.out.lines.grep(/\A\?\? /).map(&:chomp) == ["?? bin/", "?? canary_begin.rb", "?? cat"]
 scopes = leaked.out.lines.select { |l| l.match?(/\A[a-z]+\t/) }.map { |l| l.split("\t").first }.uniq
 check "git reads only the repository's own config: #{scopes.inspect}", scopes == ["local"]
 
@@ -554,6 +596,9 @@ variants = {
   "zsh-extendedglob" => ["echo ^in.txt", ->(r) { r.exit_code == 0 && r.out.include?("README.md") && !r.out.include?("in.txt") }],
 }
 layout = session.prepare
+# scene の file は、表の中身のまま、command ごとの一時 dir にある (- で始まる名前を含む)。
+check "the scene files are in each command's temp dir, with the fixed mtime",
+      I::FIXTURE_SCENES.all? { |rel, body| File.read(File.join(layout.fx, rel)) == body && File.mtime(File.join(layout.fx, rel)) == I::FIXTURE_MTIME }
 # fixture の中の実行できる file は canary だけ (git init が置く hook の見本を残さない)。
 executables = Dir.glob(File.join(layout.fx, "**", "*"), File::FNM_DOTMATCH).select { |p| File.file?(p) && File.executable?(p) }
 check "the fixture has no executable file other than the canaries: #{executables.length}",
@@ -987,6 +1032,26 @@ check "witness: ./cat is I2 for the fixture canary: #{ran.violations.inspect} #{
 word = J.observe(session, "env done rm x")
 check "witness: a reserved-word canary goes to a human, and nothing after it runs: #{word.violations.inspect} #{word.human.inspect}",
       word.violations.empty? && word.human == [{ "reason" => "reserved-canary", "paths" => ["shim/done"], "canaries" => ["word.done"] }]
+
+# scene と、guard の表の 3 つ目の形。glob が展開して出来る書き込みと、zsh が代入の中の置き換えを走らせる形。
+# 値は [変種, 差分の種類, 変わる path]。path が nil の行は、その変種では何も変わらないことを見る (対照)。
+substitution = %q(RANDOM='a[$(sort -o out.txt in.txt)1]')
+scenes = [
+  ["uniq pair/*", "zsh", "content", "fx/pair/b.txt"],
+  ["cd sortopt && sort *", "zsh", "created", "fx/sortopt/planted.txt"],
+  ["cd pair && uniq ^x", "zsh-extendedglob", "content", "fx/pair/b.txt"],
+  ["cd pair && uniq ^x", "zsh", nil, nil],
+  ["a=1; #{substitution}", "zsh", "created", "fx/out.txt"],
+  # a が無ければ、zsh でも走らない。bash は、同じ代入で置き換えを走らせない。
+  [substitution, "zsh", nil, nil],
+  ["a=1; #{substitution}", "bash", nil, nil],
+]
+scenes.each do |command, variant, kind, path|
+  v = J.observe(session, command, variant: variant)
+  want = kind ? [{ "invariant" => "I1", "kinds" => [kind], "paths" => [path] }] : []
+  check "witness (#{variant}): #{command.inspect} gives #{want.inspect}: #{v.violations.inspect} #{v.human.inspect}",
+        v.violations == want && v.human.empty? && v.unmeasured.nil?
+end
 
 # 書かない形は、差分も人に出すものも無い。git diff は、fixture の index を揃えてあるので書き直さない。
 ["git status", "git diff", "cat README.md", "ruby -c lib/median.rb"].each do |command|
@@ -1460,5 +1525,186 @@ exit(@failed.zero? ? 0 : 1)
 RUBY
   echo "ok T6 (entry: preflight and a command in isolation)"
 fi
+
+# --- T7: 生成器と変異の表 (sandbox の要らない部分) ----------------------------------------------------
+ruby -r"$script_dir/lib/check_helper" - "$isolation" "$generator" "$mutations" <<'RUBY'
+require "digest"
+require ARGV[0]
+require ARGV[1]
+require ARGV[2]
+I = ProbeClassifier::Isolation
+G = ProbeClassifier::Generator
+M = ProbeClassifier::Mutations
+raises = lambda do |klass, &blk|
+  begin
+    blk.call
+    false
+  rescue klass
+    true
+  end
+end
+
+# 同じ seed と件数なら、同じ列。digest の固定値は、Ruby の版に依らず同じ列になることを見る (CI の 2 つの行)。
+# 表か選び方を変えたら、この値も変わる (意図した変更なら、値を更新する)。
+rows = G.generate(754, 150)
+check "generator: the same seed and count give the same rows", G.generate(754, 150) == rows && rows.length == 150
+check "generator: the digest of seed 754 and count 150 is the fixed value: #{G.digest(rows)}",
+      G.digest(rows) == "051d91bbdc8850455df02ba2d6f30e9a0e024491cd4576efffe36c657ea11ffb"
+check "generator: the digest is the SHA-256 of the command lines",
+      G.digest(rows) == Digest::SHA256.hexdigest(rows.map { |r| "#{r.command}\n" }.join)
+check "generator: a seed given as a string is the same seed", G.generate("754", 150) == rows
+other = G.generate(755, 150)
+check "generator: another seed gives other rows", other != rows && G.digest(other) != G.digest(rows)
+check "generator: a row depends only on the seed and its index", G.generate(754, 300).first(150) == rows && G.row(754, 149) == rows[149]
+check "generator: count 0 is an empty list", G.generate(754, 0) == []
+check "generator: a count that is not a non-negative integer is refused",
+      [-1, "150", nil, 1.5].all? { |count| raises.call(ArgumentError) { G.generate(754, count) } }
+
+# cell。系統とずらしの組に、門の外の 4 つを足した並び。番号の順に回る。
+names = G.cell_names
+regular = G::CELLS.reject { |c| c.family == G::GATE }
+check "cells: 101 names, at most 150, without duplicates: #{names.length}", names.length == 101 && names.length <= 150 && names.uniq == names
+check "cells: 11 families and 12 shifts, each of them used",
+      G::FAMILIES == %w[plain sort uniq diff sed awk find xargs rg ruby git] &&
+      G::SHIFTS == %w[opt-after dashdash bundle value-next write-form brace glob quote prefix name script git-form] &&
+      regular.map(&:family).uniq.sort == G::FAMILIES.sort && regular.map(&:shift).uniq.sort == G::SHIFTS.sort
+check "cells: a regular cell is named family/shift", regular.all? { |c| c.name == "#{c.family}/#{c.shift}" && G::FAMILIES.include?(c.family) && G::SHIFTS.include?(c.shift) }
+check "cells: every cell has something to emit", G::CELLS.all? { |c| !(c.forms + c.bases).empty? }
+# 2000 件では、どの cell も 19 回は回る。その中で、表の形が全部出る (seed に依らない)。
+# 読むだけの command の基本形 (37 個) だけは、1 つの cell でなく、系統の cell を合わせて全部出る。
+%w[754 1 2].each do |seed|
+  seen = Hash.new { |h, k| h[k] = [] }
+  2000.times do |i|
+    cell, entry = G.slot(seed, i)
+    seen[cell.name] << entry
+  end
+  missing = G::CELLS.flat_map { |c| c.forms - seen[c.name] } + regular.reject { |c| c.family == "plain" }.flat_map { |c| c.bases - seen[c.name] }
+  tools_seen = regular.select { |c| c.family == "plain" }.flat_map { |c| seen[c.name] & c.bases }.uniq
+  check "cells: 2000 rows of seed #{seed} reach every form and every base of the tables: #{missing.length} #{tools_seen.length}",
+        missing.empty? && tools_seen.length == 37
+end
+check "cells: a count equal to the number of cells reaches every cell", G.generate(754, names.length).map(&:cell) == names
+check "cells: rows carry their index and go through the cells in order",
+      rows.each_with_index.all? { |r, i| r.index == i && r.cell == names[i % names.length] && r.command.is_a?(String) && !r.command.strip.empty? }
+check "cells: the record of a row has the three keys of corpus.jsonl",
+      rows[3].record == { "index" => 3, "command" => rows[3].command, "cell" => "diff/opt-after" } && rows[3].record.keys == %w[index command cell]
+check "cells: each family, the gate and each shift name their counterpart in the classifier",
+      (G::FAMILIES + [G::GATE]).all? { |f| !G::SOURCES.fetch(f).empty? } && (G::SHIFTS + ["wrap"]).all? { |s| !G::SHIFT_SOURCES.fetch(s).empty? }
+
+# 生成した全件が guard を通る (4 つの seed で、cell の数の 10 倍ずつ)。
+checked = 0
+%w[754 1 2 3].each do |seed|
+  G.generate(seed, names.length * 10).each do |r|
+    checked += 1
+    reason = I.guard(r.command)
+    check "guard accepts the generated row #{seed}/#{r.index} (#{r.cell}) #{r.command.inspect}: #{reason.inspect}", reason.nil?
+  end
+end
+check "guard: every generated row was checked: #{checked}", checked == 4040
+
+# 門の外の形。閉じた表の文字列を、そのまま出す。回す順番の最後の 4 つの cell なので、割合は 101 件に 4 件。
+big = G.generate(754, 2000)
+gate_rows = big.select { |r| G.gate?(r.cell) }
+gate_forms = G::GATE_FORMS.values.flatten
+check "gate: the closed table", G::GATE_FORMS == {
+  "gate/ansi-dollar" => ["sort $'-o' out.txt in.txt", "sort in.txt $'-o' out.txt"],
+  "gate/dq-dollar" => ['sort "${zz:--o}" out.txt in.txt', 'sort in.txt "${zz:--o}" out.txt'],
+  "gate/assignment" => ["n=1", "cat in.txt; n=1", "n=1; cat in.txt", "n=1; m=2"],
+  "gate/substitution" => [%q(a=1; RANDOM='a[$(sort -o out.txt in.txt)1]'), %q(RANDOM='a[$(sort -o out.txt in.txt)1]')],
+}
+# 2000 件の digest も固定する。150 件に出ない形 (cell ごとの形、2 つ目のずらし、包み) まで、版に依らないことを見る。
+check "generator: the digest of seed 754 and count 2000 is the fixed value: #{G.digest(big)}",
+      G.digest(big) == "432a0d9dc782b1d02c3558b6a524c027bdcf7b3a3f2dd7d4119b0565c25ff240"
+check "gate: the four cells close the rotation", names.last(4) == G::GATE_FORMS.keys && G::GATE_FORMS.keys.all? { |n| G.gate?(n) } && !G.gate?("sort/glob")
+check "gate: 76 of 2000 rows and 4 of 150 rows: #{gate_rows.length}", gate_rows.length == 76 && rows.count { |r| G.gate?(r.cell) } == 4
+check "gate: a gate row is a string of the table, with nothing added", gate_rows.all? { |r| G::GATE_FORMS.fetch(r.cell).include?(r.command) }
+check "gate: 2000 rows reach every string of the table", gate_rows.map(&:command).uniq.sort == gate_forms.sort
+check "gate: no other row has an expansion", (big - gate_rows).none? { |r| r.command.match?(/[$`()]/) }
+gate_forms.each { |c| check "guard accepts the gate form #{c.inspect}: #{I.guard(c).inspect}", I.guard(c).nil? }
+# $ を含む形は、guard の表の形だけで出来ている (表の形を除くと、$ が残らない)。環境の変数は読まない。
+without_forms = ->(c) { I::DOLLAR_FORMS.keys.reduce(c) { |text, form| text.gsub(form) { "" } } }
+check "gate: every $ in the table belongs to a form of the guard's table", gate_forms.none? { |c| without_forms.call(c).include?("$") }
+check "gate: the only variable a form reads is the unset one of the guard's table",
+      gate_forms.flat_map { |c| c.scan(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/).flatten }.uniq == ["zz"]
+
+# operand。表が当てにする名前は、fixture の表にある。
+fixture = I::FIXTURE_FIRST.keys + I::FIXTURE_SCENES.keys + I::CANARIES.select { |c| c.zone == "fx" }.map(&:rel)
+check "operands: the names the tables rely on are in the fixture: #{(G::FIXTURE_PATHS - fixture).inspect}",
+      (G::FIXTURE_PATHS - fixture).empty? && (G::FIXTURE_DIRS - fixture.map { |p| File.dirname(p) }).empty?
+check "operands: the file slots name fixture files, and the dir slots name fixture dirs",
+      %w[file gfile rb fb].all? { |slot| (G::SLOTS.fetch(slot) - G::FIXTURE_PATHS).empty? } &&
+      (G::APPEND_FILES - G::FIXTURE_PATHS).empty? && (G::SLOTS.fetch("dir") + G::CD_DIRS - G::FIXTURE_DIRS).empty?
+check "operands: relative names only", G::SLOTS.values.flatten.none? { |w| w.start_with?("/", "~") || w.include?("..") }
+# 読むだけの command の語は、2000 件で全部出る (cd は、包みと手で置いた形から出る)。
+tools = G::CELLS.find { |c| c.name == "plain/opt-after" }.bases.map(&:name)
+plain = big.select { |r| r.cell.start_with?("plain/") }.map { |r| r.command.split(/[ '"]/) }
+check "plain: 2000 rows reach every tool of the table: #{tools.length}",
+      tools.length == 37 && tools.uniq == tools && (tools + ["cd"]).all? { |tool| plain.any? { |words| words.include?(tool) } }
+
+# 変異の表の形。
+check "mutations: the twelve names, without duplicates: #{M.names.inspect}",
+      M.names == %w[plain-read-sort uniq-output-operand uniq-spec-drift find-delete git-output-option brace-expansion-off
+                    glob-floor-off dq-dollar assignment-only-read custom-path-floor-off rg-glob-word-any caret-not-glob]
+tool_names = I::REQUIRED_TOOLS.keys + I::OPTIONAL_TOOLS.keys
+M::TABLE.each do |m|
+  check "mutation #{m.name}: replaces a text with a different one", m.from.is_a?(String) && !m.from.empty? && m.to.is_a?(String) && m.from != m.to
+  variant = I.variant(m.variant)
+  check "mutation #{m.name}: has an expectation (invariant, tools, variant, how it shows)",
+        %w[I1 I2].include?(m.invariant) && (m.needs - tool_names).empty? && !variant.nil? && M::EXPECTATIONS.include?(m.expect) &&
+        !m.reopens.to_s.empty?
+  # 既定でない変種だけで出る違反は、反例でなく、人に出すものになる。
+  check "mutation #{m.name}: the expectation fits the variant", !variant.nil? && variant.default == (m.expect == "violation")
+  measurable = !m.witnesses.empty? && m.unmeasurable.nil?
+  unmeasurable = m.witnesses.empty? && m.unmeasurable.is_a?(String) && !m.unmeasurable.empty?
+  check "mutation #{m.name}: has witnesses, or a reason why it cannot be measured", measurable ^ unmeasurable
+  m.witnesses.each { |w| check "mutation #{m.name}: guard accepts the witness #{w.inspect}: #{I.guard(w).inspect}", I.guard(w).nil? }
+end
+check "mutations: fetch returns the row, and the only tool a mutation needs is rg",
+      M.fetch("find-delete").name == "find-delete" && M::TABLE.flat_map(&:needs).uniq == ["rg"] && M.fetch("rg-glob-word-any").needs == ["rg"]
+check "mutations: caret-not-glob is watched in zsh-extendedglob, as a finding for a human",
+      M.fetch("caret-not-glob").variant == "zsh-extendedglob" && M.fetch("caret-not-glob").expect == "non-default-variant"
+
+# 変異の当て方。小さな代役の source で見る (repo の分類器には当てない)。
+standin = ->(m, times) { "module Standin\n  A = 1\n#{"  x = #{m.from}\n" * times}end\n" }
+M::TABLE.each do |m|
+  source = standin.call(m, 1).freeze
+  check "apply #{m.name}: the one occurrence is replaced, and nothing else",
+        M.apply(source, m.name) == "module Standin\n  A = 1\n  x = #{m.to}\nend\n" && source == standin.call(m, 1)
+  check "apply #{m.name}: no occurrence is an error", raises.call(M::Error) { M.apply(standin.call(m, 0), m.name) }
+  check "apply #{m.name}: two occurrences are an error", raises.call(M::Error) { M.apply(standin.call(m, 2), m.name) }
+end
+mini = <<~'SOURCE'
+  module SkillBehaviorClassifier
+    PLAIN_READ = %w[cat md5sum].freeze
+    GLOB_CHAR = /[*?\[^]/.freeze
+  end
+SOURCE
+check "apply: a small stand-in classifier gets sort in its plain list",
+      M.apply(mini, "plain-read-sort") == mini.sub("md5sum].freeze") { "md5sum sort].freeze" } && mini.include?("md5sum].freeze")
+check "apply: the backslash of a replacement is kept as it is", M.apply(mini, "caret-not-glob").include?('GLOB_CHAR = /[*?\[]/.freeze')
+check "apply: a mutation whose text is not in the source is an error", raises.call(M::Error) { M.apply(mini, "find-delete") }
+check "apply: an unknown name is an error", raises.call(M::Error) { M.apply(mini, "no-such-mutation") } && raises.call(M::Error) { M.fetch(nil) }
+check "apply: a source that is not a string is an error", raises.call(M::Error) { M.apply(nil, "plain-read-sort") }
+message = begin
+  M.apply(mini, "no-such-mutation")
+rescue M::Error => e
+  e.message
+end
+check "apply: the error for an unknown name lists the known ones and does not echo the given one: #{message.inspect}",
+      message.include?("plain-read-sort") && message.include?("caret-not-glob") && !message.include?("no-such-mutation")
+count_message = begin
+  M.apply(standin.call(M.fetch("find-delete"), 2), "find-delete")
+rescue M::Error => e
+  e.message
+end
+check "apply: the error says how many times the text occurs: #{count_message.inspect}",
+      count_message == "mutation find-delete does not apply: the text to replace occurs 2 times (expected 1)"
+# 入口は ProbeClassifier::Error を exit 2 にする。
+check "apply: the error is a ProbeClassifier::Error", M::Error.ancestors.include?(ProbeClassifier::Error) && M::Error != ProbeClassifier::Error
+check "occurrences are counted without overlap", M.occurrences("aaaa", "aa") == 2 && M.occurrences("abab", "ab") == 2 && M.occurrences("x", "ab") == 0
+
+exit(@failed.zero? ? 0 : 1)
+RUBY
+echo "ok T7 (generator and mutations: determinism, cells, guard, gate forms, apply)"
 
 echo "probe-classifier-invariants-test: ok"
