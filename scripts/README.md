@@ -262,7 +262,7 @@ usage: probe-classifier-invariants.sh --preflight [--out DIR]
 
 - network は使わない。macOS の `sandbox-exec` と `git` が要る。sandbox の中の session では `sandbox-exec` を入れ子に
   適用できないので、exit 2 で command を走らせない (素の実行には戻らない)。memory と時間の上限は、呼ぶ側が
-  `personal-safe-run` で付ける。`--out` は git の worktree の外に限る。
+  `personal-safe-run` で付ける。`--out` は git の worktree の外の、書ける所に限る。
 - exit code は 0 (確かめた反例なし)、1 (既定の変種で確かめた反例あり)、2 (使い方の誤りと、走らせる前の失敗)、
   3 (人に出すものだけがある)。2 には、1 件の command の guard の拒否、分類の失敗、当たらない変異、preflight の失敗が入る。
   生成の入口は、`--out` に `results.json` と `corpus.jsonl` を書く。生成した command を多数走らせる試行は、手元で走らせる

@@ -13,6 +13,7 @@
 #   - 出す形は、全件が Isolation.guard を通る形に限る (self-test が確かめる)。guard が拒む語 (set、kill、gh、
 #     while など) を、operand の名前や pattern に使わない。
 #   - operand は fixture の中の相対 path だけ。名前は isolation.rb の fixture の表にある (FIXTURE_PATHS)。
+#     包みの cd で下の dir に移る行は、その dir に在る名前で埋める (LOCAL_FILES)。
 #   - 乱数は SHA-256 から取る整数だけ。shuffle、sample、rand、Object#hash、時刻、pid は使わない。
 
 require "digest"
@@ -97,21 +98,47 @@ module ProbeClassifier
     }.freeze
     # 2 つ目のずらしで、最初の file の語を置き換える形。
     DECOR_SLOTS = %w[file gfile rb].freeze
+    # 2 つの表の最後の行は、包みの cd で移った先の名前 (LOCAL_FILES)。
     GLOB_OF = {
       "in.txt" => ["in.tx?", "i*.txt", "[i]n.txt"], "x" => ["?", "[x]"], "README.md" => ["README.*", "R*.md"],
       "lib/median.rb" => ["lib/*.rb", "lib/median.r?", "*/median.rb"], "pair/a.txt" => ["pair/a.*", "pair/*"],
       "canary_begin.rb" => ["canary_*.rb"],
+      "median.rb" => ["*.rb", "median.r?"], "a.txt" => ["a.*", "a*"], "b.txt" => ["b.*", "[b].txt"],
     }.freeze
     BRACE_OF = {
       "in.txt" => ["{in,in}.txt", "{in.txt,x}"], "x" => ["{x,x}", "{x,in.txt}"], "README.md" => ["{README,README}.md"],
       "lib/median.rb" => ["lib/{median,median}.rb"], "pair/a.txt" => ["pair/{a,b}.txt"],
       "canary_begin.rb" => ["{canary_begin,canary_begin}.rb"],
+      "median.rb" => ["{median,median}.rb"], "a.txt" => ["{a,a}.txt"], "b.txt" => ["{b,b}.txt"],
     }.freeze
+    # 移った先で使う表。{in.txt,x} の x は root にしか無いので外す。
+    LOCAL_BRACE_OF = BRACE_OF.merge("in.txt" => ["{in,in}.txt"]).freeze
     # 表が当てにする、fixture の中の名前 (isolation.rb の FIXTURE_FIRST、FIXTURE_SCENES、canary の file)。
     # self-test が、fixture の表と突き合わせる。sortopt と pre の - で始まる名前は、glob の展開でだけ届く。
     FIXTURE_PATHS = %w[README.md in.txt x lib/median.rb pair/a.txt pair/b.txt sortopt/in.txt pre/a.txt plain/a.txt
                        cat bin/grep canary_begin.rb].freeze
     FIXTURE_DIRS = %w[. lib pair plain sortopt pre].freeze
+
+    # --- 包みの cd で移った先の operand ------------------------------------------------------------
+    # 下の dir ごとの、そこに在る file。root からの名前 (README.md、lib/median.rb) は、移った先には無い。
+    # - で始まる名前は持たない (字では出さず、glob の展開でだけ届かせる)。
+    LOCAL_FILES = {
+      "lib" => %w[median.rb], "pair" => %w[a.txt b.txt], "plain" => %w[a.txt], "sortopt" => %w[in.txt], "pre" => %w[a.txt],
+    }.freeze
+    # 移った先で @名前 を埋める表。path を指す @名前 だけを、その dir の名前に替える。
+    # newname は、fixture の file と同じ名前 (x) を外す (self-test が、移った先に無い名前を見分けられるように)。
+    LOCAL_SLOTS = LOCAL_FILES.map do |dir, files|
+      pairs = files.length > 1 ? ["{#{files.join(',')}}"] : []
+      [dir, SLOTS.merge(
+        "file" => files, "gfile" => files, "fb" => files, "out" => ["out.txt", files.last],
+        "dir" => ["."], "path" => ["."] + files, "rgpath" => ["."] + files, "fname" => files + ["'*'"],
+        "gl" => ["*", "*", "./*", "^x", "?*", "[a-z]*"], "br" => files.map { |f| "{#{f},#{f}}" } + pairs,
+        "newname" => %w[v1 topic]
+      ).freeze]
+    end.to_h.freeze
+    # 表の形が字で持つと、移った先に在るかを見る名前 (fixture の file と dir。/ の無い語)。
+    # canary の cat と grep は、command の名前でもあるので入れない (./cat と bin/grep は、/ の規則が受ける)。
+    FIXTURE_NAMES = (%w[README.md in.txt x canary_begin.rb] + LOCAL_FILES.keys + LOCAL_FILES.values.flatten).uniq.freeze
 
     # 前置きの cell が前に置く語。分類器が読み飛ばす語 (PREFIX_WORDS)、引用した予約語、代入。
     # env done と 'fi' 'done' '}' は、後ろが何であっても read になる (既知の K4)。
@@ -130,6 +157,9 @@ module ProbeClassifier
     # 分類器の門が通す安全な redirect (SAFE_REDIRECTS と同じ 7 つ)。
     SAFE_REDIRECTS = ["2>/dev/null", "1>/dev/null", ">/dev/null", "&>/dev/null", "2>&1", "1>&2", ">&2"].freeze
     SIDES = ["cat x", "ls", "pwd", "true", "git status --short", "echo in.txt"].freeze
+    # dir を移る command の後ろに置ける部分。fixture の名前を持つ部分 (cat x、echo in.txt) を外す。
+    # x は、移った先に無い。echo は file を読まないが、名前を持たない形に揃える (self-test が、名前だけで見分けられるように)。
+    SIDES_ANYWHERE = SIDES.reject { |side| side.split.any? { |word| FIXTURE_NAMES.include?(word) } }.freeze
     FILTERS = ["wc -l", "head -n 1", "sort", "uniq -c", "cat"].freeze
     CD_DIRS = %w[. . lib pair plain sortopt pre].freeze
     NESTED_SHELLS = ["sh -c", "bash -c", "zsh -lc", "zsh -c"].freeze
@@ -802,10 +832,34 @@ module ProbeClassifier
 
       draw = Draw.new(seed, index)
       second = draw.weighted("second", SECOND_SHIFTS)
+      # 包みは、埋める前に決める。cd で下の dir に移る行は、operand を移った先の名前で埋める。
+      # 札ごとに別の乱数なので、決める順番を変えても、ほかの選択は変わらない。
+      kind = draw.weighted("wrap", WRAPS)
+      dir = kind == :cd ? cd_dir(entry, draw) : nil
       text = entry.is_a?(Base) ? shifted(cell.shift, entry, draw) : entry
-      command = fill(text, draw, second)
+      command = fill(text, draw, second, dir)
       command = lead_shift(command, second, draw)
-      Row.new(index: index, command: wrap(command, draw, cell), cell: cell.name)
+      Row.new(index: index, command: wrap(kind, command, draw, cell, dir), cell: cell.name)
+    end
+
+    # 包みの cd が移る先。表の形を移せないときは、. にする (cd DIR && の形は残し、operand は root のまま)。
+    def self.cd_dir(entry, draw)
+      dir = draw.pick("cd", CD_DIRS)
+      dir == "." || movable?(entry, dir) ? dir : "."
+    end
+
+    # 表の形 (埋める前) を、下の dir に移せるか。字で持つ fixture の名前が、移った先に在る形に限る。
+    # 移せない形は、/ を含む語 (lib/x、./cat、sed の番地) を持つ形、cd で始まる形、@rb を持つ形
+    # (rb の file は、root からの名前で指す)。/ の無い glob (*、*.txt) は、移った先で展開させる。
+    # ^x の x は名前に数えない (x の他の全部を指す glob で、移った先では scene の全部の file になる)。
+    # - に続く語も数えない (--pre は option の名前で、dir の pre ではない)。
+    def self.movable?(entry, dir)
+      text = entry.is_a?(Base) ? [entry.options.join(" "), entry.operands, entry.lead].join(" ") : entry
+      bare = text.gsub(/@[a-z]+/, " ")
+      return false if text.start_with?("cd ") || text.include?("@rb") || bare.include?("/")
+
+      words = bare.scan(/(?<![\^A-Za-z0-9_.-])[A-Za-z0-9_.]+/)
+      (words & (FIXTURE_NAMES - LOCAL_FILES.fetch(dir))).empty?
     end
 
     # 番号から、cell と、その中の形 (手で置いた形の文字列か、基本形) を決める。
@@ -882,28 +936,31 @@ module ProbeClassifier
 
     # --- @名前 を埋める -------------------------------------------------------------------------
     # second が :quote、:glob、:brace のときは、最初の file の語をその形に替える (2 つ目のずらし)。
-    def self.fill(text, draw, second)
+    # dir が下の dir のときは、その dir の表で埋める (包みの cd で移った先)。
+    def self.fill(text, draw, second, dir = nil)
+      local = LOCAL_SLOTS.key?(dir)
+      slots = local ? LOCAL_SLOTS.fetch(dir) : SLOTS
       pending = %i[quote glob brace].include?(second) ? second : nil
       # brace のある形には、brace を足さない (2 つの brace の間の字で、guard が入れ子と読むことがある)。
       pending = nil if pending == :brace && text.include?("{")
       text.gsub(/@([a-z]+)/) do
         slot = Regexp.last_match(1)
-        value = draw.pick("slot-#{slot}", SLOTS.fetch(slot))
+        value = draw.pick("slot-#{slot}", slots.fetch(slot))
         if pending && DECOR_SLOTS.include?(slot)
-          value = decorated(value, pending, draw)
+          value = decorated(value, pending, draw, local ? LOCAL_BRACE_OF : BRACE_OF)
           pending = nil
         end
         value
       end
     end
 
-    def self.decorated(value, kind, draw)
+    def self.decorated(value, kind, draw, braces)
       case kind
       when :quote
         mark = draw.pick("decor-mark", %w[' "])
         "#{mark}#{value}#{mark}"
       when :glob then draw.pick("decor-glob", GLOB_OF.fetch(value, [value]))
-      else draw.pick("decor-brace", BRACE_OF.fetch(value, [value]))
+      else draw.pick("decor-brace", braces.fetch(value, [value]))
       end
     end
 
@@ -934,10 +991,11 @@ module ProbeClassifier
     end
 
     # --- 包み -------------------------------------------------------------------------------
-    def self.wrap(command, draw, cell)
-      case draw.weighted("wrap", WRAPS)
+    # kind は包みの種類、dir は cd の移る先 (row が、埋める前に決める)。
+    def self.wrap(kind, command, draw, cell, dir)
+      case kind
       when :second then second_part(command, draw)
-      when :cd then "cd #{draw.pick('cd', CD_DIRS)} && #{command}"
+      when :cd then "cd #{dir} && #{command}"
       when :redirect then "#{command} #{draw.pick('redirect', SAFE_REDIRECTS)}"
       when :nested then nested(command, draw)
       when :xargs then appendable?(command) ? "echo #{draw.pick('append', APPEND_FILES)} | xargs #{command}" : command
@@ -948,7 +1006,10 @@ module ProbeClassifier
 
     def self.second_part(command, draw)
       side = draw.pick("side", SIDES)
-      case draw.number("second-form", 6)
+      form = draw.number("second-form", 6)
+      # dir を移る command の後ろに、fixture の名前を持つ部分 (cat x) は置かない。前に回す (0 と 1 を、2 と 3 に)。
+      form += 2 if form < 2 && first_word(command) == "cd" && !SIDES_ANYWHERE.include?(side)
+      case form
       when 0 then "#{command}; #{side}"
       when 1 then "#{command} && #{side}"
       when 2 then "#{side}; #{command}"

@@ -235,6 +235,9 @@ module ProbeClassifierInvariants
 
   # --out は git の worktree と .git の外で、無いか空の dir に限る (結果を tracked にしないため)。
   # probe-opencode-plugin.sh と同じ決まり。
+  # 書けない出力先も、ここで止める。結果を書くのは走らせた後なので、そこで初めて失敗すると、走らせた分が残らない。
+  # 見るのは、今ある最も近い dir の権限だけで、dir は作らない (止まる道では、何も書かない)。
+  # 後から変わった権限や、容量の不足は、書く所で分かる。
   def self.check_out!(out)
     path = expand_path("--out", out)
     raise Error, "--out is not a directory" if File.exist?(path) && !File.directory?(path)
@@ -243,6 +246,7 @@ module ProbeClassifierInvariants
     existing = path
     existing = File.dirname(existing) until File.exist?(existing)
     raise Error, "--out must be outside a git worktree" if inside_worktree?(File.join(File.realpath(existing), path[existing.length..-1]))
+    raise Error, "--out is not writable" unless File.directory?(existing) && File.writable?(existing) && File.executable?(existing)
 
     path
   end

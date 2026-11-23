@@ -206,7 +206,10 @@ guard は、形を表の右の文字列に置き換えてから、ほかの規�
 入れ子の command の引用の終わりに付いた形 (`sh -c 'cat x 2>&1'`) は外さない (`>/dev/null'x'` は `/dev/nullx` を指す)。
 sed と awk の script は、人が中身を確かめたものだけを表に持ち、単一引用の語の完全一致で外す。
 今は 2 つ。K2 の形 (`/a\/,/w lib/p`) と、番地の範囲を表示するだけの形 (`/apple/,/banana/p`)。
-表の語は、ほかの command の引数でも外れる。実在しうる path になる script は足さない。
+表の語は、ほかの command の引数でも外れる。番地で始まる script は、字面の上では絶対 path になる。
+足すのは、人が中身を確かめた literal だけにする。
+字面の path が、どの machine にも在りそうな場所 (`/etc/…`、`/tmp/…` など) を指す script は足さない。
+その path への書き込みが guard を通っても、一時 dir の外なので profile が拒む。
 
 ### preflight
 
@@ -381,7 +384,7 @@ operand、option、2 つ目のずらし、包みは、乱数で選ぶ。
 | 包み | 重み | 形 |
 | --- | --- | --- |
 | 2 つ目の部分 | 16 | `;`、`&&`、pipe、`\|\| true` で、読むだけの command をつなぐ |
-| `cd DIR &&` | 8 | fixture の dir に移ってから走らせる |
+| `cd DIR &&` | 8 | fixture の dir に移ってから走らせる (下の「移った先の operand」) |
 | 安全な redirect | 12 | 分類器の門が通す 7 つ (`2>/dev/null` など) を後ろに付ける |
 | 入れ子の shell | 14 | `sh -c`、`bash -c`、`zsh -lc`、`zsh -c` |
 | xargs | 5 | `echo FILE \| xargs` の後ろに置く |
@@ -389,6 +392,25 @@ operand、option、2 つ目のずらし、包みは、乱数で選ぶ。
 
 operand は、fixture の中の相対 path だけ。guard が拒む語 (`set`、`kill`、`gh`、`while` など) は、名前にも pattern にも使わない。
 生成した全件が guard を通ることは、self-test が 4 つの seed の 4040 行で確かめる。
+
+### 移った先の operand
+
+包みの `cd DIR &&` の DIR は、`.` か、fixture の下の dir (`lib`、`pair`、`plain`、`sortopt`、`pre`)。7 回のうち 5 回が下の dir になる。
+root からの名前 (`README.md`、`lib/median.rb`) は、移った先には無い。そのまま包むと、中の command は file を開けずに終わる。
+そこで、下の dir に移る行は、operand を、その dir に在る名前で埋める。
+
+- file を指す所は、その dir の file (`pair` なら `a.txt` と `b.txt`)。dir を指す所は `.`。
+- glob は `*`、`./*`、`^x`、`?*`、`[a-z]*`。`-` で始まる名前は字では出さず、glob の展開でだけ届かせる。
+- 表の形が字で持つ、`/` の無い glob (`*.txt` など) は、そのまま移った先で展開させる。
+
+表の形が、root からの名前を字で持つときは、移さずに `cd . &&` にする。
+当たるのは、`/` を含む語 (`lib/x`、`./cat`、sed の番地)、root の file と dir の名前 (`x`、`lib` など)、`cd` で始まる形。
+rb の file を指す所を持つ形も移さない (rb の file は、root からの名前で指す)。
+決めるのは、埋める前の表の形と、移る先だけ。出来た command の文字列は見ない。
+
+seed 754 の 2000 件では、包みが下の dir を引く行は 121 行で、102 行が移り、19 行が `cd . &&` になる。
+手で置いた `cd DIR && …` の形の後ろには、fixture の名前を持つ部分 (`cat x`、`echo in.txt`) をつながない。前に回す。
+self-test は、`cd DIR &&` で始まる行の後ろに、その dir に無い fixture の名前が残らないことを見る。
 
 ### 門の外の形
 
@@ -415,6 +437,7 @@ hash の先頭の 12 桁 (48 bit) を整数にし、候補の数で割った余�
 
 列の digest は、command を 1 行ずつ並べた text の SHA-256 で、`results.json` の `digest` に出る。
 self-test は、seed 754 の 150 件と 2000 件の digest を、固定値と比べる (CI の 2 つの Ruby で同じ値になることを見る)。
+seed 755 の 150 件の digest も固定する。seed が、cell の中の回り始めと、行ごとの乱数の両方に届くことを見るため。
 表か選び方を変えると、この値も変わる。
 
 ## 陽性の対照
@@ -482,6 +505,44 @@ dry-run では走らせていないので、`result` は `null` で、差分の�
 変異の見込み (`expected`) と違う変種で走らせると、差分の組が在っても違反は出ず、`missed` になりうる。
 結果を読むときは、`variant` と `expected` の `variant` を見比べる。
 
+`found` は、差分の組に違反が 1 つでもあれば付く。違反の原因が、当てた変異かどうかは見ない。
+command が差分の組に入るのは変異のためでも、書き込みは別の穴から起きることがある
+(`glob-floor-off` の差分の組に、下の K2 と同じ `fx/lib/p` の作成が入っていた)。
+結果を読むときは、束の path が、変異の狙い (上の表の witness が変える所) と合うかも見る。
+
+### 対照に要る件数
+
+対照には件数が要る。差分の組は列の一部で、違反になる形は、そのまた一部にしか出ない。
+件数が足りないと、差分の組が 0 件か、書かない形だけになり、`missed` になる。
+行は seed と番号だけで決まるので、最初の違反の行の番号より多い件数なら、`found` になる。
+
+次の表は、seed 754 で測った数。変種は、変異の表の「見る変種」。
+
+| 変異 | 2000 件の差分の組 | `found` になる最小の件数 |
+| --- | --- | --- |
+| `plain-read-sort` | 88 | 22 |
+| `uniq-output-operand` | 63 | 42 |
+| `uniq-spec-drift` | 11 | 50 |
+| `find-delete` | 15 | 146 |
+| `git-output-option` | 14 | 47 |
+| `brace-expansion-off` | 35 | 50 |
+| `glob-floor-off` | 172 | 161 |
+| `dq-dollar` | 19 | 99 |
+| `assignment-only-read` | 38 | 101 |
+| `custom-path-floor-off` | 56 | 92 |
+| `rg-glob-word-any` | 9 | 168 |
+| `caret-not-glob` | 23 | 363 |
+
+12 個とも `found` になるのは、363 件から。既定の 200 件では、`caret-not-glob` が `missed` になる。
+150 件では、`glob-floor-off` と `rg-glob-word-any` も `missed` になる。
+過去の版の対照 (cace62e を調べ、25a12ed と比べる) は、差分の組が 2000 件で 23。
+`zsh-extendedglob` では 363 件から `found` になり、`zsh` では 2000 件でも `missed` だった (既定の変種では出ない穴のため)。
+対照は、2000 件で走らせる。走るのは差分の組だけなので、変異 1 個が 6 秒から 50 秒で終わった。
+
+測った条件。分類器は 25a12ed の file (SHA-256 の先頭は `48f88ba5380ca216`)。
+生成器は、seed 754 の 2000 件の digest が `7cca8420b41387eb…` の版。道具の版は、上の「変異の表」と同じ。
+表か選び方を変えると列が変わるので、この数も測り直す。
+
 ## 数え方
 
 「反例 0 件」も「反例 N 件」も、そのままでは結果にならない。試行を走らせる前に、次を決めておく。
@@ -535,7 +596,7 @@ usage: probe-classifier-invariants.sh --preflight [--out DIR]
 | `--classifier FILE` | 調べる分類器。省くと、repo の今の分類器 |
 | `--baseline FILE` | 比べる相手の分類器。渡すと、差分の組だけを走らせる |
 | `--mutation NAME` | 調べる分類器の source に変異を 1 つ当てた版を調べる。比べる相手は、当てる前の版 |
-| `--out DIR` | 結果を書く dir。git の worktree の外で、無いか空の dir |
+| `--out DIR` | 結果を書く dir。git の worktree の外で、無いか空の dir。書けない所は受けない |
 
 `--baseline` と `--mutation` は、同時には渡せない。
 `--command` に足せるのは、`--variant`、`--classifier`、`--mutation` だけ。
@@ -566,17 +627,17 @@ personal-safe-run --max-footprint-mb 2048 --max-seconds 300 -- \
   scripts/probe-classifier-invariants.sh --out "$work/run" \
   --classifier "$work/classifier.rb" --seed 754 --count 150 --run
 
-# 変異の対照。差分の組だけを走らせる。
+# 変異の対照。差分の組だけを走らせる。件数は 2000 にする (少ないと missed になる。上の「対照に要る件数」)。
 personal-safe-run --max-footprint-mb 2048 --max-seconds 300 -- \
   scripts/probe-classifier-invariants.sh --out "$work/m1" \
-  --classifier "$work/classifier.rb" --mutation plain-read-sort --seed 754 --count 150 --run
+  --classifier "$work/classifier.rb" --mutation plain-read-sort --seed 754 --count 2000 --run
 
 # 過去の版の対照。調べるのは過去の版で、比べる相手は試行の対象の版。
 git show cace62e:scripts/lib/skill_behavior_classifier.rb > "$work/old.rb"
 personal-safe-run --max-footprint-mb 2048 --max-seconds 300 -- \
   scripts/probe-classifier-invariants.sh --out "$work/old" \
   --classifier "$work/old.rb" --baseline "$work/classifier.rb" \
-  --variant zsh-extendedglob --seed 754 --count 150 --run
+  --variant zsh-extendedglob --seed 754 --count 2000 --run
 
 # witness を直接確かめる。変異した版で分類し、read なら走らせる。
 personal-safe-run --max-footprint-mb 2048 --max-seconds 120 -- \
@@ -587,6 +648,7 @@ personal-safe-run --max-footprint-mb 2048 --max-seconds 120 -- \
 ### 1 件の command の順序
 
 1. `--out` を確かめる。git の worktree の外で、無いか空の dir に限る。
+   書けない所も、ここで exit 2 にする (下の「出力先の検査」)。
 2. command を分類する。分類は別の process で行う (分類器の file を取り替えて調べるため)。
    `--classifier` を省くと、repo の今の分類器を使う。`--mutation` があれば、変異を当てた版で分類する。
 3. `read` でなければ、走らせずに exit 0 で終わる。
@@ -610,6 +672,19 @@ personal-safe-run --max-footprint-mb 2048 --max-seconds 120 -- \
 10. `corpus.jsonl` と `results.json` を書く。
 
 command を走らせる道は、guard と profile の両方がかかる 1 つだけにしてある。dry-run は、隔離の session を開かない。
+
+### 出力先の検査
+
+`--out` は、どの入口でも、何かを読んだり走らせたりする前に確かめる。
+
+- git の worktree と `.git` の外であること。結果を tracked にしないため。
+- 無いか、空の dir であること。
+- 書けること。今ある最も近い dir (`--out` 自身か、その祖先) が、書ける dir であること。
+
+結果の file を書くのは、走らせた後である。書けない出力先を先に止めないと、走らせた分が残らない
+(2000 件の run は、約 100 秒かかる)。
+検査は権限を見るだけで、dir は作らない。止まる道では、何も書かない。
+後から変わった権限や、容量の不足は、書く所で分かる (exit 2)。
 
 走らせている間の途中経過は、stderr に出す (10 行ほど)。
 stdout には、件数、区分ごとの件数、対照の結果、行の coverage、束ねた反例と人に出すものを出す。
@@ -753,6 +828,9 @@ dry-run は何も走らせないので、1 にはならない。guard が拒ん�
 - 生成の件数の上限は 5000。子の出力の取り込みの上限は、生成の run でも足していない。
   生成器の operand は、fixture の小さい file だけを指す。
 - 生成の run が途中で止まると (中断、想定外の失敗)、file を書かない。走らせ直す。
+- 出力先の検査が見るのは、権限だけ。容量の不足などで書けない出力先は、走らせた後の、書く所で初めて分かる。
+- 包みの `cd` で移った先でも、名前の付いた glob (`*.md` など) は、合う file が無ければ展開されない。
+  その行は、`nomatch` か、file が無い失敗で終わる。
 
 範囲の外。
 

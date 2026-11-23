@@ -629,7 +629,8 @@ module ProbeClassifier
                      "RANDOM='a[$(sort -o out.txt in.txt)1]'" => "sort -o out.txt in.txt" }.freeze
     # sed と awk の script の表。番地の / で始まる script は絶対 path の規則に当たるので、人が中身を
     # 確かめた script だけを、単一引用の語の完全一致で外す。K2 (#756) の形と、番地の範囲を表示するだけの形。
-    # 表の語は、sed と awk のほかの command の引数でも外れる。実在しうる path になる script は足さない。
+    # 表の語は、sed と awk のほかの command の引数でも外れる。番地で始まる script は、字面の上では絶対 path になる。
+    # 足すのは、人が中身を確かめた literal だけ。どの machine にも在りそうな場所 (/etc/…、/tmp/…) を指す script は足さない。
     SCRIPT_TABLE = ['/a\/,/w lib/p', "/apple/,/banana/p"].freeze
     # xargs の、値をとる option。値の語を option と読み違えないために使う。
     XARGS_VALUE_OPTIONS = %w[-E -I -J -L -n -P -R -S -s -d -a].freeze
