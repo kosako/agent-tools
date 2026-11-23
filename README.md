@@ -13,7 +13,8 @@ repository です。
 pipeline の各 script は macOS 標準の Ruby だけで動きます(追加依存なし・ネットワーク不要)。
 例外は `scripts/probe-credential-isolation.sh` (`gh` / `git` / `curl` と network に依存)、
 `scripts/probe-skill-routing.sh` (`claude` / `codex` CLI と network に依存)、
-`scripts/probe-opencode-plugin.sh` (`opencode` CLI と起動時の npm install の network に依存) と、
+`scripts/probe-opencode-plugin.sh` (`opencode` CLI と起動時の npm install の network に依存)、
+`scripts/probe-classifier-invariants.sh` (macOS の `sandbox-exec` と `git` に依存。network は使わない) と、
 `personal-safe-gh` など一部の配布 script (`gh` / `codex` CLI や、`personal-usage-reader` の設定した実行ファイルに依存)。clone / pull には git を使います。
 
 ```sh
@@ -100,7 +101,8 @@ generated/
 scripts/          check-manifests / check-injection / check-credential-isolation /
                   check-skill-routing / build / register / connect / sync / status /
                   doctor / setup scripts と、実機観測の probe-credential-isolation /
-                  probe-skill-routing / probe-opencode-plugin harness。
+                  probe-skill-routing / probe-opencode-plugin harness、分類器の不変条件を
+                  隔離の中で確かめる probe-classifier-invariants。
                   usage は scripts/README.md を参照。
 docs/             boundary と policy documents。
 ```
