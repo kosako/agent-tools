@@ -279,6 +279,8 @@ module ProbeClassifier
     TEMPLATE_ENV = { "GIT_AUTHOR_DATE" => "2026-01-01T00:00:00Z", "GIT_COMMITTER_DATE" => "2026-01-01T00:00:00Z" }.freeze
     GIT_INIT = "git -c init.defaultBranch=main init -q ."
     GIT_COMMIT = 'git add -A . && git -c user.name=fixture -c user.email=fixture@example.invalid commit -q -m "$1"'
+    # index の stat を、今の file に合わせ直す。-q は、未 commit の変更があっても失敗にしない。
+    GIT_REFRESH = "git update-index -q --refresh"
 
     def self.write_files(dir, files)
       files.each do |rel, body|
@@ -452,21 +454,22 @@ module ProbeClassifier
         layout = new_layout("pci-template-")
         Isolation.link_tools(layout, @toolset)
         Isolation.write_files(layout.fx, FIXTURE_FIRST)
-        template_step(layout, "#{GIT_INIT} && #{GIT_COMMIT}", "first")
+        fixture_step(layout, "#{GIT_INIT} && #{GIT_COMMIT}", "first")
         Isolation.write_files(layout.fx, FIXTURE_SECOND)
-        template_step(layout, GIT_COMMIT, "second")
+        fixture_step(layout, GIT_COMMIT, "second")
         Isolation.write_files(layout.fx, FIXTURE_DIRTY)
         # git init が置く hook の見本は実行できる file なので、fixture に残さない。
         FileUtils.rm_rf(File.join(layout.fx, ".git", "hooks"))
         @template = layout
       end
 
-      def template_step(layout, script, message)
+      # fixture を用意する git の 1 歩。隔離の中 (profile と閉じた環境の下) で走らせる。
+      def fixture_step(layout, script, message)
         env = Isolation.child_env(layout).merge(TEMPLATE_ENV)
         run = run_argv(layout, ["/bin/sh", "-c", script, "sh", message], env: env, timeout: 30)
         return if run.exit_code == 0 && !run.timed_out
 
-        raise Error, "the fixture template could not be built (exit #{run.exit_code.inspect}): #{run.err.strip}"
+        raise Error, "the fixture could not be prepared (#{message}, exit #{run.exit_code.inspect}): #{run.err.strip}"
       end
 
       # command 1 件のための新しい一時 dir。template を fx に写し、その後で canary を書く。
@@ -475,6 +478,10 @@ module ProbeClassifier
         layout = new_layout("pci-")
         FileUtils.cp_r(File.join(@template.fx, "."), layout.fx, preserve: true)
         Isolation.link_tools(layout, @toolset)
+        # 写した file は inode と ctime が変わり、index の stat が全部古くなる。git diff は、古い stat を見ると
+        # GIT_OPTIONAL_LOCKS=0 でも index を書き直す (実測)。fixture の用意の跡を command の書き込みと
+        # 読み違えないように、走らせる前に揃える。
+        fixture_step(layout, GIT_REFRESH, "refresh")
         Isolation.install_canaries(layout)
         layout
       end
