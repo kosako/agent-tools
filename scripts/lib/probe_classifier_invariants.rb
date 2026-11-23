@@ -62,7 +62,7 @@ module ProbeClassifierInvariants
       --out         results.json を書く dir。git の worktree の外で、無いか空の dir
 
     exit: 0 = 確かめた反例なし (read でないので走らせなかったときも), 1 = 既定の変種で確かめた反例あり,
-          2 = 使い方の誤り・guard の拒否・preflight の失敗・中断, 3 = 人に出すものだけがある
+          2 = 使い方の誤り・guard の拒否・preflight の失敗・中断・想定外の失敗, 3 = 人に出すものだけがある
   TEXT
 
   # --- 引数 -------------------------------------------------------------------------------
@@ -113,11 +113,19 @@ module ProbeClassifierInvariants
     raise Error, "--variant must be one of #{Isolation::VARIANTS.map(&:name).join(', ')}" unless Isolation.variant(opts[:variant])
   end
 
+  # 引数の path を絶対 path にする。File.expand_path は、居ない user の ~name で ArgumentError を上げる。
+  # 使い方の誤りとして返す (受けないと、Ruby の既定の終了が「反例あり」と同じ exit 1 になる)。
+  def self.expand_path(option, value)
+    File.expand_path(value)
+  rescue ArgumentError
+    raise Error, "#{option} is not a usable path"
+  end
+
   # --out は git の worktree と .git の外で、無いか空の dir に限る (結果を tracked にしないため)。
   # probe-opencode-plugin.sh と同じ決まり。git の探索は親の env (GIT_CEILING_DIRECTORIES や GIT_DIR) で結果が
   # 変わるので使わず、symlink を解決した path について、祖先に .git があるかを filesystem で見る。
   def self.check_out!(out)
-    path = File.expand_path(out)
+    path = expand_path("--out", out)
     raise Error, "--out is not a directory" if File.exist?(path) && !File.directory?(path)
     raise Error, "--out must be empty or absent" if File.directory?(path) && !Dir.empty?(path)
 
@@ -168,7 +176,7 @@ module ProbeClassifierInvariants
   # 戻り値は { "version" => 整数, "class" => 区分, "sha256" => file の SHA-256 }。
   # 子が失敗したとき、版や区分が読めないときは Error (分類できなかった command を「read でない」と数えない)。
   def self.classify(file, command)
-    path = File.expand_path(file)
+    path = expand_path("--classifier", file)
     raise Error, "--classifier is not a readable file" unless File.file?(path) && File.readable?(path)
 
     real = File.realpath(path)
@@ -179,10 +187,11 @@ module ProbeClassifierInvariants
                                                                      timeout: CLASSIFY_TIMEOUT, stdin: input,
                                                                      unsetenv_others: true)
     unless result.completed && result.status&.success?
-      # 子の stderr の先頭だけを出す (端末でないとき、Ruby は例外の文言を先頭に出す)。分類器の file の場所は、
-      # 置き換えてから出す。
+      # 子の stderr の先頭だけを出す (端末でないとき、Ruby は例外の文言を先頭に出す)。分類器の file と、その dir
+      # (require_relative の失敗の文言に出る) の場所は、置き換えてから出す。
       head = result.err.to_s.scrub("?").lines.first(2).join
       [real, path].uniq.each { |p| head = head.gsub(p) { "<classifier>" } }
+      [real, path].map { |p| File.dirname(p) }.uniq.each { |d| head = head.gsub(d) { "<classifier-dir>" } unless d == "/" }
       raise Error, "the classifier could not be run (exit #{result.status&.exitstatus.inspect}): #{one_line(head)}"
     end
 
@@ -207,11 +216,13 @@ module ProbeClassifierInvariants
   end
 
   # 隔離の session を開いて block に渡し、終わりに必ず閉じる (一時 dir を残さない)。
-  # 途中の SystemCallError の文言は一時 dir の path を含みうるので、置き換えてから Error にする。
+  # 途中の例外の文言は一時 dir の path を含みうるので、session が在る間に置き換えてから Error にする。
   def self.with_session
     session = Isolation::Session.open
     yield session
-  rescue SystemCallError => e
+  rescue Error, ProbeClassifier::Error
+    raise
+  rescue StandardError => e
     raise Error, one_line(redact("#{e.class}: #{e.message}", session))
   ensure
     session&.close
@@ -276,13 +287,19 @@ module ProbeClassifierInvariants
     end
   end
 
+  # 報告の 1 行。path は command が作った名前を含むので、制御の字を置き換える (改行を含む名前が、報告の行と
+  # 同じ形の行を作らないように)。
+  def self.report_line(text, session)
+    redact(text, session).gsub(/[\x00-\x1f\x7f]/, "?")
+  end
+
   def self.report(data, session)
     puts "command: class=read variant=#{data['variant']} runs=#{data['runs'].length} " \
          "violations=#{data['violations'].length} human=#{data['human'].length}"
-    data["violations"].each { |v| puts redact("  #{v['invariant']} #{v['kinds'].join(',')} #{v['paths'].join(' ')}", session) }
+    data["violations"].each { |v| puts report_line("  #{v['invariant']} #{v['kinds'].join(',')} #{v['paths'].join(' ')}", session) }
     data["human"].each do |h|
       detail = (h["paths"] || h["names"] || h["why"] || []).join(" ")
-      puts redact("  human #{h['reason']} #{detail}".rstrip, session)
+      puts report_line("  human #{h['reason']} #{detail}".rstrip, session)
     end
   end
 
@@ -306,6 +323,10 @@ module ProbeClassifierInvariants
     2
   rescue Interrupt
     warn "error: interrupted"
+    2
+  rescue StandardError => e
+    # 想定していない失敗。exit 1 は「反例あり」の意味なので、Ruby の既定の終了 (exit 1 と backtrace) には任せない。
+    warn "error: unexpected failure: #{one_line(redact("#{e.class}: #{e.message}"))}"
     2
   end
 end

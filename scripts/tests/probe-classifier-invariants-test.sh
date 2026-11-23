@@ -1,19 +1,23 @@
 #!/bin/sh
-# 分類器の不変条件の試行 (#754) の self-test。隔離 (scripts/lib/probe_classifier/isolation.rb)、判定
-# (scripts/lib/probe_classifier/judge.rb)、入口 (scripts/probe-classifier-invariants.sh) を見る。
+# 分類器の不変条件の試行 (#754) の self-test。隔離、判定、入口の 3 つを見る。
+# 対象は scripts/lib/probe_classifier/ の isolation.rb と judge.rb、scripts/probe-classifier-invariants.sh。
 # - T1: 隔離の、sandbox の要らない部分。profile の文字列の形、閉じた環境の表、変種・canary・道具の表、guard が
-#   通す形と拒む形、出力の path の置き換え、group の空の確かめ、隔離を組めないときの理由。
-# - T2: 隔離の、sandbox の要る部分。否定の検査 (一時 dir の外への書き込み、HOME の代役の読み取り、127.0.0.1 への
-#   接続、allowlist の外の起動、外の process への signal、親の環境の引き継ぎ、終わらない command) は、どれも対照
-#   (相手を許した profile で同じ probe が通る) と組にする。
+#   通す形と拒む形、出力の path の置き換え、group の空の確かめ、隔離を組めないときの理由、preflight の結論の組み方。
+# - T2: 隔離の、sandbox の要る部分。否定の検査は、どれも対照 (相手を許した profile で同じ probe が通る) と組にする。
+#   否定の検査は 7 つ。一時 dir の外への書き込み、HOME の代役の読み取り、127.0.0.1 への接続、allowlist の外の起動、
+#   外の process への signal、親の環境の引き継ぎ、終わらない command。
+#   拒否を 1 つ緩めた profile で、その検査が通らないことも見る。
 #   ほかに、sandbox を外した profile での書き込みの閉じ方、表の道具と canary の動き、変種ごとの shell の設定、
-#   command ごとの新しい一時 dir を見る。
+#   command ごとの新しい一時 dir、検査した profile のまま command が走ることを見る。
 # - T3: 判定の、sandbox の要らない部分。手で変えた tree の差分の種類、終わり方の区分、拒まれた起動の拾い方、
 #   違反と人に出すものの分け方、確かめ直し (走らせる部分を差し替えて見る)。
 # - T4: 判定の、sandbox の要る部分 (witness)。書き込む形が I1、canary を走らせる形が I2、書かない形が差分なしに
 #   なること、表に無い program の起動が人に出ること、書き込みの後に終わらない形でも I1 が出ること。
-# - T5: 入口の、sandbox の要らない部分。引数の誤り、出力先の検査、guard の拒否、read でない command。
+# - T5: 入口の、sandbox の要らない部分。引数の誤り、出力先の検査、guard の拒否、read でない command、
+#   preflight が通らないときと想定外の失敗のときの exit 2。
 # - T6: 入口の、sandbox の要る部分。--preflight と、read の command を走らせた結果の file。
+#   入口を process として呼ぶのは 2 回 (--preflight と、書き込む command)。preflight は 1 回に 3 秒ほどかかる。
+#   残りの終わり方は、preflight を「通った」結果に差し替え、同じ process の中から入口を呼んで見る。
 # sandbox を適用できない環境 (入れ子の sandbox の中など) では T2・T4・T6 を skip して 1 行出す。CI
 # (GITHUB_ACTIONS=true) では skip せず失敗にする。skip の判断は T2 の中の 1 か所で行う。
 # 走らせる command は、この test の一時 dir の中で、相対 path だけを使う。否定の検査の probe だけは、同じ一時 dir に
@@ -165,6 +169,12 @@ check "tools: a /bin/sh script is accepted", I.resolve_candidate(sh_tool, []) ==
 check "tools: a tool under HOME is not added", I.resolve_candidate(sh_tool, [tmp]) == [nil, "under-home"]
 check "tools: a missing candidate", I.resolve_candidate(File.join(tmp, "absent"), []) == [nil, "not-found"]
 
+# fixture の file の mtime は、過去の決まった時刻 (git の結果が、template を作ってからの時間に依らないように)。
+Dir.mkdir(File.join(tmp, "t1-files"))
+I.write_files(File.join(tmp, "t1-files"), "a.txt" => "a\n", "sub/b.txt" => "b\n")
+check "fixture: files are written with the fixed mtime in the past",
+      I::FIXTURE_MTIME == Time.utc(2026, 1, 1) && %w[a.txt sub/b.txt].all? { |f| File.mtime(File.join(tmp, "t1-files", f)) == I::FIXTURE_MTIME }
+
 # guard が通す形。手書きの受け入れの command (K1 から K4 を含む) と、生成器が出す門の外の形。
 accept = [
   "uniq in.txt -c", %q(sed -n '/a\/,/w lib/p' x), "git branch --format --list x", "sort -o out.txt in.txt",
@@ -174,6 +184,9 @@ accept = [
   "find . -name x -exec cat {} +", "find . -name '*.rb'", "echo in.txt | xargs -n 1 cat", "echo in.txt | xargs grep -o a",
   "tail -n 2 in.txt | cut -f1", "tail +2 in.txt", "grep -F a in.txt | tail -n 1", "cat lib/*.rb", "cat x/{a,b}.md", "sort {-o,out.txt} in.txt",
   "git -C . status", "git log --format=%H", "cat {in,x}.txt", "echo in.txt | xargs -I{} cat {}", "uniq - -c", "cat in.txt; cat x", %q(ruby -e 'puts [1, 2].sum'), "echo ^in.txt",
+  # 入れ子の shell の、command の文字列より後ろの option は、shell の option ではない。\; は find の終わりの印。
+  "sh -c 'cat -n in.txt'", "bash -c 'uniq -c in.txt' && cat x", "zsh -lc 'tail -n 1 in.txt' 2>&1", "find . -name x -exec cat {} \\;",
+  "cd lib", "pushd lib && cat median.rb", "cat x 2>/dev/null && cat x >&2",
 ]
 accept.each { |c| check "guard accepts #{c.inspect}: #{I.guard(c).inspect}", I.guard(c).nil? }
 
@@ -192,24 +205,47 @@ reject = {
   # / の前が名前の字でない形。
   "cat x >/x" => "abs-path", "cat </x" => "abs-path", "cat ''/etc" => "abs-path", "cat {x,}/etc" => "abs-path",
   "cat {a,b}/x" => "abs-path", "cat \"/etc/hosts\"" => "abs-path", "cat '/etc/hosts'" => "abs-path", "cat x\t/etc/hosts" => "abs-path",
-  "cat a:/b" => "abs-path", "cat \\/etc/hosts" => "abs-path", "cat `pwd`/x" => "abs-path", "sort --output=/abs in.txt" => "abs-path",
+  "cat a:/b" => "abs-path", "cat \\/etc/hosts" => "abs-path", "sort --output=/abs in.txt" => "abs-path",
   "x=/abs cat" => "abs-path", "cat x > /dev/null" => "abs-path", "cat x >/dev/nullx" => "abs-path", "cat x 2>/dev/null/x" => "abs-path",
   "sort $'-o'/abs in.txt" => "abs-path",
+  # 走るときに文字列を作る形 (backtick と括弧)。位置に依らない。括弧は、zsh の glob の修飾子 (親の dir を指せる) を含む。
+  "cat `pwd`/x" => "backtick", "cd .`echo .` && cd .`echo .` && pwd && uniq - -c" => "backtick", "cat `echo x`" => "backtick",
+  "cd x(:A:h:h:h) && pwd && uniq - -c" => "paren", "(cd lib; cat median.rb)" => "paren", "cat <(cat x)" => "paren",
+  "cat '(x)'" => "paren", "cat x\\(:A:h\\)" => "paren",
+  # && のほかの & (後ろで走らせる形、|&、表に無い fd への複製)。
+  "cat in.txt &" => "ampersand", "uniq in.txt -c >/dev/null 2>&1 &" => "ampersand", "cat x & cat x" => "ampersand",
+  "cat x |& cat" => "ampersand", "cat x >&3" => "ampersand", "cat x &&& cat x" => "ampersand", "coproc cat in.txt" => "background",
   # 短い option に付いた path、zsh の =name、brace と glob が作る ..。
   "git -C/x status" => "option-path", "sort -o/abs in.txt" => "option-path", "cat =ls" => "equals-word",
+  "echo ={cat,ruby}" => "equals-word", "uniq ={cat,canary}" => "equals-word", "cat ''=ls" => "equals-word", "cat x = y" => "equals-word",
   "cat .{.,a}" => "brace-dot", "cat {.,x}./y" => "brace-dot", "cat {a,}." => "brace-dot", "cat x/{..,y}" => "dotdot",
+  "cat .{./x,y}" => "brace-dot", "cat {x/.,y}./z" => "brace-dot", "cat .{,a}." => "brace-dot", "cat .{a,,b}." => "brace-dot",
   "tail -{f,F} x" => "brace-glued", "xargs -{p,t} cat" => "brace-glued", "{ta,x}il -f x" => "brace-glued",
   "ta{il,x} -f x" => "brace-glued", "{g,x}{h,y} api" => "brace-glued", "tail '-'{f,F} x" => "brace-glued",
   "tail -{f,{F,x}} x" => "brace-glued",
   "cd .?/marks && uniq - -c" => "glob-dot", "cat .*" => "glob-dot", "cat ./.*/x" => "glob-dot", "cat '.'*" => "glob-dot",
+  "cat .[.]/x" => "glob-dot",
   # 語の位置に依らない形 (前置き、xargs、find -exec、brace、入れ子の shell)。
   "xargs tail -f" => "tail-follow", "find . -exec tail -F {} +" => "tail-follow", "env tail -f x" => "tail-follow",
   "{tail,-f} x" => "tail-follow", "sh -c 'tail -f x'" => "tail-follow", "sh -c \"sh -c 'tail -f x'\"" => "tail-follow",
   "zsh -lc \"gh api x\"" => "gh", "git -C . remote show x" => "git-remote", "xargs -0p cat" => "xargs-tty",
   "xargs -n 1 -p cat" => "xargs-tty", "xargs -E eof -o cat" => "xargs-tty", "xargs -I {} -p cat {}" => "xargs-tty",
-  "cd fx tools" => "cd-args", "builtin cd fx tools" => "cd-args",
+  "cd fx tools" => "cd-args", "builtin cd fx tools" => "cd-args", "pushd fx tools && pwd" => "cd-args",
+  "chdir fx tools && pwd" => "cd-args", "popd fx tools" => "cd-args",
+  # 引用の断片や \ をつないで出来る、入れ子の command (断片ごとに見ると漏れる)。
+  "sh -c 'tail '\"-f x\"" => "tail-follow", "sh -c tail\\ -f\\ x" => "tail-follow", "sh -c 'g'\"h api x\"" => "gh",
+  # shell の設定を変える形。job control を立てると、子が process group を抜ける。入れ子の shell の option は -c と -lc だけ。
+  "set -m; cat x" => "shell-option", "set -o monitor; cat x" => "shell-option", "setopt monitor; cat x" => "shell-option",
+  "cat x; set +m" => "shell-option", "shopt -s nullglob; cat x" => "shell-option", "emulate sh; cat x" => "shell-option",
+  "sh -mc 'cat x'" => "shell-option", "bash -ic 'cat x'" => "shell-option", "sh -o monitor -c 'cat x'" => "shell-option",
+  "sh -c -m 'cat x'" => "shell-option", "zsh +m -c 'cat x'" => "shell-option", "env bash -i" => "shell-option",
+  "sh -c 'set -m; cat x'" => "shell-option", "sh -c set\\ -m" => "shell-option", "eval 'se''t -m'" => "shell-option",
+  "s''et -m" => "shell-option", "find . -exec sh -c 'cat x' \\; -exec sh -m x \\;" => "shell-option",
+  "SHELLOPTS=monitor sh -c 'cat x'" => "shell-option", "env SHELL''OPTS=monitor sh -c 'cat x'" => "shell-option",
+  "export BASHOPTS; cat x" => "shell-option",
   # 外の process への signal。
   "kill -9 -1" => "signal", "echo 1 | xargs kill" => "signal", "sh -c 'kill -0 1'" => "signal", "killall zsh" => "signal",
+  "pkill -f x" => "signal",
   # 表に無い $ と、読めない形。
   "echo $(touch x)" => "dollar", "sort $'-O' out.txt in.txt" => "dollar", "sort \"${zz:-/x}\" in.txt" => "dollar",
   "" => "empty", "  " => "empty", "cat 'x" => "unbalanced-quote", "cat \u3042" => "non-ascii-or-control", "cat a\u0001b" => "non-ascii-or-control",
@@ -221,7 +257,9 @@ check "guard: the safe redirects are the seven of the classifier gate",
 # sed と awk の script の表は、単一引用の語の完全一致だけを外す。
 check "guard: a script outside the table is rejected", I.guard("sed -n '/x/p' in.txt") == "abs-path"
 check "guard: a script in the table is accepted", I.guard("sed -n '/x/p' in.txt", scripts: ["/x/p"]).nil?
-check "guard: the table matches the whole quoted word", I.guard("sed -n '/x/p;w /abs' in.txt", scripts: ["/x/p"]) == "abs-path"
+# 表の script に続きを足した語と、引用の外の同じ字は、外さない (続きの側に絶対 path の無い形で見る)。
+check "guard: the table matches the whole quoted word", I.guard("sed -n '/x/p;w out' in.txt", scripts: ["/x/p"]) == "abs-path"
+check "guard: the table does not match outside the quotes", I.guard("sed -n /x/p in.txt", scripts: ["/x/p"]) == "abs-path"
 check "guard: the rest of the command is still checked", I.guard("sed -n '/x/p' ../in.txt", scripts: ["/x/p"]) == "dotdot"
 check "guard: the dollar table is closed", I.guard("sort $'-o' out.txt in.txt", dollar_forms: []) == "dollar"
 
@@ -241,6 +279,18 @@ check "run_command refuses an unknown variant", raised.call { session.run_comman
 home = session.deny_read.first
 text = "a #{layout.base}/fx b #{layout.alias_base}/fx c #{session.root} d #{home}/z e \xff".b
 check "redact: temp dir and HOME paths are replaced", session.redact(text, layout) == "a <T>/fx b <T>/fx c <R> d <HOME>/z e ?"
+
+# preflight の結論。通らない検査が 1 つでもあれば ok は false で、理由に検査の名前が出る (path は置き換える)。
+passing = I::Check.new(name: "write-outside", ok: true, negative: {}, control: {})
+failing = I::Check.new(name: "network", ok: false, negative: { connected: true, at: "#{layout.base}/fx" }, control: { connected: true })
+concluded = I.conclude(session, [passing, failing], layout)
+check "conclude: one failed check fails the preflight: #{concluded.ok.inspect}",
+      concluded.ok == false && concluded.unavailable == false && concluded.checks == [passing, failing]
+check "conclude: the reason names the check and carries no temp dir path: #{concluded.reasons.inspect}",
+      concluded.reasons.length == 1 && concluded.reasons[0].start_with?("network: negative=") &&
+      concluded.reasons[0].include?("<T>/fx") && !concluded.reasons[0].include?(layout.base)
+all_passing = I.conclude(session, [passing])
+check "conclude: every check passing is ok", all_passing.ok == true && all_passing.reasons.empty? && all_passing.unavailable == false
 
 # group の空の確かめ。生きている group は「空でない」、終わった group は「空」。
 group = I.live_group_control
@@ -280,6 +330,9 @@ Dir.mkdir(File.join(fake_home, "under"))
 I.with_parent_env("HOME" => fake_home) do
   under = I::Session.open(root: File.join(fake_home, "under"))
   check "setup: a temp root under HOME is a problem", under.problems.include?("the temp root is under the real HOME")
+  # HOME を別の所に向けても、passwd の HOME (本物) は読み取りを拒む一覧に残る。
+  check "setup: the passwd HOME stays read-denied when HOME points elsewhere: #{under.deny_read.length}",
+        under.deny_read.include?(File.realpath(Etc.getpwuid(Process.uid).dir)) && under.deny_read.include?(File.realpath(fake_home))
   pre = I.preflight(under)
   check "preflight: setup problems fail without launching", pre.ok == false && pre.unavailable == false && pre.checks.empty? &&
                                                             pre.reasons == under.problems && Dir.children(File.join(fake_home, "under")).empty?
@@ -366,9 +419,47 @@ home = session.deny_read.first
 check "preflight results carry no temp dir or HOME path", [pre.checks.inspect, pre.reasons.inspect].none? { |s| s.include?(session.root) || s.include?(home) }
 check "preflight cleans up its temp dirs", Dir.children(session.root).all? { |n| n.start_with?("pci-template-") }
 
+# 検査は、拒否が効いていない profile を見逃さない。session の profile を 1 か所ずつ緩め、その検査が通らないことを見る
+# (検査が ok を自己申告だけで true にしていないことの確かめ)。緩めるのは、この test の一時 dir の中の代役に対してだけ。
+weak_outside = File.realpath(Dir.mktmpdir("pci-outside-", session.root))
+weak_layout = session.prepare
+weakened = lambda do |change, &probe|
+  session.define_singleton_method(:profile_for) { |l, **kw| super(l, **change.call(kw)) }
+  begin
+    probe.call
+  ensure
+    session.singleton_class.send(:remove_method, :profile_for)
+  end
+end
+{
+  "write-outside" => [->(kw) { kw.merge(allow_write: [weak_outside]) }, -> { I.check_write_outside(session, weak_layout, weak_outside) }],
+  "read-home" => [->(kw) { kw.merge(deny_read_extra: []) }, -> { I.check_read_home(session, weak_layout, weak_outside) }],
+  "network" => [->(kw) { kw.merge(network: true) }, -> { I.check_network(session, weak_layout) }],
+  "exec-outside" => [->(kw) { kw.merge(exec_extra: [File.join(weak_outside, "fakecli")]) },
+                     -> { I.check_exec_outside(session, weak_layout, weak_outside) }],
+  "exec-fixture" => [->(kw) { kw.merge(exec_extra: [File.join(weak_layout.fx, "notcanary")]) }, -> { I.check_exec_fixture(session, weak_layout) }],
+  "exec-unlisted" => [->(kw) { kw.merge(exec_extra: [I::UNLISTED_PROGRAM]) }, -> { I.check_exec_unlisted(session, weak_layout) }],
+  "signal-outside" => [->(kw) { kw.merge(signals: true) }, -> { I.check_signal_outside(session, weak_layout) }],
+}.each do |name, (change, probe)|
+  weak = weakened.call(change, &probe)
+  check "a profile that does not deny fails the #{name} check: #{weak.ok.inspect}", weak.name == name && weak.ok == false
+end
+check "the weakened profile is gone after the checks", session.profile_for(weak_layout).include?("(deny network*)")
+session.cleanup(weak_layout)
+FileUtils.rm_rf(weak_outside)
+
 # 1 件の command を走らせる入口。block には走らせる前の layout が渡り、command ごとに新しい一時 dir になる。
+# run_command は、検査した profile と閉じた環境のまま走らせる (起動に profile や環境の上書きを渡さない)。
+launch_opts = []
+session.define_singleton_method(:launch) do |l, command, **opts|
+  launch_opts << opts
+  super(l, command, **opts)
+end
 seen_before = nil
 first = session.run_command("sort -o out.txt in.txt") { |l| seen_before = File.exist?(File.join(l.fx, "out.txt")) }
+session.singleton_class.send(:remove_method, :launch)
+check "run_command passes no profile or env override to the launch: #{launch_opts.map(&:keys).inspect}",
+      launch_opts.map { |o| o.keys.sort } == [%i[timeout variant]]
 check "run_command yields the layout before the launch", seen_before == false && File.file?(File.join(first.layout.fx, "out.txt"))
 check "run_command returns how the command ended",
       first.exit_code == 0 && first.signal.nil? && first.timed_out == false && first.group_empty == true &&
@@ -413,6 +504,8 @@ layout = session.prepare
 executables = Dir.glob(File.join(layout.fx, "**", "*"), File::FNM_DOTMATCH).select { |p| File.file?(p) && File.executable?(p) }
 check "the fixture has no executable file other than the canaries: #{executables.length}",
       executables.map { |p| p.sub("#{layout.fx}/", "") }.sort == %w[bin/grep cat]
+check "the fixture files keep the fixed mtime in each command's temp dir",
+      %w[README.md in.txt x lib/median.rb].all? { |f| File.mtime(File.join(layout.fx, f)) == I::FIXTURE_MTIME }
 variants.each do |name, (command, want)|
   run = session.launch(layout, command, variant: name)
   check "variant #{name}: #{run.exit_code.inspect} #{run.out.inspect} #{run.err.inspect}", want.call(run) && run.variant == name
@@ -475,6 +568,7 @@ I::ZONES.each { |z| FileUtils.mkdir_p(File.join(base, z)) }
 %w[keep.txt content.txt same-size.txt mode.txt touched.txt replaced.txt gone.txt type secret.txt sub/keep.txt
    quiet/keep.txt moded/keep.txt churn/keep.txt].each { |rel| put.call("fx/#{rel}", "body of #{File.basename(rel)}\n") }
 fx = File.join(base, "fx")
+Dir.mkdir(File.join(fx, "redone"))
 File.chmod(0o644, File.join(fx, "mode.txt"), File.join(fx, "secret.txt"))
 File.chmod(0o755, File.join(fx, "moded"))
 File.symlink("keep.txt", File.join(fx, "link"))
@@ -521,6 +615,10 @@ put.call("fx/new.txt", "new\n")
 put.call("fx/-c", "")
 File.delete(File.join(fx, "type"))
 Dir.mkdir(File.join(fx, "type"))
+# dir を消して、同じ名前、同じ時刻で作り直す (種類も mtime も同じで、実体だけが別)。
+Dir.rmdir(File.join(fx, "redone"))
+Dir.mkdir(File.join(fx, "redone"))
+File.utime(old, old, File.join(fx, "redone"))
 # 先の名前の長さは同じ (size では見分けられない)。
 File.delete(File.join(fx, "link"))
 File.symlink("mode.txt", File.join(fx, "link"))
@@ -549,7 +647,7 @@ expected = {
   "fx" => ["dir-mtime"], "fx/-c" => ["created"], "fx/.git/index" => ["content"], "fx/.git/refs/heads" => ["dir-mtime"],
   "fx/.git/refs/heads/x" => ["created"], "fx/churn" => ["dir-mtime"], "fx/content.txt" => ["content"],
   "fx/gone.txt" => ["deleted"], "fx/link" => ["content"], "fx/mode.txt" => ["mode"], "fx/moded" => ["mode"],
-  "fx/new.txt" => ["created"], "fx/quiet" => ["dir-mtime"], "fx/replaced.txt" => ["rewrite"],
+  "fx/new.txt" => ["created"], "fx/quiet" => ["dir-mtime"], "fx/redone" => ["rewrite"], "fx/replaced.txt" => ["rewrite"],
   "fx/same-size.txt" => ["content"], "fx/secret.txt" => secret, "fx/sub" => ["dir-mtime"], "fx/sub/new.txt" => ["created"],
   "fx/touched.txt" => ["rewrite"], "fx/type" => ["type"], "home" => ["dir-mtime"], "home/.cache" => ["created"],
   "home/.cache/x" => ["created"], "marks" => ["dir-mtime"], "marks/cli.codex.5" => ["created"],
@@ -621,8 +719,19 @@ denied = ->(err, code) { J.denied_items(fake.call(exit_code: code, err: err), na
   ["/bin/sh: date: command not found\n", 127] => ["date"],
   ["env: date: No such file or directory\n", 127] => ["date"],
   ["/bin/sh: line 0: exec: nosuch: not found\n", 127] => ["nosuch"],
+  # path の形の名前 (/ を含む) を、shell が起動できなかった行。実行できない file と、無い file。
+  ["zsh:1: permission denied: ./x\n", 126] => ["./x"], ["/bin/sh: ./x: Permission denied\n", 126] => ["./x"],
+  ["sh: ./x: Permission denied\n", 126] => ["./x"], ["zsh:1: no such file or directory: ./nosuch\n", 127] => ["./nosuch"],
+  ["/bin/bash: lib/nosuch: No such file or directory\n", 127] => ["lib/nosuch"], ["bash: ./nosuch: No such file or directory\n", 127] => ["./nosuch"],
+  ["/bin/sh: line 3: ./nosuch: No such file or directory\n", 127] => ["./nosuch"],
+  ["xargs: ./x: Permission denied\n", 126] => ["./x"], ["nohup: ./x: Permission denied\n", 126] => ["./x"],
+  # 名前の basename が表の道具でも、path の形なら fixture の中の file を指す。表の道具とは数えない。
+  ["env: ./sort: No such file or directory\n", 127] => ["./sort"], ["env: lib/cat: No such file or directory\n", 127] => ["lib/cat"],
+  # git が、alias などの先の program を起動できなかった行。
+  ["error: cannot run date: No such file or directory\nfatal: while expanding alias 'x': 'date': No such file or directory\n", 128] => ["date"],
   # 最後の終了 code が 0 でも、stderr の行から拾う (/bin/date; echo x)。
   ["/bin/bash: /bin/date: Operation not permitted\n", 0] => ["/bin/date"],
+  ["zsh:1: permission denied: ./x\n", 0] => ["./x"], ["/bin/sh: ./nosuch: No such file or directory\n", 0] => ["./nosuch"],
   ["cat: x\nzsh:1: command not found: date\nzsh:1: operation not permitted: /bin/date\nzsh:1: command not found: date\n", 127] => ["/bin/date", "date"],
   # stderr を捨てた起動 (date 2>/dev/null) は、終了 code だけで拾う。名前は分からない。
   ["", 127] => [], ["", 126] => [],
@@ -636,7 +745,22 @@ end
   # 表の道具が、この machine に無いだけの回 (rg など) は、拒まれた起動に数えない。
   ["zsh:1: command not found: rg\n", 127], ["/bin/sh: jq: command not found\n", 127],
   ["cat: nofile: No such file or directory\n", 1], ["/bin/bash: line 0: type: nosuch: not found\n", 1], ["", 0], ["", 1],
+  # 道具が出す行と、/ の無い名前の redirect の失敗は、起動の失敗ではない。
+  ["cat: lib/nofile: No such file or directory\n", 1], ["cat: ./secret.txt: Permission denied\n", 1],
+  ["zsh:1: no such file or directory: nofile\n", 1], ["/bin/sh: nofile: No such file or directory\n", 1],
+  ["zsh:1: permission denied: out.txt\n", 1], ["env: rg: No such file or directory\n", 127],
 ].each { |err, code| check "denied-exec: not reported for #{err.inspect} exit #{code}", denied.call(err, code) == [] }
+# 2>&1 を付けた起動は、字面が stdout に回る。stdout の行からも拾う。
+{
+  "zsh:1: command not found: date\n" => ["date"], "/bin/sh: /bin/date: Operation not permitted\n" => ["/bin/date"],
+  "apple\nzsh:1: permission denied: ./x\n" => ["./x"],
+}.each do |out, want|
+  got = J.denied_items(fake.call(out: out), names)
+  check "denied-exec: read from stdout too: #{out.inspect}: #{got.inspect}", got == [{ "reason" => "denied-exec", "names" => want, "exit_code" => 0 }]
+end
+both = J.denied_items(fake.call(err: "zsh:1: permission denied: ./x\n", out: "zsh:1: command not found: date\n"), names)
+check "denied-exec: stderr and stdout are one finding: #{both.inspect}", both == [{ "reason" => "denied-exec", "names" => ["./x", "date"], "exit_code" => 0 }]
+check "denied-exec: ordinary output is not a finding", J.denied_items(fake.call(out: "apple\napple\nbanana\n"), names) == []
 check "denied-exec: a failed sandbox-exec is not read as a denied launch",
       J.denied_items(fake.call(sandbox_error: true, exit_code: 71, err: "sandbox-exec: sandbox_apply: Operation not permitted\n"), names) == []
 check "denied-exec: the table is every tool name, usable here or not", %w[cat git rg jq shasum].all? { |n| names.include?(n) } && !names.include?("date")
@@ -730,9 +854,22 @@ check "examine: a counterexample only in a non-default variant goes to a human: 
 o, calls = examine.call("bash-nullglob", "bash-nullglob" => [verdict_of.call([i1])] * 3, "bash" => [verdict_of.call([i1])] * 3)
 check "examine: confirmed in the default variant of the same shell too, it is a counterexample",
       o.violations == [i1] && o.human.empty? && calls == %w[bash-nullglob] * 3 + %w[bash] * 3 && J.exit_code(o) == 1 && o.runs.length == 6
+# 既定の変種の回で見たものは、変種の名前を付けて結果に残す (照合に使わなかった分を落とさない)。
+in_zsh = ->(item) { item.merge("variant" => "zsh") }
 o, = examine.call("zsh-extendedglob", "zsh-extendedglob" => [verdict_of.call([i1])] * 3,
                                       "zsh" => [verdict_of.call([i1]), verdict_of.call([]), verdict_of.call([i1])])
-check "examine: flaky in the default variant is not a confirmation there", o.violations.empty? && o.human == [{ "reason" => "non-default-variant" }.merge(i1)]
+check "examine: flaky in the default variant is not a confirmation there, and is reported as flaky: #{o.human.inspect}",
+      o.violations.empty? && o.human == [{ "reason" => "non-default-variant" }.merge(i1), in_zsh.call({ "reason" => "flaky" }.merge(i1))] &&
+      J.exit_code(o) == 3
+o, calls = examine.call("zsh-nullglob", "zsh-nullglob" => [verdict_of.call([content])] * 3, "zsh" => [verdict_of.call([i1])] * 3)
+check "examine: a different kind confirmed in the default variant is a counterexample there: #{o.violations.inspect} #{o.human.inspect}",
+      o.violations == [in_zsh.call(i1)] && o.human == [{ "reason" => "non-default-variant" }.merge(content)] &&
+      calls == %w[zsh-nullglob] * 3 + %w[zsh] * 3 && J.exit_code(o) == 1
+o, = examine.call("zsh-nullglob", "zsh-nullglob" => [verdict_of.call([i1, i2])] * 3,
+                                  "zsh" => [verdict_of.call([i1, content], human: [denied_item])] * 3)
+check "examine: shared, only-here and only-in-the-default findings are kept apart: #{o.violations.inspect} #{o.human.inspect}",
+      o.violations == [i1, in_zsh.call(content)] &&
+      o.human == [{ "reason" => "non-default-variant" }.merge(i2), in_zsh.call(denied_item)] && J.exit_code(o) == 1
 o, calls = examine.call("zsh-nullglob", "zsh-nullglob" => [verdict_of.call([i1]), verdict_of.call([]), verdict_of.call([])])
 check "examine: a flaky candidate is not taken to the default variant", o.human == [{ "reason" => "flaky" }.merge(i1)] && calls == %w[zsh-nullglob] * 3
 
@@ -751,6 +888,13 @@ J = ProbeClassifier::Judge
 Dir.mkdir(File.join(tmp, "t4"))
 session = I::Session.open(root: File.join(tmp, "t4"))
 defaults = I::VARIANTS.select(&:default).map(&:name)
+
+# template を作った直後の最初の command。fixture の file の mtime を過去に揃えてあるので、git が index を書き直さない
+# (揃えないと、template と同じ秒に走った回だけ、fx/.git/index の書き直しが I1 に出た)。
+# lock の跡 (fx/.git の mtime) は git の版で変わりうるので、I1 でないことだけを見る。
+fresh = J.observe(session, "git describe --always --dirty")
+check "witness: git describe --dirty right after the template is built does not rewrite the index: #{fresh.violations.inspect}",
+      fresh.violations.empty? && fresh.unmeasured.nil? && fresh.ending == "ok"
 
 # 書き込む形は I1。分類は通さず、隔離と判定だけを見る (分類器が read と言うかどうかに依らない)。
 writes = {
@@ -803,6 +947,35 @@ defaults.each do |variant|
   check "witness (#{variant}): a denied launch with stderr thrown away is still reported: #{v.human.inspect}",
         v.violations.empty? && v.human == [{ "reason" => "denied-exec", "names" => [], "exit_code" => 127 }]
 end
+
+# 途中の位置の起動の失敗と、2>&1 で stdout に回った字面も拾う (最後の終了 code は 0)。./x は実行できない file。
+defaults.each do |variant|
+  v = J.observe(session, "date 2>&1 | cat; ./x; cat in.txt", variant: variant)
+  check "witness (#{variant}): failed launches in the middle of a command are reported: #{v.human.inspect}",
+        v.violations.empty? && v.human == [{ "reason" => "denied-exec", "names" => ["./x", "date"], "exit_code" => 0 }]
+end
+# 名前の basename が表の道具でも、path の形の名前は表の道具に数えない。
+v = J.observe(session, "env ./sort in.txt")
+check "witness: a launcher's missing path-shaped name is reported: #{v.human.inspect}",
+      v.human == [{ "reason" => "denied-exec", "names" => ["./sort"], "exit_code" => 127 }]
+
+# stderr の「sandbox-exec: 」の行は、0 で終わった回では command の出力として読む (未測定にしない)。
+v = J.observe(session, "echo 'sandbox-exec: x' >&2")
+check "witness: a command that prints a sandbox-exec line and exits 0 is measured: #{v.unmeasured.inspect}", v.unmeasured.nil? && v.clean?
+v = J.observe(session, "echo 'sandbox-exec: x' >&2; false")
+check "witness: the same line with a failed ending stays unmeasured: #{v.unmeasured.inspect}", v.unmeasured == "sandbox-error" && !v.clean?
+
+# group が空と確かめられなかった回は、起動の結果から判定まで「未測定」として届く。
+group_empty = I.method(:group_empty?)
+I.define_singleton_method(:group_empty?) { |*_args, **_opts| false }
+begin
+  v = J.observe(session, "cat in.txt")
+ensure
+  I.define_singleton_method(:group_empty?, group_empty)
+end
+check "witness: a run whose group is not confirmed empty is unmeasured end to end: #{v.unmeasured.inspect}",
+      v.unmeasured == "group-not-empty" && v.violations.empty? && !v.clean?
+check "group_empty? is restored", I.group_empty?(nil) == false && I.live_group_control[:exited_reported_empty] == true
 
 # 書き込みの後に終わらない形。期限で止めても、差分から I1 が出て、timeout が併記される。
 hang = J.observe(session, "uniq in.txt -c; tail -f in.txt", variant: "sh", timeout: 1, guarded: false)
@@ -916,6 +1089,17 @@ done
 run_cli 2 "--preflight with --out in a worktree" --preflight --out "$tmp/wt/out"
 [ ! -e "$tmp/wt/out" ] && [ ! -e "$tmp/wt/sub/deep" ] && [ ! -e "$tmp/wt/.git/out" ] || fail "--out inside a worktree must not be created"
 
+# 居ない user の ~name は、使い方の誤り (exit 2)。Ruby の既定の終了 (exit 1 と backtrace) にはしない。
+# exit 1 は「反例あり」の意味で、backtrace は repo の絶対 path を含む。
+run_cli 2 "--out with an unknown ~user" --out '~nosuchuser-zz/x' --command 'cat README.md' --classifier "$stub"
+grep -q '^error: --out is not a usable path$' "$tmp/cli.err" || fail "--out with an unknown ~user: missing the reason: $(cat "$tmp/cli.err")"
+no_abs_paths "--out with an unknown ~user" "$tmp/cli.err"
+run_cli 2 "--classifier with an unknown ~user" --out "$tmp/o-tilde" --command 'cat README.md' --classifier '~nosuchuser-zz/c.rb'
+grep -q '^error: --classifier is not a usable path$' "$tmp/cli.err" \
+  || fail "--classifier with an unknown ~user: missing the reason: $(cat "$tmp/cli.err")"
+no_abs_paths "--classifier with an unknown ~user" "$tmp/cli.err"
+[ ! -e "$tmp/o-tilde" ] || fail "--classifier with an unknown ~user: --out must not be created"
+
 # guard が拒む command は、走らせずに exit 2。結果の file は書かない。
 run_cli 2 "guard: absolute path" --out "$tmp/o-g1" --command 'cat /etc/hosts' --classifier "$stub"
 grep -q 'guard rejected the command (abs-path); it was not run' "$tmp/cli.err" || fail "guard: absolute path: missing the reason: $(cat "$tmp/cli.err")"
@@ -950,6 +1134,12 @@ run_cli 2 "classifier that does not load" --out "$tmp/o-b" --command 'cat README
 grep -q 'the classifier could not be run.*<classifier>.*this classifier does not load' "$tmp/cli.err" \
   || fail "broken classifier: missing the reason: $(cat "$tmp/cli.err")"
 no_abs_paths "broken classifier" "$tmp/cli.err"
+# 分類器が同じ dir の file を読めずに落ちた回は、文言に分類器の dir が出る。そこも置き換える。
+printf 'require_relative "nope-missing"\n' > "$tmp/rel-classifier.rb"
+run_cli 2 "classifier with a failing require_relative" --out "$tmp/o-b" --command 'cat README.md' --classifier "$tmp/rel-classifier.rb"
+grep -q 'the classifier could not be run.*<classifier-dir>/nope-missing' "$tmp/cli.err" \
+  || fail "classifier with a failing require_relative: missing the reason: $(cat "$tmp/cli.err")"
+no_abs_paths "classifier with a failing require_relative" "$tmp/cli.err"
 run_cli 2 "classifier with an unknown class" --out "$tmp/o-b" --command 'cat README.md' --classifier "$tmp/odd-classifier.rb"
 run_cli 2 "classifier file missing" --out "$tmp/o-b" --command 'cat README.md' --classifier "$tmp/absent.rb"
 [ ! -e "$tmp/o-b" ] || fail "a failed classification must not write results"
@@ -988,6 +1178,83 @@ check "results: the classifier is recorded by version and hash only", data["clas
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
+# preflight の検査が 1 つでも通らなければ、入口は command を走らせず exit 2 にする。想定していない失敗も exit 2 で、
+# 1 行だけ出す (exit 1 は「反例あり」の意味)。preflight と、走らせる所を差し替えて、同じ process の中から入口を呼ぶ
+# (何も走らせない)。
+TMPDIR="$cli_tmp" ruby -r"$script_dir/lib/check_helper" - "$repo_root/scripts/lib/probe_classifier_invariants.rb" "$stub" "$tmp" <<'RUBY'
+require "stringio"
+require ARGV[0]
+stub = ARGV[1]
+tmp = File.realpath(ARGV[2])
+P = ProbeClassifierInvariants
+I = P::Isolation
+J = P::Judge
+
+# 入口を呼び、[exit code, stdout, stderr] を返す。
+call = lambda do |*argv|
+  saved = [$stdout, $stderr]
+  $stdout = StringIO.new
+  $stderr = StringIO.new
+  begin
+    code = P.main(argv)
+    [code, $stdout.string, $stderr.string]
+  ensure
+    $stdout, $stderr = saved
+  end
+end
+observed = 0
+J.define_singleton_method(:observe) do |*_args, **_opts|
+  observed += 1
+  raise "the command must not be run"
+end
+asked = []
+failed = I::Preflight.new(ok: false, unavailable: false, reasons: ["network: stubbed"],
+                          checks: [I::Check.new(name: "network", ok: false, negative: {}, control: {})])
+I.define_singleton_method(:preflight) do |session, **_opts|
+  asked << session.root
+  failed
+end
+out_dir = File.join(tmp, "o-gate")
+code, out, err = call.call("--out", out_dir, "--command", "cat README.md", "--classifier", stub)
+check "gate: a failed preflight check stops --command with exit 2: #{code.inspect} #{err.inspect}",
+      code == 2 && out.empty? && err == "error: the isolation preflight failed: network: stubbed\n"
+check "gate: nothing is run and no results are written", observed.zero? && !File.exist?(out_dir) && asked.length == 1
+code, out, err = call.call("--preflight")
+check "gate: a failed preflight check makes --preflight exit 2: #{code.inspect} #{err.inspect}",
+      code == 2 && out.empty? && err == "error: the isolation preflight failed: network: stubbed\n" && asked.length == 2
+
+# 想定していない例外。session が在る間の失敗は、一時 dir と HOME の path を置き換えて 1 行にする。
+I.define_singleton_method(:preflight) { |session, **_opts| raise "boom at #{session.root}/x and #{ENV.fetch('HOME')}/y\nsecond line" }
+code, out, err = call.call("--preflight")
+check "unexpected failure in a session: exit 2, one line, paths replaced: #{code.inspect} #{err.inspect}",
+      code == 2 && out.empty? && err == "error: RuntimeError: boom at <R>/x and <HOME>/y second line\n"
+code, = call.call("--out", out_dir, "--command", "cat README.md", "--classifier", stub)
+check "unexpected failure before a command: exit 2, nothing run, no results", code == 2 && observed.zero? && !File.exist?(out_dir)
+# session の外の失敗 (引数を読む所に注入する)。
+P.define_singleton_method(:parse_argv) { |_argv| raise TypeError, "boom in #{ENV.fetch('HOME')}/z" }
+code, out, err = call.call("--preflight")
+check "unexpected failure outside a session: exit 2, one line: #{code.inspect} #{err.inspect}",
+      code == 2 && out.empty? && err == "error: unexpected failure: TypeError: boom in <HOME>/z\n"
+check "the entry left no temp dir behind", Dir.children(ENV.fetch("TMPDIR")).empty?
+
+# 報告の行。path は command が作った名前を含むので、制御の字を置き換えて 1 行に保つ。
+data = { "variant" => "zsh", "runs" => [{}],
+         "violations" => [{ "invariant" => "I1", "kinds" => ["created"], "paths" => ["fx/a\n  I2 fixture shim/canary\ncommand: class=read"] }],
+         "human" => [{ "reason" => "zone", "paths" => ["tmp/b\rc", "tmp/d\e[2K"] }] }
+saved = $stdout
+$stdout = StringIO.new
+begin
+  P.report(data, nil)
+  lines = $stdout.string.lines
+ensure
+  $stdout = saved
+end
+check "report: a path with control characters stays on its own line: #{lines.inspect}",
+      lines == ["command: class=read variant=zsh runs=1 violations=1 human=1\n",
+                "  I1 created fx/a?  I2 fixture shim/canary?command: class=read\n", "  human zone tmp/b?c tmp/d?[2K\n"]
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
 # sandbox を適用できないときは、何も走らせずに exit 2 で、理由を 1 行出す (素の実行には戻らない)。
 # 適用できる環境では、何でも許す sandbox の中から入口を呼び、入れ子で適用できない状態を作る。
 # 使い方: run_unavailable <label> <引数>...
@@ -1016,24 +1283,78 @@ if [ "$sandbox" = yes ]; then
   run_cli 0 "preflight" --preflight --out "$tmp/o-pre"
   grep -q '^preflight: ok (11 checks)$' "$tmp/cli.out" || fail "preflight: missing the ok line: $(cat "$tmp/cli.out")"
   no_abs_paths "preflight" "$tmp/o-pre/results.json" "$tmp/cli.out" "$tmp/cli.err"
-  # K1 の形。代役の分類器が read と答えるので走り、fx/-c の作成が I1 になる。
+  # K1 の形。代役の分類器が read と答えるので走り、fx/-c の作成が I1 になる。本物の preflight を通ってから走る。
   run_cli 1 "command with a write" --out "$tmp/o-k1" --command 'uniq in.txt -c' --classifier "$stub"
+  grep -q '^  I1 created fx/-c$' "$tmp/cli.out" || fail "command with a write: missing the line: $(cat "$tmp/cli.out")"
   no_abs_paths "command with a write" "$tmp/o-k1/results.json" "$tmp/cli.out" "$tmp/cli.err"
-  run_cli 0 "command without a write" --out "$tmp/o-cat" --command 'cat README.md' --classifier "$stub" --variant sh
-  no_abs_paths "command without a write" "$tmp/o-cat/results.json" "$tmp/cli.out" "$tmp/cli.err"
   [ ! -e "$tmp/o-pre/corpus.jsonl" ] && [ ! -e "$tmp/o-k1/corpus.jsonl" ] || fail "--preflight and --command must not write corpus.jsonl"
-  # 既定でない変種でだけ書き込む形 (nullglob では合わない glob が消え、-o が in.txt を取る)。既定の zsh では合わない glob で
-  # 止まるので、反例に数えず、人に出すものだけになる (exit 3)。
-  run_cli 3 "command that writes only under a non-default variant" --out "$tmp/o-ng" --command 'sort -o nomatch* in.txt' \
-    --classifier "$stub" --variant zsh-nullglob
-  grep -q '^  human non-default-variant fx/in.txt$' "$tmp/cli.out" || fail "non-default variant: missing the line: $(cat "$tmp/cli.out")"
-  no_abs_paths "non-default variant" "$tmp/o-ng/results.json" "$tmp/cli.out" "$tmp/cli.err"
+
+  # 残りの終わり方 (exit 0、exit 3、既定の変種の側の反例) は、同じ process の中から入口を呼んで見る。
+  # preflight は「通った」結果に差し替える (この環境で通ることは、T2 と上の 2 回が見ている)。
+  # command は、差し替えの無い経路で、本物の profile の下で走る。
+  TMPDIR="$cli_tmp" ruby -r"$script_dir/lib/check_helper" - "$repo_root/scripts/lib/probe_classifier_invariants.rb" "$stub" "$tmp" <<'RUBY'
+require "stringio"
+require ARGV[0]
+stub = ARGV[1]
+tmp = File.realpath(ARGV[2])
+P = ProbeClassifierInvariants
+I = P::Isolation
+
+asked = []
+passed = I::Preflight.new(ok: true, unavailable: false, checks: [], reasons: [])
+I.define_singleton_method(:preflight) do |session, **_opts|
+  asked << session.root
+  passed
+end
+# 入口を呼び、[exit code, stdout, stderr] を返す。
+call = lambda do |*argv|
+  saved = [$stdout, $stderr]
+  $stdout = StringIO.new
+  $stderr = StringIO.new
+  begin
+    code = P.main(argv)
+    [code, $stdout.string, $stderr.string]
+  ensure
+    $stdout, $stderr = saved
+  end
+end
+command = lambda do |name, text, variant|
+  call.call("--out", File.join(tmp, name), "--command", text, "--classifier", stub, "--variant", variant)
+end
+
+code, out, err = command.call("o-cat", "cat README.md", "sh")
+check "read: exit 0 and one line: #{code.inspect} #{out.inspect} #{err.inspect}",
+      code == 0 && err.empty? && out == "command: class=read variant=sh runs=1 violations=0 human=0\n"
+outputs = [out, err]
+# 既定でない変種でだけ書き込む形 (nullglob では合わない glob が消え、-o が in.txt を取る)。既定の zsh では合わない glob で
+# 止まるので、反例に数えず、人に出すものだけになる (exit 3)。
+code, out, err = command.call("o-ng", "sort -o nomatch* in.txt", "zsh-nullglob")
+check "non-default variant only: exit 3 and the line for a human: #{code.inspect} #{out.inspect} #{err.inspect}",
+      code == 3 && err.empty? && out.lines == ["command: class=read variant=zsh-nullglob runs=4 violations=0 human=1\n",
+                                               "  human non-default-variant fx/in.txt\n"]
+outputs.push(out, err)
+# 同じ command は、既定の bash では別の種類の書き込みになる (合わない glob が字のまま残り、その名前の file を作る)。
+# 既定の変種で確かめた反例なので、exit 1 で、既定の変種の名前で結果に出る。
+code, out, err = command.call("o-bng", "sort -o nomatch* in.txt", "bash-nullglob")
+check "a different kind in the default variant: exit 1 and both lines: #{code.inspect} #{out.inspect} #{err.inspect}",
+      code == 1 && err.empty? && out.lines == ["command: class=read variant=bash-nullglob runs=6 violations=1 human=1\n",
+                                               "  I1 created fx/nomatch*\n", "  human non-default-variant fx/in.txt\n"]
+outputs.push(out, err)
+check "the entry asks for a preflight before each command, on a new session each time", asked.length == 3 && asked.uniq.length == 3
+check "the entry left no temp dir behind", Dir.children(ENV.fetch("TMPDIR")).empty?
+File.write(File.join(tmp, "inproc.out"), outputs.join)
+exit(@failed.zero? ? 0 : 1)
+RUBY
+  no_abs_paths "commands run in process" "$tmp/o-cat/results.json" "$tmp/o-ng/results.json" "$tmp/o-bng/results.json" "$tmp/inproc.out"
+  [ ! -e "$tmp/o-cat/corpus.jsonl" ] || fail "--command must not write corpus.jsonl"
+
   ruby -r"$script_dir/lib/check_helper" -rjson - "$tmp/o-pre/results.json" "$tmp/o-k1/results.json" "$tmp/o-cat/results.json" \
-    "$tmp/o-ng/results.json" <<'RUBY'
+    "$tmp/o-ng/results.json" "$tmp/o-bng/results.json" <<'RUBY'
 pre = JSON.parse(File.read(ARGV[0]))
 k1 = JSON.parse(File.read(ARGV[1]))
 cat = JSON.parse(File.read(ARGV[2]))
 ng = JSON.parse(File.read(ARGV[3]))
+bng = JSON.parse(File.read(ARGV[4]))
 found = ng["human"][0] || {}
 check "non-default variant: no counterexample, one finding for a human with the command and the variant: #{ng['human'].inspect}",
       ng["violations"] == [] && ng["human"].length == 1 && found["reason"] == "non-default-variant" &&
@@ -1041,9 +1362,18 @@ check "non-default variant: no counterexample, one finding for a human with the 
       found["paths"] == ["fx/in.txt"] && ng["variant"] == "zsh-nullglob"
 check "non-default variant: three runs in the variant, then the default variant of the same shell",
       ng["runs"].map { |r| r["variant"] } == %w[zsh-nullglob zsh-nullglob zsh-nullglob zsh] && ng["counts"]["executed"] == 1
+sort = "sort -o nomatch* in.txt"
+check "default variant's own counterexample: listed under the default variant's name: #{bng['violations'].inspect}",
+      bng["violations"] == [{ "invariant" => "I1", "command" => sort, "variant" => "bash", "kinds" => ["created"], "paths" => ["fx/nomatch*"] }] &&
+      bng["variant"] == "bash-nullglob"
+check "default variant's own counterexample: the variant-only write stays with a human: #{bng['human'].inspect}",
+      bng["human"] == [{ "reason" => "non-default-variant", "command" => sort, "variant" => "bash-nullglob", "invariant" => "I1",
+                         "kinds" => ["content"], "paths" => ["fx/in.txt"] }] &&
+      bng["runs"].map { |r| r["variant"] } == %w[bash-nullglob] * 3 + %w[bash] * 3
 check "preflight results: mode and every check passed: #{pre.inspect}",
       pre["mode"] == "preflight" && pre["preflight"]["ok"] == true && pre["preflight"]["unavailable"] == false &&
       pre["preflight"]["checks"].length == 11 && pre["preflight"]["checks"].all? { |c| c["ok"] == true } && pre["preflight"]["reasons"] == []
+check "preflight results: only the mode and the preflight keys", pre.keys.sort == %w[mode preflight]
 check "write: mode, variant, classifier", k1["mode"] == "command" && k1["variant"] == "zsh" && k1["classifier"]["version"] == 754
 check "write: counts: #{k1['counts'].inspect}", k1["counts"] == { "generated" => 1, "by_class" => { "read" => 1 }, "executed" => 1, "unmeasured" => 0 }
 check "write: one I1 violation at fx/-c: #{k1['violations'].inspect}",

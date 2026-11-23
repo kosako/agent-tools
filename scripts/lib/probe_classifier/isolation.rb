@@ -43,8 +43,9 @@ module ProbeClassifier
     # login の shell (zsh -lc) が PATH を組み直すのに呼ぶ。許さないと、PATH が実機と違う形になる。
     PATH_HELPER = "/usr/libexec/path_helper"
     DEFAULT_TIMEOUT = 5
-    # preflight の「終わらない command」の期限。止めるのに、これと ProbeChild の TERM の猶予がかかる。
-    HANG_TIMEOUT = 1
+    # preflight の「終わらない command」の期限。止めるのに、これと ProbeChild の TERM の猶予 (1 秒) がかかる。
+    # preflight は走らせるたびにかけるので、短く取る。
+    HANG_TIMEOUT = 0.5
     # 止まるまでの時間の余裕。期限と猶予にこれを足した時間を超えたら、期限が効いていないとみなす。
     HANG_MARGIN = 3
     # 一時 dir の中の区画。fx が cwd。marks は canary が印を書く所。
@@ -281,12 +282,16 @@ module ProbeClassifier
     GIT_COMMIT = 'git add -A . && git -c user.name=fixture -c user.email=fixture@example.invalid commit -q -m "$1"'
     # index の stat を、今の file に合わせ直す。-q は、未 commit の変更があっても失敗にしない。
     GIT_REFRESH = "git update-index -q --refresh"
+    # fixture の file の mtime。過去の決まった時刻に揃える。index と同じ秒の mtime が残ると、git は中身を比べ直して
+    # index を書き直す。その回は、template を作ってからの時間で結果が変わった (git describe --dirty で実測)。
+    FIXTURE_MTIME = Time.utc(2026, 1, 1)
 
     def self.write_files(dir, files)
       files.each do |rel, body|
         path = File.join(dir, rel)
         FileUtils.mkdir_p(File.dirname(path))
         File.write(path, body)
+        File.utime(FIXTURE_MTIME, FIXTURE_MTIME, path)
       end
     end
 
@@ -501,7 +506,8 @@ module ProbeClassifier
           timed_out: !result.completed, out: redact(result.out, layout), err: err,
           # ProbeChild.run は group の終わりを返さないので、ここで確かめる。pid が分からなければ未確認。
           group_empty: status ? Isolation.group_empty?(status.pid) : false,
-          drained: result.drained, sandbox_error: err.match?(/^sandbox-exec: /)
+          # sandbox-exec 自体の失敗は 0 で終わらない (65 と 71 を実測)。0 で終わった回の同じ字面は、command の出力。
+          drained: result.drained, sandbox_error: err.match?(/^sandbox-exec: /) && status&.exitstatus != 0
         )
       rescue SystemCallError => e
         # sandbox-exec を起動できない (無い、など)。command は走っていない。
@@ -573,9 +579,12 @@ module ProbeClassifier
     # --- guard (文字列で見る) -----------------------------------------------------------------
     # 一時 dir の外を指しうる形と、network、端末、終わらない形、signal を、走らせる前に拒む。戻り値は、通せば nil、
     # 拒めば理由の名前。分類器より粗く、拒む側に寄せる (通る形でも、ここで拒むことがある)。
+    # 止める対象 (shell の process group) から子が外れる形と、後ろで走る子を作る形も拒む。
     # 見るのは command の文字列だけ。実行のときに出来る path (which の出力や、tr で作った .. を xargs に
     # 渡す、など) は見えない。そこは sandbox の層が受ける。run_command は必ず profile を付けて走らせる
     # (profile を替えられるのは、検査のための launch と run_argv だけ)。
+    # 実行のときに出来る command (printf で組んだ文字列を sh に渡す、など) も見えない。group を抜ける形が
+    # そこから出来た回は、受ける層が無い (docs の「限界」)。
     #
     # 分類器の門が通す安全な redirect (SkillBehaviorClassifier::SAFE_REDIRECTS と同じ 7 つ)。/dev/null の
     # 先頭の / を、絶対 path の規則から外す。後ろに字が続く形 (>/dev/nullx) は外さない。
@@ -584,10 +593,23 @@ module ProbeClassifier
     DOLLAR_FORMS = ["$'-o'", '"${zz:--o}"'].freeze
     # sed と awk の script の表。番地の / で始まる script は絶対 path の規則に当たるので、人が中身を
     # 確かめた script だけを、単一引用の語の完全一致で外す。今は K2 (#756) の形だけ。
+    # 表の語は、sed と awk のほかの command の引数でも外れる。実在しうる path になる script は足さない。
     SCRIPT_TABLE = ['/a\/,/w lib/p'].freeze
     # xargs の、値をとる option。値の語を option と読み違えないために使う。
     XARGS_VALUE_OPTIONS = %w[-E -I -J -L -n -P -R -S -s -d -a].freeze
     SIGNAL_NAMES = %w[kill pkill killall].freeze
+    # dir を移る builtin。zsh は、引数が 2 つあると、今の dir の path の一部を置き換えて移る (cd fx tools)。
+    DIR_BUILTINS = %w[cd chdir pushd popd].freeze
+    # shell の設定は、変種の表だけが決める。command の中で設定を変える形は受けない。
+    # sh と bash は、job control を立てると (set -m、SHELLOPTS=monitor)、子を別の process group に移す。
+    # その子は、止める対象から外れて残った (実測)。zsh は、端末なしでは job control を立てられなかった。
+    SHELL_SETTERS = %w[set setopt unsetopt shopt emulate].freeze
+    SHELL_ENV = /SHELLOPTS|BASHOPTS/.freeze
+    SHELL_NAMES = %w[sh bash zsh dash ksh].freeze
+    # 入れ子の shell の名前の直後に受ける option。ほかの option (-m、-i、-o NAME など) は拒む。
+    SHELL_OPTIONS = %w[-c -lc].freeze
+    # & を使わずに、後ろで走る子を作る語。
+    BACKGROUND_NAMES = %w[coproc].freeze
     # , を含む brace の前後に名前の字か別の brace が付く形と、brace の中の brace。{} (find の置き場所) は当たらない。
     BRACE_GLUED = /[A-Za-z0-9_}-]\{[^{}]*,[^{}]*\}|\{[^{}]*,[^{}]*\}[A-Za-z0-9_{-]|\{[^}]*\{/.freeze
     MAX_NESTING = 6
@@ -604,7 +626,7 @@ module ProbeClassifier
       # 引用と \ は、字をつないで別の語を作る ('.'./x は ../x、ta''il は tail)。原文と、引用の記号を
       # 除いた写しの両方に、同じ規則を当てる。
       [masked, masked.gsub(/['"\\]/, "")].each do |view|
-        reason = path_reason(view)
+        reason = text_reason(view)
         return reason if reason
       end
       forbidden_reason(masked, 0)
@@ -621,16 +643,25 @@ module ProbeClassifier
       out
     end
 
-    # 一時 dir の外を指しうる形。/ は、前が名前の字のときだけ通す (拒む字を並べると、>/x や {x,}/y を漏らす)。
-    def self.path_reason(view)
+    # 字の並びで見る規則。一時 dir の外を指しうる形と、走るときに文字列を作る形を拒む。
+    # / と = は、前が名前の字のときだけ通す (拒む字を並べると、>/x や {x,}/y や ={cat,x} を漏らす)。
+    def self.text_reason(view)
       return "dotdot" if view.include?("..")
       return "tilde" if view.include?("~")
+      # 走るときに文字列を作る形 ($、backtick、括弧) は、閉じた表の外では受けない。位置に依らない。
+      # 括弧は、置き換え、subshell、zsh の glob の修飾子 (x(:A:h) は親の dir を指す) に当たる。
       return "dollar" if view.include?("$")
+      return "backtick" if view.include?("`")
+      return "paren" if view.match?(/[()]/)
+      # && のほかの & (後ろで走らせる &、|&、>&3)。安全な redirect の & は、先に外してある。
+      # 後ろで走る子は、shell が終わった時点で止められ、その後の書き込みが見えない。
+      return "ampersand" if view.gsub("&&", "").include?("&")
+      return "shell-option" if view.match?(SHELL_ENV)
       return "abs-path" if view.match?(%r{(?<![A-Za-z0-9_.*?\]-])/})
       # 短い option に付いた値 (-o/x、-C/x)。前の字が option の字なので、上の規則では見分けられない。
       return "option-path" if view.match?(%r{(?<![A-Za-z0-9_.*?\]/-])-[A-Za-z0-9]+/})
-      # zsh は、語の先頭の =name を、その command の絶対 path に展開する。
-      return "equals-word" if view.match?(%r{(?<![A-Za-z0-9_.*?\]/-])=[A-Za-z0-9_./-]})
+      # zsh は、語の先頭の =name を、その command の絶対 path に展開する (={cat,ruby} も)。
+      return "equals-word" if view.match?(%r{(?<![A-Za-z0-9_.*?\]/-])=})
       # brace の展開は、. で終わる部分と . で始まる部分をつないで .. を作れる (.{.,a} や {a,}. の形)。
       return "brace-dot" if view.match?(/[{,]\.|\.[,}]|\{,|,,|,\}/)
       # 名前や option につないだ brace は、展開で別の語を作る (tail -{f,F} は -f と -F、{ta,x}il は tail)。
@@ -642,8 +673,9 @@ module ProbeClassifier
       nil
     end
 
-    # 走らせない形 (network、端末、終わらない形、外の process への signal)。語の位置に依らず、同じ部分の中の語の組で見る。
-    # 引用の中身は、入れ子の command (sh -c '…') として同じ規則で見る。
+    # 走らせない形 (network、端末、終わらない形、外の process への signal、shell の設定の変更)。語の位置に依らず、
+    # 同じ部分の中の語の組で見る。引用か \ を含む語は、組み立てた後の中身を、入れ子の command (sh -c '…') として
+    # 同じ規則で見る。引用の断片ごとに見ると、つないで出来る command を漏らす ('tail '"-f x" や set\ -m)。
     def self.forbidden_reason(text, depth)
       return "nesting" if depth > MAX_NESTING
 
@@ -655,12 +687,12 @@ module ProbeClassifier
         plain = text.gsub(/['"\\]/, "")
         scanned = [plain.split(/[|;&()`\n]/).map { |s| s.split(/[ \t{},<>]+/).reject(&:empty?) }, []]
       end
-      segments, quoted = scanned
+      segments, joined = scanned
       segments.each do |words|
         reason = segment_reason(words)
         return reason if reason
       end
-      quoted.each do |inner|
+      joined.each do |inner|
         reason = forbidden_reason(inner, depth + 1)
         return reason if reason
       end
@@ -679,10 +711,23 @@ module ProbeClassifier
       return "tail-follow" if after.call("tail")&.any? { |w| w.match?(/\A[-+][^-]*[fF]/) || w.start_with?("--f") }
       return "find-ok" if after.call("find")&.any? { |w| %w[-ok -okdir].include?(w) }
       return "xargs-tty" if xargs_tty?(after.call("xargs"))
-      # zsh の cd は、引数が 2 つあると、今の dir の path の一部を置き換えて移る (cd fx tools)。
-      return "cd-args" if after.call("cd")&.count { |w| !w.start_with?("-") }.to_i >= 2
+      return "cd-args" if DIR_BUILTINS.any? { |name| after.call(name)&.count { |w| !w.start_with?("-") }.to_i >= 2 }
+      return "shell-option" unless (names & SHELL_SETTERS).empty?
+      return "shell-option" if shell_option?(names, words)
+      return "background" unless (names & BACKGROUND_NAMES).empty?
 
       nil
+    end
+
+    # 入れ子の shell に、表に無い option を渡す形。名前の直後に続く option の語だけを見る
+    # (command の文字列より後ろの語は、shell の option ではない)。
+    def self.shell_option?(names, words)
+      names.each_index.any? do |i|
+        next false unless SHELL_NAMES.include?(names[i])
+
+        leading = words[(i + 1)..-1].take_while { |w| w.start_with?("-", "+") }
+        !(leading - SHELL_OPTIONS).empty?
+      end
     end
 
     # xargs の -p と -o (端末を開く)。xargs の option は utility の名前の前だけなので、そこまでを見る。
@@ -701,15 +746,20 @@ module ProbeClassifier
       false
     end
 
-    # 引用を追って語に分ける。戻り値は [部分ごとの語の並び, 引用の中身の並び]。引用が閉じなければ nil。
+    # 引用を追って語に分ける。戻り値は [部分ごとの語の並び, 引用か \ を含む語の並び]。引用が閉じなければ nil。
     # brace と , でも語を切る ({tail,-f} x は、展開の後の tail と -f を語として見る)。
     def self.shell_words(text)
       segments = [[]]
-      quoted = []
+      joined = []
       word = nil
+      glued = false
       flush = lambda do
-        segments.last << word if word
+        if word
+          segments.last << word
+          joined << word if glued
+        end
         word = nil
+        glued = false
       end
       i = 0
       while i < text.length
@@ -718,9 +768,8 @@ module ProbeClassifier
           j = text.index("'", i + 1)
           return nil unless j
 
-          inner = text[(i + 1)...j]
-          quoted << inner
-          word = (word || +"") << inner
+          word = (word || +"") << text[(i + 1)...j]
+          glued = true
           i = j + 1
         elsif c == '"'
           inner = +""
@@ -732,11 +781,12 @@ module ProbeClassifier
           end
           return nil if j >= text.length
 
-          quoted << inner
           word = (word || +"") << inner
+          glued = true
           i = j + 1
         elsif c == "\\"
           word = (word || +"") << text[i + 1].to_s
+          glued = true
           i += 2
         elsif "|;&()`\n".include?(c)
           flush.call
@@ -751,7 +801,7 @@ module ProbeClassifier
         end
       end
       flush.call
-      [segments, quoted]
+      [segments, joined]
     end
 
     # --- preflight --------------------------------------------------------------------------
@@ -794,10 +844,7 @@ module ProbeClassifier
           check_env_closed(session, layout), check_timeout_group(session, layout, hang_timeout),
           check_guard_only_write(session, writes, [outside, layout.base]), check_tools_work(session, layout),
         ]
-        reasons = checks.reject(&:ok).map do |c|
-          session.redact("#{c.name}: negative=#{c.negative.inspect} control=#{c.control.inspect}", layout)
-        end
-        Preflight.new(ok: reasons.empty?, unavailable: false, checks: checks, reasons: reasons)
+        conclude(session, checks, layout)
       rescue Error, SystemCallError => e
         # 検査を組めなかった回も、理由を返して失敗にする (素の実行には戻らない)。
         Preflight.new(ok: false, unavailable: false, checks: [], reasons: [session.redact("#{e.class}: #{e.message}")])
@@ -805,6 +852,14 @@ module ProbeClassifier
         layouts.each { |l| session.cleanup(l) }
         FileUtils.rm_rf(outside) if outside && inside?(outside, session.root)
       end
+    end
+
+    # 検査の結果から、preflight の結論を組む。通らない検査が 1 つでもあれば、ok は false。
+    def self.conclude(session, checks, layout = nil)
+      reasons = checks.reject(&:ok).map do |c|
+        session.redact("#{c.name}: negative=#{c.negative.inspect} control=#{c.control.inspect}", layout)
+      end
+      Preflight.new(ok: reasons.empty?, unavailable: false, checks: checks, reasons: reasons)
     end
 
     def self.facts(run, extra = {})
@@ -967,7 +1022,8 @@ module ProbeClassifier
       started = Time.now
       neg = session.launch(layout, "tail -f in.txt; :", variant: "sh", timeout: hang_timeout)
       elapsed = Time.now - started
-      ctl = session.launch(layout, "tail -n 1 in.txt; :", variant: "sh", timeout: hang_timeout)
+      # 対照は自分で終わる。期限は既定のままにする (混んだ machine で、短い期限に掛けないため)。
+      ctl = session.launch(layout, "tail -n 1 in.txt; :", variant: "sh")
       group = live_group_control
       # 渡した期限で止まること。既定の期限まで待っていれば、ここで落ちる。
       in_time = elapsed < hang_timeout + ProbeChild::TERM_GRACE + HANG_MARGIN

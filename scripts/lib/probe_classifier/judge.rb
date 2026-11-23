@@ -171,11 +171,19 @@ module ProbeClassifier
     #   xargs など:  xargs: NAME: Operation not permitted     /  xargs: NAME: No such file or directory
     #   script:      NAME: /bin/sh: bad interpreter: Operation not permitted
     #   exec:        /bin/sh: line 0: exec: NAME: not found
+    #   path の名前: zsh:1: permission denied: ./NAME          /  /bin/sh: ./NAME: No such file or directory
+    #   git:         error: cannot run NAME: No such file or directory
     DENIED = Isolation::DENIED_EXEC
-    # program を起動する道具。「No such file or directory」が、起動する名前を指しうるもの
-    # (find は、探す先が無いときも同じ字面になる。見分けずに人に出す)。
+    # program を起動する道具。「No such file or directory」と「Permission denied」が、起動する名前を指しうるもの
+    # (find は、探す先が無いときや読めないときも同じ字面になる。見分けずに人に出す)。
     LAUNCHERS = %w[env xargs find nohup nice time].freeze
-    LAUNCHER_MISSING = /\A(?:#{LAUNCHERS.join('|')}): (.+): No such file or directory\z/.freeze
+    FAILED = "(?:No such file or directory|Permission denied)"
+    LAUNCHER_FAILED = /\A(?:#{LAUNCHERS.join('|')}): (.+): #{FAILED}\z/.freeze
+    # shell が、path の形の名前 (/ を含む) を起動できなかった行。/ の無い名前の同じ字面は redirect の失敗なので拾わない
+    # (/ を含む redirect の先は見分けられず、ここに出る)。道具が出す行 (cat: lib/x: No such …) は、先頭の形で外れる。
+    SHELL_HEAD = %r{(?:/bin/)?(?:sh|bash|zsh)(?::\d+)?}.freeze
+    SHELL_PATH_FAILED = %r{\A#{SHELL_HEAD}: (?:line \d+: )?(?:(\S*/\S*): #{FAILED}|#{FAILED}: (\S*/\S*))\z}i.freeze
+    GIT_CANNOT_RUN = /\Aerror: cannot run (.+): No such file or directory\z/.freeze
     # 名前として出す字。stderr の中身を、そのまま結果に写さないため。
     NAME_CHARS = %r{\A[A-Za-z0-9_.+<>/=:@%,!{}\[\]^-]{1,120}\z}.freeze
     UNNAMED = "?"
@@ -206,23 +214,29 @@ module ProbeClassifier
       elsif (m = line.match(/: exec: (.+): not found\z/))
         # type や command -v の「not found」は起動ではないので、exec の字面だけを拾う。
         clean_name(m[1])
-      elsif (m = line.match(LAUNCHER_MISSING))
+      elsif (m = line.match(LAUNCHER_FAILED) || line.match(GIT_CANNOT_RUN))
         clean_name(m[1])
+      elsif (m = line.match(SHELL_PATH_FAILED))
+        clean_name(m[1] || m[2])
       end
     end
 
-    # 拒まれた起動の事実。denied は sandbox が拒んだ名前、missing は見つからなかった名前のうち表の道具でないもの。
-    # by_exit は、stderr に行が無いのに終了 code が 126 か 127 の回 (2>/dev/null を付けた起動は、字面が残らない)。
+    # 拒まれた起動の事実。denied は sandbox が拒んだ名前、missing は起動できなかった名前のうち表の道具でないもの。
+    # 行は stderr と stdout の両方から拾う (2>&1 を付けた起動は、字面が stdout に回る)。最後の終了 code には依らない。
+    # 表の道具とみなすのは、/ の無い名前だけ (./sort や lib/cat は、fixture の中の path を指す)。
+    # by_exit は、行が無いのに終了 code が 126 か 127 の回 (2>/dev/null を付けた起動は、字面が残らない)。
     def self.denied_exec(run, tool_names)
       denied = []
       missing = []
       listed_missing = false
-      run.err.to_s.each_line do |raw|
-        line = raw.chomp.strip
-        if line.match?(DENIED)
-          denied << denied_name(line)
-        elsif (name = not_found_name(line))
-          tool_names.include?(File.basename(name)) ? listed_missing = true : missing << name
+      [run.err, run.out].each do |text|
+        text.to_s.each_line do |raw|
+          line = raw.chomp.strip
+          if line.match?(DENIED)
+            denied << denied_name(line)
+          elsif (name = not_found_name(line))
+            tool_names.include?(name) ? listed_missing = true : missing << name
+          end
         end
       end
       by_exit = [126, 127].include?(run.exit_code) && denied.empty? && missing.empty? && !listed_missing
@@ -374,6 +388,8 @@ module ProbeClassifier
     # 1 件の command の結論。observe は、変種の名前を受けて 1 回走らせ、Verdict を返す。
     #   1. 最初の回の違反の候補を、同じ変種でさらに 2 回走らせて確かめる。
     #   2. 既定でない変種の反例は、同じ shell の既定の変種でも同じ手順で確かめる。そこで出なければ人に出す。
+    #   3. 既定の変種の回で見たもの (別の種類の反例、flaky、人に出すもの) は、変種の名前を付けて結果に足す。
+    #      照合に使わなかった分を捨てると、既定の変種で確かめた反例が結果から消える。
     def self.examine(variant, observe)
       first = observe.call(variant.name)
       settled = settle(first) { observe.call(variant.name) }
@@ -381,11 +397,15 @@ module ProbeClassifier
       human = first.human + settled.flaky.map { |x| flaky_item(x) }
       violations = settled.confirmed
       unless variant.default || violations.empty?
-        base = settle(observe.call(variant.base)) { observe.call(variant.base) }
+        base_first = observe.call(variant.base)
+        base = settle(base_first) { observe.call(variant.base) }
         verdicts.concat(base.verdicts)
-        kept, only_here = violations.partition { |x| base.confirmed.any? { |b| signature(b) == signature(x) } }
-        violations = kept
+        in_base = ->(item) { item.merge("variant" => variant.base) }
+        shared, only_here = violations.partition { |x| base.confirmed.any? { |b| signature(b) == signature(x) } }
+        only_base = base.confirmed.reject { |b| shared.any? { |x| signature(x) == signature(b) } }
+        violations = shared + only_base.map(&in_base)
         human.concat(only_here.map { |x| { "reason" => "non-default-variant" }.merge(x) })
+        human.concat((base_first.human + base.flaky.map { |x| flaky_item(x) }).map(&in_base))
       end
       unmeasured = verdicts.map(&:unmeasured).compact.uniq
       human << { "reason" => "unmeasured", "why" => unmeasured } unless unmeasured.empty?
