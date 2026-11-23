@@ -6,8 +6,9 @@
 # 層は 2 つある。文字列の guard は、一時 dir の外を指す形と、終わらない形を走らせない。
 # sandbox-exec の profile は、外への書き込み、network、HOME の読み取り、表に無い program の起動、
 # 外の process への signal を拒む。
+# command は必ず sandbox-exec を通す。sandbox を適用できなければ sandbox-exec が失敗し、command は走らない。
 # preflight は、profile の拒否が効いていること (対照つき) と、sandbox を外しても語彙の中の書き込みが
-# 一時 dir に閉じることを、実行のたびに確かめる。通らなければ走らせない (素の実行には戻らない)。
+# 一時 dir に閉じることを確かめる。呼ぶ側は、走らせる前に preflight をかけ、通らなければ走らせない。
 #
 # 責務の境界:
 #   - ここは走らせて終わり方を返すだけ。snapshot、差分、違反の判定は judge.rb が持つ。
@@ -565,7 +566,8 @@ module ProbeClassifier
     # 一時 dir の外を指しうる形と、network、端末、終わらない形、signal を、走らせる前に拒む。戻り値は、通せば nil、
     # 拒めば理由の名前。分類器より粗く、拒む側に寄せる (通る形でも、ここで拒むことがある)。
     # 見るのは command の文字列だけ。実行のときに出来る path (which の出力や、tr で作った .. を xargs に
-    # 渡す、など) は見えない。そこは sandbox の層が受けるので、guard だけで走らせる入口は作らない。
+    # 渡す、など) は見えない。そこは sandbox の層が受ける。run_command は必ず profile を付けて走らせる
+    # (profile を替えられるのは、検査のための launch と run_argv だけ)。
     #
     # 分類器の門が通す安全な redirect (SkillBehaviorClassifier::SAFE_REDIRECTS と同じ 7 つ)。/dev/null の
     # 先頭の / を、絶対 path の規則から外す。後ろに字が続く形 (>/dev/nullx) は外さない。
@@ -578,6 +580,8 @@ module ProbeClassifier
     # xargs の、値をとる option。値の語を option と読み違えないために使う。
     XARGS_VALUE_OPTIONS = %w[-E -I -J -L -n -P -R -S -s -d -a].freeze
     SIGNAL_NAMES = %w[kill pkill killall].freeze
+    # , を含む brace の前後に名前の字か別の brace が付く形と、brace の中の brace。{} (find の置き場所) は当たらない。
+    BRACE_GLUED = /[A-Za-z0-9_}-]\{[^{}]*,[^{}]*\}|\{[^{}]*,[^{}]*\}[A-Za-z0-9_{-]|\{[^}]*\{/.freeze
     MAX_NESTING = 6
 
     def self.guard(command, scripts: SCRIPT_TABLE, dollar_forms: DOLLAR_FORMS)
@@ -621,6 +625,9 @@ module ProbeClassifier
       return "equals-word" if view.match?(%r{(?<![A-Za-z0-9_.*?\]/-])=[A-Za-z0-9_./-]})
       # brace の展開は、. で終わる部分と . で始まる部分をつないで .. を作れる (.{.,a} や {a,}. の形)。
       return "brace-dot" if view.match?(/[{,]\.|\.[,}]|\{,|,,|,\}/)
+      # 名前や option につないだ brace は、展開で別の語を作る (tail -{f,F} は -f と -F、{ta,x}il は tail)。
+      # 入れ子の brace も、展開の後の語を追わずに拒む。
+      return "brace-glued" if view.match?(BRACE_GLUED)
       # bash と sh の glob は、. で始まる pattern で .. にも当たる (.? や .*)。
       return "glob-dot" if view.match?(/(?<![A-Za-z0-9_*?\]-])\.[*?\[]/)
 

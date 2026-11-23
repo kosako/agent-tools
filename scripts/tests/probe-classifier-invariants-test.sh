@@ -161,7 +161,7 @@ accept = [
   "sort $'-o' out.txt in.txt", %q(sort "${zz:--o}" out.txt in.txt), "zsh -lc 'cat in.txt'", "sh -c 'cat in.txt'",
   "find . -name x -exec cat {} +", "find . -name '*.rb'", "echo in.txt | xargs -n 1 cat", "echo in.txt | xargs grep -o a",
   "tail -n 2 in.txt | cut -f1", "tail +2 in.txt", "grep -F a in.txt | tail -n 1", "cat lib/*.rb", "cat x/{a,b}.md", "sort {-o,out.txt} in.txt",
-  "git -C . status", "git log --format=%H", "uniq - -c", "cat in.txt; cat x", %q(ruby -e 'puts [1, 2].sum'), "echo ^in.txt",
+  "git -C . status", "git log --format=%H", "cat {in,x}.txt", "echo in.txt | xargs -I{} cat {}", "uniq - -c", "cat in.txt; cat x", %q(ruby -e 'puts [1, 2].sum'), "echo ^in.txt",
 ]
 accept.each { |c| check "guard accepts #{c.inspect}: #{I.guard(c).inspect}", I.guard(c).nil? }
 
@@ -186,6 +186,9 @@ reject = {
   # 短い option に付いた path、zsh の =name、brace と glob が作る ..。
   "git -C/x status" => "option-path", "sort -o/abs in.txt" => "option-path", "cat =ls" => "equals-word",
   "cat .{.,a}" => "brace-dot", "cat {.,x}./y" => "brace-dot", "cat {a,}." => "brace-dot", "cat x/{..,y}" => "dotdot",
+  "tail -{f,F} x" => "brace-glued", "xargs -{p,t} cat" => "brace-glued", "{ta,x}il -f x" => "brace-glued",
+  "ta{il,x} -f x" => "brace-glued", "{g,x}{h,y} api" => "brace-glued", "tail '-'{f,F} x" => "brace-glued",
+  "tail -{f,{F,x}} x" => "brace-glued",
   "cd .?/marks && uniq - -c" => "glob-dot", "cat .*" => "glob-dot", "cat ./.*/x" => "glob-dot", "cat '.'*" => "glob-dot",
   # 語の位置に依らない形 (前置き、xargs、find -exec、brace、入れ子の shell)。
   "xargs tail -f" => "tail-follow", "find . -exec tail -F {} +" => "tail-follow", "env tail -f x" => "tail-follow",
@@ -245,6 +248,18 @@ session.cleanup(layout)
 check "cleanup removes the layout", !File.exist?(layout.base)
 session.close
 check "close leaves a given root in place and empty", Dir.children(File.join(tmp, "t1")).empty?
+
+# root を省くと、session が一時 dir の置き場を自分で作り、close で消す。
+own_tmp = File.join(tmp, "own")
+Dir.mkdir(own_tmp)
+I.with_parent_env("TMPDIR" => own_tmp) do
+  own = I::Session.open
+  check "session without a root: makes its own under TMPDIR: #{own.problems.inspect}",
+        own.problems.empty? && File.dirname(own.root) == own_tmp && File.directory?(own.root)
+  own.new_layout("pci-")
+  own.close
+  check "session without a root: close removes it", Dir.children(own_tmp).empty?
+end
 
 # 隔離を組めないとき (一時 dir が HOME の下) は、理由を返し、何も走らせない。
 fake_home = File.join(tmp, "fake-home")
