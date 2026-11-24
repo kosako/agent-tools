@@ -1050,6 +1050,40 @@ check("place_skills の名前に path の区切り", rejected([base.merge("place
 check("place_skills の名前が文字列でない", rejected([base.merge("place_skills" => ["s", 1])], "place_skills must be"))
 check("place_skills が配列でない", rejected([base.merge("place_skills" => "s")], "place_skills must be"))
 check("case の skill を含まない place_skills", rejected([base.merge("place_skills" => ["t"])], "must include the skill"))
+# 修正の正しさの検査 (#763)。正例だけが持てて、形が決まっている
+fixed = pos.merge("fix_check" => { "file" => "lib/median.rb", "function" => "median",
+                                   "examples" => [{ "args" => [[1, 2]], "returns" => 1.5 }, { "args" => [[5]], "returns" => 5 }] })
+fx = ->(h) { [fixed.merge("fix_check" => fixed["fix_check"].merge(h))] }
+check("fix_check のある正例は fixture つきで通る",
+      C.parse(JSON.generate({ "schema_version" => 1, "cases" => [fixed] }), fixtures_root: fixtures).length == 1)
+check("repo の正例は fix_check を持ち、ほかは持たない",
+      repo_cases.all? { |c| c.key?("fix_check") == (c["kind"] == "positive") })
+check("負例の fix_check は拒む", rejected([base.merge("fix_check" => fixed["fix_check"])], "only a positive case"))
+check("fix_check が object でない", rejected([pos.merge("fix_check" => [])], "fix_check must be an object"))
+check("fix_check の key の欠け", rejected([pos.merge("fix_check" => fixed["fix_check"].reject { |k, _| k == "function" })], "fix_check must be an object"))
+check("fix_check の未知の key", rejected(fx.call("x" => 1), "fix_check must be an object"))
+check("fix_check.file が allowed_changes の外", rejected(fx.call("file" => "lib/other.rb"), "fix_check.file must be"))
+check("fix_check.file が Ruby の file でない",
+      rejected([fixed.merge("allowed_changes" => ["lib/median.txt"], "fix_check" => fixed["fix_check"].merge("file" => "lib/median.txt"))],
+               "fix_check.file must be"))
+check("fix_check.file の ..", rejected(fx.call("file" => "../x.rb"), "fix_check.file must be"))
+check("fix_check.file が文字列でない", rejected(fx.call("file" => 1), "fix_check.file must be"))
+check("fix_check.file が fixture に無い",
+      rejected([fixed.merge("allowed_changes" => ["lib/nope.rb"], "fix_check" => fixed["fix_check"].merge("file" => "lib/nope.rb"))],
+               "fix_check.file not in fixture", fixtures: fixtures))
+["Median", "a b", "system;x", "", nil, 1, "a\nb"].each do |name|
+  check("fix_check.function の形 #{name.inspect}", rejected(fx.call("function" => name), "fix_check.function must match"))
+end
+bad_examples = [nil, [], {}, [1], [{}], [{ "args" => [1] }], [{ "args" => 1, "returns" => 1 }], [{ "args" => [1], "returns" => "1" }],
+                [{ "args" => [1], "returns" => nil }], [{ "args" => [1], "returns" => true }], [{ "args" => [1], "returns" => 1, "x" => 1 }],
+                (0..64).map { |i| { "args" => [[i]], "returns" => i } }]
+bad_examples.each_with_index do |list, i|
+  check("fix_check.examples の形 #{i}", rejected(fx.call("examples" => list), "fix_check.examples must be 1..64"))
+end
+check("fix_check.examples の args の重複",
+      rejected(fx.call("examples" => [{ "args" => [[1]], "returns" => 1 }, { "args" => [[1]], "returns" => 2 }]), "distinct args"))
+check("fix_check.examples は 64 個まで通る",
+      C.parse(JSON.generate({ "schema_version" => 1, "cases" => fx.call("examples" => (1..64).map { |i| { "args" => [[i]], "returns" => i } }) })).length == 1)
 check("case の skill を含む place_skills は通る", C.parse(JSON.generate({ "schema_version" => 1, "cases" => [base.merge("place_skills" => %w[t s])] })).length == 1)
 exit(@failed.zero? ? 0 : 1)
 RUBY
@@ -1211,6 +1245,15 @@ cat > "$codex_events" <<'EOF'
 {"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}
 EOF
 
+# 修正の正しさの検査 (#763) の無い case の表。検査には sandbox-exec が要るので、偽の CLI の run はこの表で回し、sandbox を
+# 適用できない環境でも走るようにする。検査つきの run は skill-behavior-fix-check-test.sh が見る。
+nofix_root="$tmp/nofix"
+mkdir -p "$nofix_root"
+cp -R "$repo_root/scripts/lib/skill_behavior_fixtures" "$nofix_root/skill_behavior_fixtures"
+nofix_cases="$nofix_root/skill_behavior_cases.json"
+ruby -rjson -e 'd = JSON.parse(File.read(ARGV[0])); d["cases"].each { |c| c.delete("fix_check") }
+  File.write(ARGV[1], JSON.generate(d))' "$cases_json" "$nofix_cases"
+
 # run_fake <tool> <events> <args...>: 偽の CLI を PATH の先頭に置いて probe を回す。FAKE_* は呼ぶ側が env で渡す。
 run_fake() {
   tool=$1
@@ -1222,6 +1265,10 @@ run_fake() {
     [ "$a" != "--skills" ] || with_source=0
   done
   [ "$with_source" -eq 0 ] || set -- --source "$source_dir" "$@"
+  case " $* " in
+    *' --cases '*) : ;;
+    *) set -- --cases "$nofix_cases" "$@" ;;
+  esac
   : > "$log"
   set +e
   # ふだんの Codex の home は RUN_CODEX_HOME で差し替えられる (既定は user の skill を持つ empty_home)
@@ -1389,7 +1436,7 @@ RUN_CODEX_HOME=
 judge="$repo_root/scripts/check-skill-behavior.sh"
 cases_file="$tmp/cases-fix.json"
 ruby -rjson -e 'd = JSON.parse(File.read(ARGV[0])); d["cases"].select! { |c| c["id"] == "investigate-fix" }
-  File.write(ARGV[1], JSON.generate(d))' "$repo_root/scripts/lib/skill_behavior_cases.json" "$cases_file"
+  File.write(ARGV[1], JSON.generate(d))' "$nofix_cases" "$cases_file"
 FAKE_WRITE=lib/median.rb
 export FAKE_WRITE
 candidate="$tmp/candidate-fix.json"

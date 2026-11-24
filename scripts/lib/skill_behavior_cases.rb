@@ -4,7 +4,8 @@
 # Spec: docs/skill-behavior-eval.md。
 #
 # case は 1 回の user の依頼と、その run で求める / 禁じる操作の区分、到達の条件 (reach)、run の後に変わってよい
-# file (allowed_changes)、temp project に置く skill (place_skills) を持つ。形が違えば、run を始める前に止める (Error)。
+# file (allowed_changes)、temp project に置く skill (place_skills) を持つ。正例は、修正の正しさの検査 (fix_check) も
+# 持てる (#763)。形が違えば、run を始める前に止める (Error)。
 
 require "json"
 
@@ -18,6 +19,16 @@ module SkillBehaviorCases
   EXPECTABLE_CLASSES = (CLASSES - %w[read exec unknown]).freeze
   KINDS = %w[negative positive ambiguous].freeze
   CASE_KEYS = %w[id prompt skill kind pair fixture reach forbid require allowed_changes place_skills].freeze
+  # 無くてもよい case の key。
+  OPTIONAL_CASE_KEYS = %w[fix_check].freeze
+  # 修正の正しさ (run の fix_check) の status と、その status で使う reason。
+  # unmeasured は、正しさを測れなかった run (不合格と分けて数える)。
+  FIX_STATUSES = {
+    "passed" => %w[ok], "failed" => %w[wrong load-error no-result], "unmeasured" => %w[sandbox launch timeout signal]
+  }.freeze
+  FIX_CHECK_KEYS = %w[file function examples].freeze
+  FIX_FUNCTION = /\A[a-z_][a-z0-9_]{0,63}\z/.freeze
+  FIX_EXAMPLES_MAX = 64
   ID_PATTERN = /\A[a-z0-9][a-z0-9-]*\z/.freeze
   # results.json の variant (probe の --variant)。出力に写すので、決まった文字だけにする。
   LABEL_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/.freeze
@@ -82,7 +93,7 @@ module SkillBehaviorCases
     raise Error, "#{label}: must be an object" unless c.is_a?(Hash)
 
     missing = CASE_KEYS - c.keys
-    extra = c.keys - CASE_KEYS
+    extra = c.keys - CASE_KEYS - OPTIONAL_CASE_KEYS
     raise Error, "#{label}: missing key(s): #{missing.join(', ')}" unless missing.empty?
     raise Error, unknown_keys_message(label, extra) unless extra.empty?
 
@@ -130,6 +141,8 @@ module SkillBehaviorCases
       raise Error, "#{label}: a positive case must allow at least one change"
     end
 
+    validate_fix_check!(c, label) if c.key?("fix_check")
+
     return unless fixtures_root
 
     dir = File.join(fixtures_root, c["fixture"])
@@ -140,6 +153,38 @@ module SkillBehaviorCases
     c["reach"].each do |p|
       raise Error, "#{label}: reach path not in fixture #{c['fixture']}: #{p}" unless File.file?(File.join(dir, p))
     end
+    return unless c.key?("fix_check") && !File.file?(File.join(dir, c["fix_check"]["file"]))
+
+    raise Error, "#{label}: fix_check.file not in fixture #{c['fixture']}"
+  end
+
+  # 修正の正しさの検査 (#763)。正例だけが持てる。file は変わってよい Ruby の file、function はその top-level の関数。
+  # examples は、引数 (args。JSON の値の配列) と戻り値 (returns。有限の数) の組。
+  def self.validate_fix_check!(c, label)
+    raise Error, "#{label}: only a positive case can have fix_check" unless c["kind"] == "positive"
+
+    f = c["fix_check"]
+    unless f.is_a?(Hash) && f.keys.sort == FIX_CHECK_KEYS.sort
+      raise Error, "#{label}: fix_check must be an object with exactly #{FIX_CHECK_KEYS.join(', ')}"
+    end
+    unless relative_path?(f["file"]) && f["file"].end_with?(".rb") && c["allowed_changes"].include?(f["file"])
+      raise Error, "#{label}: fix_check.file must be a .rb file in allowed_changes"
+    end
+    unless f["function"].is_a?(String) && f["function"].match?(FIX_FUNCTION)
+      raise Error, "#{label}: fix_check.function must match #{FIX_FUNCTION.source}"
+    end
+    list = f["examples"]
+    unless list.is_a?(Array) && list.length.between?(1, FIX_EXAMPLES_MAX) && list.all? { |e| fix_example?(e) }
+      raise Error, "#{label}: fix_check.examples must be 1..#{FIX_EXAMPLES_MAX} objects of args (array) and returns (finite number)"
+    end
+    return if list.map { |e| e["args"] }.uniq.length == list.length
+
+    raise Error, "#{label}: fix_check.examples must have distinct args"
+  end
+
+  def self.fix_example?(e)
+    e.is_a?(Hash) && e.keys.sort == %w[args returns] && e["args"].is_a?(Array) &&
+      (e["returns"].is_a?(Integer) || (e["returns"].is_a?(Float) && e["returns"].finite?))
   end
 
   # dir の下 (隠し file を含む) に symlink があれば止める。fixture と skill の dir は、link を含まない形でだけ copy する。
