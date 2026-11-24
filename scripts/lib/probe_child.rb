@@ -94,6 +94,8 @@ module ProbeChild
     truncated = false
     if max_bytes
       truncated = [out, err].any? { |b| b.bytesize > max_bytes }
+      # 越えたところで口を閉じているので、EOF まで読み切っていない。
+      drained = false if truncated
       out, err = [out, err].map { |b| b.byteslice(0, max_bytes).force_encoding(Encoding.default_external) }
     end
     Result.new(out: out, err: err, status: status, completed: completed, drained: drained, truncated: truncated)

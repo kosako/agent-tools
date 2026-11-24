@@ -59,6 +59,8 @@ end
   ["結果の行の後の空の行", decide.call("ready\n[1,2.5]\n\n\n"), ["failed", "no-result", 0]],
   ["結果の行が途中で切れている", decide.call("ready\n[1,2.5]"), ["failed", "no-result", 0]],
   ["上限を越えた出力", decide.call("ready\n[1,2.5]\n", truncated: true), ["failed", "no-result", 0]],
+  ["上限を越えた出力 (読み込みの失敗の印があっても)", decide.call("ready\nload-error\n", truncated: true), ["failed", "no-result", 0]],
+  ["上限を越えて signal で終わった", decide.call("ready\n", truncated: true, status: KILLED), ["unmeasured", "signal", nil]],
   ["印の行が途中で切れている", decide.call("ready"), ["unmeasured", "launch", nil]],
   ["例の数と違う", decide.call("ready\n[1]\n"), ["failed", "no-result", 0]],
   ["配列でない", decide.call("ready\n{}\n"), ["failed", "no-result", 0]],
@@ -99,12 +101,14 @@ child = ->(code, **opts) { ProbeChild.run([RbConfig.ruby, "--disable=gems", "-e"
   took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
   got = name == "STDOUT" ? r.out : r.err
   check("#{name} に書き続ける子は、上限で切って止まる (#{got.bytesize} byte, #{took.round(1)} 秒)",
-        got.bytesize == 100_000 && r.truncated == true && r.completed && took < 10)
+        got.bytesize == 100_000 && r.truncated == true && r.completed && r.drained == false && took < 10)
 end
 r = child.call("STDOUT.write('あ' * 3); STDERR.write('い')", max_bytes: 9)
 check("上限ちょうどの出力は、切らずに残す (#{r.out.inspect} #{r.truncated})", r.out == "あああ" && r.err == "い" && r.truncated == false && r.drained)
 r = child.call("STDOUT.write('x' * 10)", max_bytes: 9)
-check("上限を 1 byte 越えたら切れた印を立てる", r.out == "x" * 9 && r.truncated == true)
+check("上限を 1 byte 越えたら切れた印を立て、読み切ったとはしない (#{r.drained})", r.out == "x" * 9 && r.truncated == true && r.drained == false)
+r = child.call("STDOUT.syswrite('x' * #{ProbeChild::READ_CHUNK}); sleep 0.5; STDOUT.syswrite('y') rescue nil", max_bytes: ProbeChild::READ_CHUNK)
+check("ちょうど上限まで読んだ後に続きが来ても、切れた印を立てる", r.out == "x" * ProbeChild::READ_CHUNK && r.truncated == true && r.drained == false)
 r = child.call("STDOUT.write('あ' * 100_000)")
 check("上限を渡さなければ全部を残す", r.out == "あ" * 100_000 && r.truncated == false && r.drained)
 check("label は数を、測れたときだけ出す", outcome.label == "unmeasured/sandbox" &&

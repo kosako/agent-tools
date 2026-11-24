@@ -142,10 +142,12 @@ module SkillBehaviorFixCheck
     end
     return ["unmeasured", "launch", nil] unless ready
     return ["unmeasured", "signal", nil] if result.status.nil? || result.status.signaled?
+    # 上限を越えた出力は、途中で切れているので、どの形も受けない。
+    return ["failed", "no-result", 0] if result.truncated
     return ["failed", "load-error", 0] if text == "ready\nload-error\n"
 
-    # ちょうど 2 行の形だけを受ける。上限を越えた出力は、途中で切れているので受けない。
-    line = result.truncated ? nil : text[/\Aready\n([^\n]*)\n\z/n, 1]
+    # ちょうど 2 行の形だけを受ける。
+    line = text[/\Aready\n([^\n]*)\n\z/n, 1]
     values = line.nil? ? nil : parse_values(line, spec["examples"].length)
     return ["failed", "no-result", 0] if values.nil?
 
