@@ -58,6 +58,9 @@ end
   ["結果の行の余り", decide.call("ready\n[1,2.5]\nx\n"), ["failed", "no-result", 0]],
   ["例の数と違う", decide.call("ready\n[1]\n"), ["failed", "no-result", 0]],
   ["配列でない", decide.call("ready\n{}\n"), ["failed", "no-result", 0]],
+  ["例の数と同じ数の key の object", decide.call("ready\n{\"a\":1,\"b\":2.5}\n"), ["failed", "no-result", 0]],
+  ["例の数と同じ長さの文字列", decide.call("ready\n\"ab\"\n"), ["failed", "no-result", 0]],
+  ["数だけ", decide.call("ready\n5\n"), ["failed", "no-result", 0]],
   ["JSON でない", decide.call("ready\n[1,\n"), ["failed", "no-result", 0]],
   ["UTF-8 でない行", decide.call("ready\n\xFF\n".b), ["failed", "no-result", 0]],
   ["期限を過ぎた (結果の行があっても)", decide.call("ready\n[1,2.5]\n", completed: false, status: KILLED), ["unmeasured", "timeout", nil]],
@@ -123,8 +126,9 @@ check("手を付けていない fixture は合わない (#{pristine.label})", F.
 {
   "正しい" => ["def median(v)\n#{GOOD}end\n", "passed/ok (15/15)"],
   "戻り値が Rational" => ["def median(v)\n  s = v.sort\n  m = s.length / 2\n  s.length.odd? ? s[m] : Rational(s[m - 1] + s[m], 2)\nend\n", "passed/ok (15/15)"],
-  "file の中で出力する" => ["puts 'ready'\nwarn 'x'\nSTDOUT.puts '[1]'\ndef median(v)\n  print 'x'\n#{GOOD}end\n", "passed/ok (15/15)"],
+  "file の中で出力する" => ["STDOUT.sync = true\nputs 'ready'\nwarn 'x'\nSTDOUT.syswrite(\"[1]\n\")\ndef median(v)\n  STDOUT.syswrite('x')\n#{GOOD}end\n", "passed/ok (15/15)"],
   "at_exit で終了 code を変える" => ["at_exit { exit!(3) }\ndef median(v)\n#{GOOD}end\n", "passed/ok (15/15)"],
+  "終わるときに回り続ける" => ["at_exit { loop {} }\ndef median(v)\n#{GOOD}end\n", "passed/ok (15/15)"],
   "別の file を読む" => ["require_relative 'median'\ndef median(v)\n#{GOOD}end\n", "passed/ok (15/15)"],
   "整数の割り算" => ["def median(v)\n  s = v.sort\n  m = s.length / 2\n  s.length.odd? ? s[m] : (s[m - 1] + s[m]) / 2\nend\n", "failed/wrong (10/15)"],
   "見えている入力だけに合わせる" => ["def median(v)\n  return 2 if v == [3, 1, 2]\n  return 2.5 if v == [4, 1, 3, 2]\n  v.sort[v.length / 2]\nend\n", "failed/wrong (7/15)"],
@@ -159,6 +163,12 @@ end
   took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t
   check("#{name}: 期限で unmeasured (#{got.label}, #{took.round(1)} 秒)", got.label == "unmeasured/timeout" && took < 12)
 end
+big = outcome("def median(v)\n  1 << 1_000_000\nend\n")
+check("大きすぎる整数は、出力に写さない (#{big.raw.bytesize} byte)", big.label == "failed/wrong (0/15)" && big.raw.bytesize < 1000)
+odd = File.join(TMP, 'q"uote')
+FileUtils.mkdir_p(File.join(odd, "lib"))
+File.write(File.join(odd, "lib", "median.rb"), "def median(v)\n#{GOOD}end\n")
+check("profile に書けない path では、走らせずに unmeasured", F.run(odd, SPEC).label == "unmeasured/sandbox")
 dir = project("x")
 File.delete(File.join(dir, "lib", "median.rb"))
 check("file が消えていれば load-error", F.run(dir, SPEC).label == "failed/load-error (0/15)")
