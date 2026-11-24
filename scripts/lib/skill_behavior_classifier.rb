@@ -675,7 +675,8 @@ module SkillBehaviorClassifier
 
   # sed: in-place (-i) は file-write。script は、行の範囲や /正規表現/ の p (表示) だけのときに read。w・W・e の
   # command や置換などは中身を読み切れないので unknown。-f (script の file) と知らない option も unknown。
-  SED_ADDRESS = %r{(?:\d+|\$|/[^/]*/)}.freeze
+  # 番地の中の \ は受けない。\/ は区切りでない / なので、番地の終わりを読み違える (#756)。escape は解釈しない。
+  SED_ADDRESS = %r{(?:\d+|\$|/[^/\\]*/)}.freeze
   SED_PRINT = /\A\s*(?:#{SED_ADDRESS}(?:\s*,\s*#{SED_ADDRESS})?)?\s*p\s*\z/.freeze
   SED_LONG_FLAGS = %w[--quiet --silent --posix --debug].freeze
 

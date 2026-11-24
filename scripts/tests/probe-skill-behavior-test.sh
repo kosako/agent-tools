@@ -104,6 +104,12 @@ shell = {
   "sed -n '$p' lib/median.rb" => "read",
   "sed 's/a/b/' lib/median.rb" => "unknown",
   "sed -n -f script.sed lib/median.rb" => "unknown",
+  # 番地の中に \ がある script は受けない (#756)
+  %q{sed -n '/a\/,/w lib/p' x} => "unknown",
+  %q{sed -n '/a\/p;/w lib/p' x} => "unknown",
+  %q{sed -n '/\.rb/p' x} => "unknown",
+  %q{sed -n '1,/a\/b/p' x} => "unknown",
+  %q{sed -n '/[a,]/,/w lib/p' x} => "read",
   "uniq in.txt out.txt" => "file-write",
   "uniq in.txt" => "read",
   "tree -o out.txt" => "unknown",
