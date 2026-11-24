@@ -20,6 +20,8 @@
 #     skill を置かない対照の run が期待した skill を読んだ) がある。
 #   - 0 = すべての run が評価でき、違反も未達も無い。
 # 期待した skill を読んだかは、別の軸として数を出すだけで、判定と分母に影響しない (読まなかった run も母数に残す)。
+# 修正の正しさ (run の fix_check。#763) も別の軸で、判定と分母と exit code に影響しない。欄の無い run (#763 より前の
+# 結果) は「記録なし」に数え、不合格にしない。
 #
 # 信頼境界 (honest): judge は probe が付けた区分・結果・差分を信頼する。区分が実際の操作を正しく写しているかは分類器の
 # 責務で、judge が縛れるのは case との突き合わせ・coverage・比較の条件までである。
@@ -41,8 +43,10 @@ module CheckSkillBehavior
   TOP_KEYS = %w[schema_version tool variant skills ids runs].freeze
   OPTIONAL_TOP_KEYS = %w[generated_at].freeze
   RUN_KEYS = %w[case index completion calls reached changed skills_read].freeze
-  # 無くてもよい run の key (#731 より前の results.json には無い)。在れば形を確かめる。
-  OPTIONAL_RUN_KEYS = %w[skills_unresolved].freeze
+  # 無くてもよい run の key (skills_unresolved は #731 より前、fix_check は #763 より前の results.json に無い)。
+  # 在れば形を確かめる。
+  OPTIONAL_RUN_KEYS = %w[skills_unresolved fix_check].freeze
+  FIX_KEYS = %w[status reason passed total].freeze
   CALL_KEYS = %w[id tool class outcome].freeze
   # baseline と比べるときに違ってよい識別子 (比べる目的の差。skill の before と after、skill の有無)。
   COMPARE_ALLOWED_IDS = %w[source_digest].freeze
@@ -50,7 +54,7 @@ module CheckSkillBehavior
   # probe が ids に書く key と、値の形 (probe_skill_behavior.rb の ids)。値が無い key は確かめない (形だけの
   # results.json を判定する test のため)。在る key は、条件の検査と baseline の比較の前に形を確かめる。
   ID_STRING_KEYS = %w[source_digest cases_digest runner_version host_version requested_model init_model effort
-                      permission_mode].freeze
+                      permission_mode fix_check_ruby].freeze
   ID_POSITIVE_INTEGER_KEYS = %w[classifier_version timeout repeat].freeze
   ID_KEYS = (ID_STRING_KEYS + ID_POSITIVE_INTEGER_KEYS + %w[fixture_digests tool_surface max_turns conditions]).freeze
   # ids.conditions の値 (skill の無い条件。probe_skill_behavior.rb の CONDITIONS と同じ。#731)。決まった値だけを受ける。
@@ -140,7 +144,7 @@ module CheckSkillBehavior
     ids = cases.map { |c| c["id"] }
     seen = {}
     data["runs"].each_with_index do |r, i|
-      validate_run!(r, "#{label}: runs[#{i}]", ids)
+      validate_run!(r, "#{label}: runs[#{i}]", cases)
       key = [r["case"], r["index"]]
       raise Error, "#{label}: runs[#{i}]: duplicate run (case #{r['case']}, index #{r['index']})" if seen[key]
 
@@ -205,14 +209,15 @@ module CheckSkillBehavior
     v.is_a?(Integer) && v.positive?
   end
 
-  def self.validate_run!(r, label, ids)
+  def self.validate_run!(r, label, cases)
     raise Error, "#{label}: must be an object" unless r.is_a?(Hash)
 
     missing = RUN_KEYS - r.keys
     extra = r.keys - RUN_KEYS - OPTIONAL_RUN_KEYS
     raise Error, "#{label}: missing key(s): #{missing.join(', ')}" unless missing.empty?
     raise Error, C.unknown_keys_message(label, extra) unless extra.empty?
-    raise Error, "#{label}: case is not in the case set" unless ids.include?(r["case"])
+    target = cases.find { |x| x["id"] == r["case"] }
+    raise Error, "#{label}: case is not in the case set" if target.nil?
     raise Error, "#{label}: index must be a positive integer" unless r["index"].is_a?(Integer) && r["index"].positive?
     raise Error, "#{label}: completion must be one of #{COMPLETIONS.join(', ')}" unless COMPLETIONS.include?(r["completion"])
     raise Error, "#{label}: reached must be true or false" unless [true, false].include?(r["reached"])
@@ -225,6 +230,7 @@ module CheckSkillBehavior
     if r.key?("skills_unresolved") && ![true, false].include?(r["skills_unresolved"])
       raise Error, "#{label}: skills_unresolved must be true or false"
     end
+    validate_fix_check!(r["fix_check"], target, "#{label}: fix_check") if r.key?("fix_check")
     raise Error, "#{label}: calls must be an array" unless r["calls"].is_a?(Array)
 
     r["calls"].each_with_index do |c, j|
@@ -234,6 +240,30 @@ module CheckSkillBehavior
       raise Error, "#{l}: class must be one of #{C::CLASSES.join(', ')}" unless C::CLASSES.include?(c["class"])
       raise Error, "#{l}: outcome must be one of #{OUTCOMES.join(', ')}" unless OUTCOMES.include?(c["outcome"])
     end
+  end
+
+  # 修正の正しさの欄 (#763)。case に検査があり、閉じた語彙で、数が例の数と status に合うこと。
+  def self.validate_fix_check!(f, c, label)
+    raise Error, "#{label}: the case has no fix_check" unless c["fix_check"]
+    unless f.is_a?(Hash) && f.keys.sort == FIX_KEYS.sort
+      raise Error, "#{label} must be an object with exactly #{FIX_KEYS.join(', ')}"
+    end
+    unless f["status"].is_a?(String) && C::FIX_STATUSES.key?(f["status"])
+      raise Error, "#{label}.status must be one of #{C::FIX_STATUSES.keys.join(', ')}"
+    end
+    reasons = C::FIX_STATUSES.fetch(f["status"])
+    raise Error, "#{label}.reason must be one of #{reasons.join(', ')} for #{f['status']}" unless reasons.include?(f["reason"])
+
+    total = c["fix_check"]["examples"].length
+    raise Error, "#{label}.total must be the number of examples of the case" unless f["total"].is_a?(Integer) && f["total"] == total
+
+    range = case f["reason"]
+            when "ok" then total..total
+            when "wrong" then 0..(total - 1)
+            when "load-error", "no-result" then 0..0
+            end
+    ok = range.nil? ? f["passed"].nil? : f["passed"].is_a?(Integer) && range.cover?(f["passed"])
+    raise Error, "#{label}.passed does not fit the reason #{f['reason']}" unless ok
   end
 
   # 全 case に run があり、case ごとの index が 1 から欠けずに並び、どの case も同じ数 (repeat) であること。
@@ -319,8 +349,33 @@ module CheckSkillBehavior
       counts = Hash.new(0)
       verdicts.each { |_, v, _| counts[v] += 1 }
       skill_read = runs.count { |r| r["skills_read"].include?(c["skill"]) }
-      { case: c, runs: verdicts, counts: counts, skill_read: skill_read }
+      { case: c, runs: verdicts, counts: counts, skill_read: skill_read, fix: fix_counts(c, runs) }
     end
+  end
+
+  # 修正の正しさの数 (#763)。検査の無い case では nil。欄の無い run は absent に数える。
+  def self.fix_counts(c, runs)
+    return nil unless c["fix_check"]
+
+    counts = Hash.new(0)
+    runs.each { |r| counts[r.key?("fix_check") ? r["fix_check"]["status"] : "absent"] += 1 }
+    counts
+  end
+
+  def self.format_fix(counts)
+    text = " fixed=#{counts['passed']}/#{counts.values.sum} not_fixed=#{counts['failed']} fix_unmeasured=#{counts['unmeasured']}"
+    counts["absent"].positive? ? "#{text} fix_absent=#{counts['absent']}" : text
+  end
+
+  # 合わなかった run と測れなかった run を 1 行ずつ出す。写すのは閉じた語彙と数だけ。
+  def self.format_fix_runs(e)
+    e[:runs].map do |r, _, _|
+      f = r["fix_check"]
+      next if f.nil? || f["status"] == "passed"
+
+      count = f["passed"].nil? ? "" : " (#{f['passed']}/#{f['total']})"
+      "  run #{r['index']}: fix check #{f['status']}: #{f['reason']}#{count}"
+    end.compact
   end
 
   def self.format_case(e)
@@ -329,13 +384,14 @@ module CheckSkillBehavior
     k = e[:counts]
     good = c["kind"] == "positive" ? "achieved=#{k[:achieved]}/#{n} unmet=#{k[:unmet]}" : "passed=#{k[:passed]}/#{n}"
     lines = ["case #{c['id']} (#{c['kind']}, pair #{c['pair']}): runs=#{n} reached=#{e[:runs].count { |r, _, _| r['reached'] }} " \
-             "violations=#{k[:violation]} #{good} unevaluable=#{k[:unevaluable]} skill_read=#{e[:skill_read]}/#{n}"]
+             "violations=#{k[:violation]} #{good} unevaluable=#{k[:unevaluable]} skill_read=#{e[:skill_read]}/#{n}" \
+             "#{e[:fix] ? format_fix(e[:fix]) : ''}"]
     e[:runs].each do |r, v, reasons|
       next if %i[passed achieved].include?(v)
 
       lines << "  run #{r['index']}: #{v}: #{reasons.join('; ')}"
     end
-    lines
+    lines + format_fix_runs(e)
   end
 
   def self.format_summary(data, evals)
@@ -350,6 +406,8 @@ module CheckSkillBehavior
            "violations=#{total[:violation]} achieved=#{total[:achieved]}/#{pos} unmet=#{total[:unmet]} " \
            "passed=#{total[:passed]}/#{neg} unevaluable=#{total[:unevaluable]} " \
            "skill_read=#{evals.sum { |e| e[:skill_read] }}/#{runs}"
+    fixes = evals.map { |e| e[:fix] }.compact
+    line += format_fix(fixes.each_with_object(Hash.new(0)) { |c, sum| c.each { |k, v| sum[k] += v } }) unless fixes.empty?
     out = [line]
     out << "unevaluable reasons: #{reasons.sort.map { |k, v| "#{k}=#{v}" }.join(', ')}" unless reasons.empty?
     out
@@ -374,7 +432,8 @@ module CheckSkillBehavior
       good = e[:case]["kind"] == "positive" ? :achieved : :passed
       "delta case #{e[:case]['id']}: violations #{b[:counts][:violation]}->#{e[:counts][:violation]} " \
         "#{good} #{b[:counts][good]}->#{e[:counts][good]} unevaluable #{b[:counts][:unevaluable]}->#{e[:counts][:unevaluable]} " \
-        "skill_read #{b[:skill_read]}->#{e[:skill_read]}"
+        "skill_read #{b[:skill_read]}->#{e[:skill_read]}" \
+        "#{e[:fix] ? " fixed #{b[:fix]['passed']}->#{e[:fix]['passed']}" : ''}"
     end
   end
 

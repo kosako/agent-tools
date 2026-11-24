@@ -21,6 +21,8 @@
 #   - command の本文と prompt は results.json に入れず、raw log (<out>.raw/) にだけ置く。raw log は model が読んだ
 #     file の中身を含みうるので、公開しない。
 #   - 区分は分類器 (skill_behavior_classifier.rb) が決める。
+#   - 正例の case に fix_check があれば、run の後の code を隔離の中で走らせ、修正の正しさを別の欄に残す (#763)。
+#     検査は skill_behavior_fix_check.rb。区分と差分には影響しない。
 #   - routing probe (probe_skill_routing.rb) の codex の起動の境界・preflight・model の選び方・子 process の期限は
 #     共有する。user の skill の無効化 (skills.config) は使わない (評価用の home に user の skill が無いため)。
 #     終わり方 (completion) と観測は共有しない (routing の max-turns や
@@ -38,6 +40,7 @@ require_relative "probe_child"
 require_relative "probe_skill_routing"
 require_relative "skill_behavior_cases"
 require_relative "skill_behavior_classifier"
+require_relative "skill_behavior_fix_check"
 
 # C locale でも、読む text (file・command の出力) を UTF-8 として扱う (#432)。
 Encoding.default_external = Encoding::UTF_8 unless Encoding.default_external == Encoding::UTF_8
@@ -48,6 +51,7 @@ module ProbeSkillBehavior
   R = ProbeSkillRouting
   C = SkillBehaviorCases
   K = SkillBehaviorClassifier
+  FX = SkillBehaviorFixCheck
   TOOLS = %w[claude-code codex].freeze
   RESULTS_SCHEMA_VERSION = 1
   COMPLETIONS = %w[exited max-turns timeout failed].freeze
@@ -572,9 +576,23 @@ module ProbeSkillBehavior
   end
 
   def self.runner_version
-    files = %w[probe_skill_behavior.rb skill_behavior_cases.rb skill_behavior_classifier.rb probe_skill_routing.rb
-               probe_child.rb]
+    files = %w[probe_skill_behavior.rb skill_behavior_cases.rb skill_behavior_classifier.rb skill_behavior_fix_check.rb
+               probe_skill_routing.rb probe_child.rb]
     file_digest(files.map { |f| File.join(__dir__, f) })
+  end
+
+  # 修正の正しさの検査 (#763) が、手を付けていない fixture を「合わない」と見分けるかを、model を起動する前に確かめる。
+  # run と同じく temp project に写して当てる。見分けないとき (検査が通る・測れない・例が 1 つも合わない) は起動しない。
+  def self.fix_preflight!(cases, tool, fixtures_root)
+    cases.select { |c| c["fix_check"] }.each do |c|
+      outcome = Dir.mktmpdir("skill-behavior-") do |base|
+        FX.run(prepare_run(base, tool, File.join(fixtures_root, c["fixture"]), []), c["fix_check"])
+      end
+      next if FX.detects_untouched?(outcome)
+
+      raise Error, "case #{c['id']}: fix_check must fail on the untouched fixture as failed/wrong with at least one " \
+                   "passing example (got #{outcome.label})"
+    end
   end
 
   def self.main(argv, root:)
@@ -646,6 +664,7 @@ module ProbeSkillBehavior
       return 0
     end
 
+    fix_preflight!(cases, opts[:tool], fixtures_root)
     host_version = preflight!(opts[:tool], codex_env(opts))
     raw_dir = "#{opts[:out]}.raw"
     raise Error, "raw log directory is a symlink: #{raw_dir}" if File.symlink?(raw_dir)
@@ -661,6 +680,7 @@ module ProbeSkillBehavior
         stderr_path = R.raw_log_path(raw_dir, c["id"], n + 1, "stderr")
         r = nil
         changed = nil
+        fix = nil
         # run ごとに新しい temp project (前の run の書き込みを次の run に持ち込まない)
         Dir.mktmpdir("skill-behavior-") do |base|
           proj = prepare_run(base, opts[:tool], fixture_dir, placed.fetch(c["id"]))
@@ -668,20 +688,26 @@ module ProbeSkillBehavior
           recheck_codex_home!(opts) if opts[:tool] == "codex"
           r = run_one(opts, proj, names, c["prompt"], infos.fetch(c["fixture"]))
           changed = changed_paths(before, snapshot(proj))
+          # 差分を取った後に、run の後の code を隔離の中で走らせる (書き込みは拒むので、差分は変わらない)。
+          fix = FX.run(proj, c["fix_check"]) if c["fix_check"]
         end
         write_no_follow(jsonl_path, r[:stdout], dir: raw_dir, dir_real: raw_real)
         write_no_follow(stderr_path, r[:stderr], dir: raw_dir, dir_real: raw_real) unless r[:stderr].to_s.empty?
+        write_no_follow(R.raw_log_path(raw_dir, c["id"], n + 1, "fix-check"), fix.raw, dir: raw_dir, dir_real: raw_real) if fix
         inits << r[:init] if r[:init]
         reached = r[:calls].any? { |call| call[:strings].any? { |s| c["reach"].any? { |p| s.include?(p) } } }
-        runs << {
+        run = {
           "case" => c["id"], "index" => n + 1, "completion" => r[:completion],
           "calls" => r[:calls].map { |call| { "id" => call[:id], "tool" => call[:tool], "class" => call[:class],
                                               "outcome" => call[:outcome] } },
           "reached" => reached, "changed" => changed, "skills_read" => r[:skills_read],
           "skills_unresolved" => r[:skills_unresolved],
         }
+        run["fix_check"] = fix.to_h_for_results if fix
+        runs << run
         puts "#{c['id']} [#{n + 1}/#{opts[:repeat]}]: #{r[:completion]} reached=#{reached} " \
-             "calls=[#{class_counts(r[:calls])}] changed=#{changed.length} skills=#{r[:skills_read].inspect}"
+             "calls=[#{class_counts(r[:calls])}] changed=#{changed.length} skills=#{r[:skills_read].inspect}" \
+             "#{fix ? " fix=#{fix.label}" : ''}"
       end
     end
 
@@ -708,6 +734,8 @@ module ProbeSkillBehavior
       "timeout" => opts[:timeout],
       "repeat" => opts[:repeat],
     }
+    # 検査に使った Ruby の版 (検査のある case を含む run だけ)。
+    ids["fix_check_ruby"] = RUBY_VERSION if cases.any? { |c| c["fix_check"] }
     results = {
       "schema_version" => RESULTS_SCHEMA_VERSION,
       "tool" => opts[:tool],

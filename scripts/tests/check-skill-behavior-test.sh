@@ -7,6 +7,7 @@
 # - 記録した条件の食い違い (run の間の mixed、固定した tool surface、permission の mode、skill を置かない対照の run が
 #   期待した skill を読んだ。対照を baseline に渡したときも同じ)。ids.conditions の決まった値 (#731)。
 # - baseline との比較の条件 (tool・数・識別子) と、違ってよい差 (source_digest・variant・skills)。
+# - 修正の正しさの欄 (#763): 別の軸の数、exit code に影響しないこと、欄の無い古い結果、形の検査。
 # - probe の実際の出力 (偽の claude で回した results.json) をそのまま判定できること。
 # network / 実 CLI には触れない。
 set -eu
@@ -404,6 +405,96 @@ end
 rc, out, = judge_run.call(mutate.call { |d| run_of.call(d, "neg")["calls"] << write }, baseline: mutate.call { |d| d["tool"] = "codex" })
 check("比べられない baseline でも候補の違反は exit 1 (#{rc})", rc == 1 && out.include?("violation"))
 
+# 修正の正しさの欄 (#763)。pos に 3 例の検査を足した case の表で判定する
+fix_cases = copy.call(cases)
+fix_cases["cases"][1]["fix_check"] = { "file" => "lib.rb", "function" => "f",
+                                       "examples" => (1..3).map { |i| { "args" => [i], "returns" => i } } }
+fix_path = File.join(tmp, "fix-cases.json")
+File.write(fix_path, JSON.generate(fix_cases))
+fix_judge = lambda do |data, baseline: nil|
+  @n += 1
+  path = File.join(tmp, "f#{@n}.json")
+  File.write(path, JSON.generate(data))
+  args = ["sh", judge, "--cases", fix_path, "--results", path]
+  if baseline
+    File.write("#{path}.base", JSON.generate(baseline))
+    args += ["--baseline", "#{path}.base"]
+  end
+  out, err, st = Open3.capture3(*args)
+  [st.exitstatus, out, err]
+end
+fix = ->(status, reason, passed, total = 3) { { "status" => status, "reason" => reason, "passed" => passed, "total" => total } }
+with_fix = ->(*values) { mutate.call { |d|
+  d["ids"]["repeat"] = values.length
+  d["runs"] = %w[neg pos amb].flat_map { |id| (1..values.length).map { |n| run.call(id, n) } }
+  d["runs"].select { |r| r["case"] == "pos" }.each_with_index { |r, i| r["fix_check"] = values[i] unless values[i].nil? }
+} }
+rc, out, = fix_judge.call(with_fix.call(fix.call("passed", "ok", 3)))
+check("合った run は fixed に数える (#{rc}): #{out}",
+      rc == 0 && out.include?("skill_read=1/1 fixed=1/1 not_fixed=0 fix_unmeasured=0\n") &&
+      out.include?("skill_read=3/3 fixed=1/1 not_fixed=0 fix_unmeasured=0\n") && !out.include?("fix check"))
+rc, out, = fix_judge.call(with_fix.call(fix.call("failed", "wrong", 2), fix.call("unmeasured", "timeout", nil),
+                                        fix.call("failed", "load-error", 0), nil))
+check("合わない run・測れない run・記録の無い run を分けて数え、判定と exit code は変わらない (#{rc}): #{out}",
+      rc == 0 && out.include?("achieved=4/4") && out.include?("fixed=0/4 not_fixed=2 fix_unmeasured=1 fix_absent=1\n") &&
+      out.include?("  run 1: fix check failed: wrong (2/3)\n") && out.include?("  run 2: fix check unmeasured: timeout\n") &&
+      out.include?("  run 3: fix check failed: load-error (0/3)\n") && !out.include?("  run 4: fix check"))
+rc, out, = fix_judge.call(base)
+check("古い結果 (欄の無い run) は記録なしで、不合格に数えない (#{rc}): #{out}",
+      rc == 0 && out.include?("fixed=0/1 not_fixed=0 fix_unmeasured=0 fix_absent=1"))
+check("検査の無い case の行には正しさの数を出さない", out.lines.grep(/case (neg|amb) /).length == 2 && out.lines.grep(/case (neg|amb) /).none? { |l| l.include?("fixed=") })
+rc, out, = judge_run.call(base)
+check("検査の無い case の表では、正しさの数を出さない (#{rc})", rc == 0 && !out.include?("fixed="))
+rc, out, = fix_judge.call(with_fix.call(fix.call("failed", "wrong", 0)).tap { |d| run_of.call(d, "neg")["calls"] << write })
+check("違反があれば、正しさによらず exit 1 (#{rc})", rc == 1 && out.include?("not_fixed=1"))
+rc, out, = fix_judge.call(with_fix.call(fix.call("passed", "ok", 3)).tap { |d| run_of.call(d, "pos")["calls"] = [read] })
+check("合っていても、求めた区分の呼び出しが無ければ unmet (#{rc})", rc == 1 && out.include?("unmet=1") && out.include?("fixed=1/1"))
+rc, out, = fix_judge.call(with_fix.call(fix.call("passed", "ok", 3)), baseline: base)
+check("baseline との差に fixed を出す (#{rc}): #{out.lines.grep(/delta/).join}",
+      rc == 0 && out.include?("delta case pos: violations 0->0 achieved 1->1 unevaluable 0->0 skill_read 1->1 fixed 0->1\n") &&
+      out.lines.grep(/delta case neg/).none? { |l| l.include?("fixed") })
+rc, out, = fix_judge.call(mutate.call { |d| d["ids"]["fix_check_ruby"] = "2.6.10" }, baseline: base)
+check("検査の Ruby の版が違えば比べない (#{rc})", rc == 2 && out.include?("ids differ: fix_check_ruby"))
+rc, _, err = judge_run.call(mutate.call { |d| run_of.call(d, "pos")["fix_check"] = fix.call("passed", "ok", 3) })
+check("検査の無い case の run の欄は入力の誤り (#{rc}): #{err.lines.first}", rc == 2 && err.include?("fix_check: the case has no fix_check"))
+rc, _, err = fix_judge.call(mutate.call { |d| run_of.call(d, "neg")["fix_check"] = fix.call("passed", "ok", 3) })
+check("検査のある表でも、負例の run の欄は入力の誤り (#{rc})", rc == 2 && err.include?("fix_check: the case has no fix_check"))
+rc, _, err = fix_judge.call(with_fix.call(fix.call("secret-canary", "ok", 3)))
+check("知らない status は入力の誤りで、値を出さない (#{rc}): #{err.lines.first}",
+      rc == 2 && err.include?("fix_check.status must be one of passed, failed, unmeasured") && !err.include?("secret-canary"))
+
+# 欄の形の全部の組。受けるのは、下の表の 9 行だけ (例は 3 つ)
+load File.join(File.dirname(judge), "lib", "check_skill_behavior.rb")
+accepted = [["passed", "ok", 3], ["failed", "wrong", 0], ["failed", "wrong", 1], ["failed", "wrong", 2], ["failed", "load-error", 0],
+            ["failed", "no-result", 0]] + %w[sandbox launch timeout signal].map { |r| ["unmeasured", r, nil] }
+statuses = ["passed", "failed", "unmeasured", "other", nil, 1]
+reasons = %w[ok wrong load-error no-result sandbox launch timeout signal other] + [nil, 1]
+counts = [nil, -1, 0, 1, 2, 3, 4, 1.0, "1", true]
+totals = [3, 2, 4, 0, nil, 3.0, "3"]
+target = fix_cases["cases"][1]
+tried = 0
+wrong = statuses.product(reasons, counts, totals).reject do |s, r, n, t|
+  tried += 1
+  got = begin
+    CheckSkillBehavior.validate_fix_check!(fix.call(s, r, n, t), target, "x")
+    true
+  rescue CheckSkillBehavior::Error
+    false
+  end
+  got == (accepted.include?([s, r, n]) && !n.is_a?(Float) && t.is_a?(Integer) && t == 3)
+end
+check("欄の形の全部の組の数 (#{tried})", tried == 4620)
+check("欄の形の全部の組で、表の行だけを受ける (#{wrong.length} 件違う #{wrong.first(3).inspect})", wrong.empty?)
+["x", [], {}, fix.call("passed", "ok", 3).merge("x" => 1), fix.call("passed", "ok", 3).reject { |k, _| k == "total" }].each do |v|
+  got = begin
+    CheckSkillBehavior.validate_fix_check!(v, target, "x")
+    true
+  rescue CheckSkillBehavior::Error => e
+    e.message
+  end
+  check("欄が決まった 4 つの key の object でなければ誤り #{v.class}: #{got}", got.is_a?(String) && got.include?("must be an object with exactly"))
+end
+
 # 引数
 _, err, st = Open3.capture3("sh", judge, "--results", "x")
 check("--cases が無ければ exit 2", st.exitstatus == 2 && err.include?("--cases is required"))
@@ -436,16 +527,31 @@ for s in personal-investigate personal-production-rail; do   # repo の case の
   mkdir -p "$source_dir/$s"
   printf -- '---\nname: %s\ndescription: d\n---\n' "$s" > "$source_dir/$s/SKILL.md"
 done
+# repo の case の表には修正の正しさの検査 (#763) があり、sandbox-exec が要る。適用できない環境 (入れ子の sandbox の中など) では、
+# 検査の無い表で回す。CI では必ず repo の表で回す。
+cases_dir="$repo_root/scripts/lib"
+fix_seen='fixed=0/2 not_fixed=2 fix_unmeasured=0'
+if [ "${GITHUB_ACTIONS:-}" != true ] && ! /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true 2>/dev/null; then
+  echo "skip: sandbox-exec を適用できないので、修正の正しさの検査の無い表で回す"
+  cases_dir="$tmp/nofix"
+  fix_seen='achieved=2/2'
+  mkdir -p "$cases_dir"
+  cp -R "$repo_root/scripts/lib/skill_behavior_fixtures" "$cases_dir/skill_behavior_fixtures"
+  ruby -rjson -e 'd = JSON.parse(File.read(ARGV[0])); d["cases"].each { |c| c.delete("fix_check") }
+    File.write(ARGV[1], JSON.generate(d))' "$repo_root/scripts/lib/skill_behavior_cases.json" "$cases_dir/skill_behavior_cases.json"
+fi
 res="$tmp/probe.json"
 set +e
-probe_out=$(PATH="$fakebin:$PATH" sh "$repo_root/scripts/probe-skill-behavior.sh" --tool claude-code --source "$source_dir" --repeat 2 --out "$res" 2>&1)
+probe_out=$(PATH="$fakebin:$PATH" sh "$repo_root/scripts/probe-skill-behavior.sh" --tool claude-code --cases "$cases_dir/skill_behavior_cases.json" --source "$source_dir" --repeat 2 --out "$res" 2>&1)
 probe_rc=$?
-judge_out=$(sh "$judge" --cases "$repo_root/scripts/lib/skill_behavior_cases.json" --results "$res" 2>&1)
+judge_out=$(sh "$judge" --cases "$cases_dir/skill_behavior_cases.json" --results "$res" 2>&1)
 judge_rc=$?
 set -e
 [ "$probe_rc" -eq 0 ] || fail "the probe with a fake claude should exit 0 (rc=$probe_rc): $probe_out"
 [ "$judge_rc" -eq 0 ] || fail "the judge should accept the probe's own results (rc=$judge_rc): $judge_out"
 case "$judge_out" in *'ok: skill behavior verified (6 runs, 3 cases)'*) : ;; *) fail "judge summary: $judge_out" ;; esac
 case "$judge_out" in *'case investigate-fix (positive, pair investigate-fix): runs=2 reached=2 violations=0 achieved=2/2'*) : ;; *) fail "positive line: $judge_out" ;; esac
+# 許した file に 1 行足しただけの run は、達成だが、直っていない (#763)
+case "$judge_out" in *"$fix_seen"*) : ;; *) fail "fix columns: $judge_out" ;; esac
 
 echo "check-skill-behavior-test: ok"
