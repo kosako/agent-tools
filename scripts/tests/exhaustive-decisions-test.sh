@@ -85,7 +85,7 @@ exit(@failed.zero? ? 0 : 1)
 RUBY
 
 # ---- E2 ------------------------------------------------------------------------------------
-ruby -r"$script_dir/lib/check_helper" -rdigest -ryaml -rtime -rfileutils - "$packet" "$tmp" <<'RUBY'
+ruby -r"$script_dir/lib/check_helper" -rdigest -rjson -ryaml -rtime - "$packet" "$tmp" <<'RUBY'
 load ARGV[0]
 DIR = File.realpath(ARGV[1])
 PATH_PACKET = File.join(DIR, "7.md")
@@ -121,6 +121,25 @@ TEXTS = { "entry" => "足す結果", "next" => "新しい入口", "request" => "
 # 節 (## の見出し) ごとの本文。実装の読み方に依らず、行頭の ## だけで分ける。
 def split_body(text)
   text.split(/^(?=## )/).map { |part| part.start_with?("## ") ? [part.lines.first.chomp, part.lines.drop(1).join] : ["", part] }.to_h
+end
+
+# frontmatter を書く。updated のほかの値は JSON の形 (YAML としても読める) で書き、値の型をそのまま渡す。
+def packet_text(front)
+  lines = front.map { |k, v| "#{k}: #{k == 'updated' ? v : JSON.generate([v])[1..-2]}\n" }
+  "---\n#{lines.join}custom: keep\n# 残す comment\n---\n#{BODY}"
+end
+
+# 操作を 1 つ当てる。戻り値は [拒んだ理由 (通れば nil), 当てた後の file の中身]
+def apply(original, op, input)
+  File.write(PATH_PACKET, original)
+  data = { "schema" => 1, "operation" => op, "expected_sha256" => Digest::SHA256.hexdigest(original) }.merge(input)
+  code = begin
+    Packet.worker_update(7, data)
+    nil
+  rescue Packet::WorkerUpdateError => e
+    e.code
+  end
+  [code, File.read(PATH_PACKET)]
 end
 
 def read_packet(text)
@@ -201,21 +220,12 @@ INPUTS.each do |op, list|
   list.product(STATES, RUNS, LASTS, TABS, BRANCHES, PRS) do |input, state, run, last_run, tab, branch, pr|
     front = { "issue" => 7, "title" => "t", "state" => state, "worker" => "codex", "updated" => UPDATED }
     { "run" => run, "last_run" => last_run, "tab" => tab, "branch" => branch, "pr" => pr }.each { |k, v| front[k] = v unless v == :absent }
-    lines = front.map { |k, v| "#{k}: #{v.is_a?(String) && k != 'updated' ? v.inspect : v.inspect.sub('nil', 'null').delete('"')}\n" }
-    original = "---\n#{lines.join}custom: keep\n# 残す comment\n---\n#{BODY}"
-    File.write(PATH_PACKET, original)
+    original = packet_text(front)
     before, before_body = read_packet(original)
     label = "#{op} #{input.reject { |k, _| TEXTS.key?(k) }.inspect} state=#{state} run=#{run.inspect} last=#{last_run.inspect} tab=#{tab.inspect} branch=#{branch.inspect} pr=#{pr.inspect}"
     tried[op] += 1
-    data = { "schema" => 1, "operation" => op, "expected_sha256" => Digest::SHA256.hexdigest(original) }.merge(input)
     days = [Time.now.strftime("%Y-%m-%d")]
-    code = begin
-      Packet.worker_update(7, data)
-      nil
-    rescue Packet::WorkerUpdateError => e
-      e.code
-    end
-    text = File.read(PATH_PACKET)
+    code, text = apply(original, op, input)
     # 日付の境目をまたいでも揺れないように、呼ぶ前と後の日付のうち、書かれた方を使う
     days << Time.now.strftime("%Y-%m-%d")
     today = days.find { |d| text.include?("### #{d} ") } || days.last
@@ -268,6 +278,27 @@ check("許す組の数 #{accepted.inspect} (表からは #{counts.inspect})", ac
 # 壊れた組。(run, last_run, tab) の 48 通りのうち、壊れていないのは 5 × 2。
 check("壊れた packet の組の数 #{refused.inspect}", refused["invalid_packet"] == (48 - 10) * 4 * 6 * INPUTS.values.map(&:length).sum &&
                                                 refused.values.sum == 11_520 - counts.values.sum)
+# 壊れた記録の値。上の組の null のほかの形を、key ごとに全部の操作と state に当てる。どの操作でも invalid_packet で拒み、file は変わらない。
+# 記録 (run・last_run・tab) は、空でない文字列で、制御文字を含まない。run と last_run は絶対 path。branch は文字列、pr は整数。
+BROKEN = {
+  "run" => [nil, "", " ", 7, true, [A], { "a" => 1 }, "/runs/\ta", "/runs/\u0001a", "runs/a", "~/runs/a"],
+  "last_run" => [nil, "", " ", 7, true, [A], { "a" => 1 }, "/runs/\ta", "/runs/\u0001a", "runs/a", "~/runs/a"],
+  "tab" => [nil, "", " ", 7, true, ["#7"], { "a" => 1 }, "#\t7", "#\u00017"],
+  "branch" => [7, true, ["x"], { "a" => 1 }],
+  "pr" => ["3", true, [3], { "a" => 1 }, 1.5],
+}.freeze
+broken_tried = 0
+BROKEN.each do |key, values|
+  values.product(INPUTS.flat_map { |op, list| list.map { |i| [op, i] } }, STATES) do |value, (op, input), state|
+    front = { "issue" => 7, "title" => "t", "state" => state, "worker" => "codex", "updated" => UPDATED, key => value }
+    original = packet_text(front)
+    code, text = apply(original, op, input)
+    broken_tried += 1
+    problems["壊れた記録を拒まない"] << "#{op} state=#{state} #{key}=#{value.inspect} #{code.inspect}" unless code == "invalid_packet"
+    problems["壊れた記録で file が変わった"] << "#{op} state=#{state} #{key}=#{value.inspect}" unless text == original
+  end
+end
+check("壊れた記録の組の数 (#{broken_tried})", broken_tried == 40 * (11 + 11 + 9 + 4 + 5))
 problems.each { |name, list| check("#{name}: #{list.length} 件 #{list.first(2).join(' / ')}", list.empty?) }
 check("残った file が無い #{Dir.children(DIR).inspect}", Dir.children(DIR) == ["7.md"])
 exit(@failed.zero? ? 0 : 1)

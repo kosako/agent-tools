@@ -326,7 +326,7 @@ stdin は UTF-8 の JSON object 1 つで、上限は 64 KiB (65,536 byte)。
 | `review` | `pr` | state が open で run が無い | pr を保存し、state を review にして updated を更新 |
 
 上の表の「前提」と「更新内容」は、`scripts/tests/exhaustive-decisions-test.sh` が、操作、state、run、last_run、tab、branch、pr、
-`expected_run` の全部の組で実装と照らします (#762)。壊れた packet (run・last_run・tab が空、run と last_run の両方がある) は、どの操作でも
+`expected_run` の全部の組で実装と照らします (#762)。壊れた packet (run・last_run・tab が空や文字列でない、制御文字を含む、run と last_run が絶対 path でない、両方がある) は、どの操作でも
 `invalid_packet` で拒みます。表を変えるときは、この test の期待値も変えます。
 
 `run-start` の `expected_run` は、空の結果の再実行で使う前提です。
