@@ -46,6 +46,8 @@ class RunAll
     @running = {}
     @done = []
     @stop_requested = false
+    @stopped = false
+    @active = false
   end
 
   # 走らせる test の名前 (dir の直下の *.sh の file を、名前の順に)。
@@ -74,11 +76,7 @@ class RunAll
     return 1 unless finished
 
     summary(names.length, now - started)
-    passed = @done.length == names.length && @done.none?(&:failure)
-    # 後片付けと集計の間に届いた INT と TERM も、中断として扱う (走っている test はもう無い)。
-    return 1 if @stop_requested && !stop
-
-    passed ? 0 : 1
+    @done.length == names.length && @done.none?(&:failure) ? 0 : 1
   end
 
   def now
@@ -163,26 +161,38 @@ class RunAll
   end
 
   # --- 止める -------------------------------------------------------------------------------
+  # block (走らせる全体。後片付けと集計を含む) の間の INT と TERM を、中断にする。戻り値は exit code。
+  # handler は @active で 2 つに分かれる。block の間は印を残すだけで、その後は exit 1 で終わる。印を見るのは、@active を
+  # 閉じた後の 1 か所。閉じる前に届けば印が見え、閉じた後に届けば handler が終わらせるので、0 を返す隙間が無い。
   # signal の handler では記録だけをする (handler の中で例外を上げたり待ったりしない)。
   # 走っている子は多くて 16 本なので、読む前に pipe が埋まることはない。
   def with_signals
     @signal_reader, writer = IO.pipe
     wake = -> { writer.write_nonblock("x") rescue nil }
+    @active = true
     previous = [["CHLD", trap("CHLD") { wake.call }]]
     previous += %w[INT TERM].map do |name|
       [name, trap(name) do
+        exit!(1) unless @active
         @stop_requested = true
         wake.call
       end]
     end
-    yield
+    code = yield
+    @active = false
+    return code unless @stop_requested
+
+    stop unless @stopped
+    1
   ensure
+    @active = false
     previous&.each { |name, handler| trap(name, handler || "DEFAULT") }
     [@signal_reader, writer].compact.each(&:close)
   end
 
   # 走っている test の group を止め、それまでの出力を出す (止まっていた test を調べられるように)。戻り値は false。
   def stop
+    @stopped = true
     tests = @running.values
     say "interrupted; running: #{tests.map(&:label).join(', ')}"
     tests.each { |t| signal_group("TERM", t.pid) }

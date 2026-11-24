@@ -269,27 +269,52 @@ cases.each do |point, nth, sig, jobs, table|
 end
 check "signals: at every point, INT and TERM end as exit 1, without starting another test (#{cases.length}): #{wrong.first.inspect}",
       wrong.empty? && cases.length == 84
-# run の外 (引数を読む間と、run が終わった後) に届いた分も exit 1。入口を process として起動し、その位置で自分に送る。
-program = <<'PROGRAM'
-require ARGV[0]
-where, sig, dir = ARGV[1..-1]
-hit = lambda do
-  Process.kill(sig, Process.pid)
-  sleep 5
-end
-case where
-when "before" then RunAll.define_singleton_method(:parse) { |*args| hit.call; super(*args) }
-when "after" then RunAll.prepend(Module.new { define_method(:run) { super().tap { hit.call } } })
-end
-exit RunAll.main(["--dir", dir])
-PROGRAM
-ends = %w[before after none].product(%w[INT TERM]).map do |where, sig|
-  pid = Process.spawn("ruby", "-e", program, ARGV[0], where, sig, dir, out: File::NULL, err: File::NULL)
+# 入口 (main) の全部の行。fork した子で、runner の n 行目を実行する直前に signal を送る。n を 1 から、送る行が無くなるまで
+# 進める。送った回は、どの行でも exit 1 で終わる (0 でも、signal での終わりでもない)。位置を選んで試す形では、
+# handler を戻す間などの隙間を漏らした (#726 の review)。INT と TERM は、行ごとに交互に送る。
+# 数えるのは、main が handler を置いた後の行 (置く前の signal は、既定の動きになる)。
+source = File.realpath(ARGV[0])
+first = File.readlines(source).index { |l| l.include?("trap(name) { exit!(1) }") } + 1
+at_line = lambda do |nth, sig|
+  reader, writer = IO.pipe
+  pid = fork do
+    reader.close
+    $stdout.reopen(File::NULL)
+    $stderr.reopen(File::NULL)
+    count = 0
+    armed = false
+    trace = TracePoint.new(:line) do |tp|
+      next unless tp.path == source
+
+      armed ||= tp.lineno != first && tp.method_id == :main
+      next unless armed
+
+      count += 1
+      next unless count == nth
+
+      writer.write("x")
+      Process.kill(sig, Process.pid)
+    end
+    code = trace.enable { RunAll.main(["--dir", dir, "--jobs", "2"]) }
+    exit!(code)
+  end
+  writer.close
+  sent = !reader.read.empty?
   _, status = Process.wait2(pid)
-  [where, sig, status.exitstatus, status.termsig]
+  [sent, status.exitstatus, status.termsig]
 end
-check "signals: outside the run they end as exit 1 as well, not by the signal: #{ends.inspect}",
-      ends == %w[before after].product(%w[INT TERM], [1], [nil]) + [["none", "INT", 0, nil], ["none", "TERM", 0, nil]]
+bad = []
+lines = 0
+(1..2000).each do |nth|
+  sent, code, termsig = at_line.call(nth, nth.odd? ? "INT" : "TERM")
+  unless sent
+    bad << [nth, "not sent", code, termsig] unless code == 0
+    break
+  end
+  lines += 1
+  bad << [nth, code, termsig] unless code == 1
+end
+check "signals: before every line of the entry (#{lines} lines), the run ends as exit 1: #{bad.first(5).inspect}", bad.empty? && lines >= 100 && lines < 2000
 # 対照: 届かなければ、同じ dir は exit 0 で、集計を出す。
 out = StringIO.new
 check "signals: the same tests pass without a signal", RunAll.new(dir: dir, jobs: 2, label: "L", out: out).run == 0 && out.string.include?("over 3 tests")
