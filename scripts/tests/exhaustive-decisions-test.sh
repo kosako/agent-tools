@@ -1,7 +1,7 @@
 #!/bin/sh
 # 入力が有限な判定 2 つを、全部の組で確かめる self-test (#762)。
 # - E1: review の相手の判定 (personal-review-routing-preflight の judge)。label の列の全部。
-# - E2: packet の worker の操作 (personal-packet の worker_update)。操作、state、run、last_run、branch、expected_run の全部。
+# - E2: packet の worker の操作 (personal-packet の worker_update)。操作、state、run、last_run、tab、branch、pr、expected_run の全部。
 # 期待値は、実装を呼び直して作らない。E1 は reviewer の表と性質から、E2 は docs/agent-packets.md の「worker-update の入力と保存」の
 # 表から、ここに書き下ろす。組の数を固定する (組が減って気付かない形にしない)。
 # git・gh・network には触れない (E2 は、更新先の検査 (git) だけを差し替え、読み書きと判定は本物を通す)。
@@ -128,9 +128,10 @@ def read_packet(text)
   [YAML.safe_load(front, permitted_classes: [Time, Date]), split_body(body)]
 end
 
-# 壊れた packet (docs の「起動の記録」): run が空 (記録が無いなら key ごと消す)、run と last_run の両方がある。どの操作でも拒む。
-def broken?(run, last_run)
-  run.nil? || (run.is_a?(String) && last_run.is_a?(String))
+# 壊れた packet (docs の「起動の記録」): run・last_run・tab が空 (記録が無いなら key ごと消す)、run と last_run の両方がある。
+# どの操作でも拒む。
+def broken?(run, last_run, tab)
+  [run, last_run, tab].any?(&:nil?) || (run.is_a?(String) && last_run.is_a?(String))
 end
 
 # 前提: docs の表の「前提」の列。has は key があるか (branch は、値が null でも、ある)。
@@ -177,7 +178,8 @@ INPUTS = {
   "review" => [{ "pr" => 12 }],
 }.freeze
 RUNS = [:absent, nil, A, B].freeze
-LASTS = [:absent, A, B].freeze
+LASTS = [:absent, nil, A, B].freeze
+TABS = [:absent, nil, "#7"].freeze
 BRANCHES = [:absent, nil, "feat/7-old"].freeze
 PRS = [:absent, 3].freeze
 
@@ -196,15 +198,14 @@ accepted = Hash.new(0)
 refused = Hash.new(0)
 problems = Hash.new { |h, k| h[k] = [] }
 INPUTS.each do |op, list|
-  list.product(STATES, RUNS, LASTS, BRANCHES, PRS) do |input, state, run, last_run, branch, pr|
+  list.product(STATES, RUNS, LASTS, TABS, BRANCHES, PRS) do |input, state, run, last_run, tab, branch, pr|
     front = { "issue" => 7, "title" => "t", "state" => state, "worker" => "codex", "updated" => UPDATED }
-    { "run" => run, "last_run" => last_run, "branch" => branch, "pr" => pr }.each { |k, v| front[k] = v unless v == :absent }
-    front["tab"] = "#7" if run.is_a?(String)
+    { "run" => run, "last_run" => last_run, "tab" => tab, "branch" => branch, "pr" => pr }.each { |k, v| front[k] = v unless v == :absent }
     lines = front.map { |k, v| "#{k}: #{v.is_a?(String) && k != 'updated' ? v.inspect : v.inspect.sub('nil', 'null').delete('"')}\n" }
     original = "---\n#{lines.join}custom: keep\n# 残す comment\n---\n#{BODY}"
     File.write(PATH_PACKET, original)
     before, before_body = read_packet(original)
-    label = "#{op} #{input.reject { |k, _| TEXTS.key?(k) }.inspect} state=#{state} run=#{run.inspect} last=#{last_run.inspect} branch=#{branch.inspect} pr=#{pr.inspect}"
+    label = "#{op} #{input.reject { |k, _| TEXTS.key?(k) }.inspect} state=#{state} run=#{run.inspect} last=#{last_run.inspect} tab=#{tab.inspect} branch=#{branch.inspect} pr=#{pr.inspect}"
     tried[op] += 1
     data = { "schema" => 1, "operation" => op, "expected_sha256" => Digest::SHA256.hexdigest(original) }.merge(input)
     days = [Time.now.strftime("%Y-%m-%d")]
@@ -219,7 +220,7 @@ INPUTS.each do |op, list|
     days << Time.now.strftime("%Y-%m-%d")
     today = days.find { |d| text.include?("### #{d} ") } || days.last
     want = allowed?(op, state, run == :absent ? nil : run, last_run == :absent ? nil : last_run, front.keys, input)
-    broken = broken?(run, last_run)
+    broken = broken?(run, last_run, tab)
     want &&= !broken
     unless code.nil? == want
       problems["許すかどうか"] << "#{label} want=#{want} got=#{code.inspect}"
@@ -251,21 +252,22 @@ INPUTS.each do |op, list|
     problems["節の数"] << label unless after_body.keys == before_body.keys
   end
 end
-base = STATES.length * RUNS.length * LASTS.length * BRANCHES.length * PRS.length
-check("組の数 #{tried.inspect}", base == 288 && tried == INPUTS.map { |op, list| [op, base * list.length] }.to_h && tried.values.sum == 2880)
+base = STATES.length * RUNS.length * LASTS.length * TABS.length * BRANCHES.length * PRS.length
+check("組の数 #{tried.inspect}", base == 1152 && tried == INPUTS.map { |op, list| [op, base * list.length] }.to_h && tried.values.sum == 11_520)
 # 許す組の数。表から手で数えたもの。壊れていない (run, last_run) の組は 5 つ (run が無い 3 つ、run だけの 2 つ)。1 つの state と
-# (run, last_run) の組に、branch と pr の組が 6 つある (branch が無いのは 2 つ)。
+# (run, last_run) の組に、tab (有無) と branch と pr の組が 12 ある (branch が無いのは 4 つ)。
 counts = {
-  "branch" => 4 * 5 * 2,                              # state は問わない。branch が無い
-  "run-start" => (3 + 5) * 6 + 2 * 1 * 6 + 2 * 1 * 6, # expected なし: open は run が無い 3 つ、blocked は 5 つ。あり: 一致する 1 つ × 2 state
-  "result" => 1 * 6,                                  # open で、run が一致する 1 つ
-  "stop" => 2 * (2 * 6),                              # open で、run か last_run が一致する 2 つ。role が 2 つ
-  "round" => 2 * (3 * 5 * 6),                         # 3 つの state。review_entry の有無で 2 つ
-  "review" => 3 * 6,                                  # open で、run が無い 3 つ
+  "branch" => 4 * 5 * 4,                                 # state は問わない。branch が無い
+  "run-start" => (3 + 5) * 12 + 2 * 1 * 12 + 2 * 1 * 12, # expected なし: open は run が無い 3 つ、blocked は 5 つ。あり: 一致する 1 つ × 2 state
+  "result" => 1 * 12,                                    # open で、run が一致する 1 つ
+  "stop" => 2 * (2 * 12),                                # open で、run か last_run が一致する 2 つ。role が 2 つ
+  "round" => 2 * (3 * 5 * 12),                           # 3 つの state。review_entry の有無で 2 つ
+  "review" => 3 * 12,                                    # open で、run が無い 3 つ
 }
 check("許す組の数 #{accepted.inspect} (表からは #{counts.inspect})", accepted == counts)
-check("壊れた packet の組の数 #{refused.inspect}", refused["invalid_packet"] == 7 * 4 * 6 * INPUTS.values.map(&:length).sum &&
-                                                refused.values.sum == 2880 - counts.values.sum)
+# 壊れた組。(run, last_run, tab) の 48 通りのうち、壊れていないのは 5 × 2。
+check("壊れた packet の組の数 #{refused.inspect}", refused["invalid_packet"] == (48 - 10) * 4 * 6 * INPUTS.values.map(&:length).sum &&
+                                                refused.values.sum == 11_520 - counts.values.sum)
 problems.each { |name, list| check("#{name}: #{list.length} 件 #{list.first(2).join(' / ')}", list.empty?) }
 check("残った file が無い #{Dir.children(DIR).inspect}", Dir.children(DIR) == ["7.md"])
 exit(@failed.zero? ? 0 : 1)
