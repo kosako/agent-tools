@@ -115,6 +115,11 @@ shell の command には、もう 1 つ門があります。`read` と `exec` �
 - `echo` でない command の `$?`。`uniq in.txt $?` は、数字の名前の file に書く。
 - 置き換えや here document の中、ほかの展開 (`$$`・`${?}`・`$x`)。
 
+構文の語 (`then`・`do`・`else`・`!`・`{` と、`}`・`fi`・`done`) は、部分の先頭に、引用の無い語で続くときだけ構文として読みます
+(#773)。引用した語 (`"fi"`)、前に付く command の後の語 (`env done`)、redirect の後の語 (`2>/dev/null then`。sh と bash) は、
+`PATH` の program の名前になるので、`unknown` との重い方を取ります (書き込みなどの重い区分は軽くしません)。位置の合わない裸の
+構文の語 (`cat a; done`) は、shell では構文エラーで何も動かないので、見ません。
+
 引用の外の brace の展開 (`x/{a,b}.md`) は、受ける形だけを分類器が展開し、展開した語の並びを今の規則で区分します (#745)。
 sh と zsh は `x/{a,b}.md` を `x/a.md x/b.md` に、`{-o,out}` を `-o out` (option) に展開しますが、`Shellwords` と scanner は
 展開しないためです。受ける形は、1 つの語に `{…}` が 1 つだけで、中が `,` で分けた 2 つ以上の要素、各要素が英数字と
