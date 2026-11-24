@@ -1319,25 +1319,27 @@ module SkillBehaviorClassifier
   }.freeze
 
   # git branch / tag: 一覧の表示だけ read。位置引数は、-l / --list (pattern) があるときか、値をとる option の値のとき
-  # だけ。ほかの形 (名前を渡す作成、削除・移動、知らない option や省略形) は git-write。
+  # だけ。ほかの形 (名前を渡す作成、削除・移動、知らない option や省略形) は git-write。値をとる option が次の語を値に
+  # 読むので、一覧の印は、値として読まれる語を除いて数える (--format --list x は x を作る。#757)。
   def self.git_listing(sub, rest)
     spec = GIT_LISTING.fetch(sub)
-    listing = rest.any? { |a| %w[-l --list].include?(a) }
+    words = []
     i = 0
     while i < rest.length
-      a = rest[i]
+      name, val = rest[i].split("=", 2)
+      takes = spec[:values].include?(name)
+      words << rest[i] unless takes
+      i += takes && val.nil? ? 2 : 1
+    end
+    listing = words.any? { |a| %w[-l --list].include?(a) }
+    words.each do |a|
       name = a.split("=", 2).first
-      if spec[:values].include?(name)
-        i += a.include?("=") ? 1 : 2
-        next
-      end
       if a.start_with?("-")
         ok = spec[:flags].include?(name) || (sub == "tag" && a.match?(/\A-n\d*\z/))
         return "git-write" unless ok
       elsif !listing
         return "git-write"
       end
-      i += 1
     end
     "read"
   end
