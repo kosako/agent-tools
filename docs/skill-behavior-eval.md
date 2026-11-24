@@ -307,7 +307,7 @@ run が終わり、差分を取った後、temp project を消す前に 1 回走
 | `unmeasured` | `sandbox` | sandbox を適用できない。code は走っていない |
 | `unmeasured` | `launch` | driver が始まらない |
 | `unmeasured` | `timeout` | 期限を過ぎた |
-| `unmeasured` | `signal` | signal で終わった、または終わり方を確かめられない |
+| `unmeasured` | `signal` | signal で終わった、または終わり方を確かめられない (上限を越えた出力は、先に `no-result` にする) |
 
 `passed` の欄は合った例の数で、`unmeasured` のときは `null` です。`total` は例の数です。検査の生の出力は raw log
 (`<case>-<n>.fix-check`) に残します。

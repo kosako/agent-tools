@@ -141,9 +141,10 @@ module SkillBehaviorFixCheck
       return ["unmeasured", "sandbox", nil]
     end
     return ["unmeasured", "launch", nil] unless ready
-    return ["unmeasured", "signal", nil] if result.status.nil? || result.status.signaled?
-    # 上限を越えた出力は、途中で切れているので、どの形も受けない。
+    # 上限を越えた出力は、途中で切れているので、どの形も受けない。上限で口を閉じると、続けて書いた子は、Ruby 2.6 では例外で、
+    # 3.x では SIGPIPE で終わる。どちらも同じ結果にするため、signal より先に見る。
     return ["failed", "no-result", 0] if result.truncated
+    return ["unmeasured", "signal", nil] if result.status.nil? || result.status.signaled?
     return ["failed", "load-error", 0] if text == "ready\nload-error\n"
 
     # ちょうど 2 行の形だけを受ける。
