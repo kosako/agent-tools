@@ -273,6 +273,17 @@ got = at.call(shut_at).select { |c| %w[read exec].include?(P.classify_shell(c)) 
 check("loop の redirect: read にならない位置 #{got.inspect}", got.empty?)
 broken = opened.reject { |c| syntax.call(c).all? }
 check("loop の redirect: 構文の通らない形を read にした #{broken.length} 件 #{broken.first(3).inspect}", broken.empty?)
+
+# 頭の $(…) の中。sh と bash の -n は $(…) の中を見ないので、中の command だけを取り出しても構文検査にかける。
+inners = ends.product(outer, ends).map { |a, b, c| "#{a}#{b == " " ? "cat y" : "cat y#{b}cat z"}#{c}" }
+inners += words.flat_map { |w| [w, "#{w} cat y", "cat y; #{w}", "cat y | #{w} cat z"] }
+check("loop の頭の中: 組の数", inners.length == 7 * 8 * 7 + 52 * 4)
+read = inners.select { |i| %w[read exec].include?(P.classify_shell("for x in $(#{i}); do cat $x; done")) }
+# 区切りの組は、先頭 2 (無しと改行)、間 1 + 5 (1 つの command、; 改行 | && |改行)、終わり 3。語の組は、ふつうの command の 7 語
+check("loop の頭の中: read の組の数 (#{read.length})", read.length == 2 * 6 * 3 + 7 * 4)
+broken = read.reject { |i| (syntax.call(i) + syntax.call("for x in $(#{i}); do cat $x; done")).all? }
+check("loop の頭の中: 対照", syntax.call("cat y |") == [false] * 3)
+check("loop の頭の中: 構文の通らない形を read にした #{broken.length} 件 #{broken.first(3).inspect}", broken.empty?)
 exit(@failed.zero? ? 0 : 1)
 RUBY
 

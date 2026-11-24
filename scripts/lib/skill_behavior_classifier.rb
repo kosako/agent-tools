@@ -196,9 +196,22 @@ module SkillBehaviorClassifier
     m = FOR_HEAD.match(segments[head][1].strip)
     # redirect の後の done (2>/dev/null done) も終わりと数えるが、その部分は構文の語でないので unknown になる (#773)
     tail = ((head + 1)...segments.length).find { |k| without_redirects(segments[k])[0].strip == "done" }
-    return nil unless m && tail && for_joints?(segments, head, tail) && no_reserved_words?(segments, head, tail)
+    return nil unless m && tail && for_joints?(segments, head, tail) && no_reserved_words?(segments, head, tail) &&
+                      well_formed_substitution?(segments[head])
 
     ForLoop.new(head, (head + 1)...tail, m[1])
+  end
+
+  # 頭の $(…) の中も、区切りと予約語が構文に合うか (loop なら、loop として受ける形か)。$(…) が無ければ true。
+  def self.well_formed_substitution?(head)
+    raw, masked = head
+    s = masked.index("$(")
+    return true unless s
+
+    inner, = scan(raw[(s + 2)...masked.rindex(")")])
+    return false unless inner
+
+    !for_loop(inner).nil? || (joints?(inner) { FOR_PART_JOINT } && no_reserved_words?(inner, nil, nil))
   end
 
   # 頭と done のほかの部分の先頭 (最初の本体の部分は do の後ろ) が、予約語でないか。redirect の後ろの語も見る (zsh は予約語として読む)。
@@ -208,7 +221,7 @@ module SkillBehaviorClassifier
 
       raw, masked = without_redirects(segments[k])
       words = masked_words(raw, masked).map { |s, e| raw[s...e] }
-      words.shift if k == head + 1
+      words.shift if head && k == head + 1
       !RESERVED_WORDS.include?(words.first)
     end
   end
@@ -218,14 +231,23 @@ module SkillBehaviorClassifier
   def self.for_joints?(segments, head, tail)
     bare_do = segments[head + 1][0].strip == "do"
     return false unless bare_do ? tail > head + 2 : segments[head + 1][0].match?(/\A\s*do\s/)
+
+    joints?(segments) do |k|
+      if k == head || k == tail - 1 then FOR_JOINT
+      elsif bare_do && k == head + 1 then ["\n"]
+      else FOR_PART_JOINT
+      end
+    end
+  end
+
+  # 区切りの並びが構文に合うか。block は、部分の番号から、その後ろに来てよい区切りを返す。
+  def self.joints?(segments)
+    return true if segments.empty?
     return false unless segments[0][4].all? { |s| s == "\n" }
 
     last = segments.length - 1
     segments.each_index.all? do |k|
-      ops = if k == head || k == tail - 1 || k == last then FOR_JOINT
-            elsif bare_do && k == head + 1 then ["\n"]
-            else FOR_PART_JOINT
-            end
+      ops = k == last ? FOR_JOINT : yield(k)
       # 区切りが無いのは、最後の部分だけ
       first, *rest = segments[k][3]
       (first.nil? || ops.include?(first)) && rest.all? { |s| s == "\n" }
