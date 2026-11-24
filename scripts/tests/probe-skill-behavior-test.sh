@@ -659,6 +659,98 @@ shell = {
   "echo $?; git push" => "git-write",
   "echo $? | sh" => "unknown",
   %q{sh -c "echo $?"} => "unknown",
+  # #773: 構文の語 (then・do・else・!・{・}・fi・done) は、部分の先頭に、引用の無い語で続くときだけ構文として働く。ほかの位置では
+  # PATH の program の名前になる。期待値の表の R1〜R45 と、その近くの形
+  %q{"fi"} => "unknown",
+  "'done'" => "unknown",
+  %q{"do" cat x} => "unknown",
+  %q{"!" cat x} => "unknown",
+  %q{f"i"} => "unknown",
+  "''fi" => "unknown",
+  "fi''" => "unknown",
+  %q{"then" cat x} => "unknown",
+  "env done" => "unknown",
+  "env do cat x" => "unknown",
+  "command fi" => "unknown",
+  "nohup then cat x" => "unknown",
+  %q{exec "fi"} => "unknown",
+  %q{time "fi"} => "unknown",
+  "time done" => "unknown",
+  "command env fi" => "unknown",
+  "env -i fi" => "unknown",
+  "nice -n 5 fi" => "unknown",
+  "builtin fi" => "unknown",
+  "X=1 fi" => "unknown",
+  "X=1 do cat x" => "unknown",
+  %q{"X=1" cat x} => "unknown",
+  %q{"X=1" rm out} => "file-write",
+  %q{2>/dev/null "fi"} => "unknown",
+  "env 2>/dev/null fi" => "unknown",
+  "2>/dev/null env fi" => "unknown",
+  %q{"fi" 2>/dev/null} => "unknown",
+  %q{"fi" > out} => "file-write",
+  "{fi,done} x" => "unknown",
+  "{do,cat} x" => "unknown",
+  "{then,env} cat x" => "unknown",
+  "f? x" => "unknown",
+  "cat f?" => "read",
+  %q{cat x; "done"} => "unknown",
+  %q{cat x | "fi"} => "unknown",
+  %q{cat x && "do" y} => "unknown",
+  %Q{cat x\n"fi"} => "unknown",
+  %q{"fi"; rm x} => "file-write",
+  %q{echo $("fi")} => "unknown",
+  %q{sh -c '"fi"'} => "unknown",
+  "sh -c 'env fi'" => "unknown",
+  %q{xargs "fi"} => "unknown",
+  "xargs fi" => "unknown",
+  %q{find . -exec "fi" {} +} => "unknown",
+  "find . -exec fi {} +" => "unknown",
+  "echo done" => "read",
+  %q{echo "done" 'fi'} => "read",
+  "env cat x" => "read",
+  "time cat x" => "read",
+  %q{"env" cat x} => "read",
+  %q{"time" cat x} => "read",
+  "exec 2>/dev/null" => "read",
+  "then cat x" => "read",
+  "do cat x" => "read",
+  "else cat x" => "read",
+  "then env cat x" => "read",
+  "do do cat x" => "read",
+  "2>/dev/null do cat x" => "unknown",
+  "2>/dev/null fi" => "unknown",
+  "2>&1 then" => "unknown",
+  ">/dev/null done" => "unknown",
+  "do 2>/dev/null then cat x" => "unknown",
+  "do 2>/dev/null cat x" => "read",
+  "fi>/dev/null" => "read",
+  "done>out" => "file-write",
+  "do" => "read",
+  "fi" => "read",
+  "done" => "read",
+  "done 2>/dev/null" => "read",
+  "2>/dev/null cat x" => "read",
+  "then fi" => "unknown",
+  "do done" => "unknown",
+  "do env do cat x" => "unknown",
+  %q{do "do" cat x} => "unknown",
+  %q{"do" cat fi} => "unknown",
+  %q{"do" cat do} => "unknown",
+  "env do cat then" => "unknown",
+  "then do cat fi" => "read",
+  %q{fi >"/dev/null"} => "file-write",
+  "then ruby test/a.rb" => "exec",
+  "env then ruby test/a.rb" => "unknown",
+  # 重い区分を軽くしない
+  %q{env "rm" out} => "file-write",
+  %q{command "git" push} => "git-write",
+  %q{"do" rm out} => "file-write",
+  %q{"!" rm out} => "file-write",
+  "env then rm out" => "file-write",
+  "env done; rm out" => "file-write",
+  "! rm out" => "file-write",
+  "{ rm out; }" => "file-write",
 }
 shell.each do |cmd, want|
   got = P.classify_shell(cmd)
@@ -871,7 +963,7 @@ check("fixture を渡さない classify_claude の Bash は fixture の関数を
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-r ./lib/median ") }) == "unknown")
 check("classify_claude の Bash は fixture を分類器に渡す",
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-Ilib -rmedian ") }, fixture: fx) == "exec")
-check("分類器の版は 10 (#767)", P::VERSION == 10)
+check("分類器の版は 11 (#773)", P::VERSION == 11)
 observed745 = "ruby -e 'require \"./lib/median\"; p median([3,1,2]), median([4,1,3,2])'"
 check("claude の Bash の、code の中の require の観測した形は fixture を渡せば exec (#745)",
       P.classify_claude("Bash", { "command" => observed745 }, fixture: fx) == "exec" &&
@@ -1422,7 +1514,7 @@ unset FAKE_WRITE
   '["cases_digest","classifier_version","conditions","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
   || fail "claude ids keys: $(json_get "$res" 'd["ids"].keys.sort')"
 [ "$(json_get "$res" 'd["ids"].values_at("host_version", "init_model", "requested_model", "permission_mode", "max_turns", "repeat", "classifier_version")')" = \
-  '["9.9.9","m-fake","default","acceptEdits",12,2,10]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
+  '["9.9.9","m-fake","default","acceptEdits",12,2,11]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
 [ "$(json_get "$res" 'd["ids"]["tool_surface"]')" = \
   '{"requested":["Read","Glob","Grep","Edit","Write","NotebookEdit","Bash","Skill"],"init":"Bash,Edit,Glob,Grep,NotebookEdit,Read,Skill,Write"}' ] \
   || fail "claude tool surface: $(json_get "$res" 'd["ids"]["tool_surface"]')"
@@ -1823,7 +1915,7 @@ run_fake codex "$inline_events" --model m-x --only investigate-diagnose-only --c
 [ "$rc" -eq 0 ] || fail "codex probe with inline Ruby should exit 0 (rc=$rc): $out"
 [ "$(json_get "$res" 'd["runs"][0]["calls"].map { |c| c["class"] }')" = '["exec","unknown","exec","unknown"]' ] \
   || fail "the probe should pass the fixture functions and files to the classifier (#737・#742): $(json_get "$res" 'd["runs"][0]["calls"]')"
-[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '10' ] || fail "codex ids should record classifier version 10"
+[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '11' ] || fail "codex ids should record classifier version 11"
 
 # prepare_run は、case の検査を経ない呼び出しでも、fixture と skill の dir の symlink を copy の前に拒む
 ruby -r"$script_dir/lib/check_helper" - "$src" "$tmp/prep" "$fixture" <<'RUBY'

@@ -1,7 +1,7 @@
 #!/bin/sh
-# scripts/lib/skill_behavior_classifier.rb の self-test (#755・#756・#757・#767)。
+# scripts/lib/skill_behavior_classifier.rb の self-test (#755・#756・#757・#767・#773)。
 # 引数の語の組を列挙し、分類器が read と区分した組を、実物の uniq・sed・git で走らせる。file も ref もできないことを見る。
-# $? の形は、command の全文の組を、実物の sh・bash・zsh で走らせる (shell の展開を通す)。
+# $? と構文の語の形は、command の全文の組を、実物の sh・bash・zsh で走らせる (shell の展開を通す)。
 # 期待値は分類器から作らない。できた file を数えるだけで、実物の引数の読み方をここに写さない。
 # - 組の数と、走らせた数の下限を固定する (組が減ったり、全部が read でなくなったりして、何も確かめない形にしない)。
 # - 実物は argv で起動する (shell の展開を通さない)。書き込みは一時 dir の中だけ。network と実 ~/.gitconfig には触れない。
@@ -127,6 +127,39 @@ wrote = ran.flat_map { |c| shells.map { |sh| [sh[0], c, made(dir, base, [*sh, c]
 check("status: read と区分した command が書いた #{wrote.length} 件 #{wrote.first(3).inspect}", wrote.empty?)
 out = shells.map { |sh| Open3.capture3(*sh, 'false; echo "a=$?"', chdir: dir)[0] }
 check("status: $? は整数に展開される #{out.inspect}", out == ["a=1\n"] * 3)
+
+# ---- 構文の語 (#773) -----------------------------------------------------------------------
+# 構文の語の名前の program を PATH の先頭に置き、read か exec と区分した command が、どの shell でもそれを起動しないことを見る。
+# program は、起動されると、今いる dir に ran という file を作る。
+dir = File.join(TMP, "words")
+bin = File.join(TMP, "words-bin")
+[dir, bin].each { |d| FileUtils.mkdir_p(d) }
+File.write(File.join(dir, "in.txt"), "a\n")
+base = entries(dir)
+keywords = P::KEYWORD_WORDS + P::CLOSER_WORDS
+keywords.each do |w|
+  File.write(File.join(bin, w), "#!/bin/sh\n: > ran\n")
+  File.chmod(0o755, File.join(bin, w))
+end
+path = { "PATH" => "#{bin}:/usr/bin:/bin" }
+fronts = ["", "env ", "command ", "exec ", "nohup ", "nice ", "time ", "builtin ", "env command ", "then ", "do ", "do env ", "X=1 ",
+          "2>/dev/null ", ">/dev/null ", "2>&1 ", "do 2>/dev/null ", "env 2>/dev/null ", "cat in.txt; ", "cat in.txt | ", "cat in.txt && env "]
+forms = [->(w) { w }, ->(w) { "\"#{w}\"" }, ->(w) { "'#{w}'" }, ->(w) { "\"\"#{w}" }, ->(w) { "#{w[0]}'#{w[1..]}'" }]
+backs = ["", " cat in.txt", " 2>/dev/null", "; cat in.txt"]
+all = fronts.product(forms, keywords, backs).map { |a, f, w, b| "#{a}#{f.call(w)}#{b}" }
+check("構文の語: 組の数", all.length == 21 * 5 * 8 * 4)
+ran = all.select { |c| %w[read exec].include?(P.classify_shell(c)) }.uniq
+check("構文の語: 走らせる組に、引用した語が無い", ran.none? { |c| c.match?(/['"]/) })
+# 裸の語だけ。先頭・; の後・| の後に 5 語 (! と { と } は門が止める)、then と do の後に 3 語 (then・do・else)、後ろ 4
+check("構文の語: 走らせる組の数 (#{ran.length})", ran.length == (3 * 5 + 2 * 3) * 4)
+[%q{"fi"}, "env done", %q{"do" cat in.txt}, "nice then"].each do |c|
+  got = shells.map { |sh| made(dir, base, [*sh, c], path) }
+  check("構文の語: 対照。#{c} は program を起動する #{got.inspect}", got == [["ran"]] * 3)
+end
+got = shells.map { |sh| made(dir, base, [*sh, "2>/dev/null then"], path) }
+check("構文の語: 対照。redirect の後の語は、sh と bash で program を起動する #{got.inspect}", got == [["ran"], ["ran"], []])
+started = ran.flat_map { |c| shells.map { |sh| [sh[0], c, made(dir, base, [*sh, c], path)] } }.reject { |_, _, new| new.empty? }
+check("構文の語: read と区分した command が program を起動した #{started.length} 件 #{started.first(3).inspect}", started.empty?)
 exit(@failed.zero? ? 0 : 1)
 RUBY
 

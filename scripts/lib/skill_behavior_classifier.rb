@@ -29,13 +29,18 @@ module SkillBehaviorClassifier
   # 8 で、引用の外の ^ を glob の字に足した (#751)。
   # 9 で、uniq の位置引数の後ろ (#755)、sed の番地の \ (#756)、git の一覧の印 (#757) の読み方を、実物に合わせた。
   # 10 で、echo の 1 つの引数の終わりの $? を足した (#767)。
-  VERSION = 10
+  # 11 で、引用した構文の語と、前に付く command の後の構文の語を、構文として読まない (#773)。
+  VERSION = 11
 
   CLAUDE_READ_TOOLS = %w[Read Glob Grep LS Skill NotebookRead].freeze
   CLAUDE_WRITE_TOOLS = %w[Edit Write NotebookEdit MultiEdit].freeze
   SHELLS = %w[sh bash zsh dash].freeze
-  # 前に付いても command の本体を変えない語 (読み飛ばして次の語を command とみなす)。
-  PREFIX_WORDS = %w[env command exec nohup time nice builtin then do else ! {].freeze
+  # 前に付いても command の本体を変えない語 (読み飛ばして次の語を command とみなす)。KEYWORD_WORDS は shell の構文の語で、
+  # 部分の先頭に、引用の無い語で続くときだけ、構文として働く。CLOSER_WORDS は、部分の先頭で構文を閉じる語 (同じ条件)。
+  # ほかの位置の構文の語は、PATH の program の名前になる (#773)。
+  KEYWORD_WORDS = %w[then do else ! {].freeze
+  CLOSER_WORDS = %w[} fi done].freeze
+  PREFIX_WORDS = (%w[env command exec nohup time nice builtin] + KEYWORD_WORDS).freeze
   # command の名前に path が付くとき、名前で区分してよい directory (ほかの path は project の file などを実行する)。
   STANDARD_BIN_DIRS = %w[/bin /usr/bin /usr/local/bin /opt/homebrew/bin /usr/sbin /sbin].freeze
   # exec にする script の拡張子 (interpreter と shell ごと)。拡張子の無い path (/dev/stdin・/dev/fd/0、cd の後の
@@ -493,11 +498,21 @@ module SkillBehaviorClassifier
 
     braced = expanded != stripped
     variants = braced ? [expanded, stripped] : [stripped]
-    max_class(classes + variants.map { |text| classify_split(text, masked, depth, fixture, braced) })
+    lead = leading_keywords(stripped, masked, spans)
+    max_class(classes + variants.map { |text| classify_split(text, masked, depth, fixture, braced, lead) })
   end
 
-  # 部分の写し (redirect を空白にし、brace を決めた写し) を語に分けて区分する。braced は、部分に展開した brace があること。
-  def self.classify_split(text, masked, depth, fixture, braced)
+  # 部分の先頭の、構文として働く語 (引用の無い KEYWORD_WORDS の並びか、1 つの CLOSER_WORDS) の数。語は、redirect を空白にした
+  # 写しから、引用を外さずに分ける。redirect より後ろの語は数えない (sh と bash は、redirect の後の語を構文の語にしない。#773)。
+  def self.leading_keywords(stripped, masked, spans)
+    limit = spans.map(&:first).min || stripped.length
+    words = masked_words(stripped, masked).take_while { |s, _| s < limit }.map { |s, e| stripped[s...e] }
+    CLOSER_WORDS.include?(words.first) ? 1 : words.take_while { |w| KEYWORD_WORDS.include?(w) }.length
+  end
+
+  # 部分の写し (redirect を空白にし、brace を決めた写し) を語に分けて区分する。braced は、部分に展開した brace があること、lead は
+  # 部分の先頭の、構文として働く語の数 (leading_keywords)。
+  def self.classify_split(text, masked, depth, fixture, braced, lead)
     words = begin
       Shellwords.split(text)
     rescue ArgumentError
@@ -506,8 +521,12 @@ module SkillBehaviorClassifier
     prefix = words.take_while { |w| w.match?(ASSIGNMENT) || PREFIX_WORDS.include?(w) }
     words = words.drop(prefix.length)
     # 代入だけの部分も read にしない (zsh は整数の変数 (RANDOM・COLUMNS・OPTIND など) への代入で添字を評価する)
-    assigned = prefix.any? { |w| w.match?(ASSIGNMENT) }
-    return assigned ? "unknown" : "read" if words.empty? || %w[} fi done].include?(words.first)
+    doubtful = prefix.any? { |w| w.match?(ASSIGNMENT) }
+    # 構文として働く位置でない構文の語 (引用した語、前に付く command の後の語) は、PATH の program の名前になる (#773)。区分の
+    # 計算は変えず、unknown との重い方を取る (重い区分を軽くしない)
+    closing = CLOSER_WORDS.include?(words.first)
+    doubtful ||= prefix.drop(lead).any? { |w| KEYWORD_WORDS.include?(w) } || (closing && (lead.zero? || !prefix.empty?))
+    return doubtful ? "unknown" : "read" if words.empty? || closing
 
     cls = classify_words(words, depth, fixture: fixture)
     # 引用の外の glob (* ? [ ^) は、展開で引数の数と意味が変わる (uniq a* が出力の file を持つ、など)。rg の位置引数の、決めた
@@ -517,7 +536,7 @@ module SkillBehaviorClassifier
       cls = max_class([cls, "unknown"])
     end
     # 環境変数 (PAGER・GIT_EXTERNAL_DIFF・RUBYOPT など) は program を差し替えうる
-    cls = max_class([cls, "unknown"]) if assigned
+    cls = max_class([cls, "unknown"]) if doubtful
     cls
   end
 
