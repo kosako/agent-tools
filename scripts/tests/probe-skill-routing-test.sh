@@ -262,6 +262,13 @@ check("claude: prompt_tokens は result の usage の 3 key の合計", r[:promp
 check("claude: output_tokens は result の usage の値", r[:output_tokens] == 7)
 check("claude: result の subtype を拾う", r[:subtype] == "error_max_turns")
 check("claude: system の model を拾う", r[:model] == "m-claude")
+# init ごとの、自動の memory の状態 (#770)。init でない system の event は数えない
+init = { "type" => "system", "subtype" => "init", "model" => "m" }
+listed = init.merge("memory_paths" => { "auto" => "/x" })
+{ [] => [], [init] => %w[not-listed], [listed, init] => %w[listed not-listed], [listed.merge("subtype" => "status")] => [] }.each do |events, want|
+  got = P.parse_claude(jsonl(*events))[:memory_states]
+  check("claude: init ごとの自動の memory の状態は #{want.inspect} (#{got.inspect})", got == want)
+end
 
 broken = "{\"type\":\"result\"\nnot json\n[1, 2]\n" +
          jsonl({ "type" => "result", "subtype" => "success", "usage" => { "input_tokens" => 3, "output_tokens" => 1 } })
@@ -375,6 +382,7 @@ cat > "$fakebin/codex" <<'EOF'
 #!/bin/sh
 # 偽の codex。呼ばれた argv を 1 行ずつ log に残し、help / features list / exec を模倣する。
 printf '%s\n' "$*" >> "$FAKE_CODEX_LOG"
+printf 'auto-memory: %s\n' "${CLAUDE_CODE_DISABLE_AUTO_MEMORY-unset}" >> "$FAKE_CODEX_LOG"
 case "$1 $2" in
   "exec --help")
     help='Options:
@@ -602,8 +610,10 @@ cat > "$fakebin/claude" <<'EOF'
 #!/bin/sh
 # 偽の claude。stream-json の event を出して FAKE_CLAUDE_RC で終わる。FAKE_CLAUDE_SUBTYPE が空でなければ
 # result に subtype を付ける。FAKE_CLAUDE_USAGE は result の usage (JSON。none なら usage を付けない。空なら既定)、
-# FAKE_CLAUDE_SLEEP は result を出した後に待つ秒数 (--timeout で kill させる)。
-printf '%s\n' '{"type":"system","subtype":"init","model":"m-fake-claude"}'
+# FAKE_CLAUDE_SLEEP は result を出した後に待つ秒数 (--timeout で kill させる)。FAKE_CLAUDE_INIT は init に足す欄 (none なら
+# init を出さない)、FAKE_CLAUDE_LOG は環境を残す file。
+[ -z "${FAKE_CLAUDE_LOG:-}" ] || printf 'auto-memory: %s\n' "${CLAUDE_CODE_DISABLE_AUTO_MEMORY-unset}" >> "$FAKE_CLAUDE_LOG"
+[ "${FAKE_CLAUDE_INIT:-}" = none ] || printf '{"type":"system","subtype":"init","model":"m-fake-claude"%s}\n' "${FAKE_CLAUDE_INIT:-}"
 printf '%s\n' '{"type":"assistant","message":{"usage":{"input_tokens":5},"content":[{"type":"text","text":"personal-a"}]}}'
 case ${FAKE_CLAUDE_USAGE:-} in
   none) usage= ;;
@@ -671,5 +681,55 @@ run_claude_smoke error_max_turns 1
 case "$out" in *'completion=max-turns'*) : ;; *) fail "the claude max-turns cut should be max-turns: $out" ;; esac
 run_claude_smoke '' 1
 case "$out" in *'completion=failed'*) : ;; *) fail "a claude non-zero exit should be failed: $out" ;; esac
+
+# ---- 自動の memory を止める環境と、その記録 (#770) --------------------------------------------
+# run_claude_memory <init に足す欄> <出力> [--smoke]: 偽の claude で 2 回の run を回す
+claude_log="$tmp/claude-env.log"
+run_claude_memory() {
+  : > "$claude_log"
+  rcm_init=$1
+  rcm_out=$2
+  shift 2
+  [ $# -gt 0 ] || set -- --cases "$tmp/stop-cases.json" --repeat 2 --out "$rcm_out"
+  set +e
+  out=$(env FAKE_CLAUDE_INIT="$rcm_init" FAKE_CLAUDE_LOG="$claude_log" FAKE_CLAUDE_SUBTYPE=success \
+    PATH="$fakebin:$PATH" ruby "$src" --tool claude-code --source "$source_dir" "$@" 2>&1)
+  rc=$?
+  set -e
+}
+for parent in unset 0 '' 1 true; do
+  if [ "$parent" = unset ]; then unset CLAUDE_CODE_DISABLE_AUTO_MEMORY; else
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY=$parent
+    export CLAUDE_CODE_DISABLE_AUTO_MEMORY
+  fi
+  run_claude_memory '' "$tmp/mem.json"
+  [ "$rc" -eq 0 ] || fail "claude runs should exit 0 (rc=$rc): $out"
+  [ "$(cat "$claude_log")" = 'auto-memory: 1
+auto-memory: 1' ] || fail "each claude run should get the variable set to 1 (parent: $parent): $(cat "$claude_log")"
+  run_claude_memory '' '' --smoke
+  [ "$(cat "$claude_log")" = 'auto-memory: 1' ] || fail "the claude smoke should get the variable set to 1 (parent: $parent): $(cat "$claude_log")"
+  # codex の子 process には足さず、親の値も変えない
+  run_probe --smoke
+  [ "$(grep '^auto-memory: ' "$log" | sort -u)" = "auto-memory: $parent" ] || fail "codex calls should keep the parent's value ($parent): $(cat "$log")"
+done
+unset CLAUDE_CODE_DISABLE_AUTO_MEMORY
+# memory_value <results.json>: auto_memory を 1 行で出す (無ければ none)
+memory_value() {
+  ruby -rjson -e 'd = JSON.parse(File.read(ARGV[0])); puts d.key?("auto_memory") ? JSON.generate(d["auto_memory"]) : "none"' "$1"
+}
+[ "$(memory_value "$tmp/mem.json")" = '{"requested":"off","init":"not-listed"}' ] || fail "not-listed should be recorded: $(cat "$tmp/mem.json")"
+run_claude_memory ',"memory_paths":{"auto":"/x/CANARY-MEM"}' "$tmp/mem-listed.json"
+[ "$(memory_value "$tmp/mem-listed.json")" = '{"requested":"off","init":"listed"}' ] || fail "listed should be recorded: $(cat "$tmp/mem-listed.json")"
+if grep -q CANARY-MEM "$tmp/mem-listed.json"; then fail "results.json must not contain the memory path"; fi
+run_claude_memory none "$tmp/mem-none.json"
+[ "$(memory_value "$tmp/mem-none.json")" = '{"requested":"off","init":"unknown"}' ] || fail "unknown should be recorded: $(cat "$tmp/mem-none.json")"
+[ "$(memory_value "$tmp/stop/results.json")" = none ] || fail "codex results must not record auto_memory: $(cat "$tmp/stop/results.json")"
+# judge は listed を緑にしない
+set +e
+judge_out=$(sh "$repo_root/scripts/check-skill-routing.sh" --cases "$tmp/stop-cases.json" --results "$tmp/mem-listed.json" 2>&1)
+judge_rc=$?
+set -e
+[ "$judge_rc" -eq 2 ] || fail "the judge should not accept listed (rc=$judge_rc): $judge_out"
+case "$judge_out" in *'auto memory was not off in every run'*) : ;; *) fail "the judge should name the memory condition: $judge_out" ;; esac
 
 echo "probe-skill-routing-test: ok"

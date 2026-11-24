@@ -35,9 +35,13 @@ harness です。#216 の cross-skill routing suite の最小 slice で、
   終えるか `--timeout` (既定 300 秒) で kill されるまで走る。kill した run は、skill を読んでから作業に入った印が
   あれば観測完了 (`completion: observed-stop`) に数え、token は取らない (下の「観測契約」。#302)。
 
-## 隔離 (実 home に触らない)
+## 隔離
 
-probe は一時 directory に project を作り、候補 skill を **project scope** に copy して実行する。
+probe は一時 directory に project を作り、候補 skill を **project scope** に copy して実行する。probe 自身は tool home
+(`~/.claude` / `~/.codex`) に書き込まない。CLI 自身が home に置く状態の file (認証・cache・log など) は見ていない。
+
+Claude Code の子 process には `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` を渡し、自動の memory を止める (#770)。止めないと、run ごとに
+`~/.claude/projects` の下に、temp project の名前の dir と空の `memory` ができ、model に memory の置き場が示される (2.1.331 で確かめた)。
 
 | tool | 候補 skill の置き場 | user scope の排除 | 確認した版 |
 | --- | --- | --- | --- |
@@ -83,7 +87,7 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
 
 候補 skill の既定の source は `generated/<tool>/skills` (build 済みの配布物)。`--source DIR` で
 別の dir (例: 圧縮前の generated を退避したもの) を指せるので、baseline と candidate を同じ
-手順で測れる。実 home (`~/.claude` / `~/.codex`) には書き込まない。
+手順で測れる。
 
 ## 観測契約 (probe → results.json)
 
@@ -92,7 +96,8 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
   "listing_chars": 4952,
   "runs": [ { "case": "<case id>", "observed": ["<skill name>", ...],
               "prompt_tokens": 1234, "output_tokens": 56, "first_prompt_tokens": 1000,
-              "status": "ok", "completion": "exited" } ] }
+              "status": "ok", "completion": "exited" } ],
+  "auto_memory": { "requested": "off", "init": "not-listed" } }
 ```
 
 - `observed`: その run で **起動された** skill 名。claude-code は stream-json の `Skill` tool_use、
@@ -136,6 +141,9 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
   - 終わり方は、期限の中で終わった run (`exited`・`max-turns`・`failed`) と、kill した run (`observed-stop`・`timeout`)
     に分かれる。
   - judge は schema_version 1 の結果も読む (`completion` は無く、token は整数)。
+- `auto_memory` (任意。claude-code だけ。#770): 自動の memory の記録。`requested` は渡した設定 (いつも `off`)、`init` は run の init の
+  event に見えた状態 (`listed` / `not-listed` / `unknown`、run の間で違えば `mixed:` の後に並べる)。judge は `not-listed` のときだけ
+  緑にする。`not-listed` の意味と限界は [Skill Behavior Eval](skill-behavior-eval.md) の「results.json」と同じ。
 - raw log は `<out>.raw/<case>-<n>.jsonl` に残す。observed が正しいかはこの log で人が確認する
   (judge は runner の観測を信頼する。信頼境界は judge の冒頭コメント参照)。raw log は private な内容を
   含みうるので、Issue / PR / comment には貼らない (下の「raw log の扱い」)。
@@ -151,8 +159,10 @@ scripts/check-skill-routing.sh --cases scripts/lib/skill_routing_cases.json \
 - **primary hit**: case の `primary` が `observed` に含まれる (`primary: null` の case は対象外)。
   MISS は報告するが、単独では破れにしない (headless 単発 turn の揺れがあるため)。
 - **must_not violation**: `must_not` のいずれかが `observed` に含まれる = routing の破れ (exit 1)。
-- **baseline 比較**: 同じ tool・同じ model・同じ case 集合・同じ run 数の結果だけ比較する (違えば
-  exit 2)。primary は case ごとに比べ、baseline で半分以上の run が当たっていた case が、候補で一度も当たらなければ
+- **自動の memory** (#770): `auto_memory` が在り、`init` が `not-listed` でなければ構造エラー。形が違うとき、Codex の結果に在るときは
+  入力の誤り (どちらも exit 2)。
+- **baseline 比較**: 同じ tool・同じ model・同じ case 集合・同じ run 数・同じ `auto_memory` (無いものどうしを含む) の結果だけ
+  比較する (違えば exit 2)。primary は case ごとに比べ、baseline で半分以上の run が当たっていた case が、候補で一度も当たらなければ
   回帰 (exit 1。#417)。それより小さい減少は case ごとに `warn:` の行で出し、exit には響かない。合計の hit は比べない
   (ある case の回帰が別の case の改善で打ち消され、揺れだけの差が回帰になるため)。must_not は、候補で 1 回でも出れば
   baseline によらず case ごとに破れ (上)。構造エラー (coverage 欠落・

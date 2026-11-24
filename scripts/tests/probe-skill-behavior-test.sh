@@ -1653,6 +1653,14 @@ pairs = argv.each_cons(2).to_a
 check("codex は sandbox が temp project の外の /tmp と $TMPDIR に書けない設定で起動する (#733)",
       pairs.include?(["-c", "sandbox_workspace_write.exclude_slash_tmp=true"]) &&
       pairs.include?(["-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true"]))
+# init ごとの、自動の memory の状態 (#770)
+init_line = ->(h = {}) { JSON.generate({ "type" => "system", "subtype" => "init", "model" => "m" }.merge(h)) }
+[[[], []], [[init_line.call], %w[not-listed]], [[init_line.call("memory_paths" => { "auto" => "/x" }), init_line.call], %w[listed not-listed]],
+ [[JSON.generate("type" => "system", "subtype" => "status", "memory_paths" => { "auto" => "/x" })], []]].each do |lines, want|
+  got = P.parse_claude(lines.join("\n"), [])[:memory_states]
+  check("init ごとの状態は #{want.inspect} (#{got.inspect})", got == want)
+end
+check("codex の event からは、自動の memory の状態を作らない", P.parse_codex("", [])[:memory_states].nil?)
 check("codex の子 process の環境は --codex-home のときだけ CODEX_HOME を持つ",
       P.codex_env({ codex_home: "/e" }) == { "CODEX_HOME" => "/e" } && P.codex_env({}) == {})
 check("merged は 1 つの値ならその値", P.merged(["a", "a", nil]) == "a")
@@ -1684,6 +1692,7 @@ EOF
 cat > "$fakebin/claude" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_LOG"
+printf 'auto-memory: %s\n' "${CLAUDE_CODE_DISABLE_AUTO_MEMORY-unset}" >> "$FAKE_LOG"
 if [ "${1:-}" = "--help" ]; then
   help='  --permission-mode <mode>
   --tools <tools...>'
@@ -1697,6 +1706,7 @@ cat > "$fakebin/codex" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_LOG"
 printf 'codex-home: %s\n' "${CODEX_HOME:-unset}" >> "$FAKE_LOG"
+printf 'auto-memory: %s\n' "${CLAUDE_CODE_DISABLE_AUTO_MEMORY-unset}" >> "$FAKE_LOG"
 case "$1 ${2:-}" in
   "--version ") echo "codex-cli 9.9.9"; exit 0 ;;
   "exec --help") printf '%s\n' '  --ignore-user-config' '  --ignore-rules' '  --disable <FEATURE>' '  -s, --sandbox <MODE>'; exit 0 ;;
@@ -1795,6 +1805,21 @@ json_get() {
   ruby -rjson -e 'd = JSON.parse(File.read(ARGV[0])); puts eval(ARGV[1]).to_json' "$1" "$2"
 }
 
+# --- runner の版の digest は、run の結果を左右する file のどれが変わっても変わる (copy の上で 1 つずつ変える) ---
+lib_copy="$tmp/lib-copy"
+cp -R "$repo_root/scripts/lib" "$lib_copy"
+runner_version() {
+  ruby -e 'load ARGV[0]; puts ProbeSkillBehavior.runner_version' "$lib_copy/probe_skill_behavior.rb"
+}
+before_version=$(runner_version)
+[ "$(runner_version)" = "$before_version" ] || fail "the runner version should be stable"
+for f in probe_skill_behavior skill_behavior_cases skill_behavior_classifier skill_behavior_fix_check probe_skill_routing probe_child auto_memory; do
+  cp "$lib_copy/$f.rb" "$tmp/kept.rb"
+  printf '# x\n' >> "$lib_copy/$f.rb"
+  [ "$(runner_version)" != "$before_version" ] || fail "the runner version should change with $f.rb"
+  cp "$tmp/kept.rb" "$lib_copy/$f.rb"
+done
+
 # --- claude: 正例の run (書き込みを実行した run) を 2 回 ---
 res="$tmp/claude.json"
 FAKE_WRITE=lib/median.rb
@@ -1817,7 +1842,7 @@ unset FAKE_WRITE
 [ "$(json_get "$res" 'd.values_at("schema_version", "tool", "variant", "skills")')" = '[1,"claude-code","candidate","source"]' ] \
   || fail "claude top-level fields: $(json_get "$res" 'd.keys')"
 [ "$(json_get "$res" 'd["ids"].keys.sort')" = \
-  '["cases_digest","classifier_version","conditions","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
+  '["auto_memory","cases_digest","classifier_version","conditions","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
   || fail "claude ids keys: $(json_get "$res" 'd["ids"].keys.sort')"
 [ "$(json_get "$res" 'd["ids"].values_at("host_version", "init_model", "requested_model", "permission_mode", "max_turns", "repeat", "classifier_version")')" = \
   '["9.9.9","m-fake","default","acceptEdits",12,2,12]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
@@ -1844,6 +1869,34 @@ run_fake claude-code "$quiet_events" --only investigate-diagnose-only --out "$re
 [ "$(json_get "$res" 'd["runs"][0].values_at("completion", "reached", "changed", "calls")')" = '["exited",false,[],[]]' ] \
   || fail "a run without calls should be unreached and unchanged: $(json_get "$res" 'd["runs"][0]')"
 
+# --- claude: 自動の memory を止める環境と、その記録 (#770) ---
+[ "$(json_get "$res" 'd["ids"]["auto_memory"]')" = '{"requested":"off","init":"not-listed"}' ] \
+  || fail "a run whose init lists no memory path should be recorded as not-listed: $(json_get "$res" 'd["ids"]')"
+# 親の環境の値によらず、起動の前の確認 (--help) と run の両方の子 process に 1 を渡す
+for parent in unset 0 '' 1 true; do
+  if [ "$parent" = unset ]; then unset CLAUDE_CODE_DISABLE_AUTO_MEMORY; else
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY=$parent
+    export CLAUDE_CODE_DISABLE_AUTO_MEMORY
+  fi
+  run_fake claude-code "$quiet_events" --only investigate-diagnose-only --out "$res"
+  [ "$(grep '^auto-memory: ' "$log")" = 'auto-memory: 1
+auto-memory: 1' ] || fail "both claude calls should get the variable set to 1 (parent: $parent): $(cat "$log")"
+  # codex の子 process には足さず、親の値も変えない
+  run_fake codex "$codex_events" --model m-x --only investigate-fix --codex-home "$eval_home" --out "$tmp/codex-memory.json"
+  [ "$(grep '^auto-memory: ' "$log" | sort -u)" = "auto-memory: $parent" ] \
+    || fail "codex calls should keep the parent's value ($parent): $(cat "$log")"
+done
+unset CLAUDE_CODE_DISABLE_AUTO_MEMORY
+[ "$(json_get "$tmp/codex-memory.json" 'd["ids"].key?("auto_memory")')" = 'false' ] || fail "codex results must not record auto_memory"
+# init に memory の置き場が示されたら listed。path は残さない
+listed_events="$tmp/claude-listed.jsonl"
+printf '%s\n' '{"type":"system","subtype":"init","model":"m-fake","claude_code_version":"9.9.9","tools":["Read"],"permissionMode":"acceptEdits","memory_paths":{"auto":"/x/CANARY-MEM"}}' \
+  '{"type":"result","subtype":"success"}' > "$listed_events"
+run_fake claude-code "$listed_events" --only investigate-diagnose-only --repeat 2 --out "$res"
+[ "$(json_get "$res" 'd["ids"]["auto_memory"]')" = '{"requested":"off","init":"listed"}' ] \
+  || fail "a run whose init lists a memory path should be recorded as listed: $(json_get "$res" 'd["ids"]')"
+if grep -q -F 'CANARY-MEM' "$res"; then fail "results.json must not contain the memory path"; fi
+
 # --- claude: 終わり方 (timeout・max-turns・failed) ---
 FAKE_SLEEP=5
 export FAKE_SLEEP
@@ -1856,6 +1909,8 @@ FAKE_RC=1
 export FAKE_RC
 run_fake claude-code "$mt_events" --only investigate-fix --out "$res"
 [ "$(json_get "$res" 'd["runs"][0]["completion"]')" = '"max-turns"' ] || fail "error_max_turns should be max-turns: $out"
+[ "$(json_get "$res" 'd["ids"]["auto_memory"]')" = '{"requested":"off","init":"unknown"}' ] \
+  || fail "a run without init should be recorded as unknown: $(json_get "$res" 'd["ids"]')"
 run_fake claude-code "$quiet_events" --only investigate-fix --out "$res"
 unset FAKE_RC
 [ "$(json_get "$res" 'd["runs"][0]["completion"]')" = '"failed"' ] || fail "a non-zero exit should be failed: $out"

@@ -177,9 +177,11 @@ usage: expand-vendored-policy.sh --root DIR --facets-root PATH --entry PATH [--c
 
 - `probe-skill-routing.sh`: skill routing acceptance harness の probe runner (実機)。候補 skill
   だけを project scope に置いた隔離 project で `claude -p` / `codex exec` を headless 実行し、
-  発火した skill と token 使用量を `results.json` (judge 入力) に書く。実 tool home には
-  書き込まない。Codex は監査 / review と同じ境界 (`--ignore-user-config` / `--ignore-rules` /
-  `--disable apps` 等) で起動し、起動の前に flag と feature の在否を確かめる (#372)。
+  発火した skill と token 使用量を `results.json` (judge 入力) に書く。probe 自身は tool home に
+  書き込まない (CLI 自身の状態の file は見ていない)。Claude Code の自動の memory は止めて、記録に残す
+  (#770。設定と記録の形は `lib/auto_memory.rb`、self-test は `tests/auto-memory-test.sh`)。Codex は監査 / review と
+  同じ境界 (`--ignore-user-config` / `--ignore-rules` / `--disable apps` 等) で起動し、起動の前に flag と feature の
+  在否を確かめる (#372)。
 
 ```text
 usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>

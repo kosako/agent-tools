@@ -12,7 +12,9 @@
 #   - 測るのは、1 回の依頼から run の終わりまでに model が求めた操作。複数 turn の許可の保持は測らない。
 #   - 書き込みは run ごとの temp project の中に閉じる。claude-code は --permission-mode acceptEdits (作業 directory の
 #     中の編集だけを自動で許可し、Bash などは -p の既定のまま拒否される)、codex は -s workspace-write (network なし)。
-#     どちらも実 tool home (~/.claude / ~/.codex) には書かない。
+#     probe 自身は tool home (~/.claude / ~/.codex) に書かない。claude-code の子 process には自動の memory を止める環境を渡す
+#     (#770。止めないと、run ごとに ~/.claude/projects の下に dir ができる)。CLI 自身が home に置く状態の file (認証・
+#     cache・log など) は見ていない。
 #   - skill の無い条件は、両方の target で、運用 instruction と user の skill の両方が無い条件 (#731)。claude-code は
 #     --setting-sources project で user の instruction と skill を読まない。codex は global の AGENTS.md を止める設定が
 #     無いので、人がログインした評価用の home (--codex-home) で起動し、子 process にだけ CODEX_HOME を渡す。
@@ -36,6 +38,7 @@ require "ripper"
 require "shellwords"
 require "tmpdir"
 require "time"
+require_relative "auto_memory"
 require_relative "probe_child"
 require_relative "probe_skill_routing"
 require_relative "skill_behavior_cases"
@@ -237,18 +240,21 @@ module ProbeSkillBehavior
   # - 呼び出し: type=assistant の message.content[] の tool_use (id・name・input)。
   # - 結果: type=user の message.content[] の tool_result (tool_use_id・is_error)。result の permission_denials に
   #   tool_use_id があれば denied (許可の要る呼び出しが拒まれた)。どちらも無ければ unknown。
-  # - init: type=system subtype=init の model・claude_code_version・tools・permissionMode。
+  # - init: type=system subtype=init の model・claude_code_version・tools・permissionMode。memory_states は、init ごとの
+  #   自動の memory の状態 (memory_paths から。#770)。
   def self.parse_claude(jsonl, names, fixture = K::NO_FIXTURE)
     calls = []
     results = {}
     denied = []
     init = {}
+    memory_states = []
     result_seen = false
     subtype = nil
     json_lines(jsonl).each do |e|
       case e["type"]
       when "system"
         if e["subtype"] == "init"
+          memory_states << AutoMemory.state(e)
           init = { model: e["model"], version: e["claude_code_version"], tools: e["tools"], mode: e["permissionMode"] }
         end
       when "assistant"
@@ -291,8 +297,8 @@ module ProbeSkillBehavior
       { id: c[:id], tool: c[:tool], class: K.classify_claude(c[:tool], c[:input], fixture: fixture), outcome: outcome,
         strings: strings_in(c[:input]) }
     end
-    { calls: out, skills_read: skills.uniq, skills_unresolved: unresolved, init: init, result_seen: result_seen,
-      subtype: subtype }
+    { calls: out, skills_read: skills.uniq, skills_unresolved: unresolved, init: init, memory_states: memory_states,
+      result_seen: result_seen, subtype: subtype }
   end
 
   # codex exec --json の event (0.153.4 で実測した形)。呼び出しは item.started / item.completed の item で、id で束ねる。
@@ -517,7 +523,7 @@ module ProbeSkillBehavior
   end
 
   def self.claude_preflight!
-    help = R.capture_ok(%w[claude --help])
+    help = R.capture_ok(%w[claude --help], env: AutoMemory::ENV_OFF)
     raise Error, "claude-code: `claude --help` failed" unless help
 
     missing = CLAUDE_HELP_MARKERS.reject { |m| help.include?(m) }
@@ -553,7 +559,7 @@ module ProbeSkillBehavior
   def self.run_one(opts, proj, names, prompt, fixture = K::NO_FIXTURE)
     if opts[:tool] == "claude-code"
       argv = claude_argv(opts, prompt)
-      r = R.run_command(argv, chdir: proj, stdin: nil, timeout: opts[:timeout])
+      r = R.run_command(argv, chdir: proj, stdin: nil, timeout: opts[:timeout], env: AutoMemory::ENV_OFF)
       parsed = parse_claude(r.out, names, fixture)
     else
       argv = codex_argv(opts, proj)
@@ -577,7 +583,7 @@ module ProbeSkillBehavior
 
   def self.runner_version
     files = %w[probe_skill_behavior.rb skill_behavior_cases.rb skill_behavior_classifier.rb skill_behavior_fix_check.rb
-               probe_skill_routing.rb probe_child.rb]
+               probe_skill_routing.rb probe_child.rb auto_memory.rb]
     file_digest(files.map { |f| File.join(__dir__, f) })
   end
 
@@ -673,6 +679,7 @@ module ProbeSkillBehavior
     raw_real = File.realpath(raw_dir)
     runs = []
     inits = []
+    memory_states = []
     cases.each do |c|
       fixture_dir = File.join(fixtures_root, c["fixture"])
       opts[:repeat].times do |n|
@@ -695,6 +702,7 @@ module ProbeSkillBehavior
         write_no_follow(stderr_path, r[:stderr], dir: raw_dir, dir_real: raw_real) unless r[:stderr].to_s.empty?
         write_no_follow(R.raw_log_path(raw_dir, c["id"], n + 1, "fix-check"), fix.raw, dir: raw_dir, dir_real: raw_real) if fix
         inits << r[:init] if r[:init]
+        memory_states << r[:memory_states] if r[:memory_states]
         reached = r[:calls].any? { |call| call[:strings].any? { |s| c["reach"].any? { |p| s.include?(p) } } }
         run = {
           "case" => c["id"], "index" => n + 1, "completion" => r[:completion],
@@ -734,6 +742,8 @@ module ProbeSkillBehavior
       "timeout" => opts[:timeout],
       "repeat" => opts[:repeat],
     }
+    # 自動の memory を止めたこと (#770。claude-code だけ)。
+    ids["auto_memory"] = AutoMemory.record(memory_states) if claude
     # 検査に使った Ruby の版 (検査のある case を含む run だけ)。
     ids["fix_check_ruby"] = RUBY_VERSION if cases.any? { |c| c["fix_check"] }
     results = {

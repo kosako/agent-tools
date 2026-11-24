@@ -27,6 +27,7 @@
 # 責務で、judge が縛れるのは case との突き合わせ・coverage・比較の条件までである。
 
 require "json"
+require_relative "auto_memory"
 require_relative "skill_behavior_cases"
 
 # C locale でも、読む text (file・command の出力) を UTF-8 として扱う (#432)。
@@ -56,7 +57,8 @@ module CheckSkillBehavior
   ID_STRING_KEYS = %w[source_digest cases_digest runner_version host_version requested_model init_model effort
                       permission_mode fix_check_ruby].freeze
   ID_POSITIVE_INTEGER_KEYS = %w[classifier_version timeout repeat].freeze
-  ID_KEYS = (ID_STRING_KEYS + ID_POSITIVE_INTEGER_KEYS + %w[fixture_digests tool_surface max_turns conditions]).freeze
+  ID_KEYS = (ID_STRING_KEYS + ID_POSITIVE_INTEGER_KEYS + %w[fixture_digests tool_surface max_turns conditions
+                                                                  auto_memory]).freeze
   # ids.conditions の値 (skill の無い条件。probe_skill_behavior.rb の CONDITIONS と同じ。#731)。決まった値だけを受ける。
   CONDITIONS = {
     "claude-code" => { "setting_sources" => "project" },
@@ -176,6 +178,10 @@ module CheckSkillBehavior
     validate_tool_surface!(ids["tool_surface"], tool, "#{label}.tool_surface") if ids.key?("tool_surface")
     if ids.key?("conditions") && ids["conditions"] != CONDITIONS.fetch(tool)
       raise Error, "#{label}.conditions must be #{JSON.generate(CONDITIONS.fetch(tool))} for #{tool}"
+    end
+    # 自動の memory の記録 (#770)。#770 より前の results には無い。
+    if ids.key?("auto_memory") && !(tool == "claude-code" && AutoMemory.valid?(ids["auto_memory"]))
+      raise Error, "#{label}.auto_memory must be an object of requested (off) and init, for claude-code only"
     end
   end
 
@@ -321,6 +327,7 @@ module CheckSkillBehavior
     if data["tool"] == "claude-code" && ids.key?("permission_mode") && ids["permission_mode"] != CLAUDE_PERMISSION_MODE
       issues << "permission mode of the runs is not #{CLAUDE_PERMISSION_MODE}"
     end
+    issues << "auto memory was not off in every run" if ids.key?("auto_memory") && !AutoMemory.off?(ids["auto_memory"])
     issues
   end
 

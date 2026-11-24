@@ -277,6 +277,62 @@ write_results "$tmp/repeat.json" claude-code model-x baseline \
 run_case "compare-run-count-mismatch" 2 "comparison: run count differs for case 'a-primary' (2 vs 1)" \
   -- --cases "$tmp/cases.json" --results "$tmp/ok.json" --baseline "$tmp/repeat.json"
 
+# --- 自動の memory の記録 (#770)。在るときだけ見る (ほかの case の results には無い) ---
+# usage: with_memory <in> <out> <auto_memory の JSON> [schema_version]
+with_memory() {
+  ruby -rjson -e '
+    d = JSON.parse(File.read(ARGV[0]))
+    d["auto_memory"] = JSON.parse("[#{ARGV[2]}]")[0]
+    if ARGV[3]
+      d["schema_version"] = Integer(ARGV[3])
+      d["runs"].each { |r| r["completion"] = "exited" } if d["schema_version"] == 2
+    end
+    File.write(ARGV[1], JSON.generate(d))' "$@"
+}
+for version in 1 2; do
+  with_memory "$tmp/ok.json" "$tmp/mem-off-$version.json" '{"requested":"off","init":"not-listed"}' "$version"
+  run_case "memory-off-schema-$version" 0 "ok: skill routing verified" -- --cases "$tmp/cases.json" --results "$tmp/mem-off-$version.json"
+  for state in listed unknown CANARY 'mixed:not-listed,listed'; do
+    with_memory "$tmp/ok.json" "$tmp/mem-state.json" "{\"requested\":\"off\",\"init\":\"$state\"}" "$version"
+    run_case "memory-$state-schema-$version" 2 "FAIL: candidate: auto memory was not off in every run" \
+      -- --cases "$tmp/cases.json" --results "$tmp/mem-state.json"
+    if grep -q -e CANARY -e "ok: " "$tmp/out"; then fail "memory-$state: the state must not be copied or pass: $(cat "$tmp/out")"; fi
+  done
+done
+for value in null '"off"' '[]' '{}' '{"requested":"off"}' '{"init":"not-listed"}' '{"requested":"off","init":"not-listed","x":1}' \
+  '{"requested":"on","init":"not-listed"}' '{"requested":"off","init":""}' '{"requested":"off","init":1}'; do
+  with_memory "$tmp/ok.json" "$tmp/mem-bad.json" "$value"
+  run_case "memory-shape $value" 2 "error: results: auto_memory must be" -- --cases "$tmp/cases.json" --results "$tmp/mem-bad.json"
+  run_case "memory-baseline-shape $value" 2 "error: baseline: auto_memory must be" \
+    -- --cases "$tmp/cases.json" --results "$tmp/mem-off-1.json" --baseline "$tmp/mem-bad.json"
+  if grep -q "delta candidate-baseline" "$tmp/out"; then fail "memory-baseline-shape: delta reported: $(cat "$tmp/out")"; fi
+done
+write_results "$tmp/codex-ok.json" codex model-x candidate \
+  "$(run_line a-primary ok 100 10 '["skill-a"]')" \
+  "$(run_line b-primary ok 120 12 '["skill-b"]')" \
+  "$(run_line none ok 80 8 '[]')"
+run_case "memory-codex-without" 0 "ok: skill routing verified" -- --cases "$tmp/cases.json" --results "$tmp/codex-ok.json"
+with_memory "$tmp/codex-ok.json" "$tmp/mem-codex.json" '{"requested":"off","init":"not-listed"}'
+run_case "memory-codex" 2 "error: results: auto_memory must be" -- --cases "$tmp/cases.json" --results "$tmp/mem-codex.json"
+# 記録の有る結果と無い結果は、どちらが候補でも比べない。違反は exit 1 のまま
+run_case "memory-compare-new-old" 2 "FAIL: comparison: auto memory differs" \
+  -- --cases "$tmp/cases.json" --results "$tmp/mem-off-1.json" --baseline "$tmp/ok.json"
+if grep -q "delta candidate-baseline" "$tmp/out"; then fail "memory-compare-new-old: delta reported: $(cat "$tmp/out")"; fi
+run_case "memory-compare-old-new" 2 "FAIL: comparison: auto memory differs" \
+  -- --cases "$tmp/cases.json" --results "$tmp/ok.json" --baseline "$tmp/mem-off-1.json"
+run_case "memory-compare-same" 0 "delta candidate-baseline" \
+  -- --cases "$tmp/cases.json" --results "$tmp/mem-off-1.json" --baseline "$tmp/mem-off-1.json"
+with_memory "$tmp/ok.json" "$tmp/mem-listed.json" '{"requested":"off","init":"listed"}'
+run_case "memory-compare-both-listed" 2 "FAIL: candidate: auto memory was not off in every run" \
+  -- --cases "$tmp/cases.json" --results "$tmp/mem-listed.json" --baseline "$tmp/mem-listed.json"
+if grep -q "delta candidate-baseline" "$tmp/out"; then fail "memory-compare-both-listed: delta reported: $(cat "$tmp/out")"; fi
+run_case "memory-compare-baseline-listed" 2 "FAIL: baseline: auto memory was not off in every run" \
+  -- --cases "$tmp/cases.json" --results "$tmp/mem-off-1.json" --baseline "$tmp/mem-listed.json"
+with_memory "$tmp/viol.json" "$tmp/mem-viol.json" '{"requested":"off","init":"listed"}'
+run_case "memory-violation-first" 1 "FAIL: candidate: auto memory was not off in every run" \
+  -- --cases "$tmp/cases.json" --results "$tmp/mem-viol.json" --baseline "$tmp/ok.json"
+grep -q "triggered must_not skill(s) skill-b" "$tmp/out" || fail "memory-violation-first: the breach should be reported: $(cat "$tmp/out")"
+
 # --- case 21: error run が candidate / baseline のどちらにあっても、baseline 比較 (delta と回帰の判定) を
 # 飛ばして構造エラー (exit 2) にする。回帰に見える差があっても判定しない。candidate 自身の must_not 違反は
 # exit 1 として残る (docs の「既知の挙動」、#302) ---
