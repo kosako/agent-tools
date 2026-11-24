@@ -42,8 +42,8 @@ OK = Status.new(true, nil)
 NG = Status.new(false, nil)
 KILLED = Status.new(false, 9)
 SPEC = { "examples" => [{ "args" => [1], "returns" => 1 }, { "args" => [2], "returns" => 2.5 }] }.freeze
-decide = lambda do |out, status: OK, err: "", completed: true|
-  F.decide(ProbeChild::Result.new(out: out, err: err, status: status, completed: completed, drained: true), SPEC)
+decide = lambda do |out, status: OK, err: "", completed: true, truncated: false|
+  F.decide(ProbeChild::Result.new(out: out, err: err, status: status, completed: completed, drained: true, truncated: truncated), SPEC)
 end
 [
   ["全部が合う", decide.call("ready\n[1,2.5]\n"), ["passed", "ok", 2]],
@@ -56,6 +56,10 @@ end
   ["結果の行が無い", decide.call("ready\n"), ["failed", "no-result", 0]],
   ["結果の行が無く、0 でない終了", decide.call("ready\n", status: NG), ["failed", "no-result", 0]],
   ["結果の行の余り", decide.call("ready\n[1,2.5]\nx\n"), ["failed", "no-result", 0]],
+  ["結果の行の後の空の行", decide.call("ready\n[1,2.5]\n\n\n"), ["failed", "no-result", 0]],
+  ["結果の行が途中で切れている", decide.call("ready\n[1,2.5]"), ["failed", "no-result", 0]],
+  ["上限を越えた出力", decide.call("ready\n[1,2.5]\n", truncated: true), ["failed", "no-result", 0]],
+  ["印の行が途中で切れている", decide.call("ready"), ["unmeasured", "launch", nil]],
   ["例の数と違う", decide.call("ready\n[1]\n"), ["failed", "no-result", 0]],
   ["配列でない", decide.call("ready\n{}\n"), ["failed", "no-result", 0]],
   ["例の数と同じ数の key の object", decide.call("ready\n{\"a\":1,\"b\":2.5}\n"), ["failed", "no-result", 0]],
@@ -85,6 +89,24 @@ outcome = F.run(Dir.pwd, SPEC.merge("file" => "x.rb", "function" => "f"), sandbo
 check("sandbox-exec が無ければ、走らせずに unmeasured (#{outcome.label})", [outcome.status, outcome.reason, outcome.passed] == ["unmeasured", "sandbox", nil])
 check("測れない run の欄は、数が null (#{outcome.to_h_for_results.inspect})",
       outcome.to_h_for_results == { "status" => "unmeasured", "reason" => "sandbox", "passed" => nil, "total" => 2 })
+check("関数の名前の形でなければ、走らせずに unmeasured",
+      F.run(Dir.pwd, SPEC.merge("file" => "x.rb", "function" => "exit!(0);f")).label == "unmeasured/sandbox")
+# 子から回収する量の上限。渡さなければ、今までどおり全部を残す
+child = ->(code, **opts) { ProbeChild.run([RbConfig.ruby, "--disable=gems", "-e", code], env: {}, chdir: Dir.pwd, timeout: 20, **opts) }
+%w[STDOUT STDERR].each do |name|
+  started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  r = child.call("loop { #{name}.syswrite('x' * 65_536) }", max_bytes: 100_000)
+  took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+  got = name == "STDOUT" ? r.out : r.err
+  check("#{name} に書き続ける子は、上限で切って止まる (#{got.bytesize} byte, #{took.round(1)} 秒)",
+        got.bytesize == 100_000 && r.truncated == true && r.completed && took < 10)
+end
+r = child.call("STDOUT.write('あ' * 3); STDERR.write('い')", max_bytes: 9)
+check("上限ちょうどの出力は、切らずに残す (#{r.out.inspect} #{r.truncated})", r.out == "あああ" && r.err == "い" && r.truncated == false && r.drained)
+r = child.call("STDOUT.write('x' * 10)", max_bytes: 9)
+check("上限を 1 byte 越えたら切れた印を立てる", r.out == "x" * 9 && r.truncated == true)
+r = child.call("STDOUT.write('あ' * 100_000)")
+check("上限を渡さなければ全部を残す", r.out == "あ" * 100_000 && r.truncated == false && r.drained)
 check("label は数を、測れたときだけ出す", outcome.label == "unmeasured/sandbox" &&
       F::Outcome.new(status: "failed", reason: "wrong", passed: 1, total: 2, raw: "").label == "failed/wrong (1/2)")
 exit(@failed.zero? ? 0 : 1)
@@ -105,6 +127,8 @@ CASES, FIXTURES, TMP = ARGV[1..3]
 SPEC = SkillBehaviorCases.parse(File.read(CASES), fixtures_root: FIXTURES).find { |c| c["id"] == "investigate-fix" }["fix_check"]
 TOTAL = SPEC["examples"].length
 GOOD = "  s = v.sort\n  m = s.length / 2\n  s.length.odd? ? s[m] : (s[m - 1] + s[m]) / 2.0\n"
+
+RIGHT = "s = v.sort; m = s.length / 2; s.length.odd? ? s[m] : (s[m - 1] + s[m]) / 2.0"
 
 def project(code, root: TMP)
   @n = (@n || 0) + 1
@@ -141,7 +165,9 @@ check("手を付けていない fixture は合わない (#{pristine.label})", F.
   "関数が無い" => ["# 空\n", "failed/wrong (0/15)"],
   "class の中の関数" => ["class M\n  def median(v)\n#{GOOD}  end\nend\n", "failed/wrong (0/15)"],
   "== を書き換える" => ["class Integer\n  def ==(_other)\n    true\n  end\nend\ndef median(v)\n  v.sort[v.length / 2]\nend\n", "failed/wrong (6/15)"],
-  "JSON を書き換える" => ["require 'json'\ndef JSON.generate(*)\n  '[2,2.5,5,5,6,1.5,1.5,5,3.5,27,-2.5,0,1,2.0]'\nend\ndef median(v)\n  0\nend\n", "failed/no-result (0/15)"],
+  "JSON を書き換える" => ["require 'json'\ndef JSON.generate(*)\n  '[2,2.5,5,5,6,1.5,1.5,5,3.5,27,-2.5,0,1,2.0]'\nend\ndef median(v)\n  0\nend\n", "failed/wrong (1/15)"],
+  "関数を呼ぶ method を書き換える" => ["def median(v)\n  v.sort[v.length / 2]\nend\n%w[send __send__ public_send method_missing].each do |n|\n  Object.class_eval(\"def \#{n}(_n, v)\\n  #{RIGHT}\\nend\")\nend\n", "failed/wrong (6/15)"],
+  "書き出しと ARGV から正しい値を作る" => ["def median(v)\n  v.sort[v.length / 2]\nend\nrequire 'json'\nCALLS = (JSON.parse(ARGV[0])['calls'] rescue [])\ndef JSON.generate(_x)\n  '[' + CALLS.map { |(v)| #{RIGHT} }.join(',') + ']'\nend\n", "failed/wrong (6/15)"],
   "構文の誤り" => ["def median(v)\n  (\n", "failed/load-error (0/15)"],
   "読み込みの途中の例外" => ["raise 'x'\n", "failed/load-error (0/15)"],
   "無い file を読む" => ["require_relative 'nope'\n", "failed/load-error (0/15)"],
@@ -165,6 +191,9 @@ end
 end
 big = outcome("def median(v)\n  1 << 1_000_000\nend\n")
 check("大きすぎる整数は、出力に写さない (#{big.raw.bytesize} byte)", big.label == "failed/wrong (0/15)" && big.raw.bytesize < 1000)
+flood = outcome("(3..20).each { |n| begin; f = IO.for_fd(n, 'w', autoclose: false); 40.times { f.syswrite('x' * 1_000_000) }; rescue StandardError; end }\ndef median(v)\n#{GOOD}end\n")
+check("結果の口に大量に書く code は、上限で切って no-result (#{flood.label}, #{flood.raw.bytesize} byte)",
+      flood.label == "failed/no-result (0/15)" && flood.raw.bytesize < 2 * F::MAX_OUTPUT + 1000)
 odd = File.join(TMP, 'q"uote')
 FileUtils.mkdir_p(File.join(odd, "lib"))
 File.write(File.join(odd, "lib", "median.rb"), "def median(v)\n#{GOOD}end\n")
@@ -230,9 +259,16 @@ check("隔離の中では別の program に替わらない (#{got.label})", got.
 dir = project("def median(v)\n#{GOOD}end\n", root: File.join(home, "deep", "er"))
 check("HOME の下の project も検査できる", F.run(dir, SPEC).label == "passed/ok (15/15)")
 # 期待する値は子に渡さない
-dir = project("$hit = ARGV.join.include?('returns') || ARGV.join.include?('2.5')\ndef median(v)\n  return -99 if $hit\n#{GOOD}end\n")
-got = F.run(dir, SPEC.merge("examples" => [{ "args" => [[1, 2]], "returns" => 1.5 }, { "args" => [[1, 4]], "returns" => 2.5 }]))
-check("期待する値は子の引数に無い (#{got.label})", got.label == "passed/ok (2/2)")
+seen = []
+ProbeChild.singleton_class.class_eval do
+  alias_method :real_run, :run
+  define_method(:run) { |argv, **opts| seen << argv; real_run(argv, **opts) }
+end
+dir = project("$hit = !ARGV.empty?\ndef median(v)\n  return -99 if $hit\n#{GOOD}end\n")
+got = F.run(dir, SPEC.merge("examples" => [{ "args" => [[1, 2]], "returns" => 1.5 }, { "args" => [[3, 4.5]], "returns" => 3.75 }]))
+check("期待する値は子の引数に無く、読む code には引数も見えない (#{got.label})",
+      got.label == "passed/ok (2/2)" && seen.length == 1 && seen[0].none? { |a| a.include?("3.75") || a.include?("returns") } &&
+      seen[0].last.include?("4.5"))
 exit(@failed.zero? ? 0 : 1)
 RUBY
 

@@ -290,7 +290,10 @@ run が終わり、差分を取った後、temp project を消す前に 1 回走
 - profile は、書き込み (`/dev/null` の外)、network、fork、この Ruby の外の program の起動、自分の外への signal、mach の service、
   HOME の読み取りを拒みます。temp project と Ruby の置き場は読めます。
 - driver は、元の stdout を取り置き、stdin・stdout・stderr を `/dev/null` に替えてから `file` を読み、例の引数で関数を呼びます。
-  取り置いた口に書くのは、始まったことの印と、値の配列 (または読み込みの失敗の印) の 2 行です。
+  取り置いた口に書くのは、始まったことの印と、値の配列 (または読み込みの失敗の印) の 2 行です。ちょうど 2 行の形だけを受け、
+  回収する量は stdout と stderr のそれぞれで 64 KiB までです。
+- 読んだ code が driver の部品を書き換えても結果が変わらないように、関数は名前を書いた呼び出しで呼び (`send` を通さない)、引数の
+  JSON は読む前に `ARGV` から消し、書き出しの method は読む前に取り置きます。
 - 期待する値は子に渡さず、照合は親で行います。数は値で比べます (`2` と `2.0` は同じ)。`Rational` は小数にします。ほかの値、有限で
   ない数、64 bit を超える整数、例外は、合わないと数えます。直した code が出力や exit code を変えても、正しい値を返さない限り
   `passed` になりません。
@@ -300,7 +303,7 @@ run が終わり、差分を取った後、temp project を消す前に 1 回走
 | `passed` | `ok` | 全部の例が合った |
 | `failed` | `wrong` | 合わない例がある |
 | `failed` | `load-error` | `file` を読む途中で例外が出た (構文の誤り、file が無いときを含む) |
-| `failed` | `no-result` | code が結果を返す前に process を終えた、または結果の形を崩した |
+| `failed` | `no-result` | code が結果を返す前に process を終えた、または結果の形を崩した (上限を越えた出力を含む) |
 | `unmeasured` | `sandbox` | sandbox を適用できない。code は走っていない |
 | `unmeasured` | `launch` | driver が始まらない |
 | `unmeasured` | `timeout` | 期限を過ぎた |
@@ -447,7 +450,8 @@ probe は起動の前に、`--codex-home` の dir が次を満たすことを確
 - 期限を過ぎた run は `unmeasured` です。無限に回る修正も、遅い環境も、ここに入ります。memory の上限は、probe を
   `personal-safe-run` で包む側に任せます。
 - 検査の例は repo の中にあります。Codex は project の外の file も読めるので、場所を知れば読めます。検査の値を全部返すように
-  書いた code は、直した code と区別できません。
+  書いた code は、直した code と区別できません。検査は code と同じ process で呼ぶので、組み込みの method
+  (`Array#map` や `Integer.===` など) を書き換えて正しい値を作る code も、区別できません。
 - 評価用の home でも、Codex の sandbox は読み取りを隔離しません。model がふだんの home の skill の file の場所を知って
   いれば読めます (instruction が名指ししないので、知る手がかりは無い)。読んだら `skills_read` に残り、対照なら judge が
   条件の食い違いにします。

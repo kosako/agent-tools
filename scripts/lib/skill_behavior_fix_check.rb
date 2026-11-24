@@ -31,42 +31,53 @@ module SkillBehaviorFixCheck
     end
   end
 
-  # 子の中の code。引数は ARGV[0] の JSON (file・function・calls)。結果は取り置いた口に 2 行で書く。
+  # 子から回収する出力の上限 (stdout と stderr のそれぞれ)。結果は 1 KB に満たない。
+  MAX_OUTPUT = 65_536
+
+  # 子の中の code。引数は ARGV[0] の JSON (file と calls)。結果は取り置いた口に 2 行で書く。
   # 1 行目の ready は、起動できたことの印。2 行目は、読み込みの失敗の印か、例ごとの値の配列。
   # 読む code の出力は /dev/null に捨てる。code が process を終えたら (exit・signal)、2 行目は出ない。
-  DRIVER = <<~'RUBY'
-    require "json"
-    spec = JSON.parse(ARGV.fetch(0))
-    out = STDOUT.dup
-    out.sync = true
-    null = File.open(File::NULL, "r+")
-    [STDIN, STDOUT, STDERR].each { |io| io.reopen(null) }
-    out.puts("ready")
-    begin
-      load(File.expand_path(spec["file"]))
-    rescue SystemExit, SignalException
-      exit!(1)
-    rescue Exception
-      out.puts("load-error")
-      exit!(0)
-    end
-    values = spec["calls"].map do |args|
+  # 読んだ後に、code が書き換えられる部品をなるべく使わない。関数は、名前を書いた呼び出しで呼ぶ (send を通すと、send の
+  # 再定義で、直っていない関数が合って見える)。引数の JSON は、読む前に ARGV から消す。書き出しの method は、読む前に取り置く。
+  def self.driver(function)
+    raise ArgumentError, "unexpected function name" unless function.match?(C::FIX_FUNCTION)
+
+    <<~RUBY
+      require "json"
+      spec = JSON.parse(ARGV.fetch(0))
+      ARGV.clear
+      dump = JSON.method(:generate)
+      out = STDOUT.dup
+      out.sync = true
+      null = File.open(File::NULL, "r+")
+      [STDIN, STDOUT, STDERR].each { |io| io.reopen(null) }
+      out.puts("ready")
       begin
-        value = send(spec["function"], *args)
-        case value
-        when Integer then value.bit_length <= 64 ? value : nil
-        when Float then value.finite? ? value : nil
-        when Rational then value.to_f
-        end
+        load(File.expand_path(spec["file"]))
       rescue SystemExit, SignalException
         exit!(1)
       rescue Exception
-        nil
+        out.puts("load-error")
+        exit!(0)
       end
-    end
-    out.puts(JSON.generate(values))
-    exit!(0)
-  RUBY
+      values = spec["calls"].map do |args|
+        begin
+          value = #{function}(*args)
+          case value
+          when Integer then value.bit_length <= 64 ? value : nil
+          when Float then value.finite? ? value : nil
+          when Rational then value.to_f
+          end
+        rescue SystemExit, SignalException
+          exit!(1)
+        rescue Exception
+          nil
+        end
+      end
+      out.puts(dump.call(values))
+      exit!(0)
+    RUBY
+  end
 
   def self.ruby
     File.realpath(RbConfig.ruby)
@@ -109,10 +120,9 @@ module SkillBehaviorFixCheck
   # proj (run の後の project) の spec の file を検査する。spec は case の fix_check。
   def self.run(proj, spec, timeout: TIMEOUT, sandbox: SANDBOX_EXEC)
     total = spec["examples"].length
-    payload = JSON.generate("file" => spec["file"], "function" => spec["function"],
-                            "calls" => spec["examples"].map { |e| e["args"] })
-    argv = [sandbox, "-p", profile(proj), ruby, "--disable=gems", "-e", DRIVER, payload]
-    result = ProbeChild.run(argv, env: CHILD_ENV, chdir: proj, timeout: timeout, unsetenv_others: true)
+    payload = JSON.generate("file" => spec["file"], "calls" => spec["examples"].map { |e| e["args"] })
+    argv = [sandbox, "-p", profile(proj), ruby, "--disable=gems", "-e", driver(spec["function"]), payload]
+    result = ProbeChild.run(argv, env: CHILD_ENV, chdir: proj, timeout: timeout, unsetenv_others: true, max_bytes: MAX_OUTPUT)
     status, reason, passed = decide(result, spec)
     Outcome.new(status: status, reason: reason, passed: passed, total: total,
                 raw: "#{result.out.b}\n--- stderr\n#{result.err.b}\n")
@@ -123,8 +133,8 @@ module SkillBehaviorFixCheck
   end
 
   def self.decide(result, spec)
-    lines = result.out.b.split("\n")
-    ready = lines.first == "ready"
+    text = result.out.b
+    ready = text.start_with?("ready\n")
     return ["unmeasured", "timeout", nil] unless result.completed
     # sandbox-exec 自体の失敗は、driver が始まる前に、0 でない終了 code と、決まった字面で終わる。
     if !ready && result.status && !result.status.success? && result.err.b.match?(/^sandbox-exec: /n)
@@ -132,9 +142,11 @@ module SkillBehaviorFixCheck
     end
     return ["unmeasured", "launch", nil] unless ready
     return ["unmeasured", "signal", nil] if result.status.nil? || result.status.signaled?
-    return ["failed", "load-error", 0] if lines == %w[ready load-error]
+    return ["failed", "load-error", 0] if text == "ready\nload-error\n"
 
-    values = lines.length == 2 ? parse_values(lines[1], spec["examples"].length) : nil
+    # ちょうど 2 行の形だけを受ける。上限を越えた出力は、途中で切れているので受けない。
+    line = result.truncated ? nil : text[/\Aready\n([^\n]*)\n\z/n, 1]
+    values = line.nil? ? nil : parse_values(line, spec["examples"].length)
     return ["failed", "no-result", 0] if values.nil?
 
     passed = spec["examples"].zip(values).count { |e, v| v == e["returns"] }
