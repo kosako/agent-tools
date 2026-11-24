@@ -233,8 +233,8 @@ RUBY
 done
 pgrep -f "$tmp/hang" >/dev/null 2>&1 && fail "hang: a process of the fixture is still running"
 
-# INT と TERM が届く位置の全部。位置は、k 本目を始めた直後と、終わりを数えた直後 (最後の 1 本を含む)。
-# どこで届いても exit 1 で、集計を出さず、届いた後に新しい test を始めない。
+# INT と TERM が届く位置の全部。位置は、k 本目を始めた直後、終わりを数えた直後 (最後の 1 本を含む)、集計の直後。
+# どこで届いても exit 1 で、届いた後に新しい test を始めない。test の間に届けば、集計を出さない。
 ruby -r"$script_dir/lib/check_helper" - "$runner" "$tmp" <<'RUBY'
 require "stringio"
 require ARGV[0]
@@ -246,7 +246,8 @@ dir = Dir.mktmpdir("sig-", tmp)
 3.times { |i| File.link(pool, File.join(dir, "#{i}-test.sh")) }
 alone = { "2-test.sh" => "why" }
 wrong = []
-cases = %i[start finish].product([1, 2, 3], %w[INT TERM], [1, 2, 3], [{}, alone])
+cases = %i[start finish].product([1, 2, 3], %w[INT TERM], [1, 2, 3], [{}, alone]) +
+        [:summary].product([1], %w[INT TERM], [1, 2, 3], [{}, alone])
 cases.each do |point, nth, sig, jobs, table|
   out = StringIO.new
   runner = RunAll.new(dir: dir, jobs: jobs, label: "L", alone: table, out: out)
@@ -263,11 +264,32 @@ cases.each do |point, nth, sig, jobs, table|
   end
   code = runner.run
   text = out.string
-  ok = code == 1 && !text.include?("total ") && text.include?("interrupted; running:") && text.scan(/^start: /).length == at
+  ok = code == 1 && text.include?("total ") == (point == :summary) && text.include?("interrupted; running:") && text.scan(/^start: /).length == at
   wrong << [point, nth, sig, jobs, table.keys, code, text] unless ok
 end
 check "signals: at every point, INT and TERM end as exit 1, without starting another test (#{cases.length}): #{wrong.first.inspect}",
-      wrong.empty? && cases.length == 72
+      wrong.empty? && cases.length == 84
+# run の外 (引数を読む間と、run が終わった後) に届いた分も exit 1。入口を process として起動し、その位置で自分に送る。
+program = <<'PROGRAM'
+require ARGV[0]
+where, sig, dir = ARGV[1..-1]
+hit = lambda do
+  Process.kill(sig, Process.pid)
+  sleep 5
+end
+case where
+when "before" then RunAll.define_singleton_method(:parse) { |*args| hit.call; super(*args) }
+when "after" then RunAll.prepend(Module.new { define_method(:run) { super().tap { hit.call } } })
+end
+exit RunAll.main(["--dir", dir])
+PROGRAM
+ends = %w[before after none].product(%w[INT TERM]).map do |where, sig|
+  pid = Process.spawn("ruby", "-e", program, ARGV[0], where, sig, dir, out: File::NULL, err: File::NULL)
+  _, status = Process.wait2(pid)
+  [where, sig, status.exitstatus, status.termsig]
+end
+check "signals: outside the run they end as exit 1 as well, not by the signal: #{ends.inspect}",
+      ends == %w[before after].product(%w[INT TERM], [1], [nil]) + [["none", "INT", 0, nil], ["none", "TERM", 0, nil]]
 # 対照: 届かなければ、同じ dir は exit 0 で、集計を出す。
 out = StringIO.new
 check "signals: the same tests pass without a signal", RunAll.new(dir: dir, jobs: 2, label: "L", out: out).run == 0 && out.string.include?("over 3 tests")

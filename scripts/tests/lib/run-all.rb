@@ -60,21 +60,26 @@ class RunAll
     unknown = @alone.keys - names
     raise Usage, "ALONE names a test that does not exist: #{unknown.join(', ')}" unless unknown.empty?
 
-    started = now
-    Dir.mktmpdir("run-all-") do |logs|
-      @logs = logs
-      with_signals do
-        drain(names - @alone.keys, @jobs) && drain(names & @alone.keys, 1)
-      end
-    end
-    # 最後の test の終わりと重なって届いた INT と TERM も、中断として扱う。
-    return 1 if @stop_requested
-
-    summary(names.length, now - started)
-    @done.length == names.length && @done.none?(&:failure) ? 0 : 1
+    with_signals { run_names(names) }
   end
 
   private
+
+  def run_names(names)
+    started = now
+    finished = Dir.mktmpdir("run-all-") do |logs|
+      @logs = logs
+      drain(names - @alone.keys, @jobs) && drain(names & @alone.keys, 1)
+    end
+    return 1 unless finished
+
+    summary(names.length, now - started)
+    passed = @done.length == names.length && @done.none?(&:failure)
+    # 後片付けと集計の間に届いた INT と TERM も、中断として扱う (走っている test はもう無い)。
+    return 1 if @stop_requested && !stop
+
+    passed ? 0 : 1
+  end
 
   def now
     Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -240,6 +245,8 @@ class RunAll
   end
 
   def self.main(argv)
+    # run の外 (引数を読む間と、run が終わってから exit するまで) に届いた INT と TERM も、exit 1 にする。
+    %w[INT TERM].each { |name| trap(name) { exit!(1) } }
     $stdout.sync = true
     $stdout.binmode
     if argv == ["--help"] || argv == ["-h"]
