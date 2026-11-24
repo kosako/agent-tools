@@ -13,6 +13,11 @@ crash せず該当項目が degrade するだけ)。**例外は `probe-credentia
 `tests/` の self-tests と repository checks は CI (`.github/workflows/test.yml`) で
 PR / push ごとに実行されます。
 
+self-tests は `tests/lib/run-all.rb` が 3 本ずつ並べて走らせます (#726)。手元で全部を走らせるときも使えます
+(`ruby scripts/tests/lib/run-all.rb --jobs 4`。memory と時間の上限は `personal-safe-run` で付ける)。
+test は自分の一時 dir の中だけを書き換えます。repo の作業ツリー、HOME、決まった path、決まった port は、並んで走るほかの
+test と共有です。実時間の上限に厳しく、並べると揺れる test は、`run-all.rb` の表 (`ALONE`) に理由と一緒に入れます。
+
 pipeline scripts の `--root` を省略したときの root は、その script が属する repo (`scripts/` の親)
 です。cwd には依存しないので、repo 外の cwd から絶対パスで起動しても同じ repo を対象にします。
 `shared/` を持たない root を `--root` に渡すと、build / register は致命 gate で非 0 終了し、

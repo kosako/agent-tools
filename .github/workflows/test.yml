@@ -14,12 +14,12 @@ permissions:
 jobs:
   self-tests:
     runs-on: macos-latest
-    # 実測 (2026-11-13〜16 の 82 run): system は中央値 15.5 分・最長 19.2 分、3.4 は中央値 12.3 分・最長 15.5 分。
-    # 20 分の上限では、system が最後の test の途中で打ち切られた回があった。残りの step を足すと約 21 分の見込み (#699)。
+    # 実測 (2026-11-24、test を 3 本ずつ並べた後の 4 run): system は 10.9〜16.9 分、3.4 は 9.0〜13.4 分 (#726)。
+    # 並べる前の 11-23 は、system が 24〜35 分 (上限で取り消し)、3.4 が 18〜26 分だった。
     # 遅い回は、ほぼすべての test が同じ割合で伸びる (runner の速さの揺れ。特定の test の待ちではない)。
-    # 上限は、最長の約 21 分の 1.5 倍 (31.5 分) を 5 分の単位で切り上げた 35 分 (#645 で 15 分から 20 分に上げていた)。
-    # 最長が上限の 2/3 (約 23 分) を超えたら見直す。test ごとの秒は「Run self-tests」の log の末尾にある。
-    timeout-minutes: 35
+    # 上限は、最長の 16.9 分の 1.5 倍 (約 25 分) を 5 分の単位で切り上げた 30 分。
+    # 最長が上限の 2/3 (20 分) を超えたら見直す。test ごとの秒は「Run self-tests」の log の末尾にある。
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -77,8 +77,9 @@ jobs:
 
       - name: Run self-tests
         run: |
-          # 最初の失敗で止めず全 test を走らせ、1 回の CI で全失敗を可視化する。
-          # test ごとの秒を記録し、最後に遅い順の 10 本と合計を出す (上限の見直しに使う。#699)。
+          # runner は、最初の失敗で止めずに全 test を走らせ (1 回の CI で全失敗を可視化する)、最後に遅い順の 10 本と合計を
+          # 出す (上限の見直しに使う。#699)。3 本ずつ並べるのは、runner が 3 core のため (#726)。job を分けると必要な check の
+          # 名前が変わり、macOS の runner も多く要るので、job の中で並べる。
           # 手元に local の断片がある環境を模す (#689)。sync と doctor が読む場所に、不正な断片 (指す先の無い symlink) を
           # この step の間だけ置く。XDG_CONFIG_HOME を一時 dir に向けずに断片を読む test は、sync の conflict か doctor の
           # fail で落ちる。後の step (doctor を空の home で走らせる) には残さない。
@@ -88,23 +89,10 @@ jobs:
           mkdir -p "$xdg/agent-tools"
           ln -s "$RUNNER_TEMP/no-such-local-instructions" "$fragment"
           trap 'rm -f "$fragment"' EXIT
-          failed=0
-          times="$RUNNER_TEMP/test-seconds.tsv"
-          : > "$times"
-          for t in scripts/tests/*.sh; do
-            echo "--- $t"
-            start=$(date +%s)
-            "$t" || { echo "FAIL: $t"; failed=1; }
-            printf '%s\t%s\n' "$(( $(date +%s) - start ))" "$t" >> "$times"
-          done
-          echo "--- slowest tests (seconds)"
-          # sed は入力を読み切るので、head と違って sort に SIGPIPE を返さない。
-          sort -rn "$times" | sed -n '1,10p'
-          awk -F '\t' '{ s += $1 } END { printf "total %d s over %d tests\n", s, NR }' "$times"
-          exit "$failed"
+          ruby scripts/tests/lib/run-all.rb --jobs 3
 
       # 偽の HOME の下に置いた canary で、書き込み経路を持つ suite (sync / setup / root-default)
-      # が実物の ~/.config/opencode を触らないことを確かめる (#295)。tests/lib/ は上の loop に
+      # が実物の ~/.config/opencode を触らないことを確かめる (#295)。tests/lib/ は上の runner に
       # 乗らないので別 step で呼ぶ。
       - name: Run opencode home canary
         run: scripts/tests/lib/opencode-home-canary.sh
