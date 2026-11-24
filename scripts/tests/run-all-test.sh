@@ -233,6 +233,47 @@ RUBY
 done
 pgrep -f "$tmp/hang" >/dev/null 2>&1 && fail "hang: a process of the fixture is still running"
 
+# INT と TERM が届く位置の全部。位置は、k 本目を始めた直後と、終わりを数えた直後 (最後の 1 本を含む)。
+# どこで届いても exit 1 で、集計を出さず、届いた後に新しい test を始めない。
+ruby -r"$script_dir/lib/check_helper" - "$runner" "$tmp" <<'RUBY'
+require "stringio"
+require ARGV[0]
+tmp = ARGV[1]
+pool = File.join(tmp, "quick.sh")
+File.write(pool, "#!/bin/sh\nexit 0\n")
+File.chmod(0o755, pool)
+dir = Dir.mktmpdir("sig-", tmp)
+3.times { |i| File.link(pool, File.join(dir, "#{i}-test.sh")) }
+alone = { "2-test.sh" => "why" }
+wrong = []
+cases = %i[start finish].product([1, 2, 3], %w[INT TERM], [1, 2, 3], [{}, alone])
+cases.each do |point, nth, sig, jobs, table|
+  out = StringIO.new
+  runner = RunAll.new(dir: dir, jobs: jobs, label: "L", alone: table, out: out)
+  calls = 0
+  at = nil
+  runner.define_singleton_method(point) do |*args|
+    super(*args)
+    calls += 1
+    next unless calls == nth
+
+    at = out.string.scan(/^start: /).length
+    Process.kill(sig, Process.pid)
+    sleep 0.02
+  end
+  code = runner.run
+  text = out.string
+  ok = code == 1 && !text.include?("total ") && text.include?("interrupted; running:") && text.scan(/^start: /).length == at
+  wrong << [point, nth, sig, jobs, table.keys, code, text] unless ok
+end
+check "signals: at every point, INT and TERM end as exit 1, without starting another test (#{cases.length}): #{wrong.first.inspect}",
+      wrong.empty? && cases.length == 72
+# 対照: 届かなければ、同じ dir は exit 0 で、集計を出す。
+out = StringIO.new
+check "signals: the same tests pass without a signal", RunAll.new(dir: dir, jobs: 2, label: "L", out: out).run == 0 && out.string.include?("over 3 tests")
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
 # --- T6: workflow ------------------------------------------------------------------------------------
 ruby -r"$script_dir/lib/check_helper" -ryaml -rjson - "$repo_root/.github/workflows/test.yml" "$repo_root/.github/repo-baseline.json" <<'RUBY'
 text = File.read(ARGV[0], encoding: "UTF-8")

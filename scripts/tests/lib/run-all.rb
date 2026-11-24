@@ -33,8 +33,6 @@ class RunAll
   # 止めるときに、TERM から KILL までに待つ秒。
   GRACE = 2
   POLL = 0.05
-  CHILD_MARK = "c"
-  STOP_MARK = "s"
 
   Test = Struct.new(:name, :label, :log, :pid, :started, :seconds, :failure, keyword_init: true)
 
@@ -47,6 +45,7 @@ class RunAll
     @out = out
     @running = {}
     @done = []
+    @stop_requested = false
   end
 
   # 走らせる test の名前 (dir の直下の *.sh の file を、名前の順に)。
@@ -68,7 +67,8 @@ class RunAll
         drain(names - @alone.keys, @jobs) && drain(names & @alone.keys, 1)
       end
     end
-    return 1 if @interrupted
+    # 最後の test の終わりと重なって届いた INT と TERM も、中断として扱う。
+    return 1 if @stop_requested
 
     summary(names.length, now - started)
     @done.length == names.length && @done.none?(&:failure) ? 0 : 1
@@ -85,32 +85,32 @@ class RunAll
   end
 
   # queue の test を、limit 本まで並べて走らせ切る。止められたら false。
+  # INT と TERM の印は、待っている間だけでなく、1 本ごとと、走らせ切った後にも見る (子の終わりと重なって届くことがある)。
   def drain(queue, limit)
     queue = queue.dup
     until queue.empty? && @running.empty?
-      start(queue.shift) while !queue.empty? && @running.length < limit
+      return stop if @stop_requested
+
+      start(queue.shift) while !@stop_requested && !queue.empty? && @running.length < limit
       # どれも起動できなかったとき。子が無いと wait2 は例外を上げる。
       next if @running.empty?
 
       pid, status = Process.wait2(-1, Process::WNOHANG)
       if pid
         finish(@running.delete(pid), status) if @running.key?(pid)
-      elsif interrupted?
-        stop
-        return false
+      else
+        wait_for_signal
       end
     end
-    true
+    @stop_requested ? stop : true
   end
 
-  # 子が終わるか、INT か TERM が届くまで待つ。INT か TERM なら true。
-  # CHLD は、wait2 と select の間に届いても pipe に残るので、取りこぼさない。1 秒の期限は、その念のため。
-  def interrupted?
-    return false unless IO.select([@signal_reader], nil, nil, 1)
-
-    @signal_reader.read_nonblock(4096).include?(STOP_MARK)
+  # 子が終わるか、INT か TERM が届くまで待つ。
+  # signal は、wait2 と select の間に届いても pipe に残るので、取りこぼさない。1 秒の期限は、その念のため。
+  def wait_for_signal
+    @signal_reader.read_nonblock(4096) if IO.select([@signal_reader], nil, nil, 1)
   rescue IO::WaitReadable
-    false
+    nil
   end
 
   def start(name)
@@ -162,17 +162,22 @@ class RunAll
   # 走っている子は多くて 16 本なので、読む前に pipe が埋まることはない。
   def with_signals
     @signal_reader, writer = IO.pipe
-    marks = { "CHLD" => CHILD_MARK, "INT" => STOP_MARK, "TERM" => STOP_MARK }
-    previous = marks.map { |name, mark| [name, trap(name) { writer.write_nonblock(mark) rescue nil }] }
+    wake = -> { writer.write_nonblock("x") rescue nil }
+    previous = [["CHLD", trap("CHLD") { wake.call }]]
+    previous += %w[INT TERM].map do |name|
+      [name, trap(name) do
+        @stop_requested = true
+        wake.call
+      end]
+    end
     yield
   ensure
     previous&.each { |name, handler| trap(name, handler || "DEFAULT") }
     [@signal_reader, writer].compact.each(&:close)
   end
 
-  # 走っている test の group を止め、それまでの出力を出す (止まっていた test を調べられるように)。
+  # 走っている test の group を止め、それまでの出力を出す (止まっていた test を調べられるように)。戻り値は false。
   def stop
-    @interrupted = true
     tests = @running.values
     say "interrupted; running: #{tests.map(&:label).join(', ')}"
     tests.each { |t| signal_group("TERM", t.pid) }
@@ -188,6 +193,7 @@ class RunAll
       print_log(t)
     end
     @running.clear
+    false
   end
 
   def signal_group(signal, pid)
