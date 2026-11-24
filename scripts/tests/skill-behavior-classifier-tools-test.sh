@@ -321,11 +321,13 @@ while made_up.length < 12_000
   end
   made_up[t.each_with_index.map { |w, i| i.zero? ? w : "#{" " unless rng.rand(10).zero?}#{w}" }.join] = true
 end
-inside = ->(c) { (m = /\$\((?<in>(?:[^()]|\(\g<in>\))*)\)/.match(c)) ? [m[:in], *inside.call(m[:in])] : [] }
-check("loop の生成: 対照。$(…) の中を、入れ子まで取り出す", inside.call("a $(b $(c d) e) f") == ["b $(c d) e", "c d"])
+# 置き換えの中は、分類器の scanner で取り出す (引用の中の、置き換えでない $(…) は取り出さない)
+inside = ->(c) { P.scan(c)[1].flat_map { |x| [x, *inside.call(x)] } }
+check("loop の生成: 対照。$(…) の中を、入れ子まで取り出す", inside.call("a $(b $(c d) e) f $(g)").sort == ["b $(c d) e", "c d", "g"])
+check("loop の生成: 対照。引用の中の、置き換えでない $(…) は取り出さない", inside.call(%q(echo '$(a |)' "$(b)" $(c))).sort == %w[b c])
 got = made_up.keys.select { |c| %w[read exec].include?(P.classify_shell(c)) && P.for_loop(P.scan(c)[0]) }
 check("loop の生成: loop として read か exec にした数の下限 (#{got.length})", got.length >= 250)
-check("loop の生成: そのうち $(…) のあるもの", got.count { |c| c.include?("$(") } >= 70)
+check("loop の生成: そのうち $(…) の中を取り出せたもの", got.count { |c| inside.call(c).any? } >= 70)
 broken = got.reject { |c| [c, *inside.call(c)].all? { |x| syntax.call(x).all? } }
 check("loop の生成: 構文の通らない形を read にした #{broken.length} 件 #{broken.first(3).inspect}", broken.empty?)
 exit(@failed.zero? ? 0 : 1)
