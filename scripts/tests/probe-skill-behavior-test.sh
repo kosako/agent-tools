@@ -545,6 +545,120 @@ shell = {
   %q{sed -n '/^## /p' lib/median.rb} => "read",
   "rg foo READ^ME.md" => "read",
   "rg foo lib/^x.rb" => "read",
+  # #767: echo の 1 つの引数の終わりの $? (0〜255 の整数にだけ展開される)。部分の全体がこの形のときだけ受ける。
+  # 受ける形と、1 か所だけ外した形を並べる
+  "echo $?" => "read",
+  %q{echo "$?"} => "read",
+  %q{echo "a$?"} => "read",
+  %q{echo "a=$?"} => "read",
+  %q{echo "a: $?"} => "read",
+  %q{echo "-- exit_1.0 $?"} => "read",
+  %q{echo "EXIT=$?"} => "read",
+  "echo a=$?" => "read",
+  "echo RC_1=$?" => "read",
+  "echo a:$?" => "read",
+  %q{ruby -v; ruby test/median_test.rb; echo "exit=$?"} => "exec",
+  "echo $?\n" => "read",
+  "  echo $?  ; cat x" => "read",
+  "cat x\necho $?\ncat y" => "read",
+  "echo $?; echo $?" => "read",
+  "echo $?; echo $?; echo $?" => "read",
+  "; ; echo $?" => "read",
+  "sh -c 'echo $?'" => "read",
+  %q{/bin/zsh -lc 'cat x; echo "exit=$?"'} => "read",
+  %q{echo "$?" | cat} => "read",
+  "echo $? && cat x" => "read",
+  "echo $? || cat x" => "read",
+  "echo '$?'" => "read",
+  # 直後に字が続く (zsh の添字と修飾を含む)
+  "echo $?x" => "unknown",
+  %q{echo "$?x"} => "unknown",
+  "echo $?[1]" => "unknown",
+  %q{echo "$?[1]"} => "unknown",
+  "echo $?:h" => "unknown",
+  %q{echo "$?:h"} => "unknown",
+  "echo $??" => "unknown",
+  "echo $?*" => "unknown",
+  %q{echo "$?"x} => "unknown",
+  %q{echo "$? "} => "unknown",
+  %q{echo "$?$?"} => "unknown",
+  %q{echo "a=$? b=$?"} => "unknown",
+  "echo $?$?" => "unknown",
+  # 前置きの字
+  %q{echo "a/$?"} => "unknown",
+  %q{echo "a+$?"} => "unknown",
+  %q{echo "a~$?"} => "unknown",
+  "echo a$?" => "unknown",
+  "echo a.$?" => "unknown",
+  "echo -$?" => "unknown",
+  "echo =$?" => "unknown",
+  "echo a=b=$?" => "unknown",
+  "echo a==$?" => "unknown",
+  "echo a/$?" => "unknown",
+  "echo *$?" => "unknown",
+  %q{echo "a\"$?"} => "unknown",
+  %q{echo x"$?"} => "unknown",
+  %q{echo ''$?} => "unknown",
+  # 引数の数と、command の形
+  "echo $? $?" => "unknown",
+  "echo a $?" => "unknown",
+  "echo -n $?" => "unknown",
+  "echo  $?" => "unknown",
+  "echo\t$?" => "unknown",
+  "echo$?" => "unknown",
+  "echo=$?" => "unknown",
+  "printf $?" => "unknown",
+  "cat $?" => "unknown",
+  "ls $?" => "unknown",
+  "uniq x $?" => "file-write",
+  "sort -o $?" => "file-write",
+  "rm $?" => "file-write",
+  "$?" => "unknown",
+  "/bin/echo $?" => "unknown",
+  "./echo $?" => "unknown",
+  # 前に付く語と redirect
+  "env echo $?" => "unknown",
+  "command echo $?" => "unknown",
+  "X=1 echo $?" => "unknown",
+  "do echo $?" => "unknown",
+  "! echo $?" => "unknown",
+  "{ echo $?; }" => "unknown",
+  "(echo $?)" => "unknown",
+  "echo $? 2>&1" => "unknown",
+  "echo $? >/dev/null" => "unknown",
+  "echo $? <in" => "unknown",
+  "echo $? >out" => "file-write",
+  "echo $? >$?" => "file-write",
+  "echo $? &" => "unknown",
+  "echo $? # c" => "unknown",
+  # ほかの展開と、置き換え・here document の中
+  "echo $" => "unknown",
+  "echo $$" => "unknown",
+  "echo $$?" => "unknown",
+  "echo $#" => "unknown",
+  "echo ${?}" => "unknown",
+  "echo \\$?" => "unknown",
+  "echo $(echo $?)" => "unknown",
+  %q{echo "$(echo $?)"} => "unknown",
+  "echo `echo $?`" => "unknown",
+  %q{echo "`echo $?`"} => "unknown",
+  "cat <(echo $?)" => "unknown",
+  "cat <<E\necho $?\nE" => "unknown",
+  %q{echo $'$?'} => "unknown",
+  "echo $(rm out)$?" => "file-write",
+  %q{echo "$(rm out)$?"} => "file-write",
+  # 受ける部分が、同じ command のほかの部分の $ を通さない
+  "echo $?; cat $x" => "unknown",
+  "echo $?; cat $?" => "unknown",
+  "cat $?; echo $?" => "unknown",
+  "echo $?; echo $? x" => "unknown",
+  "cat $x; echo $?" => "unknown",
+  %q{echo "a=$?"; cat "$x"} => "unknown",
+  "echo $?; uniq x $?" => "file-write",
+  "echo $?; rm x" => "file-write",
+  "echo $?; git push" => "git-write",
+  "echo $? | sh" => "unknown",
+  %q{sh -c "echo $?"} => "unknown",
 }
 shell.each do |cmd, want|
   got = P.classify_shell(cmd)
@@ -757,7 +871,7 @@ check("fixture を渡さない classify_claude の Bash は fixture の関数を
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-r ./lib/median ") }) == "unknown")
 check("classify_claude の Bash は fixture を分類器に渡す",
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-Ilib -rmedian ") }, fixture: fx) == "exec")
-check("分類器の版は 9 (#755・#756・#757)", P::VERSION == 9)
+check("分類器の版は 10 (#767)", P::VERSION == 10)
 observed745 = "ruby -e 'require \"./lib/median\"; p median([3,1,2]), median([4,1,3,2])'"
 check("claude の Bash の、code の中の require の観測した形は fixture を渡せば exec (#745)",
       P.classify_claude("Bash", { "command" => observed745 }, fixture: fx) == "exec" &&
@@ -1308,7 +1422,7 @@ unset FAKE_WRITE
   '["cases_digest","classifier_version","conditions","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
   || fail "claude ids keys: $(json_get "$res" 'd["ids"].keys.sort')"
 [ "$(json_get "$res" 'd["ids"].values_at("host_version", "init_model", "requested_model", "permission_mode", "max_turns", "repeat", "classifier_version")')" = \
-  '["9.9.9","m-fake","default","acceptEdits",12,2,9]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
+  '["9.9.9","m-fake","default","acceptEdits",12,2,10]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
 [ "$(json_get "$res" 'd["ids"]["tool_surface"]')" = \
   '{"requested":["Read","Glob","Grep","Edit","Write","NotebookEdit","Bash","Skill"],"init":"Bash,Edit,Glob,Grep,NotebookEdit,Read,Skill,Write"}' ] \
   || fail "claude tool surface: $(json_get "$res" 'd["ids"]["tool_surface"]')"
@@ -1709,7 +1823,7 @@ run_fake codex "$inline_events" --model m-x --only investigate-diagnose-only --c
 [ "$rc" -eq 0 ] || fail "codex probe with inline Ruby should exit 0 (rc=$rc): $out"
 [ "$(json_get "$res" 'd["runs"][0]["calls"].map { |c| c["class"] }')" = '["exec","unknown","exec","unknown"]' ] \
   || fail "the probe should pass the fixture functions and files to the classifier (#737・#742): $(json_get "$res" 'd["runs"][0]["calls"]')"
-[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '9' ] || fail "codex ids should record classifier version 9"
+[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '10' ] || fail "codex ids should record classifier version 10"
 
 # prepare_run は、case の検査を経ない呼び出しでも、fixture と skill の dir の symlink を copy の前に拒む
 ruby -r"$script_dir/lib/check_helper" - "$src" "$tmp/prep" "$fixture" <<'RUBY'
