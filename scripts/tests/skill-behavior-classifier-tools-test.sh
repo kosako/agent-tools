@@ -284,6 +284,50 @@ check("loop の頭の中: read の組の数 (#{read.length})", read.length == 2 
 broken = read.reject { |i| (syntax.call(i) + syntax.call("for x in $(#{i}); do cat $x; done")).all? }
 check("loop の頭の中: 対照", syntax.call("cat y |") == [false] * 3)
 check("loop の頭の中: 構文の通らない形を read にした #{broken.length} 件 #{broken.first(3).inspect}", broken.empty?)
+
+# 頭の $(…) の中に command が無い形 (空・空白・改行・区切りだけ)。どれも受けない (入れ子の loop の頭も)。
+blanks = ["", " ", "\n", ";", "|", "||", "&", "&&", ";;"].repeated_permutation(3).map(&:join).uniq
+loops = ["for x in $(W); do cat $x; done", "for x in $(for y in $(W); do cat $y; done); do cat $x; done"]
+got = loops.product(blanks).map { |pl, w| pl.sub("W") { w } }.select { |c| %w[read exec].include?(P.classify_shell(c)) }
+check("loop の頭の中の空: 組の数 (#{blanks.length})", blanks.length >= 400)
+check("loop の頭の中の空: 対照。空でなければ read", loops.all? { |pl| P.classify_shell(pl.sub("W") { "ls" }) == "read" })
+check("loop の頭の中の空: read にした #{got.length} 件 #{got.first(3).inspect}", got.empty?)
+
+# 無作為の生成。正しい loop の語を、決まった seed で 1〜3 回崩す (消す・足す・置き換える・写す・入れ替える)。loop として read か exec に
+# なった command の全体と、頭の $(…) の中が、どの shell でも構文検査を通る (-n。走らせない)。builtin は入れない (上と同じ理由)。
+rng = Random.new(767)
+loops = ["for x in a ; do cat $x ; done", "for x in a* \n do \n cat $x \n done", "for x in $( ls | sort ) ; do head $x ; done",
+         "for x in $( cat a ) \n do echo \"$x\" \n done ; cat b", "cat a ; for x in a b ; do cat $x | head -5 ; done | wc",
+         "for x in $( for y in a ; do cat $y ; done ) ; do cat $x ; done", "for file in a ; do wc -l $file && cat b ; done 2>&1"]
+tokens = [["\n", ";", "|", "||", "&", "&&", ";;", "\n\n"], %w[do done for fi then else if while in case esac ! { } time until],
+          %w[x a cat echo $x "$x" ls env 2>/dev/null >/dev/null 2>&1 # " ' "do" $?], %w[$( )]]
+seeds = loops.map { |l| l.split(" ", -1).reject(&:empty?) }
+made_up = {}
+while made_up.length < 12_000
+  t = seeds[rng.rand(seeds.length)].dup
+  (1 + rng.rand(3)).times do
+    i = rng.rand(t.length)
+    group = tokens[rng.rand(tokens.length)]
+    word = group[rng.rand(group.length)]
+    case rng.rand(5)
+    when 0 then t.delete_at(i) if t.length > 2
+    when 1 then t.insert(i, word)
+    when 2 then t[i] = word
+    when 3 then t.insert(i, t[rng.rand(t.length)])
+    else
+      j = rng.rand(t.length)
+      t[i], t[j] = t[j], t[i]
+    end
+  end
+  made_up[t.each_with_index.map { |w, i| i.zero? ? w : "#{" " unless rng.rand(10).zero?}#{w}" }.join] = true
+end
+inside = ->(c) { (m = /\$\((?<in>(?:[^()]|\(\g<in>\))*)\)/.match(c)) ? [m[:in], *inside.call(m[:in])] : [] }
+check("loop の生成: 対照。$(…) の中を、入れ子まで取り出す", inside.call("a $(b $(c d) e) f") == ["b $(c d) e", "c d"])
+got = made_up.keys.select { |c| %w[read exec].include?(P.classify_shell(c)) && P.for_loop(P.scan(c)[0]) }
+check("loop の生成: loop として read か exec にした数の下限 (#{got.length})", got.length >= 250)
+check("loop の生成: そのうち $(…) のあるもの", got.count { |c| c.include?("$(") } >= 70)
+broken = got.reject { |c| [c, *inside.call(c)].all? { |x| syntax.call(x).all? } }
+check("loop の生成: 構文の通らない形を read にした #{broken.length} 件 #{broken.first(3).inspect}", broken.empty?)
 exit(@failed.zero? ? 0 : 1)
 RUBY
 

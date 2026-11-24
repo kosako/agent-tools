@@ -172,7 +172,7 @@ module SkillBehaviorClassifier
 
   # 受ける形の for の loop (#767)。頭は `for 名前 in 語…`、次の部分が do で始まり、done だけの部分で終わる。1 つの command に
   # 1 つだけ。名前は小文字 1 字か file (PATH や zsh の path のような特別な変数を避ける)。語は、引用の無い path の形の 1 つ以上か、
-  # ちょうど 1 つの $(…)。$(…) の中は、ほかの置き換えと同じく別に区分する。
+  # ちょうど 1 つの $(…) (中に command が要る)。$(…) の中は、ほかの置き換えと同じく別に区分する。
   FOR_WORD = %r{[A-Za-z0-9_.][A-Za-z0-9_./*-]*}.freeze
   FOR_HEAD = /\Afor ([a-z]|file) in (?:#{FOR_WORD.source}(?: #{FOR_WORD.source})*|\$\( *\))\z/.freeze
   # 本体で $名前 を許す command。どんな引数でも書き込みも program の起動もしない (値は file の名前で、決められないため)。
@@ -202,14 +202,15 @@ module SkillBehaviorClassifier
     ForLoop.new(head, (head + 1)...tail, m[1])
   end
 
-  # 頭の $(…) の中も、区切りと予約語が構文に合うか (loop なら、loop として受ける形か)。$(…) が無ければ true。
+  # 頭の $(…) の中も、区切りと予約語が構文に合うか (loop なら、loop として受ける形か)。$(…) が無ければ true。中に command が
+  # 無い $(…) は受けない (scan は区切りだけの中身を空にするので、$(|) と $() を見分けられない)。
   def self.well_formed_substitution?(head)
     raw, masked = head
     s = masked.index("$(")
     return true unless s
 
     inner, = scan(raw[(s + 2)...masked.rindex(")")])
-    return false unless inner
+    return false if inner.nil? || inner.empty?
 
     !for_loop(inner).nil? || (joints?(inner) { FOR_PART_JOINT } && no_reserved_words?(inner, nil, nil))
   end
@@ -242,7 +243,6 @@ module SkillBehaviorClassifier
 
   # 区切りの並びが構文に合うか。block は、部分の番号から、その後ろに来てよい区切りを返す。
   def self.joints?(segments)
-    return true if segments.empty?
     return false unless segments[0][4].all? { |s| s == "\n" }
 
     last = segments.length - 1
