@@ -27,7 +27,8 @@ module SkillBehaviorClassifier
   # 6 で、引用の外の受ける形の brace の展開を足した (#745)。
   # 7 で、rg の位置引数にある、決めた形の引用の外の glob の語を足した (#750)。
   # 8 で、引用の外の ^ を glob の字に足した (#751)。
-  VERSION = 8
+  # 9 で、uniq の位置引数の後ろ (#755)、sed の番地の \ (#756)、git の一覧の印 (#757) の読み方を、実物に合わせた。
+  VERSION = 9
 
   CLAUDE_READ_TOOLS = %w[Read Glob Grep LS Skill NotebookRead].freeze
   CLAUDE_WRITE_TOOLS = %w[Edit Write NotebookEdit MultiEdit].freeze
@@ -597,7 +598,7 @@ module SkillBehaviorClassifier
 
       opts.any? { |o, _| %w[-o --output].include?(o) } ? "file-write" : "read"
     when "uniq"
-      opts, pos = parse_options(args, UNIQ_SPEC)
+      opts, pos = parse_options(args, UNIQ_SPEC, permute: false)
       return "unknown" if opts.nil?
 
       pos.length >= 2 ? "file-write" : "read"
@@ -613,8 +614,9 @@ module SkillBehaviorClassifier
 
   # option を spec で読む。戻り値は [option の配列 ([名前, 値])、位置引数の配列、位置引数の args の中の位置の配列]。`-` は
   # 位置引数 (標準入力・出力)。
-  # spec に無い option があれば nil。GNU の慣習どおり、位置引数の後の option も読む (`--` の後は位置引数だけ)。
-  def self.parse_options(args, spec)
+  # spec に無い option があれば nil。既定では GNU の慣習どおり、位置引数の後の option も読む (`--` の後は位置引数だけ)。
+  # permute が false なら、最初の位置引数の後ろは、`--` も含めて全部が位置引数 (macOS の uniq の読み方。#755)。
+  def self.parse_options(args, spec, permute: true)
     opts = []
     pos = []
     positions = []
@@ -626,6 +628,11 @@ module SkillBehaviorClassifier
         positions.concat(((i + 1)...args.length).to_a)
         break
       elsif a == "-" || !a.start_with?("-")
+        unless permute
+          pos.concat(args[i..])
+          positions.concat((i...args.length).to_a)
+          break
+        end
         pos << a
         positions << i
       elsif a.start_with?("--")
