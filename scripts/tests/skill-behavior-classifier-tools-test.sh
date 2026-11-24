@@ -1,6 +1,7 @@
 #!/bin/sh
-# scripts/lib/skill_behavior_classifier.rb の self-test (#755・#756・#757)。
+# scripts/lib/skill_behavior_classifier.rb の self-test (#755・#756・#757・#767)。
 # 引数の語の組を列挙し、分類器が read と区分した組を、実物の uniq・sed・git で走らせる。file も ref もできないことを見る。
+# $? の形は、command の全文の組を、実物の sh・bash・zsh で走らせる (shell の展開を通す)。
 # 期待値は分類器から作らない。できた file を数えるだけで、実物の引数の読み方をここに写さない。
 # - 組の数と、走らせた数の下限を固定する (組が減ったり、全部が read でなくなったりして、何も確かめない形にしない)。
 # - 実物は argv で起動する (shell の展開を通さない)。書き込みは一時 dir の中だけ。network と実 ~/.gitconfig には触れない。
@@ -100,6 +101,32 @@ check("git: 組の数", all.length == 258)
   wrote = read.map { |a| [a, made(dir, base, [*git, sub, *a], env)] }.reject { |_, new| new.empty? }
   check("git #{sub}: read と区分した組が書いた #{wrote.length} 件 #{wrote.first(3).inspect}", wrote.empty?)
 end
+
+# ---- echo の $? (#767) ---------------------------------------------------------------------
+# command の頭・前置き・引用・直後の字・後ろの組。read か exec と区分した command を、実物の shell で走らせる。
+dir = File.join(TMP, "status")
+FileUtils.mkdir_p(dir)
+File.write(File.join(dir, "in.txt"), "a\na\nb\n")
+base = entries(dir)
+shells = [%w[/bin/sh -c], %w[/bin/bash -c], %w[/bin/zsh -f -c]]
+heads = ["echo", "echo -n", "cat", "ls", "uniq in.txt", "sort -o", "sort in.txt -o", "tee", "touch", "env echo", "X=1 echo",
+         "false; echo", "cat in.txt | echo", "cat in.txt\necho"]
+pre = ["", "a", "a=", "a:", "a.", "a/", "a b=", "=", "-", "~", "*"]
+post = ["", "x", "[1]", ":h", "?", "*", " ", "}"]
+tails = ["", " >out", " 2>&1", " $?", "; touch out", "; cat in.txt", " | cat", " && cat in.txt"]
+all = heads.product(pre, ["", '"'], post, tails).map { |h, a, q, b, t| "#{h} #{q}#{a}$?#{b}#{q}#{t}" }
+check("status: 組の数", all.length == 19_712 && all.uniq.length == all.length)
+ran = all.select { |c| %w[read exec].include?(P.classify_shell(c)) }
+# 頭 4 (前に付く語と option の無い echo)、後ろ 4 (書く command と redirect と 2 つ目の引数のほか)、引数 14 (引用なしは前置き 3 と、
+# その後ろの空白の 3。二重引用は、許す字だけの前置き 8)
+check("status: 走らせる組の数 (#{ran.length})", ran.length == 4 * 4 * (3 + 3 + 8))
+check("status: 観測した形は read", ran.include?('echo "a=$?"') && ran.include?('false; echo "a=$?"'))
+check("status: 対照。書く command は、できたものに出る",
+      made(dir, base, ["/bin/sh", "-c", "false; uniq in.txt $?"]) == ["1"])
+wrote = ran.flat_map { |c| shells.map { |sh| [sh[0], c, made(dir, base, [*sh, c])] } }.reject { |_, _, new| new.empty? }
+check("status: read と区分した command が書いた #{wrote.length} 件 #{wrote.first(3).inspect}", wrote.empty?)
+out = shells.map { |sh| Open3.capture3(*sh, 'false; echo "a=$?"', chdir: dir)[0] }
+check("status: $? は整数に展開される #{out.inspect}", out == ["a=1\n"] * 3)
 exit(@failed.zero? ? 0 : 1)
 RUBY
 

@@ -28,7 +28,8 @@ module SkillBehaviorClassifier
   # 7 で、rg の位置引数にある、決めた形の引用の外の glob の語を足した (#750)。
   # 8 で、引用の外の ^ を glob の字に足した (#751)。
   # 9 で、uniq の位置引数の後ろ (#755)、sed の番地の \ (#756)、git の一覧の印 (#757) の読み方を、実物に合わせた。
-  VERSION = 9
+  # 10 で、echo の 1 つの引数の終わりの $? を足した (#767)。
+  VERSION = 10
 
   CLAUDE_READ_TOOLS = %w[Read Glob Grep LS Skill NotebookRead].freeze
   CLAUDE_WRITE_TOOLS = %w[Edit Write NotebookEdit MultiEdit].freeze
@@ -131,12 +132,13 @@ module SkillBehaviorClassifier
     scanned = scan(command)
     return "unknown" unless scanned
 
-    segments, substitutions = scanned
+    segments, substitutions, statuses = scanned
     classes = segments.map { |raw, masked| classify_segment(raw, masked, depth, fixture: fixture) }
     classes += substitutions.map { |s| classify_shell(s, depth + 1, fixture: fixture) }
     cls = classes.empty? ? "read" : max_class(classes)
     # 重い区分はそのまま。read と exec は、単純な形の command のときだけ (下の「門」)
-    return cls if SEVERITY.fetch(cls) > SEVERITY.fetch("unknown") || simple_command?(command)
+    return cls if SEVERITY.fetch(cls) > SEVERITY.fetch("unknown") ||
+                  simple_command?(gate_copy(command, segments, statuses))
 
     "unknown"
   rescue StandardError
@@ -154,6 +156,17 @@ module SkillBehaviorClassifier
   SIMPLE_CHAR = %r{[A-Za-z0-9 \t\n_./:,=+@%^*?~\[\];-]}.freeze
   SAFE_REDIRECTS = ["2>/dev/null", "1>/dev/null", ">/dev/null", "&>/dev/null", "2>&1", "1>&2", ">&2"].freeze
   DQ_ESCAPES = ['\\"', "\\\\"].freeze
+  # 門が許す $? の形 (#767)。部分 (区切りで分けた 1 つの command) の全体が、echo と、$? で終わる 1 つの引数。$? は 0〜255 の
+  # 整数にだけ展開される。echo は、引数が何でも書き込みも program の起動もしない。$? の直後に字が続く形 ($?[1]・$?:h) は、
+  # zsh が添字や修飾として評価しうるので受けない。前に付く語 (env・代入・do) と redirect のある部分も、この形に合わない。
+  ECHO_STATUS = /\Aecho (?:"[A-Za-z0-9_ =:.-]*\$\?"|(?:[A-Za-z0-9_]+[=:])?\$\?)\z/.freeze
+
+  # 門に渡す command の写し。許す形の部分の $? を、同じ長さの字に置き換える。statuses は scan が拾った $? の位置。
+  def self.gate_copy(command, segments, statuses)
+    copy = command.dup
+    statuses.each { |index, pos| copy[pos, 2] = "00" if segments[index][0].strip.match?(ECHO_STATUS) }
+    copy
+  end
 
   # 二重引用の中身の始まり (start) から読み、閉じる " の位置を返す。$・`・許さない escape があるか、閉じなければ nil。
   def self.dq_end(cmd, start)
@@ -256,12 +269,13 @@ module SkillBehaviorClassifier
   end
 
   # --- scanner ---------------------------------------------------------------------------
-  # 戻り値は [部分の配列, 一番外の置き換えの中身の配列] で、部分は [原文, 伏せた写し]。伏せた写しは、一番外の文脈の
-  # 字だけを残し (引用の記号と $( ) は残す)、引用と置き換えの中身を空白にする (redirect を外の文脈でだけ探すため)。
+  # 戻り値は [部分の配列, 一番外の置き換えの中身の配列, $? の位置の配列] で、部分は [原文, 伏せた写し]。伏せた写しは、一番外の
+  # 文脈の字だけを残し (引用の記号と $( ) は残す)、引用と置き換えの中身を空白にする (redirect を外の文脈でだけ探すため)。
   # comment は捨て、here document の本文は data として読み飛ばす。引用・置き換え・here document が閉じなければ nil。
+  # $? の位置は、一番外の文脈と、その二重引用の中のものだけで、[部分の番号, command の中の位置] (#767)。
 
   def self.scan(cmd)
-    st = { segs: [], subs: [], raw: +"", masked: +"", stack: [:top], sub_start: nil, heredocs: [] }
+    st = { segs: [], subs: [], raw: +"", masked: +"", stack: [:top], sub_start: nil, heredocs: [], statuses: [] }
     i = 0
     while i < cmd.length
       i = scan_step(cmd, i, st)
@@ -270,7 +284,8 @@ module SkillBehaviorClassifier
     return nil unless st[:stack] == [:top] && st[:heredocs].empty?
 
     st[:segs] << [st[:raw], st[:masked]]
-    [st[:segs].reject { |r, _| r.strip.empty? }, st[:subs]]
+    kept = st[:segs].each_index.reject { |k| st[:segs][k][0].strip.empty? }
+    [kept.map { |k| st[:segs][k] }, st[:subs], st[:statuses].map { |k, pos| [kept.index(k), pos] }]
   end
 
   # 1 字 (か 1 つの記号) を読み、次の位置を返す。読めない形なら nil。
@@ -299,6 +314,8 @@ module SkillBehaviorClassifier
     return emit(st, ch + nxt, false, i + 2, masked: "  ") if ch == "\\" && nxt
     return open_sub(cmd, i, st, 2, top ? "$(" : "  ") if ch == "$" && nxt == "("
     return open_sub(cmd, i, st, 1, top ? "`" : " ", :tick) if ch == "`"
+
+    st[:statuses] << [st[:segs].length, i] if ch == "$" && nxt == "?" && (top || stack == %i[top dq])
     if ctx == :dq
       stack.pop if ch == '"'
       return emit(st, ch, stack.length == 1, i + 1)
