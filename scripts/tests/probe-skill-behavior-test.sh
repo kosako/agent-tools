@@ -104,6 +104,12 @@ shell = {
   "sed -n '$p' lib/median.rb" => "read",
   "sed 's/a/b/' lib/median.rb" => "unknown",
   "sed -n -f script.sed lib/median.rb" => "unknown",
+  # 番地の中に \ がある script は受けない (#756)
+  %q{sed -n '/a\/,/w lib/p' x} => "unknown",
+  %q{sed -n '/a\/p;/w lib/p' x} => "unknown",
+  %q{sed -n '/\.rb/p' x} => "unknown",
+  %q{sed -n '1,/a\/b/p' x} => "unknown",
+  %q{sed -n '/[a,]/,/w lib/p' x} => "read",
   "uniq in.txt out.txt" => "file-write",
   "uniq in.txt" => "read",
   "tree -o out.txt" => "unknown",
@@ -176,6 +182,20 @@ shell = {
   "uniq - out.txt" => "file-write",
   "uniq -c in.txt" => "read",
   "uniq --unknown in.txt" => "unknown",
+  # macOS の uniq は、最初の位置引数の後ろを option として読まない (#755)
+  "uniq in.txt -c" => "file-write",
+  "uniq in.txt --count" => "file-write",
+  "uniq in.txt -d" => "file-write",
+  "uniq - -c" => "file-write",
+  "uniq in.txt --" => "file-write",
+  "uniq in.txt -Q" => "file-write",
+  "uniq -- in.txt -c" => "file-write",
+  "uniq -c -- in.txt" => "read",
+  "uniq -c -" => "read",
+  "uniq -f 1 in.txt" => "read",
+  "sort in.txt -o out.txt" => "file-write",
+  "sort in.txt -r" => "read",
+  "rg foo -n lib" => "read",
   "xxd -r - out.bin" => "unknown",
   "file --compile -m magic" => "unknown",
   "awk -e 'x' f" => "unknown",
@@ -313,6 +333,21 @@ shell = {
   "git tag -n5" => "read",
   "git tag --contains HEAD" => "read",
   "git tag -d v1" => "git-write",
+  # 値をとる option が読む --list と -l は、一覧の印ではない (#757)
+  "git branch --format --list x" => "git-write",
+  "git branch --format -l x" => "git-write",
+  "git branch --sort --list x" => "git-write",
+  "git branch --sort -l x" => "git-write",
+  "git tag --format --list x" => "git-write",
+  "git tag --format -l x" => "git-write",
+  "git branch x --format --list" => "git-write",
+  "git branch --contains --list x" => "git-write",
+  "git branch x --list" => "read",
+  "git branch --sort -committerdate" => "read",
+  "git branch --format --format --list x" => "read",
+  "git branch --format=--list x" => "git-write",
+  "git branch --list --format x" => "read",
+  "git branch --sort refname --list x" => "read",
   "git config --unset-a user.name" => "git-write",
   "git config --global user.name" => "unknown",
   "git config --get-regexp 'user.*'" => "unknown",
@@ -722,7 +757,7 @@ check("fixture を渡さない classify_claude の Bash は fixture の関数を
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-r ./lib/median ") }) == "unknown")
 check("classify_claude の Bash は fixture を分類器に渡す",
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-Ilib -rmedian ") }, fixture: fx) == "exec")
-check("分類器の版は 8 (#751)", P::VERSION == 8)
+check("分類器の版は 9 (#755・#756・#757)", P::VERSION == 9)
 observed745 = "ruby -e 'require \"./lib/median\"; p median([3,1,2]), median([4,1,3,2])'"
 check("claude の Bash の、code の中の require の観測した形は fixture を渡せば exec (#745)",
       P.classify_claude("Bash", { "command" => observed745 }, fixture: fx) == "exec" &&
@@ -1226,7 +1261,7 @@ unset FAKE_WRITE
   '["cases_digest","classifier_version","conditions","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
   || fail "claude ids keys: $(json_get "$res" 'd["ids"].keys.sort')"
 [ "$(json_get "$res" 'd["ids"].values_at("host_version", "init_model", "requested_model", "permission_mode", "max_turns", "repeat", "classifier_version")')" = \
-  '["9.9.9","m-fake","default","acceptEdits",12,2,8]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
+  '["9.9.9","m-fake","default","acceptEdits",12,2,9]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
 [ "$(json_get "$res" 'd["ids"]["tool_surface"]')" = \
   '{"requested":["Read","Glob","Grep","Edit","Write","NotebookEdit","Bash","Skill"],"init":"Bash,Edit,Glob,Grep,NotebookEdit,Read,Skill,Write"}' ] \
   || fail "claude tool surface: $(json_get "$res" 'd["ids"]["tool_surface"]')"
@@ -1627,7 +1662,7 @@ run_fake codex "$inline_events" --model m-x --only investigate-diagnose-only --c
 [ "$rc" -eq 0 ] || fail "codex probe with inline Ruby should exit 0 (rc=$rc): $out"
 [ "$(json_get "$res" 'd["runs"][0]["calls"].map { |c| c["class"] }')" = '["exec","unknown","exec","unknown"]' ] \
   || fail "the probe should pass the fixture functions and files to the classifier (#737・#742): $(json_get "$res" 'd["runs"][0]["calls"]')"
-[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '8' ] || fail "codex ids should record classifier version 8"
+[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '9' ] || fail "codex ids should record classifier version 9"
 
 # prepare_run は、case の検査を経ない呼び出しでも、fixture と skill の dir の symlink を copy の前に拒む
 ruby -r"$script_dir/lib/check_helper" - "$src" "$tmp/prep" "$fixture" <<'RUBY'
