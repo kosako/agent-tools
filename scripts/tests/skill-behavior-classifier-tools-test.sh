@@ -1,7 +1,7 @@
 #!/bin/sh
 # scripts/lib/skill_behavior_classifier.rb の self-test (#755・#756・#757・#767・#773)。
 # 引数の語の組を列挙し、分類器が read と区分した組を、実物の uniq・sed・git で走らせる。file も ref もできないことを見る。
-# $? と構文の語の形は、command の全文の組を、実物の sh・bash・zsh で走らせる (shell の展開を通す)。
+# $? と構文の語と for の loop の形は、command の全文の組を、実物の sh・bash・zsh で走らせる (shell の展開を通す)。
 # 期待値は分類器から作らない。できた file を数えるだけで、実物の引数の読み方をここに写さない。
 # - 組の数と、走らせた数の下限を固定する (組が減ったり、全部が read でなくなったりして、何も確かめない形にしない)。
 # - 実物は argv で起動する (shell の展開を通さない)。書き込みは一時 dir の中だけ。network と実 ~/.gitconfig には触れない。
@@ -160,6 +160,176 @@ got = shells.map { |sh| made(dir, base, [*sh, "2>/dev/null then"], path) }
 check("構文の語: 対照。redirect の後の語は、sh と bash で program を起動する #{got.inspect}", got == [["ran"], ["ran"], []])
 started = ran.flat_map { |c| shells.map { |sh| [sh[0], c, made(dir, base, [*sh, c], path)] } }.reject { |_, _, new| new.empty? }
 check("構文の語: read と区分した command が program を起動した #{started.length} 件 #{started.first(3).inspect}", started.empty?)
+
+# ---- for の loop (#767) --------------------------------------------------------------------
+# loop の値に、option・置き換え・区切り・空白・glob の字を持つ名前を入れる。頭・command・引数・後ろ・終わりの組を区分し、read の
+# 数を手で出した式と照合する。走らせるのは、頭・command・引数の全部の組 (後ろは無し) と、後ろと終わりの全部の組 (1 つの loop)。
+dir = File.join(TMP, "loop")
+FileUtils.mkdir_p(File.join(dir, "v"))
+odd = ["-o", "-n", "a b", "$(touch pwn)", ";touch pwn", "`touch pwn`", "*", "in.txt"]
+odd.each { |n| File.write(File.join(dir, "v", n), "x\n") }
+File.write(File.join(dir, "-o"), "x\n")
+File.write(File.join(dir, "in.txt"), "a\na\nb\n")
+File.write(File.join(dir, "names"), odd.join("\n") + "\nout\n")
+base = entries(dir)
+heads = ["for x in in.txt names", "for x in v/*", "for x in ./*", "for x in $(cat names)", "for x in $(ls)",
+         "for x in *", "for x in {in.txt,names}", "for path in in.txt"]
+cmds = ["cat", "echo", "head", "tail", "wc", "nl", "ls", "sort", "uniq in.txt", "tee", "touch", "sed -n p", "sort in.txt",
+        "env cat", "grep a", "xargs", "sh"]
+args = ["$x", '"$x"', '"== $x"', "$x out", "-o $x", "${x}", "$x.rb", '"$x"b']
+tails = ["", " 2>/dev/null", " | cat", " >out", " | tee out", "; touch out"]
+ends = ["; done", "; done | cat", "; cat $x; done", "; done >out", "; done; cat $x", ""]
+all = heads.product(cmds, args, tails, ends)
+text = ->((h, c, a, t, e)) { "#{h}; do #{c} #{a}#{t}#{e}" }
+check("loop: 組の数", all.length == 39_168)
+read = all.select { |x| P.classify_shell(text.call(x)) == "read" }
+# 頭 5 (先頭が * の語・brace・特別な変数のほか)、command 7、引数 5 (名前の直後に字が続く形と ${x} のほか)、後ろ 3、終わり 3
+check("loop: read の組の数 (#{read.length})", read.length == 5 * 7 * 5 * 3 * 3)
+check("loop: exec の組は無い", all.none? { |x| P.classify_shell(text.call(x)) == "exec" })
+ran = read.select do |h, c, a, t, e|
+  (t.empty? && e == "; done") || (h == heads[3] && c == "cat" && a == "$x")
+end
+check("loop: 走らせる組の数 (#{ran.length})", ran.length == 5 * 7 * 5 + 3 * 3 - 1)
+{ 'for x in $(cat names); do sort $x out in.txt; done' => %w[out], 'for x in v/*; do sh -c "$x"; done' => %w[pwn] }.each do |cmd, want|
+  got = made(dir, base, ["/bin/sh", "-c", cmd])
+  check("loop: 対照。値で書く loop は、できたものに出る #{cmd} #{got.inspect}", got == want)
+  check("loop: 対照の loop は read でない", P.classify_shell(cmd) == "unknown")
+end
+wrote = ran.flat_map { |x| shells.map { |sh| [sh[0], text.call(x), made(dir, base, [*sh, text.call(x)])] } }
+           .reject { |_, _, new| new.empty? }
+check("loop: read と区分した loop が書いた #{wrote.length} 件 #{wrote.first(3).inspect}", wrote.empty?)
+out = shells.map { |sh| Open3.capture3(*sh, 'for x in $(cat names); do echo "== $x"; done', chdir: dir)[0] }
+check("loop: 値は、そのまま出る", out.all? { |o| o.include?("== -o\n") && o.include?("== $(touch\n") && o.include?("== out\n") })
+
+# 区切りの並び。read と区分した並びは、どの shell でも構文が通る (-n。走らせない)。
+seps = [" ", ";", "\n", "|", "&&", "&", ";;", "; ;", ";\n", "\n;", "|\n", "| |"]
+all = seps.repeated_permutation(4).map { |a, b, c, d| "for x in a#{a}do#{b}cat $x#{c}cat b#{d}done" }
+check("loop の区切り: 組の数", all.length == 20_736 && all.uniq.length == all.length)
+read = all.select { |c| %w[read exec].include?(P.classify_shell(c)) }
+# 頭と do の間 3 (; と改行と ;改行)、do の後 2 (空白と改行)、本体の間 7 (空白 ; 改行 | && ;改行 |改行。空白なら 1 つの command)、
+# done の前 3
+check("loop の区切り: read の組の数 (#{read.length})", read.length == 3 * 2 * 7 * 3)
+syntax = ->(c) { [%w[/bin/sh -n -c], %w[/bin/bash -n -c], %w[/bin/zsh -f -n -c]].map { |sh| Open3.capture3(*sh, c, chdir: dir)[2].success? } }
+check("loop の区切り: 対照。崩れた並びは構文が通らない", syntax.call("for x in a; do cat $x | done") == [false] * 3)
+broken = read.reject { |c| syntax.call(c).all? }
+check("loop の区切り: 構文の通らない並びを read にした #{broken.length} 件 #{broken.first(3).inspect}", broken.empty?)
+# loop の外。先頭、前の部分との間、後ろの部分との間、終わりの組 (間の " " は、前や後ろの部分が無い形にする)
+ends = ["", "\n", ";", "|", "&&", ";;", "||"]
+outer = [" ", ";", "\n", "|", "&&", ";;", "\n;", "|\n"]
+around = ends.product(outer, outer, ends).map do |a, b, c, d|
+  "#{a}#{"cat y#{b}" unless b == " "}for x in a; do cat $x; done#{"#{c}cat z" unless c == " "}#{d}"
+end
+check("loop の外の区切り: 組の数", around.length == 3_136)
+read = around.select { |c| %w[read exec].include?(P.classify_shell(c)) }
+# 先頭 2 (無しと改行)、前の部分 1 + 5 (無し、; 改行 | && |改行)、後ろの部分 1 + 5、終わり 3 (無し ; 改行)
+check("loop の外の区切り: read の組の数 (#{read.length})", read.length == 2 * 6 * 6 * 3)
+check("loop の外の区切り: 対照", syntax.call("for x in a; do cat $x; done |") == [false] * 3 && syntax.call("| for x in a; do cat $x; done") == [false] * 3)
+broken = read.uniq.reject { |c| syntax.call(c).all? }
+check("loop の外の区切り: 構文の通らない並びを read にした #{broken.length} 件 #{broken.first(3).inspect}", broken.empty?)
+
+# 予約語。どの位置でも、read になるのは、ふつうの command の語だけ。read の全部が、どの shell でも構文が通る。
+# builtin は入れない (zsh の -n は、在るかどうかの検査で「builtin cat」を落とす。構文の検査ではない)。
+plain = %w[cat command env exec nice nohup true]
+extra = %w(break continue eval exit export integer local noglob readonly return set shift trap typeset : . - [)
+words = P::RESERVED_WORDS + plain + extra
+places = ["for x in a; do W; cat $x; done", "for x in a; do W cat b; done", "for x in a; do cat $x; W; done",
+          "for x in a; do cat $x; W cat b; done", "for x in a; do cat $x | W cat b; done", "for x in a; do cat $x && W cat b; done",
+          "for x in a; do cat $x; 2>/dev/null W; done", "for x in a; do 2>/dev/null W cat b; done",
+          "for x in a\ndo\nW cat b\ncat $x\ndone", "for x in a; do cat $x; done; W", "for x in a; do cat $x; done; W cat b",
+          "for x in a; do cat $x; done | W cat b", "for x in a; do cat $x; done; 2>/dev/null W cat b", "W; for x in a; do cat $x; done",
+          "W cat b; for x in a; do cat $x; done", "2>/dev/null W cat b; for x in a; do cat $x; done"]
+check("loop の予約語: 語と位置の数", words.uniq.length == 52 && places.length == 16)
+places.each do |place|
+  got = words.select { |w| %w[read exec].include?(P.classify_shell(place.gsub("W") { w })) }
+  check("loop の予約語: read の語 #{place.inspect} #{got.inspect}", got.sort == plain)
+end
+misplaced = ["for x in a; W do cat $x; done", "for x in a; do cat $x; done W", "W for x in a; do cat $x; done", "for x in a; do W cat $x; done"]
+misplaced.each do |place|
+  got = words.select { |w| %w[read exec].include?(P.classify_shell(place.gsub("W") { w })) }
+  check("loop の予約語: 置けない位置 #{place.inspect} #{got.inspect}", got == (place.include?("do W cat $x") ? %w[cat] : []))
+end
+read = places.product(plain).map { |pl, w| pl.gsub("W") { w } }
+check("loop の予約語: 対照", syntax.call("for x in a; do cat $x; done; done") == [false] * 3)
+broken = read.reject { |c| syntax.call(c).all? }
+check("loop の予約語: 構文の通らない形を read にした #{broken.length} 件 #{broken.first(3).inspect}", broken.empty?)
+
+# 構文として働かない位置の構文の語 (引用・前に付く command・redirect の後)。どの位置でも read にしない (#773)。
+hidden = keywords.flat_map { |w| ["\"#{w}\"", "'#{w}'", "''#{w}", "env #{w}", "command #{w}", "env \"#{w}\"", "2>/dev/null #{w}"] }
+got = places.product(hidden).map { |pl, w| pl.gsub("W") { w } }.select { |c| %w[read exec].include?(P.classify_shell(c)) }
+check("loop の隠れた構文の語: 組の数", places.length * hidden.length == 16 * 8 * 7)
+check("loop の隠れた構文の語: read にした #{got.length} 件 #{got.first(3).inspect}", got.empty?)
+
+# redirect の位置。read になる位置と、ならない位置。read の全部が、どの shell でも構文が通る。
+redirects = ["2>/dev/null", "2>&1", ">/dev/null", "&>/dev/null"]
+open_at = ["for x in a; do cat $x R; done", "for x in a; do R cat b; done", "for x in a; do cat $x; done R", "for x in a; do cat $x; done; R",
+           "R; for x in a; do cat $x; done", "for x in a; do cat $x; R; done", "for x in a; do R; done", "for x in a; do cat $x; done R; cat b"]
+shut_at = ["R for x in a; do cat $x; done", "for R x in a; do cat $x; done", "for x R in a; do cat $x; done", "for x in R a; do cat $x; done",
+           "for x in a R; do cat $x; done", "for x in a; R do cat $x; done", "for x in a; do R cat $x; done", "for x in a; do cat $x; R done",
+           "for x in a; do cat $x; done R b", "for x in a; do cat $x; done; R done", "for x in a; do cat $x; R done; done"]
+at = ->(list) { list.product(redirects).map { |pl, r| pl.gsub("R") { r } } }
+opened = at.call(open_at)
+check("loop の redirect: read になる位置 #{opened.reject { |c| P.classify_shell(c) == "read" }.inspect}", opened.all? { |c| P.classify_shell(c) == "read" })
+got = at.call(shut_at).select { |c| %w[read exec].include?(P.classify_shell(c)) }
+check("loop の redirect: read にならない位置 #{got.inspect}", got.empty?)
+broken = opened.reject { |c| syntax.call(c).all? }
+check("loop の redirect: 構文の通らない形を read にした #{broken.length} 件 #{broken.first(3).inspect}", broken.empty?)
+
+# 頭の $(…) の中。sh と bash の -n は $(…) の中を見ないので、中の command だけを取り出しても構文検査にかける。
+inners = ends.product(outer, ends).map { |a, b, c| "#{a}#{b == " " ? "cat y" : "cat y#{b}cat z"}#{c}" }
+inners += words.flat_map { |w| [w, "#{w} cat y", "cat y; #{w}", "cat y | #{w} cat z"] }
+check("loop の頭の中: 組の数", inners.length == 7 * 8 * 7 + 52 * 4)
+read = inners.select { |i| %w[read exec].include?(P.classify_shell("for x in $(#{i}); do cat $x; done")) }
+# 区切りの組は、先頭 2 (無しと改行)、間 1 + 5 (1 つの command、; 改行 | && |改行)、終わり 3。語の組は、ふつうの command の 7 語
+check("loop の頭の中: read の組の数 (#{read.length})", read.length == 2 * 6 * 3 + 7 * 4)
+broken = read.reject { |i| (syntax.call(i) + syntax.call("for x in $(#{i}); do cat $x; done")).all? }
+check("loop の頭の中: 対照", syntax.call("cat y |") == [false] * 3)
+check("loop の頭の中: 構文の通らない形を read にした #{broken.length} 件 #{broken.first(3).inspect}", broken.empty?)
+
+# 頭の $(…) の中に command が無い形 (空・空白・改行・区切りだけ)。どれも受けない (入れ子の loop の頭も)。
+blanks = ["", " ", "\n", ";", "|", "||", "&", "&&", ";;"].repeated_permutation(3).map(&:join).uniq
+loops = ["for x in $(W); do cat $x; done", "for x in $(for y in $(W); do cat $y; done); do cat $x; done"]
+got = loops.product(blanks).map { |pl, w| pl.sub("W") { w } }.select { |c| %w[read exec].include?(P.classify_shell(c)) }
+check("loop の頭の中の空: 組の数 (#{blanks.length})", blanks.length >= 400)
+check("loop の頭の中の空: 対照。空でなければ read", loops.all? { |pl| P.classify_shell(pl.sub("W") { "ls" }) == "read" })
+check("loop の頭の中の空: read にした #{got.length} 件 #{got.first(3).inspect}", got.empty?)
+
+# 無作為の生成。正しい loop の語を、決まった seed で 1〜3 回崩す (消す・足す・置き換える・写す・入れ替える)。loop として read か exec に
+# なった command の全体と、頭の $(…) の中が、どの shell でも構文検査を通る (-n。走らせない)。builtin は入れない (上と同じ理由)。
+rng = Random.new(767)
+loops = ["for x in a ; do cat $x ; done", "for x in a* \n do \n cat $x \n done", "for x in $( ls | sort ) ; do head $x ; done",
+         "for x in $( cat a ) \n do echo \"$x\" \n done ; cat b", "cat a ; for x in a b ; do cat $x | head -5 ; done | wc",
+         "for x in $( for y in a ; do cat $y ; done ) ; do cat $x ; done", "for file in a ; do wc -l $file && cat b ; done 2>&1"]
+tokens = [["\n", ";", "|", "||", "&", "&&", ";;", "\n\n"], %w[do done for fi then else if while in case esac ! { } time until],
+          %w[x a cat echo $x "$x" ls env 2>/dev/null >/dev/null 2>&1 # " ' "do" $?], %w[$( )]]
+seeds = loops.map { |l| l.split(" ", -1).reject(&:empty?) }
+made_up = {}
+while made_up.length < 12_000
+  t = seeds[rng.rand(seeds.length)].dup
+  (1 + rng.rand(3)).times do
+    i = rng.rand(t.length)
+    group = tokens[rng.rand(tokens.length)]
+    word = group[rng.rand(group.length)]
+    case rng.rand(5)
+    when 0 then t.delete_at(i) if t.length > 2
+    when 1 then t.insert(i, word)
+    when 2 then t[i] = word
+    when 3 then t.insert(i, t[rng.rand(t.length)])
+    else
+      j = rng.rand(t.length)
+      t[i], t[j] = t[j], t[i]
+    end
+  end
+  made_up[t.each_with_index.map { |w, i| i.zero? ? w : "#{" " unless rng.rand(10).zero?}#{w}" }.join] = true
+end
+# 置き換えの中は、分類器の scanner で取り出す (引用の中の、置き換えでない $(…) は取り出さない)
+inside = ->(c) { P.scan(c)[1].flat_map { |x| [x, *inside.call(x)] } }
+check("loop の生成: 対照。$(…) の中を、入れ子まで取り出す", inside.call("a $(b $(c d) e) f $(g)").sort == ["b $(c d) e", "c d", "g"])
+check("loop の生成: 対照。引用の中の、置き換えでない $(…) は取り出さない", inside.call(%q(echo '$(a |)' "$(b)" $(c))).sort == %w[b c])
+got = made_up.keys.select { |c| %w[read exec].include?(P.classify_shell(c)) && P.for_loop(P.scan(c)[0]) }
+check("loop の生成: loop として read か exec にした数の下限 (#{got.length})", got.length >= 250)
+check("loop の生成: そのうち $(…) の中を取り出せたもの", got.count { |c| inside.call(c).any? } >= 70)
+broken = got.reject { |c| [c, *inside.call(c)].all? { |x| syntax.call(x).all? } }
+check("loop の生成: 構文の通らない形を read にした #{broken.length} 件 #{broken.first(3).inspect}", broken.empty?)
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
