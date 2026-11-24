@@ -30,7 +30,8 @@ module SkillBehaviorClassifier
   # 9 で、uniq の位置引数の後ろ (#755)、sed の番地の \ (#756)、git の一覧の印 (#757) の読み方を、実物に合わせた。
   # 10 で、echo の 1 つの引数の終わりの $? を足した (#767)。
   # 11 で、引用した構文の語と、前に付く command の後の構文の語を、構文として読まない (#773)。
-  VERSION = 11
+  # 12 で、受ける形の for の loop を足した (#767)。
+  VERSION = 12
 
   CLAUDE_READ_TOOLS = %w[Read Glob Grep LS Skill NotebookRead].freeze
   CLAUDE_WRITE_TOOLS = %w[Edit Write NotebookEdit MultiEdit].freeze
@@ -137,13 +138,16 @@ module SkillBehaviorClassifier
     scanned = scan(command)
     return "unknown" unless scanned
 
-    segments, substitutions, statuses = scanned
-    classes = segments.map { |raw, masked| classify_segment(raw, masked, depth, fixture: fixture) }
+    segments, substitutions = scanned
+    floop = for_loop(segments)
+    classes = segments.each_with_index.map do |(raw, masked), k|
+      floop && k == floop.head ? "read" : classify_segment(raw, masked, depth, fixture: fixture)
+    end
     classes += substitutions.map { |s| classify_shell(s, depth + 1, fixture: fixture) }
     cls = classes.empty? ? "read" : max_class(classes)
     # 重い区分はそのまま。read と exec は、単純な形の command のときだけ (下の「門」)
     return cls if SEVERITY.fetch(cls) > SEVERITY.fetch("unknown") ||
-                  simple_command?(gate_copy(command, segments, statuses))
+                  simple_command?(gate_copy(command, segments, floop))
 
     "unknown"
   rescue StandardError
@@ -166,11 +170,115 @@ module SkillBehaviorClassifier
   # zsh が添字や修飾として評価しうるので受けない。前に付く語 (env・代入・do) と redirect のある部分も、この形に合わない。
   ECHO_STATUS = /\Aecho (?:"[A-Za-z0-9_ =:.-]*\$\?"|(?:[A-Za-z0-9_]+[=:])?\$\?)\z/.freeze
 
-  # 門に渡す command の写し。許す形の部分の $? を、同じ長さの字に置き換える。statuses は scan が拾った $? の位置。
-  def self.gate_copy(command, segments, statuses)
+  # 受ける形の for の loop (#767)。頭は `for 名前 in 語…`、次の部分が do で始まり、done だけの部分で終わる。1 つの command に
+  # 1 つだけ。名前は小文字 1 字か file (PATH や zsh の path のような特別な変数を避ける)。語は、引用の無い path の形の 1 つ以上か、
+  # ちょうど 1 つの $(…)。$(…) の中は、ほかの置き換えと同じく別に区分する。
+  FOR_WORD = %r{[A-Za-z0-9_.][A-Za-z0-9_./*-]*}.freeze
+  FOR_HEAD = /\Afor ([a-z]|file) in (?:#{FOR_WORD.source}(?: #{FOR_WORD.source})*|\$\( *\))\z/.freeze
+  # 本体で $名前 を許す command。どんな引数でも書き込みも program の起動もしない (値は file の名前で、決められないため)。
+  FOR_READ = %w[cat echo head tail wc nl ls].freeze
+  # 部分の間の区切り。どれも、後ろに改行が続いてよい。FOR_JOINT は頭と do の間・done の前・command の終わり、FOR_PART_JOINT は
+  # そのほかの部分の間 (loop の外も)。
+  FOR_JOINT = [";", "\n"].freeze
+  FOR_PART_JOINT = [";", "\n", "|", "||", "&&"].freeze
+  # 部分の先頭に来ると、shell の構文の語になる語 (bash と zsh)。loop の頭・do・done のほかの所に在る command は受けない。
+  RESERVED_WORDS = %w[! { } [[ ]] always case coproc do done elif else end esac fi for foreach function if in nocorrect
+                      repeat select then time until while].freeze
+  ForLoop = Struct.new(:head, :body, :name)
+
+  # 受ける形の loop。head は頭の部分の番号、body は本体の部分の番号の範囲。受けない形なら nil (頭が unknown になる)。
+  # 頭は伏せた写しで見る (引用と置き換えの中身は空白)。brace の展開より前なので、brace のある頭は合わない。
+  def self.for_loop(segments)
+    heads = segments.each_index.select { |k| segments[k][0].match?(/\A\s*for\s/) }
+    return nil unless heads.length == 1
+
+    head = heads.first
+    m = FOR_HEAD.match(segments[head][1].strip)
+    # redirect の後の done (2>/dev/null done) も終わりと数えるが、その部分は構文の語でないので unknown になる (#773)
+    tail = ((head + 1)...segments.length).find { |k| without_redirects(segments[k])[0].strip == "done" }
+    return nil unless m && tail && for_joints?(segments, head, tail) && no_reserved_words?(segments, head, tail)
+
+    ForLoop.new(head, (head + 1)...tail, m[1])
+  end
+
+  # 頭と done のほかの部分の先頭 (最初の本体の部分は do の後ろ) が、予約語でないか。redirect の後ろの語も見る (zsh は予約語として読む)。
+  def self.no_reserved_words?(segments, head, tail)
+    segments.each_index.all? do |k|
+      next true if k == head || k == tail
+
+      raw, masked = without_redirects(segments[k])
+      words = masked_words(raw, masked).map { |s, e| raw[s...e] }
+      words.shift if k == head + 1
+      !RESERVED_WORDS.include?(words.first)
+    end
+  end
+
+  # loop を含む command の、全部の部分の並びと区切りが、shell の構文に合うか (loop の外の部分の区切りと、先頭と終わりも見る)。
+  # do は、後ろに command が続く (do cat x) か、改行が続く。
+  def self.for_joints?(segments, head, tail)
+    bare_do = segments[head + 1][0].strip == "do"
+    return false unless bare_do ? tail > head + 2 : segments[head + 1][0].match?(/\A\s*do\s/)
+    return false unless segments[0][4].all? { |s| s == "\n" }
+
+    last = segments.length - 1
+    segments.each_index.all? do |k|
+      ops = if k == head || k == tail - 1 || k == last then FOR_JOINT
+            elsif bare_do && k == head + 1 then ["\n"]
+            else FOR_PART_JOINT
+            end
+      # 区切りが無いのは、最後の部分だけ
+      first, *rest = segments[k][3]
+      (first.nil? || ops.include?(first)) && rest.all? { |s| s == "\n" }
+    end
+  end
+
+  # 部分の [原文, 伏せた写し] の redirect を空白にしたもの。
+  def self.without_redirects(segment)
+    raw, masked = segment
+    redirect_spans(masked).each_with_object([raw.dup, masked.dup]) do |(s, e, _), texts|
+      texts.each { |text| text[s...e] = " " * (e - s) }
+    end
+  end
+
+  # 門に渡す command の写し。受ける形の $? と、受ける形の loop の頭の $(…)・本体の $名前 を、同じ長さの字に置き換える (#767)。
+  def self.gate_copy(command, segments, floop)
     copy = command.dup
-    statuses.each { |index, pos| copy[pos, 2] = "00" if segments[index][0].strip.match?(ECHO_STATUS) }
+    segments.each_with_index do |(raw, masked, map), k|
+      accepted_spans(raw, masked, k, floop).each { |s, e| (s...e).each { |j| copy[map[j]] = "0" } }
+    end
     copy
+  end
+
+  # 部分の中の、門で許す所の [始まり, 終わり] (部分の原文の中の位置) の並び。
+  def self.accepted_spans(raw, masked, index, floop)
+    if raw.strip.match?(ECHO_STATUS)
+      s = raw.index("$?")
+      return [[s, s + 2]]
+    end
+    return [] unless floop
+    return for_var_spans(raw, masked, floop.name) if floop.body.cover?(index)
+    return [] unless index == floop.head
+
+    s = masked.index("$(")
+    s ? [[s, masked.rindex(")") + 1]] : []
+  end
+
+  # 本体の部分の $名前 の位置。前置きは do だけ、command は FOR_READ の名前そのもの、$ を含む語は、語の全体が $名前 か、語の全体が
+  # 1 つの二重引用で、$名前 の直後が空白か引用の終わりのときだけ。1 つでも外れたら、部分の全部を許さない。$名前 の直後に字が続く形は、
+  # zsh が添字や修飾として評価しうる。
+  def self.for_var_spans(raw, masked, name)
+    units = masked_words(raw, masked).map { |s, e| [s, raw[s...e]] }
+    units.shift if units.first && units.first[1] == "do"
+    return [] unless units.first && FOR_READ.include?(units.first[1])
+
+    var = "$#{name}"
+    quoted = /\A"(?:[^"$`\\]|#{Regexp.escape(var)}(?=[ "]))*"\z/
+    dollars = units.select { |_, w| w.include?("$") }
+    return [] unless dollars.all? { |_, w| w == var || w.match?(quoted) }
+
+    dollars.flat_map do |s, w|
+      (0...w.length).select { |j| w[j] == "$" }.map { |j| [s + j, s + j + var.length] }
+    end
   end
 
   # 二重引用の中身の始まり (start) から読み、閉じる " の位置を返す。$・`・許さない escape があるか、閉じなければ nil。
@@ -274,13 +382,14 @@ module SkillBehaviorClassifier
   end
 
   # --- scanner ---------------------------------------------------------------------------
-  # 戻り値は [部分の配列, 一番外の置き換えの中身の配列, $? の位置の配列] で、部分は [原文, 伏せた写し]。伏せた写しは、一番外の
-  # 文脈の字だけを残し (引用の記号と $( ) は残す)、引用と置き換えの中身を空白にする (redirect を外の文脈でだけ探すため)。
+  # 戻り値は [部分の配列, 一番外の置き換えの中身の配列] で、部分は [原文, 伏せた写し, 原文の字ごとの command の中の位置, 次の部分
+  # までの区切りの並び, 先頭の部分の前の区切りの並び (ほかの部分は空)]。空の部分は捨て、その後ろの区切りは前の部分の並びに足す
+  # (`a; ; b` の a は [";", ";"]。前に部分が無ければ、先頭の部分の前の並び)。伏せた写しは、一番外の文脈の字だけを残し
+  # (引用の記号と $( ) は残す)、引用と置き換えの中身を空白にする (redirect を外の文脈でだけ探すため)。
   # comment は捨て、here document の本文は data として読み飛ばす。引用・置き換え・here document が閉じなければ nil。
-  # $? の位置は、一番外の文脈と、その二重引用の中のものだけで、[部分の番号, command の中の位置] (#767)。
 
   def self.scan(cmd)
-    st = { segs: [], subs: [], raw: +"", masked: +"", stack: [:top], sub_start: nil, heredocs: [], statuses: [] }
+    st = { segs: [], subs: [], raw: +"", masked: +"", map: [], stack: [:top], sub_start: nil, heredocs: [] }
     i = 0
     while i < cmd.length
       i = scan_step(cmd, i, st)
@@ -288,9 +397,20 @@ module SkillBehaviorClassifier
     end
     return nil unless st[:stack] == [:top] && st[:heredocs].empty?
 
-    st[:segs] << [st[:raw], st[:masked]]
-    kept = st[:segs].each_index.reject { |k| st[:segs][k][0].strip.empty? }
-    [kept.map { |k| st[:segs][k] }, st[:subs], st[:statuses].map { |k, pos| [kept.index(k), pos] }]
+    st[:segs] << [st[:raw], st[:masked], st[:map], nil]
+    [joined_segments(st[:segs]), st[:subs]]
+  end
+
+  # 空の部分を捨て、部分ごとに、次の部分までの区切りと、先頭の部分の前の区切りを並べる。
+  def self.joined_segments(segs)
+    lead = []
+    segs.each_with_object([]) do |(raw, masked, map, sep), kept|
+      if raw.strip.empty?
+        (kept.empty? ? lead : kept.last[3]) << sep if sep
+      else
+        kept << [raw, masked, map, [sep].compact, kept.empty? ? lead : []]
+      end
+    end
   end
 
   # 1 字 (か 1 つの記号) を読み、次の位置を返す。読めない形なら nil。
@@ -319,8 +439,6 @@ module SkillBehaviorClassifier
     return emit(st, ch + nxt, false, i + 2, masked: "  ") if ch == "\\" && nxt
     return open_sub(cmd, i, st, 2, top ? "$(" : "  ") if ch == "$" && nxt == "("
     return open_sub(cmd, i, st, 1, top ? "`" : " ", :tick) if ch == "`"
-
-    st[:statuses] << [st[:segs].length, i] if ch == "$" && nxt == "?" && (top || stack == %i[top dq])
     if ctx == :dq
       stack.pop if ch == '"'
       return emit(st, ch, stack.length == 1, i + 1)
@@ -358,6 +476,7 @@ module SkillBehaviorClassifier
   def self.emit(st, text, visible, next_i, masked: nil)
     st[:raw] << text
     st[:masked] << (masked || (visible ? text : " " * text.length))
+    st[:map].concat(((next_i - text.length)...next_i).to_a)
     next_i
   end
 
@@ -395,11 +514,12 @@ module SkillBehaviorClassifier
   end
 
   def self.split_at(cmd, i, st)
-    st[:segs] << [st[:raw], st[:masked]]
-    st[:raw] = +""
-    st[:masked] = +""
     ch = cmd[i]
     j = (ch == "&" || ch == "|") && cmd[i + 1] == ch ? i + 2 : i + 1
+    st[:segs] << [st[:raw], st[:masked], st[:map], cmd[i...j]]
+    st[:raw] = +""
+    st[:masked] = +""
+    st[:map] = []
     return j unless ch == "\n" && !st[:heredocs].empty?
 
     skip_heredoc_bodies(cmd, j, st)
