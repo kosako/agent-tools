@@ -222,6 +222,8 @@ usage: probe-skill-behavior.sh --tool <claude-code|codex> --out <results.json>
 ```
 
 - temp project に置く skill は、case の `place_skills` の skill だけ (#737)。`source_digest` も置いた skill から作る。
+- 前の turn のある case (#769) は、turn ごとに 1 つの process で流し、session を保存して再開する。できた記録は、その run の分だけを
+  run の終わりに消す (`lib/skill_behavior_session.rb`、self-test は `tests/probe-skill-behavior-turns-test.sh`)。
 - Codex の run は、人がログインした評価用の Codex の home (`--codex-home`) で起動し、子 process にだけ `CODEX_HOME` を
   渡す。運用 instruction と user の skill の無い条件で比べるため (#731。docs の「評価用の Codex の home」)。
 
