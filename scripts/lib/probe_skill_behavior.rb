@@ -252,11 +252,11 @@ module ProbeSkillBehavior
   #   tool_use_id があれば denied (許可の要る呼び出しが拒まれた)。どちらも無ければ unknown。
   # - init: type=system subtype=init の model・claude_code_version・tools・permissionMode。memory_states は、init ごとの
   #   自動の memory の状態 (memory_paths から。#770)。session_ids は、init の session_id の並び (#769)。
-  # shown: 中身を出す検索 (Grep の output_mode が content) の、誤りでない結果の本文 (#778)。到達の判定の間だけ持ち、results.json には入れない。
+  # shown: 中身を出す検索 (Grep の output_mode が content) の、誤りでない結果の本文 (同じ id の結果が複数なら全部。#778)。到達の判定の間だけ持ち、results.json には入れない。
   def self.parse_claude(jsonl, names, fixture = K::NO_FIXTURE)
     calls = []
     results = {}
-    outputs = {}
+    outputs = Hash.new { |h, k| h[k] = [] }
     denied = []
     init = {}
     memory_states = []
@@ -289,7 +289,7 @@ module ProbeSkillBehavior
           next unless c.is_a?(Hash) && c["type"] == "tool_result"
 
           results[c["tool_use_id"].to_s] = c["is_error"] == true ? "error" : "ok"
-          outputs[c["tool_use_id"].to_s] = result_text(c["content"])
+          outputs[c["tool_use_id"].to_s] << result_text(c["content"])
         end
       when "result"
         result_seen = true
@@ -311,7 +311,7 @@ module ProbeSkillBehavior
       outcome = denied.include?(c[:id]) ? "denied" : results.fetch(c[:id], "unknown")
       { id: c[:id], tool: c[:tool], class: K.classify_claude(c[:tool], c[:input], fixture: fixture), outcome: outcome,
         strings: strings_in(c[:input]),
-        shown: outcome == "ok" && c[:tool] == "Grep" && c[:input]["output_mode"] == "content" ? outputs[c[:id]] : nil }
+        shown: outcome == "ok" && c[:tool] == "Grep" && c[:input]["output_mode"] == "content" ? outputs[c[:id]].join("\n") : nil }
     end
     { calls: out, skills_read: skills.uniq, skills_unresolved: unresolved, init: init, memory_states: memory_states,
       session_ids: session_ids.uniq, result_seen: result_seen, subtype: subtype }
@@ -324,12 +324,12 @@ module ProbeSkillBehavior
     (content.is_a?(Array) ? content : []).map { |x| x.is_a?(Hash) && x["type"] == "text" && x["text"].is_a?(String) ? x["text"] : "" }.join("\n")
   end
 
-  # case の reach の file に届いたか。入力に path を含む呼び出し、または、中身を出す検索の結果に path で始まる行がある (#778。一致した行は
-  # 「path:」の形で出る。path の前に dir の部分が付いてもよい)。
+  # case の reach の file に届いたか。入力に path を含む呼び出し、または、中身を出す検索の結果に「path:」で始まる行がある (#778。一致した
+  # 行の形。検索の結果の path は、作業 dir からの相対で出る)。
   def self.reached?(calls, reach)
     calls.any? do |call|
       reach.any? do |p|
-        call[:strings].any? { |s| s.include?(p) } || (call[:shown] && call[:shown].match?(%r{^(?:[^:\n]*/)?#{Regexp.escape(p)}:}))
+        call[:strings].any? { |s| s.include?(p) } || (call[:shown] && call[:shown].match?(/^#{Regexp.escape(p)}:/))
       end
     end
   end
