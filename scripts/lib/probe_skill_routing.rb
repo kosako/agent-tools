@@ -10,7 +10,9 @@
 #
 # 責務境界 (honest):
 #   - runner は「観測」だけを行う。判定は check-skill-routing.sh、緑/赤の解釈は人間の責務。
-#   - 実 tool home (~/.claude / ~/.codex) には書き込まない。候補 skill は project scope
+#   - probe 自身は tool home (~/.claude / ~/.codex) に書き込まない。claude-code の子 process には自動の memory を止める環境を
+#     渡す (#770。止めないと、run ごとに ~/.claude/projects の下に dir ができる)。CLI 自身が home に置く状態の file (認証・
+#     cache・log など) は見ていない。候補 skill は project scope
 #     (claude-code: <proj>/.claude/skills、codex: <proj>/.agents/skills) に copy し、claude-code は
 #     --setting-sources project で user scope の skill を外し、codex は候補と同名の user skill を
 #     skills.config の -c override で無効化する (どちらも実測済み。docs 参照)。
@@ -35,6 +37,7 @@ require "json"
 require "open3"
 require "tmpdir"
 require "time"
+require_relative "auto_memory"
 require_relative "check_skill_routing"
 require_relative "probe_child"
 require_relative "yaml_util"
@@ -191,11 +194,13 @@ module ProbeSkillRouting
   # - prompt_tokens / output_tokens: type=result の usage (run 全体の合計。turn 数に依存する)。usage が取れなければ
   #   nil (観測不能)。
   # - subtype: result の subtype。error_max_turns は打ち切りであって観測失敗ではない。
+  # - memory_states: init ごとの、自動の memory の状態 (memory_paths から。#770)。
   def self.parse_claude(jsonl)
     observed = []
     model = nil
     prompt_tokens = output_tokens = first_prompt_tokens = nil
     subtype = nil
+    memory_states = []
     text = +""
     jsonl.each_line do |line|
       e = begin
@@ -208,6 +213,7 @@ module ProbeSkillRouting
       case e["type"]
       when "system"
         model ||= e["model"] if e["model"].is_a?(String)
+        memory_states << AutoMemory.state(e) if e["subtype"] == "init"
       when "assistant"
         if first_prompt_tokens.nil?
           u = e.dig("message", "usage")
@@ -240,7 +246,7 @@ module ProbeSkillRouting
       end
     end
     { observed: observed.uniq, model: model, prompt_tokens: prompt_tokens, output_tokens: output_tokens,
-      first_prompt_tokens: first_prompt_tokens, subtype: subtype, text: text, note: nil }
+      first_prompt_tokens: first_prompt_tokens, subtype: subtype, text: text, note: nil, memory_states: memory_states }
   end
 
   def self.sum_usage(usage, keys)
@@ -450,7 +456,7 @@ module ProbeSkillRouting
   def self.run_one(opts, proj, names, prompt)
     if opts[:tool] == "claude-code"
       argv = claude_argv(opts, prompt)
-      r = run_command(argv, chdir: proj, stdin: nil, timeout: opts[:timeout])
+      r = run_command(argv, chdir: proj, stdin: nil, timeout: opts[:timeout], env: AutoMemory::ENV_OFF)
       parsed = parse_claude(r.out)
     else
       argv = codex_argv(opts, proj, names)
@@ -532,6 +538,7 @@ module ProbeSkillRouting
       FileUtils.mkdir_p(raw_dir)
       runs = []
       model = nil
+      memory_states = []
       cases.each do |c|
         opts[:repeat].times do |n|
           # 保存先は CLI を起動する前に確かめる (保存できない run を走らせない)。
@@ -539,6 +546,7 @@ module ProbeSkillRouting
           stderr_path = raw_log_path(raw_dir, c["id"], n + 1, "stderr")
           r = run_one(opts, proj, names, c["prompt"])
           model ||= r[:model]
+          memory_states << r[:memory_states] if r[:memory_states]
           File.write(jsonl_path, r[:stdout])
           File.write(stderr_path, r[:stderr]) unless r[:stderr].to_s.empty?
           # observed-stop の run は token を取らないので null。ほかは今までどおり、取れなければ 0 (error run)。
@@ -568,6 +576,8 @@ module ProbeSkillRouting
         "generated_at" => Time.now.utc.iso8601,
         "runs" => runs,
       }
+      # 自動の memory を止めたこと (#770。claude-code だけ)。
+      results["auto_memory"] = AutoMemory.record(memory_states) if opts[:tool] == "claude-code"
       File.write(opts[:out], JSON.pretty_generate(results) + "\n")
       errors = runs.count { |r| r["status"] != "ok" }
       puts "wrote #{opts[:out]} (#{runs.length} runs, #{errors} error run(s), raw: #{raw_dir})"

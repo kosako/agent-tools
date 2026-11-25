@@ -39,6 +39,7 @@
 # 集合演算・比較条件までで、それ以上「検証」したフリをしない。
 
 require "json"
+require_relative "auto_memory"
 
 # C locale (LC_ALL=C や LANG の未設定) でも、読む text (file・command の出力) を UTF-8 として扱う (#432)。
 # この entrypoint は cli.rb (#418 の固定) を require しないので、同じ固定を各自で持つ。
@@ -66,7 +67,10 @@ module CheckSkillRouting
       { "schema_version": 2, "tool": "claude-code", "model": "<model id>", "variant": "<label>",
         "runs": [ { "case": "<case id>", "observed": ["<skill name>", ...],
                     "prompt_tokens": 1234, "output_tokens": 56, "status": "ok", "completion": "exited",
-                    "first_prompt_tokens": 1000 } ] }   (first_prompt_tokens は任意)
+                    "first_prompt_tokens": 1000 } ],
+        "auto_memory": { "requested": "off", "init": "not-listed" } }
+      first_prompt_tokens と auto_memory は任意。auto_memory は claude-code だけで、init が not-listed でなければ
+      緑にしない (#770)。
       completion: exited / max-turns / observed-stop (status ok) か timeout / failed (status error)。
       observed-stop の run だけ token を null にできる (集計から外し、外した数を出す)。schema_version 1 も読む
       (completion なし、token は整数)。
@@ -74,7 +78,7 @@ module CheckSkillRouting
     判定: 全 case に ok な run があること (coverage)。primary skill の hit と must_not skill の
     violation を数え、token を合算して報告する (prompt_tokens = run 全体、first_prompt_tokens =
     最初の API call の prompt 量。後者は全 run が持つときだけ集計)。--baseline を与えると同条件
-    (tool / model / case 集合 / run 数) の結果と case ごとに比較する。baseline で半分以上の run が primary に
+    (tool / model / case 集合 / run 数 / auto_memory) の結果と case ごとに比較する。baseline で半分以上の run が primary に
     当たっていた case が、候補で一度も当たらなければ回帰。それより小さい減少は warn: の行で出し、exit に
     響かない (合計は比べない)。must_not は baseline によらず、候補で 1 回でも出れば破れ。token は gate に
     せず delta を報告するだけ。
@@ -139,6 +143,10 @@ module CheckSkillRouting
     raise Error, "#{label}: tool must be one of #{KNOWN_TOOLS.join(', ')}" unless KNOWN_TOOLS.include?(data["tool"])
     raise Error, "#{label}: model must be a non-empty string" unless label?(data["model"])
     raise Error, "#{label}: variant must be a non-empty string" unless label?(data["variant"])
+    # 自動の memory の記録 (#770)。#770 より前の results には無い。
+    if data.key?("auto_memory") && !(data["tool"] == "claude-code" && AutoMemory.valid?(data["auto_memory"]))
+      raise Error, "#{label}: auto_memory must be an object of requested (off) and init, for claude-code only"
+    end
 
     runs = data["runs"]
     raise Error, "#{label}: runs must be an array" unless runs.is_a?(Array)
@@ -211,6 +219,9 @@ module CheckSkillRouting
     per_case = []
     known_ids = cases[:cases].map { |c| c["id"] }
     (by_case.keys - known_ids).each { |id| structural << "#{label}: run for unknown case '#{id}'" }
+    if results.key?("auto_memory") && !AutoMemory.off?(results["auto_memory"])
+      structural << "#{label}: auto memory was not off in every run"
+    end
 
     hit = 0
     hit_total = 0
@@ -286,11 +297,12 @@ module CheckSkillRouting
     { summary: summary, per_case: per_case, breaches: breaches, structural: structural }
   end
 
-  # baseline との比較条件 (tool / model / case ごとの run 数) を検証する。違えば構造エラー。
+  # baseline との比較条件 (tool / model / 自動の memory の記録 / case ごとの run 数) を検証する。違えば構造エラー。
   def self.comparison_structural(cases, candidate, baseline)
     failures = []
     failures << "comparison: tool differs (#{baseline['tool']} vs #{candidate['tool']})" if candidate["tool"] != baseline["tool"]
     failures << "comparison: model differs (#{baseline['model']} vs #{candidate['model']})" if candidate["model"] != baseline["model"]
+    failures << "comparison: auto memory differs" if candidate["auto_memory"] != baseline["auto_memory"]
     cases[:cases].each do |c|
       n_c = candidate["runs"].count { |r| r["case"] == c["id"] }
       n_b = baseline["runs"].count { |r| r["case"] == c["id"] }

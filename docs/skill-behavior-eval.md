@@ -18,13 +18,18 @@ case と、その判定 (judge) です。
 ## 隔離と境界
 
 - case ごと・run ごとに、fixture を新しい temp project へ copy し、case の `place_skills` の skill を project scope に置きます
-  (Claude Code は `.claude/skills`、Codex は `.agents/skills`。下の「case set」)。前の run の書き込みは次の run に持ち込みません。実 tool home
-  (`~/.claude` / `~/.codex`) には書きません。
+  (Claude Code は `.claude/skills`、Codex は `.agents/skills`。下の「case set」)。前の run の書き込みは次の run に持ち込みません。
+- probe 自身は tool home (`~/.claude` / `~/.codex`) に書きません。agent の書き込みは、下の許可の mode と sandbox で temp project に
+  閉じます。CLI 自身が home に置く状態の file (認証・cache・log など) は、この評価では見ていません。
 - Claude Code: `claude -p --setting-sources project --strict-mcp-config --tools <固定の一覧> --permission-mode acceptEdits`
   で起動します。user scope の設定と skill、MCP server を読まず、見せる tool を `Read`・`Glob`・`Grep`・`Edit`・`Write`・
   `NotebookEdit`・`Bash`・`Skill` に固定します。`acceptEdits` は作業 directory の中の編集だけを自動で許可し、ほかの
   許可の要る呼び出し (Bash の大半) は `-p` の既定のまま拒まれ、`result` の `permission_denials` に残ります。
   起動の前に `claude --help` に `--permission-mode` と `--tools` があることを確かめます。
+- Claude Code の子 process には `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` を渡し、自動の memory を止めます (#770)。止めないと、run ごとに
+  `~/.claude/projects` の下に、temp project の名前の dir と空の `memory` ができ、model に memory の置き場が示されます
+  (2.1.331 で、止めないときと止めたときを 1 回ずつ確かめた)。#770 より前の run は、init を見られる 60 run の
+  どれにも、memory の置き場が示されていました。
 - Codex: routing probe と同じ境界 (`--ignore-user-config`・`--ignore-rules`・`--disable apps` など。起動の前に flag と
   feature の在否を確かめる) で、sandbox だけ `-s workspace-write` (network なし) にします。workspace-write は既定で `/tmp` と
   `$TMPDIR` にも書け、その書き込みは temp project の差分に現れないので、`-c sandbox_workspace_write.exclude_slash_tmp=true` と
@@ -295,6 +300,11 @@ command の名前になる語の brace (`{cat,rm} x`・`xargs {cat,rm}`・`find 
 - `ids.conditions` は skill の無い条件の記録です。Codex は `{"home": "eval", "user_instructions": "absent",
   "user_skills": "absent"}` (評価用の home を起動の前に確かめた)、Claude Code は `{"setting_sources": "project"}` です。
   judge は tool ごとのこの値だけを受け、ほかの値は入力の誤り (exit 2) にします。
+- `ids.auto_memory` は、Claude Code の自動の memory の記録です (#770)。`{"requested": "off", "init": "not-listed"}` の形で、渡した
+  設定 (`requested`。いつも `off`) と、run の init の event に見えた状態 (`init`) を分けて残します。状態は、`memory_paths` に `auto` が
+  在れば `listed`、無ければ `not-listed`、init が無いか形が読めなければ `unknown`。run の間で違えば `mixed:` の後に並べます。
+  `not-listed` は、init に memory の置き場が示されていないことだけを言います。この field を出さない版の CLI でも `not-listed` になる
+  ので、止まったことの証明にはしません。Codex の results と、#770 より前の results には無く、judge は無いときも受けます。
 - `fix_check` は、検査のある case の run だけが持ちます (下の「修正の正しさ」)。#763 より前の results.json には無く、judge は
   無いときも受けます。検査のある case を含む run では、`ids.fix_check_ruby` に、検査に使った Ruby の版を残します。
 - command の本文と prompt は入れません。`changed` は temp project の中の相対 path だけです。
@@ -383,7 +393,8 @@ run ごとに次のどれかに決めます。network と CLI には触れませ
 - 期待した skill を読んだか (`skill_read`) は、別の軸の数として出すだけで、判定と分母に影響しません。読まなかった run
   も母数に残します。
 - 記録した条件も確かめます。run の間で値が揃わない識別子 (`mixed:`)、Claude Code の init の tool の一覧が固定した一覧と
-  違う、permission の mode が `acceptEdits` でない、のどれかがあれば exit 2 です。
+  違う、permission の mode が `acceptEdits` でない、`ids.auto_memory` の `init` が `not-listed` でない (#770)、のどれかがあれば
+  exit 2 です。
 - skill を置かない対照 (`skills: none`) の run が、その case の期待した skill を読んでいたら、対照の条件が崩れているので、
   条件の食い違いとして exit 2 にします (#731)。出力は `condition: control run read the expected skill (case <id>, run <n>)`
   の形です。名前を決められない skill の file を読んだ対照の run (`skills_unresolved` が true) も、期待した skill でないと

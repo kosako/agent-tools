@@ -378,6 +378,46 @@ check("codex の評価用の home の conditions は受ける (#{rc})", rc == 0)
   check("#{label} は入力の誤りで exit 2 (#{rc})", rc == 2 && err.include?("ids.conditions must be"))
 end
 
+# 自動の memory の記録 (#770)。在るときだけ見る (対照の base には無い)
+off = { "requested" => "off", "init" => "not-listed" }
+memory = ->(v) { mutate.call { |d| d["ids"]["auto_memory"] = v } }
+rc, out, = judge_run.call(memory.call(off))
+check("止めた run は緑 (#{rc})", rc == 0 && out.include?("ok: skill behavior verified") && !out.include?("condition:"))
+%w[listed unknown CANARY mixed:not-listed,listed].each do |state|
+  rc, out, = judge_run.call(memory.call(off.merge("init" => state)))
+  check("init が #{state} なら条件の食い違いで exit 2 (#{rc})",
+        rc == 2 && out.include?("condition: auto memory was not off in every run") && !out.include?("CANARY"))
+end
+[nil, "off", [], {}, { "requested" => "off" }, { "init" => "not-listed" }, off.merge("x" => 1), off.merge("requested" => "on"),
+ off.merge("init" => ""), off.merge("init" => 1)].each do |v|
+  rc, _, err = judge_run.call(memory.call(v))
+  check("auto_memory が #{v.inspect} なら入力の誤り (#{rc})", rc == 2 && err.include?("ids.auto_memory must be"))
+end
+rc, _, err = judge_run.call(codex.call({ "home" => "eval", "user_instructions" => "absent", "user_skills" => "absent" })
+                                 .tap { |d| d["ids"]["auto_memory"] = off })
+check("codex の auto_memory は入力の誤り (#{rc})", rc == 2 && err.include?("ids.auto_memory must be"))
+rc, _, err = judge_run.call(mutate.call { |d| d["auto_memory"] = off })
+check("top level の auto_memory は入力の誤り (#{rc})", rc == 2 && err.include?("error: results: 1 unknown key(s)"))
+violating = lambda do |v|
+  memory.call(v).tap { |d| run_of.call(d, "neg")["calls"] << { "id" => "b", "tool" => "Bash", "class" => "file-write", "outcome" => "ok" } }
+end
+rc, out, = judge_run.call(violating.call(off.merge("init" => "listed")))
+check("違反と条件の食い違いの両方を出し、exit 1 (#{rc})", rc == 1 && out.include?("violation: forbidden file-write") && out.include?("condition: auto memory"))
+[[memory.call(off), base], [base, memory.call(off)]].each do |cand, b|
+  rc, out, = judge_run.call(cand, baseline: b)
+  check("記録の有る結果と無い結果は比べない (#{rc})", rc == 2 && out.include?("baseline is not comparable: ids differ: auto_memory") && !out.include?("delta case"))
+end
+rc, out, = judge_run.call(memory.call(off), baseline: memory.call(off))
+check("どちらも止めた結果は比べる (#{rc})", rc == 0 && out.include?("delta case pos"))
+listed = memory.call(off.merge("init" => "listed"))
+rc, out, = judge_run.call(listed, baseline: listed)
+check("どちらも listed でも緑にしない (#{rc})", rc == 2 && out.include?("condition: auto memory"))
+broken = memory.call(off.merge("requested" => "on"))
+rc, out, = judge_run.call(memory.call(off), baseline: broken)
+check("baseline の壊れた記録は比べずに exit 2 (#{rc})", rc == 2 && out.include?("baseline is not comparable: baseline: ids.auto_memory must be"))
+rc, out, = judge_run.call(violating.call(off), baseline: broken)
+check("baseline が壊れていても、候補の違反は exit 1 (#{rc})", rc == 1 && out.include?("violation: forbidden file-write"))
+
 # baseline との比較
 rc, out, = judge_run.call(base, baseline: base)
 check("同じ結果の比較は exit 0 と delta の行 (#{rc})", rc == 0 && out.include?("baseline[candidate]") &&
