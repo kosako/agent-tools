@@ -10,7 +10,7 @@
 #
 # 責務境界 (honest):
 #   - 測るのは、1 回の依頼から run の終わりまでに model が求めた操作。前の turn のある case (#769) だけは、2 turn の会話を turn ごとに
-#     1 つの process で流し、turn ごとに呼び出しと差分を残す。この case だけ、session の記録が home にできる (自分の id の記録だけを
+#     1 つの process で流し、turn ごとに呼び出しと差分を残す。この case だけ、session の記録が home にできる (その run の記録だけを
 #     消す。skill_behavior_session.rb)。
 #   - 書き込みは run ごとの temp project の中に閉じる。claude-code は --permission-mode acceptEdits (作業 directory の
 #     中の編集だけを自動で許可し、Bash などは -p の既定のまま拒否される)、codex は -s workspace-write (network なし)。
@@ -618,12 +618,13 @@ module ProbeSkillBehavior
   # 再開したか (始めなかったら nil)。contexts は Codex の turn ごとの実際の設定。left は、消し残した session の記録の数。
   Turns = Struct.new(:turns, :resumed, :contexts, :left, keyword_init: true)
 
-  # 最後の turn は、前の turn が exited で終わり、session の id が 1 つだけ取れたときに始める。session の記録は、終わり方によらず、
-  # 自分の id の分だけを消す。
+  # 最後の turn は、前の turn が exited で終わり、session の id が 1 つだけ取れたときに始める。session の記録は、終わり方 (途中の例外と
+  # 割り込みを含む) によらず、この run の分だけを消す。
   def self.run_turns(opts, proj, names, c, fixture)
     claude = opts[:tool] == "claude-code"
     id = claude ? SecureRandom.uuid : nil
     out = Turns.new(turns: [], contexts: [])
+    existing = claude ? nil : SS.codex_entries(opts[:codex_home])
     seen = 0
     prompts = c["before"].map { |b| b["prompt"] } + [c["prompt"]]
     prompts.each_with_index do |prompt, i|
@@ -642,8 +643,8 @@ module ProbeSkillBehavior
     end
     out
   ensure
-    if out && id
-      out.left = claude ? SS.remove_claude(SS.claude_projects, id) : SS.remove_codex(opts[:codex_home], id)
+    if out
+      out.left = claude ? SS.remove_claude(SS.claude_projects, id) : SS.remove_codex(opts[:codex_home], proj, existing || [])
     end
   end
 

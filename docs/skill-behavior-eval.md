@@ -111,7 +111,7 @@ judge が共有)。形が違えば run を始める前に止まります。
   UUID を `--session-id` で渡し、init の id がその値のとき。Codex は event の thread の id が 1 つで、UUID の形のときです。
 - 再開は、Claude Code が `--resume`、Codex が `exec resume` です。Codex の再開した turn は 1 turn 目の sandbox を引き継がないので、
   sandbox・承認・除外の設定・禁じる feature を渡し直します。起動の前に、どちらの CLI にも要る flag が在ることを確かめます。
-- Codex は、session の記録 (rollout) から turn ごとの `turn_context` を読み、承認・作業 dir (temp project か)・sandbox を 1 つの文字列に
+- Codex は、この run の rollout (1 つで、名前に session の id を含むとき) から turn ごとの `turn_context` を読み、承認・作業 dir (temp project か)・sandbox を 1 つの文字列に
   します。真偽値と短い語だけを写し、ほかの値は `?` にします (local の path を残さないため)。
 - raw log は、前の turn が `<case>-<n>.turn1.jsonl`、最後の turn が `<case>-<n>.jsonl` です。
 
@@ -121,9 +121,14 @@ judge が共有)。形が違えば run を始める前に止まります。
 
 - Claude Code は、ふだんの tool home の `projects` の下に `<id>.jsonl` ができます (`CLAUDE_CONFIG_DIR` があればその下)。Codex は、評価用の
   home の `sessions` の下に rollout ができます。
-- run の終わり (打ち切りや中断を含む) に、自分の id の記録だけを消します。消すのは link でない通常の file と、空になった dir だけです。
-  id の名前のものがほかに残っていれば、消さずに数を出力に書きます (`warning: session record(s) left in the home`)。Codex の id が
-  決まらなかった run は、消す記録を決められないので、評価用の home に残ります (数は `unknown`)。
+- run の終わり (打ち切り、途中の誤り、割り込みを含む) に、この run の記録だけを消します。消すのは link でない通常の file と、空になった
+  dir だけです。
+  - Claude Code は、probe が起動の前に作った id の `<id>.jsonl`。
+  - Codex は、名前が `rollout-*.jsonl` で、先頭の行 (`session_meta`) の作業 dir がこの run の temp project のもの。id は CLI が決めるので、
+    1 turn 目の途中で止まると分からないためです (temp project は run ごとに別)。
+- 残ったものがあれば、消さずに数を出力に書きます (`warning: session record(s) left in the home`)。Claude Code は `projects` の下で
+  id を名前に含むもの、Codex は評価用の home の `sessions` の下で run の前に無かったものです (同じ home で probe を同時に流すと、
+  ほかの run の分も数えます)。
 - probe が強制的に止められたとき (KILL) は、記録が残ります。
 - 確かめた範囲: Claude Code 2.1.332 で、自動の memory を止めた 2 turn (2 turn 目に Edit を 1 回) の後、tool home で id の名前のものは
   `<id>.jsonl` だけでした。長い会話や大きな出力では確かめていません。

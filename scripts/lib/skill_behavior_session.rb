@@ -3,13 +3,15 @@
 require "json"
 
 # 前の turn のある case (#769) の、session の記録の扱い。2 turn 目を始めるために session を保存するので、記録が home にできる。
-# 自分の session の id の記録だけを読み、終わったら自分の id の記録だけを消す。
+# この run の記録だけを読み、終わったらこの run の記録だけを消す。
 #
-# - Claude Code: ふだんの tool home の projects/<temp project の名前>/<id>.jsonl。id は probe が作る。自動の memory を止めた 2 turn
-#   (2 turn 目に Edit を 1 回) で、id の名前のものは、この file だけだった (2.1.332 の実測)。
-# - Codex: 評価用の home の sessions の下の、名前に id を含む rollout。turn ごとの実際の sandbox などが、その中の turn_context に残る。
+# - Claude Code: ふだんの tool home の projects/<temp project の名前>/<id>.jsonl。id は probe が起動の前に作る。自動の memory を止めた
+#   2 turn (2 turn 目に Edit を 1 回) で、id の名前のものは、この file だけだった (2.1.332 の実測)。
+# - Codex: 評価用の home の sessions の下の rollout。id は CLI が決め、1 turn 目の途中で止まると分からない。そこで、先頭の session_meta の
+#   作業 dir が、この run の temp project のものを自分の記録とみなす (temp project は run ごとに別)。turn ごとの実際の sandbox などが、
+#   その中の turn_context に残る。
 #
-# 消すのは link でない通常の file と、空になった dir だけ。id の名前のものがほかに残っていれば、消さずに数を返す。
+# 消すのは link でない通常の file と、空になった dir だけ。ほかに残っていれば、消さずに数を返す。
 module SkillBehaviorSession
   # 消す file の名前に使うので、UUID の形だけを受ける。
   ID = /\A[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\z/.freeze
@@ -22,7 +24,7 @@ module SkillBehaviorSession
     File.join(env["CLAUDE_CONFIG_DIR"] || File.join(Dir.home, ".claude"), "projects")
   end
 
-  # Claude Code の記録を消し、残った (id を名前に含む) ものの数を返す。確かめられなければ nil。
+  # Claude Code の記録を消し、残ったもの (projects の下のどの深さでも、id を名前に含むもの) の数を返す。確かめられなければ nil。
   def self.remove_claude(projects, id)
     return nil unless id?(id)
     return 0 unless File.directory?(projects)
@@ -33,23 +35,36 @@ module SkillBehaviorSession
 
       Dir.rmdir(d) if Dir.empty?(d)
     end
-    dirs.select { |d| real_dir?(d) }.sum { |d| Dir.children(d).count { |n| n.include?(id) } }
+    walk(projects).count { |f| File.basename(f).include?(id) }
   rescue SystemCallError
     nil
   end
 
-  # Codex の rollout (名前に id を含む .jsonl)。
-  def self.codex_rollouts(home, id)
+  # 評価用の home の sessions の下の、dir でないもの (path の並び)。
+  def self.codex_entries(home)
     sessions = File.join(home, "sessions")
-    return [] unless id?(id) && real_dir?(sessions)
+    return [] unless real_dir?(sessions)
 
-    Dir.glob("**/*#{id}*", File::FNM_DOTMATCH, base: sessions).sort.map { |f| File.join(sessions, f) }
+    walk(sessions).reject { |f| real_dir?(f) }
   end
 
-  # rollout の turn_context を、並んだ順に、決まった形の文字列にする。rollout が 1 つの通常の file でなければ nil。
+  # この run の rollout。
+  def self.codex_rollouts(home, proj)
+    codex_entries(home).select { |f| File.basename(f).match?(/\Arollout-.*\.jsonl\z/) && File.lstat(f).file? && own_rollout?(f, proj) }
+  end
+
+  def self.own_rollout?(file, proj)
+    e = JSON.parse(File.open(file, "r:UTF-8", &:gets).to_s)
+    e.is_a?(Hash) && e["type"] == "session_meta" && e["payload"].is_a?(Hash) && same_dir?(e["payload"]["cwd"], proj)
+  rescue JSON::ParserError, ArgumentError
+    false
+  end
+
+  # rollout の turn_context を、並んだ順に、決まった形の文字列にする。この run の rollout が 1 つでないか、名前に session の id が
+  # 無ければ nil。
   def self.codex_contexts(home, id, proj)
-    files = codex_rollouts(home, id)
-    return nil unless files.length == 1 && File.lstat(files.first).file?
+    files = codex_rollouts(home, proj)
+    return nil unless id?(id) && files.length == 1 && File.basename(files.first).include?(id)
 
     File.readlines(files.first, encoding: "UTF-8").map do |line|
       e = begin
@@ -83,13 +98,12 @@ module SkillBehaviorSession
     path.is_a?(String) && path.start_with?("/") && File.directory?(path) && File.identical?(path, proj)
   end
 
-  # Codex の rollout を消し、空になった日付の dir も消して、残ったものの数を返す。確かめられなければ nil。
-  def self.remove_codex(home, id)
-    return nil unless id?(id)
-
+  # この run の rollout を消し、空になった日付の dir も消して、残ったもの (before に無かったもの) の数を返す。確かめられなければ nil。
+  # before は、run の前の codex_entries。
+  def self.remove_codex(home, proj, before)
     sessions = File.join(home, "sessions")
-    codex_rollouts(home, id).each do |f|
-      next unless f.end_with?(".jsonl") && delete_file(f)
+    codex_rollouts(home, proj).each do |f|
+      next unless delete_file(f)
 
       d = File.dirname(f)
       while d.start_with?("#{sessions}/") && Dir.empty?(d)
@@ -97,7 +111,7 @@ module SkillBehaviorSession
         d = File.dirname(d)
       end
     end
-    codex_rollouts(home, id).length
+    (codex_entries(home) - before).length
   rescue SystemCallError
     nil
   end
@@ -120,5 +134,13 @@ module SkillBehaviorSession
 
   def self.children(dir)
     Dir.children(dir).sort.map { |n| File.join(dir, n) }
+  end
+
+  # dir の下の全部 (隠し file と dir を含む。link の先は辿らない)。読めない dir があれば SystemCallError のまま上げる (0 と数えない)。
+  # 見ている間に消えた dir は、空とみなす (ほかの session が同じ home を使っていることがある)。
+  def self.walk(dir)
+    children(dir).flat_map { |f| real_dir?(f) ? [f, *walk(f)] : [f] }
+  rescue Errno::ENOENT
+    []
   end
 end

@@ -61,6 +61,11 @@ write.call(File.join(pr, "-a", "#{id}.jsonl"))
 write.call(File.join(pr, "-a", id, "tool-results", "x.txt"))
 check("id の名前の dir は消さずに数える", S.remove_claude(pr, id) == 1 && File.file?(File.join(pr, "-a", id, "tool-results", "x.txt")) &&
       !File.exist?(File.join(pr, "-a", "#{id}.jsonl")))
+pr = fresh.call("c3b")
+write.call(File.join(pr, "-a", "#{id}.jsonl"))
+deep = write.call(File.join(pr, "-a", "cache", "x-#{id}-y.bin"))
+hidden = write.call(File.join(pr, "-b", ".hidden", "#{id}", "z"))
+check("深い所に残った id の名前のものも数える", S.remove_claude(pr, id) == 2 && File.file?(deep) && File.file?(hidden))
 pr = fresh.call("c4")
 target = write.call(File.join(root, "outside.txt"))
 FileUtils.mkdir_p(File.join(pr, "-a"))
@@ -104,41 +109,86 @@ Dir.chdir(File.dirname(proj)) do
   check("作業 dir が、今いる dir からの相対でも other", S.same_dir?(File.basename(proj), proj) == false && S.same_dir?(proj, proj))
 end
 home = fresh.call("h1")
+meta = ->(cwd, h = {}) { JSON.generate("type" => "session_meta", "payload" => { "id" => "x", "cwd" => cwd }.merge(h)) + "\n" }
 day = File.join(home, "sessions", "2026", "11", "25")
 line = ->(payload) { JSON.generate("type" => "turn_context", "payload" => payload) }
 roll = write.call(File.join(day, "rollout-1-#{id}.jsonl"),
-                  ["{\"type\":\"session_meta\"}", line.call(measured), "not json", "\xff\xfe", "[1]", line.call("x"), "{\"type\":\"event\",\"payload\":{}}",
+                  meta.call(proj) + [line.call(measured), "not json", "\xff\xfe", "[1]", line.call("x"), "{\"type\":\"event\",\"payload\":{}}",
                    line.call(measured.merge("sandbox_policy" => { "type" => "read-only" }))].join("\n") + "\n")
 check("rollout の turn_context を並んだ順に読む",
       S.codex_contexts(home, id, proj) == [C::CODEX_TURN_CONTEXT, 'approval=never cwd=project sandbox={"type":"read-only"}'])
-check("turn_context の無い rollout は空", S.codex_contexts(home, id, proj).length == 2 && begin
-  write.call(File.join(fresh.call("h2"), "sessions", "rollout-#{id}.jsonl"), "{}\n")
-  S.codex_contexts(File.join(root, "h2"), id, proj) == []
-end)
-check("id の形でなければ読まない", S.codex_contexts(home, "*", proj).nil? && S.codex_contexts(home, nil, proj).nil? &&
-      S.codex_contexts(File.join(root, "h2"), "*", proj).nil? && S.codex_contexts(File.join(root, "h2"), "rollout", proj).nil?)
-check("rollout が無ければ nil", S.codex_contexts(home, other, proj).nil?)
-write.call(File.join(home, "sessions", "2026", "11", "24", "rollout-2-#{id}.jsonl"), line.call(measured))
-check("rollout が 2 つなら nil", S.codex_contexts(home, id, proj).nil?)
-mine2 = File.join(home, "sessions", "2026", "11", "24", "rollout-2-#{id}.jsonl")
-others = write.call(File.join(day, "rollout-1-#{other}.jsonl"))
-check("自分の rollout を消し、空になった日付の dir も消す", S.remove_codex(home, id) == 0 && !File.exist?(roll) && !File.exist?(mine2) &&
-      File.file?(others) && Dir.children(File.join(home, "sessions", "2026", "11")) == ["25"])
-check("自分の rollout が最後なら、sessions の下を空にする", S.remove_codex(home, other) == 0 && Dir.children(File.join(home, "sessions")).empty?)
-home = fresh.call("h3")
-FileUtils.mkdir_p(File.join(home, "sessions"))
-File.symlink(target, File.join(home, "sessions", "rollout-#{id}.jsonl"))
-check("rollout が link なら読まず、消さずに数える", S.codex_contexts(home, id, proj).nil? && S.remove_codex(home, id) == 1 && File.file?(target))
-home = fresh.call("h4")
-write.call(File.join(home, "sessions", "#{id}.txt"))
-check("rollout でない名前は消さずに数える", S.remove_codex(home, id) == 1)
-home = fresh.call("h5")
+h2 = fresh.call("h2")
+write.call(File.join(h2, "sessions", "rollout-#{id}.jsonl"), meta.call(proj))
+check("turn_context の無い rollout は空", S.codex_contexts(h2, id, proj) == [])
+check("id の形でなければ読まない", ["*", nil, "rollout", ""].all? { |x| S.codex_contexts(h2, x, proj).nil? })
+check("名前に session の id が無い rollout は読まない", S.codex_contexts(h2, other, proj).nil?)
+check("作業 dir が違う rollout は、自分の記録でない", S.codex_contexts(h2, id, root).nil? && S.remove_codex(h2, root, S.codex_entries(h2)) == 0 &&
+      File.file?(File.join(h2, "sessions", "rollout-#{id}.jsonl")))
+keep = write.call(File.join(day, "rollout-1-#{other}.jsonl"), meta.call(root))
+before = S.codex_entries(home) - [roll]
+check("ほかの run の rollout が在っても、自分の 1 つを読む", S.codex_contexts(home, id, proj).length == 2)
+mine2 = write.call(File.join(home, "sessions", "2026", "11", "24", "rollout-2-#{id}.jsonl"), meta.call(proj) + line.call(measured))
+check("自分の rollout が 2 つなら読まない", S.codex_contexts(home, id, proj).nil?)
+check("自分の rollout を全部消し、空になった日付の dir も消す", S.remove_codex(home, proj, before) == 0 && !File.exist?(roll) && !File.exist?(mine2) &&
+      File.file?(keep) && Dir.children(File.join(home, "sessions", "2026", "11")) == ["25"])
+alone = fresh.call("h1b")
+write.call(File.join(alone, "sessions", "2026", "11", "25", "rollout-1-#{id}.jsonl"), meta.call(proj))
+check("自分の rollout が最後なら、sessions の下を空にし、sessions は残す", S.remove_codex(alone, proj, []) == 0 && Dir.children(File.join(alone, "sessions")).empty?)
+# 自分の記録とみなさない rollout (先頭の行が session_meta でない・作業 dir が違う・名前や種類が違う) は、消さずに数える
+first_lines = {
+  "空" => "", "JSON でない" => "not json\n", "object でない" => "[1]\n", "UTF-8 でない" => "\xff\xfe\n", "種類が違う" => JSON.generate("type" => "event", "payload" => { "cwd" => proj }),
+  "payload が無い" => "{\"type\":\"session_meta\"}\n", "payload が文字列" => JSON.generate("type" => "session_meta", "payload" => proj),
+  "作業 dir が無い" => meta.call(nil), "作業 dir が違う" => meta.call(root), "作業 dir が相対" => meta.call("proj"), "2 行目に session_meta" => "{}\n" + meta.call(proj),
+}
+first_lines.each_with_index do |(label, text), i|
+  h = fresh.call("hx#{i}")
+  f = write.call(File.join(h, "sessions", "rollout-#{id}.jsonl"), text)
+  check("先頭の行が#{label}の rollout は消さずに数える", S.remove_codex(h, proj, []) == 1 && File.file?(f) && S.codex_contexts(h, id, proj).nil?)
+  check("run の前からあるものは数えない (#{label})", S.remove_codex(h, proj, S.codex_entries(h)) == 0)
+end
+["#{id}.jsonl", "rollout-#{id}.txt", "rollout-#{id}.jsonl.bak", "x-rollout-#{id}.jsonl"].each_with_index do |name, i|
+  h = fresh.call("hn#{i}")
+  f = write.call(File.join(h, "sessions", name), meta.call(proj))
+  check("rollout でない名前 (#{name}) は消さずに数える", S.remove_codex(h, proj, []) == 1 && File.file?(f))
+end
+h3 = fresh.call("h3")
+real = write.call(File.join(root, "h3-real.jsonl"), meta.call(proj))
+FileUtils.mkdir_p(File.join(h3, "sessions"))
+File.symlink(real, File.join(h3, "sessions", "rollout-#{id}.jsonl"))
+check("rollout が link なら読まず、link も先も消さずに数える", S.codex_contexts(h3, id, proj).nil? && S.remove_codex(h3, proj, []) == 1 && File.file?(real) &&
+      File.symlink?(File.join(h3, "sessions", "rollout-#{id}.jsonl")))
+h5 = fresh.call("h5")
 out = fresh.call("h5-outside")
-linked = write.call(File.join(out, "rollout-#{id}.jsonl"))
-File.symlink(out, File.join(home, "sessions"))
-check("sessions が link なら辿らない", S.remove_codex(home, id) == 0 && S.codex_contexts(home, id, proj).nil? && File.file?(linked))
-check("sessions が無ければ 0", S.remove_codex(fresh.call("h6"), id) == 0)
-check("id の形でなければ消さない", S.remove_codex(home, "rollout").nil?)
+linked = write.call(File.join(out, "rollout-#{id}.jsonl"), meta.call(proj))
+File.symlink(out, File.join(h5, "sessions"))
+check("sessions が link なら辿らない", S.remove_codex(h5, proj, []) == 0 && S.codex_contexts(h5, id, proj).nil? && File.file?(linked))
+check("sessions が無ければ 0", S.remove_codex(fresh.call("h6"), proj, []) == 0)
+# 読めない dir があれば、0 と数えずに nil
+shut = lambda do |dir, &blk|
+  File.chmod(0o000, dir)
+  blk.call
+ensure
+  File.chmod(0o700, dir)
+end
+h = fresh.call("h8")
+write.call(File.join(h, "sessions", "2026", "x"))
+check("sessions の下に読めない dir があれば nil", shut.call(File.join(h, "sessions", "2026")) { S.remove_codex(h, proj, []) }.nil? &&
+      shut.call(File.join(h, "sessions")) { S.remove_codex(h, proj, []) }.nil?)
+pr = fresh.call("c7")
+write.call(File.join(pr, "-a", "sub", "x"))
+check("projects の下に読めない dir があれば nil", shut.call(File.join(pr, "-a", "sub")) { S.remove_claude(pr, id) }.nil? && shut.call(pr) { S.remove_claude(pr, id) }.nil?)
+check("見ている間に消えた dir は、空とみなす", S.walk(File.join(root, "gone")) == [])
+check("walk は link の先を辿らない", begin
+  d = fresh.call("w1")
+  write.call(File.join(d, "a", "x"))
+  File.symlink(root, File.join(d, "l"))
+  S.walk(d).map { |f| f.delete_prefix("#{d}/") } == ["a", "a/x", "l"]
+end)
+check("隠し file も数える", begin
+  h = fresh.call("h7")
+  write.call(File.join(h, "sessions", "2026", ".lock"))
+  S.remove_codex(h, proj, []) == 1
+end)
 
 # 起動の argv
 plain = P.claude_argv({ max_turns: 12 }, "<p>")
@@ -241,8 +291,9 @@ fi
 eval "shown=\${FAKE_ID_$turn:-\$FAKE_THREAD} box=\${FAKE_SANDBOX_$turn:-\$sandbox} events=\${FAKE_EVENTS_$turn:-}"
 store="$CODEX_HOME/sessions/2026/11/25"
 mkdir -p "$store"
-[ "$box" = none ] || printf '{"type":"turn_context","payload":{"approval_policy":"never","cwd":"%s","sandbox_policy":%s}}\n' "$(pwd -P)" "$box" >> "$store/rollout-x-$FAKE_THREAD.jsonl"
-[ -f "$store/rollout-x-$FAKE_THREAD.jsonl" ] || : > "$store/rollout-x-$FAKE_THREAD.jsonl"
+roll="$store/rollout-x-$FAKE_THREAD.jsonl"
+[ -f "$roll" ] || printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$FAKE_THREAD" "$(pwd -P)" > "$roll"
+[ "$box" = none ] || printf '{"type":"turn_context","payload":{"approval_policy":"never","cwd":"%s","sandbox_policy":%s}}\n' "$(pwd -P)" "$box" >> "$roll"
 [ -z "${FAKE_LEFT:-}" ] || : > "$store/$FAKE_THREAD.lock"
 for v in $shown; do
   [ "$v" = none ] || printf '{"type":"thread.started","thread_id":"%s"}\n' "$v"
@@ -424,16 +475,42 @@ for shown in none aaaaaaaa-0000-4000-8000-000000000000; do
   unset FAKE_ID_1
   not_started "claude id $shown"
 done
-# codex の id が取れない・2 つある・形が違うときは、消す記録を決められないので、片付けは評価用の home に残る
+# codex の id が取れない・2 つある・形が違うときも、作業 dir で自分の記録を見つけて消す
 for shown in none not-an-id "$thread aaaaaaaa-0000-4000-8000-000000000000" '../../x'; do
   FAKE_ID_1=$shown; export FAKE_ID_1
   run_turns codex investigate-then-question
   unset FAKE_ID_1
-  [ "$(launches)" -eq 1 ] || fail "codex id $shown: only the first turn should run: $(cat "$log")"
-  expect "codex id $shown" '[r["completion"], r["before"][0]["completion"], d["ids"]["turn_context"]]' '["not-started","exited","unknown"]'
-  [ -f "$eval_home/sessions/2026/11/25/rollout-x-$thread.jsonl" ] || fail "codex id $shown: an unidentified record must not be deleted"
-  case "$out" in *'warning: session record(s) left in the home: unknown'*) : ;; *) fail "codex id $shown: the left record should be reported: $out" ;; esac
-  rm -f "$eval_home/sessions/2026/11/25/rollout-x-$thread.jsonl"
+  not_started "codex id $shown"
+  expect "codex id $shown" '[r["before"][0]["completion"], d["ids"]["turn_context"]]' '["exited","unknown"]'
+  case "$out" in *'warning: session record'*) fail "codex id $shown: no record should be left: $out" ;; esac
+done
+
+# --- 割り込み。1 turn 目か 2 turn 目の途中で止められても、自分の記録を消す (Codex は id がまだ分からない) ---
+for sig in INT TERM; do
+  for tool in claude-code codex; do
+    for turn in 1 2; do
+      : > "$log"
+      rm -rf "$res" "$res.raw"
+      set -- --tool "$tool" --cases "$work/investigate-then-question.json" --source "$source_dir" --model m-x --out "$res"
+      [ "$tool" = claude-code ] || set -- "$@" --codex-home "$eval_home"
+      if [ "$tool" = codex ]; then watch="$eval_home/sessions"; else watch="$claude_home/projects"; fi
+      env FAKE_LOG="$log" FAKE_THREAD="$thread" CODEX_HOME="$usual_home" CLAUDE_CONFIG_DIR="$claude_home" PATH="$fakebin:$PATH" \
+        WATCH="$watch" "FAKE_SLEEP_$turn=60" ruby -e '
+          sig, log, turn, *cmd = ARGV
+          pid = Process.spawn(*cmd, out: "/dev/null", err: "/dev/null")
+          limit = Time.now + 30
+          # 起動の数と、記録ができたことを見てから送る
+          sleep 0.1 until File.read(log).lines.grep(/claude memory=1 -p|codex exec --json|codex exec resume --json/).length >= turn.to_i &&
+                          !Dir.glob(File.join(ENV["WATCH"], "**", "*.jsonl")).reject { |f| f.include?("99999999") }.empty? || Time.now > limit
+          sleep 0.5
+          Process.kill(sig, pid)
+          Process.wait(pid)
+          exit($?.success? ? 1 : 0)
+        ' "$sig" "$log" "$turn" ruby "$src" "$@" > /dev/null 2>&1 || fail "$tool: $sig in turn $turn should stop the probe"
+      [ ! -e "$res" ] || fail "$tool: an interrupted probe must not write results"
+      clean "$tool $sig in turn $turn"
+    done
+  done
 done
 
 # --- 2 turn 目の終わり方 ---
@@ -498,6 +575,19 @@ find "$claude_home/projects" -name tool-results -exec rmdir {} +
 find "$claude_home/projects/-fake-proj" -mindepth 1 -type d -empty -exec rmdir {} +
 rm -f "$eval_home/sessions/2026/11/25/$thread.lock"
 clean "after the left records"
+
+# --- 数えられないとき (読めない dir) は unknown と出す ---
+for tool in claude-code codex; do
+  if [ "$tool" = codex ]; then shut="$eval_home/sessions/2026"; else shut="$claude_home/projects/-fake-proj"; fi
+  FAKE_HOOK_2="chmod 000 '$shut'"; export FAKE_HOOK_2
+  run_turns "$tool" investigate-then-question
+  unset FAKE_HOOK_2
+  chmod 700 "$shut"
+  [ "$rc" -eq 0 ] || fail "$tool: an unreadable record dir should not stop the probe (rc=$rc): $out"
+  case "$out" in *'warning: session record(s) left in the home: unknown (investigate-then-question [1/1])'*) : ;; *) fail "$tool: an unreadable record dir should be reported as unknown: $out" ;; esac
+done
+find "$claude_home/projects/-fake-proj" "$eval_home/sessions" -type f ! -name '*99999999*' -exec rm -f {} +
+clean "after the unreadable dirs"
 
 # --- 2 turn 目の前に評価用の home が変わったら止める。1 turn 目の記録は消す ---
 FAKE_HOOK_1="touch '$eval_home/AGENTS.md'"; export FAKE_HOOK_1
