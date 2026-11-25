@@ -70,8 +70,10 @@ reset_packet
 reset_herdr
 started = launch(0, {}, ["--branch", "feat/7-initial"])
 RUN = started.fetch("run_dir")
-# check only uses last_run and the preflight snapshot, not launch.json or done.txt.
+# check only uses last_run, the preflight snapshot and request.sha256, not launch.json or done.txt.
 File.unlink(File.join(RUN, "launch.json"))
+REQUEST_RECORD = File.join(RUN, "request.sha256")
+assert(File.binread(REQUEST_RECORD) == Digest::SHA256.hexdigest(REQUEST) + "\n", "launch records the request digest")
 git(MAIN, "remote", "set-url", "--push", "origin", "https://github.com/owner/project.git")
 
 $branch_number = 0
@@ -179,7 +181,25 @@ no_fetch
 File.write(PACKET, saved_packet.sub("last_run:", "run:").sub("state: review", "state: open").sub("---\n## 依頼", "tab: \"#7\"\n---\n## 依頼"))
 failure("launch-record", "check-record")
 no_fetch
+# 起動のときの依頼と今の依頼が同じと確かめられなければ、公開に進めない (#719)。
+[saved_packet.sub(REQUEST, REQUEST + "足した依頼\n"), saved_packet.sub(REQUEST, REQUEST + "\n"), saved_packet.sub(REQUEST, "書き直した依頼\n")].each do |text|
+  File.write(PACKET, text)
+  failure("launch-record", "request-changed")
+  no_fetch
+end
+[saved_packet.sub(REQUEST, " \n"), saved_packet.sub(REQUEST, REQUEST + "## 知らない節\n"), saved_packet.sub(REQUEST, REQUEST + "## 依頼\nもう 1 つ\n")].each do |text|
+  File.write(PACKET, text)
+  failure("launch-record", "check-record")
+  no_fetch
+end
 File.write(PACKET, saved_packet)
+digest = Digest::SHA256.hexdigest(REQUEST)
+[nil, "", "\n", digest, digest + "\n\n", digest + " \n", digest.upcase + "\n", digest[0, 63] + "\n", "x\n" + digest + "\n"].each do |text|
+  text ? File.write(REQUEST_RECORD, text) : File.unlink(REQUEST_RECORD)
+  failure("launch-record", "request-unrecorded")
+  no_fetch
+end
+File.write(REQUEST_RECORD, digest + "\n")
 
 ["", "\xff".b, " \n"].each do |text|
   invalid = File.join(ROOT, "invalid-body")

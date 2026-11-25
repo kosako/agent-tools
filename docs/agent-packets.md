@@ -320,18 +320,22 @@ stdin は UTF-8 の JSON object 1 つで、上限は 64 KiB (65,536 byte)。
 | --- | --- | --- | --- |
 | `branch` | `branch` | frontmatter に `branch` が無い | `branch` を追加。`updated` は保持 |
 | `run-start` | `run`、`tab`。省略可: `expected_run` | state が open か blocked。run が無いか state が blocked。expected_run があれば現在の run との一致が必須で、open の run も差し替え可 | run と tab を保存し、last_run を削除。blocked なら open にして updated を更新。それ以外の updated は保持 |
-| `result` | `run`、`entry`、`next` | state が open で run が一致 | 結果に今日の worker/codex entry を追記。次の入口を next に置換。run を last_run に移して tab を削除し、updated を更新 |
-| `stop` | `run`、`role`、`entry`、`next` | state が open で run または last_run が一致 | 結果に今日の role の entry を追記。次の入口を next に置換。state を blocked にして updated を更新。run、tab、last_run は保持 |
+| `result` | `run`、`entry`。省略可: `next` | state が open で run が一致 | 結果に今日の worker/codex entry を追記。next があれば次の入口を置換し、無ければ保持。run を last_run に移して tab を削除し、updated を更新 |
+| `stop` | `run`、`role`、`entry`。省略可: `next` | state が open で run または last_run が一致 | 結果に今日の role の entry を追記。next があれば次の入口を置換し、無ければ保持。state を blocked にして updated を更新。run、tab、last_run は保持 |
 | `round` | `request`、`next`。省略可: `review_entry` | state が open、review、blocked のいずれか | 依頼に request を追記し、次の入口を next に置換。review なら open にし、open と blocked は保持。updated を更新 |
 | `review` | `pr` | state が open で run が無い | pr を保存し、state を review にして updated を更新 |
 
 上の表の「前提」と「更新内容」は、`scripts/tests/exhaustive-decisions-test.sh` が、操作、state、run、last_run、tab、branch、pr、
-`expected_run` の全部の組で実装と照らします (#762)。壊れた packet (run・last_run・tab が空や文字列でない、制御文字を含む、run と last_run が絶対 path でない、両方がある) は、どの操作でも
+`expected_run`、`next` の有無の全部の組で実装と照らします (#762)。壊れた packet (run・last_run・tab が空や文字列でない、制御文字を含む、run と last_run が絶対 path でない、両方がある) は、どの操作でも
 `invalid_packet` で拒みます。表を変えるときは、この test の期待値も変えます。
 
 `run-start` の `expected_run` は、空の結果の再実行で使う前提です。
 不一致なら `precondition` (exit 1) で保存しません。省略時の条件は変わりません。
 空の結果かどうかは caller が検査します。
+
+`result` と `stop` の `next` は、起動の後に依頼が変わった結果を転記するときに省きます。
+回収した結果は起動のときの依頼の分だけを満たすので、足した依頼の次の入口を残すためです (#719)。
+`personal-codex-worker-run collect` が、依頼を比べて省きます ([codex-worker-run](codex-worker-run.md) の「依頼の照合」)。
 
 `round` の `review_entry` があれば、結果の末尾に当日の日付と `reviewer/claude` の entry を足します。
 本文の検査は `entry` と同じです。省略時は結果の節を保持します。

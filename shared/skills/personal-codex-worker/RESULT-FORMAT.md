@@ -21,6 +21,15 @@ Run dir: <path>
 Next step: 修正 round N で再起動するか (§1 の authorization) を決める
 ```
 
+起動の後に依頼が変わっていた場合 (`collect` の `request` が `same` でない):
+
+```text
+Status: DONE
+Packet: #<issue> — 結果 "### <日付> worker/codex" を注記つきで追記 / 次の入口は更新していない / state: open / 起動の記録は転記で last_run に移した
+Run dir: <path>
+Next step: 変わった依頼で再起動するか (§1 の authorization) を決める
+```
+
 RUNNING の場合 (実行中、待つ上限、または人手実行の完了待ち):
 
 ```text

@@ -8,7 +8,8 @@
 #   P1 回収した結果は、起動したときの依頼の分だけを満たす。          (Issue の受け入れ条件。人が承認)
 #   P2 起動の後に足した依頼の「次の入口」は、回収で上書きされない。  (同上)
 #   P3 依頼が変わっていても、結果と古い依頼は失われない。            (同上)
-#   P4 依頼が変わっていなければ、今までどおり結果で次の入口を更新し、check は通る。
+#   P4 依頼が変わっていなければ、今までどおり結果で次の入口を更新し、check は通る。  (人が順序で確認)
+# 起動のときの依頼の記録が無い run (古い版の起動) は、同じと確かめられないので、変わったときと同じに扱う。
 # 期待値は、当てた操作の履歴だけから作る (model)。実装の判定を呼び直さない。
 require "json"
 require "stringio"
@@ -24,7 +25,7 @@ load File.join(SOURCE, "shared/scripts/personal-packet.rb")
 load File.join(SOURCE, "shared/scripts/personal-codex-worker-run.rb")
 
 FULL_KEY = ARGV.include?("--full")
-MAX_LAUNCHES, MAX_CHANGES = (ARGV.find { |a| a.start_with?("--bounds=") } || "--bounds=3,2").split("=", 2).last.split(",").map { |n| Integer(n) }
+MAX_LAUNCHES, MAX_CHANGES = (ARGV.find { |a| a.start_with?("--bounds=") } || "--bounds=2,1").split("=", 2).last.split(",").map { |n| Integer(n) }
 
 ENV.keys.grep(/\A(?:GIT_|GH_|HERDR_|CODEX_)/).each { |k| ENV.delete(k) }
 ENV["HOME"] = File.join(ROOT, "home")
@@ -237,13 +238,25 @@ class Explorer
     m["request"] != run["request"]
   end
 
+  # 実装が返すはずの値。起動の記録に依頼が無ければ、比べられない
+  def status(m, run)
+    return "unrecorded" unless run["recorded"]
+
+    changed?(m, run) ? "changed" : "same"
+  end
+
   def events(m)
     list = []
     run = current(m)
     waiting = run && run["done"].nil? && m["state"] == "open"
     if m["runs"].size < MAX_LAUNCHES
       list << "launch" if (m["state"] == "open" && run.nil?) || m["state"] == "blocked"
-      list << "retry-empty" if m["state"] == "open" && run && run["done"] == "empty" && run["retry_of"].nil?
+      list += %w[retry-empty manual-retry] if m["state"] == "open" && run && run["done"] == "empty" && run["retry_of"].nil?
+    end
+    if waiting && run["manual"]
+      # 手で組んだ run は launch.json が無く、collect は使えない。caller が同じ契約で転記する
+      list << "manual-collect"
+      waiting = false
     end
     if waiting
       list += ["collect:normal", "collect:empty", *STOPS.map { |s| "collect:#{s}" }]
@@ -252,10 +265,11 @@ class Explorer
     list << "collect:again" if m["state"] == "open" && run && run["done"] == "late"
     if m["runs"].any? && m["changes"] < MAX_CHANGES
       list << "round" << "overwrite"
-      base = run || (m["last"] && m["runs"][m["last"]])
-      list << "restore" if base && changed?(m, base)
     end
-    list << "metadata" if m["runs"].any? && m["metadata"].zero?
+    base = run || (m["last"] && m["runs"][m["last"]])
+    list << "restore" if m["state"] == "open" && base && changed?(m, base) && m["restores"].zero?
+    list << "metadata" if waiting && m["metadata"].zero?
+    list << "forget" if waiting && run["recorded"] && m["forgets"].zero?
     list << "stop" if m["state"] == "open" && (run || m["last"]) && m["stops"].zero?
     list << "review" if m["state"] == "open" && run.nil? && m["last"]
     list
@@ -270,6 +284,8 @@ class Explorer
     case name
     when "launch", "retry-empty" then start(name, m)
     when "collect" then collect(kind, m)
+    when "manual-retry" then manual_retry(m)
+    when "manual-collect" then manual_collect(m)
     when "round"
       add_round(m)
     when "overwrite"
@@ -278,7 +294,7 @@ class Explorer
       replace_section("依頼", "\n#{mark}\n\n")
       m["request"] = [mark]
     when "restore"
-      m["changes"] += 1
+      m["restores"] += 1
       base = current(m) || m["runs"][m["last"]]
       replace_section("依頼", base["bytes"])
       m["request"] = base["request"]
@@ -286,6 +302,12 @@ class Explorer
       m["metadata"] = 1
       text = File.read(PACKET, encoding: "UTF-8")
       File.write(PACKET, text.sub(/^updated: .*$/, "updated: 2026-01-02T00:00:00+09:00\npublished: 2026-01-02T00:00:00+09:00"))
+    when "forget"
+      # 依頼を記録しない古い版で起動した run
+      m["forgets"] = 1
+      run = current(m)
+      run["recorded"] = false
+      File.unlink(File.join(run["dir"], "request.sha256"))
     when "stop"
       m["stops"] += 1
       target = current(m) || m["runs"][m["last"]]
@@ -319,15 +341,50 @@ class Explorer
     run = { "dir" => out.fetch("run_dir"), "nonce" => out.fetch("nonce"), "done" => nil,
             "retry_of" => name == "retry-empty" ? previous : nil }
     if name == "retry-empty"
-      # 同じ brief をもう一度使うので、依頼は前の run のもの
-      run["request"], run["bytes"] = m["runs"][previous].values_at("request", "bytes")
+      # 同じ brief をもう一度使うので、依頼 (と、その記録の有無) は前の run のもの
+      run["request"], run["bytes"], run["recorded"] = m["runs"][previous].values_at("request", "bytes", "recorded")
     else
-      run["request"], run["bytes"] = m["request"], section("依頼")
+      run["request"], run["bytes"], run["recorded"] = m["request"], section("依頼"), true
     end
     brief = File.read(File.join(run["dir"], "brief.md"), encoding: "UTF-8")
     violate("P1", "#{name}: worker に渡した依頼が、起動のときの依頼と違う") unless marks(brief, "req") == run["request"]
     m["runs"] << run
     m["run"], m["last"], m["state"] = m["runs"].size - 1, nil, "open"
+  end
+
+  # docs の「人手実行だけの空の結果の回復」。新しい run dir に前の run の brief と依頼の記録を写し、run-start で差し替える。
+  # 前の tab は、人が確かめて閉じる (手で組んだ run には tab-id が無い)。
+  def manual_retry(m)
+    previous = m["runs"][m["run"]]
+    dir = File.join(RUNS, "7.manual#{m['runs'].size}")
+    Dir.mkdir(dir, 0700)
+    %w[brief.md request.sha256 preflight.json].each do |name|
+      from = File.join(previous["dir"], name)
+      FileUtils.cp(from, File.join(dir, name)) if File.exist?(from)
+    end
+    packet_update("run-start", "run" => dir, "tab" => "#7", "expected_run" => previous["dir"])
+    World.tabs, World.panes = [], []
+    m["runs"] << { "dir" => dir, "nonce" => "e" * 16, "done" => nil, "retry_of" => m["run"], "manual" => true,
+                   "request" => previous["request"], "bytes" => previous["bytes"], "recorded" => previous["recorded"] }
+    m["run"] = m["runs"].size - 1
+  end
+
+  def manual_collect(m)
+    run = current(m)
+    number = m["run"] + 1
+    finish(run, "normal", number)
+    _code, out = invoke("collect")
+    raise "手で組んだ run を collect が受けた: #{out}" unless out["reason_code"] == "no-launch-record"
+
+    values = { "run" => run["dir"], "entry" => "[res-W#{number}]" }
+    if status(m, run) == "same"
+      values["next"] = "[next-W#{number}]"
+      m["next"] = [values["next"]]
+    end
+    packet_update("result", values)
+    run["done"] = "collected"
+    m["results"] << "[res-W#{number}]"
+    m["run"], m["last"] = nil, m["run"]
   end
 
   def finish(run, kind, number)
@@ -372,20 +429,19 @@ class Explorer
       return
     end
 
-    changed = changed?(m, run)
+    status = status(m, run)
     stopped = STOPS.include?(kind) || kind == "empty"
     raise "回収の結果が違う: #{kind} #{out}" unless stopped ? code == 1 && out["packet"]["state"] == "blocked" : out["status"] == "DONE"
 
     run["done"] = "collected"
     violate("P3", "collect:#{kind}: 結果が packet に無い") unless written
     m["results"] << mark if mark
-    unless BEHAVIOR_ONLY
-      violate("P1", "collect:#{kind}: 依頼が変わったことを返さない") if changed && out["request"] != "changed"
-      violate("P4", "collect:#{kind}: 依頼が同じなのに、同じと返さない") if !changed && out["request"] != "same"
-    end
+    violate(status == "same" ? "P4" : "P1", "collect:#{kind}: 依頼が #{status} と返さない") unless BEHAVIOR_ONLY || out["request"] == status
     got = section("次の入口")
-    if changed
-      violate("P2", "collect:#{kind}: 足した依頼の次の入口を上書きした") unless marks(got, "next") == m["next"]
+    if status != "same"
+      violate("P2", "collect:#{kind}: 足した依頼の次の入口を上書きした (#{status})") unless marks(got, "next") == m["next"]
+      # 次の入口に書かない停止の案内を、結果から失わない
+      violate("P3", "collect:#{kind}: 停止の案内が結果に無い") if kind == "empty" && !section("結果").include?("停止理由と退避した変更を確かめてから")
     else
       # 正しい形の結果は worker の次の手、書式や本文の無い停止は決まった文
       wanted = kind == "empty" ? [] : ["[next-W#{number}]"]
@@ -413,16 +469,16 @@ class Explorer
     before = File.binread(PACKET)
     _code, out = invoke("check", "--title", "題名", "--body-file", BODY)
     ready = out["status"] == "READY"
-    changed = changed?(m, m["runs"][m["last"]])
-    violate("P1", "check: 依頼が変わったのに READY になる") if ready && changed
-    violate("P4", "check: 依頼が同じなのに READY にならない (#{out['reason_code']})") if !ready && !changed
-    violate("P1", "check: 依頼が変わったことを理由に返さない (#{out['reason_code']})") if !BEHAVIOR_ONLY && !ready && changed && out["reason_code"] != "request-changed"
+    status = status(m, m["runs"][m["last"]])
+    violate("P1", "check: 依頼が #{status} なのに READY になる") if ready && status != "same"
+    violate("P4", "check: 依頼が同じなのに READY にならない (#{out['reason_code']})") if !ready && status == "same"
+    violate("P1", "check: 依頼が #{status} なことを理由に返さない (#{out['reason_code']})") if !BEHAVIOR_ONLY && !ready && status != "same" && out["reason_code"] != "request-#{status}"
     violate("P3", "check: packet を書いた") unless File.binread(PACKET) == before
   end
 end
 
 # ---- 状態の保存 --------------------------------------------------------------------------------
-KEPT = %w[launch.json preflight.json brief.md done.txt result.md codex.log tab-id pane-id].freeze
+KEPT = %w[launch.json request.sha256 preflight.json brief.md done.txt result.md codex.log tab-id pane-id].freeze
 
 def save(model)
   runs = Dir.children(RUNS).sort.map do |name|
@@ -454,7 +510,7 @@ def state_key(model)
   text = text.split(/^(?=## )/).map { |part| part =~ /\A## (?:結果|次の入口)\n/ ? part.lines.first : part }.join unless FULL_KEY
   parts = [text]
   model["runs"].each do |run|
-    files = FULL_KEY || run["done"] != "collected" ? KEPT : %w[launch.json brief.md]
+    files = FULL_KEY || run["done"] != "collected" ? KEPT : %w[launch.json request.sha256 brief.md]
     parts << files.map { |f| File.join(run["dir"], f) }.select { |f| File.exist?(f) }.map { |f| File.read(f, encoding: "UTF-8") }.join("\0")
   end
   ignored = FULL_KEY ? %w[history] : %w[history results next]
@@ -487,7 +543,7 @@ TEXT
 FileUtils.mkdir_p(RUNS, mode: 0700)
 World.tabs, World.panes = [], []
 start = { "request" => ["[req-R0]"], "next" => ["[next-R0]"], "results" => [], "runs" => [], "run" => nil, "last" => nil, "state" => "open",
-          "changes" => 0, "metadata" => 0, "stops" => 0, "history" => [] }
+          "changes" => 0, "restores" => 0, "metadata" => 0, "forgets" => 0, "stops" => 0, "history" => [] }
 
 began = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 seen = { state_key(start) => true }
@@ -537,5 +593,12 @@ end
 unless found.empty?
   (property, text), history = found.min_by { |_, h| h.size }
   abort "FAIL: worker-request-order: 性質の違反 #{found.size} 種類。例: #{property} #{text} (#{history.join(' → ')})"
+end
+# 並べる範囲が減って気付かない形にしない。操作の種類は全部が当たり、self-test の上限では、状態と操作の数を固定する。
+EVENTS = %w[launch retry-empty manual-retry manual-collect round overwrite restore metadata forget stop review collect:normal
+            collect:normal+round collect:again collect:empty].concat(Explorer::STOPS.map { |s| "collect:#{s}" }).freeze
+abort "FAIL: worker-request-order: 当たらない操作 #{(EVENTS - used.keys).inspect}、一覧に無い操作 #{(used.keys - EVENTS).inspect}" unless used.keys.sort == EVENTS.sort
+if [MAX_LAUNCHES, MAX_CHANGES] == [2, 1] && !FULL_KEY && !BEHAVIOR_ONLY && [seen.size, transitions] != [1613, 3369]
+  abort "FAIL: worker-request-order: 状態と操作の数が変わった (#{seen.size}、#{transitions})"
 end
 puts "ok: worker-request-order (状態 #{seen.size}、操作 #{transitions})"

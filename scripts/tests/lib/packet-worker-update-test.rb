@@ -259,6 +259,17 @@ assert(current.last_run == RUN, "review preserves last_run")
 reset(ORIGINAL.sub("state: open", "run: #{RUN.to_json}\ntab: \"#7\"\nstate: open"))
 update("round", "request" => "PRIVATE-REQUEST", "next" => "PRIVATE-NEXT")
 assert(current.run == RUN && current.tab == "#7", "round preserves active run")
+# next を省いた result と stop は、次の入口を保つ (#719)。空の next は、省いたことにしない。
+{ "result" => {}, "stop" => { "role" => "worker/codex" } }.each do |operation, extra|
+  reset(ORIGINAL.sub("state: open", "run: #{RUN.to_json}\ntab: \"#7\"\nstate: open"))
+  kept = Packet.sections(current.body)["次の入口"]
+  values = { "run" => RUN, "entry" => "PRIVATE-ENTRY" }.merge(extra)
+  [" ", "", nil].each { |value| update(operation, values.merge("next" => value), 2) }
+  update(operation, values)
+  assert(Packet.sections(current.body)["次の入口"] == kept, "#{operation} without next keeps the entry")
+  assert(Packet.sections(current.body)["結果"].include?("PRIVATE-ENTRY"), "#{operation} without next still appends the result")
+  assert(current.state == (operation == "stop" ? "blocked" : "open"), "#{operation} without next changes the state as usual")
+end
 reset
 result = update("review", "pr" => 123)
 assert(current.pr == 123 && current.state == "review" && result["updated_changed"], "review")

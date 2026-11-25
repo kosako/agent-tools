@@ -47,6 +47,7 @@ hook dispatcher と public-safety、git-identity、ai-trailer の各 gate も同
 
 停止時は `status`、`blocked_at`、`reason_code`、`reason`、`issue`、`phase`、`packet` を返します。
 run directory を作った後なら `run_dir` も返します。
+`collect` は、起動の記録を読めた後の返却 (完了、停止、RUNNING) に `request` を含みます (「依頼の照合」)。
 `records` で同じ Issue の記録が原因なら、既存の run を `run_dir` に返します。
 別の Issue の記録が原因なら、`other_issue` と `other_run_dir` にその番号と run を返します。
 この場合は `run_dir` を返しません。
@@ -94,6 +95,8 @@ packet の検査前に止まる場合は、state や記録の有無自体を確�
 | `check` | `BLOCKED` | `launch-record` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
 | `check` | `BLOCKED` | `launch-record` | `packet-check` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
 | `check` | `BLOCKED` | `launch-record` | `packet-list` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `check` | `BLOCKED` | `launch-record` | `request-changed` | 状態・run / last_run を保持。書込なし | 指揮役が、変わった依頼を読む | 許可された依頼なら launch、collect をやり直して check。起動のときの文面に戻せるなら、戻して check |
+| `check` | `BLOCKED` | `launch-record` | `request-unrecorded` | 状態・run / last_run を保持。書込なし | 人が last_run の由来を確認 | 古い版で起動した run なら、許可された依頼で launch、collect をやり直して check。記録を手で作らない |
 | `check` | `BLOCKED` | `preflight` | `gh-repo` | 状態・run / last_run を保持。書込なし | 人が GH_REPO を確認 | 人が env を直し、同じ subcommand |
 | `check` | `BLOCKED` | `preflight` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
 | `check` | `BLOCKED` | `public-safety` | `destination` | open または review / last_run を保持。書込なし | 人が診断と公開内容を確認。指揮役は push を止める | 「check の回復」の順で原因を直して check。題名と本文を変えたら personal-post-check から再実行 |
@@ -304,7 +307,7 @@ packet が前の run を指していなければ、`snapshot-untraceable` にな
 
 script は clone の削除や作り直しを行いません。
 
-`preflight.json`、`brief.md`、`run.zsh`、`tab-id`、`pane-id` を run directory に保存します。
+`preflight.json`、`brief.md`、`request.sha256`、`run.zsh`、`tab-id`、`pane-id` を run directory に保存します。
 `run.zsh` は preflight の argv を要素ごとに shell literal 化します。
 置き換える値は `<run dir>/result.md` だけです。flag の追加や削除はしません。
 実行時は `codex.log` に stdout と stderr を残します。
@@ -335,6 +338,23 @@ packet と preflight は実装を配備と同じ名前で配置し、herdr と c
 run script の実行、特殊文字を含む path、snapshot、起動記録、停止後の非実行を検証します。
 本物の herdr、codex、GitHub には接続しません。
 
+`scripts/tests/worker-request-order-test.sh` は、「依頼の照合」の性質を、操作の順序を並べて見ます (#719)。
+packet と起動の script を1つの process に読み込み、外部の command (git、herdr、preflight、gate、gh) だけを差し替えます。
+起動、依頼の変更、回収、再実行、破棄などの操作を、届く状態が尽きるまで1つずつ当てます。
+self-test の上限は、起動2回、依頼の変更1回です (状態の数と操作の数を固定しています)。
+この範囲を変えるときや、起動と回収の契約を変えるときは、手元で上限を広げて走らせます。
+
+```text
+t=$(mktemp -d)
+ruby scripts/tests/lib/worker-request-order-test.rb "$PWD" "$t" --report --bounds=2,2
+```
+
+- `--bounds=<起動>,<依頼の変更>` は上限です。2,2 と 3,1 は、それぞれ1〜2分かかります (2026-11-25、開発機)。
+- 同じ状態かを見るとき、後の判断に効かないと見なす値 (結果と次の入口の文面、回収し終えた run の成果物) を外します。
+  `--full` は外さずに見ます。2,1 の範囲で、直す前の違反の種類と、直した後に違反が無いことが、外した形と同じでした。
+- 操作は subcommand の単位です。1つの subcommand の途中に入る変更は、`collect` が待つ間の `round` だけを見ます。
+- 違反が出た先はたどりません。
+
 ## 起動の記録 (`launch.json`)
 
 brief と run script を生成する段で、起動記録を書く前に `launch.json` を保存します。
@@ -352,6 +372,27 @@ herdr から ID が返ったら、一時 file と rename で更新します。
 `tab_id`、`pane_id`、`pane_label` は未確定の間だけ null です。
 再実行では、`retry_of` に1回目の run directory を追加します。
 古い run に JSON が無ければ、回収は `no-launch-record` で止まります。
+
+## 依頼の照合 (`request.sha256`)
+
+回収した結果は、起動したときの依頼の分だけを満たします (#719)。
+`launch` は、brief に書いた依頼の節の SHA-256 (64桁の小文字の hex と改行) を、run directory の `request.sha256` に残します。
+`retry-empty` は前の run の brief を使うので、`request.sha256` も前の run のものを写します。前に無ければ作りません。
+`collect` と `check` は、この値を今の packet の依頼の節と比べます。packet のほかの変更は比べません。
+
+| `request` | 意味 | `collect` の次の入口 | `check` |
+| --- | --- | --- | --- |
+| `same` | 依頼が起動のときと同じ | 結果の次の手に置き換える | 先へ進む |
+| `changed` | 起動の後に依頼が変わった (`round` の追記、手の上書き、誤字の直し) | 保つ | `request-changed` で止まる |
+| `unrecorded` | 記録が無いか、形が違う (古い版で起動した run など) | 保つ | `request-unrecorded` で止まる |
+
+- 質問、limit、異常終了などの停止の記録も同じです。結果は、どの場合も結果の節に足します。
+- `same` でなければ、entry の先頭に注記を付けます。
+  最終 message を写せない停止では、次の入口に書くはずの案内を entry に書きます。
+- 足した依頼を満たすには、その依頼で `launch` して回収します。依頼を起動のときの文面に戻しても `same` になります。
+- `collect` は始めに読んだ packet の digest で書きます。待つ間に packet が変わると `packet-update` で止まるので、
+  packet を読み直して、もう一度 `collect` を呼びます。
+- 見ないものが1つあります。`check` が `READY` を返した後、push や PR の作成の前に依頼が変わることです。
 
 ## collect の入力と出力
 
@@ -373,13 +414,14 @@ process-info が失敗した場合や読めない場合は、worker の消滅と
 完了時は exit 0 で、次の形を返します。
 
 ```json
-{"status":"DONE","issue":7,"run_dir":"<run dir>","head_oid":"<HEAD OID>","commits_this_run":1,"redacted":false,"leftover":{"foreground":{"checked":true,"processes":[]},"clone_arguments":{"checked":true,"processes":[]}},"packet":{"written":true,"state":"open","record":"last_run"}}
+{"status":"DONE","issue":7,"run_dir":"<run dir>","head_oid":"<HEAD OID>","commits_this_run":1,"redacted":false,"leftover":{"foreground":{"checked":true,"processes":[]},"clone_arguments":{"checked":true,"processes":[]}},"request":"same","packet":{"written":true,"state":"open","record":"last_run"}}
 ```
 
 `head_oid` は snapshot 照合後の clone の HEAD です。
 `commits_this_run` は、clone 内の `start_head..HEAD` の commit 数です。
 start_head が無い場合や clone 内に該当 commit が無い場合は null とし、転記を続けます。
 collect は clone にも main にも fetch しません。
+`request` は、起動のときの依頼と今の依頼を比べた値です (「依頼の照合」)。`same` のときだけ、次の入口を置き換えています。
 `leftover` は pane の shell 以外の process と、clone の path を引数に持つ process の観測です。
 確認できない項目は `checked: false` だけを返します。観測結果は転記を妨げません。
 残った process は pid と名前を返します。名前を確認できなければ name は null です。
@@ -431,7 +473,7 @@ state と記録、回復の順は「停止後の state と回復 (正本)」に�
 snapshot の stderr は `snapshot-verify.txt` に保存します。
 最終 message が書式と gate を通れば worker/codex の entry を使います。
 通らなければ orchestrator/claude の固定文で、区分、exit、退避 file 名だけを記録します。
-stop は run と tab を残します。
+stop は run と tab を残します。次の入口は、`request` が `same` のときだけ置き換えます。
 
 ## retry-empty の入力と出力
 
@@ -442,7 +484,7 @@ personal-codex-worker-run retry-empty --repo <main worktree の root> --issue <N
 packet の run が1回目で、nonce が一致し、exit 0 で結果が欠落または0 byte の場合だけ起動します。
 対象外なら `launch-record` の `not-retryable` で止まり、packet を書きません。
 新しい run directory と nonce を作り、元の snapshot で clone を照合してから preflight をやり直します。
-brief は byte のまま写します。元の run directory は保持します。
+brief と `request.sha256` は byte のまま写します。元の run directory は保持します。
 
 `run-start` の `expected_run` に元の run を渡し、起動記録を新しい run に差し替えます。
 tab の存在と元の `tab-id` との一致、pane の名前は、起動記録の書き換え前に確認します。
@@ -470,7 +512,7 @@ pane が無い手渡しの1回目が、nonce 一致・exit 0・結果なしで�
 2. worker の書込先の外に新しい run directory を作ります。
    元の `preflight.json` で snapshot を照合してから preflight をやり直します。
    照合の失敗では clone に git を実行せず、元の記録を残して人に返します。
-3. 元の `brief.md` を byte のまま写します。新しい preflight の `launch_argv` から run script を作ります。
+3. 元の `brief.md` と `request.sha256` (在れば) を byte のまま写します。新しい preflight の `launch_argv` から run script を作ります。
    `<run dir>/result.md` だけを置き換え、flag を足し引きしません。
    path、nonce、argv は要素ごとに shell literal 化します。
    clone に cd し、stdout / stderr を codex.log に tee します。
@@ -480,11 +522,13 @@ pane が無い手渡しの1回目が、nonce 一致・exit 0・結果なしで�
 5. この手作りの run には `launch.json` がありません。`collect` は `no-launch-record` で止まります。
    caller が nonce、exit、結果の6見出し、snapshot、public-safety gate を確認します。
    本文の置換と転記は上の collect と同じ契約に従い、`worker-update` の `result` を使います。
+   依頼が、写した `request.sha256` と同じと確かめられなければ、`next` を省いて次の入口を保ちます。
+   比べる値は、packet の `## 依頼` の次の行から、次の `## ` の行の前までの byte 列の SHA-256 です。
    pane が無いため pane.log の保存は省きます。
 6. 2回目も空なら `executor-result` で停止します。終了失敗や limit も再実行しません。
    snapshot の照合後、staged と unstaged を別の binary patch、untracked を tar に退避します。
    patch は `--no-textconv --no-ext-diff`、tar の名前は NUL 区切りの list で渡します。
-   退避が通ったら `worker-update` の `stop` を使います。失敗なら記録を保持して人に返します。
+   退避が通ったら `worker-update` の `stop` を使います。`next` を省くかは、5と同じです。失敗なら記録を保持して人に返します。
 
 原文、前の run directory、clone を残します。caller が代わりに commit しません。
 
@@ -500,6 +544,7 @@ personal-codex-worker-run check --repo <main worktree の root> --issue <N> --ti
 ```
 
 対象は完了の転記後の `last_run` です。packet の state は `open` または `review` を受け付けます。
+今の依頼が、その run の起動のときと同じと確かめられなければ止まります (「依頼の照合」)。
 未回収の `run` がある、`last_run` が無い、state が対象外の場合は `launch-record` で止まります。
 題名は空でない1行、本文は UTF-8 の空でない regular file にします。
 本文の file は main と clone の外に置きます。symlink は受け付けません。
@@ -529,7 +574,7 @@ personal-codex-worker-run check --repo <main worktree の root> --issue <N> --ti
 | --- | --- | --- |
 | input | authorization | `input`: 引数、main root、本文の形式と置き場 |
 | environment | preflight | `gh-repo`: GH_REPO が空でない |
-| packet | launch-record | `packet-check` / `packet-list` / `check-record`: packet と回収済み run |
+| packet | launch-record | `packet-check` / `packet-list` / `check-record`: packet と回収済み run。`request-changed` / `request-unrecorded`: 起動のときの依頼との一致 |
 | snapshot | fetch | `snapshot-mismatch`: last_run の preflight.json との照合 |
 | fetch | fetch | `fetch`: clone から main への取り込み。non-fast-forward も拒否 |
 | trailer | trailer | `trailer`: origin/main の fetch、base と head、全 commit の trailer |

@@ -58,7 +58,7 @@ stdout を file に保存し、exit と JSON を両方読む。
 | exit / status | 次の手 |
 | --- | --- |
 | 0 / STARTED | 起動の受付。`collect` を呼ぶ |
-| 0 / DONE | 結果は転記済み。`leftover` を報告し、受け入れを判断する |
+| 0 / DONE | 結果は転記済み。`leftover` を報告し、受け入れを判断する。`request` が `same` でなければ、変わった依頼の分は満たしていない |
 | 0 / READY | 文体の指摘を読み、§9 で OID を指定して push する |
 | 1 / BLOCKED | `blocked_at`、`reason_code`、`phase` を読み、§3 の回復へ進む |
 | 2 / BLOCKED | 入力を直す。clone や起動記録が作られたと推測しない |
@@ -126,6 +126,7 @@ digest 不一致では書かない。読み直した状態と依頼を確認し�
 
 `round` は許可された修正内容を依頼に追記し、review なら state を `open` に戻す。
 blocked は保持し、次の `launch` の `run-start` で `open` に戻す。
+実行中の run がある間に足した依頼は、その run の回収では満たされない。次の入口は残るので、回収の後に `launch` し直す。
 `review` は PR 番号を記録して state を `review` にする。
 `stop` は `open` が前提。人が起動記録の破棄を決めた場合は §3 に従う。
 `review` で停止し、修正依頼がまだ無いときは、前提を満たすためだけの `round` を作らず判断を待つ。

@@ -767,11 +767,12 @@ module Packet
 
   WORKER_INPUT_KEYS = {
     "branch" => %w[branch], "run-start" => %w[run tab],
-    "result" => %w[run entry next], "stop" => %w[run role entry next],
+    "result" => %w[run entry], "stop" => %w[run role entry],
     "round" => %w[request next], "review" => %w[pr]
   }.freeze
   WORKER_COMMON_KEYS = %w[schema operation expected_sha256].freeze
-  WORKER_OPTIONAL_KEYS = { "run-start" => %w[expected_run], "round" => %w[review_entry] }.freeze
+  # result と stop は、next を省くと次の入口を保つ (起動の後に足した依頼の入口を、回収で上書きしない。#719)。
+  WORKER_OPTIONAL_KEYS = { "run-start" => %w[expected_run], "result" => %w[next], "stop" => %w[next], "round" => %w[review_entry] }.freeze
   WORKER_INPUT_LIMIT = 64 * 1024
 
   class WorkerUpdateError < StandardError
@@ -926,7 +927,7 @@ module Packet
       role = operation == "result" ? "worker/codex" : data.fetch("role")
       entry = "### #{at.strftime('%Y-%m-%d')} #{role}\n\n#{data.fetch('entry')}"
       bodies["結果"] = worker_append(secs.fetch("結果"), entry)
-      bodies["次の入口"] = "\n#{data.fetch('next')}\n\n"
+      bodies["次の入口"] = "\n#{data.fetch('next')}\n\n" if data.key?("next")
       if operation == "result"
         changes.merge!("last_run" => data.fetch("run").to_json, "run" => nil, "tab" => nil)
       else
