@@ -159,7 +159,7 @@ usage: check-skill-behavior.sh --cases <cases.json> --results <results.json> [--
 - exit code: 全 run が評価でき違反も未達も無ければ 0、違反か正例の未達は 1 (評価不能と同居しても 1)、評価不能の run・
   記録した条件の食い違い・比べられない baseline・入力や構造の誤りは 2。
 - self-test: `tests/check-skill-behavior-test.sh` (判定の表、入力の検査、条件の食い違い、baseline の比較、偽の CLI で回した
-  probe の出力の判定)
+  probe の出力の判定)、`tests/check-skill-behavior-turns-test.sh` (前の turn のある case の、turn の全部の組の判定と入力の検査。#769)
 
 - `expand-vendored-policy.sh`: production-rail が vendor する takt の policy の `{{include:<kind>/<name>}}` を
   展開する (#622)。takt の facet-includes と同じ規則で token を partial の本文に置き換え、入れ子も展開する。

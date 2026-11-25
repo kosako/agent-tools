@@ -20,8 +20,9 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 src="$repo_root/scripts/lib/probe_skill_behavior.rb"
 cases_lib="$repo_root/scripts/lib/skill_behavior_cases.rb"
 cases_json="$repo_root/scripts/lib/skill_behavior_cases.json"
+turn_cases_json="$repo_root/scripts/lib/skill_behavior_turn_cases.json"
 fixture="$repo_root/scripts/lib/skill_behavior_fixtures/median"
-for f in "$src" "$cases_lib" "$cases_json" "$fixture/lib/median.rb"; do
+for f in "$src" "$cases_lib" "$cases_json" "$turn_cases_json" "$fixture/lib/median.rb"; do
   [ -f "$f" ] || fail "missing $f"
 done
 
@@ -1507,7 +1508,7 @@ exit(@failed.zero? ? 0 : 1)
 RUBY
 
 # ---- Ruby unit checks: case set の検査 -------------------------------------------------------
-ruby -r"$script_dir/lib/check_helper" - "$cases_lib" "$cases_json" "$repo_root/scripts/lib/skill_behavior_fixtures" <<'RUBY'
+ruby -r"$script_dir/lib/check_helper" - "$cases_lib" "$cases_json" "$repo_root/scripts/lib/skill_behavior_fixtures" "$turn_cases_json" <<'RUBY'
 require "json"
 load ARGV[0]
 C = SkillBehaviorCases
@@ -1597,6 +1598,37 @@ check("fix_check.examples の args の重複",
 check("fix_check.examples は 64 個まで通る",
       C.parse(JSON.generate({ "schema_version" => 1, "cases" => fx.call("examples" => (1..64).map { |i| { "args" => [[i]], "returns" => i } }) })).length == 1)
 check("case の skill を含む place_skills は通る", C.parse(JSON.generate({ "schema_version" => 1, "cases" => [base.merge("place_skills" => %w[t s])] })).length == 1)
+# 前の turn (#769)
+ok_before = { "prompt" => "p", "forbid" => ["file-write"], "allowed_changes" => [] }
+with_before = ->(v) { [base.merge("before" => v)] }
+bf = ->(h) { with_before.call([ok_before.merge(h)]) }
+check("前の turn のある負例・曖昧・正例は通る",
+      C.parse(JSON.generate({ "schema_version" => 1, "cases" => [base, base.merge("id" => "c", "kind" => "ambiguous"), pos].map { |c| c.merge("before" => [ok_before]) } }),
+              fixtures_root: fixtures).length == 3)
+check("前の turn で変わってよい file は書ける", C.parse(JSON.generate({ "schema_version" => 1, "cases" => bf.call("allowed_changes" => ["lib/median.rb"]) })).length == 1)
+[nil, [], {}, "x", ok_before, [ok_before, ok_before], [1], [[]], [ok_before.reject { |k, _| k == "prompt" }], [ok_before.reject { |k, _| k == "forbid" }],
+ [ok_before.reject { |k, _| k == "allowed_changes" }], [ok_before.merge("reach" => ["lib/median.rb"])], [ok_before.merge("require" => [])]].each_with_index do |v, i|
+  check("before の形 #{i}", rejected(with_before.call(v), "before must be an array of 1"))
+end
+["", "  ", "-x", nil, 1, ["p"]].each { |v| check("before.prompt の形 #{v.inspect}", rejected(bf.call("prompt" => v), "before.prompt must be")) }
+[nil, "file-write", ["read"], ["unknown"], ["exec"], %w[file-write file-write], [1]].each do |v|
+  check("before.forbid の形 #{v.inspect}", rejected(bf.call("forbid" => v), "before.forbid must be"))
+end
+check("before.forbid の空", rejected(bf.call("forbid" => []), "before.forbid must not be empty"))
+[nil, "x", ["../x"], ["/x"], %w[a a], [1]].each do |v|
+  check("before.allowed_changes の形 #{v.inspect}", rejected(bf.call("allowed_changes" => v), "before.allowed_changes must be"))
+end
+turn_cases = C.parse(File.read(ARGV[3]), fixtures_root: fixtures)
+by_id = repo_cases.map { |c| [c["id"], c] }.to_h
+check("2 turn の表は 3 件で、種類が 1 つずつ", turn_cases.map { |c| [c["id"], c["kind"]] } ==
+      [%w[investigate-then-question negative], %w[investigate-then-symptom ambiguous], %w[investigate-then-fix positive]])
+check("前の turn は、どれも原因だけの case と同じ依頼と禁止で、何も変えてよくない",
+      turn_cases.all? { |c| c["before"] == [{ "prompt" => by_id["investigate-diagnose-only"]["prompt"], "forbid" => by_id["investigate-diagnose-only"]["forbid"], "allowed_changes" => [] }] })
+check("2 turn の正例の許す変更・求める区分・正しさの検査は、直す case と同じ",
+      %w[forbid require allowed_changes fix_check].all? { |k| turn_cases.last[k] == by_id["investigate-fix"][k] })
+check("2 turn の表の skill・fixture・到達は、今の表と同じ",
+      turn_cases.all? { |c| %w[skill fixture reach place_skills].all? { |k| c[k] == by_id["investigate-fix"][k] } })
+check("今の表に、前の turn のある case は無い", repo_cases.none? { |c| c.key?("before") })
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -1936,6 +1968,21 @@ set -e
 [ "$rc" -eq 2 ] || fail "a --variant outside the label pattern must exit 2 (rc=$rc): $out"
 case "$out" in *'--variant must match'*) : ;; *) fail "--variant should name the label pattern: $out" ;; esac
 [ ! -e "$tmp/never.json" ] || fail "a rejected --variant must not write results"
+
+# --- 前の turn のある case (#769) は、最後の依頼だけを流さないよう、どの CLI も起動せずに止める (--dry-run は表示だけ) ---
+turns_root="$tmp/turns"
+mkdir -p "$turns_root"
+cp -R "$repo_root/scripts/lib/skill_behavior_fixtures" "$turns_root/skill_behavior_fixtures"
+cp "$turn_cases_json" "$turns_root/cases.json"
+for tool in claude-code codex; do
+  set -- --cases "$turns_root/cases.json" --only investigate-then-question --model m-x --out "$tmp/never.json"
+  [ "$tool" = claude-code ] || set -- "$@" --codex-home "$eval_home"
+  run_fake "$tool" "$quiet_events" "$@"
+  [ "$rc" -eq 2 ] || fail "$tool: a case with before must not run yet (rc=$rc): $out"
+  case "$out" in *'cases with before are not supported'*) : ;; *) fail "$tool: the reason should name before: $out" ;; esac
+  [ ! -s "$log" ] || fail "$tool: no CLI should be launched for a case with before: $(cat "$log")"
+done
+[ ! -e "$tmp/never.json" ] || fail "a case with before must not write results"
 
 # --- claude: 起動の前の確認で欠けた flag があれば起動しない ---
 for flag in --permission-mode --tools; do
