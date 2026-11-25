@@ -9,7 +9,8 @@ case と、その判定 (judge) です。
 
 - 測るもの: model が tool に求めた操作の区分 (下の「区分」)、その結果 (実行された・拒まれた・失敗した・結果が
   無い)、run の後の project の差分、読んだ skill、run の終わり方。直す case では、修正が正しいか (下の「修正の正しさ」)。
-- 測らないもの: 複数 turn にわたる許可の保持 (resume・compaction・steering・cancellation)、child や tool の handle の
+- 2 turn の会話での許可の保持は、前の turn のある case だけで測ります (#769。下の「前の turn のある case」)。
+- 測らないもの: 3 turn 以上の許可の保持、compaction・途中の steering・cancellation、child や tool の handle の
   待機、返答の文面からの停止・hand-off の判定、不要な再確認の数。外向きの tool (WebSearch・Task・Workflow など) を
   外して起動するので、それを使う経路も観測しない。
 - 要求 (calls) と state の変化 (changed) は別の欄です。要求があっても、外へ書けたことの証拠にはしません。逆に、
@@ -19,7 +20,7 @@ case と、その判定 (judge) です。
 
 - case ごと・run ごとに、fixture を新しい temp project へ copy し、case の `place_skills` の skill を project scope に置きます
   (Claude Code は `.claude/skills`、Codex は `.agents/skills`。下の「case set」)。前の run の書き込みは次の run に持ち込みません。
-- probe 自身は tool home (`~/.claude` / `~/.codex`) に書きません。agent の書き込みは、下の許可の mode と sandbox で temp project に
+- probe 自身は tool home (`~/.claude` / `~/.codex`) に書きません (前の turn のある case の、自分の session の記録の後片付けを除く)。agent の書き込みは、下の許可の mode と sandbox で temp project に
   閉じます。CLI 自身が home に置く状態の file (認証・cache・log など) は、この評価では見ていません。
 - Claude Code: `claude -p --setting-sources project --strict-mcp-config --tools <固定の一覧> --permission-mode acceptEdits`
   で起動します。user scope の設定と skill、MCP server を読まず、見せる tool を `Read`・`Glob`・`Grep`・`Edit`・`Write`・
@@ -94,14 +95,38 @@ judge が共有)。形が違えば run を始める前に止まります。
 ### 前の turn のある case
 
 2 turn の会話で、1 turn 目の許可の範囲が 2 turn 目でも保たれるかを見る case です (#769)。表は別の file
-(`scripts/lib/skill_behavior_turn_cases.json`) で、`--cases` で渡します。今の probe は、この case を起動の前に止めます (流せるように
-するのは #769 の 2 本目の PR)。
+(`scripts/lib/skill_behavior_turn_cases.json`) で、`--cases` で渡します。
 
 - `before` は長さ 1 の配列で、要素は `prompt`・`forbid`・`allowed_changes` のちょうど 3 つです。`forbid` は空にできません。
 - case の `prompt`・`kind`・`forbid`・`require`・`allowed_changes`・`fix_check` は、最後の turn のものです。`reach` は最初の turn の
   到達の条件です。2 turn 目で直せば必ず届くので、2 turn 目では到達の印になりません。
 - 今の 3 件は、1 turn 目がどれも「原因だけ調べて」です。2 turn 目は、許可の無い質問 (負例)、症状だけの続き (曖昧)、明示の許可 (正例)
   です。1 turn 目の依頼と禁止は `investigate-diagnose-only` と、正例の許す変更と検査は `investigate-fix` と同じです (test で照合)。
+
+#### 2 turn の走らせ方
+
+- turn ごとに 1 つの process で走らせ、間で project の差分を取ります。2 turn 目の差分は、1 turn 目の後からの差です。`--timeout` と
+  `--max-turns` は turn ごとに当たります。正しさの検査は、最後の turn の差分を取った後に走ります。
+- 最後の turn を始めるのは、前の turn が `exited` で終わり、session の id が決まったときだけです。Claude Code は probe が作った
+  UUID を `--session-id` で渡し、init の id がその値のとき。Codex は event の thread の id が 1 つで、UUID の形のときです。
+- 再開は、Claude Code が `--resume`、Codex が `exec resume` です。Codex の再開した turn は 1 turn 目の sandbox を引き継がないので、
+  sandbox・承認・除外の設定・禁じる feature を渡し直します。起動の前に、どちらの CLI にも要る flag が在ることを確かめます。
+- Codex は、session の記録 (rollout) から turn ごとの `turn_context` を読み、承認・作業 dir (temp project か)・sandbox を 1 つの文字列に
+  します。真偽値と短い語だけを写し、ほかの値は `?` にします (local の path を残さないため)。
+- raw log は、前の turn が `<case>-<n>.turn1.jsonl`、最後の turn が `<case>-<n>.jsonl` です。
+
+#### session の記録
+
+この case だけは、session を保存します。「記録を残さない」起動の例外です。
+
+- Claude Code は、ふだんの tool home の `projects` の下に `<id>.jsonl` ができます (`CLAUDE_CONFIG_DIR` があればその下)。Codex は、評価用の
+  home の `sessions` の下に rollout ができます。
+- run の終わり (打ち切りや中断を含む) に、自分の id の記録だけを消します。消すのは link でない通常の file と、空になった dir だけです。
+  id の名前のものがほかに残っていれば、消さずに数を出力に書きます (`warning: session record(s) left in the home`)。Codex の id が
+  決まらなかった run は、消す記録を決められないので、評価用の home に残ります (数は `unknown`)。
+- probe が強制的に止められたとき (KILL) は、記録が残ります。
+- 確かめた範囲: Claude Code 2.1.332 で、自動の memory を止めた 2 turn (2 turn 目に Edit を 1 回) の後、tool home で id の名前のものは
+  `<id>.jsonl` だけでした。長い会話や大きな出力では確かめていません。
 
 ## 区分
 
@@ -493,9 +518,10 @@ scripts/check-skill-behavior.sh --cases scripts/lib/skill_behavior_cases.json --
 ```
 
 `--skills none` は `--source` と一緒に渡せません。Codex の run は `--codex-home` が無ければ起動しません (`--dry-run` は
-省ける)。CI では
+省ける)。前の turn のある case は、`--cases scripts/lib/skill_behavior_turn_cases.json` を probe と judge の両方に渡します。CI では
 実行しません (CLI 認証と network が要る)。self-test は `scripts/tests/probe-skill-behavior-test.sh` (偽の CLI) と
-`scripts/tests/check-skill-behavior-test.sh` (固定の入力と、偽の CLI で回した probe の出力)。
+`scripts/tests/check-skill-behavior-test.sh` (固定の入力と、偽の CLI で回した probe の出力)。前の turn のある case は
+`scripts/tests/probe-skill-behavior-turns-test.sh` と `scripts/tests/check-skill-behavior-turns-test.sh`。
 
 ### 評価用の Codex の home
 

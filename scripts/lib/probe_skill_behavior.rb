@@ -9,7 +9,9 @@
 # 合わせて results.json に残す。判定は judge (#369 の PR 2) が行う。
 #
 # 責務境界 (honest):
-#   - 測るのは、1 回の依頼から run の終わりまでに model が求めた操作。複数 turn の許可の保持は測らない。
+#   - 測るのは、1 回の依頼から run の終わりまでに model が求めた操作。前の turn のある case (#769) だけは、2 turn の会話を turn ごとに
+#     1 つの process で流し、turn ごとに呼び出しと差分を残す。この case だけ、session の記録が home にできる (自分の id の記録だけを
+#     消す。skill_behavior_session.rb)。
 #   - 書き込みは run ごとの temp project の中に閉じる。claude-code は --permission-mode acceptEdits (作業 directory の
 #     中の編集だけを自動で許可し、Bash などは -p の既定のまま拒否される)、codex は -s workspace-write (network なし)。
 #     probe 自身は tool home (~/.claude / ~/.codex) に書かない。claude-code の子 process には自動の memory を止める環境を渡す
@@ -35,6 +37,7 @@ require "digest"
 require "fileutils"
 require "json"
 require "ripper"
+require "securerandom"
 require "shellwords"
 require "tmpdir"
 require "time"
@@ -44,6 +47,7 @@ require_relative "probe_skill_routing"
 require_relative "skill_behavior_cases"
 require_relative "skill_behavior_classifier"
 require_relative "skill_behavior_fix_check"
+require_relative "skill_behavior_session"
 
 # C locale でも、読む text (file・command の出力) を UTF-8 として扱う (#432)。
 Encoding.default_external = Encoding::UTF_8 unless Encoding.default_external == Encoding::UTF_8
@@ -55,6 +59,7 @@ module ProbeSkillBehavior
   C = SkillBehaviorCases
   K = SkillBehaviorClassifier
   FX = SkillBehaviorFixCheck
+  SS = SkillBehaviorSession
   TOOLS = %w[claude-code codex].freeze
   RESULTS_SCHEMA_VERSION = 1
   COMPLETIONS = %w[exited max-turns timeout failed].freeze
@@ -67,6 +72,11 @@ module ProbeSkillBehavior
   CLAUDE_PERMISSION_MODE = "acceptEdits"
   # 起動の前に `claude --help` で在否を確かめる flag (無ければ起動しない)。
   CLAUDE_HELP_MARKERS = %w[--permission-mode --tools].freeze
+  # 前の turn のある case (#769) を含むときに、加えて確かめる flag。
+  CLAUDE_TURN_HELP_MARKERS = %w[--session-id --resume].freeze
+  # 始めなかった最後の turn の記録 (#769)。
+  NOT_STARTED_TURN = { "completion" => "not-started", "calls" => [], "reached" => false, "changed" => [], "skills_read" => [],
+                       "skills_unresolved" => false }.freeze
   CODEX_SANDBOX = "workspace-write"
   # workspace-write の sandbox が書ける所を temp project (-C の dir) の中だけにする (#733)。既定では /tmp と $TMPDIR にも
   # 書け、その書き込みは temp project の差分に現れない。起動の argv と ids.tool_surface の両方をここから作る。
@@ -241,13 +251,14 @@ module ProbeSkillBehavior
   # - 結果: type=user の message.content[] の tool_result (tool_use_id・is_error)。result の permission_denials に
   #   tool_use_id があれば denied (許可の要る呼び出しが拒まれた)。どちらも無ければ unknown。
   # - init: type=system subtype=init の model・claude_code_version・tools・permissionMode。memory_states は、init ごとの
-  #   自動の memory の状態 (memory_paths から。#770)。
+  #   自動の memory の状態 (memory_paths から。#770)。session_ids は、init の session_id の並び (#769)。
   def self.parse_claude(jsonl, names, fixture = K::NO_FIXTURE)
     calls = []
     results = {}
     denied = []
     init = {}
     memory_states = []
+    session_ids = []
     result_seen = false
     subtype = nil
     json_lines(jsonl).each do |e|
@@ -255,6 +266,7 @@ module ProbeSkillBehavior
       when "system"
         if e["subtype"] == "init"
           memory_states << AutoMemory.state(e)
+          session_ids << e["session_id"]
           init = { model: e["model"], version: e["claude_code_version"], tools: e["tools"], mode: e["permissionMode"] }
         end
       when "assistant"
@@ -298,7 +310,7 @@ module ProbeSkillBehavior
         strings: strings_in(c[:input]) }
     end
     { calls: out, skills_read: skills.uniq, skills_unresolved: unresolved, init: init, memory_states: memory_states,
-      result_seen: result_seen, subtype: subtype }
+      session_ids: session_ids.uniq, result_seen: result_seen, subtype: subtype }
   end
 
   # codex exec --json の event (0.153.4 で実測した形)。呼び出しは item.started / item.completed の item で、id で束ねる。
@@ -311,6 +323,7 @@ module ProbeSkillBehavior
   def self.parse_codex(jsonl, names, fixture = K::NO_FIXTURE)
     items = {}
     order = []
+    session_ids = []
     turn_completed = false
     json_lines(jsonl).each do |e|
       case e["type"]
@@ -322,6 +335,8 @@ module ProbeSkillBehavior
         order << id unless items.key?(id)
         prev = items[id] || {}
         items[id] = prev.merge(item).merge("_completed" => prev["_completed"] || e["type"] == "item.completed")
+      when "thread.started"
+        session_ids << e["thread_id"]
       when "turn.completed"
         turn_completed = true
       end
@@ -338,7 +353,8 @@ module ProbeSkillBehavior
       end
       { id: id, tool: item["type"], class: codex_class(item, fixture), outcome: codex_outcome(item), strings: strings }
     end
-    { calls: calls, skills_read: skills.uniq, skills_unresolved: unresolved, turn_completed: turn_completed }
+    { calls: calls, skills_read: skills.uniq, skills_unresolved: unresolved, session_ids: session_ids.uniq,
+      turn_completed: turn_completed }
   end
 
   def self.codex_strings(item)
@@ -502,41 +518,62 @@ module ProbeSkillBehavior
 
   # --- adapter ---------------------------------------------------------------------------
 
-  def self.claude_argv(opts, prompt)
+  # session は、前の turn のある case の turn (#769)。{ id:, resume: } で、無ければ記録を残さない 1 回の run。
+  def self.claude_argv(opts, prompt, session = nil)
     # --tools は値を複数とる option なので、後ろに値を 1 つとる option を置いて、prompt を取り込ませない。
     argv = ["claude", "-p", "--setting-sources", "project", "--strict-mcp-config",
             "--tools", CLAUDE_TOOLS.join(","), "--permission-mode", CLAUDE_PERMISSION_MODE,
             "--output-format", "stream-json", "--verbose",
-            "--max-turns", opts[:max_turns].to_s, "--no-session-persistence"]
+            "--max-turns", opts[:max_turns].to_s]
+    argv += session ? [session[:resume] ? "--resume" : "--session-id", session[:id]] : ["--no-session-persistence"]
     argv += ["--model", opts[:model]] if opts[:model]
     argv + [prompt]
   end
 
   # 評価用の home には user の skill が無いので、user の skill を外す skills.config は渡さない (#731)。
-  def self.codex_argv(opts, proj)
-    argv = ["codex", "exec", "--json", "--ephemeral", "--skip-git-repo-check",
-            "--ignore-user-config", "--ignore-rules", "-s", CODEX_SANDBOX, "-c", 'approval_policy="never"']
+  # 再開した turn (#769) は 1 turn 目の sandbox を引き継がないので、sandbox・承認・除外の設定を渡し直す (exec resume には -s と -C が
+  # 無い。作業 dir は起動した dir になる)。
+  def self.codex_argv(opts, proj, session = nil)
+    argv = if session && session[:resume]
+             ["codex", "exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules",
+              "-c", "sandbox_mode=\"#{CODEX_SANDBOX}\"", "-c", 'approval_policy="never"']
+           else
+             ["codex", "exec", "--json", *(session ? [] : ["--ephemeral"]), "--skip-git-repo-check",
+              "--ignore-user-config", "--ignore-rules", "-s", CODEX_SANDBOX, "-c", 'approval_policy="never"']
+           end
     R::CODEX_DISABLE_FEATURES.each { |f| argv.push("--disable", f) }
     CODEX_SANDBOX_CONFIG.each { |k, v| argv.push("-c", "#{k}=#{v}") }
-    argv.push("-C", proj, "-m", R.codex_model(opts))
+    argv.push("-C", proj) unless session && session[:resume]
+    argv.push("-m", R.codex_model(opts))
+    argv.push(session[:id]) if session && session[:resume]
     argv + ["-"]
   end
 
-  def self.claude_preflight!
+  def self.claude_preflight!(turns)
     help = R.capture_ok(%w[claude --help], env: AutoMemory::ENV_OFF)
     raise Error, "claude-code: `claude --help` failed" unless help
 
-    missing = CLAUDE_HELP_MARKERS.reject { |m| help.include?(m) }
+    missing = (CLAUDE_HELP_MARKERS + (turns ? CLAUDE_TURN_HELP_MARKERS : [])).reject { |m| help.include?(m) }
     raise Error, "claude-code: lacks flag(s): #{missing.join(', ')}" unless missing.empty?
   end
 
-  # 戻り値は host の版 (codex --version の 1 行目)。
-  def self.preflight!(tool, env)
+  # 前の turn のある case (#769) で使う exec resume にも、境界の flag が在ることを確かめる。
+  def self.codex_turn_preflight!(env)
+    help = R.capture_ok(%w[codex exec resume --help], env: env)
+    raise Error, "codex: `codex exec resume --help` failed" unless help
+
+    missing = R::CODEX_HELP_MARKERS.reject { |m| help.include?(m) }
+    raise Error, "codex: exec resume lacks boundary flag(s): #{missing.join(', ')}" unless missing.empty?
+  end
+
+  # 戻り値は host の版 (codex --version の 1 行目)。turns は、前の turn のある case を含むか。
+  def self.preflight!(tool, env, turns: false)
     if tool == "claude-code"
-      claude_preflight!
+      claude_preflight!(turns)
       nil
     else
       R.codex_preflight!(env: env)
+      codex_turn_preflight!(env) if turns
       (R.capture_ok(%w[codex --version], env: env) || "").lines.first.to_s.strip
     end
   end
@@ -556,17 +593,77 @@ module ProbeSkillBehavior
   end
 
   # fixture は case の fixture の情報 (fixture_info)。分類器が inline の Ruby の中で許す関数と -r の名前に使う (#737・#742)。
-  def self.run_one(opts, proj, names, prompt, fixture = K::NO_FIXTURE)
+  def self.run_one(opts, proj, names, prompt, fixture = K::NO_FIXTURE, session = nil)
     if opts[:tool] == "claude-code"
-      argv = claude_argv(opts, prompt)
+      argv = claude_argv(opts, prompt, session)
       r = R.run_command(argv, chdir: proj, stdin: nil, timeout: opts[:timeout], env: AutoMemory::ENV_OFF)
       parsed = parse_claude(r.out, names, fixture)
     else
-      argv = codex_argv(opts, proj)
+      argv = codex_argv(opts, proj, session)
       r = R.run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout], env: codex_env(opts))
       parsed = parse_codex(r.out, names, fixture)
     end
     parsed.merge(stdout: r.out, stderr: r.err, completion: completion(opts[:tool], r, parsed))
+  end
+
+  # 1 つの turn を走らせ、その turn の前後の差分を足す。
+  def self.run_turn(opts, proj, names, prompt, fixture, session = nil)
+    before = snapshot(proj)
+    recheck_codex_home!(opts) if opts[:tool] == "codex"
+    r = run_one(opts, proj, names, prompt, fixture, session)
+    r.merge(changed: changed_paths(before, snapshot(proj)))
+  end
+
+  # 前の turn のある case の run (#769) の結果。turns は走らせた turn (始めなかった turn は無い)。resumed は、最後の turn が同じ session を
+  # 再開したか (始めなかったら nil)。contexts は Codex の turn ごとの実際の設定。left は、消し残した session の記録の数。
+  Turns = Struct.new(:turns, :resumed, :contexts, :left, keyword_init: true)
+
+  # 最後の turn は、前の turn が exited で終わり、session の id が 1 つだけ取れたときに始める。session の記録は、終わり方によらず、
+  # 自分の id の分だけを消す。
+  def self.run_turns(opts, proj, names, c, fixture)
+    claude = opts[:tool] == "claude-code"
+    id = claude ? SecureRandom.uuid : nil
+    out = Turns.new(turns: [], contexts: [])
+    seen = 0
+    prompts = c["before"].map { |b| b["prompt"] } + [c["prompt"]]
+    prompts.each_with_index do |prompt, i|
+      r = run_turn(opts, proj, names, prompt, fixture, { id: id, resume: i.positive? })
+      out.turns << r
+      ids = r[:session_ids]
+      id = ids.first if i.zero? && !claude && ids.length == 1
+      out.resumed = resumed_state(ids, id) if i.positive?
+      unless claude
+        all = id ? SS.codex_contexts(opts[:codex_home], id, proj) : nil
+        fresh = (all || []).drop(seen)
+        out.contexts.concat(fresh.empty? ? ["unknown"] : fresh)
+        seen = all.length if all
+      end
+      break unless r[:completion] == "exited" && SS.id?(id) && ids == [id]
+    end
+    out
+  ensure
+    if out && id
+      out.left = claude ? SS.remove_claude(SS.claude_projects, id) : SS.remove_codex(opts[:codex_home], id)
+    end
+  end
+
+  # 再開した turn の session の id が、前の turn と同じか (id が取れなければ unknown)。
+  def self.resumed_state(ids, id)
+    return "unknown" if ids.compact.empty?
+
+    ids == [id] ? "same" : "differs"
+  end
+
+  # results.json の 1 つの turn の記録。
+  def self.turn_record(r, c)
+    { "completion" => r[:completion],
+      "calls" => r[:calls].map { |call| { "id" => call[:id], "tool" => call[:tool], "class" => call[:class], "outcome" => call[:outcome] } },
+      "reached" => r[:calls].any? { |call| call[:strings].any? { |s| c["reach"].any? { |p| s.include?(p) } } },
+      "changed" => r[:changed], "skills_read" => r[:skills_read], "skills_unresolved" => r[:skills_unresolved] }
+  end
+
+  def self.turn_label(t)
+    "#{t['completion']} reached=#{t['reached']} calls=[#{class_counts(t['calls'])}] changed=#{t['changed'].length} skills=#{t['skills_read'].inspect}"
   end
 
   # 複数の run の値を 1 つにまとめる (無ければ unknown、食い違えば mixed: の後に並べる)。
@@ -578,12 +675,12 @@ module ProbeSkillBehavior
   end
 
   def self.class_counts(calls)
-    calls.group_by { |c| c[:class] }.sort.map { |k, v| "#{k}:#{v.length}" }.join(",")
+    calls.group_by { |c| c["class"] }.sort.map { |k, v| "#{k}:#{v.length}" }.join(",")
   end
 
   def self.runner_version
     files = %w[probe_skill_behavior.rb skill_behavior_cases.rb skill_behavior_classifier.rb skill_behavior_fix_check.rb
-               probe_skill_routing.rb probe_child.rb auto_memory.rb]
+               probe_skill_routing.rb probe_child.rb auto_memory.rb skill_behavior_session.rb]
     file_digest(files.map { |f| File.join(__dir__, f) })
   end
 
@@ -659,8 +756,11 @@ module ProbeSkillBehavior
         first = placed.fetch(cases.first["id"])
         proj = prepare_run(base, opts[:tool], File.join(fixtures_root, cases.first["fixture"]), first)
         puts "isolated project (per run): #{proj} (#{first.length} skills, fixture #{cases.first['fixture']})"
-        sample = opts[:tool] == "claude-code" ? claude_argv(opts, "<prompt>") : codex_argv(opts, proj)
-        puts "argv: #{sample.map(&:inspect).join(' ')}#{opts[:tool] == 'codex' ? ' (prompt on stdin)' : ''}"
+        sessions = cases.any? { |c| c["before"] } ? [{ id: "<session>", resume: false }, { id: "<session>", resume: true }] : [nil]
+        sessions.each do |s|
+          sample = opts[:tool] == "claude-code" ? claude_argv(opts, "<prompt>", s) : codex_argv(opts, proj, s)
+          puts "argv#{s ? (s[:resume] ? ' (turn 2)' : ' (turn 1)') : ''}: #{sample.map(&:inspect).join(' ')}#{opts[:tool] == 'codex' ? ' (prompt on stdin)' : ''}"
+        end
         if opts[:tool] == "codex"
           puts "codex home: #{opts[:codex_home] ? "#{opts[:codex_home]} (CODEX_HOME for the child)" : 'not set (required for runs)'}"
         end
@@ -670,11 +770,10 @@ module ProbeSkillBehavior
       return 0
     end
 
-    # 前の turn のある case (#769) は、まだ走らせられない。最後の依頼だけを流すと別のものを測るので、起動の前に止める。
-    raise Error, "cases with before are not supported by this probe" if cases.any? { |c| c["before"] }
+    with_turns = cases.any? { |c| c["before"] }
 
     fix_preflight!(cases, opts[:tool], fixtures_root)
-    host_version = preflight!(opts[:tool], codex_env(opts))
+    host_version = preflight!(opts[:tool], codex_env(opts), turns: with_turns)
     raw_dir = "#{opts[:out]}.raw"
     raise Error, "raw log directory is a symlink: #{raw_dir}" if File.symlink?(raw_dir)
 
@@ -683,42 +782,47 @@ module ProbeSkillBehavior
     runs = []
     inits = []
     memory_states = []
+    resumed = []
+    contexts = []
     cases.each do |c|
       fixture_dir = File.join(fixtures_root, c["fixture"])
       opts[:repeat].times do |n|
         jsonl_path = R.raw_log_path(raw_dir, c["id"], n + 1, "jsonl")
         stderr_path = R.raw_log_path(raw_dir, c["id"], n + 1, "stderr")
-        r = nil
-        changed = nil
+        done = nil
         fix = nil
+        last = nil
         # run ごとに新しい temp project (前の run の書き込みを次の run に持ち込まない)
         Dir.mktmpdir("skill-behavior-") do |base|
           proj = prepare_run(base, opts[:tool], fixture_dir, placed.fetch(c["id"]))
-          before = snapshot(proj)
-          recheck_codex_home!(opts) if opts[:tool] == "codex"
-          r = run_one(opts, proj, names, c["prompt"], infos.fetch(c["fixture"]))
-          changed = changed_paths(before, snapshot(proj))
+          info = infos.fetch(c["fixture"])
+          done = c["before"] ? run_turns(opts, proj, names, c, info) : Turns.new(turns: [run_turn(opts, proj, names, c["prompt"], info)])
+          # 最後の turn の結果 (始めなかったら nil)
+          last = done.turns[c["before"] ? c["before"].length : 0]
           # 差分を取った後に、run の後の code を隔離の中で走らせる (書き込みは拒むので、差分は変わらない)。
-          fix = FX.run(proj, c["fix_check"]) if c["fix_check"]
+          fix = FX.run(proj, c["fix_check"]) if c["fix_check"] && last
         end
-        write_no_follow(jsonl_path, r[:stdout], dir: raw_dir, dir_real: raw_real)
-        write_no_follow(stderr_path, r[:stderr], dir: raw_dir, dir_real: raw_real) unless r[:stderr].to_s.empty?
+        done.turns.each_with_index do |r, i|
+          # 前の turn の raw log は、番号の付いた別の名前にする。
+          jsonl, stderr = r.equal?(last) ? [jsonl_path, stderr_path] : %w[jsonl stderr].map { |x| R.raw_log_path(raw_dir, c["id"], n + 1, "turn#{i + 1}.#{x}") }
+          write_no_follow(jsonl, r[:stdout], dir: raw_dir, dir_real: raw_real)
+          write_no_follow(stderr, r[:stderr], dir: raw_dir, dir_real: raw_real) unless r[:stderr].to_s.empty?
+          inits << r[:init] if r[:init]
+          memory_states << r[:memory_states] if r[:memory_states]
+        end
         write_no_follow(R.raw_log_path(raw_dir, c["id"], n + 1, "fix-check"), fix.raw, dir: raw_dir, dir_real: raw_real) if fix
-        inits << r[:init] if r[:init]
-        memory_states << r[:memory_states] if r[:memory_states]
-        reached = r[:calls].any? { |call| call[:strings].any? { |s| c["reach"].any? { |p| s.include?(p) } } }
-        run = {
-          "case" => c["id"], "index" => n + 1, "completion" => r[:completion],
-          "calls" => r[:calls].map { |call| { "id" => call[:id], "tool" => call[:tool], "class" => call[:class],
-                                              "outcome" => call[:outcome] } },
-          "reached" => reached, "changed" => changed, "skills_read" => r[:skills_read],
-          "skills_unresolved" => r[:skills_unresolved],
-        }
+        records = done.turns.map { |r| turn_record(r, c) }
+        run = { "case" => c["id"], "index" => n + 1 }.merge(last ? records.last : NOT_STARTED_TURN)
+        run["before"] = records.first(c["before"].length) if c["before"]
         run["fix_check"] = fix.to_h_for_results if fix
         runs << run
-        puts "#{c['id']} [#{n + 1}/#{opts[:repeat]}]: #{r[:completion]} reached=#{reached} " \
-             "calls=[#{class_counts(r[:calls])}] changed=#{changed.length} skills=#{r[:skills_read].inspect}" \
-             "#{fix ? " fix=#{fix.label}" : ''}"
+        resumed << done.resumed
+        contexts.concat(done.contexts || [])
+        puts "#{c['id']} [#{n + 1}/#{opts[:repeat]}]: #{(run['before'] || []).map { |t| "turn 1 #{turn_label(t)}; turn 2 " }.join}" \
+             "#{turn_label(run)}#{fix ? " fix=#{fix.label}" : ''}"
+        next unless c["before"] && done.left != 0
+
+        puts "warning: session record(s) left in the home: #{done.left.nil? ? 'unknown' : done.left} (#{c['id']} [#{n + 1}/#{opts[:repeat]}])"
       end
     end
 
@@ -747,6 +851,11 @@ module ProbeSkillBehavior
     }
     # 自動の memory を止めたこと (#770。claude-code だけ)。
     ids["auto_memory"] = AutoMemory.record(memory_states) if claude
+    # 前の turn のある case (#769) の条件。再開した session が同じか、Codex の実際の設定。
+    if with_turns
+      ids["resume_session"] = merged(resumed)
+      ids["turn_context"] = merged(contexts) unless claude
+    end
     # 検査に使った Ruby の版 (検査のある case を含む run だけ)。
     ids["fix_check_ruby"] = RUBY_VERSION if cases.any? { |c| c["fix_check"] }
     results = {

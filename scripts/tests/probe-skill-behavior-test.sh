@@ -1845,7 +1845,8 @@ runner_version() {
 }
 before_version=$(runner_version)
 [ "$(runner_version)" = "$before_version" ] || fail "the runner version should be stable"
-for f in probe_skill_behavior skill_behavior_cases skill_behavior_classifier skill_behavior_fix_check probe_skill_routing probe_child auto_memory; do
+for f in probe_skill_behavior skill_behavior_cases skill_behavior_classifier skill_behavior_fix_check probe_skill_routing probe_child auto_memory \
+  skill_behavior_session; do
   cp "$lib_copy/$f.rb" "$tmp/kept.rb"
   printf '# x\n' >> "$lib_copy/$f.rb"
   [ "$(runner_version)" != "$before_version" ] || fail "the runner version should change with $f.rb"
@@ -1968,21 +1969,6 @@ set -e
 [ "$rc" -eq 2 ] || fail "a --variant outside the label pattern must exit 2 (rc=$rc): $out"
 case "$out" in *'--variant must match'*) : ;; *) fail "--variant should name the label pattern: $out" ;; esac
 [ ! -e "$tmp/never.json" ] || fail "a rejected --variant must not write results"
-
-# --- 前の turn のある case (#769) は、最後の依頼だけを流さないよう、どの CLI も起動せずに止める (--dry-run は表示だけ) ---
-turns_root="$tmp/turns"
-mkdir -p "$turns_root"
-cp -R "$repo_root/scripts/lib/skill_behavior_fixtures" "$turns_root/skill_behavior_fixtures"
-cp "$turn_cases_json" "$turns_root/cases.json"
-for tool in claude-code codex; do
-  set -- --cases "$turns_root/cases.json" --only investigate-then-question --model m-x --out "$tmp/never.json"
-  [ "$tool" = claude-code ] || set -- "$@" --codex-home "$eval_home"
-  run_fake "$tool" "$quiet_events" "$@"
-  [ "$rc" -eq 2 ] || fail "$tool: a case with before must not run yet (rc=$rc): $out"
-  case "$out" in *'cases with before are not supported'*) : ;; *) fail "$tool: the reason should name before: $out" ;; esac
-  [ ! -s "$log" ] || fail "$tool: no CLI should be launched for a case with before: $(cat "$log")"
-done
-[ ! -e "$tmp/never.json" ] || fail "a case with before must not write results"
 
 # --- claude: 起動の前の確認で欠けた flag があれば起動しない ---
 for flag in --permission-mode --tools; do
