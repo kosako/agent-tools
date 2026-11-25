@@ -497,16 +497,27 @@ for sig in INT TERM; do
       env FAKE_LOG="$log" FAKE_THREAD="$thread" CODEX_HOME="$usual_home" CLAUDE_CONFIG_DIR="$claude_home" PATH="$fakebin:$PATH" \
         WATCH="$watch" "FAKE_SLEEP_$turn=60" ruby -e '
           sig, log, turn, *cmd = ARGV
+          turn = turn.to_i
           pid = Process.spawn(*cmd, out: "/dev/null", err: "/dev/null")
-          limit = Time.now + 30
-          # 起動の数と、記録ができたことを見てから送る
-          sleep 0.1 until File.read(log).lines.grep(/claude memory=1 -p|codex exec --json|codex exec resume --json/).length >= turn.to_i &&
-                          !Dir.glob(File.join(ENV["WATCH"], "**", "*.jsonl")).reject { |f| f.include?("99999999") }.empty? || Time.now > limit
-          sleep 0.5
+          # 対象の turn の起動と、その turn の記録 (claude は「turn N」の行、codex は N 個目の turn_context) ができたことを見てから送る。
+          # 期限までに見えなければ、送らずに失敗にする。
+          ready = lambda do
+            launched = File.read(log).lines.grep(/claude memory=1 -p|codex exec --json|codex exec resume --json/).length
+            own = Dir.glob(File.join(ENV["WATCH"], "**", "*.jsonl")).reject { |x| x.include?("99999999") }.map { |x| File.read(x) }
+            launched == turn && own.length == 1 && (own.first.lines.include?("turn #{turn}\n") || own.first.scan("\"turn_context\"").length == turn)
+          end
+          limit = Time.now + 60
+          sleep 0.1 until ready.call || Time.now > limit
+          unless ready.call
+            Process.kill("KILL", pid)
+            Process.wait(pid)
+            warn "the turn did not start"
+            exit 3
+          end
           Process.kill(sig, pid)
           Process.wait(pid)
           exit($?.success? ? 1 : 0)
-        ' "$sig" "$log" "$turn" ruby "$src" "$@" > /dev/null 2>&1 || fail "$tool: $sig in turn $turn should stop the probe"
+        ' "$sig" "$log" "$turn" ruby "$src" "$@" > "$tmp/interrupt.out" 2>&1 || fail "$tool: $sig in turn $turn should stop the probe: $(cat "$tmp/interrupt.out")"
       [ ! -e "$res" ] || fail "$tool: an interrupted probe must not write results"
       clean "$tool $sig in turn $turn"
     done
