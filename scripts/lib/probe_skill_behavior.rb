@@ -252,9 +252,11 @@ module ProbeSkillBehavior
   #   tool_use_id があれば denied (許可の要る呼び出しが拒まれた)。どちらも無ければ unknown。
   # - init: type=system subtype=init の model・claude_code_version・tools・permissionMode。memory_states は、init ごとの
   #   自動の memory の状態 (memory_paths から。#770)。session_ids は、init の session_id の並び (#769)。
+  # shown: 中身を出す検索 (Grep の output_mode が content) の、誤りでない結果の本文 (#778)。到達の判定の間だけ持ち、results.json には入れない。
   def self.parse_claude(jsonl, names, fixture = K::NO_FIXTURE)
     calls = []
     results = {}
+    outputs = {}
     denied = []
     init = {}
     memory_states = []
@@ -287,6 +289,7 @@ module ProbeSkillBehavior
           next unless c.is_a?(Hash) && c["type"] == "tool_result"
 
           results[c["tool_use_id"].to_s] = c["is_error"] == true ? "error" : "ok"
+          outputs[c["tool_use_id"].to_s] = result_text(c["content"])
         end
       when "result"
         result_seen = true
@@ -307,10 +310,28 @@ module ProbeSkillBehavior
       unresolved ||= u
       outcome = denied.include?(c[:id]) ? "denied" : results.fetch(c[:id], "unknown")
       { id: c[:id], tool: c[:tool], class: K.classify_claude(c[:tool], c[:input], fixture: fixture), outcome: outcome,
-        strings: strings_in(c[:input]) }
+        strings: strings_in(c[:input]),
+        shown: outcome == "ok" && c[:tool] == "Grep" && c[:input]["output_mode"] == "content" ? outputs[c[:id]] : nil }
     end
     { calls: out, skills_read: skills.uniq, skills_unresolved: unresolved, init: init, memory_states: memory_states,
       session_ids: session_ids.uniq, result_seen: result_seen, subtype: subtype }
+  end
+
+  # tool_result の content (文字列か、text の並び) の本文。
+  def self.result_text(content)
+    return content if content.is_a?(String)
+
+    (content.is_a?(Array) ? content : []).map { |x| x.is_a?(Hash) && x["type"] == "text" && x["text"].is_a?(String) ? x["text"] : "" }.join("\n")
+  end
+
+  # case の reach の file に届いたか。入力に path を含む呼び出し、または、中身を出す検索の結果に path で始まる行がある (#778。一致した行は
+  # 「path:」の形で出る。path の前に dir の部分が付いてもよい)。
+  def self.reached?(calls, reach)
+    calls.any? do |call|
+      reach.any? do |p|
+        call[:strings].any? { |s| s.include?(p) } || (call[:shown] && call[:shown].match?(%r{^(?:[^:\n]*/)?#{Regexp.escape(p)}:}))
+      end
+    end
   end
 
   # codex exec --json の event (0.153.4 で実測した形)。呼び出しは item.started / item.completed の item で、id で束ねる。
@@ -659,7 +680,7 @@ module ProbeSkillBehavior
   def self.turn_record(r, c)
     { "completion" => r[:completion],
       "calls" => r[:calls].map { |call| { "id" => call[:id], "tool" => call[:tool], "class" => call[:class], "outcome" => call[:outcome] } },
-      "reached" => r[:calls].any? { |call| call[:strings].any? { |s| c["reach"].any? { |p| s.include?(p) } } },
+      "reached" => reached?(r[:calls], c["reach"]),
       "changed" => r[:changed], "skills_read" => r[:skills_read], "skills_unresolved" => r[:skills_unresolved] }
   end
 

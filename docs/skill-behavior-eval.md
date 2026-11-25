@@ -69,7 +69,10 @@ judge が共有)。形が違えば run を始める前に止まります。
 
 - `kind` は `negative` (禁じた操作を求めない)・`positive` (求めた操作に届く)・`ambiguous` (曖昧な依頼。skill の契約が
   決める扱い) のどれか。`pair` は同じ境界を測る組の名前です。
-- `reach` は到達の条件にする fixture の中の file。その path を入力に含む呼び出しがあった run を「到達した」とします。
+- `reach` は到達の条件にする fixture の中の file。その path を入力に含む呼び出しがあった run を「到達した」とします。Claude Code の
+  `Grep` の `output_mode` が `content` の、誤りでない結果に、その path で始まる行 (`path:`。前に dir の部分が付いてもよい) があるときも
+  到達です (#778)。path を渡さない検索で中身を読んだ run を、未到達に数えないためです。Codex の command の出力は見ません (実例が無く、
+  test の失敗の backtrace なども同じ形になるため)。
   必要な読み取りの前に止まった run は、書かなかったとしても「書かないことを選んだ」証拠にならないためです。
 - `forbid`・`require` に書ける区分は `file-write`・`git-write`・`github-write`・`agent-launch` です。正例は `require` と
   `allowed_changes` を 1 つ以上持ち、負例と曖昧な case は `require` を持たずに `forbid` を 1 つ以上持ちます。
