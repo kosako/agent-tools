@@ -5,7 +5,9 @@
 #
 # case は 1 回の user の依頼と、その run で求める / 禁じる操作の区分、到達の条件 (reach)、run の後に変わってよい
 # file (allowed_changes)、temp project に置く skill (place_skills) を持つ。正例は、修正の正しさの検査 (fix_check) も
-# 持てる (#763)。形が違えば、run を始める前に止める (Error)。
+# 持てる (#763)。前の turn (before) のある case は、2 turn の会話で、許可の範囲が保たれるかを見る (#769)。prompt・kind・
+# forbid・require・allowed_changes・fix_check は最後の turn のもの、reach は最初の turn の到達の条件になる。
+# 形が違えば、run を始める前に止める (Error)。
 
 require "json"
 
@@ -20,7 +22,14 @@ module SkillBehaviorCases
   KINDS = %w[negative positive ambiguous].freeze
   CASE_KEYS = %w[id prompt skill kind pair fixture reach forbid require allowed_changes place_skills].freeze
   # 無くてもよい case の key。
-  OPTIONAL_CASE_KEYS = %w[fix_check].freeze
+  OPTIONAL_CASE_KEYS = %w[fix_check before].freeze
+  # 前の turn (#769)。数は 1 つだけ。
+  BEFORE_KEYS = %w[prompt forbid allowed_changes].freeze
+  BEFORE_TURNS = 1
+  # 前の turn のある case の run で、Codex の session の記録にあるはずの、turn ごとの承認・作業 dir・sandbox (#769)。
+  # 再開した turn は 1 turn 目の sandbox を引き継がないので、渡したことではなく、実際に効いた値を見る。
+  CODEX_TURN_CONTEXT = 'approval=never cwd=project sandbox={"exclude_slash_tmp":true,"exclude_tmpdir_env_var":true,' \
+                       '"network_access":false,"type":"workspace-write"}'
   # 修正の正しさ (run の fix_check) の status と、その status で使う reason。
   # unmeasured は、正しさを測れなかった run (不合格と分けて数える)。
   FIX_STATUSES = {
@@ -108,12 +117,7 @@ module SkillBehaviorCases
     raise Error, "#{label}: prompt must not start with '-'" if c["prompt"].start_with?("-")
     raise Error, "#{label}: kind must be one of #{KINDS.join(', ')}" unless KINDS.include?(c["kind"])
 
-    %w[forbid require].each do |k|
-      v = c[k]
-      unless v.is_a?(Array) && v.all? { |x| EXPECTABLE_CLASSES.include?(x) } && v.uniq.length == v.length
-        raise Error, "#{label}: #{k} must be an array of distinct classes from #{EXPECTABLE_CLASSES.join(', ')}"
-      end
-    end
+    %w[forbid require].each { |k| validate_classes!(c[k], "#{label}: #{k}") }
     overlap = c["forbid"] & c["require"]
     raise Error, "#{label}: forbid and require overlap: #{overlap.join(', ')}" unless overlap.empty?
     if c["kind"] == "positive"
@@ -123,12 +127,7 @@ module SkillBehaviorCases
       raise Error, "#{label}: a #{c['kind']} case must forbid at least one class" if c["forbid"].empty?
     end
 
-    %w[reach allowed_changes].each do |k|
-      v = c[k]
-      unless v.is_a?(Array) && v.all? { |p| relative_path?(p) } && v.uniq.length == v.length
-        raise Error, "#{label}: #{k} must be an array of distinct relative paths (no '..', no leading '/')"
-      end
-    end
+    %w[reach allowed_changes].each { |k| validate_paths!(c[k], "#{label}: #{k}") }
     raise Error, "#{label}: reach must not be empty" if c["reach"].empty?
     # temp project に置く skill (#737)。名前は skill の dir の名前なので、決まった形だけにする (path の区切りや .. を持たない)。
     # その case の skill を必ず含める (置かない skill の挙動を測ることにならないため)。
@@ -142,6 +141,7 @@ module SkillBehaviorCases
     end
 
     validate_fix_check!(c, label) if c.key?("fix_check")
+    validate_before!(c["before"], label) if c.key?("before")
 
     return unless fixtures_root
 
@@ -156,6 +156,35 @@ module SkillBehaviorCases
     return unless c.key?("fix_check") && !File.file?(File.join(dir, c["fix_check"]["file"]))
 
     raise Error, "#{label}: fix_check.file not in fixture #{c['fixture']}"
+  end
+
+  def self.validate_classes!(v, label)
+    return if v.is_a?(Array) && v.all? { |x| EXPECTABLE_CLASSES.include?(x) } && v.uniq.length == v.length
+
+    raise Error, "#{label} must be an array of distinct classes from #{EXPECTABLE_CLASSES.join(', ')}"
+  end
+
+  def self.validate_paths!(v, label)
+    return if v.is_a?(Array) && v.all? { |p| relative_path?(p) } && v.uniq.length == v.length
+
+    raise Error, "#{label} must be an array of distinct relative paths (no '..', no leading '/')"
+  end
+
+  # 前の turn (#769)。依頼と、その turn で禁じる区分 (1 つ以上) と、その turn の後に変わってよい file。
+  def self.validate_before!(list, label)
+    unless list.is_a?(Array) && list.length == BEFORE_TURNS && list.all? { |b| b.is_a?(Hash) && b.keys.sort == BEFORE_KEYS.sort }
+      raise Error, "#{label}: before must be an array of #{BEFORE_TURNS} object(s) with exactly #{BEFORE_KEYS.join(', ')}"
+    end
+
+    list.each do |b|
+      unless b["prompt"].is_a?(String) && !b["prompt"].strip.empty? && !b["prompt"].start_with?("-")
+        raise Error, "#{label}: before.prompt must be a non-empty string that does not start with '-'"
+      end
+      validate_classes!(b["forbid"], "#{label}: before.forbid")
+      raise Error, "#{label}: before.forbid must not be empty" if b["forbid"].empty?
+
+      validate_paths!(b["allowed_changes"], "#{label}: before.allowed_changes")
+    end
   end
 
   # 修正の正しさの検査 (#763)。正例だけが持てる。file は変わってよい Ruby の file、function はその top-level の関数。

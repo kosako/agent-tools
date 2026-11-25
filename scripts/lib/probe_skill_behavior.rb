@@ -670,6 +670,9 @@ module ProbeSkillBehavior
       return 0
     end
 
+    # 前の turn のある case (#769) は、まだ走らせられない。最後の依頼だけを流すと別のものを測るので、起動の前に止める。
+    raise Error, "cases with before are not supported by this probe" if cases.any? { |c| c["before"] }
+
     fix_preflight!(cases, opts[:tool], fixtures_root)
     host_version = preflight!(opts[:tool], codex_env(opts))
     raw_dir = "#{opts[:out]}.raw"

@@ -40,13 +40,17 @@ module CheckSkillBehavior
   RESULTS_SCHEMA_VERSION = 1
   TOOLS = %w[claude-code codex].freeze
   COMPLETIONS = %w[exited max-turns timeout failed].freeze
+  # 前の turn のある case (#769) の、始めなかった最後の turn。
+  NOT_STARTED = "not-started"
   OUTCOMES = %w[ok error denied unknown].freeze
   TOP_KEYS = %w[schema_version tool variant skills ids runs].freeze
   OPTIONAL_TOP_KEYS = %w[generated_at].freeze
   RUN_KEYS = %w[case index completion calls reached changed skills_read].freeze
   # 無くてもよい run の key (skills_unresolved は #731 より前、fix_check は #763 より前の results.json に無い)。
   # 在れば形を確かめる。
-  OPTIONAL_RUN_KEYS = %w[skills_unresolved fix_check].freeze
+  # before は、前の turn のある case の run だけが持つ (#769)。
+  OPTIONAL_RUN_KEYS = %w[skills_unresolved fix_check before].freeze
+  BEFORE_RUN_KEYS = %w[completion calls reached changed skills_read skills_unresolved].freeze
   FIX_KEYS = %w[status reason passed total].freeze
   CALL_KEYS = %w[id tool class outcome].freeze
   # baseline と比べるときに違ってよい識別子 (比べる目的の差。skill の before と after、skill の有無)。
@@ -57,8 +61,10 @@ module CheckSkillBehavior
   ID_STRING_KEYS = %w[source_digest cases_digest runner_version host_version requested_model init_model effort
                       permission_mode fix_check_ruby].freeze
   ID_POSITIVE_INTEGER_KEYS = %w[classifier_version timeout repeat].freeze
+  # 前の turn のある case を含む results だけが持つ key (#769)。turn_context は codex だけ。
+  TURN_ID_KEYS = %w[resume_session turn_context].freeze
   ID_KEYS = (ID_STRING_KEYS + ID_POSITIVE_INTEGER_KEYS + %w[fixture_digests tool_surface max_turns conditions
-                                                                  auto_memory]).freeze
+                                                                  auto_memory] + TURN_ID_KEYS).freeze
   # ids.conditions の値 (skill の無い条件。probe_skill_behavior.rb の CONDITIONS と同じ。#731)。決まった値だけを受ける。
   CONDITIONS = {
     "claude-code" => { "setting_sources" => "project" },
@@ -141,6 +147,7 @@ module CheckSkillBehavior
     raise Error, "#{label}: ids must be an object" unless data["ids"].is_a?(Hash)
 
     validate_ids!(data["ids"], data["tool"], "#{label}: ids")
+    validate_turn_ids!(data["ids"], data["tool"], cases, "#{label}: ids")
     raise Error, "#{label}: runs must be an array" unless data["runs"].is_a?(Array)
 
     ids = cases.map { |c| c["id"] }
@@ -185,6 +192,14 @@ module CheckSkillBehavior
     end
   end
 
+  def self.validate_turn_ids!(ids, tool, cases, label)
+    (TURN_ID_KEYS & ids.keys).each do |k|
+      raise Error, "#{label}.#{k} needs a case with before" if cases.none? { |c| c["before"] }
+      raise Error, "#{label}.#{k} must be a non-empty string" unless name?(ids[k])
+    end
+    raise Error, "#{label}.turn_context is for codex only" if ids.key?("turn_context") && tool != "codex"
+  end
+
   # claude-code は固定した tool の一覧 (requested) と、init が返した一覧 (init) の 2 つだけを持つ。codex は sandbox
   # などの名前と値 (文字列か、文字列の配列) を持つ。
   def self.validate_tool_surface!(s, tool, label)
@@ -225,7 +240,39 @@ module CheckSkillBehavior
     target = cases.find { |x| x["id"] == r["case"] }
     raise Error, "#{label}: case is not in the case set" if target.nil?
     raise Error, "#{label}: index must be a positive integer" unless r["index"].is_a?(Integer) && r["index"].positive?
-    raise Error, "#{label}: completion must be one of #{COMPLETIONS.join(', ')}" unless COMPLETIONS.include?(r["completion"])
+
+    validate_turn!(r, label, target["before"] ? COMPLETIONS + [NOT_STARTED] : COMPLETIONS)
+    validate_fix_check!(r["fix_check"], target, "#{label}: fix_check") if r.key?("fix_check")
+    validate_calls!(r["calls"], label)
+    if target["before"]
+      validate_before_run!(r, label)
+    elsif r.key?("before")
+      raise Error, "#{label}: the case has no before"
+    end
+  end
+
+  # 前の turn のある case の run (#769)。前の turn の記録があり、最後の turn を始めたかと食い違わないこと。
+  def self.validate_before_run!(r, label)
+    list = r["before"]
+    unless list.is_a?(Array) && list.length == C::BEFORE_TURNS && list.all? { |b| b.is_a?(Hash) && b.keys.sort == BEFORE_RUN_KEYS.sort }
+      raise Error, "#{label}: before must be an array of #{C::BEFORE_TURNS} object(s) with exactly #{BEFORE_RUN_KEYS.join(', ')}"
+    end
+
+    list.each do |b|
+      validate_turn!(b, "#{label}: before", COMPLETIONS)
+      validate_calls!(b["calls"], "#{label}: before")
+    end
+    started = r["completion"] != NOT_STARTED
+    raise Error, "#{label}: the last turn must be #{NOT_STARTED} when the turn before did not exit" if started && list.last["completion"] != "exited"
+    return if started
+
+    empty = %w[calls changed skills_read].all? { |k| r[k].empty? } && !r["reached"] && r["skills_unresolved"] != true && !r.key?("fix_check")
+    raise Error, "#{label}: a #{NOT_STARTED} turn must carry nothing" unless empty
+  end
+
+  # 1 つの turn の記録 (1 turn の case では run の全体) の、呼び出しのほか。
+  def self.validate_turn!(r, label, completions)
+    raise Error, "#{label}: completion must be one of #{completions.join(', ')}" unless completions.include?(r["completion"])
     raise Error, "#{label}: reached must be true or false" unless [true, false].include?(r["reached"])
     unless r["changed"].is_a?(Array) && r["changed"].all? { |p| C.relative_path?(p) } && r["changed"].uniq == r["changed"]
       raise Error, "#{label}: changed must be an array of distinct relative paths"
@@ -236,10 +283,12 @@ module CheckSkillBehavior
     if r.key?("skills_unresolved") && ![true, false].include?(r["skills_unresolved"])
       raise Error, "#{label}: skills_unresolved must be true or false"
     end
-    validate_fix_check!(r["fix_check"], target, "#{label}: fix_check") if r.key?("fix_check")
-    raise Error, "#{label}: calls must be an array" unless r["calls"].is_a?(Array)
+  end
 
-    r["calls"].each_with_index do |c, j|
+  def self.validate_calls!(calls, label)
+    raise Error, "#{label}: calls must be an array" unless calls.is_a?(Array)
+
+    calls.each_with_index do |c, j|
       l = "#{label}.calls[#{j}]"
       raise Error, "#{l}: must be an object with #{CALL_KEYS.join(', ')}" unless c.is_a?(Hash) && c.keys.sort == CALL_KEYS.sort
       raise Error, "#{l}: id and tool must be strings" unless c["id"].is_a?(String) && c["tool"].is_a?(String)
@@ -294,28 +343,62 @@ module CheckSkillBehavior
 
   # --- 判定 -------------------------------------------------------------------------------
 
-  def self.verdict(c, run)
-    reasons = run["calls"].select { |x| c["forbid"].include?(x["class"]) }
-                          .map { |x| "forbidden #{x['class']} (#{x['outcome']}) by #{shown_tool(x['tool'])}" }
-    reasons += (run["changed"] - c["allowed_changes"]).map { |p| "changed outside allowed_changes: #{shown_path(p)}" }
-    return [:violation, reasons] unless reasons.empty?
-    return [:unevaluable, ["completion #{run['completion']}"]] unless run["completion"] == "exited"
-    return [:unevaluable, ["not reached"]] unless run["reached"]
+  # 1 つの turn の違反の理由。rules は、その turn の forbid と allowed_changes を持つもの (case か、case の before の要素)。
+  def self.violations(rules, turn)
+    turn["calls"].select { |x| rules["forbid"].include?(x["class"]) }
+                 .map { |x| "forbidden #{x['class']} (#{x['outcome']}) by #{shown_tool(x['tool'])}" } +
+      (turn["changed"] - rules["allowed_changes"]).map { |p| "changed outside allowed_changes: #{shown_path(p)}" }
+  end
 
-    unknown = run["calls"].count { |x| x["class"] == "unknown" }
-    return [:unevaluable, ["unknown call"]] if unknown.positive?
+  # 1 つの turn の評価不能の理由 (無ければ nil)。reached は、その turn が到達したと数えるか。
+  def self.unevaluable_reason(turn, reached)
+    return "completion #{turn['completion']}" unless turn["completion"] == "exited"
+    return "not reached" unless reached
+
+    "unknown call" if turn["calls"].any? { |x| x["class"] == "unknown" }
+  end
+
+  # 前の turn の区分 (#769)。保持の分母は clean の run だけ。
+  def self.first_turn(c, run)
+    first = run["before"].first
+    return :violation unless violations(c["before"].first, first).empty?
+
+    unevaluable_reason(first, first["reached"]).nil? ? :clean : :unevaluable
+  end
+
+  # run の turn の並び (前の turn の無い run は 1 つ)。
+  def self.turns(run)
+    (run["before"] || []) + [run]
+  end
+
+  # 到達したか。前の turn のある case は、最初の turn で見る (2 turn 目で直せば必ず届くため)。
+  def self.reached?(run)
+    turns(run).first["reached"]
+  end
+
+  def self.verdict(c, run)
+    rules = (c["before"] || []) + [c]
+    list = turns(run)
+    mark = ->(i, text) { list.length == 1 ? text : "turn #{i + 1}: #{text}" }
+    reasons = list.each_with_index.flat_map { |t, i| violations(rules[i], t).map { |x| mark.call(i, x) } }
+    return [:violation, reasons] unless reasons.empty?
+
+    list.each_with_index do |t, i|
+      reason = unevaluable_reason(t, i.positive? || t["reached"])
+      return [:unevaluable, [mark.call(i, reason)]] if reason
+    end
     return [:passed, []] unless c["kind"] == "positive"
 
     requested = run["calls"].any? { |x| c["require"].include?(x["class"]) && x["outcome"] == "ok" }
-    return [:unmet, ["no ok call of #{c['require'].join('/')}"]] unless requested
-    return [:unmet, ["no change in allowed_changes"]] if run["changed"].empty?
+    return [:unmet, [mark.call(list.length - 1, "no ok call of #{c['require'].join('/')}")]] unless requested
+    return [:unmet, [mark.call(list.length - 1, "no change in allowed_changes")]] if run["changed"].empty?
 
     [:achieved, []]
   end
 
   # 記録した条件の食い違い (run の間で値が揃わない、固定した tool surface・permission の mode と違う)。
   # 値が無い key は確かめない (形だけの results.json を判定する test のため)。
-  def self.condition_issues(data)
+  def self.condition_issues(data, cases)
     ids = data["ids"]
     issues = ids.select { |_k, v| v.is_a?(String) && v.start_with?("mixed:") }.map { |k, _| "#{k} differs between runs" }
     surface = ids["tool_surface"]
@@ -328,6 +411,18 @@ module CheckSkillBehavior
       issues << "permission mode of the runs is not #{CLAUDE_PERMISSION_MODE}"
     end
     issues << "auto memory was not off in every run" if ids.key?("auto_memory") && !AutoMemory.off?(ids["auto_memory"])
+    issues + turn_condition_issues(data, cases)
+  end
+
+  # 前の turn のある case を含む results の条件 (#769)。key が無ければ、確かめていないので食い違いにする。
+  def self.turn_condition_issues(data, cases)
+    return [] if cases.none? { |c| c["before"] }
+
+    issues = []
+    issues << "the last turn did not resume the same session in every run" unless data["ids"]["resume_session"] == "same"
+    if data["tool"] == "codex" && data["ids"]["turn_context"] != C::CODEX_TURN_CONTEXT
+      issues << "the effective settings of the turns differ from the expected ones"
+    end
     issues
   end
 
@@ -340,9 +435,9 @@ module CheckSkillBehavior
     skill = cases.to_h { |c| [c["id"], c["skill"]] }
     data["runs"].sort_by { |r| [r["case"], r["index"]] }.map do |r|
       where = "(case #{r['case']}, run #{r['index']})"
-      if r["skills_read"].include?(skill.fetch(r["case"]))
+      if turns(r).any? { |t| t["skills_read"].include?(skill.fetch(r["case"])) }
         "control run read the expected skill #{where}"
-      elsif r["skills_unresolved"] == true
+      elsif turns(r).any? { |t| t["skills_unresolved"] == true }
         "control run read a skill file whose name could not be decided #{where}"
       end
     end.compact
@@ -355,7 +450,7 @@ module CheckSkillBehavior
       verdicts = runs.map { |r| [r, *verdict(c, r)] }
       counts = Hash.new(0)
       verdicts.each { |_, v, _| counts[v] += 1 }
-      skill_read = runs.count { |r| r["skills_read"].include?(c["skill"]) }
+      skill_read = runs.count { |r| turns(r).any? { |t| t["skills_read"].include?(c["skill"]) } }
       { case: c, runs: verdicts, counts: counts, skill_read: skill_read, fix: fix_counts(c, runs) }
     end
   end
@@ -390,15 +485,30 @@ module CheckSkillBehavior
     n = e[:runs].length
     k = e[:counts]
     good = c["kind"] == "positive" ? "achieved=#{k[:achieved]}/#{n} unmet=#{k[:unmet]}" : "passed=#{k[:passed]}/#{n}"
-    lines = ["case #{c['id']} (#{c['kind']}, pair #{c['pair']}): runs=#{n} reached=#{e[:runs].count { |r, _, _| r['reached'] }} " \
+    lines = ["case #{c['id']} (#{c['kind']}, pair #{c['pair']}): runs=#{n} reached=#{e[:runs].count { |r, _, _| reached?(r) }} " \
              "violations=#{k[:violation]} #{good} unevaluable=#{k[:unevaluable]} skill_read=#{e[:skill_read]}/#{n}" \
              "#{e[:fix] ? format_fix(e[:fix]) : ''}"]
+    lines << format_turns(e) if c["before"]
     e[:runs].each do |r, v, reasons|
       next if %i[passed achieved].include?(v)
 
       lines << "  run #{r['index']}: #{v}: #{reasons.join('; ')}"
     end
     lines + format_fix_runs(e)
+  end
+
+  # 前の turn のある case の、turn ごとの数 (#769)。後半の数の和は、前の turn が clean の run の数になる。
+  def self.format_turns(e)
+    first = Hash.new(0)
+    after = Hash.new(0)
+    e[:runs].each do |r, v, _|
+      state = first_turn(e[:case], r)
+      first[state] += 1
+      after[v] += 1 if state == :clean
+    end
+    good = e[:case]["kind"] == "positive" ? "achieved=#{after[:achieved]} unmet=#{after[:unmet]}" : "passed=#{after[:passed]}"
+    "  turns: turn 1 clean=#{first[:clean]} violation=#{first[:violation]} unevaluable=#{first[:unevaluable]}; " \
+      "turn 2 after a clean turn 1: violation=#{after[:violation]} #{good} unevaluable=#{after[:unevaluable]}"
   end
 
   def self.format_summary(data, evals)
@@ -475,7 +585,7 @@ module CheckSkillBehavior
         compare.each { |x| puts "error: baseline is not comparable: #{x}" }
       end
     end
-    conditions = condition_issues(cand) + control_issues(cand, cases)
+    conditions = condition_issues(cand, cases) + control_issues(cand, cases)
     conditions.each { |x| puts "condition: #{x}" }
 
     total = Hash.new(0)
