@@ -882,6 +882,13 @@ module CodexWorkerRun
       check_request
     end
 
+    # 検査の途中に依頼が足されたり、別の run を回収したりしても、READY を返さない (#719)。返す直前に読み直す。
+    def recheck_record
+      run, branch = @run, @branch
+      read_check_record
+      stop("check-record") unless @run == run && @branch == branch
+    end
+
     # 公開に進めるのは、起動のときの依頼が今の依頼と同じ結果だけ (#719)。
     def check_request
       request = request_section(File.binread(File.join(@repo, ".agent-packets", "#{@issue}.md")))
@@ -989,6 +996,7 @@ module CodexWorkerRun
       stage("publish-gate", "public-safety") { check_publish_gate }
       stage("destination", "public-safety") { check_destination }
       marker = stage("marker", "public-safety") { check_marker }
+      stage("packet-again", "launch-record") { recheck_record }
       result = { "status" => "READY", "issue" => @issue, "branch" => @branch,
                  "base_oid" => @base, "head_oid" => @head, "commits" => @commit_count,
                  "slug" => @slug, "style_findings" => @style_findings, "marker" => marker, "run_dir" => @run }

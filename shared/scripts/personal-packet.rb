@@ -720,20 +720,39 @@ module Packet
     # 投稿する前にここで止まる)。投稿後は rename で差し替える (File.write は truncate してから書く
     # ため、途中で失敗すると packet 本体を失う。R293-16)。
     tmp = write_sibling(path, updated_text)
+    # 一時 file がある間、worker-update と pull は packet を書かない。読んでから一時 file を作るまで (gate の検査の
+    # 間) に足された依頼や結果を、古い内容で上書きしないよう、投稿の前に読んだときと同じかを確かめる (#719)。
+    unless unchanged?(path, original)
+      File.unlink(tmp) rescue nil
+      raise Error, "#{path}: 読んだ後に packet が変わりました。投稿しません。もう一度実行してください"
+    end
     begin
       url = post_comment(issue, repo, text)
     rescue Error
       File.unlink(tmp) rescue nil
       raise
     end
+    where = url.empty? ? "issue ##{issue}" : url
+    # 一時 file を見ない書き手 (人の編集など) の変更も、差し替えで消さない。
+    unless unchanged?(path, original)
+      raise Error, "投稿は完了しました (#{where}) が、投稿の間に packet が変わったので差し替えません。再実行せず、" \
+                   "#{tmp} を消してから、#{path} の frontmatter の published を #{at.iso8601} にしてください"
+    end
     begin
       File.rename(tmp, path)
     rescue SystemCallError => e
       # 投稿は済んでいる。再試行すると二重投稿になるので、URL と更新内容の置き場を示して止める。
-      raise Error, "投稿は完了しました (#{url.empty? ? "issue ##{issue}" : url}) が、packet の差し替えに失敗しました " \
+      raise Error, "投稿は完了しました (#{where}) が、packet の差し替えに失敗しました " \
                    "(#{e.class})。再実行せず、更新内容 #{tmp} を #{path} に手で移してください"
     end
-    puts "published: #{url.empty? ? "issue ##{issue}" : url}"
+    puts "published: #{where}"
+  end
+
+  # 差し替える前の packet が、読んだときと同じ byte か (#719)。読めなければ同じと見なさない。
+  def unchanged?(path, original)
+    File.binread(path) == original.b
+  rescue SystemCallError
+    false
   end
 
   # path と同じ directory に、同じ mode で内容を書き切った一時 file を作り、その path を返す。
@@ -1258,7 +1277,8 @@ module Packet
     # 更新先の検査 (#386。symlink / tracked の packet dir / file は更新しない)。--dry-run でも止める
     check_target!(dir, issue)
     path = File.join(dir, "#{issue}.md")
-    local = File.exist?(path) ? parse(path) : nil
+    original = File.exist?(path) ? read_text(path) : nil
+    local = original && parse_text(original, path)
     envelope = read_issue("comments", issue, repo)
     raise Error, "#{READER_NAME} の comments が配列ではありません" unless envelope["comments"].is_a?(Array)
 
@@ -1284,6 +1304,9 @@ module Packet
     begin
       if local
         tmp = write_sibling(path, text)
+        # Issue を読む間に足された依頼や結果を、読む前の内容で上書きしない (#719)。一時 file がある間、
+        # worker-update と publish は書かないので、確かめてから差し替えるまでの間は変わらない。
+        raise Error, "#{path}: 読んだ後に packet が変わりました。書きません。もう一度実行してください" unless unchanged?(path, original)
         File.rename(tmp, path)
       else
         # 内容を書き切ってから link する。存在確認後に別の書き手が作った packet も上書きしない。

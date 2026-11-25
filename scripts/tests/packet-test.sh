@@ -778,6 +778,26 @@ else
   ls "$repo/.agent-packets"/.7.md.tmp >/dev/null 2>&1 || fail "rename failure should leave the updated content in the temp file for manual recovery"
   rm -f "$repo/.agent-packets"/.7.md.tmp
   calls=$(gh_calls)
+  # 投稿の間に packet が変わる (一時 file を見ない人の編集など) → 差し替えない。投稿 1 回・URL と published の案内・
+  # 編集を保つ (#719。worker-update と pull の割り込みは worker-request-order-test が見る)
+  cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
+  cp "$tmp/7.bak" "$tmp/7.edited"
+  echo human-edit >> "$tmp/7.edited"
+  printf 'echo human-edit >> %s\n' "$(shq "$repo/.agent-packets/7.md")" > "$gh_hook"
+  set +e
+  out=$(cd "$repo" && with_gh "$pkt" publish 7 2>&1)
+  rc=$?
+  set -e
+  rm -f "$gh_hook"
+  [ "$rc" -eq 2 ] || fail "#719: a packet changed while posting should be exit 2 (rc=$rc): $out"
+  [ "$(gh_calls)" -eq $((calls + 1)) ] || fail "#719: changed-while-posting case should have posted exactly once"
+  echo "$out" | grep -q "example.invalid/comment/1" || fail "#719: must report the posted url: $out"
+  echo "$out" | grep -q "差し替えません" || fail "#719: must say the packet is not replaced: $out"
+  echo "$out" | grep -q "再実行せず" || fail "#719: must warn against retrying: $out"
+  cmp -s "$tmp/7.edited" "$repo/.agent-packets/7.md" || fail "#719: the edit made while posting must be kept"
+  ls "$repo/.agent-packets"/.7.md.tmp >/dev/null 2>&1 || fail "#719: the temp file stays until the manual published update"
+  rm -f "$repo/.agent-packets"/.7.md.tmp
+  calls=$(gh_calls)
   # 読めない packet が 1 つあっても list は止まらず、健全な行を出して exit 1 (R293-18)
   printf -- '---\nissue: 6\ntitle: t\nstate: open\nworker: claude\nupdated: 2026-09-21T00:00:00+09:00\n---\n' > "$repo/.agent-packets/6.md"
   chmod 000 "$repo/.agent-packets/6.md"

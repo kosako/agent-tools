@@ -11,7 +11,7 @@ risk:
 # script の配布承認は内容に紐づく。変更時は review と build_id の更新が必要。
 review:
   human_review: approved
-  approved_build_id: sha256:178a7d222e335fe9bc4b58f96010b35db2656c06870da90fd103f0a1e52bb517
+  approved_build_id: sha256:261f541701611d6b64ed82543ee920be70968a31679574649fdc767ba06d3b00
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-codex-worker-run.rb

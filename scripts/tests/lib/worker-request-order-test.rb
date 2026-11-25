@@ -11,6 +11,8 @@
 #   P4 依頼が変わっていなければ、今までどおり結果で次の入口を更新し、check は通る。  (人が順序で確認)
 # 起動のときの依頼の記録が無い run (古い版の起動) は、同じと確かめられないので、変わったときと同じに扱う。
 # 期待値は、当てた操作の履歴だけから作る (model)。実装の判定を呼び直さない。
+# 並べる操作は、packet と run directory を書く手順 (worker-update・collect・check・publish・pull・人の編集) から引く。
+# 1 つの subcommand の途中に依頼が足される形は、collect・check・publish・pull の 4 つで当てる。
 require "json"
 require "stringio"
 require "fileutils"
@@ -53,13 +55,27 @@ end
 Packet.define_singleton_method(:packet_dir) { PACKETS }
 Packet.define_singleton_method(:check_target!) { |_dir, issue| File.join(PACKETS, "#{issue}.md") }
 Packet.define_singleton_method(:tracked_packet_names) { [] }
+# publish と pull が呼ぶ外部 (gate・gh・safe reader) を差し替える。途中で依頼を足す操作は、ここに割り込む。
+Packet.define_singleton_method(:scan) do |_text|
+  World.on_scan&.call
+  false
+end
+Packet.define_singleton_method(:post_comment) do |_issue, _repo, _text|
+  World.posts = World.posts.to_i + 1
+  "https://example.invalid/comment"
+end
+Packet.define_singleton_method(:read_issue) do |verb, _issue, _repo|
+  raise "差し替えていない read_issue: #{verb}" unless verb == "comments" && World.on_read
+
+  { "comments" => [{ "author_trust" => "self", "body" => World.on_read.call }], "repo" => "owner/project" }
+end
 
 # 外部の command の代わり。知らない呼び出しは止める (実装が新しい command に頼ったら、この test の見直しになる)。
 module World
   OID = "a" * 40
   BASE_OID = "b" * 40
   class << self
-    attr_accessor :tabs, :panes, :on_wait, :calls
+    attr_accessor :tabs, :panes, :on_wait, :on_gh, :on_scan, :on_read, :posts, :calls
 
     def ok(out = "")
       [out, 0, ""]
@@ -99,7 +115,9 @@ module World
 
     def gh(args)
       case args
-      when %w[repo view --json nameWithOwner] then ok(JSON.generate("nameWithOwner" => "owner/project"))
+      when %w[repo view --json nameWithOwner]
+        on_gh&.call
+        ok(JSON.generate("nameWithOwner" => "owner/project"))
       when %w[api user] then ok(JSON.generate("login" => "owner"))
       when %w[api repos/owner/project] then ok(JSON.generate("owner" => { "type" => "User", "login" => "owner" }))
       else raise "差し替えていない gh: #{args.inspect}"
@@ -234,8 +252,20 @@ class Explorer
     m["run"] && m["runs"][m["run"]]
   end
 
+  # 依頼の節が、起動のときの byte と違うか。依頼を書き換えるたびに版を進め、元に戻すと起動のときの版に戻る。
+  # 印を保った書き換え (誤字の修正) も、版が進むので変更に数える。
   def changed?(m, run)
-    m["request"] != run["request"]
+    m["rev"] != run["rev"]
+  end
+
+  def revise(m)
+    m["revs"] += 1
+    m["rev"] = m["revs"]
+  end
+
+  # check が公開前の検査まで進む状態
+  def checkable?(m)
+    %w[open review].include?(m["state"]) && m["run"].nil? && m["last"]
   end
 
   # 実装が返すはずの値。起動の記録に依頼が無ければ、比べられない
@@ -264,8 +294,11 @@ class Explorer
     end
     list << "collect:again" if m["state"] == "open" && run && run["done"] == "late"
     if m["runs"].any? && m["changes"] < MAX_CHANGES
-      list << "round" << "overwrite"
+      list << "round" << "overwrite" << "typo"
+      # packet を丸ごと書き換える 2 つの操作の途中に、依頼を足す
+      list << "publish+round" << "pull+round"
     end
+    list << "check+round" if checkable?(m) && status(m, m["runs"][m["last"]]) == "same" && m["changes"] < MAX_CHANGES
     base = run || (m["last"] && m["runs"][m["last"]])
     list << "restore" if m["state"] == "open" && base && changed?(m, base) && m["restores"].zero?
     list << "metadata" if waiting && m["metadata"].zero?
@@ -293,14 +326,24 @@ class Explorer
       mark = "[req-X#{m['changes']}]"
       replace_section("依頼", "\n#{mark}\n\n")
       m["request"] = [mark]
+      revise(m)
+    when "typo"
+      # 印を変えずに、依頼の文を直す
+      m["changes"] += 1
+      replace_section("依頼", section("依頼") + "(誤字を直した)\n\n")
+      revise(m)
+    when "check+round" then check_round(m)
+    when "publish+round" then publish_round(m)
+    when "pull+round" then pull_round(m)
     when "restore"
       m["restores"] += 1
       base = current(m) || m["runs"][m["last"]]
       replace_section("依頼", base["bytes"])
       m["request"] = base["request"]
+      m["rev"] = base["rev"]
     when "metadata"
       m["metadata"] = 1
-      text = File.read(PACKET, encoding: "UTF-8")
+      text = File.read(PACKET, encoding: "UTF-8").sub(/^published: .*\n/, "")
       File.write(PACKET, text.sub(/^updated: .*$/, "updated: 2026-01-02T00:00:00+09:00\npublished: 2026-01-02T00:00:00+09:00"))
     when "forget"
       # 依頼を記録しない古い版で起動した run
@@ -331,6 +374,55 @@ class Explorer
     m["request"] += ["[req-R#{n}]"]
     m["next"] = ["[next-R#{n}]"]
     m["state"] = "open" if m["state"] == "review"
+    revise(m)
+  end
+
+  # check が依頼を比べた後、READY を返す前 (公開先の確認の間) に依頼が足される
+  def check_round(m)
+    fired = false
+    World.on_gh = lambda do
+      World.on_gh = nil
+      fired = true
+      add_round(m)
+    end
+    _code, out = invoke("check", "--title", "題名", "--body-file", BODY)
+    World.on_gh = nil
+    raise "check が公開先の確認に届かない: #{out}" unless fired
+
+    violate("P1", "check+round: 検査の途中で依頼が変わったのに READY になる") if out["status"] == "READY"
+    if !BEHAVIOR_ONLY && out["status"] != "READY" && out["reason_code"] != "request-changed"
+      violate("P1", "check+round: 依頼が変わったことを理由に返さない (#{out['reason_code']})")
+    end
+  end
+
+  # publish が packet を読んだ後、一時 file を作る前 (gate の検査の間) に依頼が足される
+  def publish_round(m)
+    fired = false
+    World.on_scan = lambda do
+      World.on_scan = nil
+      fired = true
+      add_round(m)
+    end
+    World.packet(%w[publish 7], "")
+    World.on_scan = nil
+    raise "publish が gate の検査に届かない" unless fired
+  end
+
+  # pull が Issue の写しを読む間に依頼が足される。pull が packet を書くのは、local に未 publish の更新が無いときだけ
+  # なので、先に今の packet を publish した後の形にする。写しは、その後に別の場所で publish した形 (中身は同じ)。
+  def pull_round(m)
+    File.write(PACKET, Packet.with_published(File.read(PACKET, encoding: "UTF-8"), Time.now, PACKET))
+    fired = false
+    World.on_read = lambda do
+      fired = true
+      copy = Packet.compose(Packet.parse_text(File.read(PACKET, encoding: "UTF-8"), PACKET), Time.now + 60)
+      add_round(m)
+      copy
+    end
+    _out, _code, err = World.packet(%w[pull 7], "")
+    World.on_read = nil
+    raise "pull が Issue の写しを読まない" unless fired
+    raise "pull が分岐で止まった (local を publish した形になっていない): #{err}" if err.include?("分岐")
   end
 
   def start(name, m)
@@ -342,9 +434,9 @@ class Explorer
             "retry_of" => name == "retry-empty" ? previous : nil }
     if name == "retry-empty"
       # 同じ brief をもう一度使うので、依頼 (と、その記録の有無) は前の run のもの
-      run["request"], run["bytes"], run["recorded"] = m["runs"][previous].values_at("request", "bytes", "recorded")
+      run["request"], run["bytes"], run["recorded"], run["rev"] = m["runs"][previous].values_at("request", "bytes", "recorded", "rev")
     else
-      run["request"], run["bytes"], run["recorded"] = m["request"], section("依頼"), true
+      run["request"], run["bytes"], run["recorded"], run["rev"] = m["request"], section("依頼"), true, m["rev"]
     end
     brief = File.read(File.join(run["dir"], "brief.md"), encoding: "UTF-8")
     violate("P1", "#{name}: worker に渡した依頼が、起動のときの依頼と違う") unless marks(brief, "req") == run["request"]
@@ -365,7 +457,8 @@ class Explorer
     packet_update("run-start", "run" => dir, "tab" => "#7", "expected_run" => previous["dir"])
     World.tabs, World.panes = [], []
     m["runs"] << { "dir" => dir, "nonce" => "e" * 16, "done" => nil, "retry_of" => m["run"], "manual" => true,
-                   "request" => previous["request"], "bytes" => previous["bytes"], "recorded" => previous["recorded"] }
+                   "request" => previous["request"], "bytes" => previous["bytes"], "recorded" => previous["recorded"],
+                   "rev" => previous["rev"] }
     m["run"] = m["runs"].size - 1
   end
 
@@ -457,6 +550,8 @@ class Explorer
 
   # どの操作の後でも見ること
   def invariants(m)
+    # 書き手の一時 file が残ると、後の書き込みがすべて止まる。性質の外の失敗として扱う。
+    raise "packet の dir に一時 file などが残った: #{Dir.children(PACKETS).sort.inspect}" unless Dir.children(PACKETS) == ["7.md"]
     violate("P3", "依頼の節が、足した依頼を失った") unless marks(section("依頼"), "req") == m["request"]
     violate("P3", "結果の節が、回収した結果を失った") unless marks(section("結果"), "res") == m["results"]
     m["runs"].each_with_index do |run, i|
@@ -464,7 +559,7 @@ class Explorer
       violate("P3", "起動 #{i + 1} の依頼が run dir に残っていない") unless marks(brief, "req") == run["request"]
     end
     violate("P2", "次の入口が、最後に書いたものと違う") unless marks(section("次の入口"), "next") == m["next"]
-    return unless %w[open review].include?(m["state"]) && m["run"].nil? && m["last"]
+    return unless checkable?(m)
 
     before = File.binread(PACKET)
     _code, out = invoke("check", "--title", "題名", "--body-file", BODY)
@@ -485,12 +580,15 @@ def save(model)
     dir = File.join(RUNS, name)
     [name, KEPT.map { |f| File.join(dir, f) }.select { |f| File.exist?(f) }.map { |f| [File.basename(f), File.binread(f)] }]
   end
-  Marshal.dump([File.binread(PACKET), runs, World.tabs, World.panes, model])
+  # packet の dir は丸ごと保つ (一時 file が残る形を、別の順序へ漏らさない)
+  packets = Dir.children(PACKETS).sort.map { |name| [name, File.binread(File.join(PACKETS, name))] }
+  Marshal.dump([packets, runs, World.tabs, World.panes, model])
 end
 
 def restore(saved)
-  packet, runs, tabs, panes, model = Marshal.load(saved)
-  File.binwrite(PACKET, packet)
+  packets, runs, tabs, panes, model = Marshal.load(saved)
+  Dir.children(PACKETS).each { |name| File.unlink(File.join(PACKETS, name)) }
+  packets.each { |name, bytes| File.binwrite(File.join(PACKETS, name), bytes) }
   FileUtils.rm_rf(RUNS)
   FileUtils.mkdir_p(RUNS, mode: 0700)
   runs.each do |name, files|
@@ -543,7 +641,8 @@ TEXT
 FileUtils.mkdir_p(RUNS, mode: 0700)
 World.tabs, World.panes = [], []
 start = { "request" => ["[req-R0]"], "next" => ["[next-R0]"], "results" => [], "runs" => [], "run" => nil, "last" => nil, "state" => "open",
-          "changes" => 0, "restores" => 0, "metadata" => 0, "forgets" => 0, "stops" => 0, "history" => [] }
+          "changes" => 0, "restores" => 0, "metadata" => 0, "forgets" => 0, "stops" => 0,
+          "rev" => 0, "revs" => 0, "history" => [] }
 
 began = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 seen = { state_key(start) => true }
@@ -595,10 +694,11 @@ unless found.empty?
   abort "FAIL: worker-request-order: 性質の違反 #{found.size} 種類。例: #{property} #{text} (#{history.join(' → ')})"
 end
 # 並べる範囲が減って気付かない形にしない。操作の種類は全部が当たり、self-test の上限では、状態と操作の数を固定する。
-EVENTS = %w[launch retry-empty manual-retry manual-collect round overwrite restore metadata forget stop review collect:normal
-            collect:normal+round collect:again collect:empty].concat(Explorer::STOPS.map { |s| "collect:#{s}" }).freeze
+EVENTS = %w[launch retry-empty manual-retry manual-collect round overwrite typo restore metadata forget stop review collect:normal
+            collect:normal+round collect:again collect:empty check+round publish+round pull+round]
+         .concat(Explorer::STOPS.map { |s| "collect:#{s}" }).freeze
 abort "FAIL: worker-request-order: 当たらない操作 #{(EVENTS - used.keys).inspect}、一覧に無い操作 #{(used.keys - EVENTS).inspect}" unless used.keys.sort == EVENTS.sort
-if [MAX_LAUNCHES, MAX_CHANGES] == [2, 1] && !FULL_KEY && !BEHAVIOR_ONLY && [seen.size, transitions] != [1613, 3369]
+if [MAX_LAUNCHES, MAX_CHANGES] == [2, 1] && !FULL_KEY && !BEHAVIOR_ONLY && [seen.size, transitions] != [2408, 5604]
   abort "FAIL: worker-request-order: 状態と操作の数が変わった (#{seen.size}、#{transitions})"
 end
 puts "ok: worker-request-order (状態 #{seen.size}、操作 #{transitions})"

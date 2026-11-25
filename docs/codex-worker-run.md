@@ -339,8 +339,9 @@ run script の実行、特殊文字を含む path、snapshot、起動記録、�
 本物の herdr、codex、GitHub には接続しません。
 
 `scripts/tests/worker-request-order-test.sh` は、「依頼の照合」の性質を、操作の順序を並べて見ます (#719)。
-packet と起動の script を1つの process に読み込み、外部の command (git、herdr、preflight、gate、gh) だけを差し替えます。
-起動、依頼の変更、回収、再実行、破棄などの操作を、届く状態が尽きるまで1つずつ当てます。
+packet と起動の script を1つの process に読み込み、外部の command (git、herdr、preflight、gate、gh、Issue の読み取り) だけを差し替えます。
+起動、依頼の変更、回収、再実行、破棄、`publish`、`pull` などの操作を、届く状態が尽きるまで1つずつ当てます。
+並べる操作は、packet と run directory を書く手順 (`worker-update`、`collect`、`check`、`publish`、`pull`、人の編集) から引きます。
 self-test の上限は、起動2回、依頼の変更1回です (状態の数と操作の数を固定しています)。
 この範囲を変えるときや、起動と回収の契約を変えるときは、手元で上限を広げて走らせます。
 
@@ -349,10 +350,11 @@ t=$(mktemp -d)
 ruby scripts/tests/lib/worker-request-order-test.rb "$PWD" "$t" --report --bounds=2,2
 ```
 
-- `--bounds=<起動>,<依頼の変更>` は上限です。2,2 と 3,1 は、それぞれ1〜2分かかります (2026-11-25、開発機)。
+- `--bounds=<起動>,<依頼の変更>` は上限です。2,2 と 3,1 は、それぞれ2〜3分かかります (2026-11-26、開発機)。
 - 同じ状態かを見るとき、後の判断に効かないと見なす値 (結果と次の入口の文面、回収し終えた run の成果物) を外します。
   `--full` は外さずに見ます。2,1 の範囲で、直す前の違反の種類と、直した後に違反が無いことが、外した形と同じでした。
-- 操作は subcommand の単位です。1つの subcommand の途中に入る変更は、`collect` が待つ間の `round` だけを見ます。
+- 操作は subcommand の単位です。1つの subcommand の途中に入る変更は、`round` だけを見ます。入れる所は、`collect` が待つ間、
+  `check` が公開先を確かめる間、`publish` が gate に通す間、`pull` が Issue を読む間の 4 つです。
 - 違反が出た先はたどりません。
 
 ## 起動の記録 (`launch.json`)
@@ -392,6 +394,8 @@ herdr から ID が返ったら、一時 file と rename で更新します。
 - 足した依頼を満たすには、その依頼で `launch` して回収します。依頼を起動のときの文面に戻しても `same` になります。
 - `collect` は始めに読んだ packet の digest で書きます。待つ間に packet が変わると `packet-update` で止まるので、
   packet を読み直して、もう一度 `collect` を呼びます。
+- `check` は、`READY` を返す直前に packet の記録と依頼を読み直します (`packet-again` の段)。検査の途中で依頼が
+  変わったら `request-changed`、回収した run が変わったら `check-record` で止まります。
 - 見ないものが1つあります。`check` が `READY` を返した後、push や PR の作成の前に依頼が変わることです。
 
 ## collect の入力と出力
@@ -583,6 +587,7 @@ personal-codex-worker-run check --repo <main worktree の root> --issue <N> --ti
 | publish-gate | public-safety | `publish-material` / `publish-gate` / `gate-warning`: 公開する材料と gate |
 | destination | public-safety | `destination`: slug と origin の push URL |
 | marker | public-safety | `marker`: 個人 project の PR の目印 |
+| packet-again | launch-record | `packet-check` / `packet-list` / `check-record` / `request-changed` / `request-unrecorded`: 返す直前に packet の段を繰り返し、回収した run と branch が始めと同じか |
 
 予期しない file 操作などの失敗は、その段で `io` を返します。
 snapshot の stderr は `last_run` の `snapshot-verify.txt` に保存します。

@@ -10,6 +10,8 @@ write_exec(File.join(BIN, "gh"), <<~'FAKE')
   case ARGV
   when %w[repo view --json nameWithOwner]
     exit 1 if ENV["FAKE_GH_VIEW_FAIL"]
+    # 検査の途中 (公開先の確認の間) に packet が変わる形 (#719)
+    File.write(ENV.fetch("FAKE_PACKET_PATH"), File.read(ENV["FAKE_GH_VIEW_PACKET"])) if ENV["FAKE_GH_VIEW_PACKET"]
     puts JSON.generate("nameWithOwner" => ENV.fetch("FAKE_GH_SLUG", "owner/project"))
   when %w[api user]
     exit 1 if ENV["FAKE_OWNER_FAIL"]
@@ -200,6 +202,24 @@ digest = Digest::SHA256.hexdigest(REQUEST)
   no_fetch
 end
 File.write(REQUEST_RECORD, digest + "\n")
+# 検査の途中に依頼が変わる、または回収した run が変わると、READY を返さない (#719)。返す直前に packet を読み直す。
+# 別の run は依頼の記録が同じなので、run の比較だけが止める。
+other_run = RUN + "-other"
+FileUtils.mkdir_p(other_run)
+FileUtils.cp(REQUEST_RECORD, other_run)
+[[saved_packet.sub(REQUEST, REQUEST + "足した依頼\n"), "request-changed"],
+ [saved_packet.sub(/^last_run:.*\n/, "last_run: #{JSON.generate(other_run)}\n"), "check-record"]].each do |text, code|
+  swap = File.join(ROOT, "packet-swap")
+  File.write(swap, text)
+  result = launch(1, { "FAKE_GH_VIEW_PACKET" => swap, "FAKE_PACKET_PATH" => PACKET }, [],
+                  explicit: ["check", "--repo", MAIN, "--issue", "7", "--title", "検査を追加する (#7)", "--body-file", BODY])
+  assert(result.values_at("status", "phase", "blocked_at", "reason_code") == ["BLOCKED", "packet-again", "launch-record", code],
+         "a packet changed during check blocks before READY: #{result}")
+  assert(File.read(PACKET) == text, "check keeps the packet written during it")
+  File.write(PACKET, saved_packet)
+end
+FileUtils.rm_rf(other_run)
+assert(invoke_check["status"] == "READY", "the unchanged packet still reaches READY")
 
 ["", "\xff".b, " \n"].each do |text|
   invalid = File.join(ROOT, "invalid-body")
