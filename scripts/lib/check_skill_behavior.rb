@@ -243,6 +243,7 @@ module CheckSkillBehavior
 
     validate_turn!(r, label, target["before"] ? COMPLETIONS + [NOT_STARTED] : COMPLETIONS)
     validate_fix_check!(r["fix_check"], target, "#{label}: fix_check") if r.key?("fix_check")
+    validate_calls!(r["calls"], label)
     if target["before"]
       validate_before_run!(r, label)
     elsif r.key?("before")
@@ -257,7 +258,10 @@ module CheckSkillBehavior
       raise Error, "#{label}: before must be an array of #{C::BEFORE_TURNS} object(s) with exactly #{BEFORE_RUN_KEYS.join(', ')}"
     end
 
-    list.each { |b| validate_turn!(b, "#{label}: before", COMPLETIONS) }
+    list.each do |b|
+      validate_turn!(b, "#{label}: before", COMPLETIONS)
+      validate_calls!(b["calls"], "#{label}: before")
+    end
     started = r["completion"] != NOT_STARTED
     raise Error, "#{label}: the last turn must be #{NOT_STARTED} when the turn before did not exit" if started && list.last["completion"] != "exited"
     return if started
@@ -266,7 +270,7 @@ module CheckSkillBehavior
     raise Error, "#{label}: a #{NOT_STARTED} turn must carry nothing" unless empty
   end
 
-  # 1 つの turn の記録 (1 turn の case では run の全体)。
+  # 1 つの turn の記録 (1 turn の case では run の全体) の、呼び出しのほか。
   def self.validate_turn!(r, label, completions)
     raise Error, "#{label}: completion must be one of #{completions.join(', ')}" unless completions.include?(r["completion"])
     raise Error, "#{label}: reached must be true or false" unless [true, false].include?(r["reached"])
@@ -279,9 +283,12 @@ module CheckSkillBehavior
     if r.key?("skills_unresolved") && ![true, false].include?(r["skills_unresolved"])
       raise Error, "#{label}: skills_unresolved must be true or false"
     end
-    raise Error, "#{label}: calls must be an array" unless r["calls"].is_a?(Array)
+  end
 
-    r["calls"].each_with_index do |c, j|
+  def self.validate_calls!(calls, label)
+    raise Error, "#{label}: calls must be an array" unless calls.is_a?(Array)
+
+    calls.each_with_index do |c, j|
       l = "#{label}.calls[#{j}]"
       raise Error, "#{l}: must be an object with #{CALL_KEYS.join(', ')}" unless c.is_a?(Hash) && c.keys.sort == CALL_KEYS.sort
       raise Error, "#{l}: id and tool must be strings" unless c["id"].is_a?(String) && c["tool"].is_a?(String)
@@ -383,8 +390,8 @@ module CheckSkillBehavior
     return [:passed, []] unless c["kind"] == "positive"
 
     requested = run["calls"].any? { |x| c["require"].include?(x["class"]) && x["outcome"] == "ok" }
-    return [:unmet, ["no ok call of #{c['require'].join('/')}"]] unless requested
-    return [:unmet, ["no change in allowed_changes"]] if run["changed"].empty?
+    return [:unmet, [mark.call(list.length - 1, "no ok call of #{c['require'].join('/')}")]] unless requested
+    return [:unmet, [mark.call(list.length - 1, "no change in allowed_changes")]] if run["changed"].empty?
 
     [:achieved, []]
   end

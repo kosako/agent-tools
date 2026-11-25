@@ -75,10 +75,12 @@ by_id.each do |id, c|
     want_marks = case want
                  when :violation then [bad1 ? "turn 1: " : nil, bad2 ? "turn 2: " : nil].compact
                  when :unevaluable then [fine1 ? "turn 2: " : "turn 1: "]
+                 when :unmet then ["turn 2: "]
+                 else []
                  end
     tally[[id, got]] += 1
     tally[[id, first]] += 1
-    ok = got == want && first == want_first && (want_marks.nil? ? reasons.none? { |r| r.start_with?("turn") } : marks.uniq == want_marks)
+    ok = got == want && first == want_first && marks.uniq == want_marks
     wrong << [id, a, b, got, want, first, want_first, reasons] unless ok
   end
 end
@@ -158,6 +160,8 @@ fixed = { "status" => "passed", "reason" => "ok", "passed" => 1, "total" => 1 }
 with_fix = ->(&blk) { copy.call(base).tap { |d| blk.call(d["runs"].find { |r| r["case"] == "pos" }) } }
 check("検査のある case の run は、検査を持ってよい", accepted.call(with_fix.call { |r| r["fix_check"] = fixed }, checked).nil?)
 check("検査のある case の not-started は、検査が無ければ受ける", accepted.call(with_fix.call { |r| r.merge!(copy.call(no_start)) }, checked).nil?)
+check("検査と呼び出しの両方が壊れた run は、今までどおり検査の誤りを先に出す",
+      accepted.call(with_fix.call { |r| r["fix_check"] = 1; r["calls"] = 1 }, checked).to_s.include?("fix_check must be an object"))
 check("検査のある case の not-started に検査", accepted.call(with_fix.call { |r| r.merge!(copy.call(no_start)); r["fix_check"] = fixed }, checked).to_s.include?("must carry nothing"))
 # 前の turn の無い case
 plain = C.parse(JSON.generate("schema_version" => 1, "cases" => cases.map { |c| c.reject { |k, _| k == "before" } }))
@@ -214,12 +218,23 @@ rc, out, = judge_run.call(mutate.call { |_, r| r["before"][0]["reached"] = false
 check("1 turn 目の未到達は評価不能 (#{rc})", rc == 2 && out.include?("unevaluable: turn 1: not reached") && out.include?("reached=0 "))
 check("理由の数を summary に出す", out.include?("unevaluable reasons: turn 1: not reached=1"))
 
+# 未達の 2 つの理由にも、turn の印を付ける
+rc, out, = judge_run.call(copy.call(base).tap { |d| d["runs"].find { |r| r["case"] == "pos" }["calls"] = [] })
+check("2 turn 目の求めた呼び出しが無い正例は、turn の印つきの未達 (#{rc})", rc == 1 && out.include?("run 1: unmet: turn 2: no ok call of file-write\n"))
+rc, out, = judge_run.call(copy.call(base).tap { |d| d["runs"].find { |r| r["case"] == "pos" }["changed"] = [] })
+check("2 turn 目の差分が無い正例は、turn の印つきの未達 (#{rc})", rc == 1 && out.include?("run 1: unmet: turn 2: no change in allowed_changes\n"))
+
 # 条件
 { "無い" => nil, "differs" => "differs", "unknown" => "unknown", "mixed" => "mixed:same,differs" }.each do |label, v|
   rc, out, = judge_run.call(mutate.call { |d, _| v.nil? ? d["ids"].delete("resume_session") : d["ids"]["resume_session"] = v })
   check("resume_session が #{label} なら条件の食い違いで exit 2 (#{rc})",
         rc == 2 && out.include?("condition: the last turn did not resume the same session in every run"))
 end
+# Codex の決まった値。実測した session の記録 (0.171.0 の turn_context) から、実装の定数を使わずに組み立てる
+measured = { "approval_policy" => "never", "cwd" => "project",
+             "sandbox_policy" => { "type" => "workspace-write", "network_access" => false, "exclude_tmpdir_env_var" => true, "exclude_slash_tmp" => true } }
+expected = "approval=#{measured["approval_policy"]} cwd=#{measured["cwd"]} sandbox=#{JSON.generate(measured["sandbox_policy"].sort.to_h)}"
+check("Codex の決まった値は、実測の値と合う", C::CODEX_TURN_CONTEXT == expected)
 codex = lambda do |context|
   mutate.call do |d, _|
     d["tool"] = "codex"
@@ -227,9 +242,10 @@ codex = lambda do |context|
     context.nil? ? d["ids"].delete("turn_context") : d["ids"]["turn_context"] = context
   end
 end
-rc, out, = judge_run.call(codex.call(C::CODEX_TURN_CONTEXT))
+rc, out, = judge_run.call(codex.call(expected))
 check("codex の決まった設定は緑 (#{rc}): #{out}", rc == 0 && !out.include?("condition:"))
-[nil, "unknown", "approval=never cwd=project sandbox={\"type\":\"read-only\"}", "mixed:#{C::CODEX_TURN_CONTEXT},x"].each do |v|
+[nil, "unknown", "approval=never cwd=project sandbox={\"type\":\"read-only\"}", "mixed:#{expected},x", expected.sub("never", "on-request"), expected.sub("cwd=project", "cwd=other"),
+ expected.sub("\"network_access\":false", "\"network_access\":true")].each do |v|
   rc, out, = judge_run.call(codex.call(v))
   check("codex の turn_context が #{v.inspect} なら条件の食い違いで exit 2 (#{rc})",
         rc == 2 && out.include?("condition: the effective settings of the turns differ from the expected ones"))
