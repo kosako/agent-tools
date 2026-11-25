@@ -1727,6 +1727,7 @@ seen = ->(*lines) { P.reached?(P.parse_claude(lines.join("\n"), [])[:calls], rea
   "本文の中の path" => [use.call("Grep", grep), result.call("test/a.rb:3: lib/median.rb:4:y\n")],
   "名前の続く別の file" => [use.call("Grep", grep), result.call("lib/median.rb.bak:3:y\nlib/median.rb-old:3:y\n")],
   "別の dir の同じ名前の file" => [use.call("Grep", grep), result.call("other/lib/median.rb:3:y\n./lib/median.rb:3:y\n/x/lib/median.rb:3:y\n")],
+  "同じ id の結果の先の方が誤りで、そこにだけ在る" => [use.call("Grep", grep), result.call(found, { "is_error" => true }), result.call("none")],
   "同じ id の結果の後の方が誤り" => [use.call("Grep", grep), result.call(found), result.call("x", { "is_error" => true })],
   "前に字の付く別の file" => [use.call("Grep", grep), result.call("xlib/median.rb:3:y\n")],
   "path だけの行" => [use.call("Grep", grep), result.call("lib/median.rb\n")],
@@ -1737,6 +1738,11 @@ seen = ->(*lines) { P.reached?(P.parse_claude(lines.join("\n"), [])[:calls], rea
   "文字列でない結果" => [use.call("Grep", grep), result.call({ "text" => found })],
   "text でない並びの結果" => [use.call("Grep", grep), result.call([{ "type" => "image", "text" => found }, found, { "type" => "text", "text" => 1 }])],
 }.each { |label, lines| check("到達にしない: #{label}", !seen.call(*lines)) }
+[true, false].repeated_permutation(4).each do |err1, has1, err2, has2|
+  lines = [[err1, has1], [err2, has2]].map { |err, has| result.call(has ? found : "none", err ? { "is_error" => true } : {}) }
+  want = !err2 && ((!err1 && has1) || has2)
+  check("同じ id の 2 つの結果 (誤り #{err1}・#{err2}、在る #{has1}・#{has2}) は #{want}", seen.call(use.call("Grep", grep), *lines) == want)
+end
 check("path が 2 つなら、どちらかで到達", P.reached?(P.parse_claude([use.call("Grep", grep), result.call(found)].join("\n"), [])[:calls], ["lib/none.rb", "lib/median.rb"]))
 codex_out = JSON.generate("type" => "item.completed", "item" => { "id" => "i", "type" => "command_execution", "command" => "rg -n median", "exit_code" => 0, "status" => "completed",
                                                                  "aggregated_output" => found })

@@ -289,7 +289,7 @@ module ProbeSkillBehavior
           next unless c.is_a?(Hash) && c["type"] == "tool_result"
 
           results[c["tool_use_id"].to_s] = c["is_error"] == true ? "error" : "ok"
-          outputs[c["tool_use_id"].to_s] << result_text(c["content"])
+          outputs[c["tool_use_id"].to_s] << result_text(c["content"]) unless c["is_error"] == true
         end
       when "result"
         result_seen = true
