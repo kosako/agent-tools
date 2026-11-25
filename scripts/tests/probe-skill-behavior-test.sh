@@ -1693,6 +1693,60 @@ init_line = ->(h = {}) { JSON.generate({ "type" => "system", "subtype" => "init"
   check("init ごとの状態は #{want.inspect} (#{got.inspect})", got == want)
 end
 check("codex の event からは、自動の memory の状態を作らない", P.parse_codex("", [])[:memory_states].nil?)
+# 到達 (#778)。中身を出す検索の結果に、path で始まる行があれば、path を渡していなくても到達
+use = ->(name, input, id = "t1") { JSON.generate("type" => "assistant", "message" => { "content" => [{ "type" => "tool_use", "id" => id, "name" => name, "input" => input }] }) }
+result = ->(content, h = {}, id = "t1") { JSON.generate("type" => "user", "message" => { "content" => [{ "type" => "tool_result", "tool_use_id" => id, "content" => content }.merge(h)] }) }
+deny = JSON.generate("type" => "result", "subtype" => "success", "permission_denials" => [{ "tool_use_id" => "t1" }])
+reach = ["lib/median.rb"]
+grep = { "pattern" => "median", "output_mode" => "content", "-C" => 10 }
+found = "lib/median.rb-1-# x\nlib/median.rb:3:def median(values)\nlib/median.rb-4-  sorted\n"
+seen = ->(*lines) { P.reached?(P.parse_claude(lines.join("\n"), [])[:calls], reach) }
+{
+  "中身を出す検索の結果" => [use.call("Grep", grep), result.call(found)],
+  "行番号の無い結果" => [use.call("Grep", grep), result.call("lib/median.rb:def median(values)\n")],
+  "結果の途中の行" => [use.call("Grep", grep), result.call("test/a.rb:1:x\nlib/median.rb:3:y\n")],
+  "同じ id の結果が 2 つで、先の方に在る" => [use.call("Grep", grep), result.call(found), result.call("none")],
+  "同じ id の結果が 2 つで、後の方に在る" => [use.call("Grep", grep), result.call("none"), result.call(found)],
+  "text の並びの結果" => [use.call("Grep", grep), result.call([{ "type" => "text", "text" => "Found 1" }, { "type" => "text", "text" => found }])],
+  "text の並びの 2 つ目の頭" => [use.call("Grep", grep), result.call([{ "type" => "text", "text" => "Found 1" }, { "type" => "text", "text" => "lib/median.rb:3:y" }])],
+  "2 つ目の呼び出し" => [use.call("Glob", { "pattern" => "*" }), result.call("lib/median.rb"), use.call("Grep", grep, "t2"), result.call(found, {}, "t2")],
+  "入力に path (結果は無い)" => [use.call("Read", { "file_path" => "/x/proj/lib/median.rb" })],
+  "入力に path (拒まれた)" => [use.call("Bash", { "command" => "cat lib/median.rb" }), result.call("denied", { "is_error" => true })],
+}.each { |label, lines| check("到達にする: #{label}", seen.call(*lines)) }
+{
+  "呼び出しが無い" => [],
+  "名前だけの検索" => [use.call("Grep", grep.merge("output_mode" => "files_with_matches")), result.call(found)],
+  "数だけの検索" => [use.call("Grep", grep.merge("output_mode" => "count")), result.call("lib/median.rb:3\n")],
+  "output_mode の省略 (既定は名前だけ)" => [use.call("Grep", { "pattern" => "median" }), result.call(found)],
+  "誤りの結果" => [use.call("Grep", grep), result.call(found, { "is_error" => true })],
+  "拒まれた呼び出し" => [use.call("Grep", grep), result.call(found), deny],
+  "結果が無い" => [use.call("Grep", grep)],
+  "別の呼び出しの結果" => [use.call("Grep", grep), result.call(found, {}, "t9")],
+  "文脈の行だけ" => [use.call("Grep", grep), result.call("lib/median.rb-1-# x\n")],
+  "行の途中の path" => [use.call("Grep", grep), result.call("test/a.rb:3:require lib/median.rb: x\n")],
+  "本文の中の path" => [use.call("Grep", grep), result.call("test/a.rb:3: lib/median.rb:4:y\n")],
+  "名前の続く別の file" => [use.call("Grep", grep), result.call("lib/median.rb.bak:3:y\nlib/median.rb-old:3:y\n")],
+  "別の dir の同じ名前の file" => [use.call("Grep", grep), result.call("other/lib/median.rb:3:y\n./lib/median.rb:3:y\n/x/lib/median.rb:3:y\n")],
+  "同じ id の結果の先の方が誤りで、そこにだけ在る" => [use.call("Grep", grep), result.call(found, { "is_error" => true }), result.call("none")],
+  "同じ id の結果の後の方が誤り" => [use.call("Grep", grep), result.call(found), result.call("x", { "is_error" => true })],
+  "前に字の付く別の file" => [use.call("Grep", grep), result.call("xlib/median.rb:3:y\n")],
+  "path だけの行" => [use.call("Grep", grep), result.call("lib/median.rb\n")],
+  "点を任意の字とみなした file" => [use.call("Grep", grep), result.call("lib/medianxrb:3:y\n")],
+  "Glob の結果" => [use.call("Glob", { "pattern" => "**/*.rb", "output_mode" => "content" }), result.call(found)],
+  "Read の結果" => [use.call("Read", { "file_path" => "/x/proj/test/a.rb", "output_mode" => "content" }), result.call(found)],
+  "Bash の結果" => [use.call("Bash", { "command" => "grep -rn median .", "output_mode" => "content" }), result.call(found)],
+  "文字列でない結果" => [use.call("Grep", grep), result.call({ "text" => found })],
+  "text でない並びの結果" => [use.call("Grep", grep), result.call([{ "type" => "image", "text" => found }, found, { "type" => "text", "text" => 1 }])],
+}.each { |label, lines| check("到達にしない: #{label}", !seen.call(*lines)) }
+[true, false].repeated_permutation(4).each do |err1, has1, err2, has2|
+  lines = [[err1, has1], [err2, has2]].map { |err, has| result.call(has ? found : "none", err ? { "is_error" => true } : {}) }
+  want = !err2 && ((!err1 && has1) || has2)
+  check("同じ id の 2 つの結果 (誤り #{err1}・#{err2}、在る #{has1}・#{has2}) は #{want}", seen.call(use.call("Grep", grep), *lines) == want)
+end
+check("path が 2 つなら、どちらかで到達", P.reached?(P.parse_claude([use.call("Grep", grep), result.call(found)].join("\n"), [])[:calls], ["lib/none.rb", "lib/median.rb"]))
+codex_out = JSON.generate("type" => "item.completed", "item" => { "id" => "i", "type" => "command_execution", "command" => "rg -n median", "exit_code" => 0, "status" => "completed",
+                                                                 "aggregated_output" => found })
+check("codex の command の出力では到達にしない", !P.reached?(P.parse_codex(codex_out, [])[:calls], reach))
 check("codex の子 process の環境は --codex-home のときだけ CODEX_HOME を持つ",
       P.codex_env({ codex_home: "/e" }) == { "CODEX_HOME" => "/e" } && P.codex_env({}) == {})
 check("merged は 1 つの値ならその値", P.merged(["a", "a", nil]) == "a")
@@ -1901,6 +1955,18 @@ run_fake claude-code "$quiet_events" --only investigate-diagnose-only --out "$re
 [ "$rc" -eq 0 ] || fail "quiet claude probe should exit 0 (rc=$rc): $out"
 [ "$(json_get "$res" 'd["runs"][0].values_at("completion", "reached", "changed", "calls")')" = '["exited",false,[],[]]' ] \
   || fail "a run without calls should be unreached and unchanged: $(json_get "$res" 'd["runs"][0]')"
+
+# --- claude: path を渡さない検索で中身を読んだ run は到達。本文は results.json に入れない (#778) ---
+grep_events="$tmp/claude-grep.jsonl"
+for body in 'lib/median.rb:3:CANARY-BODY|true' 'lib/median.rb-3-CANARY-BODY|false'; do
+  printf '%s\n' '{"type":"system","subtype":"init","model":"m-fake","claude_code_version":"9.9.9","tools":["Grep"],"permissionMode":"acceptEdits"}' \
+    '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Grep","input":{"pattern":"median","output_mode":"content"}}]}}' \
+    "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":\"${body%|*}\"}]}}" \
+    '{"type":"result","subtype":"success"}' > "$grep_events"
+  run_fake claude-code "$grep_events" --only investigate-diagnose-only --out "$tmp/grep.json"
+  [ "$(ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0]))["runs"][0]["reached"]' "$tmp/grep.json")" = "${body#*|}" ] || fail "reached should be ${body#*|} for ${body%|*}: $out"
+  if grep -q CANARY-BODY "$tmp/grep.json"; then fail "results.json must not contain the search output"; fi
+done
 
 # --- claude: 自動の memory を止める環境と、その記録 (#770) ---
 [ "$(json_get "$res" 'd["ids"]["auto_memory"]')" = '{"requested":"off","init":"not-listed"}' ] \
