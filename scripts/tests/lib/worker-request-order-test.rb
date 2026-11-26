@@ -60,14 +60,17 @@ Packet.define_singleton_method(:scan) do |_text|
   World.on_scan&.call
   false
 end
-Packet.define_singleton_method(:post_comment) do |_issue, _repo, _text|
+Packet.define_singleton_method(:post_comment) do |_issue, _repo, text|
   World.posts = World.posts.to_i + 1
+  World.posted << text if World.posted
   "https://example.invalid/comment"
 end
+# 写しは、pull+round では割り込みが作り、pull では publish が投稿したものを読む
 Packet.define_singleton_method(:read_issue) do |verb, _issue, _repo|
-  raise "差し替えていない read_issue: #{verb}" unless verb == "comments" && World.on_read
+  raise "差し替えていない read_issue: #{verb}" unless verb == "comments" && (World.on_read || World.copies)
 
-  { "comments" => [{ "author_trust" => "self", "body" => World.on_read.call }], "repo" => "owner/project" }
+  bodies = World.on_read ? [World.on_read.call] : World.copies
+  { "comments" => bodies.map { |body| { "author_trust" => "self", "body" => body } }, "repo" => "owner/project" }
 end
 
 # 外部の command の代わり。知らない呼び出しは止める (実装が新しい command に頼ったら、この test の見直しになる)。
@@ -75,7 +78,7 @@ module World
   OID = "a" * 40
   BASE_OID = "b" * 40
   class << self
-    attr_accessor :tabs, :panes, :on_wait, :on_gh, :on_scan, :on_read, :posts, :calls
+    attr_accessor :tabs, :panes, :on_wait, :on_gh, :on_scan, :on_read, :posts, :posted, :copies, :calls
 
     def ok(out = "")
       [out, 0, ""]
@@ -303,6 +306,10 @@ class Explorer
       # packet を丸ごと書き換える 2 つの操作の途中に、依頼を足す
       list << "publish+round" << "pull+round"
     end
+    # 成功する publish と、その写しを取り込む pull (別の場所の写しは無い)。frontmatter の時刻を偽る metadata の後は並べない。
+    # publish は人の操作なので、人の変更の上限に数える (依頼の変更と重ねる順序は、上限を広げると並ぶ)
+    list << "publish" if m["runs"].any? && m["copies"].empty? && m["changes"] < MAX_CHANGES
+    list << "pull" if m["copies"].any? && m["pulls"].zero? && m["metadata"].zero?
     list << "check+round" if checkable?(m) && status(m, m["runs"][m["last"]]) == "same" && m["changes"] < MAX_CHANGES
     base = run || (m["last"] && m["runs"][m["last"]])
     list << "restore" if m["state"] == "open" && base && changed?(m, base) && m["restores"].zero?
@@ -344,6 +351,21 @@ class Explorer
       m["changes"] += 1
       replace_section("依頼", section("依頼") + "(誤字を直した)\n\n")
       revise(m)
+    when "publish"
+      m["changes"] += 1
+      World.posted = []
+      _out, code, err = World.packet(%w[publish 7], "")
+      posted, World.posted = World.posted, nil
+      raise "publish が通らない: #{err}" unless code == 0 && posted.size == 1
+
+      m["copies"] = posted
+    when "pull"
+      # 投稿した写しだけを取り込む。local の後の変更は未 publish のまま残り、節の文面は変わらないはず (texts で見る)
+      m["pulls"] = 1
+      World.copies = m["copies"]
+      _out, code, err = World.packet(%w[pull 7], "")
+      World.copies = nil
+      raise "投稿した写しだけの pull が通らない: #{err}" unless code == 0
     when "check+round" then check_round(m)
     when "publish+round" then publish_round(m)
     when "pull+round" then pull_round(m)
@@ -665,7 +687,10 @@ def state_key(model)
     parts << files.map { |f| File.join(run["dir"], f) }.select { |f| File.exist?(f) }.map { |f| File.read(f, encoding: "UTF-8") }.join("\0")
   end
   ignored = FULL_KEY ? %w[history] : %w[history results next]
-  parts << JSON.generate([World.tabs, World.panes, model.reject { |k, _| ignored.include?(k) }])
+  kept = model.reject { |k, _| ignored.include?(k) }
+  # 投稿した写しも、packet の結果と次の入口と同じく、既定では印だけを見る
+  kept["copies"] = kept["copies"].map { |copy| copy.scan(/\[\w+-\w+\]/) } unless FULL_KEY
+  parts << JSON.generate([World.tabs, World.panes, kept])
   joined = parts.join("\1")
   model["runs"].each_with_index { |run, i| joined = joined.gsub(run["dir"], "run#{i}").gsub(run["nonce"], "nonce#{i}") }
   Digest::SHA256.hexdigest(joined.gsub(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:Z|[+-]\d\d:\d\d)/, "TIME"))
@@ -694,7 +719,7 @@ TEXT
 FileUtils.mkdir_p(RUNS, mode: 0700)
 World.tabs, World.panes = [], []
 start = { "request" => ["[req-R0]"], "next" => ["[next-R0]"], "results" => [], "runs" => [], "run" => nil, "last" => nil, "state" => "open",
-          "changes" => 0, "restores" => 0, "metadata" => 0, "forgets" => 0, "stops" => 0, "handoffs" => 0,
+          "changes" => 0, "restores" => 0, "metadata" => 0, "forgets" => 0, "stops" => 0, "handoffs" => 0, "copies" => [], "pulls" => 0,
           "rev" => 0, "revs" => 0, "history" => [] }
 
 began = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -748,10 +773,10 @@ unless found.empty?
 end
 # 並べる範囲が減って気付かない形にしない。操作の種類は全部が当たり、self-test の上限では、状態と操作の数を固定する。
 EVENTS = %w[launch retry-empty manual-retry manual-collect round overwrite typo restore metadata forget stop review handoff collect:normal
-            collect:normal+round collect:again collect:empty check+round publish+round pull+round]
+            collect:normal+round collect:again collect:empty check+round publish+round pull+round publish pull]
          .concat(Explorer::STOPS.map { |s| "collect:#{s}" }).freeze
 abort "FAIL: worker-request-order: 当たらない操作 #{(EVENTS - used.keys).inspect}、一覧に無い操作 #{(used.keys - EVENTS).inspect}" unless used.keys.sort == EVENTS.sort
-if [MAX_LAUNCHES, MAX_CHANGES] == [2, 1] && !FULL_KEY && !BEHAVIOR_ONLY && [seen.size, transitions] != [2634, 6217]
+if [MAX_LAUNCHES, MAX_CHANGES] == [2, 1] && !FULL_KEY && !BEHAVIOR_ONLY && [seen.size, transitions] != [3903, 8487]
   abort "FAIL: worker-request-order: 状態と操作の数が変わった (#{seen.size}、#{transitions})"
 end
 puts "ok: worker-request-order (状態 #{seen.size}、操作 #{transitions})"
