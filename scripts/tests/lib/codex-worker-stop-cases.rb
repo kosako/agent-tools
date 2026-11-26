@@ -112,7 +112,7 @@ module CodexWorkerStopCases
       "transcription" => "transcription", "pane-log" => "transcription", "commits" => "clone",
       "fetch" => "fetch", "trailer" => "trailer", "merge-commits" => "public-safety",
       "style" => "public-safety", "publish-gate" => "public-safety", "destination" => "public-safety", "marker" => "public-safety",
-      "packet-again" => "launch-record", "clone-state" => "fetch", "fetched-head" => "fetch"
+      "packet-again" => "launch-record", "clone-state" => "fetch", "fetched-head" => "fetch", "clone-again" => "fetch"
     }.to_a + [["snapshot", "clone"], ["snapshot", "fetch"]]
     raise "stage の context を見直す" unless stages == expected_stages.sort
 

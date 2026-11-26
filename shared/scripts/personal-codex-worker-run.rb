@@ -84,6 +84,8 @@ module CodexWorkerRun
   }.freeze
   # brief に書いた依頼の節の SHA-256。brief を写して再実行するときは、一緒に写す (#719)。
   REQUEST_FILE = "request.sha256"
+  # collect が照合して転記した clone の HEAD の OID (#718)。check は、公開する先端がこれと同じときだけ通す。
+  COLLECTED_FILE = "collected-head"
   # 依頼が起動のときと同じと確かめられない結果に付ける注記 (#719)。
   REQUEST_NOTES = {
     "changed" => "(orchestrator 注: 起動の後に依頼が変わった。この結果は起動のときの依頼の分で、次の入口は更新していない)",
@@ -841,6 +843,7 @@ module CodexWorkerRun
       # Count only this run; main may have advanced beyond the clone's objects.
       head, count, state = stage("commits", "clone") do
         state = clone_state
+        File.binwrite(File.join(@run, COLLECTED_FILE), state["head"] + "\n")
         [state["head"], commits_this_run(state["head"]), state]
       end
       redacted = stage("transcription", "transcription") do
@@ -910,6 +913,9 @@ module CodexWorkerRun
       stop("check-record") unless valid_branch?(@branch)
       @run = @row["last_run"]
       @clone = "#{@repo}-clones/#{@issue}"
+      collected = File.join(@run, COLLECTED_FILE)
+      @collected_head = File.file?(collected) ? File.binread(collected)[/\A([0-9a-f]{40}|[0-9a-f]{64})\n\z/, 1] : nil
+      stop("check-record") unless @collected_head
       check_request
     end
 
@@ -931,10 +937,12 @@ module CodexWorkerRun
 
     # 公開するのは、worker が最後にいた commit で、作業ツリーに残りが無いときだけ (#718)。
     # HEAD の不一致を先に返す (branch に戻して検査し直すと、残りが見える)。
+    # 公開する先端は、collect が照合して転記した commit と同じでなければならない (collect の後に branch を戻すと違う)。
     def check_clone_state
       state = clone_state
       stop("clone-head") unless state["head_on_branch"]
       stop("clone-dirty") unless state.values_at("staged", "unstaged", "untracked").all?(&:zero?)
+      stop("clone-head") unless state["head"] == @collected_head
       @clone_head = state["head"]
     end
 
@@ -1040,6 +1048,11 @@ module CodexWorkerRun
       stage("destination", "public-safety") { check_destination }
       marker = stage("marker", "public-safety") { check_marker }
       stage("packet-again", "launch-record") { recheck_record }
+      # 検査の途中に clone が変わったら (残った process や人の編集)、READY を返さない。返す直前に照合し直す (#718)。
+      stage("clone-again", "fetch") do
+        verify_snapshot(@run)
+        check_clone_state
+      end
       result = { "status" => "READY", "issue" => @issue, "branch" => @branch,
                  "base_oid" => @base, "head_oid" => @head, "commits" => @commit_count,
                  "slug" => @slug, "style_findings" => @style_findings, "marker" => marker, "run_dir" => @run }

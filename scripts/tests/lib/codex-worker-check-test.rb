@@ -12,6 +12,12 @@ write_exec(File.join(BIN, "gh"), <<~'FAKE')
     exit 1 if ENV["FAKE_GH_VIEW_FAIL"]
     # 検査の途中 (公開先の確認の間) に packet が変わる形 (#719)
     File.write(ENV.fetch("FAKE_PACKET_PATH"), File.read(ENV["FAKE_GH_VIEW_PACKET"])) if ENV["FAKE_GH_VIEW_PACKET"]
+    # 検査の途中に clone が変わる形 (#718)。file を作る、または同じ OID の別の branch に切り替える。
+    File.write(ENV["FAKE_GH_VIEW_TOUCH"], "left\n") if ENV["FAKE_GH_VIEW_TOUCH"]
+    if (target = ENV["FAKE_GH_VIEW_SWITCH"])
+      clone, branch = target.split("\n", 2)
+      system(ENV.fetch("FAKE_GIT_REAL"), "-C", clone, "switch", "-qc", branch) || exit(1)
+    end
     puts JSON.generate("nameWithOwner" => ENV.fetch("FAKE_GH_SLUG", "owner/project"))
   when %w[api user]
     exit 1 if ENV["FAKE_OWNER_FAIL"]
@@ -98,6 +104,12 @@ def commit(message = "implementation\n\n#{TRAILER}", content = "safe\n")
   git(CLONE, "rev-parse", "HEAD")
 end
 
+# collect が照合して転記した HEAD の記録 (#718)。この fixture は collect を通さないので、check の直前の HEAD で書く。
+# 記録と食い違う形を見る case は、これを通さずに launch を呼ぶ。
+def collected!
+  File.write(File.join(RUN, "collected-head"), git(CLONE, "rev-parse", "HEAD") + "\n")
+end
+
 def check_events
   File.readlines(ENV.fetch("FAKE_CHECK_LOG")).map { |line| JSON.parse(line) }
 end
@@ -115,6 +127,7 @@ def invoke_check(expected = 0, env = {}, title: "検査を追加する (#7)", bo
       [p, File.stat(p).mode, Digest::SHA256.file(p).hexdigest]
     end
   end
+  collected!
   clone_before = snapshot.call
   File.write(ENV.fetch("FAKE_GIT_LOG"), "")
   File.write(ENV.fetch("FAKE_CHECK_LOG"), "")
@@ -273,13 +286,43 @@ failure("launch-record", "request-changed")
 no_fetch
 File.unlink(File.join(CLONE, "left.txt"))
 # 状態を読んだ後に clone の branch が動くと、取り込んだ先端が worker のいた commit と違う (#718)。
+check_argv = ["check", "--repo", MAIN, "--issue", "7", "--title", "検査を追加する (#7)", "--body-file", BODY]
 name = branch
 head = commit
-result = launch(1, { "FAKE_CHECK_MOVE_CLONE" => CLONE }, [],
-                explicit: ["check", "--repo", MAIN, "--issue", "7", "--title", "検査を追加する (#7)", "--body-file", BODY])
+collected!
+result = launch(1, { "FAKE_CHECK_MOVE_CLONE" => CLONE }, [], explicit: check_argv)
 assert(result.values_at("status", "phase", "blocked_at", "reason_code") == ["BLOCKED", "fetched-head", "fetch", "clone-head"],
        "a branch moved after the clone state blocks: #{result}")
 assert(git(CLONE, "rev-parse", "HEAD") != head, "fixture: the clone branch moved")
+# collect の記録が無い run (古い版で回収した) は、比べる相手が無いので止まる (#718)。
+name = branch
+commit
+File.unlink(File.join(RUN, "collected-head"))
+result = launch(1, {}, [], explicit: check_argv)
+assert(result.values_at("blocked_at", "reason_code") == %w[launch-record check-record], "a run without the collect record blocks: #{result}")
+# collect の後に人が branch を前の commit に戻すと、公開する先端は worker の最後の commit と違う (#718 の review)。
+name = branch
+first = commit
+commit
+collected!
+git(CLONE, "switch", "-q", "-C", name, first)
+result = launch(1, {}, [], explicit: check_argv)
+assert(result.values_at("phase", "blocked_at", "reason_code") == %w[clone-state fetch clone-head], "a branch reset after collect blocks: #{result}")
+# 検査の途中に clone が変わる (file が増える、同じ OID の別の branch に切り替える) と、返す直前の照合で止まる。
+name = branch
+commit
+collected!
+touched = File.join(CLONE, "late.txt")
+result = launch(1, { "FAKE_GH_VIEW_TOUCH" => touched }, [], explicit: check_argv)
+assert(result.values_at("phase", "blocked_at", "reason_code") == %w[clone-again fetch clone-dirty], "a file left during check blocks: #{result}")
+assert(File.read(touched) == "left\n", "check keeps the late file")
+File.unlink(touched)
+name = branch
+commit
+collected!
+result = launch(1, { "FAKE_GH_VIEW_SWITCH" => "#{CLONE}\nsame-oid-#{$branch_number}" }, [], explicit: check_argv)
+assert(result.values_at("phase", "blocked_at", "reason_code") == %w[clone-again fetch clone-head], "a branch switch during check blocks: #{result}")
+git(CLONE, "switch", "-q", name)
 
 ["", "\xff".b, " \n"].each do |text|
   invalid = File.join(ROOT, "invalid-body")

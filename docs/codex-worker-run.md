@@ -94,7 +94,7 @@ packet の検査前に止まる場合は、state や記録の有無自体を確�
 | `check` | `BLOCKED` | `fetch` | `fetch` | open または review / last_run を保持。書込なし | 人が診断と公開内容を確認。指揮役は push を止める | 「check の回復」の順で原因を直して check。題名と本文を変えたら personal-post-check から再実行 |
 | `check` | `BLOCKED` | `fetch` | `io` | open または review / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
 | `check` | `BLOCKED` | `fetch` | `snapshot-mismatch` | open または review / last_run を保持。書込なし | 人が snapshot の由来と保存すべき変更を確認。clone に git を実行しない | state と last_run を保つ。由来を確認して照合可能なら check。clone を退避して作り直すなら、許可された round、launch、collect、check |
-| `check` | `BLOCKED` | `launch-record` | `check-record` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
+| `check` | `BLOCKED` | `launch-record` | `check-record` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。`collected-head` が無い run (古い版で回収した) は、許可された依頼で launch、collect をやり直す。前提が揃うまで人に返す |
 | `check` | `BLOCKED` | `launch-record` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
 | `check` | `BLOCKED` | `launch-record` | `packet-check` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
 | `check` | `BLOCKED` | `launch-record` | `packet-list` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | packet check / list で確認。run が未回収なら collect、許可された修正依頼なら worker-update round。前提が揃うまで人に返す |
@@ -440,6 +440,8 @@ process-info が失敗した場合や読めない場合は、worker の消滅と
 gitignore された file、空の directory は数えません。読むときは `--no-optional-locks` を付け、index を書きません。
 collect はこの値では止まりません。`head_on_branch` が false か、数が 0 でない結果は受け入れません。
 公開前の `check` が `clone-head` か `clone-dirty` で止めます。
+照合した `HEAD` の OID は、run directory の `collected-head` (40 か 64 桁の小文字の hex と改行) に残します。
+`check` は、公開する先端がこれと同じときだけ通します。collect の後に clone の branch を動かすと、`check` は止まります。
 `commits_this_run` は、clone 内の `start_head..HEAD` の commit 数です。
 start_head が無い場合や clone 内に該当 commit が無い場合は null とし、転記を続けます。
 collect は clone にも main にも fetch しません。
@@ -544,6 +546,8 @@ pane が無い手渡しの1回目が、nonce 一致・exit 0・結果なしで�
 5. この手作りの run には `launch.json` がありません。`collect` は `no-launch-record` で止まります。
    caller が nonce、exit、結果の6見出し、snapshot、public-safety gate を確認します。
    clone の状態も、collect の `clone` と同じ読み方で確かめ、結果に書きます。公開前の `check` は同じ規則で止めます。
+   照合した clone の `HEAD` の OID を、新しい run directory の `collected-head` に書きます (collect と同じ形)。
+   書かないと、`check` は `check-record` で止まります。
    本文の置換と転記は上の collect と同じ契約に従い、`worker-update` の `result` を使います。
    依頼が、写した `request.sha256` と同じと確かめられなければ、`next` を省いて次の入口を保ちます。
    比べる値は、packet の `## 依頼` の次の行から、次の `## ` の行の前までの byte 列の SHA-256 です。
@@ -597,9 +601,9 @@ personal-codex-worker-run check --repo <main worktree の root> --issue <N> --ti
 | --- | --- | --- |
 | input | authorization | `input`: 引数、main root、本文の形式と置き場 |
 | environment | preflight | `gh-repo`: GH_REPO が空でない |
-| packet | launch-record | `packet-check` / `packet-list` / `check-record`: packet と回収済み run。`request-changed` / `request-unrecorded`: 起動のときの依頼との一致 |
+| packet | launch-record | `packet-check` / `packet-list` / `check-record`: packet と回収済み run (`collected-head` の記録を含む)。`request-changed` / `request-unrecorded`: 起動のときの依頼との一致 |
 | snapshot | fetch | `snapshot-mismatch`: last_run の preflight.json との照合 |
-| clone-state | fetch | `clone-head` / `clone-dirty` / `clone-command`: clone の HEAD が branch を指すか、未 commit の変更が無いか。両方に当たれば `clone-head` |
+| clone-state | fetch | `clone-head` / `clone-dirty` / `clone-command`: clone の HEAD が branch を指すか、未 commit の変更が無いか (両方に当たれば `clone-head`)。HEAD が `collected-head` と同じか |
 | fetch | fetch | `fetch`: clone から main への取り込み。non-fast-forward も拒否 |
 | trailer | trailer | `trailer`: origin/main の fetch、base と head、全 commit の trailer |
 | fetched-head | fetch | `clone-head`: 取り込んだ branch の先端が、clone の状態を読んだときの HEAD と同じか (読んだ後に branch が動いたら止まる) |
@@ -609,6 +613,7 @@ personal-codex-worker-run check --repo <main worktree の root> --issue <N> --ti
 | destination | public-safety | `destination`: slug と origin の push URL |
 | marker | public-safety | `marker`: 個人 project の PR の目印 |
 | packet-again | launch-record | `packet-check` / `packet-list` / `check-record` / `request-changed` / `request-unrecorded`: 返す直前に packet の段を繰り返し、回収した run と branch が始めと同じか |
+| clone-again | fetch | `snapshot-mismatch` / `clone-head` / `clone-dirty` / `clone-command`: 返す直前に、snapshot の照合と clone-state の段を繰り返す (検査の途中に残った process や人が clone を変えたら止まる) |
 
 予期しない file 操作などの失敗は、その段で `io` を返します。
 snapshot の stderr は `last_run` の `snapshot-verify.txt` に保存します。
@@ -645,12 +650,12 @@ commit の差分や message に修正が必要な場合は、履歴を書き換�
 各 commit の差分も検査するので、後続の commit で削除するだけでは警告は消えません。
 書き換えた branch をそのまま取り込むと、main に取り込み済みの tip に対して non-fast-forward になります。
 その場合、`check` は `fetch` で止まります。
-人が対象と履歴を確認し、clone の中で rebase、amend などの commit の操作で書き換えます。
-clone に fetch や config の変更をしません。snapshot の照合で許可されない変更を避けるためです。
-main では clone の snapshot を照合し、clone から修正後の objects を取り込んでから ref を付け替えます。
+書き換えは、許可された修正 round で worker に頼みます (launch、collect、check)。
+`check` は、公開する先端が collect の記録 (`collected-head`) と同じときだけ通すので、collect の後に人が clone の中で
+書き換えると、`clone-head` で止まります (#718)。人が書き換えたときも、修正 round で worker に書き換え後の branch を
+確かめさせ、collect し直してから `check` します。
+main の ref は、取り込み済みの tip に対して non-fast-forward になるので、人が対象と履歴を確認して付け替えます。
 objects を取り込む前に、clone だけにある OID へ main の ref を付け替えません。
-この履歴の書き換えと ref の付け替えは、`check` と worker の範囲外です。
-人の作業が終わってから、指揮役が `check` をやり直します。
 
 公開先は main で `gh repo view --json nameWithOwner` を読み、slug の形を確認します。
 origin の push URL は `LAUNCH.md` §9 の6形式のいずれかとの完全一致が必要です。

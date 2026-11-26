@@ -493,6 +493,7 @@ clone_case = lambda do |label, expected, work|
   result = invoke("collect")
   assert(result["status"] == "DONE" && result["clone"] == expected, "#{label}: #{result['clone'].inspect} #{result['reason_code']}")
   assert(result["head_oid"] == git(CLONE, "rev-parse", "HEAD"), "#{label}: head_oid is the clone HEAD")
+  assert(File.read(File.join(started.fetch("run_dir"), "collected-head")) == result["head_oid"] + "\n", "#{label}: collect records the HEAD")
   assert(File.read(PACKET).include?(RESULT), "#{label}: the result is transcribed")
   result
 end
