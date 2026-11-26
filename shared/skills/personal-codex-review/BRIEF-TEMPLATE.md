@@ -43,6 +43,7 @@ script が配備されていない環境で手で組むときは、上の 3 つ�
 
 1. <今回の変更で、特に確かめてほしいこと>
 2. <…>
+3. <状態を複数の書き手が書く変更なら: 守る性質と、その状態を書く手順の一覧を書き、性質を破る操作の順序 (反例) と、一覧に無い書き手を挙げてもらう (#783)>
 
 production の review lens が必要なら、Codex home の `skills/personal-production-rail/references/policy-index.md` の
 `### review` の項にある「sections(読む節)」の節だけを、`policies/review.md` から読む (`rg -n '^#'` で見出しの行を見てから、
