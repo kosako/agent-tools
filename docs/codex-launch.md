@@ -211,8 +211,7 @@ launch="$HOME/.claude/agent-tools/scripts/personal-codex-launch"
 | `personal-repo-audit` (Codex に監査させる) | `json` | `findings.schema.json` | 呼び出し側の値 | 3 | `CODEX-LAUNCH.md` の先頭の節 |
 | `personal-maintenance-sweep` の反証 | `json` | `refutation.schema.json` | プリセットの値 | 3 | `REFUTE.md`。run dir の記録は `RECORD.md` |
 | `personal-grill-me` / `personal-grill-with-docs` の事前相談 | `json` | `consult.schema.json` | high (追加の相談は medium) | 1 | `CONSULT.md` |
-| 受け入れの scenario の作成 (#667 の試行) | `text` | なし | model の選択の値 | 3 | Issue #667 |
-| 受け入れの scenario の判定 (#667 の試行) | `json` | 判定の schema | medium | 3 | Issue #667 |
+| 実装の前の期待値の表 (#768) | `text` | なし | model の選択の値 | 3 | [expectation-table](expectation-table.md) |
 
 再開で回収する呼び出し側 (sweep) は、起動の前に、その起動だけに使う directory を記録して `--run-root` に渡します。
 run dir は、その下にできるただ 1 つの directory です。
