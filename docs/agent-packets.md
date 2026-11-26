@@ -293,11 +293,14 @@ file で行い、command 文字列へ inline 展開しない。
 - publish は投稿前に更新内容を同じ dir の `.<issue>.md.tmp` へ書き切り、投稿後に rename で差し替える。
   差し替えに失敗したら投稿済み URL とこの一時 file を示して止まる (再実行しない。中身を手で移す)。
   一時 file が既に残っていれば消さずに止まる (片付けてから再実行)。
-- 一時 file は、ほかの書き手を止める印も兼ねる。publish・pull・`worker-update` は、一時 file がある間は書かない。
-  publish と pull は、一時 file を作った後に、packet が読んだときと同じ byte かを確かめ、違えば書かずに exit 2 で
-  止まる (読んでから書くまでに足された依頼や結果を、古い内容で上書きしないため。#719)。publish は投稿の前と、
-  投稿の後の差し替えの前の 2 回確かめる。投稿の後に変わっていたら (人の編集など)、差し替えずに投稿済みの URL を示して
-  止まる (再実行しない。一時 file を消し、`published` を手で更新する)。
+- packet を書く script は 3 つ (`worker-update`・publish・pull) で、どれも同じ取り決めで書く (#719)。一時 file を
+  作り (既にあれば書かずに止まる)、packet が読んだときと同じ byte かを確かめ、違えば書かずに止まり、同じなら rename で
+  差し替える。一時 file がある間は、ほかの script は書かない。publish は投稿の前と、投稿の後の差し替えの前の 2 回確かめ、
+  投稿の後に変わっていたら、差し替えずに投稿済みの URL を示して止まる (再実行しない。一時 file を消し、`published` を
+  手で更新する)。
+- この取り決めを使わない書き手 (人や agent の直接の編集。`personal-session-handoff` の packet の更新もこれに当たる) とは、
+  最後に確かめてから rename するまでの間 (system call の 2 つの間) が重なりうる。この間の直接の編集は、差し替えで消える。
+  ふつうの file の操作では、印を見ない書き手を止められないため。直接の編集は、script が動いていない間に行う。
 
 self-test は `scripts/tests/packet-test.sh` (dir / list / check / publish) と `scripts/tests/packet-pull-test.sh`
 (pull。上の「写しの取り込み」)。

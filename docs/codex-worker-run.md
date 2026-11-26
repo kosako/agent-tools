@@ -341,7 +341,7 @@ run script の実行、特殊文字を含む path、snapshot、起動記録、�
 `scripts/tests/worker-request-order-test.sh` は、「依頼の照合」の性質を、操作の順序を並べて見ます (#719)。
 packet と起動の script を1つの process に読み込み、外部の command (git、herdr、preflight、gate、gh、Issue の読み取り) だけを差し替えます。
 起動、依頼の変更、回収、再実行、破棄、`publish`、`pull` などの操作を、届く状態が尽きるまで1つずつ当てます。
-並べる操作は、packet と run directory を書く手順 (`worker-update`、`collect`、`check`、`publish`、`pull`、人の編集) から引きます。
+並べる操作は、packet と run directory を書く手順 (`worker-update`、`collect`、`check`、`publish`、`pull`、人の編集、session の区切りの記録) から引きます。
 self-test の上限は、起動2回、依頼の変更1回です (状態の数と操作の数を固定しています)。
 この範囲を変えるときや、起動と回収の契約を変えるときは、手元で上限を広げて走らせます。
 
@@ -350,11 +350,15 @@ t=$(mktemp -d)
 ruby scripts/tests/lib/worker-request-order-test.rb "$PWD" "$t" --report --bounds=2,2
 ```
 
-- `--bounds=<起動>,<依頼の変更>` は上限です。2,2 と 3,1 は、それぞれ2〜3分かかります (2026-11-26、開発機)。
+- `--bounds=<起動>,<人の変更>` は上限です。人の変更は、依頼の変更 (round、上書き、誤字の直し) と、session の区切りの
+  記録 (結果への追記と次の入口の上書き) の回数です。2,2 と 3,1 は、それぞれ2〜3分かかります (2026-11-26、開発機)。
+- self-test の上限では、人の変更を2つ重ねる順序 (誤字を直してから round を足す、など) は並びません。
 - 同じ状態かを見るとき、後の判断に効かないと見なす値 (結果と次の入口の文面、回収し終えた run の成果物) を外します。
   `--full` は外さずに見ます。2,1 の範囲で、直す前の違反の種類と、直した後に違反が無いことが、外した形と同じでした。
 - 操作は subcommand の単位です。1つの subcommand の途中に入る変更は、`round` だけを見ます。入れる所は、`collect` が待つ間、
   `check` が公開先を確かめる間、`publish` が gate に通す間、`pull` が Issue を読む間の 4 つです。
+- 印に加えて文面も見ます。結果の節は追記だけ、依頼の節は round なら追記だけで、書かないはずの節は byte で同じです。
+  依頼が変わったときの回収は、次の入口を byte で保ちます。
 - 違反が出た先はたどりません。
 
 ## 起動の記録 (`launch.json`)
@@ -396,7 +400,8 @@ herdr から ID が返ったら、一時 file と rename で更新します。
   packet を読み直して、もう一度 `collect` を呼びます。
 - `check` は、`READY` を返す直前に packet の記録と依頼を読み直します (`packet-again` の段)。検査の途中で依頼が
   変わったら `request-changed`、回収した run が変わったら `check-record` で止まります。
-- 見ないものが1つあります。`check` が `READY` を返した後、push や PR の作成の前に依頼が変わることです。
+- 見ないものが1つあります。`check` が最後に読み直した後 (`READY` を返す前の一瞬を含む)、push や PR の作成の前に
+  依頼が変わることです。`READY` は、最後に読み直した時点の判定です。
 
 ## collect の入力と出力
 

@@ -11,7 +11,7 @@
 #   P4 依頼が変わっていなければ、今までどおり結果で次の入口を更新し、check は通る。  (人が順序で確認)
 # 起動のときの依頼の記録が無い run (古い版の起動) は、同じと確かめられないので、変わったときと同じに扱う。
 # 期待値は、当てた操作の履歴だけから作る (model)。実装の判定を呼び直さない。
-# 並べる操作は、packet と run directory を書く手順 (worker-update・collect・check・publish・pull・人の編集) から引く。
+# 並べる操作は、packet と run directory を書く手順 (worker-update・collect・check・publish・pull・人の編集・session の区切りの記録) から引く。
 # 1 つの subcommand の途中に依頼が足される形は、collect・check・publish・pull の 4 つで当てる。
 require "json"
 require "stringio"
@@ -209,7 +209,12 @@ end
 
 # packet の節。実装の読み方に依らず、行頭の ## だけで分ける。
 def section(name)
-  File.read(PACKET, encoding: "UTF-8").split(/^(?=## )/).find { |part| part.start_with?("## #{name}\n") }.lines.drop(1).join
+  sections.fetch(name)
+end
+
+# 3 つの節を、1 回の読みで返す
+def sections
+  File.read(PACKET, encoding: "UTF-8").split(/^(?=## )/).map { |part| [part.lines.first.chomp.delete_prefix("## "), part.lines.drop(1).join] }.to_h
 end
 
 def replace_section(name, text)
@@ -304,6 +309,8 @@ class Explorer
     list << "metadata" if waiting && m["metadata"].zero?
     list << "forget" if waiting && run["recorded"] && m["forgets"].zero?
     list << "stop" if m["state"] == "open" && (run || m["last"]) && m["stops"].zero?
+    # 人の手の packet の変更なので、依頼の変更と同じ上限に数える
+    list << "handoff" if m["runs"].any? && m["changes"] < MAX_CHANGES
     list << "review" if m["state"] == "open" && run.nil? && m["last"]
     list
   end
@@ -312,8 +319,13 @@ class Explorer
     @bad << [property, text]
   end
 
+  # 次の入口を書いてよい操作と、依頼の節を変える操作。ほかの操作の後は、その節が byte で同じはず。
+  NEXT_WRITERS = %w[collect manual-collect stop round check+round publish+round pull+round handoff].freeze
+  REQUEST_WRITERS = %w[round overwrite typo restore check+round publish+round pull+round].freeze
+
   def apply(event, m)
     name, kind = event.split(":", 2)
+    before = sections
     case name
     when "launch", "retry-empty" then start(name, m)
     when "collect" then collect(kind, m)
@@ -362,9 +374,34 @@ class Explorer
     when "review"
       packet_update("review", "pr" => 17)
       m["state"] = "review"
+    when "handoff"
+      # session の区切りの記録 (personal-session-handoff の手順 1.5)。packet を直接書き、結果に追記し、次の入口を上書きする
+      m["handoffs"] += 1
+      m["changes"] += 1
+      mark, entry = "[res-S#{m['handoffs']}]", "[next-S#{m['handoffs']}]"
+      replace_section("結果", section("結果").sub(/\n+\z/, "\n") + "\n### 2026-01-03 worker/claude\n#{mark}\n\n")
+      replace_section("次の入口", "\n#{entry}\n\n")
+      m["results"] << mark
+      m["next"] = [entry]
     else raise event
     end
+    texts(event, name, before)
     invariants(m)
+  end
+
+  # 印だけでなく文面も見る。結果の節は追記だけ、依頼の節は round なら追記だけ。書かないはずの節は byte で同じ。
+  def texts(event, name, before)
+    after = sections
+    grown = ->(s) { after.fetch(s).start_with?(before.fetch(s).sub(/\n+\z/, "")) }
+    violate("P3", "#{event}: 結果の節を、追記でなく書き換えた") unless grown.call("結果")
+    unless NEXT_WRITERS.include?(name) || after.fetch("次の入口") == before.fetch("次の入口")
+      violate("P2", "#{event}: 書かないはずの次の入口の文面が変わった")
+    end
+    if name == "round" || event.end_with?("+round")
+      violate("P3", "#{event}: 依頼の節を、追記でなく書き換えた") unless grown.call("依頼")
+    elsif !REQUEST_WRITERS.include?(name)
+      violate("P3", "#{event}: 依頼の節の文面が変わった") unless after.fetch("依頼") == before.fetch("依頼")
+    end
   end
 
   def add_round(m)
@@ -495,11 +532,13 @@ class Explorer
     number = m["run"] + 1
     late = kind == "normal+round"
     before = File.binread(PACKET)
+    kept = section("次の入口")
     if late
       # 回収が待っている間に、依頼が足される
       World.on_wait = lambda do
         World.on_wait = nil
         add_round(m)
+        kept = section("次の入口")
         finish(run, "normal", number)
       end
     elsif kind != "again"
@@ -533,6 +572,7 @@ class Explorer
     got = section("次の入口")
     if status != "same"
       violate("P2", "collect:#{kind}: 足した依頼の次の入口を上書きした (#{status})") unless marks(got, "next") == m["next"]
+      violate("P2", "collect:#{kind}: 依頼が #{status} なのに、次の入口の文面が変わった") unless got == kept
       # 次の入口に書かない停止の案内を、結果から失わない
       violate("P3", "collect:#{kind}: 停止の案内が結果に無い") if kind == "empty" && !section("結果").include?("停止理由と退避した変更を確かめてから")
     else
@@ -641,7 +681,7 @@ TEXT
 FileUtils.mkdir_p(RUNS, mode: 0700)
 World.tabs, World.panes = [], []
 start = { "request" => ["[req-R0]"], "next" => ["[next-R0]"], "results" => [], "runs" => [], "run" => nil, "last" => nil, "state" => "open",
-          "changes" => 0, "restores" => 0, "metadata" => 0, "forgets" => 0, "stops" => 0,
+          "changes" => 0, "restores" => 0, "metadata" => 0, "forgets" => 0, "stops" => 0, "handoffs" => 0,
           "rev" => 0, "revs" => 0, "history" => [] }
 
 began = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -694,11 +734,11 @@ unless found.empty?
   abort "FAIL: worker-request-order: 性質の違反 #{found.size} 種類。例: #{property} #{text} (#{history.join(' → ')})"
 end
 # 並べる範囲が減って気付かない形にしない。操作の種類は全部が当たり、self-test の上限では、状態と操作の数を固定する。
-EVENTS = %w[launch retry-empty manual-retry manual-collect round overwrite typo restore metadata forget stop review collect:normal
+EVENTS = %w[launch retry-empty manual-retry manual-collect round overwrite typo restore metadata forget stop review handoff collect:normal
             collect:normal+round collect:again collect:empty check+round publish+round pull+round]
          .concat(Explorer::STOPS.map { |s| "collect:#{s}" }).freeze
 abort "FAIL: worker-request-order: 当たらない操作 #{(EVENTS - used.keys).inspect}、一覧に無い操作 #{(used.keys - EVENTS).inspect}" unless used.keys.sort == EVENTS.sort
-if [MAX_LAUNCHES, MAX_CHANGES] == [2, 1] && !FULL_KEY && !BEHAVIOR_ONLY && [seen.size, transitions] != [2408, 5604]
+if [MAX_LAUNCHES, MAX_CHANGES] == [2, 1] && !FULL_KEY && !BEHAVIOR_ONLY && [seen.size, transitions] != [2634, 6217]
   abort "FAIL: worker-request-order: 状態と操作の数が変わった (#{seen.size}、#{transitions})"
 end
 puts "ok: worker-request-order (状態 #{seen.size}、操作 #{transitions})"
