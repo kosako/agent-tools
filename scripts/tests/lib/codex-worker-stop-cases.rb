@@ -72,7 +72,7 @@ module CodexWorkerStopCases
     # 分岐条件や別 subcommand からの呼出し経路まで証明する検査ではない。
     expected_order = {
       "read_packet" => %w[command:packet-check assign:authorization stop:packet-missing stop:packet-state
-                          stop:request-empty stop:request-empty stop:request-empty assign:launch-record stop:packet-list],
+                          stop:request-empty assign:launch-record stop:packet-list],
       "check_other_records" => %w[assign:launch-path stop:worker-running stop:run-unconfirmed],
       "resolve_branch" => %w[stop:branch assign:launch-record update_packet:branch],
       "stop_executor" => %w[stage:snapshot stage:backup stage:transcription update_packet:stop assign:completion stop:*],
@@ -111,7 +111,8 @@ module CodexWorkerStopCases
       "herdr" => "launch-path", "wait" => "executor-exit", "backup" => "clone",
       "transcription" => "transcription", "pane-log" => "transcription", "commits" => "clone",
       "fetch" => "fetch", "trailer" => "trailer", "merge-commits" => "public-safety",
-      "style" => "public-safety", "publish-gate" => "public-safety", "destination" => "public-safety", "marker" => "public-safety"
+      "style" => "public-safety", "publish-gate" => "public-safety", "destination" => "public-safety", "marker" => "public-safety",
+      "packet-again" => "launch-record"
     }.to_a + [["snapshot", "clone"], ["snapshot", "fetch"]]
     raise "stage の context を見直す" unless stages == expected_stages.sort
 
@@ -124,7 +125,7 @@ module CodexWorkerStopCases
     add.call("packet_rows target", all, "launch-record")
     add.call("packet_rows target", ["collect"], "transcription")
     add.call("read_packet", read, "launch-record") # 下で reason ごとに authorization を選ぶ。
-    add.call("read_check_record", ["check"], "launch-record")
+    add.call("read_check_record check_request recheck_record", ["check"], "launch-record")
     add.call("check_records", ["launch"], "launch-record")
     add.call("check_other_records", start, "launch-record") # worker-running は launch-path。
     add.call("check_workspace herdr identifier panes foreground matching_tabs owned_tab_panes check_retry_tab launch_pane make_run check_run_location", start, "launch-path")

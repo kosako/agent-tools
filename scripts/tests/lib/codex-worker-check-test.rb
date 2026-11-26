@@ -10,6 +10,8 @@ write_exec(File.join(BIN, "gh"), <<~'FAKE')
   case ARGV
   when %w[repo view --json nameWithOwner]
     exit 1 if ENV["FAKE_GH_VIEW_FAIL"]
+    # 検査の途中 (公開先の確認の間) に packet が変わる形 (#719)
+    File.write(ENV.fetch("FAKE_PACKET_PATH"), File.read(ENV["FAKE_GH_VIEW_PACKET"])) if ENV["FAKE_GH_VIEW_PACKET"]
     puts JSON.generate("nameWithOwner" => ENV.fetch("FAKE_GH_SLUG", "owner/project"))
   when %w[api user]
     exit 1 if ENV["FAKE_OWNER_FAIL"]
@@ -70,8 +72,10 @@ reset_packet
 reset_herdr
 started = launch(0, {}, ["--branch", "feat/7-initial"])
 RUN = started.fetch("run_dir")
-# check only uses last_run and the preflight snapshot, not launch.json or done.txt.
+# check only uses last_run, the preflight snapshot and request.sha256, not launch.json or done.txt.
 File.unlink(File.join(RUN, "launch.json"))
+REQUEST_RECORD = File.join(RUN, "request.sha256")
+assert(File.binread(REQUEST_RECORD) == Digest::SHA256.hexdigest(REQUEST) + "\n", "launch records the request digest")
 git(MAIN, "remote", "set-url", "--push", "origin", "https://github.com/owner/project.git")
 
 $branch_number = 0
@@ -179,7 +183,43 @@ no_fetch
 File.write(PACKET, saved_packet.sub("last_run:", "run:").sub("state: review", "state: open").sub("---\n## 依頼", "tab: \"#7\"\n---\n## 依頼"))
 failure("launch-record", "check-record")
 no_fetch
+# 起動のときの依頼と今の依頼が同じと確かめられなければ、公開に進めない (#719)。
+[saved_packet.sub(REQUEST, REQUEST + "足した依頼\n"), saved_packet.sub(REQUEST, REQUEST + "\n"), saved_packet.sub(REQUEST, "書き直した依頼\n")].each do |text|
+  File.write(PACKET, text)
+  failure("launch-record", "request-changed")
+  no_fetch
+end
+[saved_packet.sub(REQUEST, " \n"), saved_packet.sub(REQUEST, REQUEST + "## 知らない節\n"), saved_packet.sub(REQUEST, REQUEST + "## 依頼\nもう 1 つ\n")].each do |text|
+  File.write(PACKET, text)
+  failure("launch-record", "check-record")
+  no_fetch
+end
 File.write(PACKET, saved_packet)
+digest = Digest::SHA256.hexdigest(REQUEST)
+[nil, "", "\n", digest, digest + "\n\n", digest + " \n", digest.upcase + "\n", digest[0, 63] + "\n", "x\n" + digest + "\n"].each do |text|
+  text ? File.write(REQUEST_RECORD, text) : File.unlink(REQUEST_RECORD)
+  failure("launch-record", "request-unrecorded")
+  no_fetch
+end
+File.write(REQUEST_RECORD, digest + "\n")
+# 検査の途中に依頼が変わる、または回収した run が変わると、READY を返さない (#719)。返す直前に packet を読み直す。
+# 別の run は依頼の記録が同じなので、run の比較だけが止める。
+other_run = RUN + "-other"
+FileUtils.mkdir_p(other_run)
+FileUtils.cp(REQUEST_RECORD, other_run)
+[[saved_packet.sub(REQUEST, REQUEST + "足した依頼\n"), "request-changed"],
+ [saved_packet.sub(/^last_run:.*\n/, "last_run: #{JSON.generate(other_run)}\n"), "check-record"]].each do |text, code|
+  swap = File.join(ROOT, "packet-swap")
+  File.write(swap, text)
+  result = launch(1, { "FAKE_GH_VIEW_PACKET" => swap, "FAKE_PACKET_PATH" => PACKET }, [],
+                  explicit: ["check", "--repo", MAIN, "--issue", "7", "--title", "検査を追加する (#7)", "--body-file", BODY])
+  assert(result.values_at("status", "phase", "blocked_at", "reason_code") == ["BLOCKED", "packet-again", "launch-record", code],
+         "a packet changed during check blocks before READY: #{result}")
+  assert(File.read(PACKET) == text, "check keeps the packet written during it")
+  File.write(PACKET, saved_packet)
+end
+FileUtils.rm_rf(other_run)
+assert(invoke_check["status"] == "READY", "the unchanged packet still reaches READY")
 
 ["", "\xff".b, " \n"].each do |text|
   invalid = File.join(ROOT, "invalid-body")

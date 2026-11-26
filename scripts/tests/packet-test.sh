@@ -637,6 +637,17 @@ grep -q "NEXT-ENTRY-LINE" "$repo/.agent-packets/7.md" || fail "body must be unto
 # 2 回目は published 行を置き換える (重複しない)
 (cd "$repo" && with_gh "$pkt" publish 7 >/dev/null)
 [ "$(grep -c '^published:' "$repo/.agent-packets/7.md")" -eq 1 ] || fail "published line should be replaced, not duplicated"
+# updated が今より後の packet (worker-update が published と同じ秒に書き、次の秒へ進めた) を投稿しても、投稿した後は
+# 未 publish と読まれない。published を、投稿した内容の updated より前にしない (#719)
+cp "$repo/.agent-packets/7.md" "$tmp/7.ahead"
+ahead=$(ruby -rtime -e 'puts Time.at(Time.now.to_i + 3600).localtime("+09:00").iso8601')
+sed "s/^updated: .*/updated: $ahead/" "$tmp/7.ahead" > "$repo/.agent-packets/7.md"
+(cd "$repo" && with_gh "$pkt" publish 7 >/dev/null) || fail "#719: publish of a packet with a later updated should succeed"
+grep -q "^published: $ahead$" "$repo/.agent-packets/7.md" || fail "#719: published must not be before updated: $(grep '^published:' "$repo/.agent-packets/7.md")"
+grep -q "^<!-- agent-packet issue=7 published=$ahead -->" "$gh_body" || fail "#719: the posted marker must carry the same time"
+(cd "$repo" && "$pkt" list --json > "$tmp/list-ahead.json")
+[ "$(jget "$tmp/list-ahead.json" 0 unpublished)" = "false" ] || fail "#719: after publish, a packet with a later updated must not stay unpublished"
+cp "$tmp/7.ahead" "$repo/.agent-packets/7.md"
 
 # ---- publish: --repo が無く env の GH_REPO があれば、gh を呼ばず packet も変えずに exit 2 (#528) --------
 # --dry-run も同じ (本文も出さない)。空の GH_REPO は無いのと同じ。--repo があれば GH_REPO があっても投稿する。
@@ -776,6 +787,26 @@ else
   echo "$out" | grep -q "再実行せず" || fail "rename failure must warn against retrying: $out"
   cmp -s "$tmp/7.bak" "$repo/.agent-packets/7.md" || fail "rename failure must leave the original packet intact"
   ls "$repo/.agent-packets"/.7.md.tmp >/dev/null 2>&1 || fail "rename failure should leave the updated content in the temp file for manual recovery"
+  rm -f "$repo/.agent-packets"/.7.md.tmp
+  calls=$(gh_calls)
+  # 投稿の間に packet が変わる (一時 file を見ない人の編集など) → 差し替えない。投稿 1 回・URL と published の案内・
+  # 編集を保つ (#719。worker-update と pull の割り込みは worker-request-order-test が見る)
+  cp "$tmp/7.bak" "$repo/.agent-packets/7.md"
+  cp "$tmp/7.bak" "$tmp/7.edited"
+  echo human-edit >> "$tmp/7.edited"
+  printf 'echo human-edit >> %s\n' "$(shq "$repo/.agent-packets/7.md")" > "$gh_hook"
+  set +e
+  out=$(cd "$repo" && with_gh "$pkt" publish 7 2>&1)
+  rc=$?
+  set -e
+  rm -f "$gh_hook"
+  [ "$rc" -eq 2 ] || fail "#719: a packet changed while posting should be exit 2 (rc=$rc): $out"
+  [ "$(gh_calls)" -eq $((calls + 1)) ] || fail "#719: changed-while-posting case should have posted exactly once"
+  echo "$out" | grep -q "example.invalid/comment/1" || fail "#719: must report the posted url: $out"
+  echo "$out" | grep -q "差し替えません" || fail "#719: must say the packet is not replaced: $out"
+  echo "$out" | grep -q "再実行せず" || fail "#719: must warn against retrying: $out"
+  cmp -s "$tmp/7.edited" "$repo/.agent-packets/7.md" || fail "#719: the edit made while posting must be kept"
+  ls "$repo/.agent-packets"/.7.md.tmp >/dev/null 2>&1 || fail "#719: the temp file stays until the manual published update"
   rm -f "$repo/.agent-packets"/.7.md.tmp
   calls=$(gh_calls)
   # 読めない packet が 1 つあっても list は止まらず、健全な行を出して exit 1 (R293-18)

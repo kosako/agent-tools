@@ -199,6 +199,8 @@ pane と tab は成功・失敗のどちらでも残す。閉じるのは §9 �
 `personal-codex-worker-run collect` を呼ぶ。`DONE` なら最終 message の転記まで済んでいる。
 script が pane の出力、残った process、snapshot、最終 message の書式と gate を検査する。
 結果は要約せず `worker-update` の `result` 操作で転記し、`run` を `last_run` に移す。
+返却の `request` が `same` でなければ、結果は起動のときの依頼の分だけで、次の入口は更新されていない。
+変わった依頼を読み、worker にこなさせるなら §1 の authorization に従って `launch` し直す。
 `leftover` に残った process があれば報告し、観測できなかった項目も明記する。
 残った process を自分では止めず、止めるかは人が決める。
 
@@ -234,6 +236,8 @@ open の記録は stop で blocked にしてから launch。既に blocked な�
 exit 3 は指摘を読んで直すか、理由を持って `--style-reviewed` を付けてかけ直す。
 検査が exit 0、または exit 1 の後に人が公開を認めた場合だけ、次の検査へ進む。
 `personal-codex-worker-run check` を題名と本文を渡して呼ぶ。
+`check` は、今の依頼が `last_run` の起動のときと同じと確かめられなければ止まる (`request-changed`、`request-unrecorded`)。
+依頼の誤字を直しただけでも止まる。記録を手で作らず、`docs/codex-worker-run.md` の「依頼の照合」に従う。
 `check` が snapshot、fetch、全 commit の Codex trailer、merge commit の不在を検査する。
 累積差分・各 commit の差分・全 message・branch 名・題名と本文を public-safety gate に通す。
 公開先の slug と origin の push URL も照合する。別の base で検査を代えない。
@@ -272,7 +276,7 @@ JSON を読めない・command が無い場合は成功と扱わず、配備ま�
 | exit / status | 返却と次の手 |
 | --- | --- |
 | 0 / STARTED | 起動を受け付けた。`collect` で待つ |
-| 0 / DONE | 転記済み。受け入れを判断し、未達なら修正 round を記録して `Status: DONE` |
+| 0 / DONE | 転記済み。`request` を見て受け入れを判断し、未達なら修正 round を記録して `Status: DONE` |
 | 0 / READY | 公開前の検査が成功。push と PR の記録まで済んだら `Status: REVIEW` |
 | 1 / BLOCKED | `Status: BLOCKED`。`blocked_at` を `Blocked at:`、固定の `reason` を `Reason:` に写す |
 | 2 / BLOCKED | 入力の誤り。引数を確認する。起動済みと扱わない |

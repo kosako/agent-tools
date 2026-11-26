@@ -67,6 +67,8 @@ module CodexWorkerRun
     "run-record" => "起動の記録を読み直して確認できません",
     "tab-ownership" => "既存の tab の所有を確かめられません",
     "check-record" => "公開前の検査に使う回収済みの記録を確かめられません",
+    "request-changed" => "依頼が、結果を回収した run の起動のときと違います",
+    "request-unrecorded" => "結果を回収した run の起動のときの依頼を確かめられません",
     "fetch" => "clone の branch を main に取り込めません",
     "trailer" => "公開する commit の Codex trailer を確かめられません",
     "merge-commit" => "公開する範囲に merge commit があります",
@@ -77,6 +79,13 @@ module CodexWorkerRun
     "gate-warning" => "公開する内容の検査に警告があります",
     "destination" => "公開先を確かめられません",
     "io" => "この段の処理を完了できません"
+  }.freeze
+  # brief に書いた依頼の節の SHA-256。brief を写して再実行するときは、一緒に写す (#719)。
+  REQUEST_FILE = "request.sha256"
+  # 依頼が起動のときと同じと確かめられない結果に付ける注記 (#719)。
+  REQUEST_NOTES = {
+    "changed" => "(orchestrator 注: 起動の後に依頼が変わった。この結果は起動のときの依頼の分で、次の入口は更新していない)",
+    "unrecorded" => "(orchestrator 注: 起動のときの依頼の記録が無く、今の依頼と同じか確かめられない。次の入口は更新していない)"
   }.freeze
   class Stop < StandardError
     attr_reader :code, :status, :exit_code
@@ -218,26 +227,42 @@ module CodexWorkerRun
       @packet_path = File.join(@repo, ".agent-packets", "#{@issue}.md")
       bytes = File.binread(@packet_path)
       @digest = Digest::SHA256.hexdigest(bytes)
-      # 節境界だけを読む。依頼の byte は改行や空白も含めて保持する。
+      @request = request_section(bytes)
+      stop("request-empty") unless @request
+      @previous_run = @row["state"] == "blocked" ? (@row["run"] || @row["last_run"]) : @row["last_run"]
+      # metadata と依頼を読んだ間の更新を拾う。以降の更新はこの digest を前提にする。
+      @blocked_at = "launch-record"
+      stop("packet-list") unless target(packet_rows) == @row && Digest::SHA256.file(@packet_path).hexdigest == @digest
+    end
+
+    # 節境界だけを読む。依頼の byte は改行や空白も含めて保持する。読めない・空なら nil。
+    def request_section(bytes)
       body = bytes.force_encoding(Encoding::UTF_8).split(/^---\s*\n/, 3)[2]
       request = nil
       current = nil
       (body || "").each_line do |line|
         if line.start_with?("## ")
           current = line.chomp.delete_prefix("## ").rstrip
-          stop("request-empty") unless %w[依頼 結果 次の入口].include?(current)
-          stop("request-empty") if current == "依頼" && request
+          return nil unless %w[依頼 結果 次の入口].include?(current)
+          return nil if current == "依頼" && request
           request = +"" if current == "依頼"
         elsif current == "依頼"
           request << line
         end
       end
-      stop("request-empty") unless request && !request.strip.empty?
-      @request = request
-      @previous_run = @row["state"] == "blocked" ? (@row["run"] || @row["last_run"]) : @row["last_run"]
-      # metadata と依頼を読んだ間の更新を拾う。以降の更新はこの digest を前提にする。
-      @blocked_at = "launch-record"
-      stop("packet-list") unless target(packet_rows) == @row && Digest::SHA256.file(@packet_path).hexdigest == @digest
+      request unless request.nil? || request.strip.empty?
+    end
+
+    # run の brief に書いた依頼と、今の依頼を比べる。同じと確かめられるときだけ same (#719)。
+    def request_status(run, request)
+      path = File.join(run, REQUEST_FILE)
+      recorded = File.file?(path) ? File.binread(path) : ""
+      return "unrecorded" unless recorded.match?(/\A[0-9a-f]{64}\n\z/)
+      recorded == request_record(request) ? "same" : "changed"
+    end
+
+    def request_record(request)
+      Digest::SHA256.hexdigest(request) + "\n"
     end
 
     def herdr(*args)
@@ -438,6 +463,9 @@ module CodexWorkerRun
 
     def write_artifacts
       File.binwrite(File.join(@run, "brief.md"), @retry_brief || brief)
+      # 再実行は前の run の brief を使うので、依頼の記録も前の run のものを写す。前に無ければ、作らない。
+      record = @retry_of ? @retry_record : request_record(@request)
+      File.binwrite(File.join(@run, REQUEST_FILE), record) if record
       argv = @launch_argv.map { |a| a == "<run dir>/result.md" ? File.join(@run, "result.md") : a }
       script = <<~ZSH
         #!/bin/zsh
@@ -589,6 +617,8 @@ module CodexWorkerRun
       @retry_of = @previous_run = @run
       @round = @launch_record["round"]
       @retry_brief = File.binread(File.join(@run, "brief.md"))
+      record = File.join(@run, REQUEST_FILE)
+      @retry_record = File.file?(record) ? File.binread(record) : nil
       # Same-issue finished run is intentionally replaced; other issues still gate launch.
       check_other_records
     end
@@ -742,6 +772,12 @@ module CodexWorkerRun
       @backup_step = nil
     end
 
+    # 依頼が同じと確かめられたときだけ、次の入口を置き換える。違うときは、足した依頼の入口を残す (#719)。
+    def transcription(entry, following)
+      return { "entry" => entry, "next" => following } if @request_status == "same"
+      { "entry" => REQUEST_NOTES.fetch(@request_status) + "\n\n" + entry }
+    end
+
     def stop_executor(code, exit_code)
       category = case code
                  when "limit" then "limit"
@@ -764,8 +800,10 @@ module CodexWorkerRun
           entry = "停止の区分: #{category}。done.txt の exit: #{exit_code.nil? ? '不明' : exit_code}。\n" \
                   "退避: wip-status.txt、wip-staged.patch、wip-unstaged.patch、wip-untracked.tar。"
           following = "停止理由と退避した変更を確かめてから、再開を判断する。"
+          # 次の入口に書かないときも、次の手を失わない。
+          entry += "\n次の手: #{following}" unless @request_status == "same"
         end
-        update_packet("stop", "run" => @run, "role" => role, "entry" => entry, "next" => following)
+        update_packet("stop", { "run" => @run, "role" => role }.merge(transcription(entry, following)))
         @stopped_packet = true
       end
       @retryable = false
@@ -775,6 +813,7 @@ module CodexWorkerRun
 
     def collect
       stage("records", "launch-record") { read_launch_record }
+      @request_status = request_status(@run, @request)
       done = stage("wait", "executor-exit") { wait_completion }
       return stop_executor(done["error"], done["exit"]) if done["error"]
       unless done["exit"] == 0
@@ -806,17 +845,17 @@ module CodexWorkerRun
         entry, sections, changed = gated_result
         following = sections.fetch("次の 1 アクション").strip
         if sections.fetch("停止理由 または 質問").gsub(/\A[[:space:]。]+|[[:space:]。]+\z/, "") != "なし"
-          update_packet("stop", "run" => @run, "role" => "worker/codex", "entry" => entry, "next" => following)
+          update_packet("stop", { "run" => @run, "role" => "worker/codex" }.merge(transcription(entry, following)))
           @stopped_packet, @retryable, @blocked_at = true, false, "executor-result"
           stop("worker-question")
         end
-        update_packet("result", "run" => @run, "entry" => entry, "next" => following)
+        update_packet("result", { "run" => @run }.merge(transcription(entry, following)))
         row = target(packet_rows)
         stop("run-record") unless row && row["run"].nil? && row["last_run"] == @run && row["state"] == "open"
         changed
       end
       puts JSON.generate("status" => "DONE", "issue" => @issue, "run_dir" => @run, "head_oid" => head,
-        "commits_this_run" => count, "redacted" => redacted, "leftover" => @leftover,
+        "commits_this_run" => count, "redacted" => redacted, "leftover" => @leftover, "request" => @request_status,
         "packet" => { "written" => true, "state" => "open", "record" => "last_run" })
       0
     end
@@ -840,6 +879,23 @@ module CodexWorkerRun
       stop("check-record") unless valid_branch?(@branch)
       @run = @row["last_run"]
       @clone = "#{@repo}-clones/#{@issue}"
+      check_request
+    end
+
+    # 検査の途中に依頼が足されたり、別の run を回収したりしても、READY を返さない (#719)。返す直前に読み直す。
+    def recheck_record
+      run, branch = @run, @branch
+      read_check_record
+      stop("check-record") unless @run == run && @branch == branch
+    end
+
+    # 公開に進めるのは、起動のときの依頼が今の依頼と同じ結果だけ (#719)。
+    def check_request
+      request = request_section(File.binread(File.join(@repo, ".agent-packets", "#{@issue}.md")))
+      stop("check-record") unless request
+      status = request_status(@run, request)
+      stop("request-unrecorded") if status == "unrecorded"
+      stop("request-changed") unless status == "same"
     end
 
     def check_trailers
@@ -940,6 +996,7 @@ module CodexWorkerRun
       stage("publish-gate", "public-safety") { check_publish_gate }
       stage("destination", "public-safety") { check_destination }
       marker = stage("marker", "public-safety") { check_marker }
+      stage("packet-again", "launch-record") { recheck_record }
       result = { "status" => "READY", "issue" => @issue, "branch" => @branch,
                  "base_oid" => @base, "head_oid" => @head, "commits" => @commit_count,
                  "slug" => @slug, "style_findings" => @style_findings, "marker" => marker, "run_dir" => @run }
@@ -1014,6 +1071,7 @@ module CodexWorkerRun
       result["dependency_exit"] = @dependency_exit if @phase == "preflight"
       result["retryable"] = @retryable unless @retryable.nil?
       result["pane_id"] = @pane if @subcommand == "collect"
+      result["request"] = @request_status if @request_status
       result["elapsed_minutes"] = @elapsed_minutes if @elapsed_minutes
       result["leftover"] = @leftover if @leftover
       result["backup_step"] = @backup_step if @backup_step

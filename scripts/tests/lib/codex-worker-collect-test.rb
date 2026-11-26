@@ -87,6 +87,9 @@ record = JSON.parse(File.read(record_path))
 assert(record == { "schema" => 1, "issue" => 7, "branch" => "feat/7-test", "clone_root" => File.realpath(CLONE),
   "nonce" => nonce, "tab_id" => "t1", "pane_id" => "p1", "pane_label" => "worker-7", "round" => 2,
   "previous_run" => nil, "created_at" => record["created_at"], "start_head" => BASE }, "launch record fields")
+request_path = File.join(run, "request.sha256")
+request_record = Digest::SHA256.hexdigest(REQUEST) + "\n"
+assert(File.binread(request_path) == request_record, "request digest is recorded with the brief")
 assert(Time.iso8601(record["created_at"]).utc?, "UTC creation time")
 assert(!File.exist?(record_path + ".tmp"), "atomic launch record leaves no temp")
 # Neither collector nor retry may parse this file.
@@ -112,6 +115,8 @@ assert(result["status"] == "DONE" && result["head_oid"] == head && result["commi
 assert(!result.key?("commits"), "old total count key is absent")
 assert(result["packet"] == { "written" => true, "state" => "open", "record" => "last_run" }, "done packet shape")
 assert(result["redacted"] == false && result["leftover"]["foreground"]["checked"], "result flags")
+assert(result["request"] == "same" && File.read(PACKET).end_with?("## 次の入口\n\nなし (review 待ち)\n\n"), "unchanged request updates the next entry")
+assert(!File.read(PACKET).include?("起動の後に依頼が変わった"), "unchanged request adds no note")
 assert(File.read(PACKET).include?(RESULT) && File.read(PACKET).include?("last_run: #{run.to_json}"), "verbatim transcription and last_run")
 assert(!File.read(PACKET).match?(/^run:/) && !File.read(PACKET).match?(/^tab:/), "record moved")
 assert(File.read(File.join(run, "pane.log")) == "PRIVATE-PANE\n", "raw pane log retained")
@@ -137,6 +142,45 @@ assert(trace.none? { |a| a.include?("fetch") }, "correction collection never fet
   assert(result["status"] == "DONE" && result.key?("commits_this_run") && result["commits_this_run"].nil?, "unknown start HEAD does not block transcription")
 end
 File.write(record_path, JSON.generate(record))
+
+# The request is appended while the worker runs (#719). The result is kept and the appended entry survives.
+def append_request
+  packet = File.join(DEPLOY, "personal-packet")
+  input = { "schema" => 1, "operation" => "round", "request" => "### 修正 round 9\nPRIVATE-REQUEST を足す", "next" => "足した依頼の入口",
+            "expected_sha256" => Digest::SHA256.file(PACKET).hexdigest }
+  run_cmd(packet, "worker-update", "7", "--stdin", stdin_data: JSON.generate(input), chdir: MAIN)
+end
+kept = "## 次の入口\n\n足した依頼の入口\n\n"
+finish(run, nonce)
+append_request
+result = invoke("collect")
+assert(result["status"] == "DONE" && result["request"] == "changed", "changed request is reported")
+text = File.read(PACKET)
+assert(text.end_with?(kept) && text.include?("worker/codex\n\n(orchestrator 注: 起動の後に依頼が変わった。") && text.include?(RESULT), "changed request keeps the entry and the result")
+assert(text.include?("修正 round 9") && text.include?("last_run: #{run.to_json}"), "changed request keeps the request and moves the record")
+finish(run, nonce, RESULT.sub(" なし。 ", "判断が必要です。"))
+append_request
+result = failure("collect", "executor-result", "worker-question", {}, [], changed: true)
+assert(result["request"] == "changed" && File.read(PACKET).end_with?(kept), "question keeps the appended entry")
+finish(run, nonce, "PRIVATE-RESULT malformed", 17)
+append_request
+result = failure("collect", "executor-exit", "executor-exit", {}, [], changed: true)
+text = File.read(PACKET)
+assert(result["request"] == "changed" && text.end_with?(kept), "stopped run keeps the appended entry")
+assert(text.include?("orchestrator/claude\n\n(orchestrator 注: 起動の後に依頼が変わった。") && text.include?("\n次の手: 停止理由と退避した変更を確かめてから、再開を判断する。\n"), "fixed stop entry keeps its own next step")
+finish(run, nonce)
+append_request
+failure("collect", "transcription", "pane-log", { "FAKE_PANE_OUTPUT" => "" })
+# A run launched by an older version has no digest. It cannot be shown to match.
+[nil, "", request_record.chomp, request_record.upcase].each do |recorded_request|
+  finish(run, nonce)
+  recorded_request ? File.write(request_path, recorded_request) : File.unlink(request_path)
+  result = invoke("collect")
+  text = File.read(PACKET)
+  assert(result["status"] == "DONE" && result["request"] == "unrecorded" && text.end_with?("## 次の入口\n\nnext\n"), "unrecorded request keeps the entry")
+  assert(text.include?("(orchestrator 注: 起動のときの依頼の記録が無く"), "unrecorded request adds its note")
+end
+File.write(request_path, request_record)
 
 # A launch-path failure leaves a manual script even after creating a pane.
 state = JSON.parse(File.read(ENV.fetch("FAKE_HERDR_FILE")))
@@ -340,8 +384,11 @@ trace = File.readlines(ENV.fetch("FAKE_GIT_LOG")).map { |line| JSON.parse(line) 
 assert(trace.none? { |a| a.include?(CLONE) }, "retry verifies before clone git")
 File.binwrite(config_path, config)
 failure("retry-empty", "preflight", "preflight", { "FAKE_CODEX_NO_HELP" => "1" })
+# The request changes before the retry. The retry runs the old brief, so it keeps the old digest (#719).
+append_request
 retry_result = invoke("retry-empty")
 retry_run = retry_result.fetch("run_dir")
+assert(File.binread(File.join(retry_run, "request.sha256")) == request_record, "retry keeps the digest of the copied brief")
 retry_record = JSON.parse(File.read(File.join(retry_run, "launch.json")))
 assert(retry_run != run && retry_result["nonce"] != nonce && retry_result["tab_id"] == first["tab_id"], "fresh run in same tab")
 assert(retry_record["retry_of"] == run && retry_record["previous_run"] == run && retry_record["round"] == 2, "retry lineage")

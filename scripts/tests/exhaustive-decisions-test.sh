@@ -177,9 +177,9 @@ def expected_change(op, state, input, today)
     [change, state == "blocked", {}, {}]
   when "result"
     [{ "last_run" => input["run"], "run" => nil, "tab" => nil }, true,
-     { "## 結果" => "### #{today} worker/codex\n\n足す結果" }, { "## 次の入口" => "新しい入口" }]
+     { "## 結果" => "### #{today} worker/codex\n\n足す結果" }, input.key?("next") ? { "## 次の入口" => "新しい入口" } : {}]
   when "stop"
-    [{ "state" => "blocked" }, true, { "## 結果" => "### #{today} #{input['role']}\n\n足す結果" }, { "## 次の入口" => "新しい入口" }]
+    [{ "state" => "blocked" }, true, { "## 結果" => "### #{today} #{input['role']}\n\n足す結果" }, input.key?("next") ? { "## 次の入口" => "新しい入口" } : {}]
   when "round"
     add = { "## 依頼" => "足す依頼" }
     add["## 結果"] = "### #{today} reviewer/claude\n\n足す review" if input.key?("review_entry")
@@ -191,8 +191,8 @@ end
 INPUTS = {
   "branch" => [{ "branch" => "feat/7-x" }],
   "run-start" => [{}, { "expected_run" => A }, { "expected_run" => B }].map { |h| { "run" => NEW, "tab" => "#7" }.merge(h) },
-  "result" => [{ "run" => A, "entry" => TEXTS["entry"], "next" => TEXTS["next"] }],
-  "stop" => %w[worker/codex orchestrator/claude].map { |r| { "run" => A, "role" => r, "entry" => TEXTS["entry"], "next" => TEXTS["next"] } },
+  "result" => [{ "next" => TEXTS["next"] }, {}].map { |h| { "run" => A, "entry" => TEXTS["entry"] }.merge(h) },
+  "stop" => %w[worker/codex orchestrator/claude].product([{ "next" => TEXTS["next"] }, {}]).map { |r, h| { "run" => A, "role" => r, "entry" => TEXTS["entry"] }.merge(h) },
   "round" => [{}, { "review_entry" => TEXTS["review_entry"] }].map { |h| { "request" => TEXTS["request"], "next" => TEXTS["next"] }.merge(h) },
   "review" => [{ "pr" => 12 }],
 }.freeze
@@ -222,7 +222,7 @@ INPUTS.each do |op, list|
     { "run" => run, "last_run" => last_run, "tab" => tab, "branch" => branch, "pr" => pr }.each { |k, v| front[k] = v unless v == :absent }
     original = packet_text(front)
     before, before_body = read_packet(original)
-    label = "#{op} #{input.reject { |k, _| TEXTS.key?(k) }.inspect} state=#{state} run=#{run.inspect} last=#{last_run.inspect} tab=#{tab.inspect} branch=#{branch.inspect} pr=#{pr.inspect}"
+    label = "#{op} #{input.reject { |k, _| TEXTS.key?(k) && k != 'next' }.inspect} state=#{state} run=#{run.inspect} last=#{last_run.inspect} tab=#{tab.inspect} branch=#{branch.inspect} pr=#{pr.inspect}"
     tried[op] += 1
     days = [Time.now.strftime("%Y-%m-%d")]
     code, text = apply(original, op, input)
@@ -263,21 +263,21 @@ INPUTS.each do |op, list|
   end
 end
 base = STATES.length * RUNS.length * LASTS.length * TABS.length * BRANCHES.length * PRS.length
-check("組の数 #{tried.inspect}", base == 1152 && tried == INPUTS.map { |op, list| [op, base * list.length] }.to_h && tried.values.sum == 11_520)
+check("組の数 #{tried.inspect}", base == 1152 && tried == INPUTS.map { |op, list| [op, base * list.length] }.to_h && tried.values.sum == 14_976)
 # 許す組の数。表から手で数えたもの。壊れていない (run, last_run) の組は 5 つ (run が無い 3 つ、run だけの 2 つ)。1 つの state と
 # (run, last_run) の組に、tab (有無) と branch と pr の組が 12 ある (branch が無いのは 4 つ)。
 counts = {
   "branch" => 4 * 5 * 4,                                 # state は問わない。branch が無い
   "run-start" => (3 + 5) * 12 + 2 * 1 * 12 + 2 * 1 * 12, # expected なし: open は run が無い 3 つ、blocked は 5 つ。あり: 一致する 1 つ × 2 state
-  "result" => 1 * 12,                                    # open で、run が一致する 1 つ
-  "stop" => 2 * (2 * 12),                                # open で、run か last_run が一致する 2 つ。role が 2 つ
+  "result" => 2 * (1 * 12),                              # open で、run が一致する 1 つ。next の有無で 2 つ
+  "stop" => 2 * 2 * (2 * 12),                            # open で、run か last_run が一致する 2 つ。role が 2 つ、next の有無で 2 つ
   "round" => 2 * (3 * 5 * 12),                           # 3 つの state。review_entry の有無で 2 つ
   "review" => 3 * 12,                                    # open で、run が無い 3 つ
 }
 check("許す組の数 #{accepted.inspect} (表からは #{counts.inspect})", accepted == counts)
 # 壊れた組。(run, last_run, tab) の 48 通りのうち、壊れていないのは 5 × 2。
 check("壊れた packet の組の数 #{refused.inspect}", refused["invalid_packet"] == (48 - 10) * 4 * 6 * INPUTS.values.map(&:length).sum &&
-                                                refused.values.sum == 11_520 - counts.values.sum)
+                                                refused.values.sum == 14_976 - counts.values.sum)
 # 壊れた記録の値。上の組の null のほかの形を、key ごとに全部の操作と state に当てる。どの操作でも invalid_packet で拒み、file は変わらない。
 # 記録 (run・last_run・tab) は、空でない文字列で、制御文字を含まない。run と last_run は絶対 path。branch は文字列、pr は整数。
 BROKEN = {
@@ -298,7 +298,7 @@ BROKEN.each do |key, values|
     problems["壊れた記録で file が変わった"] << "#{op} state=#{state} #{key}=#{value.inspect}" unless text == original
   end
 end
-check("壊れた記録の組の数 (#{broken_tried})", broken_tried == 40 * (11 + 11 + 9 + 4 + 5))
+check("壊れた記録の組の数 (#{broken_tried})", broken_tried == 52 * (11 + 11 + 9 + 4 + 5))
 problems.each { |name, list| check("#{name}: #{list.length} 件 #{list.first(2).join(' / ')}", list.empty?) }
 check("残った file が無い #{Dir.children(DIR).inspect}", Dir.children(DIR) == ["7.md"])
 exit(@failed.zero? ? 0 : 1)

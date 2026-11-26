@@ -215,7 +215,10 @@ Issue コメントへ写すのは **`結果` の最新節 + `次の入口` の�
   write 境界として当てにしない。委譲した worker の write は、起動側が固定の起動形で connector・MCP・rules を
   外して止める (同節)。
 - 投稿後に frontmatter の `published` を更新する。resume は `updated > published` を
-  「未 publish の追記あり」として表示する。
+  「未 publish の追記あり」として表示する。時刻は秒の精度で保存するので、`worker-update` は `published` と同じ秒か
+  それより前の時計で書くとき、`updated` を `published` の次の秒にする (pull と同じ。同じ秒だと未 publish の印が
+  立たず、pull が写しの古い次の入口を取り込む。#719)。publish は、投稿する内容の `updated` より前の時刻を `published` に
+  しない (写しの marker も同じ時刻。前にすると、投稿した後も未 publish と読まれ、後の pull が分岐で止まる)。
 
 ## 写しの取り込み(pull)
 
@@ -293,6 +296,15 @@ file で行い、command 文字列へ inline 展開しない。
 - publish は投稿前に更新内容を同じ dir の `.<issue>.md.tmp` へ書き切り、投稿後に rename で差し替える。
   差し替えに失敗したら投稿済み URL とこの一時 file を示して止まる (再実行しない。中身を手で移す)。
   一時 file が既に残っていれば消さずに止まる (片付けてから再実行)。
+- packet を書く script は 3 つ (`worker-update`・publish・pull) で、どれも同じ取り決めで書く (#719)。一時 file を
+  作り (既にあれば書かずに止まる)、packet が読んだときと同じ byte かを確かめ、違えば書かずに止まり、同じなら rename で
+  差し替える。一時 file がある間は、ほかの script は書かない。publish は投稿の前と、投稿の後の差し替えの前の 2 回確かめ、
+  投稿の後に変わっていたら、差し替えずに投稿済みの URL を示して止まる (再実行しない。一時 file を消し、`published` を
+  手で更新する)。
+- この取り決めを使わない書き手 (人や agent の直接の編集。`personal-session-handoff` の packet の更新もこれに当たる) とは、
+  最後に確かめてから rename するまでの間 (system call の 2 つの間) が重なりうる。この間の直接の編集は、差し替えで消える。
+  ふつうの file の操作では、印を見ない書き手を止められないため。直接の編集は、script が動いていない間に行う
+  (すべての書き手を共通の更新口に通す案は #782)。
 
 self-test は `scripts/tests/packet-test.sh` (dir / list / check / publish) と `scripts/tests/packet-pull-test.sh`
 (pull。上の「写しの取り込み」)。
@@ -320,18 +332,22 @@ stdin は UTF-8 の JSON object 1 つで、上限は 64 KiB (65,536 byte)。
 | --- | --- | --- | --- |
 | `branch` | `branch` | frontmatter に `branch` が無い | `branch` を追加。`updated` は保持 |
 | `run-start` | `run`、`tab`。省略可: `expected_run` | state が open か blocked。run が無いか state が blocked。expected_run があれば現在の run との一致が必須で、open の run も差し替え可 | run と tab を保存し、last_run を削除。blocked なら open にして updated を更新。それ以外の updated は保持 |
-| `result` | `run`、`entry`、`next` | state が open で run が一致 | 結果に今日の worker/codex entry を追記。次の入口を next に置換。run を last_run に移して tab を削除し、updated を更新 |
-| `stop` | `run`、`role`、`entry`、`next` | state が open で run または last_run が一致 | 結果に今日の role の entry を追記。次の入口を next に置換。state を blocked にして updated を更新。run、tab、last_run は保持 |
+| `result` | `run`、`entry`。省略可: `next` | state が open で run が一致 | 結果に今日の worker/codex entry を追記。next があれば次の入口を置換し、無ければ保持。run を last_run に移して tab を削除し、updated を更新 |
+| `stop` | `run`、`role`、`entry`。省略可: `next` | state が open で run または last_run が一致 | 結果に今日の role の entry を追記。next があれば次の入口を置換し、無ければ保持。state を blocked にして updated を更新。run、tab、last_run は保持 |
 | `round` | `request`、`next`。省略可: `review_entry` | state が open、review、blocked のいずれか | 依頼に request を追記し、次の入口を next に置換。review なら open にし、open と blocked は保持。updated を更新 |
 | `review` | `pr` | state が open で run が無い | pr を保存し、state を review にして updated を更新 |
 
 上の表の「前提」と「更新内容」は、`scripts/tests/exhaustive-decisions-test.sh` が、操作、state、run、last_run、tab、branch、pr、
-`expected_run` の全部の組で実装と照らします (#762)。壊れた packet (run・last_run・tab が空や文字列でない、制御文字を含む、run と last_run が絶対 path でない、両方がある) は、どの操作でも
+`expected_run`、`next` の有無の全部の組で実装と照らします (#762)。壊れた packet (run・last_run・tab が空や文字列でない、制御文字を含む、run と last_run が絶対 path でない、両方がある) は、どの操作でも
 `invalid_packet` で拒みます。表を変えるときは、この test の期待値も変えます。
 
 `run-start` の `expected_run` は、空の結果の再実行で使う前提です。
 不一致なら `precondition` (exit 1) で保存しません。省略時の条件は変わりません。
 空の結果かどうかは caller が検査します。
+
+`result` と `stop` の `next` は、起動の後に依頼が変わった結果を転記するときに省きます。
+回収した結果は起動のときの依頼の分だけを満たすので、足した依頼の次の入口を残すためです (#719)。
+`personal-codex-worker-run collect` が、依頼を比べて省きます ([codex-worker-run](codex-worker-run.md) の「依頼の照合」)。
 
 `round` の `review_entry` があれば、結果の末尾に当日の日付と `reviewer/claude` の entry を足します。
 本文の検査は `entry` と同じです。省略時は結果の節を保持します。
