@@ -30,7 +30,9 @@ URL、local path、secret、credential、client/work material は含めません
 ## 基本 loop
 
 1. repository 外の planning docs で背景、目的、判断材料、未決事項を整理する。
-2. 作業単位が具体化したら GitHub Issue を作る。
+2. 作業単位が具体化したら GitHub Issue を作る。状態を複数の書き手が書く挙動の変更では、守る性質を 3〜5 文 (出どころ: 人・
+   docs・推測) と、その状態を書く手順の一覧 (subcommand からでなく、docs から逆に引く) を Issue に書く (#783。順序を並べる
+   test は必須にしない)。
 3. Issue ごとに branch を切り、実装担当を決める (下の「割当」)。
 4. 変更は小さく保ち、関連する docs / assets / scripts だけを触る。
 5. commit・push と、Issue・PR・コメントの投稿の前に public safety check を行う (下の Public safety check)。
