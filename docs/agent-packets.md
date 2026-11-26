@@ -217,7 +217,8 @@ Issue コメントへ写すのは **`結果` の最新節 + `次の入口` の�
 - 投稿後に frontmatter の `published` を更新する。resume は `updated > published` を
   「未 publish の追記あり」として表示する。時刻は秒の精度で保存するので、`worker-update` は `published` と同じ秒か
   それより前の時計で書くとき、`updated` を `published` の次の秒にする (pull と同じ。同じ秒だと未 publish の印が
-  立たず、pull が写しの古い次の入口を取り込む。#719)。
+  立たず、pull が写しの古い次の入口を取り込む。#719)。publish は、投稿する内容の `updated` より前の時刻を `published` に
+  しない (写しの marker も同じ時刻。前にすると、投稿した後も未 publish と読まれ、後の pull が分岐で止まる)。
 
 ## 写しの取り込み(pull)
 
