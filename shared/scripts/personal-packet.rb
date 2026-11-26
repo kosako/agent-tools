@@ -964,7 +964,11 @@ module Packet
       changes.merge!("pr" => data.fetch("pr").to_s, "state" => "review")
     end
     if !%w[branch run-start].include?(operation) || (operation == "run-start" && front.state == "blocked")
-      changes["updated"] = at.iso8601
+      # 保存は秒の精度なので、publish と同じ秒に書くと updated == published になり、未 publish の印が立たない。
+      # pull と同じく、published の次の秒にして updated > published を保つ (#719。pull の分岐の検査を素通りさせない)。
+      stamp = at
+      stamp = front.published - front.published.subsec + 1 if front.published && stamp.to_i <= front.published.to_i
+      changes["updated"] = stamp.iso8601
     end
     [changes, bodies]
   end

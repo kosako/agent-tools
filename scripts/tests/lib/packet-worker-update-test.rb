@@ -472,4 +472,15 @@ assert(current.body.include?("### #{Time.now.strftime('%Y-%m-%d')} reviewer/clau
 ["", "## injected", "<!-- comment -->", "### 2026-01-01 worker/codex", "ok\n  **次の入口**  "].each do |entry|
   update("round", { "request" => "PRIVATE-REQUEST", "next" => "PRIVATE-NEXT", "review_entry" => entry }, 2)
 end
+# 保存は秒の精度。publish と同じ秒 (や、それより前の時計) で書いても、書いた後は updated > published で、未 publish と
+# 読まれる (#719。同じ秒だと、pull が写しの古い次の入口を、分岐と見ずに取り込む)。
+ahead = Time.at(Time.now.to_i + 3600).localtime("+09:00")
+%w[round result stop review].each do |operation|
+  reset(ORIGINAL.sub(/^published: .*$/, "published: #{ahead.iso8601}"))
+  values = { "round" => { "request" => "足す", "next" => "次" }, "result" => { "run" => RUN, "entry" => "結果" },
+             "stop" => { "run" => RUN, "role" => "orchestrator/claude", "entry" => "止めた" }, "review" => { "pr" => 17 } }.fetch(operation)
+  File.write(PATH_PACKET, File.read(PATH_PACKET).sub("worker: codex\n", "worker: codex\nrun: #{RUN}\ntab: \"#7\"\n")) if %w[result stop].include?(operation)
+  update(operation, values)
+  assert(current.updated.to_i == ahead.to_i + 1 && current.unpublished?, "#{operation}: updated stays after published (#{current.updated})")
+end
 puts "ok: packet worker-update (#{$count} assertions)"

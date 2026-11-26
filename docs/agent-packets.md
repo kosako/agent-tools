@@ -215,7 +215,9 @@ Issue コメントへ写すのは **`結果` の最新節 + `次の入口` の�
   write 境界として当てにしない。委譲した worker の write は、起動側が固定の起動形で connector・MCP・rules を
   外して止める (同節)。
 - 投稿後に frontmatter の `published` を更新する。resume は `updated > published` を
-  「未 publish の追記あり」として表示する。
+  「未 publish の追記あり」として表示する。時刻は秒の精度で保存するので、`worker-update` は `published` と同じ秒か
+  それより前の時計で書くとき、`updated` を `published` の次の秒にする (pull と同じ。同じ秒だと未 publish の印が
+  立たず、pull が写しの古い次の入口を取り込む。#719)。
 
 ## 写しの取り込み(pull)
 
