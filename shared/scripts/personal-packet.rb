@@ -688,6 +688,9 @@ module Packet
     original = read_text(path)
     front = parse_text(original, path)
     at = Time.now
+    # 投稿する内容の updated より前を published にしない。worker-update は published と同じ秒に書くと updated を
+    # 次の秒に進めるので、同じ秒のうちに投稿しても、投稿した後に未 publish と読まれないようにする (#719)。
+    at = front.updated if front.updated && front.updated > at
     text = compose(front, at)
     # pull が読めない形の写しは投稿しない (#428)。投稿の前に、pull と同じ読み方 (published_copy) で読み直す。
     # 読めない写しを投稿すると、pull はそれを捨てて古い写しを現在地として採用する。

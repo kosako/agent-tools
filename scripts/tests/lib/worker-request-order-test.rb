@@ -506,12 +506,22 @@ class Explorer
     _code, out = invoke("collect")
     raise "手で組んだ run を collect が受けた: #{out}" unless out["reason_code"] == "no-launch-record"
 
+    # caller は docs (人手実行だけの空の結果の回復、手順 5) のとおりに比べる。packet の `## 依頼` の次の行から、次の
+    # `## ` の行の前までの byte 列の SHA-256 が、写した request.sha256 と同じときだけ next を渡す。model の判定は使わない。
+    body = File.read(PACKET, encoding: "UTF-8")[/^## 依頼\n(.*?)^## /m, 1]
+    record = File.join(run["dir"], "request.sha256")
+    same = body && File.file?(record) && File.binread(record) == Digest::SHA256.hexdigest(body) + "\n"
     values = { "run" => run["dir"], "entry" => "[res-W#{number}]" }
-    if status(m, run) == "same"
-      values["next"] = "[next-W#{number}]"
-      m["next"] = [values["next"]]
-    end
+    values["next"] = "[next-W#{number}]" if same
+    kept = section("次の入口")
     packet_update("result", values)
+    status = status(m, run)
+    if status == "same"
+      violate("P4", "manual-collect: 依頼が同じなのに、docs の照合では次の入口を更新しない") unless same
+      m["next"] = ["[next-W#{number}]"]
+    else
+      violate("P2", "manual-collect: 依頼が #{status} なのに、docs の照合で次の入口を上書きした") unless section("次の入口") == kept
+    end
     run["done"] = "collected"
     m["results"] << "[res-W#{number}]"
     m["run"], m["last"] = nil, m["run"]

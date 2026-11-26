@@ -637,6 +637,17 @@ grep -q "NEXT-ENTRY-LINE" "$repo/.agent-packets/7.md" || fail "body must be unto
 # 2 回目は published 行を置き換える (重複しない)
 (cd "$repo" && with_gh "$pkt" publish 7 >/dev/null)
 [ "$(grep -c '^published:' "$repo/.agent-packets/7.md")" -eq 1 ] || fail "published line should be replaced, not duplicated"
+# updated が今より後の packet (worker-update が published と同じ秒に書き、次の秒へ進めた) を投稿しても、投稿した後は
+# 未 publish と読まれない。published を、投稿した内容の updated より前にしない (#719)
+cp "$repo/.agent-packets/7.md" "$tmp/7.ahead"
+ahead=$(ruby -rtime -e 'puts Time.at(Time.now.to_i + 3600).localtime("+09:00").iso8601')
+sed "s/^updated: .*/updated: $ahead/" "$tmp/7.ahead" > "$repo/.agent-packets/7.md"
+(cd "$repo" && with_gh "$pkt" publish 7 >/dev/null) || fail "#719: publish of a packet with a later updated should succeed"
+grep -q "^published: $ahead$" "$repo/.agent-packets/7.md" || fail "#719: published must not be before updated: $(grep '^published:' "$repo/.agent-packets/7.md")"
+grep -q "^<!-- agent-packet issue=7 published=$ahead -->" "$gh_body" || fail "#719: the posted marker must carry the same time"
+(cd "$repo" && "$pkt" list --json > "$tmp/list-ahead.json")
+[ "$(jget "$tmp/list-ahead.json" 0 unpublished)" = "false" ] || fail "#719: after publish, a packet with a later updated must not stay unpublished"
+cp "$tmp/7.ahead" "$repo/.agent-packets/7.md"
 
 # ---- publish: --repo が無く env の GH_REPO があれば、gh を呼ばず packet も変えずに exit 2 (#528) --------
 # --dry-run も同じ (本文も出さない)。空の GH_REPO は無いのと同じ。--repo があれば GH_REPO があっても投稿する。
