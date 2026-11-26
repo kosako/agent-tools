@@ -288,7 +288,10 @@ boundary でない)。
       build 後どの時点でも再照合されない**: sync は generated 側も配置済み target 側も sidecar
       の `build_id` しか確認せず body を無照合で copy するため、build 後に generated body だけ
       改竄されればその内容が配備され、配備後に target body だけ改竄されても up-to-date として
-      skip される。つまり **generated / deployed の body 改竄はどの層も検出しない**。
+      skip される。つまり **generated / deployed の body 改竄は、配備を止める層では検出しない**。
+      配備の後のずれは、doctor の body の検査 (#722) が、source から一時 directory に作り直した artifact と
+      比べて `warn` で見つける ([install-and-usage](install-and-usage.md) の「状態を見る」)。これは事後の
+      検出で、同じ OS user は doctor の前に戻せるので、改竄の防御ではない。
       hook 自体が fail-open steering なので防御表の強度ラベルは変わらないが、「trust したから
       body も安全」と読み違えないこと。
   - hook 読み込みは **user 層のみ実機で確認**。登録の実配線は dotfiles#181 で **user 層の別ファイル

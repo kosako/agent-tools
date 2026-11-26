@@ -74,7 +74,7 @@ instruction entry が無いと skip するので、register の後に回す。sy
 | connect (instruction 所有確立) | `connect.sh` | `scripts/lib/connect.rb` (`Connect::Runner#plan` / `apply`) |
 | sync (配置) | `sync.sh` | `scripts/lib/sync.rb` (`Sync::Runner#plan` / `plan_for_entry` / `apply`) |
 | status (観測) | `status.sh` | `scripts/lib/status.rb` (`Status::Runner#report`, `target_state`) |
-| doctor (環境点検) | `doctor.sh` | `scripts/lib/doctor.rb` (`Doctor::Runner#run`, `check_catalog`) |
+| doctor (環境点検) | `doctor.sh` | `scripts/lib/doctor.rb` (`Doctor::Runner#run`, `check_catalog`)、body の検査は `scripts/lib/body_check.rb` (`BodyCheck.run`) |
 | psych 3/4 両対応 YAML loader | — | `scripts/lib/yaml_util.rb` (`YamlUtil.load`) |
 | vendor する takt の policy の include の展開 (#622) | `expand-vendored-policy.sh` | `scripts/lib/expand_vendored_policy.rb` (`ExpandVendoredPolicy.expand`) |
 

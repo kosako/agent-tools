@@ -76,8 +76,11 @@ module Build
   end
 
   class Runner
-    def initialize(root)
+    # root は source を読む repo。out_root は generated/ を書く root で、既定は root。doctor は、同じ builder で
+    # 一時 directory に作り直して配備先と比べるために、別の out_root を渡す (#722)。source は常に root から読む。
+    def initialize(root, out_root: nil)
       @root = File.expand_path(root)
+      @out = out_root ? File.expand_path(out_root) : @root
       @built = []
       @skipped = []
     end
@@ -118,7 +121,7 @@ module Build
       name = asset[:name]
       source = asset[:source]["path"]
       format = asset[:source]["format"]
-      out_dir = ArtifactTargets.generated_path(@root, tool, name, "skill")
+      out_dir = ArtifactTargets.generated_path(@out, tool, name, "skill")
 
       # rm_rf と mkdir_p の前に経路を調べる。SKILL.md・directory の中身・marker は、旧 dir を
       # 消しきって作り直した空の dir の中に書くので、経路の検査はこの 1 回で足りる (#386)。
@@ -148,7 +151,7 @@ module Build
     # codex: AGENTS.md) として生成する。所有 marker は HTML コメントで本体に埋める
     # (instruction は単一ファイル所有なので skill の dir sidecar marker が使えない)。
     def build_instruction(tool, asset)
-      out = ArtifactTargets.generated_path(@root, tool, asset[:name], "instruction")
+      out = ArtifactTargets.generated_path(@out, tool, asset[:name], "instruction")
       unless out
         @skipped << "#{asset[:manifest_path]}: instruction unsupported for #{tool}"
         return
@@ -183,7 +186,7 @@ module Build
         return
       end
 
-      out = ArtifactTargets.generated_path(@root, tool, name, "script")
+      out = ArtifactTargets.generated_path(@out, tool, name, "script")
       sidecar = ArtifactTargets.sidecar_marker_path(out)
       guard_file(out, sidecar)
       FileUtils.mkdir_p(File.dirname(out))
@@ -213,7 +216,7 @@ module Build
         return
       end
 
-      out = ArtifactTargets.generated_path(@root, tool, name, "plugin")
+      out = ArtifactTargets.generated_path(@out, tool, name, "plugin")
       guard_file(out)
       FileUtils.mkdir_p(File.dirname(out))
       build_id = Build.build_id_for(@root, source, format)
@@ -248,18 +251,18 @@ module Build
     end
 
     def rel(path)
-      Assets.rel(@root, path)
+      Assets.rel(@out, path)
     end
 
     # 書き込み・削除の前に、出力の経路 (leaf と途中の dir) に symlink が無いことを確かめる。
     # 見つけたら OutputPathError で止め、それ以上書かない (#386)。
     def guard(*paths)
-      paths.each { |path| Build.guard_output_path!(@root, path) }
+      paths.each { |path| Build.guard_output_path!(@out, path) }
     end
 
     # 単一 file の書き込みの前に、経路に加えて leaf が無いか regular file であることを確かめる (#386)。
     def guard_file(*paths)
-      paths.each { |path| Build.guard_output_file!(@root, path) }
+      paths.each { |path| Build.guard_output_file!(@out, path) }
     end
 
     public
@@ -314,7 +317,7 @@ module Build
       pruned = []
       kept = []
       failed = []
-      PathGlob.under(ArtifactTargets.generated_dir(@root, tool, "skill"), "*").sort.each do |dir|
+      PathGlob.under(ArtifactTargets.generated_dir(@out, tool, "skill"), "*").sort.each do |dir|
         next unless File.directory?(dir)
         next if names.include?(File.basename(dir))
 
@@ -335,7 +338,7 @@ module Build
       pruned = []
       kept = []
       failed = []
-      PathGlob.under(ArtifactTargets.generated_dir(@root, tool, "script"), "*").sort.each do |path|
+      PathGlob.under(ArtifactTargets.generated_dir(@out, tool, "script"), "*").sort.each do |path|
         next unless File.file?(path)
 
         if path.end_with?(ArtifactTargets::MARKER_BASENAME)
@@ -369,7 +372,7 @@ module Build
       kept = []
       failed = []
       keep = names.empty? ? nil : ArtifactTargets::INSTRUCTION_FILENAMES[tool]
-      PathGlob.under(ArtifactTargets.generated_dir(@root, tool, "instruction"), "*").sort.each do |file|
+      PathGlob.under(ArtifactTargets.generated_dir(@out, tool, "instruction"), "*").sort.each do |file|
         next unless File.file?(file)
         next if keep && File.basename(file) == keep
 
@@ -390,7 +393,7 @@ module Build
       kept = []
       failed = []
       expected_files = names.map { |name| ArtifactTargets.plugin_filename(name) }
-      PathGlob.under(ArtifactTargets.generated_dir(@root, tool, "plugin"), "*").sort.each do |path|
+      PathGlob.under(ArtifactTargets.generated_dir(@out, tool, "plugin"), "*").sort.each do |path|
         next unless File.file?(path)
         next if expected_files.include?(File.basename(path))
 

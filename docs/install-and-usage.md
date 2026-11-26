@@ -158,10 +158,42 @@ git pull
 
 ```sh
 ./scripts/status.sh         # human-readable サマリ(--json で機械可読)
-./scripts/doctor.sh         # 環境点検(ruby/git、tool home、catalog の鮮度など)
+./scripts/doctor.sh         # 環境点検(ruby/git、tool home、catalog の鮮度、配備した body のずれなど)
 ```
 
 どちらも read-only で、state を一切変更しません。
+
+status の `managed` は、管理 marker が一致するという意味です。skill・script・plugin では marker の `build_id` だけを見るので、
+marker を変えずに body だけが変わっても `managed` のままです (instruction は byte で比べるので `stale` になります)。
+doctor は、`managed` の target を、source から一時 directory に作り直した artifact と比べ、結果を target の行に載せます (#722)。
+
+- `ok: target: [<tool>] <name> managed (body matches a fresh build)`: 名前の集合、種類 (file・directory・symlink)、
+  file の byte、通常の file の所有者の実行 bit、symlink の行き先が同じ。instruction は今の local の断片を足した本文と
+  byte で比べ、mode は比べません (所有 file の mode は人の file から引き継ぐため)。
+- `warn: target: … managed but the body differs from a fresh build (<相対 path>: <違い>)`: 最初の違いを 1 つ出します。
+  違いは `content`・`exec bit`・`missing`・`extra`・`type`・`link target` のどれかです。UTF-8 として読めない名前や制御文字を
+  含む名前は escape して 1 行に収めます。exit は 0 のままです。
+- `info: target: … managed (body not verified: <理由>)`: 一致ともずれとも言えないとき。例えば、配備の後に source が
+  変わった (`source changed since the deployed build`)、作り直しや読み取りに失敗した、一時 directory の置き場が無い、です。
+  理由に例外の文言は出さず、class の名前だけを出します。
+
+一時 directory は、`TMPDIR`、system の一時 directory、`/tmp` の順に、repo・tool home・agents home の外にあるものだけを
+使い、終わると消します。`generated/` は作り直しません。`build_id` は source の通常の file の相対 path と byte から作るので、
+source の実行 bit や空の directory だけを変えたとき、manifest の `source.path` だけを変えたとき、build の変換が変わった
+ときは、`build_id` が同じまま作り直しが変わり、ずれと出ます。この検査は偶発的なずれと取り違えを見つけるためのもので、
+同じ OS user による改ざんの防御ではありません (doctor を走らせる前に戻せます)。
+
+ずれが出たら、次の手順で置き直します。sync は marker が同じ target を置き直さないので、写しを消してから配備します。
+`sync.sh --apply` だけでなく `setup.sh --apply` を使うのは、`generated/` が変えられていたときに source から作り直すためです。
+
+```sh
+rm -r ~/.claude/skills/<name>                  # skill (tool ごとの home の skills/<name>)
+rm ~/.claude/agent-tools/scripts/<name>         # script (本体だけを消せば足りる。sidecar は残してよい)
+rm ~/.config/opencode/plugins/<name>.js         # plugin
+./scripts/setup.sh --apply
+```
+
+instruction は所有 file を消さず、`setup.sh --apply` だけで直ります (sync が byte で比べて書き直す)。
 
 ### dotfiles から参照する(report-only)
 
