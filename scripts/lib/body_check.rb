@@ -66,7 +66,7 @@ module BodyCheck
   # 候補は TMPDIR、system の一時 directory、/tmp の順で、directory で書け、world-writable なら sticky で、avoid の
   # どれの内側でもないものだけ。無ければ nil (何も書かない)。
   def temp_base(avoid, env)
-    avoided = avoid.compact.map { |dir| real_or_expanded(dir) }
+    avoided = avoid.compact.map { |dir| dir_id(dir) }.compact
     [env["TMPDIR"], Etc.systmpdir, "/tmp"].each do |dir|
       next if dir.nil? || dir.empty?
 
@@ -78,17 +78,34 @@ module BodyCheck
       stat = File.stat(real)
       next unless stat.directory? && stat.writable?
       next if stat.world_writable? && !stat.sticky?
-      next if avoided.any? { |a| real == a || real.start_with?(File.join(a, "")) }
+      next if within?(real, avoided)
 
       return real
     end
     nil
   end
 
-  def real_or_expanded(dir)
-    File.realpath(dir)
+  # 内側かは、path の文字列ではなく、置き場とその親を順に辿った directory の (device, inode) で決める。大文字小文字を
+  # 区別しない file system では、File.realpath は入力の表記を保つので、表記の違う同じ directory を文字列では
+  # 見分けられない (#786 の review)。無い directory は何も含まないので、avoid から外してよい。
+  def within?(real, avoided)
+    path = real
+    loop do
+      id = dir_id(path)
+      return true if id && avoided.include?(id)
+
+      parent = File.dirname(path)
+      return false if parent == path
+
+      path = parent
+    end
+  end
+
+  def dir_id(dir)
+    stat = File.stat(dir)
+    stat.directory? ? [stat.dev, stat.ino] : nil
   rescue SystemCallError
-    File.expand_path(dir)
+    nil
   end
 
   def compare(tmp, plan, fragment)

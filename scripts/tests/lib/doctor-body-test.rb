@@ -442,6 +442,19 @@ before = snapshot
 out, = doctor("R3", extra_env: { "TMPDIR" => inner })
 expect_all_match("R3", out)
 check(snapshot == before, "R3: doctor must not create its temporary directory under the repo")
+# 大文字小文字だけが違う表記の repo の内側 (#786 の review)。区別しない file system では File.realpath が入力の
+# 表記を保つので、文字列の比較では内側と分からない。区別する file system では同じ表記の path が無いので見ない。
+upper = File.join(TMP, "REPO", "INNER-TMP")
+if File.directory?(upper)
+  check(BodyCheck.temp_base([REPO], { "TMPDIR" => upper }) != File.realpath(upper),
+        "R3: a TMPDIR inside the repo written in another case is skipped")
+  before = snapshot
+  out, = doctor("R3 case", extra_env: { "TMPDIR" => upper })
+  expect_all_match("R3 case", out)
+  check(snapshot == before, "R3 case: doctor must not create its temporary directory under the repo")
+else
+  puts "skip: R3 case (the file system distinguishes case)"
+end
 FileUtils.rmdir(inner)
 
 # --- R3 の続き: 置き場がどこにも無ければ、何も書かずに未検査 ---
