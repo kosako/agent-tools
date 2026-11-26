@@ -442,6 +442,8 @@ collect はこの値では止まりません。`head_on_branch` が false か、
 公開前の `check` が `clone-head` か `clone-dirty` で止めます。
 照合した `HEAD` の OID は、run directory の `collected-head` (40 か 64 桁の小文字の hex と改行) に残します。
 `check` は、公開する先端がこれと同じときだけ通します。collect の後に clone の branch を動かすと、`check` は止まります。
+記録するのは collect の時点の HEAD です。worker の終了から collect までの間に人が clone を変えると、その変更を
+worker の結果として記録します (印を使わない直接の編集。範囲の外で、#782)。
 `commits_this_run` は、clone 内の `start_head..HEAD` の commit 数です。
 start_head が無い場合や clone 内に該当 commit が無い場合は null とし、転記を続けます。
 collect は clone にも main にも fetch しません。
