@@ -202,6 +202,8 @@ script が pane の出力、残った process、snapshot、最終 message の書
 返却の `request` が `same` でなければ、結果は起動のときの依頼の分だけで、次の入口は更新されていない。
 変わった依頼を読み、worker にこなさせるなら §1 の authorization に従って `launch` し直す。
 `leftover` に残った process があれば報告し、観測できなかった項目も明記する。
+返却の `clone` の `head_on_branch` が false か、未 commit の数が 0 でなければ、結果を受け入れない (#718)。
+worker の修正 round か人の確認に回す。公開前の `check` は `clone-head` か `clone-dirty` で止まる。
 残った process を自分では止めず、止めるかは人が決める。
 
 `empty-result` で `retryable: true` のときだけ、`personal-codex-worker-run retry-empty` を呼ぶ。

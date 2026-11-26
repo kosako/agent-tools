@@ -78,7 +78,7 @@ module CodexWorkerStopCases
       "stop_executor" => %w[stage:snapshot stage:backup stage:transcription update_packet:stop assign:completion stop:*],
       "collect" => %w[stage:records stage:wait stop_executor:* stop_executor:* stop_executor:empty-result
                       assign:completion,executor-result stop:empty-result stage:pane-log command:pane-log stop:pane-log
-                      stage:snapshot stage:commits command:clone-command stop:clone-command stage:transcription
+                      stage:snapshot stage:commits stage:transcription
                       update_packet:stop assign:executor-result stop:worker-question update_packet:result stop:run-record]
     }
     expected_order.each do |name, expected|
@@ -112,7 +112,7 @@ module CodexWorkerStopCases
       "transcription" => "transcription", "pane-log" => "transcription", "commits" => "clone",
       "fetch" => "fetch", "trailer" => "trailer", "merge-commits" => "public-safety",
       "style" => "public-safety", "publish-gate" => "public-safety", "destination" => "public-safety", "marker" => "public-safety",
-      "packet-again" => "launch-record"
+      "packet-again" => "launch-record", "clone-state" => "fetch", "fetched-head" => "fetch"
     }.to_a + [["snapshot", "clone"], ["snapshot", "fetch"]]
     raise "stage の context を見直す" unless stages == expected_stages.sort
 
@@ -140,6 +140,8 @@ module CodexWorkerStopCases
     add.call("prepare_retry", ["retry-empty"], "launch-record")
     add.call("verify_snapshot", read, "clone")
     add.call("verify_snapshot", ["check"], "fetch")
+    add.call("clone_state", ["collect"], "clone")
+    add.call("clone_state check_clone_state", ["check"], "fetch")
     add.call("wait_completion", ["collect"], "executor-exit")
     add.call("result_sections gated_result", ["collect"], "transcription")
     add.call("backup_changes commits_this_run", ["collect"], "clone")

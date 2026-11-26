@@ -25,6 +25,10 @@ FAKE
 # Select late git failures without breaking packet reads or the earlier trailer scan.
 git_wrapper = File.read(File.join(BIN, "git"))
 write_exec(File.join(BIN, "git"), git_wrapper.sub('exec(ENV.fetch("FAKE_GIT_REAL"), *ARGV)', <<~'FAKE'))
+  # 取り込みの直前に clone の branch を進める形 (#718。状態を読んだ後に branch が動く)。
+  if (moved = ENV["FAKE_CHECK_MOVE_CLONE"]) && ARGV[2] == "fetch" && ARGV.include?(moved)
+    system(ENV.fetch("FAKE_GIT_REAL"), "-C", moved, "commit", "--allow-empty", "-qm", "moved\n\nCo-Authored-By: Codex <codex@example.invalid>") || exit(1)
+  end
   step = ENV["FAKE_CHECK_GIT_STEP"]
   fail_here = case step
               when "origin-fetch" then ARGV[2, 2] == %w[fetch origin]
@@ -220,6 +224,62 @@ FileUtils.cp(REQUEST_RECORD, other_run)
 end
 FileUtils.rm_rf(other_run)
 assert(invoke_check["status"] == "READY", "the unchanged packet still reaches READY")
+
+# clone の状態 (#718)。HEAD が branch を指さない、または未 commit の変更が残ると、fetch の前に止まる。
+# 両方なら clone-head を先に返す。gitignore された file と空の directory は数えない。変更は消さない。
+clean_up = lambda do |name|
+  current, = Open3.capture2(REAL_GIT, "-C", CLONE, "symbolic-ref", "-q", "--short", "HEAD")
+  git(CLONE, "switch", "-q", name) unless current.strip == name
+  git(CLONE, "add", "-A")
+  git(CLONE, "commit", "--allow-empty", "-qm", "cleanup\n\n#{TRAILER}")
+end
+[["K2 branch から外れた HEAD", "clone-head", lambda { git(CLONE, "switch", "-q", "--detach"); commit }],
+ ["K2 別の branch", "clone-head", lambda { git(CLONE, "switch", "-qc", "other-#{$branch_number}"); commit }],
+ ["K3 untracked", "clone-dirty", lambda { File.write(File.join(CLONE, "left.txt"), "left\n") }],
+ ["K3 staged", "clone-dirty", lambda { File.write(File.join(CLONE, "work.txt"), "staged\n"); git(CLONE, "add", "work.txt") }],
+ ["K3 unstaged", "clone-dirty", lambda { File.write(File.join(CLONE, "work.txt"), "unstaged\n") }],
+ ["K3 unstaged の削除", "clone-dirty", lambda { File.unlink(File.join(CLONE, "work.txt")) }],
+ ["K4 両方", "clone-head", lambda { git(CLONE, "switch", "-q", "--detach"); File.write(File.join(CLONE, "left.txt"), "left\n") }]].each do |label, code, setup|
+  name = branch
+  commit
+  setup.call
+  before = Dir.glob(File.join(CLONE, "**/*"), File::FNM_DOTMATCH).reject { |p| p.include?("/.git/") }.sort
+  failure("fetch", code)
+  no_fetch
+  after = Dir.glob(File.join(CLONE, "**/*"), File::FNM_DOTMATCH).reject { |p| p.include?("/.git/") }.sort
+  assert(after == before, "#{label}: check keeps the clone's files")
+  clean_up.call(name)
+end
+# clone の状態は index を書かずに読む。stat の古い file があると、ふつうの status は index を書き直す (#718)。
+name = branch
+commit
+past = Time.now - 600
+File.utime(past, past, File.join(CLONE, "work.txt"))
+assert(invoke_check["status"] == "READY", "a stale index stat does not block, and check does not rewrite the index")
+# gitignore された file と空の directory だけなら通る (C16、C21)。
+name = branch
+File.write(File.join(CLONE, ".gitignore"), "*.out\n")
+git(CLONE, "add", ".gitignore")
+commit
+File.write(File.join(CLONE, "test.out"), "generated\n")
+Dir.mkdir(File.join(CLONE, "empty-dir"))
+assert(invoke_check["status"] == "READY", "ignored files and empty directories do not block")
+FileUtils.rm_rf(File.join(CLONE, "empty-dir"))
+File.unlink(File.join(CLONE, "test.out"))
+# 依頼の照合が先 (K5)。依頼が変わっていれば、clone が汚れていても request-changed。
+File.write(File.join(CLONE, "left.txt"), "left\n")
+File.write(PACKET, File.read(PACKET).sub(REQUEST, REQUEST + "足した依頼\n"))
+failure("launch-record", "request-changed")
+no_fetch
+File.unlink(File.join(CLONE, "left.txt"))
+# 状態を読んだ後に clone の branch が動くと、取り込んだ先端が worker のいた commit と違う (#718)。
+name = branch
+head = commit
+result = launch(1, { "FAKE_CHECK_MOVE_CLONE" => CLONE }, [],
+                explicit: ["check", "--repo", MAIN, "--issue", "7", "--title", "検査を追加する (#7)", "--body-file", BODY])
+assert(result.values_at("status", "phase", "blocked_at", "reason_code") == ["BLOCKED", "fetched-head", "fetch", "clone-head"],
+       "a branch moved after the clone state blocks: #{result}")
+assert(git(CLONE, "rev-parse", "HEAD") != head, "fixture: the clone branch moved")
 
 ["", "\xff".b, " \n"].each do |text|
   invalid = File.join(ROOT, "invalid-body")

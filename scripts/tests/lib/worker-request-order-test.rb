@@ -136,7 +136,9 @@ module World
       raise "差し替えていない git: #{args.inspect}" unless args.first == "-C"
 
       root, *rest = args.drop(1)
+      rest = rest.drop(1) if rest.first == "--no-optional-locks"
       case rest
+      when %w[symbolic-ref -q HEAD] then ok("refs/heads/feat/7-test\n")
       when %w[rev-parse --show-toplevel] then ok(root + "\n")
       when %w[rev-parse --git-common-dir] then ok(".git\n")
       when %w[config --path --get core.hooksPath] then ok(HOOKS + "\n")

@@ -88,6 +88,9 @@ packet の検査前に止まる場合は、state や記録の有無自体を確�
 | --- | --- | --- | --- | --- | --- | --- |
 | `check` | `BLOCKED` | `authorization` | `input` | 状態・run / last_run を保持。書込なし | 指揮役が入力と依存先を確認 | 引数を直して同じ subcommand。exit 2、packet の書込なし |
 | `check` | `BLOCKED` | `authorization` | `io` | 状態・run / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
+| `check` | `BLOCKED` | `fetch` | `clone-command` | open または review / last_run を保持。書込なし | 人が git の失敗と clone の状態を確認 | 照合済みの clone の原因を直して check。clone を作り直すなら snapshot の回復手順 |
+| `check` | `BLOCKED` | `fetch` | `clone-dirty` | open または review / last_run を保持。書込なし。clone の変更は保つ | 指揮役が残った変更の内容を確認。push を止め、add も commit もしない | 続ける変更なら、許可された修正 round で worker に commit させ、launch、collect、check。無関係な file なら、人が確かめて片付けてから、同じ last_run で check |
+| `check` | `BLOCKED` | `fetch` | `clone-head` | open または review / last_run を保持。書込なし。clone は保つ | 人が clone の HEAD と branch の先端を確認。指揮役は push を止める | 作業を branch に載せるなら、許可された修正 round で worker に branch へ戻して commit させ、launch、collect、check。状態を読んだ後に branch が動いたなら、由来を確かめて check |
 | `check` | `BLOCKED` | `fetch` | `fetch` | open または review / last_run を保持。書込なし | 人が診断と公開内容を確認。指揮役は push を止める | 「check の回復」の順で原因を直して check。題名と本文を変えたら personal-post-check から再実行 |
 | `check` | `BLOCKED` | `fetch` | `io` | open または review / last_run を保持。書込なし | 人が phase と診断 file を確認 | I/O の原因を直し、下の「更新後の失敗」で適用済みの操作を確認。同じ処理を無条件で繰り返さない |
 | `check` | `BLOCKED` | `fetch` | `snapshot-mismatch` | open または review / last_run を保持。書込なし | 人が snapshot の由来と保存すべき変更を確認。clone に git を実行しない | state と last_run を保つ。由来を確認して照合可能なら check。clone を退避して作り直すなら、許可された round、launch、collect、check |
@@ -318,8 +321,11 @@ run directory が clone、`/tmp`、`$TMPDIR` の実体の内側なら起動し�
 tab や pane を閉じる操作は持ちません。
 
 snapshot が許可する変更は、worker が commit するための entry に限ります。
-`HEAD`、`index`、`COMMIT_EDITMSG`、`ORIG_HEAD`、`AUTO_MERGE`、loose object、
+`HEAD`、`index`、`COMMIT_EDITMSG`、`ORIG_HEAD`、`AUTO_MERGE`、`REBASE_HEAD`、loose object、
 `objects/pack/` の pack、`refs/heads/` と branch の reflog が対象です。
+`REBASE_HEAD` は、最後の commit が conflict した rebase を終えた後に残ります (#775)。中身は見ません。
+rebase の途中 (`rebase-merge/` などが残る) と、fetch や pull が書く `FETCH_HEAD` と remote の ref は、今までどおり止めます。
+rebase を途中で抜けて HEAD が branch から外れた clone は、`check` が `clone-head` で止めます。
 設定、hook、info の変更や allowlist 外の追加・削除は停止します。
 clone の自動 maintenance は作成直後に無効化します。
 この照合は sandbox の代わりではなく、回収前に危険な git 設定を読ませないための検査です。
@@ -425,10 +431,15 @@ process-info が失敗した場合や読めない場合は、worker の消滅と
 完了時は exit 0 で、次の形を返します。
 
 ```json
-{"status":"DONE","issue":7,"run_dir":"<run dir>","head_oid":"<HEAD OID>","commits_this_run":1,"redacted":false,"leftover":{"foreground":{"checked":true,"processes":[]},"clone_arguments":{"checked":true,"processes":[]}},"request":"same","packet":{"written":true,"state":"open","record":"last_run"}}
+{"status":"DONE","issue":7,"run_dir":"<run dir>","head_oid":"<HEAD OID>","commits_this_run":1,"redacted":false,"leftover":{"foreground":{"checked":true,"processes":[]},"clone_arguments":{"checked":true,"processes":[]}},"request":"same","clone":{"head_on_branch":true,"staged":0,"unstaged":0,"untracked":0},"packet":{"written":true,"state":"open","record":"last_run"}}
 ```
 
-`head_oid` は snapshot 照合後の clone の HEAD です。
+`head_oid` は snapshot 照合後の clone の HEAD です。公開する branch の先端とは限りません。
+`clone` は、照合の後に読んだ clone の状態です (#718)。`head_on_branch` は HEAD が packet の branch を指すか、
+`staged`・`unstaged`・`untracked` は未 commit の変更の数です。数えるのは status の record 1 つごとで、rename の元の名前、
+gitignore された file、空の directory は数えません。読むときは `--no-optional-locks` を付け、index を書きません。
+collect はこの値では止まりません。`head_on_branch` が false か、数が 0 でない結果は受け入れません。
+公開前の `check` が `clone-head` か `clone-dirty` で止めます。
 `commits_this_run` は、clone 内の `start_head..HEAD` の commit 数です。
 start_head が無い場合や clone 内に該当 commit が無い場合は null とし、転記を続けます。
 collect は clone にも main にも fetch しません。
@@ -532,6 +543,7 @@ pane が無い手渡しの1回目が、nonce 一致・exit 0・結果なしで�
    新しい run を記録して読み直した後だけ、人に run script を渡します。
 5. この手作りの run には `launch.json` がありません。`collect` は `no-launch-record` で止まります。
    caller が nonce、exit、結果の6見出し、snapshot、public-safety gate を確認します。
+   clone の状態も、collect の `clone` と同じ読み方で確かめ、結果に書きます。公開前の `check` は同じ規則で止めます。
    本文の置換と転記は上の collect と同じ契約に従い、`worker-update` の `result` を使います。
    依頼が、写した `request.sha256` と同じと確かめられなければ、`next` を省いて次の入口を保ちます。
    比べる値は、packet の `## 依頼` の次の行から、次の `## ` の行の前までの byte 列の SHA-256 です。
@@ -587,8 +599,10 @@ personal-codex-worker-run check --repo <main worktree の root> --issue <N> --ti
 | environment | preflight | `gh-repo`: GH_REPO が空でない |
 | packet | launch-record | `packet-check` / `packet-list` / `check-record`: packet と回収済み run。`request-changed` / `request-unrecorded`: 起動のときの依頼との一致 |
 | snapshot | fetch | `snapshot-mismatch`: last_run の preflight.json との照合 |
+| clone-state | fetch | `clone-head` / `clone-dirty` / `clone-command`: clone の HEAD が branch を指すか、未 commit の変更が無いか。両方に当たれば `clone-head` |
 | fetch | fetch | `fetch`: clone から main への取り込み。non-fast-forward も拒否 |
 | trailer | trailer | `trailer`: origin/main の fetch、base と head、全 commit の trailer |
+| fetched-head | fetch | `clone-head`: 取り込んだ branch の先端が、clone の状態を読んだときの HEAD と同じか (読んだ後に branch が動いたら止まる) |
 | merge-commits | public-safety | `merge-commit` / `publish-material`: merge commit の有無 |
 | style | public-safety | `style`: 文体検査の実行または応答の失敗 |
 | publish-gate | public-safety | `publish-material` / `publish-gate` / `gate-warning`: 公開する材料と gate |
@@ -599,6 +613,7 @@ personal-codex-worker-run check --repo <main worktree の root> --issue <N> --ti
 予期しない file 操作などの失敗は、その段で `io` を返します。
 snapshot の stderr は `last_run` の `snapshot-verify.txt` に保存します。
 照合が通るまでは clone を git に渡しません。clone の `.git` に書き込む操作もありません。
+clone の状態は `--no-optional-locks` を付けて読み、index を書きません (#718)。
 取り込みは `git fetch --no-tags -- <clone> refs/heads/<branch>:refs/heads/<branch>` です。
 refspec に `+` を付けず、main の checkout も変えません。
 

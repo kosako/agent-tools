@@ -36,10 +36,10 @@ check("disable する feature の一覧", P::DISABLE_FEATURES == %w[apps compute
 check("再指定する key の一覧", P::MODEL_KEYS == { "--model" => "model", "--effort" => "model_reasoning_effort" })
 check("git snapshot の変更 allowlist は branch への commit の領域に固定 (#493)",
       P::GIT_MUTABLE_DIRS == %w[objects objects/pack refs refs/heads logs logs/refs logs/refs/heads] &&
-      P::GIT_MUTABLE_FILES == %w[HEAD index COMMIT_EDITMSG ORIG_HEAD AUTO_MERGE])
+      P::GIT_MUTABLE_FILES == %w[HEAD index COMMIT_EDITMSG ORIG_HEAD AUTO_MERGE REBASE_HEAD])
 hex40 = "0123456789abcdef0123456789abcdef01234567"
 hex64 = "#{hex40}0123456789abcdef01234567"
-allowed = ["HEAD", "index", "AUTO_MERGE", "objects", "objects/ab", "objects/ab/#{hex40[2..]}", "objects/ab/#{hex64[2..]}",
+allowed = ["HEAD", "index", "AUTO_MERGE", "REBASE_HEAD", "objects", "objects/ab", "objects/ab/#{hex40[2..]}", "objects/ab/#{hex64[2..]}",
            "objects/pack", "objects/pack/pack-#{hex40}.pack", "objects/pack/pack-#{hex40}.idx",
            "objects/pack/pack-#{hex64}.rev", "refs/heads", "refs/heads/main", "refs/heads/codex/issue-1",
            "logs/HEAD", "logs/refs/heads/main", "logs/refs/heads/codex/issue-1"]
@@ -901,6 +901,26 @@ git -C "$flow_clone" rebase -q codex/issue-1-b
 git -C "$flow_clone" branch -q -D codex/issue-1-b
 flow_verify
 [ "$rc" -eq 0 ] || fail "amend, reset, switch, rebase and branch -D on the worker branch must pass (rc=$rc): $out"
+# 最後の commit が conflict した rebase は、途中では止め、終えた後に残る REBASE_HEAD は通す (#775)。
+flow_snapshot
+git -C "$flow_clone" switch -q -c codex/issue-1-c HEAD~1
+printf 'side\n' >> "$flow_clone/f"
+git -C "$flow_clone" commit -q -a -m side
+git -C "$flow_clone" switch -q codex/issue-1
+set +e
+git -C "$flow_clone" rebase -q codex/issue-1-c > /dev/null 2>&1
+set -e
+[ -f "$flow_clone/.git/REBASE_HEAD" ] && [ -d "$flow_clone/.git/rebase-merge" ] || fail "fixture: the rebase must stop at a conflict"
+flow_verify
+[ "$rc" -eq 2 ] || fail "a rebase stopped at a conflict must fail closed (rc=$rc): $out"
+case "$out" in *rebase-merge*) : ;; *) fail "diagnostic must name rebase-merge: $out" ;; esac
+printf 'resolved\n' > "$flow_clone/f"
+git -C "$flow_clone" add f
+GIT_EDITOR=true git -C "$flow_clone" rebase --continue > /dev/null 2>&1 || fail "fixture: rebase --continue failed"
+[ -f "$flow_clone/.git/REBASE_HEAD" ] && [ ! -d "$flow_clone/.git/rebase-merge" ] || fail "fixture: a finished rebase leaves REBASE_HEAD alone"
+flow_verify
+[ "$rc" -eq 0 ] || fail "a finished rebase that leaves REBASE_HEAD must pass (rc=$rc): $out"
+git -C "$flow_clone" branch -q -D codex/issue-1-c
 flow_oid=$(git -C "$flow_clone" rev-parse HEAD)
 # 1 つ書くごとに snapshot を取り直し、止まることと、診断が書いた entry を名指すことを確かめてから戻す。
 flow_expect_stop() {

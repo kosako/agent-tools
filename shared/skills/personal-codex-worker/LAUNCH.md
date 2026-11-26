@@ -58,7 +58,7 @@ stdout を file に保存し、exit と JSON を両方読む。
 | exit / status | 次の手 |
 | --- | --- |
 | 0 / STARTED | 起動の受付。`collect` を呼ぶ |
-| 0 / DONE | 結果は転記済み。`leftover` を報告し、受け入れを判断する。`request` が `same` でなければ、変わった依頼の分は満たしていない |
+| 0 / DONE | 結果は転記済み。`leftover` を報告し、受け入れを判断する。`request` が `same` でなければ、変わった依頼の分は満たしていない。`clone` が branch の外か未 commit の残りを示すなら、受け入れない |
 | 0 / READY | 文体の指摘を読み、§9 で OID を指定して push する |
 | 1 / BLOCKED | `blocked_at`、`reason_code`、`phase` を読み、§3 の回復へ進む |
 | 2 / BLOCKED | 入力を直す。clone や起動記録が作られたと推測しない |
