@@ -70,6 +70,8 @@ module CodexWorkerRun
     "request-changed" => "依頼が、結果を回収した run の起動のときと違います",
     "request-unrecorded" => "結果を回収した run の起動のときの依頼を確かめられません",
     "fetch" => "clone の branch を main に取り込めません",
+    "clone-head" => "clone の HEAD が、公開する branch を指していません",
+    "clone-dirty" => "clone に未 commit の変更が残っています",
     "trailer" => "公開する commit の Codex trailer を確かめられません",
     "merge-commit" => "公開する範囲に merge commit があります",
     "style" => "日本語の文体検査の結果を確かめられません",
@@ -82,6 +84,8 @@ module CodexWorkerRun
   }.freeze
   # brief に書いた依頼の節の SHA-256。brief を写して再実行するときは、一緒に写す (#719)。
   REQUEST_FILE = "request.sha256"
+  # collect が照合して転記した clone の HEAD の OID (#718)。check は、公開する先端がこれと同じときだけ通す。
+  COLLECTED_FILE = "collected-head"
   # 依頼が起動のときと同じと確かめられない結果に付ける注記 (#719)。
   REQUEST_NOTES = {
     "changed" => "(orchestrator 注: 起動の後に依頼が変わった。この結果は起動のときの依頼の分で、次の入口は更新していない)",
@@ -584,6 +588,7 @@ module CodexWorkerRun
       stop("invalid-launch-record") unless valid
       @launch_record = record
       @clone, @nonce, @pane, @tab = record.values_at("clone_root", "nonce", "pane_id", "tab_id")
+      @branch = record["branch"]
     rescue SystemCallError
       stop("invalid-launch-record")
     end
@@ -836,10 +841,10 @@ module CodexWorkerRun
       @leftover = leftovers
       stage("snapshot", "clone") { verify_snapshot(@run) }
       # Count only this run; main may have advanced beyond the clone's objects.
-      head, count = stage("commits", "clone") do
-        head = command(git(@clone, "rev-parse", "--verify", "HEAD"), "clone-command").strip
-        stop("clone-command") unless head.match?(/\A[0-9a-f]{40,64}\z/)
-        [head, commits_this_run(head)]
+      head, count, state = stage("commits", "clone") do
+        state = clone_state
+        File.binwrite(File.join(@run, COLLECTED_FILE), state["head"] + "\n")
+        [state["head"], commits_this_run(state["head"]), state]
       end
       redacted = stage("transcription", "transcription") do
         entry, sections, changed = gated_result
@@ -854,10 +859,39 @@ module CodexWorkerRun
         stop("run-record") unless row && row["run"].nil? && row["last_run"] == @run && row["state"] == "open"
         changed
       end
+      # head_oid は clone の HEAD。head_on_branch が false なら、公開する branch の先端とは違う (#718)。
       puts JSON.generate("status" => "DONE", "issue" => @issue, "run_dir" => @run, "head_oid" => head,
         "commits_this_run" => count, "redacted" => redacted, "leftover" => @leftover, "request" => @request_status,
+        "clone" => state.reject { |key, _| key == "head" },
         "packet" => { "written" => true, "state" => "open", "record" => "last_run" })
       0
+    end
+
+    # 照合の後に、clone の作業ツリーと HEAD を読む (#718)。index を書かない。gitignore された file は数えない。
+    # status の record 1 つごとに、index の側に変化があれば staged、作業ツリーの側にあれば unstaged に足す。
+    # rename と copy の元の名前は数えない。HEAD が branch から外れているのは、ふつうの不一致として返す。
+    def clone_state
+      out = command(git(@clone, "--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"),
+                    "clone-command").b
+      counts = { "staged" => 0, "unstaged" => 0, "untracked" => 0 }
+      fields = out.split("\0")
+      until fields.empty?
+        record = fields.shift
+        stop("clone-command") unless record.bytesize >= 4 && record.byteslice(2) == " "
+        x, y = record.byteslice(0), record.byteslice(1)
+        fields.shift if "RC".include?(x) || "RC".include?(y)
+        if x == "?" && y == "?"
+          counts["untracked"] += 1
+        else
+          counts["staged"] += 1 unless x == " "
+          counts["unstaged"] += 1 unless y == " "
+        end
+      end
+      ref, rc = capture(git(@clone, "symbolic-ref", "-q", "HEAD"))
+      stop("clone-command") unless [0, 1].include?(rc)
+      head = command(git(@clone, "rev-parse", "--verify", "HEAD"), "clone-command").strip
+      stop("clone-command") unless head.match?(/\A[0-9a-f]{40,64}\z/)
+      { "head_on_branch" => rc == 0 && ref.chomp == "refs/heads/#{@branch}", "head" => head }.merge(counts)
     end
 
     def commits_this_run(head)
@@ -879,6 +913,9 @@ module CodexWorkerRun
       stop("check-record") unless valid_branch?(@branch)
       @run = @row["last_run"]
       @clone = "#{@repo}-clones/#{@issue}"
+      collected = File.join(@run, COLLECTED_FILE)
+      @collected_head = File.file?(collected) ? File.binread(collected)[/\A([0-9a-f]{40}|[0-9a-f]{64})\n\z/, 1] : nil
+      stop("check-record") unless @collected_head
       check_request
     end
 
@@ -896,6 +933,17 @@ module CodexWorkerRun
       status = request_status(@run, request)
       stop("request-unrecorded") if status == "unrecorded"
       stop("request-changed") unless status == "same"
+    end
+
+    # 公開するのは、worker が最後にいた commit で、作業ツリーに残りが無いときだけ (#718)。
+    # HEAD の不一致を先に返す (branch に戻して検査し直すと、残りが見える)。
+    # 公開する先端は、collect が照合して転記した commit と同じでなければならない (collect の後に branch を戻すと違う)。
+    def check_clone_state
+      state = clone_state
+      stop("clone-head") unless state["head_on_branch"]
+      stop("clone-dirty") unless state.values_at("staged", "unstaged", "untracked").all?(&:zero?)
+      stop("clone-head") unless state["head"] == @collected_head
+      @clone_head = state["head"]
     end
 
     def check_trailers
@@ -987,16 +1035,24 @@ module CodexWorkerRun
     def check
       stage("packet", "launch-record") { read_check_record }
       stage("snapshot", "fetch") { verify_snapshot(@run) }
+      stage("clone-state", "fetch") { check_clone_state }
       stage("fetch", "fetch") do
         command(git(@repo, "fetch", "--no-tags", "--", @clone, "refs/heads/#{@branch}:refs/heads/#{@branch}"), "fetch")
       end
       stage("trailer", "trailer") { check_trailers }
+      # 状態を読んだ後に clone の branch が動いたら、取り込んだ先端は worker が最後にいた commit と違う (#718)。
+      stage("fetched-head", "fetch") { stop("clone-head") unless @head == @clone_head }
       stage("merge-commits", "public-safety") { check_merges }
       stage("style", "public-safety") { check_style }
       stage("publish-gate", "public-safety") { check_publish_gate }
       stage("destination", "public-safety") { check_destination }
       marker = stage("marker", "public-safety") { check_marker }
       stage("packet-again", "launch-record") { recheck_record }
+      # 検査の途中に clone が変わったら (残った process や人の編集)、READY を返さない。返す直前に照合し直す (#718)。
+      stage("clone-again", "fetch") do
+        verify_snapshot(@run)
+        check_clone_state
+      end
       result = { "status" => "READY", "issue" => @issue, "branch" => @branch,
                  "base_oid" => @base, "head_oid" => @head, "commits" => @commit_count,
                  "slug" => @slug, "style_findings" => @style_findings, "marker" => marker, "run_dir" => @run }

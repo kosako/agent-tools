@@ -480,4 +480,88 @@ reset_herdr(state)
   assert(File.readlines(sleep_log).map(&:to_f).sum > 59, "waiting uses sleep rather than spinning")
 end
 assert(events.none? { |e| %w[close kill].include?(e[1]) }, "never closes or kills")
+# clone の状態 (#718)。collect は止まらずに転記し、clone の項目で、未 commit の数と HEAD が branch を指すかを返す。
+# 各 case は新しい clone で起動し、worker の commit の後に手を加える。
+clone_case = lambda do |label, expected, work|
+  FileUtils.rm_rf(CLONE)
+  reset_packet
+  reset_herdr
+  started = launch(0, {}, ["--branch", "feat/7-test"])
+  git(CLONE, "commit", "--allow-empty", "-qm", "implementation")
+  work.call
+  finish(started.fetch("run_dir"), started.fetch("nonce"))
+  result = invoke("collect")
+  assert(result["status"] == "DONE" && result["clone"] == expected, "#{label}: #{result['clone'].inspect} #{result['reason_code']}")
+  assert(result["head_oid"] == git(CLONE, "rev-parse", "HEAD"), "#{label}: head_oid is the clone HEAD")
+  assert(File.read(File.join(started.fetch("run_dir"), "collected-head")) == result["head_oid"] + "\n", "#{label}: collect records the HEAD")
+  assert(File.read(PACKET).include?(RESULT), "#{label}: the result is transcribed")
+  result
+end
+counts = ->(on, staged, unstaged, untracked) { { "head_on_branch" => on, "staged" => staged, "unstaged" => unstaged, "untracked" => untracked } }
+write = ->(name, text) { File.write(File.join(CLONE, name), text) }
+rebase_conflict = lambda do
+  write.call("base.txt", "worker\n")
+  git(CLONE, "commit", "-qam", "worker change")
+  git(CLONE, "switch", "-qc", "side", BASE)
+  write.call("base.txt", "side\n")
+  git(CLONE, "commit", "-qam", "side change")
+  git(CLONE, "switch", "-q", "feat/7-test")
+  _out, status = Open3.capture2e(REAL_GIT, "-C", CLONE, "rebase", "-q", "side")
+  assert(!status.success? && File.exist?(File.join(CLONE, ".git/REBASE_HEAD")), "fixture: the last commit conflicts")
+  write.call("base.txt", "resolved\n")
+  git(CLONE, "add", "base.txt")
+end
+clone_case.call("C1 clean", counts.call(true, 0, 0, 0), -> {})
+clone_case.call("C12 staged", counts.call(true, 1, 0, 0), -> { write.call("new.txt", "new\n"); git(CLONE, "add", "new.txt") })
+clone_case.call("C13 unstaged", counts.call(true, 0, 1, 0), -> { write.call("base.txt", "changed\n") })
+clone_case.call("C14 untracked", counts.call(true, 0, 0, 1), -> { write.call("left.txt", "left\n") })
+clone_case.call("C15 three", counts.call(true, 1, 1, 1), lambda {
+  write.call("new.txt", "new\n")
+  git(CLONE, "add", "new.txt")
+  write.call("base.txt", "changed\n")
+  write.call("left.txt", "left\n")
+})
+clone_case.call("same file staged and unstaged", counts.call(true, 1, 1, 0), lambda {
+  write.call("base.txt", "staged\n")
+  git(CLONE, "add", "base.txt")
+  write.call("base.txt", "unstaged\n")
+})
+clone_case.call("C16 ignored", counts.call(true, 0, 0, 0), lambda {
+  write.call(".gitignore", "*.out\n")
+  git(CLONE, "add", ".gitignore")
+  git(CLONE, "commit", "-qm", "ignore")
+  write.call("test.out", "generated\n")
+})
+clone_case.call("C17 rename", counts.call(true, 1, 0, 0), -> { git(CLONE, "mv", "base.txt", "moved.txt") })
+clone_case.call("C18 staged deletion", counts.call(true, 1, 0, 0), -> { git(CLONE, "rm", "-q", "base.txt") })
+clone_case.call("C19 unstaged deletion", counts.call(true, 0, 1, 0), -> { File.unlink(File.join(CLONE, "base.txt")) })
+clone_case.call("C20 names", counts.call(true, 0, 0, 3), lambda {
+  write.call("with space.txt", "a\n")
+  write.call("with\nnewline.txt", "b\n")
+  write.call("名前.txt", "c\n")
+})
+clone_case.call("C21 empty directory", counts.call(true, 0, 0, 0), -> { Dir.mkdir(File.join(CLONE, "empty-dir")) })
+clone_case.call("C9 detached HEAD", counts.call(false, 0, 0, 0), lambda {
+  git(CLONE, "switch", "-q", "--detach")
+  git(CLONE, "commit", "--allow-empty", "-qm", "detached")
+})
+clone_case.call("C10 other branch", counts.call(false, 0, 0, 0), lambda {
+  git(CLONE, "switch", "-qc", "other")
+  git(CLONE, "commit", "--allow-empty", "-qm", "other")
+})
+clone_case.call("C11 back to the branch", counts.call(true, 0, 0, 0), lambda {
+  git(CLONE, "switch", "-qc", "other")
+  git(CLONE, "commit", "--allow-empty", "-qm", "other")
+  git(CLONE, "switch", "-q", "feat/7-test")
+})
+clone_case.call("C2 finished rebase", counts.call(true, 0, 0, 0), lambda {
+  rebase_conflict.call
+  out, status = Open3.capture2e({ "GIT_EDITOR" => "true" }, REAL_GIT, "-C", CLONE, "rebase", "--continue")
+  assert(status.success? && File.exist?(File.join(CLONE, ".git/REBASE_HEAD")), "fixture: the finished rebase leaves REBASE_HEAD: #{out}")
+})
+clone_case.call("C6 rebase --quit", counts.call(false, 0, 0, 0), lambda {
+  rebase_conflict.call
+  git(CLONE, "commit", "-qm", "half")
+  git(CLONE, "rebase", "--quit")
+})
 puts "ok: codex-worker collect/retry self-test (#{$count} checks)"

@@ -136,7 +136,9 @@ module World
       raise "差し替えていない git: #{args.inspect}" unless args.first == "-C"
 
       root, *rest = args.drop(1)
+      rest = rest.drop(1) if rest.first == "--no-optional-locks"
       case rest
+      when %w[symbolic-ref -q HEAD] then ok("refs/heads/feat/7-test\n")
       when %w[rev-parse --show-toplevel] then ok(root + "\n")
       when %w[rev-parse --git-common-dir] then ok(".git\n")
       when %w[config --path --get core.hooksPath] then ok(HOOKS + "\n")
@@ -539,6 +541,8 @@ class Explorer
     values = { "run" => run["dir"], "entry" => "[res-W#{number}]" }
     values["next"] = "[next-W#{number}]" if same
     kept = section("次の入口")
+    # docs の手順 5: 照合した clone の HEAD の OID を、run dir の collected-head に書く (#718)
+    File.write(File.join(run["dir"], "collected-head"), World::OID + "\n")
     packet_update("result", values)
     status = status(m, run)
     if status == "same"
@@ -648,7 +652,7 @@ class Explorer
 end
 
 # ---- 状態の保存 --------------------------------------------------------------------------------
-KEPT = %w[launch.json request.sha256 preflight.json brief.md done.txt result.md codex.log tab-id pane-id].freeze
+KEPT = %w[launch.json request.sha256 collected-head preflight.json brief.md done.txt result.md codex.log tab-id pane-id].freeze
 
 def save(model)
   runs = Dir.children(RUNS).sort.map do |name|
