@@ -302,7 +302,8 @@ file で行い、command 文字列へ inline 展開しない。
   手で更新する)。
 - この取り決めを使わない書き手 (人や agent の直接の編集。`personal-session-handoff` の packet の更新もこれに当たる) とは、
   最後に確かめてから rename するまでの間 (system call の 2 つの間) が重なりうる。この間の直接の編集は、差し替えで消える。
-  ふつうの file の操作では、印を見ない書き手を止められないため。直接の編集は、script が動いていない間に行う。
+  ふつうの file の操作では、印を見ない書き手を止められないため。直接の編集は、script が動いていない間に行う
+  (すべての書き手を共通の更新口に通す案は #782)。
 
 self-test は `scripts/tests/packet-test.sh` (dir / list / check / publish) と `scripts/tests/packet-pull-test.sh`
 (pull。上の「写しの取り込み」)。

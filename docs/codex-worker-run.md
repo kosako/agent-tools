@@ -401,7 +401,7 @@ herdr から ID が返ったら、一時 file と rename で更新します。
 - `check` は、`READY` を返す直前に packet の記録と依頼を読み直します (`packet-again` の段)。検査の途中で依頼が
   変わったら `request-changed`、回収した run が変わったら `check-record` で止まります。
 - 見ないものが1つあります。`check` が最後に読み直した後 (`READY` を返す前の一瞬を含む)、push や PR の作成の前に
-  依頼が変わることです。`READY` は、最後に読み直した時点の判定です。
+  依頼が変わることです。`READY` は、最後に読み直した時点の判定です (照合と push を同じ排他で行う案は #782)。
 
 ## collect の入力と出力
 
