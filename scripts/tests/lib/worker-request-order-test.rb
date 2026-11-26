@@ -448,7 +448,10 @@ class Explorer
   # pull が Issue の写しを読む間に依頼が足される。pull が packet を書くのは、local に未 publish の更新が無いときだけ
   # なので、先に今の packet を publish した後の形にする。写しは、その後に別の場所で publish した形 (中身は同じ)。
   def pull_round(m)
-    File.write(PACKET, Packet.with_published(File.read(PACKET, encoding: "UTF-8"), Time.now, PACKET))
+    # publish と同じく、published を今の updated より前にしない (前の round が updated を次の秒へ進めていることがある)
+    text = File.read(PACKET, encoding: "UTF-8")
+    at = [Time.now, Packet.parse_text(text, PACKET).updated].compact.max
+    File.write(PACKET, Packet.with_published(text, at, PACKET))
     fired = false
     World.on_read = lambda do
       fired = true
