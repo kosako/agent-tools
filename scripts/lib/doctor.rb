@@ -5,14 +5,17 @@
 # Spec: docs/sync-policy.md, docs/status-manifest-contract.md,
 #       docs/register-catalog.md
 #
-# - read-only。いかなる state も変更しない。
+# - read-only。いかなる state も変更しない。body の検査 (#722) は、repo と tool home の外の一時 directory に
+#   作り直して比べ、終わると消す。
 # - 出力に secrets / absolute private paths を含めない (paths は tilde 表記)。
 # - 外部依存ゼロ、network access なし。
 
 require "yaml"
 
 require_relative "assets"
+require_relative "body_check"
 require_relative "status"
+require_relative "sync"
 require_relative "build"
 require_relative "artifact_targets"
 require_relative "catalog"
@@ -86,18 +89,42 @@ module Doctor
       level = generated["stale"].zero? ? "ok" : "warn"
       report(level, "generated", "#{generated['total']} artifact(s), #{generated['stale']} stale")
 
+      bodies = body_results
       status["sync_targets"].each do |t|
         # deployed_but_inactive = 未登録 (gate 中) なのに実体が残っている = 掃除対象の
         # 可能性があるので warn (#186)。
         level = { "managed" => "ok", "missing" => "info", "stale" => "warn", "conflict" => "fail",
                   "deployed_but_inactive" => "warn" }.fetch(t["state"])
-        report(level, "target", "[#{t['tool']}] #{t['name']} #{t['state']}")
+        message = "[#{t['tool']}] #{t['name']} #{t['state']}"
+        # managed は marker の build_id の一致で、body の一致ではない。body の検査の結果を同じ行に載せ、ずれた
+        # target を ok のままにしない (#722)。
+        level, message = body_line(bodies[[t["tool"], t["name"]]], message) if t["state"] == "managed"
+        report(level, "target", message)
       end
 
       # catalog から消えたのに tool home に残る管理下の配置物 (#424)。使える状態のまま残るので warn。撤去は
       # sync --prune の明示の操作 (doctor は report-only)。
       status["orphans"].each do |o|
         report("warn", "target", "[#{o['tool']}] #{o['name']} orphan (not in catalog; remove with scripts/sync.sh --prune --apply)")
+      end
+    end
+
+    # sync の plan が up-to-date (status の managed) の target を、source から作り直した artifact と比べる
+    # (BodyCheck)。[tool, name] → Result の hash。一時 directory を消しきれなかったら warn を 1 行出す (path は出さない)。
+    def body_results
+      plans = Sync::Runner.new(@root, @homes).plan.select { |p| p.code == :up_to_date }
+      results, leftover = BodyCheck.run(@root, plans, avoid: [@root, *@homes.values, @agents_home],
+                                                      fragment: LocalInstructions.read)
+      report("warn", "body", "could not remove the temporary directory of the fresh build") if leftover
+      plans.zip(results).each_with_object({}) { |(p, r), h| h[[p.tool, p.name]] = r }
+    end
+
+    def body_line(result, message)
+      case result&.state
+      when :match then ["ok", "#{message} (body matches a fresh build)"]
+      when :differs then ["warn", "#{message} but the body differs from a fresh build (#{result.detail})"]
+      when :unverified then ["info", "#{message} (body not verified: #{result.detail})"]
+      else ["info", "#{message} (body not verified: not checked)"]
       end
     end
 

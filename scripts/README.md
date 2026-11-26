@@ -399,9 +399,12 @@ usage: doctor.sh [--root DIR] [--codex-home DIR] [--claude-home DIR] [--opencode
   marker を探す方式) に `<opencode home>/node_modules` は足さない (file 先頭 marker の plugin は
   この方式で検出できないため)。OpenCode が plugin を読み込んだかや二重読込の判定は dotfiles の
   doctor が持つ ([boundary-with-dotfiles](../docs/boundary-with-dotfiles.md)「OpenCode home の所有」)。
+- status が `managed` の target は、source から一時 directory に作り直した artifact と body を比べ、結果を target の
+  行に載せる (`lib/body_check.rb`。#722)。一致は ok、ずれは warn (最初の違いの相対 path と種類)、未検査は info。
+  比べる規則、一時 directory の置き場、回復の手順は [install-and-usage](../docs/install-and-usage.md) の「状態を見る」。
 - 出力は `level: area: message` 形式 (ok / info / warn / fail)。fail があれば exit 1。
-- read-only。paths は tilde 表記で出力し、secrets を含めない。
-- self-test: `tests/doctor-test.sh`
+- read-only。paths は tilde 表記で出力し、secrets を含めない。一時 directory は repo と tool home の外に作り、終わると消す。
+- self-test: `tests/doctor-test.sh`、`tests/doctor-body-test.sh` (body の検査)
 
 - `register.sh`: assets を検証し、`generated/catalog.json` に登録状態を記録する。
   [Register / Catalog](../docs/register-catalog.md) に従う。
