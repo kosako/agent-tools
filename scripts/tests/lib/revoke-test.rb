@@ -303,12 +303,20 @@ check(!rc.zero?, "N3: the documented mkdir stops when the quarantine exists")
 check(out.lines.none? { |l| l.start_with?("/") }, "N3: no place is printed when the mkdir stops: #{out}")
 check(Dir.glob(File.join(qdir("personal-tool"), "**", "*")).sort == before, "N3: the existing quarantine is unchanged")
 
-# --- B1: 承認を戻す。今の build_id は、承認を外した後の register が catalog に書いたもの (register の警告は pending では
-# 出ない)。dry-run の plan が対象の create だけと見てから sync --apply。managed と body の一致に戻る ---
+# --- B1: 止めている間に source を変えてから戻す。catalog の build_id は止めたときのままなので、pending のまま build と
+# register をかけ直してから読む (register の警告は pending では build_id を出さない)。dry-run の plan が対象の create
+# だけと見てから sync --apply。managed と body の一致に戻る ---
+tool_src = File.join(REPO, "shared/scripts/personal-tool.rb")
+File.binwrite(tool_src, "#!/usr/bin/env ruby\nputs 'tool v2'\n")
+current = Build.build_id_for(REPO, "shared/scripts/personal-tool.rb", "text")
+check(entry("codex", "personal-tool")["build_id"] != current, "B1: the catalog keeps the stopped build_id until register")
+tool(:pending)
+build_register
 %w[codex claude-code].each do |t|
-  check(entry(t, "personal-tool")["build_id"] == Build.build_id_for(REPO, "shared/scripts/personal-tool.rb", "text"),
-        "B1: [#{t}] the catalog holds the current build_id while pending")
+  check(entry(t, "personal-tool")["build_id"] == current, "B1: [#{t}] after register, the catalog holds the current build_id")
 end
+check(MarkdownUnits.squash(SECTION_TEXT).include?(MarkdownUnits.squash("pending のまま `./scripts/build.sh --prune` と `./scripts/register.sh` をかけ")),
+      "B1: the docs re-run build and register while pending before reading the build_id")
 tool(:approved)
 plan = restore_plan
 check(plan.sort == ["create: [claude-code] ~/.claude/agent-tools/scripts/personal-tool",
