@@ -163,7 +163,8 @@ dir (tool-managed) で、後者は user が plugin を置く dir (OpenCode は `
 ## 撤去 (sync --prune)
 
 `sync --prune` は、catalog に載らなくなった (= `shared/` から消えた) asset の deployed
-コピーを tool home から撤去します。`build --prune` (generated/ の orphan 削除) の sync 版
+コピーを tool home から撤去します。対象を 1 件に絞れない (通常の sync の plan と、すべての orphan を適用する) ので、
+配った asset を 1 つだけ止める手順では使いません ([install-and-usage](install-and-usage.md) の「配った asset を止める (取り消し)」。#723)。`build --prune` (generated/ の orphan 削除) の sync 版
 です (#154)。
 
 - 削除も dry-run が既定で、実削除には `--apply` が必須。

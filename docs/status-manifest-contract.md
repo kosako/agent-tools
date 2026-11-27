@@ -109,7 +109,7 @@ dotfiles 側の実装は含めません。
 | `stale` | agent-tools marker を持つが、generated artifact より古い。build や register が先に要る entry で、target が在るものも含む (下の注)。 |
 | `conflict` | 同名 target が存在するが marker を持たない (unmanaged)。sync が配置を止めるその他の理由 (target か親 dir が symlink、skill と script の generated 側の marker が不正、`personal-` で始まらない、など) も含む。instruction と plugin の generated 側の marker の不正は build が先に要る扱いなので、下の注のとおり `stale` か `missing` になる。 |
 | `missing` | target がまだ存在しない。build や register が先に要る entry で target が無いもの、instruction の所有ファイルが無いか空 (未接続。connect が先に要る) のもの、target を持たない entry (register の unsupported) も含む。 |
-| `deployed_but_inactive` | 配布不許可・配置が残る。catalog entry が registered でない (human_review_required / unsupported) のに、target の path に何かが在る (一度承認して配布 → 後で gate がかかった等)。見るのは path の有無だけで、marker は見ない (手書きの同名 file や dangling な symlink でも出る)。sync は配置も削除もしないため、手で撤去するか再承認するまで残る (#186)。実行が止まったことは示さない。client が読み込むか、実行するかも見ない (#723)。 |
+| `deployed_but_inactive` | 配布不許可・配置が残る。catalog entry が registered でない (human_review_required / unsupported) のに、target の path に何かが在る (一度承認して配布 → 後で gate がかかった等)。見るのは path の有無だけで、marker は見ない (手書きの同名 file や dangling な symlink でも出る)。sync は配置も削除もしないため、手で撤去するか再承認するまで残る (#186。撤去の手順は [install-and-usage](install-and-usage.md) の「配った asset を止める (取り消し)」)。実行が止まったことは示さない。client が読み込むか、実行するかも見ない (#723)。 |
 
 `conflict` の target は sync が変更してはいけません。
 

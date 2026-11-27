@@ -203,6 +203,69 @@ rm ~/.config/opencode/plugins/<name>.js         # plugin
 
 instruction は所有 file を消さず、`setup.sh --apply` だけで直ります (sync が byte で比べて書き直す)。
 
+### 配った asset を止める (取り消し)
+
+配った skill・script・plugin を 1 つだけ止め、後で戻す手順です (#723)。ほかの asset の配置、instruction の所有 file、
+人の file は変えません。instruction はこの手順の対象外です (この節の最後)。
+
+下では、止める asset を `personal-x` と書きます。配置先は上の「何がどこに置かれるか」の表のとおりで、tool ごとに
+あります。
+
+1. 呼び手を確かめます。`git grep -n personal-x -- shared` で、ほかの skill・script・plugin が呼んでいないかを見ます。
+   dotfiles が hook として登録していないかを、dotfiles の doctor で見ます (hook は、本体が agent-tools、登録が dotfiles。
+   [boundary-with-dotfiles](boundary-with-dotfiles.md))。分かるのは、この 2 つで確かめられた範囲だけです。作業ツリーの
+   外の呼び手と、続いている session の参照は確かめられません。
+2. 今の状態を、repo の外の file に控えます (`./scripts/status.sh --json > <控えの file>`)。
+3. 配布を止めます。kind で道を選びます。
+   - 承認を外す (script・plugin・human review の要る skill)。manifest の `review` を `human_review: pending` の 1 行だけに
+     し、`approved_build_id` と `approved_artifact_kind` の行を消します。`./scripts/register.sh` が exit 3 で終わり、
+     status のその asset の行が `deployed_but_inactive` になったことを見ます。exit 1 なら manifest の検査が落ちていて、
+     catalog は前のままです (status は `stale` と出すことがある)。manifest を直してやり直します。
+   - `targets` から外す (危険度の低い skill、1 つの tool だけを止めるとき)。危険度の低い skill は、承認を外しても
+     登録されたままだからです (register はこの skill の `review` を見ない)。`targets` が 1 つしかないときは、asset
+     (manifest と source) を消します。`./scripts/build.sh --prune` と `./scripts/register.sh` をかけ、status に
+     その tool の `orphan:` の行が出たことを見ます。
+4. hook の登録を外します。手順 1 で hook と分かったときだけで、dotfiles の側の手順で行います。本体を動かす前に
+   済ませます。登録が残ったまま本体が無くなると、hook は起動のたびに失敗するからです (多くは fail-open で止めないが、
+   git hook の gate は commit を止める)。
+5. 配置を、tool home の外の隔離の置き場へ動かします。`sync --prune --apply` は使いません。prune は対象の 1 件だけで
+   なく、通常の sync の plan と、すべての orphan を適用するからです。動かす前に、marker が `personal-x` と
+   その tool を指すことを確かめます (skill は dir の中の `.agent-tools-managed.yml`、script は sidecar、plugin は
+   先頭の 1 行)。marker が無いものは agent-tools の写しではないので、中身を見てから扱いを決めます。
+
+   ```sh
+   q=~/.local/share/agent-tools/quarantine/$(date +%Y%m%d-%H%M%S)-personal-x
+   mkdir -p ~/.local/share/agent-tools/quarantine && mkdir "$q" && mkdir "$q/codex" "$q/claude-code" "$q/opencode"
+   mv ~/.claude/skills/personal-x "$q/claude-code/"                    # skill (dir ごと)
+   mv ~/.claude/agent-tools/scripts/personal-x \
+      ~/.claude/agent-tools/scripts/personal-x.agent-tools-managed.yml "$q/claude-code/"   # script (本体と sidecar)
+   mv ~/.config/opencode/plugins/personal-x.js "$q/opencode/"          # plugin
+   ```
+
+   codex は `~/.codex` の下の同じ場所です。`mkdir "$q"` は、同じ名前の directory が在ると止まります。tool home を
+   既定から変えていて、置き場がその内側になるときは、別の場所を選びます。
+6. 確かめます。
+   - 配置先の path が無いこと。script は本体と sidecar の両方を見ます (sidecar だけが残ると、prune の候補にも出ない)。
+   - status のその asset の行が `missing` になった (承認を外した道) か、その tool の行と `orphan:` の行が消えた
+     (`targets` から外した道) こと。ほかの行が、手順 2 の控えと同じこと。
+   - `./scripts/doctor.sh` に、その asset の warn が残らないこと。
+   - 続いている session は、起動のときに読んだもの (skill の一覧、hook の登録) を持ち続けることがあります。止めたい
+     session は終えて、新しく起動します。
+
+戻すときは、次の順です。
+
+1. 承認か `targets` を戻します。承認は、register の警告が出す今の build_id で `approved_build_id` を書き、
+   `approved_artifact_kind` も書きます。asset を消したときは、git で戻します。
+2. `./scripts/setup.sh` を dry-run でかけ、sync の plan の `create:`・`update:`・`delete:` の行が、戻す asset の
+   ものだけであることを見ます。ほかの行があれば、先にそれを片付けるか、動くことを承知で進めます。
+3. `./scripts/setup.sh --apply` をかけます。隔離した写しは戻さず、source から作り直します。script の sidecar だけが
+   残っていても、create で置き直されます。戻す先に手書きの同名 file があると、sync は conflict で止まり、上書きしません。
+4. status が `managed`、doctor が `managed (body matches a fresh build)` になったことを見ます。
+5. hook の登録を戻します (本体が先、登録が後)。効くのは新しい session からです。隔離した写しは、調べ終えたら消します。
+
+instruction はこの手順の対象外です。prune は所有 file を消さず、所有 file は人の `CLAUDE.md` の import と組だから
+です。止めたいときは source を戻し、`./scripts/setup.sh --apply` で書き直します。
+
 ### dotfiles から参照する(report-only)
 
 `dotfiles` は `agent-tools` を自動 clone / pull / sync せず、agent-tools の state を書き換えません。
@@ -315,7 +378,7 @@ model_reasoning_effort = "high"
 | --- | --- | --- |
 | `skip ... (run build first)` | generated が無い / 古い | `./scripts/build.sh` を実行 |
 | `skip ... (run connect first)` | instruction の所有先が未確立(未接続 / 空ファイル) | `./scripts/connect.sh --apply` |
-| `skip ... (human_review_required)` | catalog で human review 待ち | manifest の `review.human_review: approved` と `review.approved_build_id`(現在の build_id)・`review.approved_artifact_kind`(配布形態)を設定して `register` し直す |
+| `skip ... (human_review_required)` | catalog で human review 待ち | manifest の `review.human_review: approved` と `review.approved_build_id`(現在の build_id)・`review.approved_artifact_kind`(配布形態)を設定して `register` し直す。止めたままにするなら、残った配置を「配った asset を止める (取り消し)」の手順で動かす |
 | `skip ... (manifest changed; run scripts/register.sh first)` | register 後に manifest を変更した(登録判断が古い) | `./scripts/register.sh` で catalog を再生成 |
 | `conflict ... (existing target is unmanaged)` | 同名の手書き / 別管理ファイルがある | 中身を確認。agent-tools に委ねてよいなら退避してから再実行(無断上書きはしない) |
 | `conflict ... (owned file belongs to another instruction asset (<旧名>); ...)` | instruction の asset を改名した後で、所有ファイルに旧名の marker が残っている | 所有ファイル (`<claude home>/agent-tools/CLAUDE.md` / `<codex home>/AGENTS.md`) を空にして `./scripts/connect.sh --apply` をやり直す ([instruction-artifact-kind.md](instruction-artifact-kind.md)) |
