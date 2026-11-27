@@ -257,8 +257,16 @@ exit 3 は指摘を読んで直すか、理由を持って `--style-reviewed` �
 本文を直したら `personal-post-check` から、commit を直したら `check` からやり直す。履歴の修正は `LAUNCH.md` §3 を参照する。
 
 `READY` のときだけ、`check` が返した `head_oid` を指定して push する。
+`READY` を受けたら、間に別の作業を挟まずに push する。
+人の確認を待った、別の作業をした、など `READY` の後に間が空いたときは、push の前に `check` をかけ直す。
+`check` が最後に packet を読み直してから push までの間に足された依頼は見ないので、この間を短くする (#782。窓は残る)。
 branch の現在の tip で代えない。具体的な push と PR 作成は `LAUNCH.md` §9 に従う。
 push が失敗したら PR を作らない。修正 round は既存 PR を使う。
+PR を作る前に止まった後の修正 round では、PR がまだ無いので、`READY` の後に push してから PR を作る。
+push の後、PR の作成までに間が空いたときも、PR を作る前に `check` をかけ直す。`READY` でなければ PR を作らない
+(push した branch はそのまま残し、下の BLOCKED の扱いに従う)。
+かけ直しの `READY` の `head_oid` が push した OID と違うときは、PR を作る前に新しい `head_oid` を push する
+(待つ間に別の session が修正 round を回収すると、公開した branch が古い OID のままになるため)。
 PR 作成後は `personal-packet worker-update <issue> --stdin` の `review` 操作で packet を書く。
 その前に packet を読み直し、`expected_sha256` と PR 番号を渡す。state は `review` にする。
 修正 round の push 後も同じ操作を行う。既に PR 番号と state が一致する場合は保持する。

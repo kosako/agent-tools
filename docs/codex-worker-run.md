@@ -409,7 +409,14 @@ herdr から ID が返ったら、一時 file と rename で更新します。
 - `check` は、`READY` を返す直前に packet の記録と依頼を読み直します (`packet-again` の段)。検査の途中で依頼が
   変わったら `request-changed`、回収した run が変わったら `check-record` で止まります。
 - 見ないものが1つあります。`check` が最後に読み直した後 (`READY` を返す前の一瞬を含む)、push や PR の作成の前に
-  依頼が変わることです。`READY` は、最後に読み直した時点の判定です (照合と push を同じ排他で行う案は #782)。
+  依頼が変わることです。`READY` は、最後に読み直した時点の判定です。この窓は残ります (閉じていない)。
+  - 照合と push を同じ排他で行う command にはしません (人の判断、2026-11-27。#782)。network の push の間ずっと
+    一時 file の印を持つことになり、途中で落ちると印が残って、人が片付けるまで packet を誰も書けなくなるためです。
+    push の間に依頼を足せるのは別の session か人だけで、人の直接の編集はどの形でも止められません。
+  - 代わりに手順で窓を短くします。`READY` を受けたら、間に別の作業を挟まずに push します。`READY` の後に人の確認を
+    待った、別の作業をした、など間が空いたときは、push の前と PR の作成の前に `check` をかけ直し、`READY` でなければ
+    先へ進みません。push の後のかけ直しで `READY` の `head_oid` が push した OID と違えば、PR の前に新しい OID を push します
+    (委譲の skill の §7 と `LAUNCH.md` §9)。
 
 ## collect の入力と出力
 
@@ -686,8 +693,10 @@ worker に直させる場合は、`worker-update round` で修正 round の項�
    題名や本文を直したら post-check から、commit を直したら `check` からやり直します。
 3. 別の呼び出しで、main から `git push origin <head_oid>:refs/heads/<branch>` を実行します。
    `head_oid` は `check` が返した full OID を使います。push が失敗したら PR を作りません。
+   `READY` の後に間が空いたときの扱い (push の前と PR の作成の前に `check` をかけ直す) の正本は、「依頼の照合」の項です (#782)。
 4. `gh pr create --repo <slug> --base main --head <branch> --title <題名> --body-file <file>` で PR を作ります。
-   修正 round では既存 PR を使います。値は argv か shell literal で渡します。
+   修正 round では既存 PR を使います。PR を作る前に止まった後の修正 round では、PR がまだ無いので、`READY` の後に push してから PR を作ります (#782)。
+   値は argv か shell literal で渡します。
 5. packet を読み直して digest を得ます。
    `personal-packet worker-update <N> --stdin` の `review` で PR 番号を記録し、state を `review` にします。
    すでに `review` で PR 番号も一致する場合は、そのまま保持します。

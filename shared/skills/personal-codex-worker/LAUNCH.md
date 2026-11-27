@@ -173,6 +173,9 @@ exit 3 は指摘を読んで直すか、理由を持って `--style-reviewed` �
 検査が exit 0、または exit 1 の後に人が公開を認めた場合だけ、§1 の `check` を呼ぶ。
 手で fetch や gate の pipeline を組まない。検査と公開は別の呼び出しにする。
 以下は `check` が exit 0 で `READY` を返した後だけ行う。
+`READY` の後は、間に別の作業を挟まずに push し、push が成功したら続けて PR を作る。
+`READY` の後、push の前か PR の作成の前に間が空いたときは、その前に `check` をかけ直し、`READY` でなければ先へ進まない (#782)。
+push の後のかけ直しで、`READY` の `head_oid` が push した OID と違うときは、PR を作る前に新しい `head_oid` を push する。
 JSON の `head_oid`、`branch`、`slug` をそれぞれ変数に読み、検査した OID を指定する。
 題名や本文を直したら `personal-post-check` からやり直す。
 
@@ -191,6 +194,7 @@ gh pr create --repo "$slug" --base main --head "$branch" --title "$title" --body
 ```
 
 修正 round では PR を新しく作らない。push 後に §4 の `review` 操作で PR 番号と state を記録する。
+PR を作る前に止まった後の修正 round では、PR がまだ無いので、`READY` の後に push してから上の手順で PR を作る (#782)。
 
 後始末で使う公開先の確認は次の block。§11 の前提確認で再実行する。
 通常の公開前検査をこれで代えない。

@@ -31,6 +31,13 @@ clause.call(s5, "`personal-codex-worker-run launch` を呼ぶ")
 clause.call(s6, "`personal-codex-worker-run collect` を呼ぶ")
 clause.call(s6, "`empty-result` で `retryable: true` のときだけ、`personal-codex-worker-run retry-empty` を呼ぶ")
 clause.call(s7, "`personal-codex-worker-run check` を題名と本文を渡して呼ぶ")
+# check と push の間の窓は、手順で短くする (#782 の 2 つ目。人の判断 2026-11-27)。
+clause.call(s7, "`READY` を受けたら、間に別の作業を挟まずに push する")
+clause.call(s7, "`READY` の後に間が空いたときは、push の前に `check` をかけ直す")
+clause.call(s7, "push の後、PR の作成までに間が空いたときも、PR を作る前に `check` をかけ直す")
+clause.call(s7, "`READY` でなければ PR を作らない")
+clause.call(s7, "かけ直しの `READY` の `head_oid` が push した OID と違うときは、PR を作る前に新しい `head_oid` を push する")
+clause.call(s7, "PR を作る前に止まった後の修正 round では、PR がまだ無いので、`READY` の後に push してから PR を作る")
 clause.call(s7, "人が `gate-publish.err` を確かめて公開を認めたときだけ `--accept-warnings` を付けて `check` をやり直す")
 clause.call(s7, "人の確認なしに `--accept-warnings` を付けない")
 clause.call(s7, "`READY` のときだけ、`check` が返した `head_oid` を指定して push する")
@@ -101,7 +108,16 @@ commands.each do |argv|
              "--wait-minutes" => "60", "--title" => "$title", "--body-file" => "$body_file" }
   errors << "引数の値または順序が不正: #{sub}" unless pairs.all? { |key, value| values[key] == value && !value.nil? }
 end
+# docs の公開の手順は、間が空いたときの扱いを「依頼の照合」の項 (正本) に寄せ、PR の前に止まった修正 round を書く (#782)。
+runbook = section.call(File.read(File.join(root, "docs/codex-worker-run.md"), encoding: "UTF-8"), "## 公開前後の指揮役の手順")
+clause.call(runbook, "`READY` の後に間が空いたときの扱い")
+clause.call(runbook, "PR を作る前に止まった後の修正 round では、PR がまだ無いので、`READY` の後に push してから PR を作ります")
 publish = section.call(launch, "## 9. 回収 (fetch) と trailer 検査と PR")
+clause.call(publish, "`READY` の後は、間に別の作業を挟まずに push し、push が成功したら続けて PR を作る")
+clause.call(publish, "`READY` の後、push の前か PR の作成の前に間が空いたときは、その前に `check` をかけ直し")
+clause.call(publish, "`READY` でなければ先へ進まない")
+clause.call(publish, "push の後のかけ直しで、`READY` の `head_oid` が push した OID と違うときは、PR を作る前に新しい `head_oid` を push する")
+clause.call(publish, "PR を作る前に止まった後の修正 round では、PR がまだ無いので、`READY` の後に push してから上の手順で PR を作る")
 lines = MU.sh_blocks(publish).flat_map(&:lines).map(&:strip)
 push_command = 'git -C "$main" push origin "${head_oid}:refs/heads/${branch}"'
 errors << "push の例が無い" unless lines.include?(push_command)
