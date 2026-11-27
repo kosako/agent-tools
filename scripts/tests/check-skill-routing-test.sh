@@ -579,4 +579,76 @@ ruby -rjson -e '
   abort "must_not must stay [personal-review-request]" unless c["must_not"] == ["personal-review-request"]
 ' "$real_cases" "$expected_merge_prompt" || fail "real case set: safe-reader-body-says-merge expectation broken (#365)"
 
+# ---- reads と要確認 (#720)。行の ID は #720 の期待値の表 ----
+# usage: run_line_reads <case> <status> <observed-json-array> <reads-json-array>
+run_line_reads() {
+  printf '{"case": "%s", "status": "%s", "prompt_tokens": 10, "output_tokens": 1, "observed": %s, "reads": %s}' \
+    "$1" "$2" "$3" "$4"
+}
+rd() { printf '{"skill": %s, "path": %s, "via": "command", "copy": "%s", "sha256": null}' "$1" "$2" "$3"; }
+ra=$(rd '"skill-a"' '".agents/skills/skill-a/SKILL.md"' candidate)
+rb=$(rd '"skill-b"' '".agents/skills/skill-b/SKILL.md"' candidate)
+rc=$(rd '"skill-c"' '".agents/skills/skill-c/SKILL.md"' candidate)
+rn=$(rd null '"SKILL.md"' unknown)
+b_ok=$(run_line_reads b-primary ok '["skill-b"]' "[$rb]")
+n_ok=$(run_line_reads none ok '[]' '[]')
+# P06・J04: 探索読み (observed は 1 本目だけ) の 2 本目以降に must_not がある run は、要確認で exit 3 (verified を出さない)
+write_results "$tmp/rv.json" codex model-x candidate "$(run_line_reads a-primary ok '["skill-a"]' "[$ra, $rb, $rc]")" "$b_ok" "$n_ok"
+run_case "review: must_not read beyond observed" 3 "review: candidate: case 'a-primary' run 1: read must_not skill skill-b (reads #2, copy candidate)" \
+  -- --cases "$tmp/cases.json" --results "$tmp/rv.json"
+grep -q "needs review: 1 must_not trace" "$tmp/out" || fail "review: needs review line missing: $(cat "$tmp/out")"
+! grep -q "ok: skill routing verified" "$tmp/out" || fail "review: must not print verified: $(cat "$tmp/out")"
+grep -q "case a-primary: primary=hit must_not=review(skill-b)" "$tmp/out" || fail "review: case line must show review: $(cat "$tmp/out")"
+write_results "$tmp/rv-base.json" codex model-x baseline "$(run_line_reads a-primary ok '["skill-a"]' "[$ra]")" "$b_ok" "$n_ok"
+run_case "J04: review is reported even with a clean baseline" 3 "review: candidate: case 'a-primary'" \
+  -- --cases "$tmp/cases.json" --results "$tmp/rv.json" --baseline "$tmp/rv-base.json"
+# P02・J03: observed にある must_not は今までどおり violation (exit 1)。要確認と同居しても 1 が優先する
+write_results "$tmp/rv-viol.json" codex model-x candidate "$(run_line_reads a-primary ok '["skill-a"]' "[$ra, $rb]")" \
+  "$(run_line_reads b-primary ok '["skill-b", "skill-a"]' "[$rb, $ra]")" "$n_ok"
+run_case "J03: violation beats review" 1 "FAIL: candidate: case 'b-primary' triggered must_not skill(s) skill-a" \
+  -- --cases "$tmp/cases.json" --results "$tmp/rv-viol.json"
+grep -q "review: candidate: case 'a-primary'" "$tmp/out" || fail "J03: review must still be reported: $(cat "$tmp/out")"
+# P15: 名前を決められない SKILL.md の読み取りは、must_not のある case で要確認
+write_results "$tmp/rv-unnamed.json" codex model-x candidate "$(run_line_reads a-primary ok '["skill-a"]' "[$ra, $rn]")" "$b_ok" "$n_ok"
+run_case "P15: unnamed SKILL.md read in a must_not case" 3 "read a SKILL.md whose skill could not be determined (reads #2)" \
+  -- --cases "$tmp/cases.json" --results "$tmp/rv-unnamed.json"
+# P08: error の run にも要確認の行を出すが、exit は構造エラーの 2
+write_results "$tmp/rv-error.json" codex model-x candidate "$(run_line_reads a-primary error '["skill-a"]' "[$ra, $rb]")" "$b_ok" "$n_ok"
+run_case "P08: review on an error run, exit 2 wins" 2 "review: candidate: case 'a-primary' run 1: read must_not skill skill-b" \
+  -- --cases "$tmp/cases.json" --results "$tmp/rv-error.json"
+# C03・C04・C06: 候補と違う copy の読み取りは note の行で出し、exit には響かない
+ro=$(rd '"skill-a"' '"~/.codex/skills/skill-a/SKILL.md"' other)
+rs=$(rd '"skill-a"' '"~/same/skill-a/SKILL.md"' same-content)
+ru=$(rd '"skill-a"' '"$X/skill-a/SKILL.md"' unknown)
+write_results "$tmp/rv-copy.json" codex model-x candidate "$(run_line_reads a-primary ok '["skill-a"]' "[$ro, $rs, $ru]")" "$b_ok" "$n_ok"
+run_case "copy notes do not change exit" 0 "note: candidate: case 'a-primary' run 1: read skill-a from a copy other than the candidate (reads #1, copy other)" \
+  -- --cases "$tmp/cases.json" --results "$tmp/rv-copy.json"
+grep -q "(reads #2, copy same-content)" "$tmp/out" && grep -q "(reads #3, copy unknown)" "$tmp/out" \
+  || fail "copy notes: same-content and unknown must be reported: $(cat "$tmp/out")"
+# J01: reads の無い古い結果は observed で判定する (上の case 1 が exit 0 のまま)。J02 など: reads の形の検査は exit 2
+write_results "$tmp/rv-missing.json" codex model-x candidate "$(run_line_reads a-primary ok '["skill-a"]' '[]')" "$b_ok" "$n_ok"
+run_case "J02: observed not in reads" 2 "must include every observed skill (missing: skill-a)" \
+  -- --cases "$tmp/cases.json" --results "$tmp/rv-missing.json"
+for bad in '{"skill": "skill-a"}' '{"skill": "a b", "path": null, "via": "command", "copy": "candidate", "sha256": null}' \
+  '{"skill": "skill-a", "path": null, "via": "cat", "copy": "candidate", "sha256": null}' \
+  '{"skill": "skill-a", "path": null, "via": "command", "copy": "maybe", "sha256": null}' \
+  '{"skill": "skill-a", "path": null, "via": "command", "copy": "candidate", "sha256": "xyz"}' \
+  '{"skill": "skill-a", "path": 7, "via": "command", "copy": "candidate", "sha256": null}'; do
+  write_results "$tmp/rv-bad.json" codex model-x candidate "$(run_line_reads a-primary ok '["skill-a"]' "[$bad]")" "$b_ok" "$n_ok"
+  run_case "reads shape rejected: $bad" 2 "reads\[0\] must have skill, path, via, copy and sha256" \
+    -- --cases "$tmp/cases.json" --results "$tmp/rv-bad.json"
+done
+write_results "$tmp/rv-notarray.json" codex model-x candidate "$(run_line_reads a-primary ok '["skill-a"]' '{}')" "$b_ok" "$n_ok"
+run_case "reads must be an array" 2 "reads must be an array" -- --cases "$tmp/cases.json" --results "$tmp/rv-notarray.json"
+# must_not の無い case では、名前を決められない読み取りも要確認にしない
+cat > "$tmp/cases-no-must-not.json" <<'EOF'
+{
+  "schema_version": 1,
+  "inventory": ["skill-a", "skill-b"],
+  "cases": [ { "id": "a-primary", "cluster": "ab", "prompt": "do a", "primary": "skill-a", "must_not": [] } ]
+}
+EOF
+write_results "$tmp/rv-no-must-not.json" codex model-x candidate "$(run_line_reads a-primary ok '["skill-a"]' "[$ra, $rn, $rb]")"
+run_case "no must_not: no review" 0 "ok: skill routing verified" -- --cases "$tmp/cases-no-must-not.json" --results "$tmp/rv-no-must-not.json"
+
 echo "ok: check-skill-routing self-test passed"
