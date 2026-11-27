@@ -790,11 +790,19 @@ module Packet
   WORKER_INPUT_KEYS = {
     "branch" => %w[branch], "run-start" => %w[run tab],
     "result" => %w[run entry], "stop" => %w[run role entry],
-    "round" => %w[request next], "review" => %w[pr]
+    "round" => %w[request next], "review" => %w[pr],
+    "entry" => %w[role entry], "done" => %w[]
   }.freeze
   WORKER_COMMON_KEYS = %w[schema operation expected_sha256].freeze
   # result と stop は、next を省くと次の入口を保つ (起動の後に足した依頼の入口を、回収で上書きしない。#719)。
-  WORKER_OPTIONAL_KEYS = { "run-start" => %w[expected_run], "result" => %w[next], "stop" => %w[next], "round" => %w[review_entry] }.freeze
+  WORKER_OPTIONAL_KEYS = { "run-start" => %w[expected_run], "result" => %w[next], "stop" => %w[next], "round" => %w[review_entry],
+                           "entry" => %w[next state] }.freeze
+  # 操作ごとの role の値。stop は委譲した worker の停止の記録、entry は handoff などの agent の追記 (#782)。
+  # orchestrator の結果は stop に限り、human の役割は agent が名乗らない。
+  WORKER_ROLES = { "stop" => %w[worker/codex orchestrator/claude],
+                   "entry" => %w[worker/claude worker/codex reviewer/claude reviewer/codex] }.freeze
+  # entry の state は open か blocked。review は pr を伴う review、done は done の操作で入れる。
+  ENTRY_STATES = %w[open blocked].freeze
   WORKER_INPUT_LIMIT = 64 * 1024
 
   class WorkerUpdateError < StandardError
@@ -851,7 +859,8 @@ module Packet
                   else
                     false
                   end
-                when "role" then %w[worker/codex orchestrator/claude].include?(value)
+                when "role" then WORKER_ROLES.fetch(data["operation"]).include?(value)
+                when "state" then ENTRY_STATES.include?(value)
                 else
                   !value.strip.empty? && !value.delete("\n\t").match?(/[[:cntrl:]]/) &&
                     !value.include?("<!--") && !value.include?("-->") &&
@@ -861,6 +870,10 @@ module Packet
                 end
               end
       raise WorkerUpdateError.new("invalid_input", "#{key} の値が不正です", 2) unless valid
+    end
+    # reviewer が書くのは結果への追記だけ。次の入口と state は worker の書く所 (書き手の表。#782)。
+    if data["operation"] == "entry" && data["role"].start_with?("reviewer/") && (data.key?("next") || data.key?("state"))
+      raise WorkerUpdateError.new("invalid_input", "reviewer の entry には next と state を渡せません", 2)
     end
     data
   rescue JSON::ParserError
@@ -936,6 +949,12 @@ module Packet
                 front.state == "open" && [front.run, front.last_run].include?(data["run"])
               when "round" then ACTIVE_STATES.include?(front.state)
               when "review" then front.state == "open" && !keys.key?("run")
+              # 起動の記録がある間は、その回の結果を result か stop で書く (回収の digest を途中で変えない。#782)。
+              # review の間は追記だけを受ける。review から戻すのは round (依頼に修正 round の項を足す)。
+              when "entry"
+                ACTIVE_STATES.include?(front.state) && !keys.key?("run") &&
+                  (!data.key?("state") || %w[open blocked].include?(front.state))
+              when "done" then ACTIVE_STATES.include?(front.state) && !keys.key?("run")
               end
     raise WorkerUpdateError.new("precondition", "操作の state または起動の記録が前提を満たしません") unless allowed
 
@@ -965,6 +984,13 @@ module Packet
       changes["state"] = "open" if front.state == "review"
     when "review"
       changes.merge!("pr" => data.fetch("pr").to_s, "state" => "review")
+    when "entry"
+      entry = "### #{at.strftime('%Y-%m-%d')} #{data.fetch('role')}\n\n#{data.fetch('entry')}"
+      bodies["結果"] = worker_append(secs.fetch("結果"), entry)
+      bodies["次の入口"] = "\n#{data.fetch('next')}\n\n" if data.key?("next")
+      changes["state"] = data.fetch("state") if data.key?("state")
+    when "done"
+      changes["state"] = "done"
     end
     if !%w[branch run-start].include?(operation) || (operation == "run-start" && front.state == "blocked")
       # 保存は秒の精度なので、publish と同じ秒に書くと updated == published になり、未 publish の印が立たない。
@@ -1343,7 +1369,7 @@ module Packet
 
       作業単位 (Issue) ごとの packet .agent-packets/<issue>.md を扱う (docs/agent-packets.md)。
       worker-update は JSON (schema: 1、operation、expected_sha256、操作の値) を stdin から読む。
-      operation: branch / run-start / result / stop / round / review。詳細は docs/agent-packets.md。
+      operation: branch / run-start / result / stop / round / review / entry / done。詳細は docs/agent-packets.md。
       check は packet を書く前の更新先の検査 (exit 0 で path を出す / 1 = 拒否 / 2 = 判定できない)。
       publish は同じ directory の personal-public-safety-gate --stdin が exit 0 のときだけ投稿する。gate が
       警告を出したら投稿せず exit 1 (人が --dry-run で確かめてから --accept-warnings で投稿する)。
