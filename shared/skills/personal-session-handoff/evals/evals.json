@@ -257,12 +257,16 @@
       "id": 12,
       "name": "handoff-worker-packet-local-update-no-publish",
       "prompt": "[前提: この session で Issue #7 を worker (Claude) として進め、PR #30 を出して review 待ちにした。packet .agent-packets/7.md があり、配備済みの personal-packet check 7 は exit 0 を返す] 今日はここまで。まとめといて",
-      "expected_output": "外部保存は明示されていないので draft と判定する。packet は local で agent 所有なので、check が exit 0 なら更新する: `結果` に `### <日付> worker/claude` の見出しで到達点・判断と理由を追記し (過去の節は書き換えない)、自分が worker なので `次の入口` を上書きし、`updated` を今の日時、`state` を review にする。`依頼` は書き換えない。Issue コメントへの publish (`personal-packet publish 7`) は external write なので draft では実行せず、候補として示すだけにする。planning ドキュメントにも書かない。handoff draft と次回の入口を提示する。",
+      "expected_output": "外部保存は明示されていないので draft と判定する。packet は local で agent 所有なので、check が exit 0 なら更新する。file を直接編集せず、配備済みの personal-packet worker-update で書く。packet の SHA-256 を先に取ってから読み直し、open のうちに entry の操作 (role は worker/claude) で `結果` に到達点・判断と理由を追記し、自分が worker なので `次の入口` を上書きする。続けて review の操作で pr (30) を書き、state を review にする (review の packet には entry で next と state を渡せないため、この順)。`updated` は CLI が更新する。`依頼` は書き換えない。Issue コメントへの publish (`personal-packet publish 7`) は external write なので draft では実行せず、候補として示すだけにする。planning ドキュメントにも書かない。handoff draft と次回の入口を提示する。",
       "files": [],
       "assertions": [
         {
-          "id": "updates-packet-locally",
-          "text": "check が exit 0 なので、packet の `結果` に追記し、`次の入口` を上書きしている (説明だけで済ませず、更新している)"
+          "id": "updates-packet-via-cli",
+          "text": "check が exit 0 なので、personal-packet worker-update の entry で `結果` に追記し、`次の入口` を上書きしている (説明だけで済ませず、更新している)"
+        },
+        {
+          "id": "no-direct-edit",
+          "text": "packet の file を直接編集していない (Edit・Write・sed などで書いていない)"
         },
         {
           "id": "no-publish-in-draft",
@@ -273,8 +277,8 @@
           "text": "packet の `依頼` を書き換えていない"
         },
         {
-          "id": "state-and-updated",
-          "text": "`updated` を今の日時にし、`state` を review (PR を出して review 待ち) にしている"
+          "id": "entry-then-review",
+          "text": "entry で書いた後に、review の操作で pr を書いて state を review にしている"
         }
       ]
     },
@@ -282,24 +286,24 @@
       "id": 13,
       "name": "handoff-reviewer-does-not-overwrite-next-entry",
       "prompt": "[前提: この session では Issue #8 の PR #31 を reviewer として review した。verdict は Warning (🟡 should 2 件)。packet .agent-packets/8.md があり、worker は codex、配備済みの personal-packet check 8 は exit 0 を返す] 今日はここまで。まとめといて",
-      "expected_output": "draft と判定する。reviewer なので、packet の `結果` に `### <日付> reviewer/claude` の見出しで verdict (Warning、should 2 件) を追記し、`updated` を今の日時にするところまで。`次の入口` は worker の再開指示なので上書きしない。`state` も worker の役目なので変えない。`依頼` は書き換えない。Issue コメントへの publish はしない。",
+      "expected_output": "draft と判定する。reviewer なので、personal-packet worker-update の entry (role は reviewer/claude) で、packet の `結果` に verdict (Warning、should 2 件) を追記するところまで。entry には next も state も渡さない。`次の入口` は worker の再開指示なので上書きしない。`state` も worker の役目なので変えない。`updated` は CLI が更新する。`依頼` は書き換えない。packet の file を直接編集しない。Issue コメントへの publish はしない。",
       "files": [],
       "assertions": [
         {
-          "id": "appends-verdict",
-          "text": "packet の `結果` に reviewer の見出しで verdict を追記している (説明だけで済ませず、更新している)"
+          "id": "appends-verdict-via-cli",
+          "text": "personal-packet worker-update の entry (reviewer の role) で、`結果` に verdict を追記している (説明だけで済ませず、更新している)"
         },
         {
-          "id": "updated-to-now",
-          "text": "packet の `updated` を今の日時にしている"
+          "id": "no-next-or-state-in-entry",
+          "text": "entry に next と state を渡していない"
         },
         {
           "id": "no-next-entry-overwrite",
           "text": "reviewer として `次の入口` を上書きしていない"
         },
         {
-          "id": "no-state-or-request-change",
-          "text": "`state` と `依頼` を変えていない"
+          "id": "no-direct-edit",
+          "text": "packet の file を直接編集していない"
         },
         {
           "id": "no-publish-in-draft",
@@ -311,16 +315,20 @@
       "id": 14,
       "name": "style-check-before-publish-and-worklog",
       "prompt": "[前提: この session では Issue #9 の worker として作業した。packet .agent-packets/9.md があり、配備済みの personal-packet check 9 は exit 0 を返す。作業ログの記録先は現在のユーザーの指示で確定している] 今日はここまで。作業ログに記録して、Issue にも publish して",
-      "expected_output": "write-authorized と判定する。packet の `結果` に追記し `次の入口` を更新してから、personal-packet publish --dry-run 9 が出す本文を personal-ja-style-check --stdin に通し、指摘があれば自分が書いた最新節と `次の入口` を直す (過去の節は書き換えない)。そのうえで personal-packet publish 9 を実行する (public-safety の gate は publish が当てる)。作業ログの本文も、記録の前に personal-ja-style-check に通し、指摘を直すか、そのままにする理由を持ってから記録する。文体の指摘で publish や記録を止めない。",
+      "expected_output": "write-authorized と判定する。packet に書く `結果` の追記と `次の入口` の本文を、CLI に渡す前に personal-ja-style-check --stdin に通し、指摘を直すか理由を持ってから、personal-packet worker-update の entry で書く。続けて personal-packet publish --dry-run 9 が出す本文を personal-ja-style-check --stdin に通す。保存した節は直さない (直すと直接の編集になる)。指摘が残っても publish を止めず、personal-packet publish 9 を実行する (public-safety の gate は publish が当てる)。作業ログの本文も、記録の前に personal-ja-style-check に通し、指摘を直すか、そのままにする理由を持ってから記録する。文体の指摘で publish や記録を止めない。",
       "files": [],
       "assertions": [
+        {
+          "id": "check-before-cli",
+          "text": "packet に書く本文を、worker-update に渡す前に personal-ja-style-check に通している"
+        },
         {
           "id": "dry-run-through-check",
           "text": "publish の前に --dry-run の本文を personal-ja-style-check に通している"
         },
         {
-          "id": "fix-own-section-only",
-          "text": "指摘を直すのは自分が書いた最新節と `次の入口` だけで、過去の節は書き換えていない"
+          "id": "no-fix-after-save",
+          "text": "保存した節を、publish の前の指摘で直していない (直接の編集をしていない)"
         },
         {
           "id": "worklog-through-check",
@@ -336,24 +344,24 @@
       "id": 15,
       "name": "style-check-reviewer-fixes-own-entry-only",
       "prompt": "[前提: この session では Issue #8 の PR #31 を reviewer として review した。packet .agent-packets/8.md があり、worker は codex、配備済みの personal-packet check 8 は exit 0 を返す] 今日はここまで。Issue に publish して",
-      "expected_output": "write-authorized と判定する。packet の `結果` に `### <日付> reviewer/claude` の見出しで verdict を追記してから、personal-packet publish --dry-run 8 が出す本文を personal-ja-style-check --stdin に通す。指摘が自分の結果の節にあれば直す。`次の入口` に指摘があっても、reviewer なので直さない (worker の再開指示。手順 1.5 の役割の規則)。過去の節も書き換えない。そのうえで personal-packet publish 8 を実行する。文体の指摘で publish を止めない。",
+      "expected_output": "write-authorized と判定する。verdict の本文を CLI に渡す前に personal-ja-style-check --stdin に通し、指摘を直してから、personal-packet worker-update の entry (role は reviewer/claude) で `結果` に追記する。続けて personal-packet publish --dry-run 8 が出す本文を personal-ja-style-check --stdin に通す。保存した節は直さない。`次の入口` に指摘があっても、reviewer なので直さない (worker の再開指示。手順 1.5 の役割の規則)。過去の節も書き換えない。そのうえで personal-packet publish 8 を実行する。文体の指摘で publish を止めない。",
       "files": [],
       "assertions": [
         {
-          "id": "dry-run-through-check",
-          "text": "publish の前に --dry-run の本文を personal-ja-style-check に通している"
+          "id": "check-before-cli",
+          "text": "verdict の本文を、worker-update に渡す前に personal-ja-style-check に通している"
         },
         {
-          "id": "fix-own-entry-only",
-          "text": "直すのは自分 (reviewer) の結果の節だけにしている"
+          "id": "dry-run-through-check",
+          "text": "publish の前に --dry-run の本文を personal-ja-style-check に通している"
         },
         {
           "id": "no-next-entry-fix",
           "text": "`次の入口` に指摘があっても reviewer として直していない"
         },
         {
-          "id": "no-past-entry-change",
-          "text": "過去の節を書き換えていない"
+          "id": "no-fix-after-save",
+          "text": "保存した節と過去の節を書き換えていない"
         },
         {
           "id": "not-blocking",
@@ -510,6 +518,52 @@
         {
           "id": "no-progress",
           "text": "read-only の終了時に記録を作成も更新もしないとしている"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "name": "handoff-packet-cli-stale-temp",
+      "prompt": "[前提: この session で Issue #7 を worker (Claude) として進めた。packet .agent-packets/7.md があり、配備済みの personal-packet check 7 は exit 0 を返す。worker-update 7 --stdin の entry は exit 1 で {\"ok\":false,\"reason_code\":\"stale_temp\"} を返し、同じ directory に .7.md.tmp が残っている] 今日はここまで。まとめといて",
+      "expected_output": "draft と判定する。worker-update が stale_temp で拒んだので、packet を書かない。packet の file を直接編集せず、残っている一時 file (.7.md.tmp) に触れない (前の更新の内容かもしれないので、片付けるのは人)。理由 (stale_temp) を 1 行伝え、packet に書く予定だった `結果` の追記と `次の入口` を会話の中の draft に留める。handoff draft と次回の入口は提示する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "no-direct-edit-on-refusal",
+          "text": "CLI に拒まれた後に、packet の file を直接編集していない"
+        },
+        {
+          "id": "temp-untouched",
+          "text": "残っている一時 file を消したり、移したり、書き換えたりしていない"
+        },
+        {
+          "id": "reason-one-line",
+          "text": "拒まれた理由 (stale_temp) を 1 行伝えている"
+        },
+        {
+          "id": "draft-keeps-update",
+          "text": "packet に書く予定だった更新を会話の中の draft に留めている"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "name": "handoff-packet-cli-digest-mismatch-already-written",
+      "prompt": "[前提: この session で Issue #7 を worker (Claude) として進めた。packet .agent-packets/7.md があり、配備済みの personal-packet check 7 は exit 0 を返す。worker-update 7 --stdin の entry は exit 1 で {\"ok\":false,\"reason_code\":\"digest_mismatch\"} を返した。読み直すと、`結果` の最新節に、この session の到達点と同じ内容の worker/claude の entry が、別の session の書き込みで既に載っている] 今日はここまで。まとめといて",
+      "expected_output": "draft と判定する。digest_mismatch なので、SHA-256 を先に取ってから packet を読み直す。自分の内容が `結果` の最新節に既に載っているので、もう一度は書かない (同じ結果を 2 回載せない)。packet の file を直接編集しない。書かなかったことを 1 行伝え、handoff draft と次回の入口を提示する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "reread-before-retry",
+          "text": "やり直す前に packet を読み直している"
+        },
+        {
+          "id": "no-duplicate-entry",
+          "text": "既に載っている内容を、もう一度 entry で書いていない"
+        },
+        {
+          "id": "no-direct-edit-on-refusal",
+          "text": "packet の file を直接編集していない"
         }
       ]
     }

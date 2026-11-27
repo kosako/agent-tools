@@ -301,10 +301,16 @@ file で行い、command 文字列へ inline 展開しない。
   差し替える。一時 file がある間は、ほかの script は書かない。publish は投稿の前と、投稿の後の差し替えの前の 2 回確かめ、
   投稿の後に変わっていたら、差し替えずに投稿済みの URL を示して止まる (再実行しない。一時 file を消し、`published` を
   手で更新する)。
-- この取り決めを使わない書き手 (人や agent の直接の編集。`personal-session-handoff` の packet の更新もこれに当たる) とは、
-  最後に確かめてから rename するまでの間 (system call の 2 つの間) が重なりうる。この間の直接の編集は、差し替えで消える。
-  ふつうの file の操作では、印を見ない書き手を止められないため。直接の編集は、script が動いていない間に行う
-  (すべての書き手を共通の更新口に通す案は #782)。
+- agent の書き手は、既存の packet を `worker-update` の操作で書く (#782)。`personal-session-handoff` の追記は `entry`、
+  委譲の orchestrator の転記・停止・round・起動の記録・review は、それぞれの操作を使う。`done` も操作で入れる。
+  CLI に拒まれたときは直接の編集に戻らず、書く予定だった内容を会話の中の draft に留める (handoff の手順 1.5)。
+- この取り決めを使わない書き手とは、最後に確かめてから rename するまでの間 (system call の 2 つの間) が重なりうる。
+  この間の直接の編集は、差し替えで消える。ふつうの file の操作では、印を見ない書き手を止められないため。
+  この窓は残る (閉じていない)。残る書き手は次のとおりで、どれも script が動いていない間に行う。
+  - 人の直接の編集。書き手として残すと決めた (人の判断、2026-11-27。#782)。
+  - orchestrator の `依頼` の既存の文の訂正 (足すだけなら `round` を使う)。
+  - 回復の手直し: publish の差し替えに失敗した後の `published` の更新と、一時 file の中身の移し替え。人が行う。
+  - packet の新規の作成 (下の「resume / handoff との関係」)。
 
 self-test は `scripts/tests/packet-test.sh` (dir / list / check / publish) と `scripts/tests/packet-pull-test.sh`
 (pull。上の「写しの取り込み」)。
@@ -442,10 +448,13 @@ stderr にも人向けの診断を 1 行出す。本文の `entry`、`request`�
   herdr が無い / server が止まっていれば packet 一覧だけに縮退する。tab ↔ Issue の対応規約 (worker の tab は
   `#<Issue 番号>`) は [herdr-operations](herdr-operations.md)。
 - `personal-session-handoff`: workspace 単位の索引 file は作らない (packet から導出)。役割は
-  packet の `結果` / `次の入口` を更新 (常時。local で agent 所有なので authorization は要らない。
-  ただし `check` に落ちる packet は書かず、更新の内容を会話の中の draft に留める。置き場の規則) →
+  packet の `結果` / `次の入口` を `worker-update` の `entry` で更新 (常時。local で agent 所有なので authorization は要らない。
+  ただし `check` に落ちる packet と、CLI に拒まれた更新は書かず、更新の内容を会話の中の draft に留める。置き場の規則と #782) →
   publish (write-authorized のとき) → planning tool (write-authorized のとき、project 単位の判断だけ)。
-- 既存の open Issue は packet 化しない。着手する Issue から orchestrator が起こす。
+- 既存の open Issue は packet 化しない。着手する Issue から orchestrator が起こす。新規の作成は `worker-update` を通らない
+  (既存の packet だけを更新する)。pull の新規の作成は link を使い、既にある file を上書きしないが、orchestrator が後から
+  同じ path に直接作ると、pull が取り込んだ内容が消える。作るときは、既にあれば書かない形 (shell の noclobber など) で
+  作る (#782)。`依頼` の初めの記述と割当の記録 (`personal-project-operating-loop` の「記録」) は、作成と同時に書く。
 
 ## worker 委譲との関係(#254)
 

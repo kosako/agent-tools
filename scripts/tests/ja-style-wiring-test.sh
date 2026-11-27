@@ -7,7 +7,8 @@
 #   指摘だけで投稿を止めない句と command の行 (同じ sh の block で body を定める)、手順 4 に reviewer の指摘を転記した部分は書き換えない句、手順 5 に
 #   後続のコメントも通す句がある (#676 から、この 3 つの手順は personal-post-check 経由。exit code の扱いは
 #   post-check-wiring-test が見る)。
-# - personal-session-handoff の手順 3 に、publish の前に --dry-run の本文を通す句と、作業ログの本文を通す句がある。
+# - personal-session-handoff の手順 3 に、publish の前に --dry-run の本文を通す句と、保存した節を直さない句と、作業ログの本文を
+#   通す句がある。手順 1.5 に、CLI に渡す前に本文を通す句がある (#782)。
 # - personal-codex-worker の §4 の brief の一覧に「文章の規則:」の bullet があり、worker が commit の前に通し gate で
 #   ないことが句としてある (一覧の外にだけあっても worker には届かない)。§7 に題名と本文を通す句、LAUNCH.md の §9 に
 #   post-check の句がある。実行は codex-worker-check-test が検査する。
@@ -98,7 +99,11 @@ check.call(request, "### 5. 後続のやり取りも PR 上で", "後続も通�
 handoff = "shared/skills/personal-session-handoff/SKILL.md"
 step3 = "### 3. 記録する"
 check.call(handoff, step3, "publish の前に通す句",
-           "publish の前に、`personal-packet publish --dry-run <issue>` が出す本文を `personal-ja-style-check --stdin` に通し、指摘があれば手順 1.5 の役割の規則の範囲で直します (worker は自分が書いた最新節と `次の入口`、reviewer は自分の結果の節だけ。過去の節は書き換えない。指摘だけで publish を止めない。#556。運用 instruction の「日本語の文章」)。")
+           "publish の前に、`personal-packet publish --dry-run <issue>` が出す本文を `personal-ja-style-check --stdin` に通します。")
+check.call(handoff, step3, "保存した節を直さない句",
+           "保存した節は直しません (手順 1.5 で CLI に渡す前の本文に通してあり、保存した後に直すと直接の編集になるため。#782)。")
+check.call(handoff, "### 1.5. packet を更新する (local、常に)", "CLI に渡す前に通す句",
+           "本文は、CLI に渡す前に `personal-ja-style-check --stdin` に通し、指摘を直すか、そのままにする理由を持つ (保存した節は後から直さないため。手順 3)。")
 check.call(handoff, step3, "作業ログを通す句",
            "書き込む本文も、記録の前に `personal-ja-style-check --stdin` に通し、指摘を直すか、そのままにする理由を持ちます。")
 
