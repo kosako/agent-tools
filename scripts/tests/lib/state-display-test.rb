@@ -25,9 +25,18 @@ HOMES = ["--codex-home", CODEX, "--claude-home", CLAUDE, "--opencode-home", OPEN
 # 期待する文言は code の定数を使わずに書く (定数を変えたら落ちるように)。
 INACTIVE = "(not registered, so sync leaves the target path as it is; " \
            "whether it is still loaded or run is not checked)"
-MANAGED_NOTE = "note:      managed = the deployed marker carries the build_id of generated/ (instruction: same bytes); " \
+MANAGED_NOTE = "note:      managed = the deployed marker carries the build_id of generated/ " \
+               "(instruction: same bytes as generated/ plus the local fragment); " \
                "doctor compares the body, and what clients loaded is not checked"
 TOP_KEYS = %w[assets checks contract_version generated orphans register repo sync_targets].freeze
+# 入れ子の object の key の集合 (docs/status-manifest-contract.md の Fields)。
+NESTED_KEYS = {
+  "repo" => %w[clean present],
+  "assets" => %w[manifest_errors total],
+  "checks" => %w[manifest_validation prompt_injection_static],
+  "generated" => %w[stale total],
+  "register" => %w[catalog_present human_review_required registered unsupported],
+}.freeze
 
 $checks = 0
 
@@ -124,6 +133,13 @@ end
 def expect_contract(label, json)
   check(json.keys.sort == TOP_KEYS, "#{label}: top-level keys must stay #{TOP_KEYS}: #{json.keys.sort}")
   check(json["contract_version"] == 3, "#{label}: contract_version must stay 3")
+  NESTED_KEYS.each do |key, keys|
+    check(json[key].is_a?(Hash) && json[key].keys.sort == keys, "#{label}: #{key} keys must stay #{keys}: #{json[key]}")
+  end
+  check(json["sync_targets"].is_a?(Array) && json["orphans"].is_a?(Array), "#{label}: rows stay arrays")
+  json["orphans"].each do |o|
+    check(o.keys.sort == %w[kind name tool], "#{label}: orphans keys must stay tool/name/kind: #{o}")
+  end
   json["sync_targets"].each do |t|
     check(t.keys.sort == %w[name state tool], "#{label}: sync_targets keys must stay tool/name/state: #{t}")
     check(%w[managed stale conflict missing deployed_but_inactive].include?(t["state"]),
@@ -223,6 +239,25 @@ check(state_of(json, "codex", "personal-med") == "deployed_but_inactive", "S3: d
 sout = status_human
 dout, = doctor
 expect_inactive("S3", "codex", "personal-med", sout, dout)
+
+# --- C1: orphan の行がある JSON でも、key の集合は変わらない ---
+manifest(File.join(REPO, "shared/skills/personal-single.asset.yml"), "personal-single", "skill",
+         "shared/skills/personal-single.md", "markdown", %w[codex])
+register
+json = status_json
+check(json["orphans"] == [{ "tool" => "claude-code", "name" => "personal-single", "kind" => "skill" }],
+      "C1: the removed target is an orphan: #{json['orphans']}")
+expect_contract("orphan", json)
+
+# --- S6: instruction は、local の断片を足した内容で配っても managed のまま (注の「plus the local fragment」) ---
+write(File.join(XDG, "agent-tools", "instructions.local.md"), "local rule\n")
+run!("setup with a fragment", File.join(SCRIPTS, "setup.sh"), "--apply", "--quiet", "--root", REPO, *HOMES)
+json = status_json
+%w[codex claude-code].each do |t|
+  check(state_of(json, t, "personal-ops") == "managed", "S6: [#{t}] instruction with a fragment stays managed: #{json}")
+end
+check(File.binread(File.join(CODEX, "AGENTS.md")).include?("local rule"), "S6: the fragment is deployed")
+check(lines_of(status_human, "note:") == [MANAGED_NOTE], "S6: one managed note with a fragment")
 
 # --- docs が載せる注の文言は、表示と同じ ---
 usage = File.read(File.join(ROOT, "docs/install-and-usage.md"))

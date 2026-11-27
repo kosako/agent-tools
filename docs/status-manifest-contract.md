@@ -105,7 +105,7 @@ dotfiles 側の実装は含めません。
 
 | state | 意味 |
 | --- | --- |
-| `managed` | 配備の identity が一致する。agent-tools marker を持ち、最新の generated artifact と一致する。一致は、skill・script・plugin では marker の `build_id` で、instruction では byte で見る。skill・script・plugin の body の中身は見ない (doctor の body の検査が見る。#722)。client が読み込んだ版と、実行の状態も見ない (#723)。 |
+| `managed` | 配備の identity が一致する。agent-tools marker を持ち、最新の generated artifact と一致する。一致は、skill・script・plugin では marker の `build_id` で、instruction では generated artifact に local の断片 (#689) を足した内容との byte で見る。skill・script・plugin の body の中身は見ない (doctor の body の検査が見る。#722)。client が読み込んだ版と、実行の状態も見ない (#723)。 |
 | `stale` | agent-tools marker を持つが、generated artifact より古い。build や register が先に要る entry で、target が在るものも含む (下の注)。 |
 | `conflict` | 同名 target が存在するが marker を持たない (unmanaged)。sync が配置を止めるその他の理由 (target か親 dir が symlink、skill と script の generated 側の marker が不正、`personal-` で始まらない、など) も含む。instruction と plugin の generated 側の marker の不正は build が先に要る扱いなので、下の注のとおり `stale` か `missing` になる。 |
 | `missing` | target がまだ存在しない。build や register が先に要る entry で target が無いもの、instruction の所有ファイルが無いか空 (未接続。connect が先に要る) のもの、target を持たない entry (register の unsupported) も含む。 |

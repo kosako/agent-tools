@@ -31,9 +31,11 @@ module Status
   # symlink でも出る)。実行が止まったとも、agent-tools の写しだとも、まだ読み込まれるとも断定しない。doctor の行と共有する。
   INACTIVE_NOTE = "not registered, so sync leaves the target path as it is; " \
                   "whether it is still loaded or run is not checked"
-  # managed は配備の identity の一致 (skill・script・plugin は marker の build_id、instruction は byte)。body・client が
-  # 読み込んだ版は見ない。status の人向けの出力の最後に 1 回だけ出す (全部の行に付けると読みにくいため)。
-  MANAGED_NOTE = "managed = the deployed marker carries the build_id of generated/ (instruction: same bytes); " \
+  # managed は配備の identity の一致 (skill・script・plugin は marker の build_id、instruction は generated に local の断片
+  # (#689) を足した内容との byte)。body・client が読み込んだ版は見ない。status の人向けの出力の最後に 1 回だけ出す
+  # (全部の行に付けると読みにくいため)。
+  MANAGED_NOTE = "managed = the deployed marker carries the build_id of generated/ " \
+                 "(instruction: same bytes as generated/ plus the local fragment); " \
                  "doctor compares the body, and what clients loaded is not checked"
 
   class Runner
