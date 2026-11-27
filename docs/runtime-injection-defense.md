@@ -158,13 +158,14 @@ code・docs・設定から読んだ作り (どう起動されるか) で、効�
 | Claude の reviewer (Claude Code の session 自身が review する) | 対話の Claude Code と同じ | 同じ | 同じ | 同じ | 同じ。subagent の tool call にも hook は発火する (公式の仕様の確認、上の節) | 対話の Claude Code の行と同じ |
 | `claude -p` の reviewer (Codex の session から起動する) | Claude の login。起動した session の環境を引き継ぐ | git の読み取りと file の読み取りだけを許す tool の allowlist で起動する。allowlist の外が拒まれることを確かめてから走らせる手順。既にある permission と MCP の tool も確かめる | allowlist に network の tool を入れない手順 | allowlist の外 | `settings.json` の登録が読まれるかは `未確認` | `personal-review-request` の手順の読み取り。実測なし |
 | 隔離した reader (`personal-github-safe-reader`) | 呼んだ session と同じ。credential を外して起動する形は無い | 呼んだ session と同じ | 同じ | 同じ | 同じ | skill の読み取り。reader の前提 (secret と write token の無い session) を満たす起動の形は、今は無い |
-| credential 隔離の probe (`scripts/probe-credential-isolation.sh`) | `env -i` の allowlist、空の HOME、repo の外の cwd。その中で検査の command (`gh`・`git` など) を走らせる | 決まった検査の command だけ (file system の制限ではない) | 制限しない。認証なしで届くことも確かめる (reachability control) | 射程の外。MCP・connector・keychain の直読みは塞がない | 対象の外 | 実機の記録は [credential-isolation-acceptance](credential-isolation-acceptance.md)。probe は agent も reader も起動しない |
+| credential 隔離の probe (`scripts/probe-credential-isolation.sh`) | 検査の command (`gh`・`git` など) を 2 つの環境で走らせる。negative と reachability control は、`env -i` の allowlist、空の HOME、repo の外の cwd の中で走る。positive control は、普段の環境 (credential あり) の repo の外の cwd で走る | 決まった検査の command だけ (file system の制限ではない) | 制限しない。認証なしで届くことも確かめる (reachability control) | 射程の外。MCP・connector・keychain の直読みは塞がない | 対象の外 | 実機の記録は [credential-isolation-acceptance](credential-isolation-acceptance.md)。probe は agent も reader も起動しない |
 
 注:
 
-- credential を外して走るのは、最後の行の probe の検査の command だけです。agent と reader を credential なしで起動する
-  形は、今はありません。ほかの形は、どれも user の credential の file を読めます。worker と executor は network の無い
-  既定の sandbox で動く作りなので、その credential で GitHub に届かない作りです (今の版では実測していない)。
+- credential を外して走るのは、最後の行の probe の negative と reachability control の検査の command だけです。同じ
+  probe の positive control は、普段の認証のまま走ります。agent と reader を credential なしで起動する形は、今は
+  ありません。ほかの形は、どれも user の credential の file を読めます。worker と executor は network の無い既定の
+  sandbox で動く作りなので、その credential で GitHub に届かない作りです (今の版では実測していない)。
 - hook は、登録があることを効いている根拠にしません。Codex の hook は `/hooks` で trust するまで skip され、body が無い
   hook は no-op です。登録と body の有無は dotfiles の doctor が報告します。
 - client を更新したら、根拠の列の版 (書いていないセルは冒頭の版) と今の版を比べます。違えば、そのセルは `未確認` に
