@@ -570,6 +570,31 @@
           "text": "packet の file を直接編集していない (`次の入口` だけを手で直していない)"
         }
       ]
+    },
+    {
+      "id": 26,
+      "name": "handoff-worker-packet-already-review",
+      "prompt": "[前提: この session で Issue #7 を worker (Claude) として進めた。PR #30 は前の session で出してあり、packet .agent-packets/7.md の state は review、pr は 30、起動の記録 (run) は無い。この session では CI の失敗の原因を調べ、まだ直していない。配備済みの personal-packet check 7 は exit 0 を返す] 今日はここまで。まとめといて",
+      "expected_output": "draft と判定する。packet が既に review なので、personal-packet worker-update の entry (role は worker/claude) には結果 (調べたこと、判断と理由) だけを渡し、`次の入口` と `state` は渡さない (review の packet への entry は next と state を拒む)。次の入口を変えるのは修正 round を始める round の操作で、この handoff では行わない。書く予定だった次の 1 アクションは handoff draft と次回の入口に示す。packet の file を直接編集しない。Issue コメントへの publish はしない。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "entry-result-only",
+          "text": "review の packet への entry に、結果だけを渡している (next と state を渡していない)"
+        },
+        {
+          "id": "no-direct-next-edit",
+          "text": "`次の入口` を直接の編集で書き換えていない"
+        },
+        {
+          "id": "next-in-draft",
+          "text": "次の 1 アクションを handoff draft と次回の入口に示している"
+        },
+        {
+          "id": "no-publish-in-draft",
+          "text": "draft なので Issue コメントへの publish を実行していない"
+        }
+      ]
     }
   ]
 }

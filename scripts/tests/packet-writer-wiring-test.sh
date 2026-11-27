@@ -76,6 +76,16 @@ terms.call("agent-packets の窓が残る項目", one.call(packets, tooling, :bu
   terms.call("agent-packets の残る書き手 #{key}", one.call(packets, tooling, :bullets, key), words)
 end
 
+# 書き方の規則の正本は tooling の節に 1 つ。概要の表と書式の節は、そこを指す (例外を落とした一般化を書き直さない)。
+row = MU.rows(section.call(packets, "## 位置づけ(何の正本か)").to_s).find { |r| r.start_with?("| packet `.agent-packets/") }
+errors << "#{packets} の「## 位置づけ(何の正本か)」に packet の行が無い" if row.nil?
+terms.call("agent-packets の概要の packet の行", row, ["「tooling」の書き方の規則が正本"])
+terms.call("agent-packets の書式の節の印の文", one.call(packets, "## 書式", :sentences, "印を使う書き手"), ["どうしだけ"])
+terms.call("agent-packets の書式の節の窓の文", one.call(packets, "## 書式", :sentences, "直接の書き手として残るもの"),
+           ["「tooling」の残る書き手", "`依頼` の文の訂正", "窓は残る"])
+terms.call("手順 1.5 の review の packet の文", one.call(handoff, step, :sentences, "packet が既に review なら"),
+           ["結果だけを渡し", "`次の入口` と `state` は変えない"])
+
 loop_doc = "shared/workflows/personal-project-operating-loop.md"
 loop_text = read.call(loop_doc)
 hits = MU.containing(MU.sentences(loop_text), "割当をやり直したとき")

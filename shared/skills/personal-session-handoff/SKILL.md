@@ -112,6 +112,8 @@ packet は配備済みの `personal-packet` の `worker-update` で書き、file
 - `## 次の入口` の **上書き** は、この session で自分が **worker** だったときだけ (次に着手する人が
   最初の 1 アクションに迷わない一文 + 前提)。reviewer は `結果` への追記までで、`次の入口` は
   触らない (worker の再開指示を上書きしない。CLI も reviewer の `next` と `state` を拒む)。
+  packet が既に review なら、worker も `entry` には結果だけを渡し、`次の入口` と `state` は変えない (review の packet への
+  `entry` は `next` と `state` を拒む)。review の後に次の入口を変えるのは、修正 round を始める `round` の操作。
 - `state` を実態に合わせるのも worker (`open` = 作業中 / `blocked` = 質問待ち・limit 到達・CI 赤)。
   PR を出して review 待ちにしたときは、open のうちに `entry` で結果と次の入口を書いてから、`review` の操作で
   `pr` と `state: review` を書く。review の packet に渡せるのは結果への追記だけ (`next` と `state` は CLI が拒む)。
