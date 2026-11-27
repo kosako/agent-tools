@@ -138,7 +138,7 @@ PR #124 の should 1 件を直して re-review を依頼する。
   終了後の snapshot 照合失敗では、元の state と run を保持する。
   人が変更を保存して clone を退避し、記録の破棄を決めた場合は stop、launch の順で再開する。
   停止後の state と回復の正本は [codex-worker-run](codex-worker-run.md) の表。
-  `done` は orchestrator が入れる。
+  `done` は orchestrator が、merge か close の後に `worker-update` の `done` で入れる (#782)。
   - **review の修正 round** (#325): `review` → `open` → `review` と遷移させる。`open` に戻すのは、`依頼` に
     「修正 round N」の項を書く orchestrator (委譲せず自分で直す worker なら本人) で、書くのと同じ時点で
     戻す。修正を push した者 (委譲した Codex worker の分は push を行う orchestrator) が `review` に戻す。
@@ -313,6 +313,8 @@ self-test は `scripts/tests/packet-test.sh` (dir / list / check / publish) と 
 
 `worker-update <issue> --stdin` は既存 packet の更新だけを行う。
 委譲の skill と `personal-codex-worker-run` は、この口で packet を更新する。
+`entry` は、委譲していない worker と reviewer の `結果` への追記 (`personal-session-handoff` の手順 1.5) に使い、`done` は、
+merge か close の後に orchestrator が入れる (#782)。
 呼び出しの許可範囲は従来どおりで、この command の追加で worker の権限は広がらない。
 
 stdin は UTF-8 の JSON object 1 つで、上限は 64 KiB (65,536 byte)。
@@ -336,9 +338,11 @@ stdin は UTF-8 の JSON object 1 つで、上限は 64 KiB (65,536 byte)。
 | `stop` | `run`、`role`、`entry`。省略可: `next` | state が open で run または last_run が一致 | 結果に今日の role の entry を追記。next があれば次の入口を置換し、無ければ保持。state を blocked にして updated を更新。run、tab、last_run は保持 |
 | `round` | `request`、`next`。省略可: `review_entry` | state が open、review、blocked のいずれか | 依頼に request を追記し、次の入口を next に置換。review なら open にし、open と blocked は保持。updated を更新 |
 | `review` | `pr` | state が open で run が無い | pr を保存し、state を review にして updated を更新 |
+| `entry` | `role`、`entry`。省略可: `next`、`state` | state が open、blocked、review のいずれかで run が無い。`next` か `state` を渡すのは、今の state が open か blocked のときだけ | 結果に今日の role の entry を追記。next があれば次の入口を置換し、無ければ保持。state があればその値にする。updated を更新。run、tab、last_run、pr、branch は保持 |
+| `done` | なし | state が open、blocked、review のいずれかで run が無い | state を done にして updated を更新。last_run と pr は保持 |
 
 上の表の「前提」と「更新内容」は、`scripts/tests/exhaustive-decisions-test.sh` が、操作、state、run、last_run、tab、branch、pr、
-`expected_run`、`next` の有無の全部の組で実装と照らします (#762)。壊れた packet (run・last_run・tab が空や文字列でない、制御文字を含む、run と last_run が絶対 path でない、両方がある) は、どの操作でも
+`expected_run`、`next`、`role`、`state` の値の全部の組で実装と照らします (#762・#782)。壊れた packet (run・last_run・tab が空や文字列でない、制御文字を含む、run と last_run が絶対 path でない、両方がある) は、どの操作でも
 `invalid_packet` で拒みます。表を変えるときは、この test の期待値も変えます。
 
 `run-start` の `expected_run` は、空の結果の再実行で使う前提です。
@@ -352,13 +356,27 @@ stdin は UTF-8 の JSON object 1 つで、上限は 64 KiB (65,536 byte)。
 `round` の `review_entry` があれば、結果の末尾に当日の日付と `reviewer/claude` の entry を足します。
 本文の検査は `entry` と同じです。省略時は結果の節を保持します。
 
+`entry` と `done` は、委譲した worker の起動の記録 (`run`) がある間は拒みます (`precondition`)。その回の結果は `result` か
+`stop` で書き、回収が持つ digest を途中で変えないためです (#782)。
+`entry` で書けるのは `結果`、`次の入口`、`state`、`updated` だけです。reviewer の role では `結果` への追記だけで、`next` か
+`state` を渡すと `invalid_input` (exit 2) で拒みます (上の書き手の表)。
+review の packet には結果への追記だけを受け、`next` と `state` を渡すと `precondition` で拒みます。review から open に戻すのは
+`round` で、PR を出して review にするのは `review` です。PR を出した worker は、open のうちに `entry` で結果と次の入口を書いてから、
+`review` で review にします。
+`entry` の `state: open` は、自分で作業する worker が blocked から戻すときに使います。委譲した worker の再開は、今までどおり
+`run-start` で戻します (上の「blocked からの再起動」)。
+CLI が確かめるのは、role の値と state と起動の記録までです。呼んだ agent が本当にその役割か、`done` の前に merge か close を
+したかは確かめません。それは呼ぶ側の手順の責任です。
+
 `pr` は正の整数。それ以外の追加の値は文字列とし、次の検査を通す。
 
 - `run` は絶対 path で、制御文字、`"`、`\` を含めない。
 - `tab` は `#<issue>` と一致させる。
 - `branch` は空白と制御文字を含めず、`git check-ref-format --branch` を通る branch 名にする。
   履歴を展開する `@{-1}` などの表記は使わない。
-- `role` は `worker/codex` か `orchestrator/claude`。
+- `role` は、`stop` では `worker/codex` か `orchestrator/claude`。`entry` では `worker/claude`、`worker/codex`、
+  `reviewer/claude`、`reviewer/codex` のどれか。orchestrator の結果は `stop` に限り、human の役割は agent が名乗らない。
+- `entry` の `state` は `open` か `blocked`。
 - `entry`、`request`、`next` は空でない本文とする。
   改行と tab 以外の制御文字、行頭の `## `、`<!--`、`-->` を含めない。
   `### YYYY-MM-DD 役割/agent` の entry 見出し行も含めない。

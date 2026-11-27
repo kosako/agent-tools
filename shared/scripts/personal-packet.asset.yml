@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:9d9133975ed1c7bad51d950fb20fe7013875924f22938768eb1130c11eb25950
+  approved_build_id: sha256:b8108eb019484564215100125207411d2e421b5aff3cc62c2fc5a2763e6ad568
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-packet.rb
@@ -26,5 +26,6 @@ summary: >-
   Issue コメントへ写す。同じ directory の personal-public-safety-gate --stdin が exit 0 のときだけ
   投稿し、gh に到達できなければ exit 2 で Claude か人に渡す) / pull (personal-safe-gh の self
   コメントから検証できる写しを取り込み、local packet を再構成。--dry-run で全文を表示)。
-  worker-update は digest と操作の前提を検査して、worker の branch・起動・結果・停止・round・review を更新する。
+  worker-update は digest と操作の前提を検査して、worker の branch・起動・結果・停止・round・review と、
+  agent の結果の追記 (entry)・完了 (done) を更新する。
   規約は docs/agent-packets.md。

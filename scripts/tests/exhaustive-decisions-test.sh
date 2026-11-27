@@ -164,6 +164,9 @@ def allowed?(op, state, run, last_run, has, input)
   when "stop" then state == "open" && [run, last_run].include?(input["run"])
   when "round" then %w[open review blocked].include?(state)
   when "review" then state == "open" && !has.include?("run")
+  # entry と done (#782): run が無い間だけ。entry の state は、今の state が open か blocked のときだけ受ける。
+  when "entry" then %w[open blocked review].include?(state) && !has.include?("run") && (%w[open blocked].include?(state) || !(input.key?("state") || input.key?("next")))
+  when "done" then %w[open blocked review].include?(state) && !has.include?("run")
   end
 end
 
@@ -185,6 +188,10 @@ def expected_change(op, state, input, today)
     add["## 結果"] = "### #{today} reviewer/claude\n\n足す review" if input.key?("review_entry")
     [state == "review" ? { "state" => "open" } : {}, true, add, { "## 次の入口" => "新しい入口" }]
   when "review" then [{ "pr" => input["pr"], "state" => "review" }, true, {}, {}]
+  when "entry"
+    [input.key?("state") ? { "state" => input["state"] } : {}, true, { "## 結果" => "### #{today} #{input['role']}\n\n足す結果" },
+     input.key?("next") ? { "## 次の入口" => "新しい入口" } : {}]
+  when "done" then [{ "state" => "done" }, true, {}, {}]
   end
 end
 
@@ -195,6 +202,11 @@ INPUTS = {
   "stop" => %w[worker/codex orchestrator/claude].product([{ "next" => TEXTS["next"] }, {}]).map { |r, h| { "run" => A, "role" => r, "entry" => TEXTS["entry"] }.merge(h) },
   "round" => [{}, { "review_entry" => TEXTS["review_entry"] }].map { |h| { "request" => TEXTS["request"], "next" => TEXTS["next"] }.merge(h) },
   "review" => [{ "pr" => 12 }],
+  # worker の role は next の有無と state (無し・open・blocked) の 6 通り。reviewer の role は entry だけ (next と state は入力の検査で拒む)。
+  "entry" => (%w[worker/claude worker/codex].product([{ "next" => TEXTS["next"] }, {}], [{}, { "state" => "open" }, { "state" => "blocked" }])
+                .map { |r, n, s| { "role" => r, "entry" => TEXTS["entry"] }.merge(n).merge(s) } +
+              %w[reviewer/claude reviewer/codex].map { |r| { "role" => r, "entry" => TEXTS["entry"] } }),
+  "done" => [{}],
 }.freeze
 RUNS = [:absent, nil, A, B].freeze
 LASTS = [:absent, nil, A, B].freeze
@@ -263,7 +275,7 @@ INPUTS.each do |op, list|
   end
 end
 base = STATES.length * RUNS.length * LASTS.length * TABS.length * BRANCHES.length * PRS.length
-check("組の数 #{tried.inspect}", base == 1152 && tried == INPUTS.map { |op, list| [op, base * list.length] }.to_h && tried.values.sum == 14_976)
+check("組の数 #{tried.inspect}", base == 1152 && tried == INPUTS.map { |op, list| [op, base * list.length] }.to_h && tried.values.sum == 32_256)
 # 許す組の数。表から手で数えたもの。壊れていない (run, last_run) の組は 5 つ (run が無い 3 つ、run だけの 2 つ)。1 つの state と
 # (run, last_run) の組に、tab (有無) と branch と pr の組が 12 ある (branch が無いのは 4 つ)。
 counts = {
@@ -273,11 +285,15 @@ counts = {
   "stop" => 2 * 2 * (2 * 12),                            # open で、run か last_run が一致する 2 つ。role が 2 つ、next の有無で 2 つ
   "round" => 2 * (3 * 5 * 12),                           # 3 つの state。review_entry の有無で 2 つ
   "review" => 3 * 12,                                    # open で、run が無い 3 つ
+  # entry: run が無い 3 つ。worker の role 2 つは、next も state も無い 1 つが 3 つの state、next か state のある 5 つが open と
+  # blocked。reviewer の role 2 つは 3 つの state。
+  "entry" => 2 * (1 * 3 + 5 * 2) * 3 * 12 + 2 * 3 * 3 * 12,
+  "done" => 3 * 3 * 12,                                  # 3 つの state で、run が無い 3 つ
 }
 check("許す組の数 #{accepted.inspect} (表からは #{counts.inspect})", accepted == counts)
 # 壊れた組。(run, last_run, tab) の 48 通りのうち、壊れていないのは 5 × 2。
 check("壊れた packet の組の数 #{refused.inspect}", refused["invalid_packet"] == (48 - 10) * 4 * 6 * INPUTS.values.map(&:length).sum &&
-                                                refused.values.sum == 14_976 - counts.values.sum)
+                                                refused.values.sum == 32_256 - counts.values.sum)
 # 壊れた記録の値。上の組の null のほかの形を、key ごとに全部の操作と state に当てる。どの操作でも invalid_packet で拒み、file は変わらない。
 # 記録 (run・last_run・tab) は、空でない文字列で、制御文字を含まない。run と last_run は絶対 path。branch は文字列、pr は整数。
 BROKEN = {
@@ -298,7 +314,7 @@ BROKEN.each do |key, values|
     problems["壊れた記録で file が変わった"] << "#{op} state=#{state} #{key}=#{value.inspect}" unless text == original
   end
 end
-check("壊れた記録の組の数 (#{broken_tried})", broken_tried == 52 * (11 + 11 + 9 + 4 + 5))
+check("壊れた記録の組の数 (#{broken_tried})", broken_tried == 112 * (11 + 11 + 9 + 4 + 5))
 problems.each { |name, list| check("#{name}: #{list.length} 件 #{list.first(2).join(' / ')}", list.empty?) }
 check("残った file が無い #{Dir.children(DIR).inspect}", Dir.children(DIR) == ["7.md"])
 exit(@failed.zero? ? 0 : 1)
