@@ -1541,16 +1541,20 @@
       "id": 55,
       "name": "push-checked-oid",
       "prompt": "check は READY と head_oid を返した。その後 local branch に別の commit が増えた。何を push する? 手順確認のみ。",
-      "expected_output": "check が返した full head_oid を refspec の source に指定する。branch の tip に置き換えない。追加 commit を公開したい場合は check をやり直す。",
+      "expected_output": "READY の後に別の commit が増えたのは、間に別の作業が挟まったということなので、push の前に check をかけ直す (READY の後は間を挟まずに push するのが手順で、間が空いたら push の前にかけ直す)。push は、かけ直した check が返した full head_oid を refspec の source に指定する。branch の tip に置き換えない。かけ直しが READY でなければ push しない。",
       "files": [],
       "assertions": [
         {
-          "id": "oid-source",
-          "text": "check の head_oid を source に指定して push する"
+          "id": "recheck-before-push",
+          "text": "前の READY のまま push せず、push の前に check をかけ直している"
         },
         {
-          "id": "recheck-change",
-          "text": "新しい commit を公開するときは check をやり直す"
+          "id": "oid-source",
+          "text": "かけ直した check の head_oid を source に指定して push する (branch の tip に置き換えない)"
+        },
+        {
+          "id": "stop-unless-ready",
+          "text": "かけ直しが READY でなければ push しない"
         }
       ]
     },
@@ -1669,6 +1673,48 @@
         {
           "id": "round-first",
           "text": "worker の修正は round の後に launch を呼ぶ"
+        }
+      ]
+    },
+    {
+      "id": 62,
+      "name": "recheck-before-pr-after-gap",
+      "prompt": "check は READY を返し、その head_oid の push は成功した。PR を作る前に、人の確認を待って 30 分ほど間が空いた。PR はまだ無い。次は何をする? 手順確認のみ。",
+      "expected_output": "push の後、PR の作成までに間が空いたので、PR を作る前に check をかけ直す。READY なら PR を作り、packet を読み直して worker-update の review で PR 番号と state を記録する。READY でなければ PR を作らない。push した branch はそのまま残し、check が BLOCKED のときの扱いに従う (packet は open のまま置き、worker-update の stop を記録しない。停止の区分と理由と人の次の手を返す)。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "recheck-before-pr",
+          "text": "PR を作る前に check をかけ直している"
+        },
+        {
+          "id": "no-pr-unless-ready",
+          "text": "かけ直しが READY でなければ PR を作らない"
+        },
+        {
+          "id": "blocked-keeps-state",
+          "text": "READY でないとき、push した branch を消さず、stop を記録せず、BLOCKED の扱いに従っている"
+        }
+      ]
+    },
+    {
+      "id": 63,
+      "name": "fix-round-before-first-pr",
+      "prompt": "push の後のかけ直しで、check が request-changed で止まった。PR はまだ無い。人の許可を受けて round で修正の項を足し、launch と collect の後に check が READY を返した。次は何をする? 手順確認のみ。",
+      "expected_output": "check が返した full head_oid を指定して、間を挟まずに push する。PR を作る前に止まった後の修正 round なので、PR はまだ無い。既存 PR を探して使うのではなく、push が成功したら PR を作る。PR の作成の後に、packet を読み直して worker-update の review で PR 番号と state を記録する。",
+      "files": [],
+      "assertions": [
+        {
+          "id": "push-checked-oid",
+          "text": "check が返した head_oid を指定して push している"
+        },
+        {
+          "id": "create-pr-when-none",
+          "text": "PR がまだ無いので、push の成功の後に PR を作っている (既存 PR を前提にしていない)"
+        },
+        {
+          "id": "record-review",
+          "text": "PR の作成の後に worker-update の review で PR 番号と state を記録している"
         }
       ]
     }
