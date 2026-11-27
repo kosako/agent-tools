@@ -45,27 +45,27 @@ def check(cond, message)
 end
 
 # 子の process の env。date は固定の値を返す stub にする (隔離の置き場の名前を決め、同じ名前の衝突を作れるように)。
-def env
-  { "HOME" => HOME, "XDG_CONFIG_HOME" => XDG, "PATH" => "#{BIN}:#{ENV.fetch('PATH')}" }
+def env(home = HOME)
+  { "HOME" => home, "XDG_CONFIG_HOME" => File.join(home, ".config"), "PATH" => "#{BIN}:#{ENV.fetch('PATH')}" }
 end
 
-def run(*argv)
-  out, status = Open3.capture2e(env, *argv)
+def run(*argv, home: HOME)
+  out, status = Open3.capture2e(env(home), *argv)
   [out, status.exitstatus]
 end
 
-def run!(label, *argv, ok: [0])
-  out, rc = run(*argv)
+def run!(label, *argv, ok: [0], home: HOME)
+  out, rc = run(*argv, home: home)
   fail!("#{label}: exit #{rc}: #{out}") unless ok.include?(rc)
   [out, rc]
 end
 
-def script(name, *args, ok: [0])
-  run!(name, File.join(SCRIPTS, name), "--root", REPO, *args, ok: ok)
+def script(name, *args, ok: [0], root: REPO, home: HOME)
+  run!(name, File.join(SCRIPTS, name), "--root", root, *args, ok: ok, home: home)
 end
 
-def setup_apply(ok: [0])
-  script("setup.sh", "--apply", "--quiet", *HOMES, ok: ok)
+def setup_apply
+  script("setup.sh", "--apply", "--quiet", *HOMES)
 end
 
 def register(ok: [0, 3])
@@ -102,10 +102,22 @@ def state_of(json, tool, name)
   row && row["state"]
 end
 
-# setup.sh の dry-run の plan のうち、配置を変える行 (戻す手順の 2)。path は fixture の場所を外して見る。
-def changes
-  out, = script("setup.sh", *HOMES, ok: [0])
-  out.lines.map(&:chomp).select { |l| l.match?(/\A(create|update|delete): /) }.map { |l| l.sub(HOME, "~") }
+# 戻す手順の 2 と 3: build --prune と register をかけ、sync の dry-run の plan のうち skip でない行を返す。path は fixture の
+# 場所を外して見る。
+def restore_plan
+  build_register
+  # conflict があると dry-run も exit 1 で終わる (何も適用しない)。plan の行は sync の action の語で始まる。
+  out, = script("sync.sh", *HOMES, ok: [0, 1])
+  plan = out.lines.map(&:chomp).select { |l| l.match?(/\A[a-z-]+: \[/) }
+  # note: は update に添える説明の行 (instruction の節の変化) で、plan の action ではない。
+  unknown = plan.reject { |l| l.match?(/\A(skip|create|update|delete|conflict|note): /) }
+  fail!("restore_plan: unknown plan lines: #{unknown}") unless unknown.empty?
+  plan.reject { |l| l.match?(/\A(skip|note): /) }.map { |l| l.gsub(HOME, "~") }
+end
+
+# 戻す手順の 4。
+def sync_apply(ok: [0])
+  script("sync.sh", "--apply", "--quiet", *HOMES, ok: ok)
 end
 
 def write(path, text, mode = nil)
@@ -189,16 +201,19 @@ DOC = File.read(File.join(ROOT, "docs/install-and-usage.md"))
 SECTION_TEXT = MarkdownUnits.section(DOC, SECTION)
 fail!("docs/install-and-usage.md must have the section '#{SECTION}'") unless SECTION_TEXT
 SH = MarkdownUnits.sh_blocks(SECTION_TEXT)
-check(SH.size == 1, "the section has one sh block: #{SH.size}")
-CMDS = SH.first.lines.map(&:strip).reject(&:empty?)
-check(CMDS.size == 5, "the sh block has 5 commands: #{CMDS}")
-Q_LINE, MKDIR_LINE = CMDS[0, 2]
+check(SH.size == 2, "the section has two sh blocks (make the quarantine, then move): #{SH.size}")
+MAKE, MOVE = SH.map { |b| b.lines.map(&:strip).reject(&:empty?) }
+check(MAKE.size == 2, "the first block has 2 commands: #{MAKE}")
+check(MOVE.size == 3, "the second block has 3 commands: #{MOVE}")
+Q_LINE, MKDIR_LINE = MAKE
 check(Q_LINE.start_with?("q=~/.local/share/agent-tools/quarantine/$(date +%Y%m%d-%H%M%S)-personal-x"),
       "the first command names the quarantine: #{Q_LINE}")
 check(MKDIR_LINE.include?('mkdir "$q" &&'), "the second command stops when the quarantine exists: #{MKDIR_LINE}")
+check(MKDIR_LINE.end_with?(' && (cd "$q" && pwd -P)'),
+      "the second command prints where the quarantine really is, only when every mkdir succeeded: #{MKDIR_LINE}")
 MV = { "skill" => "# skill", "script" => "# script", "plugin" => "# plugin" }.map do |kind, tag|
-  line = CMDS.find { |c| c.end_with?(tag) || c.include?("#{tag} ") }
-  fail!("the sh block has the #{kind} command: #{CMDS}") unless line
+  line = MOVE.find { |c| c.end_with?(tag) || c.include?("#{tag} ") }
+  fail!("the sh block has the #{kind} command: #{MOVE}") unless line
   [kind, line]
 end.to_h
 
@@ -210,10 +225,9 @@ def mv_line(kind, tool, name)
   line.gsub("~/.claude/", "~/.codex/").gsub('"$q/claude-code/"', '"$q/codex/"')
 end
 
-def quarantine(name, moves)
-  lines = [Q_LINE.gsub("personal-x", name), MKDIR_LINE.gsub("personal-x", name)] +
-          moves.map { |kind, tool| mv_line(kind, tool, name) }
-  run("sh", "-c", "set -e\n#{lines.join("\n")}\n")
+def quarantine(name, moves, home: HOME)
+  lines = MAKE.map { |l| l.gsub("personal-x", name) } + moves.map { |kind, tool| mv_line(kind, tool, name) }
+  run("sh", "-c", "set -e\n#{lines.join("\n")}\n", home: home)
 end
 
 def qdir(name)
@@ -264,8 +278,9 @@ end
 check(tool_paths.map { |p| File.binread(p) } == old_bodies, "R1: the old body and sidecar stay")
 
 # --- R7・S4: docs の command で、本体と sidecar を両 tool とも隔離の置き場へ動かす ---
-_, rc = quarantine("personal-tool", [%w[script claude-code], %w[script codex]])
-check(rc.zero?, "R7: the documented quarantine commands succeed")
+out, rc = quarantine("personal-tool", [%w[script claude-code], %w[script codex]])
+check(rc.zero?, "R7: the documented quarantine commands succeed: #{out}")
+check(out.lines.map(&:chomp) == [File.realpath(qdir("personal-tool"))], "R7: the first block prints the real place: #{out}")
 check(tool_paths.none? { |p| File.exist?(p) || File.symlink?(p) }, "R7: body and sidecar are gone from both homes")
 %w[codex claude-code].each do |t|
   moved = Dir.children(File.join(qdir("personal-tool"), t)).sort
@@ -283,18 +298,23 @@ check(rc.zero? && dout.lines.none? { |l| l.start_with?("warn:") && l.include?("p
 
 # --- N3: 同じ名前の隔離の置き場が在ると、docs の mkdir で止まり、中を変えない ---
 before = Dir.glob(File.join(qdir("personal-tool"), "**", "*")).sort
-_, rc = quarantine("personal-tool", [])
+out, rc = quarantine("personal-tool", [])
 check(!rc.zero?, "N3: the documented mkdir stops when the quarantine exists")
+check(out.lines.none? { |l| l.start_with?("/") }, "N3: no place is printed when the mkdir stops: #{out}")
 check(Dir.glob(File.join(qdir("personal-tool"), "**", "*")).sort == before, "N3: the existing quarantine is unchanged")
 
-# --- B1: 承認を戻し、dry-run の plan が対象の create だけと見てから setup --apply。managed と body の一致に戻る ---
+# --- B1: 承認を戻す。今の build_id は、承認を外した後の register が catalog に書いたもの (register の警告は pending では
+# 出ない)。dry-run の plan が対象の create だけと見てから sync --apply。managed と body の一致に戻る ---
+%w[codex claude-code].each do |t|
+  check(entry(t, "personal-tool")["build_id"] == Build.build_id_for(REPO, "shared/scripts/personal-tool.rb", "text"),
+        "B1: [#{t}] the catalog holds the current build_id while pending")
+end
 tool(:approved)
-register
-plan = changes
+plan = restore_plan
 check(plan.sort == ["create: [claude-code] ~/.claude/agent-tools/scripts/personal-tool",
                     "create: [codex] ~/.codex/agent-tools/scripts/personal-tool"],
       "B1: the dry-run plan creates only the restored asset: #{plan}")
-setup_apply
+sync_apply
 json = status_json
 %w[codex claude-code].each { |t| check(state_of(json, t, "personal-tool") == "managed", "B1: [#{t}] managed") }
 check(tool_paths.all? { |p| File.file?(p) }, "B1: body and sidecar are created again")
@@ -315,6 +335,12 @@ check(register.zero?, "R3: register exits 0")
 end
 single
 register
+
+# 人が CLAUDE.md の import を外していても、戻す手順は人の file を変えない (setup.sh の connect は足しうる)。
+human_md = File.join(CLAUDE, "CLAUDE.md")
+File.binwrite(human_md, "# mine\n")
+check(script("setup.sh", *HOMES).first.lines.any? { |l| l.start_with?("add-import: ") },
+      "N2: setup.sh would add the import back (the reason the restore does not use it)")
 
 codex_single = paths_of("codex", "personal-single", "skill")
 claude_entry = entry("claude-code", "personal-single").values_at("registration", "build_id", "artifact_kind")
@@ -347,19 +373,18 @@ check(snapshot(codex_single) == others, "N1: the claude-code copy and other targ
 single(%w[codex claude-code])
 ops_src = File.join(REPO, "shared/instructions/personal-ops.md")
 File.binwrite(ops_src, "# ops v2\n")
-register
-plan = changes
+plan = restore_plan
 check(plan.any? { |l| l.start_with?("update: ") && l.include?("AGENTS.md") }, "N4: the plan shows the other update: #{plan}")
 File.binwrite(ops_src, "# ops\n")
-register
 
-# --- B2: plan が対象の create だけになったら setup --apply。codex に作り直し、claude-code の写しはそのまま ---
-plan = changes
+# --- B2: plan が対象の create だけになったら sync --apply。codex に作り直し、claude-code の写しと人の file はそのまま ---
+plan = restore_plan
 check(plan == ["create: [codex] ~/.codex/skills/personal-single"], "B2: the plan creates only the codex skill: #{plan}")
-setup_apply
+sync_apply
 json = status_json
 check(state_of(json, "codex", "personal-single") == "managed", "B2: codex managed again")
 check(snapshot(codex_single) == others, "B2: restoring does not touch the claude-code copy or other targets")
+check(File.binread(human_md) == "# mine\n", "N2・B2: restoring does not add the import back to the human CLAUDE.md")
 
 # ===== asset を消す道 (target が 1 つの plugin の personal-plug) =====
 plug_paths = paths_of("opencode", "personal-plug", "plugin")
@@ -381,12 +406,16 @@ plug_files.each { |f| FileUtils.cp(File.join(BACKUP, File.basename(f)), File.joi
 plug(:approved)
 write(plug_paths.first, "export const Hand = async () => ({});\n")
 hand = File.binread(plug_paths.first)
-setup_apply(ok: [0, 1])
-check(File.binread(plug_paths.first) == hand, "B3: the hand-written file is not overwritten")
+plan = restore_plan
+check(plan.size == 1 && plan.first.start_with?("conflict: [opencode] ~/.config/opencode/plugins/personal-plug.js"),
+      "B3: the plan shows the conflict, so the restore stops before --apply: #{plan}")
+sync_apply(ok: [0, 1])
+check(File.binread(plug_paths.first) == hand, "B3: the hand-written file is not overwritten even by --apply")
 check(state_of(status_json, "opencode", "personal-plug") == "conflict", "B3: status shows conflict")
 File.delete(plug_paths.first)
-check(changes == ["create: [opencode] ~/.config/opencode/plugins/personal-plug.js"], "B3: the plan creates only the plugin")
-setup_apply
+plan = restore_plan
+check(plan == ["create: [opencode] ~/.config/opencode/plugins/personal-plug.js"], "B3: the plan creates only the plugin: #{plan}")
+sync_apply
 check(state_of(status_json, "opencode", "personal-plug") == "managed", "B3: managed after the hand file is gone")
 
 # ===== R9: script の本体だけを動かすと、sidecar が残り、catalog から消えても orphan に出ない (両方を動かす理由) =====
@@ -399,6 +428,39 @@ check(status_json["orphans"].map { |o| o["name"] }.uniq == ["personal-keep"], "R
 keep_paths.each_slice(2) { |body, _sidecar| File.delete(body) }
 check(status_json["orphans"].empty?, "R9: a sidecar alone is not listed as an orphan")
 check(keep_paths.each_slice(2).all? { |_body, sidecar| File.exist?(sidecar) }, "R9: the sidecars are left behind")
+
+# ===== R6: repo の最後の asset を消すと catalog が空になり、status は orphan を出さない。marker を見て docs の command で動かす =====
+repo2 = File.join(TMP, "repo-last")
+home2 = File.join(TMP, "home-last")
+homes2 = ["--codex-home", File.join(home2, ".codex"), "--claude-home", File.join(home2, ".claude"),
+          "--opencode-home", File.join(home2, ".config/opencode")]
+FileUtils.mkdir_p(File.join(repo2, "shared/skills"))
+FileUtils.cp(File.join(REPO, "shared/skills/personal-single.md"), File.join(repo2, "shared/skills/"))
+FileUtils.cp(File.join(REPO, "shared/skills/personal-single.asset.yml"), File.join(repo2, "shared/skills/"))
+[".codex", ".claude", ".config/opencode"].each { |d| FileUtils.mkdir_p(File.join(home2, d)) }
+script("setup.sh", "--apply", "--quiet", *homes2, root: repo2, home: home2)
+last = File.join(home2, ".codex/skills/personal-single")
+check(File.directory?(last), "R6: the only asset is deployed")
+%w[personal-single.md personal-single.asset.yml].each { |f| File.delete(File.join(repo2, "shared/skills", f)) }
+script("build.sh", "--prune", "--quiet", root: repo2, home: home2)
+script("register.sh", "--quiet", root: repo2, home: home2)
+json = JSON.parse(script("status.sh", "--json", *homes2, root: repo2, home: home2).first)
+check(json["orphans"].empty? && json["sync_targets"].empty?, "R6: an empty catalog shows no orphan row: #{json}")
+check(File.read(File.join(last, ".agent-tools-managed.yml")).include?("personal-single"), "R6: the marker can be checked")
+out, rc = quarantine("personal-single", [%w[skill codex]], home: home2)
+check(rc.zero? && !File.exist?(last), "R6: the documented skill command moves the last asset: #{out}")
+
+# ===== N3: 置き場の親が symlink で tool home の内側を指すと、1 つ目の block が出す場所でそれと分かる =====
+trap = File.join(CLAUDE, "trap")
+FileUtils.mkdir_p(trap)
+FileUtils.mv(QROOT, "#{QROOT}.real")
+File.symlink(trap, QROOT)
+out, rc = quarantine("personal-z", [])
+check(rc.zero? && out.lines.map(&:chomp) == [File.join(File.realpath(trap), "#{STAMP}-personal-z")],
+      "N3: the printed place shows the quarantine is inside the tool home: #{out}")
+File.delete(QROOT)
+FileUtils.mv("#{QROOT}.real", QROOT)
+FileUtils.rm_rf(trap)
 
 # ===== O1・O2: hook の登録は、外すときは本体より先、戻すときは本体の後 =====
 # 節の番号つきの段 (行の頭の `<数>. ` と、字下げした続きの行) を、手順と戻す手順の 2 つの列に分けて読む。
@@ -432,7 +494,7 @@ move = step(stop_steps, "隔離の置き場へ動かします")
 check(unhook[0] < move[0], "O1: the hook is unregistered in an earlier step than the move: #{unhook[0]} / #{move[0]}")
 check(MarkdownUnits.squash(unhook[1]).include?(MarkdownUnits.squash("本体を動かす前に済ませます")),
       "O1: the hook step says it comes before the move")
-restore = step(back_steps, "`./scripts/setup.sh --apply` をかけます")
+restore = step(back_steps, "`./scripts/sync.sh --apply` をかけます")
 rehook = step(back_steps, "hook の登録を戻します")
 check(restore[0] < rehook[0], "O2: the hook is registered again after the body is back: #{restore[0]} / #{rehook[0]}")
 check(MarkdownUnits.squash(rehook[1]).include?(MarkdownUnits.squash("本体が先、登録が後")),

@@ -218,13 +218,15 @@ instruction は所有 file を消さず、`setup.sh --apply` だけで直りま�
 2. 今の状態を、repo の外の file に控えます (`./scripts/status.sh --json > <控えの file>`)。
 3. 配布を止めます。kind で道を選びます。
    - 承認を外す (script・plugin・human review の要る skill)。manifest の `review` を `human_review: pending` の 1 行だけに
-     し、`approved_build_id` と `approved_artifact_kind` の行を消します。`./scripts/register.sh` が exit 3 で終わり、
-     status のその asset の行が `deployed_but_inactive` になったことを見ます。exit 1 なら manifest の検査が落ちていて、
-     catalog は前のままです (status は `stale` と出すことがある)。manifest を直してやり直します。
+     し、`approved_build_id` と `approved_artifact_kind` の行を消します (消す前に、2 つの行を repo の外に控える)。
+     `./scripts/register.sh` が exit 3 で終わり、status のその asset の行が `deployed_but_inactive` になったことを
+     見ます。exit 1 なら manifest の検査が落ちていて、catalog は前のままです (status は `stale` と出すことがある)。
+     manifest を直してやり直します。
    - `targets` から外す (危険度の低い skill、1 つの tool だけを止めるとき)。危険度の低い skill は、承認を外しても
      登録されたままだからです (register はこの skill の `review` を見ない)。`targets` が 1 つしかないときは、asset
      (manifest と source) を消します。`./scripts/build.sh --prune` と `./scripts/register.sh` をかけ、status に
-     その tool の `orphan:` の行が出たことを見ます。
+     その tool の `orphan:` の行が出たことを見ます。repo の最後の asset を消したときは、catalog が空になり、status は
+     orphan を判断しないので、行は出ません。そのときは手順 5 の marker の確かめで進めます。
 4. hook の登録を外します。手順 1 で hook と分かったときだけで、dotfiles の側の手順で行います。本体を動かす前に
    済ませます。登録が残ったまま本体が無くなると、hook は起動のたびに失敗するからです (多くは fail-open で止めないが、
    git hook の gate は commit を止める)。
@@ -235,15 +237,22 @@ instruction は所有 file を消さず、`setup.sh --apply` だけで直りま�
 
    ```sh
    q=~/.local/share/agent-tools/quarantine/$(date +%Y%m%d-%H%M%S)-personal-x
-   mkdir -p ~/.local/share/agent-tools/quarantine && mkdir "$q" && mkdir "$q/codex" "$q/claude-code" "$q/opencode"
+   mkdir -p ~/.local/share/agent-tools/quarantine && mkdir "$q" && mkdir "$q/codex" "$q/claude-code" \
+     "$q/opencode" && (cd "$q" && pwd -P)
+   ```
+
+   2 行目は、最後に、symlink を辿った置き場の実際の場所を出します。その場所が tool home と repo の外にあることを見て
+   から、次の block で動かします。内側なら、作った置き場を消して別の場所を選びます。何も出ずに error で終わったら
+   (同じ名前の directory が在る、など)、次の block に進まず、1 行目から少し待ってかけ直します。
+
+   ```sh
    mv ~/.claude/skills/personal-x "$q/claude-code/"                    # skill (dir ごと)
    mv ~/.claude/agent-tools/scripts/personal-x \
       ~/.claude/agent-tools/scripts/personal-x.agent-tools-managed.yml "$q/claude-code/"   # script (本体と sidecar)
    mv ~/.config/opencode/plugins/personal-x.js "$q/opencode/"          # plugin
    ```
 
-   codex は `~/.codex` の下の同じ場所です。`mkdir "$q"` は、同じ名前の directory が在ると止まります。tool home を
-   既定から変えていて、置き場がその内側になるときは、別の場所を選びます。
+   codex は `~/.codex` の下の同じ場所です。
 6. 確かめます。
    - 配置先の path が無いこと。script は本体と sidecar の両方を見ます (sidecar だけが残ると、prune の候補にも出ない)。
    - status のその asset の行が `missing` になった (承認を外した道) か、その tool の行と `orphan:` の行が消えた
@@ -252,19 +261,24 @@ instruction は所有 file を消さず、`setup.sh --apply` だけで直りま�
    - 続いている session は、起動のときに読んだもの (skill の一覧、hook の登録) を持ち続けることがあります。止めたい
      session は終えて、新しく起動します。
 
-戻すときは、次の順です。
+戻すときは、次の順です。`setup.sh` は使いません。中の connect が、人の `CLAUDE.md` に import の行を足すことがある
+からです。
 
-1. 承認か `targets` を戻します。承認は、register の警告が出す今の build_id で `approved_build_id` を書き、
-   `approved_artifact_kind` も書きます。asset を消したときは、git で戻します。
-2. `./scripts/setup.sh` を dry-run でかけ、sync の plan の `create:`・`update:`・`delete:` の行が、戻す asset の
-   ものだけであることを見ます。ほかの行があれば、先にそれを片付けるか、動くことを承知で進めます。
-3. `./scripts/setup.sh --apply` をかけます。隔離した写しは戻さず、source から作り直します。script の sidecar だけが
-   残っていても、create で置き直されます。戻す先に手書きの同名 file があると、sync は conflict で止まり、上書きしません。
-4. status が `managed`、doctor が `managed (body matches a fresh build)` になったことを見ます。
-5. hook の登録を戻します (本体が先、登録が後)。効くのは新しい session からです。隔離した写しは、調べ終えたら消します。
+1. 承認か `targets` を戻します。承認は、source を変えていなければ、控えた 2 つの行を戻します。変えたときは review の
+   うえで、`generated/catalog.json` のその asset の entry の `build_id` (承認を外した後の register が書いたもの) を
+   `approved_build_id` に書き、`approved_artifact_kind` も書きます。asset を消したときは、git で戻します。
+2. `./scripts/build.sh --prune` と `./scripts/register.sh` をかけます。
+3. `./scripts/sync.sh` を dry-run でかけ、plan の行のうち `skip:` でないもの (`create:`・`update:`・`conflict:`) が、
+   戻す asset の `create:` だけであることを見ます。ほかの行があるうちは `--apply` をかけず、先にそれを片付けます
+   (変えた source を戻す、戻す先の手書きの同名 file を退ける、など)。sync は手書きの同名 file を上書きしません
+   (`conflict:` で止まる)。
+4. `./scripts/sync.sh --apply` をかけます。隔離した写しは戻さず、generated/ から作り直します。script の sidecar
+   だけが残っていても、create で置き直されます。
+5. status が `managed`、doctor が `managed (body matches a fresh build)` になったことを見ます。
+6. hook の登録を戻します (本体が先、登録が後)。効くのは新しい session からです。隔離した写しは、調べ終えたら消します。
 
 instruction はこの手順の対象外です。prune は所有 file を消さず、所有 file は人の `CLAUDE.md` の import と組だから
-です。止めたいときは source を戻し、`./scripts/setup.sh --apply` で書き直します。
+です。止めたいときは source を戻し、上の 2〜4 (build・register・sync) で書き直します。
 
 ### dotfiles から参照する(report-only)
 
