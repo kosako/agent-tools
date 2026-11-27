@@ -209,7 +209,8 @@ instruction は所有 file を消さず、`setup.sh --apply` だけで直りま�
 人の file は変えません。instruction はこの手順の対象外です (この節の最後)。
 
 下では、止める asset を `personal-x` と書きます。配置先は上の「何がどこに置かれるか」の表のとおりで、tool ごとに
-あります。
+あります。tool home を既定から変えているときは、command の `~/.claude` などをその home に読み替え、script には
+`--codex-home` などを付けます。
 
 1. 呼び手を確かめます。`git grep -n personal-x -- shared` で、ほかの skill・script・plugin が呼んでいないかを見ます。
    dotfiles が hook として登録していないかを、dotfiles の doctor で見ます (hook は、本体が agent-tools、登録が dotfiles。
@@ -230,8 +231,9 @@ instruction は所有 file を消さず、`setup.sh --apply` だけで直りま�
 4. hook の登録を外します。手順 1 で hook と分かったときだけで、dotfiles の側の手順で行います。本体を動かす前に
    済ませます。登録が残ったまま本体が無くなると、hook は起動のたびに失敗するからです (多くは fail-open で止めないが、
    git hook の gate は commit を止める)。
-5. 配置を、tool home の外の隔離の置き場へ動かします。`sync --prune --apply` は使いません。prune は対象の 1 件だけで
-   なく、通常の sync の plan と、すべての orphan を適用するからです。動かす前に、marker が `personal-x` と
+5. 配置を、tool home の外の隔離の置き場へ動かします。`targets` から外した道では、外した tool の写しだけを動かします。
+   `sync --prune --apply` は使いません。prune は対象の 1 件だけでなく、通常の sync の plan と、すべての orphan を適用する
+   からです。動かす前に、marker が `personal-x` と
    その tool を指すことを確かめます (skill は dir の中の `.agent-tools-managed.yml`、script は sidecar、plugin は
    先頭の 1 行)。marker が無いものは agent-tools の写しではないので、中身を見てから扱いを決めます。
 
