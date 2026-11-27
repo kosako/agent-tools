@@ -134,8 +134,9 @@ packet は配備済みの `personal-packet` の `worker-update` で書き、file
 
    (`$input` は一時 file の path。shell literal 化した変数で渡す。) stdout の JSON の `ok` が true なら書けている。
 3. 拒まれたとき (exit 0 以外) は、直接の編集に戻らない。
-   - `digest_mismatch`: 1. の順で読み直す。自分の内容がもう載っていれば書かない (`結果` の最新節。worker なら
-     `次の入口` も。別の session が書いた)。載っていなければ、1 回だけやり直す。
+   - `digest_mismatch`: 1. の順で読み直す。自分の結果がもう `結果` に載っていれば、`entry` をやり直さない (別の session が
+     書いた。CLI は結果の重複を見ないので、やり直すと同じ結果が 2 回残る)。そのとき `次の入口` や `state` が書く予定と
+     違っても書かず、書く予定だった内容を会話の中の draft に留めて 1 行伝える。結果が載っていなければ、1 回だけやり直す。
    - それ以外 (`stale_temp`・`precondition`・`invalid_input`・`invalid_packet` など) と、やり直しの失敗: 書かずに
      `reason_code` を 1 行伝え、書く予定だった内容を会話の中の draft に留める。`stale_temp` の一時 file には触れない
      (前の更新の内容かもしれないので、片付けるのは人)。起動の記録 (`run`) があって `precondition` になったときは、

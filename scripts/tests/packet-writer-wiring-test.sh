@@ -4,8 +4,8 @@
 # worker-request-order-test)。説明の文はそのまま固定しない。項目・文ごとに、要る語がそろっているかを見る。節の全体からは
 # 探さない (語が別の項目や文に移っただけの変更を通さないため)。文書を単位に分ける読み方は lib/markdown_units.rb。
 # - handoff の手順 1.5 に、worker-update で書き file を直接編集しない文、digest を先に取ってから読む文、PR を出した worker の
-#   順 (open のうちに entry、続けて review)、拒まれたときに直接の編集に戻らない文、digest_mismatch のやり直しの前の重複の
-#   確認、stale_temp の一時 file に触れない項目、委譲の例外も操作で書く文がある。frontmatter の updated を手で書く古い指示が無い。
+#   順 (open のうちに entry、続けて review)、拒まれたときに直接の編集に戻らない文、digest_mismatch のやり直しの条件 (結果が
+#   載っていればやり直さず、次の入口が違っても draft に留める) の文、stale_temp の一時 file に触れない項目、委譲の例外も操作で書く文がある。frontmatter の updated を手で書く古い指示が無い。
 # - docs/agent-packets.md の「## tooling(`personal-packet`)」に、残る直接の書き手を名指しして窓が残ると書いた項目がある。
 # - operating-loop の割当の記録に、作成の後は round で足し、直接編集しない文がある。
 # 引数で repo root を差し替えられる (変異での確認用)。
@@ -51,8 +51,13 @@ terms.call("手順 1.5 の digest の順の文", one.call(handoff, step, :senten
 terms.call("手順 1.5 の PR を出した worker の順の文", one.call(handoff, step, :sentences, "open のうちに"),
            ["`entry`", "`review` の操作", "`state: review`"])
 terms.call("手順 1.5 の拒まれたときの文", one.call(handoff, step, :sentences, "拒まれたとき"), %w[直接の編集に戻らない])
-terms.call("手順 1.5 の digest_mismatch の項目", one.call(handoff, step, :bullets, "`digest_mismatch`"),
-           %w[載っていれば書かない 1 回だけやり直す])
+# digest_mismatch のやり直しの条件は、文の単位で見る (条件と処理が別の文に移った変更を通さない)。
+terms.call("手順 1.5 の digest_mismatch のやり直さない文", one.call(handoff, step, :sentences, "もう `結果` に載っていれば"),
+           ["`entry` をやり直さない"])
+terms.call("手順 1.5 の digest_mismatch の次の入口の文", one.call(handoff, step, :sentences, "書く予定と"),
+           ["`次の入口`", "違っても書かず", "draft"])
+terms.call("手順 1.5 の digest_mismatch のやり直す文", one.call(handoff, step, :sentences, "結果が載っていなければ"),
+           %w[1 回だけやり直す])
 terms.call("手順 1.5 の stale_temp の項目", one.call(handoff, step, :bullets, "一時 file には触れない"),
            ["`stale_temp`", "draft", "片付けるのは人"])
 terms.call("手順 1.5 の委譲の例外の項目", one.call(handoff, step, :bullets, "例外は orchestrator として"),

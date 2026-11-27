@@ -30,7 +30,7 @@ Codex の sandbox から読める場所に置くため。
 
 | 節 | 書けるのは | 操作 |
 |---|---|---|
-| `## 依頼` | orchestrator のみ | 上書き |
+| `## 依頼` | orchestrator のみ | packet の作成と同時に書く。作成の後に足すときは `worker-update` の `round` で追記 (#782)。既存の文の訂正だけは直接の編集で、窓が残る (下の「tooling」の残る書き手) |
 | `## 結果` | worker (実装) / reviewer (verdict) / orchestrator (委譲した worker の停止記録と、転記の後の回収・trailer 検査・公開する内容の gate の停止 (#412 / #413) だけ。見出しは `orchestrator/claude`)。packet に書けない worker (委譲した Codex) の分は orchestrator が worker の最終 message から転記する (見出しは `worker/codex`) | `### <日付> <役割/agent>` 見出しで区切って追記 |
 | `## 次の入口` | worker (委譲した worker の分は orchestrator が worker の最終 message から写す。worker が止まって最終 message が無いときは orchestrator が続きの入り方を書く。修正 round (review の指摘、または転記の後に受け入れ条件を満たさないと判断したとき。#412) を始めるときは orchestrator が書く。下記) | 現在地に上書き |
 
@@ -106,7 +106,7 @@ tab: "#123"            # worker を動かしている herdr の tab 名。`#` �
 
 ## 依頼
 
-<!-- orchestrator が上書き。受け入れ条件・制約は Issue 本文と同じでも packet に転記する
+<!-- orchestrator が作成のときに書き、後から足すときは round で追記する。受け入れ条件・制約は Issue 本文と同じでも packet に転記する
      (network に届かない worker が packet だけで再開できるように)。Issue 参照は補足 -->
 - Issue: #123 / branch: feat/123-example
 - 受け入れ条件: (Issue 本文のもの、または補足)

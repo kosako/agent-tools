@@ -256,7 +256,7 @@
     {
       "id": 12,
       "name": "handoff-worker-packet-local-update-no-publish",
-      "prompt": "[前提: この session で Issue #7 を worker (Claude) として進め、PR #30 を出して review 待ちにした。packet .agent-packets/7.md があり、配備済みの personal-packet check 7 は exit 0 を返す] 今日はここまで。まとめといて",
+      "prompt": "[前提: この session で Issue #7 を worker (Claude) として進め、PR #30 を出して review 待ちにした。packet .agent-packets/7.md があり、state は open で pr はまだ無い (この session では packet をまだ書いていない)。起動の記録 (run) は無い。配備済みの personal-packet check 7 は exit 0 を返す] 今日はここまで。まとめといて",
       "expected_output": "外部保存は明示されていないので draft と判定する。packet は local で agent 所有なので、check が exit 0 なら更新する。file を直接編集せず、配備済みの personal-packet worker-update で書く。packet の SHA-256 を先に取ってから読み直し、open のうちに entry の操作 (role は worker/claude) で `結果` に到達点・判断と理由を追記し、自分が worker なので `次の入口` を上書きする。続けて review の操作で pr (30) を書き、state を review にする (review の packet には entry で next と state を渡せないため、この順)。`updated` は CLI が更新する。`依頼` は書き換えない。Issue コメントへの publish (`personal-packet publish 7`) は external write なので draft では実行せず、候補として示すだけにする。planning ドキュメントにも書かない。handoff draft と次回の入口を提示する。",
       "files": [],
       "assertions": [
