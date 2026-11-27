@@ -346,6 +346,9 @@ assert(current.state == "done" && current.pr == 5 && current.last_run == RUN, "D
   ["D03", "state: done", "done", {}],
   ["D03", "state: done", "entry", { "role" => "reviewer/claude", "entry" => "PRIVATE-ENTRY" }],
   ["R05", "state: review", "entry", { "role" => "worker/claude", "entry" => "PRIVATE-ENTRY", "state" => "open" }],
+  # review の packet には結果への追記だけ。次の入口も変えない (PR #795 の review の must)。
+  ["R05", "state: review", "entry", { "role" => "worker/claude", "entry" => "PRIVATE-ENTRY", "next" => "PRIVATE-NEXT" }],
+  ["R05", "state: review", "entry", { "role" => "worker/codex", "entry" => "PRIVATE-ENTRY", "next" => "PRIVATE-NEXT", "state" => "blocked" }],
   ["R05", "state: review", "entry", { "role" => "worker/claude", "entry" => "PRIVATE-ENTRY", "state" => "blocked" }],
   ["R06", "state: open\nrun: #{RUN.to_json}\ntab: \"#7\"", "entry", { "role" => "worker/claude", "entry" => "PRIVATE-ENTRY" }],
   ["R06", "state: review\nrun: #{RUN.to_json}\ntab: \"#7\"", "entry", { "role" => "reviewer/claude", "entry" => "PRIVATE-ENTRY" }],

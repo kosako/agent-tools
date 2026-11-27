@@ -165,7 +165,7 @@ def allowed?(op, state, run, last_run, has, input)
   when "round" then %w[open review blocked].include?(state)
   when "review" then state == "open" && !has.include?("run")
   # entry と done (#782): run が無い間だけ。entry の state は、今の state が open か blocked のときだけ受ける。
-  when "entry" then %w[open blocked review].include?(state) && !has.include?("run") && (!input.key?("state") || %w[open blocked].include?(state))
+  when "entry" then %w[open blocked review].include?(state) && !has.include?("run") && (%w[open blocked].include?(state) || !(input.key?("state") || input.key?("next")))
   when "done" then %w[open blocked review].include?(state) && !has.include?("run")
   end
 end
@@ -285,9 +285,9 @@ counts = {
   "stop" => 2 * 2 * (2 * 12),                            # open で、run か last_run が一致する 2 つ。role が 2 つ、next の有無で 2 つ
   "round" => 2 * (3 * 5 * 12),                           # 3 つの state。review_entry の有無で 2 つ
   "review" => 3 * 12,                                    # open で、run が無い 3 つ
-  # entry: run が無い 3 つ。worker の role 2 つは、state 無し (next の有無で 2) が 3 つの state、state あり (2 × 2) が open と blocked。
-  # reviewer の role 2 つは 3 つの state。
-  "entry" => 2 * (2 * 3 + 4 * 2) * 3 * 12 + 2 * 3 * 3 * 12,
+  # entry: run が無い 3 つ。worker の role 2 つは、next も state も無い 1 つが 3 つの state、next か state のある 5 つが open と
+  # blocked。reviewer の role 2 つは 3 つの state。
+  "entry" => 2 * (1 * 3 + 5 * 2) * 3 * 12 + 2 * 3 * 3 * 12,
   "done" => 3 * 3 * 12,                                  # 3 つの state で、run が無い 3 つ
 }
 check("許す組の数 #{accepted.inspect} (表からは #{counts.inspect})", accepted == counts)

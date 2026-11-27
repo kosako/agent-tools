@@ -338,7 +338,7 @@ stdin は UTF-8 の JSON object 1 つで、上限は 64 KiB (65,536 byte)。
 | `stop` | `run`、`role`、`entry`。省略可: `next` | state が open で run または last_run が一致 | 結果に今日の role の entry を追記。next があれば次の入口を置換し、無ければ保持。state を blocked にして updated を更新。run、tab、last_run は保持 |
 | `round` | `request`、`next`。省略可: `review_entry` | state が open、review、blocked のいずれか | 依頼に request を追記し、次の入口を next に置換。review なら open にし、open と blocked は保持。updated を更新 |
 | `review` | `pr` | state が open で run が無い | pr を保存し、state を review にして updated を更新 |
-| `entry` | `role`、`entry`。省略可: `next`、`state` | state が open、blocked、review のいずれかで run が無い。`state` を渡すのは、今の state が open か blocked のときだけ | 結果に今日の role の entry を追記。next があれば次の入口を置換し、無ければ保持。state があればその値にする。updated を更新。run、tab、last_run、pr、branch は保持 |
+| `entry` | `role`、`entry`。省略可: `next`、`state` | state が open、blocked、review のいずれかで run が無い。`next` か `state` を渡すのは、今の state が open か blocked のときだけ | 結果に今日の role の entry を追記。next があれば次の入口を置換し、無ければ保持。state があればその値にする。updated を更新。run、tab、last_run、pr、branch は保持 |
 | `done` | なし | state が open、blocked、review のいずれかで run が無い | state を done にして updated を更新。last_run と pr は保持 |
 
 上の表の「前提」と「更新内容」は、`scripts/tests/exhaustive-decisions-test.sh` が、操作、state、run、last_run、tab、branch、pr、
@@ -360,7 +360,9 @@ stdin は UTF-8 の JSON object 1 つで、上限は 64 KiB (65,536 byte)。
 `stop` で書き、回収が持つ digest を途中で変えないためです (#782)。
 `entry` で書けるのは `結果`、`次の入口`、`state`、`updated` だけです。reviewer の role では `結果` への追記だけで、`next` か
 `state` を渡すと `invalid_input` (exit 2) で拒みます (上の書き手の表)。
-review の packet には `state` を渡せません。review から open に戻すのは `round` で、PR を出して review にするのは `review` です。
+review の packet には結果への追記だけを受け、`next` と `state` を渡すと `precondition` で拒みます。review から open に戻すのは
+`round` で、PR を出して review にするのは `review` です。PR を出した worker は、open のうちに `entry` で結果と次の入口を書いてから、
+`review` で review にします。
 `entry` の `state: open` は、自分で作業する worker が blocked から戻すときに使います。委譲した worker の再開は、今までどおり
 `run-start` で戻します (上の「blocked からの再起動」)。
 CLI が確かめるのは、role の値と state と起動の記録までです。呼んだ agent が本当にその役割か、`done` の前に merge か close を

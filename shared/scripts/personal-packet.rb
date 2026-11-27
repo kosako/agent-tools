@@ -950,10 +950,11 @@ module Packet
               when "round" then ACTIVE_STATES.include?(front.state)
               when "review" then front.state == "open" && !keys.key?("run")
               # 起動の記録がある間は、その回の結果を result か stop で書く (回収の digest を途中で変えない。#782)。
-              # review の間は追記だけを受ける。review から戻すのは round (依頼に修正 round の項を足す)。
+              # review の間は結果への追記だけを受け、次の入口と state は変えない。review から戻すのは round
+              # (依頼に修正 round の項を足す)。
               when "entry"
                 ACTIVE_STATES.include?(front.state) && !keys.key?("run") &&
-                  (!data.key?("state") || %w[open blocked].include?(front.state))
+                  (%w[open blocked].include?(front.state) || !(data.key?("state") || data.key?("next")))
               when "done" then ACTIVE_STATES.include?(front.state) && !keys.key?("run")
               end
     raise WorkerUpdateError.new("precondition", "操作の state または起動の記録が前提を満たしません") unless allowed
