@@ -264,11 +264,12 @@ instruction は所有 file を消さず、`setup.sh --apply` だけで直りま�
 戻すときは、次の順です。`setup.sh` は使いません。中の connect が、人の `CLAUDE.md` に import の行を足すことがある
 からです。
 
-1. 承認か `targets` を戻します。承認は、source を変えていなければ、控えた 2 つの行を戻します。止めている間に source を
-   変えたときは、pending のまま `./scripts/build.sh --prune` と `./scripts/register.sh` をかけ、catalog を今の source に
-   合わせます。review のうえで、そのとき `generated/catalog.json` のその asset の entry に書かれた `build_id` を
-   `approved_build_id` に書き、`approved_artifact_kind` も書きます (pending では register の警告が build_id を出さない)。
-   asset を消したときは、git で戻します。
+1. 承認か `targets` を戻します。承認は、`human_review: pending` を `human_review: approved` に戻し、その下に 2 つの行を
+   書きます。source を変えていなければ、控えた 2 つの行をそのまま戻します。止めている間に source を変えたときは、
+   先に pending のまま `./scripts/build.sh --prune` と `./scripts/register.sh` をかけ、catalog を今の source に合わせます。
+   review のうえで、そのとき `generated/catalog.json` のその asset の entry に書かれた `build_id` を `approved_build_id`
+   に書き、`approved_artifact_kind` も書きます (pending では register の警告が build_id を出さない)。asset を消したときは、
+   git で戻します。
 2. `./scripts/build.sh --prune` と `./scripts/register.sh` をかけます。
 3. `./scripts/sync.sh` を dry-run でかけ、plan の行のうち `skip:` でないもの (`create:`・`update:`・`conflict:`) が、
    戻す asset の `create:` だけであることを見ます。ほかの行があるうちは `--apply` をかけず、先にそれを片付けます

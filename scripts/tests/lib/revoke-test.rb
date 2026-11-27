@@ -159,6 +159,25 @@ def plug(review)
   manifest("personal-plug", "plugin", "shared/plugins/personal-plug.js", "text", %w[opencode], review: review)
 end
 
+# 止める手順の 3 (承認を外す): `review` を `human_review: pending` の 1 行にし、承認の 2 行を消す。消した 2 行を返す (控え)。
+APPROVAL_LINE = /\A  approved_(build_id|artifact_kind): /.freeze
+
+def withdraw(manifest_path)
+  lines = File.read(manifest_path).lines
+  saved = lines.select { |l| l.match?(APPROVAL_LINE) }
+  fail!("withdraw: two approval lines in #{manifest_path}: #{saved}") unless saved.size == 2
+  rest = lines.reject { |l| l.match?(APPROVAL_LINE) }.map { |l| l == "  human_review: approved\n" ? "  human_review: pending\n" : l }
+  File.write(manifest_path, rest.join)
+  saved
+end
+
+# 戻す手順の 1 (承認を戻す): `human_review: pending` を `human_review: approved` に戻し、その下に 2 行を書く。
+def reapprove(manifest_path, approval_lines)
+  text = File.read(manifest_path)
+  fail!("reapprove: pending line in #{manifest_path}") unless text.scan("  human_review: pending\n").size == 1
+  File.write(manifest_path, text.sub("  human_review: pending\n") { "  human_review: approved\n#{approval_lines.join}" })
+end
+
 def ops
   manifest("personal-ops", "instruction", "shared/instructions/personal-ops.md", "markdown", %w[codex claude-code])
 end
@@ -269,7 +288,10 @@ check(entry("codex", "personal-tool")["registration"] == "registered", "R2: the 
 check(state_of(status_json, "codex", "personal-tool") == "stale", "R2: status shows stale, not deployed_but_inactive")
 
 # --- R1: 承認の行を消して pending にすると、register は exit 3 で、両 tool が deployed_but_inactive。旧い本体は残る ---
-tool(:pending)
+tool(:approved)
+tool_manifest = File.join(REPO, "shared/scripts/personal-tool.asset.yml")
+withdraw(tool_manifest)
+check(File.read(tool_manifest).include?("  human_review: pending\n"), "R1: the manifest says pending")
 check(register == 3, "R1: register exits 3")
 %w[codex claude-code].each do |t|
   check(entry(t, "personal-tool")["registration"] == "human_review_required", "R1: [#{t}] human_review_required")
@@ -310,14 +332,16 @@ tool_src = File.join(REPO, "shared/scripts/personal-tool.rb")
 File.binwrite(tool_src, "#!/usr/bin/env ruby\nputs 'tool v2'\n")
 current = Build.build_id_for(REPO, "shared/scripts/personal-tool.rb", "text")
 check(entry("codex", "personal-tool")["build_id"] != current, "B1: the catalog keeps the stopped build_id until register")
-tool(:pending)
 build_register
 %w[codex claude-code].each do |t|
   check(entry(t, "personal-tool")["build_id"] == current, "B1: [#{t}] after register, the catalog holds the current build_id")
 end
 check(MarkdownUnits.squash(SECTION_TEXT).include?(MarkdownUnits.squash("pending のまま `./scripts/build.sh --prune` と `./scripts/register.sh` をかけ")),
       "B1: the docs re-run build and register while pending before reading the build_id")
-tool(:approved)
+check(MarkdownUnits.squash(SECTION_TEXT).include?(MarkdownUnits.squash("`human_review: pending` を `human_review: approved` に戻し")),
+      "B1: the docs turn the review back to approved")
+reapprove(tool_manifest, ["  approved_build_id: #{entry('codex', 'personal-tool')['build_id']}\n",
+                          "  approved_artifact_kind: script\n"])
 plan = restore_plan
 check(plan.sort == ["create: [claude-code] ~/.claude/agent-tools/scripts/personal-tool",
                     "create: [codex] ~/.codex/agent-tools/scripts/personal-tool"],
@@ -333,6 +357,27 @@ dout, rc = doctor
 end
 check(rc.zero?, "B1: doctor passes")
 check(snapshot(tool_paths) == others, "N1・B1: restoring does not touch other targets")
+
+# ===== 承認を外す道で、source を変えずに戻す (human review の要る skill の personal-med。控えた 2 行をそのまま戻す) =====
+med_manifest = File.join(REPO, "shared/skills/personal-med.asset.yml")
+med_paths = %w[codex claude-code].flat_map { |t| paths_of(t, "personal-med", "skill") }
+others = snapshot(med_paths)
+saved = withdraw(med_manifest)
+check(register == 3, "R1: register exits 3 for the skill")
+%w[codex claude-code].each do |t|
+  check(state_of(status_json, t, "personal-med") == "deployed_but_inactive", "R1: [#{t}] personal-med deployed_but_inactive")
+end
+out, rc = quarantine("personal-med", [%w[skill claude-code], %w[skill codex]])
+check(rc.zero? && med_paths.none? { |p| File.exist?(p) }, "R7: the documented skill commands move both copies: #{out}")
+reapprove(med_manifest, saved)
+plan = restore_plan
+check(plan.sort == ["create: [claude-code] ~/.claude/skills/personal-med", "create: [codex] ~/.codex/skills/personal-med"],
+      "B1: with the saved lines, the plan creates only the skill: #{plan}")
+sync_apply
+%w[codex claude-code].each do |t|
+  check(state_of(status_json, t, "personal-med") == "managed", "B1: [#{t}] personal-med managed with the saved lines")
+end
+check(snapshot(med_paths) == others, "N1: restoring the skill does not touch other targets")
 
 # ===== targets から外す道 (危険度の低い skill の personal-single を codex だけ) =====
 # --- R3: 危険度の低い skill に pending を書いても登録は外れない (道を分ける根拠) ---
