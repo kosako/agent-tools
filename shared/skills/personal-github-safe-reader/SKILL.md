@@ -64,10 +64,12 @@ MCP github tool へ fallback せず、本文を読まずに停止します。
 
 - 配備されていない (tool 別の絶対 path `<tool home>/agent-tools/scripts/personal-safe-gh` に file が無い)。
 - 実行できない (実行権が無い、interpreter が無いなど、起動そのものが失敗する)。
-- exit が想定外 (0 以外。1 = gh の呼び出しや repository の解決の失敗、2 = 引数の不正。それ以外の値も
-  同じ)。自分の呼び方の誤り (番号や repo の形、`-R` の付け忘れ) が safe-gh の固定の message から
+- exit が想定外 (0 以外。1 = gh の呼び出しや repository の解決の失敗、2 = 引数の不正か、github.com 以外の
+  host を指す環境・github.com の repository と確かめられない今の directory (safe-gh は github.com 専用。#721)。
+  それ以外の値も同じ)。自分の呼び方の誤り (番号や repo の形、`-R` の付け忘れ) が safe-gh の固定の message から
   明らかなときは、直して safe-gh を 1 度だけ呼び直してよく、これは fallback ではありません。それでも
-  exit 0 にならなければ停止します。
+  exit 0 にならなければ停止します。host の理由の exit 2 は呼び方の誤りではないので、同じ名前に `-R` を付けて
+  呼び直しません (github.com の別の repository を読みうるため)。
 
 停止したら、何が使えなかったか (配備なし / 起動の失敗 / exit の値) を 1 行で伝え、規律 7 と同じ
 hand-off に移ります (trusted なユーザーに safe-gh の配備・修復か public-safe な抜粋を頼む、または

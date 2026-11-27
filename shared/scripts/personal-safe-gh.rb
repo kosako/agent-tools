@@ -37,11 +37,21 @@ require "open3"
 Encoding.default_external = Encoding::UTF_8 unless Encoding.default_external == Encoding::UTF_8
 
 module SafeGh
-  # 出力に埋める safe reader version。出力契約が変わったら上げる。
+  # 出力に埋める safe reader version。出力契約が変わったら上げる。key を足すだけの変更 (#721 の host)
+  # では上げない (読む側は知らない key を無視する)。
   VERSION = "1"
+
+  # 読む GitHub の host。github.com 専用 (#721、人の判断 2026-11-27)。self は数値の ID で判定するので、
+  # 別の host を読むと、そこで同じ ID を持つ別の account を self と判定しうる。別の host を指す環境では
+  # gh を呼ぶ前に止める (exit 2)。API は host を固定して呼び、repo の解決では gh が選んだ host を確かめる。
+  HOST = "github.com"
+
+  # 別の host を指す環境、または github.com の repo と確かめられないときの停止 (exit 2)。
+  class Refused < StandardError; end
 
   # self identity の任意 override file。dotfiles が非コミットで置く場合に優先して読む
   # (実値は public repo にハードコードしない)。env で path を上書きできる。
+  # trust file は github.com の login / id だけを置く前提で読む (中身に host が無いので、機械では確かめない。#721)。
   # 信頼境界 (honest): この file / env を書ける主体は任意 login/id を self と宣言でき、
   # その author の body withhold が外れる。local file/env の改変は本 wrapper の脅威モデル外
   # (steering であり enforcement boundary ではない。床は実行環境側の責務)。
@@ -102,6 +112,7 @@ module SafeGh
     trust = classify(user, me)
     env = {
       "safe_reader_version" => VERSION,
+      "host" => HOST,
       "source" => kind,
       "repo" => repo,
       "number" => data["number"],
@@ -143,6 +154,7 @@ module SafeGh
     end
     env = {
       "safe_reader_version" => VERSION,
+      "host" => HOST,
       "source" => "#{kind}_comments",
       "repo" => repo,
       "number" => number,
@@ -176,6 +188,7 @@ module SafeGh
     end
     env = {
       "safe_reader_version" => VERSION,
+      "host" => HOST,
       "source" => "pr_reviews",
       "repo" => repo,
       "number" => number,
@@ -209,7 +222,7 @@ module SafeGh
     from_file = self_identity_from_file(env)
     return from_file if from_file
 
-    out, ok = gh_capture(["api", "user", "--jq", "{login: .login, id: .id}"])
+    out, ok = gh_capture(["api", "--hostname", HOST, "user", "--jq", "{login: .login, id: .id}"])
     return nil unless ok
 
     parsed = parse_json(out)
@@ -250,8 +263,29 @@ module SafeGh
     nil
   end
 
+  # 環境が別の host を指していれば、gh を呼ぶ前に止める (#721)。`GH_HOST` は未設定か空か、小文字の
+  # `github.com` との完全一致だけを受ける (大文字・URL・末尾の `/`・`api.github.com`・port つきは拒む)。
+  # `GH_REPO` の `HOST/OWNER/REPO` の形は、host が github.com でなければ拒む (`-R` の有無によらない)。
+  def check_host_env!(env = ENV)
+    gh_host = env["GH_HOST"].to_s
+    raise Refused, "GH_HOST が github.com 以外を指しています (safe-gh は github.com 専用)" unless gh_host.empty? || gh_host == HOST
+
+    parts = env["GH_REPO"].to_s.split("/", -1)
+    if parts.size > 2 && parts.first != HOST
+      raise Refused, "GH_REPO が github.com 以外の host を指しています (safe-gh は github.com 専用)"
+    end
+  end
+
+  # API の呼び出し (`gh api`) は host を github.com に固定する。repo の解決 (`gh repo view`) は `GH_HOST` を
+  # 外して呼び、gh が remote から選んだ repo の本当の host を、呼んだ側で確かめる (resolve_repo)。
+  # repo view にも github.com を渡すと、別 host の remote の代わりに同じ名前の github.com の repo を選び
+  # うるため (#721)。
+  def gh_env(args)
+    args.first == "api" ? { "GH_HOST" => HOST } : { "GH_HOST" => nil }
+  end
+
   def gh_capture(args)
-    out, _err, status = Open3.capture3("gh", *args)
+    out, _err, status = Open3.capture3(gh_env(args), "gh", *args)
     [out, status.success?]
   rescue SystemCallError
     ["", false]
@@ -266,7 +300,7 @@ module SafeGh
   # ため、`--slurp` で各ページを 1 要素とする配列にまとめ、flatten(1) で平坦化する
   # (single page でも `[[...]]` を平坦化するので結果は常に flat な配列)。
   def gh_api(path, paginate: false)
-    args = ["api"]
+    args = ["api", "--hostname", HOST]
     args += ["--paginate", "--slurp"] if paginate
     args << path
     out, ok = gh_capture(args)
@@ -285,14 +319,30 @@ module SafeGh
       return explicit
     end
 
-    out, ok = gh_capture(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"])
+    out, ok = gh_capture(["repo", "view", "--json", "nameWithOwner,url"])
     raise Error, "repository を解決できない (-R OWNER/REPO で指定してください)" unless ok
 
-    name = out.strip
-    raise Error, "repository を解決できない (-R OWNER/REPO で指定してください)" if name.empty?
+    data = parse_json(out)
+    name = data.is_a?(Hash) ? data["nameWithOwner"] : nil
+    raise Error, "repository を解決できない (-R OWNER/REPO で指定してください)" if !name.is_a?(String) || name.strip.empty?
+
+    name = name.strip
     raise Error, "解決した repository が owner/repo 形式ではありません" unless valid_repo?(name)
+    unless github_com_url?(data["url"], name)
+      # 同じ名前で -R を付け直すと github.com の別の repo を読みうるので、-R を勧めない。
+      raise Refused, "今の directory の repository を github.com のものと確かめられません (safe-gh は github.com 専用で、別の host の repository は読めません)"
+    end
 
     name
+  end
+
+  # gh が選んだ repo の url が、github.com の同じ repo を指すか (#721)。https、host は github.com、port なし、
+  # path は nameWithOwner と同じ (大文字小文字は問わない) ときだけ true。欠けた・空・別の形は false。
+  def github_com_url?(url, name)
+    return false unless url.is_a?(String)
+
+    m = %r{\Ahttps://github\.com/([^/?#:]+/[^/?#:]+)\z}.match(url)
+    !m.nil? && m[1].casecmp?(name)
   end
 
   # PR の会話コメントは issue comments endpoint に乗る (PR は issue でもある)。
@@ -357,12 +407,18 @@ module SafeGh
       return 2
     end
 
+    # gh を 1 度も呼ぶ前に、別の host を指す環境を拒む (#721)。
+    check_host_env!
+
     me = self_identity
     warn "warn: self identity を確定できないため全 author を untrusted として扱います" unless me
 
     repo = resolve_repo(repo)
     puts JSON.pretty_generate(run(noun, verb, number, repo, me))
     0
+  rescue Refused => e
+    warn "fail: #{e.message}"
+    2
   rescue Error => e
     warn "fail: #{e.message}"
     1

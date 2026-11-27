@@ -237,6 +237,19 @@ boundary でない)。
   ない number・未知の noun / verb) は、usage を出して exit 2 (gh は呼ばない。#429)。gh の呼び出しの失敗と
   repository の解決の失敗は exit 1。self を確定できないときは warn を出し、全 author を untrusted (self
   以外) として続ける (成功すれば exit 0)。`-h` / `--help` は usage を出して exit 0。
+- **github.com 専用 (#721、人の判断 2026-11-27)**: self は数値の ID で判定するので、別の host を読むと、そこで
+  同じ ID を持つ別の account を self と判定しうる。そのため次のとおり github.com だけを読む。複数の host には
+  対応しない (別の host を使うときに見直す)。
+  - 環境の拒否: `GH_HOST` は、未設定か空か、小文字の `github.com` との完全一致だけを受ける。`GH_REPO` の
+    `HOST/OWNER/REPO` の形は、host が github.com のときだけ受ける。それ以外は、gh を一度も呼ばずに exit 2。
+  - API の固定: `gh api` は `--hostname github.com` を付け、子 process の `GH_HOST` も `github.com` にして呼ぶ。
+  - repo の解決: `-R` が無いときは、`GH_HOST` を外して `gh repo view --json nameWithOwner,url` を呼び、gh が
+    remote から選んだ repo の `url` を確かめる。https、host が `github.com`、port なし、path が
+    `nameWithOwner` と同じ (大文字小文字は問わない) ときだけ読む。確かめられなければ exit 2。repo view に
+    `GH_HOST` を渡すと、別 host の remote の代わりに同じ名前の github.com の repo を選びうるため。
+  - trust file は github.com の login / id だけを置く前提で読む。中身に host は無く、機械では確かめない。
+  - envelope に `"host": "github.com"` を足す。key を足すだけなので、`safe_reader_version` は `"1"` のまま
+    にする (読む側は知らない key を無視する。reader の allowlist と packet の pull は host を見ない)。
 - 上の 3 signal のうち **分類に使うのは `is_bot` → `is_self` の 2 つ**で、author を `self` / `bot` /
   `other` に決める。`association` は分類に使わず envelope の補助信号として載るだけ (上記のとおり
   単体の許可ソースにしない)。self を確定できなければ、bot は `bot`、それ以外は `other` に分類する (どちらも untrusted。fail-closed)。

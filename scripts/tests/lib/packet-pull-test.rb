@@ -157,15 +157,16 @@ Dir.mktmpdir("packet-pull-") do |tmp|
     dir = File.dirname(__FILE__)
     File.open(File.join(dir, "gh-calls.jsonl"), "a") { |f| f.puts JSON.generate(ARGV) }
     exit 1 if File.exist?(File.join(dir, "fail"))
+    # safe-gh は github.com 専用 (#721): repo view は nameWithOwner と url の JSON、api は --hostname github.com を付ける。
     if ARGV[0] == "repo" && ARGV[1..2] == %w[view --json]
-      puts "fixture/repo"
+      puts JSON.generate("nameWithOwner" => "fixture/repo", "url" => "https://github.com/fixture/repo")
       exit 0
     end
-    abort "unexpected gh args: #{ARGV.inspect}" unless ARGV[0] == "api"
+    abort "unexpected gh args: #{ARGV.inspect}" unless ARGV[0] == "api" && ARGV[1..2] == %w[--hostname github.com]
     path = ARGV.last
     fixture = if path == "repos/fixture/repo/issues/7"
                 "issue-rest.json"
-              elsif path == "repos/fixture/repo/issues/7/comments" && ARGV[1..2] == %w[--paginate --slurp]
+              elsif path == "repos/fixture/repo/issues/7/comments" && ARGV[3..4] == %w[--paginate --slurp]
                 "comments-rest.json"
               else
                 abort "unexpected endpoint: #{ARGV.inspect}"
@@ -493,7 +494,7 @@ Dir.mktmpdir("packet-pull-") do |tmp|
     assert(status.exitstatus == 2, "invalid pull args must return exit 2")
   end
   assert(File.readlines(calls_path) == calls, "argument failures must not call reader")
-  assert(calls.map { |l| JSON.parse(l) }.include?(%w[api --paginate --slurp repos/fixture/repo/issues/7/comments]), "real safe-gh REST argv contract")
+  assert(calls.map { |l| JSON.parse(l) }.include?(%w[api --hostname github.com --paginate --slurp repos/fixture/repo/issues/7/comments]), "real safe-gh REST argv contract (github.com に固定。#721)")
   assert(Dir.glob(File.join(repo, "SHELL-*")).empty?, "runtime data must not execute as shell")
 end
 puts "ok: packet pull self-test"

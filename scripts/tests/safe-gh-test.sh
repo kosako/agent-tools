@@ -314,7 +314,7 @@ check("valid explicit repo passes through", SafeGh.resolve_repo("owner/repo") ==
 # 解決値: gh が返した値が不正なら fail-closed
 module SafeGh
   def self.gh_capture(_args)
-    ["not-a-slug", true]
+    [JSON.generate("nameWithOwner" => "not-a-slug", "url" => "https://github.com/not-a-slug"), true]
   end
 end
 begin
@@ -326,7 +326,7 @@ end
 
 module SafeGh
   def self.gh_capture(_args)
-    ["owner/repo\n", true]
+    [JSON.generate("nameWithOwner" => "owner/repo", "url" => "https://github.com/owner/repo") + "\n", true]
   end
 end
 check("valid resolved repo is used", SafeGh.resolve_repo(nil) == "owner/repo")
@@ -393,6 +393,155 @@ rc_resolved = silently { SafeGh.main(["issue", "view", "1"]) }
 check("main fails closed on malformed resolved repo", rc_resolved == 1)
 check("main does not reach the target API", SafeGh.calls.none? { |a| a.any? { |x| x.to_s.include?("repos/") } })
 
+# ---- github.com 専用 (#721) の純粋な部分 ----
+check("host constant is github.com", SafeGh::HOST == "github.com")
+# E01〜E04: どの envelope にも host があり、版は "1" のまま
+issue_env = SafeGh.issue_envelope("issue", "o/r", self_issue, ME)
+comments_env = SafeGh.comments_envelope("issue", "o/r", 7, [], ME)
+reviews_env = SafeGh.reviews_envelope("o/r", 7, [], ME)
+[issue_env, comments_env, reviews_env].each_with_index do |e, i|
+  check("envelope #{i} has host github.com (E01-E03)", e["host"] == "github.com")
+  check("envelope #{i} keeps safe_reader_version 1 (E04)", e["safe_reader_version"] == "1")
+end
+# R02 の url の形: https、host は github.com、port なし、path は nameWithOwner と同じ (大文字小文字は問わない)
+check("url github.com matches", SafeGh.github_com_url?("https://github.com/o/r", "o/r"))
+check("url case-insensitive path", SafeGh.github_com_url?("https://github.com/O/R", "o/r"))
+[nil, "", 7, "not a url", "http://github.com/o/r", "https://github.com:8443/o/r", "https://github.com:443/o/r",
+ "https://GITHUB.COM/o/r", "https://ghe.example.invalid/o/r", "https://github.com/x/y", "https://github.com/o/r/extra",
+ "https://github.com/o/r?x=1", "https://github.com/o/r#x", "https://api.github.com/o/r", "https://github.com.evil/o/r"].each do |url|
+  check("url rejected: #{url.inspect}", !SafeGh.github_com_url?(url, "o/r"))
+end
+# H07〜H14: 環境の検査
+refused = lambda do |env|
+  SafeGh.check_host_env!(env)
+  false
+rescue SafeGh::Refused
+  true
+end
+[{}, { "GH_HOST" => "" }, { "GH_HOST" => "github.com" }, { "GH_REPO" => "o/r" }, { "GH_REPO" => "github.com/o/r" },
+ { "GH_REPO" => "" }].each do |env|
+  check("host env accepted: #{env.inspect}", !refused.call(env))
+end
+[{ "GH_HOST" => "ghe.example.invalid" }, { "GH_HOST" => "GITHUB.COM" }, { "GH_HOST" => "https://github.com" },
+ { "GH_HOST" => "github.com/" }, { "GH_HOST" => "api.github.com" }, { "GH_HOST" => "github.com:443" },
+ { "GH_HOST" => " github.com" }, { "GH_REPO" => "ghe.example.invalid/o/r" }, { "GH_REPO" => "https://ghe.example.invalid/o/r" },
+ { "GH_REPO" => "GITHUB.COM/o/r" }].each do |env|
+  check("host env refused: #{env.inspect}", refused.call(env))
+end
+# API は github.com に固定し、repo の解決は GH_HOST を外して gh に選ばせる
+check("api env pins GH_HOST", SafeGh.gh_env(["api", "--hostname", "github.com", "user"]) == { "GH_HOST" => "github.com" })
+check("repo view env unsets GH_HOST", SafeGh.gh_env(["repo", "view"]) == { "GH_HOST" => nil })
+
+exit(@failed.zero? ? 0 : 1)
+RUBY
+
+# ---- github.com 専用 (#721) の CLI の契約。fake の gh を PATH に置いて、本物の process として走らせる ----
+# fake の gh は、呼ばれた argv と、受け取った GH_HOST・GH_REPO を 1 行の JSON で log に足す。
+mkdir -p "$tmp/bin" "$tmp/home"
+ruby - "$src" "$tmp" <<'RUBY'
+require "json"
+require "open3"
+require "rbconfig"
+src, tmp = ARGV
+bin = File.join(tmp, "bin")
+log = File.join(tmp, "gh.log")
+fake = File.join(bin, "gh")
+File.write(fake, <<~FAKE)
+  #!#{RbConfig.ruby}
+  require "json"
+  File.open(#{log.inspect}, "a") { |f| f.puts(JSON.generate("argv" => ARGV, "GH_HOST" => ENV["GH_HOST"], "GH_REPO" => ENV["GH_REPO"])) }
+  if ARGV.first == "repo"
+    print ENV.fetch("FAKE_REPO_JSON", "")
+    exit Integer(ENV.fetch("FAKE_REPO_EXIT", "0"))
+  elsif ARGV.include?("user")
+    print JSON.generate("login" => "me", "id" => 4242)
+  elsif ARGV.any? { |a| a.end_with?("/issues/7") }
+    # 別の host で同じ数値の ID を持つ account を模す author (github.com では self と同じ ID)
+    print JSON.generate("number" => 7, "state" => "open", "title" => "T-SENTINEL", "body" => "B-SENTINEL",
+                        "user" => { "login" => "someone", "id" => 4242 }, "author_association" => "NONE", "labels" => [])
+  else
+    exit 1
+  end
+FAKE
+File.chmod(0o755, fake)
+@failed = 0
+def check(name, ok)
+  return if ok
+
+  @failed += 1
+  warn "FAIL: #{name}"
+end
+BASE = { "PATH" => "#{bin}:#{ENV.fetch('PATH')}", "HOME" => File.join(tmp, "home"), "GH_HOST" => nil, "GH_REPO" => nil,
+         "GH_ENTERPRISE_TOKEN" => nil, "SAFE_GH_TRUST_FILE" => nil, "FAKE_REPO_JSON" => nil, "FAKE_REPO_EXIT" => nil }.freeze
+def run(argv, env = {})
+  File.write(LOG, "")
+  out, _err, status = Open3.capture3(BASE.merge(env), RbConfig.ruby, SRC, *argv)
+  calls = File.read(LOG).lines.map { |l| JSON.parse(l) }
+  [status.exitstatus, out, calls]
+end
+SRC = src
+LOG = log
+api_ok = ->(calls) { calls.select { |c| c["argv"].first == "api" }.all? { |c| c["argv"][1, 2] == ["--hostname", "github.com"] && c["GH_HOST"] == "github.com" } }
+targets = ->(calls) { calls.select { |c| c["argv"].any? { |a| a.start_with?("repos/") } } }
+gh_url = JSON.generate("nameWithOwner" => "o/r", "url" => "https://github.com/o/r")
+ghe_url = JSON.generate("nameWithOwner" => "o/r", "url" => "https://ghe.example.invalid/o/r")
+
+# H07・H08・S01 と H09〜H13・H14: 別の host を指す環境では、gh を一度も呼ばずに exit 2
+["ghe.example.invalid", "GITHUB.COM", "https://github.com", "github.com/", "api.github.com", "github.com:443"].each do |host|
+  [["-R", "o/r", "issue", "view", "7"], ["issue", "view", "7"]].each do |argv|
+    rc, out, calls = run(argv, "GH_HOST" => host, "FAKE_REPO_JSON" => gh_url)
+    check("GH_HOST=#{host} #{argv.join(' ')}: exit 2 (H07-H13)", rc == 2)
+    check("GH_HOST=#{host} #{argv.join(' ')}: no gh call", calls.empty?)
+    check("GH_HOST=#{host} #{argv.join(' ')}: no body leaked (S01)", !out.include?("B-SENTINEL"))
+  end
+end
+["ghe.example.invalid/o/r", "https://ghe.example.invalid/o/r"].each do |gh_repo|
+  [["-R", "o/r", "issue", "view", "7"], ["issue", "view", "7"]].each do |argv|
+    rc, _out, calls = run(argv, "GH_REPO" => gh_repo, "FAKE_REPO_JSON" => gh_url)
+    check("GH_REPO=#{gh_repo} #{argv.join(' ')}: exit 2 without gh (H14)", rc == 2 && calls.empty?)
+  end
+end
+# H01・H03・H05・H15・H16: github.com を指す環境と -R では、API を github.com に固定して読む
+[{}, { "GH_HOST" => "" }, { "GH_HOST" => "github.com" }, { "GH_REPO" => "github.com/o/r" }, { "GH_REPO" => "o/r" },
+ { "GH_ENTERPRISE_TOKEN" => "x" }].each do |env|
+  rc, out, calls = run(["-R", "o/r", "issue", "view", "7"], env)
+  check("#{env.inspect} -R: exit 0 (H01/H03/H05/H15/H16)", rc == 0)
+  check("#{env.inspect} -R: api pinned to github.com", !calls.empty? && api_ok.call(calls))
+  check("#{env.inspect} -R: no repo view", calls.none? { |c| c["argv"].first == "repo" })
+  check("#{env.inspect} -R: envelope host", JSON.parse(out)["host"] == "github.com")
+end
+# H02: -R なしで、gh が github.com の repo を選べば読む。repo view の子 process には GH_HOST を渡さない
+rc, _out, calls = run(["issue", "view", "7"], "GH_HOST" => "github.com", "FAKE_REPO_JSON" => gh_url)
+view = calls.find { |c| c["argv"].first == "repo" }
+check("no -R with github.com repo: exit 0 (H02)", rc == 0)
+check("repo view asks for nameWithOwner and url", view && view["argv"] == ["repo", "view", "--json", "nameWithOwner,url"])
+check("repo view runs without GH_HOST", view && view["GH_HOST"].nil?)
+check("no -R: target api pinned", targets.call(calls).size == 1 && api_ok.call(calls))
+# H04・H06・R01・R02: gh が選んだ repo を github.com のものと確かめられなければ、対象を読まずに exit 2
+bad_urls = [ghe_url, JSON.generate("nameWithOwner" => "o/r"), JSON.generate("nameWithOwner" => "o/r", "url" => ""),
+            JSON.generate("nameWithOwner" => "o/r", "url" => "https://github.com/x/y"),
+            JSON.generate("nameWithOwner" => "o/r", "url" => "https://github.com:8443/o/r")]
+bad_urls.each do |json|
+  [{}, { "GH_HOST" => "" }, { "GH_HOST" => "github.com" }].each do |env|
+    rc, out, calls = run(["issue", "view", "7"], env.merge("FAKE_REPO_JSON" => json))
+    check("repo #{json} #{env.inspect}: exit 2 (R01/R02)", rc == 2)
+    check("repo #{json} #{env.inspect}: target not read", targets.call(calls).empty?)
+    check("repo #{json} #{env.inspect}: no body leaked", !out.include?("B-SENTINEL"))
+  end
+end
+# R03: repo を解決できなければ、今までどおり exit 1
+rc, _out, calls = run(["issue", "view", "7"], "FAKE_REPO_EXIT" => "1")
+check("unresolvable repo: exit 1 (R03)", rc == 1 && targets.call(calls).empty?)
+# S02・S03: trust file があれば gh api user を呼ばない。無ければ github.com に固定して呼ぶ
+trust = File.join(tmp, "trust.json")
+_rc, _out, calls = run(["-R", "o/r", "issue", "view", "7"], "SAFE_GH_TRUST_FILE" => trust)
+check("trust file skips gh api user (S02)", calls.none? { |c| c["argv"].include?("user") })
+_rc, _out, calls = run(["-R", "o/r", "issue", "view", "7"])
+user = calls.find { |c| c["argv"].include?("user") }
+check("no trust file calls gh api user pinned (S03)", user && user["argv"][0, 3] == ["api", "--hostname", "github.com"] && user["GH_HOST"] == "github.com")
+# N03: host つきの -R は、今までどおり gh を呼ばずに exit 2
+rc, _out, calls = run(["-R", "ghe.example.invalid/o/r", "issue", "view", "7"])
+check("-R with host: exit 2 without gh (N03)", rc == 2 && calls.empty?)
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
