@@ -277,7 +277,8 @@ module SafeGh
   end
 
   # API の呼び出し (`gh api`) は host を github.com に固定する。repo の解決 (`gh repo view`) は `GH_HOST` を
-  # 外して呼び、gh が remote から選んだ repo の本当の host を、呼んだ側で確かめる (resolve_repo)。
+  # 外して呼び、gh が選んだ repo (`GH_REPO` があればその repo、無ければ remote から選んだ repo) の本当の host を、
+  # 呼んだ側で確かめる (resolve_repo)。
   # repo view にも github.com を渡すと、別 host の remote の代わりに同じ名前の github.com の repo を選び
   # うるため (#721)。
   def gh_env(args)
