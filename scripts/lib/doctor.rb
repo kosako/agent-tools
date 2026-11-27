@@ -91,11 +91,12 @@ module Doctor
 
       bodies = body_results
       status["sync_targets"].each do |t|
-        # deployed_but_inactive = 未登録 (gate 中) なのに実体が残っている = 掃除対象の
-        # 可能性があるので warn (#186)。
+        # deployed_but_inactive = 未登録 (gate 中) なのに target の path に何かが残っている = 掃除対象の
+        # 可能性があるので warn (#186)。止まったとは読めないよう、status の注を同じ行に載せる (#723)。
         level = { "managed" => "ok", "missing" => "info", "stale" => "warn", "conflict" => "fail",
                   "deployed_but_inactive" => "warn" }.fetch(t["state"])
         message = "[#{t['tool']}] #{t['name']} #{t['state']}"
+        message += " (#{Status::INACTIVE_NOTE})" if t["state"] == "deployed_but_inactive"
         # managed は marker の build_id の一致で、body の一致ではない。body の検査の結果を同じ行に載せ、ずれた
         # target を ok のままにしない (#722)。
         level, message = body_line(bodies[[t["tool"], t["name"]]], message) if t["state"] == "managed"

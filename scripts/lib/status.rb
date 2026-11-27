@@ -26,6 +26,18 @@ require_relative "cli"
 module Status
   CONTRACT_VERSION = 3
 
+  # 人が読む表示に足す注 (#723)。JSON の値 (contract) は変えない。
+  # deployed_but_inactive は target の path に何かが在ることだけを見る (marker を見ない。手書きの同名 file や dangling な
+  # symlink でも出る)。実行が止まったとも、agent-tools の写しだとも、まだ読み込まれるとも断定しない。doctor の行と共有する。
+  INACTIVE_NOTE = "not registered, so sync leaves the target path as it is; " \
+                  "whether it is still loaded or run is not checked"
+  # managed は配備の identity の一致 (skill・script・plugin は marker の build_id、instruction は generated に local の断片
+  # (#689) を足した内容との byte)。body・client が読み込んだ版は見ない。status の人向けの出力の最後に 1 回だけ出す
+  # (全部の行に付けると読みにくいため)。
+  MANAGED_NOTE = "managed = the deployed marker carries the build_id of generated/ " \
+                 "(instruction: same bytes as generated/ plus the local fragment); " \
+                 "doctor compares the body, and what clients loaded is not checked"
+
   class Runner
     def initialize(root, homes)
       @root = File.expand_path(root)
@@ -300,11 +312,13 @@ end
     reg = report["register"]
     puts "register:  catalog_present=#{reg['catalog_present']} registered=#{reg['registered']} human_review_required=#{reg['human_review_required']} unsupported=#{reg['unsupported']}"
     report["sync_targets"].each do |t|
-      puts "target:    [#{t['tool']}] #{t['name']} #{t['state']}"
+      note = t["state"] == "deployed_but_inactive" ? " (#{INACTIVE_NOTE})" : ""
+      puts "target:    [#{t['tool']}] #{t['name']} #{t['state']}#{note}"
     end
     report["orphans"].each do |o|
       puts "orphan:    [#{o['tool']}] #{o['name']} (#{o['kind']}; not in catalog)"
     end
+    puts "note:      #{MANAGED_NOTE}" if report["sync_targets"].any? { |t| t["state"] == "managed" }
   end
 
   USAGE = "usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR] [--opencode-home DIR]"

@@ -74,7 +74,8 @@ dotfiles 側の実装は含めません。
   `plugin` kind と `opencode` target (#295) では上げていない: field の集合も値の意味も変わらず、
   `sync_targets[].tool` の値に `opencode` が増えるだけで、旧 reader (dotfiles の doctor) の解釈が
   壊れないため (version を上げると dotfiles の doctor が status を解釈しなくなる。
-  [Register / Catalog](register-catalog.md)「catalog_version は上げない」と同じ判断)。
+  [Register / Catalog](register-catalog.md)「catalog_version は上げない」と同じ判断)。人が読む summary に注を足した
+  変更 (#723) でも上げていない。JSON の値と field は変えていないため。
 - `repo.present`: agent-tools repository が存在するか。
 - `repo.clean`: working tree が clean か。
 - `assets.total`: 作業ツリーの `shared/` の下で見つけた manifest (`*.asset.yml` と `<dir>/asset.yml`) の数。git の
@@ -104,11 +105,11 @@ dotfiles 側の実装は含めません。
 
 | state | 意味 |
 | --- | --- |
-| `managed` | agent-tools marker を持ち、最新の generated artifact と一致する。一致は、skill・script・plugin では marker の `build_id` で、instruction では byte で見る。skill・script・plugin の body の中身は見ない (doctor の body の検査が見る。#722)。 |
+| `managed` | 配備の identity が一致する。agent-tools marker を持ち、最新の generated artifact と一致する。一致は、skill・script・plugin では marker の `build_id` で、instruction では generated artifact に local の断片 (#689) を足した内容との byte で見る。skill・script・plugin の body の中身は見ない (doctor の body の検査が見る。#722)。client が読み込んだ版と、実行の状態も見ない (#723)。 |
 | `stale` | agent-tools marker を持つが、generated artifact より古い。build や register が先に要る entry で、target が在るものも含む (下の注)。 |
 | `conflict` | 同名 target が存在するが marker を持たない (unmanaged)。sync が配置を止めるその他の理由 (target か親 dir が symlink、skill と script の generated 側の marker が不正、`personal-` で始まらない、など) も含む。instruction と plugin の generated 側の marker の不正は build が先に要る扱いなので、下の注のとおり `stale` か `missing` になる。 |
 | `missing` | target がまだ存在しない。build や register が先に要る entry で target が無いもの、instruction の所有ファイルが無いか空 (未接続。connect が先に要る) のもの、target を持たない entry (register の unsupported) も含む。 |
-| `deployed_but_inactive` | catalog entry が registered でない (human_review_required / unsupported) のに、target 実体がディスクに残っている (一度承認して配布 → 後で gate がかかった等)。sync は配置も削除もしないため、手動掃除か再承認まで居座る (#186)。 |
+| `deployed_but_inactive` | 配布不許可・配置が残る。catalog entry が registered でない (human_review_required / unsupported) のに、target の path に何かが在る (一度承認して配布 → 後で gate がかかった等)。見るのは path の有無だけで、marker は見ない (手書きの同名 file や dangling な symlink でも出る)。sync は配置も削除もしないため、手で撤去するか再承認するまで残る (#186)。実行が止まったことは示さない。client が読み込むか、実行するかも見ない (#723)。 |
 
 `conflict` の target は sync が変更してはいけません。
 
@@ -214,6 +215,17 @@ build_id: sha256:...
 - status output contract の JSON 全体。
 - 各 target の state (`managed` / `stale` / `conflict` / `missing` / `deployed_but_inactive`)。
 - checks の結果 (`pass` / `fail` / `human_review`。`not_run` は予約値で、現行の status は出さない)。
+
+## 統合の表示に渡すとき
+
+status を別の表示 (dotfiles の doctor、個人用の control center など) にまとめるときは、次を守ります (#723)。
+
+- target の state を、healthy の 1 つに畳まない。`managed` は「配備の identity が一致」で、body の一致ではない
+  (body は doctor が見る)。`deployed_but_inactive` は「配布不許可・配置が残る」で、止まったことではない。
+- status が確かめていないものは、未確認として残す。client が読み込んだ版、実行が止まったか、hook の登録
+  (dotfiles の範囲) がそれに当たる。
+- 判定には JSON の `state` の値を使う。人が読む summary と doctor の行の注は表示のためのもので、contract では
+  ない (文言は変わりうる)。
 
 ## dotfiles が読まない・status に含めない情報
 

@@ -166,6 +166,14 @@ git pull
 status の `managed` は、管理 marker が一致するという意味です。skill・script・plugin では marker の `build_id` だけを見るので、
 marker を変えずに body だけが変わっても `managed` のままです (instruction は byte で比べるので `stale` になります)。
 doctor は、`managed` の target を、source から一時 directory に作り直した artifact と比べ、結果を target の行に載せます (#722)。
+status の人向けの出力は、`managed` が 1 つでもあれば、最後にこの意味を `note:` の 1 行で示します。client が読み込んだ版は、
+status も doctor も見ません。
+
+`deployed_but_inactive` は、登録されていない (承認を外した、承認の後に source を変えた、など) のに、target の path に何かが
+残っている状態です。sync は置き直しも削除もしないので、残ったものを client が読み込み、実行することがあります。止まったことを
+示す state ではありません。status と doctor は、その行に
+`(not registered, so sync leaves the target path as it is; whether it is still loaded or run is not checked)` を足します。
+見るのは path の有無だけなので、手書きの同名 file や dangling な symlink でも同じ行になります。
 
 - `ok: target: [<tool>] <name> managed (body matches a fresh build)`: 名前の集合、種類 (file・directory・symlink)、
   file の byte、通常の file の所有者の実行 bit、symlink の行き先が同じ。instruction は今の local の断片を足した本文と
