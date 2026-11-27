@@ -692,8 +692,10 @@ worker に直させる場合は、`worker-update round` で修正 round の項�
    題名や本文を直したら post-check から、commit を直したら `check` からやり直します。
 3. 別の呼び出しで、main から `git push origin <head_oid>:refs/heads/<branch>` を実行します。
    `head_oid` は `check` が返した full OID を使います。push が失敗したら PR を作りません。
+   `READY` の後に間が空いたときの扱い (push の前と PR の作成の前に `check` をかけ直す) の正本は、「依頼の照合」の項です (#782)。
 4. `gh pr create --repo <slug> --base main --head <branch> --title <題名> --body-file <file>` で PR を作ります。
-   修正 round では既存 PR を使います。値は argv か shell literal で渡します。
+   修正 round では既存 PR を使います。PR を作る前に止まった後の修正 round では、PR がまだ無いので、`READY` の後に push してから PR を作ります (#782)。
+   値は argv か shell literal で渡します。
 5. packet を読み直して digest を得ます。
    `personal-packet worker-update <N> --stdin` の `review` で PR 番号を記録し、state を `review` にします。
    すでに `review` で PR 番号も一致する場合は、そのまま保持します。

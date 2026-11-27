@@ -107,6 +107,10 @@ commands.each do |argv|
              "--wait-minutes" => "60", "--title" => "$title", "--body-file" => "$body_file" }
   errors << "引数の値または順序が不正: #{sub}" unless pairs.all? { |key, value| values[key] == value && !value.nil? }
 end
+# docs の公開の手順は、間が空いたときの扱いを「依頼の照合」の項 (正本) に寄せ、PR の前に止まった修正 round を書く (#782)。
+runbook = section.call(File.read(File.join(root, "docs/codex-worker-run.md"), encoding: "UTF-8"), "## 公開前後の指揮役の手順")
+clause.call(runbook, "`READY` の後に間が空いたときの扱い")
+clause.call(runbook, "PR を作る前に止まった後の修正 round では、PR がまだ無いので、`READY` の後に push してから PR を作ります")
 publish = section.call(launch, "## 9. 回収 (fetch) と trailer 検査と PR")
 clause.call(publish, "`READY` の後は、間に別の作業を挟まずに push し、push が成功したら続けて PR を作る")
 clause.call(publish, "`READY` の後、push の前か PR の作成の前に間が空いたときは、その前に `check` をかけ直し")
