@@ -296,7 +296,7 @@ module CheckSkillRouting
                          "but it is not in observed (cannot tell whether it acted on it)"
                      else
                        "#{label}: case '#{c['id']}' run #{n + 1}: read a SKILL.md whose skill could not be determined " \
-                         "(reads ##{j}) while the case has must_not"
+                         "(reads ##{j}, copy #{copy}) while the case has must_not"
                      end
         end
         (r["reads"] || []).each_with_index do |e, j|
@@ -502,7 +502,18 @@ module CheckSkillRouting
     structural = cand[:structural]
 
     if opts["--baseline"]
-      baseline = parse_results(read_file(opts["--baseline"], "baseline"), "baseline")
+      # baseline を読めない・形が違うときも、候補で見つけた破れと要確認は捨てずに報告する (1 > 2 > 3。#720 の review)。
+      # 入力の誤りの行の形 (error: ...) は今までどおり。exit は下で、破れがあれば 1、無ければ 2。
+      baseline = begin
+        parse_results(read_file(opts["--baseline"], "baseline"), "baseline")
+      rescue Error, JSON::ParserError, SystemCallError => e
+        # Error は label (baseline:) を含む。JSON と file の誤りには付ける。
+        warn "error: #{e.is_a?(Error) ? e.message : "baseline: #{e.message}"}"
+        baseline_unreadable = true
+        nil
+      end
+    end
+    if baseline
       base = evaluate(cases, baseline, "baseline")
       puts format_summary(base[:summary])
       structural += base[:structural]
@@ -519,6 +530,10 @@ module CheckSkillRouting
     # 候補と違う copy の読み取りは報告だけ。要確認は、破れと構造エラーが無ければ exit 3 (#720)。
     cand[:notes].each { |n| puts "note: #{n}" }
     cand[:reviews].each { |r| warn "review: #{r}" }
+    if baseline_unreadable
+      breaches.each { |failure| warn "FAIL: #{failure}" }
+      return breaches.empty? ? 2 : 1
+    end
     if breaches.empty? && structural.empty?
       unless cand[:reviews].empty?
         warn "needs review: #{cand[:reviews].length} must_not trace(s) not in observed (not a violation, not verified)"

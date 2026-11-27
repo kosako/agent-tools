@@ -602,6 +602,16 @@ grep -q "case a-primary: primary=hit must_not=review(skill-b)" "$tmp/out" || fai
 write_results "$tmp/rv-base.json" codex model-x baseline "$(run_line_reads a-primary ok '["skill-a"]' "[$ra]")" "$b_ok" "$n_ok"
 run_case "J04: review is reported even with a clean baseline" 3 "review: candidate: case 'a-primary'" \
   -- --cases "$tmp/cases.json" --results "$tmp/rv.json" --baseline "$tmp/rv-base.json"
+# baseline を読めないときも、候補の破れと要確認は捨てずに報告する (1 > 2 > 3。#801 の review の must)
+printf '{ not json' > "$tmp/rv-base-broken.json"
+run_case "broken baseline keeps candidate review (exit 2)" 2 "review: candidate: case 'a-primary' run 1: read must_not skill skill-b" \
+  -- --cases "$tmp/cases.json" --results "$tmp/rv.json" --baseline "$tmp/rv-base-broken.json"
+grep -q "error: baseline:" "$tmp/out" || fail "broken baseline: input error line missing: $(cat "$tmp/out")"
+write_results "$tmp/rv-viol-only.json" codex model-x candidate "$(run_line_reads a-primary ok '["skill-a", "skill-b"]' "[$ra, $rb]")" "$b_ok" "$n_ok"
+run_case "broken baseline keeps candidate violation (exit 1)" 1 "FAIL: candidate: case 'a-primary' triggered must_not skill(s) skill-b" \
+  -- --cases "$tmp/cases.json" --results "$tmp/rv-viol-only.json" --baseline "$tmp/rv-base-broken.json"
+run_case "missing baseline file keeps candidate violation (exit 1)" 1 "FAIL: candidate: case 'a-primary' triggered must_not skill(s) skill-b" \
+  -- --cases "$tmp/cases.json" --results "$tmp/rv-viol-only.json" --baseline "$tmp/no-such-baseline.json"
 # P02・J03: observed にある must_not は今までどおり violation (exit 1)。要確認と同居しても 1 が優先する
 write_results "$tmp/rv-viol.json" codex model-x candidate "$(run_line_reads a-primary ok '["skill-a"]' "[$ra, $rb]")" \
   "$(run_line_reads b-primary ok '["skill-b", "skill-a"]' "[$rb, $ra]")" "$n_ok"
@@ -610,7 +620,7 @@ run_case "J03: violation beats review" 1 "FAIL: candidate: case 'b-primary' trig
 grep -q "review: candidate: case 'a-primary'" "$tmp/out" || fail "J03: review must still be reported: $(cat "$tmp/out")"
 # P15: 名前を決められない SKILL.md の読み取りは、must_not のある case で要確認
 write_results "$tmp/rv-unnamed.json" codex model-x candidate "$(run_line_reads a-primary ok '["skill-a"]' "[$ra, $rn]")" "$b_ok" "$n_ok"
-run_case "P15: unnamed SKILL.md read in a must_not case" 3 "read a SKILL.md whose skill could not be determined (reads #2)" \
+run_case "P15: unnamed SKILL.md read in a must_not case" 3 "read a SKILL.md whose skill could not be determined (reads #2, copy unknown)" \
   -- --cases "$tmp/cases.json" --results "$tmp/rv-unnamed.json"
 # P08: error の run にも要確認の行を出すが、exit は構造エラーの 2
 write_results "$tmp/rv-error.json" codex model-x candidate "$(run_line_reads a-primary error '["skill-a"]' "[$ra, $rb]")" "$b_ok" "$n_ok"

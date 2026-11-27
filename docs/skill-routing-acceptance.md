@@ -199,6 +199,8 @@ scripts/check-skill-routing.sh --cases scripts/lib/skill_routing_cases.json \
   `runs_without_tokens=<数>` を出す (平均の分母は token を持つ run の数)。delta は、両方の結果で全 run が token を
   持つ case だけで合計を取り直し、外した case があればその数を末尾に出す (#302)。
 - exit: `0` = pass、`1` = 破れ / 回帰、`2` = 入力・構造エラー、`3` = 要確認 (#720)。優先は 1 > 2 > 3 > 0 で、
+  候補の結果を読めないときは、その場で exit 2 にする。baseline を読めないときは `error:` の行で出し、候補の破れと
+  要確認は捨てずに報告する (破れがあれば exit 1、無ければ 2)。
   同居したものは全件報告する。exit 3 では、`review:` の行の run の raw log を人が読んで、禁じた skill の手順で動いたかを確かめる。
 
 ## 使い方 (description を変える PR での before / after)

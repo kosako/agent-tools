@@ -358,7 +358,16 @@ copy = ->(name, path) { P.classify_copy(name, path, proj: proj, home: home, tool
 cand_sha = Digest::SHA256.hexdigest("candidate body\n")
 check("C01: 候補を指す絶対 path は candidate", copy.call("skill-a", File.join(cand, "SKILL.md")) == ["candidate", cand_sha])
 check("C02: cwd からの相対の path は candidate", copy.call("skill-a", ".agents/skills/skill-a/SKILL.md") == ["candidate", cand_sha])
-check("C07: .. を含む path も実体で candidate", copy.call("skill-a", ".agents/skills/x/../skill-a/SKILL.md") == ["candidate", cand_sha])
+FileUtils.mkdir_p(File.join(proj, ".agents", "skills", "x"))
+check("C07: .. を含む path も、中間の dir が在れば実体で candidate", copy.call("skill-a", ".agents/skills/x/../skill-a/SKILL.md") == ["candidate", cand_sha])
+# shell と同じく .. は実体の上で解く: 存在しない中間の dir を通る path は解決できない (字面で消さない。#801 の review)
+check("C07: 存在しない中間の dir を通る .. は unknown", copy.call("skill-a", ".agents/skills/nope/../skill-a/SKILL.md") == ["unknown", nil])
+# symlink の dir の後の .. は、link の指す先の親に上がる (字面では候補の置き場に見えても、実体は外)
+File.symlink(File.join(home, "outside"), File.join(proj, ".agents", "skills", "link"))
+FileUtils.mkdir_p(File.join(home, "skill-a"))
+File.write(File.join(home, "skill-a", "SKILL.md"), "physical body\n")
+check("C07: symlink の dir の後の .. は実体の親に上がる (字面の候補にしない)",
+      copy.call("skill-a", ".agents/skills/link/../skill-a/SKILL.md") == ["other", Digest::SHA256.hexdigest("physical body\n")])
 check("C03: home の中身の違う copy は other", copy.call("skill-a", "~/.codex/skills/skill-a/SKILL.md") == ["other", Digest::SHA256.hexdigest("old body\n")])
 check("C05: $HOME と ${HOME} も home で展開する", copy.call("skill-a", "$HOME/.codex/skills/skill-a/SKILL.md").first == "other" &&
       copy.call("skill-a", "${HOME}/.codex/skills/skill-a/SKILL.md").first == "other")

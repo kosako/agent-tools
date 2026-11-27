@@ -97,8 +97,10 @@ module ProbeSkillRouting
     expanded = path.sub(%r{\A(?:~|\$HOME|\$\{HOME\})(?=/)}) { home.to_s }
     return ["unknown", nil] if expanded.start_with?("~", "$") || expanded.match?(/[$`]/) || (home.nil? && expanded != path)
 
+    # File.expand_path は .. を字面で消す (symlink を解く前で、存在しない中間の dir も通す) ので使わない。
+    # 字面の正規化をせずに proj とつなぎ、realpath に .. を実体の上で解かせる (中間の dir が無ければ失敗する)。
     real = begin
-      File.realpath(File.expand_path(expanded, proj))
+      File.realpath(expanded.start_with?("/") ? expanded : File.join(proj, expanded))
     rescue SystemCallError
       nil
     end
