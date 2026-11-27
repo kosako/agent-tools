@@ -9,6 +9,7 @@
 #   P2 起動の後に足した依頼の「次の入口」は、回収で上書きされない。  (同上)
 #   P3 依頼が変わっていても、結果と古い依頼は失われない。            (同上)
 #   P4 依頼が変わっていなければ、今までどおり結果で次の入口を更新し、check は通る。  (人が順序で確認)
+#   P5 session の区切りの記録 (handoff) は worker-update の entry で書き、起動の記録がある間は packet を変えない。  (#782 の設計)
 # 起動のときの依頼の記録が無い run (古い版の起動) は、同じと確かめられないので、変わったときと同じに扱う。
 # 期待値は、当てた操作の履歴だけから作る (model)。実装の判定を呼び直さない。
 # 並べる操作は、packet と run directory を書く手順 (worker-update・collect・check・publish・pull・人の編集・session の区切りの記録) から引く。
@@ -399,14 +400,26 @@ class Explorer
       packet_update("review", "pr" => 17)
       m["state"] = "review"
     when "handoff"
-      # session の区切りの記録 (personal-session-handoff の手順 1.5)。packet を直接書き、結果に追記し、次の入口を上書きする
+      # session の区切りの記録 (personal-session-handoff の手順 1.5)。worker-update の entry で結果に追記し、次の入口を上書きする
+      # (#782)。review の packet には追記だけを渡す。起動の記録がある間は precondition で拒まれ、packet を変えない
+      # (その回の結果は collect が書く)。
       m["handoffs"] += 1
       m["changes"] += 1
       mark, entry = "[res-S#{m['handoffs']}]", "[next-S#{m['handoffs']}]"
-      replace_section("結果", section("結果").sub(/\n+\z/, "\n") + "\n### 2026-01-03 worker/claude\n#{mark}\n\n")
-      replace_section("次の入口", "\n#{entry}\n\n")
-      m["results"] << mark
-      m["next"] = [entry]
+      original = File.binread(PACKET)
+      input = { "schema" => 1, "operation" => "entry", "expected_sha256" => Digest::SHA256.hexdigest(original),
+                "role" => "worker/claude", "entry" => mark }
+      input["next"] = entry unless m["state"] == "review"
+      out, code, = World.packet(%w[worker-update 7 --stdin], JSON.generate(input))
+      running = original.match?(/^run: /)
+      if code.zero?
+        violate("P5", "handoff: 起動の記録がある間に entry が通った") if running
+        m["results"] << mark
+        m["next"] = [entry] if input.key?("next")
+      else
+        violate("P5", "handoff: 起動の記録が無いのに entry が拒まれた (#{out.to_s.strip})") unless running
+        violate("P5", "handoff: 拒まれたのに packet が変わった") unless File.binread(PACKET) == original
+      end
     else raise event
     end
     texts(event, name, before)

@@ -168,7 +168,9 @@ honest-label: 値は読み取り口が最後に更新した時点のもの (例:
 その tool を実行した時点) で、別の machine で同じ account を使った分は、この machine で次に動かすまで
 反映されないことがあります。止める判断の正本は limit 到達の検知 (pane 出力の文言) です。
 
-**記録**: 割当を決めた orchestrator は、packet の `依頼` に担当・残量の扱い・理由を 1 行で残します。残量を
+**記録**: 割当を決めた orchestrator は、packet の `依頼` に担当・残量の扱い・理由を 1 行で残します。packet を起こすときは
+作成と同時に書き、作成の後に割当をやり直したときは `personal-packet worker-update` の `round` で `依頼` に足します (file を
+直接編集しない。#782)。残量を
 読んだなら値・取得時刻・取得元 (どの読み取り口から読んだか)、読まなかったならその理由 (従量課金 / 読み取り口
 なし / 読めない / 値が古い) を書きます。packet は local の file で private な詳細を含んでよく、publish が Issue に写すのは
 `結果` の最新節と `次の入口` だけです。PR の題名と本文 (委譲 worker の PR は orchestrator が packet から書く) にも

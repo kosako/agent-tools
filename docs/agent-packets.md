@@ -8,7 +8,7 @@
 
 | 置き場 | 正本にするもの | 書き方 |
 |---|---|---|
-| packet `.agent-packets/<issue>.md` (local、git 管理しない) | **Issue 単位の作業状態** (依頼 / 結果 / 次の入口)。private な詳細 (path / 判断の生々しい理由 / 残量) を含んでよい | 依頼は上書き、結果は追記、次の入口は現在地 |
+| packet `.agent-packets/<issue>.md` (local、git 管理しない) | **Issue 単位の作業状態** (依頼 / 結果 / 次の入口)。private な詳細 (path / 判断の生々しい理由 / 残量) を含んでよい | 依頼は作成のときに書き後から足すときは追記、結果は追記、次の入口は現在地。誰がどの口で書くか、直接の書き手として残るものは、下の「tooling」の書き方の規則が正本 (#782) |
 | GitHub Issue コメント | packet の **public-safe な写し** (machine 跨ぎの受け渡し用) | publish (下記) で写す。手で編集しない |
 | planning tool (repository 外) | **project 単位**の判断ログとダッシュボード (どの Issue が動いているかの索引まで) | Issue 単位の細かい進捗は書かない |
 
@@ -30,7 +30,7 @@ Codex の sandbox から読める場所に置くため。
 
 | 節 | 書けるのは | 操作 |
 |---|---|---|
-| `## 依頼` | orchestrator のみ | 上書き |
+| `## 依頼` | orchestrator のみ | packet の作成と同時に書く。作成の後に足すときは `worker-update` の `round` で追記 (#782)。既存の文の訂正だけは直接の編集で、窓が残る (下の「tooling」の残る書き手) |
 | `## 結果` | worker (実装) / reviewer (verdict) / orchestrator (委譲した worker の停止記録と、転記の後の回収・trailer 検査・公開する内容の gate の停止 (#412 / #413) だけ。見出しは `orchestrator/claude`)。packet に書けない worker (委譲した Codex) の分は orchestrator が worker の最終 message から転記する (見出しは `worker/codex`) | `### <日付> <役割/agent>` 見出しで区切って追記 |
 | `## 次の入口` | worker (委譲した worker の分は orchestrator が worker の最終 message から写す。worker が止まって最終 message が無いときは orchestrator が続きの入り方を書く。修正 round (review の指摘、または転記の後に受け入れ条件を満たさないと判断したとき。#412) を始めるときは orchestrator が書く。下記) | 現在地に上書き |
 
@@ -106,7 +106,7 @@ tab: "#123"            # worker を動かしている herdr の tab 名。`#` �
 
 ## 依頼
 
-<!-- orchestrator が上書き。受け入れ条件・制約は Issue 本文と同じでも packet に転記する
+<!-- orchestrator が作成のときに書き、後から足すときは round で追記する。受け入れ条件・制約は Issue 本文と同じでも packet に転記する
      (network に届かない worker が packet だけで再開できるように)。Issue 参照は補足 -->
 - Issue: #123 / branch: feat/123-example
 - 受け入れ条件: (Issue 本文のもの、または補足)
@@ -147,7 +147,7 @@ PR #124 の should 1 件を直して re-review を依頼する。
     し直さない。
   - **blocked からの再起動** (#412): 委譲した worker を `blocked` から再起動するときは、`blocked` → `open` と
     遷移させる。戻すのは再起動する orchestrator で、新しい run の起動の記録 (`run` / `tab`) を書くのと**同じ
-    書き込み**で戻す (質問への回答を `依頼` に書くのはその前)。`blocked` のまま新しい run の記録を書くと、その
+    書き込み**で戻す (質問への回答を `round` で `依頼` に足すのはその前)。`blocked` のまま新しい run の記録を書くと、その
     記録が「停止を記録済みの run」に見え、委譲 skill の二重起動の確認と resume の表示が実行中の worker を見落とす。
     逆に記録より先に `open` に戻すと、起動の前に止まった (preflight など) ときに、古い停止の run が「完了・未転記」
     に見える。`state` は写しの対象なので、この書き込みでは `updated` も今の日時にする。記録を書いた後に人手の実行に渡す (`launch-path`) ときや、worker が動いているか確かめられない
@@ -182,8 +182,9 @@ PR #124 の should 1 件を直して re-review を依頼する。
   - 起動の記録ではない (`run_status` は出さず、resume の「起動済み・未回収」にもならない)。`list --json` にだけ
     出し、text の一覧には出さない。写しの対象ではないので、書き込み・削除で `updated` を変えない。pull は
     local の値を保持する。
-- 「依頼は上書き・結果は追記」は書式でなく手順で守る (1 PR = 1 author なので同時書き込みは
-  想定しない)。
+- 「依頼は作成のときに書き、後から足すときは `round` で追記・結果は追記」は、書式でなく手順と `worker-update` の操作で守る。
+  一時 file の印と照合で同時の書き込みを止めるのは、印を使う書き手 (script と、`worker-update` で書く agent) どうしだけ。
+  直接の書き手として残るもの (下の「tooling」の残る書き手で、orchestrator による `依頼` の文の訂正を含む) との窓は残る (#782)。
 - **行頭の `## ` は 3 つの節見出しに予約する** (fenced code や引用の中でも同じ)。それ以外の行頭
   `## ` や重複があると `personal-packet publish` は投稿しない (markdown を解釈せずに節を切るための
   規約。サンプルを書くなら字下げするか見出し記号を変える)。`結果` の追記の見出しは
@@ -301,10 +302,17 @@ file で行い、command 文字列へ inline 展開しない。
   差し替える。一時 file がある間は、ほかの script は書かない。publish は投稿の前と、投稿の後の差し替えの前の 2 回確かめ、
   投稿の後に変わっていたら、差し替えずに投稿済みの URL を示して止まる (再実行しない。一時 file を消し、`published` を
   手で更新する)。
-- この取り決めを使わない書き手 (人や agent の直接の編集。`personal-session-handoff` の packet の更新もこれに当たる) とは、
-  最後に確かめてから rename するまでの間 (system call の 2 つの間) が重なりうる。この間の直接の編集は、差し替えで消える。
-  ふつうの file の操作では、印を見ない書き手を止められないため。直接の編集は、script が動いていない間に行う
-  (すべての書き手を共通の更新口に通す案は #782)。
+- agent の書き手は、既存の packet を `worker-update` の操作で書く (#782。下の残る書き手に挙げた、orchestrator による
+  `依頼` の文の訂正を除く)。`personal-session-handoff` の追記は `entry`、
+  委譲の orchestrator の転記・停止・round・起動の記録・review は、それぞれの操作を使う。`done` も操作で入れる。
+  CLI に拒まれたときは直接の編集に戻らず、書く予定だった内容を会話の中の draft に留める (handoff の手順 1.5)。
+- この取り決めを使わない書き手とは、最後に確かめてから rename するまでの間 (system call の 2 つの間) が重なりうる。
+  この間の直接の編集は、差し替えで消える。ふつうの file の操作では、印を見ない書き手を止められないため。
+  この窓は残る (閉じていない)。残る書き手は次のとおりで、どれも script が動いていない間に行う。
+  - 人の直接の編集。書き手として残すと決めた (人の判断、2026-11-27。#782)。
+  - orchestrator の `依頼` の既存の文の訂正 (足すだけなら `round` を使う)。
+  - 回復の手直し: publish の差し替えに失敗した後の `published` の更新と、一時 file の中身の移し替え。人が行う。
+  - packet の新規の作成 (下の「resume / handoff との関係」)。
 
 self-test は `scripts/tests/packet-test.sh` (dir / list / check / publish) と `scripts/tests/packet-pull-test.sh`
 (pull。上の「写しの取り込み」)。
@@ -442,10 +450,13 @@ stderr にも人向けの診断を 1 行出す。本文の `entry`、`request`�
   herdr が無い / server が止まっていれば packet 一覧だけに縮退する。tab ↔ Issue の対応規約 (worker の tab は
   `#<Issue 番号>`) は [herdr-operations](herdr-operations.md)。
 - `personal-session-handoff`: workspace 単位の索引 file は作らない (packet から導出)。役割は
-  packet の `結果` / `次の入口` を更新 (常時。local で agent 所有なので authorization は要らない。
-  ただし `check` に落ちる packet は書かず、更新の内容を会話の中の draft に留める。置き場の規則) →
+  packet の `結果` / `次の入口` を `worker-update` の `entry` で更新 (常時。local で agent 所有なので authorization は要らない。
+  ただし `check` に落ちる packet と、CLI に拒まれた更新は書かず、更新の内容を会話の中の draft に留める。置き場の規則と #782) →
   publish (write-authorized のとき) → planning tool (write-authorized のとき、project 単位の判断だけ)。
-- 既存の open Issue は packet 化しない。着手する Issue から orchestrator が起こす。
+- 既存の open Issue は packet 化しない。着手する Issue から orchestrator が起こす。新規の作成は `worker-update` を通らない
+  (既存の packet だけを更新する)。pull の新規の作成は link を使い、既にある file を上書きしないが、orchestrator が後から
+  同じ path に直接作ると、pull が取り込んだ内容が消える。作るときは、既にあれば書かない形 (shell の noclobber など) で
+  作る (#782)。`依頼` の初めの記述と割当の記録 (`personal-project-operating-loop` の「記録」) は、作成と同時に書く。
 
 ## worker 委譲との関係(#254)
 

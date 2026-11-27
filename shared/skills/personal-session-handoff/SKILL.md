@@ -85,6 +85,10 @@ read-only、status-only、会話の外への書き込み全体を禁じられた
 
 会話の外への書き込み全体を禁じた no-write (「実行モード」) では、この手順を飛ばし、下の更新の内容を draft に含めます。
 
+packet は配備済みの `personal-packet` の `worker-update` で書き、file を直接編集しません (#782)。`worker-update`・publish・pull は、
+一時 file を印にし、読んだときと同じ byte かを確かめてから差し替えます。直接の編集はこの印を見ないので、script の差し替えと
+重なると、どちらかの書き込みが消えます。
+
 更新の前に、配備済みの `personal-packet` で更新先を検査します:
 
 ```sh
@@ -100,22 +104,52 @@ read-only、status-only、会話の外への書き込み全体を禁じられた
 この session で進めた Issue に packet (`.agent-packets/<issue>.md`。dir は配備済みの
 `personal-packet dir`、規約は agent-tools の `docs/agent-packets.md`) があれば、手順 1 の整理を
 そこへ写します。packet は local で agent 所有なので、この更新に external write の authorization は
-要りません:
+要りません。書く内容は役割で決まります:
 
-- `## 結果` に `### <日付> <役割/agent>` の見出しで **追記** (worker なら到達点 / 判断と理由 /
-  停止理由や質問、reviewer なら verdict)。過去の節は書き換えない。
+- `## 結果` に **追記** する (worker なら到達点 / 判断と理由 / 停止理由や質問、reviewer なら verdict)。
+  過去の節は書き換えない。`entry` の操作の `role` (`worker/claude`・`reviewer/claude` など) が、
+  `### <日付> <役割/agent>` の見出しになる。
 - `## 次の入口` の **上書き** は、この session で自分が **worker** だったときだけ (次に着手する人が
   最初の 1 アクションに迷わない一文 + 前提)。reviewer は `結果` への追記までで、`次の入口` は
-  触らない (worker の再開指示を上書きしない)。
-- frontmatter の `updated` を今の日時にする。`state` を実態に合わせるのも worker (`review` = PR を
-  出して review 待ち / `blocked` = 質問待ち・limit 到達・CI 赤 / `open` = 作業中)。`done` は
-  orchestrator が入れる。`依頼` は worker も reviewer も書き換えない (曖昧なら `結果` に質問を書く)。
+  触らない (worker の再開指示を上書きしない。CLI も reviewer の `next` と `state` を拒む)。
+  packet が既に review なら、worker も `entry` には結果だけを渡し、`次の入口` と `state` は変えない (review の packet への
+  `entry` は `next` と `state` を拒む)。review の後に次の入口を変えるのは、修正 round を始める `round` の操作。
+- `state` を実態に合わせるのも worker (`open` = 作業中 / `blocked` = 質問待ち・limit 到達・CI 赤)。
+  PR を出して review 待ちにしたときは、open のうちに `entry` で結果と次の入口を書いてから、`review` の操作で
+  `pr` と `state: review` を書く。review の packet に渡せるのは結果への追記だけ (`next` と `state` は CLI が拒む)。
+  自分で直す修正 round は `round` の操作で `依頼` に「修正 round N」の項を足す (review から open に戻る)。
+  `updated` は CLI が今の日時にする。`done` は orchestrator が、merge か close の後に `done` の操作で入れる。
+  `依頼` は worker も reviewer も書き換えない (曖昧なら `結果` に質問を書く)。
+- 本文は、CLI に渡す前に `personal-ja-style-check --stdin` に通し、指摘を直すか、そのままにする理由を持つ
+  (保存した節は後から直さないため。手順 3)。
+
+書き方 (入力の形の正本は `docs/agent-packets.md` の「worker-update の入力と保存」):
+
+1. packet の SHA-256 を先に取り (`shasum -a 256`)、その後に packet を読み直して、今の `state` と節を確かめる。
+   読む前に取るので、読んだ後に packet が変われば、CLI が digest の不一致で拒む。
+2. 操作の JSON (`schema`・`operation`・`expected_sha256` と操作の値) を repo の外の一時 file に書き、stdin で渡す。
+   本文を argv や command 文字列に入れない。
+
+   ```sh
+   "$packet_cli" worker-update "$issue" --stdin < "$input"
+   ```
+
+   (`$input` は一時 file の path。shell literal 化した変数で渡す。) stdout の JSON の `ok` が true なら書けている。
+3. 拒まれたとき (exit 0 以外) は、直接の編集に戻らない。
+   - `digest_mismatch`: 1. の順で読み直す。自分の結果がもう `結果` に載っていれば、`entry` をやり直さない (別の session が
+     書いた。CLI は結果の重複を見ないので、やり直すと同じ結果が 2 回残る)。そのとき `次の入口` や `state` が書く予定と
+     違っても書かず、書く予定だった内容を会話の中の draft に留めて 1 行伝える。結果が載っていなければ、1 回だけやり直す。
+   - それ以外 (`stale_temp`・`precondition`・`invalid_input`・`invalid_packet` など) と、やり直しの失敗: 書かずに
+     `reason_code` を 1 行伝え、書く予定だった内容を会話の中の draft に留める。`stale_temp` の一時 file には触れない
+     (前の更新の内容かもしれないので、片付けるのは人)。起動の記録 (`run`) があって `precondition` になったときは、
+     その回の結果を委譲の skill が回収で書く。
+
 - 例外は orchestrator として Codex worker に委譲した session。worker は packet に書けないので、次を
-  orchestrator が書く (正本は `docs/agent-packets.md` の書き手の表・`state` の規則・「worker 委譲との関係」、
-  手順は `personal-codex-worker`):
-  - 完了の転記: worker の最終 message から `結果` (見出しは `worker/codex`) と `次の入口` (最終 message の
-    「次の 1 アクション」) を写し、`run` を `last_run` に移して `tab` を消す (#325)。PR を出したら `pr:` と
-    `state: review` を入れる。
+  orchestrator が書く。どれも `worker-update` の操作で書き、手で書き換えない (正本は `docs/agent-packets.md` の
+  書き手の表・`state` の規則・「worker 委譲との関係」、手順は `personal-codex-worker`):
+  - 完了の転記: `collect` が `result` の操作で、worker の最終 message から `結果` (見出しは `worker/codex`) と
+    `次の入口` (最終 message の「次の 1 アクション」) を写し、`run` を `last_run` に移して `tab` を消す (#325)。
+    PR を出したら `review` の操作で `pr` と `state: review` を入れる。
   - 停止: `collect` 内の stop、または人が決めた破棄の `worker-update stop` が成功すると blocked になる。
     照合・退避・転記の更新前の失敗は元の state と run を保持する。
     更新後の再読込で失敗することもあるため、packet を読み直して済んだ範囲を返す。
@@ -126,11 +160,12 @@ read-only、status-only、会話の外への書き込み全体を禁じられた
     停止区分と理由、人の次の手を返却の Next step に書く。
     停止後の state と回復の正本は `docs/codex-worker-run.md` の表。前提に応じた順を使う。
   - 修正 round: review の指摘を直すとき、または転記の後に受け入れ条件を満たさないと判断したとき (#412) は、
-    `依頼` に「修正 round N」の項を足し、`次の入口` を「修正 round N (`依頼` の該当項) を実装する」に上書き
-    する。review の修正 round では同じ時点で `state` を `open` に戻し、修正を push したら `review` に戻す
-    (#325)。
-  - 起動の記録: 起動の前に `run` / `tab` を書く (`last_run` は同時に消す)。`blocked` からの再起動では、
-    質問があればその回答を `依頼` に書いてから、記録を書くのと同じ書き込みで `state` を `open` に戻す (#412)。
+    `round` の操作で `依頼` に「修正 round N」の項を足し、`次の入口` を「修正 round N (`依頼` の該当項) を実装する」に
+    上書きする。review の修正 round では同じ書き込みで `state` が `open` に戻る。修正を push したら `review` の操作で
+    `review` に戻す (#325)。
+  - 起動の記録: `launch` が `run-start` の操作で、起動の前に `run` / `tab` を書く (`last_run` は同じ書き込みで消える)。
+    `blocked` からの再起動では、質問があればその回答を `round` の操作で `依頼` に足してから、`run-start` の同じ
+    書き込みで `state` を `open` に戻す (#412)。
 - packet が無い Issue は作らない (起こすのは orchestrator の役目)。必要なら「packet を起こすか」を
   次の入口に書く。
 
@@ -175,9 +210,13 @@ write authorization と具体的な記録先の両方が trusted な指示で確
    `--repo` が無く env の `GH_REPO` が空でないときも exit 2 で止まります (投稿先と pull の読み先が別の repo に
    なりうるため。#528)。env を書き換えたり `GH_REPO` の値を `--repo` に写したりせず、`GH_REPO` を外すか、
    publish する repo を `--repo OWNER/REPO` で指定してもらうよう人に伝えます。
-   publish の前に、`personal-packet publish --dry-run <issue>` が出す本文を `personal-ja-style-check --stdin` に通し、
-   指摘があれば手順 1.5 の役割の規則の範囲で直します (worker は自分が書いた最新節と `次の入口`、reviewer は自分の結果の
-   節だけ。過去の節は書き換えない。指摘だけで publish を止めない。#556。運用 instruction の「日本語の文章」)。
+   publish の前に、`personal-packet publish --dry-run <issue>` が出す本文を `personal-ja-style-check --stdin` に通します。
+   保存した節は直しません (手順 1.5 で CLI に渡す前の本文に通してあり、保存した後に直すと直接の編集になるため。#782)。
+   指摘が残っても、それをそのままにする理由とし、publish を止めません (#556。運用 instruction の「日本語の文章」)。
+   手順 1.5 で packet を書けなかったときは、`--dry-run` の本文を今回の handoff と照らします (#782)。`結果` の最新節が今回の
+   結果でなければ、publish しません (古い内容を写すため)。publish しなかったことと理由を報告し、内容は draft に残します。
+   結果は書けて `次の入口` だけを変えなかったとき (packet が既に review) は publish してよく、写しの `次の入口` は packet の
+   ものだと報告に添えます。
 2. **planning ドキュメント** (write-authorized のとき): project 単位の判断ログとダッシュボードだけを
    更新します。Issue 単位の細かい進捗は packet と Issue コメントに任せ、二重に書きません。書き込む本文も、
    記録の前に `personal-ja-style-check --stdin` に通し、指摘を直すか、そのままにする理由を持ちます。
@@ -228,9 +267,11 @@ agent はこのファイルを **書き換えません (read-only)**。代わり
 ### 5. 次回の入口を一文で示す
 
 最後に「次回はここから」を、記録済み handoff または会話内 draft に一文で残し、ユーザーにも
-提示します。packet がある Issue で自分が worker なら、その `## 次の入口` と同じ一文にします
-(再開する人は resume が出す packet 一覧から入る)。再開する人が最初の 1 アクションに迷わない状態に
-して終わります。
+提示します。packet がある Issue で自分が worker なら、手順 1.5 で書いた `## 次の入口` と同じ一文にします
+(再開する人は resume が出す packet 一覧から入る)。手順 1.5 で `次の入口` を書けなかったとき (packet が既に review、
+または CLI に拒まれて draft に留めた) は、書けなかったことを一文に添えて伝えます。packet の `次の入口` がこの一文と
+違うと確かめられたときだけ、違うことも伝えます (同じこともあり、拒まれたときは確かめられないこともある)。
+再開する人が最初の 1 アクションに迷わない状態にして終わります。
 
 ## やってはいけないこと
 
