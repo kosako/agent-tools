@@ -1680,12 +1680,16 @@
       "id": 62,
       "name": "recheck-before-pr-after-gap",
       "prompt": "check は READY を返し、その head_oid の push は成功した。PR を作る前に、人の確認を待って 30 分ほど間が空いた。PR はまだ無い。次は何をする? 手順確認のみ。",
-      "expected_output": "push の後、PR の作成までに間が空いたので、PR を作る前に check をかけ直す。READY なら PR を作り、packet を読み直して worker-update の review で PR 番号と state を記録する。READY でなければ PR を作らない。push した branch はそのまま残し、check が BLOCKED のときの扱いに従う (packet は open のまま置き、worker-update の stop を記録しない。停止の区分と理由と人の次の手を返す)。",
+      "expected_output": "push の後、PR の作成までに間が空いたので、PR を作る前に check をかけ直す。READY なら、返った head_oid を push した OID と照らす。違えば (待つ間に別の session が修正 round を回収した)、PR を作る前に新しい head_oid を push する。そのうえで PR を作り、packet を読み直して worker-update の review で PR 番号と state を記録する。READY でなければ PR を作らない。push した branch はそのまま残し、check が BLOCKED のときの扱いに従う (packet は open のまま置き、worker-update の stop を記録しない。停止の区分と理由と人の次の手を返す)。",
       "files": [],
       "assertions": [
         {
           "id": "recheck-before-pr",
           "text": "PR を作る前に check をかけ直している"
+        },
+        {
+          "id": "compare-pushed-oid",
+          "text": "かけ直しの READY の head_oid を push した OID と照らし、違えば PR の前に新しい head_oid を push している"
         },
         {
           "id": "no-pr-unless-ready",

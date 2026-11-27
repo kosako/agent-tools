@@ -415,7 +415,8 @@ herdr から ID が返ったら、一時 file と rename で更新します。
     push の間に依頼を足せるのは別の session か人だけで、人の直接の編集はどの形でも止められません。
   - 代わりに手順で窓を短くします。`READY` を受けたら、間に別の作業を挟まずに push します。`READY` の後に人の確認を
     待った、別の作業をした、など間が空いたときは、push の前と PR の作成の前に `check` をかけ直し、`READY` でなければ
-    先へ進みません (委譲の skill の §7 と `LAUNCH.md` §9)。
+    先へ進みません。push の後のかけ直しで `READY` の `head_oid` が push した OID と違えば、PR の前に新しい OID を push します
+    (委譲の skill の §7 と `LAUNCH.md` §9)。
 
 ## collect の入力と出力
 

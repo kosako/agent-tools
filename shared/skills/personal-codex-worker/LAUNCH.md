@@ -175,6 +175,7 @@ exit 3 は指摘を読んで直すか、理由を持って `--style-reviewed` �
 以下は `check` が exit 0 で `READY` を返した後だけ行う。
 `READY` の後は、間に別の作業を挟まずに push し、push が成功したら続けて PR を作る。
 `READY` の後、push の前か PR の作成の前に間が空いたときは、その前に `check` をかけ直し、`READY` でなければ先へ進まない (#782)。
+push の後のかけ直しで、`READY` の `head_oid` が push した OID と違うときは、PR を作る前に新しい `head_oid` を push する。
 JSON の `head_oid`、`branch`、`slug` をそれぞれ変数に読み、検査した OID を指定する。
 題名や本文を直したら `personal-post-check` からやり直す。
 

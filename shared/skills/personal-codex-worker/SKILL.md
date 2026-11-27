@@ -265,6 +265,8 @@ push が失敗したら PR を作らない。修正 round は既存 PR を使う
 PR を作る前に止まった後の修正 round では、PR がまだ無いので、`READY` の後に push してから PR を作る。
 push の後、PR の作成までに間が空いたときも、PR を作る前に `check` をかけ直す。`READY` でなければ PR を作らない
 (push した branch はそのまま残し、下の BLOCKED の扱いに従う)。
+かけ直しの `READY` の `head_oid` が push した OID と違うときは、PR を作る前に新しい `head_oid` を push する
+(待つ間に別の session が修正 round を回収すると、公開した branch が古い OID のままになるため)。
 PR 作成後は `personal-packet worker-update <issue> --stdin` の `review` 操作で packet を書く。
 その前に packet を読み直し、`expected_sha256` と PR 番号を渡す。state は `review` にする。
 修正 round の push 後も同じ操作を行う。既に PR 番号と state が一致する場合は保持する。
