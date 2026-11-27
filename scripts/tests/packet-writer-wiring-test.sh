@@ -6,7 +6,9 @@
 # - handoff の手順 1.5 に、worker-update で書き file を直接編集しない文、digest を先に取ってから読む文、PR を出した worker の
 #   順 (open のうちに entry、続けて review)、拒まれたときに直接の編集に戻らない文、digest_mismatch のやり直しの条件 (結果が
 #   載っていればやり直さず、次の入口が違っても draft に留める) の文、stale_temp の一時 file に触れない項目、委譲の例外も操作で書く文がある。frontmatter の updated を手で書く古い指示が無い。
-# - handoff の手順 5 に、次の入口を書けなかったとき (review の packet、拒まれた) は packet の次の入口と違うと添える文がある。
+# - handoff の手順 5 に、次の入口を書けなかったとき (review の packet、拒まれた) は書けなかったことを添え、違いは確かめられた
+#   ときだけ伝える文がある。手順 3 に、手順 1.5 で書けなかったときは dry-run を照らし、最新節が今回の結果でなければ publish
+#   しない文がある。
 # - docs/agent-packets.md の「## tooling(`personal-packet`)」に、残る直接の書き手を名指しして窓が残ると書いた項目がある。
 # - operating-loop の割当の記録に、作成の後は round で足し、直接編集しない文がある。
 # 引数で repo root を差し替えられる (変異での確認用)。
@@ -87,8 +89,14 @@ terms.call("agent-packets の書式の節の窓の文", one.call(packets, "## �
 terms.call("手順 1.5 の review の packet の文", one.call(handoff, step, :sentences, "packet が既に review なら"),
            ["結果だけを渡し", "`次の入口` と `state` は変えない"])
 # 手順 5: 次の入口を書けなかったときは、packet の次の入口と違うことを添える (round 5 の指摘)。
-terms.call("手順 5 の書けなかったときの文", one.call(handoff, "### 5. 次回の入口を一文で示す", :sentences, "書けなかったとき"),
-           ["既に review", "拒まれて", "違うことを"])
+step5 = "### 5. 次回の入口を一文で示す"
+terms.call("手順 5 の書けなかったときの文", one.call(handoff, step5, :sentences, "書けなかったとき"),
+           ["既に review", "拒まれて", "書けなかったことを"])
+terms.call("手順 5 の違いを伝える文", one.call(handoff, step5, :sentences, "違うと確かめられたときだけ"), ["違うことも伝えます"])
+# 手順 3: 手順 1.5 で書けなかったときは、dry-run を今回の handoff と照らし、最新節が今回の結果でなければ publish しない。
+step3 = "### 3. 記録する"
+terms.call("手順 3 の照らす文", one.call(handoff, step3, :sentences, "packet を書けなかったときは"), ["`--dry-run`", "照らします"])
+terms.call("手順 3 の publish しない文", one.call(handoff, step3, :sentences, "今回の結果でなければ"), ["publish しません"])
 
 loop_doc = "shared/workflows/personal-project-operating-loop.md"
 loop_text = read.call(loop_doc)
