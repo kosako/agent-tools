@@ -145,29 +145,31 @@ hard なのは **床** (credential 隔離 + egress)。reader を使えば hard�
 - 過去の probe が合格したこと (probe が確かめるのは、probe 自身の隔離した invocation だけ)。
 - safe-reader や safe-gh を使ったこと (safe-gh は手元の `gh` を、その認証のまま起動する)。
 
-確かめた日は 2026-11-27、版は Claude Code 2.1.332、codex-cli 0.171.0、herdr 0.9.5 です。根拠は、この repo の code と
-docs、dotfiles の docs の読み取りで、この節のために実測はしていません。実測の記録があるのは、隔離した reader の probe
-([credential-isolation-acceptance](credential-isolation-acceptance.md)) と、worker の書き込みの範囲
-([codex-worker-run](codex-worker-run.md)) で、どちらも測った時の版のものです。分からない所は `未確認` と書きます。
-秘密の値と、user の設定の値は写しません。
+確かめた日は 2026-11-27 で、そのときの版は Claude Code 2.1.332、codex-cli 0.171.0、herdr 0.9.5 です。表のセルは、
+code・docs・設定から読んだ作り (どう起動されるか) で、効いていることの確認ではありません。実測の記録があるセルは、
+根拠の列に、測ったときの版を書きます。分からない所は `未確認` と書きます。秘密の値と、user の設定の値は写しません。
 
-| 起動の形 | 認証の出所 | 読み書きの範囲 | network | MCP と apps | hook の実効 |
-| --- | --- | --- | --- | --- | --- |
-| 対話の Claude Code | Claude の login。Bash は user の環境を引き継ぎ、`gh` の認証も使える | dotfiles の managed な `settings.json` の permission (allow・ask・deny) で決まる。personal の profile は `enforceAiSandbox` が false で、Bash は OS の sandbox の外 | Bash は制限なし。`WebFetch` は permission で決まる | user と plugin の MCP (machine ごと)。`mcp__github` は deny (`gateGitHubMcp`) | dotfiles が `settings.json` に登録し、body は agent-tools が配る。steering で fail-open。body が無ければ no-op |
-| 対話の Codex | Codex の login (`CODEX_HOME` の `auth.json`)。shell は user の環境を引き継ぐ | user の設定 (`config.toml` の `sandbox_mode` と `approval_policy`、起動の flag) で決まる。dotfiles は管理しない | 同じく user の設定で決まる | `config.toml` の MCP と、account の connector (apps) | dotfiles が `~/.codex/hooks.json` に登録する。`/hooks` で trust するまで動かない |
-| 委譲した worker (`personal-codex-worker-run`) | 同じ `auth.json`。shell は herdr の pane の shell の環境を引き継ぎ、credential を外さない | `workspace-write`。worker の clone と、`--add-dir` で開けた clone の git dir、一時 dir に書ける。読み取りは隔離しない | `workspace-write` の既定 (network なし)。worker の規約も network を禁じる | `--ignore-user-config` で `config.toml` の MCP を読まない。`--disable` で apps・computer use・browser use を外す | `hooks.json` が読まれるかは `未確認`。git の hook は、main と同じ配線であることを preflight が求める |
-| review・監査の executor (`personal-codex-launch`) | worker と同じ | `read-only`。書けない。読み取りは隔離しない | read-only の sandbox の既定 (network なし) | worker と同じ flag | `未確認` |
-| Claude の reviewer (Codex 著の PR) | 対話の Claude Code と同じ (subagent か `claude -p`) | 対話の Claude Code と同じ | 同じ | 同じ | 同じ。subagent の tool call にも hook は発火する (公式の仕様の確認、上の節) |
-| 隔離した reader (credential 隔離の probe) | `env -i` の allowlist、空の HOME、repo の外の cwd | 決まった probe の command だけを走らせる (file system の制限ではない) | 制限しない。認証なしで届くことも確かめる (reachability control) | 射程の外。MCP・connector・keychain の直読みは塞がない | 対象の外 |
+| 起動の形 | 認証の出所 | 読み書きの範囲 | network | MCP と apps | hook の実効 | 根拠 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 対話の Claude Code | Claude の login。Bash は user の環境を引き継ぎ、`gh` の認証も使える | dotfiles の managed な `settings.json` の permission (allow・ask・deny) で決まる。personal の profile は `enforceAiSandbox` が false で、Bash は OS の sandbox の外 | Bash は制限なし。`WebFetch` は permission で決まる | user と plugin の MCP (machine ごと)。`mcp__github` は deny (`gateGitHubMcp`) | dotfiles が `settings.json` に登録し、body は agent-tools が配る。steering で fail-open。body が無ければ no-op | dotfiles の docs と profile の読み取り。実測なし |
+| 対話の Codex | Codex の login (`CODEX_HOME` の `auth.json`) か、user の設定で選んだ provider の認証。shell は user の環境を引き継ぐ | user の設定 (`config.toml` の `sandbox_mode` と `approval_policy`、起動の flag) で決まる。dotfiles は管理しない | 同じく user の設定で決まる | `config.toml` の MCP と、account の connector (apps) | dotfiles が `~/.codex/hooks.json` に登録する。`/hooks` で trust するまで動かない | dotfiles の docs の読み取り。実測なし |
+| 委譲した worker (`personal-codex-worker-run`) | Codex の login か、user の設定で選んだ provider の認証 (amazon-bedrock なら AWS の profile と region を引き継ぐ。#543)。shell は herdr の pane の shell の環境を引き継ぎ、credential を外さない | `workspace-write`。worker の clone と、`--add-dir` で開けた clone の git dir、一時 dir に書ける作り。読み取りは隔離しない | `workspace-write` の既定 (network なし) の作り。worker の規約も network を禁じる | `--ignore-user-config` で `config.toml` の MCP を読まない。`--disable` で apps・computer use・browser use を外す | `hooks.json` が読まれるかは `未確認`。git の hook は、main と同じ配線であることを preflight が求める | launch の argv の code の読み取り。MCP と apps を外せることの実測は codex 0.154.0、書き込みの範囲の実測は codex 0.156.0 ([codex-worker-run](codex-worker-run.md))。どちらも 0.171.0 では `未確認` |
+| review・監査の executor (`personal-codex-launch`) | worker と同じ (provider の認証も同じく引き継ぐ) | `read-only`。書けない作り。読み取りは隔離しない | read-only の sandbox の既定 (network なし) の作り | worker と同じ flag | `未確認` | code の読み取り。実測なし |
+| Claude の reviewer (Claude Code の session 自身が review する) | 対話の Claude Code と同じ | 同じ | 同じ | 同じ | 同じ。subagent の tool call にも hook は発火する (公式の仕様の確認、上の節) | 対話の Claude Code の行と同じ |
+| `claude -p` の reviewer (Codex の session から起動する) | Claude の login。起動した session の環境を引き継ぐ | git の読み取りと file の読み取りだけを許す tool の allowlist で起動する。allowlist の外が拒まれることを確かめてから走らせる手順。既にある permission と MCP の tool も確かめる | allowlist に network の tool を入れない手順 | allowlist の外 | `settings.json` の登録が読まれるかは `未確認` | `personal-review-request` の手順の読み取り。実測なし |
+| 隔離した reader (`personal-github-safe-reader`) | 呼んだ session と同じ。credential を外して起動する形は無い | 呼んだ session と同じ | 同じ | 同じ | 同じ | skill の読み取り。reader の前提 (secret と write token の無い session) を満たす起動の形は、今は無い |
+| credential 隔離の probe (`scripts/probe-credential-isolation.sh`) | `env -i` の allowlist、空の HOME、repo の外の cwd。その中で検査の command (`gh`・`git` など) を走らせる | 決まった検査の command だけ (file system の制限ではない) | 制限しない。認証なしで届くことも確かめる (reachability control) | 射程の外。MCP・connector・keychain の直読みは塞がない | 対象の外 | 実機の記録は [credential-isolation-acceptance](credential-isolation-acceptance.md)。probe は agent も reader も起動しない |
 
 注:
 
-- credential を外すのは、表の最後の行の probe だけです。ほかの形は、どれも user の credential の file を読めます。
-  worker と executor は network が無い既定の sandbox で動くので、その credential で GitHub に届かない作りです
-  (この節では実測していない)。
+- credential を外して走るのは、最後の行の probe の検査の command だけです。agent と reader を credential なしで起動する
+  形は、今はありません。ほかの形は、どれも user の credential の file を読めます。worker と executor は network の無い
+  既定の sandbox で動く作りなので、その credential で GitHub に届かない作りです (今の版では実測していない)。
 - hook は、登録があることを効いている根拠にしません。Codex の hook は `/hooks` で trust するまで skip され、body が無い
   hook は no-op です。登録と body の有無は dotfiles の doctor が報告します。
-- client を更新したら、表の版と今の版を比べます。違えば、その行は `未確認` に戻ったものとして読みます。
+- client を更新したら、根拠の列の版 (書いていないセルは冒頭の版) と今の版を比べます。違えば、そのセルは `未確認` に
+  戻ったものとして読みます。実測の版が今の版より古いセル (worker の MCP と apps、書き込みの範囲) は、今も `未確認`
+  です。
 - 機密や untrusted を扱う専用の形が要るようになったら、その形だけを、前提を機械で確かめる launcher にします
   (今は作らない)。
 
