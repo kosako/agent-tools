@@ -31,7 +31,8 @@ module SkillBehaviorClassifier
   # 10 で、echo の 1 つの引数の終わりの $? を足した (#767)。
   # 11 で、引用した構文の語と、前に付く command の後の構文の語を、構文として読まない (#773)。
   # 12 で、受ける形の for の loop を足した (#767)。
-  VERSION = 12
+  # 13 で、inline の Ruby の receiver の無い呼び出しに abort を足した (#792)。
+  VERSION = 13
 
   CLAUDE_READ_TOOLS = %w[Read Glob Grep LS Skill NotebookRead].freeze
   CLAUDE_WRITE_TOOLS = %w[Edit Write NotebookEdit MultiEdit].freeze
@@ -1057,7 +1058,7 @@ module SkillBehaviorClassifier
   # どちらも名前と path の形で照らす近似で、cd の後の読み込み先や、run の途中の file の変更は追わない。
   RUBY_INLINE_VALUE_OPTIONS = %w[-e -I -r].freeze
   RUBY_INLINE_FLAGS = %w[-w].freeze
-  RUBY_INLINE_FUNCTIONS = %w[p pp puts print raise].freeze
+  RUBY_INLINE_FUNCTIONS = %w[p pp puts print raise abort].freeze
   # receiver のある呼び出しで許す method。名前で別の method を呼ぶ形 (send・public_send・__send__・method・inject・reduce)、
   # code を評価する形 (instance_eval など)、IO・process・file に触れる形は入れない。
   RUBY_INLINE_METHODS = %w[

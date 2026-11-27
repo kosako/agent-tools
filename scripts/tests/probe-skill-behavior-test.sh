@@ -1213,6 +1213,31 @@ ruby_inline = [
   ["ruby -e", [], "unknown"],
   ["#{inline.('p 1')} arg", [], "unknown"],
   ["#{inline.('p 1')} -- x", [], "unknown"],
+  # abort (#792)。行の ID は #792 の期待値の表。receiver の無い abort は、ほかの許す呼び出しと同じ規則で読む
+  [inline.('abort "x" unless median([]).nil?; abort "x" unless median([4, 1, 3, 2]) == 2.5; puts "ok"', "-Ilib -rmedian "), fx, "exec"], # A01
+  [inline.("abort"), [], "exec"], [inline.("abort()"), [], "exec"], [inline.('abort "x"'), [], "exec"], # A02-A04
+  [inline.('abort("x")'), [], "exec"], [inline.('abort "x" unless true'), [], "exec"], # A05-A06
+  [inline.('abort("x") if true'), [], "exec"], [inline.('abort "x" rescue nil'), [], "exec"], # A07-A08
+  [inline.('true ? abort("x") : 1'), [], "exec"], [inline.('p "#{abort("x")}"'), [], "exec"], # A09-A10
+  [inline.('p(abort("x"))'), [], "exec"], [inline.('abort("x") { puts "y" }'), [], "exec"], # A11-A12
+  [inline.("abort 1, 2"), [], "exec"], [inline.('abort "x"', "-r ./lib/median "), fx, "exec"], # A13-A14
+  [inline.("abort = 1; abort"), [], "exec"], [inline.('abort = 1; abort("x")'), [], "exec"], # 名前の衝突
+  # -r ./… の file が abort を上書きしても、区分は構文の近似のまま (U13。p・puts・raise と同じ限界)
+  [inline.('abort "x"', "-r ./lib/overrides "), [], "exec"],
+  # 表の外の形と似た名前は unknown のまま (U01-U12)。block だけの abort は raise と同じく木の形が表の外
+  [inline.("abort `printf x`"), [], "unknown"], [inline.('abort(system("x"))'), [], "unknown"],
+  [inline.('abort(File.write("x", "y"))'), [], "unknown"], [inline.('abort "x"; system("y")'), [], "unknown"],
+  [inline.("exit"), [], "unknown"], [inline.("exit!"), [], "unknown"], [inline.('at_exit { puts "x" }'), [], "unknown"],
+  # 引数の欄が空の呼び出し (bare の exit!・block だけの at_exit) は、名前によらず木の形で unknown。名前の表を見る形も置く
+  [inline.("exit!(1)"), [], "unknown"], [inline.("at_exit"), [], "unknown"], [inline.('at_exit() { puts "x" }'), [], "unknown"],
+  [inline.('Kernel.abort("x")'), [], "unknown"], [inline.('Process.abort("x")'), [], "unknown"],
+  [inline.('x.abort("x")'), [], "unknown"], [inline.('x = 1; x.abort("x")'), [], "unknown"],
+  [inline.('abort "x"', "-Ilib -rmedian "), [], "unknown"],
+  [inline.('abort "x"', "-rjson "), [], "unknown"], [inline.('abort { puts "y" }'), [], "unknown"],
+  # 同じ表を使うほかの道は変わらない (N01-N05)
+  ["#{inline.('abort "x"')} 2> out.txt", [], "file-write"], ["ruby -pi -e #{sq}abort \"x\"#{sq} lib/median.rb", [], "file-write"],
+  ["#{inline.('abort "x"')} arg", [], "unknown"], ["ruby -n -e #{sq}abort \"x\"#{sq}", [], "unknown"],
+  ["ruby -p -e #{sq}abort \"x\"#{sq}", [], "unknown"],
   # in-place の編集と redirect は今の規則のまま
   ["ruby -i -e #{sq}p 1#{sq} lib/median.rb", [], "file-write"],
   ["ruby -pi -e #{sq}p 1#{sq} lib/median.rb", [], "file-write"],
@@ -1270,7 +1295,7 @@ check("fixture を渡さない classify_claude の Bash は fixture の関数を
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-r ./lib/median ") }) == "unknown")
 check("classify_claude の Bash は fixture を分類器に渡す",
       P.classify_claude("Bash", { "command" => inline.("p median([1])", "-Ilib -rmedian ") }, fixture: fx) == "exec")
-check("分類器の版は 12 (#767)", P::VERSION == 12)
+check("分類器の版は 13 (#792)", P::VERSION == 13)
 observed745 = "ruby -e 'require \"./lib/median\"; p median([3,1,2]), median([4,1,3,2])'"
 check("claude の Bash の、code の中の require の観測した形は fixture を渡せば exec (#745)",
       P.classify_claude("Bash", { "command" => observed745 }, fixture: fx) == "exec" &&
@@ -1932,7 +1957,7 @@ unset FAKE_WRITE
   '["auto_memory","cases_digest","classifier_version","conditions","effort","fixture_digests","host_version","init_model","max_turns","permission_mode","repeat","requested_model","runner_version","source_digest","timeout","tool_surface"]' ] \
   || fail "claude ids keys: $(json_get "$res" 'd["ids"].keys.sort')"
 [ "$(json_get "$res" 'd["ids"].values_at("host_version", "init_model", "requested_model", "permission_mode", "max_turns", "repeat", "classifier_version")')" = \
-  '["9.9.9","m-fake","default","acceptEdits",12,2,12]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
+  '["9.9.9","m-fake","default","acceptEdits",12,2,13]' ] || fail "claude ids values: $(json_get "$res" 'd["ids"]')"
 [ "$(json_get "$res" 'd["ids"]["tool_surface"]')" = \
   '{"requested":["Read","Glob","Grep","Edit","Write","NotebookEdit","Bash","Skill"],"init":"Bash,Edit,Glob,Grep,NotebookEdit,Read,Skill,Write"}' ] \
   || fail "claude tool surface: $(json_get "$res" 'd["ids"]["tool_surface"]')"
@@ -2375,7 +2400,7 @@ run_fake codex "$inline_events" --model m-x --only investigate-diagnose-only --c
 [ "$rc" -eq 0 ] || fail "codex probe with inline Ruby should exit 0 (rc=$rc): $out"
 [ "$(json_get "$res" 'd["runs"][0]["calls"].map { |c| c["class"] }')" = '["exec","unknown","exec","unknown"]' ] \
   || fail "the probe should pass the fixture functions and files to the classifier (#737・#742): $(json_get "$res" 'd["runs"][0]["calls"]')"
-[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '12' ] || fail "codex ids should record classifier version 12"
+[ "$(json_get "$res" 'd["ids"]["classifier_version"]')" = '13' ] || fail "codex ids should record classifier version 13"
 
 # prepare_run は、case の検査を経ない呼び出しでも、fixture と skill の dir の symlink を copy の前に拒む
 ruby -r"$script_dir/lib/check_helper" - "$src" "$tmp/prep" "$fixture" <<'RUBY'
