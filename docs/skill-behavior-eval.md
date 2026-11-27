@@ -232,7 +232,10 @@ command の名前になる語の brace (`{cat,rm} x`・`xargs {cat,rm}`・`find 
   - 許す形: 数・文字列・symbol・配列・hash・範囲の literal、`nil`・`true`・`false`、local の変数と代入、block (引数は
     名前と `(a, b)` の組だけ)、`if`・`unless`・三項の演算子・修飾子の分岐、決まった演算子。receiver のある呼び出しは
     決まった method (`sort`・`length`・`each`・`map` など) だけで、`&:名前` は名前が表にあるときだけです。receiver の
-    無い呼び出しは、`p`・`pp`・`puts`・`print`・`raise` と、fixture の関数だけです。
+    無い呼び出しは、`p`・`pp`・`puts`・`print`・`raise`・`abort` と、fixture の関数だけです (`abort` は #792)。
+    引数の数と block は、どの名前も同じ規則で読みます。`abort` も、引数を標準エラーに出して終わるだけで、書き込みも
+    program の起動もしません。名前は語の形で照らすので、`-r` で読んだ file が同じ名前の関数を定義していれば、その定義が
+    呼ばれます (区分には出ない。`exit`・`exit!`・`at_exit` は表に無いので `unknown`)。
   - code の中の `require` は、receiver の無い `require` (括弧の有無を問わない) に、展開の無い文字列の literal が 1 つだけ
     付き、その中身が下の `-r` の相対 path と同じ規則 (`./` で始まり、`..` を含まない) を満たす形だけを許します (#745)。
     中身に `\` があれば受けません (構文の木は escape を外す前の字なので、`\x2e` の `.` を見落とさないため)。
