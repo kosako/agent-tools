@@ -510,8 +510,8 @@ end
   check("#{env.inspect} -R: no repo view", calls.none? { |c| c["argv"].first == "repo" })
   check("#{env.inspect} -R: envelope host", JSON.parse(out)["host"] == "github.com")
 end
-# -R なしで GH_REPO があるとき (#799 の review): gh は GH_REPO の宛先を選ぶので、GH_REPO を子 process にそのまま渡し、
-# その宛先の url を確かめる。github.com の url なら読み、別 host の url なら読まない
+# -R なしで GH_REPO があるとき (#799 の review): GH_REPO は子 process にそのまま渡し、gh が返した url を確かめる。
+# github.com の url なら読み、別 host の url なら読まない (gh がどの repo を選ぶかは、fake では見ない)
 ["github.com/o/r", "o/r"].each do |gh_repo|
   rc, _out, calls = run(["issue", "view", "7"], "GH_REPO" => gh_repo, "FAKE_REPO_JSON" => gh_url)
   view = calls.find { |c| c["argv"].first == "repo" }

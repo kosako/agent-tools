@@ -244,8 +244,9 @@ boundary でない)。
     `HOST/OWNER/REPO` の形は、host が github.com のときだけ受ける。それ以外は、gh を一度も呼ばずに exit 2。
   - API の固定: `gh api` は `--hostname github.com` を付け、子 process の `GH_HOST` も `github.com` にして呼ぶ。
   - repo の解決: `-R` が無いときは、`GH_HOST` を外して `gh repo view --json nameWithOwner,url` を呼び、gh が
-    選んだ repo の `url` を確かめる。gh が選ぶのは、`GH_REPO` があればその repo、無ければ remote から選んだ repo で、
-    確かめるのはその宛先 (`GH_REPO` と別 host の remote が共存するときは `GH_REPO` の宛先)。https、host が `github.com`、port なし、path が
+    返した repo の `url` を確かめる。どの repo を返すか (remote から選ぶか、`GH_REPO` を見るか) は gh が決め、
+    safe-gh はその規則に頼らず、返った宛先だけを確かめる (`GH_REPO` を見ないことは gh 2.102.0 で実測した。
+    [agent-packets](agent-packets.md) の pull の項)。https、host が `github.com`、port なし、path が
     `nameWithOwner` と同じ (大文字小文字は問わない) ときだけ読む。確かめられなければ exit 2。repo view に
     `GH_HOST` を渡すと、別 host の remote の代わりに同じ名前の github.com の repo を選びうるため。
   - trust file は github.com の login / id だけを置く前提で読む。中身に host は無く、機械では確かめない。
