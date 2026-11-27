@@ -32,7 +32,9 @@
 #   - 1 = 観測された破れ (must_not violation / baseline からの回帰)。probe の結果そのものが赤。
 #   - 2 = 入力・構造エラー (JSON 不正 / スキーマ違反 / coverage 欠落 / error run / 観測の全損 / 比較条件不一致)。
 #     破れの証拠ではない。破れと同居するときは 1 を優先し、全 failure を報告する。
-#   - 0 は完全 coverage かつ violation 0 (比較時は回帰なし) のときだけ。
+#   - 3 = 要確認 (#720)。must_not の skill を読んだ痕跡 (reads) が observed に無い run、または must_not のある case で
+#     名前を決められない SKILL.md の読み取りがある run。違反でも、禁じた動作が無かった証明でもない。1 と 2 が優先する。
+#   - 0 は完全 coverage かつ violation 0 (比較時は回帰なし) で、要確認も無いときだけ。
 #
 # 信頼境界 (honest): judge は runner が付けた observed / token を信頼する。observed が実際の
 # Skill 起動を正しく写しているかは runner の責務 (実機ログが証跡)。judge が縛れるのは coverage・
@@ -74,6 +76,8 @@ module CheckSkillRouting
       completion: exited / max-turns / observed-stop (status ok) か timeout / failed (status error)。
       observed-stop の run だけ token を null にできる (集計から外し、外した数を出す)。schema_version 1 も読む
       (completion なし、token は整数)。
+      reads (任意。#720): 読み取りの痕跡の全部 [{"skill", "path", "via", "copy", "sha256"}, ...]。在れば observed の名前を
+      全部含むこと。
 
     判定: 全 case に ok な run があること (coverage)。primary skill の hit と must_not skill の
     violation を数え、token を合算して報告する (prompt_tokens = run 全体、first_prompt_tokens =
@@ -81,12 +85,14 @@ module CheckSkillRouting
     (tool / model / case 集合 / run 数 / auto_memory) の結果と case ごとに比較する。baseline で半分以上の run が primary に
     当たっていた case が、候補で一度も当たらなければ回帰。それより小さい減少は warn: の行で出し、exit に
     響かない (合計は比べない)。must_not は baseline によらず、候補で 1 回でも出れば破れ。token は gate に
-    せず delta を報告するだけ。
+    せず delta を報告するだけ。reads があれば、must_not の痕跡が observed に無い run (と、must_not のある case の
+    名前を決められない SKILL.md の読み取り) を review: の行で出し、候補と違う copy の読み取りを note: の行で出す (#720)。
 
-    exit: 0 = pass (violation 0、比較時は回帰なし),
+    exit: 0 = pass (violation 0、比較時は回帰なし、要確認なし),
           1 = breach observed (must_not violation / regression against baseline),
           2 = usage / input / structural error (invalid JSON, schema violation, coverage gap,
-              error run, every observed empty although primary cases exist, comparison condition mismatch)
+              error run, every observed empty although primary cases exist, comparison condition mismatch),
+          3 = needs review (a must_not trace in reads is not in observed; neither a violation nor verified)
   TEXT
 
   # --- 入力の検証 ---------------------------------------------------------------
@@ -189,6 +195,43 @@ module CheckSkillRouting
     if r.key?("first_prompt_tokens") && !(r["first_prompt_tokens"].is_a?(Integer) && r["first_prompt_tokens"] >= 0)
       raise Error, "#{label}: runs[#{index}].first_prompt_tokens must be a non-negative integer when present"
     end
+    validate_reads!(r, index, label) if r.key?("reads")
+  end
+
+  # reads (#720): 読み取りの痕跡の全部。任意 (無い古い結果は observed で判定する)。在れば形を確かめ、observed の名前が
+  # reads の名前 (nil でないもの) に全部含まれることを求める (observed は reads を圧縮した推定なので)。
+  READ_KEYS = %w[skill path via copy sha256].freeze
+  READ_VIAS = %w[skill read command].freeze
+  READ_COPIES = %w[candidate same-content other unknown listing].freeze
+
+  def self.validate_reads!(r, index, label)
+    reads = r["reads"]
+    where = "#{label}: runs[#{index}].reads"
+    raise Error, "#{where} must be an array" unless reads.is_a?(Array)
+
+    reads.each_with_index do |e, j|
+      ok = e.is_a?(Hash) && e.keys.sort == READ_KEYS.sort &&
+           (e["skill"].nil? || skill_name?(e["skill"])) && (e["path"].nil? || e["path"].is_a?(String)) &&
+           READ_VIAS.include?(e["via"]) && READ_COPIES.include?(e["copy"]) &&
+           (e["sha256"].nil? || (e["sha256"].is_a?(String) && e["sha256"].match?(/\A[0-9a-f]{64}\z/)))
+      raise Error, "#{where}[#{j}] must have skill, path, via, copy and sha256 of the documented shapes" unless ok
+    end
+    named = reads.map { |e| e["skill"] }.compact
+    missing = r["observed"] - named
+    raise Error, "#{where} must include every observed skill (missing: #{missing.join(', ')})" unless missing.empty?
+  end
+
+  # must_not の痕跡のうち observed に無いもの (要確認) と、名前を決められない SKILL.md の読み取りを返す。
+  # 戻り値: [[skill, 1 から始まる reads の番号, copy], ...]。skill が nil のものは名前を決められない読み取り。
+  def self.review_traces(c, r)
+    return [] if c["must_not"].empty? || !r["reads"].is_a?(Array)
+
+    # Ruby 2.6 (system の Ruby) には filter_map が無いので、map と compact で書く。
+    r["reads"].each_with_index.map do |e, j|
+      next unless e["skill"].nil? || (c["must_not"].include?(e["skill"]) && !r["observed"].include?(e["skill"]))
+
+      [e["skill"], j + 1, e["copy"]]
+    end.compact
   end
 
   # skill 名は失敗メッセージへ interpolate されるので、制御文字を入力エラーで弾く (出力偽造の防止)。
@@ -208,14 +251,17 @@ module CheckSkillRouting
 
   # --- 判定 -------------------------------------------------------------------------
 
-  # 1 結果 file の集計。coverage / error run は構造エラー、violation は破れ。
-  # 戻り値: { summary:, per_case:, breaches:, structural: }
+  # 1 結果 file の集計。coverage / error run は構造エラー、violation は破れ、must_not の痕跡が observed に無い run は
+  # 要確認 (reviews。#720)。候補と違う copy の読み取りは notes (報告だけ)。
+  # 戻り値: { summary:, per_case:, breaches:, structural:, reviews:, notes: }
   def self.evaluate(cases, results, label)
     by_case = Hash.new { |h, k| h[k] = [] }
     results["runs"].each { |r| by_case[r["case"]] << r }
 
     structural = []
     breaches = []
+    reviews = []
+    notes = []
     per_case = []
     known_ids = cases[:cases].map { |c| c["id"] }
     (by_case.keys - known_ids).each { |id| structural << "#{label}: run for unknown case '#{id}'" }
@@ -241,7 +287,24 @@ module CheckSkillRouting
         structural << "#{label}: case '#{c['id']}' has no run (coverage gap)"
         next
       end
-      runs.each do |r|
+      runs.each_with_index do |r, n|
+        # 要確認と copy の報告は、run の status によらず出す (exit は構造エラーが優先する。#720)。
+        traces = review_traces(c, r)
+        traces.each do |skill, j, copy|
+          reviews << if skill
+                       "#{label}: case '#{c['id']}' run #{n + 1}: read must_not skill #{skill} (reads ##{j}, copy #{copy}) " \
+                         "but it is not in observed (cannot tell whether it acted on it)"
+                     else
+                       "#{label}: case '#{c['id']}' run #{n + 1}: read a SKILL.md whose skill could not be determined " \
+                         "(reads ##{j}, copy #{copy}) while the case has must_not"
+                     end
+        end
+        (r["reads"] || []).each_with_index do |e, j|
+          next if e["skill"].nil? || %w[candidate listing].include?(e["copy"])
+
+          notes << "#{label}: case '#{c['id']}' run #{n + 1}: read #{e['skill']} from a copy other than the candidate " \
+                   "(reads ##{j + 1}, copy #{e['copy']})"
+        end
         if r["status"] != "ok"
           structural << "#{label}: case '#{c['id']}' has a run with status '#{r['status']}' (not counted as green)"
           next
@@ -273,6 +336,7 @@ module CheckSkillRouting
         end
         per_case << {
           id: c["id"], primary: c["primary"], primary_hit: primary_hit, violated: violated,
+          review: traces.map { |skill, _j, _copy| skill || "?" }.uniq,
           observed: observed, prompt_tokens: r["prompt_tokens"], output_tokens: r["output_tokens"],
           first_prompt_tokens: r["first_prompt_tokens"]
         }
@@ -294,7 +358,7 @@ module CheckSkillRouting
       prompt_tokens: prompt_tokens, output_tokens: output_tokens, token_runs: token_runs, without_tokens: without_tokens,
       first_prompt_tokens: (first_count == runs_total && runs_total.positive? ? first_tokens : nil)
     }
-    { summary: summary, per_case: per_case, breaches: breaches, structural: structural }
+    { summary: summary, per_case: per_case, breaches: breaches, structural: structural, reviews: reviews, notes: notes }
   end
 
   # baseline との比較条件 (tool / model / 自動の memory の記録 / case ごとの run 数) を検証する。違えば構造エラー。
@@ -347,7 +411,10 @@ module CheckSkillRouting
 
   def self.format_case(pc)
     primary = pc[:primary].nil? ? "primary=n/a" : "primary=#{pc[:primary_hit] ? 'hit' : 'MISS'}"
-    must_not = pc[:violated].empty? ? "must_not=ok" : "must_not=VIOLATED(#{pc[:violated].join(',')})"
+    must_not = if !pc[:violated].empty? then "must_not=VIOLATED(#{pc[:violated].join(',')})"
+               elsif !pc[:review].to_a.empty? then "must_not=review(#{pc[:review].join(',')})"
+               else "must_not=ok"
+               end
     "case #{pc[:id]}: #{primary} #{must_not} observed=[#{pc[:observed].join(',')}] " \
       "tokens=first:#{pc[:first_prompt_tokens] || 'n/a'} total:#{pc[:prompt_tokens] || 'n/a'} out:#{pc[:output_tokens] || 'n/a'}"
   end
@@ -420,7 +487,7 @@ module CheckSkillRouting
     opts = begin
       parse_argv(argv)
     rescue Error => e
-      warn "error: #{e.message}"
+      warn "error: #{one_line(e.message)}"
       warn USAGE
       return 2
     end
@@ -435,7 +502,20 @@ module CheckSkillRouting
     structural = cand[:structural]
 
     if opts["--baseline"]
-      baseline = parse_results(read_file(opts["--baseline"], "baseline"), "baseline")
+      # baseline を読めない・形が違うときも、候補で見つけた破れと要確認は捨てずに報告する (1 > 2 > 3。#720 の review)。
+      # 入力の誤りの行の形 (error: ...) は今までどおり。exit は下で、破れがあれば 1、無ければ 2。
+      baseline = begin
+        parse_results(read_file(opts["--baseline"], "baseline"), "baseline")
+      rescue Error, JSON::ParserError, SystemCallError => e
+        # どの誤りの行も「baseline: 」で始める (parse_results の Error は既に付いている。file が無い・JSON の誤りには付ける)。
+        # JSON の誤りの文は入力の断片を含み、改行がありうるので 1 行にする (ほかの行に見せない)。
+        msg = one_line(e.message)
+        warn "error: #{msg.start_with?("baseline: ") ? msg : "baseline: #{msg}"}"
+        baseline_unreadable = true
+        nil
+      end
+    end
+    if baseline
       base = evaluate(cases, baseline, "baseline")
       puts format_summary(base[:summary])
       structural += base[:structural]
@@ -449,7 +529,19 @@ module CheckSkillRouting
       end
     end
 
+    # 候補と違う copy の読み取りは報告だけ。要確認は、破れと構造エラーが無ければ exit 3 (#720)。
+    cand[:notes].each { |n| puts "note: #{n}" }
+    cand[:reviews].each { |r| warn "review: #{r}" }
+    if baseline_unreadable
+      # 候補の破れと構造エラーは全件出す (baseline の誤りは上の error: の行で出した)。
+      (breaches + structural).each { |failure| warn "FAIL: #{failure}" }
+      return breaches.empty? ? 2 : 1
+    end
     if breaches.empty? && structural.empty?
+      unless cand[:reviews].empty?
+        warn "needs review: #{cand[:reviews].length} must_not trace(s) not in observed (not a violation, not verified)"
+        return 3
+      end
       puts "ok: skill routing verified (#{cand[:summary][:runs]} runs, #{cases[:cases].length} cases)"
       return 0
     end
@@ -457,8 +549,13 @@ module CheckSkillRouting
     (breaches + structural).each { |failure| warn "FAIL: #{failure}" }
     breaches.empty? ? 2 : 1
   rescue Error, JSON::ParserError, SystemCallError => e
-    warn "error: #{e.message}"
+    warn "error: #{one_line(e.message)}"
     2
+  end
+
+  # 誤りの文を 1 行にする。CR と LF は \r と \n の 2 文字に置き換える (入力の断片が別の行に見えないように)。
+  def self.one_line(msg)
+    msg.gsub("\r", "\\r").gsub("\n", "\\n")
   end
 end
 

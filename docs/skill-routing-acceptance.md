@@ -67,7 +67,8 @@ codex の「起動」= **command 文字列に `/<name>/SKILL.md` が現れた読
 以上を読んだ run は **探索読み**とみなし、最初に読んだ skill だけを
 `observed` にして残りを `note` に残す (Claude Code の `Skill` 呼び出しと違い、codex は file を読むだけなので
 安価に全部読める run がある。baseline 24 run 中 1 run)。これは heuristic であり、raw log で確認できるように
-しておく。
+しておく。探索読みの 1 本目が must_not なら、今までどおり `observed` に入って violation になる (heuristic は「最初に
+読んだものを選んだ」とみなす)。2 本目以降は `observed` に入らないが、下の `reads` に残り、judge が要確認にする (#720)。
 
 claude-code の MCP server は `--strict-mcp-config` で読まない。headless では MCP の起動が最初の API call に間に合う
 かが run ごとに揺れ、baseline の実測 (2026-09-20) では 24 run が `tools=25 / mcp=0` と
@@ -96,7 +97,9 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
   "listing_chars": 4952,
   "runs": [ { "case": "<case id>", "observed": ["<skill name>", ...],
               "prompt_tokens": 1234, "output_tokens": 56, "first_prompt_tokens": 1000,
-              "status": "ok", "completion": "exited" } ],
+              "status": "ok", "completion": "exited",
+              "reads": [ { "skill": "<skill name>", "path": ".agents/skills/<name>/SKILL.md", "via": "command",
+                         "copy": "candidate", "sha256": "<64 桁の hex>" } ] } ],
   "auto_memory": { "requested": "off", "init": "not-listed" } }
 ```
 
@@ -104,6 +107,20 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
   codex は `command_execution` の command 文字列に現れた `/<name>/SKILL.md` の読み取り (scope 不問、
   出力は見ない。詳細は上の「隔離」の節の codex の「起動」の段落) から取る。listing に載っているだけの
   skill は含めない。
+- `reads` (任意。#720): その run の読み取りの **痕跡の全部** (読んだ順、重複を除かない)。`observed` は primary の推定
+  (Codex は探索読みを圧縮する) なので、must_not の判定には `reads` も使う。要素は次の 5 つ。
+  - `skill`: 読んだ skill の名前。`observed` と同じ規則 (直前が `/<name>/`) で決め、決められなければ null
+    (`cd <dir> && cat SKILL.md` や `find -name SKILL.md`、glob の `*/SKILL.md`)。`observed` の名前は必ず `reads` に入る。
+  - `path`: 入力に現れた path の表記 (local の絶対 path を含みうる)。`via`: `skill` (Claude Code の `Skill` の呼び出し)・
+    `read` (Claude Code の `Read` の `file_path`)・`command` (Codex の command と Claude Code の Bash の command)。
+  - `copy`: `candidate` (実体が候補の `SKILL.md`)・`same-content` (別の置き場で中身が同じ)・`other` (中身が違う。user の
+    home の古い copy など)・`unknown` (file に解決できない、名前を決められない)・`listing` (`Skill` の呼び出し。listing の
+    skill を呼んだもので、置き場は `--smoke` の隔離の確認による)。判定は、先頭の `~/`・`$HOME/`・`${HOME}/` を run の
+    `HOME` で展開し、相対の path は作業 dir (proj) から解き、`realpath` (symlink と `..` を解く) の実体で行う。字面では
+    決めない。`sha256` は解決できた file の中身の hash (run の直後、proj があるうちに取る)。
+  - 痕跡は入力の文字列 (command・`Read` の `file_path`) に現れた `SKILL.md` だけで、出力 (`aggregated_output`) は見ない。
+    痕跡が無いことは「読まなかった」証明ではない。
+  - `reads` には local の path が入るので、results.json も raw log と同じく Issue / PR / comment には貼らない。
 - `prompt_tokens`: claude-code は `result.usage` の input + cache_creation + cache_read の合計
   (skill listing は system prompt 側なので cache に現れる)。codex は usage の `input_tokens`。
   `output_tokens` は各 CLI の値。どちらも run 全体の合計で、turn 数 (model の振る舞い) に依存する。
@@ -159,6 +176,15 @@ scripts/check-skill-routing.sh --cases scripts/lib/skill_routing_cases.json \
 - **primary hit**: case の `primary` が `observed` に含まれる (`primary: null` の case は対象外)。
   MISS は報告するが、単独では破れにしない (headless 単発 turn の揺れがあるため)。
 - **must_not violation**: `must_not` のいずれかが `observed` に含まれる = routing の破れ (exit 1)。
+- **要確認** (#720): `reads` があり、`must_not` の skill が `reads` にあるのに `observed` に無い run、または `must_not` の
+  ある case で名前を決められない `SKILL.md` の読み取りがある run。`review:` の行で、case、run、skill (決められなければ
+  その旨)、`reads` の中の番号、`copy` を出し、case の行は `must_not=review(...)` にする。違反でも、禁じた動作が無かった
+  証明でもないので、破れと構造エラーが無ければ exit 3 にし、`ok: skill routing verified` は出さない。run の status に
+  よらず出す (error の run では exit 2 が優先する)。baseline の構造エラーがあっても、候補の `review:` の行は出す。
+- **copy の報告** (#720): 候補と違う copy (`same-content`・`other`・`unknown`) の読み取りは `note:` の行で出す。報告だけで、
+  exit と primary hit の数え方は変えない。
+- **`reads` の形**: 在れば要素の 5 つの key の形を確かめ、`observed` の名前が `reads` の名前に全部含まれることを求める
+  (違えば exit 2)。`reads` の無い古い結果 (schema_version 1・2) は、`observed` だけで今までどおり判定する。
 - **自動の memory** (#770): `auto_memory` が在り、`init` が `not-listed` でなければ構造エラー。形が違うとき、Codex の結果に在るときは
   入力の誤り (どちらも exit 2)。
 - **baseline 比較**: 同じ tool・同じ model・同じ case 集合・同じ run 数・同じ `auto_memory` (無いものどうしを含む) の結果だけ
@@ -172,8 +198,10 @@ scripts/check-skill-routing.sh --cases scripts/lib/skill_routing_cases.json \
   Issue / PR に記録する。token が `null` の run (`observed-stop`) は合算から外し、summary の末尾に
   `runs_without_tokens=<数>` を出す (平均の分母は token を持つ run の数)。delta は、両方の結果で全 run が token を
   持つ case だけで合計を取り直し、外した case があればその数を末尾に出す (#302)。
-- exit: `0` = pass、`1` = 破れ / 回帰、`2` = 入力・構造エラー。破れと構造不備が同居したら 1 を
-  優先し、全件報告する。
+- exit: `0` = pass、`1` = 破れ / 回帰、`2` = 入力・構造エラー、`3` = 要確認 (#720)。優先は 1 > 2 > 3 > 0 で、
+  候補の結果を読めないときは、その場で exit 2 にする。baseline を読めないときは `error:` の行で出し、候補の破れと
+  要確認は捨てずに報告する (破れがあれば exit 1、無ければ 2)。
+  同居したものは全件報告する。exit 3 では、`review:` の行の run の raw log を人が読んで、禁じた skill の手順で動いたかを確かめる。
 
 ## 使い方 (description を変える PR での before / after)
 

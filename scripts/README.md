@@ -141,7 +141,8 @@ usage: check-skill-routing.sh --cases <cases.json> --results <results.json> [--b
 ```
 
 - exit code: pass は 0、観測された破れ (must_not violation / baseline からの回帰) は 1、
-  usage / 入力・構造エラー (coverage 欠落・error run・比較条件不一致) は 2。token は gate にせず
+  usage / 入力・構造エラー (coverage 欠落・error run・比較条件不一致) は 2、要確認 (must_not の読み取りの痕跡が observed に
+  無い run。#720) は 3。優先は 1 > 2 > 3 > 0。token は gate にせず
   delta を報告するだけ。構造エラーが baseline / candidate のどちらかにあると、baseline との比較 (delta と
   回帰の判定) をしない。
 - case set の正本は `lib/skill_routing_cases.json`。

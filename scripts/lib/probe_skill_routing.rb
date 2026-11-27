@@ -32,6 +32,7 @@
 # prompt / path は shell 文字列に埋め込まず argv 配列と stdin で渡す (#266 の欠陥クラスを
 # 持ち込まない)。
 
+require "digest"
 require "fileutils"
 require "json"
 require "open3"
@@ -56,6 +57,70 @@ module ProbeSkillRouting
     "codex" => File.join(".agents", "skills"),
   }.freeze
   SMOKE_PROMPT = "あなたが今使える skill の name を、カンマ区切りで全部列挙して。他の文は書かない。"
+
+  # --- reads: 読んだ skill の痕跡の全部 (#720) -----------------------------------------------
+  # observed (primary の推定。Codex は探索読みを圧縮する) とは別に、読み取りの痕跡を全部残す。judge は must_not を
+  # これでも見て、observed に無い痕跡を「要確認」にする。痕跡は入力の文字列 (command・Read の file_path) に現れた
+  # SKILL.md だけで、出力は見ない。痕跡が無いことは、読まなかった証明ではない。
+  # 要素: skill (名前を決められなければ nil)、path (現れた表記)、via (skill・read・command)、copy、sha256。
+  # copy: candidate (実体が候補の SKILL.md)・same-content (別の置き場で中身が同じ)・other (中身が違う)・
+  # unknown (file に解決できない・名前を決められない)・listing (Claude Code の Skill の呼び出し。listing の skill)。
+  READ_VIAS = %w[skill read command].freeze
+  READ_COPIES = %w[candidate same-content other unknown listing].freeze
+  # SKILL.md の直前の path の切れ目。空白・引用符・shell の区切りの記号で切る (引用の中の空白は扱わない)。
+  PATH_BREAK = /[\s"'`;|&<>()=]/.freeze
+
+  # text に現れた SKILL.md ごとに [skill 名か nil, path の表記] を返す。名前は今の observed と同じ規則
+  # (直前が `/<name>/`) で決めるので、observed の名前は必ず reads に入る。
+  def self.skill_md_mentions(text, names)
+    return [] unless text.is_a?(String) && text.include?("SKILL.md")
+
+    tail = names.empty? ? nil : %r{/(#{names.map { |n| Regexp.escape(n) }.join('|')})/SKILL\.md\z}
+    found = []
+    offset = 0
+    while (i = text.index("SKILL.md", offset))
+      stop = i + "SKILL.md".length
+      prefix = text[0...stop]
+      name = tail && (m = tail.match(prefix)) ? m[1] : nil
+      start = prefix.rindex(PATH_BREAK)
+      found << [name, prefix[(start ? start + 1 : 0)..]]
+      offset = stop
+    end
+    found
+  end
+
+  # path の表記を file に解決して copy を決める。~/・$HOME/・${HOME}/ は home で、相対の path は proj から解き、
+  # realpath (symlink と .. を解く) の実体で比べる。字面では決めない。解決できなければ unknown。
+  def self.classify_copy(name, path, proj:, home:, tool:)
+    return ["unknown", nil] if name.nil? || proj.nil? || path.nil?
+
+    expanded = path.sub(%r{\A(?:~|\$HOME|\$\{HOME\})(?=/)}) { home.to_s }
+    return ["unknown", nil] if expanded.start_with?("~", "$") || expanded.match?(/[$`]/) || (home.nil? && expanded != path)
+
+    # File.expand_path は .. を字面で消す (symlink を解く前で、存在しない中間の dir も通す) ので使わない。
+    # 字面の正規化をせずに proj とつなぎ、realpath に .. を実体の上で解かせる (中間の dir が無ければ失敗する)。
+    real = begin
+      File.realpath(expanded.start_with?("/") ? expanded : File.join(proj, expanded))
+    rescue SystemCallError
+      nil
+    end
+    return ["unknown", nil] unless real && File.file?(real)
+
+    sha = Digest::SHA256.file(real).hexdigest
+    candidate = begin
+      File.realpath(File.join(proj, PROJECT_SKILL_DIRS.fetch(tool), name, "SKILL.md"))
+    rescue SystemCallError
+      nil
+    end
+    return ["candidate", sha] if candidate && real == candidate
+
+    [candidate && Digest::SHA256.file(candidate).hexdigest == sha ? "same-content" : "other", sha]
+  end
+
+  def self.read_entry(name, path, via, proj:, home:, tool:)
+    copy, sha = classify_copy(name, path, proj: proj, home: home, tool: tool)
+    { "skill" => name, "path" => path, "via" => via, "copy" => copy, "sha256" => sha }
+  end
   DEFAULT_MAX_TURNS = 2
   DEFAULT_TIMEOUT = 300
   # Codex の起動で disable する feature と、起動の前に `codex exec --help` で確かめる flag (#372)。
@@ -195,8 +260,11 @@ module ProbeSkillRouting
   #   nil (観測不能)。
   # - subtype: result の subtype。error_max_turns は打ち切りであって観測失敗ではない。
   # - memory_states: init ごとの、自動の memory の状態 (memory_paths から。#770)。
-  def self.parse_claude(jsonl)
+  # reads (#720): Skill の呼び出し (copy は listing)、Read の file_path と Bash の command に現れた SKILL.md。
+  # names・proj・home は copy の判定に使う (無ければ名前を決められない読み取りと unknown になる)。
+  def self.parse_claude(jsonl, names: [], proj: nil, home: nil)
     observed = []
+    reads = []
     model = nil
     prompt_tokens = output_tokens = first_prompt_tokens = nil
     subtype = nil
@@ -226,7 +294,24 @@ module ProbeSkillRouting
           if c["type"] == "tool_use" && c["name"] == "Skill"
             input = c["input"].is_a?(Hash) ? c["input"] : {}
             name = input["skill"] || input["name"]
-            observed << name if name.is_a?(String)
+            if name.is_a?(String)
+              observed << name
+              reads << { "skill" => name, "path" => nil, "via" => "skill", "copy" => "listing", "sha256" => nil }
+            end
+          elsif c["type"] == "tool_use" && %w[Read Bash].include?(c["name"])
+            input = c["input"].is_a?(Hash) ? c["input"] : {}
+            if c["name"] == "Read"
+              path = input["file_path"]
+              if path.is_a?(String) && path.end_with?("SKILL.md")
+                tail = names.empty? ? nil : %r{(?:\A|/)(#{names.map { |n| Regexp.escape(n) }.join('|')})/SKILL\.md\z}
+                name = tail && (m = tail.match(path)) ? m[1] : nil
+                reads << read_entry(name, path, "read", proj: proj, home: home, tool: "claude-code")
+              end
+            else
+              skill_md_mentions(input["command"], names).each do |name, path|
+                reads << read_entry(name, path, "command", proj: proj, home: home, tool: "claude-code")
+              end
+            end
           elsif c["type"] == "text" && c["text"].is_a?(String)
             text << c["text"]
           end
@@ -246,7 +331,8 @@ module ProbeSkillRouting
       end
     end
     { observed: observed.uniq, model: model, prompt_tokens: prompt_tokens, output_tokens: output_tokens,
-      first_prompt_tokens: first_prompt_tokens, subtype: subtype, text: text, note: nil, memory_states: memory_states }
+      first_prompt_tokens: first_prompt_tokens, subtype: subtype, text: text, note: nil, memory_states: memory_states,
+      reads: reads }
   end
 
   def self.sum_usage(usage, keys)
@@ -367,8 +453,11 @@ module ProbeSkillRouting
   #   call だけの値は event に無いので first_prompt_tokens は取らない (judge では n/a)。
   # - text: 最後の agent_message。model は event に出ない (caller が argv の値を使う)。
   # - routing_done: 上の CODEX_ROUTING_GAP の印が立ったか (一度立てば、後の読み取りで戻さない)。
-  def self.parse_codex(jsonl, names)
+  # - reads (#720): 上の observed の圧縮の前の、SKILL.md の読み取りの痕跡の全部 (重複を除かない。名前を決められない
+  #   `cd <dir> && cat SKILL.md` の形も skill を nil にして残す)。proj と home は copy の判定に使う。
+  def self.parse_codex(jsonl, names, proj: nil, home: nil)
     reads = []
+    all_reads = []
     usage = nil
     text = +""
     gap = 0
@@ -390,6 +479,9 @@ module ProbeSkillRouting
         elsif CODEX_TOOL_ITEM_TYPES.include?(item["type"])
           command = item["type"] == "command_execution" && item["command"].is_a?(String) ? item["command"] : ""
           command.scan(pattern) { |(name)| reads << name unless reads.include?(name) }
+          skill_md_mentions(command, names).each do |name, path|
+            all_reads << read_entry(name, path, "command", proj: proj, home: home, tool: "codex")
+          end
           if command.include?("SKILL.md")
             gap = 0
           elsif !reads.empty?
@@ -410,7 +502,7 @@ module ProbeSkillRouting
     prompt_tokens = usage && usage["input_tokens"].is_a?(Integer) ? usage["input_tokens"] : nil
     output_tokens = usage && usage["output_tokens"].is_a?(Integer) ? usage["output_tokens"] : nil
     { observed: observed, model: nil, prompt_tokens: prompt_tokens, output_tokens: output_tokens,
-      first_prompt_tokens: nil, subtype: nil, text: text, note: note, routing_done: routing_done }
+      first_prompt_tokens: nil, subtype: nil, text: text, note: note, routing_done: routing_done, reads: all_reads }
   end
 
   # --- 実行 -------------------------------------------------------------------------
@@ -457,11 +549,11 @@ module ProbeSkillRouting
     if opts[:tool] == "claude-code"
       argv = claude_argv(opts, prompt)
       r = run_command(argv, chdir: proj, stdin: nil, timeout: opts[:timeout], env: AutoMemory::ENV_OFF)
-      parsed = parse_claude(r.out)
+      parsed = parse_claude(r.out, names: names, proj: proj, home: Dir.home)
     else
       argv = codex_argv(opts, proj, names)
       r = run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout])
-      parsed = parse_codex(r.out, names).merge(model: codex_model(opts))
+      parsed = parse_codex(r.out, names, proj: proj, home: Dir.home).merge(model: codex_model(opts))
     end
     done = completion(opts[:tool], r, parsed)
     parsed = parsed.merge(prompt_tokens: nil, output_tokens: nil) if done == "observed-stop"
@@ -558,6 +650,7 @@ module ProbeSkillRouting
           # first_prompt_tokens は取れた tool (claude-code) だけ書く。judge では任意 field。
           run["first_prompt_tokens"] = r[:first_prompt_tokens] if r[:first_prompt_tokens]
           run["note"] = r[:note] if r[:note]
+          run["reads"] = r[:reads] if r[:reads]
           runs << run
           puts "#{c['id']} [#{n + 1}/#{opts[:repeat]}]: #{r[:status]} (#{r[:completion]}) observed=#{r[:observed].inspect} " \
                "tokens=first:#{r[:first_prompt_tokens].inspect} total:#{r[:prompt_tokens].inspect} " \

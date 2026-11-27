@@ -306,6 +306,94 @@ r = P.parse_codex(reads.call(6), names)
 check("codex: 6 本の読み取りは探索読みとして最初の 1 本だけを採り、note に残す",
       r[:observed] == ["skill-a"] && r[:note].to_s.start_with?("survey: read 6 skills"))
 
+# ---- reads (#720): 圧縮の前の読み取りの痕跡の全部と、copy の区別。行の ID は #720 の期待値の表 ----
+r = P.parse_codex(reads.call(5), names)
+check("P01: 5 本の reads は 5 件で、observed も 5 本", r[:reads].map { |e| e["skill"] } == names.first(5) && r[:observed] == names.first(5))
+r = P.parse_codex(reads.call(6), names)
+check("P04: 6 本の reads は 6 件で、observed は最初の 1 本のまま", r[:reads].map { |e| e["skill"] } == names.first(6) && r[:observed] == ["skill-a"])
+check("reads は via command で、proj が無ければ copy は unknown", r[:reads].all? { |e| e["via"] == "command" && e["copy"] == "unknown" && e["sha256"].nil? })
+six_same = jsonl(*6.times.map { command_item("cat .agents/skills/skill-a/SKILL.md") },
+                 { "type" => "turn.completed", "usage" => { "input_tokens" => 1, "output_tokens" => 1 } })
+r = P.parse_codex(six_same, names)
+check("N01: 同じ skill を 6 回読んでも、reads は 6 件で探索読みにしない", r[:reads].length == 6 && r[:observed] == ["skill-a"] && r[:note].nil?)
+# P15: cd の後の相対の読み取りは、名前を決められない読み取りとして残る
+cd_read = jsonl(command_item("cat .agents/skills/skill-a/SKILL.md"), command_item("cd .agents/skills/skill-b && cat SKILL.md"),
+                { "type" => "turn.completed", "usage" => { "input_tokens" => 1, "output_tokens" => 1 } })
+r = P.parse_codex(cd_read, names)
+check("P15: cd の後の cat SKILL.md は skill nil の reads になる", r[:reads].map { |e| e["skill"] } == ["skill-a", nil] && r[:observed] == ["skill-a"])
+# P16: 出力にだけ現れた path は reads に足さない
+r = P.parse_codex(jsonl(command_item("ls .agents/skills", "/p/.agents/skills/skill-b/SKILL.md\n"),
+                        { "type" => "turn.completed", "usage" => { "input_tokens" => 1, "output_tokens" => 1 } }), names)
+check("P16: 出力 (aggregated_output) の path は reads に入らない", r[:reads].empty?)
+# claude: Skill は listing、Read の file_path と Bash の command の SKILL.md も reads (P09〜P14)
+claude_reads = jsonl({ "type" => "assistant", "message" => { "content" => [
+  skill_use("skill" => "skill-a"),
+  { "type" => "tool_use", "name" => "Read", "input" => { "file_path" => "/x/.claude/skills/skill-b/SKILL.md" } },
+  { "type" => "tool_use", "name" => "Bash", "input" => { "command" => "cat .claude/skills/skill-c/SKILL.md && cat SKILL.md" } },
+  { "type" => "tool_use", "name" => "Read", "input" => { "file_path" => "/x/notes.md" } },
+] } }, { "type" => "result", "subtype" => "success", "usage" => { "input_tokens" => 1, "output_tokens" => 1 } })
+r = P.parse_claude(claude_reads, names: names)
+check("P14: claude は Skill・Read・Bash の SKILL.md を reads に残し、observed は Skill だけ",
+      r[:observed] == ["skill-a"] && r[:reads].map { |e| [e["skill"], e["via"]] } ==
+        [["skill-a", "skill"], ["skill-b", "read"], ["skill-c", "command"], [nil, "command"]])
+check("claude の Skill の reads は copy listing", r[:reads].first["copy"] == "listing" && r[:reads].first["path"].nil?)
+check("claude の reads は SKILL.md 以外の Read を入れない", r[:reads].none? { |e| e["path"].to_s.end_with?("notes.md") })
+check("names が無ければ claude の Read の reads は skill nil", P.parse_claude(claude_reads)[:reads][1]["skill"].nil?)
+# C01〜C08: copy の区別。proj の候補、home の同じ中身・違う中身、外を指す symlink、解決できない path
+cdir = File.join(Dir.mktmpdir, "copy")
+proj = File.join(cdir, "proj")
+home = File.join(cdir, "home")
+cand = File.join(proj, ".agents", "skills", "skill-a")
+FileUtils.mkdir_p(cand)
+File.write(File.join(cand, "SKILL.md"), "candidate body\n")
+FileUtils.mkdir_p(File.join(home, ".codex", "skills", "skill-a"))
+File.write(File.join(home, ".codex", "skills", "skill-a", "SKILL.md"), "old body\n")
+FileUtils.mkdir_p(File.join(home, "same", "skill-a"))
+File.write(File.join(home, "same", "skill-a", "SKILL.md"), "candidate body\n")
+FileUtils.mkdir_p(File.join(proj, ".agents", "skills", "skill-b"))
+FileUtils.mkdir_p(File.join(home, "outside", "skill-b"))
+File.write(File.join(home, "outside", "skill-b", "SKILL.md"), "outside body\n")
+File.symlink(File.join(home, "outside", "skill-b", "SKILL.md"), File.join(proj, ".agents", "skills", "skill-b", "SKILL.md"))
+copy = ->(name, path) { P.classify_copy(name, path, proj: proj, home: home, tool: "codex") }
+cand_sha = Digest::SHA256.hexdigest("candidate body\n")
+check("C01: 候補を指す絶対 path は candidate", copy.call("skill-a", File.join(cand, "SKILL.md")) == ["candidate", cand_sha])
+check("C02: cwd からの相対の path は candidate", copy.call("skill-a", ".agents/skills/skill-a/SKILL.md") == ["candidate", cand_sha])
+FileUtils.mkdir_p(File.join(proj, ".agents", "skills", "x"))
+check("C07: .. を含む path も、中間の dir が在れば実体で candidate", copy.call("skill-a", ".agents/skills/x/../skill-a/SKILL.md") == ["candidate", cand_sha])
+# shell と同じく .. は実体の上で解く: 存在しない中間の dir を通る path は解決できない (字面で消さない。#801 の review)
+check("C07: 存在しない中間の dir を通る .. は unknown", copy.call("skill-a", ".agents/skills/nope/../skill-a/SKILL.md") == ["unknown", nil])
+# symlink の dir の後の .. は、link の指す先の親に上がる (字面では候補の置き場に見えても、実体は外)
+File.symlink(File.join(home, "outside"), File.join(proj, ".agents", "skills", "link"))
+FileUtils.mkdir_p(File.join(home, "skill-a"))
+File.write(File.join(home, "skill-a", "SKILL.md"), "physical body\n")
+check("C07: symlink の dir の後の .. は実体の親に上がる (字面の候補にしない)",
+      copy.call("skill-a", ".agents/skills/link/../skill-a/SKILL.md") == ["other", Digest::SHA256.hexdigest("physical body\n")])
+check("C03: home の中身の違う copy は other", copy.call("skill-a", "~/.codex/skills/skill-a/SKILL.md") == ["other", Digest::SHA256.hexdigest("old body\n")])
+check("C05: $HOME と ${HOME} も home で展開する", copy.call("skill-a", "$HOME/.codex/skills/skill-a/SKILL.md").first == "other" &&
+      copy.call("skill-a", "${HOME}/.codex/skills/skill-a/SKILL.md").first == "other")
+check("C04: 別の置き場で中身が同じなら same-content", copy.call("skill-a", "~/same/skill-a/SKILL.md") == ["same-content", cand_sha])
+# C08: 字面ではなく実体で比べる。候補の置き場が symlink なら、候補は指す先の file で、同じ実体を読めば candidate
+outside_sha = Digest::SHA256.hexdigest("outside body\n")
+check("C08: 候補の置き場の symlink は実体で比べる (候補の実体と同じ file なら candidate、hash は実体の中身)",
+      copy.call("skill-b", ".agents/skills/skill-b/SKILL.md") == ["candidate", outside_sha] &&
+      copy.call("skill-b", "~/outside/skill-b/SKILL.md") == ["candidate", outside_sha])
+check("C08: 候補の置き場を字面で指しても、実体が違えば candidate にしない",
+      copy.call("skill-a", ".agents/skills/skill-a/../skill-b/SKILL.md") == ["other", outside_sha])
+# 字面に /.agents/skills/ を含む絶対 path でも、実体が候補でなければ candidate にしない (別の project の置き場など)
+other_proj = File.join(cdir, "other-proj", ".agents", "skills", "skill-a")
+FileUtils.mkdir_p(other_proj)
+File.write(File.join(other_proj, "SKILL.md"), "another project body\n")
+check("C01: 別の project の .agents/skills の copy は other",
+      copy.call("skill-a", File.join(other_proj, "SKILL.md")) == ["other", Digest::SHA256.hexdigest("another project body\n")])
+check("C01: 候補の置き場の字面で、.. で外へ出る絶対 path は other",
+      copy.call("skill-a", File.join(proj, ".agents", "skills", "skill-a", "..", "skill-b", "SKILL.md")) == ["other", outside_sha])
+check("C06: 解決できない path は unknown", copy.call("skill-a", "/nope/skill-a/SKILL.md") == ["unknown", nil] &&
+      copy.call("skill-a", "$X/skill-a/SKILL.md") == ["unknown", nil] && copy.call(nil, ".agents/skills/skill-a/SKILL.md") == ["unknown", nil])
+r = P.parse_codex(jsonl(command_item("cat .agents/skills/skill-a/SKILL.md ~/.codex/skills/skill-a/SKILL.md"),
+                        { "type" => "turn.completed", "usage" => { "input_tokens" => 1, "output_tokens" => 1 } }),
+                  names, proj: proj, home: home)
+check("parse_codex は proj と home で copy を決める", r[:reads].map { |e| e["copy"] } == %w[candidate other])
+
 broken = "{\"type\":\"turn.completed\"\nnot json\n[1]\n" +
          jsonl(command_item("cat .agents/skills/skill-a/SKILL.md"),
                { "type" => "turn.completed", "usage" => { "input_tokens" => 3, "output_tokens" => 1 } })
