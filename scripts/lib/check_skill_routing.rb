@@ -508,7 +508,8 @@ module CheckSkillRouting
         parse_results(read_file(opts["--baseline"], "baseline"), "baseline")
       rescue Error, JSON::ParserError, SystemCallError => e
         # どの誤りの行も「baseline: 」で始める (parse_results の Error は既に付いている。file が無い・JSON の誤りには付ける)。
-        msg = e.message
+        # JSON の誤りの文は入力の断片を含み、改行がありうるので 1 行にする (ほかの行に見せない)。
+        msg = one_line(e.message)
         warn "error: #{msg.start_with?("baseline: ") ? msg : "baseline: #{msg}"}"
         baseline_unreadable = true
         nil
@@ -548,8 +549,13 @@ module CheckSkillRouting
     (breaches + structural).each { |failure| warn "FAIL: #{failure}" }
     breaches.empty? ? 2 : 1
   rescue Error, JSON::ParserError, SystemCallError => e
-    warn "error: #{e.message}"
+    warn "error: #{one_line(e.message)}"
     2
+  end
+
+  # 誤りの文を 1 行にする。CR と LF は \r と \n の 2 文字に置き換える (入力の断片が別の行に見えないように)。
+  def self.one_line(msg)
+    msg.gsub("\r", "\\r").gsub("\n", "\\n")
   end
 end
 

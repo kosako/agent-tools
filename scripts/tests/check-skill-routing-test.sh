@@ -619,6 +619,20 @@ run_case "broken baseline keeps candidate structural error (exit 2)" 2 "FAIL: ca
 run_case "broken baseline keeps violation and structural error (exit 1)" 1 "triggered must_not skill(s) skill-b" \
   -- --cases "$tmp/cases.json" --results "$tmp/both.json" --baseline "$tmp/rv-base-broken.json"
 grep -q "coverage gap" "$tmp/out" || fail "broken baseline: structural failure not reported alongside: $(cat "$tmp/out")"
+# JSON の誤りの文に入力の改行が入っても、label の無い行を作らない (#801 の round 3)
+printf '{ "x":\nFAIL: candidate: fake\n' > "$tmp/rv-base-newline.json"
+run_case "broken baseline with newline stays one line (exit 2)" 2 "error: baseline: " \
+  -- --cases "$tmp/cases.json" --results "$tmp/rv.json" --baseline "$tmp/rv-base-newline.json"
+! grep -q "^FAIL: candidate: fake" "$tmp/out" || fail "broken baseline: input text leaked as its own line: $(cat "$tmp/out")"
+# 誤りの文の書き方は json の版で違う (入力の断片を含まない版もある) ので、行の数だけを見る: error: の行は 1 つ
+[ "$(grep -c '^error: ' "$tmp/out")" -eq 1 ] || fail "broken baseline: expected one error line: $(cat "$tmp/out")"
+# one_line は CR と LF を 2 文字に置き換える (json の版によらず、部品を直に見る)
+ruby -e 'load ARGV[0]; exit(CheckSkillRouting.one_line("a\nb\r\nc") == "a\\nb\\r\\nc" ? 0 : 1)' "$script_dir/../lib/check_skill_routing.rb" \
+  || fail "one_line: CR and LF must become escaped text"
+printf '{ "x":\nFAIL: candidate: fake\n' > "$tmp/res-newline.json"
+run_case "broken results with newline stays one line (exit 2)" 2 "error: " \
+  -- --cases "$tmp/cases.json" --results "$tmp/res-newline.json"
+! grep -q "^FAIL: candidate: fake" "$tmp/out" || fail "broken results: input text leaked as its own line: $(cat "$tmp/out")"
 # P02・J03: observed にある must_not は今までどおり violation (exit 1)。要確認と同居しても 1 が優先する
 write_results "$tmp/rv-viol.json" codex model-x candidate "$(run_line_reads a-primary ok '["skill-a"]' "[$ra, $rb]")" \
   "$(run_line_reads b-primary ok '["skill-b", "skill-a"]' "[$rb, $ra]")" "$n_ok"
