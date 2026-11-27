@@ -130,7 +130,7 @@ module ProbeSkillRouting
   USAGE = <<~TEXT
     usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
              [--source DIR] [--cases FILE] [--variant LABEL] [--model MODEL] [--repeat N]
-             [--only ID[,ID...]] [--max-turns N] [--timeout SEC] [--dry-run] [--smoke]
+             [--only ID[,ID...]] [--max-turns N] [--timeout SEC] [--codex-home DIR] [--dry-run] [--smoke]
 
       --tool      観測対象の CLI (claude-code = `claude -p`, codex = `codex exec`)
       --out       results.json の出力先。raw log は <out>.raw/ に残す (judge の証跡)
@@ -146,6 +146,9 @@ module ProbeSkillRouting
       --timeout   1 run の上限秒 (既定: #{DEFAULT_TIMEOUT})
                   codex で上限に達した run は、skill を読んでから作業に入った印があれば観測完了
                   (completion: observed-stop、token は取らない)。無ければ error
+      --codex-home 評価用の Codex の home (codex の run では必須。--dry-run では省ける)。人がその dir で
+                  一度ログインしておく。子の CODEX_HOME にこれを、子の HOME に run ごとの空の dir を渡す (#802)。
+                  model の取得はふだんの Codex home のまま。条件は docs/skill-routing-acceptance.md の「隔離」
       --dry-run   隔離 project の配置と実行 argv を表示して終了 (CLI を起動しない)
       --smoke     case set の代わりに「見えている skill を列挙する」prompt を 1 回流し、
                   隔離と event 形式を確認する (results.json は書かない)
@@ -161,10 +164,10 @@ module ProbeSkillRouting
     while i < argv.length
       key = argv[i]
       case key
-      when "--tool", "--out", "--source", "--cases", "--variant", "--model", "--only"
+      when "--tool", "--out", "--source", "--cases", "--variant", "--model", "--only", "--codex-home"
         value = argv[i + 1]
         raise Error, "#{key} requires a value" if value.nil? || value.start_with?("-")
-        opts[key.delete_prefix("--").to_sym] = value
+        opts[key.delete_prefix("--").tr("-", "_").to_sym] = value
         i += 2
       when "--repeat", "--max-turns", "--timeout"
         value = argv[i + 1]
@@ -184,6 +187,10 @@ module ProbeSkillRouting
     raise Error, "--tool is required" unless opts[:tool]
     raise Error, "--tool must be one of #{TOOLS.join(', ')}" unless TOOLS.include?(opts[:tool])
     raise Error, "--out is required" unless opts[:out] || opts[:dry_run] || opts[:smoke]
+    raise Error, "--codex-home is only for --tool codex" if opts[:codex_home] && opts[:tool] != "codex"
+    if opts[:tool] == "codex" && !opts[:codex_home] && !opts[:dry_run]
+      raise Error, "--codex-home is required for --tool codex (an eval-only Codex home; docs/skill-routing-acceptance.md)"
+    end
     opts
   end
 
@@ -356,7 +363,7 @@ module ProbeSkillRouting
             "--ignore-user-config", "--ignore-rules", "-s", "read-only", "-c", 'approval_policy="never"']
     CODEX_DISABLE_FEATURES.each { |f| argv.push("--disable", f) }
     argv.push("-C", proj, "-m", codex_model(opts))
-    disable = codex_disable_override(names)
+    disable = codex_disable_override(names, opts[:codex_home])
     argv += ["-c", disable] if disable
     argv + ["-"]
   end
@@ -387,8 +394,89 @@ module ProbeSkillRouting
     nil
   end
 
+  # codex の子 process にだけ渡す環境 (#802)。CODEX_HOME は評価用の home、HOME は run ごとの空の dir。親の process の
+  # 環境は変えない (PATH などはそのまま継ぐ)。
+  def self.codex_env(opts, home)
+    { "CODEX_HOME" => opts.fetch(:codex_home), "HOME" => home }
+  end
+
+  # 空の dir を作って HOME に使い、終わったら消す (#802)。Dir.mktmpdir は mode 0700 で作る。temp project とは別の
+  # 置き場。消せなければ残った path を warn に出す (子は read-only の sandbox なので、ふつうは中身が増えない)。
+  def self.with_empty_home(prefix)
+    dir = Dir.mktmpdir(prefix)
+    yield dir
+  ensure
+    if dir
+      begin
+        FileUtils.remove_entry(dir)
+      rescue SystemCallError => e
+        warn "warn: could not remove the empty home #{dir} (#{e.class})"
+      end
+    end
+  end
+
+  # 親の process のふだんの Codex home (model の取得と、評価用の home がこれと別の実体かの照合に使う。#802)。
+  # 子の Codex には渡さない (子の CODEX_HOME は --codex-home の評価用の home)。
   def self.codex_home
     ENV["CODEX_HOME"] || File.join(Dir.home, ".codex")
+  end
+
+  # 評価用の Codex の home に在ってはいけない file (大文字小文字を区別しない。#731)。
+  EVAL_HOME_FORBIDDEN = %w[agents.md agents.override.md].freeze
+
+  # 評価用の Codex の home を確かめ、実 path を返す (#731。#802 で routing の probe と共有)。auth.json の中身は読まない。
+  def self.eval_codex_home!(dir)
+    raise Error, "--codex-home must be an absolute path" unless dir.start_with?("/")
+
+    st = begin
+      File.lstat(dir)
+    rescue Errno::ENOENT
+      raise Error, "--codex-home does not exist"
+    end
+    raise Error, "--codex-home must not be a symlink" if st.symlink?
+    raise Error, "--codex-home must be a directory" unless st.directory?
+
+    real = File.realpath(dir)
+    usual = codex_home
+    # 文字列ではなく実体で比べる (大文字小文字を区別しない file system では、同じ dir の実 path の表記が変わりうる)
+    if File.exist?(usual) && File.identical?(usual, real)
+      raise Error, "--codex-home must not be the usual Codex home"
+    end
+
+    auth = begin
+      File.lstat(File.join(real, "auth.json"))
+    rescue Errno::ENOENT
+      raise Error, "--codex-home has no auth.json (log in once with CODEX_HOME set to the dir)"
+    end
+    raise Error, "--codex-home: auth.json must be a regular file" unless auth.file?
+
+    found = Dir.children(real).select { |n| EVAL_HOME_FORBIDDEN.include?(n.downcase) }
+    raise Error, "--codex-home must not have #{found.sort.join(', ')}" unless found.empty?
+
+    skills = File.join(real, "skills")
+    if File.symlink?(skills)
+      raise Error, "--codex-home: skills must not be a symlink"
+    elsif File.directory?(skills)
+      user = Dir.children(skills).reject { |n| n.start_with?(".") }
+      raise Error, "--codex-home must not have user skills (#{user.length} under skills/)" unless user.empty?
+    elsif File.exist?(skills)
+      raise Error, "--codex-home: skills must be a directory"
+    end
+    real
+  rescue SystemCallError => e
+    raise Error, "--codex-home could not be checked (#{e.class})"
+  end
+
+  # 各 codex exec の前に、評価用の home を検査し直し、最初に確かめた dir と同じ実体かも確かめる (#731。review の
+  # round 1)。run の間に AGENTS.md や skill が足された、dir を差し替えられた、のどれでも起動せずに止める。
+  def self.recheck_codex_home!(opts)
+    real = eval_codex_home!(opts[:codex_home])
+    st = File.stat(real)
+    return if real == opts[:codex_home] && [st.dev, st.ino] == opts[:codex_home_id]
+
+    raise Error, "--codex-home changed during the probe"
+  rescue SystemCallError => e
+    raise Error, "--codex-home could not be checked (#{e.class})"
   end
 
   # --model が無ければ $CODEX_HOME/config.toml の top-level model を使う。どちらも無ければ
@@ -412,9 +500,13 @@ module ProbeSkillRouting
     raise Error, "codex: --model is required (no top-level model in #{config})"
   end
 
-  def self.codex_disable_override(names)
+  # 子の Codex home (--codex-home) の user scope に候補と同名の skill があれば無効にする。評価用の home は user の
+  # skill を持てない (eval_codex_home!) ので、ふつうは空。home が無い (--dry-run で省いた) ときも空。
+  def self.codex_disable_override(names, child_codex_home)
+    return nil unless child_codex_home
+
     entries = names.map do |n|
-      path = File.join(codex_home, "skills", n, "SKILL.md")
+      path = File.join(child_codex_home, "skills", n, "SKILL.md")
       next unless File.file?(path)
 
       "{path=\"#{toml_escape(path)}\",enabled=false}"
@@ -551,9 +643,15 @@ module ProbeSkillRouting
       r = run_command(argv, chdir: proj, stdin: nil, timeout: opts[:timeout], env: AutoMemory::ENV_OFF)
       parsed = parse_claude(r.out, names: names, proj: proj, home: Dir.home)
     else
+      # 起動の前に評価用の home を検査し直す (#802。挙動の評価と同じ)。copy の判定の ~ は子の HOME で展開する。
+      recheck_codex_home!(opts)
       argv = codex_argv(opts, proj, names)
-      r = run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout])
-      parsed = parse_codex(r.out, names, proj: proj, home: Dir.home).merge(model: codex_model(opts))
+      r = nil
+      parsed = nil
+      with_empty_home("skill-routing-home-") do |home|
+        r = run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout], env: codex_env(opts, home))
+        parsed = parse_codex(r.out, names, proj: proj, home: home).merge(model: codex_model(opts))
+      end
     end
     done = completion(opts[:tool], r, parsed)
     parsed = parsed.merge(prompt_tokens: nil, output_tokens: nil) if done == "observed-stop"
@@ -581,6 +679,11 @@ module ProbeSkillRouting
       return 0
     end
     opts = parse_argv(argv)
+    if opts[:codex_home]
+      opts[:codex_home] = eval_codex_home!(opts[:codex_home])
+      st = File.stat(opts[:codex_home])
+      opts[:codex_home_id] = [st.dev, st.ino]
+    end
     source = source_dir(opts, root)
     dirs = skill_dirs(source)
     names = dirs.map { |d| File.basename(d) }
@@ -598,8 +701,11 @@ module ProbeSkillRouting
     # prompt は argv / stdin で渡すが、先頭 '-' は CLI に option と解釈されうるので弾く。
     bad = cases.select { |c| c["prompt"].start_with?("-") }
     raise Error, "prompt must not start with '-': #{bad.map { |c| c['id'] }.join(', ')}" unless bad.empty?
-    # dry-run は CLI を起動しないので確かめない。
-    codex_preflight! if opts[:tool] == "codex" && !opts[:dry_run]
+    # dry-run は CLI を起動しないので確かめない。確かめは run と同じ条件 (評価用の CODEX_HOME と空の HOME) で、確かめの
+    # 専用の空の HOME を使う (run ごとの HOME はまだ無い。#802)。
+    if opts[:tool] == "codex" && !opts[:dry_run]
+      with_empty_home("skill-routing-preflight-home-") { |home| codex_preflight!(env: codex_env(opts, home)) }
+    end
 
     Dir.mktmpdir("skill-routing-") do |base|
       proj = prepare_project(base, opts[:tool], dirs)
@@ -608,6 +714,10 @@ module ProbeSkillRouting
       if opts[:dry_run]
         sample = opts[:tool] == "claude-code" ? claude_argv(opts, "<prompt>") : codex_argv(opts, proj, names)
         puts "argv: #{sample.map(&:inspect).join(' ')}#{opts[:tool] == 'codex' ? ' (prompt on stdin)' : ''}"
+        if opts[:tool] == "codex"
+          home_line = opts[:codex_home] ? "#{opts[:codex_home]} (CODEX_HOME for the child; HOME is an empty dir per run)" : "not set (required for runs)"
+          puts "codex home: #{home_line}"
+        end
         puts "cases: #{cases.length} x repeat #{opts[:repeat]}"
         cases.each { |c| puts "  #{c['id']}: #{c['prompt']}" }
         return 0
@@ -671,6 +781,8 @@ module ProbeSkillRouting
       }
       # 自動の memory を止めたこと (#770。claude-code だけ)。
       results["auto_memory"] = AutoMemory.record(memory_states) if opts[:tool] == "claude-code"
+      # Codex の子の home の条件 (#802。codex だけ)。judge は比較の両側でこれが同じかを確かめる。
+      results["codex_isolation"] = CheckSkillRouting::CODEX_ISOLATION if opts[:tool] == "codex"
       File.write(opts[:out], JSON.pretty_generate(results) + "\n")
       errors = runs.count { |r| r["status"] != "ok" }
       puts "wrote #{opts[:out]} (#{runs.length} runs, #{errors} error run(s), raw: #{raw_dir})"

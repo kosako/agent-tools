@@ -53,6 +53,8 @@ module CheckSkillRouting
   CASES_SCHEMA_VERSION = 1
   # probe が書く版は 2 (#302 で run の completion と、observed-stop の run の null の token を足した)。1 も読む。
   RESULTS_SCHEMA_VERSION = 2
+  # Codex の子の home の条件 (#802)。子の HOME は run ごとの空の dir、CODEX_HOME は評価用の home。値はこれだけ。
+  CODEX_ISOLATION = { "home" => "empty", "codex_home" => "eval" }.freeze
   READABLE_RESULTS_SCHEMA_VERSIONS = [1, 2].freeze
   KNOWN_TOOLS = %w[claude-code codex].freeze
   RUN_STATUSES = %w[ok error].freeze
@@ -73,6 +75,8 @@ module CheckSkillRouting
         "auto_memory": { "requested": "off", "init": "not-listed" } }
       first_prompt_tokens と auto_memory は任意。auto_memory は claude-code だけで、init が not-listed でなければ
       緑にしない (#770)。
+      codex_isolation (任意。#802): codex だけで、値は { "home": "empty", "codex_home": "eval" } だけ。比較の条件に入る
+      (片側にだけある、#802 より前の結果との比較は構造エラー)。
       completion: exited / max-turns / observed-stop (status ok) か timeout / failed (status error)。
       observed-stop の run だけ token を null にできる (集計から外し、外した数を出す)。schema_version 1 も読む
       (completion なし、token は整数)。
@@ -82,7 +86,7 @@ module CheckSkillRouting
     判定: 全 case に ok な run があること (coverage)。primary skill の hit と must_not skill の
     violation を数え、token を合算して報告する (prompt_tokens = run 全体、first_prompt_tokens =
     最初の API call の prompt 量。後者は全 run が持つときだけ集計)。--baseline を与えると同条件
-    (tool / model / case 集合 / run 数 / auto_memory) の結果と case ごとに比較する。baseline で半分以上の run が primary に
+    (tool / model / case 集合 / run 数 / auto_memory / codex_isolation) の結果と case ごとに比較する。baseline で半分以上の run が primary に
     当たっていた case が、候補で一度も当たらなければ回帰。それより小さい減少は warn: の行で出し、exit に
     響かない (合計は比べない)。must_not は baseline によらず、候補で 1 回でも出れば破れ。token は gate に
     せず delta を報告するだけ。reads があれば、must_not の痕跡が observed に無い run (と、must_not のある case の
@@ -152,6 +156,10 @@ module CheckSkillRouting
     # 自動の memory の記録 (#770)。#770 より前の results には無い。
     if data.key?("auto_memory") && !(data["tool"] == "claude-code" && AutoMemory.valid?(data["auto_memory"]))
       raise Error, "#{label}: auto_memory must be an object of requested (off) and init, for claude-code only"
+    end
+    # Codex の子の home の条件 (#802)。#802 より前の results には無い。
+    if data.key?("codex_isolation") && !(data["tool"] == "codex" && data["codex_isolation"] == CODEX_ISOLATION)
+      raise Error, "#{label}: codex_isolation must be {\"home\": \"empty\", \"codex_home\": \"eval\"}, for codex only"
     end
 
     runs = data["runs"]
@@ -367,6 +375,8 @@ module CheckSkillRouting
     failures << "comparison: tool differs (#{baseline['tool']} vs #{candidate['tool']})" if candidate["tool"] != baseline["tool"]
     failures << "comparison: model differs (#{baseline['model']} vs #{candidate['model']})" if candidate["model"] != baseline["model"]
     failures << "comparison: auto memory differs" if candidate["auto_memory"] != baseline["auto_memory"]
+    # 片側にだけある (#802 より前の結果と比べる) ときも違うとする。子の home の条件が違う run は同条件ではない。
+    failures << "comparison: codex isolation differs" if candidate["codex_isolation"] != baseline["codex_isolation"]
     cases[:cases].each do |c|
       n_c = candidate["runs"].count { |r| r["case"] == c["id"] }
       n_b = baseline["runs"].count { |r| r["case"] == c["id"] }
