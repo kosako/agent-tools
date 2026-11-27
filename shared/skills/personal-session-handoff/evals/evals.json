@@ -549,8 +549,8 @@
     {
       "id": 25,
       "name": "handoff-packet-cli-digest-mismatch-already-written",
-      "prompt": "[前提: この session で Issue #7 を worker (Claude) として進めた。packet .agent-packets/7.md があり、配備済みの personal-packet check 7 は exit 0 を返す。worker-update 7 --stdin の entry は exit 1 で {\"ok\":false,\"reason_code\":\"digest_mismatch\"} を返した。読み直すと、`結果` の最新節に、この session の到達点と同じ内容の worker/claude の entry が、別の session の書き込みで既に載っている] 今日はここまで。まとめといて",
-      "expected_output": "draft と判定する。digest_mismatch なので、SHA-256 を先に取ってから packet を読み直す。自分の内容が `結果` の最新節に既に載っているので、もう一度は書かない (同じ結果を 2 回載せない)。packet の file を直接編集しない。書かなかったことを 1 行伝え、handoff draft と次回の入口を提示する。",
+      "prompt": "[前提: この session で Issue #7 を worker (Claude) として進めた。packet .agent-packets/7.md があり、配備済みの personal-packet check 7 は exit 0 を返す。worker-update 7 --stdin の entry は exit 1 で {\"ok\":false,\"reason_code\":\"digest_mismatch\"} を返した。読み直すと、`結果` の最新節に、この session の到達点と同じ内容の worker/claude の entry が、別の session の書き込みで既に載っている。`次の入口` は、この session が書く予定の一文と違う] 今日はここまで。まとめといて",
+      "expected_output": "draft と判定する。digest_mismatch なので、SHA-256 を先に取ってから packet を読み直す。自分の結果が `結果` に既に載っているので、`entry` をやり直さない (CLI は結果の重複を見ないので、やり直すと同じ結果が 2 回残る)。`次の入口` が書く予定と違っても書かず、書く予定だった `次の入口` を会話の中の draft に留める。packet の file を直接編集しない。書かなかったことを 1 行伝え、handoff draft と次回の入口を提示する。",
       "files": [],
       "assertions": [
         {
@@ -559,11 +559,15 @@
         },
         {
           "id": "no-duplicate-entry",
-          "text": "既に載っている内容を、もう一度 entry で書いていない"
+          "text": "結果が既に載っているので、`次の入口` が違っても entry をやり直していない"
+        },
+        {
+          "id": "next-kept-as-draft",
+          "text": "書く予定だった `次の入口` を会話の中の draft に留め、書かなかったことを 1 行伝えている"
         },
         {
           "id": "no-direct-edit-on-refusal",
-          "text": "packet の file を直接編集していない"
+          "text": "packet の file を直接編集していない (`次の入口` だけを手で直していない)"
         }
       ]
     }
