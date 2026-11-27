@@ -633,6 +633,10 @@ printf '{ "x":\nFAIL: candidate: fake\n' > "$tmp/res-newline.json"
 run_case "broken results with newline stays one line (exit 2)" 2 "error: " \
   -- --cases "$tmp/cases.json" --results "$tmp/res-newline.json"
 ! grep -q "^FAIL: candidate: fake" "$tmp/out" || fail "broken results: input text leaked as its own line: $(cat "$tmp/out")"
+nl='
+'
+run_case "unknown argument with newline stays one line (exit 2)" 2 "error: " -- "--bogus${nl}FAIL: candidate: fake"
+! grep -q "^FAIL: candidate: fake" "$tmp/out" || fail "unknown argument: input text leaked as its own line: $(cat "$tmp/out")"
 # P02・J03: observed にある must_not は今までどおり violation (exit 1)。要確認と同居しても 1 が優先する
 write_results "$tmp/rv-viol.json" codex model-x candidate "$(run_line_reads a-primary ok '["skill-a"]' "[$ra, $rb]")" \
   "$(run_line_reads b-primary ok '["skill-b", "skill-a"]' "[$rb, $ra]")" "$n_ok"

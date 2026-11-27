@@ -487,7 +487,7 @@ module CheckSkillRouting
     opts = begin
       parse_argv(argv)
     rescue Error => e
-      warn "error: #{e.message}"
+      warn "error: #{one_line(e.message)}"
       warn USAGE
       return 2
     end
