@@ -193,6 +193,7 @@ gh pr create --repo "$slug" --base main --head "$branch" --title "$title" --body
 ```
 
 修正 round では PR を新しく作らない。push 後に §4 の `review` 操作で PR 番号と state を記録する。
+PR を作る前に止まった後の修正 round では、PR がまだ無いので、`READY` の後に push してから上の手順で PR を作る (#782)。
 
 後始末で使う公開先の確認は次の block。§11 の前提確認で再実行する。
 通常の公開前検査をこれで代えない。

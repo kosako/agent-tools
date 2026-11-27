@@ -262,6 +262,7 @@ exit 3 は指摘を読んで直すか、理由を持って `--style-reviewed` �
 `check` が最後に packet を読み直してから push までの間に足された依頼は見ないので、この間を短くする (#782。窓は残る)。
 branch の現在の tip で代えない。具体的な push と PR 作成は `LAUNCH.md` §9 に従う。
 push が失敗したら PR を作らない。修正 round は既存 PR を使う。
+PR を作る前に止まった後の修正 round では、PR がまだ無いので、`READY` の後に push してから PR を作る。
 push の後、PR の作成までに間が空いたときも、PR を作る前に `check` をかけ直す。`READY` でなければ PR を作らない
 (push した branch はそのまま残し、下の BLOCKED の扱いに従う)。
 PR 作成後は `personal-packet worker-update <issue> --stdin` の `review` 操作で packet を書く。
