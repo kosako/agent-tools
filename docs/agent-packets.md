@@ -8,7 +8,7 @@
 
 | 置き場 | 正本にするもの | 書き方 |
 |---|---|---|
-| packet `.agent-packets/<issue>.md` (local、git 管理しない) | **Issue 単位の作業状態** (依頼 / 結果 / 次の入口)。private な詳細 (path / 判断の生々しい理由 / 残量) を含んでよい | 依頼は作成のときに書き後から足すときは追記、結果は追記、次の入口は現在地 (どれも `worker-update` の操作で書く。#782) |
+| packet `.agent-packets/<issue>.md` (local、git 管理しない) | **Issue 単位の作業状態** (依頼 / 結果 / 次の入口)。private な詳細 (path / 判断の生々しい理由 / 残量) を含んでよい | 依頼は作成のときに書き後から足すときは追記、結果は追記、次の入口は現在地 (新規の作成と、依頼の既存の文の訂正のほかは `worker-update` の操作で書く。#782) |
 | GitHub Issue コメント | packet の **public-safe な写し** (machine 跨ぎの受け渡し用) | publish (下記) で写す。手で編集しない |
 | planning tool (repository 外) | **project 単位**の判断ログとダッシュボード (どの Issue が動いているかの索引まで) | Issue 単位の細かい進捗は書かない |
 
@@ -302,7 +302,8 @@ file で行い、command 文字列へ inline 展開しない。
   差し替える。一時 file がある間は、ほかの script は書かない。publish は投稿の前と、投稿の後の差し替えの前の 2 回確かめ、
   投稿の後に変わっていたら、差し替えずに投稿済みの URL を示して止まる (再実行しない。一時 file を消し、`published` を
   手で更新する)。
-- agent の書き手は、既存の packet を `worker-update` の操作で書く (#782)。`personal-session-handoff` の追記は `entry`、
+- agent の書き手は、既存の packet を `worker-update` の操作で書く (#782。下の残る書き手に挙げた、orchestrator による
+  `依頼` の文の訂正を除く)。`personal-session-handoff` の追記は `entry`、
   委譲の orchestrator の転記・停止・round・起動の記録・review は、それぞれの操作を使う。`done` も操作で入れる。
   CLI に拒まれたときは直接の編集に戻らず、書く予定だった内容を会話の中の draft に留める (handoff の手順 1.5)。
 - この取り決めを使わない書き手とは、最後に確かめてから rename するまでの間 (system call の 2 つの間) が重なりうる。
