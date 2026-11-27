@@ -362,7 +362,9 @@ usage: sync.sh [--root DIR] [--apply] [--prune] [--codex-home DIR] [--claude-hom
   配備の前から続いている session が前の版で動き続けることを 1 行で出す (#688。`--quiet`・conflict・節に違いが無いときは
   出さない。[sync-policy](../docs/sync-policy.md) の「配備の報告」)。
 - self-test: `tests/sync-test.sh`、local の断片は `tests/local-instructions-test.sh`、配備の報告は
-  `tests/sync-instruction-note-test.sh` と `tests/instruction-sections-test.sh` (fake home のみを使い、実際の tool homes には触れない)
+  `tests/sync-instruction-note-test.sh` と `tests/instruction-sections-test.sh`、配った asset を止めて戻す手順
+  ([install-and-usage](../docs/install-and-usage.md) の「配った asset を止める (取り消し)」。#723) は `tests/revoke-test.sh`
+  (fake home のみを使い、実際の tool homes には触れない)
 
 - `status.sh`: report-only status。
   [Status / Manifest Contract](../docs/status-manifest-contract.md) の JSON を出力する。
@@ -380,7 +382,7 @@ usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR] [-
   1 つ出す (#723。文言は `Status::INACTIVE_NOTE` と `Status::MANAGED_NOTE`)。`--json` の値と field は変えない。
 - read-only。いかなる state も変更しない。
 - 出力に absolute local paths / secrets を含めない。
-- self-test: `tests/status-test.sh`
+- self-test: `tests/status-test.sh`、人向けの出力の注は `tests/state-display-test.sh`
 
 - `doctor.sh`: state を変更せず、local environment assumptions を inspect する。
 
@@ -407,7 +409,7 @@ usage: doctor.sh [--root DIR] [--codex-home DIR] [--claude-home DIR] [--opencode
 - `deployed_but_inactive` の target の行 (warn) には、status と同じ注 (`Status::INACTIVE_NOTE`) を載せる (#723)。
 - 出力は `level: area: message` 形式 (ok / info / warn / fail)。fail があれば exit 1。
 - read-only。paths は tilde 表記で出力し、secrets を含めない。一時 directory は repo と tool home の外に作り、終わると消す。
-- self-test: `tests/doctor-test.sh`、`tests/doctor-body-test.sh` (body の検査)
+- self-test: `tests/doctor-test.sh`、`tests/doctor-body-test.sh` (body の検査)、`tests/state-display-test.sh` (target の行の注)
 
 - `register.sh`: assets を検証し、`generated/catalog.json` に登録状態を記録する。
   [Register / Catalog](../docs/register-catalog.md) に従う。
