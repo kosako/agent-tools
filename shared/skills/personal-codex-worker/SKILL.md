@@ -257,6 +257,9 @@ exit 3 は指摘を読んで直すか、理由を持って `--style-reviewed` �
 本文を直したら `personal-post-check` から、commit を直したら `check` からやり直す。履歴の修正は `LAUNCH.md` §3 を参照する。
 
 `READY` のときだけ、`check` が返した `head_oid` を指定して push する。
+`READY` を受けたら、間に別の作業を挟まずに push する。
+人の確認を待った、別の作業をした、など `READY` の後に間が空いたときは、push の前に `check` をかけ直す。
+`check` が最後に packet を読み直してから push までの間に足された依頼は見ないので、この間を短くする (#782。窓は残る)。
 branch の現在の tip で代えない。具体的な push と PR 作成は `LAUNCH.md` §9 に従う。
 push が失敗したら PR を作らない。修正 round は既存 PR を使う。
 PR 作成後は `personal-packet worker-update <issue> --stdin` の `review` 操作で packet を書く。

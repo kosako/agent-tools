@@ -31,6 +31,9 @@ clause.call(s5, "`personal-codex-worker-run launch` を呼ぶ")
 clause.call(s6, "`personal-codex-worker-run collect` を呼ぶ")
 clause.call(s6, "`empty-result` で `retryable: true` のときだけ、`personal-codex-worker-run retry-empty` を呼ぶ")
 clause.call(s7, "`personal-codex-worker-run check` を題名と本文を渡して呼ぶ")
+# check と push の間の窓は、手順で短くする (#782 の 2 つ目。人の判断 2026-11-27)。
+clause.call(s7, "`READY` を受けたら、間に別の作業を挟まずに push する")
+clause.call(s7, "`READY` の後に間が空いたときは、push の前に `check` をかけ直す")
 clause.call(s7, "人が `gate-publish.err` を確かめて公開を認めたときだけ `--accept-warnings` を付けて `check` をやり直す")
 clause.call(s7, "人の確認なしに `--accept-warnings` を付けない")
 clause.call(s7, "`READY` のときだけ、`check` が返した `head_oid` を指定して push する")
@@ -102,6 +105,8 @@ commands.each do |argv|
   errors << "引数の値または順序が不正: #{sub}" unless pairs.all? { |key, value| values[key] == value && !value.nil? }
 end
 publish = section.call(launch, "## 9. 回収 (fetch) と trailer 検査と PR")
+clause.call(publish, "`READY` の後は、間に別の作業を挟まずに push する")
+clause.call(publish, "間が空いたときは、push の前に `check` をかけ直す")
 lines = MU.sh_blocks(publish).flat_map(&:lines).map(&:strip)
 push_command = 'git -C "$main" push origin "${head_oid}:refs/heads/${branch}"'
 errors << "push の例が無い" unless lines.include?(push_command)
