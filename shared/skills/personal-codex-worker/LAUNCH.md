@@ -173,7 +173,8 @@ exit 3 は指摘を読んで直すか、理由を持って `--style-reviewed` �
 検査が exit 0、または exit 1 の後に人が公開を認めた場合だけ、§1 の `check` を呼ぶ。
 手で fetch や gate の pipeline を組まない。検査と公開は別の呼び出しにする。
 以下は `check` が exit 0 で `READY` を返した後だけ行う。
-`READY` の後は、間に別の作業を挟まずに push する。間が空いたときは、push の前に `check` をかけ直す (#782)。
+`READY` の後は、間に別の作業を挟まずに push し、push が成功したら続けて PR を作る。
+`READY` の後、push の前か PR の作成の前に間が空いたときは、その前に `check` をかけ直し、`READY` でなければ先へ進まない (#782)。
 JSON の `head_oid`、`branch`、`slug` をそれぞれ変数に読み、検査した OID を指定する。
 題名や本文を直したら `personal-post-check` からやり直す。
 
