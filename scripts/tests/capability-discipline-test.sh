@@ -107,6 +107,9 @@ run_check.call(rs, SAFE, "安全な読み口の節",
                "自分の呼び方の誤り (番号や repo の形、`-R` の付け忘れ) が safe-gh の固定の message から明らかなときは、直して safe-gh を 1 度だけ呼び直してよく、これは fallback ではありません。", 2,
                ["それでも exit 0 にならなければ停止します。"], :bullets)
 check.call(rs, SAFE, "安全な読み口の節", :bullets, "exit が想定外 (0 以外。", ["自分の呼び方の誤り"])
+# github.com 専用 (#721): host の理由の exit 2 は、同じ名前に -R を付けて呼び直さない (github.com の別の repo を読みうる)。
+run_check.call(rs, SAFE, "安全な読み口の節", "host の理由の exit 2 は呼び方の誤りではないので", 1,
+               ["同じ名前に `-R` を付けて呼び直しません (github.com の別の repository を読みうるため)。"], :bullets)
 check.call(rs, SAFE, "安全な読み口の節", :sentences,
            "停止したら、何が使えなかったか (配備なし / 起動の失敗 / exit の値) を 1 行で伝え、規律 7 と同じ hand-off に移ります (trusted なユーザーに safe-gh の配備・修復か public-safe な抜粋を頼む、または credential と write capability を持たない隔離 reader / human reviewer へ引き継ぐ)。")
 check.call(rs, DONTS, "やってはいけないことの節", :bullets,
