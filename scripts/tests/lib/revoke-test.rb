@@ -85,6 +85,17 @@ def doctor
   run!("doctor", File.join(SCRIPTS, "doctor.sh"), "--root", REPO, *HOMES, "--agents-home", AGENTS, ok: [0, 1])
 end
 
+# 戻す手順の 5: doctor が、戻した target を source から作り直した artifact と一致と出す。
+def expect_body_match(label, targets, root: REPO, home: HOME, homes: HOMES)
+  out, rc = run!("doctor", File.join(SCRIPTS, "doctor.sh"), "--root", root, *homes, "--agents-home", File.join(home, ".agents"),
+                 ok: [0, 1], home: home)
+  check(rc.zero?, "#{label}: doctor passes: #{out}")
+  targets.each do |tool, name|
+    check(out.lines.map(&:chomp).include?("ok: target: [#{tool}] #{name} managed (body matches a fresh build)"),
+          "#{label}: [#{tool}] #{name} matches a fresh build: #{out}")
+  end
+end
+
 def catalog
   JSON.parse(File.read(File.join(REPO, "generated/catalog.json")))["assets"]
 end
@@ -378,6 +389,7 @@ sync_apply
   check(state_of(status_json, t, "personal-med") == "managed", "B1: [#{t}] personal-med managed with the saved lines")
 end
 check(snapshot(med_paths) == others, "N1: restoring the skill does not touch other targets")
+expect_body_match("B1", [%w[codex personal-med], %w[claude-code personal-med]])
 
 # ===== targets から外す道 (危険度の低い skill の personal-single を codex だけ) =====
 # --- R3: 危険度の低い skill に pending を書いても登録は外れない (道を分ける根拠) ---
@@ -436,6 +448,7 @@ check(plan == ["create: [codex] ~/.codex/skills/personal-single"], "B2: the plan
 sync_apply
 json = status_json
 check(state_of(json, "codex", "personal-single") == "managed", "B2: codex managed again")
+expect_body_match("B2", [%w[codex personal-single], %w[claude-code personal-single]])
 check(snapshot(codex_single) == others, "B2: restoring does not touch the claude-code copy or other targets")
 check(File.binread(human_md) == "# mine\n", "N2・B2: restoring does not add the import back to the human CLAUDE.md")
 
@@ -470,6 +483,7 @@ plan = restore_plan
 check(plan == ["create: [opencode] ~/.config/opencode/plugins/personal-plug.js"], "B3: the plan creates only the plugin: #{plan}")
 sync_apply
 check(state_of(status_json, "opencode", "personal-plug") == "managed", "B3: managed after the hand file is gone")
+expect_body_match("B3", [%w[opencode personal-plug]])
 
 # ===== R9: script の本体だけを動かすと、sidecar が残り、catalog から消えても orphan に出ない (両方を動かす理由) =====
 keep_paths = %w[codex claude-code].flat_map { |t| paths_of(t, "personal-keep", "script") }
@@ -492,16 +506,30 @@ FileUtils.cp(File.join(REPO, "shared/skills/personal-single.md"), File.join(repo
 FileUtils.cp(File.join(REPO, "shared/skills/personal-single.asset.yml"), File.join(repo2, "shared/skills/"))
 [".codex", ".claude", ".config/opencode"].each { |d| FileUtils.mkdir_p(File.join(home2, d)) }
 script("setup.sh", "--apply", "--quiet", *homes2, root: repo2, home: home2)
-last = File.join(home2, ".codex/skills/personal-single")
-check(File.directory?(last), "R6: the only asset is deployed")
-%w[personal-single.md personal-single.asset.yml].each { |f| File.delete(File.join(repo2, "shared/skills", f)) }
+last = [File.join(home2, ".codex/skills/personal-single"), File.join(home2, ".claude/skills/personal-single")]
+check(last.all? { |d| File.directory?(d) }, "R6: the only asset is deployed to both tools")
+last_files = %w[personal-single.md personal-single.asset.yml]
+last_files.each { |f| FileUtils.cp(File.join(repo2, "shared/skills", f), File.join(BACKUP, "last-#{f}")) }
+last_files.each { |f| File.delete(File.join(repo2, "shared/skills", f)) }
 script("build.sh", "--prune", "--quiet", root: repo2, home: home2)
 script("register.sh", "--quiet", root: repo2, home: home2)
 json = JSON.parse(script("status.sh", "--json", *homes2, root: repo2, home: home2).first)
 check(json["orphans"].empty? && json["sync_targets"].empty?, "R6: an empty catalog shows no orphan row: #{json}")
-check(File.read(File.join(last, ".agent-tools-managed.yml")).include?("personal-single"), "R6: the marker can be checked")
-out, rc = quarantine("personal-single", [%w[skill codex]], home: home2)
-check(rc.zero? && !File.exist?(last), "R6: the documented skill command moves the last asset: #{out}")
+last.each do |d|
+  check(File.read(File.join(d, ".agent-tools-managed.yml")).include?("personal-single"), "R6: the marker can be checked: #{d}")
+end
+out, rc = quarantine("personal-single", [%w[skill codex], %w[skill claude-code]], home: home2)
+check(rc.zero? && last.none? { |d| File.exist?(d) }, "R6: the documented skill commands move both copies: #{out}")
+# 戻す: asset を戻し (git で戻す代わりに控えを戻す)、build・register・sync の dry-run が両 tool の create だけと見て apply
+last_files.each { |f| FileUtils.cp(File.join(BACKUP, "last-#{f}"), File.join(repo2, "shared/skills", f)) }
+script("build.sh", "--prune", "--quiet", root: repo2, home: home2)
+script("register.sh", "--quiet", root: repo2, home: home2)
+out, = script("sync.sh", *homes2, root: repo2, home: home2)
+plan = out.lines.map(&:chomp).select { |l| l.match?(/\A(create|update|delete|conflict): /) }.map { |l| l.gsub(home2, "~") }
+check(plan.sort == ["create: [claude-code] ~/.claude/skills/personal-single", "create: [codex] ~/.codex/skills/personal-single"],
+      "R6: the restore plan creates only the two copies: #{plan}")
+script("sync.sh", "--apply", "--quiet", *homes2, root: repo2, home: home2)
+expect_body_match("R6", [%w[codex personal-single], %w[claude-code personal-single]], root: repo2, home: home2, homes: homes2)
 
 # ===== N3: 置き場の親が symlink で tool home の内側を指すと、1 つ目の block が出す場所でそれと分かる =====
 trap = File.join(CLAUDE, "trap")
