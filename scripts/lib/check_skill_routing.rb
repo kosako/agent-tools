@@ -507,8 +507,9 @@ module CheckSkillRouting
       baseline = begin
         parse_results(read_file(opts["--baseline"], "baseline"), "baseline")
       rescue Error, JSON::ParserError, SystemCallError => e
-        # Error は label (baseline:) を含む。JSON と file の誤りには付ける。
-        warn "error: #{e.is_a?(Error) ? e.message : "baseline: #{e.message}"}"
+        # どの誤りの行も「baseline: 」で始める (parse_results の Error は既に付いている。file が無い・JSON の誤りには付ける)。
+        msg = e.message
+        warn "error: #{msg.start_with?("baseline: ") ? msg : "baseline: #{msg}"}"
         baseline_unreadable = true
         nil
       end
@@ -531,7 +532,8 @@ module CheckSkillRouting
     cand[:notes].each { |n| puts "note: #{n}" }
     cand[:reviews].each { |r| warn "review: #{r}" }
     if baseline_unreadable
-      breaches.each { |failure| warn "FAIL: #{failure}" }
+      # 候補の破れと構造エラーは全件出す (baseline の誤りは上の error: の行で出した)。
+      (breaches + structural).each { |failure| warn "FAIL: #{failure}" }
       return breaches.empty? ? 2 : 1
     end
     if breaches.empty? && structural.empty?

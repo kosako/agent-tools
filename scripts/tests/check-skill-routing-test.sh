@@ -612,6 +612,13 @@ run_case "broken baseline keeps candidate violation (exit 1)" 1 "FAIL: candidate
   -- --cases "$tmp/cases.json" --results "$tmp/rv-viol-only.json" --baseline "$tmp/rv-base-broken.json"
 run_case "missing baseline file keeps candidate violation (exit 1)" 1 "FAIL: candidate: case 'a-primary' triggered must_not skill(s) skill-b" \
   -- --cases "$tmp/cases.json" --results "$tmp/rv-viol-only.json" --baseline "$tmp/no-such-baseline.json"
+grep -q "error: baseline: baseline file not found" "$tmp/out" || fail "missing baseline: label missing: $(cat "$tmp/out")"
+# 候補の構造エラーも、baseline を読めないときに捨てない (#801 の round 2)
+run_case "broken baseline keeps candidate structural error (exit 2)" 2 "FAIL: candidate: case 'none' has no run (coverage gap)" \
+  -- --cases "$tmp/cases.json" --results "$tmp/gap.json" --baseline "$tmp/rv-base-broken.json"
+run_case "broken baseline keeps violation and structural error (exit 1)" 1 "triggered must_not skill(s) skill-b" \
+  -- --cases "$tmp/cases.json" --results "$tmp/both.json" --baseline "$tmp/rv-base-broken.json"
+grep -q "coverage gap" "$tmp/out" || fail "broken baseline: structural failure not reported alongside: $(cat "$tmp/out")"
 # P02・J03: observed にある must_not は今までどおり violation (exit 1)。要確認と同居しても 1 が優先する
 write_results "$tmp/rv-viol.json" codex model-x candidate "$(run_line_reads a-primary ok '["skill-a"]' "[$ra, $rb]")" \
   "$(run_line_reads b-primary ok '["skill-b", "skill-a"]' "[$rb, $ra]")" "$n_ok"
