@@ -376,6 +376,8 @@ usage: status.sh [--root DIR] [--json] [--codex-home DIR] [--claude-home DIR] [-
   sync target state (managed / stale / conflict / missing / deployed_but_inactive) を含む。
   generated の列挙は `ArtifactTargets::TOOL_KINDS` の組だけを回し、plugin の鮮度は先頭行 marker の
   `build_id` と `Build.build_id_for` の比較で判定する。`sync_targets[].tool` に `opencode` が入る。
+- human-readable summary は、`deployed_but_inactive` の行に注を足し、`managed` が 1 つでもあれば最後に `note:` の行を
+  1 つ出す (#723。文言は `Status::INACTIVE_NOTE` と `Status::MANAGED_NOTE`)。`--json` の値と field は変えない。
 - read-only。いかなる state も変更しない。
 - 出力に absolute local paths / secrets を含めない。
 - self-test: `tests/status-test.sh`
@@ -402,6 +404,7 @@ usage: doctor.sh [--root DIR] [--codex-home DIR] [--claude-home DIR] [--opencode
 - status が `managed` の target は、source から一時 directory に作り直した artifact と body を比べ、結果を target の
   行に載せる (`lib/body_check.rb`。#722)。一致は ok、ずれは warn (最初の違いの相対 path と種類)、未検査は info。
   比べる規則、一時 directory の置き場、回復の手順は [install-and-usage](../docs/install-and-usage.md) の「状態を見る」。
+- `deployed_but_inactive` の target の行 (warn) には、status と同じ注 (`Status::INACTIVE_NOTE`) を載せる (#723)。
 - 出力は `level: area: message` 形式 (ok / info / warn / fail)。fail があれば exit 1。
 - read-only。paths は tilde 表記で出力し、secrets を含めない。一時 directory は repo と tool home の外に作り、終わると消す。
 - self-test: `tests/doctor-test.sh`、`tests/doctor-body-test.sh` (body の検査)
