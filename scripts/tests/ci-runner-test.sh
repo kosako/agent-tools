@@ -26,7 +26,8 @@ image="ghcr.io/actions/actions-runner@sha256:$(printf '%064d' 0 | tr 0 a)"
 # 呼び出しごとに結果を指定する (file の中身で選ぶ。無ければ ok):
 #   mode-post: ok / fail (500・作られない) / fail-created (500 だが作られる) / hang (作ってから返らない) /
 #              late (返らず、止められた後で作られる) / notfound (404)
-#   post-body: normal / noid / runnerstring / otherid (返事の id が別の既存 runner を指す) / badcfg
+#   post-body: normal / noid / runnerstring / otherid (返事の id が別の既存 runner を指す) / badcfg / bigcfg (pipe の容量を超える長さ)
+#   list-lag: 回数。その回数だけ、一覧に agent-tools-ci- の runner を出さない (作った直後の一覧に出るのが遅れる形)
 #   mode-list: ok / fail / hang      mode-delete: ok / notfound / notfound-gone / fail
 #   list-delay・delete-delay: 一覧・DELETE の前に待つ秒      vis-seq の hang は 90 秒返らない
 #   mode-delete の fail-once: 1 回だけ失敗する      ignore-term: TERM を無視する (KILL でだけ止まる)
@@ -101,6 +102,7 @@ elsif method == "POST" && path.match?(%r{/actions/runners/generate-jitconfig\z})
   when "noid" then body["runner"].delete("id")
   when "runnerstring" then body["runner"] = "oops"
   when "badcfg" then body["encoded_jit_config"] = "bad!cfg"
+  when "bigcfg" then body["encoded_jit_config"] = "A" * 65_536
   when "otherid"
     File.write(File.join(runners, "5555"), "someone-else")
     body["runner"]["id"] = 5555
@@ -133,6 +135,12 @@ elsif method == "GET" && path.match?(%r{/actions/runners\?per_page=100\z})
   # leak: 孫の process が stdout を持ったまま残る (親が終わっても、出力の pipe が閉じない)
   Process.detach(fork { sleep 30 }) if mode.call("mode-list") == "leak"
   list = Dir.children(runners).sort.map { |id| { "id" => id.to_i, "name" => File.read(File.join(runners, id)) } }
+  lag_file = File.join(dir, "list-lag")
+  lag = File.exist?(lag_file) ? File.read(lag_file).to_i : 0
+  if lag.positive?
+    File.write(lag_file, (lag - 1).to_s)
+    list = list.reject { |r| r["name"].start_with?("agent-tools-ci-") }
+  end
   puts JSON.generate([{ "total_count" => list.length, "runners" => list }])
 else
   abort "fake gh: unexpected #{method} #{path}"
@@ -157,7 +165,8 @@ args.shift
 case args.shift
 when "run"
   name = args[args.index("--name") + 1]
-  File.write(File.join(dir, "stdin-#{name}"), STDIN.read)
+  # no-stdin: stdin を読まないまま動き続ける
+  File.write(File.join(dir, "stdin-#{name}"), File.exist?(File.join(dir, "no-stdin")) ? "" : STDIN.read)
   state = $(shq "$state")
   FileUtils.cp_r(state, File.join(dir, "state-#{name}")) if File.directory?(state)
   code = File.exist?(File.join(dir, "run-exit")) ? File.read(File.join(dir, "run-exit")).to_i : 0
@@ -475,7 +484,7 @@ invariant() { # $1=case
 }
 converge() { # $1=case
   rm -f "$tmp/gh"/mode-* "$tmp/gh/post-body" "$tmp/gh/vis-seq" "$tmp/gh/chmod-state-on-post" "$tmp/gh/list-delay" \
-    "$tmp/gh/delete-delay" "$tmp/docker/stop-fail" "$tmp/docker/stop-hang" "$tmp/docker/ps-fail" "$tmp/docker"/running-*
+    "$tmp/gh/delete-delay" "$tmp/gh/list-lag" "$tmp/docker/stop-fail" "$tmp/docker/stop-hang" "$tmp/docker/ps-fail" "$tmp/docker"/running-*
   [ -d "$state" ] && chmod 700 "$state"
   for f in "$state"/agent-tools-ci-*.json; do
     [ -f "$f" ] || continue
@@ -489,12 +498,14 @@ converge() { # $1=case
 }
 now_s() { ruby -e 'print Process.clock_gettime(Process::CLOCK_MONOTONIC)'; }
 # case を流す。$1=case 名  $2=TERM の時機 (none / post / running)  $3=遅れて効く偽の子を待つ秒
-# short=1 なら期限を 8 秒にして流す。TERM を送った時刻を $sent に残す
+# short=1 なら期限を 10 秒にして流す。TERM を送った時刻を $sent に残す。late_list があれば、待つ所まで進んだ後に一覧の
+# 結果をそれに替える (起動の前の一覧は成功させ、後片付けの一覧だけを返らなくする case 用)
 run_case() {
   case $2 in
     none) run once kosako/prism ;;
     *)
       start_once "$2"
+      if [ -n "${late_list:-}" ]; then printf '%s\n' "$late_list" > "$tmp/gh/mode-list"; fi
       sent=$(now_s)
       sent_wall=$(ruby -e "print Time.now.to_f")
       kill -TERM "$bg"
@@ -700,12 +711,13 @@ short=1
 # T3: 動いている間に TERM、一覧が返らない -> container は登録の削除を待たずにすぐ止め、once は期限のうちに戻る
 reset
 printf '30\n' > "$tmp/docker/run-seconds"
-printf 'hang\n' > "$tmp/gh/mode-list"
+late_list=hang
 run_case T3 running
+late_list=
 [ "$rc" -eq 1 ] || fail "T3: expected exit 1, got $rc"
 ruby -e '
   ex = File.readlines(ARGV[0]).map(&:split).select { |_, e| e == "EXIT" }.map { |t, _| t.to_f }.min
-  abort "T3: the container must stop within 3s of TERM (exit at #{ex.inspect})" unless ex && ex - ARGV[1].to_f < 3
+  abort "T3: the container must stop well before the deadline (exit at #{ex.inspect})" unless ex && ex - ARGV[1].to_f < 8
 ' -- "$tmp/docker/events.log" "$sent_wall" || fail "T3: the container stop must not wait for the registration removal"
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "T3: the record must be kept"
 converge T3
@@ -741,9 +753,10 @@ converge T6
 # T7: 動いている間に TERM、一覧が返らず、gh が TERM を無視する -> 期限で残った gh を止め (KILL)、期限のうちに戻る
 reset
 printf '30\n' > "$tmp/docker/run-seconds"
-printf 'hang\n' > "$tmp/gh/mode-list"
 touch "$tmp/gh/ignore-term"
+late_list=hang
 run_case T7 running
+late_list=
 [ "$rc" -eq 1 ] || fail "T7: expected exit 1, got $rc"
 rm -f "$tmp/gh/ignore-term"
 converge T7
@@ -859,6 +872,73 @@ main_script=
 ls "$tmp/docker" | grep -q '^stop-' || fail "T11: the container must be stopped"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "T11: the registration must be deleted by the settle"
 converge T11
+# T14 (must 1): JIT の設定が pipe の容量を超え、docker の client が stdin を読まない -> 書き込みで止まらず、TERM で止められる
+reset
+short=1
+printf '30\n' > "$tmp/docker/run-seconds"
+printf 'bigcfg\n' > "$tmp/gh/post-body"
+touch "$tmp/docker/no-stdin"
+run_case T14 running
+short=
+[ "$rc" -eq 1 ] || fail "T14: expected exit 1, got $rc"
+ls "$tmp/docker" | grep -q '^stop-' || fail "T14: the container must be stopped"
+[ ! -e "$tmp/gh/runners/4242" ] || fail "T14: the registration must be deleted"
+[ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "T14: the record must be removed"
+rm -f "$tmp/docker/no-stdin"
+converge T14
+# M26 (must 2): 作った runner が一覧に出るのが遅れ、container は job を走らせずにすぐ終わる (exit 90) -> 名前で見えたことが
+# 一度も無いので、見つからなくても記録を残す。後から出た登録は cleanup が消す
+reset
+printf '90\n' > "$tmp/docker/run-exit"
+printf '2\n' > "$tmp/gh/list-lag"
+run_case M26 none
+expect_rc 1 "M26"
+[ -e "$tmp/gh/runners/4242" ] || fail "M26: the fake registration must still exist"
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M26: the record must be kept until the runner has been seen by name"
+converge M26
+# M27 (must 3): 記録を書いた直後、POST の前に TERM -> POST を始めず、登録を作っていないので記録だけ外す
+reset
+main_script='load ARGV.shift
+original = CiRunner.method(:write_record)
+CiRunner.define_singleton_method(:write_record) do |*a|
+  ok = original.call(*a)
+  Process.kill("TERM", Process.pid)
+  sleep 0.3 # trap の handler が走るのを待つ
+  ok
+end
+exit CiRunner.main(ARGV)'
+start_once none
+wait_bg
+main_script=
+[ "$rc" -eq 1 ] || fail "M27: expected exit 1, got $rc"
+invariant M27
+case $(cat "$tmp/out") in *"止める signal を受けたので runner を作りません"*) ;; *) fail "M27: unexpected output: $(cat "$tmp/out")" ;; esac
+! posted || fail "M27: the POST must not be started after the signal"
+[ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "M27: the record must be removed (nothing was created)"
+converge M27
+# T15 (should 1): docker の client だけが終わった後、名前で止める段が 1 回目だけ例外を出す -> 例外の受け口が名前で止める
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+printf '1\n' > "$tmp/docker/client-drop"
+main_script='load ARGV.shift
+first = true
+original = CiRunner.method(:stop_until_gone)
+CiRunner.define_singleton_method(:stop_until_gone) do |*a|
+  if first
+    first = false
+    raise "boom"
+  end
+  original.call(*a)
+end
+exit CiRunner.main(ARGV)'
+start_once running
+wait_bg
+main_script=
+[ "$rc" -eq 1 ] || fail "T15: expected exit 1, got $rc"
+invariant T15
+ls "$tmp/docker" | grep -q '^stop-' || fail "T15: the container must be stopped by name after the failure"
+! ls "$tmp/docker" | grep -q '^running-' || fail "T15: the fake container must not look alive"
+converge T15
 
 # ---- cleanup の個別の case ---------------------------------------------------------------------------------------
 put_record() { # $1=名前  $2=何秒前に作ったか

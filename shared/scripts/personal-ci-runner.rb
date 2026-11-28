@@ -256,7 +256,7 @@ module CiRunner
       return EXIT_NOT_OK
     end
 
-    ctx = { record: record, pid: nil, alive: false }
+    ctx = { record: record, pid: nil, alive: false, seen: false }
     begin
       launch_and_wait(config, repo, ctx, state, out)
     rescue StandardError => e
@@ -282,7 +282,14 @@ module CiRunner
   def launch_and_wait(config, repo, ctx, state, out)
     record = ctx[:record]
     jit = create_jit(repo, record["name"])
-    reason = launch_refusal(repo, jit)
+    if jit == :not_started
+      # POST を始めていないので、登録は無い。記録だけ外す
+      out.puts "once: #{repo}: 止める signal を受けたので runner を作りません"
+      out.puts "once: #{repo}: 記録を消せませんでした" unless remove_record(state, record)
+      return EXIT_NOT_OK
+    end
+
+    reason = launch_refusal(repo, jit, ctx)
     if reason
       out.puts "once: #{repo}: #{reason}"
       report_settle(settle(record, state, ran: false), record, out)
@@ -292,16 +299,19 @@ module CiRunner
     out.puts "once: #{repo}: runner を起動します (#{record['name']})"
     status = run_container(config, repo, ctx, jit)
     out.puts "once: #{repo}: #{status_label(status, record)}"
-    # 起動した container が終わったと確かめたときだけ ran (名前で見つからなければ、もう無いとみなしてよい)。container が
-    # 動いているかもしれないこと (ctx[:alive]) は、止まったと確かめられないままあきらめたときに立つ
-    ran = %i[started made_public interrupted client_lost].include?(status)
+    # 名前で見つからないときに「もう無い」とみなせる (ran) のは、作った後に一度は名前で一覧に見えていて (ctx[:seen])、
+    # 起動した container が終わったと確かめたときだけ。container が動いているかもしれないこと (ctx[:alive]) は、
+    # 止まったと確かめられないままあきらめたときに立つ
+    ran = ctx[:seen] && %i[started made_public interrupted client_lost].include?(status)
     result = settle(record, state, ran: ran, alive: ctx[:alive])
     report_settle(result, record, out)
     status == :started && result == :removed ? EXIT_OK : EXIT_NOT_OK
   end
 
-  # JIT の設定を作った後で、container を起動しない理由 (無ければ nil)。
-  def launch_refusal(repo, jit)
+  # JIT の設定を作った後で、container を起動しない理由 (無ければ nil)。起動する前に、作った runner が名前で一覧に見える
+  # ことを確かめて ctx[:seen] に残す (GitHub の一覧に出るのが遅れることがある。見えた後に見つからなくなったときだけ、
+  # 消えたとみなせる。規則 1)。見えなくても起動は止めない。
+  def launch_refusal(repo, jit, ctx)
     return "止める signal を受けました" if interrupted?
     return "runner を作れませんでした" if jit.nil?
     return "JIT の設定の形が違います" unless jit.match?(JIT_RE)
@@ -309,6 +319,9 @@ module CiRunner
     vis = visibility(repo, interruptible: true)
     return "止める signal を受けました" if interrupted?
     return "作った直後の確かめで private でなくなったので止めます" unless vis == "private"
+
+    ctx[:seen] = find_runner_id(repo, ctx[:record]["name"], interruptible: true).is_a?(Integer)
+    return "止める signal を受けました" if interrupted?
 
     nil
   end
@@ -342,14 +355,27 @@ module CiRunner
       return :start_failed
     end
     reader.close
-    begin
-      writer.write("#{jit}\n")
-    rescue Errno::EPIPE
-      nil
-    ensure
-      writer.close
+    # 書き込みは別の thread で行う。docker の client が stdin を読まないまま動き続けても、container を待つ loop (signal と
+    # 公開範囲の確かめ) を止めない。thread の例外は外に出さない (message に JIT の設定を載せない)
+    feeder = Thread.new do
+      Thread.current.report_on_exception = false
+      begin
+        writer.write("#{jit}\n")
+      rescue IOError, SystemCallError
+        nil
+      ensure
+        writer.close unless writer.closed?
+      end
     end
-    wait_container(config, repo, ctx)
+    begin
+      wait_container(config, repo, ctx)
+    ensure
+      # client が読まないまま終わったときは、書き込みで止まった thread を終わらせる
+      unless feeder.join(1)
+        feeder.kill
+        feeder.join(1)
+      end
+    end
   end
 
   # container が終わるまで待つ。検知 (signal を受けた、private と確かめられない、docker の client だけが終わった) があれば、
@@ -404,12 +430,13 @@ module CiRunner
     false
   end
 
-  # 想定外の例外の後: container が動いていれば、同じ規則で止める。止められなければ ctx[:alive] が立つ。
+  # 想定外の例外の後: container が動いていれば、同じ規則で止める。docker の client が残っていれば client ごと、client が
+  # 無くても container が動いているかもしれなければ (ctx[:alive]) 名前で止める。止められなければ ctx[:alive] が立つ。
   def stop_after_failure(config, ctx)
-    return if ctx[:pid].nil?
+    return if ctx[:pid].nil? && !ctx[:alive]
 
     detect!
-    stop_until_exit(config, ctx)
+    ctx[:pid] ? stop_until_exit(config, ctx) : stop_until_gone(config, ctx)
   rescue StandardError
     ctx[:alive] = true
   end
@@ -592,8 +619,8 @@ module CiRunner
   end
 
   # 名前で runner を探す。見つかれば id、無ければ :none、判定できなければ nil (一覧の失敗、形の違い、同じ名前が 2 つ)。
-  def find_runner_id(repo, name)
-    pages, code = gh_get("repos/#{repo}/actions/runners?per_page=100", paginate: true)
+  def find_runner_id(repo, name, interruptible: false)
+    pages, code = gh_get("repos/#{repo}/actions/runners?per_page=100", paginate: true, interruptible: interruptible)
     return nil unless code == :ok && pages.is_a?(Array)
 
     runners = pages.flat_map { |page| page.is_a?(Hash) && page["runners"].is_a?(Array) ? page["runners"] : [nil] }
@@ -627,7 +654,10 @@ module CiRunner
 
   # JIT の runner を作り、JIT の設定 (無ければ nil) を返す。返事からは JIT の設定だけを使い、runner の id は使わない
   # (同一性は名前だけ。規則 1)。作られたかどうかは、後片付けが名前で一覧を引いて決める。返事の本文は外に出さない。
+  # signal を受けていたら、POST を始めずに :not_started を返す (signal の後に登録を作らない)。
   def create_jit(repo, name)
+    return :not_started if interrupted?
+
     body = JSON.generate("name" => name, "runner_group_id" => RUNNER_GROUP_ID, "labels" => LABELS)
     data, code = gh_call("--method", "POST", "repos/#{repo}/actions/runners/generate-jitconfig", "--input", "-",
                          stdin: body, interruptible: true)
