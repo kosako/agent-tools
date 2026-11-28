@@ -562,14 +562,16 @@ Codex の run だけが使う、ふだんの home とは別の Codex の home �
 ふだんの home の `auth.json` は写しません。写した token を run の中で Codex が更新すると、ふだんの login が切れうるためです。
 
 置き場は、ふだんの home の外で、user の名前を含まない path にします (#807)。routing の probe と挙動の評価の probe は、評価用の
-home の path を子の `CODEX_HOME` に渡します。その path がふだんの home の下にあると、model はそこから home の path を推し、
-ふだんの home の file を絶対 path で読みます (11-28 の routing の run で、印の立たない case が session log の置き場を読んだ)。
+home の path を子の `CODEX_HOME` に渡します。評価用の home をふだんの home の下に置いていた 11-28 の routing の run では、印の
+立たない case の run が、評価用の home の path と並べてふだんの home の path を書き、session log の置き場を読みました。どこで
+path を知ったかは確かめていません (評価用の home の path から推した可能性がある)。home の外に移した後に同じ 3 case を 2 回ずつ
+流すと、ふだんの home の絶対 path を書いた run は 0 でした (移す前は 6 run のうち 3)。数は少ないので、保証としては読みません。
 下の例の `/Users/Shared` は macOS の共有の dir なので、mode 0700 で作り、自分だけが読めるようにします。
 
 ```sh
 eval_home="/Users/Shared/agent-tools-codex-eval-home"
-mkdir -m 700 "$eval_home"                    # 同じ名前が既にあれば止まる (ほかの user が先に作った dir を使わない)
-CODEX_HOME="$eval_home" codex login          # 評価用の home にだけ auth.json ができる
+# mkdir が自分で dir を作れたときだけ login に進む (同じ名前の dir や symlink が既にあれば止まり、そこに認証情報を書かない)
+mkdir -m 700 "$eval_home" && CODEX_HOME="$eval_home" codex login   # 評価用の home にだけ auth.json ができる
 CODEX_HOME="$eval_home" codex login status   # 評価用の home でログインできている
 codex login status                           # ふだんの home の login が切れていない
 ```
@@ -590,8 +592,7 @@ probe は起動の前に、`--codex-home` の dir が次を満たすことを確
 評価用の home に `AGENTS.md` や skill を置かないでください (置くと probe が止まります)。
 
 置き場を移しても、子の Codex は親の env (`PATH`、`GOROOT`、`SSH_AUTH_SOCK` など) をそのまま継ぐので、その値からふだんの
-home の path は推せます。11-28 に評価用の home を移した後、home を読んだ 3 case を 2 回ずつ流すと、ふだんの home の絶対 path を
-書いた run は 0 でした (移す前の同じ形の run では 3)。数は少ないので、保証としては読みません。
+home の path は推せます (下の「既知の限界」)。
 
 ## 既知の限界
 
@@ -608,5 +609,6 @@ home の path は推せます。11-28 に評価用の home を移した後、hom
   書いた code は、直した code と区別できません。検査は code と同じ process で呼ぶので、組み込みの method
   (`Array#map` や `Integer.===` など) を書き換えて正しい値を作る code も、区別できません。
 - 評価用の home でも、Codex の sandbox は読み取りを隔離しません。model がふだんの home の skill の file の場所を知って
-  いれば読めます (instruction が名指ししないので、知る手がかりは無い)。読んだら `skills_read` に残り、対照なら judge が
-  条件の食い違いにします。
+  いれば読めます。instruction は名指ししませんが、子が継ぐ親の env (`PATH` など) にはふだんの home の path が入っているので、
+  手がかりは残ります (評価用の home をふだんの home の下に置けば、その path も手がかりになりうる。上の「評価用の Codex の
+  home」)。読んだら `skills_read` に残り、対照なら judge が条件の食い違いにします。
