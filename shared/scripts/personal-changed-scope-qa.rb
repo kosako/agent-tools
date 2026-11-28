@@ -54,9 +54,14 @@
 # state: ~/.cache/agent-tools/changed-scope-qa/<repo path の sha256>.json
 # (AGENT_TOOLS_QA_STATE_DIR で override 可・test 用)。check は決定的である前提
 # (同一 scope の再実行を cache が省くため)。
+#
+# 入口 (#815): 引数なしは Stop の hook (stdin の JSON を読む)。`--declaration-status` は、今の repo の qa_checks の
+# 宣言の有無を 1 語で返す読み取りの口 (resume が使う)。stdin を読まず、state を書かず、check を起動しない。stdout は
+# 1 語だけで、stderr には何も書かない (設定の path や command を出さない)。ほかの引数は stdin を読む前に exit 2。
 
 require "json"
 require "digest"
+require "open3"
 require "tmpdir"
 
 # C locale (LC_ALL=C や LANG の未設定) でも、読む text (stdin・file・git や gh の出力) を UTF-8 として扱う (#432)。
@@ -636,4 +641,84 @@ module ChangedScopeQa
   end
 end
 
-exit ChangedScopeQa.run if $PROGRAM_NAME == __FILE__
+module ChangedScopeQa
+  # 宣言の有無の読み取りの口 (#815)。返す語:
+  # - declared: 今の repo の entry に空でない qa_checks の配列がある (中の要素が不正でも。不正は Stop が警告する)
+  # - empty: qa_checks が空の配列 (QA は要らないと決めた印)
+  # - absent: 設定の file が無い、entry が無い・object でない、entry に qa_checks が無い
+  # - unreadable: 設定の file が regular file でない・読めない・JSON でない・top-level が object でない、qa_checks が配列でない
+  # - outside: git が「repo の外」と答えた
+  # - unknown: repository を選ぶ git の env を継いでいる (値が空でも)、git が失敗した、ほかの想定外
+  module DeclarationStatus
+    FLAG = "--declaration-status"
+    # resume の手順 1・2 が除くのと同じ、repository / index を選ぶ git の env
+    GIT_ENV = %w[GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
+                 GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE].freeze
+
+    module_function
+
+    def run
+      $stdout.puts(word)
+      0
+    end
+
+    def word
+      return "unknown" if GIT_ENV.any? { |name| ENV.key?(name) }
+
+      kind, root = repo_root
+      return kind unless kind == :root
+
+      config_word(root)
+    rescue StandardError
+      "unknown"
+    end
+
+    # [:root, 実 path] / ["outside"] / ["unknown"]。git の message は C locale で読む。
+    def repo_root
+      out, err, status = Open3.capture3({ "LC_ALL" => "C", "LANGUAGE" => nil }, "git", "rev-parse", "--show-toplevel",
+                                        stdin_data: "")
+      if status.success?
+        top = out.chomp
+        return top.empty? ? ["unknown"] : [:root, File.realpath(top)]
+      end
+      err.match?(/not a git repository/i) ? ["outside"] : ["unknown"]
+    rescue SystemCallError
+      ["unknown"]
+    end
+
+    # 「無い」は lstat の ENOENT だけ。親の directory に権限が無いなど、在るかを確かめられないときは unreadable。
+    def config_word(root)
+      path = ChangedScopeQa.config_path
+      begin
+        File.lstat(path)
+      rescue Errno::ENOENT
+        return "absent"
+      end
+      return "unreadable" unless File.file?(path)
+
+      data = JSON.parse(File.read(path))
+      return "unreadable" unless data.is_a?(Hash)
+
+      entry = data[root]
+      return "absent" unless entry.is_a?(Hash) && entry.key?("qa_checks")
+
+      checks = entry["qa_checks"]
+      return "unreadable" unless checks.is_a?(Array)
+
+      checks.empty? ? "empty" : "declared"
+    rescue JSON::ParserError, SystemCallError
+      "unreadable"
+    end
+  end
+
+  # 入口。引数なしは Stop の hook、`--declaration-status` だけなら読み取りの口。ほかは stdin を読む前に exit 2。
+  def self.main(argv)
+    return run if argv.empty?
+    return DeclarationStatus.run if argv == [DeclarationStatus::FLAG]
+
+    warn "usage: personal-changed-scope-qa [#{DeclarationStatus::FLAG}]"
+    2
+  end
+end
+
+exit ChangedScopeQa.main(ARGV) if $PROGRAM_NAME == __FILE__

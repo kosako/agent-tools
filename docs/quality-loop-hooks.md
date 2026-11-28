@@ -244,6 +244,29 @@
 - Codex 側は Stop の matcher が無視される (#201)。`stop_hook_active` と exit 2 による
   継続要求は[公式 Stop 契約](https://developers.openai.com/codex/hooks#stop)にも記載されている。
   実機 smoke の確認範囲は下記。配備先ごとの登録・trust は別途必要。
+- `qa_checks` を空の配列にした entry は、「この repo に QA は要らない」と決めた印として扱う。hook は何も走らせない
+  (宣言が無い repo と同じ)。resume の知らせ (下の「宣言の有無の読み取り」) も、この印を見て出さない。
+
+### 宣言の有無の読み取り (`--declaration-status`、#815)
+
+`personal-changed-scope-qa --declaration-status` は、今の directory の repo の `qa_checks` の宣言の有無を 1 語で返す
+読み取りの口です。`personal-resume-project` が、個人 project で QA の宣言が無いことを 1 行で知らせるために使います。
+
+| 語 | 意味 |
+| --- | --- |
+| `declared` | 今の repo の entry に、空でない `qa_checks` の配列がある (中の要素が不正でも。不正は Stop が警告する) |
+| `empty` | `qa_checks` が空の配列 (QA は要らないと決めた印) |
+| `absent` | 設定の file が無い、今の repo の entry が無い・object でない、entry に `qa_checks` が無い |
+| `unreadable` | 設定の file が regular file でない (directory、指す先の無い symlink)、読めない (親の directory の権限を含む)、JSON でない、top-level が object でない、`qa_checks` が配列でない |
+| `outside` | git が「repo の外」と答えた |
+| `unknown` | repository / index を選ぶ git の env (`GIT_DIR` など 7 つ。resume の手順 1 と同じ) を継いでいる (値が空でも)、git が失敗した・無い、ほかの想定外 |
+
+- repo は、Stop の hook と同じく `git rev-parse --show-toplevel` の実 path で決める。linked worktree と worker の clone は
+  main の repo と key が違うので、main で宣言していても `absent` になる (Stop の hook もその path では QA を走らせない)。
+- 「無い」と扱うのは、設定の path の `lstat` が `ENOENT` のときだけ。指す先のある symlink は先を読む。
+- stdout は 1 語と改行だけで、stderr には何も書かない (設定の path も command も出さない)。どの語でも exit 0。
+- stdin を読まない。state を書かず、check も起動しない。引数が `--declaration-status` 1 つだけでないとき (知らない引数、
+  余分な引数) は、stdin を読む前に usage を stderr に出して exit 2。引数なしは、今までどおり Stop の hook。
 
 ## OpenCode (plugin 経由、#295)
 
@@ -344,6 +367,10 @@ M13 / M14 / M17 (OpenCode 1.18.30)。
   Add と Move、`default_edit_checks` の 16 の組、読めない設定、宣言との重ね方、PATH の `git` と `ruby` を使わないこと、
   safe-run が無いとき、changed-scope-qa が新しい key で変わらないことを確かめる。OpenCode の plugin の入口は
   `scripts/tests/opencode-plugin-test.sh` の E9 が確かめる。
+- changed-scope-qa の読み取りの口 (#815) は `scripts/tests/qa-declaration-status-test.sh` が検証する。6 つの語の区分、
+  下位の directory・symlink 越しの cwd・linked worktree、git の env と git の失敗、書き込み側を開けたままの stdin を
+  待たないこと、知らない引数の exit 2、Stop の入口が変わらないこと、設定の path と command の canary がどの出力にも
+  出ないことを見る。resume の本文の手順は `scripts/tests/resume-quality-loop-wiring-test.sh` が句で固定する。
 - safe-run 経由の起動 (#467) は `scripts/tests/quality-loop-safe-run-test.sh` が検証する。report の分類・不正な
   report・予算 (`--max-seconds` の値)・cache・上限の上書き・safe-run の期限・出力の保持量は fake の safe-run と
   注入した時計で決定的に、memory と時間の上限で止まって group が空になること・safe-run が無い / 実行できない・

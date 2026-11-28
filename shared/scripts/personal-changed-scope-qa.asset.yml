@@ -15,7 +15,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:6e8797786ba9820d7ab03274b929dbc2a4652a6ce41b04516f3c351f65f27008
+  approved_build_id: sha256:288e731eedc27d49e0d1182abad2ee94f63ff6c5d5998edc15b048a7c3336d80
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-changed-scope-qa.rb
@@ -26,4 +26,6 @@ summary: >-
   cache し同一 scope を再検査しない / stop_hook_active 時と同一失敗の再発は非ブロッキング
   警告に降格 / check 不在も警告降格 (無限ループ対策・#200 §4.5)。check は同じ dir の
   personal-safe-run の子として memory と時間の上限 (既定 4096 MiB / 300 秒、hook 1 回の総予算 540 秒) を付けて
-  起動し、safe-run が無ければ走らせない (#467)。宣言の無い repo では無言 no-op。docs/quality-loop-hooks.md が正本。
+  起動し、safe-run が無ければ走らせない (#467)。宣言の無い repo では無言 no-op。引数 --declaration-status では、
+  今の repo の qa_checks の宣言の有無を 1 語で返す読み取りの口になる (stdin を読まず、state も書かない。#815)。
+  docs/quality-loop-hooks.md が正本。
