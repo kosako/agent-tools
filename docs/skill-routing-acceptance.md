@@ -54,6 +54,9 @@ Codex は依頼の作業を最後まで行うので、case によってはふだ
   評価用の `CODEX_HOME` で走らせる。子の command の `~` は空の dir を指すので、`reads` の copy の判定もその dir で展開する。
 - 親の process は、model の取得 (`--model` が無いとき) と、評価用の home がふだんの Codex home と別の実体かの照合にだけ、ふだんの
   Codex home を読む。親の env は変えず、PATH などは子にそのまま継ぐ (login の設定 (`~/.zprofile` など) は空の HOME では読まれない)。
+- 評価用の Codex の home は、ふだんの home の外で、user の名前を含まない path に置く (#807。置き場の例と理由は
+  [Skill Behavior Eval](skill-behavior-eval.md) の「評価用の Codex の home」)。ふだんの home の下に置いていた 11-28 の run では、
+  印の立たない run がふだんの home を読んだ (path を知った経路は確かめていない。評価用の home の path から推した可能性がある)。
 - 限界: 子が絶対 path を知れば、ふだんの home の file も読める (sandbox は読み取りを隔離しない)。11-28 の実機の run (採掘の case)
   では、`~` の読み取りが空の dir に向いた後に、model がふだんの home の絶対 path を書いて session log を読んだ (path をどこから
   知ったかは確かめていない)。HOME を分けるだけでは、ふだんの home の読み取りは防げない。既定の止める形 (下の「観測契約」の
