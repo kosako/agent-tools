@@ -21,7 +21,12 @@ module ProbeChild
   # completed: 期限の中で子が終わった。drained: stdout / stderr を EOF まで読み切った。
   # status: 子の終了の状態 (Process::Status)。終わったと確かめられなければ nil。
   # truncated: max_bytes を越えたので、途中までしか残していない (上限を渡さなければ false)。
-  Result = Struct.new(:out, :err, :status, :completed, :drained, :truncated, keyword_init: true)
+  # stopped: stop_line が真を返したので、子が終わる前に止めた (#802)。out はその行までで切る (後の event を含めない)。
+  #   止める前に子が終わっていれば false (completed が true)。stop_line を渡さなければ false。
+  Result = Struct.new(:out, :err, :status, :completed, :drained, :truncated, :stopped, keyword_init: true)
+
+  # stop_line を渡したときに、子の終了と止める印を見る間隔 (秒)。
+  STOP_POLL = 0.05
 
   # pgroup: true なので pgid == 子の pid。負の pid で group 全体に送る。止めるものが無ければ何もしない
   # (group が空なら ESRCH、macOS は中が zombie だけの group に EPERM を返す)。
@@ -50,23 +55,72 @@ module ProbeChild
     t
   end
 
+  # stdout を読みながら、改行までそろった行ごとに stop_line を呼ぶ (#802)。真を返した行の終わりの byte の位置を
+  # state[:stop_at] に入れ、それより後の行には呼ばない (読むのは EOF まで続ける)。buf は byte の列として扱う。
+  def self.line_reader(io, buf, stop_line, state)
+    buf.force_encoding(Encoding::BINARY)
+    t = Thread.new do
+      scan = 0
+      loop do
+        buf << io.readpartial(READ_CHUNK)
+        next if state[:stop_at]
+
+        while (nl = buf.index("\n".b, scan))
+          line = buf.byteslice(scan, nl - scan + 1).force_encoding(Encoding::UTF_8)
+          scan = nl + 1
+          next unless stop_line.call(line)
+
+          state[:stop_at] = scan
+          break
+        end
+      end
+    rescue EOFError, IOError
+      nil
+    end
+    t.report_on_exception = false
+    t
+  end
+
   # max_bytes は、stdout と stderr のそれぞれで残す量の上限 (byte)。渡さなければ、全部を残す。
-  def self.run(argv, env:, chdir:, timeout:, stdin: nil, unsetenv_others: false, max_bytes: nil)
+  # stop_line は、stdout の完全な行 (改行を含む) を受け、真なら子の group を止める (#802)。max_bytes とは組まない。
+  def self.run(argv, env:, chdir:, timeout:, stdin: nil, unsetenv_others: false, max_bytes: nil, stop_line: nil)
+    raise ArgumentError, "stop_line and max_bytes cannot be combined" if stop_line && max_bytes
+
     out = +""
     err = +""
     status = nil
     completed = false
     drained = false
+    stopped = false
+    state = {}
     spawn_opts = { chdir: chdir, pgroup: true }
     spawn_opts[:unsetenv_others] = true if unsetenv_others
     Open3.popen3(env, *argv, **spawn_opts) do |i, o, e, wait|
       readers = []
       begin
         # 先に reader を起こしてから stdin を書く (子が stdin を読む前に出力の pipe を埋めても詰まらない)。
-        readers = [reader(o, out, max_bytes), reader(e, err, max_bytes)]
+        out_reader = stop_line ? line_reader(o, out, stop_line, state) : reader(o, out, max_bytes)
+        readers = [out_reader, reader(e, err, max_bytes)]
         i.write(stdin) if stdin
         i.close
-        completed = !wait.join(timeout).nil?
+        if stop_line
+          # 子の終了・止める印・期限のどれかまで待つ。印を見た時点で子が終わっていれば、止めずに終わった run とする
+          # (止める要求より前に確かめた終了を優先する)。
+          limit = Time.now + timeout
+          loop do
+            completed = !wait.join(0).nil?
+            break if completed
+            if state[:stop_at]
+              stopped = true
+              break
+            end
+            break if Time.now >= limit
+
+            wait.join([STOP_POLL, limit - Time.now].min)
+          end
+        else
+          completed = !wait.join(timeout).nil?
+        end
         unless completed
           kill_group(wait.pid, "TERM")
           sleep TERM_GRACE
@@ -98,6 +152,11 @@ module ProbeChild
       drained = false if truncated
       out, err = [out, err].map { |b| b.byteslice(0, max_bytes).force_encoding(Encoding.default_external) }
     end
-    Result.new(out: out, err: err, status: status, completed: completed, drained: drained, truncated: truncated)
+    if stop_line
+      out = out.byteslice(0, state[:stop_at]) if stopped
+      out = out.force_encoding(Encoding.default_external)
+    end
+    Result.new(out: out, err: err, status: status, completed: completed, drained: drained, truncated: truncated,
+               stopped: stopped)
   end
 end

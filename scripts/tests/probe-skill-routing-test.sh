@@ -508,6 +508,8 @@ browser_use  beta  false}"
         echo $! > "$FAKE_CODEX_CHILD_PID"
       fi
       [ -z "${FAKE_CODEX_SLEEP:-}" ] || sleep "$FAKE_CODEX_SLEEP"
+      # FAKE_CODEX_EVENTS_AFTER があれば、待った後にその event を出す (止める形と最後まで流す形を分ける確かめ。#802)
+      [ -z "${FAKE_CODEX_EVENTS_AFTER:-}" ] || cat "$FAKE_CODEX_EVENTS_AFTER"
       exit "${FAKE_CODEX_RC:-0}"
     fi
     printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"personal-a"}}'
@@ -787,33 +789,33 @@ grandchild_gone() {
   return 0
 }
 
-run_codex_events "$tmp/ev-done" 30 0 --smoke --timeout 1
+run_codex_events "$tmp/ev-done" 30 0 --smoke --full-run --timeout 1
 [ "$rc" -eq 0 ] || fail "a timed-out run with the routing mark should be ok (rc=$rc): $out"
 case "$out" in *'status=ok exit=nil '*'prompt_tokens=nil output_tokens=nil completion=observed-stop'*) : ;;
   *) fail "a timed-out run with the routing mark should be observed-stop without tokens: $out" ;; esac
 grandchild_gone || fail "the grandchild of a timed-out run must not survive"
 
 # usage を出した後に止まった run も、打ち切りの token は信用しないので null
-run_codex_events "$tmp/ev-done-turn" 30 0 --smoke --timeout 1
+run_codex_events "$tmp/ev-done-turn" 30 0 --smoke --full-run --timeout 1
 case "$out" in *'status=ok exit=nil '*'prompt_tokens=nil output_tokens=nil completion=observed-stop'*) : ;;
   *) fail "a timed-out run must drop the tokens even after turn.completed: $out" ;; esac
 grandchild_gone || fail "the grandchild of a timed-out run (after turn.completed) must not survive"
 
-run_codex_events "$tmp/ev-one" 30 0 --smoke --timeout 1
+run_codex_events "$tmp/ev-one" 30 0 --smoke --full-run --timeout 1
 [ "$rc" -eq 2 ] || fail "a timed-out run with one work item after the read must be an error run (rc=$rc): $out"
 case "$out" in *'status=error exit=nil '*'completion=timeout'*) : ;; *) fail "one work item should be timeout: $out" ;; esac
 grandchild_gone || fail "the grandchild of a timed-out run (one work item) must not survive"
 
-run_codex_events "$tmp/ev-none" 30 0 --smoke --timeout 1
+run_codex_events "$tmp/ev-none" 30 0 --smoke --full-run --timeout 1
 [ "$rc" -eq 2 ] || fail "a timed-out run without a read must be an error run (rc=$rc): $out"
 case "$out" in *'status=error exit=nil '*'observed=[]'*) : ;; *) fail "no read should be an error run: $out" ;; esac
 case "$out" in *'completion=timeout'*) : ;; *) fail "no read should be timeout: $out" ;; esac
 
-run_codex_events "$tmp/ev-done-turn" 0 1 --smoke --timeout 5
+run_codex_events "$tmp/ev-done-turn" 0 1 --smoke --full-run --timeout 5
 [ "$rc" -eq 2 ] || fail "a non-zero exit with the routing mark must be an error run (rc=$rc): $out"
 case "$out" in *'status=error exit=1 '*'completion=failed'*) : ;; *) fail "a non-zero exit should be failed: $out" ;; esac
 
-run_codex_events "$tmp/ev-done-turn" 0 0 --smoke --timeout 5
+run_codex_events "$tmp/ev-done-turn" 0 0 --smoke --full-run --timeout 5
 [ "$rc" -eq 0 ] || fail "a normal exit should be ok (rc=$rc): $out"
 case "$out" in *'status=ok exit=0 '*'prompt_tokens=10 output_tokens=2 completion=exited'*) : ;;
   *) fail "a normal exit should keep tokens and be exited: $out" ;; esac
@@ -845,6 +847,135 @@ judge_rc=$?
 set -e
 [ "$judge_rc" -eq 0 ] || fail "the judge should accept the runner's observed-stop result (rc=$judge_rc): $judge_out"
 case "$judge_out" in *'runs_without_tokens=1'*) : ;; *) fail "the judge should count the run without tokens: $judge_out" ;; esac
+ruby -rjson -e 'exit(JSON.parse(File.read(ARGV[0]))["codex_stop"] == "routing-mark" ? 0 : 1)' "$tmp/stop/results.json" \
+  || fail "a default run must record codex_stop routing-mark: $(cat "$tmp/stop/results.json")"
+
+# ---- integration: 既定は印の行で止める (#802) -------------------------------------------------
+# E14・E21: 印が立った行で子の group を止める。期限 (60 秒) を待たず、token は null、孫も残らない
+start=$(date +%s)
+run_codex_events "$tmp/ev-done" 30 0 --smoke --timeout 60
+took=$(( $(date +%s) - start ))
+[ "$rc" -eq 0 ] || fail "a run stopped at the routing mark should be ok (rc=$rc): $out"
+case "$out" in *'status=ok exit=nil '*'prompt_tokens=nil output_tokens=nil completion=observed-stop'*) : ;;
+  *) fail "a run stopped at the routing mark should be observed-stop without tokens: $out" ;; esac
+[ "$took" -lt 15 ] || fail "the run must stop at the mark, not wait for the timeout (took ${took}s)"
+grandchild_gone || fail "the grandchild of a run stopped at the mark must not survive"
+# E17: 印を立てた行より後の event は結果に含めない (raw log にも残らない)
+ev_after='{"type":"item.completed","item":{"type":"command_execution","command":"echo AFTER-MARK && cat .agents/skills/personal-a/SKILL.md"}}'
+printf '%s\n' "$ev_read" "$ev_work" "$ev_work" "$ev_after" "$ev_turn" > "$tmp/ev-after"
+run_codex_events "$tmp/ev-after" 30 0 --cases "$tmp/stop-cases.json" --out "$tmp/stop/after.json" --timeout 60
+[ "$rc" -eq 0 ] || fail "a run with events after the mark should be ok (rc=$rc): $out"
+if grep -q AFTER-MARK "$tmp/stop/after.json.raw/stop-1.jsonl"; then fail "events after the mark must not be kept: $(cat "$tmp/stop/after.json.raw/stop-1.jsonl")"; fi
+ruby -rjson -e 'r = JSON.parse(File.read(ARGV[0]))["runs"][0]; exit(r["completion"] == "observed-stop" && r["prompt_tokens"].nil? && r["reads"].length == 1 ? 0 : 1)' \
+  "$tmp/stop/after.json" || fail "the run must end at the mark: $(cat "$tmp/stop/after.json")"
+grandchild_gone || fail "the grandchild of a run with events after the mark must not survive"
+# E18: 印が立たない run は止めない (子が終われば exited で token を持つ)
+printf '%s\n' "$ev_read" "$ev_work" "$ev_turn" > "$tmp/ev-one-turn"
+run_codex_events "$tmp/ev-one-turn" 0 0 --smoke --timeout 5
+case "$out" in *'status=ok exit=0 '*'prompt_tokens=10 output_tokens=2 completion=exited'*) : ;;
+  *) fail "a run without the mark must run to its end: $out" ;; esac
+# E16 (#805 の review): 印を立てる event が改行の無い末尾の行なら、止めず、期限で打ち切っても observed-stop にしない
+printf '%s\n%s\n%s' "$ev_read" "$ev_work" "$ev_work" > "$tmp/ev-done-nonl"
+run_codex_events "$tmp/ev-done-nonl" 30 0 --smoke --timeout 2
+[ "$rc" -eq 2 ] || fail "a mark on an unterminated last line must not count (rc=$rc): $out"
+case "$out" in *'status=error exit=nil '*'completion=timeout'*) : ;; *) fail "an unterminated mark line should end as timeout: $out" ;; esac
+grandchild_gone || fail "the grandchild of a run with an unterminated mark line must not survive"
+# E19: 印の前に非ゼロで終われば failed
+printf '%s\n' "$ev_read" "$ev_turn" > "$tmp/ev-read-turn"
+run_codex_events "$tmp/ev-read-turn" 0 1 --smoke --timeout 5
+case "$out" in *'status=error exit=1 '*'completion=failed'*) : ;; *) fail "a non-zero exit before the mark should be failed: $out" ;; esac
+# E22: 印の後に 2 秒待ってから usage を出して終わる子。--full-run は止めずに待ち、exited で token を持つ。既定は印で止める
+# (孫の process は残さない。残すと正常に終わっても pipe を読み切れず failed になる)
+printf '%s\n' "$ev_turn" > "$tmp/ev-turn-only"
+FAKE_CODEX_EVENTS="$tmp/ev-done" FAKE_CODEX_SLEEP=2 FAKE_CODEX_RC=0 FAKE_CODEX_EVENTS_AFTER="$tmp/ev-turn-only"
+export FAKE_CODEX_EVENTS FAKE_CODEX_SLEEP FAKE_CODEX_RC FAKE_CODEX_EVENTS_AFTER
+run_probe --smoke --full-run --timeout 20
+case "$out" in *'status=ok exit=0 '*'prompt_tokens=10 output_tokens=2 completion=exited'*) : ;;
+  *) fail "--full-run must not stop at the mark: $out" ;; esac
+run_probe --smoke --timeout 20
+case "$out" in *'prompt_tokens=nil output_tokens=nil completion=observed-stop'*) : ;;
+  *) fail "the default must stop at the mark before the late usage: $out" ;; esac
+unset FAKE_CODEX_EVENTS FAKE_CODEX_SLEEP FAKE_CODEX_RC FAKE_CODEX_EVENTS_AFTER
+# E22・E25: --full-run は止めず、記録は none。dry-run は形を出す
+run_codex_events "$tmp/ev-done-turn" 0 0 --cases "$tmp/stop-cases.json" --out "$tmp/stop/full.json" --full-run --timeout 5
+ruby -rjson -e 'd = JSON.parse(File.read(ARGV[0])); r = d["runs"][0]; exit(d["codex_stop"] == "none" && r["completion"] == "exited" && r["prompt_tokens"] == 10 ? 0 : 1)' \
+  "$tmp/stop/full.json" || fail "a --full-run result must record codex_stop none and keep tokens: $(cat "$tmp/stop/full.json")"
+run_probe --dry-run
+case "$out" in *'codex stop: routing-mark'*) : ;; *) fail "dry-run should show the stop mode: $out" ;; esac
+run_probe --dry-run --full-run
+case "$out" in *'codex stop: none'*) : ;; *) fail "dry-run should show --full-run: $out" ;; esac
+# E26: 止めた形の違う結果は比べない
+set +e
+judge_out=$(sh "$repo_root/scripts/check-skill-routing.sh" --cases "$tmp/stop-cases.json" --results "$tmp/stop/results.json" --baseline "$tmp/stop/full.json" 2>&1)
+judge_rc=$?
+set -e
+[ "$judge_rc" -eq 2 ] || fail "results with different stop modes must not be compared (rc=$judge_rc): $judge_out"
+case "$judge_out" in *'comparison: codex stop differs'*) : ;; *) fail "the comparison must name the stop mode: $judge_out" ;; esac
+# --full-run は codex だけ
+set +e
+out=$(ruby "$src" --tool claude-code --source "$source_dir" --full-run --dry-run 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "claude-code with --full-run must exit 2 (rc=$rc): $out"
+case "$out" in *'--full-run is only for --tool codex'*) : ;; *) fail "the error should say --full-run is codex only: $out" ;; esac
+
+# ---- unit: ProbeChild の止める口 (#802) と、印の規則が 1 つであること ---------------------------
+ruby -r"$script_dir/lib/check_helper" - "$repo_root/scripts/lib/probe_child.rb" "$src" <<'RUBY'
+load ARGV[0]
+load ARGV[1]
+P = ProbeSkillRouting
+sh = ->(script) { ["/bin/sh", "-c", script] }
+# 印の行で止め、out はその行まで。期限より前に止まり、completed は false、stopped は true
+t0 = Time.now
+r = ProbeChild.run(sh.call('printf "a\nb\nc\n"; sleep 30'), env: {}, chdir: "/", timeout: 20, stop_line: ->(l) { l == "b\n" })
+check("stop_line: 真の行で止め、out はその行まで", r.stopped && !r.completed && r.out == "a\nb\n")
+check("stop_line: 期限を待たない", Time.now - t0 < 10)
+# 改行までそろうまで判定しない (途中で切れた行は 1 行として 1 回だけ渡す)
+seen = []
+r = ProbeChild.run(sh.call('printf "x"; sleep 0.3; printf "y\n"; sleep 30'), env: {}, chdir: "/", timeout: 20,
+                   stop_line: ->(l) { seen << l; true })
+check("stop_line: 改行までそろった行だけを渡す", seen == ["xy\n"] && r.out == "xy\n")
+# 真にならなければ止めない (子が終われば completed、out は全部)
+r = ProbeChild.run(sh.call('printf "a\nb\n"'), env: {}, chdir: "/", timeout: 20, stop_line: ->(_l) { false })
+check("stop_line: 真にならなければ止めない", r.completed && !r.stopped && r.out == "a\nb\n" && r.status.success?)
+# 期限まで真にならなければ、期限で打ち切る (stopped は false)
+r = ProbeChild.run(sh.call('printf "a\n"; sleep 30'), env: {}, chdir: "/", timeout: 1, stop_line: ->(_l) { false })
+check("stop_line: 期限で打ち切った run は stopped でない", !r.completed && !r.stopped && r.out == "a\n")
+# 渡さなければ今の挙動 (stopped は false)
+r = ProbeChild.run(sh.call('printf "a\nb\n"'), env: {}, chdir: "/", timeout: 20)
+check("stop_line なし: 今の挙動", r.completed && r.stopped == false && r.out == "a\nb\n")
+raised = begin
+  ProbeChild.run(sh.call("true"), env: {}, chdir: "/", timeout: 5, stop_line: ->(_l) { false }, max_bytes: 10)
+  false
+rescue ArgumentError
+  true
+end
+check("stop_line と max_bytes は組まない", raised)
+
+# 印の規則は 1 つ: CodexRoutingMark を 1 行ずつ当てた結果と、parse_codex の routing_done が、決めた期待と同じ
+names = %w[skill-a skill-b]
+ev = ->(cmd) { JSON.generate("type" => "item.completed", "item" => { "type" => "command_execution", "command" => cmd }) }
+msg = JSON.generate("type" => "item.completed", "item" => { "type" => "agent_message", "text" => "x" })
+fc = JSON.generate("type" => "item.completed", "item" => { "type" => "file_change" })
+read_a = ev.call("cat .agents/skills/skill-a/SKILL.md")
+other = ev.call("cat docs/SKILL.md")
+work = ev.call("git status")
+# 期待は設計の規則から決める: 候補の読み取りの後に、SKILL.md を含まない tool の item が 2 つ続けば立つ
+table = [[[read_a, work, work], true], [[read_a, work], false], [[work, work, work], false], [[work, work, read_a, work], false],
+         [[read_a, work, read_a, work], false], [[read_a, work, other, work], false], [[read_a, msg, work, msg, work], true],
+         [[read_a, fc, work], true], [["not json", read_a, "[1]", work, work], true],
+         [[other, work, work], false]] # 候補でない SKILL.md の読み取りでは数え始めない
+table.each do |seq, want|
+  m = P::CodexRoutingMark.new(names)
+  seq.each { |l| m.feed_line(l) }
+  got_parse = P.parse_codex(seq.join("\n") + "\n", names)[:routing_done]
+  check("印の規則: #{seq.length} 行の列で #{want} (mark=#{m.done} parse=#{got_parse})", m.done == want && got_parse == want)
+end
+# parse_codex も、改行の無い末尾の行を印に数えない (止める判定と同じ。#805 の review)
+check("印の規則: 改行の無い末尾の行は印に数えない", P.parse_codex([read_a, work, work].join("\n"), names)[:routing_done] == false)
+check("印の規則: 改行があれば数える", P.parse_codex([read_a, work, work].join("\n") + "\n", names)[:routing_done] == true)
+exit(@failed.zero? ? 0 : 1)
+RUBY
 
 # ---- integration: 偽の claude で --max-turns の打ち切りの扱いを確かめる ----------------------
 cat > "$fakebin/claude" <<'EOF'
