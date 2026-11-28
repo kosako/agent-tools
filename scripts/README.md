@@ -410,9 +410,15 @@ usage: doctor.sh [--root DIR] [--codex-home DIR] [--claude-home DIR] [--opencode
   行に載せる (`lib/body_check.rb`。#722)。一致は ok、ずれは warn (最初の違いの相対 path と種類)、未検査は info。
   比べる規則、一時 directory の置き場、回復の手順は [install-and-usage](../docs/install-and-usage.md) の「状態を見る」。
 - `deployed_but_inactive` の target の行 (warn) には、status と同じ注 (`Status::INACTIVE_NOTE`) を載せる (#723)。
+- 受け入れの記録 (`docs/acceptance-records.md`) を読み、項目ごとに記録した engine の版と今の版を比べる (`lib/acceptance_records.rb`。
+  #725)。同じなら ok、版が変わった・読めない・記録が無いときは warn で、exit は変えない。版は `claude` / `codex` / `herdr` の
+  `--version` だけで読み (5 秒と出力 4 KiB が上限)、生の出力は出さない。読み方と限界は
+  [acceptance-records](../docs/acceptance-records.md)。
 - 出力は `level: area: message` 形式 (ok / info / warn / fail)。fail があれば exit 1。
 - read-only。paths は tilde 表記で出力し、secrets を含めない。一時 directory は repo と tool home の外に作り、終わると消す。
-- self-test: `tests/doctor-test.sh`、`tests/doctor-body-test.sh` (body の検査)、`tests/state-display-test.sh` (target の行の注)
+  受け入れの記録の検査が起動する CLI の `--version` の副作用は、doctor の保証の外。
+- self-test: `tests/doctor-test.sh`、`tests/doctor-body-test.sh` (body の検査)、`tests/state-display-test.sh` (target の行の注)、
+  `tests/acceptance-records-test.sh` (受け入れの記録)
 
 - `register.sh`: assets を検証し、`generated/catalog.json` に登録状態を記録する。
   [Register / Catalog](../docs/register-catalog.md) に従う。

@@ -8,7 +8,8 @@
 # - read-only。いかなる state も変更しない。body の検査 (#722) は、repo と tool home の外の一時 directory に
 #   作り直して比べ、終わると消す。
 # - 出力に secrets / absolute private paths を含めない (paths は tilde 表記)。
-# - 外部依存ゼロ、network access なし。
+# - 外部依存ゼロ、network access なし。受け入れの記録の検査 (#725) は engine の CLI の `--version` を起動するが、その
+#   副作用は doctor の保証の外 (docs/acceptance-records.md の限界)。
 
 require "yaml"
 
@@ -23,6 +24,7 @@ require_relative "path_glob"
 require_relative "plugin_marker"
 require_relative "local_instructions"
 require_relative "cli"
+require_relative "acceptance_records"
 
 module Doctor
   Line = Struct.new(:level, :area, :message) do
@@ -49,6 +51,7 @@ module Doctor
       check_local_instructions
       check_forbidden_targets
       check_catalog
+      check_acceptance
       @lines
     end
 
@@ -56,6 +59,24 @@ module Doctor
 
     def report(level, area, message)
       @lines << Line.new(level, area, message)
+    end
+
+    # 受け入れの記録 (docs/acceptance-records.md) と、今の engine の版を比べる (#725)。warn しか出さず、exit は変えない。
+    # 記録の表を読めなければ 1 行の warn。版は engine ごとに 1 回だけ、必要になったときに読む。
+    def check_acceptance
+      path = File.join(@root, AcceptanceRecords::PATH)
+      parsed = File.file?(path) ? AcceptanceRecords.parse(File.read(path, encoding: "UTF-8")) : nil
+      unless parsed
+        report("warn", "acceptance", "cannot read the records table in #{AcceptanceRecords::PATH}")
+        return
+      end
+      rows, problems = parsed
+      problems.each { |p| report("warn", "acceptance", "records: #{p}") }
+      cache = {}
+      versions = ->(engine) { cache.fetch(engine) { cache[engine] = AcceptanceRecords.read_version(engine) } }
+      AcceptanceRecords.evaluate(rows, versions).each { |level, message| report(level, "acceptance", message) }
+    rescue ArgumentError, SystemCallError => e
+      report("warn", "acceptance", "cannot read the records (#{e.class})")
     end
 
     def check_runtime
