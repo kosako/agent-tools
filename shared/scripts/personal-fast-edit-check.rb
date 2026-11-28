@@ -369,9 +369,14 @@ module FastEditCheck
   # 設定を読む。無い = 宣言していない (nil。既定の check だけが走る)。壊れている・読めない = 警告文字列を返す
   # (無言で握り潰すとユーザーが設定ミスに気づけない)。在るのに regular file でない (directory、指す先の無い
   # symlink など) と、権限で読めないときも、止める設定を読めないので壊れた設定と同じに扱う (#814)。
+  # 「無い」は lstat の ENOENT だけ。親の directory に権限が無いなど、ほかの失敗で無いと決めつけない。
   def load_config
     path = config_path
-    return nil unless File.exist?(path) || File.symlink?(path)
+    begin
+      File.lstat(path)
+    rescue Errno::ENOENT
+      return nil
+    end
     return "checks.local.json が regular file ではありません" unless File.file?(path)
 
     data = JSON.parse(File.read(path))
@@ -423,6 +428,8 @@ module FastEditCheck
   # (「設定済みなのに動かない」を診断可能にする)。
   def checks_for(entry, file)
     checks = entry.is_a?(Hash) ? entry["edit_checks"] : nil
+    # edit_checks が在るのに配列でない宣言も、黙って無視せず不正な宣言として知らせる (#814 review)
+    return [[], ["edit_checks"]] if entry.is_a?(Hash) && entry.key?("edit_checks") && !checks.is_a?(Array)
     return [[], []] unless checks.is_a?(Array)
 
     matched = []
@@ -491,9 +498,14 @@ module FastEditCheck
 
   # file の実 path (link の参照先) が repo root の中にあるか。repo の外を指す link には既定を走らせない。
   def inside_root?(file, repo_root)
-    File.realpath(file).start_with?(repo_root + File::SEPARATOR)
+    File.realpath(file).start_with?(root_prefix(repo_root))
   rescue SystemCallError
     false
+  end
+
+  # repo root の下の path の接頭辞。root が "/" のときに "//" にしない (#814 review)。
+  def root_prefix(repo_root)
+    repo_root.end_with?(File::SEPARATOR) ? repo_root : repo_root + File::SEPARATOR
   end
 
   # 失敗要約の label は常に repo 相対 path にする (#431 の 4): OpenCode plugin は file ごとに本 script を呼んで
@@ -503,7 +515,7 @@ module FastEditCheck
   # 指す link でも label は repo の中の path)。check に渡す path は payload のまま。
   def relative_label(file, repo_root)
     real = File.join(File.realpath(File.dirname(file)), File.basename(file))
-    real.delete_prefix(repo_root + File::SEPARATOR)
+    real.delete_prefix(root_prefix(repo_root))
   end
 
   def truncate(text)
@@ -556,20 +568,21 @@ module FastEditCheck
         reported_config_errors[repo_root] = true
       end
 
+      # default_edit_checks の型は、宣言が一致するかに関わらず検査して知らせる (#814 review)
+      entry_on, entry_invalid = default_flag(entry)
+      if global_invalid && !reported_flag_errors[:global]
+        parts << "fast-edit-check: 設定エラー: top-level の #{DEFAULT_FLAG_KEY} は true か false にしてください。" \
+                 "既定の check を止めました (#{config_path})"
+        reported_flag_errors[:global] = true
+      end
+      if entry_invalid && !reported_flag_errors[repo_root]
+        parts << "fast-edit-check: 設定エラー: #{repo_root} の #{DEFAULT_FLAG_KEY} は true か false にしてください。" \
+                 "この repo の既定の check を止めました (#{config_path})"
+        reported_flag_errors[repo_root] = true
+      end
       # 有効な宣言が file に一致すれば、宣言が既定に代わる。一致しなければ既定を走らせる (止める設定が無ければ)
-      if checks.empty? && !defaults.empty?
-        entry_on, entry_invalid = default_flag(entry)
-        if global_invalid && !reported_flag_errors[:global]
-          parts << "fast-edit-check: 設定エラー: top-level の #{DEFAULT_FLAG_KEY} は true か false にしてください。" \
-                   "既定の check を止めました (#{config_path})"
-          reported_flag_errors[:global] = true
-        end
-        if entry_invalid && !reported_flag_errors[repo_root]
-          parts << "fast-edit-check: 設定エラー: #{repo_root} の #{DEFAULT_FLAG_KEY} は true か false にしてください。" \
-                   "この repo の既定の check を止めました (#{config_path})"
-          reported_flag_errors[repo_root] = true
-        end
-        checks = defaults if global_on && entry_on && inside_root?(file, repo_root)
+      if checks.empty? && !defaults.empty? && global_on && entry_on && inside_root?(file, repo_root)
+        checks = defaults
       end
 
       results = checks.map { |c| run_check(c, file, repo_root, budget_deadline) }

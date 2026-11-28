@@ -296,6 +296,16 @@ if [ "$(id -u)" -ne 0 ]; then
   assert_has "$out" "設定エラー: checks.local.json を読めません" "E21 noread"
   assert_lacks "$out" "ruby-syntax" "E21 noread"
   chmod 600 "$tmp/noread.json"
+  # R1 (review の must): 設定の file の親の directory に権限が無い -> 無い扱いにせず、設定エラーで止める
+  mkdir -p "$tmp/locked"
+  printf '{}' > "$tmp/locked/checks.local.json"
+  chmod 000 "$tmp/locked"
+  before=$(sr_count)
+  out=$(run_edit "$plain/bad.rb" "$tmp/locked/checks.local.json") || fail "R1: hook must exit 0"
+  chmod 700 "$tmp/locked"
+  assert_has "$out" "設定エラー: checks.local.json を読めません" "R1"
+  assert_lacks "$out" "ruby-syntax" "R1"
+  [ "$(sr_count)" -eq "$before" ] || fail "R1: no check may start when the config cannot be checked"
 fi
 
 # ---- 宣言との重ね方 (E22〜E26) ---------------------------------------------------------
@@ -330,6 +340,37 @@ for d in d24 d25 d26; do
   assert_has "$out" "不正な check 宣言を無視しました" "$d"
   assert_has "$out" "[ruby-syntax (既定)]" "$d"
 done
+
+# R2 (review の should): edit_checks が配列でない (object・文字列・null) -> 不正な宣言として知らせ、既定は走る
+for value in '{}' '"lint"' 'null'; do
+  write_json "$tmp/r2.json" '{ ARGV[1] => { "edit_checks" => JSON.parse(ARGV[2]) } }' "$plain_real" "[$value]"
+  ruby -rjson -e 'd = JSON.parse(File.read(ARGV[0])); k = d.keys.first; d[k]["edit_checks"] = d[k]["edit_checks"].first; File.write(ARGV[0], JSON.generate(d))' -- "$tmp/r2.json"
+  out=$(run_edit "$plain/bad.rb" "$tmp/r2.json") || fail "R2 $value: hook must exit 0"
+  assert_has "$out" "不正な check 宣言を無視しました: edit_checks" "R2 $value"
+  assert_has "$out" "[ruby-syntax (既定)]" "R2 $value"
+done
+
+# R3 (review の should): 一致する宣言があっても、default_edit_checks の不正な値は知らせる (宣言は走る)
+write_json "$tmp/r3.json" '{ "default_edit_checks" => "no",
+  ARGV[1] => { "default_edit_checks" => 1, "edit_checks" => [{ "name" => "pass", "pattern" => "\\.rb$", "command" => [ARGV[2]] }] } }' \
+  "$plain_real" "$tmp/pass-check"
+before=$(sr_count)
+out=$(run_edit "$plain/bad.rb" "$tmp/r3.json") || fail "R3: hook must exit 0"
+assert_has "$out" "top-level の default_edit_checks は true か false にしてください" "R3"
+assert_has "$out" "$plain_real の default_edit_checks は true か false にしてください" "R3"
+assert_lacks "$out" "ruby-syntax" "R3"
+[ "$(sr_count)" -eq $((before + 1)) ] || fail "R3: only the declared check must run"
+
+# R4 (review の should): repo root が "/" でも、root の下の file を root の中と判定し、label に "/" を残さない
+ruby -e '
+  load ARGV[0]
+  file = File.realpath(ARGV[1])
+  abort "R4: root_prefix(\"/\") must be \"/\"" unless FastEditCheck.root_prefix("/") == "/"
+  abort "R4: a file under / must be inside the root /" unless FastEditCheck.inside_root?(file, "/")
+  label = FastEditCheck.relative_label(file, "/")
+  abort "R4: the label under / must not start with /: #{label}" if label.start_with?("/")
+  abort "R4: a file must not be inside an unrelated root" if FastEditCheck.inside_root?(file, File.realpath(ARGV[2]))
+' -- "$edit_src" "$plain/good.rb" "$tmp/loose" || fail "R4: root / must be handled"
 
 # ---- P1: PATH の git と ruby (E27) ------------------------------------------------------
 fake_bin="$tmp/fake-bin"

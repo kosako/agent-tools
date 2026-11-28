@@ -48,7 +48,9 @@
   changed-scope-qa は、指紋に diff が要るので、今までどおり git で repo root を決める。
 - 設定の file が在るのに読めないとき (JSON でない、top-level が object でない、regular file でない (directory や指す先の
   無い symlink)、権限で読めない) は、fast-edit-check が設定エラーを 1 行知らせ、既定を含めて check を走らせない
-  (既定を止める設定を読めないため)。changed-scope-qa は二重に騒がず、無言で何もしない。
+  (既定を止める設定を読めないため)。「無い」と扱うのは、設定の path の `lstat` が `ENOENT` のときだけで、親の
+  directory に権限が無いなど、在るかを確かめられないときも設定エラーにする。changed-scope-qa は二重に騒がず、無言で
+  何もしない。
 - **repo 内の宣言ファイルは読まない**: clone した第三者 repo が「編集・終了のたびに実行
   される任意コマンド」を宣言できてしまうため。宣言の所有をユーザーに固定するのが
   この配置の主目的 (中央 local 設定は `.agent-context.local.md` と同じユーザー正本
@@ -77,11 +79,13 @@
   相対 path には当てない (先頭が `-` の名前を interpreter が option として読まないように)。repo の外を指す symlink にも
   当てない。git の repo の外の file には何もしない。worker の clone と linked worktree も git の repo なので、既定が効く。
 - **宣言との重ね方**: その file に一致する有効な宣言の `edit_checks` が 1 つでもあれば、既定は走らせない (宣言が
-  既定に代わる)。一致する有効な宣言が無ければ、既定を走らせる。不正な宣言 (構造の不正・壊れた regex・不正な上限) は
-  今までどおり設定エラーの警告を出し、既定は走らせる (不正な宣言は既定に代わらない)。
+  既定に代わる)。一致する有効な宣言が無ければ、既定を走らせる。不正な宣言 (`edit_checks` が配列でない、要素の構造の
+  不正・壊れた regex・不正な上限) は設定エラーの警告を出し、既定は走らせる (不正な宣言は既定に代わらない)。
 - **止め方**: 設定の top-level の `"default_edit_checks": false` で全体、repo の entry の `"default_edit_checks": false` で
   その repo の既定を止める。どちらかが `false` なら止まる。値は `true` か `false` だけを受け、ほかの型は設定エラーを
   出してその範囲 (top-level なら全体、entry ならその repo) の既定を止める (user が止めたかった可能性があるため)。
+  値の型は、宣言が一致するかに関わらず、git の repo の中の file を編集するたびに検査して知らせる (設定の file が無い
+  ときは読む値も無い)。
 
   ```json
   {
