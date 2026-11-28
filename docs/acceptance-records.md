@@ -56,3 +56,4 @@ engine (Claude Code・Codex・herdr) の版が変わると、前に通した受�
 
 | 項目 | engine | agent-tools | dotfiles | 日時 | 根拠 |
 | --- | --- | --- | --- | --- | --- |
+| notify | claude-code 2.1.332; herdr 0.9.5 | c731653 | fd4e22a | 2026-11-28 | #725 |

@@ -45,9 +45,9 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
 - subagent と ultracode は親と同じ枠を使う。割当では予定の消費を差し引かず、枠が実際に枯渇したときだけ
   割当の規則 2 で扱う。
 
-**未検証**: 同じ種類の worker を複数同時に走らせる N 並列は、この doc の範囲に入れていません。1 + 1
-自体もまだ実際に回していないので、最初の 1 回を検証として扱い、その経験を見て N 並列を別の Issue に
-します。
+**未検証**: 同じ種類の worker を複数同時に走らせる N 並列は、この doc の範囲に入れていません。1 + 1 は、
+#309 (Codex の worker の初めての PR) で初めて回し、#310 (PR #323) で、tab の起動と起動の記録を含む委譲の全経路を
+実地で確かめました。その後も worker の委譲を回しています。N 並列は、必要になったら別の Issue にします。
 
 ## tab と pane
 
@@ -135,7 +135,8 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
     直前に止まった、落ちた、判定できない) は、自動で起動し直さず人に確認します。
 
   これで、orchestrator の session が起動の前後や worker の途中で終わっても、二重に起動せず、次の
-  session が回収できます。`personal-packet` は `run` / `tab` を解析し、`list` に run dir の状態
+  session が回収できる設計です。この流れを実機で通したかは、受け入れの記録 ([acceptance-records](acceptance-records.md)
+  の `resume`) で追います (2026-11-28 の時点では未記録)。`personal-packet` は `run` / `tab` を解析し、`list` に run dir の状態
   (`run_status`: `finished` / `unfinished` / `missing`) を出し、publish / pull で保持します (書式は
   [agent-packets](agent-packets.md))。worker の起動手順 (`personal-codex-worker`) が起動の前に書いて
   起動の前に確かめ、resume (`personal-resume-project`) が「起動済み・未回収」(`state: blocked` なら「停止中」) を
@@ -148,9 +149,10 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
 - 根拠: orchestrator (Claude) が人を必要とするとき (merge の確認、停止の報告、質問) は、必ず turn を
   終えて返答を待ちます。これは Claude の pane の状態変化なので、組み込み通知が出ます。worker の完了は
   orchestrator が待っていて自動で続けるので、人に知らせる必要はありません。
-- **前提 (未実測)**: Claude の pane が turn を終えたときに、OS の通知が実際に届くこと。組み込み通知の
-  配信は herdr の config (`[ui.toast]` の `delivery`) 次第で、既定は `off` です (config は dotfiles の
-  管轄)。
+- **前提**: Claude の pane が turn を終えたときに、OS の通知が実際に届くこと。組み込み通知の配信は herdr の
+  config (`[ui.toast]` の `delivery`) 次第で、既定は `off` です (config は dotfiles の管轄)。2026-11-28 に、
+  `delivery = "system"` の設定で、Claude Code 2.1.332・herdr 0.9.5 で届くことを人が確かめました。版が変わったら
+  確かめ直します (受け入れの記録 [acceptance-records](acceptance-records.md) の `notify`。doctor が版の変化を知らせる)。
 - 通知は気づくきっかけで、記録ではありません。見逃しても、agent panel、packet の `state`、PR の状態、
   残った tab / pane、packet の `run` から後で検知できます。
 - 組み込み通知で拾えない event が実際に見つかったら、そのときに `notification show` を足します (どの
