@@ -254,14 +254,23 @@ module CiRunner
       return EXIT_NOT_OK
     end
 
-    ctx = { record: record, pid: nil }
+    ctx = { record: record, pid: nil, alive: false }
     begin
       launch_and_wait(config, repo, ctx, state, out)
     rescue StandardError => e
-      # 想定外の例外でも、container が動いていれば止め、規則 1 で後片付けをする
-      out.puts "once: #{repo}: 想定外の失敗で止めました (#{e.class})"
+      # 想定外の例外でも、container が動いていれば止め、規則 1 で後片付けをする。出力は止めた後 (出力の失敗で止めを飛ばさない)
       stop_after_failure(config, ctx)
-      report_settle(settle(record, state, ran: false, alive: ctx[:alive] == true), record, out)
+      result = begin
+        settle(record, state, ran: false, alive: ctx[:alive])
+      rescue StandardError
+        :kept_failed
+      end
+      begin
+        out.puts "once: #{repo}: 想定外の失敗で止めました (#{e.class})"
+        report_settle(result, record, out)
+      rescue StandardError
+        nil
+      end
       EXIT_NOT_OK
     ensure
       reap_children
@@ -281,9 +290,10 @@ module CiRunner
     out.puts "once: #{repo}: runner を起動します (#{record['name']})"
     status = run_container(config, repo, ctx, jit)
     out.puts "once: #{repo}: #{status_label(status, record)}"
-    # container が動いて終わったのを回収したときだけ ran (名前で見つからなければ、もう無いとみなしてよい)
+    # container が動いて終わったのを回収したときだけ ran (名前で見つからなければ、もう無いとみなしてよい)。container が
+    # 動いているかもしれないこと (ctx[:alive]) は、あきらめたときと docker の client が signal で終わったときに立つ
     ran = %i[started made_public interrupted].include?(status)
-    result = settle(record, state, ran: ran, alive: status == :stop_failed)
+    result = settle(record, state, ran: ran, alive: ctx[:alive])
     report_settle(result, record, out)
     status == :started && result == :removed ? EXIT_OK : EXIT_NOT_OK
   end
@@ -303,21 +313,29 @@ module CiRunner
     { started: "container が終わりました", start_failed: "container を起動できませんでした",
       made_public: "private でなくなったので container を止めました",
       interrupted: "signal を受けたので container を止めました",
+      client_lost: "docker の client が signal で終わりました (container が動いているかもしれません: #{record['container']})",
       stop_failed: "container を止められませんでした (docker で手で止めてください: #{record['container']})" }.fetch(status)
   end
 
   # container を起動し、終わるまで待つ。JIT の設定は stdin で渡す。戻り値: :started / :start_failed / :made_public /
-  # :interrupted / :stop_failed。
+  # :interrupted / :client_lost / :stop_failed。docker を起動できなかったときだけ :start_failed にする (起動の後の失敗は
+  # 例外の受け口に任せ、container を止めてから後片付けをする)。
   def run_container(config, repo, ctx, jit)
     reader, writer = IO.pipe
     record = ctx[:record]
-    ctx[:pid] = Process.spawn(*docker(config), "run", "--rm", "-i", "--name", record["container"],
-                              "--label", "#{CONTAINER_LABEL}=#{repo}",
-                              "--cpus", config["cpus"].to_s, "--memory", "#{config['memory_mb']}m",
-                              "--memory-swap", "#{config['memory_mb']}m", "--pids-limit", config["pids"].to_s,
-                              "--security-opt", "no-new-privileges", "--cap-drop", "ALL",
-                              config["image"], "sh", "-c", INNER,
-                              in: reader, out: File::NULL, err: File::NULL)
+    begin
+      ctx[:pid] = Process.spawn(*docker(config), "run", "--rm", "-i", "--name", record["container"],
+                                "--label", "#{CONTAINER_LABEL}=#{repo}",
+                                "--cpus", config["cpus"].to_s, "--memory", "#{config['memory_mb']}m",
+                                "--memory-swap", "#{config['memory_mb']}m", "--pids-limit", config["pids"].to_s,
+                                "--security-opt", "no-new-privileges", "--cap-drop", "ALL",
+                                config["image"], "sh", "-c", INNER,
+                                in: reader, out: File::NULL, err: File::NULL)
+    rescue SystemCallError
+      reader.close
+      writer.close
+      return :start_failed
+    end
     reader.close
     begin
       writer.write("#{jit}\n")
@@ -327,8 +345,6 @@ module CiRunner
       writer.close
     end
     wait_container(config, repo, ctx)
-  rescue SystemCallError
-    :start_failed
   end
 
   # container が終わるまで待つ。signal を受けた、または private と確かめられなくなったら (検知)、規則 2 で止める:
@@ -340,7 +356,7 @@ module CiRunner
       _, status = Process.waitpid2(pid, Process::WNOHANG)
       if status
         ctx[:pid] = nil
-        return exit_kind(status)
+        return exit_kind(status, ctx)
       end
 
       reason = nil
@@ -373,30 +389,34 @@ module CiRunner
     result == :exited ? reason : :stop_failed
   end
 
-  # 想定外の例外の後: container が動いていれば、同じ規則で止める。止められなければ ctx[:alive] を立てる。
+  # 想定外の例外の後: container が動いていれば、同じ規則で止める。止められなければ ctx[:alive] が立つ。
   def stop_after_failure(config, ctx)
     return if ctx[:pid].nil?
 
     detect!
-    ctx[:alive] = stop_until_exit(config, ctx) != :exited
+    stop_until_exit(config, ctx)
   rescue StandardError
     ctx[:alive] = true
   end
 
   # docker stop (失敗したら docker kill) を、container が終わるまで STOP_RETRY_SECONDS ごとに繰り返す。期限の
-  # ABANDON_SECONDS 前になっても終わらなければ、docker の client を止める。戻り値: :exited / :abandoned。
+  # ABANDON_SECONDS 前になっても終わらなければ、docker の client を止める。戻り値: :exited / :abandoned。あきらめたときと、
+  # client が signal で終わったときは、container が動いているかもしれないので ctx[:alive] を立てる (規則 1 で記録を残す)。
   def stop_until_exit(config, ctx)
     pid = ctx[:pid]
     next_stop = now
     loop do
-      if Process.waitpid(pid, Process::WNOHANG)
+      _, status = Process.waitpid2(pid, Process::WNOHANG)
+      if status
         ctx[:pid] = nil
-        return :exited
+        ctx[:alive] = true if status.signaled?
+        return status.signaled? ? :abandoned : :exited
       end
       left = remaining
       if left <= ABANDON_SECONDS
         abandon(pid, left)
         ctx[:pid] = nil
+        ctx[:alive] = true
         return :abandoned
       end
       if now >= next_stop
@@ -411,7 +431,13 @@ module CiRunner
   end
 
   # docker run の exit 125・126・127 は、container を起動できなかった印。ほかは runner の終わり方で、job の成否は GitHub の側。
-  def exit_kind(status)
+  # docker の client が signal で終わったときは、container が残っているかもしれない (ctx[:alive] を立てる)。
+  def exit_kind(status, ctx)
+    if status.signaled?
+      ctx[:alive] = true
+      return :client_lost
+    end
+
     [125, 126, 127].include?(status.exitstatus) ? :start_failed : :started
   end
 
@@ -647,9 +673,11 @@ module CiRunner
     ["", "", nil]
   end
 
+  # TERM から KILL までは 5 秒。検知の後は期限までの残りで切る (下限 1 秒。規則 2 の期限を延ばさない)。
   def stop_child(thread)
     signal_child(thread.pid, "TERM")
-    return if thread.join(5)
+    grace = @deadline ? [[remaining, 1].max, 5].min : 5
+    return if thread.join(grace)
 
     signal_child(thread.pid, "KILL")
     thread.join

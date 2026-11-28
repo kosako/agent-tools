@@ -575,7 +575,7 @@ expect_rc 0 "M13"
 [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "M13: the record must be removed"
 converge M13
 # M14: 動いている間に TERM -> 止めて消す。登録を消すのは、container が終わる前に始まっている。docker stop と kill が
-# 失敗しても 5 秒ごとに繰り返し、TERM から 15 秒のうちに止める
+# 失敗しても 5 秒ごとに繰り返し、TERM から 30 秒のうちに止める (繰り返さなければ、55 秒であきらめるまで止まらない)
 reset
 printf '90\n' > "$tmp/docker/run-seconds"
 printf '3\n' > "$tmp/docker/stop-fail"
@@ -587,7 +587,7 @@ ruby -e '
   del = ev.select { |t, e| e == "DELETE" }.map { |t, _| t.to_f }.min
   ex = ev.select { |t, e| e == "EXIT" }.map { |t, _| t.to_f }.min
   abort "M14: DELETE #{del.inspect} must start before the container exits #{ex.inspect}" unless del && ex && del < ex
-  abort "M14: the stop must be retried until the container exits (#{(ex - ARGV[2].to_f).round(1)}s)" unless ex - ARGV[2].to_f < 15
+  abort "M14: the stop must be retried until the container exits (#{(ex - ARGV[2].to_f).round(1)}s)" unless ex - ARGV[2].to_f < 30
 ' -- "$tmp/gh/events.log" "$tmp/docker/events.log" "$sent_wall" || fail "M14: the registration removal must not wait for the container"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "M14: the registration must be deleted"
 converge M14
@@ -714,7 +714,42 @@ run_case T7 running
 [ "$rc" -eq 1 ] || fail "T7: expected exit 1, got $rc"
 rm -f "$tmp/gh/ignore-term"
 converge T7
+# T8: 作る段で TERM、一覧が返らず、gh が TERM を無視する -> TERM から KILL までの猶予も期限の残りで切り、期限のうちに戻る
+reset
+printf 'hang\n' > "$tmp/gh/mode-post"
+printf 'hang\n' > "$tmp/gh/mode-list"
+touch "$tmp/gh/ignore-term"
+run_case T8 post
+[ "$rc" -eq 1 ] || fail "T8: expected exit 1, got $rc"
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "T8: the record must be kept"
+rm -f "$tmp/gh/ignore-term"
+converge T8
+# T10: 止めている途中で docker の client が KILL される -> container が残りうるので、記録を残す
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+touch "$tmp/docker/stop-hang"
+start_once running
+kill -TERM "$bg"
+sleep 1
+pkill -KILL -f -- "fake/docker --context colima-ci run" || true
+wait_bg
+[ "$rc" -eq 1 ] || fail "T10: expected exit 1, got $rc"
+invariant T10
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "T10: the record must be kept while the container may be alive"
+converge T10
 short=
+# M23: 動いている間に docker の client が KILL される -> 登録は消し、container が残りうるので記録を残す
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+start_once running
+pkill -KILL -f -- "fake/docker --context colima-ci run" || true
+wait_bg
+[ "$rc" -eq 1 ] || fail "M23: expected exit 1, got $rc"
+invariant M23
+case $(cat "$tmp/out") in *"docker の client が signal で終わりました"*) ;; *) fail "M23: unexpected output: $(cat "$tmp/out")" ;; esac
+[ ! -e "$tmp/gh/runners/4242" ] || fail "M23: the registration must be deleted"
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M23: the record must be kept while the container may be alive"
+converge M23
 
 # ---- cleanup の個別の case ---------------------------------------------------------------------------------------
 put_record() { # $1=名前  $2=何秒前に作ったか
@@ -842,6 +877,35 @@ env PATH="$tmp/fake:$PATH" HOME="$tmp/home" AGENT_TOOLS_CI_RUNNER_CONFIG="$conf"
 case $(cat "$tmp/out") in *"想定外の失敗で止めました (RuntimeError)"*) ;; *) fail "T2: unexpected output: $(cat "$tmp/out")" ;; esac
 ls "$tmp/docker" | grep -q '^stop-' || fail "T2: the container must be stopped"
 [ ! -e "$tmp/gh/runners/4242" ] && [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "T2: the runner and record must be cleaned up"
+invariant T2
+# T9: T2 に加えて、例外の後は出力も失敗する -> 出力より先に container を止めて後片付けをする
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+rc=0
+env PATH="$tmp/fake:$PATH" HOME="$tmp/home" AGENT_TOOLS_CI_RUNNER_CONFIG="$conf" AGENT_TOOLS_CI_RUNNER_STATE_DIR="$state" \
+  AGENT_TOOLS_CI_RUNNER_POLL_SECONDS=1 GH_REPO= GH_HOST= "$real_ruby" -e '
+  load ARGV[0]
+  broken = Object.new
+  def broken.puts(*args)
+    raise IOError, "closed stream" if $broken
+    STDOUT.puts(*args)
+  end
+  calls = 0
+  original = CiRunner.method(:visibility)
+  CiRunner.define_singleton_method(:visibility) do |*a, **k|
+    calls += 1
+    if calls == 3
+      $broken = true
+      raise "boom"
+    end
+    original.call(*a, **k)
+  end
+  exit CiRunner.main(["once", "kosako/prism"], out: broken)
+' -- "$src" > "$tmp/out" 2> "$tmp/err" || rc=$?
+[ "$rc" -eq 1 ] || fail "T9: expected exit 1, got $rc ($(cat "$tmp/out"))"
+ls "$tmp/docker" | grep -q '^stop-' || fail "T9: the container must be stopped before any output"
+[ ! -e "$tmp/gh/runners/4242" ] && [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "T9: the runner and record must be cleaned up"
+invariant T9
 
 # ---- 使い方の誤り --------------------------------------------------------------------------------------------------
 reset

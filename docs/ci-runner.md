@@ -101,8 +101,9 @@ personal-ci-runner check | once <owner/repo> | cleanup
   JIT の runner は GitHub の側で消える)。または、記録を作ってから 10 分たっている (作成の途中で止めた POST が後から効く場合に
   備えて、それまでは残す)。
 
-それ以外では記録を残します。一覧の失敗、DELETE の失敗や期限切れ、container が動いているかもしれないとき (止められなかった)、
-想定外の例外の後が当たります。記録を消せなかったときも、登録は消したまま記録が残ります (`cleanup` が後で消す)。
+それ以外では記録を残します。一覧の失敗、DELETE の失敗や期限切れ、container が動いているかもしれないとき、想定外の例外の後が
+当たります。container が動いているかもしれないのは、止めるのをあきらめたときと、docker の client が signal で終わったとき
+(client が消えても container は残りうる) です。記録を消せなかったときも、登録は消したまま記録が残ります (`cleanup` が後で消す)。
 
 ### 規則 2: 止めるときの時間
 
@@ -113,13 +114,15 @@ personal-ci-runner check | once <owner/repo> | cleanup
 - 後の gh と docker の全部の呼び出しに、期限までの残りを渡します (`docker stop --time` もその内に収める)。
 - 期限の 5 秒前になっても container が終わらなければ、docker の client を止め (TERM、残りで KILL)、container の名前を出して
   「手で止めてください」と知らせます。
-- 期限までに終わらなかった登録の削除は、その gh を止めて終わらせます。`once` は検知から 60 秒のうちに戻ります。
+- 期限までに終わらなかった登録の削除は、その gh を止めて終わらせます。期限の後は、残った子を止める猶予 (1 秒ほど) だけ待つ
+  ので、`once` は検知から約 60 秒で戻ります。
 - JIT を作る前と作る段の gh (private の確かめと JIT の作成) は、signal を受けた時点で止めます。JIT を作る前の signal なら、
   runner を作りません。job の途中なら、その job は取り消しになります。
 - 想定外の例外の受け口でも、container が動いていれば同じ形で止め、規則 1 で後片付けをします。
 
 gh と docker の子 process は、検知が無いときも 60 秒の期限で待ちます (`docker stop` は 30 秒)。期限を過ぎたら子を止め (TERM →
-5 秒 → KILL)、失敗として扱います。`once` の終わりには、残った子を止めます。
+5 秒 → KILL。検知の後は、この 5 秒も期限までの残りで切り、下限は 1 秒)、失敗として扱います。`once` の終わりには、残った子を
+止めます (TERM → 1 秒 → KILL)。
 
 ## state
 
@@ -154,7 +157,8 @@ token は書きません。4 つの key のほかを持つ記録は、読めな�
 ## 公開に切り替えるとき
 
 1. 設定の `repos` から、その repo を外します。
-2. 動いている `once` を止め (INT か TERM)、`personal-ci-runner cleanup` で残った登録を消します。
+2. 動いている `once` を止め (INT か TERM)、`personal-ci-runner cleanup` で残った登録を消します。`cleanup` は、名前で見つからない
+   記録を作ってから 10 分は残し、exit 0 のまま「残します」と出します。state の記録が無くなるまで、時間をおいて繰り返します。
 3. repo の settings の runner の一覧に、`agent-tools-ci-` で始まる runner が残っていないことを確かめます。
 4. repo を公開に切り替え、workflow が GitHub の runner を選ぶこと (`runs-on` の式) と、CI が通ることを確かめます。
 
@@ -164,14 +168,16 @@ token は書きません。4 つの key のほかを持つ記録は、読めな�
 
 - POST: 成功、500 で作られない、500 だが作られる、作ってから返らない、止められた後で作られる、404
 - 一覧: 成功、失敗、返らない、遅い
-- DELETE: 成功、404 で消えている、404 なのに残っている、失敗、遅い
+- DELETE: 成功、404 で消えている、404 なのに残っている、失敗、1 回だけ失敗、遅い
+- gh の process: TERM で止まる、TERM を無視する (KILL でだけ止まる)
 - docker run: すぐ終わる、125、長く動く
 - docker stop・kill: 成功、何度か失敗してから成功、返らない
+- docker run の client: 動いている間に KILL される、止めている途中で KILL される
 - docker ps: 成功、失敗
 - 動いている間の確かめ: private、public、失敗、形の違う返事、返らない
-- 記録: 書けない、消せない
+- 記録と lock: 記録を書けない、記録を消せない、lock の file を用意できない
 
-「組の表」の case (M01〜M22 と T3〜T5) では、どの case の後にも同じ検査をかけます。遅れて効く偽の子が終わるのを待ってから、次を
+「組の表」の case (M01〜M23 と T3〜T10) では、どの case の後にも同じ検査をかけます。遅れて効く偽の子が終わるのを待ってから、次を
 見ます。
 
 - 偽の GitHub に `agent-tools-ci-` の runner が残っていれば、その名前の記録も残っている。
@@ -181,8 +187,9 @@ token は書きません。4 つの key のほかを持つ記録は、読めな�
 - 全部の呼び出しを成功にし、残った container を人が止めたことにし、記録を 10 分より前に作ったことにして `cleanup` を流すと、
   runner も記録も残らない。
 
-T3〜T5 は、期限を 8 秒・あきらめを 2 秒にした `once` を、返らない偽の gh と docker で流します (helper は差し替えない)。T1 は同じ
-上限で、container を待つ helper を直接呼びます。想定外の例外 (T2) は、helper の差し替えで起こします。
+T3〜T8 と T10 は、期限を 8 秒・あきらめを 2 秒にした `once` を、返らない偽の gh と docker で流します (helper は差し替えない)。
+T1 は同じ上限で、container を待つ helper を直接呼びます。想定外の例外 (T2) は helper の差し替えで起こし、T9 はその後の出力も
+失敗させて、出力より先に container を止めることを見ます。
 
 ほかに、設定の検査 (形・範囲・境界・key の重なり・symlink・権限・大きさ)、公開範囲の判定、JIT の設定が stdin の 1 行で届き、
 出力・docker の引数・state に出ないこと、docker の引数 (付ける option と付けない option)、記録の形、同じ repo の lock、`cleanup` の
