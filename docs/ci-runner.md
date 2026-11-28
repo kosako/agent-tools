@@ -86,13 +86,21 @@ personal-ci-runner check | once <owner/repo> | cleanup
    中の shell は、stdin の 1 行を `ACTIONS_RUNNER_INPUT_JITCONFIG` に入れて、`run.sh` を引数なしで起動します (runner は値を読んだ
    後で、自分の env から消す)。JIT の設定は container の stdin で渡すので、host の docker の argv と env に載りません。container の
    stdout と stderr は捨てます (job の log は GitHub の側で見る)。
-8. container が動いている間、60 秒ごとに private を確かめます (env の `AGENT_TOOLS_CI_RUNNER_POLL_SECONDS` で 1〜3600 秒に替えられる)。
-   private でなくなったら、container を止めます。
+8. container が動いている間、60 秒ごとに private を確かめます (env の `AGENT_TOOLS_CI_RUNNER_POLL_SECONDS` で 1〜60 秒に縮められる。
+   範囲の外の値は 60 秒)。private と確かめられなくなったら (public か判定できない)、先に runner の登録を消して新しい job を
+   取らせないようにし、container を止めます。止めるのは `docker stop` (失敗したら `docker kill`) で、container が終わるまで 5 秒ごとに
+   繰り返します。60 秒たっても終わらなければ、docker の client を止め、container の名前を出して「手で止めてください」と知らせ、
+   exit 1 にします。
 9. 終わったら、登録が残っていれば消し (API の runner の名前が記録と一致するときだけ)、消せたら (もう無ければ) 記録を外します。
    消せなければ記録を残して exit 1 にし、後で `cleanup` が消します。
 
-INT・TERM・HUP は、どの段で受けても、container を止めて登録を消します。JIT を作る前なら作りません。job の途中なら、その job は
-取り消しになります。
+INT・TERM・HUP は、どの段で受けても、container を止めて登録を消します (止め方は 8 と同じ)。JIT を作る前なら作りません。job の途中
+なら、その job は取り消しになります。
+
+gh と docker の子 process は、60 秒の期限で待ちます (`docker stop` は 30 秒)。期限を過ぎたら子を止め (TERM → 5 秒 → KILL)、失敗として
+扱います。JIT を作る前と作る段の gh (private の確かめと JIT の作成) は、signal を受けた時点でも止めて、後片付けに進みます。作成の
+途中で止めた runner は、名前で探して消します。後片付けの gh (登録の確かめと削除) は、signal では止めません。記録を書いた後の段で
+想定外の例外が起きたときも、登録を消す後片付けに進みます。
 
 ## state
 
@@ -108,6 +116,8 @@ group と other が使えないことを確かめます。記録は一時 file �
 
 - private の確かめと runner の作成・起動の間、動いている間の確かめの間 (最大 60 秒) には時差があります。repo を公開に切り替える
   前に、設定の `repos` から外し、動いている `once` を止めてください (下の「公開に切り替えるとき」)。
+- 動いている間の確かめで判定できない (GitHub の API の一時的な失敗など) ときも、container を止めます。その job は取り消しになります。
+- `docker stop` も `docker kill` も 60 秒のうちに効かないときは、container が残りえます (名前を出して知らせる)。
 - 同じ container の job は、runner の process の初めの env (`/proc/<pid>/environ`) から JIT の設定を読みえます。その 1 job の
   runner の資格に限られます。host の gh の token は container に渡しません。
 - `no-new-privileges` と `--cap-drop ALL` のため、job の中で `sudo` は使えません。apt などが要る repo は、道具を入れた image を別に
@@ -133,4 +143,6 @@ group と other が使えないことを確かめます。記録は一時 file �
 `scripts/tests/ci-runner-test.sh` が、偽の `gh` と `docker` で確かめます。設定の検査 (形・範囲・境界・key の重なり・symlink・
 権限・大きさ)、公開範囲の判定 (public・形の違う返事・失敗・名前の違い)、作った直後と動いている間の確かめ、JIT の設定が
 stdin の 1 行で届き出力・docker の引数・state に出ないこと、docker の引数 (付ける option と付けない option)、作った後の失敗の
-後片付け、`cleanup` の照合、signal、同じ repo の lock を見ます。実機の smoke は、合格の条件を先に #803 に書き、人が 1 回流します。
+後片付け、`cleanup` の照合、signal、同じ repo の lock を見ます。review の round 1 (#818) の後に、監視の間隔の上限、`docker stop` と
+`kill` の失敗の繰り返しと、止める前に登録を消すこと、形の違う JIT の返事、返らない POST の間の TERM、子の待ちの期限を足しました。
+60 秒たっても止められないときのあきらめの段は、test では見ていません (待ちが長くなるため)。実機の smoke は、合格の条件を先に #803 に書き、人が 1 回流します。

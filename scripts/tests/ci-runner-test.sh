@@ -72,6 +72,8 @@ elsif method == "POST" && path.match?(%r{/actions/runners/generate-jitconfig\z})
   body = { "runner" => { "id" => 4242, "name" => name }, "encoded_jit_config" => $(shq "$canary") }
   body["runner"].delete("id") if mode == "noid"
   body["encoded_jit_config"] = "bad!cfg" if mode == "badcfg"
+  body["runner"] = "oops" if mode == "runnerstring"
+  sleep 30 if mode == "hang"
   puts JSON.generate(body)
 elsif method == "GET" && (m = path.match(%r{/actions/runners/(\d+)\z}))
   file = File.join(runners, m[1])
@@ -124,7 +126,18 @@ when "ps"
   filter = args[args.index("--filter") + 1]
   name = filter.sub("name=^/?", "").sub(/\\\$\z/, "")
   puts "c0ffee" if File.exist?(File.join(dir, "running-#{name}"))
-when "stop"
+when "stop", "kill"
+  # 最初の stop の時点で、runner の登録が残っていたかを書く (public になったら先に登録を消すことを見るため)
+  first = File.join(dir, "reg-at-first-stop")
+  File.write(first, File.exist?(File.join($(shq "$tmp/gh/runners"), "4242")) ? "present" : "gone") unless File.exist?(first)
+  # stop-fail の数だけ、stop と kill を失敗させる
+  fail_file = File.join(dir, "stop-fail")
+  left = File.exist?(fail_file) ? File.read(fail_file).to_i : 0
+  if left.positive?
+    File.write(fail_file, (left - 1).to_s)
+    warn "fake docker: cannot stop"
+    exit 1
+  end
   File.write(File.join(dir, "stop-#{args.last}"), "")
 else
   abort "fake docker: unexpected"
@@ -481,6 +494,70 @@ expect_rc 3 "E30"
 [ "$(grep -c '"POST"' "$tmp/gh/argv.log")" -eq 1 ] || fail "E30: the second once must not create a runner"
 kill -TERM "$bg"
 wait_bg
+
+# ---- review の round 1 の指摘 (#818) ---------------------------------------------------------------------------------
+# R1: 動いている間の確かめの間隔は 60 秒が上限。env で大きくできない
+ruby -e '
+  load ARGV[0]
+  { "3600" => 60, "61" => 60, "60" => 60, "1" => 1, "0" => 60, "x" => 60 }.each do |value, want|
+    ENV["AGENT_TOOLS_CI_RUNNER_POLL_SECONDS"] = value
+    got = CiRunner.poll_seconds
+    abort "R1: poll_seconds for #{value} must be #{want}, got #{got}" unless got == want
+  end
+' -- "$src" || fail "R1: the poll interval must be capped at 60 seconds"
+
+# R2: public になったら、先に登録を消し、docker stop と kill の失敗を間を置いて繰り返して止める
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+printf 'private\nprivate\npublic\n' > "$tmp/gh/vis-seq"
+printf '3\n' > "$tmp/docker/stop-fail"
+poll=1 start_once
+wait_bg
+[ "$bg_rc" -eq 1 ] || fail "R2: expected exit 1, got $bg_rc"
+[ "$(cat "$tmp/docker/reg-at-first-stop")" = gone ] || fail "R2: the registration must be removed before stopping"
+attempts=$(grep -c -E '"(stop|kill)"' "$tmp/docker/argv.log")
+[ "$attempts" -ge 4 ] || fail "R2: stop and kill must be retried after failures (attempts: $attempts)"
+grep -F -e '"kill"' "$tmp/docker/argv.log" >/dev/null || fail "R2: docker kill must be tried after docker stop fails"
+ls "$tmp/docker" | grep -q '^stop-agent' || fail "R2: the container must be stopped in the end"
+
+# R3: JIT の返事の runner が object でない -> 例外にせず、名前で探して消す。container は起動しない
+reset
+printf 'runnerstring\n' > "$tmp/gh/jit-mode"
+run once kosako/prism
+expect_rc 1 "R3"
+! docker_ran || fail "R3: no container may start"
+[ ! -e "$tmp/gh/runners/4242" ] || fail "R3: the runner must be found by name and deleted"
+if grep -F -e "TypeError" "$tmp/out" "$tmp/err" >/dev/null; then fail "R3: the response shape must not raise"; fi
+
+# R4: JIT の POST が返らないまま TERM -> gh を止めて後片付けに進む
+reset
+printf 'hang\n' > "$tmp/gh/jit-mode"
+env PATH="$tmp/fake:$PATH" HOME="$tmp/home" AGENT_TOOLS_CI_RUNNER_CONFIG="$conf" AGENT_TOOLS_CI_RUNNER_STATE_DIR="$state" \
+  GH_REPO= GH_HOST= "$real_ruby" "$src" once kosako/prism > "$tmp/bg-out" 2> "$tmp/bg-err" < /dev/null &
+bg=$!
+i=0
+until [ -e "$tmp/gh/runners/4242" ]; do
+  i=$((i + 1))
+  [ "$i" -lt 200 ] || fail "R4: the POST did not start"
+  sleep 0.05
+done
+started=$(ruby -e 'print Process.clock_gettime(Process::CLOCK_MONOTONIC)')
+kill -TERM "$bg"
+wait_bg
+took=$(ruby -e 'print((Process.clock_gettime(Process::CLOCK_MONOTONIC) - ARGV[0].to_f).round)' -- "$started")
+[ "$bg_rc" -eq 1 ] || fail "R4: expected exit 1, got $bg_rc"
+[ "$took" -lt 15 ] || fail "R4: TERM must stop the hanging gh promptly (took ${took}s)"
+[ ! -e "$tmp/gh/runners/4242" ] && [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "R4: the runner and record must be cleaned up"
+! docker_ran || fail "R4: no container may start"
+# 子の待ちには期限がある
+ruby -e '
+  load ARGV[0]
+  t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  _o, _e, status = CiRunner.run_child(["sleep", "30"], timeout: 1)
+  took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t
+  abort "R4: a timed-out child must give a nil status" unless status.nil?
+  abort "R4: the timeout must stop the child promptly (#{took})" unless took < 10
+' -- "$src" || fail "R4: run_child must time out"
 
 # ---- 使い方の誤り --------------------------------------------------------------------------------------------------
 reset

@@ -53,9 +53,15 @@ module CiRunner
   # repo の runner の既定の group
   RUNNER_GROUP_ID = 1
   CONTAINER_LABEL = "agent-tools.ci-runner"
+  # 動いている間の private の確かめの間隔。上限は 60 秒 (公開に変わった repo の runner を長く動かさない。#818 review)
   DEFAULT_POLL_SECONDS = 60
-  POLL_RANGE = (1..3600).freeze
+  POLL_RANGE = (1..60).freeze
   STOP_SECONDS = 10
+  # 止める必要が出た後、docker stop (失敗したら docker kill) を繰り返す間隔と、あきらめるまでの時間
+  STOP_RETRY_SECONDS = 5
+  STOP_GIVE_UP_SECONDS = 60
+  # gh と docker の子 process を待つ期限 (秒)
+  CHILD_TIMEOUT_SECONDS = 60
   # container の中の shell。stdin の 1 行を env に入れて、run.sh を引数なしで起動する (argv に JIT の設定を載せない)。
   INNER = 'IFS= read -r c || exit 90; export ACTIONS_RUNNER_INPUT_JITCONFIG="$c"; unset c; exec ./run.sh'
   TRAPPED_SIGNALS = %w[INT TERM HUP].freeze
@@ -222,7 +228,7 @@ module CiRunner
 
   def run_once(config, repo, state, out)
     install_traps
-    vis = visibility(repo)
+    vis = visibility(repo, interruptible: true)
     unless vis == "private"
       out.puts "once: #{repo}: #{vis} なので runner を作りません"
       return EXIT_NOT_OK
@@ -240,7 +246,18 @@ module CiRunner
       return EXIT_NOT_OK
     end
 
-    id, jit = create_jit(repo, name)
+    begin
+      launch_and_wait(config, repo, record, state, out)
+    rescue StandardError => e
+      # 記録を書いた後の想定外の例外でも、作った runner の登録を消す後片付けに進む (#818 review)
+      out.puts "once: #{repo}: 想定外の失敗で止めました (#{e.class})"
+      finish(config, record, state, out)
+      EXIT_NOT_OK
+    end
+  end
+
+  def launch_and_wait(config, repo, record, state, out)
+    id, jit = create_jit(repo, record["name"])
     record["id"] = id if id
     write_record(state, record) if id
     reason = launch_refusal(repo, id, jit)
@@ -250,27 +267,29 @@ module CiRunner
       return EXIT_NOT_OK
     end
 
-    out.puts "once: #{repo}: runner を起動します (#{name})"
+    out.puts "once: #{repo}: runner を起動します (#{record['name']})"
     status = run_container(config, repo, record, jit)
-    out.puts "once: #{repo}: #{status_label(status)}"
+    out.puts "once: #{repo}: #{status_label(status, record)}"
     cleaned = finish(config, record, state, out)
     status == :started && cleaned ? EXIT_OK : EXIT_NOT_OK
   end
 
   # JIT の設定を作った後で、container を起動しない理由 (無ければ nil)。
   def launch_refusal(repo, id, jit)
+    return "止める signal を受けました" if interrupted?
     return "runner を作れませんでした" if id.nil? || jit.nil?
     return "JIT の設定の形が違います" unless jit.match?(JIT_RE)
-    return "作った直後の確かめで private でなくなったので止めます" unless visibility(repo) == "private"
+    return "作った直後の確かめで private でなくなったので止めます" unless visibility(repo, interruptible: true) == "private"
     return "止める signal を受けました" if interrupted?
 
     nil
   end
 
-  def status_label(status)
+  def status_label(status, record)
     { started: "container が終わりました", start_failed: "container を起動できませんでした",
       made_public: "private でなくなったので container を止めました",
-      interrupted: "signal を受けたので container を止めました" }.fetch(status)
+      interrupted: "signal を受けたので container を止めました",
+      stop_failed: "container を止められませんでした (docker で手で止めてください: #{record['container']})" }.fetch(status)
   end
 
   # container を起動し、終わるまで待つ。JIT の設定は stdin で渡す。戻り値: :started / :start_failed / :made_public /
@@ -297,22 +316,38 @@ module CiRunner
     :start_failed
   end
 
+  # container が終わるまで待つ。signal を受けた、または private と確かめられなくなったら、止める。public になったときは、
+  # 先に runner の登録を消して新しい job を取らせない。止めるのは docker stop (失敗したら docker kill) を間を置いて繰り返し、
+  # STOP_GIVE_UP_SECONDS たっても終わらなければ docker の client を止めて :stop_failed を返す (#818 review)。
   def wait_container(config, repo, record, pid)
     next_poll = now + poll_seconds
-    stopped = nil
+    reason = nil
+    stop_started = nil
+    next_stop = nil
     loop do
       _, status = Process.waitpid2(pid, Process::WNOHANG)
-      return stopped || exit_kind(status) if status
+      return reason || exit_kind(status) if status
 
-      if stopped.nil? && interrupted?
-        stopped = :interrupted
-        stop_container(config, record)
-      elsif stopped.nil? && now >= next_poll
+      if reason.nil? && interrupted?
+        reason = :interrupted
+      elsif reason.nil? && now >= next_poll
         next_poll = now + poll_seconds
-        unless visibility(repo) == "private"
-          stopped = :made_public
-          stop_container(config, record)
+        vis = visibility(repo, interruptible: true)
+        if interrupted?
+          reason = :interrupted
+        elsif vis != "private"
+          reason = :made_public
+          remove_registration(record)
         end
+      end
+      if reason && (next_stop.nil? || now >= next_stop)
+        stop_started ||= now
+        if now - stop_started > STOP_GIVE_UP_SECONDS
+          abandon(pid)
+          return :stop_failed
+        end
+        stop_container(config, record)
+        next_stop = now + STOP_RETRY_SECONDS
       end
       sleep 0.2
     end
@@ -323,9 +358,35 @@ module CiRunner
     [125, 126, 127].include?(status.exitstatus) ? :start_failed : :started
   end
 
+  # docker stop で止め、失敗したら docker kill を試す。どちらかが成功すれば true。
   def stop_container(config, record)
-    Open3.capture3(*docker(config), "stop", "--time", STOP_SECONDS.to_s, record["container"])
-  rescue SystemCallError
+    _out, _err, status = run_child([*docker(config), "stop", "--time", STOP_SECONDS.to_s, record["container"]],
+                                   timeout: STOP_SECONDS + 20)
+    return true if status&.success?
+
+    _out, _err, status = run_child([*docker(config), "kill", record["container"]], timeout: 20)
+    status&.success? || false
+  end
+
+  # 止められない container の docker の client を止める (TERM → 5 秒 → KILL)。container そのものは残りうる。
+  def abandon(pid)
+    signal_child(pid, "TERM")
+    deadline = now + 5
+    until Process.waitpid(pid, Process::WNOHANG)
+      if now >= deadline
+        signal_child(pid, "KILL")
+        Process.waitpid(pid)
+        break
+      end
+      sleep 0.1
+    end
+  rescue Errno::ECHILD
+    nil
+  end
+
+  def signal_child(pid, signal)
+    Process.kill(signal, pid)
+  rescue Errno::ESRCH
     nil
   end
 
@@ -382,14 +443,12 @@ module CiRunner
   end
 
   def container_running?(config, record)
-    stdout, _err, status = Open3.capture3(*docker(config), "ps", "--quiet", "--filter", "name=^/?#{record['container']}$",
-                                          "--filter", "label=#{CONTAINER_LABEL}")
+    stdout, _err, status = run_child([*docker(config), "ps", "--quiet", "--filter", "name=^/?#{record['container']}$",
+                                      "--filter", "label=#{CONTAINER_LABEL}"])
     # docker に問い合わせられないときは、動いているかもしれないので消さない
-    return true unless status.success?
+    return true unless status&.success?
 
     !stdout.strip.empty?
-  rescue SystemCallError
-    true
   end
 
   # 記録の runner の登録を消す。戻り値: :deleted / :gone / :failed。id のある記録は、API の runner の名前が記録と一致する
@@ -423,8 +482,9 @@ module CiRunner
   # ---- GitHub の API ---------------------------------------------------------------------------------------------
 
   # 公開範囲。private と public は、private・visibility・full_name の 3 つがそろったときだけ。ほかは unknown。
-  def visibility(repo)
-    data, code = gh_get("repos/#{repo}")
+  # interruptible なら、signal を受けた時点で gh を止める (unknown になる)。
+  def visibility(repo, interruptible: false)
+    data, code = gh_get("repos/#{repo}", interruptible: interruptible)
     return "unknown" unless code == :ok && data.is_a?(Hash)
     return "unknown" unless data["full_name"].is_a?(String) && data["full_name"].casecmp?(repo)
 
@@ -437,34 +497,77 @@ module CiRunner
     end
   end
 
-  # JIT の runner を作る。戻り値: [id か nil, JIT の設定か nil]。返事の本文は外に出さない。
+  # JIT の runner を作る。戻り値: [id か nil, JIT の設定か nil]。返事の形は検査し (runner が object でない、など)、本文は
+  # 外に出さない。signal を受けたら gh を止める (作られたかもしれない runner は、後片付けが名前で探す)。
   def create_jit(repo, name)
     body = JSON.generate("name" => name, "runner_group_id" => RUNNER_GROUP_ID, "labels" => LABELS)
     data, code = gh_call("--method", "POST", "repos/#{repo}/actions/runners/generate-jitconfig", "--input", "-",
-                         stdin: body)
+                         stdin: body, interruptible: true)
     return [nil, nil] unless code == :ok && data.is_a?(Hash)
 
-    id = data.dig("runner", "id")
+    runner = data["runner"]
+    id = runner.is_a?(Hash) ? runner["id"] : nil
     jit = data["encoded_jit_config"]
     [id.is_a?(Integer) ? id : nil, jit.is_a?(String) ? jit : nil]
   end
 
-  def gh_get(path, paginate: false)
+  def gh_get(path, paginate: false, interruptible: false)
     args = paginate ? [path, "--paginate", "--slurp"] : [path]
-    gh_call(*args)
+    gh_call(*args, interruptible: interruptible)
   end
 
   # gh api を呼ぶ。戻り値: [JSON か nil, :ok / :not_found / :failed]。gh の出力と error の本文は外に出さない。
-  def gh_call(*args, stdin: "")
-    stdout, stderr, status = Open3.capture3("gh", "api", "--hostname", HOST, *args, stdin_data: stdin)
-    unless status.success?
-      return [nil, stderr.include?("(HTTP 404)") ? :not_found : :failed]
-    end
+  def gh_call(*args, stdin: "", interruptible: false)
+    stdout, stderr, status = run_child(["gh", "api", "--hostname", HOST, *args], stdin: stdin, interruptible: interruptible)
+    return [nil, :failed] if status.nil?
+    return [nil, stderr.include?("(HTTP 404)") ? :not_found : :failed] unless status.success?
     return [nil, :ok] if stdout.strip.empty?
 
     [JSON.parse(stdout.scrub), :ok]
-  rescue JSON::ParserError, SystemCallError
+  rescue JSON::ParserError
     [nil, :failed]
+  end
+
+  # 子 process を起動し、stdout・stderr・status を返す。timeout 秒を過ぎたとき、または interruptible で signal を受けた
+  # ときは、子を止めて (TERM → 5 秒 → KILL) status を nil にする。起動できなければ status は nil。
+  def run_child(cmd, stdin: "", timeout: CHILD_TIMEOUT_SECONDS, interruptible: false)
+    Open3.popen3(*cmd) do |input, output, error, thread|
+      feeder = Thread.new do
+        input.write(stdin)
+      rescue IOError, SystemCallError
+        nil
+      ensure
+        input.close unless input.closed?
+      end
+      # 子を止めた後に stream が閉じられても、thread の例外を stderr に出さない
+      readers = [output, error].map do |stream|
+        Thread.new do
+          Thread.current.report_on_exception = false
+          stream.read
+        end
+      end
+      deadline = now + timeout
+      until thread.join(0.1)
+        next unless now >= deadline || (interruptible && interrupted?)
+
+        stop_child(thread)
+        feeder.join(1)
+        readers.each { |r| r.join(1) }
+        return ["", "", nil]
+      end
+      feeder.join
+      [readers[0].value.to_s, readers[1].value.to_s, thread.value]
+    end
+  rescue SystemCallError
+    ["", "", nil]
+  end
+
+  def stop_child(thread)
+    signal_child(thread.pid, "TERM")
+    return if thread.join(5)
+
+    signal_child(thread.pid, "KILL")
+    thread.join
   end
 
   # ---- state -----------------------------------------------------------------------------------------------------
