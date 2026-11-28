@@ -23,10 +23,24 @@ canary=Q0FOQVJZODAzSklUQ09ORklH
 image="ghcr.io/actions/actions-runner@sha256:$(printf '%064d' 0 | tr 0 a)"
 
 # ---- 偽の gh ----------------------------------------------------------------------------------------------------
+# 呼び出しごとに結果を指定する (file の中身で選ぶ。無ければ ok):
+#   mode-post: ok / fail (500・作られない) / fail-created (500 だが作られる) / hang (作ってから返らない) /
+#              late (返らず、止められた後で作られる) / notfound (404)
+#   post-body: normal / noid / runnerstring / otherid (返事の id が別の既存 runner を指す) / badcfg
+#   mode-list: ok / fail / hang      mode-delete: ok / notfound / notfound-gone / fail
+#   list-delay・delete-delay: 一覧・DELETE の前に待つ秒      vis-seq の hang は 90 秒返らない
+#   mode-delete の fail-once: 1 回だけ失敗する      ignore-term: TERM を無視する (KILL でだけ止まる)
+#   vis-seq: 呼び出しごとの公開範囲 (private / public / mixed / garbage / fail / hang)。最後の行を繰り返す
+#   chmod-state-on-post: POST の後に state の dir を書けなくする (記録を消せない形)
+# DELETE と POST の時刻を events.log に書く。
 cat > "$tmp/fake/gh" <<EOF
 #!$real_ruby
 require "json"
 dir = $(shq "$tmp/gh")
+state = $(shq "$state")
+mode = ->(name) { f = File.join(dir, name); File.exist?(f) ? File.read(f).strip : "ok" }
+event = ->(text) { File.open(File.join(dir, "events.log"), "a") { |f| f.puts("#{Time.now.to_f} #{text}") } }
+trap("TERM") {} if File.exist?(File.join(dir, "ignore-term"))
 stdin = STDIN.read
 File.open(File.join(dir, "argv.log"), "a") { |f| f.puts(JSON.generate(ARGV)) }
 File.open(File.join(dir, "stdin.log"), "a") { |f| f.puts(stdin) } unless stdin.empty?
@@ -39,8 +53,8 @@ if args.first == "--method"
   method = args.shift
 end
 path = args.shift
-def not_found
-  warn "gh: Not Found (HTTP 404)"
+def http_error(code, text)
+  warn "gh: #{text} (HTTP #{code})"
   exit 1
 end
 runners = File.join(dir, "runners")
@@ -57,48 +71,61 @@ if method == "GET" && path.match?(%r{\Arepos/[^/]+/[^/]+\z})
   when "public" then puts JSON.generate("full_name" => full, "private" => false, "visibility" => "public")
   when "mixed" then puts JSON.generate("full_name" => full, "private" => true, "visibility" => "public")
   when "garbage" then puts "not json"
-  else
-    warn "gh: Server Error (HTTP 500)"
-    exit 1
+  when "hang" then sleep 90
+  else http_error(500, "Server Error")
   end
 elsif method == "POST" && path.match?(%r{/actions/runners/generate-jitconfig\z})
-  mode = File.exist?(File.join(dir, "jit-mode")) ? File.read(File.join(dir, "jit-mode")).strip : "ok"
-  if mode == "fail"
-    warn "gh: Server Error (HTTP 500)"
-    exit 1
-  end
   name = JSON.parse(stdin)["name"]
-  if mode == "late"
-    # client が止められた後で、GitHub の側の作成が終わる形 (止められた後に runner ができる)
-    File.write(File.join(dir, "post-started"), "")
+  event.call("POST")
+  File.write(File.join(dir, "post-started"), "")
+  case mode.call("mode-post")
+  when "fail" then http_error(500, "Server Error")
+  when "notfound" then http_error(404, "Not Found")
+  when "fail-created"
+    File.write(File.join(runners, "4242"), name)
+    http_error(500, "Server Error")
+  when "late"
     child = fork { sleep 3; File.write(File.join(runners, "4242"), name) }
     Process.detach(child)
     sleep 30
     exit 1
-  end
-  File.write(File.join(runners, "4242"), name)
-  body = { "runner" => { "id" => 4242, "name" => name }, "encoded_jit_config" => $(shq "$canary") }
-  body["runner"].delete("id") if mode == "noid"
-  body["runner"]["id"] = 9999 if mode == "wrongid"
-  body["runner"]["id"] = 0 if mode == "zeroid"
-  body["runner"]["name"] = "agent-tools-ci-ffffffffffffffff" if mode == "othername"
-  body["encoded_jit_config"] = "bad!cfg" if mode == "badcfg"
-  body["runner"] = "oops" if mode == "runnerstring"
-  sleep 30 if mode == "hang"
-  puts JSON.generate(body)
-elsif method == "GET" && (m = path.match(%r{/actions/runners/(\d+)\z}))
-  file = File.join(runners, m[1])
-  not_found unless File.exist?(file)
-  puts JSON.generate("id" => m[1].to_i, "name" => File.read(file))
-elsif method == "DELETE" && (m = path.match(%r{/actions/runners/(\d+)\z}))
-  if File.exist?(File.join(dir, "delete-fail"))
-    warn "gh: Server Error (HTTP 500)"
+  when "hang"
+    File.write(File.join(runners, "4242"), name)
+    sleep 30
     exit 1
   end
+  File.write(File.join(runners, "4242"), name)
+  File.chmod(0o500, state) if File.exist?(File.join(dir, "chmod-state-on-post"))
+  body = { "runner" => { "id" => 4242, "name" => name }, "encoded_jit_config" => $(shq "$canary") }
+  case mode.call("post-body")
+  when "noid" then body["runner"].delete("id")
+  when "runnerstring" then body["runner"] = "oops"
+  when "badcfg" then body["encoded_jit_config"] = "bad!cfg"
+  when "otherid"
+    File.write(File.join(runners, "5555"), "someone-else")
+    body["runner"]["id"] = 5555
+  end
+  puts JSON.generate(body)
+elsif method == "DELETE" && (m = path.match(%r{/actions/runners/(\d+)\z}))
+  event.call("DELETE #{m[1]}")
+  sleep File.read(File.join(dir, "delete-delay")).to_f if File.exist?(File.join(dir, "delete-delay"))
+  case mode.call("mode-delete")
+  when "fail" then http_error(500, "Server Error")
+  when "fail-once"
+    File.write(File.join(dir, "mode-delete"), "ok")
+    http_error(500, "Server Error")
+  when "notfound" then http_error(404, "Not Found")
+  when "notfound-gone"
+    File.delete(File.join(runners, m[1])) if File.exist?(File.join(runners, m[1]))
+    http_error(404, "Not Found")
+  end
   file = File.join(runners, m[1])
-  not_found unless File.exist?(file)
+  http_error(404, "Not Found") unless File.exist?(file)
   File.delete(file)
 elsif method == "GET" && path.match?(%r{/actions/runners\?per_page=100\z})
+  http_error(500, "Server Error") if mode.call("mode-list") == "fail"
+  sleep 30 if mode.call("mode-list") == "hang"
+  sleep File.read(File.join(dir, "list-delay")).to_f if File.exist?(File.join(dir, "list-delay"))
   list = Dir.children(runners).sort.map { |id| { "id" => id.to_i, "name" => File.read(File.join(runners, id)) } }
   puts JSON.generate([{ "total_count" => list.length, "runners" => list }])
 else
@@ -107,6 +134,9 @@ end
 EOF
 
 # ---- 偽の docker ------------------------------------------------------------------------------------------------
+# run は stdin と state の写しを残し、run-seconds の間 (stop が来るまで) 動く。run-exit が 125 なら起動できない形。
+# stop と kill は stop-fail の回数だけ失敗し、stop-hang があれば返らない。auto-remove があれば、終わったときに
+# runner の登録を消す (job を終えた JIT の runner)。run の終わりの時刻を events.log に書く。
 cat > "$tmp/fake/docker" <<EOF
 #!$real_ruby
 require "json"
@@ -131,19 +161,16 @@ when "run"
   stop = File.join(dir, "stop-#{name}")
   sleep 0.05 until Time.now >= deadline || File.exist?(stop)
   File.delete(running)
+  File.open(File.join(dir, "events.log"), "a") { |f| f.puts("#{Time.now.to_f} EXIT") }
   Dir.glob(File.join($(shq "$tmp/gh/runners"), "*")).each { |f| File.delete(f) } if File.exist?(File.join(dir, "auto-remove"))
   exit(File.exist?(stop) ? 143 : code)
 when "ps"
+  exit 1 if File.exist?(File.join(dir, "ps-fail"))
   filter = args[args.index("--filter") + 1]
   name = filter.sub("name=^/?", "").sub(/\\\$\z/, "")
   puts "c0ffee" if File.exist?(File.join(dir, "running-#{name}"))
 when "stop", "kill"
-  # 最初の stop の時点で、runner の登録が残っていたかを書く (止める前に登録を消すことを見るため)
-  first = File.join(dir, "reg-at-first-stop")
-  File.write(first, File.exist?(File.join($(shq "$tmp/gh/runners"), "4242")) ? "present" : "gone") unless File.exist?(first)
-  # stop-hang があれば、stop と kill は返らない (期限で止められるかを見るため)
   sleep 30 if File.exist?(File.join(dir, "stop-hang"))
-  # stop-fail の数だけ、stop と kill を失敗させる
   fail_file = File.join(dir, "stop-fail")
   left = File.exist?(fail_file) ? File.read(fail_file).to_i : 0
   if left.positive?
@@ -172,7 +199,7 @@ reset() {
 run() {
   rc=0
   env PATH="$tmp/fake:$PATH" HOME="$tmp/home" AGENT_TOOLS_CI_RUNNER_CONFIG="$conf" AGENT_TOOLS_CI_RUNNER_STATE_DIR="$state" \
-    AGENT_TOOLS_CI_RUNNER_POLL_SECONDS="${poll:-60}" GH_REPO= GH_HOST= \
+    AGENT_TOOLS_CI_RUNNER_POLL_SECONDS="${poll:-40}" GH_REPO= GH_HOST= \
     "$real_ruby" "$src" "$@" > "$tmp/out" 2> "$tmp/err" < /dev/null || rc=$?
 }
 expect_rc() { # $1=期待する exit  $2=case
@@ -311,17 +338,7 @@ printf 'Kosako/Prism\n' > "$tmp/gh/full-name"
 run check
 expect_rc 0 "E15 case"
 
-# ---- E16: JIT を作った直後の確かめで public になっていた ----------------------------------------------------------
-reset
-printf 'private\npublic\n' > "$tmp/gh/vis-seq"
-run once kosako/prism
-expect_rc 1 "E16"
-posted || fail "E16: the JIT runner should have been created before the recheck"
-! docker_ran || fail "E16: no container may start after the repo became public"
-[ ! -e "$tmp/gh/runners/4242" ] || fail "E16: the registration must be deleted"
-[ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "E16: the record must be removed"
-
-# ---- 通常の once (E17・E19・E21・E23・E24・E26) -------------------------------------------------------------------
+# ---- 通常の once (E17・E19・E21・E23・E24) -------------------------------------------------------------------------
 reset
 run once kosako/prism
 expect_rc 0 "E17"
@@ -345,229 +362,440 @@ ruby -rjson -e '
   abort "E21: the inner shell must read stdin into the env" unless line.last.include?("ACTIONS_RUNNER_INPUT_JITCONFIG") && line.last.include?("exec ./run.sh")
   abort "E21: run.sh must not take --jitconfig" if line.any? { |a| a.include?("--jitconfig") }
 ' -- "$tmp/docker/argv.log" "$image" || fail "E21: docker arguments"
-# E19: state の記録は repo・名前・container・id だけで、0600
+# E19: 記録は POST の前に 1 回だけ書く 4 つの key だけ。0600、dir は 0700
 snap="$tmp/docker/state-$name"
 ruby -rjson -e '
   f = File.join(ARGV[0], "#{ARGV[1]}.json")
   r = JSON.parse(File.read(f))
-  abort "E19: keys #{r.keys.sort}" unless r.keys.sort == %w[container created_at id name repo]
+  abort "E19: keys #{r.keys.sort}" unless r.keys.sort == %w[container created_at name repo]
   abort "E19: created_at must be an integer" unless r["created_at"].is_a?(Integer)
+  abort "E19: the record must be 0600" unless (File.stat(f).mode & 0o777) == 0o600
 ' -- "$snap" "$name" || fail "E19: the record shape"
 [ "$(ruby -e 'printf("%o", File.stat(ARGV[0]).mode & 0o777)' -- "$state")" = 700 ] || fail "E19: the state dir must be 0700"
 no_canary_outside "E24"
-# E26: 終わった後で登録が残っていれば消し、記録を外す
 [ ! -e "$tmp/gh/runners/4242" ] || fail "E26: the registration must be deleted"
-grep -F -e '"DELETE"' "$tmp/gh/argv.log" >/dev/null || fail "E26: a DELETE must be sent"
 [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "E26: the record must be removed"
 
-# 登録が GitHub の側で消えていれば (job を終えた JIT の runner)、DELETE を送らずに記録を外す
+# 形の違う JIT の設定は container に渡さない
 reset
-touch "$tmp/docker/auto-remove"
-run once kosako/prism
-expect_rc 0 "gone after job"
-! grep -F -e '"DELETE"' "$tmp/gh/argv.log" >/dev/null || fail "gone after job: no DELETE is needed"
-[ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "gone after job: the record must be removed"
-
-# ---- 作った後の失敗 (E18・E20・E25 と決めたこと) ------------------------------------------------------------------
-# E18: 返事に id が無い -> 名前で探して消す。container は起動しない
-reset
-printf 'noid\n' > "$tmp/gh/jit-mode"
-run once kosako/prism
-expect_rc 1 "E18"
-! docker_ran || fail "E18: no container may start"
-[ ! -e "$tmp/gh/runners/4242" ] || fail "E18: the runner must be found by name and deleted"
-# JIT の設定の形が違う -> container に渡さず消す
-reset
-printf 'badcfg\n' > "$tmp/gh/jit-mode"
+printf 'badcfg\n' > "$tmp/gh/post-body"
 run once kosako/prism
 expect_rc 1 "bad jit"
 ! docker_ran || fail "bad jit: no container may start"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "bad jit: the registration must be deleted"
-# E20: 作りかけの記録を書けない -> API を呼ばない。lock の file は先に置いておき、記録の書き込みの失敗まで届かせる
+
+# E30: 同じ repo の once を 2 つ
+# 検知の期限を 8 秒、あきらめを 2 秒にして once を流す (load して定数を替える。時間の case 用)
+short_main='load ARGV.shift
+{ STOP_GIVE_UP_SECONDS: 8, ABANDON_SECONDS: 2 }.each { |k, v| CiRunner.send(:remove_const, k); CiRunner.const_set(k, v) }
+exit CiRunner.main(ARGV)'
+start_once() { # 背景で once を起動する。$1=待つもの (running / post / none)。short=1 なら期限を短くする
+  if [ "${short:-0}" = 1 ]; then set -- "$1" -e "$short_main" -- "$src"; else set -- "$1" "$src"; fi
+  wait_for=$1
+  shift
+  env PATH="$tmp/fake:$PATH" HOME="$tmp/home" AGENT_TOOLS_CI_RUNNER_CONFIG="$conf" AGENT_TOOLS_CI_RUNNER_STATE_DIR="$state" \
+    AGENT_TOOLS_CI_RUNNER_POLL_SECONDS="${poll:-40}" GH_REPO= GH_HOST= \
+    "$real_ruby" "$@" once kosako/prism > "$tmp/out" 2> "$tmp/err" < /dev/null &
+  bg=$!
+  set -- "$wait_for"
+  i=0
+  while :; do
+    case $1 in
+      running) ls "$tmp/docker" | grep -q '^running-' && break ;;
+      post) [ -e "$tmp/gh/post-started" ] && break ;;
+      none) break ;;
+    esac
+    i=$((i + 1))
+    [ "$i" -lt 400 ] || fail "the background once did not reach $1"
+    sleep 0.05
+  done
+}
+wait_bg() {
+  rc=0
+  wait "$bg" || rc=$?
+}
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+start_once running
+bg_first=$bg
+run once kosako/prism
+expect_rc 3 "E30"
+[ "$(grep -c '"POST"' "$tmp/gh/argv.log")" -eq 1 ] || fail "E30: the second once must not create a runner"
+bg=$bg_first
+kill -TERM "$bg"
+wait_bg
+
+# ---- 組の表 (呼び出し × 結果) ------------------------------------------------------------------------------------------
+# どの case の後にも、遅れて効く偽の子を待ってから、同じ検査をかける:
+# - 偽の GitHub に agent-tools-ci- の runner が残っていれば、その名前の記録も残っている
+# - 偽の docker に動いている container が残っていれば、その名前の記録も残っている
+# - 偽の gh と docker の process が残っていない
+# - TERM を送った case では、once が期限のうちに戻った (検知 + 60 秒。期限を短くした case は 8 秒。余裕を 3 秒)
+# - そのあと、全部を成功にし、残った container を人が止めたことにし、記録を 10 分より前に作ったことにして cleanup を
+#   流すと、runner も記録も残らない
+invariant() { # $1=case
+  ruby -rjson -e '
+    runners = Dir.children(ARGV[0]).map { |id| File.read(File.join(ARGV[0], id)) }.select { |n| n.start_with?("agent-tools-ci-") }
+    running = Dir.children(ARGV[3]).grep(/\Arunning-/).map { |f| f.sub(/\Arunning-/, "") }
+    records = File.directory?(ARGV[1]) ? Dir.children(ARGV[1]).grep(/\.json\z/).map { |f| f.sub(/\.json\z/, "") } : []
+    missing = runners - records
+    abort "#{ARGV[2]}: a runner is left without a record: #{missing}" unless missing.empty?
+    alive = running - records
+    abort "#{ARGV[2]}: a container is left without a record: #{alive}" unless alive.empty?
+  ' -- "$tmp/gh/runners" "$state" "$1" "$tmp/docker" || fail "$1: invariant"
+  i=0
+  while pgrep -f -- "$tmp/fake/" >/dev/null; do
+    i=$((i + 1))
+    [ "$i" -lt 60 ] || fail "$1: fake gh or docker processes are left: $(pgrep -lf -- "$tmp/fake/" | tr '\n' ' ')"
+    sleep 0.05
+  done
+}
+converge() { # $1=case
+  rm -f "$tmp/gh"/mode-* "$tmp/gh/post-body" "$tmp/gh/vis-seq" "$tmp/gh/chmod-state-on-post" "$tmp/gh/list-delay" \
+    "$tmp/gh/delete-delay" "$tmp/docker/stop-fail" "$tmp/docker/stop-hang" "$tmp/docker/ps-fail" "$tmp/docker"/running-*
+  [ -d "$state" ] && chmod 700 "$state"
+  for f in "$state"/agent-tools-ci-*.json; do
+    [ -f "$f" ] || continue
+    ruby -rjson -e 'r = JSON.parse(File.read(ARGV[0])); r["created_at"] -= 3600; File.write(ARGV[0], JSON.generate(r))' -- "$f"
+  done
+  run cleanup
+  expect_rc 0 "$1 converge"
+  left=$(ls "$tmp/gh/runners" | while read -r id; do cat "$tmp/gh/runners/$id"; echo; done | grep -c '^agent-tools-ci-' || true)
+  [ "$left" -eq 0 ] || fail "$1 converge: runners are left"
+  [ -z "$(ls "$state" 2>/dev/null | grep '\.json$' || true)" ] || fail "$1 converge: records are left"
+}
+now_s() { ruby -e 'print Process.clock_gettime(Process::CLOCK_MONOTONIC)'; }
+# case を流す。$1=case 名  $2=TERM の時機 (none / post / running)  $3=遅れて効く偽の子を待つ秒
+# short=1 なら期限を 8 秒にして流す。TERM を送った時刻を $sent に残す
+run_case() {
+  case $2 in
+    none) run once kosako/prism ;;
+    *)
+      start_once "$2"
+      sent=$(now_s)
+      sent_wall=$(ruby -e "print Time.now.to_f")
+      kill -TERM "$bg"
+      wait_bg
+      limit=63
+      [ "${short:-0}" = 1 ] && limit=11
+      ruby -e 'took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - ARGV[0].to_f
+        abort "#{ARGV[2]}: once must return within the deadline after TERM (took #{took.round(1)}s)" unless took < ARGV[1].to_f' \
+        -- "$sent" "$limit" "$1" || fail "$1: deadline"
+      ;;
+  esac
+  [ "${3:-0}" -gt 0 ] && sleep "$3"
+  invariant "$1"
+}
+
+# M01: POST 成功、すぐ終わる
+reset
+run_case M01 none
+expect_rc 0 "M01"
+converge M01
+# M02・M03: POST が 500 で作られない / 404 -> container を起動しない。作られたか分からないので、記録は 10 分残る
+for m in fail notfound; do
+  reset
+  printf '%s\n' "$m" > "$tmp/gh/mode-post"
+  run_case "M02 $m" none
+  expect_rc 1 "M02 $m"
+  ! docker_ran || fail "M02 $m: no container may start"
+  converge "M02 $m"
+done
+# M04: POST は 500 だが作られている -> 名前で見つけて消す
+reset
+printf 'fail-created\n' > "$tmp/gh/mode-post"
+run_case M04 none
+expect_rc 1 "M04"
+[ ! -e "$tmp/gh/runners/4242" ] || fail "M04: the created runner must be found by name and deleted"
+converge M04
+# M05: POST が作ってから返らない -> TERM で止め、名前で見つけて消す
+reset
+printf 'hang\n' > "$tmp/gh/mode-post"
+run_case M05 post
+[ "$rc" -eq 1 ] || fail "M05: expected exit 1, got $rc"
+[ ! -e "$tmp/gh/runners/4242" ] || fail "M05: the runner must be deleted"
+converge M05
+# M06: POST が返らず、止められた後で作られる -> 記録が残り、後の cleanup が消す
+reset
+printf 'late\n' > "$tmp/gh/mode-post"
+run_case M06 post 4
+[ "$rc" -eq 1 ] || fail "M06: expected exit 1, got $rc"
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M06: the record must be kept"
+converge M06
+# M07・M08: 返事の形 (id が無い・runner が object でない・id が別の既存 runner を指す) -> id は使わない。名前で消す
+for b in noid runnerstring otherid; do
+  reset
+  printf '%s\n' "$b" > "$tmp/gh/post-body"
+  run_case "M07 $b" none
+  expect_rc 0 "M07 $b"
+  [ ! -e "$tmp/gh/runners/4242" ] || fail "M07 $b: our runner must be deleted by name"
+  if [ "$b" = otherid ]; then
+    [ "$(cat "$tmp/gh/runners/5555")" = someone-else ] || fail "M07 otherid: another runner must be left alone"
+    rm -f "$tmp/gh/runners/5555"
+  fi
+  converge "M07 $b"
+done
+# M09: 一覧が失敗する -> 登録を消せないので記録を残す
+reset
+printf 'fail\n' > "$tmp/gh/mode-list"
+run_case M09 none
+expect_rc 1 "M09"
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M09: the record must be kept"
+converge M09
+# M10: DELETE が失敗する -> 記録を残す
+reset
+printf "fail\n" > "$tmp/gh/mode-delete"
+run_case M10 none
+expect_rc 1 "M10"
+converge M10
+# M11: DELETE が 404 で実際に消えている -> 記録を外す。404 なのに一覧に残っている -> 記録を残す
+reset
+printf "notfound-gone\n" > "$tmp/gh/mode-delete"
+run_case "M11 gone" none
+expect_rc 0 "M11 gone"
+converge "M11 gone"
+reset
+printf "notfound\n" > "$tmp/gh/mode-delete"
+run_case "M11 listed" none
+expect_rc 1 "M11 listed"
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M11 listed: the record must be kept while the runner is listed"
+converge "M11 listed"
+# M12: docker run が 125 (起動できない) -> 名前で見つけて消す
+reset
+printf '125\n' > "$tmp/docker/run-exit"
+run_case M12 none
+expect_rc 1 "M12"
+[ ! -e "$tmp/gh/runners/4242" ] || fail "M12: the registration must be deleted"
+converge M12
+# M13: job を終えた runner は GitHub の側で消える -> 名前で見つからず、container の終わりを回収したので記録を外す
+reset
+touch "$tmp/docker/auto-remove"
+run_case M13 none
+expect_rc 0 "M13"
+[ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "M13: the record must be removed"
+converge M13
+# M14: 動いている間に TERM -> 止めて消す。登録を消すのは、container が終わる前に始まっている。docker stop と kill が
+# 失敗しても 5 秒ごとに繰り返し、TERM から 15 秒のうちに止める
+reset
+printf '90\n' > "$tmp/docker/run-seconds"
+printf '3\n' > "$tmp/docker/stop-fail"
+run_case M14 running
+[ "$rc" -eq 1 ] || fail "M14: expected exit 1, got $rc"
+grep -F -e '"kill"' "$tmp/docker/argv.log" >/dev/null || fail "M14: docker kill must be tried after docker stop fails"
+ruby -e '
+  ev = File.readlines(ARGV[0]).map(&:split) + File.readlines(ARGV[1]).map(&:split)
+  del = ev.select { |t, e| e == "DELETE" }.map { |t, _| t.to_f }.min
+  ex = ev.select { |t, e| e == "EXIT" }.map { |t, _| t.to_f }.min
+  abort "M14: DELETE #{del.inspect} must start before the container exits #{ex.inspect}" unless del && ex && del < ex
+  abort "M14: the stop must be retried until the container exits (#{(ex - ARGV[2].to_f).round(1)}s)" unless ex - ARGV[2].to_f < 15
+' -- "$tmp/gh/events.log" "$tmp/docker/events.log" "$sent_wall" || fail "M14: the registration removal must not wait for the container"
+[ ! -e "$tmp/gh/runners/4242" ] || fail "M14: the registration must be deleted"
+converge M14
+# M15・M16・M17: 動いている間の確かめが public / 失敗 / 形の違う返事 -> 止めて消す
+# (sh では `VAR=x 関数` の代入が関数の後も残るので、poll と short は代入してから戻す)
+poll=1
+for v in public fail mixed; do
+  reset
+  printf '30\n' > "$tmp/docker/run-seconds"
+  printf 'private\nprivate\n%s\n' "$v" > "$tmp/gh/vis-seq"
+  run_case "M15 $v" none
+  expect_rc 1 "M15 $v"
+  ls "$tmp/docker" | grep -q '^stop-' || fail "M15 $v: the container must be stopped"
+  converge "M15 $v"
+done
+# M22: 動いている間の確かめが返らない -> 20 秒で切って止める (検知まで 1 + 20 秒。60 秒待たない)
+reset
+printf '90\n' > "$tmp/docker/run-seconds"
+printf 'private\nprivate\nhang\n' > "$tmp/gh/vis-seq"
+t0=$(now_s)
+run_case M22 none
+ruby -e 'took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - ARGV[0].to_f
+  abort "M22: a hanging check must be cut at 20 seconds (took #{took.round(1)}s)" unless took < 40' -- "$t0" || fail "M22: timing"
+expect_rc 1 "M22"
+converge M22
+poll=
+# M18: JIT を作った直後の確かめで public -> container を起動せず、名前で消す
+reset
+printf 'private\npublic\n' > "$tmp/gh/vis-seq"
+run_case M18 none
+expect_rc 1 "M18"
+! docker_ran || fail "M18: no container may start"
+[ ! -e "$tmp/gh/runners/4242" ] || fail "M18: the registration must be deleted"
+converge M18
+# M19: 記録を書けない (POST の前) -> API を呼ばない
 reset
 mkdir -m 700 "$state"
 lock_name=$(ruby -rdigest -e 'print "lock-" + Digest::SHA256.hexdigest("kosako/prism")[0, 16]')
 : > "$state/$lock_name"
 chmod 600 "$state/$lock_name"
 chmod 500 "$state"
-run once kosako/prism
+run_case M19 none
 chmod 700 "$state"
-expect_rc 1 "E20"
-case $(cat "$tmp/out") in *"state に記録できないので runner を作りません"*) ;; *) fail "E20: must stop at the record write: $(cat "$tmp/out")" ;; esac
-! posted || fail "E20: the JIT runner must not be created without a record"
+expect_rc 1 "M19"
+case $(cat "$tmp/out") in *"state に記録できないので runner を作りません"*) ;; *) fail "M19: must stop at the record write: $(cat "$tmp/out")" ;; esac
+! posted || fail "M19: the JIT runner must not be created without a record"
+converge M19
 # lock の file を用意できない -> runner を作らず exit 1。backtrace を出さない
 reset
 mkdir -m 700 "$state"
 chmod 500 "$state"
-run once kosako/prism
+run_case "lock unavailable" none
 chmod 700 "$state"
 expect_rc 1 "lock unavailable"
 case $(cat "$tmp/out") in *"lock の file を用意できない"*) ;; *) fail "lock unavailable: unexpected output: $(cat "$tmp/out")" ;; esac
 ! posted || fail "lock unavailable: the JIT runner must not be created"
 if grep -F -e ".rb:" "$tmp/err" >/dev/null; then fail "lock unavailable: no backtrace may be printed: $(cat "$tmp/err")"; fi
-# E25: container を起動できない (docker run の exit 125) -> 登録を消す
+converge "lock unavailable"
+# M20: 記録を消せない (state の dir を後で書けなくする) -> 登録は消し、記録は残る
 reset
-printf '125\n' > "$tmp/docker/run-exit"
-run once kosako/prism
-expect_rc 1 "E25"
-[ ! -e "$tmp/gh/runners/4242" ] || fail "E25: the registration must be deleted"
-# 登録を消せない -> 記録を残して exit 1。後の cleanup が消す
+touch "$tmp/gh/chmod-state-on-post"
+run_case M20 none
+expect_rc 1 "M20"
+[ ! -e "$tmp/gh/runners/4242" ] || fail "M20: the registration must still be deleted"
+converge M20
+# M21: 動いている間に TERM、DELETE が失敗する -> 記録を残す
 reset
-touch "$tmp/gh/delete-fail"
-run once kosako/prism
-expect_rc 1 "delete failure"
-[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "delete failure: the record must be kept"
-rm -f "$tmp/gh/delete-fail"
-run cleanup
-expect_rc 0 "cleanup after delete failure"
-[ ! -e "$tmp/gh/runners/4242" ] && [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "cleanup after delete failure"
+printf '30\n' > "$tmp/docker/run-seconds"
+printf 'fail\n' > "$tmp/gh/mode-delete"
+run_case M21 running
+[ "$rc" -eq 1 ] || fail "M21: expected exit 1, got $rc"
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M21: the record must be kept"
+converge M21
 
-# ---- cleanup (E27・E28 と照合) ------------------------------------------------------------------------------------
-put_record() { # $1=名前  $2=id (空なら付けない)  $3=何秒前に作ったか (省略時 0)  $4=uncertain なら yes
+# 期限を 8 秒にした once (返らない gh と docker を、本物の偽の子で置く。helper は差し替えない)
+short=1
+# T3: 動いている間に TERM、一覧が返らない -> container は登録の削除を待たずにすぐ止め、once は期限のうちに戻る
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+printf 'hang\n' > "$tmp/gh/mode-list"
+run_case T3 running
+[ "$rc" -eq 1 ] || fail "T3: expected exit 1, got $rc"
+ruby -e '
+  ex = File.readlines(ARGV[0]).map(&:split).select { |_, e| e == "EXIT" }.map { |t, _| t.to_f }.min
+  abort "T3: the container must stop within 3s of TERM (exit at #{ex.inspect})" unless ex && ex - ARGV[1].to_f < 3
+' -- "$tmp/docker/events.log" "$sent_wall" || fail "T3: the container stop must not wait for the registration removal"
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "T3: the record must be kept"
+converge T3
+# T4: 作る段で TERM、一覧が遅く DELETE が返らない -> TERM の時点の期限で、後の呼び出しも切る
+reset
+printf 'hang\n' > "$tmp/gh/mode-post"
+printf '3\n' > "$tmp/gh/list-delay"
+printf '30\n' > "$tmp/gh/delete-delay"
+run_case T4 post
+[ "$rc" -eq 1 ] || fail "T4: expected exit 1, got $rc"
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "T4: the record must be kept"
+converge T4
+# T5: 動いている間に TERM、docker stop も kill も返らない -> docker の client をあきらめ、container の名前を出し、記録を残す
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+touch "$tmp/docker/stop-hang"
+run_case T5 running
+[ "$rc" -eq 1 ] || fail "T5: expected exit 1, got $rc"
+case $(cat "$tmp/out") in *"手で止めてください"*) ;; *) fail "T5: unexpected output: $(cat "$tmp/out")" ;; esac
+ls "$tmp/docker" | grep -q '^running-' || fail "T5: the fake container must still look alive"
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "T5: the record must be kept while the container may be alive"
+converge T5
+# T6: T5 に加えて、登録の削除が 1 回目だけ失敗する -> 後片付けで登録は消せても、container が動いているかもしれないので記録を残す
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+touch "$tmp/docker/stop-hang"
+printf 'fail-once\n' > "$tmp/gh/mode-delete"
+run_case T6 running
+[ "$rc" -eq 1 ] || fail "T6: expected exit 1, got $rc"
+[ ! -e "$tmp/gh/runners/4242" ] || fail "T6: the registration must be deleted on the second try"
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "T6: the record must be kept while the container may be alive"
+converge T6
+# T7: 動いている間に TERM、一覧が返らず、gh が TERM を無視する -> 期限で残った gh を止め (KILL)、期限のうちに戻る
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+printf 'hang\n' > "$tmp/gh/mode-list"
+touch "$tmp/gh/ignore-term"
+run_case T7 running
+[ "$rc" -eq 1 ] || fail "T7: expected exit 1, got $rc"
+rm -f "$tmp/gh/ignore-term"
+converge T7
+short=
+
+# ---- cleanup の個別の case ---------------------------------------------------------------------------------------
+put_record() { # $1=名前  $2=何秒前に作ったか
   mkdir -p -m 700 "$state"
   ruby -rjson -e '
-    r = { "repo" => "kosako/prism", "name" => ARGV[1], "container" => ARGV[1], "created_at" => Time.now.to_i - ARGV[3].to_i }
-    r["id"] = ARGV[2].to_i unless ARGV[2].empty?
-    r["uncertain"] = true if ARGV[4] == "yes"
+    r = { "repo" => "kosako/prism", "name" => ARGV[1], "container" => ARGV[1], "created_at" => Time.now.to_i - ARGV[2].to_i }
     File.write(File.join(ARGV[0], "#{ARGV[1]}.json"), JSON.generate(r))
-  ' -- "$state" "$1" "$2" "${3:-0}" "${4:-no}"
+  ' -- "$state" "$1" "$2"
 }
 n1=agent-tools-ci-0000000000000001
-# E27: 動いていない container の記録 -> 消す
+# E27: 動いていない container の記録 -> 名前で見つけて消す
 reset
-put_record "$n1" 7
+put_record "$n1" 0
 printf '%s' "$n1" > "$tmp/gh/runners/7"
 run cleanup
 expect_rc 0 "E27"
 [ ! -e "$tmp/gh/runners/7" ] && [ ! -e "$state/$n1.json" ] || fail "E27: the leftover must be cleaned"
 # E28: 動いている container の記録 -> 残す
 reset
-put_record "$n1" 7
+put_record "$n1" 0
 printf '%s' "$n1" > "$tmp/gh/runners/7"
 touch "$tmp/docker/running-$n1"
 run cleanup
 expect_rc 0 "E28"
 [ -e "$tmp/gh/runners/7" ] && [ -e "$state/$n1.json" ] || fail "E28: a running runner must be kept"
-# id の runner の名前が記録と違う -> 消さない
+# 名前で見つからない記録: 作ってから 10 分たつまで残し、たったら外す。ほかの名前の runner には触れない
 reset
-put_record "$n1" 7
-printf 'someone-else' > "$tmp/gh/runners/7"
+put_record "$n1" 0
+printf 'someone-else' > "$tmp/gh/runners/9"
 run cleanup
-expect_rc 1 "name mismatch"
-[ -e "$tmp/gh/runners/7" ] && [ -e "$state/$n1.json" ] || fail "name mismatch: nothing may be deleted"
-# id の無い記録 (作りかけ) -> 名前で探す。無ければ記録だけ外す
+expect_rc 0 "young absent"
+[ -e "$state/$n1.json" ] && [ -e "$tmp/gh/runners/9" ] || fail "young absent: the record and the other runner must be kept"
 reset
-put_record "$n1" ""
+put_record "$n1" 3600
 run cleanup
-expect_rc 0 "pending record"
-[ ! -e "$state/$n1.json" ] || fail "pending record: must be removed when no runner has the name"
-# 壊れた記録 -> 消さずに知らせる
+expect_rc 0 "old absent"
+[ ! -e "$state/$n1.json" ] || fail "old absent: the record must be removed"
+# 同じ名前の runner が 2 つ・id が 0 -> どれも消さず、記録を残して知らせる
+reset
+put_record "$n1" 3600
+printf '%s' "$n1" > "$tmp/gh/runners/7"
+printf '%s' "$n1" > "$tmp/gh/runners/8"
+run cleanup
+expect_rc 1 "duplicate names"
+[ -e "$tmp/gh/runners/7" ] && [ -e "$tmp/gh/runners/8" ] && [ -e "$state/$n1.json" ] || fail "duplicate names: nothing may be deleted"
+reset
+put_record "$n1" 3600
+printf '%s' "$n1" > "$tmp/gh/runners/0"
+run cleanup
+expect_rc 1 "zero id"
+[ -e "$tmp/gh/runners/0" ] && [ -e "$state/$n1.json" ] || fail "zero id: nothing may be deleted"
+# docker に問い合わせられない -> 動いているとみなして残す
+reset
+put_record "$n1" 3600
+printf '%s' "$n1" > "$tmp/gh/runners/7"
+touch "$tmp/docker/ps-fail"
+run cleanup
+expect_rc 0 "ps fails"
+[ -e "$tmp/gh/runners/7" ] && [ -e "$state/$n1.json" ] || fail "ps fails: the runner and record must be kept"
+# 壊れた記録と、知らない key を持つ記録 -> 消さずに知らせる
 reset
 mkdir -p -m 700 "$state"
 printf 'not json' > "$state/$n1.json"
 run cleanup
 expect_rc 1 "broken record"
-
-# ---- signal と公開の変化 (E29 と決めたこと) -----------------------------------------------------------------------
-start_once() { # 背景で once を起動し、container が動き出すまで待つ。pid を $bg に入れる
-  env PATH="$tmp/fake:$PATH" HOME="$tmp/home" AGENT_TOOLS_CI_RUNNER_CONFIG="$conf" AGENT_TOOLS_CI_RUNNER_STATE_DIR="$state" \
-    AGENT_TOOLS_CI_RUNNER_POLL_SECONDS="${poll:-60}" GH_REPO= GH_HOST= \
-    "$real_ruby" "$src" once kosako/prism > "$tmp/bg-out" 2> "$tmp/bg-err" < /dev/null &
-  bg=$!
-  i=0
-  until ls "$tmp/docker" | grep -q '^running-'; do
-    i=$((i + 1))
-    [ "$i" -lt 200 ] || fail "the background once did not start a container"
-    sleep 0.05
-  done
-}
-wait_bg() {
-  bg_rc=0
-  wait "$bg" || bg_rc=$?
-}
-# E29: 動いている間に TERM -> container を止め、登録を消す
 reset
-printf '30\n' > "$tmp/docker/run-seconds"
-start_once
-kill -TERM "$bg"
-wait_bg
-[ "$bg_rc" -eq 1 ] || fail "E29: expected exit 1 after TERM, got $bg_rc"
-ls "$tmp/docker" | grep -q '^stop-' || fail "E29: the container must be stopped"
-[ ! -e "$tmp/gh/runners/4242" ] && [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "E29: the registration and record must be removed"
-# 動いている間に public になった -> container を止め、登録を消す
-reset
-printf '30\n' > "$tmp/docker/run-seconds"
-printf 'private\nprivate\npublic\n' > "$tmp/gh/vis-seq"
-poll=1 start_once
-wait_bg
-[ "$bg_rc" -eq 1 ] || fail "made public: expected exit 1, got $bg_rc"
-ls "$tmp/docker" | grep -q '^stop-' || fail "made public: the container must be stopped"
-[ ! -e "$tmp/gh/runners/4242" ] || fail "made public: the registration must be deleted"
+put_record "$n1" 0
+ruby -rjson -e 'r = JSON.parse(File.read(ARGV[0])); r["id"] = 7; File.write(ARGV[0], JSON.generate(r))' -- "$state/$n1.json"
+run cleanup
+expect_rc 1 "record with an unknown key"
 
-# ---- E30: 同じ repo の once を 2 つ -----------------------------------------------------------------------------
-reset
-printf '30\n' > "$tmp/docker/run-seconds"
-start_once
-run once kosako/prism
-expect_rc 3 "E30"
-[ "$(grep -c '"POST"' "$tmp/gh/argv.log")" -eq 1 ] || fail "E30: the second once must not create a runner"
-kill -TERM "$bg"
-wait_bg
-
-# ---- review の round 1 の指摘 (#818) ---------------------------------------------------------------------------------
-# R1: 動いている間の確かめの間隔は 60 秒が上限。env で大きくできない
+# ---- helper を直接呼ぶ case ----------------------------------------------------------------------------------------
+# R1: 動いている間の確かめの間隔は 40 秒が上限
 ruby -e '
   load ARGV[0]
-  { "3600" => 60, "61" => 60, "60" => 60, "1" => 1, "0" => 60, "x" => 60 }.each do |value, want|
+  { "3600" => 40, "41" => 40, "40" => 40, "1" => 1, "0" => 40, "x" => 40 }.each do |value, want|
     ENV["AGENT_TOOLS_CI_RUNNER_POLL_SECONDS"] = value
     got = CiRunner.poll_seconds
     abort "R1: poll_seconds for #{value} must be #{want}, got #{got}" unless got == want
   end
-' -- "$src" || fail "R1: the poll interval must be capped at 60 seconds"
-
-# R2: public になったら、先に登録を消し、docker stop と kill の失敗を間を置いて繰り返して止める
-reset
-printf '30\n' > "$tmp/docker/run-seconds"
-printf 'private\nprivate\npublic\n' > "$tmp/gh/vis-seq"
-printf '3\n' > "$tmp/docker/stop-fail"
-poll=1 start_once
-wait_bg
-[ "$bg_rc" -eq 1 ] || fail "R2: expected exit 1, got $bg_rc"
-[ "$(cat "$tmp/docker/reg-at-first-stop")" = gone ] || fail "R2: the registration must be removed before stopping"
-attempts=$(grep -c -E '"(stop|kill)"' "$tmp/docker/argv.log")
-[ "$attempts" -ge 4 ] || fail "R2: stop and kill must be retried after failures (attempts: $attempts)"
-grep -F -e '"kill"' "$tmp/docker/argv.log" >/dev/null || fail "R2: docker kill must be tried after docker stop fails"
-ls "$tmp/docker" | grep -q '^stop-agent' || fail "R2: the container must be stopped in the end"
-
-# R3: JIT の返事の runner が object でない -> 例外にせず、名前で探して消す。container は起動しない
-reset
-printf 'runnerstring\n' > "$tmp/gh/jit-mode"
-run once kosako/prism
-expect_rc 1 "R3"
-! docker_ran || fail "R3: no container may start"
-[ ! -e "$tmp/gh/runners/4242" ] || fail "R3: the runner must be found by name and deleted"
-if grep -F -e "TypeError" "$tmp/out" "$tmp/err" >/dev/null; then fail "R3: the response shape must not raise"; fi
-
-# R4: JIT の POST が返らないまま TERM -> gh を止めて後片付けに進む
-reset
-printf 'hang\n' > "$tmp/gh/jit-mode"
-env PATH="$tmp/fake:$PATH" HOME="$tmp/home" AGENT_TOOLS_CI_RUNNER_CONFIG="$conf" AGENT_TOOLS_CI_RUNNER_STATE_DIR="$state" \
-  GH_REPO= GH_HOST= "$real_ruby" "$src" once kosako/prism > "$tmp/bg-out" 2> "$tmp/bg-err" < /dev/null &
-bg=$!
-i=0
-until [ -e "$tmp/gh/runners/4242" ]; do
-  i=$((i + 1))
-  [ "$i" -lt 200 ] || fail "R4: the POST did not start"
-  sleep 0.05
-done
-started=$(ruby -e 'print Process.clock_gettime(Process::CLOCK_MONOTONIC)')
-kill -TERM "$bg"
-wait_bg
-took=$(ruby -e 'print((Process.clock_gettime(Process::CLOCK_MONOTONIC) - ARGV[0].to_f).round)' -- "$started")
-[ "$bg_rc" -eq 1 ] || fail "R4: expected exit 1, got $bg_rc"
-[ "$took" -lt 15 ] || fail "R4: TERM must stop the hanging gh promptly (took ${took}s)"
-[ ! -e "$tmp/gh/runners/4242" ] && [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "R4: the runner and record must be cleaned up"
-! docker_ran || fail "R4: no container may start"
+' -- "$src" || fail "R1: the poll interval must be capped at 40 seconds"
 # 子の待ちには期限がある
 ruby -e '
   load ARGV[0]
@@ -577,88 +805,43 @@ ruby -e '
   abort "R4: a timed-out child must give a nil status" unless status.nil?
   abort "R4: the timeout must stop the child promptly (#{took})" unless took < 10
 ' -- "$src" || fail "R4: run_child must time out"
-
-# ---- review の round 2 の指摘 (#818) ---------------------------------------------------------------------------------
-# S1: 作成の途中で止めた後に GitHub の側で runner ができる -> once は記録を残し、後の cleanup が名前で見つけて消す
-reset
-printf 'late\n' > "$tmp/gh/jit-mode"
-env PATH="$tmp/fake:$PATH" HOME="$tmp/home" AGENT_TOOLS_CI_RUNNER_CONFIG="$conf" AGENT_TOOLS_CI_RUNNER_STATE_DIR="$state" \
-  GH_REPO= GH_HOST= "$real_ruby" "$src" once kosako/prism > "$tmp/bg-out" 2> "$tmp/bg-err" < /dev/null &
-bg=$!
-i=0
-until [ -e "$tmp/gh/post-started" ]; do
-  i=$((i + 1))
-  [ "$i" -lt 200 ] || fail "S1: the POST did not start"
-  sleep 0.05
-done
-kill -TERM "$bg"
-wait_bg
-[ "$bg_rc" -eq 1 ] || fail "S1: expected exit 1, got $bg_rc"
-case $(cat "$tmp/bg-out") in *"作れたかが分からない"*) ;; *) fail "S1: must keep the record as uncertain: $(cat "$tmp/bg-out")" ;; esac
-[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "S1: the uncertain record must be kept"
-i=0
-until [ -e "$tmp/gh/runners/4242" ]; do
-  i=$((i + 1))
-  [ "$i" -lt 200 ] || fail "S1: the late runner did not appear"
-  sleep 0.05
-done
-run cleanup
-expect_rc 0 "S1 cleanup"
-[ ! -e "$tmp/gh/runners/4242" ] && [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "S1: cleanup must delete the late runner and the record"
-# S1 の続き: 結果不明の記録で runner が見つからない -> 若いうちは残し、10 分たったら外す
-reset
-put_record "$n1" "" 0 yes
-run cleanup
-expect_rc 0 "S1 young"
-[ -e "$state/$n1.json" ] || fail "S1 young: a young uncertain record must be kept"
-reset
-put_record "$n1" "" 3600 yes
-run cleanup
-expect_rc 0 "S1 old"
-[ ! -e "$state/$n1.json" ] || fail "S1 old: an old uncertain record without a runner must be removed"
-
-# S3: 返事の id が実際の runner と違う -> id の GET が 404 でも、名前で照合して消す
-reset
-printf 'wrongid\n' > "$tmp/gh/jit-mode"
-run once kosako/prism
-expect_rc 0 "S3 wrongid"
-[ ! -e "$tmp/gh/runners/4242" ] && [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "S3 wrongid: the real runner must be found by name and deleted"
-# 0 の id と、違う名前の返事は使わない (container を起動せず、名前で探して消す)
-for mode in zeroid othername; do
-  reset
-  printf '%s\n' "$mode" > "$tmp/gh/jit-mode"
-  run once kosako/prism
-  expect_rc 1 "S3 $mode"
-  ! docker_ran || fail "S3 $mode: no container may start"
-  [ ! -e "$tmp/gh/runners/4242" ] || fail "S3 $mode: the runner must be found by name and deleted"
-done
-
-# S2: 60 秒の上限は docker stop と kill の各呼び出しにも効く (上限を 3 秒にして、返らない docker で helper を呼ぶ)
+# T1: 検知の期限は、返らない gh と返らない docker が同時にあっても効く (上限を 8 秒・あきらめを 2 秒にして呼ぶ)
 reset
 touch "$tmp/docker/stop-hang"
-env PATH="$tmp/fake:$PATH" ruby -e '
+printf 'hang\n' > "$tmp/gh/mode-list"
+env PATH="$tmp/fake:$PATH" GH_REPO= GH_HOST= ruby -e '
   load ARGV[0]
-  CiRunner.send(:remove_const, :STOP_GIVE_UP_SECONDS)
-  CiRunner.const_set(:STOP_GIVE_UP_SECONDS, 3)
-  CiRunner.define_singleton_method(:remove_registration) { |_r| :gone }
+  { STOP_GIVE_UP_SECONDS: 8, ABANDON_SECONDS: 2 }.each { |k, v| CiRunner.send(:remove_const, k); CiRunner.const_set(k, v) }
   CiRunner.instance_variable_set(:@interrupted, true)
   pid = Process.spawn("sleep", "60")
   record = { "repo" => "kosako/prism", "name" => "agent-tools-ci-0000000000000002", "container" => "agent-tools-ci-0000000000000002" }
   t = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-  result = CiRunner.wait_container({ "docker_context" => "colima-ci" }, "kosako/prism", record, pid)
+  result = CiRunner.wait_container({ "docker_context" => "colima-ci" }, "kosako/prism", { record: record, pid: pid })
   took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t
-  abort "S2: expected :stop_failed, got #{result}" unless result == :stop_failed
-  abort "S2: the give-up limit must bound each call (took #{took.round(1)}s)" unless took < 12
-' -- "$src" || fail "S2: the stop limit must apply to each docker call"
-rm -f "$tmp/docker/stop-hang"
-
-# S4: signal のときも、止める前に登録を消す
+  abort "T1: expected :stop_failed, got #{result}" unless result == :stop_failed
+  abort "T1: the detection deadline must bound everything (took #{took.round(1)}s)" unless took < 12
+' -- "$src" || fail "T1: the detection deadline must apply to gh and docker together"
+rm -f "$tmp/docker/stop-hang" "$tmp/gh/mode-list"
+# T2: 想定外の例外 (動いている間の確かめで raise) -> container を止め、名前で消して記録を外す
 reset
 printf '30\n' > "$tmp/docker/run-seconds"
-start_once
-kill -TERM "$bg"
-wait_bg
-[ "$(cat "$tmp/docker/reg-at-first-stop")" = gone ] || fail "S4: the registration must be removed before stopping on a signal"
+rc=0
+env PATH="$tmp/fake:$PATH" HOME="$tmp/home" AGENT_TOOLS_CI_RUNNER_CONFIG="$conf" AGENT_TOOLS_CI_RUNNER_STATE_DIR="$state" \
+  AGENT_TOOLS_CI_RUNNER_POLL_SECONDS=1 GH_REPO= GH_HOST= "$real_ruby" -e '
+  load ARGV[0]
+  calls = 0
+  original = CiRunner.method(:visibility)
+  CiRunner.define_singleton_method(:visibility) do |*a, **k|
+    calls += 1
+    raise "boom" if calls == 3
+    original.call(*a, **k)
+  end
+  exit CiRunner.main(["once", "kosako/prism"])
+' -- "$src" > "$tmp/out" 2> "$tmp/err" || rc=$?
+[ "$rc" -eq 1 ] || fail "T2: expected exit 1, got $rc ($(cat "$tmp/out"))"
+case $(cat "$tmp/out") in *"想定外の失敗で止めました (RuntimeError)"*) ;; *) fail "T2: unexpected output: $(cat "$tmp/out")" ;; esac
+ls "$tmp/docker" | grep -q '^stop-' || fail "T2: the container must be stopped"
+[ ! -e "$tmp/gh/runners/4242" ] && [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "T2: the runner and record must be cleaned up"
 
 # ---- 使い方の誤り --------------------------------------------------------------------------------------------------
 reset
