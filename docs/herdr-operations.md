@@ -46,8 +46,10 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
   割当の規則 2 で扱う。
 
 **未検証**: 同じ種類の worker を複数同時に走らせる N 並列は、この doc の範囲に入れていません。1 + 1 は、
-#309 (Codex の worker の初めての PR) で初めて回し、#310 (PR #323) で、tab の起動と起動の記録を含む委譲の全経路を
-実地で確かめました。その後も worker の委譲を回しています。N 並列は、必要になったら別の Issue にします。
+#309 (Codex の worker の初めての PR) で初めて回し、#310 (PR #323) で、tab の起動と起動の記録を含む通常の起動と
+回収の経路を実地で確かめました。その後も worker の委譲を回しています。orchestrator が終わった後の再開と、二重の
+起動の防止は、まだ実機で通していません (下の「dashboard」の節の「起動の記録」と、受け入れの記録の `resume`)。N 並列は、必要に
+なったら別の Issue にします。
 
 ## tab と pane
 
@@ -145,7 +147,8 @@ session は workspace ごとにあり、`personal-codex-worker` の「orchestrat
 ## 通知
 
 - 独自の通知 (`herdr notification show`) は入れず、herdr の組み込み通知に任せます。組み込み通知は、
-  agent の状態変化を toast / OS の通知で知らせ、background の workspace では音も鳴らします。
+  agent の状態変化を toast / OS の通知で知らせます。background の workspace では音も鳴らす想定です (音は実機で
+  確かめていない。確かめたのは、下の前提の OS の通知が届くことだけ)。
 - 根拠: orchestrator (Claude) が人を必要とするとき (merge の確認、停止の報告、質問) は、必ず turn を
   終えて返答を待ちます。これは Claude の pane の状態変化なので、組み込み通知が出ます。worker の完了は
   orchestrator が待っていて自動で続けるので、人に知らせる必要はありません。
