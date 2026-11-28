@@ -114,6 +114,10 @@ elsif method == "DELETE" && (m = path.match(%r{/actions/runners/(\d+)\z}))
   when "fail-once"
     File.write(File.join(dir, "mode-delete"), "ok")
     http_error(500, "Server Error")
+  when "hang-once"
+    File.write(File.join(dir, "mode-delete"), "ok")
+    sleep 30
+    exit 1
   when "notfound" then http_error(404, "Not Found")
   when "notfound-gone"
     File.delete(File.join(runners, m[1])) if File.exist?(File.join(runners, m[1]))
@@ -126,6 +130,8 @@ elsif method == "GET" && path.match?(%r{/actions/runners\?per_page=100\z})
   http_error(500, "Server Error") if mode.call("mode-list") == "fail"
   sleep 30 if mode.call("mode-list") == "hang"
   sleep File.read(File.join(dir, "list-delay")).to_f if File.exist?(File.join(dir, "list-delay"))
+  # leak: 孫の process が stdout を持ったまま残る (親が終わっても、出力の pipe が閉じない)
+  Process.detach(fork { sleep 30 }) if mode.call("mode-list") == "leak"
   list = Dir.children(runners).sort.map { |id| { "id" => id.to_i, "name" => File.read(File.join(runners, id)) } }
   puts JSON.generate([{ "total_count" => list.length, "runners" => list }])
 else
@@ -136,7 +142,9 @@ EOF
 # ---- 偽の docker ------------------------------------------------------------------------------------------------
 # run は stdin と state の写しを残し、run-seconds の間 (stop が来るまで) 動く。run-exit が 125 なら起動できない形。
 # stop と kill は stop-fail の回数だけ失敗し、stop-hang があれば返らない。auto-remove があれば、終わったときに
-# runner の登録を消す (job を終えた JIT の runner)。run の終わりの時刻を events.log に書く。
+# runner の登録を消す (job を終えた JIT の runner)。run の終わりの時刻を events.log に書く。動いている container の印は
+# running-<名前> で、run が終わるときと stop・kill が成功したときに消える。run の client だけが終わると (KILL、client-drop)、
+# 印は残る (container は動き続けている形)。
 cat > "$tmp/fake/docker" <<EOF
 #!$real_ruby
 require "json"
@@ -159,8 +167,12 @@ when "run"
   seconds = File.exist?(File.join(dir, "run-seconds")) ? File.read(File.join(dir, "run-seconds")).to_f : 0
   deadline = Time.now + seconds
   stop = File.join(dir, "stop-#{name}")
-  sleep 0.05 until Time.now >= deadline || File.exist?(stop)
-  File.delete(running)
+  # client-drop: 秒数の後に、client だけが signal でなく終わる (daemon との接続が切れた形)。動いている印は残す
+  drop = File.join(dir, "client-drop")
+  drop_at = File.exist?(drop) ? Time.now + File.read(drop).to_f : nil
+  sleep 0.05 until Time.now >= deadline || File.exist?(stop) || (drop_at && Time.now >= drop_at)
+  exit 125 if drop_at && Time.now >= drop_at && !File.exist?(stop)
+  File.delete(running) if File.exist?(running)
   File.open(File.join(dir, "events.log"), "a") { |f| f.puts("#{Time.now.to_f} EXIT") }
   Dir.glob(File.join($(shq "$tmp/gh/runners"), "*")).each { |f| File.delete(f) } if File.exist?(File.join(dir, "auto-remove"))
   exit(File.exist?(stop) ? 143 : code)
@@ -178,7 +190,13 @@ when "stop", "kill"
     warn "fake docker: cannot stop"
     exit 1
   end
+  # 本物の docker stop は、container が止まってから返る。client (run) が居なくても、動いている印を外す
   File.write(File.join(dir, "stop-#{args.last}"), "")
+  begin
+    File.delete(File.join(dir, "running-#{args.last}"))
+  rescue Errno::ENOENT
+    nil
+  end
 else
   abort "fake docker: unexpected"
 end
@@ -385,12 +403,16 @@ expect_rc 1 "bad jit"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "bad jit: the registration must be deleted"
 
 # E30: 同じ repo の once を 2 つ
-# 検知の期限を 8 秒、あきらめを 2 秒にして once を流す (load して定数を替える。時間の case 用)
+# 検知の期限を 10 秒、あきらめを 4 秒にして once を流す (load して定数を替える。時間の case 用)
 short_main='load ARGV.shift
-{ STOP_GIVE_UP_SECONDS: 8, ABANDON_SECONDS: 2 }.each { |k, v| CiRunner.send(:remove_const, k); CiRunner.const_set(k, v) }
+{ STOP_GIVE_UP_SECONDS: 10, ABANDON_SECONDS: 4 }.each { |k, v| CiRunner.send(:remove_const, k); CiRunner.const_set(k, v) }
 exit CiRunner.main(ARGV)'
-start_once() { # 背景で once を起動する。$1=待つもの (running / post / none)。short=1 なら期限を短くする
-  if [ "${short:-0}" = 1 ]; then set -- "$1" -e "$short_main" -- "$src"; else set -- "$1" "$src"; fi
+# 背景で once を起動する。$1=待つもの (running / post / none)。short=1 なら期限を短くする。main_script があれば、それを
+# ruby -e で流す (helper を差し替える case 用。ARGV の先頭が本体の path)
+start_once() {
+  if [ -n "${main_script:-}" ]; then set -- "$1" -e "$main_script" -- "$src"
+  elif [ "${short:-0}" = 1 ]; then set -- "$1" -e "$short_main" -- "$src"
+  else set -- "$1" "$src"; fi
   wait_for=$1
   shift
   env PATH="$tmp/fake:$PATH" HOME="$tmp/home" AGENT_TOOLS_CI_RUNNER_CONFIG="$conf" AGENT_TOOLS_CI_RUNNER_STATE_DIR="$state" \
@@ -403,6 +425,7 @@ start_once() { # 背景で once を起動する。$1=待つもの (running / pos
     case $1 in
       running) ls "$tmp/docker" | grep -q '^running-' && break ;;
       post) [ -e "$tmp/gh/post-started" ] && break ;;
+      vis2) [ "$(cat "$tmp/gh/vis-count" 2>/dev/null || true)" = 2 ] && break ;;
       none) break ;;
     esac
     i=$((i + 1))
@@ -430,7 +453,7 @@ wait_bg
 # - 偽の GitHub に agent-tools-ci- の runner が残っていれば、その名前の記録も残っている
 # - 偽の docker に動いている container が残っていれば、その名前の記録も残っている
 # - 偽の gh と docker の process が残っていない
-# - TERM を送った case では、once が期限のうちに戻った (検知 + 60 秒。期限を短くした case は 8 秒。余裕を 3 秒)
+# - TERM を送った case では、once が期限のうちに戻った (検知 + 60 秒。期限を短くした case は 10 秒。余裕を 3 秒ほど)
 # - そのあと、全部を成功にし、残った container を人が止めたことにし、記録を 10 分より前に作ったことにして cleanup を
 #   流すと、runner も記録も残らない
 invariant() { # $1=case
@@ -477,7 +500,7 @@ run_case() {
       kill -TERM "$bg"
       wait_bg
       limit=63
-      [ "${short:-0}" = 1 ] && limit=11
+      [ "${short:-0}" = 1 ] && limit=13.5
       ruby -e 'took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - ARGV[0].to_f
         abort "#{ARGV[2]}: once must return within the deadline after TERM (took #{took.round(1)}s)" unless took < ARGV[1].to_f' \
         -- "$sent" "$limit" "$1" || fail "$1: deadline"
@@ -622,6 +645,16 @@ expect_rc 1 "M18"
 ! docker_ran || fail "M18: no container may start"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "M18: the registration must be deleted"
 converge M18
+# M24: JIT を作った直後の確かめの途中で TERM -> signal として知らせ、container を起動せず、名前で消して記録を外す
+reset
+printf 'private\nhang\n' > "$tmp/gh/vis-seq"
+run_case M24 vis2
+[ "$rc" -eq 1 ] || fail "M24: expected exit 1, got $rc"
+case $(cat "$tmp/out") in *"止める signal を受けました"*) ;; *) fail "M24: unexpected output: $(cat "$tmp/out")" ;; esac
+! docker_ran || fail "M24: no container may start"
+[ ! -e "$tmp/gh/runners/4242" ] || fail "M24: the registration must be deleted"
+[ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "M24: the record must be removed"
+converge M24
 # M19: 記録を書けない (POST の前) -> API を呼ばない
 reset
 mkdir -m 700 "$state"
@@ -662,7 +695,7 @@ run_case M21 running
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M21: the record must be kept"
 converge M21
 
-# 期限を 8 秒にした once (返らない gh と docker を、本物の偽の子で置く。helper は差し替えない)
+# 期限を 10 秒にした once (返らない gh と docker を、本物の偽の子で置く。helper は差し替えない)
 short=1
 # T3: 動いている間に TERM、一覧が返らない -> container は登録の削除を待たずにすぐ止め、once は期限のうちに戻る
 reset
@@ -724,32 +757,108 @@ run_case T8 post
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "T8: the record must be kept"
 rm -f "$tmp/gh/ignore-term"
 converge T8
-# T10: 止めている途中で docker の client が KILL される -> container が残りうるので、記録を残す
+# 偽の docker の client (run) を KILL する。pattern に $tmp を入れ、並べて流したほかの test の偽の docker に当てない
+kill_client() {
+  pkill -KILL -f -- "$tmp/fake/docker --context colima-ci run" || true
+}
+# client だけが終わり、止まったと確かめられない case (T10・T12・T13)。登録の削除は 1 回目だけ失敗させる (fail-once)。
+# 後片付けが登録を見つけて消せる形にすると、記録を残す理由が「container が動いているかもしれない」だけになる
+kept_alive_checks() { # $1=case
+  [ "$rc" -eq 1 ] || fail "$1: expected exit 1, got $rc"
+  invariant "$1"
+  case $(cat "$tmp/out") in *"手で止めてください"*) ;; *) fail "$1: unexpected output: $(cat "$tmp/out")" ;; esac
+  ls "$tmp/docker" | grep -q '^running-' || fail "$1: the fake container must still look alive"
+  [ ! -e "$tmp/gh/runners/4242" ] || fail "$1: the registration must be deleted on the second try"
+  [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "$1: the record must be kept while the container may be alive"
+  converge "$1"
+}
+within_short_deadline() { # $1=case  $2=始めの時刻
+  ruby -e 'took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - ARGV[0].to_f
+    abort "#{ARGV[1]}: once must return within the deadline (took #{took.round(1)}s)" unless took < 13.5' -- "$2" "$1" || fail "$1: deadline"
+}
+# T10: 止めている途中で docker の client が KILL される (docker stop も返らない)
 reset
 printf '30\n' > "$tmp/docker/run-seconds"
 touch "$tmp/docker/stop-hang"
+printf 'fail-once\n' > "$tmp/gh/mode-delete"
 start_once running
 kill -TERM "$bg"
 sleep 1
-pkill -KILL -f -- "fake/docker --context colima-ci run" || true
+kill_client
 wait_bg
-[ "$rc" -eq 1 ] || fail "T10: expected exit 1, got $rc"
-invariant T10
-[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "T10: the record must be kept while the container may be alive"
-converge T10
+kept_alive_checks T10
+# T12: 動いている間に docker の client が KILL され、docker stop も返らない
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+touch "$tmp/docker/stop-hang"
+printf 'fail-once\n' > "$tmp/gh/mode-delete"
+start_once running
+t0=$(now_s)
+kill_client
+wait_bg
+within_short_deadline T12 "$t0"
+kept_alive_checks T12
+# T13: 動いている間に docker の client だけが signal でなく終わり (daemon との接続が切れた形)、docker stop も返らない
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+printf '1\n' > "$tmp/docker/client-drop"
+touch "$tmp/docker/stop-hang"
+printf 'fail-once\n' > "$tmp/gh/mode-delete"
+start_once running
+t0=$(now_s)
+wait_bg
+within_short_deadline T13 "$t0"
+kept_alive_checks T13
 short=
-# M23: 動いている間に docker の client が KILL される -> 登録は消し、container が残りうるので記録を残す
+# client だけが終わり、名前で止められる case (M23・M25) -> container を止め、止まったと確かめて、登録と記録を片付ける
+stopped_by_name_checks() { # $1=case
+  [ "$rc" -eq 1 ] || fail "$1: expected exit 1, got $rc"
+  invariant "$1"
+  case $(cat "$tmp/out") in *"docker の client だけが終わったので container を止めました"*) ;; *) fail "$1: unexpected output: $(cat "$tmp/out")" ;; esac
+  ls "$tmp/docker" | grep -q '^stop-' || fail "$1: the container must be stopped by name"
+  ! ls "$tmp/docker" | grep -q '^running-' || fail "$1: the fake container must not look alive"
+  [ ! -e "$tmp/gh/runners/4242" ] || fail "$1: the registration must be deleted"
+  [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "$1: the record must be removed once the container is confirmed gone"
+  converge "$1"
+}
+# M23: 動いている間に docker の client が KILL される
 reset
 printf '30\n' > "$tmp/docker/run-seconds"
 start_once running
-pkill -KILL -f -- "fake/docker --context colima-ci run" || true
+kill_client
 wait_bg
-[ "$rc" -eq 1 ] || fail "M23: expected exit 1, got $rc"
-invariant M23
-case $(cat "$tmp/out") in *"docker の client が signal で終わりました"*) ;; *) fail "M23: unexpected output: $(cat "$tmp/out")" ;; esac
-[ ! -e "$tmp/gh/runners/4242" ] || fail "M23: the registration must be deleted"
-[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M23: the record must be kept while the container may be alive"
-converge M23
+stopped_by_name_checks M23
+# M25: 動いている間に docker の client だけが signal でなく終わる (exit 125。起動の失敗と同じ exit code でも、container が
+# 動いていれば止める)
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+printf '1\n' > "$tmp/docker/client-drop"
+start_once running
+wait_bg
+stopped_by_name_checks M25
+# T11: 止める段が 1 回目だけ例外を出し、登録を消す thread の DELETE が返らない -> 例外の受け口が container を止めて後片付けを
+# し、once の終わりに、残った gh を止める (process を残さない)
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+printf 'hang-once\n' > "$tmp/gh/mode-delete"
+main_script='load ARGV.shift
+first = true
+original = CiRunner.method(:stop_until_exit)
+CiRunner.define_singleton_method(:stop_until_exit) do |*a|
+  if first
+    first = false
+    sleep 1 # 登録を消す thread が DELETE に入るのを待つ
+    raise "boom"
+  end
+  original.call(*a)
+end
+exit CiRunner.main(ARGV)'
+run_case T11 running
+main_script=
+[ "$rc" -eq 1 ] || fail "T11: expected exit 1, got $rc"
+ls "$tmp/docker" | grep -q '^stop-' || fail "T11: the container must be stopped"
+[ ! -e "$tmp/gh/runners/4242" ] || fail "T11: the registration must be deleted by the settle"
+converge T11
 
 # ---- cleanup の個別の case ---------------------------------------------------------------------------------------
 put_record() { # $1=名前  $2=何秒前に作ったか
@@ -809,6 +918,18 @@ touch "$tmp/docker/ps-fail"
 run cleanup
 expect_rc 0 "ps fails"
 [ -e "$tmp/gh/runners/7" ] && [ -e "$state/$n1.json" ] || fail "ps fails: the runner and record must be kept"
+# 一覧の gh が終わっても、孫の process が出力の pipe を持ち続ける -> 読み切りを待ち続けず、失敗として記録を残す
+reset
+put_record "$n1" 3600
+printf '%s' "$n1" > "$tmp/gh/runners/7"
+printf 'leak\n' > "$tmp/gh/mode-list"
+t0=$(now_s)
+run cleanup
+ruby -e 'took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - ARGV[0].to_f
+  abort "leaked pipe: must not wait for the grandchild (took #{took.round(1)}s)" unless took < 15' -- "$t0" || fail "leaked pipe: timing"
+expect_rc 1 "leaked pipe"
+[ -e "$tmp/gh/runners/7" ] && [ -e "$state/$n1.json" ] || fail "leaked pipe: the runner and record must be kept"
+pkill -f -- "$tmp/fake/gh" || true
 # 壊れた記録と、知らない key を持つ記録 -> 消さずに知らせる
 reset
 mkdir -p -m 700 "$state"
