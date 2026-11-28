@@ -62,6 +62,9 @@ module CiRunner
   STOP_GIVE_UP_SECONDS = 60
   # gh と docker の子 process を待つ期限 (秒)
   CHILD_TIMEOUT_SECONDS = 60
+  # 作成の結果が分からない記録を、名前で見つからなくても残す時間 (秒)。この間は cleanup が名前で照合し直す
+  UNCERTAIN_GRACE_SECONDS = 600
+  RECORD_KEYS = %w[repo name container created_at id uncertain].freeze
   # container の中の shell。stdin の 1 行を env に入れて、run.sh を引数なしで起動する (argv に JIT の設定を載せない)。
   INNER = 'IFS= read -r c || exit 90; export ACTIONS_RUNNER_INPUT_JITCONFIG="$c"; unset c; exec ./run.sh'
   TRAPPED_SIGNALS = %w[INT TERM HUP].freeze
@@ -240,7 +243,7 @@ module CiRunner
     end
 
     name = RUNNER_PREFIX + SecureRandom.hex(8)
-    record = { "repo" => repo, "name" => name, "container" => name }
+    record = { "repo" => repo, "name" => name, "container" => name, "created_at" => Time.now.to_i }
     unless write_record(state, record)
       out.puts "once: #{repo}: state に記録できないので runner を作りません"
       return EXIT_NOT_OK
@@ -257,9 +260,11 @@ module CiRunner
   end
 
   def launch_and_wait(config, repo, record, state, out)
-    id, jit = create_jit(repo, record["name"])
+    id, jit, outcome = create_jit(repo, record["name"])
     record["id"] = id if id
-    write_record(state, record) if id
+    # 作成の結果が分からない (gh を止めた・失敗した) ときは、名前で見つからなくても記録を外さない (#818 review)
+    record["uncertain"] = true if outcome == :unknown
+    write_record(state, record) if id || outcome == :unknown
     reason = launch_refusal(repo, id, jit)
     if reason
       out.puts "once: #{repo}: #{reason}"
@@ -337,16 +342,20 @@ module CiRunner
           reason = :interrupted
         elsif vis != "private"
           reason = :made_public
-          remove_registration(record)
         end
       end
+      if reason && stop_started.nil?
+        # 理由によらず、止める前に登録を消して新しい job を取らせない (#818 review)。消せなくても finish が確かめ直す
+        remove_registration(record)
+        stop_started = now
+      end
       if reason && (next_stop.nil? || now >= next_stop)
-        stop_started ||= now
-        if now - stop_started > STOP_GIVE_UP_SECONDS
+        left = STOP_GIVE_UP_SECONDS - (now - stop_started)
+        if left <= 0
           abandon(pid)
           return :stop_failed
         end
-        stop_container(config, record)
+        stop_container(config, record, left)
         next_stop = now + STOP_RETRY_SECONDS
       end
       sleep 0.2
@@ -359,12 +368,20 @@ module CiRunner
   end
 
   # docker stop で止め、失敗したら docker kill を試す。どちらかが成功すれば true。
-  def stop_container(config, record)
-    _out, _err, status = run_child([*docker(config), "stop", "--time", STOP_SECONDS.to_s, record["container"]],
-                                   timeout: STOP_SECONDS + 20)
-    return true if status&.success?
+  # 残りの時間 left (秒) を、docker stop の猶予と、各呼び出しの期限にも当てる (60 秒の上限を超えて待たない。#818 review)。
+  def stop_container(config, record, left)
+    deadline = now + left
+    grace = [STOP_SECONDS, left.floor - 1].min
+    if grace >= 1
+      _out, _err, status = run_child([*docker(config), "stop", "--time", grace.to_s, record["container"]],
+                                     timeout: [left, STOP_SECONDS + 20].min)
+      return true if status&.success?
+    end
 
-    _out, _err, status = run_child([*docker(config), "kill", record["container"]], timeout: 20)
+    remaining = deadline - now
+    return false if remaining <= 0
+
+    _out, _err, status = run_child([*docker(config), "kill", record["container"]], timeout: [remaining, 20].min)
     status&.success? || false
   end
 
@@ -392,13 +409,17 @@ module CiRunner
 
   # 登録を消し、消せたら (もう無かったら) 記録を外す。消せなければ記録を残して false (cleanup が後で消す)。
   def finish(config, record, state, out)
-    result = remove_registration(record)
-    if result == :failed
+    case remove_registration(record)
+    when :failed
       out.puts "once: #{record['repo']}: runner の登録を消せませんでした (記録を残します。cleanup で消します)"
-      return false
+      false
+    when :pending
+      out.puts "once: #{record['repo']}: runner を作れたかが分からないので、記録を残します (cleanup で確かめ直します)"
+      false
+    else
+      remove_record(state, record)
+      true
     end
-    remove_record(state, record)
-    true
   end
 
   # ---- cleanup ---------------------------------------------------------------------------------------------------
@@ -422,6 +443,7 @@ module CiRunner
       case result
       when :removed then out.puts "cleanup: #{record['repo']}: #{record['name']} の登録を消しました"
       when :running, :busy then out.puts "cleanup: #{record['repo']}: #{record['name']} は動いているので残します"
+      when :pending then out.puts "cleanup: #{record['repo']}: #{record['name']} は作れたかを確かめ直しているので残します"
       else
         out.puts "cleanup: #{record['repo']}: #{record['name']} の登録を消せませんでした"
         ok = false
@@ -434,7 +456,7 @@ module CiRunner
     return :running if container_running?(config, record)
 
     result = remove_registration(record)
-    return :failed if result == :failed
+    return result if %i[failed pending].include?(result)
 
     File.delete(path)
     :removed
@@ -451,17 +473,31 @@ module CiRunner
     !stdout.strip.empty?
   end
 
-  # 記録の runner の登録を消す。戻り値: :deleted / :gone / :failed。id のある記録は、API の runner の名前が記録と一致する
-  # ときだけ消す。id の無い記録 (作りかけ) は、名前で一覧から探す。
+  # 記録の runner の登録を消す。戻り値: :deleted / :gone / :pending / :failed。
+  # - id のある記録は、その id の runner の名前が記録と一致するときだけ消す。id で 404 なら、名前で一覧を照合し直す
+  #   (返事の id が違っていた場合に、登録を残したまま記録を外さない。#818 review)。
+  # - id の無い記録は、名前で一覧から探す。見つからないとき、作成の結果が分からない記録 (uncertain) は、作ってから
+  #   UNCERTAIN_GRACE_SECONDS たつまで :pending (記録を残して cleanup が確かめ直す)、ほかは :gone。
   def remove_registration(record)
     repo = record["repo"]
-    id = record["id"] || find_runner_id(repo, record["name"])
-    return :gone if id == :none
-    return :failed if id.nil?
+    if record["id"]
+      result = delete_if_named(repo, record["id"], record["name"])
+      return result unless result == :gone
+    end
 
+    id = find_runner_id(repo, record["name"])
+    return :failed if id.nil?
+    return delete_if_named(repo, id, record["name"]) unless id == :none
+    return :pending if record["uncertain"] && Time.now.to_i - record["created_at"].to_i < UNCERTAIN_GRACE_SECONDS
+
+    :gone
+  end
+
+  # id の runner の名前が name と一致するときだけ消す。戻り値: :deleted / :gone (その id は無い) / :failed。
+  def delete_if_named(repo, id, name)
     runner, code = gh_get("repos/#{repo}/actions/runners/#{id}")
     return :gone if code == :not_found
-    return :failed unless runner.is_a?(Hash) && runner["name"] == record["name"] && runner["name"].match?(RUNNER_NAME_RE)
+    return :failed unless code == :ok && runner.is_a?(Hash) && runner["name"] == name && name.match?(RUNNER_NAME_RE)
 
     _out, code = gh_call("--method", "DELETE", "repos/#{repo}/actions/runners/#{id}")
     { ok: :deleted, not_found: :gone }.fetch(code, :failed)
@@ -476,7 +512,13 @@ module CiRunner
     return nil if runners.any? { |r| !r.is_a?(Hash) }
 
     found = runners.find { |r| r["name"] == name }
-    found.nil? ? :none : found["id"]
+    return :none if found.nil?
+
+    valid_id?(found["id"]) ? found["id"] : nil
+  end
+
+  def valid_id?(id)
+    id.is_a?(Integer) && id.positive?
   end
 
   # ---- GitHub の API ---------------------------------------------------------------------------------------------
@@ -497,18 +539,21 @@ module CiRunner
     end
   end
 
-  # JIT の runner を作る。戻り値: [id か nil, JIT の設定か nil]。返事の形は検査し (runner が object でない、など)、本文は
-  # 外に出さない。signal を受けたら gh を止める (作られたかもしれない runner は、後片付けが名前で探す)。
+  # JIT の runner を作る。戻り値: [id か nil, JIT の設定か nil, :created / :not_created / :unknown]。
+  # - id は、正の整数で、返事の runner の名前が頼んだ名前と同じときだけ使う (違えば nil にして名前で探す。#818 review)。
+  # - gh を止めた (signal・期限)、5xx などで失敗したときは :unknown (作られたかもしれない)。4xx は :not_created。
+  # 返事の本文は外に出さない。
   def create_jit(repo, name)
     body = JSON.generate("name" => name, "runner_group_id" => RUNNER_GROUP_ID, "labels" => LABELS)
     data, code = gh_call("--method", "POST", "repos/#{repo}/actions/runners/generate-jitconfig", "--input", "-",
                          stdin: body, interruptible: true)
-    return [nil, nil] unless code == :ok && data.is_a?(Hash)
+    return [nil, nil, %i[not_found client_error].include?(code) ? :not_created : :unknown] unless code == :ok
+    return [nil, nil, :created] unless data.is_a?(Hash)
 
     runner = data["runner"]
-    id = runner.is_a?(Hash) ? runner["id"] : nil
+    id = runner.is_a?(Hash) && runner["name"] == name && valid_id?(runner["id"]) ? runner["id"] : nil
     jit = data["encoded_jit_config"]
-    [id.is_a?(Integer) ? id : nil, jit.is_a?(String) ? jit : nil]
+    [id, jit.is_a?(String) ? jit : nil, :created]
   end
 
   def gh_get(path, paginate: false, interruptible: false)
@@ -516,11 +561,16 @@ module CiRunner
     gh_call(*args, interruptible: interruptible)
   end
 
-  # gh api を呼ぶ。戻り値: [JSON か nil, :ok / :not_found / :failed]。gh の出力と error の本文は外に出さない。
+  # gh api を呼ぶ。戻り値: [JSON か nil, :ok / :not_found / :client_error (404 以外の 4xx) / :failed / :aborted (止めた・
+  # 期限切れ・起動できない)]。gh の出力と error の本文は外に出さない。
   def gh_call(*args, stdin: "", interruptible: false)
     stdout, stderr, status = run_child(["gh", "api", "--hostname", HOST, *args], stdin: stdin, interruptible: interruptible)
-    return [nil, :failed] if status.nil?
-    return [nil, stderr.include?("(HTTP 404)") ? :not_found : :failed] unless status.success?
+    return [nil, :aborted] if status.nil?
+    unless status.success?
+      return [nil, :not_found] if stderr.include?("(HTTP 404)")
+
+      return [nil, stderr.match?(/\(HTTP 4\d\d\)/) ? :client_error : :failed]
+    end
     return [nil, :ok] if stdout.strip.empty?
 
     [JSON.parse(stdout.scrub), :ok]
@@ -628,9 +678,11 @@ module CiRunner
 
   def read_record(path)
     data = File.open(path, File::RDONLY | File::NOFOLLOW) { |f| f.stat.file? ? JSON.parse(f.read) : nil }
-    return nil unless data.is_a?(Hash) && valid_repo?(data["repo"]) && data["name"].is_a?(String) &&
-                      data["name"].match?(RUNNER_NAME_RE) && data["container"] == data["name"]
-    return nil if data.key?("id") && !data["id"].is_a?(Integer)
+    return nil unless data.is_a?(Hash) && (data.keys - RECORD_KEYS).empty? && valid_repo?(data["repo"]) &&
+                      data["name"].is_a?(String) && data["name"].match?(RUNNER_NAME_RE) &&
+                      data["container"] == data["name"] && data["created_at"].is_a?(Integer)
+    return nil if data.key?("id") && !valid_id?(data["id"])
+    return nil if data.key?("uncertain") && data["uncertain"] != true
     return nil unless File.basename(path) == "#{data['name']}.json"
 
     data

@@ -69,10 +69,12 @@ personal-ci-runner check | once <owner/repo> | cleanup
 3. API で private を確かめます。`private` が `true`、`visibility` が `"private"`、`full_name` が設定の名前と大文字小文字を除いて
    一致する、の 3 つがそろったときだけ private です。ほかは `unknown` で (rename や redirect で名前が違うときを含む)、何も作らずに
    exit 1。gh の error の本文は出しません。
-4. runner の名前 (`agent-tools-ci-<16 桁の hex>`) を先に決め、「作りかけ」の記録 (repo・名前・container の名前) を state に書きます。
-   書けなければ、API を呼ばずに exit 1。
+4. runner の名前 (`agent-tools-ci-<16 桁の hex>`) を先に決め、「作りかけ」の記録 (repo・名前・container の名前・作った時刻) を state に
+   書きます。書けなければ、API を呼ばずに exit 1。
 5. JIT の runner を作ります (`POST /repos/{owner}/{repo}/actions/runners/generate-jitconfig`。group は 1、label は `self-hosted`・
-   `linux`・`arm64`)。返ってきた id を記録に足します。
+   `linux`・`arm64`)。返事の id は、正の整数で、返事の runner の名前が頼んだ名前と同じときだけ記録に足します (違えば名前で探す)。
+   gh を止めた (signal・期限) か 5xx などで失敗して、作られたかが分からないときは、記録に「結果不明」の印を付けます (4xx は作られて
+   いないとみなす)。
 6. もう一度 private を確かめます。そうでなければ、登録を消して exit 1。JIT の設定が base64 の 1 行 (64 KiB まで) でないとき、返事に
    id か設定が無いときも、container を起動せずに登録を消します。
 7. container を起動します。
@@ -87,12 +89,14 @@ personal-ci-runner check | once <owner/repo> | cleanup
    後で、自分の env から消す)。JIT の設定は container の stdin で渡すので、host の docker の argv と env に載りません。container の
    stdout と stderr は捨てます (job の log は GitHub の側で見る)。
 8. container が動いている間、60 秒ごとに private を確かめます (env の `AGENT_TOOLS_CI_RUNNER_POLL_SECONDS` で 1〜60 秒に縮められる。
-   範囲の外の値は 60 秒)。private と確かめられなくなったら (public か判定できない)、先に runner の登録を消して新しい job を
-   取らせないようにし、container を止めます。止めるのは `docker stop` (失敗したら `docker kill`) で、container が終わるまで 5 秒ごとに
-   繰り返します。60 秒たっても終わらなければ、docker の client を止め、container の名前を出して「手で止めてください」と知らせ、
+   範囲の外の値は 60 秒)。private と確かめられなくなったら (public か判定できない)、container を止めます。止めるときは、理由
+   (signal・公開範囲) によらず、先に runner の登録を消して新しい job を取らせないようにします。止めるのは `docker stop` (失敗したら
+   `docker kill`) で、container が終わるまで 5 秒ごとに繰り返します。60 秒の残りの時間は、`docker stop` の猶予 (`--time`) と各呼び出しの
+   期限にも当てます。60 秒たっても終わらなければ、docker の client を止め、container の名前を出して「手で止めてください」と知らせ、
    exit 1 にします。
-9. 終わったら、登録が残っていれば消し (API の runner の名前が記録と一致するときだけ)、消せたら (もう無ければ) 記録を外します。
-   消せなければ記録を残して exit 1 にし、後で `cleanup` が消します。
+9. 終わったら、登録が残っていれば消し、消せたら (もう無ければ) 記録を外します。消すのは、API の runner の名前が記録と一致するとき
+   だけです。id で 404 のときも、名前で一覧を照合し直してから記録を外します (返事の id が違っていた場合に備える)。消せなければ
+   記録を残して exit 1 にし、後で `cleanup` が消します。「結果不明」の記録で、名前で見つからないときも、記録を残して exit 1 です。
 
 INT・TERM・HUP は、どの段で受けても、container を止めて登録を消します (止め方は 8 と同じ)。JIT を作る前なら作りません。job の途中
 なら、その job は取り消しになります。
@@ -105,12 +109,13 @@ gh と docker の子 process は、60 秒の期限で待ちます (`docker stop`
 ## state
 
 `${XDG_STATE_HOME:-~/.local/state}/agent-tools/ci-runner/` (env の `AGENT_TOOLS_CI_RUNNER_STATE_DIR` で替えられる) に、runner ごとに
-1 つの記録 (`<名前>.json`: repo・名前・container・id) と、repo ごとの lock の file を置きます。dir は 0700 で、自分の持ち物で、
-group と other が使えないことを確かめます。記録は一時 file に書いて rename で置きます (0600)。JIT の設定と token は書きません。
+1 つの記録 (`<名前>.json`: repo・名前・container・作った時刻・id・結果不明の印) と、repo ごとの lock の file を置きます。dir は 0700 で、
+自分の持ち物で、group と other が使えないことを確かめます。記録は一時 file に書いて rename で置きます (0600)。JIT の設定と token は
+書きません。
 
 `cleanup` は、記録の repo の lock を取れたものだけを見ます (`once` の途中の記録を消さない)。動いている container (名前と label で
-探す。docker に問い合わせられなければ、動いているとみなす) の記録は残します。id のある記録は、API の runner の名前が記録と一致して
-接頭辞を持つときだけ消し、404 ならもう無いとして記録を外します。id の無い記録は、名前で API の一覧から探します。
+探す。docker に問い合わせられなければ、動いているとみなす) の記録は残します。ほかの記録は、`once` の 9 と同じ規則で登録を消します。
+「結果不明」の記録で、名前で見つからないものは、作ってから 10 分たつまで残して照合し直し、10 分たったら外します。
 
 ## 限界
 
@@ -145,4 +150,5 @@ group と other が使えないことを確かめます。記録は一時 file �
 stdin の 1 行で届き出力・docker の引数・state に出ないこと、docker の引数 (付ける option と付けない option)、作った後の失敗の
 後片付け、`cleanup` の照合、signal、同じ repo の lock を見ます。review の round 1 (#818) の後に、監視の間隔の上限、`docker stop` と
 `kill` の失敗の繰り返しと、止める前に登録を消すこと、形の違う JIT の返事、返らない POST の間の TERM、子の待ちの期限を足しました。
-60 秒たっても止められないときのあきらめの段は、test では見ていません (待ちが長くなるため)。実機の smoke は、合格の条件を先に #803 に書き、人が 1 回流します。
+round 2 の後に、作成の途中で止めた後に runner ができる形、結果不明の記録の扱い、違う id・0 の id・違う名前の返事、各呼び出しへの
+残りの時間の適用 (上限を短くして helper を直接呼ぶ)、signal のときも止める前に登録を消すことを足しました。実機の smoke は、合格の条件を先に #803 に書き、人が 1 回流します。
