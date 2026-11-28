@@ -1090,6 +1090,31 @@ console.log("ok E6 warn path failures are swallowed")
   console.log("ok E8 same-basename failures are kept apart by their repo-relative labels")
 }
 
+// E9: 宣言の無い repo でも、既定の構文チェック (#814) の失敗の要約が足される。edit と apply_patch (add) の両方の
+// 入口で、plugin が絞った子の env のままで走る。宣言の fake check は走らない (その repo の宣言が無いため)。
+{
+  const client = makeClient("ok")
+  const plainRepo = makeRepo("repo-undeclared")
+  const hooks = await makeHooks(client, { timeoutMs: { fastEditCheck: REAL_TIMEOUT_MS } }, plainRepo)
+  const editFile = join(plainRepo, "edited.rb")
+  const addFile = join(plainRepo, "added.sh")
+  writeFileSync(editFile, "def broken(\n")
+  writeFileSync(addFile, "if true; then\n")
+  const expected = [editFile, addFile].map((file) => expectedEditContext(file))
+  assert(expected[0] !== null && expected[0].includes("[ruby-syntax (既定)]"), `E9: the script must report the default ruby check (fixture assumption): ${expected[0]}`)
+  assert(expected[1] !== null && expected[1].includes("[sh-syntax (既定)]"), `E9: the script must report the default sh check (fixture assumption): ${expected[1]}`)
+  const before = readLines(checkLog).length
+  const editOut = toolOutput()
+  await runAfter(hooks, homes.real, editInput("edit", editFile), editOut, REAL_TIMEOUT_MS, "E9 edit")
+  assert(editOut.output === `${ORIGINAL_OUTPUT}\n\n${expected[0]}`, `E9 edit: the default summary must be appended, got: ${JSON.stringify(editOut.output)}`)
+  const patchOut = toolOutput({ files: [{ filePath: addFile, type: "add" }] })
+  await runAfter(hooks, homes.real, patchInput(), patchOut, REAL_TIMEOUT_MS, "E9 apply_patch")
+  assert(patchOut.output === `${ORIGINAL_OUTPUT}\n\n${expected[1]}`, `E9 apply_patch: the default summary must be appended, got: ${JSON.stringify(patchOut.output)}`)
+  assert(readLines(checkLog).length === before, "E9: the declared fake check must not run in the undeclared repo")
+  assert(client.calls.length === 0, `E9: no warn expected, got ${client.calls.length}`)
+  console.log("ok E9 the default syntax checks run in an undeclared repo")
+}
+
 // === 品質ループ: changed-scope-qa (event の session.idle、report-only) ===========================
 
 const qaStateDir = (home) => join(home, ...QA_STATE_REL)
