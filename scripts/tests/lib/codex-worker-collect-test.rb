@@ -245,6 +245,18 @@ redacted = File.read(File.join(run, "result.redacted.md"))
 assert(result["redacted"] && redacted.include?("src/file.rb\n<clone>\n<run dir>\n<home>/elsewhere"), "home paths replaced in order")
 assert(File.read(File.join(run, "result.md")) == text, "original result retained")
 assert(File.read(PACKET).include?("orchestrator 注:") && File.read(PACKET).include?(redacted), "redaction note and text")
+# 見出しの語だけの行も見出しとして受ける (#806)。#847 のように語の後ろに空白が付いても受け、転記は逐語 (packet にも
+# 語だけの行がそのまま残る)。次の入口は節の中身から取る
+bare = RESULT.gsub(/^### /, "").sub("判断\n", "判断  \n")
+finish(run, nonce, bare)
+result = invoke("collect")
+assert(result["status"] == "DONE" && result["packet"]["written"], "bare headings are accepted")
+assert(File.read(PACKET).include?(bare) && File.read(PACKET).end_with?("## 次の入口\n\nなし (review 待ち)\n\n"),
+       "bare headings are transcribed verbatim with the next entry")
+# gate の置き換えで本文の行が見出しの語だけになれば、2 回目の解析で見出しが増えて止まり、転記しない (#806)
+finish(run, nonce, RESULT.sub("PRIVATE-RESULT", "PRIVATE-RESULT\n#{CLONE}/判断"))
+failure("collect", "transcription", "result-format", { "HOME" => ROOT, "FAKE_GATE_HOME" => "1" })
+assert(File.read(File.join(run, "result.redacted.md")).include?("\n判断\n"), "the redacted line became a bare heading word")
 finish(run, nonce, RESULT.sub("PRIVATE-RESULT", "x#{ROOT}/unchanged"))
 failure("collect", "transcription", "gate", { "HOME" => ROOT, "FAKE_GATE_HOME" => "1" })
 # Other findings must not trigger replacement, even alongside home-path.

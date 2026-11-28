@@ -705,6 +705,15 @@ module CodexWorkerRun
     RESULT_HEADINGS = ["到達点", "判断", "未完", "停止理由 または 質問", "commits", "次の 1 アクション"].freeze
     ENTRY_HEADING = %r{\A### \d{4}-\d{2}-\d{2} (?:worker|reviewer|orchestrator)/(?:claude|codex|human)\s*\z}.freeze
 
+    # 最終 message の見出しの行なら、その語を返す (#806)。`### <語>` と `<語>` だけの行の両方を受け、前後の空白を
+    # 外して照らす。外すのは半角の空白と tab だけ (strip が外すほかの文字は、前の制御文字の検査で止まる。全角の空白は
+    # 外さない)。順と回数は呼び出し側が RESULT_HEADINGS と照らすので、本文に語だけの行があれば見出しが増えて止まる。
+    # 転記は今どおり逐語で、見出しの行の形は packet にもそのまま残る。
+    def result_heading(line)
+      stripped = line.strip
+      RESULT_HEADINGS.find { |h| stripped == h || stripped == "### #{h}" }
+    end
+
     def result_sections(text)
       stop("result-format") unless text.valid_encoding? && !text.strip.empty? &&
         !text.delete("\n\t").match?(/[[:cntrl:]]/) && !text.include?("<!--") && !text.include?("-->")
@@ -714,12 +723,12 @@ module CodexWorkerRun
         line.start_with?("## ") || line.match?(ENTRY_HEADING) ||
           ["**結果 (最新節)**", "**次の入口**"].include?(line.chomp)
       end
-      headings = lines.select { |line| RESULT_HEADINGS.any? { |h| line.chomp == "### #{h}" } }
-      stop("result-format") unless headings.map(&:chomp) == RESULT_HEADINGS.map { |h| "### #{h}" }
+      headings = lines.map { |line| result_heading(line) }.compact
+      stop("result-format") unless headings == RESULT_HEADINGS
       sections = {}
       current = nil
       lines.each do |line|
-        name = RESULT_HEADINGS.find { |h| line.chomp == "### #{h}" }
+        name = result_heading(line)
         if name
           current = name
           sections[current] = +""
@@ -1216,23 +1225,30 @@ module CodexWorkerRun
 
         ## 最終 message の書式
 
-        以下の見出しをこの順に使います。行頭の ## は使いません。
+        次の 6 つの見出しを、この順に 1 回ずつ使います。見出しの行は、下の例のとおり `### ` で始めます。行頭の ## は使いません。
         「停止理由 または 質問」には、作業を止めて orchestrator の判断を待つ理由だけを書きます。
         受け入れ条件の曖昧さや、続けられない障害が対象です。
         走らせられなかった test や読めなかった process 一覧など、確かめられなかったことは「未完」に書きます。
         止まらずに終えたときは、「停止理由 または 質問」に「なし」とだけ書きます。
         file は repo 相対の path で書き、link にしません。clone、run、home の絶対 path は書きません。
 
+        ```markdown
         ### 到達点
         ### 判断
-        理由も書きます。
         ### 未完
         ### 停止理由 または 質問
         ### commits
-        oid と subject の一覧を書きます。
         ### 次の 1 アクション
-        自分の次の手だけを書きます。完了して review 待ちなら「なし (review 待ち)」と書きます。
-        orchestrator や reviewer への依頼は書きません。
+        ```
+
+        各節に書くこと:
+
+        - 判断: 理由も書きます。
+        - commits: oid と subject の一覧を書きます。
+        - 次の 1 アクション: 自分の次の手だけを書きます。完了して review 待ちなら「なし (review 待ち)」と書きます。
+          orchestrator や reviewer への依頼は書きません。
+
+        終える前に、見出しの 6 行が `### ` で始まり、この順に 1 回ずつあることを確かめてください (#806)。
       TEXT
     end
   end
