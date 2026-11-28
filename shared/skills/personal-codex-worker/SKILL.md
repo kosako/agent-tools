@@ -157,7 +157,8 @@ shell 引数に埋め込まない。diff や既存 code は、worker が clone �
   実行できなかった test や読めなかった process 一覧は `未完` に書く。commits は oid と subject の一覧にする。
   `次の 1 アクション` は worker 自身の次の手だけを書き、完了して review 待ちなら「なし (review 待ち)」と
   書く。orchestrator / reviewer への依頼 (「転記して review に回す」等) は書かない (#325)。
-  markdown の見出しは上の6つに固定し、行頭 `## ` は使わない (packet の予約)。file は repo 相対の
+  markdown の見出しは上の6つに固定し、行頭 `## ` は使わない (packet の予約)。見出しの行は上の形のとおりに書き、
+  終える前に 6 行の形と順を確かめる (launcher の brief は見出しの例を code block で示す。#806)。file は repo 相対の
   path で書き、markdown のリンクにしない。clone / run dir / home の絶対 path も書かない (転記前の
   public-safety gate が止める。§6 の置き換えは取りこぼしたときの安全網。#326)。
 - 品質の観点: コードや script を書く・直す作業では、配備済みの skill `personal-production-rail` を使い、索引で選んだ
