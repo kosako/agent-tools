@@ -541,7 +541,7 @@ case ごとに、違反、達成 (正例) か通過 (負例・曖昧)、評価�
 
 ```sh
 scripts/build.sh   # generated/<tool>/skills を作る
-eval_home="$HOME/.local/share/agent-tools/codex-eval-home"   # 下の「評価用の Codex の home」
+eval_home="/Users/Shared/agent-tools-codex-eval-home"   # 下の「評価用の Codex の home」(ふだんの home の外に置く)
 scripts/probe-skill-behavior.sh --tool claude-code --out after-claude.json --repeat 2
 scripts/probe-skill-behavior.sh --tool codex --codex-home "$eval_home" --out after-codex.json --repeat 2
 scripts/probe-skill-behavior.sh --tool codex --codex-home "$eval_home" --skills none --out control-codex.json --repeat 2   # skill を置かない対照
@@ -561,9 +561,14 @@ scripts/check-skill-behavior.sh --cases scripts/lib/skill_behavior_cases.json --
 Codex の run だけが使う、ふだんの home とは別の Codex の home です (#731)。人が自分の terminal で 1 回だけログインします。
 ふだんの home の `auth.json` は写しません。写した token を run の中で Codex が更新すると、ふだんの login が切れうるためです。
 
+置き場は、ふだんの home の外で、user の名前を含まない path にします (#807)。routing の probe と挙動の評価の probe は、評価用の
+home の path を子の `CODEX_HOME` に渡します。その path がふだんの home の下にあると、model はそこから home の path を推し、
+ふだんの home の file を絶対 path で読みます (11-28 の routing の run で、印の立たない case が session log の置き場を読んだ)。
+下の例の `/Users/Shared` は macOS の共有の dir なので、mode 0700 で作り、自分だけが読めるようにします。
+
 ```sh
-eval_home="$HOME/.local/share/agent-tools/codex-eval-home"
-mkdir -p -m 700 "$eval_home"
+eval_home="/Users/Shared/agent-tools-codex-eval-home"
+mkdir -m 700 "$eval_home"                    # 同じ名前が既にあれば止まる (ほかの user が先に作った dir を使わない)
 CODEX_HOME="$eval_home" codex login          # 評価用の home にだけ auth.json ができる
 CODEX_HOME="$eval_home" codex login status   # 評価用の home でログインできている
 codex login status                           # ふだんの home の login が切れていない
@@ -583,6 +588,10 @@ probe は起動の前に、`--codex-home` の dir が次を満たすことを確
 
 `config.toml` と execpolicy の rules は、`--ignore-user-config` と `--ignore-rules` で読まないので、在ってもかまいません。
 評価用の home に `AGENTS.md` や skill を置かないでください (置くと probe が止まります)。
+
+置き場を移しても、子の Codex は親の env (`PATH`、`GOROOT`、`SSH_AUTH_SOCK` など) をそのまま継ぐので、その値からふだんの
+home の path は推せます。11-28 に評価用の home を移した後、home を読んだ 3 case を 2 回ずつ流すと、ふだんの home の絶対 path を
+書いた run は 0 でした (移す前の同じ形の run では 3)。数は少ないので、保証としては読みません。
 
 ## 既知の限界
 
