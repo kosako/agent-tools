@@ -171,7 +171,8 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
     `agent_message` などは数えず、`SKILL.md` を含む command (候補か否か、前に `/` があるかを問わない。
     `cd <dir> && cat SKILL.md` の形を含む) は数を 0 に戻し、知らない type は数えない。規則の正本は
     `CodexRoutingMark` (`scripts/lib/probe_skill_routing.rb`) で、run の途中で止める判定と run の後の解析が同じものを使う。
-    止める判定は、改行までそろった JSONL の行だけで行い、印を立てた行までを結果 (raw log・observed・reads) に残し、後の
+    印は、止める判定でも run の後の解析でも、改行までそろった JSONL の行だけで数える (期限で打ち切った run の末尾の改行の
+    無い行は数えない)。止める判定は、印を立てた行までを結果 (raw log・observed・reads) に残し、後の
     event は含めない。印を見た時点で子が既に終わっていれば、止めずに終わった run として扱う (`exited`・`failed`)。
     2026-11-28 に過去の Codex の raw log (128 run) に止める形を当てると、印が立つ 93 run で primary (observed の最初の
     skill) は全部変わらず、observed の並びが変わるのは 5 run (後で読んだ skill が抜ける 4、探索読みの圧縮がかからなく

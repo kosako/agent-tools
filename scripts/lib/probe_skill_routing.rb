@@ -610,7 +610,9 @@ module ProbeSkillRouting
       end
       next unless e.is_a?(Hash)
 
-      mark.feed_event(e)
+      # 印は改行までそろった行だけで数える (止める判定の stop_line と同じ。#802 の review)。期限で打ち切った run の末尾の
+      # 改行の無い行は、ほかの観測には使うが、印には数えない。
+      mark.feed_event(e) if line.end_with?("\n")
       case e["type"]
       when "item.completed"
         item = e["item"].is_a?(Hash) ? e["item"] : {}

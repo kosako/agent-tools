@@ -874,6 +874,12 @@ printf '%s\n' "$ev_read" "$ev_work" "$ev_turn" > "$tmp/ev-one-turn"
 run_codex_events "$tmp/ev-one-turn" 0 0 --smoke --timeout 5
 case "$out" in *'status=ok exit=0 '*'prompt_tokens=10 output_tokens=2 completion=exited'*) : ;;
   *) fail "a run without the mark must run to its end: $out" ;; esac
+# E16 (#805 の review): 印を立てる event が改行の無い末尾の行なら、止めず、期限で打ち切っても observed-stop にしない
+printf '%s\n%s\n%s' "$ev_read" "$ev_work" "$ev_work" > "$tmp/ev-done-nonl"
+run_codex_events "$tmp/ev-done-nonl" 30 0 --smoke --timeout 2
+[ "$rc" -eq 2 ] || fail "a mark on an unterminated last line must not count (rc=$rc): $out"
+case "$out" in *'status=error exit=nil '*'completion=timeout'*) : ;; *) fail "an unterminated mark line should end as timeout: $out" ;; esac
+grandchild_gone || fail "the grandchild of a run with an unterminated mark line must not survive"
 # E19: 印の前に非ゼロで終われば failed
 printf '%s\n' "$ev_read" "$ev_turn" > "$tmp/ev-read-turn"
 run_codex_events "$tmp/ev-read-turn" 0 1 --smoke --timeout 5
@@ -965,6 +971,9 @@ table.each do |seq, want|
   got_parse = P.parse_codex(seq.join("\n") + "\n", names)[:routing_done]
   check("印の規則: #{seq.length} 行の列で #{want} (mark=#{m.done} parse=#{got_parse})", m.done == want && got_parse == want)
 end
+# parse_codex も、改行の無い末尾の行を印に数えない (止める判定と同じ。#805 の review)
+check("印の規則: 改行の無い末尾の行は印に数えない", P.parse_codex([read_a, work, work].join("\n"), names)[:routing_done] == false)
+check("印の規則: 改行があれば数える", P.parse_codex([read_a, work, work].join("\n") + "\n", names)[:routing_done] == true)
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
