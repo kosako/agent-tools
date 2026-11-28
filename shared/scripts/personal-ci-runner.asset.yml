@@ -1,0 +1,29 @@
+schema_version: 1
+name: personal-ci-runner
+kind: script
+visibility: personal
+targets:
+  - codex
+  - claude-code
+risk:
+  prompt_injection: low
+  privacy: low
+# script kind は実行コード配布のため常に human review 必須 (#147)。
+# 本 script は #803 の PR で author≠reviewer レビューのうえ承認する。
+# 承認は内容と配布形態に紐づく (#148, #184)。source 変更時は再レビューして
+# approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
+review:
+  human_review: approved
+  approved_build_id: sha256:443aa87ccd63b55109c521bfbcf5f0559926eaf69b63567e064ccde8503b3479
+  approved_artifact_kind: script
+source:
+  path: shared/scripts/personal-ci-runner.rb
+  format: text
+summary: >-
+  個人 project の private の repo の CI を、手元の machine の self-hosted runner で走らせる本体 (#803)。1 job ごとに GitHub の
+  just-in-time の runner を作り、新しい container で動かし、終わったら登録を消す。check (公開範囲の検査) / once (1 job の runner) /
+  cleanup (残った登録の後片付け)。起動のたびに API で private を確かめ (private・visibility・full_name の 3 つがそろったときだけ)、
+  人が設定 (~/.config/agent-tools/ci-runner.json) に書いた repo だけを扱う。container には host の mount・docker の socket・gh の token を
+  渡さず、CPU・memory・process の数に上限を付け、no-new-privileges と cap-drop ALL を付ける。JIT の設定は container の stdin で渡し、
+  host の argv・env・log・state に残さない。手順の守りであって境界ではない。exit 0 = 成功 / 1 = private でない・判定できない・失敗 /
+  2 = 使い方・設定の誤り / 3 = 同じ repo の once が動いている。(docs/ci-runner.md)
