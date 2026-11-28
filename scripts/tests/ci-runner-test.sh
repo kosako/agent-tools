@@ -25,12 +25,13 @@ image="ghcr.io/actions/actions-runner@sha256:$(printf '%064d' 0 | tr 0 a)"
 # ---- 偽の gh ----------------------------------------------------------------------------------------------------
 # 呼び出しごとに結果を指定する (file の中身で選ぶ。無ければ ok):
 #   mode-post: ok / fail (500・作られない) / fail-created (500 だが作られる) / hang (作ってから返らない) /
-#              late (返らず、止められた後で作られる) / notfound (404)
+#              late (返らず、止められた後で作られる) / stall (何も作らず、返らない) / notfound (404)
 #   post-body: normal / noid / runnerstring / otherid (返事の id が別の既存 runner を指す) / badcfg / bigcfg (pipe の容量を超える長さ)
 #   list-lag: 回数。その回数だけ、一覧に agent-tools-ci- の runner を出さない (作った直後の一覧に出るのが遅れる形)
 #   mode-list: ok / fail / hang      mode-delete: ok / notfound / notfound-gone / fail
 #   list-delay・delete-delay: 一覧・DELETE の前に待つ秒      vis-seq の hang は 90 秒返らない
 #   mode-delete の fail-once: 1 回だけ失敗する      ignore-term: TERM を無視する (KILL でだけ止まる)
+#   mode-delete の hang-once: 1 回だけ返らない。入った目印に delete-hung を置く (test は時間でなく目印を待つ)
 #   vis-seq: 呼び出しごとの公開範囲 (private / public / mixed / garbage / fail / hang)。最後の行を繰り返す
 #   chmod-state-on-post: POST の後に state の dir を書けなくする (記録を消せない形)
 # DELETE と POST の時刻を events.log に書く。
@@ -85,6 +86,9 @@ elsif method == "POST" && path.match?(%r{/actions/runners/generate-jitconfig\z})
   when "fail-created"
     File.write(File.join(runners, "4242"), name)
     http_error(500, "Server Error")
+  when "stall"
+    sleep 30
+    exit 1
   when "late"
     child = fork { sleep 3; File.write(File.join(runners, "4242"), name) }
     Process.detach(child)
@@ -118,6 +122,7 @@ elsif method == "DELETE" && (m = path.match(%r{/actions/runners/(\d+)\z}))
     http_error(500, "Server Error")
   when "hang-once"
     File.write(File.join(dir, "mode-delete"), "ok")
+    File.write(File.join(dir, "delete-hung"), "")
     sleep 30
     exit 1
   when "notfound" then http_error(404, "Not Found")
@@ -425,7 +430,7 @@ start_once() {
   wait_for=$1
   shift
   env PATH="$tmp/fake:$PATH" HOME="$tmp/home" AGENT_TOOLS_CI_RUNNER_CONFIG="$conf" AGENT_TOOLS_CI_RUNNER_STATE_DIR="$state" \
-    AGENT_TOOLS_CI_RUNNER_POLL_SECONDS="${poll:-40}" GH_REPO= GH_HOST= \
+    AGENT_TOOLS_CI_RUNNER_POLL_SECONDS="${poll:-40}" GH_REPO= GH_HOST= TEST_MARKER="${test_marker:-}" \
     "$real_ruby" "$@" once kosako/prism > "$tmp/out" 2> "$tmp/err" < /dev/null &
   bg=$!
   set -- "$wait_for"
@@ -865,14 +870,17 @@ original = CiRunner.method(:stop_until_exit)
 CiRunner.define_singleton_method(:stop_until_exit) do |*a|
   if first
     first = false
-    sleep 1 # 登録を消す thread が DELETE に入るのを待つ
+    # 登録を消す thread が、返らない DELETE に入るのを待つ (偽の gh が置く目印。時間では決めない)
+    200.times { break if File.exist?(ENV.fetch("TEST_MARKER")); sleep 0.05 }
     raise "boom"
   end
   original.call(*a)
 end
 exit CiRunner.main(ARGV)'
+test_marker="$tmp/gh/delete-hung"
 run_case T11 running
 main_script=
+test_marker=
 [ "$rc" -eq 1 ] || fail "T11: expected exit 1, got $rc"
 ls "$tmp/docker" | grep -q '^stop-' || fail "T11: the container must be stopped"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "T11: the registration must be deleted by the settle"
@@ -921,10 +929,12 @@ case $(cat "$tmp/out") in *"止める signal を受けたので runner を作り
 ! posted || fail "M27: the POST must not be started after the signal"
 [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "M27: the record must be removed (nothing was created)"
 converge M27
-# M28: signal を確かめた後、gh の POST を起動する前に TERM が届く。POST は起動され、止めた後で登録が作られる -> 作られたか
-# 分からないので、記録を残す。後から出た登録は cleanup が消す (signal は任意の時点に届く。確かめた後の分は防げない)
+# M28: signal を確かめた後、gh の POST を起動する前に TERM が届く。gh は起動された後に止まる -> 作られたか分からないので、
+# 記録を残す。止めた POST が後から効いた形 (記録の名前の登録が、後から一覧に出る) でも、記録があるので cleanup が消す
+# (signal は任意の時点に届く。確かめた後の分は防げない)。偽の gh がどこまで進んだかに頼らないよう、偽の POST は何も
+# 作らず、後から出る登録は test が置く
 reset
-printf 'late\n' > "$tmp/gh/mode-post"
+printf 'stall\n' > "$tmp/gh/mode-post"
 main_script='load ARGV.shift
 original = CiRunner.method(:gh_call)
 CiRunner.define_singleton_method(:gh_call) do |*a, **k|
@@ -939,11 +949,11 @@ start_once none
 wait_bg
 main_script=
 [ "$rc" -eq 1 ] || fail "M28: expected exit 1, got $rc"
-posted || fail "M28: the POST is expected to start in this case (the signal arrived after the check)"
+case $(cat "$tmp/out") in *"止める signal を受けました"*) ;; *) fail "M28: unexpected output: $(cat "$tmp/out")" ;; esac
 ! docker_ran || fail "M28: no container may start"
-[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M28: the record must be kept (the registration may have been created)"
-sleep 4
-[ -e "$tmp/gh/runners/4242" ] || fail "M28: the fake registration must appear after the POST was stopped"
+rec=$(ls "$state" | grep '\.json$' || true)
+[ -n "$rec" ] || fail "M28: the record must be kept (the registration may have been created)"
+printf '%s' "${rec%.json}" > "$tmp/gh/runners/4242"
 invariant M28
 converge M28
 # T16: docker の client だけが終わった直後、docker ps の呼び出しが 1 回目だけ例外を出す -> container が動いているかも
