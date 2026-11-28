@@ -84,8 +84,8 @@ module ProbeSkillBehavior
     "sandbox_workspace_write.exclude_slash_tmp" => "true",
     "sandbox_workspace_write.exclude_tmpdir_env_var" => "true",
   }.freeze
-  # 評価用の Codex の home に在ってはいけない file (大文字小文字を区別しない。#731)。
-  EVAL_HOME_FORBIDDEN = %w[agents.md agents.override.md].freeze
+  # 評価用の Codex の home に在ってはいけない file (正本は ProbeSkillRouting。#802)。
+  EVAL_HOME_FORBIDDEN = R::EVAL_HOME_FORBIDDEN
   # results.json の ids.conditions (skill の無い条件。値は決まったものだけ)。
   CONDITIONS = {
     "claude-code" => { "setting_sources" => "project" },
@@ -165,61 +165,21 @@ module ProbeSkillBehavior
     opts
   end
 
-  # 評価用の Codex の home を確かめ、実 path を返す (#731)。auth.json の中身は読まない。
+  # 評価用の Codex の home の検査は、routing の probe と共有する (#802。規則の正本は ProbeSkillRouting)。
+  # 誤りはこの probe の Error に包み直す (文言は変えない)。
   def self.eval_codex_home!(dir)
-    raise Error, "--codex-home must be an absolute path" unless dir.start_with?("/")
-
-    st = begin
-      File.lstat(dir)
-    rescue Errno::ENOENT
-      raise Error, "--codex-home does not exist"
-    end
-    raise Error, "--codex-home must not be a symlink" if st.symlink?
-    raise Error, "--codex-home must be a directory" unless st.directory?
-
-    real = File.realpath(dir)
-    usual = R.codex_home
-    # 文字列ではなく実体で比べる (大文字小文字を区別しない file system では、同じ dir の実 path の表記が変わりうる)
-    if File.exist?(usual) && File.identical?(usual, real)
-      raise Error, "--codex-home must not be the usual Codex home"
-    end
-
-    auth = begin
-      File.lstat(File.join(real, "auth.json"))
-    rescue Errno::ENOENT
-      raise Error, "--codex-home has no auth.json (log in once with CODEX_HOME set to the dir)"
-    end
-    raise Error, "--codex-home: auth.json must be a regular file" unless auth.file?
-
-    found = Dir.children(real).select { |n| EVAL_HOME_FORBIDDEN.include?(n.downcase) }
-    raise Error, "--codex-home must not have #{found.sort.join(', ')}" unless found.empty?
-
-    skills = File.join(real, "skills")
-    if File.symlink?(skills)
-      raise Error, "--codex-home: skills must not be a symlink"
-    elsif File.directory?(skills)
-      user = Dir.children(skills).reject { |n| n.start_with?(".") }
-      raise Error, "--codex-home must not have user skills (#{user.length} under skills/)" unless user.empty?
-    elsif File.exist?(skills)
-      raise Error, "--codex-home: skills must be a directory"
-    end
-    real
-  rescue SystemCallError => e
-    raise Error, "--codex-home could not be checked (#{e.class})"
+    R.eval_codex_home!(dir)
+  rescue R::Error => e
+    raise Error, e.message
   end
-
-  # 各 codex exec の前に、評価用の home を検査し直し、最初に確かめた dir と同じ実体かも確かめる (#731。review の
-  # round 1)。run の間に AGENTS.md や skill が足された、dir を差し替えられた、のどれでも起動せずに止める。
+  
+  # 各 codex exec の前に、評価用の home を検査し直し、最初に確かめた dir と同じ実体かも確かめる (#731)。
   def self.recheck_codex_home!(opts)
-    real = eval_codex_home!(opts[:codex_home])
-    st = File.stat(real)
-    return if real == opts[:codex_home] && [st.dev, st.ino] == opts[:codex_home_id]
-
-    raise Error, "--codex-home changed during the probe"
-  rescue SystemCallError => e
-    raise Error, "--codex-home could not be checked (#{e.class})"
+    R.recheck_codex_home!(opts)
+  rescue R::Error => e
+    raise Error, e.message
   end
-
+  
   # codex の子 process にだけ足す環境 (probe の process の環境は変えない)。
   def self.codex_env(opts)
     opts[:codex_home] ? { "CODEX_HOME" => opts[:codex_home] } : {}

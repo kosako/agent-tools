@@ -333,6 +333,34 @@ run_case "memory-violation-first" 1 "FAIL: candidate: auto memory was not off in
   -- --cases "$tmp/cases.json" --results "$tmp/mem-viol.json" --baseline "$tmp/ok.json"
 grep -q "triggered must_not skill(s) skill-b" "$tmp/out" || fail "memory-violation-first: the breach should be reported: $(cat "$tmp/out")"
 
+# --- Codex の子の home の条件 (#802)。codex だけで、値は 1 つだけ。比較の条件に入る ---
+# usage: with_isolation <in> <out> <codex_isolation の JSON>
+with_isolation() {
+  ruby -rjson -e '
+    d = JSON.parse(File.read(ARGV[0]))
+    d["codex_isolation"] = JSON.parse("[#{ARGV[2]}]")[0]
+    File.write(ARGV[1], JSON.generate(d))' "$@"
+}
+with_isolation "$tmp/codex-ok.json" "$tmp/iso.json" '{"home":"empty","codex_home":"eval"}'
+run_case "isolation-codex" 0 "ok: skill routing verified" -- --cases "$tmp/cases.json" --results "$tmp/iso.json"
+for value in null '"eval"' '{}' '{"home":"empty"}' '{"home":"usual","codex_home":"eval"}' '{"home":"empty","codex_home":"usual"}' \
+  '{"home":"empty","codex_home":"eval","x":1}'; do
+  with_isolation "$tmp/codex-ok.json" "$tmp/iso-bad.json" "$value"
+  run_case "isolation-shape $value" 2 "error: results: codex_isolation must be" -- --cases "$tmp/cases.json" --results "$tmp/iso-bad.json"
+  run_case "isolation-baseline-shape $value" 2 "error: baseline: codex_isolation must be" \
+    -- --cases "$tmp/cases.json" --results "$tmp/iso.json" --baseline "$tmp/iso-bad.json"
+done
+with_isolation "$tmp/ok.json" "$tmp/iso-claude.json" '{"home":"empty","codex_home":"eval"}'
+run_case "isolation-claude" 2 "error: results: codex_isolation must be" -- --cases "$tmp/cases.json" --results "$tmp/iso-claude.json"
+# 記録の有る結果と無い結果は、どちらが候補でも比べない。両側に同じ記録があれば比べる
+run_case "isolation-compare-new-old" 2 "FAIL: comparison: codex isolation differs" \
+  -- --cases "$tmp/cases.json" --results "$tmp/iso.json" --baseline "$tmp/codex-ok.json"
+if grep -q "delta candidate-baseline" "$tmp/out"; then fail "isolation-compare-new-old: delta reported: $(cat "$tmp/out")"; fi
+run_case "isolation-compare-old-new" 2 "FAIL: comparison: codex isolation differs" \
+  -- --cases "$tmp/cases.json" --results "$tmp/codex-ok.json" --baseline "$tmp/iso.json"
+run_case "isolation-compare-same" 0 "delta candidate-baseline" \
+  -- --cases "$tmp/cases.json" --results "$tmp/iso.json" --baseline "$tmp/iso.json"
+
 # --- case 21: error run が candidate / baseline のどちらにあっても、baseline 比較 (delta と回帰の判定) を
 # 飛ばして構造エラー (exit 2) にする。回帰に見える差があっても判定しない。candidate 自身の must_not 違反は
 # exit 1 として残る (docs の「既知の挙動」、#302) ---

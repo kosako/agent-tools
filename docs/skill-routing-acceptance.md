@@ -40,13 +40,31 @@ harness です。#216 の cross-skill routing suite の最小 slice で、
 probe は一時 directory に project を作り、候補 skill を **project scope** に copy して実行する。probe 自身は tool home
 (`~/.claude` / `~/.codex`) に書き込まない。CLI 自身が home に置く状態の file (認証・cache・log など) は見ていない。
 
+書き込みは temp project の中に限るが、読み取りは隔離しない (Codex の read-only の sandbox も project の外の file を読める)。
+Codex は依頼の作業を最後まで行うので、case によってはふだんの home を広く読む (#802 の発端は、採掘の case の run が home 全体を
+検索し、macOS の許可の画面が出たこと)。そのため Codex の子は、ふだんの HOME とふだんの Codex home を見ない形で起動する (#802)。
+
+- 子の `CODEX_HOME` は評価用の Codex の home (`--codex-home`。codex の run では必須、`--dry-run` では省ける)。条件と作り方は
+  [Skill Behavior Eval](skill-behavior-eval.md) の「評価用の Codex の home」と同じで、検査の code も共有する (絶対 path、symlink
+  でない、ふだんの Codex home と実体が違う、`auth.json` が regular file、`AGENTS.md` と user の skill が無い)。検査は起動の前と、
+  Codex の run ごとの起動の前にかけ直す (run の間に差し替えられたら、次の run を起動せずに止まる)。
+- 子の `HOME` は run ごとの空の dir (`Dir.mktmpdir`、mode 0700、temp project とは別の置き場)。run の後に消し、消せなければ
+  `warn:` の行で残った path を出す。起動の前の確かめ (`codex exec --help`、`codex features list`) も、確かめの専用の空の HOME と
+  評価用の `CODEX_HOME` で走らせる。子の command の `~` は空の dir を指すので、`reads` の copy の判定もその dir で展開する。
+- 親の process は、model の取得 (`--model` が無いとき) と、評価用の home がふだんの Codex home と別の実体かの照合にだけ、ふだんの
+  Codex home を読む。親の env は変えず、PATH などは子にそのまま継ぐ (login の設定 (`~/.zprofile` など) は空の HOME では読まれない)。
+- 限界: 子が絶対 path を知れば、ふだんの home の file も読める (sandbox は読み取りを隔離しない)。11-28 の実機の run (採掘の case)
+  では、`~` の読み取りが空の dir に向いた後に、model がふだんの home の絶対 path を書いて session log を読んだ (path をどこから
+  知ったかは確かめていない)。HOME を分けるだけでは、ふだんの home の読み取りは防げない。Claude Code の run は今のまま
+  (`--max-turns 2` で作業に入る前に終わる)。
+
 Claude Code の子 process には `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` を渡し、自動の memory を止める (#770)。止めないと、run ごとに
 `~/.claude/projects` の下に、temp project の名前の dir と空の `memory` ができ、model に memory の置き場が示される (2.1.331 で確かめた)。
 
 | tool | 候補 skill の置き場 | user scope の排除 | 確認した版 |
 | --- | --- | --- | --- |
 | claude-code | `<proj>/.claude/skills/<name>/` | `--setting-sources project` (user / local の settings と skill を読まない) | 2.1.277 (2026-09-20 smoke): `~/.claude/skills` の `personal-*` と plugin skill は listing から消え、project skill と bundled skill (dataviz / code-review 等) だけが残る。bundled は両 variant に等しく載る |
-| codex | `<proj>/.agents/skills/<name>/` (公式 docs の repository-level path) | 候補と同名の `~/.codex/skills/<name>/SKILL.md` を `-c 'skills.config=[{path=...,enabled=false},...]'` で無効化 | 0.153.4 (2026-09-21 実測): project scope は読まれる。user scope の同名 skill は **両方 listing に並ぶ** (`--ignore-user-config` では消えない。plugin skill だけ消える)。`skills.config` で 12 本を無効化すると候補だけが残る。他の user / plugin skill は両 variant に等しく載る。0.159.3 (2026-10-03、下の起動の境界つき): listing は候補 14 本と、候補以外の skill 5 本 (system の imagegen / openai-docs / skill-creator / skill-installer と、user scope の migrate-to-codex) で、plugin skill は消える |
+| codex | `<proj>/.agents/skills/<name>/` (公式 docs の repository-level path) | 子の Codex home の user scope に候補と同名の `skills/<name>/SKILL.md` があれば `-c 'skills.config=[{path=...,enabled=false},...]'` で無効化 (#802 から子の Codex home は評価用の home で、user の skill を持てないので、ふつうは付かない) | 0.153.4 (2026-09-21 実測): project scope は読まれる。user scope の同名 skill は **両方 listing に並ぶ** (`--ignore-user-config` では消えない。plugin skill だけ消える)。`skills.config` で 12 本を無効化すると候補だけが残る。他の user / plugin skill は両 variant に等しく載る。0.159.3 (2026-10-03、下の起動の境界つき): listing は候補 14 本と、候補以外の skill 5 本 (system の imagegen / openai-docs / skill-creator / skill-installer と、user scope の migrate-to-codex) で、plugin skill は消える |
 
 claude-code の観測に使う event (2.1.277 で実測): `system` / `init` の `model`、`assistant` の `tool_use`
 (`name: "Skill"`, `input.skill: "<name>"`)、`result` の `usage` (`input_tokens` /
@@ -161,6 +179,8 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
 - `auto_memory` (任意。claude-code だけ。#770): 自動の memory の記録。`requested` は渡した設定 (いつも `off`)、`init` は run の init の
   event に見えた状態 (`listed` / `not-listed` / `unknown`、run の間で違えば `mixed:` の後に並べる)。judge は `not-listed` のときだけ
   緑にする。`not-listed` の意味と限界は [Skill Behavior Eval](skill-behavior-eval.md) の「results.json」と同じ。
+- `codex_isolation` (任意。codex だけ。#802): Codex の子の home の条件。値は `{"home": "empty", "codex_home": "eval"}` だけ
+  (上の「隔離」)。#802 より前の結果には無い。
 - raw log は `<out>.raw/<case>-<n>.jsonl` に残す。observed が正しいかはこの log で人が確認する
   (judge は runner の観測を信頼する。信頼境界は judge の冒頭コメント参照)。raw log は private な内容を
   含みうるので、Issue / PR / comment には貼らない (下の「raw log の扱い」)。
@@ -187,8 +207,10 @@ scripts/check-skill-routing.sh --cases scripts/lib/skill_routing_cases.json \
   (違えば exit 2)。`reads` の無い古い結果 (schema_version 1・2) は、`observed` だけで今までどおり判定する。
 - **自動の memory** (#770): `auto_memory` が在り、`init` が `not-listed` でなければ構造エラー。形が違うとき、Codex の結果に在るときは
   入力の誤り (どちらも exit 2)。
-- **baseline 比較**: 同じ tool・同じ model・同じ case 集合・同じ run 数・同じ `auto_memory` (無いものどうしを含む) の結果だけ
-  比較する (違えば exit 2)。primary は case ごとに比べ、baseline で半分以上の run が当たっていた case が、候補で一度も当たらなければ
+- **Codex の子の home の条件** (#802): `codex_isolation` が在れば、Codex の結果で、値が決まった 1 つであること。違えば入力の誤り
+  (exit 2)。
+- **baseline 比較**: 同じ tool・同じ model・同じ case 集合・同じ run 数・同じ `auto_memory`・同じ `codex_isolation` (どちらも、
+  無いものどうしを含む) の結果だけ比較する (違えば exit 2。#802 より前の Codex の結果とは比べないので、baseline を取り直す)。primary は case ごとに比べ、baseline で半分以上の run が当たっていた case が、候補で一度も当たらなければ
   回帰 (exit 1。#417)。それより小さい減少は case ごとに `warn:` の行で出し、exit には響かない。合計の hit は比べない
   (ある case の回帰が別の case の改善で打ち消され、揺れだけの差が回帰になるため)。must_not は、候補で 1 回でも出れば
   baseline によらず case ごとに破れ (上)。構造エラー (coverage 欠落・
@@ -224,7 +246,8 @@ scripts/check-skill-routing.sh --cases scripts/lib/skill_routing_cases.json \
   --results after.json --baseline before.json
 ```
 
-codex は `--tool codex` で同じ手順。両 tool で回帰なしを確認したものだけ merge する (#280 の
+codex は `--tool codex` に `--codex-home <評価用の Codex の home>` を足して同じ手順 (#802。上の「隔離」)。両 tool で回帰なしを
+確認したものだけ merge する (#280 の
 受け入れ条件)。`--repeat N` で揺れを均せる (baseline と candidate で同じ N にする。repeat 1 では 1 回の外れが「一度も
 当たらない」になり回帰になるので、gate にするなら 2 以上)。Codex の case `audit-mine-session-logs` は、
 `--timeout` まで走ってから `observed-stop` になりやすい (下の「既知の挙動」)。

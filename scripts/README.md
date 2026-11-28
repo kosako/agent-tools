@@ -182,12 +182,13 @@ usage: expand-vendored-policy.sh --root DIR --facets-root PATH --entry PATH [--c
   書き込まない (CLI 自身の状態の file は見ていない)。Claude Code の自動の memory は止めて、記録に残す
   (#770。設定と記録の形は `lib/auto_memory.rb`、self-test は `tests/auto-memory-test.sh`)。Codex は監査 / review と
   同じ境界 (`--ignore-user-config` / `--ignore-rules` / `--disable apps` 等) で起動し、起動の前に flag と feature の
-  在否を確かめる (#372)。
+  在否を確かめる (#372)。Codex の子は、評価用の Codex の home (`--codex-home`、codex の run では必須) と run ごとの空の HOME で
+  起動し、ふだんの HOME とふだんの Codex home を見ない (#802)。
 
 ```text
 usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
          [--source DIR] [--cases FILE] [--variant LABEL] [--model MODEL] [--repeat N]
-         [--only ID[,ID...]] [--max-turns N] [--timeout SEC] [--dry-run] [--smoke]
+         [--only ID[,ID...]] [--max-turns N] [--timeout SEC] [--codex-home DIR] [--dry-run] [--smoke]
 ```
 
 - **CI では実行しない** (CLI 認証と network が要る)。証跡は raw log (`<out>.raw/`) と judge の

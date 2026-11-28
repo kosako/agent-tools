@@ -47,12 +47,19 @@ check("境界つきの argv を固定する",
 check("disable する feature の一覧", P::CODEX_DISABLE_FEATURES == %w[apps computer_use browser_use])
 check("起動の前に確かめる flag の一覧", P::CODEX_HELP_MARKERS == %w[--ignore-user-config --ignore-rules --disable])
 
-# 候補と同名の user skill の無効化 (-c skills.config) は境界と両立し、prompt (stdin の -) の前に付く
-ENV["CODEX_HOME"] = ARGV[2]
-argv = P.codex_argv({ model: "m-x" }, "/proj", ["personal-a"])
+# 候補と同名の user skill の無効化 (-c skills.config) は、子の Codex home (--codex-home) を見る (#802)。境界と両立し、
+# prompt (stdin の -) の前に付く。親の CODEX_HOME に同名の skill があっても、子の home に無ければ付けない
+ENV["CODEX_HOME"] = ARGV[1]
+argv = P.codex_argv({ model: "m-x", codex_home: ARGV[2] }, "/proj", ["personal-a"])
 check("境界の flag は skills.config の override と両立する",
       argv.include?("--ignore-user-config") && argv.include?("--ignore-rules") &&
       argv[-3] == "-c" && argv[-2].start_with?("skills.config=[{path=") && argv[-1] == "-")
+check("override の path は子の Codex home の下", argv[-2].include?(File.join(ARGV[2], "skills", "personal-a", "SKILL.md")))
+ENV["CODEX_HOME"] = ARGV[2]
+argv = P.codex_argv({ model: "m-x", codex_home: ARGV[1] }, "/proj", ["personal-a"])
+check("親の Codex home にだけ同名の skill があっても override を付けない", !argv.include?("-c") || argv.none? { |a| a.start_with?("skills.config=") })
+argv = P.codex_argv({ model: "m-x" }, "/proj", ["personal-a"])
+check("子の Codex home が無い (dry-run で省いた) ときは override を付けない", argv.none? { |a| a.start_with?("skills.config=") })
 exit(@failed.zero? ? 0 : 1)
 RUBY
 
@@ -471,6 +478,9 @@ cat > "$fakebin/codex" <<'EOF'
 # 偽の codex。呼ばれた argv を 1 行ずつ log に残し、help / features list / exec を模倣する。
 printf '%s\n' "$*" >> "$FAKE_CODEX_LOG"
 printf 'auto-memory: %s\n' "${CLAUDE_CODE_DISABLE_AUTO_MEMORY-unset}" >> "$FAKE_CODEX_LOG"
+printf 'env: home=%s codex_home=%s home_entries=%s\n' "$HOME" "${CODEX_HOME-unset}" "$(ls -A "$HOME" 2>/dev/null | wc -l | tr -d ' ')" >> "$FAKE_CODEX_LOG"
+# FAKE_CODEX_TAMPER があれば、exec の間に子の CODEX_HOME に AGENTS.md を足す (run の間の差し替えの確かめ。#802)
+case "$1" in exec) [ "${2-}" = "--help" ] || { [ -z "${FAKE_CODEX_TAMPER:-}" ] || : > "$CODEX_HOME/AGENTS.md"; } ;; esac
 case "$1 $2" in
   "exec --help")
     help='Options:
@@ -513,8 +523,17 @@ source_dir="$tmp/source"
 mkdir -p "$source_dir/personal-a"
 printf -- '---\nname: personal-a\ndescription: a\n---\n' > "$source_dir/personal-a/SKILL.md"
 
-# run_probe <args...>: 偽の codex を PATH に置き、実 ~/.codex の代わりに空の CODEX_HOME で probe を回す
+# 評価用の Codex home (#802): auth.json だけを持つ。ふだんの Codex home (親の CODEX_HOME = $empty_home) とは別の dir
+eval_home="$tmp/eval-home"
+mkdir -p "$eval_home"
+printf '{}\n' > "$eval_home/auth.json"
+
+# run_probe <args...>: 偽の codex を PATH に置き、実 ~/.codex の代わりに空の CODEX_HOME で probe を回す。
+# 子には評価用の Codex home を渡す (--codex-home)。渡さない形は run_probe_bare で回す
 run_probe() {
+  run_probe_bare --codex-home "$eval_home" "$@"
+}
+run_probe_bare() {
   : > "$log"
   set +e
   out=$(env FAKE_CODEX_LOG="$log" CODEX_HOME="$empty_home" PATH="$fakebin:$PATH" \
@@ -560,7 +579,7 @@ for pair in "FAKE_RC_HELP|exec --help" "FAKE_RC_FEATURES|features list"; do
     : > "$log"
     set +e
     out=$(env "$var=3" FAKE_CODEX_LOG="$log" CODEX_HOME="$empty_home" PATH="$fakebin:$PATH" \
-      ruby "$src" --tool codex --model m-x --source "$source_dir" --smoke 2>&1)
+      ruby "$src" --tool codex --model m-x --source "$source_dir" --codex-home "$eval_home" --smoke 2>&1)
     rc=$?
     set -e
   }
@@ -575,6 +594,140 @@ run_probe --dry-run
 [ "$rc" -eq 0 ] || fail "dry-run should exit 0 (rc=$rc): $out"
 [ ! -s "$log" ] || fail "dry-run must not call codex: $(cat "$log")"
 case "$out" in *'"--ignore-user-config" "--ignore-rules"'*'"--disable" "browser_use"'*) : ;; *) fail "dry-run argv should show the boundary: $out" ;; esac
+
+# ---- integration: 評価用の Codex home と空の HOME (#802) ------------------------------------
+eval_real=$(cd "$eval_home" && pwd -P)
+# env_lines: log の env の行 (確かめの 2 回と exec の 1 回ずつ)
+env_lines() { grep '^env: ' "$log"; }
+
+# E08・E09: 確かめ (help・features list) も exec も、子の CODEX_HOME は評価用の home、HOME は中身の無い dir
+run_probe --smoke
+[ "$rc" -eq 0 ] || fail "smoke with --codex-home should exit 0 (rc=$rc): $out"
+[ "$(env_lines | wc -l | tr -d ' ')" -eq 3 ] || fail "expected env lines for help, features list and exec: $(cat "$log")"
+env_lines | grep -v -q "codex_home=$eval_real home_entries=0\$" && fail "every child must get the eval CODEX_HOME and an empty HOME: $(env_lines)"
+env_lines | grep -q "home=$HOME " && fail "no child may get the parent's HOME: $(env_lines)"
+for h in $(env_lines | sed 's/^env: home=\([^ ]*\) .*/\1/'); do
+  [ ! -e "$h" ] || fail "the empty HOME must be removed after use: $h"
+done
+# 確かめの HOME と exec の HOME は別の dir
+[ "$(env_lines | sed 's/^env: home=\([^ ]*\) .*/\1/' | sort -u | wc -l | tr -d ' ')" -ge 2 ] \
+  || fail "the preflight and the run must not share a HOME: $(env_lines)"
+
+# E13: run ごとに別の空の HOME (同じ case の 2 回目も新しい dir)
+cat > "$tmp/home-cases.json" <<'EOF'
+{
+  "schema_version": 1,
+  "inventory": ["personal-a"],
+  "cases": [
+    { "id": "home", "cluster": "x", "prompt": "do a", "primary": "personal-a", "must_not": [] }
+  ]
+}
+EOF
+printf '%s\n' '{"type":"item.completed","item":{"type":"command_execution","command":"cat .agents/skills/personal-a/SKILL.md"}}' \
+  '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}' > "$tmp/ev-home-ok"
+FAKE_CODEX_EVENTS="$tmp/ev-home-ok"
+export FAKE_CODEX_EVENTS
+run_probe --cases "$tmp/home-cases.json" --repeat 2 --out "$tmp/home/results.json"
+unset FAKE_CODEX_EVENTS
+[ "$rc" -eq 0 ] || fail "two runs with --codex-home should exit 0 (rc=$rc): $out"
+exec_homes=$(grep -A2 '^exec --json' "$log" | sed -n 's/^env: home=\([^ ]*\) .*/\1/p')
+[ "$(printf '%s\n' "$exec_homes" | sort -u | wc -l | tr -d ' ')" -eq 2 ] || fail "each run needs its own HOME: $exec_homes"
+# results.json は隔離の条件を残し、judge はそのまま読める
+ruby -rjson -e 'd = JSON.parse(File.read(ARGV[0])); exit(d["codex_isolation"] == { "home" => "empty", "codex_home" => "eval" } ? 0 : 1)' \
+  "$tmp/home/results.json" || fail "results.json must record codex_isolation: $(cat "$tmp/home/results.json")"
+set +e
+judge_out=$(sh "$repo_root/scripts/check-skill-routing.sh" --cases "$tmp/home-cases.json" --results "$tmp/home/results.json" 2>&1)
+judge_rc=$?
+set -e
+[ "$judge_rc" -eq 0 ] || fail "the judge should accept a result with codex_isolation (rc=$judge_rc): $judge_out"
+# E27: #802 より前の形 (codex_isolation が無い) の結果とは比べない
+ruby -rjson -e 'd = JSON.parse(File.read(ARGV[0])); d.delete("codex_isolation"); File.write(ARGV[1], JSON.generate(d))' \
+  "$tmp/home/results.json" "$tmp/home/old.json"
+set +e
+judge_out=$(sh "$repo_root/scripts/check-skill-routing.sh" --cases "$tmp/home-cases.json" --results "$tmp/home/results.json" --baseline "$tmp/home/old.json" 2>&1)
+judge_rc=$?
+set -e
+[ "$judge_rc" -eq 2 ] || fail "comparing with a result without codex_isolation must be a structural error (rc=$judge_rc): $judge_out"
+case "$judge_out" in *'comparison: codex isolation differs'*) : ;; *) fail "the comparison must name codex isolation: $judge_out" ;; esac
+
+# E01・E03: codex の run に --codex-home が無ければ、確かめも起動もせずに exit 2 (smoke・--only も同じ)
+for mode in --smoke "--only home --cases $tmp/home-cases.json --out $tmp/home/only.json"; do
+  # shellcheck disable=SC2086
+  run_probe_bare $mode
+  [ "$rc" -eq 2 ] || fail "codex without --codex-home must exit 2 ($mode, rc=$rc): $out"
+  case "$out" in *'--codex-home is required for --tool codex'*) : ;; *) fail "the error should name --codex-home ($mode): $out" ;; esac
+  [ ! -s "$log" ] || fail "codex must not be called without --codex-home ($mode): $(cat "$log")"
+done
+# E02: dry-run は省ける (CLI を起動しない)。表示は home が無いことを書く
+run_probe_bare --dry-run
+[ "$rc" -eq 0 ] || fail "dry-run without --codex-home should exit 0 (rc=$rc): $out"
+case "$out" in *'codex home: not set (required for runs)'*) : ;; *) fail "dry-run should say the codex home is not set: $out" ;; esac
+run_probe --dry-run
+case "$out" in *"codex home: $eval_real (CODEX_HOME for the child; HOME is an empty dir per run)"*) : ;;
+  *) fail "dry-run should show the eval codex home: $out" ;; esac
+# E04: claude-code に --codex-home は入力の誤り
+set +e
+out=$(ruby "$src" --tool claude-code --source "$source_dir" --codex-home "$eval_home" --dry-run 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "claude-code with --codex-home must exit 2 (rc=$rc): $out"
+case "$out" in *'--codex-home is only for --tool codex'*) : ;; *) fail "the error should say --codex-home is codex only: $out" ;; esac
+
+# E05・E06: 評価用の home に当てはまらない dir では、確かめも起動もしない (規則は挙動の評価と共有。#731)
+bad_noauth="$tmp/bad-noauth"; mkdir -p "$bad_noauth"
+bad_agents="$tmp/bad-agents"; mkdir -p "$bad_agents"; printf '{}\n' > "$bad_agents/auth.json"; : > "$bad_agents/Agents.md"
+bad_skill="$tmp/bad-skill"; mkdir -p "$bad_skill/skills/personal-a"; printf '{}\n' > "$bad_skill/auth.json"
+ln -s "$eval_home" "$tmp/bad-link"
+for pair in "relative|eval-home|absolute path" "usual|$empty_home|usual Codex home" "link|$tmp/bad-link|symlink" \
+            "noauth|$bad_noauth|auth.json" "agents|$bad_agents|must not have Agents.md" "skill|$bad_skill|user skills"; do
+  name=${pair%%|*}; rest=${pair#*|}; dir=${rest%%|*}; want=${rest#*|}
+  run_probe_bare --codex-home "$dir" --smoke
+  [ "$rc" -eq 2 ] || fail "a bad codex home ($name) must exit 2 (rc=$rc): $out"
+  case "$out" in *"$want"*) : ;; *) fail "the bad codex home ($name) should be named: $out" ;; esac
+  [ ! -s "$log" ] || fail "codex must not be called with a bad codex home ($name): $(cat "$log")"
+done
+
+# E07: run の間に評価用の home が変われば、次の run を起動せずに止める
+FAKE_CODEX_TAMPER=1
+export FAKE_CODEX_TAMPER
+run_probe --cases "$tmp/home-cases.json" --repeat 2 --out "$tmp/home/tamper.json"
+unset FAKE_CODEX_TAMPER
+rm -f "$eval_home/AGENTS.md"
+[ "$rc" -eq 2 ] || fail "a codex home changed between runs must stop the probe (rc=$rc): $out"
+case "$out" in *'--codex-home must not have AGENTS.md'*) : ;; *) fail "the change should be named: $out" ;; esac
+[ "$(grep -c '^exec --json' "$log")" -eq 1 ] || fail "the second run must not be launched: $(cat "$log")"
+
+# E10: --model が無ければ、model は親のふだんの Codex home の top-level から取る (評価用の home の config.toml は読まない)
+eval_model_home="$tmp/eval-home-model"
+mkdir -p "$eval_model_home"
+printf '{}\n' > "$eval_model_home/auth.json"
+printf 'model = "m-eval"\n' > "$eval_model_home/config.toml"
+: > "$log"
+set +e
+out=$(env FAKE_CODEX_LOG="$log" CODEX_HOME="$top_home" PATH="$fakebin:$PATH" \
+  ruby "$src" --tool codex --source "$source_dir" --codex-home "$eval_model_home" --smoke 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "smoke without --model should exit 0 (rc=$rc): $out"
+grep -q '^exec --json .* -m m-top -$' "$log" || fail "the model must come from the usual Codex home: $(grep '^exec' "$log")"
+if grep -q 'm-eval' "$log"; then fail "the eval home's config.toml must not choose the model: $(grep '^exec' "$log")"; fi
+
+# E12: copy の判定の ~ は子の HOME で展開する (親の HOME に同名の file があっても、子の空の HOME には無い)
+parent_home="$tmp/parent-home"
+mkdir -p "$parent_home/.codex/skills/personal-a"
+printf 'old\n' > "$parent_home/.codex/skills/personal-a/SKILL.md"
+printf '%s\n' '{"type":"item.completed","item":{"type":"command_execution","command":"cat ~/.codex/skills/personal-a/SKILL.md"}}' \
+  '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}' > "$tmp/ev-home-read"
+: > "$log"
+set +e
+out=$(env HOME="$parent_home" FAKE_CODEX_LOG="$log" FAKE_CODEX_EVENTS="$tmp/ev-home-read" CODEX_HOME="$empty_home" PATH="$fakebin:$PATH" \
+  ruby "$src" --tool codex --model m-x --source "$source_dir" --codex-home "$eval_home" \
+  --cases "$tmp/home-cases.json" --out "$tmp/home/tilde.json" 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "the ~ read run should exit 0 (rc=$rc): $out"
+ruby -rjson -e 'r = JSON.parse(File.read(ARGV[0]))["runs"][0]; e = (r["reads"] || [])[0] || {}; exit(e["skill"] == "personal-a" && e["copy"] == "unknown" ? 0 : 1)' \
+  "$tmp/home/tilde.json" || fail "~ must expand to the child's empty HOME (copy unknown): $(cat "$tmp/home/tilde.json")"
 
 # case id は raw log の file 名に使う。raw dir の外を指す id では Codex を起動せずに exit 2 で止まり、
 # raw dir の外 (ここでは --out の directory) に何も作らない
