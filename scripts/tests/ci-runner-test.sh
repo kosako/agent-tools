@@ -79,8 +79,12 @@ if method == "GET" && path.match?(%r{\Arepos/[^/]+/[^/]+\z})
 elsif method == "POST" && path.match?(%r{/actions/runners/generate-jitconfig\z})
   name = JSON.parse(stdin)["name"]
   event.call("POST")
-  File.write(File.join(dir, "post-started"), "")
-  case mode.call("mode-post")
+  # post-started は、test が TERM を送る目印。作ってから返らない形 (hang) と、後から作る子を起こす形 (late) では、その
+  # 副作用を済ませてから置く (目印が見えた時点で、狙った状態に入っている)
+  post_mode = mode.call("mode-post")
+  started = -> { File.write(File.join(dir, "post-started"), "") }
+  started.call unless %w[hang late].include?(post_mode)
+  case post_mode
   when "fail" then http_error(500, "Server Error")
   when "notfound" then http_error(404, "Not Found")
   when "fail-created"
@@ -92,10 +96,12 @@ elsif method == "POST" && path.match?(%r{/actions/runners/generate-jitconfig\z})
   when "late"
     child = fork { sleep 3; File.write(File.join(runners, "4242"), name) }
     Process.detach(child)
+    started.call
     sleep 30
     exit 1
   when "hang"
     File.write(File.join(runners, "4242"), name)
+    started.call
     sleep 30
     exit 1
   end
@@ -547,18 +553,21 @@ run_case M04 none
 expect_rc 1 "M04"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "M04: the created runner must be found by name and deleted"
 converge M04
-# M05: POST が作ってから返らない -> TERM で止め、名前で見つけて消す
+# M05: POST が作ってから返らない -> TERM で止め、名前で見つけて消す。TERM は、偽の gh が登録を作った後に送る (目印)
 reset
 printf 'hang\n' > "$tmp/gh/mode-post"
 run_case M05 post
 [ "$rc" -eq 1 ] || fail "M05: expected exit 1, got $rc"
+grep -F -e 'DELETE 4242' "$tmp/gh/events.log" >/dev/null || fail "M05: the created runner must be deleted by a DELETE call"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "M05: the runner must be deleted"
 converge M05
-# M06: POST が返らず、止められた後で作られる -> 記録が残り、後の cleanup が消す
+# M06: POST が返らず、止められた後で作られる -> 記録が残り、後の cleanup が消す。TERM は、偽の gh が「後から作る子」を
+# 起こした後に送る (目印)。once が戻ってから 6 秒待ち、登録が実際に後から出たことも確かめる (子は 3 秒後に作る)
 reset
 printf 'late\n' > "$tmp/gh/mode-post"
-run_case M06 post 4
+run_case M06 post 6
 [ "$rc" -eq 1 ] || fail "M06: expected exit 1, got $rc"
+[ -e "$tmp/gh/runners/4242" ] || fail "M06: the late registration must have appeared (the case did not reach its target state)"
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M06: the record must be kept"
 converge M06
 # M07・M08: 返事の形 (id が無い・runner が object でない・id が別の既存 runner を指す) -> id は使わない。名前で消す
@@ -806,7 +815,13 @@ touch "$tmp/docker/stop-hang"
 printf 'fail-once\n' > "$tmp/gh/mode-delete"
 start_once running
 kill -TERM "$bg"
-sleep 1
+# 返らない docker stop に入ったことを、偽の docker の呼び出しの記録で確かめてから、client を止める (時間では決めない)
+i=0
+until grep -F -e '"stop"' "$tmp/docker/argv.log" >/dev/null 2>&1; do
+  i=$((i + 1))
+  [ "$i" -lt 200 ] || fail "T10: docker stop was not called (the case did not reach its target state)"
+  sleep 0.05
+done
 kill_client
 wait_bg
 kept_alive_checks T10
@@ -870,8 +885,13 @@ original = CiRunner.method(:stop_until_exit)
 CiRunner.define_singleton_method(:stop_until_exit) do |*a|
   if first
     first = false
-    # 登録を消す thread が、返らない DELETE に入るのを待つ (偽の gh が置く目印。時間では決めない)
+    # 登録を消す thread が、返らない DELETE に入るのを待つ (偽の gh が置く目印。時間では決めない)。目印を確かめられ
+    # なければ、別の exit code で止めて、この case を落とす
     200.times { break if File.exist?(ENV.fetch("TEST_MARKER")); sleep 0.05 }
+    unless File.exist?(ENV.fetch("TEST_MARKER"))
+      warn "T11: the hung DELETE marker was not seen"
+      exit!(97)
+    end
     raise "boom"
   end
   original.call(*a)
