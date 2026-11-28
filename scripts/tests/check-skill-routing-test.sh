@@ -361,6 +361,34 @@ run_case "isolation-compare-old-new" 2 "FAIL: comparison: codex isolation differ
 run_case "isolation-compare-same" 0 "delta candidate-baseline" \
   -- --cases "$tmp/cases.json" --results "$tmp/iso.json" --baseline "$tmp/iso.json"
 
+# --- Codex の run を止めた形 (#802)。codex だけで、値は routing-mark か none。比較の条件に入る ---
+# usage: with_stop <in> <out> <codex_stop の JSON>
+with_stop() {
+  ruby -rjson -e '
+    d = JSON.parse(File.read(ARGV[0]))
+    d["codex_stop"] = JSON.parse("[#{ARGV[2]}]")[0]
+    File.write(ARGV[1], JSON.generate(d))' "$@"
+}
+for value in routing-mark none; do
+  with_stop "$tmp/iso.json" "$tmp/stop-$value.json" "\"$value\""
+  run_case "stop-$value" 0 "ok: skill routing verified" -- --cases "$tmp/cases.json" --results "$tmp/stop-$value.json"
+done
+for value in null '""' '"full"' '"Routing-Mark"' 1 '[]' '{}'; do
+  with_stop "$tmp/iso.json" "$tmp/stop-bad.json" "$value"
+  run_case "stop-shape $value" 2 "error: results: codex_stop must be one of routing-mark, none" -- --cases "$tmp/cases.json" --results "$tmp/stop-bad.json"
+  run_case "stop-baseline-shape $value" 2 "error: baseline: codex_stop must be one of" \
+    -- --cases "$tmp/cases.json" --results "$tmp/stop-none.json" --baseline "$tmp/stop-bad.json"
+done
+with_stop "$tmp/ok.json" "$tmp/stop-claude.json" '"none"'
+run_case "stop-claude" 2 "error: results: codex_stop must be one of" -- --cases "$tmp/cases.json" --results "$tmp/stop-claude.json"
+run_case "stop-compare-differ" 2 "FAIL: comparison: codex stop differs" \
+  -- --cases "$tmp/cases.json" --results "$tmp/stop-routing-mark.json" --baseline "$tmp/stop-none.json"
+if grep -q "delta candidate-baseline" "$tmp/out"; then fail "stop-compare-differ: delta reported: $(cat "$tmp/out")"; fi
+run_case "stop-compare-missing" 2 "FAIL: comparison: codex stop differs" \
+  -- --cases "$tmp/cases.json" --results "$tmp/iso.json" --baseline "$tmp/stop-none.json"
+run_case "stop-compare-same" 0 "delta candidate-baseline" \
+  -- --cases "$tmp/cases.json" --results "$tmp/stop-none.json" --baseline "$tmp/stop-none.json"
+
 # --- case 21: error run が candidate / baseline のどちらにあっても、baseline 比較 (delta と回帰の判定) を
 # 飛ばして構造エラー (exit 2) にする。回帰に見える差があっても判定しない。candidate 自身の must_not 違反は
 # exit 1 として残る (docs の「既知の挙動」、#302) ---

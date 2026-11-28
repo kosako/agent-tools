@@ -130,7 +130,7 @@ module ProbeSkillRouting
   USAGE = <<~TEXT
     usage: probe-skill-routing.sh --tool <claude-code|codex> --out <results.json>
              [--source DIR] [--cases FILE] [--variant LABEL] [--model MODEL] [--repeat N]
-             [--only ID[,ID...]] [--max-turns N] [--timeout SEC] [--codex-home DIR] [--dry-run] [--smoke]
+             [--only ID[,ID...]] [--max-turns N] [--timeout SEC] [--codex-home DIR] [--full-run] [--dry-run] [--smoke]
 
       --tool      観測対象の CLI (claude-code = `claude -p`, codex = `codex exec`)
       --out       results.json の出力先。raw log は <out>.raw/ に残す (judge の証跡)
@@ -149,6 +149,9 @@ module ProbeSkillRouting
       --codex-home 評価用の Codex の home (codex の run では必須。--dry-run では省ける)。人がその dir で
                   一度ログインしておく。子の CODEX_HOME にこれを、子の HOME に run ごとの空の dir を渡す (#802)。
                   model の取得はふだんの Codex home のまま。条件は docs/skill-routing-acceptance.md の「隔離」
+      --full-run  codex の run を、skill を読んで作業に入った印で止めず、子が終わるか --timeout まで流す (#802)。
+                  既定は印の行で止め (completion: observed-stop、token は取らない)、token の比較が要るときだけ付ける。
+                  期限を過ぎた run は付けても token が取れない (自然に終わることは保証しない)
       --dry-run   隔離 project の配置と実行 argv を表示して終了 (CLI を起動しない)
       --smoke     case set の代わりに「見えている skill を列挙する」prompt を 1 回流し、
                   隔離と event 形式を確認する (results.json は書かない)
@@ -180,6 +183,9 @@ module ProbeSkillRouting
       when "--smoke"
         opts[:smoke] = true
         i += 1
+      when "--full-run"
+        opts[:full_run] = true
+        i += 1
       else
         raise Error, "unknown argument: #{key}"
       end
@@ -188,6 +194,7 @@ module ProbeSkillRouting
     raise Error, "--tool must be one of #{TOOLS.join(', ')}" unless TOOLS.include?(opts[:tool])
     raise Error, "--out is required" unless opts[:out] || opts[:dry_run] || opts[:smoke]
     raise Error, "--codex-home is only for --tool codex" if opts[:codex_home] && opts[:tool] != "codex"
+    raise Error, "--full-run is only for --tool codex" if opts[:full_run] && opts[:tool] != "codex"
     if opts[:tool] == "codex" && !opts[:codex_home] && !opts[:dry_run]
       raise Error, "--codex-home is required for --tool codex (an eval-only Codex home; docs/skill-routing-acceptance.md)"
     end
@@ -534,6 +541,47 @@ module ProbeSkillRouting
   CODEX_ROUTING_GAP = 2
   CODEX_TOOL_ITEM_TYPES = %w[command_execution file_change mcp_tool_call web_search].freeze
 
+  # 上の印を event ごとに数える (#802)。run の後の解析 (parse_codex) と、run の途中で子を止める判定 (stop_line) が
+  # この 1 つの規則を使う。候補の名前の `/<name>/SKILL.md` を含む command を読み取りとし (scope は問わない)、
+  # `SKILL.md` を含む command で数を 0 に戻す。一度立てば立ったまま。
+  class CodexRoutingMark
+    attr_reader :done
+
+    def initialize(names)
+      @pattern = %r{/(#{names.map { |n| Regexp.escape(n) }.join('|')})/SKILL\.md}
+      @read = false
+      @gap = 0
+      @done = false
+    end
+
+    # JSONL の 1 行を足す。JSON として読めない行と object でない行は数えない。戻り値は印が立っているか。
+    def feed_line(line)
+      e = begin
+        JSON.parse(line)
+      rescue JSON::ParserError
+        return @done
+      end
+      feed_event(e)
+    end
+
+    def feed_event(e)
+      return @done unless e.is_a?(Hash) && e["type"] == "item.completed"
+
+      item = e["item"].is_a?(Hash) ? e["item"] : {}
+      return @done unless CODEX_TOOL_ITEM_TYPES.include?(item["type"])
+
+      command = item["type"] == "command_execution" && item["command"].is_a?(String) ? item["command"] : ""
+      @read = true if command.match?(@pattern)
+      if command.include?("SKILL.md")
+        @gap = 0
+      elsif @read
+        @gap += 1
+        @done ||= @gap >= CODEX_ROUTING_GAP
+      end
+      @done
+    end
+  end
+
   # codex exec --json の event (0.153.4 で実測): thread.started / turn.started / item.started /
   # item.completed (item.type = agent_message | command_execution | error ...) / turn.completed
   # (usage: input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens, ...)。
@@ -552,8 +600,7 @@ module ProbeSkillRouting
     all_reads = []
     usage = nil
     text = +""
-    gap = 0
-    routing_done = false
+    mark = CodexRoutingMark.new(names)
     pattern = %r{/(#{names.map { |n| Regexp.escape(n) }.join('|')})/SKILL\.md}
     jsonl.each_line do |line|
       e = begin
@@ -563,6 +610,7 @@ module ProbeSkillRouting
       end
       next unless e.is_a?(Hash)
 
+      mark.feed_event(e)
       case e["type"]
       when "item.completed"
         item = e["item"].is_a?(Hash) ? e["item"] : {}
@@ -573,12 +621,6 @@ module ProbeSkillRouting
           command.scan(pattern) { |(name)| reads << name unless reads.include?(name) }
           skill_md_mentions(command, names).each do |name, path|
             all_reads << read_entry(name, path, "command", proj: proj, home: home, tool: "codex")
-          end
-          if command.include?("SKILL.md")
-            gap = 0
-          elsif !reads.empty?
-            gap += 1
-            routing_done ||= gap >= CODEX_ROUTING_GAP
           end
         end
       when "turn.completed"
@@ -594,17 +636,26 @@ module ProbeSkillRouting
     prompt_tokens = usage && usage["input_tokens"].is_a?(Integer) ? usage["input_tokens"] : nil
     output_tokens = usage && usage["output_tokens"].is_a?(Integer) ? usage["output_tokens"] : nil
     { observed: observed, model: nil, prompt_tokens: prompt_tokens, output_tokens: output_tokens,
-      first_prompt_tokens: nil, subtype: nil, text: text, note: note, routing_done: routing_done, reads: all_reads }
+      first_prompt_tokens: nil, subtype: nil, text: text, note: note, routing_done: mark.done, reads: all_reads }
   end
 
   # --- 実行 -------------------------------------------------------------------------
 
   # argv を配列のまま起動し、timeout を超えたら kill する。ProbeChild の Result (out / err / status / completed /
   # drained) をそのまま返す。process group の起動・期限・中断を含む後片付けは ProbeChild が持つ (#568)。
-  def self.run_command(argv, chdir:, stdin:, timeout:, env: {})
+  # stop_line は ProbeChild.run にそのまま渡す (codex の止める形。#802)。
+  def self.run_command(argv, chdir:, stdin:, timeout:, env: {}, stop_line: nil)
     # 入れ子起動の guard 変数を外す (Claude Code の Bash から起動された場合)。env は子 process に足す環境。
     env = { "CLAUDECODE" => nil, "CLAUDE_CODE_ENTRYPOINT" => nil }.merge(env)
-    ProbeChild.run(argv, env: env, chdir: chdir, stdin: stdin, timeout: timeout)
+    ProbeChild.run(argv, env: env, chdir: chdir, stdin: stdin, timeout: timeout, stop_line: stop_line)
+  end
+
+  # codex の止める形 (#802): run ごとに新しい印で、立った行で子を止める。--full-run なら止めない (nil)。
+  def self.codex_stop_line(opts, names)
+    return nil if opts[:full_run]
+
+    mark = CodexRoutingMark.new(names)
+    ->(line) { mark.feed_line(line) }
   end
 
   # run の終わり方 (results.json の completion)。ok に数えるのは OK_COMPLETIONS の 3 つだけ。
@@ -628,6 +679,8 @@ module ProbeSkillRouting
       "exited"
     elsif status && usage && parsed[:subtype] == "error_max_turns"
       "max-turns"
+    # 印の行で止めた run (#802) も、期限で打ち切った run も、子は終わる前に止めている (completed が false)。止めた run の
+    # out は印の行までなので、読み切れていれば印が立っている。
     elsif !result.completed && result.drained && tool == "codex" && parsed[:routing_done]
       "observed-stop"
     elsif !result.completed
@@ -649,7 +702,8 @@ module ProbeSkillRouting
       r = nil
       parsed = nil
       with_empty_home("skill-routing-home-") do |home|
-        r = run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout], env: codex_env(opts, home))
+        r = run_command(argv, chdir: proj, stdin: prompt, timeout: opts[:timeout], env: codex_env(opts, home),
+                        stop_line: codex_stop_line(opts, names))
         parsed = parse_codex(r.out, names, proj: proj, home: home).merge(model: codex_model(opts))
       end
     end
@@ -717,6 +771,7 @@ module ProbeSkillRouting
         if opts[:tool] == "codex"
           home_line = opts[:codex_home] ? "#{opts[:codex_home]} (CODEX_HOME for the child; HOME is an empty dir per run)" : "not set (required for runs)"
           puts "codex home: #{home_line}"
+          puts "codex stop: #{opts[:full_run] ? 'none (--full-run: run until exit or --timeout)' : 'routing-mark (stop at the line that sets the routing mark)'}"
         end
         puts "cases: #{cases.length} x repeat #{opts[:repeat]}"
         cases.each { |c| puts "  #{c['id']}: #{c['prompt']}" }
@@ -783,6 +838,8 @@ module ProbeSkillRouting
       results["auto_memory"] = AutoMemory.record(memory_states) if opts[:tool] == "claude-code"
       # Codex の子の home の条件 (#802。codex だけ)。judge は比較の両側でこれが同じかを確かめる。
       results["codex_isolation"] = CheckSkillRouting::CODEX_ISOLATION if opts[:tool] == "codex"
+      # Codex の run を印で止めたか (#802。codex だけ)。judge は比較の両側でこれが同じかを確かめる。
+      results["codex_stop"] = opts[:full_run] ? "none" : "routing-mark" if opts[:tool] == "codex"
       File.write(opts[:out], JSON.pretty_generate(results) + "\n")
       errors = runs.count { |r| r["status"] != "ok" }
       puts "wrote #{opts[:out]} (#{runs.length} runs, #{errors} error run(s), raw: #{raw_dir})"

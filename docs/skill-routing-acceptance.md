@@ -31,9 +31,10 @@ harness です。#216 の cross-skill routing suite の最小 slice で、
   読まない。**probe の結果は「同条件の before / after を比べる」用途に限り、
   絶対値を品質の保証として読まない。**
 - Codex は `first_prompt_tokens` を取れない (event に turn 合計の usage しか無い) ので、token の比較は
-  `prompt_tokens` (turn 全体) と静的な `listing_chars` で見る。`--max-turns` 相当も無く、run は model が
-  終えるか `--timeout` (既定 300 秒) で kill されるまで走る。kill した run は、skill を読んでから作業に入った印が
-  あれば観測完了 (`completion: observed-stop`) に数え、token は取らない (下の「観測契約」。#302)。
+  `prompt_tokens` (turn 全体) と静的な `listing_chars` で見る。`--max-turns` 相当も無いので、既定では skill を読んでから
+  作業に入った印が立った行で子の group を止め、観測完了 (`completion: observed-stop`) に数え、token は取らない (#802。下の
+  「観測契約」)。`--full-run` を付けると止めず、model が終えるか `--timeout` (既定 300 秒) で kill されるまで走る。kill した
+  run は、印があれば同じく `observed-stop` に数える (#302)。
 
 ## 隔離
 
@@ -55,8 +56,9 @@ Codex は依頼の作業を最後まで行うので、case によってはふだ
   Codex home を読む。親の env は変えず、PATH などは子にそのまま継ぐ (login の設定 (`~/.zprofile` など) は空の HOME では読まれない)。
 - 限界: 子が絶対 path を知れば、ふだんの home の file も読める (sandbox は読み取りを隔離しない)。11-28 の実機の run (採掘の case)
   では、`~` の読み取りが空の dir に向いた後に、model がふだんの home の絶対 path を書いて session log を読んだ (path をどこから
-  知ったかは確かめていない)。HOME を分けるだけでは、ふだんの home の読み取りは防げない。Claude Code の run は今のまま
-  (`--max-turns 2` で作業に入る前に終わる)。
+  知ったかは確かめていない)。HOME を分けるだけでは、ふだんの home の読み取りは防げない。既定の止める形 (下の「観測契約」の
+  `observed-stop`) では、この run は 3 本目の command の後 (絶対 path の読み取りの前) に止まる。印が立たない run (`none-*` の
+  case など) と `--full-run` には、この読み取りが残る。Claude Code の run は今のまま (`--max-turns 2` で作業に入る前に終わる)。
 
 Claude Code の子 process には `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` を渡し、自動の memory を止める (#770)。止めないと、run ごとに
 `~/.claude/projects` の下に、temp project の名前の dir と空の `memory` ができ、model に memory の置き場が示される (2.1.331 で確かめた)。
@@ -125,7 +127,7 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
   codex は `command_execution` の command 文字列に現れた `/<name>/SKILL.md` の読み取り (scope 不問、
   出力は見ない。詳細は上の「隔離」の節の codex の「起動」の段落) から取る。listing に載っているだけの
   skill は含めない。
-- `reads` (任意。#720): その run の読み取りの **痕跡の全部** (読んだ順、重複を除かない)。`observed` は primary の推定
+- `reads` (任意。#720): その run の読み取りの **痕跡の全部** (読んだ順、重複を除かない。Codex の run を印の行で止めたときは、その行までの痕跡。#802)。`observed` は primary の推定
   (Codex は探索読みを圧縮する) なので、must_not の判定には `reads` も使う。要素は次の 5 つ。
   - `skill`: 読んだ skill の名前。`observed` と同じ規則 (直前が `/<name>/`) で決め、決められなければ null
     (`cd <dir> && cat SKILL.md` や `find -name SKILL.md`、glob の `*/SKILL.md`)。`observed` の名前は必ず `reads` に入る。
@@ -162,13 +164,20 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
   エラーにする)。
   - `exited` (`ok`): CLI が exit 0 で終わり、usage が取れた。
   - `max-turns` (`ok`): Claude Code の `--max-turns` の打ち切り (上)。
-  - `observed-stop` (`ok`): Codex の run を `--timeout` で kill し、出力を読み切れていて、kill の前に「skill を読んで
-    から作業に入った印」が立っていた。印は、候補 skill の `SKILL.md` を読んだ後に、`SKILL.md` を読まない tool の item
+  - `observed-stop` (`ok`): Codex の run を、印が立った行で止めた (既定。#802) か、`--full-run` の run を `--timeout` で kill
+    し、出力を読み切れていて、止める前に「skill を読んでから作業に入った印」が立っていた。印は、候補 skill の `SKILL.md`
+    (名前で照らし、scope は問わない) を読んだ後に、`SKILL.md` を読まない tool の item
     (`item.completed` の type が `command_execution`・`file_change`・`mcp_tool_call`・`web_search`) が 2 つ続いたこと。
     `agent_message` などは数えず、`SKILL.md` を含む command (候補か否か、前に `/` があるかを問わない。
-    `cd <dir> && cat SKILL.md` の形を含む) は数を 0 に戻し、知らない type は数えない。2026-09-21 の Codex の raw log (48 run) に当てると、observed が変わるのは作業の途中で skill を読み回した
-    1 run だけだった。kill を待たずに印の時点で止める形は採らない (ほぼ全 run が印の後も作業を続け、Codex の token は
-    `turn.completed` にしか出ないので、token の before / after を比べられなくなる)。
+    `cd <dir> && cat SKILL.md` の形を含む) は数を 0 に戻し、知らない type は数えない。規則の正本は
+    `CodexRoutingMark` (`scripts/lib/probe_skill_routing.rb`) で、run の途中で止める判定と run の後の解析が同じものを使う。
+    止める判定は、改行までそろった JSONL の行だけで行い、印を立てた行までを結果 (raw log・observed・reads) に残し、後の
+    event は含めない。印を見た時点で子が既に終わっていれば、止めずに終わった run として扱う (`exited`・`failed`)。
+    2026-11-28 に過去の Codex の raw log (128 run) に止める形を当てると、印が立つ 93 run で primary (observed の最初の
+    skill) は全部変わらず、observed の並びが変わるのは 5 run (後で読んだ skill が抜ける 4、探索読みの圧縮がかからなく
+    なる 1)、後の `reads` が抜けるのは 22 run だった。印の後に禁じた skill を読む run (`review:` に当たる形) は、
+    `--full-run` でしか見つからない。Codex の token は `turn.completed` にしか出ないので、止めた run は token を持たない。
+    token の before / after を比べるときは、両側に `--full-run` を付ける (印が立った後も、期限を過ぎれば token は取れない)。
   - `timeout` (`error`): kill した run で、`observed-stop` の条件 (出力を読み切れた、印が立った) を満たさない。
     Claude Code の kill した run は、打ち切りの result があってもここに入る。
   - `failed` (`error`): 期限の中で終わった run で、`exited`・`max-turns` に当たらない (非ゼロ終了・usage が無い・
@@ -181,6 +190,8 @@ results とは比べない)。0.159.3 の smoke では、prompt は境界なし�
   緑にする。`not-listed` の意味と限界は [Skill Behavior Eval](skill-behavior-eval.md) の「results.json」と同じ。
 - `codex_isolation` (任意。codex だけ。#802): Codex の子の home の条件。値は `{"home": "empty", "codex_home": "eval"}` だけ
   (上の「隔離」)。#802 より前の結果には無い。
+- `codex_stop` (任意。codex だけ。#802): Codex の run を止めた形。`routing-mark` (既定。印の行で止めた) か `none`
+  (`--full-run`)。#802 より前の結果には無い。
 - raw log は `<out>.raw/<case>-<n>.jsonl` に残す。observed が正しいかはこの log で人が確認する
   (judge は runner の観測を信頼する。信頼境界は judge の冒頭コメント参照)。raw log は private な内容を
   含みうるので、Issue / PR / comment には貼らない (下の「raw log の扱い」)。
@@ -207,10 +218,11 @@ scripts/check-skill-routing.sh --cases scripts/lib/skill_routing_cases.json \
   (違えば exit 2)。`reads` の無い古い結果 (schema_version 1・2) は、`observed` だけで今までどおり判定する。
 - **自動の memory** (#770): `auto_memory` が在り、`init` が `not-listed` でなければ構造エラー。形が違うとき、Codex の結果に在るときは
   入力の誤り (どちらも exit 2)。
-- **Codex の子の home の条件** (#802): `codex_isolation` が在れば、Codex の結果で、値が決まった 1 つであること。違えば入力の誤り
-  (exit 2)。
+- **Codex の子の home の条件と止めた形** (#802): `codex_isolation` が在れば、Codex の結果で、値が決まった 1 つであること。
+  `codex_stop` が在れば、Codex の結果で、`routing-mark` か `none` であること。違えば入力の誤り (exit 2)。
 - **baseline 比較**: 同じ tool・同じ model・同じ case 集合・同じ run 数・同じ `auto_memory`・同じ `codex_isolation` (どちらも、
-  無いものどうしを含む) の結果だけ比較する (違えば exit 2。#802 より前の Codex の結果とは比べないので、baseline を取り直す)。primary は case ごとに比べ、baseline で半分以上の run が当たっていた case が、候補で一度も当たらなければ
+  無いものどうしを含む)・同じ `codex_stop` の結果だけ比較する (違えば exit 2。#802 より前の Codex の結果とは比べないので、baseline を
+  取り直す)。primary は case ごとに比べ、baseline で半分以上の run が当たっていた case が、候補で一度も当たらなければ
   回帰 (exit 1。#417)。それより小さい減少は case ごとに `warn:` の行で出し、exit には響かない。合計の hit は比べない
   (ある case の回帰が別の case の改善で打ち消され、揺れだけの差が回帰になるため)。must_not は、候補で 1 回でも出れば
   baseline によらず case ごとに破れ (上)。構造エラー (coverage 欠落・
@@ -246,10 +258,11 @@ scripts/check-skill-routing.sh --cases scripts/lib/skill_routing_cases.json \
   --results after.json --baseline before.json
 ```
 
-codex は `--tool codex` に `--codex-home <評価用の Codex の home>` を足して同じ手順 (#802。上の「隔離」)。両 tool で回帰なしを
+codex は `--tool codex` に `--codex-home <評価用の Codex の home>` を足して同じ手順 (#802。上の「隔離」)。Codex の token の
+before / after を比べるときは、両側に `--full-run` を付ける (既定の止める形では token を取らない)。両 tool で回帰なしを
 確認したものだけ merge する (#280 の
 受け入れ条件)。`--repeat N` で揺れを均せる (baseline と candidate で同じ N にする。repeat 1 では 1 回の外れが「一度も
-当たらない」になり回帰になるので、gate にするなら 2 以上)。Codex の case `audit-mine-session-logs` は、
+当たらない」になり回帰になるので、gate にするなら 2 以上)。Codex の case `audit-mine-session-logs` は、`--full-run` では
 `--timeout` まで走ってから `observed-stop` になりやすい (下の「既知の挙動」)。
 
 ## raw log の扱い
@@ -277,8 +290,8 @@ codex は `--tool codex` に `--codex-home <評価用の Codex の home>` を足
 - #302 から、打ち切られた run は、skill を読んでから作業に入った印があれば `observed-stop` (`ok`) に数える (上の
   「観測契約」の `completion`)。採掘を始めた run は印が立つので、coverage を満たし、baseline との比較も飛ばない。
   token は取れないので、この case は token の delta から外れる (judge が外した case の数を出す)。
-- 期限まで走る間の時間と Codex の枠は、今までどおり使う。model が実 home の session log を読みうることも変わらない
-  (上の「raw log の扱い」)。
+- #802 から、既定では印の行で止めるので、この case も期限まで走らない。`--full-run` では、期限まで走る間の時間と Codex の
+  枠を今までどおり使い、model が実 home の session log を読みうることも変わらない (上の「隔離」の限界と「raw log の扱い」)。
 - 印が立たないまま打ち切られた run (`timeout`) は、今までどおり error run で、judge は exit 2 になり比較を飛ばす。
   そのときは、この case を除いた case set の copy を before / after の両方の `--cases` に渡すか、case ごとの行を
   突き合わせて読む。どちらでも、Codex 側の asset-miner の routing を測っていないことを PR に書き、case を外して
