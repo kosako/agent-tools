@@ -34,7 +34,10 @@ image="ghcr.io/actions/actions-runner@sha256:$(printf '%064d' 0 | tr 0 a)"
 #   mode-delete の hang-once: 1 回だけ返らない。入った目印に delete-hung を置く (test は時間でなく目印を待つ)
 #   vis-seq: 呼び出しごとの公開範囲 (private / public / mixed / garbage / fail / hang)。最後の行を繰り返す
 #   chmod-state-on-post: POST の後に state の dir を書けなくする (記録を消せない形)
-# DELETE と POST の時刻を events.log に書く。
+# 入った分岐を、時刻つきで events.log に書く (VIS <結果>・VIS-HANG・POST・POST-MODE <形>・POST-BODY <形>・LIST <形>・LIST-HANG・
+# LIST-DELAY・LIST-LAG・DELETE <id>・DELETE-DELAY・DELETE-MODE <形>・IGNORE-TERM)。返らない分岐の印 (VIS-HANG・LIST-HANG) は、
+# その分岐の中で、待ちに入る直前に書く。test は、障害を仕掛けた case が、その障害を実際に
+# 通ったことを、この記録で確かめる (reached)。
 cat > "$tmp/fake/gh" <<EOF
 #!$real_ruby
 require "json"
@@ -42,7 +45,10 @@ dir = $(shq "$tmp/gh")
 state = $(shq "$state")
 mode = ->(name) { f = File.join(dir, name); File.exist?(f) ? File.read(f).strip : "ok" }
 event = ->(text) { File.open(File.join(dir, "events.log"), "a") { |f| f.puts("#{Time.now.to_f} #{text}") } }
-trap("TERM") {} if File.exist?(File.join(dir, "ignore-term"))
+if File.exist?(File.join(dir, "ignore-term"))
+  trap("TERM") {}
+  event.call("IGNORE-TERM")
+end
 stdin = STDIN.read
 File.open(File.join(dir, "argv.log"), "a") { |f| f.puts(JSON.generate(ARGV)) }
 File.open(File.join(dir, "stdin.log"), "a") { |f| f.puts(stdin) } unless stdin.empty?
@@ -67,13 +73,16 @@ if method == "GET" && path.match?(%r{\Arepos/[^/]+/[^/]+\z})
   n = File.exist?(count_file) ? File.read(count_file).to_i : 0
   File.write(count_file, (n + 1).to_s)
   k = kind[[n, kind.length - 1].min]
+  event.call("VIS #{k}")
   full = File.exist?(File.join(dir, "full-name")) ? File.read(File.join(dir, "full-name")).strip : path.sub("repos/", "")
   case k
   when "private" then puts JSON.generate("full_name" => full, "private" => true, "visibility" => "private")
   when "public" then puts JSON.generate("full_name" => full, "private" => false, "visibility" => "public")
   when "mixed" then puts JSON.generate("full_name" => full, "private" => true, "visibility" => "public")
   when "garbage" then puts "not json"
-  when "hang" then sleep 90
+  when "hang"
+    event.call("VIS-HANG") # 返らない分岐に入った印 (test は、これを待ってから TERM を送る)
+    sleep 90
   else http_error(500, "Server Error")
   end
 elsif method == "POST" && path.match?(%r{/actions/runners/generate-jitconfig\z})
@@ -82,6 +91,7 @@ elsif method == "POST" && path.match?(%r{/actions/runners/generate-jitconfig\z})
   # post-started は、test が TERM を送る目印。作ってから返らない形 (hang) と、後から作る子を起こす形 (late) では、その
   # 副作用を済ませてから置く (目印が見えた時点で、狙った状態に入っている)
   post_mode = mode.call("mode-post")
+  event.call("POST-MODE #{post_mode}")
   started = -> { File.write(File.join(dir, "post-started"), "") }
   started.call unless %w[hang late].include?(post_mode)
   case post_mode
@@ -108,6 +118,7 @@ elsif method == "POST" && path.match?(%r{/actions/runners/generate-jitconfig\z})
   File.write(File.join(runners, "4242"), name)
   File.chmod(0o500, state) if File.exist?(File.join(dir, "chmod-state-on-post"))
   body = { "runner" => { "id" => 4242, "name" => name }, "encoded_jit_config" => $(shq "$canary") }
+  event.call("POST-BODY #{mode.call("post-body")}")
   case mode.call("post-body")
   when "noid" then body["runner"].delete("id")
   when "runnerstring" then body["runner"] = "oops"
@@ -120,8 +131,13 @@ elsif method == "POST" && path.match?(%r{/actions/runners/generate-jitconfig\z})
   puts JSON.generate(body)
 elsif method == "DELETE" && (m = path.match(%r{/actions/runners/(\d+)\z}))
   event.call("DELETE #{m[1]}")
-  sleep File.read(File.join(dir, "delete-delay")).to_f if File.exist?(File.join(dir, "delete-delay"))
-  case mode.call("mode-delete")
+  if File.exist?(File.join(dir, "delete-delay"))
+    event.call("DELETE-DELAY")
+    sleep File.read(File.join(dir, "delete-delay")).to_f
+  end
+  delete_mode = mode.call("mode-delete")
+  event.call("DELETE-MODE #{delete_mode}")
+  case delete_mode
   when "fail" then http_error(500, "Server Error")
   when "fail-once"
     File.write(File.join(dir, "mode-delete"), "ok")
@@ -140,15 +156,24 @@ elsif method == "DELETE" && (m = path.match(%r{/actions/runners/(\d+)\z}))
   http_error(404, "Not Found") unless File.exist?(file)
   File.delete(file)
 elsif method == "GET" && path.match?(%r{/actions/runners\?per_page=100\z})
-  http_error(500, "Server Error") if mode.call("mode-list") == "fail"
-  sleep 30 if mode.call("mode-list") == "hang"
-  sleep File.read(File.join(dir, "list-delay")).to_f if File.exist?(File.join(dir, "list-delay"))
+  list_mode = mode.call("mode-list")
+  event.call("LIST #{list_mode}")
+  http_error(500, "Server Error") if list_mode == "fail"
+  if list_mode == "hang"
+    event.call("LIST-HANG") # 返らない分岐に入った印
+    sleep 30
+  end
+  if File.exist?(File.join(dir, "list-delay"))
+    event.call("LIST-DELAY")
+    sleep File.read(File.join(dir, "list-delay")).to_f
+  end
   # leak: 孫の process が stdout を持ったまま残る (親が終わっても、出力の pipe が閉じない)
-  Process.detach(fork { sleep 30 }) if mode.call("mode-list") == "leak"
+  Process.detach(fork { sleep 30 }) if list_mode == "leak"
   list = Dir.children(runners).sort.map { |id| { "id" => id.to_i, "name" => File.read(File.join(runners, id)) } }
   lag_file = File.join(dir, "list-lag")
   lag = File.exist?(lag_file) ? File.read(lag_file).to_i : 0
   if lag.positive?
+    event.call("LIST-LAG")
     File.write(lag_file, (lag - 1).to_s)
     list = list.reject { |r| r["name"].start_with?("agent-tools-ci-") }
   end
@@ -245,6 +270,25 @@ expect_rc() { # $1=期待する exit  $2=case
 }
 calls() { # $1=偽の gh か docker の dir。記録された呼び出しの数
   if [ -f "$1/argv.log" ]; then grep -c '' "$1/argv.log"; else echo 0; fi
+}
+gh_event() { # $1=偽の gh の記録 (events.log) にあるはずの語
+  [ -f "$tmp/gh/events.log" ] && grep -F -e " $1" "$tmp/gh/events.log" >/dev/null
+}
+docker_called() { # $1=偽の docker の subcommand
+  [ -f "$tmp/docker/argv.log" ] && grep -F -e "\"$1\"" "$tmp/docker/argv.log" >/dev/null
+}
+# 障害を仕掛けた case が、その障害を実際に通ったことを確かめる (通っていなければ、検査が空振りで通ったことになる)。
+# $1=case  残り=gh:<偽の gh の記録の語> か docker:<偽の docker の subcommand>
+reached() {
+  reached_case=$1
+  shift
+  for item in "$@"; do
+    case $item in
+      gh:*) gh_event "${item#gh:}" || fail "$reached_case: the case did not reach its target state (no '${item#gh:}' in the fake gh events)" ;;
+      docker:*) docker_called "${item#docker:}" || fail "$reached_case: the case did not reach its target state (docker ${item#docker:} was not called)" ;;
+      *) fail "$reached_case: bad reached item: $item" ;;
+    esac
+  done
 }
 posted() {
   [ -f "$tmp/gh/argv.log" ] && grep -F -e '"POST"' "$tmp/gh/argv.log" >/dev/null
@@ -421,6 +465,7 @@ run once kosako/prism
 expect_rc 1 "bad jit"
 ! docker_ran || fail "bad jit: no container may start"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "bad jit: the registration must be deleted"
+reached "bad jit" "gh:POST-BODY badcfg" "gh:DELETE 4242"
 
 # E30: 同じ repo の once を 2 つ
 # 検知の期限を 10 秒、あきらめを 4 秒にして once を流す (load して定数を替える。時間の case 用)
@@ -445,7 +490,7 @@ start_once() {
     case $1 in
       running) ls "$tmp/docker" | grep -q '^running-' && break ;;
       post) [ -e "$tmp/gh/post-started" ] && break ;;
-      vis2) [ "$(cat "$tmp/gh/vis-count" 2>/dev/null || true)" = 2 ] && break ;;
+      vishang) gh_event "VIS-HANG" && break ;;
       none) break ;;
     esac
     i=$((i + 1))
@@ -528,7 +573,17 @@ run_case() {
         -- "$sent" "$limit" "$1" || fail "$1: deadline"
       ;;
   esac
-  [ "${3:-0}" -gt 0 ] && sleep "$3"
+  case ${3:-} in
+    late-runner)
+      # 遅れて作られる登録が出るのを、期限付きで待つ (固定の待ちにしない)
+      i=0
+      until [ -e "$tmp/gh/runners/4242" ]; do
+        i=$((i + 1))
+        [ "$i" -lt 300 ] || fail "$1: the late registration did not appear (the case did not reach its target state)"
+        sleep 0.05
+      done
+      ;;
+  esac
   invariant "$1"
 }
 
@@ -544,6 +599,7 @@ for m in fail notfound; do
   run_case "M02 $m" none
   expect_rc 1 "M02 $m"
   ! docker_ran || fail "M02 $m: no container may start"
+  reached "M02 $m" "gh:POST-MODE $m"
   converge "M02 $m"
 done
 # M04: POST は 500 だが作られている -> 名前で見つけて消す
@@ -552,6 +608,7 @@ printf 'fail-created\n' > "$tmp/gh/mode-post"
 run_case M04 none
 expect_rc 1 "M04"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "M04: the created runner must be found by name and deleted"
+reached M04 "gh:POST-MODE fail-created" "gh:DELETE 4242"
 converge M04
 # M05: POST が作ってから返らない -> TERM で止め、名前で見つけて消す。TERM は、偽の gh が登録を作った後に送る (目印)
 reset
@@ -560,15 +617,17 @@ run_case M05 post
 [ "$rc" -eq 1 ] || fail "M05: expected exit 1, got $rc"
 grep -F -e 'DELETE 4242' "$tmp/gh/events.log" >/dev/null || fail "M05: the created runner must be deleted by a DELETE call"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "M05: the runner must be deleted"
+reached M05 "gh:POST-MODE hang"
 converge M05
 # M06: POST が返らず、止められた後で作られる -> 記録が残り、後の cleanup が消す。TERM は、偽の gh が「後から作る子」を
 # 起こした後に送る (目印)。once が戻ってから 6 秒待ち、登録が実際に後から出たことも確かめる (子は 3 秒後に作る)
 reset
 printf 'late\n' > "$tmp/gh/mode-post"
-run_case M06 post 6
+run_case M06 post late-runner
 [ "$rc" -eq 1 ] || fail "M06: expected exit 1, got $rc"
 [ -e "$tmp/gh/runners/4242" ] || fail "M06: the late registration must have appeared (the case did not reach its target state)"
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M06: the record must be kept"
+reached M06 "gh:POST-MODE late"
 converge M06
 # M07・M08: 返事の形 (id が無い・runner が object でない・id が別の既存 runner を指す) -> id は使わない。名前で消す
 for b in noid runnerstring otherid; do
@@ -581,6 +640,7 @@ for b in noid runnerstring otherid; do
     [ "$(cat "$tmp/gh/runners/5555")" = someone-else ] || fail "M07 otherid: another runner must be left alone"
     rm -f "$tmp/gh/runners/5555"
   fi
+  reached "M07 $b" "gh:POST-BODY $b" "gh:DELETE 4242"
   converge "M07 $b"
 done
 # M09: 一覧が失敗する -> 登録を消せないので記録を残す
@@ -589,12 +649,14 @@ printf 'fail\n' > "$tmp/gh/mode-list"
 run_case M09 none
 expect_rc 1 "M09"
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M09: the record must be kept"
+reached M09 "gh:LIST fail"
 converge M09
 # M10: DELETE が失敗する -> 記録を残す
 reset
 printf "fail\n" > "$tmp/gh/mode-delete"
 run_case M10 none
 expect_rc 1 "M10"
+reached M10 "gh:DELETE-MODE fail"
 converge M10
 # M11: DELETE が 404 で、引き直すと見つからない -> 消せたとはみなさず、10 分の規則に任せる (記録を残して exit 0)。
 # 404 なのに一覧に残っている -> 失敗として記録を残す (exit 1)
@@ -603,12 +665,14 @@ printf "notfound-gone\n" > "$tmp/gh/mode-delete"
 run_case "M11 gone" none
 expect_rc 0 "M11 gone"
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M11 gone: a 404 is not a successful DELETE; the record must wait for the 10 minute rule"
+reached "M11 gone" "gh:DELETE-MODE notfound-gone"
 converge "M11 gone"
 reset
 printf "notfound\n" > "$tmp/gh/mode-delete"
 run_case "M11 listed" none
 expect_rc 1 "M11 listed"
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M11 listed: the record must be kept while the runner is listed"
+reached "M11 listed" "gh:DELETE-MODE notfound"
 converge "M11 listed"
 # M12: docker run が 125 (起動できない) -> 名前で見つけて消す
 reset
@@ -616,6 +680,7 @@ printf '125\n' > "$tmp/docker/run-exit"
 run_case M12 none
 expect_rc 1 "M12"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "M12: the registration must be deleted"
+reached M12 docker:run docker:ps "gh:DELETE 4242"
 converge M12
 # M13: job を終えた runner は GitHub の側で消える -> 名前で見つからない。自分の DELETE で消したのではないので、記録は
 # 10 分の規則に任せて残す。成功 (exit 0) で、後の cleanup が外す
@@ -625,6 +690,8 @@ run_case M13 none
 expect_rc 0 "M13"
 case $(cat "$tmp/out") in *"作ってから 10 分たてば cleanup が外します"*) ;; *) fail "M13: unexpected output: $(cat "$tmp/out")" ;; esac
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M13: the record must be kept until the 10 minute rule"
+[ ! -e "$tmp/gh/runners/4242" ] || fail "M13: the fake GitHub must have removed the runner (the case did not reach its target state)"
+! gh_event "DELETE 4242" || fail "M13: the runner was removed by GitHub, so no DELETE call is expected"
 converge M13
 # M14: 動いている間に TERM -> 止めて消す。登録を消すのは、container が終わる前に始まっている。docker stop と kill が
 # 失敗しても 5 秒ごとに繰り返し、TERM から 30 秒のうちに止める (繰り返さなければ、55 秒であきらめるまで止まらない)
@@ -643,6 +710,7 @@ ruby -e '
 ' -- "$tmp/gh/events.log" "$tmp/docker/events.log" "$sent_wall" || fail "M14: the registration removal must not wait for the container"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "M14: the registration must be deleted"
 [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "M14: the record must be removed (this process deleted the registration)"
+reached M14 docker:stop docker:kill "gh:DELETE 4242"
 converge M14
 # M15・M16・M17: 動いている間の確かめが public / 失敗 / 形の違う返事 -> 止めて消す
 # (sh では `VAR=x 関数` の代入が関数の後も残るので、poll と short は代入してから戻す)
@@ -654,6 +722,7 @@ for v in public fail mixed; do
   run_case "M15 $v" none
   expect_rc 1 "M15 $v"
   ls "$tmp/docker" | grep -q '^stop-' || fail "M15 $v: the container must be stopped"
+  reached "M15 $v" "gh:VIS $v" docker:stop
   converge "M15 $v"
 done
 # M22: 動いている間の確かめが返らない -> 20 秒で切って止める (検知まで 1 + 20 秒。60 秒待たない)
@@ -665,6 +734,7 @@ run_case M22 none
 ruby -e 'took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - ARGV[0].to_f
   abort "M22: a hanging check must be cut at 20 seconds (took #{took.round(1)}s)" unless took < 40' -- "$t0" || fail "M22: timing"
 expect_rc 1 "M22"
+reached M22 "gh:VIS-HANG" docker:stop
 converge M22
 poll=
 # M18: JIT を作った直後の確かめで public -> container を起動せず、名前で消す
@@ -674,16 +744,18 @@ run_case M18 none
 expect_rc 1 "M18"
 ! docker_ran || fail "M18: no container may start"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "M18: the registration must be deleted"
+reached M18 "gh:VIS public" "gh:DELETE 4242"
 converge M18
 # M24: JIT を作った直後の確かめの途中で TERM -> signal として知らせ、container を起動せず、名前で消して記録を外す
 reset
 printf 'private\nhang\n' > "$tmp/gh/vis-seq"
-run_case M24 vis2
+run_case M24 vishang
 [ "$rc" -eq 1 ] || fail "M24: expected exit 1, got $rc"
 case $(cat "$tmp/out") in *"止める signal を受けました"*) ;; *) fail "M24: unexpected output: $(cat "$tmp/out")" ;; esac
 ! docker_ran || fail "M24: no container may start"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "M24: the registration must be deleted"
 [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "M24: the record must be removed"
+reached M24 "gh:VIS-HANG" "gh:DELETE 4242"
 converge M24
 # M19: 記録を書けない (POST の前) -> API を呼ばない
 reset
@@ -715,6 +787,8 @@ touch "$tmp/gh/chmod-state-on-post"
 run_case M20 none
 expect_rc 1 "M20"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "M20: the registration must still be deleted"
+case $(cat "$tmp/out") in *"記録を消せませんでした"*) ;; *) fail "M20: unexpected output: $(cat "$tmp/out")" ;; esac
+reached M20 "gh:DELETE 4242"
 converge M20
 # M21: 動いている間に TERM、DELETE が失敗する -> 記録を残す
 reset
@@ -723,6 +797,7 @@ printf 'fail\n' > "$tmp/gh/mode-delete"
 run_case M21 running
 [ "$rc" -eq 1 ] || fail "M21: expected exit 1, got $rc"
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M21: the record must be kept"
+reached M21 "gh:DELETE-MODE fail" docker:stop
 converge M21
 
 # 期限を 10 秒にした once (返らない gh と docker を、本物の偽の子で置く。helper は差し替えない)
@@ -739,6 +814,7 @@ ruby -e '
   abort "T3: the container must stop well before the deadline (exit at #{ex.inspect})" unless ex && ex - ARGV[1].to_f < 8
 ' -- "$tmp/docker/events.log" "$sent_wall" || fail "T3: the container stop must not wait for the registration removal"
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "T3: the record must be kept"
+reached T3 "gh:LIST-HANG" docker:stop
 converge T3
 # T4: 作る段で TERM、一覧が遅く DELETE が返らない -> TERM の時点の期限で、後の呼び出しも切る
 reset
@@ -748,6 +824,7 @@ printf '30\n' > "$tmp/gh/delete-delay"
 run_case T4 post
 [ "$rc" -eq 1 ] || fail "T4: expected exit 1, got $rc"
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "T4: the record must be kept"
+reached T4 "gh:POST-MODE hang" "gh:LIST-DELAY" "gh:DELETE-DELAY"
 converge T4
 # T5: 動いている間に TERM、docker stop も kill も返らない -> docker の client をあきらめ、container の名前を出し、記録を残す
 reset
@@ -758,6 +835,7 @@ run_case T5 running
 case $(cat "$tmp/out") in *"手で止めてください"*) ;; *) fail "T5: unexpected output: $(cat "$tmp/out")" ;; esac
 ls "$tmp/docker" | grep -q '^running-' || fail "T5: the fake container must still look alive"
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "T5: the record must be kept while the container may be alive"
+reached T5 docker:stop
 converge T5
 # T6: T5 に加えて、登録の削除が 1 回目だけ失敗する -> 後片付けで登録は消せても、container が動いているかもしれないので記録を残す
 reset
@@ -768,6 +846,7 @@ run_case T6 running
 [ "$rc" -eq 1 ] || fail "T6: expected exit 1, got $rc"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "T6: the registration must be deleted on the second try"
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "T6: the record must be kept while the container may be alive"
+reached T6 docker:stop "gh:DELETE-MODE fail-once"
 converge T6
 # T7: 動いている間に TERM、一覧が返らず、gh が TERM を無視する -> 期限で残った gh を止め (KILL)、期限のうちに戻る
 reset
@@ -778,6 +857,7 @@ run_case T7 running
 late_list=
 [ "$rc" -eq 1 ] || fail "T7: expected exit 1, got $rc"
 rm -f "$tmp/gh/ignore-term"
+reached T7 "gh:LIST-HANG" "gh:IGNORE-TERM" docker:stop
 converge T7
 # T8: 作る段で TERM、一覧が返らず、gh が TERM を無視する -> TERM から KILL までの猶予も期限の残りで切り、期限のうちに戻る
 reset
@@ -788,6 +868,7 @@ run_case T8 post
 [ "$rc" -eq 1 ] || fail "T8: expected exit 1, got $rc"
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "T8: the record must be kept"
 rm -f "$tmp/gh/ignore-term"
+reached T8 "gh:POST-MODE hang" "gh:LIST-HANG" "gh:IGNORE-TERM"
 converge T8
 # 偽の docker の client (run) を KILL する。pattern に $tmp を入れ、並べて流したほかの test の偽の docker に当てない
 kill_client() {
@@ -802,6 +883,7 @@ kept_alive_checks() { # $1=case
   ls "$tmp/docker" | grep -q '^running-' || fail "$1: the fake container must still look alive"
   [ ! -e "$tmp/gh/runners/4242" ] || fail "$1: the registration must be deleted on the second try"
   [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "$1: the record must be kept while the container may be alive"
+  reached "$1" docker:stop "gh:DELETE-MODE fail-once"
   converge "$1"
 }
 within_short_deadline() { # $1=case  $2=始めの時刻
@@ -857,6 +939,7 @@ stopped_by_name_checks() { # $1=case
   ! ls "$tmp/docker" | grep -q '^running-' || fail "$1: the fake container must not look alive"
   [ ! -e "$tmp/gh/runners/4242" ] || fail "$1: the registration must be deleted"
   [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "$1: the record must be removed once the container is confirmed gone"
+  reached "$1" docker:stop docker:ps "gh:DELETE 4242"
   converge "$1"
 }
 # M23: 動いている間に docker の client が KILL される
@@ -904,6 +987,7 @@ test_marker=
 [ "$rc" -eq 1 ] || fail "T11: expected exit 1, got $rc"
 ls "$tmp/docker" | grep -q '^stop-' || fail "T11: the container must be stopped"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "T11: the registration must be deleted by the settle"
+reached T11 "gh:DELETE-MODE hang-once" docker:stop
 converge T11
 # T14 (must 1): JIT の設定が pipe の容量を超え、docker の client が stdin を読まない -> 書き込みで止まらず、TERM で止められる
 reset
@@ -918,6 +1002,10 @@ ls "$tmp/docker" | grep -q '^stop-' || fail "T14: the container must be stopped"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "T14: the registration must be deleted"
 [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "T14: the record must be removed"
 rm -f "$tmp/docker/no-stdin"
+reached T14 "gh:POST-BODY bigcfg" docker:stop
+for f in "$tmp"/docker/stdin-agent-tools-ci-*; do
+  [ ! -s "$f" ] || fail "T14: the fake docker must not have read stdin (the case did not reach its target state)"
+done
 converge T14
 # M26: 作った runner が一覧に出るのが遅れ、container は job を走らせずにすぐ終わる (exit 90) -> 名前で見つからなくても、
 # 記録を残す (10 分の規則)。後から出た登録は cleanup が消す
@@ -928,6 +1016,7 @@ run_case M26 none
 expect_rc 0 "M26"
 [ -e "$tmp/gh/runners/4242" ] || fail "M26: the fake registration must still exist"
 [ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M26: the record must be kept while the runner is not found by name"
+reached M26 "gh:LIST-LAG"
 converge M26
 # M27: 記録を書いた直後に TERM -> signal を受けたと確かめられるので、gh の POST を起動せず、記録だけ外す
 reset
@@ -1000,6 +1089,7 @@ invariant T16
 ls "$tmp/docker" | grep -q '^stop-' || fail "T16: the container must be stopped by name after the failure"
 ! ls "$tmp/docker" | grep -q '^running-' || fail "T16: the fake container must not look alive"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "T16: the registration must be deleted"
+reached T16 docker:stop docker:ps
 converge T16
 # T15 (should 1): docker の client だけが終わった後、名前で止める段が 1 回目だけ例外を出す -> 例外の受け口が名前で止める
 reset
@@ -1023,6 +1113,7 @@ main_script=
 invariant T15
 ls "$tmp/docker" | grep -q '^stop-' || fail "T15: the container must be stopped by name after the failure"
 ! ls "$tmp/docker" | grep -q '^running-' || fail "T15: the fake container must not look alive"
+reached T15 docker:stop docker:ps
 converge T15
 
 # ---- cleanup の個別の case ---------------------------------------------------------------------------------------
@@ -1041,6 +1132,7 @@ printf '%s' "$n1" > "$tmp/gh/runners/7"
 run cleanup
 expect_rc 0 "E27"
 [ ! -e "$tmp/gh/runners/7" ] && [ ! -e "$state/$n1.json" ] || fail "E27: the leftover must be cleaned"
+reached E27 docker:ps "gh:DELETE 7"
 # E28: 動いている container の記録 -> 残す
 reset
 put_record "$n1" 0
@@ -1083,6 +1175,7 @@ touch "$tmp/docker/ps-fail"
 run cleanup
 expect_rc 0 "ps fails"
 [ -e "$tmp/gh/runners/7" ] && [ -e "$state/$n1.json" ] || fail "ps fails: the runner and record must be kept"
+reached "ps fails" docker:ps
 # 一覧の gh が終わっても、孫の process が出力の pipe を持ち続ける -> 読み切りを待ち続けず、失敗として記録を残す
 reset
 put_record "$n1" 3600
@@ -1094,6 +1187,7 @@ ruby -e 'took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - ARGV[0].to_f
   abort "leaked pipe: must not wait for the grandchild (took #{took.round(1)}s)" unless took < 15' -- "$t0" || fail "leaked pipe: timing"
 expect_rc 1 "leaked pipe"
 [ -e "$tmp/gh/runners/7" ] && [ -e "$state/$n1.json" ] || fail "leaked pipe: the runner and record must be kept"
+reached "leaked pipe" "gh:LIST leak"
 pkill -f -- "$tmp/fake/gh" || true
 # 壊れた記録と、知らない key を持つ記録 -> 消さずに知らせる
 reset
@@ -1142,6 +1236,7 @@ env PATH="$tmp/fake:$PATH" GH_REPO= GH_HOST= ruby -e '
   abort "T1: expected :stop_failed, got #{result}" unless result == :stop_failed
   abort "T1: the detection deadline must bound everything (took #{took.round(1)}s)" unless took < 12
 ' -- "$src" || fail "T1: the detection deadline must apply to gh and docker together"
+reached T1 "gh:LIST-HANG" docker:stop
 rm -f "$tmp/docker/stop-hang" "$tmp/gh/mode-list"
 # T2: 想定外の例外 (動いている間の確かめで raise) -> container を止め、名前で消して記録を外す
 reset
@@ -1163,6 +1258,7 @@ env PATH="$tmp/fake:$PATH" HOME="$tmp/home" AGENT_TOOLS_CI_RUNNER_CONFIG="$conf"
 case $(cat "$tmp/out") in *"想定外の失敗で止めました (RuntimeError)"*) ;; *) fail "T2: unexpected output: $(cat "$tmp/out")" ;; esac
 ls "$tmp/docker" | grep -q '^stop-' || fail "T2: the container must be stopped"
 [ ! -e "$tmp/gh/runners/4242" ] && [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "T2: the runner and record must be cleaned up"
+reached T2 docker:stop "gh:DELETE 4242"
 invariant T2
 # T9: T2 に加えて、例外の後は出力も失敗する -> 出力より先に container を止めて後片付けをする
 reset
@@ -1191,6 +1287,7 @@ env PATH="$tmp/fake:$PATH" HOME="$tmp/home" AGENT_TOOLS_CI_RUNNER_CONFIG="$conf"
 [ "$rc" -eq 1 ] || fail "T9: expected exit 1, got $rc ($(cat "$tmp/out"))"
 ls "$tmp/docker" | grep -q '^stop-' || fail "T9: the container must be stopped before any output"
 [ ! -e "$tmp/gh/runners/4242" ] && [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "T9: the runner and record must be cleaned up"
+reached T9 docker:stop "gh:DELETE 4242"
 invariant T9
 
 # ---- 使い方の誤り --------------------------------------------------------------------------------------------------
