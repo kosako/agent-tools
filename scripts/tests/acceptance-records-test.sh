@@ -99,6 +99,13 @@ check("23 2 行目が形の異常でも、同じ項目の 1 行目を使わな�
 r, p = run(doc([GOOD["hook-claude"], "hook-codex | codex 0.171.0 | 2f57b0a | 1a2b3c4 | 2026-11-28 | #725 |", GOOD["notify"]]))
 check("22 表の途中の | で始まらない行は形の異常", p == ["row 2: expected 6 columns"])
 check("22 その後の行も読む", line_for(r, "notify").first == "ok" && line_for(r, "hook-codex") == ["warn", "hook-codex not recorded"])
+# #810 の review の round 2: 2 行目の末尾の | が欠けても、同じ項目の行として数える
+r, p = run(doc([GOOD["hook-codex"], GOOD["hook-codex"].sub(/ \|\z/, "")]))
+check("23 末尾の | が欠けた 2 行目も、同じ項目として数える", line_for(r, "hook-codex") == ["warn", "hook-codex not recorded"] &&
+      p.include?("item hook-codex has more than one row"))
+r, p = run(doc([GOOD["hook-codex"], GOOD["hook-codex"].sub(/\A\| /, "")]))
+check("23 先頭の | が欠けた 2 行目も、同じ項目として数える", line_for(r, "hook-codex") == ["warn", "hook-codex not recorded"] &&
+      p.include?("item hook-codex has more than one row"))
 r, p = run(doc([GOOD["hook-codex"], "hook-codex は直した"]))
 check("23 | で始まらない行の項目の名前は数えない (形の異常だけ)", line_for(r, "hook-codex").first == "ok" && p == ["row 2: expected 6 columns"])
 r, _ = run(doc([GOOD["hook-codex"]]) + "\n| hook-claude | claude-code 2.1.332 | 2f57b0a | 1a2b3c4 | 2026-11-28 | #725 |\n")

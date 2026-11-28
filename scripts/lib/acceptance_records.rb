@@ -62,7 +62,7 @@ module AcceptanceRecords
     # 同じ項目の行は、形の異常の行も含めて数える (2 行目が崩れていても、1 行目を使わない。#810 の review)。
     named = Hash.new(0)
     table[2..-1].each_with_index do |line, i|
-      first = cells(line).first
+      first = first_cell(line)
       named[first] += 1 if ITEMS.key?(first)
       row, problem = parse_row(line)
       if problem
@@ -81,6 +81,11 @@ module AcceptanceRecords
     return [] unless inner.start_with?("|") && inner.end_with?("|")
 
     inner[1..-2].split("|", -1).map(&:strip)
+  end
+
+  # 重複を数えるための 1 列目。両端の `|` に頼らない (末尾の `|` が欠けた崩れた行も、項目の名前で数える。#810 の review)。
+  def first_cell(line)
+    line.strip.delete_prefix("|").split("|", 2).first.to_s.strip
   end
 
   def separator?(line)
