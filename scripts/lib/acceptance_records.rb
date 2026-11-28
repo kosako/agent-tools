@@ -42,19 +42,28 @@ module AcceptanceRecords
     start = lines.index(SECTION)
     return nil unless start
 
+    # 表は、`|` で始まる最初の行から、空行か次の `## ` の見出しの前までとする。途中の `|` で始まらない行は、表の行として
+    # 読み、形の異常にする (黙って読むのを止めない。#810 の review)。
     table = []
     lines[(start + 1)..-1].each do |line|
       break if line.start_with?("## ")
-      next if table.empty? && line.strip.empty?
-      break unless line.start_with?("|")
-
+      if table.empty?
+        next if line.strip.empty?
+        break unless line.start_with?("|")
+      elsif line.strip.empty?
+        break
+      end
       table << line
     end
     return nil if table.length < 2 || cells(table[0]) != HEADER || !separator?(table[1])
 
     rows = []
     problems = []
+    # 同じ項目の行は、形の異常の行も含めて数える (2 行目が崩れていても、1 行目を使わない。#810 の review)。
+    named = Hash.new(0)
     table[2..-1].each_with_index do |line, i|
+      first = cells(line).first
+      named[first] += 1 if ITEMS.key?(first)
       row, problem = parse_row(line)
       if problem
         problems << "row #{i + 1}: #{problem}"
@@ -62,7 +71,7 @@ module AcceptanceRecords
         rows << row
       end
     end
-    dup = rows.group_by(&:item).select { |_, rs| rs.length > 1 }.keys
+    dup = named.select { |_, n| n > 1 }.keys
     dup.each { |item| problems << "item #{item} has more than one row" }
     [rows.reject { |r| dup.include?(r.item) }, problems]
   end

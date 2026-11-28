@@ -91,6 +91,18 @@ bad.each do |name, row|
 end
 r, p = run(doc([GOOD["hook-codex"], GOOD["hook-codex"].sub("2026-11-28", "2026-11-29")]))
 check("23 同じ項目の 2 行は異常で、どちらも使わない", p == ["item hook-codex has more than one row"] && line_for(r, "hook-codex") == ["warn", "hook-codex not recorded"])
+# #810 の review: 2 行目の形が崩れていても、同じ項目の 2 行として数え、1 行目も使わない
+r, p = run(doc([GOOD["hook-codex"], GOOD["hook-codex"].sub("0.171.0", "0.171")]))
+check("23 2 行目が形の異常でも、同じ項目の 1 行目を使わない", line_for(r, "hook-codex") == ["warn", "hook-codex not recorded"] &&
+      p.include?("item hook-codex has more than one row") && p.any? { |x| x.start_with?("row 2: ") })
+# #810 の review: 表の途中の | で始まらない行は、形の異常として知らせ、後の行も読む (黙って止めない)
+r, p = run(doc([GOOD["hook-claude"], "hook-codex | codex 0.171.0 | 2f57b0a | 1a2b3c4 | 2026-11-28 | #725 |", GOOD["notify"]]))
+check("22 表の途中の | で始まらない行は形の異常", p == ["row 2: expected 6 columns"])
+check("22 その後の行も読む", line_for(r, "notify").first == "ok" && line_for(r, "hook-codex") == ["warn", "hook-codex not recorded"])
+r, p = run(doc([GOOD["hook-codex"], "hook-codex は直した"]))
+check("23 | で始まらない行の項目の名前は数えない (形の異常だけ)", line_for(r, "hook-codex").first == "ok" && p == ["row 2: expected 6 columns"])
+r, _ = run(doc([GOOD["hook-codex"]]) + "\n| hook-claude | claude-code 2.1.332 | 2f57b0a | 1a2b3c4 | 2026-11-28 | #725 |\n")
+check("表は空行で終わる (空行の後の行は読まない)", line_for(r, "hook-claude") == ["warn", "hook-claude not recorded"])
 r, _ = run(doc(GOOD.values), NOW.merge("codex" => "0.172.0", "herdr" => nil))
 check("26 変わった engine と読めない engine を両方出し、ok にしない", line_for(r, "worker-run") == ["warn", "worker-run unconfirmed (codex 0.171.0 -> 0.172.0; herdr version unreadable)"])
 check("28 判定は ok と warn だけ (今の fail と exit を変えない)", (r.map(&:first) - %w[ok warn]).empty?)
