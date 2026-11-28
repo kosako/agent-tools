@@ -570,10 +570,13 @@ path を知ったかは確かめていません (評価用の home の path か�
 
 ```sh
 eval_home="/Users/Shared/agent-tools-codex-eval-home"
-# mkdir が自分で dir を作れたときだけ login に進む (同じ名前の dir や symlink が既にあれば止まり、そこに認証情報を書かない)
-mkdir -m 700 "$eval_home" && CODEX_HOME="$eval_home" codex login   # 評価用の home にだけ auth.json ができる
-CODEX_HOME="$eval_home" codex login status   # 評価用の home でログインできている
-codex login status                           # ふだんの home の login が切れていない
+# mkdir が自分で dir を作れたときだけ先に進む (同じ名前の dir や symlink が既にあれば、ここで全部止まり、そこに認証情報を
+# 書かない)。login は評価用の home にだけ auth.json を作る。続く 2 つで、評価用の home でログインできていることと、ふだんの
+# home の login が切れていないことを確かめる。
+mkdir -m 700 "$eval_home" &&
+  CODEX_HOME="$eval_home" codex login &&
+  CODEX_HOME="$eval_home" codex login status &&
+  codex login status
 ```
 
 probe は起動の前に、`--codex-home` の dir が次を満たすことを確かめ、満たさなければ codex を呼ばずに exit 2 です。
