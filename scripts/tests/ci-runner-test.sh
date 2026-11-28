@@ -582,11 +582,13 @@ printf "fail\n" > "$tmp/gh/mode-delete"
 run_case M10 none
 expect_rc 1 "M10"
 converge M10
-# M11: DELETE が 404 で実際に消えている -> 記録を外す。404 なのに一覧に残っている -> 記録を残す
+# M11: DELETE が 404 で、引き直すと見つからない -> 消せたとはみなさず、10 分の規則に任せる (記録を残して exit 0)。
+# 404 なのに一覧に残っている -> 失敗として記録を残す (exit 1)
 reset
 printf "notfound-gone\n" > "$tmp/gh/mode-delete"
 run_case "M11 gone" none
 expect_rc 0 "M11 gone"
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M11 gone: a 404 is not a successful DELETE; the record must wait for the 10 minute rule"
 converge "M11 gone"
 reset
 printf "notfound\n" > "$tmp/gh/mode-delete"
@@ -601,12 +603,14 @@ run_case M12 none
 expect_rc 1 "M12"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "M12: the registration must be deleted"
 converge M12
-# M13: job を終えた runner は GitHub の側で消える -> 名前で見つからず、container の終わりを回収したので記録を外す
+# M13: job を終えた runner は GitHub の側で消える -> 名前で見つからない。自分の DELETE で消したのではないので、記録は
+# 10 分の規則に任せて残す。成功 (exit 0) で、後の cleanup が外す
 reset
 touch "$tmp/docker/auto-remove"
 run_case M13 none
 expect_rc 0 "M13"
-[ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "M13: the record must be removed"
+case $(cat "$tmp/out") in *"作ってから 10 分たてば cleanup が外します"*) ;; *) fail "M13: unexpected output: $(cat "$tmp/out")" ;; esac
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M13: the record must be kept until the 10 minute rule"
 converge M13
 # M14: 動いている間に TERM -> 止めて消す。登録を消すのは、container が終わる前に始まっている。docker stop と kill が
 # 失敗しても 5 秒ごとに繰り返し、TERM から 30 秒のうちに止める (繰り返さなければ、55 秒であきらめるまで止まらない)
@@ -624,6 +628,7 @@ ruby -e '
   abort "M14: the stop must be retried until the container exits (#{(ex - ARGV[2].to_f).round(1)}s)" unless ex - ARGV[2].to_f < 30
 ' -- "$tmp/gh/events.log" "$tmp/docker/events.log" "$sent_wall" || fail "M14: the registration removal must not wait for the container"
 [ ! -e "$tmp/gh/runners/4242" ] || fail "M14: the registration must be deleted"
+[ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "M14: the record must be removed (this process deleted the registration)"
 converge M14
 # M15・M16・M17: 動いている間の確かめが public / 失敗 / 形の違う返事 -> 止めて消す
 # (sh では `VAR=x 関数` の代入が関数の後も残るので、poll と short は代入してから戻す)
@@ -886,17 +891,17 @@ ls "$tmp/docker" | grep -q '^stop-' || fail "T14: the container must be stopped"
 [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "T14: the record must be removed"
 rm -f "$tmp/docker/no-stdin"
 converge T14
-# M26 (must 2): 作った runner が一覧に出るのが遅れ、container は job を走らせずにすぐ終わる (exit 90) -> 名前で見えたことが
-# 一度も無いので、見つからなくても記録を残す。後から出た登録は cleanup が消す
+# M26: 作った runner が一覧に出るのが遅れ、container は job を走らせずにすぐ終わる (exit 90) -> 名前で見つからなくても、
+# 記録を残す (10 分の規則)。後から出た登録は cleanup が消す
 reset
 printf '90\n' > "$tmp/docker/run-exit"
 printf '2\n' > "$tmp/gh/list-lag"
 run_case M26 none
-expect_rc 1 "M26"
+expect_rc 0 "M26"
 [ -e "$tmp/gh/runners/4242" ] || fail "M26: the fake registration must still exist"
-[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M26: the record must be kept until the runner has been seen by name"
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M26: the record must be kept while the runner is not found by name"
 converge M26
-# M27 (must 3): 記録を書いた直後、POST の前に TERM -> POST を始めず、登録を作っていないので記録だけ外す
+# M27: 記録を書いた直後に TERM -> signal を受けたと確かめられるので、gh の POST を起動せず、記録だけ外す
 reset
 main_script='load ARGV.shift
 original = CiRunner.method(:write_record)
@@ -916,6 +921,56 @@ case $(cat "$tmp/out") in *"止める signal を受けたので runner を作り
 ! posted || fail "M27: the POST must not be started after the signal"
 [ -z "$(ls "$state" | grep '\.json$' || true)" ] || fail "M27: the record must be removed (nothing was created)"
 converge M27
+# M28: signal を確かめた後、gh の POST を起動する前に TERM が届く。POST は起動され、止めた後で登録が作られる -> 作られたか
+# 分からないので、記録を残す。後から出た登録は cleanup が消す (signal は任意の時点に届く。確かめた後の分は防げない)
+reset
+printf 'late\n' > "$tmp/gh/mode-post"
+main_script='load ARGV.shift
+original = CiRunner.method(:gh_call)
+CiRunner.define_singleton_method(:gh_call) do |*a, **k|
+  if a.include?("POST")
+    Process.kill("TERM", Process.pid)
+    sleep 0.3 # trap の handler が走るのを待つ
+  end
+  original.call(*a, **k)
+end
+exit CiRunner.main(ARGV)'
+start_once none
+wait_bg
+main_script=
+[ "$rc" -eq 1 ] || fail "M28: expected exit 1, got $rc"
+posted || fail "M28: the POST is expected to start in this case (the signal arrived after the check)"
+! docker_ran || fail "M28: no container may start"
+[ -n "$(ls "$state" | grep '\.json$' || true)" ] || fail "M28: the record must be kept (the registration may have been created)"
+sleep 4
+[ -e "$tmp/gh/runners/4242" ] || fail "M28: the fake registration must appear after the POST was stopped"
+invariant M28
+converge M28
+# T16: docker の client だけが終わった直後、docker ps の呼び出しが 1 回目だけ例外を出す -> container が動いているかも
+# しれないままなので、例外の受け口が名前で止める (印は起動の時点で立っている)
+reset
+printf '30\n' > "$tmp/docker/run-seconds"
+printf '1\n' > "$tmp/docker/client-drop"
+main_script='load ARGV.shift
+first = true
+original = CiRunner.method(:container_running?)
+CiRunner.define_singleton_method(:container_running?) do |*a|
+  if first
+    first = false
+    raise "boom"
+  end
+  original.call(*a)
+end
+exit CiRunner.main(ARGV)'
+start_once running
+wait_bg
+main_script=
+[ "$rc" -eq 1 ] || fail "T16: expected exit 1, got $rc"
+invariant T16
+ls "$tmp/docker" | grep -q '^stop-' || fail "T16: the container must be stopped by name after the failure"
+! ls "$tmp/docker" | grep -q '^running-' || fail "T16: the fake container must not look alive"
+[ ! -e "$tmp/gh/runners/4242" ] || fail "T16: the registration must be deleted"
+converge T16
 # T15 (should 1): docker の client だけが終わった後、名前で止める段が 1 回目だけ例外を出す -> 例外の受け口が名前で止める
 reset
 printf '30\n' > "$tmp/docker/run-seconds"

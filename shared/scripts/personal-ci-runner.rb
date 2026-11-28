@@ -13,8 +13,9 @@
 #
 # 使い方: personal-ci-runner check | once <owner/repo> | cleanup
 # - check: 設定を検査し、repo ごとに公開範囲 (private / public / unknown) を 1 行ずつ出す。runner は作らない。
-# - once: 1 job の runner を 1 つ動かし、container が終わるまで待つ。終わったら登録を消す。
-# - cleanup: state に記録した runner のうち、container が動いていないものの登録を消す。
+# - once: 1 job の runner を 1 つ動かし、container が終わるまで待つ。終わったら、残った登録を消す。
+# - cleanup: state に記録した runner のうち、container が動いていないものの登録を消し、記録を外す (途中で止まった once の
+#   後片付けと、ふつうに終わった once が残した記録の片付けを兼ねる)。
 # exit: 0 = 成功 / 1 = private でない・判定できない・起動や後片付けの失敗 / 2 = 使い方・設定の誤り / 3 = 同じ repo の once が動いている
 
 require "digest"
@@ -53,7 +54,7 @@ module CiRunner
   # repo の runner の既定の group
   RUNNER_GROUP_ID = 1
   CONTAINER_LABEL = "agent-tools.ci-runner"
-  # 規則 2: 動いている間の private の確かめは 40 秒ごとで、その gh の期限は 20 秒 (公開範囲の変化を検知するまで最大 60 秒)
+  # 動いている間の private の確かめは 40 秒ごとで、その gh の期限は 20 秒 (公開範囲の変化を検知するまで最大 60 秒)
   DEFAULT_POLL_SECONDS = 40
   POLL_RANGE = (1..40).freeze
   VISIBILITY_TIMEOUT_SECONDS = 20
@@ -67,7 +68,7 @@ module CiRunner
   CHILD_TIMEOUT_SECONDS = 60
   # 子が終わった後、その出力を読み切るのを待つ時間 (秒)
   READ_GRACE_SECONDS = 2
-  # 規則 1: 名前で見つからない記録を、container の終わりを回収していなくても外してよくなるまでの時間 (秒)
+  # 名前で見つからない記録を、外してよくなるまでの時間 (秒)。docs の「前提と不変条件」の根拠 3
   RECORD_GRACE_SECONDS = 600
   # 記録は POST の前に 1 回だけ書く。この 4 つの key だけを持つ
   RECORD_KEYS = %w[repo name container created_at].freeze
@@ -235,7 +236,8 @@ module CiRunner
     end
   end
 
-  # 記録は POST の前に 1 回だけ書き、以後は書き換えない (規則 1)。runner の同一性は名前だけで決める。
+  # 記録は POST の前に 1 回だけ書き、以後は書き換えない。runner の同一性は名前だけで決める。不変条件 (docs の「前提と
+  # 不変条件」): runner の登録か container が残りうるなら、記録が残る。
   def run_once(config, repo, state, out)
     install_traps
     vis = visibility(repo, interruptible: true)
@@ -256,14 +258,17 @@ module CiRunner
       return EXIT_NOT_OK
     end
 
-    ctx = { record: record, pid: nil, alive: false, seen: false }
+    # pid: docker の client。alive: container が動いているかもしれない (起動した時点で立て、docker ps で止まったと確かめた
+    # ときだけ下ろす)。deleted: この process の DELETE が成功した
+    ctx = { record: record, pid: nil, alive: false, deleted: false }
     begin
       launch_and_wait(config, repo, ctx, state, out)
     rescue StandardError => e
-      # 想定外の例外でも、container が動いていれば止め、規則 1 で後片付けをする。出力は止めた後 (出力の失敗で止めを飛ばさない)
+      # 想定外の例外でも、container が動いているかもしれなければ止め、後片付けをする。出力は止めた後 (出力の失敗で止めを
+      # 飛ばさない)
       stop_after_failure(config, ctx)
       result = begin
-        settle(record, state, ran: false, alive: ctx[:alive])
+        settle(record, state, alive: ctx[:alive], deleted: ctx[:deleted])
       rescue StandardError
         :kept_failed
       end
@@ -283,35 +288,30 @@ module CiRunner
     record = ctx[:record]
     jit = create_jit(repo, record["name"])
     if jit == :not_started
-      # POST を始めていないので、登録は無い。記録だけ外す
+      # gh の POST を起動していないので、登録は無い。記録だけ外す (記録を外す根拠の 2 つ目)
       out.puts "once: #{repo}: 止める signal を受けたので runner を作りません"
       out.puts "once: #{repo}: 記録を消せませんでした" unless remove_record(state, record)
       return EXIT_NOT_OK
     end
 
-    reason = launch_refusal(repo, jit, ctx)
+    reason = launch_refusal(repo, jit)
     if reason
       out.puts "once: #{repo}: #{reason}"
-      report_settle(settle(record, state, ran: false), record, out)
+      report_settle(settle(record, state), record, out)
       return EXIT_NOT_OK
     end
 
     out.puts "once: #{repo}: runner を起動します (#{record['name']})"
     status = run_container(config, repo, ctx, jit)
     out.puts "once: #{repo}: #{status_label(status, record)}"
-    # 名前で見つからないときに「もう無い」とみなせる (ran) のは、作った後に一度は名前で一覧に見えていて (ctx[:seen])、
-    # 起動した container が終わったと確かめたときだけ。container が動いているかもしれないこと (ctx[:alive]) は、
-    # 止まったと確かめられないままあきらめたときに立つ
-    ran = ctx[:seen] && %i[started made_public interrupted client_lost].include?(status)
-    result = settle(record, state, ran: ran, alive: ctx[:alive])
+    result = settle(record, state, alive: ctx[:alive], deleted: ctx[:deleted])
     report_settle(result, record, out)
-    status == :started && result == :removed ? EXIT_OK : EXIT_NOT_OK
+    # job を終えた JIT の runner は GitHub の側で消えるので、名前で見つからずに記録を残した場合 (10 分後に cleanup が外す) も成功
+    status == :started && %i[removed kept_pending].include?(result) ? EXIT_OK : EXIT_NOT_OK
   end
 
-  # JIT の設定を作った後で、container を起動しない理由 (無ければ nil)。起動する前に、作った runner が名前で一覧に見える
-  # ことを確かめて ctx[:seen] に残す (GitHub の一覧に出るのが遅れることがある。見えた後に見つからなくなったときだけ、
-  # 消えたとみなせる。規則 1)。見えなくても起動は止めない。
-  def launch_refusal(repo, jit, ctx)
+  # JIT の設定を作った後で、container を起動しない理由 (無ければ nil)。
+  def launch_refusal(repo, jit)
     return "止める signal を受けました" if interrupted?
     return "runner を作れませんでした" if jit.nil?
     return "JIT の設定の形が違います" unless jit.match?(JIT_RE)
@@ -319,9 +319,6 @@ module CiRunner
     vis = visibility(repo, interruptible: true)
     return "止める signal を受けました" if interrupted?
     return "作った直後の確かめで private でなくなったので止めます" unless vis == "private"
-
-    ctx[:seen] = find_runner_id(repo, ctx[:record]["name"], interruptible: true).is_a?(Integer)
-    return "止める signal を受けました" if interrupted?
 
     nil
   end
@@ -354,6 +351,9 @@ module CiRunner
       writer.close
       return :start_failed
     end
+    # 起動した時点から、docker ps で止まったと確かめるまでは、container が動いているかもしれないものとして扱う
+    # (この後のどこで失敗しても、印が残る)
+    ctx[:alive] = true
     reader.close
     # 書き込みは別の thread で行う。docker の client が stdin を読まないまま動き続けても、container を待つ loop (signal と
     # 公開範囲の確かめ) を止めない。thread の例外は外に出さない (message に JIT の設定を載せない)
@@ -379,7 +379,7 @@ module CiRunner
   end
 
   # container が終わるまで待つ。検知 (signal を受けた、private と確かめられない、docker の client だけが終わった) があれば、
-  # 規則 2 で止める: 検知の時点で期限を決め (detect!)、登録を消すのを別の thread で、container を止めるのを同時に始める。
+  # 止める (docs の「止めるときの時間」): 検知の時点で期限を決め (detect!)、登録を消すのを別の thread で、container を止めるのを同時に始める。
   def wait_container(config, repo, ctx)
     pid = ctx[:pid]
     next_poll = now + poll_seconds
@@ -410,7 +410,7 @@ module CiRunner
     detect!
     remover = Thread.new do
       Thread.current.report_on_exception = false
-      delete_by_name(ctx[:record])
+      ctx[:deleted] = true if delete_by_name(ctx[:record]) == :deleted
     end
     result = ctx[:pid] ? stop_until_exit(config, ctx) : stop_until_gone(config, ctx)
     # 登録の削除は期限まで待つ。期限で切った gh は、TERM から KILL までの猶予 (1 秒ほど) のうちに終わる。済まなかった分は、
@@ -420,31 +420,31 @@ module CiRunner
   end
 
   # docker の client が終わった後、container が動いていないと docker ps で確かめる。client だけが終わることがある (signal で
-  # 終わった、daemon との接続が切れた) ので、client の終わり方では決めない。確かめられれば true。動いている、または
-  # 問い合わせられないときは、ctx[:alive] を立てて false (止まったと確かめるまで、動いているかもしれないものとして扱う)。
+  # 終わった、daemon との接続が切れた) ので、client の終わり方では決めない。確かめられたときだけ ctx[:alive] を下ろして
+  # true。動いている、問い合わせられない、途中で例外が出たときは、ctx[:alive] は立ったまま (起動の時点で立ててある)。
   def container_gone?(config, ctx)
     ctx[:pid] = nil
-    return true unless container_running?(config, ctx[:record])
+    return false if container_running?(config, ctx[:record])
 
-    ctx[:alive] = true
-    false
+    ctx[:alive] = false
+    true
   end
 
-  # 想定外の例外の後: container が動いていれば、同じ規則で止める。docker の client が残っていれば client ごと、client が
-  # 無くても container が動いているかもしれなければ (ctx[:alive]) 名前で止める。止められなければ ctx[:alive] が立つ。
+  # 想定外の例外の後: container が動いているかもしれなければ (ctx[:alive])、同じ形で止める。docker の client が残って
+  # いれば client ごと、無ければ名前で止める。止まったと確かめられなければ、ctx[:alive] は立ったまま。
   def stop_after_failure(config, ctx)
-    return if ctx[:pid].nil? && !ctx[:alive]
+    return unless ctx[:pid] || ctx[:alive]
 
     detect!
     ctx[:pid] ? stop_until_exit(config, ctx) : stop_until_gone(config, ctx)
   rescue StandardError
-    ctx[:alive] = true
+    nil
   end
 
   # docker stop (失敗したら docker kill) を、container が終わるまで STOP_RETRY_SECONDS ごとに繰り返す。期限の
-  # ABANDON_SECONDS 前になっても終わらなければ、docker の client を止める。戻り値: :exited / :abandoned。あきらめたときは、
-  # container が動いているかもしれないので ctx[:alive] を立てる (規則 1 で記録を残す)。client が終わっても container が
-  # 止まったと確かめられなければ、client なしで止め続ける (stop_until_gone)。
+  # ABANDON_SECONDS 前になっても終わらなければ、docker の client を止める。戻り値: :exited (止まったと確かめた) / :abandoned
+  # (確かめられないままあきらめた。ctx[:alive] は立ったままで、記録が残る)。client が終わっても container が止まったと
+  # 確かめられなければ、client なしで止め続ける (stop_until_gone)。
   def stop_until_exit(config, ctx)
     pid = ctx[:pid]
     next_stop = now
@@ -459,7 +459,6 @@ module CiRunner
       if left <= ABANDON_SECONDS
         abandon(pid, left)
         ctx[:pid] = nil
-        ctx[:alive] = true
         return :abandoned
       end
       if now >= next_stop
@@ -472,9 +471,9 @@ module CiRunner
     container_gone?(config, ctx) ? :exited : stop_until_gone(config, ctx)
   end
 
-  # docker の client が無い container を止める (client だけが終わった後。呼ぶ側が ctx[:alive] を立ててから呼ぶ)。
-  # docker ps で止まったと確かめられるまで、docker stop (失敗したら docker kill) を STOP_RETRY_SECONDS ごとに繰り返す。
-  # 確かめられれば ctx[:alive] を下ろして :exited。期限の ABANDON_SECONDS 前までに確かめられなければ、立てたまま :abandoned。
+  # docker の client が無い container を止める (client だけが終わった後)。docker ps で止まったと確かめられるまで、
+  # docker stop (失敗したら docker kill) を STOP_RETRY_SECONDS ごとに繰り返す。確かめられれば ctx[:alive] を下ろして
+  # :exited。期限の ABANDON_SECONDS 前までに確かめられなければ、ctx[:alive] は立ったままで :abandoned。
   def stop_until_gone(config, ctx)
     loop do
       left = remaining - ABANDON_SECONDS
@@ -533,18 +532,21 @@ module CiRunner
     nil
   end
 
-  # ---- 規則 1: 記録を外してよいとき ------------------------------------------------------------------------------
+  # ---- 後片付け: 記録を外してよいとき ----------------------------------------------------------------------------
 
   # 登録を名前で引いて消し、記録を外してよいときだけ外す。once と cleanup が共有する。戻り値:
   # :removed (記録を外した) / :kept_failed (一覧や DELETE の失敗) / :kept_pending (名前で見つからないが、まだ外さない) /
   # :kept_alive (container が動いているかもしれない) / :kept_record (登録は消せたが記録を消せない)。
-  # - 外すのは、名前で見つかって消せた (DELETE が成功。404 なら名前で引き直して無いと確かめた)、または、名前で見つからず
-  #   ran か作ってから RECORD_GRACE_SECONDS たっている、のどちらかのとき。alive なら外さない。
-  def settle(record, state, ran:, alive: false)
-    result = delete_by_name(record)
+  # 不変条件: 登録か container が残りうるなら、記録を残す。ここで記録を外す根拠は 2 つだけ (3 つ目の「gh の POST を起動して
+  # いない」は launch_and_wait):
+  # - この process の DELETE が成功した (deleted: once の途中で消せたとき。そうでなければ、ここで名前で引いて消す)。
+  # - 名前で見つからず、作ってから RECORD_GRACE_SECONDS たっている。
+  # alive (container が動いているかもしれない) なら外さない。
+  def settle(record, state, alive: false, deleted: false)
+    result = deleted ? :deleted : delete_by_name(record)
     return :kept_failed if result == :failed
     return :kept_alive if alive
-    return :kept_pending if result == :absent && !ran && !aged?(record)
+    return :kept_pending if result == :absent && !aged?(record)
 
     remove_record(state, record) ? :removed : :kept_record
   end
@@ -552,7 +554,7 @@ module CiRunner
   def report_settle(result, record, out)
     message = {
       kept_failed: "runner の登録を消せませんでした (記録を残します。cleanup で消します)",
-      kept_pending: "runner が名前で見つからないので、作られたかを確かめ直すため記録を残します (cleanup が照合し直します)",
+      kept_pending: "runner が名前で見つからないので、記録を残します (作ってから 10 分たてば cleanup が外します)",
       kept_alive: "container が動いているかもしれないので、記録を残します",
       kept_record: "runner の登録は消しましたが、記録を消せませんでした",
     }[result]
@@ -563,8 +565,9 @@ module CiRunner
     Time.now.to_i - record["created_at"] >= RECORD_GRACE_SECONDS
   end
 
-  # 一覧を名前で引き、見つかった runner を DELETE する。戻り値: :deleted / :absent (名前で見つからない) /
-  # :failed (一覧か DELETE の失敗・期限切れ)。DELETE が 404 なら、名前で一覧を引き直し、無いと確かめられたときだけ :deleted。
+  # 一覧を名前で引き、見つかった runner を DELETE する。戻り値: :deleted (DELETE が成功した) / :absent (名前で見つからない) /
+  # :failed (一覧か DELETE の失敗・期限切れ)。DELETE が 404 なら、消せたとはみなさず、名前で一覧を引き直す: 見つからなければ
+  # :absent (10 分の規則に任せる)、まだ見つかれば :failed。
   def delete_by_name(record)
     repo = record["repo"]
     id = find_runner_id(repo, record["name"])
@@ -575,7 +578,7 @@ module CiRunner
     return :deleted if code == :ok
     return :failed unless code == :not_found
 
-    find_runner_id(repo, record["name"]) == :none ? :deleted : :failed
+    find_runner_id(repo, record["name"]) == :none ? :absent : :failed
   end
 
   # ---- cleanup ---------------------------------------------------------------------------------------------------
@@ -591,7 +594,7 @@ module CiRunner
       end
       result = with_lock(state, record["repo"]) do |locked|
         case locked
-        when true then container_running?(config, record) ? :running : settle(record, state, ran: false)
+        when true then container_running?(config, record) ? :running : settle(record, state)
         when false then :busy
         else :kept_failed
         end
@@ -619,8 +622,8 @@ module CiRunner
   end
 
   # 名前で runner を探す。見つかれば id、無ければ :none、判定できなければ nil (一覧の失敗、形の違い、同じ名前が 2 つ)。
-  def find_runner_id(repo, name, interruptible: false)
-    pages, code = gh_get("repos/#{repo}/actions/runners?per_page=100", paginate: true, interruptible: interruptible)
+  def find_runner_id(repo, name)
+    pages, code = gh_get("repos/#{repo}/actions/runners?per_page=100", paginate: true)
     return nil unless code == :ok && pages.is_a?(Array)
 
     runners = pages.flat_map { |page| page.is_a?(Hash) && page["runners"].is_a?(Array) ? page["runners"] : [nil] }
@@ -653,8 +656,10 @@ module CiRunner
   end
 
   # JIT の runner を作り、JIT の設定 (無ければ nil) を返す。返事からは JIT の設定だけを使い、runner の id は使わない
-  # (同一性は名前だけ。規則 1)。作られたかどうかは、後片付けが名前で一覧を引いて決める。返事の本文は外に出さない。
-  # signal を受けていたら、POST を始めずに :not_started を返す (signal の後に登録を作らない)。
+  # (同一性は名前だけ)。作られたかどうかは、後片付けが名前で一覧を引いて決める。返事の本文は外に出さない。
+  # signal を受けたと確かめられたら、gh を起動せずに :not_started を返す (登録は無いと言える)。signal は任意の時点に届くので、
+  # この確かめの後に届いた分は、gh を起動した後に止めることになる。そのときは nil を返し、作られたかどうかは分からない
+  # ものとして扱う (記録を残し、後片付けは名前で引く)。
   def create_jit(repo, name)
     return :not_started if interrupted?
 
@@ -689,7 +694,7 @@ module CiRunner
   # 子 process を起動し、stdout・stderr・status を返す。timeout 秒を過ぎたとき、または interruptible で signal を受けた
   # ときは、子を止めて (TERM → 5 秒 → KILL。検知の後は、この猶予も期限までの残りで切る) status を nil にする。起動できない、
   # 子が終わった後も出力が閉じない (READ_GRACE_SECONDS) ときも、status は nil。検知の後は、timeout を検知の期限までの残りで
-  # 切る (規則 2)。残りが無ければ起動しない。
+  # 切る。残りが無ければ起動しない。
   def run_child(cmd, stdin: "", timeout: CHILD_TIMEOUT_SECONDS, interruptible: false)
     timeout = [timeout, remaining].min if @deadline
     return ["", "", nil] if timeout <= 0
@@ -734,7 +739,7 @@ module CiRunner
     ["", "", nil]
   end
 
-  # TERM から KILL までは 5 秒。検知の後は期限までの残りで切る (下限 1 秒。規則 2 の期限を延ばさない)。
+  # TERM から KILL までは 5 秒。検知の後は期限までの残りで切る (下限 1 秒。検知の期限を延ばさない)。
   def stop_child(thread)
     signal_child(thread.pid, "TERM")
     grace = @deadline ? [[remaining, 1].max, 5].min : 5
@@ -881,7 +886,7 @@ module CiRunner
     Process.clock_gettime(Process::CLOCK_MONOTONIC)
   end
 
-  # signal は flag を立て、検知の期限を決める (規則 2)。
+  # signal は flag を立て、検知の期限を決める。
   def install_traps
     @interrupted = false
     @deadline = nil

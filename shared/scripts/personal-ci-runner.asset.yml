@@ -14,7 +14,7 @@ risk:
 # approved_build_id を、kind 変更時は approved_artifact_kind を更新する。
 review:
   human_review: approved
-  approved_build_id: sha256:cd8cae0e1e18f4ae77917e2b017468a3710b499ef8cef50a58f7c03401b112e6
+  approved_build_id: sha256:4aff6135bca14626b52651633ec8fe61d65fe78107e2ab8f8687c2c4b4de52bb
   approved_artifact_kind: script
 source:
   path: shared/scripts/personal-ci-runner.rb
@@ -25,6 +25,6 @@ summary: >-
   cleanup (残った登録の後片付け)。起動のたびに API で private を確かめ (private・visibility・full_name の 3 つがそろったときだけ)、
   人が設定 (~/.config/agent-tools/ci-runner.json) に書いた repo だけを扱う。container には host の mount・docker の socket・gh の token を
   渡さず、CPU・memory・process の数に上限を付け、no-new-privileges と cap-drop ALL を付ける。JIT の設定は container の stdin で渡し、
-  host の argv・env・log・state に残さない。後片付けは runner の名前で照合し、消せたと確かめられるまで state の記録を残す。
+  host の argv・env・log・state に残さない。runner の登録か container が残りうる間は、state の記録を残す (後片付けは名前で照合し、cleanup が続きをする)。
   手順の守りであって境界ではない。exit 0 = 成功 / 1 = private でない・判定できない・失敗 /
   2 = 使い方・設定の誤り / 3 = 同じ repo の once が動いている。(docs/ci-runner.md)
