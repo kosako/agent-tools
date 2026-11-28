@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 # fast-edit-check: PostToolUse (Edit|Write|apply_patch) hook body。編集直後の変更ファイルに
-# repo 宣言済みの高速 check (syntax / lint) を実行し、失敗要約だけを
+# 高速 check (syntax / lint) を実行し、失敗要約だけを
 # hookSpecificOutput.additionalContext でモデルに返す steering hook (#200 §4.4 / #203)。
 # 「書いた直後に機械が指摘 → その場で直す」ループの機械判定部分を担う。
 #
@@ -14,12 +14,20 @@
 #
 # check コマンドの発見 (自動推測しない・#203 裁定):
 # - 宣言の正本は **ユーザー所有の untracked 中央設定** ~/.config/agent-tools/checks.local.json。
-#   repo の実 path をキーに edit_checks (pattern + command) を宣言した repo でだけ動き、
-#   宣言が無い repo では無言 no-op。
+#   repo の実 path をキーに edit_checks (pattern + command) を宣言する。
 # - repo 内の宣言ファイルは**読まない**: clone した第三者 repo が「編集のたびに実行される
 #   任意コマンド」を宣言できてしまうため (宣言の所有をユーザーに固定する)。
 # - 設定形式が JSON なのは、standalone 配布 script に psych 3/4 分岐 (yaml_util の領分) を
 #   持ち込まないため。
+#
+# 既定の check (#814): 宣言が無い repo でも、file を実行しない構文チェックだけを走らせる。
+# - `.rb` に `ruby --disable=all -c` (hook 自身を動かしている Ruby)、`.sh` に `/bin/sh -n`。command は hook の中で
+#   固定し、PATH から新しく実行 file を引かず、repo の中の file や設定を読まない。
+# - 対象は、絶対 path で、実 path (link の参照先) が git の repo root の中にある file だけ。
+# - その file に一致する有効な宣言の edit_checks があれば、既定は走らせない (宣言が代わる)。
+# - 設定の top-level か repo の entry の "default_edit_checks": false で止める。true / false 以外は設定エラーに
+#   して、その範囲の既定を止める。
+# - repo root は git を起動せず、file の directory の実 path から上へ .git を探して決める (宣言の照合も同じ)。
 #
 # 設定例 (checks.local.json):
 #   {
@@ -43,6 +51,7 @@
 # tool_input.command を読む。未知の payload / patch は無言 no-op (fail-open)。
 
 require "json"
+require "rbconfig"
 require "tmpdir"
 
 # C locale (LC_ALL=C や LANG の未設定) でも、読む text (stdin・file・git や gh の出力) を UTF-8 として扱う (#432)。
@@ -62,6 +71,16 @@ module FastEditCheck
   # 600 秒より短い)。#467
   DEFAULT_MAX_SECONDS = 30
   BUDGET_SECONDS = 120
+
+  # 既定の check (#814)。file を実行しない構文チェックだけを置く。足す条件は docs/quality-loop-hooks.md の
+  # 「既定の check」: command を hook の中で固定できる、file の中身を実行しない、1 file で 1 秒未満、interpreter を
+  # PATH と repo から引かない。
+  DEFAULT_FLAG_KEY = "default_edit_checks"
+  DEFAULT_EDIT_CHECKS = [
+    { pattern: /\.rb\z/, check: { "name" => "ruby-syntax (既定)",
+                                   "command" => [RbConfig.ruby, "--disable=all", "-c"].freeze }.freeze },
+    { pattern: /\.sh\z/, check: { "name" => "sh-syntax (既定)", "command" => ["/bin/sh", "-n"].freeze }.freeze },
+  ].freeze
 
   # ---- safe-run 経由の check の起動 (#467。personal-fast-edit-check と personal-changed-scope-qa に同じ本文で置き、
   # test が一致を確かめる) ------------------------------------------------------------------------------------------
@@ -347,29 +366,56 @@ module FastEditCheck
     files.select { |file| file.is_a?(String) && File.file?(file) }.uniq
   end
 
-  # 設定を読む。無い = opt-in していない (nil)。壊れている = 警告文字列を返す
-  # (無言で握り潰すとユーザーが設定ミスに気づけない)。
+  # 設定を読む。無い = 宣言していない (nil。既定の check だけが走る)。壊れている・読めない = 警告文字列を返す
+  # (無言で握り潰すとユーザーが設定ミスに気づけない)。在るのに regular file でない (directory、指す先の無い
+  # symlink など) と、権限で読めないときも、止める設定を読めないので壊れた設定と同じに扱う (#814)。
   def load_config
-    return nil unless File.file?(config_path)
+    path = config_path
+    return nil unless File.exist?(path) || File.symlink?(path)
+    return "checks.local.json が regular file ではありません" unless File.file?(path)
 
-    data = JSON.parse(File.read(config_path))
+    data = JSON.parse(File.read(path))
     return "checks.local.json のトップレベルが object ではありません" unless data.is_a?(Hash)
 
     data
   rescue JSON::ParserError
     "checks.local.json を JSON として解釈できません"
+  rescue SystemCallError
+    "checks.local.json を読めません"
   end
 
+  # repo root を、file の directory の実 path から上へ .git を探して決める (#814)。git を起動しないので、PATH の
+  # git も GIT_DIR などの env も判定を変えない。.git は、directory なら中に HEAD があり、regular file なら先頭が
+  # "gitdir: " のもの (linked worktree・submodule)。.git の中の file は、git が work tree の外として扱うので対象外。
   def repo_root_for(file)
     dir = File.dirname(file)
     return nil unless File.directory?(dir)
 
-    out = IO.popen(["git", "-C", dir, "rev-parse", "--show-toplevel"], err: File::NULL, &:read)
-    return nil unless $?.success?
+    current = File.realpath(dir)
+    return nil if current.split(File::SEPARATOR).include?(".git")
 
-    File.realpath(out.chomp)
-  rescue Errno::ENOENT, Errno::EACCES
+    loop do
+      return current if git_marker?(File.join(current, ".git"))
+
+      parent = File.dirname(current)
+      return nil if parent == current
+
+      current = parent
+    end
+  rescue SystemCallError
     nil
+  end
+
+  def git_marker?(path)
+    if File.directory?(path)
+      File.file?(File.join(path, "HEAD"))
+    elsif File.file?(path)
+      File.open(path, "rb") { |f| f.read(8) } == "gitdir: "
+    else
+      false
+    end
+  rescue SystemCallError
+    false
   end
 
   # 宣言 entry を [file に一致する有効 check, 不正 entry の名前] に分類する。
@@ -423,6 +469,33 @@ module FastEditCheck
     name.is_a?(String) && !name.empty? ? name : check["command"].first
   end
 
+  # file に当たる既定の check (#814)。拡張子は payload の path で見る。相対 path には当てない (先頭が "-" の名前を
+  # interpreter が option として読まないように)。
+  def default_candidates(file)
+    return [] unless file.start_with?(File::SEPARATOR)
+
+    DEFAULT_EDIT_CHECKS.select { |d| d[:pattern].match?(file) }.map { |d| d[:check] }
+  end
+
+  # default_edit_checks の値を [既定を走らせるか, 値が不正か] で返す。key が無ければ走らせる。true / false 以外は
+  # 不正で、止めたかった可能性があるので走らせない。
+  def default_flag(container)
+    return [true, false] unless container.is_a?(Hash) && container.key?(DEFAULT_FLAG_KEY)
+
+    case container[DEFAULT_FLAG_KEY]
+    when true then [true, false]
+    when false then [false, false]
+    else [false, true]
+    end
+  end
+
+  # file の実 path (link の参照先) が repo root の中にあるか。repo の外を指す link には既定を走らせない。
+  def inside_root?(file, repo_root)
+    File.realpath(file).start_with?(repo_root + File::SEPARATOR)
+  rescue SystemCallError
+    false
+  end
+
   # 失敗要約の label は常に repo 相対 path にする (#431 の 4): OpenCode plugin は file ごとに本 script を呼んで
   # 同文の要約を除くので、basename だと同名 file (a/index.rb と b/index.rb) の失敗が 1 件に潰れる。
   # payload の path は symlink 越し (macOS の /var → /private/var など) があり得るので、directory を realpath に
@@ -457,15 +530,21 @@ module FastEditCheck
     return 0 if files.empty?
 
     config = load_config
-    return 0 if config.nil?
     if config.is_a?(String)
       emit("fast-edit-check: 設定エラー: #{config} (#{config_path})")
       return 0
     end
 
+    config ||= {}
+    global_on, global_invalid = default_flag(config)
     parts = []
     reported_config_errors = {}
+    reported_flag_errors = {}
     files.each do |file|
+      defaults = default_candidates(file)
+      # 宣言が無く、既定にも当たらない file では、repo root を探さずに終わる (#814 の P5)
+      next if config.empty? && defaults.empty?
+
       repo_root = repo_root_for(file)
       next if repo_root.nil?
 
@@ -477,12 +556,28 @@ module FastEditCheck
         reported_config_errors[repo_root] = true
       end
 
+      # 有効な宣言が file に一致すれば、宣言が既定に代わる。一致しなければ既定を走らせる (止める設定が無ければ)
+      if checks.empty? && !defaults.empty?
+        entry_on, entry_invalid = default_flag(entry)
+        if global_invalid && !reported_flag_errors[:global]
+          parts << "fast-edit-check: 設定エラー: top-level の #{DEFAULT_FLAG_KEY} は true か false にしてください。" \
+                   "既定の check を止めました (#{config_path})"
+          reported_flag_errors[:global] = true
+        end
+        if entry_invalid && !reported_flag_errors[repo_root]
+          parts << "fast-edit-check: 設定エラー: #{repo_root} の #{DEFAULT_FLAG_KEY} は true か false にしてください。" \
+                   "この repo の既定の check を止めました (#{config_path})"
+          reported_flag_errors[repo_root] = true
+        end
+        checks = defaults if global_on && entry_on && inside_root?(file, repo_root)
+      end
+
       results = checks.map { |c| run_check(c, file, repo_root, budget_deadline) }
       failures = results.reject { |r| r[:ok] }
       label = relative_label(file, repo_root)
       unless failures.empty?
         body = failures.map { |r| "[#{r[:name]}] #{r[:reason]}\n#{truncate(r[:output])}" }.join("\n")
-        parts << "fast-edit-check: #{label} への編集が repo 宣言の check に失敗しました。" \
+        parts << "fast-edit-check: #{label} への編集が check に失敗しました。" \
                  "いま直してください (自動修正はしません):\n#{body}"
       end
       incomplete = results.select { |r| r[:cleanup_incomplete] }.map { |r| r[:name] }

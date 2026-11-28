@@ -8,7 +8,8 @@
 ## 強度ラベル(偽らない)
 
 - **fast-edit-check は steering / fail-open**。block しない・自動 fix しない。hook 内部の
-  想定外はすべて exit 0 で透過し、編集操作を壊さない。
+  想定外はすべて exit 0 で透過し、編集操作を壊さない。宣言の無い repo でも、file を実行しない構文チェックだけを
+  既定で走らせる (下の「既定の check」。#814)。
 - **changed-scope-qa は best-effort gate**。hook 無効化・別経路で迂回できる。block は
   「新しい変更 scope に対して 1 回だけ」で、無限ループ対策 (下記) を仕様に含む。
 - どちらも登録 (+ Codex は trust) が済むまで不活性 (fail-open の帰結)。
@@ -39,8 +40,15 @@
 }
 ```
 
-- キーは repo root の**実 path** (`File.realpath`)。宣言がある repo でだけ動き、無い repo
-  では両 hook とも**無言 no-op** (opt-in 設計)。
+- キーは repo root の**実 path** (`File.realpath`)。宣言した check は、宣言がある repo でだけ動く (opt-in 設計)。
+  宣言の無い repo では、changed-scope-qa は**無言 no-op**、fast-edit-check は下の「既定の check」だけを走らせる。
+- fast-edit-check の repo root は、git を起動せず、編集した file の directory の実 path から上へ `.git` を探して決める
+  (`.git` は、directory なら中に `HEAD` があるもの、regular file なら先頭が `gitdir: ` のもの。linked worktree と
+  submodule を含む)。PATH の `git` も `GIT_DIR` などの env も判定を変えない。`.git` の中の file は対象外 (#814)。
+  changed-scope-qa は、指紋に diff が要るので、今までどおり git で repo root を決める。
+- 設定の file が在るのに読めないとき (JSON でない、top-level が object でない、regular file でない (directory や指す先の
+  無い symlink)、権限で読めない) は、fast-edit-check が設定エラーを 1 行知らせ、既定を含めて check を走らせない
+  (既定を止める設定を読めないため)。changed-scope-qa は二重に騒がず、無言で何もしない。
 - **repo 内の宣言ファイルは読まない**: clone した第三者 repo が「編集・終了のたびに実行
   される任意コマンド」を宣言できてしまうため。宣言の所有をユーザーに固定するのが
   この配置の主目的 (中央 local 設定は `.agent-context.local.md` と同じユーザー正本
@@ -52,6 +60,45 @@
 - 宣言する check の目安: edit_checks は「1 ファイル・数百 ms」(編集のたびに同期実行)、
   qa_checks は「repo 全体で数秒・決定的」(Stop のたびに走りうる。決定性は cache の前提)。
 - check ごとに memory と時間の上限 (`max_footprint_mb` / `max_seconds`) を宣言できる (下の「check の起動」)。
+
+## 既定の check (fast-edit-check、#814)
+
+宣言の無い repo でも、編集した file の拡張子に応じて、file を実行しない構文チェックを走らせる。
+
+| 名前 | 対象 (payload の path、大文字小文字を区別) | command (末尾に file の path) |
+| --- | --- | --- |
+| `ruby-syntax (既定)` | `\.rb\z` | hook 自身を動かしている Ruby (`RbConfig.ruby`) の `--disable=all -c` |
+| `sh-syntax (既定)` | `\.sh\z` | `/bin/sh -n` |
+
+- **守る性質**: repo の中の file と設定は、既定の command と interpreter を変えない。既定の check は PATH から新しく
+  実行 file を引かない。既定の check は、編集した file の中身を実行しない (`ruby -c` は `BEGIN` を、`sh -n` は command も
+  here document の中の command substitution も実行しない。`--disable=all` は RUBYOPT と gem を読まないため)。
+- **対象**: 絶対 path の file で、実 path (link の参照先) が、その file の置き場所の repo root の中にあるものだけ。
+  相対 path には当てない (先頭が `-` の名前を interpreter が option として読まないように)。repo の外を指す symlink にも
+  当てない。git の repo の外の file には何もしない。worker の clone と linked worktree も git の repo なので、既定が効く。
+- **宣言との重ね方**: その file に一致する有効な宣言の `edit_checks` が 1 つでもあれば、既定は走らせない (宣言が
+  既定に代わる)。一致する有効な宣言が無ければ、既定を走らせる。不正な宣言 (構造の不正・壊れた regex・不正な上限) は
+  今までどおり設定エラーの警告を出し、既定は走らせる (不正な宣言は既定に代わらない)。
+- **止め方**: 設定の top-level の `"default_edit_checks": false` で全体、repo の entry の `"default_edit_checks": false` で
+  その repo の既定を止める。どちらかが `false` なら止まる。値は `true` か `false` だけを受け、ほかの型は設定エラーを
+  出してその範囲 (top-level なら全体、entry ならその repo) の既定を止める (user が止めたかった可能性があるため)。
+
+  ```json
+  {
+    "default_edit_checks": true,
+    "/Users/<you>/src/some-repo": {"default_edit_checks": false}
+  }
+  ```
+
+- **起動**: 宣言の check と同じく safe-run の子として起動する (既定の上限、総予算、要約、失敗と実行できなかった
+  check の扱い、中断の扱いも同じ。下の「check の起動」)。設定の file が無く、どの既定にも当たらない file では、
+  repo root を探す前に終わる (repo root の探索は process を起動しない)。
+- **限界**: hook と safe-run は shebang の `env ruby` で起動するので、Ruby は PATH から選ばれる。既定の check の Ruby は
+  hook を動かしている Ruby と同じで、hook の起動と同じ信頼に留まる。PATH に相対の entry (`./bin` など) があると、hook
+  自身が repo の中の実行 file で動きうる (既定の check に限らず、hook 全体の限界)。総予算 (120 秒) は今までどおりで、
+  予算が尽きた check は「実行できません」として要約に出し、要約の上限 (2000 文字) で後ろの file の失敗が切れうる。
+- **既定を足す条件**: command を hook の中で固定できること、file の中身を実行しないこと、1 file で 1 秒未満で終わること、
+  interpreter を PATH と repo から引かないこと。
 
 ## check の起動 (personal-safe-run 経由、#467)
 
@@ -120,7 +167,8 @@
 - Codex の通常 patch (`*** Begin Patch` / `*** End Patch`) 全体を検査し、Add / Update の
   対象、Move の移動先を `cwd` 基準の絶対 path にする。1 patch 内の重複は除き、Delete と
   現存しないファイルは高速 check の対象外にする。各ファイルの repo の `edit_checks` の
-  うち `pattern` (Ruby regex) が一致するものだけを実行する。
+  うち `pattern` (Ruby regex) が一致するものだけを実行する。一致する有効な宣言が無い file には、
+  上の「既定の check」を当てる。
   1 patch の対象ファイルごとに check を直列・同期実行するため、全体の待ち時間は
   「対象ファイル数 × 一致する check の所要時間」に応じて増える。出力上限に達しても
   後続の check は省略しない。
@@ -286,6 +334,12 @@ M13 / M14 / M17 (OpenCode 1.18.30)。
 
 - 純粋ロジックと git 連携・cache・ループ対策は `scripts/tests/quality-loop-hooks-test.sh`
   が CI で検証する (設定 / state / HOME / git config を隔離・fake check 使用)。
+- fast-edit-check の既定の check (#814) は `scripts/tests/fast-edit-default-checks-test.sh` が検証する。実物の
+  `ruby -c` と `/bin/sh -n` を、起動の引数を記録する safe-run の wrapper の下で走らせ、宣言の無い repo での成否、拡張子、
+  中身を実行しないこと (`BEGIN`・here document)、repo の外・`.git` の中・repo の外を指す symlink・相対 path、apply_patch の
+  Add と Move、`default_edit_checks` の 16 の組、読めない設定、宣言との重ね方、PATH の `git` と `ruby` を使わないこと、
+  safe-run が無いとき、changed-scope-qa が新しい key で変わらないことを確かめる。OpenCode の plugin の入口は
+  `scripts/tests/opencode-plugin-test.sh` の E9 が確かめる。
 - safe-run 経由の起動 (#467) は `scripts/tests/quality-loop-safe-run-test.sh` が検証する。report の分類・不正な
   report・予算 (`--max-seconds` の値)・cache・上限の上書き・safe-run の期限・出力の保持量は fake の safe-run と
   注入した時計で決定的に、memory と時間の上限で止まって group が空になること・safe-run が無い / 実行できない・
